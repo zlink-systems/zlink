@@ -200,7 +200,10 @@ prepare_core_runtime() {
     echo "Build core/build before running dotnet perf." >&2
     exit 1
   fi
-  if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 0 ]] && find "${REPO_DIR}/core/include" "${REPO_DIR}/core/src" \
+  # An external symlinked build is owned and validated by its source tree;
+  # this worktree's source mtimes cannot establish whether it is stale.
+  if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 0 && ! -L "${REPO_DIR}/core/build" ]] && \
+      find "${REPO_DIR}/core/include" "${REPO_DIR}/core/src" \
       -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' \) \
       -newer "${CORE_LIB}" -print -quit | grep -q .; then
     echo "core runtime is older than core source: ${CORE_LIB}" >&2

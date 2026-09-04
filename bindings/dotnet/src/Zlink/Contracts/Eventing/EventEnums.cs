@@ -428,9 +428,10 @@ public enum PollEventFlags
     PollIn = 1,
 
     /// <summary>
-    ///     Writable: a send will not block. For a back-pressured awaitable SEND,
-    ///     the binding also pulls the completion queue and retries only the
-    ///     operation whose matching WRITABLE token is present.
+    ///     Writable: an outbound submit retry is worthwhile. For a
+    ///     back-pressured awaitable SEND or REQUEST, the binding also pulls the
+    ///     completion queue and retries only the operation whose matching
+    ///     WRITABLE token is present.
     /// </summary>
     PollOut = 2,
 
@@ -445,9 +446,9 @@ public enum PollEventFlags
     PollPri = 8,
 
     /// <summary>
-    ///     A request completion is available. Successful SEND admission does not
-    ///     report this event; back-pressured SEND retry readiness uses
-    ///     <see cref="PollOut" /> and <see cref="CompletionKind.Writable" />.
+    ///     A request completion or WRITABLE record is available. The binding
+    ///     consumes WRITABLE internally and exposes a completion event only when
+    ///     a request result remains. Successful SEND admission reports no event.
     /// </summary>
     PollCompletion = 32
 }

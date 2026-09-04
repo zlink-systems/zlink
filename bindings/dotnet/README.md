@@ -12,7 +12,7 @@ message back over the original receive context. Request messages also keep
 Create caller-owned receive buffers with `Received.Create()` and reuse the
 same instance across `Recv(...)` calls when draining hot paths.
 
-## Send back-pressure and completion
+## Send and request back-pressure
 
 A normal SEND admission returns completion ID 0 and produces no completion.
 When a DONTWAIT SEND is back-pressured, Core reports `EAGAIN` and retains the
@@ -30,6 +30,18 @@ An external poll loop driving awaitable SEND retries registers both `POLLOUT`
 and `POLLCOMPLETION`: the former reports credit and the latter transfers sole
 completion-queue drain ownership to that poller. The binding filters a
 WRITABLE-only wake from the caller-visible `POLLCOMPLETION` result.
+
+Awaitable REQUEST uses the same pre-admission token flow. Immediate admission
+returns a nonzero REQUEST completion ID and starts the reply timeout. On
+`BACKPRESSURED`/`EAGAIN`, Core retains only a nonzero wait token, context, and
+target. The binding snapshots the request at that refusal point, waits for its
+matching `WRITABLE`, and resubmits the same request. Only admission changes the
+operation to the normal reply/timeout completion phase. Terminal WRITABLE
+records surface as typed `ZlinkSubmitException` failures.
+
+`PENDING_MAX_MSGS` and `PENDING_MAX_BYTES` retain their native numeric values
+and value storage for ABI compatibility. Core ignores both options; neither
+SEND nor REQUEST has a Core-owned pre-admission pending payload pool.
 
 ## Native library loading
 

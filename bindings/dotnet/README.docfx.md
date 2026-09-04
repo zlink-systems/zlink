@@ -38,10 +38,16 @@ bindings/dotnet/_site/index.html
   awaitable send helper keeps the exact packet, waits for `POLLOUT`, drains the
   completion queue, and retries only after the matching `WRITABLE` token,
   context, and routing id arrive.
+- Awaitable REQUEST follows the same pre-admission WRITABLE-token flow. Its
+  reply timeout and REQUEST completion ID begin only after admission; terminal
+  WRITABLE records surface as typed submit failures.
+- `PENDING_MAX_MSGS` and `PENDING_MAX_BYTES` keep their ABI values and storage
+  but are ignored. Core owns no SEND or REQUEST payload before admission.
 - `Send().Message(...).TrySubmit()` returns `false` for
   `BACKPRESSURED`/`EAGAIN` and leaves its messages with the caller.
 - External loops register `POLLOUT | POLLCOMPLETION`; the latter transfers sole
   queue-drain ownership, while WRITABLE-only wakes remain caller-visible as
   `POLLOUT` rather than `POLLCOMPLETION`.
-- `POLLCOMPLETION` remains the request-completion signal; it is not a
-  successful-SEND notification.
+- `POLLCOMPLETION` wakes for REQUEST completions and WRITABLE records. The
+  binding consumes WRITABLE internally; successful SEND admission produces no
+  completion.

@@ -157,21 +157,52 @@ internal sealed class CompletionOwner
                 return Task.FromCanceled<IReadOnlyList<Message>>(
                     cancellationToken);
 
-            var entry = new RequestCompletionEntry(cancellationToken);
+            var entry = new RequestCompletionEntry(target, timeoutMs,
+                cancellationToken);
             Register(entry);
-            try
+            var attempt = SubmitRequest(target, parts, timeoutMs, DontWait,
+                entry.Context);
+            if (attempt.Failure is null)
             {
-                var completionId = SubmitRequest(target, parts, timeoutMs,
-                    DontWait, entry.Context);
-                entry.Publish(completionId);
+                if (attempt.CompletionId == 0)
+                {
+                    var failure = CreateProtocolFailure();
+                    entry.AbortBeforeNativeWait(failure);
+                    throw failure;
+                }
+
+                entry.PublishRequest(attempt.CompletionId);
                 StartRuntimePump();
                 return entry.Task;
             }
-            catch (Exception exception)
+
+            if (IsBackpressured(attempt.Failure)
+                && attempt.CompletionId != 0)
             {
-                entry.AbortBeforeNativeWait(exception);
-                throw;
+                Message[]? retained = null;
+                try
+                {
+                    // Core retains only the token. Snapshot the request only
+                    // after refusal so the admitted path remains unchanged.
+                    retained = RequestReplySupport.CloneParts(parts);
+                    RequestReplySupport.ConsumeParts(parts);
+                    entry.ArmWritable(attempt.CompletionId, retained);
+                }
+                catch (Exception exception)
+                {
+                    entry.ArmFailed(attempt.CompletionId, retained, exception);
+                    StartRuntimePump();
+                    throw;
+                }
+                StartRuntimePump();
+                return entry.Task;
             }
+
+            var submitFailure = IsBackpressured(attempt.Failure)
+                ? CreateProtocolFailure()
+                : attempt.Failure;
+            entry.AbortBeforeNativeWait(submitFailure);
+            throw submitFailure;
         }
     }
 
@@ -182,20 +213,24 @@ internal sealed class CompletionOwner
         lock (_submitSync)
         {
             RequestReplySupport.EnsureParts(parts, nameof(parts));
-            entry = new RequestCompletionEntry(CancellationToken.None);
+            entry = new RequestCompletionEntry(target, timeoutMs,
+                CancellationToken.None);
             Register(entry);
-            try
+            var attempt = SubmitRequest(target, parts, timeoutMs, 0,
+                entry.Context);
+            if (attempt.Failure is not null)
             {
-                var completionId = SubmitRequest(target, parts, timeoutMs, 0,
-                    entry.Context);
-                entry.Publish(completionId);
-                StartRuntimePump();
+                entry.AbortBeforeNativeWait(attempt.Failure);
+                throw attempt.Failure;
             }
-            catch (Exception exception)
+            if (attempt.CompletionId == 0)
             {
-                entry.AbortBeforeNativeWait(exception);
-                throw;
+                var failure = CreateProtocolFailure();
+                entry.AbortBeforeNativeWait(failure);
+                throw failure;
             }
+            entry.PublishRequest(attempt.CompletionId);
+            StartRuntimePump();
         }
         return entry.Task.GetAwaiter().GetResult();
     }
@@ -458,7 +493,7 @@ internal sealed class CompletionOwner
         }
     }
 
-    private unsafe ulong SubmitRequest(RoutingId? target,
+    private unsafe SendAttempt SubmitRequest(RoutingId? target,
         IReadOnlyList<Message> parts, uint timeoutMs, int flags,
         IntPtr userContext)
     {
@@ -471,19 +506,25 @@ internal sealed class CompletionOwner
         }
         ulong completionId = 0;
         var completionIdPointer = &completionId;
-        RequestReplySupport.SubmitPreservingOnFailure(parts,
-            (ref ZlinkMsg nativePart, NativeMethods.ZlinkPartFlag partFlag) =>
-            {
-                var final = partFlag == NativeMethods.ZlinkPartFlag.Final;
-                return NativeMethods.zlink_request_part(_handle,
-                    targetPointer, ref nativePart, flags, partFlag,
-                    final ? timeoutMs : 0,
-                    final ? userContext : IntPtr.Zero,
-                    final ? completionIdPointer : null);
-            });
-        if (completionId == 0)
-            throw CreateProtocolFailure();
-        return completionId;
+        try
+        {
+            RequestReplySupport.SubmitPreservingOnFailure(parts,
+                (ref ZlinkMsg nativePart,
+                    NativeMethods.ZlinkPartFlag partFlag) =>
+                {
+                    var final = partFlag == NativeMethods.ZlinkPartFlag.Final;
+                    return NativeMethods.zlink_request_part(_handle,
+                        targetPointer, ref nativePart, flags, partFlag,
+                        final ? timeoutMs : 0,
+                        final ? userContext : IntPtr.Zero,
+                        final ? completionIdPointer : null);
+                });
+            return new SendAttempt(completionId, null);
+        }
+        catch (Exception exception)
+        {
+            return new SendAttempt(completionId, exception);
+        }
     }
 
     private static bool IsBackpressured(Exception exception)
@@ -1078,21 +1119,26 @@ internal sealed class CompletionOwner
     private sealed class RequestCompletionEntry : CompletionEntry
     {
         private readonly object _sync = new();
+        private readonly RoutingId? _target;
+        private readonly uint _timeoutMs;
         private readonly CancellationToken _cancellationToken;
         private readonly TaskCompletionSource<IReadOnlyList<Message>>
             _completion = new(
                 TaskCreationOptions.RunContinuationsAsynchronously);
         private CancellationTokenRegistration _cancellationRegistration;
         private IReadOnlyList<Message> _reply = Array.Empty<Message>();
+        private Message[]? _retained;
         private ulong _completionId;
-        private bool _published;
-        private bool _terminal;
-        private bool _failedWaiting;
+        private RequestEntryState _state;
         private bool _cancelClaimed;
         private bool _taskSettled;
+        private bool _payloadReleased;
 
-        internal RequestCompletionEntry(CancellationToken cancellationToken)
+        internal RequestCompletionEntry(RoutingId? target, uint timeoutMs,
+            CancellationToken cancellationToken)
         {
+            _target = target;
+            _timeoutMs = timeoutMs;
             _cancellationToken = cancellationToken;
         }
 
@@ -1106,91 +1152,241 @@ internal sealed class CompletionOwner
                 static state => ((RequestCompletionEntry)state!).Cancel(), this);
         }
 
-        internal void Publish(ulong completionId)
+        internal void PublishRequest(ulong completionId)
         {
             if (completionId == 0)
                 throw CreateProtocolFailure();
             lock (_sync)
             {
+                if (_state != RequestEntryState.Registered)
+                    throw new InvalidOperationException(
+                        "A request completion must be published once.");
                 _completionId = completionId;
-                _published = true;
+                _state = RequestEntryState.WaitingRequest;
                 if (_cancelClaimed)
                     SetCanceledLocked();
             }
         }
 
+        internal void ArmWritable(ulong token, Message[] retained)
+        {
+            lock (_sync)
+            {
+                if (_state != RequestEntryState.Registered || token == 0)
+                    throw new InvalidOperationException(
+                        "A writable wait must be armed once with a nonzero token.");
+                _completionId = token;
+                _retained = retained;
+                _state = RequestEntryState.WaitingWritable;
+                if (_cancelClaimed)
+                {
+                    ReleasePayloadLocked();
+                    SetCanceledLocked();
+                }
+            }
+        }
+
+        internal void ArmFailed(ulong token, Message[]? retained,
+            Exception exception)
+        {
+            lock (_sync)
+            {
+                if (_state != RequestEntryState.Registered || token == 0)
+                    return;
+                _completionId = token;
+                _retained = retained;
+                _state = RequestEntryState.FailedWaiting;
+                ReleasePayloadLocked();
+                SetExceptionLocked(exception);
+            }
+            _cancellationRegistration.Unregister();
+        }
+
         internal override unsafe void Capture(ref ZlinkCompletion completion)
         {
+            Exception? failure = null;
+            var retry = false;
             var keepExpectedWaiter = false;
             lock (_sync)
             {
-                if (_terminal)
+                if (_state == RequestEntryState.Terminal)
                     return;
-                Exception? failure = null;
-                if (_failedWaiting)
+                if (_state == RequestEntryState.FailedWaiting)
                 {
                     if (completion.CompletionId != _completionId)
                         return;
-                    _terminal = true;
+                    _state = RequestEntryState.Terminal;
                 }
-                else if (_published
-                         && completion.CompletionId != _completionId)
+                else if (completion.CompletionId != _completionId)
                 {
-                    failure = new ZlinkRequestException(
-                        RequestResult.InternalError);
-                    _failedWaiting = true;
+                    failure = CreateStateFailure();
+                    _state = RequestEntryState.FailedWaiting;
+                    ReleasePayloadLocked();
+                    SetExceptionLocked(failure);
                     keepExpectedWaiter = true;
                 }
-                else
+                else if (_state == RequestEntryState.WaitingWritable)
                 {
-                    _terminal = true;
-                    if (!_published
-                        || completion.Kind != CompletionKind.Request
+                    if (completion.Kind != CompletionKind.Writable
+                        || completion.UserContext != Context
+                        || !TargetMatches(_target,
+                            ref completion.PeerRoutingId))
+                    {
+                        failure = CreateProtocolFailure();
+                        _state = RequestEntryState.Terminal;
+                        ReleasePayloadLocked();
+                        SetExceptionLocked(failure);
+                    }
+                    else if (completion.SendResult ==
+                             ZlinkSendCompleteResult.Terminal)
+                    {
+                        failure = completion.SendTerminalErrno != 0
+                            ? ZlinkException.CreateSubmitException(
+                                completion.SendTerminalErrno)
+                            : new ZlinkSubmitException(
+                                SubmitResult.NotAdmitted);
+                        _state = RequestEntryState.Terminal;
+                        ReleasePayloadLocked();
+                        SetExceptionLocked(failure);
+                    }
+                    else if (completion.SendResult !=
+                             ZlinkSendCompleteResult.Admitted
+                             || completion.SendTerminalErrno != 0)
+                    {
+                        failure = CreateProtocolFailure();
+                        _state = RequestEntryState.Terminal;
+                        ReleasePayloadLocked();
+                        SetExceptionLocked(failure);
+                    }
+                    else if (_cancelClaimed)
+                    {
+                        _state = RequestEntryState.Terminal;
+                        ReleasePayloadLocked();
+                        SetCanceledLocked();
+                    }
+                    else if (_retained is null)
+                    {
+                        failure = CreateProtocolFailure();
+                        _state = RequestEntryState.Terminal;
+                        SetExceptionLocked(failure);
+                    }
+                    else
+                    {
+                        _state = RequestEntryState.Retrying;
+                        retry = true;
+                    }
+                }
+                else if (_state == RequestEntryState.WaitingRequest)
+                {
+                    _state = RequestEntryState.Terminal;
+                    if (completion.Kind != CompletionKind.Request
                         || completion.UserContext != Context)
+                    {
                         failure = new ZlinkRequestException(
                             RequestResult.InternalError);
+                        SetExceptionLocked(failure);
+                    }
                     else if (!_cancelClaimed)
                     {
                         if (completion.RequestResult != RequestResult.Ok)
+                        {
                             failure = new ZlinkRequestException(
                                 completion.RequestResult);
+                            SetExceptionLocked(failure);
+                        }
                         else
                         {
                             try
                             {
                                 _reply = MoveReply(ref completion);
+                                SetResultLocked();
                             }
                             catch (Exception exception)
                             {
                                 failure = exception;
+                                SetExceptionLocked(failure);
                             }
                         }
                     }
-                }
-
-                if (!_taskSettled)
-                {
-                    if (_cancelClaimed)
-                        SetCanceledLocked();
-                    else if (failure is not null)
-                        SetExceptionLocked(failure);
                     else
-                        SetResultLocked();
+                    {
+                        SetCanceledLocked();
+                    }
+                }
+                else
+                {
+                    failure = CreateStateFailure();
+                    _state = RequestEntryState.Terminal;
+                    ReleasePayloadLocked();
+                    SetExceptionLocked(failure);
                 }
             }
             if (keepExpectedWaiter)
                 return;
+            if (retry)
+            {
+                RetryRequest();
+                return;
+            }
             _cancellationRegistration.Unregister();
             Remove();
+        }
+
+        private void RetryRequest()
+        {
+            var attempt = Owner.SubmitRequest(_target, _retained!, _timeoutMs,
+                DontWait, Context);
+            var terminal = false;
+            lock (_sync)
+            {
+                if (attempt.Failure is null && attempt.CompletionId != 0)
+                {
+                    _completionId = attempt.CompletionId;
+                    _state = RequestEntryState.WaitingRequest;
+                    ReleasePayloadLocked();
+                    if (_cancelClaimed)
+                        SetCanceledLocked();
+                }
+                else if (attempt.Failure is not null
+                         && IsBackpressured(attempt.Failure)
+                         && attempt.CompletionId != 0)
+                {
+                    _completionId = attempt.CompletionId;
+                    _state = RequestEntryState.WaitingWritable;
+                    if (_cancelClaimed)
+                    {
+                        ReleasePayloadLocked();
+                        SetCanceledLocked();
+                    }
+                }
+                else
+                {
+                    var failure = attempt.Failure is null
+                                  || IsBackpressured(attempt.Failure)
+                        ? CreateProtocolFailure()
+                        : attempt.Failure;
+                    _state = RequestEntryState.Terminal;
+                    ReleasePayloadLocked();
+                    SetExceptionLocked(failure);
+                    terminal = true;
+                }
+            }
+
+            if (terminal)
+            {
+                _cancellationRegistration.Unregister();
+                Remove();
+            }
         }
 
         internal override void AbortBeforeNativeWait(Exception exception)
         {
             lock (_sync)
             {
-                if (_terminal)
+                if (_state == RequestEntryState.Terminal)
                     return;
-                _terminal = true;
+                _state = RequestEntryState.Terminal;
+                ReleasePayloadLocked();
                 if (!_taskSettled)
                 {
                     if (_cancelClaimed)
@@ -1205,20 +1401,28 @@ internal sealed class CompletionOwner
 
         internal override void FailLifecycle()
         {
-            AbortBeforeNativeWait(new ZlinkRequestException(
-                RequestResult.Terminated));
+            Exception failure;
+            lock (_sync)
+                failure = _state == RequestEntryState.WaitingWritable
+                    ? new ZlinkSubmitException(SubmitResult.Terminated,
+                        (int)ErrorCode.EShutdown)
+                    : new ZlinkRequestException(RequestResult.Terminated);
+            AbortBeforeNativeWait(failure);
         }
 
         internal override void FailRuntimeWait()
         {
             lock (_sync)
             {
-                if (_terminal || !_published || _failedWaiting)
+                if (_state is RequestEntryState.Registered
+                    or RequestEntryState.Terminal
+                    or RequestEntryState.FailedWaiting)
                     return;
-                _failedWaiting = true;
+                var failure = CreateStateFailure();
+                _state = RequestEntryState.FailedWaiting;
+                ReleasePayloadLocked();
                 if (!_taskSettled)
-                    SetExceptionLocked(new ZlinkRequestException(
-                        RequestResult.InternalError));
+                    SetExceptionLocked(failure);
             }
         }
 
@@ -1226,12 +1430,20 @@ internal sealed class CompletionOwner
         {
             lock (_sync)
             {
-                if (_terminal || _taskSettled)
+                if (_state == RequestEntryState.Terminal || _taskSettled)
                     return;
                 _cancelClaimed = true;
                 SetCanceledLocked();
+                if (_state == RequestEntryState.WaitingWritable)
+                    ReleasePayloadLocked();
             }
         }
+
+        private Exception CreateStateFailure() =>
+            _state is RequestEntryState.WaitingWritable
+                or RequestEntryState.Retrying
+                ? CreateProtocolFailure()
+                : new ZlinkRequestException(RequestResult.InternalError);
 
         private static unsafe IReadOnlyList<Message> MoveReply(
             ref ZlinkCompletion completion)
@@ -1261,12 +1473,16 @@ internal sealed class CompletionOwner
 
         private void SetResultLocked()
         {
+            if (_taskSettled)
+                return;
             _taskSettled = true;
             _completion.TrySetResult(_reply);
         }
 
         private void SetExceptionLocked(Exception exception)
         {
+            if (_taskSettled)
+                return;
             _taskSettled = true;
             _completion.TrySetException(exception);
         }
@@ -1278,12 +1494,30 @@ internal sealed class CompletionOwner
             _taskSettled = true;
             _completion.TrySetCanceled(_cancellationToken);
         }
+
+        private void ReleasePayloadLocked()
+        {
+            if (_payloadReleased || _retained is null)
+                return;
+            _payloadReleased = true;
+            RequestReplySupport.DisposeParts(_retained);
+        }
     }
 
     private enum SendEntryState
     {
         Registered,
         Waiting,
+        FailedWaiting,
+        Retrying,
+        Terminal
+    }
+
+    private enum RequestEntryState
+    {
+        Registered,
+        WaitingWritable,
+        WaitingRequest,
         FailedWaiting,
         Retrying,
         Terminal

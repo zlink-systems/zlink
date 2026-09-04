@@ -122,6 +122,31 @@ public sealed class test_optimization_guard
     }
 
     [Fact]
+    public void async_request_retains_payload_only_after_backpressure()
+    {
+        string path = Path.Combine(BindingRoot(), "src", "Zlink", "Runtime",
+            "Messaging", "CompletionOwner.cs");
+        string source = File.ReadAllText(path);
+
+        int requestPath = source.IndexOf(
+            "internal Task<IReadOnlyList<Message>> RequestAsync",
+            StringComparison.Ordinal);
+        int firstAttempt = source.IndexOf(
+            "var attempt = SubmitRequest(target, parts, timeoutMs, DontWait,",
+            requestPath, StringComparison.Ordinal);
+        int retainedSnapshot = source.IndexOf(
+            "retained = RequestReplySupport.CloneParts(parts);",
+            firstAttempt, StringComparison.Ordinal);
+        int writableRetry = source.IndexOf("private void RetryRequest()",
+            retainedSnapshot, StringComparison.Ordinal);
+
+        Assert.True(requestPath >= 0);
+        Assert.True(firstAttempt > requestPath);
+        Assert.True(retainedSnapshot > firstAttempt);
+        Assert.True(writableRetry > retainedSnapshot);
+    }
+
+    [Fact]
     public void shutdown_errno_maps_to_terminated_submit_result()
     {
         string path = Path.Combine(BindingRoot(), "src", "Zlink", "Runtime",

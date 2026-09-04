@@ -53,9 +53,11 @@ public interface IRouterSocket : IConnectableRoutedMessageSocket
     RoutingId GetRoutingId();
 
     /// <summary>
-    ///     Start a request operation addressed to a peer routing id. Independent
-    ///     request builders may be submitted concurrently on the same socket. Do
-    ///     not share one builder or one message between concurrent operations.
+    ///     Start a request operation addressed to a peer routing id. A refused
+    ///     awaitable request retries only after the WRITABLE token for that exact
+    ///     routing id. Independent request builders may be submitted concurrently
+    ///     on the same socket. Do not share one builder or one message between
+    ///     concurrent operations.
     /// </summary>
     RequestOperation Request(RoutingId peerRid);
 

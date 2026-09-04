@@ -15,8 +15,8 @@ public enum CompletionKind
     Request = 2,
 
     /// <summary>
-    ///     A DONTWAIT SEND wait token became writable. This grants permission to
-    ///     retry the same packet; it does not report SEND success.
+    ///     A DONTWAIT SEND or REQUEST wait token became writable. This grants
+    ///     permission to retry the same packet; it does not report admission.
     /// </summary>
     Writable = 3
 }

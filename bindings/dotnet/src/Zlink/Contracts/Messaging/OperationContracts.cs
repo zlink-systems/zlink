@@ -163,13 +163,15 @@ public interface RequestSubmitOperation
     IReadOnlyList<Message> Submit();
 
     /// <summary>
-    ///     Transfers the request parts to the operation, asynchronously waits for
-    ///     exact-target admission, and returns the reply parts.
+    ///     Attempts non-blocking admission, waits for the exact WRITABLE token
+    ///     after backpressure, resubmits the same request, and returns the reply
+    ///     parts after admission.
     /// </summary>
     /// <remarks>
     ///     The caller owns the returned messages and must dispose them. Calling
-    ///     this method transfers all accumulated request parts to the pending
-    ///     operation, including while it waits for exact-target admission.
+    ///     this method transfers all accumulated request parts to the operation.
+    ///     Core retains no request payload before admission; the binding takes a
+    ///     retained packet snapshot only if the first attempt is refused.
     /// </remarks>
     Task<IReadOnlyList<Message>> Async(
         CancellationToken cancellationToken = default);
@@ -275,8 +277,9 @@ public enum RequestResult
     NotSupported = 112,
 
     /// <summary>
-    ///     The target could not admit the request because its bounded pending
-    ///     budget was exhausted.
+    ///     ABI-preserved request result for outbound admission backpressure.
+    ///     Awaitable request admission handles this through a WRITABLE token
+    ///     before any request completion exists.
     /// </summary>
     Backpressured = 113
 }

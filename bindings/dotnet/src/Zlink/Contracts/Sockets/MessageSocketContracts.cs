@@ -80,10 +80,11 @@ public interface IDealerSocket : IReceivingMessageSocket, IConnectableSocket
 
     /// <summary>
     ///     Begins a request: add parts on the returned builder, then submit and
-    ///     await a reply. Request parts are consumed on a successful submit (see
-    ///     <see cref="SendOperation" /> for the ownership contract). Independent
-    ///     request builders may be submitted concurrently on the same socket. Do
-    ///     not share one builder or one message between concurrent operations.
+    ///     await a reply. An awaitable request refused before admission retains
+    ///     its packet in the binding and retries only after its WRITABLE token.
+    ///     Independent request builders may be submitted concurrently on the
+    ///     same socket. Do not share one builder or one message between
+    ///     concurrent operations.
     /// </summary>
     RequestOperation Request();
 }
