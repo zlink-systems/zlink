@@ -17,15 +17,16 @@
 
 - Multi `tcp`: DD `통과(90.8%)`, DR/RR REQREP `보류(57.4/68.4%)`, PUBSUB `보류(81.5%)`(자체·Sol 두 pass 모두 no-go; subscriber wrapper 5~6%만 binding 귀속).
 - Multi `tls/ws/wss`: DD `보류(79.3/85.3/91.1%)`(3-run), REQREP `보류`(53.1~72.3%, §7.5: pattern pass 두 번 완료·후보 소진), PUBSUB `통과(100.2~104.8%)`.
-- Single(before, 07:16): one-way 82~109%, routed one-way 84~96%(`inproc`만 57~75%), REQREP 40.6~46.4%. **one-way latency가 C 대비 수십~수백 배** — 정의는 같고 C++ 수신 경로가 병목이라 큐가 HWM까지 차는 현상. 수신 경로 pass 1 job 진행 중(07:17~, 결과는 §5).
+- Single: before 07:16 → 수신 경로 pass 1(library no-go; **C++ 러너가 메시지마다 `PERF_PART_COUNT`를 getenv로 읽던 버그** 수정 `9cb8a3a11b`) → 08:20 재짝지음: PAIR 86~96%, PUBSUB 91~113%, DD 63~96%, DR 91~97%, RR 74~98% — `inproc`(DD 63.1, RR 73.8, PAIR 86.3, PUBSUB 91.1)과 tcp PAIR 90.0·DD 92.6, ws/wss PAIR 94 등만 미달, 나머지 통과. REQREP 40.6~46.4% 미달(pass 예정). one-way latency는 큐 깊이라 판정 제외(D-B91).
 
-## 3. 사용자 결정 필요
+## 3. 열려 있던 항목 — 사용자 지시(08:20 "결정할 것 없음, 진행")로 D-B91에 확정
 
-1. **D-B83 1·2** Core latency 잔여(DD 작은 크기 평균 latency 1.6~3.5x, REQREP +50%) — Core 추가 수정 여부.
-2. **D-B89** C 러너 ws/wss REQREP byte-quantum 제출 턴 유지 여부(붕괴 제거 대신 ws 4K/8K 안정 처리량 40~50% 하락). 대안 (b) client별 제출 즉시 진행, (c) timeout 상향.
-3. **D-B90** C++ Multi PUBSUB 러너 parity 수정(서버 auto-HWM 재계산 시점을 C에 맞춤, SUB filter `""`) — 러너 변경이라 확인 뒤 진행.
-4. DD/one-way **latency metric**: multi DD와 single one-way 모두 "큐 깊이"가 되어 binding 비교에 쓸 수 없음(양 러너 bimodal). 정책(§2.2 latency 목표)을 admission→수신 시간 등으로 재정의할지.
-5. tcp의 DD 완화 목표 90%를 tls/ws/wss에도 적용할지(적용 시 `wss` DD `통과`).
+D-B83 Core latency 잔여는 원인별 수정 트랙으로, D-B89 러너 수정 유지, D-B90 PUBSUB 러너 parity 수정 진행, one-way latency는 큐 깊이라 판정 제외(처리량으로 판정), DD 완화 90% 전 transport 적용.
+
+## 3-1. A 후속 2건 접수 (`handoff-B-followups-D086-D087.ko.md`, 08:25 KST job 시작)
+
+- D-086 tcp same-RID handover admission 지연: Core job `b-core-d086`(sol high, 90분).
+- D-087 Java 네이티브 라이브러리 임시 디렉터리 누수: Java job `b-java-d087`(sol high, 60분).
 
 ## 4. 남은 것 (계획서 §7.4 순서)
 
@@ -34,4 +35,4 @@
 
 ## 5. 진행 중 job
 
-- `b-cpp-single-recv-pass1`(sol high, 75분 상한, worktree `~/project/zlink-wt-cpp-single`) — 결과는 이 파일 갱신 또는 계획서 §9.1.1에 반영.
+- `b-cpp-single-recv-pass1` 완료(07:35, 위 반영). `b-core-d086`, `b-java-d087` 진행 중(08:25~).
