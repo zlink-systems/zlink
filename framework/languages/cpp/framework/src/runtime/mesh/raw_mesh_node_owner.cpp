@@ -794,17 +794,38 @@ bool raw_mesh_node_owner_t::connect_peer (
     if (!_router || endpoint.empty ()) {
         return false;
     }
-    _expected_peers.insert_or_assign (
-      expected_descriptor.node_routing_id, expected_descriptor);
+    const auto endpoint_retargeted = std::any_of (
+      _expected_peers.begin (), _expected_peers.end (),
+      [&endpoint, &expected_descriptor] (const auto &entry) {
+          return entry.first != expected_descriptor.node_routing_id
+                 && entry.second.advertised_endpoint == endpoint;
+      });
     try {
         std::lock_guard socket_lock (_socket_mutex);
         trace_mesh ("connect endpoint=" + endpoint
                     + " expected=" + owner_key (expected_descriptor.node_routing_id));
+        if (endpoint_retargeted && _outbound_endpoints.contains (endpoint)) {
+            // connect_routing_id is captured only when a new connect intent is
+            // created. Retire the stale same-endpoint intent before assigning
+            // the replacement RID, otherwise reconnect keeps publishing the
+            // previous alias and RouteMesh can never admit the replacement.
+            _router->disconnect (endpoint);
+        }
         _router->options ().connect_routing_id (
           zlink::routing_id_t::from (
             expected_descriptor.node_routing_id));
         _router->connect (endpoint);
         _outbound_endpoints.insert (endpoint);
+        if (endpoint_retargeted) {
+            std::erase_if (
+              _expected_peers,
+              [&endpoint, &expected_descriptor] (const auto &entry) {
+                  return entry.first != expected_descriptor.node_routing_id
+                         && entry.second.advertised_endpoint == endpoint;
+              });
+        }
+        _expected_peers.insert_or_assign (
+          expected_descriptor.node_routing_id, expected_descriptor);
         return true;
     }
     catch (...) {

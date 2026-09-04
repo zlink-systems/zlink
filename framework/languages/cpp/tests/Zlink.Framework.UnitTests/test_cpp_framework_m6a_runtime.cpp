@@ -732,6 +732,10 @@ void verify_stale_rid_disconnect_preserves_same_endpoint_replacement ()
           mesh::service_liveness_registry_t::clock_t::now ());
         std::this_thread::sleep_for (1ms);
     }
+    // Regression precondition: reconnect still owns the endpoint after the
+    // old RID is gone, so connecting the replacement must retarget that
+    // existing endpoint intent rather than keep publishing the old alias.
+    assert (!source.topology ().peer (old_descriptor.node_routing_id));
 
     auto replacement_options = descriptor ("replacement-new", endpoint);
     auto replacement = std::make_unique<mesh::raw_mesh_node_owner_t> (
