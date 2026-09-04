@@ -1,0 +1,34 @@
+# Job: final cpp + node 7-sample gates on the committed main tree with the current local packages (built 2026-09-05 01:53, D-B85 REQUEST wait-token bindings)
+
+You are a codex sub-agent under a Claude supervisor. Execution/classification job (no source edits).
+Read `AGENTS.md` (root) §2/§4, `doc/plan/c016-worklog/c-cross-language-e2e-2-summary.md` (cpp sample
+commands, §"cpp samples") and `gate-samples-node-fix-summary.md` (node sample commands). Do not modify
+source/tests, nothing under `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`,
+`doc/site/**`. Do not rebuild Core or local packages. Only touch the cpp and node trees.
+
+## Environment
+- cpp: `ZLINK_CPP_BUILD_DIR=/home/hep7/project/zlink/framework/languages/cpp/build/linux-ninja-c-e2e`
+  (already built against the current packages; `cmake --build ... -j4` once to confirm no work),
+  `TMPDIR=/dev/shm/zlink-tmp-cpp`. Runner: `framework/languages/cpp/samples/run_samples.sh` (accepts a
+  selector; read it). Docker/redis on 127.0.0.1:6379 available.
+- node: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`,
+  `flock -w7200 /tmp/zlink-node-gate.lock`; `npm run build` once first. Runner:
+  `framework/languages/node/samples/run-sample.mjs` / `run_samples.sh` (read them; SupportChat needs the
+  Playwright Chromium in `framework/languages/node/.cache/ms-playwright`; ZoneWorld needs
+  `samples/ZoneWorld/dist` — exists).
+
+## What to run
+For each language: the 7 common samples individually (TicTacToe, Bingo, DeliveryDispatch, SupportChat,
+GameQuest, ShoppingMall, ZoneWorld) — exit, duration, final PASS/completion marker — then the aggregate
+runner once. Re-run a failing sample once for determinism and preserve its logs before retrying.
+
+## Classify every failure
+(A) DONTWAIT/backpressure, (B) terminal/error classification, (C) known pre-existing with prior evidence
+`file:line`, (D) environment/runner, (E) binding-port dependency (a REQUEST/SEND submit whose
+BACKPRESSURED/EAGAIN result is never resubmitted — capture the exact site); first failing
+assertion/log excerpt with `file:line`.
+
+## Deliverable
+`doc/plan/c016-worklog/gate-final-cpp-node-samples-summary.md`: two 7-row tables + aggregate rows,
+failures bucketed, exact commands, logs under `zlink-work/c016/logs/gate-final-samples-<lang>-*.log`,
+BLOCKERS. Do not commit.
