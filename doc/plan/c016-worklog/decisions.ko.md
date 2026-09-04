@@ -705,3 +705,16 @@ codex sol reverify-bcore. **결론: R-Bcore 없음**(B의 core posddd/perf가 fr
 에러(npm test lint 게이트 차단). validator가 런타임 invalid 값 거부하도록 수정 필요.
 **잔여 delivery debt(캠페인서 계속 수정, 사용자 승인)**: cpp stream-connector delivery stall(Bingo/TTT 공통), java 샘플
 authenticate(별개 root), node cross-language .NET→Node stream stage, ZoneWorld(4언어). 전부 pull-completion 무관 기존 부채.
+
+## D-078 (2026-09-04 09:xx) 설계 원칙 확정(사용자) — API는 직관적 동작, 별도 해석 불필요; readiness는 진짜 level-trigger
+사용자 원칙: "API는 직관적인 방법으로 동작해야 하고 그 외 다른 해석이 필요 없어야 한다." → poll/recv 같은 API는 자연스러운
+"poll→recv 하나→poll" 사용으로 동작해야 하며, drain-until-EAGAIN 같은 **특별한 사용을 강요하면 API/readiness 설계·구현 결함**.
+이는 기존 스펙과 **이미 일치**: `05-polling.ko.md:65-71` readiness=level-trigger + "readiness=true인데 timeout까지 잠듦
+(lost wake)은 계약 위반, 구현은 command 소비 후 notification descriptor 재무장으로 이를 지킨다"; line 49 raw socket POLLIN=
+"complete record 수신 가능"; line 78 "queue에 record 남아있는 동안 readiness 유지". line 83/88의 drain-until-NO_DATA는
+completion polling(POLLCOMPLETION) 전용 규칙이지 일반 POLLIN 계약 아님.
+**적용**: (1) STREAM stall = Core stream.cpp packet-mode의 lost-wake(buffered packet에 POLLIN 재무장 안 함) = **Core 계약
+위반 버그**로 확정. framework drain 루프는 workaround라 기각(codex도 동일 결론, 자기 framework 변경 되돌림). Core에서 수정
+(스펙 변경 아님, 구현을 스펙에 맞춤). (2) **소켓 사용 audit 기준**: perf(소켓별 최적 사용)와 대조하되, framework가 "특별 사용"을
+해야만 동작하는 지점은 그 소켓의 readiness/API 구현 결함으로 판정해 API 레이어(Core/binding)에서 고친다. perf의 drain 루프는
+API가 level-trigger면 최적화(선택)이지 필수 아님.
