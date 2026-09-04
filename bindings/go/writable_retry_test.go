@@ -3,7 +3,9 @@ package zlink_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"runtime"
+	"syscall"
 	"testing"
 	"time"
 
@@ -115,6 +117,79 @@ func TestPublicSendRetriesExactPacketAfterWritable(t *testing.T) {
 	var duplicate zlink.Received
 	if ok, err := dealer.Recv(&duplicate, zlink.RecvFlagsDontWait); err != nil || ok {
 		t.Fatalf("Recv(DontWait) after exact retry = (%v, %v), want no duplicate", ok, err)
+	}
+}
+
+func TestPublicBackpressuredSendReportsRouteRemoval(t *testing.T) {
+	ctx := newContext(t)
+	defer ctx.Close()
+	if err := ctx.Options().SetAutoHwmEnabled(false); err != nil {
+		t.Fatalf("SetAutoHwmEnabled(false) error = %v", err)
+	}
+
+	router, _ := ctx.RouterSocket()
+	dealer, _ := ctx.DealerSocket()
+	defer router.Close()
+	defer dealer.Close()
+	if err := router.SetLinger(0); err != nil {
+		t.Fatalf("router SetLinger(0) error = %v", err)
+	}
+	if err := dealer.SetLinger(0); err != nil {
+		t.Fatalf("dealer SetLinger(0) error = %v", err)
+	}
+	if err := router.SetSendHighWaterMark(1); err != nil {
+		t.Fatalf("router SetSendHighWaterMark(1) error = %v", err)
+	}
+	if err := dealer.SetReceiveHighWaterMark(1); err != nil {
+		t.Fatalf("dealer SetReceiveHighWaterMark(1) error = %v", err)
+	}
+
+	dealerRID := zlink.NewRoutingID([]byte("go-public-terminal-peer"))
+	if err := dealer.SetRoutingID(dealerRID); err != nil {
+		t.Fatalf("dealer SetRoutingID() error = %v", err)
+	}
+	endpoint := inprocEndpoint("public-writable-terminal")
+	if err := router.Bind(endpoint); err != nil {
+		t.Fatalf("router Bind() error = %v", err)
+	}
+	if err := dealer.Connect(endpoint); err != nil {
+		t.Fatalf("dealer Connect() error = %v", err)
+	}
+	if err := dealer.Send().Bytes([]byte("route-prime")).Submit(context.Background()); err != nil {
+		t.Fatalf("dealer prime Submit() error = %v", err)
+	}
+	var prime zlink.Received
+	if ok, err := router.Recv(&prime, zlink.RecvFlagsNone); err != nil || !ok {
+		t.Fatalf("router prime Recv() = (%v, %v), want (true, nil)", ok, err)
+	}
+	_ = prime.Close()
+	if err := router.SendTo(dealerRID).Bytes(bytes.Repeat([]byte{'f'}, 64)).Submit(context.Background()); err != nil {
+		t.Fatalf("HWM filler Submit() error = %v", err)
+	}
+
+	sendDone := make(chan error, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		sendDone <- router.SendTo(dealerRID).Bytes([]byte("must-not-send")).Submit(context.Background())
+	}()
+	<-started
+	assertSendRemainsBackpressured(t, sendDone)
+	if err := router.DisconnectRID(dealerRID); err != nil {
+		t.Fatalf("DisconnectRID() error = %v", err)
+	}
+
+	select {
+	case err := <-sendDone:
+		var submitErr *zlink.SubmitError
+		if !errors.As(err, &submitErr) || submitErr.Result != zlink.SubmitNotFound {
+			t.Fatalf("terminal send error = %v, want SubmitNotFound", err)
+		}
+		if !errors.Is(err, syscall.ENOENT) {
+			t.Fatalf("terminal send error = %v, want ENOENT", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("backpressured send remained blocked after route removal")
 	}
 }
 

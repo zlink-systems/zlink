@@ -401,13 +401,15 @@ prepare_core_runtime() {
     native_dir="${GO_NATIVE_DIR_OVERRIDE}"
   else
     native_dir="${ZLINK_GO_NATIVE_DIR:-${ROOT_DIR}/native}"
-    case "${PLATFORM}:$(uname -m)" in
-      linux:x86_64|linux:amd64) native_dir="${native_dir}/linux-x86_64" ;;
-      linux:aarch64|linux:arm64) native_dir="${native_dir}/linux-aarch64" ;;
-      macos:x86_64|macos:amd64) native_dir="${native_dir}/darwin-x86_64" ;;
-      macos:arm64|macos:aarch64) native_dir="${native_dir}/darwin-aarch64" ;;
-      *) echo "unsupported Go package platform: ${PLATFORM}:$(uname -m)" >&2; exit 1 ;;
-    esac
+    if [[ ! -f "${native_dir}/libzlink.so.${CORE_VERSION}" && ! -f "${native_dir}/libzlink.dylib" ]]; then
+      case "${PLATFORM}:$(uname -m)" in
+        linux:x86_64|linux:amd64) native_dir="${native_dir}/linux-x86_64" ;;
+        linux:aarch64|linux:arm64) native_dir="${native_dir}/linux-aarch64" ;;
+        macos:x86_64|macos:amd64) native_dir="${native_dir}/darwin-x86_64" ;;
+        macos:arm64|macos:aarch64) native_dir="${native_dir}/darwin-aarch64" ;;
+        *) echo "unsupported Go package platform: ${PLATFORM}:$(uname -m)" >&2; exit 1 ;;
+      esac
+    fi
   fi
   local runtime="${native_dir}/libzlink.dylib"
   if [[ "${PLATFORM}" == "linux" ]]; then

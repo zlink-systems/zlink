@@ -3,8 +3,42 @@ package native
 import (
 	"context"
 	"errors"
+	"syscall"
 	"testing"
 )
+
+func TestImmediateSendRegistrationDoesNotStartRuntimeDrain(t *testing.T) {
+	owner := newCompletionOwner(nil)
+	entry := newSendCompletionEntry(context.Background(), nil)
+	if err := owner.register(entry); err != nil {
+		t.Fatalf("register(send) error = %v", err)
+	}
+	if owner.runtime != nil {
+		t.Fatal("immediate send registration started a completion poller before backpressure")
+	}
+	owner.unregister(entry)
+}
+
+func TestSendTerminalErrorPreservesCauseCategory(t *testing.T) {
+	tests := []struct {
+		name   string
+		errno  int
+		result SubmitResult
+	}{
+		{name: "route removed", errno: int(syscall.ENOENT), result: SubmitNotFound},
+		{name: "socket shutdown", errno: int(syscall.ESHUTDOWN), result: SubmitTerminated},
+		{name: "context terminated", errno: contextTerminatedErrno, result: SubmitTerminated},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var submitErr *SubmitError
+			err := sendTerminalError(test.errno)
+			if !errors.As(err, &submitErr) || submitErr.Result != test.result || submitErr.InternalErrno() != test.errno {
+				t.Fatalf("sendTerminalError(%d) = %v, want result %d with original errno", test.errno, err, test.result)
+			}
+		})
+	}
+}
 
 func TestRequestCompletionEntryJoinsCaptureBeforePublish(t *testing.T) {
 	entry := newCompletionEntry(completionRequest, context.Background())
@@ -47,7 +81,7 @@ func TestInactiveRuntimeKeepsOwnershipWhenSubmitRegistersBeforeRetire(t *testing
 	runtime := &runtimeCompletionDrain{}
 	owner.runtime = runtime
 
-	if _, _, active := owner.runtimeEvents(runtime); active {
+	if _, active := owner.runtimeEvents(runtime); active {
 		t.Fatal("empty completion owner unexpectedly reported an active runtime")
 	}
 	entry := &completionEntry{handleKey: 1}

@@ -10,13 +10,14 @@ import "C"
 
 import (
 	"context"
-	goruntime "runtime"
 	"runtime/cgo"
 	"sync"
 	"unsafe"
 )
 
 type completionOperationKind uint8
+
+var contextTerminatedErrno = int(C.ETERM)
 
 const (
 	completionSendRetry completionOperationKind = iota + 1
@@ -139,11 +140,11 @@ func (e *completionEntry) finishSend(err error) {
 	}
 }
 
-func (e *completionEntry) setSendWaiting(waiting bool) {
+func (e *completionEntry) setSendWaiting(waiting bool) error {
 	if e == nil || e.owner == nil {
-		return
+		return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
-	e.owner.setSendWaiting(e, waiting)
+	return e.owner.setSendWaiting(e, waiting)
 }
 
 func (e *completionEntry) failSubmit() {
@@ -310,12 +311,10 @@ func (e *completionEntry) waitRequest() ([]*Message, error) {
 func (e *completionEntry) waitSettled() { <-e.settledDone }
 
 type runtimeCompletionDrain struct {
-	poller            unsafe.Pointer
-	events            C.short
-	observedWaitEpoch uint64
-	pollOutSuppressed bool
-	stop              chan struct{}
-	done              chan struct{}
+	poller unsafe.Pointer
+	events C.short
+	stop   chan struct{}
+	done   chan struct{}
 }
 
 // completionOwner owns the only drain path for one socket. Runtime polling
@@ -323,13 +322,12 @@ type runtimeCompletionDrain struct {
 type completionOwner struct {
 	socket unsafe.Pointer
 
-	mu            sync.Mutex
-	entries       map[uintptr]*completionEntry
-	publicOwner   *Poller
-	runtime       *runtimeCompletionDrain
-	sendWaiters   int
-	sendWaitEpoch uint64
-	shutdown      bool
+	mu          sync.Mutex
+	entries     map[uintptr]*completionEntry
+	publicOwner *Poller
+	runtime     *runtimeCompletionDrain
+	sendWaiters int
+	shutdown    bool
 }
 
 func newCompletionOwner(socket unsafe.Pointer) *completionOwner {
@@ -347,7 +345,10 @@ func (o *completionOwner) register(entry *completionEntry) error {
 	}
 	entry.owner = o
 	o.entries[entry.handleKey] = entry
-	if o.publicOwner == nil && o.runtime == nil {
+	// An immediately admitted SEND has no completion record. Keep its entry
+	// visible to an already-active drain, but create a runtime drain only after
+	// the initial attempt actually returns a wait token.
+	if entry.kind == completionRequest && o.publicOwner == nil && o.runtime == nil {
 		if err := o.startRuntimeLocked(); err != nil {
 			delete(o.entries, entry.handleKey)
 			return err
@@ -378,9 +379,6 @@ func (o *completionOwner) startRuntimeLocked() error {
 		return configErrorFromErrno(currentErrno())
 	}
 	events := C.short(C.ZLINK_POLLCOMPLETION)
-	if o.sendWaiters > 0 {
-		events |= C.short(C.ZLINK_POLLOUT)
-	}
 	if err := configErrorFromResult(C.zlink_poller_add(
 		poller, o.socket, nil, events)); err != nil {
 		handle := poller
@@ -398,35 +396,38 @@ func (o *completionOwner) startRuntimeLocked() error {
 	return nil
 }
 
-func (o *completionOwner) setSendWaiting(entry *completionEntry, waiting bool) {
+func (o *completionOwner) setSendWaiting(entry *completionEntry, waiting bool) error {
 	if o == nil || entry == nil {
-		return
+		return &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if current := o.entries[entry.handleKey]; current != entry || entry.sendWaiting == waiting {
-		return
+		return nil
 	}
 	entry.sendWaiting = waiting
 	if waiting {
 		o.sendWaiters++
-		o.sendWaitEpoch++
+		if o.publicOwner == nil && o.runtime == nil {
+			if err := o.startRuntimeLocked(); err != nil {
+				entry.sendWaiting = false
+				o.sendWaiters--
+				return err
+			}
+		}
 	} else {
 		o.sendWaiters--
 	}
+	return nil
 }
 
-func (o *completionOwner) runtimeEvents(runtime *runtimeCompletionDrain) (C.short, uint64, bool) {
+func (o *completionOwner) runtimeEvents(runtime *runtimeCompletionDrain) (C.short, bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.shutdown || o.runtime != runtime || o.publicOwner != nil || len(o.entries) == 0 {
-		return 0, 0, false
+		return 0, false
 	}
-	events := C.short(C.ZLINK_POLLCOMPLETION)
-	if o.sendWaiters > 0 && (!runtime.pollOutSuppressed || runtime.observedWaitEpoch != o.sendWaitEpoch) {
-		events |= C.short(C.ZLINK_POLLOUT)
-	}
-	return events, o.sendWaitEpoch, true
+	return C.short(C.ZLINK_POLLCOMPLETION), true
 }
 
 func (o *completionOwner) runtimeLoop(runtime *runtimeCompletionDrain) {
@@ -437,10 +438,7 @@ func (o *completionOwner) runtimeLoop(runtime *runtimeCompletionDrain) {
 			return
 		default:
 		}
-		// One non-blocking readiness turn at a time keeps progress on the Go
-		// scheduler without a dedicated OS thread, sleep, or timer.
-		goruntime.Gosched()
-		events, waitEpoch, active := o.runtimeEvents(runtime)
+		events, active := o.runtimeEvents(runtime)
 		if !active {
 			if o.exitInactiveRuntime(runtime) {
 				return
@@ -458,12 +456,10 @@ func (o *completionOwner) runtimeLoop(runtime *runtimeCompletionDrain) {
 
 		var event C.zlink_poller_event_t
 		var result C.zlink_config_result_t
-		count := C.zlink_poller_wait(runtime.poller, &event, 1, 0, &result)
+		// Block when there is no completion. The bounded native wait lets
+		// socket/context shutdown join this goroutine without a polling spin.
+		count := C.zlink_poller_wait(runtime.poller, &event, 1, 100, &result)
 		if count > 0 {
-			if PollEventFlag(event.events)&PollOut != 0 {
-				runtime.observedWaitEpoch = waitEpoch
-				runtime.pollOutSuppressed = true
-			}
 			if _, err := o.drain(false); err != nil {
 				o.failRuntimeLoop(runtime)
 				return
@@ -709,7 +705,7 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 		}
 		e.setSendWaiting(false)
 		e.send.payload.close()
-		e.finishSend(&SubmitError{Result: SubmitNotAdmitted, nativeErrno: terminalErrno})
+		e.finishSend(sendTerminalError(terminalErrno))
 		e.attemptMu.Unlock()
 		return true
 	}
@@ -741,6 +737,17 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 	}
 	e.attemptMu.Unlock()
 	return e.attemptSend()
+}
+
+func sendTerminalError(terminalErrno int) error {
+	result := SubmitNotAdmitted
+	switch terminalErrno {
+	case int(C.ENOENT):
+		result = SubmitNotFound
+	case int(C.ESHUTDOWN), contextTerminatedErrno:
+		result = SubmitTerminated
+	}
+	return &SubmitError{Result: result, nativeErrno: terminalErrno}
 }
 
 func captureNativeCompletion(

@@ -99,6 +99,7 @@ func runMultiDealerRouterEchoWindow(
 	// turns SENDSEND into reply-gated ping-pong.
 	var senders sync.WaitGroup
 	sendErrors := make(chan error, len(dealers))
+	measurementDone := make(chan struct{})
 	for _, dealer := range dealers {
 		socket := dealer.socket
 		senders.Add(1)
@@ -107,6 +108,11 @@ func runMultiDealerRouterEchoWindow(
 			payload := perfcommon.PreparePayload(msgSize)
 			for time.Now().Before(window.StopAt) {
 				if sendErr := sendMultiDealerRouterRequest(socket, payload, msgSize, window); sendErr != nil {
+					select {
+					case <-measurementDone:
+						return
+					default:
+					}
 					if perfcommon.IsTransient(sendErr) {
 						continue
 					}
@@ -145,6 +151,14 @@ func runMultiDealerRouterEchoWindow(
 				drainMultiDealerRouterReplies(socket, stats, msgSize, window)
 			}
 		}
+	}
+	// A managed send can legitimately still be waiting on its final WRITABLE
+	// token when the measurement window closes. Closing the client sockets is
+	// the lifecycle wakeup for those submissions; otherwise senders.Wait can
+	// hang forever after the receive loop has stopped draining echoed traffic.
+	close(measurementDone)
+	for _, dealer := range dealers {
+		_ = dealer.socket.Close()
 	}
 	senders.Wait()
 	select {

@@ -139,8 +139,19 @@ func (e *completionEntry) attemptSend() bool {
 	if errors.As(err, &submitErr) && submitErr.Result == SubmitBackpressured {
 		if submitErr.internalErrno() == int(C.EAGAIN) && completionID != 0 {
 			e.send.payload.takeSourceOwnership()
-			e.setSendWaiting(true)
 			e.publishSendWait(completionID)
+			if activateErr := e.setSendWaiting(true); activateErr != nil {
+				// Core already owns the token. Preserve the entry as a tombstone so
+				// its cgo context cannot be reused before socket shutdown.
+				e.mu.Lock()
+				if !e.publicDone {
+					e.err = activateErr
+					e.publicDone = true
+					close(e.done)
+				}
+				e.mu.Unlock()
+				e.send.payload.close()
+			}
 			return false
 		}
 		err = &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
