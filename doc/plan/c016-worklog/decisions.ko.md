@@ -1065,3 +1065,10 @@ cycle 5/5·ctest 1/1 즉시 반환, DEALER 1개 미close 시 늦은 close까지 
 **Core 후속(B, 미수정)**: tcp에서 이전 pipe 생존 중 same-RID replacement DEALER admission 지연 0.1~2.9 s(간헐 >5 s, 빠른 reconnect일수록 악화; inproc 즉시).
 framework test의 2 s 기대치가 이 분포 안에 있어 handover 계열 test(`HandoverKeepsPriorReplyEpochUntilExactDisconnect :560`, 36분짜리 D-068 sibling)의 간헐 실패/지연 원인 후보.
 
+## D-087 (2026-09-05 05:55, 머신 A) bindings/java 발견 — 네이티브 라이브러리 추출 임시 디렉터리 누수로 /tmp(8 GB tmpfs) 가득 참 (B 영역, 미수정)
+`bindings/java/src/main/java/systems/zlink/runtime/nativeapi/LibraryLoader.java:60-64`는 JVM마다 `Files.createTempDirectory("zlink-native-")`에
+`libzlink.so`(84 MB)를 복사하고 `deleteOnExit`에만 의존한다. 샘플 runner의 role kill(SIGKILL)·crash·hang-kill 경로에서는 삭제되지 않아
+하룻밤 java 샘플/테스트 게이트로 `/tmp/zlink-native-*` 약 95개(≈8 GB)가 남았고 tmpfs가 100%가 되어 감독 세션 도구 출력까지 실패했다.
+**임시 조치(A)**: 30분 넘은 디렉터리 주기 삭제 monitor. **제안(B)**: 추출 위치를 콘텐츠 해시 기반 고정 경로(예 `~/.cache/zlink/native/<sha256>/libzlink.so`)로 바꾸고
+동일 해시가 있으면 재사용(복사 생략) — JVM당 복사·누수 모두 사라지고 `System.load` 경로 안정. 회귀: 두 JVM 연속 로드 시 temp 디렉터리 수 증가 0 검증.
+
