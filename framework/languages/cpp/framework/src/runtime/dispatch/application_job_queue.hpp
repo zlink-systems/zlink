@@ -1036,8 +1036,8 @@ class application_supply_slot_t final
         std::optional<application_job_queue_t::permit_t> permit;
         {
             std::lock_guard lock (_state->mutex);
-            permit = std::move (_state->permit);
-            completed = std::move (_state->waiter);
+            permit = std::exchange (_state->permit, std::nullopt);
+            completed = std::exchange (_state->waiter, std::nullopt);
         }
         completed.reset ();
         return permit;
