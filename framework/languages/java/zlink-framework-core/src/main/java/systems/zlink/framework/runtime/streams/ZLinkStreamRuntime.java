@@ -39,9 +39,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
@@ -1081,24 +1079,12 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         if (!HEARTBEAT_PING_NAME.equals(header.packetName())) {
             throw new IllegalArgumentException("unknown STREAM control packet: " + header.packetName());
         }
-        Message empty = Message.from(new byte[0]);
-            try {
-                ZLinkStreamHeader pong = new ZLinkStreamHeader(
-                ZLinkStreamMessageKind.CONTROL,
-                ZLinkStreamCodec.RAW,
-                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                Optional.empty(),
-                HEARTBEAT_PONG_NAME,
-                    Map.of(),
-                    Optional.empty());
-            if (!stream.send(routingId, pong, List.of(empty), SendFlags.DONT_WAIT)) {
-                LOGGER.log(Level.FINE,
-                    "STREAM heartbeat pong was not admitted by the transport: "
-                        + routingId);
-            }
-        } finally {
-            empty.close();
-        }
+        sendControlAsync(
+            stream,
+            routingId,
+            HEARTBEAT_PONG_NAME,
+            Message.from(new byte[0]),
+            "STREAM heartbeat pong was not admitted by the transport: ");
     }
 
     private void dispatchStreamNotification(
@@ -1427,47 +1413,37 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     public CompletionStage<Void> notifyServerDrain() {
         List<Map.Entry<String, SessionState>> active = inStateLane(
             () -> List.copyOf(sessions.entrySet()));
+        List<CompletableFuture<Void>> notifications = new ArrayList<>();
         for (Map.Entry<String, SessionState> entry : active) {
             SessionState state = entry.getValue();
-            sendSessionClosing(state.stream(), state.routingId());
+            notifications.add(sendSessionClosing(
+                state.stream(), state.routingId()).toCompletableFuture());
         }
-        return CompletableFuture.completedFuture(null);
+        return CompletableFuture.allOf(
+            notifications.toArray(CompletableFuture[]::new));
     }
 
-    private static void sendSessionClosing(
+    private static CompletionStage<Void> sendSessionClosing(
         ZLinkBackendStreamSocket stream,
         RoutingId routingId) {
-        sendSessionClosing(stream, routingId, ZLinkSessionClosingControl.SERVER_DRAIN, "server drain");
+        return sendSessionClosing(
+            stream,
+            routingId,
+            ZLinkSessionClosingControl.SERVER_DRAIN,
+            "server drain");
     }
 
-    private static void sendSessionClosing(
+    private static CompletionStage<Void> sendSessionClosing(
         ZLinkBackendStreamSocket stream,
         RoutingId routingId,
         int reason,
         String diagnostic) {
-        Message payload = Message.from(ZLinkSessionClosingControl.encode(reason, diagnostic));
-        try {
-            ZLinkStreamHeader header = new ZLinkStreamHeader(
-                ZLinkStreamMessageKind.CONTROL,
-                ZLinkStreamCodec.RAW,
-                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                Optional.empty(),
-                ZLinkSessionClosingControl.NAME,
-                Map.of(),
-                Optional.empty());
-            if (!stream.send(routingId, header, List.of(payload), SendFlags.NONE)) {
-                LOGGER.log(Level.FINE,
-                    "STREAM session-closing control was not admitted by the transport: "
-                        + routingId);
-            }
-        } catch (ZlinkSubmitException transportFailure) {
-            LOGGER.log(Level.FINE,
-                "STREAM session-closing control failed during transport teardown: "
-                    + routingId,
-                transportFailure);
-        } finally {
-            payload.close();
-        }
+        return sendControlAsync(
+            stream,
+            routingId,
+            ZLinkSessionClosingControl.NAME,
+            Message.from(ZLinkSessionClosingControl.encode(reason, diagnostic)),
+            "STREAM session-closing control failed during transport teardown: ");
     }
 
     private void checkSessionLiveness() {
@@ -1505,26 +1481,48 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     private static void sendHeartbeatPing(SessionState state) {
-        Message empty = Message.from(new byte[0]);
+        sendControlAsync(
+            state.stream(),
+            state.routingId(),
+            HEARTBEAT_PING_NAME,
+            Message.from(new byte[0]),
+            "STREAM heartbeat ping failed during transport teardown: ");
+    }
+
+    private static CompletionStage<Void> sendControlAsync(
+        ZLinkBackendStreamSocket stream,
+        RoutingId routingId,
+        String packetName,
+        Message payload,
+        String failureMessage) {
+        CompletionStage<Void> submission;
         try {
-            ZLinkStreamHeader ping = new ZLinkStreamHeader(
+            ZLinkStreamHeader header = new ZLinkStreamHeader(
                 ZLinkStreamMessageKind.CONTROL,
                 ZLinkStreamCodec.RAW,
                 EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
                 Optional.empty(),
-                HEARTBEAT_PING_NAME,
+                packetName,
                 Map.of(),
                 Optional.empty());
-            state.stream().send(
-                state.routingId(), ping, List.of(empty), SendFlags.DONT_WAIT);
-        } catch (ZlinkSubmitException transportFailure) {
+            submission = stream.sendAsync(
+                routingId, header, List.of(payload));
+        } catch (RuntimeException failure) {
+            payload.close();
             LOGGER.log(Level.FINE,
-                "STREAM heartbeat ping failed during transport teardown: "
-                    + state.routingId(),
-                transportFailure);
-        } finally {
-            empty.close();
+                failureMessage + routingId,
+                failure);
+            return CompletableFuture.completedFuture(null);
         }
+        return submission.handle((ignored, failure) -> {
+            payload.close();
+            if (failure != null) {
+                LOGGER.log(Level.FINE,
+                    failureMessage + routingId,
+                    failure);
+            }
+            return null;
+        });
     }
 
     private <T> CompletionStage<T> executeHandler(

@@ -255,6 +255,27 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
+    void pendingHeartbeatPongAdmissionDoesNotBlockTheReceiveOwner()
+        throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.deferHeartbeatPongSend = true;
+        stream.enqueue(PEER_A, controlFrame("$zlink.heartbeat.ping"));
+        stream.enqueue(PEER_B, frame("good", "{}"));
+
+        ZLinkStreamRuntime runtime = start(stream, 0);
+        runtimes.add(runtime);
+
+        TestSession session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        assertTrue(stream.heartbeatPongAsyncAttempted.await(
+            5, TimeUnit.SECONDS));
+        assertEquals(List.of("good"), session.packetNames);
+        assertEquals(0, stream.synchronousHeartbeatPongSends.get());
+        assertFalse(stream.deferredHeartbeatPong.isDone());
+        stream.deferredHeartbeatPong.complete(null);
+    }
+
+    @Test
     void heartbeatTransportFailureDoesNotStopLivenessChecks() throws Exception {
         FakeStream stream = new FakeStream();
         stream.failHeartbeatPingSend = true;
@@ -1081,7 +1102,14 @@ final class ZLinkStreamRuntimeIngressTest {
         private volatile boolean ignoreFirstReceiveInterrupt;
         private volatile boolean failHeartbeatPongSend;
         private volatile boolean failHeartbeatPingSend;
+        private volatile boolean deferHeartbeatPongSend;
         private final CountDownLatch heartbeatPingAttempted = new CountDownLatch(1);
+        private final CountDownLatch heartbeatPongAsyncAttempted =
+            new CountDownLatch(1);
+        private final AtomicInteger synchronousHeartbeatPongSends =
+            new AtomicInteger();
+        private final CompletableFuture<Void> deferredHeartbeatPong =
+            new CompletableFuture<>();
         private final AtomicInteger closeCalls = new AtomicInteger();
         private ZLinkBackendStreamErrorHandler errorHandler;
 
@@ -1226,11 +1254,27 @@ final class ZLinkStreamRuntimeIngressTest {
                 && "$zlink.heartbeat.pong".equals(header.packetName())) {
                 return false;
             }
+            if (deferHeartbeatPongSend
+                && "$zlink.heartbeat.pong".equals(header.packetName())) {
+                synchronousHeartbeatPongSends.incrementAndGet();
+                return true;
+            }
             if ("session-closing".equals(header.packetName())) {
                 sessionClosingSends.incrementAndGet();
                 sessionClosingSendsLatch.countDown();
             }
             return true;
+        }
+        @Override public CompletionStage<Void> sendAsync(
+            RoutingId routingId, ZLinkStreamHeader header,
+            List<Message> parts) {
+            if (deferHeartbeatPongSend
+                && "$zlink.heartbeat.pong".equals(header.packetName())) {
+                heartbeatPongAsyncAttempted.countDown();
+                return deferredHeartbeatPong;
+            }
+            return ZLinkBackendStreamSocket.super.sendAsync(
+                routingId, header, parts);
         }
         @Override public boolean reply(
             RoutingId routingId, long requestSeq, String packetName,
