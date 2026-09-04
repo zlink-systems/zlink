@@ -2236,6 +2236,55 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
+    void streamCloseCompletesWhenRemoteBindingRouteFailsDuringSubmit()
+        throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from("submit-disconnected-close-node"));
+            ZLinkJavaStreamSocket.BoundSessionLifecycle lifecycle =
+                new ZLinkJavaStreamSocket.BoundSessionLifecycle() {
+                    @Override
+                    public CompletionStage<Void> bind(
+                        RoutingId sessionRid,
+                        systems.zlink.framework.runtime.internal.backend
+                            .ZLinkBackendActorRef actor,
+                        long bindingGeneration,
+                        Duration timeout) {
+                        return CompletableFuture.completedFuture(null);
+                    }
+
+                    @Override
+                    public CompletionStage<Void> unbind(
+                        RoutingId sessionRid,
+                        systems.zlink.framework.runtime.internal.backend
+                            .ZLinkBackendActorRef actor,
+                        long bindingGeneration,
+                        Duration timeout) {
+                        throw new ZlinkSubmitException(
+                            SubmitResult.NOT_CONNECTED);
+                    }
+                };
+            var stream = new ZLinkJavaStreamSocket(
+                context.createStreamSocket(),
+                node,
+                null,
+                lifecycle);
+            stream.startSessionService();
+            stream.bindActor(
+                    RoutingId.from("submit-disconnected-close-session"),
+                    new systems.zlink.framework.runtime.internal.backend
+                        .ZLinkBackendActorRef(
+                            RoutingId.from("submit-disconnected-close-actor-node"),
+                            "submit-disconnected-close-actor",
+                            1))
+                .submit(Duration.ofSeconds(1)).toCompletableFuture()
+                .get(1, TimeUnit.SECONDS);
+
+            assertDoesNotThrow(stream::close);
+        }
+    }
+
+    @Test
     void streamCloseCompletesWhenRemoteBindingAdmissionIsGone()
         throws Exception {
         try (var context = Zlink.createContext();
