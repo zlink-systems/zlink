@@ -90,7 +90,7 @@ rust 실행기 spin 제거(172k → 259k), python 7.9k → 20k. 표는 인계 �
 - [x] 0.15.1 대비 재측정 표 — D-B87; RR_REQREP 65536B 원인·수정 `5e26e72806`(D-B88, −4.4% 허용). 남은 것은 latency 잔여(D-B83)
 - [x] PUBSUB allocator abort 원인·수정 — SUB session use-after-free(ZMP decoder 지연 소멸), `29add0ac81`, 회귀 테스트 추가
 - [x] 리팩토링 패스 커밋 — Core token-path 정리(dead code·책임 분리·이름·핫패스, hotpath ±0.04%); bindings 쪽 POSDDD 검토는 §6 언어별 pass(계획서 §7.4-14)에서 수행
-- [ ] bindings 성능 측정·개선 — §6 실행 계획대로(계획서 §9 표 채움)
+- [ ] bindings 성능 측정·개선 — §6 실행 계획대로. 진행: C++ Multi tcp before/pass1/pass2 완료(DD 통과 90.8%, REQREP 보류 57/68%, PUBSUB 미달 93.3%; 커밋 `ee50ebaeaf`·`6e8d798bac`), tls/ws/wss before 측정 완료(기록 중), C 러너 ws/wss 4096B REQREP 붕괴 조사 job 진행 중; 다음 C++ PUBSUB pass → .NET
 - [ ] 인계 문서 최종 갱신(REQUEST 계약·해시), 아침 요약
 
 ## 6. bindings 성능 계획(0.17.0) 실행 계획
