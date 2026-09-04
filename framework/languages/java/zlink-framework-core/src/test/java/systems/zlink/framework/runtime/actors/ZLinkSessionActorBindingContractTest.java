@@ -220,6 +220,39 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     @Test
+    void asyncBoundSessionSendSubmitsInSessionFifoWithoutWaiting() {
+        FakeStream stream = new FakeStream();
+        stream.deferBoundPushAdmission = true;
+        ZLinkSessionActorsRuntime runtime = runtime(
+            stream,
+            authoritySpotNode(Map.of(
+                NODE_A, new ActorAuthority(3, 9, 4))));
+        runtime.bind(new ActorRef("actor-1", 7, MESH, NODE_A))
+            .toCompletableFuture().join();
+
+        CompletionStage<Boolean> first = runtime.acceptBoundSessionSendAsync(
+            NODE_A,
+            3,
+            boundSend(NODE_A, 3, 9, 400),
+            outboundPayload("first"));
+        CompletionStage<Boolean> second = runtime.acceptBoundSessionSendAsync(
+            NODE_A,
+            3,
+            boundSend(NODE_A, 3, 9, 400),
+            outboundPayload("second"));
+
+        awaitBoundPushAdmissions(stream, 2);
+        assertEquals(List.of("first", "second"), stream.boundPushes);
+        assertFalse(first.toCompletableFuture().isDone());
+        assertFalse(second.toCompletableFuture().isDone());
+
+        stream.boundPushAdmissions.getFirst().complete(null);
+        assertTrue(first.toCompletableFuture().join());
+        stream.boundPushAdmissions.getLast().complete(null);
+        assertTrue(second.toCompletableFuture().join());
+    }
+
+    @Test
     void command42DoesNotRejudgeActorOrSessionAuthorityMirrors() {
         FakeStream stream = new FakeStream();
         ZLinkSessionActorsRuntime runtime = runtime(
@@ -662,6 +695,20 @@ final class ZLinkSessionActorBindingContractTest {
         }
     }
 
+    private static void awaitBoundPushAdmissions(
+        FakeStream stream,
+        int expected) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (stream.boundPushAdmissions.size() < expected) {
+            if (System.nanoTime() > deadline) {
+                assertEquals(expected, stream.boundPushAdmissions.size(),
+                    "bound Session physical admission did not start");
+                return;
+            }
+            Thread.onSpinWait();
+        }
+    }
+
     private static boolean await(CountDownLatch latch) {
         try {
             return latch.await(5, TimeUnit.SECONDS);
@@ -693,6 +740,9 @@ final class ZLinkSessionActorBindingContractTest {
         private volatile boolean boundPushAvailable = true;
         private final List<String> boundPushes =
             new java.util.concurrent.CopyOnWriteArrayList<>();
+        private final List<CompletableFuture<Void>> boundPushAdmissions =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+        private boolean deferBoundPushAdmission;
         private int disconnectNotifications;
         private int disconnectedPeers;
         private long nextIngressSequence = 1;
@@ -798,6 +848,19 @@ final class ZLinkSessionActorBindingContractTest {
             boundPushes.add(new String(
                 parts.getFirst().toByteArray(), StandardCharsets.UTF_8));
             return true;
+        }
+        @Override public CompletionStage<Void> sendBoundSessionPushAsync(
+            RoutingId sessionRid,
+            List<Message> parts) {
+            if (!deferBoundPushAdmission) {
+                return ZLinkBackendStreamSocket.super
+                    .sendBoundSessionPushAsync(sessionRid, parts);
+            }
+            boundPushes.add(new String(
+                parts.getFirst().toByteArray(), StandardCharsets.UTF_8));
+            CompletableFuture<Void> admission = new CompletableFuture<>();
+            boundPushAdmissions.add(admission);
+            return admission;
         }
         @Override public boolean relayBoundActor(
             RoutingId sessionRid, String actorId, ZLinkStreamHeader header,

@@ -1190,6 +1190,38 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         return true;
     }
 
+    /** Admits command 36 without blocking its infrastructure receive owner. */
+    public CompletionStage<Boolean> acceptBoundSessionSendAsync(
+        RoutingId sourceNodeRid,
+        long sourceNodeGeneration,
+        ZLinkServiceM6BWireCodec.BoundSessionSend command,
+        ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+        Objects.requireNonNull(payload, "payload");
+        return stateLane.<AsyncBoundSessionAdmission>runAsync(() -> {
+            TargetOutboundTarget target = outboundTargetLocked(
+                sourceNodeRid, sourceNodeGeneration, command);
+            if (target != null) {
+                TargetOutboundAdmission admission = target.binding().admit(
+                    target.epoch(), command, payload);
+                return new AsyncBoundSessionAdmission(
+                    CompletableFuture.completedFuture(
+                        admission.admitted()),
+                    admission.admitted() ? target.binding() : null);
+            } else if (matchesCurrentBoundSessionSendLocked(
+                    sourceNodeRid, sourceNodeGeneration, command)) {
+                return new AsyncBoundSessionAdmission(
+                    deliverCurrentBoundSessionSendAsync(payload), null);
+            }
+            return new AsyncBoundSessionAdmission(
+                CompletableFuture.completedFuture(false), null);
+        }).thenCompose(admission -> {
+            if (admission.drain() != null) {
+                startTargetOutboundDrain(admission.drain());
+            }
+            return admission.completion();
+        });
+    }
+
     TargetOutboundAdmission admitBoundSessionSend(
         RoutingId sourceNodeRid,
         long sourceNodeGeneration,
@@ -1218,6 +1250,11 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         TargetOutboundTarget target,
         TargetOutboundAdmission admission,
         boolean current) {
+    }
+
+    private record AsyncBoundSessionAdmission(
+        CompletionStage<Boolean> completion,
+        TargetOutboundBinding drain) {
     }
 
     private TargetOutboundTarget outboundTargetLocked(
@@ -1301,6 +1338,20 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         try {
             return stream.sendBoundSessionPush(
                 sessionRid, parts, SendFlags.DONT_WAIT);
+        } finally {
+            parts.forEach(Message::close);
+        }
+    }
+
+    private CompletionStage<Boolean> deliverCurrentBoundSessionSendAsync(
+        ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+        List<Message> parts =
+            ZLinkServiceM6AWireCodec.decodeFrameworkMultipart(payload);
+        try {
+            return stream.sendBoundSessionPushAsync(sessionRid, parts)
+                .thenApply(ignored -> true);
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
         } finally {
             parts.forEach(Message::close);
         }

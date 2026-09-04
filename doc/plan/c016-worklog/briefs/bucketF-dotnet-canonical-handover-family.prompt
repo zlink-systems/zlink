@@ -1,0 +1,53 @@
+# Job: dotnet — CanonicalActorJoinIngressReplyTests handover family on the combined admission changes: `ManagedSource_Command28Request_ConsumesCommand20TailAndApplicationReply(targetDialsSource: True)` FAILS and `CanonicalActorJoinRequest_HandoverKeepsPriorReplyEpochUntilExactDisconnect` HANGS (then ctx_term teardown hang)
+
+You are a codex sub-agent under a Claude supervisor. One cause if they share it (they likely do),
+1.5 h cap. Read `AGENTS.md` (root) §2/§3/§4.1, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`.
+Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`,
+other languages' trees; never lower an assertion; do not commit.
+
+## Facts
+- Working tree (uncommitted, keep all): dotnet admission changes — reciprocal handover
+  settle-before-submit, unilateral-Hello outbound fallback + ready-pair attribution, relay RID→pair
+  re-pin at admission, and the `RouteAdmission_*` fixture fix. Summaries:
+  `bucketB-dotnet-handover-resend-summary.md`, `bucketB-dotnet-cross-spotroute-summary.md`,
+  `bucketF-dotnet-relocated-reply-relay-summary.md`, `bucketF-dotnet-handover-liveness-hang-summary.md`.
+- Supervisor gate on `--filter 'FullyQualifiedName~CanonicalActorJoinIngressReplyTests&FullyQualifiedName!~ActorCreateCompletion_AfterHandoverHello_UsesCapturedReplyRoute' --blame-hang-timeout 3m`
+  (log `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate-v4-canonical.log`):
+  9 passed, **1 failed**: `ManagedSource_Command28Request_ConsumesCommand20TailAndApplicationReply(targetDialsSource: True)`
+  (the `targetDialsSource: False` variant passed), then **hang** in
+  `CanonicalActorJoinRequest_HandoverKeepsPriorReplyEpochUntilExactDisconnect` — dump
+  `tests/Zlink.Framework.UnitTests/TestResults/257faa7c-e536-4cf8-bd2f-34bde6e29130/dotnet_96534_20260905T042258_hangdump.dmp`.
+  The previous hang job found that a failed assertion in this family is followed by a teardown hang in
+  `Context.Dispose → zlink_ctx_term` (Core candidate, reported separately) — so "hang" here likely
+  means "assertion failed, then teardown hung": get the assertion first (run with `--blame-hang-timeout 1m`
+  and read the xUnit failure output / trx before the hang).
+- `targetDialsSource: True` = the target node dials the source (reciprocal/bilateral direction) —
+  exactly the surface the settle-before-submit + ready-pair attribution changes touch. Hypothesis: with
+  the target dialling, the source's inbound peer is retired/deferred (settlement pending, or the
+  unilateral fallback binds the Hello to the wrong intent), so the command 28 request's reply route /
+  captured epoch no longer matches. `HandoverKeepsPriorReplyEpochUntilExactDisconnect` asserts the
+  prior reply epoch survives until the exact loser disconnect — the new `Disconnect(endpoint)` of the
+  losing outbound intent (RetireDuplicatePeer) or `InvalidateCurrentTransportPair` timing may now
+  invalidate the prior epoch early.
+- Spec: `03-spot-actor/03-mesh-node.ko.md:303-313` (fixed-RID handover: keep prior pipe until exact
+  disconnect confirmed), `04-session/02-session-actor-binding.ko.md` reply-route/epoch rules, and
+  D-072 (reply routes by logical RID). Parity: cpp bilateral survivor tests in m6a.
+- dotnet env block (never `--artifacts-path`, never `ulimit -v`); another `dotnet test` (the
+  supervisor's "rest" gate) may hold `/tmp/zlink-dotnet-gate.lock` for up to ~1 h — your runs queue
+  behind it via flock; use the time to read code and the dump (`dotnet-dump analyze`, `clrstack -all`).
+  xUnit swallows Console.Error — add a temporary file sink for the framework debug log if needed and
+  remove it before finishing.
+
+## What to do
+1. Get the exact assertion of both tests (1-min blame), the admission trace for the targetDialsSource
+   path, and the epoch/transport-pair transitions around the loser retirement.
+2. Fix minimally in `framework/languages/dotnet/**` without reopening the bilateral caller-first,
+   relay, spot-route or RouteAdmission cases: keep `BilateralCallerFirstAdmissionCompletesImmediateActorRequestOnSurvivor`,
+   the three `RemoteActorStaleAuthority*`, `RelocatedActorReply*` (3), `ZLinkMeshPeerAdmissionTests`,
+   and `RouteAdmission_*` green.
+3. Then run the Canonical family (excluding the 36-min sibling) 3× with `--blame-hang-timeout 3m` —
+   all pass, no hang — and `--filter 'FullyQualifiedName~StatefulServiceRuntimeTests'` once.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketF-dotnet-canonical-handover-family-summary.md`: assertions, traces,
+cause `file:line`, spec clause, fix + regression, results, BLOCKERS.
