@@ -878,6 +878,80 @@ public sealed class StatefulServiceRuntimeTests
     }
 
     [Fact]
+    public async Task BilateralCallerFirstAdmissionCompletesImmediateActorRequestOnSurvivor()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var caller = NewNode(context, "bilateral-request-aa");
+        await using var owner = NewNode(context, "bilateral-request-zz");
+        owner.SetLocalOwnerLeaseGeneration(131);
+
+        var actor = owner.CreateActor("bilateral-request-actor");
+        DrainAndDispose(owner);
+        Assert.True(owner.TryGetActorAuthority(
+            actor,
+            out var authorityOwnerGeneration,
+            out var ownerLeaseGeneration));
+        caller.ObserveActorAuthority(
+            actor,
+            owner.Status().LifecycleGeneration,
+            authorityOwnerGeneration,
+            ownerLeaseGeneration);
+
+        var suffix = Guid.NewGuid().ToString("N");
+        var callerEndpoint = $"inproc://bilateral-request-aa-{suffix}";
+        var ownerEndpoint = $"inproc://bilateral-request-zz-{suffix}";
+        caller.SetBind(callerEndpoint);
+        owner.SetBind(ownerEndpoint);
+        caller.ConnectPeer(ownerEndpoint, owner.RoutingId);
+        owner.ConnectPeer(callerEndpoint, caller.RoutingId);
+        caller.Start();
+        owner.Start();
+        await WaitUntilAsync(() => caller.Status().AdmittedPeerCount == 1
+                                  && owner.Status().AdmittedPeerCount == 1);
+
+        using var request = Message.From(new byte[] { 137 });
+        Assert.Equal(
+            SubmitResult.Ok,
+            caller.RequestToActor(
+                actor,
+                [request],
+                out var operation,
+                TimeSpan.FromSeconds(3)));
+
+        await WaitUntilAsync(() => owner.Status().PendingApplicationMessages == 1);
+        using (var ready = new MeshReadyBatch())
+        {
+            owner.DrainReady(
+                MeshReadyDomains.Application,
+                ready,
+                RecvFlags.DontWait);
+            Assert.Equal(1, ready.Count);
+            using var claim = ready.TakeClaim(0);
+            using var received = new MeshReceiveBatch();
+            Assert.True(claim.Receive(received, RecvFlags.DontWait));
+            Assert.Equal(1, received.Count);
+            Assert.Equal(MeshRecordKind.ActorRequest, received[0].Kind);
+            Assert.Equal(operation, received[0].OperationId);
+            using var reply = Message.From(new byte[] { 139 });
+            Assert.Equal(
+                SubmitResult.Ok,
+                received[0].Reply([reply]));
+        }
+
+        await WaitUntilAsync(() =>
+            caller.Status().PendingInfrastructureMessages > 0);
+        var completion = Assert.Single(DrainRecords(caller).Where(record =>
+            record.Kind == MeshRecordKind.Completion
+            && record.OperationId == operation));
+        Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
+        await Task.Delay(50);
+        Assert.DoesNotContain(
+            DrainRecords(caller),
+            record => record.Kind == MeshRecordKind.Completion
+                      && record.OperationId == operation);
+    }
+
+    [Fact]
     public async Task RemoteActorStaleAuthorityReturnsOneTerminalForTheOriginalOperation()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

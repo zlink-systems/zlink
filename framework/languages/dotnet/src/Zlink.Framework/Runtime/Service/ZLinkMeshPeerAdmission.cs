@@ -15,12 +15,31 @@ namespace Zlink.Framework.Runtime.Service;
 /// </remarks>
 internal sealed class ZLinkMeshPeerAdmission
 {
+    internal static ZLinkMeshPeer? FindReadyOutboundCandidate(
+        IEnumerable<ZLinkMeshPeer> peersByIntent,
+        RoutingId routingId,
+        string remoteAddress)
+    {
+        ArgumentNullException.ThrowIfNull(peersByIntent);
+        ArgumentNullException.ThrowIfNull(remoteAddress);
+        return peersByIntent.FirstOrDefault(peer =>
+            peer.Direction == ZLinkServiceConnectionDirection.Outbound
+            && peer.State != MeshPeerState.Closed
+            && (peer.ExpectedRid == routingId
+                || peer.PhysicalRoutingId == routingId)
+            && string.Equals(
+                peer.Endpoint,
+                remoteAddress,
+                StringComparison.Ordinal));
+    }
+
     internal ZLinkMeshPeer? FindForAdmission(
         IReadOnlyDictionary<RoutingId, ZLinkMeshPeer> peersByRid,
         IEnumerable<ZLinkMeshPeer> peersByIntent,
         RoutingId sourceRid,
         ServiceWireConstants.Command command,
-        string advertisedEndpoint)
+        string advertisedEndpoint,
+        bool hasReadyInboundCandidate)
     {
         ArgumentNullException.ThrowIfNull(peersByRid);
         ArgumentNullException.ThrowIfNull(peersByIntent);
@@ -37,7 +56,8 @@ internal sealed class ZLinkMeshPeerAdmission
 
         var peers = peersByIntent.ToArray();
         if (command == ServiceWireConstants.Command.Hello)
-            return peers
+        {
+            var inbound = peers
                 .Where(peer =>
                     peer.Direction == ZLinkServiceConnectionDirection.Inbound
                     && !peer.Admitted
@@ -46,6 +66,13 @@ internal sealed class ZLinkMeshPeerAdmission
                     && peer.RoutingId == sourceRid)
                 .OrderBy(static peer => peer.Discriminator, StringComparer.Ordinal)
                 .FirstOrDefault();
+            if (inbound is not null || hasReadyInboundCandidate)
+                return inbound;
+            // RouteMesh peers can both send Hello on one unilateral physical
+            // connection. With no accepted inbound candidate, bind that Hello
+            // to the sole configured outbound intent just as the C++ candidate
+            // registry falls back to the only opposite-direction connection.
+        }
 
         var candidates = peers
             .Where(peer =>
