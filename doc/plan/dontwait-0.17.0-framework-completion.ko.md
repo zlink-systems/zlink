@@ -46,13 +46,14 @@
 ### C. 검증 인프라 (신뢰성 확보)
 - [x] 환경 재구축(2026-09-05, WSL 재설치): Core dev 빌드, **로컬 Core 0.17.0 프리픽스 수동 구성**(GitHub에 `core/v0.17.0` 릴리스 없음 — `fetch-release.sh` 캐시 단락 경로 이용), 4언어 로컬 패키지,
       cpp 의존성(apt boost/gtest/gmock/lz4/libuv + hiredis·redis++ 소스 빌드), node `http-client` tarball 재생성(`npm pack ./packages/http-client`), Docker Desktop WSL 통합, Playwright Chromium
-- [ ] cpp 샘플 신뢰성 있는 실행 — 별도 build dir `build/linux-ninja-c-e2e` 구성 완료, cpp job 종료 후 `c-cross-language-e2e` job으로 실행
-- [ ] cross-language E2E full: dotnet의 C++ host 0.13.2 stale artifact → 같은 job에서 해소
-- [x] Java↔C++ E2E: `java-cross` stage 4/4 통과 (`gate-node-bootstrap-summary.md`)
+- [x] cpp 샘플 신뢰성 있는 실행 — 별도 build dir `build/linux-ninja-c-e2e`(protobuf include 수정 커밋) 에서 **7/7 PASS**(`c-cross-language-e2e-2-summary.md`)
+- [x] cross-language E2E: C++ host stale 문제는 caller가 `ZLINK_CPP_BUILD_DIR` 미지정이 원인(runner는 이미 우선 계약) — 0.17 host로 재실행. C++↔.NET·C++↔Node messaging/flow/stream PASS, C++→.NET spot-route PASS.
+      **잔여**: `.NET→C++ spot-route` `Unavailable`(B, dotnet client측) 및 node smoke의 .NET TestHost flow Activity tag 불일치(D) — dotnet handover job 종료 후 순차 job
+- [x] `java-cross` selector(Java↔Node/.NET) 4/4 통과. Java↔C++ 방향은 all-stage runner 후반이라 위 .NET→C++ 실패 해소 후 실행
 
 ### D. 최종 게이트 (plan line 143: framework unit + cross-language E2E + 7 samples 전부 green)
 - [ ] 4언어 framework unit: DONTWAIT 회귀 0, 잔여는 pre-existing만 — java unit 1207/2·contract 26/1 = pre-existing 3건 동일 assertion 확인(`gate-node-java-summary.md`); node 1532/6(신규 B 1건 + 환경 D 5건, lint C); cpp·dotnet §B 진행 중
-- [ ] 7 samples × 4언어 green
+- [ ] 7 samples × 4언어 green — **cpp 7/7 green**; dotnet·java·node 미실행
 - [ ] cross-language E2E green
 - [ ] 최종 커밋+푸시
 

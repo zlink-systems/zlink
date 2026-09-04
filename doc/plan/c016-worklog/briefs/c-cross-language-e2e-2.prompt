@@ -1,0 +1,40 @@
+# Job: §C (resume) — fix the protobuf generated-header include path in the C++ framework CMake, then run cross-language E2E + 7 cpp samples
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §2/§4 and
+`doc/plan/c016-worklog/briefs/c-cross-language-e2e.prompt` (the original §C brief: environment, run
+order, buckets, rules, deliverable) — this job continues it with ONE extra allowed edit.
+
+## Blocker found by the previous run (`doc/plan/c016-worklog/c-cross-language-e2e-summary.md`)
+`cmake --build framework/languages/cpp/build/linux-ninja-c-e2e -j16` fails:
+`samples/Bingo/Shared/Contracts/messages.hpp:4: #include "bingo_messages.pb.h": No such file or directory`.
+`framework/languages/cpp/CMakeLists.txt:623-632` `add_zlink_protobuf_schema()` calls `protobuf_generate(
+TARGET … IMPORT_DIRS "${proto_dir}" PROTOC_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}")` and adds only
+`${CMAKE_CURRENT_BINARY_DIR}` as a public include dir. On this machine (Ubuntu 24.04 system protobuf
+3.21.12, found via `find_package(protobuf CONFIG)` or the `Protobuf` module — check which one won in
+`CMakeCache.txt`) the generated header lands at
+`build/linux-ninja-c-e2e/samples/Bingo/Shared/Contracts/bingo_messages.pb.h` (source-relative subdir
+preserved), so the include path is wrong. With vcpkg's protobuf (the tree's original environment) it
+lands at the build root. Both layouts must work.
+
+## What to do
+1. Fix `add_zlink_protobuf_schema` minimally and portably in `framework/languages/cpp/CMakeLists.txt`
+   (this one file is explicitly allowed for this job): e.g. also add
+   `${CMAKE_CURRENT_BINARY_DIR}/<proto_dir relative to CMAKE_CURRENT_SOURCE_DIR>` to the target's public
+   include dirs (compute with `file(RELATIVE_PATH …)`), or pass the generation base so both protobuf
+   variants emit to the same place. Do not change any `#include` in sources. Verify with a
+   reconfigure (`cmake --preset linux-ninja-debug -B framework/languages/cpp/build/linux-ninja-c-e2e`)
+   and a full build of that dir. Report which protobuf package/variant CMake picked.
+2. Then execute the original §C run order exactly as in the first brief (cross-language all stages
+   with `ZLINK_CPP_BUILD_DIR=/home/hep7/project/zlink/framework/languages/cpp/build/linux-ninja-c-e2e`,
+   node smoke, java-cross selector, then `framework/languages/cpp/samples/run_samples.sh` for the 7
+   samples), classify every failure (A/B/C/D) with evidence, and write
+   `doc/plan/c016-worklog/c-cross-language-e2e-2-summary.md` with the same tables.
+3. Note: Core main includes D-B85 (`7d8205a028`, DONTWAIT REQUEST may return BACKPRESSURED + wait
+   token) and B has NOT yet ported the bindings' REQUEST path. Any failure that traces to a REQUEST
+   submit returning BACKPRESSURED/EAGAIN or a request awaitable never settling is bucket **(E) D-B85
+   binding-port dependency** — record the exact site and move on; do not patch runtime code for it.
+4. Another job is editing `framework/languages/dotnet/**`; do not touch that tree (running the .NET
+   TestHost peer via the cpp runner is fine). Rules from the first brief otherwise apply verbatim
+   (no runtime source, no assertions, no `core/**`, `bindings/**`, any `doc/spec/**`,
+   `framework/doc/framework/**`, `doc/site/**`; keep logs under `zlink-work/c016/logs/c-e2e-2-*.log`;
+   do not commit).
