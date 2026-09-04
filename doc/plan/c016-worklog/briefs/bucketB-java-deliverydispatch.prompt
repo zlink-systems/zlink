@@ -1,0 +1,39 @@
+# Job: java DeliveryDispatch sample — start the courier offer deadline after the offer is actually sent (sample spec §7.2)
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1 h cap. Read `AGENTS.md` (root)
+§2/§3 (samples use public API only; fix in the owning module), `framework/AGENTS.md`. Never modify
+`core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`,
+`framework/languages/{cpp,dotnet,node}/**`; never lower an assertion; do not commit.
+
+## Facts (from `doc/plan/c016-worklog/bucketB-java-samples-summary.md`)
+- Native REQUEST probe: every functional request returned `SubmitResult.OK` — not a D-B85 or handover
+  issue. Cause is sample sequencing: `DispatchWorker.dispatch()` calls `offers.offer(...)` (which
+  records `deadline = now + 900 ms`, `DeliveryOfferStore.java:21-30`, `SampleTimings.java:11`) BEFORE
+  awaiting `publishStatus(...)` and submitting the courier actor send (`DispatchWorker.java:36-40`,
+  re-dispatch `:80-83`). In the failing run the preceding `DeliveryStatusChangedReq` took 2.653 s, so
+  attempt 1 expired before courier A even received `OfferDeliveryMsg`; the courier's valid decision was
+  then dropped as stale, attempt 2 expired the same way, and the client stream sequence timed out
+  (`gate-samples-java-DeliveryDispatch.log:234-247`).
+- Sample contract `framework/doc/framework/common/sample/deliverydispatch/README.ko.md:292-296` (§7.2):
+  the attempt expires when courier A does not answer within the deadline **after receiving** the offer.
+  The other languages' DeliveryDispatch implementations (cpp/dotnet/node) can be read for parity on
+  where the offer row/deadline starts — read only.
+- Env: `TMPDIR=/dev/shm/zlink-tmp-java`, `flock -w7200 /tmp/zlink-jvm-gate.lock`,
+  `ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/.artifacts/wsl/install/zlink-core/0.17.0/lib/libzlink.so`
+  (a file), Docker OK. Run: `cd framework/languages/java/samples/java/DeliveryDispatch && ./run_sample.sh`.
+  Known unrelated: `courier-session` `TEARDOWN_FAILED` at shutdown (pre-existing C) may still make the
+  overall exit 1 — report the three functional markers and the teardown status separately.
+
+## What to do
+1. Move the offer row/deadline start (first dispatch and re-dispatch) to after the status publish
+   completes, adjacent to the courier actor send, so only the courier's response time counts.
+   Keep the change inside `framework/languages/java/samples/java/DeliveryDispatch/**`.
+2. Regression: a unit test for `DispatchWorker`/`DeliveryOfferStore` that delays the status publish
+   beyond 900 ms and asserts the attempt is not expired before the courier send, and that the deadline
+   is measured from the send. Use the sample's existing test module if present (else add one the
+   sample's gradle already wires).
+3. Re-run the sample 3×; report functional markers and teardown separately.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-java-deliverydispatch-summary.md`: fix with `file:line`, spec clause,
+parity note, regression test, 3× results, BLOCKERS.
