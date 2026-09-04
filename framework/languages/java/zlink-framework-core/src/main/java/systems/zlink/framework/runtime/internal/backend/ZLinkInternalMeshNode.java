@@ -718,7 +718,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
 
     @FunctionalInterface
     interface BoundSessionSendHandler {
-        boolean handle(
+        CompletionStage<Boolean> handle(
             RoutingId sourceNodeRid,
             long sourceNodeGeneration,
             ZLinkServiceM6BWireCodec.BoundSessionSend command,

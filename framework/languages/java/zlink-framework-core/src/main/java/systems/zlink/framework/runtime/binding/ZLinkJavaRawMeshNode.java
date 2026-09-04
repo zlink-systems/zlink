@@ -6364,17 +6364,27 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             if (handler == null) {
                 return;
             }
-            boolean accepted = handler.handle(
-                inbound.source(),
-                source.orElseThrow().descriptor()
-                    .lifecycleGeneration(),
-                send,
-                payload);
-            streamTrace(STREAM_TRACE ? "bound session receive "
-                + (accepted ? "accepted" : "rejected")
-                + " actor=" + actorSummary(send.actor().actor())
-                + " source=" + inbound.source()
-                + " binding=" + send.expectedBindingGeneration() : null);
+            CompletionStage<Boolean> acceptance = Objects.requireNonNull(
+                handler.handle(
+                    inbound.source(),
+                    source.orElseThrow().descriptor()
+                        .lifecycleGeneration(),
+                    send,
+                    payload),
+                "bound Session send handler result");
+            // This pump owns the public mesh poller. Observe settlement without
+            // waiting so service operation completions keep draining.
+            acceptance.whenComplete((accepted, failure) -> {
+                if (failure == null) {
+                    streamTrace(STREAM_TRACE ? "bound session receive "
+                        + (Boolean.TRUE.equals(accepted)
+                            ? "accepted" : "rejected")
+                        + " actor=" + actorSummary(send.actor().actor())
+                        + " source=" + inbound.source()
+                        + " binding=" + send.expectedBindingGeneration()
+                        : null);
+                }
+            });
         } catch (RuntimeException invalid) {
             // A malformed or stale one-way record has no terminal route.
         }

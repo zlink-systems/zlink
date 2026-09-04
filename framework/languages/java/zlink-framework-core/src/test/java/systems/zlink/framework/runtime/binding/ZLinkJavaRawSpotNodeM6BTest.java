@@ -2573,6 +2573,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             RoutingId.from("jvm-m6b-bound-session");
         CopyOnWriteArrayList<String> pushed =
             new CopyOnWriteArrayList<>();
+        AtomicInteger boundPushCalls = new AtomicInteger();
+        CompletableFuture<Boolean> firstBoundPushSettlement =
+            new CompletableFuture<>();
         try (var context = Zlink.createContext();
              var actorNode = new ZLinkJavaRawMeshNode(context, "mesh");
              var sessionNode = new ZLinkJavaRawMeshNode(context, "mesh");
@@ -2658,13 +2661,18 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 sourceNodeRid,
                 sourceNodeGeneration,
                 command,
-                payload) -> sessionOwner.matchesBoundSessionSend(
-                    sourceNodeRid, sourceNodeGeneration, command)
+                payload) -> {
+                boolean accepted = sessionOwner.matchesBoundSessionSend(
+                        sourceNodeRid, sourceNodeGeneration, command)
                     && sessionOwner.acceptBoundSessionSend(
                         sourceNodeRid,
                         sourceNodeGeneration,
                         command,
-                        payload));
+                        payload);
+                return boundPushCalls.incrementAndGet() == 1
+                    ? firstBoundPushSettlement
+                    : CompletableFuture.completedFuture(accepted);
+            });
             long firstBindingGeneration =
                 sessionNode.bindingGenerationSeed();
             sessionOwner.bind(new ActorRef(
@@ -2687,11 +2695,24 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS);
             }
+            try (Message push = Message.from("push-after-unsettled")) {
+                actorNode.spotNode().sendRemoteActorBoundSession(
+                        actor, List.of(push))
+                    .toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS);
+            }
+            while (boundPushCalls.get() < 2
+                && System.nanoTime() < deadline) {
+                Thread.sleep(1);
+            }
+            assertEquals(2, boundPushCalls.get(),
+                "raw mesh polling must not wait for application delivery settlement");
+            firstBoundPushSettlement.complete(true);
             while (pushed.isEmpty()
                 && System.nanoTime() < deadline) {
                 Thread.sleep(1);
             }
-            assertEquals(List.of("push-one"), pushed);
+            assertEquals(List.of("push-one", "push-after-unsettled"), pushed);
             sessionNode.spotNode().rememberActorAuthority(actor, 73, 1);
 
             sessionOwner.bind(new ActorRef(
@@ -2803,12 +2824,13 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     .toCompletableFuture()
                     .get(1, TimeUnit.SECONDS);
             }
-            while (pushed.size() < 2
+            while (pushed.size() < 3
                 && System.nanoTime() < deadline) {
                 Thread.sleep(1);
             }
             assertEquals(
-                List.of("push-one", "push-two"), pushed);
+                List.of("push-one", "push-after-unsettled", "push-two"),
+                pushed);
 
             stream.unbindActor(sessionRid, actor.actorId())
                 .submit(Duration.ofSeconds(1)).toCompletableFuture()
@@ -2824,7 +2846,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     SubmitResult.NOT_FOUND,
                     ((ZlinkSubmitException) lateFailure.getCause()).getResult());
             }
-            assertEquals(2, pushed.size());
+            assertEquals(3, pushed.size());
         }
     }
 

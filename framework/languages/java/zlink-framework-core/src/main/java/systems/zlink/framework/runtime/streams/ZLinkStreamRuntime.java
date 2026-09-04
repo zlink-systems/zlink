@@ -468,19 +468,21 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             .thenApply(codec::encodeSessionRelocationSealed);
     }
 
-    public boolean handleBoundSessionSend(
+    public CompletionStage<Boolean> handleBoundSessionSend(
         RoutingId sourceNodeRid,
         long sourceNodeGeneration,
         ZLinkServiceM6BWireCodec.BoundSessionSend command,
         ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
-        List<? extends BoundSessionSendOwner> owners = inStateLane(() ->
-            sessions.values().stream()
+        return stateLane.<CompletionStage<Boolean>>runAsync(() -> {
+            List<? extends BoundSessionSendOwner> owners = sessions.values()
+                .stream()
                 .map(SessionState::actorRuntime)
                 .filter(Objects::nonNull)
                 .map(SessionBoundSessionSendOwner::new)
-                .toList());
-        return dispatchBoundSessionSend(
-            owners, sourceNodeRid, sourceNodeGeneration, command, payload);
+                .toList();
+            return dispatchBoundSessionSendAsync(
+                owners, sourceNodeRid, sourceNodeGeneration, command, payload);
+        }).thenCompose(Function.identity());
     }
 
     static boolean dispatchBoundSessionSend(
@@ -498,6 +500,22 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 sourceNodeRid, sourceNodeGeneration, command, payload);
     }
 
+    private static CompletionStage<Boolean> dispatchBoundSessionSendAsync(
+        List<? extends BoundSessionSendOwner> owners,
+        RoutingId sourceNodeRid,
+        long sourceNodeGeneration,
+        ZLinkServiceM6BWireCodec.BoundSessionSend command,
+        ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+        List<? extends BoundSessionSendOwner> matches = owners.stream()
+            .filter(owner -> owner.matches(
+                sourceNodeRid, sourceNodeGeneration, command))
+            .toList();
+        return matches.size() == 1
+            ? matches.getFirst().acceptAsync(
+                sourceNodeRid, sourceNodeGeneration, command, payload)
+            : CompletableFuture.completedFuture(false);
+    }
+
     interface BoundSessionSendOwner {
         boolean matches(
             RoutingId sourceNodeRid,
@@ -509,6 +527,15 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             long sourceNodeGeneration,
             ZLinkServiceM6BWireCodec.BoundSessionSend command,
             ZLinkServiceM6AWireCodec.ApplicationPayload payload);
+
+        default CompletionStage<Boolean> acceptAsync(
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            ZLinkServiceM6BWireCodec.BoundSessionSend command,
+            ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+            return CompletableFuture.completedFuture(accept(
+                sourceNodeRid, sourceNodeGeneration, command, payload));
+        }
     }
 
     private record SessionBoundSessionSendOwner(
@@ -529,6 +556,16 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkServiceM6BWireCodec.BoundSessionSend command,
             ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
             return runtime.acceptBoundSessionSend(
+                sourceNodeRid, sourceNodeGeneration, command, payload);
+        }
+
+        @Override
+        public CompletionStage<Boolean> acceptAsync(
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            ZLinkServiceM6BWireCodec.BoundSessionSend command,
+            ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
+            return runtime.acceptBoundSessionSendAsync(
                 sourceNodeRid, sourceNodeGeneration, command, payload);
         }
     }
