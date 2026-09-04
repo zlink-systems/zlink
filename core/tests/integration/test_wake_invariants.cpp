@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 SETUP_TEARDOWN_TESTCONTEXT
 
@@ -551,6 +552,369 @@ void test_hwm_eagain_drain_wakes_pollout_with_and_without_async_owner ()
     run_hwm_pollout_recovery (true, 5);
 }
 
+const size_t multi_dealer_count = 100;
+const size_t large_payload_size = 64 * 1024;
+const uint64_t large_hwm_bytes = 1024 * 1024;
+const size_t lwm_drain_records = 8;
+const int multi_dealer_fill_timeout_ms = 30000;
+const int multi_dealer_wait_safety_timeout_ms = 60000;
+const int multi_dealer_arm_timeout_ms = 10000;
+
+void configure_large_hwm (void *socket_)
+{
+    const int socket_buffer = 4096;
+    const int tcp_nodelay = 1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (socket_, ZLINK_OPT_SNDHWM, &large_hwm_bytes,
+                        sizeof (large_hwm_bytes)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (socket_, ZLINK_OPT_RCVHWM, &large_hwm_bytes,
+                        sizeof (large_hwm_bytes)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (socket_, ZLINK_OPT_SNDBUF, &socket_buffer,
+                        sizeof (socket_buffer)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (socket_, ZLINK_OPT_RCVBUF, &socket_buffer,
+                        sizeof (socket_buffer)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (socket_, ZLINK_OPT_TCP_NODELAY, &tcp_nodelay,
+                        sizeof (tcp_nodelay)));
+}
+
+struct multi_pollout_wait_state_t
+{
+    multi_pollout_wait_state_t () :
+        armed_count (0),
+        recovered_count (0),
+        poll_error (ZLINK_CONFIG_OK),
+        errno_value (0),
+        max_wait_ms (0)
+    {
+    }
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    size_t armed_count;
+    size_t recovered_count;
+    zlink_config_result_t poll_error;
+    int errno_value;
+    int64_t max_wait_ms;
+    std::chrono::steady_clock::time_point latest_recovered_at;
+};
+
+void wait_for_dealer_pollout (void *poller_, void *client_,
+                              multi_pollout_wait_state_t *state_)
+{
+    const std::chrono::steady_clock::time_point started =
+      std::chrono::steady_clock::now ();
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        ++state_->armed_count;
+        state_->cv.notify_all ();
+    }
+
+    zlink_poller_event_t event;
+    memset (&event, 0, sizeof (event));
+    zlink_config_result_t poll_error = ZLINK_CONFIG_OK;
+    const int poll_rc =
+      zlink_poller_wait (poller_, &event, 1,
+                         multi_dealer_wait_safety_timeout_ms, &poll_error);
+    const std::chrono::steady_clock::time_point completed =
+      std::chrono::steady_clock::now ();
+    const int64_t elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds> (
+        completed - started)
+        .count ();
+
+    {
+        std::lock_guard<std::mutex> lock (state_->mutex);
+        if (elapsed_ms > state_->max_wait_ms)
+            state_->max_wait_ms = elapsed_ms;
+        if (poll_rc == 1 && event.socket == client_
+            && (event.events & ZLINK_POLLOUT) != 0) {
+            ++state_->recovered_count;
+            if (state_->recovered_count == 1
+                || completed > state_->latest_recovered_at)
+                state_->latest_recovered_at = completed;
+        } else if (state_->errno_value == 0) {
+            state_->poll_error = poll_error;
+            state_->errno_value =
+              poll_rc == 0 ? ETIMEDOUT
+                           : (poll_rc < 0 && zlink_errno () != 0
+                                ? zlink_errno ()
+                                : EIO);
+        }
+    }
+}
+
+void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_NOT_NULL (server);
+    configure_socket (server);
+    configure_large_hwm (server);
+
+    char endpoint[MAX_SOCKET_STRING];
+    test_bind (server, "tcp://127.0.0.1:*", endpoint, sizeof (endpoint));
+
+    std::vector<void *> clients (multi_dealer_count, NULL);
+    for (size_t i = 0; i < multi_dealer_count; ++i) {
+        clients[i] = test_context_socket (ZLINK_SOCKET_DEALER);
+        TEST_ASSERT_NOT_NULL (clients[i]);
+        configure_socket (clients[i]);
+        configure_large_hwm (clients[i]);
+
+        char routing_id[32];
+        snprintf (routing_id, sizeof (routing_id), "large-dealer-%03u",
+                  static_cast<unsigned> (i));
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_CONFIG_OK,
+          zlink_set_routing_id (clients[i], routing_id, strlen (routing_id)));
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
+                               zlink_connect (clients[i], endpoint));
+    }
+
+    std::vector<unsigned char> payload (large_payload_size, 'p');
+    for (size_t i = 0; i < multi_dealer_count; ++i) {
+        const uint32_t client_index = static_cast<uint32_t> (i);
+        memcpy (&payload[0], &client_index, sizeof (client_index));
+        TEST_ASSERT_EQUAL_INT (
+          static_cast<int> (payload.size ()),
+          zlink_send (clients[i], &payload[0], payload.size (), 0));
+    }
+
+    std::vector<unsigned char> primed (multi_dealer_count, 0);
+    for (size_t i = 0; i < multi_dealer_count; ++i) {
+        TEST_ASSERT_EQUAL_INT (
+          static_cast<int> (payload.size ()),
+          zlink_recv (server, &payload[0], payload.size (), 0));
+        uint32_t client_index = 0;
+        memcpy (&client_index, &payload[0], sizeof (client_index));
+        TEST_ASSERT_TRUE (client_index < multi_dealer_count);
+        TEST_ASSERT_EQUAL_UINT8 (0, primed[client_index]);
+        primed[client_index] = 1;
+    }
+
+    // Match the benchmark's per-size refresh and apply byte limits to every
+    // already-established pipe before filling it.
+    configure_large_hwm (server);
+    for (size_t i = 0; i < multi_dealer_count; ++i)
+        configure_large_hwm (clients[i]);
+    msleep (50);
+
+    const size_t max_records_per_client = 64;
+    std::vector<size_t> accepted (multi_dealer_count, 0);
+    std::vector<zlink_pollitem_t> fill_items (multi_dealer_count);
+    for (size_t i = 0; i < multi_dealer_count; ++i) {
+        fill_items[i].socket = clients[i];
+        fill_items[i].fd = 0;
+        fill_items[i].events = ZLINK_POLLOUT;
+        fill_items[i].revents = 0;
+    }
+
+    bool saturated = false;
+    int fill_error = 0;
+    const std::chrono::steady_clock::time_point fill_deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::milliseconds (multi_dealer_fill_timeout_ms);
+    while (std::chrono::steady_clock::now () < fill_deadline) {
+        for (size_t i = 0; i < multi_dealer_count; ++i) {
+            const uint32_t client_index = static_cast<uint32_t> (i);
+            memcpy (&payload[0], &client_index, sizeof (client_index));
+            while (accepted[i] < max_records_per_client) {
+                const int send_rc = zlink_send (
+                  clients[i], &payload[0], payload.size (), ZLINK_DONTWAIT);
+                if (send_rc == static_cast<int> (payload.size ())) {
+                    ++accepted[i];
+                    continue;
+                }
+                if (send_rc == -1 && zlink_errno () == EAGAIN)
+                    break;
+                fill_error = zlink_errno () != 0 ? zlink_errno () : EIO;
+                break;
+            }
+            if (fill_error != 0)
+                break;
+            if (accepted[i] == max_records_per_client) {
+                fill_error = EOVERFLOW;
+                break;
+            }
+        }
+        if (fill_error != 0)
+            break;
+
+        for (size_t i = 0; i < fill_items.size (); ++i)
+            fill_items[i].revents = 0;
+        zlink_config_result_t poll_error = ZLINK_CONFIG_OK;
+        const int poll_rc =
+          zlink_poll (&fill_items[0], static_cast<int> (fill_items.size ()),
+                      50, &poll_error);
+        if (poll_rc == 0) {
+            saturated = true;
+            break;
+        }
+        if (poll_rc < 0) {
+            fill_error = poll_error == ZLINK_CONFIG_OK ? zlink_errno ()
+                                                       : poll_error;
+            break;
+        }
+    }
+
+    size_t accepted_total = 0;
+    size_t min_accepted = max_records_per_client;
+    size_t max_accepted = 0;
+    for (size_t i = 0; i < accepted.size (); ++i) {
+        accepted_total += accepted[i];
+        if (accepted[i] < min_accepted)
+            min_accepted = accepted[i];
+        if (accepted[i] > max_accepted)
+            max_accepted = accepted[i];
+    }
+    const bool fill_ready =
+      saturated && fill_error == 0 && min_accepted >= lwm_drain_records;
+
+    multi_pollout_wait_state_t wait_state;
+    bool waiter_armed = false;
+    bool waiters_blocked = false;
+    std::vector<void *> pollers (multi_dealer_count, NULL);
+    std::vector<std::thread> waiters;
+    size_t drained_total = 0;
+    size_t lwm_ready_clients = 0;
+    int drain_error = 0;
+    std::vector<size_t> drained (multi_dealer_count, 0);
+    std::chrono::steady_clock::time_point drain_completed_at;
+    const std::chrono::steady_clock::time_point drain_started =
+      std::chrono::steady_clock::now ();
+
+    if (fill_ready) {
+        for (size_t i = 0; i < multi_dealer_count; ++i) {
+            pollers[i] = zlink_poller_new ();
+            TEST_ASSERT_NOT_NULL (pollers[i]);
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_CONFIG_OK,
+              zlink_poller_add (pollers[i], clients[i], clients[i],
+                                ZLINK_POLLOUT));
+        }
+
+        waiters.reserve (multi_dealer_count);
+        for (size_t i = 0; i < multi_dealer_count; ++i)
+            waiters.push_back (std::thread (wait_for_dealer_pollout,
+                                            pollers[i], clients[i],
+                                            &wait_state));
+        {
+            std::unique_lock<std::mutex> lock (wait_state.mutex);
+            waiter_armed = wait_state.cv.wait_for (
+              lock, std::chrono::milliseconds (multi_dealer_arm_timeout_ms),
+              [&wait_state] {
+                  return wait_state.armed_count == multi_dealer_count;
+              });
+        }
+        // BUSY proves that every persistent registration is inside its sole
+        // blocking wait before any reader credit is issued.
+        waiters_blocked = waiter_armed;
+        for (size_t i = 0; waiters_blocked && i < multi_dealer_count; ++i)
+            waiters_blocked = wait_until_poller_wait_is_active (pollers[i]);
+
+        while (lwm_ready_clients < multi_dealer_count) {
+            const int recv_rc =
+              zlink_recv (server, &payload[0], payload.size (), 0);
+            if (recv_rc != static_cast<int> (payload.size ())) {
+                drain_error = recv_rc == -1 && zlink_errno () != 0
+                                ? zlink_errno ()
+                                : EPROTO;
+                break;
+            }
+
+            uint32_t client_index = 0;
+            memcpy (&client_index, &payload[0], sizeof (client_index));
+            if (client_index >= multi_dealer_count) {
+                drain_error = EPROTO;
+                break;
+            }
+            ++drained[client_index];
+            if (drained[client_index] == lwm_drain_records)
+                ++lwm_ready_clients;
+            ++drained_total;
+        }
+        drain_completed_at = std::chrono::steady_clock::now ();
+    }
+
+    const int64_t drain_elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds> (
+        std::chrono::steady_clock::now () - drain_started)
+        .count ();
+
+    for (size_t i = 0; i < waiters.size (); ++i)
+        waiters[i].join ();
+
+    int64_t recovery_after_drain_ms = -1;
+    if (wait_state.recovered_count == multi_dealer_count) {
+        recovery_after_drain_ms =
+          wait_state.latest_recovered_at > drain_completed_at
+            ? std::chrono::duration_cast<std::chrono::milliseconds> (
+                wait_state.latest_recovered_at - drain_completed_at)
+                .count ()
+            : 0;
+    }
+
+    bool drained_to_lwm = lwm_ready_clients == multi_dealer_count;
+    for (size_t i = 0; i < multi_dealer_count; ++i)
+        drained_to_lwm =
+          drained_to_lwm && drained[i] >= lwm_drain_records;
+
+    bool pollers_closed = true;
+    for (size_t i = 0; i < pollers.size (); ++i) {
+        if (!pollers[i])
+            continue;
+        const zlink_config_result_t remove_rc =
+          zlink_poller_remove (pollers[i], clients[i]);
+        const zlink_close_result_t destroy_rc =
+          zlink_poller_destroy (&pollers[i]);
+        pollers_closed = pollers_closed && remove_rc == ZLINK_CONFIG_OK
+                         && destroy_rc == ZLINK_CLOSE_OK;
+    }
+
+    for (size_t i = 0; i < multi_dealer_count; ++i)
+        test_context_socket_close_zero_linger (clients[i]);
+    test_context_socket_close_zero_linger (server);
+
+    std::ostringstream details;
+    details << "saturated=" << saturated << " fill_errno=" << fill_error
+            << " accepted_total=" << accepted_total
+            << " accepted_min=" << min_accepted
+            << " accepted_max=" << max_accepted
+            << " waiter_armed=" << waiter_armed
+            << " waiters_blocked=" << waiters_blocked
+            << " drained=" << drained_total
+            << " lwm_ready_clients=" << lwm_ready_clients
+            << " drain_errno=" << drain_error
+            << " drain_elapsed_ms=" << drain_elapsed_ms
+            << " recovered=" << wait_state.recovered_count
+            << " poll_error=" << wait_state.poll_error
+            << " poll_errno=" << wait_state.errno_value
+            << " max_wait_ms=" << wait_state.max_wait_ms
+            << " recovery_after_drain_ms=" << recovery_after_drain_ms
+            << " pollers_closed=" << pollers_closed;
+    TEST_ASSERT_TRUE_MESSAGE (fill_ready, details.str ().c_str ());
+    TEST_ASSERT_TRUE_MESSAGE (waiter_armed && waiters_blocked,
+                              details.str ().c_str ());
+    TEST_ASSERT_TRUE_MESSAGE (drained_to_lwm && drain_error == 0,
+                              details.str ().c_str ());
+    TEST_ASSERT_TRUE_MESSAGE (pollers_closed, details.str ().c_str ());
+    TEST_ASSERT_TRUE_MESSAGE (
+      wait_state.recovered_count == multi_dealer_count
+        && wait_state.poll_error == ZLINK_CONFIG_OK
+        && wait_state.errno_value == 0 && wait_state.max_wait_ms >= 0
+        && recovery_after_drain_ms >= 0
+        && recovery_after_drain_ms < wake_timeout_ms,
+      details.str ().c_str ());
+}
+
 struct stress_state_t
 {
     stress_state_t () : armed_iteration (no_iteration),
@@ -733,6 +1097,8 @@ int main ()
     RUN_TEST (test_monitor_close_first_message_wakes_public_waiters);
     RUN_TEST (
       test_hwm_eagain_drain_wakes_pollout_with_and_without_async_owner);
+    RUN_TEST (
+      test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout);
     RUN_TEST (
       test_level_triggered_wake_stress_across_socket_transport_matrix);
     return UNITY_END ();
