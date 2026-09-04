@@ -175,6 +175,7 @@ void zlink::router_t::xpipe_terminated (pipe_t *pipe_)
 void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
 {
     bool rollback_outbound = false;
+    pipe_t *promoted_writable_pipe = NULL;
     {
         std::lock_guard<std::mutex> route_lifecycle_lock (
           _out_pipes_sync);
@@ -245,10 +246,16 @@ void zlink::router_t::xsocket_msg_pipe_terminated (pipe_t *pipe_)
               lookup_out_pipe (standby_to_promote->get_routing_id ());
             zlink_assert (promoted && promoted->pipe == standby_to_promote);
             update_out_pipe_weight (promoted, peer_weight);
+            if (standby_to_promote->retain_lifetime_ref ())
+                promoted_writable_pipe = standby_to_promote;
         }
     }
     if (rollback_outbound)
         pipe_->rollback ();
+    if (promoted_writable_pipe) {
+        notify_send_writable (promoted_writable_pipe);
+        promoted_writable_pipe->release_lifetime_ref ();
+    }
 }
 
 int zlink::router_t::xrollback ()

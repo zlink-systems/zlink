@@ -1834,8 +1834,16 @@ zlink::pipe_message_admission_t zlink::pipe_t::check_write_admission ()
 
 bool zlink::pipe_t::take_hwm_credit_recovery ()
 {
-    return _waiting_for_byte_credit.exchange (false,
-                                               std::memory_order_acq_rel);
+    scoped_fast_lock_t lock (_out_sync);
+    const bool recovery =
+      _waiting_for_byte_credit.load (std::memory_order_acquire);
+    // process_activate_write() releases _out_sync before notifying the socket.
+    // If another sender filled the pipe in that interval, _out_active is false
+    // and this marker belongs to the new wait, not the activation being
+    // delivered. Preserve it so the next peer drain still emits a wake.
+    if (recovery && _out_active)
+        _waiting_for_byte_credit.store (false, std::memory_order_release);
+    return recovery;
 }
 
 bool zlink::pipe_t::take_request_correlation_recovery ()
@@ -1925,7 +1933,15 @@ uint64_t zlink::pipe_t::test_apply_lwm_hint (uint64_t hwm_, uint64_t lwm_,
 
 bool zlink::pipe_t::take_flow_resume_recovery ()
 {
-    return _waiting_for_flow_resume.exchange (false, std::memory_order_acq_rel);
+    scoped_fast_lock_t lock (_out_sync);
+    const bool recovery =
+      _waiting_for_flow_resume.load (std::memory_order_acquire);
+    // A new PAUSE can race the socket callback after the prior RESUME released
+    // _out_sync. Keep a marker armed for that newer pause instead of consuming
+    // it as part of the older activation.
+    if (recovery && !_remote_flow_paused)
+        _waiting_for_flow_resume.store (false, std::memory_order_release);
+    return recovery;
 }
 
 void zlink::pipe_t::process_flow_state (unsigned char state_, uint64_t epoch_)

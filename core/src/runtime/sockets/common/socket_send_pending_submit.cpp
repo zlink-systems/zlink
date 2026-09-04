@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
-// Pull-completion SEND and internal REQUEST admission submission. Queue
-// driving lives in socket_send_complete.cpp; this module owns validation and
-// message ownership transfer into the shared pending owner.
+// Blocking SEND and internal REQUEST admission submission. Queue driving lives
+// in socket_send_complete.cpp; only REQUEST transfers message ownership into
+// the pending owner.
 
 #include "utils/precompiled.hpp"
 
@@ -256,179 +256,29 @@ struct zlink::socket_base_t::request_submit_selection_t
     std::optional<std::string> logical_endpoint;
 };
 
-int zlink::socket_base_t::send_completion_submit (
+int zlink::socket_base_t::try_send_parts_scoped_once (
   zlink_msg_t *parts_, size_t part_count_,
-  const zlink_routing_id_t *target_rid_, void *user_context_,
-  zlink_completion_id_t *completion_id_out_,
-  const routed_send_target_key_t *committed_target_,
-  bool admission_gate_preacquired_)
+  const zlink_routing_id_t *target_rid_or_null_,
+  socket_public_send_scope_t &send_scope_)
 {
-    if (completion_id_out_)
-        *completion_id_out_ = 0;
-
-    zlink_routed_submit_target_t target;
-    memset (&target, 0, sizeof (target));
-    if (target_rid_)
-        target.peer_rid = *target_rid_;
-
-    // Immediate completion id 0 needs no pending-record ownership. Attempt it
-    // before target resolution, maps, reservations, or heap-backed records.
-    // The admission gate is the same serialization point used by the pending
-    // driver. If this attempt loses or reports EAGAIN, the full path below
-    // remains authoritative and preserves all queue/terminal semantics.
-    socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    if (!committed_target_ && !target_rid_ && parts_ && part_count_ != 0
-        && (options.type == ZLINK_CORE_SOCKET_PAIR
-            || options.type == ZLINK_CORE_SOCKET_DEALER)
-        && pending.pending_msgs.load (std::memory_order_acquire) == 0
-        && !pending.failing.load (std::memory_order_acquire)) {
-        bool gate_expected = false;
-        if (pending.admission_gate.compare_exchange_strong (
-              gate_expected, true, std::memory_order_acq_rel,
-              std::memory_order_acquire)) {
-            const int immediate_rc = try_admit_send_parts (
-              parts_, part_count_, empty_routed_send_target, false, false);
-            const int immediate_errno = errno;
-            pending.admission_gate.store (false, std::memory_order_release);
-            if (pending.pending_msgs.load (std::memory_order_acquire) != 0)
-                drive_send_pending ();
-            if (immediate_rc == 0) {
-                pending.completion_capacity_blocked.store (
-                  false, std::memory_order_release);
-                errno = 0;
-                return 0;
-            }
-            if (immediate_errno != EAGAIN) {
-                errno = immediate_errno;
-                return -1;
-            }
-            errno = immediate_errno;
-        }
-    }
-
-    return send_pending_submit (parts_, part_count_,
-                                target_rid_ ? &target : NULL, NULL,
-                                true, user_context_, completion_id_out_, false,
-                                NULL, NULL, NULL, NULL, NULL,
-                                committed_target_,
-                                admission_gate_preacquired_);
-}
-
-int zlink::socket_base_t::try_immediate_completion_send_scoped (
-  zlink_msg_t *parts_, size_t part_count_,
-  socket_public_send_scope_t &send_scope_,
-  routed_send_target_key_t *fallback_target_out_,
-  bool *fallback_target_valid_out_,
-  bool *admission_gate_retained_out_)
-{
-    if (fallback_target_valid_out_)
-        *fallback_target_valid_out_ = false;
-    if (admission_gate_retained_out_)
-        *admission_gate_retained_out_ = false;
-    if (!parts_ || part_count_ < 2 || !send_scope_.acquired ()
-        || (options.type != ZLINK_CORE_SOCKET_PAIR
-            && options.type != ZLINK_CORE_SOCKET_DEALER)) {
+    if (!parts_ || part_count_ < 2 || !send_scope_.acquired ()) {
         errno = EINVAL;
         return -1;
     }
-
-    socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    if (pending.pending_msgs.load (std::memory_order_acquire) != 0
-        || pending.failing.load (std::memory_order_acquire)) {
-        errno = pending.failing.load (std::memory_order_acquire)
-                  ? ESHUTDOWN
-                  : EAGAIN;
+    if (target_rid_or_null_) {
+        if (options.type != ZLINK_CORE_SOCKET_ROUTER) {
+            errno = ENOTSUP;
+            return -1;
+        }
+    } else if (options.type != ZLINK_CORE_SOCKET_PAIR
+               && options.type != ZLINK_CORE_SOCKET_DEALER) {
+        errno = ENOTSUP;
         return -1;
     }
 
-    // A blocking PAIR continuation still owns both the public multipart
-    // marker and the socket send sync. No new complete sender can reach
-    // physical admission in that interval. When the pending state and gate
-    // are already clean, avoid taking and releasing a second socket-wide
-    // atomic owner solely for this in-scope attempt. DONTWAIT must retain the
-    // gate because an EAGAIN handoff can publish pending work after returning
-    // from this function; DEALER also needs it for target ordering.
-    const bool pair_scope_owns_admission =
-      options.type == ZLINK_CORE_SOCKET_PAIR
-      && admission_gate_retained_out_ == NULL && send_scope_.sync_locked ()
-      && send_scope_.multipart_marker_owned ()
-      && !pending.admission_gate.load (std::memory_order_acquire);
-    bool admission_gate_owned = false;
-    if (!pair_scope_owns_admission) {
-        bool gate_expected = false;
-        if (!pending.admission_gate.compare_exchange_strong (
-              gate_expected, true, std::memory_order_acq_rel,
-              std::memory_order_acquire)) {
-            errno = EAGAIN;
-            return -1;
-        }
-        admission_gate_owned = true;
-    }
-
-    pipe_t *selected_pipe = NULL;
-    if (options.type == ZLINK_CORE_SOCKET_DEALER) {
-        if (process_submit_commands () != 0) {
-            const int saved_errno = errno;
-            if (saved_errno == EAGAIN && admission_gate_retained_out_)
-                *admission_gate_retained_out_ = true;
-            else
-                pending.admission_gate.store (false,
-                                              std::memory_order_release);
-            errno = saved_errno;
-            return -1;
-        }
-        if (xselect_routed_submit_pipe (&selected_pipe, false) != 0
-            || !selected_pipe) {
-            const int saved_errno = errno;
-            if (saved_errno == EAGAIN && admission_gate_retained_out_)
-                *admission_gate_retained_out_ = true;
-            else
-                pending.admission_gate.store (false,
-                                              std::memory_order_release);
-            errno = saved_errno;
-            return -1;
-        }
-    }
     const int rc = try_admit_send_parts_scoped (
       parts_, part_count_, empty_routed_send_target, false, send_scope_, NULL,
-      options.type == ZLINK_CORE_SOCKET_DEALER, NULL, NULL, false, true, NULL,
-      selected_pipe);
-    const int saved_errno = errno;
-    if (rc != 0 && saved_errno == EAGAIN && selected_pipe
-        && fallback_target_out_ && fallback_target_valid_out_) {
-        try {
-            const std::string logical_endpoint =
-              selected_pipe->get_endpoint_pair ().identifier ();
-            const blob_t &rid = selected_pipe->get_routing_id ();
-            *fallback_target_out_ = routed_send_target_key_t (
-              rid.data (), rid.size (), 0, 0, 0, logical_endpoint);
-            if (logical_endpoint.empty ()) {
-                if (admission_gate_owned)
-                    pending.admission_gate.store (
-                      false, std::memory_order_release);
-                errno = EHOSTUNREACH;
-                return -1;
-            }
-            *fallback_target_valid_out_ = true;
-        } catch (...) {
-            if (admission_gate_owned)
-                pending.admission_gate.store (false,
-                                              std::memory_order_release);
-            errno = ENOMEM;
-            return -1;
-        }
-    }
-    const bool retain_gate = admission_gate_owned && rc != 0
-                             && saved_errno == EAGAIN
-                             && admission_gate_retained_out_;
-    if (retain_gate)
-        *admission_gate_retained_out_ = true;
-    else if (admission_gate_owned)
-        pending.admission_gate.store (false, std::memory_order_release);
-    if (rc == 0)
-        pending.completion_capacity_blocked.store (
-          false, std::memory_order_release);
-    errno = saved_errno;
+      false, NULL, NULL, false, false, target_rid_or_null_);
     return rc;
 }
 
@@ -741,11 +591,10 @@ int zlink::socket_base_t::request_admission_submit (
         target.peer_rid = *target_rid_or_null_;
 
     zlink_send_op_id_t internal_op_id = 0;
-    const int rc = send_pending_submit (
+    const int rc = request_pending_submit (
       parts_, part_count_, target_rid_or_null_ ? &target : NULL,
-      &internal_op_id, true, NULL, NULL,
-      true, admission_observer_, admission_observer_userdata_, resolved_,
-      cleanup_, resolution_context_, NULL, false, promote_);
+      &internal_op_id, admission_observer_, admission_observer_userdata_,
+      resolved_, cleanup_, resolution_context_, promote_);
     if (rc == 0 && pending_out_)
         *pending_out_ = internal_op_id != 0;
     return rc;
@@ -1009,26 +858,21 @@ int zlink::socket_base_t::request_admission_submit_blocking (
       admission_observer_userdata_, timeout);
 }
 
-int zlink::socket_base_t::send_pending_submit (
+int zlink::socket_base_t::request_pending_submit (
   zlink_msg_t *parts_, size_t part_count_,
   const zlink_routed_submit_target_t *target_, zlink_send_op_id_t *op_id_out_,
-  bool pull_completion_, void *user_context_,
-  zlink_completion_id_t *completion_id_out_, bool request_admission_,
   pipe_write_observer_fn admission_observer_,
   void *admission_observer_userdata_,
   send_pending_request_resolved_fn request_resolved_,
   send_pending_request_cleanup_fn request_cleanup_,
   void *request_resolution_context_,
-  const routed_send_target_key_t *committed_target_,
-  bool admission_gate_preacquired_,
   send_pending_request_promote_fn request_promote_)
 {
     if (op_id_out_)
         *op_id_out_ = 0;
-    if (completion_id_out_)
-        *completion_id_out_ = 0;
 
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
+    bool admission_gate_preacquired_ = false;
     preacquired_admission_gate_guard_t preacquired_gate (
       &pending.admission_gate, admission_gate_preacquired_);
 
@@ -1042,7 +886,8 @@ int zlink::socket_base_t::send_pending_submit (
         errno = EINVAL;
         return -1;
     }
-    if (!socket_type_supports_send_completion (options.type)) {
+    if (options.type != ZLINK_CORE_SOCKET_DEALER
+        && options.type != ZLINK_CORE_SOCKET_ROUTER) {
         errno = ENOTSUP;
         return -1;
     }
@@ -1057,10 +902,6 @@ int zlink::socket_base_t::send_pending_submit (
             errno = EFAULT;
             return -1;
         }
-    }
-    if (!pull_completion_ && !request_admission_) {
-        errno = EINVAL;
-        return -1;
     }
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
@@ -1078,7 +919,7 @@ int zlink::socket_base_t::send_pending_submit (
     // first so no pending operation can overtake this attempt, then write the
     // selected pipe directly.  Only a retryable physical refusal materializes
     // the configured endpoint used by the pending retry path below.
-    if (!admission_gate_preacquired_ && !committed_target_ && !target_
+    if (!admission_gate_preacquired_ && !target_
         && options.type == ZLINK_CORE_SOCKET_DEALER
         && pending.pending_msgs.load (std::memory_order_acquire) == 0
         && !pending.failing.load (std::memory_order_acquire)) {
@@ -1091,14 +932,13 @@ int zlink::socket_base_t::send_pending_submit (
             int direct_errno = 0;
             pipe_t *selected_pipe = NULL;
             if (process_submit_commands () == 0
-                && xselect_routed_submit_pipe (&selected_pipe,
-                                               request_admission_)
+                && xselect_routed_submit_pipe (&selected_pipe, true)
                      == 0
                 && selected_pipe) {
                 direct_rc = try_admit_send_parts_scoped (
                   parts_, part_count_, empty_routed_send_target, false,
                   admission, NULL, true, admission_observer_,
-                  admission_observer_userdata_, request_admission_, true,
+                  admission_observer_userdata_, true, true,
                   NULL, selected_pipe);
                 direct_errno = errno;
             } else {
@@ -1110,7 +950,7 @@ int zlink::socket_base_t::send_pending_submit (
                 consume_caller_parts (parts_, part_count_);
                 preacquired_gate.release ();
                 if (pending.pending_msgs.load (std::memory_order_acquire) != 0)
-                    drive_send_pending ();
+                    drive_request_pending ();
                 errno = 0;
                 return 0;
             }
@@ -1118,19 +958,18 @@ int zlink::socket_base_t::send_pending_submit (
             if (!retryable_logical_send_errno (direct_errno)) {
                 preacquired_gate.release ();
                 if (pending.pending_msgs.load (std::memory_order_acquire) != 0)
-                    drive_send_pending ();
+                    drive_request_pending ();
                 errno = direct_errno;
                 return -1;
             }
 
             if (selected_pipe) {
-                if (request_admission_
-                    && xcommit_request_submit_pipe (selected_pipe) != 0) {
+                if (xcommit_request_submit_pipe (selected_pipe) != 0) {
                     const int commit_errno = errno;
                     preacquired_gate.release ();
                     if (pending.pending_msgs.load (std::memory_order_acquire)
                         != 0)
-                        drive_send_pending ();
+                        drive_request_pending ();
                     errno = commit_errno;
                     return -1;
                 }
@@ -1142,7 +981,7 @@ int zlink::socket_base_t::send_pending_submit (
                         if (pending.pending_msgs.load (
                               std::memory_order_acquire)
                             != 0)
-                            drive_send_pending ();
+                            drive_request_pending ();
                         errno = EHOSTUNREACH;
                         return -1;
                     }
@@ -1155,7 +994,7 @@ int zlink::socket_base_t::send_pending_submit (
                     preacquired_gate.release ();
                     if (pending.pending_msgs.load (std::memory_order_acquire)
                         != 0)
-                        drive_send_pending ();
+                        drive_request_pending ();
                     errno = ENOMEM;
                     return -1;
                 }
@@ -1168,7 +1007,7 @@ int zlink::socket_base_t::send_pending_submit (
                 // disconnected/history slow path resolve it below.
                 preacquired_gate.release ();
                 if (pending.pending_msgs.load (std::memory_order_acquire) != 0)
-                    drive_send_pending ();
+                    drive_request_pending ();
             }
         }
     }
@@ -1218,7 +1057,6 @@ int zlink::socket_base_t::send_pending_submit (
     };
     routed_send_target_key_t target;
     bool has_target = false;
-    bool deferred_target_select = false;
     std::string request_logical_endpoint;
 
     //  Resolve the exact target now. Deferring the choice to completion time
@@ -1228,23 +1066,9 @@ int zlink::socket_base_t::send_pending_submit (
     if (direct_fallback_target_valid) {
         target = std::move (direct_fallback_target);
         has_target = true;
-    } else if (committed_target_) {
-        if (options.type != ZLINK_CORE_SOCKET_DEALER
-            || committed_target_->logical_endpoint.empty ()) {
-            errno = EINVAL;
-            return -1;
-        }
-        try {
-            target = *committed_target_;
-        } catch (...) {
-            errno = ENOMEM;
-            return -1;
-        }
-        has_target = true;
     } else try {
         if (options.type == ZLINK_CORE_SOCKET_ROUTER
-                   || options.type == ZLINK_CORE_SOCKET_STREAM
-                   || options.type == ZLINK_CORE_SOCKET_DEALER) {
+            || options.type == ZLINK_CORE_SOCKET_DEALER) {
             zlink_routed_submit_target_t resolved;
             uint64_t resolved_connection_id = 0;
             uint64_t resolved_route_incarnation_id = 0;
@@ -1257,34 +1081,21 @@ int zlink::socket_base_t::send_pending_submit (
                 //  requiring a second Core boundary crossing per message.
                 if (resolved.transport_pair_id == 0
                     && resolved.transport_pair_generation == 0
-                    && (options.type == ZLINK_CORE_SOCKET_ROUTER
-                        || options.type == ZLINK_CORE_SOCKET_STREAM)) {
+                    && options.type == ZLINK_CORE_SOCKET_ROUTER) {
                     if (!valid_routing_id (&resolved.peer_rid)) {
                         errno = EINVAL;
                         return -1;
                     }
-                    if (!request_admission_
-                        && options.type == ZLINK_CORE_SOCKET_ROUTER
-                        && part_count_ == 1) {
-                        deferred_target_select = true;
-                    } else {
-                        if (process_submit_commands () != 0)
-                            return -1;
-                        const zlink_routing_id_t requested_rid = resolved.peer_rid;
-                        const int select_rc = request_admission_
-                          ? xselect_request_submit_target (
-                              &requested_rid, &resolved,
-                              &resolved_connection_id,
-                              &resolved_route_incarnation_id,
-                              &request_logical_endpoint)
-                          : xselect_routed_submit_target_internal (
-                              &requested_rid, &resolved,
-                              &resolved_connection_id,
-                              &resolved_route_incarnation_id);
-                        if (select_rc
-                            != 0)
-                            return -1;
-                    }
+                    if (process_submit_commands () != 0)
+                        return -1;
+                    const zlink_routing_id_t requested_rid = resolved.peer_rid;
+                    if (xselect_request_submit_target (
+                          &requested_rid, &resolved,
+                          &resolved_connection_id,
+                          &resolved_route_incarnation_id,
+                          &request_logical_endpoint)
+                        != 0)
+                        return -1;
                 }
             } else {
                 if (options.type != ZLINK_CORE_SOCKET_DEALER) {
@@ -1293,13 +1104,11 @@ int zlink::socket_base_t::send_pending_submit (
                 }
                 if (process_submit_commands () != 0)
                     return -1;
-                const int select_rc = request_admission_
-                  ? xselect_request_submit_target (
+                if (xselect_request_submit_target (
                       NULL, &resolved, &resolved_connection_id,
                       &resolved_route_incarnation_id,
                       &request_logical_endpoint)
-                  : xselect_routed_submit_target (NULL, &resolved);
-                if (select_rc != 0)
+                    != 0)
                     return -1;
             }
             const bool resolved_pair = resolved.transport_pair_id != 0
@@ -1314,48 +1123,14 @@ int zlink::socket_base_t::send_pending_submit (
               && !logical_endpoint.empty ();
             if ((!dealer_endpoint_target
                  && !valid_routing_id (&resolved.peer_rid))
-                || (!deferred_target_select && !dealer_endpoint_target
-                    && !resolved_pair
+                || (!dealer_endpoint_target && !resolved_pair
                     && !resolved_unpaired)) {
                 errno = EINVAL;
                 return -1;
             }
-            if (pull_completion_
-                && options.type == ZLINK_CORE_SOCKET_DEALER
-                && !request_admission_ && !deferred_target_select) {
-                std::vector<pipe_t *> attached;
-                snapshot_attached_pipes (&attached);
-                for (size_t i = 0; i != attached.size (); ++i) {
-                    pipe_t *const pipe = attached[i];
-                    if (!pipe
-                        || pipe->get_transport_lane ()
-                             != transport_lane_application
-                        || pipe->get_transport_pair_id ()
-                             != resolved.transport_pair_id
-                        || pipe->get_transport_pair_generation ()
-                             != resolved.transport_pair_generation)
-                        continue;
-                    logical_endpoint =
-                      pipe->get_endpoint_pair ().identifier ();
-                    break;
-                }
-                if (logical_endpoint.empty ()) {
-                    errno = EHOSTUNREACH;
-                    return -1;
-                }
-            }
-            if (!deferred_target_select)
-                target = routed_send_target_key_t (
-                  resolved.peer_rid.data, resolved.peer_rid.size,
-                  pull_completion_ ? 0 : resolved.transport_pair_id,
-                  pull_completion_ ? 0 : resolved.transport_pair_generation,
-                  pull_completion_
-                    ? 0
-                    : resolved_unpaired ? resolved_route_incarnation_id : 0,
-                  logical_endpoint);
-            else
-                target = routed_send_target_key_t (
-                  resolved.peer_rid.data, resolved.peer_rid.size, 0, 0);
+            target = routed_send_target_key_t (
+              resolved.peer_rid.data, resolved.peer_rid.size, 0, 0, 0,
+              logical_endpoint);
             has_target = true;
         }
     } catch (...) {
@@ -1399,25 +1174,11 @@ int zlink::socket_base_t::send_pending_submit (
             errno = ESHUTDOWN;
             return -1;
         }
-        bool target_queue_empty = true;
-        if (deferred_target_select) {
-            for (std::map<routed_send_target_key_t,
-                          std::deque<send_pending_record_t *> >::const_iterator
-                   it = pending.queues.begin ();
-                 it != pending.queues.end (); ++it) {
-                if (!it->second.empty ()
-                    && it->first.peer_rid == target.peer_rid) {
-                    target_queue_empty = false;
-                    break;
-                }
-            }
-        } else {
-            const std::map<routed_send_target_key_t,
-                           std::deque<send_pending_record_t *> >::const_iterator
-              queue = pending.queues.find (target);
-            target_queue_empty =
-              queue == pending.queues.end () || queue->second.empty ();
-        }
+        const std::map<routed_send_target_key_t,
+                       std::deque<send_pending_record_t *> >::const_iterator
+          queue = pending.queues.find (target);
+        const bool target_queue_empty =
+          queue == pending.queues.end () || queue->second.empty ();
         if (target_queue_empty) {
             try {
                 if (reserve_inline_attempt_locked (inline_reservation_key,
@@ -1453,69 +1214,26 @@ int zlink::socket_base_t::send_pending_submit (
     // win this race and turn the async operation into pending work instead of
     // being rejected at submit time.
     admission.unlock_sync ();
-    if (deferred_target_select && !attempt_inline) {
-        zlink_routed_submit_target_t resolved;
-        zlink_routing_id_t requested_rid;
-        uint64_t resolved_connection_id = 0;
-        uint64_t resolved_route_incarnation_id = 0;
-        memset (&resolved, 0, sizeof (resolved));
-        memset (&requested_rid, 0, sizeof (requested_rid));
-        requested_rid = target_->peer_rid;
-        if (select_routed_submit_target_internal (
-              &requested_rid, &resolved, &resolved_connection_id,
-              &resolved_route_incarnation_id)
-            != 0)
-            return -1;
-        try {
-            target = routed_send_target_key_t (
-              resolved.peer_rid.data, resolved.peer_rid.size,
-              pull_completion_ ? 0 : resolved.transport_pair_id,
-              pull_completion_ ? 0 : resolved.transport_pair_generation,
-              pull_completion_
-                ? 0
-                : resolved.transport_pair_id == 0
-                ? resolved_route_incarnation_id
-                : 0);
-        } catch (...) {
-            errno = ENOMEM;
-            return -1;
-        }
-        deferred_target_select = false;
-    }
-
-    // Preserve direct admission when no operation is ahead of this target.
-    // Success is reported by completion id 0 and creates no queue record.
+    // Preserve direct admission when no request is ahead of this target.
+    // Immediate admission creates no pending queue record.
     std::optional<send_pending_record_t> inline_record;
     int inline_terminal_errno = 0;
     bool inline_record_owns_copies = false;
     int inline_errno = EAGAIN;
-    routed_send_attempt_identity_t attempted_identity;
     if (attempt_inline) {
-        // The pull API consumes every input on every result and can use caller
-        // storage for the direct attempt. Do not construct or copy a pending
-        // record until the physical attempt actually reports EAGAIN.
+        // The request API consumes every input on every result and can use
+        // caller storage for the direct attempt. Do not construct or copy a
+        // pending record until the physical attempt actually reports EAGAIN.
             zlink_msg_t *const attempt_parts = parts_;
             const size_t attempt_part_count = part_count_;
             socket_public_send_scope_t physical_admission (
               lifecycle, true, socket_send_admission_complete);
             int inline_rc = -1;
             if (physical_admission.acquired ()) {
-                inline_rc = deferred_target_select
-                              ? send_routed_scoped (
-                                  &target_->peer_rid,
-                                  reinterpret_cast<msg_t *> (
-                                    attempt_parts),
-                                  ZLINK_DONTWAIT, physical_admission, NULL, 0,
-                                  NULL, 0, 0, false,
-                                  admission_observer_,
-                                  admission_observer_userdata_,
-                                  &attempted_identity)
-                              : try_admit_send_parts_scoped (
-                                  attempt_parts, attempt_part_count, target,
-                                  has_target, physical_admission, NULL, false,
-                                  admission_observer_,
-                                  admission_observer_userdata_,
-                                  request_admission_);
+                inline_rc = try_admit_send_parts_scoped (
+                  attempt_parts, attempt_part_count, target, has_target,
+                  physical_admission, NULL, false, admission_observer_,
+                  admission_observer_userdata_, true);
             } else {
                 // An open incremental sequence is physical admission
                 // contention, not an invalid async submission. Preserve the
@@ -1543,7 +1261,7 @@ int zlink::socket_base_t::send_pending_submit (
                 //  Operations queued behind the direct attempt may also fit.
                 if (pending.pending_msgs.load (std::memory_order_acquire)
                     != 0) {
-                    drive_send_pending ();
+                    drive_request_pending ();
                 }
                 return 0;
             }
@@ -1556,7 +1274,7 @@ int zlink::socket_base_t::send_pending_submit (
                       inline_reservation_key);
                 }
                 if (pending.pending_msgs.load (std::memory_order_acquire) != 0)
-                    drive_send_pending ();
+                    drive_request_pending ();
                 errno = inline_errno;
                 return -1;
             }
@@ -1571,7 +1289,7 @@ int zlink::socket_base_t::send_pending_submit (
                     release_inline_attempt_locked (
                       inline_reservation_key);
                 }
-                drive_send_pending ();
+                drive_request_pending ();
                 errno = ENOMEM;
                 return -1;
             }
@@ -1586,101 +1304,25 @@ int zlink::socket_base_t::send_pending_submit (
                       inline_reservation_key);
                 }
                 if (pending.pending_msgs.load (std::memory_order_acquire) != 0)
-                    drive_send_pending ();
+                    drive_request_pending ();
                 errno = ENOMEM;
                 return -1;
             }
             inline_record_owns_copies = true;
 
-        if (deferred_target_select) {
-            const bool attempted_pair =
-              attempted_identity.transport_pair_id != 0
-              && attempted_identity.transport_pair_generation != 0;
-            const bool attempted_unpaired =
-              attempted_identity.transport_pair_id == 0
-              && attempted_identity.transport_pair_generation == 0
-              && attempted_identity.transport_connection_id != 0
-              && attempted_identity.route_incarnation_id != 0;
-            if (!attempted_pair && !attempted_unpaired) {
-                pending.admission_gate.store (false,
-                                              std::memory_order_release);
-                if (target_reserved) {
-                    scoped_lock_t lock (pending.sync);
-                    release_inline_attempt_locked (
-                      inline_reservation_key);
-                }
-                close_send_parts (&inline_record->parts);
-                inline_record_owns_copies = false;
-                if (pending.pending_msgs.load (std::memory_order_acquire) != 0)
-                    drive_send_pending ();
-                errno = inline_errno;
-                return -1;
-            }
-            try {
-                target = routed_send_target_key_t (
-                  target_->peer_rid.data,
-                  target_->peer_rid.size,
-                  pull_completion_ ? 0
-                                   : attempted_identity.transport_pair_id,
-                  pull_completion_ ? 0
-                                   : attempted_identity.transport_pair_generation,
-                  pull_completion_
-                    ? 0
-                    : attempted_unpaired
-                    ? attempted_identity.route_incarnation_id
-                    : 0);
-            } catch (...) {
-                pending.admission_gate.store (false,
-                                              std::memory_order_release);
-                if (target_reserved) {
-                    scoped_lock_t lock (pending.sync);
-                    release_inline_attempt_locked (
-                      inline_reservation_key);
-                }
-                close_send_parts (&inline_record->parts);
-                inline_record_owns_copies = false;
-                if (pending.pending_msgs.load (std::memory_order_acquire) != 0)
-                    drive_send_pending ();
-                errno = ENOMEM;
-                return -1;
-            }
-            deferred_target_select = false;
-        }
-
     }
 
     const uint64_t charge = record_charge_bytes (parts_, part_count_);
-    socket_completion::reservation_t *completion_reservation = NULL;
-    zlink_completion_id_t completion_id = 0;
     int pending_reject_errno = 0;
-    if (pull_completion_ && !request_admission_) {
-        const zlink_routing_id_t *completion_peer =
-          (options.type == ZLINK_CORE_SOCKET_ROUTER
-           || options.type == ZLINK_CORE_SOCKET_STREAM)
-            ? target_ ? &target_->peer_rid : NULL
-            : NULL;
-        if (socket_completion::reserve (
-              &completion_runtime (), ZLINK_COMPLETION_SEND, user_context_,
-              completion_peer, &completion_reservation, &completion_id)
-            != 0) {
-            pending_reject_errno = errno;
-            if (pending_reject_errno == EAGAIN)
-                mark_send_completion_capacity_blocked ();
-        }
-    }
-    send_pending_record_t *record =
-      pending_reject_errno == 0
-        ? new (std::nothrow) send_pending_record_t ()
-        : NULL;
+    send_pending_record_t *record = new (std::nothrow) send_pending_record_t ();
     bool record_owns_copies = false;
     bool request_context_promoted = false;
     zlink_send_op_id_t op_id = 0;
-    bool start_send_completion_owner = false;
-    if (!record && pending_reject_errno == 0)
+    if (!record)
         pending_reject_errno = ENOMEM;
     void *record_observer_userdata = admission_observer_userdata_;
     void *record_resolution_context = request_resolution_context_;
-    if (record && request_admission_ && request_promote_) {
+    if (record && request_promote_) {
         record_observer_userdata = NULL;
         record_resolution_context = NULL;
         if (request_promote_ (
@@ -1693,9 +1335,6 @@ int zlink::socket_base_t::send_pending_submit (
         }
     }
     if (record && pending_reject_errno == 0) {
-        record->pull_completion = pull_completion_;
-        record->request_admission = request_admission_;
-        record->completion_reservation = completion_reservation;
         record->admission_observer = admission_observer_;
         record->admission_observer_userdata = record_observer_userdata;
         record->request_resolution_context = record_resolution_context;
@@ -1750,8 +1389,8 @@ int zlink::socket_base_t::send_pending_submit (
                     record->claimed = true;
                 }
             }
-            // A non-zero option is an explicit application overload policy;
-            // zero means unlimited and normal HWM pressure stays pending.
+            // Pending limits remain the REQUEST overload policy. Ordinary
+            // DONTWAIT SEND never reaches this queue.
             const uint64_t max_msgs = options.send_pending_max_msgs;
             const uint64_t max_bytes = options.send_pending_max_bytes;
             const uint64_t reserved_bytes =
@@ -1770,7 +1409,7 @@ int zlink::socket_base_t::send_pending_submit (
                 //  Operation id zero permanently denotes immediate admission.
                 //  Once the socket-local uint64 sequence wraps, refuse new
                 //  pending ownership instead of publishing an unobservable
-                //  operation that cannot be correlated.
+                    //  request that cannot be correlated.
                 pending_reject_errno = EOVERFLOW;
             } else {
                 const zlink_send_op_id_t candidate_op_id = pending.next_op_id;
@@ -1822,12 +1461,8 @@ int zlink::socket_base_t::send_pending_submit (
                     //  caller ownership exactly as the async API promises.
                     record->op_id = candidate_op_id;
                     ++pending.next_op_id;
-                    const uint64_t previous_pending =
-                      pending.pending_msgs.fetch_add (
-                        1, std::memory_order_release);
-                    start_send_completion_owner =
-                      previous_pending == 0 && pull_completion_
-                      && !request_admission_;
+                    pending.pending_msgs.fetch_add (
+                      1, std::memory_order_release);
                     pending.pending_bytes = reserved_bytes;
                     pending.enqueue_epoch.fetch_add (
                       1, std::memory_order_release);
@@ -1875,10 +1510,7 @@ int zlink::socket_base_t::send_pending_submit (
             delete record;
             record = NULL;
         }
-        if (completion_reservation)
-            socket_completion::release (&completion_runtime (),
-                                        completion_reservation);
-        drive_send_pending ();
+        drive_request_pending ();
         errno = pending_reject_errno;
         return -1;
     }
@@ -1898,32 +1530,14 @@ int zlink::socket_base_t::send_pending_submit (
     }
     if (op_id_out_)
         *op_id_out_ = op_id;
-    if (completion_id_out_)
-        *completion_id_out_ = completion_id;
-
-    // A pull SEND can be accepted after the application has closed its
-    // connection monitor and may make no further call on this socket until it
-    // expects the completion. Retain the socket mailbox executor at the first
-    // pending transition so activate_write can redrive the record without a
-    // later public API call. This is a cold EAGAIN path; immediate sends pay no
-    // owner-management cost.
-    if (start_send_completion_owner
-        && _completion_poller_refs.load (std::memory_order_acquire) == 0
-        && !_async_command_processing_retained.load (
-          std::memory_order_acquire)) {
-        const int accepted_errno = errno;
-        (void) ensure_completion_processing ();
-        errno = accepted_errno;
-    }
 
     if (inline_terminal_errno != 0) {
-        finish_send_pending (record, ZLINK_SEND_TERMINAL,
-                             inline_terminal_errno);
+        finish_request_pending (record, false, inline_terminal_errno);
         return 0;
     }
 
     // Retry once after publication so a writable edge racing the direct
     // EAGAIN cannot be lost between attempt and queue insertion.
-    drive_send_pending ();
+    drive_request_pending ();
     return 0;
 }

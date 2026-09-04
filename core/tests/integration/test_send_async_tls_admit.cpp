@@ -42,7 +42,52 @@ void configure_tls (void *server_, void *client_, const tls_test_files_t &files_
       client_, ZLINK_OPT_TLS_HOSTNAME, hostname, strlen (hostname)));
 }
 
-void run_case (const char *transport_, int settle_ms_)
+void assert_no_completion (void *socket_)
+{
+    zlink_completion_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.struct_size = sizeof (completion);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_NO_DATA,
+      zlink_completion_recv (socket_, &completion,
+                             ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    zlink_completion_close (&completion);
+}
+
+void receive_writable_completion (void *socket_,
+                                  zlink_completion_id_t expected_id_,
+                                  void *expected_context_)
+{
+    zlink_pollitem_t writable = {socket_, 0, ZLINK_POLLOUT, 0};
+    zlink_config_result_t poll_error = ZLINK_CONFIG_INTERNAL_ERROR;
+    TEST_ASSERT_EQUAL_INT (
+      1, zlink_poll (&writable, 1, completion_wait_ms, &poll_error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, poll_error);
+    TEST_ASSERT_BITS_HIGH (ZLINK_POLLOUT, writable.revents);
+
+    writable.revents = 0;
+    TEST_ASSERT_EQUAL_INT (1, zlink_poll (&writable, 1, 0, &poll_error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, poll_error);
+    TEST_ASSERT_BITS_HIGH (ZLINK_POLLOUT, writable.revents);
+
+    zlink_completion_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.struct_size = sizeof (completion);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_completion_recv (socket_, &completion,
+                             ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
+    TEST_ASSERT_EQUAL_UINT64 (expected_id_, completion.completion_id);
+    TEST_ASSERT_EQUAL_PTR (expected_context_, completion.user_context);
+    TEST_ASSERT_EQUAL_UINT8 (0, completion.peer_rid.size);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.send_result);
+    TEST_ASSERT_EQUAL_INT (0, completion.send_terminal_errno);
+    zlink_completion_close (&completion);
+}
+
+void run_case (const char *transport_)
 {
     const bool is_tls = strcmp (transport_, "tls") == 0;
     if (is_tls && !tls_available ())
@@ -59,55 +104,51 @@ void run_case (const char *transport_, int settle_ms_)
         configure_tls (server, client, tls_files);
     }
 
+    const int immediate = 1;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      client, ZLINK_OPT_IMMEDIATE, &immediate, sizeof (immediate)));
+
     char endpoint[MAX_SOCKET_STRING];
-    test_bind (server, is_tls ? "tls://127.0.0.1:*" : "tcp://127.0.0.1:*",
-               endpoint, sizeof (endpoint));
+    fd_t reserved = bind_socket_resolve_port ("127.0.0.1", "0", endpoint);
+    close (reserved);
+    if (is_tls)
+        memcpy (endpoint, "tls", 3);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
-    if (settle_ms_ > 0)
-        msleep (settle_ms_);
 
     std::string payload (payload_size, 'x');
-    zlink_submit_result_t submit = ZLINK_SUBMIT_INTERNAL_ERROR;
-    zlink_completion_id_t completion_id = 0;
-    int completion_context = 91;
-    for (int i = 0; i != completion_wait_ms / 5; ++i) {
-        zlink_msg_t part;
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&part, payload.size ()));
-        memcpy (zlink_msg_data (&part), payload.data (), payload.size ());
-        submit = zlink_send_part (client, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                                  ZLINK_PART_FINAL, &completion_context,
-                                  &completion_id);
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
-        if (submit == ZLINK_SUBMIT_OK)
-            break;
-        TEST_ASSERT_TRUE (submit == ZLINK_SUBMIT_NOT_CONNECTED
-                          || submit == ZLINK_SUBMIT_BACKPRESSURED);
-        msleep (5);
-    }
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, submit);
+    int wait_context = 91;
+    zlink_msg_t rejected;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_msg_init_size (&rejected, payload.size ()));
+    memcpy (zlink_msg_data (&rejected), payload.data (), payload.size ());
+    zlink_completion_id_t wait_token = UINT64_MAX;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_BACKPRESSURED,
+      zlink_send_part (client, &rejected, ZLINK_SEND_FLAGS_DONTWAIT,
+                       ZLINK_PART_FINAL, &wait_context, &wait_token));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    TEST_ASSERT_NOT_EQUAL (0, wait_token);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&rejected));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&rejected));
+    TEST_ASSERT_EQUAL_UINT64 (payload_size, payload.size ());
+    assert_no_completion (client);
 
-    if (completion_id != 0) {
-        zlink_completion_t completion;
-        memset (&completion, 0, sizeof (completion));
-        completion.struct_size = sizeof (completion);
-        zlink_recv_result_t recv_rc = ZLINK_RECV_NO_DATA;
-        for (int waited = 0;
-             waited < completion_wait_ms && recv_rc == ZLINK_RECV_NO_DATA;
-             waited += 5) {
-            recv_rc = zlink_completion_recv (
-              client, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
-            if (recv_rc == ZLINK_RECV_NO_DATA)
-                msleep (5);
-        }
-        TEST_ASSERT_EQUAL_INT_MESSAGE (
-          ZLINK_RECV_OK, recv_rc,
-          "pending send completion never became pull-readable");
-        TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_SEND, completion.kind);
-        TEST_ASSERT_EQUAL_UINT64 (completion_id, completion.completion_id);
-        TEST_ASSERT_EQUAL_PTR (&completion_context, completion.user_context);
-        TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.send_result);
-        zlink_completion_close (&completion);
-    }
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (server, endpoint));
+    receive_writable_completion (client, wait_token, &wait_context);
+
+    zlink_msg_t retry;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&retry, payload.size ()));
+    memcpy (zlink_msg_data (&retry), payload.data (), payload.size ());
+    zlink_completion_id_t retry_id = UINT64_MAX;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_part (client, &retry, ZLINK_SEND_FLAGS_DONTWAIT,
+                       ZLINK_PART_FINAL, NULL, &retry_id));
+    TEST_ASSERT_EQUAL_UINT64 (0, retry_id);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&retry));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&retry));
+    assert_no_completion (client);
 
     zlink_msg_t received;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&received));
@@ -122,6 +163,8 @@ void run_case (const char *transport_, int settle_ms_)
     TEST_ASSERT_EQUAL_UINT64 (0, token);
     TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
     TEST_ASSERT_EQUAL_UINT (payload_size, zlink_msg_size (&received));
+    TEST_ASSERT_EQUAL_MEMORY (payload.data (), zlink_msg_data (&received),
+                              payload.size ());
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&received));
 
     test_context_socket_close_zero_linger (client);
@@ -131,30 +174,30 @@ void run_case (const char *transport_, int settle_ms_)
 }
 }
 
-void test_pending_send_admits_over_tcp ()
+void test_writable_token_retries_over_tcp ()
 {
-    run_case ("tcp", SETTLE_TIME);
+    run_case ("tcp");
 }
 
-void test_pending_send_admits_over_tls ()
+void test_writable_token_retries_over_tls ()
 {
-    run_case ("tls", SETTLE_TIME);
+    run_case ("tls");
 }
 
-void test_pending_send_admits_over_tls_during_handshake ()
+void test_writable_token_retries_over_tls_during_handshake ()
 {
-    run_case ("tls", 0);
+    run_case ("tls");
 }
 
 int main ()
 {
     setup_test_environment (30);
     UNITY_BEGIN ();
-    if (selected ("test_pending_send_admits_over_tcp"))
-        RUN_TEST (test_pending_send_admits_over_tcp);
-    if (selected ("test_pending_send_admits_over_tls"))
-        RUN_TEST (test_pending_send_admits_over_tls);
-    if (selected ("test_pending_send_admits_over_tls_during_handshake"))
-        RUN_TEST (test_pending_send_admits_over_tls_during_handshake);
+    if (selected ("test_writable_token_retries_over_tcp"))
+        RUN_TEST (test_writable_token_retries_over_tcp);
+    if (selected ("test_writable_token_retries_over_tls"))
+        RUN_TEST (test_writable_token_retries_over_tls);
+    if (selected ("test_writable_token_retries_over_tls_during_handshake"))
+        RUN_TEST (test_writable_token_retries_over_tls_during_handshake);
     return UNITY_END ();
 }

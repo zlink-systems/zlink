@@ -5,7 +5,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -145,47 +147,105 @@ zlink_routing_id_t receive_connected_rid (void *stream_)
     return rid;
 }
 
-zlink_completion_id_t create_stably_pending_send (
-  void *stream_, const zlink_routing_id_t *rid_)
+void assert_no_completion (void *stream_)
 {
+    zlink_completion_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.struct_size = sizeof (completion);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_NO_DATA,
+      zlink_completion_recv (stream_, &completion, ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    zlink_completion_close (&completion);
+}
+
+void receive_writable_completion (void *stream_,
+                                  zlink_completion_id_t expected_id_,
+                                  void *expected_context_,
+                                  const zlink_routing_id_t *expected_rid_)
+{
+    zlink_pollitem_t writable = {stream_, 0, ZLINK_POLLOUT, 0};
+    zlink_config_result_t poll_error = ZLINK_CONFIG_INTERNAL_ERROR;
+    TEST_ASSERT_EQUAL_INT (1, zlink_poll (&writable, 1, 5000, &poll_error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, poll_error);
+    TEST_ASSERT_BITS_HIGH (ZLINK_POLLOUT, writable.revents);
+
+    writable.revents = 0;
+    TEST_ASSERT_EQUAL_INT (1, zlink_poll (&writable, 1, 0, &poll_error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, poll_error);
+    TEST_ASSERT_BITS_HIGH (ZLINK_POLLOUT, writable.revents);
+
+    zlink_completion_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.struct_size = sizeof (completion);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_completion_recv (stream_, &completion,
+                             ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
+    TEST_ASSERT_EQUAL_UINT64 (expected_id_, completion.completion_id);
+    TEST_ASSERT_EQUAL_PTR (expected_context_, completion.user_context);
+    TEST_ASSERT_EQUAL_UINT (expected_rid_->size, completion.peer_rid.size);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY (expected_rid_->data,
+                                   completion.peer_rid.data,
+                                   expected_rid_->size);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.send_result);
+    TEST_ASSERT_EQUAL_INT (0, completion.send_terminal_errno);
+    zlink_completion_close (&completion);
+}
+
+size_t fill_until_backpressured (
+  void *stream_, const zlink_routing_id_t *rid_,
+  const std::vector<unsigned char> &payload_, void *user_context_,
+  zlink_completion_id_t *wait_token_out_)
+{
+    TEST_ASSERT_NOT_NULL (wait_token_out_);
+    *wait_token_out_ = 0;
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (5);
-    std::vector<unsigned char> payload (payload_size, 0x5a);
+    size_t admitted = 0;
 
     while (std::chrono::steady_clock::now () < deadline) {
         zlink_msg_t part;
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
-                               zlink_msg_init_size (&part, payload.size ()));
-        memcpy (zlink_msg_data (&part), &payload[0], payload.size ());
-        zlink_completion_id_t id = 0;
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_SUBMIT_OK,
-          zlink_send_part_rid (stream_, rid_, &part,
-                               ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
-                               NULL, &id));
+                               zlink_msg_init_size (&part, payload_.size ()));
+        memcpy (zlink_msg_data (&part), payload_.data (), payload_.size ());
+        zlink_completion_id_t id = UINT64_MAX;
+        const zlink_submit_result_t result = zlink_send_part_rid (
+          stream_, rid_, &part, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
+          user_context_, &id);
+        const int submit_errno = zlink_errno ();
         TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
-        if (id == 0)
+        if (result == ZLINK_SUBMIT_BACKPRESSURED) {
+            TEST_ASSERT_EQUAL_INT (EAGAIN, submit_errno);
+            TEST_ASSERT_NOT_EQUAL (0, id);
+
+            // A raw TCP peer can free kernel credit without an application
+            // recv. Consume such an already-ready token and keep filling until
+            // POLLOUT stays quiet for a bounded interval; that is the stable
+            // pressure point needed by the blocking-wakeup half of this test.
+            zlink_pollitem_t writable = {stream_, 0, ZLINK_POLLOUT, 0};
+            zlink_config_result_t poll_error = ZLINK_CONFIG_INTERNAL_ERROR;
+            const int poll_rc =
+              zlink_poll (&writable, 1, 20, &poll_error);
+            TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, poll_error);
+            if (poll_rc == 0) {
+                *wait_token_out_ = id;
+                assert_no_completion (stream_);
+                return admitted;
+            }
+            TEST_ASSERT_EQUAL_INT (1, poll_rc);
+            TEST_ASSERT_BITS_HIGH (ZLINK_POLLOUT, writable.revents);
+            receive_writable_completion (stream_, id, user_context_, rid_);
             continue;
-
-        std::this_thread::sleep_for (std::chrono::milliseconds (100));
-        zlink_completion_t completion;
-        memset (&completion, 0, sizeof (completion));
-        completion.struct_size = sizeof (completion);
-        const zlink_recv_result_t receive_result = zlink_completion_recv (
-          stream_, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
-        if (receive_result == ZLINK_RECV_NO_DATA) {
-            TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-            return id;
         }
-
-        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, receive_result);
-        TEST_ASSERT_EQUAL_UINT64 (id, completion.completion_id);
-        TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.send_result);
-        zlink_completion_close (&completion);
+        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
+        TEST_ASSERT_EQUAL_UINT64 (0, id);
+        ++admitted;
     }
 
-    TEST_FAIL_MESSAGE ("STREAM send did not remain pending at the HWM");
+    TEST_FAIL_MESSAGE ("STREAM send did not reach backpressure at the HWM");
     return 0;
 }
 
@@ -201,6 +261,13 @@ struct blocking_send_result_t
     zlink_submit_result_t result;
     zlink_completion_id_t completion_id;
     uint64_t remaining_size;
+};
+
+struct send_start_latch_t
+{
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool started = false;
 };
 } // namespace
 
@@ -219,11 +286,16 @@ void test_stream_blocking_send_wakes_after_peer_reads ()
     const int raw_fd = connect_raw_tcp (endpoint);
     TEST_ASSERT_GREATER_OR_EQUAL_INT (0, raw_fd);
     const zlink_routing_id_t rid = receive_connected_rid (stream);
-    const zlink_completion_id_t pending_id =
-      create_stably_pending_send (stream, &rid);
-    TEST_ASSERT_NOT_EQUAL (0, pending_id);
+    const std::vector<unsigned char> rejected_payload (payload_size, 0x5a);
+    int wait_context = 71;
+    zlink_completion_id_t wait_token = 0;
+    TEST_ASSERT_GREATER_THAN (
+      0, fill_until_backpressured (stream, &rid, rejected_payload,
+                                   &wait_context, &wait_token));
+    TEST_ASSERT_NOT_EQUAL (0, wait_token);
 
     blocking_send_result_t observed;
+    send_start_latch_t start;
     std::thread sender ([&] {
         zlink_msg_t part;
         observed.result =
@@ -232,6 +304,11 @@ void test_stream_blocking_send_wakes_after_peer_reads ()
             : ZLINK_SUBMIT_INTERNAL_ERROR;
         if (observed.result == ZLINK_SUBMIT_OK) {
             memset (zlink_msg_data (&part), 0x33, payload_size);
+            {
+                std::lock_guard<std::mutex> lock (start.mutex);
+                start.started = true;
+            }
+            start.condition.notify_one ();
             errno = 0;
             observed.result = zlink_send_part_rid (
               stream, &rid, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
@@ -242,9 +319,11 @@ void test_stream_blocking_send_wakes_after_peer_reads ()
         observed.done.store (true, std::memory_order_release);
     });
 
-    std::this_thread::sleep_for (std::chrono::milliseconds (50));
-    TEST_ASSERT_FALSE (observed.done.load (std::memory_order_acquire));
-
+    {
+        std::unique_lock<std::mutex> lock (start.mutex);
+        TEST_ASSERT_TRUE (start.condition.wait_for (
+          lock, std::chrono::seconds (5), [&] { return start.started; }));
+    }
     unsigned char drain_buffer[64 * 1024];
     const std::chrono::steady_clock::time_point drain_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (5);
@@ -257,23 +336,15 @@ void test_stream_blocking_send_wakes_after_peer_reads ()
     TEST_ASSERT_EQUAL_UINT64 (0, observed.completion_id);
     TEST_ASSERT_EQUAL_UINT64 (0, observed.remaining_size);
 
-    zlink_completion_t completion;
-    memset (&completion, 0, sizeof (completion));
-    completion.struct_size = sizeof (completion);
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_OK,
-      zlink_completion_recv (stream, &completion, ZLINK_RECV_FLAGS_NONE));
-    TEST_ASSERT_EQUAL_UINT64 (pending_id, completion.completion_id);
-    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_SEND, completion.kind);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.send_result);
-    zlink_completion_close (&completion);
+    receive_writable_completion (stream, wait_token, &wait_context, &rid);
+    assert_no_completion (stream);
 
     close (raw_fd);
     test_context_socket_close_zero_linger (stream);
 #endif
 }
 
-void test_stream_pending_send_detach_completes_once ()
+void test_stream_backpressure_wakes_pollout_and_retry_succeeds ()
 {
 #if defined(ZLINK_HAVE_WINDOWS)
     TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
@@ -288,47 +359,39 @@ void test_stream_pending_send_detach_completes_once ()
     const int raw_fd = connect_raw_tcp (endpoint);
     TEST_ASSERT_GREATER_OR_EQUAL_INT (0, raw_fd);
     const zlink_routing_id_t rid = receive_connected_rid (stream);
-    const zlink_completion_id_t pending_id =
-      create_stably_pending_send (stream, &rid);
-    TEST_ASSERT_NOT_EQUAL (0, pending_id);
+    const std::vector<unsigned char> rejected_payload (payload_size, 0x5a);
+    int wait_context = 72;
+    zlink_completion_id_t wait_token = 0;
+    TEST_ASSERT_GREATER_THAN (
+      0, fill_until_backpressured (stream, &rid, rejected_payload,
+                                   &wait_context, &wait_token));
+    TEST_ASSERT_NOT_EQUAL (0, wait_token);
+
+    unsigned char drain_buffer[64 * 1024];
+    TEST_ASSERT_GREATER_THAN (0,
+                              recv_raw (raw_fd, drain_buffer,
+                                        sizeof (drain_buffer)));
+
+    receive_writable_completion (stream, wait_token, &wait_context, &rid);
+
+    zlink_msg_t retry;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_msg_init_size (&retry,
+                                                rejected_payload.size ()));
+    memcpy (zlink_msg_data (&retry), rejected_payload.data (),
+            rejected_payload.size ());
+    zlink_completion_id_t completion_id = UINT64_MAX;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_part_rid (stream, &rid, &retry,
+                           ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL,
+                           &completion_id));
+    TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&retry));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&retry));
+    assert_no_completion (stream);
 
     close (raw_fd);
-
-    zlink_completion_t completion;
-    memset (&completion, 0, sizeof (completion));
-    completion.struct_size = sizeof (completion);
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_NO_DATA,
-      zlink_completion_recv (stream, &completion,
-                             ZLINK_RECV_FLAGS_DONTWAIT));
-    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-    zlink_completion_close (&completion);
-
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
-                           zlink_disconnect_rid (stream, &rid));
-
-    memset (&completion, 0, sizeof (completion));
-    completion.struct_size = sizeof (completion);
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_OK,
-      zlink_completion_recv (stream, &completion, ZLINK_RECV_FLAGS_NONE));
-    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_SEND, completion.kind);
-    TEST_ASSERT_EQUAL_UINT64 (pending_id, completion.completion_id);
-    TEST_ASSERT_EQUAL_UINT (rid.size, completion.peer_rid.size);
-    TEST_ASSERT_EQUAL_UINT8_ARRAY (rid.data, completion.peer_rid.data, rid.size);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_TERMINAL, completion.send_result);
-    TEST_ASSERT_EQUAL_INT (ENOENT, completion.send_terminal_errno);
-    zlink_completion_close (&completion);
-
-    memset (&completion, 0, sizeof (completion));
-    completion.struct_size = sizeof (completion);
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_NO_DATA,
-      zlink_completion_recv (stream, &completion,
-                             ZLINK_RECV_FLAGS_DONTWAIT));
-    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-    zlink_completion_close (&completion);
-
     test_context_socket_close_zero_linger (stream);
 #endif
 }
@@ -338,6 +401,6 @@ int main ()
     setup_test_environment ();
     UNITY_BEGIN ();
     RUN_TEST (test_stream_blocking_send_wakes_after_peer_reads);
-    RUN_TEST (test_stream_pending_send_detach_completes_once);
+    RUN_TEST (test_stream_backpressure_wakes_pollout_and_retry_succeeds);
     return UNITY_END ();
 }

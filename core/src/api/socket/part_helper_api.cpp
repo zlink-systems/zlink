@@ -96,8 +96,9 @@ int begin_send_sequence_locked (
     if (!sink_socket_->begin_public_send_scope (&send_scope)) {
         const int scope_errno = errno;
         sink_socket_->set_part_helper_send_active (false);
-        // A Core-owned pending-send retry briefly uses the complete admission
-        // slot. It is backpressure, not a malformed multipart sequence.
+        // A concurrent complete-record admission (including a pending REQUEST
+        // retry) briefly uses the slot. It is backpressure, not a malformed
+        // multipart sequence.
         if (scope_errno == EINVAL
             && spec_.flags == ZLINK_SEND_FLAGS_DONTWAIT) {
             sink_socket_->arm_send_recovery_after_backpressure ();

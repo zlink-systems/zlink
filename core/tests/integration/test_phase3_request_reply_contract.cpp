@@ -254,70 +254,6 @@ void assert_request_not_found_completion (
     assert_empty_completion (completion);
 }
 
-void fill_live_dealer_pipe_until_shared_limit_rejects (void *dealer_)
-{
-    bool rejected = false;
-    for (int attempt = 0; attempt != 256; ++attempt) {
-        zlink_msg_t filler;
-        init_part (&filler,
-                   "pending-pool-fill-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
-        zlink_completion_id_t completion_id = UINT64_MAX;
-        errno = 0;
-        const zlink_submit_result_t result =
-          zlink_send_part (dealer_, &filler, ZLINK_SEND_FLAGS_DONTWAIT,
-                           ZLINK_PART_FINAL, NULL, &completion_id);
-        assert_part_consumed (&filler);
-        if (result == ZLINK_SUBMIT_OK) {
-            // Every pre-limit fill is direct admission. Accepting a pending
-            // SEND here would prove that it escaped the shared REQUEST slot.
-            TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
-            continue;
-        }
-        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_BACKPRESSURED, result);
-        TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-        TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
-        rejected = true;
-        break;
-    }
-    TEST_ASSERT_TRUE_MESSAGE (rejected,
-                              "live data pipe never reached pending admission");
-}
-
-zlink_completion_id_t submit_pending_send_after_shared_limit_release (
-  void *dealer_)
-{
-    zlink_msg_t pending;
-    init_part (&pending, "pending-after-shared-limit-release");
-    zlink_completion_id_t completion_id = 0;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (dealer_, &pending, ZLINK_SEND_FLAGS_DONTWAIT,
-                       ZLINK_PART_FINAL, NULL, &completion_id));
-    TEST_ASSERT_NOT_EQUAL (0, completion_id);
-    assert_part_consumed (&pending);
-    return completion_id;
-}
-
-zlink_completion_id_t fill_live_dealer_pipe_until_pending_is_accepted (
-  void *dealer_)
-{
-    for (int attempt = 0; attempt != 256; ++attempt) {
-        zlink_msg_t filler;
-        init_part (&filler,
-                   "pending-release-fill-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
-        zlink_completion_id_t completion_id = 0;
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_SUBMIT_OK,
-          zlink_send_part (dealer_, &filler, ZLINK_SEND_FLAGS_DONTWAIT,
-                           ZLINK_PART_FINAL, NULL, &completion_id));
-        assert_part_consumed (&filler);
-        if (completion_id != 0)
-            return completion_id;
-    }
-    TEST_FAIL_MESSAGE ("live data pipe never produced an accepted pending SEND");
-    return 0;
-}
-
 struct router_part_t
 {
     zlink_routing_id_t source_rid;
@@ -1519,151 +1455,16 @@ void test_router_explicit_logical_rid_removal_completes_admitted_request_not_fou
     test_context_socket_close_zero_linger (server_router);
 }
 
-void test_send_and_request_share_pending_record_limit_and_release ()
-{
-    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
-    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
-    TEST_ASSERT_NOT_NULL (router);
-    TEST_ASSERT_NOT_NULL (dealer);
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_routing_id (dealer, "shared-pending", 14));
-
-    const uint64_t hwm =
-      4u * (64u + static_cast<uint64_t> (sizeof (zlink_msg_t)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (dealer, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (router, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
-    const uint64_t one_pending = 1;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (dealer, ZLINK_OPT_PENDING_MAX_MSGS, &one_pending,
-                        sizeof (one_pending)));
-
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_BIND_OK,
-      zlink_bind (router, "inproc://phase3-shared-pending"));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONNECT_OK,
-      zlink_connect (dealer, "inproc://phase3-shared-pending"));
-    msleep (SETTLE_TIME);
-    prime_router_dealer_route (dealer, router);
-
-    zlink_completion_id_t pending_send_id = 0;
-    for (int attempt = 0; attempt != 256 && pending_send_id == 0; ++attempt) {
-        zlink_msg_t filler;
-        init_part (&filler,
-                   "send-pending-fill-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
-        zlink_completion_id_t completion_id = 0;
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_SUBMIT_OK,
-          zlink_send_part (dealer, &filler, ZLINK_SEND_FLAGS_DONTWAIT,
-                           ZLINK_PART_FINAL, NULL, &completion_id));
-        assert_part_consumed (&filler);
-        pending_send_id = completion_id;
-    }
-    TEST_ASSERT_NOT_EQUAL (0, pending_send_id);
-
-    zlink_msg_t rejected_request;
-    init_part (&rejected_request, "request-must-share-limit");
-    zlink_completion_id_t rejected_id = UINT64_MAX;
-    errno = 0;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_BACKPRESSURED,
-      zlink_request_part (dealer, NULL, &rejected_request,
-                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 100,
-                          NULL, &rejected_id));
-    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-    TEST_ASSERT_EQUAL_UINT64 (0, rejected_id);
-    assert_part_consumed (&rejected_request);
-
-    zlink_completion_t send_completion;
-    init_empty_completion (&send_completion);
-    const std::chrono::steady_clock::time_point drain_deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (3);
-    while (std::chrono::steady_clock::now () < drain_deadline) {
-        if (zlink_completion_recv (dealer, &send_completion,
-                                  ZLINK_RECV_FLAGS_DONTWAIT)
-            == ZLINK_RECV_OK)
-            break;
-        TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-        const router_part_t drained = receive_router_part_eventually (router);
-        TEST_ASSERT_EQUAL_UINT64 (0, drained.reply_token);
-    }
-    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_SEND, send_completion.kind);
-    TEST_ASSERT_EQUAL_UINT64 (pending_send_id,
-                              send_completion.completion_id);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED,
-                           send_completion.send_result);
-    zlink_completion_close (&send_completion);
-
-    int request_context = 99;
-    zlink_msg_t accepted_request;
-    init_part (&accepted_request, "request-after-release");
-    zlink_completion_id_t request_id = 0;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer, NULL, &accepted_request,
-                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 1000,
-                          &request_context, &request_id));
-    TEST_ASSERT_NOT_EQUAL (0, request_id);
-    assert_part_consumed (&accepted_request);
-
-    router_part_t request;
-    do {
-        request = receive_router_part_eventually (router);
-    } while (request.reply_token == 0);
-    zlink_msg_t reply;
-    init_part (&reply, "shared-limit-reply");
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_reply_part (router, &request.source_rid, request.reply_token,
-                        &reply, ZLINK_PART_FINAL));
-    assert_part_consumed (&reply);
-
-    zlink_completion_t request_completion =
-      receive_completion_eventually (dealer);
-    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST,
-                           request_completion.kind);
-    TEST_ASSERT_EQUAL_UINT64 (request_id,
-                              request_completion.completion_id);
-    TEST_ASSERT_EQUAL_PTR (&request_context,
-                           request_completion.user_context);
-    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK,
-                           request_completion.request_result);
-    zlink_completion_close (&request_completion);
-
-    test_context_socket_close_zero_linger (dealer);
-    test_context_socket_close_zero_linger (router);
-}
-
-void test_pending_msgs_request_then_send_share_pool ()
+void test_pending_msgs_limit_rejects_second_request ()
 {
     const char *const request_endpoint =
       "inproc://phase3-pending-msgs-request-route";
-    const char *const data_endpoint =
-      "inproc://phase3-pending-msgs-data-route";
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
-    void *data_peer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (dealer);
-    TEST_ASSERT_NOT_NULL (data_peer);
     set_routing_id_text (router, "pending-msgs-router");
     set_routing_id_text (dealer, "pending-msgs-dealer");
-    set_routing_id_text (data_peer, "pending-msgs-data-peer");
-
-    const uint64_t hwm =
-      4u * (64u + static_cast<uint64_t> (sizeof (zlink_msg_t)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (dealer, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (data_peer, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
     const uint64_t one_pending = 1;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
@@ -1683,23 +1484,9 @@ void test_pending_msgs_request_then_send_share_pool ()
         msleep (1);
     }
 
-    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK,
-                           zlink_bind (data_peer, data_endpoint));
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
-                           zlink_connect (dealer, data_endpoint));
-    msleep (SETTLE_TIME);
-    zlink_msg_t data_prime;
-    init_part (&data_prime, "pending-msgs-data-prime");
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (dealer, &data_prime, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL));
-    assert_part_consumed (&data_prime);
-    receive_dealer_data_eventually (data_peer, "pending-msgs-data-prime");
-
     int request_context = 201;
     zlink_msg_t request;
-    init_part (&request, "request-owns-shared-msg-slot");
+    init_part (&request, "request-owns-pending-msg-slot");
     zlink_completion_id_t request_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
@@ -1710,26 +1497,32 @@ void test_pending_msgs_request_then_send_share_pool ()
     assert_part_consumed (&request);
     assert_no_completion_for (dealer, 20);
 
-    fill_live_dealer_pipe_until_shared_limit_rejects (dealer);
+    zlink_msg_t rejected_request;
+    init_part (&rejected_request, "second-request-exceeds-msg-limit");
+    zlink_completion_id_t rejected_id = UINT64_MAX;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_BACKPRESSURED,
+      zlink_request_part (dealer, NULL, &rejected_request,
+                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 120000,
+                          NULL, &rejected_id));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    TEST_ASSERT_EQUAL_UINT64 (0, rejected_id);
+    assert_part_consumed (&rejected_request);
+    assert_no_completion_for (dealer, 20);
 
-    test_context_socket_close_zero_linger (data_peer);
     test_context_socket_close_zero_linger (dealer);
 }
 
-void test_pending_request_terminal_releases_shared_msg_slot ()
+void test_pending_request_terminal_releases_msg_slot ()
 {
     const char *const request_endpoint = endpoint_3 ();
-    const char *const data_endpoint =
-      "inproc://phase3-pending-terminal-data-route";
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
-    void *data_peer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (dealer);
-    TEST_ASSERT_NOT_NULL (data_peer);
     set_routing_id_text (router, "pending-terminal-router");
     set_routing_id_text (dealer, "pending-terminal-dealer");
-    set_routing_id_text (data_peer, "pending-terminal-data-peer");
 
     const uint64_t hwm =
       4u * (64u + static_cast<uint64_t> (sizeof (zlink_msg_t)));
@@ -1738,7 +1531,7 @@ void test_pending_request_terminal_releases_shared_msg_slot ()
       zlink_set_option (dealer, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
-      zlink_set_option (data_peer, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+      zlink_set_option (router, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
     const uint64_t one_pending = 1;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
@@ -1765,7 +1558,7 @@ void test_pending_request_terminal_releases_shared_msg_slot ()
 
     int request_context = 202;
     zlink_msg_t request;
-    init_part (&request, "terminal-releases-shared-msg-slot");
+    init_part (&request, "terminal-releases-request-msg-slot");
     zlink_completion_id_t request_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
@@ -1780,51 +1573,54 @@ void test_pending_request_terminal_releases_shared_msg_slot ()
     assert_request_not_found_completion (dealer, request_id,
                                          &request_context, NULL);
 
-    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK,
-                           zlink_bind (data_peer, data_endpoint));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
-                           zlink_connect (dealer, data_endpoint));
-    msleep (SETTLE_TIME);
-    zlink_msg_t data_prime;
-    init_part (&data_prime, "pending-terminal-data-prime");
+                           zlink_connect (dealer, request_endpoint));
+    for (int i = 0; i != 300; ++i) {
+        process_socket_commands_through_public_api (router);
+        process_socket_commands_through_public_api (dealer);
+        msleep (1);
+    }
+    paused_item.revents = 0;
+    TEST_ASSERT_EQUAL_INT (0, zlink_poll (&paused_item, 1, 0, NULL));
+
+    zlink_msg_t replacement;
+    init_part (&replacement, "replacement-request-owns-released-slot");
+    zlink_completion_id_t replacement_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
-      zlink_send_part (dealer, &data_prime, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL));
-    assert_part_consumed (&data_prime);
-    receive_dealer_data_eventually (data_peer,
-                                    "pending-terminal-data-prime");
-    (void) fill_live_dealer_pipe_until_pending_is_accepted (dealer);
+      zlink_request_part (dealer, NULL, &replacement,
+                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 120000,
+                          NULL, &replacement_id));
+    TEST_ASSERT_NOT_EQUAL (0, replacement_id);
+    assert_part_consumed (&replacement);
 
-    test_context_socket_close_zero_linger (data_peer);
+    zlink_msg_t rejected_probe;
+    init_part (&rejected_probe, "replacement-request-filled-msg-slot");
+    zlink_completion_id_t rejected_id = UINT64_MAX;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_BACKPRESSURED,
+      zlink_request_part (dealer, NULL, &rejected_probe,
+                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 120000,
+                          NULL, &rejected_id));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    TEST_ASSERT_EQUAL_UINT64 (0, rejected_id);
+    assert_part_consumed (&rejected_probe);
+
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
 }
 
-void test_pending_bytes_request_then_send_share_pool_and_admission_releases ()
+void test_pending_bytes_request_admission_releases_reservation ()
 {
     const char *const request_endpoint =
       "inproc://phase3-pending-bytes-request-route";
-    const char *const data_endpoint =
-      "inproc://phase3-pending-bytes-data-route";
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
-    void *data_peer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (dealer);
-    TEST_ASSERT_NOT_NULL (data_peer);
     set_routing_id_text (router, "pending-bytes-router");
     set_routing_id_text (dealer, "pending-bytes-dealer");
-    set_routing_id_text (data_peer, "pending-bytes-data-peer");
-
-    const uint64_t hwm =
-      4u * (64u + static_cast<uint64_t> (sizeof (zlink_msg_t)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (dealer, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (data_peer, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
     const uint64_t one_part_charge = sizeof (zlink_msg_t);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
@@ -1844,20 +1640,6 @@ void test_pending_bytes_request_then_send_share_pool_and_admission_releases ()
         msleep (1);
     }
 
-    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK,
-                           zlink_bind (data_peer, data_endpoint));
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
-                           zlink_connect (dealer, data_endpoint));
-    msleep (SETTLE_TIME);
-    zlink_msg_t data_prime;
-    init_part (&data_prime, "pending-bytes-data-prime");
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (dealer, &data_prime, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL));
-    assert_part_consumed (&data_prime);
-    receive_dealer_data_eventually (data_peer, "pending-bytes-data-prime");
-
     zlink_msg_t request;
     init_part (&request, "r");
     zlink_completion_id_t request_id = 0;
@@ -1867,7 +1649,19 @@ void test_pending_bytes_request_then_send_share_pool_and_admission_releases ()
                           ZLINK_PART_FINAL, 120000, NULL, &request_id));
     TEST_ASSERT_NOT_EQUAL (0, request_id);
     assert_part_consumed (&request);
-    fill_live_dealer_pipe_until_shared_limit_rejects (dealer);
+
+    zlink_msg_t rejected_request;
+    init_part (&rejected_request, "s");
+    zlink_completion_id_t rejected_id = UINT64_MAX;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_BACKPRESSURED,
+      zlink_request_part (dealer, NULL, &rejected_request,
+                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 120000,
+                          NULL, &rejected_id));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    TEST_ASSERT_EQUAL_UINT64 (0, rejected_id);
+    assert_part_consumed (&rejected_request);
 
     void *replacement_router = test_context_socket (ZLINK_SOCKET_ROUTER);
     TEST_ASSERT_NOT_NULL (replacement_router);
@@ -1880,16 +1674,27 @@ void test_pending_bytes_request_then_send_share_pool_and_admission_releases ()
     TEST_ASSERT_NOT_EQUAL (0, admitted.reply_token);
     TEST_ASSERT_EQUAL_STRING ("r", admitted.payload.c_str ());
 
-    // Admission, not reply completion, releases the shared byte reservation.
-    // Remove only the physical Router so raw SEND has one live data target.
+    // Admission, not reply completion, releases the REQUEST pending-byte
+    // reservation. Detach the physical Router again so the probe must reserve
+    // pending storage instead of taking the direct-admission path.
     test_context_socket_close_zero_linger (replacement_router);
     for (int i = 0; i != 40; ++i) {
         process_socket_commands_through_public_api (dealer);
         msleep (1);
     }
-    (void) submit_pending_send_after_shared_limit_release (dealer);
 
-    test_context_socket_close_zero_linger (data_peer);
+    zlink_msg_t retried_request;
+    init_part (&retried_request, "s");
+    zlink_completion_id_t retried_id = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_request_part (dealer, NULL, &retried_request,
+                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 120000,
+                          NULL, &retried_id));
+    TEST_ASSERT_NOT_EQUAL (0, retried_id);
+    assert_part_consumed (&retried_request);
+    assert_no_completion_for (dealer, 20);
+
     test_context_socket_close_zero_linger (dealer);
 }
 
@@ -2231,7 +2036,7 @@ void test_request_lifecycle_discards_pending_and_unread_completion ()
     }
 }
 
-void test_mixed_send_and_request_completions_are_drained_once_by_id ()
+void test_request_completions_are_drained_once_by_id ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -2239,103 +2044,81 @@ void test_mixed_send_and_request_completions_are_drained_once_by_id ()
     TEST_ASSERT_NOT_NULL (dealer);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
-      zlink_set_routing_id (dealer, "mixed-completion", 16));
-
-    const uint64_t hwm =
-      4u * (64u + static_cast<uint64_t> (sizeof (zlink_msg_t)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (dealer, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (router, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+      zlink_set_routing_id (dealer, "request-completion", 18));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_BIND_OK,
-      zlink_bind (router, "inproc://phase3-mixed-completion-drain"));
+      zlink_bind (router, "inproc://phase3-request-completion-drain"));
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONNECT_OK,
-      zlink_connect (dealer, "inproc://phase3-mixed-completion-drain"));
+      zlink_connect (dealer, "inproc://phase3-request-completion-drain"));
     msleep (SETTLE_TIME);
     prime_router_dealer_route (dealer, router);
 
-    int send_context = 121;
-    zlink_completion_id_t send_id = 0;
-    for (int attempt = 0; attempt != 256 && send_id == 0; ++attempt) {
-        zlink_msg_t part;
-        init_part (&part,
-                   "mixed-send-fill-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
-        zlink_completion_id_t completion_id = 0;
+    int request_contexts[2] = {121, 122};
+    zlink_completion_id_t request_ids[2] = {0, 0};
+    const char *const request_payloads[2] = {"first-request",
+                                             "second-request"};
+    const char *const reply_payloads[2] = {"first-reply", "second-reply"};
+    for (size_t i = 0; i != 2; ++i) {
+        zlink_msg_t request_part;
+        init_part (&request_part, request_payloads[i]);
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_OK,
-          zlink_send_part (dealer, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                           ZLINK_PART_FINAL, &send_context, &completion_id));
-        assert_part_consumed (&part);
-        send_id = completion_id;
+          zlink_request_part (dealer, NULL, &request_part,
+                              ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
+                              2000, &request_contexts[i], &request_ids[i]));
+        TEST_ASSERT_NOT_EQUAL (0, request_ids[i]);
+        assert_part_consumed (&request_part);
     }
-    TEST_ASSERT_NOT_EQUAL (0, send_id);
+    TEST_ASSERT_NOT_EQUAL (request_ids[0], request_ids[1]);
 
-    int request_context = 122;
-    zlink_msg_t request_part;
-    init_part (&request_part, "mixed-request");
-    zlink_completion_id_t request_id = 0;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer, NULL, &request_part,
-                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 2000,
-                          &request_context, &request_id));
-    TEST_ASSERT_NOT_EQUAL (0, request_id);
-    TEST_ASSERT_NOT_EQUAL (send_id, request_id);
-    assert_part_consumed (&request_part);
+    for (size_t i = 0; i != 2; ++i) {
+        const router_part_t request =
+          receive_router_part_eventually (router);
+        TEST_ASSERT_NOT_EQUAL (0, request.reply_token);
+        TEST_ASSERT_EQUAL_STRING (request_payloads[i],
+                                  request.payload.c_str ());
 
-    router_part_t request;
-    do {
-        request = receive_router_part_eventually (router);
-    } while (request.reply_token == 0);
-    TEST_ASSERT_EQUAL_STRING ("mixed-request", request.payload.c_str ());
+        zlink_msg_t reply;
+        init_part (&reply, reply_payloads[i]);
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK,
+          zlink_reply_part (router, &request.source_rid,
+                            request.reply_token, &reply, ZLINK_PART_FINAL));
+        assert_part_consumed (&reply);
+    }
 
-    zlink_msg_t reply;
-    init_part (&reply, "mixed-reply");
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_reply_part (router, &request.source_rid, request.reply_token,
-                        &reply, ZLINK_PART_FINAL));
-    assert_part_consumed (&reply);
-
-    bool saw_send = false;
-    bool saw_request = false;
-    for (int i = 0; i != 2; ++i) {
+    bool saw_request[2] = {false, false};
+    for (size_t completion_index = 0; completion_index != 2;
+         ++completion_index) {
         zlink_completion_t completion =
           receive_completion_eventually (dealer);
+        TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
         TEST_ASSERT_EQUAL_UINT (0, completion.peer_rid.size);
-        if (completion.completion_id == send_id) {
-            TEST_ASSERT_FALSE (saw_send);
-            saw_send = true;
-            TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_SEND, completion.kind);
-            TEST_ASSERT_EQUAL_PTR (&send_context, completion.user_context);
-            TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED,
-                                   completion.send_result);
-        } else if (completion.completion_id == request_id) {
-            TEST_ASSERT_FALSE (saw_request);
-            saw_request = true;
-            TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST,
-                                   completion.kind);
-            TEST_ASSERT_EQUAL_PTR (&request_context,
-                                   completion.user_context);
-            TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK,
-                                   completion.request_result);
-            TEST_ASSERT_NOT_NULL (completion.reply_parts);
-            TEST_ASSERT_EQUAL_UINT64 (1, completion.reply_part_count);
-            TEST_ASSERT_EQUAL_STRING (
-              "mixed-reply",
-              part_string (&completion.reply_parts[0]).c_str ());
-        } else {
-            TEST_FAIL_MESSAGE (
-              "mixed completion queue returned an unknown completion id");
-        }
+
+        size_t request_index = 2;
+        if (completion.completion_id == request_ids[0])
+            request_index = 0;
+        else if (completion.completion_id == request_ids[1])
+            request_index = 1;
+        TEST_ASSERT_TRUE_MESSAGE (
+          request_index != 2,
+          "REQUEST completion queue returned an unknown completion id");
+        TEST_ASSERT_FALSE (saw_request[request_index]);
+        saw_request[request_index] = true;
+        TEST_ASSERT_EQUAL_PTR (&request_contexts[request_index],
+                               completion.user_context);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK,
+                               completion.request_result);
+        TEST_ASSERT_NOT_NULL (completion.reply_parts);
+        TEST_ASSERT_EQUAL_UINT64 (1, completion.reply_part_count);
+        TEST_ASSERT_EQUAL_STRING (
+          reply_payloads[request_index],
+          part_string (&completion.reply_parts[0]).c_str ());
         zlink_completion_close (&completion);
     }
-    TEST_ASSERT_TRUE (saw_send);
-    TEST_ASSERT_TRUE (saw_request);
+    TEST_ASSERT_TRUE (saw_request[0]);
+    TEST_ASSERT_TRUE (saw_request[1]);
 
     zlink_completion_t empty;
     init_empty_completion (&empty);
@@ -2350,21 +2133,24 @@ void test_mixed_send_and_request_completions_are_drained_once_by_id ()
     test_context_socket_close_zero_linger (router);
 }
 
-void test_send_and_request_share_65536_completion_reservations ()
+void test_request_only_65536_completion_reservations ()
 {
     const char *const request_endpoint =
-      "inproc://phase3-mixed-completion-cap-request";
-    const char *const data_endpoint =
-      "inproc://phase3-mixed-completion-cap-data";
+      "inproc://phase3-request-only-completion-cap";
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
     void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
-    void *data_peer = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (dealer);
-    TEST_ASSERT_NOT_NULL (data_peer);
-    set_routing_id_text (router, "mixed-cap-router");
-    set_routing_id_text (dealer, "mixed-cap-dealer");
-    set_routing_id_text (data_peer, "mixed-cap-data-peer");
+    set_routing_id_text (router, "request-cap-router");
+    set_routing_id_text (dealer, "request-cap-dealer");
+
+    // Keep the REQUEST pending pool above the completion reservation ceiling
+    // so the socket-local completion budget is the only limiting resource.
+    const uint64_t pending_limit = kReplyTokenCapacity + 1;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (dealer, ZLINK_OPT_PENDING_MAX_MSGS, &pending_limit,
+                        sizeof (pending_limit)));
 
     TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK,
                            zlink_bind (dealer, request_endpoint));
@@ -2372,6 +2158,24 @@ void test_send_and_request_share_65536_completion_reservations ()
                            zlink_connect (router, request_endpoint));
     msleep (SETTLE_TIME);
     prime_router_dealer_route (dealer, router);
+
+    int first_request_context = 301;
+    zlink_msg_t first_request;
+    init_part (&first_request, "request-cap-first");
+    zlink_completion_id_t first_request_id = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_request_part (dealer, NULL, &first_request,
+                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 1,
+                          &first_request_context, &first_request_id));
+    TEST_ASSERT_NOT_EQUAL (0, first_request_id);
+    assert_part_consumed (&first_request);
+
+    const router_part_t first_admitted =
+      receive_router_part_eventually (router);
+    TEST_ASSERT_NOT_EQUAL (0, first_admitted.reply_token);
+    TEST_ASSERT_EQUAL_STRING ("request-cap-first",
+                              first_admitted.payload.c_str ());
     test_context_socket_close_zero_linger (router);
     router = NULL;
     for (int i = 0; i != 40; ++i) {
@@ -2379,74 +2183,25 @@ void test_send_and_request_share_65536_completion_reservations ()
         msleep (1);
     }
 
-    // The empty-pipe oversize exception admits exactly one application frame;
-    // without a receiver, all later SEND records must retain completion slots.
-    // Apply the small HWM only after the request route has been primed.
-    const uint64_t one_byte_hwm = 1;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (dealer, ZLINK_OPT_SNDHWM, &one_byte_hwm,
-                        sizeof (one_byte_hwm)));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_option (data_peer, ZLINK_OPT_RCVHWM, &one_byte_hwm,
-                        sizeof (one_byte_hwm)));
-
-    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK,
-                           zlink_bind (data_peer, data_endpoint));
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
-                           zlink_connect (dealer, data_endpoint));
-    msleep (SETTLE_TIME);
-    zlink_msg_t data_prime;
-    init_part (&data_prime, "mixed-cap-prime");
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (dealer, &data_prime, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL));
-    assert_part_consumed (&data_prime);
-    receive_dealer_data_eventually (data_peer, "mixed-cap-prime");
-
-    int first_request_context = 301;
-    zlink_msg_t first_request;
-    init_part (&first_request, "mixed-cap-first-request");
-    zlink_completion_id_t first_request_id = 0;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer, NULL, &first_request,
-                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 120000,
-                          &first_request_context, &first_request_id));
-    TEST_ASSERT_NOT_EQUAL (0, first_request_id);
-    assert_part_consumed (&first_request);
-
-    const size_t required_send_reservations = kReplyTokenCapacity - 1;
-    size_t send_reservations = 0;
-    bool pending_started = false;
-    for (size_t attempts = 0;
-         send_reservations != required_send_reservations;
-         ++attempts) {
-        TEST_ASSERT_TRUE_MESSAGE (
-          attempts <= required_send_reservations + 16,
-          "SEND pipe did not become pending at the one-frame HWM");
-        zlink_msg_t data;
-        init_part (&data, "mixed-cap-fill");
+    for (size_t request_index = 1; request_index != kReplyTokenCapacity;
+         ++request_index) {
+        zlink_msg_t request;
+        init_part (&request, "request-cap-fill");
         zlink_completion_id_t completion_id = 0;
         TEST_ASSERT_EQUAL_INT (
           ZLINK_SUBMIT_OK,
-          zlink_send_part (dealer, &data, ZLINK_SEND_FLAGS_DONTWAIT,
-                           ZLINK_PART_FINAL, NULL, &completion_id));
-        assert_part_consumed (&data);
-        if (completion_id == 0) {
-            TEST_ASSERT_FALSE (pending_started);
-            continue;
-        }
-        pending_started = true;
-        ++send_reservations;
+          zlink_request_part (dealer, NULL, &request,
+                              ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
+                              120000, NULL, &completion_id));
+        TEST_ASSERT_NOT_EQUAL (0, completion_id);
+        assert_part_consumed (&request);
     }
 
-    // One REQUEST plus 65,535 SEND operations owns the socket-local 65,536
-    // completion budget. A cross-family FINAL cannot overbook it.
+    // Pending and terminal-but-unread REQUESTs both retain their completion
+    // reservations. The 65,537th REQUEST therefore cannot overbook the fixed
+    // socket-local budget.
     zlink_msg_t rejected_request;
-    init_part (&rejected_request, "mixed-cap-rejected-request");
+    init_part (&rejected_request, "request-cap-rejected");
     zlink_completion_id_t rejected_id = UINT64_MAX;
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
@@ -2458,16 +2213,18 @@ void test_send_and_request_share_65536_completion_reservations ()
     TEST_ASSERT_EQUAL_UINT64 (0, rejected_id);
     assert_part_consumed (&rejected_request);
 
-    // One DATA receive admits one queued SEND, and dequeuing exactly that one
-    // SEND completion releases one shared reservation.
-    receive_dealer_data_eventually (data_peer, "mixed-cap-fill");
-    zlink_completion_t admitted_send = receive_completion_eventually (dealer);
-    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_SEND, admitted_send.kind);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, admitted_send.send_result);
-    zlink_completion_close (&admitted_send);
+    // The first short-lived REQUEST has timed out, but its reservation is held
+    // until the application dequeues the completion.
+    zlink_completion_t timed_out = receive_completion_eventually (dealer);
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, timed_out.kind);
+    TEST_ASSERT_EQUAL_UINT64 (first_request_id, timed_out.completion_id);
+    TEST_ASSERT_EQUAL_PTR (&first_request_context, timed_out.user_context);
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_TIMED_OUT,
+                           timed_out.request_result);
+    zlink_completion_close (&timed_out);
 
     zlink_msg_t retried_request;
-    init_part (&retried_request, "mixed-cap-retried-request");
+    init_part (&retried_request, "request-cap-retried");
     zlink_completion_id_t retried_id = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
@@ -2477,7 +2234,6 @@ void test_send_and_request_share_65536_completion_reservations ()
     TEST_ASSERT_NOT_EQUAL (0, retried_id);
     assert_part_consumed (&retried_request);
 
-    test_context_socket_close_zero_linger (data_peer);
     test_context_socket_close_zero_linger (dealer);
 }
 
@@ -4396,24 +4152,20 @@ int main ()
       test_dealer_explicit_endpoint_removal_completes_admitted_request_not_found_once);
     RUN_PHASE3_REQUEST_TEST (
       test_router_explicit_logical_rid_removal_completes_admitted_request_not_found_once);
+    RUN_PHASE3_REQUEST_TEST (test_pending_msgs_limit_rejects_second_request);
     RUN_PHASE3_REQUEST_TEST (
-      test_send_and_request_share_pending_record_limit_and_release);
+      test_pending_request_terminal_releases_msg_slot);
     RUN_PHASE3_REQUEST_TEST (
-      test_pending_msgs_request_then_send_share_pool);
-    RUN_PHASE3_REQUEST_TEST (
-      test_pending_request_terminal_releases_shared_msg_slot);
-    RUN_PHASE3_REQUEST_TEST (
-      test_pending_bytes_request_then_send_share_pool_and_admission_releases);
+      test_pending_bytes_request_admission_releases_reservation);
     RUN_PHASE3_REQUEST_TEST (
       test_pending_byte_sum_saturates_at_uint64_max_without_wrap);
     RUN_PHASE3_REQUEST_TEST (
       test_pending_limit_runtime_shrink_preserves_existing_reservation);
     RUN_PHASE3_REQUEST_TEST (
       test_request_lifecycle_discards_pending_and_unread_completion);
+    RUN_PHASE3_REQUEST_TEST (test_request_completions_are_drained_once_by_id);
     RUN_PHASE3_REQUEST_TEST (
-      test_mixed_send_and_request_completions_are_drained_once_by_id);
-    RUN_PHASE3_REQUEST_TEST (
-      test_send_and_request_share_65536_completion_reservations);
+      test_request_only_65536_completion_reservations);
     RUN_PHASE3_REQUEST_TEST (
       test_router_reply_registry_capacity_fair_pollin_and_round_robin_redrive);
     RUN_PHASE3_REQUEST_TEST (

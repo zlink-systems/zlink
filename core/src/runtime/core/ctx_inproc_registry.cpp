@@ -140,9 +140,10 @@ void zlink::ctx_inproc_registry_t::connect_pending (const char *addr_, socket_ba
         _pending_connections.erase (pending.first, pending.second);
     }
 
-    // Binding a pending inproc peer synchronously runs attach_pipe().  It may
-    // replan Auto-HWM and acquire context/socket locks, so it must never run
-    // while the registry mutex is held.
+    // Binding a pending inproc peer can synchronously attach the bind-side
+    // pipe and queues connector-side attachment. Both may replan Auto-HWM and
+    // acquire context/socket locks, so neither runs while the registry mutex
+    // is held.
     for (std::vector<pending_connection_t>::const_iterator p =
            pending_connections.begin ();
          p != pending_connections.end (); ++p)
@@ -334,21 +335,68 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
         pending_connection_.bind_pipe->set_hwms (0, 0);
     }
 
+    bool completion_materialized_before_application = false;
+    if (!completion && lane_count == 2u && side_ == bind_side) {
+        const std::string endpoint_uri =
+          pending_connection_.connect_pipe->get_endpoint_pair ().identifier ();
+        if (pending_connection_.endpoint.socket
+              ->materialize_inproc_completion_lane (
+                bind_socket_, bind_options_, endpoint_uri, pair_id,
+                pair_generation, true)
+            != 0) {
+            // pend_connection() reserved one connector sequence number. No
+            // application bind command will consume it on this failure path.
+            bind_socket_->send_inproc_connected (
+              pending_connection_.endpoint.socket);
+            pending_connection_.connect_pipe->terminate (false);
+            pending_connection_.bind_pipe->terminate (false);
+            return;
+        }
+        completion_materialized_before_application = true;
+    }
+
     if (side_ == bind_side) {
         command_t cmd;
         cmd.type = command_t::bind;
         cmd.args.bind.pipe = pending_connection_.bind_pipe;
         // process_command releases every pipe reference carried by a command.
-        if (!pending_connection_.bind_pipe->retain_lifetime_ref ())
+        if (!pending_connection_.bind_pipe->retain_lifetime_ref ()) {
+            // No bind command will consume the connect-before-bind sequence
+            // reservation. Balance it even when close won this lifetime race.
+            bind_socket_->send_inproc_connected (
+              pending_connection_.endpoint.socket);
+            pending_connection_.connect_pipe->terminate (false);
+            pending_connection_.bind_pipe->terminate (false);
             return;
+        }
         bind_socket_->inc_seqnum ();
         bind_socket_->process_command (cmd);
-        pending_connection_.endpoint.socket->validate_inproc_connection (
-          pending_connection_.connect_pipe);
+        if (paired) {
+            // The connector may be concurrently sending while bind() owns the
+            // bind socket's public synchronization. Queue paired scheduler
+            // attachment through the normal command owner instead of
+            // mutating DEALER/ROUTER state directly and risking both a data
+            // race and cross-socket lock inversion. pend_connection() already
+            // reserved the connector sequence number, so this bind command
+            // consumes that reservation.
+            if (!pending_connection_.connect_pipe->send_bind (
+                  pending_connection_.endpoint.socket,
+                  pending_connection_.connect_pipe, false)) {
+                bind_socket_->send_inproc_connected (
+                  pending_connection_.endpoint.socket);
+                pending_connection_.connect_pipe->terminate (false);
+                pending_connection_.bind_pipe->terminate (false);
+                return;
+            }
+        } else {
+            pending_connection_.endpoint.socket->validate_inproc_connection (
+              pending_connection_.connect_pipe);
+            pending_connection_.endpoint.socket->emit_inproc_connection_ready (
+              pending_connection_.connect_pipe);
+            bind_socket_->send_inproc_connected (
+              pending_connection_.endpoint.socket);
+        }
         bind_socket_->emit_inproc_connection_ready (pending_connection_.bind_pipe);
-        pending_connection_.endpoint.socket->emit_inproc_connection_ready (
-          pending_connection_.connect_pipe);
-        bind_socket_->send_inproc_connected (pending_connection_.endpoint.socket);
     } else {
         if (!pending_connection_.connect_pipe->send_bind (
               bind_socket_, pending_connection_.bind_pipe, true))
@@ -356,7 +404,8 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
         bind_socket_->emit_inproc_connection_ready (pending_connection_.bind_pipe);
     }
 
-    if (!completion && lane_count == 2u) {
+    if (!completion && lane_count == 2u
+        && !completion_materialized_before_application) {
         const std::string endpoint_uri =
           pending_connection_.connect_pipe->get_endpoint_pair ().identifier ();
         if (pending_connection_.endpoint.socket

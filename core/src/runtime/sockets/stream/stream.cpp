@@ -310,9 +310,9 @@ void zlink::stream_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
     _fq.attach (pipe_);
     // Pending logical sends may already exist when a STREAM transport arrives.
     // Emit the first writable edge after identity assignment.
-    if (has_send_pending ()
+    if (has_request_pending ()
         && pipe_->check_write_admission () == pipe_message_admission_ready)
-        notify_send_pending_writable (pipe_);
+        notify_request_pending_writable (pipe_);
     maybe_emit_connect_event (pipe_);
     if (options.stream_notify)
         queue_stream_notify (pipe_->get_server_socket_routing_id ());
@@ -1198,6 +1198,67 @@ bool zlink::stream_t::xhas_in ()
 
 bool zlink::stream_t::xhas_out ()
 {
+    return true;
+}
+
+bool zlink::stream_t::xsend_writable_target_ready (
+  const zlink_routing_id_t *target_rid_or_null_)
+{
+    uint32_t routing_id = 0;
+    if (!target_rid_or_null_ || target_rid_or_null_->size != 4)
+        return false;
+    routing_id = get_uint32 (target_rid_or_null_->data);
+
+    route_shard_t &shard = route_shard_for (routing_id);
+    scoped_fast_lock_t shard_lock (shard.sync);
+    const route_shard_t::routes_t::const_iterator it =
+      shard.routes.find (routing_id);
+    if (it == shard.routes.end () || !it->second.pipe
+        || !it->second.pipe->is_lifecycle_active ())
+        return false;
+    uint64_t pair_id = 0;
+    uint64_t pair_generation = 0;
+    if (!stream_exact_target_identity (it->second.pipe, &pair_id,
+                                       &pair_generation))
+        return false;
+    return it->second.pipe->check_write_admission ()
+           == pipe_message_admission_ready;
+}
+
+bool zlink::stream_t::xsend_writable_target_known (
+  const zlink_routing_id_t *target_rid_or_null_)
+{
+    if (!target_rid_or_null_ || target_rid_or_null_->size != 4)
+        return false;
+    const uint32_t routing_id = get_uint32 (target_rid_or_null_->data);
+
+    route_shard_t &shard = route_shard_for (routing_id);
+    scoped_fast_lock_t shard_lock (shard.sync);
+    const route_shard_t::routes_t::const_iterator it =
+      shard.routes.find (routing_id);
+    return it != shard.routes.end () && it->second.pipe
+           && it->second.pipe->is_lifecycle_active ();
+}
+
+bool zlink::stream_t::xsend_writable_target_for_pipe (
+  pipe_t *pipe_, zlink_routing_id_t *target_rid_out_)
+{
+    if (!pipe_ || !target_rid_out_)
+        return false;
+    const uint32_t routing_id = pipe_->get_server_socket_routing_id ();
+    if (routing_id == 0)
+        return false;
+
+    route_shard_t &shard = route_shard_for (routing_id);
+    scoped_fast_lock_t shard_lock (shard.sync);
+    const route_shard_t::routes_t::const_iterator it =
+      shard.routes.find (routing_id);
+    if (it == shard.routes.end () || it->second.pipe != pipe_)
+        return false;
+
+    memset (target_rid_out_, 0, sizeof (*target_rid_out_));
+    target_rid_out_->size = 4;
+    put_uint32 (target_rid_out_->data, routing_id);
     return true;
 }
 

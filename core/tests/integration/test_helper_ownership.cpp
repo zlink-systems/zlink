@@ -155,13 +155,34 @@ void test_send_failures_consume_current_part ()
 
     zlink_msg_t missing_route;
     init_part (&missing_route, "missing-route");
+    zlink_completion_id_t writable_token = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_NOT_CONNECTED,
       zlink_send_part_rid (router, &missing, &missing_route,
                            ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL,
-                           NULL));
+                           &writable_token));
+    TEST_ASSERT_EQUAL_INT (EHOSTUNREACH, errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, writable_token);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&missing_route));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&missing_route));
+
+    // A routed target that has no route can never become writable, so it
+    // fails synchronously instead of holding a wait token (STREAM too).
+    void *stream = test_context_socket (ZLINK_SOCKET_STREAM);
+    zlink_msg_t missing_stream_route;
+    init_part (&missing_stream_route, "missing-stream-route");
+    writable_token = 0;
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_NOT_CONNECTED,
+      zlink_send_part_rid (stream, &missing, &missing_stream_route,
+                           ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL,
+                           &writable_token));
+    TEST_ASSERT_EQUAL_INT (EHOSTUNREACH, errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, writable_token);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&missing_stream_route));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&missing_stream_route));
+    test_context_socket_close (stream);
 
     zlink_msg_t wrong_publish_type;
     init_part (&wrong_publish_type, "wrong-publish-type");

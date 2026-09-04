@@ -50,7 +50,7 @@ void zlink::pair_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool lo
     //  The socket rejects any further connection requests.
     if (_pipe == NULL)
         _pipe = pipe_;
-    else
+    else if (_pipe != pipe_)
         pipe_->terminate (false);
 }
 

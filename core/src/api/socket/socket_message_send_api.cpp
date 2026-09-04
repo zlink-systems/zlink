@@ -86,7 +86,8 @@ bool parse_stream_routing_id (const zlink_routing_id_t *rid_, uint32_t *routing_
 int send_stream_message (const socket_handle_t &handle_,
                          const zlink_routing_id_t *rid_,
                          zlink_msg_t *msg_,
-                         zlink_send_flags_t flags_)
+                         zlink_send_flags_t flags_,
+                         bool manage_public_send_recovery_)
 {
     zlink::msg_t *core_msg = reinterpret_cast<zlink::msg_t *> (msg_);
     if (!core_msg->check ()) {
@@ -115,10 +116,11 @@ int send_stream_message (const socket_handle_t &handle_,
 
     const zlink_send_flags_t base_flags = static_cast<zlink_send_flags_t> (flags_ & ZLINK_DONTWAIT);
     const int send_rc =
-      handle_.socket->send_complete_record (core_msg, base_flags);
+      handle_.socket->send_complete_record (
+        core_msg, base_flags, manage_public_send_recovery_);
     if (send_rc < 0) {
         const int err = errno;
-        if (err != EAGAIN)
+        if (manage_public_send_recovery_ && err != EAGAIN)
             zlink::request_reply::consume_send_frame (msg_);
         errno = err;
         return -1;
@@ -145,7 +147,8 @@ int validate_socket_send_request (const socket_handle_t &handle_,
 int send_socket_unrouted_parts (const socket_handle_t &handle_,
                                 zlink_msg_t *parts_,
                                 size_t part_count_,
-                                zlink_send_flags_t flags_)
+                                zlink_send_flags_t flags_,
+                                bool manage_public_send_recovery_)
 {
     // Hot path: PAIR/DEALER single-part public send reaches here on every
     // message. Keep this path free of extra allocation and avoid adding
@@ -160,7 +163,8 @@ int send_socket_unrouted_parts (const socket_handle_t &handle_,
     if (part_count_ == 1) {
         const int rc = handle_.socket->send_complete_record (
           reinterpret_cast<zlink::msg_t *> (&parts_[0]),
-          static_cast<zlink_send_flags_t> (flags_ & ZLINK_DONTWAIT));
+          static_cast<zlink_send_flags_t> (flags_ & ZLINK_DONTWAIT),
+          manage_public_send_recovery_);
         if (rc < 0)
             return -1;
         errno = 0;
@@ -174,7 +178,8 @@ int send_socket_routed_parts (const socket_handle_t &handle_,
                               const zlink_routing_id_t *target_rid_,
                               zlink_msg_t *parts_,
                               size_t part_count_,
-                              zlink_send_flags_t flags_)
+                              zlink_send_flags_t flags_,
+                              bool manage_public_send_recovery_)
 {
     const int type = socket_type (handle_);
     if (type == ZLINK_CORE_SOCKET_STREAM) {
@@ -183,7 +188,9 @@ int send_socket_routed_parts (const socket_handle_t &handle_,
             return -1;
         }
 
-        const int rc = send_stream_message (handle_, target_rid_, &parts_[0], flags_);
+        const int rc = send_stream_message (
+          handle_, target_rid_, &parts_[0], flags_,
+          manage_public_send_recovery_);
         if (rc < 0)
             return -1;
         errno = 0;
@@ -198,7 +205,8 @@ int send_socket_routed_parts (const socket_handle_t &handle_,
     if (part_count_ == 1) {
         const int rc = handle_.socket->send_routed_complete_record (
           target_rid_, reinterpret_cast<zlink::msg_t *> (&parts_[0]),
-          static_cast<int> (flags_ & ZLINK_DONTWAIT));
+          static_cast<int> (flags_ & ZLINK_DONTWAIT),
+          manage_public_send_recovery_);
         if (rc != 0)
             return -1;
         errno = 0;
@@ -213,7 +221,8 @@ int send_socket_parts (const socket_handle_t &handle_,
                        const zlink_routing_id_t *target_rid_,
                        zlink_msg_t *parts_,
                        size_t part_count_,
-                       zlink_send_flags_t flags_)
+                       zlink_send_flags_t flags_,
+                       bool manage_public_send_recovery_ = true)
 {
     if (validate_socket_send_request (handle_, parts_, part_count_, flags_) != 0)
         return -1;
@@ -227,7 +236,8 @@ int send_socket_parts (const socket_handle_t &handle_,
             memset (&target_rid, 0, sizeof (target_rid));
             if (try_extract_router_target_rid (&parts_[0], &target_rid)) {
                 const int rc = send_socket_routed_parts (handle_, &target_rid, parts_ + 1,
-                                                         part_count_ - 1, flags_);
+                                                         part_count_ - 1, flags_,
+                                                         manage_public_send_recovery_);
                 zlink::request_reply::consume_send_frame (&parts_[0]);
                 if (rc != 0)
                     zlink::request_reply::consume_send_frames_from (parts_, 1, part_count_);
@@ -235,10 +245,14 @@ int send_socket_parts (const socket_handle_t &handle_,
             }
         }
 
-        return send_socket_unrouted_parts (handle_, parts_, part_count_, flags_);
+        return send_socket_unrouted_parts (
+          handle_, parts_, part_count_, flags_,
+          manage_public_send_recovery_);
     }
 
-    return send_socket_routed_parts (handle_, target_rid_, parts_, part_count_, flags_);
+    return send_socket_routed_parts (
+      handle_, target_rid_, parts_, part_count_, flags_,
+      manage_public_send_recovery_);
 }
 
 int publish_socket_parts (const socket_handle_t &handle_,
@@ -349,24 +363,37 @@ void consume_public_send_record (
 }
 
 zlink_submit_result_t submit_public_send_record (
-  zlink::socket_base_t *socket_, const zlink_routing_id_t *target_rid_,
+  const socket_handle_t &handle_, const zlink_routing_id_t *target_rid_,
   zlink_msg_t *parts_,
   size_t part_count_, zlink_send_flags_t flags_, void *user_context_,
-  zlink_completion_id_t *completion_id_out_,
-  const zlink::routed_send_target_key_t *committed_target_ = NULL,
-  bool admission_gate_preacquired_ = false)
+  zlink_completion_id_t *completion_id_out_)
 {
+    if (completion_id_out_)
+        *completion_id_out_ = 0;
+
     int rc = -1;
     if (flags_ == ZLINK_SEND_FLAGS_DONTWAIT) {
-        rc = socket_->send_completion_submit (
-          parts_, part_count_, target_rid_, user_context_,
-          completion_id_out_, committed_target_,
-          admission_gate_preacquired_);
+        // The successful hot path remains a single allocation-free admission
+        // attempt. Only its retryable fallback registers a payload-free wait
+        // token for the exact logical target.
+        rc = send_socket_parts (handle_, target_rid_, parts_, part_count_,
+                                flags_, false);
     } else {
-        rc = socket_->send_completion_submit_blocking (
+        rc = handle_.socket->send_completion_submit_blocking (
           parts_, part_count_, target_rid_);
     }
-    const int saved_errno = errno;
+    int saved_errno = errno;
+    if (rc != 0 && flags_ == ZLINK_SEND_FLAGS_DONTWAIT
+        && (saved_errno == EAGAIN || saved_errno == ENOTCONN
+            || saved_errno == EHOSTUNREACH
+            || saved_errno == ECONNREFUSED)) {
+        if (handle_.socket->register_send_writable_wait (
+              target_rid_, user_context_, completion_id_out_)
+            == 0)
+            saved_errno = EAGAIN;
+        else
+            saved_errno = errno;
+    }
     zlink::request_reply::consume_send_frames_from (
       parts_, 0, part_count_);
     errno = saved_errno;
@@ -391,7 +418,7 @@ zlink_submit_result_t submit_completion_aware_part (
         part_flag_ == ZLINK_PART_MORE);
     if (prepare_rc == 1) {
         return submit_public_send_record (
-          socket, target_rid_, part_, 1, spec_.flags, user_context_,
+          handle_, target_rid_, part_, 1, spec_.flags, user_context_,
           completion_id_out_);
     }
     if (prepare_rc != 0) {
@@ -426,41 +453,44 @@ zlink_submit_result_t submit_completion_aware_part (
         return zlink::submit_result_internal::from_errno (saved_errno);
     }
 
-    // PAIR and DEALER already hold the only multipart admission marker and
-    // the socket send sync here. Releasing it and acquiring a second complete
-    // scope made every ordinary two-part record pay an avoidable lifecycle
-    // round trip. Attempt the complete record in this scope; only actual
-    // backpressure falls through to the full pending machinery.
-    int immediate_rc = -1;
-    int immediate_errno = EAGAIN;
-    zlink::routed_send_target_key_t fallback_target;
-    bool fallback_target_valid = false;
-    bool admission_gate_retained = false;
-    if (!target_rid_ && state->send.send_scope
-        && (socket->socket_type () == ZLINK_CORE_SOCKET_PAIR
-            || spec_.flags == ZLINK_SEND_FLAGS_DONTWAIT)) {
-        immediate_rc = socket->try_immediate_completion_send_scoped (
+    // FINAL still owns the multipart scope and marker. Perform the one-shot
+    // whole-record attempt before releasing either so another sender cannot
+    // open a MORE sequence in the handoff gap. DONTWAIT returns this result
+    // directly. Blocking SEND skips this attempt and follows its existing
+    // park/SNDTIMEO path unchanged.
+    int scoped_rc = -1;
+    int scoped_errno = EAGAIN;
+    if (spec_.flags == ZLINK_SEND_FLAGS_DONTWAIT
+        && state->send.send_scope) {
+        scoped_rc = socket->try_send_parts_scoped_once (
           state->send.buffered_parts.data (),
-          state->send.buffered_parts.size (), *state->send.send_scope,
-          &fallback_target, &fallback_target_valid,
-          spec_.flags == ZLINK_SEND_FLAGS_DONTWAIT
-            ? &admission_gate_retained
-            : NULL);
-        immediate_errno = errno;
+          state->send.buffered_parts.size (), target_rid_,
+          *state->send.send_scope);
+        scoped_errno = errno;
     }
-    if (immediate_rc == 0 || immediate_errno != EAGAIN) {
+    if (spec_.flags == ZLINK_SEND_FLAGS_DONTWAIT) {
         zlink::part_helper_internal::send_part_buffer_t record;
         record.take_from (&state->send.buffered_parts);
-        zlink::part_helper_internal::reset_send_sequence (&state->send,
-                                                           false);
+        zlink::part_helper_internal::reset_send_sequence (&state->send, false);
         state_lock.unlock ();
         socket->notify_incremental_send_released ();
-        // Closing a public message can invoke a user-owned zero-copy free
-        // callback. Keep that callback outside the helper and socket scopes so
-        // re-entry observes the completed send rather than deadlocking.
+        if (scoped_rc != 0
+            && (scoped_errno == EAGAIN || scoped_errno == ENOTCONN
+                || scoped_errno == EHOSTUNREACH
+                || scoped_errno == ECONNREFUSED)) {
+            if (socket->register_send_writable_wait (
+                  target_rid_, user_context_, completion_id_out_)
+                == 0)
+                scoped_errno = EAGAIN;
+            else
+                scoped_errno = errno;
+        }
+        // A zero-copy release callback may re-enter this socket, so consume
+        // only after all helper/socket scopes and the wait-token publication
+        // boundary have been released.
         consume_public_send_record (&record);
-        errno = immediate_rc == 0 ? 0 : immediate_errno;
-        return zlink::submit_result_internal::from_rc (immediate_rc);
+        errno = scoped_rc == 0 ? 0 : scoped_errno;
+        return zlink::submit_result_internal::from_rc (scoped_rc);
     }
 
     zlink::part_helper_internal::send_part_buffer_t record;
@@ -468,10 +498,8 @@ zlink_submit_result_t submit_completion_aware_part (
     zlink::part_helper_internal::reset_send_sequence (&state->send, false);
     state_lock.unlock ();
     const zlink_submit_result_t result = submit_public_send_record (
-      socket, target_rid_, record.data (), record.size (), spec_.flags,
-      user_context_, completion_id_out_,
-      fallback_target_valid ? &fallback_target : NULL,
-      admission_gate_retained);
+      handle_, target_rid_, record.data (), record.size (), spec_.flags,
+      user_context_, completion_id_out_);
     socket->notify_incremental_send_released ();
     return result;
 }
@@ -604,7 +632,8 @@ zlink_submit_result_t zlink_send_part (void *s_,
     if (part_flag_ == ZLINK_PART_FINAL
         && !socket->part_helper_send_active ()) {
         return submit_public_send_record (
-          socket, NULL, part_, 1, flags_, user_context_, completion_id_out_);
+          socket_guard, NULL, part_, 1, flags_, user_context_,
+          completion_id_out_);
     }
     const zlink::part_helper_internal::send_sequence_spec_t &spec =
       plain_send_sequence_specs.values[
@@ -670,7 +699,7 @@ zlink_submit_result_t zlink_send_part_rid (void *s_,
         }
 
         return submit_public_send_record (
-          socket, target_rid_, part_, 1, flags_, user_context_,
+          socket_guard, target_rid_, part_, 1, flags_, user_context_,
           completion_id_out_);
     }
 
@@ -678,7 +707,7 @@ zlink_submit_result_t zlink_send_part_rid (void *s_,
         && part_flag_ == ZLINK_PART_FINAL
         && !socket->part_helper_send_active ()) {
         return submit_public_send_record (
-          socket, target_rid_, part_, 1, flags_, user_context_,
+          socket_guard, target_rid_, part_, 1, flags_, user_context_,
           completion_id_out_);
     }
 

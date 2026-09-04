@@ -44,7 +44,8 @@ typedef uint64_t zlink_reply_token_t;
 typedef enum zlink_completion_kind_t
 {
     ZLINK_COMPLETION_SEND = 1,
-    ZLINK_COMPLETION_REQUEST = 2
+    ZLINK_COMPLETION_REQUEST = 2,
+    ZLINK_COMPLETION_WRITABLE = 3
 } zlink_completion_kind_t;
 
 typedef struct zlink_completion_t
@@ -222,9 +223,18 @@ ZLINK_EXPORT zlink_connect_result_t zlink_disconnect_rid (void *s_,
                                                           const zlink_routing_id_t *peer_rid_);
 
 /* ========== Raw part send/receive ========== */
-/* Every part call consumes part_ on success and failure. A non-NULL completion
- * output is zeroed before all other validation. user_context_ is non-NULL only
- * for DONTWAIT FINAL; MORE and synchronous NONE FINAL reject it. */
+/* Every part call consumes part_ on success and failure. DONTWAIT FINAL makes
+ * one admission attempt. Admission returns ZLINK_SUBMIT_OK with ID 0 and no
+ * completion. Backpressure or an unready target returns
+ * ZLINK_SUBMIT_BACKPRESSURED with EAGAIN and a nonzero wait token; Core retains
+ * the token, target, and user_context_, but not the payload. When write credit
+ * becomes available, Core reports ZLINK_COMPLETION_WRITABLE with that token and
+ * context (send_result ZLINK_SEND_ADMITTED). A ROUTER/STREAM RID with no route
+ * returns ZLINK_SUBMIT_NOT_CONNECTED with no token; a DEALER with no peers
+ * still receives a token. Explicit target removal, socket close, or context
+ * termination retires a live token as WRITABLE with ZLINK_SEND_TERMINAL and
+ * the cause errno. PUB/XPUB publish has no SEND completion. MORE and
+ * synchronous NONE FINAL reject a non-NULL user_context_. */
 ZLINK_EXPORT zlink_submit_result_t zlink_send_part (void *s_,
                                                     zlink_msg_t *part_,
                                                     zlink_send_flags_t flags_,

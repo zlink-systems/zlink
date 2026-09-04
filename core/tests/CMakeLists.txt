@@ -718,7 +718,7 @@ set(REQUEST_REPLY_RECOVERY_TEST_SPECS
     test_request_reply_recovery_out_of_order=test_out_of_order_replies_match_completion_ids)
 
 set(TLS_ADMISSION_RECOVERY_TEST_SPECS
-    test_tls_admission_during_handshake=test_pending_send_admits_over_tls_during_handshake)
+    test_tls_admission_during_handshake=test_writable_token_retries_over_tls_during_handshake)
 
 set(BACKPRESSURE_MATRIX_INTEGRATION_TEST_SPECS
     test_backpressure_matrix_single_socket=test_single_socket_backpressure_matrix)

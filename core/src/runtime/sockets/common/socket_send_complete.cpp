@@ -1,11 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
-// Core-owned pull-completion SEND and internal REQUEST admission.
-//
-//  Async retries use the blocking send's frame admission rules, with the
-//  socket mailbox owner driving retries and completion replacing the caller
-//  wake. PAIR may publish through a success-only whole-record shortcut; every
-//  refusal falls back to the frame path that owns errno, wait and rollback.
+// Core-owned REQUEST admission retries and blocking SEND admission helpers.
+// Ordinary DONTWAIT SEND is never represented by a record in this module.
 
 #include "utils/precompiled.hpp"
 
@@ -19,6 +15,7 @@
 #include "utils/routing_id.hpp"
 
 #include <algorithm>
+#include <atomic>
 
 namespace
 {
@@ -32,9 +29,9 @@ void signal_logical_wait_state (
     state_->terminal_errno = terminal_errno_ != 0 ? terminal_errno_ : EIO;
 }
 
-bool retryable_pull_target_errno (int err_)
+bool retryable_request_target_errno (int err_)
 {
-    // A pull-completion record is keyed by its logical destination.  Losing
+    // A pending REQUEST is keyed by its logical destination. Losing
     // the currently selected physical pipe is therefore a wait condition,
     // exactly like HWM pressure, until an explicit logical-target removal or
     // another permanent cause completes it.
@@ -119,11 +116,142 @@ int copy_send_part_array (zlink_msg_t *parts_,
 
 }
 
-bool zlink::socket_type_supports_send_completion (int type_)
+bool zlink::socket_type_supports_completion_pull (int type_)
 {
     return type_ == ZLINK_CORE_SOCKET_PAIR || type_ == ZLINK_CORE_SOCKET_DEALER
            || type_ == ZLINK_CORE_SOCKET_ROUTER
            || type_ == ZLINK_CORE_SOCKET_STREAM;
+}
+
+bool zlink::socket_base_t::has_send_writable_wait () const
+{
+    return socket_completion::has_writable_wait (
+      const_cast<socket_completion::queue_state_t *> (&completion_runtime ()));
+}
+
+bool zlink::socket_base_t::xsend_writable_target_ready (
+  const zlink_routing_id_t *target_rid_or_null_)
+{
+    if (target_rid_or_null_)
+        return false;
+    return xhas_out ();
+}
+
+bool zlink::socket_base_t::xsend_writable_target_known (
+  const zlink_routing_id_t *target_rid_or_null_)
+{
+    return target_rid_or_null_ == NULL;
+}
+
+bool zlink::socket_base_t::xsend_writable_target_for_pipe (
+  pipe_t *pipe_, zlink_routing_id_t *target_rid_out_)
+{
+    LIBZLINK_UNUSED (pipe_);
+    LIBZLINK_UNUSED (target_rid_out_);
+    return false;
+}
+
+void zlink::socket_base_t::publish_send_writable_target (
+  const zlink_routing_id_t *target_rid_or_null_)
+{
+    const int saved_errno = errno;
+    const int published = socket_completion::publish_writable_waiters (
+      &completion_runtime (), target_rid_or_null_, ZLINK_SEND_ADMITTED, 0);
+    if (published > 0) {
+        // The completion command supplies async-owner progress and
+        // POLLCOMPLETION. signal() is deliberately unconditional here: an
+        // older unread REQUEST completion may already own the coalescing bit,
+        // while this new WRITABLE batch must still wake a POLLOUT-only poller.
+        notify_request_completion ();
+        static_cast<mailbox_t *> (_mailbox)->signal ();
+    }
+    errno = saved_errno;
+}
+
+void zlink::socket_base_t::notify_send_writable (pipe_t *pipe_)
+{
+    if (!has_send_writable_wait ())
+        return;
+
+    const int type = options.type;
+    if (type == ZLINK_CORE_SOCKET_PAIR) {
+        // PAIR activation commands intentionally avoid the socket-wide send
+        // lock. The callback owns a lifetime reference to this exact pipe, so
+        // inspect it directly instead of racing pair_t::_pipe through xhas_out().
+        if (pipe_ && pipe_->is_lifecycle_active ()
+            && pipe_->check_write_admission ()
+                 == pipe_message_admission_ready)
+            publish_send_writable_target (NULL);
+        return;
+    }
+
+    zlink_routing_id_t target_rid;
+    const zlink_routing_id_t *target = NULL;
+    if (type == ZLINK_CORE_SOCKET_ROUTER
+        || type == ZLINK_CORE_SOCKET_STREAM) {
+        memset (&target_rid, 0, sizeof (target_rid));
+        if (!xsend_writable_target_for_pipe (pipe_, &target_rid))
+            return;
+        target = &target_rid;
+    }
+
+    // Route/pipe locks are acquired and released inside this predicate before
+    // the completion mutex is taken by publish_send_writable_target().
+    if (xsend_writable_target_ready (target))
+        publish_send_writable_target (target);
+}
+
+int zlink::socket_base_t::register_send_writable_wait (
+  const zlink_routing_id_t *target_rid_or_null_, void *user_context_,
+  zlink_completion_id_t *completion_id_out_)
+{
+    if (completion_id_out_)
+        *completion_id_out_ = 0;
+
+    const int type = options.type;
+    const bool routed = type == ZLINK_CORE_SOCKET_ROUTER
+                        || type == ZLINK_CORE_SOCKET_STREAM;
+    if ((routed && !valid_routing_id (target_rid_or_null_))
+        || (!routed && target_rid_or_null_)
+        || (type != ZLINK_CORE_SOCKET_PAIR
+            && type != ZLINK_CORE_SOCKET_DEALER && !routed)) {
+        errno = routed ? EINVAL : ENOTSUP;
+        return -1;
+    }
+    if (routed && !xsend_writable_target_known (target_rid_or_null_)) {
+        errno = EHOSTUNREACH;
+        return -1;
+    }
+
+    socket_completion::reservation_t *reservation = NULL;
+    zlink_completion_id_t completion_id = 0;
+    if (socket_completion::reserve_writable_wait (
+          &completion_runtime (), user_context_, target_rid_or_null_,
+          &reservation, &completion_id)
+        != 0)
+        return -1;
+    zlink_assert (reservation);
+
+    // Pair the writer's linked wait record with every credit/attach wake: a
+    // wake that ran first is observed by the readiness recheck, while a wake
+    // that runs later finds the fully linked token in the queue-owned FIFO.
+    std::atomic_thread_fence (std::memory_order_seq_cst);
+    bool ready = false;
+    {
+        socket_public_send_scope_t readiness_scope (
+          lifecycle_coordinator (), true);
+        if (readiness_scope.acquired () && process_submit_commands () == 0)
+            ready = xsend_writable_target_ready (
+              routed ? target_rid_or_null_ : NULL);
+    }
+    if (ready)
+        publish_send_writable_target (
+          routed ? target_rid_or_null_ : NULL);
+
+    if (completion_id_out_)
+        *completion_id_out_ = completion_id;
+    errno = 0;
+    return 0;
 }
 
 void zlink::socket_base_t::close_send_parts (
@@ -154,23 +282,18 @@ int zlink::socket_base_t::copy_send_parts (
     return -1;
 }
 
-bool zlink::socket_base_t::has_send_pending () const
+bool zlink::socket_base_t::has_request_pending () const
 {
     const socket_send_pending_runtime_t &pending = send_pending_runtime ();
     scoped_lock_t lock (pending.sync);
     return !pending.by_op.empty ();
 }
 
-void zlink::socket_base_t::destroy_send_pending_record (
+void zlink::socket_base_t::destroy_request_pending_record (
   send_pending_record_t *record_)
 {
     if (!record_)
         return;
-    if (record_->completion_reservation) {
-        socket_completion::release (&completion_runtime (),
-                                    record_->completion_reservation);
-        record_->completion_reservation = NULL;
-    }
     // Close is correct after admission too because the pipe retains its own
     // frame-content reference.
     close_send_parts (&record_->parts);
@@ -180,22 +303,16 @@ void zlink::socket_base_t::destroy_send_pending_record (
     delete record_;
 }
 
-// Remove a resolved record and publish to the pull queue or the internal
-// REQUEST admission resolver.
-void zlink::socket_base_t::finish_send_pending (
-  send_pending_record_t *record_, zlink_send_complete_result_t result_,
-  int terminal_errno_)
+// Remove a resolved record and notify the internal REQUEST admission resolver.
+void zlink::socket_base_t::finish_request_pending (
+  send_pending_record_t *record_, bool admitted_, int terminal_errno_)
 {
     if (!record_)
         return;
 
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    socket_completion::reservation_t *pull_reservation = NULL;
-    bool pull_completion = false;
-    bool request_admission = false;
     send_pending_request_resolved_fn request_resolved = NULL;
     void *request_resolution_context = NULL;
-    bool pending_became_empty = false;
     {
         scoped_lock_t lock (pending.sync);
         std::map<routed_send_target_key_t,
@@ -218,92 +335,28 @@ void zlink::socket_base_t::finish_send_pending (
           pending.pending_msgs.load (std::memory_order_relaxed);
         pending.pending_msgs.store (pending_count > 0 ? pending_count - 1 : 0,
                                     std::memory_order_release);
-        pending_became_empty = pending_count == 1;
         pending.pending_bytes = pending.pending_bytes > record_->charge_bytes
                                   ? pending.pending_bytes
                                       - record_->charge_bytes
                                   : 0;
 
-        pull_completion = record_->pull_completion;
-        request_admission = record_->request_admission;
         request_resolved = record_->request_resolved;
         request_resolution_context = record_->request_resolution_context;
-        pull_reservation = record_->completion_reservation;
-        record_->completion_reservation = NULL;
     }
-    if (pending_became_empty
-        && pending.completion_capacity_blocked.load (
-          std::memory_order_acquire)
-        && transport_has_out ()) {
-        dispatch_runtime ().mark_send_recovery_ready ();
-        static_cast<mailbox_t *> (_mailbox)->signal ();
-    }
-    if (request_admission) {
-        if (request_resolved)
-            request_resolved (request_resolution_context,
-                              result_ == ZLINK_SEND_ADMITTED,
-                              result_ == ZLINK_SEND_ADMITTED
-                                ? 0
-                                : terminal_errno_);
-        destroy_send_pending_record (record_);
-    } else {
-        zlink_assert (pull_completion);
-        if (socket_completion::publish_send (
-              &completion_runtime (), pull_reservation, result_,
-              result_ == ZLINK_SEND_ADMITTED ? 0 : terminal_errno_)
-            == 0)
-            notify_request_completion ();
-        else
-            socket_completion::release (&completion_runtime (),
-                                        pull_reservation);
-        destroy_send_pending_record (record_);
-    }
-}
-
-void zlink::socket_base_t::mark_send_completion_capacity_blocked ()
-{
-    socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    pending.completion_capacity_blocked.store (true,
-                                               std::memory_order_release);
-    dispatch_runtime ().mark_send_recovery_pending ();
-    // A completion consumer can release the first slot after reserve() reports
-    // EAGAIN but before this recovery marker is fully armed.  Publish the
-    // marker first and then re-sample the authoritative queue count: either the
-    // consumer observes completion_capacity_blocked and notifies us, or this
-    // check observes its released slot.  Without the re-sample, the consumer's
-    // ready edge can be overwritten by mark_send_recovery_pending() above.
-    const bool completion_capacity_available =
-      socket_completion::outstanding (&completion_runtime ())
-      < socket_completion::max_outstanding_completions;
-    if (completion_capacity_available
-        || (pending.pending_msgs.load (std::memory_order_acquire) == 0
-            && transport_has_out ())) {
-        dispatch_runtime ().mark_send_recovery_ready ();
-        static_cast<mailbox_t *> (_mailbox)->signal ();
-    }
+    if (request_resolved)
+        request_resolved (request_resolution_context, admitted_,
+                          admitted_ ? 0 : terminal_errno_);
+    destroy_request_pending_record (record_);
 }
 
 void zlink::socket_base_t::clear_public_send_recovery_state ()
 {
-    send_pending_runtime ().completion_capacity_blocked.store (
-      false, std::memory_order_release);
     dispatch_runtime ().clear_send_recovery_pending ();
-}
-
-void zlink::socket_base_t::notify_send_completion_capacity_available ()
-{
-    socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    if (!pending.completion_capacity_blocked.exchange (
-          false, std::memory_order_acq_rel))
-        return;
-    dispatch_runtime ().mark_send_recovery_pending ();
-    dispatch_runtime ().mark_send_recovery_ready ();
-    static_cast<mailbox_t *> (_mailbox)->signal ();
 }
 
 //  Physically submit one record. Returns 0 on admission, -1 with errno set
 //  otherwise; EAGAIN means "not now, keep the record pending".
-int zlink::socket_base_t::try_admit_send_pending (
+int zlink::socket_base_t::try_admit_request_pending (
   send_pending_record_t *record_)
 {
     if (!record_ || record_->parts.empty ()) {
@@ -318,7 +371,7 @@ int zlink::socket_base_t::try_admit_send_pending (
     return try_admit_send_parts (
       record_->parts.data (), record_->parts.size (), record_->target,
       record_->has_target, true, record_, record_->admission_observer,
-      record_->admission_observer_userdata, record_->request_admission);
+      record_->admission_observer_userdata, true);
 }
 
 int zlink::socket_base_t::try_admit_send_parts (
@@ -525,20 +578,21 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
             errno_assert (close_rc == 0);
         }
         if (i == 0) {
-            //  Nothing reached the pipe, so the record is untouched.
-            //  Backpressure keeps it reserved; a route failure completes
-            //  it with that cause. Lifecycle refusals are the exception:
-            //  close and context termination own the pending terminal.
-            errno = failure_errno == ESHUTDOWN || failure_errno == ETERM
+            // Nothing reached the pipe, so the source record is untouched.
+            // A pending REQUEST may retry it; an ordinary DONTWAIT SEND
+            // returns the failure without retaining the source.
+            errno = request_admission_
+                        && (failure_errno == ESHUTDOWN
+                            || failure_errno == ETERM)
                       ? EAGAIN
                       : failure_errno;
             return -1;
         }
 
-        //  Drop the half-written physical attempt before releasing the scope.
-        //  Framed sockets can discover byte HWM on a continuation. An async
-        //  record has a pristine Core-owned shadow, so retain EAGAIN and retry
-        //  the complete record after the credit wake.
+        // Drop the half-written physical attempt before releasing the scope.
+        // Framed sockets can discover byte HWM on a continuation. Attempts use
+        // copies where needed, so the complete source record survives rollback;
+        // only a pending REQUEST retains it for a later Core retry.
         (void) rollback_scoped (scope);
         errno = failure_errno;
         return -1;
@@ -548,7 +602,7 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
 
 //  Admit whatever the current pipe state allows. Head-of-line within a target
 //  is deliberate: the target queue is one logical stream.
-void zlink::socket_base_t::drive_send_pending ()
+void zlink::socket_base_t::drive_request_pending ()
 {
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
     if (pending.pending_msgs.load (std::memory_order_acquire) == 0)
@@ -628,16 +682,13 @@ void zlink::socket_base_t::drive_send_pending ()
             return;
         }
 
-        const int rc = try_admit_send_pending (record);
+        const int rc = try_admit_request_pending (record);
         if (rc == 0) {
-            finish_send_pending (record, ZLINK_SEND_ADMITTED, 0);
+            finish_request_pending (record, true, 0);
             continue;
         }
         const int failure_errno = errno;
-        const bool retry_later =
-          failure_errno == EAGAIN
-          || (record->pull_completion
-              && retryable_pull_target_errno (failure_errno));
+        const bool retry_later = retryable_request_target_errno (failure_errno);
         int deferred_terminal_errno = 0;
         {
             scoped_lock_t lock (pending.sync);
@@ -685,18 +736,17 @@ void zlink::socket_base_t::drive_send_pending ()
             }
         }
         if (deferred_terminal_errno != 0) {
-            finish_send_pending (record, ZLINK_SEND_TERMINAL,
-                                 deferred_terminal_errno);
+            finish_request_pending (record, false, deferred_terminal_errno);
             continue;
         }
         if (retry_later) {
             continue;
         }
-        finish_send_pending (record, ZLINK_SEND_TERMINAL, failure_errno);
+        finish_request_pending (record, false, failure_errno);
     }
 }
 
-void zlink::socket_base_t::notify_send_pending_writable (pipe_t *pipe_)
+void zlink::socket_base_t::notify_request_pending_writable (pipe_t *pipe_)
 {
     LIBZLINK_UNUSED (pipe_);
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
@@ -720,7 +770,7 @@ void zlink::socket_base_t::notify_incremental_send_released ()
     lifecycle_coordinator ().release_public_multipart_control_boundary ();
     if (lifecycle_coordinator ().deferred_peer_controls_pending_cached ())
         flush_deferred_peer_controls ();
-    notify_send_pending_writable (NULL);
+    notify_request_pending_writable (NULL);
 }
 
 void zlink::socket_base_t::hold_incremental_send_control_boundary ()
@@ -772,9 +822,26 @@ void zlink::socket_base_t::mark_deferred_peer_controls ()
     lifecycle_coordinator ().mark_deferred_peer_controls ();
 }
 
+void zlink::socket_base_t::publish_send_writable_terminal (
+  const zlink_routing_id_t *target_rid_or_null_, int terminal_errno_)
+{
+    const int saved_errno = errno;
+    const int published = socket_completion::publish_writable_waiters (
+      &completion_runtime (), target_rid_or_null_, ZLINK_SEND_TERMINAL,
+      terminal_errno_);
+    if (published > 0) {
+        notify_request_completion ();
+        static_cast<mailbox_t *> (_mailbox)->signal ();
+    }
+    errno = saved_errno;
+}
+
 void zlink::socket_base_t::fail_pull_send_pending_for_logical_target (
   const zlink_routing_id_t *peer_rid_, int terminal_errno_)
 {
+    // Explicit removal of a logical target retires its WRITABLE wait tokens
+    // too: a waiter parked on that target could otherwise never be woken.
+    publish_send_writable_terminal (peer_rid_, terminal_errno_);
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
     const std::string logical_rid =
       peer_rid_ && peer_rid_->size
@@ -812,7 +879,7 @@ void zlink::socket_base_t::fail_pull_send_pending_for_logical_target (
                    pending.by_op.begin ();
                  it != pending.by_op.end (); ++it) {
                 send_pending_record_t *candidate = it->second;
-                if (!candidate->pull_completion || candidate->claimed
+                if (candidate->claimed
                     || candidate->target.peer_rid != logical_rid)
                     continue;
                 candidate->claimed = true;
@@ -822,8 +889,7 @@ void zlink::socket_base_t::fail_pull_send_pending_for_logical_target (
         }
         if (!doomed)
             break;
-        finish_send_pending (doomed, ZLINK_SEND_TERMINAL,
-                             terminal_errno_);
+        finish_request_pending (doomed, false, terminal_errno_);
         completed_any = true;
     }
     if (completed_any)
@@ -866,7 +932,7 @@ void zlink::socket_base_t::fail_pull_send_pending_for_logical_endpoint (
                    pending.by_op.begin ();
                  it != pending.by_op.end (); ++it) {
                 send_pending_record_t *const candidate = it->second;
-                if (!candidate->pull_completion || candidate->claimed
+                if (candidate->claimed
                     || candidate->target.logical_endpoint != endpoint_)
                     continue;
                 candidate->claimed = true;
@@ -876,8 +942,7 @@ void zlink::socket_base_t::fail_pull_send_pending_for_logical_endpoint (
         }
         if (!doomed)
             break;
-        finish_send_pending (doomed, ZLINK_SEND_TERMINAL,
-                             terminal_errno_);
+        finish_request_pending (doomed, false, terminal_errno_);
         completed_any = true;
     }
     if (completed_any)
@@ -933,6 +998,6 @@ void zlink::socket_base_t::fail_all_send_pending (int terminal_errno_)
         }
         if (!doomed)
             break;
-        finish_send_pending (doomed, ZLINK_SEND_TERMINAL, terminal_errno_);
+        finish_request_pending (doomed, false, terminal_errno_);
     }
 }

@@ -3,6 +3,7 @@
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
 
+
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -479,6 +480,96 @@ void configure_hwm (void *socket_)
       zlink_set_option (socket_, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
 }
 
+zlink_submit_result_t submit_dontwait_part_copy (
+  void *socket_, const void *payload_, size_t payload_size_,
+  void *user_context_, zlink_completion_id_t *completion_id_)
+{
+    zlink_msg_t part;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_msg_init_size (&part, payload_size_));
+    if (payload_size_ != 0)
+        memcpy (zlink_msg_data (&part), payload_, payload_size_);
+
+    errno = 0;
+    const zlink_submit_result_t result =
+      zlink_send_part (socket_, &part, ZLINK_SEND_FLAGS_DONTWAIT,
+                       ZLINK_PART_FINAL, user_context_, completion_id_);
+    const int submit_errno = zlink_errno ();
+    // The public part object is consumed on every result. The logical record
+    // remains in the application buffer passed to this copy helper.
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
+    errno = submit_errno;
+    return result;
+}
+
+bool receive_writable_completion (void *socket_,
+                                  zlink_completion_id_t expected_token_,
+                                  void *expected_context_, int *error_)
+{
+    zlink_completion_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.struct_size = sizeof (completion);
+    errno = 0;
+    const zlink_recv_result_t result = zlink_completion_recv (
+      socket_, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+    const int recv_errno = zlink_errno ();
+    if (result != ZLINK_RECV_OK) {
+        if (error_)
+            *error_ = recv_errno != 0 ? recv_errno : EPROTO;
+        return false;
+    }
+
+    const bool matches = completion.kind == ZLINK_COMPLETION_WRITABLE
+                         && completion.completion_id == expected_token_
+                         && completion.user_context == expected_context_
+                         && completion.peer_rid.size == 0
+                         && completion.send_result == ZLINK_SEND_ADMITTED
+                         && completion.send_terminal_errno == 0
+                         && completion.reply_parts == NULL
+                         && completion.reply_part_count == 0;
+    zlink_completion_close (&completion);
+    if (!matches) {
+        if (error_)
+            *error_ = EPROTO;
+        return false;
+    }
+    if (error_)
+        *error_ = 0;
+    return true;
+}
+
+bool completion_queue_is_empty (void *socket_, int *error_)
+{
+    zlink_completion_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.struct_size = sizeof (completion);
+    errno = 0;
+    const zlink_recv_result_t result = zlink_completion_recv (
+      socket_, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+    if (result == ZLINK_RECV_OK) {
+        zlink_completion_close (&completion);
+        if (error_)
+            *error_ = EEXIST;
+        return false;
+    }
+    const bool empty = result == ZLINK_RECV_NO_DATA && zlink_errno () == EAGAIN
+                       && completion.kind == 0
+                       && completion.completion_id == 0;
+    if (error_)
+        *error_ = empty ? 0 : (zlink_errno () != 0 ? zlink_errno () : EPROTO);
+    return empty;
+}
+
+void assert_no_ready_completion (void *socket_)
+{
+    int completion_error = 0;
+    TEST_ASSERT_TRUE_MESSAGE (
+      completion_queue_is_empty (socket_, &completion_error),
+      "socket published an unexpected extra completion");
+    TEST_ASSERT_EQUAL_INT (0, completion_error);
+}
+
 void run_hwm_pollout_recovery (bool keep_monitor_owner_, size_t serial_)
 {
     fixture_t fixture (dealer_router, "inproc", serial_);
@@ -489,22 +580,31 @@ void run_hwm_pollout_recovery (bool keep_monitor_owner_, size_t serial_)
     if (!keep_monitor_owner_)
         fixture.close_monitor ();
 
-    const std::string payload (64, 'h');
+    std::string logical_payload (64, 'h');
+    int send_context = 0x79;
     size_t accepted = 0;
-    int send_result = 0;
+    zlink_submit_result_t send_result = ZLINK_SUBMIT_INTERNAL_ERROR;
+    zlink_completion_id_t completion_id = UINT64_MAX;
     for (; accepted != 4096; ++accepted) {
-        errno = 0;
-        send_result = zlink_send (fixture.sender, payload.data (),
-                                  payload.size (), ZLINK_DONTWAIT);
-        if (send_result == -1)
+        const uint64_t sequence = accepted;
+        memcpy (&logical_payload[0], &sequence, sizeof (sequence));
+        completion_id = UINT64_MAX;
+        send_result = submit_dontwait_part_copy (
+          fixture.sender, logical_payload.data (), logical_payload.size (),
+          &send_context, &completion_id);
+        if (send_result != ZLINK_SUBMIT_OK)
             break;
-        TEST_ASSERT_EQUAL_INT (static_cast<int> (payload.size ()),
-                               send_result);
+        TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
     }
     TEST_ASSERT_TRUE_MESSAGE (accepted != 0 && accepted != 4096,
                               "DONTWAIT send did not reach HWM");
-    TEST_ASSERT_EQUAL_INT (-1, send_result);
+    const int backpressure_errno = zlink_errno ();
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_BACKPRESSURED, send_result);
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    TEST_ASSERT_EQUAL_INT (EAGAIN, backpressure_errno);
+    TEST_ASSERT_NOT_EQUAL (0, completion_id);
+    const zlink_completion_id_t writable_token = completion_id;
+    assert_no_ready_completion (fixture.sender);
 
     zlink_pollitem_t not_writable = {fixture.sender, 0, ZLINK_POLLOUT, 0};
     TEST_ASSERT_EQUAL_INT (0, zlink_poll (&not_writable, 1, 0, NULL));
@@ -532,6 +632,11 @@ void run_hwm_pollout_recovery (bool keep_monitor_owner_, size_t serial_)
           zlink_router_recv (fixture.receiver, &source, &token, &parts,
                              &part_count, 0));
         TEST_ASSERT_EQUAL_UINT64 (1, part_count);
+        TEST_ASSERT_EQUAL_UINT64 (logical_payload.size (),
+                                  zlink_msg_size (&parts[0]));
+        uint64_t sequence = UINT64_MAX;
+        memcpy (&sequence, zlink_msg_data (&parts[0]), sizeof (sequence));
+        TEST_ASSERT_EQUAL_UINT64 (i, sequence);
         zlink_multipart_close (parts, part_count);
     }
     waiter.join ();
@@ -540,6 +645,57 @@ void run_hwm_pollout_recovery (bool keep_monitor_owner_, size_t serial_)
                                 ? "HWM recovery with monitor owner"
                                 : "HWM recovery without monitor owner";
     assert_wake_result (wake, ZLINK_POLLOUT, label);
+
+    // The registration remains level-ready after the wake event is consumed.
+    zlink_poller_event_t level_event;
+    memset (&level_event, 0, sizeof (level_event));
+    zlink_config_result_t level_error = ZLINK_CONFIG_INTERNAL_ERROR;
+    TEST_ASSERT_EQUAL_INT (
+      1, zlink_poller_wait (poller, &level_event, 1, 0, &level_error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, level_error);
+    TEST_ASSERT_EQUAL_PTR (fixture.sender, level_event.socket);
+    TEST_ASSERT_TRUE ((level_event.events & ZLINK_POLLOUT) != 0);
+
+    int writable_completion_error = 0;
+    TEST_ASSERT_TRUE_MESSAGE (
+      receive_writable_completion (fixture.sender, writable_token,
+                                   &send_context,
+                                   &writable_completion_error),
+      "HWM recovery did not publish the matching WRITABLE completion");
+    TEST_ASSERT_EQUAL_INT (0, writable_completion_error);
+    assert_no_ready_completion (fixture.sender);
+
+    // Recreate a public message from the unchanged application buffer and
+    // retry the exact logical record rejected at HWM.
+    completion_id = UINT64_MAX;
+    send_result = submit_dontwait_part_copy (
+      fixture.sender, logical_payload.data (), logical_payload.size (),
+      &send_context, &completion_id);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, send_result);
+    TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
+    assert_no_ready_completion (fixture.sender);
+
+    zlink_msg_t *retry_parts = NULL;
+    size_t retry_part_count = 0;
+    const zlink_routing_id_t *retry_source = NULL;
+    zlink_reply_token_t retry_token = UINT64_MAX;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_router_recv (fixture.receiver, &retry_source, &retry_token,
+                         &retry_parts, &retry_part_count, 0));
+    TEST_ASSERT_EQUAL_UINT64 (1, retry_part_count);
+    TEST_ASSERT_EQUAL_UINT64 (logical_payload.size (),
+                              zlink_msg_size (&retry_parts[0]));
+    TEST_ASSERT_EQUAL_MEMORY (logical_payload.data (),
+                              zlink_msg_data (&retry_parts[0]),
+                              logical_payload.size ());
+    zlink_multipart_close (retry_parts, retry_part_count);
+
+    // No second copy may appear from Core after the caller's one retry.
+    zlink_pollitem_t no_extra = {fixture.receiver, 0, ZLINK_POLLIN, 0};
+    TEST_ASSERT_EQUAL_INT (0, zlink_poll (&no_extra, 1, 20, NULL));
+    TEST_ASSERT_EQUAL_INT (0, no_extra.revents);
+
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                            zlink_poller_remove (poller, fixture.sender));
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
@@ -705,12 +861,19 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
     configure_large_hwm (server);
     for (size_t i = 0; i < multi_dealer_count; ++i)
         configure_large_hwm (clients[i]);
-    msleep (50);
 
     const size_t max_records_per_client = 64;
     std::vector<size_t> accepted (multi_dealer_count, 0);
+    std::vector<unsigned char> backpressured (multi_dealer_count, 0);
+    std::vector<size_t> backpressure_attempts (multi_dealer_count, 0);
+    std::vector<zlink_completion_id_t> writable_tokens (multi_dealer_count, 0);
+    std::vector<int> send_contexts (multi_dealer_count, 0);
+    std::vector<std::vector<unsigned char> > logical_payloads (
+      multi_dealer_count,
+      std::vector<unsigned char> (large_payload_size, 'p'));
     std::vector<zlink_pollitem_t> fill_items (multi_dealer_count);
     for (size_t i = 0; i < multi_dealer_count; ++i) {
+        send_contexts[i] = static_cast<int> (i);
         fill_items[i].socket = clients[i];
         fill_items[i].fd = 0;
         fill_items[i].events = ZLINK_POLLOUT;
@@ -719,23 +882,48 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
 
     bool saturated = false;
     int fill_error = 0;
+    size_t backpressured_clients = 0;
     const std::chrono::steady_clock::time_point fill_deadline =
       std::chrono::steady_clock::now ()
       + std::chrono::milliseconds (multi_dealer_fill_timeout_ms);
     while (std::chrono::steady_clock::now () < fill_deadline) {
         for (size_t i = 0; i < multi_dealer_count; ++i) {
+            // One rejected logical send owns one writable wait token. Do not
+            // probe this client again until that token has become WRITABLE.
+            if (backpressured[i])
+                continue;
             const uint32_t client_index = static_cast<uint32_t> (i);
-            memcpy (&payload[0], &client_index, sizeof (client_index));
             while (accepted[i] < max_records_per_client) {
-                const int send_rc = zlink_send (
-                  clients[i], &payload[0], payload.size (), ZLINK_DONTWAIT);
-                if (send_rc == static_cast<int> (payload.size ())) {
+                const uint32_t sequence =
+                  static_cast<uint32_t> (accepted[i]);
+                memcpy (&logical_payloads[i][0], &client_index,
+                        sizeof (client_index));
+                memcpy (&logical_payloads[i][sizeof (client_index)],
+                        &sequence, sizeof (sequence));
+                zlink_completion_id_t completion_id = UINT64_MAX;
+                const zlink_submit_result_t send_result =
+                  submit_dontwait_part_copy (
+                    clients[i], &logical_payloads[i][0],
+                    logical_payloads[i].size (), &send_contexts[i],
+                    &completion_id);
+                const int send_errno = zlink_errno ();
+                if (send_result == ZLINK_SUBMIT_OK) {
+                    if (completion_id != 0) {
+                        fill_error = EPROTO;
+                        break;
+                    }
                     ++accepted[i];
                     continue;
                 }
-                if (send_rc == -1 && zlink_errno () == EAGAIN)
+                if (send_result == ZLINK_SUBMIT_BACKPRESSURED
+                    && send_errno == EAGAIN && completion_id != 0) {
+                    backpressured[i] = 1;
+                    ++backpressure_attempts[i];
+                    writable_tokens[i] = completion_id;
+                    ++backpressured_clients;
                     break;
-                fill_error = zlink_errno () != 0 ? zlink_errno () : EIO;
+                }
+                fill_error = send_errno != 0 ? send_errno : EIO;
                 break;
             }
             if (fill_error != 0)
@@ -747,6 +935,10 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
         }
         if (fill_error != 0)
             break;
+        if (backpressured_clients == multi_dealer_count) {
+            saturated = true;
+            break;
+        }
 
         for (size_t i = 0; i < fill_items.size (); ++i)
             fill_items[i].revents = 0;
@@ -768,15 +960,28 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
     size_t accepted_total = 0;
     size_t min_accepted = max_records_per_client;
     size_t max_accepted = 0;
+    bool all_backpressured = true;
+    bool one_wait_token_per_client = true;
     for (size_t i = 0; i < accepted.size (); ++i) {
         accepted_total += accepted[i];
         if (accepted[i] < min_accepted)
             min_accepted = accepted[i];
         if (accepted[i] > max_accepted)
             max_accepted = accepted[i];
+        all_backpressured = all_backpressured && backpressured[i] != 0;
+        one_wait_token_per_client =
+          one_wait_token_per_client && backpressure_attempts[i] == 1
+          && writable_tokens[i] != 0;
     }
     const bool fill_ready =
-      saturated && fill_error == 0 && min_accepted >= lwm_drain_records;
+      saturated && fill_error == 0 && all_backpressured
+      && one_wait_token_per_client
+      && min_accepted >= lwm_drain_records;
+
+    if (fill_ready) {
+        for (size_t i = 0; i < multi_dealer_count; ++i)
+            assert_no_ready_completion (clients[i]);
+    }
 
     multi_pollout_wait_state_t wait_state;
     bool waiter_armed = false;
@@ -836,6 +1041,13 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
                 drain_error = EPROTO;
                 break;
             }
+            uint32_t sequence = UINT32_MAX;
+            memcpy (&sequence, &payload[sizeof (client_index)],
+                    sizeof (sequence));
+            if (sequence != drained[client_index]) {
+                drain_error = EPROTO;
+                break;
+            }
             ++drained[client_index];
             if (drained[client_index] == lwm_drain_records)
                 ++lwm_ready_clients;
@@ -867,6 +1079,150 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
         drained_to_lwm =
           drained_to_lwm && drained[i] >= lwm_drain_records;
 
+    size_t level_ready_clients = 0;
+    int level_error = 0;
+    size_t writable_completion_clients = 0;
+    int writable_completion_error = 0;
+    size_t retried_clients = 0;
+    int retry_error = 0;
+    const bool all_waiters_recovered =
+      wait_state.recovered_count == multi_dealer_count
+      && wait_state.poll_error == ZLINK_CONFIG_OK
+      && wait_state.errno_value == 0;
+    if (fill_ready && drained_to_lwm && drain_error == 0
+        && all_waiters_recovered) {
+        // Consuming the wake does not consume writable state: every persistent
+        // registration must immediately report level-triggered POLLOUT again.
+        for (size_t i = 0; i < multi_dealer_count; ++i) {
+            zlink_poller_event_t event;
+            memset (&event, 0, sizeof (event));
+            zlink_config_result_t poll_error = ZLINK_CONFIG_INTERNAL_ERROR;
+            const int poll_rc =
+              zlink_poller_wait (pollers[i], &event, 1, 0, &poll_error);
+            if (poll_rc != 1 || poll_error != ZLINK_CONFIG_OK
+                || event.socket != clients[i]
+                || (event.events & ZLINK_POLLOUT) == 0) {
+                level_error = poll_error != ZLINK_CONFIG_OK
+                                ? poll_error
+                                : (poll_rc == 0 ? EAGAIN : EIO);
+                break;
+            }
+            ++level_ready_clients;
+        }
+
+        if (level_ready_clients == multi_dealer_count) {
+            // POLLOUT and WRITABLE describe the same credit transition. Each
+            // completion must carry the one token/context captured on EAGAIN.
+            for (size_t i = 0; i < multi_dealer_count; ++i) {
+                if (!receive_writable_completion (
+                      clients[i], writable_tokens[i], &send_contexts[i],
+                      &writable_completion_error))
+                    break;
+                int extra_completion_error = 0;
+                if (!completion_queue_is_empty (clients[i],
+                                                &extra_completion_error)) {
+                    writable_completion_error =
+                      extra_completion_error != 0 ? extra_completion_error
+                                                  : EPROTO;
+                    break;
+                }
+                ++writable_completion_clients;
+            }
+        }
+
+        if (writable_completion_clients == multi_dealer_count) {
+            // Each per-client application buffer still contains the logical
+            // record that received EAGAIN. Rebuild a fresh public message and
+            // submit that exact sequence once after POLLOUT and WRITABLE.
+            for (size_t i = 0; i < multi_dealer_count; ++i) {
+                uint32_t retained_client = UINT32_MAX;
+                uint32_t retained_sequence = UINT32_MAX;
+                memcpy (&retained_client, &logical_payloads[i][0],
+                        sizeof (retained_client));
+                memcpy (&retained_sequence,
+                        &logical_payloads[i][sizeof (retained_client)],
+                        sizeof (retained_sequence));
+                if (retained_client != i
+                    || retained_sequence != accepted[i]) {
+                    retry_error = EPROTO;
+                    break;
+                }
+
+                zlink_completion_id_t completion_id = UINT64_MAX;
+                const zlink_submit_result_t send_result =
+                  submit_dontwait_part_copy (
+                    clients[i], &logical_payloads[i][0],
+                    logical_payloads[i].size (), &send_contexts[i],
+                    &completion_id);
+                const int send_errno = zlink_errno ();
+                if (send_result != ZLINK_SUBMIT_OK || completion_id != 0) {
+                    retry_error = send_result == ZLINK_SUBMIT_BACKPRESSURED
+                                      && send_errno == EAGAIN
+                                    ? EAGAIN
+                                    : (send_errno != 0 ? send_errno : EPROTO);
+                    break;
+                }
+                ++retried_clients;
+                int extra_completion_error = 0;
+                if (!completion_queue_is_empty (clients[i],
+                                                &extra_completion_error)) {
+                    retry_error = extra_completion_error != 0
+                                    ? extra_completion_error
+                                    : EPROTO;
+                    break;
+                }
+            }
+        }
+    }
+
+    int delivery_error = drain_error;
+    const size_t expected_delivery_total = accepted_total + retried_clients;
+    if (delivery_error == 0 && retried_clients == multi_dealer_count) {
+        while (drained_total < expected_delivery_total) {
+            const int recv_rc =
+              zlink_recv (server, &payload[0], payload.size (), 0);
+            if (recv_rc != static_cast<int> (payload.size ())) {
+                delivery_error = recv_rc == -1 && zlink_errno () != 0
+                                   ? zlink_errno ()
+                                   : EPROTO;
+                break;
+            }
+
+            uint32_t client_index = UINT32_MAX;
+            uint32_t sequence = UINT32_MAX;
+            memcpy (&client_index, &payload[0], sizeof (client_index));
+            memcpy (&sequence, &payload[sizeof (client_index)],
+                    sizeof (sequence));
+            if (client_index >= multi_dealer_count
+                || sequence != drained[client_index]) {
+                delivery_error = EPROTO;
+                break;
+            }
+            ++drained[client_index];
+            ++drained_total;
+        }
+    }
+
+    bool delivered_all = delivery_error == 0
+                         && retried_clients == multi_dealer_count
+                         && drained_total == expected_delivery_total;
+    for (size_t i = 0; i < multi_dealer_count; ++i)
+        delivered_all = delivered_all && drained[i] == accepted[i] + 1;
+
+    bool no_extra_delivery = false;
+    int extra_poll_error = 0;
+    if (delivered_all) {
+        zlink_pollitem_t extra = {server, 0, ZLINK_POLLIN, 0};
+        zlink_config_result_t poll_error = ZLINK_CONFIG_INTERNAL_ERROR;
+        const int poll_rc = zlink_poll (&extra, 1, 20, &poll_error);
+        no_extra_delivery = poll_rc == 0 && poll_error == ZLINK_CONFIG_OK
+                            && extra.revents == 0;
+        if (!no_extra_delivery)
+            extra_poll_error = poll_error != ZLINK_CONFIG_OK
+                                 ? poll_error
+                                 : (poll_rc < 0 ? zlink_errno () : EPROTO);
+    }
+
     bool pollers_closed = true;
     for (size_t i = 0; i < pollers.size (); ++i) {
         if (!pollers[i])
@@ -885,6 +1241,9 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
 
     std::ostringstream details;
     details << "saturated=" << saturated << " fill_errno=" << fill_error
+            << " all_backpressured=" << all_backpressured
+            << " backpressured_clients=" << backpressured_clients
+            << " one_wait_token_per_client=" << one_wait_token_per_client
             << " accepted_total=" << accepted_total
             << " accepted_min=" << min_accepted
             << " accepted_max=" << max_accepted
@@ -899,11 +1258,34 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
             << " poll_errno=" << wait_state.errno_value
             << " max_wait_ms=" << wait_state.max_wait_ms
             << " recovery_after_drain_ms=" << recovery_after_drain_ms
+            << " level_ready_clients=" << level_ready_clients
+            << " level_errno=" << level_error
+            << " writable_completions=" << writable_completion_clients
+            << " writable_completion_errno=" << writable_completion_error
+            << " retried_clients=" << retried_clients
+            << " retry_errno=" << retry_error
+            << " delivered_total=" << drained_total
+            << " expected_delivery_total=" << expected_delivery_total
+            << " delivery_errno=" << delivery_error
+            << " no_extra_delivery=" << no_extra_delivery
+            << " extra_poll_errno=" << extra_poll_error
             << " pollers_closed=" << pollers_closed;
     TEST_ASSERT_TRUE_MESSAGE (fill_ready, details.str ().c_str ());
     TEST_ASSERT_TRUE_MESSAGE (waiter_armed && waiters_blocked,
                               details.str ().c_str ());
     TEST_ASSERT_TRUE_MESSAGE (drained_to_lwm && drain_error == 0,
+                              details.str ().c_str ());
+    TEST_ASSERT_TRUE_MESSAGE (
+      level_ready_clients == multi_dealer_count && level_error == 0,
+      details.str ().c_str ());
+    TEST_ASSERT_TRUE_MESSAGE (
+      writable_completion_clients == multi_dealer_count
+        && writable_completion_error == 0,
+      details.str ().c_str ());
+    TEST_ASSERT_TRUE_MESSAGE (
+      retried_clients == multi_dealer_count && retry_error == 0,
+      details.str ().c_str ());
+    TEST_ASSERT_TRUE_MESSAGE (delivered_all && no_extra_delivery,
                               details.str ().c_str ());
     TEST_ASSERT_TRUE_MESSAGE (pollers_closed, details.str ().c_str ());
     TEST_ASSERT_TRUE_MESSAGE (

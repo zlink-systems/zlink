@@ -79,6 +79,13 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
     void clear_session_observer (void *userdata_);
 
   private:
+    bool xsend_writable_target_ready (
+      const zlink_routing_id_t *target_rid_or_null_) ZLINK_OVERRIDE;
+    bool xsend_writable_target_known (
+      const zlink_routing_id_t *target_rid_or_null_) ZLINK_OVERRIDE;
+    bool xsend_writable_target_for_pipe (
+      zlink::pipe_t *pipe_, zlink_routing_id_t *target_rid_out_) ZLINK_OVERRIDE;
+
     enum
     {
         route_shard_count = 64

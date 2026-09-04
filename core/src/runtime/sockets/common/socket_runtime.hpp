@@ -669,15 +669,12 @@ typedef int (*send_pending_request_promote_fn) (
   void *inline_context_, void **pending_observer_userdata_out_,
   void **pending_resolution_context_out_);
 
-//  One pending nonblocking SEND/REQUEST admission record. Core owns every
-//  part in `parts` after the public submit returns ZLINK_SUBMIT_OK.
+// One pending nonblocking REQUEST admission record. Ordinary SEND never
+// transfers a backpressured record to this owner.
 struct send_pending_record_t
 {
     send_pending_record_t () :
         op_id (0),
-        pull_completion (false),
-        request_admission (false),
-        completion_reservation (NULL),
         admission_observer (NULL),
         admission_observer_userdata (NULL),
         request_resolution_context (NULL),
@@ -691,9 +688,6 @@ struct send_pending_record_t
     }
 
     zlink_send_op_id_t op_id;
-    bool pull_completion;
-    bool request_admission;
-    socket_completion::reservation_t *completion_reservation;
     pipe_write_observer_fn admission_observer;
     void *admission_observer_userdata;
     void *request_resolution_context;
@@ -748,7 +742,7 @@ struct send_logical_wait_state_t
     uint32_t waiters;
 };
 
-//  Per-socket asynchronous send admission state.
+// Per-socket REQUEST admission and blocking SEND wait state.
 //
 //  Ordering: records for one target form a FIFO. The admit loop only ever
 //  looks at the head of each target queue, so head-of-line blocking within a
@@ -763,7 +757,6 @@ struct socket_send_pending_runtime_t
         enqueue_epoch (0),
         redrive_epoch (0),
         pending_bytes (0),
-        completion_capacity_blocked (false),
         failing (false)
     {
     }
@@ -788,7 +781,7 @@ struct socket_send_pending_runtime_t
     std::map<routed_send_target_key_t, send_logical_wait_state_t>
       logical_waits;
     std::map<zlink_send_op_id_t, send_pending_record_t *> by_op;
-    // Reused only by the admission-gate owner. drive_send_pending keeps the
+    // Reused only by the admission-gate owner. drive_request_pending keeps the
     // active prefix local so a new drive call begins unblocked without
     // destroying retained string/vector capacity.
     std::vector<routed_send_target_key_t> blocked_targets_scratch;
@@ -804,11 +797,6 @@ struct socket_send_pending_runtime_t
     //  while the current driver still owns admission_gate.
     std::atomic<uint64_t> redrive_epoch;
     uint64_t pending_bytes;
-    // Set only after the unified completion reservation limit rejects a
-    // public submit. Unlike pipe HWM, this condition can recover either when
-    // a completion is dequeued or when every older pending record admits and
-    // a new submit can take the immediate-id-0 path.
-    std::atomic<bool> completion_capacity_blocked;
     //  Set once close or context termination has failed every pending record.
     //  New submits are refused from that point on.
     std::atomic<bool> failing;

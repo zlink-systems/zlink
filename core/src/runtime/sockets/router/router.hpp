@@ -102,6 +102,12 @@ class router_t : public routing_socket_base_t
   protected:
     //  Rollback any message parts that were sent but not yet flushed.
     int xrollback () ZLINK_OVERRIDE;
+    bool xsend_writable_target_ready (
+      const zlink_routing_id_t *target_rid_or_null_) ZLINK_OVERRIDE;
+    bool xsend_writable_target_known (
+      const zlink_routing_id_t *target_rid_or_null_) ZLINK_OVERRIDE;
+    bool xsend_writable_target_for_pipe (
+      zlink::pipe_t *pipe_, zlink_routing_id_t *target_rid_out_) ZLINK_OVERRIDE;
 
   private:
     int send_with_observer (zlink::msg_t *msg_,

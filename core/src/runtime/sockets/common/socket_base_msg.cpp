@@ -165,7 +165,8 @@ int zlink::socket_base_t::send (msg_t *msg_, int flags_)
     return send_scoped (msg_, flags_, send_scope);
 }
 
-int zlink::socket_base_t::send_complete_record (msg_t *msg_, int flags_)
+int zlink::socket_base_t::send_complete_record (
+  msg_t *msg_, int flags_, bool manage_public_send_recovery_)
 {
     socket_public_send_scope_t send_scope (
       lifecycle_coordinator (), true,
@@ -173,7 +174,8 @@ int zlink::socket_base_t::send_complete_record (msg_t *msg_, int flags_)
     if (!send_scope.acquired ())
         return -1;
 
-    return send_scoped (msg_, flags_, send_scope);
+    return send_scoped (msg_, flags_, send_scope, NULL, false, NULL, NULL,
+                        manage_public_send_recovery_);
 }
 
 int zlink::socket_base_t::send_scoped (msg_t *msg_,
@@ -182,12 +184,14 @@ int zlink::socket_base_t::send_scoped (msg_t *msg_,
                                        pipe_t **pipe_out_,
                                        bool report_multipart_abort_,
                                        pipe_write_observer_fn observer_,
-                                       void *observer_userdata_)
+                                       void *observer_userdata_,
+                                       bool manage_public_send_recovery_)
 {
     return send_direct_with_retry (NULL, msg_, flags_, send_scope, NULL, 0,
                                    report_multipart_abort_, pipe_out_, 0, 0,
                                    true, false, observer_,
-                                   observer_userdata_);
+                                   observer_userdata_, NULL, 0,
+                                   manage_public_send_recovery_);
 }
 
 int zlink::socket_base_t::send_routed (const zlink_routing_id_t *target_rid_,
@@ -202,14 +206,17 @@ int zlink::socket_base_t::send_routed (const zlink_routing_id_t *target_rid_,
 }
 
 int zlink::socket_base_t::send_routed_complete_record (
-  const zlink_routing_id_t *target_rid_, msg_t *msg_, int flags_)
+  const zlink_routing_id_t *target_rid_, msg_t *msg_, int flags_,
+  bool manage_public_send_recovery_)
 {
     socket_public_send_scope_t send_scope (
       lifecycle_coordinator (), true, socket_send_admission_complete);
     if (!send_scope.acquired ())
         return -1;
 
-    return send_routed_scoped (target_rid_, msg_, flags_, send_scope);
+    return send_routed_scoped (target_rid_, msg_, flags_, send_scope, NULL, 0,
+                               NULL, 0, 0, false, NULL, NULL, NULL, 0,
+                               manage_public_send_recovery_);
 }
 
 int zlink::socket_base_t::select_routed_submit_target (
@@ -280,7 +287,8 @@ int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_r
                                               routed_send_attempt_identity_t
                                                 *attempt_identity_out_,
                                               uint64_t
-                                                expected_route_incarnation_id_)
+                                                expected_route_incarnation_id_,
+                                              bool manage_public_send_recovery_)
 {
     if (unlikely (!target_rid_)) {
         errno = EFAULT;
@@ -292,7 +300,7 @@ int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_r
       expected_connection_id_, report_multipart_abort_, pipe_out_, expected_transport_pair_id_,
       expected_transport_pair_generation_, true, false, observer_,
       observer_userdata_, attempt_identity_out_,
-      expected_route_incarnation_id_);
+      expected_route_incarnation_id_, manage_public_send_recovery_);
 }
 
 bool zlink::socket_base_t::begin_public_send_scope (

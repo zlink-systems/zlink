@@ -79,9 +79,9 @@ namespace zlink
 class address_t;
 struct multipart_send_facade_t;
 
-//  Socket types that own a pull SEND-completion channel. This set widens the
-//  ZLINK_POLLCOMPLETION registration check beyond reply completions.
-bool socket_type_supports_send_completion (int type_);
+// Preserve the completion-poller registration set for ABI compatibility even
+// though ordinary SEND no longer publishes completion records.
+bool socket_type_supports_completion_pull (int type_);
 
 struct socket_request_reply_bridge_t
 {
@@ -286,7 +286,8 @@ class socket_base_t : public own_t,
     int term_endpoint (const char *endpoint_uri_);
     int term_peer_rid (const zlink_routing_id_t *peer_rid_);
     int send (zlink::msg_t *msg_, int flags_);
-    int send_complete_record (zlink::msg_t *msg_, int flags_);
+    int send_complete_record (zlink::msg_t *msg_, int flags_,
+                              bool manage_public_send_recovery_ = true);
     // Internal helper for logical multipart wrappers that already hold the
     // public send scope for the whole transaction.
     int send_scoped (zlink::msg_t *msg_,
@@ -295,11 +296,13 @@ class socket_base_t : public own_t,
                      zlink::pipe_t **pipe_out_ = NULL,
                      bool report_multipart_abort_ = false,
                      pipe_write_observer_fn observer_ = NULL,
-                     void *observer_userdata_ = NULL);
+                     void *observer_userdata_ = NULL,
+                     bool manage_public_send_recovery_ = true);
     int send_routed (const zlink_routing_id_t *target_rid_, zlink::msg_t *msg_, int flags_);
     int send_routed_complete_record (const zlink_routing_id_t *target_rid_,
                                      zlink::msg_t *msg_,
-                                     int flags_);
+                                     int flags_,
+                                     bool manage_public_send_recovery_ = true);
     int send_routed_scoped (const zlink_routing_id_t *target_rid_,
                             zlink::msg_t *msg_,
                             int flags_,
@@ -314,7 +317,8 @@ class socket_base_t : public own_t,
                             void *observer_userdata_ = NULL,
                             routed_send_attempt_identity_t
                               *attempt_identity_out_ = NULL,
-                            uint64_t expected_route_incarnation_id_ = 0);
+                            uint64_t expected_route_incarnation_id_ = 0,
+                            bool manage_public_send_recovery_ = true);
     int select_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_);
@@ -518,28 +522,19 @@ class socket_base_t : public own_t,
     int begin_close_handoff ();
     void complete_close_handoff ();
     int peer_command_from_io (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
-    int send_completion_submit (zlink_msg_t *parts_,
-                                size_t part_count_,
-                                const zlink_routing_id_t *target_rid_,
-                                void *user_context_,
-                                zlink_completion_id_t *completion_id_out_,
-                                const routed_send_target_key_t
-                                  *committed_target_ = NULL,
-                                bool admission_gate_preacquired_ = false);
-    // An incremental PAIR/DEALER send already owns the socket's multipart
-    // admission scope at FINAL. Reuse that scope for the common immediate
-    // whole-record attempt; EAGAIN retains every input's ownership and content
-    // so the caller can release the multipart marker and enter the ordinary
-    // pending path.
-    int try_immediate_completion_send_scoped (
-      zlink_msg_t *parts_, size_t part_count_,
-      socket_public_send_scope_t &send_scope_,
-      routed_send_target_key_t *fallback_target_out_ = NULL,
-      bool *fallback_target_valid_out_ = NULL,
-      bool *admission_gate_retained_out_ = NULL);
     int send_completion_submit_blocking (
       zlink_msg_t *parts_, size_t part_count_,
       const zlink_routing_id_t *target_rid_or_null_);
+    int try_send_parts_scoped_once (
+      zlink_msg_t *parts_, size_t part_count_,
+      const zlink_routing_id_t *target_rid_or_null_,
+      socket_public_send_scope_t &send_scope_);
+    // Register a payload-free DONTWAIT SEND wait token after one physical
+    // admission attempt reported backpressure or an unready logical target.
+    int register_send_writable_wait (
+      const zlink_routing_id_t *target_rid_or_null_, void *user_context_,
+      zlink_completion_id_t *completion_id_out_);
+    bool has_send_writable_wait () const;
     int request_admission_submit (
       zlink_msg_t *parts_, size_t part_count_,
       const zlink_routing_id_t *target_rid_or_null_,
@@ -555,12 +550,10 @@ class socket_base_t : public own_t,
       pipe_write_observer_fn admission_observer_,
       void *admission_observer_userdata_);
     // Admit whatever the current pipe state allows. Resolution is published
-    // only to the pull completion queue or an internal REQUEST admission hook.
-    void drive_send_pending ();
-    bool has_send_pending () const;
-    void mark_send_completion_capacity_blocked ();
+    // Pending records now belong only to REQUEST admission.
+    void drive_request_pending ();
+    bool has_request_pending () const;
     void clear_public_send_recovery_state ();
-    void notify_send_completion_capacity_available ();
     socket_completion::queue_state_t &completion_runtime ()
     {
         return _runtime.completion_runtime;
@@ -851,6 +844,16 @@ class socket_base_t : public own_t,
 
     //  The default implementation assumes that send is not supported.
     virtual bool xhas_out ();
+    // Exact readiness used only by the DONTWAIT SEND fallback. Unrouted
+    // sockets pass NULL; ROUTER and STREAM override this for one logical RID.
+    virtual bool xsend_writable_target_ready (
+      const zlink_routing_id_t *target_rid_or_null_);
+    // Whether the logical target can ever become writable. A ROUTER/STREAM
+    // RID without a route fails immediately instead of holding a token.
+    virtual bool xsend_writable_target_known (
+      const zlink_routing_id_t *target_rid_or_null_);
+    virtual bool xsend_writable_target_for_pipe (
+      zlink::pipe_t *pipe_, zlink_routing_id_t *target_rid_out_);
     virtual int xsend (
       zlink::msg_t *msg_,
       pipe_message_admission_t *admission_out_ = NULL);
@@ -1043,7 +1046,11 @@ class socket_base_t : public own_t,
                      bool pin_pipe_out_ = false,
                      zlink::socket_receive_record_scope_t *record_scope_ = NULL);
     //  A pipe became writable again: nudge the admit loop for that target.
-    void notify_send_pending_writable (pipe_t *pipe_);
+    void notify_request_pending_writable (pipe_t *pipe_);
+    // Publish every wait token for the exact target after scheduler/route
+    // state says a retry is worthwhile. Passing a pipe derives the routed key;
+    // PAIR/DEALER use their socket-wide candidate target.
+    void notify_send_writable (pipe_t *pipe_);
     void flush_deferred_peer_controls ();
     void mark_deferred_peer_controls ();
     //  A route ended: fail every pending record bound to that exact target.
@@ -1074,6 +1081,10 @@ class socket_base_t : public own_t,
     int get_events_for_poller (int events_, uint32_t *out_,
                                bool transport_output_,
                                bool consume_primary_signaler_);
+    void publish_send_writable_target (
+      const zlink_routing_id_t *target_rid_or_null_);
+    void publish_send_writable_terminal (
+      const zlink_routing_id_t *target_rid_or_null_, int terminal_errno_);
 
     bool has_stable_completion_processing_owner () const;
     void invalidate_completion_processing_owner ();
@@ -1293,7 +1304,7 @@ class socket_base_t : public own_t,
     //  definition not admitted yet.
     void fail_all_send_pending (int terminal_errno_);
     //  Finish helpers used by the admit loop.
-    int try_admit_send_pending (send_pending_record_t *record_);
+    int try_admit_request_pending (send_pending_record_t *record_);
     int select_routed_submit_target_internal (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_,
@@ -1366,32 +1377,24 @@ class socket_base_t : public own_t,
       pipe_write_observer_fn admission_observer_,
       void *admission_observer_userdata_,
       submit_timeout_budget_t &timeout_);
-    void finish_send_pending (send_pending_record_t *record_,
-                              zlink_send_complete_result_t result_,
-                              int terminal_errno_);
-    void destroy_send_pending_record (send_pending_record_t *record_);
+    void finish_request_pending (send_pending_record_t *record_,
+                                 bool admitted_,
+                                 int terminal_errno_);
+    void destroy_request_pending_record (send_pending_record_t *record_);
     static void close_send_parts (std::vector<zlink_msg_t> *parts_);
     static int copy_send_parts (zlink_msg_t *parts_,
                                 size_t part_count_,
                                 std::vector<zlink_msg_t> *copies_);
-    int send_pending_submit (zlink_msg_t *parts_,
-                             size_t part_count_,
-                             const zlink_routed_submit_target_t *target_,
-                             zlink_send_op_id_t *op_id_out_,
-                             bool pull_completion_,
-                             void *user_context_,
-                             zlink_completion_id_t *completion_id_out_,
-                             bool request_admission_ = false,
-                             pipe_write_observer_fn admission_observer_ = NULL,
-                             void *admission_observer_userdata_ = NULL,
-                             send_pending_request_resolved_fn request_resolved_ = NULL,
-                             send_pending_request_cleanup_fn request_cleanup_ = NULL,
-                             void *request_resolution_context_ = NULL,
-                             const routed_send_target_key_t
-                               *committed_target_ = NULL,
-                             bool admission_gate_preacquired_ = false,
-                             send_pending_request_promote_fn
-                               request_promote_ = NULL);
+    int request_pending_submit (
+      zlink_msg_t *parts_, size_t part_count_,
+      const zlink_routed_submit_target_t *target_,
+      zlink_send_op_id_t *op_id_out_,
+      pipe_write_observer_fn admission_observer_,
+      void *admission_observer_userdata_,
+      send_pending_request_resolved_fn request_resolved_,
+      send_pending_request_cleanup_fn request_cleanup_,
+      void *request_resolution_context_,
+      send_pending_request_promote_fn request_promote_);
     static void reaper_mailbox_handler (void *arg_);
     static void reaper_mailbox_pre_post (void *arg_);
     static void async_mailbox_handler (void *arg_);

@@ -470,6 +470,7 @@ void router_t::finish_route_adoption (pipe_t *adopted_pipe_,
 {
     if (!actions_)
         return;
+    const bool route_published = actions_->cache_completion;
     if (actions_->terminate_pipe) {
         actions_->terminate_pipe->terminate (true);
         actions_->terminate_pipe->release_lifetime_ref ();
@@ -483,6 +484,8 @@ void router_t::finish_route_adoption (pipe_t *adopted_pipe_,
         // absent logical route must observe either transition immediately.
         notify_submit_progress ();
     }
+    if (route_published)
+        notify_send_writable (adopted_pipe_);
 }
 
 int router_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)
@@ -508,7 +511,8 @@ int router_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)
         public_routing_id = blob_t (
           event_routing_id.data (), event_routing_id.size ());
     }
-    notify_send_pending_writable (pipe_);
+    notify_request_pending_writable (pipe_);
+    notify_send_writable (pipe_);
     // Monitor enqueueing has its own synchronization. Never call it while the
     // I/O/owner route-lifecycle fence is held.
     emit_peer_weight_changed (pipe_, weight_, &public_routing_id);

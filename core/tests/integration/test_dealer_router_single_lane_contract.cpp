@@ -2341,7 +2341,7 @@ void test_sl_flow_dr_normal_kinds_share_pause_and_hwm_gate ()
 {
     dr_fixture_t fixture ("inproc://sl-flow-normal-kinds");
     const uint64_t hwm = 256;
-    const uint64_t one_pending = 1;
+    const uint64_t one_pending_request = 1;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
       zlink_set_option (fixture.dealer, ZLINK_OPT_SNDHWM, &hwm,
@@ -2353,7 +2353,8 @@ void test_sl_flow_dr_normal_kinds_share_pause_and_hwm_gate ()
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
       zlink_set_option (fixture.dealer, ZLINK_OPT_PENDING_MAX_MSGS,
-                        &one_pending, sizeof (one_pending)));
+                        &one_pending_request,
+                        sizeof (one_pending_request)));
     fixture.connect_and_prime ();
 
     TEST_ASSERT_EQUAL_INT (
@@ -2363,32 +2364,47 @@ void test_sl_flow_dr_normal_kinds_share_pause_and_hwm_gate ()
     TEST_ASSERT_TRUE (wait_for_flow_paused_count (fixture.dealer, 1));
     bool data_blocked = false;
     size_t data_accepted = 0;
+    int data_wait_context = 0x5d;
+    zlink_completion_id_t data_wait_token = 0;
     for (int attempt = 0; attempt != 32; ++attempt) {
         zlink_msg_t data;
         init_sized_part (&data, 1024, 'd');
         zlink_completion_id_t completion_id = 0;
         const zlink_submit_result_t result = zlink_send_part (
           fixture.dealer, &data, ZLINK_SEND_FLAGS_DONTWAIT,
-          ZLINK_PART_FINAL, NULL, &completion_id);
+          ZLINK_PART_FINAL, &data_wait_context, &completion_id);
         assert_consumed (&data);
         if (result == ZLINK_SUBMIT_BACKPRESSURED) {
+            TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+            TEST_ASSERT_NOT_EQUAL (0, completion_id);
+            data_wait_token = completion_id;
             data_blocked = true;
             break;
         }
         TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
+        TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
         ++data_accepted;
     }
     TEST_ASSERT_TRUE (data_blocked);
+    TEST_ASSERT_NOT_EQUAL (0, data_wait_token);
+    zlink_completion_t no_completion;
+    init_empty_completion (&no_completion);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_NO_DATA,
+      zlink_completion_recv (fixture.dealer, &no_completion,
+                             ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    zlink_completion_close (&no_completion);
 
     zlink_msg_t request;
     init_part (&request, "request-shares-gate");
     zlink_completion_id_t request_id = UINT64_MAX;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_BACKPRESSURED,
+      ZLINK_SUBMIT_OK,
       zlink_request_part (fixture.dealer, NULL, &request,
                           ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 1000,
                           NULL, &request_id));
-    TEST_ASSERT_EQUAL_UINT64 (0, request_id);
+    TEST_ASSERT_NOT_EQUAL (0, request_id);
     assert_consumed (&request);
 
     TEST_ASSERT_EQUAL_INT (
@@ -2401,34 +2417,44 @@ void test_sl_flow_dr_normal_kinds_share_pause_and_hwm_gate ()
           receive_router_part (fixture.router);
         TEST_ASSERT_EQUAL_UINT64 (0, drained.reply_token);
     }
-    bool request_admitted = false;
-    for (int attempt = 0; attempt != 200 && !request_admitted; ++attempt) {
-        zlink_msg_t retry;
-        init_part (&retry, "request-after-gate");
-        request_id = 0;
-        const zlink_submit_result_t result = zlink_request_part (
-          fixture.dealer, NULL, &retry, ZLINK_SEND_FLAGS_DONTWAIT,
-          ZLINK_PART_FINAL, 2000, NULL, &request_id);
-        assert_consumed (&retry);
-        if (result == ZLINK_SUBMIT_OK) {
-            request_admitted = true;
-            break;
-        }
-        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_BACKPRESSURED, result);
-        msleep (1);
-    }
-    TEST_ASSERT_TRUE (request_admitted);
-    TEST_ASSERT_NOT_EQUAL (0, request_id);
     const received_router_part_t admitted = receive_router_part (fixture.router);
     TEST_ASSERT_NOT_EQUAL (0, admitted.reply_token);
     send_reply (fixture.router, admitted, "normal-kinds-reply");
+
+    zlink_pollitem_t writable = {fixture.dealer, 0, ZLINK_POLLOUT, 0};
+    zlink_config_result_t poll_error = ZLINK_CONFIG_INTERNAL_ERROR;
+    TEST_ASSERT_EQUAL_INT (1,
+                           zlink_poll (&writable, 1, contract_wait_ms,
+                                       &poll_error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, poll_error);
+    TEST_ASSERT_BITS_HIGH (ZLINK_POLLOUT, writable.revents);
+
     zlink_completion_t completion = receive_completion (fixture.dealer);
-    while (completion.kind == ZLINK_COMPLETION_SEND) {
-        zlink_completion_close (&completion);
-        completion = receive_completion (fixture.dealer);
-    }
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
+    TEST_ASSERT_EQUAL_UINT64 (data_wait_token, completion.completion_id);
+    TEST_ASSERT_EQUAL_PTR (&data_wait_context, completion.user_context);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.send_result);
+    TEST_ASSERT_EQUAL_INT (0, completion.send_terminal_errno);
+    zlink_completion_close (&completion);
+
+    completion = receive_completion (fixture.dealer);
     assert_request_completion (&completion, request_id, ZLINK_REQUEST_OK,
                                "normal-kinds-reply");
+
+    zlink_msg_t retried_data;
+    init_sized_part (&retried_data, 1024, 'd');
+    zlink_completion_id_t retry_id = UINT64_MAX;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_send_part (fixture.dealer, &retried_data,
+                       ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL,
+                       &retry_id));
+    TEST_ASSERT_EQUAL_UINT64 (0, retry_id);
+    assert_consumed (&retried_data);
+    const received_router_part_t retried = receive_router_part (fixture.router);
+    TEST_ASSERT_EQUAL_UINT64 (0, retried.reply_token);
+    TEST_ASSERT_EQUAL_UINT64 (1024, retried.payload.size ());
+    assert_no_completion (fixture.dealer);
     fixture.close ();
 }
 

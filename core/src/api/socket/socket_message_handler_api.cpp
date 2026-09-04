@@ -8,6 +8,8 @@
 #include "core/msg.hpp"
 #include "sockets/stream/stream.hpp"
 
+#include <atomic>
+
 namespace
 {
 bool is_zero_initialized_routing_id (const zlink_routing_id_t &rid_)
@@ -121,13 +123,13 @@ zlink_recv_result_t zlink_completion_recv (
     }
 
     // A completion pull is itself a socket progress point. Drain commands
-    // before driving pending SEND records so a physical detach/reconnect can
-    // replace the pipe behind the same logical target.  If context shutdown
+    // before driving pending REQUEST admission so a physical detach/reconnect
+    // can replace the pipe behind the same logical target. If context shutdown
     // was observed, prefer an already-published completion; otherwise surface
     // the lifecycle result with the caller output still empty.
     const int command_progress_rc = handle.socket->process_submit_commands ();
     const int command_progress_errno = errno;
-    handle.socket->drive_send_pending ();
+    handle.socket->drive_request_pending ();
     if (command_progress_rc != 0
         && !zlink::socket_completion::has_ready (
           &handle.socket->completion_runtime ())) {
@@ -135,8 +137,8 @@ zlink_recv_result_t zlink_completion_recv (
         return zlink::recv_result_internal::from_errno (errno);
     }
 
-    // Pending SEND admission and wire REQUEST replies need a command owner
-    // even when the application uses blocking pull without a poller.
+    // Pending REQUEST admission and wire replies need a command owner even
+    // when the application uses blocking pull without a poller.
     if (flags_ != ZLINK_RECV_FLAGS_DONTWAIT
         && handle.socket->receive_timeout_ms () != 0
         && !zlink::socket_completion::has_ready (
@@ -151,7 +153,19 @@ zlink_recv_result_t zlink_completion_recv (
           handle.socket->receive_timeout_ms ()) != 0)
         return zlink::recv_result_internal::from_errno (errno);
 
-    handle.socket->notify_send_completion_capacity_available ();
+    // A direct pull can consume the command associated with the queue's first
+    // ready record without passing through a poller's notification
+    // acknowledgement. Retire the coalescing bit only at the empty boundary,
+    // then recheck so a concurrent enqueue either observes the cleared bit or
+    // is explicitly re-notified here.
+    if (!zlink::socket_completion::has_ready (
+          &handle.socket->completion_runtime ())) {
+        handle.socket->acknowledge_request_completion_notification ();
+        std::atomic_thread_fence (std::memory_order_seq_cst);
+        if (zlink::socket_completion::has_ready (
+              &handle.socket->completion_runtime ()))
+            handle.socket->notify_request_completion ();
+    }
 
     return ZLINK_RECV_OK;
 }

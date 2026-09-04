@@ -467,6 +467,11 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             dispatch_runtime ().mark_send_recovery_ready ();
             static_cast<mailbox_t *> (_mailbox)->signal ();
         }
+        // A DONTWAIT SEND may have registered while this logical target had
+        // no application pipe. xattach_pipe() has now published scheduler and
+        // route state; the matcher rechecks exact writability before moving
+        // any token to the completion queue.
+        notify_send_writable (application);
     }
     if (ready_application && ready_completion
         && ready_completion != ready_application)
@@ -556,7 +561,7 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         // the Application/Completion pair becomes Ready. HWM recovery emits
         // its own edge from write_activated(), but releasing the pair hold is
         // a distinct admission transition and must wake that exact target too.
-        notify_send_pending_writable (ready_application);
+        notify_request_pending_writable (ready_application);
     }
     if (ready_application && socket_type () == ZLINK_CORE_SOCKET_ROUTER) {
         // ROUTER readiness is a public data-plane edge, not merely pair-table
@@ -762,19 +767,18 @@ int zlink::socket_base_t::get_events (int events_, uint32_t *out_)
     //  the query sync bit first: physical admission takes that bit itself and
     //  would otherwise wait on this thread's own lock.
     if (events_ & ZLINK_POLLCOMPLETION)
-        drive_send_pending ();
+        drive_request_pending ();
 
     {
         socket_public_api_lock_scope_t guard (lifecycle);
         //  Only a caller that asks for ZLINK_POLLCOMPLETION owns the
         //  completion drain, so only that caller runs reply handlers.
-        bool completion_notified = false;
         int drained_completions = 0;
         if (events_ & ZLINK_POLLCOMPLETION) {
             scoped_lock_t owner_lock (_completion_owner_sync);
             const completion_drain_scope_t drain_scope (this);
-            completion_notified =
-              _request_completion_pending.exchange (false, std::memory_order_acq_rel);
+            (void) _request_completion_pending.exchange (
+              false, std::memory_order_acq_rel);
             process_ready_completion_pipes ();
             drained_completions = drain_request_completions ();
             if (drained_completions < 0)
@@ -783,8 +787,7 @@ int zlink::socket_base_t::get_events (int events_, uint32_t *out_)
 
         uint32_t events = 0;
         if ((events_ & ZLINK_POLLCOMPLETION)
-            && (socket_completion::has_ready (&completion_runtime ())
-                || completion_notified || drained_completions > 0))
+            && socket_completion::has_ready (&completion_runtime ()))
             events |= ZLINK_POLLCOMPLETION;
         if ((events_ & ZLINK_POLLOUT) && has_out ())
             events |= ZLINK_POLLOUT;
@@ -849,7 +852,7 @@ int zlink::socket_base_t::get_events_internal (
             // handoff. Keep the poller alive on the mailbox descriptor rather
             // than reporting a stale completion notification or surfacing
             // ETERM before the callback exists.
-            if (has_send_pending ()) {
+            if (has_request_pending ()) {
                 *out_ = 0;
                 errno = terminal_errno;
                 return 0;
@@ -861,16 +864,15 @@ int zlink::socket_base_t::get_events_internal (
     }
     errno_assert (rc == 0);
 
-    bool completion_notified = false;
     int drained_completions = 0;
     if (events_ & ZLINK_POLLCOMPLETION) {
         zlink_assert (_completion_poller_refs.load (std::memory_order_acquire)
                       != 0);
-        drive_send_pending ();
+        drive_request_pending ();
         scoped_lock_t owner_lock (_completion_owner_sync);
         const completion_drain_scope_t drain_scope (this);
-        completion_notified =
-          _request_completion_pending.exchange (false, std::memory_order_acq_rel);
+        (void) _request_completion_pending.exchange (
+          false, std::memory_order_acq_rel);
         process_ready_completion_pipes ();
         drained_completions = drain_request_completions ();
         if (drained_completions < 0)
@@ -879,8 +881,7 @@ int zlink::socket_base_t::get_events_internal (
 
     uint32_t events = 0;
     if ((events_ & ZLINK_POLLCOMPLETION)
-        && (socket_completion::has_ready (&completion_runtime ())
-            || completion_notified || drained_completions > 0))
+        && socket_completion::has_ready (&completion_runtime ()))
         events |= ZLINK_POLLCOMPLETION;
     if ((events_ & ZLINK_POLLIN) && has_in ())
         events |= ZLINK_POLLIN;
@@ -957,7 +958,7 @@ void zlink::socket_base_t::resume_completion_processing_if_needed ()
 
     std::shared_ptr<socket_reqrep_internal::socket_request_reply_state_t> socket_state =
       request_reply_state ();
-    if (has_send_pending ()
+    if (has_send_writable_wait () || has_request_pending ()
         || (socket_state
             && socket_reqrep_internal::has_pending_request_work (
               socket_state))) {
@@ -1008,6 +1009,11 @@ bool zlink::socket_base_t::has_in ()
 
 bool zlink::socket_base_t::has_out ()
 {
+    // Each unread WRITABLE completion keeps POLLOUT level-ready independently
+    // of the legacy one-shot recovery flag. A successful competing send may
+    // clear that flag, but must not hide another wait token's notification.
+    if (socket_completion::has_ready_writable (&completion_runtime ()))
+        return true;
     const zlink::socket_dispatch_bridge_t &dispatch = dispatch_runtime ();
     if (!dispatch.send_recovery_pending ())
         return false;
@@ -1697,15 +1703,16 @@ void zlink::socket_base_t::write_activated (pipe_t *pipe_)
         if (request_correlation_recovery)
             dispatch_runtime ().mark_send_recovery_pending ();
         if (credit_recovery || flow_recovery)
-            notify_send_pending_writable (pipe_);
+            notify_request_pending_writable (pipe_);
+        // Sample WRITABLE only after consuming the marker for this activation.
+        // A competing send can fill the newly active pipe and arm a fresh byte
+        // waiter before this recheck; check_write_admission() then preserves
+        // that new marker for the next credit edge instead of having it erased
+        // by this callback.
+        notify_send_writable (pipe_);
     }
-    const socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    const bool completion_capacity_wait =
-      pending.completion_capacity_blocked.load (std::memory_order_acquire);
     if (dispatch_runtime ().send_recovery_pending ()
-        && !dispatch_runtime ().send_recovery_ready ()
-        && (!completion_capacity_wait
-            || pending.pending_msgs.load (std::memory_order_acquire) == 0)) {
+        && !dispatch_runtime ().send_recovery_ready ()) {
         dispatch_runtime ().mark_send_recovery_ready ();
         static_cast<mailbox_t *> (_mailbox)->signal ();
     }

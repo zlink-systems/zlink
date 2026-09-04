@@ -4,8 +4,10 @@
 
 #include "sockets/router/router.hpp"
 #include "sockets/router/router_debug.hpp"
+#include "core/c_api_copy_internal.hpp"
 #include "utils/likely.hpp"
 #include "utils/err.hpp"
+#include "utils/routing_id.hpp"
 
 #include <cstdio>
 
@@ -596,4 +598,67 @@ bool zlink::router_t::xhas_out ()
         return true;
 
     return has_writable_weighted_out_pipes ();
+}
+
+bool zlink::router_t::xsend_writable_target_ready (
+  const zlink_routing_id_t *target_rid_or_null_)
+{
+    if (!valid_routing_id (target_rid_or_null_))
+        return false;
+
+    std::lock_guard<std::mutex> route_lifecycle_lock (
+      _out_pipes_sync);
+    const blob_t routing_id (
+      const_cast<unsigned char *> (target_rid_or_null_->data),
+      target_rid_or_null_->size, reference_tag_t ());
+    const out_pipe_t *const out_pipe = lookup_out_pipe (routing_id);
+    if (!out_pipe || !out_pipe->pipe || !out_pipe->active
+        || out_pipe->weight == 0 || !out_pipe->pipe->is_lifecycle_active ())
+        return false;
+
+    const uint64_t pair_id = out_pipe->pipe->get_transport_pair_id ();
+    if (pair_id != 0
+        && (out_pipe->pipe->get_transport_pair_generation () == 0
+            || !transport_pair_application_ready (out_pipe->pipe)))
+        return false;
+    if (pair_id == 0
+        && out_pipe->pipe->get_transport_connection_id () == 0)
+        return false;
+
+    return out_pipe->pipe->check_write_admission ()
+           == pipe_message_admission_ready;
+}
+
+bool zlink::router_t::xsend_writable_target_known (
+  const zlink_routing_id_t *target_rid_or_null_)
+{
+    if (!valid_routing_id (target_rid_or_null_))
+        return false;
+
+    std::lock_guard<std::mutex> route_lifecycle_lock (
+      _out_pipes_sync);
+    const blob_t routing_id (
+      const_cast<unsigned char *> (target_rid_or_null_->data),
+      target_rid_or_null_->size, reference_tag_t ());
+    const out_pipe_t *const out_pipe = lookup_out_pipe (routing_id);
+    return out_pipe && out_pipe->pipe
+           && out_pipe->pipe->is_lifecycle_active ();
+}
+
+bool zlink::router_t::xsend_writable_target_for_pipe (
+  pipe_t *pipe_, zlink_routing_id_t *target_rid_out_)
+{
+    if (!pipe_ || !target_rid_out_)
+        return false;
+
+    std::lock_guard<std::mutex> route_lifecycle_lock (
+      _out_pipes_sync);
+    const blob_t &routing_id = pipe_->get_routing_id ();
+    const out_pipe_t *const out_pipe = lookup_out_pipe (routing_id);
+    if (!out_pipe || out_pipe->pipe != pipe_ || routing_id.size () == 0
+        || routing_id.size () > sizeof (target_rid_out_->data))
+        return false;
+    copy_routing_id_from_bytes (routing_id.data (), routing_id.size (),
+                                target_rid_out_);
+    return true;
 }

@@ -496,7 +496,8 @@ int zlink::dealer_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)
     // A weight transition is an admission edge for an exact pending send.
     // Mailbox redrive lets zero reach normal terminal ECONNREFUSED handling and
     // lets a newly positive target retry without an unrelated HWM activation.
-    notify_send_pending_writable (pipe_);
+    notify_request_pending_writable (pipe_);
+    notify_send_writable (pipe_);
     emit_peer_weight_changed (pipe_, weight_);
     return 1;
 }
