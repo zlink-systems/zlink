@@ -13,7 +13,9 @@ from pathlib import Path
 ZMP_MAGIC = 0x5A
 ZMP_VERSION = 0x01
 ZMP_HEADER_SIZE = 8
+ZMP_REQUEST_SEQUENCE_SIZE = 8
 ZMP_FLAG_MORE = 0x01
+ZMP_REQUEST_REPLY_KINDS = frozenset((0x01, 0x02, 0x03))
 WIRE_MAGIC = bytes((90, 77))
 SESSION_RELOCATION_ROUTE = 44
 
@@ -29,13 +31,17 @@ class FrameParser:
             if self._buffer[0] != ZMP_MAGIC or self._buffer[1] != ZMP_VERSION:
                 raise ValueError("unexpected ZMP frame header")
             flags = self._buffer[2]
+            kind = self._buffer[3]
             size = int.from_bytes(self._buffer[4:8], "big")
-            total = ZMP_HEADER_SIZE + size
+            header_size = ZMP_HEADER_SIZE
+            if kind in ZMP_REQUEST_REPLY_KINDS:
+                header_size += ZMP_REQUEST_SEQUENCE_SIZE
+            total = header_size + size
             if len(self._buffer) < total:
                 break
             raw = bytes(self._buffer[:total])
             del self._buffer[:total]
-            frames.append((raw, flags, raw[ZMP_HEADER_SIZE:]))
+            frames.append((raw, flags, raw[header_size:]))
         return frames
 
 

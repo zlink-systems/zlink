@@ -1818,6 +1818,12 @@ task_t<bool> mesh_node_runtime_t::send_instance_spot_activation_remote (
 
 void mesh_node_runtime_t::stop () noexcept
 {
+    // Stop timer producers before draining their serial/worker consumers, and
+    // keep application instances alive until every admitted callback settles.
+    spot_node_runtime_t spot_runtime (_state->spot_state);
+    spot_runtime.request_stop ();
+    spot_runtime.cancel_timers ();
+    spot_runtime.cancel_pending_dispatch ();
     /* Seal new submissions first, then let every synchronous operation that
      * is already waiting on a completion settle at its original deadline.
      * The hosted-service drain also waits for callback-owned reservations.
@@ -1860,7 +1866,9 @@ void mesh_node_runtime_t::stop () noexcept
           detail::boundary_error_t::shutdown,
           "MeshNode operation stopped because the runtime is shutting down"));
     }
+    spot_runtime.cancel_pending_work ();
     if (!_node) {
+        spot_runtime.release_native_handles ();
         return;
     }
     try {
@@ -1871,11 +1879,12 @@ void mesh_node_runtime_t::stop () noexcept
         for (auto &[_, spot] : _spots)
             (void) spot.close ();
         _spots.clear ();
-        spot_node_runtime_t (_state->spot_state).detach_native_node ();
+        spot_runtime.detach_native_node ();
         _node->close ();
     }
     catch (...) {
     }
+    spot_runtime.release_native_handles ();
     _node.reset ();
 }
 
@@ -2313,6 +2322,13 @@ mesh_node_runtime_t::request_actor_join_spot_route (const runtime::spot_address_
         const auto failure = failure_mapper.reply_header_exception (
           completed.record.terminal_result, completed.record.failure_errno,
           "Actor transfer route request");
+        if (failure.kind () == framework_error_kind_t::deadline_exceeded
+            && target.node_generation != 0
+            && !has_admitted_peer (target.node_rid, target.node_generation)) {
+            co_return result_t<runtime::messaging::message_parts_t>::failure (
+              framework_error_kind_t::unavailable,
+              "Actor transfer route target RouteMesh peer became unavailable");
+        }
         co_return result_t<runtime::messaging::message_parts_t>::failure (failure.kind (),
                                                                           failure.what ());
     }
@@ -2816,6 +2832,19 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
                     "wire Actor join reply was malformed or identity-fenced"),
                   "wire Actor join reply was malformed or identity-fenced");
             case runtime::mesh::actor_join_wire_failure_t::deadline_exceeded:
+                // The raw request only knows that no reply arrived before its
+                // deadline.  If the exact target incarnation disappeared in
+                // the meantime, the semantic failure is route/owner loss,
+                // not an otherwise-live peer taking too long to reply.
+                if (!has_admitted_peer (s->target.node_rid,
+                                        observed.target_node_generation)) {
+                    co_return fail_remote_actor_join (
+                      *s,
+                      result_t<actor_join_reply_t>::failure (
+                        framework_error_kind_t::unavailable,
+                        "wire Actor join target RouteMesh peer became unavailable"),
+                      "wire Actor join target RouteMesh peer became unavailable");
+                }
                 co_return fail_remote_actor_join (
                   *s,
                   result_t<actor_join_reply_t>::failure (

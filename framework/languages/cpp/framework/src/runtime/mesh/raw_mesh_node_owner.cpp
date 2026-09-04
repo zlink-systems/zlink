@@ -3851,6 +3851,13 @@ task_t<std::size_t> raw_mesh_node_owner_t::drain_monitor_events (
         }
         const auto node_routing_id = event->routing_id->to_bytes ();
         if (event->event == zlink::monitor_event::connection_ready) {
+            // Core also publishes connection-ready count snapshots with the
+            // edge flag clear.  Only a rising edge may admit a physical
+            // candidate and send a new RouteMesh hello.
+            if (!zlink::has_flag (event->flags,
+                                  zlink::monitor_event_flag_t::connection_ready_edge)) {
+                continue;
+            }
             const auto ready = _lane.run ([this, &event, &node_routing_id,
                                            &connection_id] {
                 struct ready_t
