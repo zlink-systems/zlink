@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(zlink_cpp VERSION 0.16.0 LANGUAGES CXX)
+project(zlink_cpp VERSION 0.17.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -8,12 +8,12 @@ get_filename_component(ZLINK_CPP_BINDINGS_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSOLU
 get_filename_component(ZLINK_REPO_ROOT_DIR "${ZLINK_CPP_BINDINGS_DIR}/../.." ABSOLUTE)
 
 set(ZLINK_CORE_DIR "${ZLINK_REPO_ROOT_DIR}/core" CACHE PATH "Path to zlink core")
-set(ZLINK_CPP_CORE_VERSION "0.16.0" CACHE STRING
+set(ZLINK_CPP_CORE_VERSION "0.17.0" CACHE STRING
     "Exact Core package version required by this C++ binding")
 set(ZLINK_CPP_CORE_BUILD_DIR "${ZLINK_REPO_ROOT_DIR}/core/build" CACHE PATH
     "Path to an existing zlink core build directory")
 set(ZLINK_CPP_CORE_PACKAGE_PREFIX "" CACHE PATH
-    "Path to an installed Zlink 0.16.0 Core release prefix")
+    "Path to an installed Zlink 0.17.0 Core release prefix")
 option(ZLINK_CPP_USE_CORE_BUILD_RUNTIME
   "Require the targeted core/build runtime instead of an installed Core package"
   OFF)
@@ -221,7 +221,7 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
 
   message(FATAL_ERROR
     "No zlink core runtime found for this platform. "
-    "Expected an installed Core 0.16.0 package, an existing libzlink target, "
+    "Expected an installed Core 0.17.0 package, an existing libzlink target, "
     "or a targeted source build under ${ZLINK_CPP_CORE_BUILD_DIR}.")
 endfunction()
 

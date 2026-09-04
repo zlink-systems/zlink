@@ -340,12 +340,6 @@ def synchronize(write: bool) -> tuple[str, str, list[Path]]:
         sync.regex(relative, rf"(?<![0-9.]){SEMVER}(?![0-9.])", core_version, expected)
 
     sync.regex(
-        "bindings/go/contract_test.go",
-        r"(version\.Major != )[0-9]+( \|\| version\.Minor != )[0-9]+( \|\| version\.Patch != )[0-9]+",
-        rf"\g<1>{major}\g<2>{minor}\g<3>{patch}",
-        1,
-    )
-    sync.regex(
         "bindings/go/internal/native/raw_contract_test.go",
         rf'(allowlist\.CoreVersion != "){SEMVER}("\s*)',
         rf"\g<1>{core_version}\2",
@@ -368,13 +362,6 @@ def synchronize(write: bool) -> tuple[str, str, list[Path]]:
             1,
         )
     sync.regex(
-        "bindings/go/contract_test.go",
-        rf"want {SEMVER}",
-        f"want {core_version}",
-        1,
-    )
-
-    sync.regex(
         "bindings/python/pyproject.toml",
         rf'(?m)^version = "{SEMVER}"$',
         f'version = "{binding_version}"',
@@ -382,13 +369,6 @@ def synchronize(write: bool) -> tuple[str, str, list[Path]]:
     )
     for relative in ("bindings/python/setup.py", "bindings/python/src/zlink/_native/_native_loader.py"):
         sync.regex(relative, rf"(?<![0-9.]){SEMVER}(?![0-9.])", core_version, 1)
-    sync.regex(
-        "bindings/python/tests/test_native_contract.py",
-        rf"libzlink\.so\.{SEMVER}",
-        f"libzlink.so.{core_version}",
-        1,
-    )
-
     sync.regex(
         "bindings/rust/Cargo.toml",
         rf'(\[package\]\nname = "zlink"\nversion = "){SEMVER}(")',

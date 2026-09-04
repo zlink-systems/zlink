@@ -6,9 +6,9 @@
 #include <type_traits>
 
 static_assert(ZLINK_VERSION_MAJOR == 0, "zlink/common.h major version must match Core version");
-static_assert(ZLINK_VERSION_MINOR == 16, "zlink/common.h minor version must match Core version");
+static_assert(ZLINK_VERSION_MINOR == 17, "zlink/common.h minor version must match Core version");
 static_assert(ZLINK_VERSION_PATCH == 0, "zlink/common.h patch version must match Core version");
-static_assert(ZLINK_VERSION == ZLINK_MAKE_VERSION(0, 16, 0),
+static_assert(ZLINK_VERSION == ZLINK_MAKE_VERSION(0, 17, 0),
   "zlink/common.h aggregate version must match Core version");
 static_assert(ZLINK_COMPLETION_WRITABLE == 3,
   "the public raw header must expose the WRITABLE completion ABI value");
