@@ -690,8 +690,8 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/cpp/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미측정`
-- 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
+- Multi 상태: `미달` — `tcp` 4 pattern(`MULTI_DEALER_DEALER`, `MULTI_DEALER_ROUTER_REQREP`, `MULTI_ROUTER_ROUTER_REQREP`, `MULTI_PUBSUB`)의 첫 paired before 측정만 기록, 개선 pass 전
+- 다음 작업: 위 4 pattern의 자체 hot-path 개선 pass와 after 측정(§7.4 9~11단계). `131072`와 나머지 transport·pattern은 미측정.
 
 #### 9.1.1 Single suite
 
@@ -744,12 +744,12 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 미달(56.1%) | 미달(60.2%) | 미달(68.8%) | 미달(81.8%) | 미달(108.3%) | 미측정 | before(개선 pass 전); aggregate throughput 75.0%, latency 0.58x; 처리량 C++/C 605.5/1079.5, 586.9/974.5, 593.3/862.8, 292.8/358.1, 83.8/77.4 Kmsg/s; `p1cpp`; C `perf_c_multi_linux_20260905_034919_p1cpp.txt`, C++ `perf_cpp_multi_linux_20260905_035055_p1cpp.txt`; [log](log/2026-09-05-cpp-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미달(40.7%) | 미달(43.2%) | 미달(38.0%) | 미달(45.5%) | 미달(91.5%) | 미측정 | before(개선 pass 전); aggregate throughput 51.8%, latency 0.80x; 처리량 C++/C 63.2/155.5, 64.5/149.1, 60.9/160.1, 58.3/128.2, 21.0/23.0 Kops/s; `p1cpp`; C `perf_c_multi_linux_20260905_035123_p1cpp.txt`, C++ `perf_cpp_multi_linux_20260905_035151_p1cpp.txt`; [log](log/2026-09-05-cpp-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미달(44.8%) | 미달(45.8%) | 미달(49.8%) | 미달(53.7%) | 미달(109.4%) | 미측정 | before(개선 pass 전); aggregate throughput 60.7%, latency 0.77x; 처리량 C++/C 62.5/139.5, 58.9/128.6, 58.6/117.7, 55.8/103.8, 21.7/19.8 Kops/s; `p1cpp`; C `perf_c_multi_linux_20260905_035218_p1cpp.txt`, C++ `perf_cpp_multi_linux_20260905_035246_p1cpp.txt`; [log](log/2026-09-05-cpp-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_PUBSUB` | 미달(80.9%) | 미달(108.7%) | 미달(96.9%) | 미달(86.5%) | 미달(93.8%) | 미측정 | before(개선 pass 전); aggregate throughput 93.3%, latency 1.06x; 처리량 C++/C 507.3/626.9, 641.9/590.6, 689.2/711.5, 566.6/655.2, 61.7/65.8 Kmsg/s; `p1cpp`; C `perf_c_multi_linux_20260905_035313_p1cpp.txt`, C++ `perf_cpp_multi_linux_20260905_035341_p1cpp.txt`; [log](log/2026-09-05-cpp-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
@@ -1317,17 +1317,17 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | 구분 | 상태 | 결과 파일 / 메모 |
 |------|------|------------------|
-| 현재 언어 | 미정 |  |
-| 현재 pattern | 미측정 |  |
-| paired C | 미측정 |  |
-| 개선 반복 | 미측정 |  |
+| 현재 언어 | C++ | 순서 1 |
+| 현재 pattern | 미달 | Multi `tcp` `MULTI_DEALER_DEALER` 75.0%, `MULTI_DEALER_ROUTER_REQREP` 51.8%, `MULTI_ROUTER_ROUTER_REQREP` 60.7%, `MULTI_PUBSUB` 93.3% before 측정; latency 모두 2.0x 이내; `131072` 미측정 |
+| paired C | 완료 | `p1cpp`, 2026-09-05 03:49~03:54 KST, pattern마다 C 직후 C++ 순차 실행; [log](log/2026-09-05-cpp-multi-tcp-before.ko.md) |
+| 개선 반복 | 미측정 | 자체 hot-path pass와 Sol 리뷰 pass 전 |
 | 커밋과 푸시 | 미측정 |  |
 
 ### 10.3 언어 진행 상태
 
 | 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
 |------|------|-------------|------------|-----------|
-| 1 | C++ | 미측정 | 미측정 | paired 기준 측정을 시작한다. |
+| 1 | C++ | 미측정 | 미달 | Multi `tcp` 4 pattern before 측정 완료(aggregate 75.0/51.8/60.7/93.3%); 자체 개선 pass와 after 측정을 진행한다. |
 | 2 | .NET | 미측정 | 미측정 | paired 기준 측정을 시작한다. |
 | 3 | Java | 미측정 | 미측정 | paired 기준 측정을 시작한다. |
 | 4 | Node | 미측정 | 미측정 | paired 기준 측정을 시작한다. |
@@ -1344,6 +1344,7 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 |------|------|---------------|----------|----------------|------|---------------|
 | 2026-09-05 | 전체 | 계획 초기화 | - | Core 0.17.0 local release build(LTO) `libzlink.so.0.17.0`, 정책 §1.2·§5.1 단일 phase runner, C 기준과 binding paired 비교, 단일 perf process 조건. 시작 조건: REQUEST 계약 통일(D-B85)과 binding REQUEST 포팅 반영 뒤. | 계획 작성 | 이 문서 |
 | 2026-09-05 | 전체 | inventory gate | - | 7개 binding의 source pattern registry·CLI parser·README와 공식 single/multi wrapper `--help`를 대조했다. 모든 binding의 canonical 등록 목록은 Single 7개와 Multi 7개로 C runner와 같고, C 기본 크기와 STREAM 예외는 §3과 일치한다. 제외할 미등록 pattern과 C 크기 정책 불일치는 없다. 일부 README의 누락은 manifest에 기록했다. | 완료 | `log/2026-09-05-environment.ko.md` |
+| 2026-09-05 | C++ | Multi `tcp` `MULTI_DEALER_DEALER`, `MULTI_DEALER_ROUTER_REQREP`, `MULTI_ROUTER_ROUTER_REQREP`, `MULTI_PUBSUB` before | `p1cpp` | 5 sizes(64~65536, `131072` 제외), 5초, 1회, 100 clients, I/O 4/4, auto-HWM balanced, Core 0.17.0 local Release+LTO `libzlink.so.0.17.0`(`053a568ddd`, clean), C 직후 C++ 순차 실행, 03:49~03:54 KST, load average 2.7~6.2는 실행 자체 부하 | before: 처리량 평균 75.0% / 51.8% / 60.7% / 93.3%로 모두 미달(목표 95/85/85/95%), latency 평균 0.58x / 0.80x / 0.77x / 1.06x로 통과; `MsgUnit(B)`는 양쪽 `?`; 개선 pass 전 | C: `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260905_{034919,035123,035218,035313}_p1cpp.txt`; C++: `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260905_{035055,035151,035246,035341}_p1cpp.txt`; [log](log/2026-09-05-cpp-multi-tcp-before.ko.md) |
 
 ## 12. 완료 기준
 
