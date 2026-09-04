@@ -113,6 +113,7 @@ async_result_t<std::vector<message_t>> request_submit_operation_t::async () &&
     try {
         bundle = std::make_shared<request_completion_bundle_t> (
           std::move (operation_state));
+        bundle->result.bind_lifetime (bundle);
         entry = std::shared_ptr<detail::completion_entry_t> (
           bundle, &bundle->entry);
     }

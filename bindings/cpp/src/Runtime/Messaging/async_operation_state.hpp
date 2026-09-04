@@ -17,9 +17,16 @@ namespace zlink::detail
 class async_resume_slot_t
 {
   public:
+    async_resume_slot_t () noexcept : _continuation (nullptr) {}
+
     explicit async_resume_slot_t (std::coroutine_handle<> continuation_) :
         _continuation (continuation_.address ())
     {
+    }
+
+    void bind (std::coroutine_handle<> continuation_) noexcept
+    {
+        _continuation.store (continuation_.address (), std::memory_order_release);
     }
 
     void abandon (std::coroutine_handle<> continuation_) noexcept
@@ -62,6 +69,11 @@ template <typename T>
 class async_operation_state_t final : public async_result_state_t<T>
 {
   public:
+    void bind_lifetime (const std::shared_ptr<void> &lifetime_) noexcept
+    {
+        _lifetime = lifetime_;
+    }
+
     bool ready () const noexcept override
     {
         return _terminal.load (std::memory_order_acquire);
@@ -76,7 +88,15 @@ class async_operation_state_t final : public async_result_state_t<T>
         if (_consumer_registered)
             throw std::logic_error ("async result already has a consumer");
         _consumer_registered = true;
-        _continuation = std::make_shared<async_resume_slot_t> (continuation_);
+        const std::shared_ptr<void> lifetime = _lifetime.lock ();
+        if (lifetime) {
+            _inline_continuation.bind (continuation_);
+            _continuation = std::shared_ptr<async_resume_slot_t> (
+              lifetime, &_inline_continuation);
+        } else {
+            _continuation = std::make_shared<async_resume_slot_t> (continuation_);
+        }
+        _continuation_weak = _continuation;
         _scheduler = std::move (scheduler_);
         return true;
     }
@@ -94,6 +114,7 @@ class async_operation_state_t final : public async_result_state_t<T>
         const std::exception_ptr failure = _failure;
         std::optional<T> value = std::move (_value);
         _continuation.reset ();
+        _continuation_weak.reset ();
         if (failure)
             std::rethrow_exception (failure);
         if (!value)
@@ -106,6 +127,7 @@ class async_operation_state_t final : public async_result_state_t<T>
         std::lock_guard<std::mutex> lock (_mutex);
         _detached = true;
         _continuation.reset ();
+        _continuation_weak.reset ();
         _scheduler = {};
     }
 
@@ -115,8 +137,10 @@ class async_operation_state_t final : public async_result_state_t<T>
         {
             std::lock_guard<std::mutex> lock (_mutex);
             _detached = true;
-            slot = _continuation;
-            _continuation.reset ();
+            slot = std::move (_continuation);
+            if (!slot)
+                slot = _continuation_weak.lock ();
+            _continuation_weak.reset ();
             _scheduler = {};
         }
         if (slot)
@@ -149,7 +173,7 @@ class async_operation_state_t final : public async_result_state_t<T>
                 _failure = std::current_exception ();
             }
             if (!_detached) {
-                slot = _continuation;
+                slot = std::move (_continuation);
                 scheduler = std::move (_scheduler);
             }
             _terminal.store (true, std::memory_order_release);
@@ -161,7 +185,10 @@ class async_operation_state_t final : public async_result_state_t<T>
     mutable std::mutex _mutex;
     std::optional<T> _value;
     std::exception_ptr _failure;
+    std::weak_ptr<void> _lifetime;
+    async_resume_slot_t _inline_continuation;
     std::shared_ptr<async_resume_slot_t> _continuation;
+    std::weak_ptr<async_resume_slot_t> _continuation_weak;
     async_continuation_scheduler_t _scheduler;
     std::atomic<bool> _terminal{false};
     bool _consumed = false;
@@ -173,6 +200,11 @@ template <>
 class async_operation_state_t<void> final : public async_result_state_t<void>
 {
   public:
+    void bind_lifetime (const std::shared_ptr<void> &lifetime_) noexcept
+    {
+        _lifetime = lifetime_;
+    }
+
     bool ready () const noexcept override
     {
         return _terminal.load (std::memory_order_acquire);
@@ -187,7 +219,15 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
         if (_consumer_registered)
             throw std::logic_error ("async result already has a consumer");
         _consumer_registered = true;
-        _continuation = std::make_shared<async_resume_slot_t> (continuation_);
+        const std::shared_ptr<void> lifetime = _lifetime.lock ();
+        if (lifetime) {
+            _inline_continuation.bind (continuation_);
+            _continuation = std::shared_ptr<async_resume_slot_t> (
+              lifetime, &_inline_continuation);
+        } else {
+            _continuation = std::make_shared<async_resume_slot_t> (continuation_);
+        }
+        _continuation_weak = _continuation;
         _scheduler = std::move (scheduler_);
         return true;
     }
@@ -201,6 +241,7 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
         _consumed = true;
         const std::exception_ptr failure = _failure;
         _continuation.reset ();
+        _continuation_weak.reset ();
         if (failure)
             std::rethrow_exception (failure);
     }
@@ -210,6 +251,7 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
         std::lock_guard<std::mutex> lock (_mutex);
         _detached = true;
         _continuation.reset ();
+        _continuation_weak.reset ();
         _scheduler = {};
     }
 
@@ -219,8 +261,10 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
         {
             std::lock_guard<std::mutex> lock (_mutex);
             _detached = true;
-            slot = _continuation;
-            _continuation.reset ();
+            slot = std::move (_continuation);
+            if (!slot)
+                slot = _continuation_weak.lock ();
+            _continuation_weak.reset ();
             _scheduler = {};
         }
         if (slot)
@@ -244,7 +288,7 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
                 return false;
             _failure = std::move (failure_);
             if (!_detached) {
-                slot = _continuation;
+                slot = std::move (_continuation);
                 scheduler = std::move (_scheduler);
             }
             _terminal.store (true, std::memory_order_release);
@@ -255,7 +299,10 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
 
     mutable std::mutex _mutex;
     std::exception_ptr _failure;
+    std::weak_ptr<void> _lifetime;
+    async_resume_slot_t _inline_continuation;
     std::shared_ptr<async_resume_slot_t> _continuation;
+    std::weak_ptr<async_resume_slot_t> _continuation_weak;
     async_continuation_scheduler_t _scheduler;
     std::atomic<bool> _terminal{false};
     bool _consumed = false;

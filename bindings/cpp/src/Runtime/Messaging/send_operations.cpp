@@ -48,6 +48,7 @@ async_result_t<void> submit_send_awaitable (
     try {
         bundle = std::make_shared<send_completion_bundle_t> (
           std::move (state_));
+        bundle->result.bind_lifetime (bundle);
         entry = std::shared_ptr<detail::completion_entry_t> (
           bundle, &bundle->entry);
     }

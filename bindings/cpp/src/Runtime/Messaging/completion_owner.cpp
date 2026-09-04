@@ -434,11 +434,9 @@ bool completion_entry_t::capture (zlink_completion_t &completion_) noexcept
               static_cast<request_result_t> (completion_.request_result);
             failure = std::make_exception_ptr (request_error_t (result, request_errno (result)));
         } else {
-            parts.reserve (completion_.reply_part_count);
+            parts.resize (completion_.reply_part_count);
             for (size_t i = 0; i < completion_.reply_part_count; ++i) {
-                message_t part;
-                adopt_native_message (part, &completion_.reply_parts[i]);
-                parts.push_back (std::move (part));
+                adopt_native_message (parts[i], &completion_.reply_parts[i]);
             }
         }
     }
@@ -537,15 +535,28 @@ void completion_owner_t::register_entry (const std::shared_ptr<completion_entry_
     std::lock_guard<std::mutex> lock (_mutex);
     if (_shutdown)
         throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
-    const auto inserted = _entries.emplace (entry_.get (), entry_);
-    if (!inserted.second)
+    if (_inline_entry.get () == entry_.get ())
         throw submit_error_t (submit_result_t::invalid_state, EBUSY);
+    bool inline_inserted = false;
+    decltype (_entries)::iterator inserted = _entries.end ();
+    if (!_inline_entry) {
+        _inline_entry = entry_;
+        inline_inserted = true;
+    } else {
+        const auto result = _entries.emplace (entry_.get (), entry_);
+        if (!result.second)
+            throw submit_error_t (submit_result_t::invalid_state, EBUSY);
+        inserted = result.first;
+    }
     try {
         if (!_public_owner)
             start_runtime_owner_locked ();
     }
     catch (...) {
-        _entries.erase (inserted.first);
+        if (inline_inserted)
+            _inline_entry.reset ();
+        else
+            _entries.erase (inserted);
         throw;
     }
 }
@@ -561,9 +572,15 @@ void completion_owner_t::register_send_entry (
     std::unique_lock<std::mutex> lock (_mutex);
     if (_shutdown)
         throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
-    const auto inserted = _entries.emplace (entry_.get (), entry_);
-    if (!inserted.second)
+    if (_inline_entry.get () == entry_.get ())
         throw submit_error_t (submit_result_t::invalid_state, EBUSY);
+    if (!_inline_entry)
+        _inline_entry = entry_;
+    else {
+        const auto inserted = _entries.emplace (entry_.get (), entry_);
+        if (!inserted.second)
+            throw submit_error_t (submit_result_t::invalid_state, EBUSY);
+    }
     ++_send_entry_count;
 
     const auto early = _early_send_completions.find (entry_.get ());
@@ -588,15 +605,22 @@ void completion_owner_t::unregister_entry (completion_entry_t *entry_) noexcept
 {
     try {
         std::unique_lock<std::mutex> lock (_mutex);
-        const auto found = _entries.find (entry_);
-        if (found == _entries.end ())
-            return;
-        if (found->second->kind () == completion_entry_t::kind_t::send_retry
-            && _send_entry_count != 0)
-            --_send_entry_count;
-        _entries.erase (found);
+        if (_inline_entry.get () == entry_) {
+            if (_inline_entry->kind () == completion_entry_t::kind_t::send_retry
+                && _send_entry_count != 0)
+                --_send_entry_count;
+            _inline_entry.reset ();
+        } else {
+            const auto found = _entries.find (entry_);
+            if (found == _entries.end ())
+                return;
+            if (found->second->kind () == completion_entry_t::kind_t::send_retry
+                && _send_entry_count != 0)
+                --_send_entry_count;
+            _entries.erase (found);
+        }
         if (!_shutdown && !_public_owner && _send_entry_count == 0
-            && !_entries.empty ())
+            && (_inline_entry || !_entries.empty ()))
             start_runtime_owner_locked ();
     }
     catch (...) {
@@ -630,10 +654,14 @@ size_t completion_owner_t::drain (bool wait_for_publish_,
         bool retained_early_send = false;
         {
             std::lock_guard<std::mutex> lock (_mutex);
-            const auto found = _entries.find (completion.user_context);
-            if (found != _entries.end ())
-                entry = found->second;
-            else if (!_shutdown && completion.user_context
+            if (_inline_entry.get () == completion.user_context)
+                entry = _inline_entry;
+            else {
+                const auto found = _entries.find (completion.user_context);
+                if (found != _entries.end ())
+                    entry = found->second;
+            }
+            if (!entry && !_shutdown && completion.user_context
                      && completion.kind == ZLINK_COMPLETION_WRITABLE) {
                 // async SEND submits before taking the owner/map locks. If a
                 // concurrent public/runtime drain wins that short window,
@@ -766,7 +794,7 @@ void completion_owner_t::transfer_to_runtime (const void *poller_owner_) noexcep
         if (_public_owner != poller_owner_)
             return;
         _public_owner = nullptr;
-        if (!_entries.empty () && _send_entry_count == 0) {
+        if ((_inline_entry || !_entries.empty ()) && _send_entry_count == 0) {
             try {
                 start_runtime_owner_locked ();
             }
@@ -788,6 +816,7 @@ void completion_owner_t::shutdown (int terminal_errno_) noexcept
         return;
     _shutdown = true;
     stop_runtime_owner_locked (lock);
+    std::shared_ptr<completion_entry_t> inline_entry = std::move (_inline_entry);
     auto entries = std::move (_entries);
     _entries.clear ();
     for (auto &[key, completion] : _early_send_completions) {
@@ -797,6 +826,8 @@ void completion_owner_t::shutdown (int terminal_errno_) noexcept
     _early_send_completions.clear ();
     _send_entry_count = 0;
     lock.unlock ();
+    if (inline_entry)
+        inline_entry->terminate (terminal_errno_);
     for (auto &[key, entry] : entries) {
         (void) key;
         entry->terminate (terminal_errno_);

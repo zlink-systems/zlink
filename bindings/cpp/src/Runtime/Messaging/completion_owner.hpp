@@ -109,6 +109,9 @@ class completion_owner_t : public std::enable_shared_from_this<completion_owner_
     // nodes are recycled under _mutex, avoiding one allocator round trip for
     // every request while preserving each entry's unique lifetime.
     std::pmr::unsynchronized_pool_resource _entry_map_pool;
+    // The common one-outstanding-operation case stays out of the hash table.
+    // Additional concurrent operations retain the existing PMR-backed map.
+    std::shared_ptr<completion_entry_t> _inline_entry;
     std::pmr::unordered_map<void *, std::shared_ptr<completion_entry_t>> _entries;
     std::pmr::unordered_map<void *, zlink_completion_t> _early_send_completions;
     size_t _send_entry_count = 0;
