@@ -6,24 +6,32 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import systems.zlink.TestSupport;
 import systems.zlink.contracts.core.Context;
+import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.eventing.PollEvents;
 import systems.zlink.contracts.eventing.Poller;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.sockets.DealerSocket;
 import systems.zlink.contracts.sockets.PairSocket;
 import systems.zlink.contracts.sockets.RecvFlags;
+import systems.zlink.contracts.sockets.RouterSocket;
+import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.runtime.nativeapi.NativeErrno;
 
 class DontWaitBackpressureContractTest {
     private static final long HWM_BYTES = 512L;
@@ -165,7 +173,134 @@ class DontWaitBackpressureContractTest {
         }
     }
 
-    private static void configureSmallHwm(PairSocket socket) {
+    @Test
+    void routedWaitFailsAsNotFoundWhenItsExactRouteIsRemoved()
+        throws Exception {
+        TestSupport.assumeNative();
+
+        RoutingId dealerId = RoutingId.from("terminal-route");
+        try (Context context = Zlink.createContext()) {
+            context.options().autoHwmEnabled(false);
+            try (RouterSocket router = context.createRouterSocket();
+                 DealerSocket dealer = context.createDealerSocket()) {
+                configureSmallHwm(router);
+                configureSmallHwm(dealer);
+                String endpoint = TestSupport.inprocEndpoint(
+                    "dontwait-terminal-route");
+                dealer.setRoutingId(dealerId);
+                router.bind(endpoint);
+                dealer.connect(endpoint);
+
+                try (Message probe = Message.from("ready")) {
+                    dealer.send().message(probe).submit_sync();
+                }
+                try (Received received = new Received()) {
+                    assertTrue(router.recv(received, RecvFlags.NONE));
+                }
+
+                CompletableFuture<Void> waiting = fillUntilBackpressured(
+                    router, dealerId);
+                router.disconnectRid(dealerId);
+
+                ExecutionException terminal = assertThrows(
+                    ExecutionException.class, () -> waiting.get(
+                        TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS));
+                ZlinkSubmitException failure = (ZlinkSubmitException)
+                    terminal.getCause();
+                assertEquals(SubmitResult.NOT_FOUND, failure.getResult());
+                assertEquals(NativeErrno.ENOENT, failure.getNativeErrno());
+            }
+        }
+    }
+
+    @Test
+    void routedSendWithoutRouteFailsImmediatelyAndPreservesMessage() {
+        TestSupport.assumeNative();
+
+        try (Context context = Zlink.createContext();
+             RouterSocket router = context.createRouterSocket();
+             Message payload = Message.from("missing-route")) {
+            ZlinkSubmitException failure = assertThrows(
+                ZlinkSubmitException.class, () -> router
+                    .send(RoutingId.from("absent"))
+                    .message(payload)
+                    .submit());
+            assertEquals(SubmitResult.NOT_CONNECTED, failure.getResult());
+            assertEquals("missing-route", payload.toUtf8String());
+        }
+    }
+
+    @Test
+    void socketCloseTerminatesBackpressuredSendWithTypedFailure()
+        throws Exception {
+        TestSupport.assumeNative();
+
+        try (Context context = Zlink.createContext()) {
+            context.options().autoHwmEnabled(false);
+            try (PairSocket sender = context.createPairSocket();
+                 PairSocket receiver = context.createPairSocket()) {
+                configureSmallHwm(sender);
+                configureSmallHwm(receiver);
+                String endpoint = TestSupport.inprocEndpoint(
+                    "dontwait-close-waiter");
+                receiver.bind(endpoint);
+                sender.connect(endpoint);
+
+                try (Message probe = Message.from("ready")) {
+                    sender.send().message(probe).submit_sync();
+                }
+                try (Received received = new Received()) {
+                    assertTrue(receiver.recv(received, RecvFlags.NONE));
+                }
+
+                CompletableFuture<Void> waiting =
+                    fillUntilBackpressured(sender);
+                sender.close();
+
+                ExecutionException terminal = assertThrows(
+                    ExecutionException.class, () -> waiting.get(
+                        TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS));
+                ZlinkSubmitException failure = (ZlinkSubmitException)
+                    terminal.getCause();
+                assertEquals(SubmitResult.TERMINATED, failure.getResult());
+                assertEquals(NativeErrno.ESHUTDOWN,
+                    failure.getNativeErrno());
+            }
+        }
+    }
+
+    private static CompletableFuture<Void> fillUntilBackpressured(
+            PairSocket sender) {
+        for (int sequence = 0; sequence < MAX_FILL_RECORDS; sequence++) {
+            try (Message candidate = Message.from(payload(sequence))) {
+                CompletableFuture<Void> completion = sender.send()
+                    .message(candidate).submit().toCompletableFuture();
+                if (!completion.isDone()) {
+                    return completion;
+                }
+                completion.join();
+            }
+        }
+        throw new AssertionError("DONTWAIT fill did not reach HWM");
+    }
+
+    private static CompletableFuture<Void> fillUntilBackpressured(
+            RouterSocket sender, RoutingId target) {
+        for (int sequence = 0; sequence < MAX_FILL_RECORDS; sequence++) {
+            try (Message candidate = Message.from(payload(sequence))) {
+                CompletableFuture<Void> completion = sender.send(target)
+                    .message(candidate).submit().toCompletableFuture();
+                if (!completion.isDone()) {
+                    return completion;
+                }
+                completion.join();
+            }
+        }
+        throw new AssertionError("DONTWAIT fill did not reach HWM");
+    }
+
+    private static void configureSmallHwm(
+            systems.zlink.contracts.sockets.Socket socket) {
         socket.options().linger(Duration.ZERO);
         socket.options().sendHwm(HWM_BYTES);
         socket.options().recvHwm(HWM_BYTES);

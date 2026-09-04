@@ -32,6 +32,12 @@ public final class NativeSubmitErrors {
             || errno == NativeErrno.ECONNREFUSED_WIN;
     }
 
+    public static boolean isTerminated(int errno) {
+        return errno == NativeErrno.ECANCELED
+            || errno == NativeErrno.ESHUTDOWN
+            || errno == NativeErrno.ETERM;
+    }
+
     public static ZlinkSubmitException submitExceptionOrNull(int errno) {
         if (isBackpressured(errno)) {
             return new ZlinkSubmitException(SubmitResult.BACKPRESSURED, errno);
@@ -44,6 +50,9 @@ public final class NativeSubmitErrors {
         }
         if (isNotAdmitted(errno)) {
             return new ZlinkSubmitException(SubmitResult.NOT_ADMITTED, errno);
+        }
+        if (isTerminated(errno)) {
+            return new ZlinkSubmitException(SubmitResult.TERMINATED, errno);
         }
         return null;
     }

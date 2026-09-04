@@ -129,6 +129,8 @@ public abstract sealed class ZlinkException extends RuntimeException
                 SubmitResult.NOT_FOUND;
             case NativeErrorCodes.ECONNREFUSED, NativeErrorCodes.ECONNREFUSED_WIN ->
                 SubmitResult.NOT_ADMITTED;
+            case NativeErrorCodes.ECANCELED, NativeErrorCodes.ESHUTDOWN,
+                 NativeErrorCodes.ETERM -> SubmitResult.TERMINATED;
             case NativeErrorCodes.EINVAL -> SubmitResult.INVALID_ARGUMENT;
             case NativeErrorCodes.ENOTSUP -> SubmitResult.NOT_SUPPORTED;
             case NativeErrorCodes.ENOMEM -> SubmitResult.OUT_OF_MEMORY;

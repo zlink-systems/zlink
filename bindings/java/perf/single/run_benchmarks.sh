@@ -276,7 +276,7 @@ prune_reports() {
   fi
   find "${report_dir}" -maxdepth 1 -type f -name 'perf_*.txt' -printf '%f\n' \
     | sort \
-    | head -n "$((count - 100))" \
+    | sed -n "1,$((count - 100))p" \
     | while read -r old_file; do
         rm -f "${report_dir}/${old_file}"
       done
