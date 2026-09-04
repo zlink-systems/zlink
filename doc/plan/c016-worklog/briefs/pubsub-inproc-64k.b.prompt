@@ -1,0 +1,18 @@
+역할: zlink Core(/home/hep7hep7/project/zlink, branch main = 8d58b7f891, 여기서 직접 작업; 감독관이 커밋) 회귀 수정자(sol ultra, 시간 상한 1.5시간 — 상한 안에 근본 수정이 안 되면 실증 원인과 후보 수정을 요약에 적고 종료).
+
+증상(감독관 실증, 2회 재현, runs=3 median): single PUBSUB/inproc 65536B throughput candidate/baseline(core/v0.15.1) = 0.38~0.40 (118k → 45k msg/s). 64/256/1024B는 1.16~1.23으로 좋고 latency는 전 size 개선(0.5~0.96). 즉 64 KiB PUB→SUB inproc의 포화 throughput만 1/2.5로 떨어졌다.
+A/B 근거: 머지 직전 트리(perf/phase2-judge = origin/main 1ac16a22b2 + B의 커밋들)에서는 같은 cell이 1.20/1.20/1.13/1.20 PASS였다. 머지로 들어온 Core 변경은 origin/main 1ac16a22b2..504d39fc6e 의 core/src 커밋: `git log --oneline 1ac16a22b2..504d39fc6e -- core/src` (a339149dbb "commit peer-control frames to the physical-queue registry ledger", e3d5c5b79f "bind CONNECT_ROUTING_ID alias to its own connect's pipe" 등). 64 KiB 전용 증상이므로 byte 계정(HWM credit/registry ledger, Auto HWM budget)이나 큰 메시지 경로의 복사/분할이 유력하다. 먼저 두 커밋을 각각 되돌린 A/B(라이브러리만 빌드: `cmake --build core/build --target libzlink -j4`, 벤치는 .so 동적 로드)로 원인 커밋을 확정한다.
+
+재현(각 ~1분, 두 트리):
+  ulimit -v 16777216; export ZLINK_WORK=/home/hep7hep7/project/zlink-work
+  candidate: cd ~/project/zlink && bindings/c/perf/run_benchmarks.sh --pattern PUBSUB --transports inproc --msg-sizes 65536 --runs 3 --results-tag ps64 --results-dir $ZLINK_WORK/c016/light-results/ps64 2>&1 | grep -E '^RESULT.*throughput'
+  baseline:  cd ~/project/zlink-perf-core-0.15.1 && bindings/c/perf/run_benchmarks.sh --pattern PUBSUB --transports inproc --msg-sizes 65536 --runs 3 --results-tag ps64b --results-dir $ZLINK_WORK/c016/light-results/ps64 2>&1 | grep -E '^RESULT.*throughput'
+(baseline worktree는 읽기·실행만; 벤치 소스는 0.15.1 API용이라 복사 금지.)
+
+읽을 것: core/doc/spec/core/systems/10-hot-path.ko.md §3·§4, 06-auto-hwm.ko.md, 위 두 커밋의 diff와 메시지, doc/plan/c016-worklog/decisions.ko.md(D-060~D-075: A의 의도), 스펙 socket/03-pub 계약. 수정은 A의 의도(ledger 정확성·alias 바인딩)를 보존하면서 64 KiB 경로의 비용을 제거하는 근본 수정이어야 한다(동작·계약 변경 금지). 결정적 테스트가 가능한 원인이면 회귀 테스트 추가.
+
+Gate(전부 green, `ulimit -v 16777216`): `cmake --build core/build -j4`; 재현 candidate 3회 median이 baseline의 ≥0.95(가능하면 ≥1.0); `ctest --test-dir core/build -j2` 전체(139); `ctest -R hotpath_gate`(±5%); `ctest -L wake-invariant -j1`; raw mirror cmp 12; `git diff --check`.
+
+절대 규칙: doc/**·core/doc/** 수정 금지. framework/**·bindings/** 수정 금지(raw header mirror 동기화 예외). scripts/local-package/** 실행 금지. git commit/push/reset/checkout/stash 금지(A/B는 편집으로만, 반드시 원복). hotpath_reference.json 수정 금지. 공개 API·ABI·계약 변경 금지. 다른 perf 측정 없음.
+
+완료 시 /home/hep7hep7/project/zlink-work/c016/pubsub-inproc-64k-summary.md 에 A/B 표·원인·수정(파일별)·gate·재측정. 진행은 pubsub-inproc-64k-progress.md 에 단계마다 append.

@@ -127,3 +127,17 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 판정·발견은 `$ZLINK_WORK/c016/decisions.md`에 D-051부터 이어서 적고, 마지막 PR에 `doc/plan/c016-worklog/decisions.ko.md`로
   복사해 커밋한다. spec gap이 발견되면(특히 "completion poller owner의 blocking request" 계약) 감독관이 문안을 만들어
   사용자 승인 후 스펙에 반영한다.
+
+## 8. 실행 결과 (2026-09-04, 머신 B)
+
+- 작업 1(성능 판정): 원래 벤치의 결함 2건(REQREP latency를 포화 queue 깊이로 보고, latency 1µs 반올림)과 one-way ack 경계를
+  정정한 뒤 판정. 정정 벤치가 드러낸 회귀 3건을 수정: PAIR 경로 원인 5개(8b6c2aa906), ROUTER 첫 activation 유실(90b58fd213,
+  main의 phase-2 커밋에도 있던 결함), PUBSUB/inproc 64 KiB NODROP preflight(머신 A 커밋 이후). 30 cell 판정에서 throughput 집계
+  전부 PASS; 남은 미달은 p95/p99 tail 집계 1~9%(WSL2 drift)로 사용자 결정(D-B70)에 따라 release 판정에서 제외. 전체 70 cell
+  4-size sweep은 다음 release 전 재실행.
+- 작업 2(hotpath gate 도구): `core/tests/perf/hotpath_bench.cpp`·`hotpath_gate.py`·`hotpath_reference.json`, ctest `hotpath_gate`
+  (370717c0f0). 결정성 ±0.06%, 인위 회귀 3.8× FAIL.
+- 작업 3(posddd 리팩토링 + wake 테스트): api/socket(d80ba60c9b), runtime/sockets(23bb5a968f), runtime/core(341974c4d6) 순감
+  약 2,300줄, 공개 API/ABI 불변; `test_wake_invariants`(36d3174f63). 범위 밖 이동이 필요한 BLOCKERS는 각 rf 요약 참조.
+- 합류: 단일 PR #1 → main 8d58b7f891 (사용자 지시로 3-PR 대신 1-PR, 브랜치 추가 없이 `perf/phase2-judge`에서 수행).
+  판정 D-B54~B70은 `c016-worklog/decisions.ko.md`.

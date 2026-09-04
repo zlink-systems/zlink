@@ -718,3 +718,27 @@ completion polling(POLLCOMPLETION) 전용 규칙이지 일반 POLLIN 계약 아�
 (스펙 변경 아님, 구현을 스펙에 맞춤). (2) **소켓 사용 audit 기준**: perf(소켓별 최적 사용)와 대조하되, framework가 "특별 사용"을
 해야만 동작하는 지점은 그 소켓의 readiness/API 구현 결함으로 판정해 API 레이어(Core/binding)에서 고친다. perf의 drain 루프는
 API가 level-trigger면 최적화(선택)이지 필수 아님.
+
+## D-B68 (2026-09-04 08:30, 머신 B, 사용자 지시) main 머지 완료
+머지 트리 gate: ctest 139(contract_c_header_mirror 실패 → A의 0.16.0 범프가 바인딩 mirror common.h/zlink.h를 0.15.1로 남긴 것,
+mirror 동기화 29c247f75e), backpressure 10/10, single-lane ×2, diff-check, python 7/7, cpp(계약 테스트가 0.15.1 하드코딩 → 0.16.0
+8d58b7f891) PASS, hotpath_gate PASS(A의 Core 변경 후에도 ±5% 이내). gh pr merge가 "base modified"로 거부돼 로컬 ff 머지 후 push:
+main = 8d58b7f891. 남은 것: main 트리에서 10× REQREP 재현·1024B 비교(사후), 70 cell 전체 판정 계속. node 스크립트의 0.15.1 문자열은
+오류 메시지뿐(A 몫).
+
+## D-B69 (2026-09-04 08:55, 머신 B) main에서 PUBSUB/inproc 64 KiB throughput 회귀 발견 → 즉시 수정 job
+main(8d58b7f891) 전체 판정 11 cell 진행 중: PAIR 6(tcp·ipc p99 집계 1.008~1.009 tail, wss 확인 PASS), PUBSUB tcp/tls/ws/wss tail
+(p99 집계 1.06~1.09) 뒤 PUBSUB/inproc 65536B throughput 0.38/0.40(118k→45k msg/s, runs=3 ×2) — 64/256/1024B는 1.16~1.23.
+머지 직전 트리에서는 같은 cell 1.20 PASS → 머지로 들어온 A의 Core 커밋(a339149dbb ledger / e3d5c5b79f alias) 범위. 배치 중단
+(sweep2-results.run4-main-partial.md), job c016-pubsub-64k(sol ultra, 1.5h, 두 커밋 A/B로 원인 확정 후 근본 수정).
+
+## D-B70 (2026-09-04 10:00, 머신 B, 사용자 결정) release 판정 기준 확정 — 여기서 마무리
+사용자: "20시간 했고 정식 release 해야 한다" → 제안대로 진행 승인. (1) PUBSUB/inproc 64 KiB 회귀는 근본 수정
+(XPUB NODROP message preflight가 `_out_active=false`일 때 peer가 이미 게시한 credit을 재확인·소비; dist_t 소유 경로만, 일반
+check_hwm()은 passive 유지; 결정적 wake 테스트 + ledger 보존 테스트) 채택·main 커밋. job 재측정 1.056(raw 134/145/104k vs
+127/130/118k — 이 cell은 baseline 자체 run 편차가 ±15%). (2) 70 cell 전체 4-size 판정은 여기서 중단(30 cell 판정: throughput
+집계 전부 PASS; 미달은 p95/p99 tail 집계 1~9%와 DEALER_DEALER tcp/wss mean latency 집계 1.04~1.06 — WSL2 tail drift 범위,
+throughput 영향 없음). 사용자 결정으로 이 tail 편차를 0.16.0 release 판정에서 "알려진 편차"로 제외하고 태그를 진행한다
+(D-040 gate 자체는 유지; 다음 release 전 조용한 리눅스 머신에서 전체 sweep 재실행 권고). 결과 파일: sweep2-results.run3-
+partial-19cell-premerge.md(머지 전), sweep2-results.run4-main-partial.md(main, 11 cell). 인계(A): node 스크립트 0.15.1 문자열,
+posddd rf1~3 BLOCKERS(범위 밖 이동), 4-size 전체 sweep.
