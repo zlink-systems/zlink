@@ -39,7 +39,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
@@ -250,6 +252,23 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(1, TestSession.createdCount.get());
         assertEquals(List.of("good"), session.packetNames);
         assertEquals(0, stream.sessionClosingSends.get());
+    }
+
+    @Test
+    void heartbeatTransportFailureDoesNotStopLivenessChecks() throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.failHeartbeatPingSend = true;
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+
+        ZLinkStreamRuntime runtime = start(stream, 0);
+        runtimes.add(runtime);
+
+        awaitSession();
+        assertTrue(stream.heartbeatPingAttempted.await(5, TimeUnit.SECONDS));
+        stream.failHeartbeatPingSend = false;
+        expireSessionTimestamp(runtime, "lastHeartbeatPongNanos");
+
+        assertTrue(stream.sessionClosingSendsLatch.await(5, TimeUnit.SECONDS));
     }
 
     @Test
@@ -786,6 +805,17 @@ final class ZLinkStreamRuntimeIngressTest {
     private static void expireSessionForLiveness(
         ZLinkStreamRuntime runtime,
         String expiredTimestampField) throws Exception {
+        expireSessionTimestamp(runtime, expiredTimestampField);
+        Method checkSessionLiveness = ZLinkStreamRuntime.class
+            .getDeclaredMethod("checkSessionLiveness");
+        checkSessionLiveness.setAccessible(true);
+        checkSessionLiveness.invoke(runtime);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void expireSessionTimestamp(
+        ZLinkStreamRuntime runtime,
+        String expiredTimestampField) throws Exception {
         Field sessionsField = ZLinkStreamRuntime.class.getDeclaredField("sessions");
         sessionsField.setAccessible(true);
         Map<String, Object> sessions = (Map<String, Object>) sessionsField.get(runtime);
@@ -811,10 +841,6 @@ final class ZLinkStreamRuntimeIngressTest {
             state,
             expiredTimestampField,
             now - TimeUnit.SECONDS.toNanos(31));
-        Method checkSessionLiveness = ZLinkStreamRuntime.class
-            .getDeclaredMethod("checkSessionLiveness");
-        checkSessionLiveness.setAccessible(true);
-        checkSessionLiveness.invoke(runtime);
     }
 
     private static void setSessionTimestamp(Object state, String name, long value)
@@ -1054,6 +1080,8 @@ final class ZLinkStreamRuntimeIngressTest {
         private volatile boolean blockFirstReceive;
         private volatile boolean ignoreFirstReceiveInterrupt;
         private volatile boolean failHeartbeatPongSend;
+        private volatile boolean failHeartbeatPingSend;
+        private final CountDownLatch heartbeatPingAttempted = new CountDownLatch(1);
         private final AtomicInteger closeCalls = new AtomicInteger();
         private ZLinkBackendStreamErrorHandler errorHandler;
 
@@ -1188,6 +1216,12 @@ final class ZLinkStreamRuntimeIngressTest {
         @Override public boolean send(
             RoutingId routingId, ZLinkStreamHeader header,
             List<Message> parts, SendFlags flags) {
+            if ("$zlink.heartbeat.ping".equals(header.packetName())) {
+                heartbeatPingAttempted.countDown();
+                if (failHeartbeatPingSend) {
+                    throw new ZlinkSubmitException(SubmitResult.NOT_CONNECTED);
+                }
+            }
             if (failHeartbeatPongSend
                 && "$zlink.heartbeat.pong".equals(header.packetName())) {
                 return false;
