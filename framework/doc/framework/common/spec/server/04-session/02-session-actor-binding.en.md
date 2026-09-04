@@ -1,5 +1,5 @@
 ---
-title: "Session And Actor Binding"
+title: "Session and Actor Binding"
 ---
 
 # Session and Actor Binding
@@ -10,7 +10,7 @@ title: "Session And Actor Binding"
 > execution order connecting a STREAM session and the Actor runtime. It
 > describes the responsibility boundaries of the Application, Runtime, Actor
 > owner, and relocation runtime, and the normal flow and failure rules, as
-> the contract a caller depends on, and together carries the
+> the contract a caller depends on, and also includes the
 > execution-engine structure and swap order that satisfy that contract as
 > implementation rules every language runtime must follow.
 
@@ -53,7 +53,7 @@ The overall flow has the following five steps.
 | Question to check | Contract |
 |---|---|
 | How many Actors can one session bind | It can bind multiple Actors. |
-| How many sessions can one Actor bind at once | One. Once a new binding is confirmed, the previous binding is invalidated. |
+| How many sessions can one Actor be bound to at once | One. Once a new binding is confirmed, the previous binding is invalidated. |
 | How Actor location is found for each message | Uses the route confirmed at bind time. The Location Store isn't re-queried when relaying. |
 | Route and location after an Actor moves to another node | After a relocation commit, the framework updates the Actor route and bound-session current Actor location snapshot kept in the session to the target. `ActorId`/`ObjectGeneration` are kept. |
 | How an Actor can learn a connection dropped | The framework automatically notifies every Actor in the current binding snapshot. |
@@ -752,8 +752,7 @@ lane) is confirmed by static inspection.
 
 This lane policy operates on top of the separation of queue and execution
 gate, and the ready-set management, defined by
-[Handler Turn And Execution Gate](../01-execution/02-handler-turn-and-execution-gate.en.md)
-defines.
+[Handler Turn And Execution Gate](../01-execution/02-handler-turn-and-execution-gate.en.md).
 
 ## 12. Failure and Errors
 

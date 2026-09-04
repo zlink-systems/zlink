@@ -11,7 +11,7 @@ title: "Framework Messaging Glossary"
 [Spec documentation writing guide](../../../../../../../doc/principal/documentation/spec-writing-guide.ko.md) ·
 [Spot Messaging](../03-spot-actor/02-spot-messaging.en.md)
 
-## How To Read The Tables And .NET Code Examples
+## How to Read the Tables and .NET Code Examples
 
 For a term denoting a value or a record, a summary table like the one below comes first.
 
@@ -72,7 +72,7 @@ redefine the term for the whole spec
   in meaning with another term
   ([spec documentation writing guide](../../../../../../../doc/principal/documentation/spec-writing-guide.ko.md#34-새-제품-용어) §3.4).
 
-## 1. Spot And Location
+## 1. Spot and Location
 
 <a id="spot"></a>
 ### Spot
@@ -120,7 +120,7 @@ runtime resource. A regular Spot message takes only the Spot ID and re-resolves
 current authority.
 
 <a id="entry-user-instance-spot"></a>
-### Entry Spot, User Spot, And Instance Spot
+### Entry Spot, User Spot, and Instance Spot
 
 - Entry Spot has its Spot ID issued by the framework and is provided as a server
   entry point.
@@ -265,7 +265,7 @@ and the already-published payload, under a reference the framework issues.
 | Lifetime | Kept for the retention the framework specifies; extended with `Renew` or explicitly removed with `Delete`. |
 
 <a id="object-role"></a>
-### Object Client And Object Server Role
+### Object Client and Object Server Role
 
 - Object Client can request Spot creation, lookup, and messaging, but doesn't
   provide a Spot factory.
@@ -917,7 +917,7 @@ public sealed record ZLinkObjectReservation(
     ZLinkLocationOwnerToken TargetOwner);   // target host owner lease fence
 ```
 
-## 3. Message Calls And Async Execution
+## 3. Message Calls and Async Execution
 
 <a id="spot-direct"></a>
 ### Spot Direct
@@ -950,7 +950,7 @@ run concurrently.
 | Lifetime | Kept from the callback's start to its completion. In a `SpotWide` User Spot or Instance Spot, `Yield` can return the shared Spot turn first. |
 
 <a id="async-yield"></a>
-### Async And Yield
+### Async and Yield
 
 - `Async` holds the current Spot turn while waiting.
 - `Yield` returns the shared turn of a `SpotWide` User Spot or Instance Spot so the
@@ -1072,7 +1072,7 @@ A state where the runtime is proceeding with shutdown and can't accept new opera
 admission. A new one-way call completes with a `ShuttingDown` exception. The runtime
 termination reason and outcome are owned by a separate lifecycle result.
 
-## 4. Channel And Logical Multicast
+## 4. Channel and Logical Multicast
 
 <a id="channelname"></a>
 ### ChannelName
@@ -1184,7 +1184,7 @@ Multicast.
 | Public composition | Uses a fanout ChannelName, topic, and typed event; has no per-subscriber acknowledgement or replay state. |
 | Lifetime | Kept for the publisher/subscriber listener lifecycle and each publish admission. |
 
-## 5. Queue, Control, And Lifetime
+## 5. Queue, Control, and Lifetime
 
 ### Snapshot
 
@@ -1407,7 +1407,7 @@ If the value isn't set, this exclusion rule doesn't apply. The framework compare
 the configured string as a whole, case-sensitively.
 
 <a id="drain"></a>
-### Drain And Draining
+### Drain and Draining
 
 Drain is the process of closing admission for new application work in order to shut
 down a host, and cleaning up already-accepted work and infrastructure resources
@@ -1483,7 +1483,7 @@ public sealed class ZLinkMessageMetadata
 }
 ```
 
-## 6. RouteMesh And Channel Topology
+## 6. RouteMesh and Channel Topology
 
 <a id="membership"></a>
 ### Membership
@@ -1501,7 +1501,7 @@ and target selection.
 | Lifetime | Kept for the lifecycle of that MeshNode or ClientServer registration. Drain and weight changes only change selectability. |
 
 <a id="channel-client-server-role"></a>
-### Channel Client And Server Role
+### Channel Client and Server Role
 
 - Client role only registers the send path to start Channel calls.
 - Server role registers the send path plus remote target membership, and provides
@@ -1944,7 +1944,7 @@ same namespace.
 | Lifetime | Must stay stable for that message and handler registration. |
 
 <a id="liveness-beacon"></a>
-### Liveness And Liveness Beacon
+### Liveness and Liveness Beacon
 
 Liveness checking is the action of confirming whether signals from a connected peer
 keep arriving within a fixed time, to judge whether a connection can be kept in a
@@ -2226,7 +2226,7 @@ existing claim or retry the same operation with a new UUID.
 | Public composition | Describes that a global Spot ID claim conflicted. Doesn't include the conflicting owner token. |
 | Lifetime | Ends that startup or create operation with a terminal failure. |
 
-## 10. STREAM Session And Actor Binding
+## 10. STREAM Session and Actor Binding
 
 <a id="stream-session"></a>
 ### STREAM Session

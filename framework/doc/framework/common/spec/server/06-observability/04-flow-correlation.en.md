@@ -1,8 +1,8 @@
 ---
-title: "Request Correlation And Business Flow Identification"
+title: "Request Correlation and Business Flow Identification"
 ---
 
-# Request Correlation And Business Flow Identification
+# Request Correlation and Business Flow Identification
 
 [Observability topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 03. Message Flow Tracing](03-message-flow-tracing.en.md)
 
@@ -33,7 +33,7 @@ field in a trace and sampling are defined by
 [03. Message Flow Tracing](03-message-flow-tracing.en.md). The three
 fields are framework-managed context — not an application metadata key.
 
-## 2. The Role Of The Two Identifiers
+## 2. The Role of the Two Identifiers
 
 | Identifier | Scope it links | Who creates it | Valid period |
 |---|---|---|---|
@@ -63,7 +63,7 @@ request to a different target is called a
 kept if it continues from the same cause. A `correlation_id` isn't built
 for a one-way message with no reply.
 
-## 3. Format And Ownership
+## 3. Format and Ownership
 
 | Field | Format and value range |
 |---|---|
@@ -161,7 +161,7 @@ request. In this case the original `correlation_id` is kept. If tracing
 is on, `flow_id` and `flow_origin` are also kept. Once the target queue
 accepts the message, the framework doesn't automatically resend it.
 
-## 6. Async Work And Execution Context
+## 6. Async Work and Execution Context
 
 The framework preserves the current flow context in an async
 continuation it's waiting on. Context isn't implicitly delivered to a
@@ -175,7 +175,7 @@ public interface to explicitly capture context. The current flow isn't
 guessed from a process-global variable, thread ID, or a mutable
 connector field.
 
-## 7. Reply And Failure
+## 7. Reply and Failure
 
 A Response and error preserve the request's `correlation_id`. If
 tracing is on at the moment the reply is built and a request flow
@@ -206,7 +206,7 @@ Sharing the same `flow_id` doesn't authorize a retry. Whether to retry
 and whether to issue a new `correlation_id` follows that messaging
 surface's contract.
 
-## 8. Observability And Privacy
+## 8. Observability and Privacy
 
 Tracing records `correlation_id`, `flow_id`, and `flow_origin`. The
 precise inclusion condition and structured-log key are defined by
