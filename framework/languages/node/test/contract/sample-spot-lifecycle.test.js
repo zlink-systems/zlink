@@ -16,6 +16,10 @@ test('SupportChat closes a conversation Spot after the close grace deadline', as
         outputRoot,
         'Server/Support/Infrastructure/ZLink/Spots/ConversationSpot/conversation-spot.js'
       ));
+      const { SampleTimings } = require(path.join(
+        outputRoot,
+        'Server/Configuration/sample-names.js'
+      ));
       const spot = new ConversationSpot(
         { assignNextAgent: () => undefined },
         { get: () => undefined },
@@ -42,9 +46,11 @@ test('SupportChat closes a conversation Spot after the close grace deadline', as
         displayName: 'Agent'
       });
 
-      const idleAt = Date.now() + 3001;
+      const idleAt = Date.now() + SampleTimings.idleTimeout + 1;
       await spot.onTimer(idleAt);
-      const closedAgentActorId = await spot.onTimer(idleAt + 1001);
+      const closedAgentActorId = await spot.onTimer(
+        idleAt + SampleTimings.closeGraceTimeout + 1
+      );
 
       //  member Actor가 남아 있으면 public close는 false로 끝나므로 Spot은 논리적
       //  Closed 상태만 갖는다 — Spot 모델 §5 "Current Actor membership이 하나라도

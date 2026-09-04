@@ -52,6 +52,7 @@ async function main() {
     const redisEndpoint = await startRedis();
     const context = createContext(redisEndpoint);
     await runSample(context);
+    console.log(`PASS ${sampleName}`);
   } catch (error) {
     failed = true;
     printLogs();
