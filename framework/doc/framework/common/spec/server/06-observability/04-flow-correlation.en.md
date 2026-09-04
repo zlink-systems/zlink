@@ -27,9 +27,9 @@ hops and fan-out branches started from the same cause is `flow_id`.
 
 This document only defines the creation, format, propagation, ownership,
 and lifetime of these three fields. The ownership and size of metadata
-the application sends with a message is defined by
+the application sends with a message are defined by
 [Message Model](../00-foundation/05-message-model.en.md). The condition for including a
-field in trace and sampling are defined by
+field in a trace and sampling are defined by
 [03. Message Flow Tracing](03-message-flow-tracing.en.md). The three
 fields are framework-managed context — not an application metadata key.
 
@@ -67,7 +67,7 @@ for a one-way message with no reply.
 
 | Field | Format and value range |
 |---|---|
-| `correlation_id` | A framework-built opaque ASCII value, `1..64 bytes`. Can't be duplicated among requests concurrently pending within the same lifecycle of the runtime that built the value. |
+| `correlation_id` | A framework-built opaque ASCII value, `1..64 bytes`. It can't be duplicated among requests concurrently pending within the same lifecycle of the runtime that built the value. |
 | `flow_id` | A UUIDv7 written in lowercase with hyphens, exactly `36 ASCII bytes`. |
 | `flow_origin` | One of `inbound`, `timer`, `application`, `lifecycle`. The value fixed when the flow was first built is kept across subsequent hops. |
 
@@ -75,7 +75,7 @@ The application doesn't interpret or assemble these three values.
 `flow_id` and `flow_origin` must exist together or be absent together.
 
 A malformed `flow_id`, a zero-byte-length `correlation_id`, or flow
-information with only one of the two fields present, is a protocol
+information with only one of the two fields present is a protocol
 error.
 
 | Where the invalid value arrives | How the framework completes it |
@@ -221,9 +221,9 @@ doesn't change the format and ownership the framework set.
 
 ## 9. Verification Requirements
 
-The following is confirmed using only the public surface — the
-request/reply exchanging `correlation_id`/`flow_id`/`flow_origin`, and
-the public interface capturing execution context. Each item leads to
+The following is confirmed using only the public surface: the
+request/reply exchange of `correlation_id`/`flow_id`/`flow_origin` and
+the public interface for capturing execution context. Each item leads to
 one contract test.
 
 **Correlation and reply**

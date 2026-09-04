@@ -1,8 +1,8 @@
 ---
-title: "Runtime Status Query And Operational Diagnostics"
+title: "Runtime Status Query and Operational Diagnostics"
 ---
 
-# Runtime Status Query And Operational Diagnostics
+# Runtime Status Query and Operational Diagnostics
 
 [Observability topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Next: 02. Runtime Metrics](02-runtime-metrics.en.md)
 
@@ -14,8 +14,9 @@ title: "Runtime Status Query And Operational Diagnostics"
 ## 1. Runtime Status Query Overview
 
 An application operator queries the framework runtime's current status
-once, observes subsequent changes, and finds why a status changed in logs.
-The application uses this information to judge whether it can accept new
+once, observes subsequent changes, and uses logs to determine why a status
+changed.
+The application uses this information to judge whether the runtime can accept new
 work, the scope of a failure, and relocation/shutdown results.
 
 This document owns the complete status at a specific point in time, the
@@ -28,30 +29,30 @@ transitions of relocation and shutdown are owned by
 [Host Relocation And Shutdown](../05-location-relocation/05-host-relocation-flow.en.md). See the
 [topic README](README.en.md) for the complete ownership map.
 
-## 2. Roles And Responsibilities · Values Not Exposed Publicly
+## 2. Roles and Responsibilities · Values Not Exposed Publicly
 
 | Party | Responsibility |
 |---|---|
-| Application | Queries/observes status by registered name, and configures the logger provider and backend. |
+| Application | Queries and observes status by registered name, and configures the logger provider and backend. |
 | Framework | Combines internal service values into a complete status and records standard identifiers for state changes. |
 | Provider | Delivers logs to the logger backend the application chose. Ensures a provider failure doesn't change the runtime result. |
 | Remote runtime | Publishes its own service availability and operational state. The current runtime reflects this in topology status. |
 
 The [descriptor revision](../00-foundation/02-glossary.en.md#descriptor-revision),
-indicating the order in which remote registration information changed, and
+indicating the order of changes to remote registration information, and
 the [owner lease](../00-foundation/02-glossary.en.md#owner-lease), indicating whether a
 host can keep using its current lifecycle's ownership, are used only for
 internal judgment. The public interface doesn't expose these two values,
 the internal state of work acceptance, claims, capacity reservation, socket
 state, exporters, storage, raw event DTOs, or native handles.
 
-## 3. Host State — Values Read At Once
+## 3. Host State — Values Read at Once
 
 The application reads per-feature status by the name it registered at
 startup. It doesn't directly combine values from several internal
 services.
 
-The registration names appearing for the first time are as follows.
+The registration names introduced here are as follows.
 
 - The runtime unit that provides RouteMesh peer connections and Channel
   messaging within one process is called a
@@ -67,8 +68,8 @@ The registration names appearing for the first time are as follows.
   [ClientServer Channel](../00-foundation/02-glossary.en.md#clientserver-channel).
 - The logical execution unit with an address and state that receives
   messages is called a [Spot](../00-foundation/02-glossary.en.md#spot).
-- The state where every per-feature serving condition is met, so it can
-  receive application messages, is called
+- The state in which every per-feature serving condition is met, allowing
+  application messages to be received, is called
   [Ready](../00-foundation/02-glossary.en.md#ready).
 
 | State scope | Values checked in one status |
@@ -80,7 +81,7 @@ The registration names appearing for the first time are as follows.
 
 **Status is an immutable value that can be kept after the call ends.** It
 doesn't reference a native handle, caller buffer, payload, or application
-metadata, so the caller holding onto status doesn't pin runtime-internal
+metadata, so the caller holding onto the status doesn't pin runtime-internal
 resources.
 
 The following C# is a non-normative excerpt showing the common behavior. It
@@ -99,8 +100,8 @@ public interface IZLinkRouteMeshRuntime
 }
 ```
 
-Host state doesn't belong to a specific `MeshName`. Relocation's and
-shutdown's final results are also provided just once, in host status.
+Host state doesn't belong to a specific `MeshName`. The final results of
+relocation and shutdown are also provided just once, in host status.
 
 Host runtime state is closed to the following values. A value not in this
 table must not be added. The procedure of blocking new work and cleaning
@@ -150,13 +151,13 @@ relocation.
   request from a sender still caching the previous route can end with
   `Unavailable`.
 
-The definition of Message Follow and the cutover retransmission window is
+The definitions of Message Follow and the cutover retransmission window are
 owned by
 [Complete Actor And Spot Relocation Flow](../05-location-relocation/04-relocation-flow.en.md).
 
-## 4. The Capacity Fields Of Host Status
+## 4. The Capacity Fields of Host Status
 
-Host status's capacity fields coherently read the Core HWM snapshot and the
+The capacity fields in host status coherently read the Core HWM snapshot and the
 [Application job queue](../00-foundation/02-glossary.en.md#application-job-queue)
 snapshot — the shared supply-permit queue a host holds before an
 application callback starts — from one measurement epoch. It doesn't walk
@@ -170,9 +171,10 @@ applied/accounted, and total-instance applied/accounted bytes; blocked
 ratio; and active ordinary/completion/send/receive queue counts. The four
 fields `application accounted bytes`, `outstanding application lease`,
 `retired queue`, and `deferred origin credit` are reserved fields kept for
-ABI compatibility and are always `0` since 0.13.1. This doesn't mean an
+ABI compatibility and have always been `0` since version 0.13.1. This
+doesn't mean an
 application byte HWM or lease exists. The framework projects the Core
-runtime snapshot unchanged and neither recomputes it nor uses it for a
+runtime snapshot unchanged and neither recomputes it nor assigns it a
 different meaning.
 
 Under this Core meaning, DEALER-ROUTER reply bytes are included in
@@ -190,8 +192,8 @@ pressure state; current pause duration; and capacity waiter/wait
 count/duration. Reset keeps configuration, the pressure state, and current
 pause duration, and advances the measurement epoch, while pressure
 transition count, cumulative pause duration, and flow-state config failure
-count are set to `0`. A concurrent event is included in exactly one of the
-previous or new epoch, and peak can't be smaller than current. The
+count are set to `0`. A concurrent event is included in exactly one epoch —
+the previous or the new epoch — and peak can't be smaller than current. The
 ownership of the measurement epoch and the instrument that continuously
 tracks this snapshot's values is defined by
 [Runtime Metrics §3](02-runtime-metrics.en.md#3-host-core-hwm-and-application-job-queue);
@@ -204,7 +206,7 @@ list. A per-owner top-N isn't part of the public contract.
 
 ## 5. Topology State — RouteMesh, ClientServer, Automatic Fanout
 
-Topology state represents a different scope from host state. Host state is
+Topology state has a different scope from host state. Host state is
 the process-wide startup, relocation, and shutdown progress. Topology
 state indicates whether one RouteMesh/ClientServer/automatic fanout
 registered under a `MeshName` or `ChannelName` can currently process
@@ -214,8 +216,8 @@ So even if the host is `serving`, if a specific ClientServer Channel has no
 ready target, only that topology can be `degraded`. Conversely, if the
 host is `relocating`, `relocated`, or `draining`, every topology's
 `IsReady` is `false` even if connections remain. At this point, the
-connected peer/target count still provides the actual current connection
-state — the count isn't changed to `0` just because the host isn't
+connected peer/target counts still reflect the actual current connection
+state — the counts aren't changed to `0` just because the host isn't
 accepting application traffic.
 
 | State kind | Allowed values |
@@ -247,7 +249,7 @@ Peer state distinguishes two cases where there's no connection.
 
 A `not_required` peer is still left in the status's peer list. This lets an
 operator distinguish a normal connection omission from a connection
-failure. This state alone doesn't turn a RouteMesh `degraded`.
+failure. This state alone doesn't cause a RouteMesh to become `degraded`.
 
 RouteMesh placement state provides whether new objects are accepted and
 the current active Actor/Spot count. Status separately provides the count
@@ -257,7 +259,7 @@ per-type capacity reservation registered at startup, the
 first-message delivery before Spot initialization finishes, and internal
 capacity counters, aren't provided.
 
-**Placement's `IsAvailable` is `true` only when the host is `serving`, it's
+**Placement's `IsAvailable` is `true` only when the host is `serving` and is
 an Object Server, placement weight is positive, and there's headroom in
 both Actor/Spot capacity and activation concurrency.** Activation
 concurrency's current value and limit aren't exposed as a separate field
@@ -272,15 +274,15 @@ footing with a remote Server. Status provides target count and each
 target's state/weight. `client_and_server` means both roles are registered
 under the same `ChannelName` — it isn't a separate registration role.
 
-**An automatic fanout publisher becomes ready once it connects the socket
-and receives an application record, or the
+**An automatic fanout publisher becomes ready after establishing a socket
+connection and receiving either an application record or the
 [liveness beacon](../00-foundation/02-glossary.en.md#liveness-beacon) the
 framework exchanges to check connection status.** If a disconnect is
 confirmed, or there's no record for 15 seconds, only that publisher is
 excluded from candidates. A connection plan or `connect` acceptance alone
 doesn't make it ready.
 
-## 6. Observing State Changes — Sequence And The Complete Status
+## 6. Observing State Changes — Sequence and the Complete Status
 
 Each language provides a current-status query and an async change
 observation. Names and types are set by each language's interface.
@@ -307,9 +309,9 @@ carrying only some fields.** A general-purpose event DTO combining
 nullable fields isn't provided. If an observer notices a `Sequence` gap, it
 re-queries the current status to restore every field.
 
-## 7. When The Observer Is Slow — Source, Coalescing, And The Lost-Update Count
+## 7. When the Observer Is Slow — Source, Coalescing, and the Lost-Update Count
 
-### 7.1 Definition Of A Source
+### 7.1 Definition of a Source
 
 The unit of coalescing, a **source**, equals **the thing that owns a
 `Sequence`**. Since each status item carries one `Sequence`, the entity
@@ -320,7 +322,7 @@ issuing that `Sequence` is the source.
 | Host status | This one runtime instance | The runtime instance ID. One for the process's lifetime |
 | Topology status | One topology runtime | RouteMesh uses `MeshName`; ClientServer/fanout use `ChannelName` |
 
-**A peer and an object move aren't separate sources.** They're carried as a
+**Peers and object moves aren't separate sources.** They're carried as a
 list inside topology status and don't have their own `Sequence`. If one
 peer changes, that topology's whole status is published with a new
 `Sequence`. To have a separate slot per peer or per move, **a separate
@@ -340,16 +342,16 @@ intermediate status of the same source is replaced by the latest status.
 Even so, the following results are guaranteed.
 
 - Delivers the most recent status's `Sequence` for **kept sources**.
-- Relocation's and shutdown's terminal status isn't overwritten by an
+- Terminal statuses for relocation and shutdown aren't overwritten by an
   intermediate status.
-- One observer's delay, cancellation, or failure doesn't change another
-  observer or the runtime result.
-- A cumulative field reflects the latest value even after coalescing. An
-  increment of backpressure and drop counters isn't lost to coalescing.
+- One observer's delay, cancellation, or failure doesn't affect other
+  observers or the runtime result.
+- A cumulative field reflects the latest value even after coalescing.
+  Increments to backpressure and drop counters aren't lost to coalescing.
 
-Even with the one-slot-per-source structure, if an observer keeps not
-reading, terminated sources' terminal status accumulates. There's a cap on
-this retained amount, and once exceeded, the framework **discards the
+Even with the one-slot-per-source structure, if an observer continues
+without reading, terminated sources' terminal statuses accumulate. The
+retained amount is capped, and once the cap is exceeded, the framework **discards the
 oldest terminal status first.** A structure that retains terminal status
 indefinitely isn't allowed, since one slow observer would exhaust runtime
 memory.
@@ -383,12 +385,13 @@ its terminal status is delivered or discarded. A removed source drops out
 of the "kept sources" above.
 
 **The framework doesn't end a stream just because an observer's queue is
-full.** It only catches up via the coalescing and retention cap above —
+full.** It relies only on the coalescing and retention cap above to let the
+observer catch up —
 the stream stays open even if an observer stays slow. Canceling
 observation only ends that stream. It doesn't cancel already-accepted
 runtime work or other observers.
 
-## 8. Querying An Object's Current Location
+## 8. Querying an Object's Current Location
 
 An operational tool can precisely query the current location by Actor ID or
 Spot ID, or enumerate the management scope of stored location information
@@ -401,8 +404,8 @@ storage for location information, are set by
 [Location Runtime's Operational Query](../05-location-relocation/01-location-runtime.en.md#74-querying-the-current-location-from-operational-tools).
 
 Per-ID lookup and paging return `Creating`, `Ready`, and `Unavailable`
-entries with the same meaning. A missing record is empty in per-ID lookup
-and absent from a page. A Store query failure is an `Unavailable`
+entries with the same meaning. A missing record produces an empty per-ID
+result and is absent from a page. A Store query failure is an `Unavailable`
 framework error and never returns part of a page as a successful result.
 
 ## 9. Structured Log
@@ -433,9 +436,9 @@ objects move to.
 | `zlink.runtime.fanout.publisher_changed` | An automatic publisher's connection target or ready state changed. |
 | `zlink.runtime.location.store_changed` | The Location Store changed between ready and degraded. |
 
-A log records timestamp, source kind, and registration name. Needed
-changes add Node RID, weight, reason, and state. Payload, metadata, Actor
-ID, Spot ID, owner token, generation, raw frame, and native handle aren't
+A log records timestamp, source kind, and registration name. For relevant
+changes, it also records Node RID, weight, reason, and state. Payload,
+metadata, Actor ID, Spot ID, owner token, generation, raw frame, and native handle aren't
 recorded.
 
 A structured log or dedicated metric isn't recorded when work enters or
@@ -445,23 +448,23 @@ aggregated into drop/timeout/backpressure metrics, and individual message
 delay is investigated via
 [Message Flow Tracing](03-message-flow-tracing.en.md).
 
-Publisher state is recorded as `excluded_draining`, `excluded_stale`,
-`reconnecting`, `disconnected`. A log is a judgment at the time it was
+Publisher state is recorded as one of `excluded_draining`, `excluded_stale`,
+`reconnecting`, or `disconnected`. A log is a judgment at the time it was
 recorded and isn't the basis for current location or state. Current state
 is read from fanout status.
 
-If a relocation unit's time from source admission seal to the one-way
-cutover submit's success or failure terminal exceeds 1 second,
-`zlink.runtime.relocation.changed` records `unit_kind`, and where needed,
-`execution_mode`, `interruption_target_exceeded=true`, and the actual
+If a relocation unit's time from source admission seal to the terminal
+success or failure of the one-way cutover submit exceeds 1 second,
+`zlink.runtime.relocation.changed` records `unit_kind` and, where needed,
+`execution_mode`, as well as `interruption_target_exceeded=true` and the actual
 duration. `unit_kind` is one of `actor`, `instance_spot`, `user_spot`.
 This is an operational warning and doesn't change the relocation outcome
 or recovery judgment. Actor ID and Spot ID aren't put in structured logs
-and are only checked via limited-scope trace. Target admission opening
+and are only checked via limited-scope trace. The opening of target admission
 isn't acknowledged to the source and is observed through target-local
 status and tracing.
 
-## 10. Startup And Failure
+## 10. Startup and Failure
 
 - Requesting status for an unregistered `MeshName` or `ChannelName` is a
   configuration error.
@@ -476,7 +479,7 @@ status and tracing.
 
 ## 11. Verification Requirements
 
-The following is confirmed using only the public surface — the
+The following is verified using only the public surface — the
 host/topology status query API, the status-change observation API, the
 `SafeToShutdown` observation value, the operational tool's location query
 API, and structured-log identifiers. Each item leads to one implementation
