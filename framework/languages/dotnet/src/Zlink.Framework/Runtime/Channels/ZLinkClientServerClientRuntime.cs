@@ -631,12 +631,13 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private Task? _admissionTask;
         private readonly List<Task> _admissionTasks = [];
         private readonly List<Task> _retryTasks = [];
-        private bool _retryScheduled;
+        private ulong? _retryScheduledGeneration;
         private Task? _controlTask;
         private Task? _livenessTask;
         private Task? _monitorTask;
         private Task? _reconnectTask;
         private bool _reconnectInProgress;
+        private TaskCompletionSource? _reconnectDisconnectObserved;
         private readonly Action<Connection, string> _onAdmitted;
         private readonly Action _onSelectionChanged;
         private ulong _nextProbeId = 1;
@@ -1019,11 +1020,16 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 case ZLinkSocketNativeEventType.HandshakeFailedNoDetail:
                 case ZLinkSocketNativeEventType.HandshakeFailedProtocol:
                 case ZLinkSocketNativeEventType.HandshakeFailedAuth:
+                    var physicalCloseObserved = value.NativeEvent is
+                        ZLinkSocketNativeEventType.Disconnected
+                        or ZLinkSocketNativeEventType.Closed;
                     RunState(() =>
                     {
                         if (_reconnectInProgress)
                         {
                             _ready = false;
+                            if (physicalCloseObserved)
+                                _reconnectDisconnectObserved?.TrySetResult();
                             _onSelectionChanged();
                         }
                         else
@@ -1058,7 +1064,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
         }
 
-        private void TryStartAdmission()
+        private void TryStartAdmission(
+            ulong? expectedPhysicalGeneration = null)
         {
             ulong physicalGeneration;
             ulong attempt;
@@ -1080,6 +1087,14 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 // guard, which fires without ever attempting a Hello and must
                 // not block the still-pending real admission attempt.
                 if (_disposed
+                    || expectedPhysicalGeneration is { } expected
+                    && _physicalGeneration != expected
+                    // A fallback from the retiring generation, or the
+                    // edge-less ready-count snapshot paired with its
+                    // DISCONNECTED event, can arrive before Connect runs.
+                    // Reconnect schedules the fresh generation's fallback
+                    // only after Connect returns.
+                    || _reconnectInProgress
                     || _admissionStarted
                     || _currentAdmission is not null)
                     return;
@@ -1177,19 +1192,21 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             RunState(() =>
             {
-                if (_disposed || _retryScheduled)
+                var physicalGeneration = _physicalGeneration;
+                if (_disposed
+                    || _retryScheduledGeneration == physicalGeneration)
                     return;
-                _retryScheduled = true;
+                _retryScheduledGeneration = physicalGeneration;
                 Task retryTask;
                 using (ExecutionContext.SuppressFlow())
-                    retryTask = RetryAdmissionAsync();
+                    retryTask = RetryAdmissionAsync(physicalGeneration);
                 _retryTasks.RemoveAll(
                     static candidate => candidate.IsCompleted);
                 _retryTasks.Add(retryTask);
             });
         }
 
-        private async Task RetryAdmissionAsync()
+        private async Task RetryAdmissionAsync(ulong physicalGeneration)
         {
             try
             {
@@ -1197,14 +1214,18 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         TimeSpan.FromMilliseconds(100),
                         _admissionStop.Token)
                     .ConfigureAwait(false);
-                TryStartAdmission();
+                TryStartAdmission(physicalGeneration);
             }
             catch (OperationCanceledException)
             {
             }
             finally
             {
-                RunState(() => _retryScheduled = false);
+                RunState(() =>
+                {
+                    if (_retryScheduledGeneration == physicalGeneration)
+                        _retryScheduledGeneration = null;
+                });
             }
         }
 
@@ -1553,11 +1574,15 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             {
                 if (_disposed || _reconnectInProgress)
                     return (Started: false, PhysicalGeneration: 0UL,
-                        AdmissionAttempt: 0UL);
+                        AdmissionAttempt: 0UL,
+                        DisconnectObserved: (TaskCompletionSource?)null);
                 _reconnectInProgress = true;
+                _reconnectDisconnectObserved = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
                 FencePhysicalConnection(diagnostics);
                 return (Started: true, PhysicalGeneration: _physicalGeneration,
-                    AdmissionAttempt: _admissionAttempt);
+                    AdmissionAttempt: _admissionAttempt,
+                    DisconnectObserved: _reconnectDisconnectObserved);
             });
             if (!reconnectState.Started)
                 return false;
@@ -1567,7 +1592,11 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 {
                     if (RunState(() => _disposed))
                     {
-                        RunState(() => _reconnectInProgress = false);
+                        RunState(() =>
+                        {
+                            _reconnectInProgress = false;
+                            _reconnectDisconnectObserved = null;
+                        });
                         return false;
                     }
                     Socket.Disconnect(_endpoint);
@@ -1575,18 +1604,23 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             }
             catch
             {
+                // A rejected Disconnect does not guarantee a later terminal
+                // monitor edge, so keep the prior reconnect fallback.
+                reconnectState.DisconnectObserved!.TrySetResult();
             }
             var scheduled = RunState(() =>
             {
                 if (_disposed)
                 {
                     _reconnectInProgress = false;
+                    _reconnectDisconnectObserved = null;
                     return false;
                 }
                 using (ExecutionContext.SuppressFlow())
                     _reconnectTask = ReconnectAsync(
                         reconnectState.PhysicalGeneration,
-                        reconnectState.AdmissionAttempt);
+                        reconnectState.AdmissionAttempt,
+                        reconnectState.DisconnectObserved!.Task);
                 return true;
             });
             return scheduled;
@@ -1594,22 +1628,37 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
 
         private async Task ReconnectAsync(
             ulong physicalGeneration,
-            ulong admissionAttempt)
+            ulong admissionAttempt,
+            Task disconnectObserved)
         {
+            // RestartPhysicalConnection creates this task on the state lane.
+            // Always leave that lane before an already-observed disconnect can
+            // make the first await complete synchronously.
+            await Task.Yield();
             try
             {
+                // Re-registering the same endpoint before Core reports the
+                // prior pipe's terminal edge can leave the new admission
+                // request queued on the retiring pipe. The monitor edge is the
+                // physical close fence; an elapsed delay is not one. Keep
+                // polling the socket while waiting because the Disconnect
+                // command reaches its terminal edge through socket command
+                // progress. The control receive loop deliberately stops
+                // polling while admission is fenced.
+                using var reconnectPoller =
+                    ZLinkBackendSocketPoller.Create(Socket);
+                while (!disconnectObserved.IsCompleted
+                       && !_admissionStop.IsCancellationRequested)
+                {
+                    reconnectPoller.Wait(ControlReceivePollInterval);
+                    await Task.Yield();
+                }
+                await disconnectObserved.WaitAsync(_admissionStop.Token)
+                    .ConfigureAwait(false);
                 while (!_admissionStop.IsCancellationRequested)
                 {
                     try
                     {
-                        // Disconnect completion is asynchronous at the
-                        // transport layer. Give its monitor event a chance
-                        // to retire the old pipe before registering the same
-                        // endpoint again.
-                        await Task.Delay(
-                                TimeSpan.FromMilliseconds(100),
-                                _admissionStop.Token)
-                            .ConfigureAwait(false);
                         lock (_socketLifecycleGate)
                         {
                             if (RunState(() => _disposed
@@ -1644,12 +1693,20 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             return true;
                         }))
                             return;
+                        await Task.Delay(
+                                TimeSpan.FromMilliseconds(100),
+                                _admissionStop.Token)
+                            .ConfigureAwait(false);
                     }
                 }
             }
             finally
             {
-                RunState(() => _reconnectInProgress = false);
+                RunState(() =>
+                {
+                    _reconnectInProgress = false;
+                    _reconnectDisconnectObserved = null;
+                });
             }
             if (!_admissionStop.IsCancellationRequested)
                 ScheduleAdmissionRetry();

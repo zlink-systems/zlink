@@ -35,6 +35,10 @@ internal sealed class ZLinkMeshPeer(
     internal ZLinkNativeReplyPeerEpoch NativeReplyEpoch { get; set; } = new();
     internal MeshPeerState State { get; set; } = MeshPeerState.Configured;
     internal bool Admitted { get; set; }
+    internal bool ReciprocalHandoverPending { get; set; }
+    internal uint ReciprocalHandoverDisconnectMask { get; set; }
+    internal ZLinkServiceConnectionDirection ReciprocalRetiredDirection { get; set; }
+    internal string ReciprocalRetiredEndpoint { get; set; } = string.Empty;
     internal ZLinkServiceLiveness? Liveness { get; set; }
     internal long NextAdmissionTimestamp { get; set; }
     internal ulong LastChangedMs { get; set; } =

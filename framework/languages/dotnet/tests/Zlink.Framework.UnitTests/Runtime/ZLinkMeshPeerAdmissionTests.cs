@@ -25,7 +25,8 @@ public sealed class ZLinkMeshPeerAdmissionTests
             [endpointMatch, identityMatch],
             sourceRid,
             ServiceWireConstants.Command.Admit,
-            identityMatch.Endpoint);
+            identityMatch.Endpoint,
+            hasReadyInboundCandidate: false);
 
         Assert.Same(identityMatch, selected);
     }
@@ -42,7 +43,8 @@ public sealed class ZLinkMeshPeerAdmissionTests
             ],
             RoutingId.From("remote-node"),
             ServiceWireConstants.Command.Admit,
-            "tcp://unconfigured");
+            "tcp://unconfigured",
+            hasReadyInboundCandidate: false);
 
         Assert.Null(selected);
     }
@@ -87,10 +89,67 @@ public sealed class ZLinkMeshPeerAdmissionTests
             [admitted],
             sourceRid,
             ServiceWireConstants.Command.Hello,
-            admitted.Endpoint);
+            admitted.Endpoint,
+            hasReadyInboundCandidate: false);
 
         Assert.Same(admitted, selected);
         Assert.Equal(42UL, selected!.ConnectionGeneration);
+    }
+
+    [Fact]
+    public void Hello_on_unilateral_connection_reuses_configured_outbound_intent()
+    {
+        var sourceRid = RoutingId.From("remote-node");
+        var outbound = Peer(1, "tcp://remote", sourceRid);
+        var matcher = new ZLinkMeshPeerAdmission();
+
+        var selected = matcher.FindForAdmission(
+            new Dictionary<RoutingId, ZLinkMeshPeer>(),
+            [outbound],
+            sourceRid,
+            ServiceWireConstants.Command.Hello,
+            outbound.Endpoint,
+            hasReadyInboundCandidate: false);
+
+        Assert.Same(outbound, selected);
+    }
+
+    [Fact]
+    public void Hello_with_ready_inbound_candidate_does_not_reuse_outbound_intent()
+    {
+        var sourceRid = RoutingId.From("remote-node");
+        var outbound = Peer(1, "tcp://remote", sourceRid);
+        var matcher = new ZLinkMeshPeerAdmission();
+
+        var selected = matcher.FindForAdmission(
+            new Dictionary<RoutingId, ZLinkMeshPeer>(),
+            [outbound],
+            sourceRid,
+            ServiceWireConstants.Command.Hello,
+            outbound.Endpoint,
+            hasReadyInboundCandidate: true);
+
+        Assert.Null(selected);
+    }
+
+    [Fact]
+    public void Ready_candidate_requires_configured_rid_and_endpoint_for_outbound_direction()
+    {
+        var sourceRid = RoutingId.From("remote-node");
+        var outbound = Peer(1, "tcp://remote", sourceRid);
+
+        Assert.Same(outbound, ZLinkMeshPeerAdmission.FindReadyOutboundCandidate(
+            [outbound],
+            sourceRid,
+            outbound.Endpoint));
+        Assert.Null(ZLinkMeshPeerAdmission.FindReadyOutboundCandidate(
+            [outbound],
+            RoutingId.From("provisional-inbound"),
+            outbound.Endpoint));
+        Assert.Null(ZLinkMeshPeerAdmission.FindReadyOutboundCandidate(
+            [outbound],
+            sourceRid,
+            "tcp://different"));
     }
 
     private static ZLinkMeshPeer Peer(

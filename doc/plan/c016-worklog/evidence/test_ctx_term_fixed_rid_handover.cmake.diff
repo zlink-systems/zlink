@@ -1,0 +1,25 @@
+diff --git a/core/tests/CMakeLists.txt b/core/tests/CMakeLists.txt
+index bdcefff5aa..98ed350daa 100644
+--- a/core/tests/CMakeLists.txt
++++ b/core/tests/CMakeLists.txt
+@@ -85,6 +85,7 @@ set(tests
+   ${INTEGRATION_TEST_ROOT}/test_connect_resolve
+   ${INTEGRATION_TEST_ROOT}/test_capabilities
+   ${INTEGRATION_TEST_ROOT}/test_ctx_destroy
++  ${INTEGRATION_TEST_ROOT}/test_ctx_term_fixed_rid_handover
+   ${INTEGRATION_TEST_ROOT}/test_ctx_options
+   ${INTEGRATION_TEST_ROOT}/test_socket_null
+   ${INTEGRATION_TEST_ROOT}/test_multi_socket_contract_regressions
+@@ -357,6 +358,12 @@ foreach(test_source ${tests})
+         PROPERTIES
+           TIMEOUT 30)
+     endif()
++    if(${test} STREQUAL "test_ctx_term_fixed_rid_handover")
++      set_tests_properties(
++        ${test}
++        PROPERTIES
++          TIMEOUT 30)
++    endif()
+     if(${test} STREQUAL "test_helper_request_sequence_failure")
+       set_tests_properties(
+         ${test}

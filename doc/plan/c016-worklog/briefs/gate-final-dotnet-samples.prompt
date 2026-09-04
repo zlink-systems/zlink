@@ -1,0 +1,30 @@
+# Job: run the 7 common .NET samples (plan §D) on the committed main tree and classify every failure
+
+You are a codex sub-agent under a Claude supervisor. Execution/classification job (no source edits).
+Read `AGENTS.md` (root) §2/§4. Do not modify source, tests, or anything under `core/**`, `bindings/**`,
+any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`. Do not rebuild Core or local packages.
+
+## Environment (prepared)
+- Core `core/build-dev`, local packages under `.artifacts/wsl/` (0.17.0), Docker Desktop WSL
+  integration on (`redis:7.2-alpine`), redis-server on 127.0.0.1:6379, Playwright Chromium installed.
+- dotnet env block (never `--artifacts-path`, never `ulimit -v`):
+  `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}` and
+  `flock -w7200 /tmp/zlink-dotnet-gate.lock` around the runner. Read
+  `framework/languages/dotnet/samples/run_samples.sh` + `redis-common.sh` first (it accepts sample
+  names as args; SAMPLES=TicTacToe Bingo SupportChat ShoppingMall DeliveryDispatch GameQuest ZoneWorld).
+
+## What to run
+Run each of the 7 samples individually via `run_samples.sh <Sample>` (so one failure does not mask
+the others), record exit code, duration, final PASS/completed marker. If a sample fails, re-run it
+once to record determinism. Then run the aggregate `run_samples.sh` once.
+
+## Classify every failure
+(A) DONTWAIT/backpressure, (B) terminal/error classification, (C) known pre-existing (name the prior
+evidence `file:line` in `doc/plan/c016-worklog/*.md` — e.g. D-084 .NET Gateway state-lane finding in
+`decisions.ko.md`), (D) environment/runner, (E) binding-port dependency. Verify (C) by exact
+assertion, not counts. Capture the first failing assertion/log excerpt with `file:line`.
+
+## Deliverable
+`doc/plan/c016-worklog/gate-final-dotnet-samples-summary.md`: 7-row table (sample, result, exit,
+duration, marker), aggregate result, every failure bucketed, exact commands, logs under
+`zlink-work/c016/logs/gate-final-dotnet-<sample>.log`, BLOCKERS. Do not commit.

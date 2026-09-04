@@ -1,0 +1,41 @@
+# Job: dotnet — `CanonicalActorJoinIngressReplyTests` fixture leaks the replacement DEALER on a failed handover, so `Context.DisposeAsync` blocks in `zlink_ctx_term` (the 3–20 min teardown hangs)
+
+You are a codex sub-agent under a Claude supervisor. Test-fixture fix, 45 min cap. Read `AGENTS.md`
+(root) §2/§3/§4.1, `framework/languages/dotnet/AGENTS.md`, and
+`doc/plan/c016-worklog/core-ctx-term-teardown-hang-summary.md` (dump analysis: the only socket left
+in the native context at teardown is a DEALER with the fixed source RID whose managed handle has 0 GC
+roots — `zlink_close` was never called; Core conforms to
+`core/doc/spec/core/socket/README.ko.md:486`, sockets must be closed before the context terminates).
+Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`,
+non-test framework sources, other languages' trees; never lower an assertion or widen a timeout; do
+not commit. Another job edits `src/.../ZLinkClientServerClientRuntime.cs` concurrently — take
+`flock -w7200 /tmp/zlink-dotnet-gate.lock` around EVERY `dotnet build`/`dotnet test`.
+
+## Leak sites (`tests/Zlink.Framework.UnitTests/Runtime/CanonicalActorJoinIngressReplyTests.cs`)
+- `ReconnectAsync` (~`:1141-1147`): `replacement = Context.CreateDealerSocket()`; if `SendHelloAsync`
+  / `ReceiveAsync` throws after `Source = replacement`, the *prior* Source is dropped undisposed.
+- `HandoverAsync` (~`:1149-1170`): `replacement` created; on the non-quiesce path a throw in
+  `SendHelloAsync`/`ReceiveAsync` before `Source = replacement` leaks `replacement`; on the
+  quiesce/disconnect path `SendHelloUntilAdmittedAsync` threw
+  `TimeoutException("Route admission reply was not received.")` before `Source = replacement` (found
+  in the dump) → `replacement` leaked → `ConnectedRuntime.DisposeAsync` (`:1297-1303`) disposes
+  PriorSource/Source/Target then `Context.DisposeAsync()` blocks forever.
+
+## What to do
+1. Make the fixture exception-safe: every DEALER the `ConnectedRuntime` creates must be disposed
+   before `Context.DisposeAsync()` regardless of where a handover/reconnect throws. Prefer tracking
+   created sockets in the runtime (a list disposed in `DisposeAsync`) over per-site try/catch, so a
+   future helper cannot reintroduce the hole; keep the existing PriorSource/Source semantics.
+2. Add one regression: a fixture-level test (or an assertion inside an existing failing-handover
+   scenario) that a handover which fails admission still lets `ConnectedRuntime.DisposeAsync`
+   complete within a bounded time (e.g. `WaitAsync(TimeSpan.FromSeconds(10))`) — it must hang/fail
+   before the fix and pass after. Do not weaken the handover tests' own assertions.
+3. Verify with the dotnet env block (never `--artifacts-path`, never `ulimit -v`):
+   `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; cd framework/languages/dotnet; flock -w7200 /tmp/zlink-dotnet-gate.lock dotnet test tests/Zlink.Framework.UnitTests --filter 'FullyQualifiedName~CanonicalActorJoinIngressReplyTests&FullyQualifiedName!~ActorCreateCompletion_AfterHandoverHello_UsesCapturedReplyRoute' --blame-hang --blame-hang-timeout 3m`
+   2×. Note: with the leak fixed, a handover that fails admission now surfaces as a normal test
+   failure instead of a hang — report any such failure verbatim (do not fix it here; it is the
+   separate "same-RID replacement admission over tcp takes 0.1–2.9 s" finding).
+
+## Deliverable
+`doc/plan/c016-worklog/bucketF-dotnet-canonical-fixture-dealer-leak-summary.md`: change, regression,
+2× results (with any now-visible admission failures listed), BLOCKERS.

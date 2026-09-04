@@ -1,0 +1,32 @@
+# Job: final cross-language E2E gate (plan §D) on the committed main tree — cpp all-stage, node smoke incl. Redis stage, java-cross
+
+You are a codex sub-agent under a Claude supervisor. Execution/classification job (no source edits).
+Read `AGENTS.md` (root) §2/§4 and `doc/plan/c016-worklog/c-cross-language-e2e-2-summary.md` (the
+exact commands/env that produced cpp 32/32, node smoke 12/12, java-cross 4/4). Do not modify source
+or tests, nothing under `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`,
+`doc/site/**`. Do not rebuild Core or local packages.
+
+## Environment (prepared)
+- cpp build dir `framework/languages/cpp/build/linux-ninja-c-e2e` exists (reconfigure only if the
+  runner reports it stale; `cmake --build ... -j4`); Docker + redis:7.2-alpine + redis-server
+  127.0.0.1:6379; Playwright Chromium in `framework/languages/node/.cache/ms-playwright` and
+  `~/.cache/ms-playwright`; node `node_modules` installed, `npm run build` done — re-run
+  `npm run build` in `framework/languages/node` once first (the tree changed since).
+- Locks: `flock -w7200 /tmp/zlink-{dotnet,node,jvm}-gate.lock` as in the prior summary; `TMPDIR=/dev/shm/zlink-tmp-<lang>`;
+  dotnet env block (`ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib` + NuGet hash cache +
+  `UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1`) ONLY for the .NET stages; `unset ZLINK_LIBRARY_PATH`
+  for the java-cross stage (Java treats it as a file path).
+
+## What to run (each with `ZLINK_CPP_BUILD_DIR=/home/hep7/project/zlink/framework/languages/cpp/build/linux-ninja-c-e2e`)
+1. `framework/languages/cpp/cross-language/run_cross_language_smoke.sh` (all stages; expect 32/32).
+2. `framework/languages/node/cross-language/run_cross_language_smoke.sh` (expect 12/12 incl. the
+   Redis stage — confirm the Redis stage actually ran).
+3. `ZLINK_CPP_CROSS_LANGUAGE_STAGE=java-cross framework/languages/cpp/cross-language/run_cross_language_smoke.sh` (expect 4/4).
+If a stage fails, re-run that stage once to record determinism; classify (A) DONTWAIT/backpressure,
+(B) terminal/error classification, (C) known pre-existing with prior evidence `file:line`,
+(D) environment/runner, (E) binding-port dependency; first failing assertion with `file:line`.
+
+## Deliverable
+`doc/plan/c016-worklog/gate-final-cross-language-summary.md`: per-runner stage table (pass/fail
+counts, duration), failures bucketed, exact commands, logs under
+`zlink-work/c016/logs/gate-final-cross-<runner>.log`, BLOCKERS. Do not commit.

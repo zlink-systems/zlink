@@ -85,7 +85,11 @@ public sealed class MessageFlowTracerTests
                 InstanceSpotType: "type",
                 ActivationState: "ready",
                 DurationSeconds: 0.25,
-                Result: ZLinkMessageFlowResult.Cancelled));
+                Result: ZLinkMessageFlowResult.Cancelled)
+            {
+                FlowId = "018f2b63-9d4a-7abc-8def-0123456789ab",
+                FlowOrigin = ZLinkFlowOrigin.Application
+            });
         }
 
         var activity = Assert.Single(activities);
@@ -93,6 +97,11 @@ public sealed class MessageFlowTracerTests
         Assert.Equal("reply_received", activity.GetTagItem("phase"));
         Assert.Equal("channel", activity.GetTagItem("surface"));
         Assert.Equal("request", activity.GetTagItem("message_kind"));
+        Assert.Equal("packet", activity.GetTagItem("packet_name"));
+        Assert.Equal(
+            "018f2b63-9d4a-7abc-8def-0123456789ab",
+            activity.GetTagItem("flow_id"));
+        Assert.Equal("application", activity.GetTagItem("flow_origin"));
         Assert.Equal("cancelled", activity.GetTagItem("outcome"));
         Assert.Equal("route_mesh", activity.GetTagItem("channel_route_kind"));
         Assert.Equal("mesh", activity.GetTagItem("mesh_name"));

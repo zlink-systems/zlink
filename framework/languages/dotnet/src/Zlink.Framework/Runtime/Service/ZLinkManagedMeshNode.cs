@@ -67,6 +67,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly Dictionary<RoutingId, ZLinkMeshPeerExpectation> _peerExpectations = new();
     private readonly Dictionary<RoutingId, ZLinkTransportPairIdentity>
         _transportPairsByRid = [];
+    private readonly HashSet<string> _readyOutboundEndpoints =
+        new(StringComparer.Ordinal);
+    private readonly HashSet<RoutingId> _readyInboundRids = [];
+    private readonly HashSet<string> _readyInboundEndpoints =
+        new(StringComparer.Ordinal);
     // Invalid epochs remain as retired-pair tombstones until this node stops.
     // Core does not order monitor and Router-data queues, so a momentarily
     // empty receive queue cannot prove that pre-disconnect data will not arrive.
@@ -2947,6 +2952,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 epoch.Invalidate();
             _nativeReplyEpochsByTransportPair.Clear();
             _transportPairsByRid.Clear();
+            _readyOutboundEndpoints.Clear();
+            _readyInboundRids.Clear();
+            _readyInboundEndpoints.Clear();
         });
         while (_pendingNativeTerminalReplies.TryDequeue(out var pendingReply))
             pendingReply.Dispose();
@@ -8284,13 +8292,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         Peer peer;
         ZLinkServiceAdmissionDecision decision;
+        var publishAdmitted = false;
         {
             var matchedPeer = _peerAdmission.FindForAdmission(
-                       _peersByRid,
-                       _peersByIntent.Values,
-                       sourceRid,
-                       command,
-                       admission.AdvertisedEndpoint);
+                _peersByRid,
+                _peersByIntent.Values,
+                sourceRid,
+                command,
+                admission.AdvertisedEndpoint,
+                _readyInboundRids.Contains(sourceRid)
+                || _readyInboundEndpoints.Contains(admission.AdvertisedEndpoint));
+            if (matchedPeer is
+                {
+                    Direction: ZLinkServiceConnectionDirection.Outbound,
+                    TransportPair.IsValid: true
+                }
+                && _readyOutboundEndpoints.Contains(matchedPeer.Endpoint))
+                transportPair = matchedPeer.TransportPair;
             if (matchedPeer is null
                 && command != ServiceWireConstants.Command.Hello)
             {
@@ -8447,10 +8465,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (duplicateDecision
                     == ZLinkServiceDuplicateConnectionDecision.KeepCurrent)
                 {
+                    var wasDuplicateAdmitted = duplicate.Admitted;
+                    if (duplicate.Direction != peer.Direction)
+                        BeginReciprocalHandoverSettlement(
+                            peer,
+                            duplicate,
+                            sourceRid);
                     RetireDuplicatePeer(peer, duplicate, sourceRid);
-                    AttachTransportPair(duplicate, transportPair);
+                    AttachTransportPair(
+                        duplicate,
+                        duplicate.Direction == ZLinkServiceConnectionDirection.Outbound
+                        && duplicate.TransportPair.IsValid
+                            ? duplicate.TransportPair
+                            : transportPair);
                     if (command == ServiceWireConstants.Command.Hello
-                        && duplicate.Admitted)
+                        && wasDuplicateAdmitted)
                         SendAdmission(
                             duplicate,
                             ServiceWireConstants.Command.Admit,
@@ -8462,7 +8491,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 }
                 if (duplicateDecision
                     == ZLinkServiceDuplicateConnectionDecision.UseIncoming)
+                {
+                    if (duplicate.Direction != peer.Direction)
+                        BeginReciprocalHandoverSettlement(
+                            duplicate,
+                            peer,
+                            sourceRid);
                     RetireDuplicatePeer(duplicate, peer, sourceRid);
+                }
             }
 
             decision = ZLinkServiceAdmissionGuard.Evaluate(
@@ -8510,13 +8546,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             peer.DescriptorRevision = admission.DescriptorRevision;
             peer.Channels = admission.Channels;
             peer.Admission = admission;
-            //  Peer가 draining을 알려오면 그대로 표시한다. 이 값이 없으면
-            //  MeshPeerState.Draining은 어디에서도 대입되지 않고, 그것을 읽는
-            //  status·selection·monitoring이 전부 죽은 코드가 된다.
-            peer.State = admission.RuntimeState == 2
-                ? MeshPeerState.Draining
-                : MeshPeerState.Admitted;
-            peer.Admitted = true;
             // A descriptor update changes neither the admitted physical pipe
             // nor its liveness epoch (service-wire §5). Replacing this state
             // here drops an outstanding probe/ACK fence while a relocation
@@ -8527,14 +8556,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     peer.ConnectionGeneration);
             peer.LastChangedMs = checked((ulong)Environment.TickCount64);
             _peersByRid[sourceRid] = peer;
-            // Remote admission traffic must never reopen this node after its
-            // relocation drain has published Draining. In particular, a
-            // target descriptor update can overlap command 40 and must leave
-            // the target connection's identity and the local drain fence
-            // intact.
-            if (_state != MeshNodeState.Draining)
-                _state = MeshNodeState.Ready;
-            RebuildChannelSelectionPlansUnderLock();
+            if (!peer.ReciprocalHandoverPending)
+            {
+                CompletePeerAdmissionUnderLock(peer);
+                publishAdmitted = true;
+            }
+            else
+            {
+                peer.State = MeshPeerState.Connecting;
+                peer.Admitted = false;
+                RebuildChannelSelectionPlansUnderLock();
+            }
         }
 
         if (command == ServiceWireConstants.Command.Hello)
@@ -8542,13 +8574,39 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 peer,
                 ServiceWireConstants.Command.Admit,
                 admissionResponse);
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"mesh_peer_admission_accepted local={_routingId} peer={sourceRid} "
-            + $"command={command} endpoint={admission.AdvertisedEndpoint} "
-            + $"lifecycle={admission.LifecycleGeneration} "
-            + $"revision={admission.DescriptorRevision}");
-        Publish(MeshMonitorEventKind.PeerAdmitted, peerRid: sourceRid);
-        Publish(MeshMonitorEventKind.StateChanged);
+        if (publishAdmitted)
+        {
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"mesh_peer_admission_accepted local={_routingId} peer={sourceRid} "
+                + $"command={command} endpoint={admission.AdvertisedEndpoint} "
+                + $"lifecycle={admission.LifecycleGeneration} "
+                + $"revision={admission.DescriptorRevision}");
+            Publish(MeshMonitorEventKind.PeerAdmitted, peerRid: sourceRid);
+            Publish(MeshMonitorEventKind.StateChanged);
+        }
+    }
+
+    private void CompletePeerAdmissionUnderLock(Peer peer)
+    {
+        // A draining descriptor remains admitted but is excluded from route
+        // selection. Preserve that distinction when reciprocal handover
+        // settlement completes asynchronously.
+        peer.State = peer.Admission is { RuntimeState: 2 }
+            ? MeshPeerState.Draining
+            : MeshPeerState.Admitted;
+        peer.Admitted = true;
+        peer.LastChangedMs = checked((ulong)Environment.TickCount64);
+        if (!peer.RoutingId.IsEmpty)
+        {
+            _peersByRid[peer.RoutingId] = peer;
+            if (peer.TransportPair.IsValid)
+                _transportPairsByRid[peer.RoutingId] = peer.TransportPair;
+        }
+        // Remote admission traffic must never reopen this node after its
+        // relocation drain has published Draining.
+        if (_state != MeshNodeState.Draining)
+            _state = MeshNodeState.Ready;
+        RebuildChannelSelectionPlansUnderLock();
     }
 
     private void ProcessLiveness(
@@ -8743,9 +8801,39 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 return;
             RunState(() =>
             {
-                _transportPairsByRid[routingId] = transportPair;
-                if (_peersByRid.TryGetValue(routingId, out var peer))
-                    AttachTransportPair(peer, transportPair);
+                var outboundCandidate =
+                    ZLinkMeshPeerAdmission.FindReadyOutboundCandidate(
+                        _peersByIntent.Values,
+                        routingId,
+                        value.RemoteAddr);
+                if (outboundCandidate is not null)
+                {
+                    _readyOutboundEndpoints.Add(value.RemoteAddr);
+                    AttachTransportPair(outboundCandidate, transportPair);
+                    _transportPairsByRid[routingId] = transportPair;
+                }
+                else
+                {
+                    _readyInboundRids.Add(routingId);
+                    if (!string.IsNullOrEmpty(value.RemoteAddr))
+                        _readyInboundEndpoints.Add(value.RemoteAddr);
+                    if (_peersByRid.TryGetValue(routingId, out var peer)
+                        && peer.Direction == ZLinkServiceConnectionDirection.Inbound)
+                    {
+                        AttachTransportPair(peer, transportPair);
+                        _transportPairsByRid[routingId] = transportPair;
+                    }
+                    else if (peer is null
+                             || !peer.Admitted
+                             || !peer.TransportPair.IsValid)
+                    {
+                        // A reciprocal inbound candidate can become ready
+                        // after the outbound survivor was admitted. Keep the
+                        // RID ingress fence on that survivor until duplicate
+                        // settlement retires the other direction.
+                        _transportPairsByRid[routingId] = transportPair;
+                    }
+                }
             });
             return;
         }
@@ -8753,16 +8841,55 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             || (routingId.IsEmpty && !transportPair.IsValid))
             return;
 
-        if (!routingId.IsEmpty)
-            RunState(() =>
+        ObserveReciprocalHandoverDisconnect(value, routingId);
+        RunState(() =>
+        {
+            if (!string.IsNullOrEmpty(value.RemoteAddr))
             {
+                _readyOutboundEndpoints.Remove(value.RemoteAddr);
+                _readyInboundEndpoints.Remove(value.RemoteAddr);
+            }
+            if (!routingId.IsEmpty)
+            {
+                _readyInboundRids.Remove(routingId);
                 if (_transportPairsByRid.TryGetValue(routingId, out var current)
                     && current == transportPair)
                     _transportPairsByRid.Remove(routingId);
-            });
+            }
+        });
 
         _transportDisconnects.Enqueue(
             new TransportDisconnect(routingId, transportPair));
+    }
+
+    private void ObserveReciprocalHandoverDisconnect(
+        MonitorEvent value,
+        RoutingId routingId)
+    {
+        if (value.TransportLane > 1)
+            return;
+        RunState(() =>
+        {
+            foreach (var peer in _peersByIntent.Values)
+            {
+                if (peer.ReciprocalHandoverDisconnectMask == 0)
+                    continue;
+                var matchesRetiredDirection =
+                    peer.ReciprocalRetiredDirection
+                    == ZLinkServiceConnectionDirection.Outbound
+                        ? string.Equals(
+                            peer.ReciprocalRetiredEndpoint,
+                            value.RemoteAddr,
+                            StringComparison.Ordinal)
+                        : !routingId.IsEmpty
+                          && (peer.RoutingId == routingId
+                              || peer.ExpectedRid == routingId);
+                if (!matchesRetiredDirection)
+                    continue;
+                peer.ReciprocalHandoverDisconnectMask &=
+                    ~(1U << checked((int)value.TransportLane));
+            }
+        });
     }
 
     private void AttachTransportPair(
@@ -8898,6 +9025,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 peer.NativeReplyEpoch.Invalidate();
                 peer.TransportPair = default;
                 peer.NativeReplyEpoch = new ZLinkNativeReplyPeerEpoch();
+                if (!peer.Admitted && peer.ReciprocalHandoverPending)
+                    return null;
                 if (peer.Direction == ZLinkServiceConnectionDirection.Inbound)
                 {
                     // An inbound transport has no local retry intent. Once
@@ -8928,6 +9057,30 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
             if (closedRid is { } peerRid)
                 Publish(MeshMonitorEventKind.PeerClosed, peerRid: peerRid);
+        }
+
+        var settledPeers = RunState(() =>
+        {
+            var settled = _peersByIntent.Values
+                .Where(peer => peer.ReciprocalHandoverPending
+                               && peer.ReciprocalHandoverDisconnectMask == 0
+                               && peer.Admission is not null)
+                .ToArray();
+            foreach (var peer in settled)
+            {
+                peer.ReciprocalHandoverPending = false;
+                peer.ReciprocalRetiredEndpoint = string.Empty;
+                CompletePeerAdmissionUnderLock(peer);
+            }
+            return settled;
+        });
+        foreach (var peer in settledPeers)
+        {
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"mesh_peer_handover_settled local={_routingId} "
+                + $"peer={peer.RoutingId} direction={peer.Direction}");
+            Publish(MeshMonitorEventKind.PeerAdmitted, peerRid: peer.RoutingId);
+            Publish(MeshMonitorEventKind.StateChanged);
         }
     }
 
@@ -11517,17 +11670,47 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
+    private void BeginReciprocalHandoverSettlement(
+        Peer retired,
+        Peer survivor,
+        RoutingId logicalRoutingId)
+    {
+        if (!SharesNativeHandoverRoute(retired, survivor, logicalRoutingId))
+            return;
+
+        var losingDirectionReachedReady = retired.Direction
+            == ZLinkServiceConnectionDirection.Outbound
+                ? _readyOutboundEndpoints.Contains(retired.Endpoint)
+                : _readyInboundRids.Contains(logicalRoutingId)
+                  || _readyInboundEndpoints.Contains(retired.Endpoint);
+        if (!losingDirectionReachedReady)
+            return;
+
+        // ROUTER-ROUTER owns one Application/Completion lane set. Do not
+        // publish the Framework survivor until both lanes of the reciprocal
+        // loser have reported their disconnect edge.
+        survivor.ReciprocalHandoverPending = true;
+        survivor.ReciprocalHandoverDisconnectMask = 0b11;
+        survivor.ReciprocalRetiredDirection = retired.Direction;
+        survivor.ReciprocalRetiredEndpoint = retired.Endpoint;
+        survivor.Admitted = false;
+        survivor.State = MeshPeerState.Connecting;
+        RebuildChannelSelectionPlansUnderLock();
+    }
+
     private void RetireDuplicatePeer(
         Peer peer,
         Peer survivor,
         RoutingId logicalRoutingId)
     {
-        var wasAdmitted = peer.Admitted;
         var physicalRoutingId = peer.PhysicalRoutingId;
         var nativeHandoverOwnsRoute = SharesNativeHandoverRoute(
             peer,
             survivor,
             logicalRoutingId);
+        var retiresReciprocalOutbound = nativeHandoverOwnsRoute
+            && peer.Direction == ZLinkServiceConnectionDirection.Outbound
+            && survivor.Direction == ZLinkServiceConnectionDirection.Inbound;
         if (peer.Admitted
             || peer.State != MeshPeerState.Configured
             || _peersByIntent.ContainsKey(peer.Intent))
@@ -11554,13 +11737,33 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         peer.Admitted = false;
         peer.State = MeshPeerState.Closed;
         RebuildChannelSelectionPlansUnderLock();
-        if (peer.Direction == ZLinkServiceConnectionDirection.Outbound
-            && _socket is not null
-            && !nativeHandoverOwnsRoute)
+        if (retiresReciprocalOutbound && _socket is not null)
+        {
+            // The Framework has retired this outbound direction, so its
+            // native reconnect intent must retire as well. DisconnectRid
+            // names the shared logical RID and would close the inbound
+            // survivor selected by reciprocal handover; endpoint disconnect
+            // cancels only this locally initiated direction.
+            try
+            {
+                lock (_socketGate)
+                    _socket.Disconnect(peer.Endpoint);
+            }
+            catch (ZlinkException)
+            {
+            }
+        }
+        else if (peer.Direction == ZLinkServiceConnectionDirection.Outbound
+                 && _socket is not null
+                 && !nativeHandoverOwnsRoute)
             DisconnectTransport(
                 peer,
-                wasAdmitted,
                 physicalRoutingId);
+        if (retiresReciprocalOutbound)
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"mesh_peer_duplicate_retire_disconnect_endpoint local={_routingId} "
+                + $"peer={peer.RoutingId} logical={logicalRoutingId} "
+                + $"survivor={survivor.RoutingId}");
         else if (nativeHandoverOwnsRoute)
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"mesh_peer_duplicate_retire_skip_transport local={_routingId} "
@@ -11578,6 +11781,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId logicalRoutingId) =>
         !logicalRoutingId.IsEmpty
         && (retired.RoutingId == logicalRoutingId
+            || retired.ExpectedRid == logicalRoutingId
             || retired.PhysicalRoutingId == logicalRoutingId)
         && (survivor.RoutingId == logicalRoutingId
             || survivor.ExpectedRid == logicalRoutingId
@@ -11617,7 +11821,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void RemovePeer(Peer peer, bool disconnect)
     {
-        var wasAdmitted = peer.Admitted;
         var physicalRoutingId = peer.PhysicalRoutingId;
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"mesh_peer_remove local={_routingId} peer={peer.RoutingId} "
@@ -11636,14 +11839,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (disconnect && _socket is not null)
             DisconnectTransport(
                 peer,
-                wasAdmitted,
                 physicalRoutingId);
         Publish(MeshMonitorEventKind.PeerClosed, peerRid: peer.RoutingId);
     }
 
     private void DisconnectTransport(
         Peer peer,
-        bool wasAdmitted,
         RoutingId physicalRoutingId)
     {
         try
@@ -11658,7 +11859,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             peer.Endpoint,
                             StringComparison.Ordinal)
                         && otherPeer.State != MeshPeerState.Closed);
-                if (wasAdmitted || replacementUsesEndpoint)
+                if (peer.Direction != ZLinkServiceConnectionDirection.Outbound
+                    || replacementUsesEndpoint)
                 {
                     if (!physicalRoutingId.IsEmpty)
                         _socket!.DisconnectRid(physicalRoutingId);
@@ -11669,9 +11871,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     return;
                 }
 
-                // With no replacement, endpoint disconnect also cancels the
-                // binding's reconnect intent. This is required for a removed
-                // Connecting peer whose physical RID is still pending.
+                // With no replacement, removing an outbound peer must also
+                // cancel the binding's endpoint reconnect intent. Otherwise a
+                // later intent for the same endpoint inherits the old physical
+                // RID even when the removed peer had already been admitted.
                 _socket!.Disconnect(peer.Endpoint);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"mesh_peer_transport_disconnect local={_routingId} "
