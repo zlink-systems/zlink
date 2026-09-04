@@ -692,3 +692,16 @@ scripts·native sync·09-01 autostash)는 **사용자 작업 아님(사용자 �
 (내 커밋 무손실). `git pull --no-rebase`로 merge commit `bebbc7b925` 생성(충돌 0, codec=framework/cpp vs B=core/bindings/docs).
 **B core 재검증 착수(codex sol)**: 새 core 재빌드+sha256 gate+framework 재검증(codec Bingo·dotnet SUB cross-language·4언어
 focused). B posddd는 동작보존 의도라 회귀 없어야 하나 재빌드 필수. 재검증 green 확인 후 merge push(broken main 방지).
+
+## D-077 (2026-09-04 06:xx) B core 재검증 R-Bcore 없음 → merge push (9a2fc244ed)
+codex sol reverify-bcore. **결론: R-Bcore 없음**(B의 core posddd/perf가 framework 회귀 유발 안 함, 동작보존 확인).
+- Core ctest 139/139(B 신규 hotpath/wake test + 내 alias/mesh 공존), **sha256 gate 58/58**(새 lib 06f5e02455...).
+- cpp framework-unit 38/40·contract 9/10(전부 (P): M6A·M6B1343·E2E inventory), codec/STREAM-001/sample_parity 통과.
+- dotnet focused 재실행 57/57(56/57은 flake), SUB/fanout 37/37+8/8(SUB fix 유지). java 1205/1207((P)M6A). node backend-contract
+  54/54, full runtime 1551/1553(2=(E)chromium). cross-language C++/.NET/Node channel·fanout·raw STREAM codec mismatch 0.
+- Bingo/TTT stream-connector timeout=D-075 계열 기존 delivery debt(P), B pipe/mailbox(341974c4d6)와 인과 없음(A/B 배제).
+**merge push `9a2fc244ed`**: codec fix(180323e6fa)+B merge(bebbc7b925)+D-076 통합. origin/main = B core + 내 캠페인 전부.
+**node lint(내 fallout)**: ZlinkStreamConnectorOptions.ts:94 `!== Detailed` 추가로 enum 소진 → no-unnecessary-condition
+에러(npm test lint 게이트 차단). validator가 런타임 invalid 값 거부하도록 수정 필요.
+**잔여 delivery debt(캠페인서 계속 수정, 사용자 승인)**: cpp stream-connector delivery stall(Bingo/TTT 공통), java 샘플
+authenticate(별개 root), node cross-language .NET→Node stream stage, ZoneWorld(4언어). 전부 pull-completion 무관 기존 부채.
