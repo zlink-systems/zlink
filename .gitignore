@@ -115,6 +115,7 @@ libunity.a
 !doc/site/overrides/**/*.html
 # guide 다이어그램(archify 렌더 SVG) — 사이트가 서빙하는 소스다.
 !framework/doc/framework/common/diagrams/*.html
+!framework/languages/shared_sample/zoneworld/client/*.html
 *.pdf
 *.ps
 *~
