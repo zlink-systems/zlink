@@ -54,6 +54,11 @@ struct client_slot_t
         index (0),
         next_seq (1),
         outstanding (0),
+        wait_token (0),
+        retained_request (false),
+        retry_ready (false),
+        routed_request (false),
+        target_rid (),
         payload ()
     {
     }
@@ -63,6 +68,11 @@ struct client_slot_t
     size_t index;
     uint64_t next_seq;
     size_t outstanding;
+    zlink_completion_id_t wait_token;
+    bool retained_request;
+    bool retry_ready;
+    bool routed_request;
+    zlink_routing_id_t target_rid;
     std::vector<char> payload;
 };
 
@@ -123,10 +133,31 @@ inline int poll_timeout_until (const std::chrono::steady_clock::time_point &dead
     return static_cast<int> (std::min<long> (remaining_ms, std::max (1, max_wait_ms)));
 }
 
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
 inline bool is_transient_submit (zlink_submit_result_t rc, int err)
 {
     return rc == ZLINK_SUBMIT_BACKPRESSURED || err == EAGAIN || err == EWOULDBLOCK
            || err == EINTR || err == ETIMEDOUT;
+}
+#endif
+
+inline bool request_rid_matches (const client_slot_t &slot,
+                                 const zlink_routing_id_t &peer_rid)
+{
+    return slot.routed_request
+             ? perf_multi_client::routing_ids_equal (slot.target_rid, peer_rid)
+             : peer_rid.size == 0;
+}
+
+inline void clear_retained_request (client_slot_t *slot)
+{
+    if (!slot)
+        return;
+    slot->wait_token = 0;
+    slot->retained_request = false;
+    slot->retry_ready = false;
+    slot->routed_request = false;
+    std::memset (&slot->target_rid, 0, sizeof (slot->target_rid));
 }
 
 inline void record_request_completion (client_slot_t *slot,
@@ -199,13 +230,26 @@ inline bool submit_request (const endpoint_config_t &config,
         return false;
     }
 
-    const size_t payload_size = std::max<size_t> (msg_size, perf_multi_metric::header_size ());
-    if (slot->payload.size () != payload_size)
-        slot->payload.assign (payload_size, 'c');
+    const bool retrying = slot->retained_request;
+    if (retrying && (!slot->retry_ready || slot->wait_token != 0)) {
+        if (blocked_out)
+            *blocked_out = true;
+        return true;
+    }
 
-    if (!perf_multi_metric::stamp_payload (slot->payload.data (), payload_size, run_id,
-                                           perf_multi_metric::phase_active, msg_size,
-                                           slot->next_seq, perf_multi_metric::now_ns ())) {
+    const size_t payload_size = std::max<size_t> (msg_size, perf_multi_metric::header_size ());
+    if (!retrying) {
+        if (slot->payload.size () != payload_size)
+            slot->payload.assign (payload_size, 'c');
+
+        if (!perf_multi_metric::stamp_payload (slot->payload.data (), payload_size, run_id,
+                                               perf_multi_metric::phase_active, msg_size,
+                                               slot->next_seq,
+                                               perf_multi_metric::now_ns ())) {
+            return false;
+        }
+    } else if (slot->payload.size () != payload_size) {
+        errno = EPROTO;
         return false;
     }
 
@@ -244,6 +288,7 @@ inline bool submit_request (const endpoint_config_t &config,
     --slot->outstanding;
 #else
     zlink_completion_id_t completion_id = 0;
+    slot->retry_ready = false;
     if (config.client_router_request) {
         if (!target_rid || target_rid->size == 0) {
             zlink_msg_close (&part);
@@ -259,31 +304,60 @@ inline bool submit_request (const endpoint_config_t &config,
           slot, &completion_id);
     }
 
+    const int err = rc == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
+    zlink_msg_close (&part);
     if (rc == ZLINK_SUBMIT_OK && completion_id != 0) {
         ++slot->outstanding;
         ++slot->next_seq;
+        clear_retained_request (slot);
         return true;
     }
 
-    const int err = zlink_errno ();
     if (rc == ZLINK_SUBMIT_OK) {
         errno = EPROTO;
         return false;
     }
+    if (rc == ZLINK_SUBMIT_BACKPRESSURED
+        && (err == EAGAIN || err == EWOULDBLOCK) && completion_id != 0) {
+        slot->retained_request = true;
+        slot->retry_ready = false;
+        slot->wait_token = completion_id;
+        slot->routed_request = config.client_router_request;
+        if (config.client_router_request)
+            slot->target_rid = *target_rid;
+        else
+            std::memset (&slot->target_rid, 0, sizeof (slot->target_rid));
+        if (blocked_out)
+            *blocked_out = true;
+        errno = err;
+        return true;
+    }
+    if (rc == ZLINK_SUBMIT_BACKPRESSURED)
+        errno = EPROTO;
+    else
+        errno = err != 0 ? err : EIO;
+    return false;
 #endif
+#if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
     if (is_transient_submit (rc, err)) {
         if (blocked_out)
             *blocked_out = true;
         return true;
     }
     return false;
+#endif
 }
 
 #if !defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
-inline bool drain_socket_completions (client_state_t *state, void *socket)
+inline bool drain_socket_completions (client_state_t *state,
+                                      void *socket,
+                                      client_slot_t *socket_slot)
 {
-    if (!state || !socket)
+    if (!state || !socket || !socket_slot || socket_slot->owner != state
+        || socket_slot->socket != socket) {
+        errno = EPROTO;
         return false;
+    }
     for (;;) {
         zlink_completion_t completion;
         std::memset (&completion, 0, sizeof (completion));
@@ -294,19 +368,41 @@ inline bool drain_socket_completions (client_state_t *state, void *socket)
             return true;
         if (rc != ZLINK_RECV_OK)
             return false;
-        // A DONTWAIT handshake send that met backpressure left a wait token
-        // whose WRITABLE record shares this queue. Nothing waits on it here.
         if (completion.kind == ZLINK_COMPLETION_WRITABLE) {
+            const bool owned = socket_slot->retained_request
+                               && socket_slot->wait_token != 0
+                               && completion.completion_id
+                                    == socket_slot->wait_token;
+            if (!owned) {
+                // Setup SENDs can leave an anonymous WRITABLE on this shared
+                // queue. REQUEST owns and dispatches only its matching token.
+                zlink_completion_close (&completion);
+                continue;
+            }
+            const bool valid = completion.user_context == socket_slot
+                               && request_rid_matches (*socket_slot,
+                                                       completion.peer_rid)
+                               && completion.send_result == ZLINK_SEND_ADMITTED
+                               && completion.send_terminal_errno == 0;
+            if (valid) {
+                socket_slot->wait_token = 0;
+                socket_slot->retry_ready = true;
+            } else {
+                const int terminal_errno = completion.send_terminal_errno;
+                clear_retained_request (socket_slot);
+                errno = terminal_errno != 0 ? terminal_errno : EPROTO;
+            }
             zlink_completion_close (&completion);
+            if (!valid)
+                return false;
             continue;
         }
-        client_slot_t *slot = static_cast<client_slot_t *> (completion.user_context);
         const bool valid = completion.kind == ZLINK_COMPLETION_REQUEST
-                           && completion.completion_id != 0 && slot
-                           && slot->owner == state && slot->socket == socket
-                           && slot->outstanding != 0;
+                           && completion.completion_id != 0
+                           && completion.user_context == socket_slot
+                           && socket_slot->outstanding != 0;
         if (valid) {
-            record_request_completion (slot, completion.request_result,
+            record_request_completion (socket_slot, completion.request_result,
                                        completion.reply_parts,
                                        completion.reply_part_count);
         }
@@ -327,8 +423,9 @@ inline bool drain_ready_completions (client_state_t *state, int event_count)
 #else
     for (int i = 0; i < event_count; ++i) {
         const zlink_poller_event_t &event = state->events[static_cast<size_t> (i)];
+        client_slot_t *const slot = static_cast<client_slot_t *> (event.user_data);
         if ((event.events & ZLINK_POLLCOMPLETION) != 0
-            && !drain_socket_completions (state, event.socket))
+            && !drain_socket_completions (state, event.socket, slot))
             return false;
     }
     return true;
@@ -344,7 +441,40 @@ inline bool any_waiting_reply (const client_state_t &state)
     return false;
 }
 
-inline bool drain_pending_replies (client_state_t *state, uint32_t request_timeout_ms)
+inline bool any_retained_request (const client_state_t &state)
+{
+    for (size_t i = 0; i < state.slots.size (); ++i) {
+        if (state.slots[i].retained_request)
+            return true;
+    }
+    return false;
+}
+
+inline bool retry_ready_requests (const endpoint_config_t &config,
+                                  client_state_t *state,
+                                  const zlink_routing_id_t *target_rid,
+                                  uint32_t run_id,
+                                  size_t msg_size,
+                                  uint32_t request_timeout_ms)
+{
+    for (size_t i = 0; i < state->slots.size (); ++i) {
+        client_slot_t &slot = state->slots[i];
+        if (!slot.retained_request || !slot.retry_ready)
+            continue;
+        bool blocked = false;
+        if (!submit_request (config, &slot, target_rid, run_id, msg_size,
+                             request_timeout_ms, &blocked))
+            return false;
+    }
+    return true;
+}
+
+inline bool drain_pending_replies (const endpoint_config_t &config,
+                                   client_state_t *state,
+                                   const zlink_routing_id_t *target_rid,
+                                   uint32_t run_id,
+                                   size_t msg_size,
+                                   uint32_t request_timeout_ms)
 {
     if (!state || !state->poller) {
         errno = EINVAL;
@@ -356,7 +486,8 @@ inline bool drain_pending_replies (client_state_t *state, uint32_t request_timeo
       static_cast<int> (request_timeout_ms) * 4);
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now () + std::chrono::milliseconds (drain_ms);
-    while (any_waiting_reply (*state) && std::chrono::steady_clock::now () < deadline) {
+    while ((any_waiting_reply (*state) || any_retained_request (*state))
+           && std::chrono::steady_clock::now () < deadline) {
         const int wait_ms = poll_timeout_until (deadline, 50);
         const int event_count =
           zlink_poller_wait (state->poller, state->events.empty () ? NULL : &state->events[0],
@@ -368,8 +499,11 @@ inline bool drain_pending_replies (client_state_t *state, uint32_t request_timeo
         }
         if (!drain_ready_completions (state, event_count))
             return false;
+        if (!retry_ready_requests (config, state, target_rid, run_id, msg_size,
+                                   request_timeout_ms))
+            return false;
     }
-    return !any_waiting_reply (*state);
+    return !any_waiting_reply (*state) && !any_retained_request (*state);
 }
 
 inline bool run_measurement_window (const endpoint_config_t &config,
@@ -448,7 +582,8 @@ inline bool run_measurement_window (const endpoint_config_t &config,
                   << " errno=" << errno << std::endl;
         return false;
     }
-    if (!drain_pending_replies (state, request_timeout_ms)) {
+    if (!drain_pending_replies (config, state, target_rid_ptr, run_id, msg_size,
+                                request_timeout_ms)) {
         size_t waiting_slots = 0;
         unsigned long long waiting_requests = 0;
         for (size_t i = 0; i < state->slots.size (); ++i) {
@@ -460,6 +595,7 @@ inline bool run_measurement_window (const endpoint_config_t &config,
         std::cerr << "[perf-multi-socket-reqrep] drain timeout size=" << msg_size
                   << " waiting_slots=" << waiting_slots << "/" << state->slots.size ()
                   << " waiting_requests=" << waiting_requests
+                  << " retained_requests=" << any_retained_request (*state)
                   << " request_timeout_ms=" << request_timeout_ms
                   << " replies=" << state->active_reply_count << std::endl;
         return false;

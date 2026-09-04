@@ -119,7 +119,7 @@ void run_dealer_router_reqrep (const std::string &transport,
       [&] (zlink_msg_t *part_, uint32_t timeout_ms_, void *user_context_,
            zlink_completion_id_t *completion_id_out_) {
           return perf_zlink_dealer_request_measurement_part (
-            requester.get (), part_, ZLINK_SEND_FLAGS_NONE, timeout_ms_,
+            requester.get (), part_, ZLINK_SEND_FLAGS_DONTWAIT, timeout_ms_,
             user_context_, completion_id_out_);
       },
 #endif

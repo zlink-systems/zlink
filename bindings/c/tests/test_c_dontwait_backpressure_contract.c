@@ -151,6 +151,188 @@ static int fill_until_backpressured_null_id (void *router,
     return __LINE__;
 }
 
+static int fill_requests_until_backpressured (
+  void *dealer,
+  const void *payload,
+  size_t payload_size,
+  void *user_context,
+  size_t *accepted_out,
+  zlink_completion_id_t *wait_token_out)
+{
+    size_t attempt;
+    for (attempt = 0; attempt != MAX_FILL_ATTEMPTS; ++attempt) {
+        zlink_msg_t part;
+        zlink_completion_id_t completion_id = 0;
+        CHECK (init_part (&part, payload, payload_size) == 0);
+
+        errno = 0;
+        const zlink_submit_result_t result = zlink_request_part (
+          dealer, NULL, &part, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
+          120000, user_context, &completion_id);
+        const int submit_errno = zlink_errno ();
+        CHECK (check_part_consumed (&part) == 0);
+
+        if (result == ZLINK_SUBMIT_BACKPRESSURED) {
+            CHECK (submit_errno == EAGAIN);
+            CHECK (completion_id != 0);
+            CHECK (attempt != 0);
+            *accepted_out = attempt;
+            *wait_token_out = completion_id;
+            return 0;
+        }
+        CHECK (result == ZLINK_SUBMIT_OK);
+        CHECK (completion_id != 0);
+    }
+    return __LINE__;
+}
+
+static int receive_request (void *router,
+                            const void *expected,
+                            size_t expected_size,
+                            zlink_routing_id_t *source_rid_out,
+                            zlink_reply_token_t *reply_token_out)
+{
+    CHECK (wait_socket (router, ZLINK_POLLIN) == 0);
+    const zlink_routing_id_t *source_rid = NULL;
+    zlink_msg_t part;
+    zlink_part_flag_t part_flag = ZLINK_PART_MORE;
+    CHECK (zlink_msg_init (&part) == ZLINK_CONFIG_OK);
+    CHECK (zlink_router_recv_part (router, &source_rid, reply_token_out, &part,
+                                   &part_flag, ZLINK_RECV_FLAGS_DONTWAIT)
+           == ZLINK_RECV_OK);
+    CHECK (source_rid != NULL);
+    CHECK (source_rid->size != 0);
+    CHECK (*reply_token_out != 0);
+    CHECK (part_flag == ZLINK_PART_FINAL);
+    CHECK (zlink_msg_size (&part) == expected_size);
+    CHECK (memcmp (zlink_msg_data (&part), expected, expected_size) == 0);
+    if (source_rid_out != NULL) {
+        memset (source_rid_out, 0, sizeof (*source_rid_out));
+        source_rid_out->size = source_rid->size;
+        memcpy (source_rid_out->data, source_rid->data, source_rid->size);
+    }
+    CHECK (zlink_msg_close (&part) == ZLINK_CONFIG_OK);
+    return 0;
+}
+
+static int test_request_wait_token_flow (void *dealer,
+                                         void *router,
+                                         const void *payload,
+                                         size_t payload_size)
+{
+    int poller_context = 81;
+    int wait_context = 82;
+    void *poller = zlink_poller_new ();
+    CHECK (poller != NULL);
+    CHECK (zlink_poller_add (poller, dealer, &poller_context,
+                             ZLINK_POLLCOMPLETION) == ZLINK_CONFIG_OK);
+
+    size_t accepted = 0;
+    zlink_completion_id_t wait_token = 0;
+    CHECK (fill_requests_until_backpressured (
+             dealer, payload, payload_size, &wait_context, &accepted,
+             &wait_token)
+           == 0);
+    CHECK (accepted != 0);
+    CHECK (wait_token != 0);
+    CHECK (check_no_completion (dealer) == 0);
+
+    size_t drained = 0;
+    int writable_ready = 0;
+    while (drained != accepted && !writable_ready) {
+        zlink_reply_token_t ignored_reply_token = 0;
+        CHECK (receive_request (router, payload, payload_size, NULL,
+                                &ignored_reply_token) == 0);
+        ++drained;
+
+        zlink_poller_event_t event;
+        zlink_config_result_t poller_error = ZLINK_CONFIG_INTERNAL_ERROR;
+        memset (&event, 0, sizeof (event));
+        const int count = zlink_poller_wait (poller, &event, 1, 100,
+                                             &poller_error);
+        CHECK (poller_error == ZLINK_CONFIG_OK);
+        CHECK (count == 0 || count == 1);
+        if (count == 1) {
+            CHECK (event.socket == dealer);
+            CHECK (event.user_data == &poller_context);
+            CHECK ((event.events & ZLINK_POLLCOMPLETION)
+                   == ZLINK_POLLCOMPLETION);
+            writable_ready = 1;
+        }
+    }
+    CHECK (writable_ready);
+
+    zlink_completion_t writable;
+    memset (&writable, 0, sizeof (writable));
+    writable.struct_size = sizeof (writable);
+    CHECK (zlink_completion_recv (dealer, &writable,
+                                  ZLINK_RECV_FLAGS_DONTWAIT)
+           == ZLINK_RECV_OK);
+    CHECK (writable.kind == ZLINK_COMPLETION_WRITABLE);
+    CHECK (writable.completion_id == wait_token);
+    CHECK (writable.user_context == &wait_context);
+    CHECK (writable.peer_rid.size == 0);
+    CHECK (writable.send_result == ZLINK_SEND_ADMITTED);
+    CHECK (writable.send_terminal_errno == 0);
+    zlink_completion_close (&writable);
+
+    int request_context = 83;
+    zlink_msg_t retry;
+    zlink_completion_id_t request_id = 0;
+    CHECK (init_part (&retry, payload, payload_size) == 0);
+    CHECK (zlink_request_part (dealer, NULL, &retry,
+                               ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
+                               5000, &request_context, &request_id)
+           == ZLINK_SUBMIT_OK);
+    CHECK (request_id != 0);
+    CHECK (request_id != wait_token);
+    CHECK (check_part_consumed (&retry) == 0);
+
+    while (drained != accepted) {
+        zlink_reply_token_t ignored_reply_token = 0;
+        CHECK (receive_request (router, payload, payload_size, NULL,
+                                &ignored_reply_token) == 0);
+        ++drained;
+    }
+
+    zlink_routing_id_t source_rid;
+    zlink_reply_token_t reply_token = 0;
+    CHECK (receive_request (router, payload, payload_size, &source_rid,
+                            &reply_token) == 0);
+    zlink_msg_t reply;
+    CHECK (init_part (&reply, payload, payload_size) == 0);
+    CHECK (zlink_reply_part (router, &source_rid, reply_token, &reply,
+                             ZLINK_PART_FINAL) == ZLINK_SUBMIT_OK);
+    CHECK (check_part_consumed (&reply) == 0);
+
+    zlink_poller_event_t event;
+    zlink_config_result_t poller_error = ZLINK_CONFIG_INTERNAL_ERROR;
+    memset (&event, 0, sizeof (event));
+    CHECK (zlink_poller_wait (poller, &event, 1, 5000, &poller_error) == 1);
+    CHECK (poller_error == ZLINK_CONFIG_OK);
+    CHECK ((event.events & ZLINK_POLLCOMPLETION) == ZLINK_POLLCOMPLETION);
+
+    zlink_completion_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.struct_size = sizeof (completion);
+    CHECK (zlink_completion_recv (dealer, &completion,
+                                  ZLINK_RECV_FLAGS_DONTWAIT)
+           == ZLINK_RECV_OK);
+    CHECK (completion.kind == ZLINK_COMPLETION_REQUEST);
+    CHECK (completion.completion_id == request_id);
+    CHECK (completion.user_context == &request_context);
+    CHECK (completion.request_result == ZLINK_REQUEST_OK);
+    CHECK (completion.reply_part_count == 1);
+    CHECK (zlink_msg_size (&completion.reply_parts[0]) == payload_size);
+    CHECK (memcmp (zlink_msg_data (&completion.reply_parts[0]), payload,
+                   payload_size) == 0);
+    zlink_completion_close (&completion);
+
+    CHECK (zlink_poller_remove (poller, dealer) == ZLINK_CONFIG_OK);
+    CHECK (zlink_poller_destroy (&poller) == ZLINK_CLOSE_OK);
+    return 0;
+}
+
 /* Pull the queue to NO_DATA and require exactly one WRITABLE record. */
 static int receive_single_writable (void *router, zlink_completion_t *record_out)
 {
@@ -240,6 +422,9 @@ int main (void)
     CHECK (strlen (dealer_name) <= sizeof (target.data));
     target.size = (uint8_t) strlen (dealer_name);
     memcpy (target.data, dealer_name, target.size);
+
+    CHECK (test_request_wait_token_flow (dealer, router, logical_payload,
+                                         sizeof (logical_payload)) == 0);
 
     int poller_context = 71;
     void *poller = zlink_poller_new ();

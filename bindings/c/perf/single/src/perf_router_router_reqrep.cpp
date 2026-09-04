@@ -205,6 +205,8 @@ void run_router_router_reqrep (const std::string &transport,
     request_state.run_id = next_single_metric_run_id ();
     request_state.msg_size = msg_size;
     request_state.latency_sample_cap = perf_single_reqrep::resolve_latency_sample_cap ();
+    request_state.routed_request = true;
+    request_state.target_rid = server_rid;
 
     const int duration_s = std::max (1, resolve_single_duration_seconds ());
     void *completion_poller = NULL;
@@ -223,7 +225,7 @@ void run_router_router_reqrep (const std::string &transport,
       [&] (zlink_msg_t *part_, uint32_t timeout_ms_, void *user_context_,
            zlink_completion_id_t *completion_id_out_) {
           return perf_zlink_router_request_measurement_part (
-            requester.get (), &server_rid, part_, ZLINK_SEND_FLAGS_NONE,
+            requester.get (), &server_rid, part_, ZLINK_SEND_FLAGS_DONTWAIT,
             timeout_ms_, user_context_, completion_id_out_);
       },
 #endif
