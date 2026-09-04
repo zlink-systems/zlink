@@ -84,11 +84,11 @@ rust 실행기 spin 제거(172k → 259k), python 7.9k → 20k. 표는 인계 �
 ## 5. 체크리스트
 
 - [x] Core 계약 B(SEND), 스펙, 범프, bindings 8 포팅, 리뷰 8, perf 러너 복원, DD latency 수정, 가이드·계획 문서
-- [ ] Core REQUEST 계약 B 커밋·push, 스펙 갱신 커밋
-- [ ] bindings REQUEST 포팅 1차(node·cpp·java·dotnet) / 2차(c·go·rust·python)
-- [ ] C perf REQREP 러너 토큰 모델
-- [ ] 0.15.1 대비 재측정 표(D-B8x)
-- [ ] PUBSUB allocator abort 원인·수정
+- [x] Core REQUEST 계약 B 커밋·push(`7d8205a028`), 스펙 갱신 커밋(`ea934d0e97`), hotpath_gate PASS(D-B86)
+- [x] bindings REQUEST 포팅 1차 dotnet `2099bb045a`(병합)·java `a06260f507`·node `b145f86501`·cpp `e0860723bc` / 2차 python `78eed9ce96`·rust `9728a0e081`·go `7afa27e72b`·c `8decd5ed5c`(병합)
+- [x] C perf REQREP 러너 토큰 모델(`e5770ec569` 병합)
+- [x] 0.15.1 대비 재측정 표 — D-B87(RR_REQREP 65536B −17.5%만 미달, latency 잔여)
+- [x] PUBSUB allocator abort 원인·수정 — SUB session use-after-free(ZMP decoder 지연 소멸), `29add0ac81`, 회귀 테스트 추가
 - [ ] 리팩토링 패스 커밋
 - [ ] bindings 성능 측정·개선 — §6 실행 계획대로(계획서 §9 표 채움)
 - [ ] 인계 문서 최종 갱신(REQUEST 계약·해시), 아침 요약

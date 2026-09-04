@@ -1011,3 +1011,23 @@ Core `7d8205a028`(29파일 +255/−2733: REQUEST pending pool 제거, DONTWAIT R
 트리(core/build-gate)에서 hotpath_gate 4 cell PASS(최대 비율 1.0055). 바인딩 REQUEST 포팅 1차(node·cpp·java·dotnet) job 진행 중.
 DEALER 세부: 선택 가능한 ROUTER가 없으면(peer 0개·전부 weight 0) EAGAIN → 토큰; ROUTER routing map에 없는 RID는 ENOENT → EHOSTUNREACH →
 NOT_CONNECTED(토큰 없음). blocking NONE의 DEALER NOT_CONNECTED/NOT_ADMITTED와 ROUTER NOT_FOUND 판정은 유지.
+
+## D-B87 (2026-09-05 02:05, 머신 B) REQUEST 계약 B 뒤 재측정 — 64K REQREP latency 해소, RR_REQREP 65536B 처리량 −17.5%가 남은 대상
+조용한 머신(load 0.4→4, 내 측정만), 0.15.1(순정 러너) vs 0.17.0(`8decd5ed5c`: REQUEST 계약 B + session 수명 수정), CCU=100 tcp DUR=5.
+1회 실행 throughput(K msg/s, SENDSEND·REQREP는 K ops/s), 괄호는 latency mean ms:
+| pattern | 64 | 256 | 1024 | 4096 | 65536 |
+|---|---:|---:|---:|---:|---:|
+| DD 0.15.1 | 929 (0.09) | 894 (0.62) | 858 (0.81) | 341 (635) | timeout |
+| DD 0.17.0 | 959 (0.31) | 964 (2.03) | 896 (1.27) | 389 (612) | 74 (18.6) |
+| SENDSEND 0.15.1 | 224 (0.80) | 187 (0.75) | 182 (0.94) | 161 (1.24) | 15.2 |
+| SENDSEND 0.17.0 | 255 (0.79) | 221 (0.90) | 208 (0.94) | 166 (1.36) | 31.9 (65.7) |
+| PUBSUB 0.15.1 | 667 | 774 | 810 | 613 | 42.0 |
+| PUBSUB 0.17.0 | 658 (−1%) | 810 | 913 | 697 | 72.7 |
+| DR_REQREP 0.15.1 | 135 (0.64) | 125 (0.69) | 164* (0.52) | 106 (0.86) | 25.9* (1.21) |
+| DR_REQREP 0.17.0 | 190 (0.94) | 174 (0.88) | 192* (0.77) | 141 (1.21) | 25.5* (2.14) |
+| RR_REQREP 0.15.1 | 144 (0.59) | 135 (0.58) | 154* (0.51) | 114 (0.73) | 26.2* (1.20) |
+| RR_REQREP 0.17.0 | 144 (0.93) | 131 (0.91) | 161* (0.79) | 120 (1.14) | 21.6* (2.41) |
+(*: runs=3 중앙값.) 판정(사이즈별 −5%, 합계 하락 불허): throughput은 **RR_REQREP 65536B −17.5%** 한 cell만 미달(RR 256B −3%는 허용).
+REQUEST 계약 B로 64K REQREP latency 68~127 ms → 2.1~2.4 ms(0.15.1 1.2 ms)로 해소, DR_REQREP 처리량 +17~41%. 남은 latency 격차:
+DD 64/256/1024B mean 3~3.5배·1.6배, REQREP 1024B +50%, 64K 약 2배 — throughput은 우위이나 gate의 latency geomean ≤ 1.0은 미달.
+다음: RR_REQREP 65536B 처리량 원인 job, 그 뒤 latency 잔여(D-B83 항목 1·2와 함께 사용자 결정).
