@@ -6,20 +6,156 @@ package native
 #include <errno.h>
 #include <stdint.h>
 #include "zlink.h"
+
+static inline zlink_submit_result_t zlink_go_send_part_with_context(
+    void *socket_, zlink_msg_t *part_, zlink_send_flags_t flags_,
+    zlink_part_flag_t part_flag_, uintptr_t user_context_,
+    zlink_completion_id_t *completion_id_out_) {
+    return zlink_send_part(socket_, part_, flags_, part_flag_,
+                           (void *)user_context_, completion_id_out_);
+}
+
+static inline zlink_submit_result_t zlink_go_send_part_rid_with_context(
+    void *socket_, const zlink_routing_id_t *target_rid_, zlink_msg_t *part_,
+    zlink_send_flags_t flags_, zlink_part_flag_t part_flag_,
+    uintptr_t user_context_, zlink_completion_id_t *completion_id_out_) {
+    return zlink_send_part_rid(socket_, target_rid_, part_, flags_, part_flag_,
+                               (void *)user_context_, completion_id_out_);
+}
+
+static inline zlink_submit_result_t zlink_go_request_part_with_context(
+    void *socket_, const zlink_routing_id_t *target_rid_, zlink_msg_t *part_,
+    zlink_send_flags_t flags_, zlink_part_flag_t part_flag_,
+    uint32_t timeout_ms_, uintptr_t user_context_,
+    zlink_completion_id_t *completion_id_out_) {
+    return zlink_request_part(socket_, target_rid_, part_, flags_, part_flag_,
+                              timeout_ms_, (void *)user_context_,
+                              completion_id_out_);
+}
 */
 import "C"
 
 import (
 	"context"
+	"errors"
 	"time"
-	"unsafe"
 )
 
-func submitCompletionSend(
+type sendRetryState struct {
+	core      *socketCore
+	target    RoutingID
+	hasTarget bool
+	payload   *sendRetryPayload
+}
+
+func newSendRetryState(
+	core *socketCore,
+	target *RoutingID,
+	parts []sendBuilderPart,
+) (*sendRetryState, error) {
+	payload, err := newSendRetryPayload(parts)
+	if err != nil {
+		return nil, err
+	}
+	state := &sendRetryState{core: core, payload: payload}
+	if target != nil {
+		state.target = *target
+		state.hasTarget = true
+	}
+	return state, nil
+}
+
+func (s *sendRetryState) attempt(userContext uintptr) (uint64, error) {
+	if s == nil || s.core == nil || s.payload == nil {
+		return 0, &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+
+	var completionID C.zlink_completion_id_t
+	var rid C.zlink_routing_id_t
+	if s.hasTarget {
+		rid = s.target.toC()
+	}
+	err := submitMultipartFromClones(s.payload.owned, false, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
+		var finalContext C.uintptr_t
+		var completionOut *C.zlink_completion_id_t
+		if partFlag == C.ZLINK_PART_FINAL {
+			finalContext = C.uintptr_t(userContext)
+			completionOut = &completionID
+		}
+		if !s.hasTarget {
+			return submitErrorFromResult(C.zlink_go_send_part_with_context(
+				s.core.raw(), part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
+				finalContext, completionOut))
+		}
+		return submitErrorFromResult(C.zlink_go_send_part_rid_with_context(
+			s.core.raw(), &rid, part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
+			finalContext, completionOut))
+	})
+	return uint64(completionID), err
+}
+
+func (s *sendRetryState) matchesTarget(actual RoutingID) bool {
+	if s == nil {
+		return false
+	}
+	if !s.hasTarget {
+		return actual.Size() == 0
+	}
+	return s.target.Equal(actual)
+}
+
+func (e *completionEntry) attemptSend() bool {
+	if e == nil {
+		return true
+	}
+	e.attemptMu.Lock()
+	defer e.attemptMu.Unlock()
+
+	e.mu.Lock()
+	settled := e.settled
+	e.mu.Unlock()
+	if settled {
+		return true
+	}
+	if e.send == nil {
+		e.finishSend(&SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)})
+		return true
+	}
+
+	completionID, err := e.send.attempt(e.handleKey)
+	if err == nil {
+		if completionID != 0 {
+			err = &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
+		} else {
+			e.setSendWaiting(false)
+			e.send.payload.takeSourceOwnership()
+			e.send.payload.close()
+			e.finishSend(nil)
+			return true
+		}
+	}
+
+	var submitErr *SubmitError
+	if errors.As(err, &submitErr) && submitErr.Result == SubmitBackpressured {
+		if submitErr.internalErrno() == int(C.EAGAIN) && completionID != 0 {
+			e.send.payload.takeSourceOwnership()
+			e.setSendWaiting(true)
+			e.publishSendWait(completionID)
+			return false
+		}
+		err = &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
+	}
+
+	e.setSendWaiting(false)
+	e.send.payload.close()
+	e.finishSend(err)
+	return true
+}
+
+func submitManagedSend(
 	ctx context.Context,
 	core *socketCore,
 	target *RoutingID,
-	stream bool,
 	parts []sendBuilderPart,
 ) error {
 	if err := contextError(ctx); err != nil {
@@ -32,55 +168,25 @@ func submitCompletionSend(
 		return &SubmitError{Result: SubmitInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
 
-	entry := newCompletionEntry(completionSend, ctx)
+	send, err := newSendRetryState(core, target, parts)
+	if err != nil {
+		return err
+	}
+	entry := newSendCompletionEntry(ctx, send)
 	if err := core.completion.register(entry); err != nil {
+		send.payload.close()
 		entry.failSubmit()
 		entry.deleteHandle()
 		return err
 	}
 	if err := contextError(ctx); err != nil {
-		entry.failSubmit()
+		send.payload.close()
+		entry.finishSend(err)
 		core.completion.unregister(entry)
 		return err
 	}
 
-	var completionID C.zlink_completion_id_t
-	var rid C.zlink_routing_id_t
-	if target != nil {
-		rid = target.toC()
-	}
-	submitPart := func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
-		var userContext unsafe.Pointer
-		var completionOut *C.zlink_completion_id_t
-		if partFlag == C.ZLINK_PART_FINAL {
-			userContext = entry.userContext()
-			completionOut = &completionID
-		}
-		if target == nil {
-			return submitErrorFromResult(C.zlink_send_part(
-				core.raw(), part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
-				userContext, completionOut))
-		}
-		return submitErrorFromResult(C.zlink_send_part_rid(
-			core.raw(), &rid, part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
-			userContext, completionOut))
-	}
-
-	var err error
-	if stream {
-		err = submitStreamFromBuilderParts(parts, submitPart)
-	} else {
-		err = submitMultipartFromBuilderParts(parts, submitPart)
-	}
-	if err != nil {
-		entry.failSubmit()
-		core.completion.unregister(entry)
-		return err
-	}
-
-	entry.publish(uint64(completionID))
-	if completionID == 0 {
-		entry.capture(nil, nil)
+	if entry.attemptSend() {
 		core.completion.unregister(entry)
 	}
 	return entry.waitSend()
@@ -129,14 +235,14 @@ func submitCompletionRequest(
 	sendParts := sendPartsFromRequestParts(parts)
 	err = submitMultipartFromBuilderParts(sendParts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
 		var partTimeout C.uint32_t
-		var userContext unsafe.Pointer
+		var userContext C.uintptr_t
 		var completionOut *C.zlink_completion_id_t
 		if partFlag == C.ZLINK_PART_FINAL {
 			partTimeout = C.uint32_t(timeoutMillis)
-			userContext = entry.userContext()
+			userContext = C.uintptr_t(entry.handleKey)
 			completionOut = &completionID
 		}
-		return submitErrorFromResult(C.zlink_request_part(
+		return submitErrorFromResult(C.zlink_go_request_part_with_context(
 			core.raw(), ridPointer, part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
 			partTimeout, userContext, completionOut))
 	})

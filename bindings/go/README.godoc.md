@@ -24,13 +24,17 @@ pkgsite -http=:6060
 
 ## Public Surface Summary
 
-The exported Go package reflects the Core 0.16.0 raw-socket contract.
+The exported Go package reflects the Core 0.17.0 raw-socket contract.
 
 - multipart-only public send/receive APIs
 - send and request builders expose one `Submit(context.Context)` terminal;
   context cancellation ends only the caller's wait
-- send, request, and reply completion is drained by a socket-local owner or a
-  public poller's `PollCompletion` registration
+- a send makes one native DONTWAIT admission attempt; after back-pressure the
+  binding retains the logical packet, remembers Core's nonzero wait token, and
+  retries the same packet only after the matching `CompletionWritable` record
+- ordinary send admission returns completion ID zero and emits no completion;
+  `CompletionSend` remains ABI-only
+- request completion handling is unchanged and replies emit no completion
 - publish uses its separate flag-bearing `PublishOp`
 - non-blocking receive returns `(value, ok, error)`
 - ROUTER request receive exposes an opaque owner-bound `ReplyToken`
@@ -41,14 +45,29 @@ The exported Go package reflects the Core 0.16.0 raw-socket contract.
 - typed domain objects are used for `Message`, `RoutingID`, `Received`,
   `TopicMessage`, `SubscriptionEvent`, and `MonitorEvent`
 
-When a public poller owns a socket's `PollCompletion` drain, keep calling
-`Wait` from another goroutine while a completion-backed `Submit(ctx)` is
-outstanding. Otherwise the terminal cannot settle until ownership returns to
-the runtime or the poller drains the queue.
+When managed send retries may be outstanding and a public poller owns the
+socket's completion drain, register both `PollOut` and `PollCompletion`.
+Request-only polling still needs only `PollCompletion`. Keep calling `Wait`
+from another goroutine while a managed send or request `Submit(ctx)` is
+outstanding; `Wait` pulls the completion queue to no-data. A WRITABLE-only wake
+advances the exact send retry and remains visible as `PollOut`, not as a
+successful-send `PollCompletion`.
+
+`Publish(...).Flags(SendFlagsDontWait).Submit(ctx)` performs one attempt and
+returns `(false, nil)` on back-pressure. PUB/XPUB has no wait-token completion.
+The raw `ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` values
+remain ABI-stable but limit pending DONTWAIT REQUEST records only; the Go
+binding does not expose them as send options.
+
+If a managed send's context is canceled while a wait token is live, the caller
+receives the context error and the retained packet is released. A payload-free
+entry remains until that exact native token is pulled, and the canceled packet
+is not retransmitted.
+
 - raw option bags and raw flags are not exposed publicly
 - socket-specific capabilities are exposed only on concrete socket types
 - monitor open APIs take typed masks and default to `ALL` when omitted
-- all Core 0.16.0 monitor mask and delivered event values have typed constants;
+- all Core 0.17.0 monitor mask and delivered event values have typed constants;
   use `MonitorEventMask` for opening and `MonitorEventType` for event values
 - poller registrations borrow socket and timer handles; remove a source before
   closing it and serialize one poller's add/modify/remove/wait operations

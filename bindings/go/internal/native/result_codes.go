@@ -16,6 +16,17 @@ const (
 	RecvFlagsDontWait RecvFlags = 1
 )
 
+// CompletionKind identifies a record in a socket's native completion queue.
+// CompletionSend is retained for ABI compatibility but is never emitted;
+// managed sends use CompletionWritable as a retry notification.
+type CompletionKind int
+
+const (
+	CompletionSend     CompletionKind = 1
+	CompletionRequest  CompletionKind = 2
+	CompletionWritable CompletionKind = 3
+)
+
 type SubmitResult int
 
 const (

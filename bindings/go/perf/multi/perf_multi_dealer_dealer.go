@@ -199,9 +199,9 @@ func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfi
 	if len(clients) == 0 {
 		return
 	}
-	// Go has no separate async send terminal. Each long-lived goroutine owns
-	// one socket's blocking Submit call; the Go scheduler keeps the remaining
-	// sockets progressing while Core suspends a backpressured submit.
+	// Go has one context-aware Send terminal. Each long-lived goroutine owns one
+	// socket's Submit call; after backpressure the binding's scheduler pump
+	// correlates WRITABLE and retries that goroutine's retained packet.
 	var workers sync.WaitGroup
 	errors := make(chan error, len(clients))
 	for _, client := range clients {
@@ -256,8 +256,8 @@ func useMultiDealerDealerMoveMessage(transport string, msgSize int) bool {
 }
 
 // sendMultiDealerStopToken pushes the wire-level stop token through the
-// dealer socket. Bounded attempts through transient backpressure mirror
-// the cpp / java / dotnet implementations.
+// dealer socket. Submit handles WRITABLE retry internally; the outer bound
+// remains for terminal-phase connection and lifecycle failures.
 func sendMultiDealerStopToken(socket *zlink.DealerSocket) {
 	for attempt := 0; attempt < perfcommon.StopTokenSendAttempts; attempt++ {
 		sent, err := perfcommon.SubmitRoutedPayload(perfcommon.StopToken, func(message *zlink.Message) error {

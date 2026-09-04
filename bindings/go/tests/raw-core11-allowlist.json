@@ -16,7 +16,7 @@
     },
     {
       "path": "include/zlink/eventing/api.h",
-      "sha256": "5a439f8a1b608473dcec63fad954ccf0770a0d36201f5a6153661f02b32d46e6"
+      "sha256": "c2444588975fafd996c5154e2f06a48d6b2bae4dbd7af5e4a08cb3c593684341"
     },
     {
       "path": "include/zlink/message/api.h",
@@ -24,11 +24,11 @@
     },
     {
       "path": "include/zlink/socket/api.h",
-      "sha256": "89871551a417881eaaf4a5f5ee11d1d3931f1d318f8b4d9e7f219e967c7bf5c2"
+      "sha256": "7babe538c03598151ac77b7e421a922810464fea0dec65f286bf8e4e1f367ba8"
     },
     {
       "path": "include/zlink_enum.h",
-      "sha256": "efec61ad4858ffa74c187f9922cc8f0fd53b56caa5dd552ce4b76143e71d8292"
+      "sha256": "1da0d7f125a7fca7062abbf96b4be443c2f39d2f20379f20f9728563b714edc1"
     },
     {
       "path": "include/zlink_errno.h",
@@ -92,8 +92,6 @@
     "zlink_part_flag_t",
     "zlink_poll",
     "zlink_poller_add",
-    "zlink_poller_add_fd",
-    "zlink_poller_add_timer",
     "zlink_poller_destroy",
     "zlink_poller_event_t",
     "zlink_poller_modify",
@@ -114,12 +112,10 @@
     "zlink_recv_result_t",
     "zlink_reply_part",
     "zlink_reply_token_t",
-    "zlink_request_part",
     "zlink_router_recv_part",
     "zlink_routing_id_t",
+    "zlink_send_complete_result_t",
     "zlink_send_flags_t",
-    "zlink_send_part",
-    "zlink_send_part_rid",
     "zlink_set_dealer_option",
     "zlink_set_option",
     "zlink_set_pub_option",
@@ -158,10 +154,13 @@
     "zlink_xpub_recv_part"
   ],
   "localSymbols": [
-    "zlink_go_completion_context",
-    "zlink_go_completion_context_value",
-    "zlink_thread_start_go",
-    "zlink_userdata_from_handle"
+    "zlink_go_poller_add_fd_slot",
+    "zlink_go_poller_add_slot",
+    "zlink_go_poller_add_timer_slot",
+    "zlink_go_request_part_with_context",
+    "zlink_go_send_part_rid_with_context",
+    "zlink_go_send_part_with_context",
+    "zlink_thread_start_go"
   ],
   "forbiddenPaths": [
     "include/zlink/service"

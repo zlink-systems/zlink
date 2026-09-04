@@ -72,9 +72,9 @@ const (
 	MonitorEventConnectionReady = impl.MonitorEventConnectionReady
 	// MonitorEventPeerWeightChanged fires when a peer's load-balancing weight changes.
 	MonitorEventPeerWeightChanged = impl.MonitorEventPeerWeightChanged
-    // MonitorEventSendFlowPaused selects the PAUSED-transition event for an affected Application pipe.
+	// MonitorEventSendFlowPaused selects the PAUSED-transition event for an affected Application pipe.
 	MonitorEventSendFlowPaused = impl.MonitorEventSendFlowPaused
-    // MonitorEventSendFlowResumed selects the RUNNING-transition event for an affected Application pipe.
+	// MonitorEventSendFlowResumed selects the RUNNING-transition event for an affected Application pipe.
 	MonitorEventSendFlowResumed = impl.MonitorEventSendFlowResumed
 	// MonitorEventFlowStateStale selects a rejected stale or duplicate flow-state frame event.
 	MonitorEventFlowStateStale = impl.MonitorEventFlowStateStale
@@ -110,9 +110,9 @@ const (
 	MonitorEventTypeHandshakeFailedAuth = impl.MonitorEventTypeHandshakeFailedAuth
 	// MonitorEventTypePeerWeightChanged is the delivered value for a peer weight change.
 	MonitorEventTypePeerWeightChanged = impl.MonitorEventTypePeerWeightChanged
-    // MonitorEventTypeSendFlowPaused is the delivered value for a PAUSED transition on an affected Application pipe.
+	// MonitorEventTypeSendFlowPaused is the delivered value for a PAUSED transition on an affected Application pipe.
 	MonitorEventTypeSendFlowPaused = impl.MonitorEventTypeSendFlowPaused
-    // MonitorEventTypeSendFlowResumed is the delivered value for a RUNNING transition on an affected Application pipe.
+	// MonitorEventTypeSendFlowResumed is the delivered value for a RUNNING transition on an affected Application pipe.
 	MonitorEventTypeSendFlowResumed = impl.MonitorEventTypeSendFlowResumed
 	// MonitorEventTypeFlowStateStale is the delivered value for a rejected stale or duplicate flow-state frame.
 	MonitorEventTypeFlowStateStale = impl.MonitorEventTypeFlowStateStale
@@ -128,17 +128,17 @@ const (
 	MonitorEventFlagFlowStateStaleEpoch = impl.MonitorEventFlagFlowStateStaleEpoch
 	// MonitorTransportLaneApplication identifies the application lane of a paired transport.
 	MonitorTransportLaneApplication = impl.MonitorTransportLaneApplication
-    // MonitorTransportLaneCompletion identifies the Completion connection of a count-2 ROUTER-ROUTER peer.
+	// MonitorTransportLaneCompletion identifies the Completion connection of a count-2 ROUTER-ROUTER peer.
 	MonitorTransportLaneCompletion = impl.MonitorTransportLaneCompletion
 	// PollIn reports that a receive will not block.
 	PollIn = impl.PollIn
-	// PollOut reports that a send will not block.
+	// PollOut reports aggregate send readiness and stays set while an unread WRITABLE record exists.
 	PollOut = impl.PollOut
 	// PollErr reports an error condition on the source.
 	PollErr = impl.PollErr
 	// PollPri reports that priority or out-of-band data is available.
 	PollPri = impl.PollPri
-	// PollCompletion reports that an asynchronous operation has completed.
+	// PollCompletion reports completion-queue data; WRITABLE advances a retry rather than reporting send success.
 	PollCompletion = impl.PollCompletion
 	// PollSourceSocket identifies a socket as the source of a poll event.
 	PollSourceSocket = impl.PollSourceSocket

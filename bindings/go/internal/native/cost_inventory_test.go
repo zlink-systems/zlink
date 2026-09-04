@@ -42,6 +42,7 @@ func TestHotPathCostInventoryIsClassified(t *testing.T) {
 		"message-native-allocation":    {},
 		"message-snapshot-copy":        {},
 		"submit-copy-for-preservation": {},
+		"managed-send-retry-snapshot":  {},
 		"received-adopt-wrapper":       {},
 		"topic-buffer-reuse":           {},
 		"bytes-builder-native-copy":    {},

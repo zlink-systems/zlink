@@ -340,8 +340,8 @@ func submitMultiRouterReply(
 }
 
 // sendMultiRouterStopToken pushes the wire-level stop token through the
-// supplied router socket addressed to the server. Bounded attempts through
-// transient backpressure.
+// supplied router socket addressed to the server. Submit handles WRITABLE
+// retry internally; the outer bound covers other transient shutdown failures.
 func sendMultiRouterStopToken(socket *zlink.RouterSocket, serverID zlink.RoutingID) {
 	for attempt := 0; attempt < perfcommon.StopTokenSendAttempts; attempt++ {
 		sent, err := perfcommon.SubmitRoutedPayload(perfcommon.StopToken, func(message *zlink.Message) error {

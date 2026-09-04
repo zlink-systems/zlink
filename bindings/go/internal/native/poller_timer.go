@@ -6,12 +6,19 @@ package native
 #include <stdint.h>
 #include "zlink.h"
 
-static inline void *zlink_userdata_from_handle(uintptr_t handle) {
-	return (void *)handle;
+static inline zlink_config_result_t zlink_go_poller_add_slot(
+    void *poller_, void *socket_, uintptr_t slot_, short events_) {
+    return zlink_poller_add(poller_, socket_, (void *)slot_, events_);
 }
 
-static inline uintptr_t zlink_handle_from_userdata(void *userdata) {
-	return (uintptr_t)userdata;
+static inline zlink_config_result_t zlink_go_poller_add_fd_slot(
+    void *poller_, zlink_fd_t fd_, uintptr_t slot_, short events_) {
+    return zlink_poller_add_fd(poller_, fd_, (void *)slot_, events_);
+}
+
+static inline zlink_config_result_t zlink_go_poller_add_timer_slot(
+    void *poller_, void *timer_, uintptr_t slot_) {
+    return zlink_poller_add_timer(poller_, timer_, (void *)slot_);
 }
 */
 import "C"
@@ -95,6 +102,7 @@ type Poller struct {
 	mu         sync.Mutex
 	waitMu     sync.Mutex
 	waitEvents []C.zlink_poller_event_t
+	waitSlots  []uintptr
 	sockets    map[uintptr]*pollerEntry
 	fds        map[int]*pollerEntry
 	timers     map[uintptr]*pollerEntry
@@ -228,7 +236,7 @@ func (p *Poller) AddSocket(socket SocketTarget, events PollEventFlag, slot uintp
 			return err
 		}
 	}
-	if err := configErrorFromResult(C.zlink_poller_add(p.handle, raw, entry.userDataPtr(), C.short(events))); err != nil {
+	if err := configErrorFromResult(C.zlink_go_poller_add_slot(p.handle, raw, C.uintptr_t(entry.slot), C.short(events))); err != nil {
 		if entry.ownsCompletion {
 			entry.owner.transferToRuntime(p)
 		}
@@ -313,7 +321,7 @@ func (p *Poller) AddFd(fd int, events PollEventFlag, slot uintptr) error {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	entry := p.makeEntry(pollerEntryFD, nil, nil, fd, nil, slot, events)
-	if err := configErrorFromResult(C.zlink_poller_add_fd(p.handle, C.zlink_fd_t(fd), entry.userDataPtr(), C.short(events))); err != nil {
+	if err := configErrorFromResult(C.zlink_go_poller_add_fd_slot(p.handle, C.zlink_fd_t(fd), C.uintptr_t(entry.slot), C.short(events))); err != nil {
 		return err
 	}
 	p.fds[fd] = entry
@@ -361,7 +369,7 @@ func (p *Poller) AddTimer(timer *Timer, slot uintptr) error {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
 	}
 	entry := p.makeEntry(pollerEntryTimer, nil, nil, 0, timer, slot, PollIn)
-	if err := configErrorFromResult(C.zlink_poller_add_timer(p.handle, timer.handle, entry.userDataPtr())); err != nil {
+	if err := configErrorFromResult(C.zlink_go_poller_add_timer_slot(p.handle, timer.handle, C.uintptr_t(entry.slot))); err != nil {
 		return err
 	}
 	p.timers[uintptr(timer.handle)] = entry
@@ -433,21 +441,38 @@ func (p *Poller) Wait(events []PollEvent, timeout time.Duration) (int, error) {
 		}
 		return 0, configErrorFromErrno(currentErrno())
 	}
+	readyCount := int(count)
+	if cap(p.waitSlots) < readyCount {
+		p.waitSlots = make([]uintptr, readyCount)
+	}
+	slots := p.waitSlots[:readyCount]
+	for i := 0; i < readyCount; i++ {
+		// Slots are opaque integers encoded in native user_data. Remove the
+		// integer-shaped pointer from Go-scanned storage before a completion drain
+		// can grow this goroutine's stack.
+		slots[i] = uintptr(nativeEvents[i].user_data)
+		nativeEvents[i].user_data = nil
+	}
 	out := 0
-	for i := 0; i < int(count); i++ {
+	for i := 0; i < readyCount; i++ {
 		event := nativeEvents[i]
 		revents := PollEventFlag(event.events)
-		if revents&PollCompletion != 0 {
+		if revents&(PollOut|PollCompletion) != 0 {
 			p.mu.Lock()
 			entry := p.sockets[uintptr(event.socket)]
 			p.mu.Unlock()
 			if entry != nil && entry.ownsCompletion && entry.owner != nil {
-				processed, drainErr := entry.owner.drain(true)
+				drained, drainErr := entry.owner.drain(true)
 				if drainErr != nil {
 					return 0, drainErr
 				}
-				if processed == 0 {
+				// A WRITABLE record advances a managed SEND retry but is not a
+				// successful-SEND completion. Keep PollCompletion caller-visible
+				// only when this drain also delivered a REQUEST completion.
+				if drained.requestCompletions == 0 {
 					revents &^= PollCompletion
+				} else {
+					revents |= PollCompletion
 				}
 			}
 		}
@@ -457,7 +482,7 @@ func (p *Poller) Wait(events []PollEvent, timeout time.Duration) (int, error) {
 		events[out] = PollEvent{
 			SourceKind: PollSourceKind(event.source_kind),
 			Fd:         int(event.fd),
-			Slot:       uintptr(event.user_data),
+			Slot:       slots[i],
 			Revents:    revents,
 		}
 		out++
@@ -501,13 +526,6 @@ func (p *Poller) Close() error {
 
 func (p *Poller) makeEntry(kind pollerEntryKind, socket SocketTarget, raw unsafe.Pointer, fd int, timer *Timer, slot uintptr, events PollEventFlag) *pollerEntry {
 	return &pollerEntry{kind: kind, socket: socket, raw: raw, fd: fd, timer: timer, slot: slot, events: events}
-}
-
-func (e *pollerEntry) userDataPtr() unsafe.Pointer {
-	if e == nil {
-		return nil
-	}
-	return C.zlink_userdata_from_handle(C.uintptr_t(e.slot))
 }
 
 func Poll(items []PollItem, timeout time.Duration) (int, error) {

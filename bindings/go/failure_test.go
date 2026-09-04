@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -324,7 +325,7 @@ func TestSendDoesNotExposeFlags(t *testing.T) {
 	}
 }
 
-func TestPublishDontWaitReturnsErrorWhenUnroutable(t *testing.T) {
+func TestLossyPublishDontWaitSucceedsWithoutPeer(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
@@ -337,23 +338,86 @@ func TestPublishDontWaitReturnsErrorWhenUnroutable(t *testing.T) {
 	}
 }
 
+func TestNoDropPublishDontWaitReportsBackpressureAsState(t *testing.T) {
+	ctx := newContext(t)
+	defer ctx.Close()
+	if err := ctx.Options().SetAutoHwmEnabled(false); err != nil {
+		t.Fatalf("SetAutoHwmEnabled(false) error = %v", err)
+	}
+
+	publisher, _ := ctx.XPubSocket()
+	subscriber, _ := ctx.SubSocket()
+	defer publisher.Close()
+	defer subscriber.Close()
+	const recordHWM = 65_536 + 1_024
+	if err := publisher.SetNoDrop(true); err != nil {
+		t.Fatalf("SetNoDrop(true) error = %v", err)
+	}
+	if err := publisher.SetSendHighWaterMark(recordHWM); err != nil {
+		t.Fatalf("publisher SetSendHighWaterMark() error = %v", err)
+	}
+	if err := subscriber.SetReceiveHighWaterMark(recordHWM); err != nil {
+		t.Fatalf("subscriber SetReceiveHighWaterMark() error = %v", err)
+	}
+	if err := publisher.SetReceiveTimeout(5 * time.Second); err != nil {
+		t.Fatalf("publisher SetReceiveTimeout() error = %v", err)
+	}
+
+	const topic = "dontwait-full"
+	endpoint := inprocEndpoint("xpub-dontwait-backpressure")
+	if err := publisher.Bind(endpoint); err != nil {
+		t.Fatalf("publisher Bind() error = %v", err)
+	}
+	if err := subscriber.SetSubscription(topic); err != nil {
+		t.Fatalf("subscriber SetSubscription() error = %v", err)
+	}
+	if err := subscriber.Connect(endpoint); err != nil {
+		t.Fatalf("subscriber Connect() error = %v", err)
+	}
+	var subscription zlink.SubscriptionEvent
+	if ok, err := publisher.ReceiveSubscriptionEvent(&subscription, zlink.RecvFlagsNone); err != nil || !ok {
+		t.Fatalf("ReceiveSubscriptionEvent() = (%v, %v), want (true, nil)", ok, err)
+	}
+	if !subscription.Subscribed() || subscription.Topic() != topic {
+		t.Fatalf("subscription = (%v, %q), want (true, %q)", subscription.Subscribed(), subscription.Topic(), topic)
+	}
+
+	payload := make([]byte, 65_536)
+	for attempt := 0; attempt < 64; attempt++ {
+		accepted, err := publisher.Publish(topic).Bytes(payload).Flags(zlink.SendFlagsDontWait).Submit(context.Background())
+		if err != nil {
+			t.Fatalf("DONTWAIT publish attempt %d error = %v", attempt, err)
+		}
+		if !accepted {
+			return
+		}
+	}
+	t.Fatal("NODROP DONTWAIT publish did not report backpressure")
+}
+
 func TestTargetedSendFailureSurfacesError(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 
 	router, _ := ctx.RouterSocket()
 	defer router.Close()
-
 	if err := router.SetMandatory(true); err != nil {
-		t.Fatalf("SetMandatory() error = %v", err)
+		t.Fatalf("SetMandatory(true) error = %v", err)
 	}
 	if err := router.Bind(inprocEndpoint("router-send-fail")); err != nil {
 		t.Fatalf("Bind() error = %v", err)
 	}
 
 	rid := zlink.NewRoutingID([]byte("missing-peer"))
-	if err := router.SendTo(rid).Message(newMessage(t, "data")).Submit(context.Background()); err == nil {
-		t.Fatalf("SendTo() should surface an error when no peer exists")
+	message := newMessage(t, "data")
+	defer message.Close()
+	err := router.SendTo(rid).Message(message).Submit(context.Background())
+	var submitErr *zlink.SubmitError
+	if !errors.As(err, &submitErr) || submitErr.Result != zlink.SubmitNotConnected {
+		t.Fatalf("SendTo(missing RID) error = %v, want SubmitNotConnected", err)
+	}
+	if !errors.Is(err, syscall.EHOSTUNREACH) {
+		t.Fatalf("SendTo(missing RID) error = %v, want EHOSTUNREACH", err)
 	}
 }
 
@@ -546,7 +610,7 @@ func TestStreamPacketNoDataLeavesOutputEmpty(t *testing.T) {
 	}
 }
 
-func TestStreamPacketPullCanUseCompletionSend(t *testing.T) {
+func TestStreamPacketPullCanUseManagedSend(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 

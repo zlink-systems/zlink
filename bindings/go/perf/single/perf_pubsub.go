@@ -164,10 +164,9 @@ func recvSinglePubSubOnce(
 }
 
 // sendPubSubStopToken pushes the wire-level stop token on the bench
-// topic. Bounded attempts through transient backpressure mirror the
-// pattern used in single one-way. The token is published on the
-// same `bench` topic so it is delivered to subscribers that
-// matched the active stream.
+// topic. PUB/XPUB has no WRITABLE completion, so bounded DONTWAIT publish
+// attempts remain appropriate. The token is published on the same `bench`
+// topic so it is delivered to subscribers that matched the active stream.
 func sendPubSubStopToken(publisher *zlink.PubSocket) bool {
 	for attempt := 0; attempt < perfcommon.StopTokenSendAttempts; attempt++ {
 		_, err := perfcommon.SubmitMessage(perfcommon.NewMessage(perfcommon.StopToken), func(message *zlink.Message) (bool, error) {

@@ -42,8 +42,9 @@ func TestRequestUsesUnifiedCoreTargetContract(t *testing.T) {
 	}
 	body := string(bodyBytes)
 
-	if !strings.Contains(body, "C.zlink_request_part(") {
-		t.Fatal("send/request adapter must use zlink_request_part")
+	if !strings.Contains(body, "C.zlink_go_request_part_with_context(") ||
+		!strings.Contains(body, "return zlink_request_part(") {
+		t.Fatal("send/request adapter must use the uintptr-safe zlink_request_part wrapper")
 	}
 }
 

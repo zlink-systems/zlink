@@ -255,10 +255,9 @@ func (r *multiStreamRouteSender) submit(packet *zlink.Message) bool {
 			if sent {
 				return true
 			}
-			// A normal blocking STREAM backpressure result restores MoveMessage
-			// ownership. Retry on this same route while active. Once stop begins,
-			// abandon this route so teardown cannot spin behind a disconnected or
-			// permanently backpressured client.
+			// Production Submit handles a STREAM WRITABLE retry internally. Keep the
+			// false branch for injected dispatches and retry this route while active;
+			// once stop begins, abandon it so teardown cannot spin indefinitely.
 			if r.dispatch.canContinue() {
 				continue
 			}

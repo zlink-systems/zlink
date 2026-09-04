@@ -6,18 +6,18 @@ import (
 	"testing"
 )
 
-func TestCompletionEntryJoinsCaptureBeforePublish(t *testing.T) {
-	entry := newCompletionEntry(completionSend, context.Background())
+func TestRequestCompletionEntryJoinsCaptureBeforePublish(t *testing.T) {
+	entry := newCompletionEntry(completionRequest, context.Background())
 	defer entry.deleteHandle()
 	entry.capture(nil, nil)
 	select {
 	case <-entry.done:
-		t.Fatal("capture must not settle before submit publishes its completion id")
+		t.Fatal("request capture must not settle before submit publishes its completion id")
 	default:
 	}
 	entry.publish(42)
-	if err := entry.waitSend(); err != nil {
-		t.Fatalf("waitSend() error = %v", err)
+	if parts, err := entry.waitRequest(); err != nil || len(parts) != 0 {
+		t.Fatalf("waitRequest() = (%v, %v), want (empty, nil)", parts, err)
 	}
 	entry.waitSettled()
 }
@@ -39,5 +39,24 @@ func TestCompletionEntryDropsLateRequestPartsAfterCallerCancellation(t *testing.
 	entry.waitSettled()
 	if part.Data() != nil {
 		t.Fatal("late request payload was not closed")
+	}
+}
+
+func TestInactiveRuntimeKeepsOwnershipWhenSubmitRegistersBeforeRetire(t *testing.T) {
+	owner := newCompletionOwner(nil)
+	runtime := &runtimeCompletionDrain{}
+	owner.runtime = runtime
+
+	if _, _, active := owner.runtimeEvents(runtime); active {
+		t.Fatal("empty completion owner unexpectedly reported an active runtime")
+	}
+	entry := &completionEntry{handleKey: 1}
+	owner.entries[entry.handleKey] = entry
+
+	if owner.exitInactiveRuntime(runtime) {
+		t.Fatal("runtime exited after an entry registered in the idle-retirement window")
+	}
+	if owner.runtime != runtime {
+		t.Fatal("runtime ownership was cleared while a registered entry still needed it")
 	}
 }

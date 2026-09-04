@@ -77,14 +77,14 @@ func TestReplyTokenRejectsZeroAndDifferentRouterOwner(t *testing.T) {
 	}
 }
 
-func TestCompletionCanJoinBeforeSubmitReturns(t *testing.T) {
+func TestOrdinaryAdmittedSendsReturnAndDeliver(t *testing.T) {
 	ctx := newContext(t)
 	defer ctx.Close()
 	server, _ := ctx.PairSocket()
 	client, _ := ctx.PairSocket()
 	defer server.Close()
 	defer client.Close()
-	endpoint := inprocEndpoint("completion-join")
+	endpoint := inprocEndpoint("admitted-send")
 	if err := server.Bind(endpoint); err != nil {
 		t.Fatalf("Bind() error = %v", err)
 	}

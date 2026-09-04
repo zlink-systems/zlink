@@ -32,6 +32,16 @@
       "guardTest": "TestTargetedSendFailurePreservesMessagePayload"
     },
     {
+      "id": "managed-send-retry-snapshot",
+      "classification": "required",
+      "sources": [
+        "internal/native/send_retry.go:8-76",
+        "internal/native/dealer_router_request.go:25-137"
+      ],
+      "reason": "Core retains only a DONTWAIT wait token, context, and target, so the managed Send terminal must own an immutable logical packet that it can recreate after the matching WRITABLE record.",
+      "guardTest": "TestManagedSendRetriesExactPacketAfterWritable"
+    },
+    {
       "id": "received-adopt-wrapper",
       "classification": "required",
       "sources": [
@@ -73,9 +83,9 @@
       "id": "completion-owner-worker",
       "classification": "required",
       "sources": [
-        "internal/native/completion_owner.go:199-287"
+        "internal/native/completion_owner.go:321-505"
       ],
-      "reason": "One runtime drain worker per active socket owns completion progress until a public poller atomically takes ownership.",
+      "reason": "One scheduler-yielding event-loop pump per active socket owns WRITABLE and REQUEST completion progress until a public poller atomically takes ownership.",
       "guardTest": "TestPollerCompletionOwnsRequestProgressAndTransfersBack"
     },
     {

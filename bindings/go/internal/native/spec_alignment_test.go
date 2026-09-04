@@ -195,6 +195,9 @@ func TestCoreEventFlagValuesRemainComplete(t *testing.T) {
 	if PollIn != 1 || PollOut != 2 || PollErr != 4 || PollPri != 8 || PollCompletion != 32 {
 		t.Fatalf("poll flags = (%d, %d, %d, %d, %d), want (1, 2, 4, 8, 32)", PollIn, PollOut, PollErr, PollPri, PollCompletion)
 	}
+	if CompletionSend != 1 || CompletionRequest != 2 || CompletionWritable != 3 {
+		t.Fatalf("completion kinds = (%d, %d, %d), want (1, 2, 3)", CompletionSend, CompletionRequest, CompletionWritable)
+	}
 }
 
 func TestCoreEventFlagBitValuesRemainComplete(t *testing.T) {

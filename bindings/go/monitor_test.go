@@ -2,7 +2,6 @@ package zlink_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -82,7 +81,7 @@ func TestMonitorRecv(t *testing.T) {
 
 	// §8.1.1 follow-up: the five flow-state metrics must be present on the
 	// public MonitorStatus surface and read as zero on a fresh PAIR socket,
-    // which does not support DEALER/ROUTER receive-flow control.
+	// which does not support DEALER/ROUTER receive-flow control.
 	if snapshot.FlowPausedConnections != 0 ||
 		snapshot.FlowPauseAppliedTotal != 0 ||
 		snapshot.FlowResumeAppliedTotal != 0 ||
@@ -132,7 +131,7 @@ func TestMonitorObservesReceiveFlowStateTransitionsWithPairMetadata(t *testing.T
 	if err := dealer.Connect(endpoint); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
-	sendWithConnectRetry(t, dealer, newMessage(t, "hello"))
+	sendAfterConnect(t, dealer, newMessage(t, "hello"))
 	var request zlink.Received
 	if _, err := router.Recv(&request, zlink.RecvFlagsNone); err != nil {
 		t.Fatalf("router Recv() error = %v", err)
@@ -198,26 +197,14 @@ func TestMonitorRecvPullReceivesStateChange(t *testing.T) {
 	}
 }
 
-// sendWithConnectRetry sends msg on a just-Connect()ed DEALER, retrying while
-// the async TCP handshake is still in flight (SubmitNotConnected). msg's
-// payload survives a failed Submit, so the same message is reused.
-func sendWithConnectRetry(t testing.TB, dealer *zlink.DealerSocket, msg *zlink.Message) {
+// sendAfterConnect sends msg on a just-Connect()ed DEALER. Submit retains
+// the packet while Core's no-peer wait token is live and retries it only after
+// the matching WRITABLE completion arrives.
+func sendAfterConnect(t testing.TB, dealer *zlink.DealerSocket, msg *zlink.Message) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-		err := dealer.Send().Message(msg).Submit(ctx)
-		cancel()
-		if err == nil {
-			return
-		}
-		var submitError *zlink.SubmitError
-		if !errors.As(err, &submitError) || submitError.Result != zlink.SubmitNotConnected {
-			t.Fatalf("dealer Send() error = %v", err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for dealer to connect")
-		}
-		time.Sleep(5 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := dealer.Send().Message(msg).Submit(ctx); err != nil {
+		t.Fatalf("dealer Send() error = %v", err)
 	}
 }

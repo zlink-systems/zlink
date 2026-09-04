@@ -26,6 +26,7 @@ type (
 	SocketMonitor        = impl.SocketMonitor
 
 	RoutingID         = impl.RoutingID
+	CompletionKind    = impl.CompletionKind
 	Message           = impl.Message
 	ReplyToken        = impl.ReplyToken
 	Received          = impl.Received
@@ -180,6 +181,9 @@ const (
 	PollSourceSocket         = impl.PollSourceSocket
 	PollSourceFD             = impl.PollSourceFD
 	PollSourceTimer          = impl.PollSourceTimer
+	CompletionSend           = impl.CompletionSend
+	CompletionRequest        = impl.CompletionRequest
+	CompletionWritable       = impl.CompletionWritable
 
 	SubmitOK              = impl.SubmitOK
 	SubmitBackpressured   = impl.SubmitBackpressured

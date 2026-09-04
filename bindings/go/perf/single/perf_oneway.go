@@ -84,8 +84,8 @@ func runSingleOneWayWithTransient(
 		}
 	}
 	// PERF_SINGLE_TEST_POLICY § 1.4: signal phase end via wire-level
-	// stop token. Blocking send uses bounded transient-backpressure attempts
-	// so the receiver always observes the terminator.
+	// stop token. Managed send handles WRITABLE retry internally; the outer
+	// bound still prevents terminal-phase connection failures from hanging.
 	if !sendStopTokenSingle(sendStop, isTransient) {
 		perfcommon.Must(fmt.Errorf("single stop token send failed"))
 	}
@@ -191,9 +191,9 @@ func drainSingleOneWayProbe(receiver recvSocket) bool {
 }
 
 // sendStopTokenSingle attempts to push the wire-level stop token onto the
-// connection. The send is bounded: each transient backpressure /
-// EAGAIN response waits through `StopTokenSendBackoff`, capped by
-// `StopTokenSendAttempts`. A non-transient error is fatal.
+// connection. Managed WRITABLE retry occurs inside Submit. This outer loop is
+// capped by StopTokenSendAttempts for other transient terminal-phase failures;
+// a non-transient error is fatal.
 func sendStopTokenSingle(send func(*zlink.Message) error, isTransient func(error) bool) bool {
 	if isTransient == nil {
 		isTransient = perfcommon.IsTransient

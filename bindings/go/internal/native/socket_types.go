@@ -75,7 +75,7 @@ func newPairSocket(ctx *Context) (*PairSocket, error) {
 
 func (s *PairSocket) Send() SendOp {
 	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
-		return submitCompletionSend(ctx, s.socketCore, nil, false, parts)
+		return submitManagedSend(ctx, s.socketCore, nil, parts)
 	})
 }
 
@@ -179,7 +179,7 @@ func (s *DealerSocket) SetRequestTimeout(value time.Duration) error {
 
 func (s *DealerSocket) Send() SendOp {
 	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
-		return submitCompletionSend(ctx, s.socketCore, nil, false, parts)
+		return submitManagedSend(ctx, s.socketCore, nil, parts)
 	})
 }
 
@@ -504,7 +504,7 @@ func (s *StreamSocket) RoutingID() (RoutingID, error) {
 
 func (s *StreamSocket) SendTo(target RoutingID) SendOp {
 	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
-		return submitCompletionSend(ctx, s.core.socketCore, &target, true, parts)
+		return submitManagedSend(ctx, s.core.socketCore, &target, parts)
 	})
 }
 
@@ -518,7 +518,7 @@ func (s *StreamSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 	if out.routingID.Size() > 0 {
 		routingID := out.routingID
 		out.send = func(ctx context.Context, builderParts []sendBuilderPart) error {
-			return submitCompletionSend(ctx, s.core.socketCore, &routingID, true, builderParts)
+			return submitManagedSend(ctx, s.core.socketCore, &routingID, builderParts)
 		}
 	}
 	return true, nil

@@ -10,9 +10,7 @@ package native
 import "C"
 
 import (
-	"errors"
 	"runtime"
-	"syscall"
 	"unsafe"
 )
 
@@ -207,18 +205,6 @@ func submitSinglePartFromCopy(part *Message, submit multipartSubmitFunc) error {
 }
 
 func submitSinglePartMoved(part *Message, submit multipartSubmitFunc) error {
-	return submitSinglePartMovedWithStreamBackpressure(part, submit, false)
-}
-
-func submitSingleStreamPartMoved(part *Message, submit multipartSubmitFunc) error {
-	return submitSinglePartMovedWithStreamBackpressure(part, submit, true)
-}
-
-func submitSinglePartMovedWithStreamBackpressure(
-	part *Message,
-	submit multipartSubmitFunc,
-	retainStreamBackpressure bool,
-) error {
 	if part == nil {
 		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
@@ -238,26 +224,10 @@ func submitSinglePartMovedWithStreamBackpressure(
 	}
 	err := submit(&native, C.zlink_part_flag_t(C.ZLINK_PART_FINAL))
 	if err != nil {
-		if retainStreamBackpressure && isStreamBackpressuredEAGAIN(err) {
-			if restoreErr := configErrorFromResult(C.zlink_msg_move(&part.msg, &native)); restoreErr != nil {
-				_ = configErrorFromResult(C.zlink_msg_close(&native))
-				part.moved()
-				return restoreErr
-			}
-			_ = configErrorFromResult(C.zlink_msg_close(&native))
-			return err
-		}
 		_ = configErrorFromResult(C.zlink_msg_close(&native))
 	}
 	part.moved()
 	return err
-}
-
-func isStreamBackpressuredEAGAIN(err error) bool {
-	var submitErr *SubmitError
-	return errors.As(err, &submitErr) &&
-		submitErr.Result == SubmitBackpressured &&
-		submitErr.internalErrno() == int(syscall.EAGAIN)
 }
 
 func submitSinglePartFromBytes(data []byte, submit multipartSubmitFunc) error {
@@ -348,13 +318,4 @@ func submitMultipartFromBuilderParts(parts []sendBuilderPart, submit multipartSu
 		}
 	}
 	return err
-}
-
-func submitStreamFromBuilderParts(parts []sendBuilderPart, submit multipartSubmitFunc) error {
-	if len(parts) == 1 && parts[0].move && !parts[0].bytes {
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-		return submitSingleStreamPartMoved(parts[0].message, submit)
-	}
-	return submitMultipartFromBuilderParts(parts, submit)
 }

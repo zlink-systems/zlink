@@ -67,7 +67,7 @@ func (s *routedSocket) replaceRoutedReceived(
 	var send func(context.Context, []sendBuilderPart) error
 	if routingID.Size() > 0 {
 		send = func(ctx context.Context, builderParts []sendBuilderPart) error {
-			return submitCompletionSend(ctx, s.socketCore, &routingID, false, builderParts)
+			return submitManagedSend(ctx, s.socketCore, &routingID, builderParts)
 		}
 	}
 	out.replace(routingID, parts, token, reply, send)
@@ -88,7 +88,7 @@ func (s *routedSocket) Recv(out *Received, flags RecvFlags) (bool, error) {
 
 func (s *RouterSocket) SendTo(target RoutingID) SendOp {
 	return newSendBuilder(func(ctx context.Context, parts []sendBuilderPart) error {
-		return submitCompletionSend(ctx, s.socketCore, &target, false, parts)
+		return submitManagedSend(ctx, s.socketCore, &target, parts)
 	})
 }
 

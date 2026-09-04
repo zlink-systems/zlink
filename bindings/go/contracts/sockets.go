@@ -11,7 +11,7 @@ type (
 	RidDuplicatePolicy = impl.RidDuplicatePolicy
 	// SubmitRetryMode determines whether a failed submit is retried.
 	SubmitRetryMode = impl.SubmitRetryMode
-    // ReceiveFlowState is the DEALER/ROUTER receive-flow state.
+	// ReceiveFlowState is the DEALER/ROUTER receive-flow state.
 	ReceiveFlowState = impl.ReceiveFlowState
 	// CommonSocketOptions is the typed facade over the socket options shared by every socket type.
 	CommonSocketOptions = impl.CommonSocketOptions
@@ -35,7 +35,7 @@ type (
 	StreamSocket = impl.StreamSocket
 	// SendOp builds a multipart send; submitting consumes the added parts.
 	SendOp = impl.SendOp
-	// SendSubmitOp accepts further parts and the completion-backed terminal submit of a send.
+	// SendSubmitOp accepts further parts and a terminal that retries the retained packet after its exact WRITABLE token.
 	SendSubmitOp = impl.SendSubmitOp
 	// RequestOp builds a request; submitting consumes the parts and awaits a reply.
 	RequestOp = impl.RequestOp
@@ -51,7 +51,7 @@ type (
 	PublishSubmitOp = impl.PublishSubmitOp
 	// StreamReceiveMode selects RAW or decoded PACKET receive before bind/connect.
 	StreamReceiveMode = impl.StreamReceiveMode
-	// SendFlags modify send behavior; DontWait reports back-pressure instead of blocking.
+	// SendFlags modify publish behavior; DontWait reports back-pressure instead of blocking.
 	SendFlags = impl.SendFlags
 	// RecvFlags modify receive behavior; DontWait returns instead of blocking when no message is available.
 	RecvFlags = impl.RecvFlags
@@ -74,7 +74,7 @@ const (
 	RidDuplicateHandover = impl.RidDuplicateHandover
 	// SubmitRetryOff never retries; a failed submit fails immediately.
 	SubmitRetryOff = impl.SubmitRetryOff
-	// SubmitRetryLocalFailure retries when the submit fails locally, such as under back-pressure.
+	// SubmitRetryLocalFailure retries configured local connection failures; DONTWAIT back-pressure uses WRITABLE tokens instead.
 	SubmitRetryLocalFailure = impl.SubmitRetryLocalFailure
 	// SendFlagsNone is the default send behavior: block until the message can be queued.
 	SendFlagsNone = impl.SendFlagsNone
@@ -84,9 +84,9 @@ const (
 	RecvFlagsNone = impl.RecvFlagsNone
 	// RecvFlagsDontWait does not block; returns immediately when no message is available.
 	RecvFlagsDontWait = impl.RecvFlagsDontWait
-    // ReceiveFlowRunning is the default receive-flow state: the affected Application pipe accepts data normally.
+	// ReceiveFlowRunning is the default receive-flow state: the affected Application pipe accepts data normally.
 	ReceiveFlowRunning = impl.ReceiveFlowRunning
-    // ReceiveFlowPaused pauses an affected Application pipe's remote peer without touching byte HWM or transport backpressure.
+	// ReceiveFlowPaused pauses an affected Application pipe's remote peer without touching byte HWM or transport backpressure.
 	ReceiveFlowPaused        = impl.ReceiveFlowPaused
 	StreamReceiveUnspecified = impl.StreamReceiveUnspecified
 	StreamReceiveRaw         = impl.StreamReceiveRaw

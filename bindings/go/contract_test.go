@@ -40,6 +40,11 @@ func TestCoreResultAndEventConstantsArePublic(t *testing.T) {
 	if zlink.PollErr != zlink.PollEventFlag(4) || zlink.PollPri != zlink.PollEventFlag(8) {
 		t.Fatalf("poll error flags = (%d, %d), want (4, 8)", zlink.PollErr, zlink.PollPri)
 	}
+	if zlink.CompletionSend != zlink.CompletionKind(1) ||
+		zlink.CompletionRequest != zlink.CompletionKind(2) ||
+		zlink.CompletionWritable != zlink.CompletionKind(3) {
+		t.Fatalf("completion kinds = (%d, %d, %d), want (1, 2, 3)", zlink.CompletionSend, zlink.CompletionRequest, zlink.CompletionWritable)
+	}
 }
 
 func TestDirectCommonHeaderVersionMatchesPackage(t *testing.T) {

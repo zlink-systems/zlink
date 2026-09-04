@@ -32,11 +32,10 @@ func IsStopTokenMessage(part *zlink.Message) bool {
 	return IsStopToken(part.Data())
 }
 
-// StopTokenSendBackoff is the initial backoff a blocking-stop-token send
-// uses when the socket reports transient backpressure. The wait is
-// bounded by StopTokenSendAttempts so the sender goroutine cannot hang
-// indefinitely on a fully blocked peer. Attempts are sized for ~5 s of
-// drain time which covers heavy multi-pattern fan-out workloads.
+// StopTokenSendBackoff is the outer retry backoff for transient stop-token
+// failures not handled by a managed WRITABLE retry. Attempts are bounded so a
+// sender goroutine cannot hang indefinitely during shutdown and are sized for
+// about five seconds of heavy multi-pattern fan-out drain time.
 const (
 	StopTokenSendBackoff  = time.Millisecond
 	StopTokenSendAttempts = 5000

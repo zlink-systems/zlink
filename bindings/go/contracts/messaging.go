@@ -5,6 +5,9 @@ package contracts
 import impl "zlink.systems/zlink/internal/native"
 
 type (
+	// CompletionKind identifies a native completion record kind. Send is ABI-only;
+	// Writable tells a managed send to retry its retained packet.
+	CompletionKind = impl.CompletionKind
 	// RoutingID is an opaque identifier for a messaging peer or route, 1 to 255 bytes.
 	RoutingID = impl.RoutingID
 	// Message owns a message payload; sending consumes it and Close releases it.
@@ -19,6 +22,15 @@ type (
 	SubscriptionEvent = impl.SubscriptionEvent
 	// StreamPacket is reusable output storage for one decoded STREAM packet.
 	StreamPacket = impl.StreamPacket
+)
+
+const (
+	// CompletionSend is retained for ABI compatibility and is never emitted.
+	CompletionSend = impl.CompletionSend
+	// CompletionRequest carries a completed request and its reply or terminal result.
+	CompletionRequest = impl.CompletionRequest
+	// CompletionWritable carries the exact wait token whose send target became writable.
+	CompletionWritable = impl.CompletionWritable
 )
 
 var (
