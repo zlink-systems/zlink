@@ -1,0 +1,65 @@
+# Job: dotnet — stale-authority TimedOut(101) is the spec-defined losing-direction handover timeout; make the framework follow the spec (settle-before-submit or resend-after-handover), parity with cpp/node
+
+You are a codex sub-agent under a Claude supervisor. One cause per job, 1.5 h cap. Read `AGENTS.md`
+(root), `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md` first. **Do not modify Core or
+bindings. Do not touch any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`.**
+
+## What is established (do not re-derive; the previous job's Core-bug conclusion was WRONG)
+- Read `doc/plan/c016-worklog/bucketB-dotnet-stale-summary.md` for the traces, but its classification
+  "Core defect" is overruled by the spec text below. Core behaves per spec.
+- `core/doc/spec/core/socket/README.ko.md` §4 "rid 중복 정책" (HANDOVER): when opposite-direction pipes
+  of the same peer RID conflict, both peers compare RIDs and pick ONE direction; a request already
+  admitted on the losing direction is not carried over — "그 request의 reply는 submit 시점에 사용한
+  바로 그 transport pair로만 전달되도록 제한되어 있어 request를 완료하지 못하고, request는 자기
+  timeout으로 정확히 한 번 종결된다. **Caller는 handover 뒤 다시 보낸다.**"
+- `framework/doc/framework/common/spec/server/02-channel-transport/01-channel-topology.ko.md` "Peer 연결":
+  automatic RouteMesh — only the smaller-RID node connects; "Manual 양방향 connect와 automatic의 연결
+  경합·오래된 후보는 같은 handshake와 duplicate-pipe admission을 거쳐 **ready 연결 하나만** 남긴다."
+- Core impl (`core/src/runtime/sockets/router/router_admission.cpp` identify_peer, `reciprocal_duplicate`):
+  the losing pipe stays alive as an anonymous standby RID (`_standby_pipes`); only the winner carries the
+  logical RID. ROUTER-ROUTER = one lane set (Application + Completion lane).
+- The three failing tests (`StatefulServiceRuntimeTests.RemoteActorStaleAuthority*`) register both
+  peers, start caller then owner, both `ConnectPeer` each other (manual bilateral), wait for
+  `AdmittedPeerCount == 1` on both, then `RequestToActor(..., 3 s)`. Trace: owner replies OK on the
+  winner's Completion lane; caller's pending request is pinned to the loser pair → discarded per spec →
+  `ExpireOperationAsync` TimedOut(101). The framework's own duplicate handling logged
+  `mesh_peer_duplicate_retire` + `mesh_peer_duplicate_retire_skip_transport` (keeps the loser transport as
+  standby, `SharesNativeHandoverRoute`).
+- So the defect is one of: (a) the framework declares the peer Admitted/ready and submits application
+  requests **before Core's handover has settled** (framework spec: "ready 연결 하나만 남긴다"), and/or
+  (b) the framework does not **resend after handover** as the Core spec requires of the caller. The node
+  framework's terminal-replay loop and the cpp framework's bilateral survivor handling
+  (`test_cpp_framework_m6a_runtime.cpp` `verify_duplicate_connection_survivor_is_symmetric`,
+  `verify_bilateral_raw_connection_without_public_pipe_id_keeps_survivor`) are the parity references.
+- Also note: Core main now includes D-B85 (`7d8205a028`): DONTWAIT REQUEST can return BACKPRESSURED +
+  wait token; the .NET binding's REQUEST port for that is NOT done yet (B's job). Do not build on it;
+  if you observe BACKPRESSURED on request submit, report it and keep to the handover cause.
+- Env: `core/build-dev` and `.artifacts/wsl` are being rebuilt for the new Core right now; wait until
+  `/home/hep7/project/zlink/zlink-work/c016/logs/rebuild-newcore.done` exists before running dotnet
+  tests. dotnet test env block (never `--artifacts-path`, never `ulimit -v`):
+  `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; cd framework/languages/dotnet; flock -w7200 /tmp/zlink-dotnet-gate.lock dotnet test tests/Zlink.Framework.UnitTests --filter '...'`.
+  xUnit swallows Console.Error: if you need the framework's `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` traces,
+  add a temporary file sink and remove it before finishing.
+
+## What to do
+1. Establish the handover timing: at `RequestToActor` submit time, has the caller's Core already
+   applied the reciprocal handover (which pipe holds RID "owner")? Use Core monitor events the framework
+   already pulls (`OnSocketMonitorEvent`: CONNECTION_READY edge / DISCONNECTED with connection id + lane)
+   and the framework's peer state. Determine what "ready 연결 하나만" should mean for `Admitted`.
+2. Decide the spec-conformant mechanism and match cpp/node parity: (a) do not mark a manually
+   bilateral peer Admitted (or do not select its route for application submits) until the survivor
+   direction is settled; and/or (b) resend the same operation after a handover-caused TimedOut within
+   the operation deadline, exactly-once preserved (the owner's terminal replay / idempotent operation id
+   rules in `framework/doc/framework/common/spec/server/03-spot-actor/` and `04-session/`). Cite the
+   clauses. Prefer the mechanism the other frameworks already use.
+3. Implement minimally in `framework/languages/dotnet/**`. Never edit the three tests' assertions.
+   Add a regression test that pins the mechanism (e.g. bilateral connect with caller-first ordering,
+   request submitted right after Admitted, expects the actor terminal, not TimedOut).
+4. Verify: the 3 tests 3× green, `--filter 'FullyQualifiedName~StatefulServiceRuntimeTests'` once,
+   then `tests/Zlink.Framework.UnitTests` once (report counts; do not chase unrelated failures).
+5. Remove temporary probes. Do NOT commit.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-dotnet-handover-resend-summary.md`: the handover timing evidence,
+mechanism chosen with spec clauses and cpp/node parity, files changed with `file:line`, regression test,
+commands + results, BLOCKERS (including anything that looks like a spec gap — proposal only).

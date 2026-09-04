@@ -62,6 +62,45 @@
 - [x] "cpp async-only submit projection" 계약 실패는 로컬 false-failure로 판정(CI 통과) — framework API 추가 불필요
 - [ ] **[사용자 요청] framework 가이드에 메시징 API 종결자 의미·사용법 추가** — 05-channel-messaging에 개념 절 신설(04 §3.1 중복 금지). 진단·제안 위치는 HANDOFF §4.2
 
+
+## §B 근본원인·해결방안 정리 (2026-09-05 새벽, A 감독관)
+
+### B-1. dotnet stale-authority 3건 (`TimedOut(101)`) — **Core 버그 아님, spec이 정한 handover timeout**
+- **현상**: caller/owner가 서로 `ConnectPeer`(manual 양방향), caller 먼저 시작. owner는 stale terminal을 정상 submit(OK)하지만
+  caller는 completion을 못 받고 3초 뒤 `ExpireOperationAsync`가 101을 만든다. 순수 C 재현 5/5(`c016-worklog/tools/repro_router_reply_pair_mismatch.cpp`).
+- **spec 판정** (`core/doc/spec/core/socket/README.ko.md` §4 rid 중복 정책, HANDOVER): 반대 방향 pipe 충돌 시 두 peer가 RID 비교로
+  **같은 방향 하나**를 선택하고, 물러나는 방향에 이미 admit된 request는 **"submit 시점 transport pair로만 reply 전달"**되어 자기
+  timeout으로 정확히 한 번 종결되며 **"Caller는 handover 뒤 다시 보낸다"**. framework spec `01-channel-topology` "Peer 연결":
+  automatic은 RID가 작은 쪽만 connect, manual 양방향은 duplicate-pipe admission으로 **ready 연결 하나만** 남긴다.
+  ROUTER-ROUTER 링크 = lane set 하나(Application lane + Completion lane, READY `Zlink-Lane` 0/1로 확정).
+- **Core 구현**: `router_admission.cpp` identify_peer의 `reciprocal_duplicate` — 승자에만 logical RID를 묶고 패자 pipe는 끊지 않고
+  익명 standby RID(`_standby_pipes`)로 유지. 수신 측 pair 고정(`socket_request_reply_pending_api.cpp:105`)은 spec 문면 그대로.
+  → 세션 중 "수신 측 pair 고정이 spec에 없다"는 판정과 그에 따른 Core 수정 job은 **오판으로 중단·폐기**했다.
+- **실제 결함 위치 = .NET framework 순서/재전송**: (a) Core handover가 수렴하기 전에 peer를 `Admitted`로 선언하고 물러날 pair로
+  application request를 제출(`mesh_peer_duplicate_retire_skip_transport`가 패자 transport를 standby로 유지), 그리고/또는
+  (b) spec이 caller에 요구하는 "handover 뒤 재전송"이 actor request 경로(`CompleteNativeApplicationRequest`)에 없다.
+- **해결방안**: cpp(`verify_duplicate_connection_survivor_is_symmetric`, `…bilateral…keeps_survivor`)·node(terminal replay 루프)와
+  parity로 .NET에 (a) survivor 확정 전 route 미선택 또는 (b) deadline 내 같은 operation 재전송(exactly-once 유지)을 구현.
+  브리프 `briefs/bucketB-dotnet-handover-resend.prompt`(sol/xhigh). Core·spec 변경 없음. standby pipe 유지가 spec "물러난다"와
+  일치하는지는 사용자 판단 사항으로 보고만 한다.
+
+### B-2. node `user-spot-native-two-process` `RequestError(101)` — 같은 현상의 node판, framework 수정 완료(미커밋)
+- 첫 raw request가 end-to-end deadline 전부를 소진해 reply 유실 뒤 terminal replay 기회가 없었다. 수정: attempt별 남은 deadline의
+  절반만 배정(`service-stateful-runtime.ts:4008`), 회귀 테스트 `test/m6b/m6b-user-spot-terminal-replay.contract.ts`. 3/3 green.
+  → 새 Core 재빌드 후 감독 게이트 재실행하고 커밋.
+
+### B-3. cpp — 4건 모두 커밋 완료
+- `a22f8c880b` ENOENT 재시도 분류, `44b9b27efc` 같은 endpoint RID 교체 시 stale connect intent 종료,
+  `cc9a4edcd7` plain-hello 테스트 하네스(poller 구동), `cee95ff462` bound-session 테스트를 실제 transport 경로로.
+- 잔여 후보: m6b line 1909 route-cache owner-admission 타이밍 flake(2/15) — in-memory store(system_clock) vs runtime(steady_clock)
+  cross-clock, `bucketB-cpp-m6b-late-summary.md` 참조. 별도 job.
+
+### B-4. **새 의존성 — Core REQUEST 계약 B (D-B85, `7d8205a028`, 2026-09-05 00:24)**
+- DONTWAIT request가 SEND처럼 `BACKPRESSURED`+wait token → WRITABLE 후 재제출. ROUTER no-route는 SEND와 같은 `NOT_CONNECTED` 규칙.
+- **B의 bindings 8개 REQUEST 포팅이 아직 미완**(`core-0.17.0-dontwait-contract-and-perf-plan-b.ko.md` §5). framework의 request 경로
+  적응(§A의 request판)은 그 포팅 뒤에 한다. 그 전까지 framework 게이트에서 request 관련 신규 실패는 이 의존성으로 분류한다.
+- 즉시 조치: 새 Core로 `core/build-dev`·프리픽스·로컬 패키지 재생성 후 cpp m6a/m6b·monitor 재현 재실행(진행 중).
+
 ## 알려진 pre-existing (회귀 아님, 별도 추적)
 - node lint `spot-timer.ts:137` (2026-08 이후 불변, DONTWAIT 무관)
 - java M6A 2건 + JavaDocumentationRegression 1건 (0.16 전환 커밋에도 존재)
