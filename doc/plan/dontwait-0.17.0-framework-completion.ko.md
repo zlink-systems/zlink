@@ -58,7 +58,7 @@
       java 1213/2 = pre-existing M6A 2건만(F 1건 `EntrySpotActorDispatchTests…staleTerminal`은 하네스 drain barrier 수정 `2b1d0c794c`);
       node 1552/5 → C 4(ZoneWorld dist 미빌드 3·lint 1) + F 2 수정 완료(`2ceb137abe`);
       cpp gate-v2 63/69 → stream-connector fixture(RAW mode before bind, spec 08-stream §2) `dbfcf7d6fe`·lz4 packaging `20b94c3457`·package-test config `4573c09a2a` 수정 후 잔여 = inventory 278(C)·m6b 1909 flake(C);
-      dotnet 전체 unit gate(handover+spot-route 결합 상태, 36분짜리 D-068 sibling 제외): 852 pass / 1 fail / 1 hang →
+      dotnet 전체 unit gate: v3 852/1/1hang → v4 → v5 1917/2 → **v6 1919/0 + Canonical 15/15** → **v7(TicTacToe 수정 포함) 1920/0 + Canonical 15/15, hang 0** (36분짜리 D-068 sibling만 제외). 커밋: 승인 rework `b28eb24270`, ClientServer 재연결 `25952a76bc`, fixture DEALER 누수 `6b77ba013f`, inbound peer 재사용 `ebff5b3e1b`.
       relay fail = 늦은 loser `ConnectionReady`가 survivor의 RID→pair 인덱스를 덮어 command 33이 `current_source=False`로 폐기(수정, 15/15);
       hang = fixed-RID handover 테스트 fixture 경합(`RouteAdmission_HandoverStartsFreshLivenessDeadline`, 이전 DEALER reconnect intent 유지) — fixture 수정(8/8).
       **Core 후보(B 보고) → 해소(2026-09-05 05:40, Core 결함 아님)**: dump 분석 결과 native ctx에 남은 socket은 test fixture(`CanonicalActorJoinIngressReplyTests.ConnectedRuntime.HandoverAsync/ReconnectAsync`)가 admission 실패 예외 경로에서 dispose하지 않은 fixed-RID DEALER 1개(managed handle GC root 0) — `zlink_close` 미호출 상태에서 `Context.DisposeAsync`가 spec(`core/doc/spec/core/socket/README.ko.md:486`, 모든 socket close 후 ctx term)대로 block. 공개 C API repro(모든 socket close 시 tcp/inproc/handover cycle 5/5 즉시 반환; 미close DEALER 1개면 늦은 close까지 block) = `doc/plan/c016-worklog/evidence/test_ctx_term_fixed_rid_handover.cpp`. fixture 수정 job 진행 중. 2차 발견(Core 후속, B 영역): tcp에서 이전 pipe가 살아있는 same-RID replacement DEALER admission이 0.1~2.9 s(간헐 >5 s, inproc 즉시) — decisions D-086.
@@ -67,7 +67,7 @@
 - [ ] 7 samples × 4언어 green — **cpp 7/7**; **node 7/7**(SupportChat budget `2e3b1b47e4`, ZoneWorld entry html `c67deb44e0`, runner PASS marker `2ceb137abe`);
       java: TicTacToe·SupportChat·DeliveryDispatch(`ed156f5983`+teardown `6682ae0db1`)·GameQuest(heartbeat `dc9fe76100`)·ShoppingMall·**Bingo**(teardown/heartbeat 수정으로 해소, exit 0) = **6/7**; 최종 java gate(2026-09-05 05:22): 개별 6/7(TicTacToe는 run_sample.sh 실행비트 누락 → 5언어 일괄 `133d01c9b2`; ZoneWorld A3 `moveTo` timeout 1/4 간헐 → job), aggregate는 Java 7/7 완료 후 Kotlin GameQuest `Program.kt:179` `ensure(unavailable != null)` 실패(owner termination 뒤 요청이 성공) → job;
       ZoneWorld: A2 지연 = public mesh poller owner가 command 36 STREAM admission을 동기 대기 → 비동기 admission `424b15684c`; A5 = STREAM 수신 owner가 control frame(heartbeat pong·session-closing) 전송을 state lane에서 동기 대기 → 비동기 전송 `7b0590183d` → **FULL ZoneWorld 2/2 green** ⇒ **java 7/7**(최종 일괄 게이트 job 실행 중);
-      dotnet 7 samples 미실행(dotnet 커밋 후). cpp/node 리팩토링 pass(POSDDD·perf·dead code) job 진행 중
+      dotnet 7 samples(1차, `ebff5b3e1b` 전): 6/7 — TicTacToe `JoinGameNotify` 미전달 = auto-connect가 이미 admitted된 inbound peer를 재사용하지 않고 reciprocal candidate를 열어 route/survivor 불일치(수정 `ebff5b3e1b`, 3/3) → 2차 전체 재실행 중. java ZoneWorld A3 = bound-session push가 호출 thread에서 STREAM state lane join(수정 `d8575e6fbb` 직전 커밋, prefix 5/5·FULL 2/2) → java 2차 재실행 중. cpp/node 리팩토링 pass 커밋 `01e5c4613d`.
 - [ ] cross-language E2E green — cpp all-stage runner **32/32 PASS**(dotnet spot-route 수정 포함, 미커밋 상태); node smoke 12/12 + Redis stage(환경 복원 후 재실행 필요); java-cross 4/4. dotnet 커밋 후 최종 재실행
 - [ ] 최종 커밋+푸시 — 지금까지 framework 수정 커밋 20건 푸시됨(main); dotnet 일괄 커밋·리팩토링 pass·최종 게이트 잔여
 
