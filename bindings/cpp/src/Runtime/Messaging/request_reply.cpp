@@ -10,6 +10,23 @@
 
 namespace zlink
 {
+namespace
+{
+
+struct request_completion_bundle_t
+{
+    explicit request_completion_bundle_t (
+      std::unique_ptr<detail::operation_state_t> operation_) :
+        result (), entry (&result, std::move (operation_))
+    {
+    }
+
+    detail::async_operation_state_t<std::vector<message_t>> result;
+    detail::completion_entry_t entry;
+};
+
+} // namespace
+
 request_submit_operation_t::~request_submit_operation_t () = default;
 request_submit_operation_t::request_submit_operation_t (request_submit_operation_t &&) noexcept =
   default;
@@ -63,8 +80,7 @@ std::vector<message_t> request_submit_operation_t::submit () &&
     if (!runtime)
         throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
 
-    std::shared_ptr<detail::async_operation_state_t<std::vector<message_t>>> no_async;
-    auto entry = std::make_shared<detail::completion_entry_t> (no_async);
+    auto entry = std::make_shared<detail::completion_entry_t> (nullptr);
     runtime->completion->register_entry (entry);
     try {
         operation.flags = send_flags_t::none;
@@ -91,13 +107,14 @@ async_result_t<std::vector<message_t>> request_submit_operation_t::async () &&
         throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
 
     operation.flags = send_flags_t::dontwait;
-    auto result = std::make_shared<
-      detail::async_operation_state_t<std::vector<message_t>>> ();
     auto operation_state = release_state_ptr ();
+    std::shared_ptr<request_completion_bundle_t> bundle;
     std::shared_ptr<detail::completion_entry_t> entry;
     try {
-        entry = std::make_shared<detail::completion_entry_t> (
-          result, std::move (operation_state));
+        bundle = std::make_shared<request_completion_bundle_t> (
+          std::move (operation_state));
+        entry = std::shared_ptr<detail::completion_entry_t> (
+          bundle, &bundle->entry);
     }
     catch (...) {
         if (operation_state) {
@@ -115,8 +132,11 @@ async_result_t<std::vector<message_t>> request_submit_operation_t::async () &&
         runtime->completion->unregister_entry (entry.get ());
         throw;
     }
+    detail::async_result_state_t<std::vector<message_t>> *const result =
+      &bundle->result;
     return detail::async_result_access_t::make<std::vector<message_t>> (
-      std::move (result));
+      std::shared_ptr<detail::async_result_state_t<std::vector<message_t>>> (
+        std::move (bundle), result));
 }
 
 } // namespace zlink

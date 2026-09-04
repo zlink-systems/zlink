@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <memory_resource>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -28,19 +29,23 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
     enum class kind_t { send_retry, request };
 
     explicit completion_entry_t (
-      std::shared_ptr<async_operation_state_t<void>> send_result_,
+      async_operation_state_t<void> *send_result_,
       std::unique_ptr<operation_state_t> send_operation_);
     explicit completion_entry_t (
-      std::shared_ptr<async_operation_state_t<std::vector<message_t>>> request_result_);
+      async_operation_state_t<std::vector<message_t>> *request_result_);
+    explicit completion_entry_t (
+      const std::shared_ptr<async_operation_state_t<std::vector<message_t>>> &
+        request_result_);
     completion_entry_t (
-      std::shared_ptr<async_operation_state_t<std::vector<message_t>>> request_result_,
+      async_operation_state_t<std::vector<message_t>> *request_result_,
       std::unique_ptr<operation_state_t> request_operation_);
     ~completion_entry_t ();
 
     completion_entry_t (const completion_entry_t &) = delete;
     completion_entry_t &operator= (const completion_entry_t &) = delete;
 
-    bool start_send ();
+    bool start_send (bool defer_source_detach_ = false);
+    void detach_send_sources () noexcept;
     void start_request ();
     void publish (uint64_t completion_id_) noexcept;
     void fail_submit () noexcept;
@@ -51,16 +56,16 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
     kind_t kind () const noexcept { return _kind; }
 
   private:
-    bool submit_send_attempt (bool initial_);
+    bool submit_send_attempt (bool initial_, bool defer_source_detach_ = false);
     bool submit_request_attempt (bool initial_);
     void fail_send (std::exception_ptr failure_) noexcept;
     void fail_request (std::exception_ptr failure_) noexcept;
     void settle_if_joined (std::unique_lock<std::mutex> &lock_) noexcept;
 
     kind_t _kind;
-    std::shared_ptr<async_operation_state_t<void>> _send_result;
+    async_operation_state_t<void> *_send_result;
     std::unique_ptr<operation_state_t> _send_operation;
-    std::shared_ptr<async_operation_state_t<std::vector<message_t>>> _request_result;
+    async_operation_state_t<std::vector<message_t>> *_request_result;
     std::unique_ptr<operation_state_t> _request_operation;
     std::mutex _mutex;
     std::condition_variable _changed;
@@ -99,7 +104,13 @@ class completion_owner_t : public std::enable_shared_from_this<completion_owner_
     void *_socket;
     void *_runtime_poller = nullptr;
     std::mutex _mutex;
-    std::unordered_map<void *, std::shared_ptr<completion_entry_t>> _entries;
+    // Entry identities are never pooled: Core may still carry one as callback
+    // userdata until its exact completion is drained. Only the unordered-map
+    // nodes are recycled under _mutex, avoiding one allocator round trip for
+    // every request while preserving each entry's unique lifetime.
+    std::pmr::unsynchronized_pool_resource _entry_map_pool;
+    std::pmr::unordered_map<void *, std::shared_ptr<completion_entry_t>> _entries;
+    std::pmr::unordered_map<void *, zlink_completion_t> _early_send_completions;
     size_t _send_entry_count = 0;
     const void *_public_owner = nullptr;
     std::thread _runtime_thread;

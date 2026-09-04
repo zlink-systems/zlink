@@ -64,15 +64,14 @@ class async_operation_state_t final : public async_result_state_t<T>
   public:
     bool ready () const noexcept override
     {
-        std::lock_guard<std::mutex> lock (_mutex);
-        return _terminal;
+        return _terminal.load (std::memory_order_acquire);
     }
 
     bool suspend (std::coroutine_handle<> continuation_,
                   async_continuation_scheduler_t scheduler_) override
     {
         std::lock_guard<std::mutex> lock (_mutex);
-        if (_terminal)
+        if (_terminal.load (std::memory_order_relaxed))
             return false;
         if (_consumer_registered)
             throw std::logic_error ("async result already has a consumer");
@@ -84,19 +83,17 @@ class async_operation_state_t final : public async_result_state_t<T>
 
     T take () override
     {
-        std::exception_ptr failure;
-        std::optional<T> value;
-        {
-            std::lock_guard<std::mutex> lock (_mutex);
-            if (!_terminal)
-                throw std::logic_error ("async result is not complete");
-            if (_consumed)
-                throw std::logic_error ("async result was already consumed");
-            _consumed = true;
-            failure = _failure;
-            value = std::move (_value);
-            _continuation.reset ();
-        }
+        // Completion publishes every result field before the release-store to
+        // _terminal. async_result_t is move-only and single-consumer, so after
+        // the matching acquire no writer can race this terminal extraction.
+        if (!_terminal.load (std::memory_order_acquire))
+            throw std::logic_error ("async result is not complete");
+        if (_consumed)
+            throw std::logic_error ("async result was already consumed");
+        _consumed = true;
+        const std::exception_ptr failure = _failure;
+        std::optional<T> value = std::move (_value);
+        _continuation.reset ();
         if (failure)
             std::rethrow_exception (failure);
         if (!value)
@@ -143,7 +140,7 @@ class async_operation_state_t final : public async_result_state_t<T>
         async_continuation_scheduler_t scheduler;
         {
             std::lock_guard<std::mutex> lock (_mutex);
-            if (_terminal)
+            if (_terminal.load (std::memory_order_relaxed))
                 return false;
             try {
                 store_ ();
@@ -151,11 +148,11 @@ class async_operation_state_t final : public async_result_state_t<T>
             catch (...) {
                 _failure = std::current_exception ();
             }
-            _terminal = true;
             if (!_detached) {
                 slot = _continuation;
                 scheduler = std::move (_scheduler);
             }
+            _terminal.store (true, std::memory_order_release);
         }
         resume_async_slot (std::move (slot), std::move (scheduler));
         return true;
@@ -166,7 +163,7 @@ class async_operation_state_t final : public async_result_state_t<T>
     std::exception_ptr _failure;
     std::shared_ptr<async_resume_slot_t> _continuation;
     async_continuation_scheduler_t _scheduler;
-    bool _terminal = false;
+    std::atomic<bool> _terminal{false};
     bool _consumed = false;
     bool _detached = false;
     bool _consumer_registered = false;
@@ -178,15 +175,14 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
   public:
     bool ready () const noexcept override
     {
-        std::lock_guard<std::mutex> lock (_mutex);
-        return _terminal;
+        return _terminal.load (std::memory_order_acquire);
     }
 
     bool suspend (std::coroutine_handle<> continuation_,
                   async_continuation_scheduler_t scheduler_) override
     {
         std::lock_guard<std::mutex> lock (_mutex);
-        if (_terminal)
+        if (_terminal.load (std::memory_order_relaxed))
             return false;
         if (_consumer_registered)
             throw std::logic_error ("async result already has a consumer");
@@ -198,17 +194,13 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
 
     void take () override
     {
-        std::exception_ptr failure;
-        {
-            std::lock_guard<std::mutex> lock (_mutex);
-            if (!_terminal)
-                throw std::logic_error ("async result is not complete");
-            if (_consumed)
-                throw std::logic_error ("async result was already consumed");
-            _consumed = true;
-            failure = _failure;
-            _continuation.reset ();
-        }
+        if (!_terminal.load (std::memory_order_acquire))
+            throw std::logic_error ("async result is not complete");
+        if (_consumed)
+            throw std::logic_error ("async result was already consumed");
+        _consumed = true;
+        const std::exception_ptr failure = _failure;
+        _continuation.reset ();
         if (failure)
             std::rethrow_exception (failure);
     }
@@ -248,14 +240,14 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
         async_continuation_scheduler_t scheduler;
         {
             std::lock_guard<std::mutex> lock (_mutex);
-            if (_terminal)
+            if (_terminal.load (std::memory_order_relaxed))
                 return false;
             _failure = std::move (failure_);
-            _terminal = true;
             if (!_detached) {
                 slot = _continuation;
                 scheduler = std::move (_scheduler);
             }
+            _terminal.store (true, std::memory_order_release);
         }
         resume_async_slot (std::move (slot), std::move (scheduler));
         return true;
@@ -265,7 +257,7 @@ class async_operation_state_t<void> final : public async_result_state_t<void>
     std::exception_ptr _failure;
     std::shared_ptr<async_resume_slot_t> _continuation;
     async_continuation_scheduler_t _scheduler;
-    bool _terminal = false;
+    std::atomic<bool> _terminal{false};
     bool _consumed = false;
     bool _detached = false;
     bool _consumer_registered = false;

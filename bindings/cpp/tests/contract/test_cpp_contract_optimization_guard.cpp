@@ -131,6 +131,8 @@ int main ()
     assert (completion_owner.find ("ZLINK_RECV_NO_DATA") != std::string::npos);
     assert (completion_owner.find ("completion_guard_t guard") != std::string::npos);
     assert (completion_owner.find ("settle_if_joined") != std::string::npos);
+    assert (completion_owner.find ("_early_send_completions.emplace")
+            != std::string::npos);
     const std::size_t request_attempt = completion_owner.find (
       "submit_request_attempt (bool initial_)");
     const std::size_t request_refused = completion_owner.find (
@@ -141,6 +143,15 @@ int main ()
             && request_refused != std::string::npos
             && request_snapshot != std::string::npos
             && request_refused < request_snapshot);
+
+    const std::string send_operations = read_file (
+      cpp_root / "src" / "Runtime" / "Messaging" / "send_operations.cpp");
+    const std::size_t send_start = send_operations.find ("start_send (true)");
+    const std::size_t send_registration = send_operations.find (
+      "register_send_entry (entry)", send_start);
+    assert (send_start != std::string::npos
+            && send_registration != std::string::npos
+            && send_start < send_registration);
 
     assert_public_contract_includes_only (cpp_root / "samples");
     return 0;

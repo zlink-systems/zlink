@@ -65,23 +65,30 @@ bool is_lifecycle_errno (int err_) noexcept
 } // namespace
 
 completion_entry_t::completion_entry_t (
-  std::shared_ptr<async_operation_state_t<void>> send_result_,
+  async_operation_state_t<void> *send_result_,
   std::unique_ptr<operation_state_t> send_operation_) :
-    _kind (kind_t::send_retry), _send_result (std::move (send_result_)),
+    _kind (kind_t::send_retry), _send_result (send_result_),
     _send_operation (std::move (send_operation_))
 {
 }
 
 completion_entry_t::completion_entry_t (
-  std::shared_ptr<async_operation_state_t<std::vector<message_t>>> request_result_) :
-    _kind (kind_t::request), _request_result (std::move (request_result_))
+  async_operation_state_t<std::vector<message_t>> *request_result_) :
+    _kind (kind_t::request), _request_result (request_result_)
 {
 }
 
 completion_entry_t::completion_entry_t (
-  std::shared_ptr<async_operation_state_t<std::vector<message_t>>> request_result_,
+  const std::shared_ptr<async_operation_state_t<std::vector<message_t>>> &
+    request_result_) :
+    completion_entry_t (request_result_.get ())
+{
+}
+
+completion_entry_t::completion_entry_t (
+  async_operation_state_t<std::vector<message_t>> *request_result_,
   std::unique_ptr<operation_state_t> request_operation_) :
-    _kind (kind_t::request), _request_result (std::move (request_result_)),
+    _kind (kind_t::request), _request_result (request_result_),
     _request_operation (std::move (request_operation_))
 {
 }
@@ -98,7 +105,7 @@ completion_entry_t::~completion_entry_t ()
 
 void completion_entry_t::fail_send (std::exception_ptr failure_) noexcept
 {
-    std::shared_ptr<async_operation_state_t<void>> result;
+    async_operation_state_t<void> *result = nullptr;
     std::exception_ptr failure = std::move (failure_);
     {
         std::lock_guard<std::mutex> lock (_mutex);
@@ -115,7 +122,7 @@ void completion_entry_t::fail_send (std::exception_ptr failure_) noexcept
 
 void completion_entry_t::fail_request (std::exception_ptr failure_) noexcept
 {
-    std::shared_ptr<async_operation_state_t<std::vector<message_t>>> result;
+    async_operation_state_t<std::vector<message_t>> *result = nullptr;
     std::exception_ptr failure = std::move (failure_);
     {
         std::lock_guard<std::mutex> lock (_mutex);
@@ -131,7 +138,8 @@ void completion_entry_t::fail_request (std::exception_ptr failure_) noexcept
         result->fail (std::move (failure));
 }
 
-bool completion_entry_t::submit_send_attempt (bool initial_)
+bool completion_entry_t::submit_send_attempt (bool initial_,
+                                              bool defer_source_detach_)
 {
     {
         std::lock_guard<std::mutex> lock (_mutex);
@@ -174,7 +182,8 @@ bool completion_entry_t::submit_send_attempt (bool initial_)
 
     // async() owns every source object after it has either admitted the packet
     // or returned a live retry result. No retry entry retains caller pointers.
-    detach_async_send_sources (*_send_operation);
+    if (admitted || !defer_source_detach_)
+        detach_async_send_sources (*_send_operation);
     if (!admitted) {
         std::lock_guard<std::mutex> lock (_mutex);
         if (_settled)
@@ -185,7 +194,7 @@ bool completion_entry_t::submit_send_attempt (bool initial_)
         return false;
     }
 
-    std::shared_ptr<async_operation_state_t<void>> result;
+    async_operation_state_t<void> *result = nullptr;
     {
         std::lock_guard<std::mutex> lock (_mutex);
         if (_settled)
@@ -199,12 +208,18 @@ bool completion_entry_t::submit_send_attempt (bool initial_)
     return true;
 }
 
-bool completion_entry_t::start_send ()
+bool completion_entry_t::start_send (bool defer_source_detach_)
 {
     if (_kind != kind_t::send_retry || !_send_operation)
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     own_async_send_parts (*_send_operation);
-    return submit_send_attempt (true);
+    return submit_send_attempt (true, defer_source_detach_);
+}
+
+void completion_entry_t::detach_send_sources () noexcept
+{
+    if (_send_operation)
+        detach_async_send_sources (*_send_operation);
 }
 
 bool completion_entry_t::submit_request_attempt (bool initial_)
@@ -475,7 +490,8 @@ void completion_entry_t::settle_if_joined (std::unique_lock<std::mutex> &lock_) 
         return;
     _settled = true;
     const std::exception_ptr failure = _failure;
-    auto request_result = _request_result;
+    async_operation_state_t<std::vector<message_t>> *const request_result =
+      _request_result;
     std::vector<message_t> parts;
     if (request_result)
         parts = std::move (_reply_parts);
@@ -508,7 +524,11 @@ std::vector<message_t> completion_entry_t::wait_request ()
     return result;
 }
 
-completion_owner_t::completion_owner_t (void *socket_) : _socket (socket_) {}
+completion_owner_t::completion_owner_t (void *socket_) :
+    _socket (socket_), _entries (&_entry_map_pool),
+    _early_send_completions (&_entry_map_pool)
+{
+}
 
 completion_owner_t::~completion_owner_t () { shutdown (); }
 
@@ -536,6 +556,8 @@ void completion_owner_t::register_send_entry (
     if (!entry_ || entry_->kind () != completion_entry_t::kind_t::send_retry)
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
 
+    zlink_completion_t early_completion{};
+    bool has_early_completion = false;
     std::unique_lock<std::mutex> lock (_mutex);
     if (_shutdown)
         throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
@@ -544,11 +566,22 @@ void completion_owner_t::register_send_entry (
         throw submit_error_t (submit_result_t::invalid_state, EBUSY);
     ++_send_entry_count;
 
+    const auto early = _early_send_completions.find (entry_.get ());
+    if (early != _early_send_completions.end ()) {
+        early_completion = early->second;
+        _early_send_completions.erase (early);
+        has_early_completion = true;
+    }
+
     // SEND retry progress belongs to the application's public poller. Stop the
     // REQUEST fallback owner before the first DONTWAIT attempt can publish a
     // WRITABLE completion; otherwise that private thread could consume it.
     if (!_public_owner)
         stop_runtime_owner_locked (lock);
+    lock.unlock ();
+
+    if (has_early_completion && entry_->capture (early_completion))
+        unregister_entry (entry_.get ());
 }
 
 void completion_owner_t::unregister_entry (completion_entry_t *entry_) noexcept
@@ -594,18 +627,29 @@ size_t completion_owner_t::drain (bool wait_for_publish_,
             throw recv_error_t (static_cast<recv_result_t> (rc), zlink_errno ());
 
         std::shared_ptr<completion_entry_t> entry;
+        bool retained_early_send = false;
         {
             std::lock_guard<std::mutex> lock (_mutex);
             const auto found = _entries.find (completion.user_context);
             if (found != _entries.end ())
                 entry = found->second;
+            else if (!_shutdown && completion.user_context
+                     && completion.kind == ZLINK_COMPLETION_WRITABLE) {
+                // async SEND submits before taking the owner/map locks. If a
+                // concurrent public/runtime drain wins that short window,
+                // retain its exact token until register_send_entry replays it.
+                // The map node is allocated only on actual backpressure.
+                const auto inserted = _early_send_completions.emplace (
+                  completion.user_context, completion);
+                retained_early_send = inserted.second;
+            }
         }
         if (entry) {
             const bool terminal = entry->capture (completion);
             if (terminal) {
                 unregister_entry (entry.get ());
             }
-        } else {
+        } else if (!retained_early_send) {
             zlink_completion_close (&completion);
         }
         ++processed;
@@ -746,6 +790,11 @@ void completion_owner_t::shutdown (int terminal_errno_) noexcept
     stop_runtime_owner_locked (lock);
     auto entries = std::move (_entries);
     _entries.clear ();
+    for (auto &[key, completion] : _early_send_completions) {
+        (void) key;
+        zlink_completion_close (&completion);
+    }
+    _early_send_completions.clear ();
     _send_entry_count = 0;
     lock.unlock ();
     for (auto &[key, entry] : entries) {

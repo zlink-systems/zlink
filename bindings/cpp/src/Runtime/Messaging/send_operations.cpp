@@ -13,6 +13,18 @@ namespace zlink
 namespace
 {
 
+struct send_completion_bundle_t
+{
+    explicit send_completion_bundle_t (
+      std::unique_ptr<detail::operation_state_t> operation_) :
+        result (), entry (&result, std::move (operation_))
+    {
+    }
+
+    detail::async_operation_state_t<void> result;
+    detail::completion_entry_t entry;
+};
+
 async_result_t<void> submit_send_awaitable (
   std::unique_ptr<detail::operation_state_t> state_)
 {
@@ -31,12 +43,13 @@ async_result_t<void> submit_send_awaitable (
         throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
     }
 
-    std::shared_ptr<detail::async_operation_state_t<void>> result;
+    std::shared_ptr<send_completion_bundle_t> bundle;
     std::shared_ptr<detail::completion_entry_t> entry;
     try {
-        result = std::make_shared<detail::async_operation_state_t<void>> ();
-        entry = std::make_shared<detail::completion_entry_t> (
-          result, std::move (state_));
+        bundle = std::make_shared<send_completion_bundle_t> (
+          std::move (state_));
+        entry = std::shared_ptr<detail::completion_entry_t> (
+          bundle, &bundle->entry);
     }
     catch (...) {
         if (state_) {
@@ -46,16 +59,24 @@ async_result_t<void> submit_send_awaitable (
         throw;
     }
 
-    runtime->completion->register_send_entry (entry);
     try {
-        if (entry->start_send ())
-            runtime->completion->unregister_entry (entry.get ());
+        // Most DONTWAIT sends are admitted immediately. Submit first so that
+        // path takes neither the completion-owner lock nor a waiter-map node.
+        // A concurrent drain retains an early WRITABLE record by this entry's
+        // unique context until registration replays it.
+        if (!entry->start_send (true)) {
+            runtime->completion->register_send_entry (entry);
+            entry->detach_send_sources ();
+        }
     }
     catch (...) {
         runtime->completion->unregister_entry (entry.get ());
         throw;
     }
-    return detail::async_result_access_t::make<void> (std::move (result));
+    detail::async_result_state_t<void> *const result = &bundle->result;
+    return detail::async_result_access_t::make<void> (
+      std::shared_ptr<detail::async_result_state_t<void>> (
+        std::move (bundle), result));
 }
 
 } // namespace
