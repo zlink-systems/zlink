@@ -425,6 +425,13 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  separate write/flush lock acquisitions.
     bool write_and_flush (const msg_t *msg_,
                           pipe_message_admission_t *admission_out_ = NULL);
+    //  Writes and flushes only while this exact physical connection is still
+    //  current. The generation check shares the ordinary pipe write lock so a
+    //  concurrent transport teardown either follows the complete record or
+    //  prevents the record from entering the pipe.
+    bool write_and_flush_if_transport_connection (
+      const msg_t *msg_, uint64_t connection_id_,
+      pipe_message_admission_t *admission_out_ = NULL);
 
     //  Success-only fast path for an ordinary complete application record.
     //  Returns false without publishing any frame when the current pipe mode
@@ -497,6 +504,10 @@ class pipe_t ZLINK_FINAL : public object_t,
     void set_endpoint_pair (endpoint_uri_pair_t endpoint_pair_);
     const endpoint_uri_pair_t &get_endpoint_pair () const;
     void set_transport_connection_id (uint64_t connection_id_);
+    //  Session teardown invalidates the shared connection id while holding
+    //  the peer writer's pipe lock. This orders single-record reply writes
+    //  without imposing the transport generation lock on their hot path.
+    void clear_transport_connection_id_before_peer_writes ();
     uint64_t get_transport_connection_id () const;
     // Claims the one physical DISCONNECTED monitor edge owned by this socket
     // endpoint. The transport error path and explicit local termination can

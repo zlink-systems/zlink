@@ -2478,6 +2478,32 @@ bool zlink::pipe_t::write_and_flush (
     return true;
 }
 
+bool zlink::pipe_t::write_and_flush_if_transport_connection (
+  const msg_t *msg_, uint64_t connection_id_,
+  pipe_message_admission_t *admission_out_)
+{
+    scoped_fast_lock_t lock (_out_sync);
+    if (unlikely (!_transport_lifetime || connection_id_ == 0
+                  || _transport_lifetime->connection_id.load (
+                       std::memory_order_acquire)
+                       != connection_id_)) {
+        if (admission_out_)
+            *admission_out_ = pipe_message_admission_inactive;
+        errno = EAGAIN;
+        return false;
+    }
+    if (unlikely (!admit_write_unlocked (admission_out_)))
+        return false;
+
+    const bool more = (msg_->flags () & msg_t::more) != 0;
+    if (!write_message_unlocked (msg_, true, true, admission_out_))
+        return false;
+    if (!more)
+        flush_unlocked ();
+
+    return true;
+}
+
 bool zlink::pipe_t::try_write_complete_record_and_flush (
   const msg_t *parts_, size_t part_count_)
 {
@@ -3394,6 +3420,32 @@ void zlink::pipe_t::set_transport_connection_id (uint64_t connection_id_)
         return;
     }
     _endpoint_pair.connection_id = connection_id_;
+}
+
+void zlink::pipe_t::clear_transport_connection_id_before_peer_writes ()
+{
+    if (!_transport_lifetime) {
+        _endpoint_pair.connection_id = 0;
+        return;
+    }
+
+    pipe_t *peer = NULL;
+    {
+        scoped_fast_lock_t generation_lock (
+          _transport_lifetime->transport_sync);
+        peer = retain_peer_snapshot ();
+        if (peer) {
+            scoped_fast_lock_t write_lock (peer->_out_sync);
+            _transport_lifetime->connection_id.store (
+              0, std::memory_order_release);
+        } else {
+            _transport_lifetime->connection_id.store (
+              0, std::memory_order_release);
+        }
+        _endpoint_pair.connection_id = 0;
+    }
+    if (peer)
+        peer->release_lifetime_ref ();
 }
 
 uint64_t zlink::pipe_t::get_transport_connection_id () const

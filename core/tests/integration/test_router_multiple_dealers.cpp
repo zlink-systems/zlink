@@ -595,6 +595,74 @@ void test_peer_control_does_not_complete_open_application_multipart ()
     close_sync_socket (owner_handle);
 }
 
+void test_connection_guarded_write_rejects_stale_generation ()
+{
+    void *owner_handle = create_sync_socket (ZLINK_SOCKET_PAIR);
+    zlink::object_t *owner = static_cast<zlink::object_t *> (
+      as_socket_handle (owner_handle).socket);
+    zlink::object_t *parents[] = {owner, owner};
+    const uint64_t hwms[] = {4096, 4096};
+    const bool conflate[] = {false, false};
+    zlink::pipe_t *pipes[2];
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflate));
+
+    pipe_cleanup_sink_t cleanup_sink;
+    pipes[0]->set_event_sink (&cleanup_sink);
+    pipes[1]->set_event_sink (&cleanup_sink);
+    pipes[0]->set_transport_connection_id (41);
+    pipes[1]->set_transport_connection_id (41);
+
+    zlink::msg_t payload;
+    TEST_ASSERT_SUCCESS_ERRNO (payload.init_size (3));
+    memcpy (payload.data (), "one", payload.size ());
+    zlink::pipe_message_admission_t admission =
+      zlink::pipe_message_admission_invalid;
+    TEST_ASSERT_TRUE (pipes[0]->write_and_flush_if_transport_connection (
+      &payload, 41, &admission));
+    TEST_ASSERT_EQUAL_INT (zlink::pipe_message_admission_ready, admission);
+
+    zlink::msg_t received;
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_EQUAL_MEMORY ("one", received.data (), received.size ());
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+
+    pipes[1]->set_transport_connection_id (42);
+    admission = zlink::pipe_message_admission_invalid;
+    TEST_ASSERT_FALSE (pipes[0]->write_and_flush_if_transport_connection (
+      &payload, 41, &admission));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+    TEST_ASSERT_EQUAL_INT (zlink::pipe_message_admission_inactive, admission);
+    TEST_ASSERT_FALSE (pipes[1]->check_read ());
+
+    admission = zlink::pipe_message_admission_invalid;
+    TEST_ASSERT_TRUE (pipes[0]->write_and_flush_if_transport_connection (
+      &payload, 42, &admission));
+    TEST_ASSERT_SUCCESS_ERRNO (received.init ());
+    TEST_ASSERT_TRUE (pipes[1]->read (&received));
+    TEST_ASSERT_SUCCESS_ERRNO (received.close ());
+
+    pipes[1]->clear_transport_connection_id_before_peer_writes ();
+    admission = zlink::pipe_message_admission_invalid;
+    TEST_ASSERT_FALSE (pipes[0]->write_and_flush_if_transport_connection (
+      &payload, 42, &admission));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+    TEST_ASSERT_EQUAL_INT (zlink::pipe_message_admission_inactive, admission);
+    TEST_ASSERT_FALSE (pipes[1]->check_read ());
+
+    TEST_ASSERT_SUCCESS_ERRNO (payload.close ());
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    int events = 0;
+    size_t events_size = sizeof (events);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_option (owner_handle, ZLINK_OPT_EVENTS, &events,
+                        &events_size));
+    TEST_ASSERT_EQUAL_INT (2, cleanup_sink.terminated_count);
+    close_sync_socket (owner_handle);
+}
+
 void test_peer_control_slots_reject_non_dealer_router_pipe ()
 {
     const int ordinary_peer_types[] = {
@@ -2186,6 +2254,7 @@ int main ()
     RUN_TEST (test_unpaired_inproc_peer_weight_is_not_application_data);
     RUN_TEST (
       test_peer_control_does_not_complete_open_application_multipart);
+    RUN_TEST (test_connection_guarded_write_rejects_stale_generation);
     RUN_TEST (test_peer_control_slots_reject_non_dealer_router_pipe);
     RUN_TEST (test_weighted_lb_reactivation_keeps_configured_weight);
     RUN_TEST (test_weight_zero_between_parts_preserves_selected_message);

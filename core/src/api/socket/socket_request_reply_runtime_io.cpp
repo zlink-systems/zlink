@@ -1453,12 +1453,11 @@ int send_completion_staged_frames_on_pipe (
     int rc = 0;
     const size_t total_part_count = staged_part_count_ + 1;
     {
-        // engine_error() clears the connection id under this same generation
-        // lock. Hold it from the snapshot through the terminal flush so either
-        // the complete reply precedes that error, or no input frame moves and
-        // the caller observes retryable EAGAIN.
-        zlink::scoped_fast_lock_t transport_generation_lock (
-          completion_->transport_sync ());
+        // Multipart rollback spans several pipe lock acquisitions and keeps
+        // the generation gate. A complete single-part reply validates its
+        // connection under the pipe's existing terminal write/flush lock.
+        zlink::scoped_optional_fast_lock_t transport_generation_lock (
+          total_part_count > 1 ? &completion_->transport_sync () : NULL);
         const uint64_t transport_connection_id =
           completion_->get_transport_connection_id ();
         if (transport_connection_id == 0
@@ -1498,8 +1497,12 @@ int send_completion_staged_frames_on_pipe (
                 written = i + 1 < total_part_count
                             ? completion_->write (
                                 msg, i == 0 ? &admission : NULL)
-                            : completion_->write_and_flush (
-                                msg, i == 0 ? &admission : NULL);
+                          : total_part_count > 1
+                            ? completion_->write_and_flush (
+                                msg, i == 0 ? &admission : NULL)
+                            : completion_->write_and_flush_if_transport_connection (
+                                msg, transport_connection_id,
+                                i == 0 ? &admission : NULL);
             if (i == 0 && first_admission_out_)
                 *first_admission_out_ = admission;
             if (!written) {
