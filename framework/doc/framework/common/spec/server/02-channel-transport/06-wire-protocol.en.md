@@ -373,14 +373,15 @@ Admission of a [Descriptor](../00-foundation/02-glossary.en.md#descriptor) — t
 information a remote runtime publishes so its endpoint, identity, membership, weight, and
 status can be discovered — and physical transport replacement use the same fence.
 Once descriptor expectations are complete, an endpoint-only manual intent with
-generation 0 cannot overwrite them. The runtime uses the
-`transportPairId`/`transportPairGeneration` from the monitor event to mark all
-lanes in the current pair for termination, and does not create a new
-connection for the same endpoint before observing that pair's close snapshot
-or disconnect event. An endpoint-level disconnect is a fallback for an initial
-transport whose pair identity is unavailable, but a successful call does not
-replace observation of the physical close. A late event from the previous
-pair is fenced by its pair identity and cannot change admission or ready state
+generation 0 cannot overwrite them. The runtime requests
+termination of the current physical connection at the endpoint level, and does
+not create a new connection for the same endpoint before observing that
+endpoint's close snapshot or disconnect event. A successful call does not
+replace observation of the physical close. The `connection_id` of a monitor
+event is for diagnostics and correlation only and is never used as a fence. A
+late event from the previous connection is fenced by the descriptor's RID,
+security identity, and lifecycle generation together with the observation
+order, and cannot change admission or ready state
 of the new connection.
 
 ### ClientServer Direction

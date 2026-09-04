@@ -332,14 +332,13 @@ Remote runtime이 endpoint, identity, membership, weight와 상태를 발견할 
 정보인 [Descriptor](../00-foundation/02-glossary.ko.md#descriptor) admission과 physical transport
 replacement는 같은 fence를 사용한다.
 완전한 descriptor 기대값이 있으면 generation이 0인 endpoint-only manual intent는
-그 값을 덮어쓰지 못한다. Runtime은 monitor event에서 얻은
-`transportPairId`·`transportPairGeneration`을 사용해 현재 pair의 모든 lane을
-종료 대상으로 지정하고, 해당 pair의 close snapshot 또는 disconnect event를
-받기 전에는 같은 endpoint에 새 connection을 만들지 않는다. Pair identity가
-없는 초기 transport는 endpoint-level disconnect를 fallback으로 사용할 수 있지만,
-호출 성공은 physical close의 관찰을 대신하지 않는다. 늦게 도착한 이전 pair
-event는 pair identity로 fence되어 새 connection의 admission이나 ready 상태를
-바꾸지 못한다.
+그 값을 덮어쓰지 못한다. Runtime은 endpoint 단위로 현재
+physical connection의 종료를 요청하고, 그 endpoint의 close snapshot 또는 disconnect
+event를 받기 전에는 같은 endpoint에 새 connection을 만들지 않는다. 호출 성공은
+physical close의 관찰을 대신하지 않는다. Monitor event의 `connection_id`는 진단과
+correlation 전용이며 fence로 사용하지 않는다. 늦게 도착한 이전 connection의 event는
+descriptor의 RID·security identity·lifecycle generation과 관찰 순서로 fence되어 새
+connection의 admission이나 ready 상태를 바꾸지 못한다.
 
 ### ClientServer 방향
 

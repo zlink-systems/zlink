@@ -665,6 +665,17 @@ ActorId는 metric label로 사용하지 않는다.
   capacity를 반환한다.
 - Terminal record가 original deadline 뒤 5분 동안 같은 operation의 replay를 허용하고,
   TTL 뒤 Ready authority가 없으면 새 reservation으로 다시 생성할 수 있다.
+- 재전송(replay)의 주체는 그 operation을 시작한 Framework runtime이다. `OperationId`를 가진
+  Framework durable lifecycle operation(Actor create·join, session bind 등)만 같은
+  `OperationId`로 재전송하며, application request는 [§5.1](#51-route-cache와-generation)대로
+  자동 재전송하지 않는다. Core socket 계약의 "Caller는 handover 뒤 다시 보낸다"는
+  application request에서는 application, durable lifecycle operation에서는 Framework를 뜻한다.
+- 재전송 조건은 terminal envelope(`Created`·`Existing`·`Rejected`·`Failed` 등)를 받지 못한
+  모든 경우다. Route 부재, handover에 따른 1회 timeout, reply 유실이 여기에 든다. Terminal
+  envelope를 받은 operation은 재전송하지 않는다.
+- 각 attempt는 operation의 남은 deadline 전부를 사용하고 attempt마다 deadline을 분할하지
+  않는다. 횟수 제한은 없으며 전체 deadline이 소진되면 `DeadlineExceeded`로 종결한다. 중복 실행
+  방지는 target의 terminal record가 보장하므로 sender는 실행 여부를 추정하지 않는다.
 - Destroy가 같은 generation만 인정하고 새 incarnation으로 다시 지정하지 않는다.
 
 ---

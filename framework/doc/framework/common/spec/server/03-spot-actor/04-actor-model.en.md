@@ -765,6 +765,22 @@ ActorId isn't used as a metric label.
 - A terminal record allows replay of the same operation for 5 minutes after
   the original deadline, and the Actor can be re-created via a new reservation
   if there's no Ready authority after the TTL.
+- The resender (replayer) is the framework runtime that started the operation.
+  Only framework durable lifecycle operations that carry an `OperationId`
+  (Actor create/join, session bind, and so on) are resent with the same
+  `OperationId`; application requests are never resent automatically, as
+  [§5.1](#51-route-cache-and-generation) states. The "caller resends after the
+  handover" in the Core socket contract means the application for application
+  requests and the framework for durable lifecycle operations.
+- The resend condition is any case in which no terminal envelope (`Created`,
+  `Existing`, `Rejected`, `Failed`, and so on) was received: a missing route,
+  the single timeout caused by a handover, or a lost reply. An operation whose
+  terminal envelope was received is not resent.
+- Each attempt uses the operation's entire remaining deadline; the deadline is
+  not split across attempts. There is no attempt limit; when the whole deadline
+  is exhausted the operation ends with `DeadlineExceeded`. The target's terminal
+  record guarantees that execution is not duplicated, so the sender does not
+  guess whether execution happened.
 - Destroy accepts only the same generation and doesn't retarget to a new
   incarnation.
 
