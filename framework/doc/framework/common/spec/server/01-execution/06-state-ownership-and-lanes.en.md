@@ -1,8 +1,8 @@
 ---
-title: "State Ownership And State Lanes"
+title: "State Ownership and State Lanes"
 ---
 
-# State Ownership And State Lanes
+# State Ownership and State Lanes
 
 [Execution topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 05. Payload Ownership And Codec](05-payload-ownership-and-codec.en.md) · [Next: 07. Serial Executor Layers](07-serial-executor-layers.en.md)
 
@@ -19,20 +19,20 @@ for the mechanism that guarantees only one piece of code touches that state at a
 criteria for classifying which state needs which primitive, the guarantees that primitive
 must provide, and how to structure code so reentrancy cannot arise.
 
-What this document does not define — when a handler executes and when it yields its place to
-another handler is owned by [Handler Turn And Execution Gate](02-handler-turn-and-execution-gate.en.md);
-ownership and copying of a message on its way from the socket to the handler is owned by
+This document does not define when a handler executes or yields its place to another handler;
+that contract is owned by [Handler Turn And Execution Gate](02-handler-turn-and-execution-gate.en.md).
+Ownership and copying of a message on its way from the socket to the handler is owned by
 [Payload Ownership And Codec](05-payload-ownership-and-codec.en.md). The rules here concern the
 mechanism that protects a component's internal state, not the ordering, timeouts, or error
 codes an application observes.
 
-## 2. Terminology — State Lane Versus Application/Lifecycle Lane
+## 2. Terminology — State Lane versus Application/Lifecycle Lane
 
-This document's **state lane** is the execution unit through which one component owns its
+This document's **state lane** is the execution unit a component uses to own its
 mutable state. Every piece of code that reads or writes that component's state runs only on
 this lane.
 
-This term is a different concept from the "application lane" and "lifecycle lane" used by
+This term denotes a different concept from the "application lane" and "lifecycle lane" used by
 [Handler Turn And Execution Gate "7. Lane Separation And Priority
 (Implementation)"](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation).
 The two documents use the same word "lane" for different things, so they must be kept apart.
@@ -49,8 +49,8 @@ or the Actor inside it — while a state lane exists per component that owns sta
 | Admission/priority | None — executes strictly in FIFO arrival order, with no count/byte caps or priority between lanes | Present — count/byte caps, an owner occupancy time budget, and a lifecycle priority rule |
 | Owning document | This document | [02 §7](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation) |
 
-That a component has a state lane, and which of the application lane or lifecycle lane the
-handler of the Spot/Actor it belongs to is admitted into, are decisions at different layers.
+Assigning a state lane to a component and admitting the handler of its Spot/Actor to the
+application lane or lifecycle lane are decisions at different layers.
 While a handler execution is waiting its turn on the application lane, the state that handler
 touches may be serialized on a different component's state lane.
 
@@ -78,7 +78,7 @@ the code that reads the state and the code that settles the decision stay in the
 
 ```csharp
 // contract pseudocode, not the real API — the real signatures are owned by each language interface.
-// inside the turn, read the state and fix the decision so it cannot be undone.
+// inside the turn, read the state and finalize the decision so it cannot be undone.
 var claim = await lane.Run(() =>
     entries.TryGetValue(key, out var entry)
         ? entry.ClaimRoute()      // generation and ownership settled inside this turn
@@ -96,7 +96,7 @@ inside the turn, so what the claim refers to does not change even if the state d
 the state and settling the decision — waiting for an external operation to complete inside a turn
 is what §4 forbids.
 
-## 4. State Classifications And How To Tell Them Apart
+## 4. State Classifications and How to Tell Them Apart
 
 A component's mutable state falls into one of the following classifications. Once classified,
 the mechanism that guards it follows mechanically.
@@ -109,8 +109,8 @@ the mechanism that guards it follows mechanically.
 
 When a component mixes all three, **C2 wins** — the strongest requirement decides the
 mechanism for the whole component. Moving only part of a component to a lane while leaving the
-rest on a concurrent map or a separate lock lets the cross-invariant violation C2 exists to
-prevent reappear at that boundary.
+rest on a concurrent map or a separate lock lets the cross-invariant violation that C2 exists
+to prevent reappear at that boundary.
 
 ```csharp
 // contract pseudocode, not the real API — the real signatures are owned by each language interface.
@@ -119,7 +119,7 @@ class RouteRegistry            // C1 — lookup/add/remove only, no invariant sp
     ConcurrentMap<RouteKey, Route> routes;
 }
 
-class BindingTable             // C2 — the two maps reference each other. change one and it breaks
+class BindingTable             // C2 — the two maps reference each other; changing one breaks the invariant
 {
     ZLinkStateLane lane;
     Map<ActorId, SessionId> actorToSession;   // plain map
@@ -140,16 +140,16 @@ class SendCounter              // C3 — increments only
 
 **Do not replace C2 with a concurrent map.** A concurrent map makes only the individual
 operation on one map atomic. An invariant spanning multiple collections/fields is not
-preserved by per-map atomicity — atomicity fractures down to that one map, and the invariant
+preserved by per-map atomicity — atomicity is limited to each individual map, and the invariant
 breaks with it.
 
 **Do not replace C2 with a different exclusive-access primitive (a semaphore, for example).**
-Swapping the exclusive-access primitive from a lock to a semaphore leaves the shape
-[§3](#3-the-prohibited-shape) rules out fully intact — all that changes is a number (the lock
+Swapping the exclusive-access primitive from a lock to a semaphore leaves fully intact the shape
+that [§3](#3-the-prohibited-shape) rules out — all that changes is a number (the lock
 count went down), while the structure of "release the exclusive section, then act on a
 snapshot" is unchanged.
 
-### Distinguishing State Protection From Serializing An Operation Protocol
+### Distinguishing State Protection from Serializing an Operation Protocol
 
 A semaphore, socket gate, or dispose gate that runs an entire external asynchronous operation
 one at a time carries a different responsibility from the state lane that guards a component's
@@ -167,12 +167,12 @@ following conditions.
 Waiting for a state lane's completion from inside an operation-protocol gate is allowed. The
 opposite direction — waiting, from inside a state lane's turn, for that gate to be acquired or
 for a long-running operation to complete — is not. Allowing both directions creates a
-back-to-back deadlock where each side waits on the other's completion.
+deadlock in which each side waits on the other's completion.
 
 This exception is not permission to split C2 state across multiple locks. Fields and
 collections that share the same invariant are still owned by a single state lane.
 
-## 5. What A State Lane Guarantees And Requires
+## 5. What a State Lane Guarantees and Requires
 
 A state lane guarantees the following.
 
@@ -218,7 +218,7 @@ moment. The lane must instead end this at the exact call site where the reentran
 happened, as an exception. Raising an error right there that names which lane was re-entered
 means the stack trace points straight at the offending code.
 
-### Completion Signals And The Blocking-Compatible Boundary
+### Completion Signals and the Blocking-Compatible Boundary
 
 A lane work item's completion signal must run the caller's continuation only after that lane's
 current-ownership marker has been released. In a language where the completion API can run a
@@ -275,18 +275,18 @@ alongside): the async surface is canonical, and the sync surface is a single min
 over it satisfying the three conditions above. The sync surface is **only for use outside
 framework-owned execution contexts** (handlers, lanes, turns, completion callbacks) — its
 audience is configuration time, operational tooling, and tests. Inside framework execution
-contexts, use the async surface. No language provides only one of the two surfaces, so the
-languages do not diverge.
+contexts, use the async surface. Do not let the languages diverge by providing only one of the
+two surfaces in any language.
 
-## 6. Structuring So Reentrancy Cannot Arise
+## 6. Structuring so Reentrancy Cannot Arise
 
 Reentrancy does not happen by accident. It arises structurally in three places, and each place
-has a settled shape.
+has a prescribed structure.
 
-**Kind ① — a spot where code inside the lane calls back into the same component's public
+**Kind ① — a place where code inside the lane calls back into the same component's public
 surface.** If one public entry point, already inside a turn admitted to the lane, calls
 another public method of the same component, that method also tries to enter the same lane,
-which is reentrancy. Split such a spot into a private method that does not enter the lane. The
+which is reentrancy. For such cases, use a private method that does not enter the lane. The
 public entry point enters the lane exactly once, and code inside the lane calls the private
 method's body directly.
 
@@ -349,6 +349,16 @@ Do not defer to turn B a state transition the original code used to finish befor
 callback. A racing observer inside the callback's execution window must see the same state the
 original code showed "after the exclusive section ended."
 
+**Do not rely on reentrancy permitted by an exclusive-access primitive.** Some languages'
+exclusive-access primitives (C#'s Monitor and Java's `synchronized`) allow nested acquisition
+by the same thread. A structure in which an external callback or listener invoked inside an
+exclusive-access section reacquires the same primitive is latent reentrancy that works only
+because of that allowance — moving it to a state lane turns it into a reentrancy exception,
+and even before it is moved, the atomicity that the exclusive access was meant to guarantee
+depends on the behavior of code outside that exclusive-access section. Split such cases
+according to Kind ③. This prohibition does not apply to nested acquisition by a private
+self-call that does not let control leave the component.
+
 ## 7. Per-Language Mapping
 
 In .NET, `Zlink.Framework.Runtime.Execution.ZLinkStateLane` is the reference implementation of
@@ -368,9 +378,11 @@ as is, use that language's primitive that satisfies the same guarantees this doc
 one turn executing at a time, FIFO, immediate exception detection on reentrancy, and no locking
 on owned collections.
 
-**The public surface names and contracts are the exception.** These six on the state lane carry
-the same name (spelling conversion only) and the same meaning across all four languages.
-Measurement confirms the four already agree.
+**The public surface names and contracts are the exception.** The following six state-lane
+members have the same meaning across all four languages. The first five names also match modulo
+spelling conversion. Because `close` currently has a different name in each language, it is a
+**unification target** — the table shows the currently observed names, and the target is one
+consistent `close` naming scheme.
 
 | Contract | Meaning | .NET | java | cpp | node |
 |---|---|---|---|---|---|
