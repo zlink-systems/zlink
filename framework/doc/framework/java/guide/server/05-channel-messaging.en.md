@@ -41,6 +41,43 @@ Channel messaging is the framework's most fundamental axis. It covers these inte
 <iframe class="zlink-diagram" src="/common/diagrams/05-messaging-kinds-en.html" title="Three call kinds — Request · Send · Publish" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/05-messaging-kinds-en.html" target="_blank">↗ View larger</a></p>
 
+## Terminators — The Last Piece That Actually Sends a Call
+
+Every outbound call in this chapter **starts with a builder and ends with exactly one
+terminator.** The part that picks the target channel and the message only assembles the call;
+nothing has been sent yet. The runtime accepts the call at the moment you invoke the
+terminator. A builder left without one does nothing at all.
+
+There are two kinds, and **"finished" means something different for each.**
+
+| Kind | Used by | What finishing means | Result |
+| --- | --- | --- | --- |
+| One-way terminator | send · publish | Your own runtime accepted the submission | None — it says nothing about whether the peer received it or the handler ran |
+| Request terminator | request | The peer's reply arrived | The reply payload. Finishing without a reply fails as a timeout or a route error |
+
+The reply type comes from the **request terminator, not from the message you send.** The same
+request payload can be answered with different reply types in different places, so the reply
+type is not tied to the request message.
+
+```java
+// one-way — only until the submission is accepted. It completes with no value.
+client.sendToChannel("profile", command).submit();
+publisher.publish("api.events", "profile.cache-refreshed", evt).submit();
+
+// request — until the reply arrives. The terminator names the reply type.
+CompletionStage<PriceReply> reply =
+    client.requestToChannel("price", query).submit(PriceReply.class);
+```
+
+A request terminator can be preceded by an optional terminator that changes how long the reply
+is awaited. The one-way kind never waits for a reply, so that surface does not exist there —
+[§4 Outbound Calls](#4-outbound-calls) covers its use.
+
+> **Why even a one-way terminator is awaited** — what happens when there is no room to send is
+> owned by [04-backpressure §3.1](04-backpressure.en.md#31-why-send-is-async).
+> The exact terminator names, overloads, and exceptions are owned by the
+> [per-language public contract](../../../common/spec/server/languages/README.en.md).
+
 ## 0. Use as a gRPC Replacement
 
 Channel messaging is used in general web/microservice backends to **replace gRPC between

@@ -38,6 +38,40 @@ channel messaging은 framework의 가장 기본 축이다. 다음 상호작용�
 <iframe class="zlink-diagram" src="/common/diagrams/05-messaging-kinds.html" title="세 가지 호출 종류 — Request · Send · Publish" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/05-messaging-kinds.html" target="_blank">↗ 크게 보기</a></p>
 
+## 종결자 — 호출을 실제로 보내는 마지막 한 조각
+
+이 장의 outbound 호출은 모두 **빌더로 시작해 종결자 하나로 끝난다.** 대상 channel과 보낼
+메시지를 고르는 앞부분은 호출을 조립할 뿐 아직 아무것도 보내지 않는다. 종결자를 부르는
+순간에야 runtime이 그 호출을 받아들인다. 종결자를 빠뜨린 빌더는 아무 일도 하지 않는다.
+
+종결자는 두 갈래이고, **끝났다는 말의 뜻이 서로 다르다.**
+
+| 갈래 | 쓰는 곳 | 끝났다는 뜻 | 결과 |
+| --- | --- | --- | --- |
+| one-way 종결자 | send · publish | 내 runtime이 제출을 받아들였다 | 없다 — 상대가 받았는지, handler가 끝났는지는 알려주지 않는다 |
+| request 종결자 | request | 상대의 응답이 도착했다 | 응답 payload. 응답 없이 끝나면 timeout이나 route 오류로 실패한다 |
+
+응답 타입은 보내는 메시지가 아니라 **request 종결자에서 지정한다.** 같은 요청 payload로 서로
+다른 응답 타입을 받는 자리가 있어서, 응답 타입을 요청 메시지에 묶지 않는다.
+
+```csharp
+// one-way — 제출을 받아들일 때까지. 반환값이 없다.
+await client.SendToChannel("profile", command).Async(ct);
+await publisher.Publish("api.events", "profile.cache-refreshed", evt).Async(ct);
+
+// request — 응답이 올 때까지. 응답 타입은 종결자가 정한다.
+var reply = await client.RequestToChannel("price", query).Async<PriceReply>(ct);
+```
+
+request 종결자에는 reply 대기 시간을 바꾸는 선택 종결자를 앞에 붙일 수 있다. one-way 갈래는
+응답을 기다리지 않으므로 그 표면 자체가 없다 —
+[§4 outbound 호출](#4-outbound-호출)이 그 사용법을 다룬다.
+
+> **왜 one-way 종결자까지 기다리게 되어 있나** — 보낼 자리가 없을 때 무슨 일이 일어나는지는
+> [04-backpressure §3.1](04-backpressure.ko.md#31-send가-async인-이유)이 소유한다.
+> 종결자의 정확한 이름·오버로드·예외는
+> [언어별 공개 계약](../../../common/spec/server/languages/README.ko.md)이 소유한다.
+
 ## 0. gRPC를 대체하는 용도
 
 channel messaging은 일반 웹·마이크로서비스 백엔드에서 **서비스 간 gRPC를 대체**하는
