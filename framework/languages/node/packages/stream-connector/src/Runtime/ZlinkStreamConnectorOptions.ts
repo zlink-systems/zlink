@@ -11,6 +11,13 @@ import {
 import { connectorError } from './ZlinkStreamSupport';
 import { inferTransport } from './Transport/ZlinkStreamEndpoint';
 
+const validDiagnosticsLevels: ReadonlySet<ZlinkStreamDiagnosticsLevel> = new Set([
+  ZlinkStreamDiagnosticsLevel.Off,
+  ZlinkStreamDiagnosticsLevel.Errors,
+  ZlinkStreamDiagnosticsLevel.Normal,
+  ZlinkStreamDiagnosticsLevel.Detailed
+]);
+
 export function normalizeOptions(
   options: ZlinkStreamConnectorOptions,
   defaultTransportFactory: RequiredZlinkStreamConnectorOptions['transportFactory']
@@ -86,13 +93,7 @@ function resolveCompressionCodec(options: ZlinkStreamConnectorOptions) {
 
 
 export function validateDiagnosticsLevel(level: ZlinkStreamDiagnosticsLevel | undefined): void {
-  if (
-    level !== undefined
-    && level !== ZlinkStreamDiagnosticsLevel.Off
-    && level !== ZlinkStreamDiagnosticsLevel.Errors
-    && level !== ZlinkStreamDiagnosticsLevel.Normal
-    && level !== ZlinkStreamDiagnosticsLevel.Detailed
-  ) {
+  if (level !== undefined && !validDiagnosticsLevels.has(level)) {
     throw connectorError(ZlinkStreamErrorCode.ConfigurationError, 'DiagnosticsLevel is invalid.');
   }
 }
