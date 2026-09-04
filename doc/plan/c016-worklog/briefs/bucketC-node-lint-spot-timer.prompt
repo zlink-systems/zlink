@@ -1,0 +1,29 @@
+# Job: node — clear the one ESLint blocker so the standard `npm test` runtime gate can run, then run it fully
+
+You are a codex sub-agent under a Claude supervisor. Small scoped job, 45 min cap. Read `AGENTS.md`
+(root) §2/§3/§4.1, `framework/AGENTS.md`, and `doc/plan/c016-worklog/gate-final-cpp-node-unit-summary.md`.
+Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`,
+other languages' trees, `bindings/node/provenance/**`, `package-lock.json`; never lower an assertion;
+do not commit. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`,
+`flock -w7200 /tmp/zlink-node-gate.lock` around every npm invocation. Do not rebuild Core/local packages.
+
+## Facts
+- `npm test` = `node scripts/run_node_runtime_gate.js` (build → typecheck → lint → runtime tests).
+  Lint fails deterministically on `packages/framework/src/runtime/spots/spot-timer.ts:137:12`
+  (`@typescript-eslint/strict-boolean-expressions`, nullable boolean in a condition), so the runtime
+  test stage never runs in the standard gate (earlier campaign gates ran the runtime tests directly:
+  1552 tests / 5 known items).
+- Fix: make the condition explicit without changing behaviour (e.g. `=== true` / `?? false` matching
+  the surrounding code's convention; read the field's type and the existing style in that file).
+
+## What to do
+1. Apply the one-line lint fix; `npm run lint` must be fully green.
+2. Run the full standard gate `npm test` once and record the runtime test counts (pass/fail/skip) and
+   every failure with `file:line`, classified (A) DONTWAIT/backpressure, (B) terminal/error,
+   (C) known pre-existing with prior evidence `file:line`, (D) environment, (E) binding-port.
+   Known earlier C items: ZoneWorld dist-not-built ×3 (dist now exists — expect them green).
+3. Re-run any failing test file once for determinism.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketC-node-lint-spot-timer-summary.md`: the diff, lint result, `npm test`
+counts + failure table, commands, logs under `zlink-work/c016/logs/gate-final-unit-node-2-*.log`, BLOCKERS.
