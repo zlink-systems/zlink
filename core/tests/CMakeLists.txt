@@ -1077,6 +1077,23 @@ add_executable(
   ${INTEGRATION_TEST_ROOT}/test_two_poller_wake.cpp)
 target_link_libraries(test_two_poller_wake ${TESTUTIL_LIB})
 
+# Regression: closing a SUB (linger 0) while its engine is still receiving a
+# frame payload must not release the decoder frame reservation through the
+# already-freed session (engine destruction is deferred past the session).
+add_executable(
+  test_pubsub_close_during_inbound_frame
+  ${INTEGRATION_TEST_ROOT}/test_pubsub_close_during_inbound_frame.cpp)
+target_link_libraries(test_pubsub_close_during_inbound_frame ${TESTUTIL_LIB})
+add_test(NAME test_pubsub_close_during_inbound_frame
+         COMMAND test_pubsub_close_during_inbound_frame)
+set_tests_properties(
+  test_pubsub_close_during_inbound_frame
+  PROPERTIES
+    LABELS "regression;serial"
+    RUN_SERIAL TRUE
+    TIMEOUT 180
+    RESOURCE_LOCK "${NETWORK_INTEGRATION_RESOURCE_LOCK}")
+
 add_test(NAME test_wake_invariants COMMAND test_wake_invariants)
 add_test(NAME test_two_poller_wake COMMAND test_two_poller_wake)
 add_test(

@@ -374,6 +374,16 @@ void zlink::asio_engine_t::unplug ()
     _pipeline.pending_stream_rx_chunks.clear ();
     _pipeline.total_pending_bytes = 0;
 
+    //  The decoder may still hold a frame reservation for a partially
+    //  received message. That reservation lives inside the session and is
+    //  released through a session back-pointer. This engine is deleted later,
+    //  on a posted io_context handler (destroy_after_callbacks), which can run
+    //  after the session that owns us has been freed: a terminating session
+    //  deletes itself right after calling terminate(). Sever the decoder's
+    //  session references now, while the session is guaranteed alive.
+    if (_decoder)
+        _decoder->detach_frame_admission ();
+
     _connection_facade.session = NULL;
 }
 

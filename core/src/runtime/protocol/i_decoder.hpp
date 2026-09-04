@@ -31,6 +31,15 @@ class i_decoder
     //  Notify a framed decoder that its underlying byte stream ended. Stream
     //  decoders that do not need finalization keep the default no-op behavior.
     virtual int stream_end () { return 0; }
+
+    //  Sever every reference the decoder holds into the session that fed
+    //  it: the frame admission subject and an outstanding frame reservation
+    //  (the reservation storage itself lives inside the session). The engine
+    //  is destroyed on a posted io_context handler that may run after the
+    //  session has already been deleted, so the engine calls this from
+    //  unplug() while the session is still alive. Decoders without frame
+    //  admission keep the default no-op.
+    virtual void detach_frame_admission () {}
 };
 }
 

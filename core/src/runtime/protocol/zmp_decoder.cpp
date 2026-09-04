@@ -97,6 +97,16 @@ void zlink::zmp_decoder_t::discard_frame_reservation ()
     release_frame_reservation ();
 }
 
+void zlink::zmp_decoder_t::detach_frame_admission ()
+{
+    //  Release through the session while it is still alive, then forget it:
+    //  the destructor must not touch the session again.
+    release_frame_reservation ();
+    _frame_admission_handler = NULL;
+    _frame_reservation_release_handler = NULL;
+    _frame_admission_subject = NULL;
+}
+
 void zlink::zmp_decoder_t::release_frame_reservation ()
 {
     if (!_frame_reservation)

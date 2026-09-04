@@ -33,6 +33,7 @@ class zmp_decoder_t ZLINK_FINAL
     int retry_frame_admission ();
     void **frame_reservation_slot ();
     void discard_frame_reservation ();
+    void detach_frame_admission () ZLINK_OVERRIDE;
     int stream_end () ZLINK_OVERRIDE;
 
   private:
