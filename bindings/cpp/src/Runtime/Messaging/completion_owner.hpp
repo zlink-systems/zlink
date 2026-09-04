@@ -41,7 +41,7 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
     void publish (uint64_t completion_id_) noexcept;
     void fail_submit () noexcept;
     bool capture (zlink_completion_t &completion_) noexcept;
-    void terminate () noexcept;
+    void terminate (int terminal_errno_) noexcept;
     void wait_settled () noexcept;
     std::vector<message_t> wait_request ();
     kind_t kind () const noexcept { return _kind; }
@@ -81,7 +81,7 @@ class completion_owner_t : public std::enable_shared_from_this<completion_owner_
 
     void transfer_to_public (const void *poller_owner_);
     void transfer_to_runtime (const void *poller_owner_) noexcept;
-    void shutdown () noexcept;
+    void shutdown (int terminal_errno_ = ESHUTDOWN) noexcept;
 
   private:
     void start_runtime_owner_locked ();

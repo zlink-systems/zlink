@@ -177,7 +177,6 @@ class router_router_client_bench_t
                 _poller.add (
                   sock,
                   zlink::poll_event_flag_t::pollin
-                    | zlink::poll_event_flag_t::pollout
                     | zlink::poll_event_flag_t::pollcompletion,
                   _socket_states.size () - 1);
             }
@@ -328,7 +327,7 @@ class router_router_client_bench_t
                     if (slot_index >= _socket_states.size ())
                         continue;
                     socket_state_t &state = _socket_states[slot_index];
-                    // POLLOUT/POLLCOMPLETION drive public async send. Payload
+                    // POLLCOMPLETION drives exact-token async retry. Payload
                     // receive remains driven exclusively by POLLIN readiness.
                     if (perf::poll_event_has (events_[i].revents,
                                               zlink::poll_event_flag_t::pollin)) {

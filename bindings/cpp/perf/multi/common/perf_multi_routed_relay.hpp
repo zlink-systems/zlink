@@ -92,7 +92,6 @@ inline bool run_routed_echo_relay (zlink::router_socket_t &server,
     zlink::poller_t poller;
     poller.add (server,
                 zlink::poll_event_flag_t::pollin
-                  | zlink::poll_event_flag_t::pollout
                   | zlink::poll_event_flag_t::pollcompletion,
                 0);
     std::vector<zlink::poll_event_t> events (1);

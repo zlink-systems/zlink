@@ -7,6 +7,8 @@
 #include "../Sockets/results.hpp"
 #include "results.hpp"
 
+#include <zlink_errno.h>
+
 #include <cerrno>
 #include <sstream>
 
@@ -262,30 +264,53 @@ inline handler_result_t handler_result_from_errno (int err_)
 inline submit_result_t submit_result_from_errno (int err_)
 {
     switch (err_) {
+        case 0:
+            return submit_result_t::ok;
         case EAGAIN:
+        case ETIMEDOUT:
+        case ENOBUFS:
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+        case EWOULDBLOCK:
+#endif
             return submit_result_t::backpressured;
         case ENOTCONN:
+        case EHOSTUNREACH:
             return submit_result_t::not_connected;
         case ENOENT:
             return submit_result_t::not_found;
+        case ECONNREFUSED:
+        case EACCES:
+        case EPROTOTYPE:
+            return submit_result_t::not_admitted;
+        case ETERM:
+        case ESHUTDOWN:
+            return submit_result_t::terminated;
+        case EFAULT:
+            return submit_result_t::invalid_handle;
+        case EINVAL:
+        case EMSGSIZE:
+            return submit_result_t::invalid_argument;
         case ENOTSUP:
 #if defined(EOPNOTSUPP) && EOPNOTSUPP != ENOTSUP
         case EOPNOTSUPP:
 #endif
             return submit_result_t::not_supported;
+        case EFSM:
         case EBUSY:
+        case ESTALE:
+        case EALREADY:
             return submit_result_t::invalid_state;
+        case EDEADLK:
         case EPERM:
+        case EMTHREAD:
             return submit_result_t::thread_violation;
         case ENOMEM:
             return submit_result_t::out_of_memory;
+        case EOVERFLOW:
+            return submit_result_t::seq_exhausted;
         default:
-            break;
+            return submit_result_t::internal_error;
     }
-
-    if (is_invalid_handle_errno (err_))
-        return submit_result_t::invalid_handle;
-    return submit_result_t::invalid_argument;
 }
 
 template <typename ErrorT, typename ResultT> inline void throw_if_failed (ResultT result_)

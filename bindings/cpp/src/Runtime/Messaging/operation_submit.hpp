@@ -77,6 +77,12 @@ inline bool submit_raw_send_state (operation_state_t &state_,
               }
           });
 
+        const int submit_errno = zlink_errno ();
+        if (direct_rc == -1) {
+            if (restore_sources_on_failure_)
+                restore_single_send_part_to_source (state_);
+            throw submit_error_t (submit_result_from_errno (submit_errno), submit_errno);
+        }
         const submit_result_t rc = static_cast<submit_result_t> (direct_rc);
         if (rc == submit_result_t::ok)
             return true;
@@ -85,7 +91,7 @@ inline bool submit_raw_send_state (operation_state_t &state_,
         if (state_.flags == send_flags_t::dontwait && rc == submit_result_t::backpressured) {
             return false;
         }
-        throw submit_error_t (rc, zlink_errno ());
+        throw submit_error_t (rc, submit_errno);
     }
 
     // Multipart record staging, ownership recovery, and pooled capacity belong
@@ -117,10 +123,11 @@ inline bool submit_raw_send_state (operation_state_t &state_,
                   return ZLINK_SUBMIT_INVALID_ARGUMENT;
           }
       });
+    const int submit_errno = zlink_errno ();
     if (raw_rc == -1) {
         if (restore_sources_on_failure_)
             restore_send_parts_to_sources (state_, parts);
-        throw last_error ();
+        throw submit_error_t (submit_result_from_errno (submit_errno), submit_errno);
     }
     const submit_result_t rc = static_cast<submit_result_t> (raw_rc);
     if (rc != submit_result_t::ok) {
@@ -129,7 +136,7 @@ inline bool submit_raw_send_state (operation_state_t &state_,
         if (state_.flags == send_flags_t::dontwait && rc == submit_result_t::backpressured) {
             return false;
         }
-        throw submit_error_t (rc, zlink_errno ());
+        throw submit_error_t (rc, submit_errno);
     }
     return true;
 }

@@ -51,10 +51,10 @@ routing_id_t routing_id_from_native_pointer (const void *native_) noexcept
 
 socket_t::~socket_t ()
 {
-    if (_runtime)
-        _runtime->completion->shutdown ();
     if (_socket)
         (void) _socket->close ();
+    if (_runtime)
+        _runtime->completion->shutdown ();
 }
 
 socket_t::socket_t (socket_t &&) noexcept = default;
@@ -63,11 +63,13 @@ socket_t &socket_t::operator= (socket_t &&other_) noexcept
 {
     if (this == &other_)
         return *this;
-    if (_socket)
-        if (_runtime)
-            _runtime->completion->shutdown ();
-    if (_socket)
-        (void) _socket->close ();
+    if (_socket) {
+        const int rc = _socket->close ();
+        if (rc != 0 && _socket->valid ())
+            return *this;
+    }
+    if (_runtime)
+        _runtime->completion->shutdown ();
     _socket = std::move (other_._socket);
     _runtime = std::move (other_._runtime);
     _receive_envelope = std::move (other_._receive_envelope);
@@ -84,9 +86,12 @@ void socket_t::close ()
 {
     if (!_socket || !_socket->valid ())
         return;
-    if (_runtime)
-        _runtime->completion->shutdown ();
     const int rc = _socket->close ();
+    // Core can reject a concurrent close with EBUSY while the socket remains
+    // live. Preserve the completion owner and all retained retry packets in
+    // that case; only a terminal native close may settle them.
+    if (!_socket->valid () && _runtime)
+        _runtime->completion->shutdown (ESHUTDOWN);
     if (rc != 0)
         throw close_error_t (static_cast<close_result_t> (rc), zlink_errno ());
 }

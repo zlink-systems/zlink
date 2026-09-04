@@ -39,10 +39,11 @@ no SEND completion.
 
 The high-level C++ `send().message(...).async()` terminal performs that
 bookkeeping and retains the packet needed for retry. Register the socket with a
-public `poller_t` for `pollout | pollcompletion`: `pollout` drives writable
-progress, while `pollcompletion` gives the poller ownership of the socket-local
-completion drain. Keep that registration until the async result becomes
-terminal. During `poller_t::wait()`, the binding drains completions,
+public `poller_t` for `pollcompletion`, the exact level-triggered signal for the
+socket-local completion drain. Aggregate `pollout` may also be requested for
+application readiness, but it does not identify a retry token and is not needed
+for async progress. Keep `pollcompletion` registered until the async result
+becomes terminal. During `poller_t::wait()`, the binding drains completions,
 matches the WRITABLE token and context to the waiting send, and retries the same
 packet. Once an attempt is admitted, the async result completes without waiting
 for a SEND completion. This event-loop path creates no binding-owned OS thread,

@@ -134,7 +134,6 @@ class dealer_router_client_bench_t
                 _poller.add (
                   sock,
                   zlink::poll_event_flag_t::pollin
-                    | zlink::poll_event_flag_t::pollout
                     | zlink::poll_event_flag_t::pollcompletion,
                   _socket_states.size () - 1);
             }
@@ -277,9 +276,8 @@ class dealer_router_client_bench_t
                     if (!state->sock)
                         continue;
 
-                    // POLLOUT/POLLCOMPLETION drive public async send and wake
-                    // this application runtime. Neither is payload readiness;
-                    // only POLLIN enters recv drain.
+                    // POLLCOMPLETION drives exact-token async retry; only
+                    // POLLIN enters the reply receive drain.
                     if (perf::poll_event_has (events_[i].revents,
                                               zlink::poll_event_flag_t::pollin)) {
                         for (;;) {

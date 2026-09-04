@@ -274,8 +274,7 @@ class dealer_dealer_client_bench_t
         try {
             for (size_t i = 0; i < _socket_states.size (); ++i) {
                 poller.add (*_socket_states[i].sock,
-                            zlink::poll_event_flag_t::pollout
-                              | zlink::poll_event_flag_t::pollcompletion,
+                            zlink::poll_event_flag_t::pollcompletion,
                             i);
             }
         }

@@ -198,8 +198,8 @@ class application_ready_queue_t
 };
 
 // Owns the one application ready queue and the poll/dispatch ordering for a
-// routed multi-perf phase. Every socket used by async send must include POLLOUT
-// and POLLCOMPLETION. The C++ async state hands a promise scheduler its
+// routed multi-perf phase. Every socket used by async send must include
+// POLLCOMPLETION. The C++ async state hands a promise scheduler its
 // continuation before poller_wait returns from draining WRITABLE. Thus a
 // completion consumed by one wait is already visible in _ready before the next
 // round can decide to block; the queue notification never has to wake a poller
@@ -969,7 +969,7 @@ class socket_t
     }
 
     // Public asynchronous routed-send terminal for coroutine consumers. The
-    // caller must keep POLLOUT | POLLCOMPLETION registered until it completes.
+    // caller must keep POLLCOMPLETION registered until it completes.
     async_result_t<void> send_routed_async (const routing_id_t &routing_id_,
                                             message_t &part_)
     {

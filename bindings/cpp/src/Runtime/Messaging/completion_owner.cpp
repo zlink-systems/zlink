@@ -48,6 +48,20 @@ int request_errno (request_result_t result_) noexcept
     }
 }
 
+submit_result_t send_terminal_result (int err_) noexcept
+{
+    if (err_ == ENOENT)
+        return submit_result_t::not_found;
+    if (err_ == ETERM || err_ == ESHUTDOWN)
+        return submit_result_t::terminated;
+    return submit_result_t::internal_error;
+}
+
+bool is_lifecycle_errno (int err_) noexcept
+{
+    return err_ == ETERM || err_ == ESHUTDOWN;
+}
+
 } // namespace
 
 completion_entry_t::completion_entry_t (
@@ -222,11 +236,11 @@ bool completion_entry_t::capture (zlink_completion_t &completion_) noexcept
         }
 
         if (send_result != ZLINK_SEND_ADMITTED || terminal_errno != 0) {
-            fail_send (std::make_exception_ptr (submit_error_t (
-              send_result == ZLINK_SEND_ADMITTED
-                ? submit_result_t::internal_error
-                : submit_result_t::not_admitted,
-              terminal_errno != 0 ? terminal_errno : EIO)));
+            const int error = terminal_errno != 0 ? terminal_errno : EIO;
+            const submit_result_t result = send_result == ZLINK_SEND_TERMINAL
+              ? send_terminal_result (error)
+              : submit_result_t::internal_error;
+            fail_send (std::make_exception_ptr (submit_error_t (result, error)));
             return true;
         }
 
@@ -272,18 +286,21 @@ bool completion_entry_t::capture (zlink_completion_t &completion_) noexcept
     return _settled;
 }
 
-void completion_entry_t::terminate () noexcept
+void completion_entry_t::terminate (int terminal_errno_) noexcept
 {
     if (_kind == kind_t::send_retry) {
+        const int error = terminal_errno_ != 0 ? terminal_errno_ : EIO;
         fail_send (std::make_exception_ptr (
-          submit_error_t (submit_result_t::not_admitted, ESHUTDOWN)));
+          submit_error_t (send_terminal_result (error), error)));
         return;
     }
 
     zlink_completion_t completion{};
     completion.struct_size = sizeof (completion);
     completion.kind = ZLINK_COMPLETION_REQUEST;
-    completion.request_result = ZLINK_REQUEST_TERMINATED;
+    completion.request_result = is_lifecycle_errno (terminal_errno_)
+      ? ZLINK_REQUEST_TERMINATED
+      : ZLINK_REQUEST_INTERNAL_ERROR;
     publish (0);
     (void) capture (completion);
 }
@@ -336,9 +353,17 @@ void completion_owner_t::register_entry (const std::shared_ptr<completion_entry_
     std::lock_guard<std::mutex> lock (_mutex);
     if (_shutdown)
         throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
-    _entries.emplace (entry_.get (), entry_);
-    if (!_public_owner)
-        start_runtime_owner_locked ();
+    const auto inserted = _entries.emplace (entry_.get (), entry_);
+    if (!inserted.second)
+        throw submit_error_t (submit_result_t::invalid_state, EBUSY);
+    try {
+        if (!_public_owner)
+            start_runtime_owner_locked ();
+    }
+    catch (...) {
+        _entries.erase (inserted.first);
+        throw;
+    }
 }
 
 void completion_owner_t::register_send_entry (
@@ -499,10 +524,17 @@ void completion_owner_t::runtime_loop (uint64_t runtime_generation_) noexcept
             try {
                 (void) drain (false, runtime_generation_);
             }
+            catch (const binding_error_t &error_) {
+                shutdown (error_.internal_errno () != 0 ? error_.internal_errno () : EIO);
+                return;
+            }
             catch (...) {
+                shutdown (EIO);
                 return;
             }
         } else if (rc < 0 && zlink_errno () != EINTR && zlink_errno () != EAGAIN) {
+            const int error_code = zlink_errno ();
+            shutdown (error_code != 0 ? error_code : EIO);
             return;
         }
     }
@@ -526,18 +558,26 @@ void completion_owner_t::transfer_to_public (const void *poller_owner_)
 void completion_owner_t::transfer_to_runtime (const void *poller_owner_) noexcept
 {
     try {
-        std::lock_guard<std::mutex> lock (_mutex);
+        std::unique_lock<std::mutex> lock (_mutex);
         if (_public_owner != poller_owner_)
             return;
         _public_owner = nullptr;
-        if (!_entries.empty () && _send_entry_count == 0)
-            start_runtime_owner_locked ();
+        if (!_entries.empty () && _send_entry_count == 0) {
+            try {
+                start_runtime_owner_locked ();
+            }
+            catch (...) {
+                lock.unlock ();
+                shutdown (EIO);
+            }
+        }
     }
     catch (...) {
+        shutdown (EIO);
     }
 }
 
-void completion_owner_t::shutdown () noexcept
+void completion_owner_t::shutdown (int terminal_errno_) noexcept
 {
     std::unique_lock<std::mutex> lock (_mutex);
     if (_shutdown)
@@ -550,7 +590,7 @@ void completion_owner_t::shutdown () noexcept
     lock.unlock ();
     for (auto &[key, entry] : entries) {
         (void) key;
-        entry->terminate ();
+        entry->terminate (terminal_errno_);
     }
 }
 

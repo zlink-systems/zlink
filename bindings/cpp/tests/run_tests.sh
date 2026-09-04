@@ -37,7 +37,7 @@ echo "[cpp-tests] configure: ${BUILD_DIR}"
 cmake -S "${CPP_DIR}" -B "${BUILD_DIR}" "${CONFIGURE_ARGS[@]}"
 
 echo "[cpp-tests] build"
-cmake --build "${BUILD_DIR}" -j"$(nproc)"
+cmake --build "${BUILD_DIR}" --parallel "${ZLINK_BUILD_JOBS:-$(nproc)}"
 
 echo "[cpp-tests] run contract tests"
 if ctest --test-dir "${BUILD_DIR}" --output-on-failure -L contract && \

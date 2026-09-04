@@ -335,7 +335,6 @@ bool run_server_pull_loop (const std::shared_ptr<stream_handler_context_t> &ctx_
     zlink::poller_t poller;
     poller.add (*ctx_->server,
                 zlink::poll_event_flag_t::pollin
-                  | zlink::poll_event_flag_t::pollout
                   | zlink::poll_event_flag_t::pollcompletion,
                 0);
     zlink::poll_event_t event;
