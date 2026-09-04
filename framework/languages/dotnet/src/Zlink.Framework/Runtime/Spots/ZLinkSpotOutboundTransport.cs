@@ -18,9 +18,9 @@ internal sealed class ZLinkSpotOutboundTransport(
         nativeSpot.Publish(channelName, topic, parts, SendFlags.None, metadata);
     }
 
-    /// <summary>Performs the non-blocking spot-send admission call.
-    /// False leaves accepted async completion to the binding; routing failures
-    /// surface as framework exceptions.</summary>
+    /// <summary>Performs one non-blocking spot-send admission attempt.
+    /// False means that attempt was backpressured; routing failures surface as
+    /// framework exceptions.</summary>
     public bool TrySendToSpotOnce(
         RoutingId targetNodeRid,
         string targetSpotId,

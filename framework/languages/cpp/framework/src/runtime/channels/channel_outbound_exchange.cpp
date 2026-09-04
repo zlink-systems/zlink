@@ -658,6 +658,11 @@ class channel_native_client_t
                                             | zlink::monitor_event::connection_ready
                                             | zlink::monitor_event::disconnected);
             monitor_poller.add (monitor, zlink::poll_event_flag_t::pollin, 1);
+            monitor_poller.add (
+              *socket,
+              zlink::poll_event_flag_t::pollout
+                | zlink::poll_event_flag_t::pollcompletion,
+              2);
         }
 
         ~transport_t () { close_noexcept (); }

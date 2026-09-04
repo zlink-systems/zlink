@@ -2,7 +2,7 @@ namespace Zlink.Framework.Runtime.Messaging;
 
 // Maps the binding submit result to the framework's typed error surface for
 // the mesh submit paths. Ok/Backpressured are binding admission control flow
-// and never reach this mapper; accepted async completion stays binding-owned.
+// and never reach this mapper; async send wait/retry stays binding-owned.
 internal static class ZLinkSubmitFailureMapper
 {
     public static ZLinkFrameworkException CreateChannelException(

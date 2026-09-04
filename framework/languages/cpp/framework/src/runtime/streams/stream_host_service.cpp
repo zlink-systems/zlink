@@ -1561,7 +1561,12 @@ class stream_host_service_t::listener_t
             _bound_endpoint = _core_socket->options ().last_endpoint ();
             mark_started ();
             zlink::poller_t poller;
-            poller.add (*_core_socket, zlink::poll_event_flag_t::pollin, 1);
+            poller.add (
+              *_core_socket,
+              zlink::poll_event_flag_t::pollin
+                | zlink::poll_event_flag_t::pollout
+                | zlink::poll_event_flag_t::pollcompletion,
+              1);
             poller.add (*_core_monitor, zlink::poll_event_flag_t::pollin, 2);
             _core_wake_timer.attach (poller);
             _core_application_supply =

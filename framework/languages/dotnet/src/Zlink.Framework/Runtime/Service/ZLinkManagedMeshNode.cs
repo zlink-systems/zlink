@@ -327,6 +327,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     socket,
                     PollEventFlags.PollIn
                     | PollEventFlags.PollErr
+                    | PollEventFlags.PollOut
                     | PollEventFlags.PollCompletion,
                     1);
                 _socket = socket;
@@ -6129,7 +6130,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 || !peer.Admitted)
                 return null;
             if (!transportPair.IsValid)
-                return null;
+                return peer.NativeReplyEpoch.IsValid
+                    ? peer.NativeReplyEpoch
+                    : null;
             if (peer.TransportPair != transportPair
                 || !_nativeReplyEpochsByTransportPair.TryGetValue(
                     transportPair,
@@ -12696,7 +12699,14 @@ internal sealed class ZLinkManagedStreamSessionService(
         var retained = parts.Select(Message.From).ToArray();
         try
         {
-            stream.Send(sessionRid).Messages(retained).Submit();
+            var operation = stream.Send(sessionRid).Messages(retained);
+            if (flags == SendFlags.DontWait)
+                return operation.TrySubmit()
+                    ? SubmitResult.Ok
+                    : SubmitResult.Backpressured;
+            if (flags != SendFlags.None)
+                throw new ArgumentOutOfRangeException(nameof(flags));
+            operation.Submit();
             return SubmitResult.Ok;
         }
         catch (ZlinkException)

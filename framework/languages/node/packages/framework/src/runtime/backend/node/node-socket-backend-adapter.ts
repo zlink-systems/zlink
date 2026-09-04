@@ -249,15 +249,11 @@ export function wrapSocket<T extends { close(): void }>(
       targetRid: unknown,
       targetSpot: unknown,
       payload: unknown,
-      flags?: number
+      _flags?: number
     ): Promise<void> {
       const operation = (nativeInstance as T & {
         sendToSpot(targetRid: unknown, targetSpot: unknown): ZLinkBindingAsyncSendOperation;
       }).sendToSpot(toNativeRoutingId(targetRid), toNativeRoutingId(targetSpot));
-      if ((flags ?? zlink.SendFlags.None) === zlink.SendFlags.DontWait) {
-        submitBindingSyncSend(operation, payload);
-        return;
-      }
       await submitBindingAsyncSend(operation, payload);
     },
     requestToSpot(

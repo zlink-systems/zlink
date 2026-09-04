@@ -237,16 +237,17 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     }
 
     Optional<Inbound> receive(RouterSocket router) {
+        ZLinkJavaSocketReceivePoller receivePoller =
+            inStateLane(() -> receivePollerOnLane(router));
+        if (receivePoller == null
+            || !receivePoller.waitForReadable(Duration.ZERO)) {
+            return Optional.empty();
+        }
         return inStateLane(() -> receiveOnLane(router));
     }
 
     private Optional<Inbound> receiveOnLane(RouterSocket router) {
         ensureOwnedOnLane(router);
-        ZLinkJavaSocketReceivePoller receivePoller = receivePollerOnLane(router);
-        if (receivePoller == null
-            || !receivePoller.waitForReadable(Duration.ZERO)) {
-            return Optional.empty();
-        }
         Received received = new Received();
         boolean transferred = false;
         try {

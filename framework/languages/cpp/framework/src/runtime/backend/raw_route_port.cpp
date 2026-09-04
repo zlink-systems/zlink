@@ -52,9 +52,11 @@ raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
                                                   : &_owned_socket_mutex),
     _receive_events (receive_events)
 {
-    if (_receive_events != zlink::poll_event_flag_t::none) {
-        _poller->add (socket, _receive_events, _poller_slot);
-    }
+    _poller->add (
+      socket,
+      _receive_events | zlink::poll_event_flag_t::pollout
+        | zlink::poll_event_flag_t::pollcompletion,
+      _poller_slot);
     _wake_timer.attach (*_poller);
 }
 
@@ -68,9 +70,9 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
     }
     auto messages = materialize_binding_parts (parts);
     std::optional<zlink::async_result_t<void>> pending;
-    // Core owns HWM waiting and completion. Submit under the socket lock, then
-    // release it before awaiting so ingress/liveness can continue to make
-    // progress while Core parks the operation.
+    // The binding owns DONTWAIT backpressure retry and its payload snapshot.
+    // Submit under the socket lock, then release it before awaiting so the
+    // public poller can drive WRITABLE completion progress.
     try {
         if (trace)
             trace ("router_admission_submit", "begin");
@@ -195,7 +197,7 @@ zlink::poll_event_flag_t raw_route_port_t::poll (
   std::chrono::milliseconds timeout)
 {
     std::lock_guard lock (*_socket_mutex);
-    if (_socket == nullptr || _receive_events == zlink::poll_event_flag_t::none)
+    if (_socket == nullptr)
         return zlink::poll_event_flag_t::none;
     zlink::poll_event_t events[2];
     const auto count = _poller->wait (events, 2, timeout);
@@ -209,7 +211,8 @@ zlink::poll_event_flag_t raw_route_port_t::poll (
         else if (events[index].slot == _poller_slot) {
             readiness = static_cast<zlink::poll_event_flag_t> (
               static_cast<short> (readiness)
-              | static_cast<short> (events[index].revents));
+              | (static_cast<short> (events[index].revents)
+                 & static_cast<short> (_receive_events)));
         }
     }
     return readiness != zlink::poll_event_flag_t::none
@@ -297,16 +300,14 @@ void raw_route_port_t::close () noexcept
     _wake_timer.detach ();
     auto *socket = _socket;
     _socket = nullptr;
-    if (_receive_events != zlink::poll_event_flag_t::none) {
-        try {
-            if (_owned_poller) {
-                _owned_poller->close ();
-            } else if (socket != nullptr) {
-                _poller->remove (*socket);
-            }
+    try {
+        if (_owned_poller) {
+            _owned_poller->close ();
+        } else if (socket != nullptr) {
+            _poller->remove (*socket);
         }
-        catch (...) {
-        }
+    }
+    catch (...) {
     }
 }
 

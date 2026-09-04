@@ -33,7 +33,12 @@ raw_dealer_port_t::raw_dealer_port_t (
     _socket_mutex (shared_socket_mutex != nullptr ? shared_socket_mutex
                                                   : &_owned_socket_mutex)
 {
-    _poller->add (socket, zlink::poll_event_flag_t::pollin, _poller_slot);
+    _poller->add (
+      socket,
+      zlink::poll_event_flag_t::pollin
+        | zlink::poll_event_flag_t::pollout
+        | zlink::poll_event_flag_t::pollcompletion,
+      _poller_slot);
 }
 
 task_t<bool> raw_dealer_port_t::send (const raw_message_t &parts)

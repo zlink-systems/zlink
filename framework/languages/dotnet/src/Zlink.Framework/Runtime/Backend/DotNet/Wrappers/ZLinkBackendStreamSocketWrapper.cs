@@ -126,9 +126,10 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
     {
         try
         {
-            AwaitStateLane(_lane.RunAsync(
-                () => _socket.Send(routingId).Message(payload).Submit()));
-            return true;
+            return AwaitStateLane(_lane.RunAsync(
+                () => SubmitSend(
+                    _socket.Send(routingId).Message(payload),
+                    flags)));
         }
         catch (ZlinkSubmitException exception)
             when (exception.Result == ZlinkSubmitException.ErrorCode.Backpressured)
@@ -152,9 +153,10 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
     {
         try
         {
-            AwaitStateLane(_lane.RunAsync(
-                () => _socket.Send(routingId).Messages(parts).Submit()));
-            return true;
+            return AwaitStateLane(_lane.RunAsync(
+                () => SubmitSend(
+                    _socket.Send(routingId).Messages(parts),
+                    flags)));
         }
         catch (ZlinkSubmitException exception)
             when (exception.Result == ZlinkSubmitException.ErrorCode.Backpressured)
@@ -335,6 +337,18 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
+
+    private static bool SubmitSend(
+        SendSubmitOperation operation,
+        SendFlags flags)
+    {
+        if (flags == SendFlags.DontWait)
+            return operation.TrySubmit();
+        if (flags != SendFlags.None)
+            throw new ArgumentOutOfRangeException(nameof(flags));
+        operation.Submit();
+        return true;
+    }
 
     private static void AwaitStateLane(ValueTask operation) =>
         operation.GetAwaiter().GetResult();

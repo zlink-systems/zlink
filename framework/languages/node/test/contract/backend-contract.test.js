@@ -138,6 +138,99 @@ test('binding synchronous send uses the flag-free finalized terminal', () => {
   assert.deepEqual(submittedParts.map((part) => part.toString()), ['blocking', 'nonblocking']);
 });
 
+test('backend DONTWAIT Spot send awaits managed binding admission', async () => {
+  let releaseAdmission;
+  const admission = new Promise((resolve) => {
+    releaseAdmission = resolve;
+  });
+  let asyncCalls = 0;
+  let syncCalls = 0;
+  const submit = {
+    message() {
+      return this;
+    },
+    submit() {
+      asyncCalls += 1;
+      return admission;
+    },
+    submit_sync() {
+      syncCalls += 1;
+    }
+  };
+  const socket = wrapSocket({
+    close() {},
+    request() {},
+    reply() {},
+    sendToSpot() {
+      return {
+        message() {
+          return submit;
+        }
+      };
+    }
+  });
+
+  let settled = false;
+  const pending = socket.sendToSpot(
+    'target-node',
+    'target-spot',
+    [Buffer.from('payload')],
+    zlink.SendFlags.DontWait
+  ).then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+
+  assert.equal(asyncCalls, 1);
+  assert.equal(syncCalls, 0);
+  assert.equal(settled, false);
+
+  releaseAdmission();
+  await pending;
+  assert.equal(settled, true);
+});
+
+test('backend managed DONTWAIT Spot send surfaces terminal binding failure', async () => {
+  const terminal = new zlink.SubmitError(zlink.SubmitResult.NotFound, 2);
+  const submit = {
+    message() {
+      return this;
+    },
+    submit() {
+      return Promise.reject(terminal);
+    },
+    submit_sync() {
+      throw new Error('managed DONTWAIT send must not use submit_sync');
+    }
+  };
+  const socket = wrapSocket({
+    close() {},
+    request() {},
+    reply() {},
+    sendToSpot() {
+      return {
+        message() {
+          return submit;
+        }
+      };
+    }
+  });
+
+  await assert.rejects(
+    socket.sendToSpot(
+      'target-node',
+      'target-spot',
+      [Buffer.from('payload')],
+      zlink.SendFlags.DontWait
+    ),
+    (error) => error instanceof backend.ZLinkBackendResultError
+      && error.operation === 'submit'
+      && error.result === zlink.SubmitResult.NotFound
+      && error.nativeErrno === 2
+      && error.cause === terminal
+  );
+});
+
 test('RouteMesh runtime weight changes reject invalid values as configuration errors', () => {
   const registration = framework.createFrameworkRegistrationWithBuilder((builder) => {
     builder.addRouteMesh('game')
