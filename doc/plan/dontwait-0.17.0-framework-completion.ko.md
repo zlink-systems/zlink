@@ -37,11 +37,12 @@
 - [x] **cpp m6b** `error_kind()==deadline_exceeded` — 동일 원인(ENOENT), 격리 3/3 green. 잔여: m6b 후반 `verify_raw_spot_and_actor_routing` line 4524 /
       `route_cache_stops_at_owner_admission_deadline` line 1909 불안정(별개 원인, job `bucketB-cpp-m6b-late` 진행 중)
 - [ ] **cpp m6a 잔여**: `verify_client_server_plain_hello_is_rejected` 행(단독 실행도 timeout) — job `bucketB-cpp-m6a-plain-hello` 진행 중
-- [ ] **dotnet stale-authority 3건**: 분류 오류가 아니라 **stall** — owner가 terminal reply submit OK(트레이스), caller가 completion을 못 받아 3초 뒤 `ExpireOperationAsync`가 TimedOut(101).
-      Core 최소 재현(ROUTER↔ROUTER 양방향 + POLLCOMPLETION poller)은 정상 → framework/binding 경계. job `bucketB-dotnet-stale`(sol/xhigh) 진행 중
-- [ ] **node 신규(B)**: `user-spot-native-two-process` `RequestError: request failed` — job `bucketB-node-two-process` 진행 중
-- [x] 판정(현재까지): cpp 2건 = framework 매핑/연결 소유자 버그(Core·binding 아님). dotnet·node 미판정.
-- [ ] 수정 + 재검증 + 커밋 — cpp 2/4 완료
+- [x] **dotnet stale-authority 3건**: 원인 = spec(README §4 HANDOVER)이 정한 패배 방향 request timeout. Framework가 Core handover 수렴 전에 `Admitted`를 공개한 것이 결함.
+      수정 = settle-before-submit(패배 outbound intent를 endpoint로 disconnect, 패배 방향이 ready였다면 두 lane Disconnected 처리 뒤에만 Admitted 공개), 회귀 `BilateralCallerFirstAdmissionCompletesImmediateActorRequestOnSurvivor`.
+      3건×3회 9/9, Stateful suite 50/50. 전체 unit gate는 감독관이 실행 중(커밋 대기). generic request 자동 재전송은 spec(02-spot-messaging:392-403, 02-session-actor-binding:626-634)이 금지하므로 미도입
+- [x] **node 신규(B)**: `user-spot-native-two-process` — 첫 request가 deadline 전부 소진 → replay 여지 없음. 수정 커밋 `285cfa522a`
+- [x] 판정: cpp 4건·dotnet 1건·node 1건 모두 framework(+테스트 하네스) 결함. Core·binding 버그 0건 (Core 수정 job 1건은 오판으로 중단).
+- [ ] 수정 + 재검증 + 커밋 — cpp 4/4·node 1/1 커밋, dotnet 커밋 대기(전체 unit gate)
 
 ### C. 검증 인프라 (신뢰성 확보)
 - [x] 환경 재구축(2026-09-05, WSL 재설치): Core dev 빌드, **로컬 Core 0.17.0 프리픽스 수동 구성**(GitHub에 `core/v0.17.0` 릴리스 없음 — `fetch-release.sh` 캐시 단락 경로 이용), 4언어 로컬 패키지,
