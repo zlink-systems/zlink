@@ -1,0 +1,39 @@
+# Job: ZoneWorld shared browser client — restore the gitignored Vite entry pages `game.html` / `ops.html`
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1 h cap. Read `AGENTS.md` (root) §2/§3.
+Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`,
+`framework/languages/{cpp,dotnet,java}/**`; do not commit.
+
+## Facts
+- `framework/languages/shared_sample/zoneworld/client/vite.config.ts:9-10` declares the Vite inputs
+  `./game.html` and `./ops.html`; the Playwright specs load `/game.html` and `/ops.html`
+  (`tests/e2e/shell.spec.ts:14,21`, `tests/live/server.spec.ts`). Neither file is in the repository or
+  its history: the root `.gitignore:113` rule `*.html` ignores them (only `doc/site/overrides/**/*.html`
+  and `framework/doc/framework/common/diagrams/*.html` are negated). They existed only on the previous
+  machine, which is gone, so the node ZoneWorld sample fails at the shared-browser build with
+  `Could not resolve entry module "game.html"` (`doc/plan/c016-worklog/gate-samples-node-fix-summary.md`).
+  The client's `npm install` has already been run.
+- App entry modules: `src/app/game.tsx`, `src/app/ops.tsx` (pages under `src/pages/{game,ops}`, theme
+  `src/shared/ui/theme.css`, config `src/shared/config/runtime.ts`). Read them (and the Playwright specs
+  for expected titles/selectors, and `src/shared/config/runtime.ts` for any `<meta>`/query/global the
+  page must provide) to reconstruct the two minimal Vite HTML entry pages exactly as the app code
+  expects (root element id, module script path, title, lang, viewport, any data attributes).
+- The node ZoneWorld runner: `framework/languages/node/samples/ZoneWorld/Runner/sample-runner.mjs:716,768`
+  runs `npm exec vite build` in that client and then verifies the built pages.
+
+## What to do
+1. Reconstruct `game.html` and `ops.html` in `framework/languages/shared_sample/zoneworld/client/` from
+   the app code (keep them minimal and conventional for Vite + React/TSX; no inline app logic).
+2. Un-ignore them: add a negation to the root `.gitignore` right after the existing `!framework/doc/...`
+   negations, scoped to `framework/languages/shared_sample/zoneworld/client/*.html` (this is the only
+   allowed edit outside the client dir). Verify with `git check-ignore -v` that both files are now
+   tracked-eligible and `git status` shows them as untracked (not ignored).
+3. Verify: `npm exec vite build` in the client succeeds; the client's Playwright shell spec
+   (`tests/e2e/shell.spec.ts`) passes if its config can run headless here; then the node ZoneWorld sample
+   `TMPDIR=/dev/shm/zlink-tmp-node flock -w7200 /tmp/zlink-node-gate.lock bash framework/languages/node/samples/ZoneWorld/run_sample.sh`
+   passes 2×. If the cpp/dotnet/java ZoneWorld runners also build this client (grep their runners for
+   `vite`), state it; do not run them.
+
+## Deliverable
+`doc/plan/c016-worklog/d-node-zoneworld-html-summary.md`: what the pages contain and the evidence for
+each element, the .gitignore line, verification results (vite build, spec, sample 2×), BLOCKERS.

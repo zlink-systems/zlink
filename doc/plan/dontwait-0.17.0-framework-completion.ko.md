@@ -98,8 +98,10 @@
 
 ### B-4. **새 의존성 — Core REQUEST 계약 B (D-B85, `7d8205a028`, 2026-09-05 00:24)**
 - DONTWAIT request가 SEND처럼 `BACKPRESSURED`+wait token → WRITABLE 후 재제출. ROUTER no-route는 SEND와 같은 `NOT_CONNECTED` 규칙.
-- **B의 bindings 8개 REQUEST 포팅이 아직 미완**(`core-0.17.0-dontwait-contract-and-perf-plan-b.ko.md` §5). framework의 request 경로
-  적응(§A의 request판)은 그 포팅 뒤에 한다. 그 전까지 framework 게이트에서 request 관련 신규 실패는 이 의존성으로 분류한다.
+- **B의 bindings 8개 REQUEST 포팅 완료·푸시됨**(2026-09-05 01:4x: java `a06260f507`, dotnet `6b4c60eb33`, cpp `e0860723bc`, node `b145f86501` 등). 바인딩 async request
+  종결자가 BACKPRESSURED→WRITABLE 재제출을 내부 처리하므로 §A에서 바인딩 async 경로+POLLCOMPLETION으로 전환한 framework는 추가 적응이 최소일 것으로
+  예상 — Core(`29add0ac81` 포함)+로컬 패키지 재빌드(01:53) 후 **gate-v2**(cpp/java/node 즉시, dotnet은 handover job 뒤)로 실측한다.
+  01:53 이전 게이트(node 게이트·샘플 등)는 새 Core+옛 바인딩 조합이었음을 감안한다.
 - 즉시 조치: 새 Core로 `core/build-dev`·프리픽스·로컬 패키지 재생성 후 cpp m6a/m6b·monitor 재현 재실행(진행 중).
 
 ## 알려진 pre-existing (회귀 아님, 별도 추적)
