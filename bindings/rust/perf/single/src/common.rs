@@ -135,21 +135,70 @@ macro_rules! perf_submit_measurement {
     }};
 }
 
+struct ThreadWake(std::thread::Thread);
+
+impl std::task::Wake for ThreadWake {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.unpark();
+    }
+}
+
+thread_local! {
+    static SENDER_WAKER: Waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+    static SENDER_POLLER: std::cell::RefCell<Option<zlink::Poller>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Registers the sender socket with a public `Poller` owned by this thread so
+/// `submit_now` drives parked SEND futures from that poller's `wait()` (the
+/// application-owned completion path) instead of the binding reactor thread.
+pub fn drive_sends_with_poller(socket: &dyn zlink::Pollable) {
+    let poller = zlink::Poller::new().expect("sender poller");
+    poller
+        .add_socket(socket, zlink::POLLOUT | zlink::POLLCOMPLETION, 0)
+        .expect("sender poller registration");
+    SENDER_POLLER.with(|slot| *slot.borrow_mut() = Some(poller));
+}
+
+fn wait_for_send_progress() {
+    let waited = SENDER_POLLER.with(|slot| {
+        let slot = slot.borrow();
+        let Some(poller) = slot.as_ref() else {
+            return false;
+        };
+        let mut events = [zlink::PollEvent::default()];
+        match poller.wait(&mut events, -1) {
+            Ok(_) => true,
+            Err(error) if error.native_errno() == libc::EINTR => true,
+            Err(error) => panic!("sender poller wait: {error}"),
+        }
+    });
+    if !waited {
+        std::thread::park();
+    }
+}
+
 pub fn submit_now<F>(future: F) -> Result<(), SubmitError>
 where
     F: Future<Output = Result<(), SubmitError>>,
 {
     let mut future = pin!(future);
-    let mut context = TaskContext::from_waker(Waker::noop());
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(result) => return result,
-            // Preserve this exact packet and token until WRITABLE drives its
-            // retry. Replacing it with another one-shot attempt would leak a
-            // growing set of payload-free wait-token sinks under sustained HWM.
-            Poll::Pending => std::thread::yield_now(),
+    SENDER_WAKER.with(|waker| {
+        let mut context = TaskContext::from_waker(waker);
+        loop {
+            match future.as_mut().poll(&mut context) {
+                Poll::Ready(result) => return result,
+                // Preserve this exact packet and token until WRITABLE drives
+                // its retry: either this thread's public poller pulls it or
+                // the binding reactor unparks this thread.
+                Poll::Pending => wait_for_send_progress(),
+            }
         }
-    }
+    })
 }
 
 pub fn now_ns() -> u64 {

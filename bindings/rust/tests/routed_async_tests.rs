@@ -442,6 +442,9 @@ fn request_sync_return_waits_for_reply() {
     let mut ready = Received::empty();
     assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
 
+    // The replier hands the ROUTER back so the peer stays open until the
+    // reply has been consumed; closing it right after the submit races the
+    // inproc delivery of that reply.
     let replier = thread::spawn(move || {
         let mut request = Received::empty();
         assert!(router.recv(&mut request, RecvFlags::NONE).unwrap());
@@ -450,6 +453,7 @@ fn request_sync_return_waits_for_reply() {
             .message(Message::try_from(b"sync-reply").unwrap())
             .submit()
             .unwrap();
+        router
     });
     let reply = dealer
         .request()
@@ -458,7 +462,7 @@ fn request_sync_return_waits_for_reply() {
         .submit_sync()
         .unwrap();
     assert_eq!(reply[0].as_bytes(), b"sync-reply");
-    replier.join().unwrap();
+    drop(replier.join().unwrap());
 }
 
 #[test]
@@ -488,6 +492,7 @@ fn dropped_request_future_cleans_up_its_late_completion() {
                 .submit()
                 .unwrap();
         }
+        router
     });
 
     let mut dropped = Box::pin(
@@ -513,5 +518,241 @@ fn dropped_request_future_cleans_up_its_late_completion() {
     )
     .unwrap();
     assert_eq!(reply[0].as_bytes(), b"next-reply");
-    responder.join().unwrap();
+    drop(responder.join().unwrap());
+}
+
+/// Counts executor polls so a parked SEND/REQUEST future can prove it is
+/// resumed by the binding reactor rather than by executor re-polling.
+struct PollCounter<F> {
+    inner: F,
+    polls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl<F: std::future::Future + Unpin> std::future::Future for PollCounter<F> {
+    type Output = F::Output;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Self::Output> {
+        self.polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::pin::Pin::new(&mut self.inner).poll(cx)
+    }
+}
+
+fn counted<F: std::future::Future + Unpin>(
+    inner: F,
+) -> (
+    PollCounter<F>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let polls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    (
+        PollCounter {
+            inner,
+            polls: std::sync::Arc::clone(&polls),
+        },
+        polls,
+    )
+}
+
+#[test]
+fn backpressured_send_resumes_without_executor_repolls() {
+    let ctx = Context::new().unwrap();
+    ctx.options().set_auto_hwm_enabled(false).unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    dealer
+        .common_options()
+        .set_send_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router
+        .common_options()
+        .set_receive_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router
+        .common_options()
+        .set_receive_timeout(Duration::from_secs(3))
+        .unwrap();
+    router.bind("inproc://rust-send-no-repoll").unwrap();
+    dealer.connect("inproc://rust-send-no-repoll").unwrap();
+    dealer
+        .send()
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut received = Received::empty();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+
+    let filler = saturate(|| Box::pin(dealer.send().message(large_filler(b'p')).submit()));
+    assert!(!filler.is_empty(), "test target did not reach HWM");
+
+    let mut parked = Box::pin(
+        dealer
+            .send()
+            .message(Message::try_from(b"parked-header").unwrap())
+            .message(large_filler(b'w'))
+            .submit(),
+    );
+    assert_eq!(test_support::poll_once(&mut parked), Poll::Pending);
+    let (parked, polls) = counted(parked);
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiter = thread::spawn(move || {
+        done_tx.send(test_support::block_on(parked)).unwrap();
+    });
+
+    // Drain the receiver until the parked packet arrives; the waiter thread is
+    // parked the whole time and must be woken by the reactor, not by polling.
+    let mut got_parked = false;
+    while !got_parked {
+        assert!(
+            router.recv(&mut received, RecvFlags::NONE).unwrap(),
+            "receiver timed out before the parked packet was delivered"
+        );
+        got_parked = received.parts()[0].as_bytes() == b"parked-header";
+    }
+    assert_eq!(received.parts().len(), 2);
+    done_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("parked SEND was not resumed by the reactor")
+        .unwrap();
+    waiter.join().unwrap();
+    let polls = polls.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        polls <= 8,
+        "parked SEND future was re-polled {polls} times: executor busy loop"
+    );
+    drop(filler);
+}
+
+#[test]
+fn request_alongside_live_send_tokens_is_not_repolled() {
+    let ctx = Context::new().unwrap();
+    ctx.options().set_auto_hwm_enabled(false).unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    dealer
+        .common_options()
+        .set_send_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router
+        .common_options()
+        .set_receive_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router.bind("inproc://rust-request-no-repoll").unwrap();
+    dealer.connect("inproc://rust-request-no-repoll").unwrap();
+    dealer
+        .send()
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut ready = Received::empty();
+    assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
+
+    let mut request = Box::pin(
+        dealer
+            .request()
+            .message(Message::try_from(b"question").unwrap())
+            .timeout(Duration::from_secs(3))
+            .submit(),
+    );
+    assert!(test_support::poll_once(&mut request).is_pending());
+    let (request, polls) = counted(request);
+    let mut received_request = Received::empty();
+    assert!(router.recv(&mut received_request, RecvFlags::NONE).unwrap());
+
+    // Live SEND wait tokens on the same socket must not turn the REQUEST
+    // waiter into a polling loop.
+    let pending = saturate(|| Box::pin(dealer.send().message(large_filler(b'q')).submit()));
+    assert!(!pending.is_empty(), "test target did not reach HWM");
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiter = thread::spawn(move || {
+        done_tx.send(test_support::block_on(request)).unwrap();
+    });
+    assert!(done_rx.recv_timeout(Duration::from_millis(100)).is_err());
+    received_request
+        .reply()
+        .message(Message::try_from(b"answer").unwrap())
+        .submit()
+        .unwrap();
+    let reply = done_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("REQUEST was not completed")
+        .unwrap();
+    assert_eq!(reply[0].as_bytes(), b"answer");
+    waiter.join().unwrap();
+    let polls = polls.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        polls <= 4,
+        "REQUEST future was re-polled {polls} times: executor busy loop"
+    );
+    drop(pending);
+}
+
+#[test]
+fn removing_the_target_fails_a_parked_router_send() {
+    let ctx = Context::new().unwrap();
+    ctx.options().set_auto_hwm_enabled(false).unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    let rid = RoutingId::from(b"rust-terminal-target");
+    dealer.set_routing_id(&rid).unwrap();
+    router
+        .common_options()
+        .set_send_high_water_mark(RECORD_HWM)
+        .unwrap();
+    dealer
+        .common_options()
+        .set_receive_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router.bind("inproc://rust-terminal-writable").unwrap();
+    dealer.connect("inproc://rust-terminal-writable").unwrap();
+    dealer
+        .send()
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut ready = Received::empty();
+    assert!(router.recv(&mut ready, RecvFlags::NONE).unwrap());
+
+    let filler = saturate(|| Box::pin(router.send(&rid).message(large_filler(b't')).submit()));
+    assert!(!filler.is_empty(), "test target did not reach HWM");
+    let mut parked = Box::pin(
+        router
+            .send(&rid)
+            .message(Message::try_from(b"never-delivered").unwrap())
+            .submit(),
+    );
+    assert_eq!(test_support::poll_once(&mut parked), Poll::Pending);
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiter = thread::spawn(move || {
+        done_tx.send(test_support::block_on(parked)).unwrap();
+    });
+    assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+    // Explicit target removal retires the token with a terminal WRITABLE;
+    // the waiter must fail instead of waiting forever.
+    router.disconnect_rid(&rid).unwrap();
+    let outcome = done_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("terminal WRITABLE did not resume the parked send");
+    let error = outcome.expect_err("a removed target cannot admit the retained packet");
+    assert!(
+        error.native_errno() == libc::ENOENT || error.native_errno() == libc::ESHUTDOWN,
+        "unexpected terminal errno {}",
+        error.native_errno()
+    );
+    assert!(
+        matches!(
+            error.code(),
+            SubmitResult::NotFound | SubmitResult::Terminated
+        ),
+        "unexpected terminal code {:?}",
+        error.code()
+    );
+    waiter.join().unwrap();
+    drop(filler);
 }

@@ -54,6 +54,7 @@ pub(crate) fn submit_routed_request(
         operation: Some(operation),
         entry: None,
         owner: None,
+        context: std::ptr::null_mut(),
         finished: false,
     }
 }
@@ -76,27 +77,14 @@ pub(crate) fn submit_routed_request_sync(
         return Err(RequestError::new(RequestResult::InternalError, libc::EPROTO).into());
     }
     entry.publish(completion_id);
-    loop {
-        if entry.is_settled() {
-            return Ok(entry
-                .wait_request_or_progress()
-                .expect("settled request outcome")?);
-        }
-        match owner.drive_send_reactor()? {
-            true => std::thread::yield_now(),
-            false => {
-                if let Some(outcome) = entry.wait_request_or_progress() {
-                    return Ok(outcome?);
-                }
-            }
-        }
-    }
+    Ok(entry.wait_request()?)
 }
 
 struct RequestFuture {
     operation: Option<RequestOpStorage>,
     entry: Option<Arc<CompletionEntry>>,
     owner: Option<Arc<CompletionOwner>>,
+    context: *mut std::ffi::c_void,
     finished: bool,
 }
 
@@ -142,6 +130,7 @@ impl Future for RequestFuture {
             }
             self.owner = Some(owner);
             self.entry = Some(entry);
+            self.context = user_context;
         }
 
         let outcome = self
@@ -158,30 +147,7 @@ impl Future for RequestFuture {
                 self.finished = true;
                 Poll::Ready(Err(error.into()))
             }
-            Poll::Pending => {
-                let self_driven = match self
-                    .owner
-                    .as_ref()
-                    .expect("request completion owner")
-                    .drive_send_reactor()
-                {
-                    Ok(value) => value,
-                    Err(error) => {
-                        if let (Some(owner), Some(entry)) = (&self.owner, &self.entry) {
-                            let captured = entry.detach();
-                            if captured {
-                                owner.unregister(Arc::as_ptr(entry) as *mut std::ffi::c_void);
-                            }
-                        }
-                        self.finished = true;
-                        return Poll::Ready(Err(error.into()));
-                    }
-                };
-                if self_driven {
-                    cx.waker().wake_by_ref();
-                }
-                Poll::Pending
-            }
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -193,7 +159,7 @@ impl Drop for RequestFuture {
                 let captured = entry.detach();
                 if captured {
                     if let Some(owner) = &self.owner {
-                        owner.unregister(Arc::as_ptr(entry) as *mut std::ffi::c_void);
+                        owner.unregister(self.context);
                     }
                 }
             }

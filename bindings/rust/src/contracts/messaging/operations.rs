@@ -37,16 +37,6 @@ impl MessageParts {
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Message> {
         self.first.iter_mut().chain(self.rest.iter_mut())
     }
-
-    pub(crate) fn try_clone(&self) -> Result<Self, crate::ConfigError> {
-        let first = self.first.as_ref().map(Message::try_clone).transpose()?;
-        let rest = self
-            .rest
-            .iter()
-            .map(Message::try_clone)
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { first, rest })
-    }
 }
 
 /// A multipart HWM-managed send builder.

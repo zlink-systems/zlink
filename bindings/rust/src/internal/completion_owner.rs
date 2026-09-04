@@ -3,14 +3,18 @@
 //! Socket-local ownership of the Core completion queue.
 //!
 //! One owner drains a socket at a time.  The binding runtime owns unregistered
-//! sockets; a public poller atomically takes that responsibility while it has a
-//! `POLLCOMPLETION` registration.  Entries are registered by stable
-//! `user_context` before the native FINAL call so an eager drain can capture a
-//! completion before the submit call publishes its completion id.
+//! sockets and drains them from one lazily started reactor thread that blocks
+//! in a native poller; a public poller atomically takes that responsibility
+//! while it has a `POLLCOMPLETION` registration.  REQUEST entries are
+//! registered before the native FINAL call.  SEND entries are registered only
+//! when Core hands out a wait token: a WRITABLE record that a concurrent drain
+//! pulls before that registration lands is parked by its opaque context and
+//! replayed when the registration arrives.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock};
 use std::task::{Poll, Waker};
 use std::thread::JoinHandle;
 
@@ -22,6 +26,12 @@ use crate::message::{Message, RoutingId};
 use crate::native_errors::{
     check_config_rc, check_recv_rc, request_error_from_result, submit_error_from_errno,
 };
+
+/// Reactor thread wait bound. The thread wakes early on any completion record;
+/// this only bounds how long a stop or ownership transfer waits for it.
+const REACTOR_WAIT_MS: i64 = 25;
+/// Idle wait rounds before an unused reactor thread retires itself.
+const REACTOR_IDLE_ROUNDS: u32 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompletionEntryKind {
@@ -42,6 +52,15 @@ struct CaptureResult {
     waker: Option<Waker>,
 }
 
+/// A WRITABLE record pulled before its SEND registration landed.
+#[derive(Clone, Copy)]
+struct ParkedWritable {
+    completion_id: u64,
+    peer_rid: ffi::zlink_routing_id_t,
+    send_result: ffi::zlink_send_complete_result_t,
+    send_terminal_errno: i32,
+}
+
 struct EntryState {
     completion_id: u64,
     published: bool,
@@ -49,7 +68,6 @@ struct EntryState {
     settled: bool,
     detached: bool,
     owner_shutdown: bool,
-    progress_kick: bool,
     outcome: Option<CompletionOutcome>,
     waker: Option<Waker>,
 }
@@ -74,7 +92,6 @@ impl CompletionEntry {
                 settled: false,
                 detached: false,
                 owner_shutdown: false,
-                progress_kick: false,
                 outcome: None,
                 waker: None,
             }),
@@ -115,6 +132,22 @@ impl CompletionEntry {
 
     fn capture(&self, completion: &mut ffi::zlink_completion_t) -> CaptureResult {
         let outcome = completion_outcome(self.kind, self.expected_target.as_ref(), completion);
+        self.capture_outcome(outcome)
+    }
+
+    fn capture_parked(&self, parked: &ParkedWritable) -> CaptureResult {
+        let outcome = writable_outcome(
+            self.expected_target.as_ref(),
+            ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE,
+            parked.completion_id,
+            &parked.peer_rid,
+            parked.send_result,
+            parked.send_terminal_errno,
+        );
+        self.capture_outcome(outcome)
+    }
+
+    fn capture_outcome(&self, outcome: CompletionOutcome) -> CaptureResult {
         let (waker, detached) = {
             let mut state = self.state.lock().expect("completion entry");
             if state.captured {
@@ -191,17 +224,14 @@ impl CompletionEntry {
         Poll::Pending
     }
 
-    pub(crate) fn wait_request_or_progress(&self) -> Option<Result<Vec<Message>, RequestError>> {
+    /// Blocks the calling thread until the REQUEST settles.
+    pub(crate) fn wait_request(&self) -> Result<Vec<Message>, RequestError> {
         let mut state = self.state.lock().expect("completion entry");
-        while !state.settled && !state.progress_kick {
+        while !state.settled {
             state = self.changed.wait(state).expect("completion entry");
         }
-        if !state.settled {
-            state.progress_kick = false;
-            return None;
-        }
         match state.outcome.take().expect("blocking request outcome") {
-            CompletionOutcome::Request(outcome) => Some(outcome),
+            CompletionOutcome::Request(outcome) => outcome,
             CompletionOutcome::Writable { .. } => {
                 unreachable!("writable outcome in request entry")
             }
@@ -212,22 +242,6 @@ impl CompletionEntry {
         let mut state = self.state.lock().expect("completion entry");
         while !state.settled {
             state = self.changed.wait(state).expect("completion entry");
-        }
-    }
-
-    pub(crate) fn is_settled(&self) -> bool {
-        self.state.lock().expect("completion entry").settled
-    }
-
-    fn wake_waiter(&self) {
-        let waker = {
-            let mut state = self.state.lock().expect("completion entry");
-            state.progress_kick = true;
-            state.waker.clone()
-        };
-        self.changed.notify_all();
-        if let Some(waker) = waker {
-            waker.wake();
         }
     }
 
@@ -274,7 +288,7 @@ impl CompletionEntry {
 
 struct OwnerState {
     entries: HashMap<usize, Arc<CompletionEntry>>,
-    send_entry_count: usize,
+    parked_writables: HashMap<usize, ParkedWritable>,
     public_owner: Option<usize>,
     runtime_poller: usize,
     runtime_thread: Option<JoinHandle<()>>,
@@ -287,7 +301,10 @@ pub(crate) struct CompletionOwner {
     socket: usize,
     state: Mutex<OwnerState>,
     drain_gate: Mutex<()>,
-    submit_gate: Mutex<()>,
+    /// Native submits hold this shared; close takes it exclusively so a raw
+    /// handle is never entered after the native close returned.
+    lifecycle: RwLock<bool>,
+    next_context: AtomicUsize,
 }
 
 unsafe impl Send for CompletionOwner {}
@@ -299,7 +316,7 @@ impl CompletionOwner {
             socket: socket as usize,
             state: Mutex::new(OwnerState {
                 entries: HashMap::new(),
-                send_entry_count: 0,
+                parked_writables: HashMap::new(),
                 public_owner: None,
                 runtime_poller: 0,
                 runtime_thread: None,
@@ -307,17 +324,24 @@ impl CompletionOwner {
                 shutdown: false,
             }),
             drain_gate: Mutex::new(()),
-            submit_gate: Mutex::new(()),
+            lifecycle: RwLock::new(false),
+            next_context: AtomicUsize::new(1),
         })
     }
 
-    /// Serializes native SEND attempts with socket shutdown/close.
+    /// Allocates a never-reused opaque completion context for this socket.
+    pub(crate) fn next_context(&self) -> *mut c_void {
+        self.next_context.fetch_add(1, Ordering::Relaxed) as *mut c_void
+    }
+
+    /// Runs one native submit while the handle is guaranteed open. Concurrent
+    /// submits share the guard; close waits for them and then blocks new ones.
     pub(crate) fn with_submit<T>(
         &self,
         action: impl FnOnce() -> Result<T, SubmitError>,
     ) -> Result<T, SubmitError> {
-        let _submit_guard = self.submit_gate.lock().expect("completion submit gate");
-        if self.state.lock().expect("completion owner").shutdown {
+        let closed = self.lifecycle.read().expect("completion lifecycle");
+        if *closed {
             return Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN));
         }
         action()
@@ -327,7 +351,7 @@ impl CompletionOwner {
         self: &Arc<Self>,
     ) -> Result<(Arc<CompletionEntry>, *mut c_void), SubmitError> {
         let entry = CompletionEntry::new(CompletionEntryKind::Request, None);
-        let key = Arc::as_ptr(&entry) as usize;
+        let context = self.next_context();
         let mut state = self.state.lock().expect("completion owner");
         if state.shutdown {
             return Err(SubmitError::new(
@@ -335,86 +359,65 @@ impl CompletionOwner {
                 libc::ESHUTDOWN,
             ));
         }
-        state.entries.insert(key, Arc::clone(&entry));
-        if state.public_owner.is_none() && state.send_entry_count == 0 {
-            if let Err(error) = self.start_runtime_locked(&mut state) {
-                state.entries.remove(&key);
-                return Err(SubmitError::new(
-                    SubmitResult::InternalError,
-                    error.native_errno(),
-                ));
-            }
+        state.entries.insert(context as usize, Arc::clone(&entry));
+        if let Err(error) = self.start_runtime_locked(&mut state) {
+            state.entries.remove(&(context as usize));
+            return Err(SubmitError::new(
+                SubmitResult::InternalError,
+                error.native_errno(),
+            ));
         }
-        Ok((entry, key as *mut c_void))
+        Ok((entry, context))
     }
 
-    pub(crate) fn register_send(
+    /// Registers the SEND entry behind `context` for the wait token Core just
+    /// issued, replays a WRITABLE record that arrived first, and makes sure a
+    /// drain owner is running. The entry stays registered across repeated
+    /// backpressure until the waiter unregisters or detaches it.
+    pub(crate) fn register_send_token(
         self: &Arc<Self>,
-        expected_target: Option<RoutingId>,
-    ) -> Result<(Arc<CompletionEntry>, *mut c_void), SubmitError> {
-        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, expected_target);
-        let key = Arc::as_ptr(&entry) as usize;
-        let mut state = self.state.lock().expect("completion owner");
-        if state.shutdown {
-            return Err(SubmitError::new(
-                SubmitResult::InvalidState,
-                libc::ESHUTDOWN,
-            ));
-        }
-        state.entries.insert(key, Arc::clone(&entry));
-        state.send_entry_count += 1;
-        if state.public_owner.is_none() {
-            if state.runtime_thread.is_some() {
-                state = self.stop_runtime_locked(state);
+        context: *mut c_void,
+        entry: &Arc<CompletionEntry>,
+        completion_id: u64,
+    ) -> Result<(), SubmitError> {
+        let (parked, start_error) = {
+            let mut state = self.state.lock().expect("completion owner");
+            if state.shutdown {
+                return Err(SubmitError::new(SubmitResult::Terminated, libc::ESHUTDOWN));
             }
-            if let Err(error) = self.start_send_poller_locked(&mut state) {
-                state.entries.remove(&key);
-                state.send_entry_count -= 1;
-                if state.send_entry_count == 0 && !state.entries.is_empty() {
-                    let _ = self.start_runtime_locked(&mut state);
-                }
-                return Err(SubmitError::new(
-                    SubmitResult::InternalError,
-                    error.native_errno(),
-                ));
+            state
+                .entries
+                .entry(context as usize)
+                .or_insert_with(|| Arc::clone(entry));
+            let parked = state.parked_writables.remove(&(context as usize));
+            let start_error = self.start_runtime_locked(&mut state).err();
+            (parked, start_error)
+        };
+        entry.publish(completion_id);
+        if let Some(parked) = parked {
+            let captured = entry.capture_parked(&parked);
+            if captured.detached {
+                self.unregister(context);
+            }
+            if let Some(waker) = captured.waker {
+                waker.wake();
             }
         }
-        let request_waiters = state
-            .entries
-            .values()
-            .filter(|item| item.kind() == CompletionEntryKind::Request)
-            .cloned()
-            .collect::<Vec<_>>();
-        drop(state);
-        // REQUEST waiters that previously depended on the fallback thread
-        // must take over the passive reactor while any SEND token is live.
-        for waiter in request_waiters {
-            waiter.wake_waiter();
+        match start_error {
+            Some(error) => Err(SubmitError::new(
+                SubmitResult::InternalError,
+                error.native_errno(),
+            )),
+            None => Ok(()),
         }
-        Ok((entry, key as *mut c_void))
     }
 
-    pub(crate) fn unregister(self: &Arc<Self>, user_context: *mut c_void) {
-        let mut state = self.state.lock().expect("completion owner");
-        let Some(entry) = state.entries.remove(&(user_context as usize)) else {
-            return;
-        };
-        if entry.kind() == CompletionEntryKind::SendRetry {
-            state.send_entry_count = state.send_entry_count.saturating_sub(1);
-        }
-        if state.shutdown || state.public_owner.is_some() {
-            return;
-        }
-        if state.entries.is_empty() {
-            if state.runtime_thread.is_none() && state.runtime_poller != 0 {
-                drop(self.stop_runtime_locked(state));
-            }
-        } else if state.send_entry_count == 0 && state.runtime_thread.is_none() {
-            if state.runtime_poller != 0 {
-                state = self.stop_runtime_locked(state);
-            }
-            let _ = self.start_runtime_locked(&mut state);
-        }
+    pub(crate) fn unregister(&self, user_context: *mut c_void) {
+        self.state
+            .lock()
+            .expect("completion owner")
+            .entries
+            .remove(&(user_context as usize));
     }
 
     pub(crate) fn drain(self: &Arc<Self>, public_owner: bool) -> Result<usize, RecvError> {
@@ -448,12 +451,13 @@ impl CompletionOwner {
                 break;
             }
 
+            let context = completion.user_context as usize;
             let entry = self
                 .state
                 .lock()
                 .expect("completion owner")
                 .entries
-                .get(&(completion.user_context as usize))
+                .get(&context)
                 .cloned();
             if let Some(entry) = entry {
                 let captured = entry.capture(&mut completion);
@@ -464,9 +468,25 @@ impl CompletionOwner {
                     entry.wait_settled();
                 }
                 if entry.kind() == CompletionEntryKind::Request || captured.detached {
-                    self.unregister(Arc::as_ptr(&entry) as *mut c_void);
+                    self.unregister(context as *mut c_void);
                 }
             } else {
+                if context != 0
+                    && completion.kind == ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE
+                {
+                    // The wait token was issued but its SEND registration has
+                    // not landed yet; replay this record when it does.
+                    let parked = ParkedWritable {
+                        completion_id: completion.completion_id,
+                        peer_rid: completion.peer_rid,
+                        send_result: completion.send_result,
+                        send_terminal_errno: completion.send_terminal_errno,
+                    };
+                    let mut state = self.state.lock().expect("completion owner");
+                    if !state.shutdown {
+                        state.parked_writables.insert(context, parked);
+                    }
+                }
                 unsafe { ffi::zlink_completion_close(&mut completion) };
             }
             processed += 1;
@@ -476,50 +496,6 @@ impl CompletionOwner {
             waker.wake();
         }
         failure.map_or(Ok(processed), Err)
-    }
-
-    /// Drives the private SEND reactor for one executor turn. `Ok(true)` means
-    /// this owner is using the private nonblocking reactor and the Future must
-    /// schedule another turn while it remains pending. A public poller owns
-    /// progress when this returns `Ok(false)`.
-    pub(crate) fn drive_send_reactor(self: &Arc<Self>) -> Result<bool, RecvError> {
-        let rc = {
-            let mut state = self.state.lock().expect("completion owner");
-            if state.shutdown
-                || state.public_owner.is_some()
-                || state.runtime_thread.is_some()
-                || state.send_entry_count == 0
-            {
-                return Ok(false);
-            }
-            if state.runtime_poller == 0 {
-                self.start_send_poller_locked(&mut state).map_err(|error| {
-                    RecvError::new(crate::RecvResult::InternalError, error.native_errno())
-                })?;
-            }
-            if state.runtime_stop {
-                return Ok(false);
-            }
-            let mut event = ffi::zlink_poller_event_t::empty();
-            unsafe {
-                ffi::zlink_poller_wait(
-                    state.runtime_poller as *mut c_void,
-                    &mut event,
-                    1,
-                    0,
-                    std::ptr::null_mut(),
-                )
-            }
-        };
-        if rc > 0 {
-            self.drain(false)?;
-        } else if rc < 0 {
-            let errno = unsafe { ffi::zlink_errno() };
-            if errno != libc::EINTR && errno != libc::EAGAIN {
-                return Err(RecvError::new(crate::RecvResult::InternalError, errno));
-            }
-        }
-        Ok(true)
     }
 
     pub(crate) fn transfer_to_public(
@@ -554,37 +530,20 @@ impl CompletionOwner {
     }
 
     pub(crate) fn transfer_to_runtime(self: &Arc<Self>, poller_owner: usize) {
-        {
-            let state = self.state.lock().expect("completion owner");
-            if state.public_owner != Some(poller_owner) {
-                return;
-            }
+        let _drain_guard = self.drain_gate.lock().expect("completion drain gate");
+        let mut state = self.state.lock().expect("completion owner");
+        if state.public_owner != Some(poller_owner) {
+            return;
         }
-        let waiters = {
-            let _drain_guard = self.drain_gate.lock().expect("completion drain gate");
-            let mut state = self.state.lock().expect("completion owner");
-            if state.public_owner != Some(poller_owner) {
-                return;
-            }
-            state.public_owner = None;
-            if !state.entries.is_empty() && !state.shutdown {
-                if state.send_entry_count == 0 {
-                    let _ = self.start_runtime_locked(&mut state);
-                } else {
-                    let _ = self.start_send_poller_locked(&mut state);
-                }
-            }
-            state.entries.values().cloned().collect::<Vec<_>>()
-        };
-        // A Future parked under public ownership must get an executor turn to
-        // begin driving the private nonblocking reactor.
-        for entry in waiters {
-            entry.wake_waiter();
+        state.public_owner = None;
+        if !state.entries.is_empty() && !state.shutdown {
+            let _ = self.start_runtime_locked(&mut state);
         }
     }
 
     pub(crate) fn shutdown_with<T>(self: &Arc<Self>, close_native: impl FnOnce() -> T) -> T {
-        let _submit_guard = self.submit_gate.lock().expect("completion submit gate");
+        let mut closed = self.lifecycle.write().expect("completion lifecycle");
+        *closed = true;
         self.shutdown_inner();
         close_native()
     }
@@ -602,7 +561,7 @@ impl CompletionOwner {
         let entries = {
             let _drain_guard = self.drain_gate.lock().expect("completion drain gate");
             let mut state = self.state.lock().expect("completion owner");
-            state.send_entry_count = 0;
+            state.parked_writables.clear();
             std::mem::take(&mut state.entries)
         };
         for entry in entries.into_values() {
@@ -611,11 +570,7 @@ impl CompletionOwner {
     }
 
     fn start_runtime_locked(self: &Arc<Self>, state: &mut OwnerState) -> Result<(), ConfigError> {
-        if state.runtime_thread.is_some()
-            || state.runtime_poller != 0
-            || state.shutdown
-            || state.send_entry_count != 0
-        {
+        if state.runtime_thread.is_some() || state.shutdown || state.public_owner.is_some() {
             return Ok(());
         }
         let poller = unsafe { ffi::zlink_poller_new() };
@@ -643,33 +598,6 @@ impl CompletionOwner {
         Ok(())
     }
 
-    fn start_send_poller_locked(&self, state: &mut OwnerState) -> Result<(), ConfigError> {
-        if state.runtime_poller != 0 || state.shutdown || state.public_owner.is_some() {
-            return Ok(());
-        }
-        let poller = unsafe { ffi::zlink_poller_new() };
-        if poller.is_null() {
-            return Err(ConfigError::new(ConfigResult::InternalError, unsafe {
-                ffi::zlink_errno()
-            }));
-        }
-        if let Err(error) = check_config_rc(unsafe {
-            ffi::zlink_poller_add(
-                poller,
-                self.socket as *mut c_void,
-                std::ptr::null_mut(),
-                crate::POLLOUT | crate::POLLCOMPLETION,
-            )
-        }) {
-            let mut raw = poller;
-            unsafe { ffi::zlink_poller_destroy(&mut raw) };
-            return Err(error);
-        }
-        state.runtime_poller = poller as usize;
-        state.runtime_stop = false;
-        Ok(())
-    }
-
     fn stop_runtime_locked<'a>(
         &'a self,
         mut state: MutexGuard<'a, OwnerState>,
@@ -692,33 +620,101 @@ impl CompletionOwner {
         self.state.lock().expect("completion owner")
     }
 
+    /// Retires the calling reactor thread: releases its poller and clears the
+    /// thread slot so the next registration can start a fresh reactor.
+    fn retire_runtime(&self, owned_poller: usize) {
+        let poller = {
+            let mut state = self.state.lock().expect("completion owner");
+            if state.runtime_stop || state.runtime_poller != owned_poller {
+                // A stopper already took the poller and is joining this thread.
+                return;
+            }
+            drop(state.runtime_thread.take());
+            std::mem::take(&mut state.runtime_poller)
+        };
+        if poller != 0 {
+            let mut raw = poller as *mut c_void;
+            unsafe { ffi::zlink_poller_destroy(&mut raw) };
+        }
+    }
+
     fn runtime_loop(self: Arc<Self>) {
+        let mut idle_rounds = 0u32;
+        let owned_poller = self.state.lock().expect("completion owner").runtime_poller;
         loop {
-            let poller = {
+            {
                 let state = self.state.lock().expect("completion owner");
-                if state.runtime_stop || state.shutdown || state.send_entry_count != 0 {
+                if state.runtime_stop || state.shutdown || state.runtime_poller != owned_poller {
                     return;
                 }
-                state.runtime_poller as *mut c_void
-            };
+                if state.entries.is_empty() {
+                    idle_rounds += 1;
+                    if idle_rounds > REACTOR_IDLE_ROUNDS {
+                        drop(state);
+                        self.retire_runtime(owned_poller);
+                        return;
+                    }
+                } else {
+                    idle_rounds = 0;
+                }
+            }
+            let poller = owned_poller as *mut c_void;
             let mut event = ffi::zlink_poller_event_t::empty();
-            let rc =
-                unsafe { ffi::zlink_poller_wait(poller, &mut event, 1, 25, std::ptr::null_mut()) };
+            let rc = unsafe {
+                ffi::zlink_poller_wait(poller, &mut event, 1, REACTOR_WAIT_MS, std::ptr::null_mut())
+            };
             match rc.cmp(&0) {
                 std::cmp::Ordering::Greater => {
                     if self.drain(false).is_err() {
+                        self.retire_runtime(owned_poller);
                         return;
                     }
                 }
                 std::cmp::Ordering::Less => {
                     let errno = unsafe { ffi::zlink_errno() };
                     if errno != libc::EINTR && errno != libc::EAGAIN {
+                        self.retire_runtime(owned_poller);
                         return;
                     }
                 }
                 std::cmp::Ordering::Equal => {}
             }
         }
+    }
+}
+
+fn writable_outcome(
+    expected_target: Option<&RoutingId>,
+    kind: ffi::zlink_completion_kind_t,
+    completion_id: u64,
+    peer_rid: &ffi::zlink_routing_id_t,
+    send_result: ffi::zlink_send_complete_result_t,
+    send_terminal_errno: i32,
+) -> CompletionOutcome {
+    let target_matches = match expected_target {
+        Some(expected) => {
+            peer_rid.size as usize == expected.size()
+                && peer_rid.data[..expected.size()] == expected.as_bytes()[..]
+        }
+        None => peer_rid.size == 0,
+    };
+    let result =
+        if kind != ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE || !target_matches {
+            Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO))
+        } else if send_result == ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED
+            && send_terminal_errno == 0
+        {
+            Ok(())
+        } else if send_result == ffi::zlink_send_complete_result_t::ZLINK_SEND_TERMINAL
+            && send_terminal_errno != 0
+        {
+            Err(submit_error_from_errno(send_terminal_errno))
+        } else {
+            Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO))
+        };
+    CompletionOutcome::Writable {
+        completion_id,
+        result,
     }
 }
 
@@ -736,37 +732,14 @@ fn completion_outcome(
     let _guard = CloseGuard(completion);
 
     match kind {
-        CompletionEntryKind::SendRetry => {
-            let target_matches = match expected_target {
-                Some(expected) => {
-                    completion.peer_rid.size as usize == expected.size()
-                        && completion.peer_rid.data[..expected.size()] == expected.as_bytes()[..]
-                }
-                None => completion.peer_rid.size == 0,
-            };
-            let result = if completion.kind
-                != ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE
-                || !target_matches
-            {
-                Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO))
-            } else if completion.send_result
-                == ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED
-                && completion.send_terminal_errno == 0
-            {
-                Ok(())
-            } else if completion.send_result
-                == ffi::zlink_send_complete_result_t::ZLINK_SEND_TERMINAL
-                && completion.send_terminal_errno != 0
-            {
-                Err(submit_error_from_errno(completion.send_terminal_errno))
-            } else {
-                Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO))
-            };
-            CompletionOutcome::Writable {
-                completion_id: completion.completion_id,
-                result,
-            }
-        }
+        CompletionEntryKind::SendRetry => writable_outcome(
+            expected_target,
+            completion.kind,
+            completion.completion_id,
+            &completion.peer_rid,
+            completion.send_result,
+            completion.send_terminal_errno,
+        ),
         CompletionEntryKind::Request => {
             let outcome = if completion.kind
                 != ffi::zlink_completion_kind_t::ZLINK_COMPLETION_REQUEST
@@ -854,6 +827,23 @@ mod tests {
     }
 
     #[test]
+    fn parked_writable_replays_like_a_live_record() {
+        let target = RoutingId::from(b"parked-target");
+        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, Some(target));
+        entry.publish(71);
+        let parked = ParkedWritable {
+            completion_id: 71,
+            peer_rid: *target.as_raw(),
+            send_result: ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED,
+            send_terminal_errno: 0,
+        };
+        let captured = entry.capture_parked(&parked);
+        assert!(!captured.detached);
+        let waker = Waker::from(Arc::new(NoopWake));
+        assert!(matches!(entry.poll_writable(&waker), Poll::Ready(Ok(()))));
+    }
+
+    #[test]
     fn mismatched_writable_token_cannot_resume_the_expected_waiter() {
         let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, None);
         entry.publish(41);
@@ -915,22 +905,27 @@ mod tests {
 
     #[test]
     fn terminal_writable_maps_to_a_terminal_submit_error() {
-        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, None);
-        entry.publish(61);
-        let mut completion = ffi::zlink_completion_t::empty();
-        completion.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
-        completion.completion_id = 61;
-        completion.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_TERMINAL;
-        completion.send_terminal_errno = libc::ESHUTDOWN;
-        entry.capture(&mut completion);
+        for (errno, expected) in [
+            (libc::ESHUTDOWN, SubmitResult::Terminated),
+            (libc::ENOENT, SubmitResult::NotFound),
+            (156_384_765, SubmitResult::Terminated),
+        ] {
+            let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, None);
+            entry.publish(61);
+            let mut completion = ffi::zlink_completion_t::empty();
+            completion.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
+            completion.completion_id = 61;
+            completion.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_TERMINAL;
+            completion.send_terminal_errno = errno;
+            entry.capture(&mut completion);
 
-        let waker = Waker::from(Arc::new(NoopWake));
-        assert!(matches!(
-            entry.poll_writable(&waker),
-            Poll::Ready(Err(error))
-                if error.code() == SubmitResult::Terminated
-                    && error.native_errno() == libc::ESHUTDOWN
-        ));
+            let waker = Waker::from(Arc::new(NoopWake));
+            assert!(matches!(
+                entry.poll_writable(&waker),
+                Poll::Ready(Err(error))
+                    if error.code() == expected && error.native_errno() == errno
+            ));
+        }
     }
 
     #[test]

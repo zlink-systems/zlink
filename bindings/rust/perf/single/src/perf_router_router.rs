@@ -103,6 +103,7 @@ fn main() {
     let active_deadline = std::time::Instant::now() + active;
     let send_target = target.clone();
     let send_thread = std::thread::spawn(move || {
+        common::drive_sends_with_poller(&sender);
         common::send_loop(
             active_deadline,
             config.size,

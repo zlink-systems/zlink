@@ -43,8 +43,11 @@ runtime has passed the Core package provenance and clean-consumer checks.
 exact multipart packet, pulls completion records through NO_DATA after
 `POLLOUT`, matches the token, user context, and routed target, then resubmits
 that packet. A repeated backpressure result arms the new token and repeats the
-same state transition. The private path is driven by nonblocking executor turns
-and creates no SEND worker thread, sleep, or timer.
+same state transition. Without a public poller the socket's completion queue is
+drained by one binding reactor thread per socket that blocks in a native
+poller on `POLLCOMPLETION`, starts with the first wait token or REQUEST, and
+retires when no operation is outstanding; parked futures are woken by that
+thread, never by executor re-polling.
 
 Registering a socket with a public `Poller` for `POLLCOMPLETION` transfers
 completion-queue ownership to that poller. Include `POLLOUT` in the mask and
