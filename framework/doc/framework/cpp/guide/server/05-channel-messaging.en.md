@@ -1,5 +1,5 @@
 ---
-title: "5. Channel Messaging — request · send · pub/sub · C++"
+title: "5. Channel Messaging — Request · Send · Pub/Sub · C++"
 ---
 
 <!-- generated:start -->
@@ -15,7 +15,7 @@ title: "5. Channel Messaging — request · send · pub/sub · C++"
 View in another language — [C#/.NET](../../../dotnet/guide/server/05-channel-messaging.en.md) · **C++** · [Java](../../../java/guide/server/05-channel-messaging.en.md) · [Kotlin](../../../kotlin/guide/server/05-channel-messaging.en.md) · [Node/TypeScript](../../../node/guide/server/05-channel-messaging.en.md)
 <!-- language-switch:end -->
 
-# 5. Channel Messaging — request · send · pub/sub
+# 5. Channel Messaging — Request · Send · Pub/Sub
 
 > **The document that owns this chapter's contract** — [Channel Messaging](../../../common/spec/server/02-channel-transport/02-channel-messaging.en.md)
 > and [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.en.md) own the
@@ -29,7 +29,7 @@ Channel messaging is the framework's most fundamental axis. It covers these inte
   lookup (DEALER → ROUTER)
 - **one-way send** — a fire-and-forget one-way command, e.g. a cache-invalidation
   notification (DEALER → ROUTER)
-- **publish/subscribe** — an event fan-out where every subscriber receives one send, e.g.
+- **publish/subscribe** — an event fan-out where every subscriber receives the message, e.g.
   propagating a domain event (PUB / SUB)
 
 > 🔰 If terms like channel/handler/client/codec are unfamiliar, read the concept
@@ -41,7 +41,7 @@ Channel messaging is the framework's most fundamental axis. It covers these inte
 <iframe class="zlink-diagram" src="/common/diagrams/05-messaging-kinds-en.html" title="Three call kinds — Request · Send · Publish" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/05-messaging-kinds-en.html" target="_blank">↗ View larger</a></p>
 
-## 0. Use As A gRPC Replacement
+## 0. Use as a gRPC Replacement
 
 Channel messaging is used in general web/microservice backends to **replace gRPC between
 services.** Instead of every service announcing a host:port or putting a gateway/load
@@ -51,18 +51,18 @@ get gRPC's four call shapes with just DTOs (records) and typed handlers.
 
 | gRPC pattern | ZLink replacement | This guide |
 |-----------|------------|-----------|
-| Unary RPC | request/response | [Writing A Handler](#2-writing-a-handler) · [Outbound Calls](#4-outbound-calls) |
-| Unary `Empty` / fire-and-forget | one-way send | [Writing A Handler](#2-writing-a-handler) · [Outbound Calls](#4-outbound-calls) |
+| Unary RPC | request/response | [Writing a Handler](#2-writing-a-handler) · [Outbound Calls](#4-outbound-calls) |
+| Unary `Empty` / fire-and-forget | one-way send | [Writing a Handler](#2-writing-a-handler) · [Outbound Calls](#4-outbound-calls) |
 | Server streaming / event feed | pub/sub fan-out | [Outbound Calls](#4-outbound-calls) |
 | Client/Bidi streaming | STREAM session | [09-stream](09-stream.en.md) |
 | Service location lookup (DNS/xDS) | location-store auto-connect | [10-location](10-location.en.md) |
 | Interceptor | handler filter | [Filter — Common Processing](#5-filter--common-processing) |
 | Deadline | request timeout | [Outbound Calls](#4-outbound-calls) |
 
-The call path diverges at this point: in gRPC, a request an L7 load balancer or a service
-mesh sidecar built from a stub sends it to one of the scaled-out servers, but in ZLink, when
-the application requests by logical channel name, the framework runtime directly picks one
-of the connected server runtimes itself. So what's left in application code isn't endpoint
+The call path diverges at this point: in gRPC, an L7 load balancer or service mesh sidecar
+takes a request created by a stub and sends it to one of the scaled-out servers. In ZLink,
+when the application calls by logical channel name, the framework runtime directly picks
+one of the connected server runtimes. So what's left in application code isn't endpoint
 or proxy configuration, but **a channel name and a handler.**
 
 For example, for an order service, gRPC's `rpc PlaceOrder(...)` turns into this.
@@ -114,14 +114,14 @@ route mesh channel just adds a name on top of that socket.
 
 | Kind | Registration | Socket | Connection pattern |
 | --- | --- | --- | --- |
-| Route mesh channel | `mesh.Channel(name).Server()`/`.Client()` | Shares an already-open MeshNode socket | request/send via `ChannelName` select-one, publish between Spots (Logical Multicast) — Node direct, which specifies an RID directly, is separate ([Calling A Managed Node Directly](#9-route-mesh--calling-a-managed-node-directly)) |
+| Route mesh channel | `mesh.Channel(name).Server()`/`.Client()` | Shares an already-open MeshNode socket | request/send via `ChannelName` select-one, publish between Spots (Logical Multicast) — Node direct, which specifies an RID directly, is separate ([Calling a Managed Node Directly](#9-route-mesh--calling-a-managed-node-directly)) |
 | ClientServer channel | `AddClientServerChannel(name)` | Opens its own socket, separate from the MeshNode (`.Listen()`; connection is manual `.Connect()` or auto-discovery) | Only request/send started by the Client — the Server can't send anything first except that reply |
 | Fanout channel | `AddFanoutChannel(name)` | Opens an independent PUB/SUB socket | publisher → many subscribers |
 
 **A route mesh channel is a logical name that shares a MeshNode connection**, and a
 **ClientServer channel is an independent connection unit that opens its own transport.**
 
-### 1.1 Route Mesh Channel — One Connection, Channels Are Names On Top
+### 1.1 Route Mesh Channel — One Connection, Channels Are Names on Top
 
 You connect to the mesh with one MeshNode socket, and the channel name is the logical
 grouping on top of it that decides "who receives this request."
@@ -133,7 +133,7 @@ The boxes are groups tied together by name, not sockets. Calling `orders` has se
 pick one of A1/A2 inside that box, and registering ten more channels doesn't add any
 sockets on node B.
 
-### 1.2 ClientServer Channel — An Independent Runtime Per Channel
+### 1.2 ClientServer Channel — An Independent Runtime per Channel
 
 A ClientServer channel doesn't share RouteMesh transport. Each channel gets its own
 independent runtime, and that runtime manages connections per Ready Server.
@@ -157,7 +157,7 @@ participates in both channels, each channel runtime manages its connection to Z 
 
 **A Server inside the same process is just as much a candidate as any other Server.** It's
 neither picked first nor excluded for being in the same process. Even when selected, the
-handler isn't called on the spot — it's **actually sent through the connection.** There's
+handler isn't called directly — it's **actually sent through the connection.** There's
 no shortcut that skips codec, admission, caps, timeout, or reply handling. So don't assume
 a local call is faster.
 
@@ -166,7 +166,7 @@ the Server needs to send a notification first, use RouteMesh instead of ClientSe
 is why TicTacToe separates login authentication (the `tictactoe.api` ClientServer channel)
 from Game Spot creation (the MeshNode's Object role) (chapter `02. Getting Started` §7).
 
-### 1.3 Two Branches Of Pub/Sub
+### 1.3 Two Branches of Pub/Sub
 
 A [Spot](03-concepts.en.md#2-spot--a-unit-that-owns-state-and-processes-it-in-order) is a
 state object found by id that lines up work addressed to it and processes it one by one.
@@ -207,22 +207,22 @@ The difference is **target scope.** Logical Multicast is limited to Spots that s
 to the same channel/topic within that mesh, while Classic fanout delivers to every
 connected subscriber regardless of mesh composition.
 
-**The loss rule also differs.** A fanout channel is a **loss-tolerant delivery.** If one
-subscriber's receiving lags and the publisher's send queue hits its cap, **that
-subscriber's share is discarded and the publish still ends as a success.** Other
+**The loss rule also differs.** A fanout channel provides **loss-tolerant delivery.** If one
+subscriber falls behind and the publisher's send queue hits its cap, **that subscriber's
+share is discarded and the publish still succeeds.** Other
 subscribers aren't affected, and the publisher doesn't stall over one slow subscriber.
 
 Logical Multicast doesn't use a PUB/SUB socket — it delivers to each node over the mesh
 connection, so this rule doesn't apply to it. **Don't use a fanout channel for delivery
 that can't tolerate loss.**
 
-## 2. Writing A Handler
+## 2. Writing a Handler
 
-| Kind | The call it sends | What completion means |
+| Kind | Call | What completion means |
 | --- | --- | --- |
-| request | Passes a channel name and a request, waits for the reply | The peer's reply arrived |
-| send | Passes a channel name and a message | The send was accepted -- not the peer's processing result |
-| publish (fanout) | Passes a channel, topic, and event | The send was accepted for transport -- not subscriber receipt |
+| request | Sends a request to a channel name and waits for the reply | The peer's reply arrived |
+| send | Sends a message to a channel name | The send was accepted -- not the peer's processing result |
+| publish (fanout) | Sends an event to a channel and topic | The send was accepted for transport -- not subscriber receipt |
 
 **Even if a request fails, it isn't auto-resent to a different server.** If the connection
 drops or times out after picking and sending to a target, it just ends as a failure. **This
@@ -230,14 +230,14 @@ is because the first target may have already processed it and only the reply fai
 come back.** Resending is a new call from the application, and handling duplicate
 execution is its responsibility too.
 
-**The payload's content doesn't change the target kind.** A message sent addressed to a
+**The payload's content doesn't change the target kind.** A message addressed to a
 node is handled by that node's handler — even if it carries a Spot ID or Actor ID inside,
 the Framework doesn't look inside and turn it into a Spot message. To send to a Spot or
 Actor, use **that dedicated call from the start.**
 
 The call shape and matching handler interface per language are as follows.
 
-| Kind | The call it sends | The handler that receives it |
+| Kind | Call | The handler that receives it |
 | --- | --- | --- |
 | request | `request_to_channel (name, req).async<TReply> ()` | A handler class declaring `request_type`/`reply_type` |
 | send | `send_to_channel (name, msg).async ()` | A handler class declaring only `request_type` |
@@ -252,11 +252,11 @@ dependencies only live until that dispatch finishes.
 > The only similarity to a controller action is the **authoring style** — write a class,
 > receive dependencies via DI, register it, and the runtime calls it.
 
-A handler implements an interface and returns its result as the return value.
+A handler implements an interface and returns its result directly.
 
-> **See it in a sample — [TicTacToe](../../../common/sample/tictactoe/README.en.md).** The
-> request handler where the API server receives an authentication request and returns
-> player info. Actual code from the repository.
+> **See it in a sample — [TicTacToe](../../../common/sample/tictactoe/README.en.md).** This
+> is the request handler in which the API server receives an authentication request and returns
+> player info. These snippets are actual code from the repository.
 
 ```cpp
 --8<-- "framework/languages/cpp/samples/TicTacToe/Server/Api/Handlers/authenticate_player_handler.hpp:doc-request-handler"
@@ -391,21 +391,21 @@ other work.
 
 So without callbacks, **code that reads top to bottom** lets a handful of workers handle
 huge numbers of concurrent requests. Blocking with `.Result` keeps that thread occupied, so
-it's forbidden inside a handler. Failures come out as exceptions on the `await` path.
+it's forbidden inside a handler. Failures surface as exceptions on the `await` path.
 
 The same `await` rule applies to Spot/Actor handlers too, but there the turn is held until
 the handler completes, so the concurrency scope differs -- covered in
 [06-spot §2.1](06-spot.en.md#21-the-execution-model--concurrency-scope).
 
-## 3. Exposing A Handler On A Channel
+## 3. Exposing a Handler on a Channel
 
 The framework doesn't automatically open every discovered handler on every channel.
 **Discovery and exposure are separate steps.**
 
 > `AddHandlersFromAssemblyOf<...>` discovers handler types, and the typed registration
-> under `Channel(name).Server()` fixes which MeshNode's which channel exposes it.
+> under `Channel(name).Server()` determines which channel on which MeshNode exposes it.
 
-### RouteMesh And Handler Registration
+### RouteMesh and Handler Registration
 
 ```cpp
 options.handlers ().group ("api").add<get_profile_handler_t> ();  // Puts the handler in a group.
@@ -415,7 +415,7 @@ mesh.channel_name ("api").server ()      // server () is the role that receives 
   .use_handler_group ("api");
 ```
 
-### Registering Multiple Channels On One MeshNode
+### Registering Multiple Channels on One MeshNode
 
 You can stack several channels on the same MeshNode, and each channel can have a different
 role.
@@ -434,7 +434,7 @@ A fanout channel's subscription handler is registered with the fanout builder's
 
 > **See it in a sample — [ZoneWorld](../../../common/sample/zoneworld/README.en.md).** All
 > three kinds appear in a single registration block. Control reports are received over a
-> route mesh channel, and cluster-wide announcements over a fanout channel.
+> route mesh channel, and cluster-wide announcements are received over a fanout channel.
 >
 > ```csharp
 > mesh.Channel(ZoneWorldNames.ZoneChannel).Server();    // A channel this node handles.
@@ -451,7 +451,7 @@ A fanout channel's subscription handler is registered with the fanout builder's
 name. The packet name is fixed **once at registration** -- there's no surface to respecify
 it per call.
 
-### Startup-Phase Validation Of Registration Errors
+### Startup-Phase Validation of Registration Errors
 
 The following are blocked as configuration errors **immediately at host startup**, not
 deferred until the first call.
@@ -506,7 +506,7 @@ class price_service_t
   [at registration](#3-exposing-a-handler-on-a-channel).
 - A route client uses the RouteMesh registered at startup. It fails as a configuration
   error if the MeshName or ChannelName isn't registered.
-- **The reason `send` is `async` is that it waits for a slot to send in, not for a
+- **The reason `send` is `async` is that it waits for an available send slot, not for a
   response.** If the receiving side is backed up, it waits until the send queue drains
   before submitting, and if a slot never opens up, it ends with `DeadlineExceeded`. How
   this flow control (backpressure) works and what options affect it are covered by
@@ -558,7 +558,7 @@ class profile_service_t
   business branching, split it by event type or by registered handler.
 - Completion of `Async(...)`/`Async<T>(...)` only guarantees delegation to transport -- it
   doesn't guarantee the remote handler completed or that a subscriber received it (see
-  [Two Branches Of Pub/Sub](#13-two-branches-of-pubsub)).
+  [Two Branches of Pub/Sub](#13-two-branches-of-pubsub)).
 - **Pub/sub has no replay.** A message published **before a subscriber connects**, or one
   that passed **while disconnected**, doesn't arrive even after reconnecting. Fill that gap
   for events you can't afford to miss with a separate resync (e.g., a one-time request for
@@ -567,14 +567,14 @@ class profile_service_t
 > **See it in a sample — [DeliveryDispatch](../../../common/sample/deliverydispatch/README.en.md).**
 > An order taken over HTTP is delegated to the dispatch server via a channel call, and
 > delivery-status changes are propagated to control and customer-push subscribers via
-> fanout publish. A representative example where the request/send/publish surfaces are all
-> used together in a single business flow.
+> fanout publish. It is a representative example in which the request/send/publish surfaces
+> are all used together in a single business flow.
 
 ## 5. Filter — Common Processing
 
 A web framework's HTTP middleware is exclusive to the HTTP pipeline and doesn't apply to
-ZLink handlers. Code that repeats across many handlers -- logging, validation, permission
-checks, metrics -- is gathered in one place with a handler filter.
+ZLink handlers. A handler filter gathers code repeated across many handlers -- logging,
+validation, permission checks, metrics -- in one place.
 
 ```cpp
 class audit_filter_t
@@ -600,7 +600,7 @@ options.use_filter<audit_filter_t> ();      // Registration order is execution o
 options.use_filter<validation_filter_t> ();
 ```
 
-### Scope Of Application
+### Scope of Application
 
 A filter applies to **messages a node receives.** It doesn't apply to handlers owned by a
 long-lived object like a Spot or Actor -- those use their own execution order and lifetime,
@@ -610,7 +610,7 @@ and if you need common processing, do it inside that handler.
 | --- | --- |
 | Channel send/request (both route mesh channel and ClientServer channel) | Runs |
 | Fanout subscription handler | Runs |
-| Node direct route handler ([Calling A Managed Node Directly](#9-route-mesh--calling-a-managed-node-directly)) | Runs |
+| Node direct route handler ([Calling a Managed Node Directly](#9-route-mesh--calling-a-managed-node-directly)) | Runs |
 | Spot handler, Actor handler | Doesn't run |
 | A Logical Multicast subscription a Spot registers | Doesn't run |
 | STREAM session handler | Doesn't run |
@@ -620,9 +620,9 @@ To handle it differently per path, check `context.DispatchKind`. `ChannelSend`/
 tell them apart, also check `context.MeshName` -- route mesh channel and Node direct
 provide MeshName, but ClientServer channel and fanout don't.
 
-### Execution Order And Short-Circuiting
+### Execution Order and Short-Circuiting
 
-Execution passes through handlers in registration order, then exits in reverse order once
+Execution passes through filters in registration order, then exits in reverse order once
 `next` finishes.
 
 ```text
@@ -647,11 +647,11 @@ request, don't call `next`; to change the response content, handle it in the han
 Calling `next` twice doesn't re-run the handler -- it's rejected as an error, classified as
 a code mistake.
 
-### Instances And Dependencies
+### Instances and Dependencies
 
 A new scope opens for every dispatch that runs one handler. Filters and the handler are
-each created once within that scope and **share the same `Scoped` service instance.** A
-value a filter pulls out is seen as-is by the handler, so you can carry per-request state
+each created once within that scope and **share the same `Scoped` service instance.** The
+handler sees any value obtained by a filter unchanged, so you can carry per-request state
 through a scoped service. This rule doesn't change regardless of what lifetime the filter
 type is registered with in DI -- it's still created by DI, not `new`.
 
@@ -681,8 +681,8 @@ new endpoint, the store's descriptor row updates and client connections follow a
 separate action is needed. A manual connection only takes effect after you change the
 config and restart the application.
 
-**Finding it in the store doesn't mean it's sent right away.** A client gets the endpoint
-from registration info, then **reconfirms identity and execution generation over the real
+**Finding a target in the store doesn't mean the message is sent right away.** A client
+gets the endpoint from registration info, then **reconfirms identity and execution generation over the real
 connection** before using that target. Manual connections go through the same
 confirmation. So a call can still end as target-not-found even though a row exists in the
 store -- at that point, check **whether the connection was actually established**, not the
@@ -698,9 +698,9 @@ even if it came from a previous generation. Conversely, if that request is alrea
 to timeout, cancellation, or a client restart, it's discarded, and **it's never used as the
 result of a different, later-started request.**
 
-**A stopped store doesn't affect already-established connections or already-received
-requests.** During an outage, only adding/removing targets from the list stops being
-computed. However, if the server side fails to renew its authority and exceeds the grace
+**A stopped store doesn't affect already-established connections or requests already
+received.** During an outage, only target-list additions and removals stop being computed.
+However, if the server side fails to renew its authority and exceeds the grace
 period, it **stops accepting new business messages.** Once the store recovers, the list is
 realigned against the latest registration info.
 
@@ -732,9 +732,9 @@ mesh_options.channel ("orders").weight (100); // Back to normal
   from new-request candidates. The store's descriptor row stays too (graceful drain).
 - The value range is `0..10000`, and the default is `100`. `Weight = 100` restores normal
   serving.
-- Propagating the drain signal is best-effort eventual -- it only guarantees "the drain
-  signal was sent." Confirm the point where a peer actually removed it from candidates by
-  checking whether the peer's status is draining (chapter `11. Monitoring` §2). The
+- Propagation of the drain signal is best-effort and eventual -- it only guarantees that
+  "the drain signal was sent." Confirm that a peer has actually removed it from candidates
+  by checking whether the peer's status is draining (chapter `11. Monitoring` §2). The
   operational vocabulary `drain`/`restore` above is just the app's admin layer putting a
   name on `Weight = 0`/`= 100`.
 
@@ -796,7 +796,7 @@ After registration, high-level calls still exchange business objects as-is, and
 serialization is handled by Avro. See the [framework-api §9](../../../common/spec/server/00-foundation/06-framework-api.en.md#12-codec)
 table for registration surfaces in other languages.
 
-## 8. Scaling A ChannelName Horizontally
+## 8. Scaling a ChannelName Horizontally
 
 To increase throughput, run several providers that own the same MeshName and ChannelName.
 The calling node registers provider endpoints via location-store auto-connect or
@@ -819,8 +819,8 @@ mesh.channel_name ("image.resize").server ()
 The calling node registers the same ChannelName as Client and connects to the processing
 nodes.
 
-**The two paths treat "yourself" differently.** This is where they diverge, so check it
-before you lock in a scaling configuration.
+**The two paths treat the sending node itself differently.** This is where they diverge,
+so check it before you lock in a scaling configuration.
 
 | | Route mesh channel | ClientServer channel |
 | --- | --- | --- |
@@ -833,7 +833,7 @@ a new socket, it uses an **already-existing peer connection**, and a MeshNode ne
 peer connection with itself. If you want it handled in the same process, use the
 ClientServer path.
 
-There's a reason for the waiting side too. In route mesh, no candidates means **no peer has
+The wait exists for a reason too. In route mesh, no candidates means **no peer has
 published that name** -- waiting won't make one appear. In ClientServer, the configuration
 may already exist in the same process and just not have finished preparing. So it waits for
 **whichever is shorter: the call's timeout or 5 seconds** -- to prevent a call right after
@@ -864,7 +864,7 @@ caller.peer_connections ().connect ("tcp://10.30.1.10:5601");
 options.add_route_mesh ("media").listen (0).channel_name ("image.resize").client ();
 ```
 
-<iframe class="zlink-diagram" src="/common/diagrams/05-node-select-en.html" title="Round-robin distribution · adding a node reflected automatically" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/05-node-select-en.html" title="Round-robin distribution · automatic updates when nodes are added" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/05-node-select-en.html" target="_blank">↗ View larger</a></p>
 
 If a specific entity (order ID, user ID) always needs to be handled by the same execution
@@ -876,7 +876,7 @@ unit, use a Spot or Actor instead of a channel ([06-spot](06-spot.en.md)).
 > (same-rid failover) -- use this to carry which node processed a response (rid), or to
 > keep routing continuous across a process replacement.
 
-## 9. Route Mesh — Calling A Managed Node Directly
+## 9. Route Mesh — Calling a Managed Node Directly
 
 A Node direct call specifies one specific MeshNode by `RoutingId`. Use this path only when
 **the node itself** is the target -- like a health check or an ops command. Don't use it to
@@ -891,7 +891,7 @@ mesh.add_route_request_handler<node_status_handler_t, get_node_status_t, node_st
   "ops.node.status");
 ```
 
-The caller passes the Node RID and MeshName confirmed from the management system together.
+The caller passes both the Node RID and MeshName obtained from the management system.
 
 ```cpp
 auto target = zlink::routing_id_t::from (std::string ("play-node-1"));
@@ -927,7 +927,7 @@ onto a Node RID.
 <iframe class="zlink-diagram" src="/common/diagrams/05-addressing-en.html" title="Addressing — operations vs application" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/05-addressing-en.html" target="_blank">↗ View larger</a></p>
 
-The tie-in with SPOT continues in [06-spot](06-spot.en.md).
+The relationship with SPOT continues in [06-spot](06-spot.en.md).
 
 ## 10. A Combined Example — Server + Outbound + Pub/Sub
 
@@ -962,12 +962,12 @@ int main (int argc, char **argv)
 
 - **The handler never fires** → `AddHandlersFromAssemblyOf(...)` alone doesn't expose it.
   It needs the typed registration under `Channel(name).Server()`
-  ([Exposing A Handler On A Channel](#3-exposing-a-handler-on-a-channel)).
+  ([Exposing a Handler on a Channel](#3-exposing-a-handler-on-a-channel)).
 - **A configuration error** → the channel doesn't exist, or that role isn't registered on
   it. Check the registration.
 - **An exception at startup** → a duplicate channel name, a duplicate `kind + packet name`
   on the same channel, or a client with no connection route. It's fail-fast
-  ([Startup-Phase Validation Of Registration Errors](#startup-phase-validation-of-registration-errors)).
+  ([Startup-Phase Validation of Registration Errors](#startup-phase-validation-of-registration-errors)).
 - **`ZLink` vs `Zlink`** → every server framework type is `ZLink` (capital L).
 - **Sending to a packet with no handler (at runtime)** → **request fails with an error
   reply** (the client gets it as an exception), while **send is silently dropped.** Dropped
@@ -984,6 +984,7 @@ int main (int argc, char **argv)
 - Topology and handler registration:
   [per-language topology public contract](../../../common/spec/server/languages/README.en.md)
 - The full scenario: [common samples](../../../common/sample/README.en.md)
+- The next axis: [06-spot](06-spot.en.md)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

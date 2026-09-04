@@ -8,7 +8,7 @@ title: "9. STREAM · Java"
 <!-- generated:end -->
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: 8. Session And Actor Binding](08-actor-session.en.md) | [Next: 10. Location — Auto-Connect And Object Location](10-location.en.md)
+[Guide Home](README.en.md) | [Previous: 8. Session and Actor Binding](08-actor-session.en.md) | [Next: 10. Location — Auto-Connect and Object Location](10-location.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
@@ -28,7 +28,7 @@ STREAM is a connection-oriented, bidirectional message channel between an extern
 the Framework server. The server implements session lifecycle and packet dispatch. The
 client uses the independent package `Systems.Zlink.Stream.Connector`.
 
-## 1. Registering A Server Node
+## 1. Registering a Server Node
 
 Register one session type on a Stream node. If you use Actor dispatch, enable it explicitly.
 
@@ -36,7 +36,7 @@ Register one session type on a Stream node. If you use Actor dispatch, enable it
 --8<-- "framework/languages/java/zlink-framework-doc-examples/src/main/java/systems/zlink/framework/docexamples/stream/StreamNodeRegistration.java:register-stream-node"
 ```
 
-A session handler and Actor/Spot handler use the Framework's default typed JSON
+Session handlers and Actor/Spot handlers use the Framework's default typed JSON
 serialization. The application doesn't register a codec per message type or parse a raw
 frame itself.
 
@@ -44,7 +44,7 @@ frame itself.
 an attribute, annotation, or decorator. There are only three axes — node name, bind
 endpoint, session type. Of these, **the bind endpoint must always be specified.**
 
-The following eight are blocked as configuration errors **before host startup**, not
+The following eight conditions are rejected as configuration errors **before host startup**, not
 deferred to the first connection.
 
 | Condition |
@@ -59,23 +59,23 @@ deferred to the first connection.
 | A client certificate is required without a TLS server configured |
 
 If you enable TLS, specify both the certificate and key paths together. Requiring a client
-certificate is off by default; turning it on rejects a connection that fails verification
+certificate is disabled by default; turning it on rejects a connection that fails verification
 **before a session is ever created.**
 
 ## 2. Session Lifecycle
 
-A session implements the connection, packet dispatch, and error/disconnect callbacks. A
+A session implements callbacks for connection, packet dispatch, errors, and disconnection. A
 given session's callbacks run serially.
 
 > **See it in a sample — [TicTacToe](../../../common/sample/tictactoe/README.en.md).** This
-> is the session that represents one client connection. It filters out the authenticate
-> packet first and relays everything else to the Actor. Actual code from the repository.
+> is the session that represents one client connection. It filters out the authentication
+> packet first and relays everything else to the Actor. This is actual code from the repository.
 
 ```java
 --8<-- "framework/languages/java/samples/java/TicTacToe/Server/src/main/java/systems/zlink/samples/tictactoe/server/play/infrastructure/zlink/sessions/PlaySession.java:doc-session"
 ```
 
-In its minimal shape, it looks like this.
+A minimal implementation looks like this.
 
 ```java
 public final class PlaySession implements ZLinkSession {
@@ -110,14 +110,14 @@ public final class PlaySession implements ZLinkSession {
 }
 ```
 
-Where an error goes splits four ways. **The session error callback receives only a
+Errors are routed in four ways. **The session error callback receives only a
 transport error that belongs to that session.**
 
 | Error | Where it goes |
 | --- | --- |
 | That session's transport error | The session error callback |
 | A handshake failure | Runtime monitoring. There's no target to call — the session hasn't been created yet |
-| A socket/node-level error | Runtime monitoring. Can't be pinned to one session's error |
+| A socket/node-level error | Runtime monitoring. It can't be attributed to a single session |
 | An application handler exception | The handler exception path. **Not the session error callback** |
 
 **A handler filter doesn't apply to session dispatch.** Even a filter attached to a
@@ -125,9 +125,9 @@ different dispatch never runs ahead of a session callback. Anything that needs f
 the session path, like authentication, is handled through the session's own handler
 registration.
 
-**There's no surface that runs a recv loop directly.** The Framework enqueues the packet and
+**There's no API for running a receive loop directly.** The Framework enqueues the packet and
 then runs the session callback, applying dispatch, DI, and logging consistently at that
-boundary. This is by design, so the application never has to carry the loop, cancellation,
+boundary. This is by design, so the application never has to manage the loop, cancellation,
 or backpressure itself.
 
 ## 3. Typed Packet Handler
@@ -142,12 +142,12 @@ request, use the current dispatch's one-shot reply token.
 `reply` is valid only for the current request and can be submitted once. Even if the send
 fails on a timeout or cancellation, the same reply token can't be reused.
 
-**No packet name rides on the response.** The client finds the pending request purely by
+**Responses do not carry packet names.** The client finds the pending request purely by
 request sequence, and **the type specified at the call site** decides what type to read the
-response as. Because it's not selected by name, there's no surface to attach a packet name
+response as. Because it's not selected by name, there's no API for attaching a packet name
 to the response side either. An error response also comes back on the same sequence.
 
-Use `send` when the server pushes first.
+Use `send` for server-initiated pushes.
 
 ```java
 --8<-- "framework/languages/java/zlink-framework-doc-examples/src/main/java/systems/zlink/framework/docexamples/stream/StreamNodeRegistration.java:server-push"
@@ -157,7 +157,7 @@ Use `send` when the server pushes first.
 
 After authentication, bind an Actor to the session, and a message not handled by a
 session-only handler can be handed off through the session actor's relay call. The detailed
-flow follows [Session And Actor Binding](08-actor-session.en.md).
+flow follows [Session and Actor Binding](08-actor-session.en.md).
 
 The application doesn't query the session route from the Location Store directly. Once Actor
 relocation completes, the Framework updates the binding route.
@@ -186,7 +186,7 @@ while (running) {
 ```
 
 Use `Manual` when the callback needs to run on a game loop or UI thread. `Immediate` runs
-the callback on the connector's own worker, so it doesn't fit a client that needs thread
+the callback on the connector's own worker, so it isn't suitable for clients that need thread
 affinity.
 
 ### 5.1 Diagnostics Level
@@ -196,14 +196,14 @@ runtime (`off`/`errors`/`Normal`/`Detailed`). The default is `errors`, which kee
 existing behavior; lowering it to `off` stops the connector from creating or attaching
 flow identifiers on outbound frames, removing the observation-only cost
 ([Stream Connector common spec §13](../../../common/spec/stream-connector/32-stream-connector.en.md#13-diagnostics-level)).
-The correlation used for request/response matching is protocol information and keeps
+The correlation data used for request/response matching is part of the protocol and keeps
 working at `off`.
 
 ```java
 ZLinkStreamConnectorOptions.createDefault(endpoint).withDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF);
 ```
 
-## 6. Client Send And Request
+## 6. Client Send and Request
 
 ```java
 // Waits for admission into the bounded outbound queue.

@@ -1,5 +1,5 @@
 ---
-title: "15. E2E Testing — Verifying The Whole System With A Client · C#/.NET"
+title: "15. E2E Testing — Verifying the Whole System with a Client · C#/.NET"
 ---
 
 <!-- generated:start -->
@@ -8,14 +8,14 @@ title: "15. E2E Testing — Verifying The Whole System With A Client · C#/.NET"
 <!-- generated:end -->
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: 14. Picking A Sample — Start With The Example Closest To Your Problem](14-samples.en.md) | [Next: 16. Options — Configuration List And Defaults](16-options.en.md)
+[Guide Home](README.en.md) | [Previous: 14. Picking a Sample — Start with the Example Closest to Your Problem](14-samples.en.md) | [Next: 16. Options — Configuration List And Defaults](16-options.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
 View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/15-e2e-testing.en.md) · [Java](../../../java/guide/server/15-e2e-testing.en.md) · [Kotlin](../../../kotlin/guide/server/15-e2e-testing.en.md) · [Node/TypeScript](../../../node/guide/server/15-e2e-testing.en.md)
 <!-- language-switch:end -->
 
-# 15. E2E Testing — Verifying The Whole System With A Client
+# 15. E2E Testing — Verifying the Whole System with a Client
 
 > **This chapter has no spec document that owns its contract.** That's because it covers
 > how to build tests in your own system. What each sample verifies is defined by the
@@ -28,11 +28,11 @@ View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/15-e
 
 No matter how tightly you write handler unit tests, some things stay unverified: whether
 registration actually took effect, whether routing between two nodes is correct, whether a
-push reaches other participants in the room. These can only be judged by **starting real
+push reaches other participants in the room. These can only be verified by **starting real
 processes and checking over a real connection.**
 
-At this point, teams usually implement a separate test-only client — opening a socket,
-assembling frames, waiting for a response, rewritten for every scenario. ZLink doesn't need
+At this point, teams usually implement a separate test-only client, rewriting the code to
+open a socket, assemble frames, and wait for a response for every scenario. ZLink doesn't need
 that work. **The client library your real users use is itself the verification tool.** An
 E2E test comes down to just this much code.
 
@@ -53,18 +53,18 @@ routing, push, and lifecycle — **items that only surface when multiple process
 together.** Branches or calculations inside a handler are far faster and more precise to
 verify with a unit test, so they don't belong in E2E.
 
-## 1. The Libraries Used For Verification
+## 1. The Libraries Used for Verification
 
 The two libraries used for verification don't overlap in role.
 
 | | `Zlink.HttpClient` | `Systems.Zlink.Stream.Connector` |
 | --- | --- | --- |
 | What it verifies | The management/gateway HTTP API | A STREAM server node |
-| When to use it | Things that **finish with one request-response**, like creating a room, querying, or admin commands | Things that need a live connection and confirming even **a push the server sends first** |
+| When to use it | Things that **finish with a single request-response exchange**, like creating a room, querying, or admin commands | Things that require a live connection, including confirmation of **server-initiated pushes** |
 | Representative call | `Post(...).Body(...).Fetch<T>()` | `Connect` · `Request` · `WaitFor` · `ExpectNone` |
 
 Most scenarios chain the two together — create a target over HTTP, then connect to STREAM
-using the endpoint carried in that response.
+using the endpoint returned in that response.
 
 ```csharp
 using Zlink.HttpClient;
@@ -92,14 +92,14 @@ When `DispatchMode` is `Immediate`, the connector handles receiving on its own, 
 scenario code never runs a separate pump. Environments that must pump manually to match a
 frame loop, like a game engine, are covered by the Stream Connector guide.
 
-Full usage for both libraries is owned by their own guides.
+Each library's guide covers its full usage.
 
 - The HTTP Client guide — request construction, body, auth/TLS, retry, and error handling,
   across 13 chapters
 - The Stream Connector guide — per-runtime integration (Unity, Godot). Server-side STREAM
   registration is covered by [09-stream](09-stream.en.md).
 
-## 2. Verification Functions And Usage
+## 2. Verification Functions and Usage
 
 Most scenarios are expressed with the verification functions the connector provides.
 
@@ -118,10 +118,10 @@ Java/Node use `submit`, and Kotlin uses `await`
 Value comparison uses `Ensure(condition, message)`. The message is required, and on
 failure the scenario ends with an exception carrying that message.
 
-### Confirming A Push Arrives
+### Confirming a Push Arrives
 
 Specify a condition with `Where(...)` to **wait for the first message matching that
-condition.** Other pushes that don't match arriving in the mix doesn't affect the scenario.
+condition.** Other, nonmatching pushes may arrive without affecting the scenario.
 
 ```csharp
 var joined = await client1.WaitFor<PlayerJoinedNotify>()
@@ -130,7 +130,7 @@ var joined = await client1.WaitFor<PlayerJoinedNotify>()
 ZlinkStreamAssert.Ensure(joined.Payload.Mark == TicTacToeMarks.O, "joined mark mismatch.");
 ```
 
-### Confirming A Push Doesn't Arrive
+### Confirming a Push Doesn't Arrive
 
 You can't confirm something never arrives without an observation window, so `Within(...)`
 must be specified. Omitting it is an error.
@@ -161,7 +161,7 @@ var statusSequence = await customer.WaitForSequence<DeliveryStatusNotify>()
     .Async(ct);
 ```
 
-### Confirming A Request Fails
+### Confirming a Request Fails
 
 Whether a request with no permission or an out-of-order request **gets rejected** is also
 part of the contract. Verifying only the success path leaves this path unverified.
@@ -174,7 +174,7 @@ await ZlinkStreamAssert.ExpectFailureAsync(
     nameof(ZlinkStreamErrorCode.RemoteError));
 ```
 
-## 3. How To Handle Waiting For A Message
+## 3. How to Handle Waiting for a Message
 
 Most E2E flakiness has the same cause. **You act first, then start waiting**, and miss a
 push that arrived in between.
@@ -286,7 +286,7 @@ private static async ValueTask<JoinGameNotify> JoinGameAsync(
 also check *whether another client observes the same fact.* Making **the result that
 actually reaches the user**, not server-internal state, the contract, is the point of E2E.
 
-## 5. Verifying With Multiple Clients
+## 5. Verifying with Multiple Clients
 
 A single scenario can create several clients. Splitting roles verifies contracts a single
 client can't confirm.
@@ -304,10 +304,10 @@ await using var client2  = CreateStreamClient(room.PlayEndpoints[1], options, "g
 await using var observer = CreateStreamClient(room.PlayEndpoints[1], options, "observer", logger);
 ```
 
-The `Bingo` sample uses this composition as-is — it keeps two players and one spectator
-together, and even confirms the win notification is delivered only to the spectator.
+The `Bingo` sample uses this composition as-is — it brings together two players and one
+spectator, and even confirms the win notification is delivered only to the spectator.
 
-## 6. Run Scripts And Success Criteria
+## 6. Run Scripts and Success Criteria
 
 The run script is responsible for **starting the server, running the client, and cleaning
 up afterward.**
@@ -332,8 +332,8 @@ The script follows these rules.
   implemented.
 - **Wait on a condition, not `sleep`.** Server startup is confirmed by whether the port is
   open; async post-processing, by whether a specific line appeared in the log.
-- **Clean up with `trap`.** So that a scenario failing partway through doesn't leave
-  started processes, temp directories, or containers behind to affect the next run.
+- **Clean up with `trap`** so that a scenario failing partway through doesn't leave started
+  processes, temp directories, or containers behind to affect the next run.
 
 Even if the client passes, also check that **the server logs have no errors.** Sometimes
 the client observes normal behavior while the server records a dispatch error.
@@ -355,8 +355,8 @@ fi
   explicitly.
 - **`WaitFor` returns a different message** → you waited on type alone, with no condition.
   Narrow it with `Where(...)` to the event this scenario is actually waiting for.
-- **It passes locally but fails only in CI** → check for leftover timing pinned with
-  `sleep`. Express every wait through a wait function with a timeout specified.
+- **It passes locally but fails only in CI** → check for remaining timing dependencies
+  implemented with `sleep`. Express every wait through a wait function with an explicit timeout.
 - **The client passes but the server log has an error** → the script doesn't check server
   logs for errors ([§6](#6-run-scripts-and-success-criteria)).
 - **It connects but the push never arrives** → in an environment that needs manual

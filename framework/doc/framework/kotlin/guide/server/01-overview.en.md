@@ -57,7 +57,7 @@ routing, reconnect, and correlation.
 
 ## 2. Situations Where You Need It
 
-### 2.1 Building A Real-Time Game Server
+### 2.1 Building a Real-Time Game Server
 
 **What makes it hard.** Game servers have no standardized framework like the web's
 `ASP.NET Core`/Spring. This isn't an accident — there's a reason.
@@ -82,10 +82,10 @@ So up to now there were two choices — build all of this yourself, or **move to
 runtime**, a game server engine, and relearn how you write logic, configure, deploy, and
 operate, on the engine's terms.
 
-**How it's actually been built.** Grouped by the names the industry commonly uses, it's
-roughly four patterns. Boxes like login/auth, gateway, and DB cache show up repeatedly no
-matter which pattern — but since there's no common framework backing them, a team picks its
-genre's pattern and rebuilds that structure from the socket up.
+**How it's actually been built.** Using the names common in the industry, these approaches
+fall into roughly four patterns. Boxes like login/auth, gateway, and DB cache show up
+repeatedly no matter which pattern you pick — but since there's no common framework backing
+them, a team picks its genre's pattern and rebuilds that structure from the socket up.
 
 <iframe class="zlink-diagram" src="/common/diagrams/01-arch-existing-en.html" title="Game backend patterns — existing approach" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-arch-existing-en.html" target="_blank">↗ View larger</a></p>
@@ -141,8 +141,8 @@ There's no need to rebuild from the socket for each one.
   [TicTacToe](../../../common/sample/tictactoe/README.en.md) is closest to this flow —
   matching request → room/connection info response → connect to the already-prepared room
   spot.
-- **④ Actor service** — an **Instance Spot** is cold-activated by entity ID, processing an
-  entity's state — one several users touch at the same time — serially, with no Redis
+- **④ Actor service** — an **Instance Spot** is cold-activated by entity ID and serially
+  processes the state of an entity that several users access at the same time, with no Redis
   distributed lock. Continued in the
   [guild service example](#하나의-엔티티에-대한-동시-접근).
 
@@ -164,9 +164,9 @@ means no new runtime to learn.
 > matching/lobby/meta/social are handled just fine today by these four approaches. Exactly
 > where the line falls is covered in [Chapter 17](17-alternative.en.md) §4.
 
-**How is this different from a game server engine or service?** The path that avoids
-building it yourself includes engines and managed services. Laying out what each provides,
-by area, makes ZLink's spot clear.
+**How is this different from a game server engine or service?** Alternatives to building
+everything yourself include engines and managed services. Comparing what each provides by
+area makes ZLink's place clear.
 
 | Area provided | Representative product | Form provided |
 | --- | --- | --- |
@@ -184,7 +184,7 @@ framework you already use.**
   top of it — it doesn't compete with a hosting service, it composes with one.
 - **Matchmaking rules and social features are app logic, not product features.** You write
   them directly with a channel handler and spot. There's less pre-built for you, but the
-  ownership and freedom over the logic stays with the app.
+  ownership and freedom over the logic stay with the app.
 
 Instead of rebuilding for each language, ZLink puts the hard runtime in a single **native
 Core (C API)** and wraps it in per-language layers. Per-language **`bindings`** connect that
@@ -233,7 +233,7 @@ every message for one room (requests, subscription events, timer ticks, actor pa
 Runnable reference samples: [TicTacToe](../../../common/sample/tictactoe/README.en.md) ·
 [Bingo](../../../common/sample/bingo/README.en.md) · [GameQuest](../../../common/sample/event/gamequest.en.md)
 
-### 2.2 Concurrent Access To One Entity
+### 2.2 Concurrent Access to One Entity
 
 **Why it's hard.** There are cases, like a guild, where **several different users need to
 modify the same entity at the same time.** Just like two users applying to join at the same
@@ -288,18 +288,21 @@ spots.requestToSpot(guildId, JoinGuildReq(userId))
 There's no runnable reference sample for this scenario yet — the code above applies the same
 API surface as GameQuest's `PlayerQuestSpot` registration/call approach to a guild.
 
-### 2.3 Adding Real-Time Features To An Existing Web Service
+### 2.3 Adding Real-Time Features to an Existing Web Service
 
-**Why complexity goes up.** The standard shape of a large web service — Spring/`ASP.NET
-Core` + Redis (cache) + Kafka (events) + LB/K8s — is optimized for **stateless
-request/response.** The moment you add a real-time feature like chat, notifications, or
-order tracking, these assumptions stop fitting one by one, and complexity rises.
+**Why complexity goes up.** Consider a **food-delivery order app**: placing and viewing an
+order are ordinary HTTP requests and responses, but status updates such as "preparing → out
+for delivery → arriving soon" need to be pushed in real time without requiring the user to
+refresh the app. The standard shape of a large web service — Spring/`ASP.NET Core` + Redis
+(cache) + Kafka (events) + LB/K8s — is optimized for **stateless request/response.** The
+moment you add a real-time feature like this, those assumptions stop fitting one by one, and
+complexity rises.
 
 - **The connection becomes state.** An HTTP request can land on any instance, but a
   WebSocket connection is pinned to one specific instance. That's how you end up with a
   sticky LB that pins connections, and the app starts managing "which instance is this user
   connected to right now" in Redis.
-  - **Real-time delivery between servers has to take a detour.** Since connections are
+- **Real-time delivery between servers has to take a detour.** Since connections are
   scattered across instances, server-to-server delivery routes through a broker (Redis
   pub/sub, or even Kafka when you don't actually need replay) — one more piece of
   infrastructure to operate.
@@ -319,24 +322,25 @@ LB, broker detour, distributed lock — plus the operational burden of running i
 | Real-time delivery through a broker | **channel/fanout** — inter-server delivery and fan-out go through transport directly | [05](05-channel-messaging.en.md) |
 | Managing "who's connected where" | **Actor binding + location store** — the framework owns reconnect portability and location lookup | [08](08-actor-session.en.md)·[10](10-location.en.md) |
 
-Drawing the same system — a web API + real-time features (chat/order tracking) — both ways
-shows the difference right in the picture.
+Drawing the same food-delivery order app — HTTP order processing + real-time delivery-status
+pushes — both ways shows the difference right in the picture.
 
 **The existing approach** — the components for the real-time feature (orange) add up to as
 much as the main body.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing-en.html" title="Existing approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-existing-en.html" title="Existing approach — food-delivery order app" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-existing-en.html" target="_blank">↗ View larger</a></p>
 
 **The ZLink approach** — every orange piece disappears, leaving one location store that
 provides node/actor/spot location information.
 
-<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink-en.html" title="ZLink approach — web service + real-time" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink-en.html" title="ZLink approach — food-delivery order app" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-zlink-en.html" target="_blank">↗ View larger</a></p>
 
-Sticky LB, WebSocket server, pub/sub detour, distributed lock, mesh/discovery — five pieces
-shrink down to **one location store.** Inter-server calls and real-time delivery all connect
-directly, runtime to runtime.
+Three pieces of infrastructure — the sticky LB, pub/sub broker, and distributed lock —
+disappear. An **Instance Spot** preserves ordering, **Session servers** (STREAM) handle
+real-time connections instead of shell servers, and **direct runtime connections** handle
+inter-server delivery. The **location store is the only new infrastructure.**
 
 **As code.** Where the distributed lock and sticky routing used to sit, the following code
 remains.
@@ -468,12 +472,12 @@ prevention, and projection rebuild, all on top of owner routing.
 
 The three situations differ only in entry point — the surface you use is the same. Products
 exist that provide one feature each — gRPC for RPC, Orleans for actors, a game engine for
-connections — but ZLink's spot is the **combination that bundles major-framework
+connections — but ZLink's niche is the **combination that bundles major-framework
 integration + serial-execution state units + auto-connect topology into one.**
 
-## 3. Surface And Structure
+## 3. Surface and Structure
 
-### 3.1 The Call Unit — MeshName And ChannelName
+### 3.1 The Call Unit — MeshName and ChannelName
 
 An inter-server call in ZLink Framework picks its target by **`MeshName` and
 `ChannelName`.** In the application, you use it like "send a request over the `orders`
@@ -493,7 +497,7 @@ The framework handles what you'd otherwise have written by hand to build one ser
 | Managing server addresses, deciding connections | Tracks the currently active endpoint through the location store |
 | Configuration, logging, monitoring | Integrated with Spring configuration/logging/lifecycle |
 
-### 3.2 The Felt Difficulty Versus The Existing Approach
+### 3.2 How It Feels Compared with the Existing Approach
 
 The difference in the amount of code needed to wire up the same "inter-server
 request/response."
@@ -535,7 +539,7 @@ val reply = client
 The connection/setup code disappears, leaving a handler and a few lines of channel
 registration.
 
-### 3.3 Layering And Registration Points
+### 3.3 Layering and Registration Points
 
 <iframe class="zlink-diagram" src="/common/diagrams/01-layers-en.html" title="Layer structure — ZLink on the host, business logic on top" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-layers-en.html" target="_blank">↗ View larger</a></p>
@@ -617,7 +621,7 @@ part of this map.
   that find an endpoint through a store lookup.
 - **Client app** — sends requests over HTTP, and receives real-time state over stream.
 
-## 6. Who This Guide Is For, And Its Scope
+## 6. Who This Guide Is for, and Its Scope
 
 This guide focuses on when to reach for channel, handler, SPOT, STREAM, and the location
 store, rather than the runtime's internal structure.

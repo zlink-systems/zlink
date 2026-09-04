@@ -28,8 +28,8 @@ View in another language — **C#/.NET** · [C++](../../../cpp/guide/server/12-o
 
 ## 0. What It Provides
 
-Once a service goes into operation, beyond the event observation covered in the `11.
-Monitoring` chapter, you need the following.
+Once a service is in production, you need the following in addition to the event observation
+covered in the [11. Monitoring](11-monitoring.en.md).
 
 1. **Metrics** — see numbers like CCU, queue depth, and request latency on a dashboard.
 2. **Graceful drain** — clean up a node being taken down for a deployment or scale-in
@@ -63,8 +63,8 @@ builder.Services.AddOpenTelemetry().WithMetrics(m => m
     .AddPrometheusExporter());
 ```
 
-- There's no zlink-specific metrics API. Each language's standard metrics API is the surface
-  as-is. To collect without OTel, subscribe directly to the meter name `"zlink.framework"`
+- There's no zlink-specific metrics API. The framework uses each language's standard metrics
+  API directly. To collect without OTel, subscribe directly to the meter name `"zlink.framework"`
   from a `MeterListener`.
 - If no listener is attached at all, an instrument update ends on a minimal-cost inactive
   path. Registering an instrument without turning it on has no effect on messaging
@@ -130,7 +130,7 @@ instruments by
 | `zlink.host.shutdown.duration` | Time from starting Host `Shutdown` to the terminal result |
 | `zlink.host.shutdown.forced` | Count of host `Shutdown` calls that ended via bounded teardown |
 
-### 1.1 Capacity Snapshot And Measurement Reset
+### 1.1 Capacity Snapshot and Measurement Reset
 
 The host runtime's capacity snapshot exposes the Core HWM and Application Job Queue status
 together. Use it to correlate the fixed startup configuration and effective limits with
@@ -150,14 +150,14 @@ reset rules are in
 and the metric names, units, and labels are in
 [Runtime metrics](../../../common/spec/server/06-observability/02-runtime-metrics.en.md).
 
-## 2. Relocate — Moving To Another Host While Keeping State
+## 2. Relocate — Moving to Another Host While Keeping State
 
 `Relocate(...)` moves every User Spot, Instance Spot, and Actor alive on this host to another
 Serving node. It's an operation that targets the whole host, and the call itself doesn't
 terminate the host.
 
-**What's preserved.** This means what the client and other nodes were using stays exactly as
-it was after the move.
+**What's preserved.** This means that what the client and other nodes were using remains
+unchanged after the move.
 
 | What's preserved | Meaning |
 | --- | --- |
@@ -171,8 +171,8 @@ The procedure:
 
 1. Preflight confirms every stateful object and target capability/capacity. If there's no
    eligible target, it ends in `Blocked` without changing source admission.
-2. Publishes the host as `Relocating` and schedules an infrastructure notification on the
-   standalone Actor's, Instance Spot's, and User Spot aggregate's execution queue.
+2. The runtime publishes the host as `Relocating` and schedules an infrastructure notification
+   on the execution queue of each standalone Actor, Instance Spot, and User Spot aggregate.
 3. Target kind/version eligibility is confirmed before source dispatch stops. When the
    notification reaches a turn boundary, only the currently executing turn finishes on the
    source; it starts no new application turn. Transport reception remains open and later
@@ -196,8 +196,8 @@ The procedure:
    required lifecycle callbacks, and opens application dispatch. For a bound Actor it then
    sends the Session owner a one-way target-route update; neither control has a completion
    reply or ACK.
-7. Once every source unit has ended dispatch and every cutover submit has succeeded, the host
-   transitions to `Relocated`. This source-side result does not mean it awaited target CAS or
+7. Once dispatch has ended for every source unit and every cutover submit has succeeded, the
+   host transitions to `Relocated`. This source-side result does not mean it awaited target CAS or
    Session route application. Connections and infrastructure stay up until `Shutdown(...)` is
    called.
 
@@ -205,9 +205,9 @@ A failure before the first relocation commit can restore the source queue and ad
 After the first commit, there's no rollback to the source — target recovery continues, and
 exceeding the deadline ends in `ForceStopped`.
 
-### 2.1 Move Unit Per Execution Mode
+### 2.1 Relocation Unit by Execution Mode
 
-Even within the same host, what gets bundled into one unit to move differs by Spot kind and
+Even within the same host, what is bundled into one relocation unit differs by Spot kind and
 execution mode. A `SpotWide` User Spot is a single aggregate together with its member Actors,
 so it commits together. An Entry Spot's and a `PerActor` User Spot's Actors are each an
 independent unit, so they move Actor by Actor, and in this case the Spot instance is a shell
@@ -216,9 +216,9 @@ that doesn't carry state.
 <iframe class="zlink-diagram" src="/common/diagrams/12-relocation-en.html" title="Relocation move unit per execution mode" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/12-relocation-en.html" target="_blank">↗ View larger</a></p>
 
-So a `PerActor` User Spot's factory can only use `RecreateOnRelocation()` as its relocation
-approach. Each member Actor's factory decides its own policy separately. An Instance Spot has
-no Actor, so one Spot is directly the move unit.
+Therefore, a `PerActor` User Spot's factory can only use `RecreateOnRelocation()` as its
+relocation approach. Each member Actor's factory decides its own policy separately. An
+Instance Spot has no Actor, so the Spot itself is the relocation unit.
 
 ### 2.2 Moving-State Transfer Settings
 
@@ -240,13 +240,13 @@ start because of the budget. Internal protocol details such as the chunk format 
 verification rules are covered by
 [Relocation Flow](../../../common/spec/server/05-location-relocation/04-relocation-flow.en.md).
 
-### 2.3 SafeToShutdown — When It's Safe To Terminate
+### 2.3 SafeToShutdown — When It's Safe to Terminate
 
 `Relocated` means the source finished sending its cutovers, not that every caller caching
 the old route now points at the new owner. The source runtime publishes the
 `SafeToShutdown` state in its own runtime status once every unit's Message Follow can end
-and the cutover retransmission window has closed. A deployment orchestrator is recommended
-to confirm `Relocated`, then observe this state before calling `Shutdown` — terminating
+and the cutover retransmission window has closed. A deployment orchestrator should confirm
+`Relocated`, then observe this state before calling `Shutdown` — terminating
 before it's published is allowed, but the remaining follow routes disappear and requests
 from callers still caching the old route can end in `Unavailable`. State queries and change
 observation follow
@@ -269,7 +269,7 @@ Spots' `OnClosingAsync` with the `HostShutdown` reason, and once that callback f
 scope, authority, session, and topology resources. If no deadline is given, it's 30 seconds.
 
 The state of any Spot cleaned up here doesn't survive. If your deployment automation needs to
-keep state alive while taking a host down, call `Relocate(...)` first before shutting down,
+keep state alive while taking a host down, call `Relocate(...)` before shutting down,
 confirm the result is `Relocated`, and only then move on to this call (the example in §4).
 When possible, also confirm the `SafeToShutdown` publication (§2.3).
 
@@ -278,7 +278,7 @@ because an ordinary request finished. Likewise, preparing a nonexistent Instance
 starts from a separate address or manager create — only from attaching Instance intent to a
 SpotId direct call ([06-spot](06-spot.en.md) §5).
 
-## 4. Wiring Operational Calls And Readiness
+## 4. Wiring Operational Calls and Readiness
 
 The two operations above don't happen automatically. The application calls them directly on
 the framework runtime. This interface is a DI singleton that owns host maintenance.
@@ -310,8 +310,8 @@ only a target exactly at that version. If there's no eligible target, it waits u
 deadline and then returns `Blocked/TargetUnavailable`. Cancellation ends only that waiter —
 a shared lifecycle operation that's already started keeps running.
 
-Readiness checks both the host framework runtime's readiness and the readiness of any
-business-required component runtime, together, and wires them to an existing HTTP endpoint.
+A readiness endpoint combines the readiness of the host framework runtime with that of any
+component runtime required by the application.
 
 ```csharp
 app.MapGet("/healthz/ready", (IZLinkFrameworkRuntime runtime) =>
@@ -320,14 +320,14 @@ app.MapGet("/healthz/ready", (IZLinkFrameworkRuntime runtime) =>
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 ```
 
-Wired into a Kubernetes deployment, it becomes this concept.
+In a Kubernetes deployment, the setup looks like this.
 
 ```yaml
 # readiness probe → /healthz/ready — excluded from new-traffic targets the moment Draining starts
-# preStop hook + terminationGracePeriodSeconds >= drain deadline — secures time for auto-drain to finish
+# preStop hook + terminationGracePeriodSeconds >= drain deadline — allows time for auto-drain to finish
 ```
 
-### 4.1 Calling It Again Or Overlapping Calls
+### 4.1 Calling It Again or Overlapping Calls
 
 Deployment automation retries on failure. So **what happens when you make the same call
 twice** is defined by contract.
@@ -354,7 +354,7 @@ If `Shutdown` doesn't finish within its deadline, it performs only bounded clean
 in a forced-termination result. A deadline overrun and a callback failure are distinguished
 by different result values.
 
-### 4.2 What Stays Alive During A Transition
+### 4.2 What Stays Alive During a Transition
 
 `Relocating`, `Relocated`, and `Draining` aren't "accepting nothing" states. **Only starting
 something new is blocked — what's already accepted is processed through to completion.**
@@ -370,7 +370,7 @@ something new is blocked — what's already accepted is processed through to com
 **Monitoring or observer callbacks never hold up termination.** Even if code observing
 status runs for a long time, maintenance never waits for it.
 
-## 5. MeshNode Runtime Control And Observation
+## 5. MeshNode Runtime Control and Observation
 
 A MeshNode registered with `AddRouteMesh` is operated through two DI singletons.
 
@@ -388,7 +388,7 @@ weight is used only for Actor/Spot create and relocation target selection. Chann
 used only for selecting new select-one targets for that server membership. Looking up an
 unregistered mesh or membership is a configuration error.
 
-**Status query — RouteMesh runtime.** Provides one consistent snapshot and an ordered
+**Status query — RouteMesh runtime.** It provides one consistent snapshot and an ordered
 component event stream for one mesh. Host termination is owned by the framework runtime.
 
 ```csharp
