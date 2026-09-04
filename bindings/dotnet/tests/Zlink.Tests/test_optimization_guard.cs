@@ -90,6 +90,48 @@ public sealed class test_optimization_guard
             StringComparison.Ordinal);
         Assert.DoesNotContain("PeriodicTimer", source,
             StringComparison.Ordinal);
+        Assert.DoesNotContain("Task.Yield()", source,
+            StringComparison.Ordinal);
+        Assert.Contains("events, 1, 25, out var error", source,
+            StringComparison.Ordinal);
+        Assert.Contains("var events = PollEventFlags.PollCompletion;", source,
+            StringComparison.Ordinal);
+        // A signal-interrupted runtime wait keeps pumping instead of failing
+        // every armed waiter.
+        Assert.Contains(
+            "if (ZlinkException.MapErrorCode(errno) != ErrorCode.EIntr)",
+            source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void async_send_retains_payload_only_after_backpressure()
+    {
+        string path = Path.Combine(BindingRoot(), "src", "Zlink", "Runtime",
+            "Messaging", "CompletionOwner.cs");
+        string source = File.ReadAllText(path);
+
+        int firstAttempt = source.IndexOf(
+            "var attempt = SubmitSend(target, parts, DontWait,",
+            StringComparison.Ordinal);
+        int retainedSnapshot = source.IndexOf(
+            "retained = RequestReplySupport.CloneParts(parts);",
+            StringComparison.Ordinal);
+
+        Assert.True(firstAttempt >= 0);
+        Assert.True(retainedSnapshot > firstAttempt);
+    }
+
+    [Fact]
+    public void shutdown_errno_maps_to_terminated_submit_result()
+    {
+        string path = Path.Combine(BindingRoot(), "src", "Zlink", "Runtime",
+            "Errors", "ZlinkException.Native.cs");
+        string source = File.ReadAllText(path);
+
+        Assert.Contains("EshutdownFallback", source,
+            StringComparison.Ordinal);
+        Assert.Contains("58 or 108 or 10058 or EshutdownFallback", source,
+            StringComparison.Ordinal);
     }
 
     [Fact]

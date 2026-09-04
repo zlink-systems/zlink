@@ -16,7 +16,18 @@ internal sealed partial class SocketKernel : IDisposable
         DisposeCore();
     }
 
-    private void DisposeCore()
+    ~SocketKernel()
+    {
+        try
+        {
+            DisposeCore(finalizing: true);
+        }
+        catch
+        {
+        }
+    }
+
+    private void DisposeCore(bool finalizing = false)
     {
         _completion?.PrepareClose();
         try
@@ -25,10 +36,14 @@ internal sealed partial class SocketKernel : IDisposable
         }
         catch
         {
-            _completion?.CancelClose();
+            if (finalizing)
+                _completion?.CompleteClose();
+            else
+                _completion?.CancelClose();
             throw;
         }
         _completion?.CompleteClose();
-        GC.SuppressFinalize(this);
+        if (!finalizing)
+            GC.SuppressFinalize(this);
     }
 }

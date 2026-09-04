@@ -26,6 +26,7 @@ public abstract partial class ZlinkException
     private const int EtimedOutFallback = ZlinkHausnumero + 16;
     private const int EhostUnreachFallback = ZlinkHausnumero + 17;
     private const int EnetResetFallback = ZlinkHausnumero + 18;
+    private const int EshutdownFallback = ZlinkHausnumero + 22;
     private const int EfsmNative = ZlinkHausnumero + 51;
     private const int EnoCompatProtoNative = ZlinkHausnumero + 52;
     private const int EtermNative = ZlinkHausnumero + 53;
@@ -108,7 +109,8 @@ public abstract partial class ZlinkException
                 ErrorCode.EConnRefused,
             (int)ErrorCode.EHostUnreach or 65 or EhostUnreachFallback =>
                 ErrorCode.EHostUnreach,
-            (int)ErrorCode.EShutdown => ErrorCode.EShutdown,
+            (int)ErrorCode.EShutdown or 58 or 10058 or EshutdownFallback =>
+                ErrorCode.EShutdown,
             (int)ErrorCode.EInProgress or 36 or EinProgressFallback =>
                 ErrorCode.EInProgress,
             EfsmNative => ErrorCode.Efsm,
@@ -117,6 +119,12 @@ public abstract partial class ZlinkException
             EmThreadNative => ErrorCode.EmThread,
             _ => ErrorCode.Unknown
         };
+    }
+
+    internal static bool IsTerminationError(int errno)
+    {
+        var error = MapErrorCode(errno);
+        return error is ErrorCode.EShutdown or ErrorCode.Eterm;
     }
 
     internal static ZlinkSubmitException CreateSubmitException(int errno)
@@ -216,7 +224,8 @@ public abstract partial class ZlinkException
             107 or 113 or 111 or 110 or 10057 or 10060 or 10065 =>
                 SubmitResult.NotConnected,
             2 or 3 => SubmitResult.NotFound,
-            156384765 => SubmitResult.Terminated,
+            58 or 108 or 10058 or EshutdownFallback or 156384765 =>
+                SubmitResult.Terminated,
             9 or 88 => SubmitResult.InvalidHandle,
             22 => SubmitResult.InvalidArgument,
             95 or 93 or 97 => SubmitResult.NotSupported,

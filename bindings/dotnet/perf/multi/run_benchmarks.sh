@@ -250,7 +250,7 @@ ensure_build_output() {
     return
   fi
 
-  dotnet build "${PROJECT}" -c "${CONFIGURATION}" >/dev/null
+  dotnet build "${PROJECT}" -c "${CONFIGURATION}" -m:1 >/dev/null
 }
 
 validate_reuse_outputs() {
@@ -772,6 +772,7 @@ extract_results_from_logs() {
 
   python3 - "${primary_log}" "${secondary_log}" "${pattern}" "${transport}" "${size}" <<'PY'
 import csv
+import math
 import sys
 from pathlib import Path
 
@@ -803,6 +804,20 @@ for path in (primary, secondary):
 missing = [metric for metric in required if metric not in merged]
 if missing:
     raise SystemExit("missing required metrics: " + ",".join(missing))
+
+values = {}
+for metric in required:
+    try:
+        values[metric] = float(merged[metric][6])
+    except ValueError as error:
+        raise SystemExit(f"invalid metric {metric}: {merged[metric][6]}") from error
+    if not math.isfinite(values[metric]):
+        raise SystemExit(f"non-finite metric {metric}: {merged[metric][6]}")
+if values["throughput"] <= 0 or values["bandwidth"] <= 0:
+    raise SystemExit("throughput and bandwidth must be positive")
+for metric in ("latency", "latency_p95", "latency_p99"):
+    if values[metric] < 0:
+        raise SystemExit(f"latency metric must not be negative: {metric}")
 
 for metric in required:
     print(",".join(merged[metric]))
@@ -1909,7 +1924,7 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
           if ! extracted="$(extract_results_from_logs "${client_log}" "${server_log}" \
               "${pattern}" "${transport}" "${size}")"; then
             record_failure "${pattern}" "${transport}" "${size}" "${run_index}" \
-              "missing_required_result_lines"
+              "invalid_or_missing_result_lines"
             status=1
             exec {server_control_fd}>&-
             continue
@@ -2012,7 +2027,7 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
             continue
           fi
           if ! extracted="$(extract_results_from_logs "${client_log}" "${server_log}" "${pattern}" "${transport}" "${size}")"; then
-            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "missing_required_result_lines"
+            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "invalid_or_missing_result_lines"
             status=1
             exec {server_control_fd}>&-
             exec {client_control_fd}>&-
@@ -2041,7 +2056,7 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
               continue
             fi
             if ! extracted="$(extract_results_from_logs "${client_log}" "${server_log}" "${pattern}" "${transport}" "${size}")"; then
-              record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "missing_required_result_lines"
+              record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "invalid_or_missing_result_lines"
               status=1
               continue
             fi

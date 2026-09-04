@@ -21,7 +21,7 @@ failed=0
 
 for sample in "${SAMPLES[@]}"; do
   echo "RUN,$sample"
-  if dotnet build "$ROOT/$sample" && zlink_sync_linux_native_dirs_by_find "$(dirname "$ROOT/$sample")/bin" '*linux-x64/native' && \
+  if dotnet build "$ROOT/$sample" -m:1 && zlink_sync_linux_native_dirs_by_find "$(dirname "$ROOT/$sample")/bin" '*linux-x64/native' && \
       timeout 60s dotnet run --no-build --project "$ROOT/$sample"; then
     echo "OK,$sample"
     passed=$((passed + 1))

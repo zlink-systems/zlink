@@ -61,6 +61,19 @@ internal static class RequestReplySupport
 
     internal static void ConsumeParts(IReadOnlyList<Message> parts)
     {
+        if (parts.Count == 1)
+        {
+            parts[0].ConsumeAfterSuccessfulSubmit();
+            return;
+        }
+        if (parts.Count == 2)
+        {
+            parts[0].ConsumeAfterSuccessfulSubmit();
+            if (!ReferenceEquals(parts[0], parts[1]))
+                parts[1].ConsumeAfterSuccessfulSubmit();
+            return;
+        }
+
         var consumed = new HashSet<Message>(
             ReferenceEqualityComparer.Instance);
         foreach (var part in parts)

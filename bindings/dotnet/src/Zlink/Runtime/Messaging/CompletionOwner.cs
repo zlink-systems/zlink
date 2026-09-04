@@ -42,34 +42,13 @@ internal sealed class CompletionOwner
                 return Task.FromCanceled(cancellationToken);
             EnsureOpenForSubmit();
 
-            // Core never retains a back-pressured DONTWAIT payload. Keep an
-            // operation-owned snapshot before asking Core to create a token.
-            var retained = RequestReplySupport.CloneParts(parts);
-            var entry = new SendCompletionEntry(target, retained,
-                cancellationToken);
-            try
-            {
-                Register(entry);
-            }
-            catch
-            {
-                RequestReplySupport.DisposeParts(retained);
-                throw;
-            }
+            var entry = new SendCompletionEntry(target, cancellationToken);
+            Register(entry);
 
-            var attempt = SubmitSend(target, retained, DontWait,
+            var attempt = SubmitSend(target, parts, DontWait,
                 entry.Context);
             if (attempt.Failure is null)
             {
-                try
-                {
-                    RequestReplySupport.ConsumeParts(parts);
-                }
-                catch (Exception exception)
-                {
-                    entry.CompleteInitialFailure(exception);
-                    throw;
-                }
                 if (attempt.CompletionId != 0)
                 {
                     var failure = CreateProtocolFailure();
@@ -84,14 +63,19 @@ internal sealed class CompletionOwner
             if (IsBackpressured(attempt.Failure)
                 && attempt.CompletionId != 0)
             {
+                Message[]? retained = null;
                 try
                 {
+                    // Core retains only the token. Take a shared zlink_msg
+                    // snapshot only after rejection, then consume the caller's
+                    // messages once ownership has moved to this operation.
+                    retained = RequestReplySupport.CloneParts(parts);
                     RequestReplySupport.ConsumeParts(parts);
-                    entry.Arm(attempt.CompletionId);
+                    entry.Arm(attempt.CompletionId, retained);
                 }
                 catch (Exception exception)
                 {
-                    entry.ArmFailed(attempt.CompletionId, exception);
+                    entry.ArmFailed(attempt.CompletionId, retained, exception);
                     StartRuntimePump();
                     throw;
                 }
@@ -232,7 +216,7 @@ internal sealed class CompletionOwner
         }
     }
 
-    internal void TransferToPublic(object pollerOwner)
+    internal bool TransferToPublic(object pollerOwner)
     {
         lock (_sync)
         {
@@ -243,10 +227,11 @@ internal sealed class CompletionOwner
                 throw new ZlinkConfigException(ConfigResult.InvalidState,
                     (int)ErrorCode.EBusy);
             if (ReferenceEquals(_publicOwner, pollerOwner))
-                return;
+                return false;
             _publicOwner = pollerOwner;
         }
         StopRuntimePump();
+        return true;
     }
 
     internal void TransferToRuntime(object pollerOwner)
@@ -257,8 +242,19 @@ internal sealed class CompletionOwner
                 return;
             _publicOwner = null;
         }
-        PrepareRuntimeDrain();
-        StartRuntimePump();
+        try
+        {
+            PrepareRuntimeDrain();
+            StartRuntimePump();
+        }
+        catch
+        {
+            // Native removal has already committed, so ownership cannot be
+            // rolled back. Settle managed waiters instead of leaking a wait
+            // with no completion drain owner.
+            StopRuntimePump();
+            FailUnownedWaits();
+        }
     }
 
     internal CompletionDrainResult Drain()
@@ -266,8 +262,25 @@ internal sealed class CompletionOwner
         // Submission and token publication are one critical section. A public
         // poller can therefore never observe WRITABLE before its entry is armed.
         lock (_submitSync)
-        lock (_drainSync)
-            return DrainCore();
+            lock (_drainSync)
+            {
+                lock (_sync)
+                    if (_closing)
+                        return default;
+                return DrainCore();
+            }
+    }
+
+    internal void FailPublicWaitTerminated()
+    {
+        lock (_submitSync)
+        {
+            CompletionEntry[] entries;
+            lock (_sync)
+                entries = _entries.Values.ToArray();
+            foreach (var entry in entries)
+                entry.FailLifecycle();
+        }
     }
 
     private CompletionDrainResult DrainCore()
@@ -284,7 +297,10 @@ internal sealed class CompletionOwner
             if ((RecvResult)rc == RecvResult.NoData)
                 return new CompletionDrainResult(processed, requests);
             if ((RecvResult)rc != RecvResult.Ok)
+            {
+                FailDrainWaits((RecvResult)rc);
                 throw ZlinkException.CreateRecvException((RecvResult)rc);
+            }
 
             CompletionEntry? entry;
             lock (_sync)
@@ -482,13 +498,17 @@ internal sealed class CompletionOwner
     private static ZlinkSubmitException CreateProtocolFailure() =>
         new(SubmitResult.InternalError, (int)ErrorCode.EProtoNoSupport);
 
-    private bool TargetMatches(RoutingId? target,
+    private static unsafe bool TargetMatches(RoutingId? target,
         ref ZlinkRoutingId completionTarget)
     {
         if (!target.HasValue)
             return completionTarget.Size == 0;
-        var actual = RoutingIdCodec.ToRoutingId(ref completionTarget);
-        return actual.HasValue && actual.Value == target.Value;
+        var expected = target.Value.ToBytes();
+        if (expected.Length != completionTarget.Size)
+            return false;
+        fixed (byte* actual = completionTarget.Data)
+            return expected.SequenceEqual(
+                new ReadOnlySpan<byte>(actual, completionTarget.Size));
     }
 
     private void PrepareRuntimeDrain()
@@ -506,8 +526,7 @@ internal sealed class CompletionOwner
             if (poller == IntPtr.Zero)
                 throw ZlinkException.CreateConfigException(
                     NativeMethods.zlink_errno());
-            var events = PollEventFlags.PollOut
-                         | PollEventFlags.PollCompletion;
+            var events = PollEventFlags.PollCompletion;
             var rc = NativeMethods.zlink_poller_add(poller, _handle,
                 IntPtr.Zero, (short)events);
             if (rc != 0)
@@ -540,19 +559,17 @@ internal sealed class CompletionOwner
 
         // Start on the shared managed scheduler so a caller's single-threaded
         // SynchronizationContext cannot own or block completion progress.
-        _ = Task.Run(() => RuntimePumpAsync(epoch));
+        _ = Task.Run(() => RuntimePump(epoch));
     }
 
-    private async Task RuntimePumpAsync(long epoch)
+    private void RuntimePump(long epoch)
     {
         var events = new ZlinkPollerEvent[1];
         while (true)
         {
-            // One non-blocking readiness turn at a time keeps progress on the
-            // managed event loop without a dedicated OS thread or timer.
-            await Task.Yield();
             var ready = false;
             var waitFailed = false;
+            var waitTerminated = false;
             lock (_runtimeSync)
             {
                 lock (_sync)
@@ -568,18 +585,26 @@ internal sealed class CompletionOwner
                 }
 
                 var rc = NativeMethods.zlink_poller_wait(_runtimePoller,
-                    events, 1, 0, out var error);
+                    events, 1, 25, out var error);
                 if (rc > 0)
                     ready = true;
                 else if (rc < 0 && (ConfigResult)error != ConfigResult.Ok)
                 {
-                    waitFailed = true;
+                    // A signal-interrupted wait (EINTR) leaves the queue and
+                    // every token intact; only a real failure ends the pump.
+                    var errno = NativeMethods.zlink_errno();
+                    if (ZlinkException.MapErrorCode(errno) != ErrorCode.EIntr)
+                    {
+                        waitFailed = true;
+                        waitTerminated =
+                            ZlinkException.IsTerminationError(errno);
+                    }
                 }
             }
 
             if (waitFailed)
             {
-                FailRuntimeWaits(epoch);
+                FailRuntimeWaits(epoch, waitTerminated);
                 return;
             }
 
@@ -598,7 +623,42 @@ internal sealed class CompletionOwner
         }
     }
 
-    private void FailRuntimeWaits(long epoch)
+    private void FailDrainWaits(RecvResult result)
+    {
+        CompletionEntry[] entries;
+        lock (_sync)
+        {
+            if (result == RecvResult.Terminated)
+                _closing = true;
+            entries = _entries.Values.ToArray();
+        }
+
+        foreach (var entry in entries)
+        {
+            if (result == RecvResult.Terminated)
+                entry.FailLifecycle();
+            else
+                entry.FailRuntimeWait();
+        }
+    }
+
+    private void FailUnownedWaits()
+    {
+        lock (_submitSync)
+        {
+            CompletionEntry[] entries;
+            lock (_sync)
+            {
+                if (_closing || _publicOwner is not null)
+                    return;
+                entries = _entries.Values.ToArray();
+            }
+            foreach (var entry in entries)
+                entry.FailRuntimeWait();
+        }
+    }
+
+    private void FailRuntimeWaits(long epoch, bool terminated = false)
     {
         // A poll/drain failure must not leave an awaiter unresolved. Native may
         // still own each published token, so entries become payload-free
@@ -608,34 +668,42 @@ internal sealed class CompletionOwner
         {
             CompletionEntry[] entries;
             lock (_runtimeSync)
-            lock (_sync)
-            {
-                if (epoch != _runtimeEpoch || _closing
-                    || _publicOwner is not null)
-                    return;
-                _runtimePumpStarted = false;
-                entries = _entries.Values.ToArray();
-            }
+                lock (_sync)
+                {
+                    if (epoch != _runtimeEpoch || _closing
+                        || _publicOwner is not null)
+                        return;
+                    _runtimePumpStarted = false;
+                    entries = _entries.Values.ToArray();
+                }
 
             foreach (var entry in entries)
-                entry.FailRuntimeWait();
+            {
+                if (terminated)
+                    entry.FailLifecycle();
+                else
+                    entry.FailRuntimeWait();
+            }
         }
     }
 
     private void DrainRuntime(long epoch)
     {
         lock (_submitSync)
-        lock (_drainSync)
-        {
-            lock (_runtimeSync)
-            lock (_sync)
+            lock (_drainSync)
             {
-                if (epoch != _runtimeEpoch || _closing
-                    || _publicOwner is not null || _runtimePoller == IntPtr.Zero)
-                    return;
+                lock (_runtimeSync)
+                {
+                    lock (_sync)
+                    {
+                        if (epoch != _runtimeEpoch || _closing
+                            || _publicOwner is not null
+                            || _runtimePoller == IntPtr.Zero)
+                            return;
+                    }
+                }
+                DrainCore();
             }
-            DrainCore();
-        }
     }
 
     private void StopRuntimePump()
@@ -690,7 +758,7 @@ internal sealed class CompletionOwner
     {
         private readonly object _sync = new();
         private readonly RoutingId? _target;
-        private readonly Message[]? _retained;
+        private Message[]? _retained;
         private readonly CancellationToken _cancellationToken;
         private readonly TaskCompletionSource? _completion;
         private CancellationTokenRegistration _cancellationRegistration;
@@ -701,10 +769,9 @@ internal sealed class CompletionOwner
         private bool _payloadReleased;
 
         internal SendCompletionEntry(RoutingId? target,
-            Message[] retained, CancellationToken cancellationToken)
+            CancellationToken cancellationToken)
         {
             _target = target;
-            _retained = retained;
             _cancellationToken = cancellationToken;
             _completion = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
@@ -755,7 +822,7 @@ internal sealed class CompletionOwner
             Remove();
         }
 
-        internal void Arm(ulong token)
+        internal void Arm(ulong token, Message[]? retained = null)
         {
             lock (_sync)
             {
@@ -763,6 +830,7 @@ internal sealed class CompletionOwner
                     throw new InvalidOperationException(
                         "A writable wait must be armed once with a nonzero token.");
                 _token = token;
+                _retained = retained;
                 _state = SendEntryState.Waiting;
                 if (_cancelClaimed)
                 {
@@ -772,13 +840,15 @@ internal sealed class CompletionOwner
             }
         }
 
-        internal void ArmFailed(ulong token, Exception exception)
+        internal void ArmFailed(ulong token, Message[]? retained,
+            Exception exception)
         {
             lock (_sync)
             {
                 if (_state != SendEntryState.Registered || token == 0)
                     return;
                 _token = token;
+                _retained = retained;
                 _state = SendEntryState.FailedWaiting;
                 ReleasePayloadLocked();
                 SetExceptionLocked(exception);
@@ -814,7 +884,7 @@ internal sealed class CompletionOwner
                 }
                 else if (completion.Kind != CompletionKind.Writable
                     || completion.UserContext != Context
-                    || !Owner.TargetMatches(_target,
+                    || !TargetMatches(_target,
                         ref completion.PeerRoutingId))
                 {
                     terminalFailure = CreateProtocolFailure();
@@ -842,11 +912,23 @@ internal sealed class CompletionOwner
                     ReleasePayloadLocked();
                     SetExceptionLocked(terminalFailure);
                 }
-                else if (_cancelClaimed || _retained is null)
+                else if (_completion is null)
+                {
+                    // TrySubmit(false) owns no payload and only drains the
+                    // token that Core necessarily published.
+                    _state = SendEntryState.Terminal;
+                }
+                else if (_cancelClaimed)
                 {
                     _state = SendEntryState.Terminal;
                     ReleasePayloadLocked();
                     SetCanceledLocked();
+                }
+                else if (_retained is null)
+                {
+                    terminalFailure = CreateProtocolFailure();
+                    _state = SendEntryState.Terminal;
+                    SetExceptionLocked(terminalFailure);
                 }
                 else
                 {

@@ -191,7 +191,7 @@ ensure_build_output() {
     return
   fi
 
-  dotnet build "${PROJECT}" -c "${CONFIGURATION}" >/dev/null
+  dotnet build "${PROJECT}" -c "${CONFIGURATION}" -m:1 >/dev/null
 }
 
 prepare_core_runtime() {

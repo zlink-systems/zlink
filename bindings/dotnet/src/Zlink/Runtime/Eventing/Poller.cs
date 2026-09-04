@@ -37,17 +37,21 @@ internal sealed class Poller : NativeOwner, IPoller
         EnumValidation.EnsurePollEvents(events, nameof(events));
 
         var ownsCompletion = (events & PollEventFlags.PollCompletion) != 0;
-        var completionOwner = concreteSocket.Kernel.Completion;
+        CompletionOwner? completionOwner = null;
+        var acquiredCompletion = false;
         if (ownsCompletion)
-            completionOwner.TransferToPublic(this);
+        {
+            completionOwner = concreteSocket.Kernel.Completion;
+            acquiredCompletion = completionOwner.TransferToPublic(this);
+        }
 
         var userData = SlotToUserData(slot);
         var rc = NativeMethods.zlink_poller_add(_handle, socketHandle,
             userData, (short)events);
         if (rc != 0)
         {
-            if (ownsCompletion)
-                completionOwner.TransferToRuntime(this);
+            if (acquiredCompletion)
+                completionOwner!.TransferToRuntime(this);
             ZlinkException.ThrowConfigIfError(rc);
         }
         RegisterItem(new PollItem(PollItemKind.Socket, socket, socketHandle, 0,
@@ -96,14 +100,19 @@ internal sealed class Poller : NativeOwner, IPoller
 
         var item = _items[index];
         var wantsCompletion = (events & PollEventFlags.PollCompletion) != 0;
+        var acquiredCompletion = false;
         if (!item.OwnsCompletion && wantsCompletion)
-            item.CompletionOwner!.TransferToPublic(this);
+        {
+            item.CompletionOwner ??= SocketInterop.RequireSocket(
+                item.Socket!, nameof(socket)).Kernel.Completion;
+            acquiredCompletion = item.CompletionOwner.TransferToPublic(this);
+        }
 
         var rc = NativeMethods.zlink_poller_modify(_handle, socketHandle,
             (short)events);
         if (rc != 0)
         {
-            if (!item.OwnsCompletion && wantsCompletion)
+            if (acquiredCompletion)
                 item.CompletionOwner!.TransferToRuntime(this);
             ZlinkException.ThrowConfigIfError(rc);
         }
@@ -132,13 +141,13 @@ internal sealed class Poller : NativeOwner, IPoller
     public bool Remove(IZlinkSocket socket)
     {
         EnsureNotDisposed();
-        var socketHandle = SocketInterop.RequirePollableHandle(socket,
-            nameof(socket));
+        _ = SocketInterop.RequireSocket(socket, nameof(socket));
 
-        var index = FindSocket(socketHandle);
+        var index = FindSocket(socket);
         if (index < 0)
             return false;
 
+        var socketHandle = _items[index].SocketHandle;
         var rc = NativeMethods.zlink_poller_remove(_handle, socketHandle);
         ZlinkException.ThrowConfigIfError(rc);
         var item = _items[index];
@@ -219,8 +228,16 @@ internal sealed class Poller : NativeOwner, IPoller
         {
             var ready = WaitNative(timeoutMs, capacity, out var errorOut);
             if (ready < 0)
+            {
+                // Only a terminated queue settles waiters: an EINTR or EBUSY
+                // wait error leaves every WRITABLE/REQUEST record unread and
+                // level-true for the next Wait, so the waiters stay valid.
+                if (ZlinkException.IsTerminationError(
+                        NativeMethods.zlink_errno()))
+                    FailPublicWaitsTerminated();
                 throw ZlinkException.CreateConfigException(
                     (ConfigResult)errorOut);
+            }
             if (ready == 0)
                 return 0;
 
@@ -232,7 +249,9 @@ internal sealed class Poller : NativeOwner, IPoller
                     & (short)PollEventFlags.PollCompletion) != 0;
                 var writableReady = (nativeEvent.Events
                     & (short)PollEventFlags.PollOut) != 0;
-                if (completionReady || writableReady)
+                var errorReady = (nativeEvent.Events
+                    & (short)PollEventFlags.PollErr) != 0;
+                if (completionReady || writableReady || errorReady)
                 {
                     var itemIndex = FindSocket(nativeEvent.Socket);
                     if (itemIndex >= 0 && _items[itemIndex].OwnsCompletion)
@@ -339,6 +358,18 @@ internal sealed class Poller : NativeOwner, IPoller
         return -1;
     }
 
+    private int FindSocket(IZlinkSocket socket)
+    {
+        for (var i = 0; i < _items.Count; i++)
+        {
+            var item = _items[i];
+            if (item.IsSocket && ReferenceEquals(item.Socket, socket))
+                return i;
+        }
+
+        return -1;
+    }
+
     private int FindFd(int fd)
     {
         for (var i = 0; i < _items.Count; i++)
@@ -398,6 +429,13 @@ internal sealed class Poller : NativeOwner, IPoller
                 item.CompletionOwner!.TransferToRuntime(this);
     }
 
+    private void FailPublicWaitsTerminated()
+    {
+        foreach (var item in _items)
+            if (item.OwnsCompletion)
+                item.CompletionOwner!.FailPublicWaitTerminated();
+    }
+
     private void EnsureNotDisposed()
     {
         EnsureNativeHandle(nameof(Poller));
@@ -448,7 +486,7 @@ internal sealed class Poller : NativeOwner, IPoller
         public Timer? Timer { get; }
         public PollEventFlags Events { get; set; }
         public nuint Slot { get; }
-        public CompletionOwner? CompletionOwner { get; }
+        public CompletionOwner? CompletionOwner { get; set; }
         public bool OwnsCompletion { get; set; }
         public bool IsSocket => Kind == PollItemKind.Socket;
     }

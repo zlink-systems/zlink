@@ -8,7 +8,7 @@ source "${ROOT_DIR}/../tools/local_core_runtime.sh"
 zlink_export_local_core_runtime
 
 echo "[dotnet-tests] building ${PROJECT}"
-dotnet build "${PROJECT}"
+dotnet build "${PROJECT}" -m:1
 
 zlink_sync_linux_native_dirs_by_find "${ROOT_DIR}/tests/Zlink.Tests/bin" '*linux-x64/native'
 

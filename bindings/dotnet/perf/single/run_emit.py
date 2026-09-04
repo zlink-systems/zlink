@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import math
 import os
 import platform
 import re
@@ -723,13 +724,36 @@ def run_single_test(
             metrics.get(LATENCY_P95_METRIC),
             metrics.get(LATENCY_P99_METRIC),
         )
+        latency_mean = (
+            latency_mean if latency_mean is not None else metrics["latency"]
+        )
+        latency_p95 = (
+            latency_p95 if latency_p95 is not None else metrics["latency"]
+        )
+        latency_p99 = (
+            latency_p99 if latency_p99 is not None else metrics["latency"]
+        )
+        observed = (
+            metrics["throughput"], metrics["bandwidth"], latency_mean,
+            latency_p95, latency_p99,
+        )
+        if (not all(math.isfinite(value) for value in observed)
+                or metrics["throughput"] <= 0
+                or metrics["bandwidth"] <= 0
+                or any(value < 0 for value in observed[2:])):
+            return RunOutcome(
+                status="fail",
+                reason="invalid_metrics",
+                warnings=warnings or None,
+                stderr=stderr,
+            )
         return RunOutcome(
             status="success",
             throughput=metrics["throughput"],
             bandwidth=metrics["bandwidth"],
-            latency=latency_mean if latency_mean is not None else metrics["latency"],
-            latency_p95=latency_p95 if latency_p95 is not None else metrics["latency"],
-            latency_p99=latency_p99 if latency_p99 is not None else metrics["latency"],
+            latency=latency_mean,
+            latency_p95=latency_p95,
+            latency_p99=latency_p99,
             warnings=warnings or None,
             stderr=stderr,
             auto_hwm_details=auto_hwm_details or None,
