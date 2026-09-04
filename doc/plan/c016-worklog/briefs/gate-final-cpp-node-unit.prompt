@@ -1,0 +1,31 @@
+# Job: final framework unit gates for cpp and node on the committed main tree (plan §D "4언어 framework unit")
+
+You are a codex sub-agent under a Claude supervisor. Execution/classification job (no source edits).
+Read `AGENTS.md` (root) §2/§4, `doc/plan/c016-worklog/refactor-pass-cpp-node-summary.md` (last
+verified commands) and the earlier gate summaries for the known items. Do not modify source/tests,
+nothing under `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`.
+Do not rebuild Core or local packages. Other gates may run concurrently on the dotnet/java trees —
+only touch cpp and node.
+
+## Environment
+- cpp: build dir `framework/languages/cpp/build/linux-ninja-c-e2e` (`cmake --build ... -j4` to refresh;
+  `TMPDIR=/dev/shm/zlink-tmp-cpp`), then `ctest --test-dir framework/languages/cpp/build/linux-ninja-c-e2e --output-on-failure -j2`
+  (full). Known C items: inventory test 278 and the m6b 1909 cross-clock flake (re-run a failing test
+  once to confirm flake vs. deterministic; name the prior evidence `file:line`). Also run the
+  package tests if the tree has them wired (`Zlink.Framework.PackageTests`, see CMake).
+- node: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `flock -w7200 /tmp/zlink-node-gate.lock`,
+  `ZLINK_LIBRARY_PATH` unset: `npm run build` then the full `npm test` (read package.json for the exact
+  gate script), plus `npm run lint` (known C: `packages/framework/src/runtime/spots/spot-timer.ts:137`
+  strict-boolean-expressions). Known C from the earlier gate: ZoneWorld dist-not-built ×3 — check
+  whether `samples/ZoneWorld/dist` exists now; if not, build it via the sample's documented step and
+  re-run only those tests, recording it as an environment step.
+
+## Classify every failure
+(A) DONTWAIT/backpressure, (B) terminal/error classification, (C) known pre-existing (exact prior
+evidence `file:line`), (D) environment/runner, (E) binding-port dependency; first failing assertion
+with `file:line`; determinism (re-run once).
+
+## Deliverable
+`doc/plan/c016-worklog/gate-final-cpp-node-unit-summary.md`: cpp ctest counts (+ per-failure
+table), node test/lint counts (+ per-failure table), exact commands, logs under
+`zlink-work/c016/logs/gate-final-unit-<lang>-*.log`, BLOCKERS. Do not commit.
