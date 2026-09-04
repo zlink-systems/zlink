@@ -1,9 +1,10 @@
 //! WRITABLE retry contracts for asynchronous SEND and Core completion
 //! contracts for REQUEST.
 //!
-//! `submit()` retains the logical SEND packet across DONTWAIT backpressure and
-//! retries it only after the matching WRITABLE token is pulled. REQUEST reply
-//! and deadline completion remain Core-owned.
+//! `submit()` retains the logical SEND or REQUEST packet across DONTWAIT
+//! backpressure and retries it only after the matching WRITABLE token is
+//! pulled. After REQUEST admission, reply and deadline completion remain
+//! Core-owned.
 
 mod test_support;
 
@@ -176,6 +177,328 @@ fn public_poller_drains_writable_and_retries_the_same_packet() {
     assert_eq!(received.parts()[0].as_bytes(), waiting_header);
     assert_eq!(received.parts()[1].as_bytes(), waiting_body);
     assert!(!receiver.recv(&mut received, RecvFlags::DONT_WAIT).unwrap());
+}
+
+#[test]
+fn request_backpressure_retries_after_its_writable_then_receives_reply() {
+    let ctx = Context::new().unwrap();
+    ctx.options().set_auto_hwm_enabled(false).unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    dealer
+        .common_options()
+        .set_send_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router
+        .common_options()
+        .set_receive_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router
+        .common_options()
+        .set_receive_timeout(Duration::from_secs(5))
+        .unwrap();
+    router.bind("inproc://rust-request-writable-hwm").unwrap();
+    dealer
+        .connect("inproc://rust-request-writable-hwm")
+        .unwrap();
+
+    dealer
+        .send()
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut received = Received::empty();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+
+    let mut first = Box::pin(
+        dealer
+            .request()
+            .message(large_filler(b'a'))
+            .timeout(Duration::from_secs(5))
+            .submit(),
+    );
+    let mut retry = Box::pin(
+        dealer
+            .request()
+            .message(large_filler(b'b'))
+            .timeout(Duration::from_secs(5))
+            .submit(),
+    );
+    assert!(test_support::poll_once(&mut first).is_pending());
+    assert!(test_support::poll_once(&mut retry).is_pending());
+
+    let poller = Poller::new().unwrap();
+    poller
+        .add_socket(&dealer, POLLOUT | POLLCOMPLETION, 51)
+        .unwrap();
+    let mut events = [PollEvent::default()];
+
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    assert_eq!(received.parts()[0].as_bytes()[0], b'a');
+    received
+        .reply()
+        .message(Message::try_from(b"first-reply").unwrap())
+        .submit()
+        .unwrap();
+    assert!(!router.recv(&mut received, RecvFlags::DONT_WAIT).unwrap());
+
+    assert_eq!(poller.wait(&mut events, 5_000).unwrap(), 1);
+    assert!(matches!(
+        test_support::poll_once(&mut first),
+        Poll::Ready(Ok(ref parts)) if parts[0].as_bytes() == b"first-reply"
+    ));
+    assert!(test_support::poll_once(&mut retry).is_pending());
+
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    assert_eq!(received.parts()[0].as_bytes()[0], b'b');
+    received
+        .reply()
+        .message(Message::try_from(b"retry-reply").unwrap())
+        .submit()
+        .unwrap();
+    assert_eq!(poller.wait(&mut events, 5_000).unwrap(), 1);
+    assert!(matches!(
+        test_support::poll_once(&mut retry),
+        Poll::Ready(Ok(ref parts)) if parts[0].as_bytes() == b"retry-reply"
+    ));
+}
+
+#[test]
+fn backpressured_request_resumes_from_runtime_owner_without_repolling() {
+    let ctx = Context::new().unwrap();
+    ctx.options().set_auto_hwm_enabled(false).unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    dealer
+        .common_options()
+        .set_send_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router
+        .common_options()
+        .set_receive_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router
+        .common_options()
+        .set_receive_timeout(Duration::from_secs(5))
+        .unwrap();
+    router
+        .bind("inproc://rust-request-writable-runtime-owner")
+        .unwrap();
+    dealer
+        .connect("inproc://rust-request-writable-runtime-owner")
+        .unwrap();
+    dealer
+        .send()
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut received = Received::empty();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+
+    let mut first = Box::pin(
+        dealer
+            .request()
+            .message(large_filler(b'a'))
+            .timeout(Duration::from_secs(5))
+            .submit(),
+    );
+    let mut retry = Box::pin(
+        dealer
+            .request()
+            .message(large_filler(b'b'))
+            .timeout(Duration::from_secs(5))
+            .submit(),
+    );
+    assert!(test_support::poll_once(&mut first).is_pending());
+    assert!(test_support::poll_once(&mut retry).is_pending());
+    let (retry, polls) = counted(retry);
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiter = thread::spawn(move || {
+        done_tx.send(test_support::block_on(retry)).unwrap();
+    });
+
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    assert_eq!(received.parts()[0].as_bytes()[0], b'a');
+    received
+        .reply()
+        .message(Message::try_from(b"first-reply").unwrap())
+        .submit()
+        .unwrap();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    assert_eq!(received.parts()[0].as_bytes()[0], b'b');
+    received
+        .reply()
+        .message(Message::try_from(b"runtime-reply").unwrap())
+        .submit()
+        .unwrap();
+
+    let reply = done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("runtime owner did not resume the request")
+        .unwrap();
+    assert_eq!(reply[0].as_bytes(), b"runtime-reply");
+    waiter.join().unwrap();
+    assert!(matches!(
+        test_support::poll_once(&mut first),
+        Poll::Ready(Ok(ref parts)) if parts[0].as_bytes() == b"first-reply"
+    ));
+    let polls = polls.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        polls <= 8,
+        "parked REQUEST future was re-polled {polls} times: executor busy loop"
+    );
+}
+
+#[test]
+fn request_connect_before_bind_waits_for_writable_without_sleep() {
+    let ctx = Context::new().unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    dealer.common_options().set_immediate(true).unwrap();
+    router
+        .common_options()
+        .set_receive_timeout(Duration::from_secs(5))
+        .unwrap();
+    dealer
+        .connect("inproc://rust-request-connect-before-bind")
+        .unwrap();
+
+    let mut request = Box::pin(
+        dealer
+            .request()
+            .message(Message::try_from(b"before-bind").unwrap())
+            .timeout(Duration::from_secs(5))
+            .submit(),
+    );
+    assert!(test_support::poll_once(&mut request).is_pending());
+
+    let poller = Poller::new().unwrap();
+    poller
+        .add_socket(&dealer, POLLOUT | POLLCOMPLETION, 52)
+        .unwrap();
+    let mut events = [PollEvent::default()];
+    router
+        .bind("inproc://rust-request-connect-before-bind")
+        .unwrap();
+    assert_eq!(poller.wait(&mut events, 5_000).unwrap(), 1);
+    assert!(test_support::poll_once(&mut request).is_pending());
+
+    let mut received = Received::empty();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    assert_eq!(received.parts()[0].as_bytes(), b"before-bind");
+    received
+        .reply()
+        .message(Message::try_from(b"after-bind").unwrap())
+        .submit()
+        .unwrap();
+    assert_eq!(poller.wait(&mut events, 5_000).unwrap(), 1);
+    assert!(matches!(
+        test_support::poll_once(&mut request),
+        Poll::Ready(Ok(ref parts)) if parts[0].as_bytes() == b"after-bind"
+    ));
+}
+
+#[test]
+fn closing_a_socket_cleans_up_a_request_wait_token() {
+    let ctx = Context::new().unwrap();
+    let mut dealer = ctx.dealer_socket().unwrap();
+    dealer.common_options().set_immediate(true).unwrap();
+    dealer.connect("inproc://rust-request-token-close").unwrap();
+    let mut request = Box::pin(
+        dealer
+            .request()
+            .message(Message::try_from(b"close-before-admission").unwrap())
+            .timeout(Duration::from_secs(5))
+            .submit(),
+    );
+    assert!(test_support::poll_once(&mut request).is_pending());
+
+    dealer.close().unwrap();
+    let error = match test_support::block_on(request) {
+        Ok(_) => panic!("closed request must fail"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        ZlinkError::Submit(submit)
+            if submit.code() == SubmitResult::Terminated
+                && submit.native_errno() == libc::ESHUTDOWN
+    ));
+}
+
+#[test]
+fn request_and_send_wait_tokens_share_the_completion_lane() {
+    let ctx = Context::new().unwrap();
+    ctx.options().set_auto_hwm_enabled(false).unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    dealer
+        .common_options()
+        .set_send_high_water_mark(2 * RECORD_HWM)
+        .unwrap();
+    router
+        .common_options()
+        .set_receive_high_water_mark(2 * RECORD_HWM)
+        .unwrap();
+    router
+        .common_options()
+        .set_receive_timeout(Duration::from_secs(5))
+        .unwrap();
+    router.bind("inproc://rust-request-send-token-mix").unwrap();
+    dealer
+        .connect("inproc://rust-request-send-token-mix")
+        .unwrap();
+
+    dealer
+        .send()
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut received = Received::empty();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+
+    for marker in [b'1', b'2'] {
+        let result = test_support::block_on(dealer.send().message(large_filler(marker)).submit());
+        result.expect("filler admission");
+    }
+    let mut request = Box::pin(
+        dealer
+            .request()
+            .message(large_filler(b'r'))
+            .timeout(Duration::from_secs(5))
+            .submit(),
+    );
+    let mut send = Box::pin(dealer.send().message(large_filler(b's')).submit());
+    assert!(test_support::poll_once(&mut request).is_pending());
+    assert!(test_support::poll_once(&mut send).is_pending());
+
+    let poller = Poller::new().unwrap();
+    poller
+        .add_socket(&dealer, POLLOUT | POLLCOMPLETION, 53)
+        .unwrap();
+    let mut events = [PollEvent::default()];
+    for marker in [b'1', b'2'] {
+        assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+        assert_eq!(received.parts()[0].as_bytes()[0], marker);
+    }
+    assert_eq!(poller.wait(&mut events, 5_000).unwrap(), 1);
+    assert!(test_support::poll_once(&mut request).is_pending());
+    assert_eq!(test_support::poll_once(&mut send), Poll::Ready(Ok(())));
+
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    assert_eq!(received.parts()[0].as_bytes()[0], b'r');
+    received
+        .reply()
+        .message(Message::try_from(b"mixed-reply").unwrap())
+        .submit()
+        .unwrap();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+    assert_eq!(received.parts()[0].as_bytes()[0], b's');
+    assert_eq!(poller.wait(&mut events, 5_000).unwrap(), 1);
+    assert!(matches!(
+        test_support::poll_once(&mut request),
+        Poll::Ready(Ok(ref parts)) if parts[0].as_bytes() == b"mixed-reply"
+    ));
 }
 
 #[test]
@@ -754,5 +1077,58 @@ fn removing_the_target_fails_a_parked_router_send() {
         error.code()
     );
     waiter.join().unwrap();
+    drop(filler);
+}
+
+#[test]
+fn removing_the_target_fails_a_parked_router_request_with_typed_error() {
+    let ctx = Context::new().unwrap();
+    ctx.options().set_auto_hwm_enabled(false).unwrap();
+    let router = ctx.router_socket().unwrap();
+    let peer = ctx.router_socket().unwrap();
+    let rid = RoutingId::from(b"rust-request-terminal-target");
+    peer.set_routing_id(&rid).unwrap();
+    router
+        .common_options()
+        .set_send_high_water_mark(RECORD_HWM)
+        .unwrap();
+    peer.common_options()
+        .set_receive_high_water_mark(RECORD_HWM)
+        .unwrap();
+    router
+        .bind("inproc://rust-request-terminal-writable")
+        .unwrap();
+    peer.connect("inproc://rust-request-terminal-writable")
+        .unwrap();
+    router
+        .send(&rid)
+        .message(Message::try_from(b"ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut ready = Received::empty();
+    assert!(peer.recv(&mut ready, RecvFlags::NONE).unwrap());
+
+    let filler = saturate(|| Box::pin(router.send(&rid).message(large_filler(b't')).submit()));
+    assert!(!filler.is_empty(), "test target did not reach HWM");
+    let mut request = Box::pin(
+        router
+            .request(&rid)
+            .message(Message::try_from(b"never-admitted").unwrap())
+            .timeout(Duration::from_secs(5))
+            .submit(),
+    );
+    assert!(test_support::poll_once(&mut request).is_pending());
+
+    router.disconnect_rid(&rid).unwrap();
+    let error = match test_support::block_on(request) {
+        Ok(_) => panic!("removed request target must fail"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        ZlinkError::Submit(submit)
+            if matches!(submit.code(), SubmitResult::NotFound | SubmitResult::Terminated)
+                && matches!(submit.native_errno(), libc::ENOENT | libc::ESHUTDOWN)
+    ));
     drop(filler);
 }

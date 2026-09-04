@@ -284,8 +284,8 @@ pub enum zlink_option_t {
     ZLINK_OPT_SUBMIT_RETRY_MODE = 0x3037,
     ZLINK_OPT_SUBMIT_RETRY_TIMEOUT = 0x3038,
     ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS = 0x3039,
-    // ABI-retained REQUEST pending-admission limits. Ordinary SEND ignores
-    // both values.
+    // ABI-retained option values and set/get storage; SEND and REQUEST ignore
+    // both limits.
     ZLINK_OPT_PENDING_MAX_MSGS = 0x303A,
     ZLINK_OPT_PENDING_MAX_BYTES = 0x303B,
     ZLINK_OPT_FD = 0x3007,

@@ -466,6 +466,7 @@ fn reply_token_rejects_a_different_router_owner_before_native_submit() {
             .message(Message::try_from(b"right-owner").unwrap())
             .submit()
             .unwrap();
+        (router, other_router)
     });
 
     let reply = dealer
@@ -475,13 +476,13 @@ fn reply_token_rejects_a_different_router_owner_before_native_submit() {
         .submit_sync()
         .unwrap();
     assert_eq!(reply[0].as_bytes(), b"right-owner");
-    responder.join().unwrap();
+    drop(responder.join().unwrap());
 }
 
 #[test]
 fn reply_token_from_closed_router_is_rejected_by_recreated_router() {
     let ctx = Context::new().unwrap();
-    let mut original_router = ctx.router_socket().unwrap();
+    let original_router = ctx.router_socket().unwrap();
     let dealer = ctx.dealer_socket().unwrap();
     original_router
         .bind("inproc://rust-stale-reply-token-owner")
@@ -497,7 +498,6 @@ fn reply_token_from_closed_router_is_rejected_by_recreated_router() {
     let mut ready = Received::empty();
     assert!(original_router.recv(&mut ready, RecvFlags::NONE).unwrap());
 
-    let (stale_tx, stale_rx) = std::sync::mpsc::channel();
     let responder = std::thread::spawn(move || {
         let mut request = Received::empty();
         assert!(original_router.recv(&mut request, RecvFlags::NONE).unwrap());
@@ -508,8 +508,7 @@ fn reply_token_from_closed_router_is_rejected_by_recreated_router() {
             .message(Message::try_from(b"original-owner").unwrap())
             .submit()
             .unwrap();
-        original_router.close().unwrap();
-        stale_tx.send((rid, token)).unwrap();
+        (rid, token, original_router)
     });
 
     let reply = dealer
@@ -519,8 +518,8 @@ fn reply_token_from_closed_router_is_rejected_by_recreated_router() {
         .submit_sync()
         .unwrap();
     assert_eq!(reply[0].as_bytes(), b"original-owner");
-    let (rid, stale_token) = stale_rx.recv().unwrap();
-    responder.join().unwrap();
+    let (rid, stale_token, mut original_router) = responder.join().unwrap();
+    original_router.close().unwrap();
 
     let recreated_router = ctx.router_socket().unwrap();
     let error = recreated_router

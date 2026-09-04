@@ -5,11 +5,12 @@
 //! One owner drains a socket at a time.  The binding runtime owns unregistered
 //! sockets and drains them from one lazily started reactor thread that blocks
 //! in a native poller; a public poller atomically takes that responsibility
-//! while it has a `POLLCOMPLETION` registration.  REQUEST entries are
-//! registered before the native FINAL call.  SEND entries are registered only
-//! when Core hands out a wait token: a WRITABLE record that a concurrent drain
-//! pulls before that registration lands is parked by its opaque context and
-//! replayed when the registration arrives.
+//! while it has a `POLLCOMPLETION` registration. REQUEST entries are
+//! registered before the native FINAL call and may move from WRITABLE waits to
+//! the final REQUEST completion. SEND entries are registered only when Core
+//! hands out a wait token: a WRITABLE record that a concurrent drain pulls
+//! before that registration lands is parked by its opaque context and replayed
+//! when the registration arrives.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -68,6 +69,7 @@ struct EntryState {
     settled: bool,
     detached: bool,
     owner_shutdown: bool,
+    awaiting_writable: bool,
     outcome: Option<CompletionOutcome>,
     waker: Option<Waker>,
 }
@@ -92,6 +94,7 @@ impl CompletionEntry {
                 settled: false,
                 detached: false,
                 owner_shutdown: false,
+                awaiting_writable: kind == CompletionEntryKind::SendRetry,
                 outcome: None,
                 waker: None,
             }),
@@ -103,11 +106,12 @@ impl CompletionEntry {
         self.kind
     }
 
-    pub(crate) fn publish(&self, completion_id: u64) {
+    fn publish(&self, completion_id: u64, awaiting_writable: bool) {
         let waker = {
             let mut state = self.state.lock().expect("completion entry");
             state.completion_id = completion_id;
             state.published = true;
+            state.awaiting_writable = awaiting_writable;
             if !state.owner_shutdown
                 && matches!(
                     state.outcome.as_ref(),
@@ -128,6 +132,14 @@ impl CompletionEntry {
         if let Some(waker) = waker {
             waker.wake();
         }
+    }
+
+    pub(crate) fn publish_writable(&self, completion_id: u64) {
+        self.publish(completion_id, true);
+    }
+
+    pub(crate) fn publish_request(&self, completion_id: u64) {
+        self.publish(completion_id, false);
     }
 
     fn capture(&self, completion: &mut ffi::zlink_completion_t) -> CaptureResult {
@@ -200,6 +212,7 @@ impl CompletionEntry {
             state.published = false;
             state.captured = false;
             state.settled = false;
+            state.awaiting_writable = false;
             return Poll::Ready(outcome);
         }
         if state.waker.as_ref().is_none_or(|old| !old.will_wake(waker)) {
@@ -266,15 +279,19 @@ impl CompletionEntry {
             state.captured = true;
             state.owner_shutdown = true;
             if !state.detached {
-                state.outcome = Some(match self.kind {
-                    CompletionEntryKind::SendRetry => CompletionOutcome::Writable {
-                        completion_id: state.completion_id,
-                        result: Err(submit_error_from_errno(libc::ESHUTDOWN)),
+                state.outcome = Some(
+                    if self.kind == CompletionEntryKind::SendRetry || state.awaiting_writable {
+                        CompletionOutcome::Writable {
+                            completion_id: state.completion_id,
+                            result: Err(submit_error_from_errno(libc::ESHUTDOWN)),
+                        }
+                    } else {
+                        CompletionOutcome::Request(Err(RequestError::new(
+                            RequestResult::Terminated,
+                            libc::ESHUTDOWN,
+                        )))
                     },
-                    CompletionEntryKind::Request => CompletionOutcome::Request(Err(
-                        RequestError::new(RequestResult::Terminated, libc::ESHUTDOWN),
-                    )),
-                });
+                );
             }
             state.settled = false;
             Self::settle_if_joined(&mut state)
@@ -349,8 +366,9 @@ impl CompletionOwner {
 
     pub(crate) fn register_request(
         self: &Arc<Self>,
+        target: Option<RoutingId>,
     ) -> Result<(Arc<CompletionEntry>, *mut c_void), SubmitError> {
-        let entry = CompletionEntry::new(CompletionEntryKind::Request, None);
+        let entry = CompletionEntry::new(CompletionEntryKind::Request, target);
         let context = self.next_context();
         let mut state = self.state.lock().expect("completion owner");
         if state.shutdown {
@@ -393,7 +411,7 @@ impl CompletionOwner {
             let start_error = self.start_runtime_locked(&mut state).err();
             (parked, start_error)
         };
-        entry.publish(completion_id);
+        entry.publish_writable(completion_id);
         if let Some(parked) = parked {
             let captured = entry.capture_parked(&parked);
             if captured.detached {
@@ -464,10 +482,12 @@ impl CompletionOwner {
                 if let Some(waker) = captured.waker {
                     wakers.push(waker);
                 }
+                let request_completion =
+                    completion.kind == ffi::zlink_completion_kind_t::ZLINK_COMPLETION_REQUEST;
                 if public_owner && entry.kind() == CompletionEntryKind::Request {
                     entry.wait_settled();
                 }
-                if entry.kind() == CompletionEntryKind::Request || captured.detached {
+                if request_completion || captured.detached {
                     self.unregister(context as *mut c_void);
                 }
             } else {
@@ -740,6 +760,18 @@ fn completion_outcome(
             completion.send_result,
             completion.send_terminal_errno,
         ),
+        CompletionEntryKind::Request
+            if completion.kind == ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE =>
+        {
+            writable_outcome(
+                expected_target,
+                completion.kind,
+                completion.completion_id,
+                &completion.peer_rid,
+                completion.send_result,
+                completion.send_terminal_errno,
+            )
+        }
         CompletionEntryKind::Request => {
             let outcome = if completion.kind
                 != ffi::zlink_completion_kind_t::ZLINK_COMPLETION_REQUEST
@@ -822,7 +854,7 @@ mod tests {
 
         let waker = Waker::from(Arc::new(NoopWake));
         assert!(entry.poll_writable(&waker).is_pending());
-        entry.publish(41);
+        entry.publish_writable(41);
         assert!(matches!(entry.poll_writable(&waker), Poll::Ready(Ok(()))));
     }
 
@@ -830,7 +862,7 @@ mod tests {
     fn parked_writable_replays_like_a_live_record() {
         let target = RoutingId::from(b"parked-target");
         let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, Some(target));
-        entry.publish(71);
+        entry.publish_writable(71);
         let parked = ParkedWritable {
             completion_id: 71,
             peer_rid: *target.as_raw(),
@@ -846,7 +878,7 @@ mod tests {
     #[test]
     fn mismatched_writable_token_cannot_resume_the_expected_waiter() {
         let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, None);
-        entry.publish(41);
+        entry.publish_writable(41);
         let mut wrong = ffi::zlink_completion_t::empty();
         wrong.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
         wrong.completion_id = 42;
@@ -870,7 +902,7 @@ mod tests {
         let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, Some(target));
         let waker = Waker::from(Arc::new(NoopWake));
 
-        entry.publish(51);
+        entry.publish_writable(51);
         let mut wrong_target = ffi::zlink_completion_t::empty();
         wrong_target.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
         wrong_target.completion_id = 51;
@@ -892,7 +924,7 @@ mod tests {
         let waker = Waker::from(Arc::new(NoopWake));
 
         for token in [52, 53] {
-            entry.publish(token);
+            entry.publish_writable(token);
             let mut completion = ffi::zlink_completion_t::empty();
             completion.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
             completion.completion_id = token;
@@ -904,6 +936,45 @@ mod tests {
     }
 
     #[test]
+    fn request_entry_moves_from_writable_to_request_completion() {
+        let entry = CompletionEntry::new(CompletionEntryKind::Request, None);
+        let waker = Waker::from(Arc::new(NoopWake));
+
+        entry.publish_writable(54);
+        let mut writable = ffi::zlink_completion_t::empty();
+        writable.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
+        writable.completion_id = 54;
+        writable.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
+        entry.capture(&mut writable);
+        assert!(matches!(entry.poll_writable(&waker), Poll::Ready(Ok(()))));
+
+        entry.publish_request(55);
+        let mut request = ffi::zlink_completion_t::empty();
+        request.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_REQUEST;
+        request.completion_id = 55;
+        request.request_result = ffi::zlink_request_result_t::ZLINK_REQUEST_OK;
+        entry.capture(&mut request);
+        assert!(matches!(
+            entry.poll_request(&waker),
+            Poll::Ready(Ok(parts)) if parts.is_empty()
+        ));
+    }
+
+    #[test]
+    fn request_writable_shutdown_is_a_typed_submit_failure() {
+        let entry = CompletionEntry::new(CompletionEntryKind::Request, None);
+        entry.publish_writable(56);
+        entry.shutdown();
+        let waker = Waker::from(Arc::new(NoopWake));
+        assert!(matches!(
+            entry.poll_writable(&waker),
+            Poll::Ready(Err(error))
+                if error.code() == SubmitResult::Terminated
+                    && error.native_errno() == libc::ESHUTDOWN
+        ));
+    }
+
+    #[test]
     fn terminal_writable_maps_to_a_terminal_submit_error() {
         for (errno, expected) in [
             (libc::ESHUTDOWN, SubmitResult::Terminated),
@@ -911,7 +982,7 @@ mod tests {
             (156_384_765, SubmitResult::Terminated),
         ] {
             let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, None);
-            entry.publish(61);
+            entry.publish_writable(61);
             let mut completion = ffi::zlink_completion_t::empty();
             completion.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
             completion.completion_id = 61;
@@ -937,7 +1008,7 @@ mod tests {
         completion.completion_id = 52;
         completion.request_result = ffi::zlink_request_result_t::ZLINK_REQUEST_TIMED_OUT;
         entry.capture(&mut completion);
-        entry.publish(52);
+        entry.publish_request(52);
 
         let state = entry.state.lock().expect("completion state");
         assert!(state.settled);

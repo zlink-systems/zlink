@@ -300,7 +300,7 @@ impl SendAttemptError {
 /// Submits Core shared copies of `parts` in sequence and returns the final
 /// `(rc, errno)`. Core consumes every submitted part and re-initializes it, so
 /// the copy is closed after each call and the retained packet is untouched.
-fn submit_shared_part_sequence(
+pub(super) fn submit_shared_part_sequence(
     parts: &mut MessageParts,
     mut submit: impl FnMut(*mut ffi::zlink_msg_t, ffi::zlink_part_flag_t, bool) -> i32,
 ) -> Result<(i32, i32), SubmitError> {

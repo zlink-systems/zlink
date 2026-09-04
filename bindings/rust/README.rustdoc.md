@@ -26,7 +26,7 @@ The current approved crate payload contains the Core 0.17.0 ABI with the 0.17.0
 Linux x86_64 runtime. Other target triples fail during build until a matching native
 runtime has passed the Core package provenance and clean-consumer checks.
 
-## DONTWAIT SEND and WRITABLE
+## DONTWAIT SEND/REQUEST and WRITABLE
 
 - A DONTWAIT SEND makes one admission attempt. Immediate admission succeeds
   with completion ID `0`; Core does not enqueue a SEND completion.
@@ -39,22 +39,24 @@ runtime has passed the Core package provenance and clean-consumer checks.
 - ROUTER and STREAM sends to a routing ID that has no route fail as
   `SubmitResult::NotConnected` without a wait token.
 
-`SendOp::submit()` implements the managed asynchronous form. It retains the
-exact multipart packet, pulls completion records through NO_DATA after
-`POLLOUT`, matches the token, user context, and routed target, then resubmits
-that packet. A repeated backpressure result arms the new token and repeats the
-same state transition. Without a public poller the socket's completion queue is
-drained by one binding reactor thread per socket that blocks in a native
-poller on `POLLCOMPLETION`, starts with the first wait token or REQUEST, and
-retires when no operation is outstanding; parked futures are woken by that
-thread, never by executor re-polling.
+`SendOp::submit()` and `RequestOp::submit()` implement the managed asynchronous
+form. Each retains the exact multipart packet, pulls completion records through
+NO_DATA after `POLLOUT`, matches the token, user context, and routed target,
+then resubmits that packet. A repeated backpressure result arms the new token
+and repeats the same state transition. After REQUEST admission, its future
+waits for the existing REQUEST reply or terminal completion. Without a public
+poller the socket's completion queue is drained by one binding reactor thread
+per socket that blocks in a native poller on `POLLCOMPLETION`, starts with the
+first wait token or REQUEST, and retires when no operation is outstanding;
+parked futures are woken by that thread, never by executor re-polling.
 
 Registering a socket with a public `Poller` for `POLLCOMPLETION` transfers
 completion-queue ownership to that poller. Include `POLLOUT` in the mask and
-keep calling `Poller::wait()` while it drives backpressured SEND futures.
-REQUEST/reply continues to use `CompletionKind::Request` and
-`POLLCOMPLETION`; successful REQUEST FINAL still reserves a nonzero completion
-ID and completes with its reply or terminal result.
+keep calling `Poller::wait()` while it drives backpressured SEND or REQUEST
+futures.
+REQUEST admission can use the same WRITABLE path. A successful REQUEST FINAL
+reserves a different nonzero completion ID and then completes with its reply or
+terminal result through `CompletionKind::Request` and `POLLCOMPLETION`.
 
 `CompletionKind::Send` remains public with ABI value `1`, but it is reserved:
 ordinary SEND success never produces that record. `CompletionKind::Request`
@@ -63,10 +65,10 @@ synchronous one-shot and produces neither SEND nor WRITABLE completions;
 `SendFlags::DONT_WAIT` backpressure is returned as `SubmitError` with
 `SubmitResult::Backpressured` and native `EAGAIN`.
 
-The ABI-retained `ZLINK_OPT_PENDING_MAX_MSGS` and
-`ZLINK_OPT_PENDING_MAX_BYTES` values limit only Core-owned DONTWAIT REQUEST
-pending admission. Ordinary SEND ignores them, and the typed Rust socket
-option surface does not expose them as SEND controls.
+`ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` retain their ABI
+values and set/get storage but are ignored. Core owns no pre-admission SEND or
+REQUEST payload pool, and the typed Rust socket option surface does not expose
+them as flow-control settings.
 
 ## Context Thread Safety
 

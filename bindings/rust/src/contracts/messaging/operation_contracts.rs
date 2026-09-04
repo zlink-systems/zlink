@@ -31,8 +31,8 @@ pub enum CompletionKind {
     Send = 1,
     /// A REQUEST completed with a reply or terminal result.
     Request = 2,
-    /// A DONTWAIT SEND wait token became eligible for one retry.
+    /// A DONTWAIT SEND or REQUEST wait token became eligible for one retry.
     ///
-    /// This is permission to resubmit the same packet, not SEND success.
+    /// This is permission to resubmit the same packet, not admission success.
     Writable = 3,
 }

@@ -171,12 +171,18 @@ impl RequestOp<Ready> {
         self
     }
 
+    /// Starts nonblocking REQUEST admission and resolves with the reply.
+    ///
+    /// Under backpressure the future retains the multipart request, waits for
+    /// its exact WRITABLE token, and resubmits it once. Repeated refusals repeat
+    /// that transition. The reply timeout starts only after admission.
     pub fn submit(
         self,
     ) -> impl std::future::Future<Output = Result<Vec<Message>, ZlinkError>> + Send {
         crate::operations::submit_routed_request(self.inner)
     }
 
+    /// Uses Core blocking admission and waits for the reply.
     pub fn submit_sync(self) -> Result<Vec<Message>, ZlinkError> {
         crate::operations::submit_routed_request_sync(self.inner)
     }

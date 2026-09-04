@@ -13,13 +13,13 @@ pub(crate) mod private {
 pub const POLLIN: i16 = 1;
 /// Poll event flag: socket-wide writable readiness is present.
 ///
-/// For a DONTWAIT SEND this aggregate level hint can represent an unread
-/// WRITABLE record. The binding pulls the completion queue and resumes only
-/// operations whose exact token, context, and routed target match.
+/// For a DONTWAIT SEND or REQUEST this aggregate level hint can represent an
+/// unread WRITABLE record. The binding pulls the completion queue and resumes
+/// only operations whose exact token, context, and routed target match.
 pub const POLLOUT: i16 = 2;
 /// Poll event flag: a completion queue record is available. REQUEST uses this
-/// for its terminal result; SEND backpressure is resumed by WRITABLE on
-/// [`POLLOUT`].
+/// for both WRITABLE admission retries and its terminal result; SEND
+/// backpressure is resumed by WRITABLE on [`POLLOUT`].
 pub const POLLCOMPLETION: i16 = 32;
 
 /// A built-in socket source that can be registered with a [`Poller`].
@@ -107,7 +107,7 @@ impl Poller {
     /// echoed back in the matching [`PollEvent`].
     ///
     /// Register both [`POLLOUT`] and [`POLLCOMPLETION`] when this poller owns
-    /// progress for managed SEND futures.
+    /// progress for managed SEND or REQUEST futures.
     pub fn add_socket(
         &self,
         socket: &dyn Pollable,
@@ -121,7 +121,8 @@ impl Poller {
     ///
     /// Adding or removing [`POLLCOMPLETION`] transfers the socket completion
     /// drain owner atomically with the native registration change. Register
-    /// [`POLLOUT`] with it when this poller drives backpressured SEND futures.
+    /// [`POLLOUT`] with it when this poller drives backpressured SEND or REQUEST
+    /// futures.
     pub fn modify_socket(&self, socket: &dyn Pollable, events: i16) -> Result<(), ConfigError> {
         self.inner.modify_socket(socket, events)
     }
@@ -163,8 +164,8 @@ impl Poller {
     /// blocks indefinitely. Returns the number of ready sources written.
     /// Before returning a socket's [`POLLOUT`] or [`POLLCOMPLETION`] event,
     /// the owning poller pulls completion records through NO_DATA so matching
-    /// WRITABLE waiters can retry and REQUEST waiters retain their existing
-    /// completion behavior.
+    /// WRITABLE waiters can retry and admitted REQUEST waiters can receive
+    /// their reply or terminal result.
     pub fn wait(&self, events: &mut [PollEvent], timeout_ms: i64) -> Result<usize, RecvError> {
         self.inner.wait(events, timeout_ms)
     }

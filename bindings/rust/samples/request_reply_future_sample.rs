@@ -3,7 +3,6 @@
 #[path = "sample_support.rs"]
 mod sample_support;
 
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -40,10 +39,9 @@ fn main() {
         .recv(&mut barrier, zlink::RecvFlags::NONE)
         .expect("barrier recv failed");
 
-    let (request_done_tx, request_done_rx) = mpsc::channel();
     let expected_routing_id = routing_id;
     let router_thread = router_socket;
-    thread::spawn(move || {
+    let request_handler = thread::spawn(move || {
         let mut received = zlink::Received::empty();
         router_thread
             .recv(&mut received, zlink::RecvFlags::NONE)
@@ -61,7 +59,7 @@ fn main() {
             .message(Message::try_from(b"pong").expect("reply message failed"))
             .submit()
             .expect("reply send failed");
-        request_done_tx.send(()).expect("request done send failed");
+        router_thread
     });
 
     let reply = sample_support::block_on(
@@ -73,9 +71,7 @@ fn main() {
     )
     .expect("dealer request submit failed");
     assert_eq!(reply[0].as_str().unwrap_or("?"), "pong");
-    request_done_rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("request handler timed out");
+    drop(request_handler.join().expect("request handler failed"));
 
     println!("[dealer-router/request-reply/future] send: \"ping\" -> recv: \"pong\"");
     // --8<-- [end:doc]

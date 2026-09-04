@@ -1,7 +1,6 @@
 //! Shared multi-socket request/reply benchmark implementation.
 
 use crate::common;
-use std::collections::VecDeque;
 use std::future::Future;
 use std::io::{self, BufRead};
 use std::pin::Pin;
@@ -51,40 +50,10 @@ enum RequestClientSocket {
     },
 }
 
-type RequestTask = Pin<Box<dyn Future<Output = RequestCompletion> + Send>>;
-
-struct LogicalRequest {
-    socket_index: usize,
-    sequence: u64,
-    payload: Vec<u8>,
-}
-
-impl LogicalRequest {
-    fn new(socket_index: usize, sequence: u64, payload_size: usize, message_size: usize) -> Self {
-        let mut payload = vec![0; payload_size];
-        common::encode_header(
-            &mut payload,
-            common::PHASE_ACTIVE,
-            message_size as u32,
-            sequence,
-        );
-        Self {
-            socket_index,
-            sequence,
-            payload,
-        }
-    }
-}
-
-struct RequestCompletion {
-    request: LogicalRequest,
-    outcome: Result<Vec<Message>, ZlinkError>,
-}
+type RequestTask = Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>;
 
 impl RequestClientSocket {
-    fn request_task(&self, request: LogicalRequest, timeout: Duration) -> RequestTask {
-        let payload = Message::try_from(request.payload.as_slice()).expect("request payload");
-
+    fn request_task(&self, payload: Message, timeout: Duration) -> RequestTask {
         let operation = match self {
             Self::Dealer(socket) => socket.request(),
             Self::Router { socket, target } => socket.request(target),
@@ -99,12 +68,7 @@ impl RequestClientSocket {
             operation.timeout(timeout).submit()
         };
 
-        Box::pin(async move {
-            RequestCompletion {
-                request,
-                outcome: future.await,
-            }
-        })
+        Box::pin(future)
     }
 }
 
@@ -293,46 +257,39 @@ pub fn run_client(config: ReqRepConfig) {
     let payload_size = args.msg_size.max(common::HEADER_SIZE);
     let active_deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
     let mut sequences = vec![1u64; sockets.len()];
-    let mut retry_requests: Vec<VecDeque<LogicalRequest>> =
-        (0..sockets.len()).map(|_| VecDeque::new()).collect();
     let mut requests = common::ConcurrentTasks::<RequestTask>::new(0);
     let mut latency = common::LatencyStats::new();
 
     // There is deliberately no per-socket or global application window. Each
-    // turn adds a request per socket, and Core admission plus the request
-    // Futures themselves determine how many remain in flight.
+    // request Future owns any refused payload and waits for its own WRITABLE
+    // token before resubmitting; admitted requests remain in flight until the
+    // Core REQUEST completion arrives.
     while Instant::now() < active_deadline {
-        let mut new_tasks = Vec::with_capacity(sockets.len());
         for (socket_index, socket) in sockets.iter().enumerate() {
             if Instant::now() >= active_deadline {
                 break;
             }
-            let request = retry_requests[socket_index].pop_front().unwrap_or_else(|| {
-                let sequence = sequences[socket_index];
-                sequences[socket_index] = sequence.wrapping_add(1);
-                LogicalRequest::new(socket_index, sequence, payload_size, args.msg_size)
-            });
-            let task_slot = requests.push(socket.request_task(request, request_timeout));
-            new_tasks.push(task_slot);
+            let sequence = sequences[socket_index];
+            sequences[socket_index] = sequence.wrapping_add(1);
+            let mut payload = Message::with_size(payload_size).expect("request payload");
+            common::encode_header(
+                payload.data_mut(),
+                common::PHASE_ACTIVE,
+                args.msg_size as u32,
+                sequence,
+            );
+            requests.push(socket.request_task(payload, request_timeout));
         }
 
         let ready = requests.poll_ready();
-        let mut progressed = !ready.is_empty();
+        let progressed = !ready.is_empty();
         for (_, completion) in ready {
-            if let Some(retry) =
-                process_completion(completion, args.msg_size, active_deadline, &mut latency)
-            {
-                enqueue_retry(&mut retry_requests, retry);
-            }
+            process_completion(completion, args.msg_size, active_deadline, &mut latency);
         }
-        progressed |= new_tasks
-            .iter()
-            .any(|task_slot| requests.is_pending(*task_slot));
         if Instant::now() < active_deadline {
-            // Core queues request terminals on the socket completion lane.
-            // Even after executor progress, a zero-time wait must drain that
-            // lane so the terminal can wake its Future. Only a genuinely idle
-            // turn blocks, and then only until the active deadline.
+            // WRITABLE and REQUEST records share the socket completion lane.
+            // Even after executor progress, a zero-time wait drains that lane;
+            // an idle turn blocks until Core wakes it or the phase ends.
             let wait_ms = if progressed {
                 0
             } else {
@@ -350,7 +307,7 @@ pub fn run_client(config: ReqRepConfig) {
         let ready = requests.poll_ready();
         let progressed = !ready.is_empty();
         for (_, completion) in ready {
-            let _ = process_completion(completion, args.msg_size, active_deadline, &mut latency);
+            process_completion(completion, args.msg_size, active_deadline, &mut latency);
         }
         if requests.any_pending() {
             let wait_ms = if progressed {
@@ -364,7 +321,7 @@ pub fn run_client(config: ReqRepConfig) {
         }
     }
     for (_, completion) in requests.poll_ready() {
-        let _ = process_completion(completion, args.msg_size, active_deadline, &mut latency);
+        process_completion(completion, args.msg_size, active_deadline, &mut latency);
     }
     assert!(
         !requests.any_pending(),
@@ -416,50 +373,28 @@ macro_rules! impl_client_common_options {
 impl_client_common_options!(DealerSocket, RouterSocket);
 
 fn process_completion(
-    completion: RequestCompletion,
+    outcome: Result<Vec<Message>, ZlinkError>,
     message_size: usize,
     active_deadline: Instant,
     latency: &mut common::LatencyStats,
-) -> Option<LogicalRequest> {
-    let RequestCompletion { request, outcome } = completion;
+) {
     match outcome {
         Ok(parts) => {
             if Instant::now() < active_deadline {
                 let payload = common::message_payload(&parts);
                 common::record_active_rtt_latency(payload, message_size, latency);
             }
-            None
-        }
-        Err(error) if retryable_pre_admission(&error) => {
-            (Instant::now() < active_deadline).then_some(request)
         }
         // Request-domain completion failures are terminal outcomes; keep
         // driving the active window after accounting for them.
-        Err(ZlinkError::Request(_)) => None,
+        Err(ZlinkError::Request(_)) => {}
         Err(error) => panic!("request failed: {error}"),
     }
-}
-
-fn retryable_pre_admission(error: &ZlinkError) -> bool {
-    matches!(
-        error,
-        ZlinkError::Submit(submit)
-            if matches!(
-                submit.code(),
-                SubmitResult::Backpressured | SubmitResult::NotAdmitted
-            )
-    )
-}
-
-fn enqueue_retry(retry_requests: &mut [VecDeque<LogicalRequest>], retry: LogicalRequest) {
-    let socket_index = retry.socket_index;
-    retry_requests[socket_index].push_back(retry);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zlink::SubmitError;
 
     #[test]
     fn official_configs_keep_distinct_request_roles() {
@@ -472,73 +407,5 @@ mod tests {
         assert_eq!(router_router.pattern, "MULTI_ROUTER_ROUTER_REQREP");
         assert!(router_router.router_clients);
         assert!(router_router.server_has_routing_id);
-    }
-
-    #[test]
-    fn only_pre_admission_pressure_is_resubmitted() {
-        assert!(retryable_pre_admission(&ZlinkError::Submit(
-            SubmitError::new(SubmitResult::Backpressured, libc::EAGAIN)
-        )));
-        assert!(retryable_pre_admission(&ZlinkError::Submit(
-            SubmitError::new(SubmitResult::NotAdmitted, libc::EAGAIN)
-        )));
-        assert!(!retryable_pre_admission(&ZlinkError::Submit(
-            SubmitError::new(SubmitResult::NotConnected, libc::ENOTCONN)
-        )));
-    }
-
-    #[test]
-    fn pre_admission_retry_preserves_the_logical_payload() {
-        let request = LogicalRequest::new(3, 17, common::HEADER_SIZE, common::HEADER_SIZE);
-        let payload = request.payload.clone();
-        let completion = RequestCompletion {
-            request,
-            outcome: Err(SubmitError::new(SubmitResult::Backpressured, libc::EAGAIN).into()),
-        };
-        let mut latency = common::LatencyStats::new();
-        let retry = process_completion(
-            completion,
-            common::HEADER_SIZE,
-            Instant::now() + Duration::from_secs(1),
-            &mut latency,
-        )
-        .expect("retryable pre-admission failure");
-
-        assert_eq!(retry.socket_index, 3);
-        assert_eq!(retry.sequence, 17);
-        assert_eq!(retry.payload, payload);
-    }
-
-    #[test]
-    fn multiple_pre_admission_retries_for_one_socket_are_preserved_in_order() {
-        let mut retry_requests: Vec<VecDeque<LogicalRequest>> =
-            (0..4).map(|_| VecDeque::new()).collect();
-        let mut expected_payloads = Vec::new();
-        let mut latency = common::LatencyStats::new();
-
-        for sequence in [17, 18] {
-            let request =
-                LogicalRequest::new(3, sequence, common::HEADER_SIZE, common::HEADER_SIZE);
-            expected_payloads.push(request.payload.clone());
-            let retry = process_completion(
-                RequestCompletion {
-                    request,
-                    outcome: Err(SubmitError::new(SubmitResult::NotAdmitted, libc::EAGAIN).into()),
-                },
-                common::HEADER_SIZE,
-                Instant::now() + Duration::from_secs(1),
-                &mut latency,
-            )
-            .expect("retryable pre-admission failure");
-            enqueue_retry(&mut retry_requests, retry);
-        }
-
-        assert_eq!(retry_requests[3].len(), 2);
-        for (sequence, expected_payload) in [17, 18].into_iter().zip(expected_payloads) {
-            let retry = retry_requests[3].pop_front().expect("queued retry");
-            assert_eq!(retry.sequence, sequence);
-            assert_eq!(retry.payload, expected_payload);
-        }
-        assert!(retry_requests[3].is_empty());
     }
 }
