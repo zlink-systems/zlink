@@ -1,0 +1,39 @@
+# Job: DeliveryDispatch parity — start the courier offer deadline after the status publish in the cpp, dotnet and node samples (java already fixed)
+
+You are a codex sub-agent under a Claude supervisor. One cause applied to three sample
+implementations; 1.5 h cap. Read `AGENTS.md` (root) §2/§3 (samples use public API only),
+`framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, framework runtime source, or `framework/languages/java/**`;
+do not commit. Another job edits `framework/languages/dotnet/cross-language/**` (TestHost) — do not
+touch it; the dotnet unit-test tree is being gated — do not run `dotnet test tests/Zlink.Framework.UnitTests`.
+
+## Facts
+- Java fix and rationale: commit `ed156f5983` (`git show ed156f5983`): the offer row/deadline (900 ms
+  courier decision timeout) was recorded BEFORE awaiting the Tracking status publish, so a slow
+  publish consumed the courier's response window, contrary to the sample contract §7.2
+  (`framework/doc/framework/common/sample/deliverydispatch/README.ko.md:292-296`: the attempt expires
+  only when courier A does not answer within the deadline AFTER receiving the offer). The java fix
+  creates the offer row inside the publish completion, immediately followed by the one-way courier
+  send, first dispatch and re-dispatch alike; regression test DispatchWorkerDeadlineTest.
+- The other three implementations still record the deadline before the publish
+  (`bucketB-java-deliverydispatch-summary.md` parity section):
+  cpp `framework/languages/cpp/samples/DeliveryDispatch/Server/Dispatch/main.cpp:205-207,243-246`;
+  dotnet `framework/languages/dotnet/samples/DeliveryDispatch/Server/Dispatch/DispatchWorker.cs:138-141,200-203`;
+  node `framework/languages/node/samples/DeliveryDispatch.Ts/Server/DispatchCenter/dispatch-worker.ts:63-83`.
+  They currently pass by timing; make them match the contract and java.
+- Env: cpp `ZLINK_CPP_BUILD_DIR=/home/hep7/project/zlink/framework/languages/cpp/build/linux-ninja-c-e2e`
+  with `framework/languages/cpp/samples/run_samples.sh DeliveryDispatch` (check the selector syntax in
+  the script); node `cd framework/languages/node && TMPDIR=/dev/shm/zlink-tmp-node flock -w7200 /tmp/zlink-node-gate.lock bash samples/DeliveryDispatch.Ts/run_sample.sh`;
+  dotnet `framework/languages/dotnet/samples/DeliveryDispatch/run_sample.sh` with the dotnet env block
+  (`TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1`, NUGET_PACKAGES keyed by the nupkg hash as in other briefs). Docker OK.
+
+## What to do
+For each of cpp, dotnet, node: move the offer row/deadline creation to after the status publish
+completes, adjacent to the courier send, for first dispatch and re-dispatch; add (or extend) a
+sample-level unit test where the sample has a test project (dotnet/node have contract tests under
+`test/`), otherwise document why not; run the sample 2× each. Keep the diffs minimal and idiomatic to
+each sample.
+
+## Deliverable
+`doc/plan/c016-worklog/parity-deliverydispatch-offer-deadline-summary.md`: per language change with
+`file:line`, test, 2× results, BLOCKERS.

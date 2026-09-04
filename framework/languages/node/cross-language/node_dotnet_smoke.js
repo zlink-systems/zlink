@@ -657,7 +657,7 @@ async function dotnetConnectorToNodeStreamServer(tempDir) {
         const fields = record.attributes;
         fsSync.appendFileSync(
           flowFile,
-          `packet=${fields.packet ?? '<null>'} flow=${fields.flow ?? '<null>'} origin=${fields.origin ?? '<null>'}\n`
+          `packet=${fields.packet_name ?? '<null>'} flow=${fields.flow_id ?? '<null>'} origin=${fields.flow_origin ?? '<null>'}\n`
         );
       },
       forceFlush: async () => undefined,

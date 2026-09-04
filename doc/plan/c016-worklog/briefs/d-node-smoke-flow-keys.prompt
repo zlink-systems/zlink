@@ -1,0 +1,25 @@
+# Job: node cross-language smoke — read the spec attribute names (`packet_name`/`flow_id`/`flow_origin`) in the Node LoggerProvider callback
+
+You are a codex sub-agent under a Claude supervisor. One cause, 45 min cap. Read `AGENTS.md` (root)
+§2/§3. Only `framework/languages/node/cross-language/**` may change. Never touch `core/**`,
+`bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other trees; do not
+commit. Do not run `dotnet test` (a full .NET unit gate holds `/tmp/zlink-dotnet-gate.lock`); the
+smoke's .NET TestHost peer is fine to run.
+
+## Facts (`doc/plan/c016-worklog/d-dotnet-testhost-flow-tags-summary.md`)
+- `framework/languages/node/cross-language/node_dotnet_smoke.js:657-660` reads
+  `record.attributes.packet`, `.flow`, `.origin` in the Node LoggerProvider callback used by the
+  `dotnet connector -> Node stream server` stage (`:649-728`). The Node runtime emits provider
+  attributes `packet_name`, `flow_id`, `flow_origin`
+  (`packages/framework/src/runtime/diagnostics/message-flow.ts:386-410`); the short keys exist only in
+  the structured log body (`:424-449`). Spec: `03-message-flow-tracing.ko.md` §3.2 (142-163 attribute
+  names; 171-178 log-body shorthand). So `assertFlowLog()` at `:895-906` sees `packet=<null> …`.
+  The .NET side is correct (verified) and `test/contract/message-flow.test.js` (40 pass) already pins
+  `record.attributes.packet_name`.
+- Env: `cd framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `flock -w7200 /tmp/zlink-node-gate.lock`,
+  Docker + Chromium available; smoke: `framework/languages/node/cross-language/run_cross_language_smoke.sh`.
+
+## What to do
+Change the three lookups to the spec attribute names (keep the log-line format the assertions expect),
+run the node cross-language smoke 2× (report every stage), and write
+`doc/plan/c016-worklog/d-node-smoke-flow-keys-summary.md` (change `file:line`, results, BLOCKERS).
