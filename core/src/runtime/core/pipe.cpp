@@ -3244,8 +3244,16 @@ zlink::pipe_t::check_hwm_for_message (const msg_t *msg_)
         return pipe_message_admission_inactive;
     if (_transport_pair_write_held)
         return pipe_message_admission_transport_wait;
-    if (!_out_active)
-        return pipe_message_admission_hwm_full;
+    if (!_out_active) {
+        // dist_t keeps a pipe in its matching set when message preflight is
+        // rejected, so it can safely consume credit published by the peer
+        // before the owner processes the matching activate_write command.
+        // The generic check_hwm() probe must remain passive because its
+        // callers may already have removed the pipe from their active set.
+        if (!check_hwm_with_peer_snapshot_unlocked ())
+            return pipe_message_admission_hwm_full;
+        clear_hwm_credit_wait_unlocked ();
+    }
     if (!check_hwm_with_peer_snapshot_unlocked ()) {
         arm_hwm_credit_wait_unlocked ();
         if (!check_hwm_with_peer_snapshot_unlocked ())
