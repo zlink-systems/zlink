@@ -157,7 +157,7 @@ task_t<raw_request_completion_t> raw_route_port_t::request (
           raw_request_result_t::ok, copy_binding_parts (reply)};
     }
     //  Split point considered and rejected: this is where an
-    //  admission-absence (EHOSTUNREACH, "routing id never registered")
+    //  admission-absence (ENOENT, "routing id never registered")
     //  vs. connect-refusal (ECONNREFUSED, "endpoint reachable, nobody
     //  listening") distinction would have to be made to satisfy both
     //  test_cpp_framework_m6a_runtime.cpp's
@@ -169,7 +169,7 @@ task_t<raw_request_completion_t> raw_route_port_t::request (
     //  framework_error_kind_t::unavailable) without editing either
     //  assertion. Verified empirically (ZLINK_CPP_ROUTE_ERRNO_TRACE-style
     //  instrumentation, since removed) that both scenarios report the
-    //  identical errno — EHOSTUNREACH (113) — because neither test ever
+    //  identical errno — ENOENT (2) — because neither test ever
     //  establishes a physical connection before issuing the request; a
     //  distinct ECONNREFUSED path does not occur here. No such split is
     //  possible at this layer, so both scenarios share one classification

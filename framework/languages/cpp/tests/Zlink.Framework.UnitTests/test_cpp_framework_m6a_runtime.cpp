@@ -2934,6 +2934,12 @@ int main ()
     assert (transient_route_errno (EHOSTUNREACH));
     assert (transient_route_errno (ENETUNREACH));
     assert (transient_route_errno (ENOTCONN));
+    //  Regression: Core answers a routed submit whose target RID is not in the
+    //  ROUTER routing map with ZLINK_SUBMIT_NOT_FOUND + ENOENT. Dropping it out
+    //  of this set classified "route not admitted yet" as a permanent failure,
+    //  so verify_bound_session_bind_retries_until_route_is_admitted below never
+    //  re-sent after admit_pair and the target mailbox stayed empty.
+    assert (transient_route_errno (ENOENT));
     assert (!transient_route_errno (EINVAL));
     verify_actor_create_command_49_roundtrip ();
     verify_bound_session_bind_retries_until_route_is_admitted ();
