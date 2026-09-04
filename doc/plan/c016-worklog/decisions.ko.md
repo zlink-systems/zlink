@@ -1053,3 +1053,15 @@ wss 1024 137k/4.0 → 127k/1.7, **wss 4096 4.4k/20.7 → 68.5k/1.3**, RR wss 409
 **트레이드오프**: 붕괴(bimodal timeout avalanche)는 사라지지만 ws 4K/8K의 안정 상태 처리량이 40~50% 낮아진다(큐 깊이 축소). C 기준값이 낮아져
 바인딩 비율이 ws에서 올라가므로 계획서 ws/wss 셀은 이 수정 뒤 값으로 다시 잰다. 감독관 판단으로 채택(기준 러너의 안정성 우선)하되 사용자
 확인을 요청한다: (a) 유지, (b) quantum 대신 client별 제출 뒤 즉시 진행(더 잦은 interleave, 처리량 영향 재측정 필요), (c) REQREP timeout 상향.
+
+## D-086 (2026-09-05 05:40, 머신 A) `zlink_ctx_term` 20분 hang은 Core 결함 아님 — .NET test fixture의 DEALER 누수; Core 후속 1건(B 영역)
+codex는 이 조사에서 content filter로 2회 사망(dump 어휘) → Claude sub-agent로 대체 수행. 결과(`core-ctx-term-teardown-hang-summary.md`):
+dump(pid 92047)에서 Core 안에 있는 스레드는 `zlink_ctx_term → ctx_t::terminate → wait_for_reaper_done(poll -1)` 하나뿐, reaper/io/control 모두 idle.
+native 등록 socket 1개 = 50B fixed RID DEALER, `zlink_close` 미호출(public handle state 0), managed `SocketHandle` GC root 0 →
+`CanonicalActorJoinIngressReplyTests.cs:1151 HandoverAsync`가 `SendHelloUntilAdmittedAsync` `TimeoutException` 뒤 `replacement`를 dispose하지 않은 채
+`ConnectedRuntime.DisposeAsync → Context.DisposeAsync`. spec `core/doc/spec/core/socket/README.ko.md:486`(socket 전부 close 후 term)대로 Core는 block.
+공개 C API repro(worktree `zlink-core-term`, 사본 `evidence/test_ctx_term_fixed_rid_handover.cpp`+cmake diff): 전부 close 시 tcp/inproc/reconnect-armed
+cycle 5/5·ctest 1/1 즉시 반환, DEALER 1개 미close 시 늦은 close까지 block. **Core 수정 없음, core/ 미커밋**(repro는 evidence로만 보존 — Core 테스트 추가 여부는 B 판단).
+**Core 후속(B, 미수정)**: tcp에서 이전 pipe 생존 중 same-RID replacement DEALER admission 지연 0.1~2.9 s(간헐 >5 s, 빠른 reconnect일수록 악화; inproc 즉시).
+framework test의 2 s 기대치가 이 분포 안에 있어 handover 계열 test(`HandoverKeepsPriorReplyEpochUntilExactDisconnect :560`, 36분짜리 D-068 sibling)의 간헐 실패/지연 원인 후보.
+
