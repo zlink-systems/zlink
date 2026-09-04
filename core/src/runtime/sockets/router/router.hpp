@@ -87,7 +87,6 @@ class router_t : public routing_socket_base_t
     int xterm_peer_rid (const zlink_routing_id_t *peer_rid_) ZLINK_OVERRIDE
     {
         fail_pull_send_pending_for_logical_target (peer_rid_, ENOENT);
-        fail_pull_request_pending_for_logical_target (peer_rid_);
         revoke_router_reply_targets_for_rid (peer_rid_);
         return terminate_out_pipe_by_routing_id (peer_rid_);
     }

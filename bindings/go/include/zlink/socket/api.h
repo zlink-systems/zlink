@@ -250,9 +250,15 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid (void *s_,
                                                         void *user_context_,
                                                         zlink_completion_id_t *completion_id_out_);
 
-/* Request MORE requires timeout_ms_ == 0 and user_context_ == NULL. Successful
- * FINAL reserves a nonzero completion ID; the reply timeout starts only after
- * local outbound admission. Every call consumes part_. */
+/* Request MORE requires timeout_ms_ == 0 and user_context_ == NULL. DONTWAIT
+ * FINAL makes one admission attempt. Admission returns ZLINK_SUBMIT_OK with a
+ * nonzero REQUEST completion ID, and its reply timeout starts then.
+ * Backpressure or an unready target returns ZLINK_SUBMIT_BACKPRESSURED with
+ * EAGAIN and a nonzero payload-free WRITABLE wait token. Credit recovery
+ * reports ZLINK_COMPLETION_WRITABLE with the same token and user context; the
+ * caller then submits the request again. A missing mandatory ROUTER route
+ * returns ZLINK_SUBMIT_NOT_CONNECTED without a token. Every call consumes
+ * part_. */
 ZLINK_EXPORT zlink_submit_result_t zlink_request_part (
   void *s_,
   const zlink_routing_id_t *target_router_rid_or_null_,

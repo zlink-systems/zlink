@@ -110,6 +110,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_polling_contract
   ${INTEGRATION_TEST_ROOT}/test_phase3_completion_contract
   ${INTEGRATION_TEST_ROOT}/test_phase3_request_reply_contract
+  ${INTEGRATION_TEST_ROOT}/test_request_writable_contract
   ${INTEGRATION_TEST_ROOT}/test_dealer_router_single_lane_contract
   ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply
   ${INTEGRATION_TEST_ROOT}/test_router_handover

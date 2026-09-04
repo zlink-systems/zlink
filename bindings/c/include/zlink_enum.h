@@ -106,9 +106,7 @@ typedef enum zlink_option_t
     ZLINK_OPT_SUBMIT_RETRY_MODE = 0x3037,
     ZLINK_OPT_SUBMIT_RETRY_TIMEOUT = 0x3038,
     ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS = 0x3039,
-    /* REQUEST pending-admission limits. uint64_t; 0 is unlimited. Option
-     * storage remains supported on PAIR, DEALER, ROUTER, and STREAM; ordinary
-     * SEND ignores these ABI-retained values. */
+    /* ABI-retained uint64_t values. Stored and returned, otherwise ignored. */
     ZLINK_OPT_PENDING_MAX_MSGS = 0x303A,
     ZLINK_OPT_PENDING_MAX_BYTES = 0x303B,
 

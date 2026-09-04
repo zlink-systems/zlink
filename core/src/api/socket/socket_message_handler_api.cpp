@@ -122,14 +122,11 @@ zlink_recv_result_t zlink_completion_recv (
         return ZLINK_RECV_NOT_SUPPORTED;
     }
 
-    // A completion pull is itself a socket progress point. Drain commands
-    // before driving pending REQUEST admission so a physical detach/reconnect
-    // can replace the pipe behind the same logical target. If context shutdown
+    // A completion pull is itself a socket progress point. If context shutdown
     // was observed, prefer an already-published completion; otherwise surface
     // the lifecycle result with the caller output still empty.
     const int command_progress_rc = handle.socket->process_submit_commands ();
     const int command_progress_errno = errno;
-    handle.socket->drive_request_pending ();
     if (command_progress_rc != 0
         && !zlink::socket_completion::has_ready (
           &handle.socket->completion_runtime ())) {
@@ -137,8 +134,8 @@ zlink_recv_result_t zlink_completion_recv (
         return zlink::recv_result_internal::from_errno (errno);
     }
 
-    // Pending REQUEST admission and wire replies need a command owner even
-    // when the application uses blocking pull without a poller.
+    // Wire replies need a command owner even when the application uses
+    // blocking pull without a poller.
     if (flags_ != ZLINK_RECV_FLAGS_DONTWAIT
         && handle.socket->receive_timeout_ms () != 0
         && !zlink::socket_completion::has_ready (

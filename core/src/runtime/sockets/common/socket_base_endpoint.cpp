@@ -952,7 +952,6 @@ int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
     const auto fail_public_pending_for_endpoint =
       [this] (const std::string &identifier_) {
           fail_pull_send_pending_for_logical_endpoint (identifier_, ENOENT);
-          fail_pull_request_pending_for_logical_endpoint (identifier_);
           xforget_request_route_endpoint (identifier_);
           if (options.type == ZLINK_CORE_SOCKET_PAIR) {
               fail_pull_send_pending_for_logical_target (NULL, ENOENT);

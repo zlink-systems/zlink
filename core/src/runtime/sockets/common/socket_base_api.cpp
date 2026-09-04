@@ -228,7 +228,6 @@ int zlink::socket_base_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
     }
 
     fail_pull_send_pending_for_logical_target (peer_rid_, ENOENT);
-    fail_pull_request_pending_for_logical_target (peer_rid_);
     match->terminate (false);
     return 0;
 }
@@ -557,11 +556,6 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         //  the one local-policy readiness resync for the current generation.
         (void) send_local_peer_weight (ready_application);
         write_activated (ready_application);
-        // A routed async submit can already be parked on transport_wait when
-        // the Application/Completion pair becomes Ready. HWM recovery emits
-        // its own edge from write_activated(), but releasing the pair hold is
-        // a distinct admission transition and must wake that exact target too.
-        notify_request_pending_writable (ready_application);
     }
     if (ready_application && socket_type () == ZLINK_CORE_SOCKET_ROUTER) {
         // ROUTER readiness is a public data-plane edge, not merely pair-table
@@ -763,12 +757,6 @@ int zlink::socket_base_t::get_events (int events_, uint32_t *out_)
         errno_assert (rc == 0);
     }
 
-    //  Process readiness commands before trying pending records, but release
-    //  the query sync bit first: physical admission takes that bit itself and
-    //  would otherwise wait on this thread's own lock.
-    if (events_ & ZLINK_POLLCOMPLETION)
-        drive_request_pending ();
-
     {
         socket_public_api_lock_scope_t guard (lifecycle);
         //  Only a caller that asks for ZLINK_POLLCOMPLETION owns the
@@ -821,11 +809,7 @@ int zlink::socket_base_t::get_events_internal (
                 return -1;
 
             // stop() publishes context termination before its command reaches
-            // process_stop(). Resolve unclaimed sends here as well, closing
-            // that publication window without driving physical admission.
-            // Claimed sends receive the same deferred-terminal handoff used by
-            // process_stop() and will wake the still-registered mailbox fd
-            // when their attempt finishes.
+            // process_stop(). Wake synchronous send waiters here as well.
             fail_all_send_pending (ETERM);
 
             // A POLLCOMPLETION registration remains the sole dispatch owner
@@ -848,16 +832,6 @@ int zlink::socket_base_t::get_events_internal (
                 return 0;
             }
 
-            // A claimed record can still be completing its deferred ETERM
-            // handoff. Keep the poller alive on the mailbox descriptor rather
-            // than reporting a stale completion notification or surfacing
-            // ETERM before the callback exists.
-            if (has_request_pending ()) {
-                *out_ = 0;
-                errno = terminal_errno;
-                return 0;
-            }
-
             errno = terminal_errno;
             return -1;
         }
@@ -868,7 +842,6 @@ int zlink::socket_base_t::get_events_internal (
     if (events_ & ZLINK_POLLCOMPLETION) {
         zlink_assert (_completion_poller_refs.load (std::memory_order_acquire)
                       != 0);
-        drive_request_pending ();
         scoped_lock_t owner_lock (_completion_owner_sync);
         const completion_drain_scope_t drain_scope (this);
         (void) _request_completion_pending.exchange (
@@ -958,7 +931,7 @@ void zlink::socket_base_t::resume_completion_processing_if_needed ()
 
     std::shared_ptr<socket_reqrep_internal::socket_request_reply_state_t> socket_state =
       request_reply_state ();
-    if (has_send_writable_wait () || has_request_pending ()
+    if (has_send_writable_wait ()
         || (socket_state
             && socket_reqrep_internal::has_pending_request_work (
               socket_state))) {
@@ -1702,8 +1675,6 @@ void zlink::socket_base_t::write_activated (pipe_t *pipe_)
         }
         if (request_correlation_recovery)
             dispatch_runtime ().mark_send_recovery_pending ();
-        if (credit_recovery || flow_recovery)
-            notify_request_pending_writable (pipe_);
         // Sample WRITABLE only after consuming the marker for this activation.
         // A competing send can fill the newly active pipe and arm a fresh byte
         // waiter before this recheck; check_write_admission() then preserves
@@ -1920,20 +1891,6 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
         //  happens here instead of racing us.
         paired_pipe->release_lifetime_ref ();
     }
-}
-
-void zlink::socket_base_t::fail_pull_request_pending_for_logical_target (
-  const zlink_routing_id_t *peer_rid_)
-{
-    socket_reqrep_internal::fail_pending_requests_for_logical_rid (
-      request_reply_state (), peer_rid_);
-}
-
-void zlink::socket_base_t::fail_pull_request_pending_for_logical_endpoint (
-  const std::string &endpoint_)
-{
-    socket_reqrep_internal::fail_pending_requests_for_logical_endpoint (
-      request_reply_state (), endpoint_);
 }
 
 zlink::pipe_t *

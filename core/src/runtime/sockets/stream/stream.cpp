@@ -308,11 +308,6 @@ void zlink::stream_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
     if (!identify_peer (pipe_, locally_initiated_))
         return;
     _fq.attach (pipe_);
-    // Pending logical sends may already exist when a STREAM transport arrives.
-    // Emit the first writable edge after identity assignment.
-    if (has_request_pending ()
-        && pipe_->check_write_admission () == pipe_message_admission_ready)
-        notify_request_pending_writable (pipe_);
     maybe_emit_connect_event (pipe_);
     if (options.stream_notify)
         queue_stream_notify (pipe_->get_server_socket_routing_id ());

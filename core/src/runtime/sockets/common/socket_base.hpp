@@ -529,8 +529,8 @@ class socket_base_t : public own_t,
       zlink_msg_t *parts_, size_t part_count_,
       const zlink_routing_id_t *target_rid_or_null_,
       socket_public_send_scope_t &send_scope_);
-    // Register a payload-free DONTWAIT SEND wait token after one physical
-    // admission attempt reported backpressure or an unready logical target.
+    // Register a payload-free DONTWAIT SEND/REQUEST wait token after one
+    // physical admission attempt reports backpressure or an unready target.
     int register_send_writable_wait (
       const zlink_routing_id_t *target_rid_or_null_, void *user_context_,
       zlink_completion_id_t *completion_id_out_);
@@ -539,20 +539,12 @@ class socket_base_t : public own_t,
       zlink_msg_t *parts_, size_t part_count_,
       const zlink_routing_id_t *target_rid_or_null_,
       pipe_write_observer_fn admission_observer_,
-      void *admission_observer_userdata_,
-      send_pending_request_resolved_fn resolved_,
-      send_pending_request_cleanup_fn cleanup_,
-      send_pending_request_promote_fn promote_,
-      void *resolution_context_, bool *pending_out_);
+      void *admission_observer_userdata_);
     int request_admission_submit_blocking (
       zlink_msg_t *parts_, size_t part_count_,
       const zlink_routing_id_t *target_rid_or_null_,
       pipe_write_observer_fn admission_observer_,
       void *admission_observer_userdata_);
-    // Admit whatever the current pipe state allows. Resolution is published
-    // Pending records now belong only to REQUEST admission.
-    void drive_request_pending ();
-    bool has_request_pending () const;
     void clear_public_send_recovery_state ();
     socket_completion::queue_state_t &completion_runtime ()
     {
@@ -1045,23 +1037,17 @@ class socket_base_t : public own_t,
                      uint64_t *connection_id_out_,
                      bool pin_pipe_out_ = false,
                      zlink::socket_receive_record_scope_t *record_scope_ = NULL);
-    //  A pipe became writable again: nudge the admit loop for that target.
-    void notify_request_pending_writable (pipe_t *pipe_);
     // Publish every wait token for the exact target after scheduler/route
     // state says a retry is worthwhile. Passing a pipe derives the routed key;
     // PAIR/DEALER use their socket-wide candidate target.
     void notify_send_writable (pipe_t *pipe_);
     void flush_deferred_peer_controls ();
     void mark_deferred_peer_controls ();
-    //  A route ended: fail every pending record bound to that exact target.
+    // A route ended: retire writable tokens and wake blocking submitters.
     void fail_pull_send_pending_for_logical_target (
       const zlink_routing_id_t *peer_rid_, int terminal_errno_);
     void fail_pull_send_pending_for_logical_endpoint (
       const std::string &endpoint_, int terminal_errno_);
-    void fail_pull_request_pending_for_logical_target (
-      const zlink_routing_id_t *peer_rid_);
-    void fail_pull_request_pending_for_logical_endpoint (
-      const std::string &endpoint_);
     void emit_peer_weight_changed (pipe_t *pipe_, uint32_t weight_,
                                    const blob_t *public_routing_id_ = NULL);
     void snapshot_attached_pipes (std::vector<pipe_t *> *out_);
@@ -1299,26 +1285,13 @@ class socket_base_t : public own_t,
     bool test_resume_deferred_transport_pair_owner_request ();
   private:
 #endif
-    //  close / ctx term: fail every pending record fast. LINGER does not
-    //  apply - it covers bytes already admitted, and a pending record is by
-    //  definition not admitted yet.
+    // Close / ctx term wakes blocking SEND waiters.
     void fail_all_send_pending (int terminal_errno_);
-    //  Finish helpers used by the admit loop.
-    int try_admit_request_pending (send_pending_record_t *record_);
     int select_routed_submit_target_internal (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_,
       uint64_t *transport_connection_id_out_,
       uint64_t *route_incarnation_id_out_);
-    int try_admit_send_parts (zlink_msg_t *parts_,
-                              size_t part_count_,
-                              const routed_send_target_key_t &target_,
-                              bool has_target_,
-                              bool commands_already_processed_,
-                              send_pending_record_t *record_ = NULL,
-                              pipe_write_observer_fn observer_ = NULL,
-                              void *observer_userdata_ = NULL,
-                              bool request_admission_ = false);
     int try_admit_send_parts_scoped (
       zlink_msg_t *parts_, size_t part_count_,
       const routed_send_target_key_t &target_, bool has_target_,
@@ -1377,24 +1350,6 @@ class socket_base_t : public own_t,
       pipe_write_observer_fn admission_observer_,
       void *admission_observer_userdata_,
       submit_timeout_budget_t &timeout_);
-    void finish_request_pending (send_pending_record_t *record_,
-                                 bool admitted_,
-                                 int terminal_errno_);
-    void destroy_request_pending_record (send_pending_record_t *record_);
-    static void close_send_parts (std::vector<zlink_msg_t> *parts_);
-    static int copy_send_parts (zlink_msg_t *parts_,
-                                size_t part_count_,
-                                std::vector<zlink_msg_t> *copies_);
-    int request_pending_submit (
-      zlink_msg_t *parts_, size_t part_count_,
-      const zlink_routed_submit_target_t *target_,
-      zlink_send_op_id_t *op_id_out_,
-      pipe_write_observer_fn admission_observer_,
-      void *admission_observer_userdata_,
-      send_pending_request_resolved_fn request_resolved_,
-      send_pending_request_cleanup_fn request_cleanup_,
-      void *request_resolution_context_,
-      send_pending_request_promote_fn request_promote_);
     static void reaper_mailbox_handler (void *arg_);
     static void reaper_mailbox_pre_post (void *arg_);
     static void async_mailbox_handler (void *arg_);

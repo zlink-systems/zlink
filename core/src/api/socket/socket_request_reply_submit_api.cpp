@@ -34,8 +34,7 @@ struct pending_pair_observer_t
     {
     }
 
-    // DONTWAIT fallback retains this observer with the pending record. Own both
-    // values so reconnect/redrive never dereferences the submitting stack.
+    // The observer lives through the single physical admission attempt.
     std::shared_ptr<reqrep::socket_request_reply_state_t> state;
     reqrep::pending_request_identity_t identity;
     // The publication lock stays held from prepare through finish. The
@@ -152,78 +151,6 @@ bool publish_pending_pair_before_flush (
     return true;
 }
 
-struct pending_request_admission_context_t
-{
-    reqrep::pending_request_token_t token;
-    pending_pair_observer_t observer;
-};
-
-void resolve_pending_request_admission (void *userdata_, bool admitted_,
-                                        int terminal_errno_)
-{
-    pending_request_admission_context_t *const context =
-      static_cast<pending_request_admission_context_t *> (userdata_);
-    if (!context || !context->observer.state)
-        return;
-
-    if (admitted_) {
-        (void) reqrep::arm_socket_pending_request_timeout (
-          context->observer.state, context->token);
-        return;
-    }
-
-    reqrep::pending_request_t pending;
-    if (!reqrep::remove_socket_pending_request (
-          context->observer.state, context->token.identity, &pending))
-        return;
-
-    pending.correlation.release ();
-    const int completion_errno = terminal_errno_ != 0 ? terminal_errno_ : EIO;
-    (void) reqrep::publish_pending_request_completion (
-      context->observer.state, &pending,
-      zlink::request_result_internal::from_errno (completion_errno), NULL, 0);
-}
-
-void cleanup_pending_request_admission (void *userdata_)
-{
-    delete static_cast<pending_request_admission_context_t *> (userdata_);
-}
-
-int promote_pending_request_admission (
-  void *inline_context_, void **pending_observer_userdata_out_,
-  void **pending_resolution_context_out_)
-{
-    if (!inline_context_ || !pending_observer_userdata_out_
-        || !pending_resolution_context_out_) {
-        errno = EFAULT;
-        return -1;
-    }
-    *pending_observer_userdata_out_ = NULL;
-    *pending_resolution_context_out_ = NULL;
-
-    pending_request_admission_context_t *const inline_context =
-      static_cast<pending_request_admission_context_t *> (inline_context_);
-    // A retryable physical refusal must have completed the observer abort
-    // phase before the submit boundary can retain this context.
-    if (inline_context->observer.publication_lock.owns_lock ()
-        || inline_context->observer.reserved_pipe
-        || inline_context->observer.reservation_committed) {
-        errno = EBUSY;
-        return -1;
-    }
-
-    pending_request_admission_context_t *const pending_context =
-      new (std::nothrow) pending_request_admission_context_t (
-        std::move (*inline_context));
-    if (!pending_context) {
-        errno = ENOMEM;
-        return -1;
-    }
-    *pending_observer_userdata_out_ = &pending_context->observer;
-    *pending_resolution_context_out_ = pending_context;
-    return 0;
-}
-
 int submit_pull_dontwait_request (
   zlink::socket_base_t *socket_, const zlink_routing_id_t *peer_rid_,
   zlink_msg_t *parts_, size_t part_count_,
@@ -235,31 +162,22 @@ int submit_pull_dontwait_request (
         return -1;
     }
 
-    pending_request_admission_context_t context;
-    context.token = token_;
-    context.observer.state = state_;
-    context.observer.identity = token_.identity;
-    context.observer.accounted_bytes = request_correlation_accounted_bytes (
+    pending_pair_observer_t observer;
+    observer.state = state_;
+    observer.identity = token_.identity;
+    observer.accounted_bytes = request_correlation_accounted_bytes (
       parts_, part_count_ - 1, &parts_[part_count_ - 1]);
 
-    bool pending = false;
     const int rc = socket_->request_admission_submit (
       parts_, part_count_, peer_rid_, &publish_pending_pair_before_flush,
-      &context.observer, &resolve_pending_request_admission,
-      &cleanup_pending_request_admission,
-      &promote_pending_request_admission, &context, &pending);
+      &observer);
     const int saved_errno = errno;
     if (rc != 0) {
         errno = saved_errno;
         return -1;
     }
 
-    // A pending record owns the promoted context even when the immediate
-    // redrive has already resolved it. Direct admission kept the inline
-    // context on this stack, so it only needs its reply timeout armed here.
-    if (!pending) {
-        (void) reqrep::arm_socket_pending_request_timeout (state_, token_);
-    }
+    (void) reqrep::arm_socket_pending_request_timeout (state_, token_);
     errno = 0;
     return 0;
 }
@@ -303,6 +221,31 @@ zlink_submit_result_t finish_request_submit_failure (
         return ZLINK_SUBMIT_OK;
     }
     return failure_;
+}
+
+zlink_submit_result_t finish_dontwait_request_admission_failure (
+  zlink::socket_base_t *socket_, const zlink_routing_id_t *peer_rid_,
+  void *user_context_,
+  const std::shared_ptr<reqrep::socket_request_reply_state_t> &state_,
+  const reqrep::pending_request_identity_t &identity_, int failure_errno_,
+  zlink_completion_id_t *completion_id_out_)
+{
+    // A mandatory ROUTER route miss is connectivity, not lookup ownership.
+    const int normalized_errno =
+      peer_rid_ && failure_errno_ == ENOENT ? EHOSTUNREACH : failure_errno_;
+    errno = normalized_errno;
+    const zlink_submit_result_t failure = finish_request_submit_failure (
+      state_, identity_,
+      zlink::submit_result_internal::from_errno (normalized_errno));
+    if (failure == ZLINK_SUBMIT_OK || normalized_errno != EAGAIN)
+        return failure;
+
+    if (socket_->register_send_writable_wait (
+          peer_rid_, user_context_, completion_id_out_)
+        != 0)
+        return zlink::submit_result_internal::from_errno (errno);
+    errno = EAGAIN;
+    return ZLINK_SUBMIT_BACKPRESSURED;
 }
 
 bool message_has_group (const zlink_msg_t *part_);
@@ -854,6 +797,11 @@ zlink_submit_result_t request_part_common (
         if (submit_rc != 0) {
             const int saved_errno = errno;
             zlink::part_helper_internal::consume_send_part (part_);
+            if (flags_ == ZLINK_DONTWAIT)
+                return finish_dontwait_request_admission_failure (
+                  socket_handle_.socket, peer_rid_, user_context_,
+                  request_state, pending_token.identity, saved_errno,
+                  completion_id_out_);
             errno = saved_errno;
             return finish_request_submit_failure (
               request_state, pending_token.identity,
@@ -959,6 +907,10 @@ zlink_submit_result_t request_part_common (
     if (submit_rc != 0) {
         const int saved_errno = errno;
         zlink_multipart_close (request_parts.data (), request_parts.size ());
+        if (flags_ == ZLINK_DONTWAIT)
+            return finish_dontwait_request_admission_failure (
+              socket_handle_.socket, peer_rid_, user_context_, request_state,
+              pending_token.identity, saved_errno, completion_id_out_);
         errno = saved_errno;
         return finish_request_submit_failure (
           request_state, pending_token.identity,
@@ -1031,7 +983,9 @@ zlink_submit_result_t zlink_request_part (
     const zlink_submit_result_t result = request_part_common (
       handle, s_, target_router_rid_or_null_, part_, flags_, part_flag_,
       timeout_ms_, user_context_, family, &accepted_completion_id);
-    if (result == ZLINK_SUBMIT_OK && part_flag_ == ZLINK_PART_FINAL
+    if ((result == ZLINK_SUBMIT_OK
+         || result == ZLINK_SUBMIT_BACKPRESSURED)
+        && part_flag_ == ZLINK_PART_FINAL
         && completion_id_out_)
         *completion_id_out_ = accepted_completion_id;
     return result;

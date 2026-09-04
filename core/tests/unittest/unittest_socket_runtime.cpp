@@ -545,17 +545,11 @@ void test_socket_dispatch_bridge_tracks_send_recovery_edges ()
     TEST_ASSERT_FALSE (bridge.send_recovery_ready ());
 }
 
-void test_socket_send_pending_runtime_starts_empty ()
+void test_socket_send_wait_runtime_starts_empty ()
 {
     zlink::socket_send_pending_runtime_t pending;
 
-    //  op id 0 is reserved as "no operation", so the first assigned id is 1.
-    TEST_ASSERT_EQUAL_UINT64 (1, pending.next_op_id);
-    TEST_ASSERT_TRUE (pending.queues.empty ());
-    TEST_ASSERT_TRUE (pending.by_op.empty ());
-    TEST_ASSERT_EQUAL_UINT64 (0, pending.pending_msgs);
-    TEST_ASSERT_EQUAL_UINT64 (0, pending.pending_bytes);
-    TEST_ASSERT_FALSE (pending.failing);
+    TEST_ASSERT_TRUE (pending.logical_waits.empty ());
 }
 
 void test_socket_public_send_scope_combines_initial_admission_and_sync ()
@@ -655,7 +649,7 @@ int main (int argc, char **argv)
     RUN_TEST (test_socket_command_runtime_throttles_command_polls_by_tsc_window);
     RUN_TEST (test_socket_command_runtime_tracks_recv_ticks_until_reset);
     RUN_TEST (test_socket_dispatch_bridge_tracks_send_recovery_edges);
-    RUN_TEST (test_socket_send_pending_runtime_starts_empty);
+    RUN_TEST (test_socket_send_wait_runtime_starts_empty);
     RUN_TEST (test_socket_public_send_scope_combines_initial_admission_and_sync);
     RUN_TEST (test_socket_public_send_scope_unlocks_sync_but_keeps_inflight_admission);
     RUN_TEST (test_socket_public_send_scope_without_sync_keeps_inflight_admission);

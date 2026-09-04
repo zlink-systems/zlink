@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
-// Core-owned REQUEST admission retries and blocking SEND admission helpers.
-// Ordinary DONTWAIT SEND is never represented by a record in this module.
+// Shared physical admission and payload-free WRITABLE wait helpers.
 
 #include "utils/precompiled.hpp"
 
@@ -14,7 +13,6 @@
 #include "utils/macros.hpp"
 #include "utils/routing_id.hpp"
 
-#include <algorithm>
 #include <atomic>
 
 namespace
@@ -27,47 +25,6 @@ void signal_logical_wait_state (
     if (state_->epoch == 0)
         ++state_->epoch;
     state_->terminal_errno = terminal_errno_ != 0 ? terminal_errno_ : EIO;
-}
-
-bool retryable_request_target_errno (int err_)
-{
-    // A pending REQUEST is keyed by its logical destination. Losing
-    // the currently selected physical pipe is therefore a wait condition,
-    // exactly like HWM pressure, until an explicit logical-target removal or
-    // another permanent cause completes it.
-    return err_ == EAGAIN || err_ == ENOTCONN || err_ == EHOSTUNREACH;
-}
-
-bool contains_routed_send_target (
-  const std::vector<zlink::routed_send_target_key_t> &targets_,
-  size_t target_count_, const zlink::routed_send_target_key_t &target_)
-{
-    const std::vector<zlink::routed_send_target_key_t>::const_iterator end =
-      targets_.begin () + target_count_;
-    const std::vector<zlink::routed_send_target_key_t>::const_iterator found =
-      std::lower_bound (targets_.begin (), end, target_);
-    return found != end && !(target_ < *found);
-}
-
-void append_routed_send_target (
-  std::vector<zlink::routed_send_target_key_t> *targets_,
-  size_t *target_count_, const zlink::routed_send_target_key_t &target_)
-{
-    const size_t insert_at = static_cast<size_t> (
-      std::lower_bound (targets_->begin (),
-                        targets_->begin () + *target_count_, target_)
-      - targets_->begin ());
-    if (insert_at != *target_count_
-        && !(target_ < (*targets_)[insert_at]))
-        return;
-    if (*target_count_ == targets_->size ())
-        targets_->push_back (target_);
-    else
-        (*targets_)[*target_count_] = target_;
-    std::rotate (targets_->begin () + insert_at,
-                 targets_->begin () + *target_count_,
-                 targets_->begin () + *target_count_ + 1);
-    ++*target_count_;
 }
 
 void close_send_part_array (zlink_msg_t *parts_, size_t part_count_)
@@ -257,171 +214,12 @@ int zlink::socket_base_t::register_send_writable_wait (
     return 0;
 }
 
-void zlink::socket_base_t::close_send_parts (
-  std::vector<zlink_msg_t> *parts_)
-{
-    const int saved_errno = errno;
-    close_send_part_array (parts_->data (), parts_->size ());
-    parts_->clear ();
-    errno = saved_errno;
-}
-
-int zlink::socket_base_t::copy_send_parts (
-  zlink_msg_t *parts_, size_t part_count_, std::vector<zlink_msg_t> *copies_)
-{
-    try {
-        copies_->resize (part_count_);
-    } catch (...) {
-        errno = ENOMEM;
-        return -1;
-    }
-
-    if (copy_send_part_array (parts_, part_count_, copies_->data ()) == 0)
-        return 0;
-
-    const int saved_errno = errno;
-    copies_->clear ();
-    errno = saved_errno;
-    return -1;
-}
-
-bool zlink::socket_base_t::has_request_pending () const
-{
-    const socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    scoped_lock_t lock (pending.sync);
-    return !pending.by_op.empty ();
-}
-
-void zlink::socket_base_t::destroy_request_pending_record (
-  send_pending_record_t *record_)
-{
-    if (!record_)
-        return;
-    // Close is correct after admission too because the pipe retains its own
-    // frame-content reference.
-    close_send_parts (&record_->parts);
-    if (record_->request_cleanup && record_->request_resolution_context)
-        record_->request_cleanup (record_->request_resolution_context);
-    record_->request_resolution_context = NULL;
-    delete record_;
-}
-
-// Remove a resolved record and notify the internal REQUEST admission resolver.
-void zlink::socket_base_t::finish_request_pending (
-  send_pending_record_t *record_, bool admitted_, int terminal_errno_)
-{
-    if (!record_)
-        return;
-
-    socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    send_pending_request_resolved_fn request_resolved = NULL;
-    void *request_resolution_context = NULL;
-    {
-        scoped_lock_t lock (pending.sync);
-        std::map<routed_send_target_key_t,
-                 std::deque<send_pending_record_t *> >::iterator queue =
-          pending.queues.find (record_->target);
-        if (queue != pending.queues.end ()) {
-            for (std::deque<send_pending_record_t *>::iterator it =
-                   queue->second.begin ();
-                 it != queue->second.end (); ++it) {
-                if (*it == record_) {
-                    queue->second.erase (it);
-                    break;
-                }
-            }
-            if (queue->second.empty ())
-                pending.queues.erase (queue);
-        }
-        pending.by_op.erase (record_->op_id);
-        const uint64_t pending_count =
-          pending.pending_msgs.load (std::memory_order_relaxed);
-        pending.pending_msgs.store (pending_count > 0 ? pending_count - 1 : 0,
-                                    std::memory_order_release);
-        pending.pending_bytes = pending.pending_bytes > record_->charge_bytes
-                                  ? pending.pending_bytes
-                                      - record_->charge_bytes
-                                  : 0;
-
-        request_resolved = record_->request_resolved;
-        request_resolution_context = record_->request_resolution_context;
-    }
-    if (request_resolved)
-        request_resolved (request_resolution_context, admitted_,
-                          admitted_ ? 0 : terminal_errno_);
-    destroy_request_pending_record (record_);
-}
-
 void zlink::socket_base_t::clear_public_send_recovery_state ()
 {
     dispatch_runtime ().clear_send_recovery_pending ();
 }
 
-//  Physically submit one record. Returns 0 on admission, -1 with errno set
-//  otherwise; EAGAIN means "not now, keep the record pending".
-int zlink::socket_base_t::try_admit_request_pending (
-  send_pending_record_t *record_)
-{
-    if (!record_ || record_->parts.empty ()) {
-        errno = EFAULT;
-        return -1;
-    }
-
-    // The pending driver is entered only after its owner has handled (or
-    // deliberately handed off) command progress. Polling again while the
-    // physical complete-record scope owns the public sync bit can recursively
-    // take that same bit on the async mailbox thread.
-    return try_admit_send_parts (
-      record_->parts.data (), record_->parts.size (), record_->target,
-      record_->has_target, true, record_, record_->admission_observer,
-      record_->admission_observer_userdata, true);
-}
-
-int zlink::socket_base_t::try_admit_send_parts (
-  zlink_msg_t *parts_, size_t part_count_,
-  const routed_send_target_key_t &target_, bool has_target_,
-  bool commands_already_processed_, send_pending_record_t *record_,
-  pipe_write_observer_fn observer_, void *observer_userdata_,
-  bool request_admission_)
-{
-    if (!parts_ || part_count_ == 0) {
-        errno = EFAULT;
-        return -1;
-    }
-
-    //  One scope for the whole record. This is the structural reason the
-    //  array form exists: the per-handle send sequence is taken and released
-    //  inside a single call, so a multipart record can never hold it across
-    //  application code.
-    socket_public_send_scope_t scope (
-      lifecycle_coordinator (), true, socket_send_admission_complete);
-    if (!scope.acquired ()) {
-        //  A lifecycle refusal (close admitted, context terminated) is not a
-        //  route failure. Keep the record pending so the close / term path
-        //  owns the terminal cause instead of reporting ESHUTDOWN here.
-        errno = EAGAIN;
-        return -1;
-    }
-
-    //  Pipe detach takes this lifecycle sync before publishing its pending
-    //  terminal handoff. Check that handoff only after acquiring the same
-    //  sync: a detach that linearized first prevents physical admission,
-    //  while a detach that waits behind this scope cannot override a send
-    //  that has already admitted successfully.
-    if (record_) {
-        scoped_lock_t lock (send_pending_runtime ().sync);
-        if (record_->deferred_terminal_errno != 0) {
-            errno = record_->deferred_terminal_errno;
-            return -1;
-        }
-    }
-
-    return try_admit_send_parts_scoped (
-      parts_, part_count_, target_, has_target_, scope, NULL,
-      commands_already_processed_, observer_, observer_userdata_,
-      request_admission_, record_ == NULL);
-}
-
+// Physically attempt one complete record.
 int zlink::socket_base_t::try_admit_send_parts_scoped (
   zlink_msg_t *parts_, size_t part_count_,
   const routed_send_target_key_t &target_, bool has_target_,
@@ -582,8 +380,6 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
         }
         if (i == 0) {
             // Nothing reached the pipe, so the source record is untouched.
-            // A pending REQUEST may retry it; an ordinary DONTWAIT SEND
-            // returns the failure without retaining the source.
             errno = request_admission_
                         && (failure_errno == ESHUTDOWN
                             || failure_errno == ETERM)
@@ -593,9 +389,7 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
         }
 
         // Drop the half-written physical attempt before releasing the scope.
-        // Framed sockets can discover byte HWM on a continuation. Attempts use
-        // copies where needed, so the complete source record survives rollback;
-        // only a pending REQUEST retains it for a later Core retry.
+        // Framed sockets can discover byte HWM on a continuation.
         (void) rollback_scoped (scope);
         errno = failure_errno;
         return -1;
@@ -603,177 +397,11 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
     return 0;
 }
 
-//  Admit whatever the current pipe state allows. Head-of-line within a target
-//  is deliberate: the target queue is one logical stream.
-void zlink::socket_base_t::drive_request_pending ()
-{
-    socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    if (pending.pending_msgs.load (std::memory_order_acquire) == 0)
-        return;
-    bool gate_expected = false;
-    if (!pending.admission_gate.compare_exchange_strong (
-          gate_expected, true, std::memory_order_acq_rel,
-          std::memory_order_acquire))
-        return;
-
-    // Only the admission-gate owner accesses this scratch storage. Its logical
-    // size is local to this drive call, while constructed key capacity survives
-    // repeated backpressure cycles.
-    std::vector<routed_send_target_key_t> &blocked_targets =
-      pending.blocked_targets_scratch;
-    size_t blocked_target_count = 0;
-    uint64_t observed_redrive_epoch =
-      pending.redrive_epoch.load (std::memory_order_acquire);
-    while (true) {
-        send_pending_record_t *record = NULL;
-        uint64_t scanned_enqueue_epoch = 0;
-        {
-            scoped_lock_t lock (pending.sync);
-            for (std::map<routed_send_target_key_t,
-                          std::deque<send_pending_record_t *> >::iterator it =
-                   pending.queues.begin ();
-                 it != pending.queues.end (); ++it) {
-                const std::map<routed_send_target_key_t,
-                               send_inline_attempt_state_t>::const_iterator
-                  inline_attempt = pending.inline_attempts.find (it->first);
-                if (it->second.empty ()
-                    || contains_routed_send_target (
-                      blocked_targets, blocked_target_count, it->first)
-                    || (inline_attempt != pending.inline_attempts.end ()
-                        && inline_attempt->second.active))
-                    continue;
-                send_pending_record_t *head = it->second.front ();
-                if (head->claimed)
-                    continue;
-                head->claimed = true;
-                record = head;
-                break;
-            }
-            //  Queue insertion publishes the record under this same lock and
-            //  then advances the epoch.  Snapshotting here lets the gate
-            //  owner detect an insertion that raced its final empty scan.
-            scanned_enqueue_epoch = pending.enqueue_epoch.load (
-              std::memory_order_acquire);
-        }
-        if (!record) {
-            pending.admission_gate.store (false, std::memory_order_release);
-
-            //  A submitter that published before the gate release observed
-            //  the gate as owned and returned from its drive attempt. Retake
-            //  ownership when its epoch is newer. A physical-admission wake
-            //  also invalidates the local blocked set: its mailbox command may
-            //  already have observed the gate as owned and returned. Otherwise
-            //  either no work arrived or a caller arriving after these checks
-            //  will acquire the now-free gate itself.
-            const uint64_t latest_redrive_epoch =
-              pending.redrive_epoch.load (std::memory_order_acquire);
-            const bool redrive_requested =
-              latest_redrive_epoch != observed_redrive_epoch;
-            if (pending.enqueue_epoch.load (std::memory_order_acquire)
-                  != scanned_enqueue_epoch
-                || redrive_requested) {
-                bool reacquire_expected = false;
-                if (pending.admission_gate.compare_exchange_strong (
-                      reacquire_expected, true, std::memory_order_acq_rel,
-                      std::memory_order_acquire)) {
-                    if (redrive_requested)
-                        blocked_target_count = 0;
-                    observed_redrive_epoch = latest_redrive_epoch;
-                    continue;
-                }
-            }
-            return;
-        }
-
-        const int rc = try_admit_request_pending (record);
-        if (rc == 0) {
-            finish_request_pending (record, true, 0);
-            continue;
-        }
-        const int failure_errno = errno;
-        const bool retry_later = retryable_request_target_errno (failure_errno);
-        int deferred_terminal_errno = 0;
-        {
-            scoped_lock_t lock (pending.sync);
-            deferred_terminal_errno = record->deferred_terminal_errno;
-            if (deferred_terminal_errno == 0 && retry_later) {
-                record->claimed = false;
-                try {
-                    append_routed_send_target (
-                      &blocked_targets, &blocked_target_count, record->target);
-                } catch (...) {
-                    //  A failed bookkeeping allocation must not escape
-                    //  through a public C entry point or strand the admission
-                    //  gate. Preserve the same handoff checks as the normal
-                    //  final scan: a wake or insertion may already have
-                    //  observed this gate as owned.
-                    const uint64_t latest_redrive_epoch =
-                      pending.redrive_epoch.load (std::memory_order_acquire);
-                    const bool redrive_requested =
-                      latest_redrive_epoch != observed_redrive_epoch;
-                    const bool enqueue_requested =
-                      pending.enqueue_epoch.load (std::memory_order_acquire)
-                      != scanned_enqueue_epoch;
-                    pending.admission_gate.store (false,
-                                                  std::memory_order_release);
-                    if (redrive_requested || enqueue_requested) {
-                        bool reacquire_expected = false;
-                        if (pending.admission_gate.compare_exchange_strong (
-                              reacquire_expected, true,
-                              std::memory_order_acq_rel,
-                              std::memory_order_acquire)) {
-                            if (redrive_requested)
-                                blocked_target_count = 0;
-                            observed_redrive_epoch = latest_redrive_epoch;
-                            continue;
-                        }
-                    }
-                    return;
-                }
-                const uint64_t latest_redrive_epoch =
-                  pending.redrive_epoch.load (std::memory_order_acquire);
-                if (latest_redrive_epoch != observed_redrive_epoch) {
-                    blocked_target_count = 0;
-                    observed_redrive_epoch = latest_redrive_epoch;
-                }
-            }
-        }
-        if (deferred_terminal_errno != 0) {
-            finish_request_pending (record, false, deferred_terminal_errno);
-            continue;
-        }
-        if (retry_later) {
-            continue;
-        }
-        finish_request_pending (record, false, failure_errno);
-    }
-}
-
-void zlink::socket_base_t::notify_request_pending_writable (pipe_t *pipe_)
-{
-    LIBZLINK_UNUSED (pipe_);
-    socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    if (pending.pending_msgs.load (std::memory_order_acquire) == 0)
-        return;
-    {
-        scoped_lock_t lock (pending.sync);
-        if (pending.by_op.empty ())
-            return;
-        pending.redrive_epoch.fetch_add (1, std::memory_order_release);
-    }
-    command_t wake;
-    memset (&wake, 0, sizeof (wake));
-    wake.destination = this;
-    wake.type = command_t::send_pending;
-    static_cast<mailbox_t *> (_mailbox)->send (wake);
-}
-
 void zlink::socket_base_t::notify_incremental_send_released ()
 {
     lifecycle_coordinator ().release_public_multipart_control_boundary ();
     if (lifecycle_coordinator ().deferred_peer_controls_pending_cached ())
         flush_deferred_peer_controls ();
-    notify_request_pending_writable (NULL);
 }
 
 void zlink::socket_base_t::hold_incremental_send_control_boundary ()
@@ -872,31 +500,6 @@ void zlink::socket_base_t::fail_pull_send_pending_for_logical_target (
         wake.type = command_t::send_pending;
         static_cast<mailbox_t *> (_mailbox)->send (wake);
     }
-    bool completed_any = false;
-    while (true) {
-        send_pending_record_t *doomed = NULL;
-        {
-            scoped_lock_t lock (pending.sync);
-            for (std::map<zlink_send_op_id_t,
-                          send_pending_record_t *>::iterator it =
-                   pending.by_op.begin ();
-                 it != pending.by_op.end (); ++it) {
-                send_pending_record_t *candidate = it->second;
-                if (candidate->claimed
-                    || candidate->target.peer_rid != logical_rid)
-                    continue;
-                candidate->claimed = true;
-                doomed = candidate;
-                break;
-            }
-        }
-        if (!doomed)
-            break;
-        finish_request_pending (doomed, false, terminal_errno_);
-        completed_any = true;
-    }
-    if (completed_any)
-        notify_request_completion ();
 }
 
 void zlink::socket_base_t::fail_pull_send_pending_for_logical_endpoint (
@@ -925,82 +528,16 @@ void zlink::socket_base_t::fail_pull_send_pending_for_logical_endpoint (
         wake.type = command_t::send_pending;
         static_cast<mailbox_t *> (_mailbox)->send (wake);
     }
-    bool completed_any = false;
-    while (true) {
-        send_pending_record_t *doomed = NULL;
-        {
-            scoped_lock_t lock (pending.sync);
-            for (std::map<zlink_send_op_id_t,
-                          send_pending_record_t *>::iterator it =
-                   pending.by_op.begin ();
-                 it != pending.by_op.end (); ++it) {
-                send_pending_record_t *const candidate = it->second;
-                if (candidate->claimed
-                    || candidate->target.logical_endpoint != endpoint_)
-                    continue;
-                candidate->claimed = true;
-                doomed = candidate;
-                break;
-            }
-        }
-        if (!doomed)
-            break;
-        finish_request_pending (doomed, false, terminal_errno_);
-        completed_any = true;
-    }
-    if (completed_any)
-        notify_request_completion ();
 }
 
-//  close / ctx term: fail fast. LINGER covers bytes already admitted to a
-//  pipe; a pending record has not been admitted, so draining it here would
-//  make close wait on the peer's consumption rate.
+// Close / context termination wakes synchronous SEND waiters.
 void zlink::socket_base_t::fail_all_send_pending (int terminal_errno_)
 {
     socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    {
-        scoped_lock_t lock (pending.sync);
-        pending.failing.store (true, std::memory_order_release);
-        for (std::map<routed_send_target_key_t,
-                      send_logical_wait_state_t>::iterator wait =
-               pending.logical_waits.begin ();
-             wait != pending.logical_waits.end (); ++wait)
-            signal_logical_wait_state (&wait->second, terminal_errno_);
-        std::map<routed_send_target_key_t,
-                 send_inline_attempt_state_t>::iterator attempt =
-          pending.inline_attempts.begin ();
-        while (attempt != pending.inline_attempts.end ()) {
-            if (attempt->second.active) {
-                if (!attempt->second.retire) {
-                    attempt->second.retire = true;
-                    attempt->second.retire_errno = terminal_errno_;
-                }
-                ++attempt;
-            } else {
-                attempt = pending.inline_attempts.erase (attempt);
-            }
-        }
-    }
-    while (true) {
-        send_pending_record_t *doomed = NULL;
-        {
-            scoped_lock_t lock (pending.sync);
-            for (std::map<zlink_send_op_id_t,
-                          send_pending_record_t *>::iterator it =
-                   pending.by_op.begin ();
-                 it != pending.by_op.end (); ++it) {
-                if (it->second->claimed) {
-                    if (it->second->deferred_terminal_errno == 0)
-                        it->second->deferred_terminal_errno = terminal_errno_;
-                    continue;
-                }
-                it->second->claimed = true;
-                doomed = it->second;
-                break;
-            }
-        }
-        if (!doomed)
-            break;
-        finish_request_pending (doomed, false, terminal_errno_);
-    }
+    scoped_lock_t lock (pending.sync);
+    for (std::map<routed_send_target_key_t,
+                  send_logical_wait_state_t>::iterator wait =
+           pending.logical_waits.begin ();
+         wait != pending.logical_waits.end (); ++wait)
+        signal_logical_wait_state (&wait->second, terminal_errno_);
 }

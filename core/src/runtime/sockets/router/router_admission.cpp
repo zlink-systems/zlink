@@ -511,7 +511,6 @@ int router_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)
         public_routing_id = blob_t (
           event_routing_id.data (), event_routing_id.size ());
     }
-    notify_request_pending_writable (pipe_);
     notify_send_writable (pipe_);
     // Monitor enqueueing has its own synchronization. Never call it while the
     // I/O/owner route-lifecycle fence is held.

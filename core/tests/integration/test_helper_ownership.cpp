@@ -396,11 +396,11 @@ void test_request_reply_failures_consume_final_part ()
     zlink_completion_id_t completion_id = UINT64_MAX;
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_NOT_FOUND,
+      ZLINK_SUBMIT_NOT_CONNECTED,
       zlink_request_part (router, &missing, &request,
                           ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 0,
                           NULL, &completion_id));
-    TEST_ASSERT_EQUAL_INT (ENOENT, errno);
+    TEST_ASSERT_EQUAL_INT (EHOSTUNREACH, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&request));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&request));

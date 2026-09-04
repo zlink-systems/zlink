@@ -1420,7 +1420,6 @@ void zlink::socket_base_t::process_async_mailbox ()
     lifecycle_coordinator ().mark_async_processing_started ();
     do {
         process_commands (0, false);
-        drive_request_pending ();
         {
             // A public POLLCOMPLETION registration is the sole completion
             // owner while it exists. The gate also fences a 0 -> 1 owner

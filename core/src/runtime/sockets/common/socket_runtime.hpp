@@ -655,77 +655,6 @@ struct routed_send_target_key_t
     uint64_t route_incarnation_id;
 };
 
-// Internal REQUEST admission hooks. The resolver runs only after one pending
-// record has won admission or a pre-admission terminal race.
-typedef void (*send_pending_request_resolved_fn) (void *context_,
-                                                  bool admitted_,
-                                                  int terminal_errno_);
-typedef void (*send_pending_request_cleanup_fn) (void *context_);
-// Promote a submit-call-owned REQUEST observer/resolution context only when
-// admission has actually fallen back to a pending record. On success the
-// pending record owns both returned pointers and releases the resolution
-// context through send_pending_request_cleanup_fn.
-typedef int (*send_pending_request_promote_fn) (
-  void *inline_context_, void **pending_observer_userdata_out_,
-  void **pending_resolution_context_out_);
-
-// One pending nonblocking REQUEST admission record. Ordinary SEND never
-// transfers a backpressured record to this owner.
-struct send_pending_record_t
-{
-    send_pending_record_t () :
-        op_id (0),
-        admission_observer (NULL),
-        admission_observer_userdata (NULL),
-        request_resolution_context (NULL),
-        request_resolved (NULL),
-        request_cleanup (NULL),
-        has_target (false),
-        charge_bytes (0),
-        claimed (false),
-        deferred_terminal_errno (0)
-    {
-    }
-
-    zlink_send_op_id_t op_id;
-    pipe_write_observer_fn admission_observer;
-    void *admission_observer_userdata;
-    void *request_resolution_context;
-    send_pending_request_resolved_fn request_resolved;
-    send_pending_request_cleanup_fn request_cleanup;
-    routed_send_target_key_t target;
-    bool has_target;
-    std::vector<zlink_msg_t> parts;
-    uint64_t charge_bytes;
-    //  Set while the admit loop owns this record outside the pending mutex so
-    //  a concurrent terminal resolver cannot race the physical submit.
-    bool claimed;
-    //  Pipe detach can race a physical admission while `claimed` keeps this
-    //  record outside the pending mutex. The detach owner publishes its
-    //  terminal cause here; the admission owner consumes it before releasing
-    //  the claim. Access is serialized by socket_send_pending_runtime_t::sync.
-    int deferred_terminal_errno;
-};
-
-//  Per-target direct-admission reservation. STREAM packet sends retain
-//  inactive entries for the lifetime of one exact transport target so the
-//  steady-state echo path does not allocate and free a tree node per packet.
-//  Detach marks an active retained entry for removal by its current owner.
-struct send_inline_attempt_state_t
-{
-    send_inline_attempt_state_t (bool active_ = false,
-                                 bool retained_ = false) :
-        active (active_), retained (retained_), retire (false),
-        retire_errno (0)
-    {
-    }
-
-    bool active;
-    bool retained;
-    bool retire;
-    int retire_errno;
-};
-
 // A synchronous NONE submit is not a pending record and therefore does not
 // reserve either pending-pool capacity or a completion slot.  It still needs a
 // socket-local fence against an explicit logical-target removal while it has
@@ -742,64 +671,14 @@ struct send_logical_wait_state_t
     uint32_t waiters;
 };
 
-// Per-socket REQUEST admission and blocking SEND wait state.
-//
-//  Ordering: records for one target form a FIFO. The admit loop only ever
-//  looks at the head of each target queue, so head-of-line blocking within a
-//  target is intentional - reordering would rearrange one logical stream on
-//  the wire. Different targets are independent.
+// Per-socket blocking SEND wait state.
 struct socket_send_pending_runtime_t
 {
-    socket_send_pending_runtime_t () :
-        admission_gate (false),
-        next_op_id (1),
-        pending_msgs (0),
-        enqueue_epoch (0),
-        redrive_epoch (0),
-        pending_bytes (0),
-        failing (false)
-    {
-    }
+    socket_send_pending_runtime_t () {}
 
     mutable mutex_t sync;
-    //  Serializes physical asynchronous admission. With no queued work the
-    //  submitter acquires this atomically and avoids the pending mutex/maps.
-    std::atomic<bool> admission_gate;
-    zlink_send_op_id_t next_op_id;
-    //  Plain sockets use the default-constructed key. Paired routed sockets
-    //  key by peer rid + transport pair identity/generation; an unpaired
-    //  ROUTER uses peer rid + its immutable physical route incarnation.
-    std::map<routed_send_target_key_t, std::deque<send_pending_record_t *> >
-      queues;
-    //  Reserves per-target ordering while a submitter attempts the direct
-    //  admission path outside the pending mutex. Different targets may still
-    //  admit independently when one target is backpressured. STREAM retains
-    //  inactive exact-target entries until detach to avoid steady-state node
-    //  churn; `active` alone controls ordering exclusion.
-    std::map<routed_send_target_key_t, send_inline_attempt_state_t>
-      inline_attempts;
     std::map<routed_send_target_key_t, send_logical_wait_state_t>
       logical_waits;
-    std::map<zlink_send_op_id_t, send_pending_record_t *> by_op;
-    // Reused only by the admission-gate owner. drive_request_pending keeps the
-    // active prefix local so a new drive call begins unblocked without
-    // destroying retained string/vector capacity.
-    std::vector<routed_send_target_key_t> blocked_targets_scratch;
-    std::atomic<uint64_t> pending_msgs;
-    //  Incremented after every queue insertion.  The admission driver uses
-    //  this to close the empty-scan/gate-release handoff window without
-    //  confusing an already blocked queue with newly published work.
-    std::atomic<uint64_t> enqueue_epoch;
-    //  Incremented before publishing a physical-admission wake. Unlike a new
-    //  queue insertion, a writable or multipart-release wake invalidates the
-    //  driver's local blocked-target set. Keeping the generation persistent
-    //  closes the window where another thread consumes the mailbox command
-    //  while the current driver still owns admission_gate.
-    std::atomic<uint64_t> redrive_epoch;
-    uint64_t pending_bytes;
-    //  Set once close or context termination has failed every pending record.
-    //  New submits are refused from that point on.
-    std::atomic<bool> failing;
 };
 
 struct socket_dispatch_bridge_t

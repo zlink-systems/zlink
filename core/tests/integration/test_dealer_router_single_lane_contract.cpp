@@ -2398,13 +2398,17 @@ void test_sl_flow_dr_normal_kinds_share_pause_and_hwm_gate ()
 
     zlink_msg_t request;
     init_part (&request, "request-shares-gate");
-    zlink_completion_id_t request_id = UINT64_MAX;
+    int request_wait_context = 0x5e;
+    zlink_completion_id_t request_wait_token = 0;
+    errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
+      ZLINK_SUBMIT_BACKPRESSURED,
       zlink_request_part (fixture.dealer, NULL, &request,
                           ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 1000,
-                          NULL, &request_id));
-    TEST_ASSERT_NOT_EQUAL (0, request_id);
+                          &request_wait_context, &request_wait_token));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    TEST_ASSERT_NOT_EQUAL (0, request_wait_token);
+    TEST_ASSERT_NOT_EQUAL (data_wait_token, request_wait_token);
     assert_consumed (&request);
 
     TEST_ASSERT_EQUAL_INT (
@@ -2417,10 +2421,6 @@ void test_sl_flow_dr_normal_kinds_share_pause_and_hwm_gate ()
           receive_router_part (fixture.router);
         TEST_ASSERT_EQUAL_UINT64 (0, drained.reply_token);
     }
-    const received_router_part_t admitted = receive_router_part (fixture.router);
-    TEST_ASSERT_NOT_EQUAL (0, admitted.reply_token);
-    send_reply (fixture.router, admitted, "normal-kinds-reply");
-
     zlink_pollitem_t writable = {fixture.dealer, 0, ZLINK_POLLOUT, 0};
     zlink_config_result_t poll_error = ZLINK_CONFIG_INTERNAL_ERROR;
     TEST_ASSERT_EQUAL_INT (1,
@@ -2429,15 +2429,43 @@ void test_sl_flow_dr_normal_kinds_share_pause_and_hwm_gate ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, poll_error);
     TEST_ASSERT_BITS_HIGH (ZLINK_POLLOUT, writable.revents);
 
-    zlink_completion_t completion = receive_completion (fixture.dealer);
-    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
-    TEST_ASSERT_EQUAL_UINT64 (data_wait_token, completion.completion_id);
-    TEST_ASSERT_EQUAL_PTR (&data_wait_context, completion.user_context);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.send_result);
-    TEST_ASSERT_EQUAL_INT (0, completion.send_terminal_errno);
-    zlink_completion_close (&completion);
+    bool saw_data_wait = false;
+    bool saw_request_wait = false;
+    for (size_t index = 0; index != 2; ++index) {
+        zlink_completion_t completion = receive_completion (fixture.dealer);
+        TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
+        TEST_ASSERT_EQUAL_INT (ZLINK_SEND_ADMITTED, completion.send_result);
+        TEST_ASSERT_EQUAL_INT (0, completion.send_terminal_errno);
+        if (completion.completion_id == data_wait_token) {
+            TEST_ASSERT_EQUAL_PTR (&data_wait_context,
+                                   completion.user_context);
+            saw_data_wait = true;
+        } else {
+            TEST_ASSERT_EQUAL_UINT64 (request_wait_token,
+                                      completion.completion_id);
+            TEST_ASSERT_EQUAL_PTR (&request_wait_context,
+                                   completion.user_context);
+            saw_request_wait = true;
+        }
+        zlink_completion_close (&completion);
+    }
+    TEST_ASSERT_TRUE (saw_data_wait);
+    TEST_ASSERT_TRUE (saw_request_wait);
 
-    completion = receive_completion (fixture.dealer);
+    zlink_msg_t retried_request;
+    init_part (&retried_request, "request-shares-gate");
+    zlink_completion_id_t request_id = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      zlink_request_part (fixture.dealer, NULL, &retried_request,
+                          ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, 1000,
+                          NULL, &request_id));
+    TEST_ASSERT_NOT_EQUAL (0, request_id);
+    assert_consumed (&retried_request);
+    const received_router_part_t admitted = receive_router_part (fixture.router);
+    TEST_ASSERT_NOT_EQUAL (0, admitted.reply_token);
+    send_reply (fixture.router, admitted, "normal-kinds-reply");
+    zlink_completion_t completion = receive_completion (fixture.dealer);
     assert_request_completion (&completion, request_id, ZLINK_REQUEST_OK,
                                "normal-kinds-reply");
 
