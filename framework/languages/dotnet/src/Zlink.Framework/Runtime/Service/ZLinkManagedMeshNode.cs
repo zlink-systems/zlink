@@ -389,12 +389,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // Service-wire §5 scopes a connection generation to the admitted
             // physical connection lifetime. Auto-connect reconciliation can
             // repeat its desired target while that connection remains live;
-            // reuse its intent instead of opening a second candidate whose
-            // admission could supersede the live generation.
+            // reuse either direction's intent instead of opening a reciprocal
+            // candidate whose admission could supersede the live generation.
             var admitted = _peersByIntent.Values.FirstOrDefault(peer =>
-                peer.Direction == ZLinkServiceConnectionDirection.Outbound
-                && peer.Admitted
-                && peer.ExpectedRid == expectedRid
+                peer.Admitted
+                && (peer.ExpectedRid == expectedRid
+                    || (expectedRid is { } rid && peer.RoutingId == rid))
                 && string.Equals(peer.Endpoint, endpoint, StringComparison.Ordinal)
                 && string.Equals(
                     peer.ExpectedSecurityIdentity,

@@ -3,7 +3,8 @@ set -euo pipefail
 set +m
 umask 077
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+ROOT_DIR="$(dirname "$SCRIPT_PATH")"
 source "$ROOT_DIR/../../runner-common.sh"
 zlink_sample_configure_port_pool java
 ZLINK_SAMPLE_GRADLE_SETTINGS_ARGS=(--settings-file standalone.settings.gradle.kts)
@@ -23,7 +24,7 @@ done
 selected() { [[ "$SCENARIO" == all || ",${SCENARIO}," == *",$1,"* ]]; }
 
 if [[ "$G4_CHILD" == 0 ]] && selected ZW-G4; then
-  if ZLINK_SAMPLE_KEEP_RUN_DIR="${ZLINK_SAMPLE_KEEP_RUN_DIR:-0}" bash "$0" --g4-child ZW-G4; then
+  if ZLINK_SAMPLE_KEEP_RUN_DIR="${ZLINK_SAMPLE_KEEP_RUN_DIR:-0}" bash "$SCRIPT_PATH" --g4-child ZW-G4; then
     G4_PROVEN=1
   else
     echo "scenario ZW-G4 blocked: isolated crash lane failed" >&2
@@ -31,7 +32,7 @@ if [[ "$G4_CHILD" == 0 ]] && selected ZW-G4; then
   if [[ "$SCENARIO" == ZW-G4 ]]; then [[ "$G4_PROVEN" == 1 ]] && exit 0 || exit 1; fi
 fi
 if [[ "$B8_CHILD" == 0 ]] && selected ZW-B8; then
-  if ZLINK_SAMPLE_KEEP_RUN_DIR="${ZLINK_SAMPLE_KEEP_RUN_DIR:-0}" bash "$0" --b8-child ZW-B8; then
+  if ZLINK_SAMPLE_KEEP_RUN_DIR="${ZLINK_SAMPLE_KEEP_RUN_DIR:-0}" bash "$SCRIPT_PATH" --b8-child ZW-B8; then
     B8_PROVEN=1
   else
     echo "scenario ZW-B8 blocked: isolated command-44 lane failed" >&2

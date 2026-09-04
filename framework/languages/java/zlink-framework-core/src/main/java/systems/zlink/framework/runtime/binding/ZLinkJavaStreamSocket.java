@@ -230,21 +230,28 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         List<Message> parts,
         Duration timeout) {
         if (boundSessionSink != null) {
-            return boundSessionSink.sendAsync(routingId, parts, timeout);
+            return boundSessionSink.sendAsync(
+                routingId,
+                parts,
+                timeout == null ? admissionTimeout() : timeout);
         }
         if (parts == null || parts.size() != 1) {
             throw new IllegalArgumentException(
                 "bound Session push requires one encoded STREAM frame");
         }
-        return inStateLane(() -> FrameworkStreamOperations.send(
-            socket, routingId, parts, timeout));
+        Message frame;
+        try {
+            frame = Message.from(parts.getFirst());
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+        return submitOwnedStreamFrameAsync(routingId, frame, timeout);
     }
 
     @Override public CompletionStage<Void> sendBoundSessionPushAsync(
         RoutingId routingId,
         List<Message> parts) {
-        return sendBoundSessionPushAsync(
-            routingId, parts, admissionTimeout());
+        return sendBoundSessionPushAsync(routingId, parts, null);
     }
     @Override public boolean send(RoutingId routingId, String packetName, List<Message> parts, SendFlags flags) {
         return inStateLane(() -> ZLinkJavaStreamFraming.submit(
@@ -294,6 +301,13 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
+        return submitOwnedStreamFrameAsync(routingId, frame, timeout);
+    }
+
+    private CompletionStage<Void> submitOwnedStreamFrameAsync(
+        RoutingId routingId,
+        Message frame,
+        Duration timeout) {
         try {
             return stateLane.<CompletionStage<Void>>runAsync(() -> {
                 try {

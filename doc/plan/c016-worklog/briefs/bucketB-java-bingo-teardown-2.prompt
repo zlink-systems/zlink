@@ -1,0 +1,45 @@
+# Job: java — (1) Bingo intermittent `FORCE_STOPPED reason=TEARDOWN_FAILED` with incomplete play-a lifecycle evidence; (2) ZoneWorld runner self-invocation breaks for a relative `$0`
+
+You are a codex sub-agent under a Claude supervisor. Two items, one cause each, 1.5 h cap. Read
+`AGENTS.md` (root) §2/§3/§4.1, `framework/AGENTS.md`, `framework/languages/java/AGENTS.md`, and
+`doc/plan/c016-worklog/bucketC-java-teardown-failed-summary.md` (the earlier TEARDOWN_FAILED fix:
+`ZLinkJavaStreamSocket` idempotent unbind classification, `6682ae0db1`) plus
+`gate-final-java-samples-2-summary.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages' trees, `framework/languages/shared_sample/**`;
+never lower an assertion; do not commit. Do not touch `framework/languages/java/samples/java/TicTacToe/run_sample.sh`
+(its non-executable mode is pinned by `SampleReleaseGateContractTest`). Take
+`flock -w7200 /tmp/zlink-jvm-gate.lock` around EVERY gradle/sample invocation; `TMPDIR=/dev/shm/zlink-tmp-java`;
+never export a directory-valued `ZLINK_LIBRARY_PATH`; do not rebuild Core or local packages.
+
+## Item 1 — Bingo TEARDOWN_FAILED (B, intermittent: 1 fail then retry pass)
+- `zlink-work/c016/logs/gate-final-java-2-Bingo.log:53-55`: `bingo-placement=completed` then
+  `Framework lifecycle evidence is incomplete: build/sample-logs/play-a.log`,
+  `READY=1 TERMINATION=1 STOPPED_NONE=0 FORCE_STOPPED=1`,
+  `ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED reason=TEARDOWN_FAILED` (play-a role). The
+  functional scenario passed; the teardown of play-a did not complete cleanly. Find the cause stack
+  in play-a's role log (run dir under `/dev/shm/zlink-tmp-java/tmp.*` or `build/sample-logs/` if
+  preserved; otherwise reproduce with `ZLINK_JAVA_STREAM_TRACE=1` + run-dir preservation, up to 6×
+  `bash framework/languages/java/samples/java/Bingo/run_sample.sh`). Candidates: a synchronous
+  submit failure during unbind/close that is not classified idempotent (same family as `6682ae0db1`
+  but a different path — async terminal? STREAM socket close ordering vs. the poller as sole
+  POLLCOMPLETION owner?), or a teardown deadline exceeded because a lane join blocks (same family as
+  the A5/A3 state-lane fixes: `bucketB-java-zoneworld-3-summary.md`, `bucketB-java-zoneworld-a3-summary.md`).
+  Spec: `framework/doc/framework/common/spec/server/**` termination/teardown outcome contract
+  (STOPPED vs FORCE_STOPPED/TEARDOWN_FAILED) — cite the clause. Fix minimally in
+  `framework/languages/java/**` with a `zlink-framework-core` regression test; verify Bingo 5× green
+  and `:zlink-framework-core:test` once (known C: two `ZLinkJavaRawMeshNodeM6ATest`).
+
+## Item 2 — ZoneWorld runner self-invocation (D, deterministic when invoked by a relative path)
+- `framework/languages/java/samples/java/ZoneWorld/run_sample.sh:10` does `cd "$ROOT_DIR"`, then `:34`
+  (and any other `bash "$0"` site) re-invokes itself for the isolation children (`--b8-child`, G4).
+  When the script was started as `bash framework/languages/java/samples/java/ZoneWorld/run_sample.sh`
+  from the repo root, `$0` is relative and no longer resolves after the `cd`:
+  `bash: framework/languages/java/samples/java/ZoneWorld/run_sample.sh: No such file or directory`
+  → ZW-B8 fails, `zoneworld=completed` withheld. Fix: resolve the script's absolute path once at the
+  top (before the cd) and use it for every self-invocation; check the Kotlin ZoneWorld runner and
+  `run_sample.ps1` for the same pattern and align. Verify: `bash framework/languages/java/samples/java/ZoneWorld/run_sample.sh`
+  from the repo root 1× green (`zoneworld=completed`), and `(cd .../ZoneWorld && bash ./run_sample.sh)` 1× green.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-java-bingo-teardown-2-summary.md`: item 1 cause stack + `file:line` +
+spec clause + fix + regression + 5× results; item 2 fix + 2 results; core test counts; BLOCKERS.

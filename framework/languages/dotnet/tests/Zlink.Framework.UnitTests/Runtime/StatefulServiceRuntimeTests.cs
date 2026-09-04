@@ -952,6 +952,33 @@ public sealed class StatefulServiceRuntimeTests
     }
 
     [Fact]
+    public async Task ConnectPeerReusesAdmittedInboundPeerForSameIdentityAndEndpoint()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var lower = NewNode(context, "reuse-inbound-aa");
+        await using var higher = NewNode(context, "reuse-inbound-zz");
+        var suffix = Guid.NewGuid().ToString("N");
+        var lowerEndpoint = $"inproc://reuse-inbound-aa-{suffix}";
+        var higherEndpoint = $"inproc://reuse-inbound-zz-{suffix}";
+        lower.SetBind(lowerEndpoint);
+        higher.SetBind(higherEndpoint);
+        higher.ConnectPeer(lowerEndpoint, lower.RoutingId);
+        lower.Start();
+        higher.Start();
+        await WaitUntilAsync(() => lower.Status().AdmittedPeerCount == 1
+                                  && higher.Status().AdmittedPeerCount == 1);
+
+        var inbound = Assert.Single(lower.Peers());
+        var reused = lower.ConnectPeer(higherEndpoint, higher.RoutingId);
+
+        Assert.Equal(inbound.ConnectionIntentId, reused);
+        Assert.Equal(
+            inbound.ConnectionIntentId,
+            Assert.Single(lower.Peers()).ConnectionIntentId);
+        Assert.Equal(1u, lower.Status().AdmittedPeerCount);
+    }
+
+    [Fact]
     public async Task RemoteActorStaleAuthorityReturnsOneTerminalForTheOriginalOperation()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

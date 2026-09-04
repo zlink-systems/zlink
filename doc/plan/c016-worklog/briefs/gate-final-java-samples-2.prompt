@@ -1,0 +1,33 @@
+# Job: final java sample gate, round 2 — run the 7 common Java samples individually + the aggregate `run_samples.sh` (java + kotlin) on the committed main tree
+
+You are a codex sub-agent under a Claude supervisor. Execution/classification job (no source edits).
+Read `AGENTS.md` (root) §2/§4 and `doc/plan/c016-worklog/gate-final-java-samples-summary.md` (round 1:
+TicTacToe runner mode → fixed `133d01c9b2`; ZoneWorld ZW-A3 → framework fix committed; Kotlin GameQuest
+owner-termination → runner fix `9e76d053e5`). Do not modify source/tests, nothing under `core/**`,
+`bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`. Do not rebuild Core or
+local packages. Another job may run .NET/cpp/node gates concurrently — only touch the java tree.
+
+## Environment
+`TMPDIR=/dev/shm/zlink-tmp-java` (mkdir -p), `flock -w7200 /tmp/zlink-jvm-gate.lock` around every
+gradle/sample invocation, do NOT export a directory-valued `ZLINK_LIBRARY_PATH`. Rebuild the Java
+host once first (the framework core changed): the runner does it via gradle (`installDist`) — read
+`framework/languages/java/samples/runner-common.sh` / `run_samples.sh`.
+
+## What to run
+1. Each of the 7 Java samples individually via `framework/languages/java/samples/java/<Sample>/run_sample.sh`
+   (TicTacToe Bingo DeliveryDispatch SupportChat GameQuest ShoppingMall ZoneWorld): exit, duration,
+   final marker. Re-run a failing sample once for determinism.
+2. The aggregate `framework/languages/java/samples/run_samples.sh` once (java + kotlin): exit,
+   duration, which sample stopped it if any.
+3. `./gradlew --no-daemon :zlink-framework-core:test` once (known C: two `ZLinkJavaRawMeshNodeM6ATest`
+   + `JavaDocumentationRegressionTest` in contractTest only) — report exact counts.
+
+## Classify every failure
+(A) DONTWAIT/backpressure, (B) terminal/error classification, (C) known pre-existing (exact prior
+evidence `file:line`), (D) environment/runner, (E) binding-port dependency; first failing
+assertion/log excerpt with `file:line`.
+
+## Deliverable
+`doc/plan/c016-worklog/gate-final-java-samples-2-summary.md`: 7-row table, aggregate row, unit
+counts, failures bucketed, exact commands, logs under `zlink-work/c016/logs/gate-final-java-2-*.log`,
+BLOCKERS. Do not commit.

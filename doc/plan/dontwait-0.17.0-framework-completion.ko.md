@@ -36,13 +36,13 @@
       후속으로 드러난 같은 endpoint RID 교체 시 stale connect intent 문제(spec 04-network-listener-identity §replacement)도 **수정 커밋 `44b9b27efc`**.
 - [x] **cpp m6b** `error_kind()==deadline_exceeded` — 동일 원인(ENOENT), 격리 3/3 green. 잔여: m6b 후반 `verify_raw_spot_and_actor_routing` line 4524 /
       `route_cache_stops_at_owner_admission_deadline` line 1909 불안정(별개 원인, job `bucketB-cpp-m6b-late` 진행 중)
-- [ ] **cpp m6a 잔여**: `verify_client_server_plain_hello_is_rejected` 행(단독 실행도 timeout) — job `bucketB-cpp-m6a-plain-hello` 진행 중
+- [x] **cpp m6a 잔여**: `verify_client_server_plain_hello_is_rejected` — 테스트가 DEALER의 completion poller를 구동하지 않아 거부 종결이 관찰되지 않던 하네스 결함, 수정 커밋 `cc9a4edcd7` (최종 cpp ctest에서 m6a green)
 - [x] **dotnet stale-authority 3건**: 원인 = spec(README §4 HANDOVER)이 정한 패배 방향 request timeout. Framework가 Core handover 수렴 전에 `Admitted`를 공개한 것이 결함.
       수정 = settle-before-submit(패배 outbound intent를 endpoint로 disconnect, 패배 방향이 ready였다면 두 lane Disconnected 처리 뒤에만 Admitted 공개), 회귀 `BilateralCallerFirstAdmissionCompletesImmediateActorRequestOnSurvivor`.
       3건×3회 9/9, Stateful suite 50/50. 전체 unit gate는 감독관이 실행 중(커밋 대기). generic request 자동 재전송은 spec(02-spot-messaging:392-403, 02-session-actor-binding:626-634)이 금지하므로 미도입
 - [x] **node 신규(B)**: `user-spot-native-two-process` — 첫 request가 deadline 전부 소진 → replay 여지 없음. 수정 커밋 `285cfa522a`
 - [x] 판정: cpp 4건·dotnet 1건·node 1건 모두 framework(+테스트 하네스) 결함. Core·binding 버그 0건 (Core 수정 job 1건은 오판으로 중단).
-- [ ] 수정 + 재검증 + 커밋 — cpp 4/4·node 1/1 커밋, dotnet 커밋 대기(전체 unit gate)
+- [x] 수정 + 재검증 + 커밋 — cpp 4/4·node 1/1 커밋, dotnet 4건 커밋(`b28eb24270`·`25952a76bc`·`6b77ba013f`·`ebff5b3e1b`, unit gate v7 1920/0+15/15), java 2건(`d8575e6fbb` STREAM push, ZoneWorld runner `83dfe33fb5`), kotlin runner `9e76d053e5`, node lint `8dd97bda2d`
 
 ### C. 검증 인프라 (신뢰성 확보)
 - [x] 환경 재구축(2026-09-05, WSL 재설치): Core dev 빌드, **로컬 Core 0.17.0 프리픽스 수동 구성**(GitHub에 `core/v0.17.0` 릴리스 없음 — `fetch-release.sh` 캐시 단락 경로 이용), 4언어 로컬 패키지,
@@ -54,28 +54,28 @@
 - [x] `java-cross` selector(Java↔Node/.NET) 4/4 통과. Java↔C++ 방향은 all-stage runner 후반이라 위 .NET→C++ 실패 해소 후 실행
 
 ### D. 최종 게이트 (plan line 143: framework unit + cross-language E2E + 7 samples 전부 green)
-- [ ] 4언어 framework unit (gate-v2, D-B85 바인딩 반영 패키지): **A/B 실패 0**.
+- [x] 4언어 framework unit — 최종(2026-09-05): **dotnet 1920/0 + Canonical 15/15(hang 0; 36분짜리 D-068 sibling만 제외)**, **node 표준 gate 1536/0 + lint 0**, **cpp ctest 68/69(inventory 278 = 기존 C, m6b 1909 flake 미발생)**, **java core 1216/2(M6A 2건 = 기존 C)**, contractTest는 JavaDocumentationRegression 1건(기존 C). A/B 실패 0.
       java 1213/2 = pre-existing M6A 2건만(F 1건 `EntrySpotActorDispatchTests…staleTerminal`은 하네스 drain barrier 수정 `2b1d0c794c`);
       node 1552/5 → C 4(ZoneWorld dist 미빌드 3·lint 1) + F 2 수정 완료(`2ceb137abe`);
-      cpp gate-v2 63/69 → stream-connector fixture(RAW mode before bind, spec 08-stream §2) `dbfcf7d6fe`·lz4 packaging `20b94c3457`·package-test config `4573c09a2a` 수정 후 잔여 = inventory 278(C)·m6b 1909 flake(C);
-      dotnet 전체 unit gate(handover+spot-route 결합 상태, 36분짜리 D-068 sibling 제외): 852 pass / 1 fail / 1 hang →
+      cpp gate-v2 63/69 → stream-connector fixture(RAW mode before bind, spec 08-stream §2) `dbfcf7d6fe`·lz4 packaging `20b94c3457`·package-test config `4573c09a2a` 수정 후 잔여 = inventory 278(C)·m6b 1909 flake(C); **최종 cpp ctest(리팩토링 후) 68/69 = inventory 278만, m6b flake 미발생, package consumer 2건 pass**; **node 최종 표준 `npm test`(build·typecheck·lint·runtime) 1536/0, lint 0 errors** — `spot-timer.ts:137` 1줄 수정 후(ZoneWorld dist 3건·two-process·Chromium 항목 모두 green);
+      dotnet 전체 unit gate: v3 852/1/1hang → v4 → v5 1917/2 → **v6 1919/0 + Canonical 15/15** → **v7(TicTacToe 수정 포함) 1920/0 + Canonical 15/15, hang 0** (36분짜리 D-068 sibling만 제외). 커밋: 승인 rework `b28eb24270`, ClientServer 재연결 `25952a76bc`, fixture DEALER 누수 `6b77ba013f`, inbound peer 재사용 `ebff5b3e1b`.
       relay fail = 늦은 loser `ConnectionReady`가 survivor의 RID→pair 인덱스를 덮어 command 33이 `current_source=False`로 폐기(수정, 15/15);
       hang = fixed-RID handover 테스트 fixture 경합(`RouteAdmission_HandoverStartsFreshLivenessDeadline`, 이전 DEALER reconnect intent 유지) — fixture 수정(8/8).
       **Core 후보(B 보고) → 해소(2026-09-05 05:40, Core 결함 아님)**: dump 분석 결과 native ctx에 남은 socket은 test fixture(`CanonicalActorJoinIngressReplyTests.ConnectedRuntime.HandoverAsync/ReconnectAsync`)가 admission 실패 예외 경로에서 dispose하지 않은 fixed-RID DEALER 1개(managed handle GC root 0) — `zlink_close` 미호출 상태에서 `Context.DisposeAsync`가 spec(`core/doc/spec/core/socket/README.ko.md:486`, 모든 socket close 후 ctx term)대로 block. 공개 C API repro(모든 socket close 시 tcp/inproc/handover cycle 5/5 즉시 반환; 미close DEALER 1개면 늦은 close까지 block) = `doc/plan/c016-worklog/evidence/test_ctx_term_fixed_rid_handover.cpp`. fixture 수정 job 진행 중. 2차 발견(Core 후속, B 영역): tcp에서 이전 pipe가 살아있는 same-RID replacement DEALER admission이 0.1~2.9 s(간헐 >5 s, inproc 즉시) — decisions D-086.
       gate-v5(재admission 수정 포함, Canonical 별도 3분 blame): Canonical 11 pass + hang 1(`RouteAdmission_PriorHelloThenExactDisconnect_DoesNotReplaceCurrentPeer`, 단독 2/2 pass → teardown/ctx_term 계열, Claude sub-agent 조사 중; codex는 content filter로 2회 사망);
       나머지 suite **1917 pass / 2 fail / hang 0**(`InstanceSpotIdleInspection` hang 소멸): `MalformedPushedControl_ReconnectsAndReadmits`(round-1 수정 후 단독 5/5이나 full suite에서 재현, `ready=0` — round-2 job) + `ManagedNode_Tcp_SameEndpoint_Replacement_RemainsAdmitted_Across_Repeated_Lifecycles`(단독 3/3 fail, 결정적 회귀 — job 진행 중)
 - [ ] 7 samples × 4언어 green — **cpp 7/7**; **node 7/7**(SupportChat budget `2e3b1b47e4`, ZoneWorld entry html `c67deb44e0`, runner PASS marker `2ceb137abe`);
-      java: TicTacToe·SupportChat·DeliveryDispatch(`ed156f5983`+teardown `6682ae0db1`)·GameQuest(heartbeat `dc9fe76100`)·ShoppingMall·**Bingo**(teardown/heartbeat 수정으로 해소, exit 0) = **6/7**; 최종 java gate(2026-09-05 05:22): 개별 6/7(TicTacToe는 run_sample.sh 실행비트 누락 → 5언어 일괄 `133d01c9b2`; ZoneWorld A3 `moveTo` timeout 1/4 간헐 → job), aggregate는 Java 7/7 완료 후 Kotlin GameQuest `Program.kt:179` `ensure(unavailable != null)` 실패(owner termination 뒤 요청이 성공) → job;
+      java: TicTacToe·SupportChat·DeliveryDispatch(`ed156f5983`+teardown `6682ae0db1`)·GameQuest(heartbeat `dc9fe76100`)·ShoppingMall·**Bingo**(teardown/heartbeat 수정으로 해소, exit 0) = **6/7**; 최종 java gate(2026-09-05 05:22): 개별 6/7(TicTacToe는 gate job이 `./run_sample.sh`를 직접 실행한 탓(비실행 모드는 `SampleReleaseGateContractTest:140-143`가 의도적으로 고정, runner는 `bash` 호출) → 실행비트 커밋 `133d01c9b2`는 revert `dd23fce2ff`; ZoneWorld A3 `moveTo` timeout 1/4 간헐 → job), aggregate는 Java 7/7 완료 후 Kotlin GameQuest `Program.kt:179` `ensure(unavailable != null)` 실패(owner termination 뒤 요청이 성공) → job;
       ZoneWorld: A2 지연 = public mesh poller owner가 command 36 STREAM admission을 동기 대기 → 비동기 admission `424b15684c`; A5 = STREAM 수신 owner가 control frame(heartbeat pong·session-closing) 전송을 state lane에서 동기 대기 → 비동기 전송 `7b0590183d` → **FULL ZoneWorld 2/2 green** ⇒ **java 7/7**(최종 일괄 게이트 job 실행 중);
-      dotnet 7 samples 미실행(dotnet 커밋 후). cpp/node 리팩토링 pass(POSDDD·perf·dead code) job 진행 중
-- [ ] cross-language E2E green — cpp all-stage runner **32/32 PASS**(dotnet spot-route 수정 포함, 미커밋 상태); node smoke 12/12 + Redis stage(환경 복원 후 재실행 필요); java-cross 4/4. dotnet 커밋 후 최종 재실행
+      dotnet 7 samples(1차, `ebff5b3e1b` 전): 6/7 — TicTacToe `JoinGameNotify` 미전달 = auto-connect가 이미 admitted된 inbound peer를 재사용하지 않고 reciprocal candidate를 열어 route/survivor 불일치(수정 `ebff5b3e1b`, 3/3) → **2차 dotnet 7/7 + aggregate exit 0(300 s)** (`gate-final-dotnet-samples-2-summary.md`). java ZoneWorld A3 = bound-session push가 호출 thread에서 STREAM state lane join(수정 `d8575e6fbb` 직전 커밋, prefix 5/5·FULL 2/2) → java 2차: 개별 6/7(+Bingo 1회 TEARDOWN_FAILED 후 재시도 pass, ZoneWorld는 상대경로 `bash "$0"` 자기호출 runner 결함 D) → Bingo teardown+ZoneWorld runner job 진행 중; core test 1216/2(M6A). cpp/node 리팩토링 pass 커밋 `01e5c4613d`.
+- [x] cross-language E2E green — **최종(커밋 tree `ebff5b3e1b`+java `d8575e6fbb`): cpp all-stage 32/32, node smoke 12/12(Redis 양방향 stage 실행 확인), java-cross 4/4** (`gate-final-cross-language-summary.md`; 초기 1회 Java library-path env 실패는 D, unset 후 재검증)
 - [ ] 최종 커밋+푸시 — 지금까지 framework 수정 커밋 20건 푸시됨(main); dotnet 일괄 커밋·리팩토링 pass·최종 게이트 잔여
 
 ### E. 문서/사이트 (2026-09-04 추가)
 - [x] docs PR #2 (영문 자연화 + archive 삭제) 머지 `3f0f02d478`, 가이드 재생성 `baa4b4e4f6`, 앵커수정 `8f8f75ff71`
 - [x] **docs 사이트 퍼블리시 완료** (GitHub Pages 배포 성공)
 - [x] "cpp async-only submit projection" 계약 실패는 로컬 false-failure로 판정(CI 통과) — framework API 추가 불필요
-- [ ] **[사용자 요청] framework 가이드에 메시징 API 종결자 의미·사용법 추가** — 05-channel-messaging에 개념 절 신설(04 §3.1 중복 금지). 진단·제안 위치는 HANDOFF §4.2
+- [x] **[사용자 요청] framework 가이드에 메시징 API 종결자 의미·사용법 추가** — 05-channel-messaging에 개념 절 신설(4언어 ko/en, 04 §3.1 중복 없음) 커밋 `15ba13b217`, MANDATORY 문구 수정 `5e9d8f258e`
 
 
 ## §B 근본원인·해결방안 정리 (2026-09-05 새벽, A 감독관)

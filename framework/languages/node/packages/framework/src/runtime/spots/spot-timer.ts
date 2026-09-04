@@ -134,7 +134,7 @@ export class ZLinkSpotTimerRegistry {
       reportFailure,
       () => this.executeTimer === undefined
         ? !executionSerial!.isExecuting
-        : !this.isTimerExecuting?.(name)
+        : this.isTimerExecuting?.(name) !== true
     ));
     const registered = await this.lane.run(() => this.completeAddCore(
       name,
