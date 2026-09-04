@@ -258,7 +258,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         RoutingId routingId,
         ZLinkStreamHeader header,
         List<Message> parts) {
-        return sendAsync(routingId, header, parts, admissionTimeout());
+        return submitStreamFrameAsync(routingId, header, parts, null);
     }
     @Override public CompletionStage<Void> sendAsync(
         RoutingId routingId,
@@ -295,11 +295,30 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             return CompletableFuture.failedFuture(failure);
         }
         try {
-            return inStateLane(() -> FrameworkStreamOperations.send(
-                socket, routingId, List.of(frame), timeout));
-        } finally {
+            return stateLane.<CompletionStage<Void>>runAsync(() -> {
+                try {
+                    return FrameworkStreamOperations.send(
+                        socket,
+                        routingId,
+                        List.of(frame),
+                        timeout == null
+                            ? admissionTimeoutOnLane()
+                            : timeout);
+                } finally {
+                    frame.close();
+                }
+            }).thenCompose(submission -> submission);
+        } catch (RuntimeException | Error failure) {
             frame.close();
+            throw failure;
         }
+    }
+
+    private Duration admissionTimeoutOnLane() {
+        Duration configured = socket.options().sendTimeout();
+        return configured.isNegative() || configured.isZero()
+            ? Duration.ofSeconds(1)
+            : configured;
     }
     @Override public ZLinkBackendActorBindOperation bindActor(RoutingId sessionRid, ZLinkBackendActorRef actor) {
         return timeout -> {
