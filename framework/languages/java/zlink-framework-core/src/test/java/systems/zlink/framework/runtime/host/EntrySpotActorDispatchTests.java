@@ -480,6 +480,7 @@ final class EntrySpotActorDispatchTests {
             ZLinkActorRuntime actors = (ZLinkActorRuntime) runtime.actorManager();
             ProbeActor actor = (ProbeActor)
                 actors.localActor("actor-a").orElseThrow();
+            awaitActorCreationTurn(actors);
 
             //  Take the Actor queue past its relocation cut: from here every
             //  admission is rejected with RelocatedOwnerException, which is the
@@ -524,6 +525,7 @@ final class EntrySpotActorDispatchTests {
             ZLinkActorRuntime actors = (ZLinkActorRuntime) runtime.actorManager();
             ProbeActor actor = (ProbeActor)
                 actors.localActor("actor-a").orElseThrow();
+            awaitActorCreationTurn(actors);
 
             var seal = actors.trySealActorRelocation("actor-a").orElseThrow();
             var commit = actors.retainActorRelocationCommit("actor-a", seal)
@@ -561,6 +563,7 @@ final class EntrySpotActorDispatchTests {
             ZLinkActorRuntime actors = (ZLinkActorRuntime) runtime.actorManager();
             ProbeActor actor = (ProbeActor)
                 actors.localActor("actor-a").orElseThrow();
+            awaitActorCreationTurn(actors);
 
             var seal = actors.trySealActorRelocation("actor-a").orElseThrow();
             var commit = actors.retainActorRelocationCommit("actor-a", seal)
@@ -892,6 +895,12 @@ final class EntrySpotActorDispatchTests {
             Thread.sleep(10);
         }
         assertEquals(expected, count.get());
+    }
+
+    private static void awaitActorCreationTurn(ZLinkActorRuntime actors)
+        throws Exception {
+        actors.awaitDrainBarrier().toCompletableFuture()
+            .get(5, TimeUnit.SECONDS);
     }
 
     private static Object defaultValue(Class<?> type) {

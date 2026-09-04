@@ -1,0 +1,42 @@
+# Job: cpp — `test_cpp_stream_connector` and `connector_perf_smoke` fail at bind: `zlink::bind_error_t: Unknown error 501 (errno=22)`
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages' trees; never lower an assertion; do not
+commit. Build dir `framework/languages/cpp/build/linux-ninja-debug` is yours (another job uses
+`build/linux-ninja-c-e2e`).
+
+## Facts (`doc/plan/c016-worklog/gate-v2-cpp-summary.md`)
+- On the rebuilt 0.17.0 packages (Core main incl. D-B85 `7d8205a028`, `29add0ac81`; cpp binding
+  `e0860723bc`), CTest 63/69. Two failures reproduce deterministically in isolation:
+  `test_cpp_stream_connector` (registered `framework/languages/cpp/CMakeLists.txt:1702`) and
+  `connector_perf_smoke` (`:1753`) both throw `zlink::bind_error_t: Unknown error 501 (errno=22)` before
+  the workload starts. 501 in `core/include/zlink_errno.h` is the bind result next to
+  `ZLINK_BIND_ADDR_IN_USE = 502` (look it up: likely the EINVAL bind result). Logs:
+  `zlink-work/c016/logs/gate-v2-cpp-ctest.log`, `gate-v2-cpp-failure-rerun.log`.
+- These tests were not run in earlier gates tonight (only m6a/m6b/channel_messaging), so "new" is
+  relative to the last full cpp ctest before the 0.16/0.17 transition. Strong hypotheses to test:
+  (1) 0.16.0 pull-completion contract: "STREAM receive mode must be set to RAW or PACKET before the
+  first successful bind/connect and is then immutable" (`core/include/zlink/socket/api.h` comment near
+  `zlink_stream_recv_packet`; spec `core/doc/spec/core/socket/08-stream.ko.md`) — a stream host that
+  binds before setting PACKET mode, or sets an option after bind, now gets EINVAL; the cpp stream
+  connector/host (`framework/languages/cpp/connector/**`, `framework/src/runtime/streams/stream_host_service.cpp`)
+  or the test fixture may do that; (2) a ws/wss/tls endpoint option ordering change in Core transports
+  (`core/src/runtime/transports/ws`, `tls` changed heavily since baseline); (3) the binding's
+  `bind_error_t` mapping lacking the new code (message says "Unknown error 501" → report as a binding
+  message-mapping gap even if not the cause).
+- Env: `cd framework/languages/cpp`, `ctest --test-dir build/linux-ninja-debug -R '^test_cpp_stream_connector$' --output-on-failure`.
+  Do not rebuild Core/packages.
+
+## What to do
+1. Reproduce; capture the exact bind endpoint, socket type, option sequence (existing tracing first:
+   `ZLINK_CPP_MESH_TRACE=1`, connector traces; then gdb on the throw) and the Core result/errno.
+2. Match the spec text (08-stream, transports) and fix the owning framework/connector/test-fixture
+   code minimally; if Core rejects a spec-valid bind, STOP and report with the exact spec clause.
+3. Regression: ensure the connector test pins the correct option ordering; rerun both ctest cases 3×
+   and `ctest -j2` for the full cpp tree once (report counts; known: m6b 1909 flake, inventory 278,
+   the two `liblz4` install-consumer failures handled by another job).
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-cpp-stream-connector-bind-summary.md`: bind sequence, Core code/errno,
+spec clause, owner, fix + regression, ctest counts, BLOCKERS.
