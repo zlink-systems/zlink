@@ -52,7 +52,10 @@
 - [x] `java-cross` selector(Java↔Node/.NET) 4/4 통과. Java↔C++ 방향은 all-stage runner 후반이라 위 .NET→C++ 실패 해소 후 실행
 
 ### D. 최종 게이트 (plan line 143: framework unit + cross-language E2E + 7 samples 전부 green)
-- [ ] 4언어 framework unit: DONTWAIT 회귀 0, 잔여는 pre-existing만 — java unit 1207/2·contract 26/1 = pre-existing 3건 동일 assertion 확인(`gate-node-java-summary.md`); node 1532/6(신규 B 1건 + 환경 D 5건, lint C); cpp·dotnet §B 진행 중
+- [ ] 4언어 framework unit (gate-v2, D-B85 바인딩 반영 패키지): **A/B 실패 0**.
+      java 1206/3 = pre-existing C 3 + 신규 F 1(`EntrySpotActorDispatchTests…staleTerminal` relocation seal 부재, job 진행);
+      node 1552/5 = C 4(ZoneWorld dist 미빌드 3·lint 1) + F 2(SupportChat lifecycle 테스트가 옛 3000/1000ms 하드코딩 — 내 budget 커밋 `2e3b1b47e4`의 후속, TicTacToe.Ts PASS 마커 — job 진행);
+      cpp·dotnet gate-v2 진행 중
 - [ ] 7 samples × 4언어 green — **cpp 7/7**; node 5/7(ZoneWorld `vite` 환경 D, SupportChat 브라우저 stream timeout B — job); java 1/7(TicTacToe·SupportChat TEARDOWN_FAILED·Bingo session-disconnect = pre-existing C, DeliveryDispatch·GameQuest·ZoneWorld timeout = B, D-B85 binding-port 의존 여부 판정 job); dotnet 미실행(handover job 종료 후)
 - [ ] cross-language E2E green
 - [ ] 최종 커밋+푸시
