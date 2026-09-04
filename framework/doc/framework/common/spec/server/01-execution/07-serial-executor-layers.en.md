@@ -253,7 +253,7 @@ It is not redefined here; only the two things that bear on this document's queue
 
 When a record is claimed from the receive mailbox into this queue, its reservation **transfers
 without a gap**, and the transfer is not a re-decision — that rule is owned by
-[04 §8 "Transferring The Owner Reservation"](04-application-job-queue-and-backpressure.en.md#transferring-the-owner-reservation--two-stages-join-without-a-gap).
+[04 §8 "Transferring the Owner Reservation"](04-application-job-queue-and-backpressure.en.md#transferring-the-owner-reservation--joining-two-stages-without-a-gap).
 
 **Its accounting boundary differs from the
 [Application job queue](../00-foundation/02-glossary.en.md#application-job-queue) permit.** The
