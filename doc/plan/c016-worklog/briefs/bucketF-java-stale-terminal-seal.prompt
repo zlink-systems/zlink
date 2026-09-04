@@ -1,0 +1,39 @@
+# Job: java — new failure after the D-B85 binding port: `EntrySpotActorDispatchTests.postCutActorArrivalWithoutForwardKeepsTheStaleTerminal` (relocation seal absent)
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages' trees, or
+`framework/languages/java/samples/**` (another job owns DeliveryDispatch); never lower an assertion; do
+not commit.
+
+## Facts
+- `doc/plan/c016-worklog/gate-v2-java-summary.md`: on the rebuilt 0.17.0 Java package (D-B85 REQUEST
+  port `a06260f507`, Core main incl. `7d8205a028`, `29add0ac81`), `:zlink-framework-core:test` =
+  1,206 pass / 3 fail: the 3 known (C) plus ONE new (F):
+  `EntrySpotActorDispatchTests.postCutActorArrivalWithoutForwardKeepsTheStaleTerminal` →
+  `java.util.NoSuchElementException: No value present` from
+  `actors.trySealActorRelocation("actor-a").orElseThrow()` (`EntrySpotActorDispatchTests.java:528`).
+  It was green on the pre-D-B85 gate (`gate-node-java-summary.md`). Log:
+  `zlink-work/c016/logs/gate-v2-java-core-test.log`.
+- What changed underneath: the Java binding's async request now returns BACKPRESSURED + wait token
+  on a non-ready target and resubmits on WRITABLE (binding-internal); ROUTER no-route is
+  NOT_CONNECTED (SEND rules); PENDING_MAX_* ignored. Core: REQUEST admission is one attempt; reply
+  timeout starts at admission. See the commit messages `git show a06260f507 -s`, `git show 7d8205a028 -s`.
+- Env: `cd framework/languages/java && TMPDIR=/dev/shm/zlink-tmp-java flock -w7200 /tmp/zlink-jvm-gate.lock ./gradlew --no-daemon :zlink-framework-core:test --tests '*EntrySpotActorDispatchTests*'`.
+  Do not export a directory-valued ZLINK_LIBRARY_PATH. Do not rebuild Core/packages.
+
+## What to do
+1. Run the single test class 5×: deterministic or flaky? Capture the flow with existing tracing
+   (`ZLINK_JAVA_STREAM_TRACE=1`, framework message-flow listener) — which transition no longer
+   produces the relocation seal before the post-cut arrival: is the relocation "cut" request now
+   completing later (request admission/reply timing under the new contract), or is a request being
+   refused NOT_CONNECTED where it used to be pending, or a test ordering assumption?
+2. Decide owner: framework runtime (sequencing that relied on pre-admission pending), test harness
+   (ordering assumption), or binding (report only). Match the spec:
+   `framework/doc/framework/common/spec/server/05-location-relocation/` (relocation seal / handoff)
+   and `03-spot-actor/`. Fix minimally in `framework/languages/java/zlink-framework-core/**` with a
+   regression test; re-run the class 5× and the whole `:zlink-framework-core:test` once.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketF-java-stale-terminal-seal-summary.md`: determinism table, the transition
+trace, cause with `file:line`, spec clause, fix + regression, gate counts, BLOCKERS.

@@ -35,9 +35,8 @@ public final class DispatchWorker {
     /** The first offer. Records it, sends it, and returns — nobody is left waiting. */
     public CompletionStage<Void> dispatch(Messages.AssignDeliveryMsg request) {
         String courierId = Candidates.get(0);
-        int attempt = offers.offer(request, 0, SampleTimings.CourierDecisionTimeout);
         return publishStatus(request, Messages.DeliveryStatus.Assigned, courierId)
-            .thenCompose(ignored -> offer(request, courierId, attempt));
+            .thenCompose(ignored -> startOffer(request, courierId, 0));
     }
 
     /** A decision arrived. Accepted carries the delivery through; refused reassigns. */
@@ -78,9 +77,8 @@ public final class DispatchWorker {
         }
 
         String courierId = Candidates.get(nextIndex);
-        int attempt = offers.offer(offer.request(), nextIndex, SampleTimings.CourierDecisionTimeout);
         return publishStatus(offer.request(), Messages.DeliveryStatus.Reassigned, courierId)
-            .thenCompose(ignored -> offer(offer.request(), courierId, attempt));
+            .thenCompose(ignored -> startOffer(offer.request(), courierId, nextIndex));
     }
 
     public CompletionStage<Messages.ServerAssertionRes> assertServerEvidence(
@@ -88,6 +86,14 @@ public final class DispatchWorker {
         return channels
             .requestToChannel(SampleNames.TrackingChannel, request)
             .submit(Messages.ServerAssertionRes.class);
+    }
+
+    private CompletionStage<Void> startOffer(
+        Messages.AssignDeliveryMsg request,
+        String courierId,
+        int candidateIndex) {
+        int attempt = offers.offer(request, candidateIndex, SampleTimings.CourierDecisionTimeout);
+        return offer(request, courierId, attempt);
     }
 
     /** The offer is a one-way send: the turn that sends it ends right there. */
