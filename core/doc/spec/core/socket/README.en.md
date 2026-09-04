@@ -1012,7 +1012,8 @@ DEALER with zero peers right after connect), returns
 discarded as on every other result, so the caller resubmits from its own copy.
 A ROUTER or STREAM RID with no route at all returns
 `ZLINK_SUBMIT_NOT_CONNECTED` with `errno == EHOSTUNREACH` and ID `0`
-immediately, without a token, regardless of `ZLINK_ROUTER_OPT_MANDATORY`. A
+immediately, without a token (for ROUTER while `ZLINK_ROUTER_OPT_MANDATORY` is
+positive, the default; with it off the record is dropped as before). A
 failed `FINAL` on either path consumes and discards the staged prefix with the
 final part.
 

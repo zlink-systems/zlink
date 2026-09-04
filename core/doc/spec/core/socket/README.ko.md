@@ -950,7 +950,7 @@ completion이 없다. HWM·byte credit·flow pause에 의한 backpressure이거�
 `ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`과 함께 nonzero 대기 토큰을 `completion_id_out_`에
 반환한다. Core는 토큰, target과 `user_context_`만 유지하고 payload는 보관하지 않는다. Part는 다른
 결과와 같이 소비·폐기되므로 caller는 자신이 보관한 복사본으로 다시 제출한다. ROUTER·STREAM에서
-지정한 RID에 route가 전혀 없으면 `ZLINK_ROUTER_OPT_MANDATORY`와 무관하게 즉시
+지정한 RID에 route가 전혀 없으면(ROUTER는 `ZLINK_ROUTER_OPT_MANDATORY`가 양수일 때, 기본값) 즉시
 `ZLINK_SUBMIT_NOT_CONNECTED`, `errno == EHOSTUNREACH`, ID `0`이며 토큰을 만들지 않는다. 두 경로의
 실패한 `FINAL`은 staging한 prefix와 함께 소비·폐기한다.
 

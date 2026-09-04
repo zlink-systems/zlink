@@ -122,8 +122,8 @@ each option. The following contracts are not included in those comments.
 
 - When `ZLINK_ROUTER_OPT_MANDATORY` is positive, a directed submit to a routing ID without a
   connected pipe fails with `ZLINK_SUBMIT_NOT_CONNECTED`. A `DONTWAIT FINAL` to a routing ID with
-  no route at all returns `ZLINK_SUBMIT_NOT_CONNECTED` immediately and creates no wait token,
-  regardless of this option's value.
+  no route at all then returns `ZLINK_SUBMIT_NOT_CONNECTED` immediately and creates no wait token.
+  With the option at `0` the record is silently dropped as before (`ZLINK_SUBMIT_OK`, ID `0`).
 - `ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID` sets the local alias that identifies the pipe created by
   the next `zlink_connect()` and is set before each connect.
 
@@ -186,7 +186,8 @@ ID `0` and no completion. If HWM or byte credit prevents admission, or a route e
 ready yet (transport pair not ready, weight `0`), it returns `ZLINK_SUBMIT_BACKPRESSURED` with
 `EAGAIN` and a nonzero wait token bound to that RID, and Core does not retain the payload. If
 `target_rid_` has no route at all, the result is `ZLINK_SUBMIT_NOT_CONNECTED` immediately with no
-token, regardless of `ZLINK_ROUTER_OPT_MANDATORY`. When the same RID gains write credit (peer
+token while `ZLINK_ROUTER_OPT_MANDATORY` is positive (the default; with it at `0` the record is
+silently dropped with ID `0` as before). When the same RID gains write credit (peer
 drain, reconnect, route adoption, standby promotion, or weight `0` to positive), Core produces
 exactly one `ZLINK_COMPLETION_WRITABLE` record for that token with
 `send_result == ZLINK_SEND_ADMITTED` and `peer_rid` set to the submitted RID. Credit on another
@@ -471,7 +472,7 @@ and status snapshots. Each item maps to one test.
 **Directed submit**
 - `zlink_send_part_rid()` with `NONE FINAL` waits within `SNDTIMEO` for same-logical-RID local admission and finishes with ID `0` and no completion.
 - A `DONTWAIT FINAL` admitted immediately has ID `0` and no completion. If it is refused because of HWM, credit, or a route that is not ready, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token for that RID, and the payload is not retained.
-- A `DONTWAIT FINAL` to a RID with no route returns `ZLINK_SUBMIT_NOT_CONNECTED` immediately with ID `0` and no token, regardless of `ZLINK_ROUTER_OPT_MANDATORY`.
+- A `DONTWAIT FINAL` to a RID with no route returns `ZLINK_SUBMIT_NOT_CONNECTED` immediately with ID `0` and no token while `ZLINK_ROUTER_OPT_MANDATORY` is positive; with it at `0` the record is silently dropped as before (`ZLINK_SUBMIT_OK`, ID `0`).
 - When the same RID gains write credit, exactly one `ZLINK_COMPLETION_WRITABLE` record (`ZLINK_SEND_ADMITTED`, `peer_rid` set to the submitted RID) is returned for that token, and credit on another RID does not wake it. `ZLINK_POLLOUT` is level-held until it is read.
 - Removing the RID with `zlink_disconnect_rid()` ends that RID's token with a WRITABLE record carrying `ZLINK_SEND_TERMINAL` and `ENOENT`.
 - A wait token is bound only to the same logical RID; after reconnect, that RID's pipe attach publishes the WRITABLE record, and after ID `0` Core does not replay the payload.

@@ -936,3 +936,16 @@ Gate: dev ctest 139/140(hotpath_gate만 FAIL — dev 트리(LTO 없음)와 LTO �
 +0.10~0.45%); release-gate(LTO) 전체 ctest 139/140 + **hotpath_gate PASS**(실패 1건은 라이브러리 스냅샷이 3번 수정 이전이라 새
 assertion이 timeout — 최종 코드는 dev에서 phase3·helper_ownership·wake_invariants 5회 green). 스펙 14파일 갱신(README·pair·dealer·
 router·stream·05-polling·10-hot-path, ko/en) 별도 커밋. WSL 재부팅 1회(메모리 11 GB, 병렬 빌드 → 이후 JOBS 제한).
+
+## D-B81 (2026-09-04 20:50, 머신 B) 바인딩 8개 포팅·리뷰 완료, 스펙 MANDATORY 정정, 결정 요청 1건
+포팅 커밋: cpp/node/dotnet `4f503b76d3`, java `7927c582c2`, c `f9d0eb84d9`, rust `85eb9425a1`, python `5240947587`, go `4ff46b5bae`. 리뷰
+커밋(버그·핫패스·테스트·샘플·perf single/multi 스모크): c `fc0562cef4`, rust `9f2342cf27`, dotnet `8b52bb66ba`, cpp `5a42a363c7`, go
+`c6fdad2194`, python `cd5b4a163e`, node `a9eb6c5a77`(포팅이 4배 회귀시킨 것을 포팅 전 수준으로 복구), java 후속. 결과 표는 인계 문서 §6.
+codex 사용 한도(19:31)로 job 6개가 죽어 cpp/dotnet/c/rust 리뷰는 Claude 서브에이전트가 이어받았고, 이후 사용자 규칙: sol ultra는 정말
+필요할 때만, 기본은 sol high/medium·terra, `service_tier=fast` 사용 금지.
+스펙 정정: "route 없는 RID → NOT_CONNECTED는 MANDATORY와 무관"은 Core(`router_send_path.cpp` no-route는 `_mandatory`일 때만 EHOSTUNREACH,
+기본 1; 0이면 조용히 버림)와 달라 README·07-router(ko/en)·인계 문서를 "MANDATORY 양수(기본)일 때"로 정정(dotnet 리뷰가 발견).
+**결정 요청(사용자)**: DONTWAIT FINAL에 `completion_id_out == NULL`을 넘겨도 Core가 대기 토큰을 등록한다(C 리뷰 발견). 호출자는 토큰을
+받을 수 없어 orphan 토큰이 close까지 남는다(유한, 무해하지만 REQUEST 큐에 stray WRITABLE로 섞임). 후보: (a) NULL이면 토큰을 만들지 않고
+BACKPRESSURED/EAGAIN만 반환(스펙 한 줄 추가), (b) 현행 유지(문서에 명시). 감독관 권고 (a).
+작업트리에서 `framework/doc/.../archive` 94파일이 삭제된 상태를 발견해 `git checkout`으로 복원(원인 job 미확인, 커밋에 포함되지 않음).

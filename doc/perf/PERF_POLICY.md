@@ -28,6 +28,7 @@
 | **PERF_POLICY.md** (본 문서) | 공통 원칙, 디렉터리 구조, RESULT 형식, 결과 저장, 출력 형식, 실패 처리, 환경 변수(공통), 리팩토링 원칙 |
 | [PERF_SINGLE_TEST_POLICY.md](PERF_SINGLE_TEST_POLICY.md) | single suite 전용: recv/request-reply 모델, phase, 패턴/transport, single 전용 환경 변수 |
 | [PERF_MULTI_TEST_POLICY.md](PERF_MULTI_TEST_POLICY.md) | multi suite 전용: 프로세스 모델, backpressure, throughput/latency 측정, 패턴/transport, multi 전용 환경 변수 |
+| [BINDINGS_OPTIMIZATION_GUIDE.ko.md](BINDINGS_OPTIMIZATION_GUIDE.ko.md) | binding library hot path 최적화 가이드: 효과가 확인된 기법의 단계별 체크리스트, 언어별 적용 현황, 기각 목록, 적용 절차 |
 
 - 양 suite에 공통으로 적용되는 모든 규칙은 본 문서에서 관리한다.
 - 개별 정책 문서는 해당 suite **전용** 규칙만 기술하며, 공통 규칙은 본 문서를 참조한다.

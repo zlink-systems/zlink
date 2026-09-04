@@ -1,8 +1,10 @@
 # A 인계 — DONTWAIT send 계약 변경 (0.17.0, 판정 D-B79)
 
 작성: 머신 B, 2026-09-04 15:10 / 개정 16:00 (계약 B로 확정) / **개정 18:40 (Core·바인딩 커밋, 인계)**.
-상태: Core 커밋 `50d77800f2`(main), 스펙 갱신 커밋(이 문서와 같은 커밋), 바인딩 cpp/node/dotnet 커밋 `4f503b76d3`, java는 후속 커밋
-(REQUEST 경로 INVALID_ARGUMENT 11건 수정 중), 0.17.0 범프는 별도 커밋. 계약의 최종 문장은 `core/doc/spec/core/socket/README.ko.md`
+상태: Core 커밋 `50d77800f2`(main), 스펙 갱신 커밋(이 문서와 같은 커밋), 바인딩 cpp/node/dotnet 커밋 `4f503b76d3`, java 커밋 `7927c582c2`,
+0.17.0 범프 커밋 `70a9998998`, c `f9d0eb84d9`, rust `85eb9425a1`, python `5240947587`, go `4ff46b5bae`.
+리뷰(버그·핫패스·스모크) 커밋: c `fc0562cef4`, rust `9f2342cf27`, dotnet `8b52bb66ba`, cpp `5a42a363c7`, go `c6fdad2194`,
+python `cd5b4a163e`, node `a9eb6c5a77`, java(후속). 리뷰 결과 표는 §6. 계약의 최종 문장은 `core/doc/spec/core/socket/README.ko.md`
 "Part send" 절이며 아래 표는 요약이다.
 
 ## 1. 바뀌는 계약 (사용자 확정, B안)
@@ -15,7 +17,7 @@
 | 앱 동작 | completion을 기다림 | POLLOUT → `zlink_completion_recv`를 NO_DATA까지 pull → WRITABLE의 context로 **정확히 그 코루틴**을 재개 → 같은 패킷 재전송 |
 | 대상 단위 | — | PAIR=단일 pipe, DEALER=후보 집합(어느 후보든 열리면 WRITABLE 1건, 재전송 시 Core가 열린 peer 선택), ROUTER/STREAM=지정 RID pipe |
 | 토큰 수명 | — | (a) WRITABLE 전달, (b) 대상의 명시적 제거(`zlink_disconnect_rid`, 해당 RID endpoint 종료) → WRITABLE + `ZLINK_SEND_TERMINAL`/`ENOENT`, (c) socket close·context termination → WRITABLE + `ZLINK_SEND_TERMINAL` + lifecycle errno. peer weight 0은 SEND 토큰을 끝내지 않음 |
-| ROUTER/STREAM에서 route가 없는 RID | `NOT_CONNECTED` | **동일: 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`(EHOSTUNREACH), 토큰 없음**(MANDATORY 무관). route는 있으나 미준비(pair 미준비·weight 0·HWM)면 토큰. DEALER peer 0개는 토큰 |
+| ROUTER/STREAM에서 route가 없는 RID | `NOT_CONNECTED` | **동일: 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`(EHOSTUNREACH), 토큰 없음**(ROUTER는 MANDATORY 양수일 때, 기본값; 0이면 기존대로 조용히 버림). route는 있으나 미준비(pair 미준비·weight 0·HWM)면 토큰. DEALER peer 0개는 토큰 |
 | reservation(65,536/socket, REQUEST와 공유) 소진 | — | SEND `ZLINK_SUBMIT_OUT_OF_MEMORY`/`ENOMEM`, ID 0 (REQUEST는 현행 BACKPRESSURED/EAGAIN) |
 | completion kind | REQUEST, SEND | REQUEST, **WRITABLE**(신규 enum 값, 기존 값 불변); 일반 SEND 성공에는 completion 없음 |
 | `ZLINK_OPT_PENDING_MAX_MSGS/BYTES` | SEND·REQUEST 공유(기본 무제한) | SEND에는 no-op(REQUEST 현행). enum 값·ABI 유지 |
@@ -57,6 +59,25 @@
 - [x] B gate — dev ctest 139/139, release-gate(LTO) hotpath_gate PASS, 변경 suite 5회 green, cpp/node/dotnet 바인딩 green. 벤치 before/after 표는 perf multi 정책 복원 job 뒤(미완)
 - [x] 스펙 정정 커밋(ko/en 14파일) — 이 문서와 같은 커밋
 - [x] bindings cpp/node/dotnet — 커밋 `4f503b76d3`
-- [ ] bindings java — REQUEST 경로 INVALID_ARGUMENT 11건 수정 job 진행 중, 완료 시 후속 커밋
-- [ ] 0.17.0 범프 커밋(직후)
-- [ ] bindings c/go/rust/python, perf multi 정책 복원(§1.2 모델 + WRITABLE drain), `doc/perf/PERF_MULTI_TEST_POLICY.md` §1.2 문단 — 머신 B 계속
+- [x] bindings java — 커밋 `7927c582c2` (LINGER 옵션 ID 라우팅 버그, REQUEST 경로 직렬화 제거)
+- [x] 0.17.0 범프 커밋 `70a9998998`
+- [x] bindings c/go/rust/python 포팅 — 위 해시
+- [x] bindings 8개 독립 리뷰(계약 a–h, 핫패스, 테스트·샘플·perf single/multi 스모크) — §6 (java는 후속 커밋)
+- [ ] perf multi 정책 복원(§1.2 모델 + WRITABLE drain) + before/after 표, `doc/perf/PERF_MULTI_TEST_POLICY.md` §1.2 문단 — 진행 중
+
+## 6. 바인딩 리뷰 결과 (2026-09-04 저녁, 각 바인딩 독립 리뷰 job)
+
+모든 바인딩에서 계약 항목 (a)~(h)를 코드로 판정했고, 표준 테스트·샘플·perf single/multi 스모크가 green이다. 수치는 DEALER_ROUTER tcp 1024B, duration 3s, runs 1(다른 job과 병행 측정이라 절대값은 참고용).
+
+| 바인딩 | 주요 수정 | 성능(수정 전 → 후) |
+|---|---|---|
+| c | REQREP 러너의 stray WRITABLE 처리, DEALER_DEALER POLLOUT spin 방지, 전송당 payload 복사 제거 | 442k → 444k (핫패스 불변) |
+| cpp | TERMINAL/native -1 typed 매핑, poller 재진입 UAF·실패 보존, close 순서, context term hang, POLLOUT 빈 drain spin 제거 | 697k → 775k |
+| dotnet | payload snapshot을 거절 시점으로, pump spin 제거, ownership rollback, EINTR 과잉 실패 정정, ESHUTDOWN 매핑 | 267k/297k ↔ 281k/287k (동률) |
+| node | 성공 경로의 entry/Promise/map 등록 제거, zero-timeout pump spin 제거, ESHUTDOWN 매핑 | 28k(포팅 후) → 145k (포팅 전 153k) |
+| java | (후속 커밋) runtime owner spin 제거, terminal typed 매핑, 즉시 성공 경로 할당 제거 | — |
+| go | 즉시 성공 send의 poller/goroutine 생성 제거, drain spin 제거, terminal 원인 보존, multi 러너 종료 hang | 81.5k → 190k |
+| rust | 실행기 spin 루프 → reactor 스레드 + public Poller 구동, 전송당 poller/복사/할당 제거, REQUEST spin 제거 | 172k(포팅 전) → 259k |
+| python | 성공 경로 bytes 이중 복사 제거, event loop spin 제거, O(n) 해제 → O(1), multi 러너 PUBSUB STOP·timeout 판정 | 7.9k → 20k |
+
+framework에서 확인할 점: WRITABLE `send_result == TERMINAL`(ENOENT → NotFound, ESHUTDOWN/ETERM → Terminated)은 각 바인딩이 typed 실패로 노출한다. ROUTER의 route 없는 RID는 MANDATORY가 양수(기본)일 때만 NOT_CONNECTED이고 0이면 기존대로 조용히 버린다.
