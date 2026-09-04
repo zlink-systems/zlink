@@ -1,0 +1,24 @@
+# Job: final java gate — all 7 common samples on the current main tree, then the framework core/contract tests
+
+You are a codex sub-agent under a Claude supervisor. Execution/classification job. Do not modify any
+source/test/manifest; do not commit; never touch `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages' trees.
+
+Env: `TMPDIR=/dev/shm/zlink-tmp-java`, `flock -w7200 /tmp/zlink-jvm-gate.lock`,
+`ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/.artifacts/wsl/install/zlink-core/0.17.0/lib/libzlink.so`
+(a file), Docker OK. Do not rebuild Core/local packages.
+
+1. Run each of the 7 samples once, individually, in order: TicTacToe, Bingo, DeliveryDispatch,
+   SupportChat, GameQuest, ShoppingMall, ZoneWorld (`cd framework/languages/java/samples/java/<S> && ./run_sample.sh`),
+   recording exit code, duration, and the final markers (`<sample>=completed` / `<sample>-placement=completed`
+   where the runner emits them; ZoneWorld's final marker is `zoneworld=completed`). Then run the
+   aggregate runner if one exists (`framework/languages/java/samples/run_samples.sh`) once.
+2. `cd framework/languages/java && ./gradlew --no-daemon :zlink-framework-core:test` and then
+   `contractTest` (separately). Expected known failures (C): `ZLinkJavaRawMeshNodeM6ATest`
+   ×2 (`observedInprocCloseDoesNotFenceDescriptorReplacement`, `descriptorFenceReplacesEndpointOnlyIntent`)
+   and `JavaDocumentationRegressionTest.canonicalCommonSpecOwnsLiveJavaContracts`.
+3. Classify anything else as (A) DONTWAIT/backpressure, (B) terminal/error, (D) environment, (F) new,
+   with assertion + file:line.
+
+Deliverable: `doc/plan/c016-worklog/gate-final-java-samples-summary.md` with the 7-row table,
+unit/contract counts, buckets, commands; logs under `zlink-work/c016/logs/gate-final-java-*.log`.

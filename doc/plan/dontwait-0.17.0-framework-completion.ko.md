@@ -66,7 +66,7 @@
       나머지 suite 442 pass / 1 fail(`ClientServerChannelRuntimeTests.MalformedPushedControl_ReconnectsAndReadmits` — 재admission 미완료, v3에서는 통과) + hang(`InstanceSpotIdleInspectionRotatesWithABoundedBatch`, v3 통과) → 후속 job 대기; 전부 해소 후 dotnet 수정 일괄 커밋
 - [ ] 7 samples × 4언어 green — **cpp 7/7**; **node 7/7**(SupportChat budget `2e3b1b47e4`, ZoneWorld entry html `c67deb44e0`, runner PASS marker `2ceb137abe`);
       java: TicTacToe·SupportChat·DeliveryDispatch(`ed156f5983`+teardown `6682ae0db1`)·GameQuest(heartbeat `dc9fe76100`)·ShoppingMall·**Bingo**(teardown/heartbeat 수정으로 해소, exit 0) = **6/7**;
-      ZoneWorld: A2 지연 = public mesh poller owner가 command 36 STREAM admission을 동기 대기 → 비동기 admission `424b15684c`(prefix 4/4, 28-37 ms); full run은 A5 client timeout — round-3 job 진행 중;
+      ZoneWorld: A2 지연 = public mesh poller owner가 command 36 STREAM admission을 동기 대기 → 비동기 admission `424b15684c`; A5 = STREAM 수신 owner가 control frame(heartbeat pong·session-closing) 전송을 state lane에서 동기 대기 → 비동기 전송 `7b0590183d` → **FULL ZoneWorld 2/2 green** ⇒ **java 7/7**(최종 일괄 게이트 job 실행 중);
       dotnet 7 samples 미실행(dotnet 커밋 후)
 - [ ] cross-language E2E green — cpp all-stage runner **32/32 PASS**(dotnet spot-route 수정 포함, 미커밋 상태); node smoke 12/12 + Redis stage(환경 복원 후 재실행 필요); java-cross 4/4. dotnet 커밋 후 최종 재실행
 - [ ] 최종 커밋+푸시 — 지금까지 framework 수정 커밋 20건 푸시됨(main); dotnet 일괄 커밋·리팩토링 pass·최종 게이트 잔여
