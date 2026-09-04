@@ -1,0 +1,47 @@
+# Job: Core candidate — `zlink_ctx_term` does not return after a failed .NET handover test (20-min inactivity hangs); reproduce with the public C API and classify
+
+You are a codex sub-agent under a Claude supervisor. Investigation job, 1.5 h cap. Read `AGENTS.md`
+(root) §2/§3/§4, `CONTRIBUTING.ko.md` §4 (tests use the public C API only). You may write a new
+public-API integration test under `core/tests/integration/` and, ONLY if you prove a Core defect
+with a deterministic repro, a minimal fix in `core/src/**` with the CONTRIBUTING §5 gate; never touch
+`core/doc/spec/**`, `bindings/**`, `framework/**`, `doc/site/**`; do not commit. Do not rebuild
+`core/build-dev` (other jobs link it) — build a Core in a separate tree:
+`git worktree add --detach /home/hep7/project/zlink-core-term HEAD` then `scripts/build-core.sh dev`
+there (JOBS=8), and run your repro/tests from that worktree.
+
+## Facts
+- Three .NET unit-test runs tonight ended in a hang after an assertion failed inside a handover test
+  (`CanonicalActorJoinIngressReplyTests`): the managed stack in every hang dump is
+  `ConnectedRuntime.DisposeAsync → Systems.Zlink.Context.DisposeAsync → Context.Dispose → zlink_ctx_term`
+  and it never returns (20-min inactivity). Dumps (readable with `dotnet tool install -g dotnet-dump`,
+  `dotnet-dump analyze <dmp>` → `clrstack -all`, `dumpheap -stat`):
+  `framework/languages/dotnet/tests/Zlink.Framework.UnitTests/TestResults/b1610869-dc8d-4955-b796-7242e7eaf9f9/dotnet_62877_20260905T034650_hangdump.dmp`,
+  `.../dcd36b29-6d26-4c73-8c15-761673518a99/dotnet_33690_20260905T035608_hangdump.dmp`,
+  `.../257faa7c-e536-4cf8-bd2f-34bde6e29130/dotnet_96534_20260905T042258_hangdump.dmp`.
+  Test context per `bucketF-dotnet-handover-liveness-hang-summary.md` and
+  `bucketF-dotnet-canonical-handover-family-summary.md`: a ROUTER (target) plus a raw DEALER whose
+  same-RID replacement DEALER did a fixed-RID handover while the prior DEALER's reconnect intent stayed
+  alive (repeated same-RID re-occupation/disconnect cycles), then the test disposed the context with
+  sockets still open (linger 0 in the framework's socket options; check `ZLinkManagedMeshNode` Start
+  for the exact option set: Linger=0, MaxMessageSize=-1, RID_DUPLICATE_HANDOVER, HWMs).
+- Spec: `core/doc/spec/core/socket/README.ko.md` context termination / close semantics (linger,
+  `ZLINK_SUBMIT_TERMINATED`+ETERM, `zlink_ctx_term` blocking rules) — cite the clause that says when
+  ctx_term must return.
+
+## What to do
+1. From the dumps, list the native state at the hang (which sockets/pipes remain, whether ctx_term is
+   waiting for a socket close, a reaper, or an I/O thread). Then write a pure C/C++ repro using only
+   the public API in the worktree: ROUTER bound (inproc and tcp), DEALER A connect + fixed RID,
+   DEALER B same RID connect (handover policy), keep A's reconnect alive, then close sockets with
+   linger 0 and call `zlink_ctx_term` under a watchdog (10 s). Iterate on ordering until it hangs or
+   you can state it does not.
+2. If it hangs: root-cause in Core, minimal fix, public-API regression test registered in
+   `core/tests/CMakeLists.txt` with labels, ctest -j2 full in the worktree + the §5 checks; write the
+   diff in the worktree (do not commit). If it does not hang: report the exact .NET-side sequence that
+   would be needed (what the dump shows Core waiting on) and classify as binding/framework teardown
+   ordering with evidence.
+
+## Deliverable
+`doc/plan/c016-worklog/core-ctx-term-teardown-hang-summary.md` (write it in the MAIN tree
+/home/hep7/project/zlink): dump findings, repro source path, result, spec clause, fix or
+classification, gate counts, BLOCKERS.
