@@ -4460,20 +4460,31 @@ void verify_raw_spot_and_actor_routing ()
     const protocol::actor_message_header_t::bound_session_source_t
       bound_session_tail{{'s', 'e', 's', 's', '-', '1'}, 5, 9};
     const protocol::wire_operation_id_t bound_operation{0xa1, 0xa2};
-    assert (target.mailbox ().try_enqueue (
-      mesh::service_mailbox_record_t{
-       "actor:actor-1",
-       mesh::service_mailbox_domain_t::application,
-       {protocol::encode_actor_message_header (
-          protocol::command::actorRequest, std::nullopt, actor_fence,
-          bound_operation, 91, 0, bound_session_tail),
-        protocol::encode_application_payload (
-          {"ActorPacket", "application/json", bytes ("bound")})},
-       source_descriptor.node_routing_id,
-       std::nullopt,
-       91,
-       source_descriptor.lifecycle_generation,
-       std::make_pair (bound_operation.high, bound_operation.low)}));
+    std::promise<request_result_t> bound_promise;
+    auto bound_future = bound_promise.get_future ();
+    assert (source.request_to_actor (
+      target_descriptor.node_routing_id, std::nullopt, actor_fence,
+      {"ActorPacket", "application/json", bytes ("bound")}, 2s,
+      [&bound_promise] (foundation::operation_terminal_t terminal,
+                        std::vector<std::uint8_t> payload) {
+          bound_promise.set_value ({terminal, std::move (payload)});
+      }, bound_operation, bound_session_tail, 91)
+              .result ()
+              .value ());
+    mesh::raw_mesh_pump_result_t bound_pump =
+      mesh::raw_mesh_pump_result_t::no_data;
+    while (bound_pump != mesh::raw_mesh_pump_result_t::application
+           && mesh::service_liveness_registry_t::clock_t::now ()
+                < deadline) {
+        const auto pump_now =
+          mesh::service_liveness_registry_t::clock_t::now ();
+        const auto source_pump =
+          source.pump_one (pump_now).result ().value ();
+        assert (source_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+        bound_pump = target.pump_one (pump_now).result ().value ();
+        assert (bound_pump != mesh::raw_mesh_pump_result_t::protocol_error);
+    }
+    assert (bound_pump == mesh::raw_mesh_pump_result_t::application);
     assert (dispatch.ingest (actor)
             == stateful::stateful_error_t::none);
     const auto [bound_delivery_error, bound_delivery] =
@@ -4527,6 +4538,21 @@ void verify_raw_spot_and_actor_routing ()
                          "ActorReply", "application/json", bytes ("bound-reply")})
               .result ().value ()
             == stateful::stateful_error_t::none);
+    while (bound_future.wait_for (0ms) != std::future_status::ready
+           && mesh::service_liveness_registry_t::clock_t::now ()
+                < deadline) {
+        const auto pump = source.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ())
+          .result ()
+          .value ();
+        assert (pump != mesh::raw_mesh_pump_result_t::protocol_error);
+    }
+    assert (bound_future.wait_for (0ms) == std::future_status::ready);
+    const auto bound_result = bound_future.get ();
+    assert (bound_result.first
+            == foundation::operation_terminal_t::completed);
+    assert (protocol::decode_application_payload (bound_result.second).payload
+            == bytes ("bound-reply"));
 
     // A bound-session-routed actorRequest that is missing its exact fence
     // (here: zero binding generation and session sequence) is pre-Captured.
