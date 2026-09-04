@@ -6,8 +6,8 @@ environment problems, not framework runtime code). Read `AGENTS.md` (root) §2/�
 ## Environment (prepared — do NOT rebuild Core or local packages)
 - Core `core/build-dev` (current main). Local packages `.artifacts/wsl/{nuget,npm,maven,install}`.
   Core prefix `~/.cache/zlink/core/0.17.0/linux-x64` (local build; no GitHub release for 0.17.0).
-- C++ framework configured at `framework/languages/cpp/build/linux-ninja-debug` (preset
-  `linux-ninja-debug`). Set `ZLINK_CPP_BUILD_DIR=/home/hep7/project/zlink/framework/languages/cpp/build/linux-ninja-debug`
+- C++ framework configured at `framework/languages/cpp/build/linux-ninja-c-e2e` (preset
+  `linux-ninja-debug`). Set `ZLINK_CPP_BUILD_DIR=/home/hep7/project/zlink/framework/languages/cpp/build/linux-ninja-c-e2e`
   for every cpp runner (plan Phase 11 item 8: all runners honour `ZLINK_CPP_BUILD_DIR`).
 - Docker works (`redis:7.2-alpine` pulled); Playwright Chromium installed; redis-server also on
   127.0.0.1:6379. Node framework `node_modules` installed (http-client tarball rebuilt).
@@ -29,7 +29,7 @@ environment problems, not framework runtime code). Read `AGENTS.md` (root) §2/�
 3. **Java↔C++ E2E** was never run (blocked by C++→.NET). Run it after (1).
 
 ## Run order
-1. `cmake --build framework/languages/cpp/build/linux-ninja-debug -j16` (full tree: tests, samples, e2e,
+1. `cmake --build framework/languages/cpp/build/linux-ninja-c-e2e -j16` (full tree: tests, samples, e2e,
    cross-language). First failure → report, do not patch runtime code.
 2. `ZLINK_CPP_BUILD_DIR=... framework/languages/cpp/cross-language/run_cross_language_smoke.sh` (all stages).
 3. `framework/languages/dotnet/cross-language/...` runner (find the entry script; fix the stale-host

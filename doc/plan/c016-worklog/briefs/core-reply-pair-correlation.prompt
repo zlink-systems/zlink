@@ -1,0 +1,78 @@
+# Job: Core — a ROUTER requester must accept the reply on the current same-RID Completion pipe (reply pair-mismatch discard)
+
+You are a codex sub-agent under a Claude supervisor. One cause, Core-owned, hard: take the time to get
+the invariant right (cap 2 h). Work ONLY in the isolated worktree `/home/hep7/project/zlink-core-fix`
+(detached HEAD at current main). Read `AGENTS.md`, `CONTRIBUTING.ko.md` §3-§5, and
+`core/doc/spec/core/systems/10-hot-path.ko.md` §3 (forbidden list) first.
+
+## Established facts (verified by the supervisor, do not re-derive)
+- Pure-C repro `doc/plan/c016-worklog/tools/repro_router_reply_pair_mismatch.cpp` (in the worktree)
+  fails 5/5 and 3/3: two ROUTERs with explicit RIDs, caller binds and connects FIRST while the owner is
+  not yet bound (pending connect), then the owner binds and connects back (reciprocal); both sockets
+  in pollers with POLLIN|POLLERR|POLLOUT|POLLCOMPLETION; Hello/Admit-style DATA both ways; caller
+  `zlink_request_part` (DONTWAIT, 3 s timeout, completion id 1) → owner `zlink_router_recv_part` →
+  owner replies from another thread ~50 ms later with the captured token → `zlink_reply_part` returns
+  OK → caller never gets a REQUEST completion until the deadline: `request_result=101 TimedOut`.
+  Control (both bind first, then connect): 25/25 OK. Build/run:
+  `g++ -std=c++17 -I core/include doc/plan/c016-worklog/tools/repro_router_reply_pair_mismatch.cpp -L core/build-dev/lib -lzlink -Wl,-rpath,$PWD/core/build-dev/lib -pthread -o /tmp/repro_core_fix && /tmp/repro_core_fix` (exit 7 = fail).
+- Root cause (GDB-confirmed by the previous job, see
+  `doc/plan/c016-worklog/bucketB-dotnet-stale-summary.md` in the main tree
+  `/home/hep7/project/zlink/doc/plan/c016-worklog/bucketB-dotnet-stale-summary.md`):
+  the responder picks the *current* ready Completion pipe of the source logical RID
+  (`core/src/api/socket/socket_request_reply_runtime_io.cpp:1334-1406`; captured target had
+  `route_binding_token=0` so the captured Application pair was not reused), writes the reply there
+  (`socket_request_reply_submit_api.cpp:459-466`) and returns OK. The caller reads that frame from its
+  Completion pipe (`socket_request_reply_dispatch.cpp:269-297`) but
+  `take_pending_reply_from_transport_locked()` (`socket_request_reply_pending_api.cpp:89-158`) requires
+  the incoming pipe's transport pair id/generation to equal the **submit-time** pair stored in the
+  pending request, returns false, and the caller silently closes the reply as
+  `completion_message_accepted` (`socket_request_reply_dispatch.cpp:151-160`) — the pending request
+  stays until its deadline. With two live transport pairs to the same logical peer (the reciprocal
+  connect case) the reply lands on the "other" pair.
+- Spec (`core/doc/spec/core/socket/07-router.ko.md` §9 raw reply submit, ~lines 285-316): the reply
+  FINAL waits for "같은 logical source RID의 reply route가 local admission" and picks "현재 ready
+  completion progress lane의 Completion pipe"; "Physical disconnect, connection generation 변경과
+  requester timeout은 token을 무효화하지 않는다"; "requester Core는 이미 correlation이 없으면
+  늦은 reply를 폐기한다". Requester-side text pins correlation to the request, NOT to a physical pair.
+  Ruling D-072 (`doc/plan/c016-worklog/decisions.ko.md`): reply routes by logical RID like any send;
+  Core send side already does so. So the fix is on the **receive/correlation side**: a reply arriving
+  on any live Completion pipe of the same logical peer RID must complete the pending request. Do NOT
+  revert the send side to the submit-time pair (that contradicts D-072), and do NOT accept "any pair"
+  blindly — validate: pending request's logical target RID == source pipe's peer logical RID, source
+  pipe is a live Completion-lane pipe of a ROUTER peer with an active lifecycle, and the frame's
+  request_seq matches. Keep the existing exactly-once / teardown-race guarantees (the generation lock
+  block at the end of that function) intact.
+
+## What to do
+1. Build the worktree's Core dev tree: `scripts/build-core.sh dev` (JOBS=8). Reproduce with the repro
+   (fail) and control (pass).
+2. Read the pending-request record (`pending_request_t`, what it stores about the target: pair id,
+   generation, correlation pipe, logical RID?) and the reply dispatch path. Design the smallest
+   correlation change that satisfies the spec invariant above. If the pending record lacks the logical
+   target RID, adding it at submit time is acceptable only if it costs no per-message allocation,
+   string identity or table lookup on the success hot path (10-hot-path §3); prefer reusing what
+   admission already pins. Compare at least two alternatives briefly in the summary.
+3. Implement in `core/src/**` only. **No changes under `core/doc/spec/**`, `bindings/**`,
+   `framework/**`, `doc/site/**`.** If you conclude the spec must change, STOP and write the exact clause
+   + proposed wording in BLOCKERS.
+4. Regression test: add a public-API integration test (no internal hooks — CONTRIBUTING §4) to the
+   phase3 request/reply contract suite (`core/tests/integration/test_phase3_request_reply_contract.cpp`)
+   or a new `test_router_reciprocal_reply_correlation.cpp` registered in `core/tests/CMakeLists.txt` with
+   the proper labels: reciprocal ROUTER connect-before-bind, request, threaded late reply, expect
+   exactly one `ZLINK_REQUEST_OK` completion with the reply part on the original completion id/context;
+   plus the control ordering; plus a late-reply-after-timeout case still discarded. Run it 5× green.
+5. Gate (CONTRIBUTING §5, in the worktree): `cmake --build core/build-dev -j8`,
+   `ctest --test-dir core/build-dev -j2 --output-on-failure` (full; `hotpath_gate` is not meaningful on
+   the no-LTO dev tree — report it separately, do not "fix" it),
+   `ctest --test-dir core/build-dev -R '^test_single_lane_' -j2` twice, `git diff --check`, and the
+   raw header mirror `cmp` loop from §5 (should be untouched). Then
+   `bash bindings/cpp/tests/run_tests.sh` against the worktree Core if the runner supports
+   `ZLINK_CORE_SOURCE=local`/build-dir override; otherwise report the exact blocker.
+   Also re-run the repro 5× (pass) and control 5× (pass).
+6. Do NOT commit. Leave the diff in the worktree.
+
+## Deliverable
+`doc/plan/c016-worklog/core-reply-pair-correlation-summary.md` (write it in the MAIN tree
+`/home/hep7/project/zlink/doc/plan/c016-worklog/`): root cause restated in one paragraph, the invariant
+chosen and why (with spec clauses), alternatives rejected, files changed with `file:line`, hot-path
+impact statement, regression test description, every gate command with counts, BLOCKERS.

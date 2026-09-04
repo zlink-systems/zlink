@@ -4012,10 +4012,13 @@ export class ServiceStatefulRuntime {
       if (remainingMs <= 0) {
         throw new Error(`${operationKind} timed out before terminal replay.`);
       }
+      // Keep part of the end-to-end deadline available for the target's
+      // operation-terminal replay when a reply is lost after execution.
+      const attemptTimeoutMs = Math.max(1, Math.ceil(remainingMs / 2));
       try {
         parts = targetNodeRid === this.nodeRid
-          ? await this.requestLocalInfrastructure(header, correlation, remainingMs)
-          : await this.raw.requestService(targetNodeRid, [header], remainingMs);
+          ? await this.requestLocalInfrastructure(header, correlation, attemptTimeoutMs)
+          : await this.raw.requestService(targetNodeRid, [header], attemptTimeoutMs);
         break;
       } catch (error) {
         const retryDelayMs = Math.min(20, deadlineMs - Date.now());
