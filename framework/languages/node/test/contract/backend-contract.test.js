@@ -38,6 +38,21 @@ function applicationJobQueue(maxQueuedApplicationJobs) {
   ));
 }
 
+function wrapSpotSendSocket(submit) {
+  return wrapSocket({
+    close() {},
+    request() {},
+    reply() {},
+    sendToSpot() {
+      return {
+        message() {
+          return submit;
+        }
+      };
+    }
+  });
+}
+
 const removedSpotAdapterContracts = new Set([
   'backend adapter unwraps SpotNode when attaching stream SessionRelay',
   'backend stream bind converts public string actor node RID to native RoutingId',
@@ -157,18 +172,7 @@ test('backend DONTWAIT Spot send awaits managed binding admission', async () => 
       syncCalls += 1;
     }
   };
-  const socket = wrapSocket({
-    close() {},
-    request() {},
-    reply() {},
-    sendToSpot() {
-      return {
-        message() {
-          return submit;
-        }
-      };
-    }
-  });
+  const socket = wrapSpotSendSocket(submit);
 
   let settled = false;
   const pending = socket.sendToSpot(
@@ -203,18 +207,7 @@ test('backend managed DONTWAIT Spot send surfaces terminal binding failure', asy
       throw new Error('managed DONTWAIT send must not use submit_sync');
     }
   };
-  const socket = wrapSocket({
-    close() {},
-    request() {},
-    reply() {},
-    sendToSpot() {
-      return {
-        message() {
-          return submit;
-        }
-      };
-    }
-  });
+  const socket = wrapSpotSendSocket(submit);
 
   await assert.rejects(
     socket.sendToSpot(

@@ -794,12 +794,14 @@ bool raw_mesh_node_owner_t::connect_peer (
     if (!_router || endpoint.empty ()) {
         return false;
     }
-    const auto endpoint_retargeted = std::any_of (
-      _expected_peers.begin (), _expected_peers.end (),
+    const auto is_stale_same_endpoint =
       [&endpoint, &expected_descriptor] (const auto &entry) {
           return entry.first != expected_descriptor.node_routing_id
                  && entry.second.advertised_endpoint == endpoint;
-      });
+      };
+    const auto endpoint_retargeted = std::any_of (
+      _expected_peers.begin (), _expected_peers.end (),
+      is_stale_same_endpoint);
     try {
         std::lock_guard socket_lock (_socket_mutex);
         trace_mesh ("connect endpoint=" + endpoint
@@ -817,12 +819,7 @@ bool raw_mesh_node_owner_t::connect_peer (
         _router->connect (endpoint);
         _outbound_endpoints.insert (endpoint);
         if (endpoint_retargeted) {
-            std::erase_if (
-              _expected_peers,
-              [&endpoint, &expected_descriptor] (const auto &entry) {
-                  return entry.first != expected_descriptor.node_routing_id
-                         && entry.second.advertised_endpoint == endpoint;
-              });
+            std::erase_if (_expected_peers, is_stale_same_endpoint);
         }
         _expected_peers.insert_or_assign (
           expected_descriptor.node_routing_id, expected_descriptor);

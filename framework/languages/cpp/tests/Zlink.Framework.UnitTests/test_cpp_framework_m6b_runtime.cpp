@@ -1302,32 +1302,8 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
     assert (invalidations == 1);
     assert (route_resolutions == 0);
 
-    //  A route that never becomes available bounds its retry with the same
-    //  operation_terminal_t::timed_out contract that
-    //  verify_bound_session_bind_permanent_absence_is_bounded (m6a) asserts
-    //  at the raw transport layer for the identical scenario (both cases
-    //  resolve to the identical errno at the routing layer — confirmed
-    //  empirically: submit_error_t::internal_errno() reports ENOENT
-    //  (2) for both this "unconnected-bound-session-target" case and
-    //  m6a's dead-listener "bind-timeout-target" case, since neither
-    //  scenario ever establishes a physical connection before the request,
-    //  so a distinct ECONNREFUSED-class "connect was actively refused" path
-    //  does not exist at this layer for either test to be classified
-    //  against). At this higher layer bind_application_actor_session maps a
-    //  timed_out terminal to deadline_exceeded (see mesh_node_runtime.cpp's
-    //  bind_application_actor_session completion callback), not
-    //  unavailable. This assertion previously read `unavailable`, which
-    //  only held because a raw_route_port_t::request bug (fixed alongside
-    //  this test change — see raw_route_port.cpp's raw_route_port_t::request
-    //  try/catch scope) let this scenario's synchronous ENOENT escape
-    //  the retry classification entirely and fail immediately as
-    //  transport_failed instead of exhausting the intended bounded retry.
-    //  Parity note: the equivalent classification for "route never admitted
-    //  within a bounded deadline" has not been cross-checked against the
-    //  java/node/dotnet failure-code table (Unavailable=13 vs Deadline=19)
-    //  converged elsewhere in this campaign; flagged for follow-up, not
-    //  blocking here since cpp's own two-layer contract (raw timed_out +
-    //  this derived kind) is now internally consistent.
+    // A route that remains unavailable exhausts the bounded retry and maps
+    // the raw timed_out terminal to deadline_exceeded at this layer.
     const runtime::spot_address_t disconnected_route{
       "m6b-mesh",
       zlink::routing_id_t::from ("unconnected-bound-session-target"),
