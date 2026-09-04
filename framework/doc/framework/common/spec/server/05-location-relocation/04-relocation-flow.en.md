@@ -1,8 +1,8 @@
 ---
-title: "Complete Actor And Spot Relocation Flow"
+title: "Complete Actor and Spot Relocation Flow"
 ---
 
-# Complete Actor And Spot Relocation Flow
+# Complete Actor and Spot Relocation Flow
 
 [Location And Relocation topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 03. Relocation Store (Redis)](03-relocation-store-redis.en.md) · [Next: 05. Complete Host Relocation Flow](05-host-relocation-flow.en.md)
 
@@ -14,7 +14,7 @@ title: "Complete Actor And Spot Relocation Flow"
 > cross-node Actor Join, User Spot authority transfer) and all four language runtimes
 > share this one protocol.
 
-## 1. Result Visible To The Application
+## 1. Result Visible to the Application
 
 This document defines the common contract from the start of Actor or Spot relocation
 until message processing resumes on the target. Host `Relocate`, cross-node Actor Join,
@@ -38,12 +38,12 @@ runtime to automatically resume an in-progress relocation after the source or ta
 process terminates. The full scope of failure and automatic reselection is defined by
 [Failure Handling And Failover Scope](06-failure-failover-policy.en.md).
 
-## 2. Responsibility Of Each Participant
+## 2. Responsibility of Each Participant
 
 | Participant | Responsibility |
 |---|---|
 | Application | Requests host relocation or registers an Actor Join. Provides a relocation adapter for the object kind when application state must be preserved. |
-| Source runtime | Finishes the current application turn and stops new dispatch. Sends the captured application state, not-yet-executed existing work, and timers directly to the target, and keeps the whole payload in memory until the cutover submit reaches a terminal result and the retransmission window (§4.4) end. Keeps relaying messages arriving at the old address to the target. Doesn't change the Location Store owner. |
+| Source runtime | Finishes the current application turn and stops new dispatch. Sends the captured application state, not-yet-executed existing work, and timers directly to the target, and keeps the whole payload in memory until the cutover submit reaches a terminal result and the retransmission window (§4.4) ends. Keeps relaying messages arriving at the old address to the target. Doesn't change the Location Store owner. |
 | Target runtime | Prepares the temporary queue first, then creates and restores the object. After receiving cutover or waiting the cutover wait setting duration (§4.4) from the relay-ready reply, runs the Location Store CAS and opens the target queue only on success. For a bound Actor, then tells the Session owner to apply the target route and release the seal. |
 | Session owner | Keeps the bound Actor's physical Session. The role this handoff asks of it is defined in §7; the actual handling is owned by [Session and Actor Binding "8. The Session's Responsibility During Actor Relocation"](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation). |
 | Location Store | Stores current owner, object generation, and membership. Applies the target's requested values in one step only when the expected source values still match. |
@@ -54,9 +54,9 @@ One participant doesn't repeat another participant's decision. Transport peer
 validation, the target's Location Store CAS, and the Session owner's current-binding
 validation are different responsibilities.
 
-## 3. What Moves As One Unit
+## 3. What Moves as One Unit
 
-One Actor or Spot bundle the Framework moves independently is called a
+One Actor or Spot bundle that the Framework moves independently is called a
 [relocation unit](../00-foundation/02-glossary.en.md#relocation-unit).
 
 | Target | Relocation unit |
@@ -104,7 +104,7 @@ operation identity.
 
 ## 4. Normal Processing Order
 
-### 4.1 Prepare The Target Before Stopping The Source
+### 4.1 Prepare the Target Before Stopping the Source
 
 The Framework first confirms that the target node supports the object kind and
 application version. If no target is usable, source application dispatch isn't blocked
@@ -175,11 +175,11 @@ relay reception is ready. Transport reception doesn't stop while target preparat
 pending, either. Limits on individual message size, transport, deadline, and
 cancellation still apply during this holding.
 
-### 4.3 Restore The Target Without Running It
+### 4.3 Restore the Target Without Running It
 
 The target registers the temporary queue for the relocation target as soon as it
 receives the Restore request, before the application-instance lookup or a call to the
-application-provided code that constructs the instance — the
+application-provided code that constructs the instance for the registered stable type — the
 [factory](../00-foundation/02-glossary.en.md#factory) — and
 before any state chunk arrives. A target without a temporary queue doesn't start Restore
 or change the Location Store. A message arriving directly at the target during Restore
@@ -232,7 +232,7 @@ preparation without opening application dispatch**. The `ready to receive relay`
 for this means only that this preparation is finished — it doesn't mean an owner change
 or an open queue.
 
-### 4.4 Ordered Relay And One-Way Cutover
+### 4.4 Ordered Relay and One-Way Cutover
 
 After the source receives the target's ready-to-receive-relay reply, it relays only the
 messages the ingress hold accepted after capture, over the same TCP connection. Because
@@ -301,7 +301,7 @@ boundary. Before owner change it relays it to the temporary queue; after owner c
 delivers it through the path by which the previous owner forwards it to the new owner on
 its behalf, [Message Follow](../00-foundation/02-glossary.en.md#message-follow) (§10).
 
-### 4.5 Only The Prepared Target Changes The Location Store
+### 4.5 Only the Prepared Target Changes the Location Store
 
 The target runs the Location Store CAS only after all of the following conditions are
 satisfied. Source, Session owner, Message Follow, and route cache don't run this CAS in
@@ -340,7 +340,7 @@ unit are removed together. Source application execution isn't reopened after the
 ready-to-receive-relay reply reaches its accepted state, and Message Follow also ends
 within its defined period.
 
-### 4.6 Target Opens The Queue Progressively, Starting With Existing Work
+### 4.6 Target Opens the Queue Progressively, Starting with Existing Work
 
 Once CAS succeeds, the target fixes the ordered durable backlog in this order.
 
@@ -349,14 +349,30 @@ Once CAS succeeds, the target fixes the ordered durable backlog in this order.
 3. Work the temporary queue accepted after that
 
 It then switches the temporary route to the regular dispatch route and finishes the
-required lifecycle callbacks. Once application dispatch is runnable, it acquires one
-shared queued-job permit in order for each backlog application-handler turn and places
-that turn on the live execution queue. When the actual handler start returns the permit,
-the next item proceeds the same way. The target doesn't reserve permits for the whole
-backlog first, and this order holds even when the target limit is smaller than the
-number of backlog items. An item waiting for a permit continues to be owned by the
-backlog retained-byte owner. A timer keeps its original timer lifecycle and follows the
-relevant ingress rule when its callback turn becomes runnable.
+required lifecycle callbacks.
+
+**The backlog secures the queue order of handler turns before ordinary ingress, and this
+guarantee is not implemented by running callbacks while holding exclusive access.** That
+approach can easily create a structure in which an external callback reacquires the same
+exclusive-access primitive, which [State Ownership And State Lanes §6](../01-execution/06-state-ownership-and-lanes.en.md#6-structuring-so-reentrancy-cannot-arise)
+prohibits. This guarantee is provided by a linearization point in one of the following
+two forms.
+
+- Before opening dispatch, fix placeholder ownership claims for the backlog share in an
+  owning turn; fill individual execution claims outside exclusive access, then settle
+  the placeholders in the same owning turn while opening ordinary admission.
+- Or switch to ordinary dispatch only when the backlog is observed atomically to be
+  empty — ordinary ingress cannot get ahead of backlog turns posted before that
+  observation.
+
+Once application dispatch is runnable, it acquires one shared queued-job permit in
+order for each backlog application-handler turn and places that turn on the live
+execution queue. When the actual handler start returns the permit, the next item
+proceeds the same way. The target doesn't reserve permits for the whole backlog first,
+and this order holds even when the target limit is smaller than the number of backlog
+items. An item waiting for a permit continues to be owned by the backlog retained-byte
+owner. A timer keeps its original timer lifecycle and follows the relevant ingress rule
+when its callback turn becomes runnable.
 
 The target sends no separate completion reply to the source after finishing owner
 change, queue merge, and application dispatch opening. For a bound Actor, the target
@@ -465,7 +481,7 @@ sequenceDiagram
     Note over A,S: source queue restoration is fixed before the command 44 abort is sent
 ```
 
-## 5. Message Order And Completion Meaning
+## 5. Message Order and Completion Meaning
 
 ### 5.1 Order That Is Guaranteed
 
@@ -479,7 +495,7 @@ There's no global order guarantee across messages arriving on different TCP conn
 For example, whether Message Follow through the old address or a message sent directly
 to the new address arrives at the target first isn't guaranteed.
 
-### 5.2 `send` And `request`
+### 5.2 `send` and `request`
 
 | Kind | Values kept when relaying | Result the caller waits for |
 |---|---|---|
@@ -580,7 +596,7 @@ This document describes the handoff order in §4 and §9 on the premise of the s
 switch result that section defines, and doesn't redefine the Session owner's validation
 rules.
 
-## 8. Differences By Actor And Spot Kind
+## 8. Differences by Actor and Spot Kind
 
 The common owner transition and queue order are the same for all; only the prepared
 state and callbacks differ. Each adapter provides only the values in the table below —
@@ -600,7 +616,7 @@ the Spot document and the document covering how an Actor belongs to a Spot; host
 operation mode and final result are
 defined by [Complete Host Relocation Flow](05-host-relocation-flow.en.md).
 
-## 9. Timeout, Failure, And Cancellation
+## 9. Timeout, Failure, and Cancellation
 
 | Timing | Owner and queue kept | Result and follow-up |
 |---|---|---|
@@ -638,7 +654,7 @@ doesn't restore the previous binding; it performs normal location validation and
 Spot creation or recovery again. An expired owner lease or terminal relocation state
 isn't used as the new connection's authority.
 
-## 10. Message Follow And Cleanup
+## 10. Message Follow and Cleanup
 
 Even after owner change, the sender may briefly keep using the old address. This section
 defines the detailed rules for Message Follow, which §4.4 only named. Message Follow keeps the original
@@ -726,7 +742,7 @@ Existing resource limits that apply to every feature — runtime memory, frame s
 Store page, and payload — still apply as-is. This limit isn't duplicated as
 relocation-specific state or a new public setting.
 
-## 12. Guarantees And Non-Guarantees
+## 12. Guarantees and Non-Guarantees
 
 | Guarantee | Scope |
 |---|---|
@@ -739,7 +755,7 @@ relocation-specific state or a new public setting.
 | Exactly-once across a process crash isn't guaranteed. | An application callback or external side effect can run twice even on a retry within the same process. |
 | Doesn't wait for a cutover or Session update ACK. | Both controls are one-way. Cutover ends with the `RelocationCutoverWaitTimeout` (default 1,000ms) fallback, Session seal with a default 3,000ms timeout. |
 
-## 13. Implementation And Contract-Test Verification Requirements
+## 13. Implementation and Contract-Test Verification Requirements
 
 The following is confirmed only through the public surface (Location Store record
 lookup, the Session owner's observable route/connection state, target/source

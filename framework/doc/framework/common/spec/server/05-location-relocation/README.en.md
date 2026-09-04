@@ -1,15 +1,15 @@
 ---
-title: "Location And Relocation"
+title: "Location and Relocation"
 ---
 
-# Location And Relocation
+# Location and Relocation
 
 [Spec table of contents](../README.en.md) · [Next: 01. Location Runtime](01-location-runtime.en.md)
 
 ## 1. What This Topic Covers
 
-An Actor, or a [Spot](../00-foundation/02-glossary.en.md#spot) — a running target that
-keeps receiving messages — must stay findable by the same ID even after it moves off
+An Actor or a [Spot](../00-foundation/02-glossary.en.md#spot) — a running target that
+keeps receiving messages — must remain findable by the same ID even after it leaves
 the node currently running it. This topic covers both how the framework finds that
 location and how it changes the processing node for planned reasons.
 
@@ -38,7 +38,7 @@ What this topic doesn't define is listed in §7.
 | Location Store | Stores current owner, object generation, and membership. Applies the target's requested values in one step only when the expected source values still match. |
 | Relocation Store | Holds only the Instance Spot cold activation's first message and creation information, and the results of a pending request that completes after relocation. Doesn't decide owner. |
 
-## 3. One Flow, At A Glance
+## 3. One Flow, at a Glance
 
 ```mermaid
 sequenceDiagram
@@ -63,7 +63,7 @@ sequenceDiagram
 This diagram shows only the normal path. Each step's conditions, failures, and
 timeouts are defined by the documents in §4.
 
-## 4. Documents In This Topic
+## 4. Documents in This Topic
 
 | Document | Covers | Layer |
 |---|---|---|
@@ -74,16 +74,16 @@ timeouts are defined by the documents in §4.
 | [05. Complete Host Relocation Flow](05-host-relocation-flow.en.md) | How Host `Relocate`/`Shutdown` applies the flow from 04 to multiple units, coordinated at the host level | Contract |
 | [06. Failure Handling And Failover Scope](06-failure-failover-policy.en.md) | The scope in which the framework automatically continues the same work on failure | Contract |
 
-## 5. Find By Question
+## 5. Find by Question
 
 | Question | Section with the answer |
 |---|---|
 | How does the framework find an object's current location | [01. Location Runtime](01-location-runtime.en.md)'s overview |
-| What does each of the Location Store and Relocation Store own | [01. Location Runtime](01-location-runtime.en.md)'s roles and responsibilities section |
+| What do the Location Store and Relocation Store each own | [01. Location Runtime](01-location-runtime.en.md)'s roles and responsibilities section |
 | What must a direct implementation of the Location Store/Relocation Store guarantee | [02. Location Store (Redis)](02-location-store-redis.en.md) · [03. Relocation Store (Redis)](03-relocation-store-redis.en.md) |
 | How is an object re-created with the same ID distinguished from an object with a changed owner | [01. Location Runtime](01-location-runtime.en.md)'s re-creation vs. owner-change section |
 | What is the normal order for moving an Actor/Spot to another node | [04. Complete Actor And Spot Relocation Flow "4. Normal Processing Order"](04-relocation-flow.en.md#4-normal-processing-order) |
-| Where do messages go during the move, and when does completion happen after the move | [04. Complete Actor And Spot Relocation Flow "5. Message Order And Completion Meaning"](04-relocation-flow.en.md#5-message-order-and-completion-meaning) · ["6. Location Store Transition Contract"](04-relocation-flow.en.md#6-location-store-transition-contract) |
+| Where do messages go during the move, and when does completion occur after the move | [04. Complete Actor And Spot Relocation Flow "5. Message Order And Completion Meaning"](04-relocation-flow.en.md#5-message-order-and-completion-meaning) · ["6. Location Store Transition Contract"](04-relocation-flow.en.md#6-location-store-transition-contract) |
 | What remains on failure, and how far does automatic continuation go | [04. Complete Actor And Spot Relocation Flow "9. Timeout, Failure, And Cancellation"](04-relocation-flow.en.md#9-timeout-failure-and-cancellation) · [06. Failure Handling And Failover Scope](06-failure-failover-policy.en.md) |
 | What happens to a session connected to an Actor during that Actor's relocation | [04. Complete Actor And Spot Relocation Flow "7. Session During Actor Relocation"](04-relocation-flow.en.md#7-session-during-actor-relocation) → [Session and Actor Binding "8"](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation) |
 | How does Host maintenance (a planned move of an entire host) differ from moving individual Actors | [05. Complete Host Relocation Flow](05-host-relocation-flow.en.md) |
@@ -115,15 +115,15 @@ scope of automatic handling on failure.
 
 ## 7. What This Topic Doesn't Define
 
-- **Session owner responsibility** — keeping the physical Session connection alive
-  during Actor relocation, installing and releasing the seal, and changing the
-  binding route is owned by [Session and Actor Binding "8. The Session's Responsibility During Actor Relocation"](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation).
+- **Session owner responsibility** — responsibility for keeping the physical Session
+  connection alive during Actor relocation, installing and releasing the seal, and
+  changing the binding route is owned by [Session and Actor Binding "8. The Session's Responsibility During Actor Relocation"](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation).
   Documents in this topic only describe and link to what they ask the Session owner
   to do at that boundary.
-- **Actor/Spot membership and lifecycle** — the general rules for Actor Join, Spot
-  creation, and membership changes — governed by
+- **Actor/Spot membership and lifecycle** — the general rules for
   [Actor membership](../00-foundation/02-glossary.en.md#actor-membership), the
-  relationship showing which Spot an Actor belongs to — are owned by the
+  relationship showing which Spot an Actor belongs to — including Actor Join, Spot
+  creation, and membership changes — are owned by the
   [Spot And Actor Membership](../03-spot-actor/05-spot-actor-membership.en.md)
   document. This topic covers only the points where relocation meets those rules.
 - **Definition of runtime observability surfaces** — metric names, event shapes,
