@@ -45,10 +45,12 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     void send (const command_t &cmd_) ZLINK_OVERRIDE;
     void signal ();
     int recv (command_t *cmd_, int timeout_) ZLINK_OVERRIDE;
+    int recv (command_t *cmd_, int timeout_, bool consume_primary_signaler_);
     //  Classifies the next command without removing it. Only the serialized
     //  command owner may call this receiver-side operation.
     command_probe_result_t probe_command (
-      bool (*predicate_) (const command_t &));
+      bool (*predicate_) (const command_t &),
+      bool consume_primary_signaler_ = true);
     //  Waits for a command-owner notification without consuming a poller's
     //  possibly shared signaler. The command owner must still call recv().
     uint64_t begin_command_wait_observation ();
@@ -81,8 +83,14 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     bool detach_io_context_if_idle ();
 
     // Signaler support for ZLINK_INTERNAL_OPT_FD
-    void add_signaler (signaler_t *signaler_);
+    int add_signaler (signaler_t *signaler_);
     void remove_signaler (signaler_t *signaler_);
+    //  The first POSIX socket poller keeps the descriptor-pollset fast path.
+    //  Concurrent pollers use their own registered signaler instead, so no two
+    //  waiters compete to consume the same primary notification.
+    bool acquire_poller_notification ();
+    void release_poller_notification (bool primary_notification_);
+    bool has_primary_poller_notification () const;
     void signal_pollers ();
     //  Re-arm the primary notification descriptor after a command owner has
     //  consumed it, so descriptor-based pollers watching this mailbox's fd
@@ -102,7 +110,7 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
 #endif
 
   private:
-    bool activate_if_command_pending ();
+    bool activate_if_command_pending (bool consume_primary_signaler_);
     void schedule_if_needed_unlocked ();
     void signal_registered_pollers_unlocked ();
 
@@ -143,6 +151,10 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     //  Signalers for ZLINK_INTERNAL_OPT_FD support
     std::vector<signaler_t *> _signalers;
     mutable std::atomic<bool> _primary_signaler_required;
+    //  The high bit records whether the current registration epoch still has
+    //  its primary poller; the remaining bits hold all POSIX poller refs.
+    //  Keeping both in one CAS state prevents primary release/re-acquire races.
+    std::atomic<uint32_t> _poller_notifications;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (mailbox_t)
 };

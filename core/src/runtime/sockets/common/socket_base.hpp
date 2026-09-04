@@ -278,7 +278,8 @@ class socket_base_t : public own_t,
     int setsockopt (int option_, const void *optval_, size_t optvallen_);
     int getsockopt (int option_, void *optval_, size_t *optvallen_);
     int get_events (int events_, uint32_t *out_);
-    int get_events_internal (int events_, uint32_t *out_);
+    int get_events_internal (int events_, uint32_t *out_,
+                             bool consume_primary_signaler_ = true);
     void set_all_pipes_nodelay ();
     int bind (const char *endpoint_uri_);
     int connect (const char *endpoint_uri_);
@@ -1071,7 +1072,8 @@ class socket_base_t : public own_t,
       bool writer_) const;
 
     int get_events_for_poller (int events_, uint32_t *out_,
-                               bool transport_output_);
+                               bool transport_output_,
+                               bool consume_primary_signaler_);
 
     bool has_stable_completion_processing_owner () const;
     void invalidate_completion_processing_owner ();
@@ -1235,7 +1237,8 @@ class socket_base_t : public own_t,
     int process_commands (int timeout_,
                           bool throttle_,
                           bool force_if_command_pending_ = false,
-                          const uint64_t *observed_command_wait_epoch_ = NULL);
+                          const uint64_t *observed_command_wait_epoch_ = NULL,
+                          bool consume_primary_signaler_ = true);
     enum submit_command_progress_mode_t
     {
         submit_command_progress_failed = -1,

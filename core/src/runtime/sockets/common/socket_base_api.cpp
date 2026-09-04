@@ -794,7 +794,8 @@ int zlink::socket_base_t::get_events (int events_, uint32_t *out_)
     return 0;
 }
 
-int zlink::socket_base_t::get_events_internal (int events_, uint32_t *out_)
+int zlink::socket_base_t::get_events_internal (
+  int events_, uint32_t *out_, bool consume_primary_signaler_)
 {
     if (!out_) {
         errno = EINVAL;
@@ -806,7 +807,8 @@ int zlink::socket_base_t::get_events_internal (int events_, uint32_t *out_)
         return 0;
     }
 
-    const int rc = process_commands (0, false);
+    const int rc = process_commands (0, false, false, NULL,
+                                     consume_primary_signaler_);
     if (unlikely (rc != 0)) {
         if (errno == EINTR)
             return -1;
@@ -890,7 +892,8 @@ int zlink::socket_base_t::get_events_internal (int events_, uint32_t *out_)
 }
 
 int zlink::socket_base_t::get_events_for_poller (int events_, uint32_t *out_,
-                                                 bool transport_output_)
+                                                 bool transport_output_,
+                                                 bool consume_primary_signaler_)
 {
     socket_public_api_scope_t admission (lifecycle_coordinator ());
     if (!admission.acquired ()) {
@@ -907,10 +910,11 @@ int zlink::socket_base_t::get_events_for_poller (int events_, uint32_t *out_,
     //  logical state. A concurrent command then either becomes visible to the
     //  sample or publishes a fresh post-commit edge, so neither a permanent
     //  readable/busy loop nor a lost wake is possible.
-    if (async_mailbox_owns_commands ())
+    if (consume_primary_signaler_ && async_mailbox_owns_commands ())
         static_cast<mailbox_t *> (_mailbox)->drain_primary_signaler ();
 
-    const int rc = get_events_internal (public_events, out_);
+    const int rc = get_events_internal (public_events, out_,
+                                        consume_primary_signaler_);
     if (rc != 0)
         return rc;
     // Apply queued activate-write/flow-resume commands before sampling the

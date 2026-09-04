@@ -63,7 +63,7 @@ zlink::socket_poller_t::~socket_poller_t ()
     }
     _windows_signaler.reset_event ();
 #else
-    unregister_socket_signaler ();
+    unregister_socket_notifications ();
     drain_socket_signaler ();
     delete _socket_signaler;
     _socket_signaler = NULL;
@@ -122,6 +122,10 @@ int zlink::socket_poller_t::add_item (socket_base_t *socket_,
                                       short events_)
 {
     const item_t item = {socket_, fd_, user_data_, events_, false
+#if !defined ZLINK_HAVE_WINDOWS
+                         ,
+                         false, false
+#endif
 #if defined ZLINK_POLL_BASED_ON_POLL
                          ,
                          -1
@@ -221,9 +225,8 @@ int zlink::socket_poller_t::remove_item (items_t::iterator it_)
         static_cast<mailbox_t *> (it_->socket->get_mailbox ())->remove_signaler (
           &_windows_signaler);
 #else
-    if (_socket_signaler_active && _socket_signaler && it_->socket)
-        static_cast<mailbox_t *> (it_->socket->get_mailbox ())->remove_signaler (
-          _socket_signaler);
+    if (it_->socket)
+        unregister_socket_notification (*it_);
 #endif
 
     _items.erase (it_);
@@ -232,14 +235,11 @@ int zlink::socket_poller_t::remove_item (items_t::iterator it_)
     return 0;
 }
 
-//  Stage 1 (plan 7.1): before 3ef4d09a37 the POSIX poller placed each socket's
-//  own mailbox descriptor in the pollset. That commit replaced it with a
-//  poller-owned shared signaler that every rebuild registers into, and
-//  unregisters from, every socket mailbox. zlink_poll() builds a fresh poller
-//  per call, so a 100-socket poll paid 200 mailbox-mutex round trips that
-//  contend with the I/O threads delivering commands. Restore the descriptor
-//  pollset.
-#define ZLINK_STAGE1_POLLER_PARENT_PATH 1
+//  Stage 1 (plan 7.1) restored each POSIX socket's mailbox descriptor because
+//  zlink_poll() builds a fresh poller per call: registering every socket on a
+//  poller-owned signaler cost two mailbox-mutex trips per item plus an eventfd
+//  create/close. Keep that fast path for the first poller on a mailbox. Only a
+//  concurrently registered poller needs its own lazily-created wake channel.
 
 int zlink::socket_poller_t::rebuild ()
 {
@@ -254,7 +254,7 @@ int zlink::socket_poller_t::rebuild ()
         _windows_signaler.reset_event ();
     }
 #else
-    unregister_socket_signaler ();
+    unregister_socket_notifications ();
     drain_socket_signaler ();
 #endif
 
@@ -273,9 +273,21 @@ int zlink::socket_poller_t::rebuild ()
 
     if (_pollset_size > 0 && windows_socket_only) {
         for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
-            if (it->events)
-                static_cast<mailbox_t *> (it->socket->get_mailbox ())->add_signaler (
-                  &_windows_signaler);
+            if (it->events
+                && static_cast<mailbox_t *> (it->socket->get_mailbox ())
+                     ->add_signaler (&_windows_signaler)
+                     != 0) {
+                for (items_t::iterator added = _items.begin (); added != it;
+                     ++added) {
+                    if (added->events)
+                        static_cast<mailbox_t *> (
+                          added->socket->get_mailbox ())
+                          ->remove_signaler (&_windows_signaler);
+                }
+                _pollset_size = 0;
+                _need_rebuild = true;
+                return -1;
+            }
         }
         _windows_signaler_active = true;
         return 0;
@@ -284,41 +296,41 @@ int zlink::socket_poller_t::rebuild ()
     // The platform-specific fallback below rebuilds the complete pollset.
     _pollset_size = 0;
 #else
-#if ZLINK_STAGE1_POLLER_PARENT_PATH
     for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
         if (it->events)
             ++_pollset_size;
     }
-#else
-    bool has_socket_items = false;
+
     for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
-        if (!it->events)
+        if (!it->socket || !it->events)
             continue;
-        if (it->socket)
-            has_socket_items = true;
-        else
-            ++_pollset_size;
-    }
-    if (has_socket_items) {
+
+        mailbox_t *const mailbox =
+          static_cast<mailbox_t *> (it->socket->get_mailbox ());
+        if (mailbox->acquire_poller_notification ()) {
+            it->primary_notification = true;
+            continue;
+        }
+
         if (!ensure_socket_signaler () || !_socket_signaler->valid ()) {
-            errno = EMFILE;
+            const int saved_errno = errno ? errno : EMFILE;
+            mailbox->release_poller_notification (false);
+            unregister_socket_notifications ();
+            errno = saved_errno;
             _need_rebuild = true;
             return -1;
         }
-        for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
-            if (it->socket && it->events) {
-                mailbox_t *const mailbox = static_cast<mailbox_t *> (it->socket->get_mailbox ());
-                // Keep the primary signaler assigned to the mailbox command
-                // owner. Only the poller-owned secondary descriptor enters
-                // the platform pollset below.
-                (void) mailbox->get_fd ();
-                mailbox->add_signaler (_socket_signaler);
-            }
+        if (mailbox->add_signaler (_socket_signaler) != 0) {
+            const int saved_errno = errno;
+            mailbox->release_poller_notification (false);
+            unregister_socket_notifications ();
+            errno = saved_errno;
+            _need_rebuild = true;
+            return -1;
         }
+        it->secondary_notification = true;
         _socket_signaler_active = true;
-        ++_pollset_size;
     }
-#endif
 #endif
 
 #if defined ZLINK_POLL_BASED_ON_POLL
@@ -341,7 +353,7 @@ int zlink::socket_poller_t::rebuild ()
 
 #if !defined ZLINK_HAVE_WINDOWS
     _socket_signaler_pollfd_index = -1;
-    if (!ZLINK_STAGE1_POLLER_PARENT_PATH && _socket_signaler_active) {
+    if (_socket_signaler_active) {
         _socket_signaler_pollfd_index = item_nbr;
         _pollfds[item_nbr].fd = _socket_signaler->get_fd ();
         _pollfds[item_nbr].events = POLLIN;
@@ -353,9 +365,12 @@ int zlink::socket_poller_t::rebuild ()
     for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
         if (it->events) {
             if (it->socket) {
-#if !defined ZLINK_HAVE_WINDOWS && !ZLINK_STAGE1_POLLER_PARENT_PATH
-                continue;
-#else
+#if !defined ZLINK_HAVE_WINDOWS
+                if (it->secondary_notification)
+                    continue;
+                if (!it->primary_notification)
+                    continue;
+#endif
                 size_t fd_size = sizeof (zlink::fd_t);
                 const int rc =
                   it->socket->getsockopt (ZLINK_INTERNAL_OPT_FD, &_pollfds[item_nbr].fd, &fd_size);
@@ -366,6 +381,9 @@ int zlink::socket_poller_t::rebuild ()
                     //  one-time POLLERR, which check_socket_events() reports
                     //  from get_events_for_poller(). Leave it out of the
                     //  descriptor set and keep the rest of the pollset.
+#if !defined ZLINK_HAVE_WINDOWS
+                    unregister_socket_notification (*it);
+#endif
                     errno = 0;
                     continue;
                 }
@@ -373,7 +391,6 @@ int zlink::socket_poller_t::rebuild ()
                 _pollfds[item_nbr].events = POLLIN;
                 _pollfds[item_nbr].revents = 0;
                 item_nbr++;
-#endif
             } else {
                 _pollfds[item_nbr].fd = it->fd;
                 _pollfds[item_nbr].events = (it->events & ZLINK_POLLIN ? POLLIN : 0)
@@ -406,7 +423,7 @@ int zlink::socket_poller_t::rebuild ()
     _max_fd = 0;
 
 #if !defined ZLINK_HAVE_WINDOWS
-    if (!ZLINK_STAGE1_POLLER_PARENT_PATH && _socket_signaler_active) {
+    if (_socket_signaler_active) {
         const zlink::fd_t socket_signaler_fd = _socket_signaler->get_fd ();
         FD_SET (socket_signaler_fd, _pollset_in.get ());
         if (_max_fd < socket_signaler_fd)
@@ -420,15 +437,21 @@ int zlink::socket_poller_t::rebuild ()
             //  If the poll item is a 0MQ socket we are interested in input on the
             //  notification file descriptor retrieved by the ZLINK_INTERNAL_OPT_FD socket option.
             if (it->socket) {
-#if !defined ZLINK_HAVE_WINDOWS && !ZLINK_STAGE1_POLLER_PARENT_PATH
-                continue;
-#else
+#if !defined ZLINK_HAVE_WINDOWS
+                if (it->secondary_notification)
+                    continue;
+                if (!it->primary_notification)
+                    continue;
+#endif
                 zlink::fd_t notify_fd;
                 size_t fd_size = sizeof (zlink::fd_t);
                 int rc = it->socket->getsockopt (ZLINK_INTERNAL_OPT_FD, &notify_fd, &fd_size);
                 if (rc != 0) {
                     //  See the poll() path: a closed registered source still
                     //  owes a one-time POLLERR, so skip it instead of failing.
+#if !defined ZLINK_HAVE_WINDOWS
+                    unregister_socket_notification (*it);
+#endif
                     errno = 0;
                     continue;
                 }
@@ -437,6 +460,7 @@ int zlink::socket_poller_t::rebuild ()
                 if (_max_fd < notify_fd)
                     _max_fd = notify_fd;
 
+#if defined ZLINK_HAVE_WINDOWS
                 _pollset_size++;
 #endif
             }
@@ -488,19 +512,38 @@ int zlink::socket_poller_t::ensure_pollfds_capacity (size_t capacity_)
 #if !defined ZLINK_HAVE_WINDOWS
 zlink::signaler_t *zlink::socket_poller_t::ensure_socket_signaler ()
 {
-    if (!_socket_signaler)
+    if (!_socket_signaler) {
         _socket_signaler = new (std::nothrow) signaler_t (true);
+        if (!_socket_signaler)
+            errno = ENOMEM;
+    }
+    if (_socket_signaler && !_socket_signaler->valid ())
+        errno = EMFILE;
     return _socket_signaler;
 }
 
-void zlink::socket_poller_t::unregister_socket_signaler ()
+void zlink::socket_poller_t::unregister_socket_notification (item_t &item_)
 {
-    if (!_socket_signaler_active || !_socket_signaler)
+    if (!item_.socket
+        || (!item_.primary_notification && !item_.secondary_notification))
         return;
+
+    mailbox_t *const mailbox =
+      static_cast<mailbox_t *> (item_.socket->get_mailbox ());
+    if (item_.secondary_notification) {
+        zlink_assert (_socket_signaler);
+        mailbox->remove_signaler (_socket_signaler);
+        item_.secondary_notification = false;
+    }
+    mailbox->release_poller_notification (item_.primary_notification);
+    item_.primary_notification = false;
+}
+
+void zlink::socket_poller_t::unregister_socket_notifications ()
+{
     for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
         if (it->socket)
-            static_cast<mailbox_t *> (it->socket->get_mailbox ())
-              ->remove_signaler (_socket_signaler);
+            unregister_socket_notification (*it);
     }
     _socket_signaler_active = false;
 }
@@ -509,8 +552,10 @@ void zlink::socket_poller_t::drain_socket_signaler ()
 {
     if (!_socket_signaler)
         return;
+    const int saved_errno = errno;
     while (_socket_signaler->recv_failable () == 0) {
     }
+    errno = saved_errno;
 }
 #endif
 
@@ -532,10 +577,21 @@ int zlink::socket_poller_t::collect_socket_event (item_t &item_, event_t *event_
         return 0;
 
     uint32_t events;
-    if (item_.socket->get_events_for_poller (
-          item_.events, &events,
-          _output_readiness == transport_output_readiness)
-        == -1) {
+#if defined ZLINK_HAVE_WINDOWS
+    const bool consume_primary_signaler = true;
+#else
+    mailbox_t *const mailbox =
+      static_cast<mailbox_t *> (item_.socket->get_mailbox ());
+    const bool consume_primary_signaler =
+      item_.primary_notification
+      || (item_.secondary_notification
+          && !mailbox->has_primary_poller_notification ());
+#endif
+    const int get_events_rc = item_.socket->get_events_for_poller (
+      item_.events, &events,
+      _output_readiness == transport_output_readiness,
+      consume_primary_signaler);
+    if (get_events_rc == -1) {
         return -1;
     }
 

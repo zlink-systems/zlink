@@ -357,7 +357,8 @@ void zlink::socket_base_t::start_reaping (poller_t *poller_)
 
 int zlink::socket_base_t::process_commands (
   int timeout_, bool throttle_, bool force_if_command_pending_,
-  const uint64_t *observed_command_wait_epoch_)
+  const uint64_t *observed_command_wait_epoch_,
+  bool consume_primary_signaler_)
 {
     receive_runtime_t &receive = receive_runtime ();
     socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
@@ -483,7 +484,8 @@ int zlink::socket_base_t::process_commands (
             const auto recv_next_command = [&] (command_t *cmd_out_) {
                 if (probe_pair_lifetime_command) {
                     const mailbox_t::command_probe_result_t probe =
-                      mailbox->probe_command (&is_pair_pipe_lifetime_command);
+                      mailbox->probe_command (&is_pair_pipe_lifetime_command,
+                                              consume_primary_signaler_);
                     if (probe == mailbox_t::command_probe_empty) {
                         errno = EAGAIN;
                         return -1;
@@ -494,7 +496,8 @@ int zlink::socket_base_t::process_commands (
                         return -1;
                     }
                 }
-                return mailbox->recv (cmd_out_, 0);
+                return mailbox->recv (cmd_out_, 0,
+                                      consume_primary_signaler_);
             };
 
 #ifdef ZLINK_BUILD_TESTS

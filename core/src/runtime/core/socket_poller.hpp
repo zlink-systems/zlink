@@ -81,6 +81,12 @@ class socket_poller_t
         void *user_data;
         short events;
         bool terminal_event_delivered;
+#if !defined ZLINK_HAVE_WINDOWS
+        //  Exactly one poller per mailbox uses its primary descriptor. Every
+        //  concurrent registration uses this poller's private signaler.
+        bool primary_notification;
+        bool secondary_notification;
+#endif
 #if defined ZLINK_POLL_BASED_ON_POLL
         int pollfd_index;
 #endif
@@ -210,7 +216,8 @@ class socket_poller_t
     int collect_socket_event (item_t &item_, event_t *event_);
 #if !defined ZLINK_HAVE_WINDOWS
     signaler_t *ensure_socket_signaler ();
-    void unregister_socket_signaler ();
+    void unregister_socket_notifications ();
+    void unregister_socket_notification (item_t &item_);
     void drain_socket_signaler ();
 #endif
 

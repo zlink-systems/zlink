@@ -8,6 +8,14 @@
 
 #include <boost/asio.hpp>
 #include <algorithm>
+#include <new>
+
+namespace
+{
+const uint32_t poller_notification_primary = UINT32_C (1) << 31;
+const uint32_t poller_notification_count =
+  poller_notification_primary - UINT32_C (1);
+}
 
 zlink::mailbox_t::mailbox_t ()
 {
@@ -25,6 +33,7 @@ zlink::mailbox_t::mailbox_t ()
     _command_wait_observers = 0;
     _command_wait_signal_pending = false;
     _primary_signaler_required.store (false, std::memory_order_release);
+    _poller_notifications.store (0, std::memory_order_release);
 }
 
 zlink::mailbox_t::~mailbox_t ()
@@ -99,12 +108,26 @@ void zlink::mailbox_t::signal ()
 
 int zlink::mailbox_t::recv (command_t *cmd_, int timeout_)
 {
+    return recv (cmd_, timeout_, true);
+}
+
+int zlink::mailbox_t::recv (command_t *cmd_, int timeout_,
+                            bool consume_primary_signaler_)
+{
     //  An async command owner and a public socket poller can observe the same
     //  primary descriptor. Consult the command pipe first so a poller that
     //  consumed the wake cannot strand an already-published command.
-    (void) activate_if_command_pending ();
+    (void) activate_if_command_pending (consume_primary_signaler_);
 
     if (!_active) {
+        if (!consume_primary_signaler_) {
+            //  A poller waiting on its private signaler must not consume the
+            //  primary poller's edge merely because it is rechecking logical
+            //  readiness. Poller readiness probes are always nonblocking.
+            zlink_assert (timeout_ == 0);
+            errno = EAGAIN;
+            return -1;
+        }
         signaler_t *shared_signaler = NULL;
         _sync.lock ();
         if (!_signalers.empty ()
@@ -161,14 +184,14 @@ int zlink::mailbox_t::recv (command_t *cmd_, int timeout_)
 }
 
 zlink::mailbox_t::command_probe_result_t zlink::mailbox_t::probe_command (
-  bool (*predicate_) (const command_t &))
+  bool (*predicate_) (const command_t &), bool consume_primary_signaler_)
 {
     zlink_assert (predicate_);
 
     //  Mirror recv()'s nonblocking receiver-state transition, including the
     //  primary wake drain. A sender can only append after this probe, so a
     //  matched front remains the next command until the command owner pops it.
-    if (!activate_if_command_pending ())
+    if (!activate_if_command_pending (consume_primary_signaler_))
         return command_probe_empty;
     if (!_cpipe.check_read ()) {
         _active = false;
@@ -179,12 +202,14 @@ zlink::mailbox_t::command_probe_result_t zlink::mailbox_t::probe_command (
                                      : command_probe_other;
 }
 
-bool zlink::mailbox_t::activate_if_command_pending ()
+bool zlink::mailbox_t::activate_if_command_pending (
+  bool consume_primary_signaler_)
 {
     if (!_active && _cpipe.check_read ()) {
         //  The command pipe is authoritative when a public poller consumed
         //  the shared descriptor edge before the command owner arrived.
-        (void) _signaler.recv_failable ();
+        if (consume_primary_signaler_)
+            (void) _signaler.recv_failable ();
         _active = true;
     }
     return _active;
@@ -350,11 +375,19 @@ bool zlink::mailbox_t::detach_io_context_if_idle ()
     return true;
 }
 
-void zlink::mailbox_t::add_signaler (signaler_t *signaler_)
+int zlink::mailbox_t::add_signaler (signaler_t *signaler_)
 {
     _sync.lock ();
-    _signalers.push_back (signaler_);
+    try {
+        _signalers.push_back (signaler_);
+    }
+    catch (const std::bad_alloc &) {
+        _sync.unlock ();
+        errno = ENOMEM;
+        return -1;
+    }
     _sync.unlock ();
+    return 0;
 }
 
 void zlink::mailbox_t::remove_signaler (signaler_t *signaler_)
@@ -365,6 +398,60 @@ void zlink::mailbox_t::remove_signaler (signaler_t *signaler_)
     if (it != end)
         _signalers.erase (it);
     _sync.unlock ();
+}
+
+bool zlink::mailbox_t::acquire_poller_notification ()
+{
+    //  Publish primary use before adding the registration. A concurrent sender
+    //  then always leaves an edge for the first descriptor-based poller.
+    _primary_signaler_required.store (true, std::memory_order_release);
+    uint32_t observed =
+      _poller_notifications.load (std::memory_order_acquire);
+    while (true) {
+        const uint32_t count = observed & poller_notification_count;
+        zlink_assert (count != poller_notification_count);
+        const bool primary = count == 0;
+        const uint32_t desired =
+          count + 1
+          | (primary ? poller_notification_primary
+                     : observed & poller_notification_primary);
+        if (_poller_notifications.compare_exchange_weak (
+              observed, desired, std::memory_order_acq_rel,
+              std::memory_order_acquire))
+            return primary;
+    }
+}
+
+void zlink::mailbox_t::release_poller_notification (
+  bool primary_notification_)
+{
+    uint32_t observed =
+      _poller_notifications.load (std::memory_order_acquire);
+    while (true) {
+        const uint32_t count = observed & poller_notification_count;
+        zlink_assert (count != 0);
+        if (primary_notification_)
+            zlink_assert (observed & poller_notification_primary);
+        const uint32_t remaining = count - 1;
+        const uint32_t desired =
+          remaining == 0
+            ? 0
+            : remaining
+                | (primary_notification_
+                     ? 0
+                     : observed & poller_notification_primary);
+        if (_poller_notifications.compare_exchange_weak (
+              observed, desired, std::memory_order_acq_rel,
+              std::memory_order_acquire))
+            return;
+    }
+}
+
+bool zlink::mailbox_t::has_primary_poller_notification () const
+{
+    return (_poller_notifications.load (std::memory_order_acquire)
+            & poller_notification_primary)
+           != 0;
 }
 
 void zlink::mailbox_t::rearm_primary_signaler ()

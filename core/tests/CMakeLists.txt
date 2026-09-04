@@ -1071,7 +1071,13 @@ add_executable(
   ${INTEGRATION_TEST_ROOT}/test_wake_invariants.cpp)
 target_link_libraries(test_wake_invariants ${TESTUTIL_LIB})
 
+add_executable(
+  test_two_poller_wake
+  ${INTEGRATION_TEST_ROOT}/test_two_poller_wake.cpp)
+target_link_libraries(test_two_poller_wake ${TESTUTIL_LIB})
+
 add_test(NAME test_wake_invariants COMMAND test_wake_invariants)
+add_test(NAME test_two_poller_wake COMMAND test_two_poller_wake)
 add_test(
   NAME test_wake_invariant_hwm_lwm_shrink
   COMMAND test_router_multiple_dealers)
@@ -1084,6 +1090,7 @@ add_test(
 
 set_tests_properties(
   test_wake_invariants
+  test_two_poller_wake
   test_wake_invariant_hwm_lwm_shrink
   test_wake_invariant_completion_owner
   PROPERTIES
@@ -1092,3 +1099,5 @@ set_tests_properties(
     SKIP_RETURN_CODE 77
     RESOURCE_LOCK "${NETWORK_INTEGRATION_RESOURCE_LOCK}"
     LABELS "integration;regression;serial;wake-invariant")
+
+set_tests_properties(test_two_poller_wake PROPERTIES TIMEOUT 60)
