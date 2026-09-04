@@ -214,8 +214,11 @@ public abstract sealed class ZlinkException extends RuntimeException
             case NativeErrorCodes.EAGAIN, NativeErrorCodes.EWOULDBLOCK_WIN ->
                 RequestResult.TIMED_OUT;
             case NativeErrorCodes.ENOTCONN, NativeErrorCodes.ENOTCONN_WIN,
-                 NativeErrorCodes.EHOSTUNREACH, NativeErrorCodes.EHOSTUNREACH_WIN ->
+                 NativeErrorCodes.EHOSTUNREACH, NativeErrorCodes.EHOSTUNREACH_WIN,
+                 NativeErrorCodes.ENOENT ->
                 RequestResult.NOT_FOUND;
+            case NativeErrorCodes.ECANCELED, NativeErrorCodes.ESHUTDOWN,
+                 NativeErrorCodes.ETERM -> RequestResult.TERMINATED;
             case NativeErrorCodes.EINTR -> RequestResult.PROTOCOL_ERROR;
             default -> RequestResult.PROTOCOL_ERROR;
         };

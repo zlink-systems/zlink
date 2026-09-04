@@ -140,25 +140,54 @@ final class CompletionOwner implements AutoCloseable {
     CompletionStage<List<Message>> submitRequest(RoutingId target,
                                                   List<Message> parts,
                                                   Duration timeout) {
-        Pending<List<Message>> state = null;
+        drainLock.lock();
         try {
-            state = registerRequest();
+            long token = nextContextToken();
+            int timeoutMs = timeoutMillis(timeout);
             SubmitAttempt attempt = submitPartsAttempt(target, parts,
-                SendFlags.DONT_WAIT.value(), timeoutMillis(timeout),
-                state.context(), true, true, 0L);
-            requireRequestSuccess(attempt);
-            closeParts(parts);
-            if (attempt.completionId() == 0L) {
-                throw new ZlinkSubmitException(
-                    SubmitResult.INTERNAL_ERROR);
+                SendFlags.DONT_WAIT.value(), timeoutMs,
+                MemorySegment.ofAddress(token), true, true, 0L);
+            if (attempt.result() == SubmitResult.OK) {
+                if (attempt.completionId() == 0L) {
+                    throw new ZlinkSubmitException(
+                        SubmitResult.INTERNAL_ERROR);
+                }
+                Pending<List<Message>> state = registerRequestAfterAttempt(
+                    token, target, List.of(), timeoutMs);
+                state.publishRequest(attempt.completionId());
+                closeParts(parts);
+                startRuntimeOwner();
+                return state.future;
             }
-            state.publishRequest(attempt.completionId());
-        } catch (RuntimeException | Error failure) {
-            if (state != null)
-                state.reject(failure);
-            throw failure;
+            if (!isWritableWait(attempt)) {
+                throw submitFailure(attempt);
+            }
+
+            List<Message> retained;
+            try {
+                retained = retainParts(parts);
+            } catch (RuntimeException | Error failure) {
+                Pending<Void> discard = registerAfterAttempt(token, target,
+                    List.of(), PendingKind.DISCARD_WRITABLE);
+                discard.armWritable(attempt.completionId());
+                startRuntimeOwner();
+                throw failure;
+            }
+            Pending<List<Message>> state;
+            try {
+                state = registerRequestAfterAttempt(token, target, retained,
+                    timeoutMs);
+            } catch (RuntimeException | Error failure) {
+                closeParts(retained);
+                throw failure;
+            }
+            state.armWritable(attempt.completionId());
+            closeParts(parts);
+            startRuntimeOwner();
+            return state.future;
+        } finally {
+            drainLock.unlock();
         }
-        return state.future;
     }
 
     List<Message> submitRequestBlocking(RoutingId target,
@@ -446,19 +475,26 @@ final class CompletionOwner implements AutoCloseable {
 
     private Pending<List<Message>> registerRequest() {
         Pending<List<Message>> state = register(PendingKind.REQUEST, null,
-            List.of());
+            List.of(), 0);
         startRuntimeOwner();
         return state;
     }
 
     private <T> Pending<T> register(PendingKind kind, RoutingId target,
                                     List<Message> retained) {
+        return register(kind, target, retained, 0);
+    }
+
+    private <T> Pending<T> register(PendingKind kind, RoutingId target,
+                                    List<Message> retained,
+                                    int requestTimeoutMs) {
         synchronized (ownerLock) {
             if (closed) {
                 throw new IllegalStateException("socket is closed");
             }
             long token = nextContextTokenLocked();
-            Pending<T> state = new Pending<>(token, kind, target, retained);
+            Pending<T> state = new Pending<>(token, kind, target, retained,
+                requestTimeoutMs);
             pending.put(token, state);
             return state;
         }
@@ -488,7 +524,25 @@ final class CompletionOwner implements AutoCloseable {
             if (closed) {
                 throw new IllegalStateException("socket is closed");
             }
-            Pending<Void> state = new Pending<>(token, kind, target, retained);
+            Pending<Void> state = new Pending<>(token, kind, target, retained,
+                0);
+            Pending<?> previous = pending.putIfAbsent(token, state);
+            if (previous != null) {
+                throw new ZlinkSubmitException(SubmitResult.INTERNAL_ERROR);
+            }
+            return state;
+        }
+    }
+
+    private Pending<List<Message>> registerRequestAfterAttempt(
+            long token, RoutingId target, List<Message> retained,
+            int timeoutMs) {
+        synchronized (ownerLock) {
+            if (closed) {
+                throw new IllegalStateException("socket is closed");
+            }
+            Pending<List<Message>> state = new Pending<>(token,
+                PendingKind.REQUEST, target, retained, timeoutMs);
             Pending<?> previous = pending.putIfAbsent(token, state);
             if (previous != null) {
                 throw new ZlinkSubmitException(SubmitResult.INTERNAL_ERROR);
@@ -579,7 +633,7 @@ final class CompletionOwner implements AutoCloseable {
                     state = pending.get(context.address());
                     if (state != null) {
                         result = readResult(completion,
-                            state.kind == PendingKind.REQUEST);
+                            state.expectsRequestCompletion());
                     }
                 } finally {
                     Native.completionClose(completion);
@@ -882,6 +936,37 @@ final class CompletionOwner implements AutoCloseable {
         }
     }
 
+    private void retryRequest(Pending<?> untyped) {
+        @SuppressWarnings("unchecked")
+        Pending<List<Message>> state =
+            (Pending<List<Message>>) untyped;
+        SubmitAttempt attempt;
+        try {
+            attempt = submitPartsAttempt(state.target, state.retained,
+                SendFlags.DONT_WAIT.value(), state.requestTimeoutMs,
+                state.context(), true, true, 0L);
+        } catch (RuntimeException | Error failure) {
+            state.reject(failure);
+            return;
+        }
+
+        if (attempt.result() == SubmitResult.OK) {
+            if (attempt.completionId() == 0L) {
+                state.reject(new ZlinkSubmitException(
+                    SubmitResult.INTERNAL_ERROR));
+                return;
+            }
+            state.publishRequest(attempt.completionId());
+            state.releaseRetained();
+            return;
+        }
+        if (isWritableWait(attempt)) {
+            state.armWritable(attempt.completionId());
+        } else {
+            state.reject(submitFailure(attempt));
+        }
+    }
+
     private void rejectPending(Throwable failure) {
         for (Pending<?> state : pending.values()) {
             state.reject(failure);
@@ -1013,6 +1098,11 @@ final class CompletionOwner implements AutoCloseable {
             }
         }
         return new ZlinkSubmitException(SubmitResult.NOT_ADMITTED, errno);
+    }
+
+    private static ZlinkRequestException terminalRequestFailure(int errno) {
+        return (ZlinkRequestException) ZlinkException.fromErrno(
+            ErrorCategory.REQUEST, errno);
     }
 
     private static int timeoutMillis(Duration timeout) {
@@ -1208,20 +1298,25 @@ final class CompletionOwner implements AutoCloseable {
         private final long token;
         private final PendingKind kind;
         private final RoutingId target;
-        private final List<Message> retained;
+        private List<Message> retained;
+        private final int requestTimeoutMs;
         private final CompletableFuture<T> future = new CompletableFuture<>();
         private boolean published;
         private boolean captured;
         private boolean dispatched;
         private long completionId;
         private Object result;
+        private boolean requestAdmitted;
 
         Pending(long token, PendingKind kind, RoutingId target,
-                List<Message> retained) {
+                List<Message> retained, int requestTimeoutMs) {
             this.token = token;
             this.kind = kind;
             this.target = target;
             this.retained = retained;
+            this.requestTimeoutMs = requestTimeoutMs;
+            this.requestAdmitted = kind == PendingKind.REQUEST
+                && retained.isEmpty();
         }
 
         MemorySegment context() {
@@ -1236,6 +1331,7 @@ final class CompletionOwner implements AutoCloseable {
                 }
                 completionId = id;
                 published = true;
+                requestAdmitted = true;
                 ready = captured;
             }
             if (ready) {
@@ -1250,12 +1346,14 @@ final class CompletionOwner implements AutoCloseable {
                 }
                 completionId = id;
                 published = true;
+                if (kind == PendingKind.REQUEST)
+                    requestAdmitted = false;
             }
             signalPendingChange();
         }
 
         void capture(Object value) {
-            if (kind == PendingKind.REQUEST) {
+            if (value instanceof RequestCompletion) {
                 captureRequest(value);
             } else {
                 captureWritable(value);
@@ -1326,8 +1424,9 @@ final class CompletionOwner implements AutoCloseable {
                     failure = new ZlinkSubmitException(
                         SubmitResult.INTERNAL_ERROR);
                 } else if (completion.sendResult() == SEND_TERMINAL) {
-                    failure = terminalSendFailure(
-                        completion.terminalErrno());
+                    failure = kind == PendingKind.REQUEST
+                        ? terminalRequestFailure(completion.terminalErrno())
+                        : terminalSendFailure(completion.terminalErrno());
                 } else if (completion.sendResult() != SEND_ADMITTED) {
                     failure = new ZlinkSubmitException(
                         SubmitResult.INTERNAL_ERROR,
@@ -1338,9 +1437,24 @@ final class CompletionOwner implements AutoCloseable {
                 reject(failure);
             } else if (kind == PendingKind.DISCARD_WRITABLE) {
                 completeDiscardInline();
+            } else if (kind == PendingKind.REQUEST) {
+                retryRequest(this);
             } else {
                 retrySend(this);
             }
+        }
+
+        synchronized boolean expectsRequestCompletion() {
+            return kind == PendingKind.REQUEST && requestAdmitted;
+        }
+
+        void releaseRetained() {
+            List<Message> released;
+            synchronized (this) {
+                released = retained;
+                retained = List.of();
+            }
+            closeParts(released);
         }
 
         void completeSendInline() {
@@ -1367,9 +1481,7 @@ final class CompletionOwner implements AutoCloseable {
                 dispatched = true;
             }
             pending.remove(token, this);
-            if (kind != PendingKind.REQUEST) {
-                closeParts(retained);
-            }
+            releaseRetained();
             signalPendingChange();
 
             Runnable completion = () -> {
@@ -1410,7 +1522,8 @@ final class CompletionOwner implements AutoCloseable {
         }
 
         synchronized boolean awaitingWritable() {
-            return kind != PendingKind.REQUEST && published && !dispatched;
+            return published && !dispatched
+                && (kind != PendingKind.REQUEST || !requestAdmitted);
         }
 
         void rejectClosed() {

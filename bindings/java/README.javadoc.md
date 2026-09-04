@@ -33,9 +33,11 @@ user context. The Java binding retains the packet, waits for `POLLOUT`, drains
 the completion queue through `NO_DATA`, and retries that packet only after the
 matching `CompletionKind.WRITABLE` record arrives.
 
-The REQUEST/reply completion path is unchanged. `ZLINK_OPT_PENDING_MAX_MSGS`
-and `ZLINK_OPT_PENDING_MAX_BYTES` keep their ABI values but limit only REQUEST
-pending admission on DEALER and ROUTER sockets. They are no-ops for SEND.
+Asynchronous REQUEST uses the same wait-token admission path. On
+`BACKPRESSURED`, the Java binding retains the request until its matching
+`WRITABLE`, resubmits it, and then awaits the ordinary REQUEST reply or timeout
+completion. `ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` keep
+their ABI values but are ignored.
 
 ## Native Library Loading
 

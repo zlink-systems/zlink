@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -162,7 +163,7 @@ final class PerfMultiSocketReqRep {
             + config.durationSeconds() * 1_000_000_000L;
         int requestTimeoutMs = resolveRequestTimeoutMs();
         Duration timeout = Duration.ofMillis(requestTimeoutMs);
-        boolean[] pendingPayloads = new boolean[clients.size()];
+        AtomicIntegerArray inFlight = new AtomicIntegerArray(clients.size());
         java.util.function.BiConsumer<List<Message>, Throwable> completion =
             (parts, error) -> {
             try {
@@ -190,9 +191,9 @@ final class PerfMultiSocketReqRep {
             }
         };
 
-        // Request completion targets are registered with POLLCOMPLETION
-        // alone. Submission continues until the public request terminal
-        // reports backpressure; replies never gate the next request.
+        // The binding owns any WRITABLE admission retry. Keep one logical
+        // request per client in flight and submit its successor only after the
+        // ordinary REQUEST completion releases that client.
         try (RequestPayloadTemplates payloadTemplates =
                  new RequestPayloadTemplates(config.size(), clients.size());
              PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
@@ -203,19 +204,13 @@ final class PerfMultiSocketReqRep {
                     if (System.nanoTime() >= activeEnd) {
                         break;
                     }
-                    if (!pendingPayloads[i]) {
-                        payloadTemplates.prepare(i, (byte) PerfUtil.PHASE_ACTIVE,
-                            System.nanoTime());
-                        pendingPayloads[i] = true;
-                    }
-                    // Each accepted request owns its own CompletionStage.
-                    // Keep submitting round-robin until Core reports
-                    // admission backpressure; replies do not gate later
-                    // request tasks.
+                    if (inFlight.get(i) != 0)
+                        continue;
+                    payloadTemplates.prepare(i, (byte) PerfUtil.PHASE_ACTIVE,
+                        System.nanoTime());
                     if (submit(clients.get(i), routedClients,
                             payloadTemplates.copyForSubmit(i), timeout,
-                            outstanding, completion)) {
-                        pendingPayloads[i] = false;
+                            outstanding, inFlight, i, completion)) {
                         progress = true;
                     }
                 }
@@ -259,6 +254,8 @@ final class PerfMultiSocketReqRep {
     private static boolean submit(Socket client, boolean routedClients,
                                   Message payload, Duration timeout,
                                   AtomicLong outstanding,
+                                  AtomicIntegerArray inFlight,
+                                  int clientIndex,
                                   java.util.function.BiConsumer<List<Message>,
                                       Throwable> completion) {
         CompletionStage<List<Message>> stage;
@@ -308,16 +305,18 @@ final class PerfMultiSocketReqRep {
             }
         }
         outstanding.incrementAndGet();
-        stage.whenComplete(completion);
+        inFlight.set(clientIndex, 1);
+        stage.whenComplete((parts, error) -> {
+            try {
+                completion.accept(parts, error);
+            } finally {
+                inFlight.set(clientIndex, 0);
+            }
+        });
         return true;
     }
 
-    /**
-     * One native template per requester preserves a pre-admission logical
-     * payload across retries. Request submission copies the source parts into
-     * Core-owned storage before returning, so its temporary clone is released
-     * independently of reply completion; this is not an inflight window.
-     */
+    /** One native template per requester supplies independently owned submits. */
     private static final class RequestPayloadTemplates implements AutoCloseable {
         private final Message[] templates;
 
@@ -334,9 +333,8 @@ final class PerfMultiSocketReqRep {
         }
 
         private Message copyForSubmit(int index) {
-            // Request submission stages source parts before it returns. A
-            // clone must therefore be independently owned, never shared with
-            // a subsequent retry or template rewrite.
+            // The binding may retain this clone through WRITABLE admission;
+            // it must not alias a later template rewrite.
             return Message.from(templates[index]);
         }
 

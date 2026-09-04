@@ -5,8 +5,10 @@ package systems.zlink.contracts.messaging;
 /**
  * Builds a request: add the request parts, then submit for asynchronous reply
  * completion.
- * Parts are consumed on a successful submit (see {@link SendOperation} for the
- * ownership contract). The caller owns any reply parts delivered on completion.
+ * An accepted asynchronous operation consumes the parts. If admission is
+ * backpressured, the binding retains its own snapshot until the matching
+ * WRITABLE token allows a retry. The caller owns any reply parts delivered on
+ * completion.
  */
 public interface RequestOperation
   extends MessageBuilderStage<RequestSubmitOperation> {

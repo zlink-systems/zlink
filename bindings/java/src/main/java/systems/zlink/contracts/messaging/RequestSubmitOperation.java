@@ -30,7 +30,12 @@ public interface RequestSubmitOperation
     /**
      * Submits the request and asynchronously returns the reply parts.
      *
-     * <p>The caller owns the returned messages and must close them.
+     * <p>Each admission attempt uses Core DONTWAIT. Immediate admission starts
+     * the reply timeout. On BACKPRESSURED/EAGAIN, Core retains only a wait
+     * token; the binding retains the request and resubmits it only after the
+     * matching WRITABLE completion. The returned stage then completes from the
+     * ordinary REQUEST reply, timeout, or typed terminal completion. The caller
+     * owns the returned messages and must close them.
      *
      * @return a future that completes with the reply message list
      */
