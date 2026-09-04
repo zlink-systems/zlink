@@ -798,3 +798,24 @@ user-spot-join 12 포함).
 **간헐(비지속, 재실행 통과)**: TTT preflight mesh_node_vertical permits_in_use==0 1회, Bingo play-a SIGSEGV 1회 — 감시 필요.
 **다음(correctness, fast/dev 빌드)**: R1 ZoneWorld·R2 java authenticate 진단·수정(병렬), R3 node flow-correlation(관측성).
 R4는 B HWM-wake 대기. perf STREAM 전체 pattern/size 게이트도 B 수정 후.
+
+## D-082 (2026-09-04 12:xx) java authenticate 회귀 수정·push (4af4f66f31)
+codex sol ultra. 근본원인: Phase11 java 전환(e65abaf7ac)이 opaque ReplyToken/isRequest() 도입 시 `ZLinkChannelSocketRegistry.
+tryHandleClientServerControl`을 누락 — Hello/LivenessProbe/decode-reject/final-reply를 옛 numeric requestSeq로 판별. valid
+pull Hello(requestSeq.empty+ReplyToken)를 Admit까지 decode하고도 "request 아님" 오판→disconnectPeer→authenticate handler
+내부 API 5초 timeout→Unavailable→handler_exception. 수정: 4 control 분기 `received.isRequest()`, reply는 `replyAndClose`
+(opaque token+legacy fallback). test 2개(pre-fix FAIL→post PASS). 2파일. cpp/dotnet 전환 누락과 동류(각 언어 control 경로).
+잔여: java Bingo session-disconnect·TicTacToe TEARDOWN_FAILED = 별개 termination/lifecycle followup.
+
+## D-083 (2026-09-04 12:xx) cpp ZoneWorld 수정·push (2f1de0b56d)
+codex sol ultra. **"unexpected ZMP frame header" = 샘플 proxy 버그**(session_route_block_proxy.py가 request/reply의 8-byte
+sequence를 payload로 오인, frame 8B 어긋남). **Core encode/decode는 동일 wire 형식(zmp_protocol/data_header/decoder 검증)
+→ Core/framework wire 버그 아님**. RouteMesh not-found=시작 transient, HTTP 504=상위 증상.
+**G4 crash-boundary = framework 버그**(proxy 수정 후 노출): target SIGKILL 후 generation 사라졌는데 deadline_exceeded 그대로
+전달(client는 Unavailable만 기대)→hang. 수정: mesh_node_runtime.cpp가 deadline_exceeded+generation gone→unavailable(transfer-
+route·wire actor-join), raw_mesh_node_owner.cpp가 edge-less CONNECTION_READY(count snapshot) skip, teardown 순서(timers stop→
+cancel dispatch/work→detach/release)로 callback settle 후 instance 해제. ZoneWorld 3/3 PASS, framework ctest 45/48(3 기존 P).
+**cross-language followup**: 동일 proxy 8-byte parser 버그가 .NET/Java/Node ZoneWorld proxy에도 존재(정적 확인) → 포팅 필요.
+per-language G4도 각 framework에 있을 수 있음(cpp처럼). **Core 후속**: physical disconnect가 pending request 즉시 settle 안 함
+(G4는 deadline 대기 후 framework서 Unavailable 분류; 즉시 settlement는 Core 소유). **감시**: ZoneNode/Bingo play-a SIGSEGV
+during cleanup(non-fatal, PASS이나 은닉 크래시).
