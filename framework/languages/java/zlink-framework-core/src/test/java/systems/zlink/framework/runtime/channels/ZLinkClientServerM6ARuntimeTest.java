@@ -383,6 +383,81 @@ final class ZLinkClientServerM6ARuntimeTest {
     }
 
     @Test
+    void reservedHelloUsesOpaqueDirectReplyPath() {
+        ZLinkChannelSocketRegistry sockets =
+            new ZLinkChannelSocketRegistry();
+        ZLinkClientServerServerDescriptor descriptor =
+            descriptor(
+                "orders", RoutingId.from("server"), 5, 2,
+                "tcp://127.0.0.1:7001", 80);
+        sockets.setClientServerServerDescriptor("orders", descriptor);
+        byte[] hello = ZLinkClientServerServiceWire.encodeHello(
+            new ZLinkClientServerServiceWire.Hello(
+                "orders", "default", 4096));
+        List<Message> reply = new ArrayList<>();
+        ControlledRouter router = new ControlledRouter();
+        ZLinkBackendReceived received = new ZLinkBackendReceived(
+            ZLinkBackendRequestResult.OK,
+            Optional.of(RoutingId.from("client")),
+            Optional.empty(),
+            Optional.empty(),
+            List.of(Message.from(hello)),
+            parts -> {
+                for (Message part : parts) {
+                    reply.add(Message.from(part));
+                }
+            },
+            () -> { });
+
+        assertTrue(sockets.tryHandleClientServerControl(
+            "orders", router, received));
+        assertTrue(router.disconnected.isEmpty());
+        assertEquals(1, reply.size());
+        try (Message response = reply.get(0)) {
+            ZLinkClientServerServiceWire.Admit admit =
+                (ZLinkClientServerServiceWire.Admit)
+                    ZLinkClientServerServiceWire.decode(
+                        response.toByteArray());
+            assertEquals(
+                descriptor.serverRid(), admit.admission().serverRid());
+        }
+    }
+
+    @Test
+    void livenessProbeUsesOpaqueDirectReplyPath() {
+        ZLinkChannelSocketRegistry sockets =
+            new ZLinkChannelSocketRegistry();
+        List<Message> reply = new ArrayList<>();
+        ControlledRouter router = new ControlledRouter();
+        ZLinkBackendReceived received = new ZLinkBackendReceived(
+            ZLinkBackendRequestResult.OK,
+            Optional.of(RoutingId.from("client")),
+            Optional.empty(),
+            Optional.empty(),
+            List.of(Message.from(
+                ZLinkClientServerServiceWire.encodeLivenessProbe(91))),
+            parts -> {
+                for (Message part : parts) {
+                    reply.add(Message.from(part));
+                }
+            },
+            () -> { });
+
+        assertTrue(sockets.tryHandleClientServerControl(
+            "orders", router, received));
+        assertTrue(router.sent.isEmpty());
+        assertTrue(router.disconnected.isEmpty());
+        assertEquals(1, reply.size());
+        try (Message response = reply.get(0)) {
+            ZLinkClientServerServiceWire.LivenessAck ack =
+                (ZLinkClientServerServiceWire.LivenessAck)
+                    ZLinkClientServerServiceWire.decode(
+                        response.toByteArray());
+            assertEquals(91, ack.probeId());
+        }
+    }
+
+    @Test
     void descriptorProjectionIgnoresPeerThatLostAdmission() {
         ZLinkChannelSocketRegistry sockets =
             new ZLinkChannelSocketRegistry();

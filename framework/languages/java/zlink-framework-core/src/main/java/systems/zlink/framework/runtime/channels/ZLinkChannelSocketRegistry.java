@@ -696,7 +696,7 @@ final class ZLinkChannelSocketRegistry {
                 ZLinkClientServerServiceWire.decode(frame);
             if (control instanceof ZLinkClientServerServiceWire.LivenessAck ack
                 && received.routingId().isPresent()
-                && received.requestSeq().isEmpty()) {
+                && !received.isRequest()) {
                 acceptClientServerServerAck(
                     channelName, received.routingId().get(), ack.probeId());
                 received.close();
@@ -707,7 +707,7 @@ final class ZLinkChannelSocketRegistry {
                 && received.routingId().isPresent()) {
                 byte[] ack = ZLinkClientServerServiceWire.encodeLivenessAck(
                     probe.probeId());
-                if (received.requestSeq().isPresent()) {
+                if (received.isRequest()) {
                     reply = ack;
                 } else {
                     try (Message message = Message.from(ack)) {
@@ -740,14 +740,13 @@ final class ZLinkChannelSocketRegistry {
             }
             }
         } catch (RuntimeException failure) {
-            if (received.requestSeq().isPresent()) {
+            if (received.isRequest()) {
                 reply = ZLinkClientServerServiceWire.encodeReject(1);
             }
         }
-        if (reply != null && received.requestSeq().isPresent()) {
-            try (Message message = Message.from(reply)) {
-                received.reply(List.of(message));
-            }
+        if (reply != null && received.isRequest()) {
+            ZLinkChannelDispatchReporter.replyAndClose(
+                router, received, Message.from(reply));
         } else if (reply != null && received.routingId().isPresent()) {
             try {
                 router.disconnectPeer(received.routingId().get());
