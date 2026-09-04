@@ -762,3 +762,20 @@ inbound false→true 반복. framework workaround(POLLIN|POLLCOMPLETION 합치�
 source optional 미clear→ensure_waiter가 새 waiter 미등록(도입 8bae89dc0f). Core race 지속 악화하나 root 아님.
 **B 최종 작업 pull(fast-forward 22b39361bb)**: bdf0917e14(core/pipe PUB credit)+docs(B campaign 종결 D-B67..B70·sweep2).
 Phase 9 tag 게이트(sweep2+posddd) 이제 열림. framework/cpp fix 대상(stream.cpp readiness)은 B 최종서 불변.
+
+## D-080 (2026-09-04 11:xx) Core two-poller lost-wake 수정 커밋·push (c12c736ca6, B merge) + build-core.sh
+codex sol ultra. **수정**: POSIX socket_poller가 같은 socket의 모든 poller에 mailbox primary FD 등록 → 동시 대기 시
+lost-wake. `_poller_notifications` 단일 atomic(high bit=primary 생존, low bits=poller refcount, CAS로 primary release/
+re-acquire race 방지)으로, **첫 poller는 primary FD fast path 유지(d58a179033 최적화 보존, signaler 할당·lock 없음)**,
+동시 등록된 추가 poller만 coalescing secondary signaler 지연 생성, signal_pollers()가 command 경계에서 모든 waiter readiness
+재평가. message 경로에 할당/lock/scan 무추가. 9파일(mailbox·socket_poller·socket_base_api/lifecycle + 신규 test_two_poller_wake
++ CMakeLists). **검증**: full ctest 140/140(poll)·select 2/2·test_two_poller_wake 100/100(STREAM/PAIR/DEALER/ROUTER+역순+
+all-secondary+lifecycle)·test_proxy 10/10 Rel·20/20 Dbg·c016 repro 300x slow_polls=0(이전 29~32)·**hotpath_gate PASS**. 감독관
+mailbox.hpp concurrency 계약 재검증. 스펙 무수정(05-polling:65-71·120-122, 08-stream:223-226에 맞춤). **STREAM stall root fix,
+모든 언어 STREAM 소비자 해소**. 사용자 승인 커밋·push(B merge).
+**build-core.sh 추가·push(c745d56684, 사용자 요청)**: dev(core/build-dev RelWithDebInfo·LTO OFF)/release(core/build Release·
+LTO ON) 2트리, 최초 1회 configure 후 재사용. correctness는 dev(LTO 링크 없어 빠름), perf/release만 LTO. [[zlink-env-test-quirks]].
+**별도 framework 결함(미커밋, 별도 처리 예정)**: application_job_queue.hpp application_supply_slot_t::take가 std::move 후
+optional 미clear→std::exchange(nullopt)로 수정(8bae89dc0f 유래, cpp-stream-stall이 남긴 diff). root 아니나 정확한 수정.
+**다음**: 패키지 재빌드(dev/release)→TicTacToe/Bingo 3x·cross-language·**perf STREAM 재측정**→잔여(java·node .NET→Node stream·
+ZoneWorld)→Phase 12.2·13→Phase 9 tag·10.
