@@ -38,6 +38,20 @@ function appendMeasurement(op, payload) {
   return op;
 }
 
+function submitReplyOrDropBackpressured(received, payload) {
+  try {
+    appendMeasurement(received.reply(), payload).submit();
+    return true;
+  } catch (error) {
+    if (!(error instanceof zlink.SubmitError)
+        || error.result !== zlink.SubmitResult.Backpressured) throw error;
+    // The requester uses the same timeout as this blocking reply admission.
+    // Once SNDTIMEO expires, let that request finish through its timeout
+    // completion instead of treating a stale perf reply as a server failure.
+    return false;
+  }
+}
+
 function measurementPayload(parts) {
   if (!Array.isArray(parts) || parts.length !== measurementPartCount()) return null;
   if (measurementPartCount() === 2 && parts[1].data().length !== 0) return null;
@@ -352,6 +366,7 @@ module.exports = {
   resolveMultiMonitorHwm,
   sendStopTokenOnce,
   sendRouted,
+  submitReplyOrDropBackpressured,
   trySocketPublish,
   appendMeasurement,
   measurementParts,

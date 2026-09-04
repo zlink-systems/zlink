@@ -22,7 +22,7 @@ export const SocketOption = Object.freeze({
   SUBMIT_RETRY_MODE: 0x3037,
   SUBMIT_RETRY_TIMEOUT: 0x3038,
   SUBMIT_RETRY_ATTEMPTS: 0x3039,
-  // ABI-stable REQUEST admission limits; DONTWAIT SEND retains no payload.
+  // ABI-stable legacy values. Core stores them but SEND and REQUEST ignore them.
   PENDING_MAX_MSGS: 0x303A,
   PENDING_MAX_BYTES: 0x303B,
   ROUTER_MANDATORY: 0x3101,

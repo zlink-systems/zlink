@@ -73,7 +73,6 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
     let seq = 1n;
 
     const payloadTemplates = sockets.map(() => createPayload(options.msgSize));
-    const retryPayloads = sockets.map(() => []);
     const pending = new Set();
     let requestFailure = null;
 
@@ -86,42 +85,26 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
         const replyPayload = measurementPayload(parts);
         collector.recordPayload(replyPayload?.data?.() ?? null, currentEpochNs());
       } catch (error) {
-        if (error instanceof zlink.SubmitError
-            && (error.result === zlink.SubmitResult.Backpressured
-                || error.result === zlink.SubmitResult.NotAdmitted)) return true;
         if (error instanceof zlink.RequestError
-            && error.result === zlink.RequestResult.TimedOut) return false;
+            && error.result === zlink.RequestResult.TimedOut) return;
         throw error;
       } finally {
         closeParts(parts);
       }
-      return false;
     };
 
     while (currentEpochNs() < activeStopNs) {
       for (let index = 0; index < sockets.length; index += 1) {
-        let payload = retryPayloads[index].shift();
-        if (!payload) {
-          payload = Buffer.from(payloadTemplates[index]);
-          const currentSeq = seq;
-          seq += 1n;
-          // A REQ/REP socket may own several concurrent logical requests, so
-          // each request keeps its own first Buffer for exact pre-admission
-          // retries. appendMeasurement shares only the immutable empty tail;
-          // adding a second record array here would increase allocation.
-          stampPayload(payload, {
-            phase: 1, runId, msgSize: options.msgSize, seq: currentSeq
-          });
-        }
-        const logicalPayload = payload;
-        const task = submitRequest(sockets[index], logicalPayload).then((retry) => {
-          if (retry && currentEpochNs() < activeStopNs) {
-            // Preserve every pre-admission failure as its exact logical
-            // request. Queued retries take priority over allocating another
-            // sequence on a later event-loop turn.
-            retryPayloads[index].push(logicalPayload);
-          }
+        const payload = Buffer.from(payloadTemplates[index]);
+        const currentSeq = seq;
+        seq += 1n;
+        // Concurrent logical requests cannot share the stamped first part.
+        // The binding owns any pre-admission WRITABLE retry of this Buffer;
+        // appendMeasurement shares only the immutable empty tail.
+        stampPayload(payload, {
+          phase: 1, runId, msgSize: options.msgSize, seq: currentSeq
         });
+        const task = submitRequest(sockets[index], payload);
         pending.add(task);
         task.catch((error) => { requestFailure = error; })
           .finally(() => pending.delete(task));

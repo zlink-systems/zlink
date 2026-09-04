@@ -110,19 +110,21 @@ test('Node requests and writable send retries use pull completion without callba
   assert.ok(completionOwner.includes('class CompletionEntry'));
   assert.ok(completionOwner.includes('byToken'));
   assert.ok(completionOwner.includes('byId'));
-  assert.ok(completionOwner.includes('sendRetries'));
+  assert.ok(completionOwner.includes('retries'));
   assert.ok(completionOwner.includes('COMPLETION_WRITABLE'));
-  assert.ok(completionOwner.includes('PollEventFlag.PollOut'));
   assert.ok(completionOwner.includes('awaitWritable'));
   assert.ok(completionOwner.includes('transferToPublic'));
-  assert.ok(completionOwner.includes('completionPumpDelayMs'));
+  assert.ok(completionOwner.includes('socketReadableWatchStart'));
   assert.equal(completionOwner.includes('COMPLETION_SEND'), false);
   assert.equal(completionOwner.includes('setInterval('), false);
+  assert.equal(completionOwner.includes('setTimeout('), false);
+  assert.equal(completionOwner.includes('setImmediate('), false);
   assert.equal(completionOwner.includes('Atomics.wait'), false);
   assert.ok(poller.includes('POLLER_SOURCE_SOCKET'));
   assert.ok(poller.includes('_socketRegistrationsByToken'));
   assert.ok(poller.includes('owner.drain(this)'));
   assert.ok(nativeBridge.includes('completion_close_guard_t guard'));
+  assert.ok(nativeBridge.includes('uv_poll_start'));
 });
 
 test('native multipart replies use inline staging without changing rejection ownership', () => {

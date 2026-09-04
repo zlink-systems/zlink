@@ -90,6 +90,8 @@ napi_value poll_events_slot (napi_env env, napi_callback_info info);
 napi_value poll_events_revents (napi_env env, napi_callback_info info);
 napi_value poll_events_fd (napi_env env, napi_callback_info info);
 napi_value poller_wait_into (napi_env env, napi_callback_info info);
+napi_value socket_readable_watch_start (napi_env env, napi_callback_info info);
+napi_value socket_readable_watch_stop (napi_env env, napi_callback_info info);
 
 napi_value timer_new (napi_env env, napi_callback_info info);
 napi_value timer_destroy (napi_env env, napi_callback_info info);

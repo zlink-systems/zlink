@@ -6,13 +6,19 @@ const zlink = require('@zlink-systems/zlink');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { isStopTokenParts } = require('../perf_stop_token');
-const { POLLIN, appendMeasurement, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, measurementPayload, waitPollerOne } = require('./perf_multi_runtime');
+const { POLLIN, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, measurementPayload, submitReplyOrDropBackpressured, waitPollerOne } = require('./perf_multi_runtime');
 const { resolveRoutedPattern, runRoutedSendSendServer } = require('./perf_multi_routed_sendsend');
 const PATTERN = 'MULTI_ROUTER_ROUTER_REQREP';
 function receiveAndReply(router, received) {
     while (true) {
-        if (!router.recv(received, zlink.RecvFlags.DontWait)) {
-            return false;
+        try {
+            if (!router.recv(received, zlink.RecvFlags.DontWait))
+                return false;
+        }
+        catch (error) {
+            if (error instanceof zlink.RecvError && error.nativeErrno === 103)
+                return false;
+            throw error;
         }
         try {
             if (!received.routingId) {
@@ -31,7 +37,7 @@ function receiveAndReply(router, received) {
             }
             // A successful public reply consumes this received native Message.
             // Forward it directly rather than materializing a Buffer copy first.
-            appendMeasurement(received.reply(), payload).submit();
+            submitReplyOrDropBackpressured(received, payload);
         }
         finally {
             received.close();

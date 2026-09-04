@@ -21,7 +21,6 @@ import type { NativeHandle } from '../native/binding_types';
 import { requireNative } from '../native/native';
 import type { OperationPayloadValue } from './send_operation_base';
 import { messagesFromNativeBuffers } from './request_executor';
-import { PollEventFlag } from '../../contracts/sockets/socket_constants';
 
 const COMPLETION_REQUEST = 2;
 const COMPLETION_WRITABLE = 3;
@@ -52,19 +51,14 @@ export interface NativeSyncRequestResult extends NativeSubmitResult {
 
 type CompletionKind = 'send' | 'request';
 
-interface SendRetryState {
+interface RetryState {
+  readonly kind: CompletionKind;
   readonly nativePayload: ReturnType<typeof normalizeOperationPayload>;
   readonly routingId: Buffer | null;
+  readonly timeoutMs: number;
 }
 
 const RESOLVED_SEND = Promise.resolve();
-const MAX_IDLE_PUMP_DELAY_MS = 8;
-
-/** @internal Exponential event-loop backoff for the Core API's pull-only queue. */
-export function completionPumpDelayMs(idlePolls: number): number {
-  if (idlePolls <= 0) return 0;
-  return Math.min(MAX_IDLE_PUMP_DELAY_MS, 2 ** Math.min(idlePolls - 1, 3));
-}
 
 function snapshotRetryPart(part: MessageLike): Buffer {
   return part instanceof Message ? part.toBytes() : Buffer.from(part);
@@ -201,15 +195,10 @@ export class CompletionOwner {
   private readonly native = requireNative();
   private readonly byToken = new Map<bigint, CompletionEntry<unknown>>();
   private readonly byId = new Map<bigint, CompletionEntry<unknown>>();
-  private readonly sendRetries = new Map<bigint, SendRetryState>();
+  private readonly retries = new Map<bigint, RetryState>();
   private nextToken = 1n;
   private publicOwner: object | null = null;
-  private pumpScheduled = false;
-  private idlePumpPolls = 0;
-  private pumpHandle: ReturnType<typeof setImmediate> | ReturnType<typeof setTimeout> | null = null;
-  private pumpUsesTimeout = false;
-  private runtimePoller: NativeHandle | null = null;
-  private runtimeEvents: NativeHandle | null = null;
+  private runtimeWatch: NativeHandle | null = null;
   private managedWritableWaitCount = 0;
   private closed = false;
 
@@ -286,12 +275,14 @@ export class CompletionOwner {
     entry.awaitWritable(result.completionId);
     this.byToken.set(token, entry as CompletionEntry<unknown>);
     this.byId.set(result.completionId, entry as CompletionEntry<unknown>);
-    this.sendRetries.set(token, {
+    this.retries.set(token, {
+      kind: 'send',
       nativePayload: retryPayload,
       routingId: routingId === null ? null : Buffer.from(routingId),
+      timeoutMs: 0,
     });
     this.managedWritableWaitCount += 1;
-    this.schedulePump();
+    this.ensureRuntimeWatch();
     return entry.promise;
   }
 
@@ -300,27 +291,84 @@ export class CompletionOwner {
     target: Buffer | null,
     timeoutMs: number
   ): Promise<Message[]> {
-    const entry = this.register<Message[]>('request');
+    if (this.closed) throw submitError(SubmitResult.InvalidState, 0, 'socket is closed');
+    const token = this.nextToken++;
+    let nativePayload: ReturnType<typeof normalizeOperationPayload>;
+    try {
+      nativePayload = normalizeOperationPayload(payload);
+    } catch (error) {
+      return Promise.reject(submitNativeError(error, DONTWAIT, 'request submit failed'));
+    }
+
     let result: NativeSubmitResult;
     try {
       result = this.native.socketSubmitRequest(
         this.handle,
         target,
-        normalizeOperationPayload(payload),
+        nativePayload,
         timeoutMs,
-        1,
-        entry.token
+        DONTWAIT,
+        token
       ) as NativeSubmitResult;
     } catch (error) {
-      this.failEntry(entry, submitNativeError(error, 1, 'request submit failed'));
+      return Promise.reject(submitNativeError(error, DONTWAIT, 'request submit failed'));
+    }
+
+    if (result.result === SubmitResult.Ok) {
+      if (result.completionId === 0n) {
+        return Promise.reject(submitError(
+          SubmitResult.InternalError,
+          result.nativeErrno,
+          'successful request returned no completion id'
+        ));
+      }
+      try {
+        consumeSubmittedMessages(payload);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      const entry = this.createEntry<Message[]>('request', token);
+      this.publish(entry, result.completionId);
+      this.ensureRuntimeWatch();
       return entry.promise;
     }
-    if (result.result !== SubmitResult.Ok) {
-      this.failEntry(entry, submitError(result.result, result.nativeErrno, 'request submit failed'));
-      return entry.promise;
+
+    if (result.result !== SubmitResult.Backpressured) {
+      return Promise.reject(submitError(
+        result.result,
+        result.nativeErrno,
+        'request submit failed'
+      ));
     }
-    consumeSubmittedMessages(payload);
-    this.publish(entry, result.completionId);
+    if (!isWouldBlock(result.nativeErrno) || result.completionId === 0n) {
+      return Promise.reject(submitError(
+        SubmitResult.Backpressured,
+        result.nativeErrno,
+        'backpressured request did not return an EAGAIN wait token'
+      ));
+    }
+
+    let retryPayload: ReturnType<typeof normalizeOperationPayload>;
+    try {
+      // Core retains no REQUEST payload before admission. Snapshot only after
+      // refusal, then release the caller-visible Message wrappers immediately.
+      retryPayload = snapshotRetryPayload(payload);
+      consumeSubmittedMessages(payload);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+
+    const entry = this.createEntry<Message[]>('request', token);
+    entry.awaitWritable(result.completionId);
+    this.byId.set(result.completionId, entry as CompletionEntry<unknown>);
+    this.retries.set(token, {
+      kind: 'request',
+      nativePayload: retryPayload,
+      routingId: target === null ? null : Buffer.from(target),
+      timeoutMs,
+    });
+    this.managedWritableWaitCount += 1;
+    this.ensureRuntimeWatch();
     return entry.promise;
   }
 
@@ -389,14 +437,9 @@ export class CompletionOwner {
       throw submitError(SubmitResult.InvalidState, 0, 'completion owner already transferred');
     }
     if (this.publicOwner === owner) return false;
-    // Core completion polling has a single owner. Drop the lazy runtime
-    // registration before the public poller attempts to acquire it.
-    try {
-      this.closeRuntimePoller(true);
-    } catch (error) {
-      this.schedulePump();
-      throw error;
-    }
+    // Stop the event-loop fd watcher before the public Core poller starts
+    // observing the same socket notification source.
+    this.closeRuntimeWatch();
     this.publicOwner = owner;
     return true;
   }
@@ -404,8 +447,7 @@ export class CompletionOwner {
   transferToRuntime(owner: object): void {
     if (this.publicOwner !== owner) return;
     this.publicOwner = null;
-    this.idlePumpPolls = 0;
-    this.schedulePump();
+    this.ensureRuntimeWatch();
   }
 
   drain(caller?: object): number {
@@ -435,18 +477,9 @@ export class CompletionOwner {
     }
     this.byToken.clear();
     this.byId.clear();
-    this.sendRetries.clear();
+    this.retries.clear();
     this.managedWritableWaitCount = 0;
-    if (this.pumpHandle !== null) {
-      if (this.pumpUsesTimeout) {
-        clearTimeout(this.pumpHandle as ReturnType<typeof setTimeout>);
-      } else {
-        clearImmediate(this.pumpHandle as ReturnType<typeof setImmediate>);
-      }
-      this.pumpHandle = null;
-      this.pumpScheduled = false;
-    }
-    this.closeRuntimePoller();
+    this.closeRuntimeWatch();
   }
 
   private register<T>(
@@ -455,9 +488,18 @@ export class CompletionOwner {
     expectsUserContext = true
   ): CompletionEntry<T> {
     if (this.closed) throw submitError(SubmitResult.InvalidState, 0, 'socket is closed');
-    const entry = new CompletionEntry<T>(this.nextToken++, kind, expectsUserContext);
+    const entry = this.createEntry<T>(kind, this.nextToken++, expectsUserContext);
+    if (schedule) this.ensureRuntimeWatch();
+    return entry;
+  }
+
+  private createEntry<T>(
+    kind: CompletionKind,
+    token: bigint,
+    expectsUserContext = true
+  ): CompletionEntry<T> {
+    const entry = new CompletionEntry<T>(token, kind, expectsUserContext);
     this.byToken.set(entry.token, entry as CompletionEntry<unknown>);
-    if (schedule) this.schedulePump();
     return entry;
   }
 
@@ -472,7 +514,7 @@ export class CompletionOwner {
       ? this.byToken.get(completion.userContext)
       : this.byId.get(completion.completionId);
     if (!entry) return; // Native already closed the unclaimed completion.
-    if (entry.kind === 'send') {
+    if (this.retries.has(entry.token)) {
       this.captureWritable(entry, completion);
       return;
     }
@@ -484,7 +526,7 @@ export class CompletionOwner {
     entry: CompletionEntry<unknown>,
     completion: NativeCompletion
   ): void {
-    const retry = this.sendRetries.get(entry.token);
+    const retry = this.retries.get(entry.token);
     const sameTarget = retry !== undefined
       && (retry.routingId === null
         ? completion.peerRoutingId === null
@@ -497,7 +539,7 @@ export class CompletionOwner {
       this.failEntry(entry, submitError(
         SubmitResult.InternalError,
         completion.terminalErrno,
-        'writable completion did not match the pending send'
+        'writable completion did not match the pending operation'
       ));
       return;
     }
@@ -505,7 +547,7 @@ export class CompletionOwner {
     this.byId.delete(entry.completionId);
     if (completion.sendResult !== SEND_ADMITTED) {
       const error = completion.sendResult === SEND_TERMINAL
-        ? createError('submit', completion.terminalErrno, 'send target became unavailable')
+        ? createError('submit', completion.terminalErrno, 'submit target became unavailable')
         : submitError(
             SubmitResult.InternalError,
             completion.terminalErrno,
@@ -514,45 +556,64 @@ export class CompletionOwner {
       this.failEntry(entry, error);
       return;
     }
-    this.attemptSend(entry);
+    this.attemptRetry(entry);
   }
 
-  private attemptSend(entry: CompletionEntry<unknown>): void {
-    const retry = this.sendRetries.get(entry.token);
+  private attemptRetry(entry: CompletionEntry<unknown>): void {
+    const retry = this.retries.get(entry.token);
     if (!retry) {
       this.failEntry(entry, submitError(
         SubmitResult.InternalError,
         0,
-        'pending send payload is missing'
+        'pending operation payload is missing'
       ));
       return;
     }
 
     let result: NativeSubmitResult;
     try {
-      result = this.native.socketSubmitSend(
-        this.handle,
-        retry.nativePayload,
-        retry.routingId,
-        DONTWAIT,
-        entry.token
-      ) as NativeSubmitResult;
+      result = retry.kind === 'send'
+        ? this.native.socketSubmitSend(
+            this.handle,
+            retry.nativePayload,
+            retry.routingId,
+            DONTWAIT,
+            entry.token
+          ) as NativeSubmitResult
+        : this.native.socketSubmitRequest(
+            this.handle,
+            retry.routingId,
+            retry.nativePayload,
+            retry.timeoutMs,
+            DONTWAIT,
+            entry.token
+          ) as NativeSubmitResult;
     } catch (error) {
-      this.failEntry(entry, submitNativeError(error, DONTWAIT, 'send submit failed'));
+      this.failEntry(entry, submitNativeError(error, DONTWAIT, `${retry.kind} submit failed`));
       return;
     }
 
     if (result.result === SubmitResult.Ok) {
-      if (result.completionId !== 0n) {
+      const validCompletionId = retry.kind === 'send'
+        ? result.completionId === 0n
+        : result.completionId !== 0n;
+      if (!validCompletionId) {
         this.failEntry(entry, submitError(
           SubmitResult.InternalError,
           result.nativeErrno,
-          'successful send returned a completion token'
+          `successful ${retry.kind} returned an invalid completion id`
         ));
         return;
       }
-      entry.succeed(undefined);
-      this.removeIfSettled(entry);
+      this.removeRetry(entry);
+      if (retry.kind === 'send') {
+        entry.succeed(undefined);
+        this.removeIfSettled(entry);
+      } else {
+        entry.publish(result.completionId);
+        this.byId.set(result.completionId, entry);
+        this.ensureRuntimeWatch();
+      }
       return;
     }
 
@@ -561,21 +622,21 @@ export class CompletionOwner {
         this.failEntry(entry, submitError(
           SubmitResult.Backpressured,
           result.nativeErrno,
-          'backpressured send did not return an EAGAIN wait token'
+          `backpressured ${retry.kind} did not return an EAGAIN wait token`
         ));
         return;
       }
       if (entry.completionId !== 0n) this.byId.delete(entry.completionId);
       entry.awaitWritable(result.completionId);
       this.byId.set(result.completionId, entry);
-      this.schedulePump();
+      this.ensureRuntimeWatch();
       return;
     }
 
     this.failEntry(entry, submitError(
       result.result,
       result.nativeErrno,
-      'send submit failed'
+      `${retry.kind} submit failed`
     ));
   }
 
@@ -588,111 +649,56 @@ export class CompletionOwner {
     if (!entry.settled) return;
     this.byToken.delete(entry.token);
     if (entry.completionId !== 0n) this.byId.delete(entry.completionId);
-    if (this.sendRetries.delete(entry.token)) {
-      this.managedWritableWaitCount -= 1;
-    }
+    this.removeRetry(entry);
   }
 
-  private schedulePump(): void {
-    if (this.closed || this.publicOwner || this.pumpScheduled || this.byToken.size === 0) return;
-    this.pumpScheduled = true;
-    const run = (): void => {
-      this.pumpScheduled = false;
-      this.pumpHandle = null;
-      if (this.closed || this.publicOwner || this.byToken.size === 0) return;
-      let processed = 0;
-      try {
-        processed = this.pollAndDrain();
-      } catch (error) {
-        const nativeErrno = readErrno();
-        const message = nativeErrorMessage(error, 'completion poll failed');
-        for (const entry of this.byToken.values()) {
-          entry.fail(entry.kind === 'request'
-            ? (nativeErrno === 0
-                ? requestError(RequestResult.InternalError, message)
-                : createError('request', nativeErrno, message))
-            : (nativeErrno === 0
-                ? submitError(SubmitResult.InternalError, 0, message)
-                : createError('submit', nativeErrno, message)));
-        }
-        this.byToken.clear();
-        this.byId.clear();
-        this.sendRetries.clear();
-        this.managedWritableWaitCount = 0;
-        this.closeRuntimePoller();
-        return;
-      }
-      this.idlePumpPolls = processed === 0
-        ? Math.min(this.idlePumpPolls + 1, 4)
-        : 0;
-      if (this.byToken.size > 0) {
-        this.schedulePump();
-      } else {
-        this.closeRuntimePoller();
-      }
-    };
-    const delayMs = completionPumpDelayMs(this.idlePumpPolls);
-    this.pumpUsesTimeout = delayMs !== 0;
-    this.pumpHandle = delayMs === 0
-      ? setImmediate(run)
-      : setTimeout(run, delayMs);
+  private removeRetry(entry: CompletionEntry<unknown>): void {
+    if (this.retries.delete(entry.token)) this.managedWritableWaitCount -= 1;
   }
 
-  private pollAndDrain(): number {
-    this.ensureRuntimePoller();
-    const count = this.native.pollerWaitInto(
-      this.runtimePoller,
-      this.runtimeEvents,
-      1,
-      0
-    ) as number;
-    if (count <= 0) return 0;
-    const events = this.native.pollEventsRevents(this.runtimeEvents, 0) as number;
-    if ((events & (PollEventFlag.PollOut | PollEventFlag.PollCompletion)) !== 0) {
-      return this.drain();
-    }
-    return 0;
+  private ensureRuntimeWatch(): void {
+    if (this.closed || this.publicOwner || this.byToken.size === 0
+        || this.runtimeWatch !== null) return;
+    this.runtimeWatch = this.native.socketReadableWatchStart(
+      this.handle,
+      (status: number): void => this.runtimeWake(status)
+    ) as NativeHandle;
   }
 
-  private ensureRuntimePoller(): void {
-    if (this.runtimePoller !== null && this.runtimeEvents !== null) return;
-    const poller = this.native.pollerNew() as NativeHandle;
-    let events: NativeHandle | null = null;
+  private runtimeWake(status: number): void {
+    if (this.closed || this.publicOwner) return;
     try {
-      events = this.native.pollEventsNew(1) as NativeHandle;
-      this.native.pollerAdd(
-        poller,
-        this.handle,
-        null,
-        PollEventFlag.PollOut | PollEventFlag.PollCompletion
-      );
+      if (status < 0) throw new Error(`socket readable watch failed (${status})`);
+      this.drain();
     } catch (error) {
-      if (events !== null) {
-        try { this.native.pollEventsDestroy(events); } catch { /* best-effort cleanup */ }
+      const nativeErrno = readErrno();
+      const message = nativeErrorMessage(error, 'completion drain failed');
+      for (const entry of this.byToken.values()) {
+        entry.fail(this.retries.has(entry.token)
+          ? (nativeErrno === 0
+              ? submitError(SubmitResult.InternalError, 0, message)
+              : createError('submit', nativeErrno, message))
+          : entry.kind === 'request'
+          ? (nativeErrno === 0
+              ? requestError(RequestResult.InternalError, message)
+              : createError('request', nativeErrno, message))
+          : (nativeErrno === 0
+              ? submitError(SubmitResult.InternalError, 0, message)
+              : createError('submit', nativeErrno, message)));
       }
-      try { this.native.pollerDestroy(poller); } catch { /* best-effort cleanup */ }
-      throw error;
+      this.byToken.clear();
+      this.byId.clear();
+      this.retries.clear();
+      this.managedWritableWaitCount = 0;
     }
-    this.runtimePoller = poller;
-    this.runtimeEvents = events;
+    if (this.byToken.size === 0) this.closeRuntimeWatch();
   }
 
-  private closeRuntimePoller(reportFailure = false): void {
-    const poller = this.runtimePoller;
-    const events = this.runtimeEvents;
-    if (poller !== null) {
-      try {
-        this.native.pollerDestroy(poller);
-        this.runtimePoller = null;
-      } catch (error) {
-        if (reportFailure) throw error;
-        this.runtimePoller = null;
-      }
-    }
-    if (events !== null) {
-      try { this.native.pollEventsDestroy(events); } catch { /* best-effort cleanup */ }
-      this.runtimeEvents = null;
-    }
+  private closeRuntimeWatch(): void {
+    const watch = this.runtimeWatch;
+    this.runtimeWatch = null;
+    if (watch === null) return;
+    try { this.native.socketReadableWatchStop(watch); } catch { /* best-effort cleanup */ }
   }
 }
 

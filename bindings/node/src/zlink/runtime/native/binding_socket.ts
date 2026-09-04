@@ -35,6 +35,11 @@ export interface SocketNativeBinding {
     timeoutMs: number
   ) => NativeSyncRequestResult;
   socketCompletionRecv: (socket: NativeHandle, flags: number) => NativeCompletion | null;
+  socketReadableWatchStart: (
+    socket: NativeHandle,
+    callback: (status: number) => void
+  ) => NativeHandle;
+  socketReadableWatchStop: (watch: NativeHandle) => void;
   socketReply: (socket: NativeHandle, sourceRid: Buffer, replyToken: bigint, parts: unknown) => void;
   socketStreamRecvPacket: (
     socket: NativeHandle,

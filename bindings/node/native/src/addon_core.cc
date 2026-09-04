@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
 #include "addon_core_api.h"
+
+#include <uv.h>
 #include "addon_core_options.h"
 #include "addon_monitor_status_values.h"
 #include "addon_message_values.h"
@@ -2247,6 +2249,179 @@ napi_value socket_completion_recv (napi_env env, napi_callback_info info)
     if (result != ZLINK_RECV_OK)
         return throw_last_error (env, "completion recv failed");
     return create_completion_value (env, &completion);
+}
+
+namespace
+{
+
+struct socket_readable_watch_t
+{
+    uv_poll_t poll;
+    napi_env env;
+    napi_ref callback;
+    bool closing;
+    bool closed;
+    bool finalized;
+};
+
+static void delete_socket_readable_watch_if_finalized (
+  socket_readable_watch_t *watch)
+{
+    if (watch->closed && watch->finalized)
+        delete watch;
+}
+
+static void socket_readable_watch_closed (uv_handle_t *handle)
+{
+    socket_readable_watch_t *watch =
+      static_cast<socket_readable_watch_t *> (handle->data);
+    watch->closed = true;
+    if (watch->callback) {
+        napi_delete_reference (watch->env, watch->callback);
+        watch->callback = NULL;
+    }
+    delete_socket_readable_watch_if_finalized (watch);
+}
+
+static void close_socket_readable_watch (socket_readable_watch_t *watch)
+{
+    if (watch->closing)
+        return;
+    watch->closing = true;
+    uv_poll_stop (&watch->poll);
+    uv_close (
+      reinterpret_cast<uv_handle_t *> (&watch->poll),
+      socket_readable_watch_closed);
+}
+
+static void socket_readable_watch_finalize (
+  napi_env, void *data, void *)
+{
+    socket_readable_watch_t *watch =
+      static_cast<socket_readable_watch_t *> (data);
+    watch->finalized = true;
+    if (!watch->closing)
+        close_socket_readable_watch (watch);
+    else
+        delete_socket_readable_watch_if_finalized (watch);
+}
+
+static void socket_readable_watch_ready (
+  uv_poll_t *poll, int status, int)
+{
+    socket_readable_watch_t *watch =
+      static_cast<socket_readable_watch_t *> (poll->data);
+    if (watch->closing || !watch->callback)
+        return;
+    napi_handle_scope scope;
+    if (napi_open_handle_scope (watch->env, &scope) != napi_ok)
+        return;
+    napi_value callback;
+    napi_value receiver;
+    napi_value status_value;
+    napi_get_reference_value (watch->env, watch->callback, &callback);
+    napi_get_undefined (watch->env, &receiver);
+    napi_create_int32 (watch->env, status, &status_value);
+    napi_value argv[] = {status_value};
+    napi_value ignored;
+    napi_call_function (
+      watch->env, receiver, callback, sizeof (argv) / sizeof (*argv), argv,
+      &ignored);
+    napi_close_handle_scope (watch->env, scope);
+}
+
+} // namespace
+
+napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    size_t argc = 2;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 2) {
+        napi_throw_type_error (
+          env, NULL, "socketReadableWatchStart requires (socket, callback)");
+        return NULL;
+    }
+    void *socket = NULL;
+    napi_get_value_external (env, argv[0], &socket);
+    napi_valuetype callback_type = napi_undefined;
+    napi_typeof (env, argv[1], &callback_type);
+    if (!socket || callback_type != napi_function) {
+        napi_throw_type_error (env, NULL, "invalid readable watch arguments");
+        return NULL;
+    }
+
+    zlink_fd_t fd;
+    size_t fd_size = sizeof (fd);
+    const zlink_config_result_t get_result =
+      zlink_get_option (socket, ZLINK_OPT_FD, &fd, &fd_size);
+    if (get_result != ZLINK_CONFIG_OK)
+        return throw_last_error (env, "socket readable fd lookup failed");
+
+    uv_loop_t *loop = NULL;
+    if (napi_get_uv_event_loop (env, &loop) != napi_ok || !loop) {
+        napi_throw_error (env, NULL, "Node event loop is unavailable");
+        return NULL;
+    }
+    socket_readable_watch_t *watch = new (std::nothrow) socket_readable_watch_t;
+    if (!watch) {
+        napi_throw_error (env, NULL, "socket readable watch allocation failed");
+        return NULL;
+    }
+    memset (&watch->poll, 0, sizeof (watch->poll));
+    watch->env = env;
+    watch->callback = NULL;
+    watch->closing = false;
+    watch->closed = false;
+    watch->finalized = false;
+    const int init_result = uv_poll_init_socket (loop, &watch->poll, fd);
+    if (init_result != 0) {
+        napi_throw_error (env, NULL, "socket readable watch start failed");
+        delete watch;
+        return NULL;
+    }
+    watch->poll.data = watch;
+    if (napi_create_reference (env, argv[1], 1, &watch->callback) != napi_ok) {
+        watch->finalized = true;
+        close_socket_readable_watch (watch);
+        napi_throw_error (env, NULL, "socket readable watch callback retention failed");
+        return NULL;
+    }
+    const int start_result = uv_poll_start (
+      &watch->poll, UV_READABLE, socket_readable_watch_ready);
+    if (start_result != 0) {
+        watch->finalized = true;
+        close_socket_readable_watch (watch);
+        napi_throw_error (env, NULL, "socket readable watch start failed");
+        return NULL;
+    }
+
+    napi_value out;
+    napi_create_external (
+      env, watch, socket_readable_watch_finalize, NULL, &out);
+    return out;
+}
+
+napi_value socket_readable_watch_stop (napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    size_t argc = 1;
+    napi_get_cb_info (env, info, &argc, argv, NULL, NULL);
+    if (argc < 1) {
+        napi_throw_type_error (
+          env, NULL, "socketReadableWatchStop requires (watch)");
+        return NULL;
+    }
+    void *data = NULL;
+    if (napi_get_value_external (env, argv[0], &data) != napi_ok || !data) {
+        napi_throw_type_error (env, NULL, "invalid socket readable watch");
+        return NULL;
+    }
+    close_socket_readable_watch (
+      static_cast<socket_readable_watch_t *> (data));
+    napi_value out;
+    napi_get_undefined (env, &out);
+    return out;
 }
 
 napi_value test_completion_close_count (napi_env env, napi_callback_info info)

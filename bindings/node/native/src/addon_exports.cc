@@ -69,6 +69,8 @@ void define_core_exports (napi_env env, napi_value exports)
       ZLINK_METHOD ("socketSubmitRequest", socket_submit_request),
       ZLINK_METHOD ("socketRequestSync", socket_request_sync),
       ZLINK_METHOD ("socketCompletionRecv", socket_completion_recv),
+      ZLINK_METHOD ("socketReadableWatchStart", socket_readable_watch_start),
+      ZLINK_METHOD ("socketReadableWatchStop", socket_readable_watch_stop),
       ZLINK_METHOD ("testCompletionCloseCount", test_completion_close_count),
       ZLINK_METHOD ("socketReply", socket_reply),
       ZLINK_METHOD ("routerRecvMessage", router_recv_message),

@@ -89,23 +89,25 @@ retains the submit-time packet snapshot. Later caller-side buffer mutation does
 not change a pending retry. A `Message` input is consumed immediately after the
 binding takes that snapshot, so the retry does not keep the caller's wrapper
 alive until the Promise resolves. When no public poller owns completion
-draining, the runtime performs nonblocking probes with a short adaptive
-event-loop backoff. When `PollEventFlag.PollOut` is ready, it pulls the socket-local
-completion queue until no more completion data is available. A
+draining, the runtime watches the socket notification descriptor and pulls the
+socket-local completion queue until no more completion data is available. A
 `CompletionKind.Writable` record must match the token, user context, and target
 routing ID before the runtime submits the same packet again. The Promise
 resolves only after that retry is admitted. This path does not use a worker
 thread, sleep, or timer.
 
-Successful REQUEST submission has a nonzero completion ID, and its Promise
-settles from the matching `CompletionKind.Request`. A public poller registered
+REQUEST uses the same pre-admission WRITABLE-token machine. Core keeps no
+rejected request payload; the binding snapshots it only after backpressure and
+resubmits that request only for its matching token. After admission, the
+nonzero completion ID identifies the reply/timeout terminal
+`CompletionKind.Request`, and the reply timeout starts at admission. A public poller registered
 for `PollEventFlag.PollCompletion` owns completion draining until its
 registration drops that flag, the socket is removed, or the poller is closed.
 The application must keep calling `poller.wait(...)` until its pending SEND and
 REQUEST Promises settle. The raw Core ABI-only options
-`ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` bound the count
-and bytes of REQUEST records waiting for admission. The typed Node socket
-options do not expose them, and they do not size binding-owned SEND retry state.
+`ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` retain their ABI
+values and storage but are ignored. The typed Node socket options do not expose
+them.
 Monitor, timer, and STREAM packet delivery also use caller-driven pull APIs.
 
 ## Service Surface

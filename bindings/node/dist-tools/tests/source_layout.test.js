@@ -97,19 +97,21 @@ function forbiddenPackageExports(exportsValue) {
     strict_1.default.ok(completionOwner.includes('class CompletionEntry'));
     strict_1.default.ok(completionOwner.includes('byToken'));
     strict_1.default.ok(completionOwner.includes('byId'));
-    strict_1.default.ok(completionOwner.includes('sendRetries'));
+    strict_1.default.ok(completionOwner.includes('retries'));
     strict_1.default.ok(completionOwner.includes('COMPLETION_WRITABLE'));
-    strict_1.default.ok(completionOwner.includes('PollEventFlag.PollOut'));
     strict_1.default.ok(completionOwner.includes('awaitWritable'));
     strict_1.default.ok(completionOwner.includes('transferToPublic'));
-    strict_1.default.ok(completionOwner.includes('completionPumpDelayMs'));
+    strict_1.default.ok(completionOwner.includes('socketReadableWatchStart'));
     strict_1.default.equal(completionOwner.includes('COMPLETION_SEND'), false);
     strict_1.default.equal(completionOwner.includes('setInterval('), false);
+    strict_1.default.equal(completionOwner.includes('setTimeout('), false);
+    strict_1.default.equal(completionOwner.includes('setImmediate('), false);
     strict_1.default.equal(completionOwner.includes('Atomics.wait'), false);
     strict_1.default.ok(poller.includes('POLLER_SOURCE_SOCKET'));
     strict_1.default.ok(poller.includes('_socketRegistrationsByToken'));
     strict_1.default.ok(poller.includes('owner.drain(this)'));
     strict_1.default.ok(nativeBridge.includes('completion_close_guard_t guard'));
+    strict_1.default.ok(nativeBridge.includes('uv_poll_start'));
 });
 (0, node_test_1.default)('native multipart replies use inline staging without changing rejection ownership', () => {
     const nativeBridge = node_fs_1.default.readFileSync(node_path_1.default.resolve(__dirname, '../../native/src/addon_core.cc'), 'utf8');

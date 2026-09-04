@@ -45,7 +45,11 @@ export interface RequestOperation extends PartBuilder<RequestSubmitOperation> {}
 /** Accepts further parts, reply timeout, and the two request terminals. */
 export interface RequestSubmitOperation
   extends PartBuilder<RequestSubmitOperation>, Timeoutable<RequestSubmitOperation> {
-  /** Submit the request and return the reply parts, which the caller owns. */
+  /**
+   * Submit the request and return the caller-owned reply parts. Backpressure
+   * waits for this request's WRITABLE token before resubmitting the same packet;
+   * the reply timeout starts only after admission.
+   */
   submit(): Promise<Message[]>;
   submit_sync(): Message[];
 }
