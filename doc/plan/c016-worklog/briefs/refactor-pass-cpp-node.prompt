@@ -1,0 +1,48 @@
+# Job: refactor pass (POSDDD / perf / dead code) over the cpp + node framework files touched by the 0.17.0 DONTWAIT campaign
+
+You are a codex sub-agent under a Claude supervisor. Behaviour-preserving refactor only; 1.5 h cap.
+Read `AGENTS.md` (root) §2/§3/§4.1, `framework/AGENTS.md`, `framework/languages/cpp/AGENTS.md`,
+`framework/languages/node/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, `framework/languages/{dotnet,java}/**` (other jobs own
+those trees); never lower or delete an assertion; do not commit; do not touch
+`bindings/node/provenance/**` or any `package-lock.json`.
+
+## Scope (only these files, all already committed on main)
+cpp: `framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp` (+ its header),
+`framework/languages/cpp/framework/src/runtime/channels/channel_outbound_exchange.cpp`,
+`framework/languages/cpp/framework/src/runtime/backend/raw_route_port.cpp`,
+`framework/languages/cpp/framework/src/runtime/backend/raw_dealer_port.cpp`,
+`framework/languages/cpp/framework/src/runtime/streams/stream_host_service.cpp`,
+`framework/languages/cpp/framework/include/**/raw_binding_adapter.hpp` (transient_route_errno),
+and the campaign tests `tests/Zlink.Framework.UnitTests/test_cpp_framework_{m6a_runtime,m6b_runtime,channel_messaging,execution}.cpp`.
+node: `framework/languages/node/packages/framework/src/runtime/backend/node/node-socket-backend-adapter.ts`,
+`framework/languages/node/packages/framework/src/runtime/**/service-stateful-runtime.ts` (replay budget
+hunk around the `remainingDeadline / 2` change), `framework/languages/node/packages/stream-connector/src/Runtime/ZlinkStreamConnectorOptions.ts`,
+`framework/languages/node/samples/run-sample.mjs`, and the campaign contract tests under
+`framework/languages/node/test/contract/` that those commits touched (`git log --since=2026-09-02 --name-only`).
+
+## What to do
+1. `git log --since=2026-09-02 -p -- <file>` per file to see exactly what the campaign changed. Look
+   for: duplicated errno/terminal classification logic that should live in one place (POSDDD: one
+   owner per rule — e.g. the ENOENT/NOT_FOUND transient-route rule in cpp, the WRITABLE/resubmit
+   handling in node adapter), leftover diagnostics/dead branches/unused includes or imports introduced
+   during debugging, avoidable allocations or copies on the send/poll hot path introduced by the
+   fixes, magic numbers that should be named constants shared with existing ones, test helpers
+   duplicated across the m6a/m6b/channel tests.
+2. Apply only changes that keep behaviour identical and are locally verifiable. No public API or
+   contract changes (`node-public-contract.json` must stay byte-identical; cpp exported headers
+   unchanged except pure cleanup). Keep each language's diff small and reviewable.
+3. Verify: cpp — build `framework/languages/cpp/build/linux-ninja-c-e2e` (`cmake --build ... -j2`) and
+   run the four touched unit test binaries + `ctest -R 'channel_messaging|m6a|m6b|execution'`; node —
+   `npm run build` and `npm test -- --testPathPattern 'contract/(backend-contract|stream-runtime|stream-session-runtime|sample-regression|node-binding-parity)'`
+   (or the repo's equivalent) plus `npm run lint` on the touched packages. Env: `TMPDIR=/dev/shm/zlink-tmp-<lang>`
+   (mkdir -p), `flock -w7200 /tmp/zlink-node-gate.lock` for node runs, `ZLINK_LIBRARY_PATH` unset for
+   node (local packages installed). Do not rebuild Core or local packages.
+4. If a candidate refactor would change behaviour or you are unsure, list it under "deferred" with
+   file:line and reasoning instead of applying it.
+
+## Deliverable
+`doc/plan/c016-worklog/refactor-pass-cpp-node-summary.md`: per-file table (change, category
+POSDDD/perf/dead-code, why behaviour-identical), deferred list, exact verification commands + results,
+BLOCKERS. Leave the working tree with only your refactor edits (git status must show nothing outside
+scope).

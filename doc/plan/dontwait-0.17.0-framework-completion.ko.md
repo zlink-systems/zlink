@@ -62,12 +62,12 @@
       relay fail = 늦은 loser `ConnectionReady`가 survivor의 RID→pair 인덱스를 덮어 command 33이 `current_source=False`로 폐기(수정, 15/15);
       hang = fixed-RID handover 테스트 fixture 경합(`RouteAdmission_HandoverStartsFreshLivenessDeadline`, 이전 DEALER reconnect intent 유지) — fixture 수정(8/8).
       **Core 후보(B 보고)**: assertion 실패 후 `Context.Dispose → zlink_ctx_term`이 반환하지 않아 20분 inactivity hang이 됨(dump: `tests/Zlink.Framework.UnitTests/TestResults/b1610869-…/dotnet_62877_20260905T034650_hangdump.dmp`, `dcd36b29-…/dotnet_33690_20260905T035608_hangdump.dmp`).
-      잔여(gate-v4): Canonical handover family — `ManagedSource_Command28Request…(targetDialsSource: True)` fail + `…HandoverKeepsPriorReplyEpochUntilExactDisconnect` hang → job 진행 중;
-      나머지 suite 442 pass / 1 fail(`ClientServerChannelRuntimeTests.MalformedPushedControl_ReconnectsAndReadmits` — 재admission 미완료, v3에서는 통과) + hang(`InstanceSpotIdleInspectionRotatesWithABoundedBatch`, v3 통과) → 후속 job 대기; 전부 해소 후 dotnet 수정 일괄 커밋
+      gate-v5(재admission 수정 포함, Canonical 별도 3분 blame): Canonical 11 pass + hang 1(`RouteAdmission_PriorHelloThenExactDisconnect_DoesNotReplaceCurrentPeer`, 단독 2/2 pass → teardown/ctx_term 계열, Claude sub-agent 조사 중; codex는 content filter로 2회 사망);
+      나머지 suite **1917 pass / 2 fail / hang 0**(`InstanceSpotIdleInspection` hang 소멸): `MalformedPushedControl_ReconnectsAndReadmits`(round-1 수정 후 단독 5/5이나 full suite에서 재현, `ready=0` — round-2 job) + `ManagedNode_Tcp_SameEndpoint_Replacement_RemainsAdmitted_Across_Repeated_Lifecycles`(단독 3/3 fail, 결정적 회귀 — job 진행 중)
 - [ ] 7 samples × 4언어 green — **cpp 7/7**; **node 7/7**(SupportChat budget `2e3b1b47e4`, ZoneWorld entry html `c67deb44e0`, runner PASS marker `2ceb137abe`);
-      java: TicTacToe·SupportChat·DeliveryDispatch(`ed156f5983`+teardown `6682ae0db1`)·GameQuest(heartbeat `dc9fe76100`)·ShoppingMall·**Bingo**(teardown/heartbeat 수정으로 해소, exit 0) = **6/7**;
+      java: TicTacToe·SupportChat·DeliveryDispatch(`ed156f5983`+teardown `6682ae0db1`)·GameQuest(heartbeat `dc9fe76100`)·ShoppingMall·**Bingo**(teardown/heartbeat 수정으로 해소, exit 0) = **6/7**; 최종 java gate(2026-09-05 05:22): 개별 6/7(TicTacToe는 run_sample.sh 실행비트 누락 → 5언어 일괄 `133d01c9b2`; ZoneWorld A3 `moveTo` timeout 1/4 간헐 → job), aggregate는 Java 7/7 완료 후 Kotlin GameQuest `Program.kt:179` `ensure(unavailable != null)` 실패(owner termination 뒤 요청이 성공) → job;
       ZoneWorld: A2 지연 = public mesh poller owner가 command 36 STREAM admission을 동기 대기 → 비동기 admission `424b15684c`; A5 = STREAM 수신 owner가 control frame(heartbeat pong·session-closing) 전송을 state lane에서 동기 대기 → 비동기 전송 `7b0590183d` → **FULL ZoneWorld 2/2 green** ⇒ **java 7/7**(최종 일괄 게이트 job 실행 중);
-      dotnet 7 samples 미실행(dotnet 커밋 후)
+      dotnet 7 samples 미실행(dotnet 커밋 후). cpp/node 리팩토링 pass(POSDDD·perf·dead code) job 진행 중
 - [ ] cross-language E2E green — cpp all-stage runner **32/32 PASS**(dotnet spot-route 수정 포함, 미커밋 상태); node smoke 12/12 + Redis stage(환경 복원 후 재실행 필요); java-cross 4/4. dotnet 커밋 후 최종 재실행
 - [ ] 최종 커밋+푸시 — 지금까지 framework 수정 커밋 20건 푸시됨(main); dotnet 일괄 커밋·리팩토링 pass·최종 게이트 잔여
 

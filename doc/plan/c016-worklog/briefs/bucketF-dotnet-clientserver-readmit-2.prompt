@@ -1,0 +1,62 @@
+# Job (round 2): dotnet — `ClientServerChannelRuntimeTests.MalformedPushedControl_ReconnectsAndReadmits` still fails inside the full unit suite after the round-1 fix (passes alone)
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`, and the round-1 summary
+`doc/plan/c016-worklog/bucketF-dotnet-clientserver-readmit-summary.md`. Never modify `core/**`,
+`bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages' trees;
+never lower an assertion or widen a timeout as the fix; do not commit. Keep the whole uncommitted
+dotnet working tree (admission rework + round-1 reconnect fix).
+
+## Facts
+- Round 1 changed `src/Zlink.Framework/Runtime/Channels/ZLinkClientServerClientRuntime.cs` so
+  `ReconnectAsync` waits for the Disconnected/Closed monitor edge of the fenced physical connection
+  before re-registering the endpoint (replacing the fixed 100 ms delay), then loops `Connect`. Alone:
+  5/5 and class 35/35 green.
+- Supervisor full-suite gate v5 (`--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests'`,
+  `--no-build`, log
+  `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate-v5-rest.log`)
+  fails it again at 00:03:22 into the run:
+  `System.TimeoutException : Expected raw record was not received. diagnostics=manual:tcp://127.0.0.1:26345=protocol:pushed-control;generation=2;attempt=3;admissionStarted=True;admissionCompleted=False;reconnect=False;current=False; physical=1; ready=0`
+  i.e. reconnect finished (`reconnect=False`), admission attempt 3 on generation 2 started, but
+  `ready=0` / `current=False`: the reconnected pair never became ready (no ConnectionReady for the
+  new physical connection) so the admission request never got a reply. So the round-1 fix is
+  incomplete: it is load/ordering-sensitive. The gate v4 failure (before round 1) had the same shape.
+- Candidate mechanisms to check against the Core socket spec (`core/doc/spec/core/socket/README.ko.md`
+  connect/disconnect/reconnect semantics; `07-router`, DEALER endpoint identity; monitor event
+  ordering) and the binding: (a) `Disconnect(endpoint)` followed by `Connect(endpoint)` after the
+  Disconnected edge — but Core may still hold the endpoint's reconnect entry (the session's own
+  reconnect timer) and dedupe the second `Connect` as the same endpoint, so no new pipe/ready event
+  is ever produced; (b) the Disconnected event observed belongs to a *different* physical generation
+  (an earlier close), so re-registration still races the retiring pipe; (c) the ready event for the
+  new pipe arrives but is attributed to the old generation and dropped by the fence
+  (`FencePhysicalConnection`) — check `ready=0` accounting vs. the generation checks around
+  `:1018-1033` and the ConnectionReady handler; (d) the test's server side (pushed-control malformed
+  frame path) closes the *server* pipe and the client's reconnect lands before the server re-accepts.
+  Decide with a trace, not by guessing: add a temporary file sink for the framework debug log / monitor
+  events (remove before finishing) and record the exact event sequence (generation, event type,
+  endpoint, timestamp) in the failing run.
+- Reproduce under load: the test passes alone. Run `--filter 'FullyQualifiedName~ClientServerChannelRuntimeTests'`
+  while 6 background `yes > /dev/null` hogs run (kill them afterwards), 5×; or run the class
+  concurrently with `--filter 'FullyQualifiedName~StatefulServiceRuntimeTests'` in a second process
+  (both need the flock — see below — so use the hog approach first). If you cannot reproduce in 5×,
+  run the full suite once with `--blame-hang --blame-hang-timeout 10m` (expect ~40 min; note the
+  known 36-min sibling `ActorCreateCompletion_AfterHandoverHello_UsesCapturedReplyRoute` and the
+  Canonical family are excluded by the supervisor filter — use the same filter).
+- dotnet env block (never `--artifacts-path`, never `ulimit -v`):
+  `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; cd framework/languages/dotnet; flock -w7200 /tmp/zlink-dotnet-gate.lock dotnet test tests/Zlink.Framework.UnitTests --filter '...'`.
+  IMPORTANT: the supervisor's gate is running right now with `--no-build` on the built test dll and
+  holds `/tmp/zlink-dotnet-gate.lock` for ~40 more minutes, and a second queued run follows it. Do
+  NOT run `dotnet build`/`dotnet test` without the flock (a rebuild under the running gate corrupts
+  it). Read sources and design the trace while you wait for the lock.
+
+## What to do
+1. Reproduce with the trace; identify the exact mechanism (a–d or other) with file:line in the
+   framework and the spec/binding clause it violates or mis-assumes.
+2. Fix minimally in `framework/languages/dotnet/**` (client runtime reconnect/admission path);
+   regression test that fails before/passes after (a deterministic one if the mechanism allows, e.g.
+   injecting the ordering via the test's monitor/socket shims).
+3. Verify: the test 5× under load, class `ClientServerChannelRuntimeTests` 1×, `StatefulServiceRuntimeTests` 1×.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketF-dotnet-clientserver-readmit-2-summary.md`: trace excerpt, mechanism,
+cause `file:line`, spec clause, fix + regression, results table, BLOCKERS.
