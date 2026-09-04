@@ -107,6 +107,73 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
     }
 
     @Test
+    void asyncBoundSessionPushReturnsBeforeTheSocketStateLaneCanStartAdmission()
+        throws Exception {
+        CountDownLatch laneEntered = new CountDownLatch(1);
+        CountDownLatch releaseLane = new CountDownLatch(1);
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh");
+             var stream = new ZLinkJavaStreamSocket(
+                 context.createStreamSocket(), node);
+             Message frame = Message.from("bound-session-frame")) {
+            Field stateLaneField = ZLinkJavaStreamSocket.class
+                .getDeclaredField("stateLane");
+            stateLaneField.setAccessible(true);
+            ZLinkStateLane stateLane =
+                (ZLinkStateLane) stateLaneField.get(stream);
+            CompletionStage<Void> laneBlocker = stateLane.runAsync(() -> {
+                laneEntered.countDown();
+                try {
+                    if (!releaseLane.await(5, TimeUnit.SECONDS)) {
+                        throw new AssertionError("socket state lane was not released");
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(
+                        "socket state lane wait was interrupted", interrupted);
+                }
+            });
+            assertTrue(laneEntered.await(1, TimeUnit.SECONDS));
+
+            AtomicReference<Thread> invocationThread = new AtomicReference<>();
+            CompletableFuture<CompletionStage<Void>> invocation =
+                CompletableFuture.supplyAsync(() -> {
+                    invocationThread.set(Thread.currentThread());
+                    return stream.sendBoundSessionPushAsync(
+                        RoutingId.from("pending-bound-session-peer"),
+                        List.of(frame));
+                });
+
+            CompletionStage<Void> submission = null;
+            boolean returnedBeforeRelease = true;
+            String blockedAt = "";
+            try {
+                submission = invocation.get(1, TimeUnit.SECONDS);
+            } catch (TimeoutException blocked) {
+                returnedBeforeRelease = false;
+                blockedAt = Arrays.toString(
+                    invocationThread.get().getStackTrace());
+            } finally {
+                releaseLane.countDown();
+                if (submission == null) {
+                    try {
+                        submission = invocation.get(1, TimeUnit.SECONDS);
+                    } catch (ExecutionException synchronousSendFailure) {
+                        // The pre-fix path reaches native send inline after the
+                        // lane is released. The assertion below owns the
+                        // synchronous-wait failure this test is detecting.
+                    }
+                }
+                laneBlocker.toCompletableFuture().get(1, TimeUnit.SECONDS);
+            }
+
+            assertTrue(returnedBeforeRelease,
+                "async bound Session push waited for the socket state lane: "
+                    + blockedAt);
+        }
+    }
+
+    @Test
     void asyncBoundActorRelayPreservesTheStreamHeaderFrame()
         throws Exception {
         RoutingId nodeRid = RoutingId.from("async-stream-node");
