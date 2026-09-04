@@ -6,18 +6,18 @@ title: "Serial Executor Layers"
 
 [Execution topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 06. State Ownership And State Lanes](06-state-ownership-and-lanes.en.md)
 
-> This document defines which serial execution unit Spot, Actor, and STREAM session each put
-> their work on, who owns that unit's lifetime, and what the entry points that put work on it
-> are. The names and entry points set here are used verbatim by all four language runtimes,
-> converted only for spelling. Which things may run concurrently under which execution mode is
+> This document defines which serial execution unit each Spot, Actor, and STREAM session puts
+> its work on, who owns that unit's lifetime, and which entry points put work on it. The names
+> and entry points set here are used verbatim by all four language runtimes, with spelling
+> changes only. What may run concurrently under each execution mode is
 > owned by the glossary; this document defines only the queue path a piece of work takes under
 > that mode.
 
 ## 1. Serial Executor Overview
 
 When an application registers a Spot handler, an Actor handler, a timer callback, or a session
-callback, the runtime does not run that callback on an arbitrary thread. It lines the callback
-up on one **serial execution unit** and runs one at a time. This document sets how many such
+callback, the runtime does not run it on an arbitrary thread. It queues each callback on one
+**serial execution unit** and runs them one at a time. This document sets how many such
 lines each layer has, who creates and destroys them, and who decides which line a piece of work
 goes on.
 
@@ -32,17 +32,17 @@ own mutable state**; the serial executor here is how **application work** runs i
 one runtime there is a state lane per component that owns state, and a serial executor per Spot,
 Actor, and session instance.
 
-Which things may run concurrently under which execution mode is owned by
+What may run concurrently under each execution mode is owned by
 [User Spot execution mode](../00-foundation/02-glossary.en.md#user-spot-execution-mode) — the
 registration option deciding which execution gate the Spot handler, member Actor handlers, and
 timer callbacks share. This document sets only the queue path work takes under that mode.
 
-## 2. Layers And Ownership
+## 2. Layers and Ownership
 
 Three layers each hold a serial execution unit. **Each layer has one coordinator, and that
 coordinator owns the lifetime of its own layer's queue together with any subordinate queues it
-created.** Without a coordinator, which work runs on which queue scatters across call sites, and
-the ordering guarantee can no longer be read off the code.
+created.** Without a coordinator, decisions about which work runs on which queue are scattered
+across call sites, and the ordering guarantee can no longer be read from the code.
 
 ```text
 ZLinkSpotSerialExecutor          ← one coordinator per Spot
@@ -109,7 +109,7 @@ path rules vary per call site and the execution mode's guarantee breaks.
 The verb is `execute` at all three layers. If `enqueue` and `execute` diverge from layer to
 layer, the same call has to be looked up again every time work crosses a layer.
 
-## 4. Spot Execution Mode And Queue Path
+## 4. Spot Execution Mode and Queue Path
 
 Which queues Actor work and timer work pass through depends on the
 [User Spot execution mode](../00-foundation/02-glossary.en.md#user-spot-execution-mode).
@@ -124,8 +124,8 @@ and an Instance Spot uses one gate for the whole Spot, so it matches the `SpotWi
 Only Actor work under `SpotWide` passes through two queues. Both modes guarantee serial
 execution; only the number of queues crossed differs.
 
-Which queue each entry point connects to, drawn per mode. The example Spot has two Actors
-(A and B) and two timers (`tick` and `beat`).
+The diagrams below show which queue each entry point connects to in each mode. The example Spot
+has two Actors (A and B) and two timers (`tick` and `beat`).
 
 **`PerActor`** — every entry point has its own queue.
 
@@ -136,7 +136,7 @@ Which queue each entry point connects to, drawn per mode. The example Spot has t
 
   executeActor(A) ─────────▶ [ Actor A queue ] ──▶ run   ┐
   executeActor(B) ─────────▶ [ Actor B queue ] ──▶ run   │ five independent queues.
-  executeTimer("tick") ────▶ [  tick queue   ] ──▶ run   │ up to five progress at once.
+  executeTimer("tick") ────▶ [  tick queue   ] ──▶ run   │ up to five run at once.
   executeTimer("beat") ────▶ [  beat queue   ] ──▶ run   ┘
 ```
 
@@ -159,15 +159,15 @@ Which queue each entry point connects to, drawn per mode. The example Spot has t
 
 What crosses into the Spot queue here is **the execution turn, not the payload.** The Actor
 payload stays in that Actor's queue —
-[Actor Model "3. Actor Queue"](../03-spot-actor/04-actor-model.en.md#3-actor-queue) pins down
-that Actor payload is never put into the Spot application queue. The head of the Actor queue,
+[Actor Model "3. Actor Queue"](../03-spot-actor/04-actor-model.en.md#3-actor-queue) specifies
+that the Actor payload is never placed in the Spot application queue. The head of the Actor queue,
 on its own turn, acquires the shared execution authority (the gate) of
 [02 §1](02-handler-turn-and-execution-gate.en.md#1-separating-queue-from-gate), and the four
 current implementations realize that acquisition by placing one execution turn on the Spot
 queue. That is why execution order is decided by the Spot queue alone.
 
-- **Under `SpotWide`, Actor work goes through the Actor queue first because of the claim, not
-  the order.** Execution order is already settled by the upper Spot queue alone. What the Actor
+- **Under `SpotWide`, Actor work goes through the Actor queue first to preserve its claim, not
+  its order.** Execution order is already settled by the upper Spot queue alone. What the Actor
   queue does is **stop the next record of an Actor that has yielded from running** — owned by
   [Handler Turn And Execution Gate "3. Gate And Claim On `Yield`"](02-handler-turn-and-execution-gate.en.md#3-gate-and-claim-on-yield):
   when a `SpotWide` member Actor yields, it hands back only the shared Spot gate and keeps its
@@ -206,8 +206,8 @@ Only the normal path is drawn. The backpressure branch where a reservation is re
 covered by §5, and the branch where an owner that has held a turn too long yields is covered by
 §6.4.
 
-The two diagrams above, as code. One entry point carries the whole §4 path decision, and the
-caller never sees a queue.
+The pseudocode below expresses the two diagrams above. One entry point carries the whole §4
+path decision, and the caller never sees a queue.
 
 ```csharp
 // contract pseudocode, not the real API — the real signatures are owned by each language interface.
@@ -218,7 +218,7 @@ ExecuteActor(actorId, work, payloadBytes)
 
     if (executionMode == PerActor)
     {
-        // ends at the one Actor queue. progresses overlapped with other Actors.
+        // ends at the one Actor queue. can overlap with other Actors.
         actorQueue.EnqueueWithPayloadBytes(work, payloadBytes);
         return;
     }
@@ -253,12 +253,12 @@ It is not redefined here; only the two things that bear on this document's queue
 
 When a record is claimed from the receive mailbox into this queue, its reservation **transfers
 without a gap**, and the transfer is not a re-decision — that rule is owned by
-[04 §8 "Transferring The Owner Reservation"](04-application-job-queue-and-backpressure.en.md#transferring-the-owner-reservation--two-stages-join-without-a-gap).
+[04 §8 "Transferring the Owner Reservation"](04-application-job-queue-and-backpressure.en.md#transferring-the-owner-reservation--joining-two-stages-without-a-gap).
 
 **Its accounting boundary differs from the
 [Application job queue](../00-foundation/02-glossary.en.md#application-job-queue) permit.** The
 permit is returned right before the callback's first instruction, while the mailbox reservation
-is returned after the handler finishes — the memory work in flight holds is not yet released. The
+is returned after the handler finishes — the memory held by in-flight work has not yet been released. The
 two limits therefore cannot stand in for each other (04 §1).
 
 When Actor work crosses two queues under `SpotWide`, **the lower Actor queue reserves that work's
@@ -267,13 +267,14 @@ independent of payload size.** The same payload is not reserved on both. Reservi
 work that passed below is caught again above, so the per-Actor ceiling stops being the real
 ceiling, and the Spot queue fills ahead of the real execution load.
 
-**Internal check condition** — on the `SpotWide` Actor path, nothing passes payload bytes as an
-argument when submitting to the upper Spot queue.
+**Internal check condition** — on the `SpotWide` Actor path, no submission to the upper Spot
+queue passes payload bytes as an argument.
 
 ## 6. The Serial Queue Primitive
 
-`ZLinkSerialExecutionQueue` does not only run work in order. **Rejecting work once capacity is
-exceeded, and stopping one owner from holding on too long, are part of its own contract.**
+`ZLinkSerialExecutionQueue` does more than run work in order. **Rejecting work once capacity is
+exceeded, and stopping one owner from holding its turn too long, are part of its
+own contract.**
 Leaving those to callers means each call site handles them differently, and then no real-time
 guarantee — that latency is bounded under any load — can be stated.
 
@@ -329,10 +330,10 @@ awaitQuiescence()                // wait until all queued work has finished
 close()                          // accept no new submissions; finish what was already accepted
 ```
 
-### 6.3 The Atomic Extent Of Capacity Decision And Sequence Issue
+### 6.3 Atomic Scope of the Capacity Decision and Sequence-Number Issuance
 
-The capacity decision, the sequence-number issue, and the queue insertion **either all happen or
-none happen.** For one caller's submission these three are not split apart.
+The capacity decision, sequence-number issuance, and queue insertion **either all happen or none
+happen.** For one caller's submission these three are not split apart.
 
 Do not substitute a concurrent queue data structure that handles the three separately. Split
 apart, two callers can see the same headroom, both pass the decision, and both insert, exceeding
@@ -342,10 +343,10 @@ three must move together, which makes them class C2 of
 
 ### 6.4 Fairness
 
-When the current owner holds longer than `ownerTimeBudget`, it **returns its remaining work to
-ready and cuts its own turn.** Without this, one owner with a lot of work piled up can hold the
-execution resource indefinitely, and then no bound can be stated for when other owners on the
-same node start.
+When the current owner holds a turn longer than `ownerTimeBudget`, it **returns its remaining
+work to the ready state and cuts its own turn.** Without this, one owner with a lot of work piled
+up can hold the execution resource indefinitely, and then no bound can be stated for when other
+owners on the same node start.
 
 **Which owner it goes to next is not decided by this queue.** One queue knows only its own
 owner's work. The order among owners returned to ready is owned by the scheduler contract in
@@ -353,9 +354,9 @@ owner's work. The order among owners returned to ready is owned by the scheduler
 this document defines only **cutting the turn** so that contract can decide the order. The bound
 is checked at handler boundaries only; a single handler running past it is outside this contract.
 
-### 6.5 Who Starts The Loop
+### 6.5 Who Starts the Loop
 
-**There is no thread per owner.** A queue normally runs nothing at all; the moment work arrives,
+**There is no thread per owner.** A queue normally runs no work; the moment work arrives,
 the submitter wakes the drain loop. If it is already running, nobody wakes it.
 
 That decision is the heart of the submit path.
@@ -404,7 +405,7 @@ On a single-threaded runtime, §6.4's yielding crosses a boundary at which the e
 service I/O and timers (a macrotask). Yielding only through microtasks starves the event loop
 itself.
 
-**What this pattern is called.** The overall shape — enqueue an invocation and let a scheduler
+**What this pattern is called.** The overall shape — enqueue invocations and let a scheduler
 take them one at a time — is **Active Object** in the pattern literature (Lavender & Schmidt,
 PLoP 1995 · *Pattern Languages of Program Design 2*, 1996). That original gives each object its
 own scheduler thread, though. Running on shared resources with no thread per owner, and the flag
@@ -412,13 +413,13 @@ decision that splits "drive it yourself" from "just publish" in order to do so, 
 **combining** lineage — Oyama, Taura, and Yonezawa, *Executing parallel programs with
 synchronization bottlenecks efficiently* (1999), and flat combining (Hendler, Incze, Shavit, and
 Tzafrir, SPAA 2010). That all four language runtimes arrived at the same shape without
-referencing each other is not coincidence; each followed this lineage.
+referencing each other is not a coincidence; each followed this lineage.
 
 ### 6.6 The Loop That Drives Turns
 
-Once woken, the loop **admits only one caller at a time.** It takes one work item, runs it on a
-turn, and moves to the next when it finishes. §6.4's yielding is implemented as this loop
-cutting its slice.
+Once woken, the loop **allows only one invocation to enter at a time.** It takes one work item,
+runs it on a turn, and moves to the next when it finishes. §6.4's yielding is implemented as
+this loop cutting its slice.
 
 ```csharp
 // contract pseudocode, not the real API — the real signatures are owned by each language interface.
@@ -448,7 +449,7 @@ Drain()
 }
 ```
 
-### 6.7 How One Work Item Is Driven, And Handing The Turn Back
+### 6.7 Driving One Work Item and Handing the Turn Back
 
 One work item is an execution unit that stops at its first waiting point and resumes afterwards —
 in C# the compiler turns an `async` method into exactly such a state machine. **The drain loop
@@ -484,7 +485,7 @@ RunOnTurn(work, turn)
 }
 ```
 
-The handing-back side is where work wraps an external call.
+Work hands the turn back where it wraps an external call.
 
 ```csharp
 // contract pseudocode, not the real API — the real signatures are owned by each language interface.
@@ -498,7 +499,7 @@ YieldFrameworkCall(submit)
     turn.SignalYielded();             // → the drain loop moves on to the next work item
     result = Await(operation);
 
-    // arriving results do not resume execution on the spot. the work queues up again
+    // arriving results do not resume execution immediately. the work queues up again
     // for a turn, which is what keeps that queue "one at a time".
     AwaitResumePermit();
     return result;
@@ -512,7 +513,7 @@ guarantee.
 **Internal check condition** — no resume path at a hand-back point continues directly without
 going through a queue submission.
 
-## 7. The Turn Boundary For State Reads
+## 7. The Turn Boundary for State Reads
 
 State values needed while handling one message are **read together in one state lane turn and
 carried as an immutable snapshot.** Do not create a separate turn per read.
@@ -525,9 +526,9 @@ snapshot = lane.Run(() => new ActorStateSnapshot(
     registry.ActorType(actorId)));
 ```
 
-Splitting reads into separate turns degrades two things at once. The values come from different
+Splitting reads into separate turns causes two problems at once. The values come from different
 points in time, so old and new values mix within the handling of one message, and that one
-message waits for a turn to complete several times over.
+message waits for several separate turns to complete.
 
 Do not read the same value twice on one handling path. Carry the first result as it is.
 
@@ -535,12 +536,12 @@ Name the snapshot type `<Target>StateSnapshot`.
 
 **Internal check condition** — no handling path reads the same registry value twice.
 
-## 8. Check The Ownership Premise
+## 8. Check the Ownership Premise
 
-Even where an upper serial execution unit guarantees "this is already serial", **do not believe
-that premise unchecked.** When the premise breaks and nobody is checking, it surfaces as a
-deadlock rather than an exception, and which call broke the premise is then hard to find in the
-code.
+Even where an upper serial execution unit guarantees "this is already serial", **do not trust
+that premise without checking it.** When the premise breaks and nobody is checking, it surfaces
+as a deadlock rather than an exception, and which call broke the premise is then hard to find in
+the code.
 
 | Position | Check |
 |---|---|
@@ -550,7 +551,7 @@ code.
 Required in debug builds. Optional in release builds, except for **components where reentrancy
 actually occurred** — those that used a recursive lock — which keep it in release too.
 
-**Internal check condition** — every position that premises upper serial ownership carries an
+**Internal check condition** — every location that assumes upper-level serial ownership has an
 `isOnLane` or `throwIfReentrant` call.
 
 ## 9. Language Mapping
@@ -567,7 +568,7 @@ Use the names set in §2, §3, and §6; convert only the spelling to each langua
 Do not rename in a way that changes meaning. Writing `executeActor` as `execute_actor` in cpp is
 spelling conversion; writing it as `dispatch_actor` is inventing a different name.
 
-All four languages carry §4's two-stage structure. node's `executeActor` too takes a per-Actor
+All four languages carry §4's two-stage structure. node's `executeActor` also acquires a per-Actor
 mailbox claim (`actorClaims.submit(actorId, …)`) first and only then uses the shared Spot
 execution unit — it does not skip the Actor queue; it is exactly §4's "a queue per Actor, a gate
 shared by the Spot".
@@ -585,21 +586,24 @@ and the exception a reentrant call receives). Each item maps to one test.
 
 **Concurrency and order per execution mode**
 
-- In a User Spot registered `PerActor`, submitting long-running work to two different Actors
-  results in the two handlers running overlapped.
-- In a User Spot registered `SpotWide`, the same submission results in the second handler
+- In a User Spot registered with `PerActor`, submitting long-running work to two different Actors
+  results in the two handler executions overlapping.
+- In a User Spot registered with `SpotWide`, the same submission results in the second handler
   starting only after the first has finished.
 - Work submitted back to back to the same Actor runs in submission order under both modes.
-- Under `PerActor`, callbacks of different timer names run overlapped, and callbacks of the same
+- Under `PerActor`, callbacks with different timer names overlap, and callbacks with the same
   timer name run in submission order.
 
 **Capacity and backpressure**
 
-- Piling local submissions on one Actor inside the same runtime until it fills
-  `applicationByteCapacity` rejects only submissions to that Actor; submissions to other Actors
-  in the same Spot are still accepted.
-- Actor packets arriving from a remote node are still delivered to an Actor that has filled that
-  ceiling — ordinary ingress is not counted again at the owner queue (§5).
+- Under both modes, piling work onto one Actor until its mailbox reaches capacity rejects only
+  submissions to that Actor; submissions to other Actors in the same Spot are still accepted.
+- Under `SpotWide`, when the same number of large-payload and small-payload items are submitted
+  to one Actor, the large-payload items are rejected first — the lower Actor queue reserves the
+  payload bytes (§5).
+- For the same submissions, the point at which the Spot queue reaches capacity is determined by
+  item count, regardless of payload size — the upper Spot queue reserves only the fixed cost
+  (§5).
 - Work submitted with `enqueueLifecycle` runs ahead of already queued application work, and the
   consecutive overtaking stops at `lifecycleBurstLimit` so one application item runs.
 
@@ -629,8 +633,8 @@ and the exception a reentrant call receives). Each item maps to one test.
 
 **Cross-language equivalence**
 
-- The items above produce the same result in .NET, java, cpp, and node. In node, "run
-  overlapped" is observed as two async handlers making progress alternately across an `await`.
+- The items above produce the same result in .NET, java, cpp, and node. In node, "overlap" is
+  observed as two async handlers making progress alternately across an `await`.
 
 ---
 

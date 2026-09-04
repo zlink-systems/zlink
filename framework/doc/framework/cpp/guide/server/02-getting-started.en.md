@@ -44,7 +44,7 @@ Targets to add when you need them:
 | stream connector | When building an external client (a game client, mobile) ([09-stream](09-stream.en.md)) |
 | `zlink::http_client` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.en.md)) |
 
-It uses C++20 coroutines, so a compiler that supports at least that is required.
+It uses C++20 coroutines, so a compiler with C++20 support is required.
 
 The license differs by layer — core/binding is MPL-2.0, framework is FSL-1.1-ALv2, and
 `zlink::http_client` is Apache-2.0. There's no cost to building and selling a service
@@ -52,9 +52,8 @@ The license differs by layer — core/binding is MPL-2.0, framework is FSL-1.1-A
 
 ## 2. A Minimal Example — Two Processes Calling Each Other
 
-With no location store and no Redis, try one request/reply over a manual connection where
-you write the endpoint directly. This is the point where you confirm "installation is
-done."
+With no location store and no Redis, try one request/reply over a manual connection with the
+endpoint specified directly. This confirms that installation is complete.
 
 **The shared contract.** Both processes reference the same record.
 
@@ -116,15 +115,15 @@ task_t<std::string> hello_http_handler_t::handle (const std::string &name)
 Start the server first, then the client, and call `curl http://localhost:5000/hello/world`
 — it returns `hello, world`.
 
-Three things are confirmed here — the package is wired up, the two processes are connected
-through the mesh, and the call was routed by logical name (`greeting`) alone. This example
+This confirms three things: the package is wired up, the two processes are connected through
+the mesh, and the call was routed by logical name (`greeting`) alone. This example
 has no Redis and no location store. For the calling code to stay the same as servers scale
 up and down, you need auto-connect, which is covered by
 [10-location](10-location.en.md).
 
-## 3. TicTacToe — The Flow Of Creating One Room
+## 3. TicTacToe — The Flow of Creating One Room
 
-From here on, we move to an actual sample. The API server doesn't pick a specific Play node
+From here on, we'll use an actual sample. The API server doesn't pick a specific Play node
 — it only passes the room's stable type and its initial settings. The Framework selects one
 of the Object Servers that registered that type, and issues a globally unique `SpotId`.
 
@@ -152,7 +151,7 @@ The table's relative paths are rooted at `framework/languages/cpp`.
 ## 4. API Server Configuration
 
 The API server registers a Location Store and an Object Client role. The Object Client role
-is used to create or call an Actor and Spot on another Object Server.
+is used to create or call Actors and Spots on another Object Server.
 
 ```cpp
 app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
@@ -175,7 +174,7 @@ The sample reads the peer endpoint from a config file for reproducible local run
 endpoint only sets up the connection — it doesn't specify which Play node the new Game Spot
 gets placed on.
 
-## 5. Creating A Spot From An HTTP Request
+## 5. Creating a Spot from an HTTP Request
 
 The HTTP handler uses the spot manager it received through DI.
 
@@ -204,13 +203,14 @@ create_game_http_handler_t::handle (const create_game_http_req_t &request)
 }
 ```
 
-Use `create` for creating a new User Spot where the caller doesn't decide the `SpotId`. To
+Use `create` to create a new User Spot where the caller doesn't decide the `SpotId`. To
 look up or create the same `SpotId` again, use `GetOrCreate(spotId, spotType)`.
 
-## 6. Registering A Stable Type On The Play Server
+## 6. Registering a Stable Type on the Play Server
 
-The Framework only uses a Serving Object Server that registered the requested stable type as
-a creation candidate. The Play server registers the `TicTacToeGame` factory as follows.
+The Framework considers only Serving Object Servers that have registered the requested
+stable type as creation candidates. The Play server registers the `TicTacToeGame` factory
+as follows.
 
 ```cpp
 auto mesh = options.add_route_mesh (sample_nodes_t::mesh)
@@ -223,10 +223,10 @@ mesh.add_spot_factory<tictactoe_game_t> (
   [] (auto &factory) { factory.disable_relocation (); });
 ```
 
-There's no sample contract for preferring a specific Play node or placing by `NodeRid`. The
-Framework and Location Store decide the placement candidate and capacity.
+The sample does not define a contract for preferring a specific Play node or placing by
+`NodeRid`. The Framework and Location Store decide the placement candidate and capacity.
 
-## 7. Validating The Initial Settings
+## 7. Validating the Initial Settings
 
 The selected Play node creates the Spot, then hands the initial request to `on_create`. The
 Spot validates the settings and returns whether it accepts creation.
@@ -248,9 +248,9 @@ task_t<spot_create_response_t> tictactoe_game_t::on_create (const message_t &req
 ```
 
 If creation is rejected, that reservation is never published as a Ready Spot. The caller
-receives the completion result as a typed failure.
+receives a typed failure as the completion result.
 
-## 8. What The ClientServer Channel Is For
+## 8. What the ClientServer Channel Is For
 
 TicTacToe's `tictactoe.api` ClientServer channel is used when a Play session requests user
 authentication from the API server. It isn't used for Game Spot creation.
@@ -271,7 +271,7 @@ options.add_client_server_channel (sample_channels_t::api).client ();
 Object creation and a ClientServer call are different features. No dedicated
 room-creation channel or `CreateGameHandler` is added.
 
-## 9. Building And Running
+## 9. Build and Run
 
 ```cmake
 # Build the sample first.
@@ -282,10 +282,10 @@ framework/languages/cpp/samples/TicTacToe/run_sample.sh
 ```
 
 The runner runs 2 APIs and 2 Plays. After creating a Game Spot, it verifies that
-participants connected to different Play endpoints join the same room, and verifies game
-messages and end-of-game cleanup.
+participants connected to different Play endpoints join the same room, then checks game
+messaging and end-of-game cleanup.
 
-## 10. What To Check When It Fails
+## 10. What to Check When It Fails
 
 | Symptom | What to check |
 | --- | --- |

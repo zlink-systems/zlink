@@ -6,11 +6,11 @@ title: "Interaction Model"
 
 [Foundation topic index](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 03. Framework Overview](03-overview.en.md) · [Next: 05. Message Model](05-message-model.en.md)
 
-> Defines how the target of a framework operation is selected, at what point the
-> completion the application observes occurs, and which owner performs the
+> Defines how the target of a framework operation is selected, when the
+> completion observed by the application occurs, and which owner performs the
 > execution.
 
-## 1. Common Model — Target Selection And Completion
+## 1. Common Model — Target Selection and Completion
 
 The method of publishing one message to several remote nodes participating in the
 same Channel and to a local [Spot](02-glossary.en.md#spot) is called
@@ -22,7 +22,7 @@ currently processes a global Spot or Actor is called
 |---|---|---|
 | node direct send | The caller directly specifies one RID belonging to the same [MeshName](02-glossary.en.md#meshname) — a name identifying one [RouteMesh](02-glossary.en.md#routemesh) physical connection group. | Completes with no return data once the source-local queue accepts the message. |
 | [node direct](02-glossary.en.md#node-direct) request | The caller directly specifies one RID belonging to the same MeshName. | Completes with one of reply, timeout, or route error. |
-| channel send | The framework selects one ready target from the RouteMesh or ClientServer send paths registered under [ChannelName](02-glossary.en.md#channelname) — a name identifying the Channel scope a message is sent to. | Completes with no return data once the selected send path's source-local queue accepts it. |
+| channel send | The framework selects one ready target from the [RouteMesh](02-glossary.en.md#routemesh) — a scope in which multiple MeshNodes participate and exchange node and Channel messages — or ClientServer send paths registered under [ChannelName](02-glossary.en.md#channelname) — a name identifying the Channel scope a message is sent to. | Completes with no return data once the selected send path's source-local queue accepts it. |
 | channel request | The framework selects one [ready target](02-glossary.en.md#ready-target) from the [RouteMesh](02-glossary.en.md#routemesh) or ClientServer send paths registered under `ChannelName`. | Completes with one of reply, timeout, or route error. |
 | [Logical Multicast](02-glossary.en.md#logical-multicast) | The framework selects matching targets among `ChannelName`'s remote members and local Spots. | Completes with no return data once it secures a bounded worker and source-local capacity and starts the publish transaction. Doesn't wait for per-target submission or handler completion. |
 | Spot message | The caller specifies a global [Spot ID](02-glossary.en.md#spot-id) — a globally unique logical address identifying a Spot — and the framework finds the [owner](02-glossary.en.md#owner) of the current [Ready](02-glossary.en.md#ready) — the state where a Spot can receive application messages — [authority](02-glossary.en.md#authority). | Send completes with no return data after source-local queue acceptance; request completes with the reply result. |
@@ -40,7 +40,7 @@ This table's "completion" is the completion boundary of each interaction
 defined by
 [Message Model "2. Message Kinds And Completion"](05-message-model.en.md#2-message-kinds-and-completion).
 
-## 2. The Public Interface That Starts An Interaction
+## 2. The Public Interface That Starts an Interaction
 
 The following table shows where the application starts each interaction. `client`
 is obtained via DI or the current handler context — the application doesn't
@@ -55,7 +55,7 @@ directly select a transport socket or endpoint.
 | Actor create/lookup | `IZLinkActorManager` | Global Actor ID and stable Actor type |
 | Logical Multicast | `IZLinkSpotPublisherClient` | ChannelName and topic |
 | Classic fanout | `IZLinkFanoutClient` | Fanout ChannelName and optional topic |
-| STREAM send/reply | `IZLinkSessionClient` | The current [STREAM session](02-glossary.en.md#stream-session) — a server-side execution unit kept from accepting one STREAM client connection until it closes |
+| STREAM send/reply | `IZLinkSessionClient` | The current [STREAM session](02-glossary.en.md#stream-session) — a server-side execution unit maintained from the time one STREAM client connection is accepted until it closes |
 
 The code below is an explanatory declaration, abbreviated in .NET notation, to show
 the shape of a common interaction. It doesn't require the same signature in other
@@ -130,7 +130,7 @@ with no return value. A `Request...` call waits for a reply via `Async<TReply>()
 Even in a language declaring `Yield<TReply>()`, this operation can only be used on
 the shared turn of a `SpotWide` User Spot or Instance Spot.
 
-## 3. Node Direct And Channel Select-One
+## 3. Node Direct and Channel Select-One
 
 Node direct uses the physical `MeshName` topology as-is, while channel
 select-one layers a process-local logical address on top of it. We look at the
@@ -195,7 +195,7 @@ connection until the logical diagram's selection finishes.
   selected owner MeshName is only observed in internal routing and runtime
   monitoring.
 
-## 4. Send And Request
+## 4. Send and Request
 
 `send` is a one-way operation with no reply, and `request` is an operation that
 completes with a reply or an error. Both calls can target a non-node-local
@@ -274,7 +274,7 @@ sequenceDiagram
   pipe are FIFO.** A global order across different destinations, origins, or
   sessions isn't guaranteed.
 
-The precise meaning of the common kind `Send` and `Request` return, and of
+The precise meaning of the common kinds returned by `Send` and `Request`, and of
 timeout and cancellation, is defined by the
 [Framework Error Model](07-framework-error-model.en.md).
 
@@ -321,7 +321,7 @@ sequenceDiagram
   [snapshot](02-glossary.en.md#snapshot) operation.** Cancellation or shutdown
   doesn't stop processing of remaining targets. An earlier-accepted remote
   target or local Spot queue isn't canceled because a later target failed.
-- **It completes normally even if every snapshot target is 0.** Remote
+- **It completes normally even if the snapshot has 0 targets.** Remote
   unreachability, insufficient outbound capacity, and local Spot queue drops
   occurring after the transaction starts don't roll back already-accepted
   targets or retry the whole publish. Per-target accept/failure results
@@ -361,16 +361,15 @@ Logical Multicast and classic fanout both offer a publish/subscribe usage
 experience, but since their delivery targets and guarantees differ, they're
 registered as separate features.
 
-## 7. Spot And Actor
+## 7. Spot and Actor
 
 A Spot is a logical mailbox owned by a MeshNode. Messages sent to that Spot pile up in the
 mailbox, and the framework takes them out one at a time and hands them to a handler.
 
-### Three Kinds Of Spot
+### Three Kinds of Spot
 
 Spots come in three kinds, split by how they are created. The split governs the execution
-order and the Actor membership rules that follow, so it comes first. Put next to something
-familiar:
+order and the Actor membership rules that follow, so it comes first. In familiar terms:
 
 - **Entry Spot** — the place where Actors are born and destroyed. It is where a connecting
   player's Actor first sets foot, and where an Actor that has not joined any room yet stays.
@@ -397,7 +396,7 @@ The exact creation API is owned by
 detailed comparison of the three kinds by
 [Spot Model §3](../03-spot-actor/01-spot-model.en.md#3-similarities-and-differences).
 
-### The Unit That Runs One Thing At A Time
+### The Unit That Runs One Thing at a Time
 
 A Spot's direct messages, [Logical Multicast](02-glossary.en.md#logical-multicast), timers, and
 lifecycle callbacks run **in turn, never overlapping**. The place that grants "your turn now"
@@ -415,7 +414,7 @@ waits; separate ones run at the same time. It splits by Spot kind and by the Use
 A Node handler does not read a Spot's mailbox on its behalf. A Spot's work runs only on the
 Spot's own turn.
 
-### Creating A Missing Instance Spot By Message
+### Creating a Missing Instance Spot by Message
 
 A target Instance Spot that does not exist yet is created only when the
 [Spot direct](02-glossary.en.md#spot-direct) call states
@@ -435,14 +434,14 @@ is as follows.
 A node that loses the race takes the winner's result as is. It neither runs the factory
 separately nor re-sends the message.
 
-### `ActorRef` And `SpotRef` — A Snapshot Of Where It Was
+### `ActorRef` and `SpotRef` — A Snapshot of Where It Was
 
 `ActorRef` and `SpotRef` are values that **capture where the object was when it was looked up**,
 and they never change once created. They hold three things.
 
 - the global ID
-- [ObjectGeneration](02-glossary.en.md#objectgeneration) — the number that tells an object
-  re-created under the same ID apart from the earlier one
+- [ObjectGeneration](02-glossary.en.md#objectgeneration) — the number that distinguishes an
+  object re-created under the same ID from the earlier one
 - the `MeshName` and `NodeRid` at lookup time
 
 They do not hold endpoints, internal frames, or runtime resources.
@@ -455,7 +454,7 @@ later can point at the old location.
 To send an ordinary message, specify the global ID, not this value. The framework finds which
 node currently holds the object at that moment.
 
-### How A Message Sent To An Actor Travels
+### How a Message Sent to an Actor Travels
 
 An Actor message resolves the node that currently holds the Actor from the global Actor ID, then
 places the message directly in that Actor's mailbox. **It does not pass through the Spot's
@@ -468,7 +467,7 @@ with the Spot.
 When an Actor handler must read or change state the Spot owns, it submits a separate send or
 request to the Spot. That work runs on the Spot's turn.
 
-### What Keeps Going While A Handler Waits
+### What Keeps Going While a Handler Waits
 
 Completion handling for Node, Spot, and Actor calls and for binding operations keeps going even
 while an application handler is waiting on something. This handling happens in an execution area
@@ -514,7 +513,7 @@ language's per-language interface. `routes`, `spots`, `actors`, manager, and pub
 are public clients obtained via DI, and RID and ID are assumed already held by
 the application. The business message types are illustrative examples.
 
-### 9.1 Node Direct And Channel Select-One
+### 9.1 Node Direct and Channel Select-One
 
 ```csharp
 // Node direct: the application specifies a particular node RID in the "world" Mesh.
@@ -533,7 +532,7 @@ The first call doesn't pick a different node if the specified RID fails. The
 second call can pick a different eligible target under the same ChannelName only
 until one target accepts the operation.
 
-### 9.2 Spot/Actor Messages And Creation
+### 9.2 Spot/Actor Messages and Creation
 
 ```csharp
 // Existing Spot: the framework finds the Spot ID's current Ready owner and sends the request.
@@ -572,7 +571,7 @@ A regular Spot/Actor message doesn't take a target node or endpoint. Even though
 `SpotRef` and `ActorRef` have a NodeRid, it isn't used as a regular message's
 address — the framework re-confirms the global ID's current authority.
 
-### 9.3 Logical Multicast And Classic Fanout
+### 9.3 Logical Multicast and Classic Fanout
 
 ```csharp
 // Logical Multicast: publishes together to matching remote nodes and local Spot subscriptions.

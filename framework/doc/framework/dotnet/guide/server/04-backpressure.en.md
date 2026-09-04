@@ -8,7 +8,7 @@ title: "4. Backpressure — When Arrival Outpaces Processing · C#/.NET"
 <!-- generated:end -->
 
 <!-- framework-adapter-nav:start -->
-[Guide Home](README.en.md) | [Previous: 3. Core Concepts](03-concepts.en.md) | [Next: 5. Channel Messaging — request · send · pub/sub](05-channel-messaging.en.md)
+[Guide Home](README.en.md) | [Previous: 3. Core Concepts](03-concepts.en.md) | [Next: 5. Channel Messaging — Request · Send · Pub/Sub](05-channel-messaging.en.md)
 <!-- framework-adapter-nav:end -->
 
 <!-- language-switch:start -->
@@ -37,13 +37,12 @@ One of the following happens.
 - **Make the sender wait** — the receiver's processing delay comes back as the sender's send
   delay.
 
-ZLink uses the third approach. **The flow control that turns the receiver's processing delay
-back into the sender's send wait is called backpressure.** An application message that has
-already been accepted is never dropped because of load. So under load, what shows up on the
-application isn't "the message vanished" — it's "`send` got slow" or "`DeadlineExceeded`
-happened."
+ZLink uses the third approach. **Flow control that propagates the receiver's processing delay
+back to the sender by making it wait is called backpressure.** An application message that has
+already been accepted is never dropped because of load. So under load, the application-visible
+symptom isn't "the message vanished" — it's "`send` got slow" or "`DeadlineExceeded` happened."
 
-## 1. Core HWM And The Application Job Queue
+## 1. Core HWM and the Application Job Queue
 
 Framework host backpressure limits two different resources. Core HWM limits accounted bytes
 held by ordinary send/receive queues per origin. The framework's application job queue limits
@@ -55,7 +54,7 @@ accounting for that record ends. The framework acquires an application job queue
 immediately before receive/claim and returns it immediately before the actual user callback's
 first instruction. A handler that has started and is awaiting asynchronous I/O therefore does
 not reacquire the queue permit. A framework-side owner keeps the record payload valid until its
-required terminal, but it does not continue to occupy Core HWM budget.
+required terminal outcome, but it does not continue to occupy Core HWM budget.
 
 <iframe class="zlink-diagram" src="/common/diagrams/04-flow-en.html" title="Backpressure path — send to receive, replies dashed" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/04-flow-en.html" target="_blank">↗ View larger</a></p>
@@ -68,11 +67,11 @@ queues fill, their per-origin byte HWMs propagate pressure back to the sender.
 
 ## 2. How It Works
 
-### 2.1 The Basis For Locking Sends
+### 2.1 The Basis for Locking Sends
 
-Whether to stop sending is judged from **one value inside your own process.** It doesn't ask
+The decision to stop sending is based on **one value inside your own process.** It doesn't ask
 the peer how much it's OK to send — once the byte sum of messages the peer hasn't yet taken
-reaches the send queue's ceiling, sending to that peer locks. There are several reasons the
+reaches the send queue's ceiling, sends to that peer are blocked. There are several reasons the
 ceiling gets reached.
 
 - Sent far more than usual in a short time.
@@ -81,7 +80,7 @@ ceiling gets reached.
 - The receiver can't keep up processing, so the send path is blocked.
 - The connection dropped and there's nowhere to send while reconnecting.
 
-### 2.2 How Receive-Side Delay Propagates To Sends
+### 2.2 How Receive-Side Delay Propagates to Sends
 
 It passes through three stages. The receiving framework and Core handle the first two; the
 sending application encounters a wait only at the last stage.
@@ -115,21 +114,21 @@ distinguish a remote handler delay, network delay, or local Core queue pressure,
 Core HWM and application job queue status on both sides
 ([12-operations](12-operations.en.md) §1).
 
-### 2.3 Permit Return And Wait Resumption
+### 2.3 Permit Return and Wait Resumption
 
-An application job queue permit is returned immediately before the user's callback first
+An application job queue permit is returned immediately before the user's callback's first
 instruction, not when a queue publishes a job or an executor task is created. A returned
-permit is handed to the oldest live waiting ingress source, and a new acquire does not pass
+permit is handed to the oldest live waiting ingress source, and a new acquire cannot overtake
 an existing waiter. A handler does not reacquire the permit after it starts and awaits.
 
 Terminal reply/error completion identifiable before receive uses neither an ordinary-ingress
 permit nor the ordinary Core byte HWM. A record received first on an ordinary connection does
 not gain this bypass after classification. Every other control or malformed record acquires
-before receive and returns the permit immediately after classification and finite internal
-processing when it creates no handler job. This separation allows terminal completion of an
+before receive and returns the permit immediately after being classified as creating no
+handler job. This separation allows terminal completion of an
 already-started request to progress while ordinary traffic is saturated.
 
-### 2.4 Splitting The Application Connection And Completion Connection
+### 2.4 Splitting the Application Connection and Completion Connection
 
 Connecting to one peer creates two paths. The **Application connection** carries ordinary
 messages and requests as well as Framework heartbeat, topology, relocation, and service-wire
@@ -145,11 +144,11 @@ request finishes normally, and the backlog drops as the next job starts executin
 
 There's no shared arrival order between the two paths. Even from the same peer, a terminal reply
 on the Completion connection can overtake a message on the Application connection, so a handler
-never judges before/after by arrival order.
+never infers ordering from arrival order.
 
-## 3. Backpressure Visible In The API
+## 3. Backpressure Visible in the API
 
-### 3.1 Why send Is async
+### 3.1 Why send Is `async`
 
 `send` doesn't wait for a response, but there's one thing it does have to wait for — **a
 slot to send into.**
@@ -191,10 +190,10 @@ unique id on the command so the receiver can filter duplicates before you retry.
 retrying, sending again immediately just piles the request back onto a queue that hasn't
 drained yet and grows the congestion, so leave a gap between retries.
 
-Only that call waits during the wait — the execution thread handles other work
+Only that call is suspended during the wait; the execution thread handles other work
 ([05-channel-messaging](05-channel-messaging.en.md#asynchronous-execution)).
 
-**There's one case that fails immediately instead of waiting until the ceiling.** When even
+**There's one case that fails immediately instead of waiting until the ceiling:** when even
 the space that holds calls waiting for a slot is full. In that case, the payload isn't held
 at all — it ends immediately in `DeadlineExceeded`. If the configured ceiling is 1 second and
 `send` failed instantly, that means the queue isn't full — **too many calls are waiting** —
@@ -287,7 +286,7 @@ bucket table. The framework root forwards Core memory settings to the same Core 
 Core computes its physical-queue census and directional HWMs. The application job queue
 limits job count independently of that byte calculation.
 
-### 4.1 Core HWM — The Byte Budget Owned By Core
+### 4.1 Core HWM — The Byte Budget Owned by Core
 
 Set the following values through the root inbound-dispatch configuration. See `16. Options` and the
 exact interface for each language's precise spelling.
@@ -309,7 +308,7 @@ throughput, latency, and process memory under production-like payload distributi
 connection count. [Perf §23](../../../common/perf/README.en.md#23-measuring-production-values-for-core-hwm-and-the-application-job-queue)
 defines the measurement procedure.
 
-### 4.2 Setting An HWM Directly
+### 4.2 Setting an HWM Directly
 
 `SendHighWaterMark` and `ReceiveHighWaterMark` are per-socket-direction manual HWMs. They use
 bytes like `CoreHwmBudgetBytes`, but have a different owner and scope. A manual socket HWM
@@ -342,7 +341,7 @@ Manual `MaxQueuedApplicationJobs` is an exact limit in `1..2,147,483,647`. `0` i
 unlimited; it is a startup configuration error. Without a manual value, the framework
 calculates the value once at startup from the effective processor count and profile.
 
-By default, the framework changes to `paused` when permits in use reaches 80% of the limit and
+By default, the framework changes to `paused` when the number of permits in use reaches 80% of the limit and
 back to `running` at or below 60%. It rounds the pause permit count up and the resume permit
 count down. Tune these boundaries with `ApplicationJobQueuePauseThresholdPercent` (`1..100`)
 and `ApplicationJobQueueResumeThresholdPercent` (`0..99`); resume must be below pause.
@@ -370,7 +369,7 @@ and 1:N local dispatch do not create more handler jobs than the permits already 
 Terminal reply/error completion identifiable before receive does not use this permit, and
 `MaxMessageSize` remains an independent single-message cap.
 
-## 5. How To Confirm Congestion Is Happening
+## 5. How to Confirm Congestion Is Happening
 
 ```csharp
 options.ConfigureDispatch().Diagnostics
@@ -379,9 +378,9 @@ options.ConfigureDispatch().Diagnostics
 
 If `backpressured` shows up in the message flow record, it means waiting for a send slot
 genuinely happened. The metric to check alongside it is
-`zlink.mesh_node.request.timeouts` (how many times a request hit the boundary), and which
-execution target is causing the delay is narrowed down using handler execution time and
-per-node processing metrics (the [11. Monitoring](11-monitoring.en.md) ·
+`zlink.mesh_node.request.timeouts` (how many times a request hit the boundary). Use handler
+execution time and per-node processing metrics to narrow down which execution target is
+causing the delay (the [11. Monitoring](11-monitoring.en.md) ·
 [12-operations](12-operations.en.md)).
 
 For byte pressure, inspect `zlink.host.core_hwm.effective_budget`, `applied`, `accounted`,
@@ -391,7 +390,7 @@ and `blocked_ratio` together. For pre-handler-start job pressure, inspect
 and clears only the current epoch's counts and duration.
 
 `zlink.mesh_node.messages.dropped` isn't a backpressure indicator. If this value rises, a
-message was dropped for a separately confirmed reason, not load, so check the `reason`
+message was dropped for another confirmed reason, not load, so check the `reason`
 attribute first.
 
 ## 6. Framework Runtime Coverage

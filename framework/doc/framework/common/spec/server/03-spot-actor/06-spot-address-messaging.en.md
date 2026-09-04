@@ -14,7 +14,7 @@ title: "Spot Address Messaging"
 > [Instance Spot](../00-foundation/02-glossary.en.md#entry-spot-user-spot-and-instance-spot) for the
 > first time via a message.
 
-## 1. Overview Of Spot Address Messaging
+## 1. Overview of Spot Address Messaging
 
 User Spot and Instance Spot use the same logical address and placement
 lifecycle. Only User Spot supports
@@ -38,7 +38,7 @@ User Spot, and the seal/commit/restore procedure for relocation, are owned
 by [Spot And Actor Membership](05-spot-actor-membership.en.md); this document
 explains only the message routing that interlocks with that procedure (§8).
 
-## 2. Spot ID And SpotRef
+## 2. Spot ID and SpotRef
 
 User and [Instance Spot](../00-foundation/02-glossary.en.md#entry-spot-user-spot-and-instance-spot) are
 identified by a Spot ID unique across the whole
@@ -67,7 +67,7 @@ together.
 [`MeshName`](../00-foundation/02-glossary.en.md#meshname) — the name that identifies one
 RouteMesh physical connection group — is only used to decide where to first place a
 [Spot](../00-foundation/02-glossary.en.md#spot) and isn't part of Spot identity. So the
-same Spot ID can't be used concurrently differing only in `MeshName`,
+same Spot ID can't be used concurrently with a different `MeshName`,
 [Spot kind](../00-foundation/02-glossary.en.md#spot-kind), or stable type.
 
 A User/Instance Spot type is a case-sensitive stable name, UTF-8, 1..255
@@ -111,7 +111,7 @@ and status can be discovered — release the linked Entry claim in the
 same transaction only if the stored descriptor's owner lease and
 lifecycle match the request. Stale cleanup from a previous lifecycle can't
 delete a replacement lifecycle's descriptor or Entry claim. `EntrySpotId` is
-included in the descriptor's immutable field and immutable digest, and
+included in the descriptor's immutable fields and immutable digest, and
 can't be changed by `Renew` or a mutable descriptor update.
 
 ### 2.2 SpotRef
@@ -143,7 +143,7 @@ create/join/leave/relocation or
 [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast) subscription — the way
 of delivering one message to multiple Spots of the same Channel by ChannelName and topic.
 
-## 3. Explicit User Spot Creation — Create And GetOrCreate
+## 3. Explicit User Spot Creation — Create and GetOrCreate
 
 The Spot manager's `Create` and `GetOrCreate` only explicitly create a User
 Spot.
@@ -153,12 +153,12 @@ Spot.
 | `Create` | The caller specifies the required stable type, and the framework builds the global Spot ID. |
 | `GetOrCreate` | The caller specifies both the global Spot ID and stable type. |
 
-**A manager overload taking Instance Spot kind, and an Instance-Spot-only
+**A manager overload that takes the Instance Spot kind, and an Instance-Spot-only
 create operation, aren't provided.** Neither operation takes a target node
 or endpoint, and both are fluent calls that can only be submitted once.
 
-`InMesh`, an encoded creation request, and a timeout are optional. They do
-not take a caller callback, target RID, or predicate. Setting the same
+`InMesh`, an encoded creation request, and a timeout are optional. The
+operations do not take a caller callback, target RID, or predicate. Setting the same
 option twice, or running terminal submit twice, is `InvalidOperation`. When
 terminal submit starts, one end-to-end deadline is fixed, applying across
 resolve, reservation, factory, and the
@@ -198,7 +198,7 @@ ZLinkSpotCreateResult result = await spotManager
     .Async(cancellationToken);    // Returns Existing, Created, or Rejected.
 ```
 
-### 3.1 Mesh And Capacity Selection
+### 3.1 Mesh and Capacity Selection
 
 If `InMesh` is specified, that Mesh is used. If omitted, it's auto-selected
 when there is exactly one object-Client-or-Server-role Mesh. With 0
@@ -218,7 +218,7 @@ than once per `(SpotId, ObjectGeneration, creation attempt)` — where
 distinguishes different logical incarnations of the same ActorId/Spot ID — it must safely
 handle re-execution with the same input.**
 
-### 3.2 Convergence Of Concurrent Requests
+### 3.2 Convergence of Concurrent Requests
 
 `Create` issues a lowercase canonical UUID v4 string as the automatic global
 Spot ID. On conflict with active
@@ -237,10 +237,10 @@ and the winner runs factory and callback with its own creation request. A
 different operation doesn't share an earlier attempt's `Rejected` state or
 application reply. Only a redelivery of the same operation ID resends the
 retained terminal result. If authority doesn't change to Ready or Missing
-by the [deadline](../00-foundation/02-glossary.en.md#deadline), it's the Framework exception
-raised when an operation's completion condition isn't met by its allowed deadline,
-[`DeadlineExceeded`](../00-foundation/02-glossary.en.md#timed-out), and the next call re-checks
-the Store's current authority.
+by the [deadline](../00-foundation/02-glossary.en.md#deadline), the operation
+ends with [`DeadlineExceeded`](../00-foundation/02-glossary.en.md#timed-out) — the Framework
+exception raised when an operation's completion condition isn't met by its
+allowed deadline — and the next call re-checks the Store's current authority.
 
 The terminal result returns that attempt's `SpotRef`, the
 `Existing`/`Created`/`Rejected` state, and an optional creation reply
@@ -254,7 +254,7 @@ together.
 
 The reply is the opaque framework message the create callback returned.
 
-### 3.3 Remote User Spot Creation — Commands 47 And 20
+### 3.3 Remote User Spot Creation — Commands 47 and 20
 
 If the owner is a different MeshNode, the source builds a generic
 reservation in the [Location Store](../00-foundation/02-glossary.en.md#location-store),
@@ -289,17 +289,17 @@ include a reply the callback built. The source doesn't use a Location row
 lookup result as the current call's terminal reply, and can't build create
 control from an application packet instead.
 
-### 3.4 Find And Query
+### 3.4 Find and Query
 
 The manager's `Find(SpotId)` returns the current Ready authority's
 `SpotRef` and doesn't start creation. Beyond the manager's current-Spot
 query and an operational query bounded to page size 1..1000 and encoded at
 most 4 MiB, an unbounded list or separate resolver isn't provided.
 
-## 4. Cold Activation — How To Create An Instance Spot For The First Time Via A Message
+## 4. Cold Activation — How to Create an Instance Spot for the First Time via a Message
 
-A [Spot direct](../00-foundation/02-glossary.en.md#spot-direct) call — one that sends a
-send/request to a Spot by specifying a single global Spot ID — by default, only calls an
+By default, a [Spot direct](../00-foundation/02-glossary.en.md#spot-direct) call — one that sends a
+send/request to a Spot by specifying a single global Spot ID — only calls an
 already-existing Spot. A send/request that doesn't specify Instance Spot intent on the call builder
 doesn't run a factory or create a creation intent, even if the RID is
 Missing.
@@ -353,7 +353,7 @@ selects the Mesh to first place a Missing Spot on. It isn't an option that
 moves an Existing Ready owner to a different Mesh or restricts current
 placement.
 
-### 4.1 Procedure — From Resolve To Activation
+### 4.1 Procedure — From Resolve to Activation
 
 The terminal call doesn't split into a separate check and send — it
 performs resolve and activation in the following order.
@@ -460,7 +460,7 @@ first, the current target doesn't create the Spot. Once the authorized
 target's Spot becomes Ready, the first request's identity and deadline are
 preserved and it's delivered exactly once to the current owner.
 
-### 4.1.1 If The Target Process Terminates During Activation
+### 4.1.1 If the Target Process Terminates During Activation
 
 **If the target process terminates after `Reserve`, the startup complete
 authority scan re-reads the Pending creation information.** It either
@@ -474,7 +474,7 @@ messages isn't opened until this restoration finishes — meaning the
 barrier defined by §4.1 step 11 above applies again in the same order after
 a restart.
 
-### 4.2 When Several Nodes Receive The First Message At Once
+### 4.2 When Several Nodes Receive the First Message at Once
 
 Even if several [MeshNode](../00-foundation/02-glossary.en.md#meshnode)s register the
 same stable Instance type, it's treated as one type with multiple
@@ -491,7 +491,7 @@ differs from the stable type specified in the builder, it's
 existing Instance Spot uses the type stored in authority, so it can be sent
 regardless of the number of registered types.
 
-## 5. Direct Call To An Existing Owner And The Completion Boundary
+## 5. Direct Call to an Existing Owner and the Completion Boundary
 
 Spot direct send/request's starter method only takes a global Spot ID and
 typed payload. The framework resolves the current Ready Spot and owner
@@ -524,7 +524,7 @@ across resolve, cold activation, first-message dispatch, and reply. A
 failure after target queue admission isn't hidden-retried by re-finding
 the current owner.
 
-## 6. Route Cache Figures And Message Follow
+## 6. Route Cache Figures and Message Follow
 
 `RouteCacheMaxAge` defaults to 15 seconds and `MessageFollowDuration`
 defaults to 30 seconds. Setting either to 0 turns off cache or
@@ -544,12 +544,12 @@ doesn't read the Store or run an application handler. The Message Follow
 route verifies that Spot ID,
 [ObjectGeneration](../00-foundation/02-glossary.en.md#objectgeneration), source and
 target AuthorityOwnerGeneration, and owner fence all match. Target owner generation
-increases per hop, up to 8 hops max.
+increases per hop, up to 8 hops.
 
-One Message Follow route's queue has no bound on message count or stored
-size on either side, and it respects the negotiated message bound. Message
+One Message Follow route's queue has no bound on either message count or
+stored size, and it respects the negotiated message bound. Message
 Follow preserves the original operation ID, generation, payload, and reply
-route. No route/expiry and a loop end with `Unavailable`; a generation
+route. A missing or expired route, or a loop, ends with `Unavailable`; a generation
 mismatch is `InvalidOperation`. A failed application operation isn't
 resubmitted to an owner found in the Store — only the next call performs a
 fresh resolve.
@@ -559,7 +559,7 @@ incarnation. Spot direct send/request's target is `SpotId`, and an
 `ObjectGeneration` mismatch doesn't reject running the current Ready
 Spot's handler.
 
-### 6.1 Route Installation For SpotWide And PerActor
+### 6.1 Route Installation for SpotWide and PerActor
 
 `SpotWide` User Spot relocation installs the Spot's and member Actors'
 Message Follow routes in the same aggregate commit. An individual
@@ -587,7 +587,7 @@ procedure.
   yet.** So it continues accepting application messages and timers on its
   existing [owner route](../00-foundation/02-glossary.en.md#owner-route).
 
-## 7. Close And The Generation Boundary
+## 7. Close and the Generation Boundary
 
 The Spot manager's public `Close` takes a User Spot's `SpotRef`. For
 Instance Spot, an application handler or timer requests local `Close` from
@@ -614,7 +614,7 @@ closing or stale result.
 with `false` and keeps admission and authority.** The framework doesn't
 secretly move or destroy a member Actor.
 
-### 7.1 Remote Close — Commands 48 And 20
+### 7.1 Remote Close — Commands 48 and 20
 
 When closing a remote owner, the source sends command 48 `userSpotClose` to
 the current owner. The request includes correlation, an operation ID
@@ -636,7 +636,7 @@ failures. The source doesn't re-find the current ref to switch the target
 to a different incarnation, and doesn't use a Location row lookup as
 completion.
 
-## 8. Maintenance Materialization — Moving A Spot Owner
+## 8. Maintenance Materialization — Moving a Spot Owner
 
 Moving an already-existing Spot owner only starts via an explicit host
 `Relocate` transaction. The
@@ -660,7 +660,7 @@ authority commit, and admission order are set by
 - **Only an explicit failure before relay-ready is accepted keeps the
   source.** Afterward, source isn't restored regardless of the
   cutover-submit result, and the procedure continues only on the same
-  target process the selection finished on. If the target process
+  target process selected earlier. If the target process
   terminates, a different target isn't selected and relocation isn't
   automatically resumed.
 - **Not-yet-executed messages at seal time, the accepted journal, and
@@ -675,7 +675,7 @@ The original send/request isn't automatically resubmitted as a new
 operation to the maintenance target, but the source ingress hold after
 seal is relayed via the committed Message Follow route.
 
-## 9. Failure And Observability
+## 9. Failure and Observability
 
 | Condition | Outcome |
 |---|---|
@@ -695,7 +695,7 @@ result, creation attempt, cold activation/close/maintenance operation kind,
 and Message Follow hop/drop and stale classification. Spot ID isn't used
 as a metric label.
 
-## 10. Implementation And Contract-Test Verification Requirements
+## 10. Implementation and Contract-Test Verification Requirements
 
 Only the public surface (the Spot manager's
 `Create`/`GetOrCreate`/`Find`/`Close`, the Spot direct call builder's

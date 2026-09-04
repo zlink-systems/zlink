@@ -11,7 +11,7 @@ unique across the whole Location Store and is case-sensitive. The application do
 choose or hold onto the `NodeRid` where a Spot lives — the framework looks up its current
 location and generation.
 
-## 1. Three Kinds Of Spot
+## 1. Three Kinds of Spot
 
 All three kinds are Spots that carry an ID and state and run callbacks in order, but they
 differ in when they're created, Actor membership, and their closing contract.
@@ -25,16 +25,16 @@ differ in when they're created, Actor membership, and their closing contract.
 | Application close | Not provided | `Close`, or close from a local context | Close from its own handler/timer context |
 | Primary use | The default location for an Actor not yet belonging to a User Spot | Room, stage, zone | An ID-based request-processing unit, like a matchmaking worker |
 
-**Which lifecycle callbacks it receives also differs by kind.** The names follow the
+**The lifecycle callbacks each kind receives also differ.** The names follow the
 language, but the call conditions and order are the same.
 
 | Callback | Entry | User | Instance | When |
 | --- | :---: | :---: | :---: | --- |
 | `Configure` | O | O | O | The configuration phase where handlers are registered |
-| `OnCreate` | X | O | X | Confirms a new User Spot creation request and decides whether to accept it. Not called when an existing Spot was found |
+| `OnCreate` | X | O | X | Confirms a new User Spot creation request and decides whether to accept it. Not called when an existing Spot is found |
 | `OnInitialize` | O | O | O | Initializes the created instance. An Instance Spot receives only this, with no `OnCreate` |
 | `OnClosing` | O | O | O | Before a still-valid local instance is cleaned up (see §4.1 below) |
-| `OnActorJoin` | X | O※ | X | Approve/reject when an existing Actor tries to come to this User Spot |
+| `OnActorJoin` | X | O※ | X | Approves or rejects an existing Actor's attempt to join this User Spot |
 | `OnCreateActor` | O※ | X | X | Approve/reject a new Actor's initial Entry Spot membership |
 | `OnJoinedActor` | O※ | O※ | X | Notifies **the destination** Spot once the join commit is done |
 | `OnLeaveActor` | O※ | O※ | X | Notifies **the origin** Spot after commit. Doesn't mean the Actor is gone |
@@ -42,7 +42,7 @@ language, but the call conditions and order are the same.
 
 ※ Only applies to a Spot that specifies an Actor type and supports Actor membership.
 
-**Membership callbacks run split between the Spot left and the Spot arrived at.** So even
+**Membership callbacks are split between the Spot the Actor leaves and the Spot it joins.** So even
 when an Actor that was in a User Spot returns to the Entry Spot, **the Entry Spot's
 `OnCreateActor` and `OnActorJoin` are not called** — returning to the Entry Spot is default
 membership, so there's no approval step. In both directions, only the arriving side's
@@ -53,7 +53,7 @@ ID or the Framework issues a new one. Instance Spot doesn't use a separate creat
 you specify the instance type on the first message, the Framework either picks an existing
 instance or creates one wherever needed, then processes that same message.
 
-### 1.1 Seeing It In A Real Sample
+### 1.1 Seeing It in a Real Sample
 
 The [Bingo sample](../../../common/sample/bingo/README.en.md) uses all three kinds. The
 Play server registers an Entry Spot and a User Spot to hold rooms; the Matchmaking server
@@ -283,10 +283,10 @@ two together.
     ```
 
 
-A User/Instance Spot also specifies its relocation policy in factory registration. It can't
-be omitted, and what to choose is covered by [Actor & Spot Hosting](07-actor-spot.en.md).
+A User Spot or Instance Spot also specifies its relocation policy in factory registration.
+It can't be omitted, and what to choose is covered by [Actor & Spot Hosting](07-actor-spot.en.md).
 
-## 2. Registering With The Object Server
+## 2. Registering with the Object Server
 
 The MeshNode that runs a Spot registers the Object Server role and its factory. Placement
 targets aren't chosen with a fixed `NodeRid` — any `Serving` node that registered the same
@@ -403,7 +403,7 @@ decided by the Spot kind and its execution mode.
 | User Spot `PerActor` | Serializes separately per Actor and per Spot lane. Different lanes can run concurrently | Each Actor owns its own. Put state shared across lanes in external storage |
 | Instance Spot | Serializes the Spot queue's direct handlers and timer. There's no Actor queue | The Spot instance owns it |
 
-<iframe class="zlink-diagram" src="/common/diagrams/06-spot-en.html" title="The Spot execution model — concurrency scope" loading="lazy" style="width:100%;border:0"></iframe>
+<iframe class="zlink-diagram" src="/common/diagrams/06-spot-en.html" title="Spot execution model — SpotWide vs. PerActor" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/06-spot-en.html" target="_blank">↗ View larger</a></p>
 
 The default is **`SpotWide`**, and most cases use this mode. Because every callback for that
@@ -412,7 +412,7 @@ share the same state without any separate synchronization. In relocation too, th
 its member Actors move together as one unit. On the other hand, one slow callback delays
 every subsequent callback for that Spot.
 
-Here is concretely how SpotWide handles many requests without locks. Every callback bound for
+Here is how SpotWide handles many requests without locks. Every callback bound for
 one Spot (including other Actors' messages, timers, and lifecycle) passes through one common
 gate and runs one turn at a time on a single lane. Because no two turns run at the same moment,
 the handler mutates Spot and member-Actor state directly with plain code and no lock.
@@ -448,11 +448,11 @@ a structure where the Spot callback receives the message and hands it over.
 Trying to register Actor membership or a Logical Multicast subscription on an Instance Spot
 is rejected **at the time of registration or Spot preparation**, not while running.
 
-## 3. Creating A User Spot
+## 3. Creating a User Spot
 
 The two calls have different purposes. **`Create` creates a new Spot**, and **`GetOrCreate`
-secures a Spot to use under that ID.** Which one to use is decided by "what do you want to
-happen if it already exists."
+secures a Spot to use under that ID.** Choose between them based on what you want to happen
+if it already exists.
 
 | | `Create` | `GetOrCreate` |
 | --- | --- | --- |
@@ -462,7 +462,7 @@ happen if it already exists."
 | SpotId | Issued by the Framework | Specified by the caller |
 | On failure | No usable Spot | No usable Spot |
 
-**`Create` — when whether it was created is itself the business result.** Use it where
+**`Create` — when creation itself is the business result.** Use it where
 creation is the point, like opening a new room. The result is one of two: it was created
 (`Created`) or the create callback rejected it (`Rejected`).
 
@@ -587,8 +587,8 @@ creation is the point, like opening a new room. The result is one of two: it was
     ```
 
 **`GetOrCreate` — when it's enough that the ID is usable.** Use it where you need "use it if
-it exists, create it if not." Whether it already existed (`Existing`) or was just created
-(`Created`) can be told apart by the result, and both give you a `SpotRef` ready to use right
+it exists, create it if not." The result distinguishes whether it already existed (`Existing`)
+or was just created (`Created`), and both give you a `SpotRef` ready to use right
 away. Even if multiple callers request the same ID at once, the Framework runs the create
 attempt only once, so the application doesn't have to guard against the race itself.
 
@@ -737,7 +737,7 @@ general messaging -- use it only to close that same incarnation.
     ```
 
 
-## 4. Writing A Spot
+## 4. Writing a Spot
 
 A Spot handler follows different authoring rules than a channel handler in
 [05-channel-messaging](05-channel-messaging.en.md). Address, lifetime, execution, and state
@@ -756,7 +756,7 @@ instance as `Handle`'s first argument. The Framework creates the handler once pe
 activation and cleans it up when the Spot closes or relocates. An Actor handler is bound to
 its Actor's activation the same way.
 
-### 4.1 Handler Kinds And The Interface To Implement
+### 4.1 Handler Kinds and the Interface to Implement
 
 Which interface to implement depends on what it receives. Whichever it is, it has to match
 what was registered in `Configure()`.
@@ -843,8 +843,8 @@ A handler takes the target Spot instance as its first argument. It runs inside t
 it touches state directly, with no lock.
 
 > **See it in a sample — [TicTacToe](../../../common/sample/tictactoe/README.en.md).** The
-> handler where the player in the room makes a move. It handles a request addressed to a
-> member Actor, receiving the Spot and the Actor together. Actual code from the repository.
+> handler is where the player in the room makes a move. It handles a request addressed to a
+> member Actor, receiving the Spot and the Actor together. This is actual code from the repository.
 
 === "C#/.NET"
 
@@ -1091,8 +1091,8 @@ The four branches in their minimal form look like this.
     ```
 
 
-A request addressed to an Actor is an actor request handler and only differs from the same
-arguments in that the return value is the reply.
+An Actor request handler takes the same arguments; the only difference is that its return
+value is the reply.
 
 Register handlers in `Configure()` and perform initialization and cleanup in lifecycle
 callbacks.
@@ -1293,7 +1293,7 @@ Framework cancels the cleanup token when the `Deadline` runs out.
 | Host shutdown | O | O | O | When the host cleans up a local Spot with no relocation |
 | Relocation out | X | O | O | After committing the owner to the target, when the source instance is cleaned up |
 
-**Remember two spots where it's not called.**
+**Remember the two cases where it's not called.**
 
 - **Not called if close fails.** If Actor membership is still left on a User Spot and the
   explicit close ends in failure, `OnClosing` doesn't run. This is why you shouldn't assume
@@ -1312,7 +1312,7 @@ On host shutdown, the callback runs **while Actor membership and the local insta
 still alive.** Cleanup happens after the callback finishes, so code inside it that reads
 member Actors is valid.
 
-### 4.2 The Activation Scope Of A Spot And Actor
+### 4.2 The Activation Scope of a Spot and Actor
 
 When the Framework activates a Spot, it creates one DI scope and resolves the Spot body's
 and Spot handlers' dependencies within that scope. The scope is cleaned up together when the
@@ -1337,7 +1337,7 @@ Registering the handler type as `Transient` or `Singleton` doesn't change the li
 Framework sets. The Framework creates the handler and only resolves dependencies within the
 activation scope.
 
-**The first choice is not to access storage directly from the Spot.** Ask a service with a
+**Prefer not to access storage directly from the Spot.** Ask a service with a
 channel handler to save/query, and let the Spot own only in-memory state and execution
 order. A channel handler has a scope per dispatch, so it's fine for it to receive an ORM in
 its constructor.
@@ -1531,7 +1531,7 @@ singleton service; infrastructure shared by multiple Spots (cache, counter) goes
 singleton with its own synchronization. A handler field is never the right place to keep
 state, in any of these cases.
 
-## 5. Sending A Message To A Spot
+## 5. Sending a Message to a Spot
 
 Regular User Spot messaging needs only the SpotId. The Framework looks up the location and
 generation from the current authority.
@@ -1714,27 +1714,27 @@ different one after receiving a failure result is a new operation for the applic
 previous target may already have run it, so **handling duplicate execution is the sender's
 responsibility.**
 
-### 5.1 Calling A Channel From A Spot Handler
+### 5.1 Calling a Channel from a Spot Handler
 
 A Spot handler or timer can start a channel send/request. **That ChannelName doesn't have to
 exist on the MeshNode that owns the Spot** -- as long as one send route with that name is
 registered anywhere in the same process, it's usable. It can be a route on a different
 RouteMesh, or a ClientServer client's route.
 
-**If it's not in the same process, it ends there.** It's not resolved through a relay on
-another process or MeshNode -- it ends with `NotFound`. That's why, when deciding which node
+**Route resolution stops at the process boundary.** The route isn't resolved through a relay
+on another process or MeshNode -- it ends with `NotFound`. That's why, when deciding which node
 to place a Spot on, you also check **whether a send route for the channels that Spot calls
 is registered in the same process.**
 
-## 6. Timer And Worker
+## 6. Timer and Worker
 
 Both start from the Spot context but serve different purposes. **A timer registers work to
 run periodically,** and **a worker runs a slow one-off task outside the Spot queue.**
 
-### 6.1 Timer -- Periodic Execution
+### 6.1 Timer — Periodic Execution
 
 A timer registers a name, period, and handler with the Spot context. The tick goes into that
-Spot's execution queue, so the handler can touch Spot state directly, as-is. Registration
+Spot's execution queue, so the handler can access Spot state directly. Registration
 returns a timer handle, used later to cancel it.
 
 === "C#/.NET"
@@ -1926,7 +1926,7 @@ In minimal form, it looks like this.
     ```
 
 
-#### The Policy For Handling A Tick Past Its Scheduled Time
+#### The Policy for Handling a Tick Past Its Scheduled Time
 
 If work piles up in the Spot queue or a handler runs long, a tick executes later than its
 scheduled time. `OverrunPolicy` decides how a late tick is handled.
@@ -2015,28 +2015,28 @@ number of skipped ticks.
     ```
 
 
-#### When A Handler Throws
+#### When a Handler Throws
 
 If `StopOnUnhandledException` is left at its default `false`, only that tick fails and the
 timer keeps running. Setting it to `true` stops that timer -- use it when you need to stop
 the same failure from repeating every period. Either way, the failure is recorded in
 diagnostics, so check it in logs/trace (see chapter `11. Monitoring` §3).
 
-#### Relocation And Timer
+#### Relocation and Timer
 
 When a Spot moves to another node, the Framework moves the timer's name, handler type,
 period, timer options, schedule cursor, and any tick not yet executed together. So a
 relocation adapter doesn't need to save the timer or re-register it at the target
 ([§7](#7-signaling-when-relocation-may-begin)).
 
-### 6.2 Worker -- Running Long Work Outside The Spot Queue
+### 6.2 Worker — Running Long Work Outside the Spot Queue
 
 A Spot's execution queue runs only one thing at a time. If you wait directly inside a
 handler for a heavy computation or external I/O, every other piece of work for that Spot
 stops for that whole time. Delegate this kind of work to a worker call.
 
 **Selection criteria.** If the work to delegate is **synchronous code that occupies a
-thread,** use `RunCpuWorker`; if it's **asynchronous code that awaits to complete,** use
+thread,** use `RunCpuWorker`; if it's **asynchronous code that awaits completion,** use
 `RunIoWorker`.
 
 | | `RunCpuWorker` | `RunIoWorker` |
@@ -2236,7 +2236,7 @@ Work that waits on I/O is handed to `RunIoWorker`.
     ```
 
 
-**Three terminals for receiving the result.**
+**There are three terminal operations for receiving the result.**
 
 | Terminal | Spot execution rights | Where to use it |
 | --- | --- | --- |
@@ -2267,12 +2267,12 @@ chosen at factory registration.
 | `FrameworkManaged` (default) | The Framework -- between a completed turn and the next | Most Spots |
 | `ApplicationSignaled` | The application -- the end of the turn that called `Defer()` | A Spot whose state-consistency unit spans multiple turns |
 
-**The condition under which the default mode holds.** The Framework doesn't interrupt a
-running turn. `Capture` is only called after one handler and one tick have finished, so if
+**When the default mode works.** The Framework doesn't interrupt a running turn. `Capture`
+is only called after a handler or tick has finished, so if
 state changes complete within a single turn, the state serialized at a turn boundary is
 always consistent.
 
-**The condition under which the default mode doesn't hold.** If the state-consistency unit
+**When the default mode doesn't work.** If the state-consistency unit
 spans multiple turns, the state serialized at a turn boundary can be incomplete. An FPS round
 is an example -- a round consists of a start tick, many input packets, and a settlement
 tick, and the state in between can't resume the round even if restored. The Framework knows
@@ -2516,4 +2516,3 @@ Follow these rules.
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=Math.max(d.body?d.body.scrollHeight:0,d.documentElement?d.documentElement.scrollHeight:0);if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>
-

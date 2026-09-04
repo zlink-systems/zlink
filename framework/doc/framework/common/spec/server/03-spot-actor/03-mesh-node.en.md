@@ -4,7 +4,7 @@ title: "MeshNode"
 
 # MeshNode
 
-[Spot And Actor topic index](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 02. Spot Messaging](02-spot-messaging.en.md) · [Next: 04. Actor Model](04-actor-model.en.md)
+[Spot and Actor topic index](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 02. Spot Messaging](02-spot-messaging.en.md) · [Next: 04. Actor Model](04-actor-model.en.md)
 
 > Defines the identity, object role, object placement conditions, and
 > startup order of a MeshNode participating in a RouteMesh.
@@ -17,13 +17,13 @@ don't use the MeshNode RID as their own logical identity. The framework links
 the global logical identity of an Actor and [Spot](../00-foundation/02-glossary.en.md#spot)
 to the route of the MeshNode where the current owner exists.
 
-## 2. Identity And Configuration A MeshNode Has
+## 2. MeshNode Identity and Configuration
 
 The following information belongs to one MeshNode.
 
 | Item | Meaning and mutability |
 |---|---|
-| [`MeshName`](../00-foundation/02-glossary.en.md#meshname)(a name identifying one physical connection group of a RouteMesh) | Determines which physical [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) and, the registration information a MeshNode publishes to the Location Store to announce its identity and connection information for RouteMesh automatic discovery, [MeshNode descriptor](../00-foundation/02-glossary.en.md#meshnode-descriptor) namespace it belongs to. Can't be changed after the MeshNode starts. |
+| [`MeshName`](../00-foundation/02-glossary.en.md#meshname)(a name identifying one physical connection group of a RouteMesh) | Determines which physical [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) and [MeshNode descriptor](../00-foundation/02-glossary.en.md#meshnode-descriptor) namespace it belongs to. A MeshNode descriptor is the registration information a MeshNode publishes to the Location Store to announce its identity and connection information for RouteMesh automatic discovery. Can't be changed after the MeshNode starts. |
 | [Routing ID](../00-foundation/02-glossary.en.md#routing-id) (`RID`) | A byte value identifying a MeshNode within the same RouteMesh; the transport identity that identifies the current MeshNode lifecycle. |
 | Endpoint | The address other peers connect to on this MeshNode's ROUTER. |
 | [`ChannelName`](../00-foundation/02-glossary.en.md#channelname)(a name identifying the Channel scope a message is sent to) set | The list of Channels it participates in with a Server role. Zero or more can be registered, and can't be changed after starting. |
@@ -53,7 +53,7 @@ MeshNode descriptor is published, the following settings can't be changed.
 
 ## 3. Routing ID
 
-### 3.1 The RID Used By Automatic Discovery
+### 3.1 The RID Used by Automatic Discovery
 
 For a MeshNode using automatic discovery, the framework generates a new RID
 for each lifecycle. The caller can only specify a prefix used for
@@ -126,7 +126,7 @@ Setting a fixed RID on a MeshNode whose object role is `Client` or `Server`,
 or setting automatic mode and fixed RID together, is a startup configuration
 error.
 
-## 4. Object Role And The Features That Can Be Registered
+## 4. Object Role and the Features That Can Be Registered
 
 Each MeshNode selects one object role.
 
@@ -142,10 +142,10 @@ object runtime. Factory and Entry Spot can only be registered on the `Server`
 builder. The Entry Spot ID is issued by the framework — the caller can't
 generate it or specify a fixed RID for it.
 
-An Object Client can't register a Spot/Actor factory or, the way an
-application sends a message to a specific MeshNode by specifying both a
-MeshName and a target RID together, an application
-[Node direct](../00-foundation/02-glossary.en.md#node-direct) handler. A RouteMesh Channel Server independent of object features can
+An Object Client can't register a Spot/Actor factory or an application
+[Node direct](../00-foundation/02-glossary.en.md#node-direct) handler, which sends a
+message to a specific MeshNode by specifying both a MeshName and a target RID.
+A RouteMesh Channel Server independent of object features can
 be registered on the same MeshNode. This combination isn't an object
 placement target, but it is a Channel target.
 
@@ -232,11 +232,11 @@ isn't provided.
 An Object Server's MeshNode descriptor includes a node-wide placement weight,
 Actor/Spot capacity projection, and capability per registered type.
 
-### 5.1 Weight And Capacity
+### 5.1 Weight and Capacity
 
 | Item | Contract |
 |---|---|
-| Placement [weight](../00-foundation/02-glossary.en.md#weight) | Range `0..10000`, default `100`. Independent of Channel weight. An out-of-range value is a configuration error at startup config and at runtime change. |
+| Placement [weight](../00-foundation/02-glossary.en.md#weight) | Range `0..10000`, default `100`. Independent of Channel weight. An out-of-range value is a configuration error during startup configuration and runtime changes. |
 | Per-node Actor limit | Default `0` means no limit. If positive, it's the maximum Actor count in range `1..2^31-1`. A negative value is a startup configuration error. |
 | Per-node Spot limit | Default `0` means no limit. If positive, the range is `1..2^31-1`, summing User Spot and Instance Spot. A negative value is a startup configuration error. |
 | Per-Spot-stable-type limit | Default `0` means no limit. If positive, the range is `1..2^31-1`, applying to that User/Instance Spot type. A negative value is a startup configuration error. |
@@ -262,7 +262,7 @@ least a 64-bit integer so it doesn't overflow.
 The startup builder, runtime option, MeshNode descriptor, and monitoring
 snapshot use the same weight and capacity values.
 
-### 5.2 Conditions For Selecting A Target Node
+### 5.2 Conditions for Selecting a Target Node
 
 A logical create's caller doesn't specify a target RID, predicate, or
 placement callback. Even when `InMesh` is specified, it only selects the Mesh
@@ -283,7 +283,7 @@ require the application to select a target RID or owner token.
 If `GetOrCreate` found an already-Ready object, it doesn't reapply the
 current owner's capacity and weight.
 
-## 6. Registration And Startup Order
+## 6. Registration and Startup Order
 
 The framework starts a MeshNode in the following order.
 
@@ -299,12 +299,11 @@ The framework starts a MeshNode in the following order.
    peers.
 4. Publishes the MeshNode descriptor containing all necessary information
    and computes which peers to connect to.
-5. After finishing, the process of checking a connecting remote node's
-   MeshName, RID, lifecycle, descriptor, object role, and security identity
-   to decide whether to admit it as a ready peer,
-   [Peer admission](../00-foundation/02-glossary.en.md#peer-admission), and local
-   handler/object runtime preparation, publishes `Serving` state and opens up
-   new target selection.
+5. After completing [Peer admission](../00-foundation/02-glossary.en.md#peer-admission),
+   which checks a connecting remote node's MeshName, RID, lifecycle,
+   descriptor, object role, and security identity to decide whether to admit
+   it as a ready peer, and preparing the local handler and object runtime, the
+   framework publishes `Serving` state and opens up new target selection.
 
 A host using an object role must explicitly register a Location Store.
 
@@ -312,7 +311,7 @@ In manual mode, the application provides the endpoint. If the configuration
 uses an expected RID, the expected RID and endpoint are provided together.
 Manual mode doesn't provide an object runtime.
 
-## 7. Peer Admission And Messaging
+## 7. Peer Admission and Messaging
 
 ### 7.1 Peer Connection
 
@@ -325,7 +324,7 @@ The peer handshake exchanges the following information.
 - The immutable `ChannelName` set
 - Security identity
 
-If `MeshName` or trust profile differ, or it's a duplicate pipe of the same
+If `MeshName` differs or the trust profiles differ, or it's a duplicate pipe of the same
 lifecycle identity, it isn't admitted.
 
 Lifecycle generation is a non-zero opaque equality token. Which lifecycle is
@@ -335,13 +334,13 @@ When reconnecting with a fixed RID in a manual topology, a connection of a
 different generation is only included in target selection after all of the
 following conditions are met.
 
-1. The application configuration has intent to connect to that peer.
+1. The application configuration expresses intent to connect to that peer.
 2. Authenticated connection handover has completed.
 3. Service liveness confirmation has established that the previous pipe has
    ended.
 
-In automatic RouteMesh, only the MeshNode with the smaller RID starts the
-connect. If a duplicate candidate arises from manual bidirectional connect or
+In automatic RouteMesh, only the MeshNode with the smaller RID initiates the
+connection. If a duplicate candidate arises from manual bidirectional connect or
 automatic connection competition, only one
 [ready](../00-foundation/02-glossary.en.md#ready) connection is kept, per
 [RouteMesh's Duplicate Peer Connection Rule](../02-channel-transport/01-channel-topology.en.md#automatic-only-the-meshnode-with-the-smaller-rid-starts-the-connection).
@@ -392,7 +391,7 @@ change node-wide placement weight either.
 |---|---|
 | Node direct | Submitted once to a specific target RID within the caller-specified `MeshName`. An Object Client RID isn't an application Node direct target. |
 | Channel | A process-local `ChannelName` index determines the RouteMesh. One Server that's ready in that Mesh and has Channel weight greater than 0 is selected in proportion to weight. |
-| [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast)(a way of delivering one message to several Spots in the same Channel via ChannelName and topic) | First, every remote MeshNode that's a member of that ChannelName, is ready, and has Channel weight greater than 0 is selected. Each receiving MeshNode delivers the message to every local Spot subscription matching the ChannelName and topic condition. |
+| [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast)(a way of delivering one message to several Spots in the same Channel via ChannelName and topic) | First, every remote MeshNode that is a member of that ChannelName and is ready and has Channel weight greater than 0 is selected. Each receiving MeshNode delivers the message to every local Spot subscription matching the ChannelName and topic condition. |
 | Actor direct | After confirming the global ActorId's current Ready authority, submits to the current owner route. |
 | [Spot direct](../00-foundation/02-glossary.en.md#spot-direct)(a way of specifying a single global Spot ID to send/request to that Spot) | After confirming the global SpotId's current [Ready](../00-foundation/02-glossary.en.md#ready) [authority](../00-foundation/02-glossary.en.md#authority), submits to the current [owner route](../00-foundation/02-glossary.en.md#owner-route). |
 
@@ -453,7 +452,7 @@ node of the target Channel. The receiving MeshNode acquires a reference to
 the same immutable message storage for each matching local Spot and puts it
 on the Spot queue.
 
-## 8. Drain And Shutdown
+## 8. Drain and Shutdown
 
 A `Relocating` node is excluded as a target for the following new work.
 
@@ -498,7 +497,7 @@ label. The detailed contract is defined by
 ## 10. Verification Requirements
 
 The implementation and contract tests confirm the following using only the
-public surface (MeshNode builder, startup result, MeshNode descriptor,
+public surface (the MeshNode builder, startup result, MeshNode descriptor,
 runtime snapshot and event).
 
 - A duplicate `MeshName` in the same process and an invalid object role
@@ -540,5 +539,4 @@ runtime snapshot and event).
 
 ---
 
-[Spot And Actor topic index](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 02. Spot Messaging](02-spot-messaging.en.md) · [Next: 04. Actor Model](04-actor-model.en.md)
-</content>
+[Spot and Actor topic index](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 02. Spot Messaging](02-spot-messaging.en.md) · [Next: 04. Actor Model](04-actor-model.en.md)

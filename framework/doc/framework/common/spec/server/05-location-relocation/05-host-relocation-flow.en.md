@@ -55,9 +55,9 @@ change's result isn't received, success or failure isn't guessed — the same re
 re-read. Source admission isn't reopened, and target application message processing
 isn't started, before confirming the actual owner.
 
-The name distinguishing, among the connection groups where several nodes exchange
-messages (a [RouteMesh](../00-foundation/02-glossary.en.md#routemesh)), the group of nodes
-connected under the same name is called a
+A connection group in which several nodes exchange messages is called a
+[RouteMesh](../00-foundation/02-glossary.en.md#routemesh). The name that identifies the group of
+nodes connected under the same name is called a
 [MeshName](../00-foundation/02-glossary.en.md#meshname). The name selecting a target among
 nodes participating in the same Channel is
 [ChannelName](../00-foundation/02-glossary.en.md#channelname). The application doesn't directly
@@ -90,9 +90,9 @@ the terminal result of a pending request completing after relocation — is defi
 [Relocation Store (Redis)](03-relocation-store-redis.en.md). This document doesn't
 repeat the transfer format — it only defines the public order of host operations.
 
-## 2. Operations The Application Chooses
+## 2. Operations the Application Chooses
 
-### 2.1 Choosing A Relocate Mode
+### 2.1 Choosing a Relocate Mode
 
 The caller must specify a mode when calling `Relocate`. The only difference between the
 two modes is the target application version. The subsequent queue seal, state restore,
@@ -198,7 +198,7 @@ target is found, the same values are preserved so the caller can confirm what co
 it was waiting on. If `Relocate` ends `Blocked`, the caller can retry, or `Shutdown`
 without continuity.
 
-## 3. Host State And Completion Results
+## 3. Host State and Completion Results
 
 The host lifecycle is owned by a single `FrameworkRuntimeState`.
 
@@ -217,8 +217,8 @@ where it's ready to accept new application work is called
 | 5 | `Stopped` | Application resource, infrastructure resource, and listener cleanup are finished. |
 | 6 | `Error` | Can't serve due to a startup or runtime error. |
 
-`IsReady` is true only in `Serving`. A component lifecycle snapshot is information
-observing each component's state and doesn't substitute for host state. Per-component
+`IsReady` is true only in `Serving`. A component lifecycle snapshot provides information
+about each component's state and doesn't substitute for host state. Per-component
 `Drain`, `AwaitDrained`, `Stop`, or a public operation targeting only some Meshes isn't
 provided.
 
@@ -268,7 +268,7 @@ it's the result of finishing cleanup via bounded teardown, with host state `Stop
 Relocation failure is owned by the relocation result and isn't mixed into the
 termination reason.
 
-## 4. Conditions Checked Before Selecting A Target
+## 4. Conditions Checked Before Selecting a Target
 
 `Relocate` started from `Serving` checks the whole host at once before changing host
 state and application admission. At this point it doesn't block new work for the moving
@@ -297,7 +297,7 @@ The scope the runtime checks is local registration. It doesn't check connections
 process made outside the Framework, so the condition that the whole set of participating
 processes uses only automatic discovery is guaranteed by the deployment.
 
-## 5. Selecting A Target Matching The Mode
+## 5. Selecting a Target Matching the Mode
 
 The Framework narrows down targets in this order.
 
@@ -315,16 +315,16 @@ by which new work is assigned among several candidates is called
 [weight](../00-foundation/02-glossary.en.md#weight). This value only applies when there are multiple
 targets satisfying the conditions.
 
-A descriptor being published, or a connect intent having been made, alone doesn't judge
-a target as ready. The result of copying state at a specific point in time into a
+A published descriptor or a created connect intent alone doesn't establish that a target
+is ready. The result of copying state at a specific point in time into a
 read-only value is called a [snapshot](../00-foundation/02-glossary.en.md#snapshot). If the descriptor
 snapshot is empty, contains only the source itself, or every remote peer is draining,
 there's no target.
 
 ### 5.1 When There's No Target Yet
 
-Before searching for a target, whether there's a unit to move is checked first. If the
-source owns no Actor, User Spot, or Instance Spot, there's nothing to move, so a target
+Before searching for a target, the Framework first checks whether there's a unit to move. If
+the source owns no Actor, User Spot, or Instance Spot, there's nothing to move, so a target
 isn't searched for and it ends with `Relocated/None`. Relocation's purpose is workload
 migration — a host with no workload to move isn't blocked just because it has no target.
 Even in this case, the host state transition and admission closing are the same as any
@@ -371,7 +371,7 @@ replacement descriptor and reflect the source's state in selection. An existing
 connection with accepted work and a remaining barrier isn't closed immediately just
 because the descriptor changed.
 
-## 6. Concurrent Calls And Cancellation
+## 6. Concurrent Calls and Cancellation
 
 | Situation | Result |
 |---|---|
@@ -386,7 +386,7 @@ because the descriptor changed.
 Caller cancellation ends only that waiter — it doesn't cancel the shared operation.
 `Shutdown` interrupts startup in `Preparing` and starts bounded cleanup in `Error`.
 
-## 7. Relocation Units And Batch Order
+## 7. Relocation Units and Batch Order
 
 The bundle of Actors or a Spot the Framework can move independently is called a
 [relocation unit](../00-foundation/02-glossary.en.md#relocation-unit). The relationship of which Entry
@@ -438,8 +438,8 @@ flowchart LR
 
 For relocation correctness, the Framework sets no separate cap on concurrent unit count,
 participant count, or relay record count. How much moves concurrently per unit is paced
-by the in-flight payload budget, which limits the bytes in-progress relocation payloads
-occupy on a peer connection at the same time; the budget's calculation and waiting rules
+by the in-flight payload budget, which limits the bytes occupied by in-progress relocation
+payloads on a peer connection at the same time; the budget's calculation and waiting rules
 are owned by
 [Complete Actor And Spot Relocation Flow
 §5.3](04-relocation-flow.en.md#53-no-relocation-specific-capacity-limit). When the
@@ -454,8 +454,8 @@ If the target is already saturated, chunk intake slows down, so the source's bud
 releases come later and the next unit's start is also delayed — a move meant to shed
 load is slowed by that load. This is the intended result of the backpressure contract
 that never bypasses saturation; no bypass path is created for relocation. If the move
-doesn't finish within the host operation deadline, the existing rule (§8) that no new
-unit relocation starts applies, so the operator first decides between extending the
+doesn't finish within the host operation deadline, the existing §8 rule against starting
+any new unit relocation applies, so the operator first decides between extending the
 deadline and relieving target load. Deadline sizing uses the transfer throughput
 observed in that deployment as input, not a formula.
 
@@ -527,7 +527,7 @@ metric names and instruments is owned by
 [Runtime metrics](../06-observability/02-runtime-metrics.en.md); this section fixes only
 the point definitions and who measures them.
 
-Each unit targets under 1 second by default. **This value is neither a timeout nor a
+Each unit has a default target of under 1 second. **This value is neither a timeout nor a
 correctness condition** — it shares the same number as
 [Complete Actor And Spot Relocation Flow's `RelocationCutoverWaitTimeout` (default
 1,000 ms)](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover) but is a
@@ -550,7 +550,7 @@ the Restore validity deadline. If source doesn't attempt every unit's cutover, t
 doesn't become `Relocated`; success or failure of an attempted submit isn't a completion
 condition.
 
-## 9. The Order For Relocating One Unit — Owned By 04
+## 9. The Order for Relocating One Unit — Owned by 04
 
 The single source for one Actor or Spot unit's owner transition, ordered relay,
 temporary-queue installation, checksum verification, cutover, Location Store CAS, queue
@@ -572,7 +572,7 @@ what values it changes together, and which callbacks it calls or doesn't call, i
 | Source runtime | Finishes currently running work and stops application dispatch. Fixes application state and the not-yet-executed queue/timers as a payload in source memory and sends it directly to the target, and relays to the target only messages that arrive at the old address after capture. It doesn't change the Location Store. |
 | Target runtime | Assembles the received chunks and verifies the checksum, then creates an Actor or Spot using the same ID and restores state and existing work. After receiving the relay cutover boundary, or reaching the cutover-wait fallback after relay-ready, it CASes the Location Store from source to target and opens the queue only if that succeeds. |
 | Location Store | Records which node currently processes an Actor or Spot. When multiple values must change together, changes all or none. |
-| Relocation Store | Holds no handoff payload. As its remaining responsibilities it records only the record made when an Instance Spot is newly created by its first message, and the terminal result of a pending request completing after relocation. |
+| Relocation Store | Holds no handoff payload. Its only remaining responsibilities are recording when an Instance Spot is newly created by its first message and recording the terminal result of a pending request completing after relocation. |
 
 `RelocationCutoverWaitTimeout` (the wait time from the relay-ready reply until cutover
 arrives, **default 1,000 ms**) is owned by
@@ -591,9 +591,9 @@ The Framework doesn't add a separate state contract ID or generic state type.
 One relocation unit's temporary queue has no bound on record count or stored size, and
 the Framework doesn't create an additional temporary queue for the same object.
 
-## 10. Differences By Unit Kind
+## 10. Differences by Unit Kind
 
-### 10.1 An Actor Belonging To An Entry Spot
+### 10.1 An Actor Belonging to an Entry Spot
 
 An Entry Spot instance belongs to the Object Server lifecycle, so it isn't moved to
 another node. Only Actors belonging to a source Entry Spot are moved, each as an
@@ -604,8 +604,8 @@ source Entry Spot's `OnLeaveActor`/`OnActorJoin`.
 
 ### 10.2 PerActor User Spot
 
-A `PerActor` User Spot changes the node handling Spot messages and each Actor
-separately. So even while some Actors are still on the source, already-moved Actors and
+A `PerActor` User Spot changes the node handling Spot messages and the node handling each
+Actor separately. So even while some Actors are still on the source, already-moved Actors and
 new Spot messages can be handled on the target.
 
 1. The target runtime creates an empty Spot instance using the same SpotId and
@@ -658,8 +658,9 @@ page records at most 1,024 entries, and one encoded page's size is at most 1 MiB
 example, with 2,500 Actors, at least three pages are used. The Framework confirms the
 total Actor count and each page's content matches the originally stored list. Only when
 everything matches does it change the node processing the User Spot and all Actors from
-source to target, all at once. If a conflict occurs mid-way, only some Actors' location
-isn't changed. This method — changing everything or nothing, only if the first-read
+source to target, all at once. If a conflict occurs mid-way, it doesn't change the
+locations of only some Actors. This method — changing everything or nothing, only if the
+first-read
 Store version is unchanged — is called
 [CAS](../00-foundation/02-glossary.en.md#compare-and-set).
 
@@ -678,14 +679,14 @@ Store records the target as the current processing node, the target processes th
 restored queue and timers. Since an Instance Spot has no Actor, Actor location or
 Session binding isn't updated.
 
-Host relocation only moves an Instance Spot already existing on the source. It doesn't
+Host relocation only moves an Instance Spot that already exists on the source. It doesn't
 start [cold activation](../00-foundation/02-glossary.en.md#cold-activation), which creates an
 Instance Spot not on the source from its first message.
 
-### 10.5 Callbacks Not Called During The Move
+### 10.5 Callbacks Not Called During the Move
 
-Entry Spot and `PerActor` User Spot Actor relocation isn't a join or leave the
-application requested. So `OnActorJoin`, `OnJoinedActor`, and `OnLeaveActor` aren't
+Entry Spot and `PerActor` User Spot Actor relocation isn't a join or leave requested by
+the application. So `OnActorJoin`, `OnJoinedActor`, and `OnLeaveActor` aren't
 called. The Framework moves Actor state, not-yet-executed queue, and timers, and
 changes only the current processing node.
 
@@ -705,7 +706,7 @@ owned by [Spot and Actor membership](../03-spot-actor/05-spot-actor-membership.e
 call the adapter. Instance Spot maintenance relocation doesn't newly create an Instance
 Spot not present on the source.
 
-## 11. Which Location Is Kept On A Mid-Way Failure
+## 11. Which Location Is Kept on a Mid-Way Failure
 
 If the target explicitly fails before the relay-ready reply is accepted, the source
 keeps processing messages. The Framework doesn't expose the target instance, discards
@@ -732,10 +733,10 @@ afterward isn't part of the contract. The source sends one-way cutover, waits fo
 completion reply, and changes to Message Follow. After CAS and queue opening, the target
 sends the Session route update one-way. This choice doesn't guarantee exactly-once
 behavior or global ordering across a process-crash window. The specific failure result the
-application observes is defined by [§13 Relocate Completion And
+application observes is defined by [§13 Relocate Completion and
 Failure](#13-relocate-completion-and-failure).
 
-## 12. Moving Pending Messages, Timers, And Sessions
+## 12. Moving Pending Messages, Timers, and Sessions
 
 The number distinguishing whether an object under the same ID was deleted and
 re-created is called [ObjectGeneration](../00-foundation/02-glossary.en.md#objectgeneration). The
@@ -746,7 +747,7 @@ the source temporarily holds new messages during a move is called
 
 | Resource | Move rule |
 |---|---|
-| A message arriving after new work is blocked | The source holds arriving messages with no bound on record count or stored size. If the owner change succeeds, operation identity and ObjectGeneration are kept and delivered to the target. On an explicit cancellation before the relay-ready reply is accepted, it's restored to the source queue in arrival order; afterward it isn't restored to source. |
+| A message arriving after new work is blocked | The source holds arriving messages with no bound on record count or stored size. If the owner change succeeds, the message is delivered to the target with its operation identity and ObjectGeneration preserved. On an explicit cancellation before the relay-ready reply is accepted, it's restored to the source queue in arrival order; afterward it isn't restored to source. |
 | `SpotWide`/Instance Spot timer | The runtime handle and continuation aren't moved. Logical registration, next fire time, and pending tick are moved, and the target automatically restores them in queue order. The application doesn't duplicate-capture a timer or re-register it in restore. |
 | Entry/`PerActor` Actor timer | Moves with the Actor queue to the Actor owner. Spot-level application timers aren't moved — a schedule that must be kept is managed in the application's external state. |
 | A session connected to an Actor | The physical STREAM connection is kept. The specific seal/route-transition order and timeouts are summarized by [04 §7](04-relocation-flow.en.md#7-session-during-actor-relocation) and owned by [Session and Actor Binding "8"](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation). |
@@ -762,7 +763,7 @@ An Instance Spot's `Close` and relocation are ordered within the same authority 
 If `Closing` comes first, close finishes and it isn't moved. If relocation comes first,
 a late `Close` is a moving result and isn't automatically resubmitted.
 
-## 13. Relocate Completion And Failure
+## 13. Relocate Completion and Failure
 
 Once every unit is detached from source dispatch and the one-way cutover submit attempt
 for each target that sent a relay-ready reply reaches a success or failure terminal, the
@@ -838,7 +839,7 @@ is it `Blocked/StoreUnavailable`. If even one can't be confirmed, no new work is
 accepted, cleanup proceeds for a fixed maximum time, and it ends as
 `ForceStopped/TeardownFailed`.
 
-## 14. The Race Between Shutdown And Relocate
+## 14. The Race Between Shutdown and Relocate
 
 `Shutdown` isn't blocked by an absent target, policy, capacity, or Relocation Store. The
 action that changes state to stop accepting new application work is called
@@ -891,7 +892,7 @@ on the source, so no other node's clock is needed for this judgment. The value i
 completion ACK sent by the target or anyone else — the source publishes it and other
 parties observe it; the specific status surface is owned by
 [Runtime monitoring](../06-observability/01-runtime-monitoring.en.md). A deployment
-orchestrator can confirm it via status query and change observation before calling
+orchestrator can confirm it via status queries and observation of changes before calling
 `Shutdown`. Calling `Shutdown` before publication is also allowed, but as the first
 paragraph of this section says, the remaining Message Follow routes and retransmission
 copies disappear with it — a request from a sender that still caches the previous route
@@ -921,7 +922,7 @@ Callback execution isn't guaranteed on hardware failure or `SIGKILL`. It doesn't
 guarantee that a different runtime automatically takes over an interrupted relocation or
 cleanup.
 
-## 15. Admission Per State
+## 15. Admission per State
 
 The way the Framework picks one Server candidate among several under the same
 ChannelName is called [select-one](../00-foundation/02-glossary.en.md#select-one). A call where the
@@ -974,13 +975,13 @@ fallbacks, are owned by
 
 The global string address for finding a Spot system-wide is called a
 [Spot ID](../00-foundation/02-glossary.en.md#spot-id). Metric labels don't include Actor ID, Spot ID,
-node RID, endpoint, session ID, or relocation ID. Individual blocker and relocation
-state is checked via count-limited diagnostic queries and traces. Telemetry provider
+node RID, endpoint, session ID, or relocation ID. Individual blockers and relocation
+states are checked via count-limited diagnostic queries and traces. Telemetry provider
 failure doesn't block operation progress. The full observability contract is owned by
 [Runtime monitoring](../06-observability/01-runtime-monitoring.en.md) and
 [Runtime metrics](../06-observability/02-runtime-metrics.en.md).
 
-## 17. Implementation And Contract-Test Verification Requirements
+## 17. Implementation and Contract-Test Verification Requirements
 
 The following is confirmed using only the public surface (`Relocate`/`Shutdown`'s
 options and return values, host status/observe stream, Location Store record lookup,
@@ -992,10 +993,10 @@ this section covers only items observable at the host level. Each item maps to o
 **Mode and target selection**
 
 - Planned maintenance selects only the same version, and rolling update selects only
-  that requested higher version.
+  the requested higher version.
 - Version applies before capacity and weight, and excludes the same wave.
-- Proceeds only once that Core peer is `Ready` on every Mesh. If there's no target
-  it waits, and it blocks on manual topology.
+- The Framework proceeds only once that Core peer is `Ready` on every Mesh. If there's no
+  target, it waits and blocks on manual topology.
 
 **Lifecycle and concurrency**
 
@@ -1004,7 +1005,7 @@ this section covers only items observable at the host level. Each item maps to o
 - `Shutdown` is called separately, with a default deadline of 30 seconds.
 - Caller cancellation ends only the waiter, and doesn't change admission in an invalid
   runtime state.
-- A relocation and a concurrent shutdown with the same option each share one operation.
+- Relocations with the same option share one operation, as do concurrent shutdowns.
 - A different relocation option ends with `OperationInProgress`; shutdown during
   relocation ends with `ShutdownRequested`; repeated calls return the same terminal
   result.
@@ -1026,31 +1027,37 @@ this section covers only items observable at the host level. Each item maps to o
   tick together.
 - The target dispatcher registers the Spot and every member Actor in the same
   relocation temporary queue group while preserving each record's actual target.
-- After every Restore and aggregate commit, saved work, pre-boundary relay, and
-  remaining temporary work go into the real queues in order and switch to the regular
-  route, then `OnRelocationReadyCompleted` finishes and dispatch opens. No participant's
-  application work runs before that switch.
+- After every Restore and aggregate commit, the target moves saved work, pre-boundary relay,
+  and remaining temporary work into the real queues in order, switches to the regular route,
+  then completes `OnRelocationReadyCompleted` and opens dispatch. No participant's application
+  work runs before that switch.
 - A Message Follow route is removed after `MessageFollowDuration` independently of
   command 44 application. An Instance Spot isn't secretly re-created.
 - Entry Spot and `PerActor` User Spot move only Actors independently and don't call a
   Spot adapter or membership callback.
 - After the Spot authority transition, `ToSpot`/Create/Join use the target, and
   `ToActor` uses each Actor's current owner.
-- Spot and Actor relocation temporary queues are registered independently. Resending
-  the same relocation request doesn't create the temporary queue and Restore twice.
+- Spot and Actor relocation temporary queues are registered independently. The order of
+  transferred existing work, temporary work, and direct work after the transition is
+  preserved, and resending the same relocation request doesn't create the temporary queue
+  and Restore twice.
 
 **Interruption budget and pacing**
 
-- For each of Actor, Instance Spot, `SpotWide` User Spot, and `PerActor` Spot direct
-  message, measure a source-local 1 second from when the source blocks new work through
+- For each Actor, Instance Spot, `SpotWide` User Spot, and `PerActor` Spot direct message,
+  measure a source-local 1 second from when the source blocks new work through
   the one-way cutover submit's success or failure terminal.
-- Don't create a target processing-start ACK, and don't use exceeding this as a
-  failure, rollback, or retry condition.
+- Don't create a target processing-start ACK, and don't treat exceeding this as a failure,
+  rollback, or retry condition.
 - After the host deadline, don't start a new unit, and process an already-started unit
   to a safe terminal state.
 - When the in-flight payload budget is full, a new unit waits before the source
   admission seal, and the waiting Actor/Spot keeps processing messages meanwhile. The
   coordinator doesn't set a separate cap on concurrent unit count.
+- If the connection is re-established within the retransmission window, the source resends
+  the pre-boundary relay batch and cutover, the target replaces partially received staging
+  with the complete retransmitted batch, and once the window ends, the copy is cleaned up
+  exactly once and no further retransmission occurs.
 
 **Metrics and SafeToShutdown**
 
@@ -1065,7 +1072,7 @@ this section covers only items observable at the host level. Each item maps to o
 **Failure and cleanup**
 
 - Only on an explicit abort before relay-ready is accepted is the target temporary
-  queue discarded without running and the source original restored to the queue. After
+  queue discarded without running and the source's original work restored to the queue. After
   that boundary, source isn't restored regardless of cutover-submit result.
 - A request's terminal result isn't duplicated across two runtimes.
 - If the same target runtime fails after owner commit, it doesn't roll back to the

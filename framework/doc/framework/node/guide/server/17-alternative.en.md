@@ -1,5 +1,5 @@
 ---
-title: "17. Where ZLink Fits — Internal Service Communication And Real-Time State Server Patterns · Node/TypeScript"
+title: "17. Where ZLink Fits — Internal Service Communication and Real-Time State Server Patterns · Node/TypeScript"
 ---
 
 <!-- generated:start -->
@@ -15,27 +15,27 @@ title: "17. Where ZLink Fits — Internal Service Communication And Real-Time St
 View in another language — [C#/.NET](../../../dotnet/guide/server/17-alternative.en.md) · [C++](../../../cpp/guide/server/17-alternative.en.md) · [Java](../../../java/guide/server/17-alternative.en.md) · [Kotlin](../../../kotlin/guide/server/17-alternative.en.md) · **Node/TypeScript**
 <!-- language-switch:end -->
 
-# 17. Where ZLink Fits — Internal Service Communication And Real-Time State Server Patterns
+# 17. Where ZLink Fits — Internal Service Communication and Real-Time State Server Patterns
 
-> **This chapter has no spec document that owns a contract.** It's an introductory
-> discussion for deciding what to pick.
+> **This chapter has no spec document that owns a contract.** It's an introduction to help
+> readers decide what to choose.
 >
 > **If you're building internal service communication or a real-time state server and
-> weighing gRPC or Akka/Orleans, ZLink is a candidate to replace that slot.**
+> weighing gRPC or Akka/Orleans, ZLink is a candidate to take their place.**
 >
-> ZLink isn't a plain RPC library — it's a **server-to-server, real-time messaging layer
+> ZLink isn't a plain RPC library — it's a **server-to-server and real-time messaging layer
 > that bundles a logical channel, connection lifecycle, a dynamic state unit (SPOT),
 > pub/sub, and location-based auto-connect into one framework** on the backend. It pays off
-> especially when "where is the service," "where is the client connected," and "how do I
+> especially when "where the service is," "where the client is connected," and "how to
 > serialize a state unit like a room/zone/symbol" **keep coming up as recurring problems.**
 >
 > If the three situations in `01. Overview` §2 (a real-time game server, adding real-time
 > features to a web service, simplifying event-driven business processing) were "why you'd
-> need it," this chapter is the introductory judgment document that takes that reasoning down
-> to the level of a technology choice. The sample chapter covers the runnable business flow,
+> need it," this chapter brings that reasoning down to the level of a technology choice. The
+> sample chapter covers the runnable business flow,
 > and chapters 05–12 cover per-feature usage.
 
-## 1. Where It's Used, At A Glance
+## 1. Where It's Used, at a Glance
 
 Draw the boundary first. **If a monolith or modular monolith is enough, don't reach for
 ZLink first.** A call between modules in the same process is just a function call — it
@@ -53,13 +53,13 @@ communication, connection, routing, and state dispatch between them.
 | **Services implemented in different languages calling each other** | **Interoperable calls** over the same channel contract, on top of a language-neutral wire protocol + codec | cross-language binding |
 | Ultra-low-latency HFT, a durable queue, a public external API | **Not ZLink's core territory** | keep gRPC/REST/Kafka/FIX |
 
-## 2. What You Stop Having To Worry About — The Development Model
+## 2. What You Stop Having to Worry About — the Development Model
 
-ZLink's felt benefit isn't that infrastructure components disappear — it's that **the
-developer worries about less.** The application deals only with domain units
-(channel/spot/session), and the framework handles the rest.
+ZLink's practical benefit isn't that infrastructure components disappear — it's that
+**developers have less to worry about.** The application deals only with domain units
+(channel/SPOT/session), and the framework handles the rest.
 
-- **You call knowing only the channel name** — you don't know the target host/port/stub.
+- **You make calls knowing only the channel name** — you don't know the target host/port/stub.
 - **Service location and peer distribution** are handled by location-store-based
   auto-connect ([10-location](10-location.en.md)).
 - **Request correlation and waiting for a reply** are handled by the framework.
@@ -73,13 +73,13 @@ developer worries about less.** The application deals only with domain units
 > The framework handles location, connection, correlation, and dispatch serialization, so
 > application code reads like **business flow**, not transport configuration.
 
-### 2.1 Several Languages On One Channel (cross-language)
+### 2.1 Several Languages on One Channel (Cross-Language)
 
 ZLink isn't tied to one language. Because the call contract is a **language-neutral wire
 protocol (ZMP) + codec (protobuf/json/messagepack) + a logical channel/packet name**,
 services implemented in different languages **call each other over the same channel**. For
 example, in a game system you could put **the room server in C++ and the API/matchmaking
-server in .NET or Java**, and message over the same channel/spot contract.
+server in .NET or Java**, and message over the same channel/SPOT contract.
 
 - The cross-language contract is a **packet name + a codec-encoded DTO** (protobuf is
   recommended across languages, or an agreed JSON/MessagePack schema). Unlike gRPC, it
@@ -94,9 +94,9 @@ server in .NET or Java**, and message over the same channel/spot contract.
 > **design goal** of ZLink — the call contract doesn't depend on the binding's
 > implementation language.
 
-## 3. When These Problems Keep Recurring, ZLink Is A Candidate
+## 3. When These Problems Keep Recurring, ZLink Is a Candidate
 
-Judge by **symptom**, not by technology name. If the following keep recurring, ZLink is a
+Judge by **symptoms**, not by technology names. If the following keep recurring, ZLink is a
 candidate.
 
 - The gRPC stub, channel factory, deadline, and service-location lookup setup repeat for
@@ -108,12 +108,12 @@ candidate.
 - External client connections, internal service calls, and room-state processing are spread
   across different frameworks.
 
-## 4. What ZLink Doesn't Do — The Boundary
+## 4. What ZLink Doesn't Do — the Boundary
 
-For the benefits to be clear, the boundary has to be clear too. The following are correctly
-left as-is.
+For the benefits to be clear, the boundary has to be clear too. The following are best left
+as-is.
 
-| Requirement | ZLink's judgment |
+| Requirement | ZLink guidance |
 |------|------------|
 | A public-facing external HTTP API | Keep REST/gRPC |
 | A durable queue, replay, consumer offsets | Keep Kafka/NATS |
@@ -122,16 +122,16 @@ left as-is.
 | Internal service communication + real-time state dispatch | **ZLink fits** |
 
 The point: ZLink is a transport/dispatch layer, **not a datastore, a durable log, or an HFT
-bus.** Domain-hard problems like distributed data consistency (saga, outbox, idempotency)
+bus.** Hard domain problems like distributed data consistency (saga, outbox, idempotency)
 and persistence/duplicate control remain the application's and infrastructure's
 responsibility.
 
-## 5. Reference — Comparison With The gRPC/Service-Mesh Stack
+## 5. Reference — Comparison with the gRPC/Service-Mesh Stack
 
-Look at why "internal services calling each other often" in §1 is a ZLink candidate, with
-the reasoning compared against the gRPC stack.
+To see why "internal services calling each other often" in §1 makes ZLink a candidate,
+compare it with the gRPC stack.
 
-### 5.1 The Limits Of gRPC Alone
+### 5.1 The Limits of gRPC Alone
 
 gRPC's own performance is excellent. The problem is that the official best practices for
 making this kind of service **"production grade"** immediately call for additional
@@ -147,7 +147,7 @@ infrastructure.
 - **The default load balancer (L4, per-connection distribution) doesn't spread gRPC load
   evenly.** Because gRPC keeps one connection open for a long time over HTTP/2 and
   multiplexes many requests over it, an L4 load balancer sees only one connection, and
-  requests pile onto whichever server that connection first attached to. Since it's built on
+  requests pile onto whichever server that connection first connected to. Since it's built on
   HTTP/2, per-request (L7) distribution is effectively required, so you typically add one of
   the following on top.
   - **Client-side LB**: the client holds the server list and calls them in rotation itself.
@@ -157,7 +157,7 @@ infrastructure.
     service handles per-request (L7) distribution and encryption (mTLS) on its behalf.
   ([Kubernetes blog](https://kubernetes.io/blog/2018/11/07/grpc-load-balancing-on-kubernetes-without-tears/))
 - **On top of that**, service-location lookup (Eureka/Consul/xDS), retry/hedging, the
-  `.proto` pipeline, mTLS, and **event fan-out needs yet another separate broker**
+  `.proto` pipeline, mTLS, and **yet another separate broker for event fan-out**
   (Kafka/NATS).
 
 L7 distribution splits work by looking at each individual request, not the connection — a
@@ -177,9 +177,9 @@ service-location lookup + an event broker + a proto pipeline** together.
 <iframe class="zlink-diagram" src="/common/diagrams/17-zlink-channel-en.html" title="ZLink — framework + location store" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-zlink-channel-en.html" target="_blank">↗ View larger</a></p>
 
-The Envoy sidecar and the mesh control plane's spot (service-location lookup, L7 LB, mTLS)
-collapse into one layer: the framework plus the location store. The broker and the WS edge
-can be absorbed into the fanout channel and STREAM if the need is simple real-time
+The Envoy sidecar and mesh control plane (service-location lookup, L7 LB, mTLS) give way to
+one layer: the framework plus the location store. The broker and the WS edge
+can be absorbed into the fanout channel and STREAM if the requirements are limited to real-time
 propagation and connection admission; if you need a durable queue with replay, or HTTP-edge
 policy, you keep them as-is.
 
@@ -191,13 +191,13 @@ policy, you keep them as-is.
 <iframe class="zlink-diagram" src="/common/diagrams/17-channel-path-en.html" title="channel path — direct call, no sidecar" loading="lazy" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/17-channel-path-en.html" target="_blank">↗ View larger</a></p>
 
-### 5.4 Summary Of What Collapses
+### 5.4 Summary of What Collapses
 
 | gRPC best practice/required infrastructure | In ZLink | Note |
 | --- | --- | --- |
 | "Reuse stubs/channels" | The route client is a DI singleton and the framework manages the MeshNode connection lifecycle | Nothing to create per call |
 | RPC deadline | `RequestToChannel(...).Timeout(...)` | The reply-wait duration |
-| L7 load balancing (Envoy/Istio) | Channel name + store auto-connect distributes the peer | No sidecar needed |
+| L7 load balancing (Envoy/Istio) | Channel name + store auto-connect distributes traffic across peers | No sidecar needed |
 | Interceptor | Handler filter | [5](05-channel-messaging.en.md) §5 |
 | Event broker (Kafka/NATS) | fanout channel pub/sub | Real-time fan-out only. A broker stays for persistence/replay |
 | Unified observability (mesh telemetry) | The status stream and standard diagnostics | [11. Monitoring](11-monitoring.en.md) |
@@ -212,22 +212,22 @@ proxy, a stub, and a separate broker collapses into one layer: the framework plu
 location store. If your organization's security policy or external ingress still needs it,
 keep the existing mesh/LB alongside it.
 
-## 6. Reference — Comparison With Distributed Actor Frameworks (Orleans/Akka)
+## 6. Reference — Comparison with Distributed Actor Frameworks (Orleans/Akka)
 
-The representative frameworks actually used for the ④ stateful-actor pattern in `01.
-Overview` §2 are Microsoft Orleans and Akka. Because ZLink's SPOT/actor offers the same
+Microsoft Orleans and Akka are representative frameworks used for the ④ stateful-actor
+pattern in `01. Overview` §2. Because ZLink's SPOT/actor offers the same
 primitives (mailbox serialization + location transparency), the candidates overlap for this
 workload.
 
-### 6.1 The Limits Of Orleans/Akka Alone
+### 6.1 The Limits of Orleans/Akka Alone
 
-Orleans and Akka focus deeply on **a single actor primitive.** But to build "one real-time
+Orleans and Akka specialize in **a single actor primitive.** But to build "one real-time
 state server," the subject of this guide, you still have to assemble the pieces outside the
 actor yourself.
 
 - **No external client connection.** Neither one bundles a protocol for a client to call a
-  grain/actor directly. A web client is usually assembled with SignalR or a separate
-  WebSocket server in front, which then calls into the actor.
+  grain/actor directly. A web client usually connects through SignalR or a separate
+  WebSocket server, which then calls into the actor.
 - **Not polyglot.** Orleans is `.NET`-only, Akka is JVM-only (Akka.NET is a separate port).
   Combining a C++ room server with a `.NET` API server under the same contract is outside
   their design scope.
@@ -245,12 +245,12 @@ actor yourself.
 <p><a href="/common/diagrams/17-zlink-integrated-en.html" target="_blank">↗ View larger</a></p>
 
 Client connections, service messaging, and actor state — three separate layers — collapse
-into one. But this picture doesn't hide everything either — it doesn't mean the auxiliary
+into one. But this diagram doesn't imply that the auxiliary
 tooling Orleans/Akka built up over a long time, like persistence connectors and reminder
-schedulers, also collapses into one. The table below separates how much is a raw feature
-difference from how much is a difference in whether this kind of pre-built tooling exists.
+schedulers, also collapse into one. The table below separates raw feature differences from
+differences in the availability of this kind of pre-built tooling.
 
-### 6.3 Feature Comparison — Advantages And Disadvantages
+### 6.3 Feature Comparison — Advantages and Disadvantages
 
 | Item | Orleans / Akka | ZLink |
 | --- | --- | --- |
@@ -259,15 +259,15 @@ difference from how much is a difference in whether this kind of pre-built tooli
 | Polyglot | ❌ Single language (.NET or JVM) | ✅ |
 | Typed inter-service messaging + declared topology | ❌ Assemble separately (gRPC, etc.) | ✅ channel + location store |
 | Actor state persistence | ✅ Mature provider ecosystem | ⚠️ Lifecycle hooks exist; no pre-built storage connector (① below) |
-| Restoring a Spot timer after relocation | ✅ | ✅ Registration and the pending tick ride in the payload and restore automatically |
+| Restoring a SPOT timer after relocation | ✅ | ✅ Registration and the pending tick are included in the payload and restored automatically |
 | Create a missing Actor or use an existing one | ✅ | ✅ `getOrCreate` coordinates concurrent creation of the same ActorId |
 | Waking a dormant actor at a scheduled time (reminder) | ✅ One API call (Orleans Reminder) | ❌ No dedicated API — compose with a distributed scheduler (② below) |
-| Distributed transactions | Orleans has experimental support | ❌ None (the app composes a saga) — this is a genuine protocol-difficulty problem that can't be worked around with existing primitives |
+| Distributed transactions | Orleans has experimental support | ❌ None (the app composes a saga) — this is an inherent protocol challenge that can't be worked around with existing primitives |
 | License | Orleans MIT / Akka BSL (a paid trigger based on annual revenue) | framework is FSL-1.1-ALv2, core/binding are MPL-2.0 — no revenue-based paid trigger (§7) |
 | Time proven in production | 10+ years (Halo, Microsoft 365, Skype) | Short — this project itself is still in progress |
 
 ① **Actor state persistence** — lifecycle hooks like `onCreate`/`onClosing` are provided,
-but which DB to use and how to store into it is left to the application to decide. This
+but which DB to use and how to persist the state is left to the application to decide. This
 means there's no bundle of pre-built storage connectors
 ([ShoppingMall](../../../common/sample/event/shoppingmall.en.md) is an example of this).
 
@@ -275,13 +275,14 @@ means there's no bundle of pre-built storage connectors
 Clustered or Hangfire, to run an Actor `getOrCreate` or message at a scheduled time.
 
 **Conclusion.** For this guide's workload — "build one real-time state server without
-assembly" — ZLink is a substitute candidate. The Framework provides Actor/Spot lifecycle and
+stitching components together" — ZLink is a viable alternative. The Framework provides
+Actor/SPOT lifecycle and
 relocation-timer restoration. Persistent-state providers and scheduled-time reminders must
 be composed by the application with its own storage and scheduler. Distributed transactions
 aren't provided either. Whether to migrate an existing Orleans/Akka system should be decided
-by weighing this difference together with your operational experience.
+by weighing these differences together with your operational experience.
 
-## 7. License — The Cost Of Using It
+## 7. License — the Cost of Using It
 
 A technology choice comes bundled with its license terms. Akka is BSL, which requires a
 commercial contract once annual revenue crosses a threshold; Orleans is MIT. ZLink's license
@@ -311,8 +312,8 @@ The reason `core` and `bindings` are MPL-2.0 is that `core` started from
 [libzmq](https://github.com/zeromq/libzmq) v4.3.5, which is MPL-2.0. `http-client` is a thin
 wrapper around each platform's conventional HTTP client library, so it's Apache-2.0.
 
-The exact terms belong to [framework/LICENSE](../../../../../LICENSE); the policy background
-belongs to
+The exact terms are governed by [framework/LICENSE](../../../../../LICENSE); the policy
+background is documented in
 [doc/license/README.md](https://github.com/zlink-systems/zlink/blob/main/doc/license/README.md).
 
 ## 8. Related Documents

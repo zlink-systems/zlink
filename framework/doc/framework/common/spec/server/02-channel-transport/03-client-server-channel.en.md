@@ -13,9 +13,9 @@ title: "ClientServer Channel"
 
 ## 1. ClientServer Channel Overview
 
-| Role | Business call it can start | Handling a received message |
+| Role | Business calls it can start | Handling a received message |
 |---|---|---|
-| `Client` | Selects one [Ready](../00-foundation/02-glossary.en.md#ready) server (finished initialization and discovery so it can receive application messages) and starts a send or request. | Doesn't receive a message the Server sends first without a Client request. Only a reply matching a request the Client started is received as that request's result. |
+| `Client` | Selects one [Ready](../00-foundation/02-glossary.en.md#ready) server (finished initialization and discovery so it can receive application messages) and starts a send or request. | Doesn't receive a message sent first by the Server without a Client request. It receives only a reply matching a request the Client started, as that request's result. |
 | `Server` | Can't start a new business send or request targeting a connected Client. | Runs the handler for a send or request the Client sent. A request handler replies using the received reply token. |
 
 In other words, on a ClientServer Channel, the only thing a Server can send a
@@ -38,9 +38,9 @@ following functionality.
 
 This restriction means ClientServer transport doesn't automatically substitute
 for the functionality above. An application in the same process can register
-ClientServer and RouteMesh separately under different instances of
+ClientServer and RouteMesh separately under different
 [ChannelName](../00-foundation/02-glossary.en.md#channelname) (the name that identifies the
-Channel scope a message is sent to) and start separate calls on the two send
+Channel scope a message is sent to) values and start separate calls on the two send
 paths. A ClientServer handler can also start a
 new call, at the application's discretion, targeting a registered RouteMesh, a
 different ClientServer Channel, a [Spot](../00-foundation/02-glossary.en.md#spot), or an
@@ -57,7 +57,7 @@ languages. The precise .NET signature is defined by
 and
 [.NET Channel Messaging Public Interface](../languages/dotnet/interfaces/04-channel-messaging.en.md).
 
-## 2. Client And Server Role Registration
+## 2. Client and Server Role Registration
 
 One process can register `Client`, `Server`, or both roles on the same
 ClientServer `ChannelName`. The registration key is `(ChannelName, Role)`, and
@@ -131,7 +131,7 @@ Several different ClientServer `ChannelName`s can be registered in the same
 process. The already-defined `ChannelName` conflict rule between RouteMesh and
 fanout doesn't change.
 
-## 3. How To Find A Server Endpoint And Make It Ready
+## 3. How to Find a Server Endpoint and Make It Ready
 
 The Client obtains a Server endpoint from one or more of the following
 sources.
@@ -145,8 +145,8 @@ If the manual and automatic sources point to the same Server RID and
 [lifecycle generation](../00-foundation/02-glossary.en.md#lifecycle-generation), the
 framework merges them into one connection candidate.
 
-From endpoint discovery through target selection, three parties are involved
-in order: the Client, the discovery source (a manual setting or an automatic
+From endpoint discovery through target selection, three parties participate
+in sequence: the Client, the discovery source (a manual setting or an automatic
 descriptor), and the Server.
 
 ```mermaid
@@ -172,7 +172,7 @@ generation are re-verified on the actual transport connection
 weight rule that picks the one Server that actually receives a call among
 ready targets is defined by [§4](#4-weight-and-target-selection).
 
-### 3.1 Only The Client Starts A Connection To The Server
+### 3.1 Only the Client Starts a Connection to the Server
 
 In both manual and automatic discovery, the Client starts the connection to
 the Server endpoint. The Server doesn't look up a Client endpoint or start an
@@ -239,7 +239,7 @@ serverOptions
     .AddRequestHandler<ChargeHandler, Charge, ChargeResult>(); // registers the request handler
 ```
 
-### 3.2 Finding The Server Descriptor Alone Does Not Make It Ready
+### 3.2 Finding the Server Descriptor Alone Does Not Make It Ready
 
 An automatic-discovery Server publishes a dedicated ClientServer
 [ClientServer Server descriptor](../00-foundation/02-glossary.en.md#clientserver-server-descriptor)
@@ -268,12 +268,12 @@ The ClientServer Server descriptor doesn't include the following information.
 
 - MeshName or RouteMesh membership
 - Spot or Actor location
-- Information judging whether to accept a MeshNode peer connection
+- Information used to decide whether to accept a MeshNode peer connection
 
 A MeshNode descriptor isn't used for ClientServer discovery, and a
 ClientServer Server descriptor isn't used for a RouteMesh peer connection.
 
-### 3.3 When The Location Store Is Needed
+### 3.3 When the Location Store Is Needed
 
 If only [manual endpoints](../00-foundation/02-glossary.en.md#manual-endpoint) are used, a
 Location Store isn't needed. If automatic discovery is enabled but there's no
@@ -291,27 +291,26 @@ This information only controls the ClientServer connection — it isn't
 converted into a [MeshNode descriptor](../00-foundation/02-glossary.en.md#meshnode-descriptor)
 or RouteMesh peer information.
 
-## 4. Weight And Target Selection
+## 4. Weight and Target Selection
 
-Server weight is a relative share deciding how often new sends and requests
+Server weight is a relative share that determines how often new sends and requests
 are assigned among several selectable Servers. The range is `0..10000`, with a
-default of `100`. A value outside the range is a configuration error, both at
-startup configuration and at runtime change.
+default of `100`. A value outside the range is a configuration error during
+startup configuration or a runtime change.
 
 This [weight](../00-foundation/02-glossary.en.md#weight) doesn't mean the number of
 concurrent requests a Server can handle or its physical performance. For
 example, if Server A's weight is `100` and Server B's is `50`, with other
-conditions equal, repeated target selection reflects A's assignment share as
-twice B's. It doesn't mean A is necessarily chosen for every individual
+conditions equal, repeated target selection gives A twice B's assignment
+share. It doesn't mean A is necessarily chosen for every individual
 request. Servers with the same weight are chosen in rotation.
 
 - **Weight is only compared among Servers that are `Ready` and not draining.**
   A Server whose connection isn't ready, or that's draining, isn't selected
   even with a high weight.
 - **The framework applies this condition first, then computes the sum of
-  remaining positive weights using at least a 64-bit integer.** This is so it
-  can select a Server by the relative ratio computed without this sum
-  overflowing.
+  remaining positive weights using at least a 64-bit integer.** This allows it
+  to select a Server by the relative ratio without overflowing the sum.
 
 Drain is the process of first blocking selection for new sends and requests,
 to safely shut down a Server or exclude it from service targets, then
@@ -327,7 +326,7 @@ and then closes the descriptor and listener.
 | Weight is `0`. | Excluded from new target selection. The Server can keep running, and raising weight again returns it to the candidate set. It doesn't change the Server role or an existing connection to a Client role. |
 | Draining for a safe shutdown. | Excluded from new target selection. The Server stops accepting new business messages, processes only already-accepted handlers and request replies up to the deadline, then cleans up the descriptor and listener. |
 
-### 4.1 A Server In The Same Process Is Also A Selection Candidate
+### 4.1 A Server in the Same Process Is Also a Selection Candidate
 
 If `Client` and `Server` for the same `ChannelName` are registered in the same
 process, the local Server is included in the same candidate set as remote
@@ -366,7 +365,7 @@ the selected Server identity to the application as an intermediate result.
   This is because the first Server may have already run the request, with
   only the reply not delivered.
 
-### 4.2 When Target-Selection Information Changes At Runtime
+### 4.2 When Target-Selection Information Changes at Runtime
 
 If a Server changes its weight or starts draining while running, the
 target-selection information the Client uses changes. The Server records this
@@ -381,12 +380,12 @@ ChannelName. Server RID and endpoint are values distinguishing remote targets
 in monitoring — the application doesn't specify them as the target for a local
 weight change.
 
-## 5. Send, Request, And Reply
+## 5. Send, Request, and Reply
 
 Send submits a one-way message to one ready Server and doesn't create a reply
 token.
 
-Reply correlation is an identifying value created when sending a request, to
+Reply correlation is an identifying value created when sending a request to
 link the request with a reply that arrives later. The Server includes the same
 value in the reply, and the Client uses it to confirm which request the reply
 is the result of.
@@ -427,7 +426,7 @@ The [reply token](../00-foundation/02-glossary.en.md#reply-token) a Server reque
 receives can only be used for the current request. Once the final reply is
 made once, it can't be reused.
 
-If a reply route can be restored on the following failures, the request
+If a reply route can be restored after any of the following failures, the request
 completes with a structured error reply.
 
 - No handler found
@@ -438,7 +437,7 @@ If the same failure occurs on a one-way send, no reply is built. The message
 isn't delivered to a handler — it's recorded in runtime observability
 information.
 
-### 5.2 When A Handler Calls Another Target
+### 5.2 When a Handler Calls Another Target
 
 A ClientServer handler can send a request to a different RouteMesh,
 ClientServer Channel, Spot, or Actor. This
@@ -457,7 +456,7 @@ received ones, processed in the following order.
 1. Closes local ready status and stops accepting new business messages.
 2. Publishes draining state and a larger revision to the ClientServer Server
    descriptor.
-3. Proceeds with already-accepted handlers and request replies up to the
+3. Continues processing already-accepted handlers and request replies up to the
    [deadline](../00-foundation/02-glossary.en.md#deadline).
 4. Once every final result is confirmed, releases the ClientServer Server
    descriptor and [owner lease](../00-foundation/02-glossary.en.md#owner-lease) and closes
@@ -512,7 +511,7 @@ stops computing additions and removals of new ClientServer Server descriptors.
   stopping and the validity of an already-verified transport connection are
   separate concerns.
 
-If a Server fails to renew its owner lease and the allowed time passes, it
+If a Server fails to renew its owner lease and the allowed time elapses, it
 stops accepting new business messages. This final time point is called the
 [`fencing deadline`](../00-foundation/02-glossary.en.md#fencing-deadline). Once the Store
 recovers, the target list is re-aligned based on the latest descriptor
@@ -523,9 +522,9 @@ revision and lifecycle generation.
 Verify the following using only the role registration builder, the
 send/request results and replies observed by Client and Server, ClientServer
 Server descriptor queries and owner lease state, and the connection snapshot
-monitoring provides.
+provided by monitoring.
 
-**Role And Registration**
+**Role and Registration**
 
 - The Server has no public API to start a new business call targeting the
   Client.
@@ -537,7 +536,7 @@ monitoring provides.
   `ChannelName`, and a `ChannelName` conflict with RouteMesh, are startup
   configuration errors.
 
-**Endpoint Discovery And Target Selection**
+**Endpoint Discovery and Target Selection**
 
 - In both manual and automatic discovery, only the Client starts the
   connection to the Server.
@@ -549,13 +548,13 @@ monitoring provides.
   interchangeably with a MeshNode descriptor.
 - Server weight allows `0`, default `100`, and cap `10000`; `-1` and `10001`
   are rejected at startup configuration and runtime change.
-- Multiple Servers for the same ChannelName are selected by weight, weight 0,
-  and drain state.
+- Multiple Servers for the same ChannelName are selected based on weight,
+  including weight 0, and drain state.
 - A local Server is selected under the same readiness, weight, and drain
   rules as a remote Server, and the selected local Server's handler also runs
   through actual transport.
 
-**Restart And Failure**
+**Restart and Failure**
 
 - When the same identity restarts, only the new lifecycle generation becomes
   a ready target.
@@ -566,7 +565,7 @@ monitoring provides.
 - After Store recovery, the target list is re-aligned with the latest
   revision and generation.
 
-**Request completion and the single FIFO**
+**Request Completion and the Single FIFO**
 
 - If a Server sends a request reply after one-way DATA and the Client stops
   receiving DATA or remains `PAUSED`, the configured timeout can end the

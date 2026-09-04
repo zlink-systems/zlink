@@ -11,7 +11,7 @@ title: "Framework Messaging Glossary"
 [Spec documentation writing guide](../../../../../../../doc/principal/documentation/spec-writing-guide.ko.md) ·
 [Spot Messaging](../03-spot-actor/02-spot-messaging.en.md)
 
-## How To Read The Tables And .NET Code Examples
+## How to Read the Tables and .NET Code Examples
 
 For a term denoting a value or a record, a summary table like the one below comes first.
 
@@ -30,7 +30,7 @@ public contract defines as opaque, internal fields aren't guessed at and added.
 
 A composite value that does have a real .NET public type shows the formal C#
 declaration below the summary table. The declaration and member names use the
-language-specific interface as-is, and each member's role is explained with a Korean comment on the
+language-specific interface as-is, and each member's role is explained with a comment on the
 same line.
 
 The single source of truth for the actual .NET declarations is the
@@ -72,7 +72,7 @@ redefine the term for the whole spec
   in meaning with another term
   ([spec documentation writing guide](../../../../../../../doc/principal/documentation/spec-writing-guide.ko.md#34-새-제품-용어) §3.4).
 
-## 1. Spot And Location
+## 1. Spot and Location
 
 <a id="spot"></a>
 ### Spot
@@ -120,7 +120,7 @@ runtime resource. A regular Spot message takes only the Spot ID and re-resolves
 current authority.
 
 <a id="entry-user-instance-spot"></a>
-### Entry Spot, User Spot, And Instance Spot
+### Entry Spot, User Spot, and Instance Spot
 
 - Entry Spot has its Spot ID issued by the framework and is provided as a server
   entry point.
@@ -175,7 +175,7 @@ member Actor handlers, and timer callbacks share inside a User Spot.
 
 | Mode | Execution unit | Scope that can run concurrently | `Yield` |
 |---|---|---|---|
-| `SpotWide` | The whole User Spot shares one single execution gate. | Runs only one of the Spot handler, member Actor handlers, timers, and lifecycle callbacks of the same User Spot at a time. Relocation moves the Spot and all member Actors as one aggregate. | Can return the shared turn. |
+| `SpotWide` | The whole User Spot shares a single execution gate. | Runs only one of the Spot handler, member Actor handlers, timers, and lifecycle callbacks of the same User Spot at a time. Relocation moves the Spot and all member Actors as one aggregate. | Can return the shared turn. |
 | `PerActor` | Separates a Spot lane, a per-Actor lane, and a per-timer lane. | Different lanes can run concurrently. Order is preserved within the same Actor and the same timer. Relocation moves Actors independently without moving Spot state. | Not usable — there's no shared Spot turn. |
 
 `SpotWide` is the default. The mode is fixed when registering the User Spot stable
@@ -265,7 +265,7 @@ and the already-published payload, under a reference the framework issues.
 | Lifetime | Kept for the retention the framework specifies; extended with `Renew` or explicitly removed with `Delete`. |
 
 <a id="object-role"></a>
-### Object Client And Object Server Role
+### Object Client and Object Server Role
 
 - Object Client can request Spot creation, lookup, and messaging, but doesn't
   provide a Spot factory.
@@ -354,7 +354,7 @@ still the same logical incarnation continuing.
 <a id="owner"></a>
 ### Owner
 
-The MeshNode that currently actually executes an Actor or Spot and manages its
+The MeshNode that currently executes an Actor or Spot and manages its
 application queue. The application doesn't directly specify the owner — the
 framework finds it through the Location Store.
 
@@ -431,8 +431,8 @@ public sealed record ZLinkAuthoritySnapshot(
 <a id="ready"></a>
 ### Ready
 
-The state after Spot creation, initialization, and the Location Store record are all
-finished, so it can receive application messages. A Spot direct call generally sends
+The state reached once Spot creation, initialization, and Location Store recording are
+all complete, allowing the Spot to receive application messages. A Spot direct call generally sends
 a message to the owner of a Ready Spot.
 
 | Item | Content |
@@ -445,7 +445,7 @@ a message to the owner of a Ready Spot.
 <a id="admission-seal"></a>
 ### Admission Seal
 
-An action that transitions a scope the framework defines so it no longer accepts new
+An action that transitions a framework-defined scope so it no longer accepts new
 application work. Handlers, replies, and recovery work already accepted can continue
 to be processed up to that operation's deadline.
 
@@ -679,7 +679,7 @@ lookup or Store I/O.
 | .NET notation | No public type |
 | Public composition | Combines the current Actor identity/`ObjectGeneration`/membership, an immutable join request snapshot, an absolute deadline, and the Actor Join `OperationId`. The internal encoding isn't part of the public contract. |
 | Creation/management | Registered by `Defer()` within an open handler registration scope. Activated when the handler ends normally; discarded on exception, cancellation, or reply-encoding failure. |
-| Lifetime | Kept from registration until Join terminal and completion ordering finish. If the process terminates before Location commit, this barrier itself isn't replayed. |
+| Lifetime | Kept from registration until Join terminal and completion ordering finish. If the process terminates before Location commit, this barrier itself isn't re-created. |
 
 <a id="bounded-aggregate-commit"></a>
 ### Bounded Aggregate Commit
@@ -864,9 +864,9 @@ handler's completion.
 <a id="activation-recovery-pointer"></a>
 ### Activation Recovery Pointer
 
-Information keeping the `Ready` authority pointed at the recovery root and replay
-cursor to read when recovering a cold activation. This pointer isn't removed before
-the first handler's completion and the cursor update finish.
+Information that keeps the `Ready` authority pointed at the recovery root and replay
+cursor used when recovering a cold activation. This pointer isn't removed before
+the first handler completes and the cursor update finishes.
 
 | Item | Content |
 |---|---|
@@ -917,7 +917,7 @@ public sealed record ZLinkObjectReservation(
     ZLinkLocationOwnerToken TargetOwner);   // target host owner lease fence
 ```
 
-## 3. Message Calls And Async Execution
+## 3. Message Calls and Async Execution
 
 <a id="spot-direct"></a>
 ### Spot Direct
@@ -937,7 +937,7 @@ ID. The application doesn't specify an owner RID or endpoint.
 
 The unit in which one Spot callback occupies an execution gate on the application
 queue and runs. Two turns never run at the same time on the same execution gate. A
-`SpotWide` User Spot and Instance Spot use one single gate for the whole Spot. Entry
+`SpotWide` User Spot and Instance Spot use a single gate for the whole Spot. Entry
 Spot separates a Spot lane from a per-Actor lane. A `PerActor` User Spot separates a
 Spot lane, a per-Actor lane, and a per-timer lane, so turns on different gates can
 run concurrently.
@@ -950,7 +950,7 @@ run concurrently.
 | Lifetime | Kept from the callback's start to its completion. In a `SpotWide` User Spot or Instance Spot, `Yield` can return the shared Spot turn first. |
 
 <a id="async-yield"></a>
-### Async And Yield
+### Async and Yield
 
 - `Async` holds the current Spot turn while waiting.
 - `Yield` returns the shared turn of a `SpotWide` User Spot or Instance Spot so the
@@ -1028,16 +1028,16 @@ same-named profile used by the application job queue.
 ### Application job queue
 
 The shared supply-permit queue a framework host instance holds until an application
-callback actually starts. Only supply identifiable before receive as terminal reply/error
-completion bypasses this permit; ordinary receive cannot gain a bypass after classification.
+callback actually starts. Only supply identified as terminal reply/error completion during pre-receive
+bypasses this permit; ordinary receive cannot gain a bypass after classification.
 Every other application, control, or malformed ordinary ingress record acquires a
 permit before receive/claim. An application record releases it at the handler's first
 instruction; a control or malformed record releases it immediately after internal
 processing. When capacity is unavailable, a cancellable wait propagates backpressure;
 there is no generic capacity reject, drop, polling, busy-spin, or unbounded bypass queue.
 
-At or above the configured pause boundary, permits in use changes the host pressure state to
-`paused`; at or below the configured resume boundary, it changes to `running`. The default
+At or above the configured pause boundary, the number of permits in use changes the host pressure state to
+`paused`; at or below the configured resume boundary, it changes the state to `running`. The default
 percentages are 80 and 60, and the current state is kept between the boundaries. This is an
 absolute flow state applied to supported sockets; it does not directly change route readiness
 or transport liveness.
@@ -1072,7 +1072,7 @@ A state where the runtime is proceeding with shutdown and can't accept new opera
 admission. A new one-way call completes with a `ShuttingDown` exception. The runtime
 termination reason and outcome are owned by a separate lifecycle result.
 
-## 4. Channel And Logical Multicast
+## 4. Channel and Logical Multicast
 
 <a id="channelname"></a>
 ### ChannelName
@@ -1184,7 +1184,7 @@ Multicast.
 | Public composition | Uses a fanout ChannelName, topic, and typed event; has no per-subscriber acknowledgement or replay state. |
 | Lifetime | Kept for the publisher/subscriber listener lifecycle and each publish admission. |
 
-## 5. Queue, Control, And Lifetime
+## 5. Queue, Control, and Lifetime
 
 ### Snapshot
 
@@ -1323,7 +1323,7 @@ that unit's contract.
 <a id="relocation-state-chunk"></a>
 ### Relocation State Chunk
 
-A piece of the relocation payload, split to at most a configured size and sent
+A piece of the relocation payload that is no larger than a configured size and is sent
 directly from the source to the target. The payload doesn't pass through a store;
 it crosses the network exactly once, on the same source–target ordered mesh
 connection that relay uses. Messages of other objects can interleave on the same
@@ -1354,7 +1354,7 @@ still starts and completes as its chunks flow in order.
 | Public composition | The per-connection ceiling is set by `RelocationInFlightPayloadBudget` (default 16 MiB; `0` means not applied), and the node-wide ceiling by `RelocationNodeInFlightPayloadBudget` (default `0`, not applied). |
 | Creation/management | The source runtime applies it per peer connection by observing the sum of relocation chunk charges the Core still accounts. |
 | Delivery | A source-local value; not carried on the wire. |
-| Lifetime | While the sum fills the budget, a new relocation unit waits before the source admission seal is applied, and the next chunk submission of an already-started unit waits until room opens. Because the wait is before the seal, a waiting Actor or Spot keeps processing messages normally, and this wait isn't included in interruption-time measurement. |
+| Lifetime | While the budget is full, a new relocation unit waits before the source admission seal is applied, and the next chunk submission of an already-started unit waits until room opens. Because the wait is before the seal, a waiting Actor or Spot keeps processing messages normally, and this wait isn't included in interruption-time measurement. |
 | Application authority | The application sets the values only through settings and doesn't change them per relocation. |
 
 <a id="cutover-retransmission-window"></a>
@@ -1407,7 +1407,7 @@ If the value isn't set, this exclusion rule doesn't apply. The framework compare
 the configured string as a whole, case-sensitively.
 
 <a id="drain"></a>
-### Drain And Draining
+### Drain and Draining
 
 Drain is the process of closing admission for new application work in order to shut
 down a host, and cleaning up already-accepted work and infrastructure resources
@@ -1483,7 +1483,7 @@ public sealed class ZLinkMessageMetadata
 }
 ```
 
-## 6. RouteMesh And Channel Topology
+## 6. RouteMesh and Channel Topology
 
 <a id="membership"></a>
 ### Membership
@@ -1501,7 +1501,7 @@ and target selection.
 | Lifetime | Kept for the lifecycle of that MeshNode or ClientServer registration. Drain and weight changes only change selectability. |
 
 <a id="channel-client-server-role"></a>
-### Channel Client And Server Role
+### Channel Client and Server Role
 
 - Client role only registers the send path to start Channel calls.
 - Server role registers the send path plus remote target membership, and provides
@@ -1567,7 +1567,7 @@ lower than this cap.
 The process of checking a connected remote node's MeshName, RID, lifecycle,
 descriptor, object role, and security identity to decide whether to accept it as a
 ready peer connection. For a manual connection, if both sides are Object Client with
-no RouteMesh Channel Server membership, a terminal admission result recording that
+no RouteMesh Channel Server membership, a terminal admission result indicating that
 the connection isn't needed is recorded, and the socket is closed before becoming
 ready.
 
@@ -1944,7 +1944,7 @@ same namespace.
 | Lifetime | Must stay stable for that message and handler registration. |
 
 <a id="liveness-beacon"></a>
-### Liveness And Liveness Beacon
+### Liveness and Liveness Beacon
 
 Liveness checking is the action of confirming whether signals from a connected peer
 keep arriving within a fixed time, to judge whether a connection can be kept in a
@@ -1952,7 +1952,7 @@ Ready state. It isn't a feature that confirms application-message handler execut
 or business processing success.
 
 Liveness beacon is an internal message the runtime periodically sends so a
-one-directional connection's liveness can be checked. Classic fanout's
+unidirectional connection's liveness can be checked. Classic fanout's
 connection-status-checking topic and beacon aren't exposed to application publish or
 handlers.
 
@@ -1969,7 +1969,7 @@ handlers.
 <a id="clientserver-channel"></a>
 ### ClientServer Channel
 
-A one-directional service boundary where the Client starts sends/requests and the
+A unidirectional service boundary where the Client initiates sends and requests and the
 Server handles execution and reply. The Server doesn't start new business calls
 targeting the Client. One process can register a Client and a Server each once for
 the same ChannelName. Monitoring's `client_and_server` is a snapshot expression
@@ -2226,7 +2226,7 @@ existing claim or retry the same operation with a new UUID.
 | Public composition | Describes that a global Spot ID claim conflicted. Doesn't include the conflicting owner token. |
 | Lifetime | Ends that startup or create operation with a terminal failure. |
 
-## 10. STREAM Session And Actor Binding
+## 10. STREAM Session and Actor Binding
 
 <a id="stream-session"></a>
 ### STREAM Session
@@ -2263,7 +2263,7 @@ distinguishing late-arriving work from a previous session after a reconnect.
 The current Actor owner delivery path a session owner keeps for a specific Actor
 binding. On a successful bind, a route built from the verified `ActorRef` location is
 stored, and relay/disconnect notification and Actor push use this stored route.
-Route isn't re-selected by re-querying the Location Store on every message.
+The route isn't re-selected by re-querying the Location Store on every message.
 
 The Location Store and Relocation Store don't store or update the binding route. The
 procedure by which the target requests a route update during Actor relocation, which

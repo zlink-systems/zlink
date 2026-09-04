@@ -1,8 +1,8 @@
 ---
-title: "Submit And Completion"
+title: "Submit and Completion"
 ---
 
-# Submit And Completion
+# Submit and Completion
 
 [Execution topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Next: 02. Handler Turn And Execution Gate](02-handler-turn-and-execution-gate.en.md)
 
@@ -17,7 +17,7 @@ title: "Submit And Completion"
 > HWM and the Application Job Queue belongs to
 > [Application Job Queue And Backpressure](04-application-job-queue-and-backpressure.en.md).
 
-## 1. Messaging/Worker Call Overview And Scope
+## 1. Messaging/Worker Call Overview and Scope
 
 When an application calls a Messaging call builder or a Worker call builder, that call
 completes with exactly one terminator this document defines. This document defines what
@@ -37,11 +37,11 @@ client configuration, handler/Channel membership/codec/security/retry registrati
 object lifecycle builders. Direct methods that don't return a builder, such as
 `RelayAsync(...)`, are also out of scope.
 
-## 2. Completion Meaning Per Terminator And Per-Language Names
+## 2. Completion Meaning per Terminator and Per-Language Names
 
 A call object offers only the terminator that fits its operation kind. Each operation's
-per-language interface defines single-use rules, what happens when the same option repeats, and
-the error for re-invoking a terminal.
+per-language interface defines single-use rules, how repeated use of the same option is handled,
+and the error for re-invoking a terminal.
 
 | terminator | completion meaning after acceptance | owner turn |
 |---|---|---|
@@ -57,10 +57,10 @@ gate uses the name `Yield`/`yield`.
 `Yield` is available only for Channel/Spot/Actor requests, CPU/I/O workers, and Actor/Spot
 create/get-or-create calls running on a `SpotWide` User Spot or an Instance Spot. `Yield` on
 create/get-or-create is not a rule that widens the naming scope — it's a separate
-object-execution special case. Outside Entry Spot, `PerActor`, Entry Actor, Node/Channel
-handlers, and the owner turn, a call ends with `InvalidOperation` before operation
-submission or any queue change. It is not available for Actor join, send, publish, timer
-registration, close, or destroy.
+object-execution special case. On an Entry Spot, in `PerActor`, in an Entry Actor or a
+Node/Channel handler, or outside the owner turn, a call ends with `InvalidOperation` before
+operation submission or any queue change. It is not available for Actor join, send, publish,
+timer registration, close, or destroy.
 
 | Call kind | `SpotWide` User Spot / Instance Spot | Entry Spot / `PerActor` / Entry Actor / Node / Channel handler |
 |---|---|---|
@@ -137,7 +137,7 @@ sequenceDiagram
     Note over App,T: Remote handler execution, subscriber receipt, and<br/>remote queue acceptance are not awaited
 ```
 
-## 5. Backpressure And Error Classification
+## 5. Backpressure and Error Classification
 
 When local Framework capacity is unavailable, the Framework waits up to that family's send
 timeout. When a binding operation waits on Core HWM, Core owns the retry and completes the
@@ -172,10 +172,11 @@ callback, retry waiter, or separate binding adapter, and follows these rules.
 | Same call's terminal invoked twice | `InvalidOperation` |
 
 Pending admission keeps the caller-specified Node RID, global Spot/Actor ID, and session
-binding token. A [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) — the scope in which
-multiple MeshNodes participate to exchange node and Channel messages —
-/ClientServer select-one Channel picks one current eligible member
-of the same [ChannelName](../00-foundation/02-glossary.en.md#channelname) immediately before starting the
+binding token. A select-one Channel in a
+[RouteMesh](../00-foundation/02-glossary.en.md#routemesh) — the scope in which multiple
+MeshNodes participate to exchange node and Channel messages — or ClientServer picks one
+current eligible member of the same
+[ChannelName](../00-foundation/02-glossary.en.md#channelname) immediately before starting the
 first binding operation. It may choose another eligible member only while checking route
 eligibility or source-local admission before any binding operation has started.
 
@@ -183,7 +184,7 @@ Starting the binding operation fixes the selected target. Core owns HWM retry an
 completion; the Framework does not reselect for capacity or resubmit the binding operation.
 There is no automatic resubmission after completion.
 
-## 6. Logical Multicast And Classic Fanout
+## 6. Logical Multicast and Classic Fanout
 
 [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast) follows these rules.
 
@@ -191,9 +192,9 @@ There is no automatic resubmission after completion.
   once.
 - If the operation itself cannot be submitted to the local executor, it waits up to the send
   timeout.
-- Once the bounded worker and source-local capacity secure the transaction start, the public
-  terminal completes normally with no return data, and per-target submission continues
-  internally.
+- Once the bounded worker and source-local capacity have been secured to start the
+  transaction, the public terminal completes normally with no return data, and per-target
+  submission continues internally.
 - Once started, an individual target's failure does not roll back the whole publish or turn
   it into an exceptional completion.
 - Per-target acceptance/failure results are not surfaced as a public return value or as
@@ -204,7 +205,7 @@ There is no automatic resubmission after completion.
 socket queue accepts the message, even with no subscribers. Subscriber count and receipt are
 not exposed as a public result.
 
-## 7. Admission Deadline — Owner And Value Rules
+## 7. Admission Deadline — Owner and Value Rules
 
 The one-way admission deadline is owned by the outbound socket or a
 [MeshNode](../00-foundation/02-glossary.en.md#meshnode) — a runtime node that participates in a
@@ -249,9 +250,9 @@ the STREAM transport queue.
 
 ## 8. STREAM Reply Token
 
-Bound session and session Actor relay do not roll back a remote failure that occurs after
-the local relay has accepted the message, and do not auto-replay it as the same submit's
-failure.
+Bound session and session Actor relay do not retroactively turn a remote failure that occurs
+after the local relay has accepted the message into a failure of the same submit, and do not
+automatically replay it.
 
 The one-shot [reply token](../00-foundation/02-glossary.en.md#reply-token) rules for STREAM reply are:
 
@@ -268,7 +269,7 @@ The one-shot [reply token](../00-foundation/02-glossary.en.md#reply-token) rules
 - Even if a late-accepted reply doesn't match on the client's correlation, the transport
   admission result does not become the request's result.
 
-## 9. Request Completion — The Completion Race And Timeout Budget
+## 9. Request Completion — The Completion Race and Timeout Budget
 
 The caller of a request observes exactly one result: whichever of reply, remote error, timeout,
 cancellation, or shutdown is decided first. Timeout and cancellation end the caller's wait,
@@ -308,7 +309,7 @@ same Spot ID, a late reply from the previous activation is not delivered to the 
 There is no automatic resend to a different RouteMesh member, ClientServer server, or send
 path after a target connection closes or times out.
 
-## 10. Operation Identity And Where Completion Happens (Implementation)
+## 10. Operation Identity and Where Completion Happens (Implementation)
 
 Each call has one completion slot, and several paths compete for it. Only the path that
 claims it releases the caller's wait. The losing paths do nothing.
@@ -369,11 +370,11 @@ sequenceDiagram
     P-->>S: deliver completion in a new execution turn
 ```
 
-## 11. The Execution Turn Of The Completion Callback (Implementation)
+## 11. The Execution Turn of the Completion Callback (Implementation)
 
 **An application callback does not run inside the lock held while confirming completion.**
 If the callback calls back into the runtime, it would require the same lock, causing a
-deadlock. Timer cancellation and payload cleanup are also done outside it.
+deadlock. Timer cancellation and payload cleanup also occur outside the lock.
 
 Releasing the lock and immediately invoking the callback on the same call stack is still
 insufficient. It lets application code re-enter the runtime before the current transport
@@ -388,11 +389,11 @@ The order is as follows.
 3. Enqueue the callback on the dispatcher.
 4. Run the callback on a new execution turn.
 
-If the terminal winner takes the in-progress call table entry and dispatcher admission then
-fails, the application completion is lost. The runtime therefore reserves a completion
+If the terminal winner takes the in-progress call table entry and admission to the dispatcher
+then fails, the application completion is lost. The runtime therefore reserves a completion
 dispatcher slot when it accepts the operation. That reservation remains until the callback
 returns. The combined number of in-progress operations and callbacks waiting or running on
-the dispatcher cannot exceed 4,096, so the callback queue cannot grow without a bound.
+the dispatcher cannot exceed 4,096, so the callback queue cannot grow without bound.
 
 If no slot can be reserved, the operation is rejected with `CapacityExceeded` before the
 request is sent. Once an operation is accepted, completion enqueue has no reject or drop
@@ -422,7 +423,7 @@ This rule requires distinguishing "failure after sending" from "failure before s
 | Before transport accepts | Yes. It's certain the target never received it |
 | After transport accepts | No. Whether it executed is unknowable |
 
-## 13. The Completion Point Of A Call That Does Not Wait For A Reply
+## 13. The Completion Point of a Call That Does Not Wait for a Reply
 
 A call that does not wait for a reply completes normally at the moment this process's send
 path accepts the message. Whether the remote queue received it or the handler executed it
@@ -433,13 +434,13 @@ can't be known from this result
 send path is the socket's send queue, so both terms refer to the same completion boundary.
 Documentation and code comments use the single term send acceptance.
 
-## 14. Failures Are Not Classified By String (Implementation)
+## 14. Failures Are Not Classified by String (Implementation)
 
 The completion path must distinguish cancellation, timeout, and shutdown. This distinction
 decides the result the caller receives.
 
-Judging cancellation by running a regex against the error message string makes
-classification change silently when the message wording changes. Conversely, a business
+Judging cancellation by running a regex against the error message string causes the
+classification to change silently when the message wording changes. Conversely, a business
 error whose message contains "cancel" is misclassified as cancellation and swallowed.
 
 **Failure is classified by type or a dedicated value.** The message string is for humans to
@@ -455,8 +456,8 @@ terminal** (C++ `async()`, .NET `Async()`, `submit()` elsewhere). The
 binding's sync(+flags) terminal is the binding's public surface, not a
 framework-internal path. Core send-completion notification drives the
 completion, so the framework doesn't wrap it in a separate executor or
-offload. The binding terminal names, return types, and flags contract
-themselves are owned by
+offload. The contracts for the binding terminal names, return types, and flags
+are owned by
 [the binding routed-transfer contract and asynchronous completion surface policy](../../../../../../../bindings/doc/spec/async-coroutine-policy.en.md)
 — this section owns only the framework's consumption rule.
 
@@ -466,9 +467,9 @@ The following two cases legitimately use the sync terminal.
   admission result without waiting, via the `DONTWAIT` flag. The sync
   terminal is the only surface of that contract.
 - **Implementing a public synchronous contract** — the internal
-  implementation of a public synchronous surface whose preservation
-  [State Ownership And Lanes §5](06-state-ownership-and-lanes.en.md#completion-before-return)
-  requires. Waiting at HWM saturation is then an observable property of
+  implementation of a public synchronous surface whose preservation is required by
+  [State Ownership And Lanes §5](06-state-ownership-and-lanes.en.md#completion-before-return).
+  Waiting at HWM saturation is then an observable property of
   that public contract, not a violation.
 
 Publish is HWM-free and uses a synchronous terminal. Raw reply depends on peer
@@ -536,12 +537,12 @@ offers a single `task_t<T> async()`. A callback overload can be provided as
 
 ## 17. Verification Requirements
 
-The public surface (each language's terminator return type, returned error kind, one-way
-submit's normal/exceptional completion, a request's reply/error/timeout/cancellation/
-shutdown completion, STREAM reply token claim results) alone confirms the following. Each
-item leads to one test. Conditions confirmable only through internal structure — that there
-is one completion-confirmation approach within the runtime, and when the dispatcher slot is
-reserved — are owned, with their rules, by §10/§11 and are not repeated here.
+The following are confirmed from the public surface alone (each language's terminator return
+type, returned error kind, one-way submit's normal/exceptional completion, a request's
+reply/error/timeout/cancellation/shutdown completion, and STREAM reply token claim results).
+Each item corresponds to one test. Conditions confirmable only through internal structure —
+that there is one completion-confirmation approach within the runtime, and when the dispatcher
+slot is reserved — are owned, with their rules, by §10/§11 and are not repeated here.
 
 **Submit and admission**
 
@@ -602,8 +603,8 @@ reserved — are owned, with their rules, by §10/§11 and are not repeated here
   complete the caller again.
 - The completion callback runs on a new execution turn, not the call stack at the moment of
   confirmation.
-- If no slot is reserved among the in-progress operations and the dispatcher, the request is
-  rejected with `CapacityExceeded` before it is sent.
+- If no slot can be reserved within the combined in-progress-operation and dispatcher limit,
+  the request is rejected with `CapacityExceeded` before it is sent.
 - Even if the connection drops after transport has accepted the message, the runtime does
   not resend to a different target.
 - A result completed by cancellation, timeout, or shutdown is distinguished by a dedicated

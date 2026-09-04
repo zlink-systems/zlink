@@ -30,7 +30,7 @@ only the route is refreshed — and when the connection drops, the
 | Party | Decides/owns |
 |---|---|
 | Application | Decides the domain identity in the session callback and binds `ActorRef`. Doesn't directly build a route or a global proxy between sessions. |
-| Framework (session owner) | Header framing, queue admission, keeping the binding token/route/generation, and performs the route switch during relay, rebind, disconnect, and relocation. |
+| Framework (session owner) | Handles header framing and queue admission, retains the binding token, route, and generation, and performs route switches during relay, rebind, disconnect, and relocation. |
 | Actor owner | Validates bind/rebind requests, registers the binding generation, and keeps exactly one current binding. |
 | Relocation runtime | Chooses the target for Actor/Spot moves, decides readiness, and accesses the [Location Store](../00-foundation/02-glossary.en.md#location-store) — the store holding each Spot's current owner and state. Only requests seal installation and route application from the session owner. |
 | Core | Handles the actual STREAM transport send/receive and the receive pipe HWM. |
@@ -62,17 +62,17 @@ attaches to the same Actor, is defined by
 [Session And Actor Binding "6. Rebind And Replacing The Previous Connection"](02-session-actor-binding.en.md#6-rebind-and-replacing-the-previous-connection),
 relocation, where the Actor moves to a different node, is defined by
 [Session And Actor Binding "8. The Session's Responsibility During Actor Relocation"](02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation),
-and each step's failure is defined by the section [§5](#5-find-by-question)
+and failures at each step are defined by the sections that [§5](#5-find-by-question)
 points to.
 
-## 4. Documents In This Topic
+## 4. Documents in This Topic
 
 | Document | Covers | Layer |
 |---|---|---|
 | [STREAM Server Session](01-stream-session.en.md) | Accepting one connection, registration, packet framing, and the codec and error boundaries — the contract the application observes | Contract |
 | [Session And Actor Binding](02-session-actor-binding.en.md) | The bind/relay/rebind/disconnect/relocation contract connecting a session to an Actor, and the execution-structure decisions every language runtime follows so the result is the same everywhere | Contract + implementation spec (decisions every language runtime follows) |
 
-## 5. Find By Question
+## 5. Find by Question
 
 | Question | Section with the answer |
 |---|---|
@@ -106,9 +106,9 @@ points to.
    to follow the path leading to the Actor.
 
 **A developer porting to a new language** — the following sections hold the
-rules and verification requirements every runtime must follow with the
-same structure, so read them before implementing per-language. Wherever
-languages may differ, the body marks it only as **Language-specific
+rules and verification requirements that every runtime must follow in the
+same structure, so read them before implementing a language runtime. Wherever
+languages may differ, the body marks such differences only as **Language-specific
 discretion**.
 
 - [STREAM Server Session "2. Roles And Responsibilities"](01-stream-session.en.md#2-roles-and-responsibilities) (recv mode),

@@ -1,24 +1,24 @@
 ---
-title: "Runtime Metrics And Aggregation Rules"
+title: "Runtime Metrics and Aggregation Rules"
 ---
 
-# Runtime Metrics And Aggregation Rules
+# Runtime Metrics and Aggregation Rules
 
 [Observability topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 01. Runtime Status Query And Operational Diagnostics](01-runtime-monitoring.en.md) · [Next: 03. Message Flow Tracing](03-message-flow-tracing.en.md)
 
-> Defines the name, kind, unit, and label of the metrics aggregating
+> Defines the name, kind, unit, and label of the metrics that aggregate
 > throughput, wait, failure, and current counts over time. The ownership
 > boundary with other documents in this topic follows the
 > [Observability responsibility map](README.en.md).
 
 ## 1. Metric Contract Overview
 
-Defines the name, kind, unit, and label of the metrics aggregating the
+Defines the name, kind, unit, and label of the metrics that aggregate the
 framework's throughput, wait, failure, and current counts. Since every
 language records values under the same contract, a single dashboard and
 alert rule set can be shared.
 
-The current complete state of runtime and topology is owned by
+The full current state of the runtime and topology is owned by
 [Runtime Status Query And Operational Diagnostics](01-runtime-monitoring.en.md);
 the progress record of one message is owned by
 [Message Flow Tracing](03-message-flow-tracing.en.md); individual host
@@ -36,7 +36,7 @@ The value space of a label must not grow in proportion to application
 object or message count. Exporter, registry, storage, histogram bucket,
 and backend aren't part of the framework's public contract.
 
-## 2. Naming And Aggregation Rules
+## 2. Naming and Aggregation Rules
 
 In the metric tables, `counter` monotonically increases occurrence count or
 a cumulative amount, `updown` records the delta when a current count goes
@@ -48,12 +48,12 @@ as a distribution.
   dotted ASCII.** Name, label key, and allowed label value are
   byte-identical across every language — so a single dashboard/alert rule
   set can be reused regardless of language.
-- Time histograms use seconds (`s`); byte-size uses `By`; everything else
+- Time histograms use seconds (`s`); byte sizes use `By`; everything else
   uses a count unit wrapped in braces.
 - **Provider failure doesn't change application callback, reply, new-work
   acceptance, or host lifecycle results.**
 
-## 3. Host Core HWM And Application Job Queue
+## 3. Host Core HWM and Application Job Queue
 
 The following instance-aggregate instruments read the Core runtime snapshot
 and [application job queue](../00-foundation/02-glossary.en.md#application-job-queue)
@@ -81,32 +81,32 @@ don't walk queues or handlers to collect metrics.
 **Reset preserves current gauges, including pressure state and current
 pause duration, rebases peak to current, and clears epoch counters and
 cumulative values, including transitions, cumulative pause duration, and
-configuration failures.** If it's already `paused` at reset time,
-cumulative pause duration starts accumulating again from that point as the
-new epoch's start. This measurement-epoch concept is observed as-is by
-[Runtime Monitoring §4](01-runtime-monitoring.en.md#4-the-capacity-fields-of-host-status)'s
-Host status capacity fields at query time, and this document owns the
-meaning of epoch and Reset.
+configuration failures.** If the queue is already `paused` at reset time,
+cumulative pause duration starts accumulating again from that point, which
+becomes the start of the new epoch. The Host status capacity fields in
+[Runtime Monitoring §4](01-runtime-monitoring.en.md#4-the-capacity-fields-of-host-status)
+observe this measurement-epoch concept as-is at query time, and this
+document owns the meaning of epoch and Reset.
 
 **Always-on metrics don't timestamp every job or create a per-job
-queue-wait histogram.** The name identifying a physical connection group,
-[`MeshName`](../00-foundation/02-glossary.en.md#meshname); the name
-identifying a Channel, [`ChannelName`](../00-foundation/02-glossary.en.md#channelname);
-Actor ID; the global logical address of a
-[Spot](../00-foundation/02-glossary.en.md#spot),
-[Spot ID](../00-foundation/02-glossary.en.md#spot-id); session ID, RID,
-endpoint, packet name, and owner aren't used as labels.
+queue-wait histogram.** The following aren't used as labels: the name
+identifying a physical connection group,
+[`MeshName`](../00-foundation/02-glossary.en.md#meshname); the name identifying a
+Channel, [`ChannelName`](../00-foundation/02-glossary.en.md#channelname); Actor ID; the
+global logical address of a [Spot](../00-foundation/02-glossary.en.md#spot),
+[Spot ID](../00-foundation/02-glossary.en.md#spot-id); session ID; RID; endpoint; packet
+name; and owner.
 
-## 4. Peer And Channel
+## 4. Peer and Channel
 
 The runtime unit that provides peer connections and Channel messaging
 within one process is called a [MeshNode](../00-foundation/02-glossary.en.md#meshnode).
 The logical runtime where multiple MeshNodes share the same messaging
 rules is called a [RouteMesh](../00-foundation/02-glossary.en.md#routemesh).
 RouteMesh registers under a MeshName, and Channel registers under a
-ChannelName, both at startup. The action by which the
-framework selects one member among those satisfying the condition is
-called [select-one](../00-foundation/02-glossary.en.md#select-one).
+ChannelName, both at startup. The framework's selection of one member that
+satisfies the condition is called
+[select-one](../00-foundation/02-glossary.en.md#select-one).
 
 Only a peer or member in the [Ready state](../00-foundation/02-glossary.en.md#ready) —
 satisfying every per-feature serving condition — is included in a ready
@@ -149,34 +149,34 @@ kinds like send/request/publish within the handler namespace.
 
 Message drop `reason` is
 `no_handler|decode_error|backpressure|stale_target|shutdown`. Here
-`backpressure` means the [state](../00-foundation/02-glossary.en.md#backpressured) where
+`backpressure` means the [state](../00-foundation/02-glossary.en.md#backpressured) in which
 the send path or queue's capacity is temporarily insufficient.
 
 [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast), which fixes a
 Spot member list and sends to every target, and
 [classic fanout](../00-foundation/02-glossary.en.md#classic-fanout) publish, which sends
-events via a separate PUB/SUB connection, are excluded. A per-target
-metric also isn't created.
+events via a separate PUB/SUB connection, are excluded. No per-target
+metric is created either.
 
-## 6. Object Count, Capacity, And Relocation Instruments
+## 6. Object Count, Capacity, and Relocation Instruments
 
 This section aggregates the current count and capacity of Spots and the
 Actors processing application messages within them, plus relocation and
-STREAM connection instruments. The connection unit where one client and
+STREAM connection instruments. The connection unit in which one client and
 server share a byte stream is a
 [STREAM session](../00-foundation/02-glossary.en.md#stream-session).
 
-The method of re-creating or storing and restoring application state when
-continuing to run an Actor or Spot on a different node is called a
+The method used to continue running an Actor or Spot on a different node by
+re-creating application state or storing and restoring it is called a
 [relocation policy](../00-foundation/02-glossary.en.md#relocation-policy). The MeshNode
 that actually runs an Actor/Spot and manages its application queue is
 called the [owner](../00-foundation/02-glossary.en.md#owner). Capacity aggregation uses
 the confirmed value from the
 [Location Store](../00-foundation/02-glossary.en.md#location-store), which holds the
-reference record for judging the current owner and location.
+reference record used to determine the current owner and location.
 
-**`zlink.spot.count` and `zlink.actor.count` count how many this MeshNode
-is currently running, while `zlink.object.capacity.*` and
+**`zlink.spot.count` and `zlink.actor.count` count the Spots and Actors this
+MeshNode is currently running, while `zlink.object.capacity.*` and
 `zlink.spot.type.capacity.*` read the population the Location Store
 confirmed.** These two instruments have different aggregation boundaries
 and don't substitute for each other — their values can differ.
@@ -184,7 +184,7 @@ and don't substitute for each other — their values can differ.
 and [stable type](../00-foundation/02-glossary.en.md#stable-type), the type identity
 that doesn't change after startup registration, are only used in labels
 as registered values. A Spot the framework can create on the first call
-by ID is called an
+using its ID is called an
 [Instance Spot](../00-foundation/02-glossary.en.md#entry-user-instance-spot).
 
 | Instrument | Kind | Unit | Label | Meaning |
@@ -220,13 +220,13 @@ by ID is called an
 
 ## 7. Instance Spot Activation Instruments
 
-Instance Spot adds the following instruments. `instance_spot_type` only
-uses a type registered at startup with a limited count. The count and byte
-count of messages in front of the
+Instance Spot adds the following instruments. Only a type registered at
+startup with a limited count is used for `instance_spot_type`. The message
+and byte counts in front of the
 [activation barrier](../00-foundation/02-glossary.en.md#activation-barrier), which
-blocks handler execution until Spot initialization and the first
-message's storage finish, are also aggregated. The reference information
-judging an Actor's or Spot's current location, owner, and generation is
+blocks handler execution until Spot initialization and storage of the first
+message are complete, are also aggregated. The reference information used
+to determine an Actor's or Spot's current location, owner, and generation is
 called [authority](../00-foundation/02-glossary.en.md#authority). A claim conflict is
 recorded when this reference information doesn't match the request's Spot
 kind or stable type.
@@ -245,15 +245,15 @@ Activation `outcome` only allows
 `reason` only allows `authority|spot_kind|spot_type|closing`; takeover
 `outcome` only allows `claimed|lost|failed`.
 
-## 8. Host Relocation And Shutdown
+## 8. Host Relocation and Shutdown
 
-The procedure where a host stops accepting new work and cleans up
+The procedure in which a host stops accepting new work and cleans up
 already-accepted work and resources is called
 [drain](../00-foundation/02-glossary.en.md#drain). Host
 [`Shutdown`](../00-foundation/02-glossary.en.md#shutdown) finishes this
-cleanup and terminates the runtime and infrastructure. The action of
-forwarding a message that arrives at the previous owner node, on behalf of
-the new owner, after relocation commits is called
+cleanup and terminates the runtime and infrastructure. The act of forwarding
+a message that arrives late at the previous owner node to the new owner
+after relocation commits is called
 [Message Follow](../00-foundation/02-glossary.en.md#message-follow).
 
 | Instrument | Kind | Unit | Label | Meaning |
@@ -268,9 +268,9 @@ the new owner, after relocation commits is called
 | `zlink.host.shutdown.duration` | histogram | `s` | `outcome` | Records the time from host `Shutdown` start to terminal result. |
 | `zlink.host.shutdown.forced` | counter | `{operation}` | `reason` | Accumulates the count of host `Shutdown`s that forcibly ended remaining work to finish cleanup within the time limit. |
 
-`state` is the 7 values
-[Runtime Monitoring §3](01-runtime-monitoring.en.md#3-host-state--values-read-at-once)
-defines: `preparing|serving|relocating|relocated|draining|stopped|error`.
+`state` has the 7 values defined by
+[Runtime Monitoring §3](01-runtime-monitoring.en.md#3-host-state--values-read-at-once):
+`preparing|serving|relocating|relocated|draining|stopped|error`.
 Relocation `outcome` is `relocated|blocked`. Shutdown `outcome` is
 `stopped|force_stopped`. Reason uses the identifiers from
 [Host Relocation And Shutdown](../05-location-relocation/05-host-relocation-flow.en.md).
@@ -279,7 +279,7 @@ Relocation `outcome` is `relocated|blocked`. Shutdown `outcome` is
 each interval is measured with exactly one node's local clock.** No metric
 directly subtracts clocks of different nodes — a full interval crossing
 nodes, such as from source seal to target dispatch opening, is observed
-via same-flow correlation in
+via correlation within the same flow in
 [Message Flow Tracing](03-message-flow-tracing.en.md). The relationship
 between the three intervals is as follows.
 
@@ -312,18 +312,17 @@ sequenceDiagram
   instrument.
 
 The [§10](#10-label-cardinality) rule of not distinguishing individual
-relocations by label also applies to these instruments as-is. A non-zero
+relocations by label also applies to these instruments. A non-zero
 `zlink.relocation.cutover_timeout` means the fallback path that doesn't
 guarantee relay ordering is actually being used in that deployment, so an
 operator uses it as the basis for adjusting the cutover wait setting
 (`RelocationCutoverWaitTimeout` in [Framework API](../00-foundation/06-framework-api.en.md)).
 
-## 9. Location And Telemetry
+## 9. Location and Telemetry
 
-The authority by which a framework host proves it can keep using the
-current lifecycle's registration information and object ownership is the
-[owner lease](../00-foundation/02-glossary.en.md#owner-lease), renewed on a fixed
-schedule.
+A framework host proves its right to keep using the current lifecycle's
+registration information and object ownership with an
+[owner lease](../00-foundation/02-glossary.en.md#owner-lease), renewed on a fixed schedule.
 
 | Instrument | Kind | Unit | Label | Meaning |
 |---|---|---|---|---|
@@ -333,13 +332,13 @@ schedule.
 | `zlink.observability.events.overflow` | counter | `{event}` | `source` | Accumulates overflow counts of the internal telemetry queue delivering runtime status and trace. |
 
 `scope_kind` is `mesh|channel`. `scope_name` holds the corresponding
-MeshName or ChannelName. `operation` is closed to the following 7 values —
+MeshName or ChannelName. `operation` is limited to the following 7 values —
 `read|compare_exchange|relocation_put|relocation_get|relocation_delete|lease_renew|release`.
 Logical Multicast and classic fanout publish aren't aggregated.
 
 ## 10. Label Cardinality
 
-Labels only use startup registration values or values an enum allows.
+Labels use only startup registration values or values an enum allows.
 
 The string distinguishing the kind of event a classic fanout subscriber
 receives is called a [topic](../00-foundation/02-glossary.en.md#topic). Individual
@@ -350,9 +349,9 @@ labels.
 |---|---|
 | `mesh_name`, `channel_name`, `scope_kind`, `scope_name`, static `source`, `surface`, `message_kind`, `operation`, `outcome`, `reason`, `mode`, `object_kind`, `unit_kind`, `execution_mode`, `policy`, `spot_kind`, `capacity_scope`, registered `stable_type`, registered `instance_spot_type`, `transport`, `close_reason`, `state` | topic, Actor ID, Spot ID, RID, endpoint, session ID, relocation ID, user ID, correlation ID, flow ID, application metadata value, application state format/version |
 
-`MeshName`, `ChannelName`, and `scope_name` are only used when closed to
-host registration values. A label isn't built from payload. Individual
-Actor/Spot/message flows are checked via
+`MeshName`, `ChannelName`, and `scope_name` are used only when their values
+are limited to host registration values. A label isn't built from payload.
+Individual Actor/Spot/message flows are checked via
 [Message Flow Tracing](03-message-flow-tracing.en.md), not a metric.
 
 ## 11. Collection Boundary
@@ -369,12 +368,13 @@ configure exporter, reader, storage, or histogram bucket.
 - A counter, timestamp, or histogram isn't recorded per mailbox
   enqueue/dequeue or turn.
 - The provider decides histogram bucket and aggregation.
-- **A provider callback failure doesn't retroactively change the last
-  normal collection result against a processing stage it already passed.**
+- **A provider callback failure doesn't cause the last successful collection
+  result to be applied retroactively to a processing stage that has already
+  passed.**
 
 ## 12. Verification Requirements
 
-The following is confirmed using only the public surface — instrument
+The following are verified using only the public surface — instrument
 name/kind/unit/label, and allowed label values. Each item leads to one
 implementation or contract test.
 
@@ -404,7 +404,7 @@ implementation or contract test.
 - Relocation interval instruments are measured with each node's own local
   clock, and no metric directly subtracts clocks of different nodes.
   `zlink.relocation.cutover_timeout` matches the count of fallback CAS
-  proceedings without verification.
+  operations performed without verification.
 - Instance activation is observed per registered type, excluding Spot
   ID/owner ID/generation from labels.
 - An Instance one-way activation failure is a `surface=instance_spot`

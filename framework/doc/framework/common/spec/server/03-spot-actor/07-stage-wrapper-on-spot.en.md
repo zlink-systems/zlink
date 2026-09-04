@@ -1,8 +1,8 @@
 ---
-title: "Stage Wrapper On Spot"
+title: "Stage Wrapper on Spot"
 ---
 
-# Stage Wrapper On Spot
+# Stage Wrapper on Spot
 
 [Spot And Actor topic index](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 06. Spot Address Messaging](06-spot-address-messaging.en.md) · [Next: 08. Spot/Actor Routing](08-routing.en.md)
 
@@ -13,7 +13,7 @@ title: "Stage Wrapper On Spot"
 
 ## 1. Stage Wrapper Overview
 
-A Stage wrapper must safely keep the state owned by a Spot while preserving the
+A Stage wrapper must safely maintain the state owned by a Spot while preserving the
 Spot/Actor/timer execution boundary that matches the selected User Spot execution mode.
 
 The framework doesn't provide a separate Stage runtime or a common Stage base type. The
@@ -26,7 +26,7 @@ public interface document.
 | Responsibility | Owner |
 |---|---|
 | Spot identity, create/close, and the application turn | Owned by the framework Spot runtime. |
-| Spot direct and [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast) (the way of delivering one message to multiple Spots of the same Channel by ChannelName and topic) dispatch | Owned by the framework Spot runtime. |
+| Spot direct and [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast) (a method of delivering one message to multiple Spots of the same Channel by ChannelName and topic) dispatch | Owned by the framework Spot runtime. |
 | Timer admission and callback turn | Owned by the framework Spot runtime. |
 | Actor queue and Actor business handler | Owned by the framework Actor runtime. |
 | Actor join/leave and lifecycle control | Owned by the Spot/Actor-dedicated queue the framework uses to process lifecycle work. |
@@ -38,7 +38,7 @@ handle, or message storage reference on the public surface.** This is because th
 wrapper's public surface must consist only of the framework's public Spot/Actor/timer/
 location surface.
 
-## 3. Preserving The Spot Turn
+## 3. Preserving the Spot Turn
 
 A callback that reads or changes state owned by the Stage must run on the target Spot's
 application turn — the [Spot turn](../00-foundation/02-glossary.en.md#spot-turn), the unit in
@@ -71,19 +71,19 @@ on a transport or completion thread.
 
 ## 4. Actor Boundary
 
-Even if an Actor joins a Stage-role Spot, the Actor's business payload is still delivered
+Even if an Actor joins a Spot serving as a Stage, the Actor's business payload is still delivered
 directly to the Actor queue. Actor payload isn't converted into a Spot callback or put on
 the Spot application queue. Consequently, an Actor handler doesn't directly reference the
 Stage's mutable state.
 
 For an Actor to change Stage state, it submits an explicit send/request to the Stage
-Spot. That handler performs
+Spot. That handler makes
 [membership](../00-foundation/02-glossary.en.md#actor-membership) — which Stage Spot the Actor
-currently belongs to — and score, world state, and broadcast decisions on the Spot turn.
+currently belongs to — as well as score, world state, and broadcast decisions on the Spot turn.
 
-- In `SpotWide`, the Actor handler also uses the same common Stage execution gate.
+- In `SpotWide`, the Actor handler also uses the shared Stage execution gate.
 - In `PerActor`, the per-Actor gate and Spot lane can run independently, so the boundary
-  where an Actor handler doesn't directly reference mutable Stage state is kept.
+  where an Actor handler doesn't directly reference mutable Stage state is preserved.
 
 The framework processes an Actor's join, leave, relocation, and lifecycle notification on
 a dedicated queue separate from business messages. This queue doesn't run the Actor's
@@ -91,9 +91,9 @@ regular business handler, and doesn't convert business payload into a lifecycle 
 either. The detailed Actor queue and lifecycle handling contract is owned by
 [Actor Model](04-actor-model.en.md).
 
-## 5. Timer And Yield
+## 5. Timer and Yield
 
-A Stage timer is registered within the Spot lifecycle and submits its tick to the Spot
+A Stage timer is registered within the Spot lifecycle, and its tick is submitted to the Spot
 application queue.
 
 - In `SpotWide`, the timer callback is serialized with the entire Stage, including Spot
@@ -131,13 +131,13 @@ run and timer registration information are included in the relocation payload. S
 target framework automatically restores these, the Stage wrapper's `Restore` doesn't
 re-register the same timer.
 
-## 6. Creation And Membership
+## 6. Creation and Membership
 
-The Stage wrapper passes stable type and a domain creation payload to the User Spot
+The Stage wrapper passes a stable type and a domain creation payload to the User Spot
 manager's explicit Create/GetOrCreate, and builds the initial Stage state inside the
 creation callback. Even if multiple nodes try to create the same Spot concurrently, the
 Framework only runs the one factory that obtained creation authority. The condition for
-allowing new work and the business state to restore after reactivation are decided by
+allowing new work and the business state restored after reactivation are decided by
 domain rules.
 
 Actor join checks the Stage membership policy on the framework's lifecycle-dedicated
@@ -154,12 +154,12 @@ A Stage-wide notification uses whichever path matches its meaning.
 
 **Logical Multicast isn't used as the durable source of the Stage member list.**
 
-## 7. Location And Lifetime
+## 7. Location and Lifetime
 
 An external service obtains a global [Spot ID](../00-foundation/02-glossary.en.md#spot-id) from a
 domain key and sends a message to the Stage Spot. When closing that incarnation or
 displaying it as operational information, use the `SpotRef` the manager lookup returned.
-owner RID and endpoint aren't stored in wrapper state. The meaning of location updates and
+The owner RID and endpoint aren't stored in wrapper state. The meaning of location updates and
 stale routes is defined by
 [Spot Address Messaging](06-spot-address-messaging.en.md).
 
@@ -168,7 +168,7 @@ already-accepted Spot turns and membership within the drain deadline. Timers,
 [subscriptions](../00-foundation/02-glossary.en.md#subscription), and direct messages after shutdown
 don't create a new Stage callback.
 
-## 8. Metadata And Observability
+## 8. Metadata and Observability
 
 The Stage wrapper provides the immutable metadata snapshot of the
 [Message Model](../00-foundation/05-message-model.en.md) to the handler as-is, and doesn't interpret
@@ -180,7 +180,7 @@ Observability information must distinguish
 type, Spot turn backlog, timer delay, membership control result, and shutdown state. Stage ID
 and Actor ID aren't used as metric labels.
 
-## 9. Implementation And Contract-Test Verification Requirements
+## 9. Implementation and Contract-Test Verification Requirements
 
 Confirm the following using only the public surface — the framework's public
 Spot/Actor/timer/location surface the Stage wrapper uses, the point at which `Yield`
@@ -220,4 +220,3 @@ returns, and the submit-time error. Each item maps to one contract test.
 ---
 
 [Spot And Actor topic index](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 06. Spot Address Messaging](06-spot-address-messaging.en.md) · [Next: 08. Spot/Actor Routing](08-routing.en.md)
-</content>

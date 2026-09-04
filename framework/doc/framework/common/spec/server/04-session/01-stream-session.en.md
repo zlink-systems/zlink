@@ -12,15 +12,15 @@ title: "STREAM Server Session"
 
 ## 1. STREAM Session Overview
 
-STREAM differs in nature from regular request-response. Connection lifetime,
-peer identification, packet framing, and session lifecycle become axes that
-must be checked before the payload of each individual request.
+STREAM differs from conventional request-response communication. Connection
+lifetime, peer identification, packet framing, and session lifecycle must be
+considered before the payload of each individual request.
 
-The framework handles STREAM as a header-based packet session, and doesn't
+The framework treats STREAM as a header-based packet session and doesn't
 hand the raw byte stream directly to the application. The framework decodes
 the stream header, puts packet name and metadata into the dispatch context,
-and delivers it to the session callback together with a payload not yet
-converted into a business object. The application only uses this session
+and delivers it to the session callback along with a payload that has not yet
+been converted into a business object. The application only uses this session
 callback; header framing, packet boundaries, and the payload conversion
 surface are defined by this document and
 [§6](#6-payload-conversion-and-the-codec-boundary).
@@ -40,19 +40,19 @@ The following is outside the scope of this contract.
   application doesn't drive a raw receive loop directly
   ([§4](#4-from-connection-accept-to-the-session-callback)).
 - **Direct handling of raw chunks.** The application only sees payload in the
-  packet units the session callback delivers.
+  packet units delivered by the session callback.
 - **Custom header framing.** The header binary format is an internal protocol
   the framework and connector share — the application isn't given a setting
   to change this format.
 
-## 2. Roles And Responsibilities
+## 2. Roles and Responsibilities
 
 | Party | Responsibility |
 |---|---|
-| Application | Implements the session callback, and distinguishes which packet to process by [packet name](../00-foundation/02-glossary.en.md#packet-name), using the framework's common decoder surface. |
+| Application | Implements the session callback, uses the [packet name](../00-foundation/02-glossary.en.md#packet-name) to determine which packet to process, and uses the framework's common decoder surface. |
 | Framework | After acquiring a managed queue permit, pulls one packet, decodes its header, runs the session callback, and manages registration, codec, and error boundaries. |
 | Core | Handles actual STREAM transport send/receive, packet boundaries in `PACKET` mode, and the receive pipe HWM. |
-| Connector (client side) | Implements the connection/reconnection and wire contract the client observes. This document defines only the server side. |
+| Connector (client side) | Implements the connection and reconnection behavior and the wire contract observed by the client. This document defines only the server side. |
 
 - **Before the first bind in every language, the framework sets the Core STREAM socket to
   `PACKET` mode and receives application packets by pulling with
@@ -66,13 +66,13 @@ The following is outside the scope of this contract.
   the backpressure boundary. This is an internal condition that the per-packet pull order in
   [§4](#4-from-connection-accept-to-the-session-callback) must satisfy.
 
-The transport body only handles header framing — it isn't responsible for
+The transport itself handles only header framing — it isn't responsible for
 converting the payload into a business object. Session connect and disconnect
 lifecycle callbacks are provided as a basic surface, and the error callback
 delivers only a transport error attributed to that session, not an
 application exception ([§7](#7-error-boundary)).
 
-## 3. Registration And Startup Validation
+## 3. Registration and Startup Validation
 
 A stream node is registered explicitly. Implicit registration based on
 attributes or decorators isn't provided.
@@ -100,7 +100,7 @@ public interface IZLinkStreamNodeBuilder
     IZLinkStreamNodeBuilder SetAdvertiseHost(string advertiseHost);
     // Optional. Cap on client-to-server complete message size (default 64 KiB). Value rule in §9.
     IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
-    // Optional. Core STREAM socket option. The items are defined by the per-language per-language interface.
+    // Optional. Core STREAM socket option. The items are defined by the per-language interface.
     IZLinkStreamSocketConfig ConfigureSocket();
     // Optional. Enabling TLS requires specifying the certificate/key paths together. Requiring a client certificate defaults to false (§3.1).
     IZLinkStreamNodeBuilder SetTlsServer(
@@ -133,8 +133,8 @@ path.
 ### 3.1 TLS
 
 A Stream node can use TLS. Enabling TLS requires specifying a certificate
-path and key path together, and whether to require a client certificate is
-chosen in the same server TLS configuration. The default is not to require
+path and key path together, and the same server TLS configuration specifies
+whether a client certificate is required. The default is not to require
 it; if set to require it, a connection that fails client-certificate
 verification is rejected before a session is built. The client-side transport
 choice is determined by the endpoint scheme
@@ -155,7 +155,7 @@ The following fail as configuration errors before the host starts.
 | TLS is enabled but the key path is empty. | Fails startup as a configuration error. |
 | A client certificate was required without configuring a TLS server. | Fails startup as a configuration error. |
 
-## 4. From Connection Accept To The Session Callback
+## 4. From Connection Accept to the Session Callback
 
 The framework internally owns the `recv loop` but doesn't expose a raw
 receive loop as an application public surface. The application only uses the
@@ -188,7 +188,7 @@ execution rules of filters on other dispatches are set by
 [Framework API §8.1](../00-foundation/06-framework-api.en.md#10-handler-filter).
 
 A session callback receives a dispatch context holding packet name, metadata,
-and request information, along with payload. The runtime preserves request
+and request information, along with the payload. The runtime preserves request
 header values inside the dispatch context, so the application doesn't build a
 header object or pass it into a relay call again. The
 [routing ID](../00-foundation/02-glossary.en.md#routing-id) — the peer identity value
@@ -218,10 +218,10 @@ pending request.
   time — not selected by name.
 - `Error` also returns the same sequence.
 
-The full rule is defined by the [Message Model](../00-foundation/05-message-model.en.md)'s
-reply correlation contract.
+The full rule is defined by the reply correlation contract in the
+[Message Model](../00-foundation/05-message-model.en.md).
 
-## 6. Payload Conversion And The Codec Boundary
+## 6. Payload Conversion and the Codec Boundary
 
 The framework's basic surface only provides session, session context,
 stream, and message. Object conversion is handled by a separate codec
@@ -229,9 +229,9 @@ extension operating on the framework message, not the raw transport message,
 and a specific codec implementation isn't directly mixed into raw transport
 or the framework's basic runtime.
 
-A session handler doesn't directly call a per-codec helper. Even when
-switching between JSON/Protobuf/MessagePack/custom codec, business code uses
-the same decode surface.
+A session handler doesn't directly call a per-codec helper. Business code uses
+the same decode surface regardless of whether the codec is JSON, Protobuf,
+MessagePack, or custom.
 
 The server framework, HTTP client host, and stream connector share the codec
 number, content-type, and typed-payload-selection contract, but don't share a
@@ -246,22 +246,22 @@ connector owns a per-connector-instance typed codec option
 | Error | Where it goes |
 |---|---|
 | A transport error attributed to that session | Delivered to the session error callback. |
-| Handshake failure | A failure before the session was built, so there's no target to run a session callback on. Only recorded in runtime monitoring. |
-| A socket/node-level error | Can't be attributed to a single specific session's error, so a session callback isn't run — it's recorded in runtime monitoring. |
+| Handshake failure | A failure before the session was built, so there's no target for a session callback. It is recorded only in runtime monitoring. |
+| A socket/node-level error | Can't be attributed to a single specific session, so a session callback isn't run — it's recorded in runtime monitoring. |
 | An application handler exception | Not a transport error, so the session error callback isn't run — the handler exception-handling path is used instead. |
 
-The session error callback is restricted to only the axis of re-surfacing a
-monitor-observable transport error at the session level.
+The session error callback is limited to surfacing a monitor-observable
+transport error at the session level.
 
 The termination reason when a session closes matches the closed set in
 [Stream Connector §6.3](../../stream-connector/32-stream-connector.en.md#63-close-reason),
-and the instrument is owned by
+and the corresponding instrument is owned by
 [runtime-metrics §4](../06-observability/02-runtime-metrics.en.md).
 
-## 8. From Session To Actor
+## 8. From Session to Actor
 
 A session callback doesn't directly change [Spot](../00-foundation/02-glossary.en.md#spot)
-state. It only proceeds as far as submitting an Actor dispatch or Spot call
+state. It only submits an Actor dispatch or Spot call
 ([Stage Wrapper On Spot §3](../03-spot-actor/07-stage-wrapper-on-spot.en.md#3-preserving-the-spot-turn)).
 
 Even if the Actor is on a different [MeshNode](../00-foundation/02-glossary.en.md#meshnode),
@@ -298,7 +298,7 @@ target runtime send commands 42, 43, 44 to the Session owner node. Their
 order and the Session owner's responsibility are defined by
 [Session And Actor Binding "8. The Session's Responsibility During Actor Relocation"](02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation).
 
-The framework only delivers these records between MeshNodes, and doesn't
+The framework delivers only these records between MeshNodes and doesn't
 expose the target Node RID,
 [binding generation](../00-foundation/02-glossary.en.md#binding-generation) (the order in
 which a binding was replaced within the same session owner process
@@ -307,9 +307,9 @@ When closing a session, a tombstone of the current binding generation is
 submitted, so a late-arriving close from a previous bind can't release a new
 binding.
 
-The contract for handing a packet a session received off to the Actor,
-rebind and replacing the previous connection, and the Session's
-responsibility during Actor relocation are defined by
+The contract for passing a packet received by a session to the Actor,
+rebinding and replacement of the previous connection, and the Session's
+responsibility during Actor relocation is defined by
 [Session And Actor Binding](02-session-actor-binding.en.md). In particular,
 the order in which the previous connection is cleaned up when a new session
 binds the same Actor is defined by
@@ -318,7 +318,7 @@ and the responsibility the physical session carries while the Actor
 relocates to another node is defined by
 [Session And Actor Binding "8. The Session's Responsibility During Actor Relocation"](02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation).
 
-## 9. Numbers And Limits
+## 9. Numbers and Limits
 
 | Item | Value | Scope |
 |---|---|---|
@@ -339,7 +339,7 @@ is owned by
 
 ## 10. Verification Requirements
 
-The following is confirmed using only the public surface — the session
+The following items are confirmed using only the public surface — the session
 registration builder, session callback and dispatch context, the send
 result/connection termination a client observes, `Response`/`Error` headers,
 and the inter-node wire records. Each item leads to one contract test.

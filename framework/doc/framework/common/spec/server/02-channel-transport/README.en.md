@@ -1,24 +1,24 @@
 ---
-title: "Channel And Transport"
+title: "Channel and Transport"
 ---
 
-# Channel And Transport
+# Channel and Transport
 
 [Spec table of contents](../README.en.md) · [Next: 01. RouteMesh Topology](01-channel-topology.en.md)
 
 ## 1. What This Covers
 
-How does one Node find another node or client, how does it exchange bytes, and how
-does it confirm a connection is alive — this topic covers both that physical
-connection and logical message target selection together. It is split across six
-documents: [MeshNode](../00-foundation/02-glossary.en.md#meshnode)s — runtime nodes that send
-or receive messages within a connection topology several nodes participate in — that find
-each other by a [MeshName](../00-foundation/02-glossary.en.md#meshname), the name identifying
-one [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) physical connection group, the
-[ClientServer Channel](../00-foundation/02-glossary.en.md#clientserver-channel) an
-application opens directly by a [ChannelName](../00-foundation/02-glossary.en.md#channelname) —
-the name identifying which Channel scope a message is sent to — the address a listener
-exposes, connection liveness confirmation, and the actual byte format that travels over
+This topic covers how one Node finds another node or client, exchanges bytes, and
+confirms that a connection is alive. It addresses both the physical connection and
+logical message target selection. The six documents cover RouteMesh, where
+[MeshNode](../00-foundation/02-glossary.en.md#meshnode)s — runtime nodes that send or receive
+messages within a connection topology in which several nodes participate — find each other
+by a [MeshName](../00-foundation/02-glossary.en.md#meshname), the name identifying one
+[RouteMesh](../00-foundation/02-glossary.en.md#routemesh) physical connection group; the
+[ClientServer Channel](../00-foundation/02-glossary.en.md#clientserver-channel), which an
+application opens directly by a [ChannelName](../00-foundation/02-glossary.en.md#channelname),
+the name identifying the Channel scope to which a message is sent; the address a listener
+exposes; connection liveness confirmation; and the actual byte format that travels over
 the wire.
 
 What a [Spot](../00-foundation/02-glossary.en.md#spot) — a logical instance with an address
@@ -36,7 +36,7 @@ logical target it arrives at.
 | [Location Store](../00-foundation/02-glossary.en.md#location-store) (the store that keeps each object's current owner and status so several nodes can check it together) | Durable record of the [ClientServer Server descriptor](../00-foundation/02-glossary.en.md#clientserver-server-descriptor) — the registration information a Server publishes for ClientServer automatic discovery to announce its own identity and connection location — and RouteMesh registration information — without it, automatic discovery does not work |
 | Core | Actual socket send/receive, connect/disconnect events, physical delivery of wire bytes |
 
-## 3. Seen As One Flow
+## 3. Seen as One Flow
 
 Physical connection and logical target selection are different layers. A physical
 connection must exist before it becomes a candidate for logical selection, and
@@ -68,10 +68,10 @@ flowchart LR
 ```
 
 Each candidate in the logical layer becomes ready only over a connection that has
-been admitted in the physical layer and confirmed alive by probe/ack — the
-connecting lines in the two diagrams are joined by this condition.
+been admitted in the physical layer and confirmed alive by probe/ack; this
+condition links the two diagrams.
 
-## 4. Documents In This Topic
+## 4. Documents in This Topic
 
 | Document | Covers | Layer |
 |---|---|---|
@@ -82,7 +82,7 @@ connecting lines in the two diagrams are joined by this condition.
 | [05. Transport Liveness](05-transport-liveness.en.md) | probe/ack and beacon fixed timing, Ready and failure determination, connection loss and reconnect | Contract + implementation spec (sole source of truth) |
 | [06. Service Wire Protocol](06-wire-protocol.en.md) | The actual byte format and command list exchanged between nodes | Implementation spec |
 
-## 5. Find By Question
+## 5. Find by Question
 
 | Question | Where the answer is |
 |---|---|
@@ -140,7 +140,7 @@ differ, it is marked in the body only with **Per-language discretion.**
 
 | Content | Owning Document |
 |---|---|
-| The Actor model and its queue, the admission-determination target of Actor join | [Spot And Actor Model](../03-spot-actor/05-spot-actor-membership.en.md) — being migrated to the 03-spot-actor topic |
+| The Actor model and its queue, the target of the admission decision for Actor join | [Spot And Actor Model](../03-spot-actor/05-spot-actor-membership.en.md) — being migrated to the 03-spot-actor topic |
 | Session's bind/relay/rebind/relocation responsibility | [Session Topic](../04-session/README.en.md) |
 | Location Store record format and CAS discipline | [Location Runtime](../05-location-relocation/01-location-runtime.en.md) — being migrated to the 05-location-relocation topic |
 | Relocation's phase state machine and [Actor membership](../00-foundation/02-glossary.en.md#actor-membership) commit procedure — which Spot an Actor belongs to | [Relocation Handoff State Transitions](../05-location-relocation/04-relocation-flow.en.md) — being migrated to the 05-location-relocation topic |

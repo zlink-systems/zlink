@@ -1,14 +1,14 @@
 ---
-title: "Relocation Store Provider SPI And The Official Redis Implementation"
+title: "Relocation Store Provider SPI and the Official Redis Implementation"
 ---
 
-# Relocation Store Provider SPI And The Official Redis Implementation
+# Relocation Store Provider SPI and the Official Redis Implementation
 
 [Location And Relocation Topic Table Of Contents](README.en.md) · [Spec Table Of Contents](../README.en.md) · [Previous: 02. Location Store (Redis)](02-location-store-redis.en.md) · [Next: 04. Complete Actor And Spot Relocation Flow](04-relocation-flow.en.md)
 
 > Defines the public provider interface (SPI) of the Relocation Store — which holds the byte
 > payload needed for the Instance Spot cold-activation record and the completion record of a
-> request that finishes after relocation — and the key/data type the official Redis
+> request that finishes after relocation — and the key format and data type the official Redis
 > implementation must follow for cross-language interoperability.
 
 ## 1. The Contract This Document Fixes
@@ -27,7 +27,7 @@ byte payload needed for the Instance Spot cold-activation record and the complet
 requests that finish after relocation. An interface the Framework calls and an external provider
 implements, like this one, is called an SPI. A provider developer must use the reference the
 Framework issued, unchanged, as the key to store the payload, and must use that same reference to
-perform read, retention extension, and delete.
+read the payload, extend its retention period, and delete it.
 
 The Actor/Spot relocation handoff payload — application state, the unexecuted queue, and timers —
 doesn't pass through this provider. The source sends it to the target directly over a mesh
@@ -41,21 +41,21 @@ The provider doesn't interpret the business meaning of the bytes it stores. It s
 uninterpreted bytes, the [activation envelope](../00-foundation/02-glossary.en.md#activation-envelope) bundling
 the first application message and creation information, the reply payload and completion result of
 a request that finished after relocation, and the reference list of those payloads. The execution
-procedure of [cold activation](../00-foundation/02-glossary.en.md#cold-activation) — which creates a new
+procedure for [cold activation](../00-foundation/02-glossary.en.md#cold-activation) — which creates a new
 instance and prepares it to process the first message when an
 [Instance Spot](../00-foundation/02-glossary.en.md#entry-user-instance-spot) that could be created
-at the needed moment, triggered by that first message, isn't yet running — and of Actor Join, is
-also outside this document's scope.
+on demand in response to that first message isn't yet running — and the procedure for Actor Join
+are also outside this document's scope.
 
 **This document also carries the same two layers as
 [02 §1](02-location-store-redis.en.md#1-scope-and-audience).** §2–§6 are the SPI contract every
 provider implementing the Relocation Store must follow, and §8 is the implementation contract
-that fixes the Redis key and data type the official Redis provider uses. Among §8, the key format
+that fixes the Redis key and data type the official Redis provider uses. In §8, the key format
 that official Redis providers in different languages must be able to read from each other (as §2
 already previews) is a MUST-level public contract; the rest of the internal Redis implementation
 is separated out at the end of §8.
 
-## 2. Public SPI And Responsibility Boundary
+## 2. Public SPI and Responsibility Boundary
 
 The Relocation Store SPI provides only the following four operations, and these are the
 provider's responsibilities.
@@ -76,7 +76,7 @@ observation is handled by [Runtime Metrics](../06-observability/02-runtime-metri
 [Message Flow Tracing](../06-observability/03-message-flow-tracing.en.md). This SPI's operation
 types and DTOs are exactly as abstract as defined here — chunk storage structure and scripts
 aren't exposed in the SPI. The Redis key layout and data type the official Redis provider uses are
-themselves a public contract §8 fixes at the MUST level, because official Redis providers in
+themselves part of the public contract that §8 fixes at the MUST level, because official Redis providers in
 different languages must be able to read a payload another language's provider stored under the
 same reference.
 
@@ -119,17 +119,17 @@ The formal declaration for other languages follows the
 example for both Stores is kept only in
 [Location Runtime §2](01-location-runtime.en.md#2-roles-and-responsibilities--provider-vs-framework).
 
-## 3. Reference And Storage Size
+## 3. Reference and Storage Size
 
 The only values the provider needs to interpret are reference, payload, and retention.
 
 | Item | Contract |
 |---|---|
-| Reference | Opaque UTF-8 `1..4096` bytes the Framework issues before `Put`. Compared case-sensitively and verbatim against the whole value. |
+| Reference | Opaque UTF-8 `1..4096` bytes the Framework issues before `Put`. The whole value is compared exactly and case-sensitively. |
 | Application data chunk | At most 64 MiB, measured in application bytes before the Framework splits it. |
 | Redis-encoded blob | The provider input combining the data chunk and the immutable envelope the Framework attaches. The official Redis provider's maximum size is `64 MiB + 23 bytes`. |
 | Payload split across multiple blobs | The whole payload the Framework can compose from multiple blobs. Maximum size is 256 GiB. |
-| Chunk count | The sum of data chunks the whole payload's leading index points to is at most 4,096. |
+| Chunk count | The whole payload's leading index points to at most 4,096 data chunks. |
 | `StoreNow` | The current time the provider includes in `Put`/`Read`/`Renew` results. Expiry is judged using this time and the provider clock. |
 
 This chunk-and-leading-index format is a common blob format independent of the kind of payload
@@ -150,21 +150,21 @@ chunk relationships.
 
 **When storing, all data chunks are re-read to confirm bytes and checksum, and only then is the
 leading index stored.** If storing or confirming any chunk fails, the leading index isn't stored.
-In this case, the remaining chunks don't point to any Location Store record, so they're cleaned up
-on retention expiry.
+In this case, no Location Store record points to the remaining chunks, so they're cleaned up when
+their retention expires.
 
-When reading, data chunks are read and each checksum is confirmed, and regardless of I/O
-completion order, they're combined in the chunk order recorded in the leading index. The combined
+When reading, the provider reads the data chunks and verifies each checksum. Regardless of I/O
+completion order, it combines them in the chunk order recorded in the leading index. The combined
 bytes' overall checksum must also match before that payload is used. If even one chunk is missing
 or its checksum differs, the whole payload is treated as `DataLost` — it's never used from only
-some chunks. When extending the retention period too, the existence and checksum of each data
-chunk are confirmed, and only after all succeed is the leading index's retention extended.
+some chunks. When extending the retention period, the provider also verifies the existence and
+checksum of each data chunk, and extends the leading index's retention only after all checks succeed.
 
 The default retention for each data chunk and the leading index is 24 hours, and the Framework
 uses the point where 12 hours of retention remain as the default renew threshold. The provider must
 compute expiry using its own clock. The application host's wall clock isn't used to judge expiry.
 
-## 4. Result Per Operation
+## 4. Result per Operation
 
 ### 4.1 `Put`
 
@@ -196,7 +196,7 @@ payload bytes.
 exist. Running the same request multiple times still ends in the same final state of the reference
 not existing.
 
-## 5. Cancellation, Errors, And Result Reconstruction
+## 5. Cancellation, Errors, and Result Reconstruction
 
 If cancellation is requested before an operation starts, the provider doesn't start I/O or write.
 If cancellation, timeout, or a transport error occurs after an operation has started, whether the
@@ -211,7 +211,7 @@ operation converts this to
 wasn't met by the deadline. A write already delivered to Redis may still be
 applied after the timeout, so it isn't assumed to have failed.
 
-A Framework that didn't receive a `Put` result must be able to reconstruct whether it was stored,
+A Framework that didn't receive a `Put` result must be able to reconstruct whether it was stored
 by running `Read` with the reference it issued, or by running `Put` again with the same reference
 and the same bytes. `Delete` reaches the same state even if run again, and `Renew` also doesn't
 change the payload.
@@ -226,7 +226,7 @@ Input bytes passed by the caller must not change until the asynchronous operatio
 provider needs to reference the same memory after the operation completes, it must copy the bytes
 first.
 
-## 6. Payload Publication And Cleanup
+## 6. Payload Publication and Cleanup
 
 A payload the Location Store authority doesn't yet point to is called an orphan. If work is
 interrupted before Location Store publication, the provider or Framework cleanup must remove that
@@ -239,7 +239,7 @@ retention remaining. This publish/release order, and the `DataLost` handling whe
 missing, are defined by
 [Location Runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received).
 
-## 7. Registration And Provider Instance Lifetime
+## 7. Registration and Provider Instance Lifetime
 
 The registration conditions of a provider instance and the ownership of the Framework root follow
 [Location Runtime §2](01-location-runtime.en.md#2-roles-and-responsibilities--provider-vs-framework)
@@ -259,8 +259,7 @@ namespace, and operation timeout needed to create an instance.
 
 **The Redis key and data type this section describes are the MUST-level public contract §2
 previewed** — official Redis providers in different languages must use the same key format and
-the same Redis data type to be able to read, from each other, a payload stored under the same
-reference.
+the same Redis data type to read payloads that another provider stored under the same reference.
 
 The payload is stored as a Redis raw-bytes `STRING`. The Redis key is
 `{prefix}:{zlink-relocation-v1}:blob:{reference}`, where `{prefix}` is the key namespace the
@@ -276,8 +275,8 @@ blob domain to one hash slot, so that any multi-key operation within this domain
 under Cluster.
 
 `retention` is applied via Redis's `PSETEX` or `SET`'s `PX` option, and the provider implements the
-§3 retention contract using this native Redis expiry feature. `Renew` re-sets a new `PX` on the
-same key.
+§3 retention contract using this native Redis expiry feature. `Renew` sets a new `PX` on the same
+key.
 
 There's no backward-compatible path that reads a payload already stored in Redis under the old key
 format and converts it to the new `zlink-relocation-v1` format. A deployment upgrading to this
@@ -304,9 +303,9 @@ create a shortcut that bypasses the principle of registering each of the two Sto
 
 ## 9. Verification Requirements
 
-The public surface — the return values of the Relocation Store SPI's four operations, and the
-key/storage format the official Redis provider verifies with the store record golden fixture —
-confirms the following alone. Each item leads to one test.
+The following requirements are verified solely through the public surface — the return values of
+the Relocation Store SPI's four operations and the key/storage format the official Redis provider
+verifies with the store record golden fixture. Each item leads to one test.
 
 **SPI (common to every provider)**
 

@@ -8,9 +8,9 @@ title: "Public Contract Governance"
 
 > Defines who owns the Framework public contract, and how a new contract is fixed and verified.
 
-## 1. What The Public Contract Is
+## 1. What the Public Contract Is
 
-The public contract doesn't mean only the types and operations an application calls. It also
+The public contract consists of more than the types and operations an application calls. It also
 includes timeout, cancellation, error, callback execution order, ownership, and completion
 conditions. This document defines the ownership and verification rules for this contract.
 
@@ -23,7 +23,7 @@ The public contract is split into common semantics and language-specific represe
 | This directory and the common spec per package | Language-independent features, states, completion conditions, error semantics |
 | A package's `languages/<lang>/` | Actual public types, method signatures, generic/nullable rules, language-specific async representation |
 | The Core formal spec | context, message, raw socket, transport, poller, and generic monitoring contracts |
-| This directory's implementation-spec narrative | Per-language service-runtime wiring, state machines, protocol handling, and thread/executor structure that satisfy the public contract. They don't own a new public contract. |
+| This directory's implementation-spec narrative | Service-runtime wiring, state machines, protocol handling, and thread/executor structure that all languages share to satisfy the public contract. They don't own a new public contract. |
 
 The common spec doesn't take any one language's syntax as the standard. Each language expresses
 the same feature and observable result in its own idiom. The precise signature of .NET
@@ -33,15 +33,13 @@ that participates in a RouteMesh to send or receive messages — is owned by
 [.NET RouteMesh/MeshNode Interface](../languages/dotnet/interfaces/03-configuration-topology.en.md).
 
 - **User-observable behavior is defined exactly once, in this directory's common spec and the
-  per-language per-language interface.** The same document may go on to describe the implementation
+  language-specific interface.** The same document may go on to describe the implementation
   structure that produces that behavior, but it doesn't redefine the public behavior or extend
-  it into a stronger guarantee — because the seat that owns the public contract wouldn't stay
-  singular.
+  it into a stronger guarantee — because the public contract would no longer have a single owner.
 - **If an implementation-structure statement conflicts with public behavior or the public API,
   that conflict is a defect.**
-  - Neither side is written down as taking precedence, leaving the
-    conflict in place.
-  - The implementation-structure statement is corrected against the contract,
+  - The conflict isn't left in place by declaring that either side takes precedence.
+  - The implementation-structure statement is corrected to match the contract,
     and if the implementation can't follow that structure and the public behavior itself must
     change, [§5 Public Contract Procedure](#5-public-contract-procedure) is followed again.
   - A gap
@@ -50,38 +48,48 @@ that participates in a RouteMesh to send or receive messages — is owned by
 
 ## 3. Production Source Owner
 
-Each deployment package has exactly one production source owner for the interfaces, calls,
-contexts, options, results, and errors the application compiles against. Source directory names
-follow each language's convention, but every language keeps the following direction.
+Each deployment package has exactly one source-file location for the interfaces, calls, contexts,
+options, results, and errors that the application references at compile time. This document calls
+that location the "contract source." Source directory names follow each language's convention,
+but the following rules apply to every language.
 
 - **The application contract source is owned by that deployment package.**
 - **Server, HTTP Client, and Stream Connector are each independent deployment packages, so each
   package has its own contract source owner.** One package's contract artifact isn't used as the
-  contract owner for a whole different package.
+  contract owner for a whole different package — otherwise, consumers of that package would
+  depend on a package they don't use.
 - **Public constructors, factories, builder entrypoints, free functions, extensions, DTOs,
   values, enums, and public errors/results are also owned by the same contract source as the
   interface.** Scattering this list across a source different from the interface means the owner
   isn't singular.
 - **Runtime implementations reference the contract. Contract source doesn't reference the
   runtime implementation.** If this direction is reversed, the contract ends up depending on
-  implementation detail.
+  implementation detail, and every implementation change can destabilize the contract.
 - **Declarations under `runtime/internal` must not be importable from outside.** Just renaming
   the directory to `internal` while keeping public visibility doesn't satisfy this rule.
 - **The minimal SPI an external provider must implement can be owned by a separate abstraction
   artifact.** For example, a [Location Store](02-glossary.en.md#location-store) provider — the
   store that lets multiple nodes check each Spot's current owner and lifecycle state — is such a
-  case: the external implementation only needs to reference that one artifact. The entire
-  application-facing contract isn't moved into the SPI artifact.
-- **Only the minimal contract that multiple packages must share type identity for — such as
-  codec/error — can be owned by a package-neutral artifact.** Moving any other contract into a
-  package-neutral artifact blurs each package's production source owner.
+  case: an implementation built outside the Framework only needs to reference that one artifact.
+  The application-facing contract isn't moved into the SPI artifact — otherwise, the application
+  would depend on the provider artifact.
+- **Only codec and error, which multiple packages must exchange as the same types, can be owned by
+  a package-neutral artifact.** Declaring types with the same names separately in each package
+  would make them different types, preventing values from being exchanged. Moving any other
+  contract into a package-neutral artifact blurs which package owns each contract.
 
-The per-language interface determines the namespace or package FQN. The FQN isn't changed just to tidy
-up source layout. A layout change must pass the public API snapshot, package consumer build, and
-owner gate together. Each language's per-language interface records the contract source owner and public
-projection per package. If an exception owner is needed, the target declaration and the
-dependency reason are recorded individually — an exception isn't granted for a whole directory or
-assembly.
+The language-specific interface determines the full namespace or package name — the name joined
+from its top-level component, such as `systems.zlink.framework.actors`. This name isn't changed
+just to tidy up the source layout. Because it is embedded directly in the code of package
+consumers, changing it would break those consumers even without a contract change.
+
+A layout change must pass all three checks together: comparison against the recorded public API
+list, the build of a consumer of that package, and owner review.
+
+Each language-specific interface records the contract source location and public projection for
+each package. If a declaration must be placed elsewhere, that declaration and the dependency
+reason must be recorded individually. An exception isn't granted for a whole directory or
+assembly, because that would make it impossible to track what is exceptional.
 
 This boundary follows the same direction as the
 [bindings public/internal boundary](../../../../../../../bindings/doc/spec/README.en.md#public-vs-internal-api-boundary).
@@ -89,7 +97,7 @@ Framework and bindings are different deployment packages, so each spec owns its 
 but the principle that the public contract doesn't depend back on the runtime implementation is
 the same.
 
-## 4. Items To Fix In A New Contract
+## 4. Items to Fix in a New Contract
 
 When defining a public feature, fix the following items together.
 
@@ -151,9 +159,9 @@ A new public interface must reduce the decisions the caller needs to know.
 - **Transport endpoint, peer selection, packet encoding, and reply correlation are owned by the
   runtime.** If an application manages these values directly, wiring that differs by language
   leaks into the public surface.
-- **[Spot](02-glossary.en.md#spot) — a logical instance with an address and state that receives
-  messages — Actor, and STREAM session addresses and generations are preserved by a typed handle
-  or context.** This is so the caller isn't made to reassemble the value on every call.
+- **The addresses and generations of [Spot](02-glossary.en.md#spot) — a logical instance that
+  represents a message recipient — Actor, and STREAM sessions are preserved by a typed handle or
+  context.** This is so the caller isn't made to reassemble the value on every call.
 - **The same feature isn't repeated as an interface that differs only in name.**
 - **An invalid combination of states isn't represented by splitting it across multiple nullable
   values and booleans.**
@@ -163,9 +171,9 @@ A new public interface must reduce the decisions the caller needs to know.
 For a non-trivial design, compare at least two options and choose the one whose public interface
 is smaller and exposes less transport knowledge.
 
-The same boundary applies to the language-specific per-language interface documents as well.
+The same boundary applies to the language-specific interface documents as well.
 
-- **The language-specific per-language interface document only records the API the application uses
+- **The language-specific interface document only records the API the application uses
   directly and the SPI an external provider package must implement.** Internal runtime wiring,
   storage rows/keys, state-transition commands, change watches, publishers, dispatcher
   invocations, and native diagnostics aren't the public contract. Even if such types are needed
@@ -176,15 +184,15 @@ The same boundary applies to the language-specific per-language interface docume
   into fine-grained capability interfaces and exposed to application registration.** The minimal
   operations an external provider needs to implement are gathered into one deep SPI, and optional
   features are absorbed into the default implementation or a capability query.
-- **An per-language interface document with no remaining public declaration for an outside implementer
+- **A language-specific interface document with no remaining public declaration for an outside implementer
   or caller to implement or call is deleted.** This standard applies equally to .NET, Java,
   Kotlin, Node.js, and C++.
 
 ## 8. Verification Requirements
 
-The following is confirmed using only each language's contract tests and the actual deployment
-package (the public export importable from an external package, the contract source defined per
-package, the signature, the async result, and the messaging contract per
+The following is confirmed using only the contract tests and actual deployment package for each
+language (the public export importable from an external package, the contract source defined for
+each package, the signature, the async result, and the messaging contract per
 [owner](02-glossary.en.md#owner)).
 
 **Export and dependency direction**

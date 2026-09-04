@@ -1,4 +1,4 @@
-# 8. Session And Actor Binding
+# 8. Session and Actor Binding
 
 > **The documents that own this chapter's contract** —
 > [Session Actor dispatch](../../../common/spec/server/04-session/02-session-actor-binding.en.md) owns the
@@ -14,23 +14,23 @@ Binding is independent of the Actor's Spot membership. Even when an Actor reloca
 another Spot or node, `ActorId` and `ObjectGeneration` are preserved and the Framework
 updates the binding route.
 
-**The cardinality is open on only one side.** One Session can bind several Actors at
-once — one connection can use both a player Actor and a party Actor together. Conversely,
+**The cardinality is open in only one direction.** One Session can bind several Actors at
+once — one connection can use both a player Actor and a party Actor. Conversely,
 **one Actor is bound to only one session at a time.** Once a new binding is confirmed, the
-previous binding becomes invalid, and a late message that arrives for it is rejected.
+previous binding becomes invalid, and a late message sent to it is rejected.
 
 **Relay doesn't re-query the Location Store.** The session keeps, per Actor, the route it
-confirmed at bind time, and sends using that. When an Actor moves, the Framework updates
+confirmed at bind time and uses it to send. When an Actor moves, the Framework updates
 that stored route after the relocation commits — the application doesn't rebind.
 
-## 1. Binding An Actor After Authentication
+## 1. Binding an Actor After Authentication
 
 Create or find the Actor in the Session handler, then bind the `ActorRef`. Don't pass a
 local Actor instance or a target `NodeRid` directly.
 
 > **See it in a sample — [TicTacToe](../../../common/sample/tictactoe/README.en.md).** This
-> is the spot that receives an authentication request, creates the player Actor, binds it to
-> the session, and sends the reply. Actual code from the repository.
+> is where the authentication request is received, the player Actor is created and bound to
+> the session, and the reply is sent. The excerpt is actual code from the repository.
 
 === "C#/.NET"
 
@@ -62,7 +62,7 @@ local Actor instance or a target `NodeRid` directly.
     --8<-- "framework/languages/node/samples/TicTacToe.Ts/Server/Play/Infrastructure/ZLink/Sessions/Handlers/authenticate-play-session-handler.ts:doc-session-auth"
     ```
 
-In its minimal shape, it looks like this.
+A minimal version looks like this.
 
 === "C#/.NET"
 
@@ -185,7 +185,7 @@ In its minimal shape, it looks like this.
 `Bind` treats a duplicate bind as an error. For a flow that might already be bound, like a
 retried authentication, use `BindOrGet`.
 
-## 2. Relaying A Session Packet To An Actor
+## 2. Relaying a Session Packet to an Actor
 
 Register session-only handlers, such as authentication, in the Session's `Configure()`. An
 unhandled packet is handed to the bound Actor.
@@ -243,7 +243,7 @@ unhandled packet is handed to the bound Actor.
 
     ```cpp
     // A C++ session inherits the interface and branches inside one on_packet.
-    // Instead of a handler registry, it directly checks "is this the authenticate packet."
+    // Instead of using a handler registry, it directly checks whether this is the authenticate packet.
     class play_session_t : public packet_stream_session_t
     {
       public:
@@ -251,7 +251,7 @@ unhandled packet is handed to the bound Actor.
                                 const stream_dispatch_context_t &dispatch,
                                 const zlink::message_t &payload) override
         {
-            // Filter out the packet to handle before Actor binding first.
+            // First, filter out the packet to handle before Actor binding.
             if (_authenticate.can_handle (dispatch)) {
                 auto authenticated = co_await _authenticate.handle (_actors, stream, payload);
                 _bound_actor_id = std::string (authenticated.actor_id ());
@@ -349,7 +349,7 @@ unhandled packet is handed to the bound Actor.
 
 
 One session can bind several Actors. In that case, the application protocol passes the
-ActorId it chose to `Context.Actors.Find(actorId)`. The Framework never picks an arbitrary
+selected ActorId to `Context.Actors.Find(actorId)`. The Framework never picks an arbitrary
 Actor on its own.
 
 ## 3. Disconnect Notification
@@ -410,8 +410,8 @@ Call it explicitly only to signal a logical disconnect while the connection stay
 A disconnect doesn't delete the Actor or move it to the Entry Spot. A reconnecting session
 can look up the same `ActorRef` again and bind it.
 
-**If notifying one Actor fails, the rest continue.** The Framework fixes a snapshot of the
-bindings at the moment the connection drops and notifies each Actor; if one of them fails, or
+**If notifying one Actor fails, the rest continue.** The Framework takes a snapshot of the
+bindings at the moment the connection drops and notifies each Actor; if one of them fails or
 a callback exceeds its deadline, it doesn't stop notifying the remaining Actors or stop
 session cleanup.
 
@@ -419,7 +419,7 @@ session cleanup.
 once.** The Framework merges two notifications for the same binding, so if the connection
 drops right after an explicit call, the Spot's disconnect callback doesn't run twice.
 
-## 4. Pushing From An Actor To The Client
+## 4. Pushing from an Actor to the Client
 
 An Actor handler sends a message to the currently bound client through
 `Context.BoundSession`.
@@ -502,7 +502,7 @@ An Actor handler sends a message to the currently bound client through
     ```
 
 
-A bound session only provides push and disconnect. An Actor's reply to a client request is
+A bound session supports only push and disconnect. An Actor's reply to a client request is
 handled through the request handler's return value.
 
 ## 5. Error-Handling Standard

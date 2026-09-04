@@ -4,11 +4,11 @@ title: "ZLink Framework API"
 
 # ZLink Framework API
 
-[Foundation Topic Table Of Contents](README.en.md) · [Spec Table Of Contents](../README.en.md) · [Previous: 05. Message Model](05-message-model.en.md) · [Next: 07. Framework Error Model](07-framework-error-model.en.md)
+[Foundation Topic Table of Contents](README.en.md) · [Spec Table of Contents](../README.en.md) · [Previous: 05. Message Model](05-message-model.en.md) · [Next: 07. Framework Error Model](07-framework-error-model.en.md)
 
 > Defines Framework's language-neutral public API family and registration rules.
 
-## 1. The Boundary Between Public Contract And Runtime Implementation
+## 1. The Boundary Between Public Contract and Runtime Implementation
 
 This document defines ZLink Framework's language-neutral public API family and registration
 rules. Actual types, generic constraints, overloads, and async return types are owned by
@@ -49,9 +49,9 @@ Configuring the same root twice in a process, or registering the same
 [MeshName](02-glossary.en.md#meshname) twice, causes a configuration error at startup.
 Registering the same [ChannelName](02-glossary.en.md#channelname) on different RouteMesh or
 ClientServer topologies also fails at startup regardless of role.
-The transport component in the current process that binds a network endpoint and accepts
-remote connections, the [Network listener](02-glossary.en.md#network-listener)'s common identity
-values and per-listener overrides are owned by
+The common identity values and per-listener overrides for the
+[Network listener](02-glossary.en.md#network-listener) — the transport component in the current
+process that binds a network endpoint and accepts remote connections — are owned by
 [13 Network Listener Identity](../02-channel-transport/04-network-listener-identity.en.md).
 
 Root registration provides one framework runtime singleton per process. This runtime
@@ -59,8 +59,8 @@ performs a host-wide `Relocate`, which requires a mode, and a separate `Shutdown
 runtime into the [Shutdown](02-glossary.en.md#shutdown) state where it stops accepting new
 operation admission.
 `PlannedMaintenance` moves to the same application version as the source, and
-`RollingUpdate` moves to a version, greater than the source's, that the caller
-specifies. It doesn't provide a drain operation per MeshName, ChannelName, or node RID.
+`RollingUpdate` moves to a caller-specified version greater than the source's. It doesn't
+provide a drain operation per MeshName, ChannelName, or node RID.
 State, per-mode target selection, terminal result, default deadline, repeated calls, and
 cancellation contract are owned by
 [54 Host Relocate, Shutdown & Handoff](../05-location-relocation/05-host-relocation-flow.en.md).
@@ -71,7 +71,7 @@ internally and distinguishes orderly disconnect from half-open failure. The fixe
 service liveness message, and reconnect contract are owned by
 [55 Transport Liveness](../02-channel-transport/05-transport-liveness.en.md).
 
-## 3. Core Memory Budget And Application Job Queue Configuration
+## 3. Core Memory Budget and Application Job Queue Configuration
 
 Framework doesn't compute a separate message byte cap. One Core context owns one messaging
 budget for the Core queue, and Framework forwards the following settings as the same
@@ -173,7 +173,7 @@ Permit acquisition and return timing differ by record kind.
 | Record kind | Permit behavior |
 |---|---|
 | Supply identifiable before receive as terminal reply or error-reply completion | doesn't use a queue permit |
-| A record first received on an ordinary connection and then classified as the above supply | doesn't bypass it |
+| A record first received on an ordinary connection and then classified as the above supply | doesn't bypass the queue permit |
 | Every other ordinary-ingress record (application, control, and malformed alike) | acquires the same shared permit immediately before receive/claim |
 | A control or malformed record | returns the permit immediately after internal processing |
 | An application record | uses one permit per final handler turn and holds it while waiting in the executor, mailbox, or serial gate. The common invocation wrapper returns the permit exactly once, immediately before executing the user callback's first instruction |
@@ -249,9 +249,9 @@ builder owns the following configuration.
 - the `DisableRelocation`, `RecreateOnRelocation`, `PreserveStateWith` policy chosen in
   every object factory callback
 - per-node Actor/Spot counts and per-Spot-type capacity, and node-wide placement weight
-- route cache age and, the duration during which the Framework delivers a message that
-  arrives at a former owner node after relocation to the new owner instead,
-  [Message Follow](02-glossary.en.md#message-follow) duration
+- route cache age and [Message Follow](02-glossary.en.md#message-follow) duration — the
+  duration during which the Framework instead delivers a message that arrives at a former
+  owner node after relocation to the new owner
 - [Logical Multicast](02-glossary.en.md#logical-multicast) publish policy — delivering one
   message to multiple Spots whose location can change, such as a room, stage, or zone
 
@@ -384,8 +384,8 @@ Channel weight 0 isn't used in place of a lifecycle state.
 
 The manual peer API provides two intents.
 
-- specifying only an endpoint lets the admission handshake determine the remote RID.
-- specifying an expected RID together with an endpoint only admits when the handshake RID
+- Specifying only an endpoint lets the admission handshake determine the remote RID.
+- Specifying an expected RID together with an endpoint only admits when the handshake RID
   matches.
 
 Runtime control provides adding a connect intent, releasing an intent by endpoint, and
@@ -477,7 +477,7 @@ Remote capacity/connection failure and local Spot queue drops after the transact
 don't roll back the whole publish or turn it into an exceptional completion. Targets
 accepted earlier aren't canceled because a later target failed.
 
-## 9. Handler Registration And Dispatch
+## 9. Handler Registration and Dispatch
 
 The handler key includes an owner and a message kind.
 
@@ -562,7 +562,7 @@ rules. Each language's per-language interface owns the concrete types of the fil
 owned by this section, a per-language implementation must not arbitrarily extend filters to
 a different dispatch owner.
 
-## 11. Handler Execution Object And Dependency Lifetime
+## 11. Handler Execution Object and Dependency Lifetime
 
 The scope of ownership for the execution object and dependencies is set by handler kind.
 
@@ -685,7 +685,7 @@ if no codec in the registry matches the non-JSON content-type the receiving enve
 specifies, the payload isn't reinterpreted as JSON — it completes with `ProtocolError`.
 
 The input to send-side codec selection is **the message type declared at the call site**,
-not the concrete type of the actually-passed instance. Even if a subtype instance is passed
+not the concrete type of the actually passed instance. Even if a subtype instance is passed
 where a base type or interface was declared, the declared type is used for selection. This
 keeps the same call-site code from using a different codec and content-type depending on
 what value happened to be passed at runtime.
@@ -736,7 +736,7 @@ the concrete types of the server extension object and connector option must also
 default JSON codec is used without separate registration, and other codecs are also
 registered once on the root or connector instance, not per message.
 
-## 13. Location Store And Relocation Store Registration
+## 13. Location Store and Relocation Store Registration
 
 A host using a classic fanout publisher participating in automatic discovery, an endpoint-
 less fanout subscriber, or the Object Client/Server role explicitly registers a location
@@ -812,7 +812,7 @@ surface for modifying [automatic discovery](02-glossary.en.md#automatic-discover
 and doesn't switch the same channel into automatic mode.
 
 The current connection intent and ready state of an automatic subscriber registered without
-an endpoint is observed only through
+an endpoint are observed only through
 [Runtime Monitoring](../06-observability/01-runtime-monitoring.en.md)'s fanout runtime snapshot and events. A
 publisher-changed event requires a publisher entry, and a location-changed event requires a
 Location snapshot — the two payloads aren't mixed into nullable fields. This surface is
@@ -836,7 +836,7 @@ publish result aggregating per-remote/per-local target counts either. It complet
 even with 0 subscribers, as long as the local publisher queue accepts the event. Monitoring
 doesn't include subscriber count, receipt, or handler-completion information.
 
-## 15. User/Instance Spot And Actor Factory Registration
+## 15. User/Instance Spot and Actor Factory Registration
 
 Spot factories and typed Actor factories are registered on the Object Server builder. A
 User/Instance Spot type is a case-sensitive stable name, UTF-8, 1-255 bytes, and doesn't use
@@ -881,7 +881,7 @@ authority. If stable type is omitted, it's auto-selected only when exactly one d
 Instance type is registered in the selected Mesh's serving descriptor. With multiple types,
 the caller must specify a stable type.
 
-## 16. Creating A Missing Object — Cold Activation Sequence
+## 16. Creating a Missing Object — Cold Activation Sequence
 
 On a Missing Instance Spot call, the source framework puts the first message together with
 operation identity/reply correlation/deadline, optional metadata presence/frame, the
@@ -901,7 +901,7 @@ with creation. The sequence is as follows.
    fence identifying the reservation and a recovery root receipt, together with the
    in-progress location information.
 4. Even if multiple targets or duplicate messages compete, only the runtime that secures
-   this reservation first runs the factory and initialize, and confirms the activation
+   this reservation first runs the factory and initialization, and confirms the activation
    envelope's message as the first record of the durable activation inbox.
 5. While keeping the handler barrier, it commits a `Ready` including the recovery
    root/cursor, restores the first record to the local queue head, and then opens the
@@ -942,7 +942,7 @@ sequenceDiagram
     Note over Src: doesn't resend the same message after Ready
 ```
 
-## 17. Create/GetOrCreate Results And Relocation Policy
+## 17. Create/GetOrCreate Results and Relocation Policy
 
 Create ends with an already-exists error if a Ready incarnation of the same ID exists.
 GetOrCreate returns a Ready incarnation of the same stable type as `Existing`. If a Creating
@@ -1015,7 +1015,7 @@ Location operational queries return a bounded page respecting page size 1..1000 
 encoded page max of 4 MiB. A public object handle, directory, resolver, or unbounded list
 isn't provided.
 
-## 18. Finishing `Yield` And STREAM/Actor Registration
+## 18. Finishing `Yield` and STREAM/Actor Registration
 
 An Actor factory builds the Actor lifecycle, and Actor handlers are registered on the Actor
 context's handler registry. Actor messages dispatch directly to the Actor mailbox. Actor
@@ -1215,7 +1215,7 @@ messages.
 
 A configuration error fails host startup rather than deferring to a lazy first call.
 
-## 24. Runtime Query And Monitoring
+## 24. Runtime Query and Monitoring
 
 Runtime query is a general public service available from DI. It returns MeshNode status,
 peer admission, RouteMesh Channel membership and weight, object role/placement weight/
@@ -1300,4 +1300,4 @@ conditions this section summarizes.
 
 ---
 
-[Foundation Topic Table Of Contents](README.en.md) · [Spec Table Of Contents](../README.en.md) · [Previous: 05. Message Model](05-message-model.en.md) · [Next: 07. Framework Error Model](07-framework-error-model.en.md)
+[Foundation Topic Table of Contents](README.en.md) · [Spec Table of Contents](../README.en.md) · [Previous: 05. Message Model](05-message-model.en.md) · [Next: 07. Framework Error Model](07-framework-error-model.en.md)

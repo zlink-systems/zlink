@@ -1,18 +1,18 @@
 ---
-title: "Application Job Queue And Backpressure"
+title: "Application Job Queue and Backpressure"
 ---
 
-# Application Job Queue And Backpressure
+# Application Job Queue and Backpressure
 
-[Execution topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 03. Cancellation And Shutdown](03-cancellation-and-shutdown.en.md) · [Next: 05. Payload Ownership And Codec](05-payload-ownership-and-codec.en.md)
+[Execution topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 03. Cancellation and Shutdown](03-cancellation-and-shutdown.en.md) · [Next: 05. Payload Ownership and Codec](05-payload-ownership-and-codec.en.md)
 
-> This document defines the order in which two independent capacity authorities — Core's
-> [Core byte HWM budget](../00-foundation/02-glossary.en.md#core-hwm-budget) and Framework's
-> [Application job queue](../00-foundation/02-glossary.en.md#application-job-queue) — pass ordinary
-> ingress, and when and how Framework observes and propagates the resulting pressure
-> state. It states the responsibility boundary among Application, Core, Framework host,
-> and provider as a contract that callers depend on, and states, alongside that contract,
-> the implementation structure that every language runtime must satisfy in common.
+> This document defines the order in which ordinary ingress passes through two independent
+> capacity authorities — Core's [Core byte HWM budget](../00-foundation/02-glossary.en.md#core-hwm-budget)
+> and Framework's [Application job queue](../00-foundation/02-glossary.en.md#application-job-queue) —
+> and when and how Framework observes and propagates the resulting pressure state. It states
+> the responsibility boundary among Application, Core, Framework host, and provider as a
+> contract that callers depend on, together with the common implementation structure that
+> every language runtime must satisfy.
 
 ## 1. Two Independent Capacity Authorities
 
@@ -61,7 +61,7 @@ reservation to a queued job does not change the total; only returning the permit
 decreases it. A record that creates 1:N callbacks uses one permit for each actual
 callback turn.
 
-## 2. Configuration And Profile Boundary
+## 2. Configuration and Profile Boundary
 
 Core and Framework profiles may use the same labels, but they are different public
 types with different calculations.
@@ -81,7 +81,7 @@ types with different calculations.
 
 ## 3. Ordinary Ingress Permit Order
 
-Ordinary ingress — every path that receives or claims from Core or the binding a record
+Ordinary ingress — every path that receives or claims a record from Core or the binding
 that has not yet received a permit — follows the same rule regardless of the context in
 which it arrives. STREAM application packets, cross-node Session application records
 (see [STREAM Server Session](../04-session/01-stream-session.en.md), [Session And Actor
@@ -94,7 +94,7 @@ Ordinary ingress follows this order.
 2. Receive or claim a record from Core or the binding only after acquiring the permit.
 3. Transfer an application record's permit to its handler turn in an owner mailbox or
    serial queue.
-4. Return the reservation after finite internal handling of a control or malformed
+4. Return the permit after finite internal handling of a control or malformed
    ordinary record.
 5. Return the permit at the common invocation boundary immediately before the
    callback's actual first instruction.
@@ -129,7 +129,7 @@ not acquire the same permit again. A non-runnable durable backlog such as reloca
 returns its initial reservation after a finite handoff to the payload owner defined by
 that relocation specification; each runnable callback turn later acquires a new permit.
 
-**Only supply identified before receive as a terminal reply or error completion
+**Only supply that is identified before receive as a terminal reply or error completion
 bypasses this permit.** A record first received from an ordinary connection cannot be
 classified later and retroactively gain this bypass. This separation lets terminal
 completions of operations already in progress continue while the ordinary queue is
@@ -148,8 +148,9 @@ order. A source that processed a batch moves to the tail of the queue.
 Neither a
 batch nor a 1:N callback publishes more application jobs than the permits it secured.
 
-Framework heartbeat, topology, relocation, and service-wire `SendReady` kind `12` are
-not this completion supply. Those control records remain on the application data line
+Framework heartbeat, topology, relocation, and service-wire `SendReady` kind `12` do
+not constitute this completion supply. Those control records remain on the application data
+line
 under its existing FIFO and liveness contract; they are not moved to the Core
 completion connection or to a separate Framework control queue.
 
@@ -160,12 +161,12 @@ The following are not allowed:
 - Replacing saturation with rejection, dropping, fixed-delay polling, or busy spinning
 - Storing a record in an unbounded or hidden side backlog not owned by a specification
 
-### The Set Of Ready Owners (Implementation)
+### The Set of Ready Owners (Implementation)
 
 For a record that has acquired a permit to enter an owner queue, the execution resource
 must know that this owner currently has work to do.
 
-- **Keep as state which owners currently have work to do.** This state represents
+- **Maintain as state the set of owners that currently have work to do.** This state represents
   "this is the current state," not a one-time "something changed" notification, and the
   same owner never enters it twice. Because an owner with remaining work must
   eventually be processed even if a notification is lost, a woken execution resource
@@ -175,15 +176,15 @@ Internal confirmation condition — that a woken execution resource always reche
 set of ready owners, so that no wakeup is missed even when a notification is lost, is a
 white-box invariant of this state management.
 
-### Deciding Whether To Admit And Admitting Are Not Split Apart (Implementation)
+### Do Not Separate the Admission Decision from Enqueueing (Implementation)
 
 Deciding which owner's queue to put a message into requires checking several
 conditions — whether that owner is still on this node, whether there is a slot, and
 whether it is sealed for a move.
 
-- **These checks and the actual enqueue finish inside the same span.** If the owner
+- **These checks and the actual enqueue occur within the same span.** If the owner
   changes between the check and the enqueue, the message ends up in the queue of a node
-  that is no longer the owner, and that queue is processed by no one — the sender waits
+  that is no longer the owner, and no one processes that queue — the sender waits
   until timeout.
 
 Handle the following as one commit inside that span.
@@ -197,30 +198,30 @@ Handle the following as one commit inside that span.
 6. If the queue was empty, put that owner into the set of ready owners and notify the
    execution resource immediately
 
-- **A message that fails a check does not appear in the queue.** It is not built as
+- **A message that fails a check does not appear in the queue.** It is not implemented as
   enqueue-then-remove — enqueuing and then removing lets it possibly execute in
-  between, and the removal cannot be distinguished from observation either. A call
+  between, and the removal cannot be distinguished in observations either. A call
   waiting for a response receives the failure reason as its result. A failed
   reservation or enqueue also leaves the item/byte usage and accepted sequence
   unchanged. A failed attempt does not change the ordering or admission result of the
   next valid work item.
 
-**Per-language discretion.** Whether this span is built as a lock or another method is
-free. The check is that only the check and the enqueue are inside this span, and that
-work that would lengthen the span — such as deserialization or handler lookup — happens
-outside it. As long as that condition holds, the observable result — that the span
-stays short and the owner does not change between the check and the enqueue — is the
-same no matter which implementation method is used.
+**Per-language discretion.** Implementations are free to use a lock or another method
+for this span. The criterion is that only the check and the enqueue are inside this span,
+and that work that would lengthen the span — such as deserialization or handler lookup —
+happens outside it. As long as that condition holds, the observable result — that the
+span stays short and the owner does not change between the check and the enqueue — is
+the same no matter which implementation method is used.
 
 Internal confirmation condition — that a message whose owner changed between the check
-moment and the enqueue moment does not go into the old owner's queue is a white-box
+and the enqueue does not go into the old owner's queue is a white-box
 invariant confirmed only by the fact that the above commit procedure is a single atomic
 span.
 
-### Permit Return And No Resource Holding While Waiting (Implementation)
+### Permit Return and No Resource Holding While Waiting (Implementation)
 
-An application permit releases at the actual first instruction of its own
-target's callback; a control or malformed record's permit releases immediately after
+An application permit is released at the actual first instruction of its own
+target's callback; a control or malformed record's permit is released immediately after
 internal handling. This release point is the same point at which a
 [STREAM session](../00-foundation/02-glossary.en.md#stream-session) — the server-side
 execution unit kept alive from accepting one STREAM connection until it closes —
@@ -228,11 +229,11 @@ callback starts — no separate rule exists per context. Cancellation, source cl
 shutdown clean up waiters and handed-off permits exactly once.
 
 - **Same-host relay, fanout, serial-owner, and relocation paths must not wait for a new
-  permit acquire of the same authority while holding a gate, execution authority, or
+  permit from the same authority while holding a gate, execution authority, or
   resource needed to return a permit.** A sustained wait/capacity cycle is not grounds
   for a bypass — it is a protocol or runtime bug.
 
-## 4. Reading Multiple Items From The Socket (Implementation)
+## 4. Reading Multiple Items from the Socket (Implementation)
 
 Separately from batch-processing after taking ownership, the same problem exists at
 **the step of pulling from the socket.** If only one item is read from the socket per
@@ -246,8 +247,8 @@ and cost grows as load rises.
 - **The bound sets count, bytes, and elapsed time together, and applies whichever is
   hit first.** Count alone makes large messages take too long, and time alone reads the
   clock too often for small messages.
-- **The next rotation starts right after the connection this one stopped at (keeping a
-  cursor).** Always iterating from the start means earlier connections keep being
+- **The next rotation starts right after the connection where the current rotation stopped
+  (keeping a cursor).** Always iterating from the start means earlier connections keep being
   processed first, and later connections get delayed even with a bound in place.
 
 This rule applies to **every multi-connection receive path**, including fanout,
@@ -258,9 +259,9 @@ next wake-up.
 **The count bound is fixed at 64 items per rotation.** The byte bound and the elapsed-
 time bound are **per-language discretion** — even with different values, the observable
 result is the same: the rotation start point always resumes right after the connection
-this one stopped at, and no connection monopolizes the receive stage indefinitely, so
-other connections get a chance to progress. The check is whether one connection with a
-slow consumer still leaves other connections' progress unblocked.
+where the previous rotation stopped, and no connection monopolizes the receive stage
+indefinitely, so other connections get a chance to progress. The check is whether one
+connection with a slow consumer still leaves other connections' progress unblocked.
 
 Wiring the directional socket options of RouteMesh's
 [MeshNode](../00-foundation/02-glossary.en.md#meshnode) — the runtime node that
@@ -270,14 +271,14 @@ document. The channel-transport topic owns the public configuration defined by
 [RouteMesh Topology](../02-channel-transport/01-channel-topology.en.md) and [MeshNode
 Startup](../03-spot-actor/03-mesh-node.en.md).
 
-## 5. Separating Receipt Handling From State Change (Implementation)
+## 5. Separating Receipt Handling from State Change (Implementation)
 
 - **The receive callback moves ownership of the received data to a runtime-side value
   and returns immediately.** The receive context is usually owned by the transport
   layer, so lingering here delays other receives on that connection.
 - **Format validation finishes before calling the handler.** Malformed input does not
   reach the handler — a call waiting for a response ends in `ProtocolError`, and a call
-  not waiting ends with only a record left.
+  not waiting leaves only a record.
 
 Internal confirmation condition — that the receive callback does not call the handler
 or change the state of a [Spot](../00-foundation/02-glossary.en.md#spot) — a logical
@@ -286,7 +287,7 @@ so that the receive path does not create
 a path that changes state without going through the [handler execution
 gate](02-handler-turn-and-execution-gate.en.md#1-separating-queue-from-gate).
 
-## 6. Pressure State And Socket Control
+## 6. Pressure State and Socket Control
 
 For effective maximum `M` and configured pause and resume percentages `P` and `R`,
 startup computes:
@@ -329,20 +330,20 @@ of the registry implementation. Binding calls run outside queue, registry, and
 user-callback locks. Configuration failures other than lifecycle results racing with
 close are recorded in diagnostics and metrics.
 
-## 7. Composition With Send Completion
+## 7. Composition with Send Completion
 
 - **Core and the binding own HWM waiting, internal retries, and per-operation
   completion.** Framework selects a specific target and starts one binding operation.
   After the operation starts, Framework does not select another target or create a
   second operation for the same payload because of PAUSE or HWM.
-- **Framework has no removed `send_ready` callback or event, readiness waiter, or retry
-  adapter.** [Deadline](../00-foundation/02-glossary.en.md#deadline) — the final time
+- **Framework does not retain the removed `send_ready` callback or event, a readiness waiter,
+  or a retry adapter.** [Deadline](../00-foundation/02-glossary.en.md#deadline) — the final time
   point by which work must finish — cancellation, detach, and shutdown follow the existing
   first-terminal rule of the operation state machine. Framework service-wire
   `SendReady` kind `12` is a Framework service-control record and is a different
   contract from the removed binding callback.
 
-## 8. The Three Backpressure Stages And Kinds Of Limits
+## 8. The Three Backpressure Stages and Kinds of Limits
 
 - **These three stages of [Backpressure](../00-foundation/02-glossary.en.md#backpressure) —
   flow control that limits send rate via an upper bound on the send queue — apply only to
@@ -361,12 +362,12 @@ close are recorded in diagnostics and metrics.
   A failure that happens after an already completed call is not covered here — a
   skipped local target after publish has started, a dropped one-way during a move, or a
   target admission failure of a completed send — none has a result to return to the
-  caller, so it is left only as an observation.
+  caller, so it is recorded only as an observation.
 - **While waiting, that work does not hold execution authority.** Holding it while
   waiting blocks another request to the same Spot for as long as it waits for send
   space.
 - **The waiting slot itself also has a bound.** If the waiting slots are full, it ends
-  immediately with `DeadlineExceeded` without waiting. The fact of being backpressured
+  immediately with `DeadlineExceeded` without waiting. Being backpressured
   itself is not a value the caller receives —
   [`Backpressured`](../00-foundation/02-glossary.en.md#backpressured) is not a public terminal
   result. Without a bound, this side's memory would keep growing indefinitely,
@@ -388,9 +389,9 @@ defaults to `64 KiB`, and does not apply to server-to-client outbound.
 
 No path creates a separate unbounded backlog, polling, busy-spin, or silent replay.
 
-### Transferring The Owner Reservation — Two Stages Join Without A Gap
+### Transferring the Owner Reservation — Joining Two Stages Without a Gap
 
-The owner FIFO's count and byte reservation is not carried by one component. The receive
+The owner FIFO's count and byte reservation is not carried by a single component. The receive
 mailbox carries it from receive acceptance until the record is claimed into the owner's
 execution queue, and the execution queue carries it from that claim until handler terminal
 completion ([02 §7](02-handler-turn-and-execution-gate.en.md#7-lane-separation-and-priority-implementation)
@@ -400,20 +401,20 @@ owns the release timing on the execution-queue side).
   completion.** At the claim boundary, the mailbox return and the execution-queue charge happen
   together. If there is an uncounted stretch in between, in-flight payload that has been
   dequeued but whose handler has not finished is caught by no limit at all — and the more
-  handlers hold large payloads for long, the more that stretch's memory grows without bound.
+  handlers hold large payloads for long, the more memory grows without bound during that gap.
 - **The transfer at claim is not a re-decision.** If the execution queue rejects an
   already-accepted record on capacity grounds, that is the "turning saturation into a reject"
   that §3 forbids. The execution queue only accounts the transferred reservation; capacity
   rejection applies only to new local submissions inside the same runtime.
 - **The two stages never count the same record at the same time.** Double counting saturates
-  the owner limit ahead of the real backlog, and the limit's value stops meaning anything.
+  the owner limit ahead of the real backlog, and the limit's value loses its meaning.
 
-Internal check condition — on the claim path there is no moment at which the record's bytes are
+Internal confirmation condition — on the claim path there is no moment at which the record's bytes are
 counted by neither side between the mailbox return and the execution-queue charge, and no site
 where a record transferred with its permit receives a capacity rejection from the execution
 queue.
 
-## 9. Large Payloads And Operational Values
+## 9. Large Payloads and Operational Values
 
 - **The Application job queue limits job count; it does not weight jobs by payload
   bytes.** An empty payload and a large payload each consume one job. The Framework
@@ -458,7 +459,7 @@ names — confirms the following. Each item leads to one contract test.
   the next receive rotation starts right after the connection this one stopped at.
 - When one socket represents multiple peers, accounting is done per peer.
 - Malformed input does not reach the handler — a call waiting for a response ends in
-  `ProtocolError`, and a call not waiting ends with only a record left.
+  `ProtocolError`, and a call not waiting leaves only a record.
 
 **Pressure state and sockets**
 
@@ -476,7 +477,7 @@ names — confirms the following. Each item leads to one contract test.
 - Owner structural rejection and shared-cap wait are observed as distinct
   errors/metrics.
 - A failure after an already completed call (a skip after publish has started, a
-  target failure of a completed send) does not change the caller's result and is left
+  target failure of a completed send) does not change the caller's result and is recorded
   only as an observation.
 - When the Core receive byte HWM fills, backpressure is carried to the sender and a
   record is not dropped.
@@ -494,4 +495,4 @@ status and metric names by [Runtime Status](../06-observability/01-runtime-monit
 
 ---
 
-[Execution topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 03. Cancellation And Shutdown](03-cancellation-and-shutdown.en.md) · [Next: 05. Payload Ownership And Codec](05-payload-ownership-and-codec.en.md)
+[Execution topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 03. Cancellation and Shutdown](03-cancellation-and-shutdown.en.md) · [Next: 05. Payload Ownership and Codec](05-payload-ownership-and-codec.en.md)

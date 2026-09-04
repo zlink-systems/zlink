@@ -17,8 +17,8 @@ The application can deliver a message to a Spot in the following two ways.
 
 | Method | Value the application specifies | How the framework decides the actual delivery target |
 |---|---|---|
-| [Spot direct](../00-foundation/02-glossary.en.md#spot-direct)(a way of specifying a single global Spot ID to send/request to that Spot) | Specifies a single global Spot ID, the logical address identifying a [Spot ID](../00-foundation/02-glossary.en.md#spot-id), to deliver to. | First finds a currently usable Spot. If it exists, sends to the node that owns it. If it doesn't exist and `InstanceSpot(...)` was specified, selects a node to create the new Spot. |
-| [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast)(a way of delivering one message to several Spots in the same Channel via ChannelName and topic) | Specifies a name identifying the delivery scope, [ChannelName](../00-foundation/02-glossary.en.md#channelname), and a `topic` selecting a Spot within it. | First selects a ready remote node with weight greater than 0 among nodes participating in that Channel. Each receiving node delivers the message to its own local Spots registered under the same ChannelName and topic. |
+| [Spot direct](../00-foundation/02-glossary.en.md#spot-direct) (a way of specifying a single global Spot ID to send/request to that Spot) | Specifies one [Spot ID](../00-foundation/02-glossary.en.md#spot-id), the global logical address that identifies the Spot to which the message will be delivered. | First finds a currently usable Spot. If it exists, sends to the node that owns it. If it doesn't exist and `InstanceSpot(...)` was specified, selects a node to create the new Spot. |
+| [Logical Multicast](../00-foundation/02-glossary.en.md#logical-multicast) (a way of delivering one message to several Spots in the same Channel via ChannelName and topic) | Specifies a name identifying the delivery scope, [ChannelName](../00-foundation/02-glossary.en.md#channelname), and a `topic` selecting a Spot within it. | First selects a ready remote node with weight greater than 0 among nodes participating in that Channel. Each receiving node delivers the message to its own local Spots registered under the same ChannelName and topic. |
 
 If [Spot direct](../00-foundation/02-glossary.en.md#spot-direct) has no Spot and `InstanceSpot(...)`
 wasn't specified either, no new Spot is created — it returns a target-not-found
@@ -30,10 +30,10 @@ node participating in the Channel, and each node checks its own subscriptions to
 decide which local Spot actually receives it.
 
 A node with [weight](../00-foundation/02-glossary.en.md#weight) greater than 0 is included as a
-Logical Multicast remote delivery candidate. Spot creation/initialization and the
-recording by the store that lets several nodes jointly check each Spot's current
-owner and lifecycle state, the [Location Store](../00-foundation/02-glossary.en.md#location-store),
-must finish before a Spot can receive messages; a node not in that
+Logical Multicast remote delivery candidate. Before a Spot can receive messages,
+Spot creation and initialization must finish, and its current owner and lifecycle
+state must be recorded in the [Location Store](../00-foundation/02-glossary.en.md#location-store),
+where multiple nodes can check them. A node not in that
 [Ready](../00-foundation/02-glossary.en.md#ready) state isn't included in this delivery, even
 with positive weight.
 
@@ -50,9 +50,9 @@ two methods. The following is defined by other documents.
 - Payload and metadata: [Message Model](../00-foundation/05-message-model.en.md)
 - Async execution of callbacks: [Async Execution Policy](../01-execution/01-submit-and-completion.en.md)
 
-### 1.1 An Example Expressing The Common Behavior As A .NET API
+### 1.1 An Example Expressing the Common Behavior as a .NET API
 
-This document's contract applies commonly to every framework language. The C#
+This document's contract applies to every framework language. The C#
 example below is a reference showing how the common behavior appears in the .NET
 public API. This example doesn't define the common interface's signature or require
 the C# shape in other languages.
@@ -61,9 +61,9 @@ The actual .NET signature is defined by
 [.NET Spot Public Interface](../languages/dotnet/interfaces/05-spots.en.md) and
 [.NET Common Runtime Interface](../languages/dotnet/interfaces/01-common-runtime.en.md).
 
-The following interface shows how to send messages from Spot direct and a Spot
+The following interface shows how to send messages via Spot direct and from a Spot
 callback. The members described in this document are excerpted exactly as their
-real .NET signature.
+actual .NET signatures.
 
 ```csharp
 public interface IZLinkSpotClient
@@ -202,9 +202,9 @@ The code above is an excerpt for understanding the interface relationships direc
 within the document. Metadata builders and .NET interfaces not used in this document
 have their actual signature defined by the documents named above.
 
-## 2. Spot And MeshNode
+## 2. Spot and MeshNode
 
-### 2.1 The Value Identifying A Spot
+### 2.1 The Value Identifying a Spot
 
 User Spot and
 [Instance Spot](../00-foundation/02-glossary.en.md#entry-spot-user-spot-and-instance-spot) are
@@ -217,7 +217,7 @@ case-sensitive, UTF-8 encoded, 1..255 bytes. Two IDs are the same only if the wh
 physical connection group of a
 [RouteMesh](../00-foundation/02-glossary.en.md#routemesh)(the scope over which several
 MeshNodes participate to exchange node and Channel messages), is used only to
-decide a Spot's initial placement location and isn't included in the value
+decide a Spot's initial placement and isn't included in the value
 identifying a Spot.
 
 [`Spot kind`](../00-foundation/02-glossary.en.md#spot-kind), the value indicating which kind
@@ -238,7 +238,7 @@ Spot ID or specify it as a create target. The issued format and collision handli
 are defined by [MeshNode](03-mesh-node.en.md).
 
 <a id="object-roles"></a>
-### 2.2 Object Client And Object Server Roles
+### 2.2 Object Client and Object Server Roles
 
 Spot factory, Entry Spot, and Spot lifecycle can only be registered on a
 [MeshNode](../00-foundation/02-glossary.en.md#meshnode) with the Object Server role.
@@ -275,7 +275,7 @@ The actual procedure for identifying and creating a Spot, and preparing a new
 instance, is defined by
 [Spot Address Messaging](06-spot-address-messaging.en.md).
 
-### 2.4 The Boundary With Classic Fanout
+### 2.4 The Boundary with Classic Fanout
 
 Classic fanout is a separate feature that uses a PUB/SUB socket to deliver the same
 event to subscribers. Service event fanout and Spot Logical Multicast are different
@@ -288,7 +288,7 @@ The two features don't share the following state.
 
 ## 3. Spot Direct
 
-### 3.1 How To Find A Ready Spot's Owner
+### 3.1 How to Find a Ready Spot's Owner
 
 Spot direct send and request take only a single global Spot ID as target.
 
@@ -368,7 +368,7 @@ static ValueTask<TReply> RequestAsync<TRequest, TReply>(
 {
     return spotClient
         .RequestToSpot(spotId, request)
-        .InstanceSpot("ShoppingCartSpot") // prepare it new with this type if the Spot doesn't exist.
+        .InstanceSpot("ShoppingCartSpot") // prepare a new Spot with this type if it doesn't exist.
         .InMesh("object-mesh")             // set the Mesh to first place a Missing Spot on.
         .Timeout(TimeSpan.FromSeconds(3))  // apply one deadline from Spot lookup through reply.
         .Async<TReply>(cancellationToken); // wait for the handler's reply after cold activation.
@@ -408,10 +408,10 @@ The activation envelope preserves the following information together.
 
 | Information | Reason it's used |
 |---|---|
-| The first application message | So the source doesn't need to resend the business payload to process once Spot preparation finishes. |
+| The first application message | So the source doesn't need to resend the business payload for processing once Spot preparation finishes. |
 | The value identifying the same work (`operation identity`) | Distinguishes whether a retry or duplicate submission is the same work. |
 | The value linking reply to request (`reply correlation`) | Links the request's reply back to the original call. |
-| The work deadline | Delivers the time boundary to apply to the work, to the target. |
+| The work deadline | Delivers to the target the time boundary that applies to the work. |
 | The Spot's global ID | Identifies the Spot the target runtime will confirm or create. |
 | The selected Mesh and stable type | Fixes what scope and kind of Instance Spot to prepare. |
 | The version of the information used to select the target ([`target descriptor fence`](../00-foundation/02-glossary.en.md#target-descriptor-fence)) | Determines whether the target's registration information changed after selection. |
@@ -423,13 +423,13 @@ creation authority records itself as owner and runs the factory. The actual orde
 this creation procedure is defined by
 [Spot Address Messaging](06-spot-address-messaging.en.md).
 
-### 3.4 Common Guarantees Of Spot Direct
+### 3.4 Common Guarantees of Spot Direct
 
 - A local Spot and remote Spot use the same handler and callback execution rules.
 - The caller doesn't build owner RID, endpoint, or internal-communication route
   information.
 - A failed Spot direct request isn't automatically resent to a different Spot.
-- How owner changes, route cache, and a stale owner route are handled is defined by
+- The handling of owner changes, the route cache, and stale owner routes is defined by
   [Spot Address Messaging](06-spot-address-messaging.en.md) and
   [Routing](08-routing.en.md).
 
@@ -447,7 +447,7 @@ make the first message runnable is defined by
 [Spot Address Messaging](06-spot-address-messaging.en.md). The source doesn't build
 a second direct message after the `Ready` commit.
 
-### 3.5 Channel Calls From A Spot
+### 3.5 Channel Calls from a Spot
 
 A Spot handler or timer can start a Channel send and request. The framework selects
 the send path registered in the current process by
@@ -562,11 +562,11 @@ current process by ChannelName.
 
 ### 4.1 Target Scope
 
-Logical Multicast is a feature delivering one message to several Spots in the same
+Logical Multicast is a feature that delivers one message to several Spots in the same
 Channel. The delivery scope is set by the `(ChannelName, topic)` combination. The
 second value is [topic](../00-foundation/02-glossary.en.md#topic).
 
-`ChannelName` selects the RouteMesh participating nodes that will receive the
+`ChannelName` selects the participating RouteMesh nodes that will receive the
 message. `Topic` selects the local Spot
 [subscription](../00-foundation/02-glossary.en.md#subscription) that will receive the message on
 each receiving MeshNode.
@@ -617,7 +617,7 @@ Multicast by repeatedly calling
 specific MeshNode by specifying both a MeshName and a target RID) send isn't part
 of the common contract.
 
-### 4.3 Conditions For Starting A Publish Operation
+### 4.3 Conditions for Starting a Publish Operation
 
 Logical Multicast doesn't provide a publish-only delivery policy option.
 
@@ -631,7 +631,7 @@ with the existing typed cancellation or `ShuttingDown` error respectively.
 Once a worker takes the work, it starts the following processing.
 
 - Submits the message once to each initially fixed remote target.
-- Submits immediately, per target, to each matching local Spot queue.
+- Immediately submits the message to each matching local Spot queue.
 
 If a local Spot queue has no capacity, the next target is processed without
 waiting. This failure isn't aggregated into a publish-only result or monitoring
@@ -684,8 +684,8 @@ aggregated into monitoring.
 
 ### 4.5 Publish Completion
 
-Even if both the initially fixed remote targets and the matching local Spots are
-`0`, publish completes normally. Once the publish transaction starts, insufficient
+Even if the counts of both the initially fixed remote targets and the matching local
+Spots are `0`, publish completes normally. Once the publish transaction starts, insufficient
 queue capacity or an unreachable connection for some targets doesn't roll back or
 retry the whole operation. Remote target connection failure and local Spot queue
 capacity shortage aren't turned into a publish-only result or monitoring value.
@@ -727,11 +727,11 @@ static async ValueTask PublishAsync<TEvent>(
 }
 ```
 
-## 5. Subscription Registration And Message Delivery
+## 5. Subscription Registration and Message Delivery
 
-### 5.1 Subscription Registration Values And Startup Checks
+### 5.1 Subscription Registration Values and Startup Checks
 
-A Spot subscription registers with the following values.
+A Spot subscription is registered with the following values.
 
 - `ChannelName`: the Channel scope the subscription belongs to
 - `topic`: the value selecting a Spot within that Channel
@@ -773,7 +773,7 @@ manages may also need to change. Work the framework runs on the Spot queue to ma
 this change is called a
 [`Spot control claim`](../00-foundation/02-glossary.en.md#spot-control-claim).
 
-Spot control claim enters the target's
+A Spot control claim enters the target's
 Spot lane and runs in queue order with that lane's handler/control callbacks. In a
 `SpotWide` User Spot, member Actors and timers also use the same shared gate. In
 Entry Spot and `PerActor` User Spot, per-Actor lanes and per-timer lanes are
@@ -783,7 +783,7 @@ a control claim.
 The scope of control work and its execution order relative to the Actor control
 claim are defined by [Actor Model §4](04-actor-model.en.md).
 
-### 5.3 Work Put On The Spot Application Queue
+### 5.3 Work Put on the Spot Application Queue
 
 | Queue | Work put on it | Work not put on it |
 |---|---|---|
@@ -792,7 +792,7 @@ claim are defined by [Actor Model §4](04-actor-model.en.md).
 | Actor queue | Actor business payload | Actor payload delivered through a Spot callback |
 
 Actor join/leave and lifecycle control callback are handled by the **Spot control
-claim**, not the Spot application queue. The two slots have different limits and
+claim**, not the Spot application queue. They have different limits and
 execution order, so they aren't mixed. An Instance Spot's Actor control or
 Logical Multicast subscription is rejected at registration time or when preparing
 the Spot.
@@ -821,9 +821,9 @@ The send family waits because there is no return value for the caller to make a
 retry decision with; the request family doesn't wait because the caller receives
 an error it can judge from. Treating a request as a wait would tie the sending
 side's execution resources to the receiving side's processing speed, creating a
-section where the two nodes block each other.
+period in which the two nodes block each other.
 
-The criterion splitting local from remote is "does this runtime own the failed
+The criterion distinguishing local from remote is "does this runtime own the failed
 queue" ([Framework Error Model](../00-foundation/07-framework-error-model.en.md)). The caller
 uses this distinction to judge what to retry.
 
@@ -840,7 +840,7 @@ The error kind on exceeding the limit follows the table above — **exceeding th
 control lane limit owned by the same runtime is `CapacityExceeded`; saturation
 announced by an owner on a different node is `Unavailable`**.
 
-### 5.4 Spot Turn And Callback Order
+### 5.4 Spot Turn and Callback Order
 
 Entry Spot and Instance Spot application callbacks run in order on each Spot turn.
 A User Spot's default `SpotWide` mode has the Spot queue and member Actor queue
@@ -867,9 +867,9 @@ If an Actor needs to change Spot state, it must submit an explicit Spot call. Th
 boundary between Actor payload and membership control is defined by
 [Actor Model](04-actor-model.en.md).
 
-### 5.5 Work Handled Separately From Application Callbacks
+### 5.5 Work Handled Separately from Application Callbacks
 
-The following work, progressing the framework's own state, is handled separately
+The following work, which advances the framework's own state, is handled separately
 from Spot application callbacks.
 
 - Notification that a Spot is ready
@@ -880,17 +880,17 @@ from Spot application callbacks.
 This work must be able to keep proceeding even while an application callback is
 waiting for a different task's result.
 
-## 6. Failure And Lifetime
+## 6. Failure and Lifetime
 
-### 6.1 Target And Request Failure
+### 6.1 Target and Request Failure
 
-For a call that doesn't start cold activation via Instance intent, if the target
-Spot has no Ready authority, it ends with a Spot target error.
+A call that doesn't start cold activation via Instance intent ends with a Spot
+target error if the target Spot has no Ready authority.
 
 A lifecycle operation like `Close`, which specifies a Spot ID and `ObjectGeneration`
 together to change a specific Spot incarnation, also checks the Location Store's
 current generation. If the specified generation differs from the current
-generation, it returns an error that it referenced an already-changed Spot. This
+generation, it returns an error indicating that it referenced an already-changed Spot. This
 check isn't applied to Spot direct send/request.
 
 If a request handler can't be found or the payload can't be interpreted, it
@@ -916,18 +916,17 @@ The conditions under which one-way and request complete are defined by
 order when terminating a Spot is defined by
 [Graceful Drain](../05-location-relocation/05-host-relocation-flow.en.md).
 
-## 7. Metadata And Observability
+## 7. Metadata and Observability
 
 ### 7.1 Metadata
 
-Spot direct and Logical Multicast use the unchangeable metadata snapshot defined by
+Spot direct and Logical Multicast use the immutable metadata snapshot defined by
 [Message Model](../00-foundation/05-message-model.en.md). Who holds metadata, the allowed size,
 and reply rules aren't redefined in this document.
 
 ### 7.2 Observability Information
 
-Observability information must provide the following items distinguished from each
-other.
+Observability information must provide the following items as distinct values.
 
 | Item | Meaning |
 |---|---|
@@ -949,7 +948,7 @@ only the public surface (the send/request/publish results of `IZLinkSpotClient`/
 `IZLinkSpotOutbound`, the registration APIs of `IZLinkSpotHandlerRegistry`, and
 return values/errnos).
 
-### 8.1 Physical Connection And Target Specification
+### 8.1 Physical Connection and Target Specification
 
 - Spot direct and Logical Multicast share one MeshNode ROUTER.
 - Spot direct only takes a global Spot ID as target.
@@ -973,7 +972,7 @@ The verification requirements for a Reserved authority's restoration after a
 process restart, durable inbox confirmation, and the Serving gate opening order are
 owned by [Spot Address Messaging](06-spot-address-messaging.en.md).
 
-### 8.3 Channel Calls Started From A Spot
+### 8.3 Channel Calls Started from a Spot
 
 - A Spot Channel call can use a different RouteMesh or ClientServer send path
   registered under the ChannelName.
@@ -995,7 +994,7 @@ owned by [Spot Address Messaging](06-spot-address-messaging.en.md).
 - Local and remote target selection count, accept count, drop count, or
   unreachable count aren't aggregated into publish-only monitoring values.
 
-### 8.5 Spot And Actor Message Delivery
+### 8.5 Spot and Actor Message Delivery
 
 - Actor payload doesn't go through the Spot application queue or a Spot callback.
 - Only Actor join/leave and lifecycle control are delivered via the Spot control
@@ -1004,4 +1003,3 @@ owned by [Spot Address Messaging](06-spot-address-messaging.en.md).
 ---
 
 [Spot And Actor topic index](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 01. Spot Model](01-spot-model.en.md) · [Next: 03. MeshNode](03-mesh-node.en.md)
-</content>
