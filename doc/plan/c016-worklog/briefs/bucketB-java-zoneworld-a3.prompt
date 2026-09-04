@@ -1,0 +1,52 @@
+# Job: java ZoneWorld — intermittent `ZW-A3` timeout in `ScenarioSupport$Game.moveTo` (final gate, 1 of ~4 runs)
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`, `framework/languages/java/AGENTS.md`, and the prior ZoneWorld
+summaries `doc/plan/c016-worklog/bucketB-java-zoneworld{,-2,-3}-summary.md` (A5 was fixed by moving
+STREAM control frames off the state lane; A3 is new). Never modify `core/**`, `bindings/**`, any
+`doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages' trees
+(`framework/languages/{cpp,dotnet,node}/**`), `framework/languages/shared_sample/**`; never lower an
+assertion or widen a timeout as the fix; do not commit. Another job may edit
+`framework/languages/java/samples/kotlin/GameQuest/**` concurrently — do not touch it; take
+`flock -w7200 /tmp/zlink-jvm-gate.lock` around EVERY gradle/sample invocation.
+
+## Facts
+- Final java gate (`doc/plan/c016-worklog/gate-final-java-samples-summary.md`): individual
+  `framework/languages/java/samples/java/ZoneWorld/run_sample.sh` exit 1 after 265 s:
+  `ZW-G4, B8, G1, G2-rid, G5, A1, A2 passed`, then
+  `CompletionException: TimeoutException` at `ScenarioSupport$Game.moveTo(ScenarioSupport.java:142)`
+  from `Scenarios.a3(Scenarios.java:77)` (`player.moveTo(49, 49)` after the two `reject(...)` steps).
+  Log: `zlink-work/c016/logs/gate-final-java-ZoneWorld.log` (run dir was under
+  `/dev/shm/zlink-tmp-java/`, role logs may still exist). The aggregate `run_samples.sh` run right
+  after it passed ZoneWorld fully (`zoneworld=completed`), as did the earlier 7/7 gate — so ~1/4.
+- `moveTo` waits for `ZoneChangedNotify` when the step crosses a zone boundary (ScenarioSupport
+  `:118-142`). A3 moves (25,25)→(49,49) after two rejected moves (OutOfRange, TooFar) — check whether
+  the timeout is the zone-change notify that never arrives for a specific crossing (which zone pair),
+  or a `MoveReq` reply that never comes: use the role logs (gateway / zone-node-N) and the message-flow
+  tracer (`ZLinkMessageFlowTracer` INFO lines) to find the last admitted/dispatched/replied packet for
+  the a3 player before the stall. Possible mechanisms: a relocation/handover between zone nodes racing
+  with the previous rejected move; the gateway STREAM push path for the notify (same family as the
+  A5 fix — the A5 fix moved heartbeat/session-closing to `sendAsync`; check whether
+  `ZoneChangedNotify` pushes still go through a synchronous path that can block on the state lane);
+  a DONTWAIT/BACKPRESSURED completion not resubmitted (WRITABLE) on the gateway's STREAM socket.
+- Reproduce: `ZLINK_ZONEWORLD_SCENARIOS`-style selector if the runner supports one (read
+  `run_sample.sh` — earlier jobs used selectors like `ZW-A4,ZW-A5`): run the prefix
+  `ZW-G4,ZW-B8,ZW-G1,ZW-G2-rid,ZW-G5,ZW-A1,ZW-A2,ZW-A3` up to 6× with `ZLINK_JAVA_STREAM_TRACE=1` and
+  run-dir preservation until it fails; keep the failing run dir under
+  `zlink-work/c016/logs/bucketB-java-zoneworld-a3-measurement/`.
+- Env: `TMPDIR=/dev/shm/zlink-tmp-java` (mkdir -p), do NOT export a directory-valued
+  `ZLINK_LIBRARY_PATH` (Java treats it as a file path; the runner already points at the local 0.17.0
+  `libzlink.so`), do not rebuild Core or local packages.
+
+## What to do
+1. Reproduce with traces; identify the exact stalled message and owner with file:line and the spec
+   clause (`framework/doc/framework/**` STREAM push / zone relocation / execution contract) it violates.
+2. Fix minimally in `framework/languages/java/**` (framework or java sample harness); regression test
+   (unit test in `zlink-framework-core` if the cause is framework-side).
+3. Verify: the prefix selector 5× green, then FULL `run_sample.sh` 2× green (`zoneworld=completed`,
+   exit 0), `./gradlew --no-daemon :zlink-framework-core:test` once (known C failures: the two
+   `ZLinkJavaRawMeshNodeM6ATest` and `JavaDocumentationRegressionTest` only).
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-java-zoneworld-a3-summary.md`: reproduction table, trace timeline,
+cause `file:line`, spec clause, fix + regression, results, BLOCKERS.

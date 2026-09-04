@@ -1,0 +1,54 @@
+# Job: kotlin GameQuest — `Ensure failed` at `Program.kt:179` (`ensure(unavailable != null)` after owner termination) in the java aggregate sample gate
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`, `framework/languages/java/AGENTS.md`, and
+`doc/plan/c016-worklog/bucketB-java-samples-summary.md` (the Java GameQuest `Ensure failed` history and
+its fix). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`,
+`doc/site/**`, other languages' trees, `framework/languages/shared_sample/**`; never lower an
+assertion; do not commit. Another job edits `framework/languages/java/samples/java/ZoneWorld/**` and
+possibly `zlink-framework-core` STREAM code concurrently — re-read files before editing and keep your
+change scoped; take `flock -w7200 /tmp/zlink-jvm-gate.lock` around EVERY gradle/sample invocation.
+
+## Facts
+- Final java aggregate gate (`doc/plan/c016-worklog/gate-final-java-samples-summary.md`,
+  log `zlink-work/c016/logs/gate-final-java-aggregate.log` ~line 796-833 and 962): all 7 Java
+  samples completed, then Kotlin GameQuest's client failed:
+  `gamequest-owner-termination-ready player=player-alice` followed by
+  `IllegalStateException: Ensure failed` at
+  `framework/languages/java/samples/kotlin/GameQuest/Client/src/main/kotlin/systems/zlink/samples/kotlin/gamequest/client/Program.kt:179`
+  = `ensure(unavailable != null)`: after `waitForOwnerTerminationRelease()`, the
+  `KillMonsterReq("player-alice", ..., "kill-after-owner-termination")` request to the terminated owner
+  was expected to fail (Unavailable / no owner) but completed with a reply (or a non-exception).
+  The runner then reported `Sample process 6765 exited during cleanup with status 1.`
+  (`runner-common.sh:235`) and the aggregate exited 1.
+- The Java GameQuest sample runs the same scenario (`GameQuestClientScenario.java`, the
+  owner-termination step) and passes in the same gate — compare the two clients step by step: what
+  the Java client waits for before sending the post-termination request (a server evidence marker? the
+  `onDisconnected`/termination-release signal?) versus the Kotlin `waitForOwnerTerminationRelease()`.
+  Candidate mechanisms: (a) the Kotlin client sends before the owner is actually terminated (release
+  signal fires early → the actor answers normally); (b) the framework re-creates the owner on the
+  post-termination request (auto spawn) so a reply is legitimate — then the assertion is a sample
+  contract question: check the sample spec/README under `framework/languages/java/samples/kotlin/GameQuest`
+  and the shared sample contract (`framework/languages/shared_sample/**`, read-only) for the expected
+  outcome and align the Kotlin client with the Java client's contract; (c) the request failed with an
+  exception that `runCatching` did not capture because the failure surfaced on the stream (`close`)
+  rather than the reply stage.
+- Env: `TMPDIR=/dev/shm/zlink-tmp-java` (mkdir -p), do NOT export a directory-valued
+  `ZLINK_LIBRARY_PATH`, do not rebuild Core or local packages. Run
+  `framework/languages/java/samples/kotlin/GameQuest/run_sample.sh` (read `runner-common.sh` for
+  run-dir preservation / trace env) 3× to get the determinism.
+
+## What to do
+1. Determinism table (3×), then the trace of the post-termination request (message flow tracer:
+   admitted/dispatched/replied, which node handled it, owner generation).
+2. Cause `file:line`; fix minimally in the Kotlin sample or, if framework-side, in
+   `framework/languages/java/**` with a `zlink-framework-core` regression test. If the Kotlin
+   client's expectation contradicts the Java client's contract, align the Kotlin client to the Java
+   one and say so explicitly.
+3. Verify: Kotlin GameQuest `run_sample.sh` 3× green; Java GameQuest `run_sample.sh` 1× green; if the
+   framework changed, `./gradlew --no-daemon :zlink-framework-core:test` once (known C failures: two
+   `ZLinkJavaRawMeshNodeM6ATest` + `JavaDocumentationRegressionTest`).
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-kotlin-gamequest-owner-termination-summary.md`: determinism, trace,
+cause `file:line`, contract reference, fix + regression, results, BLOCKERS.

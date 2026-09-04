@@ -1,0 +1,63 @@
+# Job: dotnet — `ServiceRuntimeFoundationTests.ManagedNode_Tcp_SameEndpoint_Replacement_RemainsAdmitted_Across_Repeated_Lifecycles` fails deterministically (3/3) on the combined admission rework
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`, and the admission-rework
+summaries `doc/plan/c016-worklog/bucketB-dotnet-handover-resend-summary.md`,
+`bucketB-dotnet-cross-spotroute-summary.md`, `bucketF-dotnet-relocated-reply-relay-summary.md`,
+`bucketF-dotnet-canonical-handover-family-summary.md`. Never modify `core/**`, `bindings/**`, any
+`doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages' trees; never lower an
+assertion; do not commit. Keep the whole uncommitted dotnet working tree. Another job
+(`bucketF-dotnet-clientserver-readmit-2`) is editing
+`src/Zlink.Framework/Runtime/Channels/ZLinkClientServerClientRuntime.cs` concurrently — do not touch
+that file; take `flock -w7200 /tmp/zlink-dotnet-gate.lock` around EVERY `dotnet build`/`dotnet test`
+(a build under another running test corrupts it).
+
+## Facts
+- Full gate v5 (`--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests'`): 1917 passed,
+  2 failed — this test and the ClientServer one (separate job). Focused rerun 3×: 3/3 FAIL, so it is
+  deterministic: `System.TimeoutException : The managed MeshNode condition was not reached.` at
+  `tests/Zlink.Framework.UnitTests/Runtime/ServiceRuntimeFoundationTests.cs:1564` (the
+  `WaitUntilAsync` for `local` Admitted peer with `expectedRid` AND `remote` Admitted peer with
+  `localRid`), logs
+  `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate-v5-foundation-{1,2,3}.log`.
+  Determine which generation (0/1/2) stalls and which side (local or remote) never reaches Admitted.
+- Scenario: `local` ROUTER node binds tcp; per generation the test disconnects the previous remote
+  intent (`localBackend.DisconnectPeer(remoteEndpoint)`), waits until no peer has that endpoint,
+  disposes the old remote, starts a NEW remote node with a NEW RID bound to the SAME tcp endpoint,
+  then `localBackend.ConnectPeer(newRid, sameEndpoint)` — a unilateral (one-direction) connect where
+  the remote never connects back, so admission relies on the remote receiving local's Hello over the
+  single lane set and admitting `localRid` as an inbound peer, and local admitting the new RID via the
+  reply. Expected by spec (`framework/doc/framework/.../01-channel-topology` manual connect,
+  `03-spot-actor/03-mesh-node.ko.md` same-endpoint replacement / fixed-RID handover):
+  the same endpoint with a new RID must be admitted again after the old intent is removed.
+- Suspects in `src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs` /
+  `ZLinkMeshPeerAdmission.cs` (all from the uncommitted rework): (a) `_readyOutboundEndpoints`
+  (`:70`, cleared at `:2955`, added at `:8811`, consumed at `:8310`) keyed by endpoint string — a stale
+  "ready" entry from the previous generation at the same endpoint, or a missing one because the new
+  ConnectionReady is deduped/attributed to the old generation, so `FindReadyOutboundCandidate`
+  (requires configured RID+endpoint match) never recognises the new intent; (b)
+  `BeginReciprocalHandoverSettlement` / `ObserveReciprocalHandoverDisconnect` treating the
+  same-endpoint new-RID connect as a reciprocal duplicate and deferring Admitted until a disconnect
+  mask that never clears; (c) `RetireDuplicatePeer` calling `Disconnect(endpoint)` and thereby
+  tearing down the just-created intent for the same endpoint; (d) the unilateral-Hello fallback path
+  requiring `hasReadyInboundCandidate` on the remote side. Read the code paths, then confirm with the
+  `mesh_peer_*` framework debug trace (temporary file sink; remove before finishing).
+- dotnet env block (never `--artifacts-path`, never `ulimit -v`):
+  `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; cd framework/languages/dotnet; flock -w7200 /tmp/zlink-dotnet-gate.lock dotnet test tests/Zlink.Framework.UnitTests --filter 'FullyQualifiedName~ManagedNode_Tcp_SameEndpoint_Replacement_RemainsAdmitted_Across_Repeated_Lifecycles'`.
+
+## What to do
+1. Reproduce with the trace; identify the exact site (file:line) and the spec clause that the rework
+   now violates.
+2. Fix minimally without reopening the rework's own regressions: after the fix these must stay green
+   — `BilateralCallerFirstAdmissionCompletesImmediateActorRequestOnSurvivor`, the three
+   `RemoteActorStaleAuthority*`, `RelocatedActorReplyCompletesTheOriginalRemoteCallerExactlyOnce`,
+   `ZLinkMeshPeerAdmissionTests`, `CanonicalActorJoinIngressReplyTests.RouteAdmission*`. Add a
+   regression only if the existing test does not already pin the behaviour (it does — then just say
+   so).
+3. Verify: this test 5×, `--filter 'FullyQualifiedName~ServiceRuntimeFoundationTests'` 1×,
+   `--filter 'FullyQualifiedName~StatefulServiceRuntimeTests'` 1×, `ZLinkMeshPeerAdmissionTests` 1×,
+   `CanonicalActorJoinIngressReplyTests.RouteAdmission` 1×. Do NOT run the whole suite.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketF-dotnet-tcp-same-endpoint-replacement-summary.md`: generation/side
+that stalls, trace, cause `file:line`, spec clause, fix, results table, BLOCKERS.
