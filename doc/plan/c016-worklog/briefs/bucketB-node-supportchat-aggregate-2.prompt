@@ -1,0 +1,48 @@
+# Job (round 2): node SupportChat.Ts — browser scenario "Wait for stream message timed out" recurs in the aggregate sample run after the budget fix
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`, `doc/plan/c016-worklog/gate-samples-node-fix-summary.md` (round 1:
+post-reconnect `ConversationIdleNotify` waits armed after the notification had already been delivered
+to the OLD sessions; mitigated by raising idle 10 s / close grace 2 s / wait budget 20 s, commit
+`2e3b1b47e4`), and the shared sample contract `framework/languages/shared_sample/**` supportchat +
+`framework/doc/framework/common/sample/**` supportchat (read-only). Never modify `core/**`,
+`bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages' trees,
+`framework/languages/shared_sample/**`; never lower an assertion or just widen a budget again; do not
+commit. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`,
+`flock -w7200 /tmp/zlink-node-gate.lock` around every npm/sample invocation; do not rebuild
+Core/local packages; do NOT run the cpp gates concurrently (port collisions).
+
+## Facts
+- Final node 7-sample gate on current packages: SupportChat.Ts passed individually (29 s) and 2/2 in
+  round 1, but the aggregate `bash samples/run_samples.sh` (order TicTacToe → Bingo → DeliveryDispatch
+  → SupportChat …) failed at SupportChat with THREE simultaneous
+  `ZlinkStreamException: Wait for stream message timed out.` from the browser scenario
+  (`scripts/browser-e2e/run-sample.mjs:63`), log `zlink-work/c016/logs/gate-final-samples-node-aggregate-2.log:270-300`
+  (heartbeat pings from client-3..7 keep flowing until the three waits expire — the connections are
+  alive, the awaited messages never arrive). So round 1's budget change did not remove the race; it is
+  the same family: waits armed after the awaited notification was delivered (or delivered to a
+  session the scenario has already replaced), i.e. a scenario/sample ordering defect — or a real
+  framework delivery gap after reconnect (bound-session push to the resumed session).
+- Decide with evidence, not budgets: preserve the browser log + OTel flow files
+  (`/dev/shm/zlink-tmp-node/zlink-supportchat.ts-*/logs/flow/`) of a failing run; identify WHICH three
+  waits expired (`supportchat-client-scenario.ts` line numbers) and, for each, whether the server
+  emitted the message (flow `dispatched/replied` on the server, `stream-inbound` on the gateway) before
+  or after the wait was armed and to which session (old vs resumed). Compare with the cpp/dotnet/java
+  SupportChat clients (read-only) for how they order "arm wait → act" around reconnect/resume.
+- Reproduce: run the aggregate order (`bash samples/run_samples.sh TicTacToe.Ts Bingo.Ts DeliveryDispatch.Ts SupportChat.Ts`
+  if the runner accepts a list, else the four sequentially) up to 4×, and SupportChat alone 3×, to get
+  the determinism table.
+
+## What to do
+1. Root cause with `file:line` and the sample contract clause (message semantics / idle+close
+   lifecycle / resume) that the scenario or the framework violates.
+2. Fix minimally: if the scenario arms waits too late, restructure the scenario so every wait is
+   armed before the action that triggers it (and resumed sessions observe state via the contract's
+   resume/replay, not by hoping to catch an in-flight notify); if the framework drops a push to a
+   resumed session, fix `packages/framework/**` with a contract test under `test/contract/`.
+3. Verify: aggregate order 3× green, SupportChat alone 2× green, `node --test test/contract/sample-supportchat-message-semantics-gate.test.js`
+   green, and the full `bash samples/run_samples.sh` once (all 7, exit 0).
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-node-supportchat-aggregate-2-summary.md`: determinism table, per-wait
+timeline, cause `file:line`, contract clause, fix + regression, results, BLOCKERS.
