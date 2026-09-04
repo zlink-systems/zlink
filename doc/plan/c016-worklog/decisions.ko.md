@@ -1004,3 +1004,10 @@ p95 4.3~6.4 → 2.4 ms, p99 10.8~12.8 → 4.1~5.1 ms(0.15.1: 1.9 / 3.0~4.2), mea
 REQUEST 전용 pending pool(`request_pending_submit`, drive/fail_pull_request_pending, "admission 전 pending 시간")은 제거하고 `PENDING_MAX_*`는
 완전 no-op(ABI 유지). Reply timeout은 admission 시점부터(현행). 영향: Core, 스펙(README REQUEST 절·PENDING_MAX, 06-dealer/07-router), 바인딩 8개
 REQUEST 제출 경로(SEND 토큰 기계 재사용), C perf REQREP 클라이언트, framework(A). 순서: Core job(sol high) → 스펙 diff 확인 후 커밋 → 바인딩 → perf 재측정.
+
+## D-B86 (2026-09-05 00:40, 머신 B) Core REQUEST 계약 B 커밋·스펙 커밋, hotpath_gate 통과
+Core `7d8205a028`(29파일 +255/−2733: REQUEST pending pool 제거, DONTWAIT REQUEST → 대기 토큰, 새 public suite test_request_writable_contract),
+스펙 `ea934d0e97`(README·06-dealer·07-router ko/en). Gate: dev ctest 140/140, 4 suite 5회, release lib 재링크, mirror 32/32, 별도 LTO gate
+트리(core/build-gate)에서 hotpath_gate 4 cell PASS(최대 비율 1.0055). 바인딩 REQUEST 포팅 1차(node·cpp·java·dotnet) job 진행 중.
+DEALER 세부: 선택 가능한 ROUTER가 없으면(peer 0개·전부 weight 0) EAGAIN → 토큰; ROUTER routing map에 없는 RID는 ENOENT → EHOSTUNREACH →
+NOT_CONNECTED(토큰 없음). blocking NONE의 DEALER NOT_CONNECTED/NOT_ADMITTED와 ROUTER NOT_FOUND 판정은 유지.

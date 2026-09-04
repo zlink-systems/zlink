@@ -4,7 +4,9 @@
 상태: Core 커밋 `50d77800f2`(main), 스펙 갱신 커밋(이 문서와 같은 커밋), 바인딩 cpp/node/dotnet 커밋 `4f503b76d3`, java 커밋 `7927c582c2`,
 0.17.0 범프 커밋 `70a9998998`, c `f9d0eb84d9`, rust `85eb9425a1`, python `5240947587`, go `4ff46b5bae`.
 리뷰(버그·핫패스·스모크) 커밋: c `fc0562cef4`, rust `9f2342cf27`, dotnet `8b52bb66ba`, cpp `5a42a363c7`, go `c6fdad2194`,
-python `cd5b4a163e`, node `a9eb6c5a77`, java(후속). 리뷰 결과 표는 §6. 계약의 최종 문장은 `core/doc/spec/core/socket/README.ko.md`
+python `cd5b4a163e`, node `a9eb6c5a77`, java `b72622bb2d`. 리뷰 결과 표는 §6.
+**REQUEST도 같은 계약으로 통일(D-B85, 2026-09-05)**: Core `7d8205a028`, 스펙 `ea934d0e97`, bindings dotnet `2099bb045a`(병합), java `a06260f507`,
+node `b145f86501`, cpp `e0860723bc`; c/go/rust/python은 진행 중. 계약 요약은 §7. 계약의 최종 문장은 `core/doc/spec/core/socket/README.ko.md`
 "Part send" 절이며 아래 표는 요약이다.
 
 ## 1. 바뀌는 계약 (사용자 확정, B안)
@@ -81,3 +83,20 @@ python `cd5b4a163e`, node `a9eb6c5a77`, java(후속). 리뷰 결과 표는 §6. 
 | python | 성공 경로 bytes 이중 복사 제거, event loop spin 제거, O(n) 해제 → O(1), multi 러너 PUBSUB STOP·timeout 판정 | 7.9k → 20k |
 
 framework에서 확인할 점: WRITABLE `send_result == TERMINAL`(ENOENT → NotFound, ESHUTDOWN/ETERM → Terminated)은 각 바인딩이 typed 실패로 노출한다. ROUTER의 route 없는 RID는 MANDATORY가 양수(기본)일 때만 NOT_CONNECTED이고 0이면 기존대로 조용히 버린다.
+
+## 7. REQUEST 계약 통일 (D-B85)
+
+`zlink_request_part` DONTWAIT FINAL도 SEND와 같은 모델이다.
+
+| 상황 | 결과 |
+|---|---|
+| 즉시 admission | `ZLINK_SUBMIT_OK` + nonzero REQUEST ID(현행), reply/timeout completion. Reply timeout은 admission 시점부터 |
+| HWM/credit 부족, 대상 미준비(pair 미준비·weight 0·DEALER peer 0개) | `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`+**대기 토큰**(payload는 호출자 보유) → credit 회복 시 `ZLINK_COMPLETION_WRITABLE`(같은 토큰·context·RID) → 같은 요청 재제출 |
+| ROUTER route 없음(MANDATORY 양수) | `ZLINK_SUBMIT_NOT_CONNECTED`, 토큰 없음 |
+| 토큰 종료 | WRITABLE / 명시적 제거(TERMINAL+ENOENT) / close·term(TERMINAL) |
+| `ZLINK_OPT_PENDING_MAX_*` | ABI·저장만 유지, 완전 no-op. Core REQUEST pending pool·"admission 전 pending 시간" 없음 |
+| blocking NONE request, reply 제출, PUB publish | 변경 없음 |
+
+framework 영향: 0.16.0의 "nonzero REQUEST ID = admission 전 pending 수락" 가정 제거. 바인딩의 async request는 BACKPRESSURED+토큰을 SEND와 같은
+토큰 기계로 처리하므로(자기 토큰의 WRITABLE에서만 같은 요청 재제출, admission 뒤 기존 REQUEST completion), framework는 바인딩 request API를
+그대로 쓰면 되고 직접 재시도 루프를 두지 않는다. TERMINAL WRITABLE은 typed 실패(NotFound / Terminated)로 온다.
