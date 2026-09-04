@@ -622,9 +622,13 @@ target_link_libraries(zlink_framework_codec_protobuf INTERFACE protobuf::libprot
 # Generates protobuf sources for a sample/e2e schema and exposes them as a target.
 function(add_zlink_protobuf_schema target_name proto_file)
   get_filename_component(proto_dir "${proto_file}" DIRECTORY)
+  file(RELATIVE_PATH proto_relative_dir
+    "${CMAKE_CURRENT_SOURCE_DIR}" "${proto_dir}")
   add_library(${target_name} STATIC "${proto_file}")
   target_link_libraries(${target_name} PUBLIC protobuf::libprotobuf)
-  target_include_directories(${target_name} PUBLIC "${CMAKE_CURRENT_BINARY_DIR}")
+  target_include_directories(${target_name} PUBLIC
+    "${CMAKE_CURRENT_BINARY_DIR}"
+    "${CMAKE_CURRENT_BINARY_DIR}/${proto_relative_dir}")
   set_target_properties(${target_name} PROPERTIES POSITION_INDEPENDENT_CODE ON)
   protobuf_generate(
     TARGET ${target_name}
