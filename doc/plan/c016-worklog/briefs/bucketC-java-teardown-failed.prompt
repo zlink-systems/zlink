@@ -1,0 +1,41 @@
+# Job: java framework — sample role processes end with `ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED reason=TEARDOWN_FAILED` (TicTacToe play-a, SupportChat session, DeliveryDispatch courier-session)
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages' trees; never lower an assertion; do not
+commit. Another job is editing `zlink-framework-core` tests around EntrySpotActorDispatch
+(relocation seal) — coordinate by keeping your change narrow.
+
+## Facts
+- Known since the 0.16 transition (`doc/plan/c016-worklog/handoff-2026-09-04/fw-gate-java-summary.md:57-62`,
+  mapping site `framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/host/ZLinkFrameworkRuntime.java:1482-1486`)
+  and still present on the rebuilt packages: the sample's functional markers complete, then a role
+  process (TicTacToe `play-a`, SupportChat session role, DeliveryDispatch `courier-session`) reports
+  `FORCE_STOPPED reason=TEARDOWN_FAILED`, the runner's lifecycle check
+  (`framework/languages/java/samples/runner-common.sh:123-147`) fails and the sample exits 1 without
+  `<sample>-placement=completed`. Recent role logs: `zlink-work/c016/logs/bucketB-java-delivery-run2/courier-session.log:158-161`
+  shows 4 ROUTER REQUESTs during shutdown returning `result=2 (NOT_CONNECTED) errno=113`
+  (probe output). Baseline `seven-samples-green-v1` (4bad5ac979) had these green.
+- Plan §D requires 7 samples green per language, so this pre-existing item is now in scope.
+- Spec for host shutdown/teardown outcome: `framework/doc/framework/common/spec/server/01-execution/`
+  (host lifecycle) and `02-channel-transport/05-transport-liveness.ko.md`; the termination outcome
+  contract lives near `ZLinkFrameworkRuntime` (read the spec section that defines TEARDOWN_FAILED vs
+  a clean stop — cite it).
+- Env: `TMPDIR=/dev/shm/zlink-tmp-java`, `flock -w7200 /tmp/zlink-jvm-gate.lock`,
+  `ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/.artifacts/wsl/install/zlink-core/0.17.0/lib/libzlink.so`
+  (file), Docker OK. Fastest reproduction: `cd framework/languages/java/samples/java/TicTacToe && ./run_sample.sh`
+  (~60 s). Use `ZLINK_JAVA_STREAM_TRACE=1` and the message-flow listener first.
+
+## What to do
+1. Reproduce and find which teardown step fails (the runtime's ordered stop: what request/send is
+   issued during shutdown to an already-closed peer, and why the failure is classified TEARDOWN_FAILED
+   instead of an expected NOT_CONNECTED during orderly stop). Compare with how the cpp/dotnet/node
+   runtimes classify the same shutdown-time NOT_CONNECTED (read only) — parity is the tie-breaker.
+2. Fix minimally in `framework/languages/java/zlink-framework-core/**` (or the sample if the sample
+   stops roles in a spec-violating order — cite the spec). Regression test in zlink-framework-core.
+3. Re-run TicTacToe, SupportChat, DeliveryDispatch 2× each: expect `<sample>-placement=completed` and
+   exit 0; then `:zlink-framework-core:test` once (report counts).
+
+## Deliverable
+`doc/plan/c016-worklog/bucketC-java-teardown-failed-summary.md`: the failing teardown transition with
+`file:line`, spec clause, parity, fix + regression, sample table, gate counts, BLOCKERS.

@@ -1,0 +1,32 @@
+# Job: node — two new contract-test failures on gate v2: SupportChat spot lifecycle (`sample-spot-lifecycle.test.js:53`) and `sample-regression.test.js:2282` (`PASS TicTacToe.Ts` marker)
+
+You are a codex sub-agent under a Claude supervisor. Two items, in order; 1.5 h cap. Read `AGENTS.md`
+(root) §2/§3/§4. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`,
+`doc/site/**`, other languages' trees; never lower an assertion; do not commit.
+Env: `cd framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `flock -w7200 /tmp/zlink-node-gate.lock`
+for sample runs; Docker + Chromium available; `node_modules` current (rebuilt 0.17.0 tarball installed).
+
+## Item 1 — `SupportChat closes a conversation Spot after the close grace deadline` (`test/contract/sample-spot-lifecycle.test.js:10`, assertion `:53`: actual `undefined`, expected `'agent-1'`)
+- Likely cause: commit `2e3b1b47e4` changed the SupportChat sample budgets
+  (`samples/SupportChat.Ts/Server/Configuration/sample-names.ts`: idleTimeout 3000→10000,
+  closeGraceTimeout 1000→2000; browser `waitTimeoutMs` 10000→20000) to match cpp/dotnet and fix the
+  browser scenario race (`doc/plan/c016-worklog/gate-samples-node-fix-summary.md`). If this contract
+  test hardcodes the old timings or a wait shorter than idle+grace, make it derive its waits from the
+  sample's `SampleTimings` (do not revert the sample budgets; do not weaken what the test asserts —
+  the Spot must still close after the grace deadline and report the agent). If instead the test reveals
+  a real lifecycle bug exposed by the new budgets, fix the sample/framework side minimally.
+- Run: `node --test test/contract/sample-spot-lifecycle.test.js` 3×.
+
+## Item 2 — `node run_samples.sh executes every sample self-check` (`test/contract/sample-regression.test.js:2271`, fails `:2282`: expected `/PASS TicTacToe\.Ts/`, output has `tictactoe-placement=completed` but no `PASS TicTacToe.Ts`)
+- The individual TicTacToe sample passed earlier (`gate-samples-java-node-summary.md`, 12.3 s). Find why
+  the aggregate `samples/run_samples.sh` path does not print the PASS marker for TicTacToe.Ts (runner
+  output format change, exit-code handling, ordering with the placement marker, a second sample's
+  failure aborting the aggregate before the marker) — read `samples/run_samples.sh`,
+  `samples/run-sample.mjs`, and the test's expectations `:2262-2290`. Fix the owning side minimally
+  (runner or test) without weakening the check that every sample self-check passes.
+- Run the aggregate `samples/run_samples.sh` once (all 7; ZoneWorld now has its entry pages) and the
+  test file once; report per-sample PASS markers.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketF-node-sample-tests-summary.md`: per item cause with `file:line`, fix,
+verification, and the 7-sample marker table; BLOCKERS.
