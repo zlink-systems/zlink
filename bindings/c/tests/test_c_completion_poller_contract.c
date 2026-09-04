@@ -51,7 +51,9 @@ int main (void)
     zlink_completion_id_t completion_id = 0;
     zlink_msg_t request;
     CHECK (make_part (&request, "ping") == 0);
-    CHECK (zlink_request_part (dealer, NULL, &request, ZLINK_SEND_FLAGS_DONTWAIT,
+    /* This test covers completion delivery, not pre-admission readiness. The
+       blocking variant waits for admission and still completes asynchronously. */
+    CHECK (zlink_request_part (dealer, NULL, &request, ZLINK_SEND_FLAGS_NONE,
                                ZLINK_PART_FINAL, 2000, &context_tag, &completion_id)
            == ZLINK_SUBMIT_OK);
     CHECK (completion_id != 0);
