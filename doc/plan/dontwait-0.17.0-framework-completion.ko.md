@@ -49,7 +49,8 @@
       cpp 의존성(apt boost/gtest/gmock/lz4/libuv + hiredis·redis++ 소스 빌드), node `http-client` tarball 재생성(`npm pack ./packages/http-client`), Docker Desktop WSL 통합, Playwright Chromium
 - [x] cpp 샘플 신뢰성 있는 실행 — 별도 build dir `build/linux-ninja-c-e2e`(protobuf include 수정 커밋) 에서 **7/7 PASS**(`c-cross-language-e2e-2-summary.md`)
 - [x] cross-language E2E: C++ host stale 문제는 caller가 `ZLINK_CPP_BUILD_DIR` 미지정이 원인(runner는 이미 우선 계약) — 0.17 host로 재실행. C++↔.NET·C++↔Node messaging/flow/stream PASS, C++→.NET spot-route PASS.
-      **잔여**: `.NET→C++ spot-route` `Unavailable`(B, dotnet client측) 및 node smoke의 .NET TestHost flow Activity tag 불일치(D) — dotnet handover job 종료 후 순차 job
+      `.NET→C++ spot-route` `Unavailable` = .NET RouteMesh admission 후보 선택 결함(unilateral 연결의 Hello를 새 inbound로 오인해 유일한 outbound 폐기; cpp `raw_mesh_node_owner.cpp:445-476` fallback과 parity) → 수정(미커밋, dotnet 전체 unit gate 후 커밋) 후 **cpp all-stage runner 32/32 PASS**(Java↔C++·relocation·User-Spot Join 포함).
+      잔여: node smoke의 .NET TestHost flow Activity tag 불일치(D) — job 진행 중
 - [x] `java-cross` selector(Java↔Node/.NET) 4/4 통과. Java↔C++ 방향은 all-stage runner 후반이라 위 .NET→C++ 실패 해소 후 실행
 
 ### D. 최종 게이트 (plan line 143: framework unit + cross-language E2E + 7 samples 전부 green)
@@ -58,7 +59,8 @@
       node 1552/5 = C 4(ZoneWorld dist 미빌드 3·lint 1) + F 2(SupportChat lifecycle 테스트가 옛 3000/1000ms 하드코딩 — 내 budget 커밋 `2e3b1b47e4`의 후속, TicTacToe.Ts PASS 마커 — job 진행);
       cpp gate-v2 63/69 → stream-connector fixture(RAW mode before bind, spec 08-stream §2) `dbfcf7d6fe`·lz4 packaging `20b94c3457`·package-test config `4573c09a2a` 수정 후 잔여 = inventory 278(C)·m6b 1909 flake(C);
       dotnet 전체 unit gate 감독관 실행 중(handover 수정 커밋 대기)
-- [ ] 7 samples × 4언어 green — **cpp 7/7**; node 5/7(ZoneWorld `vite` 환경 D, SupportChat 브라우저 stream timeout B — job); java 1/7(TicTacToe·SupportChat TEARDOWN_FAILED·Bingo session-disconnect = pre-existing C, DeliveryDispatch·GameQuest·ZoneWorld timeout = B, D-B85 binding-port 의존 여부 판정 job); dotnet 미실행(handover job 종료 후)
+- [ ] 7 samples × 4언어 green — **cpp 7/7**; **node 7/7**(SupportChat budget `2e3b1b47e4`, ZoneWorld entry html `c67deb44e0`, runner PASS marker `2ceb137abe`);
+      java: TicTacToe·SupportChat·DeliveryDispatch(`ed156f5983`+teardown `6682ae0db1`)·GameQuest(heartbeat `dc9fe76100`)·ShoppingMall = 5/7 green, Bingo 재실행 중, ZoneWorld job 진행 중; dotnet 7 samples 미실행(dotnet 커밋 후)
 - [ ] cross-language E2E green
 - [ ] 최종 커밋+푸시
 
