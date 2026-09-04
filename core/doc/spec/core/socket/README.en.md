@@ -70,7 +70,7 @@ application notification callbacks.
 |---|---|---|
 | Ordinary DATA | `ZLINK_POLLIN` | Socket-specific `*_recv_part()` |
 | STREAM packet | `ZLINK_POLLIN` | `zlink_stream_recv_packet()` |
-| SEND and REQUEST completion | `ZLINK_POLLCOMPLETION` | `zlink_completion_recv()` |
+| REQUEST completion and SEND WRITABLE wait token | `ZLINK_POLLCOMPLETION` (an unread WRITABLE record also holds `ZLINK_POLLOUT` level-true) | `zlink_completion_recv()` |
 | Socket monitor event | `ZLINK_POLLIN` | `zlink_socket_monitor_recv()` |
 | Timer fire count | Timer readiness | `zlink_timer_recv()` |
 
@@ -281,31 +281,35 @@ typedef uint64_t zlink_completion_id_t;
 typedef uint64_t zlink_reply_token_t;  // DATA is 0; REQUEST is nonzero
 
 typedef enum zlink_completion_kind_t {
-  ZLINK_COMPLETION_SEND = 1,     // Deferred admission result of a DONTWAIT send
-  ZLINK_COMPLETION_REQUEST = 2   // Reply, timeout, or terminal result of a request
+  ZLINK_COMPLETION_SEND = 1,     // ABI-retained only; Core never publishes this kind
+  ZLINK_COMPLETION_REQUEST = 2,  // Reply, timeout, or terminal result of a request
+  ZLINK_COMPLETION_WRITABLE = 3  // The target of a DONTWAIT send wait token has write credit again
 } zlink_completion_kind_t;
 
 typedef enum zlink_send_complete_result_t {
-  ZLINK_SEND_ADMITTED = 0,       // Local send-queue admission completed
-  ZLINK_SEND_TERMINAL = 202      // send_terminal_errno contains the terminal cause
+  ZLINK_SEND_ADMITTED = 0,       // WRITABLE: the same target accepts a resubmit
+  ZLINK_SEND_TERMINAL = 202      // WRITABLE: the target was removed; send_terminal_errno contains the cause
 } zlink_send_complete_result_t;
 
 typedef struct zlink_completion_t {
   uint32_t struct_size;                     // sizeof(zlink_completion_t)
-  zlink_completion_kind_t kind;             // SEND or REQUEST
-  zlink_completion_id_t completion_id;      // Socket-local and always nonzero
+  zlink_completion_kind_t kind;             // REQUEST or WRITABLE
+  zlink_completion_id_t completion_id;      // Socket-local and always nonzero; for WRITABLE the wait token returned by submit
   void *user_context;                       // Returned unchanged from submit
-  zlink_routing_id_t peer_rid;              // Logical peer; empty when not applicable
-  zlink_send_complete_result_t send_result; // Used only for SEND
-  int send_terminal_errno;                  // Used only for SEND TERMINAL
+  zlink_routing_id_t peer_rid;              // Submitted RID for ROUTER/STREAM WRITABLE and ROUTER REQUEST; otherwise empty
+  zlink_send_complete_result_t send_result; // Used only for WRITABLE; ADMITTED allows resubmit, TERMINAL means target removal
+  int send_terminal_errno;                  // Used only for WRITABLE TERMINAL; otherwise 0
   zlink_request_result_t request_result;    // Used only for REQUEST
   zlink_msg_t *reply_parts;                  // REQUEST payload; NULL when absent
   size_t reply_part_count;                   // Number of REQUEST payload parts
 } zlink_completion_t;
 ```
 
-SEND and REQUEST share the socket-local completion ID. Zero means either that admission already
-completed or that Core did not accept the operation, so no later completion exists. A nonzero ID is
+REQUEST and SEND wait tokens share the socket-local completion ID. Zero means either that admission
+already completed or that Core did not accept the operation, so no later completion exists. A
+nonzero ID from a SEND `DONTWAIT FINAL` is the wait token returned together with
+`ZLINK_SUBMIT_BACKPRESSURED`; exactly one `ZLINK_COMPLETION_WRITABLE` record with the same ID
+follows. A nonzero REQUEST ID is followed by one REQUEST completion. A nonzero ID is
 not reused before socket close and is not a cancellation handle. If Core cannot produce the next
 nonzero ID, submit fails with `ZLINK_SUBMIT_SEQ_EXHAUSTED`, `errno == EOVERFLOW`, and ID `0`.
 
@@ -383,17 +387,18 @@ typedef enum zlink_option_t {
   ZLINK_OPT_SUBMIT_RETRY_MODE          = 0x3037,  // Local submit-failure retry mode (int; ZLINK_SUBMIT_RETRY_OFF or ZLINK_SUBMIT_RETRY_LOCAL_FAILURE; raw socket default off)
   ZLINK_OPT_SUBMIT_RETRY_TIMEOUT       = 0x3038,  // Local submit-failure retry budget (ms, int; raw socket default 0, 0 disables retry)
   ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS      = 0x3039,  // Additional retry attempts after the first submit (int; raw socket default 0, current maximum 16)
-  ZLINK_OPT_PENDING_MAX_MSGS           = 0x303A,  // Shared DONTWAIT SEND/REQUEST pending-record limit (uint64_t, 0 unlimited, default 0)
-  ZLINK_OPT_PENDING_MAX_BYTES          = 0x303B   // Shared DONTWAIT SEND/REQUEST pending-byte limit (uint64_t, 0 unlimited, default 0)
+  ZLINK_OPT_PENDING_MAX_MSGS           = 0x303A,  // DONTWAIT REQUEST pending-record limit (uint64_t, 0 unlimited, default 0; ordinary SEND ignores it)
+  ZLINK_OPT_PENDING_MAX_BYTES          = 0x303B   // DONTWAIT REQUEST pending-byte limit (uint64_t, 0 unlimited, default 0; ordinary SEND ignores it)
 } zlink_option_t;
 ```
 
 These options are used with `zlink_set_option()` / `zlink_get_option()` and
 apply to raw sockets and discovery.
 
-`ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` are shared by
-DONTWAIT SEND and REQUEST operations whose payload Core retains because it
-cannot admit them immediately. `MAX_MSGS` counts complete multipart records.
+`ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` apply only to
+DONTWAIT REQUEST pending records whose payload Core retains because it cannot
+admit them immediately. Ordinary SEND ignores both options because Core never
+retains a SEND payload. `MAX_MSGS` counts complete multipart records.
 `MAX_BYTES` sums `max(payload size, sizeof(zlink_msg_t))` for every part and
 saturates the sum at `UINT64_MAX` on overflow. No reservation occurs while
 `MORE` parts are staged; `FINAL` atomically checks and reserves the entire
@@ -402,8 +407,9 @@ admitted or reaches a terminal result. Lowering a limit at runtime does not
 remove existing reservations; the new value applies only to later
 reservations. Immediate admission and `NONE` waits do not use this pool.
 
-Only PAIR, DEALER, ROUTER, and STREAM support these two options. Getting or
-setting either option on another socket fails with
+Only PAIR, DEALER, ROUTER, and STREAM support getting and setting these two
+options, and all four types keep the option storage for ABI compatibility.
+Getting or setting either option on another socket fails with
 `ZLINK_CONFIG_NOT_SUPPORTED` and `errno == ENOTSUP` without changing existing
 option state.
 
@@ -987,39 +993,73 @@ and closes the completion or discards the socket.
 | Successful `MORE` staging | `ZLINK_SUBMIT_OK` | 0 | none |
 | `NONE FINAL` local send-queue admission | `ZLINK_SUBMIT_OK` | 0 | none |
 | Immediate `DONTWAIT FINAL` admission | `ZLINK_SUBMIT_OK` | 0 | none |
-| Core retains `DONTWAIT FINAL` as pending | `ZLINK_SUBMIT_OK` | nonzero | one SEND record |
-| Pending or completion reservation limit exceeded | `ZLINK_SUBMIT_BACKPRESSURED`, `EAGAIN` | 0 | none |
+| `DONTWAIT FINAL` backpressured or target not ready yet | `ZLINK_SUBMIT_BACKPRESSURED`, `EAGAIN` | nonzero wait token | one WRITABLE record |
+| ROUTER or STREAM RID with no route | `ZLINK_SUBMIT_NOT_CONNECTED`, `EHOSTUNREACH` | 0 | none |
+| Completion reservation limit exceeded | `ZLINK_SUBMIT_OUT_OF_MEMORY`, `ENOMEM` | 0 | none |
 | Validation or target failure | applicable submit result | 0 | none |
 
 `NONE FINAL` snapshots `ZLINK_OPT_SNDTIMEO` on entry and waits for local
 send-queue admission. The default is 1,000 ms, `0` is immediate, and `-1`
 waits indefinitely. Expiration returns `ZLINK_SUBMIT_BACKPRESSURED` with
 `errno == EAGAIN`, ID `0`, and no completion. `DONTWAIT FINAL` does not wait:
-it either admits immediately or reserves the complete record in the
-[pending pool](#common-options-zlink_option_t). A failed `FINAL` on either path
-consumes and discards the staged prefix with the final part.
+it makes exactly one admission attempt. Immediate admission returns ID `0` and
+no completion. Backpressure from HWM, byte credit, or flow pause, or a target
+that exists but is not ready yet (transport pair not ready, peer weight 0, a
+DEALER with zero peers right after connect), returns
+`ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN` and a nonzero wait token in
+`completion_id_out_`. Core keeps only the token, the target, and
+`user_context_`; it does not retain the payload. The part is consumed and
+discarded as on every other result, so the caller resubmits from its own copy.
+A ROUTER or STREAM RID with no route at all returns
+`ZLINK_SUBMIT_NOT_CONNECTED` with `errno == EHOSTUNREACH` and ID `0`
+immediately, without a token, regardless of `ZLINK_ROUTER_OPT_MANDATORY`. A
+failed `FINAL` on either path consumes and discards the staged prefix with the
+final part.
 
-SEND and REQUEST share 65,536 unified completion reservations per socket. SEND
-reserves a slot only when a DONTWAIT `FINAL` becomes pending; every successful
-REQUEST `FINAL` reserves one. A slot remains reserved from reservation until
-`zlink_completion_recv()` removes its record from the queue. Socket close also
-releases slots for unread records. At the limit, Core does not accept the
-operation: it returns `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN` and
-ID `0`, and consumes and discards the entire sequence.
+REQUEST and SEND wait tokens share 65,536 unified completion reservations per
+socket. SEND reserves a slot only when a DONTWAIT `FINAL` returns a wait token;
+every successful REQUEST `FINAL` reserves one. A slot remains reserved from
+reservation until `zlink_completion_recv()` removes its record from the queue.
+Socket close also releases slots for unread records. At the limit, Core does
+not accept the operation and consumes and discards the entire sequence: a SEND
+`DONTWAIT FINAL` returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with `errno == ENOMEM`
+and ID `0`; a REQUEST `FINAL` returns `ZLINK_SUBMIT_BACKPRESSURED` with
+`errno == EAGAIN` and ID `0`.
 
-Once Core accepts a pending record, Core owns the payload and admission
-retries. The application neither cancels the operation nor resubmits the same
-payload. A transient transport shutdown is not terminal for a pending record
-before admission or for an in-progress NONE `FINAL` wait. PAIR fixes its single
-logical route, DEALER fixes the configured endpoint selected at `FINAL`, and
-ROUTER and STREAM fix the logical peer RID. DONTWAIT pending records preserve
-FIFO order while retrying admission on a new connection for the same logical
-target. NONE does not use the pending pool; it waits for reconnect and
-admission to the same target within the snapshotted `SNDTIMEO`.
+When the target of a wait token has write credit again, Core enqueues one
+`ZLINK_COMPLETION_WRITABLE` record on the completion queue. Its
+`completion_id` is the token, `user_context` is the submitted value,
+`send_result` is `ZLINK_SEND_ADMITTED`, `send_terminal_errno` is `0`, and
+`peer_rid` is the submitted RID for ROUTER and STREAM and empty for PAIR and
+DEALER. While that record is unread, both `ZLINK_POLLOUT` and
+`ZLINK_POLLCOMPLETION` are level-true for the socket. The application drains
+the queue with `zlink_completion_recv()` until `NO_DATA`, then resubmits the
+same record with `DONTWAIT`. One token produces exactly one WRITABLE record. A
+resubmit again makes one admission attempt and returns a new token if it is
+backpressured again. `ZLINK_POLLOUT` is the socket-wide aggregate hint that a
+submit retry is worth trying; the precise per-target signal is the WRITABLE
+record itself with its token, context, and RID.
 
-Explicit removal of the configured endpoint or logical RID, or a permanent
-protocol rejection, produces a SEND terminal completion only for a pending
-record accepted by a successful DONTWAIT submit. A NONE wait that has not
+Target granularity is the single pipe for PAIR, the candidate peer set for
+DEALER, and the exact submitted RID for ROUTER and STREAM. For DEALER, any
+candidate opening publishes one WRITABLE, the resubmit selects an open peer
+again, and no endpoint is fixed at `FINAL`. For ROUTER and STREAM, credit on
+another RID does not publish the token. The wake edges that publish WRITABLE
+are a peer drain below LWM or a credit refill, a pipe attach (connect
+completes), a peer weight change from 0 to positive, ROUTER route adoption or
+standby promotion, and flow RESUME. Core never retains a SEND payload and has
+no Core-owned SEND retry FIFO. A transient transport shutdown is not terminal
+for a wait token or for an in-progress NONE `FINAL` wait. NONE creates no
+token; it waits for reconnect and admission to the same target within the
+snapshotted `SNDTIMEO`.
+
+A wait token ends only in three ways: (a) the WRITABLE record above; (b)
+explicit removal of the target (`zlink_disconnect_rid`, endpoint termination
+for that RID), which produces a WRITABLE record with
+`send_result == ZLINK_SEND_TERMINAL` and `send_terminal_errno == ENOENT`; (c)
+socket close or context termination, which produces a WRITABLE record with
+`ZLINK_SEND_TERMINAL` and the lifecycle errno (`ESHUTDOWN` or `ETERM`). A peer
+weight dropping to 0 does not end a SEND token. A NONE wait that has not
 returned completes synchronously: target removal returns
 `ZLINK_SUBMIT_NOT_FOUND` with `ENOENT`, peer-type rejection returns
 `ZLINK_SUBMIT_NOT_ADMITTED` with `EPROTOTYPE`, context termination returns
@@ -1029,11 +1069,12 @@ returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM`; another runtime failure
 returns `ZLINK_SUBMIT_INTERNAL_ERROR` with `EIO`. All carry ID `0`, produce no
 completion, and consume and discard the complete sequence.
 
-After ID `0` or `ZLINK_SEND_ADMITTED`, the payload follows the existing
+After admission with ID `0`, the payload follows the existing
 transport-delivery contract. Core creates no separate application-record copy,
 delivery ACK, or deduplication sequence, and does not replay the application
-record on a new connection after a later disconnect. `ZLINK_SEND_ADMITTED`
-means local send-queue admission, not confirmation of peer receipt.
+record on a new connection after a later disconnect. `ZLINK_SEND_ADMITTED` in
+a WRITABLE record means that the target accepts a resubmit; it is neither
+payload admission nor confirmation of peer receipt.
 
 ### Request and reply
 
@@ -1082,7 +1123,7 @@ returns the synchronous result and errno from
 [part send](#part-send-and-pending-admission), ID `0`, and no completion. If the
 pending pool permits, a DONTWAIT `FINAL` lets Core own the record before
 admission and returns a nonzero REQUEST ID. This stage does not produce a
-separate SEND completion.
+separate SEND wait token or WRITABLE completion.
 
 `timeout_ms_ == 0` snapshots the requester socket's request timeout, whose
 default is 5,000 ms. The reply timeout begins monotonically when the request
@@ -1139,7 +1180,7 @@ neither evicts a token automatically nor drops the REQUEST.
 
 ### Completion pull and ownership
 
-SEND and REQUEST share one socket-local completion queue.
+REQUEST completions and SEND WRITABLE records share one socket-local completion queue.
 
 This public completion queue is distinct from the transport Completion connection. A
 DEALER-ROUTER reply moves to this queue after it reaches the physical head of the single Application
@@ -1161,23 +1202,24 @@ removing a record or changing existing contents. A NULL socket or output
 returns `ZLINK_RECV_INVALID_HANDLE` with `errno == EFAULT`. `NO_DATA` and every
 other failure preserve an output that was empty on entry.
 
-One successful receive returns exactly one kind, SEND or REQUEST, and leaves
-fields unused by that kind zero, empty, or NULL. `peer_rid` is a snapshot of the
-logical peer at reservation. It is empty for PAIR and DEALER SEND and DEALER
-REQUEST; it is the submitted RID for ROUTER and STREAM SEND and ROUTER REQUEST.
+One successful receive returns exactly one kind, REQUEST or WRITABLE, and
+leaves fields unused by that kind zero, empty, or NULL. `peer_rid` is a
+snapshot of the logical peer at reservation. It is empty for PAIR and DEALER
+WRITABLE and DEALER REQUEST; it is the submitted RID for ROUTER and STREAM
+WRITABLE and ROUTER REQUEST.
 It does not change to a physical connection identity after reconnect and is
 not a capability for a later send target.
 
-| Cause | SEND completion | REQUEST completion |
+| Cause | WRITABLE completion (SEND wait token) | REQUEST completion |
 |---|---|---|
-| Normal local admission or valid reply | `ZLINK_SEND_ADMITTED`, errno 0 | `ZLINK_REQUEST_OK` or wire error-reply mapping |
+| Target write credit restored or valid reply | `ZLINK_SEND_ADMITTED`, errno 0 | `ZLINK_REQUEST_OK` or wire error-reply mapping |
 | Request reply timeout | not applicable | `ZLINK_REQUEST_TIMED_OUT` |
 | Explicit endpoint or logical RID removal | `ZLINK_SEND_TERMINAL`, `ENOENT` | `ZLINK_REQUEST_NOT_FOUND` |
-| Permanent peer-type rejection | `ZLINK_SEND_TERMINAL`, `EPROTOTYPE` | `ZLINK_REQUEST_REJECTED` |
-| Malformed protocol | `ZLINK_SEND_TERMINAL`, `EPROTO` | `ZLINK_REQUEST_PROTOCOL_ERROR` |
-| Allocation or runtime failure after acceptance | `ZLINK_SEND_TERMINAL`, `ENOMEM` or `EIO` | `ZLINK_REQUEST_INTERNAL_ERROR` |
-| Transient physical disconnect | no terminal; retry same target before admission | retry before admission; after admission preserve the existing budget without replay |
-| Context termination or socket close | internally discard pending and unread records; no new completion is guaranteed | same |
+| Permanent peer-type rejection | not applicable; the token stays until target removal | `ZLINK_REQUEST_REJECTED` |
+| Malformed protocol | not applicable; the token stays until target removal | `ZLINK_REQUEST_PROTOCOL_ERROR` |
+| Allocation or runtime failure after acceptance | not applicable; Core retains no payload | `ZLINK_REQUEST_INTERNAL_ERROR` |
+| Transient physical disconnect | no terminal; the token stays and reconnect of the same target publishes WRITABLE | retry before admission; after admission preserve the existing budget without replay |
+| Context termination or socket close | `ZLINK_SEND_TERMINAL`, `ETERM` or `ESHUTDOWN`; unread records are discarded internally | internally discard pending and unread records; no new completion is guaranteed |
 
 Core stores a REQUEST reply in a contiguous `zlink_msg_t[]` allocated before
 enqueue. For a wire error reply, Core closes the errno part and normalizes only
@@ -1190,16 +1232,17 @@ nothing. The caller does not free the array directly and instead calls
 `zlink_completion_close()` to release remaining messages and the allocator
 base.
 
-`zlink_completion_close()` is safe and idempotent for NULL, SEND, and empty
+`zlink_completion_close()` is safe and idempotent for NULL, WRITABLE, and empty
 records. It resets every field to zero while preserving `struct_size`. If
 `struct_size` is `0` or differs from the exact structure size, it does not free
-a pointer and is a no-op. Every successfully received record, including SEND,
-is closed.
+a pointer and is a no-op. Every successfully received record, including
+WRITABLE, is closed.
 
 `ZLINK_POLLCOMPLETION` is level-triggered while the completion queue is
-nonempty. Poller wait does not consume a record. The caller repeats DONTWAIT
+nonempty. An unread WRITABLE record also holds `ZLINK_POLLOUT` level-true.
+Poller wait does not consume a record. The caller repeats DONTWAIT
 receive through `NO_DATA`. One socket queue has one drain owner; concurrent
-drain by two threads is unsupported. SEND and REQUEST results are returned in
+drain by two threads is unsupported. REQUEST and WRITABLE results are returned in
 the linearization order in which resolvers append them to the socket-local
 ready queue. This is neither submit order nor per-target wire order, so callers
 distinguish results by ID or context.
@@ -1344,11 +1387,12 @@ connection, options, send/receive/completion functions, return values, and
 - An unknown option, out-of-range value, or invalid byte-count size produces
   `EINVAL`; a terminated Context produces `ETERM`.
 - `ZLINK_OPT_PENDING_MAX_MSGS/BYTES` are 0x303A/0x303B, default to
-  0/unlimited, and are shared by DONTWAIT SEND and REQUEST. They reserve
+  0/unlimited, and apply only to DONTWAIT REQUEST pending records. They reserve
   nothing on `MORE`, atomically reserve the complete record on `FINAL`, and
-  release the pending charge on admission or terminal completion. Getting or
-  setting either option outside PAIR, DEALER, ROUTER, and STREAM produces
-  `ZLINK_CONFIG_NOT_SUPPORTED` with `ENOTSUP`.
+  release the pending charge on admission or terminal completion. Ordinary SEND
+  ignores both options. PAIR, DEALER, ROUTER, and STREAM keep the option
+  storage for ABI compatibility; getting or setting either option elsewhere
+  produces `ZLINK_CONFIG_NOT_SUPPORTED` with `ENOTSUP`.
 
 **HWM admission** (see [Transport/Buffer](#transportbuffer))
 - When accounted bytes reach the HWM, subsequent writes wait until the receiver
@@ -1409,19 +1453,33 @@ connection, options, send/receive/completion functions, return values, and
   `ZLINK_CONNECT_BUSY` for a lifecycle ownership conflict.
 
 **Part send and completion**
-- An immediately admitted DONTWAIT `FINAL` returns ID `0` and no completion. If
-  Core retains it as pending, it returns a nonzero ID and exactly one SEND
-  completion. A NONE `FINAL` waits for admission to the same logical target
-  within the snapshotted `SNDTIMEO` and returns ID `0` with no completion.
+- A DONTWAIT `FINAL` makes one admission attempt. Immediate admission returns
+  ID `0` and no completion. Backpressure or a target that is not ready yet
+  returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token,
+  and the caller keeps the payload. When the token's target has write credit
+  again, Core returns exactly one `ZLINK_COMPLETION_WRITABLE` record; the
+  caller drains the queue to `NO_DATA` and resubmits the same record. A NONE
+  `FINAL` waits for admission to the same logical target within the
+  snapshotted `SNDTIMEO` and returns ID `0` with no completion.
 - Every part call consumes its input on success and failure. A failed `FINAL`
-  also discards its staged prefix. Rejection by a pending or completion limit
-  returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and ID `0`.
-- A transient disconnect before admission retries FIFO on a new connection to
-  the same logical target. After ID `0` or `ZLINK_SEND_ADMITTED`, Core does not
-  replay the application payload.
-- Filling all 65,536 slots with a mix of SEND and REQUEST completions makes the
-  next completion-bearing `FINAL` return `ZLINK_SUBMIT_BACKPRESSURED` with
-  `EAGAIN` and ID `0`. Receiving one record allows the next submit again.
+  also discards its staged prefix. A ROUTER or STREAM RID with no route
+  returns `ZLINK_SUBMIT_NOT_CONNECTED` with `EHOSTUNREACH` and ID `0`;
+  completion reservation exhaustion returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with
+  `ENOMEM` and ID `0`.
+- Core neither retains a SEND payload nor keeps a Core-owned SEND retry FIFO.
+  A wait token is reserved per target (the PAIR pipe, the DEALER candidate
+  peer set, the exact ROUTER or STREAM RID), and a transient disconnect before
+  admission does not end the token. After ID `0`, Core does not replay the
+  application payload.
+- A wait token ends only through the WRITABLE record, explicit target removal
+  (`ZLINK_SEND_TERMINAL` with `ENOENT`), or socket close and context
+  termination (`ZLINK_SEND_TERMINAL` with the lifecycle errno). A peer weight
+  of 0 does not end a SEND token.
+- Filling all 65,536 slots with a mix of SEND wait tokens and REQUEST
+  completions makes the next SEND `DONTWAIT FINAL` return
+  `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM` and the next REQUEST `FINAL`
+  return `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, both with ID `0`.
+  Receiving one record allows the next submit again.
 
 **Request and reply**
 - DEALER requests a known positive-weight ROUTER route with a NULL target;
@@ -1458,31 +1516,35 @@ connection, options, send/receive/completion functions, return values, and
 
 **Completion receive and ownership**
 - While a completion exists, `ZLINK_POLLCOMPLETION` is level-triggered and
-  poller wait alone does not shrink the queue. DONTWAIT receive of the final
+  poller wait alone does not shrink the queue. An unread WRITABLE record also
+  holds `ZLINK_POLLOUT` level-true. DONTWAIT receive of the final
   record clears readiness.
 - An incorrect `struct_size` or non-empty output neither dequeues nor overwrites
-  a record. `zlink_completion_close(NULL)` and close of SEND or empty records
-  are safe and idempotent and preserve `struct_size`.
+  a record. `zlink_completion_close(NULL)` and close of WRITABLE or empty
+  records are safe and idempotent and preserve `struct_size`.
 - REQUEST success and valid error-reply payloads transfer from base index 0 of
   a contiguous array, and `zlink_completion_close()` releases remaining
   messages and the array. A malformed errno part produces payload-free
   `ZLINK_REQUEST_PROTOCOL_ERROR`; normalization allocation failure produces
   payload-free `ZLINK_REQUEST_INTERNAL_ERROR`.
-- Socket close and context termination internally release pending and unread
-  records and do not guarantee delivery of a new terminal completion.
+- Socket close and context termination retire live SEND wait tokens as
+  WRITABLE with `ZLINK_SEND_TERMINAL` and the lifecycle errno, internally
+  release pending and unread records, and do not guarantee delivery of a new
+  terminal completion.
 - Completion receive with NONE snapshots `RCVTIMEO` 0/positive/-1 on entry.
   Timeout, unknown flags, NULL input, and context or socket termination during
   a blocking wait preserve the queue and empty output with the specified
   result and errno.
-- When SEND and REQUEST completions are interleaved, every nonzero ID and
+- When WRITABLE and REQUEST completions are interleaved, every nonzero ID and
   context is returned once in socket-local append linearization order, without
   loss or coalescing due to event-array size.
-- Completion `peer_rid` is empty for PAIR and DEALER SEND and DEALER REQUEST;
-  for ROUTER and STREAM SEND and ROUTER REQUEST it is the submitted RID
-  snapshot and does not change to a physical identity after reconnect.
+- Completion `peer_rid` is empty for PAIR and DEALER WRITABLE and DEALER
+  REQUEST; for ROUTER and STREAM WRITABLE and ROUTER REQUEST it is the
+  submitted RID snapshot and does not change to a physical identity after
+  reconnect.
 
 **Pull-only surface**
-- Socket DATA, STREAM packets, SEND and REQUEST completions, and monitor events
+- Socket DATA, STREAM packets, REQUEST and WRITABLE completions, and monitor events
   are consumed through their designated pull functions. A
   `zlink_poller_event_t` contains only readiness bits, not operation payload.
 

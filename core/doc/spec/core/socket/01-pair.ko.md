@@ -29,7 +29,7 @@ receive-flow 상태가 없다는 사실이다. 모든 socket 타입이 공유하
 | 관련 계약 | 정의하는 문서 |
 |---|---|
 | socket 생성·공통 옵션·send/recv flag·result enum | [Socket 공통](README.ko.md) |
-| 송신 ownership, pending·completion 상한과 pull completion | [Socket 공통](README.ko.md) |
+| 송신 ownership, completion reservation 상한과 pull completion | [Socket 공통](README.ko.md) |
 | message lifecycle·ownership과 multipart | [Message](../02-message.ko.md) |
 | result와 errno 대응 | [Errors](../03-errors.ko.md#result와-errno-대응) |
 
@@ -146,14 +146,34 @@ ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (
 
 ### PAIR의 논리 route와 reconnect
 
-PAIR socket에는 단일 logical route가 있다. `DONTWAIT FINAL`을 Core가 pending으로 접수하거나
-`NONE FINAL`이 admission을 기다리는 동안 물리 connection이 끊겨도 terminal로 끝내지 않는다.
-Core는 같은 PAIR logical route가 다시 연결되면 FIFO를 유지해 local queue admission을 다시
-시도한다. `NONE`은 snapshot한 `SNDTIMEO`의 남은 budget만 사용한다.
+PAIR socket에는 단일 logical route가 있다. `DONTWAIT FINAL`은 admission을 한 번만 시도한다.
+즉시 admission되면 `ZLINK_SUBMIT_OK`, ID `0`이며 completion을 만들지 않는다. HWM·byte credit
+때문에 admission하지 못하거나 물리 connection이 아직 준비되지 않았으면
+`ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`과 함께 nonzero wait token을
+`completion_id_out_`에 반환한다. Core는 token, target, `user_context_`만 유지하고 payload는
+유지하지 않으므로 호출자는 보관한 record 사본을 다시 제출해야 한다.
 
-Admission 뒤에는 application payload의 별도 replay copy를 유지하지 않는다. 따라서 ID `0` 또는
-`ZLINK_SEND_ADMITTED`가 확정된 뒤 connection이 끊겨도 새 connection에 같은 record를 다시
-보내지 않는다. 완료는 local queue admission을 뜻하며 peer 수신 확인이 아니다.
+단일 pipe에 write credit이 다시 생기면(peer drain, reconnect로 인한 pipe attach) Core는 그
+token으로 `ZLINK_COMPLETION_WRITABLE` record를 정확히 하나 발행한다. 이 record는 같은
+`completion_id`, 같은 `user_context`, `send_result == ZLINK_SEND_ADMITTED`,
+`send_terminal_errno == 0`, 빈 `peer_rid`를 가진다. 읽지 않은 WRITABLE record가 있는 동안
+`ZLINK_POLLOUT`과 `ZLINK_POLLCOMPLETION`은 level로 유지된다. Application은
+`zlink_completion_recv()`로 `NO_DATA`까지 queue를 비운 뒤 같은 record를 `DONTWAIT`로 다시
+제출한다.
+
+Wait token은 다음 중 하나로만 끝난다: 위 WRITABLE record, `zlink_disconnect()`로 endpoint를
+명시적으로 제거할 때의 WRITABLE record(`send_result == ZLINK_SEND_TERMINAL`,
+`send_terminal_errno == ENOENT`), socket close 또는 context 종료의 WRITABLE record
+(`ZLINK_SEND_TERMINAL`과 lifecycle errno). 물리 connection이 끊기는 것만으로는 token이 끝나지
+않으며, 같은 logical route가 다시 연결되면 pipe attach가 WRITABLE record를 발행한다. `NONE
+FINAL`이 admission을 기다리는 동안 물리 connection이 끊겨도 terminal로 끝내지 않는다. Core는
+같은 PAIR logical route가 다시 연결되면 local queue admission을 다시 시도하며, `NONE`은
+snapshot한 `SNDTIMEO`의 남은 budget만 사용한다.
+
+Admission 뒤에는 application payload의 별도 replay copy를 유지하지 않는다. 따라서 ID `0`이
+반환된 뒤 connection이 끊겨도 새 connection에 같은 record를 다시 보내지 않는다. ID `0`은 local
+queue admission을 뜻하며 peer 수신 확인이 아니다. WRITABLE record는 write credit 알림이며
+record의 admission이 아니다.
 
 ## 5. 구현 및 contract test 검증 요구
 
@@ -170,8 +190,9 @@ Admission 뒤에는 application payload의 별도 replay copy를 유지하지 �
 - 단일 part message를 `ZLINK_PART_FINAL`로 보내면 수신 측 `*has_more_out_`은 `ZLINK_PART_FINAL`이다.
 - multipart message를 보내면 수신 측은 마지막 part 이전의 모든 part에서 `ZLINK_PART_MORE`를, 마지막 part에서 `ZLINK_PART_FINAL`을 관찰한다.
 - `DONTWAIT FINAL`이 즉시 admission되면 ID `0`과 completion 없음이다.
-- `DONTWAIT FINAL`을 Core가 pending으로 보관하면 nonzero ID의 SEND completion을 정확히 한 번 반환한다.
-- Pending·completion 상한 때문에 Core가 `DONTWAIT FINAL`을 보관하지 못하면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`이다.
+- `DONTWAIT FINAL`이 HWM·byte credit 또는 준비되지 않은 pipe 때문에 거절되면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero wait token이며, Core는 payload를 유지하지 않고 호출자가 보관한 사본을 다시 제출한다.
+- 단일 pipe에 write credit이 생기면 그 token의 `ZLINK_COMPLETION_WRITABLE` record(`ZLINK_SEND_ADMITTED`, 같은 `user_context`, 빈 `peer_rid`)를 정확히 한 번 반환하고, 읽기 전까지 `ZLINK_POLLOUT`과 `ZLINK_POLLCOMPLETION`이 level로 유지된다.
+- Completion reservation이 소진되어 wait token을 만들지 못하면 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, ID `0`이다.
 - `ZLINK_RECV_FLAGS_DONTWAIT` 수신에 데이터가 없으면 `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다.
 
 **record 원자성**
@@ -180,17 +201,20 @@ Admission 뒤에는 application payload의 별도 replay copy를 유지하지 �
 - 실패 후 다음 submit은 새 record의 첫 part로 시작한다 — 호출 전에 보관한 전체 record를 첫 part부터 다시 제출해 재시도할 수 있다.
 
 **Logical reconnect와 completion**
-- Admission 전 pending target의 connection을 끊었다가 같은 PAIR logical route를 reconnect하면
-  record가 FIFO로 admission되고 disconnect만으로 TERMINAL completion이 생기지 않는다.
+- Wait token이 있는 상태에서 connection을 끊었다가 같은 PAIR logical route를 reconnect하면
+  pipe attach가 그 token의 WRITABLE record를 발행하고, disconnect만으로 TERMINAL record가
+  생기지 않는다.
 - `NONE FINAL`은 snapshot한 `SNDTIMEO` 안에서 같은 logical route의 reconnect를 기다리며,
   만료하면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음이다.
-- ID `0` 또는 `ZLINK_SEND_ADMITTED` 뒤 connection을 끊고 다시 연결해도 같은 application
-  record가 replay되지 않는다.
+- ID `0` 뒤 connection을 끊고 다시 연결해도 같은 application record가 replay되지 않으며,
+  WRITABLE record 뒤의 재전송은 application이 다시 제출한 record다.
+- `zlink_disconnect()`로 endpoint를 제거하면 그 token은 `ZLINK_SEND_TERMINAL`+`ENOENT`인
+  WRITABLE record로 끝나고, socket close는 `ZLINK_SEND_TERMINAL`과 lifecycle errno로 끝난다.
 
 **Receive flow state 부재**
 - `zlink_socket_set_receive_flow_state()`는 PAIR socket에 대해 `errno == ENOTSUP`과 함께 `ZLINK_CONFIG_NOT_SUPPORTED`를 반환하고, byte HWM·low water mark·transport backpressure 동작은 그대로 유지된다.
 - PAIR socket의 monitor status는 `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`를 설정하지 않는다.
 - PAIR socket에서는 `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, `ZLINK_EVENT_FLOW_STATE_STALE` event가 발생하지 않는다.
 
-소유권 이전, pending·completion 상한, close와 pull completion의 검증은
+소유권 이전, completion reservation 상한, close와 pull completion의 검증은
 [Socket 공통](README.ko.md)이 소유한다.

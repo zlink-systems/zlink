@@ -33,12 +33,12 @@ path다. 이 표는 규범이다: 표의 함수(또는 그 callee)를 고치는 
 
 | 진입점 | 경로 |
 |---|---|
-| `zlink_send_part` (PAIR·DEALER·ROUTER·STREAM) | `submit_completion_aware_part` → `send_completion_submit_blocking` / `send_pending_submit` → `try_admit_send_parts_scoped` → `xsend_selected_pipe` / `xsend_configured_endpoint` / `send_direct_with_retry` → `lb_t::sendpipe_to` → `pipe_t::write_*` |
+| `zlink_send_part` (PAIR·DEALER·ROUTER·STREAM) | `submit_completion_aware_part` → `send_completion_submit_blocking` (거절 시 DONTWAIT는 `register_send_writable_wait`) → `try_admit_send_parts_scoped` → `xsend_selected_pipe` / `xsend_configured_endpoint` / `send_direct_with_retry` → `lb_t::sendpipe_to` → `pipe_t::write_*` |
 | `zlink_send_part_rid` (ROUTER·STREAM) | 위와 같되 `send_direct_with_retry` 분기 |
 | `zlink_request_part` FINAL (DEALER) | `request_part_common` → `submit_pull_blocking_request` → `request_admission_submit_blocking` → `try_admit_send_parts_scoped` → `arm_socket_pending_request_timeout` |
 | `zlink_reply_part` FINAL (ROUTER) | `public_router_reply_submit` → `checkout_public_router_reply_target` → `send_public_router_reply_with_wait` → `retain_reply_transport_pipe` → `send_completion_staged_frames_on_pipe` |
 | `zlink_recv_part` / `zlink_router_recv_part` | `recv_dealer_message_direct` / `router_recv_part_impl` → `recv_common` / `recv_routed` → `fq_t::recvpipe` → `pipe_t::read` → `reclassify_transport_pair_application_head` → `end_public_part_receive_delivery_hold` |
-| `zlink_completion_recv` | `process_submit_commands` → `drive_send_pending` → `socket_completion::recv` |
+| `zlink_completion_recv` | `process_submit_commands` → `drive_request_pending` → `socket_completion::recv` |
 | `zlink_poll` / `zlink_poller_wait` | `get_events_internal` → `process_commands` → `xhas_in` / `xhas_out` |
 | I/O thread → socket 전달 | `pipe_t::flush` → `activate_read` command → `xread_activated` → `fq_t::activated`; `process_async_mailbox` |
 
@@ -83,10 +83,16 @@ Message 경로가 필요로 하는 socket 단위 상태는 상태가 바뀌는 �
 에만 일반 경로로 후퇴한다. 후퇴 경로는 다음을 지킨다.
 
 - 첫 시도는 선택된 pipe로 직접 admit한다. 재시도 가능한 거절(`EAGAIN`, `ENOTCONN`,
-  `EHOSTUNREACH`)일 때만 그 선택을 configured endpoint로 commit해 대기 루프로 넘긴다. 다른
-  실패는 일반 경로가 냈을 errno로 즉시 반환한다.
-- 후퇴 경로의 계약(선택은 FINAL에서 한 번, 재시도는 같은 endpoint)은 fast path가 있어도
-  바뀌지 않는다.
+  `EHOSTUNREACH`, `ECONNREFUSED`)일 때만 그 선택을 configured endpoint로 commit해 대기 루프로
+  넘긴다. 다른 실패는 일반 경로가 냈을 errno로 즉시 반환한다.
+- `ZLINK_SEND_FLAGS_DONTWAIT`는 대기 루프에 들어가지 않는다. 재시도 가능한 거절이면 payload가
+  없는 wait token을 등록하고 `ZLINK_SUBMIT_BACKPRESSURED`로 즉시 반환한다. Endpoint commit
+  규칙은 blocking `ZLINK_SEND_FLAGS_NONE` send와 REQUEST에만 적용된다.
+- Wait token 등록과 WRITABLE record 게시는 message마다 실행되는 성공 경로 밖에 있다. 두 작업은
+  거절이 일어났을 때와 credit·attach wake가 일어났을 때만 실행되므로 §3의 허용 범위(후퇴 경로)에
+  속하며, 성공 경로에 대한 §3의 금지는 그대로 유효하다.
+- 후퇴 경로의 계약(blocking send의 선택은 FINAL에서 한 번, 재시도는 같은 endpoint)은 fast
+  path가 있어도 바뀌지 않는다.
 
 ## 5. 성능 gate
 

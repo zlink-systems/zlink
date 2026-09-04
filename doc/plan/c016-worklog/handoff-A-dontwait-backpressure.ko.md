@@ -1,6 +1,9 @@
 # A 인계 — DONTWAIT send 계약 변경 (0.17.0, 판정 D-B79)
 
-작성: 머신 B, 2026-09-04 15:10 / **개정 16:00 (계약 B로 확정)**. 상태: Core 수정 job 진행 중(main 트리, 커밋 전). 완료 시 커밋 해시와 영향 목록을 추가한다.
+작성: 머신 B, 2026-09-04 15:10 / 개정 16:00 (계약 B로 확정) / **개정 18:40 (Core·바인딩 커밋, 인계)**.
+상태: Core 커밋 `50d77800f2`(main), 스펙 갱신 커밋(이 문서와 같은 커밋), 바인딩 cpp/node/dotnet 커밋 `4f503b76d3`, java는 후속 커밋
+(REQUEST 경로 INVALID_ARGUMENT 11건 수정 중), 0.17.0 범프는 별도 커밋. 계약의 최종 문장은 `core/doc/spec/core/socket/README.ko.md`
+"Part send" 절이며 아래 표는 요약이다.
 
 ## 1. 바뀌는 계약 (사용자 확정, B안)
 
@@ -11,7 +14,9 @@
 | "다시 보내도 됨" 신호 | (pending이 알아서 전송) | 대상 pipe에 credit이 돌아오면 Core가 completion queue에 **`WRITABLE` completion**(토큰·context·가능하면 RID)을 넣고 poller를 **`POLLOUT`**으로 깨움(POLLCOMPLETION도 level 성립) |
 | 앱 동작 | completion을 기다림 | POLLOUT → `zlink_completion_recv`를 NO_DATA까지 pull → WRITABLE의 context로 **정확히 그 코루틴**을 재개 → 같은 패킷 재전송 |
 | 대상 단위 | — | PAIR=단일 pipe, DEALER=후보 집합(어느 후보든 열리면 WRITABLE 1건, 재전송 시 Core가 열린 peer 선택), ROUTER/STREAM=지정 RID pipe |
-| 토큰 수명 | — | WRITABLE 전달 또는 socket close(잔여 토큰은 terminal completion으로 정리) |
+| 토큰 수명 | — | (a) WRITABLE 전달, (b) 대상의 명시적 제거(`zlink_disconnect_rid`, 해당 RID endpoint 종료) → WRITABLE + `ZLINK_SEND_TERMINAL`/`ENOENT`, (c) socket close·context termination → WRITABLE + `ZLINK_SEND_TERMINAL` + lifecycle errno. peer weight 0은 SEND 토큰을 끝내지 않음 |
+| ROUTER/STREAM에서 route가 없는 RID | `NOT_CONNECTED` | **동일: 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`(EHOSTUNREACH), 토큰 없음**(MANDATORY 무관). route는 있으나 미준비(pair 미준비·weight 0·HWM)면 토큰. DEALER peer 0개는 토큰 |
+| reservation(65,536/socket, REQUEST와 공유) 소진 | — | SEND `ZLINK_SUBMIT_OUT_OF_MEMORY`/`ENOMEM`, ID 0 (REQUEST는 현행 BACKPRESSURED/EAGAIN) |
 | completion kind | REQUEST, SEND | REQUEST, **WRITABLE**(신규 enum 값, 기존 값 불변); 일반 SEND 성공에는 completion 없음 |
 | `ZLINK_OPT_PENDING_MAX_MSGS/BYTES` | SEND·REQUEST 공유(기본 무제한) | SEND에는 no-op(REQUEST 현행). enum 값·ABI 유지 |
 | blocking `NONE` send / `zlink_request_part` | 현행 | 현행 유지 |
@@ -25,7 +30,10 @@
 - 0.16.0의 "nonzero ID = pending 수락, 나중에 SEND completion = 전송 완료" 가정 제거(이제 nonzero ID = 대기 토큰, WRITABLE = 재시도 신호).
 - 같은 대상의 전송 순서가 필요하면 framework 논리 큐로 보존(Core는 순서 큐를 갖지 않음).
 - `ZLINK_OPT_PENDING_MAX_*`를 SEND 목적으로 쓰는 코드 제거(REQUEST용 유지).
-- 현재 EAGAIN/POLLOUT/BACKPRESSURED 처리 코드: cpp 6파일, dotnet 32, java 15, **node 0**. 정확한 영향 파일:행은 Core job 요약 `doc/plan/c016-worklog/dontwait-writable-core-summary.md`(완료 시).
+- 현재 EAGAIN/POLLOUT/BACKPRESSURED 처리 코드: cpp 6파일, dotnet 32, java 15, **node 0**(`rg -n 'BACKPRESSURED|POLLOUT|EAGAIN' framework/languages/<lang>`).
+- WRITABLE record의 `send_result == ZLINK_SEND_TERMINAL`(errno ENOENT/ESHUTDOWN/ETERM)은 "재전송 불가"이므로 해당 코루틴을 실패로 깨울 것(대상 제거·close). 바인딩은 이를 typed 실패로 노출한다(cpp/node/dotnet 커밋 `4f503b76d3` 메시지 참고).
+- 바인딩 public API 변경 요약(각 바인딩 README 갱신됨): `CompletionKind.WRITABLE` 추가(SEND는 ABI 유지·미발행); async send는 즉시 성공(ID 0) 또는 토큰 대기 후 같은 payload를 바인딩이 재전송(framework가 payload를 다시 만들 필요 없음); completion queue는 public poller 하나가 단독으로 drain; PENDING_MAX 옵션은 REQUEST 전용.
+- dotnet 한정: Core에 waitable poller FD가 없어 poller 미등록 상태의 autonomous await는 nonblocking scheduler turn으로 진행한다(public poller를 등록하면 그 루프가 진행을 구동). 완전한 무스핀 대기가 필요하면 Core ABI 확장 항목으로 별도 논의.
 
 ## 3. 검증 방법(framework 쪽)
 
@@ -45,8 +53,10 @@
 ## 5. 진행 상태
 
 - [x] A안(POLLOUT만) 구현 중 계약 B로 확정 → A안 job 중단, 공통 부분(payload 보관 제거·REQUEST 분리) 유지
-- [ ] Core 수정 B (job c016-dontwait-writable, sol ultra+fast) — 진행 중: 대기 토큰 + WRITABLE completion + POLLOUT
-- [ ] B gate (dev ctest, release-gate, wake-invariant, hotpath_gate, 바인딩 테스트) + 벤치 before/after 표
-- [ ] 0.17.0 범프 커밋
-- [ ] 스펙 정정 커밋(diff 사용자 확인 후)
-- [ ] bindings 언어별 job
+- [x] Core 수정 B — 커밋 `50d77800f2` (리뷰 후속 3건 포함: route 없는 RID는 NOT_CONNECTED, 내부 훅 제거, 명시적 제거 시 토큰 TERMINAL/ENOENT; D-B80)
+- [x] B gate — dev ctest 139/139, release-gate(LTO) hotpath_gate PASS, 변경 suite 5회 green, cpp/node/dotnet 바인딩 green. 벤치 before/after 표는 perf multi 정책 복원 job 뒤(미완)
+- [x] 스펙 정정 커밋(ko/en 14파일) — 이 문서와 같은 커밋
+- [x] bindings cpp/node/dotnet — 커밋 `4f503b76d3`
+- [ ] bindings java — REQUEST 경로 INVALID_ARGUMENT 11건 수정 job 진행 중, 완료 시 후속 커밋
+- [ ] 0.17.0 범프 커밋(직후)
+- [ ] bindings c/go/rust/python, perf multi 정책 복원(§1.2 모델 + WRITABLE drain), `doc/perf/PERF_MULTI_TEST_POLICY.md` §1.2 문단 — 머신 B 계속

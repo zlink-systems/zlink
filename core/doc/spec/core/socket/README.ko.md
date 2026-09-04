@@ -66,7 +66,7 @@ Core는 application notification callback을 호출하지 않는다.
 |---|---|---|
 | 일반 DATA | `ZLINK_POLLIN` | socket 종류에 맞는 `*_recv_part()` |
 | STREAM packet | `ZLINK_POLLIN` | `zlink_stream_recv_packet()` |
-| SEND·REQUEST 완료 | `ZLINK_POLLCOMPLETION` | `zlink_completion_recv()` |
+| REQUEST 완료와 SEND WRITABLE 대기 토큰 | `ZLINK_POLLCOMPLETION` (읽지 않은 WRITABLE record는 `ZLINK_POLLOUT`도 level로 유지) | `zlink_completion_recv()` |
 | socket monitor event | `ZLINK_POLLIN` | `zlink_socket_monitor_recv()` |
 | timer fire count | timer readiness | `zlink_timer_recv()` |
 
@@ -272,31 +272,35 @@ typedef uint64_t zlink_completion_id_t;
 typedef uint64_t zlink_reply_token_t;  // DATA는 0, REQUEST는 nonzero
 
 typedef enum zlink_completion_kind_t {
-  ZLINK_COMPLETION_SEND = 1,     // DONTWAIT send의 지연 admission 결과
-  ZLINK_COMPLETION_REQUEST = 2   // request의 reply·timeout·terminal 결과
+  ZLINK_COMPLETION_SEND = 1,     // ABI 보존 전용, Core는 이 kind를 발행하지 않음
+  ZLINK_COMPLETION_REQUEST = 2,  // request의 reply·timeout·terminal 결과
+  ZLINK_COMPLETION_WRITABLE = 3  // DONTWAIT send 대기 토큰의 target에 write credit이 생김
 } zlink_completion_kind_t;
 
 typedef enum zlink_send_complete_result_t {
-  ZLINK_SEND_ADMITTED = 0,       // local send queue admission 완료
-  ZLINK_SEND_TERMINAL = 202      // send_terminal_errno에 최종 사유가 있음
+  ZLINK_SEND_ADMITTED = 0,       // WRITABLE: 같은 target에 다시 submit할 수 있음
+  ZLINK_SEND_TERMINAL = 202      // WRITABLE: target이 제거됨, send_terminal_errno에 사유가 있음
 } zlink_send_complete_result_t;
 
 typedef struct zlink_completion_t {
   uint32_t struct_size;                  // sizeof(zlink_completion_t)
-  zlink_completion_kind_t kind;          // SEND 또는 REQUEST
-  zlink_completion_id_t completion_id;   // socket-local, 항상 nonzero
+  zlink_completion_kind_t kind;          // REQUEST 또는 WRITABLE
+  zlink_completion_id_t completion_id;   // socket-local, 항상 nonzero; WRITABLE은 submit이 반환한 대기 토큰
   void *user_context;                    // submit 값을 그대로 돌려줌
-  zlink_routing_id_t peer_rid;           // 논리 peer, 적용되지 않으면 empty
-  zlink_send_complete_result_t send_result; // SEND에서만 사용
-  int send_terminal_errno;               // SEND TERMINAL에서만 사용
+  zlink_routing_id_t peer_rid;           // ROUTER·STREAM WRITABLE과 ROUTER REQUEST는 submit RID, 그 외 empty
+  zlink_send_complete_result_t send_result; // WRITABLE에서만 사용; ADMITTED는 재submit 가능, TERMINAL은 target 제거
+  int send_terminal_errno;               // WRITABLE TERMINAL에서만 사용, 그 외 0
   zlink_request_result_t request_result; // REQUEST에서만 사용
   zlink_msg_t *reply_parts;               // REQUEST payload, 없으면 NULL
   size_t reply_part_count;                // REQUEST payload part 수
 } zlink_completion_t;
 ```
 
-완료 ID는 SEND와 REQUEST가 공유하는 socket-local correlation 값이다. `0`은 이미 admission됐거나
-Core가 operation을 접수하지 않아 후속 completion이 없다는 뜻이다. Nonzero ID는 socket을
+완료 ID는 REQUEST와 SEND 대기 토큰이 공유하는 socket-local correlation 값이다. `0`은 이미
+admission됐거나 Core가 operation을 접수하지 않아 후속 completion이 없다는 뜻이다. SEND
+`DONTWAIT FINAL`의 nonzero ID는 `ZLINK_SUBMIT_BACKPRESSURED`와 함께 반환하는 대기 토큰이며, 같은
+ID를 가진 `ZLINK_COMPLETION_WRITABLE` record가 정확히 한 번 뒤따른다. REQUEST의 nonzero ID는
+REQUEST completion 한 건이 뒤따른다. Nonzero ID는 socket을
 닫기 전까지 재사용하지 않으며 취소 handle이 아니다. 다음 nonzero ID를 만들 수 없으면 submit은
 `ZLINK_SUBMIT_SEQ_EXHAUSTED`, `errno == EOVERFLOW`, ID `0`으로 실패한다.
 
@@ -372,8 +376,8 @@ typedef enum zlink_option_t {
   ZLINK_OPT_SUBMIT_RETRY_MODE          = 0x3037,  // local submit 실패 재시도 모드 (int; ZLINK_SUBMIT_RETRY_OFF 또는 ZLINK_SUBMIT_RETRY_LOCAL_FAILURE, raw socket 기본값 off)
   ZLINK_OPT_SUBMIT_RETRY_TIMEOUT       = 0x3038,  // local submit 실패 재시도 예산 (ms, int; raw socket 기본값 0, 0이면 재시도 없음)
   ZLINK_OPT_SUBMIT_RETRY_ATTEMPTS      = 0x3039,  // 최초 submit 이후 추가 재시도 횟수 (int; raw socket 기본값 0, 현재 상한 16)
-  ZLINK_OPT_PENDING_MAX_MSGS           = 0x303A,  // DONTWAIT SEND·REQUEST 공유 pending record 수 상한 (uint64_t, 0 unlimited, 기본 0)
-  ZLINK_OPT_PENDING_MAX_BYTES          = 0x303B   // DONTWAIT SEND·REQUEST 공유 pending byte 상한 (uint64_t, 0 unlimited, 기본 0)
+  ZLINK_OPT_PENDING_MAX_MSGS           = 0x303A,  // DONTWAIT REQUEST pending record 수 상한 (uint64_t, 0 unlimited, 기본 0; 일반 SEND는 무시)
+  ZLINK_OPT_PENDING_MAX_BYTES          = 0x303B   // DONTWAIT REQUEST pending byte 상한 (uint64_t, 0 unlimited, 기본 0; 일반 SEND는 무시)
 } zlink_option_t;
 ```
 
@@ -381,14 +385,16 @@ typedef enum zlink_option_t {
 raw socket과 discovery에 적용된다.
 
 `ZLINK_OPT_PENDING_MAX_MSGS`와 `ZLINK_OPT_PENDING_MAX_BYTES`는 즉시 admission되지 않아
-Core가 payload를 보관하는 DONTWAIT SEND와 REQUEST가 공유한다. `MAX_MSGS`는 완전한 multipart
+Core가 payload를 보관하는 DONTWAIT REQUEST pending record에만 적용된다. 일반 SEND는 Core가
+payload를 보관하지 않으므로 두 option을 무시한다. `MAX_MSGS`는 완전한 multipart
 record 수이고, `MAX_BYTES`는 각 part의 `max(payload size, sizeof(zlink_msg_t))`를 합한 값이다.
 합산은 overflow 시 `UINT64_MAX`로 포화한다. `MORE` staging 중에는 예약하지 않고 `FINAL`에서
 전체 charge를 원자적으로 검사·예약한다. Pending payload가 admission되거나 terminal로 끝나면
 count와 byte를 해제한다. 실행 중 상한을 줄여도 기존 reservation을 제거하지 않고 이후
 reservation에만 새 값을 적용한다. Immediate admission과 `NONE` wait는 이 pool을 사용하지 않는다.
 
-두 option은 PAIR·DEALER·ROUTER·STREAM에서만 지원한다. 다른 socket의 get/set은
+두 option의 get/set은 PAIR·DEALER·ROUTER·STREAM에서만 지원하며, 네 type 모두 option 저장을
+ABI로 유지한다. 다른 socket의 get/set은
 `ZLINK_CONFIG_NOT_SUPPORTED`, `errno == ENOTSUP`로 실패하고 기존 option 상태를 바꾸지 않는다.
 
 `ZLINK_OPT_BLOCKY`는 socket option API가 지원하지 않는 식별자다.
@@ -930,45 +936,68 @@ validation 전에 `0`으로 초기화한다. `user_context_`는 `DONTWAIT FINAL`
 | `MORE` staging 성공 | `ZLINK_SUBMIT_OK` | 0 | 없음 |
 | `NONE FINAL` local send queue admission | `ZLINK_SUBMIT_OK` | 0 | 없음 |
 | `DONTWAIT FINAL` 즉시 admission | `ZLINK_SUBMIT_OK` | 0 | 없음 |
-| `DONTWAIT FINAL`을 Core가 pending으로 보관 | `ZLINK_SUBMIT_OK` | nonzero | SEND 한 건 |
-| pending 또는 completion reservation 상한 초과 | `ZLINK_SUBMIT_BACKPRESSURED`, `EAGAIN` | 0 | 없음 |
+| `DONTWAIT FINAL` backpressure 또는 target 준비 전 | `ZLINK_SUBMIT_BACKPRESSURED`, `EAGAIN` | nonzero 대기 토큰 | WRITABLE 한 건 |
+| ROUTER·STREAM RID에 route 없음 | `ZLINK_SUBMIT_NOT_CONNECTED`, `EHOSTUNREACH` | 0 | 없음 |
+| completion reservation 상한 초과 | `ZLINK_SUBMIT_OUT_OF_MEMORY`, `ENOMEM` | 0 | 없음 |
 | validation·target 실패 | 해당 submit result | 0 | 없음 |
 
 `NONE FINAL`은 호출 진입 시 `ZLINK_OPT_SNDTIMEO`를 snapshot하고 local send queue admission까지
 기다린다. 기본값은 1,000 ms, `0`은 즉시, `-1`은 무한 대기다. 만료하면
 `ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`, ID `0`, completion 없음으로 실패한다.
-`DONTWAIT FINAL`은 기다리지 않고 즉시 admission하거나 [pending pool](#공통-옵션-zlink_option_t)에
-record 전체를 예약한다. 두 경로의 실패한 `FINAL`은 staging한 prefix와 함께 소비·폐기한다.
+`DONTWAIT FINAL`은 기다리지 않고 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`이고
+completion이 없다. HWM·byte credit·flow pause에 의한 backpressure이거나 target이 존재하지만 아직
+준비되지 않은 경우(transport pair 미준비, peer weight 0, connect 직후 peer가 0개인 DEALER)에는
+`ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`과 함께 nonzero 대기 토큰을 `completion_id_out_`에
+반환한다. Core는 토큰, target과 `user_context_`만 유지하고 payload는 보관하지 않는다. Part는 다른
+결과와 같이 소비·폐기되므로 caller는 자신이 보관한 복사본으로 다시 제출한다. ROUTER·STREAM에서
+지정한 RID에 route가 전혀 없으면 `ZLINK_ROUTER_OPT_MANDATORY`와 무관하게 즉시
+`ZLINK_SUBMIT_NOT_CONNECTED`, `errno == EHOSTUNREACH`, ID `0`이며 토큰을 만들지 않는다. 두 경로의
+실패한 `FINAL`은 staging한 prefix와 함께 소비·폐기한다.
 
-SEND와 REQUEST는 socket당 65,536개의 unified completion reservation을 공유한다. SEND는
-`DONTWAIT FINAL`이 pending으로 전환될 때만 slot을 예약하고 REQUEST successful `FINAL`은 항상
+REQUEST와 SEND 대기 토큰은 socket당 65,536개의 unified completion reservation을 공유한다. SEND는
+`DONTWAIT FINAL`이 대기 토큰을 반환할 때만 slot을 예약하고 REQUEST successful `FINAL`은 항상
 예약한다. Slot은 reservation부터 `zlink_completion_recv()`가 record를 queue에서 제거할 때까지
 유지한다. Socket close가 unread record를 정리하면 함께 해제한다. 상한이 차면 Core는 operation을
-접수하지 않고 `ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`, ID `0`을 반환하며 전체
-sequence를 소비·폐기한다.
+접수하지 않고 전체 sequence를 소비·폐기한다. 이때 SEND `DONTWAIT FINAL`은
+`ZLINK_SUBMIT_OUT_OF_MEMORY`, `errno == ENOMEM`, ID `0`이고 REQUEST `FINAL`은
+`ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`, ID `0`이다.
 
-Core가 pending record를 접수한 뒤에는 payload와 admission 재시도를 Core가 소유한다. Application은
-operation을 취소하거나 같은 payload를 다시 제출하지 않는다. 일시적인 transport 종료는 admission
-전 pending record나 진행 중인 `NONE FINAL` wait의 terminal 결과가 아니다. PAIR은 socket의 단일
-논리 route, DEALER는 `FINAL`에서 선택한 configured endpoint, ROUTER·STREAM은 logical peer RID를
-target으로 고정한다. DONTWAIT pending은 FIFO를 유지해 같은 logical target의 새 connection에
-admission을 다시 시도한다. `NONE`은 pending pool을 사용하지 않고 snapshot한 `SNDTIMEO` 안에서
-같은 target의 reconnect와 admission을 기다린다.
+대기 토큰의 target에 write credit이 다시 생기면 Core는 `ZLINK_COMPLETION_WRITABLE` record 한 건을
+completion queue에 넣는다. Record의 `completion_id`는 토큰, `user_context`는 submit 값,
+`send_result`는 `ZLINK_SEND_ADMITTED`, `send_terminal_errno`는 `0`이며 `peer_rid`는 ROUTER·STREAM에서
+submit RID, PAIR·DEALER에서 empty다. 이 record를 아직 꺼내지 않은 동안 socket의 `ZLINK_POLLOUT`과
+`ZLINK_POLLCOMPLETION`은 모두 level로 true다. Application은 `zlink_completion_recv()`를 `NO_DATA`까지
+반복해 queue를 비운 뒤 같은 record를 `DONTWAIT`로 다시 제출한다. 토큰 하나는 정확히 WRITABLE
+record 하나를 만든다. 재submit도 admission을 한 번만 시도하며 다시 backpressure이면 새 토큰을
+반환한다. `ZLINK_POLLOUT`은 socket 전체의 재시도 가능성을 나타내는 aggregate hint이고, target별
+정확한 신호는 WRITABLE record의 토큰·context·RID다.
 
-Configured endpoint나 logical RID를 명시적으로 제거하거나 영구적인 protocol 거절로 다시 시도할
-수 없으면 successful DONTWAIT submit으로 접수한 pending record만 SEND terminal completion을
-만든다. 아직 반환하지 않은 `NONE` wait는 target 제거 시 `ZLINK_SUBMIT_NOT_FOUND`+`ENOENT`,
-peer-type 거절 시 `ZLINK_SUBMIT_NOT_ADMITTED`+`EPROTOTYPE`, context termination 시
+Target 단위는 PAIR은 socket의 단일 pipe, DEALER는 candidate peer 집합, ROUTER·STREAM은 지정한 RID
+하나다. DEALER는 candidate 중 하나가 열리면 WRITABLE 한 건을 만들고 재submit 시 열린 peer를 다시
+선택하며 `FINAL`에서 endpoint를 고정하지 않는다. ROUTER·STREAM은 다른 RID의 credit으로 해당 토큰을
+발행하지 않는다. WRITABLE을 발행하는 wake edge는 peer drain으로 LWM 아래 도달·credit refill,
+pipe attach(connect 완료), peer weight 0 → 양수, ROUTER route 채택·standby 승격, flow RESUME이다.
+Core는 SEND payload를 보관하지 않으며 Core 소유의 SEND 재시도 FIFO도 없다. 일시적인 transport
+종료는 대기 토큰이나 진행 중인 `NONE FINAL` wait의 terminal 결과가 아니다. `NONE`은 토큰을 만들지
+않고 snapshot한 `SNDTIMEO` 안에서 같은 target의 reconnect와 admission을 기다린다.
+
+대기 토큰은 다음 세 경우로만 종료된다. (a) 위의 WRITABLE record. (b) target의 명시적
+제거(`zlink_disconnect_rid`, 해당 RID의 endpoint termination)로 `send_result == ZLINK_SEND_TERMINAL`,
+`send_terminal_errno == ENOENT`인 WRITABLE record. (c) socket close·context termination으로
+`ZLINK_SEND_TERMINAL`과 lifecycle errno(`ESHUTDOWN` 또는 `ETERM`)인 WRITABLE record. Peer weight가
+0으로 떨어져도 SEND 토큰은 종료되지 않는다. 아직 반환하지 않은 `NONE` wait는 target 제거 시
+`ZLINK_SUBMIT_NOT_FOUND`+`ENOENT`, peer-type 거절 시 `ZLINK_SUBMIT_NOT_ADMITTED`+`EPROTOTYPE`, context termination 시
 `ZLINK_SUBMIT_TERMINATED`+`ETERM`, socket shutdown 시
 `ZLINK_SUBMIT_TERMINATED`+`ESHUTDOWN`으로 동기 종료한다. Admission 전 allocation failure는
 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, 다른 runtime failure는
 `ZLINK_SUBMIT_INTERNAL_ERROR`+`EIO`다. 모두 ID `0`, completion 없음이며 전체 sequence를
 소비·폐기한다.
 
-ID `0`이나 `ZLINK_SEND_ADMITTED` 뒤에는 payload가 기존 transport 전달 계약으로 넘어간다.
+ID `0`으로 admission된 뒤에는 payload가 기존 transport 전달 계약으로 넘어간다.
 Core는 application record의 별도 복사본, delivery ACK나 deduplication sequence를 만들지 않으며,
 그 뒤 disconnect가 발생해도 새 connection에 같은 application record를 replay하지 않는다.
-`ZLINK_SEND_ADMITTED`는 local send queue admission이지 peer 수신 확인이 아니다.
+WRITABLE record의 `ZLINK_SEND_ADMITTED`는 target에 다시 submit할 수 있다는 뜻이지 payload
+admission이나 peer 수신 확인이 아니다.
 
 ### Request와 reply
 
@@ -1007,8 +1036,8 @@ Core는 request를 wire에 공개하기 전에 completion ID와 공유 slot을 �
 `NONE FINAL`은 slot과 ID를 임시 예약한 뒤 `SNDTIMEO` 안에서 outbound local admission을 기다린다.
 Admission 전 실패는 reservation을 반납하고 [part send](#part-send와-pending-admission)의 동기
 result·errno, ID `0`, completion 없음으로 끝난다. `DONTWAIT FINAL`은 pending pool이 허용하면
-admission 전 record도 Core가 소유하고 nonzero REQUEST ID를 반환한다. 이 단계는 별도 SEND
-completion을 만들지 않는다.
+admission 전 record도 Core가 소유하고 nonzero REQUEST ID를 반환한다. 이 단계는 별도 SEND 대기
+토큰이나 WRITABLE completion을 만들지 않는다.
 
 `timeout_ms_ == 0`은 requester socket의 request timeout을 snapshot하며 기본값은 5,000 ms다.
 Reply timeout은 request record가 outbound local send queue에 admission된 시점부터 monotonic하게
@@ -1053,7 +1082,7 @@ paused pipe를 round-robin으로 다시 진행하며 token을 자동 제거하�
 
 ### Completion pull과 ownership
 
-SEND와 REQUEST는 socket-local completion queue 하나를 사용한다.
+REQUEST completion과 SEND WRITABLE record는 socket-local completion queue 하나를 사용한다.
 
 이 public completion queue는 transport의 Completion connection과 다른 개념이다.
 DEALER-ROUTER reply는 single Application connection의 physical head에 도달한 뒤 이 queue로
@@ -1073,22 +1102,22 @@ Padding byte는 비교하지 않는다. 잘못된 `struct_size`나 non-empty out
 않는다. NULL socket이나 output은 `ZLINK_RECV_INVALID_HANDLE`, `errno == EFAULT`다. `NO_DATA`와
 다른 실패는 호출 시 empty였던 output을 empty로 유지한다.
 
-한 successful receive는 SEND나 REQUEST 한 종류만 반환하고 사용하지 않는 field를
+한 successful receive는 REQUEST나 WRITABLE 한 종류만 반환하고 사용하지 않는 field를
 0·empty·NULL로 둔다. `peer_rid`는 reservation 시점의 logical peer snapshot이다. PAIR·DEALER
-SEND와 DEALER REQUEST에서는 empty이고, ROUTER·STREAM SEND와 ROUTER REQUEST에서는 submit
+WRITABLE과 DEALER REQUEST에서는 empty이고, ROUTER·STREAM WRITABLE과 ROUTER REQUEST에서는 submit
 RID다. Reconnect 뒤 physical connection identity로 바뀌지 않으며 후속 send target capability가
 아니다.
 
-| 원인 | SEND completion | REQUEST completion |
+| 원인 | WRITABLE completion (SEND 대기 토큰) | REQUEST completion |
 |---|---|---|
-| 정상 local admission 또는 유효 reply | `ZLINK_SEND_ADMITTED`, errno 0 | `ZLINK_REQUEST_OK` 또는 wire error-reply mapping |
+| target write credit 회복 또는 유효 reply | `ZLINK_SEND_ADMITTED`, errno 0 | `ZLINK_REQUEST_OK` 또는 wire error-reply mapping |
 | Request reply timeout | 해당 없음 | `ZLINK_REQUEST_TIMED_OUT` |
 | endpoint 또는 logical RID 명시적 제거 | `ZLINK_SEND_TERMINAL`, `ENOENT` | `ZLINK_REQUEST_NOT_FOUND` |
-| 영구적인 peer-type 거절 | `ZLINK_SEND_TERMINAL`, `EPROTOTYPE` | `ZLINK_REQUEST_REJECTED` |
-| malformed protocol | `ZLINK_SEND_TERMINAL`, `EPROTO` | `ZLINK_REQUEST_PROTOCOL_ERROR` |
-| accepted 뒤 allocation·runtime failure | `ZLINK_SEND_TERMINAL`, `ENOMEM` 또는 `EIO` | `ZLINK_REQUEST_INTERNAL_ERROR` |
-| transient physical disconnect | terminal 없음; admission 전 같은 target에 재시도 | admission 전 재시도, admission 뒤 replay 없이 기존 budget 유지 |
-| context termination·socket close | pending·unread record를 내부 폐기하고 새 completion 전달을 보장하지 않음 | 동일 |
+| 영구적인 peer-type 거절 | 해당 없음; 토큰은 target 제거까지 유지 | `ZLINK_REQUEST_REJECTED` |
+| malformed protocol | 해당 없음; 토큰은 target 제거까지 유지 | `ZLINK_REQUEST_PROTOCOL_ERROR` |
+| accepted 뒤 allocation·runtime failure | 해당 없음; Core가 payload를 보관하지 않음 | `ZLINK_REQUEST_INTERNAL_ERROR` |
+| transient physical disconnect | terminal 없음; 토큰 유지, 같은 target의 재연결이 WRITABLE을 발행 | admission 전 재시도, admission 뒤 replay 없이 기존 budget 유지 |
+| context termination·socket close | `ZLINK_SEND_TERMINAL`, `ETERM` 또는 `ESHUTDOWN`; 읽지 않은 record는 내부 폐기 | pending·unread record를 내부 폐기하고 새 completion 전달을 보장하지 않음 |
 
 REQUEST reply는 Core가 enqueue 전에 확보한 contiguous `zlink_msg_t[]`에 보관한다. Wire error
 reply는 errno part를 닫고 application payload만 새 Core allocation의 index 0부터 정규화한다.
@@ -1097,14 +1126,15 @@ payload 없는 `ZLINK_REQUEST_INTERNAL_ERROR` completion을 만든다. Successfu
 각 message의 소유권을 caller에게 옮기며 receive 자체는 allocation하지 않는다. Caller는 array를
 직접 free하지 않고 `zlink_completion_close()`로 남은 message와 allocator base를 정리한다.
 
-`zlink_completion_close()`는 NULL, SEND와 empty record에도 안전하고 idempotent하다. 모든 field를
+`zlink_completion_close()`는 NULL, WRITABLE과 empty record에도 안전하고 idempotent하다. 모든 field를
 0으로 되돌리되 `struct_size`는 보존한다. `struct_size`가 `0` 또는 정확한 구조체 크기가 아니면
-pointer를 해제하지 않고 no-op이다. Successful receive 뒤에는 SEND를 포함해 모든 record를 close한다.
+pointer를 해제하지 않고 no-op이다. Successful receive 뒤에는 WRITABLE을 포함해 모든 record를 close한다.
 
-Completion queue가 비어 있지 않으면 `ZLINK_POLLCOMPLETION`이 level-trigger된다. Poller wait는
+Completion queue가 비어 있지 않으면 `ZLINK_POLLCOMPLETION`이 level-trigger된다. 읽지 않은 WRITABLE
+record는 `ZLINK_POLLOUT`도 level로 유지한다. Poller wait는
 record를 소비하지 않는다. Caller는 DONTWAIT receive를 `NO_DATA`까지 반복한다. 한 socket queue의
 drain owner는 하나이며 같은 queue를 두 thread에서 동시에 drain하는 것은 지원하지 않는다.
-SEND와 REQUEST 결과는 resolver가 socket-local ready queue에 append한 linearization 순서로
+REQUEST와 WRITABLE 결과는 resolver가 socket-local ready queue에 append한 linearization 순서로
 반환한다. 이는 submit 순서나 target별 wire 순서가 아니므로 caller는 ID나 context로 구분한다.
 
 `zlink_completion_recv()`는 PAIR·DEALER·ROUTER·STREAM에서만 지원한다. 다른 socket은
@@ -1221,10 +1251,10 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 - DEALER에서 `ZLINK_OPT_CONFLATE=1`은 `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`이고, `0` 설정은
   성공하며 getter는 계속 `0`이다. PUB와 SUB는 `1`을 받아들이고 getter도 `1`을 반환한다.
 - 알 수 없는 옵션, 범위 밖 값, 잘못된 byte-count 크기는 `EINVAL`, 종료된 context는 `ETERM`이다.
-- `ZLINK_OPT_PENDING_MAX_MSGS/BYTES`는 0x303A/0x303B, 기본 0/unlimited이며 DONTWAIT SEND·REQUEST가
-  공유한다. MORE에서는 예약하지 않고 FINAL에서 record 전체를 원자적으로 예약하며 admission·
-  terminal에 pending charge를 해제한다. PAIR·DEALER·ROUTER·STREAM 외 get/set은
-  `ZLINK_CONFIG_NOT_SUPPORTED`+`ENOTSUP`다.
+- `ZLINK_OPT_PENDING_MAX_MSGS/BYTES`는 0x303A/0x303B, 기본 0/unlimited이며 DONTWAIT REQUEST pending
+  record에만 적용된다. MORE에서는 예약하지 않고 FINAL에서 record 전체를 원자적으로 예약하며 admission·
+  terminal에 pending charge를 해제한다. 일반 SEND는 두 option을 무시한다. PAIR·DEALER·ROUTER·STREAM은
+  option 저장을 ABI로 유지하고 그 외 get/set은 `ZLINK_CONFIG_NOT_SUPPORTED`+`ENOTSUP`다.
 
 **HWM admission** ([Transport/Buffer](#transportbuffer) 참조)
 - accounted byte가 HWM에 도달하면 receiver가 byte credit을 반환할 때까지 이후 write가 대기한다.
@@ -1258,16 +1288,24 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 - `zlink_disconnect_rid`는 대상 없음에 `ZLINK_CONNECT_NOT_FOUND`, 중복 routing id에 `ZLINK_CONNECT_CONFLICT`, lifecycle 소유권 충돌에 `ZLINK_CONNECT_BUSY`다.
 
 **Part send와 completion**
-- `DONTWAIT FINAL`이 즉시 admission되면 ID `0`과 completion 없음이고, Core가 pending으로 보관하면
-  nonzero ID와 SEND completion을 정확히 한 번 반환한다. `NONE FINAL`은 snapshot한 `SNDTIMEO`
+- `DONTWAIT FINAL`은 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`과 completion 없음이고,
+  backpressure이거나 target이 준비되지 않았으면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero 대기
+  토큰을 반환하며 payload는 caller가 보관한다. 토큰의 target에 write credit이 생기면
+  `ZLINK_COMPLETION_WRITABLE` record를 정확히 한 번 반환하고, caller는 queue를 `NO_DATA`까지 비운 뒤
+  같은 record를 다시 제출한다. `NONE FINAL`은 snapshot한 `SNDTIMEO`
   안에서 같은 logical target admission을 기다리며 ID `0`과 completion 없음으로 끝난다.
 - 모든 part 호출은 성공·실패와 관계없이 입력을 소비하며 실패한 FINAL과 staging prefix를 함께
-  폐기한다. Pending·completion 상한 거절은 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`이다.
-- Admission 전 transient disconnect는 같은 logical target reconnect에 FIFO로 재시도하지만 ID `0`
-  또는 `ZLINK_SEND_ADMITTED` 뒤에는 application payload를 replay하지 않는다.
-- SEND와 REQUEST completion을 섞어 65,536개 slot을 채우면 다음 completion-bearing FINAL은
-  `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`이고, 한 record를 receive하면 다음 submit이
-  다시 접수된다.
+  폐기한다. ROUTER·STREAM RID에 route가 없으면 `ZLINK_SUBMIT_NOT_CONNECTED`+`EHOSTUNREACH`, ID `0`이고
+  completion reservation 상한 초과는 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, ID `0`이다.
+- Core는 SEND payload를 보관하거나 Core 소유의 SEND 재시도 FIFO를 두지 않는다. 대기 토큰은 target
+  단위(PAIR pipe, DEALER candidate peer 집합, ROUTER·STREAM의 해당 RID)로 예약하며 admission 전
+  transient disconnect는 토큰을 종료하지 않는다. ID `0` 뒤에는 application payload를 replay하지 않는다.
+- 대기 토큰은 WRITABLE record, target 명시적 제거(`ZLINK_SEND_TERMINAL`+`ENOENT`), socket close·context
+  termination(`ZLINK_SEND_TERMINAL`+lifecycle errno)으로만 종료되며 peer weight 0은 SEND 토큰을
+  종료하지 않는다.
+- SEND 대기 토큰과 REQUEST completion을 섞어 65,536개 slot을 채우면 다음 SEND `DONTWAIT FINAL`은
+  `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, 다음 REQUEST FINAL은 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`,
+  모두 ID `0`이고, 한 record를 receive하면 다음 submit이 다시 접수된다.
 
 **Request와 reply**
 - DEALER는 NULL target으로 known positive-weight ROUTER route에, ROUTER는 non-NULL ROUTER RID에
@@ -1297,26 +1335,28 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 
 **Completion receive와 ownership**
 - Completion이 있으면 `ZLINK_POLLCOMPLETION`이 level-trigger되고 poller wait만으로 queue가 줄지
-  않는다. DONTWAIT receive로 마지막 record를 꺼내면 readiness가 해제된다.
+  않는다. 읽지 않은 WRITABLE record는 `ZLINK_POLLOUT`도 level로 유지한다. DONTWAIT receive로 마지막
+  record를 꺼내면 readiness가 해제된다.
 - 잘못된 `struct_size`와 non-empty output은 record를 dequeue·overwrite하지 않는다.
-  `zlink_completion_close(NULL)`, SEND·empty close는 안전하고 idempotent하며 `struct_size`를
+  `zlink_completion_close(NULL)`, WRITABLE·empty close는 안전하고 idempotent하며 `struct_size`를
   보존한다.
 - REQUEST success와 유효 error reply payload는 contiguous array의 base index 0부터 caller에게
   이동하고 `zlink_completion_close()`가 남은 message와 array를 정리한다. Malformed errno part는
   payload 없는 `ZLINK_REQUEST_PROTOCOL_ERROR`, 정규화 allocation 실패는 payload 없는
   `ZLINK_REQUEST_INTERNAL_ERROR`다.
-- Socket close와 context termination은 pending·unread record를 내부 정리하고 새 terminal
+- Socket close와 context termination은 live SEND 대기 토큰을 `ZLINK_SEND_TERMINAL`과 lifecycle
+  errno의 WRITABLE로 retire하고, pending·unread record를 내부 정리하며 새 terminal
   completion 전달을 보장하지 않는다.
 - Completion recv `NONE`은 진입 시 `RCVTIMEO` 0/positive/-1을 snapshot한다. Timeout·unknown
   flags·NULL input과 blocking 중 context/socket 종료는 정해진 result·errno로 queue와 empty output을
   보존한다.
-- SEND·REQUEST completion을 섞어 enqueue하면 각 nonzero ID와 context가 socket-local append
+- WRITABLE·REQUEST completion을 섞어 enqueue하면 각 nonzero ID와 context가 socket-local append
   linearization 순서로 한 번씩 반환되며 event array 크기 때문에 유실·병합되지 않는다.
-- Completion의 `peer_rid`는 PAIR·DEALER SEND와 DEALER REQUEST에서 empty, ROUTER·STREAM SEND와
+- Completion의 `peer_rid`는 PAIR·DEALER WRITABLE과 DEALER REQUEST에서 empty, ROUTER·STREAM WRITABLE과
   ROUTER REQUEST에서 submit RID snapshot이며 reconnect 뒤 physical identity로 바뀌지 않는다.
 
 **Pull-only 표면**
-- Socket DATA, STREAM packet, SEND·REQUEST completion과 monitor event는 각각 정해진 pull 함수로
+- Socket DATA, STREAM packet, REQUEST·WRITABLE completion과 monitor event는 각각 정해진 pull 함수로
   소비하고 `zlink_poller_event_t`에는 operation payload가 아니라 readiness bit만 들어간다.
 
 **receive-flow 상태**

@@ -29,7 +29,7 @@ byte record 또는 고정 framing packet을 routing ID로 송수신하는 C API�
 
 | 관련 계약 | 정의하는 문서 |
 |---|---|
-| socket 생성·close, 공통 option, pending 송신과 completion, thread safety | [소켓 공통](README.ko.md) |
+| socket 생성·close, 공통 option, 송신 wait token과 completion, thread safety | [소켓 공통](README.ko.md) |
 | ZMP framing 없이 흐르는 byte의 wire format | [RAW (STREAM) 프로토콜 상세](../protocol/02-raw.ko.md) |
 | result 값과 errno 대응 | [Errors](../03-errors.ko.md#result와-errno-대응) |
 
@@ -114,16 +114,26 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid (
 `part_`를 소비한다. 중간 실패는 staging한 prefix와 실패한 part를 모두 폐기한다.
 
 `NONE FINAL`은 `SNDTIMEO`를 snapshot해 같은 RID의 local queue admission과 reconnect를
-기다린다. `DONTWAIT FINAL`은 즉시 admission되면 ID `0`이고, Core가 pending으로 보관하면
-nonzero ID의 SEND completion을 만든다. Admission 전에는 같은 logical RID의 reconnect에만
-재시도하고, ID `0` 또는 `ZLINK_SEND_ADMITTED` 뒤에는 application payload를 replay하지 않는다.
-상세 ownership·result·errno는 [소켓 공통](README.ko.md#part-send와-pending-admission)을 따른다.
+기다린다. `DONTWAIT FINAL`은 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`과
+completion 없음이다. HWM·byte credit 때문에 admission하지 못하거나 연결은 있지만 아직 준비되지
+않았으면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID에 묶인 nonzero wait token을 반환하며
+payload는 유지하지 않는다. `target_rid_`에 해당하는 연결이 없으면 즉시
+`ZLINK_SUBMIT_NOT_CONNECTED`이고 token을 만들지 않는다. 같은 RID에 write credit이
+생기면(peer drain, reconnect로 인한 pipe attach) Core는 그 token의 `ZLINK_COMPLETION_WRITABLE`
+record를 정확히 하나 만들며 `send_result == ZLINK_SEND_ADMITTED`, `peer_rid`는 제출한 RID다.
+다른 RID의 credit은 이 token을 깨우지 않는다. 호출자는 보관한 record를 같은 RID에 `DONTWAIT`로
+다시 제출한다. `zlink_disconnect_rid()`로 그 RID를 명시적으로 제거하면 token은
+`ZLINK_SEND_TERMINAL`+`ENOENT`인 WRITABLE record로 끝나고, socket close·context 종료는
+`ZLINK_SEND_TERMINAL`과 lifecycle errno로 끝난다. ID `0` 뒤에는 application payload를 replay하지
+않는다. 상세 ownership·result·errno는
+[소켓 공통](README.ko.md#part-send와-pending-admission)을 따른다.
 
 여러 client가 연결된 STREAM에서 `ZLINK_POLLOUT`은 socket 전체의 집계 readiness이며
 특정 `target_rid_`의 credit을 예약하거나 그 RID를 event에 싣지 않는다. 다른 client가
 writable해서 event가 선 뒤에도 원래 target의 재시도는 다시 `EAGAIN`일 수 있다.
-Core가 접수한 target별 admission 결과는 `ZLINK_POLLCOMPLETION`과
-`zlink_completion_recv()`로 받는다.
+Target별 정확한 신호는 `peer_rid`로 식별되는 `ZLINK_COMPLETION_WRITABLE` record이며, 읽지 않은
+WRITABLE record가 있는 동안 `ZLINK_POLLOUT`과 `ZLINK_POLLCOMPLETION`은 level로 유지된다. 이
+record는 `zlink_completion_recv()`로 받는다.
 
 유효한 `target_rid_`에 길이 0인 part를 routed 송신하면 byte record를 보내지 않고 해당
 peer 연결의 종료를 요청한다. 성공 시 이 길이 0 part도 소비된다.
@@ -227,8 +237,10 @@ Queue는 `RCVHWM`을 따르며 가득 차면 pipe read를 멈춰 backpressure를
 
 ## 7. Completion과 thread safety
 
-STREAM send가 nonzero completion ID를 반환하면 `zlink_completion_recv()`에서 SEND record를
-정확히 한 번 받는다. `peer_rid`는 submit에 지정한 logical RID snapshot이며 reconnect 뒤의
+STREAM send가 nonzero wait token을 반환하면 `zlink_completion_recv()`에서 그 token의
+`ZLINK_COMPLETION_WRITABLE` record를 정확히 한 번 받는다 — 같은 RID에 write credit이 생기면
+`ZLINK_SEND_ADMITTED`, `zlink_disconnect_rid()`로 RID를 명시적으로 제거하거나 socket을 close하면
+`ZLINK_SEND_TERMINAL`이다. `peer_rid`는 submit에 지정한 logical RID snapshot이며 reconnect 뒤의
 physical connection identity로 바뀌지 않는다. Completion drain, reservation 상한과 close
 계약은 [소켓 공통](README.ko.md#completion-pull과-ownership)이 소유한다.
 
@@ -423,11 +435,17 @@ socket/listener 기본값은 다음과 같다.
 - 성공과 실패 모두 `part_`를 소비해 empty initialized 상태로 둔다.
 - `NONE FINAL`은 진입 시 `SNDTIMEO`를 snapshot해 같은 logical RID의 local admission을 기다리고
   ID `0`·completion 없음으로 끝난다.
-- `DONTWAIT FINAL`은 즉시 admission되면 ID `0`, pending으로 접수되면 nonzero ID를 반환하고
-  정확히 한 SEND completion을 만든다.
-- Admission 전 reconnect는 같은 logical RID만 재시도하고 ID `0` 또는 `ZLINK_SEND_ADMITTED` 뒤에는
-  payload를 replay하지 않는다.
-- 연결을 찾을 수 없으면 `ZLINK_SUBMIT_NOT_CONNECTED`다.
+- `DONTWAIT FINAL`은 즉시 admission되면 ID `0`과 completion 없음이다. HWM·credit 또는 준비되지
+  않은 연결 때문에 거절되면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID의 nonzero wait
+  token이며 payload는 유지되지 않는다.
+- 같은 RID에 write credit이 생기면 그 token의 `ZLINK_COMPLETION_WRITABLE` record
+  (`ZLINK_SEND_ADMITTED`, `peer_rid`는 제출한 RID)를 정확히 한 번 반환하고 다른 RID의 credit은
+  이 token을 깨우지 않는다. 읽기 전까지 `ZLINK_POLLOUT`이 level로 유지된다.
+- `zlink_disconnect_rid()`로 RID를 제거하면 그 RID의 token은 `ZLINK_SEND_TERMINAL`+`ENOENT`인
+  WRITABLE record로 끝난다.
+- Wait token은 같은 logical RID에만 묶이고 reconnect 뒤 그 RID의 pipe attach가 WRITABLE record를
+  발행하며, ID `0` 뒤에는 payload를 replay하지 않는다.
+- 연결을 찾을 수 없으면 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`, ID `0`이고 token이 없다.
 
 **Raw part receive**
 - 성공하면 part 소유권이 호출자에게 이전되고 `zlink_msg_close`를 정확히 한 번
@@ -454,8 +472,9 @@ socket/listener 기본값은 다음과 같다.
   않는다.
 
 **Completion**
-- Nonzero SEND ID의 completion은 `peer_rid`에 submit 시 logical RID snapshot을 보존하고 reconnect
-  뒤 physical connection identity로 바꾸지 않는다.
+- Nonzero wait token의 WRITABLE record는 정확히 한 번 반환되며(명시적 RID 제거·close에서는
+  `ZLINK_SEND_TERMINAL`), `peer_rid`에 submit 시 logical RID snapshot을 보존하고 reconnect 뒤
+  physical connection identity로 바꾸지 않는다.
 - `ZLINK_POLLCOMPLETION`은 non-consuming level readiness이며 `zlink_completion_recv(DONTWAIT)`로
   `NO_DATA`가 될 때까지 drain하면 내려간다.
 

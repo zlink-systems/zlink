@@ -29,7 +29,7 @@ The following documents own the related contracts.
 | Related contract | Defining document |
 |---|---|
 | socket creation, common options, send/recv flags, and result enums | [Socket Common](README.en.md) |
-| send ownership, pending and completion bounds, and pull completion | [Socket Common](README.en.md) |
+| send ownership, completion reservation bounds, and pull completion | [Socket Common](README.en.md) |
 | message lifecycle, ownership, and multipart | [Message](../02-message.en.md) |
 | result-to-errno mapping | [Errors](../03-errors.en.md#result-and-errno-mapping) |
 
@@ -146,16 +146,33 @@ with `EAGAIN`.
 
 ### PAIR logical route and reconnect
 
-A PAIR socket has one logical route. If its physical connection disconnects while Core holds a
-`DONTWAIT FINAL` as pending or while a `NONE FINAL` call waits for admission, the operation does
-not terminate solely because of the disconnect. When the same PAIR logical route reconnects,
-Core retries local queue admission while preserving FIFO. `NONE` uses only the remaining budget
-from the `SNDTIMEO` snapshot.
+A PAIR socket has one logical route. A `DONTWAIT FINAL` makes exactly one admission attempt. If
+it is admitted immediately, the result is `ZLINK_SUBMIT_OK` with ID `0`, and no completion is
+produced. If HWM or byte credit prevents admission, or the physical connection is not ready yet,
+the call returns `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN` and a nonzero wait token in
+`completion_id_out_`. Core retains only the token, the target, and `user_context_`; it does not
+retain the payload, so the caller resubmits its own retained copy of the record.
+
+When the single pipe regains write credit (peer drain, or pipe attach on reconnect), Core publishes
+exactly one `ZLINK_COMPLETION_WRITABLE` record for that token. The record carries the same
+`completion_id`, the same `user_context`, `send_result == ZLINK_SEND_ADMITTED`,
+`send_terminal_errno == 0`, and an empty `peer_rid`. While an unread WRITABLE record exists,
+`ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` are both level-held. The application drains the queue
+with `zlink_completion_recv()` until `NO_DATA`, then resubmits the same record with `DONTWAIT`.
+
+A wait token ends only in one of these ways: the WRITABLE record above; a WRITABLE record with
+`send_result == ZLINK_SEND_TERMINAL` and `send_terminal_errno == ENOENT` when the endpoint is
+explicitly removed with `zlink_disconnect()`; or a WRITABLE record with `ZLINK_SEND_TERMINAL` and
+the lifecycle errno on socket close or context termination. A physical disconnect alone does not
+end the token; when the same logical route reconnects, the pipe attach publishes the WRITABLE
+record. A `NONE FINAL` call that waits for admission does not terminate solely because of a
+physical disconnect. When the same PAIR logical route reconnects, Core retries local queue
+admission, and `NONE` uses only the remaining budget from the `SNDTIMEO` snapshot.
 
 After admission, Core keeps no separate replay copy of the application payload. Therefore, if the
-connection disconnects after ID `0` or `ZLINK_SEND_ADMITTED` is established, Core does not send
-the same record again on a new connection. Completion means local queue admission, not confirmation
-that the peer received the record.
+connection disconnects after ID `0` is returned, Core does not send the same record again on a new
+connection. ID `0` means local queue admission, not confirmation that the peer received the record.
+A WRITABLE record is a write-credit notification, not admission of a record.
 
 ## 5. Implementation and contract-test verification requirements
 
@@ -172,8 +189,9 @@ and errno). Each item maps to one test.
 - When a single-part message is sent with `ZLINK_PART_FINAL`, the receiver observes `ZLINK_PART_FINAL` in `*has_more_out_`.
 - For a multipart message, the receiver observes `ZLINK_PART_MORE` on every part before the last and `ZLINK_PART_FINAL` on the last part.
 - If `DONTWAIT FINAL` is admitted immediately, it returns ID `0` and no completion.
-- If Core retains `DONTWAIT FINAL` as pending, exactly one SEND completion is returned for its nonzero ID.
-- If the pending or completion bound prevents Core from retaining `DONTWAIT FINAL`, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and ID `0`.
+- If `DONTWAIT FINAL` is refused because of HWM, byte credit, or a pipe that is not ready, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token; Core does not retain the payload, and the caller resubmits its retained copy.
+- When the single pipe gains write credit, exactly one `ZLINK_COMPLETION_WRITABLE` record (`ZLINK_SEND_ADMITTED`, the same `user_context`, empty `peer_rid`) is returned for that token, and `ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` are level-held until it is read.
+- If the completion reservations are exhausted so that no wait token can be created, the result is `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM` and ID `0`.
 - A `ZLINK_RECV_FLAGS_DONTWAIT` receive with no available data returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 
 **Record atomicity**
@@ -182,14 +200,15 @@ and errno). Each item maps to one test.
 - The next submit after a failure starts the first part of a new record—the entire record retained before the calls can be resubmitted from its first part for a retry.
 
 **Logical reconnect and completion**
-- If the pending target disconnects before admission and the same PAIR logical route reconnects, the record is admitted in FIFO order and the disconnect alone does not produce a TERMINAL completion.
+- If the connection disconnects while a wait token is live and the same PAIR logical route reconnects, the pipe attach publishes the WRITABLE record for that token, and the disconnect alone does not produce a TERMINAL record.
 - `NONE FINAL` waits for reconnect of the same logical route within the snapshotted `SNDTIMEO`; expiration returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion.
-- Disconnecting and reconnecting after ID `0` or `ZLINK_SEND_ADMITTED` does not replay the same application record.
+- Disconnecting and reconnecting after ID `0` does not replay the same application record; the retransmission after a WRITABLE record is a record the application submitted again.
+- Removing the endpoint with `zlink_disconnect()` ends the token with a WRITABLE record carrying `ZLINK_SEND_TERMINAL` and `ENOENT`; socket close ends it with `ZLINK_SEND_TERMINAL` and the lifecycle errno.
 
 **Absence of receive flow state**
 - `zlink_socket_set_receive_flow_state()` returns `ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP` for a PAIR socket, while byte HWM, low water mark, and transport backpressure behavior remain in effect.
 - A PAIR socket's monitor status does not set `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE`.
 - A PAIR socket does not emit `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, or `ZLINK_EVENT_FLOW_STATE_STALE` events.
 
-[Socket Common](README.en.md) owns verification of ownership transfer, pending and completion
+[Socket Common](README.en.md) owns verification of ownership transfer, completion reservation
 bounds, close, and pull completion.

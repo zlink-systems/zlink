@@ -97,10 +97,16 @@ Ordinary `zlink_send_part()`에서는 peer가 받아들인 message에만 선택 
 크기 제한을 넘어 거부된 message는 어느 후보든 같은 이유로 거부하므로 다른 후보로 다시 시도하지
 않는다.
 
-`DONTWAIT FINAL`을 Core가 pending으로 보관하거나 `NONE FINAL`이 admission을 기다릴 때는
-`FINAL`에서 configured endpoint 하나를 고정한다. Ordinary DATA send는 호환되는 양수-weight
-logical route, typed request는 handshake에서 ROUTER로 확인된 양수-weight logical route에서
-고른다. HWM이나 일시적인 disconnect 때문에 기다리는 동안 다른 endpoint로 바꾸지 않는다.
+`NONE FINAL`이 admission을 기다리거나 `DONTWAIT` request가 pending일 때는 `FINAL`에서
+configured endpoint 하나를 고정한다. Ordinary DATA send는 호환되는 양수-weight logical route,
+typed request는 handshake에서 ROUTER로 확인된 양수-weight logical route에서 고른다. HWM이나
+일시적인 disconnect 때문에 기다리는 동안 다른 endpoint로 바꾸지 않는다.
+
+`DONTWAIT FINAL` ordinary send는 endpoint를 고정하지 않는다. 한 번의 admission 시도에서 쓰기
+여유가 있는 후보가 없으면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero wait token을
+반환하며, token의 target은 후보 peer 집합 전체다. 어느 후보든 쓰기 여유를 알리거나 새 peer가
+연결되면 Core는 `ZLINK_COMPLETION_WRITABLE` record를 하나 발행하고, 다시 제출하면 그 시점의
+선택 절차로 peer를 다시 고른다. 연결 직후 peer가 `0`개여도 wait token을 받는다.
 
 2단계의 식별자는 peer routing ID이며 byte 열로 비교한다. routing ID가 없으면 빈 byte 열이므로
 비어 있지 않은 모든 식별자보다 앞선다. 식별자가 같은 peer는, routing ID가 모두 없는 경우를
@@ -149,7 +155,9 @@ submit은 `zlink_submit_result_t`, receive는 `zlink_recv_result_t`, option은
 
 DEALER의 `ZLINK_POLLIN`은 DATA record를 수신할 수 있음을 뜻한다. Ordinary send와 request에서
 `ZLINK_POLLOUT`은 backpressure 뒤 submit을 다시 시도할 가치가 있음을 나타내지만 다음 submit
-성공을 보장하지 않는다. Core가 접수한 operation의 결과는 `ZLINK_POLLCOMPLETION`과
+성공을 보장하지 않는다. 읽지 않은 `ZLINK_COMPLETION_WRITABLE` record가 있는 동안
+`ZLINK_POLLOUT`과 `ZLINK_POLLCOMPLETION`은 level로 유지되며, target별 정확한 신호는 그 record의
+token과 context다. Core가 접수한 operation의 결과는 `ZLINK_POLLCOMPLETION`과
 `zlink_completion_recv()`로 받는다. Request reply는 `ZLINK_POLLIN`에 나타나지 않는다.
 
 ## 6. Receive flow state
@@ -185,6 +193,8 @@ termination도 각각 그대로 전송을 막으며, 어느
 send가 성공하지는 않는다. Send 결과와 readiness는 그대로다. 차단된 non-blocking send는
 계속 `errno == EAGAIN`과 함께 `ZLINK_SUBMIT_BACKPRESSURED`를 보고하고,
 `ZLINK_POLLOUT`은 [§5 Result와 readiness](#5-result와-readiness)가 정의한 의미를 유지한다.
+Remote RESUME는 그 send가 받은 wait token에 `ZLINK_COMPLETION_WRITABLE` record를 발행하는
+wake edge 중 하나다.
 
 Remote PAUSE는 다음 message 경계에서 적용되며 message를 쪼개지 않는다. 첫 byte가 이미
 pipe에 도달한 message와 socket이 첫 part를 이미 수락한 message는 남은 part를 끝까지 보내고,
@@ -260,10 +270,12 @@ Network wire, inproc 전달, CONTROL 크기 경계, multipart defer와 선택한
 Multipart가 pipe를 선택한 뒤 적용값이 `0`이 되어도 그 message는 같은 pipe에서 FINAL까지
 완료한다. 다음 message 선택부터 그 pipe를 제외한다.
 
-Remote weight가 실제로 바뀌면 admission 전 보류된 DONTWAIT send·request를 다시 평가한다.
-Message 시작 전에 weight가 `0`이 되면 completion은 `ZLINK_SEND_TERMINAL`이고
-`send_terminal_errno == ECONNREFUSED`다. `0`에서 양수로 바뀌면 다른 write-activation event 없이
-재시도할 수 있다.
+Remote weight가 실제로 바뀌면 admission 전 pending인 DONTWAIT request와 wait token이 있는
+DONTWAIT send를 다시 평가한다. Message 시작 전에 weight가 `0`이 되면 pending REQUEST의
+completion은 `ZLINK_SEND_TERMINAL`이고 `send_terminal_errno == ECONNREFUSED`다. SEND wait
+token은 weight가 `0`이 되어도 끝나지 않는다. `0`에서 양수로 바뀌면 SEND wait token에
+`ZLINK_COMPLETION_WRITABLE` record를 발행하고, pending REQUEST는 다른 write-activation event
+없이 재시도할 수 있다.
 
 Active duplicate는 standby 동안 자기 최신 값을 보관하고 나중에 같은 pipe가 선택되면 사용한다.
 Application 최대값을 10 byte보다 작게 설정해도 pair readiness·FLOWSTATE·WEIGHT 전달은 막히지
@@ -286,9 +298,15 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part(
 ```
 
 part 소비와 실패 시 record 폐기 규칙은 [§4 Part sequence와 소유권](#4-part-sequence와-소유권)을
-따른다. `DONTWAIT FINAL`이 즉시 admission되면 ID `0`과 completion 없음이고, Core가
-pending으로 보관하면 nonzero ID의 SEND completion 한 건을 만든다. `NONE FINAL`은 호출 진입 시
-`SNDTIMEO`를 snapshot해 admission까지 기다리고 ID `0`으로 끝난다. 상세 result·errno와
+따른다. `DONTWAIT FINAL`은 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`과
+completion 없음이고, 쓰기 여유가 있는 후보 peer가 없으면(HWM·byte credit, remote PAUSE, weight
+`0`, peer `0`개 포함) `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero wait token을 반환하며
+payload는 유지하지 않는다. 어느 후보 peer든 쓰기 여유가 생기면 그 token의
+`ZLINK_COMPLETION_WRITABLE` record(`ZLINK_SEND_ADMITTED`, 같은 `user_context`, 빈 `peer_rid`)를
+정확히 한 번 만들고, 호출자는 보관한 record를 `DONTWAIT`로 다시 제출한다. Token은 WRITABLE
+record, socket close 또는 context 종료(`ZLINK_SEND_TERMINAL`과 lifecycle errno)로만 끝난다.
+`NONE FINAL`은 호출 진입 시 `SNDTIMEO`를 snapshot해 admission까지 기다리고 ID `0`으로 끝난다.
+상세 result·errno와
 context 계약은 [Socket 공통](README.ko.md#part-send와-pending-admission)을 따른다.
 
 ---
@@ -375,10 +393,11 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
   하나로 보이며, FINAL 또는 rollback 뒤에는 가장 최근 값만 반영된다.
 - Application multipart의 첫 part를 받은 뒤 pipe의 remote weight가 `0`이 되어도 같은 pipe가
   FINAL까지 남은 part를 전달하고, 다음 message 선택부터 제외된다.
-- Remote weight 변경은 admission 전 보류된 DONTWAIT SEND를 다시 평가한다. Message
-  시작 전에 weight가 `0`이 되면 completion은 `ZLINK_SEND_TERMINAL`이고
-  `send_terminal_errno == ECONNREFUSED`다. `0`에서 양수로 바뀌면 다른 write-activation event 없이
-  재시도할 수 있다.
+- Remote weight 변경은 admission 전 pending인 DONTWAIT REQUEST와 wait token이 있는 DONTWAIT
+  SEND를 다시 평가한다. Message 시작 전에 weight가 `0`이 되면 pending REQUEST의 completion은
+  `ZLINK_SEND_TERMINAL`이고 `send_terminal_errno == ECONNREFUSED`이며 SEND wait token은 끝나지
+  않는다. `0`에서 양수로 바뀌면 SEND wait token에 WRITABLE record가 발행되고 pending REQUEST는
+  다른 write-activation event 없이 재시도할 수 있다.
 - Application 최대값을 10 byte보다 작게 설정해도 pair readiness·FLOWSTATE와 peer 선택·monitor로
   관찰하는 weight 변경은 막히지 않는다.
 - Reconnect 뒤 peer 선택과 monitor는 새 connection의 현재 weight를 반영한다. Active standby를
@@ -391,8 +410,12 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
 - 같은 peer와 같은 가중치로 설정하고 후보 식별자가 서로 다른 두 process는 같은 선택 순서를 낸다.
 - 재연결한 peer는 누적값 `0`에서 다시 시작하고 정렬 위치는 이전과 같다.
 - 쓰기 여유가 없어 message를 받지 못한 peer는 그 message에 한해서만 후보에서 빠지고, 여유를 다시 알리면 유지된 누적값에서 이어간다.
-- DONTWAIT SEND와 REQUEST가 pending으로 전환되면 FINAL에서 고른 configured endpoint를 고정하고,
+- DONTWAIT REQUEST가 pending으로 전환되면 FINAL에서 고른 configured endpoint를 고정하고,
   HWM이나 reconnect를 기다리는 동안 다른 endpoint로 바꾸지 않는다.
+- DONTWAIT SEND는 endpoint를 고정하지 않는다. 쓰기 여유가 있는 후보가 없으면
+  `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero wait token을 반환하고, 어느 후보든 쓰기
+  여유를 알리거나 새 peer가 연결되면 WRITABLE record 하나가 발행되며, 다시 제출하면 peer를
+  다시 고른다. peer가 `0`개여도 wait token을 받는다.
 
 **Part sequence와 소유권**
 - send API는 성공과 실패 모두에서 `part_`를 소비하고 길이 0인 초기화 상태로 둔다 — 호출 후 같은 `part_`로 전송 전 payload를 다시 읽거나 재전송할 수 없다.
@@ -410,8 +433,9 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
   FINAL에서 고른 configured endpoint는 reconnect 동안 바뀌지 않는다.
 - Request timeout은 local queue admission부터 시작하고 admission 전 pending 시간은 포함하지 않는다.
   Admission 뒤 disconnect는 payload를 replay하지 않으며 남은 monotonic budget을 reset하지 않는다.
-- SEND·REQUEST 공유 completion slot 포화는 flags와 관계없이 즉시
-  `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음이다.
+- SEND wait token과 REQUEST가 공유하는 completion reservation이 포화하면 REQUEST FINAL은 flags와
+  관계없이 즉시 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음이고, DONTWAIT
+  SEND는 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, ID `0`이다.
 - ROUTER가 multipart DATA를 먼저 보내고 같은 request의 REPLY를 보내면 DATA의 `FINAL` part를
   dequeue하기 전에는 `ZLINK_POLLCOMPLETION`이 준비되지 않는다. 마지막 DATA part 뒤 REPLY는
   정확히 한 REQUEST completion으로 나오며 reply payload는 DATA receive에 나타나지 않는다.
@@ -430,6 +454,8 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
 - `ZLINK_POLLIN`은 DATA record를 수신할 수 있음을 뜻하고 request completion은
   `ZLINK_POLLCOMPLETION`으로 구분한다.
 - Backpressure 뒤 `ZLINK_POLLOUT`이 관찰되어도 다음 submit 성공은 보장되지 않는다.
+- 읽지 않은 `ZLINK_COMPLETION_WRITABLE` record가 있는 동안 `ZLINK_POLLOUT`과
+  `ZLINK_POLLCOMPLETION`이 level로 유지되고, `NO_DATA`까지 drain하면 내려간다.
 
 **Receive flow state**
 - `ZLINK_RECEIVE_FLOW_PAUSED`를 두 번 설정해도 pause는 하나이며 두 번째 호출은 아무것도 보내지 않고 성공한다.
@@ -440,7 +466,7 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
   전달하며 public receive나 socket-local completion queue에는 control record가 나타나지 않는다.
 - DEALER-ROUTER reconnect는 새 Application connection 하나로 현재 절대 상태를 다시 보내고,
   이전 connection ID·generation의 REPLY와 FLOWSTATE는 현재 connection에 적용하지 않는다.
-- remote pause를 해제해도 그것만으로 다음 send가 성공하지 않는다. 차단된 non-blocking send는 계속 `errno == EAGAIN`과 함께 `ZLINK_SUBMIT_BACKPRESSURED`를 보고한다.
+- remote pause를 해제해도 그것만으로 다음 send가 성공하지 않는다. 차단된 non-blocking send는 계속 `errno == EAGAIN`과 함께 `ZLINK_SUBMIT_BACKPRESSURED`와 wait token을 반환하고, remote RESUME는 그 token의 WRITABLE record를 발행한다.
 - remote PAUSE는 다음 message 경계에서 적용된다 — 첫 byte가 이미 pipe에 도달했거나 첫 part가 이미 수락된 message는 남은 part를 끝까지 보낸다.
 - [Monitoring](../06-monitoring.ko.md) status snapshot에서 현재 pause 상태로 보는 peer 수, 적용한 pause·resume 전이 수, stale로 거부한 frame 수, 가장 최근에 끝난 pause의 길이를 관찰할 수 있다.
 

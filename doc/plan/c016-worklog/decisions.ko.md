@@ -840,3 +840,99 @@ codex sol ultra(계정 리셋 후 재실행, ~1h50m). cpp golden `2f1de0b56d` 3�
 **검증(권위=별도 프로세스+redis ZoneWorld 시나리오)**: .NET B8 3/3·G4 join 3/3(fresh probe 0/3=**D-084 .NET 전용**, 추격 안 함) / **Java B8 3/3·G4 완전 3/3**(fresh-owner proof) / **Node B8 3/3·G4 완전 3/3**(16 fresh actor). framework 유닛/contract는 **before=after 동일**(신규 회귀 0): .NET contract 73/4·unit 환경(STREAM bind/StartAsync 포트경합) pre-existing, Java M6A 2·doc-regression 1 pre-existing, Node matrix 동일.
 **D-084 교차 실증**: .NET만 fresh probe 실패, Java·Node 동일 경로 완전 통과 → **D-084는 Core/크로스언어 아닌 .NET Gateway state-lane 전용 확정**.
 **별도 결함(추격 안 함, 기록만)**: Node `sample-regression`(browser SupportChat 자가검증) 1건 pre-existing(before=after), ZoneWorld 무관. **후속 nit**: node `peer.state===3` 매직넘버(ADMITTED 상수화 권장). **규율**: 1차 job의 7파일 sprawl 재발 없음, codex가 포트오염 자가규명·part3 spec-correctness(06-monitoring + node/java 선례) 확인. 요약 `zlink-work/c016/zoneworld-xlang-v2-summary.md`.
+
+## D-B71 (2026-09-04 11:40, 머신 B) multi DEALER_DEALER 큰 메시지 throughput 붕괴·정지 회귀
+사용자 보고(4096B 107k msg/s·latency 930ms, 65536B 정지) 재현: main에서 65536B timeout(200s), baseline 0.15.1은 85k msg/s 10초 완료.
+client main thread가 stop 토큰 blocking send(SNDTIMEO 없음)에서 futex 대기, server는 종료 → 근본은 큰 메시지 throughput 붕괴.
+이분(라이브러리만 빌드): A 머지 전 504d39fc6e·B 머지 전 73cdc30882·머지 후·현재 566451ca06(A의 두-poller lost-wake 수정 포함)
+모두 정지 → 원인은 v0.15.1..1ac16a22b2의 Core 커밋 7개(1차 1344022a3e / 2차 f3be895b3f 핫패스 수정) 범위. 이 cell은 캠페인 내내
+아무도 측정하지 않았음(multi는 1024B만) — 70 cell 전체 판정을 미룬 결정(D-B70)의 비용. job c016-dd-stall(sol ultra, 1.5h).
+A의 c745d56684 scripts/build-core.sh(dev=no-LTO/release=LTO) 채택, CONTRIBUTING에 반영.
+
+## D-B72 (2026-09-04 12:10, 머신 B, 사용자 결정) HWM/credit wake 유실은 구조적으로 불가능하게 + 회귀 테스트 3층
+1단계 job 중간 결과: 64 KiB 정지의 최초 회귀는 phase-1보다 앞(bb66e85376 pull-completion 전환 또는 04ecca54d1 blocking send
+비용 절감 — "waiter 등록을 admission 실패 뒤로" 옮겨 check→register 사이에 reader의 LWM 통과가 끼면 wake 유실), f3be895b3f는
+4 KiB까지 악화시킨 별도 단계. 사용자: "운영에서 한 번이라도 발생하면 치명적, 근본적으로 발생 안 되게 + 회귀 테스트 확실히".
+결정: (1) 1단계 job은 원인 확정·최소 수정·회귀 테스트, (2) 2단계 job(briefs/hwm-wait-primitive.b.prompt): writer 대기를
+등록→fence→재확인→park 원시 연산 하나로 봉인(모든 writer 경로 통합), reader wake 판단을 그 짝으로, park는 기한부+재확인
+(안전망), 회귀 테스트 3층(원시 연산 순서 강제 단위 테스트 / public API 100-sender 64K·256K 스트레스 통합 테스트 / multi
+one-way 4-size 스크리닝을 perf gate에 편입), 스펙 §4 문안은 승인 후 반영.
+
+## D-B73 (2026-09-04 12:25, 머신 B, 사용자 결정) 큰 메시지 정체 회귀 검증은 ctest 스트레스 대신 CI에서 perf multi 스모크
+100-sender ctest 스트레스는 GitHub Actions 자원(2~4 vCPU)에서 flake 위험 → 기존 multi runner를 재사용: `ci_multi_smoke.sh`
+(CCU=8·2초·tcp, DEALER_DEALER/SENDSEND/PUBSUB × 4K·64K, 판정은 timeout 내 완료+RESULT 존재). 로컬·nightly는 CCU=100·4 size.
+벤치 stop 토큰 blocking send에 기한 부여. ctest에는 (a) 원시 연산 순서-강제 단위 테스트만. CI 워크플로 편집은 감독관.
+
+## D-B74 (2026-09-04 12:50, 머신 B, 사용자 제안) 2단계를 나눠 벤치·CI 쪽은 worktree에서 병렬
+1단계(c016-dd-stall) 확정: 최초 불량 커밋 bb66e85376(pull-completion 전환; DONTWAIT FINAL이 HWM에서 pending 수락+SEND completion
+→ completion을 drain하지 않는 multi one-way 벤치가 backlog를 무한 증폭) + 그와 별개로 public zlink_send(DONTWAIT)만으로 100
+client×64K에서 POLLOUT 회복 80/100 = byte-credit wake 20% 유실(Core 버그, 계측 중). 2a(worktree zlink-wt-bench, sol high,
+bindings/c/perf만): one-way runner completion drain·in-flight 상한·latency in-flight 1 구간, stop 토큰 기한, ci_multi_smoke.sh.
+2b(main, 1단계 뒤): writer 대기 원시 연산 통합·안전망·순서-강제 단위 테스트.
+
+## D-B75 (2026-09-04 13:30, 머신 B) 1단계 결론 — Core wake 유실 없음, 정지는 벤치의 completion 미drain
+계측으로 반증: 10초 창에서 "POLLOUT 미회복 20~40%"는 창을 server drain 시작 시점에 걸어 늦게 LWM에 닿은 client를 유실로 오분류한 것.
+30초 창에서 100/100 회복, 미회복군 mailbox에 activate_write 신호 존재. 결정적 회귀 테스트 추가(84c1f099d4: persistent poller 100개
+BUSY 확인 → drain → 마지막 LWM 통과 시점 기준 2초 내 POLLOUT 회복). Core 소스 변경 없음. 남은 확인: 정정 벤치(2a)로 64 KiB
+throughput이 baseline 수준인지 — 아니면 server 수신 경로(100 pipe × 64K)의 처리량 회귀를 별도 job으로. 2b(구조 수정)는 wake
+유실이 반증됐으므로 "기한부 park 안전망 + 순서-강제 단위 테스트"만 남기고 원시 연산 통합은 보류(필요성 재판단).
+
+## D-B76 (2026-09-04 14:30, 머신 B) 벤치 계약 정정 커밋·CI 스모크, 64 KiB 정지 해소 확인
+cfc284f2e4: multi one-way runner를 pull-completion 계약대로(POLLCOMPLETION drain, two-phase, bounded stop) + ci_multi_smoke.sh +
+Linux CI 단계(no-LTO 라이브러리, CCU=8, 4K/64K, 완료·RESULT 존재만 판정). CCU=100 비교: DEALER_DEALER 64K 96.2k/94.5k=1.02,
+SENDSEND 64K 37.6k/29.7k=1.27 → 정지 해소·처리량 정상. 남은 것: 4096B DEALER_DEALER 0.78(1차 벤치의 pending 상한 1이 HWM당
+256개 size에서 포화 저해 — 벤치 정책), PUBSUB 지표 의미 불일치(옛 벤치는 drop 포함 발행 수 → 비교 불가). 2차 벤치 job
+c016-perf-multi-r2(sol ultra + fast tier). 2b(구조 수정)는 wake 유실 반증으로 보류(D-B75).
+
+## D-B77 (2026-09-04 14:15, 머신 B) Windows CI 회귀 발견(A 인계)
+build.yml 수동 실행(run 33838754704, cfc284f2e4)에서 Build Windows x64 실패: test_zmp_metadata의
+test_paired_incomplete_lane_fence_timeout_and_fresh_pair(test_zmp_metadata.cpp:1908, "Expected TRUE Was FALSE", Forced closure of
+1 sockets). 마지막 성공 Windows 실행은 v0.15.1(ba78905c3d, 9/1)이며 그 뒤 첫 실행이라 v0.15.1..main 사이의 Windows 전용 회귀.
+테스트는 A의 single-lane 커밋 8b40b3feb2가 도입. Linux ctest는 140/140 통과. Windows 머신이 없어 B에서 재현 불가 → A 인계.
+Linux x64 job(스모크 단계 포함) 결과는 별도.
+- (D-B77 보강) 실패 단언은 `wait_for_transport_pair_admission(server, fresh_alias, 2)`(1908행): lone lane이 fence timeout으로 정리된 뒤
+  같은 peer RID의 새 pair(alias+1)가 admission되는지 — Windows에서만 미관측. 후보: ROUTER 첫 activation 채택 fence(B 90b58fd213,
+  route-binding token 조건)와 CONNECT_ROUTING_ID alias 바인딩(A e3d5c5b79f)의 상호작용, 또는 Windows 타이머/소켓 정리 타이밍.
+  Linux에서는 통과하므로 Windows 재현 가능한 머신에서 판정 필요.
+
+## D-B78 (2026-09-04 14:40, 머신 B, 사용자 판정) DONTWAIT 무제한 pending은 요청되지 않은 의미 변경 → 0.15.1 계약 복원
+사용자: "변경한 건 콜백→pull뿐, 그런 의미 변경을 한 적 없다". 대조: v0.15.1 스펙 06-dealer:340 "HWM이면 ZLINK_SUBMIT_BACKPRESSURED",
+무제한 pending은 별도 async send API(SEND_PENDING_MAX_*, 옵트인)의 개념. 0.16.0 전환 커밋 bb66e85376 + 스펙 f68a74d34d(9/2, A)가
+일반 zlink_send(DONTWAIT)의 HWM 거절을 "pending 수락 + completion"(기본 무제한)으로 바꿈 — 승인 기록 없음, 같은 문서 116·216행과
+모순. 결정: Core를 0.15.1 의미로 복원(DONTWAIT FINAL이 물리 HWM에 걸리면 BACKPRESSURED/EAGAIN/ID 0; pending(nonzero ID +
+completion)은 endpoint 미연결·재연결 대기 등 logical wait에만; PENDING_MAX 기본값도 HWM 상당으로 유한화 검토), 스펙 375~389행·
+06-dealer 문장 정정(감독관 커밋), 벤치는 "Core가 거절할 때까지 제출 + completion drain"으로 복귀. job c016-dontwait-hwm(sol ultra+fast).
+- (D-B78 정정, 사용자 판정 14:50) "async API는 원래 zlink_send에 있어야 할 기능을 별도 함수로 뺀 것이라 합치는 게 맞다" →
+  DONTWAIT의 pending 수락 의미는 **의도된 계약**. 감독관이 승인 없이 띄운 복원 job(c016-dontwait-hwm)은 즉시 중단·편집 원복,
+  브리프 CANCELLED. 남는 것은 스펙 내 모순 문장(README 116·216행의 "HWM 도달 시 BACKPRESSURED")을 의도된 계약에 맞게
+  정리하는 문서 gap과, 벤치가 계약대로 completion을 drain하며 Core를 포화시키는 것(2차 벤치 job).
+
+## D-B79 (2026-09-04 15:40, 머신 B, 사용자 결정) DONTWAIT 계약 확정 — Core 보관 큐 제거, HWM은 BACKPRESSURED + POLLOUT 재전송
+사용자 의도 확정: async 합치기의 목적은 "HWM 해제 신호를 기다리는 스레드/재전송 로직을 응용에서 Core로 옮기는 것"이지 패킷 보관이
+아님. 코루틴 모델: DONTWAIT send → HWM이면 BACKPRESSURED/EAGAIN(패킷은 호출자 소유) → 코루틴은 POLLOUT(level) 대기 → 깨어나면 같은
+패킷 재전송. completion queue는 접수된 작업의 결과(REQUEST reply/timeout 등)에만. 0.15.1 async의 무제한 pending 큐와 0.16.0의
+일반화된 pending 보관은 제거. blocking(NONE) send는 기존대로(호출 스레드 park, SNDTIMEO). 분담: Core+bindings API 수정·검증 =
+B(배포 제외), framework 재전송 전환 = A. 정책 문서 §1.2는 옛 모델(EAGAIN→POLLOUT 재전송) 그대로 유효.
+- (D-B79 확정 B, 사용자 15:50) 헛깨움 불허 → 대상 단위 정확 신호 필요. 계약: DONTWAIT가 HWM/admission 불가면 BACKPRESSURED/EAGAIN +
+  **대기 토큰(nonzero completion ID, user_context 기억)**, payload는 호출자 소유(Core는 토큰·대상 pipe·context만). 대상 pipe에 credit이
+  오면 Core가 completion queue에 `WRITABLE` completion(토큰·context·RID)을 넣고 poller에 POLLOUT으로 알림 → 앱은 completion queue를
+  NO_DATA까지 pull해 해당 코루틴만 재개·재전송. DEALER는 후보 집합 단위, ROUTER/STREAM은 RID 단위, PAIR 단일. PUB publish는 completion
+  비대상. REQUEST 현행 유지. 콜백 재도입 안 함. A안 job 중단, 공통 부분(payload 보관 제거·REQUEST 분리) 위에서 B로 계속.
+
+## D-B80 (2026-09-04 18:20, 머신 B) 계약 B Core 구현 완료 — 리뷰 후속 3건, spec gap 감사, gate 결과
+Core job(c016-dontwait-writable, sol ultra+fast)은 1시간 57분에 감독관이 중단(상한 초과; 계약 구현은 40분 내 완료, 나머지는 교차
+감사에서 나온 경합 수정·REQUEST 픽스처 정정·반복 gate). 감독관 리뷰(사용자 승인) 후속 3건은 감독관이 직접 반영:
+1. ROUTER·STREAM에서 route가 없는 RID의 DONTWAIT는 토큰이 아니라 즉시 `NOT_CONNECTED`(EHOSTUNREACH), 토큰 없음
+   (`xsend_writable_target_known`). route는 있으나 미준비(pair 미준비·weight 0·HWM)는 토큰. PAIR/DEALER peer 0개는 토큰 유지.
+   job이 바꿨던 `test_helper_ownership` 기대값을 NOT_CONNECTED로 되돌리고 STREAM 케이스 추가.
+2. 내부 테스트 훅 `test_set_send_writable_token_linked_hook`과 그 wake-invariant 테스트 제거(CONTRIBUTING §4: 통합 테스트는 public
+   API만). 등록→fence→recheck 창은 public API로 결정적 재현 불가 → spec gap 후보로 기록(05-polling §3 lost-wake 규칙에 서술로 고정).
+3. spec gap 감사(서브에이전트, 읽기 전용)에서 나온 구현 수정 1건: `zlink_disconnect_rid`·endpoint 종료로 대상을 명시적으로 제거하면
+   그 대상의 대기 토큰을 `WRITABLE`+`ZLINK_SEND_TERMINAL`/`ENOENT`로 즉시 완료(코루틴 영구 대기 방지). phase3 ROUTER 테스트에 고정.
+브리프 밖 런타임 변경 2건(유지, 감사 결과 스펙 충돌 없음): inproc connect-before-bind의 DEALER/ROUTER attach를 connector mailbox
+owner로 직렬화(`ctx_inproc_registry.cpp`, 교차 소켓 상태 직접 변경 제거), pipe credit/flow 회복 마커를 `_out_sync` 아래에서 상태가
+여전히 활성일 때만 소비(ABA 창 폐쇄, wake 경로 전용·per-message 아님).
+Gate: dev ctest 139/140(hotpath_gate만 FAIL — dev 트리(LTO 없음)와 LTO 기준값의 설정 차이, 같은 dev 설정의 main HEAD 대비 셀별
++0.10~0.45%); release-gate(LTO) 전체 ctest 139/140 + **hotpath_gate PASS**(실패 1건은 라이브러리 스냅샷이 3번 수정 이전이라 새
+assertion이 timeout — 최종 코드는 dev에서 phase3·helper_ownership·wake_invariants 5회 green). 스펙 14파일 갱신(README·pair·dealer·
+router·stream·05-polling·10-hot-path, ko/en) 별도 커밋. WSL 재부팅 1회(메모리 11 GB, 병렬 빌드 → 이후 JOBS 제한).

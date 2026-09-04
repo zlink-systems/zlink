@@ -101,10 +101,17 @@ peer returns to the candidate set when it reports write capacity again. A messag
 exceeding a size limit is not retried against another candidate, because every candidate would
 reject it for the same reason.
 
-When Core retains a `DONTWAIT FINAL` as pending, or a `NONE FINAL` waits for admission, FINAL fixes
-one configured endpoint. Ordinary DATA selects from compatible positive-weight logical routes;
-typed requests select from positive-weight logical routes confirmed as ROUTER during handshake.
-The operation does not change to another endpoint while waiting for HWM or a temporary disconnect.
+When a `NONE FINAL` waits for admission, or a `DONTWAIT` request is pending, FINAL fixes one
+configured endpoint. Ordinary DATA selects from compatible positive-weight logical routes; typed
+requests select from positive-weight logical routes confirmed as ROUTER during handshake. The
+operation does not change to another endpoint while waiting for HWM or a temporary disconnect.
+
+A `DONTWAIT FINAL` ordinary send pins no endpoint. If no candidate has write capacity in its single
+admission attempt, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token
+whose target is the whole candidate peer set. When any candidate reports write capacity or a new
+peer connects, Core publishes one `ZLINK_COMPLETION_WRITABLE` record, and the resubmission selects a
+peer again with the selection procedure at that time. A DEALER with `0` peers right after connect
+still receives a wait token.
 
 The identifier in step 2 is the peer routing ID, compared as a byte string. An absent routing ID is
 an empty byte string, so it sorts before every non-empty identifier. Peers with the same identifier,
@@ -160,9 +167,11 @@ defines the mapping between each result and `zlink_errno()`.
 
 DEALER `ZLINK_POLLIN` means that a DATA record can be received. For ordinary sends and
 requests, `ZLINK_POLLOUT` indicates that retrying a submit after backpressure is worthwhile, but it
-does not guarantee that the next submit will succeed. Results for operations retained by Core are
-received through `ZLINK_POLLCOMPLETION` and `zlink_completion_recv()`. Request replies do not appear
-under `ZLINK_POLLIN`.
+does not guarantee that the next submit will succeed. While an unread `ZLINK_COMPLETION_WRITABLE`
+record exists, `ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` are level-held, and the precise per-target
+signal is that record's token and context. Results for operations retained by Core are received
+through `ZLINK_POLLCOMPLETION` and `zlink_completion_recv()`. Request replies do not appear under
+`ZLINK_POLLIN`.
 
 ## 6. Receive flow state
 
@@ -197,7 +206,8 @@ transport wait, and termination each continue to block transmission; a send is a
 none of them applies. Clearing remote pause therefore does not by itself make the next send succeed.
 Send results and readiness are unchanged. A blocked non-blocking send still reports
 `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN`, and `ZLINK_POLLOUT` retains the meaning defined
-in [§5 Results and readiness](#5-results-and-readiness).
+in [§5 Results and readiness](#5-results-and-readiness). A remote RESUME is one of the wake edges
+that publishes a `ZLINK_COMPLETION_WRITABLE` record for the wait token that send received.
 
 A remote PAUSE takes effect at the next message boundary and does not split a message. A message
 whose first byte has already reached the pipe, and a message whose first part the socket has already
@@ -279,9 +289,11 @@ creates a weight record on public receive or the socket-local completion queue.
 If the applied value becomes `0` after a multipart has selected a pipe, that message completes
 through FINAL on the same pipe. The next message selection excludes it.
 
-An actual remote-weight change re-evaluates an admission-pending DONTWAIT send or request for its exact
-pipe. If the weight becomes `0` before the message begins, the completion is `ZLINK_SEND_TERMINAL`
-with `send_terminal_errno == ECONNREFUSED`; a change from `0` to a positive value permits retry without
+An actual remote-weight change re-evaluates an admission-pending DONTWAIT request and a DONTWAIT send
+that holds a wait token. If the weight becomes `0` before the message begins, the pending REQUEST
+completion is `ZLINK_SEND_TERMINAL` with `send_terminal_errno == ECONNREFUSED`; a SEND wait token
+does not end when the weight becomes `0`. A change from `0` to a positive value publishes a
+`ZLINK_COMPLETION_WRITABLE` record for the SEND wait token, and a pending REQUEST may retry without
 another write-activation event.
 
 An active duplicate keeps its own latest value while standby and uses it if that same pipe is
@@ -306,8 +318,14 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part(
 
 Part consumption and record discard on failure follow
 [§4 Part sequences and ownership](#4-part-sequences-and-ownership).
-A `DONTWAIT FINAL` that is admitted immediately has ID `0` and no completion. If Core retains
-it as pending, it has a nonzero ID and produces one SEND completion. `NONE FINAL` snapshots
+A `DONTWAIT FINAL` makes exactly one admission attempt. If it is admitted immediately, it has ID
+`0` and no completion. If no candidate peer has write capacity (HWM, byte credit, remote PAUSE,
+weight `0`, and `0` peers included), it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a
+nonzero wait token, and Core does not retain the payload. When any candidate peer gains write
+capacity, Core produces exactly one `ZLINK_COMPLETION_WRITABLE` record for that token
+(`ZLINK_SEND_ADMITTED`, the same `user_context`, empty `peer_rid`), and the caller resubmits its
+retained record with `DONTWAIT`. The token ends only with the WRITABLE record, or with socket close
+or context termination (`ZLINK_SEND_TERMINAL` and the lifecycle errno). `NONE FINAL` snapshots
 `SNDTIMEO` on entry, waits through admission, and finishes with ID `0`. [Socket Common](README.en.md#part-send-and-pending-admission)
 owns the detailed result, errno, and context contract.
 
@@ -401,10 +419,11 @@ Verify the following using only the public surface: DEALER option set/get, `zlin
 - If a pipe's remote weight becomes `0` after the first part of an Application multipart is
   accepted, the same pipe carries every remaining part through FINAL and is excluded starting with
   the next message selection.
-- A remote-weight change re-evaluates an admission-pending DONTWAIT SEND for its exact pipe:
-  if the weight becomes `0` before the message begins, the completion is `ZLINK_SEND_TERMINAL` with
-  `send_terminal_errno == ECONNREFUSED`; a change from `0` to a positive value permits retry without
-  another write-activation event.
+- A remote-weight change re-evaluates an admission-pending DONTWAIT REQUEST and a DONTWAIT SEND
+  that holds a wait token: if the weight becomes `0` before the message begins, the pending REQUEST
+  completion is `ZLINK_SEND_TERMINAL` with `send_terminal_errno == ECONNREFUSED`, and the SEND wait
+  token does not end; a change from `0` to a positive value publishes a WRITABLE record for the SEND
+  wait token and permits the pending REQUEST to retry without another write-activation event.
 - Setting an Application maximum below 10 bytes does not prevent pair readiness, FLOWSTATE, or
   weight changes observed through peer selection and monitoring.
 - After reconnect, peer selection and monitoring reflect the current weight on the new connection.
@@ -418,8 +437,12 @@ Verify the following using only the public surface: DEALER option set/get, `zlin
 - Two processes configured with the same peers and weights produce the same selection order when their candidate identifiers are distinct.
 - A reconnected peer starts again with accumulator `0` and retains its previous sorting position.
 - A peer that cannot accept a message because it has no write capacity is excluded only for that message and continues from its retained accumulator when it reports capacity again.
-- When a DONTWAIT SEND or REQUEST becomes pending, it fixes the configured endpoint selected at
-  FINAL and does not change to another endpoint while waiting for HWM or reconnect.
+- When a DONTWAIT REQUEST becomes pending, it fixes the configured endpoint selected at FINAL and
+  does not change to another endpoint while waiting for HWM or reconnect.
+- A DONTWAIT SEND pins no endpoint. If no candidate has write capacity, it returns
+  `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token; when any candidate reports
+  write capacity or a new peer connects, one WRITABLE record is published, and the resubmission
+  selects a peer again. A DEALER with `0` peers still receives a wait token.
 
 **Part sequences and ownership**
 
@@ -439,8 +462,10 @@ Verify the following using only the public surface: DEALER option set/get, `zlin
   configured endpoint selected at FINAL remains fixed during reconnect.
 - The request timeout starts at local queue admission and excludes time pending before admission. A
   disconnect after admission neither replays the payload nor resets the remaining monotonic budget.
-- Exhausting the shared SEND and REQUEST completion slots immediately returns
-  `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion, regardless of flags.
+- When the completion reservations shared by SEND wait tokens and REQUEST are exhausted, a REQUEST
+  FINAL immediately returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion
+  regardless of flags, and a DONTWAIT SEND returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM` and
+  ID `0`.
 - If the ROUTER sends multipart DATA before the REPLY for the same request,
   `ZLINK_POLLCOMPLETION` is not ready until the DATA `FINAL` part is dequeued. After the last DATA
   part, the REPLY appears as exactly one REQUEST completion, and its payload does not appear in DATA
@@ -463,6 +488,8 @@ Verify the following using only the public surface: DEALER option set/get, `zlin
 - `ZLINK_POLLIN` means that a DATA record can be received; request completion is distinguished by
   `ZLINK_POLLCOMPLETION`.
 - Observing `ZLINK_POLLOUT` after backpressure does not guarantee that the next submit will succeed.
+- While an unread `ZLINK_COMPLETION_WRITABLE` record exists, `ZLINK_POLLOUT` and
+  `ZLINK_POLLCOMPLETION` are level-held, and draining through `NO_DATA` clears them.
 
 **Receive flow state**
 
@@ -475,7 +502,7 @@ Verify the following using only the public surface: DEALER option set/get, `zlin
 - DEALER-ROUTER reconnect resends the current absolute state over one new Application connection;
   REPLY and FLOWSTATE from the previous connection ID or generation do not apply to the current
   connection.
-- Clearing remote pause does not by itself make the next send succeed. A blocked non-blocking send continues to report `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN`.
+- Clearing remote pause does not by itself make the next send succeed. A blocked non-blocking send continues to return `ZLINK_SUBMIT_BACKPRESSURED` with `errno == EAGAIN` and a wait token, and the remote RESUME publishes the WRITABLE record for that token.
 - Remote PAUSE takes effect at the next message boundary—a message whose first byte has already reached the pipe or whose first part has already been accepted sends all remaining parts.
 - The [Monitoring](../06-monitoring.en.md) status snapshot exposes the number of peers currently seen as paused, the numbers of applied pause and resume transitions, the number of frames rejected as stale, and the duration of the most recently completed pause.
 

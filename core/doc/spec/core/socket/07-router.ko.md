@@ -116,7 +116,8 @@ ZLINK_EXPORT zlink_config_result_t zlink_get_router_option(
 담기지 않는 계약은 다음과 같다.
 
 - `ZLINK_ROUTER_OPT_MANDATORY`가 양수이면 연결된 pipe가 없는 routing ID의 directed submit을
-  `ZLINK_SUBMIT_NOT_CONNECTED`로 실패시킨다.
+  `ZLINK_SUBMIT_NOT_CONNECTED`로 실패시킨다. route가 전혀 없는 routing ID의 `DONTWAIT FINAL`은
+  이 option 값과 관계없이 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`이며 wait token을 만들지 않는다.
 - `ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID`는 다음 `zlink_connect()`로 만든 pipe를 식별할 local
   alias를 설정하며, 각 connect 전에 설정한다.
 
@@ -144,10 +145,12 @@ Network wire, inproc 전달, CONTROL 크기 경계, multipart defer와 선택한
 Multipart가 pipe를 선택한 뒤 적용값이 `0`이 되어도 그 message는 같은 pipe에서 FINAL까지
 완료한다. 다음 message 선택부터 그 pipe를 제외한다.
 
-Remote weight가 실제로 바뀌면 admission 전 보류된 DONTWAIT send·request를 다시 평가한다.
-Message 시작 전에 weight가 `0`이 되면 completion은 `ZLINK_SEND_TERMINAL`이고
-`send_terminal_errno == ECONNREFUSED`다. `0`에서 양수로 바뀌면 다른 write-activation event 없이
-재시도할 수 있다.
+Remote weight가 실제로 바뀌면 admission 전 pending인 DONTWAIT request와 wait token이 있는
+DONTWAIT send를 다시 평가한다. Message 시작 전에 weight가 `0`이 되면 pending REQUEST의
+completion은 `ZLINK_SEND_TERMINAL`이고 `send_terminal_errno == ECONNREFUSED`다. SEND wait
+token은 weight가 `0`이 되어도 끝나지 않는다. `0`에서 양수로 바뀌면 그 RID의 SEND wait token에
+`ZLINK_COMPLETION_WRITABLE` record를 발행하고, pending REQUEST는 다른 write-activation event
+없이 재시도할 수 있다.
 
 Active duplicate는 standby 동안 자기 최신 값을 보관하고 나중에 같은 pipe가 선택되면 사용한다.
 Application 최대값을 10 byte보다 작게 설정해도 pair readiness·FLOWSTATE·WEIGHT 전달은 막히지
@@ -169,10 +172,20 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
 `target_rid_`의 peer에 일반 raw multipart part를 보낸다. 모든 part에 같은 target을 사용해야 한다.
 `flags_`는 `ZLINK_SEND_FLAGS_NONE` 또는 `ZLINK_SEND_FLAGS_DONTWAIT`다. `NONE FINAL`은
 `SNDTIMEO`를 snapshot해 같은 logical RID의 admission과 reconnect를 기다리고 ID `0`으로 끝난다.
-`DONTWAIT FINAL`은 즉시 admission되면 ID `0`, Core가 pending으로 보관하면 nonzero ID의 SEND
-completion을 만든다. Admission 전에는 같은 RID에만 다시 시도하고 ID `0` 또는
-`ZLINK_SEND_ADMITTED` 뒤에는 payload를 replay하지 않는다. Ownership과 exact result·errno는
-[Socket 공통](README.ko.md#part-send와-pending-admission)을 따른다.
+`DONTWAIT FINAL`은 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`과 completion
+없음이다. HWM·byte credit 때문에 admission하지 못하거나 route는 있지만 아직 준비되지
+않았으면(transport pair 미준비, weight `0`) `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID에
+묶인 nonzero wait token을 반환하며 payload는 유지하지 않는다. `target_rid_`에 route가 전혀
+없으면 `ZLINK_ROUTER_OPT_MANDATORY` 값과 관계없이 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`이고 token을
+만들지 않는다. 같은 RID에 write credit이 생기면(peer drain, reconnect·route 채택·standby 승격,
+weight `0`→양수) Core는 그 token의 `ZLINK_COMPLETION_WRITABLE` record를 정확히 하나 만들며
+`send_result == ZLINK_SEND_ADMITTED`, `peer_rid`는 제출한 RID다. 다른 RID의 credit은 이 token을
+깨우지 않는다. 호출자는 보관한 record를 같은 RID에 `DONTWAIT`로 다시 제출한다.
+`zlink_disconnect_rid()`로 그 RID를 명시적으로 제거하면 token은
+`ZLINK_SEND_TERMINAL`+`ENOENT`인 WRITABLE record로 끝나고, socket close·context 종료는
+`ZLINK_SEND_TERMINAL`과 lifecycle errno로 끝난다. ID `0` 뒤에는 payload를 replay하지 않는다.
+Ownership과 exact result·errno는 [Socket 공통](README.ko.md#part-send와-pending-admission)을
+따른다.
 
 ## 7. Raw request submit
 
@@ -320,7 +333,9 @@ ROUTER의 `ZLINK_POLLIN`은 application queue에 admission된 DATA·REQUEST 또�
 않는다. Ordinary send와 request에서
 `ZLINK_POLLOUT`은 [backpressure](../glossary.ko.md#backpressure)(수신 측이 따라오지 못해 추가
 제출이 제한되는 상태) 뒤 submit을 다시 시도할 가치가 있음을 나타내지만 다음 submit
-성공을 보장하지 않는다. Core가 접수한 SEND·REQUEST 결과는 `ZLINK_POLLCOMPLETION`과
+성공을 보장하지 않는다. 읽지 않은 `ZLINK_COMPLETION_WRITABLE` record가 있는 동안
+`ZLINK_POLLOUT`과 `ZLINK_POLLCOMPLETION`은 level로 유지되며, RID별 정확한 신호는 그 record의
+token·`peer_rid`다. Core가 접수한 SEND·REQUEST 결과는 `ZLINK_POLLCOMPLETION`과
 `zlink_completion_recv()`로 받는다. Reply submit은 completion을 만들지 않는다.
 
 ## 11. Receive flow state
@@ -398,10 +413,11 @@ test 하나로 이어진다.
   하나로 보이며, FINAL 또는 rollback 뒤에는 가장 최근 값만 반영된다.
 - Application multipart의 첫 part를 받은 뒤 pipe의 remote weight가 `0`이 되어도 같은 pipe가
   FINAL까지 남은 part를 전달하고, 다음 message 선택부터 제외된다.
-- Remote weight 변경은 같은 logical RID에 admission 전 pending인 DONTWAIT SEND를 다시 평가한다.
-  Message 시작 전에 weight가 `0`이 되면 completion은 `ZLINK_SEND_TERMINAL`이고
-  `send_terminal_errno == ECONNREFUSED`다. `0`에서 양수로 바뀌면 다른 write-activation event 없이
-  재시도할 수 있다.
+- Remote weight 변경은 같은 logical RID에 admission 전 pending인 DONTWAIT REQUEST와 wait token이
+  있는 DONTWAIT SEND를 다시 평가한다. Message 시작 전에 weight가 `0`이 되면 pending REQUEST의
+  completion은 `ZLINK_SEND_TERMINAL`이고 `send_terminal_errno == ECONNREFUSED`이며 SEND wait
+  token은 끝나지 않는다. `0`에서 양수로 바뀌면 그 RID의 SEND wait token에 WRITABLE record가
+  발행되고 pending REQUEST는 다른 write-activation event 없이 재시도할 수 있다.
 - Application 최대값을 10 byte보다 작게 설정해도 pair readiness·FLOWSTATE와 peer 선택·monitor로
   관찰하는 weight 변경은 막히지 않는다.
 - Reconnect 뒤 peer 선택과 monitor는 새 connection의 현재 weight를 반영한다. Active standby를
@@ -431,8 +447,11 @@ test 하나로 이어진다.
 
 **Directed submit**
 - `zlink_send_part_rid()`의 `NONE FINAL`은 `SNDTIMEO` 안에서 같은 logical RID의 local admission을 기다리고 ID `0`과 completion 없음으로 끝난다.
-- `DONTWAIT FINAL`이 즉시 admission되면 ID `0`, Core pending으로 접수되면 nonzero ID를 반환하고 정확히 한 SEND completion을 만든다.
-- Admission 전 reconnect는 같은 logical RID만 다시 시도하고 ID `0` 또는 `ZLINK_SEND_ADMITTED` 뒤에는 payload를 replay하지 않는다.
+- `DONTWAIT FINAL`이 즉시 admission되면 ID `0`과 completion 없음이다. HWM·credit 또는 준비되지 않은 route 때문에 거절되면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID의 nonzero wait token이며 payload는 유지되지 않는다.
+- route가 없는 RID의 `DONTWAIT FINAL`은 `ZLINK_ROUTER_OPT_MANDATORY`와 관계없이 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`, ID `0`이고 token이 없다.
+- 같은 RID에 write credit이 생기면 그 token의 `ZLINK_COMPLETION_WRITABLE` record(`ZLINK_SEND_ADMITTED`, `peer_rid`는 제출한 RID)를 정확히 한 번 반환하고 다른 RID의 credit은 이 token을 깨우지 않는다. 읽기 전까지 `ZLINK_POLLOUT`이 level로 유지된다.
+- `zlink_disconnect_rid()`로 RID를 제거하면 그 RID의 token은 `ZLINK_SEND_TERMINAL`+`ENOENT`인 WRITABLE record로 끝난다.
+- Wait token은 같은 logical RID에만 묶이고 reconnect 뒤 그 RID의 pipe attach가 WRITABLE record를 발행하며, ID `0` 뒤에는 payload를 replay하지 않는다.
 - Multipart 첫 part가 수용된 뒤 실패하면 전체 record가 rollback되어 peer에 부분 record가 보이지 않는다.
 
 **Request completion**
@@ -457,6 +476,7 @@ test 하나로 이어진다.
 
 **Readiness**
 - `ZLINK_POLLIN`은 완전한 raw record를 수신할 수 있을 때 서고, `ZLINK_POLLOUT`은 backpressure 뒤 재시도 가치를 나타낼 뿐 다음 submit 성공을 보장하지 않는다.
+- 읽지 않은 `ZLINK_COMPLETION_WRITABLE` record가 있는 동안 `ZLINK_POLLOUT`과 `ZLINK_POLLCOMPLETION`이 level로 유지되고, `NO_DATA`까지 drain하면 내려간다.
 - readiness 계약은 raw reply에 적용되지 않는다.
 
 **Receive flow state**

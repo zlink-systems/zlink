@@ -50,7 +50,7 @@ type is as follows.
 
 | Source | `POLLIN` | `POLLOUT` | Additional readiness and rules |
 |---|---|---|---|
-| raw socket | A complete record can be received | A submit retry is worthwhile | Per-socket receive mode applies. A closed registered socket reports `ZLINK_POLLERR` once |
+| raw socket | A complete record can be received | A submit retry is worthwhile (socket-wide aggregate). Level-held while an unread `ZLINK_COMPLETION_WRITABLE` record exists | Per-socket receive mode applies. A closed registered socket reports `ZLINK_POLLERR` once |
 | timer | A fire count can be received | Unsupported | Drain with `zlink_timer_recv()` |
 | FD | Platform-readable | Platform-writable | Platform `POLLPRI` maps to `ZLINK_POLLPRI`; all other platform error bits map to `ZLINK_POLLERR` |
 
@@ -62,8 +62,15 @@ after a nonblocking submit to one target reports
 submissions from a sender when the downstream cannot keep pace with processing),
 observing `ZLINK_POLLOUT` does not guarantee that the next submit to that target
 succeeds.
-Use the part-send completion ID and `zlink_completion_recv()` to distinguish
-operation-specific admission results.
+The per-target retry signal is the wait token's `ZLINK_COMPLETION_WRITABLE`
+record, not the `ZLINK_POLLOUT` bit. When a `ZLINK_SEND_FLAGS_DONTWAIT` submit
+returns `ZLINK_SUBMIT_BACKPRESSURED`, the nonzero value in `completion_id_out` is
+the wait token. When that target regains write credit, Core enqueues one
+WRITABLE record carrying the same token, the same `user_context`, and, for
+ROUTER and STREAM, the submitted RID into the socket-local completion queue.
+The application pulls that record with `zlink_completion_recv()` and uses the
+token, context, and RID to decide which target to resubmit. While the record is
+unread, both `ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` remain true.
 
 `ZLINK_POLLITEMS_DFLT` is the recommended initial item count for internal and
 application stack buffers; it is not a readiness bit. `ZLINK_HAVE_POLLER == 1`
@@ -76,15 +83,23 @@ command that produced the transition was processed by a Core-internal thread (an
 async command owner, a temporary transport owner) instead of the caller. A caller that sleeps
 until its timeout while readiness is true (a lost wake) is a contract violation; the
 implementation keeps the guarantee by re-arming the public poller's notification descriptor
-whenever an internal owner detaches or consumes commands on the socket's behalf.
+whenever an internal owner detaches or consumes commands on the socket's behalf. The same rule
+applies to wait tokens. If the target's credit recovery or pipe attach happens concurrently with
+the token registration that follows a refused DONTWAIT submit, the implementation rechecks the
+target state after registering the token (register → recheck) and publishes the WRITABLE record
+for that edge. A credit or attach edge that occurs after the refusal therefore never loses its
+WRITABLE record.
 
 ## 4. Completion polling
 
 `ZLINK_POLLCOMPLETION` is level-triggered readiness indicating that a PAIR,
 DEALER, ROUTER, or STREAM socket-local completion queue contains at least one
-record and the next `zlink_completion_recv()` can succeed. It can be registered
-alone or OR-ed with `ZLINK_POLLIN` and `ZLINK_POLLOUT`. Readiness remains set
-while records remain in the queue.
+record and the next `zlink_completion_recv()` can succeed. The record kinds
+that enter the queue are `ZLINK_COMPLETION_REQUEST` and
+`ZLINK_COMPLETION_WRITABLE`. A successful SEND produces no record, and
+`ZLINK_COMPLETION_SEND` remains in the enum for ABI compatibility only and is
+never published. The bit can be registered alone or OR-ed with `ZLINK_POLLIN`
+and `ZLINK_POLLOUT`. Readiness remains set while records remain in the queue.
 
 On a DEALER-ROUTER single connection, a REPLY behind a preceding DATA record is not the physical head
 until the last part of that DATA record is dequeued. At that point only `ZLINK_POLLIN` may be ready and
@@ -107,7 +122,7 @@ sequenceDiagram
     P-->>App: Return POLLCOMPLETION readiness
     loop Until NO_DATA
         App->>S: zlink_completion_recv(DONTWAIT)
-        S-->>App: One SEND or REQUEST completion
+        S-->>App: One REQUEST or WRITABLE record
     end
 ```
 
@@ -268,9 +283,9 @@ errno mappings.
 > in this document. This section describes how that contract is achieved
 > internally.
 
-SEND and REQUEST resolvers append results to the same socket-local ready queue. The
-linearization order of these appends is the public receive order; it does not imply
-submit order or per-target wire order.
+The REQUEST resolver and the wait-token WRITABLE publish append results to the same
+socket-local ready queue. The linearization order of these appends is the public receive
+order; it does not imply submit order or per-target wire order.
 
 ## 9. Implementation and contract-test verification requirements
 
@@ -289,7 +304,7 @@ and event-array contents. Each item maps to one unit test.
 - Adding the same source twice returns `ZLINK_CONFIG_CONFLICT`/`EEXIST`.
 - Modifying or removing a missing source returns `ZLINK_CONFIG_NOT_FOUND`/`ENOENT`.
 - An invalid event bit returns `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`, while an event unsupported by the source returns `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`.
-- `ZLINK_POLLCOMPLETION` can be added or removed by add or modify for PAIR, DEALER, ROUTER, and STREAM, alone or OR-ed with other socket readiness. Other sources and `zlink_poll()` items return `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`.
+- `ZLINK_POLLCOMPLETION` can be added or removed by add or modify for PAIR, DEALER, ROUTER, and STREAM, alone or OR-ed with other socket readiness. Other sources and `zlink_poll()` items return `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`. The bit reports two record kinds: REQUEST and WRITABLE.
 - When two pollers try to own the same socket's completion bit, the second add or modify fails with `ZLINK_CONFIG_INVALID_STATE`/`EBUSY`, and the existing registration remains unchanged. Moving ownership after the current owner removes the bit or source loses neither queued records nor readiness.
 
 **Wait and events**
@@ -302,6 +317,7 @@ and event-array contents. Each item maps to one unit test.
 **Completion polling**
 
 - Wait returns `ZLINK_POLLCOMPLETION` while at least one completion record exists; calls to wait, add, modify, or remove alone do not reduce the queue.
+- After a DONTWAIT submit returns a wait token with `ZLINK_SUBMIT_BACKPRESSURED`, credit on that target enqueues one WRITABLE record, and `ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` both remain true until that record is read. A credit or attach edge concurrent with the refusal is also observed as a WRITABLE record.
 - Receiving the last record with DONTWAIT completion receive clears readiness; readiness remains set while records remain.
 - Completions are neither lost nor merged when their count exceeds event-array capacity; the caller drains each ready socket until `ZLINK_RECV_NO_DATA`.
 - If the physical head on a DEALER-ROUTER connection is multipart DATA, `ZLINK_POLLIN` can be ready while

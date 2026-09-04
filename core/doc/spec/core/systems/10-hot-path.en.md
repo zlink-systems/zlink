@@ -37,12 +37,12 @@ this tree must update the table.
 
 | Entry point | Path |
 |---|---|
-| `zlink_send_part` (PAIR, DEALER, ROUTER, STREAM) | `submit_completion_aware_part` → `send_completion_submit_blocking` / `send_pending_submit` → `try_admit_send_parts_scoped` → `xsend_selected_pipe` / `xsend_configured_endpoint` / `send_direct_with_retry` → `lb_t::sendpipe_to` → `pipe_t::write_*` |
+| `zlink_send_part` (PAIR, DEALER, ROUTER, STREAM) | `submit_completion_aware_part` → `send_completion_submit_blocking` (on refusal, DONTWAIT calls `register_send_writable_wait`) → `try_admit_send_parts_scoped` → `xsend_selected_pipe` / `xsend_configured_endpoint` / `send_direct_with_retry` → `lb_t::sendpipe_to` → `pipe_t::write_*` |
 | `zlink_send_part_rid` (ROUTER, STREAM) | as above, through the `send_direct_with_retry` branch |
 | `zlink_request_part` FINAL (DEALER) | `request_part_common` → `submit_pull_blocking_request` → `request_admission_submit_blocking` → `try_admit_send_parts_scoped` → `arm_socket_pending_request_timeout` |
 | `zlink_reply_part` FINAL (ROUTER) | `public_router_reply_submit` → `checkout_public_router_reply_target` → `send_public_router_reply_with_wait` → `retain_reply_transport_pipe` → `send_completion_staged_frames_on_pipe` |
 | `zlink_recv_part` / `zlink_router_recv_part` | `recv_dealer_message_direct` / `router_recv_part_impl` → `recv_common` / `recv_routed` → `fq_t::recvpipe` → `pipe_t::read` → `reclassify_transport_pair_application_head` → `end_public_part_receive_delivery_hold` |
-| `zlink_completion_recv` | `process_submit_commands` → `drive_send_pending` → `socket_completion::recv` |
+| `zlink_completion_recv` | `process_submit_commands` → `drive_request_pending` → `socket_completion::recv` |
 | `zlink_poll` / `zlink_poller_wait` | `get_events_internal` → `process_commands` → `xhas_in` / `xhas_out` |
 | I/O thread → socket delivery | `pipe_t::flush` → `activate_read` command → `xread_activated` → `fq_t::activated`; `process_async_mailbox` |
 
@@ -90,11 +90,17 @@ Only when the cache cannot answer (the selected pipe detached meanwhile, or back
 retry wait) does the code fall back to the general path. The fallback keeps these rules:
 
 - The first attempt admits directly to the selected pipe. Only a retryable refusal (`EAGAIN`,
-  `ENOTCONN`, `EHOSTUNREACH`) commits that selection to the configured endpoint and enters the
-  wait loop. Any other failure returns immediately with the errno the general path would have
-  produced.
-- The contract of the fallback (selection is committed once at FINAL, retries stay on the same
-  endpoint) is unchanged by the existence of the fast path.
+  `ENOTCONN`, `EHOSTUNREACH`, `ECONNREFUSED`) commits that selection to the configured endpoint
+  and enters the wait loop. Any other failure returns immediately with the errno the general path
+  would have produced.
+- `ZLINK_SEND_FLAGS_DONTWAIT` does not enter the wait loop. On a retryable refusal it registers a
+  payload-free wait token and returns `ZLINK_SUBMIT_BACKPRESSURED` immediately. The endpoint
+  commit rule applies only to blocking `ZLINK_SEND_FLAGS_NONE` send and to REQUEST.
+- Wait-token registration and the WRITABLE record publish lie outside the per-message success
+  path. Both run only on a refusal and on a credit or attach wake, so they fall within the
+  allowance of §3 (the fallback path), and the §3 prohibitions on the success path still hold.
+- The contract of the fallback (a blocking send's selection is committed once at FINAL, retries
+  stay on the same endpoint) is unchanged by the existence of the fast path.
 
 ## 5. Performance gates
 

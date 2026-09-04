@@ -30,7 +30,7 @@ The following documents own the related contracts.
 
 | Related contract | Defining document |
 |---|---|
-| Socket creation and close, common options, pending sends and completion, and thread safety | [Socket Common](README.en.md) |
+| Socket creation and close, common options, send wait tokens and completion, and thread safety | [Socket Common](README.en.md) |
 | Wire format for bytes carried without ZMP framing | [RAW (STREAM) Protocol Details](../protocol/02-raw.en.md) |
 | Result values and errno mapping | [Errors](../03-errors.en.md#result-and-errno-mapping) |
 
@@ -118,9 +118,18 @@ consumes `part_` on success and failure. An intermediate failure discards both t
 and the failed part.
 
 `NONE FINAL` snapshots `SNDTIMEO` and waits for local queue admission and reconnect of the same
-RID. A `DONTWAIT FINAL` admitted immediately has ID `0`; if Core retains it as pending, it has a
-nonzero ID and produces a SEND completion. Before admission, Core retries only reconnect of the
-same logical RID; after ID `0` or `ZLINK_SEND_ADMITTED`, it does not replay the application payload.
+RID. A `DONTWAIT FINAL` makes exactly one admission attempt. If admitted immediately, it has ID
+`0` and no completion. If HWM or byte credit prevents admission, or the connection exists but is
+not ready yet, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token
+bound to that RID, and Core does not retain the payload. If no connection matches `target_rid_`,
+the result is `ZLINK_SUBMIT_NOT_CONNECTED` immediately with no token. When the same RID gains
+write credit (peer drain, or pipe attach on reconnect), Core produces exactly one
+`ZLINK_COMPLETION_WRITABLE` record for that token with `send_result == ZLINK_SEND_ADMITTED` and
+`peer_rid` set to the submitted RID. Credit on another RID does not wake this token. The caller
+resubmits its retained record to the same RID with `DONTWAIT`. Explicitly removing that RID with
+`zlink_disconnect_rid()` ends the token with a WRITABLE record carrying `ZLINK_SEND_TERMINAL` and
+`ENOENT`; socket close or context termination ends it with `ZLINK_SEND_TERMINAL` and the lifecycle
+errno. After ID `0`, Core does not replay the application payload.
 [Socket Common](README.en.md#part-send-and-pending-admission) owns detailed ownership, result, and
 errno rules.
 
@@ -128,8 +137,10 @@ With multiple clients connected to a STREAM socket, `ZLINK_POLLOUT` is
 aggregate readiness for the socket; it neither reserves credit for a specific
 `target_rid_` nor identifies that routing ID in the event. The original target
 can therefore return `EAGAIN` again even after another writable client raised
-the event. Target-specific admission results retained by Core are received through
-`ZLINK_POLLCOMPLETION` and `zlink_completion_recv()`.
+the event. The precise per-target signal is the `ZLINK_COMPLETION_WRITABLE`
+record identified by `peer_rid`; while an unread WRITABLE record exists,
+`ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` are level-held. That record is
+received through `zlink_completion_recv()`.
 
 Routed sending of a zero-length part to a valid `target_rid_` requests
 termination of that peer connection instead of sending a byte record. Success
@@ -238,9 +249,11 @@ silently drops packets nor creates a separate unbounded queue.
 
 ## 7. Completion and thread safety
 
-When a STREAM send returns a nonzero completion ID, exactly one SEND record is received through
-`zlink_completion_recv()`. Its `peer_rid` preserves the logical RID snapshot specified at submit; it
-does not change to a physical connection identity after reconnect. [Socket Common](README.en.md#completion-pull-and-ownership)
+When a STREAM send returns a nonzero wait token, exactly one `ZLINK_COMPLETION_WRITABLE` record
+for that token is received through `zlink_completion_recv()`: `ZLINK_SEND_ADMITTED` when the same
+RID gains write credit, or `ZLINK_SEND_TERMINAL` when the RID is explicitly removed with
+`zlink_disconnect_rid()` or the socket is closed. Its `peer_rid` preserves the logical RID snapshot
+specified at submit; it does not change to a physical connection identity after reconnect. [Socket Common](README.en.md#completion-pull-and-ownership)
 owns completion draining, reservation bounds, and close.
 
 Public socket-handle thread safety and close behavior follow
@@ -453,12 +466,18 @@ item maps to one test.
 - Success and failure both consume `part_` and leave it empty and initialized.
 - `NONE FINAL` snapshots `SNDTIMEO`, waits for same-logical-RID local admission, and finishes with
   ID `0` and no completion.
-- A `DONTWAIT FINAL` admitted immediately has ID `0`; if retained as pending, it returns a nonzero
-  ID and produces exactly one SEND completion.
-- Before admission, reconnect retries only the same logical RID; after ID `0` or
-  `ZLINK_SEND_ADMITTED`, Core does not replay the payload.
-- If the connection cannot be found, the result is
-  `ZLINK_SUBMIT_NOT_CONNECTED`.
+- A `DONTWAIT FINAL` admitted immediately has ID `0` and no completion. If it is refused because
+  of HWM, credit, or a connection that is not ready, it returns `ZLINK_SUBMIT_BACKPRESSURED` with
+  `EAGAIN` and a nonzero wait token for that RID, and the payload is not retained.
+- When the same RID gains write credit, exactly one `ZLINK_COMPLETION_WRITABLE` record
+  (`ZLINK_SEND_ADMITTED`, `peer_rid` set to the submitted RID) is returned for that token, and
+  credit on another RID does not wake it. `ZLINK_POLLOUT` is level-held until it is read.
+- Removing the RID with `zlink_disconnect_rid()` ends that RID's token with a WRITABLE record
+  carrying `ZLINK_SEND_TERMINAL` and `ENOENT`.
+- A wait token is bound only to the same logical RID; after reconnect, that RID's pipe attach
+  publishes the WRITABLE record, and after ID `0` Core does not replay the payload.
+- If the connection cannot be found, the result is `ZLINK_SUBMIT_NOT_CONNECTED` immediately with
+  ID `0` and no token.
 
 **Raw part receive**
 
@@ -491,9 +510,9 @@ item maps to one test.
 
 **Completion**
 
-- A nonzero SEND ID preserves in `peer_rid` the logical RID snapshot specified at submit; it does not
-  change to a physical connection identity after reconnect.
-- `ZLINK_POLLCOMPLETION` is non-consuming level readiness. Draining with
+- The WRITABLE record of a nonzero wait token is returned exactly once (`ZLINK_SEND_TERMINAL` on
+  explicit RID removal or close) and preserves in `peer_rid` the logical RID snapshot specified at
+  submit; it does not change to a physical connection identity after reconnect.- `ZLINK_POLLCOMPLETION` is non-consuming level readiness. Draining with
   `zlink_completion_recv(DONTWAIT)` through `NO_DATA` clears it.
 
 **Receive flow state and monitor**

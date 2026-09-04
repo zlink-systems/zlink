@@ -121,7 +121,9 @@ The inline comments in [section 4](#4-public-types) define the value format, ran
 each option. The following contracts are not included in those comments.
 
 - When `ZLINK_ROUTER_OPT_MANDATORY` is positive, a directed submit to a routing ID without a
-  connected pipe fails with `ZLINK_SUBMIT_NOT_CONNECTED`.
+  connected pipe fails with `ZLINK_SUBMIT_NOT_CONNECTED`. A `DONTWAIT FINAL` to a routing ID with
+  no route at all returns `ZLINK_SUBMIT_NOT_CONNECTED` immediately and creates no wait token,
+  regardless of this option's value.
 - `ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID` sets the local alias that identifies the pipe created by
   the next `zlink_connect()` and is set before each connect.
 
@@ -152,10 +154,12 @@ creates a weight record on public receive or the Completion lane.
 If the applied value becomes `0` after a multipart has selected a pipe, that message completes
 through FINAL on the same pipe. The next message selection excludes it.
 
-An actual remote-weight change re-evaluates an admission-pending DONTWAIT send or request for its exact
-pipe. If the weight becomes `0` before the message begins, the completion is `ZLINK_SEND_TERMINAL`
-with `send_terminal_errno == ECONNREFUSED`; a change from `0` to a positive value permits retry without
-another write-activation event.
+An actual remote-weight change re-evaluates an admission-pending DONTWAIT request and a DONTWAIT send
+that holds a wait token. If the weight becomes `0` before the message begins, the pending REQUEST
+completion is `ZLINK_SEND_TERMINAL` with `send_terminal_errno == ECONNREFUSED`; a SEND wait token
+does not end when the weight becomes `0`. A change from `0` to a positive value publishes a
+`ZLINK_COMPLETION_WRITABLE` record for that RID's SEND wait token, and a pending REQUEST may retry
+without another write-activation event.
 
 An active duplicate keeps its own latest value while standby and uses it if that same pipe is
 selected later. Setting the Application maximum below 10 bytes does not prevent pair readiness,
@@ -177,10 +181,21 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
 This sends one ordinary raw multipart part to the peer identified by `target_rid_`. Every part must
 use the same target. `flags_` is `ZLINK_SEND_FLAGS_NONE` or `ZLINK_SEND_FLAGS_DONTWAIT`. `NONE FINAL`
 snapshots `SNDTIMEO`, waits for admission and reconnect of the same logical RID, and finishes with
-ID `0`. A `DONTWAIT FINAL` has ID `0` when admission is immediate; if Core retains it as pending,
-it has a nonzero ID and produces a SEND completion. Before admission, Core retries only the same RID;
-after ID `0` or `ZLINK_SEND_ADMITTED`, it does not replay the payload. [Socket Common](README.en.md#part-send-and-pending-admission)
-owns ownership and the exact result and errno contract.
+ID `0`. A `DONTWAIT FINAL` makes exactly one admission attempt. If admission is immediate, it has
+ID `0` and no completion. If HWM or byte credit prevents admission, or a route exists but is not
+ready yet (transport pair not ready, weight `0`), it returns `ZLINK_SUBMIT_BACKPRESSURED` with
+`EAGAIN` and a nonzero wait token bound to that RID, and Core does not retain the payload. If
+`target_rid_` has no route at all, the result is `ZLINK_SUBMIT_NOT_CONNECTED` immediately with no
+token, regardless of `ZLINK_ROUTER_OPT_MANDATORY`. When the same RID gains write credit (peer
+drain, reconnect, route adoption, standby promotion, or weight `0` to positive), Core produces
+exactly one `ZLINK_COMPLETION_WRITABLE` record for that token with
+`send_result == ZLINK_SEND_ADMITTED` and `peer_rid` set to the submitted RID. Credit on another
+RID does not wake this token. The caller resubmits its retained record to the same RID with
+`DONTWAIT`. Explicitly removing that RID with `zlink_disconnect_rid()` ends the token with a
+WRITABLE record carrying `ZLINK_SEND_TERMINAL` and `ENOENT`; socket close or context termination
+ends it with `ZLINK_SEND_TERMINAL` and the lifecycle errno. After ID `0`, Core does not replay the
+payload. [Socket Common](README.en.md#part-send-and-pending-admission) owns ownership and the exact
+result and errno contract.
 
 ## 7. Raw request submit
 
@@ -334,7 +349,9 @@ token-blocked REQUEST. For ordinary sends and
 requests, `ZLINK_POLLOUT` indicates that retrying a submit after
 [backpressure](../glossary.en.md#backpressure), the state in which additional submissions are
 limited because the receiver cannot keep up, is worthwhile. It does not guarantee that the next
-submit succeeds. Results of SEND and REQUEST operations retained by Core are received through
+submit succeeds. While an unread `ZLINK_COMPLETION_WRITABLE` record exists, `ZLINK_POLLOUT` and
+`ZLINK_POLLCOMPLETION` are level-held, and the precise per-RID signal is that record's token and
+`peer_rid`. Results of SEND and REQUEST operations retained by Core are received through
 `ZLINK_POLLCOMPLETION` and `zlink_completion_recv()`. Reply submit creates no completion.
 
 ## 11. Receive flow state
@@ -420,10 +437,12 @@ and status snapshots. Each item maps to one test.
 - If a pipe's remote weight becomes `0` after the first part of an Application multipart is
   accepted, the same pipe carries every remaining part through FINAL and is excluded starting with
   the next message selection.
-- A remote-weight change re-evaluates an admission-pending DONTWAIT SEND for the same logical RID:
-  if the weight becomes `0` before the message begins, the completion is `ZLINK_SEND_TERMINAL` with
-  `send_terminal_errno == ECONNREFUSED`; a change from `0` to a positive value permits retry without
-  another write-activation event.
+- A remote-weight change re-evaluates an admission-pending DONTWAIT REQUEST and a DONTWAIT SEND
+  holding a wait token for the same logical RID: if the weight becomes `0` before the message
+  begins, the pending REQUEST completion is `ZLINK_SEND_TERMINAL` with
+  `send_terminal_errno == ECONNREFUSED`, and the SEND wait token does not end; a change from `0` to
+  a positive value publishes a WRITABLE record for that RID's SEND wait token and permits the
+  pending REQUEST to retry without another write-activation event.
 - Setting an Application maximum below 10 bytes does not prevent pair readiness, FLOWSTATE, or
   weight changes observed through peer selection and monitoring.
 - After reconnect, peer selection and monitoring reflect the current weight on the new connection.
@@ -451,8 +470,11 @@ and status snapshots. Each item maps to one test.
 
 **Directed submit**
 - `zlink_send_part_rid()` with `NONE FINAL` waits within `SNDTIMEO` for same-logical-RID local admission and finishes with ID `0` and no completion.
-- A `DONTWAIT FINAL` admitted immediately has ID `0`; if Core retains it as pending, it returns a nonzero ID and produces exactly one SEND completion.
-- Before admission, reconnect retries only the same logical RID; after ID `0` or `ZLINK_SEND_ADMITTED`, Core does not replay the payload.
+- A `DONTWAIT FINAL` admitted immediately has ID `0` and no completion. If it is refused because of HWM, credit, or a route that is not ready, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token for that RID, and the payload is not retained.
+- A `DONTWAIT FINAL` to a RID with no route returns `ZLINK_SUBMIT_NOT_CONNECTED` immediately with ID `0` and no token, regardless of `ZLINK_ROUTER_OPT_MANDATORY`.
+- When the same RID gains write credit, exactly one `ZLINK_COMPLETION_WRITABLE` record (`ZLINK_SEND_ADMITTED`, `peer_rid` set to the submitted RID) is returned for that token, and credit on another RID does not wake it. `ZLINK_POLLOUT` is level-held until it is read.
+- Removing the RID with `zlink_disconnect_rid()` ends that RID's token with a WRITABLE record carrying `ZLINK_SEND_TERMINAL` and `ENOENT`.
+- A wait token is bound only to the same logical RID; after reconnect, that RID's pipe attach publishes the WRITABLE record, and after ID `0` Core does not replay the payload.
 - A failure after the first multipart part is accepted rolls back the complete record, so no partial record becomes visible to the peer.
 
 **Request completion**
@@ -477,6 +499,7 @@ and status snapshots. Each item maps to one test.
 **Readiness**
 - `ZLINK_POLLIN` is set for an admitted DATA or REQUEST, or a complete REQUEST that can reserve a token slot. It clears when all readable heads are token-blocked REQUEST records.
 - `ZLINK_POLLOUT` indicates only that a retry after backpressure is worthwhile and does not guarantee that the next submit succeeds.
+- While an unread `ZLINK_COMPLETION_WRITABLE` record exists, `ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION` are level-held, and draining through `NO_DATA` clears them.
 
 **Receive flow state**
 - Setting the current state again succeeds and sends nothing.

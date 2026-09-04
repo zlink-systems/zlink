@@ -46,7 +46,7 @@ readiness를 기다리는 방법은 두 가지다.
 
 | Source | `POLLIN` | `POLLOUT` | 추가 readiness·규칙 |
 |---|---|---|---|
-| raw socket | complete record를 수신할 수 있음 | submit 재시도 가치가 있음 | socket별 receive mode 적용. close된 등록 socket은 `ZLINK_POLLERR` 1회 |
+| raw socket | complete record를 수신할 수 있음 | submit 재시도 가치가 있음(socket 전체 집계). 읽지 않은 `ZLINK_COMPLETION_WRITABLE` record가 있는 동안 level로 유지 | socket별 receive mode 적용. close된 등록 socket은 `ZLINK_POLLERR` 1회 |
 | timer | fire count를 받을 수 있음 | 미지원 | `zlink_timer_recv()`로 drain |
 | FD | platform readable | platform writable | platform `POLLPRI`는 `ZLINK_POLLPRI`, 그 밖의 platform 오류 bit는 `ZLINK_POLLERR`로 변환 |
 
@@ -56,7 +56,14 @@ readiness를 기다리는 방법은 두 가지다.
 [backpressure](glossary.ko.md#backpressure)(downstream이 처리 속도를 따라오지 못할 때 sender의
 추가 제출을 제한하는 동작)를 반환한 뒤 `ZLINK_POLLOUT`을 관측해도 그 target의 다음 submit
 성공은 보장되지 않는다.
-operation별 admission 결과는 part send의 completion ID와 `zlink_completion_recv()`로 구분한다.
+target별 재시도 신호는 `ZLINK_POLLOUT` bit가 아니라 wait token의
+`ZLINK_COMPLETION_WRITABLE` record다. `ZLINK_SEND_FLAGS_DONTWAIT` submit이
+`ZLINK_SUBMIT_BACKPRESSURED`를 반환하면 `completion_id_out`의 0이 아닌 값이 wait token이고,
+그 target에 write credit이 생기면 Core는 같은 token, 같은 `user_context`, 그리고
+ROUTER·STREAM이면 제출한 RID를 담은 WRITABLE record 하나를 socket-local completion queue에
+넣는다. Application은 이 record를 `zlink_completion_recv()`로 꺼내 token·context·RID로 어느
+target을 다시 submit할지 결정한다. 이 record가 읽히지 않은 동안 `ZLINK_POLLOUT`과
+`ZLINK_POLLCOMPLETION`은 모두 참으로 유지된다.
 
 `ZLINK_POLLITEMS_DFLT`는 내부·application stack buffer의 권장 초기 item 수이며
 readiness bit가 아니다. `ZLINK_HAVE_POLLER == 1`은 이 public poller API가 build에
@@ -68,14 +75,20 @@ timeout이 남아 있어도 그 시점에 깨어난다. 그 전이를 만든 com
 thread(I/O thread, async command owner, 임시 transport owner)가 처리했더라도 이 보장은 같다.
 Readiness가 참인데 caller가 timeout까지 잠드는 것(lost wake)은 계약 위반이며, 구현은 내부
 owner가 detach하거나 command를 소비한 뒤 public poller의 notification descriptor를 다시 무장해
-이를 지킨다.
+이를 지킨다. 같은 규칙이 wait token에도 적용된다. DONTWAIT submit이 거절된 뒤 token을
+등록하는 사이에 그 target의 credit 회복이나 pipe attach가 동시에 일어났다면, 구현은 token을
+등록한 뒤 target 상태를 다시 확인해(register → recheck) 그 edge에 대한 WRITABLE record를
+게시한다. 따라서 거절 이후에 생긴 credit·attach edge로 WRITABLE record가 유실되지 않는다.
 
 ## 4. Completion polling
 
 `ZLINK_POLLCOMPLETION`은 PAIR·DEALER·ROUTER·STREAM의 socket-local completion queue에
 record가 하나 이상 있어 다음 `zlink_completion_recv()`가 성공할 수 있음을 알리는
-level-triggered readiness다. 단독으로 등록하거나 `ZLINK_POLLIN`, `ZLINK_POLLOUT`과 OR할 수
-있다. Queue에 record가 남아 있는 동안 readiness도 유지된다.
+level-triggered readiness다. Queue에 들어오는 record 종류는 `ZLINK_COMPLETION_REQUEST`와
+`ZLINK_COMPLETION_WRITABLE` 두 가지다. 성공한 SEND는 record를 만들지 않으며,
+`ZLINK_COMPLETION_SEND`는 ABI 호환을 위해 enum에 남아 있을 뿐 게시되지 않는다. 단독으로
+등록하거나 `ZLINK_POLLIN`, `ZLINK_POLLOUT`과 OR할 수 있다. Queue에 record가 남아 있는 동안
+readiness도 유지된다.
 
 DEALER-ROUTER single connection에서 앞선 DATA record의 마지막 part를 dequeue하기 전에는 뒤의
 REPLY가 physical head가 아니다. 이때 `ZLINK_POLLIN`만 준비되고 `ZLINK_POLLCOMPLETION`은
@@ -96,7 +109,7 @@ sequenceDiagram
     P-->>App: POLLCOMPLETION readiness 반환
     loop NO_DATA가 나올 때까지
         App->>S: zlink_completion_recv(DONTWAIT)
-        S-->>App: SEND 또는 REQUEST completion 한 건
+        S-->>App: REQUEST 또는 WRITABLE record 한 건
     end
 ```
 
@@ -249,8 +262,9 @@ modify·remove는 `ZLINK_CONFIG_NOT_FOUND`/`ENOENT`다. 잘못된 event bit는
 > [Completion polling](#4-completion-polling) 절과 [검증 요구](#9-구현-및-contract-test-검증-요구)
 > 절이 소유한다. 이 절은 그 계약을 내부에서 어떻게 달성하는지 설명한다.
 
-SEND와 REQUEST resolver는 같은 socket-local ready queue에 결과를 append한다. 이 append의
-linearization 순서가 public receive 순서이며 submit 순서나 target별 wire 순서를 뜻하지 않는다.
+REQUEST resolver와 wait token의 WRITABLE publish는 같은 socket-local ready queue에 결과를
+append한다. 이 append의 linearization 순서가 public receive 순서이며 submit 순서나 target별
+wire 순서를 뜻하지 않는다.
 
 ## 9. 구현 및 contract test 검증 요구
 
@@ -268,7 +282,8 @@ array)만으로 다음을 확인한다. 각 항목은 unit test 하나로 이어
 - 잘못된 event bit는 `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`이고, source가 지원하지 않는 event는 `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`이다.
 - `ZLINK_POLLCOMPLETION`은 PAIR·DEALER·ROUTER·STREAM의 add·modify에서 단독 또는 다른 socket
   readiness와 OR해 추가·제거할 수 있다. 다른 source와 `zlink_poll()` item은
-  `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`이다.
+  `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`이다. 이 bit가 알리는 record는 REQUEST와 WRITABLE
+  두 종류다.
 - 두 poller가 같은 socket의 completion bit를 소유하려 하면 두 번째 add·modify가
   `ZLINK_CONFIG_INVALID_STATE`/`EBUSY`로 실패하고 기존 registration은 변하지 않는다. 기존
   owner가 bit를 제거하거나 source를 remove한 뒤 다른 poller로 이전하면 queue record와
@@ -283,6 +298,10 @@ array)만으로 다음을 확인한다. 각 항목은 unit test 하나로 이어
 **completion polling**
 - Completion record가 하나 이상 있으면 wait가 `ZLINK_POLLCOMPLETION`을 반환하며, wait·add·modify·
   remove만 호출해서는 queue가 줄지 않는다.
+- DONTWAIT submit이 `ZLINK_SUBMIT_BACKPRESSURED`로 wait token을 반환한 뒤 그 target에 credit이
+  생기면 WRITABLE record 하나가 queue에 들어오고, 그 record를 읽기 전까지 `ZLINK_POLLOUT`과
+  `ZLINK_POLLCOMPLETION`이 함께 참으로 유지된다. 거절과 동시에 일어난 credit·attach edge도
+  WRITABLE record로 관측된다.
 - DONTWAIT completion receive로 마지막 record를 꺼내면 readiness가 해제되고, record가 남아 있으면
   readiness가 유지된다.
 - Event array 용량보다 completion이 많아도 record가 유실·병합되지 않으며, caller는 준비된 socket을
