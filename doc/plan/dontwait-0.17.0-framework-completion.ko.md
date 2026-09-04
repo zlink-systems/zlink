@@ -58,14 +58,11 @@
       java 1206/3 = pre-existing C 3 + 신규 F 1(`EntrySpotActorDispatchTests…staleTerminal` relocation seal 부재, job 진행);
       node 1552/5 = C 4(ZoneWorld dist 미빌드 3·lint 1) + F 2(SupportChat lifecycle 테스트가 옛 3000/1000ms 하드코딩 — 내 budget 커밋 `2e3b1b47e4`의 후속, TicTacToe.Ts PASS 마커 — job 진행);
       cpp gate-v2 63/69 → stream-connector fixture(RAW mode before bind, spec 08-stream §2) `dbfcf7d6fe`·lz4 packaging `20b94c3457`·package-test config `4573c09a2a` 수정 후 잔여 = inventory 278(C)·m6b 1909 flake(C);
-      dotnet 전체 unit gate(handover+spot-route 결합 상태, 36분짜리 D-068 sibling 제외): 852 pass / 1 fail(`RelocatedActorReply…ExactlyOnce` relay timeout — job) / **hang**(`CanonicalActorJoinIngressReplyTests.RouteAdmission_HandoverStartsFreshLivenessDeadline`, 20분 blame dump — job 대기).
-      → 두 건 해소 전까지 dotnet 두 수정 미커밋
-- [ ] 7 samples × 4언어 green — **cpp 7/7**; **node 7/7**(SupportChat budget `2e3b1b47e4`, ZoneWorld entry html `c67deb44e0`, runner PASS marker `2ceb137abe`);
-      java: TicTacToe·SupportChat·DeliveryDispatch(`ed156f5983`+teardown `6682ae0db1`)·GameQuest(heartbeat `dc9fe76100`)·ShoppingMall = 5/7 green, Bingo 재실행 중;
-      ZoneWorld 미해결 — gateway에서 mesh actor-create reply 994 ms·bound send admission 2.008 s 지연(양자화된 wake-up gap 의심, `bucketB-java-zoneworld-summary.md`), 부수 결함 SUB socket POLLCOMPLETION 등록(spec 05-polling 위반, 수천 건 NOT_SUPPORTED) → job 2건 진행 중;
-      dotnet 7 samples 미실행(dotnet 커밋 후)
-- [ ] cross-language E2E green
-- [ ] 최종 커밋+푸시
+      dotnet 전체 unit gate(handover+spot-route 결합 상태, 36분짜리 D-068 sibling 제외): 852 pass / 1 fail / 1 hang →
+      relay fail = 늦은 loser `ConnectionReady`가 survivor의 RID→pair 인덱스를 덮어 command 33이 `current_source=False`로 폐기(수정, 15/15) ;
+      hang = fixed-RID handover 테스트 fixture 경합(`RouteAdmission_HandoverStartsFreshLivenessDeadline`, 이전 DEALER reconnect intent 유지) — fixture 수정(8/8).
+      **Core 후보(B 보고)**: assertion 실패 후 `Context.Dispose → zlink_ctx_term`이 반환하지 않아 20분 inactivity hang이 됨(dump: `tests/Zlink.Framework.UnitTests/TestResults/b1610869-…/dotnet_62877_20260905T034650_hangdump.dmp`, `dcd36b29-…/dotnet_33690_20260905T035608_hangdump.dmp`).
+      잔여 후보: `CanonicalActorJoinRequest_HandoverKeepsPriorReplyEpochUntilExactDisconnect` 실패+teardown hang(hang job BLOCKER) → gate-v4(Canonical 3분 hang-timeout 분리 실행 + 나머지)로 판정 중; 통과 시 dotnet 수정 일괄 커밋
 
 ### E. 문서/사이트 (2026-09-04 추가)
 - [x] docs PR #2 (영문 자연화 + archive 삭제) 머지 `3f0f02d478`, 가이드 재생성 `baa4b4e4f6`, 앵커수정 `8f8f75ff71`
