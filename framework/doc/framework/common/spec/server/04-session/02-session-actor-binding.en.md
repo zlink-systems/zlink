@@ -2,7 +2,7 @@
 title: "Session And Actor Binding"
 ---
 
-# Session And Actor Binding
+# Session and Actor Binding
 
 [Session topic table of contents](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 01. STREAM Server Session](01-stream-session.en.md)
 
@@ -36,11 +36,11 @@ Actor is kept by the [Location Store](../00-foundation/02-glossary.en.md#locatio
 so multiple nodes can check it together; as shown below, this document's binding
 doesn't re-query that store on every message.
 
-The whole flow is the following five steps.
+The overall flow has the following five steps.
 
 1. A session callback authenticates the client and decides the domain Actor
    identity and type.
-2. By global ActorId, it looks up an `ActorRef` that's finished creation and
+2. Using the global ActorId, it looks up an `ActorRef` that's finished creation and
    initialization and so can receive messages —
    [Ready](../00-foundation/02-glossary.en.md#ready) — or explicitly creates an Actor
    according to application policy.
@@ -52,13 +52,13 @@ The whole flow is the following five steps.
 
 | Question to check | Contract |
 |---|---|
-| How many Actors one session can bind | It can bind multiple Actors. |
-| How many sessions one Actor can bind at once | One. Once a new binding is confirmed, the previous binding is invalidated. |
+| How many Actors can one session bind | It can bind multiple Actors. |
+| How many sessions can one Actor bind at once | One. Once a new binding is confirmed, the previous binding is invalidated. |
 | How Actor location is found for each message | Uses the route confirmed at bind time. The Location Store isn't re-queried when relaying. |
 | Route and location after an Actor moves to another node | After a relocation commit, the framework updates the Actor route and bound-session current Actor location snapshot kept in the session to the target. `ActorId`/`ObjectGeneration` are kept. |
 | How an Actor can learn a connection dropped | The framework automatically notifies every Actor in the current binding snapshot. |
 
-## 2. Roles And Responsibilities
+## 2. Roles and Responsibilities
 
 | Party | Responsibility |
 |---|---|
@@ -90,8 +90,8 @@ it either.
 
 `EnableActorDispatch()` doesn't take a
 [`MeshName`](../00-foundation/02-glossary.en.md#meshname), the name identifying one of
-several physical connection groups; it enables global object dispatch capability. Startup confirms that at least an Object `Client` or
-`Server` role and a Location Store are configured in the same process.
+several physical connection groups; it enables global object dispatch capability. Startup confirms that the same process has at least one Object `Client` or
+`Server` role and a Location Store configured.
 
 Having multiple Meshes configured isn't an error. Global ActorId authority
 finds the current Mesh and owner. A MeshNode isn't needed if a STREAM-only
@@ -108,7 +108,7 @@ enablement is rejected at startup. It doesn't provide a hidden same-process
 Actor [authority](../00-foundation/02-glossary.en.md#authority) or local-only binding
 meaning.
 
-## 4. What Binding Connects And What It Stores
+## 4. What Binding Connects and What It Stores
 
 A binding is a runtime relationship linking the following values.
 
@@ -133,7 +133,7 @@ compared against the application message target, but because it's a
 terminated or replaced binding identity. The application must start a new
 bind with the new `ActorRef`.
 
-A route and current-location-snapshot update for Actor relocation that keeps
+A route and current-location-snapshot update during an Actor relocation that keeps
 the same `ObjectGeneration` doesn't create a new binding identity and isn't
 a rebind. Once a new `ObjectGeneration` is created under the same ActorId
 after Destroy, the previous binding is invalid, so the application must
@@ -156,7 +156,7 @@ lifecycle. If a different MeshNode binds, or the session owner restarts, it
 can register a new lifecycle identity even if the owner-local counter is
 smaller than the previous value.
 
-## 5. Bind And Relay
+## 5. Bind and Relay
 
 A STREAM packet is first dispatched to the session's typed handler
 registry. If the handler chooses Actor dispatch, the framework preserves
@@ -209,13 +209,13 @@ that Spot's common gate.
   Spot that Actor belongs to, or conversely,
   when the Spot is busy, even that connection's keepalive processing gets
   delayed. Connection-lifetime management and business processing differ in
-  both frequency and latency requirement.
+  both frequency and latency requirements.
 - **A control record the runtime uses isn't put into the application
   queue.** If a keep-alive signal waits in the same queue as business
   messages, business backlog can cause the connection to be misjudged as
   dropped.
 
-A push the Actor sends to the session is delivered to the session owner as
+A push sent by the Actor to the session is delivered to the session owner as
 a `boundSessionSend(36)` record. The session owner only submits it to the
 actual STREAM connection when the source Actor `ObjectGeneration`, source
 `NodeGeneration`, `AuthorityOwnerGeneration`, and expected binding
@@ -255,12 +255,12 @@ uses a copy outside those linearization points.**
    because it is not current is recorded with the existing closed vocabulary
    of [flow tracing](../06-observability/03-message-flow-tracing.en.md).
 
-What this contract does not require — a delivery acknowledgement (ack),
-retransmission, or a client-delivery guarantee. The public completion meaning
+This contract does not require a delivery acknowledgement (ack), retransmission,
+or a client-delivery guarantee. The public completion meaning
 of a one-way push follows the one-way contract of
 [Submit And Completion](../01-execution/01-submit-and-completion.en.md) as-is.
 
-Seen as one diagram, the normal path is as follows. This diagram only shows
+The following diagram shows the normal path. It only shows
 the logical order of bind, relay, and push, and the validating party at each
 step. The node boundary and where the physical socket lives are shown by
 the diagram in
@@ -319,7 +319,7 @@ route are relayed to that route's target. If there's no Message Follow
 route or it has expired, it's `Unavailable`; if the same ActorId's
 `ObjectGeneration` differs, `InvalidOperation`; during a relocation
 pre-commit seal, `Unavailable`. The source doesn't find a new route from
-the Store and hidden-retry the same bind. `BindOrGet`'s Get only returns
+the Store and silently retry the same bind. `BindOrGet`'s Get only returns
 the same session's specified ActorId/
 ObjectGeneration binding, and
 doesn't return a different generation or a directory Actor.
@@ -347,14 +347,14 @@ The control commands this section and §8.2 use are as follows.
 
 A public interface excerpt is in §13.
 
-## 6. Rebind And Replacing The Previous Connection
+## 6. Rebind and Replacing the Previous Connection
 
 When an Actor already bound to another session is connected to a new
 session, the two physical connections may briefly remain open. But the
 Actor owner's current binding must always be exactly one.
 
 - **The new connection is confirmed immediately, and the previous
-  session is notified of the replacement one-way.** The new identity is
+  session is notified one-way of the replacement.** The new identity is
   first registered atomically with the Actor owner, and the new session
   owner that receives a successful reply stores the new route. From the
   moment the Actor owner's registration finishes, only the new session
@@ -407,7 +407,7 @@ by the callback.
 
 Once the callback reaches a successful or failed terminal, the framework
 schedules a non-blocking timer to close the previous connection `100 ms`
-later from the previous session callback terminal, and immediately
+after the previous session callback terminal, and immediately
 returns the callback turn. It doesn't wait out the 100 ms with `sleep`, a
 blocking wait, or occupation of a session serial lane or worker. Before
 closing, the timer callback revalidates whether the session owner
@@ -420,8 +420,8 @@ is `30,000 ms`. A deployment where the application needs more or less time
 to send a duplicate-connection notice can adjust this setting.
 
 Failure to deliver the previous-session notification, callback failure, and
-delayed connection close are recorded with bounded diagnostics, but never
-restore or remove the new binding. This notification's send follows the
+delayed connection close are recorded with bounded diagnostics, but they
+never restore or remove the new binding. This notification's send follows the
 ordinary rule: when the queue is full, it waits for admission until the send
 timeout, and ends with `DeadlineExceeded` if it is not admitted by then. The
 Framework adds no separate retry and does not delay the bind terminal. Core
@@ -440,7 +440,7 @@ push/ingress/close from a previous owner lifecycle, a previous Actor
 malformed control or one-way record isn't put on the application queue,
 and a one-way record doesn't get a separate terminal route.
 
-Submitting the already-current binding from the same physical session
+Resubmitting the already-current binding from the same physical session
 is an idempotent success; it neither sends `boundSessionReplaced(51)` to
 itself nor closes the connection. Closing the previous connection also
 cleans up, once each via the ordinary physical-disconnect procedure, every
@@ -457,8 +457,8 @@ tombstone for the previous identity doesn't remove the new identity.
 
 ## 7. Disconnect Notification
 
-When the framework observes a physical connection disconnect, it fixes the
-current binding snapshot and automatically submits a disconnect to each
+When the framework observes a physical connection disconnect, it captures the
+current binding snapshot and automatically submits a disconnect notification to each
 binding identity. The application's session disconnect callback
 doesn't iterate bound Actors itself. The framework verifies the route and
 generation stored in the binding and delivers the notification to the
@@ -538,7 +538,7 @@ the Session owner handles within that flow.
   binding's Actor route. The two rules apply together and don't substitute
   for each other.
 
-### 8.1 Seal, Held Messages, And Route Switchover
+### 8.1 Seal, Held Messages, and Route Switchover
 
 All Session-binding validation is performed in one place, by the Session
 owner. The Session owner only validates these values.
@@ -648,7 +648,7 @@ the Session owner doesn't re-query the Store or an Actor authority mirror.
 The reserved command 45 is neither sent nor accepted. Each command's
 direction, use, and completion style are in §5's command table.
 
-## 9. Distinguishing Reconnection From Relocation
+## 9. Distinguishing Reconnection from Relocation
 
 These two look similar on the surface but are handled in opposite ways.
 
@@ -681,7 +681,7 @@ disconnect isn't evidence of relocation success or failure, and if the
 Session owner process terminates, the connection is closed rather than
 recovered in another process.
 
-## 10. Execution And Lifetime
+## 10. Execution and Lifetime
 
 The session owner serializes the same session's handler turn, binding
 mutation, close, and relocation barrier. Once submitted to the Actor, the
@@ -708,7 +708,7 @@ The host permit rule shared by Session application records and ordinary
 control is owned by
 [Application Job Queue And Backpressure "3. Ordinary Ingress Permit Order"](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order).
 
-## 11. Execution Engine And Lane Policy Types
+## 11. Execution Engine and Lane Policy Types
 
 If separate serial-execution primitive types are built for Spot, session,
 and Actor delivery, and for each of the two domain mailboxes, the rules for
@@ -724,13 +724,13 @@ those types.
   several boolean settings.** The states the three lanes need to express
   are as follows.
 
-| Site | State it has | State it doesn't have |
+| Site | States it has | States it doesn't have |
 |---|---|---|
 | Spot lane | Return-wait, move sealing | Connection closed |
 | session lane | Connection closed | Return-wait, move sealing |
 | Actor-delivery lane | None | Return-wait, move sealing, connection closed |
 
-The reason it shouldn't be expressed with two or three booleans is that
+The reason this should not be expressed with two or three booleans is that
 most combinations are meaningless. A combination like "move sealing on in
 a session" or "return-wait on in Actor delivery" is a state that can't
 exist, but if the type allows it, the caller has to know which combinations
@@ -744,18 +744,18 @@ is whether a meaningless combination can be constructed. As long as that
 condition is satisfied, the observable execution order and lane state
 transitions are the same regardless of representation.
 
-There are two internal confirmation conditions. That there is exactly one
+There are two internal confirmation conditions. The condition that there is exactly one
 serial-execution primitive type within the runtime is confirmed as a
 white-box invariant, and that the lane policy type can't express a
 combination not in the table (for example, move sealing on the session
 lane) is confirmed by static inspection.
 
 This lane policy operates on top of the separation of queue and execution
-gate, and the ready-set management, that
+gate, and the ready-set management, defined by
 [Handler Turn And Execution Gate](../01-execution/02-handler-turn-and-execution-gate.en.md)
 defines.
 
-## 12. Failure And Errors
+## 12. Failure and Errors
 
 A request reply/error completes the original STREAM correlation
 terminal-once. If a timeout, cancellation, or route failure happens after a
