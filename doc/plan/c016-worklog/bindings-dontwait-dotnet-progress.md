@@ -1,0 +1,15 @@
+# .NET DONTWAIT backpressure binding progress
+
+- 2026-09-04 16:02 KST: 작업 시작. detached worktree와 기존 변경을 확인했다. `bindings/dotnet/**`에는 선행 변경이 없으며, Core/다른 바인딩의 미커밋 스냅샷은 건드리지 않는다.
+- 2026-09-04 16:02 KST: `bindings/dotnet`에서 completion ID/pending/POLLCOMPLETION/PENDING_MAX/DONTWAIT/BACKPRESSURED 참조의 직접 목록화를 시작했다. async SEND completion 대기 경로는 우선 `Runtime/Messaging/CompletionOwner.cs`에 집중된 것으로 확인했다.
+- 2026-09-04 16:05 KST: Core 헤더에서 계약 B ABI를 확인했다. `ZLINK_COMPLETION_WRITABLE=3`, 정상 SEND는 ID 0/무-completion, DONTWAIT 거절은 BACKPRESSURED/EAGAIN+대기 토큰이며 `PENDING_MAX_*`는 REQUEST 제한(SEND no-op)이다.
+- 2026-09-04 16:08 KST: `ulimit -v 16777216; bash scripts/build-core.sh dev` 실행. 진행 중인 Core 스냅샷이 `socket_base_api.cpp:159`, `socket_base_lifecycle.cpp:1318`의 미선언 `fail_all_send_writable` 호출로 컴파일 실패했다. 바인딩 범위 밖이라 Core는 수정하지 않는다.
+- 2026-09-04 16:32 KST: SEND 상태 머신을 계약 B로 전환했다. 정상 성공은 ID 0에서 즉시 완료하고, backpressure는 payload 사본·token·context·RID를 보관한 뒤 POLLOUT/WRITABLE을 pull하여 동일 패킷을 재전송한다. 재-backpressure는 새 token으로 재무장하며 REQUEST completion 경로는 유지했다.
+- 2026-09-04 16:35 KST: 공개 `TrySubmit(): bool` 및 `CompletionKind.Writable=3`을 추가하고, STREAM 실패 시 native part 소비 의미와 REQUEST 전용 `PENDING_MAX_*` 주석을 정정했다. 전용 completion thread/timer 대신 managed event-loop turn을 사용한다.
+- 2026-09-04 16:41 KST: 메모리 상한 아래 managed restore/build/test 실행. `COMPlus_GCHeapHardLimit=40000000`, `COMPlus_GCServer=0`, `COMPlus_GCHeapCount=1`, `DOTNET_PROCESSOR_COUNT=2`를 함께 사용했으며 build 0 warning/0 error, test 177/177 green이다. 현재 native 계약 테스트는 Core 빌드 실패 때문에 실제 libzlink 없이 skip-return 경로다.
+- 2026-09-04 17:12 KST: poll/drain 실패가 awaiter를 영구 대기시키지 않도록 runtime failure 경계를 추가했다. SEND/REQUEST Task는 typed internal failure로 끝내되 native token/context는 tombstone으로 유지하여 이후 drain 또는 socket close까지 안전하게 보존한다. public poller handoff와 close가 경합하면 해당 수명주기 전이가 우선한다.
+- 2026-09-04 17:15 KST: 최신 managed build 0 warning/0 error, 전체 suite 177/177 green. WRITABLE retry·TrySubmit backpressure·CompletionKind 공개 계약 필터는 3/3을 5회 연속 통과했다. 단 native 부재로 두 HWM 테스트는 availability guard에서 조기 반환했고, enum 테스트만 실제 실행됐다.
+- 최종 재검증: 내부 WRITABLE-only wake를 걸러낸 뒤에도 `Poller.Wait`가 남은 단조 시간 제한 동안 REQUEST completion을 계속 기다리도록 수정하고 회귀 테스트를 추가했다. 전체 managed suite는 178/178, 표준 `tests/run_tests.sh`는 테스트 178/178과 sample 7/7로 통과했다.
+- 최종 재검증: HWM/POLLOUT/WRITABLE 재전송, filtered WRITABLE wake, `TrySubmit` 소유권, 공개 `CompletionKind`의 4개 필터를 실제 4/4로 5회 연속 실행했다. 현재 `libzlink.so`가 없어 네이티브 의존 3건은 availability guard에서 조기 반환했으며 enum 1건만 실제 계약을 검사했다. 최종 Core 교체 후 같은 gate 재실행이 필요하다.
+- 최종 gate: 변경 C# 파일의 `dotnet format --verify-no-changes` 통과, `git diff --check -- bindings/dotnet` 통과, `bindings/dotnet/include` 미존재로 raw-header mirror 비교는 적용 대상이 아니다. 전체 프로젝트 format은 미수정 기준 파일 `test_socket_concurrency.cs`의 기존 공백 오류 4건을 보고하므로 해당 파일은 변경하지 않았다.
+- 최종 설계 확인: Core 공개 ABI에는 poller waitable FD/HANDLE 또는 readiness callback이 없다. `ZLINK_OPT_FD`는 Core 소유 mailbox notification이라 binding이 read하면 ownership/rearm을 깨며 Linux eventfd와 Windows Winsock을 안전하게 통합할 수도 없다. 따라서 autonomous await는 shared scheduler의 nonblocking event-loop turn을 사용하고, public poller가 등록된 경우에는 외부 loop가 queue 진행을 구동한다. 완전한 무스핀 autonomous await에는 Core ABI 확장이 필요하다.

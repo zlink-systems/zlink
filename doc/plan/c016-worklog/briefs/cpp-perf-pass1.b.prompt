@@ -1,0 +1,15 @@
+역할: zlink C++ 바인딩 hot-path 개선 pass 1 담당(sol high). 작업 트리: /home/hep7hep7/project/zlink-wt-cpp-perf (detached @053a568ddd; core/build·core/build-dev는 메인 트리 symlink — core/** 아래 cmake/build/clean 금지, 라이브러리는 최종 0.17.0). 수정 범위 bindings/cpp/** 만(공개 API·ownership·error contract·측정 의미 유지; 다른 bindings·core·doc 금지). git commit/push/reset/checkout/stash 금지. 진행 로그 /home/hep7hep7/project/zlink-work/c016/cpp-perf-pass1-progress.md 한 줄씩 append, 종료 시 `EXIT:<code>`. 요약 cpp-perf-pass1-summary.md (원인 표, 변경, before/after 표, gate, BLOCKERS).
+
+배경: 0.17.0 bindings 성능 계획(doc/perf/perf/bindings-0.17.0/bindings-library-performance-improvement-plan-core-0.17.0.ko.md §7.4-9~11: 미달 셀 → 비용 위치 확인 → 자체 개선 pass → after 1회 측정)과 최적화 가이드 doc/perf/BINDINGS_OPTIMIZATION_GUIDE.ko.md(§2 체크리스트, §4 기각 목록). paired before 측정(C vs C++, multi tcp, 100 clients, 5초, Core 0.17.0):
+- DEALER_DEALER: 64B 56.1%(C 1079k vs cpp 606k), 256B 60.2%, 1024B 68.8%, 4096B 81.8%, 64K 108%.
+- DEALER_ROUTER_REQREP: 64B 40.7%(156k vs 63k ops/s), 256B 43.2%, 1024B 38.0%, 4096B 45.5%, 64K 91.5%.
+- ROUTER_ROUTER_REQREP: 64B 44.8%, 256B 45.8%, 1024B 49.8%, 4096B 53.7%, 64K 109%.
+- PUBSUB: 81~109% (개선 대상 아님).
+즉 작은 메시지에서 C++의 메시지당 고정 비용이 지배한다: REQREP는 ops당 약 3배(async request future 경로), DD는 메시지당 약 1.8배.
+
+할 일:
+1. 비용 위치 확인(추측 금지): `perf`가 없으면 callgrind(`valgrind --tool=callgrind`, ~/.local/bin/valgrind)로 C++ multi REQREP 클라이언트(1024B, clients 10, 1초)와 DD 클라이언트를 프로파일해 C 러너 대비 ops당 추가 명령 수가 어디서 나오는지(할당, Message/part wrapper 생성·파괴, completion owner map/lock, future/coroutine 상태, std::function, 복사) 상위 항목을 표로.
+2. 가이드 §2.1(즉시 성공 경로 무할당·무복사·무락), §2.2(거절 경로 O(1)), §2.3(drain/wake), §2.4(수신 direct reply, wrapper 재사용, 생성자 초기화 생략)로 판정하고 수정. 특히 REQUEST 즉시 admission 경로에서 completion entry·future 상태·map 등록이 op마다 생기면 admission 뒤 REQUEST completion 대기에 필요한 최소 상태만 남기고 pool/inline 저장으로. 기각 목록(§4)은 시도하지 않는다.
+3. after 측정: 같은 명령으로 C++만 다시(`ZLINK_CORE_SOURCE=local ZLINK_CPP_CORE_BUILD_DIR=$PWD/core/build ZLINK_BUILD_JOBS=4 bash bindings/cpp/perf/run_benchmarks_multi.sh --pattern DEALER_DEALER,DEALER_ROUTER_REQREP,ROUTER_ROUTER_REQREP --transports tcp --msg-sizes 64,256,1024,4096,65536 --duration 5 --runs 1`), 측정 중 다른 무거운 작업 금지, before 대비 표.
+4. Gate: `ZLINK_CORE_SOURCE=local ZLINK_CPP_CORE_BUILD_DIR=$PWD/core/build ZLINK_BUILD_JOBS=4 bash bindings/cpp/tests/run_tests.sh` 전체 + 샘플, 변경 관련 contract test 5회, `git diff --check`. 공개 헤더(bindings/cpp/include/zlink/**)의 시그니처 변경 금지(주석·inline 구현 최적화는 가능).
+메모리 11 GB, 다른 job 없음: 빌드 JOBS≤4. 상한 90분.

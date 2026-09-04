@@ -1,0 +1,12 @@
+역할: zlink 바인딩 `node`(/home/hep7hep7/project/zlink-wt-node/bindings/node (detached worktree; Core는 진행 중인 계약 B 구현의 스냅샷이 core/에 복사돼 있음 — 최종 Core는 감독관이 나중에 갈아 끼우고 테스트를 재실행한다; 이 worktree 안에서만 작업)) 계약 정합 수정자(sol ultra). 수정은 bindings/node/** 만(다른 바인딩·core·framework·doc 금지; raw header mirror bindings/node/include 는 core/include와 byte-identical 유지).
+
+배경(판정 D-B79 확정 B, Core 커밋 (미커밋 스냅샷; 계약은 D-B79 확정 B로 고정)): DONTWAIT send가 HWM/admission 불가면 Core는 payload를 보관하지 않고 `ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`과 함께 **대기 토큰(nonzero completion ID, user_context 기억)**을 돌려준다. 대상 pipe에 credit이 돌아오면 Core가 completion queue에 `ZLINK_COMPLETION_WRITABLE` completion(토큰·context·RID)을 넣고 poller를 `POLLOUT`으로 깨운다. 앱은 POLLOUT 뒤 `zlink_completion_recv`를 NO_DATA까지 pull해 WRITABLE의 context로 정확히 그 작업만 재개해 같은 패킷을 재전송한다. 일반 SEND 성공에는 completion이 없고(ID 0), 0.16.0의 "pending 수락 + SEND completion"은 제거됐다. REQUEST 경로는 현행 유지. Core job 요약 $ZLINK_WORK/c016/dontwait-backpressure-core-summary.md 의 영향 목록에서 이 바인딩 항목: (Core job 요약 미완 — 이 바인딩 소스에서 completion ID/pending/POLLCOMPLETION/PENDING_MAX 참조를 rg로 직접 찾아 목록화한 뒤 진행)
+
+요구:
+1. 이 바인딩의 send 계열 API(동기·비동기·헬퍼)가 새 계약을 그대로 노출하도록 정리: DONTWAIT에서 BACKPRESSURED/EAGAIN을 언어 관례의 오류·상태값으로 돌려주고, "nonzero completion ID를 기다린다"는 코드 경로를 제거한다. 바인딩이 비동기 send 헬퍼(await/promise/future)를 제공한다면 그 구현은 **토큰 기억 → POLLOUT 시 completion queue pull → WRITABLE(같은 토큰)이면 같은 패킷 재전송**으로 바꾼다(코루틴/이벤트루프 모델; 별도 OS 스레드·sleep·timer 금지). REQUEST/reply completion 처리는 유지.
+2. `ZLINK_OPT_PENDING_MAX_*`를 SEND 용도로 노출·설정하는 코드/문서가 있으면 REQUEST 전용으로 정리(값·ABI 유지).
+3. 테스트: 해당 바인딩 테스트 suite에서 pending 의미에 기대는 케이스를 새 계약으로 고치고, "HWM까지 채움 → BACKPRESSURED+토큰 → peer drain → POLLOUT → WRITABLE(같은 토큰) → 재전송 성공" 케이스와 새 completion kind 노출(enum/상수) 케이스를 public API로 추가(sleep 금지, 5회 green).
+4. 문서: 바인딩 README/API 문서의 DONTWAIT·completion 서술을 새 계약으로 정정(바인딩 문서만).
+
+Gate: 이 바인딩의 표준 테스트 스크립트(README 참고; Core는 이 worktree에서 `bash scripts/build-core.sh dev`(core/build-dev, no-LTO)로 빌드하고 바인딩 테스트는 core/build 대신 core/build-dev의 libzlink를 쓰도록 ZLINK_CORE_SOURCE=local + 필요 시 LD_LIBRARY_PATH/빌드 인자로 가리킨다(방법은 각 바인딩 run_tests.sh를 읽고 결정, 안 되면 `bash scripts/build-core.sh release --lib-only`로 core/build에 라이브러리만)) 전부 green, `git diff --check`, mirror cmp. 절대 규칙: git commit/push/checkout 금지, `--core-version` 금지, scripts/local-package/** 실행 금지, `ulimit -v 16777216`.
+완료 시 $ZLINK_WORK/c016/bindings-dontwait-node-summary.md 에 변경 파일·API 표(전/후)·테스트·gate. 진행은 bindings-dontwait-node-progress.md 에 append.

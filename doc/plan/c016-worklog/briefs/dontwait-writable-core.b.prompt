@@ -1,0 +1,18 @@
+역할: zlink Core(/home/hep7hep7/project/zlink, branch main, 여기서 직접 작업; 감독관이 커밋) 계약 구현자(sol ultra, 상한 2시간). **이전 job(브리프 $ZLINK_WORK/c016/briefs/dontwait-backpressure-core.b.prompt, 진행 기록 dontwait-backpressure-core-progress.md)이 A안(POLLOUT만, completion 없음)으로 구현하던 중 계약이 B안으로 확정되어 중단됐다.** 현재 작업 트리의 미커밋 편집(payload 보관 제거, send_pending_submit→request_pending_submit 분리, DONTWAIT 단일 admission, 테스트 보정, 32파일)을 **이어받아** B로 완성한다(되돌리지 말고 필요한 부분만 고침).
+
+확정 계약 B(판정 D-B79 확정 B):
+1. `zlink_send`/`zlink_send_part` DONTWAIT FINAL: 즉시 admission → OK, ID 0, completion 없음(현행). admission 불가(대상 pipe HWM/byte credit 부족, 대상 미준비) → `ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`, **completion ID nonzero(대기 토큰)**, `user_context` 기억. payload는 호출자 소유(Core는 토큰·대상 pipe·context만 보관). staged MORE part는 기존 rollback 규칙.
+2. 대상 pipe에 write credit이 돌아오면(기존 writer wake 지점) Core가 그 소켓 completion queue에 **`WRITABLE` completion**(새 completion kind: `zlink_completion_kind_t`에 값 추가, 기존 값 불변; completion_id=토큰, user_context, 가능하면 대상 routing id)을 넣고 public poller를 `ZLINK_POLLOUT`으로 깨운다(queue 비어 있지 않으므로 POLLCOMPLETION도 level로 성립). 토큰은 WRITABLE 전달 또는 socket close로 소멸(close 시 잔여 토큰은 terminal completion으로 정리). 같은 대상의 여러 토큰은 발급 순으로 각각 WRITABLE 1건.
+3. 대상 단위: PAIR=단일 pipe, DEALER=후보 peer 집합(어느 후보든 credit 생기면 WRITABLE 1건; 재시도 시 Core가 열린 peer 선택), ROUTER/STREAM=지정 RID pipe, PUB/XPUB publish=completion 비대상(현행). REQUEST(`zlink_request_part`)는 범위 밖·현행 유지(공유 코드 분리로 동작 불변 증명).
+4. `ZLINK_OPT_PENDING_MAX_*`: SEND에는 no-op(REQUEST 현행). 토큰 레코드는 고정 크기·hot path 할당 금지(socket 소유 pool/intrusive list; 스펙 10-hot-path §3).
+5. wake: 토큰 등록과 credit 회복 사이 순서 틈 금지(등록 → fence → 재확인; 이미 열려 있으면 즉시 WRITABLE). wake-invariant 테스트로 고정. §3.7 임시 owner 재무장 준수.
+
+공개 API 변화 허용 범위: `zlink_completion_kind_t`에 `ZLINK_COMPLETION_WRITABLE` 1개(기존 뒤에 추가), completion 구조체는 기존 필드 재사용(크기·오프셋 불변). 헤더 변경 시 raw header mirror 4종 동기화. 그 외 시그니처·ABI 변경 금지. 스펙 문안(README 116·375~389·923~955행, 06-dealer, 05-polling, completion 절)은 BLOCKERS에 제안만.
+
+테스트(public API, sleep 금지, 5회 green): (a) PAIR/DEALER/ROUTER directed에서 HWM까지 채움 → BACKPRESSURED+토큰, completion 없음, payload 소유 유지 → peer drain → POLLOUT → `zlink_completion_recv`로 WRITABLE(같은 토큰·context) → 재전송 성공; (b) ROUTER 두 RID 중 하나만 drain → 그 RID 토큰만 WRITABLE; (c) DEALER 후보 2개 중 하나 열림 → WRITABLE 1건 → 재전송이 열린 peer로; (d) 미연결 endpoint DONTWAIT → 토큰, 연결 뒤 WRITABLE; (e) 토큰 보유 중 close → terminal 정리, 누수 없음; (f) 100 client × 64 KiB(test_wake_invariants)를 새 계약으로; (g) REQUEST suite 불변; (h) 0.16.0 pending 의미에 기대던 기존 테스트를 새 계약으로(목록 기록). 영향 목록: `rg`로 framework/**·bindings/** 의 SEND completion/pending 의존 파일:행(수정 금지).
+
+Gate(전부 green, `ulimit -v 16777216`): 반복 `bash scripts/build-core.sh dev`, 최종 `bash scripts/build-core.sh release-gate` → `ctest --test-dir core/build -j2` 전체; `ctest -L wake-invariant -j1` ×3; `ctest -R hotpath_gate`(수치 기록, 기준값 수정 금지); raw mirror cmp 12; `git diff --check`; `bash bindings/cpp/tests/run_tests.sh`; `PYTHON_EXECUTABLE=$HOME/project/zlink/.artifacts/wsl/python-build-venv/bin/python ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh`(바인딩 실패는 목록만). 벤치 `bindings/c/perf/run_benchmarks_multi.sh --pattern DEALER_DEALER --transports tcp --msg-sizes 64,4096,65536 --runs 1` 완료·수치 기록(참고).
+
+절대 규칙: doc/**·core/doc/** 수정 금지. framework/**·bindings/** 수정 금지(raw header mirror 동기화 예외). scripts/local-package/** 실행 금지. git commit/push/reset/checkout/stash 금지. hotpath_reference.json 수정 금지. 임시 계측 제거. worktree zlink-wt-bench 불가침.
+
+완료 시 /home/hep7hep7/project/zlink-work/c016/dontwait-writable-core-summary.md 에 변경(파일별)·계약 대조표(0.15.1/0.16.0/B)·API 추가·테스트·gate·벤치·영향 목록·스펙 문안 제안. 진행은 dontwait-writable-core-progress.md 에 단계마다 append.

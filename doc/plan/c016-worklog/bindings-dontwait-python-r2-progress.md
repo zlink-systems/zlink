@@ -1,0 +1,3 @@
+2026-09-04 시작: detached HEAD 확인, 기존 변경은 core/build 및 core/build-dev symlink뿐이며 보존. Python API/테스트/문서 및 0.17.0 계약 정찰 시작.
+2026-09-04 구현 1차: CompletionKind.WRITABLE 공개, ffi 0.17 상수, REQUEST-only pending 설명, managed send payload snapshot/WRITABLE 재시도/event-loop pump, public poller drain 연동, perf helper 외부 재시도 제거. compileall·diff-check 통과; 좁은 테스트 77 pass, README 문구 1건 즉시 수정, in-place extension 미빌드는 최종 표준 절차에서 처리 예정.
+2026-09-04 핵심 검증: public HWM→BACKPRESSURED/EAGAIN+token→peer drain→POLLOUT→동일 token/context/RID WRITABLE→동일 payload 재전송과 CompletionKind 공개 테스트를 최종 소스에서 5회 연속 실행, 매회 2 passed. 시스템 Python의 pytest 부재는 기존 python-test-venv 실행기로 교정.

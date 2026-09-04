@@ -1,0 +1,15 @@
+역할: zlink C perf 벤치 정정자 2차(sol ultra). 작업 트리: /home/hep7hep7/project/zlink-wt-bench (detached, main cfc284f2e4 = 1차 정정이 커밋된 상태). 수정은 bindings/c/perf/** 만. Core는 `bash scripts/build-core.sh release --lib-only`로 라이브러리만. 다른 job이 같은 머신에서 돌 수 있으니 측정 절대값은 요약에 조건(부하)을 함께 적는다.
+
+1차 정정(커밋 cfc284f2e4, 요약 $ZLINK_WORK/c016/perf-multi-contract-summary.md) 뒤 감독관이 CCU=100으로 baseline(core/v0.15.1 worktree /home/hep7hep7/project/zlink-perf-core-0.15.1, 옛 벤치)과 비교한 결과(msg/s, cand/base):
+- DEALER_DEALER tcp: 4096B 307k/391k = 0.78, 65536B 96.2k/94.5k = 1.02
+- DEALER_ROUTER_SENDSEND tcp: 4096B 212k/206k = 1.03, 65536B 37.6k/29.7k = 1.27
+- PUBSUB tcp: 4096B 5.9k/649k, 65536B 300/74k — baseline 값은 100 subscriber × 4 KiB × 649k = 266 GB/s로 물리적으로 불가능하므로 옛 벤치의 PUB throughput은 drop을 포함한 "발행 수"이고, 1차 정정 벤치(NODROP=1)는 실제 전달 수를 센다 → 지표 의미가 달라 비교 불가.
+
+요구:
+1. DEALER/ROUTER one-way의 pending 상한: 1차는 socket당 pending SEND completion 1개로 조여 4 KiB(HWM당 256개)에서 포화가 안 된다. 포화 throughput 구간은 "API가 backpressure(ID 0 즉시 admission 또는 pending 수락)를 보고할 때까지 제출하되 pending completion을 POLLCOMPLETION으로 계속 drain"하는 정책으로 바꾸고, pending 상한은 HWM 기준(예: 1 MiB / msg_size, 최소 16, 최대 4096)으로 둔다. latency 구간은 그대로 in-flight 1. 재측정으로 4096B DEALER_DEALER가 baseline 대비 ≥0.95가 되는지 확인(64 KiB는 유지).
+2. PUBSUB 지표 정합: 옛 벤치(baseline worktree의 perf_multi_pubsub_*)가 무엇을 세는지(PUB 제출 수 vs SUB 수신 수, drop 정책) 소스로 확인하고, 두 트리에서 **같은 의미의 수치**가 나오도록 정정 벤치의 throughput 정의를 문서화·조정한다. 원칙: throughput = 모든 SUB가 실제 수신한 메시지 수의 합 / 초(fan-out 포함)와 PUB 제출 수 / 초 중 하나를 명시적으로 고르고 RESULT metric 의미를 README에 적는다. baseline 옛 벤치 소스를 복사하지 말고(0.15.1 API), 필요하면 baseline 쪽 결과를 같은 정의로 환산해 비교표를 만든다. drop이 있으면 drop 수를 별도 진단으로 출력.
+3. 재비교표: CCU=100, tcp, 4096·65536, DEALER_DEALER / DEALER_ROUTER_SENDSEND / PUBSUB, candidate vs baseline(각 1회, 조용한 구간에서; `ps -eo comm | grep -E '^(perf_|comp_src|python3)$'` 비어 있을 때). 표에 cand/base 비율.
+4. 검증: Python perf unittest 59개, C++ metric test, `bindings/c/perf/ci_multi_smoke.sh`(CCU=8) 완료, 1024B multi 7패턴 RESULT.
+
+절대 규칙: bindings/c/perf/** 외 수정 금지. git commit/push/checkout 금지. `--core-version` 금지. `ulimit -v 16777216`. 빌드 -j4.
+완료 시 /home/hep7hep7/project/zlink-work/c016/perf-multi-policy-r2-summary.md 에 정책 변경·지표 정의·비교표·검증. 진행은 perf-multi-policy-r2-progress.md 에 append.

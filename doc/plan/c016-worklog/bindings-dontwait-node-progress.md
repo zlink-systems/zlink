@@ -1,0 +1,21 @@
+## 2026-09-04 시작
+
+- detached worktree와 기존 Core/타 바인딩 변경을 확인했다. 해당 변경은 건드리지 않는다.
+- Node 영향 참조를 직접 조사했다: native `socketSubmitSend`/`socketCompletionRecv`, TypeScript `CompletionOwner`, public `PollEventFlag`, send completion 경계/operation 테스트, README의 Core-completion 서술.
+- 현재 차이의 핵심은 일반 SEND 성공 completion 대기 제거, BACKPRESSURED wait token의 WRITABLE 매칭 후 payload 재전송, timer 기반 completion pump 제거, `CompletionKind.Writable` 및 peer RID 노출이다.
+- 수정 범위는 `bindings/node/**`; 작업 기록/최종 요약만 이 c016 디렉터리에 쓴다.
+- `ulimit -v 16777216; bash scripts/build-core.sh dev` 1차는 진행 중 Core 스냅샷의 `core/src/runtime/sockets/router/router_send_path.cpp:641`에서 `copy_routing_id_from_bytes` 미정의로 실패했다. Node 범위 밖이라 수정하지 않았다.
+- `npm ci --ignore-scripts` 성공(23 packages). 금지된 local-package/lifecycle fetch는 실행하지 않았다.
+- 1차 구현 리뷰에서 원본 `Message` wrapper 재사용, public slot 충돌, duplicate add rollback의 세 소유권/상관관계 결함을 찾았고 후속 수정에 반영 중이다.
+- Core 스냅샷이 갱신된 뒤 `bash scripts/build-core.sh dev`를 재실행했다. 이전 ROUTER 컴파일 오류는 통과했지만 새 `socket_send_complete.cpp`가 Core 빌드 소스 목록에 아직 연결되지 않아 test executable 링크에서 `notify_send_writable`, `register_send_writable_wait` 등 심볼 미정의로 실패했다. Node 범위 밖이라 수정하지 않는다.
+- Core의 갱신된 소스가 기존 object보다 오래된 timestamp를 가진 상태를 확인했다. 생성 산출물인 `core/build-dev` target만 clean한 뒤 `bash scripts/build-core.sh dev`를 다시 실행했고, shared library와 dev test binary 빌드가 완료됐다.
+- Node addon은 `ZLINK_CORE_SOURCE=local`, `ZLINK_CORE_INCLUDE_DIR=core/include`, `ZLINK_CORE_LIB_DIR=core/build-dev/lib`로 configure/build했다. 실행 gate는 `ZLINK_LIBRARY_PATH`와 `LD_LIBRARY_PATH`를 `core/build-dev/lib/libzlink.so.0.16.0`에 고정했다.
+- 새 Core에서 일반 연결 상태의 `POLLOUT`은 발생하지 않고, wait token이 WRITABLE이 될 때만 발생한다. 신규 테스트의 연결 동기화는 Core 계약 테스트와 같은 blocking prime 송수신으로 바꿨다.
+- managed SEND는 첫 DONTWAIT 시도, BACKPRESSURED/EAGAIN/nonzero token 검증, payload snapshot, Message 소유권 반납, WRITABLE token/context/RID 상관 확인, 동일 packet 재전송으로 정리했다. 일반 성공은 completion ID 0을 검증하며 SEND completion을 기다리지 않는다.
+- public poller가 completion queue를 단독으로 drain하도록 ownership transfer와 내부 socket registration token을 추가했다. 사용자 slot이 socket/fd/timer 값과 겹쳐도 native event를 정확한 socket으로 되돌린다.
+- Core hard memory limit보다 큰 `UINT64_MAX`를 명시 budget으로 쓰던 기존 Node HWM 테스트를 Core 자체 round-trip 값(memory limit 16 MiB, core budget 4 MiB)으로 정정했다. socket HWM의 UINT64_MAX 검증은 유지했다.
+- 현재 Core 스냅샷은 이미 끊긴 stale route에 BACKPRESSURED token을 준 뒤 terminal completion을 내지 않을 수 있다. 기존 routed ownership 테스트는 즉시 NotFound/NotConnected 경계와 snapshot 후 sender close→Terminated 경계를 모두 검증하도록 정리했다.
+- 핵심 DONTWAIT/WRITABLE 및 public completion kind 테스트를 5회 연속 실행해 모두 통과했다. `npm run typecheck`, `npm run build`, 전체 `bash tests/run_tests.sh`와 sample 7개도 통과했다.
+- `git diff --check`가 통과했다. `bindings/node/include`가 존재하지 않아 raw header mirror cmp 대상은 없다.
+- README 두 파일을 문서 원칙과 현재 코드 계약으로 독립 리뷰했다. private/public completion drain 구분, caller의 `poller.wait(...)` 의무, token·context·RID 상관 검증, `CompletionKind.Send`의 ABI-only 성격과 raw Core REQUEST admission limit 범위를 반영했다.
+- 최종 변경·API 비교·gate·범위 경계를 `bindings-dontwait-node-summary.md`에 기록했다.
