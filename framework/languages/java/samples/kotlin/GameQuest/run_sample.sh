@@ -226,6 +226,7 @@ wait_for_line "$LOG_DIR/client.log" "gamequest-owner-termination-ready player=pl
 owner_role="$(wait_for_replayed_owner)"
 owner_pid="${role_pids[$owner_role]}"
 kill -KILL "$owner_pid"
+wait "$owner_pid" || true
 remaining_pids=()
 for pid in "${pids[@]}"; do
   [[ "$pid" == "$owner_pid" ]] || remaining_pids+=("$pid")

@@ -285,11 +285,13 @@ try {
     $clientLog = Join-Path $LogDir "client.log"
     Wait-LogLine $clientLog "gamequest-owner-termination-ready player=player-alice"
     $ownerRole = Wait-ReplayedOwner $missionALog $missionBLog
+    $ownerProcess = if ($ownerRole -eq "mission-a") { $missionAProcess } else { $missionBProcess }
     if ($ownerRole -eq "mission-a") {
         Stop-Process -Id $missionAProcess.Id -Force
     } else {
         Stop-Process -Id $missionBProcess.Id -Force
     }
+    $ownerProcess.WaitForExit()
     [System.IO.File]::WriteAllText((Join-Path $controlDir "owner-terminated"), "released")
     $clientProcess.WaitForExit()
     if ($clientProcess.ExitCode -ne 0) { throw "Client failed" }
