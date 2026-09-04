@@ -1,0 +1,45 @@
+# Job: run the node and java framework gates on current main and classify every failure
+
+You are a codex sub-agent under a Claude supervisor. This is an execution/classification job, not a
+fix job. Read `AGENTS.md` (root) §2 and §4 first.
+
+## Environment (already prepared — do NOT rebuild Core or local packages)
+- Core: `core/build-dev` (current main). Local packages: `.artifacts/wsl/npm/zlink-systems-zlink-0.17.0.tgz`,
+  `.artifacts/wsl/maven/`. Core prefix `~/.cache/zlink/core/0.17.0/linux-x64`.
+- redis-server runs on 127.0.0.1:6379.
+- Use `TMPDIR=/dev/shm/zlink-tmp-<lang>` (mkdir -p first). Gate locks: `flock -w7200 /tmp/zlink-node-gate.lock`,
+  `flock -w7200 /tmp/zlink-jvm-gate.lock`. Other jobs are running concurrently (cpp, dotnet); that is
+  expected and safe (independent ports) — do not wait for them.
+- Two other codex jobs are editing `framework/languages/cpp/**` and `framework/languages/dotnet/**`.
+  Do NOT touch those trees.
+
+## What to run (node, then java — or concurrently)
+1. **node**: `cd framework/languages/node`, install the local binding package the way the repo scripts
+   do (look at `package.json` / any `scripts/` there for the local `.tgz` wiring; the framework consumes
+   `@zlink-systems/zlink@0.17.0` from `.artifacts/wsl/npm`), then `npm test`. If ESLint blocks the run
+   with the known pre-existing `spot-timer.ts:137` lint error, run the unit tests directly (vitest/jest
+   invocation from package.json) and report both facts.
+2. **java**: `cd framework/languages/java && flock -w7200 /tmp/zlink-jvm-gate.lock ./gradlew --no-daemon
+   :zlink-framework-core:test contractTest` (adjust module names to `settings.gradle.kts`).
+3. For both, also run the cross-language smoke if it is self-contained:
+   `framework/languages/<lang>/cross-language/run_cross_language_smoke.sh` (java needs
+   `./gradlew --no-daemon -p cross-language :Host:installDist` first). If it depends on the C++ host and
+   that host is not built, say so and skip — do not build the C++ tree.
+
+## Classify every failure into exactly one bucket
+- (A) DONTWAIT-related (send/backpressure/WRITABLE/POLLOUT/completion drain) — should be zero now.
+- (B) terminal/error classification (wrong terminal kind / timeout where a specific terminal expected).
+- (C) known pre-existing — node lint `spot-timer.ts:137`; java `M6A` ×2 and `JavaDocumentationRegression`
+  ×1 (present since the 0.16 transition commit `e65abaf7ac`). Verify these are the SAME failures by
+  name/assertion, not merely the same count.
+- (D) environment (missing tool, port, browser harness) — say exactly what is missing.
+
+## Rules
+- Do not modify source or tests. Do not modify anything under `core/**`, `bindings/**`, any `doc/spec/**`,
+  `framework/doc/framework/**`, `doc/site/**`. Do not commit.
+- Keep full logs under `zlink-work/c016/logs/gate-<lang>-*.log`; put only first-failure excerpts in the summary.
+
+## Deliverable
+`doc/plan/c016-worklog/gate-node-java-summary.md`: per language a table (suite, pass/fail counts, exact
+commands), every failure bucketed with the assertion text and `file:line`, and a one-line verdict per
+language: "green except pre-existing (C)" or the list of new failures.

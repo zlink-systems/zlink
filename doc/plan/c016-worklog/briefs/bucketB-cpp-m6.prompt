@@ -1,0 +1,57 @@
+# Job: cpp bucket-B — finish root-causing m6a/m6b after the ENOENT route-absence fix
+
+You are a codex sub-agent under a Claude supervisor. One cause per job, 1.5 h cap. Read
+`AGENTS.md` (root) first — especially §2 (smallest verification first), §3 (fix in the owning
+module, never lower expectations), §4.1 (use existing tracing before adding any).
+
+## Established facts (do not re-derive)
+- Core `core/build-dev` is built from current main (includes B's `89ed9be356`). Local packages are
+  under `.artifacts/wsl/` (Core 0.17.0 prefix at `~/.cache/zlink/core/0.17.0/linux-x64`, built locally
+  because no `core/v0.17.0` release exists). **Do not rebuild Core or the local packages.**
+- C++ framework is configured: `framework/languages/cpp/build/linux-ninja-debug` (preset
+  `linux-ninja-debug`). Build a target with
+  `cmake --build framework/languages/cpp/build/linux-ninja-debug -j16 --target <t>` and run the
+  binary from that directory (`./test_cpp_framework_m6a_runtime`, `./test_cpp_framework_m6b_runtime`).
+- **Root cause #1 (confirmed by trace, fix applied, UNCOMMITTED in the working tree):** Core answers a
+  routed submit whose target RID is not in the ROUTER routing map with `ZLINK_SUBMIT_NOT_FOUND`(3) +
+  `ENOENT`(2) — exactly per `core/doc/spec/core/socket/07-router.ko.md` ("Routing map에 RID가 없으면
+  ZLINK_SUBMIT_NOT_FOUND+ENOENT"). `transient_route_errno()` in
+  `framework/languages/cpp/framework/src/runtime/backend/raw_binding_adapter.hpp` did not list ENOENT,
+  so `raw_route_port_t::request` classified "route not admitted yet" as permanent `failed` and the
+  bounded retry never re-sent. The fix adds ENOENT to that helper (with a comment) and a regression
+  `assert (transient_route_errno (ENOENT))` in `test_cpp_framework_m6a_runtime.cpp` main(). Keep both.
+- **After that fix, m6a no longer fails at line 176 (`records.size()==1`) but at line 155:**
+  `admit_pair()` → `assert (source.topology ().peer (target_descriptor.node_routing_id))` — the source
+  never sees the target admitted within 2 s, in `verify_bound_session_bind_retries_until_route_is_admitted`
+  (the pending bound-session-bind retry is now alive while admission runs). That is your job.
+- m6b's `verify_remote_bound_session_bind_classifies_retryable_outcomes` asserts
+  `transport_failure.error_kind () == framework_error_kind_t::deadline_exceeded` (line ~1343). Its
+  in-source comment claims both scenarios report EHOSTUNREACH(113) — that is stale (it is ENOENT now).
+  Re-verify m6b after m6a and correct the stale comment text if you touch it.
+
+## What to do
+1. Reproduce m6a's new line-155 failure. Use existing tracing first (`ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY`
+   equivalents for cpp, monitor events, the pump result); only add temporary stderr traces if the
+   existing ones are silent, and **remove them** before finishing.
+2. Determine why admission does not complete while a route-absent retry is pending: e.g. the retry
+   loop monopolising `pump_one`/the socket mutex, a retry submit clearing/holding something admission
+   needs, or the test's pump cadence. Find the owning module and the exact `file:line`.
+3. Fix minimally **inside `framework/languages/cpp/**` only**. Do not touch `core/**`, `bindings/**`,
+   `core/doc/spec/**`, `framework/doc/framework/**`. If the cause is in Core or the C++ binding, STOP and
+   write the precise diagnosis (symbol, returned vs expected value, spec clause) — the supervisor fixes
+   those.
+4. Never edit an assertion to make it pass. If an assertion contradicts the spec, report it.
+5. Add a regression test for whatever you fix (in the existing m6a/m6b test files), then run both
+   binaries 3× green and also `--target test_cpp_framework_channel_messaging` + its run.
+6. Do NOT commit. `git diff` must show only your framework/test changes plus the pre-existing
+   ENOENT fix.
+
+## Deliverable
+Write `doc/plan/c016-worklog/bucketB-cpp-m6-summary.md`: root cause (file:line, evidence), the fix
+(files, why minimal), regression test added, exact commands + results (3× runs), and BLOCKERS. If you
+hit the 1.5 h cap without a root fix, write the proven facts and the top candidates instead.
+
+## ABSOLUTE RULE
+Never create, modify, move, or delete anything under `core/doc/spec/**`, `bindings/doc/spec/**`,
+`framework/doc/framework/**`, or `doc/site/**`. Specs are user-owned. If you believe a spec is wrong or
+incomplete, write the exact clause and your proposed wording in the summary's BLOCKERS section only.

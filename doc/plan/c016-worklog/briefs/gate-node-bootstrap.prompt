@@ -1,0 +1,54 @@
+# Job: bootstrap the node framework's local dependency artifact, then run the node gate
+
+You are a codex sub-agent under a Claude supervisor. Execution job. Read `AGENTS.md` (root) §2, §4.
+
+## Situation
+`framework/languages/node/package.json:58` pins `@zlink-systems/http-client` to
+`file:../../../.artifacts/wsl/npm/zlink-systems-http-client-0.10.0.tgz`. That tarball is the pack
+output of the framework's own workspace package `framework/languages/node/packages/http-client`
+(`"files": ["dist","LICENSE"]`, `main: dist/index.js`) — it is NOT produced by
+`scripts/local-package/build-wsl.sh` (that only packs the binding tarball, which exists:
+`.artifacts/wsl/npm/zlink-systems-zlink-0.17.0.tgz`). The machine was reinstalled, so the tarball
+is gone and `npm install` fails with ENOENT before anything else. `dist/` does not exist yet either,
+and building it needs the root `node_modules` (typescript) — a bootstrap cycle.
+
+Prior finding (previous machine, `doc/plan/c016-worklog/handoff-2026-09-04/fw-gate-node-summary.md`):
+`npm ci` could not be used because the checked-in `package-lock.json` integrity for that tarball
+differs from a locally packed one; `npm install --package-lock=false` was the working route.
+Do not edit `package-lock.json` or `package.json`.
+
+## What to do
+1. Find how the repo itself expects this tarball to be produced — search `framework/languages/node/`
+   scripts (`scripts/*.mjs`, `verify_packaged_contract.sh`, `README*`, `package.json` scripts) and
+   `doc/`/`framework/doc/framework/node/guide/server/02-getting-started*.md` for the documented
+   command. Prefer the documented route. If none exists, bootstrap minimally:
+   (a) `npm pack ./packages/http-client --pack-destination ../../../.artifacts/wsl/npm` to get a
+   placeholder tarball (empty dist is fine for install), (b) `TMPDIR=/dev/shm/zlink-tmp-node npm install
+   --package-lock=false`, (c) `npm run build` (builds `packages/http-client/dist`), (d) re-pack the
+   real tarball to the same path, (e) reinstall so `node_modules/@zlink-systems/http-client` has dist.
+   Record the exact sequence in the summary so the supervisor can document it.
+2. Run the node gate: `TMPDIR=/dev/shm/zlink-tmp-node flock -w7200 /tmp/zlink-node-gate.lock npm test`.
+   If ESLint stops it at the known pre-existing `spot-timer.ts:137`, run the unit tests directly with
+   the underlying runner from `package.json` and report both.
+3. Run the node cross-language smoke: `framework/languages/node/cross-language/run_cross_language_smoke.sh`.
+   If it needs the C++ host and that is not built, report and skip (do not build the C++ tree — another
+   job owns `framework/languages/cpp/**`).
+4. Then re-run the Java cross-language stage that was blocked only by the Node peer:
+   `cd framework/languages/java && TMPDIR=/dev/shm/zlink-tmp-java flock -w7200 /tmp/zlink-jvm-gate.lock
+   ./gradlew --no-daemon -p cross-language :Host:installDist` was already green; re-run
+   `ZLINK_CPP_CROSS_LANGUAGE_STAGE=java-cross framework/languages/cpp/cross-language/run_cross_language_smoke.sh`
+   (that script is a runner — running it is fine; do not modify anything under `framework/languages/cpp/`).
+
+## Classify every failure: (A) DONTWAIT/backpressure, (B) terminal/error classification,
+(C) known pre-existing (node lint `spot-timer.ts:137`; node sample SupportChat browser-harness),
+(D) environment. Verify (C) by exact assertion/file:line, not counts.
+
+## Rules
+- Do not modify source/tests, `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`,
+  `doc/site/**`, `framework/languages/cpp/**`, `framework/languages/dotnet/**`. Do not commit.
+- Full logs under `zlink-work/c016/logs/gate-node-*.log`; excerpts only in the summary.
+
+## Deliverable
+`doc/plan/c016-worklog/gate-node-bootstrap-summary.md`: the exact bootstrap sequence that worked,
+the gate/smoke tables (pass/fail counts, commands), every failure bucketed with assertion + file:line,
+and a one-line verdict per suite.

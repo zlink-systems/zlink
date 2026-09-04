@@ -1,0 +1,90 @@
+# Job: dotnet bucket-B — root-cause the RemoteActorStaleAuthority* reply stall (TimedOut 101)
+
+You are a codex sub-agent under a Claude supervisor. One cause per job, 1.5 h cap. Read
+`AGENTS.md` (root), `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md` first —
+especially root §2 (smallest verification first), §3 (fix in the owning module, never lower
+expectations), §4.1 (use existing tracing before adding any).
+
+## Established facts (do not re-derive)
+- Core `core/build-dev` (current main, includes B's `89ed9be356`) and local packages under
+  `.artifacts/wsl/` are fresh. Core 0.17.0 prefix is `~/.cache/zlink/core/0.17.0/linux-x64` (built
+  locally; no GitHub release exists). **Do not rebuild Core or the local packages.**
+- Run dotnet tests exactly like this (the env block matters):
+  ```
+  export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib \
+         UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
+  pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}')
+  export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}
+  cd framework/languages/dotnet
+  flock -w7200 /tmp/zlink-dotnet-gate.lock dotnet test tests/Zlink.Framework.UnitTests \
+    --filter 'FullyQualifiedName~StatefulServiceRuntimeTests.RemoteActorStaleAuthority'
+  ```
+  Do NOT pass `--artifacts-path`. Never use `ulimit -v` with dotnet.
+- The 3 failing tests: `StatefulServiceRuntimeTests.RemoteActorStaleAuthorityReturnsOneTerminalForTheOriginalOperation`
+  (expects TerminalResult 107=Conflict, gets 101=TimedOut), `...DisposesRejectedFollowerPartsAndReturnsOneStaleTerminal`
+  (107 vs 101), `...UsesTheActiveFollowerBeforeAStaleTerminal` (0=Ok vs 101).
+  **This is a stall, not a misclassification.**
+- Traced with the framework's existing `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1` traces. xUnit swallows
+  `Console.Error`, so the working tree currently contains a TEMPORARY file sink in
+  `framework/languages/dotnet/src/Zlink.Framework/Runtime/Diagnostics/ZLinkFrameworkDebugLog.cs`
+  (env `ZLINK_DEBUG_FRAMEWORK_LOG_FILE=<path>` appends timestamped lines) plus temporary extra trace
+  lines in `Runtime/Service/ZLinkManagedMeshNode.cs` (`poll node=...`, `native_terminal_reply_submit`,
+  enriched `managed_operation_completion_rejected`). Use them; **remove all of them before finishing**
+  (git diff of those two files must be only your real fix, if any).
+- Timeline observed (test 1): t+0.05 s owner hits `actor_stale_path` and submits the Conflict/
+  ActorLocationStale terminal reply via `SubmitOrQueueNativeReply` → `native_terminal_reply_submit
+  result=Ok can_retry=True`. Nothing reaches the caller. t+3.0 s the caller's `ExpireOperationAsync`
+  sweeper removes the operation and enqueues TimedOut; the binding request's own TimedOut completion
+  is then rejected (`removed=False present_key=False`). No `managed_operation_completed` ever logs.
+- **Core is exonerated for the plain topology:** a minimal C++ repro (two ROUTER sockets with explicit
+  RIDs, each binds inproc and each connects to the other = the ZLinkManagedMeshNode topology; A
+  `zlink_request_part` → B `zlink_router_recv_part` → B `zlink_reply_part` with the captured token; A
+  drains via a poller registered with POLLIN|POLLERR|POLLOUT|POLLCOMPLETION) delivers the request
+  completion. Source: `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/repro_rr.cpp`
+  (build: `g++ -std=c++17 -I core/include repro_rr.cpp -L core/build-dev/lib -lzlink -Wl,-rpath,$PWD/core/build-dev/lib`;
+  run `./repro_rr dual poller`). Extend that repro if you need to test a Core hypothesis.
+- Relevant spec: `core/doc/spec/core/socket/07-router.ko.md` reply section — when the source peer is a
+  ROUTER, the reply is delivered on the **completion progress lane** (a separate physical connection,
+  glossary `completion progress lane`), and the requester's completion is consumed via
+  `zlink_completion_recv`. In the .NET binding the framework poller that registers `PollCompletion`
+  becomes the socket's sole completion drain owner (`bindings/dotnet/src/Zlink/Runtime/Eventing/Poller.cs`
+  `Wait` → `CompletionOwner.Drain()` → `DrainCore` looks up `_entries` by `completion.UserContext`;
+  an unknown context is silently dropped).
+- Prior rulings you must respect: `doc/plan/c016-worklog/decisions.ko.md` D-068 and D-072 — the
+  *handover* err101 (`CanonicalActorJoinIngressReplyTests.ActorCreateCompletion_AfterHandoverHello_UsesCapturedReplyRoute`)
+  is a documented framework/test follow-up, NOT Core. The stale-authority tests here do not use handover;
+  do not conflate them, but check whether they share the mechanism.
+- The framework-level admission trace shows `mesh_peer_duplicate_retire` / `..._skip_transport` on the
+  owner: the two physical connections both stay alive at Core level. Whether the reply goes down the
+  connection whose completion lane the caller is actually draining is an open question.
+
+## What to do
+1. Reproduce test 1 with the file sink. Then find where the reply is lost: instrument (temporarily) the
+   caller's `Poller.Wait`/`CompletionOwner.DrainCore` path (which revents arrive, whether
+   `zlink_completion_recv` ever returns a Request completion, and with which UserContext), and the
+   owner's reply target/peer-epoch. Decide: (i) reply never leaves the owner (Core queued but lane
+   absent), (ii) reply reaches the caller socket but the binding drops it (context mismatch, ownership
+   handoff, drain not run), or (iii) framework routes/keys it wrong.
+2. If you need a Core-level hypothesis, extend `repro_rr.cpp` to mimic the exact framework sequence
+   (admission handshake traffic on both connections, reply from another thread ~50 ms later, both
+   sockets owned by pollers with POLLCOMPLETION, SendHighWaterMark/SubmitRetry options as in
+   `ZLinkManagedMeshNode` Start). A failing pure-C repro = Core bug → STOP and report precisely.
+3. Fix minimally in the owning module. Framework (`framework/languages/dotnet/**`) is yours. If the
+   owner is the .NET binding (`bindings/dotnet/**`), you MAY fix it but must add a binding regression
+   test under `bindings/dotnet/tests` and report it prominently (bindings are normally B's). Do not
+   touch `core/**`, any `doc/spec/**`, or `framework/doc/framework/**`.
+4. Never edit the three assertions. Add a regression test if the fix is in a place the existing three
+   tests do not pin.
+5. Verify: the 3 tests 3× green, plus `--filter 'FullyQualifiedName~StatefulServiceRuntimeTests'` once.
+6. Do NOT commit.
+
+## Deliverable
+Write `doc/plan/c016-worklog/bucketB-dotnet-stale-summary.md`: root cause with `file:line` and the trace
+evidence, classification (framework / binding / Core / test), the fix and why it is minimal, regression
+test, exact commands + results, BLOCKERS. On the 1.5 h cap without a root fix: proven facts + ranked
+candidates.
+
+## ABSOLUTE RULE
+Never create, modify, move, or delete anything under `core/doc/spec/**`, `bindings/doc/spec/**`,
+`framework/doc/framework/**`, or `doc/site/**`. Specs are user-owned. If you believe a spec is wrong or
+incomplete, write the exact clause and your proposed wording in the summary's BLOCKERS section only.

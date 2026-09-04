@@ -1,0 +1,59 @@
+# Job: §C verification infrastructure — cross-language E2E full run with a fresh C++ host, cpp samples isolated
+
+You are a codex sub-agent under a Claude supervisor. Execution + environment job (fix only runner/
+environment problems, not framework runtime code). Read `AGENTS.md` (root) §2/§4 first.
+
+## Environment (prepared — do NOT rebuild Core or local packages)
+- Core `core/build-dev` (current main). Local packages `.artifacts/wsl/{nuget,npm,maven,install}`.
+  Core prefix `~/.cache/zlink/core/0.17.0/linux-x64` (local build; no GitHub release for 0.17.0).
+- C++ framework configured at `framework/languages/cpp/build/linux-ninja-debug` (preset
+  `linux-ninja-debug`). Set `ZLINK_CPP_BUILD_DIR=/home/hep7/project/zlink/framework/languages/cpp/build/linux-ninja-debug`
+  for every cpp runner (plan Phase 11 item 8: all runners honour `ZLINK_CPP_BUILD_DIR`).
+- Docker works (`redis:7.2-alpine` pulled); Playwright Chromium installed; redis-server also on
+  127.0.0.1:6379. Node framework `node_modules` installed (http-client tarball rebuilt).
+  `TMPDIR=/dev/shm/zlink-tmp-<lang>` (mkdir -p). Gate locks `/tmp/zlink-{dotnet,jvm,node}-gate.lock`.
+- dotnet test env block (never `--artifacts-path`, never `ulimit -v`):
+  `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}`
+
+## Known problems to solve (plan §C)
+1. **dotnet cross-language's C++ host is pinned to a stale Core 0.13.2 artifact** so 0.17 convergence
+   fails. Find where `framework/languages/dotnet/cross-language/**` (and/or the cpp cross-language
+   runner it delegates to) locates/builds the C++ host, why it picks a stale artifact (cached build dir,
+   hard-coded `build`, old `.artifacts` path), and make it use the configured 0.17 build via
+   `ZLINK_CPP_BUILD_DIR` — rebuilding the host from the current tree if the runner is supposed to.
+   Runner/script fixes are in scope; framework runtime code is not.
+2. **cpp samples could not be run reliably** because concurrent jobs shared one build cache. Run
+   `framework/languages/cpp/samples/run_samples.sh` with `ZLINK_CPP_BUILD_DIR` set and the build already
+   complete (`cmake --build <dir> -j16` once, up front — you are the only job in the cpp tree now), so
+   samples do not trigger rebuilds mid-run. Record each of the 7 samples' exit status.
+3. **Java↔C++ E2E** was never run (blocked by C++→.NET). Run it after (1).
+
+## Run order
+1. `cmake --build framework/languages/cpp/build/linux-ninja-debug -j16` (full tree: tests, samples, e2e,
+   cross-language). First failure → report, do not patch runtime code.
+2. `ZLINK_CPP_BUILD_DIR=... framework/languages/cpp/cross-language/run_cross_language_smoke.sh` (all stages).
+3. `framework/languages/dotnet/cross-language/...` runner (find the entry script; fix the stale-host
+   problem (1) first).
+4. `framework/languages/node/cross-language/run_cross_language_smoke.sh` and the Java stage
+   (`ZLINK_CPP_CROSS_LANGUAGE_STAGE=java-cross ...`, Java Host already `installDist`-ed; re-run installDist
+   if the runner requires it).
+5. `ZLINK_CPP_BUILD_DIR=... framework/languages/cpp/samples/run_samples.sh` (7 samples).
+
+## Classify every failure: (A) DONTWAIT/backpressure, (B) terminal/error classification,
+(C) known pre-existing — cpp `common_e2e_inventory` 278 (feature-map inventory gate), node lint
+`spot-timer.ts:137`, node SupportChat browser harness, java M6A×2 + JavaDocumentationRegression,
+(D) environment/runner. Verify (C) by exact assertion, not counts. Anything in (A)/(B) → capture the
+exact code/errno/terminal + `file:line`; do not fix runtime code, report.
+
+## Rules
+- You may edit runner scripts/config under `framework/languages/*/cross-language/**`,
+  `framework/languages/*/samples/run_*` and `framework/languages/cpp/e2e/**` runner glue only, with a
+  runner contract test if one exists for that runner. Never edit framework runtime source, tests'
+  assertions, `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`.
+- Preserve run dirs on failure (`ZLINK_CPP_CROSS_KEEP_RUN_DIR=1`) and keep logs under
+  `zlink-work/c016/logs/c-e2e-*.log`. Do not commit.
+
+## Deliverable
+`doc/plan/c016-worklog/c-cross-language-e2e-summary.md`: what was wrong with the stale C++ host and the
+exact runner change; tables for cross-language (cpp/dotnet/node/java stages), cpp 7 samples (each
+exit status, duration), failures bucketed with evidence; exact commands; BLOCKERS.

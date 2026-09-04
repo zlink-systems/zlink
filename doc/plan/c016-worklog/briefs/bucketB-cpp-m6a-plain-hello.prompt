@@ -1,0 +1,47 @@
+# Job: cpp m6a — `verify_client_server_plain_hello_is_rejected()` times out (alone and in the full binary)
+
+You are a codex sub-agent under a Claude supervisor. One cause per job, 1.5 h cap. Read `AGENTS.md`
+(root) §2/§3/§4.1 first. The cpp build dir `framework/languages/cpp/build/linux-ninja-m6a` is yours
+alone while this job runs.
+
+## Established facts
+- Working tree contains verified UNCOMMITTED cpp fixes (ENOENT in `transient_route_errno`, same-endpoint
+  RID retarget in `raw_mesh_node_owner_t::connect_peer`) plus possibly a fix from the m6b-late job.
+  Keep them all.
+- `doc/plan/c016-worklog/bucketB-cpp-m6-summary.md` BLOCKERS: full `test_cpp_framework_m6a_runtime`
+  passes every section up to `verify_client_server_plain_hello_is_rejected()`
+  (`test_cpp_framework_m6a_runtime.cpp:1481`), which then hangs (20 s timeout) — also when run alone.
+  The test: a raw ClientServer server + a bare DEALER that sends a *plain routed* hello (not the Core
+  request/reply envelope) via `raw_dealer_port_t::send`, expecting the server to end it as a
+  protocol error rather than admit it (spec 51 §4 = `framework/doc/framework/common/spec/server/02-channel-transport/06-wire-protocol.ko.md`
+  ClientServer direction, plus `03-client-server-channel.ko.md`).
+- The 0.17.0 contract changed `raw_dealer_port_t::send` to the binding's awaitable DONTWAIT path
+  (§A fix `4d263e66b9`): a DONTWAIT send at HWM / target-not-ready returns BACKPRESSURED with a wait
+  token and completes later with a WRITABLE completion the poller must drain; a DEALER with 0 peers
+  still gets a token (Core commit `50d77800f2` message). A bare DEALER with no framework poller
+  owning POLLCOMPLETION may therefore never see the WRITABLE and `await_task(port.send(...))` never
+  resolves — a strong first hypothesis. Also check what the server side does with a plain hello.
+- Build: `cmake --build framework/languages/cpp/build/linux-ninja-m6a -j16 --target test_cpp_framework_m6a_runtime`.
+  Existing tracing: `ZLINK_CPP_MESH_TRACE=1`, `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1`.
+
+## What to do
+1. Reproduce alone (temporarily isolate the call in main(); remove the isolation before finishing).
+   Find where it hangs (gdb `thread apply all bt`): the client's `port.send` await, the server's
+   admission loop, or the test's own wait loop after `sent`.
+2. Decide the owner: (a) `raw_dealer_port_t::send` must not hang when the caller has no completion
+   drain — compare with `raw_route_port` / `channel_outbound_exchange` which were adapted in §A;
+   (b) the test harness must drive the DEALER's poller (then the fix is in the test, only if the
+   spec says the caller owns completion draining); (c) server-side protocol-error path.
+   Match the spec text; do not invent behaviour.
+3. Fix minimally inside `framework/languages/cpp/**`; never lower/edit the assertion; never touch
+   `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`. If the
+   cause is the C++ binding's awaitable send semantics (e.g. it never settles without a public poller),
+   STOP and report precisely — bindings are fixed by the supervisor.
+4. Regression test, temporary traces removed, then full m6a 3× and full m6b 1× (report where m6b
+   stops if it does). Do NOT commit.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-cpp-m6a-plain-hello-summary.md`: hang location with backtrace excerpt,
+root cause with `file:line`, spec clause, classification (framework/test/binding/Core), fix, regression
+test, commands + results, BLOCKERS. Never modify anything under `core/doc/spec/**`,
+`bindings/doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`.

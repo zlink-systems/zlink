@@ -1,0 +1,50 @@
+# Job: cpp m6b — the late-section failures (route-cache owner-admission deadline / raw spot+actor routing)
+
+You are a codex sub-agent under a Claude supervisor. One cause per job, 1.5 h cap. Read `AGENTS.md`
+(root) §2/§3/§4.1 first. Another job may be running in `framework/languages/dotnet/**` and
+`framework/languages/node/**`; the cpp build dir `framework/languages/cpp/build/linux-ninja-debug` is
+yours alone (do not use any other build dir).
+
+## Established facts
+- Working tree already contains two verified, UNCOMMITTED cpp fixes — keep them:
+  (1) `raw_binding_adapter.hpp` `transient_route_errno()` includes ENOENT (Core answers a routed
+  submit to a RID not in the ROUTER routing map with `ZLINK_SUBMIT_NOT_FOUND`+`ENOENT`, spec
+  `core/doc/spec/core/socket/07-router.ko.md`), with a regression assert in m6a main();
+  (2) `raw_mesh_node_owner_t::connect_peer()` retires a stale same-endpoint connect intent before
+  retargeting to a replacement RID (spec `04-network-listener-identity.ko.md:304/377`: replacement
+  MeshNode keeps the endpoint but uses a new RID), with the m6a replacement regression strengthened.
+- Read `doc/plan/c016-worklog/bucketB-cpp-m6-summary.md` (previous job). Its BLOCKERS: the full
+  `test_cpp_framework_m6b_runtime` binary passes `verify_remote_bound_session_bind_classifies_retryable_outcomes`
+  (the original bucket-B item) but later aborts non-deterministically — one run at
+  `verify_raw_spot_and_actor_routing()` ~line 4524, another at
+  `verify_public_host_route_cache_stops_at_owner_admission_deadline()` line 1909
+  (`assert (send () == zlink::submit_result_t::not_found)` after a 3 s sleep, target endpoint
+  `tcp://127.0.0.1:1`, owner lease 5 s).
+- Build: `cmake --build framework/languages/cpp/build/linux-ninja-debug -j16 --target test_cpp_framework_m6b_runtime`,
+  run from that dir. Existing tracing: `ZLINK_CPP_MESH_TRACE=1`, `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1`.
+
+## What to do
+1. Run the full m6b binary 5× (timeout 120 s each) and record exactly where each run stops. Determine
+   whether the 1909 and 4524 failures are one cause or two; if two, take the one that reproduces most
+   and report the other as a candidate.
+2. For line 1909: establish whether the second `send()` result is wrong because (a) the ENOENT change
+   now turns a dead-target submit into a bounded retry that outlives the test's 3 s window (then the
+   right fix is in the route-cache/owner-admission deadline path, NOT reverting ENOENT — check what
+   the public-host route cache is specified to do at the owner admission deadline in
+   `framework/doc/framework/common/spec/server/` (location/relocation + spot messaging chapters) and
+   make the implementation match the spec text), (b) a timing flake in the test's fixed sleep (then
+   report; do not add sleeps), or (c) something else.
+3. For line 4524 (`complete_async` of a bound-session delivery): trace with existing tracing which
+   transition stops.
+4. Fix minimally inside `framework/languages/cpp/**`. Never edit an assertion or a sleep to make it
+   pass; never touch `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`,
+   `doc/site/**`. If the cause is Core/binding, STOP and report precisely.
+5. Regression test for the fix, temporary traces removed, then full m6b 5× and full m6a 1× (m6a is
+   known to stop at `verify_client_server_plain_hello_is_rejected` — a separate job; just report where
+   it stops). Do NOT commit.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-cpp-m6b-late-summary.md`: per-run stop table, root cause with
+`file:line` + evidence, spec clause matched, fix + why minimal, regression test, commands, BLOCKERS.
+Never modify anything under `core/doc/spec/**`, `bindings/doc/spec/**`, `framework/doc/framework/**`,
+`doc/site/**`.
