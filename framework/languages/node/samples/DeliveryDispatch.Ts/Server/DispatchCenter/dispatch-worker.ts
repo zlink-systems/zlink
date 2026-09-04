@@ -60,6 +60,12 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
     const courierId = courierCandidates[attempt - 1];
 
     const actor = await this.findOrEnsureActor(courierId);
+    await this.publishStatus(deliveryStatusChanged(
+      request.deliveryId,
+      request.customerId,
+      attempt === 1 ? 'Assigned' : 'Reassigned',
+      courierId
+    ));
     const offer: DeliveryOffer = {
       deliveryId: request.deliveryId,
       customerId: request.customerId,
@@ -71,12 +77,6 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
       status: 'Offered'
     };
     this.offers.save(offer);
-    await this.publishStatus(deliveryStatusChanged(
-      request.deliveryId,
-      request.customerId,
-      attempt === 1 ? 'Assigned' : 'Reassigned',
-      courierId
-    ));
     await this.actors.sendToActor(
       actor.actorId,
       offerDelivery(courierId, request.deliveryId, attempt, request.pickupAddress, request.dropoffAddress)

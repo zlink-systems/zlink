@@ -582,6 +582,23 @@ test('DeliveryDispatch TypeScript sample uses framework channel topology', () =>
   assert.doesNotMatch(serverEntries, /SAMPLE_ENDPOINT/);
 });
 
+test('DeliveryDispatch starts the offer deadline after publishing its status', () => {
+  const worker = readSample('DeliveryDispatch.Ts', 'Server/DispatchCenter/dispatch-worker.ts');
+  const start = worker.indexOf('private async startOffer(');
+  const end = worker.indexOf('private async applyResult(');
+  assert.ok(start >= 0 && start < end);
+
+  const startOffer = worker.slice(start, end);
+  const actorLookup = startOffer.indexOf('const actor = await this.findOrEnsureActor(');
+  const publish = startOffer.indexOf('await this.publishStatus(deliveryStatusChanged(', actorLookup);
+  const deadline = startOffer.indexOf('deadline: Date.now() + SampleTimings.offerDecisionTimeout');
+  const save = startOffer.indexOf('this.offers.save(offer);');
+  const send = startOffer.indexOf('await this.actors.sendToActor(');
+
+  assert.ok(actorLookup >= 0 && actorLookup < publish && publish < deadline && deadline < save && save < send);
+  assert.match(startOffer, /attempt === 1 \? 'Assigned' : 'Reassigned'/);
+});
+
 test('GameQuest TypeScript sample uses framework channel topology', () => {
   const clientScenario = readSample('GameQuest.Ts', 'Client/gamequest-client-scenario.ts');
   const clientMain = readSample('GameQuest.Ts', 'Client/main.ts');

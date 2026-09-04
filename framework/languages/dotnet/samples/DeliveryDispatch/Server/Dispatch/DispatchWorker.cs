@@ -136,8 +136,8 @@ internal sealed class DispatchWorker(
             request.CustomerId);
 
         var courierId = couriers.Candidates[0];
-        var attempt = offers.Offer(request, 0, SampleTimings.CourierDecisionTimeout);
         await statusPublisher.PublishAsync(request, DeliveryStatus.Assigned, courierId, cancellationToken);
+        var attempt = offers.Offer(request, 0, SampleTimings.CourierDecisionTimeout);
         await courierOffers.OfferAsync(request, courierId, attempt, cancellationToken);
     }
 
@@ -198,8 +198,8 @@ internal sealed class DispatchWorker(
         }
 
         var courierId = couriers.Candidates[nextIndex];
-        var attempt = offers.Offer(offer.Request, nextIndex, SampleTimings.CourierDecisionTimeout);
         await statusPublisher.PublishAsync(offer.Request, DeliveryStatus.Reassigned, courierId, cancellationToken);
+        var attempt = offers.Offer(offer.Request, nextIndex, SampleTimings.CourierDecisionTimeout);
         await courierOffers.OfferAsync(offer.Request, courierId, attempt, cancellationToken);
     }
 }

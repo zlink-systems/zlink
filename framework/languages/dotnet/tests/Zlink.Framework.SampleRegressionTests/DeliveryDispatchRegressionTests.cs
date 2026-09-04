@@ -63,6 +63,35 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
+    public void DeliveryDispatch_Offer_Deadline_Starts_After_Status_Publish()
+    {
+        var sampleRoot = ResolveSampleRoot("DeliveryDispatch");
+        var worker = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Dispatch", "DispatchWorker.cs"));
+
+        var firstPublish = worker.IndexOf(
+            "await statusPublisher.PublishAsync(request, DeliveryStatus.Assigned",
+            StringComparison.Ordinal);
+        var firstOffer = worker.IndexOf(
+            "var attempt = offers.Offer(request, 0, SampleTimings.CourierDecisionTimeout)",
+            StringComparison.Ordinal);
+        var firstSend = worker.IndexOf(
+            "await courierOffers.OfferAsync(request, courierId, attempt",
+            StringComparison.Ordinal);
+        Assert.True(firstPublish >= 0 && firstPublish < firstOffer && firstOffer < firstSend);
+
+        var reassignPublish = worker.IndexOf(
+            "await statusPublisher.PublishAsync(offer.Request, DeliveryStatus.Reassigned",
+            StringComparison.Ordinal);
+        var reassignOffer = worker.IndexOf(
+            "var attempt = offers.Offer(offer.Request, nextIndex, SampleTimings.CourierDecisionTimeout)",
+            StringComparison.Ordinal);
+        var reassignSend = worker.IndexOf(
+            "await courierOffers.OfferAsync(offer.Request, courierId, attempt",
+            StringComparison.Ordinal);
+        Assert.True(reassignPublish >= 0 && reassignPublish < reassignOffer && reassignOffer < reassignSend);
+    }
+
+    [Fact]
     public void DeliveryDispatch_Runner_Uses_Isolated_Docker_Redis_And_Location_Store()
     {
         var sampleRoot = ResolveSampleRoot("DeliveryDispatch");
