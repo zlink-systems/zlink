@@ -56,7 +56,8 @@
 - [ ] 4언어 framework unit (gate-v2, D-B85 바인딩 반영 패키지): **A/B 실패 0**.
       java 1206/3 = pre-existing C 3 + 신규 F 1(`EntrySpotActorDispatchTests…staleTerminal` relocation seal 부재, job 진행);
       node 1552/5 = C 4(ZoneWorld dist 미빌드 3·lint 1) + F 2(SupportChat lifecycle 테스트가 옛 3000/1000ms 하드코딩 — 내 budget 커밋 `2e3b1b47e4`의 후속, TicTacToe.Ts PASS 마커 — job 진행);
-      cpp·dotnet gate-v2 진행 중
+      cpp gate-v2 63/69 → stream-connector fixture(RAW mode before bind, spec 08-stream §2) `dbfcf7d6fe`·lz4 packaging `20b94c3457`·package-test config `4573c09a2a` 수정 후 잔여 = inventory 278(C)·m6b 1909 flake(C);
+      dotnet 전체 unit gate 감독관 실행 중(handover 수정 커밋 대기)
 - [ ] 7 samples × 4언어 green — **cpp 7/7**; node 5/7(ZoneWorld `vite` 환경 D, SupportChat 브라우저 stream timeout B — job); java 1/7(TicTacToe·SupportChat TEARDOWN_FAILED·Bingo session-disconnect = pre-existing C, DeliveryDispatch·GameQuest·ZoneWorld timeout = B, D-B85 binding-port 의존 여부 판정 job); dotnet 미실행(handover job 종료 후)
 - [ ] cross-language E2E green
 - [ ] 최종 커밋+푸시

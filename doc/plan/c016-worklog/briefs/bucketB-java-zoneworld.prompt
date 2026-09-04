@@ -1,0 +1,39 @@
+# Job: java ZoneWorld sample — `ZW-A2` JoinWorld/moveTo timeout under cumulative scenario load (gateway → actor send 3.010 s vs 3 s client wait)
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages' trees; never lower an assertion or a
+timeout to make it pass; do not commit. Another job may run the GameQuest java sample concurrently
+(jvm gate lock serializes runs).
+
+## Facts
+- `doc/plan/c016-worklog/bucketB-java-samples-summary.md`: full ZoneWorld gate fails at `ZW-A2`
+  (`Scenarios.java:64-68` moveTo `CompletionException: TimeoutException`, `ScenarioSupport.java:142`);
+  `ZW-A2` alone passes; prefix `G1,G5,A1` then `A2` fails with the gateway receiving A2's JoinWorldMsg
+  at 01:43:57.689 and completing the actor send at 01:44:00.699 (3.010 s) while the client waits 3 s
+  (`ScenarioSupport.java:109`). All native REQUESTs returned OK — not D-B85/handover. Logs:
+  `zlink-work/c016/logs/bucketB-java-zoneworld-prefix/gateway.log:89-121`, `bucketB-java-zoneworld-prefix.log:61-75`.
+- Baseline `seven-samples-green-v1` had ZoneWorld green (459 s full run earlier tonight failed). Two
+  Java runtime fixes landed since (idempotent shutdown unbind; DeliveryDispatch sample) — re-run first.
+- Where do 3 s go on the gateway between receiving JoinWorld and the actor send? Candidates: a
+  serial-executor/turn backlog from earlier scenarios (accumulated Actor/Spot state not released),
+  location-store lookups (Redis) with retries, relocation/handoff waits, or the sample's own scenario
+  bookkeeping. Compare with cpp ZoneWorld which passed 7/7 tonight (145 s) — parity of the gateway
+  path. Spec: `05-location-relocation/` (join/handoff timing), `01-execution/` (serial execution, no
+  head-of-line blocking rules), sample contract `framework/doc/framework/common/sample/zoneworld/`.
+- Env: `TMPDIR=/dev/shm/zlink-tmp-java`, `flock -w7200 /tmp/zlink-jvm-gate.lock`,
+  `ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/.artifacts/wsl/install/zlink-core/0.17.0/lib/libzlink.so`,
+  Docker OK. `cd framework/languages/java/samples/java/ZoneWorld && ./run_sample.sh [selector]`.
+  Tracing: `ZLINK_JAVA_STREAM_TRACE=1`, message-flow listener (dispatch diagnostics Normal).
+
+## What to do
+1. Re-run the failing prefix (`ZW-G1,ZW-G5,ZW-A1,ZW-A2`) 2×; then the full run once. With flow tracing,
+   measure where the 3 s is spent on the gateway (received → admitted → dispatched → actor send) and
+   what the gateway is doing meanwhile (other scenarios' spots/actors, store calls).
+2. Fix the owning module minimally (runtime backlog/ordering defect vs sample scenario leaking state);
+   cite the spec clause; regression test; then full ZoneWorld 2× green and `:zlink-framework-core:test`
+   once if runtime changed.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-java-zoneworld-summary.md`: timing breakdown, cause `file:line`, spec
+clause, fix + regression, results, BLOCKERS.
