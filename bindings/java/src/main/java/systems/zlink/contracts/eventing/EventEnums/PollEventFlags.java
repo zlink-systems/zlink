@@ -8,13 +8,19 @@ import java.util.EnumSet;
 public enum PollEventFlags {
     /** Readable: a receive will not block. */
     POLLIN(1),
-    /** Writable: a send will not block. */
+    /**
+     * Writable: a send will not block. An unread WRITABLE completion from a
+     * previously backpressured DONTWAIT send also keeps this flag ready.
+     */
     POLLOUT(2),
     /** An error condition occurred on the source. */
     POLLERR(4),
     /** Priority or out-of-band data is available. */
     POLLPRI(8),
-    /** An asynchronous operation completed. */
+    /**
+     * A completion record is available. Ordinary successful sends do not
+     * produce one; WRITABLE send recovery is signaled through POLLOUT.
+     */
     POLLCOMPLETION(32);
 
     private final int mask;

@@ -29,7 +29,9 @@ public enum SocketOption {
     SUBMIT_RETRY_MODE(0x3037),
     SUBMIT_RETRY_TIMEOUT(0x3038),
     SUBMIT_RETRY_ATTEMPTS(0x3039),
+    /** REQUEST pending-admission message limit; ABI-retained no-op for SEND. */
     PENDING_MAX_MSGS(0x303A),
+    /** REQUEST pending-admission byte limit; ABI-retained no-op for SEND. */
     PENDING_MAX_BYTES(0x303B),
     XPUB_MANUAL_LAST_VALUE(98),
     PUB_APPROVE_SUBSCRIBE(0x3308), PUB_REJECT_SUBSCRIBE(0x3309),

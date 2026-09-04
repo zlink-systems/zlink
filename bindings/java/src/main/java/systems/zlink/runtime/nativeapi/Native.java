@@ -18,6 +18,7 @@ import java.util.List;
 public final class Native {
     public static final int PART_FINAL = 0;
     public static final int PART_MORE = 1;
+    private static final int SEND_DONT_WAIT = 1;
     private static final ThreadLocal<NativeMultipartScratch>
         MULTIPART_RECEIVE_SCRATCH =
             ThreadLocal.withInitial(NativeMultipartScratch::new);
@@ -369,6 +370,10 @@ public final class Native {
         if (invalidMultipart(parts, partCount)) {
             return SubmitResult.INVALID_ARGUMENT.value();
         }
+        if ((flags & SEND_DONT_WAIT) != 0) {
+            throw new IllegalArgumentException(
+                "DONTWAIT multipart send requires token-aware FINAL submission");
+        }
         for (long i = 0; i < partCount; i++) {
             int partFlag = i + 1 < partCount ? PART_MORE : PART_FINAL;
             int rc = routingId == null || routingId.address() == 0
@@ -564,6 +569,7 @@ public final class Native {
 
     public static int sendPart(MemorySegment socket, MemorySegment part,
                                int flags, int partFlag) {
+        rejectUntrackedDontWait(flags);
         return sendPart(socket, part, flags, partFlag, MemorySegment.NULL,
             MemorySegment.NULL);
     }
@@ -572,6 +578,8 @@ public final class Native {
                                int flags, int partFlag,
                                MemorySegment userContext,
                                MemorySegment completionIdOut) {
+        requireTrackedDontWaitFinal(flags, partFlag, userContext,
+            completionIdOut);
         try {
             return (int) MH_SEND_PART.invokeExact(socket, part, flags, partFlag,
                 userContext, completionIdOut);
@@ -584,9 +592,21 @@ public final class Native {
     public static int sendPartNoWaitCritical(MemorySegment socket,
                                              MemorySegment part,
                                              int flags, int partFlag) {
+        rejectUntrackedDontWait(flags);
+        return sendPartNoWaitCritical(socket, part, flags, partFlag,
+            MemorySegment.NULL, MemorySegment.NULL);
+    }
+
+    public static int sendPartNoWaitCritical(MemorySegment socket,
+                                             MemorySegment part,
+                                             int flags, int partFlag,
+                                             MemorySegment userContext,
+                                             MemorySegment completionIdOut) {
+        requireTrackedDontWaitFinal(flags, partFlag, userContext,
+            completionIdOut);
         try {
             return (int) MH_SEND_PART_CRITICAL.invokeExact(socket, part, flags,
-                partFlag, MemorySegment.NULL, MemorySegment.NULL);
+                partFlag, userContext, completionIdOut);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_send_part (critical) failed", t);
         }
@@ -608,6 +628,7 @@ public final class Native {
                                   MemorySegment part,
                                   int flags,
                                   int partFlag) {
+        rejectUntrackedDontWait(flags);
         return sendPartRid(socket, routingId, part, flags, partFlag,
             MemorySegment.NULL, MemorySegment.NULL);
     }
@@ -619,6 +640,8 @@ public final class Native {
                                   int partFlag,
                                   MemorySegment userContext,
                                   MemorySegment completionIdOut) {
+        requireTrackedDontWaitFinal(flags, partFlag, userContext,
+            completionIdOut);
         try {
             return (int) MH_SEND_PART_RID.invokeExact(socket, routingId, part,
                 flags, partFlag, userContext, completionIdOut);
@@ -633,10 +656,24 @@ public final class Native {
                                                 MemorySegment part,
                                                 int flags,
                                                 int partFlag) {
+        rejectUntrackedDontWait(flags);
+        return sendPartRidNoWaitCritical(socket, routingId, part, flags,
+            partFlag, MemorySegment.NULL, MemorySegment.NULL);
+    }
+
+    public static int sendPartRidNoWaitCritical(MemorySegment socket,
+                                                MemorySegment routingId,
+                                                MemorySegment part,
+                                                int flags,
+                                                int partFlag,
+                                                MemorySegment userContext,
+                                                MemorySegment completionIdOut) {
+        requireTrackedDontWaitFinal(flags, partFlag, userContext,
+            completionIdOut);
         try {
             return (int) MH_SEND_PART_RID_CRITICAL.invokeExact(socket,
-                routingId, part, flags, partFlag, MemorySegment.NULL,
-                MemorySegment.NULL);
+                routingId, part, flags, partFlag, userContext,
+                completionIdOut);
         } catch (Throwable t) {
             throw new RuntimeException("zlink_send_part_rid (critical) failed",
                 t);
@@ -665,6 +702,27 @@ public final class Native {
                 (byte) routingId);
             return sendMultipart(socket, nativeRoutingId, parts, partCount,
                 flags);
+        }
+    }
+
+    private static void requireTrackedDontWaitFinal(
+            int flags, int partFlag, MemorySegment userContext,
+            MemorySegment completionIdOut) {
+        if ((flags & SEND_DONT_WAIT) == 0 || partFlag != PART_FINAL) {
+            return;
+        }
+        if (userContext == null || userContext.address() == 0L
+                || completionIdOut == null
+                || completionIdOut.address() == 0L) {
+            throw new IllegalArgumentException(
+                "DONTWAIT FINAL send requires user context and completion ID output");
+        }
+    }
+
+    private static void rejectUntrackedDontWait(int flags) {
+        if ((flags & SEND_DONT_WAIT) != 0) {
+            throw new IllegalArgumentException(
+                "DONTWAIT send requires token-aware overload");
         }
     }
 

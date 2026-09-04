@@ -23,6 +23,20 @@ bindings/java/build/docs/javadoc/index.html
 - Internal package (`systems.zlink.internal`) is excluded
 - Runtime packages (`systems.zlink.runtime`) are excluded
 
+## DONTWAIT send and completions
+
+`SendSubmitOperation.submit()` is the asynchronous convenience path. Each
+native attempt uses DONTWAIT. Immediate admission completes the returned stage
+without a SEND completion. If Core reports `BACKPRESSURED` with `EAGAIN`, Core
+keeps no payload; it returns a nonzero wait token associated with the target and
+user context. The Java binding retains the packet, waits for `POLLOUT`, drains
+the completion queue through `NO_DATA`, and retries that packet only after the
+matching `CompletionKind.WRITABLE` record arrives.
+
+The REQUEST/reply completion path is unchanged. `ZLINK_OPT_PENDING_MAX_MSGS`
+and `ZLINK_OPT_PENDING_MAX_BYTES` keep their ABI values but limit only REQUEST
+pending admission on DEALER and ROUTER sockets. They are no-ops for SEND.
+
 ## Native Library Loading
 
 The Java binding loads the native zlink runtime from, in order:

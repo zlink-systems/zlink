@@ -2,11 +2,14 @@
 
 package systems.zlink.contracts.sockets;
 
-/** Determines whether a failed submit is retried. */
+/** Determines whether an eligible blocking local failure is retried by Core. */
 public enum SubmitRetryMode {
     /** Never retry; a failed submit fails immediately. */
     OFF(0),
-    /** Retry when the submit fails locally, such as under back-pressure. */
+    /**
+     * Retry eligible blocking local connection failures. This does not turn
+     * DONTWAIT backpressure into a Core-retained pending SEND.
+     */
     LOCAL_FAILURE(1);
 
     private final int value;

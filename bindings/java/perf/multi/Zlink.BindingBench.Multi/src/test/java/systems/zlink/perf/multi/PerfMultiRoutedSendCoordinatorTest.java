@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PerfMultiTargetCoordinatorTest {
     @Test
-    void inlineTerminalsAdvanceOneSocketPerRoundUntilPending() {
+    void inlineTerminalsAdvanceOneSocketPerRoundUntilRetryWait() {
         List<Integer> order = new ArrayList<>();
         AtomicReferenceArray<CompletableFuture<Void>> pending =
             new AtomicReferenceArray<>(3);
@@ -41,7 +41,7 @@ class PerfMultiTargetCoordinatorTest {
         assertEquals(List.of(0, 1, 2, 1, 2, 0), order,
             "each round rotates its first socket and submits each socket once");
         assertFalse(admissions.submitRound(),
-            "pending admissions must not be submitted again");
+            "sends awaiting WRITABLE retry must not be submitted again");
 
         for (int index = 0; index < 3; index++) {
             pending.get(index).complete(null);
@@ -49,11 +49,11 @@ class PerfMultiTargetCoordinatorTest {
         order.clear();
         assertTrue(admissions.submitRound());
         assertEquals(List.of(0, 1, 2), order,
-            "pending completion makes sockets available to the coordinator");
+            "completed retry makes sockets available to the coordinator");
     }
 
     @Test
-    void admissionOnlyModeBurstsInlineTerminalsUntilActualPending() {
+    void admissionOnlyModeBurstsInlineTerminalsUntilRetryWait() {
         List<Integer> order = new ArrayList<>();
         int[] submissions = new int[2];
         var admissions = new PerfMultiTargetCoordinator.AdmissionRoundRobin(
@@ -91,7 +91,7 @@ class PerfMultiTargetCoordinatorTest {
         completionThread.join();
 
         assertTrue(admissions.submitRound(),
-            "admission completion, not a reply, enables the next submit");
+            "send completion after WRITABLE retry enables the next submit");
         assertEquals(List.of(coordinatorThread, coordinatorThread),
             submitThreads,
             "completion threads must never submit directly");
@@ -135,7 +135,7 @@ class PerfMultiTargetCoordinatorTest {
                         return CompletableFuture.failedFuture(terminalFailure);
                     }
                     throw new AssertionError(
-                        "socket was resubmitted while pending");
+                        "socket was resubmitted while awaiting WRITABLE retry");
                 }, Duration.ofSeconds(1), "test admission-only sends"));
         completionThread.join();
 

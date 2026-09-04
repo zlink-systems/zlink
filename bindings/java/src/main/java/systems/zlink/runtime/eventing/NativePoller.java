@@ -90,20 +90,21 @@ public final class NativePoller implements Poller {
             & PollEventFlags.POLLCOMPLETION.mask()) != 0;
         boolean hasCompletion = (mask
             & PollEventFlags.POLLCOMPLETION.mask()) != 0;
+        boolean claimed = false;
         if (!hadCompletion && hasCompletion) {
-            InternalAccess.completionTransferToPublic(socket);
+            claimed = InternalAccess.completionTransferToPublic(socket, this);
         }
         int rc = Native.pollerModify(handle,
             InternalAccess.socketHandle(socket), mask);
         if (rc != 0) {
-            if (!hadCompletion && hasCompletion) {
-                InternalAccess.completionReleasePublic(socket);
+            if (claimed) {
+                InternalAccess.completionReleasePublic(socket, this);
             }
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         }
         item.events = mask;
         if (hadCompletion && !hasCompletion) {
-            InternalAccess.completionReleasePublic(socket);
+            InternalAccess.completionReleasePublic(socket, this);
         }
     }
 
@@ -130,7 +131,7 @@ public final class NativePoller implements Poller {
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         PollItem removed = items.remove(index);
         if ((removed.events & PollEventFlags.POLLCOMPLETION.mask()) != 0) {
-            InternalAccess.completionReleasePublic(removed.socket);
+            InternalAccess.completionReleasePublic(removed.socket, this);
         }
         socketIndexes.remove(removed.handle.address());
         refreshIndexesFrom(index);
@@ -169,13 +170,14 @@ public final class NativePoller implements Poller {
         int rc = Native.pollerDestroy(handle);
         if (rc != 0)
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
-        handle = Native.pollerNew();
-        if (handle == null || handle.address() == 0)
-            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+        handle = MemorySegment.NULL;
         releaseCompletionOwners();
         items.clear();
         socketIndexes.clear();
         containsOnlySockets = true;
+        handle = Native.pollerNew();
+        if (handle == null || handle.address() == 0)
+            throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
     }
 
     public int size() {
@@ -206,14 +208,20 @@ public final class NativePoller implements Poller {
                 throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
             for (int i = 0; i < readyCount; i++) {
                 int revents = NativePollEvents.revents(nativeEvents, i);
-                if ((revents & PollEventFlags.POLLCOMPLETION.mask()) == 0) {
-                    continue;
-                }
                 Integer index = socketIndexes.get(
                     NativePollEvents.socket(nativeEvents, i));
-                if (index != null) {
+                if (index == null) {
+                    continue;
+                }
+                PollItem item = items.get(index);
+                boolean ownsCompletions = (item.events
+                    & PollEventFlags.POLLCOMPLETION.mask()) != 0;
+                boolean completionWake = (revents
+                    & (PollEventFlags.POLLCOMPLETION.mask()
+                        | PollEventFlags.POLLOUT.mask())) != 0;
+                if (ownsCompletions && completionWake) {
                     int progress = InternalAccess.completionDrain(
-                        items.get(index).socket, true);
+                        item.socket, true);
                     if (progress == 0) {
                         NativePollEvents.revents(nativeEvents, i,
                             revents & ~PollEventFlags.POLLCOMPLETION.mask());
@@ -316,18 +324,22 @@ public final class NativePoller implements Poller {
         ensureOpen();
         Objects.requireNonNull(socket, "socket");
         validateSlot(slot);
+        if (findSocket(InternalAccess.socketHandle(socket)) >= 0) {
+            throw new IllegalArgumentException("socket is already registered");
+        }
         PollItem item = PollItem.socket(socket,
             InternalAccess.socketHandle(socket), events, slot);
         boolean completion = (events
             & PollEventFlags.POLLCOMPLETION.mask()) != 0;
+        boolean claimed = false;
         if (completion) {
-            InternalAccess.completionTransferToPublic(socket);
+            claimed = InternalAccess.completionTransferToPublic(socket, this);
         }
         int rc = Native.pollerAdd(handle,
             InternalAccess.socketHandle(socket), item.userData(), events);
         if (rc != 0) {
-            if (completion) {
-                InternalAccess.completionReleasePublic(socket);
+            if (claimed) {
+                InternalAccess.completionReleasePublic(socket, this);
             }
             throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
         }
@@ -339,7 +351,7 @@ public final class NativePoller implements Poller {
         for (PollItem item : items) {
             if (item.socket != null && (item.events
                     & PollEventFlags.POLLCOMPLETION.mask()) != 0) {
-                InternalAccess.completionReleasePublic(item.socket);
+                InternalAccess.completionReleasePublic(item.socket, this);
             }
         }
     }

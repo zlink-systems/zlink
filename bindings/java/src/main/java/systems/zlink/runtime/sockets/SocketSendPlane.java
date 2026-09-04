@@ -11,7 +11,6 @@ import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendResult;
-import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
@@ -36,18 +35,26 @@ final class SocketSendPlane {
         Objects.requireNonNull(message, "message");
         Objects.requireNonNull(flag, "flag");
         ensureBlockingSendAllowed(flag);
-        submitBlockingPart(
-            (part, partFlag) -> sendPartOnce(part, routingId, flag.getValue(),
-                partFlag),
-            message, Native.PART_FINAL);
+        PartSubmitter submitter = (part, partFlag, context, idOut) ->
+            sendPartOnce(part, routingId, flag.getValue(), partFlag,
+                context, idOut);
+        if (isDontWait(flag)) {
+            requirePartSuccess(submitTrackedNoWaitPart(routingId, submitter,
+                message, Native.PART_FINAL));
+        } else {
+            socket.completionOwner().withSendSequenceLock(() -> {
+                submitBlockingPart(submitter, message, Native.PART_FINAL);
+                return null;
+            });
+        }
     }
 
     SendResult sendMessageFrameNoWaitResult(RoutingId routingId, Message message) {
         Objects.requireNonNull(routingId, "routingId");
         Objects.requireNonNull(message, "message");
-        return submitNoWaitPart(
-            (part, partFlag) -> sendPartOnce(part, routingId,
-                SendFlag.DONTWAIT.getValue(), partFlag),
+        return submitNoWaitPart(routingId,
+            (part, partFlag, context, idOut) -> sendPartOnce(part, routingId,
+                SendFlag.DONTWAIT.getValue(), partFlag, context, idOut),
             message, Native.PART_FINAL);
     }
 
@@ -56,9 +63,10 @@ final class SocketSendPlane {
         Objects.requireNonNull(part, "part");
         Objects.requireNonNull(flags, "flags");
         ensureBlockingSendAllowed(flags);
-        return submitBooleanPart(
-            (message, partFlag) -> sendPartOnce(message, routingIdBytes,
-                flags.getValue(), partFlag),
+        RoutingId target = RoutingId.from(routingIdBytes);
+        return submitBooleanPart(target,
+            (message, partFlag, context, idOut) -> sendPartOnce(message,
+                target, flags.getValue(), partFlag, context, idOut),
             part, Native.PART_FINAL, flags);
     }
 
@@ -66,12 +74,16 @@ final class SocketSendPlane {
         Objects.requireNonNull(part, "part");
         Objects.requireNonNull(flags, "flags");
         ensureBlockingSendAllowed(flags);
-        int rc = Native.sendMultipartU32(socket.handle(), rid,
-            InternalAccess.messageNativeHandle(part), 1, flags.getValue());
-        PartAttempt attempt = completePartAttempt(part, rc);
-        if (attempt.result() != SubmitResult.OK.value()) {
-            throwPartSubmitFailure(attempt.result(), attempt.errno());
-        }
+        RoutingId target = RoutingId.from(Integer.toUnsignedLong(rid));
+        PartSubmitter submitter = (message, partFlag, context, idOut) ->
+            sendPartOnce(message, target, flags.getValue(), partFlag,
+                context, idOut);
+        PartAttempt attempt = isDontWait(flags)
+            ? submitTrackedNoWaitPart(target, submitter, part,
+                Native.PART_FINAL)
+            : socket.completionOwner().withSendSequenceLock(() ->
+                submitPartAttempt(submitter, part, Native.PART_FINAL));
+        requirePartSuccess(attempt);
     }
 
     int send(int rid, MemorySegment payload, int length, int sendFlags) {
@@ -94,15 +106,38 @@ final class SocketSendPlane {
                 .reinterpret(length);
             MemorySegment.copy(payload, 0, dst, 0, length);
         }
-        boolean success = false;
+        boolean[] consumed = {false};
         try {
-            rc = Native.sendMultipartU32(socket.handle(), rid, nativeMsg, 1,
-                flag.getValue());
-            if (rc < 0)
-                throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.SUBMIT);
-            success = true;
+            RoutingId target = RoutingId.from(Integer.toUnsignedLong(rid));
+            MemorySegment nativeTarget = nativeRoutingId(scratch, target);
+            CompletionOwner.NoWaitAttempt tracked;
+            if (isDontWait(flag)) {
+                tracked = socket.completionOwner().trackNoWaitSend(target,
+                    (context, idOut) -> {
+                        int result = Native.sendPartRidNoWaitCritical(
+                            socket.handle(), nativeTarget, nativeMsg,
+                            flag.getValue(), Native.PART_FINAL, context,
+                            idOut);
+                        consumed[0] = true;
+                        return result;
+                    });
+                requirePartSuccess(new PartAttempt(tracked.result(),
+                    tracked.errno()));
+            } else {
+                PartAttempt attempt = socket.completionOwner()
+                    .withSendSequenceLock(() -> {
+                        int result = Native.sendPartRid(socket.handle(),
+                            nativeTarget, nativeMsg, flag.getValue(),
+                            Native.PART_FINAL);
+                        int errno = result == SubmitResult.OK.value()
+                            ? 0 : Native.errno();
+                        consumed[0] = true;
+                        return new PartAttempt(result, errno);
+                    });
+                requirePartSuccess(attempt);
+            }
         } finally {
-            if (!success) {
+            if (!consumed[0]) {
                 try {
                     NativeMessage.messageClose(nativeMsg);
                 } catch (RuntimeException ignored) {
@@ -118,7 +153,7 @@ final class SocketSendPlane {
         Objects.requireNonNull(flags, "flags");
         ensureBlockingSendAllowed(flags);
         submitBlockingPart(
-            (part, partFlag) -> publishPartOnce(topicId, part,
+            (part, partFlag, context, idOut) -> publishPartOnce(topicId, part,
                 flags.getValue(), partFlag),
             message, Native.PART_FINAL);
     }
@@ -126,8 +161,8 @@ final class SocketSendPlane {
     SendResult publishMessageFrameNoWaitResult(String topicId, Message message) {
         Objects.requireNonNull(topicId, "topicId");
         Objects.requireNonNull(message, "message");
-        return submitNoWaitPart(
-            (part, partFlag) -> publishPartOnce(topicId, part,
+        return submitPublishNoWaitPart(
+            (part, partFlag, context, idOut) -> publishPartOnce(topicId, part,
                 SendFlag.DONTWAIT.getValue(), partFlag),
             message, Native.PART_FINAL);
     }
@@ -136,26 +171,35 @@ final class SocketSendPlane {
         Objects.requireNonNull(message, "message");
         Objects.requireNonNull(flag, "flag");
         ensureBlockingSendAllowed(flag);
-        submitBlockingPart(
-            (part, partFlag) -> sendPartOnce(part, (RoutingId) null,
-                flag.getValue(), partFlag),
-            message, Native.PART_FINAL);
+        PartSubmitter submitter = (part, partFlag, context, idOut) ->
+            sendPartOnce(part, (RoutingId) null, flag.getValue(), partFlag,
+                context, idOut);
+        if (isDontWait(flag)) {
+            requirePartSuccess(submitTrackedNoWaitPart(null, submitter,
+                message, Native.PART_FINAL));
+        } else {
+            socket.completionOwner().withSendSequenceLock(() -> {
+                submitBlockingPart(submitter, message, Native.PART_FINAL);
+                return null;
+            });
+        }
     }
 
     boolean sendMessageFrameNoWaitResult(Message message, SendFlag flag) {
         Objects.requireNonNull(message, "message");
         Objects.requireNonNull(flag, "flag");
-        return submitBooleanPart(
-            (part, partFlag) -> sendPartOnce(part, (RoutingId) null,
-                flag.getValue(), partFlag),
+        return submitBooleanPart(null,
+            (part, partFlag, context, idOut) -> sendPartOnce(part,
+                (RoutingId) null, flag.getValue(), partFlag, context, idOut),
             message, Native.PART_FINAL, flag);
     }
 
     SendResult sendMessageFrameNoWaitResult(Message message) {
         Objects.requireNonNull(message, "message");
-        return submitNoWaitPart(
-            (part, partFlag) -> sendPartOnce(part, (RoutingId) null,
-                SendFlag.DONTWAIT.getValue(), partFlag),
+        return submitNoWaitPart(null,
+            (part, partFlag, context, idOut) -> sendPartOnce(part,
+                (RoutingId) null, SendFlag.DONTWAIT.getValue(), partFlag,
+                context, idOut),
             message, Native.PART_FINAL);
     }
 
@@ -164,18 +208,26 @@ final class SocketSendPlane {
         socket.ensureOpen();
         validateParts(parts);
         ensureBlockingSendAllowed(flags);
-        submitBlockingParts(
-            (part, partFlag) -> sendPartOnce(part, routingId,
-                flags.getValue(), partFlag),
-            parts);
+        PartSubmitter submitter = (part, partFlag, context, idOut) ->
+            sendPartOnce(part, routingId, flags.getValue(), partFlag,
+                context, idOut);
+        if (isDontWait(flags)) {
+            requirePartSuccess(submitNoWaitPartsAttempt(routingId, submitter,
+                parts));
+        } else {
+            socket.completionOwner().withSendSequenceLock(() -> {
+                submitBlockingParts(submitter, parts);
+                return null;
+            });
+        }
     }
 
     SendResult sendNoWaitPartsResult(RoutingId routingId, List<Message> parts) {
         socket.ensureOpen();
         validateParts(parts);
-        return submitNoWaitParts(
-            (part, partFlag) -> sendPartOnce(part, routingId,
-                SendFlag.DONTWAIT.getValue(), partFlag),
+        return submitNoWaitParts(routingId,
+            (part, partFlag, context, idOut) -> sendPartOnce(part, routingId,
+                SendFlag.DONTWAIT.getValue(), partFlag, context, idOut),
             parts);
     }
 
@@ -186,7 +238,8 @@ final class SocketSendPlane {
         ensureBlockingSendAllowed(flags);
         MemorySegment nativeTopic = nativeTopic(sendScratch.get(), topicId);
         submitBlockingParts(
-            (part, partFlag) -> publishPartOnce(nativeTopic, part,
+            (part, partFlag, context, idOut) -> publishPartOnce(nativeTopic,
+                part,
                 flags.getValue(), partFlag),
             parts);
     }
@@ -195,8 +248,9 @@ final class SocketSendPlane {
         socket.ensureOpen();
         validateParts(parts);
         MemorySegment nativeTopic = nativeTopic(sendScratch.get(), topicId);
-        return submitNoWaitParts(
-            (part, partFlag) -> publishPartOnce(nativeTopic, part,
+        return submitPublishNoWaitParts(
+            (part, partFlag, context, idOut) -> publishPartOnce(nativeTopic,
+                part,
                 SendFlag.DONTWAIT.getValue(), partFlag),
             parts);
     }
@@ -207,7 +261,8 @@ final class SocketSendPlane {
     }
 
     private int sendPartOnce(Message message, RoutingId routingId, int flags,
-                             int partFlag) {
+                             int partFlag, MemorySegment userContext,
+                             MemorySegment completionIdOut) {
         SendScratch scratch = sendScratch.get();
         MemorySegment messageHandle = InternalAccess.messageNativeHandle(message);
         MemorySegment nativeRoutingId = routingId == null
@@ -219,32 +274,18 @@ final class SocketSendPlane {
         if (nativeRoutingId.address() == 0) {
             rc = useCritical
                 ? Native.sendPartNoWaitCritical(socket.handle(), messageHandle,
-                    flags, partFlag)
+                    flags, partFlag, userContext, completionIdOut)
                 : Native.sendPart(socket.handle(), messageHandle, flags,
-                    partFlag);
+                    partFlag, userContext, completionIdOut);
         } else {
             rc = useCritical
                 ? Native.sendPartRidNoWaitCritical(socket.handle(),
-                    nativeRoutingId, messageHandle, flags, partFlag)
+                    nativeRoutingId, messageHandle, flags, partFlag,
+                    userContext, completionIdOut)
                 : Native.sendPartRid(socket.handle(), nativeRoutingId,
-                    messageHandle, flags, partFlag);
+                    messageHandle, flags, partFlag, userContext,
+                    completionIdOut);
         }
-        return rc;
-    }
-
-    private int sendPartOnce(Message message, byte[] routingIdBytes, int flags,
-                             int partFlag) {
-        SendScratch scratch = sendScratch.get();
-        MemorySegment messageHandle = InternalAccess.messageNativeHandle(message);
-        MemorySegment nativeRoutingId = nativeRoutingId(scratch,
-            routingIdBytes);
-        boolean useCritical =
-            (flags & SendFlag.DONTWAIT.getValue()) != 0;
-        int rc = useCritical
-            ? Native.sendPartRidNoWaitCritical(socket.handle(), nativeRoutingId,
-                messageHandle, flags, partFlag)
-            : Native.sendPartRid(socket.handle(), nativeRoutingId, messageHandle,
-                flags, partFlag);
         return rc;
     }
 
@@ -296,11 +337,15 @@ final class SocketSendPlane {
         }
     }
 
-    private boolean submitBooleanPart(PartSubmitter submitter, Message part,
+    private boolean submitBooleanPart(RoutingId target,
+                                      PartSubmitter submitter, Message part,
                                       int partFlag, SendFlag flags) {
         boolean explicitNonBlocking =
             (flags.getValue() & SendFlag.DONTWAIT.getValue()) != 0;
-        PartAttempt attempt = submitPartAttempt(submitter, part, partFlag);
+        PartAttempt attempt = explicitNonBlocking
+            ? submitTrackedNoWaitPart(target, submitter, part, partFlag)
+            : socket.completionOwner().withSendSequenceLock(() ->
+                submitPartAttempt(submitter, part, partFlag));
         if (attempt.result() == SubmitResult.OK.value()) {
             return true;
         }
@@ -313,9 +358,11 @@ final class SocketSendPlane {
         return false;
     }
 
-    private SendResult submitNoWaitPart(PartSubmitter submitter, Message part,
+    private SendResult submitNoWaitPart(RoutingId target,
+                                        PartSubmitter submitter, Message part,
                                         int partFlag) {
-        PartAttempt attempt = submitPartAttempt(submitter, part, partFlag);
+        PartAttempt attempt = submitTrackedNoWaitPart(target, submitter, part,
+            partFlag);
         if (attempt.result() == SubmitResult.OK.value()) {
             return SendResult.SENT;
         }
@@ -335,8 +382,55 @@ final class SocketSendPlane {
         }
     }
 
-    private SendResult submitNoWaitParts(PartSubmitter submitter,
+    private SendResult submitNoWaitParts(RoutingId target,
+                                         PartSubmitter submitter,
                                          List<Message> parts) {
+        PartAttempt attempt = submitNoWaitPartsAttempt(target, submitter,
+            parts);
+        if (attempt.result() == SubmitResult.OK.value()) {
+            return SendResult.SENT;
+        }
+        return classifyNonBlockingSendResult(attempt.result(),
+            attempt.errno());
+    }
+
+    private PartAttempt submitNoWaitPartsAttempt(RoutingId target,
+                                                 PartSubmitter submitter,
+                                                 List<Message> parts) {
+        CompletionOwner.NoWaitAttempt attempt =
+            socket.completionOwner().trackNoWaitSend(target,
+                (context, idOut) -> {
+                    for (int i = 0; i < parts.size(); i++) {
+                        int partFlag = i + 1 < parts.size()
+                            ? Native.PART_MORE : Native.PART_FINAL;
+                        boolean last = partFlag == Native.PART_FINAL;
+                        int result = submitter.submit(parts.get(i), partFlag,
+                            last ? context : MemorySegment.NULL,
+                            last ? idOut : MemorySegment.NULL);
+                        // Every part call consumes the native message even
+                        // when the packet's FINAL admission is backpressured.
+                        InternalAccess.messageMarkTransferred(parts.get(i));
+                        if (result != SubmitResult.OK.value()) {
+                            return result;
+                        }
+                    }
+                    return SubmitResult.OK.value();
+                });
+        return new PartAttempt(attempt.result(), attempt.errno());
+    }
+
+    private SendResult submitPublishNoWaitPart(PartSubmitter submitter,
+                                               Message part, int partFlag) {
+        PartAttempt attempt = submitPartAttempt(submitter, part, partFlag);
+        if (attempt.result() == SubmitResult.OK.value()) {
+            return SendResult.SENT;
+        }
+        return classifyNonBlockingSendResult(attempt.result(),
+            attempt.errno());
+    }
+
+    private SendResult submitPublishNoWaitParts(PartSubmitter submitter,
+                                                List<Message> parts) {
         for (int i = 0; i < parts.size(); i++) {
             int partFlag = i + 1 < parts.size()
                 ? Native.PART_MORE : Native.PART_FINAL;
@@ -352,24 +446,31 @@ final class SocketSendPlane {
 
     private PartAttempt submitPartAttempt(PartSubmitter submitter,
                                           Message part, int partFlag) {
-        return completePartAttempt(part, submitter.submit(part, partFlag));
+        return completePartAttempt(part, submitter.submit(part, partFlag,
+            MemorySegment.NULL, MemorySegment.NULL));
+    }
+
+    private PartAttempt submitTrackedNoWaitPart(RoutingId target,
+                                                PartSubmitter submitter,
+                                                Message part, int partFlag) {
+        CompletionOwner.NoWaitAttempt attempt =
+            socket.completionOwner().trackNoWaitSend(target,
+                (context, idOut) -> {
+                    int result = submitter.submit(part, partFlag, context,
+                        idOut);
+                    InternalAccess.messageMarkTransferred(part);
+                    return result;
+                });
+        return new PartAttempt(attempt.result(), attempt.errno());
     }
 
     private PartAttempt completePartAttempt(Message part, int result) {
         int errno = result == SubmitResult.OK.value() ? 0 : Native.errno();
-        if (result == SubmitResult.OK.value()
-            || !submittedPartRetainsCallerOwnership(socket.socketTypeHint(),
-                result, errno)) {
-            InternalAccess.messageMarkTransferred(part);
-        }
+        // Every Core part call consumes the native part on success and
+        // failure. BACKPRESSURED means Core retained no payload, not that the
+        // submitted part itself remains caller-owned.
+        InternalAccess.messageMarkTransferred(part);
         return new PartAttempt(result, errno);
-    }
-
-    static boolean submittedPartRetainsCallerOwnership(SocketType socketType,
-                                                       int result, int errno) {
-        return socketType == SocketType.STREAM
-            && result == SubmitResult.BACKPRESSURED.value()
-            && isWouldBlock(errno);
     }
 
     private static boolean isWouldBlock(int errno) {
@@ -390,6 +491,16 @@ final class SocketSendPlane {
 
     private static void throwPartSubmitFailure(int result, int errno) {
         throw NativeSubmitErrors.submitException(result, errno);
+    }
+
+    private static void requirePartSuccess(PartAttempt attempt) {
+        if (attempt.result() != SubmitResult.OK.value()) {
+            throwPartSubmitFailure(attempt.result(), attempt.errno());
+        }
+    }
+
+    private static boolean isDontWait(SendFlag flag) {
+        return (flag.getValue() & SendFlag.DONTWAIT.getValue()) != 0;
     }
 
     private static void validateParts(List<Message> parts) {
@@ -420,17 +531,10 @@ final class SocketSendPlane {
         return nativeRid;
     }
 
-    private static MemorySegment nativeRoutingId(SendScratch scratch,
-                                                 byte[] value) {
-        MemorySegment nativeRid = scratch.nativeRoutingId;
-        scratch.lastRoutingId = null;
-        NativeRoutingIds.writeBytes(nativeRid, value);
-        return nativeRid;
-    }
-
     @FunctionalInterface
     private interface PartSubmitter {
-        int submit(Message part, int partFlag);
+        int submit(Message part, int partFlag, MemorySegment userContext,
+                   MemorySegment completionIdOut);
     }
 
     private record PartAttempt(int result, int errno) {

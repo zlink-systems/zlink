@@ -7,7 +7,10 @@ package systems.zlink.contracts.sockets;
 public enum SendFlags {
     /** Default send behavior: block until the message can be queued. */
     NONE(0),
-    /** Do not block; report back-pressure instead of waiting. */
+    /**
+     * Do not block: make one admission attempt and report backpressure without
+     * retaining the payload in Core.
+     */
     DONT_WAIT(1);
 
     private final int value;

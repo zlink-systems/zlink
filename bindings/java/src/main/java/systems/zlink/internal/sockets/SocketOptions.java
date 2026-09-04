@@ -105,6 +105,8 @@ public final class SocketOptions {
     public static final SocketOptionKey<Integer> SUBMIT_RETRY_ATTEMPTS =
       SocketOptionKey.int32("SUBMIT_RETRY_ATTEMPTS",
         SocketOption.SUBMIT_RETRY_ATTEMPTS, true, true);
+    // REQUEST pending-admission limits for DEALER/ROUTER. Values and option
+    // mappings remain for ABI compatibility but are no-ops for SEND.
     static final SocketOptionKey<Long> PENDING_MAX_MSGS =
       SocketOptionKey.uint64("PENDING_MAX_MSGS",
         SocketOption.PENDING_MAX_MSGS, true, true);

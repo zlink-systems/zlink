@@ -31,9 +31,9 @@ import systems.zlink.contracts.sockets.RecvFlags;
 
 public class SocketConcurrencyStressTest {
     private static final int SENDER_THREADS = 4;
-    // Pull completion performs an actual completion drain for every pending
-    // admission. Keep this a close/register race test rather than a benchmark;
-    // the perf projects own sustained-throughput coverage.
+    // Backpressured sends remain binding-owned through their WRITABLE retry.
+    // Keep this a close/register race test rather than a benchmark; the perf
+    // projects own sustained-throughput coverage.
     private static final int ATTEMPTS_PER_SENDER = 1_000;
     private static final int CLOSE_AFTER_ATTEMPTS = 2_000;
 

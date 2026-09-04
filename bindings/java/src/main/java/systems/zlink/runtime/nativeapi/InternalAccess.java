@@ -68,8 +68,8 @@ public final class InternalAccess {
         int getDealerIntOption(Socket socket, int option);
         int getRouterIntOption(Socket socket, int option);
         void setRouterIntOption(Socket socket, int option, int value);
-        void completionTransferToPublic(Socket socket);
-        void completionReleasePublic(Socket socket);
+        boolean completionTransferToPublic(Socket socket, Object claimant);
+        void completionReleasePublic(Socket socket, Object claimant);
         int completionDrain(Socket socket, boolean waitForSettlement);
         boolean inCallback();
         void enterCallback();
@@ -151,12 +151,14 @@ public final class InternalAccess {
         return socketAccess().handle(socket);
     }
 
-    public static void completionTransferToPublic(Socket socket) {
-        socketAccess().completionTransferToPublic(socket);
+    public static boolean completionTransferToPublic(Socket socket,
+                                                     Object claimant) {
+        return socketAccess().completionTransferToPublic(socket, claimant);
     }
 
-    public static void completionReleasePublic(Socket socket) {
-        socketAccess().completionReleasePublic(socket);
+    public static void completionReleasePublic(Socket socket,
+                                               Object claimant) {
+        socketAccess().completionReleasePublic(socket, claimant);
     }
 
     public static int completionDrain(Socket socket,

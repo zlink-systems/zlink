@@ -4,10 +4,27 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export ZLINK_CORE_SOURCE="${ZLINK_CORE_SOURCE:-local}"
+JAVA_CORE_INCLUDE_OVERRIDE="${ZLINK_CORE_INCLUDE_DIR:-}"
+JAVA_CORE_LIB_OVERRIDE="${ZLINK_CORE_LIB_DIR:-}"
 source "${ROOT_DIR}/../tools/local_core_runtime.sh"
+if [[ "${ZLINK_CORE_SOURCE}" == "local" \
+      && -n "${JAVA_CORE_INCLUDE_OVERRIDE}" \
+      && -n "${JAVA_CORE_LIB_OVERRIDE}" ]]; then
+  [[ "${JAVA_CORE_INCLUDE_OVERRIDE}" == /* \
+      && "${JAVA_CORE_LIB_OVERRIDE}" == /* ]] || {
+    echo "Java local Core include/lib overrides must be absolute" >&2
+    exit 2
+  }
+  export ZLINK_CORE_INCLUDE_DIR="${JAVA_CORE_INCLUDE_OVERRIDE}"
+  export ZLINK_CORE_LIB_DIR="${JAVA_CORE_LIB_OVERRIDE}"
+  ZLINK_LOCAL_CORE_RUNTIME="${ZLINK_CORE_LIB_DIR}/libzlink.so"
+  if [[ "$(uname -s 2>/dev/null || true)" == Darwin* ]]; then
+    ZLINK_LOCAL_CORE_RUNTIME="${ZLINK_CORE_LIB_DIR}/libzlink.dylib"
+  fi
+fi
 zlink_export_local_core_runtime
 if [[ "${ZLINK_CORE_SOURCE}" == "release" && "${ZLINK_CORE_PACKAGE_PREFIX:-}" != /* ]]; then
-  echo "ZLINK_CORE_PACKAGE_PREFIX must name the approved Core 0.16.0 install prefix" >&2
+  echo "ZLINK_CORE_PACKAGE_PREFIX must name the approved Core 0.17.0 install prefix" >&2
   exit 2
 fi
 TASKS=(

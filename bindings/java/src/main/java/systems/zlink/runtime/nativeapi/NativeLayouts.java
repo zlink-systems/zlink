@@ -44,6 +44,8 @@ public final class NativeLayouts {
         COMPLETION_LAYOUT, "completion_id");
     public static final long COMPLETION_CONTEXT_OFFSET = offset(
         COMPLETION_LAYOUT, "user_context");
+    public static final long COMPLETION_PEER_RID_OFFSET = offset(
+        COMPLETION_LAYOUT, "peer_rid");
     public static final long COMPLETION_SEND_RESULT_OFFSET = offset(
         COMPLETION_LAYOUT, "send_result");
     public static final long COMPLETION_SEND_ERRNO_OFFSET = offset(

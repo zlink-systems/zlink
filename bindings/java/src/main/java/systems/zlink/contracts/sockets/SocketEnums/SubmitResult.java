@@ -6,6 +6,10 @@ package systems.zlink.contracts.sockets;
 /** The outcome of submitting a send or publish. */
 public enum SubmitResult {
     OK(0),
+    /**
+     * Admission was backpressured. For a DONTWAIT send, native errno is EAGAIN
+     * and Core did not retain the payload.
+     */
     BACKPRESSURED(1),
     NOT_CONNECTED(2),
     NOT_FOUND(3),

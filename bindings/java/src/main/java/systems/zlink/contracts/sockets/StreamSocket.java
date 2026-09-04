@@ -15,7 +15,7 @@ public interface StreamSocket extends Socket {
     void disconnectRid(RoutingId rid);
     void setRoutingId(RoutingId rid);
     RoutingId getRoutingId();
-    /** Builds a synchronous send to the peer identified by {@code rid}. */
+    /** Builds a send to the peer identified by {@code rid}. */
     SendOperation send(RoutingId rid);
     boolean recv(Received result, RecvFlags flags);
     boolean recvPacket(StreamPacket result, RecvFlags flags);

@@ -79,14 +79,17 @@ abstract class NativeSocketBase implements Socket {
             }
 
             @Override
-            public void completionTransferToPublic(Socket socket) {
-                nativeSocket(socket).runtime.completionOwner()
-                    .transferToPublic();
+            public boolean completionTransferToPublic(Socket socket,
+                                                      Object claimant) {
+                return nativeSocket(socket).runtime.completionOwner()
+                    .transferToPublic(claimant);
             }
 
             @Override
-            public void completionReleasePublic(Socket socket) {
-                nativeSocket(socket).runtime.completionOwner().releasePublic();
+            public void completionReleasePublic(Socket socket,
+                                                Object claimant) {
+                nativeSocket(socket).runtime.completionOwner()
+                    .releasePublic(claimant);
             }
 
             @Override

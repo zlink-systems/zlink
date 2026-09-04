@@ -4,7 +4,24 @@ set -euo pipefail
 
 SAMPLES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SAMPLES_DIR/.." && pwd)"
+JAVA_CORE_INCLUDE_OVERRIDE="${ZLINK_CORE_INCLUDE_DIR:-}"
+JAVA_CORE_LIB_OVERRIDE="${ZLINK_CORE_LIB_DIR:-}"
 source "${ROOT_DIR}/../tools/local_core_runtime.sh"
+if [[ "${ZLINK_CORE_SOURCE}" == "local" \
+      && -n "${JAVA_CORE_INCLUDE_OVERRIDE}" \
+      && -n "${JAVA_CORE_LIB_OVERRIDE}" ]]; then
+  [[ "${JAVA_CORE_INCLUDE_OVERRIDE}" == /* \
+      && "${JAVA_CORE_LIB_OVERRIDE}" == /* ]] || {
+    echo "Java local Core include/lib overrides must be absolute" >&2
+    exit 2
+  }
+  export ZLINK_CORE_INCLUDE_DIR="${JAVA_CORE_INCLUDE_OVERRIDE}"
+  export ZLINK_CORE_LIB_DIR="${JAVA_CORE_LIB_OVERRIDE}"
+  ZLINK_LOCAL_CORE_RUNTIME="${ZLINK_CORE_LIB_DIR}/libzlink.so"
+  if [[ "$(uname -s 2>/dev/null || true)" == Darwin* ]]; then
+    ZLINK_LOCAL_CORE_RUNTIME="${ZLINK_CORE_LIB_DIR}/libzlink.dylib"
+  fi
+fi
 zlink_export_local_core_runtime
 zlink_sync_linux_native_dir "${ROOT_DIR}/src/main/resources/native/linux-x86_64"
 zlink_sync_linux_native_dir "${ROOT_DIR}/build/resources/main/native/linux-x86_64"

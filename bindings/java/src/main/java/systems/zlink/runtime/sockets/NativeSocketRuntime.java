@@ -94,7 +94,8 @@ final class NativeSocketRuntime implements AutoCloseable {
         try {
             CompletionDispatcher dispatcher =
                 InternalAccess.contextCompletionDispatcher(ctx);
-            this.socketCore = new SocketCore(this, dispatcher.acquireLane());
+            this.socketCore = new SocketCore(this, dispatcher.acquireLane(),
+                InternalAccess.contextHandle(ctx));
         } catch (RuntimeException | Error failure) {
             Native.close(handle);
             handle = MemorySegment.NULL;
@@ -119,7 +120,8 @@ final class NativeSocketRuntime implements AutoCloseable {
             "zlink-send-completion", 1);
         this.ownedCompletionDispatcher = dispatcher;
         try {
-            this.socketCore = new SocketCore(this, dispatcher.acquireLane());
+            this.socketCore = new SocketCore(this, dispatcher.acquireLane(),
+                MemorySegment.NULL);
         } catch (RuntimeException | Error failure) {
             dispatcher.close();
             if (own && handle != null && handle.address() != 0L) {

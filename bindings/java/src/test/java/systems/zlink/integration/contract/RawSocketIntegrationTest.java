@@ -44,7 +44,7 @@ public class RawSocketIntegrationTest {
     }
 
     @Test
-    public void immediateAdmissionCompletesStageBeforeSubmitReturns() {
+    public void immediateSendSuccessCompletesStageBeforeSubmitReturns() {
         TestSupport.assumeNative();
 
         try (Context context = Zlink.createContext();
@@ -59,7 +59,7 @@ public class RawSocketIntegrationTest {
             CompletableFuture<Void> completion = sender.send()
                 .message(message).submit().toCompletableFuture();
             assertTrue(completion.isDone(),
-                "op_id == 0 admission must complete inline");
+                "ordinary SEND success must complete inline without a completion");
             assertFalse(completion.isCompletedExceptionally());
         }
     }
