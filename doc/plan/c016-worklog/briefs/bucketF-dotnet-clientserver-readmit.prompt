@@ -1,0 +1,47 @@
+# Job: dotnet — `ClientServerChannelRuntimeTests.MalformedPushedControl_ReconnectsAndReadmits` fails (re-admission never completes) and `StatefulServiceRuntimeTests.InstanceSpotIdleInspectionRotatesWithABoundedBatch` hangs in the full suite, on the combined admission changes
+
+You are a codex sub-agent under a Claude supervisor. Take the ClientServer re-admission failure as
+the one cause; check whether the InstanceSpotIdle hang is a consequence (teardown hang after a
+failure elsewhere in the same test class ordering) or separate — report, fix only if it is the same
+cause. 1.5 h cap. Read `AGENTS.md` (root) §2/§3/§4.1, `framework/AGENTS.md`,
+`framework/languages/dotnet/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages' trees; never lower an assertion; do not
+commit. Another job (`bucketF-dotnet-canonical-handover-family`) may still be editing
+`ZLinkManagedMeshNode.cs` — read its summary if present and keep your change narrowly scoped to the
+ClientServer admission path; coordinate by re-reading the file before editing.
+
+## Facts
+- Working tree (uncommitted, keep all): the dotnet admission rework (settle-before-submit for
+  reciprocal handover; unilateral-Hello outbound fallback + `FindReadyOutboundCandidate` requiring
+  configured RID+endpoint; relay RID→pair re-pin at admission; RouteAdmission fixture fix). Summaries in
+  `doc/plan/c016-worklog/bucketB-dotnet-*.md`, `bucketF-dotnet-*.md`.
+- Supervisor gate `--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests' --blame-hang-timeout 10m`
+  (log `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate-v4-rest.log`):
+  442 passed, 1 failed:
+  `ClientServerChannelRuntimeTests.MalformedPushedControl_ReconnectsAndReadmits` —
+  `TimeoutException: Expected raw record was not received. diagnostics=manual:tcp://127.0.0.1:33001=protocol:pushed-control;generation=2;attempt=3;admissionStarted=True;admissionCompleted=False;reconnect=False`
+  (client reconnects after a malformed pushed control, starts admission attempt 3 on generation 2, but
+  admission never completes). The earlier gate v3 (before the relay/fixture changes) passed 852 tests
+  including this one — so it is new with the latest change(s) or load-sensitive.
+  Then the run aborted on a 10-min hang in
+  `StatefulServiceRuntimeTests.InstanceSpotIdleInspectionRotatesWithABoundedBatch` (v3 ran past it).
+  Dump under `tests/Zlink.Framework.UnitTests/TestResults/<latest>/…hangdump.dmp`.
+- ClientServer admission is DEALER→ROUTER (no reciprocal lanes; the client is a DEALER with a
+  configured endpoint; the server accepts). Check how the new `FindReadyOutboundCandidate` (requires
+  `peer.ExpectedRid == routingId || PhysicalRoutingId == routingId` AND `Endpoint == RemoteAddr`) and the
+  `hasReadyInboundCandidate` gate interact with a *re*-admission on generation 2 after the pushed
+  control error: the ready `ConnectionReady` for the reconnected pair may carry a provisional RID or a
+  different RemoteAddr form (e.g. `tcp://127.0.0.1:33001` vs the configured string), so the outbound
+  intent is no longer recognised as ready and admission stays `admissionCompleted=False`.
+  Spec: `02-channel-transport/03-client-server-channel.ko.md` (admission on reconnect, generations),
+  `05-transport-liveness.ko.md`.
+- dotnet env block (never `--artifacts-path`, never `ulimit -v`); reproduce with
+  `--filter 'FullyQualifiedName~ClientServerChannelRuntimeTests.MalformedPushedControl'` 5× (flock on
+  `/tmp/zlink-dotnet-gate.lock`), then the whole `ClientServerChannelRuntimeTests` class once (35
+  tests were green before the campaign), and `--filter 'FullyQualifiedName~InstanceSpotIdleInspection'`
+  3× with `--blame-hang-timeout 2m`.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketF-dotnet-clientserver-readmit-summary.md`: assertion/trace, cause
+`file:line`, spec clause, fix + regression, results (5×/class/idle 3×), whether the idle hang is
+related, BLOCKERS.

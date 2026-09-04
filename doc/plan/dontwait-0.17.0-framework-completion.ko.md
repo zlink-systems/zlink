@@ -62,7 +62,8 @@
       relay fail = 늦은 loser `ConnectionReady`가 survivor의 RID→pair 인덱스를 덮어 command 33이 `current_source=False`로 폐기(수정, 15/15);
       hang = fixed-RID handover 테스트 fixture 경합(`RouteAdmission_HandoverStartsFreshLivenessDeadline`, 이전 DEALER reconnect intent 유지) — fixture 수정(8/8).
       **Core 후보(B 보고)**: assertion 실패 후 `Context.Dispose → zlink_ctx_term`이 반환하지 않아 20분 inactivity hang이 됨(dump: `tests/Zlink.Framework.UnitTests/TestResults/b1610869-…/dotnet_62877_20260905T034650_hangdump.dmp`, `dcd36b29-…/dotnet_33690_20260905T035608_hangdump.dmp`).
-      잔여: Canonical handover family — `ManagedSource_Command28Request…(targetDialsSource: True)` fail + `CanonicalActorJoinRequest_HandoverKeepsPriorReplyEpochUntilExactDisconnect` hang → job 진행 중; 나머지 suite gate-v4 실행 중; 통과 시 dotnet 수정 일괄 커밋
+      잔여(gate-v4): Canonical handover family — `ManagedSource_Command28Request…(targetDialsSource: True)` fail + `…HandoverKeepsPriorReplyEpochUntilExactDisconnect` hang → job 진행 중;
+      나머지 suite 442 pass / 1 fail(`ClientServerChannelRuntimeTests.MalformedPushedControl_ReconnectsAndReadmits` — 재admission 미완료, v3에서는 통과) + hang(`InstanceSpotIdleInspectionRotatesWithABoundedBatch`, v3 통과) → 후속 job 대기; 전부 해소 후 dotnet 수정 일괄 커밋
 - [ ] 7 samples × 4언어 green — **cpp 7/7**; **node 7/7**(SupportChat budget `2e3b1b47e4`, ZoneWorld entry html `c67deb44e0`, runner PASS marker `2ceb137abe`);
       java: TicTacToe·SupportChat·DeliveryDispatch(`ed156f5983`+teardown `6682ae0db1`)·GameQuest(heartbeat `dc9fe76100`)·ShoppingMall·**Bingo**(teardown/heartbeat 수정으로 해소, exit 0) = **6/7**;
       ZoneWorld: A2 지연 = public mesh poller owner가 command 36 STREAM admission을 동기 대기 → 비동기 admission `424b15684c`(prefix 4/4, 28-37 ms); full run은 A5 client timeout — round-3 job 진행 중;
