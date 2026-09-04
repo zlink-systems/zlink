@@ -8,7 +8,7 @@ title: "Spot Model — Entry, User, Instance"
 
 > Defines what Entry Spot, User Spot, and Instance Spot have in common and how
 > they differ. All three are [Spot](../00-foundation/02-glossary.en.md#spot)s with an
-> address and state that run callbacks in order, but their creation purpose,
+> address and state, and all run callbacks in order, but their creation purpose,
 > [Actor membership](../00-foundation/02-glossary.en.md#actor-membership) — the relationship
 > naming which Entry Spot or User Spot an Actor currently belongs to — and termination/
 > relocation contracts differ.
@@ -19,16 +19,16 @@ This document answers "which Spot kind should I use?" and "what role does an
 Entry Spot play?"
 
 A runtime node that sends or receives messages within a connection topology
-multiple nodes participate in is called a
+shared by multiple nodes is called a
 [MeshNode](../00-foundation/02-glossary.en.md#meshnode). The following contracts are owned by
 other documents.
 
 - How messages are delivered: [Spot Messaging](02-spot-messaging.en.md)
 - The order of Actor callbacks: [Spot And Actor Membership](05-spot-actor-membership.en.md)
 - Entry Spot ID issuance/format/conflict rules, Object role, and factory registration: [MeshNode](03-mesh-node.en.md)
-- User/Instance Spot's creation and address contract: [Spot Address Messaging](06-spot-address-messaging.en.md)
+- Creation and address contracts for User and Instance Spots: [Spot Address Messaging](06-spot-address-messaging.en.md)
 
-## 2. The Three Spots Differ In When They're Prepared And Their Purpose
+## 2. The Three Spots Differ in When They're Prepared and Their Purpose
 
 ```mermaid
 flowchart LR
@@ -42,12 +42,12 @@ explicitly created by the application via a manager. An Instance Spot is
 prepared, with no separate create operation, when the first direct message
 needs it.
 
-## 3. Similarities And Differences
+## 3. Similarities and Differences
 
 | Aspect | Entry Spot | User Spot | Instance Spot |
 |---|---|---|---|
 | Primary purpose | Manages the initial/default membership of Actors placed on that Object Server. | A Spot the application explicitly creates; can manage Actor membership. | Processes direct messages and timers with no Actor. |
-| Registration/creation | Registers a Spot implementation type on the Object Server builder; initialized at startup. | Registers a factory for a [stable type](../00-foundation/02-glossary.en.md#stable-type) — a fixed name identifying the same kind of Spot even across deploy versions or a different running node; created via manager `Create`/`GetOrCreate`. | Registers a factory for a stable type; prepared by the first direct call carrying [Instance intent](../00-foundation/02-glossary.en.md#instance-intent) — the caller's explicit choice that a new Instance Spot may be prepared when no target exists. |
+| Registration/creation | Registers a Spot implementation type on the Object Server builder; initialized at startup. | Registers a factory for a [stable type](../00-foundation/02-glossary.en.md#stable-type) — a fixed name identifying the same kind of Spot across deployment versions or running nodes; created via manager `Create`/`GetOrCreate`. | Registers a factory for a stable type; prepared by the first direct call carrying [Instance intent](../00-foundation/02-glossary.en.md#instance-intent) — the caller's explicit choice that a new Instance Spot may be prepared when no target exists. |
 | [Spot ID](../00-foundation/02-glossary.en.md#spot-id) — the global logical address identifying a Spot | Issued by the framework. The format and conflict-handling rules are defined by [MeshNode](03-mesh-node.en.md). | `Create` has the framework issue it; `GetOrCreate` has the caller specify it. | The caller specifies the target Spot ID of the direct message. |
 | Stable type input | No separate stable-type string is registered. | A UTF-8 1-255 byte stable type is required. | Uses a UTF-8 1-255 byte stable type. On Missing activation, either specify it or a single registered type is auto-selected. |
 | Actor membership | Supported. It's the initial membership of Actor creation and the target of `JoinEntrySpot`. | Supported. An Actor can change membership via `JoinSpot` and leave. | Not supported. |
@@ -74,14 +74,14 @@ kinds go into the
 Business payload delivered to an Actor goes directly into that Actor's queue,
 without going through the Spot queue.
 
-### 3.1 During Relocation, The Temporary Queue Is Checked First
+### 3.1 During Relocation, the Temporary Queue Is Checked First
 
-Regular dispatch finds the execution queue of a
-[Ready](../00-foundation/02-glossary.en.md#ready) Actor or Spot — one whose creation,
-initialization, and [Location Store](../00-foundation/02-glossary.en.md#location-store) record
-are done and can receive messages, where the Location Store is the store that
-lets multiple nodes jointly confirm each Spot's current owner and state — as
-usual and puts the message there. Once the target runtime receives a Restore
+Regular dispatch works as usual: it finds the execution queue of a
+[Ready](../00-foundation/02-glossary.en.md#ready) Actor or Spot and puts the message there.
+For a Ready Actor or Spot, creation, initialization, and its
+[Location Store](../00-foundation/02-glossary.en.md#location-store) record are complete, so
+it can receive messages. The Location Store lets multiple nodes jointly
+confirm each Spot's current owner and state. Once the target runtime receives a Restore
 request, it registers a
 [relocation temporary queue](../00-foundation/02-glossary.en.md#relocation-temporary-queue)
 before dispatching the next packet. Afterward, Actor or Spot message dispatch
@@ -189,15 +189,15 @@ can be moved together via the Spot relocation adapter.
 ### 3.2 Lifecycle Callback Per Spot Kind
 
 The callback names in the following table use .NET notation. Other
-languages' names and async expression may differ, but the call condition and
+languages' names and async forms may differ, but the call condition and
 order are the same. `Configure` isn't an async lifecycle callback — it's the
 configuration stage that registers handlers — but it's included in the table
 to help understand the order in which a Spot instance is prepared.
 
 | Callback | Entry Spot | User Spot | Instance Spot | Purpose of the call |
 |---|---:|---:|---:|---|
-| `Configure` | O | O | O | Registers the handlers that Spot instance will use. |
-| `OnCreateAsync` | X | O | X | When the manager creates a new User Spot, checks the creation request and returns whether to accept creation and an optional reply. Not called for an `Existing` result that found an existing User Spot. |
+| `Configure` | O | O | O | Registers the handlers that the Spot instance will use. |
+| `OnCreateAsync` | X | O | X | When the manager creates a new User Spot, this callback checks the creation request and returns whether to accept creation and an optional reply. Not called for an `Existing` result that found an existing User Spot. |
 | `OnInitializeAsync` | O | O | O | Finishes application initialization of the created Spot instance. Instance Spot uses this callback without `OnCreateAsync`. |
 | `OnClosingAsync` | O | O | O | Cleans up application resources before a still-valid local Spot instance terminates. Call conditions are distinguished in §3.4. |
 | `OnActorJoinAsync` | X | O¹ | X | When an existing Actor tries to move into a User Spot, the target User Spot approves or declines the request. Returning to an Entry Spot is default membership and doesn't use an admission callback. |
@@ -209,7 +209,7 @@ to help understand the order in which a Spot instance is prepared.
 ¹ Only applies to an Entry Spot or User Spot that specifies an Actor type and
 supports Actor membership.
 
-### 3.3 Actor Membership Callbacks Run Split Across Source And Target
+### 3.3 Actor Membership Callbacks Run Separately on the Source and Target
 
 Entry Spot and User Spot are different Spot instances. Even though both
 kinds implement the same Actor membership interface, the callback runs
@@ -225,7 +225,7 @@ bidirectional callback comparison between Entry Spot and User Spot and the
 commit order are defined by
 [Spot And Actor Membership §4](05-spot-actor-membership.en.md).
 
-### 3.4 The Callback Called When A Spot Instance Terminates
+### 3.4 The Callback Called When a Spot Instance Terminates
 
 `OnClosingAsync` isn't a per-Actor callback — it's the terminal lifecycle
 callback of an Entry/User/Instance Spot instance. The framework passes the
@@ -255,8 +255,8 @@ The Entry Spot isn't published to descriptor and resolver before
 initialization finishes. The Entry Spot ID's issuance rules, format, and
 conflict handling are owned by [MeshNode](03-mesh-node.en.md).
 
-When a new Actor is created, the Entry Spot of the owner MeshNode the
-framework selected handles initial membership. Actor creation and initial
+When a new Actor is created, the Entry Spot of the owner MeshNode selected by
+the framework handles initial membership. Actor creation and initial
 Entry Spot membership finish within the same
 [Ready](../00-foundation/02-glossary.en.md#ready) barrier. Even though the Actor belongs to
 the Entry Spot, business messages are delivered to the Actor queue without
@@ -304,10 +304,12 @@ identity, submits held messages to target route, and releases the matching
 seal. There is no application reply; without that command 44 within
 `SessionRelocationSealTimeout`, it cleans the physical Session and related
 state. Target Actor processes messages without a command 44 application
-reply, and a message on the previous route is delivered by the Message
-Follow route. A route update only applies to the same `ObjectGeneration`, and
-the application doesn't rebind to learn about the relocation. A new
-incarnation must be explicitly rebound by the application.
+reply, and a message on the previous route is delivered by the
+[Message Follow](../00-foundation/02-glossary.en.md#message-follow) route — which forwards
+messages that reach the previous owner after an Actor or Spot has moved to a
+different MeshNode — to the new owner. A route update only applies to the same
+`ObjectGeneration`, and the application doesn't rebind to learn about the
+relocation. A new incarnation must be explicitly rebound by the application.
 
 The application doesn't track the relocation via an Entry Spot lifecycle
 callback.
@@ -337,7 +339,7 @@ stable-type factory and uses the manager.
 - A User Spot supporting Actor membership serializes join/joined/leave/
   disconnect control with its other callbacks on its own Spot queue.
 - If even one current Actor membership remains, public close ends `false` —
-  the framework doesn't secretly move or remove a member Actor.
+  the framework doesn't implicitly move or remove a member Actor.
 - `SpotWide` relocation preflights and commits the User Spot and the member
   Actors at seal time as one aggregate.
 - `PerActor` relocation prepares a stateless Spot shell on the target, moves
@@ -345,10 +347,12 @@ stable-type factory and uses the manager.
 
 A User Spot's default execution mode is `SpotWide`. It runs only one of the
 same User Spot's Spot handler, member Actor handler, timer, and lifecycle
-callback at a time, across the whole Spot. Choosing `PerActor` at factory
-registration serializes only the same Actor, same Spot lane, and same timer
-respectively — different lanes can run concurrently. Execution mode is fixed
-before the MeshNode lifecycle starts and doesn't change while running.
+callback at a time, across the whole Spot. Choosing `PerActor` when registering
+the [factory](../00-foundation/02-glossary.en.md#factory) — application-provided code that
+creates a Spot instance for the registered stable type — serializes work for
+the same Actor, the same Spot lane, and the same timer independently; different
+lanes can run concurrently. Execution mode is fixed before the MeshNode
+lifecycle starts and doesn't change while running.
 
 `Yield` can only be used in `SpotWide`. Once the shared User Spot turn is
 returned, the continuation resumes on a new turn by re-obtaining the same
@@ -405,7 +409,7 @@ A new User Spot becomes Ready after the factory builds the instance and it
 goes through `Configure`, `OnCreateAsync`, and `OnInitializeAsync`.
 `OnCreateAsync` checks the creation request and returns whether to accept
 creation and an optional reply. A `GetOrCreate` that found a Ready User Spot
-of the same stable type and ended `Existing` doesn't run factory or
+of the same stable type and returned `Existing` doesn't run the factory or
 `OnCreateAsync`.
 
 A User Spot supporting Actor membership runs `OnActorJoinAsync` and
@@ -479,7 +483,7 @@ packet handler, timer, and outbound call, but can't use the following.
 - Logical Multicast subscription
 - Manager `Create`/`GetOrCreate`
 
-A [Spot direct](../00-foundation/02-glossary.en.md#spot-direct) call — sending a send or
+A [Spot direct](../00-foundation/02-glossary.en.md#spot-direct) call — issuing a send or
 request by specifying one global Spot ID — by default, only finds a running
 Spot. To prepare an
 Instance Spot from a Missing RID, Instance intent must be specified on the
@@ -509,7 +513,7 @@ normally closes it from its own context, `HostShutdown` if the host
 terminates without relocation, or `RelocationOut` if the source instance is
 cleaned up after a relocation commit.
 
-### 6.2 Cleaning Up An Idle Instance Spot
+### 6.2 Cleaning Up an Idle Instance Spot
 
 The framework can clean up an Instance Spot based on an idle criterion.
 **User Spot and Entry Spot aren't cleaned up** — since a regular message
@@ -536,7 +540,7 @@ An Instance intent call arriving after cleanup, under the same ID,
 cold-activates with a new `ObjectGeneration`. A regular message arriving
 after cleanup ends with `NotFound`.
 
-## 7. Differences Visible In .NET
+## 7. Differences Visible in .NET
 
 The following code is an excerpt of the three registration methods declared
 on the Object Server builder. Entry Spot only registers the implementation
@@ -568,7 +572,7 @@ means the staging Spot isn't exposed as Ready. A same-node operation keeps
 the Spot instance and Context. A cross-node relocation keeps SpotId and
 ObjectGeneration, passes a new Context, bound to the target owner
 generation, to the target factory, and fences new operations on the source
-Context after commit. A User Spot has Actor leave and close; an Instance
+Context after commit. A User Spot supports Actor leave and close; an Instance
 Spot only has close.
 
 ```csharp

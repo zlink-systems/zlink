@@ -1,8 +1,8 @@
 ---
-title: "Spot And Actor Membership"
+title: "Spot and Actor Membership"
 ---
 
-# Spot And Actor Membership
+# Spot and Actor Membership
 
 [Spot And Actor topic index](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 04. Actor Model](04-actor-model.en.md) · [Next: 06. Spot Address Messaging](06-spot-address-messaging.en.md)
 
@@ -13,14 +13,14 @@ Automatic failover, where a different runtime takes over relocation after a
 process terminates, isn't part of this document's contract.
 
 [Core](../00-foundation/02-glossary.en.md#location-store) only provides raw sockets and
-transport. An object's current
+transport. The relationship that identifies an object's current
 [Spot](../00-foundation/02-glossary.en.md#spot) — a logical instance with an address and
-state, either an Entry Spot or a User Spot — relationship, called
-[Actor membership](../00-foundation/02-glossary.en.md#actor-membership), plus its
-relocation state and lifecycle, are managed by each language's framework
-runtime.
+state, either an Entry Spot or a User Spot — is called
+[Actor membership](../00-foundation/02-glossary.en.md#actor-membership). Each language's
+framework runtime manages this relationship and the object's relocation state
+and lifecycle.
 
-## 1. Identity And Authority
+## 1. Identity and Authority
 
 Entry/User/Instance are the three kinds of Spot. ActorId and Spot ID are
 logical keys global across the whole Location Store namespace.
@@ -69,8 +69,8 @@ operations.
 ## 2. The Process That Confirms Only One Object Is Created
 
 Even if several nodes try to create the same Actor or Spot at the same time,
-the factory must only start on the one place that obtained creation
-authority. The framework confirms this authority as one by reserving, in the
+the factory must only start at the one location that obtained creation
+authority. The framework ensures a single authority by reserving, in the
 Location Store, both the object to create and the target node's capacity
 together. This record is called a placement reservation.
 
@@ -87,8 +87,8 @@ The common result of both methods is the same. The Location Store grants
 creation authority to only one target, and other targets don't start a
 separate [factory](../00-foundation/02-glossary.en.md#factory).
 
-The unchanging name used when registering an object factory and comparing
-whether it's the same type is called stable type.
+The unchanging name used to register an object factory and compare whether
+objects have the same type is called the stable type.
 
 Remote User Spot manager create sends a separate terminal service operation
 to that target after reservation. This operation fixes the source and
@@ -149,8 +149,8 @@ An encoded creation request is at most 1 MiB. The framework records an
 unchangeable content reference and hash into the creation intent before
 reservation, and keeps it until the object becomes Ready or a failed
 creation is cleaned up. Only the target that obtained creation authority
-passes this request to the factory. Since factory and initialize can run
-more than once per `(logical key, ObjectGeneration, attempt)`, they must
+passes this request to the factory. Since factory execution and initialization
+can run more than once per `(logical key, ObjectGeneration, attempt)`, they must
 safely handle re-execution with the same input.
 
 The staging instance an Actor factory builds is passed to the Entry Spot's
@@ -159,8 +159,8 @@ reply. If approved, initial Entry membership/Ready authority/active
 capacity and a `Created` terminal record are published together. If
 declined, Ready and message admission aren't opened — the Creating
 authority/pending capacity are cleaned up and a `Rejected` terminal record
-is published. A callback exception is a typed creation failure that already
-exists — it isn't an application rejection.
+is published. A callback exception is an existing typed creation failure —
+it isn't an application rejection.
 
 A caller that requested concurrently but didn't obtain creation authority
 doesn't start a separate factory. A different operation waits for the
@@ -169,16 +169,15 @@ it becomes Missing via callback rejection or failure cleanup, it competes
 for a new reservation to process its own creation request. It doesn't share
 an earlier operation's `Rejected` state or application reply. One terminal
 call deadline applies across the whole of resolve, waiting, reservation,
-factory, and [Ready](../00-foundation/02-glossary.en.md#ready) preparation. Once the
-[deadline](../00-foundation/02-glossary.en.md#deadline) ends, it's a Framework exception
-raised when an operation's completion condition isn't met by its allowed
-deadline, called
-[`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded). If
+factory, and [Ready](../00-foundation/02-glossary.en.md#ready) preparation. If the
+[deadline](../00-foundation/02-glossary.en.md#deadline) expires before the operation's
+completion condition is met, the framework raises the
+[`DeadlineExceeded`](../00-foundation/02-glossary.en.md#deadlineexceeded) exception. If
 a caller re-checking the Creating state reaches this deadline, that caller
 ends with `DeadlineExceeded`, but the creation attempt itself isn't
-considered failed. The next call re-checks the Store's current authority to
-clean up or continue an interrupted attempt. `Missing`, `Creating`, and
-Store failure aren't stored in a negative cache.
+considered failed. The next call re-checks the Store's current authority and
+retained terminal record to clean up or continue an interrupted attempt.
+`Missing`, `Creating`, and Store failure aren't stored in a negative cache.
 
 If multiple processes concurrently call `GetOrCreate` for the same
 ActorId, only the Location Store reservation CAS winner runs factory and
@@ -216,7 +215,7 @@ startup initialization. Actor creation completes initial Entry Spot
 membership and the Ready barrier in the same lifecycle, without calling
 `OnActorJoin` or `OnJoinedActor`.
 
-## 3. Actor Membership For Entry Spot And User Spot
+## 3. Actor Membership for Entry Spot and User Spot
 
 The three Spot kinds' creation methods and functional differences, and the
 Entry Spot's overall role, are defined by
@@ -228,9 +227,9 @@ When an Actor is created, the Entry Spot of the selected owner
 business messages are delivered directly to the Actor queue, without going
 through an Entry Spot or User Spot callback.
 
-The location where Actor payload is put on the Actor queue and the gate
-deciding handler execution authority are different contracts. The Entry
-Spot Actor's/User Spot Actor's execution gate assignment, the scope where
+The placement of Actor payload on the Actor queue and the gate that
+determines handler execution authority are separate contracts. The execution
+gate assignment for Entry Spot Actors and User Spot Actors, the scope where
 `Yield` is allowed, and the registration rules/count/size/timeout limits of
 Actor Join `Defer()` are owned by
 [Actor Model §3](04-actor-model.en.md#3-actor-queue) and apply as-is
@@ -253,7 +252,7 @@ authority if even one current Actor membership remains. It can only close
 once the caller finishes an explicit leave or destroy. The framework
 doesn't secretly move or destroy an Actor.
 
-## 4. Actor Join And Commit Order
+## 4. Actor Join and Commit Order
 
 `JoinSpot` takes the global Spot ID of the User Spot to move to.
 `JoinEntrySpot` doesn't take a target node RID. The framework finds the
@@ -383,7 +382,7 @@ proceeds with Message Follow cleanup. For a bound Actor, the target runtime
 notifies the Session owner of the target route application and seal
 release one-way.
 
-The error kind `Failed` delivers distinguishes the point of failure as
+The error kind delivered by `Failed` distinguishes the point of failure as
 follows. A result where the target's `OnActorJoin` callback normally
 declines isn't an error, so it's `Rejected`, not `Failed`.
 
@@ -428,7 +427,7 @@ Actor and waits for the reply, a cycle can form where the request and
 handler each wait for the other to finish. The framework rejects it with
 `InvalidOperation` before submitting the request to the queue.
 
-### 4.1 Comparing Entry Spot And User Spot Callbacks
+### 4.1 Comparing Entry Spot and User Spot Callbacks
 
 Entry Spot and User Spot are different Spot instances. A User Spot decides
 whether to accept an Actor in `OnActorJoin`. Entry Spot has no such
@@ -491,7 +490,7 @@ So an Actor returning from a User Spot to an Entry Spot isn't a new Actor.
 The target Entry Spot doesn't call `OnCreateActor` or `OnActorJoin` — it
 only runs `OnJoinedActor`, while the source User Spot runs `OnLeaveActor`.
 
-### 4.2 The Order For Joining An Actor To A Spot On A Different Node
+### 4.2 The Order for Joining an Actor to a Spot on a Different Node
 
 The single source for the complete owner transition, ordered relay, target
 queue merge, and Location Store CAS is
@@ -756,12 +755,12 @@ remaining temporary messages enter the real Actor queue in order. After the
 switchover, Message Follow and target direct messages use the existing
 Actor queue path.
 
-## 5. Spot Termination And Lifecycle Callback
+## 5. Spot Termination and Lifecycle Callback
 
 A Spot's terminal lifecycle callback is `OnClosing(ClosingContext)`. Since
 an Actor always belongs to an Entry or User Spot, a separate per-Actor
 closing callback isn't provided. `ClosingContext` provides the following
-closed reasons and the operation's absolute deadline.
+closing reasons and the operation's absolute deadline.
 
 | Value | Reason | Call condition |
 |---:|---|---|
@@ -791,7 +790,7 @@ ends as `ForceStopped/TeardownFailed`; deadline expiry ends as
 process crash or `SIGKILL`. The enum, context, and standard
 cancellation expression are set by each language's interface document.
 
-## 6. Relocation Policy Shared By Every Move Path
+## 6. Relocation Policy Shared by Every Move Path
 
 An Actor's/User Spot's/Instance Spot's
 [Object Server](../00-foundation/02-glossary.en.md#object-client-and-object-server-role)
@@ -849,7 +848,7 @@ The stages and sequence diagrams for moving an Entry Spot Actor,
 defined by
 [Graceful Drain And Handoff §8](../05-location-relocation/05-host-relocation-flow.en.md#9-the-order-for-relocating-one-unit--owned-by-04).
 
-## 7. Maintenance Aggregate Moving A User Spot And Member Actors Together
+## 7. Maintenance Aggregate Moving a User Spot and Member Actors Together
 
 When host `Relocate` moves a User Spot, it treats that Spot and every
 current member Actor at seal time as one aggregate. The application
@@ -878,7 +877,7 @@ to build a tree. Aggregate authority holds only the following values.
 | Value | Purpose |
 |---|---|
 | `AggregateId` and generation | Identifies the same User Spot move and its commit generation. |
-| Participant count | The total number of Spot and Actors in the tree. |
+| Participant count | The total number of participants — the Spot and Actors — in the tree. |
 | Inventory root and digest | Points to the whole list the Location Store uses as authority. |
 | Owner | Points to the current owner. The payload to restore originates from source memory, not a store, so authority doesn't point to it. |
 
@@ -954,7 +953,7 @@ per-Actor owner CAS succeeds, a message arriving at the previous owner is
 relayed to the target with the same operation identity, ObjectGeneration,
 deadline, request correlation, and reply route.
 
-Once the last Actor becomes a target owner and the source has finished
+Once the last Actor becomes owned by the target and the source has finished
 all already-accepted Spot work and relay, the source shell closes with
 `RelocationOut`. During relocation, some Actors may be on the source and
 some on the target. This distributed state is only allowed within the
@@ -1045,7 +1044,7 @@ document points to that document rather than restating it.
 The Session route contract is defined by
 [Session-Actor Binding §8.2](../04-session/02-session-actor-binding.en.md#82-control-messages-42-43-44).
 
-## 11. Implementation And Contract-Test Verification Requirements
+## 11. Implementation and Contract-Test Verification Requirements
 
 - An object role doesn't start up without a Store and doesn't create a
   hidden local manager.
@@ -1071,10 +1070,10 @@ The Session route contract is defined by
   the handler's last continuation ends normally.
 - If the handler fails, every barrier that handler registered is
   discarded.
-- Applies limits of 64 Joins per handler, 1 MiB per request, and 8 MiB
-  total requests, and an exceeded registration fails synchronously with
-  no partial record.
-- If timeout is omitted, uses 5 seconds and fixes a monotonic absolute
+- The framework applies limits of 64 Joins per handler, 1 MiB per request,
+  and 8 MiB total requests, and an exceeded registration fails synchronously
+  with no partial record.
+- If the timeout is omitted, the framework uses 5 seconds and fixes a monotonic absolute
   deadline at `Defer()` time.
 - Rejects `Defer()` after the registration scope closes, and treats a
   call from a detached task as an application contract violation.
@@ -1126,8 +1125,8 @@ The Session route contract is defined by
 - A `Restore` retry's payload origin is a resend from source memory, not
   a store.
 - Saved existing Actor work is put into the real Actor queue first, then
-  the temporary queue's work moves in behind it, then it atomically
-  switches to the existing dispatch path.
+  the temporary queue's work moves in behind it, and then the framework
+  atomically switches to the existing dispatch path.
 - Only on an abort before relay-ready is accepted is the target temporary
   queue discarded without running and the source original reprocessed.
 - A duplicate Restore with the same `RelocationId`, target attempt, and
@@ -1154,4 +1153,3 @@ The Session route contract is defined by
 ---
 
 [Spot And Actor topic index](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 04. Actor Model](04-actor-model.en.md) · [Next: 06. Spot Address Messaging](06-spot-address-messaging.en.md)
-</content>

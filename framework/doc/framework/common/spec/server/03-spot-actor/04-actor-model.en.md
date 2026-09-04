@@ -16,8 +16,8 @@ Regardless of whether an Actor is in a
 state — such as an
 [Entry Spot](../00-foundation/02-glossary.en.md#entry-spot-user-spot-and-instance-spot) or a User
 Spot, or on a remote [MeshNode](../00-foundation/02-glossary.en.md#meshnode) — a runtime node
-that sends or receives messages on a connection topology multiple nodes
-participate in — application payload is submitted to the Actor's own queue.
+that sends or receives messages on a connection topology in which multiple nodes
+participate — application payload is submitted to the Actor's own queue.
 The gate that runs a handler once it's on the queue is determined by
 [Actor membership](../00-foundation/02-glossary.en.md#actor-membership) — the relationship
 representing which Entry Spot or User Spot the Actor currently belongs to —
@@ -29,13 +29,13 @@ The related contracts are owned by the following documents.
 |---|---|
 | MeshNode route and peer admission | [MeshNode](03-mesh-node.en.md) |
 | [Spot](../00-foundation/02-glossary.en.md#spot) membership transactions and relocation | [Spot And Actor Membership](05-spot-actor-membership.en.md) |
-| [STREAM session](../00-foundation/02-glossary.en.md#stream-session)(a server-side execution unit kept alive from accepting one client connection until it closes) integration | [Session–Actor binding](../04-session/02-session-actor-binding.en.md) |
+| [STREAM session](../00-foundation/02-glossary.en.md#stream-session) (a server-side execution unit kept alive from accepting one client connection until it closes) integration | [Session–Actor binding](../04-session/02-session-actor-binding.en.md) |
 | Payload and metadata | [Message Model](../00-foundation/05-message-model.en.md) |
 | Callback execution and completion | [Async Execution Policy](../01-execution/01-submit-and-completion.en.md) |
 
-## 2. Actor Identity And Mutually Independent State
+## 2. Actor Identity and Mutually Independent State
 
-### 2.1 ActorId And Stable Type
+### 2.1 ActorId and Stable Type
 
 An Actor is a stateful object identified by a logical `ActorId`, unique across
 the whole namespace of the
@@ -57,7 +57,7 @@ on the same server is a startup error.
 
 ### 2.2 ActorRef
 
-`ActorRef` is an unchangeable snapshot representing an Actor's location at a
+`ActorRef` is an immutable snapshot representing an Actor's location at a
 specific point in time.
 
 | `ActorRef` field | Meaning |
@@ -74,7 +74,7 @@ or is re-created, a previous `ActorRef` can become stale.
 a decimal string in JSON. A separate `ActorRefSnapshot` public type isn't
 provided.
 
-### 2.3 Spot Membership And STREAM Binding
+### 2.3 Spot Membership and STREAM Binding
 
 An Actor manages the following two states independently of each other.
 
@@ -86,8 +86,8 @@ An Actor manages the following two states independently of each other.
 An Actor doesn't need a bound session to exist in a user Spot. Session bind or
 unbind also doesn't change the Actor's current Spot.
 
-One Actor can bind to only one session at a time. Conversely, one session can
-bind multiple Actors.
+One Actor can bind to only one session at a time. Conversely, multiple Actors
+can be bound to one session.
 
 ## 3. Actor Queue
 
@@ -128,7 +128,7 @@ state.
 An Actor Join is registered via `Defer()` on a `JoinSpot(...)` or
 `JoinEntrySpot(...)` call. `Defer()` is a synchronous terminal that schedules
 the Join to run after the current handler ends. At the call site itself, it
-doesn't look up a target or access the Store. It records an unchangeable Join
+doesn't look up a target or access the Store. It records an immutable Join
 request on the current handler and only registers a
 [Deferred Join barrier](../00-foundation/02-glossary.en.md#deferred-join-barrier) (an
 inactive queue barrier), so this Actor's next message doesn't run before the
@@ -148,7 +148,7 @@ operation ID.
 One handler can register at most 64 Joins. One Join request's encoded size is
 at most 1 MiB, and the sum of every Join request the same handler registered
 is at most 8 MiB. If the request is omitted, an empty `ZLinkMessage` is fixed.
-Each `Defer()` turns the request into an unchangeable snapshot and computes an
+Each `Defer()` turns the request into an immutable snapshot and computes an
 absolute deadline based on the monotonic clock. The default timeout is 5
 seconds; an explicit value must be a finite value in `1..INT_MAX`, rounded up
 to milliseconds. Exceeding the limit fails the current registration
@@ -229,7 +229,7 @@ dedicated queue. Since this is separate from the queue where the Actor's
 business handler runs, it must be able to keep processing even while an
 application handler is waiting for an async task.
 
-## 4. Actor Control Handled By A Spot
+## 4. Actor Control Handled by a Spot
 
 A Spot doesn't process Actor application payload. The only Actor-related work
 processed in a [Spot turn](../00-foundation/02-glossary.en.md#spot-turn) is membership and
@@ -237,9 +237,9 @@ lifecycle control.
 
 | Control work | What the Spot processes |
 |---|---|
-| Join | Judges whether to allow Actor membership and updates the membership the Spot owns. |
+| Join | Determines whether to allow Actor membership and updates the membership the Spot owns. |
 | Leave | Releases membership and cleans up the state the Spot owns. |
-| Relocation prepare/commit/abort | Consistently changes the state the Spot owns, matching the move transaction. |
+| Relocation prepare/commit/abort | Changes the state the Spot owns consistently with the move transaction. |
 | Actor lifecycle notification | Runs follow-up work the Spot owns after Actor creation/termination. |
 
 The framework puts this lifecycle work on the target Spot's dedicated queue.
@@ -339,7 +339,7 @@ The caller doesn't specify the following values as an Actor message target.
 - Owner RID
 - The current Spot's global address
 
-### 5.1 Route Cache And Generation
+### 5.1 Route Cache and Generation
 
 - `Missing`, `Creating`, and Store failure results aren't stored in a negative
   cache.
@@ -373,7 +373,7 @@ same handler instance — it's re-created in the target Actor activation after
 relocation and cross-node Join. The detailed lifetime contract follows
 [Framework API's Handler Lifetime](../00-foundation/06-framework-api.en.md#11-handler-execution-object-and-dependency-lifetime).
 
-Actor and Actor Context are a composition relationship. Before calling the
+Actor and Actor Context have a composition relationship. Before calling the
 factory, the framework builds a Context holding `ActorId`,
 `ObjectGeneration`, current `MeshName`, a nullable current `SpotId`, and
 bound-session capability. The factory receives only this Context — it doesn't
@@ -386,13 +386,13 @@ A same-node Join keeps the Actor instance and Context, only changing `SpotId`
 in the membership commit. A cross-node Join keeps the Actor ID and
 ObjectGeneration but passes a new Context, bound to the target owner and
 membership, to the target factory. After commit, the source Context's
-identity can still be read up through the source leave callback, but a new
+identity can still be read through the source leave callback, but a new
 send/request/session mutation/Join ends with `Unavailable` and isn't
 automatically forwarded to the current target.
 
 ## 6. Actor Lifecycle
 
-### 6.1 Registering Factory And Relocation Policy
+### 6.1 Registering Factory and Relocation Policy
 
 The Object Server registers the following values together.
 
@@ -413,7 +413,7 @@ separate state contract ID either.
 handler ended normally, and restores it into the target Actor.
 `RecreateOnRelocation` re-creates the Actor object on the target but doesn't
 restore application state. Instead, framework-owned not-yet-executed queue
-and timer information are kept after the move. Both policies don't change
+and timer information are kept after the move. Neither policy changes
 `ObjectGeneration`, since it's the same logical Actor moving. On a cross-node
 move where the owner changes, only
 [`AuthorityOwnerGeneration`](../00-foundation/02-glossary.en.md#authorityownergeneration) —
@@ -459,7 +459,7 @@ public interface IZLinkActorFactoryBuilder<TActor>
 }
 ```
 
-### 6.2 Create And GetOrCreate Input
+### 6.2 Create and GetOrCreate Input
 
 The Actor manager's `Create` and `GetOrCreate` are fluent calls that can be
 submitted only once. Both calls take the following required values.
@@ -476,7 +476,7 @@ The following values are optional.
 The caller can't specify target RID, predicate, factory class, or placement
 callback.
 
-Setting the same option twice is `InvalidOperation`. Running terminal submit
+Setting the same option twice is `InvalidOperation`. Running the terminal submit
 twice is `InvalidOperation`.
 
 One end-to-end [deadline](../00-foundation/02-glossary.en.md#deadline) is fixed when
@@ -544,7 +544,7 @@ ZLinkActorCreateResult result = await actorManager
     .Async(cancellationToken);     // Returns Created or Rejected.
 ```
 
-### 6.3 Selecting Mesh And Placement Target
+### 6.3 Selecting Mesh and Placement Target
 
 If `InMesh` was specified, that Mesh is used. If omitted, the following rules
 decide the Mesh.
@@ -565,7 +565,7 @@ The framework checks target candidates in the following order.
 
 The caller doesn't select the target node or endpoint.
 
-### 6.4 Creation Request And Factory Execution
+### 6.4 Creation Request and Factory Execution
 
 An encoded creation request is at most 1 MiB. The whole procedure that
 confirms the authority to create only one object — the reservation, why
@@ -582,7 +582,7 @@ externally. Whether it's approved is decided by the Entry Spot's
 receive messages, and doesn't consume active capacity. Rejection isn't
 implemented by exposing the Actor as Ready and then destroying it.
 
-### 6.5 The Difference Between Create And GetOrCreate
+### 6.5 The Difference Between Create and GetOrCreate
 
 Running exclusive `Create` when a Ready Actor of the same type already exists
 ends with `AlreadyExists`. If an Actor of a different type exists, it ends
@@ -592,8 +592,8 @@ with `TypeMismatch`.
 reservation or callback execution, if a Ready Actor of the same type exists.
 If an Actor of the same type is Creating, it re-checks authority with bounded
 backoff until that state ends. Even if multiple processes concurrently call
-`GetOrCreate` for the same ActorId, only the caller that succeeds the
-Location Store's [reservation](../00-foundation/02-glossary.en.md#reservation-id) CAS owns
+`GetOrCreate` for the same ActorId, only the caller whose Location Store
+[reservation](../00-foundation/02-glossary.en.md#reservation-id) CAS succeeds owns
 the creation execution.
 
 The meaning of each `Created`/`Rejected`/`Failed`/`Existing` state, how a
@@ -609,13 +609,13 @@ Actor directory either.
 
 ### 6.7 Spot Move
 
-Join/leave/relocation moving an Actor to a user Spot follows the fencing and
+Moving an Actor to a user Spot through join/leave/relocation follows the fencing and
 barriers of [Spot And Actor Membership](05-spot-actor-membership.en.md).
 
 Payload accepted during a move isn't sent to the previous Spot callback.
 Payload keeps its order in the Actor queue.
 
-### 6.8 Termination And Destroy
+### 6.8 Termination and Destroy
 
 Actor termination closes new payload admission and cleans up session binding
 and location ownership. An Actor isn't automatically terminated, or
@@ -665,7 +665,7 @@ verification, but isn't used as a basis to send payload to a Spot callback.
 Bind, rebind, disconnect, and request correlation are defined by
 [Session–Actor binding](../04-session/02-session-actor-binding.en.md).
 
-## 8. Failure And Observability
+## 8. Failure and Observability
 
 ### 8.1 Failure
 
@@ -687,8 +687,7 @@ deadline.
 
 ### 8.2 Observability Information
 
-The runtime must be able to observe the following information, distinguished
-from each other.
+The runtime must be able to observe each of the following separately.
 
 - Current `MeshName` and Actor type
 - Application queue and control backlog
@@ -699,7 +698,7 @@ from each other.
 
 ActorId isn't used as a metric label.
 
-## 9. Implementation And Contract-Test Verification Requirements
+## 9. Implementation and Contract-Test Verification Requirements
 
 - Actor payload from both Entry Spot and user Spot is delivered directly to
   the Actor queue.
@@ -728,7 +727,7 @@ ActorId isn't used as a metric label.
   of ingress kind.
 - If a `SpotWide` member Actor yields, only the User Spot gate is returned
   while the Actor queue claim is kept. During this, other Actors/Spots/timers
-  proceed, but the same Actor's next job doesn't.
+  proceed, but the same Actor's next job doesn't proceed.
 - Even after a `Yield`, a request the same Actor sent to itself doesn't run
   ahead of the current job or re-enter inline.
 - Actor Join doesn't provide `Async` or `Yield` — it's registered with
@@ -738,8 +737,8 @@ ActorId isn't used as a metric label.
   [inactive barrier](../00-foundation/02-glossary.en.md#deferred-join-barrier), with no
   target lookup or Store I/O, and runs the Join only once the handler ends
   normally.
-- Applies at most 64 per handler, at most 1 MiB per request, at most 8 MiB
-  total requests, and a default 5-second timeout.
+- The limits are at most 64 per handler, at most 1 MiB per request, at most
+  8 MiB in total request size, and a default timeout of 5 seconds.
 - Same-node Join, cross-node Join, and the
   [`RecreateOnRelocation` relocation policy](../00-foundation/02-glossary.en.md#relocation-policy)
   keep the same logical incarnation's `ObjectGeneration`.
@@ -764,12 +763,11 @@ ActorId isn't used as a metric label.
 - `Rejected` and `Failed` don't create Ready authority or active capacity —
   they return reserved capacity.
 - A terminal record allows replay of the same operation for 5 minutes after
-  the original deadline, and if there's no Ready authority after TTL, it
-  can be re-created via a new reservation.
+  the original deadline, and the Actor can be re-created via a new reservation
+  if there's no Ready authority after the TTL.
 - Destroy accepts only the same generation and doesn't retarget to a new
   incarnation.
 
 ---
 
 [Spot And Actor topic index](README.en.md) · [Spec table of contents](../README.en.md) · [Previous: 03. MeshNode](03-mesh-node.en.md) · [Next: 05. Spot And Actor Membership](05-spot-actor-membership.en.md)
-</content>
