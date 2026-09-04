@@ -11,12 +11,12 @@ title: "Transport Liveness"
 > contract visible to the application and the judgment structure every language runtime must
 > follow. Topics beyond liveness judgment — runtime startup order and status publication,
 > status-subscriber backpressure, and instrumentation cost — aren't covered here; they remain
-> in [49. Liveness And Status Publication](05-transport-liveness.en.md).
+> in [49. Liveness and Status Publication](05-transport-liveness.en.md).
 
-## 1. The Result Visible To The Application
+## 1. The Result Visible to the Application
 
-The framework's continuous check of remote service connection availability is called service
-liveness checking.
+The process by which the framework continuously checks whether a remote service connection is
+usable is called service liveness checking.
 
 A connection group where several runtime nodes exchange messages is called a
 [RouteMesh](../00-foundation/02-glossary.en.md#routemesh). The registration name identifying the same
@@ -29,9 +29,9 @@ events over a separate PUB/SUB socket is
 The framework applies the same time criteria to all three connection methods. But
 bidirectional connections and one-directional fanout check connection status differently.
 
-On a RouteMesh, if both MeshNodes' Object role is `Client`, the peer connection isn't used.
+On a RouteMesh, if the Object role of both MeshNodes is `Client`, the peer connection isn't used.
 Automatic discovery checks the descriptor and doesn't create a connection intent. A manual
-connection checks both roles at handshake and closes before ready. Since there's no
+connection checks both roles during the handshake and closes before ready. Since there's no
 connection, a liveness probe and deadline aren't applied to this pair.
 
 | Connection method | How the framework checks connection status |
@@ -49,7 +49,7 @@ doesn't use one as a substitute signal for another.
 [Shutdown](../00-foundation/02-glossary.en.md#shutdown), which cleans up runtime resources, is also a
 separate operation from a service liveness failure.
 
-## 2. Fixed Timing And The Public API Boundary
+## 2. Fixed Timing and the Public API Boundary
 
 The framework computes how long a connection can be kept after the last normal check. The
 final time an operation must finish is called a [deadline](../00-foundation/02-glossary.en.md#deadline).
@@ -76,9 +76,9 @@ Each language's service runtime only uses the binding's public raw socket API an
 framework service protocol. It doesn't use private binding members, direct native symbol
 calls, or a language-specific hidden application option.
 
-## 3. RouteMesh And ClientServer
+## 3. RouteMesh and ClientServer
 
-The state where transport connection, service handshake, and identity verification all pass,
+The state in which transport connection, service handshake, and identity verification all pass,
 making it usable as a message target, is called [ready](../00-foundation/02-glossary.en.md#ready).
 RouteMesh and ClientServer apply the 15-second deadline starting from the moment it becomes
 ready.
@@ -102,8 +102,8 @@ separate completion control. In ClientServer, earlier DATA and HWM/`PAUSED` can
 also delay a later liveness record, and this document's 15-second deadline still
 applies.
 
-1. If there's no ID still awaiting a response, builds a new non-zero ID within the
-   connection.
+1. If there's no ID still awaiting a response, the framework builds a new non-zero ID within
+   the connection.
 2. Sends that ID in a `livenessProbe`.
 3. If the next cycle arrives while waiting for a response, resends the same ID instead of
    building a new one.
@@ -156,8 +156,8 @@ A subscriber follows these rules so it can distinguish publisher connections fro
 - In manual mode, one SUB socket and receive loop is built per endpoint.
 - Multiple publishers aren't connected together to one SUB socket.
 
-This separation is needed so one publisher's timeout doesn't turn a different publisher
-not-ready.
+This separation is needed so one publisher's timeout doesn't cause a different publisher to
+become not-ready.
 
 A publisher sends a one-directional check record to the same PUB endpoint every 5 seconds,
 regardless of whether it's sending application events. This record is called a
@@ -174,7 +174,7 @@ subscription receives a message within the same ChannelName.
 | Payload frame | `5A 46 01 01` |
 | Frame count | Exactly 2 |
 
-The application can't use exactly this whole topic value as a fanout topic. Specifying it is
+The application can't use this exact topic value as a fanout topic. Specifying it is
 a call-argument error. Even starting with the same bytes, a topic differing in length or in
 the remaining bytes can be used as an application topic.
 
@@ -198,18 +198,19 @@ process application records.
 Conversely, it's a false positive if one peer monopolizes the receive stage so a different
 peer's check signal is delayed.
 
-- **The framework caps the amount received consecutively on one connection.** This is so one
+- **The framework caps the amount it receives consecutively on one connection.** This is so one
   peer's traffic volume doesn't change a different peer's ready determination. Once the cap
-  is reached, remaining receipt is deferred to the next opportunity and processing moves on
+  is reached, remaining receive work is deferred to the next opportunity and processing moves on
   to other connections and check signals. This cap isn't only for Classic fanout — the same
   rule applies to every path handling multiple connections in one receive stage (RouteMesh,
   ClientServer, service connection, STREAM). A check signal can arrive on a connection of any
   topology, and the same false positive occurs on any path if one connection monopolizes the
   receive stage.
-- **The cap applies count, bytes, and elapsed time together, whichever hits first.** With
+- **The framework applies count, byte, and elapsed-time caps together, whichever is reached
+  first.** With
   only one axis, a different axis could be used to monopolize. The next rotation starts from
-  right after the connection that stopped this time. Always iterating from the start would
-  keep pushing back later connections even with a cap in place.
+  the connection immediately after the one where processing stopped. Always iterating from the
+  start would keep pushing back later connections even with a cap in place.
 - **Where one socket represents several peers, accounting is done per peer, not per
   socket.** Counting per socket would let one peer behind that socket use up a different
   peer's share.
@@ -233,19 +234,19 @@ protocol error. The subscriber doesn't deliver that record to the application or
 as a normal receipt. Only that publisher is immediately switched to not-ready, and only that
 publisher's socket is closed.
 
-## 5. Ready And Failure Determination
+## 5. Ready and Failure Determination
 
 Information published to the Store so a remote endpoint and identity can be found is called a
-[descriptor](../00-foundation/02-glossary.en.md#descriptor). A descriptor existing, or a connect request
-being accepted, alone doesn't make a connection ready.
+[descriptor](../00-foundation/02-glossary.en.md#descriptor). Neither the existence of a descriptor nor
+acceptance of a connect request is enough to make a connection ready.
 
 | Connection method | Condition to become ready |
 |---|---|
-| RouteMesh/ClientServer | Finishes transport connection, service handshake, identity/generation verification, and handler preparation, all together. A RouteMesh Object Client pair with no Server membership is excluded from ready targets. |
+| RouteMesh/ClientServer | Completes the transport connection, service handshake, identity/generation verification, and handler preparation. A RouteMesh Object Client pair with no Server membership is excluded from ready targets. |
 | Classic fanout | The per-publisher SUB socket is connected, the descriptor or manual endpoint relationship is valid, and the first normal application record or beacon is received. |
 
-A connection is immediately removed from the ready target list on confirming any of the
-following.
+A connection is immediately removed from the ready target list when any of the following is
+confirmed.
 
 - The peer sent an orderly close.
 - A transport error or disconnect event was received.
@@ -260,7 +261,7 @@ following.
 
 Connection replacement uses the node RID, security identity, and lifecycle generation
 supplied by the current descriptor as the admission fence. Once these descriptor expectations
-are complete, an endpoint-only manual intent with generation 0 cannot weaken this check. The
+form a complete set, an endpoint-only manual intent with generation 0 cannot weaken this check. The
 existing connection requests physical-pair termination with the same `transportPairId` and
 `transportPairGeneration` obtained from the monitor event, and replaces the connection only
 after it observes that pair's close snapshot or disconnect event. An endpoint-level
@@ -276,7 +277,7 @@ One peer's failure doesn't turn the whole host `Error`. Other ready peers and th
 Spot on this host and manages its application queue — keep processing. Without a ready peer, a Channel call ends with `NotFound` or `Unavailable`.
 The framework doesn't hide a failure by extending the timeout.
 
-## 6. Connection Loss And Reconnect
+## 6. Connection Loss and Reconnect
 
 The identifying information linking a request and reply to the same call is called
 [reply correlation](../00-foundation/02-glossary.en.md#reply-correlation). The framework uses this value to
@@ -286,7 +287,7 @@ complete a request's final result exactly once.
 |---|---|
 | Before transport accepted the request | Ends as route-not-connected. |
 | Whether transport accepted it is unknown | Not automatically resubmitted to a different peer. |
-| Already accepted | Ends exactly once, via one of reply, request timeout, cancellation, `Shutdown`, or route failure. |
+| Already accepted | Ends exactly once, via one of a reply, request timeout, cancellation, `Shutdown`, or route failure. |
 
 The framework doesn't automatically resubmit a request or one-way message to a different peer
 or owner after a connection loss.
@@ -297,13 +298,13 @@ A reconnect uses the existing configuration or the current discovery descriptor.
 - A RouteMesh Object Client pair's `NotRequired` admission with no Server membership doesn't
   reconnect within the same manual configuration generation.
 - A previous connection ID, reply route, session binding, and ready state aren't reused.
-- Classic fanout newly creates a SUB socket for that publisher.
+- Classic fanout creates a new SUB socket for that publisher.
 - A fanout connection isn't ready before receiving the first normal record.
 - Even with the same RID, if the lifecycle generation differs from the current discovery
   descriptor, it's treated as a new process run. Generation values' numeric magnitude isn't
   compared.
 
-## 7. Location Store And Host Termination
+## 7. Location Store and Host Termination
 
 The period during which a host keeps current owner eligibility is called an
 [owner lease](../00-foundation/02-glossary.en.md#owner-lease). Owner lease and descriptor are the basis for
@@ -357,9 +358,9 @@ Orderly disconnect and exceeding the peer deadline are recorded with different r
 Metric labels don't include endpoint, RID, or connection ID. Individual identity is only
 provided via a count-limited snapshot and trace.
 
-### Application Job Pressure And Route State
+### Application Job Pressure and Route State
 
-A host's Application Job Queue pressure being `paused` doesn't by itself change route
+When a host's Application Job Queue pressure is `paused`, that alone doesn't change route
 readiness, host readiness, or transport liveness. Existing per-topology progress evidence and
 deadlines determine liveness. Receive flow applies to RouteMesh ROUTER-ROUTER
 two-lane sockets and ClientServer DEALER-ROUTER single-lane sockets; it excludes
@@ -415,12 +416,13 @@ contract test.
 
 - Reconnect redoes service handshake and identity verification, and doesn't reuse a previous
   connection's completion/binding/ready state.
-- Automatic excludes, at the descriptor stage, a pair where both sides are Object Client with
-  no RouteMesh Channel Server membership. Manual closes the same-condition pair as
+- Automatic discovery excludes, at the descriptor stage, a pair where both sides are Object Client with
+  no RouteMesh Channel Server membership. Manual closes a pair meeting the same conditions as
   `NotRequired` before ready, doesn't retry the same configuration generation, and doesn't
   build probe/deadline.
 - Even if reply, timeout, cancellation, disconnect, and shutdown race, the request result
-  completes exactly once. Not automatically resubmitted to a different peer or owner.
+  completes exactly once. The request is not automatically resubmitted to a different peer or
+  owner.
 - No liveness/reconnect timer, subscription, or callback remains after `Relocate`/`Shutdown`.
 - C++/.NET/JVM/Node.js provide the same fixed times and observed results.
 
