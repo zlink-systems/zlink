@@ -949,3 +949,58 @@ codex 사용 한도(19:31)로 job 6개가 죽어 cpp/dotnet/c/rust 리뷰는 Cla
 받을 수 없어 orphan 토큰이 close까지 남는다(유한, 무해하지만 REQUEST 큐에 stray WRITABLE로 섞임). 후보: (a) NULL이면 토큰을 만들지 않고
 BACKPRESSURED/EAGAIN만 반환(스펙 한 줄 추가), (b) 현행 유지(문서에 명시). 감독관 권고 (a).
 작업트리에서 `framework/doc/.../archive` 94파일이 삭제된 상태를 발견해 `git checkout`으로 복원(원인 job 미확인, 커밋에 포함되지 않음).
+
+## D-B82 (2026-09-04 22:25, 머신 B) 정책 복원 러너로 Core 0.17.0 vs 0.15.1 multi 비교 — DEALER_DEALER 1024B latency가 개선 대상
+perf multi 러너를 정책 §1.2·§5.1 모델로 복원(커밋 00a668fe90; cap-1·two-phase 제거, PUBSUB lossy 기본, 계약 B 토큰/WRITABLE 재전송 유지).
+같은 조건(CCU=100, DUR=5, tcp, 1회)에서 0.15.1(baseline worktree core/v0.15.1, 0.15.1 러너) vs 0.17.0(main, 복원 러너), K msg/s(SENDSEND는
+K ops/s): DD 64/256/1024/4096/64K = 967/1009/949/416/timeout vs 1118/1036/901/384/74; SENDSEND 253/231/229/176/15.2 vs 285/239/206/181/32.8;
+PUBSUB 751/679/803/653/42.0 vs 915/839/851/693/60.8. 14개 비교 가능 cell 중 12개 동률 이상. 0.15.1 러너는 DD 64K에서 240s timeout.
+첫 runs=3 확인은 사용자가 동시에 돌리던 perf 때문에 오염됐다(양쪽 모두 run마다 하락, 0.17.0 latency 165 ms). 조용한 상태에서 두 트리를 번갈아
+두 번씩 runs=3(중앙값): DD 1024 throughput 837k/819k(0.15.1) vs 839k/858k(0.17.0) = 동률; **latency mean 0.82/0.86 ms vs 1.21/1.27 ms(+50%),
+p99 3.4/4.7 vs 7.7/8.2 ms(약 2배)**. DD 4096 throughput 386k/366k vs 336k/363k(−13%/−1%, 경계), latency 둘 다 HWM 포화(600~700 ms)이나
+0.17.0 p95/p99가 30% 높다. SENDSEND 1024는 +11%.
+판정: DEALER_DEALER tcp 1024B(CCU=100)의 latency(mean +50%, p99 2배)가 개선 대상(gate의 latency geomean ≤ 1.0 위반), 4096B throughput은
+경계(runs 5로 재판정). 아침의 "1/3" 수치는 cap-1 러너 효과였고 실제 Core 격차는 이 cell의 latency에 국한된다. Core 조사 job(sol high; 필요 시
+ultra)을 원인 하나로 띄운다. single suite 비교는 그 뒤.
+
+## D-B83 (2026-09-04 23:20, 머신 B) DD 1024B latency 수정 커밋, 남은 격차와 후속 결정 요청
+Core 수정 커밋 `89ed9be356`(원인: 대기 토큰 등록 직후 `process_submit_commands()`로 mailbox를 동기 처리 → 100 client가 동시에 HWM에
+닿으면 credit 회복이 submit 쪽 직렬 루프가 됨; 동기 drain 제거, lost-wake 증명 불변). 결과(DD tcp 1024B CCU=100 runs=3 중앙값):
+p95 4.3~6.4 → 2.4 ms, p99 10.8~12.8 → 4.1~5.1 ms(0.15.1: 1.9 / 3.0~4.2), mean 1.33~1.47 → 1.17~1.22 ms(0.15.1 0.85~0.87), throughput 동률
+이상. dev 139/139, 3 suite 5회, release-gate hotpath_gate 4 cell PASS(최대 1.011).
+남은 항목(사용자 결정 요청):
+1. **1024B mean +35%**: 계약 B의 "payload 반환 → WRITABLE 후 재제출" 왕복의 잔여 비용(거절 빈도 0.01%이지만 그때마다 poller 왕복). 줄이려면
+   (a) 거절 시 Core가 즉시 재시도 힌트를 주는 등 공개 계약 보완, 또는 (b) 러너/framework가 WRITABLE 없이 POLLOUT level만으로 재시도하는
+   경로를 허용 — 둘 다 계약 변경이라 승인 필요. (c) 현 상태 유지(꼬리 latency는 0.15.1 수준 회복).
+2. **4096B 포화 구간**: 두 버전 모두 mean 600~700 ms의 HWM 포화이며 0.17.0의 p95/p99가 30% 높다. auto-HWM 예산/프로파일 또는 I/O batching
+   정책 조정 과제로 다른 pattern에도 영향 → 별도 성능 과제로 분리 제안.
+3. **PUBSUB double-free 1회**(`test_backpressure_oneway_matrix_pubsub_regression`, dev 병렬 suite에서 `double free or corruption (!prev)` 1회,
+   단독 재실행 통과): 수정 경로(SEND WRITABLE)와 무관한 PUBSUB 경로이며 간헐적. 메모리 손상이므로 ASan 반복 실행으로 원인 추적 job을 띄운다.
+
+## D-B84 (2026-09-04 23:35, 머신 B) REQ/REP multi 비교 정정 — 65536B가 개선 대상, REQUEST pending 무제한이 원인 후보(결정 요청)
+첫 REQREP 비교(latency 2~3배)는 측정 모델 차이였다: baseline 트리에 아침 커밋 1e91505a14("REQREP latency는 in-flight 1 phase에서 측정")가
+남아 있었고 main 러너는 정책 §1.2/§5.1(in-flight 상한 없음, 단일 phase)이다. baseline 러너를 순정 0.15.1로 되돌려(`git checkout -- bindings/c/perf`)
+같은 모델로 재측정(CCU=100, tcp, runs=3 중앙값; 0.15.1 측정은 load 3):
+| pattern | size | 0.15.1 tput | 0.17.0 tput | 0.15.1 lat | 0.17.0 lat |
+|---|---:|---:|---:|---:|---:|
+| DR_REQREP | 1024 | 157k | 181k (+15%) | 0.55 ms | 0.86 ms |
+| DR_REQREP | 65536 | 28.4k | 20.6k (**−27%**) | 1.09 ms | **67.7 ms** |
+| RR_REQREP | 1024 | 118k | 154k (+31%) | 0.65 ms | 0.70 ms |
+| RR_REQREP | 65536 | 20.2k | 19.3k (−5%) | 1.68 ms | **127 ms** |
+1회 실행 전 사이즈(정정 전 표의 throughput 열은 유효): DR 64/256/4096 −8/−10/−6%, RR 4096 −8% → 사용자 기준(사이즈별 −5%, 합계 하락 불허)으로 REQREP는
+개선 대상. 핵심은 65536B: Little의 법칙으로 in-flight가 0.15.1 약 31건 vs 0.17.0 약 1,360건(64K×1,360 ≈ 87 MB 큐)이다. 즉 0.17.0 Core는 HWM에서
+밀어내지 않고 REQUEST를 pending pool(`ZLINK_OPT_PENDING_MAX_*` 기본 0=무제한)에 계속 받는다. SEND에서 계약 B로 없앤 "Core 보관 큐"가 REQUEST에는
+그대로 남아 같은 증상(latency 폭증, 대용량 메모리, 처리량 하락)을 낸다.
+**결정 요청**: (a) REQUEST DONTWAIT도 물리 HWM에서는 `BACKPRESSURED`+대기 토큰(WRITABLE로 재제출)으로 통일하고 pending은 논리 대기(미연결 endpoint·
+재연결)에만 사용 — 계약 변경(README REQUEST 절, 06-dealer/07-router), framework 영향 있음; (b) `PENDING_MAX_*` 기본값을 HWM 상당으로 유한화(ABI 유지,
+스펙 한 줄) — 최소 변경; (c) 현행 유지. 감독관 권고 (b)를 먼저 측정해 보고 부족하면 (a).
+
+## D-B85 (2026-09-04 23:40, 머신 B, 사용자 결정) REQUEST도 계약 B로 통일 — Core pending pool 제거, HWM에서 BACKPRESSURED + 대기 토큰
+사용자: "perf 스펙으로 결정해야 하고 send, req 둘 다 (a) 방식". 정책 §1.2가 "HWM은 send admission queue를 제한하고 admission backpressure를 만날
+때까지 연속 제출"을 전제하므로 REQUEST의 무제한 pending pool은 정책 전제와 어긋난다(D-B84의 64K REQREP latency 60~75배가 그 결과).
+계약: `zlink_request_part` DONTWAIT FINAL은 admission 한 번 시도. 즉시 admission되면 현행대로 nonzero REQUEST ID + reply/timeout completion.
+물리 HWM/credit 부족·대상 미준비(route 있으나 pair 미준비, weight 0, DEALER peer 0개)면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`+대기 토큰(payload는
+호출자 보유), credit 회복 시 `ZLINK_COMPLETION_WRITABLE`(토큰·context·RID) → 같은 요청 재제출. ROUTER route 없음(MANDATORY 양수)은 NOT_CONNECTED.
+REQUEST 전용 pending pool(`request_pending_submit`, drive/fail_pull_request_pending, "admission 전 pending 시간")은 제거하고 `PENDING_MAX_*`는
+완전 no-op(ABI 유지). Reply timeout은 admission 시점부터(현행). 영향: Core, 스펙(README REQUEST 절·PENDING_MAX, 06-dealer/07-router), 바인딩 8개
+REQUEST 제출 경로(SEND 토큰 기계 재사용), C perf REQREP 클라이언트, framework(A). 순서: Core job(sol high) → 스펙 diff 확인 후 커밋 → 바인딩 → perf 재측정.
