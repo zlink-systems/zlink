@@ -248,6 +248,7 @@ std::thread start_loopback_server (zlink::context_t &context,
                                    int expected_clients)
 {
     auto server = std::make_shared<zlink::stream_socket_t> (context);
+    server->options ().recv_mode (zlink::stream_recv_mode_t::raw);
     server->options ().notify (false);
     server->bind ("tcp://127.0.0.1:0");
     endpoint = server->options ().last_endpoint ();

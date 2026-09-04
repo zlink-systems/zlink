@@ -1389,6 +1389,7 @@ int main ()
 
     zlink::context_t context;
     zlink::stream_socket_t server (context);
+    server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     server.options ().notify (false);
     server.bind ("tcp://127.0.0.1:0");
     const auto endpoint = server.options ().last_endpoint ();
@@ -2711,6 +2712,7 @@ int main ()
 
     {
         zlink::stream_socket_t custom_server (context);
+        custom_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
         custom_server.options ().notify (false);
         custom_server.bind ("tcp://127.0.0.1:0");
         const auto custom_endpoint = custom_server.options ().last_endpoint ();
@@ -2754,6 +2756,7 @@ int main ()
     }
 
     zlink::stream_socket_t receive_server (context);
+    receive_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     receive_server.options ().notify (false);
     receive_server.bind ("tcp://127.0.0.1:0");
     const auto receive_endpoint = receive_server.options ().last_endpoint ();
@@ -2826,6 +2829,7 @@ int main ()
     }
 
     zlink::stream_socket_t observer_server (context);
+    observer_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     observer_server.options ().notify (false);
     observer_server.bind ("tcp://127.0.0.1:0");
     const auto observer_endpoint = observer_server.options ().last_endpoint ();
@@ -2955,6 +2959,7 @@ int main ()
     observer_server_thread.join ();
 
     zlink::stream_socket_t failing_observer_server (context);
+    failing_observer_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     failing_observer_server.options ().notify (false);
     failing_observer_server.bind ("tcp://127.0.0.1:0");
     const auto failing_observer_endpoint = failing_observer_server.options ().last_endpoint ();
@@ -3008,6 +3013,7 @@ int main ()
     }
 
     zlink::stream_socket_t dropped_observer_server (context);
+    dropped_observer_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     dropped_observer_server.options ().notify (false);
     dropped_observer_server.bind ("tcp://127.0.0.1:0");
     const auto dropped_observer_endpoint = dropped_observer_server.options ().last_endpoint ();
@@ -3257,6 +3263,7 @@ int main ()
     }
 
     zlink::stream_socket_t auto_server (context);
+    auto_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     auto_server.options ().notify (false);
     auto_server.bind ("tcp://127.0.0.1:0");
     const auto auto_endpoint = auto_server.options ().last_endpoint ();
@@ -3369,6 +3376,7 @@ int main ()
     auto_connector.close ();
 
     zlink::stream_socket_t timeout_server (context);
+    timeout_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     timeout_server.options ().notify (false);
     timeout_server.bind ("tcp://127.0.0.1:0");
     const auto timeout_endpoint = timeout_server.options ().last_endpoint ();
@@ -3401,6 +3409,7 @@ int main ()
     timeout_connector.close ();
 
     zlink::stream_socket_t error_reply_server (context);
+    error_reply_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     error_reply_server.options ().notify (false);
     error_reply_server.bind ("tcp://127.0.0.1:0");
     const auto error_reply_endpoint = error_reply_server.options ().last_endpoint ();
@@ -3442,6 +3451,7 @@ int main ()
     error_reply_connector.close ();
 
     zlink::stream_socket_t callback_response_server (context);
+    callback_response_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     callback_response_server.options ().notify (false);
     callback_response_server.bind ("tcp://127.0.0.1:0");
     const auto callback_response_endpoint = callback_response_server.options ().last_endpoint ();
@@ -3485,6 +3495,7 @@ int main ()
     callback_response_connector.close ();
 
     zlink::stream_socket_t callback_timeout_server (context);
+    callback_timeout_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     callback_timeout_server.options ().notify (false);
     callback_timeout_server.bind ("tcp://127.0.0.1:0");
     const auto callback_timeout_endpoint = callback_timeout_server.options ().last_endpoint ();
@@ -3526,6 +3537,7 @@ int main ()
     callback_timeout_connector.close ();
 
     zlink::stream_socket_t async_pump_server (context);
+    async_pump_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     async_pump_server.options ().notify (false);
     async_pump_server.bind ("tcp://127.0.0.1:0");
     const auto async_pump_endpoint = async_pump_server.options ().last_endpoint ();
@@ -3578,6 +3590,7 @@ int main ()
     }
 
     zlink::stream_socket_t close_cleanup_server (context);
+    close_cleanup_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     close_cleanup_server.options ().notify (false);
     close_cleanup_server.bind ("tcp://127.0.0.1:0");
     const auto close_cleanup_endpoint = close_cleanup_server.options ().last_endpoint ();
@@ -3636,6 +3649,7 @@ int main ()
     }
 
     zlink::stream_socket_t coroutine_server (context);
+    coroutine_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     coroutine_server.options ().notify (false);
     coroutine_server.bind ("tcp://127.0.0.1:0");
     const auto coroutine_endpoint = coroutine_server.options ().last_endpoint ();
@@ -3733,6 +3747,7 @@ int main ()
     partial_connector.close ();
 
     zlink::stream_socket_t large_receive_server (context);
+    large_receive_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     large_receive_server.options ().notify (false);
     large_receive_server.bind ("tcp://127.0.0.1:0");
     const auto large_receive_endpoint = large_receive_server.options ().last_endpoint ();
@@ -3770,6 +3785,7 @@ int main ()
     large_receive_connector.close ();
 
     zlink::stream_socket_t oversized_receive_server (context);
+    oversized_receive_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     oversized_receive_server.options ().notify (false);
     oversized_receive_server.bind ("tcp://127.0.0.1:0");
     const auto oversized_receive_endpoint = oversized_receive_server.options ().last_endpoint ();
@@ -3804,6 +3820,7 @@ int main ()
     oversized_receive_connector.close ();
 
     zlink::stream_socket_t async_oversized_receive_server (context);
+    async_oversized_receive_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     async_oversized_receive_server.options ().notify (false);
     async_oversized_receive_server.bind ("tcp://127.0.0.1:0");
     const auto async_oversized_receive_endpoint =
@@ -3845,6 +3862,7 @@ int main ()
     async_oversized_receive_connector.close ();
 
     zlink::stream_socket_t oversized_wait_server (context);
+    oversized_wait_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     oversized_wait_server.options ().notify (false);
     oversized_wait_server.bind ("tcp://127.0.0.1:0");
     const auto oversized_wait_endpoint = oversized_wait_server.options ().last_endpoint ();
@@ -3887,6 +3905,7 @@ int main ()
     oversized_wait_connector.close ();
 
     zlink::stream_socket_t heartbeat_server (context);
+    heartbeat_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     heartbeat_server.options ().notify (false);
     heartbeat_server.bind ("tcp://127.0.0.1:0");
     const auto heartbeat_endpoint = heartbeat_server.options ().last_endpoint ();
@@ -3933,6 +3952,7 @@ int main ()
      * pong으로 답해야 한다. pong을 dispatch() 경로에만 두면, 응답이 heartbeat timeout보다
      * 오래 걸리는 정상 요청에서 서버가 세션을 끊는다(E2E ATD-C3B). */
     zlink::stream_socket_t pong_during_request_server (context);
+    pong_during_request_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     pong_during_request_server.options ().notify (false);
     pong_during_request_server.bind ("tcp://127.0.0.1:0");
     const auto pong_during_request_endpoint =
@@ -4005,6 +4025,7 @@ int main ()
     }
 
     zlink::stream_socket_t heartbeat_timeout_server (context);
+    heartbeat_timeout_server.options ().recv_mode (zlink::stream_recv_mode_t::raw);
     heartbeat_timeout_server.options ().notify (false);
     heartbeat_timeout_server.bind ("tcp://127.0.0.1:0");
     zlink::stream_connector::connector_options_t heartbeat_timeout_options;
