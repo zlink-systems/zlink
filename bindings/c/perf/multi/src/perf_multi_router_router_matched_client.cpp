@@ -171,14 +171,13 @@ bool run_reqrep_case (
     result->received = received;
     result->latency_count = state->latency.count ();
     result->latency_sum_ns = state->latency.sum_ns ();
-    if (samples.size () > k_child_sample_cap
-        || result->latency_count != result->received) {
+    if (samples.size () > k_child_sample_cap) {
         return false;
     }
     result->sample_count = static_cast<uint32_t> (samples.size ());
     for (size_t i = 0; i < result->sample_count; ++i)
         result->samples[i] = samples[i];
-    return received > 0;
+    return received > 0 && result->latency_count > 0;
 }
 
 bool run_sendsend_case (
@@ -193,11 +192,10 @@ bool run_sendsend_case (
       std::max<size_t> (msg_size, perf_multi_metric::header_size ());
     std::vector<char> payload (payload_size, 'c');
     std::vector<void *> sockets (1, socket);
-    long received = 0;
-    double latency_sum = 0.0;
-    long latency_count = 0;
-    bench_latency_stats_t latency;
-    std::vector<double> samples;
+    long active_received = 0;
+    double ignored_latency_sum = 0.0;
+    long ignored_latency_count = 0;
+    bench_latency_stats_t ignored_latency;
     if (!perf_multi_client::run_echo_window_round_robin (
           sockets, settings, payload, payload_size, msg_size,
           k_server_routing_id, true, command.run_id,
@@ -205,22 +203,41 @@ bool run_sendsend_case (
           perf_multi_client::metric_capture_bytes (),
           static_cast<double> (
             std::max<uint32_t> (1, command.duration_seconds)),
-          true, true, transport == "tcp", &received, &latency_sum,
-          &latency_count, &latency, &samples, k_child_sample_cap)) {
+          true, false, transport == "tcp", &active_received,
+          &ignored_latency_sum, &ignored_latency_count,
+          &ignored_latency)) {
         return false;
     }
-    result->received = static_cast<uint64_t> (std::max<long> (0, received));
+
+    long latency_received = 0;
+    double latency_sum = 0.0;
+    long latency_count = 0;
+    bench_latency_stats_t latency;
+    std::vector<double> samples;
+    if (!perf_multi_client::run_echo_window_round_robin (
+          sockets, settings, payload, payload_size, msg_size,
+          k_server_routing_id, true, command.run_id,
+          perf_multi_metric::phase_latency,
+          perf_multi_client::metric_capture_bytes (),
+          static_cast<double> (
+            perf_multi_client::latency_phase_duration_seconds ()),
+          true, true, transport == "tcp", &latency_received, &latency_sum,
+          &latency_count, &latency, &samples, k_child_sample_cap,
+          perf_multi_client::latency_phase_max_in_flight_per_socket ())) {
+        return false;
+    }
+    result->received =
+      static_cast<uint64_t> (std::max<long> (0, active_received));
     result->latency_count =
       static_cast<uint64_t> (std::max<long> (0, latency_count));
     result->latency_sum_ns = latency_sum;
-    if (samples.size () > k_child_sample_cap
-        || result->latency_count != result->received) {
+    if (samples.size () > k_child_sample_cap) {
         return false;
     }
     result->sample_count = static_cast<uint32_t> (samples.size ());
     for (size_t i = 0; i < result->sample_count; ++i)
         result->samples[i] = samples[i];
-    return received > 0 && latency_count > 0;
+    return active_received > 0 && latency_received > 0 && latency_count > 0;
 }
 
 int child_main (int index,
@@ -392,8 +409,7 @@ int run_client (const std::string &lib_name,
             total_received += result.received;
             total_latency_count += result.latency_count;
             total_latency += result.latency_sum_ns;
-            if (result.latency_count != result.received
-                || result.sample_count > k_child_sample_cap
+            if (result.sample_count > k_child_sample_cap
                 || !perf_multi_latency::append_weighted_samples (
                   result.latency_count, result.samples,
                   result.sample_count, &samples)) {

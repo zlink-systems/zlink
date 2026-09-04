@@ -161,6 +161,49 @@ void test_relay_submit_error_classification ()
             == reply_send_failed);
 }
 
+void test_one_way_send_completion_accounting ()
+{
+    using namespace perf_multi_client;
+    assert (send_completion_limit_per_socket () == 1);
+    assert (latency_phase_duration_seconds () == 1);
+    assert (latency_phase_max_in_flight_per_socket () == 1);
+    assert (perf_multi_metric::phase_latency != perf_multi_metric::phase_active);
+
+    send_completion_slot_t slot;
+    slot.socket = reinterpret_cast<void *> (1);
+    slot.pending = 1;
+    slot.completion_id = 7;
+
+    zlink_completion_t admitted;
+    std::memset (&admitted, 0, sizeof (admitted));
+    admitted.struct_size = sizeof (admitted);
+    admitted.kind = ZLINK_COMPLETION_SEND;
+    admitted.completion_id = 7;
+    admitted.user_context = slot.socket;
+    admitted.send_result = ZLINK_SEND_ADMITTED;
+    assert (record_send_completion (&slot, admitted));
+    assert (slot.pending == 0);
+    assert (slot.completion_id == 0);
+
+    slot.pending = 1;
+    slot.completion_id = 8;
+    zlink_completion_t wrong_id = admitted;
+    wrong_id.completion_id = 9;
+    assert (!record_send_completion (&slot, wrong_id));
+    assert (slot.pending == 1);
+    assert (slot.completion_id == 8);
+    assert (errno == EPROTO);
+
+    zlink_completion_t terminal = admitted;
+    terminal.completion_id = 8;
+    terminal.send_result = ZLINK_SEND_TERMINAL;
+    terminal.send_terminal_errno = EHOSTUNREACH;
+    assert (!record_send_completion (&slot, terminal));
+    assert (slot.pending == 0);
+    assert (slot.completion_id == 0);
+    assert (errno == EHOSTUNREACH);
+}
+
 void test_weighted_child_aggregation ()
 {
     std::vector<perf_multi_latency::weighted_sample_t> samples;
@@ -364,6 +407,7 @@ int main ()
     test_sampler_honors_child_and_environment_caps ();
     test_zero_sample_cap_preserves_exact_mean ();
     test_relay_submit_error_classification ();
+    test_one_way_send_completion_accounting ();
     test_weighted_child_aggregation ();
     test_weighted_sample_population_uses_latency_count ();
     test_count_duration_and_bandwidth ();

@@ -87,6 +87,7 @@ pubsub_recv_result_t recv_one_pubsub_message (void *socket,
     }
 
     perf_multi_metric::header_t header;
+    std::memset (&header, 0, sizeof (header));
     const bool decoded = perf_multi_metric::decode_payload_header (zlink_msg_data (&part),
                                                                    zlink_msg_size (&part), &header);
     zlink_msg_close (&part);
@@ -153,26 +154,47 @@ bool run_recv_duration (const std::vector<void *> &sockets,
     if (!throughput_out || !latency_out || sockets.empty () || !poller)
         return false;
 
-    const double active_seconds = static_cast<double> (std::max (1, settings.duration_seconds));
     long recv_count = 0;
     double lat_sum = 0.0;
     long lat_count = 0;
     bench_latency_sampler_t lat_samples;
-    const auto active_deadline = std::chrono::steady_clock::now ()
-                                 + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
-                                   std::chrono::duration<double> (active_seconds));
     std::vector<zlink_poller_event_t> events (sockets.size ());
+    const int control_timeout_ms = std::max (1, settings.connect_ready_timeout_ms);
 
-    bool phase_done = false;
-    while (!phase_done) {
-        const auto now_before_poll = std::chrono::steady_clock::now ();
-        if (now_before_poll >= active_deadline)
-            break;
-        const long long remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
-                                         active_deadline - now_before_poll)
-                                         .count ();
-        const int poll_timeout_ms = static_cast<int> (
-          std::max<long long> (1, std::min<long long> (100, remaining_ms)));
+    const auto find_socket_index = [&sockets] (void *socket) -> size_t {
+        for (size_t i = 0; i < sockets.size (); ++i) {
+            if (sockets[i] == socket)
+                return i;
+        }
+        return sockets.size ();
+    };
+
+    // The active stop marker is ordered after all active records admitted to
+    // each subscriber pipe.  Observe it on every SUB before asking the server
+    // to begin latency traffic; this is the phase boundary and backlog drain.
+    std::vector<bool> active_stopped (sockets.size (), false);
+    size_t active_stopped_count = 0;
+    const std::chrono::steady_clock::time_point active_metric_deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::seconds (std::max (1, settings.duration_seconds));
+    const std::chrono::steady_clock::time_point active_barrier_deadline =
+      active_metric_deadline + std::chrono::milliseconds (control_timeout_ms);
+    while (active_stopped_count < sockets.size ()) {
+        const auto now = std::chrono::steady_clock::now ();
+        if (now >= active_barrier_deadline) {
+            if (bench_debug_enabled ()) {
+                std::cerr << "[multi-pubsub-client] active barrier timeout size=" << msg_size
+                          << " stopped=" << active_stopped_count << "/" << sockets.size ()
+                          << " recv=" << recv_count << std::endl;
+            }
+            errno = ETIMEDOUT;
+            return false;
+        }
+        const long long remaining_ms =
+          std::chrono::duration_cast<std::chrono::milliseconds> (active_barrier_deadline - now)
+            .count ();
+        const int poll_timeout_ms =
+          static_cast<int> (std::max<long long> (1, std::min<long long> (100, remaining_ms)));
         const int poll_rc = zlink_poller_wait (poller, events.empty () ? NULL : &events[0],
                                                static_cast<int> (events.size ()), poll_timeout_ms,
                                                NULL);
@@ -182,74 +204,151 @@ bool run_recv_duration (const std::vector<void *> &sockets,
             const int err = zlink_errno ();
             if (err == EINTR || err == EAGAIN)
                 continue;
-            if (bench_debug_enabled ()) {
-                std::cerr << "[multi-pubsub-client] poller wait failed err=" << err << std::endl;
-            }
             return false;
         }
 
-        for (int i = 0; i < poll_rc; ++i) {
-            if (phase_done)
-                break;
-            if ((events[i].events & ZLINK_POLLIN) == 0)
+        for (int event_index = 0; event_index < poll_rc; ++event_index) {
+            if ((events[event_index].events & ZLINK_POLLIN) == 0)
+                continue;
+            void *socket = events[event_index].socket;
+            const size_t socket_index = find_socket_index (socket);
+            if (socket_index >= sockets.size () || active_stopped[socket_index])
                 continue;
 
-            void *socket = events[i].socket;
-            while (socket) {
-                // PUB/SUB does not guarantee delivery of a token accepted by
-                // the publisher, so the active deadline also bounds shutdown.
-                if (std::chrono::steady_clock::now () >= active_deadline) {
-                    phase_done = true;
+            const size_t max_records_per_turn = 64;
+            for (size_t record_index = 0; record_index < max_records_per_turn; ++record_index) {
+                perf_multi_metric::header_t header;
+                std::memset (&header, 0, sizeof (header));
+                const pubsub_recv_result_t recv_rc = recv_one_pubsub_message (
+                  socket, msg_size, run_id, &header, NULL, NULL);
+                if (recv_rc == pubsub_recv_error)
+                    return false;
+                if (recv_rc == pubsub_recv_empty)
+                    break;
+                if (recv_rc == pubsub_recv_stop) {
+                    active_stopped[socket_index] = true;
+                    ++active_stopped_count;
                     break;
                 }
+                if (header.phase == static_cast<uint8_t> (perf_multi_metric::phase_active)
+                    && std::chrono::steady_clock::now () < active_metric_deadline)
+                    ++recv_count;
+            }
+        }
+    }
+
+    std::cout << perf_multi_handshake::make_size_command ("LATENCY_READY,", msg_size)
+              << std::endl;
+
+    // One publication is globally in flight.  The server sends the next
+    // sequence only after this client has observed the current sequence on
+    // every SUB and emitted its ACK.
+    std::vector<bool> latency_received (sockets.size (), false);
+    std::vector<bool> latency_stopped (sockets.size (), false);
+    std::vector<bool> latency_started (sockets.size (), false);
+    size_t latency_received_count = 0;
+    size_t latency_stopped_count = 0;
+    uint64_t expected_seq = 1;
+    const std::chrono::steady_clock::time_point latency_barrier_deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (1)
+      + std::chrono::milliseconds (control_timeout_ms);
+    while (latency_stopped_count < sockets.size ()) {
+        const auto now = std::chrono::steady_clock::now ();
+        if (now >= latency_barrier_deadline) {
+            if (bench_debug_enabled ()) {
+                std::cerr << "[multi-pubsub-client] latency barrier timeout size=" << msg_size
+                          << " stopped=" << latency_stopped_count << "/" << sockets.size ()
+                          << " expected_seq=" << expected_seq << std::endl;
+            }
+            errno = ETIMEDOUT;
+            return false;
+        }
+        const long long remaining_ms =
+          std::chrono::duration_cast<std::chrono::milliseconds> (latency_barrier_deadline - now)
+            .count ();
+        const int poll_timeout_ms =
+          static_cast<int> (std::max<long long> (1, std::min<long long> (100, remaining_ms)));
+        const int poll_rc = zlink_poller_wait (poller, events.empty () ? NULL : &events[0],
+                                               static_cast<int> (events.size ()), poll_timeout_ms,
+                                               NULL);
+        if (poll_rc == 0)
+            continue;
+        if (poll_rc < 0) {
+            const int err = zlink_errno ();
+            if (err == EINTR || err == EAGAIN)
+                continue;
+            return false;
+        }
+
+        for (int event_index = 0; event_index < poll_rc; ++event_index) {
+            if ((events[event_index].events & ZLINK_POLLIN) == 0)
+                continue;
+            void *socket = events[event_index].socket;
+            const size_t socket_index = find_socket_index (socket);
+            if (socket_index >= sockets.size () || latency_stopped[socket_index])
+                continue;
+
+            const size_t max_records_per_turn = 64;
+            for (size_t record_index = 0; record_index < max_records_per_turn; ++record_index) {
                 perf_multi_metric::header_t header;
                 std::memset (&header, 0, sizeof (header));
                 double sample_ns = 0.0;
                 bool have_sample = false;
                 const pubsub_recv_result_t recv_rc = recv_one_pubsub_message (
                   socket, msg_size, run_id, &header, &sample_ns, &have_sample);
-                if (recv_rc == pubsub_recv_error) {
-                    if (bench_debug_enabled ()) {
-                        std::cerr << "[multi-pubsub-client] recv error err=" << zlink_errno ()
-                                  << std::endl;
-                    }
+                if (recv_rc == pubsub_recv_error)
                     return false;
-                }
                 if (recv_rc == pubsub_recv_empty)
                     break;
                 if (recv_rc == pubsub_recv_stop) {
-                    phase_done = true;
+                    // Lossy active-mode barriers may be published more than
+                    // once.  Those markers precede the first latency record;
+                    // only a marker after latency started ends this phase.
+                    if (!latency_started[socket_index])
+                        continue;
+                    latency_stopped[socket_index] = true;
+                    ++latency_stopped_count;
                     break;
                 }
-
-                if (header.phase == static_cast<uint8_t> (perf_multi_metric::phase_cooldown)) {
-                    phase_done = true;
-                    break;
-                }
-                if (header.phase != static_cast<uint8_t> (perf_multi_metric::phase_active)
-                    || std::chrono::steady_clock::now () >= active_deadline) {
+                if (header.phase != static_cast<uint8_t> (perf_multi_metric::phase_latency))
                     continue;
+                if (header.seq < expected_seq)
+                    continue;
+                if (header.seq != expected_seq || latency_received[socket_index]) {
+                    errno = EPROTO;
+                    return false;
                 }
 
-                ++recv_count;
+                latency_started[socket_index] = true;
+                latency_received[socket_index] = true;
+                ++latency_received_count;
                 if (have_sample) {
                     lat_sum += sample_ns;
                     ++lat_count;
                     lat_samples.add (sample_ns);
                 }
+                if (latency_received_count == sockets.size ()) {
+                    std::cout << perf_multi_handshake::make_size_count_command (
+                                   "LATENCY_ACK,", msg_size,
+                                   static_cast<size_t> (expected_seq))
+                              << std::endl;
+                    ++expected_seq;
+                    latency_received.assign (sockets.size (), false);
+                    latency_received_count = 0;
+                }
             }
         }
     }
 
-    if (recv_count < 0 || lat_count < 0) {
+    if (recv_count <= 0 || lat_count <= 0) {
         if (bench_debug_enabled ()) {
             int events = 0;
             size_t events_size = sizeof (events);
             if (zlink_get_option (sockets[0], ZLINK_OPT_EVENTS, &events, &events_size) != 0) {
                 events = -1;
             }
-            std::cerr << "[multi-pubsub-client] recv metrics invalid recv=" << recv_count
-                      << " lat=" << lat_count << " events=" << events << std::endl;
+            std::cerr << "[multi-pubsub-client] phase metrics invalid recv=" << recv_count
+                      << " latency=" << lat_count << " events=" << events << std::endl;
         }
         return false;
     }
@@ -257,10 +356,9 @@ bool run_recv_duration (const std::vector<void *> &sockets,
     *throughput_out = throughput_per_second (
       static_cast<uint64_t> (recv_count),
       static_cast<double> (std::max (1, settings.duration_seconds)));
-    if (bench_debug_enabled ()) {
+    if (bench_debug_enabled ())
         std::cerr << "[multi-pubsub-client] active recv_count=" << recv_count
-                  << " lat_count=" << lat_count << std::endl;
-    }
+                  << " latency_count=" << lat_count << std::endl;
     perf_multi_client::normalize_latency_stats (lat_sum, lat_count, &lat_samples, latency_out);
     return true;
 }

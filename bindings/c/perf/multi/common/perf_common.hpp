@@ -52,6 +52,50 @@ inline long remaining_milliseconds (const steady_clock_t::time_point &deadline,
 // Mirrors perf_multi (cpp) common/perf_common.hpp helpers.
 static const char *const k_stop_token = "__zlink_perf_stop__";
 
+enum perf_stop_submit_result_t
+{
+    perf_stop_submit_fatal = -1,
+    perf_stop_submit_ok = 0,
+    perf_stop_submit_retry = 1
+};
+
+// A stop token is a protocol boundary, so it uses a blocking submit. Bound
+// both the duration of one attempt and the number of attempts: a stalled Core
+// must turn into a client/server failure instead of pinning the benchmark
+// runner forever.
+inline int perf_stop_send_timeout_ms ()
+{
+    return 2000;
+}
+
+inline int perf_stop_send_max_attempts ()
+{
+    return 5;
+}
+
+template <typename SendOnceFn>
+inline bool send_stop_token_bounded (void *socket_, SendOnceFn send_once_)
+{
+    if (!socket_) {
+        errno = EINVAL;
+        return false;
+    }
+    if (!set_sockopt_int (socket_, ZLINK_OPT_SNDTIMEO, perf_stop_send_timeout_ms (),
+                          "ZLINK_OPT_SNDTIMEO"))
+        return false;
+
+    for (int attempt = 0; attempt < perf_stop_send_max_attempts (); ++attempt) {
+        const perf_stop_submit_result_t result = send_once_ (socket_);
+        if (result == perf_stop_submit_ok)
+            return true;
+        if (result == perf_stop_submit_fatal)
+            return false;
+    }
+
+    errno = ETIMEDOUT;
+    return false;
+}
+
 inline bool is_stop_token (const void *data_, size_t size_)
 {
     const size_t token_size = std::strlen (k_stop_token);

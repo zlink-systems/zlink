@@ -2323,6 +2323,15 @@ def run_sizes_test_split(
         server_stdout_buffer.append(line)
         emit_auto_hwm_detail_line(line)
         emit_benchmark_diag_line(line)
+        if pattern_name == "DEALER_DEALER" and line.startswith(
+            ("PHASE_LATENCY,", "PHASE_DONE,")
+        ):
+            try:
+                if client_proc[0] and client_proc[0].stdin:
+                    client_proc[0].stdin.write(line)
+                    client_proc[0].stdin.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
         if pattern_name in ("PUBSUB", "DEALER_DEALER") and line.startswith("PHASE_ACTIVE,"):
             try:
                 phase_size = int(line.split(",", 1)[1])
@@ -2532,8 +2541,12 @@ def run_sizes_test_split(
             if not expected_sizes:
                 return
 
+            # A successful DEALER_DEALER client has already sent the bounded
+            # latency stop barrier. With no active backlog left, the server
+            # must publish its RESULT within the normal shutdown allowance;
+            # do not reuse the much larger whole-case timeout here.
             deadline = time.monotonic() + max(
-                0.1, timeout_sec, shutdown_timeout_ms / 1000.0
+                0.1, shutdown_timeout_ms / 1000.0
             )
 
             def has_expected_results():
@@ -2619,6 +2632,16 @@ def run_sizes_test_split(
             pump_server_output_nonblocking()
             emit_auto_hwm_detail_line(line)
             emit_benchmark_diag_line(line)
+            if pattern_name == "PUBSUB" and line.startswith(
+                ("LATENCY_READY,", "LATENCY_ACK,")
+            ):
+                try:
+                    if server_proc.stdin:
+                        server_proc.stdin.write(line)
+                        server_proc.stdin.flush()
+                except (BrokenPipeError, OSError, ValueError):
+                    pass
+                return
             client_endpoint = parse_client_endpoint(line)
             if use_control_plane and client_endpoint:
                 try:
@@ -2667,6 +2690,16 @@ def run_sizes_test_split(
             if control_connected[0] and pending_ready_sizes:
                 maybe_send_size_start(next(iter(pending_ready_sizes)))
 
+        def service_server_while_client_runs():
+            pump_server_output_nonblocking()
+            # A client can be blocked in a phase-gate stdin read while the
+            # server has already failed. Wake it immediately instead of
+            # leaving the case at the much larger process timeout.
+            if server_proc and server_proc.poll() is not None:
+                stop_client()
+            if control_connected[0] and pending_ready_sizes:
+                maybe_send_size_start(next(iter(pending_ready_sizes)))
+
         client_cmd = client_cmd + ["--endpoint", endpoint]
         if use_control_plane:
             client_cmd = client_cmd + [
@@ -2678,12 +2711,7 @@ def run_sizes_test_split(
             client_env,
             timeout_sec,
             on_stdout_line=on_client_stdout_line,
-            on_sample=lambda _sample_cpu, _sample_mem: (
-                pump_server_output_nonblocking(),
-                maybe_send_size_start(next(iter(pending_ready_sizes)))
-                if control_connected[0] and pending_ready_sizes
-                else None,
-            ),
+            on_sample=lambda _sample_cpu, _sample_mem: service_server_while_client_runs(),
             on_process_start=lambda proc: client_proc.__setitem__(0, proc),
         )
         pump_server_output_nonblocking()
@@ -2698,7 +2726,8 @@ def run_sizes_test_split(
         if use_control_plane:
             progress_meta["server_control_endpoint"] = control_endpoint
 
-        wait_for_server_result_lines()
+        if not sampled.get("timed_out", False) and sampled.get("returncode", -1) == 0:
+            wait_for_server_result_lines()
         stop_server()
         drain_server_output()
         server_rc = server_proc.returncode if server_proc else 0

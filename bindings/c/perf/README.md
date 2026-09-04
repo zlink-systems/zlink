@@ -22,6 +22,21 @@ Local mode rebuilds `core/build` when required and rejects a runtime older than
 `core/src` or `core/include`. Explicit release mode disables source mtime checks
 because it verifies and uses the downloaded package instead.
 
+## CI Multi Smoke
+
+Run `./bindings/c/perf/ci_multi_smoke.sh` for the bounded TCP multi-socket CI
+matrix; it defaults to 8 clients, a 2-second active window, message sizes
+`4096,65536`, and patterns `DEALER_DEALER,DEALER_ROUTER_SENDSEND,PUBSUB`, and
+fails if any pattern/size throughput `RESULT` is missing or the 300-second
+deadline expires. Override those values with `CCU`, `DUR`, `SIZES`, `PATTERNS`,
+and `TIMEOUT` (or the corresponding `--ccu`, `--dur`, `--sizes`, `--patterns`,
+and `--timeout` arguments), for example:
+
+```bash
+CCU=4 DUR=1 SIZES=4096 PATTERNS=DEALER_DEALER TIMEOUT=60 \
+  ./bindings/c/perf/ci_multi_smoke.sh
+```
+
 ## Cross-Binding Handshake Reference
 
 `bindings/c/perf` is the canonical benchmark handshake for all binding-language
@@ -32,7 +47,8 @@ handshake before the numbers are treated as comparable.
 The fixed reference surface is:
 
 - runner and benchmark process stdin/stdout tokens (`READY`, `CLIENT_READY`,
-  `CLIENT_DONE`, `START`, `PHASE_ACTIVE`, `STOP`, `RESULT`);
+  `CLIENT_DONE`, `START`, `PHASE_ACTIVE`, `PHASE_LATENCY`, `PHASE_DONE`,
+  `LATENCY_READY`, `LATENCY_ACK`, `STOP`, `RESULT`);
 - raw socket connection gates based on the same C perf `CONNECTION_READY`
   meaning, plus the C perf `CLIENT_READY` / `START` start barrier for the
   one-way raw patterns that use it;
@@ -137,13 +153,16 @@ Profile guidance for byte-budget Auto HWM:
 If calculated HWM values are too small for the target traffic shape, first
 select a larger profile or configure the context-wide Auto HWM byte budget.
 
-## One-Way Latency Caveat
+## One-Way Measurement Phases
 
-One-way patterns measure throughput during the active phase. For large one-way
-payloads, that phase intentionally saturates the sender and receiver queues, so
-active-phase message timestamps mostly describe queue residence time rather than
-service latency.
+One-way patterns measure throughput during a saturated active phase, drain its
+accepted records, and then measure latency for one second with one record in
+flight per logical client (or one globally when the socket pattern cannot route
+an acknowledgement back to a specific client). The latency `RESULT` fields
+therefore exclude active-phase HWM queue residence time.
 
-The runner reports the active-phase latency values in both the markdown table
-and `RESULT` data. This keeps the C runner and binding runners on the same
-single-pass measurement contract for each pattern, transport, size, and run.
+For ordinary socket sends, the benchmark pulls every nonzero SEND completion
+from `POLLCOMPLETION` and allows only one pending completion per socket. PUB
+publish operations do not have SEND completions; PUBSUB instead uses its
+no-drop backpressure path and an explicit subscriber acknowledgement between
+latency records.

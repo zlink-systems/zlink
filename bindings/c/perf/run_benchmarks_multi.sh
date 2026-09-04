@@ -384,7 +384,7 @@ build_core_runtime() {
   local core_build_dir="${1:-${DEFAULT_CORE_BUILD_DIR}}"
   local core_source_dir="${ROOT_DIR}/core"
   local jobs
-  jobs="$(nproc 2>/dev/null || echo 4)"
+  jobs="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
   local core_cache="${core_build_dir}/CMakeCache.txt"
   local cached_generator=""
 

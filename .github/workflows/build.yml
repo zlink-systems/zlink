@@ -289,6 +289,25 @@ jobs:
           chmod +x ./core/builds/linux/build.sh
           ./core/builds/linux/build.sh x64 "ON"
 
+      # Functional smoke of the multi-socket C perf runners under the 0.16.0
+      # pull-completion contract (8 clients, 2 s, tcp, 4 KiB and 64 KiB). It
+      # judges completion and RESULT presence only, never throughput, so it is
+      # deterministic on a small runner; a stalled pattern fails within the
+      # timeout instead of hanging. Uses a no-LTO library build: the smoke is
+      # about behaviour, not instruction counts.
+      - name: Multi perf smoke (pull-completion contract)
+        run: |
+          cmake -S core -B core/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_LTO=OFF \
+            -DZLINK_BUILD_TESTS=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_BENCHMARKS=OFF \
+            -DWITH_DOCS=OFF
+          cmake --build core/build --parallel 2 --target libzlink
+          ZLINK_CORE_SOURCE=local CCU=8 DUR=2 TIMEOUT=600 \
+            bash bindings/c/perf/ci_multi_smoke.sh
+
       - name: Verify WebSocket build without TLS
         run: |
           cmake -S core -B build-linux-x64-no-tls \
