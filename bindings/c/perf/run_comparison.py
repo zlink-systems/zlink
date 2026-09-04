@@ -2323,15 +2323,6 @@ def run_sizes_test_split(
         server_stdout_buffer.append(line)
         emit_auto_hwm_detail_line(line)
         emit_benchmark_diag_line(line)
-        if pattern_name == "DEALER_DEALER" and line.startswith(
-            ("PHASE_LATENCY,", "PHASE_DONE,")
-        ):
-            try:
-                if client_proc[0] and client_proc[0].stdin:
-                    client_proc[0].stdin.write(line)
-                    client_proc[0].stdin.flush()
-            except (BrokenPipeError, OSError, ValueError):
-                pass
         if pattern_name in ("PUBSUB", "DEALER_DEALER") and line.startswith("PHASE_ACTIVE,"):
             try:
                 phase_size = int(line.split(",", 1)[1])
@@ -2632,16 +2623,6 @@ def run_sizes_test_split(
             pump_server_output_nonblocking()
             emit_auto_hwm_detail_line(line)
             emit_benchmark_diag_line(line)
-            if pattern_name == "PUBSUB" and line.startswith(
-                ("LATENCY_READY,", "LATENCY_ACK,")
-            ):
-                try:
-                    if server_proc.stdin:
-                        server_proc.stdin.write(line)
-                        server_proc.stdin.flush()
-                except (BrokenPipeError, OSError, ValueError):
-                    pass
-                return
             client_endpoint = parse_client_endpoint(line)
             if use_control_plane and client_endpoint:
                 try:

@@ -33,27 +33,9 @@ enum send_status_t
     send_error = 2
 };
 
-// Keep one application-owned logical send per socket while its wait token is
-// live. Core retains the token and target under backpressure, never the
-// payload that must be submitted again after WRITABLE.
-inline size_t send_wait_limit_per_socket ()
-{
-    return 1;
-}
-
 inline int send_retry_drain_timeout_ms ()
 {
     return resolve_multi_int_env ("PERF_MULTI_SEND_DRAIN_TIMEOUT_MS", 5000, 1);
-}
-
-inline int latency_phase_duration_seconds ()
-{
-    return 1;
-}
-
-inline size_t latency_phase_max_in_flight_per_socket ()
-{
-    return 1;
 }
 
 struct send_wait_slot_t
@@ -1179,10 +1161,8 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
                                          bench_latency_stats_t *latency_stats,
                                          std::vector<double> *latency_samples_out = NULL,
                                          size_t maximum_latency_sample_cap =
-                                           std::numeric_limits<size_t>::max (),
-                                         size_t max_replies_in_flight_per_socket = 0)
+                                           std::numeric_limits<size_t>::max ())
 {
-    (void) settings;
     if (sockets.empty ())
         return false;
     if (duration_seconds <= 0.0) {
@@ -1265,7 +1245,7 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
             --slot->replies;
 
             const bool inside_active_deadline = std::chrono::steady_clock::now () < deadline;
-            if (!count_metrics || (!collect_latency && !inside_active_deadline))
+            if (!count_metrics || !inside_active_deadline)
                 continue;
 
             ++local_recv;
@@ -1303,11 +1283,8 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
             for (size_t attempts = 0; attempts < sockets.size (); ++attempts) {
                 const size_t idx = (send_start_rr + attempts) % sockets.size ();
                 send_wait_slot_t &slot = tracker.slots[idx];
-                if (slot.retained
-                    || (max_replies_in_flight_per_socket > 0
-                        && slot.replies >= max_replies_in_flight_per_socket)) {
+                if (slot.retained)
                     continue;
-                }
 
                 std::vector<char> &send_payload =
                   per_socket_payload ? socket_payloads[idx] : payload;
@@ -1382,12 +1359,17 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
             fatal_error = true;
     }
 
-    // Stop timestamping new records at the phase boundary, then admit every
-    // retained retry and pull its echo. This makes the next latency phase start
-    // with empty physical and application-side backlogs.
+    // Stop timestamping new records at the active boundary, then admit every
+    // retained retry and pull its echo before teardown. Small-message runs can
+    // fill all per-client Core queues, so scale this bounded teardown window
+    // with the active duration instead of treating backlog as a workload cap.
+    const long long duration_drain_ms =
+      static_cast<long long> (std::max (1, settings.duration_seconds)) * 3000LL;
+    const int drain_timeout_ms = static_cast<int> (std::min<long long> (
+      INT_MAX, std::max<long long> (send_retry_drain_timeout_ms (), duration_drain_ms)));
     const auto drain_deadline =
       std::chrono::steady_clock::now ()
-      + std::chrono::milliseconds (send_retry_drain_timeout_ms ());
+      + std::chrono::milliseconds (drain_timeout_ms);
     while (!fatal_error
            && (tracker_has_retained_sends (tracker)
                || tracker_has_pending_replies (tracker))) {
@@ -1403,7 +1385,7 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
             fatal_error = true;
             break;
         }
-        if (poll_rc > 0 && !service_events (poll_rc, collect_latency)) {
+        if (poll_rc > 0 && !service_events (poll_rc, false)) {
             fatal_error = true;
             break;
         }
@@ -1466,17 +1448,17 @@ inline bool run_echo_duration (const std::vector<void *> &sockets,
     long recv_count = 0;
     double lat_sum = 0.0;
     long lat_count = 0;
-    bench_latency_stats_t ignored_latency;
+    bench_latency_stats_t active_latency;
 
     if (!run_echo_window_round_robin (
           sockets, settings, payload, payload_size, msg_size, server_id, client_router_send, run_id,
           perf_multi_metric::phase_active, scratch_capacity,
-          static_cast<double> (std::max (1, settings.duration_seconds)), true, false,
-          per_socket_payload, &recv_count, &lat_sum, &lat_count, &ignored_latency)) {
+          static_cast<double> (std::max (1, settings.duration_seconds)), true, true,
+          per_socket_payload, &recv_count, &lat_sum, &lat_count, &active_latency)) {
         return false;
     }
 
-    if (recv_count <= 0) {
+    if (recv_count <= 0 || lat_count <= 0 || active_latency.mean_ns <= 0.0) {
         if (bench_debug_enabled ()) {
             std::cerr << "[perf-multi-echo] active metrics invalid recv=" << recv_count
                       << " lat_count=" << lat_count << " run_id=" << run_id
@@ -1487,26 +1469,7 @@ inline bool run_echo_duration (const std::vector<void *> &sockets,
 
     *throughput_out = static_cast<double> (recv_count)
                       / static_cast<double> (std::max (1, settings.duration_seconds));
-
-    long latency_recv_count = 0;
-    lat_sum = 0.0;
-    lat_count = 0;
-    if (!run_echo_window_round_robin (
-          sockets, settings, payload, payload_size, msg_size, server_id, client_router_send, run_id,
-          perf_multi_metric::phase_latency, scratch_capacity,
-          static_cast<double> (latency_phase_duration_seconds ()), true, true,
-          per_socket_payload, &latency_recv_count, &lat_sum, &lat_count, latency_out, NULL,
-          std::numeric_limits<size_t>::max (), latency_phase_max_in_flight_per_socket ())) {
-        return false;
-    }
-    if (latency_recv_count <= 0 || lat_count <= 0 || latency_out->mean_ns <= 0.0) {
-        if (bench_debug_enabled ()) {
-            std::cerr << "[perf-multi-echo] latency metrics invalid recv="
-                      << latency_recv_count << " lat_count=" << lat_count << " run_id=" << run_id
-                      << " msg_size=" << msg_size << std::endl;
-        }
-        return false;
-    }
+    *latency_out = active_latency;
 
     return true;
 }

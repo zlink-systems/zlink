@@ -448,6 +448,8 @@ prepare_core_runtime() {
   local core_build_dir=""
   local runtime_lib=""
   local newer_source=""
+  local need_build=0
+  local reason=""
   core_build_dir="$(resolve_configured_core_build_dir "${build_dir}")"
   if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
     if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
@@ -459,24 +461,55 @@ prepare_core_runtime() {
     return 0
   fi
 
-  # Always let the Core build system resolve source changes before a local
-  # benchmark. An unchanged tree is an inexpensive incremental no-op.
-  build_core_runtime "${core_build_dir}"
-  if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
-    echo "Error: core runtime library missing after local build under ${core_build_dir}." >&2
-    return 1
+  # A worktree may deliberately point core/build at the main tree. Treat that
+  # runtime as externally owned: verify that it exists, but never mutate it
+  # through the symlink.
+  if [[ -L "${ROOT_DIR}/core/build"
+        && "$(normalize_cmake_path "${core_build_dir}")" == "$(normalize_cmake_path "${ROOT_DIR}/core/build")" ]]; then
+    if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
+      echo "Error: linked Core runtime not found under ${core_build_dir}." >&2
+      return 1
+    fi
+    echo "Perf core build dir: ${core_build_dir} (external symlink; rebuild skipped)"
+    echo "Perf runtime libzlink: ${runtime_lib}"
+    return 0
   fi
-  newer_source="$(
-    find \
-      "${ROOT_DIR}/core/src" \
-      "${ROOT_DIR}/core/include" \
-      -type f -newer "${runtime_lib}" -print -quit 2>/dev/null || true
-  )"
-  if [[ -n "${newer_source}" ]]; then
-    echo "Error: core runtime still stale after local build for bindings/c/perf." >&2
-    echo "  runtime: ${runtime_lib}" >&2
-    echo "  newer source: ${newer_source}" >&2
-    return 1
+
+  if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
+    need_build=1
+    reason="core runtime library not found under ${core_build_dir}"
+  else
+    newer_source="$(
+      find \
+        "${ROOT_DIR}/core/src" \
+        "${ROOT_DIR}/core/include" \
+        -type f -newer "${runtime_lib}" -print -quit 2>/dev/null || true
+    )"
+    if [[ -n "${newer_source}" ]]; then
+      need_build=1
+      reason="stale core runtime (newer source: ${newer_source})"
+    fi
+  fi
+
+  if (( need_build == 1 )); then
+    echo "Note: ${reason}; rebuilding core/build automatically before perf run." >&2
+    build_core_runtime "${core_build_dir}"
+    if ! runtime_lib="$(resolve_core_runtime_library "${core_build_dir}")"; then
+      echo "Error: core runtime library still missing after auto-build under ${core_build_dir}." >&2
+      return 1
+    fi
+    newer_source="$(
+      find \
+        "${ROOT_DIR}/core/src" \
+        "${ROOT_DIR}/core/include" \
+        -type f -newer "${runtime_lib}" -print -quit 2>/dev/null || true
+    )"
+    if [[ -n "${newer_source}" ]]; then
+      echo "Error: core runtime still stale after auto-build for bindings/c/perf." >&2
+      echo "  runtime: ${runtime_lib}" >&2
+      echo "  newer source: ${newer_source}" >&2
+      return 1
+    fi
   fi
 
   echo "Perf core build dir: ${core_build_dir}"
@@ -615,7 +648,8 @@ Notes:
   - if core/build is missing or core/src or core/include is newer than the
     resolved runtime library, the runner auto-rebuilds core/build before
     proceeding (incremental cmake --build; configures with defaults if no
-    CMakeCache.txt is present).
+    CMakeCache.txt is present). A symlinked core/build is externally owned and
+    is verified but never rebuilt through the link.
 USAGE
 }
 

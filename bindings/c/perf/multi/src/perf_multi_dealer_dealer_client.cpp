@@ -423,28 +423,30 @@ inline bool run_active_send_window (dd_send_state_t *state,
         const size_t start = rr;
         for (size_t attempts = 0; attempts < state->slots.size (); ++attempts) {
             dd_send_slot_t &slot = state->slots[(start + attempts) % state->slots.size ()];
-            // Core's physical queue remains the saturation boundary. Keep only
-            // one application-owned retained record per socket.
             if (slot.retained)
                 continue;
-
-            const send_status_t send_rc = send_one_message (
-              &slot, payload_size, run_id, perf_multi_metric::phase_active, msg_size, *seq);
-            if (send_rc == send_status_ok) {
-                ++(*seq);
-                submitted = true;
-                continue;
+            while (!g_stop_requested.load (std::memory_order_acquire)
+                   && std::chrono::steady_clock::now () < deadline
+                   && !slot.retained) {
+                const send_status_t send_rc = send_one_message (
+                  &slot, payload_size, run_id, perf_multi_metric::phase_active,
+                  msg_size, *seq);
+                if (send_rc == send_status_ok) {
+                    ++(*seq);
+                    submitted = true;
+                    continue;
+                }
+                if (send_rc == send_status_blocked) {
+                    // Keep the rejected bytes and sequence until the exact
+                    // WRITABLE token permits their resubmission.
+                    ++(*seq);
+                    if (!update_dd_slot_events (state, &slot))
+                        return false;
+                    errno = EAGAIN;
+                    break;
+                }
+                return false;
             }
-            if (send_rc == send_status_blocked) {
-                // This logical record keeps its sequence while WRITABLE drives
-                // an exact-byte retry from slot.retained_payload.
-                ++(*seq);
-                if (!update_dd_slot_events (state, &slot))
-                    return false;
-                errno = EAGAIN;
-                continue;
-            }
-            return false;
         }
         rr = (start + 1) % state->slots.size ();
 
@@ -463,174 +465,6 @@ inline bool run_active_send_window (dd_send_state_t *state,
     if (bench_transition_debug_enabled ()) {
         std::cerr << "[multi-dealer-dealer-client] active send end msg_size=" << msg_size
                   << std::endl;
-    }
-    return true;
-}
-
-inline bool wait_for_phase_from_stdin (size_t msg_size, const char *prefix)
-{
-    if (!prefix || !*prefix) {
-        errno = EINVAL;
-        return false;
-    }
-    std::string line;
-    while (std::getline (std::cin, line)) {
-        if (line == "STOP" || line == "QUIT") {
-            errno = ECANCELED;
-            return false;
-        }
-        size_t phase_size = 0;
-        if (perf_multi_handshake::parse_size_command_line (
-              line, prefix, &phase_size)
-            && phase_size == msg_size) {
-            return true;
-        }
-    }
-    errno = ECANCELED;
-    return false;
-}
-
-enum latency_ack_status_t
-{
-    latency_ack_ok = 0,
-    latency_ack_empty = 1,
-    latency_ack_fatal = 2
-};
-
-inline latency_ack_status_t receive_latency_ack (void *socket,
-                                                 size_t msg_size,
-                                                 uint32_t run_id,
-                                                 uint64_t expected_seq)
-{
-    const zlink_routing_id_t *source_rid = NULL;
-    zlink_msg_t part;
-    zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-    if (zlink_msg_init (&part) != 0)
-        return latency_ack_fatal;
-    const int rc = zlink_recv_part (socket, &source_rid, &part, &has_more,
-                                    ZLINK_RECV_FLAGS_DONTWAIT);
-    if (rc != 0) {
-        const int err = zlink_errno ();
-        zlink_msg_close (&part);
-        if (err == EAGAIN || err == EINTR)
-            return latency_ack_empty;
-        return latency_ack_fatal;
-    }
-
-    perf_multi_metric::header_t header;
-    std::memset (&header, 0, sizeof (header));
-    const bool valid = !source_rid && has_more == ZLINK_PART_FINAL
-                       && perf_multi_metric::decode_payload_header (
-                         zlink_msg_data (&part), zlink_msg_size (&part), &header)
-                       && header.magic == perf_multi_metric::k_magic
-                       && header.run_id == run_id
-                       && header.phase
-                            == static_cast<uint8_t> (perf_multi_metric::phase_latency)
-                       && header.msg_size == msg_size && header.seq == expected_seq;
-    zlink_msg_close (&part);
-    if (!valid) {
-        errno = EPROTO;
-        return latency_ack_fatal;
-    }
-    return latency_ack_ok;
-}
-
-inline bool run_latency_send_window (dd_send_state_t *state,
-                                     size_t payload_size,
-                                     uint32_t run_id,
-                                     size_t msg_size,
-                                     uint64_t *seq)
-{
-    if (!state || !state->poller || state->slots.empty () || !seq)
-        return false;
-
-    const std::chrono::steady_clock::time_point deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (1);
-    size_t rr = 0;
-    bool in_flight = false;
-    uint64_t in_flight_seq = 0;
-    unsigned long long ack_count = 0;
-
-    while (!g_stop_requested.load (std::memory_order_acquire)
-           && std::chrono::steady_clock::now () < deadline) {
-        bool submitted = false;
-        if (!in_flight && !dd_has_retained_send (*state)) {
-            dd_send_slot_t &slot = state->slots[rr];
-            const uint64_t candidate_seq = *seq;
-            const send_status_t send_rc =
-              send_one_message (&slot, payload_size, run_id,
-                                perf_multi_metric::phase_latency, msg_size, candidate_seq);
-            if (send_rc == send_status_ok || send_rc == send_status_blocked) {
-                ++(*seq);
-                in_flight = true;
-                in_flight_seq = candidate_seq;
-                submitted = send_rc == send_status_ok;
-                if (send_rc == send_status_blocked
-                    && !update_dd_slot_events (state, &slot)) {
-                    return false;
-                }
-                if (send_rc == send_status_blocked)
-                    errno = EAGAIN;
-                rr = (rr + 1) % state->slots.size ();
-            } else {
-                return false;
-            }
-        }
-
-        const int timeout_ms = submitted ? 0 : dd_wait_ms (deadline, 50);
-        if (timeout_ms == 0 && !submitted)
-            break;
-        int event_count = 0;
-        if (!service_dd_events (state, timeout_ms, &event_count))
-            return false;
-        for (int i = 0; i < event_count; ++i) {
-            const zlink_poller_event_t &event = state->events[static_cast<size_t> (i)];
-            if ((event.events & ZLINK_POLLIN) == 0)
-                continue;
-            for (;;) {
-                const latency_ack_status_t ack_rc =
-                  receive_latency_ack (event.socket, msg_size, run_id, in_flight_seq);
-                if (ack_rc == latency_ack_empty)
-                    break;
-                if (ack_rc == latency_ack_fatal || !in_flight)
-                    return false;
-                // Publish the delivery acknowledgement only after this socket's
-                // ready burst has reached NO_DATA, matching the single-runner
-                // in-flight-1 sampling boundary.
-                in_flight = false;
-                ++ack_count;
-            }
-        }
-    }
-
-    const std::chrono::steady_clock::time_point drain_deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (5);
-    while ((in_flight || dd_has_retained_send (*state))
-           && std::chrono::steady_clock::now () < drain_deadline) {
-        int event_count = 0;
-        if (!service_dd_events (state, dd_wait_ms (drain_deadline, 50), &event_count))
-            return false;
-        for (int i = 0; i < event_count; ++i) {
-            const zlink_poller_event_t &event = state->events[static_cast<size_t> (i)];
-            if ((event.events & ZLINK_POLLIN) == 0)
-                continue;
-            for (;;) {
-                const latency_ack_status_t ack_rc =
-                  receive_latency_ack (event.socket, msg_size, run_id, in_flight_seq);
-                if (ack_rc == latency_ack_empty)
-                    break;
-                if (ack_rc == latency_ack_fatal || !in_flight)
-                    return false;
-                in_flight = false;
-                ++ack_count;
-            }
-        }
-    }
-
-    if (g_stop_requested.load (std::memory_order_acquire) || in_flight
-        || dd_has_retained_send (*state) || ack_count == 0) {
-        errno = ETIMEDOUT;
-        return false;
     }
     return true;
 }
@@ -657,12 +491,9 @@ inline bool run_single_size_case (const std::vector<void *> &sockets,
         return false;
 
     uint64_t seq = 1;
-    bool ok = run_active_send_window (&state, payload_size, run_id, msg_size, active_s, &seq)
-              && send_phase_stop_tokens (sockets)
-              && wait_for_phase_from_stdin (msg_size, "PHASE_LATENCY,")
-              && run_latency_send_window (&state, payload_size, run_id, msg_size, &seq)
-              && send_phase_stop_tokens (sockets)
-              && wait_for_phase_from_stdin (msg_size, "PHASE_DONE,");
+    const bool ok =
+      run_active_send_window (&state, payload_size, run_id, msg_size, active_s, &seq)
+      && send_phase_stop_tokens (sockets);
 
     close_dd_send_state (&state);
     return ok;

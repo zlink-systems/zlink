@@ -20,7 +20,9 @@ package. A downloaded release prefix is cached by
 Before running benchmarks, the script prints the resolved `libzlink.so` path.
 Local mode rebuilds `core/build` when required and rejects a runtime older than
 `core/src` or `core/include`. Explicit release mode disables source mtime checks
-because it verifies and uses the downloaded package instead.
+because it verifies and uses the downloaded package instead. If `core/build` is
+a symlink, the target is treated as externally owned: the runner verifies the
+runtime but does not rebuild it through the link.
 
 ## CI Multi Smoke
 
@@ -47,8 +49,7 @@ handshake before the numbers are treated as comparable.
 The fixed reference surface is:
 
 - runner and benchmark process stdin/stdout tokens (`READY`, `CLIENT_READY`,
-  `CLIENT_DONE`, `START`, `PHASE_ACTIVE`, `PHASE_LATENCY`, `PHASE_DONE`,
-  `LATENCY_READY`, `LATENCY_ACK`, `STOP`, `RESULT`);
+  `CLIENT_DONE`, `START`, `PHASE_ACTIVE`, `STOP`, `RESULT`);
 - raw socket connection gates based on the same C perf `CONNECTION_READY`
   meaning, plus the C perf `CLIENT_READY` / `START` start barrier for the
   one-way raw patterns that use it;
@@ -153,13 +154,11 @@ Profile guidance for byte-budget Auto HWM:
 If calculated HWM values are too small for the target traffic shape, first
 select a larger profile or configure the context-wide Auto HWM byte budget.
 
-## One-Way Measurement Phases
+## Multi Measurement Phase
 
-One-way patterns measure throughput during a saturated active phase, drain its
-accepted records, and then measure latency for one second with one record in
-flight per logical client (or one globally when the socket pattern cannot route
-an acknowledgement back to a specific client). The latency `RESULT` fields
-therefore exclude active-phase HWM queue residence time.
+Every multi pattern measures throughput and latency together during one
+saturated active phase. Throughput counts records received inside that active
+window, and latency uses the timestamps carried by those same received records.
 
 An ordinary `DONTWAIT` socket send makes one admission attempt. Immediate
 admission returns completion ID zero and produces no completion. On
@@ -170,5 +169,4 @@ payload; the benchmark keeps one exact logical packet per socket, waits for
 the same packet. `ZLINK_OPT_PENDING_MAX_MSGS` and
 `ZLINK_OPT_PENDING_MAX_BYTES` bound pending `REQUEST` records only and do not
 govern these ordinary sends. PUB publish operations have no send completions;
-PUBSUB instead uses its no-drop backpressure path and an explicit subscriber
-acknowledgement between latency records.
+PUBSUB uses the default lossy `NODROP=0` contract and reports receiver counts.

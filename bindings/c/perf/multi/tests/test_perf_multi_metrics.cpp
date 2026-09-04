@@ -166,11 +166,13 @@ void test_relay_submit_error_classification ()
 void test_one_way_writable_retry_state ()
 {
     using namespace perf_multi_client;
-    assert (send_wait_limit_per_socket () == 1);
-    assert (latency_phase_duration_seconds () == 1);
-    assert (latency_phase_max_in_flight_per_socket () == 1);
-    assert (perf_multi_metric::phase_latency != perf_multi_metric::phase_active);
     assert (ZLINK_COMPLETION_WRITABLE == 3);
+    assert (classify_send_result (ZLINK_SUBMIT_OK, 0, 0) == send_ok);
+    assert (classify_send_result (ZLINK_SUBMIT_BACKPRESSURED, EAGAIN, 7)
+            == send_blocked);
+    assert (classify_send_result (ZLINK_SUBMIT_BACKPRESSURED, EAGAIN, 0)
+            == send_error);
+    assert (classify_send_result (ZLINK_SUBMIT_OK, 0, 7) == send_error);
 
     send_wait_slot_t slot;
     slot.socket = reinterpret_cast<void *> (1);

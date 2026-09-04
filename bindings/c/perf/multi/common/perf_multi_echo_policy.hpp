@@ -131,42 +131,6 @@ inline bool echo_finalize_latency_stats (unsigned long long latency_count,
     return true;
 }
 
-template <typename State,
-          typename ResetFn,
-          typename ConfigureFn,
-          typename SeedFn,
-          typename ServiceFn,
-          typename StopFn,
-          typename ActiveStartFn,
-          typename ActiveStopFn>
-inline bool echo_run_two_phase_request_flow (State *state,
-                                             int timeout_ms,
-                                             double active_seconds,
-                                             const ResetFn &reset_fn,
-                                             const ConfigureFn &configure_fn,
-                                             const SeedFn &seed_fn,
-                                             const ServiceFn &service_fn,
-                                             const StopFn &stop_fn,
-                                             const ActiveStartFn &active_start_fn,
-                                             const ActiveStopFn &active_stop_fn)
-{
-    reset_fn ();
-    active_start_fn ();
-    configure_fn (perf_multi_metric::phase_active, true);
-    if (!echo_start_phase_requests (state, timeout_ms, seed_fn,
-                                    [&] (State *, int slice_ms, bool *progressed) {
-                                        return service_fn (slice_ms, progressed);
-                                    }))
-        return false;
-    if (!echo_wait_phase_duration (state, active_seconds,
-                                   [&] (State *, int slice_ms, bool *progressed) {
-                                       return service_fn (slice_ms, progressed);
-                                   }))
-        return false;
-    active_stop_fn ();
-    return true;
-}
-
 inline bool echo_emit_client_results (const char *pattern,
                                       const std::string &lib_name,
                                       const std::string &transport,

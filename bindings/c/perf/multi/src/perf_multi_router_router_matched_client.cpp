@@ -193,23 +193,6 @@ bool run_sendsend_case (
     std::vector<char> payload (payload_size, 'c');
     std::vector<void *> sockets (1, socket);
     long active_received = 0;
-    double ignored_latency_sum = 0.0;
-    long ignored_latency_count = 0;
-    bench_latency_stats_t ignored_latency;
-    if (!perf_multi_client::run_echo_window_round_robin (
-          sockets, settings, payload, payload_size, msg_size,
-          k_server_routing_id, true, command.run_id,
-          perf_multi_metric::phase_active,
-          perf_multi_client::metric_capture_bytes (),
-          static_cast<double> (
-            std::max<uint32_t> (1, command.duration_seconds)),
-          true, false, transport == "tcp", &active_received,
-          &ignored_latency_sum, &ignored_latency_count,
-          &ignored_latency)) {
-        return false;
-    }
-
-    long latency_received = 0;
     double latency_sum = 0.0;
     long latency_count = 0;
     bench_latency_stats_t latency;
@@ -217,13 +200,13 @@ bool run_sendsend_case (
     if (!perf_multi_client::run_echo_window_round_robin (
           sockets, settings, payload, payload_size, msg_size,
           k_server_routing_id, true, command.run_id,
-          perf_multi_metric::phase_latency,
+          perf_multi_metric::phase_active,
           perf_multi_client::metric_capture_bytes (),
           static_cast<double> (
-            perf_multi_client::latency_phase_duration_seconds ()),
-          true, true, transport == "tcp", &latency_received, &latency_sum,
-          &latency_count, &latency, &samples, k_child_sample_cap,
-          perf_multi_client::latency_phase_max_in_flight_per_socket ())) {
+            std::max<uint32_t> (1, command.duration_seconds)),
+          true, true, transport == "tcp", &active_received,
+          &latency_sum, &latency_count, &latency, &samples,
+          k_child_sample_cap)) {
         return false;
     }
     result->received =
@@ -237,7 +220,7 @@ bool run_sendsend_case (
     result->sample_count = static_cast<uint32_t> (samples.size ());
     for (size_t i = 0; i < result->sample_count; ++i)
         result->samples[i] = samples[i];
-    return active_received > 0 && latency_received > 0 && latency_count > 0;
+    return active_received > 0 && latency_count > 0;
 }
 
 int child_main (int index,

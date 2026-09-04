@@ -351,7 +351,9 @@ inline bool drain_pending_replies (client_state_t *state, uint32_t request_timeo
         return false;
     }
 
-    const int drain_ms = std::max<int> (1000, static_cast<int> (request_timeout_ms) * 4);
+    const int drain_ms = std::max<int> (
+      perf_multi_client::send_retry_drain_timeout_ms (),
+      static_cast<int> (request_timeout_ms) * 4);
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now () + std::chrono::milliseconds (drain_ms);
     while (any_waiting_reply (*state) && std::chrono::steady_clock::now () < deadline) {
@@ -376,8 +378,6 @@ inline bool run_measurement_window (const endpoint_config_t &config,
                                     uint32_t run_id,
                                     size_t msg_size,
                                     int duration_seconds,
-                                    size_t max_in_flight_per_client,
-                                    bool capture_latency,
                                     unsigned long long *reply_count_out,
                                     bench_latency_stats_t *latency_out)
 {
@@ -400,7 +400,7 @@ inline bool run_measurement_window (const endpoint_config_t &config,
       perf_multi_metric::now_ns ()
       + static_cast<uint64_t> (std::max (1, duration_seconds)) * 1000000000ULL;
     state->active_reply_count = 0;
-    state->capture_latency = capture_latency;
+    state->capture_latency = true;
     state->latency.reset ();
     for (size_t i = 0; i < state->slots.size (); ++i)
         state->slots[i].outstanding = 0;
@@ -419,9 +419,6 @@ inline bool run_measurement_window (const endpoint_config_t &config,
         bool submitted = false;
         for (size_t i = 0; i < state->slots.size (); ++i) {
             client_slot_t &slot = state->slots[i];
-            if (max_in_flight_per_client > 0
-                && slot.outstanding >= max_in_flight_per_client)
-                continue;
             bool blocked = false;
             if (!submit_request (config, &slot, target_rid_ptr, run_id, msg_size,
                                  request_timeout_ms, &blocked)) {
@@ -469,23 +466,13 @@ inline bool run_measurement_window (const endpoint_config_t &config,
     }
 
     *reply_count_out = state->active_reply_count;
-    *latency_out = capture_latency ? state->latency.snapshot () : bench_latency_stats_t ();
-    if (capture_latency && state->latency.count () == 0) {
+    *latency_out = state->latency.snapshot ();
+    if (state->latency.count () == 0) {
         std::cerr << "[perf-multi-socket-reqrep] no latency samples size=" << msg_size
                   << " replies=" << state->active_reply_count << std::endl;
         return false;
     }
     return true;
-}
-
-inline int latency_phase_duration_seconds ()
-{
-    return 1;
-}
-
-inline size_t latency_phase_max_in_flight_per_client ()
-{
-    return 1;
 }
 
 inline bool run_active_window (const endpoint_config_t &config,
@@ -496,20 +483,9 @@ inline bool run_active_window (const endpoint_config_t &config,
                                unsigned long long *reply_count_out,
                                bench_latency_stats_t *latency_out)
 {
-    bench_latency_stats_t ignored_latency;
-    if (!run_measurement_window (config, state, settings, run_id, msg_size,
-                                 settings.duration_seconds, 0, false, reply_count_out,
-                                 &ignored_latency)) {
-        return false;
-    }
-
-    // Phase 1 drains all saturated request completions before Phase 2 starts.
-    // During Phase 2 each client timestamps a new request only after its
-    // preceding REQUEST completion has reduced outstanding to zero.
-    unsigned long long latency_reply_count = 0;
     return run_measurement_window (
-      config, state, settings, run_id, msg_size, latency_phase_duration_seconds (),
-      latency_phase_max_in_flight_per_client (), true, &latency_reply_count, latency_out);
+      config, state, settings, run_id, msg_size, settings.duration_seconds,
+      reply_count_out, latency_out);
 }
 
 inline bool setup_client_state (const endpoint_config_t &config,

@@ -157,9 +157,6 @@ enum reply_send_status_t
     reply_send_failed = 3
 };
 
-// Keep at most one immutable application-owned reply while its target-specific
-// wait token is live. Further requests remain behind the socket receive HWM
-// instead of moving into an unbounded relay queue.
 struct reply_wait_state_t
 {
     reply_wait_state_t () :
@@ -384,9 +381,6 @@ inline bool drain_recv_and_relay (void *server,
     while (true) {
         if (perf_stop_requested ().load (std::memory_order_acquire))
             return true;
-        if (!pending->empty () || wait_state->wait_token != 0)
-            return true;
-
         zlink_routing_id_t source_rid;
         bool has_source_rid = false;
         zlink_reply_token_t reply_token = 0;
@@ -459,9 +453,8 @@ inline bool run_server_loop (void *server)
 
     bool loop_ok = true;
     while (!perf_stop_requested ().load (std::memory_order_acquire)) {
-        short desired_events = ZLINK_POLLCOMPLETION;
-        if (pending.empty () && wait_state.wait_token == 0)
-            desired_events = static_cast<short> (desired_events | ZLINK_POLLIN);
+        short desired_events = static_cast<short> (ZLINK_POLLIN
+                                                    | ZLINK_POLLCOMPLETION);
         // ROUTER POLLOUT is socket-wide. Try it once for a new exact-target
         // token, then suppress it after a NO_DATA pull so another writable RID
         // cannot spin this loop; target WRITABLE still wakes POLLCOMPLETION.
@@ -518,8 +511,7 @@ inline bool run_server_loop (void *server)
                 break;
             }
         }
-        if (poll_rc > 0 && (event.events & ZLINK_POLLIN) != 0
-            && pending.empty () && wait_state.wait_token == 0) {
+        if (poll_rc > 0 && (event.events & ZLINK_POLLIN) != 0) {
             bool recv_drained = false;
             if (!drain_recv_and_relay (server, &pending, &wait_state,
                                        &recv_drained)) {
