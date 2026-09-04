@@ -39,3 +39,11 @@ aggregate throughput(size 비율 평균) **81.5%**, latency 평균 **1.08x** →
   더 크므로 C++ 미달의 원인은 아니다. C 러너 report의 HWM 스냅숏 시점은 별도 확인 항목으로 남긴다.
 - callgrind에서 확인된 subscriber wrapper 5%로는 3-run의 18.5%p 부족을 설명하지 못한다. 나머지는 lossy 경로의 동적 특성(구독자 처리
   속도·drop)이며 library 코드에서 계약을 유지한 채 줄일 후보가 없어 pass 2(read-only 리뷰)는 열지 않고 `미달`로 둔다(§7.4-11 no-go 기록).
+
+## pass 2 (Sol read-only 리뷰, 06:10~06:24 KST) — no-go, 판정 `보류(81.5%)`
+
+브리프 `doc/plan/c016-worklog/briefs/cpp-perf-pubsub-pass2.b.prompt`, 요약 `doc/plan/c016-worklog/cpp-perf-pubsub-pass2-summary.md`(파일 수정·빌드·perf 없음, 기존 callgrind에 `callgrind_annotate`만).
+
+- 수신 경로 Core 경계 대조: `zlink_subscribe_part` 2.00/message, `zlink_msg_close` 2.00/message로 C와 동일; C++ 순증은 wrapper의 empty-output preflight `zlink_msg_size` 약 1회/message. completion·`std::function`·lock 없음. poller wrapper 전체 0.13%.
+- 공개 contract 유지 후보 4개 모두 5% 미만(preflight 상태화 ≤1%, topic SSO fast path <0.6%, poller bookkeeping 0.13%, rollback 경로 0%) → **no-go**. §7.5에 따라 두 pass 뒤 `보류(81.5%)`로 확정.
+- 18.5%p 전부를 binding에 귀속하지 않는다: profile·교차 실행이 뒷받침하는 subscriber wrapper 비용은 5~6%. 나머지는 lossy 경로에서 **runner parity 차이**가 키운 것으로 본다: (1) C multi PUBSUB server는 client START 뒤 size마다 auto-HWM을 재계산·적용하고 C++ server는 bind/connect 전에 1회만(report의 server SNDHWM 1 MiB vs 4 MiB 불일치의 원인), (2) SUB filter C `""` vs C++ `"bench"`, (3) C++ client의 topic 문자열·routing-id size 추가 검사, (4) deadline/100 ms poll 규칙. → **runner parity 수정 트랙(가이드 §5: library 효과와 분리)**: C++ multi PUBSUB server의 HWM 재계산 시점을 C에 맞춘 뒤 별도 report로 재판정. 사용자 확인 뒤 진행.
