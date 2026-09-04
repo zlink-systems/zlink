@@ -86,7 +86,7 @@ class router_t : public routing_socket_base_t
     void xsocket_msg_pipe_terminated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE;
     int xterm_peer_rid (const zlink_routing_id_t *peer_rid_) ZLINK_OVERRIDE
     {
-        fail_pull_send_pending_for_logical_target (peer_rid_, ENOENT);
+        fail_blocking_send_waits_for_logical_target (peer_rid_, ENOENT);
         revoke_router_reply_targets_for_rid (peer_rid_);
         return terminate_out_pipe_by_routing_id (peer_rid_);
     }
@@ -161,12 +161,6 @@ class router_t : public routing_socket_base_t
       zlink_routed_submit_target_t *target_out_,
       uint64_t *transport_connection_id_out_,
       uint64_t *route_incarnation_id_out_, bool allow_unpaired_) const;
-    std::mutex *send_pending_target_mutex () const ZLINK_OVERRIDE
-    {
-        return &_out_pipes_sync;
-    }
-    bool xsend_pending_target_current_locked (
-      const routed_send_target_key_t &target_) const ZLINK_OVERRIDE;
     int apply_peer_weight (pipe_t *pipe_, uint32_t weight_) ZLINK_OVERRIDE;
     void initialize_peer_weight (pipe_t *pipe_,
                                  uint32_t weight_) ZLINK_OVERRIDE;

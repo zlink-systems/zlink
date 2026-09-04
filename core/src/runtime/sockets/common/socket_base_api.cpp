@@ -158,7 +158,7 @@ void zlink::socket_base_t::finish_close_reap ()
 {
     socket_completion::close (&completion_runtime (),
                               _ctx_terminated ? ETERM : ESHUTDOWN);
-    fail_all_send_pending (_ctx_terminated ? ETERM : ECANCELED);
+    fail_all_blocking_send_waits (_ctx_terminated ? ETERM : ECANCELED);
     materialize_pending_inprocs_before_reap ();
     static_cast<mailbox_t *> (_mailbox)->clear_signalers ();
 
@@ -227,7 +227,7 @@ int zlink::socket_base_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
         return -1;
     }
 
-    fail_pull_send_pending_for_logical_target (peer_rid_, ENOENT);
+    fail_blocking_send_waits_for_logical_target (peer_rid_, ENOENT);
     match->terminate (false);
     return 0;
 }
@@ -810,7 +810,7 @@ int zlink::socket_base_t::get_events_internal (
 
             // stop() publishes context termination before its command reaches
             // process_stop(). Wake synchronous send waiters here as well.
-            fail_all_send_pending (ETERM);
+            fail_all_blocking_send_waits (ETERM);
 
             // A POLLCOMPLETION registration remains the sole dispatch owner
             // during context shutdown, so drain already-resolved request and

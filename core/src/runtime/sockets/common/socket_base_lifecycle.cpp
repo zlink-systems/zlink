@@ -1316,7 +1316,7 @@ void zlink::socket_base_t::process_stop ()
     _ctx_terminated = true;
     notify_receive_progress ();
     socket_completion::close (&completion_runtime (), ETERM);
-    fail_all_send_pending (ETERM);
+    fail_all_blocking_send_waits (ETERM);
 
     scoped_lock_t lock (monitor_runtime ().sync);
     stop_monitor ();

@@ -240,11 +240,10 @@ zlink_submit_result_t finish_dontwait_request_admission_failure (
     if (failure == ZLINK_SUBMIT_OK || normalized_errno != EAGAIN)
         return failure;
 
-    if (socket_->register_send_writable_wait (
-          peer_rid_, user_context_, completion_id_out_)
+    if (socket_->register_send_writable_wait_after_failure (
+          normalized_errno, peer_rid_, user_context_, completion_id_out_)
         != 0)
         return zlink::submit_result_internal::from_errno (errno);
-    errno = EAGAIN;
     return ZLINK_SUBMIT_BACKPRESSURED;
 }
 

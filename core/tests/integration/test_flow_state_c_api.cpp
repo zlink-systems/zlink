@@ -705,9 +705,8 @@ void test_resumed_while_hwm_blocked_is_not_writable_and_send_stays_rejected ()
 {
     paired_fixture_t fixture;
     fixture.setup_inproc ("inproc://gap-h3-flow-hwm-resume", 4096);
-    //  Phase 3 DONTWAIT retains an HWM-blocked complete record in the shared
-    //  pending pool.  A zero-timeout NONE submit observes the pipe admission
-    //  predicate directly without conflating it with pending-pool capacity.
+    // A zero-timeout blocking submit observes physical pipe admission, so a
+    // receive-flow resume cannot make an HWM-blocked pipe writable.
     const int no_wait = 0;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
       fixture.dealer, ZLINK_OPT_SNDTIMEO, &no_wait, sizeof (no_wait)));

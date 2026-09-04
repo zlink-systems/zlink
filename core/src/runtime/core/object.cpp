@@ -84,7 +84,6 @@ void zlink::object_t::process_command (const command_t &cmd_)
                                  cmd_.args.peer_weight.connection_id);
             break;
 
-        case command_t::send_pending:
         case command_t::request_completion:
             break;
 

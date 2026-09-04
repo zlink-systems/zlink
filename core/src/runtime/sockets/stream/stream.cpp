@@ -373,7 +373,7 @@ int zlink::stream_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
     }
 
     const uint32_t routing_id = get_uint32 (peer_rid_->data);
-    fail_pull_send_pending_for_logical_target (peer_rid_, ENOENT);
+    fail_blocking_send_waits_for_logical_target (peer_rid_, ENOENT);
     route_shard_t &shard = route_shard_for (routing_id);
     bool terminated = false;
     {

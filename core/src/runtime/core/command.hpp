@@ -35,7 +35,6 @@ struct command_t
         activate_write,
         flow_state,
         peer_weight,
-        send_pending,
         request_completion,
         transport_pair_owner_request,
         transport_pair_owner_decision,
@@ -123,13 +122,6 @@ struct command_t
             uint64_t connection_id;
             uint32_t weight;
         } peer_weight;
-
-        //  Wakes the socket's async mailbox owner so it re-runs the
-        //  asynchronous send admit loop. The command carries no payload; the
-        //  socket-owned pending queues are the authoritative state.
-        struct
-        {
-        } send_pending;
 
         //  Schedules completion-pipe/control processing on the socket mailbox
         //  owner. The command carries no payload; the socket-owned queues are

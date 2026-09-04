@@ -17,8 +17,8 @@
 
 namespace
 {
-void signal_logical_wait_state (
-  zlink::send_logical_wait_state_t *state_, int terminal_errno_)
+void fail_blocking_send_wait_state (
+  zlink::blocking_send_wait_state_t *state_, int terminal_errno_)
 {
     zlink_assert (state_);
     ++state_->epoch;
@@ -158,12 +158,19 @@ void zlink::socket_base_t::notify_send_writable (pipe_t *pipe_)
         publish_send_writable_target (target);
 }
 
-int zlink::socket_base_t::register_send_writable_wait (
-  const zlink_routing_id_t *target_rid_or_null_, void *user_context_,
-  zlink_completion_id_t *completion_id_out_)
+int zlink::socket_base_t::register_send_writable_wait_after_failure (
+  int failure_errno_, const zlink_routing_id_t *target_rid_or_null_,
+  void *user_context_, zlink_completion_id_t *completion_id_out_)
 {
     if (completion_id_out_)
         *completion_id_out_ = 0;
+
+    if (failure_errno_ != EAGAIN && failure_errno_ != ENOTCONN
+        && failure_errno_ != EHOSTUNREACH
+        && failure_errno_ != ECONNREFUSED) {
+        errno = failure_errno_;
+        return -1;
+    }
 
     const int type = options.type;
     const bool routed = type == ZLINK_CORE_SOCKET_ROUTER
@@ -210,7 +217,7 @@ int zlink::socket_base_t::register_send_writable_wait (
 
     if (completion_id_out_)
         *completion_id_out_ = completion_id;
-    errno = 0;
+    errno = EAGAIN;
     return 0;
 }
 
@@ -467,13 +474,13 @@ void zlink::socket_base_t::publish_send_writable_terminal (
     errno = saved_errno;
 }
 
-void zlink::socket_base_t::fail_pull_send_pending_for_logical_target (
+void zlink::socket_base_t::fail_blocking_send_waits_for_logical_target (
   const zlink_routing_id_t *peer_rid_, int terminal_errno_)
 {
     // Explicit removal of a logical target retires its WRITABLE wait tokens
     // too: a waiter parked on that target could otherwise never be woken.
     publish_send_writable_terminal (peer_rid_, terminal_errno_);
-    socket_send_pending_runtime_t &pending = send_pending_runtime ();
+    socket_blocking_send_runtime_t &wait_runtime = blocking_send_runtime ();
     const std::string logical_rid =
       peer_rid_ && peer_rid_->size
         ? std::string (reinterpret_cast<const char *> (peer_rid_->data),
@@ -481,63 +488,53 @@ void zlink::socket_base_t::fail_pull_send_pending_for_logical_target (
         : std::string ();
     bool signaled_waiter = false;
     {
-        scoped_lock_t lock (pending.sync);
+        scoped_lock_t lock (wait_runtime.sync);
         for (std::map<routed_send_target_key_t,
-                      send_logical_wait_state_t>::iterator it =
-               pending.logical_waits.begin ();
-             it != pending.logical_waits.end (); ++it) {
+                      blocking_send_wait_state_t>::iterator it =
+               wait_runtime.logical_waits.begin ();
+             it != wait_runtime.logical_waits.end (); ++it) {
             if (it->first.logical_endpoint.empty ()
                 && it->first.peer_rid == logical_rid) {
-                signal_logical_wait_state (&it->second, terminal_errno_);
+                fail_blocking_send_wait_state (&it->second, terminal_errno_);
                 signaled_waiter = true;
             }
         }
     }
-    if (signaled_waiter) {
-        command_t wake;
-        memset (&wake, 0, sizeof (wake));
-        wake.destination = this;
-        wake.type = command_t::send_pending;
-        static_cast<mailbox_t *> (_mailbox)->send (wake);
-    }
+    if (signaled_waiter)
+        notify_submit_progress ();
 }
 
-void zlink::socket_base_t::fail_pull_send_pending_for_logical_endpoint (
+void zlink::socket_base_t::fail_blocking_send_waits_for_logical_endpoint (
   const std::string &endpoint_, int terminal_errno_)
 {
     if (endpoint_.empty ())
         return;
-    socket_send_pending_runtime_t &pending = send_pending_runtime ();
+    socket_blocking_send_runtime_t &wait_runtime = blocking_send_runtime ();
     bool signaled_waiter = false;
     {
-        scoped_lock_t lock (pending.sync);
+        scoped_lock_t lock (wait_runtime.sync);
         for (std::map<routed_send_target_key_t,
-                      send_logical_wait_state_t>::iterator it =
-               pending.logical_waits.begin ();
-             it != pending.logical_waits.end (); ++it) {
+                      blocking_send_wait_state_t>::iterator it =
+               wait_runtime.logical_waits.begin ();
+             it != wait_runtime.logical_waits.end (); ++it) {
             if (it->first.logical_endpoint == endpoint_) {
-                signal_logical_wait_state (&it->second, terminal_errno_);
+                fail_blocking_send_wait_state (&it->second, terminal_errno_);
                 signaled_waiter = true;
             }
         }
     }
-    if (signaled_waiter) {
-        command_t wake;
-        memset (&wake, 0, sizeof (wake));
-        wake.destination = this;
-        wake.type = command_t::send_pending;
-        static_cast<mailbox_t *> (_mailbox)->send (wake);
-    }
+    if (signaled_waiter)
+        notify_submit_progress ();
 }
 
 // Close / context termination wakes synchronous SEND waiters.
-void zlink::socket_base_t::fail_all_send_pending (int terminal_errno_)
+void zlink::socket_base_t::fail_all_blocking_send_waits (int terminal_errno_)
 {
-    socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    scoped_lock_t lock (pending.sync);
+    socket_blocking_send_runtime_t &wait_runtime = blocking_send_runtime ();
+    scoped_lock_t lock (wait_runtime.sync);
     for (std::map<routed_send_target_key_t,
-                  send_logical_wait_state_t>::iterator wait =
-           pending.logical_waits.begin ();
-         wait != pending.logical_waits.end (); ++wait)
-        signal_logical_wait_state (&wait->second, terminal_errno_);
+                  blocking_send_wait_state_t>::iterator wait =
+           wait_runtime.logical_waits.begin ();
+         wait != wait_runtime.logical_waits.end (); ++wait)
+        fail_blocking_send_wait_state (&wait->second, terminal_errno_);
 }

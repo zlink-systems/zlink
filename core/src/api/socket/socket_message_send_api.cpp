@@ -383,16 +383,10 @@ zlink_submit_result_t submit_public_send_record (
           parts_, part_count_, target_rid_);
     }
     int saved_errno = errno;
-    if (rc != 0 && flags_ == ZLINK_SEND_FLAGS_DONTWAIT
-        && (saved_errno == EAGAIN || saved_errno == ENOTCONN
-            || saved_errno == EHOSTUNREACH
-            || saved_errno == ECONNREFUSED)) {
-        if (handle_.socket->register_send_writable_wait (
-              target_rid_, user_context_, completion_id_out_)
-            == 0)
-            saved_errno = EAGAIN;
-        else
-            saved_errno = errno;
+    if (rc != 0 && flags_ == ZLINK_SEND_FLAGS_DONTWAIT) {
+        (void) handle_.socket->register_send_writable_wait_after_failure (
+          saved_errno, target_rid_, user_context_, completion_id_out_);
+        saved_errno = errno;
     }
     zlink::request_reply::consume_send_frames_from (
       parts_, 0, part_count_);
@@ -466,7 +460,8 @@ zlink_submit_result_t submit_completion_aware_part (
           state->send.buffered_parts.data (),
           state->send.buffered_parts.size (), target_rid_,
           *state->send.send_scope);
-        scoped_errno = errno;
+        if (scoped_rc != 0)
+            scoped_errno = errno;
     }
     if (spec_.flags == ZLINK_SEND_FLAGS_DONTWAIT) {
         zlink::part_helper_internal::send_part_buffer_t record;
@@ -474,16 +469,10 @@ zlink_submit_result_t submit_completion_aware_part (
         zlink::part_helper_internal::reset_send_sequence (&state->send, false);
         state_lock.unlock ();
         socket->notify_incremental_send_released ();
-        if (scoped_rc != 0
-            && (scoped_errno == EAGAIN || scoped_errno == ENOTCONN
-                || scoped_errno == EHOSTUNREACH
-                || scoped_errno == ECONNREFUSED)) {
-            if (socket->register_send_writable_wait (
-                  target_rid_, user_context_, completion_id_out_)
-                == 0)
-                scoped_errno = EAGAIN;
-            else
-                scoped_errno = errno;
+        if (scoped_rc != 0) {
+            (void) socket->register_send_writable_wait_after_failure (
+              scoped_errno, target_rid_, user_context_, completion_id_out_);
+            scoped_errno = errno;
         }
         // A zero-copy release callback may re-enter this socket, so consume
         // only after all helper/socket scopes and the wait-token publication

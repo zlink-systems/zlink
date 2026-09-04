@@ -951,10 +951,10 @@ int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
     const std::string endpoint_uri_str = std::string (endpoint_uri_);
     const auto fail_public_pending_for_endpoint =
       [this] (const std::string &identifier_) {
-          fail_pull_send_pending_for_logical_endpoint (identifier_, ENOENT);
+          fail_blocking_send_waits_for_logical_endpoint (identifier_, ENOENT);
           xforget_request_route_endpoint (identifier_);
           if (options.type == ZLINK_CORE_SOCKET_PAIR) {
-              fail_pull_send_pending_for_logical_target (NULL, ENOENT);
+              fail_blocking_send_waits_for_logical_target (NULL, ENOENT);
               return;
           }
           std::vector<pipe_t *> attached;
@@ -971,7 +971,7 @@ int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
               memset (&rid, 0, sizeof (rid));
               copy_routing_id_from_bytes (routing_id.data (),
                                           routing_id.size (), &rid);
-              fail_pull_send_pending_for_logical_target (&rid, ENOENT);
+              fail_blocking_send_waits_for_logical_target (&rid, ENOENT);
           }
       };
     if (uri_protocol == protocol_name::inproc) {

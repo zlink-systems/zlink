@@ -574,8 +574,8 @@ class socket_receive_record_scope_t
 };
 
 // Immutable physical route selected for one routed write attempt. This value
-// survives an EAGAIN result; unlike pipe_t*, it does not borrow the selected
-// pipe's lifetime while an async submit prepares its pending key.
+// survives an EAGAIN result without extending the selected pipe's lifetime
+// across a blocking retry.
 struct routed_send_attempt_identity_t
 {
     routed_send_attempt_identity_t () :
@@ -596,9 +596,8 @@ struct routed_send_attempt_identity_t
 
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
-    // Mutable engine generation observed by this one physical attempt. It is
-    // retained for wire/message stamping decisions, not as the identity of an
-    // unpaired ROUTER pending queue across reconnect.
+    // Mutable engine generation is retained for wire/message stamping, while
+    // the immutable route incarnation identifies an unpaired ROUTER retry.
     uint64_t transport_connection_id;
     // Set only for an unpaired ROUTER attempt.
     uint64_t route_incarnation_id;
@@ -655,14 +654,12 @@ struct routed_send_target_key_t
     uint64_t route_incarnation_id;
 };
 
-// A synchronous NONE submit is not a pending record and therefore does not
-// reserve either pending-pool capacity or a completion slot.  It still needs a
-// socket-local fence against an explicit logical-target removal while it has
-// dropped the public send scope to wait for reconnect/progress.  Entries exist
-// only while at least one NONE call is waiting on the key.
-struct send_logical_wait_state_t
+// A blocking submit drops the public send scope while waiting for progress.
+// Keep target-removal state until every waiter for that key has resumed so an
+// explicit disconnect cannot be mistaken for a retryable connectivity gap.
+struct blocking_send_wait_state_t
 {
-    send_logical_wait_state_t () : epoch (0), terminal_errno (0), waiters (0)
+    blocking_send_wait_state_t () : epoch (0), terminal_errno (0), waiters (0)
     {
     }
 
@@ -671,13 +668,13 @@ struct send_logical_wait_state_t
     uint32_t waiters;
 };
 
-// Per-socket blocking SEND wait state.
-struct socket_send_pending_runtime_t
+// Per-socket blocking submit wait state.
+struct socket_blocking_send_runtime_t
 {
-    socket_send_pending_runtime_t () {}
+    socket_blocking_send_runtime_t () {}
 
     mutable mutex_t sync;
-    std::map<routed_send_target_key_t, send_logical_wait_state_t>
+    std::map<routed_send_target_key_t, blocking_send_wait_state_t>
       logical_waits;
 };
 
@@ -943,7 +940,7 @@ struct socket_runtime_t
     socket_monitor_runtime_t monitor_runtime;
     socket_dispatch_bridge_t dispatch_bridge;
     socket_submit_progress_runtime_t submit_progress_runtime;
-    socket_send_pending_runtime_t send_pending_runtime;
+    socket_blocking_send_runtime_t blocking_send_runtime;
     socket_completion::queue_state_t completion_runtime;
     socket_lifecycle_coordinator_t lifecycle_coordinator;
 };

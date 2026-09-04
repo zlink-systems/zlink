@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
-// Blocking SEND and REQUEST admission submission.
+// SEND and REQUEST admission submission.
 
 #include "utils/precompiled.hpp"
 
@@ -9,7 +9,6 @@
 #include "core/pipe.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "utils/err.hpp"
-#include "utils/likely.hpp"
 #include "utils/routing_id.hpp"
 
 #include <optional>
@@ -33,23 +32,23 @@ void consume_caller_parts (zlink_msg_t *parts_, size_t part_count_)
     errno = saved_errno;
 }
 
-class logical_send_wait_guard_t
+class blocking_send_wait_guard_t
 {
   public:
-    logical_send_wait_guard_t (
-      zlink::socket_send_pending_runtime_t *runtime_) :
+    blocking_send_wait_guard_t (
+      zlink::socket_blocking_send_runtime_t *runtime_) :
         _runtime (runtime_), _target (NULL), _epoch (0), _acquired (false)
     {
     }
 
-    ~logical_send_wait_guard_t ()
+    ~blocking_send_wait_guard_t ()
     {
         if (!_acquired)
             return;
         const int saved_errno = errno;
         zlink::scoped_lock_t lock (_runtime->sync);
         std::map<zlink::routed_send_target_key_t,
-                 zlink::send_logical_wait_state_t>::iterator it =
+                 zlink::blocking_send_wait_state_t>::iterator it =
           _runtime->logical_waits.find (*_target);
         zlink_assert (it != _runtime->logical_waits.end ());
         zlink_assert (it->second.waiters != 0);
@@ -74,11 +73,11 @@ class logical_send_wait_guard_t
         try {
             const std::pair<
               std::map<zlink::routed_send_target_key_t,
-                       zlink::send_logical_wait_state_t>::iterator,
+                       zlink::blocking_send_wait_state_t>::iterator,
               bool>
               inserted = _runtime->logical_waits.insert (
                 std::make_pair (*_target,
-                                zlink::send_logical_wait_state_t ()));
+                                zlink::blocking_send_wait_state_t ()));
             ++inserted.first->second.waiters;
             _epoch = inserted.first->second.epoch;
             _acquired = true;
@@ -95,7 +94,7 @@ class logical_send_wait_guard_t
             return 0;
         zlink::scoped_lock_t lock (_runtime->sync);
         const std::map<zlink::routed_send_target_key_t,
-                       zlink::send_logical_wait_state_t>::const_iterator it =
+                       zlink::blocking_send_wait_state_t>::const_iterator it =
           _runtime->logical_waits.find (*_target);
         if (it == _runtime->logical_waits.end ()
             || it->second.epoch == _epoch)
@@ -106,7 +105,7 @@ class logical_send_wait_guard_t
     }
 
   private:
-    zlink::socket_send_pending_runtime_t *_runtime;
+    zlink::socket_blocking_send_runtime_t *_runtime;
     const zlink::routed_send_target_key_t *_target;
     uint64_t _epoch;
     bool _acquired;
@@ -361,8 +360,8 @@ int zlink::socket_base_t::wait_for_completion_submit_admission (
     const routed_send_target_key_t *target =
       committed_dealer_target_or_null_;
 
-    socket_send_pending_runtime_t &pending = send_pending_runtime ();
-    logical_send_wait_guard_t logical_wait (&pending);
+    socket_blocking_send_runtime_t &wait_runtime = blocking_send_runtime ();
+    blocking_send_wait_guard_t logical_wait (&wait_runtime);
     if (target)
         logical_wait.bind_target (target);
     else if (!has_routed_target)

@@ -887,7 +887,7 @@ set(socket-common-sources
     src/runtime/sockets/common/socket_base_flow_state.cpp
     src/runtime/sockets/common/socket_dispatch_bridge.cpp
     src/runtime/sockets/common/socket_send_complete.cpp
-    src/runtime/sockets/common/socket_send_pending_submit.cpp
+    src/runtime/sockets/common/socket_send_submit.cpp
     src/runtime/sockets/common/socket_command_runtime.cpp
     src/runtime/sockets/common/socket_base_endpoint.cpp
     src/runtime/sockets/common/socket_base_endpoint_factory.cpp

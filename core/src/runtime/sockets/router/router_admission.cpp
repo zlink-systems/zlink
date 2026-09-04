@@ -142,35 +142,6 @@ int router_t::select_routed_submit_target_locked (
     return 0;
 }
 
-bool router_t::xsend_pending_target_current_locked (
-  const routed_send_target_key_t &target_) const
-{
-    if (target_.peer_rid.empty ())
-        return false;
-    const blob_t routing_id (
-      const_cast<unsigned char *> (
-        reinterpret_cast<const unsigned char *> (target_.peer_rid.data ())),
-      target_.peer_rid.size (), reference_tag_t ());
-    const out_pipe_t *const current = lookup_out_pipe (routing_id);
-    if (!current || !current->pipe)
-        return false;
-
-    pipe_t *const pipe = current->pipe;
-    if (target_.transport_pair_id != 0
-        || target_.transport_pair_generation != 0) {
-        return target_.route_incarnation_id == 0
-               && pipe->get_transport_pair_id ()
-                    == target_.transport_pair_id
-               && pipe->get_transport_pair_generation ()
-                    == target_.transport_pair_generation;
-    }
-    return target_.route_incarnation_id != 0
-           && pipe->get_transport_pair_id () == 0
-           && pipe->get_transport_pair_generation () == 0
-           && pipe->get_route_incarnation_id ()
-                == target_.route_incarnation_id;
-}
-
 pipe_t *router_t::find_transport_pair_pipe (
   const zlink_routing_id_t *target_rid_,
   uint64_t transport_pair_id_,

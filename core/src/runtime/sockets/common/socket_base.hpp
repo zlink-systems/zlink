@@ -531,9 +531,9 @@ class socket_base_t : public own_t,
       socket_public_send_scope_t &send_scope_);
     // Register a payload-free DONTWAIT SEND/REQUEST wait token after one
     // physical admission attempt reports backpressure or an unready target.
-    int register_send_writable_wait (
-      const zlink_routing_id_t *target_rid_or_null_, void *user_context_,
-      zlink_completion_id_t *completion_id_out_);
+    int register_send_writable_wait_after_failure (
+      int failure_errno_, const zlink_routing_id_t *target_rid_or_null_,
+      void *user_context_, zlink_completion_id_t *completion_id_out_);
     bool has_send_writable_wait () const;
     int request_admission_submit (
       zlink_msg_t *parts_, size_t part_count_,
@@ -920,20 +920,6 @@ class socket_base_t : public own_t,
     {
         LIBZLINK_UNUSED (endpoint_);
     }
-    // ROUTER can replace a route from direct I/O dispatch while pending send is
-    // between physical EAGAIN and pending publication. Concrete sockets that
-    // have such a route fence validate and publish under that fence followed by
-    // send_pending_runtime::sync. No path may take those locks in reverse.
-    virtual std::mutex *send_pending_target_mutex () const
-    {
-        return NULL;
-    }
-    virtual bool xsend_pending_target_current_locked (
-      const routed_send_target_key_t &target_) const
-    {
-        LIBZLINK_UNUSED (target_);
-        return true;
-    }
     virtual bool xsubmit_retry_allowed (const zlink_routing_id_t *target_rid_, int err_) const;
     virtual int xrollback ();
 
@@ -1044,9 +1030,9 @@ class socket_base_t : public own_t,
     void flush_deferred_peer_controls ();
     void mark_deferred_peer_controls ();
     // A route ended: retire writable tokens and wake blocking submitters.
-    void fail_pull_send_pending_for_logical_target (
+    void fail_blocking_send_waits_for_logical_target (
       const zlink_routing_id_t *peer_rid_, int terminal_errno_);
-    void fail_pull_send_pending_for_logical_endpoint (
+    void fail_blocking_send_waits_for_logical_endpoint (
       const std::string &endpoint_, int terminal_errno_);
     void emit_peer_weight_changed (pipe_t *pipe_, uint32_t weight_,
                                    const blob_t *public_routing_id_ = NULL);
@@ -1132,13 +1118,13 @@ class socket_base_t : public own_t,
     {
         return _runtime.submit_progress_runtime;
     }
-    socket_send_pending_runtime_t &send_pending_runtime ()
+    socket_blocking_send_runtime_t &blocking_send_runtime ()
     {
-        return _runtime.send_pending_runtime;
+        return _runtime.blocking_send_runtime;
     }
-    const socket_send_pending_runtime_t &send_pending_runtime () const
+    const socket_blocking_send_runtime_t &blocking_send_runtime () const
     {
-        return _runtime.send_pending_runtime;
+        return _runtime.blocking_send_runtime;
     }
     lifecycle_coordinator_t &lifecycle_coordinator () { return _runtime.lifecycle_coordinator; }
     lifecycle_coordinator_t &lifecycle_coordinator () const
@@ -1285,8 +1271,7 @@ class socket_base_t : public own_t,
     bool test_resume_deferred_transport_pair_owner_request ();
   private:
 #endif
-    // Close / ctx term wakes blocking SEND waiters.
-    void fail_all_send_pending (int terminal_errno_);
+    void fail_all_blocking_send_waits (int terminal_errno_);
     int select_routed_submit_target_internal (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_,
