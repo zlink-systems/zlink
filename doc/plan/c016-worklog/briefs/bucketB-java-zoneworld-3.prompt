@@ -1,0 +1,41 @@
+# Job: java ZoneWorld (round 3) — full run now passes ZW-A2..A4 and fails at ZW-A5 (client timeout, then heartbeat cascade)
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages' trees; never lower an assertion or a
+timeout; do not commit.
+
+## Facts
+- Round 2 (`doc/plan/c016-worklog/bucketB-java-zoneworld-2-summary.md`, committed as the async
+  command-36 admission fix) removed the 1-3 s completion stalls on the gateway: the public mesh
+  poller owner no longer blocks on STREAM admission. Prefix `G1,G5,A1,A2` 4/4 green (A2 28-37 ms).
+  The full run then passed A2, A3, A4 and failed first at **ZW-A5** with a client timeout, after
+  which heartbeat failures cascaded. Logs under `zlink-work/c016/logs/bucketB-java-zoneworld-2-green-full-1*`
+  (and the preserved run dir referenced in the summary's 실행 결과 section).
+- Also fixed earlier tonight and in main: SUB POLLIN-only poller (36c310ffef), heartbeat cycle
+  survival (dc9fe76100), idempotent shutdown unbind (6682ae0db1). Baseline
+  `seven-samples-green-v1` had the full ZoneWorld green; cpp ZoneWorld passes 7/7 tonight — use it
+  as the parity reference for whatever A5 exercises (read `framework/languages/shared_sample/zoneworld`
+  and `framework/doc/framework/common/sample/zoneworld/README.ko.md` for the A5 scenario definition).
+- Method that worked in round 2: message-flow Normal + `ZLINK_JAVA_STREAM_TRACE=1` + timestamps at
+  native stage submit / continuation / pump return + periodic `jcmd Thread.print` on the gateway
+  and the involved zone node during the stall. Look first for another synchronous wait on a poller
+  owner thread (any `join()/get()` on a public-poller-owning thread) or a serial-executor
+  head-of-line block (spec `01-execution/02-handler-turn-and-execution-gate.ko.md`), then at what A5
+  specifically does (relocation? maintenance? multi-zone move?).
+- Env: `TMPDIR=/dev/shm/zlink-tmp-java`, `flock -w7200 /tmp/zlink-jvm-gate.lock`,
+  `ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/.artifacts/wsl/install/zlink-core/0.17.0/lib/libzlink.so`,
+  `ZLINK_SAMPLE_KEEP_RUN_DIR=1`, Docker OK. `cd framework/languages/java/samples/java/ZoneWorld && ./run_sample.sh [selector]`
+  — find the smallest selector that reproduces A5 (e.g. `ZW-A1,ZW-A2,ZW-A3,ZW-A4,ZW-A5`).
+
+## What to do
+1. Reproduce A5 with the smallest selector 2×; measure where the time goes (which node, which
+   transition, thread states).
+2. Fix minimally in `framework/languages/java/zlink-framework-core/**` (or the sample if the sample
+   violates its contract — cite it); regression test; selector 3× green and the FULL ZoneWorld run
+   2× green (`zoneworld-placement=completed`, exit 0); `:zlink-framework-core:test` once (known: 2
+   M6A items).
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-java-zoneworld-3-summary.md`: timeline, cause `file:line`, spec
+clause, fix + regression, results, BLOCKERS.
