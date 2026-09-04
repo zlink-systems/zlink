@@ -45,3 +45,23 @@ test('SupportChat browser lifecycle leaves time to arm idle and resume waiters',
   assert.match(timings, /closeGraceTimeout: 2000/);
   assert.match(client, /waitTimeoutMs: 20000/);
 });
+
+test('SupportChat arms lifecycle waits before the activity that starts their deadlines', () => {
+  const client = fs.readFileSync(path.join(
+    root,
+    'samples/SupportChat.Ts/Client/supportchat-client-scenario.ts'
+  ), 'utf8');
+
+  const reconnectKeepaliveWait = client.indexOf('const reconnectKeepaliveTask = waitConversation');
+  const reconnectKeepaliveRequest = client.indexOf('const reconnectKeepalive = await request');
+  const firstIdleWait = client.indexOf('const firstIdleCustomer = waitConversation');
+  const explicitClose = client.indexOf('const closed2 = await request');
+  const secondIdleWait = client.indexOf('const secondIdleCustomer = waitConversation');
+  const idleClosedWait = client.indexOf('const idleClosedCustomer = waitConversation');
+  const resumeRequest = client.indexOf('const resumed = await request');
+
+  assert.ok(reconnectKeepaliveWait >= 0 && reconnectKeepaliveWait < reconnectKeepaliveRequest);
+  assert.ok(firstIdleWait >= 0 && firstIdleWait < explicitClose);
+  assert.ok(secondIdleWait >= 0 && secondIdleWait < resumeRequest);
+  assert.ok(idleClosedWait >= 0 && idleClosedWait < resumeRequest);
+});

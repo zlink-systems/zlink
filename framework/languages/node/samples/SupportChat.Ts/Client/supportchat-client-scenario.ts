@@ -158,6 +158,19 @@ class SupportChatClientScenario {
     const typing = await typingTask;
     zlinkStreamAssert.ensure(typing.payload.actorId === 'agent-1', 'Sample scenario assertion failed.');
 
+    const reconnectKeepaliveTask = waitConversation<ChatMessageNotify>(agent, PacketNames.chatMessageNotify, cid1, signal);
+    const reconnectKeepalive = await request<SendChatMessageRes>(
+      customer1,
+      PacketNames.sendChatMessageReq,
+      sendChatMessage('Still looking into it.'),
+      cid1,
+      signal
+    );
+    zlinkStreamAssert.ensure(reconnectKeepalive.message.messageSeq === 3, 'Sample scenario assertion failed.');
+    zlinkStreamAssert.ensure(reconnectKeepalive.state.status === ConversationStatuses.Active, 'Sample scenario assertion failed.');
+    const reconnectKeepalivePush = await reconnectKeepaliveTask;
+    zlinkStreamAssert.ensure(reconnectKeepalivePush.payload.message.messageSeq === 3, 'Sample scenario assertion failed.');
+
     await customer1.close(signal);
     await reconnectedCustomer.connect(signal);
     const reconnectedCustomerAuth = await request<AuthenticateRes>(
@@ -176,7 +189,7 @@ class SupportChatClientScenario {
       signal
     );
     zlinkStreamAssert.ensure(!customerRejoined1.scheduled, 'Sample scenario assertion failed.');
-    zlinkStreamAssert.ensure(customerRejoined1.state.subject === 'checkout payment failed' && customerRejoined1.state.lastMessageSeq === 2, 'Sample scenario assertion failed.');
+    zlinkStreamAssert.ensure(customerRejoined1.state.subject === 'checkout payment failed' && customerRejoined1.state.lastMessageSeq === 3, 'Sample scenario assertion failed.');
 
     await agent.close(signal);
     await reconnectedAgent.connect(signal);
@@ -187,10 +200,12 @@ class SupportChatClientScenario {
     const rejoined2 = await request<JoinConversationRes>(reconnectedAgent, PacketNames.joinConversationReq, joinConversation(), cid2, signal);
     const rejoined3 = await request<JoinConversationRes>(reconnectedAgent, PacketNames.joinConversationReq, joinConversation(), cid3, signal);
     zlinkStreamAssert.ensure(!rejoined1.scheduled && !rejoined2.scheduled && !rejoined3.scheduled, 'Sample scenario assertion failed.');
-    zlinkStreamAssert.ensure(rejoined1.state.subject === 'checkout payment failed' && rejoined1.state.lastMessageSeq === 2, 'Sample scenario assertion failed.');
+    zlinkStreamAssert.ensure(rejoined1.state.subject === 'checkout payment failed' && rejoined1.state.lastMessageSeq === 3, 'Sample scenario assertion failed.');
     zlinkStreamAssert.ensure(rejoined2.state.subject === 'cannot log in' && rejoined2.state.lastMessageSeq === 1, 'Sample scenario assertion failed.');
     zlinkStreamAssert.ensure(rejoined3.state.subject === 'refund delayed' && rejoined3.state.lastMessageSeq === 1, 'Sample scenario assertion failed.');
 
+    const firstIdleCustomer = waitConversation<ConversationIdleNotify>(reconnectedCustomer, PacketNames.conversationIdleNotify, cid1, signal);
+    const firstIdleAgent = waitConversation<ConversationIdleNotify>(reconnectedAgent, PacketNames.conversationIdleNotify, cid1, signal);
     const closed2Notify = waitConversation<ConversationClosedNotify>(reconnectedAgent, PacketNames.conversationClosedNotify, cid2, signal);
     const closed2 = await request<CloseConversationRes>(customer2, PacketNames.closeConversationReq, closeConversation('resolved'), cid2, signal);
     zlinkStreamAssert.ensure(closed2.state.status === ConversationStatuses.Closed, 'Sample scenario assertion failed.');
@@ -198,21 +213,19 @@ class SupportChatClientScenario {
     zlinkStreamAssert.ensure(closed2Push.payload.state.status === ConversationStatuses.Closed, 'Sample scenario assertion failed.');
     await zlinkStreamAssert.expectFailure(async () => { await request(customer2, PacketNames.closeConversationReq, closeConversation(), cid2, signal); });
 
-    const firstIdleCustomer = wait<ConversationIdleNotify>(reconnectedCustomer, PacketNames.conversationIdleNotify, signal);
-    const firstIdleAgent = waitConversation<ConversationIdleNotify>(reconnectedAgent, PacketNames.conversationIdleNotify, cid1, signal);
     const [firstCustomerIdle, firstAgentIdle] = await Promise.all([firstIdleCustomer, firstIdleAgent]);
     zlinkStreamAssert.ensure(firstCustomerIdle.payload.state.status === ConversationStatuses.WaitingForClose, 'Sample scenario assertion failed.');
     zlinkStreamAssert.ensure(firstAgentIdle.payload.state.status === ConversationStatuses.WaitingForClose, 'Sample scenario assertion failed.');
     const resumedPush = waitConversation<ChatMessageNotify>(reconnectedAgent, PacketNames.chatMessageNotify, cid1, signal);
+    const secondIdleCustomer = waitConversation<ConversationIdleNotify>(reconnectedCustomer, PacketNames.conversationIdleNotify, cid1, signal);
+    const secondIdleAgent = waitConversation<ConversationIdleNotify>(reconnectedAgent, PacketNames.conversationIdleNotify, cid1, signal);
+    const idleClosedCustomer = waitConversation<ConversationClosedNotify>(reconnectedCustomer, PacketNames.conversationClosedNotify, cid1, signal);
+    const idleClosedAgent = waitConversation<ConversationClosedNotify>(reconnectedAgent, PacketNames.conversationClosedNotify, cid1, signal);
     const resumed = await request<SendChatMessageRes>(reconnectedCustomer, PacketNames.sendChatMessageReq, sendChatMessage('I am still here.'), cid1, signal);
     zlinkStreamAssert.ensure(resumed.state.status === ConversationStatuses.Active, 'Sample scenario assertion failed.');
     const resumedNotification = await resumedPush;
-    zlinkStreamAssert.ensure(resumedNotification.payload.message.messageSeq === 3, 'Sample scenario assertion failed.');
+    zlinkStreamAssert.ensure(resumedNotification.payload.message.messageSeq === 4, 'Sample scenario assertion failed.');
 
-    const secondIdleCustomer = wait<ConversationIdleNotify>(reconnectedCustomer, PacketNames.conversationIdleNotify, signal);
-    const secondIdleAgent = waitConversation<ConversationIdleNotify>(reconnectedAgent, PacketNames.conversationIdleNotify, cid1, signal);
-    const idleClosedCustomer = wait<ConversationClosedNotify>(reconnectedCustomer, PacketNames.conversationClosedNotify, signal);
-    const idleClosedAgent = waitConversation<ConversationClosedNotify>(reconnectedAgent, PacketNames.conversationClosedNotify, cid1, signal);
     await Promise.all([secondIdleCustomer, secondIdleAgent]);
     const [customerIdleClosed, agentIdleClosed] = await Promise.all([idleClosedCustomer, idleClosedAgent]);
     zlinkStreamAssert.ensure(customerIdleClosed.payload.state.status === ConversationStatuses.Closed, 'Sample scenario assertion failed.');
