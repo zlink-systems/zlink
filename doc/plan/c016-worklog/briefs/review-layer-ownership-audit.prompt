@@ -1,0 +1,72 @@
+# Audit (read-only): control implemented in several places, and framework re-implementing lower-layer (Core / binding) responsibilities — dotnet + java runtime, with cpp/node as the reference
+
+You are a codex sub-agent under a Claude supervisor doing a READ-ONLY architecture audit. Do not edit
+any file except your deliverable; never touch `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`. Read first: `AGENTS.md` §3 (구현 원칙) and the POSDDD
+principles `doc/principal/dev/zlink-system-design-principles.ko.md` (one owner per rule / per state,
+lower layer owns its concern, no re-implementation above), `framework/AGENTS.md`, and the layer
+contracts: Core socket spec `core/doc/spec/core/socket/README.ko.md` (RID duplicate policy HANDOVER
+§4, reconnect intent, linger/close), `core/doc/spec/core/05-polling.ko.md` (POLLCOMPLETION sole
+owner), binding spec `bindings/doc/spec/**` (async terminal owns BACKPRESSURED→WRITABLE resubmit,
+wait token), framework spec `framework/doc/framework/common/spec/server/**` (01-execution,
+02-channel-transport incl. 05-transport-liveness, 03-spot-actor/03-mesh-node, 04-session).
+
+The user's observation, which you must test against the CURRENT tree (main): "the worst recurring
+problem is control implemented in several places, and the upper layer re-implementing the lower
+layer's responsibility". The 0.17.0 campaign touched the dotnet and java runtimes heavily
+(`git log 4bad5ac979..HEAD -- framework/languages/dotnet framework/languages/java`); cpp and node
+pass the same gates with far fewer runtime changes.
+
+## What to audit (for dotnet and java; cpp/node only to show the reference behaviour)
+For each concern below: (1) which layer owns it per the spec (cite clause); (2) every site in the
+framework runtime that implements control for it (file:line, one row per site); (3) whether the
+framework duplicates or overrides the lower layer (e.g. waits for lane Disconnected before publishing
+Admitted, decides handover survivor by itself, re-pins RID→pair indexes, cancels reconnect intents,
+retries admission per generation, polls the socket to make Core commands progress, classifies errno
+codes that the binding already classified, swallows binding exceptions); (4) what cpp/node do for
+the same concern (site, one line); (5) verdict: OWNED-CORRECTLY / DUPLICATED (which site should be the
+single owner) / RE-IMPLEMENTS-LOWER-LAYER (which lower-layer contract should be relied on instead,
+and what would break if the framework code were deleted — name the test/sample).
+Concerns:
+1. ROUTER RID duplicate / reciprocal handover collapse and "one ready connection per logical peer"
+   (Core §4 + topology spec): dotnet `ZLinkManagedMeshNode.cs` (BeginReciprocalHandoverSettlement,
+   ObserveReciprocalHandoverDisconnect, RetireDuplicatePeer, FindReadyOutboundCandidate,
+   _readyOutboundEndpoints/_readyInboundRids, relay RID→pair re-pin, DisconnectTransport, ConnectPeer
+   reuse), `ZLinkMeshPeerAdmission.cs`; java `ZLinkJavaRawMeshNode.java` (descriptor fence,
+   replacement, edge-less ConnectionReady handling); cpp `raw_mesh_node_owner.cpp`.
+2. Physical reconnect / endpoint re-registration (Core owns the reconnect intent; framework
+   liveness spec says what to observe): dotnet `ZLinkClientServerClientRuntime.cs` (generation
+   fences, disconnect-observed TCS, reconnect poller, retry scheduling), java ClientServer runtime,
+   cpp `channel_outbound_exchange.cpp` / client runtime.
+3. DONTWAIT submit outcome handling: BACKPRESSURED/WRITABLE resubmit, wait tokens, POLLOUT drains —
+   who resubmits (binding async terminal per spec) vs framework sites that also handle it
+   (`4d263e66b9` per language; `raw_dealer_port.cpp`, `node-socket-backend-adapter.ts`,
+   dotnet `ZLinkBackendStreamSocketWrapper`/spot send wrappers, java `ZLinkJavaRawServicePort`,
+   `ZLinkJavaStreamSocket`).
+4. Completion draining / poller ownership (POLLCOMPLETION sole owner): every poller creation site per
+   language and what mask it registers; any second poller on a socket that already has an owner
+   (e.g. dotnet reconnect poller, SUB POLLIN-only changes `4644af9d03`/`36c310ffef`).
+5. Error classification of submit results (NOT_FOUND+ENOENT transient route, NOT_CONNECTED at
+   unbind, ZlinkSubmitException on heartbeat): is the classification table owned in one place per
+   language (cpp `raw_binding_adapter.hpp::transient_route_errno`) or scattered (java `6682ae0db1`,
+   `dc9fe76100` catch sites; dotnet equivalents)?
+6. Request reply routing / replay after handover (spec: reply pinned to submit-time pair; caller
+   resends): framework replay/retry logic sites per language (node `service-stateful-runtime.ts`
+   replay budget, dotnet canonical actor join retries, java), and whether any site re-implements
+   Core's reply pinning or second-guesses it.
+7. STREAM control frames and bound-session push serialization (java state lane joins `424b15684c`,
+   `7b0590183d`, `efad74ef94`): is there ONE owner of "which thread may touch the STREAM socket", and
+   are there remaining synchronous joins reachable from infrastructure owners (grep
+   `inStateLane(`, `.join()`, `admissionTimeout()` in `ZLinkJavaStreamSocket.java`,
+   `ZLinkJavaRawMeshNode.java`, `ZLinkJavaSocketBacked.java`, `ZLinkJavaRawServicePort.java`)?
+
+## Deliverable
+`doc/plan/c016-worklog/review-layer-ownership-audit.md` (Korean): per concern a table (site
+file:line, what it decides, owner per spec, cpp/node reference, verdict), then "제거/이관 계획" — an
+ordered list of framework code that should be deleted or moved to rely on the lower layer, each with:
+the spec clause that makes it safe, the lower-layer behaviour it relies on (and whether that
+behaviour is verified by a Core/binding test — name it or say MISSING → that is a Core/binding
+follow-up, not a framework workaround), and the framework test/sample that would prove the removal.
+Flag explicitly any case where the framework compensates for a Core/binding behaviour that is
+NOT what the spec says (that is a Core/binding bug to fix at the root, not a framework rule).
+2 h cap. Do not run gates.
