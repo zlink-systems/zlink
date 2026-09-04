@@ -41,15 +41,22 @@ inline zlink::message_t message_from_payload (const void *data_, size_t size_)
 // comparisons and keeps the binding's direct-send fast path observable.
 inline int measurement_part_count ()
 {
-    const char *value = std::getenv ("PERF_PART_COUNT");
-    return value && std::strcmp (value, "1") == 0 ? 1 : 2;
+    // The runner fixes PERF_PART_COUNT before launching this process. Parsing
+    // it for every sent and received message made getenv()/strcmp() part of
+    // the measured hot path and disproportionately throttled the C++ runner.
+    static const int part_count = [] () {
+        const char *value = std::getenv ("PERF_PART_COUNT");
+        return value && std::strcmp (value, "1") == 0 ? 1 : 2;
+    } ();
+    return part_count;
 }
 
 inline bool measurement_parts_valid (const std::vector<zlink::message_t> &parts_)
 {
-    if (parts_.size () != static_cast<size_t> (measurement_part_count ()))
+    const int part_count = measurement_part_count ();
+    if (parts_.size () != static_cast<size_t> (part_count))
         return false;
-    return measurement_part_count () == 1 || parts_[1].size () == 0;
+    return part_count == 1 || parts_[1].size () == 0;
 }
 
 inline const zlink::message_t *measurement_payload_part (
