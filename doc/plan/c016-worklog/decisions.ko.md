@@ -1079,3 +1079,11 @@ client START 뒤 size마다 auto-HWM을 재계산·적용, C++ server는 bind/co
 (2) SUB filter C `""` vs C++ `"bench"`; (3) C++ client의 topic 문자열·routing-id size 추가 검사; (4) deadline/100 ms poll 규칙.
 lossy PUBSUB에서는 이 차이가 drop·keep-up을 직접 바꾼다. 결정: library 판정은 `보류`로 닫고, 러너 parity 수정(C++ multi PUBSUB
 server·client를 C 러너 의미에 맞춤)은 별도 트랙·별도 report로 재판정(가이드 §5). 러너 변경이라 사용자 확인 뒤 진행.
+
+## D-B91 (2026-09-05 08:25, 머신 B) 사용자 지시 "결정할 것 없음, 진행" — 열려 있던 5개 항목의 처리
+사용자(08:20): "내가 결정할께 있어? 저 항목들은 그냥 진행해야 하는거 아니야?" → 감독 판단으로 확정하고 진행한다.
+1. D-B83 Core latency 잔여(DD 작은 크기 평균 latency, REQREP +50%): 원인별 Core 수정 트랙으로 진행(bindings 계획과 병행).
+2. D-B89 C 러너 ws/wss byte-quantum 제출 턴: 유지(`21746768ca`).
+3. D-B90 C++ Multi PUBSUB 러너 parity(서버 auto-HWM 재계산 시점·SUB filter): 러너 수정 진행, 별도 report로 재판정.
+4. one-way(single PAIR/PUBSUB/DD/DR/RR, multi DD) 평균 latency: 두 러너 정의가 같고 값이 큐 깊이이므로 binding 판정에서 제외하고 처리량 aggregate로 판정. 정책 문서(`PERF_SINGLE/MULTI_TEST_POLICY`)는 바꾸지 않고 계획서 §9 표와 log에 "판정 제외" 사유를 기록한다. 큐 깊이가 아닌 latency 정의가 필요하면 정책 개정은 별도 제안.
+5. DD 완화 목표 90%: tls/ws/wss·single 모든 transport에 동일 적용(multi `wss` DD 91.1% → `통과`).
