@@ -69,4 +69,17 @@ internal sealed class ReceivedSendContext(
                 (int)ErrorCode.EInval);
         sendKernel.Completion.Send(target.Value, parts);
     }
+
+    internal bool TrySendCore(IReadOnlyList<Message> parts)
+    {
+        ArgumentNullException.ThrowIfNull(parts);
+        if (sendKernel == null)
+            throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
+                (int)ErrorCode.EInval);
+        var target = routingId.ToRoutingId();
+        if (!target.HasValue)
+            throw new ZlinkSubmitException(SubmitResult.InvalidArgument,
+                (int)ErrorCode.EInval);
+        return sendKernel.Completion.TrySend(target.Value, parts);
+    }
 }

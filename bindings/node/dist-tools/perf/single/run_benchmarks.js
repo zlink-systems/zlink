@@ -443,6 +443,7 @@ async function main() {
     }
     let unsupportedComboCount = 0;
     let skipComboCount = 0;
+    let failComboCount = 0;
     let actualResultLines = 0;
     const successRecords = [];
     for (const [key, record] of comboResults) {
@@ -451,6 +452,9 @@ async function main() {
         }
         else if (record.status === 'skip') {
             skipComboCount += 1;
+        }
+        else if (record.status === 'fail') {
+            failComboCount += 1;
         }
         else if (record.status === 'success') {
             actualResultLines += 5;
@@ -479,7 +483,17 @@ async function main() {
             emit(line);
         }
     }
+    for (const [key, record] of comboResults) {
+        if (record.status !== 'unsupported')
+            continue;
+        const [pattern, transport] = key.split('|');
+        emit(`UNSUPPORTED,current,${pattern},${transport}`);
+    }
     emitSection('## Completion');
+    emit(`- success: ${successRecords.length}`);
+    emit(`- unsupported: ${unsupportedComboCount}`);
+    emit(`- skip: ${skipComboCount}`);
+    emit(`- fail: ${failComboCount}`);
     emit(`- status: ${status}`);
     emit(`- expected_result_lines: ${expectedResultLines}`);
     emit(`- actual_result_lines: ${actualResultLines}`);

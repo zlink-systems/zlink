@@ -74,6 +74,25 @@ public sealed class test_optimization_guard
     }
 
     [Fact]
+    public void async_send_recovery_does_not_create_a_dedicated_wait_thread()
+    {
+        string path = Path.Combine(BindingRoot(), "src", "Zlink", "Runtime",
+            "Messaging", "CompletionOwner.cs");
+        string source = File.ReadAllText(path);
+
+        Assert.DoesNotContain("new Thread(", source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Thread.Sleep", source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Task.Delay", source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("new Timer(", source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("PeriodicTimer", source,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void samples_and_perf_use_only_public_binding_contracts()
     {
         string source = ReadSampleAndPerfSource();

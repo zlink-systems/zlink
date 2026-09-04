@@ -100,7 +100,8 @@ perf::async_task_t<bool> perf_dealer_router_server (const std::string &lib_name,
     perf::multi::print_ready (endpoint);
 
     co_return perf::multi::run_routed_echo_relay (
-      server, g_stop_requested, "dealer_router server:");
+      server, g_stop_requested, "dealer_router server:",
+      std::chrono::milliseconds (settings.send_drain_timeout_ms));
 }
 
 int main (int argc, char **argv)

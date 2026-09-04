@@ -31,8 +31,9 @@ public interface IConnectableRoutedMessageSocket : IReceivingMessageSocket,
 public interface IRouterSocket : IConnectableRoutedMessageSocket
 {
     /// <summary>
-    ///     Begins an exact-target ROUTER send whose <c>Async</c> terminal waits
-    ///     for Core admission without occupying the caller thread.
+    ///     Begins an exact-target ROUTER send. Its <c>Async</c> terminal completes
+    ///     immediately on admission; after backpressure it waits for the matching
+    ///     WRITABLE token and retries the retained packet.
     /// </summary>
     SendOperation Send(RoutingId routingId);
 

@@ -46,9 +46,10 @@ static const char *k_stop_token = "__zlink_perf_stop__";
 
 // PERF_MULTI_TEST_POLICY: each one-way raw socket must publish its stop token
 // after the active phase with blocking admission semantics. In C++ the public
-// async send is the coroutine-native blocking form: it stays pending under
-// backpressure and deliberately has no per-operation or drain deadline. The
-// external runner remains the process-level failure fallback.
+// async send is the coroutine-native blocking form: on backpressure the
+// binding retains the packet and the awaiter stays suspended until WRITABLE.
+// It deliberately has no per-operation or drain deadline. The external runner
+// remains the process-level failure fallback.
 template <typename TSocket>
 ::perf::async_task_t<bool> send_stop_token_until_admitted (
   ::perf::application_ready_queue_t &ready_queue_,

@@ -83,7 +83,7 @@ public sealed class test_pull_completion_contract
     }
 
     [Fact]
-    public async Task immediate_completions_join_after_submit_publish()
+    public async Task admitted_send_completes_without_a_native_completion()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -95,22 +95,17 @@ public sealed class test_pull_completion_contract
         receiver.Bind(endpoint);
         sender.Connect(endpoint);
 
-        const int count = 256;
-        Task drain = Task.Run(() =>
-        {
-            for (var i = 0; i < count; i++)
-            {
-                using Received item = Receive(receiver);
-                Assert.Equal(i.ToString(), item.SinglePartOrThrow().GetString());
-            }
-        });
-        for (var i = 0; i < count; i++)
-        {
-            using Message message = Message.From(i.ToString());
-            await sender.Send().Message(message).Async()
-                .WaitAsync(TimeSpan.FromSeconds(2));
-        }
-        await drain.WaitAsync(TimeSpan.FromSeconds(5));
+        using Message handshake = Message.From("handshake");
+        sender.Send().Message(handshake).Submit();
+        using Received handshakeReceived = Receive(receiver);
+
+        using Message message = Message.From("immediate");
+        Task admitted = sender.Send().Message(message).Async();
+
+        Assert.True(admitted.IsCompletedSuccessfully);
+        await admitted;
+        using Received received = Receive(receiver);
+        Assert.Equal("immediate", received.SinglePartOrThrow().GetString());
     }
 
     [Fact]

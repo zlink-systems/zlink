@@ -8,8 +8,9 @@ namespace Systems.Zlink;
 public interface IStreamSocket : IReceivingMessageSocket
 {
     /// <summary>
-    ///     Begins an exact-target STREAM send whose asynchronous terminal waits
-    ///     for Core admission to the selected logical connection.
+    ///     Begins an exact-target STREAM send. Its asynchronous terminal completes
+    ///     immediately on admission; after backpressure it waits for the matching
+    ///     WRITABLE token and retries the retained packet.
     /// </summary>
     SendOperation Send(RoutingId routingId);
 

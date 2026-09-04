@@ -10,7 +10,10 @@ public enum SubmitResult
     /// <summary>The submit succeeded.</summary>
     Ok = 0,
 
-    /// <summary>The target mailbox is back-pressured.</summary>
+    /// <summary>
+    ///     The DONTWAIT target is back-pressured. Native errno is EAGAIN and Core
+    ///     did not retain the SEND payload.
+    /// </summary>
     Backpressured = 1,
 
     /// <summary>The target is not connected.</summary>

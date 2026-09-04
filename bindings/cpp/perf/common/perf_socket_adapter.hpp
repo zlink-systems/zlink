@@ -37,10 +37,10 @@ inline bool poll_event_has (poll_event_flag_t events_,
 }
 
 // Single application-thread scheduler for multi perf coroutines. Producers may
-// enqueue public-async continuations from Core's completion context, but only
-// the application thread drains them. A drain processes the queue snapshot it
-// observed at the start, so a coroutine that yields again cannot monopolize the
-// same round ahead of the other sockets.
+// enqueue public-async continuations while the public poller drains socket
+// completions, but only the application thread drains them. A drain processes
+// the queue snapshot it observed at the start, so a coroutine that yields again
+// cannot monopolize the same round ahead of the other sockets.
 class application_ready_queue_t
 {
   private:
@@ -154,7 +154,7 @@ class application_ready_queue_t
     {
         // schedule() is reached only by the application thread: initially by
         // eager task creation, then after this queue dispatches either an
-        // inline-admission yield or a public async completion.
+        // inline-admission yield or an async-result continuation.
         _ready.push_back (continuation_);
     }
 
@@ -198,12 +198,12 @@ class application_ready_queue_t
 };
 
 // Owns the one application ready queue and the poll/dispatch ordering for a
-// routed multi-perf phase. Every registered socket must include
-// POLLCOMPLETION. The C++ async state hands a promise scheduler its continuation
-// before the Core completion callback (and therefore poller_wait) returns. Thus
-// a completion consumed by one wait is already visible in _ready before the
-// next round can decide to block; the queue notification never has to wake a
-// poller that has already consumed its corresponding completion event.
+// routed multi-perf phase. Every socket used by async send must include POLLOUT
+// and POLLCOMPLETION. The C++ async state hands a promise scheduler its
+// continuation before poller_wait returns from draining WRITABLE. Thus a
+// completion consumed by one wait is already visible in _ready before the next
+// round can decide to block; the queue notification never has to wake a poller
+// that has already consumed its corresponding completion event.
 class application_poller_coordinator_t
 {
   public:
@@ -968,8 +968,8 @@ class socket_t
         });
     }
 
-    // Public asynchronous routed-send terminal used by the coroutine
-    // ROUTER_ROUTER benchmark.
+    // Public asynchronous routed-send terminal for coroutine consumers. The
+    // caller must keep POLLOUT | POLLCOMPLETION registered until it completes.
     async_result_t<void> send_routed_async (const routing_id_t &routing_id_,
                                             message_t &part_)
     {

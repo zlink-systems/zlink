@@ -13,9 +13,19 @@ internal static class RequestReplySupport
         if (parts.Count == 0)
             throw new ArgumentException("parts must not be empty", nameof(parts));
         var cloned = new Message[parts.Count];
-        for (var i = 0; i < parts.Count; i++)
-            cloned[i] = parts[i].Copy();
-        return cloned;
+        var built = 0;
+        try
+        {
+            for (; built < parts.Count; built++)
+                cloned[built] = parts[built].Copy();
+            return cloned;
+        }
+        catch
+        {
+            for (var i = 0; i < built; i++)
+                cloned[i].Dispose();
+            throw;
+        }
     }
 
     internal static void EnsureParts(IReadOnlyList<Message> parts,
@@ -47,6 +57,15 @@ internal static class RequestReplySupport
     {
         foreach (var part in parts)
             part.Dispose();
+    }
+
+    internal static void ConsumeParts(IReadOnlyList<Message> parts)
+    {
+        var consumed = new HashSet<Message>(
+            ReferenceEqualityComparer.Instance);
+        foreach (var part in parts)
+            if (consumed.Add(part))
+                part.ConsumeAfterSuccessfulSubmit();
     }
 
     internal static void SubmitClonedParts(IReadOnlyList<Message> parts,
@@ -185,8 +204,7 @@ internal static class RequestReplySupport
         try
         {
             SubmitOwnedParts(clones, submit);
-            for (var i = 0; i < parts.Count; i++)
-                parts[i].ConsumeAfterSuccessfulSubmit();
+            ConsumeParts(parts);
         }
         finally
         {

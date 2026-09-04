@@ -85,15 +85,43 @@ inline perf::detached_async_task_t submit_routed_reply_async (
 
 inline bool run_routed_echo_relay (zlink::router_socket_t &server,
                                    std::atomic<bool> &stop_requested,
-                                   const char *debug_label)
+                                   const char *debug_label,
+                                   std::chrono::milliseconds drain_timeout)
 {
     detail::routed_reply_state_t replies;
     zlink::poller_t poller;
-    poller.add (server, zlink::poll_event_flag_t::pollin, 0);
+    poller.add (server,
+                zlink::poll_event_flag_t::pollin
+                  | zlink::poll_event_flag_t::pollout
+                  | zlink::poll_event_flag_t::pollcompletion,
+                0);
     std::vector<zlink::poll_event_t> events (1);
+    bool draining = false;
+    std::chrono::steady_clock::time_point drain_deadline;
 
-    while (!stop_requested.load (std::memory_order_acquire)
-           && !replies.failed.load (std::memory_order_acquire)) {
+    for (;;) {
+        const bool accepting =
+          !stop_requested.load (std::memory_order_acquire)
+          && !replies.failed.load (std::memory_order_acquire);
+        if (!accepting) {
+            if (!draining) {
+                draining = true;
+                drain_deadline = std::chrono::steady_clock::now () + drain_timeout;
+            }
+            if (replies.in_flight.load (std::memory_order_acquire) == 0)
+                break;
+            if (std::chrono::steady_clock::now () >= drain_deadline) {
+                try {
+                    server.close ();
+                }
+                catch (const zlink::binding_error_t &) {
+                }
+                replies.error.store (ETIMEDOUT, std::memory_order_release);
+                replies.failed.store (true, std::memory_order_release);
+                break;
+            }
+        }
+
         size_t ready_count = 0;
         try {
             // The stdin watcher cannot wake this socket poll. Keep the wait
@@ -105,11 +133,21 @@ inline bool run_routed_echo_relay (zlink::router_socket_t &server,
             const int err = error.internal_errno ();
             if (err == EINTR)
                 continue;
+            try {
+                server.close ();
+            }
+            catch (const zlink::binding_error_t &) {
+            }
             replies.error.store (err, std::memory_order_release);
             replies.failed.store (true, std::memory_order_release);
             break;
         }
         if (ready_count == 0)
+            continue;
+
+        // poller.wait() has already drained WRITABLE and resumed any matching
+        // send. During shutdown, keep doing that without accepting new input.
+        if (!accepting)
             continue;
 
         const short revents = static_cast<short> (events[0].revents);
@@ -144,11 +182,6 @@ inline bool run_routed_echo_relay (zlink::router_socket_t &server,
               server, *received.routing_id (), std::move (received.parts ()), replies);
         }
     }
-
-    // Async reply continuations own message parts and reference the socket.
-    // Drain them before the server socket leaves scope.
-    while (replies.in_flight.load (std::memory_order_acquire) != 0)
-        std::this_thread::yield ();
 
     if (replies.failed.load (std::memory_order_acquire)) {
         const int err = replies.error.load (std::memory_order_acquire);

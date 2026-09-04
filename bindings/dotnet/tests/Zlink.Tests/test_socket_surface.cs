@@ -9,7 +9,7 @@ public sealed class test_socket_surface
         type.GetMethods(BindingFlags.Instance | BindingFlags.Public);
 
     [Fact]
-    public void send_and_request_expose_pull_completion_terminals()
+    public void send_and_request_expose_contract_b_terminals()
     {
         Assert.Equal(typeof(SendOperation),
             typeof(IDealerSocket).GetMethod(nameof(IDealerSocket.Send))!.ReturnType);
@@ -23,6 +23,9 @@ public sealed class test_socket_surface
         MethodInfo[] sendTerminals = PublicMethods(typeof(SendSubmitOperation));
         Assert.Contains(sendTerminals, method => method.Name == "Submit"
             && method.ReturnType == typeof(void)
+            && method.GetParameters().Length == 0);
+        Assert.Contains(sendTerminals, method => method.Name == "TrySubmit"
+            && method.ReturnType == typeof(bool)
             && method.GetParameters().Length == 0);
         Assert.Contains(sendTerminals, method => method.Name == "Async"
             && method.ReturnType == typeof(Task)
@@ -39,6 +42,14 @@ public sealed class test_socket_surface
             && method.ReturnType == typeof(Task<IReadOnlyList<Message>>));
         Assert.DoesNotContain(requestTerminals, method =>
             method.Name is "Flags" or "Callback");
+    }
+
+    [Fact]
+    public void completion_kind_exposes_contract_b_values()
+    {
+        Assert.Equal(1, (int)CompletionKind.Send);
+        Assert.Equal(2, (int)CompletionKind.Request);
+        Assert.Equal(3, (int)CompletionKind.Writable);
     }
 
     [Fact]

@@ -16,7 +16,8 @@ test('public root exports raw capabilities without service projections', () => {
     'Message',
     'ReplyToken',
     'StreamPacket',
-    'StreamRecvMode'
+    'StreamRecvMode',
+    'CompletionKind'
   ]) {
     assert.notEqual(zlink[name], undefined, name);
   }
@@ -24,8 +25,14 @@ test('public root exports raw capabilities without service projections', () => {
 
 test('ESM wrapper preserves runtime contract values exported from the CJS barrel', async () => {
   const esm = await import('../dist/index.mjs');
-  for (const name of ['Message', 'Received', 'TopicMessage', 'SubscriptionEvent']) {
-    assert.equal(typeof esm[name], 'function', name);
+  for (const name of [
+    'Message',
+    'Received',
+    'TopicMessage',
+    'SubscriptionEvent',
+    'CompletionKind'
+  ]) {
+    assert.equal(typeof esm[name], name === 'CompletionKind' ? 'object' : 'function', name);
   }
 });
 

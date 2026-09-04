@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <deque>
@@ -104,7 +105,8 @@ perf::async_task_t<bool> perf_router_router_server (const std::string &lib_name,
     perf::multi::print_ready (endpoint);
 
     co_return perf::multi::run_routed_echo_relay (
-      server, g_stop_requested, "router_router server:");
+      server, g_stop_requested, "router_router server:",
+      std::chrono::milliseconds (settings.send_drain_timeout_ms));
 }
 
 int main (int argc, char **argv)

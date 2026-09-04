@@ -53,6 +53,7 @@ struct stream_handler_context_t
     std::atomic<bool> draining{false};
     std::atomic<unsigned long long> handlers_in_flight{0};
     std::atomic<unsigned long long> sends_in_flight{0};
+    std::atomic<bool> dispatcher_done{false};
     std::atomic<bool> failed{false};
     std::atomic<bool> drain_timed_out{false};
 
@@ -282,6 +283,8 @@ void run_packet_dispatcher (const std::shared_ptr<stream_handler_context_t> &ctx
                         || ctx_->sends_in_flight.load (std::memory_order_acquire) != 0)
                         ctx_->drain_timed_out.store (true, std::memory_order_release);
                     ctx_->pending_packets.clear ();
+                    ctx_->dispatcher_done.store (true, std::memory_order_release);
+                    ctx_->queue_cv.notify_all ();
                     return;
                 }
 
@@ -330,11 +333,37 @@ void wait_for_stop_stdin ()
 bool run_server_pull_loop (const std::shared_ptr<stream_handler_context_t> &ctx_)
 {
     zlink::poller_t poller;
-    poller.add (*ctx_->server, zlink::poll_event_flag_t::pollin, 0);
+    poller.add (*ctx_->server,
+                zlink::poll_event_flag_t::pollin
+                  | zlink::poll_event_flag_t::pollout
+                  | zlink::poll_event_flag_t::pollcompletion,
+                0);
     zlink::poll_event_t event;
+    bool draining = false;
 
-    while (!g_stop_requested.load (std::memory_order_acquire)
-           && !ctx_->failed.load (std::memory_order_acquire)) {
+    for (;;) {
+        if (!draining
+            && (g_stop_requested.load (std::memory_order_acquire)
+                || ctx_->failed.load (std::memory_order_acquire))) {
+            close_packet_queue (ctx_);
+            draining = true;
+        }
+        if (draining
+            && ctx_->dispatcher_done.load (std::memory_order_acquire)) {
+            if (ctx_->sends_in_flight.load (std::memory_order_acquire) != 0
+                && ctx_->drain_timed_out.load (std::memory_order_acquire)) {
+                try {
+                    ctx_->server->close ();
+                }
+                catch (const zlink::binding_error_t &error) {
+                    debug_send_failure (error.internal_errno ());
+                    ctx_->failed.store (true, std::memory_order_release);
+                }
+            }
+            if (ctx_->sends_in_flight.load (std::memory_order_acquire) == 0)
+                break;
+        }
+
         try {
             if (poller.wait (&event, 1, std::chrono::milliseconds (200)) == 0)
                 continue;
@@ -344,8 +373,26 @@ bool run_server_pull_loop (const std::shared_ptr<stream_handler_context_t> &ctx_
                 continue;
             debug_send_failure (error.internal_errno ());
             ctx_->failed.store (true, std::memory_order_release);
+            request_stop ();
+            close_packet_queue (ctx_);
+            draining = true;
+            try {
+                ctx_->server->close ();
+            }
+            catch (const zlink::binding_error_t &close_error) {
+                debug_send_failure (close_error.internal_errno ());
+            }
+            std::unique_lock<std::mutex> lock (ctx_->queue_mutex);
+            ctx_->queue_cv.wait (lock, [&ctx_] {
+                return ctx_->dispatcher_done.load (std::memory_order_acquire);
+            });
             break;
         }
+
+        // During drain, poller.wait() still consumes WRITABLE and lets every
+        // retained async packet reach a terminal result. Do not accept input.
+        if (draining)
+            continue;
 
         if ((static_cast<short> (event.revents)
              & static_cast<short> (zlink::poll_event_flag_t::pollin)) == 0)

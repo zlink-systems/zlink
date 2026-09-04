@@ -48,7 +48,7 @@ function consumeSubmittedMessages(payload: OperationPayloadValue<MessageLike>): 
   }
 }
 
-/** Core-completion-driven PAIR send builder. */
+/** Event-loop-driven send builder with WRITABLE-token retry. */
 export class RuntimeSendOperation
   extends PartOperationBase<MessageLike, MessageLike>
   implements SendOperation, SendSubmitOperation {

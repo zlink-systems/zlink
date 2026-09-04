@@ -12,8 +12,12 @@ namespace Systems.Zlink;
 ///     instance is left empty; reading a consumed part's payload afterward throws,
 ///     though disposing it stays safe and is still required to return pooled
 ///     instances. If the submit fails, ownership of every part is restored to the
-///     caller for retry or disposal. The request, reply, and actor-join builders in
-///     this file share this same ownership model.
+///     caller for retry or disposal. <see cref="SendSubmitOperation.TrySubmit" />
+///     also leaves the parts with the caller when it returns <c>false</c>.
+///     <see cref="SendSubmitOperation.Async" /> transfers the parts to the
+///     operation once its initial attempt succeeds or obtains a WRITABLE wait
+///     token. The request, reply, and actor-join builders in this file share the
+///     successful-submit ownership model.
 /// </remarks>
 public interface SendOperation
 {
@@ -42,9 +46,25 @@ public interface SendSubmitOperation
     void Submit();
 
     /// <summary>
-    ///     Submits without blocking for HWM credit and completes after the
-    ///     socket-local native completion is drained.
+    ///     Makes one non-blocking admission attempt. Returns <c>false</c> only
+    ///     when Core reports <see cref="SubmitResult.Backpressured" /> with
+    ///     <c>EAGAIN</c>; in that case Core retained no payload and every message
+    ///     remains owned by the caller.
     /// </summary>
+    bool TrySubmit();
+
+    /// <summary>
+    ///     Makes non-blocking admission attempts. If Core reports backpressure,
+    ///     the operation retains an exact packet snapshot, waits for the matching
+    ///     <see cref="CompletionKind.Writable" /> token on <c>POLLOUT</c>, and
+    ///     retries that packet. Ordinary successful SEND admission completes
+    ///     immediately and produces no native completion.
+    /// </summary>
+    /// <remarks>
+    ///     Once the initial attempt is admitted or returns a WRITABLE wait token,
+    ///     this method consumes the caller's message wrappers and the operation
+    ///     owns its retained packet until success, cancellation, or failure.
+    /// </remarks>
     Task Async(CancellationToken cancellationToken = default);
 }
 

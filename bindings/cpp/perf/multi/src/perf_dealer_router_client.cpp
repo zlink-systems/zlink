@@ -134,6 +134,7 @@ class dealer_router_client_bench_t
                 _poller.add (
                   sock,
                   zlink::poll_event_flag_t::pollin
+                    | zlink::poll_event_flag_t::pollout
                     | zlink::poll_event_flag_t::pollcompletion,
                   _socket_states.size () - 1);
             }
@@ -249,8 +250,9 @@ class dealer_router_client_bench_t
             perf::multi::bench_latency_sampler_t latency;
             unsigned long long count = 0;
             // PERF_MULTI_TEST_POLICY § 1.3.1: the application deadline bounds an
-            // otherwise signal-driven wait. POLLIN and public async completion
-            // share this poller, so no periodic wakeup fallback is required.
+            // otherwise signal-driven wait. POLLIN and public async send
+            // progress share this poller, so no periodic wakeup fallback is
+            // required.
             const auto deadline =
               std::chrono::steady_clock::now () + std::chrono::seconds (seconds);
             const auto drain_deadline =
@@ -275,9 +277,9 @@ class dealer_router_client_bench_t
                     if (!state->sock)
                         continue;
 
-                    // POLLCOMPLETION only dispatches the public async callback
-                    // and wakes this application runtime. It is never treated
-                    // as payload readiness; only POLLIN enters recv drain.
+                    // POLLOUT/POLLCOMPLETION drive public async send and wake
+                    // this application runtime. Neither is payload readiness;
+                    // only POLLIN enters recv drain.
                     if (perf::poll_event_has (events_[i].revents,
                                               zlink::poll_event_flag_t::pollin)) {
                         for (;;) {

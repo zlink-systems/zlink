@@ -58,8 +58,9 @@ export interface Poller {
   removeFd(fd: number): boolean;
   /**
    * Wait up to `timeoutMs` for sources to become ready, filling `events`; a
-   * negative timeout blocks indefinitely. A `PollCompletion` result means the
-   * binding drained and completely processed at least one native completion.
+   * negative timeout blocks indefinitely. `PollOut` is the WRITABLE wake for
+   * managed sends; `PollCompletion` means the owned completion queue
+   * (REQUEST and any WRITABLE records) was drained.
    */
   wait(events: PollEvents, timeoutMs: number): number;
   /** Close the poller and release its resources. */

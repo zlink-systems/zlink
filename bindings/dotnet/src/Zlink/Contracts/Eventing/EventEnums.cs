@@ -428,7 +428,9 @@ public enum PollEventFlags
     PollIn = 1,
 
     /// <summary>
-    ///     Writable: a send will not block.
+    ///     Writable: a send will not block. For a back-pressured awaitable SEND,
+    ///     the binding also pulls the completion queue and retries only the
+    ///     operation whose matching WRITABLE token is present.
     /// </summary>
     PollOut = 2,
 
@@ -443,7 +445,9 @@ public enum PollEventFlags
     PollPri = 8,
 
     /// <summary>
-    ///     An asynchronous operation completed.
+    ///     A request completion is available. Successful SEND admission does not
+    ///     report this event; back-pressured SEND retry readiness uses
+    ///     <see cref="PollOut" /> and <see cref="CompletionKind.Writable" />.
     /// </summary>
     PollCompletion = 32
 }

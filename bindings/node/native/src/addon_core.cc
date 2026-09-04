@@ -2193,6 +2193,10 @@ static napi_value create_completion_value (
       env, out, "userContext",
       static_cast<uint64_t> (
         reinterpret_cast<uintptr_t> (completion->user_context)));
+    napi_value peer_rid = create_routing_id_value (env, completion->peer_rid);
+    if (!peer_rid)
+        return NULL;
+    napi_set_named_property (env, out, "peerRoutingId", peer_rid);
     set_int64_property (env, out, "sendResult", completion->send_result);
     set_int64_property (
       env, out, "terminalErrno", completion->send_terminal_errno);

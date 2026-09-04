@@ -78,7 +78,7 @@ test('package exports expose only the public root', () => {
   assert.deepEqual(forbiddenPackageExports(packageJson.exports), []);
 });
 
-test('Node async surfaces use pull completion without callback bridges', () => {
+test('Node requests and writable send retries use pull completion without callback bridges', () => {
   const nativeRoot = path.resolve(__dirname, '../../native/src');
   const sourceRoot = path.resolve(__dirname, '../../src/zlink');
   const gyp = fs.readFileSync(path.resolve(__dirname, '../../binding.gyp'), 'utf8');
@@ -87,6 +87,8 @@ test('Node async surfaces use pull completion without callback bridges', () => {
     path.join(sourceRoot, 'runtime/native/binding_socket.ts'), 'utf8');
   const completionOwner = fs.readFileSync(
     path.join(sourceRoot, 'runtime/messaging/completion_owner.ts'), 'utf8');
+  const poller = fs.readFileSync(
+    path.join(sourceRoot, 'runtime/eventing/poller.ts'), 'utf8');
 
   assert.equal(fs.existsSync(path.join(nativeRoot, 'addon_request_callbacks.cc')), false);
   assert.equal(fs.existsSync(path.join(nativeRoot, 'addon_request_callbacks.h')), false);
@@ -108,7 +110,16 @@ test('Node async surfaces use pull completion without callback bridges', () => {
   assert.ok(completionOwner.includes('class CompletionEntry'));
   assert.ok(completionOwner.includes('byToken'));
   assert.ok(completionOwner.includes('byId'));
+  assert.ok(completionOwner.includes('sendRetries'));
+  assert.ok(completionOwner.includes('COMPLETION_WRITABLE'));
+  assert.ok(completionOwner.includes('PollEventFlag.PollOut'));
+  assert.ok(completionOwner.includes('awaitWritable'));
   assert.ok(completionOwner.includes('transferToPublic'));
+  assert.equal(completionOwner.includes('COMPLETION_SEND'), false);
+  assert.equal(completionOwner.includes('setTimeout('), false);
+  assert.ok(poller.includes('POLLER_SOURCE_SOCKET'));
+  assert.ok(poller.includes('_socketRegistrationsByToken'));
+  assert.ok(poller.includes('owner.drain(this)'));
   assert.ok(nativeBridge.includes('completion_close_guard_t guard'));
 });
 

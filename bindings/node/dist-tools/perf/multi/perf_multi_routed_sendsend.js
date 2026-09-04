@@ -87,19 +87,19 @@ async function runRoutedSendSendRounds({ sockets, payloads, measurementRecords, 
                 phase: 1, runId, msgSize, seq: currentSeq
             });
             // A socket owns one stable record until its own public admission
-            // settles. A pending route does not gate another socket's next submit.
+            // settles. A backpressured retry does not gate another socket's submit.
             submitOne(index);
         }
         if (sockets.length > 0) {
             nextSocket = (sendStart + 1) % sockets.length;
         }
         // Receive progress is independent of any one admission Promise. It also
-        // lets echoed traffic release Core HWM pressure for pending routes.
+        // releases HWM credit for binding-owned WRITABLE retries.
         await drainReplies();
         await yieldTurn();
     }
-    // The active deadline stops new records. Keep receive/completion progress
-    // alive only for admissions already owned by Core.
+    // The active deadline stops new records. Keep receive/retry progress alive
+    // for sends whose packets remain owned by the binding until admission.
     while (pendingCount > 0 && nowNs() < sendDrainStopNs) {
         await drainReplies();
         await yieldTurn();
@@ -291,19 +291,17 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
                         const partSizes = received.parts.map((part) => part.data().length).join(',');
                         throw new Error(`invalid multipart echo request: expected=${expectedParts}, sizes=${partSizes}`);
                     }
-                    // Received.send captures this source route and moves the owned
-                    // application parts into Core before returning its Promise. The
-                    // reusable envelope can therefore be refilled without copying the
-                    // routing id or payload buffers while the completion is pending.
-                    // A rejected submit can leave its parts in this envelope; the next
-                    // recv refill (or final close) releases them.
+                    // Received.send captures this source route. Direct admission or a
+                    // backpressure snapshot consumes the application parts immediately;
+                    // a pending retry owns only the immutable packet. A terminal failure
+                    // before either point can leave parts for refill or final close.
                     const task = sendServerReply(received);
                     trackPendingReplyTask(pendingTasks, task, (error) => { sendFailure ??= error; });
                     replyBatchCount += 1;
                     if (replyBatchCount === ASYNC_PROGRESS_BATCH) {
                         replyBatchCount = 0;
                         // Let Promise continuations reap settled tasks without imposing an
-                        // application reply window; Core owns admission backpressure.
+                        // application reply window; the binding owns WRITABLE retries.
                         await sleepImmediate();
                         if (sendFailure)
                             throw sendFailure;

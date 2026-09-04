@@ -15,11 +15,12 @@ Aligned Node bindings for `libzlink`.
   `RouterSocket`, `PubSocket`, `SubSocket`
 - publisher sockets: `publish(topic).message(...).submit()` (synchronous
   void-or-throw)
-- message sockets: async `send().message(...).submit()` (Core-completion Promise)
-  and blocking `submit_sync()`,
+- message sockets: async `send().message(...).submit()` (event-loop-managed
+  backpressure retry Promise) and blocking `submit_sync()`,
   `recv(flags?)`
 - routed sockets: async `send(routingId).message(...).submit()`
-  (Core-completion Promise) and blocking `submit_sync()`, `recv(flags?)`
+  (event-loop-managed backpressure retry Promise) and blocking
+  `submit_sync()`, `recv(flags?)`
 - requests: async `request(...).message(...).submit()` returns
   `Promise<Message[]>`; `submit_sync()` returns `Message[]`. The sync terminal
   can block the Node event loop, so use it only when another execution context
@@ -27,7 +28,7 @@ Aligned Node bindings for `libzlink`.
 - subscriber sockets: `setSubscription(topicOrPattern)`,
   `unsetSubscription(topicOrPattern)`, `subscribe(topicMessage, flags?)`
 - `XPubSocket`: `receiveSubscriptionEvent(subscriptionEvent, flags?)`
-- `StreamSocket`: `setRoutingId()`, `getRoutingId()`, managed Core-completion
+- `StreamSocket`: `setRoutingId()`, `getRoutingId()`, managed backpressure-retry
   `send(routingId)`, `recv(received, flags?)`, and reusable
   `recvPacket(streamPacket, flags?)`; set `options.recvMode` to
   `StreamRecvMode.Raw` or `StreamRecvMode.Packet` before bind/connect
@@ -67,7 +68,8 @@ Canonical receive results are domain objects:
 - `Subscribed`: `{ routingId: Buffer | null, topic: string, parts: Message[] }`
 - `SubscriptionEvent`:
   `{ routingId: Buffer | null, topic: string, subscribed: boolean }`
-- `SendResult`: `Sent`, `Backpressured`, `NotReady`
+- completion kind ABI values: runtime records use `CompletionKind.Request` and
+  `CompletionKind.Writable`; `CompletionKind.Send` is an ABI-only value
 
 - generic `Socket` / `BaseSocket` are not exported from the aligned public API
 - legacy flags-based send/recv, raw stream attach/detach helpers, and raw
@@ -79,11 +81,32 @@ is not exposed as a public `StreamSocket` method.
 
 ## Pull Completion
 
-Awaitable send/request operations use the socket-local Core completion queue.
-The runtime drains it into Promises; a public poller watching
-`PollEventFlag.PollCompletion` temporarily owns that drain. Monitor, timer, and
-STREAM packet delivery are pull-only. There is no callback bridge or
-binding-owned retry queue.
+An ordinary successful send has completion ID `0` and produces no SEND
+completion. The async `send(...).submit()` helper first makes a DONTWAIT
+admission attempt. If Core reports `SubmitResult.Backpressured` with `EAGAIN`,
+Core retains only the nonzero wait token, user context, and target; the binding
+retains the submit-time packet snapshot. Later caller-side buffer mutation does
+not change a pending retry. A `Message` input is consumed immediately after the
+binding takes that snapshot, so the retry does not keep the caller's wrapper
+alive until the Promise resolves. When no public poller owns completion
+draining, the runtime performs a nonblocking probe on each Node event-loop
+turn. When `PollEventFlag.PollOut` is ready, it pulls the socket-local
+completion queue until no more completion data is available. A
+`CompletionKind.Writable` record must match the token, user context, and target
+routing ID before the runtime submits the same packet again. The Promise
+resolves only after that retry is admitted. This path does not use a worker
+thread, sleep, or timer.
+
+Successful REQUEST submission has a nonzero completion ID, and its Promise
+settles from the matching `CompletionKind.Request`. A public poller registered
+for `PollEventFlag.PollCompletion` owns completion draining until its
+registration drops that flag, the socket is removed, or the poller is closed.
+The application must keep calling `poller.wait(...)` until its pending SEND and
+REQUEST Promises settle. The raw Core ABI-only options
+`ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` bound the count
+and bytes of REQUEST records waiting for admission. The typed Node socket
+options do not expose them, and they do not size binding-owned SEND retry state.
+Monitor, timer, and STREAM packet delivery also use caller-driven pull APIs.
 
 ## Service Surface
 

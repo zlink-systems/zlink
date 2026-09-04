@@ -44,6 +44,14 @@ export type SendFlags = typeof SendFlags[keyof typeof SendFlags];
 export const RecvFlags = Object.freeze({ None: 0, DontWait: 0x0001 } as const);
 export type RecvFlags = typeof RecvFlags[keyof typeof RecvFlags];
 
+/** Kinds carried by socket-local Core completion records. */
+export const CompletionKind = Object.freeze({
+  Send: 1,
+  Request: 2,
+  Writable: 3
+} as const);
+export type CompletionKind = typeof CompletionKind[keyof typeof CompletionKind];
+
 /** How a socket reacts to a peer that reuses an existing routing id. */
 export const RidDuplicatePolicy = Object.freeze({
   Reject: 0,

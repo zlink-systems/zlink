@@ -18,7 +18,8 @@ public sealed partial class ZlinkSubmitException : ZlinkException
         Ok = 0,
 
         /// <summary>
-        ///     The send was refused because the outbound queue was full.
+        ///     A DONTWAIT send was refused with EAGAIN because its outbound queue
+        ///     was full. Core retained no SEND payload.
         /// </summary>
         Backpressured = 1,
 

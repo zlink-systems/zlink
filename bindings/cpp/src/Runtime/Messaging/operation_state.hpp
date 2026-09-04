@@ -268,6 +268,39 @@ inline void restore_send_parts_to_sources (operation_state_t &state_,
     state_.message.part_sources.clear ();
 }
 
+// An awaitable send can outlive the builder expression and every message_t
+// passed to it. Move the single-part fast-path source into operation-owned
+// storage before the first DONTWAIT attempt; multipart builders already keep
+// their parts in the operation state.
+inline void own_async_send_parts (operation_state_t &state_)
+{
+    if (state_.message.single_part_source
+        && !state_.message.single_part.has_value ()) {
+        state_.message.single_part.emplace (
+          std::move (*state_.message.single_part_source));
+    }
+}
+
+// Once an awaitable has returned in the backpressured state, no caller-owned
+// message object may be retained by the retry state. The operation now owns the
+// exact logical packet until admission or terminal failure.
+inline void detach_async_send_sources (operation_state_t &state_) noexcept
+{
+    state_.message.single_part_source = nullptr;
+    state_.message.part_sources.clear ();
+}
+
+// Initial, synchronous setup failures retain the ordinary builder ownership
+// rule: hand lvalue parts back before async() propagates the exception.
+inline void restore_async_send_sources (operation_state_t &state_) noexcept
+{
+    if (state_.message.single_part.has_value ()) {
+        restore_single_send_part_to_source (state_);
+        return;
+    }
+    restore_send_parts_to_sources (state_, state_.message.parts);
+}
+
 // Thread-local pool of operation_state_t to avoid per-send heap alloc.
 // Each send/request/reply chain acquires one pooled state at the entry factory
 // and returns it when the builder chain ends. The pool keeps string/vector capacity so

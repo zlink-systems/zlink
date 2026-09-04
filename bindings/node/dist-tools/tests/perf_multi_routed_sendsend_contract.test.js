@@ -104,9 +104,9 @@ async function runRoutedSendSendContract({ transport, clientCount, sendsPerClien
                         replyOperation = replyOperation.message(part);
                     }
                     const reply = replyOperation.submit();
-                    // submit() transfers every received Message to Core before returning
-                    // its completion Promise, so this envelope may be refilled while the
-                    // reply remains pending without copying either application frame.
+                    // Admission consumes these Messages immediately. If admission is
+                    // backpressured, submit() first takes an immutable packet snapshot,
+                    // consumes the wrappers, and later retries without retaining them.
                     assert.equal(sourceParts[0].size(), 0);
                     assert.equal(sourceParts[1].size(), 0);
                     pendingReplies.push(reply);
@@ -335,10 +335,10 @@ test('routed async multipart boundary preserves inline and overflow part storage
             let reply = routed.send();
             for (const part of sourceParts)
                 reply = reply.message(part);
-            const completion = reply.submit();
+            const admission = reply.submit();
             for (const part of sourceParts)
                 assert.equal(part.size(), 0);
-            await completion;
+            await admission;
             const echoDeadline = Date.now() + 5_000;
             let echoReady = dealer.recv(echoed, zlink.RecvFlags.DontWait);
             while (!echoReady && Date.now() < echoDeadline) {
@@ -360,7 +360,7 @@ test('routed async multipart boundary preserves inline and overflow part storage
         context.close();
     }
 });
-test('received routed send preserves stale-route failure and unsubmitted ownership', async () => {
+test('received routed send preserves stale-route ownership across immediate or waiting failure', async () => {
     const context = zlink.createContext();
     const router = zlink.createRouterSocket(context);
     const dealer = zlink.createDealerSocket(context);
@@ -387,16 +387,28 @@ test('received routed send preserves stale-route failure and unsubmitted ownersh
         dealer.close();
         await waitForMonitorEvent(disconnected, zlink.MonitorEventType.Disconnected);
         const sourceParts = received.parts.slice();
-        await assert.rejects(within(received.send()
+        const submission = received.send()
             .message(sourceParts[0])
             .message(sourceParts[1])
-            .submit()), (error) => error instanceof zlink.SubmitError
-            && (error.result === zlink.SubmitResult.NotConnected
-                || error.result === zlink.SubmitResult.NotFound));
-        // Target selection failed before Core accepted the record, so Received
-        // still owns both source parts for its normal close/refill cleanup.
-        assert.equal(sourceParts[0].size(), 64);
-        assert.equal(sourceParts[1].size(), 0);
+            .submit();
+        if (sourceParts[0].size() === 0) {
+            // A stale physical pipe may first report BACKPRESSURED. The binding has
+            // already snapshotted the record, so closing its sender terminates the
+            // WRITABLE wait without retaining the caller's Message wrappers.
+            assert.equal(sourceParts[1].size(), 0);
+            router.close();
+            await assert.rejects(submission, (error) => error instanceof zlink.SubmitError
+                && error.result === zlink.SubmitResult.Terminated);
+        }
+        else {
+            // If Core has already retired the route, target selection fails before
+            // snapshot/acceptance and Received keeps its parts for close or refill.
+            await assert.rejects(submission, (error) => error instanceof zlink.SubmitError
+                && (error.result === zlink.SubmitResult.NotConnected
+                    || error.result === zlink.SubmitResult.NotFound));
+            assert.equal(sourceParts[0].size(), 64);
+            assert.equal(sourceParts[1].size(), 0);
+        }
     }
     finally {
         received.close();

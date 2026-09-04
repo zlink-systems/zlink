@@ -130,8 +130,9 @@ export class Received extends MessagePartsEnvelope {
 
   /**
    * Begin a send addressed to this envelope's source route: add parts, then
-   * submit. Parts are consumed on a successful submit. Throws when the envelope
-   * carries no send context.
+   * submit. Message ownership transfers on immediate admission or after the
+   * managed send takes its first back-pressure snapshot, before the Promise may
+   * resolve. Throws when the envelope carries no send context.
    */
   send(): SendOperation {
     if (!this._sendContext) {

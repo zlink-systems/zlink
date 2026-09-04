@@ -79,8 +79,7 @@ internal sealed partial class SocketKernel
         {
             var submitter = new TargetedSendSingleSubmitter(Handle, routingIdPtr,
                 flags);
-            var rc = SinglePartSubmit.Submit(message, ref submitter,
-                Type == SocketType.Stream);
+            var rc = SinglePartSubmit.Submit(message, ref submitter);
             if (rc != 0)
                 throw ZlinkException.CreateSubmitException((SubmitResult)rc);
         }
@@ -94,8 +93,7 @@ internal sealed partial class SocketKernel
         {
             var submitter = new TargetedSendSingleSubmitter(Handle, routingIdPtr,
                 flags);
-            return MapSendResult(SinglePartSubmit.Submit(message, ref submitter,
-                Type == SocketType.Stream));
+            return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
         }
     }
 
@@ -106,8 +104,7 @@ internal sealed partial class SocketKernel
         {
             var submitter = new TargetedSendSingleNoWaitSubmitter(Handle,
                 routingIdPtr);
-            return MapSendResult(SinglePartSubmit.Submit(message, ref submitter,
-                Type == SocketType.Stream));
+            return MapSendResult(SinglePartSubmit.Submit(message, ref submitter));
         }
     }
 

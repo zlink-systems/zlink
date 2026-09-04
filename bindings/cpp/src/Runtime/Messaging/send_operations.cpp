@@ -13,41 +13,47 @@ namespace zlink
 namespace
 {
 
-async_result_t<void> submit_send_awaitable (detail::operation_state_t &state_)
+async_result_t<void> submit_send_awaitable (
+  std::unique_ptr<detail::operation_state_t> state_)
 {
-    if (state_.kind != detail::operation_kind_t::raw_send
-        && state_.kind != detail::operation_kind_t::raw_routed_send)
+    if (!state_ || (state_->kind != detail::operation_kind_t::raw_send
+                    && state_->kind != detail::operation_kind_t::raw_routed_send)) {
+        if (state_) {
+            detail::restore_async_send_sources (*state_);
+            detail::release_state (std::move (state_));
+        }
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
-    const auto runtime = detail::share_runtime_state (state_.raw);
-    if (!runtime)
+    }
+    const auto runtime = detail::share_runtime_state (state_->raw);
+    if (!runtime) {
+        detail::restore_async_send_sources (*state_);
+        detail::release_state (std::move (state_));
         throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
+    }
 
-    auto result = std::make_shared<detail::async_operation_state_t<void>> ();
-    auto entry = std::make_shared<detail::completion_entry_t> (result);
-    runtime->completion->register_entry (entry);
-
-    state_.flags = send_flags_t::dontwait;
-    zlink_completion_id_t completion_id = 0;
+    std::shared_ptr<detail::async_operation_state_t<void>> result;
+    std::shared_ptr<detail::completion_entry_t> entry;
     try {
-        if (!detail::submit_raw_send_state (state_, entry.get (), &completion_id))
-            throw submit_error_t (submit_result_t::backpressured, EAGAIN);
+        result = std::make_shared<detail::async_operation_state_t<void>> ();
+        entry = std::make_shared<detail::completion_entry_t> (
+          result, std::move (state_));
     }
     catch (...) {
-        entry->fail_submit ();
-        runtime->completion->unregister_entry (entry.get ());
+        if (state_) {
+            detail::restore_async_send_sources (*state_);
+            detail::release_state (std::move (state_));
+        }
         throw;
     }
 
-    if (completion_id == 0) {
-        entry->publish (0);
-        zlink_completion_t immediate{};
-        immediate.struct_size = sizeof (immediate);
-        immediate.kind = ZLINK_COMPLETION_SEND;
-        immediate.send_result = ZLINK_SEND_ADMITTED;
-        entry->capture (immediate);
+    runtime->completion->register_send_entry (entry);
+    try {
+        if (entry->start_send ())
+            runtime->completion->unregister_entry (entry.get ());
+    }
+    catch (...) {
         runtime->completion->unregister_entry (entry.get ());
-    } else {
-        entry->publish (completion_id);
+        throw;
     }
     return detail::async_result_access_t::make<void> (std::move (result));
 }
@@ -103,7 +109,8 @@ async_result_t<void> send_submit_operation_t::async () &&
     auto &operation = state ();
     if (!detail::has_send_parts (operation))
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
-    return submit_send_awaitable (operation);
+    operation.flags = send_flags_t::dontwait;
+    return submit_send_awaitable (release_state_ptr ());
 }
 
 publish_submit_operation_t::~publish_submit_operation_t () = default;

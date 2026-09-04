@@ -211,30 +211,56 @@ internal sealed class Poller : NativeOwner, IPoller
 
         var capacity = Math.Min(destination.Length, _items.Count);
         EnsureEventCapacity(capacity);
-        var ready = WaitNative(ToTimeoutMilliseconds(timeout), capacity,
-            out var errorOut);
-        if (ready < 0)
-            throw ZlinkException.CreateConfigException((ConfigResult)errorOut);
-        if (ready == 0)
-            return 0;
-
-        var written = 0;
-        for (var i = 0; i < ready; i++)
+        var timeoutMs = ToTimeoutMilliseconds(timeout);
+        var deadline = timeoutMs > 0
+            ? Environment.TickCount64 + timeoutMs
+            : 0;
+        while (true)
         {
-            var nativeEvent = _nativeEvents[i];
-            if ((nativeEvent.Events & (short)PollEventFlags.PollCompletion) != 0)
+            var ready = WaitNative(timeoutMs, capacity, out var errorOut);
+            if (ready < 0)
+                throw ZlinkException.CreateConfigException(
+                    (ConfigResult)errorOut);
+            if (ready == 0)
+                return 0;
+
+            var written = 0;
+            for (var i = 0; i < ready; i++)
             {
-                var itemIndex = FindSocket(nativeEvent.Socket);
-                if (itemIndex >= 0 && _items[itemIndex].OwnsCompletion
-                    && _items[itemIndex].CompletionOwner!.Drain(true) == 0)
-                    nativeEvent.Events &=
-                        unchecked((short)~(short)PollEventFlags.PollCompletion);
+                var nativeEvent = _nativeEvents[i];
+                var completionReady = (nativeEvent.Events
+                    & (short)PollEventFlags.PollCompletion) != 0;
+                var writableReady = (nativeEvent.Events
+                    & (short)PollEventFlags.PollOut) != 0;
+                if (completionReady || writableReady)
+                {
+                    var itemIndex = FindSocket(nativeEvent.Socket);
+                    if (itemIndex >= 0 && _items[itemIndex].OwnsCompletion)
+                    {
+                        var drained = _items[itemIndex].CompletionOwner!.Drain();
+                        if (completionReady && drained.RequestCount == 0)
+                            nativeEvent.Events &= unchecked(
+                                (short)~(short)PollEventFlags.PollCompletion);
+                    }
+                }
+                if (nativeEvent.Events == 0)
+                    continue;
+                destination[written++] = MapEvent(nativeEvent);
             }
-            if (nativeEvent.Events == 0)
-                continue;
-            destination[written++] = MapEvent(nativeEvent);
+            if (written != 0 || timeoutMs == 0)
+                return written;
+
+            // A WRITABLE-only completion can be consumed while the caller only
+            // requested POLLCOMPLETION. That internal progress is not a timeout;
+            // continue the same wait for its remaining deadline.
+            if (timeoutMs > 0)
+            {
+                var remaining = deadline - Environment.TickCount64;
+                if (remaining <= 0)
+                    return 0;
+                timeoutMs = (int)Math.Min(remaining, int.MaxValue);
+            }
         }
-        return written;
     }
 
     public void Dispose()

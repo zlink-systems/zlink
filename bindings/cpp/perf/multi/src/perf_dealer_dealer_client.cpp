@@ -218,8 +218,8 @@ class dealer_dealer_client_bench_t
         // async_task_t is eager. Register every sender with the shared
         // application-thread scheduler once; after that, an immediately
         // admitted public async send may submit the next message directly.
-        // A genuinely pending send still suspends and resumes through this
-        // queue, so Core backpressure remains the fairness boundary.
+        // A backpressured async result still suspends and resumes through this
+        // queue, so Core admission remains the fairness boundary.
         co_await ready_queue.schedule ();
         while (std::chrono::steady_clock::now () < deadline) {
             zlink::message_t payload;
@@ -264,40 +264,42 @@ class dealer_dealer_client_bench_t
         if (_socket_states.empty ())
             co_return false;
 
-        // Every sender continuation runs through ready_queue on this application
-        // thread, so this phase counter has a single writer.
+        // Every sender continuation runs through the coordinator's ready queue
+        // on this application thread, so this phase counter has a single writer.
         unsigned long long count = 0;
         const auto deadline = std::chrono::steady_clock::now () + duration;
         const auto drain_deadline =
           deadline + std::chrono::milliseconds (_settings.send_drain_timeout_ms);
-        perf::application_ready_queue_t ready_queue;
+        zlink::poller_t poller;
+        try {
+            for (size_t i = 0; i < _socket_states.size (); ++i) {
+                poller.add (*_socket_states[i].sock,
+                            zlink::poll_event_flag_t::pollout
+                              | zlink::poll_event_flag_t::pollcompletion,
+                            i);
+            }
+        }
+        catch (const zlink::binding_error_t &) {
+            co_return false;
+        }
+
+        perf::application_poller_coordinator_t coordinator (
+          poller, _socket_states.size ());
         std::vector<perf::async_task_t<bool>> senders;
         senders.reserve (_socket_states.size ());
         for (size_t i = 0; i < _socket_states.size (); ++i)
             senders.emplace_back (
-              run_sender (ready_queue, _socket_states[i], phase, deadline, count));
+              run_sender (coordinator.ready_queue (), _socket_states[i], phase,
+                          deadline, count));
 
-        const auto all_senders_done = [&senders] {
-            return std::all_of (senders.begin (), senders.end (),
-                                [] (const perf::async_task_t<bool> &sender_) {
-                                    return sender_.done ();
-                                });
-        };
-        while (std::chrono::steady_clock::now () < deadline) {
-            (void) ready_queue.wait_and_run_ready_round_until (
-              deadline, _socket_states.size ());
-        }
-        while (!all_senders_done ()) {
-            // Run the local deadline-check snapshot before considering abort.
-            // That leaves only public-async suspended operations to cancel if
-            // the bounded drain expires; no queued raw coroutine handle is
-            // destroyed behind application_ready_queue_t's back.
-            if (ready_queue.run_ready_round (_socket_states.size ()) != 0)
-                continue;
-            if (std::chrono::steady_clock::now () >= drain_deadline)
+        try {
+            if (!coordinator.run_until_senders_drained (
+                  deadline, drain_deadline, senders,
+                  [] (const zlink::poll_event_t *, size_t) { return true; }))
                 co_return false;
-            (void) ready_queue.wait_and_run_ready_round_until (
-              drain_deadline, _socket_states.size ());
+        }
+        catch (const zlink::binding_error_t &) {
+            co_return false;
         }
 
         for (size_t i = 0; i < senders.size (); ++i) {
@@ -305,15 +307,16 @@ class dealer_dealer_client_bench_t
                 co_return false;
         }
 
-        // Keep stop-token sends on the same application runtime. A pending
-        // public completion otherwise resumes in Core's callback context, where
-        // submitting the next socket's token is rejected with EDEADLK.
+        // Keep stop-token sends on the same application runtime. The public
+        // poller drains WRITABLE, then the ready queue resumes each sender on
+        // this thread.
         std::vector<perf::async_task_t<bool>> stop_senders;
         stop_senders.reserve (_socket_states.size ());
         for (size_t i = 0; i < _socket_states.size (); ++i)
             stop_senders.emplace_back (
               perf::multi::send_stop_token_until_admitted (
-                ready_queue, _socket_states[i].sock, g_stop_requested));
+                coordinator.ready_queue (), _socket_states[i].sock,
+                g_stop_requested));
 
         const auto all_stops_done = [&stop_senders] {
             return std::all_of (stop_senders.begin (), stop_senders.end (),
@@ -321,14 +324,23 @@ class dealer_dealer_client_bench_t
                                     return sender_.done ();
                                 });
         };
+        std::vector<zlink::poll_event_t> stop_events (_socket_states.size ());
         while (!all_stops_done ()) {
-            if (ready_queue.run_ready_round (_socket_states.size ()) != 0)
+            if (coordinator.ready_queue ().run_ready_round (
+                  _socket_states.size ()) != 0)
                 continue;
             // Stop-token admission intentionally ignores the active/drain
-            // deadlines. Block until Core completes at least one pending send;
-            // the comparison runner owns the external failure timeout.
-            (void) ready_queue.wait_and_run_ready_round (
-              _socket_states.size ());
+            // deadlines. Block in the public poller until credit returns; the
+            // comparison runner owns the external failure timeout.
+            try {
+                (void) poller.wait (stop_events.data (), stop_events.size (),
+                                    std::chrono::milliseconds (-1));
+            }
+            catch (const zlink::binding_error_t &error) {
+                if (error.internal_errno () == EINTR)
+                    continue;
+                co_return false;
+            }
         }
         for (size_t i = 0; i < stop_senders.size (); ++i) {
             if (!co_await std::move (stop_senders[i]))

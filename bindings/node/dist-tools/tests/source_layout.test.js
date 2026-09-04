@@ -67,13 +67,14 @@ function forbiddenPackageExports(exportsValue) {
     const packageJson = JSON.parse(node_fs_1.default.readFileSync(node_path_1.default.resolve(__dirname, '../../package.json'), 'utf8'));
     strict_1.default.deepEqual(forbiddenPackageExports(packageJson.exports), []);
 });
-(0, node_test_1.default)('Node async surfaces use pull completion without callback bridges', () => {
+(0, node_test_1.default)('Node requests and writable send retries use pull completion without callback bridges', () => {
     const nativeRoot = node_path_1.default.resolve(__dirname, '../../native/src');
     const sourceRoot = node_path_1.default.resolve(__dirname, '../../src/zlink');
     const gyp = node_fs_1.default.readFileSync(node_path_1.default.resolve(__dirname, '../../binding.gyp'), 'utf8');
     const nativeBridge = node_fs_1.default.readFileSync(node_path_1.default.join(nativeRoot, 'addon_core.cc'), 'utf8');
     const socketBinding = node_fs_1.default.readFileSync(node_path_1.default.join(sourceRoot, 'runtime/native/binding_socket.ts'), 'utf8');
     const completionOwner = node_fs_1.default.readFileSync(node_path_1.default.join(sourceRoot, 'runtime/messaging/completion_owner.ts'), 'utf8');
+    const poller = node_fs_1.default.readFileSync(node_path_1.default.join(sourceRoot, 'runtime/eventing/poller.ts'), 'utf8');
     strict_1.default.equal(node_fs_1.default.existsSync(node_path_1.default.join(nativeRoot, 'addon_request_callbacks.cc')), false);
     strict_1.default.equal(node_fs_1.default.existsSync(node_path_1.default.join(nativeRoot, 'addon_request_callbacks.h')), false);
     strict_1.default.equal(gyp.includes('addon_request_callbacks.cc'), false);
@@ -96,7 +97,16 @@ function forbiddenPackageExports(exportsValue) {
     strict_1.default.ok(completionOwner.includes('class CompletionEntry'));
     strict_1.default.ok(completionOwner.includes('byToken'));
     strict_1.default.ok(completionOwner.includes('byId'));
+    strict_1.default.ok(completionOwner.includes('sendRetries'));
+    strict_1.default.ok(completionOwner.includes('COMPLETION_WRITABLE'));
+    strict_1.default.ok(completionOwner.includes('PollEventFlag.PollOut'));
+    strict_1.default.ok(completionOwner.includes('awaitWritable'));
     strict_1.default.ok(completionOwner.includes('transferToPublic'));
+    strict_1.default.equal(completionOwner.includes('COMPLETION_SEND'), false);
+    strict_1.default.equal(completionOwner.includes('setTimeout('), false);
+    strict_1.default.ok(poller.includes('POLLER_SOURCE_SOCKET'));
+    strict_1.default.ok(poller.includes('_socketRegistrationsByToken'));
+    strict_1.default.ok(poller.includes('owner.drain(this)'));
     strict_1.default.ok(nativeBridge.includes('completion_close_guard_t guard'));
 });
 (0, node_test_1.default)('native multipart replies use inline staging without changing rejection ownership', () => {

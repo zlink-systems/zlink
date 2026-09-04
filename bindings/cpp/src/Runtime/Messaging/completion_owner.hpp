@@ -20,31 +20,40 @@
 namespace zlink::detail
 {
 
+struct operation_state_t;
+
 class completion_entry_t : public std::enable_shared_from_this<completion_entry_t>
 {
   public:
-    enum class kind_t { send, request };
+    enum class kind_t { send_retry, request };
 
     explicit completion_entry_t (
-      std::shared_ptr<async_operation_state_t<void>> send_result_);
+      std::shared_ptr<async_operation_state_t<void>> send_result_,
+      std::unique_ptr<operation_state_t> send_operation_);
     explicit completion_entry_t (
       std::shared_ptr<async_operation_state_t<std::vector<message_t>>> request_result_);
+    ~completion_entry_t ();
 
     completion_entry_t (const completion_entry_t &) = delete;
     completion_entry_t &operator= (const completion_entry_t &) = delete;
 
+    bool start_send ();
     void publish (uint64_t completion_id_) noexcept;
     void fail_submit () noexcept;
-    void capture (zlink_completion_t &completion_) noexcept;
+    bool capture (zlink_completion_t &completion_) noexcept;
+    void terminate () noexcept;
     void wait_settled () noexcept;
     std::vector<message_t> wait_request ();
     kind_t kind () const noexcept { return _kind; }
 
   private:
+    bool submit_send_attempt (bool initial_);
+    void fail_send (std::exception_ptr failure_) noexcept;
     void settle_if_joined (std::unique_lock<std::mutex> &lock_) noexcept;
 
     kind_t _kind;
     std::shared_ptr<async_operation_state_t<void>> _send_result;
+    std::unique_ptr<operation_state_t> _send_operation;
     std::shared_ptr<async_operation_state_t<std::vector<message_t>>> _request_result;
     std::mutex _mutex;
     std::condition_variable _changed;
@@ -66,8 +75,9 @@ class completion_owner_t : public std::enable_shared_from_this<completion_owner_
     completion_owner_t &operator= (const completion_owner_t &) = delete;
 
     void register_entry (const std::shared_ptr<completion_entry_t> &entry_);
+    void register_send_entry (const std::shared_ptr<completion_entry_t> &entry_);
     void unregister_entry (completion_entry_t *entry_) noexcept;
-    size_t drain (bool wait_for_publish_);
+    size_t drain (bool wait_for_publish_, uint64_t runtime_generation_ = 0);
 
     void transfer_to_public (const void *poller_owner_);
     void transfer_to_runtime (const void *poller_owner_) noexcept;
@@ -76,14 +86,16 @@ class completion_owner_t : public std::enable_shared_from_this<completion_owner_
   private:
     void start_runtime_owner_locked ();
     void stop_runtime_owner_locked (std::unique_lock<std::mutex> &lock_) noexcept;
-    void runtime_loop () noexcept;
+    void runtime_loop (uint64_t runtime_generation_) noexcept;
 
     void *_socket;
     void *_runtime_poller = nullptr;
     std::mutex _mutex;
     std::unordered_map<void *, std::shared_ptr<completion_entry_t>> _entries;
+    size_t _send_entry_count = 0;
     const void *_public_owner = nullptr;
     std::thread _runtime_thread;
+    uint64_t _runtime_generation = 0;
     bool _runtime_stop = false;
     bool _shutdown = false;
 };

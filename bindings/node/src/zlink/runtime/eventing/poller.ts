@@ -23,6 +23,16 @@ import type { RuntimeBaseSocket as BaseSocket } from '../sockets';
 import { completionOwnerOf, type CompletionOwner } from '../messaging/completion_owner';
 
 type BasePollable = BaseSocket;
+const POLLER_SOURCE_SOCKET = 1;
+
+interface SocketRegistration {
+  events: number;
+  handle: unknown;
+  slot: number;
+  nativeToken: number;
+  owner: CompletionOwner;
+  transferred: boolean;
+}
 
 function validateSlot(slot: number): number {
   if (!Number.isSafeInteger(slot) || slot < 0) {
@@ -31,12 +41,23 @@ function validateSlot(slot: number): number {
   return slot;
 }
 
+function acquireCompletionOwner(owner: CompletionOwner, poller: Poller): boolean {
+  try {
+    return owner.transferToPublic(poller);
+  } catch (error) {
+    throw createError(
+      'config',
+      16,
+      nativeErrorMessage(error, 'poller completion ownership transfer failed')
+    );
+  }
+}
+
 export class Poller {
   private _native: unknown | null;
-  private readonly _socketRegistrations = new Map<
-    BasePollable,
-    { events: number; handle: unknown; slot: number; owner: CompletionOwner; transferred: boolean }
-  >();
+  private readonly _socketRegistrations = new Map<BasePollable, SocketRegistration>();
+  private readonly _socketRegistrationsByToken = new Map<number, SocketRegistration>();
+  private _nextSocketRegistrationToken = 1;
 
   constructor() { this._native = requireNative().pollerNew(); }
 
@@ -122,19 +143,29 @@ export class Poller {
     }> = [];
     for (let index = 0; index < nativeCount; index += 1) {
       let revents = events.revents(index);
-      const slot = events.slot(index);
-      if ((revents & PollEventFlag.PollCompletion) !== 0) {
-        let processed = 0;
-        for (const registration of this._socketRegistrations.values()) {
-          if (registration.slot === slot && registration.transferred) {
-            processed += registration.owner.drain();
-          }
+      const sourceKind = events.sourceKind(index);
+      const nativeSlot = events.slot(index);
+      const registration = sourceKind === POLLER_SOURCE_SOCKET
+        ? this._socketRegistrationsByToken.get(nativeSlot)
+        : undefined;
+      if (sourceKind === POLLER_SOURCE_SOCKET && !registration) continue;
+      const slot = registration?.slot ?? nativeSlot;
+      if (registration
+          && (revents & (PollEventFlag.PollOut | PollEventFlag.PollCompletion)) !== 0) {
+        const completionReady = registration.transferred
+          && (revents & PollEventFlag.PollCompletion) !== 0;
+        const managedWritableReady = (revents & PollEventFlag.PollOut) !== 0
+          && registration.owner.hasManagedWritableWait();
+        const processed = completionReady || managedWritableReady
+          ? registration.owner.drain(this)
+          : 0;
+        if (processed === 0) {
+          revents &= ~PollEventFlag.PollCompletion;
         }
-        if (processed === 0) revents &= ~PollEventFlag.PollCompletion;
       }
       if (revents === 0) continue;
       processedEvents.push({
-        sourceKind: events.sourceKind(index),
+        sourceKind,
         slot,
         revents,
         fd: events.fd(index),
@@ -146,15 +177,16 @@ export class Poller {
 
   destroy(): void {
     if (this._native) {
-      for (const registration of this._socketRegistrations.values()) {
-        if (registration.transferred) registration.owner.transferToRuntime(this);
-      }
       closeCall('poller close failed', () => {
         requireNative().pollerDestroy(this._native);
       });
       this._native = null;
+      for (const registration of this._socketRegistrations.values()) {
+        if (registration.transferred) registration.owner.transferToRuntime(this);
+      }
     }
     this._socketRegistrations.clear();
+    this._socketRegistrationsByToken.clear();
   }
 
   close(): void { this.destroy(); }
@@ -163,19 +195,28 @@ export class Poller {
     const normalizedSlot = validateSlot(slot);
     const owner = completionOwnerOf(socket);
     const transferred = (events & PollEventFlag.PollCompletion) !== 0;
+    const nativeToken = this.allocateSocketRegistrationToken();
+    const handle = getNativeHandle(socket);
+    const acquired = transferred ? acquireCompletionOwner(owner, this) : false;
     try {
-      if (transferred) owner.transferToPublic(this);
-      requireNative().pollerAdd(this._native, getNativeHandle(socket), BigInt(normalizedSlot), events | 0);
-      const handle = getNativeHandle(socket);
-      this._socketRegistrations.set(socket, {
+      requireNative().pollerAdd(
+        this._native,
+        handle,
+        BigInt(nativeToken),
+        events | 0
+      );
+      const registration: SocketRegistration = {
         events: events | 0,
         handle,
         slot: normalizedSlot,
+        nativeToken,
         owner,
         transferred,
-      });
+      };
+      this._socketRegistrations.set(socket, registration);
+      this._socketRegistrationsByToken.set(nativeToken, registration);
     } catch (error) {
-      if (transferred) owner.transferToRuntime(this);
+      if (acquired) owner.transferToRuntime(this);
       throw createError('config', readErrno(), nativeErrorMessage(error, 'poller socket add failed'));
     }
   }
@@ -184,10 +225,9 @@ export class Poller {
     const handle = getNativeHandle(socket);
     const registration = this._socketRegistrations.get(socket);
     const shouldTransfer = (events & PollEventFlag.PollCompletion) !== 0;
-    const acquired = !!registration && shouldTransfer && !registration.transferred;
-    if (acquired) {
-      registration.owner.transferToPublic(this);
-    }
+    const acquired = registration && shouldTransfer && !registration.transferred
+      ? acquireCompletionOwner(registration.owner, this)
+      : false;
     try {
       configCall('poller socket modify failed', () => {
         requireNative().pollerModify(this._native, handle, events | 0);
@@ -212,7 +252,21 @@ export class Poller {
     const registration = this._socketRegistrations.get(socket);
     if (registration?.transferred) registration.owner.transferToRuntime(this);
     this._socketRegistrations.delete(socket);
+    if (registration) this._socketRegistrationsByToken.delete(registration.nativeToken);
     return true;
+  }
+
+  private allocateSocketRegistrationToken(): number {
+    if (this._socketRegistrationsByToken.size >= Number.MAX_SAFE_INTEGER) {
+      throw new RangeError('socket registration token space exhausted');
+    }
+    for (;;) {
+      const token = this._nextSocketRegistrationToken;
+      this._nextSocketRegistrationToken = token === Number.MAX_SAFE_INTEGER
+        ? 1
+        : token + 1;
+      if (!this._socketRegistrationsByToken.has(token)) return token;
+    }
   }
 
   private addTimerInternal(timer: Timer, slot: number): void {

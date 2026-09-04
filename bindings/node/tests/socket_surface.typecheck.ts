@@ -11,6 +11,8 @@ const monitor = pair.monitorOpen();
 const poller = zlink.createPoller();
 const events = zlink.createPollEvents(8);
 const timer = zlink.createTimer();
+const writableCompletion: zlink.CompletionKindValue = zlink.CompletionKind.Writable;
+void writableCompletion;
 
 const pairSend: Promise<void> = pair.send().message('one').message('two').submit();
 const pairSync: void = pair.send().message('sync').submit_sync();

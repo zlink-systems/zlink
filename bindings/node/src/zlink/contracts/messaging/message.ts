@@ -71,9 +71,11 @@ function normalizeBufferLike(value: BufferLike, label = 'value'): Buffer {
 
 /**
  * A message payload owned by this wrapper. The payload can use a JavaScript
- * Buffer or native storage. A successful submit consumes the message; `close`
- * releases it. Do not use a reference after either terminal action because the
- * runtime may reuse the returned wrapper identity.
+ * Buffer or native storage. A successful synchronous submit consumes the
+ * message. Managed async SEND also consumes it after taking a back-pressure
+ * snapshot, which can happen before the Promise resolves. `close` releases it.
+ * Do not use a reference after ownership transfers or after `close`, because
+ * the runtime may reuse the returned wrapper identity.
  */
 export class Message {
   private _buffer!: Buffer | undefined;
@@ -345,7 +347,7 @@ export function hasObservedManagedReceiveData(message: Message): boolean {
     && !state._released;
 }
 
-/** @internal Mark a successfully submitted message empty without another native call. */
+/** @internal Mark a message whose ownership transferred to an operation empty. */
 export function consumeSubmittedMessage(message: Message): void {
   const state = message as unknown as MutableMessageState;
   if (state._nativeMessage !== undefined) {

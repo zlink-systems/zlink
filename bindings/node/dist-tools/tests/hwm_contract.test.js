@@ -7,19 +7,22 @@ test('HWM and Core HWM budget options preserve uint64 byte values', () => {
     const ctx = zlink.createContext();
     ctx.options.autoHwmEnabled = false;
     const socket = zlink.createPairSocket(ctx);
-    const maxBudget = (1n << 64n) - 1n;
+    // Explicit Core budgets may not exceed the detected process/cgroup hard
+    // limit. Use distinct valid uint64 byte values for the ABI round trip.
+    const memoryLimit = 16n * 1024n * 1024n;
+    const coreBudget = 4n * 1024n * 1024n;
     const maxHwm = (1n << 64n) - 1n;
     assert.equal(socket.options.sendHwm, 4096000n);
     assert.equal(socket.options.recvHwm, 4096000n);
-    ctx.options.coreHwmMemoryLimitBytes = maxBudget;
-    ctx.options.coreHwmBudgetBytes = maxBudget;
-    assert.equal(ctx.options.coreHwmMemoryLimitBytes, maxBudget);
-    assert.equal(ctx.options.coreHwmBudgetBytes, maxBudget);
+    ctx.options.coreHwmMemoryLimitBytes = memoryLimit;
+    ctx.options.coreHwmBudgetBytes = coreBudget;
+    assert.equal(ctx.options.coreHwmMemoryLimitBytes, memoryLimit);
+    assert.equal(ctx.options.coreHwmBudgetBytes, coreBudget);
     ctx.recalculateAutoHwm();
     const before = ctx.getCoreHwmBudgetSnapshot();
     assert.equal(before.abiVersion, 1);
-    assert.equal(before.configuredMemoryLimitBytes, maxBudget);
-    assert.equal(before.configuredCoreBudgetBytes, maxBudget);
+    assert.equal(before.configuredMemoryLimitBytes, memoryLimit);
+    assert.equal(before.configuredCoreBudgetBytes, coreBudget);
     assert.equal(before.reservedUInt64.length, 8);
     ctx.resetCoreHwmBudgetMetrics();
     assert.ok(ctx.getCoreHwmBudgetSnapshot().measurementEpoch > before.measurementEpoch);

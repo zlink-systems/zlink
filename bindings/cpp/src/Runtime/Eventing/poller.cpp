@@ -383,7 +383,9 @@ struct poller_t::impl
             zlink_poller_event_t native = native_events[static_cast<size_t> (i)];
             const auto *item = static_cast<const poller_item_t *> (native.user_data);
             if (item && item->owns_completion
-                && (native.events & static_cast<short> (poll_event_flag_t::pollcompletion))) {
+                && (native.events
+                    & static_cast<short> (poll_event_flag_t::pollout
+                                          | poll_event_flag_t::pollcompletion))) {
                 const size_t processed = item->completion_owner->drain (true);
                 if (processed == 0)
                     native.events &= ~static_cast<short> (poll_event_flag_t::pollcompletion);

@@ -163,8 +163,8 @@ public enum SendFlags
     None = 0,
 
     /// <summary>
-    ///     Do not block; report back-pressure instead of waiting when the send
-    ///     would block.
+    ///     Do not block. A refused SEND reports backpressure with EAGAIN and Core
+    ///     retains only a WRITABLE wait token, context, and target—not the payload.
     /// </summary>
     DontWait = 1
 }

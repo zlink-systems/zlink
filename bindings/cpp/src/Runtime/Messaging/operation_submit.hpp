@@ -27,16 +27,19 @@ inline std::vector<message_t> take_send_parts (operation_state_t &state_)
 
 inline bool submit_raw_send_state (operation_state_t &state_,
                                    void *user_context_ = nullptr,
-                                   zlink_completion_id_t *completion_id_out_ = nullptr)
+                                   zlink_completion_id_t *completion_id_out_ = nullptr,
+                                   bool restore_sources_on_failure_ = true)
 {
     const auto throw_invalid_argument = [&] () {
-        restore_single_send_part_to_source (state_);
+        if (restore_sources_on_failure_)
+            restore_single_send_part_to_source (state_);
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
     };
     if (!state_.raw.socket)
         throw_invalid_argument ();
     if (!share_runtime_state (state_.raw)) {
-        restore_single_send_part_to_source (state_);
+        if (restore_sources_on_failure_)
+            restore_async_send_sources (state_);
         throw submit_error_t (submit_result_t::invalid_state, EINVAL);
     }
     const zlink_routing_id_t *first_rid = target_first_rid_native (state_.raw.target);
@@ -77,7 +80,8 @@ inline bool submit_raw_send_state (operation_state_t &state_,
         const submit_result_t rc = static_cast<submit_result_t> (direct_rc);
         if (rc == submit_result_t::ok)
             return true;
-        restore_single_send_part_to_source (state_);
+        if (restore_sources_on_failure_)
+            restore_single_send_part_to_source (state_);
         if (state_.flags == send_flags_t::dontwait && rc == submit_result_t::backpressured) {
             return false;
         }
@@ -114,12 +118,14 @@ inline bool submit_raw_send_state (operation_state_t &state_,
           }
       });
     if (raw_rc == -1) {
-        restore_send_parts_to_sources (state_, parts);
+        if (restore_sources_on_failure_)
+            restore_send_parts_to_sources (state_, parts);
         throw last_error ();
     }
     const submit_result_t rc = static_cast<submit_result_t> (raw_rc);
     if (rc != submit_result_t::ok) {
-        restore_send_parts_to_sources (state_, parts);
+        if (restore_sources_on_failure_)
+            restore_send_parts_to_sources (state_, parts);
         if (state_.flags == send_flags_t::dontwait && rc == submit_result_t::backpressured) {
             return false;
         }

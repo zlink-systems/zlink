@@ -21,12 +21,6 @@ internal unsafe struct ZlinkRoutingId
     public fixed byte Data[255];
 }
 
-internal enum ZlinkCompletionKind
-{
-    Send = 1,
-    Request = 2
-}
-
 internal enum ZlinkSendCompleteResult
 {
     Admitted = 0,
@@ -38,7 +32,7 @@ internal enum ZlinkSendCompleteResult
 internal unsafe struct ZlinkCompletion
 {
     public uint StructSize;
-    public ZlinkCompletionKind Kind;
+    public CompletionKind Kind;
     public ulong CompletionId;
     public IntPtr UserContext;
     public ZlinkRoutingId PeerRoutingId;

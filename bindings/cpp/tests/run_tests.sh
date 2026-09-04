@@ -9,7 +9,7 @@ source "${ROOT_DIR}/bindings/tools/local_core_runtime.sh"
 if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 1 ]]; then
   CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX}"
 else
-  CORE_BUILD_DIR="${ROOT_DIR}/core/build"
+  CORE_BUILD_DIR="${ZLINK_CPP_CORE_BUILD_DIR:-${ROOT_DIR}/core/build}"
 fi
 BUILD_DIR="${CPP_DIR}/build"
 

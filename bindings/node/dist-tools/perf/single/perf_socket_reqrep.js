@@ -41,6 +41,12 @@ function routingProbe(client, routedClient, timeoutMs) {
     }
 }
 async function runSocketReqRep(msgSize, options, routedClient) {
+    if (options.transport === 'inproc') {
+        // Node Workers cannot share the Context required by inproc.  Keep this
+        // explicit in the runner manifest instead of timing out in a second
+        // worker with an unreachable endpoint.
+        return { unsupported: true };
+    }
     const endpoint = await benchmarkEndpoint(options.transport, routedClient ? `router-router-reqrep-${msgSize}` : `dealer-router-reqrep-${msgSize}`);
     const ctx = zlink.createContext();
     applyContextPolicy(ctx);

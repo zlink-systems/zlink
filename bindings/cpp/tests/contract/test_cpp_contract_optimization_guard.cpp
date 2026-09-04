@@ -106,6 +106,11 @@ int main ()
     for (const auto &symbol : required_part_symbols)
         assert (all.find (symbol) != std::string::npos);
 
+    // Awaitable SEND treats WRITABLE as retry readiness. A normal admitted
+    // SEND has no synthetic or native SEND completion in the binding path.
+    assert (all.find ("ZLINK_COMPLETION_WRITABLE") != std::string::npos);
+    assert (all.find ("ZLINK_COMPLETION_SEND") == std::string::npos);
+
     const std::string request_reply = read_file (
       cpp_root / "src" / "Runtime" / "Messaging" / "request_reply.cpp");
     const std::size_t blocking_terminal = request_reply.find (
@@ -121,7 +126,6 @@ int main ()
 
     const std::string completion_owner = read_file (
       cpp_root / "src" / "Runtime" / "Messaging" / "completion_owner.cpp");
-    assert (completion_owner.find ("while (true)") != std::string::npos);
     assert (completion_owner.find ("ZLINK_RECV_NO_DATA") != std::string::npos);
     assert (completion_owner.find ("completion_guard_t guard") != std::string::npos);
     assert (completion_owner.find ("settle_if_joined") != std::string::npos);

@@ -21,6 +21,8 @@ import {
 } from '../../contracts/errors/errors';
 import { withRuntimeErrorMessage } from './error_state';
 
+const ETERM = 156384765;
+
 export type NativeErrorCategory =
   | 'submit'
   | 'request'
@@ -42,7 +44,8 @@ export function mapNativeErrno(category: NativeErrorCategory, errno: number): nu
         case 110: return SubmitResult.NotConnected;
         case 111: return SubmitResult.NotAdmitted;
         case 2: return SubmitResult.NotFound;
-        case 125: return SubmitResult.Terminated;
+        case 125:
+        case ETERM: return SubmitResult.Terminated;
         case 14: return SubmitResult.InvalidHandle;
         case 22: return SubmitResult.InvalidArgument;
         case 95:
@@ -58,7 +61,8 @@ export function mapNativeErrno(category: NativeErrorCategory, errno: number): nu
         case 0: return RequestResult.Ok;
         case 110: return RequestResult.TimedOut;
         case 2: return RequestResult.NotFound;
-        case 125: return RequestResult.Terminated;
+        case 125:
+        case ETERM: return RequestResult.Terminated;
         case 111: return RequestResult.Rejected;
         case 17: return RequestResult.Conflict;
         case 16: return RequestResult.Busy;

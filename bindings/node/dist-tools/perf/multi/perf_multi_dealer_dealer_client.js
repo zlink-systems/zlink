@@ -14,7 +14,8 @@ const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 // is the SENDER. It creates one DEALER socket per client (connect),
 // prints CLIENT_READY,<size>, waits START,<size> from stdin, runs the
 // per-socket bounded send window (run_send_window ~142-265). This binding
-// awaits the Core send-completion terminal instead of using the removed DONTWAIT terminal,
+// awaits the event-loop-managed WRITABLE retry terminal instead of exposing a
+// DONTWAIT loop to the benchmark,
 // then sends exactly ONE wire stop token per socket
 // (run_single_size_case ~290-293 / send_stop_token ~114-140). The
 // matching RECEIVER/MEASURER is perf_multi_dealer_dealer_server.cpp.
@@ -60,23 +61,23 @@ async function runDealerDealerSendRounds({ dealers, payloads, msgSize, activeSto
             stampPayload(payloads[index], {
                 phase: 1, runId, msgSize, seq: currentSeq
             });
-            // Keep exactly one public async admission per socket. Completion only
-            // republishes availability; it must not gate another socket's submit.
+            // Keep exactly one public async admission per socket. Promise settlement
+            // only republishes availability; it must not gate another socket's submit.
             submitOne(index);
             if (failure)
                 throw failure;
         }
         nextSocket = (nextSocket + 1) % dealers.length;
         turns += 1;
-        // Inline completions resume as microtasks. A real event-loop turn keeps
-        // TSFN completion and I/O delivery progressing while a backpressured
-        // socket remains pending independently of its peers.
+        // Immediately admitted Promises resume as microtasks. A real event-loop
+        // turn keeps managed WRITABLE retries and I/O delivery progressing while a
+        // backpressured socket remains pending independently of its peers.
         await yieldTurn();
         if (failure)
             throw failure;
     }
-    // The active deadline stops new payloads. Finish only the admissions that
-    // Core already owns before emitting each socket's wire-level stop token.
+    // The active deadline stops new payloads. Finish managed admissions that the
+    // binding may still be retrying before emitting each wire-level stop token.
     while (pendingCount > 0) {
         await yieldTurn();
         if (failure)

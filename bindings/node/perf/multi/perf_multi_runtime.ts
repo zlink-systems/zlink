@@ -94,7 +94,7 @@ function applySocketPolicy(
   // the 200ms default on every benchmark socket UNCONDITIONALLY, and
   // returns early (no timeouts) only for the inproc transport. Direct
   // Receive-only roles use public poller readiness; HWM-managed routed sends
-  // await the canonical Promise completion terminal. Match C's timeout policy:
+  // await the canonical managed Promise terminal. Match C's timeout policy:
   // skip for inproc, otherwise apply the C default.
   const transport = String(
     options.transport || process.env.PERF_MULTI_TRANSPORT || ''

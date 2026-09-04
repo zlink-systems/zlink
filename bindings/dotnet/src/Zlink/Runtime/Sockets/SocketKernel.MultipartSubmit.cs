@@ -112,12 +112,9 @@ internal sealed partial class SocketKernel
                     continue;
                 }
 
-                // STREAM is the sole synchronous send contract that retains
-                // the submitted native part on EAGAIN. Every other result,
-                // including EAGAIN on other socket families, consumes it.
-                var retainCurrent = Type == SocketType.Stream
-                    && rc == (int)SubmitResult.Backpressured;
-                consumed = retainCurrent ? i : i + 1;
+                // Every returned Core result consumes the submitted native
+                // part, including DONTWAIT backpressure on STREAM.
+                consumed = i + 1;
 
                 if (mapNoWaitResult)
                 {

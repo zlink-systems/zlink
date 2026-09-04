@@ -18,6 +18,14 @@ public interface IPoller : IDisposable, IAsyncDisposable
     ///     <paramref name="events" />; <paramref name="slot" /> is a caller token
     ///     echoed back in the matching <see cref="PollEvent" />.
     /// </summary>
+    /// <remarks>
+    ///     An external loop that drives awaitable SEND retries registers both
+    ///     <see cref="PollEventFlags.PollOut" /> and
+    ///     <see cref="PollEventFlags.PollCompletion" />. POLLOUT reports writable
+    ///     credit; POLLCOMPLETION reserves this poller as the socket's sole
+    ///     completion-queue drain owner and is reported to the caller only for
+    ///     request completions.
+    /// </remarks>
     void Add(IZlinkSocket socket, PollEventFlags events, nuint slot);
 
     /// <summary>

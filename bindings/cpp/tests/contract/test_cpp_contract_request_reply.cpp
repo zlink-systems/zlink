@@ -224,20 +224,21 @@ void test_dropped_async_result_late_completion_cleanup ()
     std::this_thread::sleep_for (std::chrono::milliseconds (50));
 }
 
-void test_completion_capture_before_submit_publish_joins_once ()
+void test_request_completion_capture_before_submit_publish_joins_once ()
 {
-    auto result = std::make_shared<zlink::detail::async_operation_state_t<void>> ();
+    auto result = std::make_shared<
+      zlink::detail::async_operation_state_t<std::vector<zlink::message_t>>> ();
     zlink::detail::completion_entry_t entry (result);
     zlink_completion_t completion{};
     completion.struct_size = sizeof (completion);
-    completion.kind = ZLINK_COMPLETION_SEND;
+    completion.kind = ZLINK_COMPLETION_REQUEST;
     completion.completion_id = 41;
-    completion.send_result = ZLINK_SEND_ADMITTED;
+    completion.request_result = ZLINK_REQUEST_OK;
     entry.capture (completion);
     assert (!result->ready ());
     entry.publish (41);
     assert (result->ready ());
-    result->take ();
+    assert (result->take ().empty ());
 }
 
 void test_non_ok_request_is_typed_without_payload ()
@@ -294,7 +295,7 @@ int main ()
     test_async_request_public_poller_progress_and_owner_transfer ();
     test_blocking_request_progresses_with_public_poller_wait_thread ();
     test_dropped_async_result_late_completion_cleanup ();
-    test_completion_capture_before_submit_publish_joins_once ();
+    test_request_completion_capture_before_submit_publish_joins_once ();
     test_non_ok_request_is_typed_without_payload ();
     test_runtime_continuation_can_close_socket ();
     return 0;

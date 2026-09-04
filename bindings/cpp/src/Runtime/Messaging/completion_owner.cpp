@@ -1,12 +1,15 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 #include "completion_owner.hpp"
 
+#include "operation_state.hpp"
+#include "operation_submit.hpp"
 #include <Runtime/Native/message_access.hpp>
 
 #include <zlink.h>
 
 #include <cerrno>
 #include <chrono>
+#include <cstring>
 #include <exception>
 #include <system_error>
 
@@ -48,8 +51,10 @@ int request_errno (request_result_t result_) noexcept
 } // namespace
 
 completion_entry_t::completion_entry_t (
-  std::shared_ptr<async_operation_state_t<void>> send_result_) :
-    _kind (kind_t::send), _send_result (std::move (send_result_))
+  std::shared_ptr<async_operation_state_t<void>> send_result_,
+  std::unique_ptr<operation_state_t> send_operation_) :
+    _kind (kind_t::send_retry), _send_result (std::move (send_result_)),
+    _send_operation (std::move (send_operation_))
 {
 }
 
@@ -57,6 +62,106 @@ completion_entry_t::completion_entry_t (
   std::shared_ptr<async_operation_state_t<std::vector<message_t>>> request_result_) :
     _kind (kind_t::request), _request_result (std::move (request_result_))
 {
+}
+
+completion_entry_t::~completion_entry_t ()
+{
+    if (_send_operation)
+        restore_async_send_sources (*_send_operation);
+    release_state (std::move (_send_operation));
+}
+
+void completion_entry_t::fail_send (std::exception_ptr failure_) noexcept
+{
+    std::shared_ptr<async_operation_state_t<void>> result;
+    std::exception_ptr failure = std::move (failure_);
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (_settled)
+            return;
+        _failure = failure;
+        _settled = true;
+        result = _send_result;
+        _changed.notify_all ();
+    }
+    if (result)
+        result->fail (std::move (failure));
+}
+
+bool completion_entry_t::submit_send_attempt (bool initial_)
+{
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (_settled)
+            return true;
+        _published = false;
+        _completion_id = 0;
+    }
+
+    zlink_completion_id_t completion_id = 0;
+    bool admitted = false;
+    int submit_errno = 0;
+    std::exception_ptr failure;
+    try {
+        admitted = submit_raw_send_state (*_send_operation, this,
+                                          &completion_id, false);
+        submit_errno = zlink_errno ();
+    }
+    catch (...) {
+        failure = std::current_exception ();
+    }
+
+    if (!failure && admitted && completion_id != 0) {
+        failure = std::make_exception_ptr (
+          submit_error_t (submit_result_t::internal_error, EPROTO));
+    } else if (!failure && !admitted
+               && (submit_errno != EAGAIN || completion_id == 0)) {
+        failure = std::make_exception_ptr (
+          submit_error_t (submit_result_t::internal_error, EPROTO));
+    }
+
+    if (failure) {
+        if (initial_)
+            restore_async_send_sources (*_send_operation);
+        fail_send (failure);
+        if (initial_)
+            std::rethrow_exception (failure);
+        return true;
+    }
+
+    // async() owns every source object after it has either admitted the packet
+    // or returned a live retry result. No retry entry retains caller pointers.
+    detach_async_send_sources (*_send_operation);
+    if (!admitted) {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (_settled)
+            return true;
+        _completion_id = completion_id;
+        _published = true;
+        _changed.notify_all ();
+        return false;
+    }
+
+    std::shared_ptr<async_operation_state_t<void>> result;
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (_settled)
+            return true;
+        _settled = true;
+        result = _send_result;
+        _changed.notify_all ();
+    }
+    if (result)
+        result->complete ();
+    return true;
+}
+
+bool completion_entry_t::start_send ()
+{
+    if (_kind != kind_t::send_retry || !_send_operation)
+        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+    own_async_send_parts (*_send_operation);
+    return submit_send_attempt (true);
 }
 
 void completion_entry_t::publish (uint64_t completion_id_) noexcept
@@ -76,20 +181,68 @@ void completion_entry_t::fail_submit () noexcept
     _changed.notify_all ();
 }
 
-void completion_entry_t::capture (zlink_completion_t &completion_) noexcept
+bool completion_entry_t::capture (zlink_completion_t &completion_) noexcept
 {
     completion_guard_t guard (completion_);
+
+    if (_kind == kind_t::send_retry) {
+        const zlink_completion_kind_t completion_kind = completion_.kind;
+        const zlink_completion_id_t completion_id = completion_.completion_id;
+        void *const user_context = completion_.user_context;
+        const zlink_send_complete_result_t send_result = completion_.send_result;
+        const int terminal_errno = completion_.send_terminal_errno;
+
+        bool routing_id_matches = true;
+        const zlink_routing_id_t *const expected_rid =
+          target_first_rid_native (_send_operation->raw.target);
+        if (expected_rid) {
+            routing_id_matches = completion_.peer_rid.size == expected_rid->size
+              && std::memcmp (completion_.peer_rid.data, expected_rid->data,
+                              expected_rid->size)
+                   == 0;
+        } else
+            routing_id_matches = completion_.peer_rid.size == 0;
+
+        {
+            std::unique_lock<std::mutex> lock (_mutex);
+            _changed.wait (lock, [this] { return _published || _settled; });
+            if (_settled)
+                return true;
+            if (completion_id != _completion_id || user_context != this)
+                return false;
+            _published = false;
+            _completion_id = 0;
+        }
+
+        if (completion_kind != ZLINK_COMPLETION_WRITABLE
+            || !routing_id_matches) {
+            fail_send (std::make_exception_ptr (
+              submit_error_t (submit_result_t::internal_error, EPROTO)));
+            return true;
+        }
+
+        if (send_result != ZLINK_SEND_ADMITTED || terminal_errno != 0) {
+            fail_send (std::make_exception_ptr (submit_error_t (
+              send_result == ZLINK_SEND_ADMITTED
+                ? submit_result_t::internal_error
+                : submit_result_t::not_admitted,
+              terminal_errno != 0 ? terminal_errno : EIO)));
+            return true;
+        }
+
+        try {
+            return submit_send_attempt (false);
+        }
+        catch (...) {
+            fail_send (std::current_exception ());
+            return true;
+        }
+    }
+
     std::vector<message_t> parts;
     std::exception_ptr failure;
     try {
-        if (_kind == kind_t::send) {
-            if (completion_.kind != ZLINK_COMPLETION_SEND
-                || completion_.send_result != ZLINK_SEND_ADMITTED) {
-                failure = std::make_exception_ptr (submit_error_t (
-                  submit_result_t::not_admitted,
-                  completion_.send_terminal_errno ? completion_.send_terminal_errno : EIO));
-            }
-        } else if (completion_.kind != ZLINK_COMPLETION_REQUEST) {
+        if (completion_.kind != ZLINK_COMPLETION_REQUEST) {
             failure = std::make_exception_ptr (
               request_error_t (request_result_t::internal_error, EPROTO));
         } else if (completion_.request_result != ZLINK_REQUEST_OK) {
@@ -111,11 +264,28 @@ void completion_entry_t::capture (zlink_completion_t &completion_) noexcept
 
     std::unique_lock<std::mutex> lock (_mutex);
     if (_captured)
-        return;
+        return _settled;
     _failure = std::move (failure);
     _reply_parts = std::move (parts);
     _captured = true;
     settle_if_joined (lock);
+    return _settled;
+}
+
+void completion_entry_t::terminate () noexcept
+{
+    if (_kind == kind_t::send_retry) {
+        fail_send (std::make_exception_ptr (
+          submit_error_t (submit_result_t::not_admitted, ESHUTDOWN)));
+        return;
+    }
+
+    zlink_completion_t completion{};
+    completion.struct_size = sizeof (completion);
+    completion.kind = ZLINK_COMPLETION_REQUEST;
+    completion.request_result = ZLINK_REQUEST_TERMINATED;
+    publish (0);
+    (void) capture (completion);
 }
 
 void completion_entry_t::settle_if_joined (std::unique_lock<std::mutex> &lock_) noexcept
@@ -124,18 +294,12 @@ void completion_entry_t::settle_if_joined (std::unique_lock<std::mutex> &lock_) 
         return;
     _settled = true;
     const std::exception_ptr failure = _failure;
-    auto send_result = _send_result;
     auto request_result = _request_result;
     std::vector<message_t> parts;
     if (request_result)
         parts = std::move (_reply_parts);
     lock_.unlock ();
-    if (_kind == kind_t::send) {
-        if (failure)
-            send_result->fail (failure);
-        else
-            send_result->complete ();
-    } else if (request_result) {
+    if (request_result) {
         if (failure)
             request_result->fail (failure);
         else
@@ -177,16 +341,60 @@ void completion_owner_t::register_entry (const std::shared_ptr<completion_entry_
         start_runtime_owner_locked ();
 }
 
-void completion_owner_t::unregister_entry (completion_entry_t *entry_) noexcept
+void completion_owner_t::register_send_entry (
+  const std::shared_ptr<completion_entry_t> &entry_)
 {
-    std::lock_guard<std::mutex> lock (_mutex);
-    _entries.erase (entry_);
+    if (!entry_ || entry_->kind () != completion_entry_t::kind_t::send_retry)
+        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
+
+    std::unique_lock<std::mutex> lock (_mutex);
+    if (_shutdown)
+        throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
+    const auto inserted = _entries.emplace (entry_.get (), entry_);
+    if (!inserted.second)
+        throw submit_error_t (submit_result_t::invalid_state, EBUSY);
+    ++_send_entry_count;
+
+    // SEND retry progress belongs to the application's public poller. Stop the
+    // REQUEST fallback owner before the first DONTWAIT attempt can publish a
+    // WRITABLE completion; otherwise that private thread could consume it.
+    if (!_public_owner)
+        stop_runtime_owner_locked (lock);
 }
 
-size_t completion_owner_t::drain (bool wait_for_publish_)
+void completion_owner_t::unregister_entry (completion_entry_t *entry_) noexcept
+{
+    try {
+        std::unique_lock<std::mutex> lock (_mutex);
+        const auto found = _entries.find (entry_);
+        if (found == _entries.end ())
+            return;
+        if (found->second->kind () == completion_entry_t::kind_t::send_retry
+            && _send_entry_count != 0)
+            --_send_entry_count;
+        _entries.erase (found);
+        if (!_shutdown && !_public_owner && _send_entry_count == 0
+            && !_entries.empty ())
+            start_runtime_owner_locked ();
+    }
+    catch (...) {
+    }
+}
+
+size_t completion_owner_t::drain (bool wait_for_publish_,
+                                  uint64_t runtime_generation_)
 {
     size_t processed = 0;
     for (;;) {
+        {
+            std::lock_guard<std::mutex> lock (_mutex);
+            if (_shutdown
+                || (!wait_for_publish_
+                    && (_runtime_stop || _public_owner
+                        || _send_entry_count != 0
+                        || runtime_generation_ != _runtime_generation)))
+                break;
+        }
         zlink_completion_t completion{};
         completion.struct_size = sizeof (completion);
         const zlink_recv_result_t rc = zlink_completion_recv (
@@ -204,10 +412,14 @@ size_t completion_owner_t::drain (bool wait_for_publish_)
                 entry = found->second;
         }
         if (entry) {
-            entry->capture (completion);
-            if (wait_for_publish_)
-                entry->wait_settled ();
-            unregister_entry (entry.get ());
+            const bool terminal = entry->capture (completion);
+            if (entry->kind () == completion_entry_t::kind_t::request) {
+                if (wait_for_publish_)
+                    entry->wait_settled ();
+                unregister_entry (entry.get ());
+            } else if (terminal) {
+                unregister_entry (entry.get ());
+            }
         } else {
             zlink_completion_close (&completion);
         }
@@ -218,7 +430,8 @@ size_t completion_owner_t::drain (bool wait_for_publish_)
 
 void completion_owner_t::start_runtime_owner_locked ()
 {
-    if (_runtime_poller || _runtime_thread.joinable () || _shutdown)
+    if (_runtime_poller || _runtime_thread.joinable () || _shutdown
+        || _send_entry_count != 0)
         return;
     _runtime_poller = zlink_poller_new ();
     if (!_runtime_poller)
@@ -232,14 +445,27 @@ void completion_owner_t::start_runtime_owner_locked ()
         throw config_error_t (static_cast<config_result_t> (rc), zlink_errno ());
     }
     _runtime_stop = false;
+    const uint64_t runtime_generation = ++_runtime_generation;
     const std::shared_ptr<completion_owner_t> self = shared_from_this ();
-    _runtime_thread = std::thread ([self] { self->runtime_loop (); });
+    try {
+        _runtime_thread = std::thread (
+          [self, runtime_generation] { self->runtime_loop (runtime_generation); });
+    }
+    catch (...) {
+        void *poller = _runtime_poller;
+        _runtime_poller = nullptr;
+        _runtime_stop = true;
+        ++_runtime_generation;
+        (void) zlink_poller_destroy (&poller);
+        throw;
+    }
 }
 
 void completion_owner_t::stop_runtime_owner_locked (
   std::unique_lock<std::mutex> &lock_) noexcept
 {
     _runtime_stop = true;
+    ++_runtime_generation;
     std::thread thread = std::move (_runtime_thread);
     void *poller = _runtime_poller;
     _runtime_poller = nullptr;
@@ -255,13 +481,14 @@ void completion_owner_t::stop_runtime_owner_locked (
     lock_.lock ();
 }
 
-void completion_owner_t::runtime_loop () noexcept
+void completion_owner_t::runtime_loop (uint64_t runtime_generation_) noexcept
 {
     while (true) {
         void *poller = nullptr;
         {
             std::lock_guard<std::mutex> lock (_mutex);
-            if (_runtime_stop || _shutdown)
+            if (_runtime_stop || _shutdown
+                || runtime_generation_ != _runtime_generation)
                 return;
             poller = _runtime_poller;
         }
@@ -270,7 +497,7 @@ void completion_owner_t::runtime_loop () noexcept
         const int rc = zlink_poller_wait (poller, &event, 1, 25, &error);
         if (rc > 0) {
             try {
-                (void) drain (false);
+                (void) drain (false, runtime_generation_);
             }
             catch (...) {
                 return;
@@ -289,8 +516,10 @@ void completion_owner_t::transfer_to_public (const void *poller_owner_)
     if (_public_owner && _public_owner != poller_owner_)
         throw config_error_t (config_result_t::invalid_state, EBUSY);
     if (!_public_owner) {
-        stop_runtime_owner_locked (lock);
+        // Publish public ownership before join drops the mutex so a concurrent
+        // REQUEST registration cannot start a replacement fallback owner.
         _public_owner = poller_owner_;
+        stop_runtime_owner_locked (lock);
     }
 }
 
@@ -301,7 +530,7 @@ void completion_owner_t::transfer_to_runtime (const void *poller_owner_) noexcep
         if (_public_owner != poller_owner_)
             return;
         _public_owner = nullptr;
-        if (!_entries.empty ())
+        if (!_entries.empty () && _send_entry_count == 0)
             start_runtime_owner_locked ();
     }
     catch (...) {
@@ -317,18 +546,11 @@ void completion_owner_t::shutdown () noexcept
     stop_runtime_owner_locked (lock);
     auto entries = std::move (_entries);
     _entries.clear ();
+    _send_entry_count = 0;
     lock.unlock ();
     for (auto &[key, entry] : entries) {
         (void) key;
-        zlink_completion_t completion{};
-        completion.struct_size = sizeof (completion);
-        completion.kind = entry->kind () == completion_entry_t::kind_t::send
-                            ? ZLINK_COMPLETION_SEND : ZLINK_COMPLETION_REQUEST;
-        completion.send_result = ZLINK_SEND_TERMINAL;
-        completion.send_terminal_errno = ESHUTDOWN;
-        completion.request_result = ZLINK_REQUEST_TERMINATED;
-        entry->publish (0);
-        entry->capture (completion);
+        entry->terminate ();
     }
 }
 

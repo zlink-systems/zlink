@@ -4,8 +4,9 @@ using Xunit;
 namespace Systems.Zlink.Tests;
 
 /// <summary>
-///     Send and request awaitable terminals submit with DONTWAIT and complete
-///     only after their socket-local completion has been drained.
+///     An admitted async send completes immediately without a native completion.
+///     A backpressured send waits for its exact WRITABLE token and then retries
+///     the same managed record. Requests retain their native completion flow.
 /// </summary>
 public sealed class test_routed_async_admission
 {
@@ -36,7 +37,7 @@ public sealed class test_routed_async_admission
     }
 
     [Fact]
-    public async Task async_terminal_parks_without_blocking_for_hwm_credit()
+    public async Task async_terminal_waits_for_writable_without_blocking_for_credit()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -119,9 +120,9 @@ public sealed class test_routed_async_admission
         Task admitted = dealer.Send().Message(payload).Async();
         started.Stop();
 
-        // Awaitable submission uses the socket-local completion drain even
-        // when Core can admit the record immediately.
+        // A successful SEND has completion id zero and no native completion.
         Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
+        Assert.True(admitted.IsCompletedSuccessfully);
         await admitted.WaitAsync(TimeSpan.FromSeconds(3));
 
         using Received received = RecvWithRetry(router);
@@ -229,7 +230,7 @@ public sealed class test_routed_async_admission
     }
 
     [Fact]
-    public async Task backpressured_send_returns_immediately_and_core_completes_it()
+    public async Task public_poller_drains_writable_and_retries_the_same_packet()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -242,38 +243,202 @@ public sealed class test_routed_async_admission
         router.Options.ReceiveHighWaterMark = RecordHwm;
 
         string endpoint = CoreTestSupport.NewEndpoint(
-            "inproc", "dotnet-routed-async-multipart");
+            "inproc", "dotnet-routed-writable-retry");
         router.Bind(endpoint);
         dealer.Connect(endpoint);
-        Thread.Sleep(100);
 
-        Task parked = FillDealerTarget(dealer, out List<Task> filler);
-
-        using Message payload = Message.From("pending-payload");
-        var started = Stopwatch.StartNew();
-        Task pending = dealer.Send().Message(payload).Async();
-        started.Stop();
-
-        // The submit never waits for credit, whether or not it parks.
-        Assert.True(started.Elapsed < TimeSpan.FromMilliseconds(250));
-        Assert.False(parked.IsCompleted);
-
-        // Draining the receiver returns credit and Core completes every
-        // parked record in submit order.
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-        while (!pending.IsCompleted && DateTimeOffset.UtcNow < deadline)
+        // A blocking handshake establishes the target without a timing delay.
+        using (Message handshake = Message.From("handshake"))
+            dealer.Send().Message(handshake).Submit();
+        using (Received handshake = Received.Create())
         {
-            using var received = Received.Create();
-            if (!router.Recv(received, RecvFlags.DontWait))
-                await Task.Delay(1);
+            Assert.True(router.Recv(handshake));
+            Assert.Equal("handshake", handshake.SinglePartOrThrow().GetString());
         }
 
+        using var poller = Zlink.CreatePoller();
+        poller.Add(dealer,
+            PollEventFlags.PollOut | PollEventFlags.PollCompletion, 41);
+
+        Task pending = FillDealerUntilAsyncBackpressured(dealer,
+            out List<string> acceptedPayloads, out string pendingPayload);
+        Assert.NotEmpty(acceptedPayloads);
+        Assert.False(pending.IsCompleted);
+
+        var events = new PollEvent[1];
+        Assert.Equal(0, poller.Wait(events, TimeSpan.Zero));
+
+        foreach (string expected in acceptedPayloads)
+        {
+            using Received filler = Received.Create();
+            Assert.True(router.Recv(filler));
+            Assert.Equal(expected, filler.SinglePartOrThrow().GetString());
+        }
+
+        Assert.Equal(1, poller.Wait(events, TimeSpan.FromSeconds(5)));
+        Assert.Equal((nuint)41, events[0].Slot);
+        Assert.NotEqual(PollEventFlags.None,
+            events[0].Revents & PollEventFlags.PollOut);
+        Assert.Equal(PollEventFlags.None,
+            events[0].Revents & PollEventFlags.PollCompletion);
+
+        // Poller.Wait pulls the WRITABLE completion, matches its token,
+        // context, and target, and retries this exact packet.
         await pending.WaitAsync(TimeSpan.FromSeconds(2));
-        await Task.WhenAll(filler).WaitAsync(TimeSpan.FromSeconds(5));
+
+        using Received retried = Received.Create();
+        Assert.True(router.Recv(retried));
+        Assert.Equal(pendingPayload,
+            retried.SinglePartOrThrow().GetString());
+
+        using Received duplicate = Received.Create();
+        Assert.False(router.Recv(duplicate, RecvFlags.DontWait));
     }
 
     [Fact]
-    public async Task cancellation_completes_a_parked_send_once()
+    public async Task filtered_writable_wake_keeps_waiting_for_request_completion()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var context = Zlink.CreateContext();
+        context.Options.AutoHwmEnabled = false;
+        using var dealer = context.CreateDealerSocket();
+        using var router = context.CreateRouterSocket();
+        dealer.Options.SendHighWaterMark = RecordHwm;
+        router.Options.ReceiveHighWaterMark = RecordHwm;
+
+        string endpoint = CoreTestSupport.NewEndpoint(
+            "inproc", "dotnet-filtered-writable-request-wait");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+
+        using (Message handshake = Message.From("handshake"))
+            dealer.Send().Message(handshake).Submit();
+        using (Received handshake = Received.Create())
+            Assert.True(router.Recv(handshake));
+
+        // POLLCOMPLETION owns the queue but does not expose a WRITABLE-only
+        // wake. Wait must keep its original deadline after making that progress.
+        using var poller = Zlink.CreatePoller();
+        poller.Add(dealer, PollEventFlags.PollCompletion, 43);
+
+        Task pendingSend = FillDealerUntilAsyncBackpressured(dealer,
+            out List<string> acceptedPayloads, out string pendingPayload);
+        Assert.NotEmpty(acceptedPayloads);
+        Assert.False(pendingSend.IsCompleted);
+        foreach (string expected in acceptedPayloads)
+        {
+            using Received filler = Received.Create();
+            Assert.True(router.Recv(filler));
+            Assert.Equal(expected, filler.SinglePartOrThrow().GetString());
+        }
+
+        using Message request = Message.From("request-after-credit");
+        Task<IReadOnlyList<Message>> replyTask = dealer.Request()
+            .Message(request)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Async();
+        RoutingId source;
+        ReplyToken replyToken;
+        using (Received receivedRequest = Received.Create())
+        {
+            Assert.True(router.Recv(receivedRequest));
+            Assert.Equal(ReceivedMessageType.Request,
+                receivedRequest.MessageType);
+            source = receivedRequest.RoutingId!.Value;
+            replyToken = receivedRequest.ReplyToken!;
+        }
+
+        Task responder = ReplyAfterSendRetry(pendingSend, router, source,
+            replyToken);
+        var events = new PollEvent[1];
+        Assert.Equal(1, poller.Wait(events, TimeSpan.FromSeconds(5)));
+        Assert.Equal((nuint)43, events[0].Slot);
+        Assert.NotEqual(PollEventFlags.None,
+            events[0].Revents & PollEventFlags.PollCompletion);
+
+        IReadOnlyList<Message> reply = await replyTask.WaitAsync(
+            TimeSpan.FromSeconds(2));
+        try
+        {
+            Assert.Single(reply);
+            Assert.Equal("reply-after-retry", reply[0].GetString());
+        }
+        finally
+        {
+            foreach (Message part in reply)
+                part.Dispose();
+        }
+        await responder;
+
+        using Received retried = Received.Create();
+        Assert.True(router.Recv(retried));
+        Assert.Equal(pendingPayload,
+            retried.SinglePartOrThrow().GetString());
+    }
+
+    [Fact]
+    public void try_submit_reports_backpressure_and_preserves_the_packet()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        using var context = Zlink.CreateContext();
+        context.Options.AutoHwmEnabled = false;
+        using var dealer = context.CreateDealerSocket();
+        using var router = context.CreateRouterSocket();
+        dealer.Options.SendHighWaterMark = RecordHwm;
+        router.Options.ReceiveHighWaterMark = RecordHwm;
+
+        string endpoint = CoreTestSupport.NewEndpoint(
+            "inproc", "dotnet-routed-try-submit");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+
+        using (Message handshake = Message.From("handshake"))
+            dealer.Send().Message(handshake).Submit();
+        using (Received handshake = Received.Create())
+            Assert.True(router.Recv(handshake));
+
+        using var poller = Zlink.CreatePoller();
+        poller.Add(dealer,
+            PollEventFlags.PollOut | PollEventFlags.PollCompletion, 42);
+
+        Message blocked = FillDealerUntilTrySubmitBackpressured(dealer,
+            out int acceptedCount);
+        using (blocked)
+        {
+            Assert.True(acceptedCount > 0);
+            Assert.Equal(FillerPayload, blocked.GetString());
+
+            var events = new PollEvent[1];
+            Assert.Equal(0, poller.Wait(events, TimeSpan.Zero));
+
+            for (var index = 0; index < acceptedCount; index++)
+            {
+                using Received filler = Received.Create();
+                Assert.True(router.Recv(filler));
+            }
+
+            Assert.Equal(1,
+                poller.Wait(events, TimeSpan.FromSeconds(5)));
+            Assert.Equal((nuint)42, events[0].Slot);
+            Assert.NotEqual(PollEventFlags.None,
+                events[0].Revents & PollEventFlags.PollOut);
+            Assert.Equal(PollEventFlags.None,
+                events[0].Revents & PollEventFlags.PollCompletion);
+
+            Assert.True(dealer.Send().Message(blocked).TrySubmit());
+            using Received retried = Received.Create();
+            Assert.True(router.Recv(retried));
+            Assert.Equal(FillerPayload,
+                retried.SinglePartOrThrow().GetString());
+        }
+    }
+
+    [Fact]
+    public async Task cancellation_completes_a_writable_waiter_once()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -309,7 +474,7 @@ public sealed class test_routed_async_admission
     }
 
     [Fact]
-    public async Task close_completes_a_pending_send_once()
+    public async Task close_completes_a_writable_waiter_once()
     {
         if (!CoreTestSupport.IsNativeAvailable())
             return;
@@ -441,9 +606,9 @@ public sealed class test_routed_async_admission
     }
 
     /// <summary>
-    ///     Submits large records until one parks, and returns that parked task.
+    ///     Submits large records until one is backpressured, and returns its task.
     ///     Awaitable send never blocks the caller for HWM credit: a record that
-    ///     cannot be admitted remains pending until its completion is drained.
+    ///     cannot be admitted waits for WRITABLE and is then retried.
     /// </summary>
     private static Task FillDealerTarget(IDealerSocket dealer,
         out List<Task> submitted)
@@ -459,7 +624,7 @@ public sealed class test_routed_async_admission
         }
 
         throw new Xunit.Sdk.XunitException(
-            "The DEALER target never parked a record.");
+            "The DEALER target never backpressured a record.");
     }
 
     private static Task FillRouterTarget(IRouterSocket router,
@@ -489,7 +654,67 @@ public sealed class test_routed_async_admission
         }
 
         throw new Xunit.Sdk.XunitException(
-            "The ROUTER target never parked a record.");
+            "The ROUTER target never backpressured a record.");
+    }
+
+    private static Task FillDealerUntilAsyncBackpressured(
+        IDealerSocket dealer, out List<string> acceptedPayloads,
+        out string pendingPayload)
+    {
+        acceptedPayloads = new List<string>();
+        pendingPayload = string.Empty;
+        for (var attempt = 0; attempt < 16; attempt++)
+        {
+            string payload = FillerPayload + $"-{attempt:D2}";
+            using Message candidate = Message.From(payload);
+            Task submitted = dealer.Send().Message(candidate).Async();
+            if (!submitted.IsCompleted)
+            {
+                pendingPayload = payload;
+                return submitted;
+            }
+
+            submitted.GetAwaiter().GetResult();
+            acceptedPayloads.Add(payload);
+        }
+
+        throw new Xunit.Sdk.XunitException(
+            "The DEALER target did not return a pending WRITABLE waiter.");
+    }
+
+    private static Message FillDealerUntilTrySubmitBackpressured(
+        IDealerSocket dealer,
+        out int acceptedCount)
+    {
+        acceptedCount = 0;
+        for (var attempt = 0; attempt < 16; attempt++)
+        {
+            Message candidate = Message.From(FillerPayload);
+            try
+            {
+                if (!dealer.Send().Message(candidate).TrySubmit())
+                    return candidate;
+
+                acceptedCount++;
+                candidate.Dispose();
+            }
+            catch
+            {
+                candidate.Dispose();
+                throw;
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException(
+            "The DEALER target did not report backpressure through TrySubmit.");
+    }
+
+    private static async Task ReplyAfterSendRetry(Task pendingSend,
+        IRouterSocket router, RoutingId source, ReplyToken replyToken)
+    {
+        await pendingSend.ConfigureAwait(false);
+        using Message reply = Message.From("reply-after-retry");
+        router.Reply(source, replyToken).Message(reply).Submit();
     }
 
     private static void SwallowAll(IEnumerable<Task> tasks)

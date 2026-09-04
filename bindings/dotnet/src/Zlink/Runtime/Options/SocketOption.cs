@@ -54,6 +54,7 @@ internal enum SocketOption
     SubmitRetryMode = 0x3037,
     SubmitRetryTimeout = 0x3038,
     SubmitRetryAttempts = 0x3039,
+    // REQUEST limits whose numeric values are part of the ABI. SEND treats them as no-op options.
     PendingMaxMsgs = 0x303A,
     PendingMaxBytes = 0x303B,
     RouterMandatory = 0x3101,

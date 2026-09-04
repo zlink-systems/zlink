@@ -56,8 +56,9 @@ public interface IPairSocket : IMessageSocket
 public interface IDealerSocket : IReceivingMessageSocket, IConnectableSocket
 {
     /// <summary>
-    ///     Begins a DEALER send whose <c>Async</c> terminal waits for exact-target
-    ///     Core admission without occupying the caller thread.
+    ///     Begins a DEALER send. Its <c>Async</c> terminal completes immediately
+    ///     on admission; after backpressure it waits for the exact WRITABLE token
+    ///     and retries the retained packet without occupying the caller thread.
     /// </summary>
     SendOperation Send();
 
