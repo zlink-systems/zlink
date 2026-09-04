@@ -1,0 +1,50 @@
+# Job: dotnet TicTacToe sample — client never receives the `JoinGameNotify` stream message the server reports as sent (deterministic 2/2 + aggregate)
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`, and
+`doc/plan/c016-worklog/gate-final-dotnet-samples-summary.md`. Never modify `core/**`, `bindings/**`,
+any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages' trees,
+`framework/languages/shared_sample/**`; never lower an assertion or widen a timeout as the fix; do not
+commit. Take `flock -w7200 /tmp/zlink-dotnet-gate.lock` around EVERY `dotnet build`/`dotnet test`/sample run.
+
+## Facts
+- Committed main (dotnet admission rework + ClientServer reconnect fix landed today: `b28eb24270`,
+  `25952a76bc`). Final .NET sample gate: 6/7 pass; TicTacToe fails deterministically (2/2 individual,
+  exit 134, and the aggregate): the server logs `sent ... packet=JoinGameNotify` after `JoinSpot`, but
+  the client fails with `System.TimeoutException: Timed out waiting for 'JoinGameNotify' stream message.`
+  at `framework/languages/dotnet/src/Systems.Zlink.Stream.Connector/Runtime/ZlinkStreamReceivedMessages.cs:71`
+  from `framework/languages/dotnet/samples/TicTacToe/Client/TicTacToeClientScenario.cs:240`.
+  Logs: `zlink-work/c016/logs/gate-final-dotnet-TicTacToe.log` (+ `-aggregate.log`); run dirs with
+  role logs under `/dev/shm/zlink-tmp-dotnet/tmp.*/logs/` (aggregate: `tmp.5n5J0qypjB/logs/client.log:23-27`).
+  The other six .NET samples (incl. SupportChat/ZoneWorld which also push STREAM messages) pass, and
+  TicTacToe passes in cpp/node/java — so this is specific to the .NET TicTacToe delivery path
+  (bound-session push from the game Spot actor to the client's STREAM session via the gateway).
+- Prior, non-deterministic observation of a TicTacToe bound-session delivery stall on cpp:
+  `doc/plan/c016-worklog/decisions.ko.md:570-571`; the .NET Gateway state-lane defect D-084
+  (`decisions.ko.md:823-833`, retired-binding pushes blocking `ZLinkBackendStreamSocketWrapper.Send`)
+  is a candidate family. Also candidates: the DONTWAIT/WRITABLE resubmit path for the .NET STREAM
+  socket (`send_ready`/BACKPRESSURED → WRITABLE handled by the binding's async terminal; check the
+  framework does not swallow a BACKPRESSURED completion for bound-session pushes), the bound-session
+  route after the admission rework (relay RID→pair re-pin / `_readyOutboundEndpoints` — did the push
+  target the retired pair?), or the sample's session binding order (JoinSpot before the STREAM
+  session is bound → push dropped as "no session").
+- Reproduce with the dotnet env block (never `--artifacts-path`, never `ulimit -v`):
+  `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; flock -w7200 /tmp/zlink-dotnet-gate.lock bash framework/languages/dotnet/samples/run_samples.sh TicTacToe`
+  (read `run_samples.sh`/`sample_runner.ps1` for run-dir preservation and trace env such as
+  `ZLINK_DEBUG_FRAMEWORK_*`, message-flow tracer). Use the message flow tracer to follow the
+  JoinGameNotify: admitted/dispatched/completed on the server, received on the gateway STREAM push
+  path, delivered to the client session.
+
+## What to do
+1. Trace where the JoinGameNotify stops (actor → gateway push → STREAM send → client) with
+   `file:line`; state the spec clause (`framework/doc/framework/common/spec/server/**` bound session /
+   STREAM push / execution contract) violated or mis-assumed.
+2. Fix minimally in `framework/languages/dotnet/**` (framework runtime or the .NET sample harness);
+   regression test in `tests/Zlink.Framework.UnitTests` if framework-side (contract-level, no sample
+   dependency).
+3. Verify: TicTacToe 3× green (`tictactoe-placement=completed`, exit 0); if the framework changed also
+   SupportChat 1× and the unit filter(s) covering the touched runtime class.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-dotnet-tictactoe-joingamenotify-summary.md`: trace, cause `file:line`,
+spec clause, fix + regression, results, BLOCKERS.
