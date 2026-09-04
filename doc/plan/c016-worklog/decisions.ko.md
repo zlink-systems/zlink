@@ -1039,3 +1039,17 @@ RR 72,469 = DR 70,293 수준, readiness 비용 동등, 재시도 0), callgrind �
 REPLY는 pipe의 `_out_sync` 안에서 generation 확인 + write/flush를 한 임계구역으로, multipart는 기존 lock 유지, `engine_error`는 peer writer
 `_out_sync`도 잡고 connection id를 0으로. 결과(64K, runs=3 중앙값): RR 29.2 vs 0.15.1 30.5 Kops/s = **−4.4%(허용)**, DR +2.2%. hotpath_gate
 4 cell PASS(≤1.0), dev 140/141(load flake 1건 단독 5/5). 남은 것: latency mean 격차(RR 1.77 vs 1.03 ms 등, D-B83·D-B87).
+
+## D-B89 (2026-09-05 05:30, 머신 B) C multi REQREP 러너의 ws/wss 4 KiB 붕괴 — 원인은 제출 턴, 수정은 byte-quantum round-robin (사용자 확인 요청)
+증상: C 러너 DEALER_ROUTER_REQREP ws 4096B 7.9k ops/s(58.6 ms), wss 3.4k, ROUTER_ROUTER wss 4096B 16.8k — tcp/tls 106~128k, C++ 러너는 ws 51k/wss 33k.
+원인(job core-c-ws-reqrep-4k, Core 변경 없음): C 러너가 100 client 모두에 제출한 뒤에야 completion poller를 진행 → ZMP 16B 헤더로 4096B 요청은
+4112B, 연속 두 요청 8224B가 8192B encoder/WS frame 경계를 넘어 요청 측 큐잉 RTT가 200 ms(REQREP timeout, `PERF_MULTI_REQREP_TIMEOUT_MS` 기본
+200)에 닿으면 timeout avalanche. timeout 1000 ms 진단 A/B에서 wss 4096B 91.6k 회복(정책상 timeout 변경은 채택 안 함). C++ 러너는 client별 async op가
+자기 completion을 기다리며 자연히 interleave해 붕괴하지 않음.
+수정(runner만, `perf_multi_socket_reqrep.hpp` + metrics test): WS/WSS에서만 제출/진행 턴을 32 KiB byte quantum round-robin(100 clients 기준
+1K/4K/8K/64K = 32/8/4/1 요청)으로 바꾸고 턴마다 poller 0-timeout 진행. outstanding 상한은 아님(백프레셔·토큰 경로 그대로). tcp/tls는 변경 없음.
+전/후(job 측정, 100 clients 5s 1회, ops/s / mean ms): ws 1024 172k/1.30 → 166k/0.99, **ws 4096 139k/8.9 → 83k/0.37**, ws 8192 90k/26 → 47k/0.25,
+wss 1024 137k/4.0 → 127k/1.7, **wss 4096 4.4k/20.7 → 68.5k/1.3**, RR wss 4096 16.8k/20.4 → 72k/2.2.
+**트레이드오프**: 붕괴(bimodal timeout avalanche)는 사라지지만 ws 4K/8K의 안정 상태 처리량이 40~50% 낮아진다(큐 깊이 축소). C 기준값이 낮아져
+바인딩 비율이 ws에서 올라가므로 계획서 ws/wss 셀은 이 수정 뒤 값으로 다시 잰다. 감독관 판단으로 채택(기준 러너의 안정성 우선)하되 사용자
+확인을 요청한다: (a) 유지, (b) quantum 대신 client별 제출 뒤 즉시 진행(더 잦은 interleave, 처리량 영향 재측정 필요), (c) REQREP timeout 상향.
