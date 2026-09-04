@@ -742,3 +742,23 @@ throughput 영향 없음). 사용자 결정으로 이 tail 편차를 0.16.0 rele
 (D-040 gate 자체는 유지; 다음 release 전 조용한 리눅스 머신에서 전체 sweep 재실행 권고). 결과 파일: sweep2-results.run3-
 partial-19cell-premerge.md(머지 전), sweep2-results.run4-main-partial.md(main, 11 cell). 인계(A): node 스크립트 0.15.1 문자열,
 posddd rf1~3 BLOCKERS(범위 밖 이동), 4-size 전체 sweep.
+
+## D-079 (2026-09-04 09:xx) STREAM stall 근본원인 확정 = Core two-poller lost-wake (d58a179033) + B 최종 pull(22b39361bb)
+codex sol ultra 진단(cpp-stream-stall-summary.md). **근본원인**: 같은 STREAM socket을 framework의 POLLIN poller와
+C++ async send가 만든 private POLLCOMPLETION poller가 동시 대기할 때 **Core lost-wake**. socket 단일 mailbox FD wake를
+completion poller가 먼저 소비, completion-only registration은 has_in() 미검사로 event 안 줌(socket_base_api.cpp:809-889),
+signal_pollers()는 secondary signaler만 깨움(mailbox.cpp:382)→이미 잠든 POLLIN waiter 미wake(socket_base_lifecycle.cpp:542).
+framework 무한 timeout→다음 command(disconnect/timer)까지 stall. 스펙 위반: 05-polling:65-71(lost-wake)·120-122(다중 poller)
+·08-stream:223-226.
+**커밋 귀속**: Core 결함 도입=**`d58a179033`**(autohwm stage1: restore POSIX descriptor pollset — poller별 secondary
+signaler 끄고 primary mailbox FD 복원). 노출=90d42d887c(C++ async private completion poller)+b32d4cae64(Phase11 packet-mode).
+**B merge 무관**(pre-B core 동일 repro, socket_poller/stream.cpp B서 불변). **Native C 두-poller repro로 Core 확정**(17/100
+slow 273ms; 단일 POLLIN/단일 POLLIN|POLLCOMPLETION owner는 0 slow). repro: c016/core_stream_packet_poller_repro.cpp·
+core_c_two_poller_repro.cpp.
+**수정 방향(Core)**: poller별 wake channel 복원 OR 한 poller가 command 소비 후 같은 socket의 모든 public waiter 재wake.
+d58a179033 의도(autohwm stage1) 깨지 말 것. 회귀 test: STREAM socket을 poller A=POLLIN·B=POLLCOMPLETION 동시 대기 +
+inbound false→true 반복. framework workaround(POLLIN|POLLCOMPLETION 합치기)는 D-078 원칙 위배로 기각.
+**별도 framework 결함(root 아님, 분리)**: application_job_queue.hpp:1003-1044 application_supply_slot_t::take가 move 후
+source optional 미clear→ensure_waiter가 새 waiter 미등록(도입 8bae89dc0f). Core race 지속 악화하나 root 아님.
+**B 최종 작업 pull(fast-forward 22b39361bb)**: bdf0917e14(core/pipe PUB credit)+docs(B campaign 종결 D-B67..B70·sweep2).
+Phase 9 tag 게이트(sweep2+posddd) 이제 열림. framework/cpp fix 대상(stream.cpp readiness)은 B 최종서 불변.
