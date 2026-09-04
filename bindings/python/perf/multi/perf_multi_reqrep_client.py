@@ -1,7 +1,6 @@
 import asyncio
 import sys
 import time
-from collections import deque
 from contextlib import ExitStack
 
 import zlink
@@ -28,24 +27,13 @@ from perf_multi_common import (
 )
 
 
-_REQUEST_RETRY_RESULTS = frozenset({zlink.SubmitResult.BACKPRESSURED})
-
-
-async def submit_request_once(
+async def submit_managed_request(
     sock, payload_parts, *, routing_id=None, timeout_s
 ):
-    """Run one public async request attempt and classify pre-admission EAGAIN."""
+    """Submit once through the binding-owned WRITABLE retry machine."""
 
     operation = sock.request() if routing_id is None else sock.request(routing_id)
-    try:
-        return (
-            await operation.messages(*payload_parts).timeout(timeout_s).submit(),
-            False,
-        )
-    except zlink.SubmitError as exc:
-        if exc.result not in _REQUEST_RETRY_RESULTS:
-            raise
-        return None, True
+    return await operation.messages(*payload_parts).timeout(timeout_s).submit()
 
 
 def _close_reply_parts(parts):
@@ -63,7 +51,6 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
     latency_sampler = LatencySampler()
     completed = 0
     pending = set()
-    retry_payloads = [deque() for _ in range(args.clients)]
     failures = []
     timeout_s = max(0.001, resolve_multi_reqrep_timeout_ms() / 1000.0)
     drain_timeout_s = max(
@@ -111,16 +98,12 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
 
                 try:
                     try:
-                        reply_parts, backpressured = await submit_request_once(
+                        reply_parts = await submit_managed_request(
                             sockets[index],
                             stamped_parts,
                             routing_id=b"SERVER" if routed_request else None,
                             timeout_s=timeout_s,
                         )
-                        if backpressured:
-                            # Core did not take ownership. Preserve this exact
-                            # logical request in the socket-local retry FIFO.
-                            return index, stamped_parts
                     except zlink.RequestError:
                         # Mirrors the C callback contract: a timed-out or
                         # otherwise terminal request is drained but is not an
@@ -156,12 +139,9 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
                 if task.cancelled():
                     return
                 try:
-                    index, retry_parts = task.result()
+                    task.result()
                 except Exception as exc:
                     failures.append(exc)
-                    return
-                if retry_parts is not None and perf_counter() < active_deadline:
-                    retry_payloads[index].append(retry_parts)
 
             # Own request completion dispatch on this event-loop thread. If
             # Core dispatches each reply from its worker, the ctypes callback
@@ -185,30 +165,26 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
                     # Python 3.12 starts each request coroutine immediately,
                     # matching Node Promise construction and removing one
                     # scheduler turn plus the old nested Task. Keep each
-                    # logical payload immutable until its request attempt has
-                    # either transferred ownership or entered the socket-local
-                    # retry FIFO.
+                    # logical payload immutable until its managed request has
+                    # either completed or retained its refusal-time snapshot.
                     with scoped_relay_eager_task_factory():
                         while perf_counter() < active_deadline and not failures:
                             for index in range(len(sockets)):
                                 if perf_counter() >= active_deadline:
                                     break
-                                if retry_payloads[index]:
-                                    stamped_parts = retry_payloads[index].popleft()
-                                else:
-                                    stamped = stamp_payload(
-                                        payloads[index],
-                                        phase=1,
-                                        run_id=run_id,
-                                        seq=seqs[index],
-                                    )
-                                    seqs[index] += 1
-                                    stamped = bytes(stamped)
-                                    stamped_parts = (
-                                        (stamped,)
-                                        if expected_part_count == 1
-                                        else (stamped, b"")
-                                    )
+                                stamped = stamp_payload(
+                                    payloads[index],
+                                    phase=1,
+                                    run_id=run_id,
+                                    seq=seqs[index],
+                                )
+                                seqs[index] += 1
+                                stamped = bytes(stamped)
+                                stamped_parts = (
+                                    (stamped,)
+                                    if expected_part_count == 1
+                                    else (stamped, b"")
+                                )
                                 task = asyncio.create_task(
                                     request_once(index, stamped_parts)
                                 )

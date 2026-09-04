@@ -28,10 +28,14 @@ The awaitable completes only when a retry is admitted. A wake FD transfers
 ownership to a public poller and stops lifecycle waits; the worker uses no
 fixed sleep, timer, or zero-time polling.
 
-`RequestOp` keeps its existing synchronous and awaitable terminals, matching
-`CompletionKind.REQUEST` records, and preserves `timeout()`. Cancelling an
-awaitable detaches only the caller wait: the socket-local owner continues the
-required retry or completion cleanup and closes late completion payloads.
+`RequestOp.submit_sync()` keeps Core's blocking `NONE` path. The awaitable
+terminal uses the same DONTWAIT wait-token machine as SEND: it snapshots the
+request only after `BACKPRESSURED`/`EAGAIN`, retries only for its matching
+WRITABLE token, and starts reply-timeout handling only after admission. It then
+completes from its `CompletionKind.REQUEST` record and preserves `timeout()`.
+Cancelling an awaitable detaches only the caller wait: the socket-local owner
+continues the required retry or completion cleanup and closes late completion
+payloads.
 
 ROUTER request receive supplies an opaque, owner-bound `ReplyToken`. Only the
 originating router accepts it, and `ReplyOp.submit()` has no flags. PUB/XPUB
@@ -41,13 +45,14 @@ retains `SendFlags`. Receive no-data is selected with `RecvFlags.DONT_WAIT`.
 A public poller driving pending operations registers both
 `PollEventFlag.POLLOUT` and `PollEventFlag.POLLCOMPLETION`. The latter transfers
 completion draining to that poller while registered; callers keep polling until
-their SEND and REQUEST awaitables settle. A REQUEST record may settle a request,
-while a WRITABLE record only advances the matching SEND retry.
+their SEND and REQUEST awaitables settle. A REQUEST record may settle an
+admitted request, while a WRITABLE record only advances the matching SEND or
+pre-admission REQUEST retry.
 
 The raw ABI options `ZLINK_OPT_PENDING_MAX_MSGS` and
-`ZLINK_OPT_PENDING_MAX_BYTES` are REQUEST-only limits for DONTWAIT records
-waiting for admission. Ordinary SEND ignores them, and the typed Python socket
-options do not expose them as SEND retry limits.
+`ZLINK_OPT_PENDING_MAX_BYTES` keep their values and storage for ABI
+compatibility but are ignored. The typed Python socket options do not expose
+them.
 
 ## Pull receive and eventing
 

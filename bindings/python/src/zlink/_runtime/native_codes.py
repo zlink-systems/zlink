@@ -55,8 +55,7 @@ class SocketOption(IntEnum):
     SUBMIT_RETRY_MODE = 0x3037
     SUBMIT_RETRY_TIMEOUT = 0x3038
     SUBMIT_RETRY_ATTEMPTS = 0x3039
-    # ABI-stable DONTWAIT REQUEST pending-payload limits. Ordinary SEND
-    # retains no payload in Core and ignores both options.
+    # ABI-stable legacy option values; Core stores but ignores both options.
     PENDING_MAX_MSGS = 0x303A
     PENDING_MAX_BYTES = 0x303B
 

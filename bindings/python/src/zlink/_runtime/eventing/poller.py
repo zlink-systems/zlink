@@ -210,9 +210,10 @@ class NativePoller:
             if output_index != 0 or timeout_ms == 0 or ready == 0:
                 return output_index
 
-            # A WRITABLE-only record is internal send progress. If the caller
-            # watched only POLLCOMPLETION, keep waiting for a REQUEST record
-            # within the original deadline instead of returning a false event.
+            # A WRITABLE-only record is internal SEND or pre-admission REQUEST
+            # progress. If the caller watched only POLLCOMPLETION, keep waiting
+            # for a REQUEST record within the original deadline instead of
+            # returning a false event.
             if deadline is not None:
                 remaining_ms = int((deadline - time.monotonic()) * 1000.0)
                 if remaining_ms <= 0:

@@ -42,7 +42,7 @@ class SendOp(_FluentMessageOp, Protocol):
 
 @runtime_checkable
 class RequestOp(_FluentMessageOp, Protocol):
-    """Build an HWM-managed routed request."""
+    """Build a routed request with managed admission backpressure."""
 
     def message(self, payload) -> "RequestOp": ...
 
@@ -53,7 +53,7 @@ class RequestOp(_FluentMessageOp, Protocol):
         ...
 
     def submit(self) -> Awaitable[list["Message"]]:
-        """Return the coroutine that completes with the reply parts."""
+        """Wait for admission through WRITABLE retries, then for the reply."""
         ...
 
     def submit_sync(self) -> list["Message"]:

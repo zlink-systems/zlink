@@ -35,7 +35,7 @@ from perf_multi_common import (
 from perf_multi_dealer_dealer_server import (
     dealer_dealer_active_poll_timeout_ms,
 )
-from perf_multi_reqrep_client import _REQUEST_RETRY_RESULTS, submit_request_once
+from perf_multi_reqrep_client import submit_managed_request
 from perf_multi_reqrep_server import submit_reqrep_reply
 from perf_multi_stream_server import classify_control_line, wait_connection_ready_count
 from run_benchmarks import (
@@ -468,7 +468,7 @@ class PerfMultiRunnerTests(unittest.TestCase):
             submit_reqrep_reply(request, (b"payload", b""))
         self.assertEqual(request.attempts, 1)
 
-    def test_request_attempt_preserves_logical_multipart_after_backpressure(self):
+    def test_request_submit_uses_binding_managed_terminal_once(self):
         reply = object()
 
         class RequestOperation:
@@ -486,10 +486,6 @@ class PerfMultiRunnerTests(unittest.TestCase):
 
             async def submit(self):
                 self.owner.attempts.append((self.parts, self.timeout_s))
-                if len(self.owner.attempts) == 1:
-                    raise zlink.SubmitError(
-                        zlink.SubmitResult.BACKPRESSURED, 11
-                    )
                 return reply
 
         class Socket:
@@ -501,26 +497,36 @@ class PerfMultiRunnerTests(unittest.TestCase):
 
         socket = Socket()
         logical_parts = (b"payload", b"")
-        first_result, first_backpressured = asyncio.run(
-            submit_request_once(socket, logical_parts, timeout_s=0.2)
+        result = asyncio.run(
+            submit_managed_request(socket, logical_parts, timeout_s=0.2)
         )
-        result, second_backpressured = asyncio.run(
-            submit_request_once(socket, logical_parts, timeout_s=0.2)
-        )
-        self.assertIsNone(first_result)
-        self.assertTrue(first_backpressured)
         self.assertIs(result, reply)
-        self.assertFalse(second_backpressured)
         self.assertEqual(
             socket.attempts,
-            [((b"payload", b""), 0.2), ((b"payload", b""), 0.2)],
+            [((b"payload", b""), 0.2)],
         )
 
-    def test_request_attempt_retries_only_pre_admission_results(self):
-        self.assertEqual(
-            _REQUEST_RETRY_RESULTS,
-            {zlink.SubmitResult.BACKPRESSURED},
-        )
+    def test_request_submit_does_not_add_external_backpressure_retry(self):
+        class RequestOperation:
+            def messages(self, *_parts):
+                return self
+
+            def timeout(self, _timeout_s):
+                return self
+
+            async def submit(self):
+                raise zlink.SubmitError(zlink.SubmitResult.BACKPRESSURED, 11)
+
+        class Socket:
+            def request(self):
+                return RequestOperation()
+
+        with self.assertRaises(zlink.SubmitError):
+            asyncio.run(
+                submit_managed_request(
+                    Socket(), (b"payload", b""), timeout_s=0.2
+                )
+            )
 
     def test_routed_send_propagates_backpressure_without_external_retry(self):
         class SendOperation:

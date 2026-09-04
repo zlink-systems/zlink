@@ -24,6 +24,7 @@ from zlink._runtime.eventing.poller import NativePoller
 from zlink._runtime.messaging.routed_async import (
     CompletionOwner,
     _CompletionEntry,
+    _RequestEntry,
     _SendEntry,
 )
 from zlink._runtime.sockets.socket_base_impl import RouterSocket
@@ -336,6 +337,51 @@ def test_terminal_writable_is_typed_and_never_retried(
 
     retry.assert_not_called()
     assert entry.settled
+    assert entry._error.result == expected_result
+    assert entry._error.native_errno == native_errno
+    assert closer.closed == 1
+
+
+@pytest.mark.parametrize(
+    ("native_errno", "expected_result"),
+    (
+        (errno.ENOENT, zlink.SubmitResult.NOT_FOUND),
+        (
+            getattr(errno, "ESHUTDOWN", errno.ECANCELED),
+            zlink.SubmitResult.TERMINATED,
+        ),
+        (int(zlink.ErrorCode.ETERM), zlink.SubmitResult.TERMINATED),
+    ),
+)
+def test_request_terminal_writable_is_typed_and_never_retried(
+    native_errno, expected_result
+):
+    target = b"terminal-request-route"
+    socket = type("Socket", (), {"_handle": 1})()
+    owner = CompletionOwner(socket)
+    entry = _RequestEntry(None, 1000)
+    entry.target = target
+    entry.payload = []
+    assert entry.await_writable(91)
+    completion = _completion(
+        ZLINK_COMPLETION_WRITABLE,
+        completion_id=91,
+        context=entry.context,
+        peer_rid=target,
+        send_result=ZLINK_SEND_TERMINAL,
+        terminal_errno=native_errno,
+    )
+
+    closer = _CompletionCloser()
+    with (
+        patch("zlink._runtime.messaging.routed_async.lib", return_value=closer),
+        patch.object(owner, "_attempt_request") as retry,
+    ):
+        assert not owner._capture_writable(entry, completion)
+
+    retry.assert_not_called()
+    assert entry.settled
+    assert isinstance(entry._error, zlink.SubmitError)
     assert entry._error.result == expected_result
     assert entry._error.native_errno == native_errno
     assert closer.closed == 1

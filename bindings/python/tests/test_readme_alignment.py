@@ -40,7 +40,9 @@ class ReadmeAlignmentTests(unittest.TestCase):
         pending_start = readme.index("ZLINK_OPT_PENDING_MAX_MSGS")
         pending_contract = readme[pending_start : pending_start + 320]
         self.assertIn("ZLINK_OPT_PENDING_MAX_BYTES", pending_contract)
-        self.assertIn("REQUEST-only", pending_contract)
+        self.assertIn("ABI", pending_contract)
+        self.assertIn("ignored", pending_contract)
+        self.assertNotIn("REQUEST-only", pending_contract)
 
     def test_test_runner_script_exists_in_tests_directory(self):
         script = ROOT / "tests" / "run_tests.sh"
