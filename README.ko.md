@@ -236,6 +236,7 @@ Framework sample은 단순 API 호출뿐 아니라 여러 역할의 server와 cl
 | 목적 | 문서 |
 |---|---|
 | 전체 문서 구조 확인 | [문서 네비게이션](./doc/README.ko.md) |
+| 기여·운영 규칙(빌드, 테스트, gate, 릴리스 절차) | [기여 핸드북](./CONTRIBUTING.ko.md) |
 | Core 사용법 | [Core 사용자 가이드](./core/doc/guide/01-overview.ko.md) |
 | Core 정식 계약 | [Core 스펙](./core/doc/spec/README.ko.md) |
 | 언어별 Binding 사용법 | [Bindings 가이드](./bindings/doc/guide/README.ko.md) |
