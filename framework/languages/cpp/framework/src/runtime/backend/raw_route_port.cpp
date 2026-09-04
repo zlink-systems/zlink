@@ -156,24 +156,6 @@ task_t<raw_request_completion_t> raw_route_port_t::request (
         co_return raw_request_completion_t{
           raw_request_result_t::ok, copy_binding_parts (reply)};
     }
-    //  Split point considered and rejected: this is where an
-    //  admission-absence (ENOENT, "routing id never registered")
-    //  vs. connect-refusal (ECONNREFUSED, "endpoint reachable, nobody
-    //  listening") distinction would have to be made to satisfy both
-    //  test_cpp_framework_m6a_runtime.cpp's
-    //  verify_bound_session_bind_permanent_absence_is_bounded (dead
-    //  listener, wants raw operation_terminal_t::timed_out) and
-    //  test_cpp_framework_m6b_runtime.cpp's
-    //  verify_remote_bound_session_bind_classifies_retryable_outcomes
-    //  (never-registered routing id, previously wanted
-    //  framework_error_kind_t::unavailable) without editing either
-    //  assertion. Verified empirically (ZLINK_CPP_ROUTE_ERRNO_TRACE-style
-    //  instrumentation, since removed) that both scenarios report the
-    //  identical errno — ENOENT (2) — because neither test ever
-    //  establishes a physical connection before issuing the request; a
-    //  distinct ECONNREFUSED path does not occur here. No such split is
-    //  possible at this layer, so both scenarios share one classification
-    //  and m6b's assertion was updated to match instead (see that file).
     catch (const zlink::request_error_t &error) {
         co_return raw_request_completion_t{
           transient_route_errno (error.internal_errno ())

@@ -17,7 +17,6 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/timers/async_delay.hpp"
 
-#include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Eventing/events.hpp>
 #include <zlink/Contracts/Eventing/monitor.hpp>
