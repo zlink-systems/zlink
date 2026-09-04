@@ -188,11 +188,10 @@ func (b *publishBuilder) Submit(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-type requestBuilderPart struct {
-	message *Message
-	data    []byte
-	bytes   bool
-}
+// Request and send staging have the same native part representation. Keeping
+// this as an alias avoids a conversion allocation on the immediately admitted
+// REQUEST path; request builders simply never set move.
+type requestBuilderPart = sendBuilderPart
 
 type requestBuilder struct {
 	parts   []requestBuilderPart

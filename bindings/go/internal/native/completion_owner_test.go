@@ -40,6 +40,27 @@ func TestSendTerminalErrorPreservesCauseCategory(t *testing.T) {
 	}
 }
 
+func TestRequestTerminalErrorPreservesCauseCategory(t *testing.T) {
+	tests := []struct {
+		name   string
+		errno  int
+		result RequestResult
+	}{
+		{name: "route removed", errno: int(syscall.ENOENT), result: RequestNotFound},
+		{name: "socket shutdown", errno: int(syscall.ESHUTDOWN), result: RequestTerminated},
+		{name: "context terminated", errno: contextTerminatedErrno, result: RequestTerminated},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var requestErr *RequestError
+			err := requestTerminalError(test.errno)
+			if !errors.As(err, &requestErr) || requestErr.Result != test.result || requestErr.InternalErrno() != test.errno {
+				t.Fatalf("requestTerminalError(%d) = %v, want result %d with original errno", test.errno, err, test.result)
+			}
+		})
+	}
+}
+
 func TestRequestCompletionEntryJoinsCaptureBeforePublish(t *testing.T) {
 	entry := newCompletionEntry(completionRequest, context.Background())
 	defer entry.deleteHandle()

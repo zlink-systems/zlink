@@ -12,8 +12,8 @@ import (
 	"zlink.systems/zlink/perf/internal/perfcommon"
 )
 
-// The 0.16 pull-completion port keeps this benchmark buildable and correct.
-// Restoring the former pipelined measurement model is deferred to Phase 7.
+// Request Submit owns any pre-admission WRITABLE retry and then waits for the
+// normal reply completion, so the benchmark loop needs no pending-request FIFO.
 func runSingleReqRep(
 	cfg benchmarkConfig,
 	requester zlink.SocketTarget,

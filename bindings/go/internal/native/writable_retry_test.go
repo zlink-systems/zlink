@@ -165,7 +165,7 @@ func waitForManagedSendToken(t testing.TB, owner *completionOwner) (*completionE
 		var waiting *completionEntry
 		owner.mu.Lock()
 		for _, entry := range owner.entries {
-			if entry.kind == completionSendRetry && entry.sendWaiting {
+			if entry.kind == completionSendRetry && entry.writableWaiting {
 				waiting = entry
 				break
 			}

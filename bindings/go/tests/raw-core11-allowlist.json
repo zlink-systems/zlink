@@ -24,11 +24,11 @@
     },
     {
       "path": "include/zlink/socket/api.h",
-      "sha256": "7babe538c03598151ac77b7e421a922810464fea0dec65f286bf8e4e1f367ba8"
+      "sha256": "257ea1f9af25f402087f8052750131030fb89273b12944713ef0a50eded89dad"
     },
     {
       "path": "include/zlink_enum.h",
-      "sha256": "1da0d7f125a7fca7062abbf96b4be443c2f39d2f20379f20f9728563b714edc1"
+      "sha256": "a7d0fec0f0c6a35cd21d8a25adda44d4ec2ab4bcd66854fbd9271c6445ee3e22"
     },
     {
       "path": "include/zlink_errno.h",

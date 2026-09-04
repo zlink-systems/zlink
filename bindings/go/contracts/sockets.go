@@ -39,7 +39,8 @@ type (
 	SendSubmitOp = impl.SendSubmitOp
 	// RequestOp builds a request; submitting consumes the parts and awaits a reply.
 	RequestOp = impl.RequestOp
-	// RequestSubmitOp accepts further parts, a timeout, and the reply-result terminal.
+	// RequestSubmitOp accepts further parts, a timeout, and a terminal that retries
+	// after its exact WRITABLE token before awaiting the reply result.
 	RequestSubmitOp = impl.RequestSubmitOp
 	// ReplyOp builds a reply; submitting consumes the parts.
 	ReplyOp = impl.ReplyOp

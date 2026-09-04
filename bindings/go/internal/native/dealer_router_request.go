@@ -48,6 +48,34 @@ type sendRetryState struct {
 	payload   *sendRetryPayload
 }
 
+// requestRetryState owns the logical request only after Core refuses the
+// initial admission attempt and returns a WRITABLE wait token. Once admitted,
+// Core owns the request lifecycle and the entry waits for its normal REQUEST
+// completion (reply or timeout).
+type requestRetryState struct {
+	core      *socketCore
+	target    RoutingID
+	hasTarget bool
+	timeout   uint32
+	payload   *sendRetryPayload
+}
+
+func newRequestRetryState(
+	core *socketCore,
+	target *RoutingID,
+	timeout uint32,
+	parts []requestBuilderPart,
+) (*requestRetryState, error) {
+	state := &requestRetryState{core: core, timeout: timeout}
+	if target != nil {
+		state.target = *target
+		state.hasTarget = true
+	}
+	payload, err := newSendRetryPayload(parts)
+	state.payload = payload
+	return state, err
+}
+
 func newSendRetryState(
 	core *socketCore,
 	target *RoutingID,
@@ -104,6 +132,44 @@ func (s *sendRetryState) matchesTarget(actual RoutingID) bool {
 	return s.target.Equal(actual)
 }
 
+func (s *requestRetryState) attempt(userContext uintptr) (uint64, error) {
+	if s == nil || s.core == nil || s.payload == nil {
+		return 0, &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
+	}
+
+	var completionID C.zlink_completion_id_t
+	var rid C.zlink_routing_id_t
+	var ridPointer *C.zlink_routing_id_t
+	if s.hasTarget {
+		rid = s.target.toC()
+		ridPointer = &rid
+	}
+	err := submitMultipartFromClones(s.payload.owned, false, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
+		var partTimeout C.uint32_t
+		var finalContext C.uintptr_t
+		var completionOut *C.zlink_completion_id_t
+		if partFlag == C.ZLINK_PART_FINAL {
+			partTimeout = C.uint32_t(s.timeout)
+			finalContext = C.uintptr_t(userContext)
+			completionOut = &completionID
+		}
+		return submitErrorFromResult(C.zlink_go_request_part_with_context(
+			s.core.raw(), ridPointer, part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
+			partTimeout, finalContext, completionOut))
+	})
+	return uint64(completionID), err
+}
+
+func (s *requestRetryState) matchesTarget(actual RoutingID) bool {
+	if s == nil {
+		return false
+	}
+	if !s.hasTarget {
+		return actual.Size() == 0
+	}
+	return s.target.Equal(actual)
+}
+
 func (e *completionEntry) attemptSend() bool {
 	if e == nil {
 		return true
@@ -127,7 +193,7 @@ func (e *completionEntry) attemptSend() bool {
 		if completionID != 0 {
 			err = &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
 		} else {
-			e.setSendWaiting(false)
+			e.setWritableWaiting(false)
 			e.send.payload.takeSourceOwnership()
 			e.send.payload.close()
 			e.finishSend(nil)
@@ -140,7 +206,7 @@ func (e *completionEntry) attemptSend() bool {
 		if submitErr.internalErrno() == int(C.EAGAIN) && completionID != 0 {
 			e.send.payload.takeSourceOwnership()
 			e.publishSendWait(completionID)
-			if activateErr := e.setSendWaiting(true); activateErr != nil {
+			if activateErr := e.setWritableWaiting(true); activateErr != nil {
 				// Core already owns the token. Preserve the entry as a tombstone so
 				// its cgo context cannot be reused before socket shutdown.
 				e.mu.Lock()
@@ -157,7 +223,7 @@ func (e *completionEntry) attemptSend() bool {
 		err = &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
 	}
 
-	e.setSendWaiting(false)
+	e.setWritableWaiting(false)
 	e.send.payload.close()
 	e.finishSend(err)
 	return true
@@ -243,8 +309,7 @@ func submitCompletionRequest(
 		rid = target.toC()
 		ridPointer = &rid
 	}
-	sendParts := sendPartsFromRequestParts(parts)
-	err = submitMultipartFromBuilderParts(sendParts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
+	err = submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
 		var partTimeout C.uint32_t
 		var userContext C.uintptr_t
 		var completionOut *C.zlink_completion_id_t
@@ -257,27 +322,55 @@ func submitCompletionRequest(
 			core.raw(), ridPointer, part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
 			partTimeout, userContext, completionOut))
 	})
+	if err == nil {
+		if completionID == 0 {
+			entry.failSubmit()
+			core.completion.unregister(entry)
+			return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
+		}
+		entry.publish(uint64(completionID))
+		return entry.waitRequest()
+	}
+
+	var submitErr *SubmitError
+	if errors.As(err, &submitErr) && submitErr.Result == SubmitBackpressured &&
+		submitErr.internalErrno() == int(C.EAGAIN) && completionID != 0 {
+		entry.attemptMu.Lock()
+		retry, snapshotErr := newRequestRetryState(core, target, timeoutMillis, parts)
+		entry.request = retry
+		earlyWritable := entry.publishRequestWait(uint64(completionID))
+		if snapshotErr == nil {
+			retry.payload.takeSourceOwnership()
+		}
+		activateErr := entry.setWritableWaiting(true)
+		if snapshotErr != nil || activateErr != nil {
+			if snapshotErr == nil {
+				snapshotErr = requestWaitActivationError(activateErr)
+			}
+			entry.mu.Lock()
+			if !entry.publicDone {
+				entry.err = snapshotErr
+				entry.publicDone = true
+				close(entry.done)
+			}
+			entry.mu.Unlock()
+			if retry.payload != nil {
+				retry.payload.close()
+			}
+		}
+		entry.attemptMu.Unlock()
+		if earlyWritable != nil && entry.captureRequestWritableRecord(*earlyWritable) {
+			core.completion.unregister(entry)
+		}
+		return entry.waitRequest()
+	}
+
 	if err != nil {
 		entry.failSubmit()
 		core.completion.unregister(entry)
 		return nil, err
 	}
-	if completionID == 0 {
-		entry.failSubmit()
-		core.completion.unregister(entry)
-		return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
-	}
-
-	entry.publish(uint64(completionID))
-	return entry.waitRequest()
-}
-
-func sendPartsFromRequestParts(parts []requestBuilderPart) []sendBuilderPart {
-	converted := make([]sendBuilderPart, len(parts))
-	for i, part := range parts {
-		converted[i] = sendBuilderPart{message: part.message, data: part.data, bytes: part.bytes}
-	}
-	return converted
+	return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
 }
 
 func requestTimeoutValue(timeout time.Duration) (uint32, error) {
@@ -298,4 +391,12 @@ func requestTimeoutValue(timeout time.Duration) (uint32, error) {
 		return 1, nil
 	}
 	return uint32(millis), nil
+}
+
+func requestWaitActivationError(err error) error {
+	var submitErr *SubmitError
+	if errors.As(err, &submitErr) && submitErr.Result == SubmitTerminated {
+		return requestTerminalError(submitErr.internalErrno())
+	}
+	return err
 }
