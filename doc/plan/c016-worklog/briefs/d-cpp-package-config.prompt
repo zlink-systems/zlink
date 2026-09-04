@@ -1,0 +1,26 @@
+# Job: cpp package test — `test_cpp_stream_connector_install_consumer` hardcodes `--config Release` and fails on a Debug single-config tree
+
+You are a codex sub-agent under a Claude supervisor. One cause, 45 min cap. Read `AGENTS.md` (root)
+§2/§3. Only `framework/languages/cpp/tests/Zlink.Framework.PackageTests/**` (and, if truly required,
+the test registration in `framework/languages/cpp/CMakeLists.txt`) may change. Never touch runtime
+source, `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`. Use
+ONLY build dir `framework/languages/cpp/build/linux-ninja-c-e2e`. Do not commit.
+
+## Facts (`doc/plan/c016-worklog/d-cpp-package-lz4-summary.md` BLOCKERS)
+`stream_connector_consumer.cmake:30` runs the install with `--config Release` regardless of the
+producer's configuration. On this Debug single-config (Ninja) tree the install copies
+`zlink_stream_connector_cppTargets.cmake` but not `zlink_stream_connector_cppTargets-debug.cmake`
+(the per-config file for the built Debug locations), so the consumer configure fails at
+`stream_connector_consumer.cmake:97`: `IMPORTED_LOCATION not set for imported target
+"zlink::stream_connector"`. `install_consumer.cmake` (the Framework package test) passes on the same
+tree — compare how it selects the configuration and mirror it.
+
+## What to do
+Make the stream-connector package test pass the producer's actual configuration (CMAKE_BUILD_TYPE
+for single-config generators, `$<CONFIG>`/CTest -C for multi-config) to both the install step and the
+consumer build, keeping vcpkg/Release behaviour unchanged. Verify
+`ctest --test-dir build/linux-ninja-c-e2e -R '^test_cpp_stream_connector_install_consumer$' --output-on-failure`
+3× and `test_cpp_framework_install_consumer` 1×.
+
+## Deliverable
+`doc/plan/c016-worklog/d-cpp-package-config-summary.md`: change with `file:line`, results, BLOCKERS.

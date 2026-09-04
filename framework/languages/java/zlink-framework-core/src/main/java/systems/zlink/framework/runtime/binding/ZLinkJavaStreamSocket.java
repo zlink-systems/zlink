@@ -573,8 +573,10 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                         })
                         .toCompletableFuture());
                 } catch (RuntimeException | Error failure) {
-                    cleanup.add(
-                        CompletableFuture.failedFuture(failure));
+                    cleanup.add(isStaleBinding(failure)
+                            || isRemoteRouteUnavailable(failure)
+                        ? CompletableFuture.completedFuture(null)
+                        : CompletableFuture.failedFuture(failure));
                 }
             });
             try {

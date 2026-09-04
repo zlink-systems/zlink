@@ -1478,7 +1478,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 HEARTBEAT_PING_NAME,
                 Map.of(),
                 Optional.empty());
-            state.stream().send(state.routingId(), ping, List.of(empty), SendFlags.DONT_WAIT);
+            state.stream().send(
+                state.routingId(), ping, List.of(empty), SendFlags.DONT_WAIT);
+        } catch (ZlinkSubmitException transportFailure) {
+            LOGGER.log(Level.FINE,
+                "STREAM heartbeat ping failed during transport teardown: "
+                    + state.routingId(),
+                transportFailure);
         } finally {
             empty.close();
         }

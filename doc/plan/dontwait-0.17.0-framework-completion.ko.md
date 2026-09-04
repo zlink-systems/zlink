@@ -37,26 +37,30 @@
 - [x] **cpp m6b** `error_kind()==deadline_exceeded` — 동일 원인(ENOENT), 격리 3/3 green. 잔여: m6b 후반 `verify_raw_spot_and_actor_routing` line 4524 /
       `route_cache_stops_at_owner_admission_deadline` line 1909 불안정(별개 원인, job `bucketB-cpp-m6b-late` 진행 중)
 - [ ] **cpp m6a 잔여**: `verify_client_server_plain_hello_is_rejected` 행(단독 실행도 timeout) — job `bucketB-cpp-m6a-plain-hello` 진행 중
-- [ ] **dotnet stale-authority 3건**: 분류 오류가 아니라 **stall** — owner가 terminal reply submit OK(트레이스), caller가 completion을 못 받아 3초 뒤 `ExpireOperationAsync`가 TimedOut(101).
-      Core 최소 재현(ROUTER↔ROUTER 양방향 + POLLCOMPLETION poller)은 정상 → framework/binding 경계. job `bucketB-dotnet-stale`(sol/xhigh) 진행 중
-- [ ] **node 신규(B)**: `user-spot-native-two-process` `RequestError: request failed` — job `bucketB-node-two-process` 진행 중
-- [x] 판정(현재까지): cpp 2건 = framework 매핑/연결 소유자 버그(Core·binding 아님). dotnet·node 미판정.
-- [ ] 수정 + 재검증 + 커밋 — cpp 2/4 완료
+- [x] **dotnet stale-authority 3건**: 원인 = spec(README §4 HANDOVER)이 정한 패배 방향 request timeout. Framework가 Core handover 수렴 전에 `Admitted`를 공개한 것이 결함.
+      수정 = settle-before-submit(패배 outbound intent를 endpoint로 disconnect, 패배 방향이 ready였다면 두 lane Disconnected 처리 뒤에만 Admitted 공개), 회귀 `BilateralCallerFirstAdmissionCompletesImmediateActorRequestOnSurvivor`.
+      3건×3회 9/9, Stateful suite 50/50. 전체 unit gate는 감독관이 실행 중(커밋 대기). generic request 자동 재전송은 spec(02-spot-messaging:392-403, 02-session-actor-binding:626-634)이 금지하므로 미도입
+- [x] **node 신규(B)**: `user-spot-native-two-process` — 첫 request가 deadline 전부 소진 → replay 여지 없음. 수정 커밋 `285cfa522a`
+- [x] 판정: cpp 4건·dotnet 1건·node 1건 모두 framework(+테스트 하네스) 결함. Core·binding 버그 0건 (Core 수정 job 1건은 오판으로 중단).
+- [ ] 수정 + 재검증 + 커밋 — cpp 4/4·node 1/1 커밋, dotnet 커밋 대기(전체 unit gate)
 
 ### C. 검증 인프라 (신뢰성 확보)
 - [x] 환경 재구축(2026-09-05, WSL 재설치): Core dev 빌드, **로컬 Core 0.17.0 프리픽스 수동 구성**(GitHub에 `core/v0.17.0` 릴리스 없음 — `fetch-release.sh` 캐시 단락 경로 이용), 4언어 로컬 패키지,
       cpp 의존성(apt boost/gtest/gmock/lz4/libuv + hiredis·redis++ 소스 빌드), node `http-client` tarball 재생성(`npm pack ./packages/http-client`), Docker Desktop WSL 통합, Playwright Chromium
 - [x] cpp 샘플 신뢰성 있는 실행 — 별도 build dir `build/linux-ninja-c-e2e`(protobuf include 수정 커밋) 에서 **7/7 PASS**(`c-cross-language-e2e-2-summary.md`)
 - [x] cross-language E2E: C++ host stale 문제는 caller가 `ZLINK_CPP_BUILD_DIR` 미지정이 원인(runner는 이미 우선 계약) — 0.17 host로 재실행. C++↔.NET·C++↔Node messaging/flow/stream PASS, C++→.NET spot-route PASS.
-      **잔여**: `.NET→C++ spot-route` `Unavailable`(B, dotnet client측) 및 node smoke의 .NET TestHost flow Activity tag 불일치(D) — dotnet handover job 종료 후 순차 job
+      `.NET→C++ spot-route` `Unavailable` = .NET RouteMesh admission 후보 선택 결함(unilateral 연결의 Hello를 새 inbound로 오인해 유일한 outbound 폐기; cpp `raw_mesh_node_owner.cpp:445-476` fallback과 parity) → 수정(미커밋, dotnet 전체 unit gate 후 커밋) 후 **cpp all-stage runner 32/32 PASS**(Java↔C++·relocation·User-Spot Join 포함).
+      잔여: node smoke의 .NET TestHost flow Activity tag 불일치(D) — job 진행 중
 - [x] `java-cross` selector(Java↔Node/.NET) 4/4 통과. Java↔C++ 방향은 all-stage runner 후반이라 위 .NET→C++ 실패 해소 후 실행
 
 ### D. 최종 게이트 (plan line 143: framework unit + cross-language E2E + 7 samples 전부 green)
 - [ ] 4언어 framework unit (gate-v2, D-B85 바인딩 반영 패키지): **A/B 실패 0**.
       java 1206/3 = pre-existing C 3 + 신규 F 1(`EntrySpotActorDispatchTests…staleTerminal` relocation seal 부재, job 진행);
       node 1552/5 = C 4(ZoneWorld dist 미빌드 3·lint 1) + F 2(SupportChat lifecycle 테스트가 옛 3000/1000ms 하드코딩 — 내 budget 커밋 `2e3b1b47e4`의 후속, TicTacToe.Ts PASS 마커 — job 진행);
-      cpp·dotnet gate-v2 진행 중
-- [ ] 7 samples × 4언어 green — **cpp 7/7**; node 5/7(ZoneWorld `vite` 환경 D, SupportChat 브라우저 stream timeout B — job); java 1/7(TicTacToe·SupportChat TEARDOWN_FAILED·Bingo session-disconnect = pre-existing C, DeliveryDispatch·GameQuest·ZoneWorld timeout = B, D-B85 binding-port 의존 여부 판정 job); dotnet 미실행(handover job 종료 후)
+      cpp gate-v2 63/69 → stream-connector fixture(RAW mode before bind, spec 08-stream §2) `dbfcf7d6fe`·lz4 packaging `20b94c3457`·package-test config `4573c09a2a` 수정 후 잔여 = inventory 278(C)·m6b 1909 flake(C);
+      dotnet 전체 unit gate 감독관 실행 중(handover 수정 커밋 대기)
+- [ ] 7 samples × 4언어 green — **cpp 7/7**; **node 7/7**(SupportChat budget `2e3b1b47e4`, ZoneWorld entry html `c67deb44e0`, runner PASS marker `2ceb137abe`);
+      java: TicTacToe·SupportChat·DeliveryDispatch(`ed156f5983`+teardown `6682ae0db1`)·GameQuest(heartbeat `dc9fe76100`)·ShoppingMall = 5/7 green, Bingo 재실행 중, ZoneWorld job 진행 중; dotnet 7 samples 미실행(dotnet 커밋 후)
 - [ ] cross-language E2E green
 - [ ] 최종 커밋+푸시
 

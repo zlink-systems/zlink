@@ -4,6 +4,13 @@ endif()
 if(NOT DEFINED ZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH)
   message(FATAL_ERROR "ZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH is required")
 endif()
+if(NOT DEFINED ZLINK_FRAMEWORK_CPP_CONFIGURATION
+    OR ZLINK_FRAMEWORK_CPP_CONFIGURATION STREQUAL "")
+  message(FATAL_ERROR "ZLINK_FRAMEWORK_CPP_CONFIGURATION is required")
+endif()
+if(NOT DEFINED ZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG)
+  message(FATAL_ERROR "ZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG is required")
+endif()
 
 string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef consumer_run_id)
 set(consumer_run_dir
@@ -27,7 +34,7 @@ execute_process(
   COMMAND "${CMAKE_COMMAND}" --install "${ZLINK_FRAMEWORK_CPP_BUILD_DIR}"
     --prefix "${consumer_install_prefix}"
     --component StreamConnector
-    --config Release
+    --config "${ZLINK_FRAMEWORK_CPP_CONFIGURATION}"
   RESULT_VARIABLE install_result)
 if(NOT install_result EQUAL 0)
   message(FATAL_ERROR "stream connector component install failed")
@@ -89,15 +96,22 @@ int main ()
 }
 ]=])
 
+set(consumer_configure_command
+  "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${consumer_build_dir}"
+  "-DCMAKE_PREFIX_PATH=${consumer_prefix_path}")
+if(NOT ZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG)
+  list(APPEND consumer_configure_command
+    "-DCMAKE_BUILD_TYPE=${ZLINK_FRAMEWORK_CPP_CONFIGURATION}")
+endif()
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${consumer_build_dir}"
-    "-DCMAKE_PREFIX_PATH=${consumer_prefix_path}"
+  COMMAND ${consumer_configure_command}
   RESULT_VARIABLE configure_result)
 if(NOT configure_result EQUAL 0)
   message(FATAL_ERROR "relocated stream connector consumer configure failed")
 endif()
 execute_process(
   COMMAND "${CMAKE_COMMAND}" --build "${consumer_build_dir}"
+    --config "${ZLINK_FRAMEWORK_CPP_CONFIGURATION}"
   RESULT_VARIABLE build_result)
 if(NOT build_result EQUAL 0)
   message(FATAL_ERROR "relocated stream connector consumer build failed")

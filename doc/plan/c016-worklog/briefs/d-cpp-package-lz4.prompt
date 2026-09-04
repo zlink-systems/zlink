@@ -1,0 +1,32 @@
+# Job: cpp package tests — install consumers require `install/lib/liblz4.{so,a}` that the system-lz4 build does not install
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1 h cap. Read `AGENTS.md` (root)
+§2/§3. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`,
+`doc/site/**`, other languages' trees; do not commit. Use ONLY build dir
+`framework/languages/cpp/build/linux-ninja-c-e2e` (another job owns `build/linux-ninja-debug`).
+
+## Facts (`doc/plan/c016-worklog/gate-v2-cpp-summary.md`)
+- `test_cpp_framework_install_consumer` fails: consumer build has `No rule to make target
+  .../install/lib/liblz4.so` (terminal assertion
+  `framework/languages/cpp/tests/Zlink.Framework.PackageTests/install_consumer.cmake:257`);
+  `test_cpp_stream_connector_install_consumer` fails: `stream connector component is missing:
+  .../install/lib/liblz4.a` (`stream_connector_consumer.cmake:67`).
+- This machine uses the `linux-ninja-debug` preset without vcpkg: lz4 comes from Ubuntu
+  `liblz4-dev` (system), whereas the tree's original environment used vcpkg where lz4 is part of the
+  installed package prefix. The install/export logic (search `CMakeLists.txt` for `lz4`,
+  `ZLINK_STREAM_CONNECTOR_WITH_LZ4`, `install(`, exported targets) apparently assumes the vcpkg layout
+  (copies/links `liblz4` from the package prefix). The protobuf equivalent was fixed earlier tonight in
+  `eb756181a6` (make both layouts work).
+- Decide the correct contract: does the installed framework package promise to ship lz4 (then the
+  install step must copy the system lz4 or build it static), or should exported targets reference
+  `lz4::lz4` from `find_dependency(lz4)` so the consumer resolves the system one? Read the package
+  tests' intent (`Zlink.Framework.PackageTests/*.cmake`) and the C++ guide's package section (read
+  only) before choosing; prefer the option that keeps vcpkg behaviour unchanged.
+
+## What to do
+1. Fix minimally in `framework/languages/cpp/CMakeLists.txt` / the stream-connector CMake so both
+   layouts pass; run the two ctest cases in `build/linux-ninja-c-e2e` (reconfigure with
+   `cmake --preset linux-ninja-debug -B build/linux-ninja-c-e2e` from framework/languages/cpp, build
+   the needed targets) 2× each.
+2. Deliverable `doc/plan/c016-worklog/d-cpp-package-lz4-summary.md`: contract chosen and why,
+   change with `file:line`, results, BLOCKERS.

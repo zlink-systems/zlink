@@ -1,0 +1,37 @@
+# Job: java GameQuest sample — `Ensure failed` at GameQuestClientScenario.java:215 (server evidence `failure:unexpected:active-binding:player-alice`)
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages' trees; never lower an assertion; do not
+commit. Another job may run the ZoneWorld java sample concurrently (jvm gate lock serializes runs).
+
+## Facts
+- `doc/plan/c016-worklog/bucketB-java-samples-summary.md`: GameQuest reproduces 2/2; all 16 ROUTER
+  REQUESTs during the run returned SubmitResult.OK (not D-B85, not handover). The client's only failed
+  evidence is `failure:unexpected:active-binding:player-alice`
+  (`zlink-work/c016/logs/bucketB-java-gamequest-probe.log:455-456`), asserted by
+  `GameQuestClientScenario.java:214-215` (`ensure(assertion.passed())`, helper `:398-401`).
+- Since then two Java runtime fixes landed on main: the shutdown-time idempotent unbind
+  (`ZLinkJavaStreamSocket.java` synchronous NOT_CONNECTED) and the DeliveryDispatch sample fix; the
+  Core/binding packages are current. First re-run GameQuest 2× on current main — it may already pass or
+  fail differently.
+- The sample contract: `framework/doc/framework/common/sample/` (GameQuest chapter — find it; the
+  active-binding evidence is a session/Actor binding lifecycle check: which player session must have
+  no active binding at that point). Relevant spec: `04-session/02-session-actor-binding.ko.md` (unbind,
+  session close, binding generations) and `03-spot-actor/`.
+- Env: `TMPDIR=/dev/shm/zlink-tmp-java`, `flock -w7200 /tmp/zlink-jvm-gate.lock`,
+  `ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/.artifacts/wsl/install/zlink-core/0.17.0/lib/libzlink.so`
+  (file), Docker OK. `cd framework/languages/java/samples/java/GameQuest && ./run_sample.sh`.
+  Tracing: `ZLINK_JAVA_STREAM_TRACE=1`, message-flow listener.
+
+## What to do
+1. Re-run 2×. If still failing: trace player-alice's binding lifecycle (bind → session close/unbind →
+   evidence check) and find which transition leaves the binding active (runtime unbind not applied,
+   evidence checked before the unbind completes, or the scenario expecting a binding state the spec
+   does not require). Decide framework vs sample vs test-scenario ordering; match the spec clause.
+2. Fix minimally in `framework/languages/java/**` (runtime or sample), regression test, sample 3× green
+   (exit 0, `gamequest-placement=completed`), and `:zlink-framework-core:test` once if runtime changed.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-java-gamequest-summary.md`: transition trace, cause `file:line`, spec
+clause, fix + regression, results, BLOCKERS.

@@ -427,8 +427,19 @@ if(ZLINK_STREAM_CONNECTOR_WITH_LZ4 OR ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4)
   find_path(ZLINK_LZ4_INCLUDE_DIR lz4.h)
   find_library(ZLINK_LZ4_LIBRARY NAMES lz4 liblz4)
   if(ZLINK_LZ4_INCLUDE_DIR AND ZLINK_LZ4_LIBRARY)
+    set(ZLINK_LZ4_INSTALL_LIBRARY "${ZLINK_LZ4_LIBRARY}")
+    if(UNIX)
+      get_filename_component(ZLINK_LZ4_LIBRARY_DIR
+        "${ZLINK_LZ4_LIBRARY}" DIRECTORY)
+      set(ZLINK_LZ4_STATIC_LIBRARY
+        "${ZLINK_LZ4_LIBRARY_DIR}/liblz4.a")
+      if(EXISTS "${ZLINK_LZ4_STATIC_LIBRARY}")
+        set(ZLINK_LZ4_INSTALL_LIBRARY
+          "${ZLINK_LZ4_STATIC_LIBRARY}")
+      endif()
+    endif()
     get_filename_component(ZLINK_LZ4_LIBRARY_NAME
-      "${ZLINK_LZ4_LIBRARY}" NAME)
+      "${ZLINK_LZ4_INSTALL_LIBRARY}" NAME)
     add_library(zlink_framework_cpp_lz4 INTERFACE)
     add_library(zlink::framework_cpp_lz4 ALIAS zlink_framework_cpp_lz4)
     set_target_properties(zlink_framework_cpp_lz4 PROPERTIES
@@ -714,7 +725,7 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     install(TARGETS zlink_framework_cpp_lz4
       EXPORT zlink_framework_cppTargets
       COMPONENT Framework)
-    install(FILES "${ZLINK_LZ4_LIBRARY}"
+    install(FILES "${ZLINK_LZ4_INSTALL_LIBRARY}"
       DESTINATION ${CMAKE_INSTALL_LIBDIR}
       COMPONENT Framework)
   endif()
@@ -729,7 +740,7 @@ if(TARGET zlink_stream_connector_cpp_lz4)
   install(TARGETS zlink_stream_connector_cpp_lz4
     EXPORT zlink_stream_connector_cppTargets
     COMPONENT StreamConnector)
-  install(FILES "${ZLINK_LZ4_LIBRARY}"
+  install(FILES "${ZLINK_LZ4_INSTALL_LIBRARY}"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT StreamConnector)
 endif()
@@ -1688,10 +1699,19 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(test_cpp_framework_install_consumer PROPERTIES
     LABELS "framework-package;framework-regression;connector-package"
     TIMEOUT 120)
+  if(CMAKE_CONFIGURATION_TYPES)
+    set(ZLINK_FRAMEWORK_CPP_PACKAGE_TEST_CONFIGURATION "$<CONFIG>")
+    set(ZLINK_FRAMEWORK_CPP_PACKAGE_TEST_IS_MULTI_CONFIG ON)
+  else()
+    set(ZLINK_FRAMEWORK_CPP_PACKAGE_TEST_CONFIGURATION "${CMAKE_BUILD_TYPE}")
+    set(ZLINK_FRAMEWORK_CPP_PACKAGE_TEST_IS_MULTI_CONFIG OFF)
+  endif()
   add_test(NAME test_cpp_stream_connector_install_consumer
     COMMAND
       ${CMAKE_COMMAND}
       -DZLINK_FRAMEWORK_CPP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+      -DZLINK_FRAMEWORK_CPP_CONFIGURATION=${ZLINK_FRAMEWORK_CPP_PACKAGE_TEST_CONFIGURATION}
+      -DZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG=${ZLINK_FRAMEWORK_CPP_PACKAGE_TEST_IS_MULTI_CONFIG}
       "-DZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH=${ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH}"
       -DZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX=${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}
       -P ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.PackageTests/stream_connector_consumer.cmake)
