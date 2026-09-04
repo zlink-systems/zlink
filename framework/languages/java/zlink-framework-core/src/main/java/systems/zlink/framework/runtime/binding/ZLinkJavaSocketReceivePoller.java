@@ -21,13 +21,21 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
 
     private final Socket socket;
     private final Poller poller;
+    private final boolean ownsCompletionQueue;
     private final PollEvents events = new PollEvents(1);
     private boolean registered;
     private boolean closed;
 
     ZLinkJavaSocketReceivePoller(Socket socket) {
+        this(socket, true);
+    }
+
+    ZLinkJavaSocketReceivePoller(
+        Socket socket,
+        boolean ownsCompletionQueue) {
         Objects.requireNonNull(socket, "socket");
         this.socket = socket;
+        this.ownsCompletionQueue = ownsCompletionQueue;
         poller = Zlink.createPoller();
     }
 
@@ -37,14 +45,19 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
         }
         // Framework creates the wrapper before it applies routing options
         // and calls bind/connect. Register the fully configured socket when
-        // the receive owner first needs readiness. The binding owns async
-        // DONTWAIT retry and completion draining on this public poller.
-        poller.add(
-            socket,
-            SOCKET_SLOT,
-            PollEventFlags.POLLIN,
-            PollEventFlags.POLLOUT,
-            PollEventFlags.POLLCOMPLETION);
+        // the receive owner first needs readiness. For socket kinds that
+        // support it, the binding owns async DONTWAIT retry and completion
+        // draining on this public poller.
+        if (ownsCompletionQueue) {
+            poller.add(
+                socket,
+                SOCKET_SLOT,
+                PollEventFlags.POLLIN,
+                PollEventFlags.POLLOUT,
+                PollEventFlags.POLLCOMPLETION);
+        } else {
+            poller.add(socket, SOCKET_SLOT, PollEventFlags.POLLIN);
+        }
         registered = true;
     }
 
