@@ -141,3 +141,16 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   약 2,300줄, 공개 API/ABI 불변; `test_wake_invariants`(36d3174f63). 범위 밖 이동이 필요한 BLOCKERS는 각 rf 요약 참조.
 - 합류: 단일 PR #1 → main 8d58b7f891 (사용자 지시로 3-PR 대신 1-PR, 브랜치 추가 없이 `perf/phase2-judge`에서 수행).
   판정 D-B54~B70은 `c016-worklog/decisions.ko.md`.
+
+### 8.1 절별 완료 체크리스트
+
+| 절 | 상태 | 근거 |
+|---|---|---|
+| §0 시작 조건 | 완료 | origin/main에 phase-2 커밋 f3be895b3f 확인(D-053) |
+| §1 환경 구성 | 완료 | core/build·baseline worktree(core/v0.15.1) 자체 빌드, 벤치 동일화, valgrind 3.23.0 소스 빌드(~/.local), $ZLINK_WORK/c016 동기화(D-B54) |
+| §2 작업 1 성능 판정 | 완료(사용자 결정 D-B70) | 벤치 결함 정정 1e91505a14·10cc586a83, 회귀 수정 8b6c2aa906·90b58fd213·bdf0917e14, 판정 30 cell throughput 집계 전부 PASS, tail 편차는 release 판정에서 제외; 결과 파일 sweep2-results-phase2-*.md |
+| §3 작업 2 hotpath gate 도구 | 완료 | 370717c0f0, ctest `hotpath_gate`, 결정성 ±0.06%, 인위 회귀 FAIL 확인 |
+| §4 작업 3 posddd 리팩토링 + wake 테스트 | 완료 | d80ba60c9b·23bb5a968f·341974c4d6(순감 약 2,300줄), 36d3174f63 `test_wake_invariants`; 범위 밖 BLOCKERS는 rf 요약에 기록 |
+| §5 감독관 기능 gate | 완료 | 모든 커밋 전 ctest 전체·single-lane ×2·mirror 12·diff-check·cpp·python green(각 커밋 메시지) |
+| §6 하지 말 것 | 준수 | 스펙 미수정, local-package 미실행, --core-version 미사용, 기준값은 감독관만 생성, 측정 중 빌드 금지 |
+| §7 합류와 인계 | 완료 | 사용자 지시로 단일 PR #1 → main 8d58b7f891, 이후 main 직접 커밋 bdf0917e14·1c9708adef; decisions D-B54~B70 복사·커밋; A 인계 항목은 D-B70 |
