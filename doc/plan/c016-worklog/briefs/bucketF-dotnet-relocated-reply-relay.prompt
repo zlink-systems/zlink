@@ -1,0 +1,44 @@
+# Job: dotnet — `StatefulServiceRuntimeTests.RelocatedActorReplyCompletesTheOriginalRemoteCallerExactlyOnce` times out in RelayRelocationReplyAsync on the combined handover + spot-route admission changes
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`. Never modify `core/**`,
+`bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages' trees;
+never lower an assertion; do not commit.
+
+## Facts
+- Working tree (uncommitted, keep): two dotnet admission fixes —
+  (1) reciprocal handover settle-before-submit (`bucketB-dotnet-handover-resend-summary.md`), and
+  (2) unilateral-Hello outbound fallback + ready-pair attribution in `ZLinkMeshPeerAdmission.cs` /
+  `ZLinkManagedMeshNode.cs` (`bucketB-dotnet-cross-spotroute-summary.md`), plus a test-only tag
+  assertion in `MessageFlowTracerTests.cs`.
+- Supervisor full unit gate (`--filter 'FullyQualifiedName!~ActorCreateCompletion_AfterHandoverHello_UsesCapturedReplyRoute'`,
+  log `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate-v3-dotnet-unit.log`)
+  reports `RelocatedActorReplyCompletesTheOriginalRemoteCallerExactlyOnce` FAIL:
+  `System.TimeoutException` from `ZLinkManagedMeshNode.RelayRelocationReplyAsync(...)` after 3 s.
+  The handover job's focused run (which included two relocation-relay tests) passed 7/7 BEFORE the
+  spot-route change landed; the spot-route job ran the Stateful filter? — check its summary. So this
+  is either a regression from change (2) (candidate: the new `hasReadyInboundCandidate` /
+  `FindReadyOutboundCandidate` logic or the ready-pair attribution altering which pair the relay
+  targets or whether the relay peer is Admitted in time) or a load flake.
+- dotnet env block (never `--artifacts-path`, never `ulimit -v`):
+  `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; cd framework/languages/dotnet; flock -w7200 /tmp/zlink-dotnet-gate.lock dotnet test tests/Zlink.Framework.UnitTests --filter 'FullyQualifiedName~RelocatedActorReplyCompletesTheOriginalRemoteCallerExactlyOnce'`.
+  xUnit swallows Console.Error — add a temporary file sink for the framework debug log if you need
+  `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` traces (remove before finishing).
+
+## What to do
+1. Run the test alone 5×. Deterministic → regression; flaky → still find the race (the relay must
+   complete within its timeout; see `03-spot-actor`/`05-location-relocation` reply-relay contract).
+2. Trace which peer/pair `RelayRelocationReplyAsync` targets and why the relay reply does not arrive:
+   Admitted deferred by settlement? outbound fallback picking the wrong intent? pair attribution
+   stale? Compare with the same test on a `git stash`-free approach: temporarily revert only change
+   (2)'s hunks in a scratch copy is NOT allowed to disturb the tree — instead reason from traces and,
+   if needed, add a narrowly scoped guard.
+3. Fix minimally in `framework/languages/dotnet/**`, keep both prior fixes' tests green
+   (`BilateralCallerFirstAdmissionCompletesImmediateActorRequestOnSurvivor`, the three
+   `RemoteActorStaleAuthority*`, `ZLinkMeshPeerAdmissionTests`), then run
+   `--filter 'FullyQualifiedName~StatefulServiceRuntimeTests'` once (expect all pass) and the
+   relocation-relay tests 5×. Do NOT run the whole unit suite (the supervisor does).
+
+## Deliverable
+`doc/plan/c016-worklog/bucketF-dotnet-relocated-reply-relay-summary.md`: determinism table, trace,
+cause `file:line`, fix + regression, results, BLOCKERS.

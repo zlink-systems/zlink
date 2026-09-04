@@ -58,7 +58,8 @@
       java 1206/3 = pre-existing C 3 + 신규 F 1(`EntrySpotActorDispatchTests…staleTerminal` relocation seal 부재, job 진행);
       node 1552/5 = C 4(ZoneWorld dist 미빌드 3·lint 1) + F 2(SupportChat lifecycle 테스트가 옛 3000/1000ms 하드코딩 — 내 budget 커밋 `2e3b1b47e4`의 후속, TicTacToe.Ts PASS 마커 — job 진행);
       cpp gate-v2 63/69 → stream-connector fixture(RAW mode before bind, spec 08-stream §2) `dbfcf7d6fe`·lz4 packaging `20b94c3457`·package-test config `4573c09a2a` 수정 후 잔여 = inventory 278(C)·m6b 1909 flake(C);
-      dotnet 전체 unit gate 감독관 실행 중(handover 수정 커밋 대기)
+      dotnet 전체 unit gate(handover+spot-route 결합 상태, 36분짜리 D-068 sibling 제외): 852 pass / 1 fail(`RelocatedActorReply…ExactlyOnce` relay timeout — job) / **hang**(`CanonicalActorJoinIngressReplyTests.RouteAdmission_HandoverStartsFreshLivenessDeadline`, 20분 blame dump — job 대기).
+      → 두 건 해소 전까지 dotnet 두 수정 미커밋
 - [ ] 7 samples × 4언어 green — **cpp 7/7**; **node 7/7**(SupportChat budget `2e3b1b47e4`, ZoneWorld entry html `c67deb44e0`, runner PASS marker `2ceb137abe`);
       java: TicTacToe·SupportChat·DeliveryDispatch(`ed156f5983`+teardown `6682ae0db1`)·GameQuest(heartbeat `dc9fe76100`)·ShoppingMall = 5/7 green, Bingo 재실행 중;
       ZoneWorld 미해결 — gateway에서 mesh actor-create reply 994 ms·bound send admission 2.008 s 지연(양자화된 wake-up gap 의심, `bucketB-java-zoneworld-summary.md`), 부수 결함 SUB socket POLLCOMPLETION 등록(spec 05-polling 위반, 수천 건 NOT_SUPPORTED) → job 2건 진행 중;
