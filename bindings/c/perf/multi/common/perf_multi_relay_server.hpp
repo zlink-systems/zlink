@@ -157,17 +157,22 @@ enum reply_send_status_t
     reply_send_failed = 3
 };
 
-// A DONTWAIT FINAL that cannot be admitted immediately is accepted by Core
-// with a nonzero SEND completion id. Keep at most one such operation on this
-// ROUTER socket and at most one immutable application retry; further requests
-// remain behind the socket's receive HWM instead of moving into an unbounded
-// relay queue.
-struct reply_completion_state_t
+// Keep at most one immutable application-owned reply while its target-specific
+// wait token is live. Further requests remain behind the socket receive HWM
+// instead of moving into an unbounded relay queue.
+struct reply_wait_state_t
 {
-    reply_completion_state_t () : socket (NULL), outstanding_id (0) {}
+    reply_wait_state_t () :
+        socket (NULL), wait_token (0), target_rid (),
+        drop_retained_reply (false), pollout_suppressed (false)
+    {
+    }
 
     void *socket;
-    zlink_completion_id_t outstanding_id;
+    zlink_completion_id_t wait_token;
+    zlink_routing_id_t target_rid;
+    bool drop_retained_reply;
+    bool pollout_suppressed;
 };
 
 inline reply_send_status_t classify_reply_send_result (zlink_submit_result_t result,
@@ -175,11 +180,8 @@ inline reply_send_status_t classify_reply_send_result (zlink_submit_result_t res
 {
     if (result == ZLINK_SUBMIT_NOT_CONNECTED || result == ZLINK_SUBMIT_NOT_FOUND)
         return reply_send_stale_route;
-    if (result == ZLINK_SUBMIT_BACKPRESSURED)
-        return reply_send_backpressured;
-    if (err == EHOSTUNREACH || err == ENOTCONN || err == ENOENT)
-        return reply_send_stale_route;
-    if (err == EAGAIN || err == EWOULDBLOCK)
+    if (result == ZLINK_SUBMIT_BACKPRESSURED
+        && (err == EAGAIN || err == EWOULDBLOCK))
         return reply_send_backpressured;
     return reply_send_failed;
 }
@@ -188,9 +190,9 @@ inline reply_send_status_t try_send_reply_now (void *server,
                                                const zlink_routing_id_t *source_rid,
                                                zlink_msg_t *parts,
                                                size_t part_count,
-                                               reply_completion_state_t *completion_state)
+                                               reply_wait_state_t *wait_state)
 {
-    if (!completion_state || completion_state->socket != server) {
+    if (!wait_state || wait_state->socket != server) {
         errno = EINVAL;
         return reply_send_failed;
     }
@@ -198,7 +200,7 @@ inline reply_send_status_t try_send_reply_now (void *server,
         errno = EINVAL;
         return reply_send_failed;
     }
-    if (completion_state->outstanding_id != 0)
+    if (wait_state->wait_token != 0)
         return reply_send_backpressured;
 
     // Every part submit consumes its input even on failure and discards an
@@ -226,27 +228,41 @@ inline reply_send_status_t try_send_reply_now (void *server,
 
     zlink_submit_result_t send_rc = ZLINK_SUBMIT_INTERNAL_ERROR;
     int err = 0;
+    zlink_completion_id_t wait_token = 0;
+    bool final_attempted = false;
     for (size_t i = 0; i < part_count; ++i) {
         const bool is_final = i + 1 == part_count;
-        zlink_completion_id_t completion_id = 0;
+        final_attempted = is_final;
         send_rc = zlink_send_part_rid (
           server, source_rid, &attempt[i],
           static_cast<zlink_send_flags_t> (ZLINK_SEND_FLAGS_DONTWAIT),
           is_final ? ZLINK_PART_FINAL : ZLINK_PART_MORE,
           is_final ? server : NULL,
-          is_final ? &completion_id : NULL);
+          is_final ? &wait_token : NULL);
         if (send_rc != ZLINK_SUBMIT_OK)
             err = zlink_errno ();
 
         if (send_rc != ZLINK_SUBMIT_OK)
             break;
-        if (is_final && completion_id != 0)
-            completion_state->outstanding_id = completion_id;
     }
 
-    const reply_send_status_t status = send_rc == ZLINK_SUBMIT_OK
-                                         ? reply_send_ok
-                                         : classify_reply_send_result (send_rc, err);
+    reply_send_status_t status = send_rc == ZLINK_SUBMIT_OK
+                                   ? reply_send_ok
+                                   : classify_reply_send_result (send_rc, err);
+    if (status == reply_send_ok && wait_token != 0) {
+        status = reply_send_failed;
+        err = EPROTO;
+    } else if (status == reply_send_backpressured) {
+        if (!final_attempted || wait_token == 0
+            || (err != EAGAIN && err != EWOULDBLOCK)) {
+            status = reply_send_failed;
+            err = EPROTO;
+        } else {
+            wait_state->wait_token = wait_token;
+            wait_state->target_rid = *source_rid;
+            wait_state->pollout_suppressed = false;
+        }
+    }
     // Submitted entries and any untouched suffix are all initialized handles.
     zlink_multipart_close (attempt.data (), attempt.size ());
     if (err != 0)
@@ -262,8 +278,9 @@ inline reply_send_status_t try_send_reply_now (void *server,
     return reply_send_failed;
 }
 
-inline bool drain_reply_send_completions (void *server,
-                                          reply_completion_state_t *state)
+inline bool drain_reply_writable (void *server,
+                                  reply_wait_state_t *state,
+                                  bool suppress_pollout_if_empty = false)
 {
     if (!server || !state || state->socket != server) {
         errno = EINVAL;
@@ -276,15 +293,20 @@ inline bool drain_reply_send_completions (void *server,
         completion.struct_size = sizeof (completion);
         const zlink_recv_result_t rc = zlink_completion_recv (
           server, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
-        if (rc == ZLINK_RECV_NO_DATA)
+        if (rc == ZLINK_RECV_NO_DATA) {
+            if (suppress_pollout_if_empty && state->wait_token != 0)
+                state->pollout_suppressed = true;
             return true;
+        }
         if (rc != ZLINK_RECV_OK)
             return false;
 
-        const bool valid = completion.kind == ZLINK_COMPLETION_SEND
+        const bool valid = completion.kind == ZLINK_COMPLETION_WRITABLE
                            && completion.completion_id != 0
-                           && completion.completion_id == state->outstanding_id
-                           && completion.user_context == server;
+                           && completion.completion_id == state->wait_token
+                           && completion.user_context == server
+                           && perf_multi_client::routing_ids_equal (
+                             completion.peer_rid, state->target_rid);
         const zlink_send_complete_result_t result = completion.send_result;
         const int terminal_errno = completion.send_terminal_errno;
         zlink_completion_close (&completion);
@@ -293,14 +315,15 @@ inline bool drain_reply_send_completions (void *server,
             return false;
         }
 
-        state->outstanding_id = 0;
-        if (result == ZLINK_SEND_ADMITTED)
+        state->wait_token = 0;
+        state->pollout_suppressed = false;
+        std::memset (&state->target_rid, 0, sizeof (state->target_rid));
+        if (result == ZLINK_SEND_ADMITTED && terminal_errno == 0)
             continue;
-        if (result == ZLINK_SEND_TERMINAL
-            && (terminal_errno == EHOSTUNREACH || terminal_errno == ENOTCONN
-                || terminal_errno == ECONNREFUSED || terminal_errno == ENOENT)) {
-            // A route can disappear after Core accepted the reply.  This is
-            // the completion equivalent of reply_send_stale_route.
+        if (result == ZLINK_SEND_TERMINAL && terminal_errno == ENOENT) {
+            // A route can disappear while its wait token is live. Drop the
+            // retained reply just like an immediate stale-route result.
+            state->drop_retained_reply = true;
             continue;
         }
         errno = terminal_errno != 0 ? terminal_errno : EIO;
@@ -310,15 +333,23 @@ inline bool drain_reply_send_completions (void *server,
 
 inline bool flush_pending_replies (void *server,
                                    std::deque<pending_reply_t> *pending,
-                                   reply_completion_state_t *completion_state)
+                                   reply_wait_state_t *wait_state)
 {
-    if (!pending)
+    if (!pending || !wait_state)
         return true;
+    if (wait_state->drop_retained_reply) {
+        if (pending->empty ()) {
+            errno = EPROTO;
+            return false;
+        }
+        pending->pop_front ();
+        wait_state->drop_retained_reply = false;
+    }
     while (!pending->empty ()) {
         pending_reply_t &front = pending->front ();
         const reply_send_status_t status = try_send_reply_now (
           server, &front.rid, front.parts.data (), front.parts.size (),
-          completion_state);
+          wait_state);
         if (status == reply_send_ok) {
             // The attempt consumed only a copy. Popping closes the immutable
             // snapshot exactly once.
@@ -340,12 +371,12 @@ inline bool flush_pending_replies (void *server,
 
 inline bool drain_recv_and_relay (void *server,
                                   std::deque<pending_reply_t> *pending,
-                                  reply_completion_state_t *completion_state,
+                                  reply_wait_state_t *wait_state,
                                   bool *recv_drained)
 {
     if (recv_drained)
         *recv_drained = false;
-    if (!pending || !completion_state || completion_state->socket != server) {
+    if (!pending || !wait_state || wait_state->socket != server) {
         errno = EINVAL;
         return false;
     }
@@ -353,7 +384,7 @@ inline bool drain_recv_and_relay (void *server,
     while (true) {
         if (perf_stop_requested ().load (std::memory_order_acquire))
             return true;
-        if (!pending->empty () || completion_state->outstanding_id != 0)
+        if (!pending->empty () || wait_state->wait_token != 0)
             return true;
 
         zlink_routing_id_t source_rid;
@@ -400,7 +431,7 @@ inline bool drain_recv_and_relay (void *server,
             pending->pop_back ();
             return false;
         }
-        if (!flush_pending_replies (server, pending, completion_state))
+        if (!flush_pending_replies (server, pending, wait_state))
             return false;
     }
 }
@@ -411,14 +442,14 @@ inline bool run_server_loop (void *server)
         return false;
 
     std::deque<pending_reply_t> pending;
-    reply_completion_state_t completion_state;
-    completion_state.socket = server;
+    reply_wait_state_t wait_state;
+    wait_state.socket = server;
 
     void *poller = zlink_poller_new ();
     short registered_events = static_cast<short> (ZLINK_POLLIN
                                                    | ZLINK_POLLCOMPLETION);
     if (!poller
-        || zlink_poller_add (poller, server, &completion_state,
+        || zlink_poller_add (poller, server, &wait_state,
                              registered_events)
              != ZLINK_CONFIG_OK) {
         if (poller)
@@ -429,9 +460,14 @@ inline bool run_server_loop (void *server)
     bool loop_ok = true;
     while (!perf_stop_requested ().load (std::memory_order_acquire)) {
         short desired_events = ZLINK_POLLCOMPLETION;
-        if (pending.empty () && completion_state.outstanding_id == 0)
+        if (pending.empty () && wait_state.wait_token == 0)
             desired_events = static_cast<short> (desired_events | ZLINK_POLLIN);
-        if (!pending.empty () && completion_state.outstanding_id == 0)
+        // ROUTER POLLOUT is socket-wide. Try it once for a new exact-target
+        // token, then suppress it after a NO_DATA pull so another writable RID
+        // cannot spin this loop; target WRITABLE still wakes POLLCOMPLETION.
+        if (!pending.empty ()
+            && (wait_state.wait_token == 0
+                || !wait_state.pollout_suppressed))
             desired_events = static_cast<short> (desired_events | ZLINK_POLLOUT);
         if (desired_events != registered_events) {
             if (zlink_poller_modify (poller, server, desired_events)
@@ -460,28 +496,32 @@ inline bool run_server_loop (void *server)
         }
         if (perf_stop_requested ().load (std::memory_order_acquire))
             break;
-        if (poll_rc > 0 && event.user_data != &completion_state) {
+        if (poll_rc > 0 && event.user_data != &wait_state) {
             errno = EPROTO;
             loop_ok = false;
             break;
         }
-        if (poll_rc > 0 && (event.events & ZLINK_POLLCOMPLETION) != 0) {
-            if (!drain_reply_send_completions (server, &completion_state)) {
+        if (poll_rc > 0
+            && (event.events & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0
+            && wait_state.wait_token != 0) {
+            if (!drain_reply_writable (server, &wait_state, true)) {
                 loop_ok = false;
                 break;
             }
         }
-        if (poll_rc > 0 && (event.events & ZLINK_POLLOUT) != 0) {
+        if (poll_rc > 0
+            && (event.events & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0
+            && wait_state.wait_token == 0 && !pending.empty ()) {
             if (!flush_pending_replies (server, &pending,
-                                        &completion_state)) {
+                                        &wait_state)) {
                 loop_ok = false;
                 break;
             }
         }
         if (poll_rc > 0 && (event.events & ZLINK_POLLIN) != 0
-            && pending.empty () && completion_state.outstanding_id == 0) {
+            && pending.empty () && wait_state.wait_token == 0) {
             bool recv_drained = false;
-            if (!drain_recv_and_relay (server, &pending, &completion_state,
+            if (!drain_recv_and_relay (server, &pending, &wait_state,
                                        &recv_drained)) {
                 loop_ok = false;
                 break;
@@ -489,33 +529,36 @@ inline bool run_server_loop (void *server)
         }
     }
 
-    // CLIENT_DONE can reach the runner just before the relay's final SEND
-    // completion becomes readable. Pull every accepted reply completion (and
-    // at most one immutable retry) before normal socket teardown, but keep the
-    // shutdown path bounded if Core or a route is stalled.
+    // CLIENT_DONE can reach the runner while the relay's final reply still has
+    // a live wait token. Admit the one immutable retry before normal socket
+    // teardown, but keep the shutdown path bounded if Core or a route stalls.
     const std::chrono::steady_clock::time_point drain_deadline =
       std::chrono::steady_clock::now ()
       + std::chrono::milliseconds (
-        perf_multi_client::send_completion_drain_timeout_ms ());
+        perf_multi_client::send_retry_drain_timeout_ms ());
     while (loop_ok
-           && (!pending.empty () || completion_state.outstanding_id != 0)
+           && (!pending.empty () || wait_state.wait_token != 0)
            && std::chrono::steady_clock::now () < drain_deadline) {
-        if (completion_state.outstanding_id != 0
-            && !drain_reply_send_completions (server, &completion_state)) {
+        if (wait_state.wait_token != 0
+            && !drain_reply_writable (server, &wait_state)) {
             loop_ok = false;
             break;
         }
-        if (completion_state.outstanding_id == 0 && !pending.empty ()
-            && !flush_pending_replies (server, &pending, &completion_state)) {
+        if (wait_state.wait_token == 0 && !pending.empty ()
+            && !flush_pending_replies (server, &pending, &wait_state)) {
             loop_ok = false;
             break;
         }
-        if (pending.empty () && completion_state.outstanding_id == 0)
+        if (pending.empty () && wait_state.wait_token == 0)
             break;
 
         const short drain_events = static_cast<short> (
           ZLINK_POLLCOMPLETION
-          | (completion_state.outstanding_id == 0 ? ZLINK_POLLOUT : 0));
+          | (!pending.empty ()
+                 && (wait_state.wait_token == 0
+                     || !wait_state.pollout_suppressed)
+               ? ZLINK_POLLOUT
+               : 0));
         if (drain_events != registered_events) {
             if (zlink_poller_modify (poller, server, drain_events)
                 != ZLINK_CONFIG_OK) {
@@ -541,23 +584,25 @@ inline bool run_server_loop (void *server)
         }
         if (poll_rc == 0)
             continue;
-        if (event.socket != server || event.user_data != &completion_state) {
+        if (event.socket != server || event.user_data != &wait_state) {
             errno = EPROTO;
             loop_ok = false;
             break;
         }
-        if ((event.events & ZLINK_POLLCOMPLETION) != 0
-            && !drain_reply_send_completions (server, &completion_state)) {
+        if ((event.events & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0
+            && wait_state.wait_token != 0
+            && !drain_reply_writable (server, &wait_state, true)) {
             loop_ok = false;
             break;
         }
-        if ((event.events & ZLINK_POLLOUT) != 0
-            && !flush_pending_replies (server, &pending, &completion_state)) {
+        if ((event.events & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0
+            && wait_state.wait_token == 0 && !pending.empty ()
+            && !flush_pending_replies (server, &pending, &wait_state)) {
             loop_ok = false;
             break;
         }
     }
-    if (loop_ok && (!pending.empty () || completion_state.outstanding_id != 0)) {
+    if (loop_ok && (!pending.empty () || wait_state.wait_token != 0)) {
         errno = ETIMEDOUT;
         loop_ok = false;
     }

@@ -161,8 +161,14 @@ flight per logical client (or one globally when the socket pattern cannot route
 an acknowledgement back to a specific client). The latency `RESULT` fields
 therefore exclude active-phase HWM queue residence time.
 
-For ordinary socket sends, the benchmark pulls every nonzero SEND completion
-from `POLLCOMPLETION` and allows only one pending completion per socket. PUB
-publish operations do not have SEND completions; PUBSUB instead uses its
-no-drop backpressure path and an explicit subscriber acknowledgement between
-latency records.
+An ordinary `DONTWAIT` socket send makes one admission attempt. Immediate
+admission returns completion ID zero and produces no completion. On
+`BACKPRESSURED`/`EAGAIN`, Core returns a nonzero wait token but retains no
+payload; the benchmark keeps one exact logical packet per socket, waits for
+`POLLOUT`/`POLLCOMPLETION`, drains the completion queue to `NO_DATA`, matches a
+`WRITABLE` record by token, context, and routed RID when present, and resubmits
+the same packet. `ZLINK_OPT_PENDING_MAX_MSGS` and
+`ZLINK_OPT_PENDING_MAX_BYTES` bound pending `REQUEST` records only and do not
+govern these ordinary sends. PUB publish operations have no send completions;
+PUBSUB instead uses its no-drop backpressure path and an explicit subscriber
+acknowledgement between latency records.

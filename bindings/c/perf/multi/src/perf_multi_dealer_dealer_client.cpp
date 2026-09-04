@@ -35,14 +35,16 @@ enum send_status_t
 struct dd_send_slot_t
 {
     dd_send_slot_t () :
-        socket (NULL), pending_completions (0), completion_id (0), send_blocked (false)
+        socket (NULL), wait_token (0), retained (false), retry_ready (false),
+        retained_payload ()
     {
     }
 
     void *socket;
-    size_t pending_completions;
-    zlink_completion_id_t completion_id;
-    bool send_blocked;
+    zlink_completion_id_t wait_token;
+    bool retained;
+    bool retry_ready;
+    std::vector<char> retained_payload;
 };
 
 struct dd_send_state_t
@@ -91,7 +93,7 @@ inline bool create_client_sockets (ctx_guard_t &ctx,
 inline short dd_slot_events (const dd_send_slot_t &slot)
 {
     short events = static_cast<short> (ZLINK_POLLIN | ZLINK_POLLCOMPLETION);
-    if (slot.send_blocked)
+    if (slot.wait_token != 0)
         events = static_cast<short> (events | ZLINK_POLLOUT);
     return events;
 }
@@ -138,26 +140,29 @@ inline bool init_dd_send_state (const std::vector<void *> &sockets, dd_send_stat
     return true;
 }
 
-inline send_status_t send_one_message (dd_send_slot_t *slot,
-                                       size_t payload_size,
-                                       uint32_t run_id,
-                                       perf_multi_metric::phase_t phase,
-                                       size_t msg_size,
-                                       uint64_t seq)
+inline void clear_retained_message (dd_send_slot_t *slot)
 {
-    if (!slot || !slot->socket || payload_size == 0 || slot->pending_completions != 0)
-        return send_status_fatal;
+    if (!slot)
+        return;
+    slot->wait_token = 0;
+    slot->retained = false;
+    slot->retry_ready = false;
+    slot->retained_payload.clear ();
+}
 
-    zlink_msg_t part;
-    if (zlink_msg_init_size (&part, payload_size) != 0)
-        return send_status_fatal;
-
-    if (!perf_multi_metric::stamp_payload (static_cast<char *> (zlink_msg_data (&part)),
-                                           payload_size, run_id, phase, msg_size, seq,
-                                           perf_multi_metric::now_ns ())) {
-        zlink_msg_close (&part);
+inline send_status_t submit_retained_message (dd_send_slot_t *slot)
+{
+    if (!slot || !slot->socket || !slot->retained || slot->wait_token != 0
+        || slot->retained_payload.empty ()) {
+        errno = EBUSY;
         return send_status_fatal;
     }
+
+    zlink_msg_t part;
+    if (zlink_msg_init_size (&part, slot->retained_payload.size ()) != 0)
+        return send_status_fatal;
+    std::memcpy (zlink_msg_data (&part), slot->retained_payload.data (),
+                 slot->retained_payload.size ());
 
     zlink_msg_t tail;
     const bool multipart = perf_measurement_part_count () != 1u;
@@ -166,42 +171,96 @@ inline send_status_t send_one_message (dd_send_slot_t *slot,
         return send_status_fatal;
     }
 
-    zlink_completion_id_t completion_id = 0;
+    zlink_completion_id_t wait_token = 0;
     zlink_submit_result_t rc = ZLINK_SUBMIT_INVALID_ARGUMENT;
     if (!multipart) {
         rc = zlink_send_part (slot->socket, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                              ZLINK_PART_FINAL, slot->socket, &completion_id);
+                              ZLINK_PART_FINAL, slot->socket, &wait_token);
     } else {
         rc = zlink_send_part (slot->socket, &part, ZLINK_SEND_FLAGS_DONTWAIT,
                               ZLINK_PART_MORE, NULL, NULL);
         if (rc == ZLINK_SUBMIT_OK) {
             rc = zlink_send_part (slot->socket, &tail, ZLINK_SEND_FLAGS_DONTWAIT,
-                                  ZLINK_PART_FINAL, slot->socket, &completion_id);
+                                  ZLINK_PART_FINAL, slot->socket, &wait_token);
         }
     }
 
-    const int err = zlink_errno ();
+    const int err = rc == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
     zlink_msg_close (&part);
     if (multipart)
         zlink_msg_close (&tail);
 
-    if (rc == ZLINK_SUBMIT_OK) {
-        if (completion_id != 0) {
-            ++slot->pending_completions;
-            slot->completion_id = completion_id;
-        }
+    if (rc == ZLINK_SUBMIT_OK && wait_token == 0) {
+        clear_retained_message (slot);
         return send_status_ok;
     }
 
-    if (rc == ZLINK_SUBMIT_BACKPRESSURED || err == EAGAIN || err == EWOULDBLOCK)
+    if (rc == ZLINK_SUBMIT_BACKPRESSURED
+        && (err == EAGAIN || err == EWOULDBLOCK) && wait_token != 0) {
+        slot->wait_token = wait_token;
+        slot->retry_ready = false;
+        errno = err;
         return send_status_blocked;
+    }
 
+    errno = rc == ZLINK_SUBMIT_OK || rc == ZLINK_SUBMIT_BACKPRESSURED
+              ? EPROTO
+              : (err != 0 ? err : EIO);
     return send_status_fatal;
 }
 
-inline bool drain_dd_send_completions (dd_send_slot_t *slot)
+inline send_status_t send_one_message (dd_send_slot_t *slot,
+                                       size_t payload_size,
+                                       uint32_t run_id,
+                                       perf_multi_metric::phase_t phase,
+                                       size_t msg_size,
+                                       uint64_t seq)
 {
-    if (!slot || !slot->socket)
+    if (!slot || !slot->socket || payload_size == 0 || slot->retained) {
+        errno = EBUSY;
+        return send_status_fatal;
+    }
+
+    slot->retained_payload.resize (payload_size);
+    if (!perf_multi_metric::stamp_payload (
+          slot->retained_payload.data (), payload_size, run_id, phase, msg_size,
+          seq, perf_multi_metric::now_ns ())) {
+        slot->retained_payload.clear ();
+        return send_status_fatal;
+    }
+    slot->retained = true;
+    return submit_retained_message (slot);
+}
+
+inline bool record_dd_writable (dd_send_slot_t *slot,
+                                const zlink_completion_t &completion)
+{
+    if (!slot || completion.kind != ZLINK_COMPLETION_WRITABLE
+        || completion.completion_id == 0
+        || completion.user_context != slot->socket
+        || completion.peer_rid.size != 0 || !slot->retained
+        || slot->wait_token == 0
+        || completion.completion_id != slot->wait_token) {
+        errno = EPROTO;
+        return false;
+    }
+
+    slot->wait_token = 0;
+    if (completion.send_result == ZLINK_SEND_ADMITTED
+        && completion.send_terminal_errno == 0) {
+        slot->retry_ready = true;
+        return true;
+    }
+
+    const int terminal_errno = completion.send_terminal_errno;
+    clear_retained_message (slot);
+    errno = terminal_errno != 0 ? terminal_errno : EIO;
+    return false;
+}
+
+inline bool drain_dd_writable (dd_send_state_t *state, dd_send_slot_t *slot)
+{
+    if (!state || !slot || !slot->socket)
         return false;
 
     for (;;) {
@@ -211,27 +270,29 @@ inline bool drain_dd_send_completions (dd_send_slot_t *slot)
         const zlink_recv_result_t rc = zlink_completion_recv (
           slot->socket, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
         if (rc == ZLINK_RECV_NO_DATA)
-            return true;
+            break;
         if (rc != ZLINK_RECV_OK)
             return false;
 
-        const bool valid = completion.kind == ZLINK_COMPLETION_SEND
-                           && completion.completion_id != 0
-                           && completion.user_context == slot->socket
-                           && slot->pending_completions == 1
-                           && completion.completion_id == slot->completion_id;
-        if (valid) {
-            --slot->pending_completions;
-            slot->completion_id = 0;
-        }
-        const bool admitted = valid && completion.send_result == ZLINK_SEND_ADMITTED;
-        const int terminal_errno = completion.send_terminal_errno;
+        const bool valid = record_dd_writable (slot, completion);
+        const int completion_errno = valid ? 0 : errno;
         zlink_completion_close (&completion);
-        if (!admitted) {
-            errno = terminal_errno != 0 ? terminal_errno : EPROTO;
+        if (!valid) {
+            errno = completion_errno;
             return false;
         }
     }
+
+    send_status_t retry_status = send_status_ok;
+    if (slot->retry_ready)
+        retry_status = submit_retained_message (slot);
+    if (retry_status == send_status_fatal)
+        return false;
+    if (!update_dd_slot_events (state, slot))
+        return false;
+    if (retry_status == send_status_blocked)
+        errno = EAGAIN;
+    return true;
 }
 
 inline bool service_dd_events (dd_send_state_t *state, int timeout_ms, int *event_count_out = NULL)
@@ -259,23 +320,18 @@ inline bool service_dd_events (dd_send_state_t *state, int timeout_ms, int *even
             errno = EPROTO;
             return false;
         }
-        if ((event.events & ZLINK_POLLCOMPLETION) != 0
-            && !drain_dd_send_completions (slot)) {
+        if ((event.events & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0
+            && !drain_dd_writable (state, slot)) {
             return false;
-        }
-        if ((event.events & ZLINK_POLLOUT) != 0 && slot->send_blocked) {
-            slot->send_blocked = false;
-            if (!update_dd_slot_events (state, slot))
-                return false;
         }
     }
     return true;
 }
 
-inline bool dd_has_pending_completion (const dd_send_state_t &state)
+inline bool dd_has_retained_send (const dd_send_state_t &state)
 {
     for (size_t i = 0; i < state.slots.size (); ++i) {
-        if (state.slots[i].pending_completions != 0)
+        if (state.slots[i].retained)
             return true;
     }
     return false;
@@ -291,17 +347,17 @@ inline int dd_wait_ms (const std::chrono::steady_clock::time_point &deadline, in
     return static_cast<int> (std::max<long long> (1, std::min<long long> (maximum_ms, remaining)));
 }
 
-inline bool drain_dd_pending_completions (dd_send_state_t *state, int timeout_ms)
+inline bool drain_dd_retained_sends (dd_send_state_t *state, int timeout_ms)
 {
     if (!state)
         return false;
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now () + std::chrono::milliseconds (std::max (1, timeout_ms));
-    while (dd_has_pending_completion (*state) && std::chrono::steady_clock::now () < deadline) {
+    while (dd_has_retained_send (*state) && std::chrono::steady_clock::now () < deadline) {
         if (!service_dd_events (state, dd_wait_ms (deadline, 50)))
             return false;
     }
-    if (dd_has_pending_completion (*state)) {
+    if (dd_has_retained_send (*state)) {
         errno = ETIMEDOUT;
         return false;
     }
@@ -358,8 +414,8 @@ inline bool run_active_send_window (dd_send_state_t *state,
         for (size_t attempts = 0; attempts < state->slots.size (); ++attempts) {
             dd_send_slot_t &slot = state->slots[(start + attempts) % state->slots.size ()];
             // Core's physical queue remains the saturation boundary. Keep only
-            // one additional Core-owned pending record per socket.
-            if (slot.pending_completions != 0 || slot.send_blocked)
+            // one application-owned retained record per socket.
+            if (slot.retained)
                 continue;
 
             const send_status_t send_rc = send_one_message (
@@ -370,9 +426,12 @@ inline bool run_active_send_window (dd_send_state_t *state,
                 continue;
             }
             if (send_rc == send_status_blocked) {
-                slot.send_blocked = true;
+                // This logical record keeps its sequence while WRITABLE drives
+                // an exact-byte retry from slot.retained_payload.
+                ++(*seq);
                 if (!update_dd_slot_events (state, &slot))
                     return false;
+                errno = EAGAIN;
                 continue;
             }
             return false;
@@ -388,16 +447,8 @@ inline bool run_active_send_window (dd_send_state_t *state,
 
     if (g_stop_requested.load (std::memory_order_acquire))
         return false;
-    if (!drain_dd_pending_completions (state, 5000))
+    if (!drain_dd_retained_sends (state, 5000))
         return false;
-
-    for (size_t i = 0; i < state->slots.size (); ++i) {
-        if (state->slots[i].send_blocked) {
-            state->slots[i].send_blocked = false;
-            if (!update_dd_slot_events (state, &state->slots[i]))
-                return false;
-        }
-    }
 
     if (bench_transition_debug_enabled ()) {
         std::cerr << "[multi-dealer-dealer-client] active send end msg_size=" << msg_size
@@ -493,29 +544,26 @@ inline bool run_latency_send_window (dd_send_state_t *state,
     while (!g_stop_requested.load (std::memory_order_acquire)
            && std::chrono::steady_clock::now () < deadline) {
         bool submitted = false;
-        if (!in_flight && !dd_has_pending_completion (*state)) {
+        if (!in_flight && !dd_has_retained_send (*state)) {
             dd_send_slot_t &slot = state->slots[rr];
-            if (!slot.send_blocked) {
-                const uint64_t candidate_seq = *seq;
-                const send_status_t send_rc =
-                  send_one_message (&slot, payload_size, run_id,
-                                    perf_multi_metric::phase_latency, msg_size, candidate_seq);
-                if (send_rc == send_status_ok) {
-                    ++(*seq);
-                    in_flight = true;
-                    in_flight_seq = candidate_seq;
-                    submitted = true;
-                    rr = (rr + 1) % state->slots.size ();
-                } else if (send_rc == send_status_blocked) {
-                    slot.send_blocked = true;
-                    if (!update_dd_slot_events (state, &slot))
-                        return false;
-                    rr = (rr + 1) % state->slots.size ();
-                } else {
+            const uint64_t candidate_seq = *seq;
+            const send_status_t send_rc =
+              send_one_message (&slot, payload_size, run_id,
+                                perf_multi_metric::phase_latency, msg_size, candidate_seq);
+            if (send_rc == send_status_ok || send_rc == send_status_blocked) {
+                ++(*seq);
+                in_flight = true;
+                in_flight_seq = candidate_seq;
+                submitted = send_rc == send_status_ok;
+                if (send_rc == send_status_blocked
+                    && !update_dd_slot_events (state, &slot)) {
                     return false;
                 }
-            } else {
+                if (send_rc == send_status_blocked)
+                    errno = EAGAIN;
                 rr = (rr + 1) % state->slots.size ();
+            } else {
+                return false;
             }
         }
 
@@ -547,7 +595,7 @@ inline bool run_latency_send_window (dd_send_state_t *state,
 
     const std::chrono::steady_clock::time_point drain_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (5);
-    while ((in_flight || dd_has_pending_completion (*state))
+    while ((in_flight || dd_has_retained_send (*state))
            && std::chrono::steady_clock::now () < drain_deadline) {
         int event_count = 0;
         if (!service_dd_events (state, dd_wait_ms (drain_deadline, 50), &event_count))
@@ -570,7 +618,7 @@ inline bool run_latency_send_window (dd_send_state_t *state,
     }
 
     if (g_stop_requested.load (std::memory_order_acquire) || in_flight
-        || dd_has_pending_completion (*state) || ack_count == 0) {
+        || dd_has_retained_send (*state) || ack_count == 0) {
         errno = ETIMEDOUT;
         return false;
     }

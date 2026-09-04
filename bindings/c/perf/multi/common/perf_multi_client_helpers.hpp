@@ -33,16 +33,15 @@ enum send_status_t
     send_error = 2
 };
 
-// DONTWAIT FINAL can be retained by Core after the physical send HWM is
-// full.  Keep at most one such record per socket: immediate admissions still
-// run at saturation speed, while the application-owned pending backlog cannot
-// grow toward the socket-wide 65,536 completion reservation limit.
-inline size_t send_completion_limit_per_socket ()
+// Keep one application-owned logical send per socket while its wait token is
+// live. Core retains the token and target under backpressure, never the
+// payload that must be submitted again after WRITABLE.
+inline size_t send_wait_limit_per_socket ()
 {
     return 1;
 }
 
-inline int send_completion_drain_timeout_ms ()
+inline int send_retry_drain_timeout_ms ()
 {
     return resolve_multi_int_env ("PERF_MULTI_SEND_DRAIN_TIMEOUT_MS", 5000, 1);
 }
@@ -57,52 +56,62 @@ inline size_t latency_phase_max_in_flight_per_socket ()
     return 1;
 }
 
-struct send_completion_slot_t
+struct send_wait_slot_t
 {
-    send_completion_slot_t () :
-        socket (NULL), pending (0), completion_id (0), replies (0), send_blocked (false)
+    send_wait_slot_t () :
+        socket (NULL), wait_token (0), replies (0), retained (false),
+        retry_ready (false), pollout_suppressed (false), retained_payload (),
+        retained_payload_size (0), router_send (false), target_rid ()
     {
     }
 
     void *socket;
-    size_t pending;
-    zlink_completion_id_t completion_id;
+    zlink_completion_id_t wait_token;
     size_t replies;
-    bool send_blocked;
+    bool retained;
+    bool retry_ready;
+    bool pollout_suppressed;
+    std::vector<char> retained_payload;
+    size_t retained_payload_size;
+    bool router_send;
+    zlink_routing_id_t target_rid;
 };
 
-struct send_completion_tracker_t
+struct send_wait_tracker_t
 {
-    send_completion_tracker_t () : poller (NULL), base_events (0), slots (), events () {}
-    ~send_completion_tracker_t ()
+    send_wait_tracker_t () : poller (NULL), base_events (0), slots (), events () {}
+    ~send_wait_tracker_t ()
     {
         if (poller)
             zlink_poller_destroy (&poller);
     }
 
   private:
-    send_completion_tracker_t (const send_completion_tracker_t &);
-    send_completion_tracker_t &operator= (const send_completion_tracker_t &);
+    send_wait_tracker_t (const send_wait_tracker_t &);
+    send_wait_tracker_t &operator= (const send_wait_tracker_t &);
 
   public:
 
     void *poller;
     short base_events;
-    std::vector<send_completion_slot_t> slots;
+    std::vector<send_wait_slot_t> slots;
     std::vector<zlink_poller_event_t> events;
 };
 
-inline short tracker_slot_events (const send_completion_tracker_t &tracker,
-                                  const send_completion_slot_t &slot)
+inline bool retry_retained_send (send_wait_tracker_t *tracker,
+                                 send_wait_slot_t *slot);
+
+inline short tracker_slot_events (const send_wait_tracker_t &tracker,
+                                  const send_wait_slot_t &slot)
 {
     short events = static_cast<short> (tracker.base_events | ZLINK_POLLCOMPLETION);
-    if (slot.send_blocked)
+    if (slot.wait_token != 0 && !slot.pollout_suppressed)
         events = static_cast<short> (events | ZLINK_POLLOUT);
     return events;
 }
 
-inline bool update_tracker_slot_events (send_completion_tracker_t *tracker,
-                                        send_completion_slot_t *slot)
+inline bool update_tracker_slot_events (send_wait_tracker_t *tracker,
+                                        send_wait_slot_t *slot)
 {
     return tracker && tracker->poller && slot && slot->socket
            && zlink_poller_modify (tracker->poller, slot->socket,
@@ -110,7 +119,7 @@ inline bool update_tracker_slot_events (send_completion_tracker_t *tracker,
                 == ZLINK_CONFIG_OK;
 }
 
-inline void close_send_completion_tracker (send_completion_tracker_t *tracker)
+inline void close_send_wait_tracker (send_wait_tracker_t *tracker)
 {
     if (!tracker)
         return;
@@ -120,14 +129,14 @@ inline void close_send_completion_tracker (send_completion_tracker_t *tracker)
     tracker->events.clear ();
 }
 
-inline bool create_send_completion_tracker (const std::vector<void *> &sockets,
-                                            short base_events,
-                                            send_completion_tracker_t *tracker)
+inline bool create_send_wait_tracker (const std::vector<void *> &sockets,
+                                      short base_events,
+                                      send_wait_tracker_t *tracker)
 {
     if (!tracker || sockets.empty ())
         return false;
 
-    close_send_completion_tracker (tracker);
+    close_send_wait_tracker (tracker);
     tracker->poller = zlink_poller_new ();
     if (!tracker->poller)
         return false;
@@ -136,39 +145,74 @@ inline bool create_send_completion_tracker (const std::vector<void *> &sockets,
     tracker->events.resize (sockets.size ());
 
     for (size_t i = 0; i < sockets.size (); ++i) {
-        send_completion_slot_t &slot = tracker->slots[i];
+        send_wait_slot_t &slot = tracker->slots[i];
         slot.socket = sockets[i];
         if (!slot.socket
             || zlink_poller_add (tracker->poller, slot.socket, &slot,
                                  tracker_slot_events (*tracker, slot))
                  != ZLINK_CONFIG_OK) {
-            close_send_completion_tracker (tracker);
+            close_send_wait_tracker (tracker);
             return false;
         }
     }
     return true;
 }
 
-inline bool record_send_completion (send_completion_slot_t *slot,
-                                    const zlink_completion_t &completion)
+inline bool routing_ids_equal (const zlink_routing_id_t &left,
+                               const zlink_routing_id_t &right)
 {
-    if (!slot || completion.kind != ZLINK_COMPLETION_SEND
-        || completion.completion_id == 0 || completion.user_context != slot->socket
-        || slot->pending != 1 || completion.completion_id != slot->completion_id) {
+    return left.size == right.size
+           && (left.size == 0
+               || std::memcmp (left.data, right.data, left.size) == 0);
+}
+
+inline void clear_retained_send (send_wait_slot_t *slot)
+{
+    if (!slot)
+        return;
+    slot->wait_token = 0;
+    slot->retained = false;
+    slot->retry_ready = false;
+    slot->pollout_suppressed = false;
+    slot->retained_payload.clear ();
+    slot->retained_payload_size = 0;
+    slot->router_send = false;
+    std::memset (&slot->target_rid, 0, sizeof (slot->target_rid));
+}
+
+inline bool record_writable_completion (send_wait_slot_t *slot,
+                                        const zlink_completion_t &completion)
+{
+    const bool rid_matches = slot
+                             && (slot->router_send
+                                   ? routing_ids_equal (completion.peer_rid,
+                                                        slot->target_rid)
+                                   : completion.peer_rid.size == 0);
+    if (!slot || completion.kind != ZLINK_COMPLETION_WRITABLE
+        || completion.completion_id == 0
+        || completion.user_context != slot->socket
+        || !slot->retained || slot->wait_token == 0
+        || completion.completion_id != slot->wait_token || !rid_matches) {
         errno = EPROTO;
         return false;
     }
 
-    --slot->pending;
-    slot->completion_id = 0;
-    if (completion.send_result == ZLINK_SEND_ADMITTED)
+    slot->wait_token = 0;
+    slot->pollout_suppressed = false;
+    if (completion.send_result == ZLINK_SEND_ADMITTED
+        && completion.send_terminal_errno == 0) {
+        slot->retry_ready = true;
         return true;
+    }
 
-    errno = completion.send_terminal_errno != 0 ? completion.send_terminal_errno : EIO;
+    const int terminal_errno = completion.send_terminal_errno;
+    clear_retained_send (slot);
+    errno = terminal_errno != 0 ? terminal_errno : EIO;
     return false;
 }
 
-inline bool drain_send_completions (send_completion_slot_t *slot)
+inline bool drain_writable_completions (send_wait_slot_t *slot,
+                                        bool suppress_pollout_if_empty)
 {
     if (!slot || !slot->socket)
         return false;
@@ -179,27 +223,33 @@ inline bool drain_send_completions (send_completion_slot_t *slot)
         completion.struct_size = sizeof (completion);
         const zlink_recv_result_t rc = zlink_completion_recv (
           slot->socket, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
-        if (rc == ZLINK_RECV_NO_DATA)
+        if (rc == ZLINK_RECV_NO_DATA) {
+            if (suppress_pollout_if_empty && slot->wait_token != 0)
+                slot->pollout_suppressed = true;
             return true;
+        }
         if (rc != ZLINK_RECV_OK)
             return false;
-        const bool valid = record_send_completion (slot, completion);
+        const bool valid = record_writable_completion (slot, completion);
+        const int completion_errno = valid ? 0 : errno;
         zlink_completion_close (&completion);
-        if (!valid)
+        if (!valid) {
+            errno = completion_errno;
             return false;
+        }
     }
 }
 
-inline bool tracker_has_pending_completions (const send_completion_tracker_t &tracker)
+inline bool tracker_has_retained_sends (const send_wait_tracker_t &tracker)
 {
     for (size_t i = 0; i < tracker.slots.size (); ++i) {
-        if (tracker.slots[i].pending != 0)
+        if (tracker.slots[i].retained)
             return true;
     }
     return false;
 }
 
-inline bool tracker_has_pending_replies (const send_completion_tracker_t &tracker)
+inline bool tracker_has_pending_replies (const send_wait_tracker_t &tracker)
 {
     for (size_t i = 0; i < tracker.slots.size (); ++i) {
         if (tracker.slots[i].replies != 0)
@@ -208,30 +258,34 @@ inline bool tracker_has_pending_replies (const send_completion_tracker_t &tracke
     return false;
 }
 
-inline send_completion_slot_t *tracker_event_slot (const zlink_poller_event_t &event)
+inline send_wait_slot_t *tracker_event_slot (const zlink_poller_event_t &event)
 {
-    send_completion_slot_t *slot = static_cast<send_completion_slot_t *> (event.user_data);
+    send_wait_slot_t *slot = static_cast<send_wait_slot_t *> (event.user_data);
     return slot && slot->socket == event.socket ? slot : NULL;
 }
 
-inline bool drain_tracker_completion_events (send_completion_tracker_t *tracker, int event_count)
+inline bool service_tracker_writable_events (send_wait_tracker_t *tracker,
+                                             int event_count)
 {
     if (!tracker || event_count < 0)
         return false;
     for (int i = 0; i < event_count; ++i) {
         zlink_poller_event_t &event = tracker->events[static_cast<size_t> (i)];
-        send_completion_slot_t *slot = tracker_event_slot (event);
+        send_wait_slot_t *slot = tracker_event_slot (event);
         if (!slot) {
             errno = EPROTO;
             return false;
         }
-        if ((event.events & ZLINK_POLLCOMPLETION) != 0
-            && !drain_send_completions (slot)) {
-            return false;
-        }
-        if ((event.events & ZLINK_POLLOUT) != 0 && slot->send_blocked) {
-            slot->send_blocked = false;
-            if (!update_tracker_slot_events (tracker, slot))
+        if ((event.events & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0) {
+            const bool was_pollout_suppressed = slot->pollout_suppressed;
+            if (!drain_writable_completions (slot, true))
+                return false;
+            // Drain to NO_DATA before retrying the exact retained record.
+            if (slot->retry_ready && !retry_retained_send (tracker, slot))
+                return false;
+            if (!slot->retry_ready
+                && slot->pollout_suppressed != was_pollout_suppressed
+                && !update_tracker_slot_events (tracker, slot))
                 return false;
         }
     }
@@ -267,13 +321,25 @@ inline bool parse_endpoint_arg (int argc, char **argv, std::string *endpoint_out
     return false;
 }
 
-inline send_status_t classify_send_result (zlink_submit_result_t rc)
+inline send_status_t classify_send_result (zlink_submit_result_t rc,
+                                           int submit_errno,
+                                           zlink_completion_id_t wait_token)
 {
-    if (rc == ZLINK_SUBMIT_OK)
-        return send_ok;
-    const int err = zlink_errno ();
-    if (err == EAGAIN)
+    if (rc == ZLINK_SUBMIT_OK) {
+        if (wait_token == 0)
+            return send_ok;
+        errno = EPROTO;
+        return send_error;
+    }
+    if (rc == ZLINK_SUBMIT_BACKPRESSURED
+        && (submit_errno == EAGAIN || submit_errno == EWOULDBLOCK)
+        && wait_token != 0) {
         return send_blocked;
+    }
+    if (rc == ZLINK_SUBMIT_BACKPRESSURED)
+        errno = EPROTO;
+    else
+        errno = submit_errno != 0 ? submit_errno : EIO;
     return send_error;
 }
 
@@ -341,12 +407,16 @@ inline send_status_t send_echo_message_flags (void *socket,
     // the preinitialized FINAL also makes allocation failure impossible after
     // a MORE prefix has already been staged.
     const int send_errno = rc == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
-    const send_status_t status = classify_send_result (rc);
+    const zlink_completion_id_t wait_token = completion_id_out ? *completion_id_out : 0;
+    const send_status_t status = classify_send_result (rc, send_errno, wait_token);
+    const int result_errno = status == send_ok
+                               ? 0
+                               : (status == send_blocked ? send_errno : errno);
     zlink_msg_close (&part);
     if (empty_part_initialized)
         zlink_msg_close (&empty_part);
-    if (send_errno != 0)
-        errno = send_errno;
+    if (result_errno != 0)
+        errno = result_errno;
     return status;
 }
 
@@ -362,6 +432,76 @@ inline send_status_t send_echo_message (void *socket,
     return send_echo_message_flags (socket, target_rid, payload, payload_size, router_send,
                                     ZLINK_DONTWAIT, per_socket_payload, completion_context,
                                     completion_id_out);
+}
+
+inline bool retain_echo_send (send_wait_slot_t *slot,
+                              const zlink_routing_id_t *target_rid,
+                              const std::vector<char> &payload,
+                              size_t payload_size,
+                              bool router_send)
+{
+    if (!slot || !slot->socket || slot->retained || payload_size > payload.size ()
+        || (router_send && (!target_rid || target_rid->size == 0))) {
+        errno = EINVAL;
+        return false;
+    }
+
+    slot->retained_payload.assign (payload.begin (), payload.begin () + payload_size);
+    slot->retained_payload_size = payload_size;
+    slot->router_send = router_send;
+    if (router_send)
+        slot->target_rid = *target_rid;
+    else
+        std::memset (&slot->target_rid, 0, sizeof (slot->target_rid));
+    slot->retained = true;
+    slot->retry_ready = false;
+    slot->pollout_suppressed = false;
+    slot->wait_token = 0;
+    return true;
+}
+
+inline send_status_t submit_retained_send (send_wait_slot_t *slot)
+{
+    if (!slot || !slot->socket || !slot->retained || slot->wait_token != 0) {
+        errno = EBUSY;
+        return send_error;
+    }
+
+    zlink_completion_id_t wait_token = 0;
+    const zlink_routing_id_t *target_rid = slot->router_send ? &slot->target_rid : NULL;
+    const send_status_t status = send_echo_message (
+      slot->socket, target_rid, slot->retained_payload,
+      slot->retained_payload_size, slot->router_send, true, slot->socket,
+      &wait_token);
+    if (status == send_ok) {
+        ++slot->replies;
+        clear_retained_send (slot);
+        return send_ok;
+    }
+    if (status == send_blocked) {
+        slot->wait_token = wait_token;
+        slot->retry_ready = false;
+        slot->pollout_suppressed = false;
+        return send_blocked;
+    }
+    return send_error;
+}
+
+inline bool retry_retained_send (send_wait_tracker_t *tracker,
+                                 send_wait_slot_t *slot)
+{
+    if (!tracker || !slot || !slot->retry_ready || slot->wait_token != 0) {
+        errno = EINVAL;
+        return false;
+    }
+    const send_status_t status = submit_retained_send (slot);
+    if (status == send_error)
+        return false;
+    if (!update_tracker_slot_events (tracker, slot))
+        return false;
+    if (status == send_blocked)
+        errno = EAGAIN;
+    return true;
 }
 
 inline int recv_one_message (
@@ -1072,11 +1212,11 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
     if (allow_send && per_socket_payload)
         socket_payloads.assign (sockets.size (), payload);
 
-    send_completion_tracker_t tracker;
-    if (!create_send_completion_tracker (sockets, ZLINK_POLLIN, &tracker))
+    send_wait_tracker_t tracker;
+    if (!create_send_wait_tracker (sockets, ZLINK_POLLIN, &tracker))
         return false;
 
-    const auto drain_socket = [&] (send_completion_slot_t *slot, bool count_metrics) -> bool {
+    const auto drain_socket = [&] (send_wait_slot_t *slot, bool count_metrics) -> bool {
         if (!slot || !slot->socket)
             return false;
         while (true) {
@@ -1127,13 +1267,13 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
     };
 
     const auto service_events = [&] (int event_count, bool count_metrics) -> bool {
-        if (!drain_tracker_completion_events (&tracker, event_count))
+        if (!service_tracker_writable_events (&tracker, event_count))
             return false;
         for (int i = 0; i < event_count; ++i) {
             zlink_poller_event_t &event = tracker.events[static_cast<size_t> (i)];
             if ((event.events & ZLINK_POLLIN) == 0)
                 continue;
-            send_completion_slot_t *slot = tracker_event_slot (event);
+            send_wait_slot_t *slot = tracker_event_slot (event);
             if (!slot || !drain_socket (slot, count_metrics))
                 return false;
         }
@@ -1146,9 +1286,8 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
             const size_t send_start_rr = rr;
             for (size_t attempts = 0; attempts < sockets.size (); ++attempts) {
                 const size_t idx = (send_start_rr + attempts) % sockets.size ();
-                send_completion_slot_t &slot = tracker.slots[idx];
-                if (slot.send_blocked
-                    || slot.pending >= send_completion_limit_per_socket ()
+                send_wait_slot_t &slot = tracker.slots[idx];
+                if (slot.retained
                     || (max_replies_in_flight_per_socket > 0
                         && slot.replies >= max_replies_in_flight_per_socket)) {
                     continue;
@@ -1162,26 +1301,26 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
                     break;
                 }
 
-                zlink_completion_id_t completion_id = 0;
-                const send_status_t send_rc = send_echo_message (
-                  sockets[idx], target_rid_ptr, send_payload, payload_size, client_router_send,
-                  per_socket_payload, slot.socket, &completion_id);
+                if (!retain_echo_send (&slot, target_rid_ptr, send_payload,
+                                       payload_size, client_router_send)) {
+                    fatal_error = true;
+                    break;
+                }
+                const send_status_t send_rc = submit_retained_send (&slot);
                 if (send_rc == send_ok) {
-                    if (completion_id != 0) {
-                        ++slot.pending;
-                        slot.completion_id = completion_id;
-                    }
-                    ++slot.replies;
                     ++sequence;
                     submitted = true;
                     continue;
                 }
                 if (send_rc == send_blocked) {
-                    slot.send_blocked = true;
+                    // Reserve this sequence for the retained logical record.
+                    // WRITABLE resubmits these exact bytes without restamping.
+                    ++sequence;
                     if (!update_tracker_slot_events (&tracker, &slot)) {
                         fatal_error = true;
                         break;
                     }
+                    errno = EAGAIN;
                     if (bench_debug_enabled ()
                         && g_debug_one_way_logs.fetch_add (1, std::memory_order_acq_rel) < 12) {
                         std::cerr << "[perf-multi-echo] send blocked phase="
@@ -1231,14 +1370,14 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
             fatal_error = true;
     }
 
-    // Stop timestamping new records at the phase boundary, then pull every
-    // completion and echo already owned by Core. This makes the next latency
-    // phase start with empty physical and application-side backlogs.
+    // Stop timestamping new records at the phase boundary, then admit every
+    // retained retry and pull its echo. This makes the next latency phase start
+    // with empty physical and application-side backlogs.
     const auto drain_deadline =
       std::chrono::steady_clock::now ()
-      + std::chrono::milliseconds (send_completion_drain_timeout_ms ());
+      + std::chrono::milliseconds (send_retry_drain_timeout_ms ());
     while (!fatal_error
-           && (tracker_has_pending_completions (tracker)
+           && (tracker_has_retained_sends (tracker)
                || tracker_has_pending_replies (tracker))) {
         const int wait_ms = std::min (50, remaining_poll_timeout_ms (drain_deadline));
         if (wait_ms <= 0)
@@ -1259,7 +1398,7 @@ inline bool run_echo_window_round_robin (const std::vector<void *> &sockets,
     }
 
     if (!fatal_error
-        && (tracker_has_pending_completions (tracker)
+        && (tracker_has_retained_sends (tracker)
             || tracker_has_pending_replies (tracker))) {
         if (bench_debug_enabled ()) {
             std::cerr << "[perf-multi-echo] drain timeout phase="

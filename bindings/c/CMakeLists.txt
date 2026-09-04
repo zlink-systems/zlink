@@ -184,6 +184,7 @@ if(ZLINK_C_BUILD_TESTS)
   zlink_c_add_contract_test(test_c_failure_boundary_contract)
   zlink_c_add_contract_test(test_c_monitor_poller_service_contract)
   zlink_c_add_contract_test(test_c_completion_poller_contract)
+  zlink_c_add_contract_test(test_c_dontwait_backpressure_contract)
 endif()
 
 option(ZLINK_C_BUILD_BENCHMARKS "Build C binding benchmarks" OFF)

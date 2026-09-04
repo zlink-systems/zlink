@@ -42,9 +42,9 @@ struct server_send_state_t
     server_send_state_t () :
         socket (NULL),
         poller (NULL),
-        pending_completions (0),
-        completion_id (0),
-        deferred_latency_ack_payload (),
+        wait_token (0),
+        retry_ready (false),
+        retained_latency_ack_payload (),
         event ()
     {
         std::memset (&event, 0, sizeof (event));
@@ -52,11 +52,29 @@ struct server_send_state_t
 
     void *socket;
     void *poller;
-    size_t pending_completions;
-    zlink_completion_id_t completion_id;
-    std::vector<char> deferred_latency_ack_payload;
+    zlink_completion_id_t wait_token;
+    bool retry_ready;
+    std::vector<char> retained_latency_ack_payload;
     zlink_poller_event_t event;
 };
+
+inline short server_send_events (const server_send_state_t &state)
+{
+    short events = ZLINK_POLLCOMPLETION;
+    if (state.wait_token == 0)
+        events = static_cast<short> (events | ZLINK_POLLIN);
+    else
+        events = static_cast<short> (events | ZLINK_POLLOUT);
+    return events;
+}
+
+inline bool update_server_send_events (server_send_state_t *state)
+{
+    return state && state->poller && state->socket
+           && zlink_poller_modify (state->poller, state->socket,
+                                   server_send_events (*state))
+                == ZLINK_CONFIG_OK;
+}
 
 inline void close_server_send_state (server_send_state_t *state)
 {
@@ -64,10 +82,10 @@ inline void close_server_send_state (server_send_state_t *state)
         return;
     if (state->poller)
         zlink_poller_destroy (&state->poller);
-    state->deferred_latency_ack_payload.clear ();
+    state->retained_latency_ack_payload.clear ();
     state->socket = NULL;
-    state->pending_completions = 0;
-    state->completion_id = 0;
+    state->wait_token = 0;
+    state->retry_ready = false;
 }
 
 inline bool init_server_send_state (void *socket, server_send_state_t *state)
@@ -80,7 +98,7 @@ inline bool init_server_send_state (void *socket, server_send_state_t *state)
     if (!state->poller)
         return false;
     if (zlink_poller_add (state->poller, socket, state,
-                          static_cast<short> (ZLINK_POLLIN | ZLINK_POLLCOMPLETION))
+                          server_send_events (*state))
         != ZLINK_CONFIG_OK) {
         close_server_send_state (state);
         return false;
@@ -88,7 +106,136 @@ inline bool init_server_send_state (void *socket, server_send_state_t *state)
     return true;
 }
 
-inline bool drain_server_send_completions (server_send_state_t *state)
+inline void clear_retained_latency_ack (server_send_state_t *state)
+{
+    if (!state)
+        return;
+    state->wait_token = 0;
+    state->retry_ready = false;
+    state->retained_latency_ack_payload.clear ();
+}
+
+inline bool submit_retained_latency_ack (server_send_state_t *state)
+{
+    if (!state || !state->socket || state->wait_token != 0
+        || state->retained_latency_ack_payload.empty ()) {
+        errno = EBUSY;
+        return false;
+    }
+
+    zlink_msg_t payload;
+    if (zlink_msg_init_size (&payload,
+                             state->retained_latency_ack_payload.size ()) != 0)
+        return false;
+    std::memcpy (zlink_msg_data (&payload),
+                 state->retained_latency_ack_payload.data (),
+                 state->retained_latency_ack_payload.size ());
+
+    zlink_completion_id_t wait_token = 0;
+    const zlink_submit_result_t rc = zlink_send_part (
+      state->socket, &payload, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
+      state->socket, &wait_token);
+    const int submit_errno = rc == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
+    zlink_msg_close (&payload);
+
+    if (rc == ZLINK_SUBMIT_OK && wait_token == 0) {
+        clear_retained_latency_ack (state);
+        return update_server_send_events (state);
+    }
+    if (rc == ZLINK_SUBMIT_BACKPRESSURED
+        && (submit_errno == EAGAIN || submit_errno == EWOULDBLOCK)
+        && wait_token != 0) {
+        state->wait_token = wait_token;
+        state->retry_ready = false;
+        if (!update_server_send_events (state))
+            return false;
+        errno = submit_errno;
+        return true;
+    }
+
+    errno = rc == ZLINK_SUBMIT_OK || rc == ZLINK_SUBMIT_BACKPRESSURED
+              ? EPROTO
+              : (submit_errno != 0 ? submit_errno : EIO);
+    return false;
+}
+
+inline bool send_latency_ack (server_send_state_t *state,
+                              const zlink_msg_t *payload)
+{
+    if (!state || !state->socket || !payload
+        || !state->retained_latency_ack_payload.empty ()) {
+        errno = EBUSY;
+        return false;
+    }
+
+    const size_t payload_size =
+      zlink_msg_size (const_cast<zlink_msg_t *> (payload));
+    if (payload_size == 0) {
+        errno = EPROTO;
+        return false;
+    }
+    state->retained_latency_ack_payload.resize (payload_size);
+    std::memcpy (state->retained_latency_ack_payload.data (),
+                 zlink_msg_data (const_cast<zlink_msg_t *> (payload)),
+                 payload_size);
+    return submit_retained_latency_ack (state);
+}
+
+inline bool defer_latency_ack (server_send_state_t *state, const zlink_msg_t *payload)
+{
+    if (!state || !payload || !state->retained_latency_ack_payload.empty ()) {
+        errno = EPROTO;
+        return false;
+    }
+
+    const size_t payload_size = zlink_msg_size (payload);
+    if (payload_size == 0) {
+        errno = EPROTO;
+        return false;
+    }
+    state->retained_latency_ack_payload.resize (payload_size);
+    std::memcpy (state->retained_latency_ack_payload.data (),
+                 zlink_msg_data (const_cast<zlink_msg_t *> (payload)), payload_size);
+    return true;
+}
+
+inline bool send_deferred_latency_ack (server_send_state_t *state)
+{
+    if (!state || state->retained_latency_ack_payload.empty ()) {
+        errno = EPROTO;
+        return false;
+    }
+    return submit_retained_latency_ack (state);
+}
+
+inline bool record_server_writable (server_send_state_t *state,
+                                    const zlink_completion_t &completion)
+{
+    if (!state || completion.kind != ZLINK_COMPLETION_WRITABLE
+        || completion.completion_id == 0
+        || completion.user_context != state->socket
+        || completion.peer_rid.size != 0
+        || state->retained_latency_ack_payload.empty ()
+        || state->wait_token == 0
+        || completion.completion_id != state->wait_token) {
+        errno = EPROTO;
+        return false;
+    }
+
+    state->wait_token = 0;
+    if (completion.send_result == ZLINK_SEND_ADMITTED
+        && completion.send_terminal_errno == 0) {
+        state->retry_ready = true;
+        return true;
+    }
+
+    const int terminal_errno = completion.send_terminal_errno;
+    clear_retained_latency_ack (state);
+    errno = terminal_errno != 0 ? terminal_errno : EIO;
+    return false;
+}
+
+inline bool drain_server_writable (server_send_state_t *state)
 {
     if (!state || !state->socket)
         return false;
@@ -99,84 +246,24 @@ inline bool drain_server_send_completions (server_send_state_t *state)
         const zlink_recv_result_t rc = zlink_completion_recv (
           state->socket, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
         if (rc == ZLINK_RECV_NO_DATA)
-            return true;
+            break;
         if (rc != ZLINK_RECV_OK)
             return false;
 
-        const bool valid = completion.kind == ZLINK_COMPLETION_SEND
-                           && completion.completion_id != 0
-                           && completion.user_context == state
-                           && state->pending_completions == 1
-                           && completion.completion_id == state->completion_id;
-        if (valid) {
-            --state->pending_completions;
-            state->completion_id = 0;
-        }
-        const bool admitted = valid && completion.send_result == ZLINK_SEND_ADMITTED;
-        const int terminal_errno = completion.send_terminal_errno;
+        const bool valid = record_server_writable (state, completion);
+        const int completion_errno = valid ? 0 : errno;
         zlink_completion_close (&completion);
-        if (!admitted) {
-            errno = terminal_errno != 0 ? terminal_errno : EPROTO;
+        if (!valid) {
+            errno = completion_errno;
             return false;
         }
     }
-}
 
-inline bool send_latency_ack (server_send_state_t *state, zlink_msg_t *payload)
-{
-    if (!state || !state->socket || !payload || state->pending_completions != 0) {
-        errno = EBUSY;
+    // WRITABLE only grants another admission attempt. Retry after the queue
+    // reaches NO_DATA, retaining these exact bytes again if credit was raced.
+    if (state->retry_ready && !submit_retained_latency_ack (state))
         return false;
-    }
-
-    zlink_completion_id_t completion_id = 0;
-    const zlink_submit_result_t rc = zlink_send_part (
-      state->socket, payload, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, state,
-      &completion_id);
-    if (rc != ZLINK_SUBMIT_OK)
-        return false;
-    if (completion_id != 0) {
-        ++state->pending_completions;
-        state->completion_id = completion_id;
-    }
     return true;
-}
-
-inline bool defer_latency_ack (server_send_state_t *state, const zlink_msg_t *payload)
-{
-    if (!state || !payload || !state->deferred_latency_ack_payload.empty ()) {
-        errno = EPROTO;
-        return false;
-    }
-
-    const size_t payload_size = zlink_msg_size (payload);
-    if (payload_size == 0) {
-        errno = EPROTO;
-        return false;
-    }
-    state->deferred_latency_ack_payload.resize (payload_size);
-    std::memcpy (state->deferred_latency_ack_payload.data (),
-                 zlink_msg_data (const_cast<zlink_msg_t *> (payload)), payload_size);
-    return true;
-}
-
-inline bool send_deferred_latency_ack (server_send_state_t *state)
-{
-    if (!state || state->deferred_latency_ack_payload.empty ()) {
-        errno = EPROTO;
-        return false;
-    }
-
-    zlink_msg_t ack;
-    if (zlink_msg_init_size (&ack, state->deferred_latency_ack_payload.size ()) != 0)
-        return false;
-    std::memcpy (zlink_msg_data (&ack), state->deferred_latency_ack_payload.data (),
-                 state->deferred_latency_ack_payload.size ());
-    const bool sent = send_latency_ack (state, &ack);
-    zlink_msg_close (&ack);
-    if (sent)
-        state->deferred_latency_ack_payload.clear ();
-    return sent;
 }
 
 inline bool decode_and_match_header (const zlink_msg_t *msg,
@@ -309,7 +396,7 @@ inline recv_result_t receive_one_message (server_send_state_t *send_state,
                        ? send_latency_ack (send_state, &part)
                        : defer_latency_ack (send_state, &part);
         } else if (has_more == ZLINK_PART_FINAL
-                   && !send_state->deferred_latency_ack_payload.empty ()) {
+                   && !send_state->retained_latency_ack_payload.empty ()) {
             // The measurement record is payload MORE + empty FINAL by
             // default. Delay the ACK until FINAL is consumed so the client
             // cannot submit the next global in-flight record while this
@@ -318,7 +405,10 @@ inline recv_result_t receive_one_message (server_send_state_t *send_state,
                      && send_deferred_latency_ack (send_state);
         }
         if (!ack_ok) {
+            const int ack_errno = zlink_errno ();
             zlink_msg_close (&part);
+            if (ack_errno != 0)
+                errno = ack_errno;
             return recv_fatal;
         }
     }
@@ -365,12 +455,12 @@ inline bool drain_non_blocking_messages (server_send_state_t *send_state,
         if (status == recv_stop) {
             if (stop_count)
                 ++(*stop_count);
-            if (echo_matched_payload && send_state->pending_completions != 0)
+            if (echo_matched_payload && send_state->wait_token != 0)
                 break;
             continue;
         }
         if (echo_matched_payload && record_boundary
-            && send_state->pending_completions != 0) {
+            && send_state->wait_token != 0) {
             break;
         }
     }
@@ -428,12 +518,11 @@ inline bool run_receive_phase (server_send_state_t *send_state,
     while (!perf_stop_requested ().load (std::memory_order_acquire)
            && stop_count < expected_stop_count
            && std::chrono::steady_clock::now () < deadline) {
-        // POLLCOMPLETION is the wakeup path, but do not make progress depend
-        // on observing one exact readiness edge. An ACK can already be
-        // delivered while its pull completion is queued; proactively drain
-        // the cap-1 completion before deciding whether POLLIN stays gated.
-        if (send_state->pending_completions != 0
-            && !drain_server_send_completions (send_state)) {
+        // WRITABLE is level-held through POLLOUT and POLLCOMPLETION. Drain the
+        // queue before deciding whether POLLIN stays gated, then resubmit the
+        // retained ACK from that same event-loop turn.
+        if (send_state->wait_token != 0
+            && !drain_server_writable (send_state)) {
             return false;
         }
         std::memset (&send_state->event, 0, sizeof (send_state->event));
@@ -453,13 +542,14 @@ inline bool run_receive_phase (server_send_state_t *send_state,
             return false;
         }
 
-        if ((send_state->event.events & ZLINK_POLLCOMPLETION) != 0
-            && !drain_server_send_completions (send_state)) {
+        if ((send_state->event.events
+             & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0
+            && !drain_server_writable (send_state)) {
             return false;
         }
 
         if ((send_state->event.events & ZLINK_POLLIN) != 0
-            && (!echo_matched_payload || send_state->pending_completions == 0)) {
+            && (!echo_matched_payload || send_state->wait_token == 0)) {
             if (!drain_non_blocking_messages (
                   send_state, expected_msg_size, expected_run_id, expected_phase, detail_emitted,
                   transport, count_message, collect_latency, message_count, lat_sum, lat_count,
@@ -474,18 +564,19 @@ inline bool run_receive_phase (server_send_state_t *send_state,
         errno = ETIMEDOUT;
         return false;
     }
-    if (!send_state->deferred_latency_ack_payload.empty ()) {
+    if (!send_state->retained_latency_ack_payload.empty ()
+        && send_state->wait_token == 0) {
         errno = EPROTO;
         return false;
     }
 
-    // A latency ACK may have taken Core's pending path just before the final
-    // stop arrived. It must be pulled before the phase state is reused.
-    while (send_state->pending_completions != 0
+    // A latency ACK may still be waiting for write credit when the final stop
+    // arrives. Admit its retained bytes before the phase state is reused.
+    while (send_state->wait_token != 0
            && std::chrono::steady_clock::now () < deadline) {
-        if (!drain_server_send_completions (send_state))
+        if (!drain_server_writable (send_state))
             return false;
-        if (send_state->pending_completions == 0)
+        if (send_state->wait_token == 0)
             break;
         std::memset (&send_state->event, 0, sizeof (send_state->event));
         const int event_count = zlink_poller_wait (send_state->poller, &send_state->event, 1,
@@ -495,12 +586,15 @@ inline bool run_receive_phase (server_send_state_t *send_state,
                 continue;
             return false;
         }
-        if (event_count > 0 && (send_state->event.events & ZLINK_POLLCOMPLETION) != 0
-            && !drain_server_send_completions (send_state)) {
+        if (event_count > 0
+            && (send_state->event.events
+                & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0
+            && !drain_server_writable (send_state)) {
             return false;
         }
     }
-    if (send_state->pending_completions != 0) {
+    if (send_state->wait_token != 0
+        || !send_state->retained_latency_ack_payload.empty ()) {
         errno = ETIMEDOUT;
         return false;
     }
@@ -559,8 +653,8 @@ inline bool run_one_size_benchmark (server_send_state_t *send_state,
     }
 
     // Every client pipe has delivered its final stop token and every latency
-    // echo SEND completion has drained. Keep the server alive until the
-    // runner observes CLIENT_DONE and replies with STOP.
+    // echo retry has been admitted. Keep the server alive until the runner
+    // observes CLIENT_DONE and replies with STOP.
     std::cout << "PHASE_DONE," << msg_size << std::endl;
 
     bench_latency_stats_t latency;
@@ -617,8 +711,9 @@ inline void wait_for_runner_stop_or_eof_bounded (server_send_state_t *send_state
             const int event_count = zlink_poller_wait (
               send_state->poller, &send_state->event, 1, 0, NULL);
             if (event_count > 0
-                && (send_state->event.events & ZLINK_POLLCOMPLETION) != 0) {
-                (void) drain_server_send_completions (send_state);
+                && (send_state->event.events
+                    & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0) {
+                (void) drain_server_writable (send_state);
             }
         }
     }

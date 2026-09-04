@@ -1,3 +1,5 @@
+#include <errno.h>
+#include <stdint.h>
 #include <string.h>
 
 #include <zlink.h>
@@ -25,14 +27,43 @@ static int make_part (zlink_msg_t *msg, const char *text)
     return 0;
 }
 
+static int check_missing_route (void *socket, const zlink_routing_id_t *unknown)
+{
+    zlink_msg_t failed;
+    CHECK (make_part (&failed, "missing-route") == 0);
+    zlink_completion_id_t completion_id = UINT64_MAX;
+    errno = 0;
+    CHECK (zlink_send_part_rid (socket, unknown, &failed,
+                                ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL,
+                                NULL, &completion_id)
+           == ZLINK_SUBMIT_NOT_CONNECTED);
+    CHECK (zlink_errno () == EHOSTUNREACH);
+    CHECK (completion_id == 0);
+    CHECK (zlink_msg_size (&failed) == 0);
+    CHECK (zlink_msg_close (&failed) == ZLINK_CONFIG_OK);
+
+    zlink_completion_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.struct_size = sizeof (completion);
+    errno = 0;
+    CHECK (zlink_completion_recv (socket, &completion,
+                                  ZLINK_RECV_FLAGS_DONTWAIT)
+           == ZLINK_RECV_NO_DATA);
+    CHECK (zlink_errno () == EAGAIN);
+    zlink_completion_close (&completion);
+    return 0;
+}
+
 int main (void)
 {
     void *ctx = zlink_ctx_new ();
     CHECK (ctx != NULL);
 
     void *router = zlink_socket (ctx, ZLINK_SOCKET_ROUTER);
+    void *stream = zlink_socket (ctx, ZLINK_SOCKET_STREAM);
     void *pair = zlink_socket (ctx, ZLINK_SOCKET_PAIR);
     CHECK (router != NULL);
+    CHECK (stream != NULL);
     CHECK (pair != NULL);
 
     zlink_routing_id_t rid255 = routing_id_of_size (255);
@@ -50,14 +81,14 @@ int main (void)
     endpoint256[sizeof (endpoint256) - 1] = '\0';
     CHECK (zlink_bind (pair, endpoint256) == ZLINK_BIND_INVALID_ARGUMENT);
 
-    zlink_msg_t failed;
-    CHECK (make_part (&failed, "keep-owned") == 0);
     zlink_routing_id_t unknown = routing_id_of_size (7);
-    CHECK (
-      zlink_send_part_rid (router, &unknown, &failed, ZLINK_SEND_FLAGS_DONTWAIT,
-                           ZLINK_PART_FINAL, NULL, NULL)
-      != ZLINK_SUBMIT_OK);
-    CHECK (zlink_msg_close (&failed) == ZLINK_CONFIG_OK);
+    int missing_route_result = check_missing_route (router, &unknown);
+    if (missing_route_result != 0)
+        return missing_route_result;
+    zlink_routing_id_t stream_unknown = routing_id_of_size (4);
+    missing_route_result = check_missing_route (stream, &stream_unknown);
+    if (missing_route_result != 0)
+        return missing_route_result;
 
     zlink_msg_t pub_failed;
     CHECK (make_part (&pub_failed, "publish") == 0);
@@ -67,6 +98,7 @@ int main (void)
     CHECK (zlink_msg_close (&pub_failed) == ZLINK_CONFIG_OK);
 
     CHECK (zlink_close (router) == ZLINK_CLOSE_OK);
+    CHECK (zlink_close (stream) == ZLINK_CLOSE_OK);
     CHECK (zlink_close (pair) == ZLINK_CLOSE_OK);
     CHECK (zlink_ctx_term (ctx) == ZLINK_CLOSE_OK);
     return 0;

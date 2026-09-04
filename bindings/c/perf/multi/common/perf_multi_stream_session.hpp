@@ -7,7 +7,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <mutex>
+#include <vector>
 
 namespace perf_multi_stream
 {
@@ -19,6 +21,11 @@ struct session_t
         recv_count (0),
         send_count (0),
         outstanding_count (0),
+        wait_token (0),
+        retry_ready (false),
+        pollout_suppressed (false),
+        retained_rid (),
+        retained_packet (),
         failure_count (0),
         first_failure_errno (0),
         failed (false),
@@ -29,9 +36,14 @@ struct session_t
     void *send_socket;
     std::atomic<unsigned long long> recv_count;
     std::atomic<unsigned long long> send_count;
-    // Counts DONTWAIT sends with a nonzero completion ID until their terminal
-    // records are pulled from the socket completion queue.
+    // Counts the one application-owned packet whose backpressure wait token is
+    // live until WRITABLE permits its exact-byte resubmission.
     std::atomic<unsigned long long> outstanding_count;
+    zlink_completion_id_t wait_token;
+    bool retry_ready;
+    bool pollout_suppressed;
+    zlink_routing_id_t retained_rid;
+    std::vector<unsigned char> retained_packet;
     std::atomic<unsigned long long> failure_count;
     std::atomic<int> first_failure_errno;
     std::atomic<bool> failed;
@@ -53,6 +65,11 @@ inline void reset_session (session_t *session, void *send_socket)
     session->recv_count.store (0, std::memory_order_release);
     session->send_count.store (0, std::memory_order_release);
     session->outstanding_count.store (0, std::memory_order_release);
+    session->wait_token = 0;
+    session->retry_ready = false;
+    session->pollout_suppressed = false;
+    std::memset (&session->retained_rid, 0, sizeof (session->retained_rid));
+    session->retained_packet.clear ();
     session->failure_count.store (0, std::memory_order_release);
     session->first_failure_errno.store (0, std::memory_order_release);
     session->failed.store (false, std::memory_order_release);
@@ -65,6 +82,11 @@ inline void clear_session (session_t *session)
         return;
     // zlink_close() must have completed before this pointer is cleared.
     session->send_socket = NULL;
+    session->wait_token = 0;
+    session->retry_ready = false;
+    session->pollout_suppressed = false;
+    std::memset (&session->retained_rid, 0, sizeof (session->retained_rid));
+    session->retained_packet.clear ();
     session->stop_cv.notify_all ();
 }
 
@@ -117,18 +139,53 @@ inline void record_immediate_admission (session_t *session)
     session->send_count.fetch_add (1, std::memory_order_relaxed);
 }
 
-inline bool record_send_completion (session_t *session,
-                                    const zlink_completion_t *completion)
+inline bool stream_routing_ids_equal (const zlink_routing_id_t &left,
+                                      const zlink_routing_id_t &right)
 {
-    if (!session || !completion || completion->kind != ZLINK_COMPLETION_SEND
-        || completion->completion_id == 0 || completion->user_context != session)
-        return false;
+    return left.size == right.size
+           && (left.size == 0
+               || std::memcmp (left.data, right.data, left.size) == 0);
+}
 
-    if (completion->send_result == ZLINK_SEND_ADMITTED)
-        session->send_count.fetch_add (1, std::memory_order_relaxed);
-    else
-        record_failure (session, completion->send_terminal_errno);
+inline void release_retained_packet (session_t *session)
+{
+    if (!session)
+        return;
+    session->wait_token = 0;
+    session->retry_ready = false;
+    session->pollout_suppressed = false;
+    std::memset (&session->retained_rid, 0, sizeof (session->retained_rid));
+    session->retained_packet.clear ();
+}
+
+inline bool record_writable_completion (session_t *session,
+                                        const zlink_completion_t *completion)
+{
+    if (!session || !completion
+        || completion->kind != ZLINK_COMPLETION_WRITABLE
+        || completion->completion_id == 0
+        || completion->user_context != session->send_socket
+        || session->wait_token == 0 || session->retained_packet.empty ()
+        || outstanding_size (session) != 1
+        || completion->completion_id != session->wait_token
+        || !stream_routing_ids_equal (completion->peer_rid,
+                                      session->retained_rid)) {
+        errno = EPROTO;
+        return false;
+    }
+
+    session->wait_token = 0;
+    session->pollout_suppressed = false;
+    if (completion->send_result == ZLINK_SEND_ADMITTED
+        && completion->send_terminal_errno == 0) {
+        session->retry_ready = true;
+        return true;
+    }
+
+    const int terminal_errno = completion->send_terminal_errno;
+    release_retained_packet (session);
     finish_pending_submission (session);
+    record_failure (session, terminal_errno != 0 ? terminal_errno : EIO);
     return true;
 }
 
@@ -162,24 +219,98 @@ inline bool submit_packet_async (session_t *session,
                                  const zlink_routing_id_t *rid,
                                  zlink_msg_t *packet)
 {
-    if (!session || !session->send_socket || !rid || rid->size == 0 || !packet)
-        return false;
-
-    zlink_completion_id_t completion_id = 0;
-    const zlink_submit_result_t result = zlink_send_part_rid (
-      session->send_socket, rid, packet, ZLINK_SEND_FLAGS_DONTWAIT,
-      ZLINK_PART_FINAL, session, &completion_id);
-    const int submit_errno = zlink_errno ();
-    if (result != ZLINK_SUBMIT_OK) {
-        errno = submit_errno;
+    if (!session || !session->send_socket || !rid || rid->size == 0 || !packet
+        || session->wait_token != 0 || !session->retained_packet.empty ()
+        || outstanding_size (session) != 0) {
+        errno = EBUSY;
         return false;
     }
 
-    if (completion_id == 0)
+    const size_t packet_size = zlink_msg_size (packet);
+    if (packet_size == 0) {
+        errno = EINVAL;
+        return false;
+    }
+    const unsigned char *packet_data =
+      static_cast<const unsigned char *> (zlink_msg_data (packet));
+    session->retained_packet.assign (packet_data, packet_data + packet_size);
+    session->retained_rid = *rid;
+
+    zlink_completion_id_t wait_token = 0;
+    const zlink_submit_result_t result = zlink_send_part_rid (
+      session->send_socket, rid, packet, ZLINK_SEND_FLAGS_DONTWAIT,
+      ZLINK_PART_FINAL, session->send_socket, &wait_token);
+    const int submit_errno = result == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
+    if (result == ZLINK_SUBMIT_OK && wait_token == 0) {
+        release_retained_packet (session);
         record_immediate_admission (session);
-    else
+        return true;
+    }
+    if (result == ZLINK_SUBMIT_BACKPRESSURED
+        && (submit_errno == EAGAIN || submit_errno == EWOULDBLOCK)
+        && wait_token != 0) {
+        session->wait_token = wait_token;
+        session->retry_ready = false;
+        session->pollout_suppressed = false;
         session->outstanding_count.fetch_add (1, std::memory_order_acq_rel);
-    return true;
+        errno = submit_errno;
+        return true;
+    }
+
+    release_retained_packet (session);
+    errno = result == ZLINK_SUBMIT_OK
+              || result == ZLINK_SUBMIT_BACKPRESSURED
+              ? EPROTO
+              : (submit_errno != 0 ? submit_errno : EIO);
+    return false;
+}
+
+inline bool retry_retained_packet (session_t *session)
+{
+    if (!session || !session->send_socket || session->wait_token != 0
+        || !session->retry_ready || session->retained_packet.empty ()
+        || session->retained_rid.size == 0 || outstanding_size (session) != 1) {
+        errno = EPROTO;
+        return false;
+    }
+
+    zlink_msg_t packet;
+    if (zlink_msg_init_size (&packet, session->retained_packet.size ()) != 0)
+        return false;
+    std::memcpy (zlink_msg_data (&packet), session->retained_packet.data (),
+                 session->retained_packet.size ());
+
+    zlink_completion_id_t wait_token = 0;
+    const zlink_submit_result_t result = zlink_send_part_rid (
+      session->send_socket, &session->retained_rid, &packet,
+      ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, session->send_socket,
+      &wait_token);
+    const int submit_errno = result == ZLINK_SUBMIT_OK ? 0 : zlink_errno ();
+    zlink_msg_close (&packet);
+
+    if (result == ZLINK_SUBMIT_OK && wait_token == 0) {
+        release_retained_packet (session);
+        finish_pending_submission (session);
+        record_immediate_admission (session);
+        return true;
+    }
+    if (result == ZLINK_SUBMIT_BACKPRESSURED
+        && (submit_errno == EAGAIN || submit_errno == EWOULDBLOCK)
+        && wait_token != 0) {
+        session->wait_token = wait_token;
+        session->retry_ready = false;
+        session->pollout_suppressed = false;
+        errno = submit_errno;
+        return true;
+    }
+
+    release_retained_packet (session);
+    finish_pending_submission (session);
+    errno = result == ZLINK_SUBMIT_OK
+              || result == ZLINK_SUBMIT_BACKPRESSURED
+              ? EPROTO
+              : (submit_errno != 0 ? submit_errno : EIO);
+    return false;
 }
 
 inline bool handle_packet_message (session_t *session,
@@ -204,12 +335,20 @@ inline bool handle_packet_message (session_t *session,
     if (!build_packet_frame (&packet, header_part, body_part))
         return false;
 
-    // Core chooses the current-pipe immediate path when it is FIFO-safe and
-    // retains a backpressured operation until its terminal completion.
-    return submit_packet_async (session, rid, &packet);
+    // Keep the exact packet bytes and route before the one DONTWAIT attempt;
+    // the message handle is consumed regardless of admission outcome.
+    const bool submitted = submit_packet_async (session, rid, &packet);
+    const int submit_errno = !submitted || outstanding_size (session) != 0
+                               ? zlink_errno ()
+                               : 0;
+    zlink_msg_close (&packet);
+    if (submit_errno != 0)
+        errno = submit_errno;
+    return submitted;
 }
 
-inline bool drain_send_completions (session_t *session)
+inline bool drain_writable_completions (session_t *session,
+                                        bool suppress_pollout_if_empty)
 {
     if (!session || !session->send_socket)
         return false;
@@ -219,15 +358,25 @@ inline bool drain_send_completions (session_t *session)
         completion.struct_size = sizeof (completion);
         const zlink_recv_result_t rc = zlink_completion_recv (
           session->send_socket, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
-        if (rc == ZLINK_RECV_NO_DATA)
-            return true;
+        if (rc == ZLINK_RECV_NO_DATA) {
+            if (suppress_pollout_if_empty && session->wait_token != 0)
+                session->pollout_suppressed = true;
+            break;
+        }
         if (rc != ZLINK_RECV_OK)
             return false;
-        const bool valid = record_send_completion (session, &completion);
+        const bool valid = record_writable_completion (session, &completion);
+        const int completion_errno = valid ? 0 : errno;
         zlink_completion_close (&completion);
-        if (!valid)
+        if (!valid) {
+            errno = completion_errno;
             return false;
+        }
     }
+
+    // The completion queue must reach NO_DATA before the exact retained packet
+    // is submitted again.
+    return !session->retry_ready || retry_retained_packet (session);
 }
 
 inline bool drain_packets (session_t *session, const char *stop_token)
@@ -263,9 +412,22 @@ inline bool drain_packets (session_t *session, const char *stop_token)
         zlink_msg_close (&body_part);
         if (!handled)
             return false;
+        if (outstanding_size (session) != 0)
+            return true;
         if (perf_stop_requested ().load (std::memory_order_acquire))
             return true;
     }
+}
+
+inline short session_poll_events (const session_t *session, bool accept_input)
+{
+    short events = ZLINK_POLLCOMPLETION;
+    if (session && session->wait_token != 0
+        && !session->pollout_suppressed)
+        events = static_cast<short> (events | ZLINK_POLLOUT);
+    if (accept_input && session && outstanding_size (session) == 0)
+        events = static_cast<short> (events | ZLINK_POLLIN);
+    return events;
 }
 
 inline int run_server_event_loop (session_t *session, const char *stop_token)
@@ -278,8 +440,7 @@ inline int run_server_event_loop (session_t *session, const char *stop_token)
     void *poller = zlink_poller_new ();
     if (!poller
         || zlink_poller_add (poller, session->send_socket, session,
-                             static_cast<short> (ZLINK_POLLIN
-                                                 | ZLINK_POLLCOMPLETION))
+                             session_poll_events (session, true))
              != ZLINK_CONFIG_OK) {
         if (poller)
             zlink_poller_destroy (&poller);
@@ -299,6 +460,13 @@ inline int run_server_event_loop (session_t *session, const char *stop_token)
             break;
         }
 
+        if (zlink_poller_modify (poller, session->send_socket,
+                                 session_poll_events (session, !stopping))
+            != ZLINK_CONFIG_OK) {
+            record_failure (session, zlink_errno ());
+            break;
+        }
+
         zlink_poller_event_t event;
         std::memset (&event, 0, sizeof (event));
         const int poll_rc = zlink_poller_wait (
@@ -309,12 +477,14 @@ inline int run_server_event_loop (session_t *session, const char *stop_token)
             record_failure (session, zlink_errno ());
             break;
         }
-        if (poll_rc > 0 && (event.events & ZLINK_POLLCOMPLETION) != 0
-            && !drain_send_completions (session)) {
+        if (poll_rc > 0
+            && (event.events & (ZLINK_POLLOUT | ZLINK_POLLCOMPLETION)) != 0
+            && !drain_writable_completions (session, true)) {
             record_failure (session, zlink_errno ());
             break;
         }
-        if (!stopping && poll_rc > 0 && (event.events & ZLINK_POLLIN) != 0
+        if (!stopping && outstanding_size (session) == 0 && poll_rc > 0
+            && (event.events & ZLINK_POLLIN) != 0
             && !drain_packets (session, stop_token)) {
             record_failure (session, zlink_errno ());
             break;

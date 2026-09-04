@@ -141,10 +141,12 @@ void test_zero_sample_cap_preserves_exact_mean ()
 void test_relay_submit_error_classification ()
 {
     using namespace perf_multi_relay_server;
+    assert (classify_reply_send_result (ZLINK_SUBMIT_BACKPRESSURED, EAGAIN)
+            == reply_send_backpressured);
     assert (classify_reply_send_result (ZLINK_SUBMIT_BACKPRESSURED, 0)
-            == reply_send_backpressured);
+            == reply_send_failed);
     assert (classify_reply_send_result (ZLINK_SUBMIT_INTERNAL_ERROR, EAGAIN)
-            == reply_send_backpressured);
+            == reply_send_failed);
     assert (classify_reply_send_result (ZLINK_SUBMIT_NOT_CONNECTED, 0)
             == reply_send_stale_route);
     assert (classify_reply_send_result (ZLINK_SUBMIT_NOT_FOUND, 0)
@@ -152,55 +154,59 @@ void test_relay_submit_error_classification ()
     assert (classify_reply_send_result (ZLINK_SUBMIT_NOT_FOUND, EAGAIN)
             == reply_send_stale_route);
     assert (classify_reply_send_result (ZLINK_SUBMIT_BACKPRESSURED, EHOSTUNREACH)
-            == reply_send_backpressured);
+            == reply_send_failed);
     assert (classify_reply_send_result (ZLINK_SUBMIT_INTERNAL_ERROR, EHOSTUNREACH)
-            == reply_send_stale_route);
+            == reply_send_failed);
     assert (classify_reply_send_result (ZLINK_SUBMIT_INTERNAL_ERROR, ENOTCONN)
-            == reply_send_stale_route);
+            == reply_send_failed);
     assert (classify_reply_send_result (ZLINK_SUBMIT_INVALID_ARGUMENT, EINVAL)
             == reply_send_failed);
 }
 
-void test_one_way_send_completion_accounting ()
+void test_one_way_writable_retry_state ()
 {
     using namespace perf_multi_client;
-    assert (send_completion_limit_per_socket () == 1);
+    assert (send_wait_limit_per_socket () == 1);
     assert (latency_phase_duration_seconds () == 1);
     assert (latency_phase_max_in_flight_per_socket () == 1);
     assert (perf_multi_metric::phase_latency != perf_multi_metric::phase_active);
+    assert (ZLINK_COMPLETION_WRITABLE == 3);
 
-    send_completion_slot_t slot;
+    send_wait_slot_t slot;
     slot.socket = reinterpret_cast<void *> (1);
-    slot.pending = 1;
-    slot.completion_id = 7;
+    slot.retained = true;
+    slot.retained_payload.push_back ('x');
+    slot.retained_payload_size = 1;
+    slot.wait_token = 7;
 
     zlink_completion_t admitted;
     std::memset (&admitted, 0, sizeof (admitted));
     admitted.struct_size = sizeof (admitted);
-    admitted.kind = ZLINK_COMPLETION_SEND;
+    admitted.kind = ZLINK_COMPLETION_WRITABLE;
     admitted.completion_id = 7;
     admitted.user_context = slot.socket;
     admitted.send_result = ZLINK_SEND_ADMITTED;
-    assert (record_send_completion (&slot, admitted));
-    assert (slot.pending == 0);
-    assert (slot.completion_id == 0);
+    assert (record_writable_completion (&slot, admitted));
+    assert (slot.retained);
+    assert (slot.retry_ready);
+    assert (slot.wait_token == 0);
 
-    slot.pending = 1;
-    slot.completion_id = 8;
+    slot.retry_ready = false;
+    slot.wait_token = 8;
     zlink_completion_t wrong_id = admitted;
     wrong_id.completion_id = 9;
-    assert (!record_send_completion (&slot, wrong_id));
-    assert (slot.pending == 1);
-    assert (slot.completion_id == 8);
+    assert (!record_writable_completion (&slot, wrong_id));
+    assert (slot.retained);
+    assert (slot.wait_token == 8);
     assert (errno == EPROTO);
 
     zlink_completion_t terminal = admitted;
     terminal.completion_id = 8;
     terminal.send_result = ZLINK_SEND_TERMINAL;
     terminal.send_terminal_errno = EHOSTUNREACH;
-    assert (!record_send_completion (&slot, terminal));
-    assert (slot.pending == 0);
-    assert (slot.completion_id == 0);
+    assert (!record_writable_completion (&slot, terminal));
+    assert (!slot.retained);
+    assert (slot.wait_token == 0);
     assert (errno == EHOSTUNREACH);
 }
 
@@ -325,20 +331,34 @@ void reset_stream_session_for_test (perf_multi_stream::session_t *session)
     perf_multi_stream::reset_session (session, reinterpret_cast<void *> (1));
 }
 
-void test_stream_async_admission_accounting ()
+void test_stream_writable_retry_accounting ()
 {
     perf_multi_stream::session_t session;
     reset_stream_session_for_test (&session);
 
     session.outstanding_count.store (1, std::memory_order_release);
+    session.wait_token = 7;
+    session.retained_packet.push_back (0x41);
+    session.retained_rid.size = 1;
+    session.retained_rid.data[0] = 0x22;
     zlink_completion_t admitted;
     std::memset (&admitted, 0, sizeof (admitted));
     admitted.struct_size = sizeof (admitted);
-    admitted.kind = ZLINK_COMPLETION_SEND;
+    admitted.kind = ZLINK_COMPLETION_WRITABLE;
     admitted.completion_id = 7;
-    admitted.user_context = &session;
+    admitted.user_context = session.send_socket;
+    admitted.peer_rid = session.retained_rid;
     admitted.send_result = ZLINK_SEND_ADMITTED;
-    require_stream_test (perf_multi_stream::record_send_completion (&session, &admitted));
+    require_stream_test (
+      perf_multi_stream::record_writable_completion (&session, &admitted));
+    require_stream_test (session.retry_ready);
+    require_stream_test (session.wait_token == 0);
+    require_stream_test (perf_multi_stream::outstanding_size (&session) == 1);
+    require_stream_test (session.send_count.load (std::memory_order_acquire) == 0);
+
+    perf_multi_stream::release_retained_packet (&session);
+    perf_multi_stream::finish_pending_submission (&session);
+    perf_multi_stream::record_immediate_admission (&session);
     require_stream_test (perf_multi_stream::outstanding_size (&session) == 0);
     require_stream_test (session.send_count.load (std::memory_order_acquire) == 1);
     require_stream_test (!session.failed.load (std::memory_order_acquire));
@@ -348,15 +368,21 @@ void test_stream_async_admission_accounting ()
     require_stream_test (session.send_count.load (std::memory_order_acquire) == 2);
 
     session.outstanding_count.store (1, std::memory_order_release);
+    session.wait_token = 8;
+    session.retained_packet.push_back (0x42);
+    session.retained_rid.size = 1;
+    session.retained_rid.data[0] = 0x23;
     zlink_completion_t terminal;
     std::memset (&terminal, 0, sizeof (terminal));
     terminal.struct_size = sizeof (terminal);
-    terminal.kind = ZLINK_COMPLETION_SEND;
+    terminal.kind = ZLINK_COMPLETION_WRITABLE;
     terminal.completion_id = 8;
-    terminal.user_context = &session;
+    terminal.user_context = session.send_socket;
+    terminal.peer_rid = session.retained_rid;
     terminal.send_result = ZLINK_SEND_TERMINAL;
     terminal.send_terminal_errno = EHOSTUNREACH;
-    require_stream_test (perf_multi_stream::record_send_completion (&session, &terminal));
+    require_stream_test (
+      perf_multi_stream::record_writable_completion (&session, &terminal));
     require_stream_test (perf_multi_stream::outstanding_size (&session) == 0);
     require_stream_test (session.failure_count.load (std::memory_order_acquire) == 1);
     require_stream_test (
@@ -379,16 +405,20 @@ std::string read_stream_session_source ()
     return text.str ();
 }
 
-void test_stream_async_send_has_no_application_retry_loop ()
+void test_stream_async_send_uses_writable_retry_loop ()
 {
     const std::string source = read_stream_session_source ();
     require_stream_test (source.find ("zlink_send_part_rid (") != std::string::npos);
     require_stream_test (source.find ("zlink_completion_recv (") != std::string::npos);
     require_stream_test (source.find ("ZLINK_SEND_FLAGS_DONTWAIT") != std::string::npos);
+    require_stream_test (source.find ("ZLINK_COMPLETION_WRITABLE")
+                         != std::string::npos);
+    require_stream_test (source.find ("retry_retained_packet") != std::string::npos);
+    require_stream_test (source.find ("retained_packet") != std::string::npos);
     require_stream_test (source.find ("perf_zlink_send_rid_parts (")
                          == std::string::npos);
-    require_stream_test (source.find ("EAGAIN") == std::string::npos);
-    require_stream_test (source.find ("ZLINK_POLLOUT") == std::string::npos);
+    require_stream_test (source.find ("EAGAIN") != std::string::npos);
+    require_stream_test (source.find ("ZLINK_POLLOUT") != std::string::npos);
     require_stream_test (source.find ("perf_socket_poll (") == std::string::npos);
     require_stream_test (source.find ("pending_by_route") == std::string::npos);
     require_stream_test (source.find ("drain_pending") == std::string::npos);
@@ -407,7 +437,7 @@ int main ()
     test_sampler_honors_child_and_environment_caps ();
     test_zero_sample_cap_preserves_exact_mean ();
     test_relay_submit_error_classification ();
-    test_one_way_send_completion_accounting ();
+    test_one_way_writable_retry_state ();
     test_weighted_child_aggregation ();
     test_weighted_sample_population_uses_latency_count ();
     test_count_duration_and_bandwidth ();
@@ -415,7 +445,7 @@ int main ()
     test_stream_active_completion_cutoff_and_echo_latency ();
     test_stream_raw_peer_allows_one_unresolved_echo ();
     test_hwm_parser_preserves_uint64_range ();
-    test_stream_async_admission_accounting ();
-    test_stream_async_send_has_no_application_retry_loop ();
+    test_stream_writable_retry_accounting ();
+    test_stream_async_send_uses_writable_retry_loop ();
     return 0;
 }
