@@ -1087,3 +1087,8 @@ server·client를 C 러너 의미에 맞춤)은 별도 트랙·별도 report로 
 3. D-B90 C++ Multi PUBSUB 러너 parity(서버 auto-HWM 재계산 시점·SUB filter): 러너 수정 진행, 별도 report로 재판정.
 4. one-way(single PAIR/PUBSUB/DD/DR/RR, multi DD) 평균 latency: 두 러너 정의가 같고 값이 큐 깊이이므로 binding 판정에서 제외하고 처리량 aggregate로 판정. 정책 문서(`PERF_SINGLE/MULTI_TEST_POLICY`)는 바꾸지 않고 계획서 §9 표와 log에 "판정 제외" 사유를 기록한다. 큐 깊이가 아닌 latency 정의가 필요하면 정책 개정은 별도 제안.
 5. DD 완화 목표 90%: tls/ws/wss·single 모든 transport에 동일 적용(multi `wss` DD 91.1% → `통과`).
+
+## D-B92 (2026-09-05 08:35, 머신 B) D-B83 잔여 항목의 처리 (D-B91 "진행" 지시에 따른 감독 판단)
+1. DD 1024B mean +35%(계약 B의 거절→WRITABLE 왕복 잔여): (c) 현 상태 유지. (a)/(b)는 공개 계약 변경이라 사용자 결정 없이는 하지 않는다. 꼬리 latency(p95/p99)는 0.15.1 수준으로 회복됨(`89ed9be356`).
+2. 4096B 포화 구간 p95/p99 +30%(auto-HWM 예산·I/O batching): Core 별도 과제로 조사 job(sol high) — 러너·바인딩과 무관한 Core 정책이므로 bindings 계획 뒤 슬롯이 나면 착수.
+3. PUBSUB 메모리 손상 1회: SUB session use-after-free로 확정·수정 완료(`29add0ac81`).
