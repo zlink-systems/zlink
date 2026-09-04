@@ -31,19 +31,27 @@
 - [x] 게이트 재검증(B 최신 바인딩 대비): node DONTWAIT 해소✓, java DONTWAIT+E2E 4/4✓ (cpp·dotnet은 §B 미해소로 미완)
 
 ### B. terminal/error 분류 회귀 (별개 클러스터 — 근본원인 규명 필요)
-- [ ] **cpp m6a**: `records.size()==1` (bound-session bind) 실패 — 근본원인
-- [ ] **cpp m6b**: `transport_failure.error_kind()==deadline_exceeded` 실패 — 근본원인
-- [ ] **dotnet stale-authority 3건**: `TimedOut(101)` vs stale terminal(107) — 근본원인
-- [ ] 판정: framework 분류 버그 vs Core 버그. **Core 버그면 A가 직접 수정+커밋+푸시(sub-agent), Core는 B가 perf만**
-- [ ] 수정 + 재검증 + 커밋
+- [x] **cpp m6a** `records.size()==1` — 근본원인 = Core 0.17이 스펙대로 ROUTER 미등록 RID submit을 `NOT_FOUND+ENOENT`로 답하는데
+      framework `transient_route_errno`가 ENOENT를 빠뜨려 영구 실패로 분류 → 재시도 없음. **수정+회귀 assert 커밋 `a22f8c880b`**.
+      후속으로 드러난 같은 endpoint RID 교체 시 stale connect intent 문제(spec 04-network-listener-identity §replacement)도 **수정 커밋 `44b9b27efc`**.
+- [x] **cpp m6b** `error_kind()==deadline_exceeded` — 동일 원인(ENOENT), 격리 3/3 green. 잔여: m6b 후반 `verify_raw_spot_and_actor_routing` line 4524 /
+      `route_cache_stops_at_owner_admission_deadline` line 1909 불안정(별개 원인, job `bucketB-cpp-m6b-late` 진행 중)
+- [ ] **cpp m6a 잔여**: `verify_client_server_plain_hello_is_rejected` 행(단독 실행도 timeout) — job `bucketB-cpp-m6a-plain-hello` 진행 중
+- [ ] **dotnet stale-authority 3건**: 분류 오류가 아니라 **stall** — owner가 terminal reply submit OK(트레이스), caller가 completion을 못 받아 3초 뒤 `ExpireOperationAsync`가 TimedOut(101).
+      Core 최소 재현(ROUTER↔ROUTER 양방향 + POLLCOMPLETION poller)은 정상 → framework/binding 경계. job `bucketB-dotnet-stale`(sol/xhigh) 진행 중
+- [ ] **node 신규(B)**: `user-spot-native-two-process` `RequestError: request failed` — job `bucketB-node-two-process` 진행 중
+- [x] 판정(현재까지): cpp 2건 = framework 매핑/연결 소유자 버그(Core·binding 아님). dotnet·node 미판정.
+- [ ] 수정 + 재검증 + 커밋 — cpp 2/4 완료
 
 ### C. 검증 인프라 (신뢰성 확보)
-- [ ] cpp 샘플 신뢰성 있는 실행 (공유 build cache 동시경합으로 종료결과 미확보 → 격리 필요)
-- [ ] cross-language E2E full: dotnet의 C++ host가 **Core 0.13.2 stale artifact에 고정**돼 0.17 수렴 실패 → C++ host 재빌드
-- [ ] Java↔C++ E2E (선행 C++→.NET 실패로 미실행) 재시도
+- [x] 환경 재구축(2026-09-05, WSL 재설치): Core dev 빌드, **로컬 Core 0.17.0 프리픽스 수동 구성**(GitHub에 `core/v0.17.0` 릴리스 없음 — `fetch-release.sh` 캐시 단락 경로 이용), 4언어 로컬 패키지,
+      cpp 의존성(apt boost/gtest/gmock/lz4/libuv + hiredis·redis++ 소스 빌드), node `http-client` tarball 재생성(`npm pack ./packages/http-client`), Docker Desktop WSL 통합, Playwright Chromium
+- [ ] cpp 샘플 신뢰성 있는 실행 — 별도 build dir `build/linux-ninja-c-e2e` 구성 완료, cpp job 종료 후 `c-cross-language-e2e` job으로 실행
+- [ ] cross-language E2E full: dotnet의 C++ host 0.13.2 stale artifact → 같은 job에서 해소
+- [x] Java↔C++ E2E: `java-cross` stage 4/4 통과 (`gate-node-bootstrap-summary.md`)
 
 ### D. 최종 게이트 (plan line 143: framework unit + cross-language E2E + 7 samples 전부 green)
-- [ ] 4언어 framework unit: DONTWAIT 회귀 0, 잔여는 pre-existing만 (java M6A 2·doc-regression 1은 pre-existing)
+- [ ] 4언어 framework unit: DONTWAIT 회귀 0, 잔여는 pre-existing만 — java unit 1207/2·contract 26/1 = pre-existing 3건 동일 assertion 확인(`gate-node-java-summary.md`); node 1532/6(신규 B 1건 + 환경 D 5건, lint C); cpp·dotnet §B 진행 중
 - [ ] 7 samples × 4언어 green
 - [ ] cross-language E2E green
 - [ ] 최종 커밋+푸시

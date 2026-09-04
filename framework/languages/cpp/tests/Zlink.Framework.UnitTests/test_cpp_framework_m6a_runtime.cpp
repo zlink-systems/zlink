@@ -732,6 +732,10 @@ void verify_stale_rid_disconnect_preserves_same_endpoint_replacement ()
           mesh::service_liveness_registry_t::clock_t::now ());
         std::this_thread::sleep_for (1ms);
     }
+    // Regression precondition: reconnect still owns the endpoint after the
+    // old RID is gone, so connecting the replacement must retarget that
+    // existing endpoint intent rather than keep publishing the old alias.
+    assert (!source.topology ().peer (old_descriptor.node_routing_id));
 
     auto replacement_options = descriptor ("replacement-new", endpoint);
     auto replacement = std::make_unique<mesh::raw_mesh_node_owner_t> (
@@ -2934,6 +2938,12 @@ int main ()
     assert (transient_route_errno (EHOSTUNREACH));
     assert (transient_route_errno (ENETUNREACH));
     assert (transient_route_errno (ENOTCONN));
+    //  Regression: Core answers a routed submit whose target RID is not in the
+    //  ROUTER routing map with ZLINK_SUBMIT_NOT_FOUND + ENOENT. Dropping it out
+    //  of this set classified "route not admitted yet" as a permanent failure,
+    //  so verify_bound_session_bind_retries_until_route_is_admitted below never
+    //  re-sent after admit_pair and the target mailbox stayed empty.
+    assert (transient_route_errno (ENOENT));
     assert (!transient_route_errno (EINVAL));
     verify_actor_create_command_49_roundtrip ();
     verify_bound_session_bind_retries_until_route_is_admitted ();

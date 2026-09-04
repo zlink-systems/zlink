@@ -1,0 +1,52 @@
+# Job: node bucket-B — root-cause `user-spot-native-two-process` RequestError ("request failed")
+
+You are a codex sub-agent under a Claude supervisor. One cause per job, 1.5 h cap. Read `AGENTS.md`
+(root) §2/§3/§4.1 and `framework/AGENTS.md` first.
+
+## Established facts
+- Core `core/build-dev` (current main incl. `89ed9be356`), local packages under `.artifacts/wsl/`
+  (binding tarball `npm/zlink-systems-zlink-0.17.0.tgz`, framework http-client tarball rebuilt),
+  and `framework/languages/node/node_modules` are installed and fresh. **Do not rebuild Core or the
+  local packages; do not run `npm install` again unless a dependency is genuinely missing.**
+- Run the node tests directly (the `npm test` gate is blocked by the known pre-existing ESLint error at
+  `packages/framework/src/runtime/spots/spot-timer.ts:137` — do not fix it, it is out of scope):
+  `cd framework/languages/node && TMPDIR=/dev/shm/zlink-tmp-node node --test --test-force-exit
+  --test-timeout=600000 test/contract/user-spot-native-two-process.test.js`
+- Failure: `public SpotManager completes User Spot lifecycle through two native MeshNode processes`
+  (`test/contract/user-spot-native-two-process.test.js:15`), child process rejects at `:170` with
+  `RequestError: request failed` thrown from the binding's completion drain
+  (`node_modules/@zlink-systems/zlink/dist/zlink/runtime/messaging/completion_owner.js:47`
+  `requestError` ← `CompletionEntry.capture:116` ← `CompletionOwner.drain:326` ← `pollAndDrain:518`).
+  So a native REQUEST completion arrived with a non-OK `request_result`; the message text is generic.
+  Log: `zlink-work/c016/logs/gate-node-direct-tests.log` around line 9434.
+- The previous machine's node gate (`doc/plan/c016-worklog/handoff-2026-09-04/fw-gate-node-summary.md`)
+  reported the node test suite green apart from environment items, so this is either new since Core
+  `89ed9be356` / the binding review fixes (`a9eb6c5a77`), or environment (two-process = spawns a
+  second node process; check ports/redis/timing), or a real terminal-classification gap (bucket B).
+- Cross-check: the same 0.17.0 contract says a ROUTER request to a RID not in the routing map fails
+  `ZLINK_SUBMIT_NOT_FOUND`+`ENOENT` at submit, and a REQUEST completion carries `request_result`
+  (`ZLINK_REQUEST_*`) — find the exact `request_result` value and errno the child saw (the binding's
+  `RequestError` should carry a code; if it does not surface, temporarily log it and remove later).
+  Relevant spec: `core/doc/spec/core/socket/07-router.ko.md` (request/reply, terminal results) and
+  `framework/doc/framework/common/spec/server/` request terminal mapping.
+
+## What to do
+1. Reproduce 3× to establish determinism. Capture the exact `request_result`/errno/terminal from the
+   binding (`completion_owner.js` `requestError`) with a temporary probe if needed.
+2. Trace the request end to end (existing tracing first: node OTel flow exporter /
+   `ZLINK_DEBUG_FRAMEWORK_RELOCATION=1`, per `framework/AGENTS.md` 디버깅 절): which request, to which
+   node, and what the responder did (reply with a non-OK terminal? never admitted the route? peer
+   process not ready?). Decide: framework mapping gap / framework sequencing / test environment /
+   binding / Core.
+3. Fix minimally in the owning module inside `framework/languages/node/**` (framework or test harness
+   readiness if the test itself races). If the cause is in `bindings/node/**` you MAY fix it with a
+   binding regression test under `bindings/node/test` and must report it prominently. Never touch
+   `core/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`,
+   `framework/languages/{cpp,dotnet}/**` (other jobs own those). Never lower an assertion.
+4. Add a regression test if the existing test does not already pin the fixed behaviour. Remove all
+   temporary probes. Re-run the test 3× green and the whole `test/contract/*.test.js` set once.
+5. Do NOT commit.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-node-two-process-summary.md`: root cause with `file:line` and the
+captured codes, classification, fix + why minimal, regression test, exact commands + results, BLOCKERS.
