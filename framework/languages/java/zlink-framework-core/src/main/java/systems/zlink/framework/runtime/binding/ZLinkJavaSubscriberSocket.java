@@ -15,7 +15,7 @@ final class ZLinkJavaSubscriberSocket
 
     ZLinkJavaSubscriberSocket(SubSocket socket) {
         this.socket = socket;
-        this.receivePoller = new ZLinkJavaSocketReceivePoller(socket);
+        this.receivePoller = new ZLinkJavaSocketReceivePoller(socket, false);
     }
 
     @Override public Socket nativeSocket() { return socket; }

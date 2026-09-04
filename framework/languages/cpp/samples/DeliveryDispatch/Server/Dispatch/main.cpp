@@ -202,8 +202,8 @@ class dispatch_worker_t
         std::cerr << "deliverydispatch dispatch: assign delivery=" << request.delivery_id
                   << " customer=" << request.customer_id << "\n";
         const auto &courier_id = _couriers.candidates ().front ();
-        const auto attempt = _state.offer (request, 0, sample_timings_t::courier_decision_timeout);
         co_await _statuses.publish (request, delivery_status_t::assigned, courier_id);
+        const auto attempt = _state.offer (request, 0, sample_timings_t::courier_decision_timeout);
         co_await _offers.offer (request, courier_id, attempt);
     }
 
@@ -240,9 +240,9 @@ class dispatch_worker_t
             co_return;
         }
         const auto &courier_id = _couriers.candidates ()[next_index];
+        co_await _statuses.publish (offer.request, delivery_status_t::reassigned, courier_id);
         const auto attempt =
           _state.offer (offer.request, next_index, sample_timings_t::courier_decision_timeout);
-        co_await _statuses.publish (offer.request, delivery_status_t::reassigned, courier_id);
         co_await _offers.offer (offer.request, courier_id, attempt);
     }
 

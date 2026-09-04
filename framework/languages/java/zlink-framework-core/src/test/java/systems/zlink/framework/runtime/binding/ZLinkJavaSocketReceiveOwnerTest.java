@@ -25,6 +25,16 @@ final class ZLinkJavaSocketReceiveOwnerTest {
     private static final Duration OPERATION_TIMEOUT = Duration.ofSeconds(2);
 
     @Test
+    void subscriberReadinessDoesNotClaimAnUnsupportedCompletionQueue() {
+        try (var context = Zlink.createContext();
+             var subscriber = new ZLinkJavaSubscriberSocket(
+                 context.createSubSocket())) {
+            assertDoesNotThrow(() ->
+                subscriber.waitForReadable(Duration.ZERO));
+        }
+    }
+
+    @Test
     void routerTopologyEntryDoesNotWaitForTheReceiveOwner() throws Exception {
         String endpoint = "inproc://receive-owner-topology-" + System.nanoTime();
         String additionalEndpoint = endpoint + "-additional";

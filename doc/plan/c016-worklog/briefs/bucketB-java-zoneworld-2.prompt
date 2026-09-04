@@ -1,0 +1,55 @@
+# Job: java ZoneWorld (round 2) — service request/send completions settle ~1 s / ~2 s late on the gateway under load (A2 join 3.011 s vs 3 s client wait)
+
+You are a codex sub-agent under a Claude supervisor. One cause, 2 h cap (hard problem — take the time
+to measure before changing). Read `AGENTS.md` (root) §2/§3/§4.1, `framework/AGENTS.md`. Never modify
+`core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other
+languages' trees; never lower an assertion or a timeout; do not commit. Another job fixes the SUB
+`POLLCOMPLETION` registration (`ZLinkJavaSocketReceivePoller`/`ZLinkJavaSubscriberSocket`) — do not
+touch those two files; assume that fix lands.
+
+## Facts (`doc/plan/c016-worklog/bucketB-java-zoneworld-summary.md`)
+- Failing A2 on the gateway: received→admitted→dispatched→Redis reserve all within 4 ms; then
+  **994 ms** until the mesh actor-create REQUEST's reply is observed by the Java framework and
+  **2.008 s** until the bound actor send's local admission completion is observed (total 3.011 s;
+  client waits 3 s). In the passing run the same two steps took 11 ms and 18 ms. The gateway was not
+  stuck: it processed liveness probes and service command 36 during the wait. All native submits
+  returned OK. With the SUB fix applied alone the gap grew to 6.003 s (so that is not the cause).
+  Inserting an async handoff between native completion and the framework continuation made one
+  prefix pass but then produced DATA_LOST / A2 timeouts (reverted).
+- The suspiciously quantized durations (≈1 s, ≈2 s) point at a **wake-up gap**: the completion is
+  queued in Core promptly but the Java framework only observes it when something else wakes its
+  loop (a poll timeout of ~1 s, the next inbound message, a liveness tick) — i.e. the thread that
+  owns the public poller with POLLCOMPLETION (`ZLinkJavaSocketReceivePoller` / the mesh receive loop
+  in `ZLinkJavaRawMeshNode`) is either not waiting in `poller.wait()` at that moment (busy in a
+  handler/turn on the same thread — check the execution-gate/turn contract
+  `01-execution/02-handler-turn-and-execution-gate.ko.md:15-29,466-478`: infrastructure completions
+  must progress independently of application handler waits) or the wake for a REQUEST completion is
+  not reaching it (binding `Poller.wait` drain semantics after D-B85 `a06260f507`; compare with the
+  cpp framework, whose ZoneWorld passed 7/7, and with dotnet's `Poller.Wait` drain).
+  Candidate sites: `ZLinkJavaRawServicePort.sendOnLane()/requestOnLane()` (`:91-180`, the native
+  stage → framework continuation), the receive loop's wait timeout, `whenComplete` vs
+  `whenCompleteAsync` executor choice (the earlier job tried async handoff), and the binding's
+  runtime pump when the public owner is busy.
+- Measure first: with `ZLINK_JAVA_STREAM_TRACE=1` + message-flow (Normal) + a temporary timestamp
+  probe at (a) native completion enqueue (binding-level trace if available, else a poll of
+  `zlink_completion_recv` from a side thread is NOT allowed — completion ownership is single; instead
+  log when `poller.wait()` returns and with which revents), (b) the framework continuation start,
+  and (c) what the receive-loop thread was doing in between (thread dump every 250 ms during the
+  gap: `jcmd <pid> Thread.print` from the runner is fine). Reproduce with the prefix
+  `ZW-G1,ZW-G5,ZW-A1,ZW-A2` (fails ~1/2) — run up to 4× to catch it.
+- Env: `TMPDIR=/dev/shm/zlink-tmp-java`, `flock -w7200 /tmp/zlink-jvm-gate.lock`,
+  `ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/.artifacts/wsl/install/zlink-core/0.17.0/lib/libzlink.so`,
+  `ZLINK_SAMPLE_KEEP_RUN_DIR=1`, Docker OK. `cd framework/languages/java/samples/java/ZoneWorld && ./run_sample.sh <selector>`.
+
+## What to do
+1. Establish with evidence which of the three (busy thread / lost wake / late continuation) it is.
+2. Fix minimally in `framework/languages/java/zlink-framework-core/**` per the spec (infrastructure
+   completions must not wait on application turns; the poller owner must be woken by
+   POLLCOMPLETION); regression test; remove probes; prefix 4× and full ZoneWorld 2× green;
+   `:zlink-framework-core:test` once (known: the two M6A items).
+   If the wake is lost inside the Java binding (`bindings/java`), STOP and report the exact evidence
+   (the supervisor coordinates bindings).
+
+## Deliverable
+`doc/plan/c016-worklog/bucketB-java-zoneworld-2-summary.md`: the measured timeline with thread
+states, cause `file:line`, spec clause, fix + regression, results, BLOCKERS.

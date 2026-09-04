@@ -1,0 +1,51 @@
+# Job: dotnet — `CanonicalActorJoinIngressReplyTests.RouteAdmission_HandoverStartsFreshLivenessDeadline` hangs (20-min inactivity) on the combined admission changes; sibling `ActorCreateCompletion_AfterHandoverHello_UsesCapturedReplyRoute` takes 36 min
+
+You are a codex sub-agent under a Claude supervisor. One cause, 1.5 h cap. Read `AGENTS.md` (root)
+§2/§3/§4.1, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`. Never modify `core/**`,
+`bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages' trees;
+never lower an assertion; do not commit.
+
+## Facts
+- Working tree (uncommitted, keep): dotnet admission fixes (1) reciprocal handover
+  settle-before-submit (`bucketB-dotnet-handover-resend-summary.md`), (2) unilateral-Hello outbound
+  fallback + ready-pair attribution (`bucketB-dotnet-cross-spotroute-summary.md`), plus whatever the
+  `bucketF-dotnet-relocated-reply-relay` job just changed (read its summary if present).
+- Supervisor full unit gate (`--filter 'FullyQualifiedName!~ActorCreateCompletion_AfterHandoverHello_UsesCapturedReplyRoute' --blame-hang --blame-hang-timeout 20m`,
+  log `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate-v3-dotnet-unit.log`):
+  852 passed, 1 failed (the relay test, separate job), then the run **aborted on a 20-minute hang in
+  `CanonicalActorJoinIngressReplyTests.RouteAdmission_HandoverStartsFreshLivenessDeadline`**. Hang dump:
+  `framework/languages/dotnet/tests/Zlink.Framework.UnitTests/TestResults/b1610869-dc8d-4955-b796-7242e7eaf9f9/dotnet_62877_20260905T034650_hangdump.dmp`
+  (+ Sequence_*.xml). The sibling `ActorCreateCompletion_AfterHandoverHello_UsesCapturedReplyRoute`
+  is a documented follow-up (D-068/D-072: handover captured-reply-route, err101) that already took
+  36 min before tonight's changes — do NOT chase it, but note whether your fix changes it.
+- Hypothesis: the `RouteAdmission_Handover*` tests exercise the same-RID handover Hello path; with
+  settle-before-submit the survivor's `Admitted` is deferred until the losing direction's lanes
+  report Disconnected — in a same-RID handover (not a reciprocal duplicate) or when the loser never
+  reached ready, the settlement mask may never clear (or the fallback/attribution change binds the
+  Hello to the wrong intent), so the test waits forever for PeerAdmitted / fresh liveness deadline.
+  Check `BeginReciprocalHandoverSettlement` preconditions (`SharesNativeHandoverRoute`, direction
+  inequality, `losingDirectionReachedReady`) against the handover-Hello scenario, and the
+  `ObserveReciprocalHandoverDisconnect` lane-mask clearing (lane index > 1 ignored; both lanes needed).
+- dotnet env block (never `--artifacts-path`, never `ulimit -v`):
+  `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; cd framework/languages/dotnet; flock -w7200 /tmp/zlink-dotnet-gate.lock dotnet test tests/Zlink.Framework.UnitTests --filter 'FullyQualifiedName~CanonicalActorJoinIngressReplyTests.RouteAdmission' --blame-hang --blame-hang-timeout 3m`.
+  xUnit swallows Console.Error — add a temporary file sink for `ZLinkFrameworkDebugLog` if you need
+  the spot-discovery traces (remove before finishing). `dotnet tool install -g dotnet-dump` is allowed
+  to read the hang dump (`dotnet-dump analyze <dmp>` → `clrstack -all`).
+
+## What to do
+1. Reproduce the hang with the 3-minute blame timeout on the `RouteAdmission*` filter; get the
+   managed stacks (blame dump or traces) and the admission trace (`mesh_peer_*`,
+   `mesh_peer_handover_settled` never appearing?).
+2. Identify the exact precondition mismatch; fix minimally in `framework/languages/dotnet/**` so
+   handover-Hello admission (same-RID replacement, spec `03-spot-actor/03-mesh-node.ko.md:303-313`
+   fixed-RID handover) is not blocked by reciprocal settlement, without reopening the bilateral
+   caller-first case (`BilateralCallerFirstAdmissionCompletesImmediateActorRequestOnSurvivor` and the
+   three `RemoteActorStaleAuthority*` must stay green, `ZLinkMeshPeerAdmissionTests` too).
+3. Regression test for the handover-Hello + settlement interaction; then run
+   `--filter 'FullyQualifiedName~CanonicalActorJoinIngressReplyTests'` (excluding the 36-min sibling
+   via `&FullyQualifiedName!~ActorCreateCompletion_AfterHandoverHello`) 3× and
+   `--filter 'FullyQualifiedName~StatefulServiceRuntimeTests'` once. Do NOT run the whole suite.
+
+## Deliverable
+`doc/plan/c016-worklog/bucketF-dotnet-handover-liveness-hang-summary.md`: stacks/trace, cause
+`file:line`, fix + regression, results, BLOCKERS.
