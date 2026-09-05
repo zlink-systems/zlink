@@ -90,7 +90,7 @@ rust 실행기 spin 제거(172k → 259k), python 7.9k → 20k. 표는 인계 �
 - [x] 0.15.1 대비 재측정 표 — D-B87; RR_REQREP 65536B 원인·수정 `5e26e72806`(D-B88, −4.4% 허용). 남은 것은 latency 잔여(D-B83)
 - [x] PUBSUB allocator abort 원인·수정 — SUB session use-after-free(ZMP decoder 지연 소멸), `29add0ac81`, 회귀 테스트 추가
 - [x] 리팩토링 패스 커밋 — Core token-path 정리(dead code·책임 분리·이름·핫패스, hotpath ±0.04%); bindings 쪽 POSDDD 검토는 §6 언어별 pass(계획서 §7.4-14)에서 수행
-- [ ] bindings 성능 측정·개선 — §6 실행 계획대로. 진행: C++ Multi tcp before/pass1/pass2 완료(DD 통과 90.8%, REQREP 보류 57/68%, PUBSUB 미달 93.3%; 커밋 `ee50ebaeaf`·`6e8d798bac`), tls/ws/wss before 측정 완료(기록 중), C 러너 ws/wss 4096B REQREP 붕괴는 러너 제출 턴 수정 `21746768ca`(D-B89)로 해소·재측정 `57e262e71b`; C++ Multi 4 transport 판정 확정(tcp DD 통과, 나머지 보류/PUBSUB tls·ws·wss 통과), Single 7 pattern before 완료·수신 경로 pass 1 진행 중(07:17~); 다음 single pass 2·REQREP pass → .NET
+- [ ] bindings 성능 측정·개선 — §6 실행 계획대로. 진행(09-05 18:20): C++ Multi 4 transport 판정 확정·Single before/pass 1; .NET pass 1·2·3(`b4fc201f7e`,`5dc05bfb3e`,`4eb8771b88`) quiet 3-run 보류 61/59/68/57%; Java pass 1+1b+2(`82b0fd9f38`,`6402fcabc4`) 3-run DD 70.8/REQREP 55/59/PUBSUB 103% 통과; Node pass 1·1b·1c(`f69558af55`,`6c2cb784c0`,`8ec82c4be7`) REQREP 20→29/31%; Go before(REQREP 2.9%) pass 1 진행 중; **Core 공통 원인 발견·수정**: 64 KiB REQUEST correlation 거절 토큰의 spurious WRITABLE busy loop(D-B119/D-B120 `a40cb46335`) → 모든 binding 64K REQREP·공유 pump 재평가 필요(각 언어 quiet 3-run 재판정). 다음: Go pass 1 → Rust → Python → 전 언어 재판정.
 - [x] 인계 문서 최종 갱신(REQUEST 계약·해시, 2026-09-05 05:45)
 - [x] 아침 요약 — `doc/plan/c016-worklog/morning-summary-2026-09-05-B.ko.md`(07:30 KST, job 결과는 추가 갱신)
 - [x] A 후속 6건(`handoff-B-followups-D086-D087.ko.md`) — 전부 push, 결과표는 인계 문서 §8 (D-B93~D-B97, D-B102, D-B104); hotpath_gate PASS(Release+LTO, `0c39ed2e52`, 11:00)
