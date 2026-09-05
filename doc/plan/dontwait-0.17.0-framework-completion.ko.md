@@ -178,5 +178,5 @@
 - [ ] dotnet: sealed node는 inbound Hello에 Admit 안 함(§14 보강) + `WaitForDescriptorPropagationAsync` 시간 대기 제거 — astra job
 - [ ] java: sealed inbound Hello 무응답 + raw mesh terminal retention monotonic(D-095 잔여) + M6A/TransportIdentity fixture retry 대기 제거 — astra job
 - [ ] cpp: sealed inbound Hello 무응답 — astra job
-- [ ] cpp `common_e2e_inventory` 278 open(feature-map-missing 94 · source-missing 122 · incomplete-status 62, 14 config·361 scenario) — 실제 미구현 시나리오 구현(A)/맵·러너 drift 수정(B) — astra xhigh job(대규모, 여러 회차 예상)
+- [x] (범위 외로 확정, 2026-09-06 사용자: e2e 요구는 cross-language E2E만) cpp `common_e2e_inventory` 278 open(cpp 공통 e2e 시나리오 122개 미구현 등) — job 중단·편집 폐기, 별도 계획으로 남김
 - [ ] 이후: Core 변경 → rebuild11 → gate11(4언어) → §G 마감
