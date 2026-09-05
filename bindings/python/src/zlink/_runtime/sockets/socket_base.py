@@ -46,6 +46,7 @@ from ...contracts.errors.errors import (
 from ..messaging.message_materializer import (
     Message,
     Received,
+    ReceivedMessage,
     TopicMessage,
 )
 from ..messaging.native_parts import _payload_parts
@@ -578,6 +579,11 @@ class _MessageSocket(_Socket):
         """
         if received is None:
             raise TypeError("received must be a Received")
+        if _native_extension is not None:
+            return _native_extension.recv_into(
+                self._socket_handle.handle, int(flags), received,
+                ReceivedMessage, RoutingId,
+            )
         try:
             bridged = self._recv_parts_via_native_bridge(flags)
             if bridged is False:
@@ -708,6 +714,11 @@ class _SubscriberSocket(_Socket):
     def subscribe_into(self, topic_message, *, flags=0):
         if topic_message is None or not hasattr(topic_message, "_replace"):
             raise TypeError("topic_message must be a TopicMessage")
+        if _native_extension is not None:
+            return _native_extension.subscribe_into(
+                self._socket_handle.handle, int(flags), topic_message,
+                ReceivedMessage, RoutingId,
+            )
         try:
             result = self._subscribe_parts_owner(flags)
             if result is False:

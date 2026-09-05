@@ -229,10 +229,18 @@ def test_cancelled_wait_keeps_native_operation_and_late_completion_cleans_once()
         def clone(_native):
             return object()
 
+        def clone_completion(completion, message_type, storage_type):
+            # The native path now owns the entire completion clone boundary.
+            # Keep this test focused on cancellation and exactly-once cleanup;
+            # real native clone lifetimes are covered by the storage tests.
+            return [message_type.__new__(message_type)
+                    for _ in range(completion.reply_part_count)]
+
         with (
             patch("zlink._runtime.messaging.routed_async.lib", return_value=closer),
             patch("zlink._runtime.messaging.routed_async.Message", FakeMessage),
             patch("zlink._runtime.messaging.routed_async._clone_native_msg", side_effect=clone),
+            patch("zlink._runtime.messaging.routed_async._native_extension.completion_messages", side_effect=clone_completion),
         ):
             entry.capture(completion)
         await asyncio.sleep(0)
@@ -241,6 +249,19 @@ def test_cancelled_wait_keeps_native_operation_and_late_completion_cleans_once()
         assert FakeMessage.created[0].closed == 1
         assert not entry.future.done()
         assert not entry.future.cancelled()
+
+    asyncio.run(exercise())
+
+
+def test_detached_cleanup_preserves_process_control_exception():
+    class InterruptedMessage:
+        def close(self):
+            raise KeyboardInterrupt("stop cleanup")
+
+    async def exercise():
+        entry = _CompletionEntry(ZLINK_COMPLETION_REQUEST, asyncio.get_running_loop())
+        with pytest.raises(KeyboardInterrupt, match="stop cleanup"):
+            entry._deliver(([InterruptedMessage()], None, True))
 
     asyncio.run(exercise())
 

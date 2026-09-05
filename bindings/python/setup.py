@@ -93,6 +93,7 @@ def _native_extension(name: str, source: str) -> Extension:
     return Extension(
         name,
         [source],
+        depends=["src/zlink/_native/hotpath.h"],
         include_dirs=[str(CORE_INCLUDE)],
         library_dirs=[str(CORE_LIBRARY)],
         libraries=["zlink"],

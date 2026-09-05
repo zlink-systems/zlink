@@ -32,6 +32,7 @@ from ...contracts.errors.errors import (
 from ...contracts.errors.codes import ConnectResult
 from ..messaging.message_materializer import (
     Message,
+    ReceivedMessage,
     SubscriptionEvent,
 )
 from ..messaging.request_reply import _clone_payload, _timeout_to_ms
@@ -497,6 +498,11 @@ class RouterSocket(
         """
         if received is None:
             raise TypeError("received must be a Received")
+        if _native_extension is not None:
+            return _native_extension.router_recv_into(
+                self._socket_handle.handle, int(flags), received,
+                ReceivedMessage, RoutingId, self, _reply_token_from_native,
+            )
         if _native_router_recv_owner_func is not None:
             result = _native_router_recv_owner_func(
                 int(self._socket_handle.handle), int(flags)
