@@ -1169,7 +1169,7 @@ Go: `AddMonitor/ModifyMonitor/RemoveMonitor`(기존 `SocketTarget` 경로에 위
 공개 C API 테스트 `test_socket_disconnect_progress_without_app_poll`(12 case: tcp/inproc × 서버 close/서버 `zlink_disconnect` × client poller 등록만/미등록, 즉시 disconnect→connect REJECT/HANDOVER): 수정 뒤 DISCONNECTED p95 ≤ 11 ms, 재연결 READY p95 ≤ 93 ms(각 20회).
 원인·수정(`core-task4-summary.md`, 병합 `core-task4m-summary.md`): ① inproc peer close 시 pipe map 삭제로 connect intent 소실 → D-B102의 `reconnect_inproc` 경로로 통합(중복 구현 제거); ② 1-lane DEALER-ROUTER inproc `send_bind`/terminal command가 idle peer mailbox에 남아 진행 안 됨 → attach/explicit disconnect에 임시 peer command executor 설치·quiesce(`socket_base_endpoint.cpp:426,951`);
 ③ bound inproc endpoint의 server `zlink_disconnect`가 attached pipe를 종료하지 않음 → matching pipe no-delay 종료 + lifetime pin 아래 양방향 ack drain(`:1042`). spec `05-polling.ko.md:72-81`(lost wake 금지), `socket/README.ko.md:825-827,851-861`.
-gate: worktree 신규 5/5 ×2, 지정 회귀 5/5, 전체 145/145; main dev 4/4 + 전체 145/145. Release+LTO hotpath_gate 별도 실행(결과 아래 추가).
+gate: worktree 신규 5/5 ×2, 지정 회귀 5/5, 전체 145/145; main dev 4/4 + 전체 145/145. Release+LTO hotpath_gate 별도 실행(결과 아래 추가). → **hotpath_gate PASS**(release-gate 트리 `0c39ed2e52`, 11:00 KST, Test #111 Passed 5.63 s); `core/build` Release lib 재빌드 10:48.
 spec gap(사용자 결정): (1) terminal edge 소비 전 같은 socket에서 즉시 `disconnect(endpoint)→connect(endpoint)` 시 새 connect가 이전 physical terminal을 기다리는지 / old·new overlap 허용인지 — 현재 REJECT는 timing에 따라 reply OK/timeout, HANDOVER는 새 connection으로 OK; (2) request/reply가 쓴 physical connection_id를 돌려주는 공개 API 없음(필요하면 계약 추가).
 **A용 한 줄: Core 버그 → 수정 커밋 `0c39ed2e52`. dotnet/java ClientServer의 두 번째 POLLIN poller와 수동 reconnect 상태기계는 삭제 가능(Core가 app poll 없이 진행). 패키지 재빌드 대상 Core 커밋: `7ffb8e55d9`, `1c69086a4a`, `0c39ed2e52`.**
 
