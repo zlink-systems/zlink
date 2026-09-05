@@ -128,6 +128,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_router_reject_disconnected_without_app_recv
   ${INTEGRATION_TEST_ROOT}/test_router_same_socket_reconnect_policy
   ${INTEGRATION_TEST_ROOT}/test_inproc_pending_connect_rejected_at_attach
+  ${INTEGRATION_TEST_ROOT}/test_close_releases_inproc_endpoint
   ${INTEGRATION_TEST_ROOT}/test_router_mandatory
   ${INTEGRATION_TEST_ROOT}/test_router_mandatory_hwm
   ${INTEGRATION_TEST_ROOT}/test_router_multiple_dealers

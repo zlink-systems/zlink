@@ -1365,10 +1365,8 @@ void zlink::socket_base_t::process_term (int linger_)
     //  recreate an endpoint that the socket is already tearing down.
     endpoint_runtime ().disable_transport_pair_reconnects ();
 
-    //  Unregister all inproc endpoints associated with this socket.
-    //  Doing this we make sure that no new pipes from other sockets (inproc)
-    //  will be initiated.
-    unregister_endpoints (this);
+    //  The bound inproc endpoints were already released on the caller thread
+    //  by finish_close_reap(), so no new inproc pipe can reach this socket.
 
     //  Ask all attached pipes to terminate.
     const size_t attached_pipe_count = endpoint_runtime ().attached_pipe_count ();
