@@ -1118,4 +1118,4 @@ binding 버그 → 수정: `bindings/java/.../nativeapi/NativeLayouts.java`의 m
 Core 결함(binding 아님, 후속 Core job): (1) inproc READY와 DISCONNECTED의 connection_id가 다름(`socket_base_endpoint.cpp:338-341`이 inproc 양쪽 endpoint pair를 따로 만들고 `endpoint.cpp:25-33`이 pair마다 새 id 발급), 서버 재bind 뒤 재연결 READY도 없음;
 (2) tcp CLOSED가 READY/DISCONNECTED의 id 대신 새 endpoint id를 씀(`asio_tcp_connecter.cpp:332-338`), inproc은 peer close에서 CLOSED 미방출. spec `06-monitoring.ko.md:67-72`("connection_id는 하나의 물리적 transport 시도를 식별")에 어긋남. 해당 3 케이스는 `@Disabled`로 고정.
 spec gap(사용자 결정 필요, 사용자 지시 "모든 bindings 동일 동작·사용성"에 따라 **추가 권고**): Java `Poller`에 `SocketMonitor` readiness 등록 표면 없음(C++ `poller.add(socket_monitor_t&)`, .NET `ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>)` 있음; Java spec `README.ko.md:175-185, 1088-1092`에 signature 없음). 8 bindings 교차 조사 뒤 spec 개정안과 함께 결정 요청.
-**A용 한 줄: binding 버그 → 수정 커밋(아래 해시), tcp identity는 spec대로 동작 확인(`MonitorConnectionIdentityContractTest`); inproc/CLOSED identity는 Core 결함 → 후속 D-B9x.**
+**A용 한 줄: binding 버그 → 수정 커밋 `c9d294c44f`, tcp identity는 spec대로 동작 확인(`MonitorConnectionIdentityContractTest`); inproc/CLOSED identity는 Core 결함 → 후속 D-B9x.**
