@@ -1147,4 +1147,4 @@ native addon 변경 없음. 테스트 `poller_monitor.test.ts`(READY/DISCONNECTE
 
 ## D-B100 (2026-09-05 10:25, 머신 B) bindings parity — Java `Poller` monitor source 구현·spec 명시; 잘못된 mask의 typed 오류는 `INVALID_ARGUMENT`로 통일
 Java `Poller.add/modify/remove(SocketMonitor, ...)`(socket overload와 같은 형태), `NativePoller`가 monitor native handle을 Core poller에 전달, completion owner 미적용, `PollEvent`는 socket과 같은 slot. 샘플 `SampleSupport`의 sleep/blocking monitor 대기를 poller drain으로.
-job은 잘못된 mask를 `NOT_SUPPORTED`로 냈으나 Node/Rust가 `InvalidArgument`(EINVAL)라 감독자가 `INVALID_ARGUMENT`로 통일(C++는 Core로 pass-through — 후속 확인 항목). 테스트 `MonitorPollingContractTest` 3 case × 5회(worktree), main에서 3/3; `tests/run_tests.sh` 전체·samples 7/7(worktree). Java spec(ko/en) 문장 추가. 커밋: 아래 해시.
+job은 잘못된 mask를 `NOT_SUPPORTED`로 냈으나 Node/Rust가 `InvalidArgument`(EINVAL)라 감독자가 `INVALID_ARGUMENT`로 통일(C++는 Core로 pass-through — 후속 확인 항목). 테스트 `MonitorPollingContractTest` 3 case × 5회(worktree), main에서 3/3; `tests/run_tests.sh` 전체·samples 7/7(worktree). Java spec(ko/en) 문장 추가. 커밋 `820b878567`.
