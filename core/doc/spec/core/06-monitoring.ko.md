@@ -534,6 +534,13 @@ status snapshot, 반환값·errno)만으로 다음을 확인한다. 각 항목�
 - DEALER-DEALER·DEALER-ROUTER의 모든 physical event는 `transport_lane`이 Application이고, ROUTER-ROUTER의
   Completion physical event만 Completion을 보고한다.
 - `connection_id`는 진단·correlation 값이며 이 값으로 send·reply target을 지정하는 public API는 없다.
+  REQUEST completion도 request가 admission된 physical connection이나 reply가 수신된 physical connection의
+  `connection_id`를 반환하지 않는다(request와 reply가 같은 physical connection을 쓴다는 보장도 없다).
+- `CLOSED`는 TCP·IPC·WS·TLS의 접속 시도(connecter) 또는 listener가 소유한 OS transport handle을 닫았음을
+  알리는 event다. 이미 성립한 연결의 종료는 transport와 무관하게 `DISCONNECTED` 하나로 보고하며, 그 연결에
+  추가 `CLOSED`가 반드시 뒤따르는 것은 아니다(서버 close 뒤 관찰되는 `CLOSED`는 이후 자동 재연결의 실패한
+  새 attempt이므로 `CONNECT_DELAYED`와 같은 `connection_id`를 갖는다). inproc peer의 단절은 `DISCONNECTED`로
+  보고하고 `CLOSED`는 발생시키지 않는다. connect intent가 남아 있으면 `DISCONNECTED` 뒤 자동 재연결은 계속된다.
 
 **Event data 소유권**
 - `zlink_socket_monitor_recv`는 현재 layout 전체를 caller-owned output 구조체에 기록하며, event의

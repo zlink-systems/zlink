@@ -1209,3 +1209,9 @@ reply는 절대 올 수 없다 → Core가 즉시 `NOT_CONNECTED`로 한 번 종
 규칙 수 3→1, 별도 거부 사유 전달 불필요. spec §6 ko/en 반영. Core 구현: pair 종료 경로 한 곳에서 `fail_pending_requests_for_transport_pair` 호출(HANDOVER 전용 호출 지점은 제거해 단일 소유), REJECT close 유지,
 BLOCKER 2(inproc 즉시 disconnect→connect overlap에서 WRITABLE 미도착·teardown 정지 회귀)는 같은 job에서 근본 수정.
 
+
+## D-B109 (2026-09-05 12:20, 머신 B) spec gap 3건 확정 — 사용자 기준 "규칙 단순화·중복 없음·제어 한 곳·POSDDD"(astra 리뷰 `specgap-review-summary.md` 반영)
+1. `CLOSED` = connecter/listener의 OS transport handle close 통지로 한정. 성립한 연결의 종료는 모든 transport에서 `DISCONNECTED` 하나(inproc은 `CLOSED` 없음). 코드 변경 없음, `06-monitoring` Event 내용 절에 명시(ko/en). (D-B102 gap 해소)
+2. `zlink_disconnect(endpoint)` 경계: 성공한 disconnect가 local 연결 등록·재연결 intent를 제거하고 이후 submit은 제거된 연결을 다시 고르지 않는다; physical teardown과 새 connect 시도는 겹칠 수 있고 진행은 monitor 소비·terminal edge 관찰에 의존하지 않는다; 원격의 같은 RID는 §4 정책; request 종결은 completion 계약(NOT_FOUND / NOT_CONNECTED / timeout 유지). Core가 유일한 제어점 → framework wire spec `06-wire-protocol.ko.md:335`의 "disconnect event 관찰 전 재연결 금지"는 중복 규칙이므로 **A가 삭제 검토**(D-088도 같은 결론: REJECT는 원격 정책, framework는 HANDOVER). `socket/README` zlink_disconnect 절에 명시(ko/en). 이 경계를 Core가 모든 transport에서 만족하는지 astra 검증 job(공개 C API 테스트) 실행. (D-B104 #1, D-088 해소)
+3. request/reply가 쓴 physical `connection_id`를 돌려주는 API 추가하지 않음; REQUEST completion은 connection id를 반환하지 않고 request·reply가 같은 physical connection을 쓴다는 보장도 없다고 명시. (D-B104 #2 해소)
+후속 발견(astra 리뷰): ws/tls connecter가 event마다 endpoint pair를 새로 만들어 같은 attempt의 connection_id가 바뀔 수 있음(`asio_ws_connecter.cpp:438`, `asio_tls_connecter.cpp:411`) — tcp/ipc 수정(`1c69086a4a`)과 같은 방식으로 수정 대상(별도 job).
