@@ -3,6 +3,7 @@
 #include "utils/precompiled.hpp"
 
 #include "sockets/common/socket_base.hpp"
+#include "api/socket/socket_request_reply_internal.hpp"
 
 #include "utils/err.hpp"
 #include "utils/macros.hpp"
@@ -218,6 +219,8 @@ int zlink::routing_socket_base_t::terminate_out_pipe_by_routing_id (
         target = outpipe->pipe;
     }
 
+    socket_reqrep_internal::fail_pending_requests_for_pipe (
+      request_reply_state (), target);
     target->terminate (false);
     target->release_lifetime_ref ();
     return 0;

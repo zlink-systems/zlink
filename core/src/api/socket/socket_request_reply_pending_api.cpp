@@ -168,14 +168,11 @@ bool reqrep::take_next_socket_pending_request_for_logical_endpoint_locked (
     for (reqrep::pending_request_store_t::iterator pending =
            state_->pending_requests.begin ();
          pending != state_->pending_requests.end (); ++pending) {
-        // DEALER requests have no logical RID. Their correlation lease pins
-        // the selected pipe until terminal completion, and endpoint metadata
-        // on that pipe is immutable after publication. Reuse that stable
-        // owner instead of allocating one endpoint string per request.
+        // Every admitted request pins its selected Application pipe. Its
+        // immutable endpoint identifies explicit removal for both DEALER and
+        // ROUTER correlation, before pair termination can consume the request.
         zlink::pipe_t *const correlation_pipe =
-          pending->second.logical_rid.empty ()
-            ? pending->second.correlation.pipe ()
-            : NULL;
+          pending->second.correlation.pipe ();
         if (correlation_pipe
             && correlation_pipe->get_endpoint_pair ().identifier ()
                  == logical_endpoint_)
@@ -185,20 +182,17 @@ bool reqrep::take_next_socket_pending_request_for_logical_endpoint_locked (
     return false;
 }
 
-bool reqrep::take_next_socket_pending_request_for_logical_rid_locked (
+bool reqrep::take_next_socket_pending_request_for_pipe_locked (
   reqrep::socket_request_reply_state_t *state_,
-  const zlink_routing_id_t *logical_rid_,
+  const zlink::pipe_t *pipe_,
   reqrep::pending_request_t *pending_out_)
 {
-    if (!state_ || !logical_rid_ || logical_rid_->size == 0)
+    if (!state_ || !pipe_)
         return false;
     for (reqrep::pending_request_store_t::iterator pending =
            state_->pending_requests.begin ();
          pending != state_->pending_requests.end (); ++pending) {
-        if (pending->second.logical_rid.size () == logical_rid_->size
-            && memcmp (pending->second.logical_rid.data (), logical_rid_->data,
-                       logical_rid_->size)
-                 == 0)
+        if (pending->second.correlation.pipe () == pipe_)
             return take_pending_request (&state_->pending_requests, pending,
                                          pending_out_);
     }
@@ -344,10 +338,6 @@ int reqrep::ensure_socket_pull_pending_request (
                 identity.request_seq = request_seq;
                 identity.cookie = allocate_pending_cookie_locked (state.get ());
                 pending.identity = identity;
-                if (peer_rid_ && peer_rid_->size != 0)
-                    pending.logical_rid.assign (
-                      reinterpret_cast<const char *> (peer_rid_->data),
-                      peer_rid_->size);
                 pending.transport_pair_id = 0;
                 pending.transport_pair_generation = 0;
                 resolved_timeout_ms = zlink::request_reply::resolve_timeout_ms (

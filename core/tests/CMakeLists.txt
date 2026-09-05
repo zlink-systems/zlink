@@ -107,6 +107,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_reconnect_ivl
   ${INTEGRATION_TEST_ROOT}/test_reconnect_options
   ${INTEGRATION_TEST_ROOT}/test_socket_disconnect_boundary
+  ${INTEGRATION_TEST_ROOT}/test_request_explicit_removal_not_found
   ${INTEGRATION_TEST_ROOT}/test_socket_disconnect_progress_without_app_poll
   ${INTEGRATION_TEST_ROOT}/test_connect_rid
   ${INTEGRATION_TEST_ROOT}/test_connect_rid_alias_binding
@@ -493,6 +494,8 @@ if(TARGET test_reconnect_ivl)
   set_tests_properties(test_reconnect_ivl PROPERTIES TIMEOUT 15)
 endif()
 set_tests_properties(test_socket_disconnect_boundary PROPERTIES TIMEOUT 60)
+# Twelve cases each observe past the original one-second request deadline.
+set_tests_properties(test_request_explicit_removal_not_found PROPERTIES TIMEOUT 30)
 if(TARGET test_socket_disconnect_progress_without_app_poll)
   set_tests_properties(
     test_socket_disconnect_progress_without_app_poll
