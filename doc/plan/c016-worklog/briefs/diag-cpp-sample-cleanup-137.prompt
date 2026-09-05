@@ -1,0 +1,22 @@
+# Job (STAGE 1, model astra): cpp samples Bingo/TicTacToe exit 137 during cleanup on the rebuilt packages — Core regression or runner/framework teardown?
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·교차언어 대조·진단 먼저). STAGE 1 = diagnosis only, NO source/test changes (temporary trace sinks allowed, removed before finishing); never modify any `doc/spec/**`; do not commit. Env: `TMPDIR=/dev/shm/zlink-tmp-cpp`, cpp build dir `framework/languages/cpp/build/linux-ninja-c-e2e` (built against the 10:55 packages); core/build-dev has Core 8b82d51b75 (stranded REQUEST -> immediate REQUEST_NOT_CONNECTED), 0c39ed2e52 (D-B104 inproc progress), 1c69086a4a (D-B102 identity), 7cbf12de41 (monitor lease). Do not rebuild core/build-dev or the packages; for an old-vs-new Core comparison build the OLD Core in `/home/hep7/project/zlink-core-b` (`git -C /home/hep7/project/zlink-core-b checkout --detach 7d8205a028^`... use the commit BEFORE 7ffb8e55d9 = `git log --oneline -1 7ffb8e55d9^`) with `nice -n 10 env JOBS=4 scripts/build-core.sh dev` there and point `ZLINK_LIBRARY_PATH`/`LD_LIBRARY_PATH` at that lib for the comparison run only. Other jobs run concurrently on dotnet and in `/home/hep7/project/zlink-core-a` — do not touch those.
+
+## Facts (`doc/plan/c016-worklog/stage2-cpp-replay-scope-3-summary.md` BLOCKERS)
+On the 10:55 packages the cpp sample runners for Bingo (`session-a`) and TicTacToe report the application complete
+(`tictactoe=completed`) but the runner force-kills the role process during cleanup → exit 137
+(`framework/languages/cpp/samples/TicTacToe/run_sample.sh:204-218`), reproduced 2/2 for TicTacToe. On the 09:49
+packages (before Core 8b82d51b75 / 0c39ed2e52 / 1c69086a4a / 7cbf12de41) all 7 cpp samples passed with clean exits
+(`gate-final-cpp-node-samples-summary.md`). Evidence: `framework/languages/cpp/build/linux-ninja-c-e2e/replay-round3/evidence/`.
+
+## Deliverable — `doc/plan/c016-worklog/diag-cpp-sample-cleanup-137.md`
+1. Reproduce TicTacToe + Bingo 3× on the current packages; capture where the role process is stuck at shutdown (gdb
+   attach / `ZLINK_DEBUG_*` traces / message-flow): inside `zlink_ctx_term` (a socket left open? a standby pipe from the
+   HANDOVER change? a monitor command lease never released — 7cbf12de41?), inside the framework host stop
+   (`public_host_runtime.cpp`, stop/drain), or the runner's wait logic.
+2. Bisect by Core only: run the same samples with the OLD Core library (worktree build, see env) but the same framework
+   binaries; if clean → Core regression, identify which of the four commits (build each in the worktree if needed) and the
+   exact mechanism (file:line). If still 137 → framework/runner teardown; identify the owner.
+3. Owner layer per spec (Core ctx_term/close contract, framework termination outcome contract 05-host-relocation-flow §14),
+   cross-language parity (do dotnet/java/node TicTacToe still exit cleanly on the same packages? run each 1×), class A/B/C/D,
+   minimal fix location + regression. STOP after the diagnosis.
