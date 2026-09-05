@@ -1,0 +1,16 @@
+# Job (STAGE 2, approved A, model astra): node — STREAM actor bind follows the sender replay policy and exhaustion kind
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·교차언어 대조) and `framework/AGENTS.md`, then the APPROVED diagnosis `doc/plan/c016-worklog/diag-exhaustion-kind-parity.md` (your language section: retry predicate/exhaustion mapping file:line, binding admission marker, 3-row matrix, 최소 수정·회귀). Spec: `framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md` sender replay bullets (durable lifecycle operations replay with the same OperationId on any outcome without a terminal envelope — missing route, the single handover timeout, lost reply; whole remaining deadline per attempt, no split; exhaustion kind follows the cause: never admitted → Unavailable, admitted reply never arrived → DeadlineExceeded; application requests never replay). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion or widen a deadline; no second poller, no retry constant tables, no errno re-classification (use the binding typed result as the admission marker); do not commit. Local packages were rebuilt at 09:49 (Core 7ffb8e55d9, java c9d294c44f); do not rebuild. Class A (contract adaptation) — implement exactly the diagnosis' minimal fix + regression; if the diagnosis turns out incomplete, STOP and report instead of improvising. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`.
+
+## Scope (diagnosis §Node — STREAM actor bind)
+- The bind path retries sync `SubmitResult.NotConnected` but ends DeadlineExceeded, and treats every nonzero async terminal
+  (incl. `RequestResult.TimedOut` and the handover single timeout) as Unavailable without replay. Align with the policy the
+  User Spot/Actor create path already implements (`service-stateful-runtime.ts`, commits 71202e4947 + 21c12eb02e): replay
+  the same OperationId on outcomes without a terminal envelope, whole remaining deadline per attempt, exhaustion kind by
+  cause using the binding typed result as the admission marker. One owner of that policy — reuse the existing helper rather
+  than a second copy.
+- Regression: 3-row matrix contract tests for STREAM actor bind. Verify: touched test files, `npm run typecheck`, lint on
+  touched files, `npm run verify:m6b-runtime`, samples TicTacToe.Ts + SupportChat.Ts 1× each.
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-node-stream-actor-bind-replay-summary.md`: diff, the four lines, matrix results, BLOCKERS.
