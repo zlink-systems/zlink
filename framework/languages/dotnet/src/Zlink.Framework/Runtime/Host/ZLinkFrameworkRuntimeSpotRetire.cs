@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Collections.Concurrent;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Identifiers;
@@ -156,7 +157,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 request.CoordinatorExpectedAuthorityStoreVersion,
                 request.RelocationReference,
                 request.RelocationChecksum,
-                DateTimeOffset.UtcNow
+                Stopwatch.GetElapsedTime(0)
                 + ZLinkSpotRetireTargetRuntime.StageRetention,
                 ZLinkSpotRetireTargetRuntime.ComputeStageRequestDigest(
                     request),

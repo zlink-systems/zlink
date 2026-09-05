@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -54,6 +55,7 @@ internal sealed class ZLinkFrameworkActorFacade(
         var effectiveDeadline = absoluteDeadline
                                 ?? DateTimeOffset.UtcNow
                                    + registration.DefaultRequestTimeout;
+        var deadline = Stopwatch.GetElapsedTime(0) + (effectiveDeadline - DateTimeOffset.UtcNow);
         var state = getState();
         var actorState = actorSessionManager.GetOrCreateState(actor.Context.ActorId);
         var node = getActorSpotNode();
@@ -84,7 +86,7 @@ internal sealed class ZLinkFrameworkActorFacade(
             return await JoinLocalActorAsync(cancellationToken).ConfigureAwait(false);
         return await ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
                 JoinLocalActorAsync,
-                ZLinkActorRemoteJoiner.RemainingTimeout(effectiveDeadline),
+                ZLinkActorRemoteJoiner.RemainingTimeout(deadline),
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -154,9 +156,10 @@ internal sealed class ZLinkFrameworkActorFacade(
                         "Actor Entry Spot Join requires a Location Store.");
         var effectiveDeadline = absoluteDeadline
                                 ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
+        var deadline = Stopwatch.GetElapsedTime(0) + (effectiveDeadline - DateTimeOffset.UtcNow);
         var descriptors = await ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
                 token => store.ListAllMeshNodesAsync(meshName, token),
-                ZLinkActorRemoteJoiner.RemainingTimeout(effectiveDeadline),
+                ZLinkActorRemoteJoiner.RemainingTimeout(deadline),
                 cancellationToken)
             .ConfigureAwait(false);
         var eligible = descriptors
@@ -185,7 +188,7 @@ internal sealed class ZLinkFrameworkActorFacade(
                     .ConfigureAwait(false);
             return await ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
                     token => _entrySpotJoin.JoinAsync(target.Rid, actor, request, token),
-                    ZLinkActorRemoteJoiner.RemainingTimeout(effectiveDeadline),
+                    ZLinkActorRemoteJoiner.RemainingTimeout(deadline),
                     cancellationToken)
                 .ConfigureAwait(false);
         }

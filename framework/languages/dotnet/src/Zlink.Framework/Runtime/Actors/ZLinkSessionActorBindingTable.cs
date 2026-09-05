@@ -292,7 +292,7 @@ internal readonly record struct ZLinkSessionBindingTombstone(
     ulong BindingGeneration,
     ulong SessionOwnerNodeGeneration,
     ZLinkSessionBindingRoute ActorRoute,
-    DateTimeOffset ExpiresAt);
+    TimeSpan ExpiresAt);
 
 internal sealed class ZLinkSessionActorBindingTable
 {
@@ -718,7 +718,7 @@ internal sealed class ZLinkSessionActorBindingTable
                 bindingGeneration,
                 sessionOwnerNodeGeneration,
                 actorRoute,
-                _timeProvider.GetUtcNow() + _tombstoneRetention);
+                _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp()) + _tombstoneRetention);
             if (_entries.TryGetValue(key, out var entry))
             {
                 CancelCanonicalSealTimeout(key);
@@ -732,7 +732,7 @@ internal sealed class ZLinkSessionActorBindingTable
     private void PurgeExpiredTombstones()
     {
         if (_tombstones.Count == 0) return;
-        var now = _timeProvider.GetUtcNow();
+        var now = _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp());
         foreach (var key in _tombstones
                      .Where(entry => entry.Value.ExpiresAt <= now)
                      .Select(static entry => entry.Key)

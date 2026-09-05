@@ -11,14 +11,16 @@ internal sealed class ZLinkDirectReplyCompletionRegistry<TKey, TValue>
 {
     private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<TKey, TValue> _pending = [];
-    private readonly Dictionary<TKey, DateTimeOffset> _terminals = [];
+    private readonly Dictionary<TKey, long> _terminals = [];
     private readonly Queue<TKey> _terminalOrder = [];
     private readonly int _capacity;
     private readonly TimeSpan _terminalRetention;
+    private readonly TimeProvider _time;
 
     internal ZLinkDirectReplyCompletionRegistry(
         int capacity,
-        TimeSpan terminalRetention)
+        TimeSpan terminalRetention,
+        TimeProvider? timeProvider = null)
     {
         if (capacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(capacity));
@@ -26,6 +28,7 @@ internal sealed class ZLinkDirectReplyCompletionRegistry<TKey, TValue>
             throw new ArgumentOutOfRangeException(nameof(terminalRetention));
         _capacity = capacity;
         _terminalRetention = terminalRetention;
+        _time = timeProvider ?? TimeProvider.System;
     }
 
     internal bool TryRegister(TKey key, TValue value)
@@ -33,7 +36,7 @@ internal sealed class ZLinkDirectReplyCompletionRegistry<TKey, TValue>
         ArgumentNullException.ThrowIfNull(value);
         return AwaitStateLane(_lane.RunAsync(() =>
         {
-            RemoveExpiredTerminalsUnderLock(DateTimeOffset.UtcNow);
+            RemoveExpiredTerminalsUnderLock(_time.GetTimestamp());
             if (_terminals.ContainsKey(key)
                 || _pending.Count >= _capacity
                 || _pending.ContainsKey(key))
@@ -61,28 +64,28 @@ internal sealed class ZLinkDirectReplyCompletionRegistry<TKey, TValue>
                 return false;
             _pending.Remove(key);
             if (rememberTerminal)
-                RememberTerminalUnderLock(key, DateTimeOffset.UtcNow);
+                RememberTerminalUnderLock(key, _time.GetTimestamp());
             return true;
         }));
     }
 
-    private void RememberTerminalUnderLock(TKey key, DateTimeOffset now)
+    private void RememberTerminalUnderLock(TKey key, long now)
     {
         RemoveExpiredTerminalsUnderLock(now);
-        if (_terminals.TryAdd(key, now + _terminalRetention))
+        if (_terminals.TryAdd(key, now))
             _terminalOrder.Enqueue(key);
         else
-            _terminals[key] = now + _terminalRetention;
+            _terminals[key] = now;
         while (_terminals.Count > _capacity
                && _terminalOrder.TryDequeue(out var evicted))
             _terminals.Remove(evicted);
     }
 
-    private void RemoveExpiredTerminalsUnderLock(DateTimeOffset now)
+    private void RemoveExpiredTerminalsUnderLock(long now)
     {
         while (_terminalOrder.TryPeek(out var oldest)
-               && (!_terminals.TryGetValue(oldest, out var expiresAt)
-                   || expiresAt <= now))
+               && (!_terminals.TryGetValue(oldest, out var retainedAt)
+                   || _time.GetElapsedTime(retainedAt, now) >= _terminalRetention))
         {
             _terminalOrder.Dequeue();
             _terminals.Remove(oldest);

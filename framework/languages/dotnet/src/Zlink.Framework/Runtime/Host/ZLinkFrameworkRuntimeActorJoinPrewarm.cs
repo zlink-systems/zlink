@@ -1,3 +1,4 @@
+using System.Diagnostics;
 namespace Zlink.Framework.Runtime.Host;
 
 internal sealed partial class ZLinkFrameworkRuntime
@@ -70,6 +71,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         DateTimeOffset deadline,
         CancellationToken cancellationToken)
     {
+        var localDeadline = Stopwatch.GetElapsedTime(0) + (deadline - TimeProvider.System.GetUtcNow());
         _actorJoinPrewarm.Register(
             handoffId,
             actorId,
@@ -105,7 +107,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             "actor-join-prewarm-expiry",
             async ct =>
             {
-                var remaining = deadline - TimeProvider.System.GetUtcNow();
+                var remaining = localDeadline - Stopwatch.GetElapsedTime(0);
                 if (remaining > TimeSpan.Zero)
                 {
                     try

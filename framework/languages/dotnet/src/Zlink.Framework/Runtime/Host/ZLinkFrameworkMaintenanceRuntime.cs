@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 
@@ -231,7 +232,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
                     _relocationOperation = ExecuteRelocationAsync(
                         options.Mode,
                         effectiveTargetVersion,
-                        _deadline.Value,
+                        Stopwatch.GetElapsedTime(0) + timeout,
                         _relocationCancellation);
                 operation = _relocationOperation;
             }
@@ -273,7 +274,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
                 relocationCancellation = _relocationCancellation;
                 using (ExecutionContext.SuppressFlow())
                     _shutdownOperation = ExecuteShutdownAsync(
-                        absoluteDeadline,
+                        Stopwatch.GetElapsedTime(0) + timeout,
                         timeout);
             }
             operation = _shutdownOperation;
@@ -288,7 +289,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
     private async Task<ZLinkFrameworkRelocationResult> ExecuteRelocationAsync(
         ZLinkFrameworkRelocationMode mode,
         long targetApplicationVersion,
-        DateTimeOffset absoluteDeadline,
+        TimeSpan absoluteDeadline,
         CancellationTokenSource shutdownCancellation)
     {
         await Task.Yield();
@@ -408,7 +409,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
         ZLinkDrainResult result;
         try
         {
-            var remaining = absoluteDeadline - DateTimeOffset.UtcNow;
+            var remaining = absoluteDeadline - Stopwatch.GetElapsedTime(0);
             if (remaining <= TimeSpan.Zero)
                 remaining = TimeSpan.FromTicks(1);
             result = await _lifecycle.DrainAsync(
@@ -464,7 +465,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
     }
 
     private async Task<ZLinkFrameworkTerminationResult> ExecuteShutdownAsync(
-        DateTimeOffset absoluteDeadline,
+        TimeSpan absoluteDeadline,
         TimeSpan teardownBound)
     {
         await Task.Yield();
@@ -478,7 +479,7 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
             if (relocation is not null)
                 await relocation.WaitAsync(deadline.Token)
                     .ConfigureAwait(false);
-            var remaining = absoluteDeadline - DateTimeOffset.UtcNow;
+            var remaining = absoluteDeadline - Stopwatch.GetElapsedTime(0);
             if (remaining <= TimeSpan.Zero)
                 throw new OperationCanceledException(deadline.Token);
             drained = await _lifecycle.DrainAsync(
@@ -658,9 +659,9 @@ internal sealed class ZLinkFrameworkMaintenanceRuntime :
         && result.TargetApplicationVersion == targetApplicationVersion;
 
     private static CancellationTokenSource CreateDeadline(
-        DateTimeOffset absoluteDeadline)
+        TimeSpan absoluteDeadline)
     {
-        var remaining = absoluteDeadline - DateTimeOffset.UtcNow;
+        var remaining = absoluteDeadline - Stopwatch.GetElapsedTime(0);
         return new CancellationTokenSource(
             remaining > TimeSpan.Zero ? remaining : TimeSpan.FromTicks(1));
     }

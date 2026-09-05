@@ -1541,7 +1541,7 @@ public sealed class RelocationRuntimeTests
             registration);
         var stage = CreateTargetStageForHeldJournal() with
         {
-            ExpiresAt = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(1)
+            ExpiresAt = System.Diagnostics.Stopwatch.GetElapsedTime(0) - TimeSpan.FromMinutes(1)
         };
         Volatile.Write(ref stage.Published, 1);
         Volatile.Write(ref stage.AuthorityPublished, 1);
@@ -1674,7 +1674,7 @@ public sealed class RelocationRuntimeTests
         Assert.Equal(2_048, target.TerminalTombstoneCount);
 
         target.RemoveExpiredTombstones(
-            DateTimeOffset.UtcNow
+            System.Diagnostics.Stopwatch.GetElapsedTime(0)
             + ZLinkSpotRetireTargetRuntime.TombstoneRetention
             + TimeSpan.FromSeconds(1));
 
@@ -2051,7 +2051,7 @@ public sealed class RelocationRuntimeTests
             19,
             owner,
             owner,
-            DateTimeOffset.UtcNow.AddSeconds(30));
+            System.Diagnostics.Stopwatch.GetElapsedTime(0) + TimeSpan.FromSeconds(30));
         var messageLeases = new List<ZLinkSpotMessageFollow.AdmissionLease>();
         for (var index = 0; index < 1_025; index++)
         {
@@ -2070,7 +2070,7 @@ public sealed class RelocationRuntimeTests
             8,
             owner,
             owner,
-            DateTimeOffset.UtcNow.AddSeconds(30));
+            System.Diagnostics.Stopwatch.GetElapsedTime(0) + TimeSpan.FromSeconds(30));
         Assert.True(bytes.TryAcquire(16L * 1024 * 1024, out var byteLease));
         Assert.True(bytes.TryAcquire(1, out var nextByteLease));
         byteLease!.Dispose();
@@ -2090,7 +2090,7 @@ public sealed class RelocationRuntimeTests
             8,
             owner,
             new ZLinkLocationOwnerToken("target-owner", 4),
-            DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(1));
+            System.Diagnostics.Stopwatch.GetElapsedTime(0) - TimeSpan.FromMilliseconds(1));
         Assert.True(messageFollow.TryAcquire(64, out var lease));
 
         var drained = messageFollow
@@ -2119,7 +2119,7 @@ public sealed class RelocationRuntimeTests
             8,
             owner,
             targetOwner,
-            DateTimeOffset.UtcNow.AddSeconds(30),
+            System.Diagnostics.Stopwatch.GetElapsedTime(0) + TimeSpan.FromSeconds(30),
             new ZLinkBoundedIngressAdmission(8, byteCapacity));
         var metadata = ZLinkMeshMetadataCodec.Encode(
             new ZLinkMessageMetadata(
@@ -2169,7 +2169,7 @@ public sealed class RelocationRuntimeTests
     {
         var owner = new ZLinkLocationOwnerToken("source-owner", 3);
         var targetOwner = new ZLinkLocationOwnerToken("target-owner", 4);
-        var now = DateTimeOffset.UtcNow;
+        var now = System.Diagnostics.Stopwatch.GetElapsedTime(0);
         var messageFollow = new ZLinkSpotMessageFollow(
             RoutingId.From("target-node"),
             5,
@@ -2179,14 +2179,14 @@ public sealed class RelocationRuntimeTests
             8,
             owner,
             targetOwner,
-            now.AddSeconds(30),
+            now + TimeSpan.FromSeconds(30),
             new ZLinkBoundedIngressAdmission(1, 64));
         using var current = MessageFollowSpotReceived(messageFollowHopCount: 1);
         using var looped = MessageFollowSpotReceived(messageFollowHopCount: 8);
 
         Assert.True(messageFollow.MatchesSourceRoute(current, 5, owner, now));
         Assert.False(messageFollow.MatchesSourceRoute(current, 5, owner,
-            now.AddSeconds(31)));
+            now + TimeSpan.FromSeconds(31)));
         Assert.False(messageFollow.MatchesSourceRoute(looped, 5, owner, now));
         Assert.True(messageFollow.TryAcquire(64, out var lease));
         Assert.False(messageFollow.TryAcquire(0, out _));
@@ -2196,7 +2196,7 @@ public sealed class RelocationRuntimeTests
     [Fact]
     public void SpotMessageFollowKeepsActiveRouteAfterRejectedFrame()
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = System.Diagnostics.Stopwatch.GetElapsedTime(0);
         var owner = new ZLinkLocationOwnerToken("source-owner", 3);
         var messageFollow = new ZLinkSpotMessageFollow(
             RoutingId.From("target-node"),
@@ -2207,12 +2207,12 @@ public sealed class RelocationRuntimeTests
             8,
             owner,
             new ZLinkLocationOwnerToken("target-owner", 4),
-            now.AddSeconds(30));
+            now + TimeSpan.FromSeconds(30));
 
         Assert.False(messageFollow.ShouldRemoveAfterRejectedFrame(now));
         Assert.True(
             messageFollow.ShouldRemoveAfterRejectedFrame(
-                now.AddSeconds(30)));
+                now + TimeSpan.FromSeconds(30)));
     }
 
     [Fact]
@@ -2228,7 +2228,7 @@ public sealed class RelocationRuntimeTests
             8,
             owner,
             new ZLinkLocationOwnerToken("target-owner", 4),
-            DateTimeOffset.UtcNow.AddSeconds(30),
+            System.Diagnostics.Stopwatch.GetElapsedTime(0) + TimeSpan.FromSeconds(30),
             new ZLinkBoundedIngressAdmission(1, 64));
         Assert.True(messageFollow.TryAcquire(64, out var lease));
         var payload = new Message((ReadOnlySpan<byte>)new byte[] { 1, 2, 3 });
@@ -2286,7 +2286,7 @@ public sealed class RelocationRuntimeTests
             8,
             owner,
             new ZLinkLocationOwnerToken("target-owner", 4),
-            DateTimeOffset.UtcNow.AddSeconds(30),
+            System.Diagnostics.Stopwatch.GetElapsedTime(0) + TimeSpan.FromSeconds(30),
             new ZLinkBoundedIngressAdmission(1, 64));
         Assert.True(messageFollow.TryAcquire(64, out var lease));
         var replyCount = 0;
@@ -4903,7 +4903,7 @@ public sealed class RelocationRuntimeTests
             string.Empty,
             "staging-root",
             1,
-            DateTimeOffset.MaxValue,
+            TimeSpan.MaxValue,
             [],
             null!,
             new Dictionary<ZLinkActorId, ulong>(),

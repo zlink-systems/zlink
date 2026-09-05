@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Channels;
@@ -101,7 +102,7 @@ internal sealed class ZLinkClientServerServerIdentity(
         RoutingId routingId,
         uint normalizedEffectiveMaxMessageBytes)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = Stopwatch.GetElapsedTime(0);
         return _lane.RunAsync(() =>
         {
             _peers[routingId] = new Peer(
@@ -127,7 +128,7 @@ internal sealed class ZLinkClientServerServerIdentity(
                 || peer.OutstandingProbeId != probeId)
                 return;
             peer.OutstandingProbeId = null;
-            peer.Deadline = DateTimeOffset.UtcNow + PeerDeadline;
+            peer.Deadline = Stopwatch.GetElapsedTime(0) + PeerDeadline;
             Interlocked.Increment(ref _livenessAckCount);
         });
 
@@ -141,7 +142,7 @@ internal sealed class ZLinkClientServerServerIdentity(
         IRouterSocket router,
         CancellationToken cancellationToken)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = Stopwatch.GetElapsedTime(0);
         var (probes, expired) = await _lane.RunAsync(() => PrepareLivenessTick(now))
             .ConfigureAwait(false);
         foreach (var routingId in expired)
@@ -216,7 +217,7 @@ internal sealed class ZLinkClientServerServerIdentity(
     }
 
     private ((RoutingId RoutingId, ulong ProbeId)[] Probes, RoutingId[] Expired)
-        PrepareLivenessTick(DateTimeOffset now)
+        PrepareLivenessTick(TimeSpan now)
     {
         List<(RoutingId RoutingId, ulong ProbeId)> probes = [];
         List<RoutingId> expired = [];
@@ -302,14 +303,14 @@ internal sealed class ZLinkClientServerServerIdentity(
     private sealed class Peer(
         RoutingId routingId,
         uint normalizedEffectiveMaxMessageBytes,
-        DateTimeOffset nextProbe,
-        DateTimeOffset deadline)
+        TimeSpan nextProbe,
+        TimeSpan deadline)
     {
         internal RoutingId RoutingId { get; } = routingId;
         internal uint NormalizedEffectiveMaxMessageBytes { get; } =
             normalizedEffectiveMaxMessageBytes;
-        internal DateTimeOffset NextProbe { get; set; } = nextProbe;
-        internal DateTimeOffset Deadline { get; set; } = deadline;
+        internal TimeSpan NextProbe { get; set; } = nextProbe;
+        internal TimeSpan Deadline { get; set; } = deadline;
         internal ulong? OutstandingProbeId { get; set; }
     }
 }

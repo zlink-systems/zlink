@@ -263,13 +263,10 @@ public sealed class FanoutAutomaticDiscoveryTests
             ZLinkFanoutLivenessProtocol.Topic,
             [valid, invalid]));
 
-        var lastActivity = DateTimeOffset.UtcNow;
         Assert.False(ZLinkFanoutLivenessProtocol.IsInboundTimedOut(
-            lastActivity,
-            lastActivity + TimeSpan.FromSeconds(14.999)));
+            TimeSpan.FromSeconds(14.999)));
         Assert.True(ZLinkFanoutLivenessProtocol.IsInboundTimedOut(
-            lastActivity,
-            lastActivity + TimeSpan.FromSeconds(15)));
+            TimeSpan.FromSeconds(15)));
     }
 
     [Fact]

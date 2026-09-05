@@ -21,6 +21,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
     private readonly TimeSpan _period;
     private readonly CancellationTokenSource _stopSource;
     private DateTimeOffset _startedAt;
+    private TimeSpan _startedElapsed;
     private ulong _deliveryIndex;
     private ulong _lastScheduledIndex;
     private DateTimeOffset? _nextScheduledAt;
@@ -84,6 +85,8 @@ internal sealed class ZLinkTimer : IZLinkTimer
             onUnhandledExceptionAsync,
             enterTickScope);
         _startedAt = snapshot.StartedAt;
+        _startedElapsed = _scheduler.Elapsed
+            - (_scheduler.TimeProvider.GetUtcNow() - snapshot.StartedAt);
         _deliveryIndex = snapshot.DeliveryIndex;
         _lastScheduledIndex = snapshot.LastScheduledIndex;
         _nextScheduledAt = snapshot.NextScheduledAt;
@@ -151,6 +154,8 @@ internal sealed class ZLinkTimer : IZLinkTimer
                     $"Logical timer '{snapshot.Name}' does not match its target registration.");
 
             _startedAt = snapshot.StartedAt;
+            _startedElapsed = _scheduler.Elapsed
+                - (_scheduler.TimeProvider.GetUtcNow() - snapshot.StartedAt);
             _deliveryIndex = snapshot.DeliveryIndex;
             _lastScheduledIndex = snapshot.LastScheduledIndex;
             _nextScheduledAt = snapshot.NextScheduledAt;
@@ -172,7 +177,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
                 return false;
 
             _nextScheduledAt = null;
-            _pendingTick ??= CreateNextTickOnLane(DateTimeOffset.UtcNow);
+            _pendingTick ??= CreateNextTickOnLane(_scheduler.TimeProvider.GetUtcNow());
             if (_activeDispatch is null)
             {
                 _activeDispatch = NewDispatchSource();
@@ -385,7 +390,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
                 {
                     var due = outcome.Delivered
                         ? ComputeNextScheduledAtOnLane()
-                        : DateTimeOffset.UtcNow + _period;
+                        : _startedAt + (_scheduler.Elapsed - _startedElapsed) + _period;
                     nextSchedule = PrepareScheduleOnLane(due);
                 }
             }
@@ -402,7 +407,8 @@ internal sealed class ZLinkTimer : IZLinkTimer
     {
         var version = checked(++_scheduleVersion);
         _nextScheduledAt = dueAt;
-        return new SchedulerSchedule(dueAt, version);
+        return new SchedulerSchedule(
+            _startedElapsed + (dueAt - _startedAt), version);
     }
 
     private void PublishSchedule(SchedulerSchedule? schedule)
@@ -415,7 +421,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
     {
         if (_callbacks.Options.OverrunPolicy
             == ZLinkTimerOverrunPolicy.DelayNextTick)
-            return DateTimeOffset.UtcNow + _period;
+            return _startedAt + (_scheduler.Elapsed - _startedElapsed) + _period;
 
         return AddPeriods(_startedAt, _lastScheduledIndex + 1, _period);
     }
@@ -430,7 +436,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
         }
         else
         {
-            var elapsedTicks = Math.Max(0, (startedAt - _startedAt).Ticks);
+            var elapsedTicks = Math.Max(0, (_scheduler.Elapsed - _startedElapsed).Ticks);
             var dueIndex = Math.Max(
                 _lastScheduledIndex + 1,
                 (ulong)Math.Max(1, elapsedTicks / _period.Ticks));
@@ -443,7 +449,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
         var deliveryIndex = _deliveryIndex + 1;
         var scheduledAt = AddPeriods(_startedAt, scheduledIndex, _period);
         var scheduledElapsed = scheduledAt - _startedAt;
-        var startedElapsed = startedAt - _startedAt;
+        var startedElapsed = _scheduler.Elapsed - _startedElapsed;
         return new ZLinkTimerTick(
             _name,
             deliveryIndex,
@@ -531,7 +537,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
     }
 
     private readonly record struct SchedulerSchedule(
-        DateTimeOffset DueAt,
+        TimeSpan DueAt,
         long Version);
 
     private readonly record struct ZLinkTimerDispatchOutcome(

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 namespace Zlink.Framework.Runtime.Execution;
 
 /// <summary>
@@ -203,7 +204,7 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
         CancellationToken cancellationToken)
     {
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
-        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        var deadline = Stopwatch.GetElapsedTime(0) + timeout;
 
         while (true)
         {
@@ -211,7 +212,7 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
             lock (_sync)
             {
                 if (_disposed) return ZLinkWorkerSubmitResult.Stopped;
-                if (deadline <= DateTimeOffset.UtcNow) return ZLinkWorkerSubmitResult.Full;
+                if (deadline <= Stopwatch.GetElapsedTime(0)) return ZLinkWorkerSubmitResult.Full;
 
                 var availableReservations = _idleThreads
                                             + (MaxThreads - _threadCount)
@@ -239,7 +240,7 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
 
             try
             {
-                var remaining = deadline - DateTimeOffset.UtcNow;
+                var remaining = deadline - Stopwatch.GetElapsedTime(0);
                 if (remaining <= TimeSpan.Zero) return ZLinkWorkerSubmitResult.Full;
                 if (!_directWaiterSlots.Wait(0)) return ZLinkWorkerSubmitResult.Full;
                 try

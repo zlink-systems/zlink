@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Execution;
 
@@ -181,7 +182,7 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
         // asynchronous to packet delivery — a bind triggered by the session's
         // first packet can outrun it and see NotConnected. Retry within the
         // bind timeout; the liveness event is milliseconds behind the packet.
-        var deadline = DateTime.UtcNow
+        var deadline = Stopwatch.GetElapsedTime(0)
                        + (timeout > TimeSpan.Zero ? timeout : TimeSpan.FromSeconds(5));
         while (true)
         {
@@ -193,7 +194,7 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
                         timeout),
                     cancellationToken)
                 .ConfigureAwait(false);
-            if (submit != SubmitResult.NotConnected || DateTime.UtcNow >= deadline)
+            if (submit != SubmitResult.NotConnected || Stopwatch.GetElapsedTime(0) >= deadline)
             {
                 ThrowIfSubmitFailed(submit);
                 return;

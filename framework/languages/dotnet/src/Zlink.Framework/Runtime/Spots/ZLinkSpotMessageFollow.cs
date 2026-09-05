@@ -1,3 +1,4 @@
+using System.Diagnostics;
 namespace Zlink.Framework.Runtime.Spots;
 
 internal enum ZLinkSpotMessageFollowResult
@@ -17,7 +18,7 @@ internal sealed class ZLinkSpotMessageFollow(
     ulong targetAuthorityOwnerGeneration,
     ZLinkLocationOwnerToken sourceOwner,
     ZLinkLocationOwnerToken targetOwner,
-    DateTimeOffset expiresAt,
+    TimeSpan expiresAt,
     ZLinkBoundedIngressAdmission? admission = null)
 {
     private readonly ZLinkBoundedIngressAdmission _admission =
@@ -35,16 +36,16 @@ internal sealed class ZLinkSpotMessageFollow(
         targetAuthorityOwnerGeneration;
     internal ZLinkLocationOwnerToken SourceOwner { get; } = sourceOwner;
     internal ZLinkLocationOwnerToken TargetOwner { get; } = targetOwner;
-    internal DateTimeOffset ExpiresAt { get; } = expiresAt;
+    internal TimeSpan ExpiresAt { get; } = expiresAt;
 
-    internal bool ShouldRemoveAfterRejectedFrame(DateTimeOffset now) =>
+    internal bool ShouldRemoveAfterRejectedFrame(TimeSpan now) =>
         ExpiresAt <= now;
 
     internal bool MatchesSourceRoute(
         ZLinkBackendRouteReceived received,
         ulong currentObjectGeneration,
         ZLinkLocationOwnerToken? currentSourceOwner,
-        DateTimeOffset now) =>
+        TimeSpan now) =>
         ExpiresAt > now
         && received.MessageFollowHopCount < 8
         && received.OperationId.High != 0
@@ -93,7 +94,7 @@ internal sealed class ZLinkSpotMessageFollow(
     internal async ValueTask WaitForExpiryAndDrainAsync(
         CancellationToken cancellationToken)
     {
-        var remaining = ExpiresAt - DateTimeOffset.UtcNow;
+        var remaining = ExpiresAt - Stopwatch.GetElapsedTime(0);
         if (remaining > TimeSpan.Zero)
             await Task.Delay(remaining, cancellationToken).ConfigureAwait(false);
         await _admission.CloseAndWaitForEmptyAsync(cancellationToken)

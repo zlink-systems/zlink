@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using System.Buffers.Binary;
 using System.Runtime.ExceptionServices;
@@ -5403,7 +5404,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"remote_actor_reply_claimed actor={actorId} request_id={requestId}");
 
-        var deadline = DateTime.UtcNow + Registration.DefaultRequestTimeout;
+        var deadline = Stopwatch.GetElapsedTime(0) + Registration.DefaultRequestTimeout;
         using (claim)
         {
             while (true)
@@ -5412,7 +5413,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 var retryable = delivery
                     is ZLinkActorBoundSessionCoordinator.RemotePushDelivery.Backpressured
                     or ZLinkActorBoundSessionCoordinator.RemotePushDelivery.NoBinding;
-                if (!retryable || DateTime.UtcNow >= deadline)
+                if (!retryable || Stopwatch.GetElapsedTime(0) >= deadline)
                     return;
                 await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken)
                     .ConfigureAwait(false);

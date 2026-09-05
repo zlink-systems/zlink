@@ -1,3 +1,4 @@
+using System.Diagnostics;
 namespace Zlink.Framework.Runtime.Host;
 
 internal sealed partial class ZLinkFrameworkRuntime
@@ -71,7 +72,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal async ValueTask<ZLinkResolvedSpotHandle?>
         WaitForInstanceSpotRouteOrMissingAsync(
             InstanceSpotIntentAddress address,
-            DateTimeOffset deadline,
+            TimeSpan deadline,
             CancellationToken cancellationToken)
     {
         var rows = Services.GetService(typeof(ZLinkStoreLocationResolvers))
@@ -120,7 +121,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         $"Instance Spot '{address.SpotId}' has another stable type.");
             }
 
-            var remaining = deadline - DateTimeOffset.UtcNow;
+            var remaining = deadline - Stopwatch.GetElapsedTime(0);
             if (remaining <= TimeSpan.Zero)
                 throw new TimeoutException(
                     $"Instance Spot '{address.SpotId}' did not finish its authority transition before the request deadline.");

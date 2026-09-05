@@ -14,6 +14,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private readonly IZLinkSocketConfig _socketConfig;
     private readonly ZLinkApplicationJobQueue _applicationJobQueue;
     private readonly TimeSpan _requestTimeout;
+    private readonly TimeProvider _time;
     private readonly CancellationToken _stopToken;
     private readonly ZLinkStateLane _lane = new();
     private readonly Dictionary<string, Connection> _connections =
@@ -42,7 +43,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         TimeSpan requestTimeout,
         CancellationToken stopToken,
         ZLinkApplicationJobQueue applicationJobQueue,
-        ZLinkMessageFlowTracer? flow = null)
+        ZLinkMessageFlowTracer? flow = null,
+        TimeProvider? timeProvider = null)
     {
         _channelName = ZLinkChannelName.FromBoundary(
             channelName,
@@ -54,6 +56,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         _stopToken = stopToken;
         _applicationJobQueue = applicationJobQueue;
         _flow = flow;
+        _time = timeProvider ?? TimeProvider.System;
     }
 
     internal void AddManual(string endpoint) =>
@@ -226,7 +229,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 _stopToken);
         try
         {
-            var deadline = DateTime.UtcNow + timeout;
+            var started = _time.GetTimestamp();
             var target = await WaitForReadyAsync(
                     timeout,
                     readyWaitCancellation.Token)
@@ -245,7 +248,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 throw ZLinkClientServerMessageBound.CreateExceededException(
                     target.AdmittedMaximumMessageBytes);
             }
-            var remaining = deadline - DateTime.UtcNow;
+            var remaining = timeout - _time.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero)
             {
                 ZLinkMessageParts.DisposeAll(parts);
@@ -456,7 +459,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 _stopToken,
                 _applicationJobQueue,
                 OnAdmitted,
-                InvalidateSelectionCache);
+                InvalidateSelectionCache,
+                _time);
             _connections[key] = created;
             InvalidateSelectionCache();
             retirePrevious = previous is not null
@@ -582,9 +586,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     private async ValueTask<Connection?> WaitForReadyAsync(
         CancellationToken cancellationToken) =>
         await WaitForReadyAsync(
-                _requestTimeout < TimeSpan.FromSeconds(5)
-                    ? _requestTimeout
-                    : TimeSpan.FromSeconds(5),
+                _requestTimeout,
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -592,12 +594,15 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        timeout = timeout < TimeSpan.FromSeconds(5)
+            ? timeout
+            : TimeSpan.FromSeconds(5);
+        var started = _time.GetTimestamp();
         while (true)
         {
             if (SelectReady() is { } ready)
                 return ready;
-            if (DateTime.UtcNow >= deadline)
+            if (_time.GetElapsedTime(started) >= timeout)
                 return null;
             await Task.Delay(
                     TimeSpan.FromMilliseconds(5),
@@ -637,7 +642,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private readonly Action _onSelectionChanged;
         private ulong _nextProbeId = 1;
         private ulong? _outstandingProbeId;
-        private DateTimeOffset _peerDeadline;
+        private long _lastPeerActivity;
+        private readonly TimeProvider _time;
         private long _livenessAckCount;
         private long _receivedLivenessProbeCount;
         private long _sentLivenessProbeCount;
@@ -655,7 +661,8 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             CancellationToken stopToken,
             ZLinkApplicationJobQueue applicationJobQueue,
             Action<Connection, string> onAdmitted,
-            Action onSelectionChanged)
+            Action onSelectionChanged,
+            TimeProvider timeProvider)
         {
             _channelName = channelName;
             _endpoint = endpoint;
@@ -665,6 +672,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             _stopToken = stopToken;
             _onAdmitted = onAdmitted;
             _onSelectionChanged = onSelectionChanged;
+            _time = timeProvider;
             _admissionStop =
                 CancellationTokenSource.CreateLinkedTokenSource(stopToken);
             _normalizedEffectiveMaxMessageBytes =
@@ -1219,8 +1227,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             admission.ServerRid,
                             admission.LifecycleGeneration);
                         _currentAdmission = admission;
-                        _peerDeadline =
-                            DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
+                        _lastPeerActivity = _time.GetTimestamp();
                         admittedIdentity = _admittedIdentity;
                         _diagnostics = "ready";
                         using (ExecutionContext.SuppressFlow())
@@ -1328,8 +1335,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             if (_outstandingProbeId != ackId)
                                 return false;
                             _outstandingProbeId = null;
-                            _peerDeadline =
-                                DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
+                            _lastPeerActivity = _time.GetTimestamp();
                             if (_currentAdmission is
                                 {
                                     State: ZLinkFrameworkRuntimeState.Serving,
@@ -1387,7 +1393,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         return (Disposed: true, TimedOut: false,
                             ProbeId: 0UL, PhysicalGeneration: 0UL);
                     var timedOut = false;
-                    if (DateTimeOffset.UtcNow >= _peerDeadline)
+                    if (_time.GetElapsedTime(_lastPeerActivity) >= TimeSpan.FromSeconds(15))
                     {
                         timedOut = true;
                     }
@@ -1440,8 +1446,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             || _outstandingProbeId != ackId)
                             return false;
                         _outstandingProbeId = null;
-                        _peerDeadline =
-                            DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
+                        _lastPeerActivity = _time.GetTimestamp();
                         if (_currentAdmission is
                             {
                                 State: ZLinkFrameworkRuntimeState.Serving,

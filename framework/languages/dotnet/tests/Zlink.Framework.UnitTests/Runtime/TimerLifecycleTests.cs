@@ -5,6 +5,37 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class TimerLifecycleTests
 {
+    [Theory]
+    [InlineData(5)]
+    [InlineData(-5)]
+    public async Task TimerElapsedCursorIgnoresWallClockJump(int wallJumpSeconds)
+    {
+        var time = new ManualTimeProvider();
+        await using var scheduler = new ZLinkTimerScheduler(time);
+        var delivered = new TaskCompletionSource<ZLinkTimerTick>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var snapshot = new ZLinkTimerLogicalSnapshot(
+            "clock-jump", TimeSpan.FromMilliseconds(100), new ZLinkTimerOptions(),
+            time.GetUtcNow(), 0, 0, null, null);
+        await using var timer = new ZLinkTimer(snapshot, CancellationToken.None,
+            (tick, _) =>
+            {
+                delivered.TrySetResult(tick);
+                return ValueTask.FromResult(false);
+            },
+            static (_, _, _, _) => ValueTask.CompletedTask,
+            startFrozen: true, scheduler: scheduler);
+
+        time.AdvanceMonotonicOnly(TimeSpan.FromMilliseconds(500));
+        time.AdvanceWallClockOnly(TimeSpan.FromSeconds(wallJumpSeconds));
+        timer.Resume();
+        var tick = await delivered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(TimeSpan.FromMilliseconds(500), tick.StartedElapsed);
+        Assert.Equal((ulong)5, tick.ScheduledIndex);
+        Assert.Equal(time.GetUtcNow(), tick.StartedAt);
+    }
+
     [Fact]
     public async Task Timer_freeze_preserves_logical_cursor_and_resume_dispatches_due_tick()
     {

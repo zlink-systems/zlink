@@ -4580,7 +4580,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         var result = RunOperation(() =>
         {
-            RemoveExpiredRelocationReplyTerminalsUnderLock(DateTimeOffset.UtcNow);
+            RemoveExpiredRelocationReplyTerminalsUnderLock(_deadlineClock.Elapsed);
             if (_operations.Count >= _maxPendingOperations)
             {
                 return (Created: false, Correlation: 0UL, Operation: (PendingOperation?)null);
@@ -4731,7 +4731,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var alreadyTerminal = false;
         var accepted = RunOperation(() =>
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = _deadlineClock.Elapsed;
             RemoveExpiredRelocationReplyTerminalsUnderLock(now);
             if (_relocationReplyTerminals.TryGetValue(key, out var terminal))
             {
@@ -4824,7 +4824,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _relocationReplyOperations.Remove(key);
         if (!rememberTerminal || operation.RequestSource == default)
             return;
-        var now = DateTimeOffset.UtcNow;
+        var now = _deadlineClock.Elapsed;
         RemoveExpiredRelocationReplyTerminalsUnderLock(now);
         RememberRelocationReplyTerminalUnderLock(
             key,
@@ -4834,7 +4834,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     }
 
     private void RemoveExpiredRelocationReplyTerminalsUnderLock(
-        DateTimeOffset now)
+        TimeSpan now)
     {
         while (_relocationReplyTerminalOrder.TryPeek(out var key))
         {
@@ -7189,7 +7189,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ingressOwner.Dispose();
             return;
         }
-        if (deadlineUnixMs <= checked((ulong)_deadlineClock.GetUnixTimeMilliseconds()))
+        var localDeadline = _deadlineClock.FromUnixTimeMilliseconds(checked((long)deadlineUnixMs));
+        if (localDeadline <= _deadlineClock.Elapsed)
         {
             SendUserSpotFailure(
                 sourceRid,
@@ -7215,7 +7216,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RemoteUserSpotInvocation invocation;
         var candidate = new RemoteUserSpotInvocation(
             record,
-            () => ExecuteUserSpotOperationAsync(target, record, deadlineUnixMs));
+            localDeadline,
+            () => ExecuteUserSpotOperationAsync(target, record, localDeadline));
         if (!TryRegisterRemoteUserSpotOperation(key, candidate, out invocation))
         {
             SendUserSpotFailure(
@@ -7264,10 +7266,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private async Task<UserSpotOperationTerminal> ExecuteUserSpotOperationAsync(
         IUserSpotOperationTarget target,
         ZLinkServiceWireCodec.UserSpotOperationRecord record,
-        ulong deadlineUnixMs)
+        TimeSpan localDeadline)
     {
-        var remaining = checked((long)deadlineUnixMs)
-                        - _deadlineClock.GetUnixTimeMilliseconds();
+        var remaining = (localDeadline - _deadlineClock.Elapsed).TotalMilliseconds;
         if (remaining <= 0)
             return new UserSpotOperationTerminal(
                 RequestResult.InternalError,
@@ -7479,13 +7480,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         try
         {
-            var deadline = invocation.Record.Command
-                == ServiceWireConstants.Command.UserSpotCreate
-                    ? invocation.Record.Create.DeadlineUnixMs
-                    : invocation.Record.Close.DeadlineUnixMs;
-            var retentionDeadline = checked(
-                (long)deadline
-                + (long)_remoteUserSpotTerminalRetention.TotalMilliseconds);
+            var retentionDeadline = invocation.Deadline + _remoteUserSpotTerminalRetention;
             await DelayUntilRemoteOperationExpiryAsync(
                     retentionDeadline,
                     _stop?.Token ?? CancellationToken.None)
@@ -7655,8 +7650,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ingressOwner.Dispose();
             return;
         }
-        if (operation.DeadlineUnixMs
-            <= checked((ulong)_deadlineClock.GetUnixTimeMilliseconds()))
+        var localDeadline = _deadlineClock.FromUnixTimeMilliseconds(checked((long)operation.DeadlineUnixMs));
+        if (localDeadline <= _deadlineClock.Elapsed)
         {
             SendActorCreateFailure(
                 sourceRid,
@@ -7680,10 +7675,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RemoteActorCreateInvocation invocation;
         var candidate = new RemoteActorCreateInvocation(
             record,
+            localDeadline,
             () => ExecuteActorCreateOperationAsync(
                 target,
                 operation,
-                operation.DeadlineUnixMs));
+                localDeadline));
         if (!TryRegisterRemoteActorCreateOperation(key, candidate, out invocation))
         {
             SendActorCreateFailure(
@@ -7845,10 +7841,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private async Task<ActorCreateOperationTerminal> ExecuteActorCreateOperationAsync(
         IActorCreateOperationTarget target,
         ActorCreateOperation operation,
-        ulong deadlineUnixMs)
+        TimeSpan localDeadline)
     {
-        var remaining = checked((long)deadlineUnixMs)
-                        - _deadlineClock.GetUnixTimeMilliseconds();
+        var remaining = (localDeadline - _deadlineClock.Elapsed).TotalMilliseconds;
         if (remaining <= 0)
             return new ActorCreateOperationTerminal(
                 RequestResult.InternalError,
@@ -7971,9 +7966,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         try
         {
-            var retentionDeadline = checked(
-                (long)invocation.Record.Operation.DeadlineUnixMs
-                + (long)_remoteUserSpotTerminalRetention.TotalMilliseconds);
+            var retentionDeadline = invocation.Deadline + _remoteUserSpotTerminalRetention;
             await DelayUntilRemoteOperationExpiryAsync(
                     retentionDeadline,
                     _stop?.Token ?? CancellationToken.None)
@@ -7990,16 +7983,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     }
 
     private async Task DelayUntilRemoteOperationExpiryAsync(
-        long retentionDeadlineUnixMs,
+        TimeSpan retentionDeadline,
         CancellationToken cancellationToken)
     {
         while (true)
         {
-            var now = _deadlineClock.GetUnixTimeMilliseconds();
-            if (now >= retentionDeadlineUnixMs)
+            var now = _deadlineClock.Elapsed;
+            if (now >= retentionDeadline)
                 return;
 
-            var remaining = retentionDeadlineUnixMs - now;
+            var remaining = (retentionDeadline - now).TotalMilliseconds;
             await Task.Delay(
                     TimeSpan.FromMilliseconds(Math.Min(remaining, int.MaxValue)),
                     cancellationToken)
@@ -9793,12 +9786,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         {
             for (; created < parts.Count; created++)
                 wire[created] = Message.From(parts[created]);
-            var deadlineUnixMs = checked(
-                _deadlineClock.GetUnixTimeMilliseconds()
-                + (long)NativeReplySubmissionTimeout.TotalMilliseconds);
+            var deadline = _deadlineClock.Elapsed + NativeReplySubmissionTimeout;
             return new PendingNativeTerminalReply(
                 targetRid,
-                deadlineUnixMs,
+                deadline,
                 reply.Messages(wire),
                 wire,
                 onCompleted);
@@ -9873,7 +9864,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private bool CanRetryNativeTerminalReply(
         PendingNativeTerminalReply pending) =>
-        _deadlineClock.GetUnixTimeMilliseconds() < pending.DeadlineUnixMs;
+        _deadlineClock.Elapsed < pending.Deadline;
 
     private SubmitResult RetryNativeTerminalReply(
         PendingNativeTerminalReply pending)
@@ -11622,7 +11613,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         MeshOperationId OperationId);
 
     private readonly record struct RelocationReplyTerminal(
-        DateTimeOffset ExpiresAt,
+        TimeSpan ExpiresAt,
         ZLinkServiceWireCodec.RequestSourceFence RequestSource);
 
     internal readonly record struct PendingReplyRelayKey(
@@ -11821,7 +11812,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private sealed class PendingNativeTerminalReply(
         RoutingId targetRid,
-        long deadlineUnixMs,
+        TimeSpan deadline,
         ReplySubmitOperation submit,
         Message[] wire,
         Action<SubmitResult>? onCompleted) : IDisposable
@@ -11830,7 +11821,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         private Action<SubmitResult>? _onCompleted = onCompleted;
 
         internal RoutingId TargetRid { get; } = targetRid;
-        internal long DeadlineUnixMs { get; } = deadlineUnixMs;
+        internal TimeSpan Deadline { get; } = deadline;
         internal ReplySubmitOperation Submit { get; } = submit;
 
         internal void Complete(SubmitResult result) =>
@@ -11858,9 +11849,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         internal RemoteUserSpotInvocation(
             ZLinkServiceWireCodec.UserSpotOperationRecord record,
+            TimeSpan deadline,
             Func<Task<UserSpotOperationTerminal>> execute)
         {
             Record = record;
+            Deadline = deadline;
             _task = new Lazy<Task<UserSpotOperationTerminal>>(
                 () =>
                 {
@@ -11870,6 +11863,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 LazyThreadSafetyMode.ExecutionAndPublication);
         }
 
+        internal TimeSpan Deadline { get; }
         internal ZLinkServiceWireCodec.UserSpotOperationRecord Record { get; }
         internal Task<UserSpotOperationTerminal> Task => _task.Value;
     }
@@ -11885,9 +11879,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         internal RemoteActorCreateInvocation(
             ZLinkServiceWireCodec.ActorCreateOperationRecord record,
+            TimeSpan deadline,
             Func<Task<ActorCreateOperationTerminal>> execute)
         {
             Record = record;
+            Deadline = deadline;
             _task = new Lazy<Task<ActorCreateOperationTerminal>>(
                 () =>
                 {
@@ -11897,6 +11893,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 LazyThreadSafetyMode.ExecutionAndPublication);
         }
 
+        internal TimeSpan Deadline { get; }
         internal ZLinkServiceWireCodec.ActorCreateOperationRecord Record { get; }
         internal Task<ActorCreateOperationTerminal> Task => _task.Value;
     }

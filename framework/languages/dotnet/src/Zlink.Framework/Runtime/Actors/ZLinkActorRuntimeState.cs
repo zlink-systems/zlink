@@ -781,14 +781,14 @@ internal sealed class ZLinkActorRuntimeState(
         _sessionBindingTombstones[binding.BindingToken] =
             new ZLinkActorSessionBindingTombstone(
                 binding,
-                _timeProvider.GetUtcNow()
+                _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp())
                 + _sessionBindingTombstoneRetention);
     }
 
     private void PurgeExpiredSessionBindingTombstones()
     {
         if (_sessionBindingTombstones.Count == 0) return;
-        var now = _timeProvider.GetUtcNow();
+        var now = _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp());
         foreach (var token in _sessionBindingTombstones
                      .Where(entry => entry.Value.ExpiresAt <= now)
                      .Select(static entry => entry.Key)
@@ -2047,7 +2047,7 @@ internal readonly record struct ZLinkActorPreviousBindingFence(
 
 internal readonly record struct ZLinkActorSessionBindingTombstone(
     ZLinkActorBoundSession Binding,
-    DateTimeOffset ExpiresAt);
+    TimeSpan ExpiresAt);
 
 internal readonly record struct ZLinkPendingActorSessionRoute(
     string HandoffId,

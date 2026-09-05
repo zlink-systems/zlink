@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Concurrent;
 using System.Buffers.Binary;
@@ -356,7 +357,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         ZLinkAggregateRelocationPublished relocation,
         CancellationToken cancellationToken)
     {
-        var deadline = DateTimeOffset.UtcNow
+        var deadline = Stopwatch.GetElapsedTime(0)
             + registration.DefaultRequestTimeout;
         var spot = relocation.Envelope.Participants.Single(
             static participant => participant.ObjectKind is
@@ -392,7 +393,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     reservation.TargetDescriptorLifecycleGeneration,
                     reservation.TargetOwner)))
                 return found.Snapshot.AuthorityOwnerGeneration;
-            if (DateTimeOffset.UtcNow >= deadline)
+            if (Stopwatch.GetElapsedTime(0) >= deadline)
             {
                 var relocationStore = registration.Locations
                     .ResolveRelocationStore()
@@ -2318,12 +2319,12 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
 
     private async ValueTask CleanupExpiredAsync()
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = Stopwatch.GetElapsedTime(0);
         RemoveExpiredTombstones(now);
         await CleanupExpiredStagesAsync(now).ConfigureAwait(false);
     }
 
-    internal void RemoveExpiredTombstones(DateTimeOffset now)
+    internal void RemoveExpiredTombstones(TimeSpan now)
     {
         while (_terminalOrder.TryPeek(out var terminalFence)
                && (!_staged.TryGetValue(terminalFence, out var terminalEntry)
@@ -2336,7 +2337,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         }
     }
 
-    private async ValueTask CleanupExpiredStagesAsync(DateTimeOffset now)
+    private async ValueTask CleanupExpiredStagesAsync(TimeSpan now)
     {
         foreach (var entry in _staged.Where(
                      entry => entry.Value is TargetStage stage
@@ -2410,7 +2411,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
 
     private static bool IsCleanupCandidate(
         TargetStage stage,
-        DateTimeOffset now) =>
+        TimeSpan now) =>
         stage.ExpiresAt <= now
         && (Volatile.Read(ref stage.AuthorityPublished) == 0
             || Volatile.Read(ref stage.Published) != 0
@@ -2444,7 +2445,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             stage.StageRequestDigest.ToArray(),
             heldRelayDigest,
             outcome,
-            DateTimeOffset.UtcNow + TombstoneRetention);
+            Stopwatch.GetElapsedTime(0) + TombstoneRetention);
         if (!_staged.TryUpdate(fence, tombstone, stage))
             return false;
         _terminalOrder.Enqueue(fence);
@@ -2478,7 +2479,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
 
 internal interface ITargetStageEntry
 {
-    DateTimeOffset ExpiresAt { get; }
+    TimeSpan ExpiresAt { get; }
 }
 
 internal enum TargetStageAbortState
@@ -2499,7 +2500,7 @@ internal sealed record TargetStageTombstone(
     byte[] StageRequestDigest,
     byte[]? HeldRelayDigest,
     TargetStageTerminalOutcome Outcome,
-    DateTimeOffset ExpiresAt) : ITargetStageEntry
+    TimeSpan ExpiresAt) : ITargetStageEntry
 {
     internal bool Matches(
         ZLinkCanonicalSpotStageContext request,
@@ -2533,7 +2534,7 @@ internal sealed record TargetStage(
     string CoordinatorExpectedAuthorityStoreVersion,
     string RelocationReference,
     uint RelocationChecksum,
-    DateTimeOffset ExpiresAt,
+    TimeSpan ExpiresAt,
     byte[] StageRequestDigest,
     ZLinkSpotRelocationSeal TargetAdmissionSeal,
     IReadOnlyDictionary<ZLinkActorId, ulong>
