@@ -1,0 +1,32 @@
+# Job (debug + fix, model astra): dotnet sample roles are SIGKILLed at runner cleanup (exit 137) on the 12:54 packages — find the owner and fix it there
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·원칙이 단순해지는 근본 수정·중복 금지),
+`framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`, and `doc/plan/c016-worklog/stage12-dotnet-canonical-residual-summary.md`
+§BLOCKERS "Sample runner의 종료 실패" (a plain Microsoft.Extensions.Hosting host started the same way also outlives the runner's grace
+after SIGINT/SIGTERM). Debug and fix in this job; the supervisor only reviews for spec gaps / lower-layer re-implementation / added
+rules. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never
+widen a deadline as the fix; do not commit. Env (never `--artifacts-path`, never `ulimit -v`): `export TMPDIR=/dev/shm/zlink-tmp-dotnet
+ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1
+DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export
+NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; flock -w7200 /tmp/zlink-dotnet-gate.lock ...`. Packages: 12:54 (Core
+close fix cb62cb89f8 included; cpp samples exit cleanly on them). The runner reports SIGKILL as failure since 9a0371fea7 (before that
+it was hidden — do NOT restore the masking).
+
+## What to establish, then fix at the owner
+1. Where does a dotnet role (TicTacToe api-a/play-a, Bingo server roles) sit after the runner's stop signal? Capture `dotnet-stack`
+   / `dotnet-dump` (installed in ~/.dotnet/tools) of a stuck role: is it (a) the framework host stop (`ZLinkFrameworkRuntime` stop /
+   drain / Context.Dispose → zlink_ctx_term — a socket or poller left open? the durable-sender or ClientServer changes of today?),
+   (b) the Generic Host shutdown itself (ApplicationStopping handlers, `HostOptions.ShutdownTimeout`, console lifetime not receiving
+   SIGINT because the runner starts roles in a background process group where SIGINT is ignored — check how `run_samples.sh` /
+   `sample_runner.ps1` / `redis-common.sh` start and stop roles: signal, process group, `kill -INT` vs `-TERM`, grace seconds), or (c)
+   the runner's grace being shorter than the framework termination contract allows (05-host-relocation-flow §14: bounded teardown;
+   what bound?).
+2. Fix at the owner: if the framework host does not complete teardown → fix the runtime (one owner of shutdown ordering, no new
+   timers); if the runner sends a signal the host ignores in that process-group setup → fix the runner to deliver the signal the
+   contract expects (cpp/java runners are the reference — compare their stop sequence); if the grace is simply below the
+   contract's bound → align the runner grace to the contract (state the clause), not an arbitrary number.
+3. Verify: TicTacToe + Bingo 3× each exit 0 with no SIGKILL, then all 7 dotnet samples + aggregate once (`bash
+   framework/languages/dotnet/samples/run_samples.sh`); `SampleRegressionTests` if the runner changed.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-sample-teardown-137-summary.md`: stack/evidence, owner, diff, the four lines + rule count, results, BLOCKERS.
