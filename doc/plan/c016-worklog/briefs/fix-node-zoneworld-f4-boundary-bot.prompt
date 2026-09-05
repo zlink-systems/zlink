@@ -1,0 +1,21 @@
+# Job (fix, model astra): node ZoneWorld — the runner's wait for `scenario ZW-F4 passed` (`Runner/sample-runner.mjs:211`; client `Client/special.ts:402` waits for boundary-bot positions and their subsequent moves) fails in 1 of 3 individual runs and in the aggregate; F1–F3 and E1–E6 pass. Root-cause the bot observation path (intermittent, stable clock)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, the ZoneWorld sample spec `framework/doc/framework/common/sample/zoneworld/README.ko.md`
+(§ bots: F1 eight fixed bots and endpoint trajectories, F2 unbound bot relocation, F3 direction reversal at rejection, F4 no bound-session push for bots; §9 ledger) and
+`doc/plan/c016-worklog/fix-node-zoneworld-ops-maintenance-restore-summary.md` §BLOCKERS (runs `/dev/shm/zlink-tmp-node/zlink-zoneworld-3OqqSG` and the aggregate;
+evidence in `/tmp/zlink-node-zoneworld-ops/`). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages,
+`framework/languages/shared_sample/**` (unless the defect is provably in the shared client scenario — then say so and keep assertions/timeouts); do not commit. Env:
+`framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`; sample runs under `flock -w7200
+/tmp/zlink-samples-gate.lock`. node_modules carries rebuild9 (Core 2055a581…; includes Core D-092/D-094/STREAM fixes) — do not reinstall. Host clock is stable.
+
+## What to do
+1. Reproduce ZoneWorld individually until F4 fails (≤5 runs), with the message-flow provider preload you used before, and capture: which bot(s) the client waited for, the
+   bot actors' positions/moves on the owning zone node, whether the client's subscription (fanout/ws) received the position updates, and whether F4's "no bound-session push
+   for a bot" check is what timed out vs. the boundary positions.
+2. Root-cause at the owner (bot movement scheduler/spot timer on the zone node, fanout/subscription delivery to the client, relocation of an unbound bot across the boundary,
+   or the client scenario's observation window). Compare the same scenario in dotnet/java ZoneWorld (both passed F4 in today's gates) for the rule they implement. Fix with a
+   regression test; no widened waits.
+3. Verify: ZoneWorld ×3 (exit 0, all 35 ledger verdicts), `bash samples/run_samples.sh` once (exit 0), `npm test` once (0 fail).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-zoneworld-f4-boundary-bot-summary.md`: correlated sequence, cause file:line, fix, four lines, rule count, results, BLOCKERS.

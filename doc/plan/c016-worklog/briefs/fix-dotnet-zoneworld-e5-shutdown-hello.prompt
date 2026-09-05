@@ -1,0 +1,29 @@
+# Job (fix, model astra): dotnet ZoneWorld ZW-E5 (zone-node-2 graceful restart) fails intermittently with "neither side logged a completed mesh admission" — the node being shut down has already `admission_sealed site=shutdown_intent`, yet keeps sending `Hello` to a peer (`mesh_peer_admission_sent … command=Hello` ×2) whose state is `Connecting`, until it removes the peer ~70 s later; the restart is delayed past the runner's wait. A sealed node must not start (re)admissions during shutdown
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`,
+`05-location-relocation/05-host-relocation-flow.{ko,en}.md` §14 (shutdown: seal admission, no new relocation/admission, drain, Stopped/None), `03-spot-actor/03-mesh-node.ko.md`
+(admission Hello/Admit/Update, peer lifecycle), decisions D-093 and the earlier dotnet teardown work (`fix-dotnet-zoneworld-g4-and-teardown-outcomes-summary.md` B1/B2,
+`fix-dotnet-zoneworld-g4-lifecycle-terminal-2-summary.md`). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages,
+`framework/languages/shared_sample/**`; never widen the runner's wait; do not commit. dotnet env block (`TMPDIR=/dev/shm/zlink-tmp-dotnet`, `ZLINK_LIBRARY_PATH=core/build-dev/lib`,
+hash-keyed `NUGET_PACKAGES`, `flock -w7200 /tmp/zlink-dotnet-gate.lock`); sample runs under `flock -w7200 /tmp/zlink-samples-gate.lock` (a gate is running; wait).
+Package: rebuild9 (Core 2055a581…). Host clock is stable (do not attribute to clock jumps).
+
+## Evidence (preserved copy)
+`/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/zoneworld-e5-fail-logs/` (run `/dev/shm/zlink-tmp-dotnet/tmp.HQe1PjYWCa`):
+`zone-node-2.log:21206` `admission_sealed site=shutdown_intent`; `:21461,21477` `mesh_peer_admission_sent … target=zn-ea93… command=Hello lifecycle=5074490627208057463 revision=5`
+(same lifecycle as before the seal → same process, during its drain); `:21493` `mesh_peer_remove … state=Connecting`, `:21494` transport_disconnect; `:21695` Stopped at
+19:28:05 (seal was ~19:26:5x). `zone-node-1.log:25415-25426` the peer only exchanges Update revisions 4/5 with zn-ba5a and never Admits the post-seal Hello.
+`runner.log` / gate log `scratchpad/gate9a-dotnet-zoneworld-2.log:123-127`: `ZW-E5-arm passed` then the admission wait fails. The same ZoneWorld passed in the aggregate
+minutes earlier (`gate9a-dotnet-samples.log`) and also failed this way in the D-093 job's aggregate → intermittent, timing-dependent.
+
+## What to do
+1. Reproduce ZoneWorld ×3 keeping logs; correlate the seal, the peer transport blip (why did zn-ea93 go to Connecting? autoconnect handover `zone-node-1.log:17319`?) and the
+   Hello resend during drain.
+2. Root-cause at the owner: which component re-issues Hello after `admission_sealed` (auto-connect expectation re-arm on DISCONNECTED? peer state machine retry?) and why the
+   drain waits on it. Per §14 the sealed node performs no new admissions; peer loss during drain is handled by the drain (Draining publication, no re-admission). One rule,
+   no new timer/flag if the seal state already exists — route the re-admission trigger through the existing seal check.
+3. Regression: unit test — sealed mesh node receives DISCONNECTED/expectation change → no Hello; drain completes within the deadline. Then ZoneWorld ×3 (exit 0, all verdicts),
+   `bash samples/run_samples.sh` once, unit half `--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests'` once.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-zoneworld-e5-shutdown-hello-summary.md`: sequence, cause file:line, fix, four lines, rule count, results, BLOCKERS.

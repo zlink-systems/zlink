@@ -23,6 +23,7 @@ import type {
 } from '@zlink-systems/framework';
 import type { NodeMaintenanceChangedEvent, WorldAnnounceEvent } from '../../../../../Shared/contracts';
 import { NodeRuntimeState } from '../../../Domain/node-runtime-state';
+import { OpsReportAdapter } from '../Monitoring/ops-report-adapter';
 
 @Injectable()
 @zlinkRequestHandler('zone-ops', PacketNames.applyNodeMaintenanceReq)
@@ -30,13 +31,15 @@ class ApplyNodeMaintenanceHandler implements
   ZLinkRequestHandler<ApplyNodeMaintenanceReq, ApplyNodeMaintenanceRes> {
   constructor(
     @Inject(ZONEWORLD_CONFIG) private readonly config: ZoneWorldConfiguration,
-    private readonly state: NodeRuntimeState
+    private readonly state: NodeRuntimeState,
+    private readonly reports: OpsReportAdapter
   ) {}
 
   async handle(request: ApplyNodeMaintenanceReq, _context: ZLinkMessageContext): Promise<ApplyNodeMaintenanceRes> {
     const nodeId = this.nodeId();
     if (request.nodeId !== nodeId) throw new Error(`Maintenance request targets '${request.nodeId}', not '${nodeId}'.`);
     this.state.setMaintenance(nodeId, request.enabled);
+    await this.reports.reportNodeStatus();
     return { nodeId, enabled: request.enabled, zones: [...this.state.zones()] };
   }
 

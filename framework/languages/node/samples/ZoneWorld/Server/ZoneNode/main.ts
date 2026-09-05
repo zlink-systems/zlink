@@ -7,7 +7,6 @@ import {
   ZLINK_ACTOR_MANAGER,
   ZLINK_FANOUT_RUNTIME,
   ZLINK_LOCATION_RUNTIME_QUERY,
-  ZLINK_ROUTE_CLIENT,
   ZLINK_ROUTE_MESH_RUNTIME,
   ZLINK_ROUTE_MESH_RUNTIME_OPTIONS,
   ZLINK_SPOT_MANAGER
@@ -17,7 +16,6 @@ import type {
   ZLinkActorManager,
   ZLinkFanoutRuntime,
   ZLinkLocationRuntimeQuery,
-  ZLinkRouteClient,
   ZLinkRouteMeshRuntime,
   ZLinkRouteMeshRuntimeOptions,
   ZLinkSpotManager
@@ -27,12 +25,13 @@ import type { ZoneWorldConfiguration } from '../Configuration/configuration';
 import { closeRuntime, waitForShutdown } from '../runtime-support';
 import { ZoneIds, ZoneWorldNames, ZoneWorldSpec } from '../../Shared/spec';
 import { createZoneNodeModule } from './zone-node-module';
-import { EnterWorldReq, EnterWorldRes, ReportNodeStatusMsg } from '../../Shared/contracts';
+import { EnterWorldReq, EnterWorldRes } from '../../Shared/contracts';
 import { MaintenanceStore } from '../Configuration/maintenance-store';
 import { NodeRuntimeState } from './Domain/node-runtime-state';
 import { botRoutes } from './Domain/bot-patrol';
 import { adjacentZones } from './Domain/world';
 import { ZoneSpot } from './Infrastructure/ZLink/Spots/zone-spot';
+import { OpsReportAdapter } from './Infrastructure/ZLink/Monitoring/ops-report-adapter';
 import type { ZoneId } from '../../Shared/spec';
 
 let statusTimer: NodeJS.Timeout | undefined;
@@ -90,19 +89,10 @@ async function bootstrap(): Promise<void> {
     } else {
       state.enableBotTicks();
     }
-    const channels = app.get<ZLinkRouteClient>(ZLINK_ROUTE_CLIENT, { strict: false });
+    const reports = app.get(OpsReportAdapter);
     const report = async () => {
       try {
-        await channels.sendToChannel(
-          ZoneWorldNames.reportChannel,
-          new ReportNodeStatusMsg(
-            node.nodeId,
-            [...state.zones()],
-            state.playerCount(),
-            state.ownMaintenance()
-          )
-        ).submit();
-        console.log(`node status submitted node=${node.nodeId}`);
+        await reports.reportNodeStatus();
       } catch {
         // Ops may start after this node; the periodic report retries through the public channel.
       }
