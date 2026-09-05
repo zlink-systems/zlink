@@ -1,0 +1,32 @@
+# Job (fix, model astra): node DeliveryDispatch browser client fails with `ZlinkStreamException: Message 'DeliveryStatusNotify' arrived out of the expected sequence` (then "Operation canceled") on the rebuild8 packages; the same sample passed on rebuild7 (Core 1c7887c3…) an hour earlier. Root-cause across the layers that changed: node binding D-B113 `f69558af55` (multipart Buffer conversion), D-B114 `6c2cb784c0` (native completion callbacks inside an N-API async callback scope), Core `599b4a75ef` (D-092 termination observation, same-RID pair) — fix at the owner
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, the DeliveryDispatch sample spec
+`framework/doc/framework/common/sample/deliverydispatch/README.ko.md` (status sequence the browser client asserts), the STREAM ordering contract
+(`framework/doc/framework/common/spec/server/02-channel-transport/*stream*`, `bindings/doc/spec/node/README.ko.md` completion/callback ordering) and
+`doc/plan/c016-worklog/decisions.ko.md` D-B113/D-B114. You may modify `framework/languages/node/**` and `bindings/node/**` (binding changes must be
+minimal, at the owner, with a binding test); never `core/**` (if the cause is Core, STOP with a C-API sequence), never any `doc/spec/**`, other languages,
+`framework/languages/shared_sample/**`; do not commit. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`,
+`flock -w7200 /tmp/zlink-node-gate.lock`; sample runs also under `flock -w7200 /tmp/zlink-samples-gate.lock` (a gate is running; wait). Installed
+binding Core sha f20f5cdb… (rebuild8; do not reinstall). If you change `bindings/node`, rebuild only the addon locally for your test
+(`npm run build` in bindings/node) and state that the installed framework package still carries the old addon — the supervisor repackages.
+
+## Evidence
+`/dev/shm/zlink-tmp-node/zlink-deliverydispatch.ts-nkocLM/logs/browser-client.log` (tail: out-of-sequence `DeliveryStatusNotify` in
+`ZlinkStreamReceivedMessages.drain` → connector error → cancel); role logs in the same dir show no server-side error. Gate log
+`/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate8-node-samples.log`. Reproduce: `bash samples/run-sample.mjs`
+for DeliveryDispatch (see `samples/run_samples.sh`) ×3.
+
+## Method
+Determine where the order is lost: server push order (courier-session/tracking STREAM server emits statuses — compare flow logs `flow/` sequence
+numbers vs the browser receive order), the node STREAM server write path (managed-stream `writeControl` async terminal change `8159b15752` — does data
+now overtake earlier writes?), the node binding completion callback ordering (D-B114 async callback scope: are completions delivered in a different
+order than before?), or the browser client's sequence tracking. Test the D-B114 hypothesis directly with a binding-level test (N completions must
+complete in submit order for one socket). Fix at the single owner; no reordering buffer in the framework or client as a workaround.
+
+## Verify
+DeliveryDispatch ×3 (exit 0), `bash samples/run_samples.sh` once, `npm test` once (0 fail), binding tests if touched. Cross-language: java/dotnet
+DeliveryDispatch status order (state whether they assert the same sequence).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-deliverydispatch-out-of-sequence-summary.md`: where order was lost (evidence), cause file:line + causing commit,
+fix, four lines, rule count, results, BLOCKERS.

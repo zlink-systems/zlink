@@ -1,0 +1,33 @@
+# Job (fix, model astra): java DeliveryDispatch `courier-session` ends `ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED reason=TEARDOWN_FAILED` on the rebuild8 packages (Bingo/TicTacToe now Stopped/None after the binding pump fix `61f227a4b1`); the runtime logs no cause for the teardown failure — fix the cause at the owner and make the termination log carry the failure cause once
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `05-location-relocation/05-host-relocation-flow.{ko,en}.md`
+§14 (HostShutdown → callbacks → local cleanup → Stopped/None; callback/resource failure = ForceStopped/TeardownFailed), the DeliveryDispatch sample spec
+(`common/sample/deliverydispatch/README.ko.md`: CourierSession binds courier sessions — STREAM + Actor bind), `doc/plan/c016-worklog/fix-java-bingo-teardown-and-runner-evidence-summary.md`
+§1 (how the previous job found the Bingo cause: temporary stack trace at the teardown failure boundary — this time make that logging permanent and
+structured: the termination log line/flow event carries exception class + message + owning stage once, no stack spam), and
+`fix-java-binding-completion-pump-close-after-shutdown-summary.md`. Never modify `core/**`, any `doc/spec/**`, `framework/doc/framework/**`, other
+languages, `framework/languages/shared_sample/**`; `bindings/java/**` only if the cause is a binding lifecycle defect (then minimal + binding test, and
+say the installed package needs repackaging); do not commit. Env: `framework/languages/java`, `TMPDIR=/dev/shm/zlink-tmp-java`, `unset ZLINK_LIBRARY_PATH`,
+gradle under `flock -w7200 /tmp/zlink-jvm-gate.lock`, sample runs also under `flock -w7200 /tmp/zlink-samples-gate.lock` (a gate is running; wait).
+Installed binding jar `.artifacts/wsl/maven/systems/zlink/zlink/0.17.0/zlink-0.17.0.jar` sha 66a0abe0… (17:13, includes the pump fix); do not rebuild packages.
+
+## Evidence
+Gate log `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate8-java-samples.log:248-433`: business flow
+completed (`reassignment=completed`, `evidence=completed`, `deliverydispatch=completed`), then courier-session `READY=1 TERMINATION=1 STOPPED_NONE=0
+FORCE_STOPPED=1`; other roles Stopped/None. Reproduce: `bash samples/java/DeliveryDispatch/run_sample.sh` ×2 keeping `build/sample-logs/`.
+
+## Fix
+1. Observability (single owner): the framework's termination reporting already emits `ZLINK_FRAMEWORK_TERMINATION outcome= reason=`; extend that
+   same emission (or its flow event) with the teardown failure's exception type/message and the stage (spot close / instance close / channel /
+   context) — one place, no new logger. Parity: dotnet logs `termination_changed ... reason=` plus the exception; node reports the error in the
+   shutdown outcome — match the information content.
+2. Root-cause the courier-session failure (suspects: STREAM session close with bound Actor sessions at HostShutdown, binding token teardown order,
+   context close after the pump fix, authority Delete/capacity contention as in dotnet B3) and fix at the owner with a regression test.
+
+## Verify
+DeliveryDispatch ×2 (all host roles Stopped/None), Bingo ×1, `ZLINK_SAMPLE_LANGUAGES=java bash samples/run_samples.sh` once (exit 0), `./gradlew --no-daemon
+:zlink-framework-core:test contractTest` once — report the exact counts (two known reds may remain: `descriptorFenceReplacesEndpointOnlyIntent` class-run,
+`ZLinkServiceOperationRegistryTest:109` — if you see them, record whether they still fail, do not fix unless the cause is yours).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-java-deliverydispatch-courier-session-teardown-summary.md`: cause file:line, fix, four lines, rule count, results, BLOCKERS.

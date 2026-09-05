@@ -1,4 +1,4 @@
-# Job (fix, model astra): java `ZLinkJavaRawMeshNodeM6ATest.descriptorFenceReplacesEndpointOnlyIntent` fails only in the class run on the rebuild7 Core ("Expected IllegalStateException, nothing thrown" at the first `replacePeerConnection`: the endpoint-only intent is already closed when it should still be open); passes alone
+# Job (fix, model astra): java `ZLinkJavaRawMeshNodeM6ATest` — `descriptorFenceReplacesEndpointOnlyIntent` (class run only, since rebuild7) and, since rebuild8 (Core `599b4a75ef`: D-092 DISCONNECTED + inproc reconnect published at peer termination instead of final ack; same-RID tcp pair id), `observedInprocCloseDoesNotFenceDescriptorReplacement` — fail in the class run (1176 run, 2 failed; XML: `zlink-framework-core/build/test-results/test/TEST-systems.zlink.framework.runtime.binding.ZLinkJavaRawMeshNodeM6ATest.xml`). Decide per test whether the java raw mesh node must follow the now-earlier Core termination edge (Core conforms to §4/D-092) or Core deviates (then STOP with a C-API sequence). Originally: `descriptorFenceReplacesEndpointOnlyIntent` fails only in the class run on the rebuild7 Core ("Expected IllegalStateException, nothing thrown" at the first `replacePeerConnection`: the endpoint-only intent is already closed when it should still be open); passes alone
 
 You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `framework/languages/java/AGENTS.md`,
 `core/doc/spec/core/socket/README.ko.md` §4 (RID duplicate REJECT/HANDOVER, connector observes termination and reconnects per intent),
@@ -6,7 +6,7 @@ You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `
 `doc/plan/c016-worklog/core-send-routing-id-assert-summary.md` (unresolved item 1: hypothesis — D-B112's REJECT close creates a reconnect loop in which the
 connector supersedes/terminates its own admitted pipe and the peer rejects the new one, closing the fenced endpoint-only intent). Never modify
 `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages; do not commit. Env: `framework/languages/java`,
-`TMPDIR=/dev/shm/zlink-tmp-java`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-jvm-gate.lock`. Installed Core 1c7887c3… (do not rebuild packages).
+`TMPDIR=/dev/shm/zlink-tmp-java`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-jvm-gate.lock`. Installed Core f20f5cdb… (rebuild8; do not rebuild packages). Read `decisions.ko.md` D-092 and `core-reject-disconnected-without-app-recv-summary.md` + `core-tcp-router-same-rid-handover-pair-summary.md` for what changed in the termination/reconnect timing.
 Another java job may have just finished editing Spot lifecycle / sample files — `git status` first and keep your edits to the raw mesh node/its tests.
 
 ## What to do

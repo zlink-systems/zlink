@@ -1,0 +1,31 @@
+# Job (Core fix, model astra): after Core `599b4a75ef` (D-092: DISCONNECTED/inproc reconnect published at peer termination; same-RID tcp handshake gets a fresh pair id; snapshot_attached_pipes no longer drains commands; pipe owned until has_completed_termination) three languages' samples regressed on the SAME rebuild (rebuild8, Core f20f5cdb…) while they passed on rebuild7 (Core 1c7887c3…, one hour earlier): dotnet Bingo client "Timed out waiting for 'BingoNumberDrawnNotify' stream message", node DeliveryDispatch browser client "Message 'DeliveryStatusNotify' arrived out of the expected sequence", java DeliveryDispatch courier-session TeardownFailed. All three involve STREAM (ws/tcp) sessions pushing to clients. Root-cause in Core, fix at the owner
+
+You are a codex sub-agent under a Claude supervisor. Read `CONTRIBUTING.ko.md` §4/§5, `AGENTS.md` §3, `core/doc/spec/core/socket/README.ko.md` (§4 RID policy,
+§6 completion/disconnect, STREAM socket sections: session/pipe per connection, ordering guarantees), `core/doc/spec/core/05-polling.ko.md` §3,
+`core/doc/spec/core/06-monitoring.ko.md` §3.1, and the two reports of the change: `doc/plan/c016-worklog/core-reject-disconnected-without-app-recv-summary.md`
+and `core-tcp-router-same-rid-handover-pair-summary.md`. Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do not commit. WORK ONLY IN
+`/home/hep7/project/zlink-core-a`: `git reset -q --hard && git clean -fdq core && git checkout -q --detach 1c0c39c5ae`. Never touch main's `core/build-dev`.
+Build: `nice -n 10 env JOBS=4 scripts/build-core.sh dev`. Do not bisect by rebuilding many Cores: read `git show 599b4a75ef -- core/src` hunk by hunk and
+reason about STREAM sockets (which have no routing-id preamble, one pipe per accepted connection, pair ids per connection, DISCONNECTED published on
+close) — candidates: (a) `pipe_peer_terminated()` now publishes DISCONNECTED + schedules inproc reconnect at peer termination — for a STREAM
+listener side does this fire on a pipe that is being *superseded/attached* rather than terminated, or twice? (b) the transport-pair registry change in
+`adopt_accepted_transport_pair` (READY check, sibling joining only for incomplete count-two) — STREAM accepted connections have count-one lanes;
+does the new branch hand them a different id/lane so the session's messages are delivered on the wrong pipe/order or a push is dropped? (c)
+`snapshot_attached_pipes()` no longer runs `process_commands()` — a caller that relied on that progress (peer-weight change, routed submit,
+STREAM push path) may now leave commands unprocessed so a pushed message is not flushed until the next unrelated command; (d) the ownership check
+`has_completed_termination()` in the bind path. Confirm with a targeted experiment against the public C API.
+
+## Evidence (main tree, read-only)
+- dotnet Bingo: `/dev/shm/zlink-tmp-dotnet/tmp.oDwJdjSDtB/logs/{client,session-a,session-b,play-a}.log` — server roles Stopped/None, client never
+  receives the STREAM push `BingoNumberDrawnNotify` (ws STREAM server → browser/CLI client).
+- node DeliveryDispatch: `/dev/shm/zlink-tmp-node/zlink-deliverydispatch.ts-nkocLM/logs/browser-client.log` (+ `flow/`) — status notifies arrive
+  out of order at the browser (ws STREAM).
+- java DeliveryDispatch: gate log `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate8-java-samples.log:374-433`.
+- Existing STREAM tests passed in the full ctest (175/176), so the regression is in a pattern they do not cover — write the missing contract test
+  (e.g. STREAM server with N accepted clients, interleaved pushes, ordering per client, push after a peer's close; tcp and ws) that fails on HEAD.
+
+## Deliverable
+Fix at the single owner (no special case per socket kind; state rule count before/after), new test `--repeat until-fail:10`, targeted
+`test_stream|test_router_reject_disconnected_without_app_recv|test_router_reject_duplicate|test_socket_disconnect_boundary|test_transport_matrix`, full ctest once;
+`doc/plan/c016-worklog/core-stream-delivery-regression-599b4a75ef-summary.md` (cause hunk, sequence, fix, owner / spec clause / parity / class, rule
+count, results, BLOCKERS); `git add -N . && git diff HEAD > /home/hep7/project/zlink-core-a/core-stream-regression.patch`.
