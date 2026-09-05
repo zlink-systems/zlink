@@ -777,7 +777,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/dotnet/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미달` — `tcp` 4 pattern before 11:07~11:14 → 자체 pass 1(astra, `dotnet-perf-pass1-summary.md`) after: DD 66.7%, DR/RR REQREP 58.1/57.2%, PUBSUB 71.4%(binding 즉시 SEND 할당 856B→0, 수신 wrapper 352→72B); Sol/astra 리뷰 pass 2 진행 중; [before](log/2026-09-05-dotnet-multi-tcp-before.ko.md)
+- Multi 상태: `보류/통과(잠정)` — before 11:07 → pass 1(`b4fc201f7e`) → pass 2(`5dc05bfb3e`) → paired 3-run 14:00~14:12: DD 62.3% `보류`, DR REQREP 58.0% `보류`, RR REQREP 71.3% `통과`, PUBSUB 64.5% `보류`(두 pass 완료, §7.5). 3-run 중 Node 프로파일링 부하(load 4~5)가 있어 잠정값 — 조용한 머신에서 재짝지음 뒤 §9.2 표 확정; [before·3-run](log/2026-09-05-dotnet-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.2.1 Single suite
