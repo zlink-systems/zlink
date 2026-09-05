@@ -1,0 +1,36 @@
+# Job (Core, model astra): simultaneous reciprocal ROUTER connects are classified as a same-direction replacement (existing_local=0 new_local=0) instead of the opposite-direction survivor/standby collapse
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §2/§3/§4, `CONTRIBUTING.ko.md` §4/§5 (public C API
+tests only; `ctest -j2`), `core/doc/spec/core/socket/README.ko.md` §4 (RID duplicate policy HANDOVER: reciprocal conflict → both
+peers pick ONE direction by RID comparison; the losing direction's lanes stay standby; a request pinned to the superseded pair
+completes immediately with REQUEST_NOT_CONNECTED — amended bb730c654f, implemented 8b82d51b75), `07-router.ko.md` §5, and
+`decisions.ko.md` D-B96 (sequential reciprocal contract test `test_router_reciprocal_handover_lanes` passes). Never modify any
+`doc/spec/**`, `bindings/**`, `framework/**`; do not commit. WORK ONLY IN `/home/hep7/project/zlink-core-a` (detached at main
+HEAD): `cd /home/hep7/project/zlink-core-a && nice -n 10 env JOBS=4 scripts/build-core.sh dev`. Never touch main's
+`core/build-dev` (being rebuilt now) or `/home/hep7/project/zlink-core-b` (another job).
+
+## Evidence (dotnet mesh unwind, `doc/plan/c016-worklog/stage2-dotnet-mesh-unwind-summary.md` B1)
+With the framework's physical settlement removed, two .NET MeshNodes that connect to each other at the same time (manual
+bilateral / caller-first) produce, in `ZLINK_ROUTER_DEBUG=1`: `router identify_peer: replace duplicate ... existing_local=0
+new_local=0` — Core treated the reciprocal collision as a SAME-direction replacement (both pipes seen as non-local /
+inbound?) rather than the opposite-direction collapse D-B96 tested with sequential connects. Consequence: the reply to an
+application request is lost and the caller sees TimedOut(101) even after an explicit resend; 4 Stateful tests + 1 Canonical
+test red.
+
+## What to do
+1. Public C API repro (tcp + inproc): ROUTER A and ROUTER Z with fixed RIDs, RID duplicate policy HANDOVER, both call
+   `zlink_connect` to each other within the same millisecond (two threads / interleaved), then each submits a REQUEST to the
+   other and awaits the reply. Compare with the sequential D-B96 shape. Capture the identify_peer decision path
+   (`router_admission.cpp:302-335` direction choice; what "local" means there — the connecting side vs the accepting side —
+   and why both can be 0 when both sides connect simultaneously: each socket sees one outbound pipe (its own connect) and one
+   inbound pipe (the peer's connect); if the direction flag is derived from something else, e.g. the READY frame's lane or
+   the endpoint pair, find where it goes wrong).
+2. If Core misclassifies: fix minimally so a reciprocal collision is always resolved by RID comparison into one direction
+   with the losing lanes standby (spec §4), regardless of arrival order/timing; the request/reply reply route must follow
+   the survivor; a request pinned to the superseded pair completes REQUEST_NOT_CONNECTED (8b82d51b75). Contract test:
+   simultaneous reciprocal (tcp/inproc, 20 repetitions), both directions' requests get replies (after at most one
+   NOT_CONNECTED + resend). Full `ctest -j2` + §5 checks; hotpath check if `scripts/` provides one.
+3. If Core is correct and the .NET observation is a framework misuse (e.g. both sides connect with the same local RID, or
+   the framework connects twice), say exactly what the framework did wrong with the trace.
+4. Deliverable: `doc/plan/c016-worklog/core-simultaneous-reciprocal-summary.md` in the MAIN tree: repro results, cause
+   file:line, diff summary, test names/counts, BLOCKERS. Leave the diff uncommitted in the worktree.

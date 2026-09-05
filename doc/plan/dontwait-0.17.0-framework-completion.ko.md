@@ -132,6 +132,8 @@
 - [x] node: DeliveryDispatch NotFound = direct resolver가 owner-lease-unavailable을 NotFound로 축약(B, `927e3a0f68`); STREAM deliver catch-all = async terminal + typed 분류(B, m6b 112/112)
 - [x] spec 결정 (a) Core §4: handover로 밀려난 REQUEST는 즉시 `REQUEST_NOT_CONNECTED`(`bb730c654f`) — Core 구현은 여기서 astra로 진행 중(worktree a); Core polling §3 disconnect progress 검증 job(worktree b)
 - [x] java durable replay(A+B): `ZLinkJavaDurableRequest` 단일 소유, core test 1221/0 — **M6A 2건 해소**(재빌드된 java binding D-B95)
-- [ ] 진행 중: dotnet Mesh 걷어내기(sol/xhigh), node STREAM bind deadline 단일 소유 2차(astra), Core 작업 7·4(astra). 이후: dotnet Actor Join replay, dotnet ClientServer second poller 제거(작업 4 결과), cpp replay 범위(Core 7 후), 4언어 최종 게이트
+- [x] node STREAM bind deadline 단일 소유(B, `8e509bb143`); Core 작업 7 stranded REQUEST 즉시 NOT_CONNECTED(`8b82d51b75`); Core 작업 4 = B D-B104(`0c39ed2e52`) + 여기서 발견한 completion-poller/monitor-lease 결함(`7cbf12de41`, 24 case 120/120)
+- [x] dotnet Mesh 걷어내기(D 제거, `3975cea255`, −640줄): admission 8/8·foundation 59/59·샘플 green; 잔여 red = 동시 reciprocal을 Core가 same-direction replacement로 분류(B1, Core 조사 job) + durable create 2 s 소진(B2, Core 7로 해소 예상) → rebuild4(10:55) 후 gate v8 재검증 중
+- [ ] 진행 중: dotnet gate v8(새 패키지), cpp replay 3차(astra), Core 동시 reciprocal 분류(astra). 이후: dotnet ClientServer second poller·수동 reconnect 제거(Core `7cbf12de41`+D-B104 근거 확보), dotnet Actor Join replay, 최종 재배포 + 4언어 게이트
 - [ ] 로컬 패키지 재빌드(`7ffb8e55d9`·`c9d294c44f` 포함) → dotnet Mesh 걷어내기 2단계(brief `stage2-dotnet-mesh-unwind.prompt`) → Canonical 3 red 재검증 → dotnet ClientServer second poller/수동 reconnect 제거(B 작업 4 결과 대기) → java 합성 connection id·errno 표 제거(B 작업 5·6) → cpp replay 범위 진단 → 4언어 최종 게이트 재실행
 

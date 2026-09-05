@@ -952,7 +952,7 @@ public sealed class StatefulServiceRuntimeTests
     }
 
     [Fact]
-    public async Task ConnectPeerReusesAdmittedInboundPeerForSameIdentityAndEndpoint()
+    public async Task ConnectPeerConvergesAdmittedInboundAndManualIntentAsDuplicate()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var lower = NewNode(context, "reuse-inbound-aa");
@@ -969,11 +969,15 @@ public sealed class StatefulServiceRuntimeTests
                                   && higher.Status().AdmittedPeerCount == 1);
 
         var inbound = Assert.Single(lower.Peers());
-        var reused = lower.ConnectPeer(higherEndpoint, higher.RoutingId);
+        var manual = lower.ConnectPeer(higherEndpoint, higher.RoutingId);
 
-        Assert.Equal(inbound.ConnectionIntentId, reused);
+        Assert.NotEqual(inbound.ConnectionIntentId, manual);
+        await WaitUntilAsync(() =>
+            lower.Status().AdmittedPeerCount == 1
+            && lower.Peers().Count() == 1
+            && lower.Peers().Single().ConnectionIntentId == manual);
         Assert.Equal(
-            inbound.ConnectionIntentId,
+            manual,
             Assert.Single(lower.Peers()).ConnectionIntentId);
         Assert.Equal(1u, lower.Status().AdmittedPeerCount);
     }
