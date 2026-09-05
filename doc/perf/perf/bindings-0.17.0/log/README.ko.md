@@ -8,3 +8,4 @@
 - [2026-09-05-cpp-single-recv-pass1.ko.md](2026-09-05-cpp-single-recv-pass1.ko.md) — C++ Single 수신 경로 pass 1(library no-go, 러너 getenv 버그 수정) + one-way 5 pattern 재짝지음
 - [2026-09-05-dotnet-multi-tcp-before.ko.md](2026-09-05-dotnet-multi-tcp-before.ko.md) — .NET Multi tcp 4 pattern paired before(44.7/51.6/53.6/44.8%)
 - [2026-09-05-java-multi-tcp-before.ko.md](2026-09-05-java-multi-tcp-before.ko.md) — Java Multi tcp 4 pattern paired before(50.8/15.1/24.0/81.0%)
+- [2026-09-05-node-multi-tcp-before.ko.md](2026-09-05-node-multi-tcp-before.ko.md) — Node Multi tcp 4 pattern paired before(27.6/18.7/17.9/28.6%)
