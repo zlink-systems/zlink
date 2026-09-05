@@ -129,6 +129,9 @@
 - [x] 1단계(B 무의존): dotnet SUB 특례 제거 + Canonical fixture 경쟁 복원(3 red, D-086 귀속) `5883711e88`; cpp ENOENT 재분리(m6b red, terminal 종류 미분리) `6b18a3f445`; node gate false-green 제거(1560/1559/1) + SupportChat 값 복원 + replay 정책(원인 (b) route 미admit) `71202e4947`; node 소진 종류 `21c12eb02e`
 - [x] B 확정: D-B94 D-086은 **Core 버그**(same-RID tcp replacement가 pair ID 재사용) 수정 `7ffb8e55d9`; D-B95 java monitor ABI 수정 `c9d294c44f`(inproc/CLOSED id는 Core 후속, Poller monitor 등록은 spec gap); D-B96 reciprocal HANDOVER spec대로(패배 lane standby 유지) → dotnet settlement 삭제 근거
 - [x] cpp 2단계 terminal 종류(route retry 소진 → Unavailable, admitted reply timeout만 DeadlineExceeded) 커밋; node m6b InvalidState = fake STREAM에 `submit_sync` 없음(fixture 수정 커밋) → 남은 red는 runtime `deliver()` catch-all(backpressure를 세션 종료로 처리) → 진단 job; parity 후속: dotnet/java Actor Join·node STREAM bind의 pre-admission 소진이 DeadlineExceeded(진단 예정)
-- [ ] node 진단: DeliveryDispatch courier NotFound 진행 중; STREAM deliver catch-all 진행 중
+- [x] node: DeliveryDispatch NotFound = direct resolver가 owner-lease-unavailable을 NotFound로 축약(B, `927e3a0f68`); STREAM deliver catch-all = async terminal + typed 분류(B, m6b 112/112)
+- [x] spec 결정 (a) Core §4: handover로 밀려난 REQUEST는 즉시 `REQUEST_NOT_CONNECTED`(`bb730c654f`) — Core 구현은 여기서 astra로 진행 중(worktree a); Core polling §3 disconnect progress 검증 job(worktree b)
+- [x] java durable replay(A+B): `ZLinkJavaDurableRequest` 단일 소유, core test 1221/0 — **M6A 2건 해소**(재빌드된 java binding D-B95)
+- [ ] 진행 중: dotnet Mesh 걷어내기(sol/xhigh), node STREAM bind deadline 단일 소유 2차(astra), Core 작업 7·4(astra). 이후: dotnet Actor Join replay, dotnet ClientServer second poller 제거(작업 4 결과), cpp replay 범위(Core 7 후), 4언어 최종 게이트
 - [ ] 로컬 패키지 재빌드(`7ffb8e55d9`·`c9d294c44f` 포함) → dotnet Mesh 걷어내기 2단계(brief `stage2-dotnet-mesh-unwind.prompt`) → Canonical 3 red 재검증 → dotnet ClientServer second poller/수동 reconnect 제거(B 작업 4 결과 대기) → java 합성 connection id·errno 표 제거(B 작업 5·6) → cpp replay 범위 진단 → 4언어 최종 게이트 재실행
 
