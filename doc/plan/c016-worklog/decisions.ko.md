@@ -1332,3 +1332,7 @@ B 권고(단순화 원칙): (1) binding 러너의 포화 제출 경계 = 공개 
 
 ## D-B128 (2026-09-05 23:00, 머신 B) Rust 리뷰 pass 2(astra) — reply adopt-in-place(FFI init/move 2회→adopt), 나머지 후보 no-go(snapshot 제거는 ownership 위반, scratch 단일 init <5%, RwLock 경합 0.47% Ir, pending 번들은 이미 Arc 1개, wrapper pool은 금지)
 after(1-run, load ≤1.9): DD 64B 47.4%·256B 56.9%·1024B 58.2%·4096B 96.5%·64K 176%, DR 77.8/81.0/86.5/93.2/74.3%(≈82.6%), RR 유사. gate 14/14·samples, clippy, fmt, diff-check, 공개 API 불변, spec gap 없음. 판정은 quiet 3-run. 커밋 `ddb614faf9`.
+
+## D-B129 (2026-09-05 23:15, 머신 B) Node pass 1d(astra) — 런타임 변경 없음: REQREP 지연의 98%는 **서버 입력 backlog**(TCP 수신→public recv 90 ms), client completion queue→drain은 평균 1.2 ms(p99 6.6 ms)로 wake 가설 기각; Node Multi `보류`
+현재 코드·Core `a40cb46335`로 요청 수명 재계측(DR 64B, 100 clients): submit→admission 0.003 ms, wire 0.1 ms, **서버 TCP 수신→public recv 90.6 ms**, reply 0.02 ms, client TCP 0.35 ms, queue 게시→FD wake→drain 1.2 ms(LD_PRELOAD로 queue notify 관측), timeout 3.2%. 즉 Node ROUTER 서버의 요청당 JS 처리(수신·reply)가 약 25k req/s에서 포화해 100 client의 pipelining이 backlog를 만든다(pass 1c에서 서버 경로 객체 비용은 이미 제거). 대안(Context worker의 public POLLCOMPLETION wait)은 원인과 무관해 미채택. 측정 종료 protocol(CLIENT_DONE 뒤 socket close → server 종료)은 정책 `PERF_MULTI_TEST_POLICY.md:378-389`와 대조해 별도 확인 항목.
+판정: Node Multi tcp — 4 pass(1·1b·1c·1d) 뒤 quiet 3-run(22:10) DD 35.9%(최소 35 충족)·REQREP 24.3/24.8%·PUBSUB 30.2% → 공개 계약을 유지하는 후보 소진으로 **`보류`**. 남은 방향은 N-API 경계에서 서버 recv+reply를 native 배치로 묶는 구조(공개 API 추가 필요 → spec 결정).
