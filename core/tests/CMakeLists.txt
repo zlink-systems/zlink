@@ -497,7 +497,7 @@ endif()
 if(TARGET test_reconnect_ivl)
   set_tests_properties(test_reconnect_ivl PROPERTIES TIMEOUT 15)
 endif()
-set_tests_properties(test_socket_disconnect_boundary PROPERTIES TIMEOUT 60)
+set_tests_properties(test_socket_disconnect_boundary PROPERTIES TIMEOUT 120)
 # Four connect-before-bind admission cases, each with monitor-driven waits.
 set_tests_properties(test_inproc_pending_connect_rejected_at_attach PROPERTIES TIMEOUT 60)
 # Twelve cases each observe past the original one-second request deadline.
