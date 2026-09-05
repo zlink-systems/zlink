@@ -555,22 +555,25 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 RequestResult.InternalError,
                 (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
 
-        var protocolErrorsBeforeRetry = monitor.Status().ProtocolErrors;
+        var protocolErrors = monitor.Status().ProtocolErrors;
+        await runtime.HandoverAsync();
         await WaitUntilAsync(() =>
             Volatile.Read(ref attempts) > 1);
-        Assert.Equal(protocolErrorsBeforeRetry, monitor.Status().ProtocolErrors);
+        Assert.Equal(protocolErrors, monitor.Status().ProtocolErrors);
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
 
-        await runtime.HandoverAsync(disconnectPrior: true);
+        await runtime.SendPriorHelloAsync();
         await WaitUntilAsync(() =>
-            monitor.Status().ProtocolErrors > protocolErrorsBeforeRetry);
-        Assert.True(monitor.Status().ProtocolErrors > protocolErrorsBeforeRetry);
-        var attemptsAfterExactDisconnect = Volatile.Read(ref attempts);
-        Assert.True(attemptsAfterExactDisconnect > 1);
+            monitor.Status().ProtocolErrors > protocolErrors);
+        var protocolErrorsAfterStaleHello = monitor.Status().ProtocolErrors;
+        Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
+
+        await runtime.DisconnectPriorSourceAsync();
+        await WaitUntilAsync(() =>
+            monitor.Status().ProtocolErrors > protocolErrorsAfterStaleHello);
+        var attemptsAfterDisconnect = Volatile.Read(ref attempts);
         await Task.Delay(150);
-        Assert.Equal(
-            attemptsAfterExactDisconnect,
-            Volatile.Read(ref attempts));
+        Assert.Equal(attemptsAfterDisconnect, Volatile.Read(ref attempts));
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
 
         Volatile.Write(ref allowSubmit, 1);
@@ -624,7 +627,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
         for (var iteration = 0; iteration < 6; iteration++)
         {
-            await runtime.HandoverAsync(quiescePrior: true);
+            await runtime.HandoverAsync();
             await runtime.SendPriorHelloAndDisconnectAsync();
 
             // The old Hello may either be rejected or be discarded with its
@@ -644,7 +647,6 @@ public sealed class CanonicalActorJoinIngressReplyTests
         {
             await Assert.ThrowsAsync<TimeoutException>(() =>
                 runtime.HandoverAsync(
-                    quiescePrior: true,
                     admitReplacement: static (_, _) =>
                         Task.FromException<Received>(new TimeoutException(
                             "Route admission reply was not received."))));
@@ -663,7 +665,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             SubmitResult.Ok);
 
         await Task.Delay(ZLinkServiceLiveness.PeerTimeout - TimeSpan.FromSeconds(2));
-        await runtime.HandoverAsync(disconnectPrior: true);
+        await runtime.HandoverAsync();
         await Task.Delay(TimeSpan.FromSeconds(3));
 
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
@@ -1151,11 +1153,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
         internal async Task SendIdempotentHelloAsync()
         {
-            using var admission = await SendHelloUntilAdmittedAsync(
-                Source,
-                SourceEndpoint);
-            await WaitUntilAsync(() =>
-                Target.Status().AdmittedPeerCount == 1);
+            await SendHelloAsync(Source, SourceEndpoint);
+            using var admission = await ReceiveAsync(Source);
         }
 
         internal async Task ReconnectAsync()
@@ -1170,50 +1169,31 @@ public sealed class CanonicalActorJoinIngressReplyTests
         }
 
         internal async Task HandoverAsync(
-            bool quiescePrior = false,
-            bool disconnectPrior = false,
             Func<IDealerSocket, string, Task<Received>>? admitReplacement = null)
         {
-            var prior = Source;
             var replacement = Context.CreateDealerSocket();
             _createdSources.Add(replacement);
             replacement.SetRoutingId(SourceRid);
             replacement.Connect(TargetEndpoint);
-            if (!quiescePrior && !disconnectPrior)
+            if (admitReplacement is null)
             {
                 await SendHelloAsync(replacement, SourceEndpoint);
-                using var originalAdmission = await ReceiveAsync(replacement);
-                PriorSource = prior;
-                Source = replacement;
-                return;
-            }
-
-            // Fixed-RID admission requires the retired pipe to stop reclaiming
-            // the same RID while the replacement Hello is being confirmed.
-            prior.Options.ReconnectInterval = null;
-            using var admission = await (admitReplacement
-                ?? SendHelloUntilAdmittedAsync)(
-                replacement,
-                SourceEndpoint);
-            Source = replacement;
-            if (disconnectPrior)
-            {
-                await prior.DisposeAsync();
-                using var readmission = await SendHelloUntilAdmittedAsync(
-                    replacement,
-                    SourceEndpoint);
+                using var admission = await ReceiveAsync(replacement);
             }
             else
             {
-                PriorSource = prior;
+                using var admission = await admitReplacement(
+                    replacement,
+                    SourceEndpoint);
             }
+            PriorSource = Source;
+            Source = replacement;
         }
 
         internal Task SendPriorHelloAsync()
         {
             if (PriorSource is not { } prior)
                 throw new InvalidOperationException("No prior source is available.");
-            prior.Options.ReconnectInterval = TimeSpan.Zero;
             return SendHelloAsync(prior, SourceEndpoint);
         }
 
@@ -1224,46 +1204,12 @@ public sealed class CanonicalActorJoinIngressReplyTests
             PriorSource = null;
             try
             {
-                prior.Options.ReconnectInterval = TimeSpan.Zero;
                 await SendHelloAsync(prior, SourceEndpoint);
             }
             finally
             {
                 await prior.DisposeAsync();
             }
-        }
-
-        private static async Task<Received> SendHelloUntilAdmittedAsync(
-            IDealerSocket source,
-            string sourceEndpoint)
-        {
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-            while (DateTime.UtcNow < deadline)
-            {
-                await SendHelloAsync(source, sourceEndpoint);
-                var attemptDeadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(100);
-                while (DateTime.UtcNow < attemptDeadline)
-                {
-                    var received = Received.Create();
-                    if (!source.Recv(received, RecvFlags.DontWait))
-                    {
-                        received.Dispose();
-                        await Task.Delay(10);
-                        continue;
-                    }
-
-                    if (received.Parts.Count != 0
-                        && ZLinkServiceWireCodec.TryDecodeRouteAdmission(
-                            received.Parts[0].ToArray(),
-                            out var command,
-                            out _,
-                            out _)
-                        && command == ServiceWireConstants.Command.Admit)
-                        return received;
-                    received.Dispose();
-                }
-            }
-            throw new TimeoutException("Route admission reply was not received.");
         }
 
         internal async ValueTask DisconnectPriorSourceAsync()
