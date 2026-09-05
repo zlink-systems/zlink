@@ -138,15 +138,17 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
     }
 
     private void connectEndpoint(String channelName, String endpoint) {
-        boolean openNow = inStateLane(() -> {
+        String id = connectionId(channelName, endpoint);
+        // Registering the endpoint and claiming its first open happen in one
+        // lane turn, so the reconcile tick cannot take the open away from the
+        // caller between the two.
+        CompletableFuture<Void> opening = inStateLane(() -> {
             desired.computeIfAbsent(
                 channelName, ignored -> new LinkedHashSet<>())
                 .add(endpoint);
-            return running;
+            return claimOpeningInLane(id);
         });
-        if (openNow) {
-            open(channelName, endpoint, null);
-        }
+        openClaimed(channelName, endpoint, id, opening, null);
     }
 
     private void disconnectEndpoint(String channelName, String endpoint) {
@@ -172,16 +174,29 @@ final class ZLinkManualFanoutRuntime implements AutoCloseable {
         String endpoint,
         CompletableFuture<Void> activeTick) {
         String id = connectionId(channelName, endpoint);
-        CompletableFuture<Void> opening = inStateLane(() -> {
-            if (!running
-                || connections.containsKey(id)
-                || openingOperations.containsKey(id)) {
-                return null;
-            }
-            CompletableFuture<Void> admitted = new CompletableFuture<>();
-            openingOperations.put(id, admitted);
-            return admitted;
-        });
+        openClaimed(
+            channelName, endpoint, id,
+            inStateLane(() -> claimOpeningInLane(id)),
+            activeTick);
+    }
+
+    private CompletableFuture<Void> claimOpeningInLane(String id) {
+        if (!running
+            || connections.containsKey(id)
+            || openingOperations.containsKey(id)) {
+            return null;
+        }
+        CompletableFuture<Void> admitted = new CompletableFuture<>();
+        openingOperations.put(id, admitted);
+        return admitted;
+    }
+
+    private void openClaimed(
+        String channelName,
+        String endpoint,
+        String id,
+        CompletableFuture<Void> opening,
+        CompletableFuture<Void> activeTick) {
         if (opening == null) return;
         try {
             openAdmitted(channelName, endpoint, id, activeTick);

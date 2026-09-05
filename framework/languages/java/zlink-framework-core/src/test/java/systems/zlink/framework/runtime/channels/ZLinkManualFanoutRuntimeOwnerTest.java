@@ -39,12 +39,19 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
         try (ExecutorService lifecycle = Executors.newSingleThreadExecutor();
              Fixture fixture = new Fixture(true, false, false)) {
             fixture.runtime.start();
-            Future<?> connect = lifecycle.submit(() ->
-                fixture.runtime.connections("events").connect(ENDPOINT));
+            AtomicReference<Thread> connectOwner = new AtomicReference<>();
+            Future<?> connect = lifecycle.submit(() -> {
+                connectOwner.set(Thread.currentThread());
+                fixture.runtime.connections("events").connect(ENDPOINT);
+            });
             ControlledSubscriber subscriber = fixture.awaitSubscriber();
             assertTrue(subscriber.connectEntered.await(1, TimeUnit.SECONDS));
 
             try {
+                // The caller that registers the endpoint owns its socket
+                // connect; the reconcile tick never takes it onto the
+                // infrastructure executor.
+                assertEquals(connectOwner.get(), subscriber.connectThread.get());
                 int tickCount = fixture.scheduler.tickCount.get();
                 awaitCondition(() ->
                     fixture.scheduler.tickCount.get() >= tickCount + 2);
@@ -298,6 +305,8 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
         private final AtomicInteger readinessWaits = new AtomicInteger();
         private final AtomicInteger subscribeCalls = new AtomicInteger();
         private final AtomicInteger connectCalls = new AtomicInteger();
+        private final AtomicReference<Thread> connectThread =
+            new AtomicReference<>();
         private final AtomicInteger disconnectCalls = new AtomicInteger();
         private final AtomicInteger closeCalls = new AtomicInteger();
         private final List<String> events = new CopyOnWriteArrayList<>();
@@ -336,6 +345,7 @@ final class ZLinkManualFanoutRuntimeOwnerTest {
         @Override
         public void connect(String endpoint) {
             connectCalls.incrementAndGet();
+            connectThread.set(Thread.currentThread());
             connectEntered.countDown();
             if (blockConnect) {
                 awaitUninterruptibly(releaseConnect);
