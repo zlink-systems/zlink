@@ -1212,7 +1212,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/python/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미달` — `tcp` 4 pattern before 19:32~19:38 KST(Core `a40cb46335`): DD 6.6%(15k msg/s 고정), DR/RR REQREP 14.2/15.4%, PUBSUB 26.2%; 자체 pass 1 job(astra) 진행 중; [log](log/2026-09-05-python-multi-tcp-before.ko.md)
+- Multi 상태: `미달` — before 19:32: DD 6.6%, REQREP 14.2/15.4%, PUBSUB 26.2% → pass 1(`72d6f8ec8a`: ctypes 11→4회/메시지) quiet 3-run 22:26: DD 9.2%(22.6k msg/s), DR/RR 15.2/16.5%, PUBSUB 28.8%(목표 60) — GIL 아래 Python 79 함수/메시지가 상한, pass 2(C 확장 hot path) 예정; [log](log/2026-09-05-python-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.7.1 Single suite
