@@ -1110,3 +1110,12 @@ spec(`socket/README.ko.md:151,159-165`, `07-router.ko.md:153`)은 종료 확인 
 결과: tcp 4~7 ms(p95 6 ms, reconnect 10/100/1000 ms × 20회), inproc 0 ms. 회귀 테스트 `test_ctx_term_fixed_rid_handover`(integration;serial, tcp p95 < 200 ms assert).
 gate(worktree Release+LTO): ctest 143/143, 신규 5/5, single-lane 29/29 ×2, hotpath_gate 0.9952/0.9962/1.0005/0.9988 PASS; main dev 트리에서 신규+관련 4/4, 신규 3회 반복 green.
 **A용 한 줄: Core 버그 → 수정 커밋 `7ffb8e55d9`. framework 2 s 기대치 조정 불필요; A는 로컬 Core/binding 패키지 재빌드 후 handover 테스트 재실행.**
+
+## D-B95 (2026-09-05 09:30, 머신 B) 작업 5 — Java monitor event ABI 레이아웃 버그 수정; inproc/CLOSED connection_id는 Core 결함(후속 job); Poller monitor 등록은 spec gap
+binding 버그 → 수정: `bindings/java/.../nativeapi/NativeLayouts.java`의 monitor event 레이아웃에 Core 공개 struct(`core/include/zlink/eventing/api.h`, 800 B; connection_id 784 / transport_lane 792 / flags 796 — sizeof/offsetof로 확인)에 없는
+`reserved_pair_id`·`reserved_pair_epoch` 두 필드가 남아 Java가 lane/flags를 808/812에서 읽고 있었음(connection_id만 우연히 정확). 제거 후 tcp READY/DISCONNECTED가 같은 nonzero connectionId·같은 lane, 자동 재연결 READY는 다른 id — 계약 테스트
+`MonitorConnectionIdentityContractTest.tcpReadyAndDisconnectedKeepIdentityAcrossReconnect`(5/5). `NativeLayoutsTest`가 크기·offset 고정. gate: `tests/run_tests.sh` 117(3 skipped)/117, samples 7/7.
+Core 결함(binding 아님, 후속 Core job): (1) inproc READY와 DISCONNECTED의 connection_id가 다름(`socket_base_endpoint.cpp:338-341`이 inproc 양쪽 endpoint pair를 따로 만들고 `endpoint.cpp:25-33`이 pair마다 새 id 발급), 서버 재bind 뒤 재연결 READY도 없음;
+(2) tcp CLOSED가 READY/DISCONNECTED의 id 대신 새 endpoint id를 씀(`asio_tcp_connecter.cpp:332-338`), inproc은 peer close에서 CLOSED 미방출. spec `06-monitoring.ko.md:67-72`("connection_id는 하나의 물리적 transport 시도를 식별")에 어긋남. 해당 3 케이스는 `@Disabled`로 고정.
+spec gap(사용자 결정 필요, 사용자 지시 "모든 bindings 동일 동작·사용성"에 따라 **추가 권고**): Java `Poller`에 `SocketMonitor` readiness 등록 표면 없음(C++ `poller.add(socket_monitor_t&)`, .NET `ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>)` 있음; Java spec `README.ko.md:175-185, 1088-1092`에 signature 없음). 8 bindings 교차 조사 뒤 spec 개정안과 함께 결정 요청.
+**A용 한 줄: binding 버그 → 수정 커밋 `c9d294c44f`, tcp identity는 spec대로 동작 확인(`MonitorConnectionIdentityContractTest`); inproc/CLOSED identity는 Core 결함 → 후속 D-B9x.**

@@ -252,12 +252,7 @@ public final class NativeLayouts {
             ROUTING_ID_LAYOUT.withName("routing_id"),
             MemoryLayout.sequenceLayout(256, ValueLayout.JAVA_BYTE).withName("local_addr"),
             MemoryLayout.sequenceLayout(256, ValueLayout.JAVA_BYTE).withName("remote_addr"),
-            // Keep the allocation at the full public Core event size. These
-            // diagnostic fields are not projected by the current Java event
-            // record, but Core writes them before returning from recv.
             ValueLayout.JAVA_LONG_UNALIGNED.withName("connection_id"),
-            ValueLayout.JAVA_LONG_UNALIGNED.withName("reserved_pair_id"),
-            ValueLayout.JAVA_LONG_UNALIGNED.withName("reserved_pair_epoch"),
             ValueLayout.JAVA_INT.withName("transport_lane"),
             ValueLayout.JAVA_INT.withName("flags"));
     public static final long MONITOR_EVENT_OFFSET = MONITOR_EVENT_LAYOUT.byteOffset(
