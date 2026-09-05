@@ -1,0 +1,23 @@
+# Job (Core diagnosis+fix, model astra, xhigh): after B's Core commit `bf28780d51` ("drain buffered STREAM fragments until packet readiness": stream.cpp decodes buffered raw chunks until a complete packet or input end; 64-chunk progress boundary and post-pop refill removed) three STREAM-dependent gates went red on the same rebuild (rebuild13, Core 083588b4…) that were green on the previous Core (rebuild12, gate12): (1) node ZoneWorld — gateway process exited before the sample client ran (`/dev/shm/zlink-tmp-node/zlink-zoneworld-I8r3Nz/logs/gateway.log`); (2) dotnet ZoneWorld run 2 — ZW-A1 "target zone admission completed before JoinWorldRes" and G3 "normal replacement did not publish a new RID"; (3) node contract `test/contract/stream-actor-bind-replay.test.js:109` "every attempt uses the whole remaining original deadline" (intermittent: 1/2 pass on the new Core). Determine whether `bf28780d51` changed STREAM delivery semantics (ordering across packets, readiness/wake-up when a partial packet remains buffered, fairness/starvation of other sockets or of the command loop while draining, blocking of the receive pump) in a way the spec forbids, and fix at the owner
+
+You are a codex sub-agent under a Claude supervisor. Read `CONTRIBUTING.ko.md` §4/§5, `AGENTS.md` §3, `core/doc/spec/core/socket/08-stream.ko.md` §6 (packet assembly/readiness) and the
+polling/command-progress spec `core/doc/spec/core/05-polling.ko.md` §3, then `git show bf28780d51` (diff + message). Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do not
+commit. WORK ONLY IN `/home/hep7/project/zlink-core-a`: `git reset -q --hard && git clean -fdq core && git checkout -q --detach bf28780d51`. Never touch main's `core/build-dev`. Build:
+`nice -n 10 env JOBS=4 scripts/build-core.sh dev`. The owner of this commit is the B session; your job is the diagnosis with a public C-API reproduction and, if the defect is
+confirmed, the fix that keeps the intended improvement (no strand of readable input) while restoring the contract — or, if the previous behavior was the only correct one, a
+revert with the reason.
+
+## Method
+1. Read the diff: what happens when the drain loop consumes many chunks for one large packet — does it hold the socket/pipe lock or the I/O thread, starving other sessions or
+   the command loop (which would explain: a gateway process appearing hung/exiting, an admission notification overtaking a STREAM reply (A1), a request's deadline attempt
+   accounting drifting (contract 3))? Does readiness get published exactly once per complete packet, and is a partially buffered packet still woken by later input?
+2. Public C-API repros in `core/tests/integration/`: (a) two STREAM sessions on one socket where one sends a large fragmented packet while the other sends small packets —
+   assert the small packets are delivered within the command-progress bound (no starvation) and in order; (b) fragmented input where the final fragment arrives after an idle
+   gap — assert readiness fires when it arrives; (c) interleaved control/command processing during a long drain. Run them on the parent commit (`git stash`-free: build the
+   parent in a second dir inside the worktree, e.g. `core/build-parent`, or reason and confirm with one targeted experiment) and on HEAD.
+3. Fix at the single owner (stream.cpp packet assembly / progress boundary) — a bounded progress step is fine if it is the *one* rule (no strand + fairness) — and keep the
+   throughput gain measurable (report ops/s before/after with the existing hotpath or a quick loop).
+4. Gate: new tests `--repeat until-fail:10`; `test_stream*` all; full `ctest -j2 -E '^hotpath_gate$'` once (all pass).
+## Deliverable
+`doc/plan/c016-worklog/core-stream-drain-regression-bf28780d51-summary.md` in MAIN (sequence per symptom, cause file:line, fix/revert, owner / spec clause / parity / class, rule
+count, throughput before/after, results, BLOCKERS) and `git add -N core && git diff HEAD -- core > /home/hep7/project/zlink-core-a/core-stream-drain.patch`.
