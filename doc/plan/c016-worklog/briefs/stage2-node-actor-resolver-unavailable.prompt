@@ -1,0 +1,14 @@
+# Job (STAGE 2, approved B): node — direct Actor resolver must report owner-lease-unavailable as Unavailable, not NotFound; add the owner-lease observability event
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·교차언어 대조) and `framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion or widen a deadline; do not commit. Local packages were rebuilt at 09:49 with Core `7ffb8e55d9` (D-086) and java `c9d294c44f`. Do not rebuild Core/local packages. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`. Another node job edits `backend/node/node-raw-mesh-backend.ts` and the deliver consumers in `service-stateful-runtime.ts` — do not touch those; you own `packages/framework/src/runtime/locations/resolvers.ts`, `actors/actor-client.ts`, `framework-errors-internal.ts` (only if a kind is missing), the observability event emitter for locations, and their tests.
+
+## Approved diagnosis
+`doc/plan/c016-worklog/diag-node-deliverydispatch-courier-notfound.md`: after `GetOrCreate` confirmed an active authority, the direct resolve failed to obtain a usable owner lease (`remainingOwnerTokenLeaseMs(...) <= 0` branch) and `resolvers.ts:388-411` collapsed that into `undefined` → `ActorRouteNotFound` (`actor-client.ts:301-319`) → public NotFound. Spec 08-routing §2.1-2.2 distinguishes Missing (no authority snapshot) from Unavailable (authority exists but no usable owner route); dotnet/java preserve Unavailable, cpp does not produce NotFound from a lease failure. Class B. The underlying reason the lease was not usable in that one run is NOT established — do not touch heartbeat/lease timeouts/retries.
+
+## What to do
+1. Make the resolver return a typed outcome (missing vs owner-unavailable) and map the latter to the internal Unavailable kind; keep Missing → NotFound.
+2. Emit an owner-lease observation on the existing framework debug/observability path (per 06-observability, same style as the relocation debug events) carrying actor id, authority generation, remaining lease ms and the resolver decision, so the next intermittent occurrence is diagnosable. No behaviour change beyond the classification.
+3. Regression: unit test for the resolver with an active authority whose lease is expired → Unavailable (not NotFound); Missing snapshot → NotFound. Run `bash samples/run_samples.sh DeliveryDispatch.Ts` 3× and the touched test files; typecheck + lint.
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-node-actor-resolver-unavailable-summary.md`: diff, the four lines, results, BLOCKERS.
