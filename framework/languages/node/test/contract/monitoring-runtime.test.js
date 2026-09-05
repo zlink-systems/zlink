@@ -22,6 +22,40 @@ test('runtime event publisher continues after a monitoring handler fails', async
   assert.equal(events.length, 1);
 });
 
+test('actor owner-lease observation uses the gated relocation debug path', () => {
+  const previousDebug = process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
+  const originalError = console.error;
+  const calls = [];
+  process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = '1';
+  console.error = (...args) => calls.push(args);
+  try {
+    framework.emitActorOwnerLeaseObservation({
+      actorId: 'actor-1',
+      authorityGeneration: 7n,
+      remainingLeaseMs: 0,
+      decision: 'owner_unavailable'
+    });
+  } finally {
+    console.error = originalError;
+    if (previousDebug === undefined) {
+      delete process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
+    } else {
+      process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = previousDebug;
+    }
+  }
+
+  assert.deepEqual(calls, [[
+    '[zlink.runtime.relocation]',
+    'actor_route.owner_lease_observed',
+    {
+      actorId: 'actor-1',
+      authorityGeneration: 7n,
+      remainingLeaseMs: 0,
+      decision: 'owner_unavailable'
+    }
+  ]]);
+});
+
 test('socket monitoring source maps backend raw events into framework typed events', async () => {
   const events = [];
   const publisher = new framework.DefaultZLinkRuntimeEventPublisher();

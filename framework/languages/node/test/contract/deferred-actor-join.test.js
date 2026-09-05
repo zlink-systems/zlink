@@ -386,26 +386,29 @@ test('deferred onJoinCompleted keeps Actor ownership and applies same-Spot wait 
       async resolveDirectActorRoute(actorId) {
         routeResolutions += 1;
         return {
-          meshName: 'game',
-          actorId,
-          actorType: 'PlayerActor',
-          actorRef: {
-            actorId,
-            objectGeneration: 1n,
+          kind: 'ready',
+          route: {
             meshName: 'game',
-            nodeRid: 'node-a'
-          },
-          ownerNodeRid: 'node-a',
-          ownerNodeGeneration: 1n,
-          spotKind: 1,
-          spotId: 'spot-a',
-          spotGeneration: 1n,
-          membershipEpoch: 1n,
-          ownerId: 'owner-a',
-          ownerLeaseGeneration: 1n,
-          authorityOwnerGeneration: 1n,
-          authorityStoreVersion: 'version-a',
-          updatedAt: new Date()
+            actorId,
+            actorType: 'PlayerActor',
+            actorRef: {
+              actorId,
+              objectGeneration: 1n,
+              meshName: 'game',
+              nodeRid: 'node-a'
+            },
+            ownerNodeRid: 'node-a',
+            ownerNodeGeneration: 1n,
+            spotKind: 1,
+            spotId: 'spot-a',
+            spotGeneration: 1n,
+            membershipEpoch: 1n,
+            ownerId: 'owner-a',
+            ownerLeaseGeneration: 1n,
+            authorityOwnerGeneration: 1n,
+            authorityStoreVersion: 'version-a',
+            updatedAt: new Date()
+          }
         };
       },
       invalidateActorRoute() {}

@@ -7,7 +7,11 @@ import {
   internalFrameworkWireReply,
   translateWireReplyDecodeError
 } from '../framework-errors-internal';
-import { RequestResult, SubmitResult } from '../backend/runtime-values';
+import {
+  RequestResult,
+  SubmitResult,
+  isZLinkBackendResultError
+} from '../backend/runtime-values';
 import type {
   RawServiceIngressRecord,
   RawServiceMeshRuntime,
@@ -204,7 +208,7 @@ export interface ServiceSessionDelivery {
    * Delivers the retained M6A application frame after the binding fence has
    * been validated. The stream adapter owns multipart decoding at that point.
    */
-  readonly deliver: (sessionRid: string, payloadFrame: Uint8Array) => boolean;
+  readonly deliver: (sessionRid: string, payloadFrame: Uint8Array) => Promise<boolean>;
   /** Enqueues the replacement lifecycle callback on the owning STREAM session. */
   readonly onBindingReplaced?: (
     actorId: string,
@@ -3572,7 +3576,7 @@ export class ServiceStatefulRuntime {
     const operation = {
       deliver: async () => {
         if (settled || retainedPayload === undefined) return false;
-        const delivered = delivery.deliver(sessionRid, retainedPayload);
+        const delivered = await delivery.deliver(sessionRid, retainedPayload);
         if (delivered) settle();
         return delivered;
       },
@@ -3597,12 +3601,22 @@ export class ServiceStatefulRuntime {
       return 'protocolError';
     }
     try {
-      const delivered = delivery.deliver(sessionRid, retainedPayload);
+      const delivered = await delivery.deliver(sessionRid, retainedPayload);
       settle();
       if (!delivered) return 'protocolError';
     } catch (error) {
       operation.fail(error);
-      return 'protocolError';
+      // Remote command 36 is one-way: its source transport admission has
+      // already completed, so a later client delivery terminal is local to
+      // this session owner. Local fast paths still preserve the typed result.
+      if (
+        ingress.sourceRoutingId !== this.nodeRid
+        && isZLinkBackendResultError(error)
+        && error.operation === 'submit'
+      ) {
+        return 'application';
+      }
+      throw error;
     }
     return 'application';
   }
@@ -4158,6 +4172,11 @@ export class ServiceStatefulRuntime {
         return result === 'application' || result === 'infrastructure'
           ? SubmitResult.Ok
           : SubmitResult.InvalidState;
+      } catch (error) {
+        if (isZLinkBackendResultError(error) && error.operation === 'submit') {
+          return error.result;
+        }
+        throw error;
       } finally {
         applicationJobOwner.close();
       }
