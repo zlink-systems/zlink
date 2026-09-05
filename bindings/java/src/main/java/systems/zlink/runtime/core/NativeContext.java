@@ -277,6 +277,7 @@ final class NativeContext implements Context {
         if (handle == null || handle.address() == 0) {
             return;
         }
+        completionDispatcher.closeNativeWait();
         NativeErrno.retryWhileInterrupted(() -> Native.ctxShutdown(handle),
             rc -> rc != 0);
         NativeErrno.retryWhileInterrupted(() -> Native.ctxTerm(handle),

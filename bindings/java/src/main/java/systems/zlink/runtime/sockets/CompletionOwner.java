@@ -5,7 +5,6 @@ package systems.zlink.runtime.sockets;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -14,7 +13,6 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -24,13 +22,11 @@ import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.CompletionKind;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
-import systems.zlink.contracts.sockets.SocketType;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.internal.sockets.SocketOption;
 import systems.zlink.runtime.nativeapi.CompletionDispatcher;
@@ -47,17 +43,42 @@ final class CompletionOwner implements AutoCloseable {
     private static final int SEND_ADMITTED = 0;
     private static final int SEND_TERMINAL = 202;
     private static final int RECV_DONT_WAIT = 1;
-    private static final int POLLER_EVENT_SIZE = 48;
-    private static final long POLLER_EVENT_SOCKET_OFFSET = 8L;
     private static final CompletionStage<Void> COMPLETED_SEND =
         CompletableFuture.completedStage(null);
     private static final AtomicLong NEXT_CONTEXT = new AtomicLong(1L);
-    private static final AtomicLong NEXT_CONTROL_ENDPOINT = new AtomicLong();
     private static final AtomicLong CLOSED_COMPLETIONS = new AtomicLong();
+
+    // Thread-local native headers never escape a submit/drain. Public messages
+    // and stages retain their independent ownership and are not pooled here.
+    private static final ThreadLocal<NativeScratch> NATIVE_SCRATCH =
+        ThreadLocal.withInitial(NativeScratch::new);
+
+    private static final class NativeScratch {
+        private final Arena arena = Arena.ofAuto();
+        final MemorySegment target = arena.allocate(
+            NativeLayouts.ROUTING_ID_LAYOUT);
+        final MemorySegment id = arena.allocate(ValueLayout.JAVA_LONG);
+        final MemorySegment completion = arena.allocate(
+            NativeLayouts.COMPLETION_LAYOUT);
+        private MemorySegment parts = arena.allocate(
+            2 * NativeLayouts.MESSAGE_LAYOUT.byteSize(),
+            NativeLayouts.MESSAGE_LAYOUT.byteAlignment());
+
+        MemorySegment parts(int count) {
+            long bytes = Math.multiplyExact((long) count,
+                NativeLayouts.MESSAGE_LAYOUT.byteSize());
+            if (parts.byteSize() < bytes) {
+                // A separate automatic arena lets an outgrown buffer be reclaimed.
+                parts = Arena.ofAuto().allocate(bytes,
+                    NativeLayouts.MESSAGE_LAYOUT.byteAlignment());
+            }
+            return parts;
+        }
+    }
 
     private final NativeSocketRuntime socket;
     private final CompletionDispatcher.CompletionLane lane;
-    private final MemorySegment contextHandle;
+    private final CompletionPump runtime;
     private final ConcurrentHashMap<Long, Pending<?>> pending =
         new ConcurrentHashMap<>();
     private final Object ownerLock = new Object();
@@ -67,16 +88,13 @@ final class CompletionOwner implements AutoCloseable {
     private volatile boolean closed;
     private boolean finalized;
     private Object publicOwner;
-    private Thread runtimeOwner;
-    private ControlWake controlWake;
 
     CompletionOwner(NativeSocketRuntime socket,
                     CompletionDispatcher.CompletionLane lane,
                     MemorySegment contextHandle) {
         this.socket = Objects.requireNonNull(socket, "socket");
         this.lane = Objects.requireNonNull(lane, "lane");
-        this.contextHandle = contextHandle == null
-            ? MemorySegment.NULL : contextHandle;
+        this.runtime = lane.completionPump(contextHandle);
     }
 
     CompletionStage<Void> submitSend(RoutingId target, List<Message> parts) {
@@ -331,80 +349,93 @@ final class CompletionOwner implements AutoCloseable {
             int timeoutMs, MemorySegment userContext, boolean completion,
             boolean request, long replyToken) {
         validateParts(originals);
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment nativeTarget = target == null ? MemorySegment.NULL
-                : NativeRoutingIds.allocate(arena, target);
-            MemorySegment idOut = completion
-                ? arena.allocate(ValueLayout.JAVA_LONG) : MemorySegment.NULL;
-            long partSize = NativeLayouts.MESSAGE_LAYOUT.byteSize();
-            // Stage native headers together. zlink_msg_copy shares large
-            // payload storage by refcount and avoids a Message/Arena pair per
-            // part; Core consumes each staged header when it is submitted.
-            MemorySegment nativeParts = arena.allocate(
-                partSize * originals.size(),
-                NativeLayouts.MESSAGE_LAYOUT.byteAlignment());
-            int initialized = 0;
-            int consumed = 0;
-            try {
-                for (; initialized < originals.size(); initialized++) {
-                    InternalAccess.messageCopyTo(originals.get(initialized),
-                        nativeParts.asSlice(partSize * initialized, partSize));
+        NativeScratch scratch = NATIVE_SCRATCH.get();
+        MemorySegment nativeTarget = target == null ? MemorySegment.NULL
+            : scratch.target;
+        if (target != null) {
+            NativeRoutingIds.write(nativeTarget, target);
+        }
+        MemorySegment idOut = completion ? scratch.id : MemorySegment.NULL;
+        if (completion) {
+            idOut.set(ValueLayout.JAVA_LONG, 0, 0L);
+        }
+        long partSize = NativeLayouts.MESSAGE_LAYOUT.byteSize();
+        // Stage native headers together. zlink_msg_copy shares large
+        // payload storage by refcount and avoids a Message/Arena pair per
+        // part; Core consumes each staged header when it is submitted.
+        MemorySegment nativeParts = scratch.parts(originals.size());
+        int initialized = 0;
+        int consumed = 0;
+        try {
+            for (; initialized < originals.size(); initialized++) {
+                InternalAccess.messageCopyTo(originals.get(initialized),
+                    nativeParts.asSlice(partSize * initialized, partSize));
+            }
+            for (; consumed < originals.size(); consumed++) {
+                MemorySegment nativePart = nativeParts.asSlice(
+                    partSize * consumed, partSize);
+                int partFlag = consumed + 1 < originals.size()
+                    ? Native.PART_MORE : Native.PART_FINAL;
+                boolean last = partFlag == Native.PART_FINAL;
+                MemorySegment context = last
+                    ? userContext : MemorySegment.NULL;
+                MemorySegment output = last
+                    ? idOut : MemorySegment.NULL;
+                int rc;
+                if (!request && replyToken == 0L) {
+                    rc = target == null
+                        ? Native.sendPart(socket.handle(), nativePart,
+                            flags, partFlag, context, output)
+                        : Native.sendPartRid(socket.handle(), nativeTarget,
+                            nativePart, flags, partFlag, context, output);
+                } else if (request) {
+                    rc = Native.requestPart(socket.handle(), nativeTarget,
+                        nativePart, flags, partFlag, last ? timeoutMs : 0,
+                        context, output);
+                } else {
+                    rc = Native.replyPart(socket.handle(), nativeTarget,
+                        replyToken, nativePart, partFlag);
                 }
-                for (; consumed < originals.size(); consumed++) {
-                    MemorySegment nativePart = nativeParts.asSlice(
-                        partSize * consumed, partSize);
-                    int partFlag = consumed + 1 < originals.size()
-                        ? Native.PART_MORE : Native.PART_FINAL;
-                    boolean last = partFlag == Native.PART_FINAL;
-                    MemorySegment context = last
-                        ? userContext : MemorySegment.NULL;
-                    MemorySegment output = last
-                        ? idOut : MemorySegment.NULL;
-                    int rc;
-                    if (!request && replyToken == 0L) {
-                        rc = target == null
-                            ? Native.sendPart(socket.handle(), nativePart,
-                                flags, partFlag, context, output)
-                            : Native.sendPartRid(socket.handle(), nativeTarget,
-                                nativePart, flags, partFlag, context, output);
-                    } else if (request) {
-                        rc = Native.requestPart(socket.handle(), nativeTarget,
-                            nativePart, flags, partFlag, last ? timeoutMs : 0,
-                            context, output);
-                    } else {
-                        rc = Native.replyPart(socket.handle(), nativeTarget,
-                            replyToken, nativePart, partFlag);
-                    }
-                    if (rc != SubmitResult.OK.value()) {
-                        int errno = Native.errno();
-                        long id = completion
-                            ? idOut.get(ValueLayout.JAVA_LONG, 0) : 0L;
-                        consumed++;
-                        return new SubmitAttempt(SubmitResult.fromValue(rc),
-                            errno, id);
-                    }
+                if (rc != SubmitResult.OK.value()) {
+                    int errno = Native.errno();
+                    long id = completion
+                        ? idOut.get(ValueLayout.JAVA_LONG, 0) : 0L;
+                    consumed++;
+                    return new SubmitAttempt(SubmitResult.fromValue(rc),
+                        errno, id);
                 }
-                long id = completion
-                    ? idOut.get(ValueLayout.JAVA_LONG, 0) : 0L;
-                return new SubmitAttempt(SubmitResult.OK, 0, id);
-            } finally {
-                for (int index = consumed; index < initialized; index++) {
-                    NativeMessage.messageClose(nativeParts.asSlice(
-                        partSize * index, partSize));
-                }
+            }
+            long id = completion
+                ? idOut.get(ValueLayout.JAVA_LONG, 0) : 0L;
+            return new SubmitAttempt(SubmitResult.OK, 0, id);
+        } finally {
+            for (int index = consumed; index < initialized; index++) {
+                NativeMessage.messageClose(nativeParts.asSlice(
+                    partSize * index, partSize));
             }
         }
     }
 
     int closeNativeSocket() {
-        Thread join;
         drainLock.lock();
         try {
             synchronized (ownerLock) {
                 closed = true;
                 ownerLock.notifyAll();
             }
-
+        } finally {
+            drainLock.unlock();
+        }
+        // Native close rejects an admitted poller wait with EBUSY. Quiesce
+        // the binding-owned wait before closing its socket, as on handover.
+        try {
+            runtime.unregister(this);
+        } catch (RuntimeException | Error failure) {
+            reopenAfterCloseFailure(failure);
+            throw failure;
+        }
+        drainLock.lock();
+        try {
             ReentrantReadWriteLock.WriteLock write = nativeCallGate.writeLock();
             write.lock();
             try {
@@ -422,13 +453,9 @@ final class CompletionOwner implements AutoCloseable {
             } finally {
                 write.unlock();
             }
-            synchronized (ownerLock) {
-                join = runtimeOwner;
-            }
         } finally {
             drainLock.unlock();
         }
-        joinRuntimeOwner(join);
         return systems.zlink.contracts.errors.CloseResult.OK.value();
     }
 
@@ -452,7 +479,9 @@ final class CompletionOwner implements AutoCloseable {
             throw new IllegalArgumentException("at least one message required");
         }
         for (int i = 0; i < parts.size(); i++) {
-            Objects.requireNonNull(parts.get(i), "parts[" + i + "]");
+            if (parts.get(i) == null) {
+                throw new NullPointerException("parts[" + i + "]");
+            }
         }
     }
 
@@ -561,24 +590,17 @@ final class CompletionOwner implements AutoCloseable {
         }
     }
 
-    int drain(boolean waitForSettlement) {
-        DrainBatch batch;
+    int drain(List<Runnable> settlements) {
         drainLock.lock();
         try {
-            batch = drainWithNativeGate(waitForSettlement);
+            return drainWithNativeGate(settlements);
         } finally {
             signalDrainProgress();
             drainLock.unlock();
         }
-        if (waitForSettlement) {
-            for (Pending<?> state : batch.settlements()) {
-                state.awaitSettlement();
-            }
-        }
-        return batch.progress();
     }
 
-    private int drainFromRuntime() {
+    int drainFromRuntime() {
         try {
             drainLock.lockInterruptibly();
         } catch (InterruptedException interrupted) {
@@ -591,73 +613,68 @@ final class CompletionOwner implements AutoCloseable {
                     return -1;
                 }
             }
-            return drainWithNativeGate(false).progress();
+            return drainWithNativeGate(null);
         } finally {
             signalDrainProgress();
             drainLock.unlock();
         }
     }
 
-    private DrainBatch drainWithNativeGate(boolean collectSettlements) {
+    private int drainWithNativeGate(List<Runnable> settlements) {
         ReentrantReadWriteLock.ReadLock read = nativeCallGate.readLock();
         read.lock();
         try {
             if (closed) {
-                return new DrainBatch(0, List.of());
+                return 0;
             }
-            return drainLocked(collectSettlements);
+            return drainLocked(settlements);
         } finally {
             read.unlock();
         }
     }
 
-    private DrainBatch drainLocked(boolean collectSettlements) {
+    private int drainLocked(List<Runnable> settlements) {
         int progress = 0;
-        List<Pending<?>> settlements = collectSettlements
-            ? new ArrayList<>() : List.of();
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment completion = arena.allocate(
-                NativeLayouts.COMPLETION_LAYOUT);
-            while (!closed) {
-                completion.fill((byte) 0);
-                completion.set(ValueLayout.JAVA_INT,
-                    NativeLayouts.COMPLETION_STRUCT_SIZE_OFFSET,
-                    (int) NativeLayouts.COMPLETION_LAYOUT.byteSize());
-                int rc = Native.completionRecv(socket.handle(), completion,
-                    RECV_DONT_WAIT);
-                if (rc == RecvResult.NO_DATA.value()
-                        || rc == RecvResult.BUSY.value()) {
-                    break;
-                }
-                if (rc != RecvResult.OK.value()) {
-                    throw new ZlinkRecvException(RecvResult.fromValue(rc),
-                        Native.errno());
-                }
-                progress++;
-                Pending<?> state = null;
-                Object result = null;
-                try {
-                    MemorySegment context = completion.get(
-                        ValueLayout.ADDRESS,
-                        NativeLayouts.COMPLETION_CONTEXT_OFFSET);
-                    state = pending.get(context.address());
-                    if (state != null) {
-                        result = readResult(completion,
-                            state.expectsRequestCompletion());
-                    }
-                } finally {
-                    Native.completionClose(completion);
-                    CLOSED_COMPLETIONS.incrementAndGet();
-                }
+        MemorySegment completion = NATIVE_SCRATCH.get().completion;
+        while (!closed) {
+            completion.fill((byte) 0);
+            completion.set(ValueLayout.JAVA_INT,
+                NativeLayouts.COMPLETION_STRUCT_SIZE_OFFSET,
+                (int) NativeLayouts.COMPLETION_LAYOUT.byteSize());
+            int rc = Native.completionRecv(socket.handle(), completion,
+                RECV_DONT_WAIT);
+            if (rc == RecvResult.NO_DATA.value()
+                    || rc == RecvResult.BUSY.value()) {
+                break;
+            }
+            if (rc != RecvResult.OK.value()) {
+                throw new ZlinkRecvException(RecvResult.fromValue(rc),
+                    Native.errno());
+            }
+            progress++;
+            Pending<?> state = null;
+            Object result = null;
+            try {
+                MemorySegment context = completion.get(
+                    ValueLayout.ADDRESS,
+                    NativeLayouts.COMPLETION_CONTEXT_OFFSET);
+                state = pending.get(context.address());
                 if (state != null) {
-                    state.capture(result);
-                    if (collectSettlements && state.terminalDispatched()) {
-                        settlements.add(state);
-                    }
+                    result = readResult(completion,
+                        state.expectsRequestCompletion());
+                }
+            } finally {
+                Native.completionClose(completion);
+                CLOSED_COMPLETIONS.incrementAndGet();
+            }
+            if (state != null) {
+                state.capture(result);
+                if (settlements != null && state.terminalDispatched()) {
+                    settlements.add(state::awaitSettlement);
                 }
             }
         }
-        return new DrainBatch(progress, settlements);
+        return progress;
     }
 
     private Object readResult(MemorySegment completion, boolean request) {
@@ -704,42 +721,33 @@ final class CompletionOwner implements AutoCloseable {
                 NativeLayouts.COMPLETION_SEND_ERRNO_OFFSET));
     }
 
+    MemorySegment handle() {
+        return socket.handle();
+    }
+
     boolean transferToPublic(Object claimant) {
         Objects.requireNonNull(claimant, "claimant");
-        Thread join;
-        ControlWake wake;
         drainLock.lock();
         try {
             synchronized (ownerLock) {
-                if (publicOwner == claimant) {
+                if (publicOwner == claimant)
                     return false;
-                }
-                if (publicOwner != null) {
+                if (publicOwner != null)
                     throw new IllegalStateException(
                         "completion queue already has a public poller owner");
-                }
                 publicOwner = claimant;
-                join = runtimeOwner;
-                wake = controlWake;
                 ownerLock.notifyAll();
             }
         } finally {
             drainLock.unlock();
         }
         try {
-            if (wake != null)
-                wake.signal();
-            joinRuntimeOwner(join);
+            runtime.unregister(this);
         } catch (RuntimeException | Error failure) {
-            drainLock.lock();
-            try {
-                synchronized (ownerLock) {
-                    if (publicOwner == claimant)
-                        publicOwner = null;
-                    ownerLock.notifyAll();
-                }
-            } finally {
-                drainLock.unlock();
+            synchronized (ownerLock) {
+                if (publicOwner == claimant)
+                    publicOwner = null;
+                ownerLock.notifyAll();
             }
             startRuntimeOwner();
             throw failure;
@@ -752,9 +760,8 @@ final class CompletionOwner implements AutoCloseable {
         drainLock.lock();
         try {
             synchronized (ownerLock) {
-                if (publicOwner != claimant) {
+                if (publicOwner != claimant)
                     return;
-                }
                 publicOwner = null;
                 ownerLock.notifyAll();
             }
@@ -765,155 +772,29 @@ final class CompletionOwner implements AutoCloseable {
     }
 
     private void startRuntimeOwner() {
-        Throwable startFailure = null;
-        synchronized (ownerLock) {
-            if (closed || publicOwner != null || pending.isEmpty()
-                    || runtimeOwner != null) {
-                return;
-            }
-            try {
-                ensureControlWakeLocked();
-                Thread owner = Thread.ofVirtual()
-                    .name("zlink-completion-event-owner")
-                    .unstarted(this::runtimeEventLoop);
-                runtimeOwner = owner;
-                owner.start();
-            } catch (RuntimeException | Error failure) {
-                runtimeOwner = null;
-                startFailure = failure;
-            }
-        }
-        if (startFailure != null) {
-            rejectRuntimeStates(startFailure);
-            if (startFailure instanceof RuntimeException runtime)
-                throw runtime;
-            throw (Error) startFailure;
-        }
-    }
-
-    private void ensureControlWakeLocked() {
-        if (controlWake != null)
-            return;
-        if (contextHandle.address() == 0L) {
-            throw new IllegalStateException(
-                "automatic completion processing requires a Context-backed socket");
-        }
-        controlWake = ControlWake.create(contextHandle);
-    }
-
-    private void runtimeEventLoop() {
-        MemorySegment poller = MemorySegment.NULL;
-        Throwable failure = null;
-        try (Arena arena = Arena.ofConfined()) {
-            poller = Native.pollerNew();
-            if (poller == null || poller.address() == 0L) {
-                throw ZlinkException.fromLastError(ErrorCategory.CONFIG);
-            }
-            int add = Native.pollerAdd(poller, socket.handle(),
-                MemorySegment.NULL, PollEventFlags.POLLCOMPLETION.mask());
-            if (add != 0) {
-                throw ZlinkException.fromLastError(ErrorCategory.CONFIG);
-            }
-            ControlWake wake;
-            synchronized (ownerLock) {
-                wake = controlWake;
-            }
-            add = Native.pollerAdd(poller, wake.reader(),
-                MemorySegment.NULL, PollEventFlags.POLLIN.mask());
-            if (add != 0) {
-                throw ZlinkException.fromLastError(ErrorCategory.CONFIG);
-            }
-            MemorySegment events = arena.allocate(POLLER_EVENT_SIZE * 2L,
-                ValueLayout.ADDRESS.byteAlignment());
-            MemorySegment errorOut = arena.allocate(ValueLayout.JAVA_INT);
-            while (runtimeShouldRun()) {
-                int readyCount = Native.pollerWait(poller, events, 2, -1,
-                    errorOut);
-                if (readyCount < 0) {
-                    throw ZlinkException.fromLastError(ErrorCategory.CONFIG);
-                }
-                if (readyCount == 0) {
-                    continue;
-                }
-                boolean socketReady = false;
-                boolean controlReady = false;
-                for (int index = 0; index < readyCount; index++) {
-                    long readySocket = events.get(ValueLayout.ADDRESS,
-                        (long) index * POLLER_EVENT_SIZE
-                            + POLLER_EVENT_SOCKET_OFFSET).address();
-                    socketReady |= readySocket == socket.handle().address();
-                    controlReady |= readySocket == wake.reader().address();
-                }
-                if (!runtimeShouldRun())
-                    return;
-                if (socketReady && drainFromRuntime() < 0)
-                    return;
-                if (!runtimeShouldRun())
-                    return;
-                if (controlReady)
-                    wake.drain();
-            }
-        } catch (RuntimeException | Error eventLoopFailure) {
-            failure = eventLoopFailure;
-        } finally {
-            if (poller != null && poller.address() != 0L) {
-                try {
-                    Native.pollerDestroy(poller);
-                } catch (RuntimeException ignored) {
-                }
-            }
-            finishRuntimeOwner(failure);
-        }
-    }
-
-    private void finishRuntimeOwner(Throwable failure) {
-        List<Pending<?>> failedStates = List.of();
-        boolean restart;
-        drainLock.lock();
         try {
             synchronized (ownerLock) {
-                if (runtimeOwner != Thread.currentThread())
+                if (closed || publicOwner != null || pending.isEmpty())
                     return;
-                if (failure != null && !closed && publicOwner == null)
-                    failedStates = new ArrayList<>(pending.values());
-                runtimeOwner = null;
-                ownerLock.notifyAll();
+                runtime.register(this);
             }
-            for (Pending<?> state : failedStates)
-                state.reject(failure);
-            synchronized (ownerLock) {
-                restart = !closed && publicOwner == null
-                    && !pending.isEmpty();
-            }
-        } finally {
-            drainLock.unlock();
+        } catch (RuntimeException | Error failure) {
+            rejectRuntimeStates(failure);
+            throw failure;
         }
-        if (restart)
-            startRuntimeOwner();
-        else
-            closeControlWake();
     }
 
-    private void rejectRuntimeStates(Throwable failure) {
+    void rejectRuntimeStates(Throwable failure) {
         drainLock.lock();
         try {
-            List<Pending<?>> failedStates;
             synchronized (ownerLock) {
                 if (closed || publicOwner != null)
                     return;
-                failedStates = new ArrayList<>(pending.values());
             }
-            for (Pending<?> state : failedStates)
+            for (Pending<?> state : new ArrayList<>(pending.values()))
                 state.reject(failure);
         } finally {
             drainLock.unlock();
-        }
-        closeControlWake();
-    }
-
-    private boolean runtimeShouldRun() {
-        synchronized (ownerLock) {
-            return !closed && publicOwner == null && !pending.isEmpty();
         }
     }
 
@@ -987,7 +868,7 @@ final class CompletionOwner implements AutoCloseable {
         }
     }
 
-    private void rejectPendingClosed() {
+    void rejectPendingClosed() {
         for (Pending<?> state : pending.values()) {
             state.rejectClosed();
         }
@@ -999,79 +880,19 @@ final class CompletionOwner implements AutoCloseable {
         }
     }
 
-    private void signalPendingChange() {
-        ControlWake wake = null;
-        synchronized (ownerLock) {
-            ownerLock.notifyAll();
-            if (pending.isEmpty() && runtimeOwner != null) {
-                wake = controlWake;
-            }
-        }
-        if (wake != null) {
-            try {
-                wake.signal();
-            } catch (RuntimeException ignored) {
-                // Socket/public-owner teardown also interrupts this owner.
-            }
-        }
-    }
-
     @Override
     public void close() {
-        Thread join;
-        ControlWake wake;
         synchronized (ownerLock) {
-            if (finalized) {
+            if (finalized)
                 return;
-            }
             finalized = true;
             closed = true;
             publicOwner = this;
-            join = runtimeOwner;
-            wake = controlWake;
             ownerLock.notifyAll();
         }
-        if (wake != null) {
-            try {
-                wake.signal();
-            } catch (RuntimeException ignored) {
-                // The native socket was already closed by the normal path.
-            }
-        }
-        joinRuntimeOwner(join);
+        runtime.unregister(this);
         rejectPendingClosed();
         pending.clear();
-        closeControlWake();
-    }
-
-    private static void joinRuntimeOwner(Thread thread) {
-        if (thread == null || thread == Thread.currentThread()) {
-            return;
-        }
-        thread.interrupt();
-        boolean interrupted = false;
-        while (thread.isAlive()) {
-            try {
-                thread.join();
-            } catch (InterruptedException ignored) {
-                interrupted = true;
-            }
-        }
-        if (interrupted) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    private void closeControlWake() {
-        ControlWake wake;
-        synchronized (ownerLock) {
-            if (runtimeOwner != null)
-                return;
-            wake = controlWake;
-            controlWake = null;
-        }
-        if (wake != null)
-            wake.close();
     }
 
     private static boolean isWritableWait(SubmitAttempt attempt) {
@@ -1163,151 +984,6 @@ final class CompletionOwner implements AutoCloseable {
     private record RequestCompletion(long completionId, Object outcome) {
     }
 
-    private record DrainBatch(int progress, List<Pending<?>> settlements) {
-    }
-
-    private static final class ControlWake implements AutoCloseable {
-        private final MemorySegment reader;
-        private final MemorySegment writer;
-        private final AtomicBoolean signalled = new AtomicBoolean();
-        private final AtomicBoolean closed = new AtomicBoolean();
-
-        private ControlWake(MemorySegment reader, MemorySegment writer) {
-            this.reader = reader;
-            this.writer = writer;
-        }
-
-        static ControlWake create(MemorySegment context) {
-            MemorySegment reader = MemorySegment.NULL;
-            MemorySegment writer = MemorySegment.NULL;
-            try {
-                reader = Native.socket(context, SocketType.PAIR.getValue());
-                if (reader == null || reader.address() == 0L)
-                    throw ZlinkException.fromLastError(ErrorCategory.CONFIG);
-                writer = Native.socket(context, SocketType.PAIR.getValue());
-                if (writer == null || writer.address() == 0L)
-                    throw ZlinkException.fromLastError(ErrorCategory.CONFIG);
-                setLingerZero(reader);
-                setLingerZero(writer);
-                String endpoint = "inproc://zlink-java-completion-control-"
-                    + NEXT_CONTROL_ENDPOINT.incrementAndGet();
-                try (Arena arena = Arena.ofConfined()) {
-                    MemorySegment address = arena.allocateFrom(endpoint,
-                        StandardCharsets.UTF_8);
-                    if (Native.bind(reader, address) != 0
-                            || Native.connect(writer, address) != 0) {
-                        throw ZlinkException.fromLastError(
-                            ErrorCategory.CONFIG);
-                    }
-                }
-                return new ControlWake(reader, writer);
-            } catch (RuntimeException | Error failure) {
-                closeHandle(writer);
-                closeHandle(reader);
-                throw failure;
-            }
-        }
-
-        MemorySegment reader() {
-            return reader;
-        }
-
-        void signal() {
-            if (closed.get() || !signalled.compareAndSet(false, true))
-                return;
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment message = arena.allocate(
-                    NativeLayouts.MESSAGE_LAYOUT);
-                boolean initialized = false;
-                try {
-                    if (NativeMessage.messageInitSize(message, 1) != 0) {
-                        throw ZlinkException.fromLastError(
-                            ErrorCategory.CONFIG);
-                    }
-                    initialized = true;
-                    NativeMessage.messageData(message).reinterpret(1)
-                        .set(ValueLayout.JAVA_BYTE, 0, (byte) 1);
-                    int result = Native.sendPart(writer, message,
-                        SendFlags.NONE.value(), Native.PART_FINAL,
-                        MemorySegment.NULL, MemorySegment.NULL);
-                    initialized = false;
-                    if (result != SubmitResult.OK.value()) {
-                        throw new ZlinkSubmitException(
-                            SubmitResult.fromValue(result), Native.errno());
-                    }
-                } finally {
-                    if (initialized)
-                        NativeMessage.messageClose(message);
-                }
-            } catch (RuntimeException | Error failure) {
-                signalled.set(false);
-                throw failure;
-            }
-        }
-
-        void drain() {
-            if (closed.get())
-                return;
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment message = arena.allocate(
-                    NativeLayouts.MESSAGE_LAYOUT);
-                MemorySegment source = arena.allocate(ValueLayout.ADDRESS);
-                MemorySegment more = arena.allocate(ValueLayout.JAVA_INT);
-                while (true) {
-                    if (NativeMessage.messageInit(message) != 0) {
-                        throw ZlinkException.fromLastError(
-                            ErrorCategory.CONFIG);
-                    }
-                    int result;
-                    int errno;
-                    try {
-                        result = Native.recv(reader, source, message, more,
-                            RECV_DONT_WAIT);
-                        errno = result == RecvResult.OK.value()
-                            ? 0 : Native.errno();
-                    } finally {
-                        NativeMessage.messageClose(message);
-                    }
-                    if (result == RecvResult.NO_DATA.value()) {
-                        signalled.set(false);
-                        return;
-                    }
-                    if (result != RecvResult.OK.value()) {
-                        throw new ZlinkRecvException(
-                            RecvResult.fromValue(result), errno);
-                    }
-                }
-            }
-        }
-
-        @Override
-        public void close() {
-            if (!closed.compareAndSet(false, true))
-                return;
-            closeHandle(writer);
-            closeHandle(reader);
-        }
-
-        private static void setLingerZero(MemorySegment handle) {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment zero = arena.allocate(ValueLayout.JAVA_INT);
-                zero.set(ValueLayout.JAVA_INT, 0, 0);
-                int optionId = SocketOptionRouter.route(
-                    SocketOption.LINGER.getValue(), SocketType.PAIR)
-                    .nativeCommonOptionId();
-                if (Native.setSockOpt(handle, optionId, zero,
-                        ValueLayout.JAVA_INT.byteSize()) != 0) {
-                    throw ZlinkException.fromLastError(ErrorCategory.CONFIG);
-                }
-            }
-        }
-
-        private static void closeHandle(MemorySegment handle) {
-            if (handle != null && handle.address() != 0L)
-                Native.close(handle);
-        }
-    }
-
     private final class Pending<T> {
         private final long token;
         private final PendingKind kind;
@@ -1364,7 +1040,7 @@ final class CompletionOwner implements AutoCloseable {
                 if (kind == PendingKind.REQUEST)
                     requestAdmitted = false;
             }
-            signalPendingChange();
+            signalDrainProgress();
         }
 
         synchronized void markTargetRemoved() {
@@ -1515,7 +1191,7 @@ final class CompletionOwner implements AutoCloseable {
             }
             pending.remove(token, this);
             releaseRetained();
-            signalPendingChange();
+            signalDrainProgress();
 
             Runnable completion = () -> {
                 try {
