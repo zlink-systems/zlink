@@ -38,6 +38,8 @@ internal static class ZLinkSubmitFailureMapper
             $"Mesh submit to {targetDescription} failed with result '{result}'.",
             retryAdvice: result is SubmitResult.NotConnected
                 ? ZLinkRetryAdvice.RetryAfterBackoff
-                : ZLinkRetryAdvice.DoNotRetry);
+                : ZLinkRetryAdvice.DoNotRetry,
+            innerException: new ZlinkSubmitException(
+                (ZlinkSubmitException.ErrorCode)(int)result));
     }
 }

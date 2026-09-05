@@ -211,11 +211,11 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw CreateActorCreationDeadlineException(actorId);
+            throw CreateActorCreationUnavailableException(actorId);
         }
         catch (TimeoutException error) when (!cancellationToken.IsCancellationRequested)
         {
-            throw CreateActorCreationDeadlineException(actorId, error);
+            throw CreateActorCreationUnavailableException(actorId, error);
         }
     }
 
@@ -254,8 +254,6 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         var applicationHash = System.Security.Cryptography.SHA256.HashData(applicationPayload);
         var contentReference = ZLinkInlineCreationIntentCodec.Encode(applicationPayload);
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
-        var unavailablePeerEpochs =
-            new HashSet<ZLinkMeshNodeTargetAvailability.PeerEpoch>();
         var reservationRefreshAttempt = 0;
         var joinRetryAttempt = 0;
         while (true)
@@ -299,8 +297,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     .ToList();
                 eligible = FilterRouteReadyCandidates(
                     source,
-                    placementEligible,
-                    unavailablePeerEpochs);
+                    placementEligible);
                 continue;
             }
             var owner = new ZLinkLocationOwnerToken(target.OwnerId, target.LeaseGeneration);
@@ -406,8 +403,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     .ToList();
                 eligible = FilterRouteReadyCandidates(
                     source,
-                    placementEligible,
-                    unavailablePeerEpochs);
+                    placementEligible);
                 continue;
             }
             if (reserve is not ZLinkObjectReserveResult.Reserved reserved)
@@ -435,96 +431,42 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     ZLinkFrameworkDebugLog.SpotDiscovery(
                         $"actor_create_local actor={actorId} target={target.Rid} "
                         + $"generation={target.LifecycleGeneration}");
-                    var local = await source.CreateActorLocalAsync(
-                            actorId,
-                            actorType,
-                            fence,
-                            deadlineUnixMs,
-                            deadline.Token)
-                        .ConfigureAwait(false);
-                    return DecodeRemoteResult(local.Completion, local.Reply);
-                }
-
-                var remote = await CreateRemoteAfterAdmissionAsync()
-                    .ConfigureAwait(false);
-                return DecodeRemoteResult(remote.Completion, remote.Reply);
-
-                async ValueTask<(
-                    ActorCreateCompletion Completion,
-                    IReadOnlyList<Message> Reply)> CreateRemoteAfterAdmissionAsync()
-                {
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"actor_create_remote actor={actorId} source={source.Node.RoutingId} "
-                        + $"target={target.Rid} generation={target.LifecycleGeneration}");
-                    while (true)
+                    try
                     {
-                        var remaining = deadlineAt - DateTimeOffset.UtcNow;
-                        if (remaining <= TimeSpan.Zero)
-                        {
-                            await store.AbortAsync(
-                                    reservation,
-                                    CancellationToken.None)
-                                .ConfigureAwait(false);
-                            throw new TimeoutException(
-                                "The Actor create deadline elapsed.");
-                        }
-                        try
-                        {
-                            return await source.Node.CreateActorRemoteAsync(
-                                    target.Rid,
-                                    actorId,
-                                    actorType,
-                                    fence,
-                                    deadlineUnixMs,
-                                    remaining,
-                                    deadline.Token)
-                                .ConfigureAwait(false);
-                        }
-                        catch (ZlinkSubmitException error)
-                            when (error.Result == ZlinkSubmitException.ErrorCode.NotConnected)
-                        {
-                            // A submitted actor-create found that this exact
-                            // admitted peer has no usable route. Do not demote
-                            // the Mesh peer here; exclude its current epoch
-                            // from this operation's next selection and let the
-                            // existing reconciliation path choose a fallback
-                            // or wait for a new peer epoch.
-                            if (ZLinkMeshNodeTargetAvailability.TryGetAdmittedPeerEpoch(
-                                    target.Rid,
-                                    target.LifecycleGeneration,
-                                    source.Node.MeshPeers(),
-                                    out var unavailablePeerEpoch))
-                                unavailablePeerEpochs.Add(unavailablePeerEpoch);
-                            throw new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.Unavailable,
-                                $"Actor create target '{target.Rid}' is not connected.",
-                                ZLinkRetryAdvice.RetryAfterBackoff,
-                                error);
-                        }
-                        catch (ZlinkSubmitException error)
-                            when (error.Result == ZlinkSubmitException.ErrorCode.Backpressured)
-                        {
-                            // Backpressure doesn't disprove transport
-                            // availability, so preserve the reservation and
-                            // retry source-local admission against this target.
-                            try
-                            {
-                                await Task.Delay(
-                                        TimeSpan.FromMilliseconds(2),
-                                        deadline.Token)
-                                    .ConfigureAwait(false);
-                            }
-                            catch (OperationCanceledException)
-                            {
-                                await store.AbortAsync(
-                                        reservation,
-                                        CancellationToken.None)
-                                    .ConfigureAwait(false);
-                                throw;
-                            }
-                        }
+                        var local = await source.CreateActorLocalAsync(
+                                actorId,
+                                actorType,
+                                fence,
+                                deadlineUnixMs,
+                                deadline.Token)
+                            .ConfigureAwait(false);
+                        return DecodeRemoteResult(local.Completion, local.Reply);
+                    }
+                    catch (OperationCanceledException error)
+                        when (!cancellationToken.IsCancellationRequested)
+                    {
+                        throw CreateActorCreationDeadlineException(actorId, error);
                     }
                 }
+
+                var remaining = deadlineAt - DateTimeOffset.UtcNow;
+                if (remaining <= TimeSpan.Zero)
+                    throw CreateActorCreationUnavailableException(actorId);
+                // The mesh durable sender keeps this reservation's encoded
+                // OperationId until a terminal or the original deadline.
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"actor_create_remote actor={actorId} source={source.Node.RoutingId} "
+                    + $"target={target.Rid} generation={target.LifecycleGeneration}");
+                var remote = await source.Node.CreateActorRemoteAsync(
+                        target.Rid,
+                        actorId,
+                        actorType,
+                        fence,
+                        deadlineUnixMs,
+                        remaining,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                return DecodeRemoteResult(remote.Completion, remote.Reply);
             }
             catch (ZlinkSubmitException)
             {
@@ -544,40 +486,24 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     .ConfigureAwait(false);
                 throw;
             }
-            catch (ZLinkFrameworkException exception)
+            catch (ZLinkFrameworkException)
             {
                 await store.AbortAsync(reservation, CancellationToken.None)
                     .ConfigureAwait(false);
-                if (exception.Kind is not
-                    (ZLinkFrameworkErrorKind.Unavailable
-                    or ZLinkFrameworkErrorKind.CapacityExceeded
-                    or ZLinkFrameworkErrorKind.DeadlineExceeded))
-                    throw;
-
-                // A remote target can be selected from a fresh Store snapshot
-                // while its reverse peer admission is still converging. The
-                // reservation belongs to this attempt, so close it before
-                // refreshing candidates and retrying within the caller's
-                // absolute deadline.
-                reservationRefreshAttempt++;
-                descriptors = await ListLiveMeshNodesAsync(
-                        selectedMesh,
-                        deadline.Token)
-                    .ConfigureAwait(false);
-                placementEligible = descriptors
-                    .Where(candidate => IsEligibleCandidate(candidate, actorType))
-                    .OrderBy(
-                        static candidate => candidate.Rid,
-                        ZLinkRoutingIdOrder.Instance)
-                    .ToList();
-                eligible = FilterRouteReadyCandidates(
-                    source,
-                    placementEligible,
-                    unavailablePeerEpochs);
-                continue;
+                // A received Failed terminal also ends the operation. Target
+                // reselection here would create a different durable identity.
+                throw;
             }
         }
     }
+
+    private static ZLinkFrameworkException CreateActorCreationUnavailableException(
+        string actorId,
+        Exception? innerException = null) =>
+        new(ZLinkFrameworkErrorKind.Unavailable,
+            $"Actor '{actorId}' creation was not admitted before its deadline.",
+            ZLinkRetryAdvice.RetryAfterBackoff,
+            innerException);
 
     internal static ZLinkFrameworkException CreateActorCreationDeadlineException(
         string actorId,

@@ -19,7 +19,7 @@ using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class StatefulServiceRuntimeTests
+public sealed partial class StatefulServiceRuntimeTests
 {
     [Fact]
     public void ActorCreationWireAndDurableTerminalPreserveIdentityAndRejectedReply()

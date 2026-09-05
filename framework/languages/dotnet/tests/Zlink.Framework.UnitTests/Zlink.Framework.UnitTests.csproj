@@ -141,6 +141,8 @@
         <Compile Include="Runtime/ServiceWireRelocationCodecTests.cs"/>
         <Compile Include="Runtime/ServiceWireSessionRelocationCodecTests.cs"/>
         <Compile Include="Runtime/StatefulServiceRuntimeTests.cs"/>
+        <Compile Include="Runtime/DurableSenderRuntimeTests.cs"/>
+        <Compile Include="Runtime/DurableRequestTests.cs"/>
         <Compile Include="Runtime/StoreRecordGoldenTests.cs"/>
         <Compile Include="Runtime/SessionActorCoordinatorTests.cs"/>
         <Compile Include="Runtime/StreamWireInteropTests.cs"/>

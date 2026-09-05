@@ -1,0 +1,31 @@
+# Job (Core, model astra): releasing the last completion poller must not restart the async executor on a socket whose close was already accepted (zlink_close hang, cpp samples exit 137)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §2/§3/§4 (가장 단순한 근본 수정, 중복 금지),
+`CONTRIBUTING.ko.md` §4/§5, and the approved diagnosis `doc/plan/c016-worklog/diag-cpp-sample-cleanup-137.md` (§정확한
+재활성화 경로, §공개 API 재현과 회귀 제안). Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do not commit. WORK
+ONLY IN `/home/hep7/project/zlink-core-b` (detached at main HEAD, which includes 7cbf12de41): `cd /home/hep7/project/zlink-core-b &&
+nice -n 10 env JOBS=4 scripts/build-core.sh dev`. Never touch main's `core/build-dev` or `/home/hep7/project/zlink-core-a`.
+
+## Approved diagnosis (class B, Core regression exposed by 7cbf12de41)
+During close, the C++ binding's completion thread destroys its poller → `release_completion_poller` (`socket_base_dispatch.cpp:289`)
+drops the reference 1→0 and unconditionally calls `resume_completion_processing_if_needed` (`socket_base_api.cpp:926-950`), which
+does not check close admission and, with a pending WRITABLE wait, calls `ensure_completion_processing` (`:177`) →
+`start_async_mailbox_processing` (`socket_base_lifecycle.cpp:890` → `socket_lifecycle_runtime.cpp:580-586`), which resets
+`async_processing_done=false` / `async_quiesce_completed=false`; the close waiter (`:644-655`) then waits behind the new executor
+forever (public_api_state closing bit set, previous handoff already complete; sometimes the reaper already owns the socket).
+Public C API repro: 300/300 before 7cbf12de41, hangs on the first run after (no framework, no tcp, no ROUTER). Spec: socket
+README §6 `zlink_close` (:601-621), 05-polling §3 (:43-49) and §5 (:127-136), 01-context §3.
+
+## What to do (simplest root fix, no new state)
+1. Do not start (or resume) an async executor once close has been accepted: the check belongs where executors are started
+   (`ensure_completion_processing` / `resume_completion_processing_if_needed`), using the existing closing state — not a new
+   flag, not a changed wait predicate (that would leave executor and reaper co-owning). Keep the 7cbf12de41 monitor-lease
+   behaviour (its contract test `test_disconnect_progress` must stay green).
+2. Contract test from the diagnosis' public API sequence (with and without a monitor; with a pending WRITABLE wait):
+   `zlink_close` returns within a bounded time, 20 reps; add to `core/tests/integration/`.
+3. Gate: full `ctest -j2` + §5 checks; then the cpp samples TicTacToe and Bingo 3× each against THIS worktree's library
+   (point `LD_LIBRARY_PATH` at `/home/hep7/project/zlink-core-b/core/build-dev/lib` for the existing
+   `framework/languages/cpp/build/linux-ninja-c-e2e` binaries, `ZLINK_CPP_BUILD_DIR=...`, `TMPDIR=/dev/shm/zlink-tmp-cpp`) —
+   expect clean exit (no 137).
+4. Deliverable: `doc/plan/c016-worklog/core-close-completion-release-restart-summary.md` in the MAIN tree: cause sites, diff
+   summary, test names/counts, sample exits, BLOCKERS. Leave the diff uncommitted in the worktree.
