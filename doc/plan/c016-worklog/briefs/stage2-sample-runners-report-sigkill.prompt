@@ -1,0 +1,27 @@
+# Job (STAGE 2, harness, model sol): dotnet and node sample runners must report a role process that had to be SIGKILLed as a failure
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3/§4. Never modify `core/**`, `bindings/**`, any
+`doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, framework runtime sources, or sample application code; do not commit.
+Harness-only change (runner scripts) in `framework/languages/dotnet/samples/**` (`run_samples.sh`, `sample_runner.ps1`,
+`redis-common.sh` if relevant) and `framework/languages/node/samples/**` (`run-sample.mjs`, `run_samples.sh`). Env: dotnet env
+block (`TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib ...`, `flock -w7200
+/tmp/zlink-dotnet-gate.lock`), node (`TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200
+/tmp/zlink-node-gate.lock`). Another node job edits `packages/framework/**` — you only touch runner scripts.
+
+## Facts (`doc/plan/c016-worklog/diag-cpp-sample-cleanup-137.md` §교차언어 종료 결과)
+The cpp and java runners report exit 137 / `TEARDOWN_FAILED` when a role process must be SIGKILLed at cleanup; the dotnet and
+node runners print the completion marker and exit 0 even though a role was SIGKILLed, hiding a teardown defect (that is how a
+Core close hang, D-089, went unnoticed in those languages). AGENTS §4: do not mask failures.
+
+## What to do
+1. In the dotnet and node runners, after the graceful stop deadline, treat any role that did not exit on its own (had to be
+   SIGKILLed, or exited 137/-9) as a runner failure: non-zero exit, a clear line naming the role, no completion marker — the
+   same semantics the cpp/java runners already have (`runner-common.sh` java: `Sample process <pid> exited during cleanup with
+   status …`). Do not change timeouts; do not add retries.
+2. Verify: run TicTacToe and Bingo for dotnet and node 1× each (they should still pass if teardown is clean on the current
+   packages; if a role is SIGKILLed the runner must now fail — report that honestly with the role name, do not mitigate).
+3. Contract tests that pin runner behaviour (node `test/contract/sample-*` runner tests; dotnet `SampleRegressionTests`) must
+   stay green or be updated to the new failure semantics only.
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-sample-runners-report-sigkill-summary.md`: diff per runner, results, BLOCKERS.

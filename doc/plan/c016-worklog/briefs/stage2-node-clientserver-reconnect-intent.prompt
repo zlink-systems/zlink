@@ -1,0 +1,25 @@
+# Job (STAGE 1+2, model astra): node ClientServer — remove the manual re-registration after close; rely on Core's connect intent / auto reconnect
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·원칙이 단순해지는 근본 수정·중복 금지),
+`framework/AGENTS.md`, `doc/plan/c016-worklog/review-layer-ownership-audit.md` §4 (Concern 2, node row: `channel-socket-registry.ts:879`
+re-registers manually after a close) and the dotnet counterpart just committed (`05b53a8098`, `stage2-dotnet-clientserver-second-poller-removal-2-summary.md`).
+Lower-layer contracts: Core `0c39ed2e52` (disconnect terminal + reconnect READY progress without an application poll), `7cbf12de41`
+(monitor command lease), spec `05-transport-liveness` as amended (3a2ada8187: request termination at endpoint level, observe that
+endpoint's close, connection_id diagnostic only; Core owns physical pipe replacement), core socket README §4/§6. Never modify
+`core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion;
+do not commit. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200
+/tmp/zlink-node-gate.lock`. Packages rebuilt 10:55; do not rebuild. STOP only for a Core/binding defect.
+
+## Stage 1 (write `doc/plan/c016-worklog/stage2-node-clientserver-reconnect-intent-diagnosis.md` first)
+Inventory every site in the node ClientServer client path that decides reconnect / re-registration / admission retry after a
+close or a malformed pushed control (`channel-socket-registry.ts` :879 and around :1253-1295 invalid pushed control handling,
+liveness reconnect), the owner per spec, and what remains framework-owned (handshake re-run, liveness deadline, endpoint-level
+termination request + close observation). Rule count before/after.
+## Stage 2
+Delete the manual re-registration and any retry loop that re-implements Core's connect intent; keep the handshake re-run after
+the observed physical reconnect. Regression: a contract test that after a malformed pushed control the client requests
+endpoint termination, observes the close, and re-admits over Core's reconnected pipe without any framework `connect` loop.
+Verify: touched contract files, `npm run typecheck`, lint on touched files, full `npm test` once, samples SupportChat.Ts +
+ShoppingMall.Ts 1×.
+## Deliverable
+`doc/plan/c016-worklog/stage2-node-clientserver-reconnect-intent-summary.md`: diff, the four lines + rule count, results, BLOCKERS.
