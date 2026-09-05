@@ -660,6 +660,26 @@ void raw_mesh_node_owner_t::start ()
     }).get ();
 }
 
+task_t<void> raw_mesh_node_owner_t::publish_draining ()
+{
+    const auto publication = _lane.run ([this] {
+        auto descriptor = _topology.local_descriptor ();
+        if (descriptor.state != service_node_state_t::draining) {
+            if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
+                throw std::overflow_error ("service descriptor revision is exhausted");
+            descriptor.state = service_node_state_t::draining;
+            ++descriptor.descriptor_revision;
+            _topology.publish_local (descriptor);
+        }
+        return std::pair{std::move (descriptor), _topology.peers ()};
+    }).get ();
+    for (const auto &peer : publication.second) {
+        (void) co_await send_header_only (
+          peer.descriptor.node_routing_id,
+          protocol::encode_route_mesh_admission (protocol::command::update, publication.first));
+    }
+}
+
 void raw_mesh_node_owner_t::close () noexcept
 {
     std::shared_ptr<detail::backend::raw_route_port_t> port;
@@ -1181,9 +1201,10 @@ void raw_mesh_node_owner_t::trace_admission_phase (
   protocol::command command,
   peer_admission_result_t result)
 {
-    if (result == peer_admission_result_t::not_required) {
+    if (!mesh_trace_enabled ()
+        || (result != peer_admission_result_t::admitted
+            && result != peer_admission_result_t::duplicate_connection))
         return;
-    }
     const auto peer = _topology.peer (node_routing_id);
     const auto peer_generation =
       peer ? peer->descriptor.lifecycle_generation : 0;
@@ -1193,16 +1214,13 @@ void raw_mesh_node_owner_t::trace_admission_phase (
       + " result=" + std::to_string (static_cast<int> (result))
       + " peer=" + (peer ? std::string ("present") : "absent")
       + " peerGeneration=" + std::to_string (peer_generation);
-    if (command == protocol::command::hello
-        && result == peer_admission_result_t::admitted) {
+    if (command == protocol::command::hello) {
         trace_mesh (
           "handshake phase=local-admission-awaiting-remote-admit"
           + admission_context);
         return;
     }
-    if (command != protocol::command::admit
-        || (result != peer_admission_result_t::admitted
-            && result != peer_admission_result_t::duplicate_connection))
+    if (command != protocol::command::admit)
         return;
     if (lifecycle_generation != 0)
         trace_mesh ("handshake phase=bilateral-ready" + admission_context);
@@ -2894,18 +2912,8 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 }
                 co_return raw_mesh_pump_result_t::infrastructure;
             }
-            if (admission
-                == peer_admission_result_t::duplicate_connection) {
-                if (header.kind == protocol::command::hello) {
-                    (void) co_await send_header_only (
-                      received->source_routing_id,
-                      protocol::encode_route_mesh_admission (
-                        protocol::command::admit,
-                        committed.local));
-                }
-                co_return raw_mesh_pump_result_t::infrastructure;
-            }
-            if (admission != peer_admission_result_t::admitted) {
+            if (admission != peer_admission_result_t::admitted
+                && admission != peer_admission_result_t::duplicate_connection) {
                 const auto reason =
                   admission == peer_admission_result_t::mesh_mismatch ? 2u
                   : admission == peer_admission_result_t::stale_descriptor
@@ -3894,7 +3902,9 @@ task_t<std::size_t> raw_mesh_node_owner_t::drain_monitor_events (
                 value.local = _topology.local_descriptor ();
                 return value;
             }).get ();
-            if (ready.port) {
+            if (ready.port
+                && !(_options.shutdown_admission_seal
+                     && _options.shutdown_admission_seal->load (std::memory_order_acquire))) {
                 try {
                     (void) co_await send_header_only (
                       node_routing_id,

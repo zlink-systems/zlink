@@ -281,6 +281,13 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                 return std::pair{peer_admission_result_t::not_required, _change_handler};
             }
 
+            if (admitted != _peers.end ()
+                && admitted->second.connection_id == connection_id
+                && admitted->second.descriptor == descriptor) {
+                return std::pair{peer_admission_result_t::duplicate_connection,
+                                 std::function<void ()>{}};
+            }
+
             if (direction.has_value () && admitted != _peers.end ()
                 && admitted->second.descriptor.lifecycle_generation
                      == descriptor.lifecycle_generation

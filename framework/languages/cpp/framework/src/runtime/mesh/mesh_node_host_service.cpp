@@ -2490,11 +2490,14 @@ void mesh_node_host_service_t::visit_relocation_nodes (
 bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state_t state) noexcept
 {
     std::lock_guard lock (_descriptor_publish_mutex);
-    const auto owner = current_location_owner ();
-    if (!_location_store || !owner) {
-        return _published_mesh_descriptors.empty ();
-    }
     try {
+        if (state == framework_runtime_state_t::draining) {
+            for (const auto &node : _nodes)
+                node->native_node ().transport ().publish_draining ().result ().value ();
+        }
+        const auto owner = current_location_owner ();
+        if (!_location_store || !owner)
+            return _published_mesh_descriptors.empty ();
         for (std::size_t index = 0; index < _published_mesh_descriptors.size ();) {
             auto current = _published_mesh_descriptors[index];
             location_page_request_t page;
