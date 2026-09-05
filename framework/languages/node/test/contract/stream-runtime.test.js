@@ -1184,7 +1184,7 @@ test('fire-and-forget remote actor session bind retry exhaustion reports a typed
   relay.retryRemoteSessionBindingSend(
     { routerChannelId: 'actor.route', targetNodeRid: 'actor-node', spotId: 'actor-node' },
     { actorId: 'actor-bind-deadline' },
-    Date.now() - 1,
+    performance.now() - 1,
     1
   );
   await new Promise((resolve) => setImmediate(resolve));

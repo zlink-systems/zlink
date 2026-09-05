@@ -969,7 +969,7 @@ export class ZLinkFrameworkRuntimeHost implements
       this.runtimeDeadline = new Date(Date.now() + deadlineMs);
       this.relocationStopStarting?.abort(new Error('Shutdown requested.'));
       this.shutdownOperationStartedAt = performance.now();
-      this.shutdownOperation = this.runShutdown(this.runtimeDeadline);
+      this.shutdownOperation = this.runShutdown(deadlineMs);
     }
     return waitForRuntimeOperation(this.shutdownOperation, options?.signal);
   }
@@ -987,8 +987,8 @@ export class ZLinkFrameworkRuntimeHost implements
         ZLinkFrameworkRelocationReason.RuntimeNotReady
       ));
     }
-    const deadlineAtMs = Date.now() + deadlineMs;
-    const remainingDeadlineMs = () => Math.max(1, deadlineAtMs - Date.now());
+    const deadlineAtMs = performance.now() + deadlineMs;
+    const remainingDeadlineMs = () => Math.max(1, deadlineAtMs - performance.now());
     try {
       // Runtime weight changes publish a newer descriptor asynchronously. A
       // maintenance operation must observe that publication before it writes
@@ -1059,7 +1059,8 @@ export class ZLinkFrameworkRuntimeHost implements
     }
   }
 
-  private async runShutdown(deadline: Date): Promise<ZLinkFrameworkTerminationResult> {
+  private async runShutdown(deadlineMs: number): Promise<ZLinkFrameworkTerminationResult> {
+    const deadlineAtMs = performance.now() + deadlineMs;
     try {
       this.admission.close();
       this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
@@ -1071,7 +1072,11 @@ export class ZLinkFrameworkRuntimeHost implements
       // host no longer accepts work. This prevents status polling from racing
       // with the coordinator's synchronous seal step.
       const unscopedStreamDrain = this.streamRuntime?.notifyUnscopedServerDrain();
-      const shutdown = this.routeMeshCoordinator.shutdownHost(deadline);
+      const shutdown = this.routeMeshCoordinator.shutdownHost(
+        this.runtimeDeadline!,
+        undefined,
+        Math.max(0, deadlineAtMs - performance.now())
+      );
       const drain = await shutdown;
       await unscopedStreamDrain;
       await this.stop();
@@ -1083,7 +1088,7 @@ export class ZLinkFrameworkRuntimeHost implements
             : ZLinkFrameworkTerminationReason.TeardownFailed
         });
       }
-      if (Date.now() >= deadline.getTime()) {
+      if (performance.now() >= deadlineAtMs) {
         throw createDeadlineExceededError('Shutdown resource cleanup exceeded its deadline.');
       }
       return this.completeTermination({
@@ -1807,7 +1812,7 @@ export class ZLinkFrameworkRuntimeHost implements
     if (location === undefined) return ZLinkFrameworkRelocationReason.StoreUnavailable;
 
     let storeUnavailable = false;
-    while (Date.now() < deadlineAt) {
+    while (performance.now() < deadlineAt) {
       try {
         if (await this.hasExactAutomaticPeerReadiness(
           location,
@@ -1822,7 +1827,7 @@ export class ZLinkFrameworkRuntimeHost implements
         Math.min(
           this.options.registration.locations.options.pollingIntervalMs
             ?? zlinkDefaultLocationOptions.pollingIntervalMs,
-          Math.max(1, deadlineAt - Date.now())
+          Math.max(1, deadlineAt - performance.now())
         )
       ));
     }

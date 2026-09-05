@@ -227,3 +227,48 @@ test('command 48 exhaustion is DeadlineExceeded after an admitted reply is withh
     runtime.close();
   }
 });
+
+for (const wallJumpMs of [60_000, -60_000]) {
+  test(`durable operation preserves its budget and wire deadline across a ${wallJumpMs} ms clock jump`, async (t) => {
+    const wallNow = Date.now();
+    const deadlineUnixMs = BigInt(wallNow + 500);
+    let elapsedMs = 0;
+    t.mock.method(performance, 'now', () => elapsedMs);
+    const requests: Buffer[] = [];
+    const budgets: number[] = [];
+    const raw = {
+      setServiceIngress() {},
+      async requestService(_target: string, parts: readonly Uint8Array[], timeoutMs: number) {
+        requests.push(Buffer.from(parts[0]!));
+        budgets.push(timeoutMs);
+        if (requests.length === 1) {
+          elapsedMs += 40;
+          t.mock.method(Date, 'now', () => wallNow + wallJumpMs);
+          throw new Error('lost reply');
+        }
+        const record = decodeStatefulHeader(requests[1]!);
+        assert.equal(record.kind, 'userSpotClose');
+        return [encodeStatefulReply(record.correlation, RequestResult.Ok, 0,
+          { kind: 'userSpotClose', closed: true })];
+      }
+    } as unknown as RawServiceMeshRuntime;
+    const runtime = new ServiceStatefulRuntime(raw, 'source-node', 17n);
+    t.after(() => runtime.close());
+    const result = await runtime.requestUserSpotClose('target-node', {
+      sourceNodeRid: 'source-node',
+      sourceNodeGeneration: 17n,
+      target: {
+        spotId: 'clock-jump-spot', objectGeneration: 19n,
+        targetNodeRid: 'target-node', targetNodeGeneration: 23n,
+        authorityOwnerGeneration: 29n, expectedStoreVersion: 'version-31'
+      },
+      deadlineUnixMs
+    }, 500);
+    assert.equal(result.terminalResult, RequestResult.Ok);
+    assert.deepEqual(budgets, [500, 460]);
+    assert.deepEqual(requests[1], requests[0]);
+    const record = decodeStatefulHeader(requests[0]!);
+    assert.equal(record.kind, 'userSpotClose');
+    if (record.kind === 'userSpotClose') assert.equal(record.deadlineUnixMs, deadlineUnixMs);
+  });
+}

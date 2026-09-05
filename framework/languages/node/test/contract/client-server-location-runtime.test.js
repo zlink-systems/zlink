@@ -1759,15 +1759,15 @@ test('ClientServer send target waits for admission already in flight instead of 
   assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
   assert.equal(created.length, 1);
 
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   let admittedAfterMs;
   const admission = setTimeout(() => {
-    admittedAfterMs = Date.now() - startedAt;
+    admittedAfterMs = performance.now() - startedAt;
     sockets.admitClientServerConnection(discoveryDescriptor('server-a', 100), 'orders-a:7');
   }, 40);
   const selected = await sockets.awaitClientDealerForOutbound('orders');
   clearTimeout(admission);
-  const elapsed = Date.now() - startedAt;
+  const elapsed = performance.now() - startedAt;
 
   assert.equal(selected, dealer);
   // A wait that did not yield to the event loop would starve this timer, which stands in for the
@@ -1785,9 +1785,9 @@ test('ClientServer send target waits the Channel request timeout when only a wei
   sockets.admitClientServerConnection(discoveryDescriptor('server-a', 0), 'orders-a:7');
   assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
 
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   const selected = await sockets.awaitClientDealerForOutbound('orders');
-  const elapsed = Date.now() - startedAt;
+  const elapsed = performance.now() - startedAt;
 
   assert.equal(selected, undefined);
   assert.ok(elapsed >= 120, `expected the configured request timeout to bound the wait, waited ${elapsed}ms`);
@@ -1798,15 +1798,38 @@ test('ClientServer send target waits the Channel request timeout when only a wei
 test('ClientServer send target caps the readiness wait at five seconds', async () => {
   const { sockets } = readyWaitSockets(60_000);
 
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   const selected = await sockets.awaitClientDealerForOutbound('orders');
-  const elapsed = Date.now() - startedAt;
+  const elapsed = performance.now() - startedAt;
 
   assert.equal(selected, undefined);
   assert.ok(elapsed >= 5_000, `expected the five second cap to bound the wait, waited ${elapsed}ms`);
   assert.ok(elapsed < 8_000, `expected the cap to end the wait, waited ${elapsed}ms`);
   await sockets.dispose();
 });
+
+for (const [direction, jumpMs] of [['forward', 10_000], ['backward', -10_000]]) {
+  test(`ClientServer readiness cap survives a wall-clock jump ${direction}`, { timeout: 10_000 }, async (t) => {
+    const { sockets } = readyWaitSockets(60_000);
+    const wallNow = Date.now.bind(Date);
+    let offsetMs = 0;
+    t.mock.method(Date, 'now', () => wallNow() + offsetMs);
+    const jump = setTimeout(() => { offsetMs = jumpMs; }, 40);
+    t.after(async () => {
+      clearTimeout(jump);
+      await sockets.dispose();
+    });
+
+    const startedAt = performance.now();
+    const selected = await sockets.awaitClientDealerForOutbound('orders', t.signal);
+    const elapsed = performance.now() - startedAt;
+
+    assert.equal(offsetMs, jumpMs);
+    assert.equal(selected, undefined);
+    assert.ok(elapsed >= 5_000, `expected the five second cap to bound the wait, waited ${elapsed}ms`);
+    assert.ok(elapsed < 8_000, `expected the cap to end the wait, waited ${elapsed}ms`);
+  });
+}
 
 test('ClientServer outbound reports no selectable target as RequestTargetNotFound', async () => {
   const registration = internal.createFrameworkRegistration({

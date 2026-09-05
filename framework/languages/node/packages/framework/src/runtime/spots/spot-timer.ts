@@ -257,7 +257,8 @@ export class ZLinkManagedTimer implements ZLinkTimer {
   private readonly lane = new ZLinkStateLane();
   private disposed = false;
   private pausedForRelocation = false;
-  private startedAtMs = Date.now();
+  private startedAtMs = performance.now();
+  private startedAtUnixMs = Date.now();
   private deliveryIndex = 0n;
   private lastScheduledIndex = 0n;
   private timeout: NodeJS.Timeout | undefined;
@@ -297,10 +298,10 @@ export class ZLinkManagedTimer implements ZLinkTimer {
       overrunPolicy: this.options.overrunPolicy,
       maxCatchUpTicks: this.options.maxCatchUpTicks,
       stopOnUnhandledException: this.options.stopOnUnhandledException,
-      startedAtUnixMs: this.startedAtMs,
+      startedAtUnixMs: this.startedAtUnixMs,
       deliveryIndex: this.deliveryIndex,
       lastScheduledIndex: this.lastScheduledIndex,
-      nextDueAtUnixMs: this.startedAtMs + Number(this.lastScheduledIndex + 1n) * this.periodMs,
+      nextDueAtUnixMs: this.startedAtUnixMs + Number(this.lastScheduledIndex + 1n) * this.periodMs,
       pendingTicks: []
     }));
   }
@@ -326,7 +327,8 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     }
     if (this.timeout !== undefined) clearTimeout(this.timeout);
     this.timeout = undefined;
-    this.startedAtMs = state.startedAtUnixMs;
+    this.startedAtUnixMs = state.startedAtUnixMs;
+    this.startedAtMs = performance.now() - Math.max(0, Date.now() - state.startedAtUnixMs);
     this.deliveryIndex = state.deliveryIndex;
     this.lastScheduledIndex = state.lastScheduledIndex;
     this.pausedForRelocation = false;
@@ -402,8 +404,8 @@ export class ZLinkManagedTimer implements ZLinkTimer {
         deliveryIndex: this.deliveryIndex,
         scheduledIndex,
         periodMs: this.periodMs,
-        scheduledAt: new Date(this.startedAtMs + scheduledElapsedMs),
-        startedAt: new Date(this.startedAtMs + startedElapsedMs),
+        scheduledAt: new Date(this.startedAtUnixMs + scheduledElapsedMs),
+        startedAt: new Date(),
         scheduledElapsedMs,
         startedElapsedMs,
         delayMs: startedElapsedMs - scheduledElapsedMs,
@@ -441,7 +443,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
   }
 
   private elapsedMs(): number {
-    return Date.now() - this.startedAtMs;
+    return performance.now() - this.startedAtMs;
   }
 }
 

@@ -1007,7 +1007,7 @@ test('remote User Spot target executes once and rewrites correlation on terminal
     runtime as unknown as {
       admittedUserSpotOperations: Map<string, {
         readonly request: string;
-        readonly deadlineUnixMs: bigint;
+        readonly replayExpiresAtMs: number;
         readonly result: Promise<unknown>;
         settled: boolean;
       }>;
@@ -1016,7 +1016,7 @@ test('remote User Spot target executes once and rewrites correlation on terminal
   for (let index = terminalTable.size; index < 65_536; index++) {
     terminalTable.set(`occupied-${index}`, {
       request: 'occupied',
-      deadlineUnixMs: BigInt(Date.now() + 10_000),
+      replayExpiresAtMs: performance.now() + 10_000,
       result: new Promise(() => undefined),
       settled: false
     });
@@ -1040,7 +1040,31 @@ test('remote User Spot target executes once and rewrites correlation on terminal
     RequestResult.Busy
   );
   const originalDateNow = Date.now;
-  Date.now = () => originalDateNow() + 5 * 60_000 + 1_000;
+  try {
+    for (const wallJumpMs of [5 * 60_000 + 1_000, -5 * 60_000 - 1_000]) {
+      Date.now = () => originalDateNow() + wallJumpMs;
+      assert.equal(await ingress({
+        command: M6bServiceWireCommand.userSpotCreate,
+        flags: 0,
+        sourceRoutingId: 'source',
+        requestSequence: 7n,
+        parts: [encodeUserSpotCreateHeader({ ...request, correlation: 42n })]
+      }), 'infrastructure');
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(executions, 1);
+      assert.equal(
+        decodeStatefulReply(replies.pop()![0]!, 42n, 'userSpotCreate').terminalResult,
+        RequestResult.Ok
+      );
+    }
+  } finally {
+    Date.now = originalDateNow;
+  }
+  const originalPerformanceNow = performance.now.bind(performance);
+  Object.defineProperty(performance, 'now', {
+    configurable: true,
+    value: () => originalPerformanceNow() + 5 * 60_000 + 1_000
+  });
   try {
     const retiredReplay = encodeUserSpotCreateHeader({
       ...request,
@@ -1059,7 +1083,7 @@ test('remote User Spot target executes once and rewrites correlation on terminal
       RequestResult.TimedOut
     );
   } finally {
-    Date.now = originalDateNow;
+    Reflect.deleteProperty(performance, 'now');
   }
   runtime.close();
 });

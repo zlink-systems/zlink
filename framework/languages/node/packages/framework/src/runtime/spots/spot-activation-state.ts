@@ -380,7 +380,7 @@ export class ZLinkSpotActivation {
 
   beginIdleEviction(): boolean {
     if (this.idleEvictionRequested || this.closeRequested) return false;
-    if (!this.isIdleFor(Date.now(), 0)) return false;
+    if (!this.isIdleFor(performance.now(), 0)) return false;
     this.idleEvictionRequested = true;
     this.closeRequested = true;
     return true;

@@ -695,7 +695,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     timeoutMs = 30_000,
     nativeActorRef?: ZLinkBackendActorRef
   ): Promise<ZLinkActorLocalCreateResult> {
-    const deadline = Date.now() + timeoutMs;
+    const deadline = performance.now() + timeoutMs;
     const requestedMeshName = this.actorMeshNames.get(actorId);
     for (;;) {
       throwIfAborted(signal);
@@ -763,7 +763,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         createRequest.nativeRequest?.close();
       }
 
-      if (Date.now() >= deadline) {
+      if (performance.now() >= deadline) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
           `Actor '${actorId}' creation did not reach a terminal state before its deadline.`,

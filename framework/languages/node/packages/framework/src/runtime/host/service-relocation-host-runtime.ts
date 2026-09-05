@@ -1125,7 +1125,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const sealTimeoutMs = registration?.locations.options
       .sessionRelocationSealTimeoutMs
       ?? zlinkRuntimeDefaultLocationOptions.sessionRelocationSealTimeoutMs;
-    const resendDeadline = Date.now() + sealTimeoutMs;
+    const resendDeadline = performance.now() + sealTimeoutMs;
     const send = async (): Promise<void> => {
       if (signal?.aborted === true) {
         finish(() => rejectPromise(signal.reason));
@@ -1149,7 +1149,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         }
         return;
       }
-      if (Date.now() >= resendDeadline) {
+      if (performance.now() >= resendDeadline) {
         pending.reject(createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
           `Session relocation seal '${key}' was not acknowledged within the relocation seal timeout.`,
@@ -1203,7 +1203,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         `Session relocation seal '${key}' was not acknowledged within the relocation seal timeout.`,
         true
       )
-    ), Math.max(0, resendDeadline - Date.now()));
+    ), Math.max(0, resendDeadline - performance.now()));
     pending.deadlineTimer.unref();
     abortListener = () => pending.reject(
       signal?.reason ?? createInternalFrameworkException(
@@ -1967,7 +1967,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     relocationDebug('coordinator.begin', { aggregateId: captured.envelope.aggregateId, targetRid: String(target.rid) });
     const localStatus = this.requireMeshNode(meshName).status();
     const controlDeadlineAtMs = signal === undefined
-      ? Date.now() + 30_000
+      ? performance.now() + 30_000
       : Number.MAX_SAFE_INTEGER;
     const coordinator = {
       ownerId: primary.ownerId,
@@ -2026,7 +2026,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     );
     const plan = planRelocationChunks(encoded, chunkLimitBytes);
     const convergenceDeadlineAtMs = signal === undefined
-      ? Date.now() + RELOCATION_OPERATION_RETENTION_MS
+      ? performance.now() + RELOCATION_OPERATION_RETENTION_MS
       : controlDeadlineAtMs;
     let readyReceived = false;
     let sourceCommitted = false;
@@ -2313,7 +2313,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     initialSubmitFailed: boolean,
     limits: ReturnType<ZLinkHostServiceRelocationRuntime['relocationLimits']>
   ): void {
-    const submittedAt = Date.now();
+    const submittedAt = performance.now();
     const window: SourceCutoverWindow = {
       meshName,
       targetNodeRid,
@@ -2341,7 +2341,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // Follow route (spec 30 §7.1).
       this.options.metrics?.duration(
         'zlink.relocation.route_convergence',
-        Math.max(0, Date.now() - submittedAt) / 1000,
+        Math.max(0, performance.now() - submittedAt) / 1000,
         { mesh_name: meshName }
       );
       settle();
@@ -2511,7 +2511,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         prepareFingerprint: fingerprint,
         authenticatedSourceNodeRid: String(sourceNodeRid),
         envelope: inventoryEnvelope,
-        restoreDeadlineAtMs: Date.now() + RELOCATION_OPERATION_RETENTION_MS,
+        restoreDeadlineAtMs: performance.now() + RELOCATION_OPERATION_RETENTION_MS,
         reservation
       };
       const stage: LocalStage = {
@@ -2934,7 +2934,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         }
       }
       if (exact) return;
-      if (Date.now() >= deadlineAtMs) {
+      if (performance.now() >= deadlineAtMs) {
         throw new Error('Relocation target owner was not confirmed before its original deadline.');
       }
       await new Promise<void>(resolve => setTimeout(resolve, 10));
@@ -3254,7 +3254,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     targetNodeRid: RoutingId,
     request: ZLinkServiceRelocationControlRequest,
     signal?: AbortSignal,
-    deadlineAtMs = Date.now() + 30_000,
+    deadlineAtMs = performance.now() + 30_000,
     sideband: readonly Uint8Array[] = []
   ): Promise<ReturnType<typeof decodeServiceRelocationControlResponse>> {
     const key = controlAckKey(request);
@@ -3264,7 +3264,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     let lastRequestError: unknown;
     for (;;) {
       signal?.throwIfAborted();
-      const remainingMs = deadlineAtMs - Date.now();
+      const remainingMs = deadlineAtMs - performance.now();
       if (remainingMs <= 0) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
@@ -3273,8 +3273,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           lastRequestError
         );
       }
-      const attemptTimeoutMs = Math.max(1, Math.min(250, remainingMs));
-      const startedAtMs = Date.now();
+      const attemptTimeoutMs = Math.max(1, Math.min(250, Math.ceil(remainingMs)));
+      const startedAtMs = performance.now();
       try {
         const replyFrames = await this.requestInfrastructureControl(
           meshName,
@@ -3306,8 +3306,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           targetRid: String(targetNodeRid)
         });
         const retryDelayMs = Math.min(
-          Math.max(0, attemptTimeoutMs - (Date.now() - startedAtMs)),
-          Math.max(0, deadlineAtMs - Date.now())
+          Math.max(0, attemptTimeoutMs - (performance.now() - startedAtMs)),
+          Math.max(0, deadlineAtMs - performance.now())
         );
         if (retryDelayMs > 0) {
           await waitForRelocationRetry(retryDelayMs, signal);
@@ -4885,7 +4885,7 @@ async function waitForLocationRetry(
   cause: unknown
 ): Promise<void> {
   signal?.throwIfAborted();
-  if (Date.now() >= deadlineAtMs) {
+  if (performance.now() >= deadlineAtMs) {
     throw new Error(
       'location_update_failed: relocation Restore validity expired before exact target owner confirmation.',
       { cause }
@@ -4901,7 +4901,7 @@ async function waitForLocationRetry(
     timer = setTimeout(() => {
       signal?.removeEventListener('abort', aborted);
       resolve();
-    }, Math.min(25, Math.max(1, deadlineAtMs - Date.now())));
+    }, Math.min(25, Math.max(1, deadlineAtMs - performance.now())));
     timer.unref();
   });
 }

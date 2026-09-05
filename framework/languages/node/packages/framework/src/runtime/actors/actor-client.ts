@@ -208,6 +208,9 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
     const sourceSpotId = currentZLinkActorExecution()?.spotId
       ?? currentZLinkSpotSerialSourceId();
     const effectiveTimeoutMs = timeoutMs ?? this.options.defaultRequestTimeoutMs;
+    const deadlineMs = effectiveTimeoutMs === undefined
+      ? undefined
+      : performance.now() + effectiveTimeoutMs;
     const deadlineUnixMs = effectiveTimeoutMs === undefined
       ? undefined
       : Date.now() + effectiveTimeoutMs;
@@ -273,7 +276,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         }
         const replies = await waitHandoffReply<unknown[]>(
           Promise.all(submissions),
-          remainingActorRequestTimeout(actorId, deadlineUnixMs)
+          remainingActorRequestTimeout(actorId, deadlineMs)
         );
         return replies[0] as TReply;
       }
@@ -281,7 +284,7 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         meshName,
         toBackendActorRef(actor),
         parts,
-        remainingActorRequestTimeout(actorId, deadlineUnixMs),
+        remainingActorRequestTimeout(actorId, deadlineMs),
         signal,
         route,
         messageFollow
@@ -547,9 +550,9 @@ function remoteRelayErrorKind(value: unknown): ZLinkFrameworkInternalErrorKind {
     : ZLinkFrameworkInternalErrorKind.RequestFailed;
 }
 
-function remainingActorRequestTimeout(actorId: string, deadlineUnixMs: number | undefined): number | undefined {
-  if (deadlineUnixMs === undefined) return undefined;
-  const remaining = deadlineUnixMs - Date.now();
+function remainingActorRequestTimeout(actorId: string, deadlineMs: number | undefined): number | undefined {
+  if (deadlineMs === undefined) return undefined;
+  const remaining = deadlineMs - performance.now();
   if (remaining <= 0) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.DeadlineExceeded,

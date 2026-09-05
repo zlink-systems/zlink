@@ -346,14 +346,16 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     return waitForOperation(this.hostOperation, signal);
   }
 
-  shutdownHost(deadline: number | Date = 30_000, signal?: AbortSignal): Promise<ZLinkMeshDrainResult> {
+  shutdownHost(
+    deadline: number | Date = 30_000,
+    signal?: AbortSignal,
+    remainingTimeoutMs?: number
+  ): Promise<ZLinkMeshDrainResult> {
     if (typeof deadline === 'number' && (!Number.isFinite(deadline) || deadline <= 0)) {
       return Promise.reject(new TypeError('Shutdown deadlineMs must be greater than zero.'));
     }
     if (this.shutdownOperation === undefined) {
-      const operation = this.performHostShutdown(
-        deadline instanceof Date ? deadline : new Date(Date.now() + deadline)
-      );
+      const operation = this.performHostShutdown(deadline, remainingTimeoutMs);
       this.shutdownOperation = operation;
       for (const state of this.states.values()) state.operation ??= operation;
     }
@@ -543,7 +545,16 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     return result;
   }
 
-  private async performHostShutdown(deadlineAt: Date): Promise<ZLinkMeshDrainResult> {
+  private async performHostShutdown(
+    cleanupDeadline: Date | number,
+    remainingTimeoutMs?: number
+  ): Promise<ZLinkMeshDrainResult> {
+    const timeoutMs = Math.max(0, remainingTimeoutMs ?? (cleanupDeadline instanceof Date
+      ? cleanupDeadline.getTime() - Date.now()
+      : cleanupDeadline));
+    const deadlineAt = cleanupDeadline instanceof Date
+      ? cleanupDeadline
+      : new Date(Date.now() + cleanupDeadline);
     const entries = [...this.states.entries()];
     if (entries.length === 0) return { kind: 'drained' };
     for (const [, state] of entries) {
@@ -552,7 +563,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     const deadline = new AbortController();
     const timer = setTimeout(
       () => deadline.abort(createDeadlineExceededError('Shutdown deadline exceeded.')),
-      Math.max(0, deadlineAt.getTime() - Date.now())
+      timeoutMs
     );
     let result: ZLinkMeshDrainResult;
     try {

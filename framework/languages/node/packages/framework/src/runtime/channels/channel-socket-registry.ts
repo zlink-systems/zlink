@@ -646,15 +646,16 @@ export class ZLinkChannelSocketRegistry {
     channelName: string,
     signal?: AbortSignal
   ): Promise<ZLinkBackendDealerSocket | undefined> {
-    const deadline = Date.now() + this.clientServerReadyWaitBoundMs(channelName);
+    const deadline = performance.now() + this.clientServerReadyWaitBoundMs(channelName);
     for (;;) {
       this.drainSocketMonitors();
       const dealer = this.clientDealerForOutbound(channelName);
       if (dealer !== undefined) return dealer;
-      if (Date.now() >= deadline) return undefined;
+      const remainingMs = deadline - performance.now();
+      if (remainingMs <= 0) return undefined;
       throwIfAborted(signal);
       await new Promise<void>(resolve => {
-        setTimeout(resolve, CLIENT_SERVER_READY_POLL_INTERVAL_MS);
+        setTimeout(resolve, Math.min(CLIENT_SERVER_READY_POLL_INTERVAL_MS, remainingMs));
       });
     }
   }

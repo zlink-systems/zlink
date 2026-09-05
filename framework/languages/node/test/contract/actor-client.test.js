@@ -307,6 +307,30 @@ test('actor client request decodes the handler reply and never auto-creates a mi
   assert.deepEqual(reply, { value: 'pong' });
 });
 
+for (const jumpMs of [10_000, -10_000]) {
+  test(`actor request keeps its local timeout across a ${jumpMs}ms wall-clock jump during resolution`, async (t) => {
+    const wallNow = Date.now();
+    let offsetMs = 0;
+    t.mock.method(Date, 'now', () => wallNow + offsetMs);
+    const client = createActorClient({
+      nodeProvider: () => ({
+        requestToActor(_actor, _parts, options) {
+          assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 100);
+          assert.ok(Number.isSafeInteger(options.timeoutMs));
+          return operationId;
+        }
+      }),
+      completionTableProvider: () => completionTable(RequestResult.Ok, createReplyParts('pong')),
+      locationResolver: () => createResolver(() => {
+        offsetMs = jumpMs;
+        return actorLocation();
+      })
+    });
+
+    assert.equal(await client.requestToActor('actor-1', new ActorAsk('ping')).timeout(100).submit(), 'pong');
+  });
+}
+
 test('actor client request decodes a single framed handler reply through stream protocol', async () => {
   const node = {
     requestToActor() {

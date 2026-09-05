@@ -243,7 +243,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       selected.node.sendToMissingInstanceSpot(
         selected.target,
         encoded,
-        BigInt(deadline.deadlineMs),
+        BigInt(deadline.deadlineUnixMs),
         sourceSpotId,
         call.metadata
       ),
@@ -429,9 +429,9 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
         undefined, call.instanceSpotType, ZLinkDispatchErrorReason.StaleTarget);
       throw error;
     }
-    const deadlineUnixMs = BigInt(deadline.deadlineMs);
+    const deadlineUnixMs = BigInt(deadline.deadlineUnixMs);
     const encoded = this.encodeAtDeadline(ZLinkChannelMessageKind.Request,
-      selected.meshName, request, deadline.deadlineMs);
+      selected.meshName, request, deadline.deadlineUnixMs);
     deadline.requireRemaining();
     const table = this.options.completions(selected.meshName);
     if (table === undefined) throw new Error(`MeshNode '${selected.meshName}' completion table is not started.`);
@@ -935,7 +935,7 @@ function initialSendTimeoutMs(
 }
 
 interface ZLinkSpotAddressDeadline {
-  readonly deadlineMs: number;
+  readonly deadlineUnixMs: number;
   readonly signal: AbortSignal;
   setOwnerTimeout(timeoutMs: number): void;
   requireRemaining(): number;
@@ -944,7 +944,8 @@ interface ZLinkSpotAddressDeadline {
 }
 
 function createSpotAddressDeadline(timeoutMs: number, parent?: AbortSignal): ZLinkSpotAddressDeadline {
-  const startedAtMs = Date.now();
+  const startedAtMs = performance.now();
+  const startedAtUnixMs = Date.now();
   let deadlineMs = startedAtMs + Math.max(0, timeoutMs);
   const controller = new AbortController();
   let expired = false;
@@ -955,7 +956,7 @@ function createSpotAddressDeadline(timeoutMs: number, parent?: AbortSignal): ZLi
   };
   const arm = () => {
     if (timeout !== undefined) clearTimeout(timeout);
-    const remainingMs = deadlineMs - Date.now();
+    const remainingMs = deadlineMs - performance.now();
     if (remainingMs <= 0) {
       expire();
       return;
@@ -967,8 +968,8 @@ function createSpotAddressDeadline(timeoutMs: number, parent?: AbortSignal): ZLi
   if (parent?.aborted === true) abort();
   else parent?.addEventListener('abort', abort, { once: true });
   return {
-    get deadlineMs() {
-      return deadlineMs;
+    get deadlineUnixMs() {
+      return Math.round(startedAtUnixMs + (deadlineMs - startedAtMs));
     },
     signal: controller.signal,
     setOwnerTimeout(ownerTimeoutMs: number) {
@@ -976,7 +977,7 @@ function createSpotAddressDeadline(timeoutMs: number, parent?: AbortSignal): ZLi
       arm();
     },
     requireRemaining() {
-      const remainingMs = deadlineMs - Date.now();
+      const remainingMs = deadlineMs - performance.now();
       if (remainingMs <= 0) {
         expired = true;
         throw createInternalFrameworkException(
@@ -985,7 +986,7 @@ function createSpotAddressDeadline(timeoutMs: number, parent?: AbortSignal): ZLi
           true
         );
       }
-      return Math.max(1, remainingMs);
+      return Math.max(1, Math.ceil(remainingMs));
     },
     expired: () => expired,
     close() {

@@ -87,7 +87,7 @@ interface ZLinkStreamLivenessOptions {
 }
 
 const systemLivenessClock: ZLinkStreamLivenessClock = {
-  now: () => Date.now(),
+  now: () => performance.now(),
   setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
   clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)
 };

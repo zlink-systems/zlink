@@ -782,7 +782,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     return await this.commitAggregateCore(
       fence,
       0,
-      Date.now() + AGGREGATE_COMMIT_RETRY_WINDOW_MS,
+      performance.now() + AGGREGATE_COMMIT_RETRY_WINDOW_MS,
       signal
     );
   }
@@ -960,7 +960,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
       if (aggregate.state === 'prepared'
         && retryAttempt < MAX_AGGREGATE_COMMIT_CONFLICT_RETRIES
-        && Date.now() < retryDeadlineAtMs) {
+        && performance.now() < retryDeadlineAtMs) {
         // The commit CAS also fences the target's live owner lease, descriptor,
         // and capacity rows. Re-read the whole prepared fence after an
         // auxiliary-row race; a changed aggregate or participant fence exits
@@ -3058,7 +3058,7 @@ async function waitForAggregateCommitRetry(
   signal?: AbortSignal
 ): Promise<void> {
   signal?.throwIfAborted();
-  const remainingMs = deadlineAtMs - Date.now();
+  const remainingMs = deadlineAtMs - performance.now();
   if (remainingMs <= 0) return;
   const exponentialMs = Math.min(100, 2 << Math.min(retryAttempt, 5));
   const delayMs = Math.min(

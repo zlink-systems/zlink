@@ -1355,9 +1355,10 @@ export class ZLinkActorTransferRuntime {
     spotId: RoutingId,
     spotGeneration: bigint,
     membershipEpoch: bigint,
-    deadlineAtMs: number,
+    deadlineUnixMs: number,
     signal?: AbortSignal
   ): Promise<ZLinkAuthoritySnapshot> {
+    const deadlineAtMs = performance.now() + (deadlineUnixMs - Date.now());
     const store = this.options.authorityStore();
     const owner = this.options.currentOwner();
     const state = this.options.actorManager()?.getState(actor.context.actorId);
@@ -1375,7 +1376,7 @@ export class ZLinkActorTransferRuntime {
       || local.lifecycleGeneration <= 0n
       || spotGeneration <= 0n
       || membershipEpoch <= 0n
-      || !Number.isSafeInteger(deadlineAtMs)
+      || !Number.isSafeInteger(deadlineUnixMs)
     ) {
       throw new Error(
         `Actor '${actor.context.actorId}' target authority commit has an incomplete materialization fence.`
@@ -1594,7 +1595,7 @@ export class ZLinkActorTransferRuntime {
     ) {
       throw new Error(`Actor '${actor.context.actorId}' Core location does not match the committed target SPOT.`);
     }
-    const deadline = Date.now() + 5_000;
+    const deadline = performance.now() + 5_000;
     const ownerNodeGeneration = node.status().lifecycleGeneration;
     if (ownerNodeGeneration <= 0n) {
       throw new Error(`Actor '${actor.context.actorId}' owner MeshNode has no valid lifecycle generation.`);
@@ -1630,7 +1631,7 @@ export class ZLinkActorTransferRuntime {
         ownerNodeGeneration,
         async () => state.clearAfterDestroy()
       );
-      if (claim.status !== 'conflict' || Date.now() >= deadline) {
+      if (claim.status !== 'conflict' || performance.now() >= deadline) {
         break;
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 10));
@@ -1940,7 +1941,7 @@ async function waitForActorAuthorityRetry(
   cause: unknown
 ): Promise<void> {
   signal?.throwIfAborted();
-  const remaining = deadlineAtMs - Date.now();
+  const remaining = deadlineAtMs - performance.now();
   if (remaining <= 0) {
     throw new Error('Actor target authority deadline expired.', { cause });
   }

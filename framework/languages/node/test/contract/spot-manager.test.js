@@ -3923,6 +3923,40 @@ test('spot timer rejects invalid options', async () => {
   );
 });
 
+test('spot managed timer keeps elapsed scheduling monotonic and relocation cursors in Unix milliseconds', async (t) => {
+  await withFakeTimerClock(async (clock) => {
+    const wallStart = 1_800_000_000_000;
+    let wallNow = wallStart;
+    t.mock.method(Date, 'now', () => wallNow);
+    const ticks = [];
+    const options = {
+      overrunPolicy: framework.ZLinkTimerOverrunPolicy.SkipLateTicks,
+      maxCatchUpTicks: 1,
+      stopOnUnhandledException: false
+    };
+    const timer = new framework.ZLinkManagedTimer('monotonic', 10, options, async (tick) => ticks.push(tick));
+    try {
+      wallNow += 10_000;
+      await clock.runNext();
+      wallNow -= 20_000;
+      await clock.runNext();
+      assert.deepEqual(ticks.map((tick) => tick.scheduledIndex), [1n, 2n]);
+      assert.deepEqual(ticks.map((tick) => tick.startedElapsedMs), [10, 20]);
+      assert.deepEqual(ticks.map((tick) => tick.scheduledAt.getTime()), [wallStart + 10, wallStart + 20]);
+      const state = await timer.captureRelocation();
+      assert.equal(state.startedAtUnixMs, wallStart);
+      assert.equal(state.nextDueAtUnixMs, wallStart + 30);
+      wallNow = wallStart + 20;
+      timer.restoreRelocation(state);
+      await clock.runNext(10);
+      assert.equal(ticks.at(-1).scheduledIndex, 3n);
+      assert.equal(ticks.at(-1).startedElapsedMs, 30);
+    } finally {
+      await timer.cancel();
+    }
+  });
+});
+
 test('spot managed timer overrun policies follow dotnet skip catch-up and fixed-delay semantics', async () => {
   await withFakeTimerClock(async (clock) => {
     const skipLateTicks = [];
@@ -4119,14 +4153,14 @@ test('spot timer handlers retain one instance for the Spot activation', async ()
 });
 
 async function withFakeTimerClock(run) {
-  const originalNow = Date.now;
+  const originalNow = Object.getOwnPropertyDescriptor(performance, 'now');
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
   let now = 0;
   let nextId = 1;
   const timers = [];
 
-  Date.now = () => now;
+  Object.defineProperty(performance, 'now', { configurable: true, value: () => now });
   global.setTimeout = (callback, delay) => {
     const timer = {
       id: nextId++,
@@ -4176,7 +4210,8 @@ async function withFakeTimerClock(run) {
   try {
     await run(clock);
   } finally {
-    Date.now = originalNow;
+    if (originalNow === undefined) delete performance.now;
+    else Object.defineProperty(performance, 'now', originalNow);
     global.setTimeout = originalSetTimeout;
     global.clearTimeout = originalClearTimeout;
   }

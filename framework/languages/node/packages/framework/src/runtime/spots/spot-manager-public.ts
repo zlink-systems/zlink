@@ -234,8 +234,8 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
       this.options.messageSerializers
     );
     const timeoutMs = state.timeoutMs ?? this.options.defaultTimeoutMs;
-    const deadline = Date.now() + timeoutMs;
-    const remainingMs = deadline - Date.now();
+    const deadline = performance.now() + timeoutMs;
+    const remainingMs = deadline - performance.now();
     if (remainingMs <= 0) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
@@ -248,7 +248,7 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
       spotId,
       stableType,
       requestPayload: requestBytes,
-      timeoutMs: remainingMs,
+      timeoutMs: Math.ceil(remainingMs),
       signal,
       generatedIdentity
     }, async (target, authority, deadlineSignal) => {
