@@ -15,6 +15,11 @@ define_exports (napi_env env, napi_value exports, napi_property_descriptor *desc
     napi_define_properties (env, exports, count, descs);
 }
 
+static void release_send_success (napi_env env, void *data, void *)
+{
+    napi_delete_reference (env, static_cast<napi_ref> (data));
+}
+
 void define_core_exports (napi_env env, napi_value exports)
 {
     napi_property_descriptor descs[] = {
@@ -114,7 +119,25 @@ void define_core_exports (napi_env env, napi_value exports)
       ZLINK_METHOD ("atomicCounterValue", atomic_counter_value),
       ZLINK_METHOD ("atomicCounterDestroy", atomic_counter_destroy),
     };
+    // The native function owns its immutable inline-success result. Each Node
+    // environment has its own function/reference; no process-global V8 handles.
+    napi_value success;
+    napi_create_object (env, &success);
+    set_int64_property (env, success, "result", ZLINK_SUBMIT_OK);
+    set_int64_property (env, success, "nativeErrno", 0);
+    set_uint64_bigint_property (env, success, "completionId", 0);
+    napi_object_freeze (env, success);
+    napi_ref success_ref;
+    napi_create_reference (env, success, 1, &success_ref);
+    for (size_t index = 0; index < sizeof (descs) / sizeof (*descs); ++index) {
+        if (strcmp (descs[index].utf8name, "socketSubmitSend") == 0)
+            descs[index].data = success_ref;
+    }
     define_exports (env, exports, descs, sizeof (descs) / sizeof (*descs));
+    napi_value send_function;
+    napi_get_named_property (env, exports, "socketSubmitSend", &send_function);
+    napi_add_finalizer (
+      env, send_function, success_ref, release_send_success, NULL, NULL);
 
     if (getenv ("ZLINK_NODE_TEST_HOOKS")) {
         napi_property_descriptor test_descs[] = {

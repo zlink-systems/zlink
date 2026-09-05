@@ -1239,3 +1239,7 @@ gate: worktree identity 5/5, integration 121/121, 전체 171/171; main dev 전�
 - B가 만든 `test_socket_disconnect_boundary`의 REJECT 단언은 `reply_ok + timed_out + not_connected == 20`이라 D-090과 양립한다. D-B112의 Core 수정(ws/tls connect 시도별 endpoint identity 1개, inproc command-owner 단일 획득, REJECT 즉시 close)은 그대로 병합했고 REJECT close 구현은 하나만 남겼다(`router_admission.cpp` 충돌은 주석만).
 - 스펙 반영(A 직접): §4 REJECT 문장 ko/en, `zlink_disconnect` 단락의 종결 요약 ko/en을 §6 단일 규칙과 일치시켰다. 병합 후 Core 전체 gate를 worktree b에서 재검증한다.
 - **B용 한 줄: §4 REJECT는 D-090(pair 종료 → 즉시 NOT_CONNECTED, 규칙 1개)으로 확정. "자기 timeout으로 종결" 문구를 다시 넣지 말 것. framework가 REJECT ROUTER에서 NOT_CONNECTED를 기대하는 코드는 그대로 유효.**
+
+## D-B113 (2026-09-05 14:55, 머신 B) Node hot-path pass 1(astra) — multipart Buffer 경로 정리로 DD 27.6→41.2%; REQREP는 요청당 ~57 ms 고정 지연(빈 FD wake·완료 진행 비용)이 남아 pass 1b
+변경(`bindings/node/native/src/addon_core.cc`, `addon_exports.cc`, `addon_message_parts.h` 제거, `runtime/buffers/message_conversion.ts`): 정상 경로의 변환 배열·진단 문자열 할당 제거, N-API 경계 정리(공개 시그니처 불변, spec gap 없음). after(1 run, load ≤3): DD 27.6→41.2%(64K 44→75%), PUBSUB 28.6→31.0%, DR/RR REQREP 18.7/17.9→20.3/18.1%(변화 없음). gate: `npm test` 126/126, 관련 24 tests × 5, samples.
+남은 원인(진단): REQREP 요청 52k건에 completion callback 344k·pull 396k(빈 FD wake), 요청당 mean latency 52~62 ms로 고정 — 완료가 FD wake가 아니라 주기적 진행에 얹혀 있는 형태. Java 1b와 같은 방식으로 완료 진행 제어점을 하나로 재설계하는 pass 1b(astra) 실행. 커밋 `f69558af55`.
