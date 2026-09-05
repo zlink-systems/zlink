@@ -3,6 +3,7 @@ import {
   Message,
   RoutingId as BindingRoutingId,
   RequestResult,
+  SubmitError,
   SubmitResult,
   type RequestResult as RequestResultValue,
   type StreamSocket,
@@ -10,6 +11,7 @@ import {
 } from '@zlink-systems/zlink';
 import {
   isZLinkBackendResultError,
+  ZLinkBackendResultError,
   type ZLinkBackendMessageLike as MessageLike
 } from '../runtime-values';
 import type {
@@ -1990,25 +1992,45 @@ class RawStreamSessionService implements StreamSessionService {
     ) as SubmitResultValue;
   }
 
-  private deliver(sessionRid: string, payload: Uint8Array): boolean {
+  private async deliver(sessionRid: string, payload: Uint8Array): Promise<boolean> {
     const target = this.sessionTargets.get(sessionRid);
     if (target === undefined) return false;
+    const operation = this.stream.send(target as unknown as BindingRoutingId);
+    const parts = decodeMultipartBuffers(decodeApplicationPayloadView(payload).payload);
+    if (parts.length === 0) return false;
+    let submit = operation.message(parts[0]!);
+    for (let index = 1; index < parts.length; index++) {
+      submit = submit.message(parts[index]!);
+    }
     try {
-      const operation = this.stream.send(target as unknown as BindingRoutingId);
-      const parts = decodeMultipartBuffers(decodeApplicationPayloadView(payload).payload);
-      if (parts.length === 0) return false;
-      let submit = operation.message(parts[0]!);
-      for (let index = 1; index < parts.length; index++) {
-        submit = submit.message(parts[index]!);
-      }
-      submit.submit_sync();
+      await submit.submit();
       return true;
-    } catch {
-      // A client may close its STREAM between the binding lookup and this
-      // one-way delivery. Treat that transport transition as a closed
-      // session; it must not escape the runtime poll and terminate the host.
-      this.sessionTargets.delete(sessionRid);
-      return false;
+    } catch (error) {
+      if (!(error instanceof SubmitError)) throw error;
+      switch (error.result) {
+        case SubmitResult.NotConnected:
+        case SubmitResult.NotFound:
+        case SubmitResult.Terminated:
+          // Let the socket monitor drive the existing STREAM close/unbind
+          // lifecycle instead of maintaining a second session-close state.
+          this.stream.disconnectRid(target as unknown as BindingRoutingId);
+          throw new ZLinkBackendResultError(
+            'submit',
+            error.result,
+            error.nativeErrno,
+            { cause: error }
+          );
+        case SubmitResult.Backpressured:
+        case SubmitResult.NotAdmitted:
+          throw new ZLinkBackendResultError(
+            'submit',
+            error.result,
+            error.nativeErrno,
+            { cause: error }
+          );
+        default:
+          throw error;
+      }
     }
   }
 

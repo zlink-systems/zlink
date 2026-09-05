@@ -9,6 +9,7 @@ import './m6b-user-spot-terminal-replay.contract';
 import {
   Message,
   RequestResult,
+  SubmitError,
   SubmitResult,
   type StreamSocket
 } from '@zlink-systems/zlink';
@@ -4170,7 +4171,7 @@ test('bound-session replacement is one-way, does not retry admission, and fences
       'old-rid',
       actor,
       1_000,
-      () => true,
+      async () => true,
       (actorId, retiredSession) => {
         replacementNotices.push({
           actorId,
@@ -4192,7 +4193,7 @@ test('bound-session replacement is one-way, does not retry admission, and fences
       'old-rid',
       actor,
       1_000,
-      () => true,
+      async () => true,
       (actorId, retiredSession) => {
         replacementNotices.push({
           actorId,
@@ -4210,7 +4211,7 @@ test('bound-session replacement is one-way, does not retry admission, and fences
     // deleting it after the new request has been admitted locally.
     rejectRequestOnce.add('session-old->actor-node');
     await assert.rejects(
-      oldSessionRuntime.bindSession('failed-rid', actor, 1_000, () => true).promise,
+      oldSessionRuntime.bindSession('failed-rid', actor, 1_000, async () => true).promise,
       /Rejected test request/
     );
     assert.deepEqual(
@@ -4224,7 +4225,7 @@ test('bound-session replacement is one-way, does not retry admission, and fences
       'new-rid',
       actor,
       1_000,
-      () => true
+      async () => true
     ).promise;
     const newBind = await newBindPromise;
     assert.equal(newBind.terminalResult, RequestResult.Ok);
@@ -4525,8 +4526,8 @@ test('concurrent remote bind completions publish the newest Session-owner genera
     ownerLeaseGeneration: 10n
   });
   try {
-    const first = runtime.bindSession('session-a', actor, 1_000, () => true).promise;
-    const second = runtime.bindSession('session-b', actor, 1_000, () => true).promise;
+    const first = runtime.bindSession('session-a', actor, 1_000, async () => true).promise;
+    const second = runtime.bindSession('session-b', actor, 1_000, async () => true).promise;
     assert.equal(requests.length, 2);
     assert.equal(runtime.allSessionBindings().length, 0);
 
@@ -4606,7 +4607,7 @@ test('remote Session bind publishes its exact Location fence for the first Actor
       'session',
       actor,
       1_000,
-      () => true,
+      async () => true,
       undefined,
       undefined,
       exactAuthority
@@ -5522,7 +5523,11 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     closeParts(instanceCompletion);
 
     const delivered: Buffer[] = [];
-    const streamState = { disconnected: false, backpressured: false };
+    const streamState: FakeStreamState = {
+      disconnected: false,
+      backpressured: false,
+      disconnectCount: 0
+    };
     const sessionService = backend.createStreamSessionService(createFakeStream(delivered, streamState));
     sessionService.start();
     const bindOperation = sessionService.bindActor('session-a', actor, 2_000);
@@ -5546,19 +5551,45 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
       SubmitResult.Ok
     );
     assert.deepEqual(delivered.map(value => value.toString()), ['session-message']);
+
+    // The binding async terminal owns the exact WRITABLE wait and resubmit.
     streamState.backpressured = true;
+    let pendingSettled = false;
+    const pendingSend = backend.sendActorBoundSession(
+      actor,
+      binding.bindingGeneration,
+      Buffer.from('backpressured-session-message'),
+      undefined,
+      actorFence
+    ).finally(() => {
+      pendingSettled = true;
+    });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(pendingSettled, false);
+    assert.deepEqual(delivered.map(value => value.toString()), ['session-message']);
+    streamState.backpressured = false;
+    streamState.releaseWritable?.();
+    assert.equal(
+      await pendingSend,
+      SubmitResult.Ok
+    );
+    assert.deepEqual(
+      delivered.map(value => value.toString()),
+      ['session-message', 'backpressured-session-message']
+    );
+
+    // A typed capacity terminal is preserved without deleting the session.
+    streamState.nextSubmitError = new SubmitError(SubmitResult.Backpressured);
     assert.equal(
       await backend.sendActorBoundSession(
         actor,
         binding.bindingGeneration,
-        Buffer.from('backpressured-session-message'),
+        Buffer.from('capacity-terminal'),
         undefined,
         actorFence
       ),
-      SubmitResult.InvalidState
+      SubmitResult.Backpressured
     );
-    assert.deepEqual(delivered.map(value => value.toString()), ['session-message']);
-    streamState.backpressured = false;
     assert.equal(
       await backend.sendActorBoundSession(
         actor,
@@ -5571,18 +5602,56 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     );
     assert.deepEqual(
       delivered.map(value => value.toString()),
-      ['session-message', 'resumed-session-message']
+      [
+        'session-message',
+        'backpressured-session-message',
+        'resumed-session-message'
+      ]
     );
-    streamState.disconnected = true;
-    assert.equal(
+
+    // Each typed close terminal requests the existing monitor-driven lifecycle.
+    for (const terminal of [
+      SubmitResult.NotConnected,
+      SubmitResult.NotFound,
+      SubmitResult.Terminated
+    ]) {
+      streamState.nextSubmitError = new SubmitError(terminal);
+      assert.equal(
         await backend.sendActorBoundSession(
           actor,
           binding.bindingGeneration,
-          Buffer.from('late-session-message'),
+          Buffer.from(`close-terminal-${terminal}`),
           undefined,
           actorFence
         ),
-        SubmitResult.InvalidState
+        terminal
+      );
+    }
+    assert.equal(streamState.disconnectCount, 3);
+
+    // Non-terminal/programming errors are not converted into session close.
+    const unknownDeliveryError = new Error('unknown STREAM delivery failure');
+    streamState.nextSubmitError = unknownDeliveryError;
+    await assert.rejects(
+      backend.sendActorBoundSession(
+        actor,
+        binding.bindingGeneration,
+        Buffer.from('unknown-error-message'),
+        undefined,
+        actorFence
+      ),
+      error => error === unknownDeliveryError
+    );
+    assert.equal(streamState.disconnectCount, 3);
+    assert.equal(
+      await backend.sendActorBoundSession(
+        actor,
+        binding.bindingGeneration,
+        Buffer.from('after-unknown-message'),
+        undefined,
+        actorFence
+      ),
+      SubmitResult.Ok
     );
     const unbindOperation = sessionService.unbindActor(
       'session-a',
@@ -6627,15 +6696,37 @@ function closeParts(record: ReceiveRecord): void {
   for (const part of record.parts) part.close();
 }
 
+interface FakeStreamState {
+  disconnected: boolean;
+  backpressured: boolean;
+  disconnectCount: number;
+  nextSubmitError?: Error;
+  releaseWritable?: () => void;
+}
+
 function createFakeStream(
   delivered: Buffer[],
-  state: { disconnected: boolean; backpressured: boolean }
-): Pick<StreamSocket, 'send'> {
+  state: FakeStreamState
+): Pick<StreamSocket, 'send' | 'disconnectRid'> {
+  const writableWaiters: Array<() => void> = [];
+  state.releaseWritable = () => {
+    for (const resolve of writableWaiters.splice(0)) resolve();
+  };
   const createSubmit = () => {
     const pending: Buffer[] = [];
-    const submitPending = (): void => {
-      if (state.disconnected) throw new Error('stream route is disconnected');
-      if (state.backpressured) throw new Error('stream route is backpressured');
+    const submitPending = async (): Promise<void> => {
+      const terminal = state.nextSubmitError;
+      state.nextSubmitError = undefined;
+      if (terminal !== undefined) throw terminal;
+      if (state.disconnected) {
+        throw new SubmitError(SubmitResult.NotConnected);
+      }
+      if (state.backpressured) {
+        await new Promise<void>(resolve => writableWaiters.push(resolve));
+      }
+      if (state.disconnected) {
+        throw new SubmitError(SubmitResult.NotConnected);
+      }
       delivered.push(...pending);
     };
     const submit = {
@@ -6644,16 +6735,19 @@ function createFakeStream(
         return submit;
       },
       async submit() {
-        submitPending();
+        await submitPending();
       },
       submit_sync() {
-        submitPending();
+        throw new Error('bound-session delivery must use the binding async terminal');
       }
     };
     return submit;
   };
   return {
-    send: createSubmit
+    send: createSubmit,
+    disconnectRid() {
+      state.disconnectCount += 1;
+    }
   };
 }
 
