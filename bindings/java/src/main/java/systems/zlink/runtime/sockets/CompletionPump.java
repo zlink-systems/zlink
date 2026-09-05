@@ -212,14 +212,13 @@ public final class CompletionPump implements AutoCloseable {
         }
     }
 
+    /** Releases the native wait after its owning Context has shut down. */
     @Override
     public void close() {
         Thread join;
         synchronized (lock) {
             closed = true;
             join = thread;
-            if (wake != null)
-                wake.signal();
         }
         if (join != null && join != Thread.currentThread()) {
             boolean interrupted = false;

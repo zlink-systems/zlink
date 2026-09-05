@@ -6,8 +6,15 @@ import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.core.ContextOptions;
 import systems.zlink.contracts.core.CoreHwmBudgetSnapshot;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.messaging.Received;
+import systems.zlink.contracts.sockets.RecvFlags;
 import java.lang.reflect.Method;
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -16,6 +23,35 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class ContextContractTest {
+    @ParameterizedTest(name = "completion pump cleanup after {0} shutdown calls")
+    @ValueSource(ints = {0, 1, 2})
+    @Timeout(10)
+    public void closeReleasesCompletionPumpAfterShutdown(int shutdownCalls) {
+        TestSupport.assumeNative();
+
+        try (Context context = Zlink.createContext()) {
+            try (var router = context.createRouterSocket();
+                 var dealer = context.createDealerSocket()) {
+                Duration timeout = Duration.ofSeconds(2);
+                String endpoint = TestSupport.inprocEndpoint("context-close");
+                router.options().recvTimeout(timeout);
+                router.bind(endpoint);
+                dealer.connect(endpoint);
+                dealer.request().message(Message.from("request"))
+                    .timeout(timeout).submit();
+                try (Received received = new Received()) {
+                    assertTrue(router.recv(received, RecvFlags.NONE),
+                        "request must be received before completion pump teardown");
+                }
+            }
+
+            for (int i = 0; i < shutdownCalls; i++)
+                assertDoesNotThrow(context::shutdown);
+            assertDoesNotThrow(context::close);
+            assertDoesNotThrow(context::close);
+        }
+    }
+
     @Test
     public void rawContextOptionBagIsHiddenAndTypedSurfaceRemains() {
         TestSupport.assumeNative();
