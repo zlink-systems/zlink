@@ -3,15 +3,22 @@ package systems.zlink.framework.runtime.binding;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.eventing.MonitorEvent;
 import systems.zlink.contracts.eventing.MonitorEventType;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 
 final class ZLinkJavaRawMeshNodeTransportIdentityTest {
     private static final long INTENT = 2;
@@ -34,12 +41,12 @@ final class ZLinkJavaRawMeshNodeTransportIdentityTest {
                     event(MonitorEventType.DISCONNECTED, 1436, 1),
                     event(MonitorEventType.DISCONNECTED, 1439, 0),
                     event(MonitorEventType.DISCONNECTED, 0, 0)}) {
-                terminate(node, event);
+                terminateAdmitted(node, event);
                 assertTrue(node.hasLivePeerIntent(ENDPOINT), event.toString());
                 assertFalse(isClosed(node), event.toString());
             }
 
-            terminate(node, event(MonitorEventType.DISCONNECTED, 1436, 0));
+            terminateAdmitted(node, event(MonitorEventType.DISCONNECTED, 1436, 0));
             assertFalse(node.hasLivePeerIntent(ENDPOINT));
             assertTrue(isClosed(node));
         }
@@ -54,14 +61,14 @@ final class ZLinkJavaRawMeshNodeTransportIdentityTest {
             ready(node, 1436, 0);
             ready(node, 1439, 1);
 
-            terminate(node, event(MonitorEventType.DISCONNECTED, 1439, 1));
+            terminateAdmitted(node, event(MonitorEventType.DISCONNECTED, 1439, 1));
             assertTrue(node.hasLivePeerIntent(ENDPOINT));
             assertFalse(isClosed(node));
-            terminate(node, event(MonitorEventType.DISCONNECTED, 1439, 1));
+            terminateAdmitted(node, event(MonitorEventType.DISCONNECTED, 1439, 1));
             assertTrue(node.hasLivePeerIntent(ENDPOINT));
             assertFalse(isClosed(node));
 
-            terminate(node, event(MonitorEventType.CLOSED, 1436, 0));
+            terminateAdmitted(node, event(MonitorEventType.CLOSED, 1436, 0));
             assertFalse(node.hasLivePeerIntent(ENDPOINT));
             assertTrue(isClosed(node));
         }
@@ -99,6 +106,127 @@ final class ZLinkJavaRawMeshNodeTransportIdentityTest {
             terminate(node, event(MonitorEventType.DISCONNECTED, 1436, 0));
             assertTrue(isClosed(node));
             assertFalse(node.isPeerConnectionClosing(INTENT));
+        }
+    }
+
+    @Test
+    void rejectedAttemptTerminationKeepsIntentUntilAdmittedConnectionCloses()
+        throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            installIntent(node);
+            ready(node, 1436, 0);
+
+            // Core rejected the first attempt before admission (D-094 retry):
+            // neither requested nor admitted, so the intent stays open and
+            // only stops being live until Core's retry reaches READY.
+            terminate(node, event(MonitorEventType.DISCONNECTED, 1436, 0));
+            assertFalse(node.hasLivePeerIntent(ENDPOINT));
+            assertFalse(isClosed(node));
+            assertFalse(node.isPeerConnectionClosing(INTENT));
+
+            ready(node, 1442, 0);
+            assertTrue(node.hasLivePeerIntent(ENDPOINT));
+            assertFalse(isClosed(node));
+
+            terminateAdmitted(node, event(MonitorEventType.DISCONNECTED, 1442, 0));
+            assertFalse(node.hasLivePeerIntent(ENDPOINT));
+            assertTrue(isClosed(node));
+        }
+    }
+
+    @Test
+    void observedInprocCloseRetiresTheCoreConnectIntent() throws Exception {
+        RoutingId localRid = RoutingId.from("jvm-retire-intent-local");
+        RoutingId peerRid = RoutingId.from("jvm-retire-intent-peer");
+        String localEndpoint = "inproc://jvm-retire-intent-local-"
+            + System.nanoTime();
+        String peerEndpoint = "inproc://jvm-retire-intent-peer-"
+            + System.nanoTime();
+        try (var context = Zlink.createContext();
+             var local = new ZLinkJavaRawMeshNode(context, "mesh");
+             var peer = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            local.setRoutingId(localRid);
+            local.setBind(localEndpoint);
+            peer.setRoutingId(peerRid);
+            peer.setBind(peerEndpoint);
+            local.start();
+            peer.start();
+
+            long intent = local.connectPeer(peerEndpoint, peerRid);
+            assertEquals(intent, awaitState(local, MeshPeerState.ADMITTED)
+                .connectionIntentId());
+            peer.close();
+            awaitState(local, MeshPeerState.CLOSED);
+            await(() -> !local.hasLivePeerIntent(peerEndpoint));
+
+            // A fresh listener on the same endpoint must not revive the
+            // closed intent: its Core connect intent was retired with it,
+            // so the only connection to the replacement is the one the
+            // replacement intent creates.
+            try (var replacementPeer = new ZLinkJavaRawMeshNode(
+                     context, "mesh")) {
+                replacementPeer.setRoutingId(peerRid);
+                replacementPeer.setBind(peerEndpoint);
+                replacementPeer.start();
+                long revived = System.nanoTime()
+                    + Duration.ofMillis(200).toNanos();
+                while (System.nanoTime() < revived) {
+                    assertFalse(local.hasLivePeerIntent(peerEndpoint));
+                    assertEquals(
+                        MeshPeerState.CLOSED,
+                        peerState(local, intent));
+                    Thread.sleep(5);
+                }
+
+                long replacement = local.replacePeerConnection(
+                    peerEndpoint,
+                    peerRid,
+                    replacementPeer.status().lifecycleGeneration(),
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                assertEquals(
+                    replacement,
+                    awaitState(local, MeshPeerState.ADMITTED)
+                        .connectionIntentId());
+                await(() -> local.hasLivePeerIntent(peerEndpoint));
+            }
+        }
+    }
+
+    private static MeshPeerState peerState(
+        ZLinkJavaRawMeshNode node,
+        long intent) {
+        return node.peers().stream()
+            .filter(entry -> entry.connectionIntentId() == intent)
+            .map(MeshPeerEntry::state)
+            .findFirst()
+            .orElseThrow();
+    }
+
+    private static MeshPeerEntry awaitState(
+        ZLinkJavaRawMeshNode node,
+        MeshPeerState state) throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (System.nanoTime() < deadline) {
+            Optional<MeshPeerEntry> matched = node.peers().stream()
+                .filter(entry -> entry.state() == state)
+                .findFirst();
+            if (matched.isPresent()) {
+                return matched.orElseThrow();
+            }
+            Thread.sleep(1);
+        }
+        throw new AssertionError("peer state was not observed: " + state);
+    }
+
+    private static void await(BooleanSupplier condition)
+        throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() >= deadline) {
+                throw new AssertionError("condition was not observed");
+            }
+            Thread.sleep(1);
         }
     }
 
@@ -143,12 +271,29 @@ final class ZLinkJavaRawMeshNodeTransportIdentityTest {
         active.invoke(node, event(MonitorEventType.CONNECTION_READY, id, lane), PEER);
     }
 
+    // A termination that did not close the peer's admitted connection
+    // (a pre-admission attempt, or a foreign transport).
     private static void terminate(ZLinkJavaRawMeshNode node, MonitorEvent event)
         throws Exception {
+        terminate(node, event, false);
+    }
+
+    // A termination the monitor path attributed to the peer's admitted
+    // connection (its liveness close).
+    private static void terminateAdmitted(
+        ZLinkJavaRawMeshNode node,
+        MonitorEvent event) throws Exception {
+        terminate(node, event, true);
+    }
+
+    private static void terminate(
+        ZLinkJavaRawMeshNode node,
+        MonitorEvent event,
+        boolean admittedConnectionClosed) throws Exception {
         Method terminal = ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-            "markPeerIntentsClosed", MonitorEvent.class);
+            "markPeerIntentsClosed", MonitorEvent.class, boolean.class);
         terminal.setAccessible(true);
-        terminal.invoke(node, event);
+        terminal.invoke(node, event, admittedConnectionClosed);
     }
 
     private static boolean isClosed(ZLinkJavaRawMeshNode node) throws Exception {

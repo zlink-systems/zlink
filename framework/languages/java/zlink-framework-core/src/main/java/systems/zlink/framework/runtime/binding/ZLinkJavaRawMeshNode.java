@@ -899,6 +899,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             // connect can deliver an inproc HELLO/ADMIT. Registering after
             // connect lets the caller-side initialization erase a rejection
             // that already arrived on the pump thread.
+            streamTrace(STREAM_TRACE ? "peer-intent-connect intent=" + intent
+                + " endpoint=" + endpoint
+                + " expected=" + expectedRoutingId : null);
             current.connect(endpoint);
         } catch (RuntimeException failure) {
             peerIntents.remove(intent);
@@ -988,6 +991,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 continue;
             }
             try {
+                streamTrace(STREAM_TRACE ? "peer-intent-disconnect intent="
+                    + request.connectionIntentId()
+                    + " endpoint=" + request.endpoint() : null);
                 current.disconnect(request.endpoint());
                 // Core completes every physical close asynchronously, including
                 // inproc. The existing monitor path owns the terminal pair
@@ -6667,11 +6673,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             if (event == null) {
                 return;
             }
+            streamTrace(STREAM_TRACE ? "monitor-event type=" + event.event()
+                + " connection=" + event.connectionId()
+                + " lane=" + event.transportLane()
+                + " flags=" + event.flags()
+                + " rid=" + event.routingId().map(RoutingId::toString).orElse("-")
+                + " local=" + event.localAddr()
+                + " remote=" + event.remoteAddr() : null);
             Optional<RoutingId> peer = event.routingId();
             if (peer.isEmpty()) {
                 if (event.event() == MonitorEventType.DISCONNECTED
                     || event.event() == MonitorEventType.CLOSED) {
-                    markPeerIntentsClosed(event);
+                    markPeerIntentsClosed(event, false);
                 }
                 continue;
             }
@@ -6710,27 +6723,31 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             } else if (event.event() == MonitorEventType.DISCONNECTED
                 || event.event() == MonitorEventType.CLOSED) {
                 RoutingId peerRid = peer.orElseThrow();
-                if (!cleanupTerminalTransport(event, peerRid)) {
-                    // Preserve the existing conservative handling for an
-                    // unmapped engine disconnect without applying it to an
-                    // exact zero-ready candidate snapshot.
-                    admissionControlReadyConnections.remove(peerRid);
-                }
-                markPeerIntentsClosed(event);
+                markPeerIntentsClosed(
+                    event,
+                    cleanupTerminalTransport(event, peerRid));
             }
         }
     }
 
+    /**
+     * Returns whether this terminal event closed the peer's admitted
+     * connection (its liveness close, mesh-node §7.1 (3)).
+     */
     private boolean cleanupTerminalTransport(
         MonitorEvent event,
         RoutingId peerRid) {
         String disconnectedId = removeTransportConnection(event);
-        if (disconnectedId != null) {
-            discardPendingConnectionId(disconnectedId);
-            disconnectAdmitted(peerRid, disconnectedId);
-        }
         nextAnnouncementNanos.put(peerRid, 0L);
-        return disconnectedId != null;
+        if (disconnectedId == null) {
+            // Preserve the existing conservative handling for an
+            // unmapped engine disconnect without applying it to an
+            // exact zero-ready candidate snapshot.
+            admissionControlReadyConnections.remove(peerRid);
+            return false;
+        }
+        discardPendingConnectionId(disconnectedId);
+        return disconnectAdmitted(peerRid, disconnectedId);
     }
 
     private static boolean isConnectionReadyEdge(MonitorEvent event) {
@@ -6767,37 +6784,53 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         });
     }
 
-    private void markPeerIntentsClosed(MonitorEvent event) {
+    private void markPeerIntentsClosed(
+        MonitorEvent event,
+        boolean admittedConnectionClosed) {
         peerIntents.forEach((intentId, intent) -> {
             Set<TransportIdentity> transports =
                 peerIntentTransports.get(intentId);
             boolean matchedTransport = transports != null
                 && transports.removeIf(transport -> transport.matches(event));
-            if (!matchedTransport) {
+            if (!matchedTransport || !transports.isEmpty()) {
                 return;
             }
-            if (transports.isEmpty()) {
-                closedPeerIntents.add(intentId);
-                closeRequestedPeerIntents.remove(intentId);
-                livePeerIntents.remove(intentId);
-                peerIntentTransports.remove(intentId);
-                cleanupClosedPeerEndpoint(intent.endpoint());
+            livePeerIntents.remove(intentId);
+            peerIntentTransports.remove(intentId);
+            // An intent's connection has ended when this node requested the
+            // close and observed it (transport-liveness §5), or when the
+            // admitted connection's liveness close was observed (mesh-node
+            // §7.1 (3)). A pre-admission attempt that Core rejected is neither:
+            // the connect intent stays and Core retries it (D-094), so the
+            // intent records the next READY edge instead of closing.
+            if (!admittedConnectionClosed
+                && !closeRequestedPeerIntents.contains(intentId)) {
+                return;
             }
+            streamTrace(STREAM_TRACE ? "peer-intent-closed intent=" + intentId
+                + " endpoint=" + intent.endpoint()
+                + " connection=" + event.connectionId()
+                + " lane=" + event.transportLane()
+                + " admittedClosed=" + admittedConnectionClosed : null);
+            closedPeerIntents.add(intentId);
+            closeRequestedPeerIntents.remove(intentId);
+            cleanupClosedPeerEndpoint(intent.endpoint());
         });
     }
 
     private void cleanupClosedPeerEndpoint(String endpoint) {
         RouterSocket current = router;
-        if (current == null || endpoint.startsWith("inproc://")) {
+        if (current == null) {
             return;
         }
         try {
-            // Remove the endpoint registration only after the monitor has
-            // confirmed physical closure so replacement connect starts a new
-            // Core-owned route.
+            // A closed intent retires its Core connect intent for every
+            // transport. Core otherwise keeps reconnecting the endpoint
+            // (inproc included, spec 06-monitoring §3), and the replacement
+            // connect would then become a second intent to the same listener.
             current.disconnect(endpoint);
         } catch (RuntimeException ignored) {
-            // A concurrent teardown may already have removed the endpoint.
+            // A requested close already retired the endpoint on the pump.
         }
     }
 
@@ -6955,16 +6988,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         disconnectAdmitted(peer, connectionIds.get(peer));
     }
 
-    private void disconnectAdmitted(
+    private boolean disconnectAdmitted(
         RoutingId peer,
         String connectionId) {
         if (connectionId == null) {
             admissionControlReadyConnections.remove(peer);
-            return;
+            return false;
         }
         if (!topology.disconnect(peer, connectionId)) {
             admissionControlReadyConnections.remove(peer, connectionId);
-            return;
+            return false;
         }
         admissionControlReadyConnections.remove(peer, connectionId);
         connectionIds.remove(peer, connectionId);
@@ -6976,6 +7009,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             admittedPeerObjectRoles.remove(peer);
         }
         liveness.disconnect(peer, connectionId);
+        return true;
     }
 
     private void forgetKnownPeerChannelsIfUntracked(RoutingId peer) {
