@@ -15,7 +15,7 @@ You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3
    is that a structural difference or a symptom of another root cause?
 4. **Classification**: A (0.17 contract adaptation, cite clause) / B (pre-existing framework defect, cite the violated clause
    and why latent before) / C (would be a workaround — name the real cause and the evidence needed) / D (spec gap — cite).
-5. Proposed minimal fix location and the regression test that would prove it; what would break if the compensating code
+5. Proposed SIMPLEST root fix (prefer deleting code over adding state/timers/helpers/options; if two options, the one with less code) and the regression test that would prove it; what would break if the compensating code
    were deleted instead.
 Forbidden as a "fix": timeout/budget/retry increases, "safe" reordering, monitor-pair state to filter frames, second poller,
 catch-all swallow, fixture relaxation, assertion changed to match implementation.
