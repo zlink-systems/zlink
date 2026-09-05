@@ -140,6 +140,76 @@ final class ZLinkJavaRawMeshNodeTransportIdentityTest {
     }
 
     @Test
+    void lateReadyCannotReviveRequestedClosedIntent() throws Exception {
+        assertLateReadyPreservesClosedIntent(false);
+    }
+
+    @Test
+    void lateReadyCannotReviveAdmittedClosedIntent() throws Exception {
+        assertLateReadyPreservesClosedIntent(true);
+    }
+
+    private static void assertLateReadyPreservesClosedIntent(boolean admitted)
+        throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            installIntent(node);
+            ready(node, 1436, 0);
+            if (!admitted) {
+                requestClose(node);
+            }
+            terminate(node, event(MonitorEventType.DISCONNECTED, 1436, 0), admitted);
+            assertTrue(isClosed(node));
+
+            Method active = ZLinkJavaRawMeshNode.class.getDeclaredMethod(
+                "markPeerIntentsActive", MonitorEvent.class, RoutingId.class);
+            active.setAccessible(true);
+            // Isolate endpoint and RID matching: neither late edge belongs
+            // to the intent whose terminal close was already published.
+            for (MonitorEvent late : new MonitorEvent[] {
+                    new MonitorEvent(MonitorEventType.CONNECTION_READY, 1,
+                        Optional.of(RoutingId.from("other-peer")), "", ENDPOINT,
+                        1442, 0, 1),
+                    new MonitorEvent(MonitorEventType.CONNECTION_READY, 1,
+                        Optional.of(PEER), "", "inproc://other-endpoint",
+                        1445, 0, 1)}) {
+                active.invoke(node, late, late.routingId().orElseThrow());
+                assertTrue(isClosed(node), late.toString());
+                assertFalse(node.hasLivePeerIntent(ENDPOINT));
+                var transportsField = ZLinkJavaRawMeshNode.class
+                    .getDeclaredField("peerIntentTransports");
+                transportsField.setAccessible(true);
+                assertFalse(((Map<?, ?>) transportsField.get(node)).containsKey(INTENT),
+                    "a late READY must not become transport ownership of a closed intent");
+            }
+
+            var routerField = ZLinkJavaRawMeshNode.class.getDeclaredField("router");
+            routerField.setAccessible(true);
+            var connects = new java.util.concurrent.atomic.AtomicInteger();
+            RouterSocket router = (RouterSocket) Proxy.newProxyInstance(
+                RouterSocket.class.getClassLoader(),
+                new Class<?>[] {RouterSocket.class},
+                (proxy, method, args) -> {
+                    assertEquals("connect", method.getName());
+                    assertEquals(ENDPOINT, args[0]);
+                    connects.incrementAndGet();
+                    return null;
+                });
+            routerField.set(node, router);
+            try {
+                long replacement = node.replacePeerConnection(ENDPOINT, PEER, 17L,
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                assertTrue(replacement != INTENT);
+                assertEquals(1, connects.get());
+                ready(node, 1450, 0);
+                assertTrue(node.hasLivePeerIntent(ENDPOINT));
+            } finally {
+                routerField.set(node, null);
+            }
+        }
+    }
+
+    @Test
     void lateReadyKeepsAdmissionIdentityWhenHelloInferredTheOppositeDirection()
         throws Exception {
         try (var context = Zlink.createContext();
@@ -326,7 +396,6 @@ final class ZLinkJavaRawMeshNodeTransportIdentityTest {
                 .connectionIntentId());
             peer.close();
             awaitState(local, MeshPeerState.CLOSED);
-            await(() -> !local.hasLivePeerIntent(peerEndpoint));
 
             // A fresh listener on the same endpoint must not revive the
             // closed intent: its Core connect intent was retired with it,

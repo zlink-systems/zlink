@@ -553,7 +553,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             local.start();
             peer.start();
 
-            local.connectPeer(
+            long intent = local.connectPeer(
                 peerEndpoint,
                 peerRid,
                 peer.status().lifecycleGeneration() + 1,
@@ -562,8 +562,11 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             assertFalse(local.peers().stream().anyMatch(peerEntry ->
                 peerEntry.state() == MeshPeerState.ADMITTED));
 
-            awaitReplacement(
-                local,
+            assertThrows(IllegalStateException.class,
+                () -> local.replacePeerConnection(peerEndpoint, peerRid,
+                    peer.status().lifecycleGeneration(), "wrong-security-identity"));
+            awaitIntentClosed(local, intent);
+            intent = local.replacePeerConnection(
                 peerEndpoint,
                 peerRid,
                 peer.status().lifecycleGeneration(),
@@ -572,8 +575,11 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             assertFalse(local.peers().stream().anyMatch(peerEntry ->
                 peerEntry.state() == MeshPeerState.ADMITTED));
 
-            awaitReplacement(
-                local,
+            assertThrows(IllegalStateException.class,
+                () -> local.replacePeerConnection(peerEndpoint, peerRid,
+                    peer.status().lifecycleGeneration(), ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY));
+            awaitIntentClosed(local, intent);
+            intent = local.replacePeerConnection(
                 peerEndpoint,
                 peerRid,
                 peer.status().lifecycleGeneration(),
@@ -649,7 +655,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             local.start();
             peer.start();
 
-            local.connectPeer(peerEndpoint);
+            long intent = local.connectPeer(peerEndpoint);
             awaitTransport(local, peerEndpoint);
             assertThrows(
                 IllegalStateException.class,
@@ -665,8 +671,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 replacementPeer.setRoutingId(peerRid);
                 replacementPeer.setBind(peerEndpoint);
                 replacementPeer.start();
-                long fencedIntent = awaitReplacement(
-                    local,
+                awaitIntentClosed(local, intent);
+                long fencedIntent = local.replacePeerConnection(
                     peerEndpoint,
                     peerRid,
                     replacementPeer.status().lifecycleGeneration(),
@@ -752,7 +758,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             local.start();
             peer.start();
 
-            local.connectPeer(peerEndpoint);
+            long intent = local.connectPeer(peerEndpoint);
             assertThrows(
                 IllegalStateException.class,
                 () -> local.replacePeerConnection(
@@ -767,8 +773,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 replacementPeer.setRoutingId(peerRid);
                 replacementPeer.setBind(peerEndpoint);
                 replacementPeer.start();
-                long replacementIntent = awaitReplacement(
-                    local,
+                awaitIntentClosed(local, intent);
+                long replacementIntent = local.replacePeerConnection(
                     peerEndpoint,
                     peerRid,
                     replacementPeer.status().lifecycleGeneration(),
@@ -1480,31 +1486,21 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         throw new AssertionError("peer state was not observed: " + state);
     }
 
-    private static long awaitReplacement(
+    private static void awaitIntentClosed(
         ZLinkJavaRawMeshNode node,
-        String endpoint,
-        RoutingId expectedRoutingId,
-        long expectedLifecycleGeneration,
-        String expectedSecurityIdentity)
-        throws InterruptedException {
+        long intent) throws Exception {
+        // ERROR and endpoint-only fixtures do not expose a CLOSED peer row.
+        // Observe the same terminal fact that replacePeerConnection reads.
+        Method isClosed = ZLinkJavaRawMeshNode.class.getDeclaredMethod(
+            "peerIntentIsClosed", long.class);
+        isClosed.setAccessible(true);
         long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        RuntimeException last = null;
-        while (System.nanoTime() < deadline) {
-            try {
-                return node.replacePeerConnection(
-                    endpoint,
-                    expectedRoutingId,
-                    expectedLifecycleGeneration,
-                    expectedSecurityIdentity);
-            } catch (RuntimeException retryableFailure) {
-                last = retryableFailure;
-                Thread.onSpinWait();
+        while (!(boolean) isClosed.invoke(node, intent)) {
+            if (System.nanoTime() >= deadline) {
+                throw new AssertionError("peer intent close was not observed");
             }
+            Thread.sleep(1);
         }
-        if (last != null) {
-            throw last;
-        }
-        throw new AssertionError("peer replacement did not run");
     }
 
     private static void awaitTransport(

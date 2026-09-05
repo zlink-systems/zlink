@@ -135,12 +135,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private static final String RELOCATION_CONTROL_PACKET =
         "zlink.internal.spot.relocation.control.v1";
     private static final int USER_SPOT_TERMINAL_CAPACITY = 4096;
-    private static final long USER_SPOT_TERMINAL_RETENTION_MS =
-        Duration.ofMinutes(5).toMillis();
+    private static final long USER_SPOT_TERMINAL_RETENTION_NANOS =
+        Duration.ofMinutes(5).toNanos();
 
     private final String meshName;
     private final ZLinkJavaRawServicePort port;
     private final LongSupplier currentTimeMillis;
+    private final LongSupplier nanoTime;
     private final Map<String, Integer> channelWeights = new ConcurrentHashMap<>();
     private final Map<Long, PeerIntent> peerIntents = new ConcurrentHashMap<>();
     private final Map<RoutingId, PeerAdmissionExpectation>
@@ -295,6 +296,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         LongSupplier currentTimeMillis,
         Duration livenessProbeInterval,
         Duration livenessPeerTimeout) {
+        this(context, meshName, currentTimeMillis, System::nanoTime,
+            livenessProbeInterval, livenessPeerTimeout);
+    }
+
+    ZLinkJavaRawMeshNode(
+        Context context,
+        String meshName,
+        LongSupplier currentTimeMillis,
+        LongSupplier nanoTime,
+        Duration livenessProbeInterval,
+        Duration livenessPeerTimeout) {
         if (meshName == null || meshName.isBlank()) {
             throw new IllegalArgumentException("meshName is required");
         }
@@ -302,6 +314,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         this.port = new ZLinkJavaRawServicePort(context);
         this.currentTimeMillis = Objects.requireNonNull(
             currentTimeMillis, "currentTimeMillis");
+        this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
         this.liveness = new ZLinkServiceLivenessRegistry(
             livenessProbeInterval, livenessPeerTimeout);
     }
@@ -6337,6 +6350,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private void dispatchAdmission(
         ZLinkJavaRawServicePort.Inbound inbound,
         int command) {
+        if (command == ServiceWireConstants.COMMAND_HELLO
+            && peerAdmissionSealed.getAsBoolean()) {
+            return;
+        }
         if (inbound.frames().size() != 1) {
             return;
         }
@@ -6765,7 +6782,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         MonitorEvent event,
         RoutingId peerRid) {
         peerIntents.forEach((intentId, intent) -> {
-            if (matchesMonitorPeer(intentId, intent, event, peerRid)) {
+            if (!closedPeerIntents.contains(intentId)
+                && matchesMonitorPeer(intentId, intent, event, peerRid)) {
                 peerIntentTransports.computeIfAbsent(
                     intentId,
                     ignored -> ConcurrentHashMap.newKeySet())
@@ -6773,7 +6791,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 if (closeRequestedPeerIntents.contains(intentId)) {
                     return;
                 }
-                closedPeerIntents.remove(intentId);
                 livePeerIntents.add(intentId);
                 if (peerRid != null
                     && intent.expectedRoutingId() == null) {
@@ -7563,11 +7580,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         UserSpotOperationKey key,
         byte[] fingerprint,
         long deadlineUnixMs) {
-        long now = currentTimeMillis.getAsLong();
         return inUserSpotTerminalStateLane(() -> {
+            long now = currentTimeMillis.getAsLong();
+            long nowNanos = nanoTime.getAsLong();
             userSpotTerminals.entrySet().removeIf(
                 entry -> entry.getValue().terminal.isDone()
-                    && entry.getValue().retentionDeadlineUnixMs < now);
+                    && nowNanos - entry.getValue().retentionDeadlineNanos > 0);
             UserSpotTerminalSlot existing = userSpotTerminals.get(key);
             if (existing != null) {
                 return MessageDigest.isEqual(
@@ -7586,7 +7604,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     null, false, false, false);
             }
             UserSpotTerminalSlot created = new UserSpotTerminalSlot(
-                fingerprint.clone(), deadlineUnixMs);
+                fingerprint.clone(), nowNanos,
+                TimeUnit.MILLISECONDS.toNanos(deadlineUnixMs - now));
             userSpotTerminals.put(key, created);
             return new UserSpotTerminalAdmission(
                 created, true, false, false);
@@ -7730,19 +7749,21 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
 
     private static final class UserSpotTerminalSlot {
         private final byte[] fingerprint;
-        private final long retentionDeadlineUnixMs;
+        private final long retentionDeadlineNanos;
         private final CompletableFuture<UserSpotTerminalReply> terminal =
             new CompletableFuture<>();
 
         private UserSpotTerminalSlot(
             byte[] fingerprint,
-            long deadlineUnixMs) {
+            long nowNanos,
+            long remainingNanos) {
             this.fingerprint = fingerprint;
-            this.retentionDeadlineUnixMs =
-                deadlineUnixMs > Long.MAX_VALUE
-                    - USER_SPOT_TERMINAL_RETENTION_MS
-                ? Long.MAX_VALUE
-                : deadlineUnixMs + USER_SPOT_TERMINAL_RETENTION_MS;
+            // Convert the wire deadline once; local retention follows elapsed
+            // time even when the wall clock changes after admission.
+            this.retentionDeadlineNanos = nowNanos
+                + Math.min(remainingNanos,
+                    Long.MAX_VALUE - USER_SPOT_TERMINAL_RETENTION_NANOS)
+                + USER_SPOT_TERMINAL_RETENTION_NANOS;
         }
     }
 

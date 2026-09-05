@@ -6,6 +6,7 @@ import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.logging.Handler;
@@ -27,6 +28,125 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegi
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 final class ZLinkJavaRawMeshNodeShutdownSealTest {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void inboundHelloFollowsHostShutdownSeal(boolean sealed) throws Exception {
+        var drains = new ZLinkMeshDrainCoordinator(List.of("mesh"));
+        var helloObserved = new CountDownLatch(1);
+        try (var context = Zlink.createContext();
+             var local = new ZLinkJavaRawMeshNode(context, "mesh");
+             var remote = new ZLinkJavaRawServicePort(context)) {
+            start(local, "inbound-seal-local");
+            local.setPeerAdmissionSealGate(() -> {
+                boolean result = drains.isSealed("mesh");
+                helloObserved.countDown();
+                return result;
+            });
+            if (sealed) {
+                drains.sealAll();
+                local.markServiceDraining();
+            }
+            RoutingId peerRid = RoutingId.from("inbound-seal-peer");
+            RouterSocket peer = remote.openRouter(peerRid);
+            peer.options().probe(true);
+            peer.connect(endpoint(local));
+            var descriptor = new ZLinkServiceNodeDescriptor("mesh", peerRid, 7, 1,
+                "inproc://inbound-seal-peer", List.of(),
+                ZLinkServiceNodeDescriptor.State.SERVING, "default", 1,
+                List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
+                ZLinkServiceNodeDescriptor.ObjectRole.NONE, 1, 1, 0, 0, 0);
+            var wire = new ZLinkServiceM6AWireCodec();
+            remote.send(peer, local.routingId(), List.of(wire.encodeAdmission(
+                ServiceWireConstants.COMMAND_HELLO, descriptor)))
+                .toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertTrue(helloObserved.await(2, TimeUnit.SECONDS));
+            if (sealed) {
+                long deadline = System.nanoTime() + Duration.ofMillis(200).toNanos();
+                do {
+                    var inbound = remote.receive(peer);
+                    if (inbound.isPresent()) {
+                        try (var message = inbound.orElseThrow()) {
+                            // ROUTER probe is an empty transport frame, not admission.
+                            assertEquals(-1, ZLinkJavaRawMeshNode
+                                .allowedInfrastructureControlCommand(message.frames()),
+                                "sealed Hello must be unanswered");
+                        }
+                    }
+                    Thread.sleep(1);
+                } while (System.nanoTime() < deadline);
+                assertTrue(local.peers().isEmpty());
+                assertTrue(((ZLinkServiceTopologyRegistry) field(local, "topology"))
+                    .peer(peerRid).isEmpty());
+                assertTrue(((java.util.Map<?, ?>) field(local, "admittedPeerChannels")).isEmpty());
+                assertTrue(((java.util.Map<?, ?>) field(local, "peerIntentRoutingIds")).isEmpty());
+                assertTrue(((java.util.Set<?>) field(local, "rejectedPeers")).isEmpty());
+            } else {
+                var receivedAdmit = new java.util.concurrent.atomic.AtomicBoolean();
+                await(() -> {
+                    if (receivedAdmit.get()) {
+                        return true;
+                    }
+                    var inbound = remote.receive(peer);
+                    if (inbound.isEmpty()) {
+                        return false;
+                    }
+                    try (var message = inbound.orElseThrow()) {
+                        receivedAdmit.set(ZLinkJavaRawMeshNode
+                            .allowedInfrastructureControlCommand(message.frames())
+                            == ServiceWireConstants.COMMAND_ADMIT);
+                        return receivedAdmit.get();
+                    }
+                });
+                assertEquals(ZLinkServiceNodeDescriptor.State.SERVING,
+                    remoteState(local, peerRid));
+                assertEquals(1, local.peers().size());
+            }
+        }
+    }
+
+    @Test
+    void admittedPeersStillExchangeDrainingUpdatesAfterSeal() throws Exception {
+        var drains = new ZLinkMeshDrainCoordinator(List.of("mesh"));
+        try (var context = Zlink.createContext();
+             var local = new ZLinkJavaRawMeshNode(context, "mesh");
+             var peer = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            start(local, "sealed-update-local");
+            start(peer, "sealed-update-peer");
+            local.setPeerAdmissionSealGate(() -> drains.isSealed("mesh"));
+            local.connectPeer(endpoint(peer), peer.routingId());
+            await(() -> admitted(local) && admitted(peer));
+            drains.sealAll();
+            local.markServiceDraining();
+            await(() -> remoteState(peer, local.routingId())
+                == ZLinkServiceNodeDescriptor.State.DRAINING);
+            var current = descriptor(peer);
+            var laterHello = new ZLinkServiceNodeDescriptor(current.meshName(),
+                current.nodeRoutingId(), current.lifecycleGeneration(), 99,
+                current.advertisedEndpoint(), current.channels(), current.state(),
+                current.securityIdentity(), current.applicationVersion(),
+                current.protocolCapabilities(), current.objectRole(),
+                current.placementWeight(), current.activeCapacityLimit(),
+                current.pendingCapacityLimit(), current.activeCapacityUsed(),
+                current.pendingCapacityUsed());
+            var port = (ZLinkJavaRawServicePort) field(peer, "port");
+            port.send((RouterSocket) field(peer, "router"), local.routingId(),
+                List.of(new ZLinkServiceM6AWireCodec().encodeAdmission(
+                    ServiceWireConstants.COMMAND_HELLO, laterHello)))
+                .toCompletableFuture().get(2, TimeUnit.SECONDS);
+            // If the sealed Hello advances revision to 99, the next Update
+            // cannot install its lower revision and this wait fails.
+            peer.markServiceDraining();
+            await(() -> remoteState(local, peer.routingId())
+                == ZLinkServiceNodeDescriptor.State.DRAINING);
+            assertEquals(descriptor(peer).descriptorRevision(),
+                ((ZLinkServiceTopologyRegistry) field(local, "topology"))
+                    .peer(peer.routingId()).orElseThrow().descriptor().descriptorRevision());
+            assertEquals(MeshNodeState.DRAINING, local.status().state());
+            assertEquals(1, local.peers().size());
+            assertTrue(drains.isSealed("mesh"));
+        }
+    }
+
     @Test
     void sealedPeerLossStopsHelloKeepsDrainingAndCompletesDrain() throws Exception {
         var drains = new ZLinkMeshDrainCoordinator(List.of("mesh"));
