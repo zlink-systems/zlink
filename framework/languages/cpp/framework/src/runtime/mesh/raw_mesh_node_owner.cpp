@@ -171,9 +171,7 @@ class infrastructure_request_retry_state_t final :
       detail::backend::raw_message_t request_parts,
       std::function<std::vector<std::uint8_t> (
         const detail::backend::raw_message_t &)> decode_reply,
-      clock_t::time_point deadline,
-      foundation::operation_terminal_t deadline_terminal =
-        foundation::operation_terminal_t::transport_failed) :
+      clock_t::time_point deadline) :
         _port (std::move (port)),
         _operations (std::move (operations)),
         _operation (operation),
@@ -182,7 +180,6 @@ class infrastructure_request_retry_state_t final :
         _request_parts (std::move (request_parts)),
         _decode_reply (std::move (decode_reply)),
         _deadline (deadline),
-        _deadline_terminal (deadline_terminal),
         _retry_timer (boost::asio::system_executor ())
     {
     }
@@ -198,7 +195,7 @@ class infrastructure_request_retry_state_t final :
         const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
           _deadline - clock_t::now ());
         if (remaining <= std::chrono::milliseconds::zero ()) {
-            fail (_deadline_terminal);
+            fail (foundation::operation_terminal_t::route_unavailable);
             return;
         }
         auto running = std::make_shared<
@@ -228,9 +225,7 @@ class infrastructure_request_retry_state_t final :
           + " result="
           + std::to_string (static_cast<int> (completion.result)));
         if (completion.result
-              == detail::backend::raw_request_result_t::not_connected
-            || completion.result
-                 == detail::backend::raw_request_result_t::route_unavailable) {
+            == detail::backend::raw_request_result_t::route_unavailable) {
             schedule_retry ();
             return;
         }
@@ -274,7 +269,7 @@ class infrastructure_request_retry_state_t final :
     {
         const auto now = clock_t::now ();
         if (now >= _deadline) {
-            fail (_deadline_terminal);
+            fail (foundation::operation_terminal_t::route_unavailable);
             return;
         }
         _retry_timer.expires_at (std::min (
@@ -305,7 +300,6 @@ class infrastructure_request_retry_state_t final :
     std::function<std::vector<std::uint8_t> (
       const detail::backend::raw_message_t &)> _decode_reply;
     clock_t::time_point _deadline;
-    foundation::operation_terminal_t _deadline_terminal;
     boost::asio::steady_timer _retry_timer;
 };
 
@@ -318,20 +312,18 @@ task_t<bool> submit_registered_infrastructure_request_with_retry (
   detail::backend::raw_message_t request_parts,
   std::function<std::vector<std::uint8_t> (
     const detail::backend::raw_message_t &)> decode_reply,
-  foundation::operation_registry_t::clock_t::time_point deadline,
-  foundation::operation_terminal_t deadline_terminal =
-    foundation::operation_terminal_t::transport_failed)
+  foundation::operation_registry_t::clock_t::time_point deadline)
 {
     if (!port
         || deadline <= foundation::operation_registry_t::clock_t::now ()) {
         (void) operations->fail (
-          operation, deadline_terminal);
+          operation, foundation::operation_terminal_t::route_unavailable);
         co_return false;
     }
     auto retry = std::make_shared<infrastructure_request_retry_state_t> (
       std::move (port), std::move (operations), operation, correlation,
       std::move (target_routing_id), std::move (request_parts),
-      std::move (decode_reply), deadline, deadline_terminal);
+      std::move (decode_reply), deadline);
     retry->start ();
     co_return true;
 }
@@ -1936,7 +1928,7 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
                 "bound Session bind reply terminal is inconsistent");
           }
           return parts.front ();
-      }, deadline, foundation::operation_terminal_t::timed_out);
+      }, deadline);
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_bound_session_replaced (

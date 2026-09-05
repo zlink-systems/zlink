@@ -254,7 +254,7 @@ void verify_bound_session_bind_permanent_absence_is_bounded ()
     assert (completion.wait_for (500ms) == std::future_status::ready);
     assert (std::chrono::steady_clock::now () - started >= 40ms);
     assert (completion.get ().first
-            == foundation::operation_terminal_t::timed_out);
+            == foundation::operation_terminal_t::route_unavailable);
     source.close ();
 }
 
@@ -398,7 +398,7 @@ void verify_actor_create_retry_timeout_is_unavailable ()
     assert (completion.wait_for (500ms) == std::future_status::ready);
     assert (std::chrono::steady_clock::now () - submitted_at >= 40ms);
     const auto terminal = completion.get ().first;
-    assert (terminal == foundation::operation_terminal_t::transport_failed);
+    assert (terminal == foundation::operation_terminal_t::route_unavailable);
     assert (
       runtime::user_spot_terminal::map_user_spot_operation_failure (
         terminal, {}, true)

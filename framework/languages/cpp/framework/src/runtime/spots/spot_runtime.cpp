@@ -1951,6 +1951,7 @@ spot_request_terminal_exception (runtime::foundation::operation_terminal_t termi
             return detail::make_boundary_exception (detail::boundary_error_t::cancelled,
                                                     "SPOT mesh request was cancelled");
         case runtime::foundation::operation_terminal_t::transport_failed:
+        case runtime::foundation::operation_terminal_t::route_unavailable:
             return detail::make_boundary_exception (detail::boundary_error_t::disconnected,
                                                     "SPOT mesh request lost its connection");
         case runtime::foundation::operation_terminal_t::shutdown:
