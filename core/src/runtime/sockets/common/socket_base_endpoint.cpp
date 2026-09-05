@@ -1034,15 +1034,6 @@ int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
           }
       };
     if (uri_protocol == protocol_name::inproc) {
-        //  A connect that is still pending (no binder yet) parks its peer
-        //  pipe in the context registry where no socket ever runs the pipe
-        //  termination handshake. Materialize it into a short-lived PAIR
-        //  socket first so both pipe halves can terminate and this socket
-        //  can be reaped before ctx term. Best effort: if the context cannot
-        //  supply the helper socket (socket limit reached or termination
-        //  already started), keep the previous disconnect semantics and fall
-        //  through to the local cleanup.
-        (void) get_ctx ()->materialize_pending_inproc (endpoint_uri_str, this);
         fail_public_pending_for_endpoint (endpoint_uri_str);
         if (unregister_endpoint (endpoint_uri_str, this) == 0) {
             std::vector<pipe_t *> attached;

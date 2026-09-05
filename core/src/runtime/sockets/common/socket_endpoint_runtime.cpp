@@ -2,6 +2,7 @@
 
 #include "utils/precompiled.hpp"
 
+#include "core/ctx.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/common/socket_runtime.hpp"
 
@@ -107,9 +108,21 @@ int zlink::socket_inprocs_t::erase_pipes (const std::string &endpoint_uri_str_,
         return -1;
     }
 
+    std::vector<pipe_t *> pipes;
     for (map_t::iterator it = range.first; it != range.second; ++it)
-        owner_->terminate_inproc_pipe_with_peer_progress (it->second);
+        if (it->second->retain_lifetime_ref ())
+            pipes.push_back (it->second);
+    // Remove connect intent before materialization can observe peer termination
+    // and queue a reconnect. Retain the pipes across that command progress.
     _inprocs.erase (range.first, range.second);
+
+    // Pending peers have no binder to complete their termination handshake.
+    // The context's existing helper gives them an owner before we terminate.
+    (void) owner_->get_ctx ()->materialize_pending_inproc (endpoint_uri_str_, owner_);
+    for (size_t i = 0; i != pipes.size (); ++i) {
+        owner_->terminate_inproc_pipe_with_peer_progress (pipes[i]);
+        pipes[i]->release_lifetime_ref ();
+    }
     return 0;
 }
 

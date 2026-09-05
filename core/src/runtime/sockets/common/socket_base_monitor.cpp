@@ -221,7 +221,8 @@ void zlink::socket_base_t::snapshot_attached_pipes (std::vector<pipe_t *> *out_)
     if (!out_)
         return;
 
-    process_commands (0, false);
+    // Callers own command progress. A snapshot must not re-enter endpoint
+    // teardown and invalidate the caller's endpoint iterators or route choice.
     out_->clear ();
     scoped_lock_t lock (monitor_runtime ().sync);
     out_->reserve (endpoint_runtime ().attached_pipe_count ());

@@ -84,18 +84,21 @@ int zlink::socket_base_t::adopt_accepted_transport_pair (
     const accepted_transport_pairs_t::iterator existing =
       _accepted_transport_pairs.find (peer_key);
     if (existing != _accepted_transport_pairs.end () && lane_count_ == 2u) {
-        *pair_id_out_ = existing->second.pair_id;
-        *generation_out_ = existing->second.generation;
-        return 0;
+        const transport_pairs_t::const_iterator pair = _transport_pairs.find (
+          transport_pair_key_t (existing->second.pair_id,
+                                existing->second.generation));
+        // RID associates the two handshakes only while their lane set is
+        // incomplete. A ready pair already owns all its physical connections;
+        // a later same-RID connection must reach ROUTER duplicate admission.
+        if (pair == _transport_pairs.end () || !pair->second.ready) {
+            *pair_id_out_ = existing->second.pair_id;
+            *generation_out_ = existing->second.generation;
+            return 0;
+        }
     }
 
-    // A count-one pair is a complete physical connection by itself. Reusing
-    // the previous connection's accepted pair ID makes pair-table admission
-    // treat a same-RID handover as a duplicate Application lane and terminate
-    // both pipes before ROUTER duplicate policy can run. Replace the registry
-    // entry with a fresh ID; release from the older pipe is ID-qualified and
-    // therefore cannot erase the new owner. Count-two transports still reuse
-    // the entry so their Application and Completion lanes converge.
+    // The old pair retains its ID in the pair table. Its ID-qualified release
+    // cannot erase the replacement handshake's association.
     if (existing != _accepted_transport_pairs.end ())
         _accepted_transport_pairs.erase (existing);
 
@@ -252,20 +255,26 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                                         bool transport_validated_)
 {
     pipe_->set_event_sink (this);
-    // A bind command retains the pipe until dispatch, but termination can
-    // already have made it unusable before that command reaches the socket.
-    // Publish endpoint ownership under the same lock used by detach, and
-    // recheck the pipe state there: if termination won before this point its
-    // callback has either already removed the pipe or will observe this
-    // insertion after the state transition.
+    // A bind command retains the pipe until dispatch. Even an inactive pipe
+    // still needs its socket owner until the termination handshake finishes.
+    // Only final release permits skipping ownership; otherwise close must
+    // include the pipe and complete its pending delimiter/ack exchange.
     {
         scoped_lock_t lock (monitor_runtime ().sync);
-        if (!pipe_->is_lifecycle_active ())
+        if (pipe_->has_completed_termination ())
             return;
         const bool already_attached =
           endpoint_runtime ().attached_pipes.contains (pipe_);
         if (!already_attached)
             endpoint_runtime ().attach_pipe (pipe_);
+    }
+
+    if (is_terminating ()) {
+        if (_term_pipes.insert (pipe_).second) {
+            register_term_acks (1);
+            ++_term_pipe_acks_registered;
+            pipe_->terminate (false);
+        }
     }
 
     const uint64_t pair_id = pipe_->get_transport_pair_id ();
@@ -629,14 +638,6 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             (void) get_ctx ()->auto_hwm_recalculate_now ();
         else
             get_ctx ()->schedule_auto_hwm_recalculate ();
-    }
-
-    if (is_terminating ()) {
-        if (_term_pipes.insert (pipe_).second) {
-            register_term_acks (1);
-            ++_term_pipe_acks_registered;
-            pipe_->terminate (false);
-        }
     }
 }
 
@@ -1722,6 +1723,42 @@ void zlink::socket_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_compl
     socket_reqrep_internal::fail_pending_requests_for_transport_pair (
       request_reply_state (), pipe_->get_transport_pair_id (),
       pipe_->get_transport_pair_generation ());
+    // The claim is shared with the transport-error producer and final release.
+    // Keep the inproc registration until release: close also uses it to find
+    // pending peers that still need an owner for their termination handshake.
+    if (!pipe_->try_claim_transport_disconnected_event ())
+        return;
+    const uint64_t pair_id = pipe_->get_transport_pair_id ();
+    const uint64_t pair_generation = pipe_->get_transport_pair_generation ();
+    const bool completion =
+      pair_id != 0 && pipe_->get_transport_lane () == transport_lane_completion;
+    endpoint_uri_pair_t endpoint_pair = pipe_->get_endpoint_pair ();
+    endpoint_pair.connection_id = pipe_->get_transport_connection_id ();
+    const blob_t &routing_id = pipe_->get_routing_id ();
+    const unsigned char *routing_id_data = routing_id.data ();
+    const size_t routing_id_size = routing_id.size ();
+    // Only the connecting socket records a pipe in inprocs. Explicit
+    // zlink_disconnect erases that record before termination, whereas an
+    // unexpected peer detach leaves it available as the reconnect intent.
+    std::string inproc_reconnect_endpoint;
+    const bool reconnect_inproc =
+      !completion && !is_terminating () && options.reconnect_ivl > 0
+      && endpoint_runtime ().inprocs.endpoint_for_pipe (
+        pipe_, &inproc_reconnect_endpoint);
+    // Physical termination is observable before inbound records are drained.
+    // Keep the existing claim shared with the transport-error producer so
+    // final pipe release cannot publish a second edge.
+    if (pair_id != 0) {
+        event_disconnected (
+          endpoint_pair, ZLINK_DISCONNECT_UNKNOWN, routing_id_data,
+          routing_id_size, pipe_->get_transport_lane (), pair_id,
+          pair_generation);
+    }
+    // pipe_peer_terminated runs under the command owner. Queue the reconnect so
+    // connect_internal does not re-enter that owner while handling this pipe.
+    if (reconnect_inproc && !is_terminating ())
+        send_reconnect_inproc (
+          this, new std::string (inproc_reconnect_endpoint));
 }
 
 void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
@@ -1747,25 +1784,6 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
     pipe_peer_terminated (pipe_);
     const bool completion =
       pipe_ && pair_id != 0 && pipe_->get_transport_lane () == transport_lane_completion;
-    // Only the connecting socket records a pipe in inprocs. Explicit
-    // zlink_disconnect erases that record before termination, whereas an
-    // unexpected peer detach leaves it available as the reconnect intent.
-    std::string inproc_reconnect_endpoint;
-    const bool reconnect_inproc =
-      pipe_ && !completion && !is_terminating () && options.reconnect_ivl > 0
-      && endpoint_runtime ().inprocs.endpoint_for_pipe (
-        pipe_, &inproc_reconnect_endpoint);
-    // A locally requested endpoint termination may tear the engine down
-    // without entering asio_engine_t::error(). Publish its physical disconnect
-    // here. The per-pipe claim makes this mutually exclusive with the normal
-    // transport-error producer.
-    if (pipe_ && pair_id != 0
-        && pipe_->try_claim_transport_disconnected_event ()) {
-        event_disconnected (
-          endpoint_pair, ZLINK_DISCONNECT_UNKNOWN, routing_id_data,
-          routing_id_size, pipe_->get_transport_lane (), pair_id,
-          pair_generation);
-    }
     if (pipe_ && pair_id != 0 && !pipe_->is_locally_initiated ()) {
         const blob_t &accepted_identity =
           pipe_->get_transport_peer_identity ();
@@ -1866,6 +1884,7 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
         socket_reqrep_internal::forget_router_reply_targets_for_pipe (
           request_reply_state (), pipe_);
     }
+
     endpoint_runtime ().inprocs.erase_pipe (pipe_);
 
     uint32_t ready_count = 0;
@@ -1919,12 +1938,6 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
         //  happens here instead of racing us.
         paired_pipe->release_lifetime_ref ();
     }
-
-    // pipe_terminated runs under the command owner. Queue the reconnect so
-    // connect_internal does not re-enter that owner while handling this pipe.
-    if (reconnect_inproc && !is_terminating ())
-        send_reconnect_inproc (
-          this, new std::string (inproc_reconnect_endpoint));
 }
 
 zlink::pipe_t *
