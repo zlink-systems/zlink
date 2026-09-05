@@ -168,8 +168,11 @@ directions collide, both peers compare their routing IDs and choose the same
 single direction. A request already admitted on the direction that loses that
 choice does not carry over to the chosen direction: its reply stays scoped to
 the transport pair that was active at submit time, so it cannot complete
-through the new direction, and the request instead ends exactly once through
-its own timeout. The caller resubmits after the handover.
+through the new direction. Core completes that request exactly once with
+`ZLINK_REQUEST_NOT_CONNECTED` (errno `EHOSTUNREACH`) as soon as its pair is
+superseded by the handover, without waiting for the request's own timeout. The
+caller resubmits through the handed-over direction after receiving that
+completion.
 
 This option is meaningful only for sockets that can observe a peer-advertised
 routing id. STREAM assigns its own 4-byte connection routing ids, so this

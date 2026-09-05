@@ -103,3 +103,18 @@ SIGKILL하는 샘플 runner에서 삭제되지 않아 머신 A에서 하룻밤 j
   게이트 수치, BLOCKERS). 커밋 메시지에 D-086/D-087 또는 리뷰 항목 참조.
 - 완료 후 A가 로컬 패키지를 재빌드해 framework 게이트를 다시 돌릴 수 있게 **마지막 커밋 해시를 decisions에 남긴다.**
 - 작업 3~6에서 "spec에 명시가 없다"가 결론이면 Core/binding을 임의로 바꾸지 말고 spec gap으로 정리해 사용자 결정을 요청한다.
+
+---
+
+## 작업 7 (P0, 2026-09-05 10:20 추가) — Core: HANDOVER로 물러난 pair에 고정된 REQUEST를 즉시 `ZLINK_REQUEST_NOT_CONNECTED`로 종결
+근거: spec 개정 `core/doc/spec/core/socket/README.ko.md` §4(같은 커밋, en 포함). 이전 문구 "request는 자기 timeout으로 정확히 한 번 종결"을
+"pair가 handover로 물러나는 즉시 `ZLINK_REQUEST_NOT_CONNECTED`(errno `EHOSTUNREACH`)로 정확히 한 번 종결, 자기 timeout까지 기다리지 않음"으로
+바꿨다. 이유: framework durable operation replay(04-actor-model sender 규칙)는 attempt마다 남은 deadline 전부를 request timeout으로 넘기므로,
+Core가 자기 timeout까지 기다리면 replay할 시간이 남지 않는다(cpp astra job 보고 `stage2-cpp-replay-scope-summary.md`). 재시도 예산 분할은 금지 패턴.
+- 구현: `router_admission.cpp` reciprocal collapse / same-direction handover에서 물러나는 pair를 결정하는 지점에서, 그 pair에 pinned된 pending REQUEST를
+  `REQUEST_NOT_CONNECTED`로 완료(reply pinning 규칙 `socket_request_reply_submit_api.cpp:121-180`의 pair/generation fence는 유지). standby pipe 자체는
+  D-B96대로 유지.
+- 테스트: `core/tests/integration/test_router_reciprocal_handover_lanes.cpp:395-434`의 losing request 기대를 `REQUEST_TIMED_OUT` → `REQUEST_NOT_CONNECTED`로
+  바꾸고, completion이 losing request timeout보다 훨씬 이른 시점(예: < 100 ms, timeout 2 s)임을 assert. same-direction HANDOVER(같은 방향 재연결)도 같은 케이스 추가.
+- 완료 후 decisions에 커밋 해시 한 줄. A는 그 뒤 cpp/java/node/dotnet의 replay 범위(handover 행)를 마무리한다.
+
