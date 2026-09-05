@@ -1,0 +1,16 @@
+역할: zlink Core 계약 테스트·조사 담당(sol high). 작업 트리: /home/hep7hep7/project/zlink-wt-core-task3 (detached @ main; core/build·core/build-dev는 메인 트리 symlink이므로 **사용 금지** — 이 트리의 Core는 반드시 별도 디렉터리 `core/build-task3`에서 빌드: scripts/build-core.sh dev 가 쓰는 cmake 옵션을 읽어 같은 옵션으로 `cmake -S core -B core/build-task3 ...`, 빌드 `-j2`). 수정 범위: core/src/**, core/tests/** (테스트는 공개 C API만). **spec(`core/doc/spec/**`, `bindings/doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`) 수정 절대 금지**, `framework/**` 금지, doc/plan/** 수정 금지(요약 파일만). git commit/push/reset/checkout/stash 금지. 진행 로그 /home/hep7hep7/project/zlink-work/c016/core-task3-progress.md 한 줄씩 append(3분마다 한 줄 이상), 종료 시 `EXIT:<code>`. 요약 /home/hep7hep7/project/zlink-work/c016/core-task3-summary.md (시나리오별 결과표, spec 조항 인용, 원인 `file:line`, 수정, 회귀 테스트 이름, 게이트 수치, BLOCKERS, 그리고 마지막에 A가 쓸 한 줄: "spec대로 동작 확인 (테스트 이름)" 또는 "Core 버그 → 수정(파일)").
+
+배경(A 인계 작업 3, P0): dotnet framework Mesh가 Core의 reciprocal HANDOVER를 믿지 못해 상위에서 settlement 코드를 재구현했다. A가 그 코드를 지우기 전에 Core가 spec대로 동작하는지 계약 테스트로 확정해야 한다. 근거 spec: `core/doc/spec/core/socket/README.ko.md` §4 RID duplicate policy(HANDOVER; reciprocal은 RID 비교로 한 방향만 남김), `core/doc/spec/core/socket/07-router.ko.md`, lane 개념(`Zlink-Lane` READY property, Application lane 0 + Completion lane 1)은 `core/doc/spec/core/06-monitoring*.ko.md`와 socket README에서 찾아 인용. 참고 코드: `core/src/runtime/sockets/router/router_admission.cpp` `identify_peer`의 `reciprocal_duplicate` 경로(의심: loser를 anonymous standby pipe로 유지). 관련 기존 테스트: `core/tests/integration/test_router_multiple_dealers.cpp`, `core/tests/integration/routing-id/**`, monitoring 테스트(`core/tests/integration/monitoring/**`)에서 monitor 이벤트 수신 방법을 그대로 따른다.
+
+시나리오(공개 C API, tcp와 inproc 둘 다): ROUTER A와 ROUTER B가 서로 fixed RID(`ZLINK_OPT_ROUTING_ID`)로 connect(reciprocal). 양방향으로 Application lane 0 + Completion lane 1 두 lane 세트가 생긴다. 확정할 것:
+(a) RID 비교로 정해진 승자 방향만 남고 **패배 방향의 두 lane이 실제로 종료**되어 양쪽 socket monitor에 Disconnected/Closed로 관찰되는지, 언제(즉시 / linger / 어떤 타이머?) — 시간을 측정해 표로.
+(b) 양쪽 노드의 active direction이 동일한지(양쪽에서 살아남은 pipe의 방향이 같은지).
+(c) 패배 방향에 이미 admit된 REQUEST는 timeout 1회로 끝나고, 재전송은 승자 방향으로 성공하는지.
+(d) 승자 방향의 첫 REQUEST가 패배 lane 종료 전에 제출돼도 정상 완료되는지.
+reconnect interval(패배 쪽 socket의 RECONNECT_IVL) 10/100/1000 ms 각각.
+
+할 일:
+1. `core/tests/integration/test_router_reciprocal_handover_lanes.cpp`를 작성하고 `core/tests/CMakeLists.txt`에 기존 integration 테스트와 같은 형식으로 등록(labels `integration;serial`, TIMEOUT 60). 위 (a)~(d)를 tcp/inproc × interval로 돌려 결과표.
+2. 결과를 spec 조항과 대조한다. 패배 lane이 종료되지 않고 standby로 남으면: spec이 종료를 요구하는지 확인 → 요구하면 Core 버그로 수정(원인 `file:line`, 회귀 assert 추가). spec이 standby를 허용/의도하면 코드를 바꾸지 말고 요약에 조항을 인용해 "종료되지 않는다(standby)"를 명시. **spec에 명시가 없으면 Core를 바꾸지 말고 BLOCKERS에 "spec gap — 사용자 결정 필요"로 정리**(무엇을 결정해야 하는지 선택지와 함께).
+3. 게이트(CONTRIBUTING.ko.md §4/§5): `core/build-task3`에서 새 테스트 5회 반복 green, 관련 라벨(`integration`) ctest -j2 green; Core 소스를 고쳤으면 전체 `ctest -j2` green(hotpath_gate는 감독자가 별도). `git diff --check`.
+메모리 11 GB, 다른 Core LTO 빌드 job 동시 실행 중: 빌드 `-j2`. 상한 90분.

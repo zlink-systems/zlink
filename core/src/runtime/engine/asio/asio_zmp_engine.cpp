@@ -643,7 +643,7 @@ int zlink::asio_zmp_engine_t::process_ready_message (msg_t *msg_)
             }
         } else if (socket ()->adopt_accepted_transport_pair (
                      _peer_routing_id, _peer_routing_id_size,
-                     &pair_id, &generation)
+                     lane_count, &pair_id, &generation)
                    != 0) {
             set_last_error (zmp_error_internal,
                             "transport pair identity allocation failed");

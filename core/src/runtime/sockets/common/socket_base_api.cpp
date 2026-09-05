@@ -65,10 +65,12 @@ class distinct_pipe_lifetime_refs_t
 
 int zlink::socket_base_t::adopt_accepted_transport_pair (
   const unsigned char *peer_routing_id_, size_t peer_routing_id_size_,
-  uint64_t *pair_id_out_, uint64_t *generation_out_)
+  unsigned char lane_count_, uint64_t *pair_id_out_,
+  uint64_t *generation_out_)
 {
     if ((!peer_routing_id_ && peer_routing_id_size_ != 0)
-        || !pair_id_out_ || !generation_out_) {
+        || (lane_count_ != 1u && lane_count_ != 2u) || !pair_id_out_
+        || !generation_out_) {
         errno = EINVAL;
         return -1;
     }
@@ -79,13 +81,23 @@ int zlink::socket_base_t::adopt_accepted_transport_pair (
         : std::string (reinterpret_cast<const char *> (peer_routing_id_),
                        peer_routing_id_size_);
     scoped_lock_t lock (_transport_pairs_sync);
-    const accepted_transport_pairs_t::const_iterator existing =
+    const accepted_transport_pairs_t::iterator existing =
       _accepted_transport_pairs.find (peer_key);
-    if (existing != _accepted_transport_pairs.end ()) {
+    if (existing != _accepted_transport_pairs.end () && lane_count_ == 2u) {
         *pair_id_out_ = existing->second.pair_id;
         *generation_out_ = existing->second.generation;
         return 0;
     }
+
+    // A count-one pair is a complete physical connection by itself. Reusing
+    // the previous connection's accepted pair ID makes pair-table admission
+    // treat a same-RID handover as a duplicate Application lane and terminate
+    // both pipes before ROUTER duplicate policy can run. Replace the registry
+    // entry with a fresh ID; release from the older pipe is ID-qualified and
+    // therefore cannot erase the new owner. Count-two transports still reuse
+    // the entry so their Application and Completion lanes converge.
+    if (existing != _accepted_transport_pairs.end ())
+        _accepted_transport_pairs.erase (existing);
 
     uint64_t pair_id = 0;
     bool collision = false;

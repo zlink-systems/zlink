@@ -1,0 +1,13 @@
+역할: zlink C++ perf multi PUBSUB 러너 parity 수정 담당(sol medium). 작업 트리: /home/hep7hep7/project/zlink-wt-cpp-pubsub-runner (detached @ main; core/build·core/build-dev는 메인 트리 symlink — core/** 아래 cmake/build/clean 금지). 수정 범위: bindings/cpp/perf/multi/** 만(바인딩 library `bindings/cpp/src/**`·공개 헤더·C 러너·doc 금지). git commit/push/reset/checkout/stash 금지. 진행 로그 /home/hep7hep7/project/zlink-work/c016/cpp-perf-pubsub-runner-progress.md 한 줄씩 append(3분마다 한 줄 이상), 종료 시 `EXIT:<code>`. 요약 /home/hep7hep7/project/zlink-work/c016/cpp-perf-pubsub-runner-summary.md (차이 표, 변경, 검증, BLOCKERS).
+
+배경(D-B90): C 러너(`bindings/c/perf/multi/src/perf_multi_pubsub_{server,client}.cpp` + `multi/common/perf_multi_client_helpers.hpp`)가 canonical reference다. Sol 리뷰(`doc/plan/c016-worklog/cpp-perf-pubsub-pass2-summary.md` §"runner 차이 판정")가 확인한 C++ 러너(`bindings/cpp/perf/multi/src/perf_pubsub_{server,client}.cpp` + `multi/common/*.hpp`)와의 차이:
+1. **서버 auto-HWM 재계산 시점**: C server는 client START 뒤 size마다 HWM을 적용하고 context를 재계산(`perf_multi_pubsub_server.cpp:299-325`), C++ server는 bind/connect 전에 1회만 → paired report의 server SNDHWM이 C 1 MiB vs C++ 4 MiB로 어긋남.
+2. SUB filter: C `""`(빈 문자열) vs C++ `"bench"`(`perf_multi_client_helpers.hpp:668-677`, `perf_pubsub_client.cpp:174-181`).
+3. C++ client가 topic 문자열과 routing-id size까지 검사(C는 topic 길이와 NULL source만).
+4. deadline/turn: C는 매 receive 전에 deadline을 확인하고 `min(100ms, remaining)`로 poll(`perf_multi_pubsub_client.cpp:168-205`); C++는 성공 receive 뒤에 확인.
+
+할 일:
+1. 위 4개를 C 러너 의미에 맞춘다(계약: `doc/perf/PERF_MULTI_TEST_POLICY.md` PUBSUB 절과 C 러너가 기준; C 러너 코드를 나란히 읽고 같은 순서·같은 시점·같은 값으로). 다른 pattern 러너(DD/REQREP/STREAM)는 건드리지 않는다. 공유 helper를 고칠 때 다른 pattern에 영향이 없는지 확인한다.
+2. 검증: `ZLINK_CORE_SOURCE=local ZLINK_CPP_CORE_BUILD_DIR=$PWD/core/build ZLINK_BUILD_JOBS=3 bash bindings/cpp/perf/run_benchmarks_multi.sh --pattern PUBSUB --transports tcp --msg-sizes 64,4096 --duration 3 --runs 1` 로 report가 complete이고 "Auto-HWM detail"의 server SNDHWM/RCVHWM이 같은 조건의 C report(`bindings/c/perf/results/multi/report/perf_c_multi_linux_20260905_055350_p1cpp-pubsub-r3.txt`의 detail)와 size별로 같은 값인지 표로. C++ multi 러너 테스트가 있으면(`bindings/cpp/perf/multi/tests`) 실행. `git diff --check`.
+3. 요약에 "러너 변경 — library 효과와 합산 금지(가이드 §5)"를 명시하고, 감독자가 뒤에 paired 3-run 재측정을 하므로 측정은 위 검증 1회로 그친다.
+메모리 11 GB, 다른 job 동시 실행: 빌드 JOBS≤3. 상한 40분.

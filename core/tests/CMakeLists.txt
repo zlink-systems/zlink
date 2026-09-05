@@ -85,6 +85,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_connect_resolve
   ${INTEGRATION_TEST_ROOT}/test_capabilities
   ${INTEGRATION_TEST_ROOT}/test_ctx_destroy
+  ${INTEGRATION_TEST_ROOT}/test_ctx_term_fixed_rid_handover
   ${INTEGRATION_TEST_ROOT}/test_ctx_options
   ${INTEGRATION_TEST_ROOT}/test_socket_null
   ${INTEGRATION_TEST_ROOT}/test_multi_socket_contract_regressions
@@ -352,6 +353,12 @@ foreach(test_source ${tests})
 
     set_tests_properties(${test} PROPERTIES TIMEOUT 10)
     if(${test} STREQUAL "test_router_handover")
+      set_tests_properties(
+        ${test}
+        PROPERTIES
+          TIMEOUT 30)
+    endif()
+    if(${test} STREQUAL "test_ctx_term_fixed_rid_handover")
       set_tests_properties(
         ${test}
         PROPERTIES
