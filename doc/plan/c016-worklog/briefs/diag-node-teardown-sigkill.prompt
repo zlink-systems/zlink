@@ -1,0 +1,32 @@
+# Job (STAGE 1, model astra): node sample roles do not exit at teardown (SIGKILLed) — TicTacToe/Bingo/SupportChat/GameQuest/ZoneWorld, deterministic
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·진단 먼저), `framework/AGENTS.md`,
+and `doc/plan/c016-worklog/gate-final-cpp-node-samples-2-summary.md` (Node table + B row). STAGE 1 = diagnosis only, NO source/test
+changes (temporary trace sinks allowed, removed before finishing); never modify any `doc/spec/**`; do not commit. Env:
+`framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`.
+Packages: 12:54 rebuild (Core 8b82d51b75, 0c39ed2e52, 1c69086a4a, 0145f5a59a, 7cbf12de41, cb62cb89f8). Do not rebuild packages; for an
+old-Core comparison build Core in `/home/hep7/project/zlink-core-b` at the commit before 7ffb8e55d9 and point `LD_LIBRARY_PATH`/the
+node binding's library lookup at it (read `bindings/node` for how the native module locates libzlink; if it is embedded in the tgz,
+say so and compare via a rebuilt node tgz only if that is cheap — otherwise skip the comparison and diagnose from stacks).
+
+## Facts
+- On the 12:54 packages every node sample completes its application markers, then 1–3 role processes do not exit within the runner's
+  graceful deadline and are SIGKILLed: TicTacToe `play-b`, Bingo `matchmaking`+`play-a`, SupportChat `support`+`session`, GameQuest
+  `mission-a`/`mission-b`, ZoneWorld `ops`+`zone-node-1`+`zone-node-2`; DeliveryDispatch and ShoppingMall exit cleanly. Deterministic on
+  retry. cpp samples exit cleanly on the same packages (the Core close/executor regression D-089 is fixed by cb62cb89f8).
+- IMPORTANT: until today the node runner masked role SIGKILLs behind exit 0 (`9a0371fea7` made them failures), so this may be a
+  long-standing node teardown hang, not a regression. Establish which with the old-Core comparison or git history of the runner
+  (`framework/languages/node/samples/run-sample.mjs`).
+
+## Deliverable — `doc/plan/c016-worklog/diag-node-teardown-sigkill.md`
+1. For TicTacToe `play-b` and Bingo `matchmaking` (fastest), capture where the role is stuck at shutdown: node `--cpu-prof`/`inspect`
+   or `SIGUSR1` stack, `ZLINK_DEBUG_FRAMEWORK_*` traces, the framework host stop sequence (`packages/framework/src/runtime/host/**`
+   stop/drain), the binding's context/socket close (`bindings/node` async runtime: poller thread, completion owner, `zlink_ctx_term`),
+   pending timers/handles keeping the event loop alive (`process._getActiveHandles()` via a temporary hook).
+2. Owner layer per spec: framework termination outcome contract (05-host-relocation-flow §14: STOPPED vs FORCE_STOPPED), Core
+   ctx_term/close (socket README §6, 01-context §3), node binding close semantics (`bindings/doc/spec/node/README.ko.md`). Which layer
+   fails to complete, and is a framework component re-implementing/duplicating a lower-layer shutdown responsibility?
+3. Cross-language parity: cpp/java/dotnet host stop sequence for the same roles (file:line); why do they exit and node does not.
+4. Classification A/B/C/D, the root fix location (framework host stop, node binding, or Core — if Core/binding, a public-API repro
+   description), the regression test that would pin clean exit, and whether DeliveryDispatch/ShoppingMall differ structurally
+   (e.g. no STREAM/ClientServer sockets). STOP after the diagnosis.
