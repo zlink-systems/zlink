@@ -1198,3 +1198,10 @@ gate: dotnet tests 208/208, samples 7/7, 새 `test_hot_path_ownership_contract` 
 수정 원칙: close 수락 뒤 executor를 시작/재개하지 않음(기존 closing 상태 사용, 새 flag·wait predicate 변경 금지). Core job(astra, worktree b).
 관측 후속: dotnet/node 샘플 runner는 role SIGKILL을 exit 0 뒤에 숨긴다 — runner가 SIGKILL을 실패로 보고해야 함(진단 시 확인).
 
+## D-090 (2026-09-05 12:00, 머신 A) 결정 — REQUEST 종결 규칙 단일화: submit 시점 pair가 종료되면(원인 불문) 즉시 `REQUEST_NOT_CONNECTED`
+REJECT-close job(`core-reject-duplicate-close-summary.md`) BLOCKER 1: 거부된 pipe의 DEALER pending REQUEST를 종결하려면 ROUTER→DEALER로 거부 사유를 wire로 전달해야 했다(새 protocol 의미 = 규칙 추가).
+대신 §6의 "transient physical disconnect → replay 없이 budget 유지" 행을 없애고 하나의 규칙으로 통일: reply는 submit 시점 pair로만 전달되므로(§4 pinning) 그 pair가 어떤 이유로든 종료되면
+reply는 절대 올 수 없다 → Core가 즉시 `NOT_CONNECTED`로 한 번 종결, caller(durable sender)가 재전송. HANDOVER 물러남(작업 7)·REJECT close·transient disconnect가 모두 이 한 규칙의 사례가 되어
+규칙 수 3→1, 별도 거부 사유 전달 불필요. spec §6 ko/en 반영. Core 구현: pair 종료 경로 한 곳에서 `fail_pending_requests_for_transport_pair` 호출(HANDOVER 전용 호출 지점은 제거해 단일 소유), REJECT close 유지,
+BLOCKER 2(inproc 즉시 disconnect→connect overlap에서 WRITABLE 미도착·teardown 정지 회귀)는 같은 job에서 근본 수정.
+
