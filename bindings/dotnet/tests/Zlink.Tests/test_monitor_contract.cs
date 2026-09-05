@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Threading;
 using Xunit;
 
@@ -6,6 +7,18 @@ namespace Systems.Zlink.Tests;
 
 public sealed class test_monitor_contract
 {
+    [Fact]
+    public void native_monitor_event_layout_matches_c_abi()
+    {
+        Type nativeType = typeof(Zlink).Assembly.GetType(
+            "Systems.Zlink.Runtime.Native.ZlinkMonitorEvent", throwOnError: true)!;
+
+        Assert.Equal(800, Marshal.SizeOf(nativeType));
+        Assert.Equal(new IntPtr(784), Marshal.OffsetOf(nativeType, "ConnectionId"));
+        Assert.Equal(new IntPtr(792), Marshal.OffsetOf(nativeType, "TransportLane"));
+        Assert.Equal(new IntPtr(796), Marshal.OffsetOf(nativeType, "Flags"));
+    }
+
     [Fact]
     public void socket_monitor_hwm_bytes_are_forwarded_exactly()
     {
