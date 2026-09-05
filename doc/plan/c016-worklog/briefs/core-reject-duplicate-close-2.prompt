@@ -1,0 +1,32 @@
+# Job (Core round 2, model astra): one rule — a pending REQUEST completes REQUEST_NOT_CONNECTED as soon as its submit-time pair terminates (any cause); keep the REJECT duplicate close; fix the inproc overlap regression
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §2/§3/§4 (원칙이 단순해지는 근본 수정·중복 금지),
+`CONTRIBUTING.ko.md` §4/§5, your round-1 report `doc/plan/c016-worklog/core-reject-duplicate-close-summary.md`, and the
+supervisor decision **D-090** in `decisions.ko.md` + the amended spec `core/doc/spec/core/socket/README.ko.md` §6 completion
+table (the transient-disconnect keep-budget row is gone: a REQUEST pinned to a transport pair completes exactly once with
+`ZLINK_REQUEST_NOT_CONNECTED`/`EHOSTUNREACH` as soon as that pair terminates, whatever the cause — HANDOVER supersession, REJECT
+close, transient disconnect; WRITABLE tokens unchanged). Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do not
+commit. WORK ONLY IN `/home/hep7/project/zlink-core-a` (keep your round-1 diff there: REJECT close in `router_admission.cpp`,
+`test_router_reject_duplicate.cpp`, CMake). Build: `nice -n 10 env JOBS=4 scripts/build-core.sh dev`. Never touch main's
+`core/build-dev` or `/home/hep7/project/zlink-core-b`.
+
+## What to do (single owner, fewer rules)
+1. Move the "complete pinned pending REQUESTs as NOT_CONNECTED" call to the ONE place where a transport pair terminates for the
+   socket that owns the pending pool (the pipe/pair termination path on the request owner's side — the DEALER for a rejected or
+   disconnected pipe, the ROUTER for its own pinned requests), reusing the existing
+   `fail_pending_requests_for_transport_pair()` (8b82d51b75). Remove the HANDOVER-specific call site in
+   `router_admission.cpp:451` if the generic termination path now covers it (no duplicate owners). Do not add a wire rejection
+   reason, a new pending index, or a new state.
+2. Keep the REJECT duplicate close from round 1.
+3. Fix BLOCKER 2 at the root: inproc immediate `disconnect(endpoint) → connect(endpoint)` overlap
+   (`test_socket_disconnect_progress_without_app_poll.cpp:473` — WRITABLE never arrives, teardown hangs): server-side term ack
+   for the old and the rejected pipe was delayed until teardown; find why command progress / WRITABLE recovery stalls when a
+   duplicate is closed while the old pipe is still terminating, and fix it in the command/termination path (not by changing
+   the close policy or the test).
+4. Contract tests: D-088 sequence tcp/inproc 20/20 (request on the rejected pipe → NOT_CONNECTED well under its timeout; after
+   the old pipe terminates the next attempt is admitted and a request succeeds); a plain transient disconnect case (server
+   closes the pipe while a request is pending → NOT_CONNECTED immediately, WRITABLE token behaviour unchanged);
+   `test_router_reciprocal_handover_lanes` and `test_disconnect_progress`/`_without_app_poll` stay green. Full `ctest -j2` +
+   §5 checks; C++/Python binding checks as in round 1; hotpath numbers reported (dev n/a).
+5. Deliverable: `doc/plan/c016-worklog/core-reject-duplicate-close-2-summary.md` in the MAIN tree: diff summary (file:line),
+   rule count before/after, test names/counts, BLOCKERS. Leave the diff uncommitted in the worktree.

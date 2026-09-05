@@ -1138,7 +1138,7 @@ RID다. Reconnect 뒤 physical connection identity로 바뀌지 않으며 후속
 | 영구적인 peer-type 거절 | 해당 없음; 토큰은 target 제거까지 유지 | `ZLINK_REQUEST_REJECTED` |
 | malformed protocol | 해당 없음; 토큰은 target 제거까지 유지 | `ZLINK_REQUEST_PROTOCOL_ERROR` |
 | accepted 뒤 allocation·runtime failure | 해당 없음; Core가 payload를 보관하지 않음 | `ZLINK_REQUEST_INTERNAL_ERROR` |
-| transient physical disconnect | terminal 없음; 토큰 유지, 같은 target의 재연결이 WRITABLE을 발행 | admission 뒤 replay 없이 기존 budget 유지 |
+| submit 시점 transport pair의 종료(transient disconnect, HANDOVER로 물러남, REJECT로 닫힘 등 원인 불문) | terminal 없음; 토큰 유지, 같은 target의 재연결이 WRITABLE을 발행 | reply는 submit 시점 pair로만 전달되므로 Core가 그 pair 종료 즉시 `ZLINK_REQUEST_NOT_CONNECTED`(`EHOSTUNREACH`)로 정확히 한 번 종결; caller가 다시 보낸다 |
 | context termination·socket close | `ZLINK_SEND_TERMINAL`, `ETERM` 또는 `ESHUTDOWN`; 읽지 않은 record는 내부 폐기 | 진행 중 request와 unread record를 내부 폐기하고 새 completion 전달을 보장하지 않음 |
 
 REQUEST reply는 Core가 enqueue 전에 확보한 contiguous `zlink_msg_t[]`에 보관한다. Wire error

@@ -1251,7 +1251,7 @@ not a capability for a later send target.
 | Permanent peer-type rejection | not applicable; the token stays until target removal | `ZLINK_REQUEST_REJECTED` |
 | Malformed protocol | not applicable; the token stays until target removal | `ZLINK_REQUEST_PROTOCOL_ERROR` |
 | Allocation or runtime failure after acceptance | not applicable; Core retains no payload | `ZLINK_REQUEST_INTERNAL_ERROR` |
-| Transient physical disconnect | no terminal; the token stays and reconnect of the same target publishes WRITABLE | after admission preserve the existing budget without replay |
+| Termination of the submit-time transport pair (transient disconnect, HANDOVER supersession, REJECT close — whatever the cause) | no terminal; the token stays and reconnect of the same target publishes WRITABLE | the reply is pinned to the submit-time pair, so Core completes the request exactly once with `ZLINK_REQUEST_NOT_CONNECTED` (`EHOSTUNREACH`) as soon as that pair terminates; the caller resubmits |
 | Context termination or socket close | `ZLINK_SEND_TERMINAL`, `ETERM` or `ESHUTDOWN`; unread records are discarded internally | internally discard in-progress requests and unread records; no new completion is guaranteed |
 
 Core stores a REQUEST reply in a contiguous `zlink_msg_t[]` allocated before
