@@ -55,10 +55,10 @@ D-B83 Core latency 잔여는 원인별 수정 트랙으로, D-B89 러너 수정 
 | C++ | 75/52/61/93 | 90.8 통과 / 57.4 / 68.4 / 93.2 (tcp) | 95(90 완화)/85/85/95 | REQREP pending 구조(계약 유지 후보 소진) |
 | .NET | 44.7/51.6/53.6/44.8 | 59.6 / 58.3 / 67.0 / 61.3 | 85/70/70/85 | submit 락·요청당 Task·runtime pump(pass 3에서 pump 대안 2개는 64K 붕괴로 기각) |
 | Java | 50.8/15.1/24.0/81.0 | 80.9 / 59.4 / 58.7 / 80.9 | 90/70/70/90 | REQREP FFM 39회 vs C 17회, DD 64K |
-| Node | 27.6/18.7/17.9/28.6 | 35.9 / 24.3 / 24.8 / 30.2 | 60/60/60/60 | REQREP ~50 ms 고정 지연(client completion 대기), one-way JS 객체 비용 |
+| Node | 27.6/18.7/17.9/28.6 | 35.9 / 24.3 / 24.8 / 30.2 (4 pass 뒤, 보류 D-B129) | 60/60/60/60 | REQREP ~50 ms 고정 지연(client completion 대기), one-way JS 객체 비용 |
 | Go | 31.5/2.9/2.8/47.3 | 53.2 / 19.0 / 21.8 / 54.6 | 65/53/53/65 | REQREP 러너 = socket당 1 in-flight(D-B127), SEND 무할당 잔여 |
-| Rust | 63.0/65.9/68.2/83.2 | 64.7 / 66.1 / 69.1 / 93.8 | 95/85/85/95 | DD 작은 크기 wrapper 이동·shared RwLock, REQREP pass 2 |
-| Python | 6.6/14.2/15.4/26.2 | 9.2 / 15.2 / 16.5 / 28.8 | 60/60/60/60 | GIL 아래 메시지당 Python 79 함수 — C 확장으로 hot path 이전(pass 2) |
+| Rust | 63.0/65.9/68.2/83.2 | 59.3 / 67.3 / 69.8 / 87.7 (pass 1·2 뒤, 보류) | 95/85/85/95 | DD 작은 크기 wrapper 이동·shared RwLock, REQREP pass 2 |
+| Python | 6.6/14.2/15.4/26.2 | 15.4 / 15.5 / 19.6 / 31.9 (pass 1·2 뒤, 보류) | 60/60/60/60 | GIL 아래 메시지당 Python 79 함수 — C 확장으로 hot path 이전(pass 2) |
 
 ### 사용자 결정 요청(아침)
 1. **D-B127** Single REQREP 정책 gap 2건: (a) binding 러너의 "백프레셔까지 포화 제출"을 공개 poller `POLLOUT` level로 정의(권고) — 검증 job 필요; (b) C single 러너의 별도 latency 단계를 정책(같은 구간)에 맞춤 → single 기준값 재측정. Multi REQREP도 같은 문제(Go/Java 러너는 socket당 1 in-flight).
