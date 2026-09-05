@@ -1,0 +1,33 @@
+# Job: node — `RawStreamSessionService.deliver()` catch-all turns every exception (incl. backpressure) into a session close (STAGE 1: diagnosis only, no code)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·교차언어 대조·진단 먼저),
+`framework/AGENTS.md`, and `doc/plan/c016-worklog/stage2-node-m6b-fake-stream-submit-sync-summary.md` §"Catch boundary 후속 사항".
+Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`. STAGE 1 = NO CODE CHANGES
+(temporary trace sinks allowed, removed before finishing); do not commit. Env: `framework/languages/node`,
+`TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`. Another job runs on
+`samples/DeliveryDispatch.Ts/**`; the local packages may be rebuilt while you run — if `npm run build` fails on a package hash
+mismatch, wait 5 minutes and retry once.
+
+## Facts
+- `packages/framework/src/runtime/backend/node/node-raw-mesh-backend.ts:1996-2011`: the `try` wraps payload decode, builder
+  creation, every `message()` and the `submit_sync()` terminal; the argument-less `catch` deletes the session target and
+  returns `false` regardless of exception kind (TypeError, protocol decode error, backpressure/timeout terminal, transport
+  close). `false` → `protocolError` (`service-stateful-runtime.ts:3599-3605`) → `SubmitResult.InvalidState` (`:4149-4160`).
+- With a real binding surface the m6b test `raw backend dispatches Spot requests and Actor sends through M6B owners` fails 0/3:
+  a backpressure exception from `submit_sync()` is treated as connection loss, the session target is dropped, and the next
+  send returns InvalidState(8).
+- Ownership audit concern 3 (`review-layer-ownership-audit.md` §5) already flagged: node/java backends wrap sync DONTWAIT
+  results instead of consuming the binding's async terminal, which owns BACKPRESSURED → WRITABLE resubmit
+  (`bindings/doc/spec/node/README.ko.md` DONTWAIT/async terminal section; core 05-polling §3-4).
+
+## Deliverable — `doc/plan/c016-worklog/diag-node-stream-deliver-catchall.md`
+1. Timeline of the failing m6b case with the real exception type/result at the `submit_sync()` boundary (existing traces first).
+2. Owner layer: who owns BACKPRESSURED/WRITABLE for a bound-session STREAM push (binding async terminal vs this sync path);
+   who owns "session closed" detection (transport close event vs a thrown exception); cite clauses. Is the catch-all a
+   duplicated/re-implemented lower-layer decision?
+3. Cross-language parity: how cpp `stream_host_service.cpp` / dotnet `ZLinkBackendStreamSocketWrapper` / java
+   `ZLinkJavaStreamSocket.submitOwnedStreamFrameAsync` deliver bound-session pushes and classify failures (file:line);
+   which of them use the async terminal.
+4. Classification A/B/C/D, the minimal fix (expected: deliver via the binding async terminal; the catch handles only the
+   documented terminal results — closed/not-connected → session close, backpressure/timeout → typed failure, anything else →
+   rethrow), the regression tests, and every caller affected. STOP after the diagnosis.
