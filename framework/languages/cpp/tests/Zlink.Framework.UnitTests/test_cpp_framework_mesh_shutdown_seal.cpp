@@ -80,10 +80,10 @@ void verify_restart (bool sealed, bool draining)
                                          : mesh::service_node_state_t::serving;
     assert (source.topology ().local_descriptor ().state == expected_state);
 
-    // A silent restarted peer proves absence of Hello on the wire, without
-    // an inbound Hello from that peer initiating a separate admission.
+    // A sealed restarted peer stays silent. Re-admission requires both
+    // peers to remain unsealed, including the peer accepting Hello.
     target = std::make_unique<mesh::raw_mesh_node_owner_t> (
-      options ('b', endpoint, std::make_shared<std::atomic_bool> (true)));
+      options ('b', endpoint, std::make_shared<std::atomic_bool> (sealed)));
     target->start ();
     std::size_t ready_events = 0;
     until ([&] { return ready_events != 0; }, [&] {
@@ -117,6 +117,77 @@ void verify_restart (bool sealed, bool draining)
     target->close ();
     assert (std::chrono::steady_clock::now () - close_started < 2s);
     assert (!source.started ());
+}
+
+void verify_inbound_hello (bool sealed)
+{
+    auto seal = std::make_shared<std::atomic_bool> (sealed);
+    mesh::raw_mesh_node_owner_t source (options ('g'));
+    mesh::raw_mesh_node_owner_t target (options ('h', "tcp://127.0.0.1:0", seal));
+    source.start ();
+    target.start ();
+    std::size_t target_changes = 0;
+    target.topology ().set_change_handler ([&] { ++target_changes; });
+    if (!sealed) {
+        connect (source, target);
+        assert (target_changes == 1);
+        assert (target.topology ().peer ({'g'}));
+        assert (source.topology ().peer ({'h'}));
+    } else {
+        assert (source.connect_peer (target.endpoint (), target.topology ().local_descriptor ()));
+        bool hello_received = false;
+        until ([&] { return hello_received; }, [&] {
+            const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+            source.drain_monitor_events (now).result ().value ();
+            target.drain_monitor_events (now).result ().value ();
+            const auto result = target.pump_one (now).result ().value ();
+            assert (result == mesh::raw_mesh_pump_result_t::no_data
+                    || result == mesh::raw_mesh_pump_result_t::infrastructure);
+            hello_received = result == mesh::raw_mesh_pump_result_t::infrastructure;
+        });
+        // Source sends Hello on READY but has no other control traffic.
+        // Observe its receive pump after target consumed that Hello: neither
+        // Admit nor Reject may be returned by the sealed target.
+        const auto deadline = std::chrono::steady_clock::now () + 200ms;
+        while (std::chrono::steady_clock::now () < deadline) {
+            pump (target);
+            assert (source.pump_one (mesh::service_liveness_registry_t::clock_t::now ())
+                      .result ().value () == mesh::raw_mesh_pump_result_t::no_data);
+            assert (target.topology ().peers ().empty ());
+            assert (source.topology ().peers ().empty ());
+            assert (target_changes == 0);
+            std::this_thread::sleep_for (1ms);
+        }
+    }
+    target.topology ().set_change_handler ({});
+}
+
+void verify_admitted_peer_update_after_seal ()
+{
+    auto seal = std::make_shared<std::atomic_bool> (false);
+    mesh::raw_mesh_node_owner_t source (options ('i', "tcp://127.0.0.1:0", seal));
+    mesh::raw_mesh_node_owner_t target (options ('j'));
+    source.start ();
+    target.start ();
+    connect (source, target);
+    const auto admitted = source.topology ().peer ({'j'});
+    seal->store (true, std::memory_order_release);
+    source.publish_draining ().result ().value ();
+    until ([&] { return target.topology ().peer ({'i'})->descriptor
+                         == source.topology ().local_descriptor (); },
+           [&] { pump (target); });
+    assert (target.topology ().peer ({'i'})->descriptor.state
+            == mesh::service_node_state_t::draining);
+
+    target.publish_draining ().result ().value ();
+    until ([&] { return source.topology ().peer ({'j'})->descriptor
+                         == target.topology ().local_descriptor (); },
+           [&] { pump (source); });
+    const auto updated = source.topology ().peer ({'j'});
+    assert (updated->descriptor.state == mesh::service_node_state_t::draining);
+    assert (updated->descriptor.descriptor_revision > admitted->descriptor.descriptor_revision);
+    assert (updated->connection_id == admitted->connection_id);
+    assert (source.topology ().local_descriptor ().state == mesh::service_node_state_t::draining);
 }
 
 void verify_liveness_and_failed_update_preserve_draining ()
@@ -192,6 +263,9 @@ void verify_crossed_admission_diagnostics ()
 
 int main ()
 {
+    verify_inbound_hello (true);
+    verify_inbound_hello (false);
+    verify_admitted_peer_update_after_seal ();
     verify_crossed_admission_diagnostics ();
     verify_restart (true, true);
     verify_restart (false, false);

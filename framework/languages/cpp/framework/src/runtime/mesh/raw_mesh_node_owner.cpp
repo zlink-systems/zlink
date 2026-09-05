@@ -2761,6 +2761,11 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
             if (received->parts.size () != 1) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
+            if (header.kind == protocol::command::hello
+                && _options.shutdown_admission_seal
+                && _options.shutdown_admission_seal->load (std::memory_order_acquire)) {
+                co_return raw_mesh_pump_result_t::infrastructure;
+            }
             const auto descriptor = protocol::decode_route_mesh_admission (
               received->parts.front (), header.kind,
               received->source_routing_id);
