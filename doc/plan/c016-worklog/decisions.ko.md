@@ -1172,3 +1172,7 @@ Go: `AddMonitor/ModifyMonitor/RemoveMonitor`(기존 `SocketTarget` 경로에 위
 gate: worktree 신규 5/5 ×2, 지정 회귀 5/5, 전체 145/145; main dev 4/4 + 전체 145/145. Release+LTO hotpath_gate 별도 실행(결과 아래 추가).
 spec gap(사용자 결정): (1) terminal edge 소비 전 같은 socket에서 즉시 `disconnect(endpoint)→connect(endpoint)` 시 새 connect가 이전 physical terminal을 기다리는지 / old·new overlap 허용인지 — 현재 REJECT는 timing에 따라 reply OK/timeout, HANDOVER는 새 connection으로 OK; (2) request/reply가 쓴 physical connection_id를 돌려주는 공개 API 없음(필요하면 계약 추가).
 **A용 한 줄: Core 버그 → 수정 커밋 `0c39ed2e52`. dotnet/java ClientServer의 두 번째 POLLIN poller와 수동 reconnect 상태기계는 삭제 가능(Core가 app poll 없이 진행). 패키지 재빌드 대상 Core 커밋: `7ffb8e55d9`, `1c69086a4a`, `0c39ed2e52`.**
+
+## D-B105 (2026-09-05 10:50, 머신 B) D-B90 정정 — multi 하네스 lifecycle은 C·C++ 모두 size별 process 쌍(정책 §3.4)이라 lifecycle gap 없음; C++ 러너 수정(`53d599aa00`)으로 서버 auto-HWM 재계산 시점만 맞춤
+astra 조사(`cpp-harness-summary.md`): `PERF_MULTI_TEST_POLICY.md:594-610` §3.4/§3.5가 size마다 독립 server/client process 쌍을 요구하고, C 하네스(`bindings/c/perf/run_comparison.py:2909,2950`)와 C++·다른 6 binding 모두 이를 따른다. 앞선 job의 "C는 한 lifecycle에 모든 size" 진단은 C 바이너리 능력과 공식 wrapper 호출을 혼동한 것 → 하네스 변경 없음(정책 위반이 됨).
+남은 관찰: C 서버 SNDHWM이 size별로 1 MiB/4 MiB 번갈아 찍힘(같은 per-size lifecycle에서) — C++ 서버 재계산 시점을 C에 맞춘 뒤 paired report에서 다시 대조(다음 PUBSUB 3-run 때). library 판정과 무관.
