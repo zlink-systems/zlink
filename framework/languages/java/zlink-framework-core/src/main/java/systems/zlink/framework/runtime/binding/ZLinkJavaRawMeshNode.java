@@ -234,6 +234,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private volatile ZLinkServiceTopologyRegistry topology;
     private volatile ZLinkServiceNodeDescriptor localDescriptor;
     private boolean deferServiceReadyPublication;
+    private volatile java.util.function.BooleanSupplier peerAdmissionSealed = () -> false;
     private volatile ZLinkInternalMeshNode.UserSpotOperationHandler
         userSpotOperationHandler;
     private volatile ZLinkInternalMeshNode.ActorCreateOperationHandler
@@ -610,17 +611,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             Math.addExact(current.descriptorRevision(), 1),
             channels,
             current.state());
-        localDescriptor = updated;
-        topology.publishLocal(updated);
-        byte[] update = wire.encodeAdmission(
-            ServiceWireConstants.COMMAND_UPDATE,
-            updated);
-        for (ZLinkServiceTopologyRegistry.Peer peer : topology.peers()) {
-            port.send(
-                requireStarted(),
-                peer.descriptor().nodeRoutingId(),
-                List.of(update));
-        }
+        publishLocalDescriptor(updated);
     }
 
     @Override
@@ -657,17 +648,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             Math.addExact(current.descriptorRevision(), 1),
             current.channels(),
             current.state());
-        localDescriptor = updated;
-        topology.publishLocal(updated);
-        byte[] update = wire.encodeAdmission(
-            ServiceWireConstants.COMMAND_UPDATE,
-            updated);
-        for (ZLinkServiceTopologyRegistry.Peer peer : topology.peers()) {
-            port.send(
-                requireStarted(),
-                peer.descriptor().nodeRoutingId(),
-                List.of(update));
-        }
+        publishLocalDescriptor(updated);
     }
 
     @Override
@@ -825,16 +806,41 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             Math.addExact(current.descriptorRevision(), 1),
             current.channels(),
             ZLinkServiceNodeDescriptor.State.SERVING);
+        publishLocalDescriptor(updated);
+    }
+
+    @Override
+    public void setPeerAdmissionSealGate(java.util.function.BooleanSupplier gate) {
+        peerAdmissionSealed = Objects.requireNonNull(gate, "gate");
+    }
+
+    @Override
+    public void markServiceDraining() {
+        inDescriptorStateLane(() -> {
+            ZLinkServiceNodeDescriptor current = localDescriptor;
+            if (current != null && state != MeshNodeState.STOPPED
+                && current.state() != ZLinkServiceNodeDescriptor.State.DRAINING) {
+                state = MeshNodeState.DRAINING;
+                publishLocalDescriptor(descriptor(
+                    current.lifecycleGeneration(),
+                    Math.addExact(current.descriptorRevision(), 1),
+                    current.channels(),
+                    ZLinkServiceNodeDescriptor.State.DRAINING));
+            }
+            return null;
+        });
+    }
+
+    private void publishLocalDescriptor(ZLinkServiceNodeDescriptor updated) {
         localDescriptor = updated;
         topology.publishLocal(updated);
         byte[] update = wire.encodeAdmission(
-            ServiceWireConstants.COMMAND_UPDATE,
-            updated);
+            ServiceWireConstants.COMMAND_UPDATE, updated);
         for (ZLinkServiceTopologyRegistry.Peer peer : topology.peers()) {
             trySendAdmissionControl(
                 peer.descriptor().nodeRoutingId(),
                 List.of(update),
-                "service-ready");
+                "descriptor-update");
         }
     }
 
@@ -4228,11 +4234,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             .factory());
         pump.execute(() -> {
             while (!closed.get()) {
-                long now = System.nanoTime();
-                drainMonitorEvents();
-                drainPeerCloseRequests();
-                announceExpectedPeers(now);
-                tickLiveness(now);
                 Optional<ZLinkJavaRawServicePort.Inbound> inbound;
                 try {
                     inbound = port.receive(requireStarted());
@@ -4246,6 +4247,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                         Duration.ofMillis(1).toNanos());
                     continue;
                 }
+                // receive advances the public poller and can commit transport
+                // transitions. Observe those transitions before publishing
+                // admission or replacement state from this receive turn.
+                long now = System.nanoTime();
+                drainMonitorEvents();
+                drainPeerCloseRequests();
+                announceExpectedPeers(now);
+                tickLiveness(now);
                 if (inbound.isEmpty()) {
                     LockSupport.parkNanos(
                         Duration.ofMillis(1).toNanos());
@@ -6524,6 +6533,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                         localDescriptor)),
                     "admit-response");
             }
+            // The registry returns ADMITTED for both a new peer and an
+            // identical descriptor on the selected connection (crossed Hello/Admit).
+            streamTrace(STREAM_TRACE ? "mesh_peer_admission_accepted peer="
+                + inbound.source() + " command="
+                + (command == ServiceWireConstants.COMMAND_HELLO ? "Hello"
+                    : command == ServiceWireConstants.COMMAND_ADMIT ? "Admit" : "Update")
+                + " lifecycle=" + descriptor.lifecycleGeneration()
+                + " revision=" + descriptor.descriptorRevision() : null);
         } catch (RuntimeException invalid) {
             streamTrace(STREAM_TRACE ? "admission-invalid source=" + inbound.source()
                 + " command=" + command
@@ -6697,7 +6714,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 ZLinkServiceAdmissionGuard.ConnectionDirection direction =
                     monitorConnectionDirection(event, peerRid);
                 String registeredId =
-                    registerTransportConnection(event, peerRid, direction);
+                    registerTransportConnection(event, peerRid);
                 ZLinkServiceTopologyRegistry.Peer admitted =
                     topology.peer(peerRid).orElse(null);
                 if (admitted == null
@@ -6740,10 +6757,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         String disconnectedId = removeTransportConnection(event);
         nextAnnouncementNanos.put(peerRid, 0L);
         if (disconnectedId == null) {
-            // Preserve the existing conservative handling for an
-            // unmapped engine disconnect without applying it to an
-            // exact zero-ready candidate snapshot.
-            admissionControlReadyConnections.remove(peerRid);
+            // A rejected attempt can terminate without a READY registration.
+            // It carries no evidence that the admitted connection ended.
             return false;
         }
         discardPendingConnectionId(disconnectedId);
@@ -6812,9 +6827,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 + " connection=" + event.connectionId()
                 + " lane=" + event.transportLane()
                 + " admittedClosed=" + admittedConnectionClosed : null);
-            closedPeerIntents.add(intentId);
-            closeRequestedPeerIntents.remove(intentId);
             cleanupClosedPeerEndpoint(intent.endpoint());
+            closeRequestedPeerIntents.remove(intentId);
+            // Publishing closed releases replacePeerConnection on the caller
+            // thread. Finish endpoint retirement first, so this close cannot
+            // disconnect the replacement intent that publication permits.
+            closedPeerIntents.add(intentId);
         });
     }
 
@@ -6889,10 +6907,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 continue;
             }
             long next = nextAnnouncementNanos.getOrDefault(expected, 0L);
-            if (nowNanos < next) {
+            if (nowNanos < next || peerAdmissionSealed.getAsBoolean()) {
                 continue;
             }
             try {
+                streamTrace(STREAM_TRACE ? "mesh_peer_admission_sent peer="
+                    + expected + " command=Hello" : null);
                 port.send(
                     requireStarted(),
                     expected,
@@ -7090,15 +7110,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
 
     private String registerTransportConnection(
         MonitorEvent event,
-        RoutingId peer,
-        ZLinkServiceAdmissionGuard.ConnectionDirection direction) {
+        RoutingId peer) {
         String currentId = connectionIds.get(peer);
+        // HELLO/ADMIT infer direction from the command, not the Core-selected
+        // route. A late READY must retain that route's admitted identity even
+        // when its observed direction differs from the handshake inference.
         boolean currentAdmissionNeedsMonitorIdentity =
             currentId != null
                 && topology.peer(peer)
                     .map(current ->
-                        current.connectionId().equals(currentId)
-                        && current.connection().direction() == direction)
+                        current.connectionId().equals(currentId))
                     .orElse(false)
                 && monitorConnectionIds.values().stream()
                     .noneMatch(ids -> ids.contains(currentId));

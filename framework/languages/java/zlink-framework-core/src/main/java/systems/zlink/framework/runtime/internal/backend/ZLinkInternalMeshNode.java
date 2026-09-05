@@ -29,6 +29,16 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // Alternate backends may provide their own ordinary-claim boundary.
     }
 
+    /** Reads the host-owned shutdown admission seal; relocation does not seal it. */
+    default void setPeerAdmissionSealGate(java.util.function.BooleanSupplier gate) {
+        // Alternate backends may not initiate service admission.
+    }
+
+    /** Publishes Draining to admitted peers while accepted work completes. */
+    default void markServiceDraining() {
+        // Alternate backends may not publish service descriptors.
+    }
+
     default RoutingId routingId() {
         return null;
     }

@@ -174,6 +174,13 @@ void zlink::socket_base_t::finish_close_reap ()
     socket_completion::close (&completion_runtime (),
                               _ctx_terminated ? ETERM : ESHUTDOWN);
     fail_all_blocking_send_waits (_ctx_terminated ? ETERM : ECANCELED);
+    // A bound inproc endpoint is released by the public call that ends the
+    // bind, before that call returns: zlink_unbind does it in
+    // term_endpoint_internal, and close does it here, on the caller thread,
+    // before the socket is handed to the reaper. Once zlink_close has
+    // returned, another socket may bind the same name, and no new inproc
+    // connect can reach a socket that is already tearing down.
+    unregister_endpoints (this);
     materialize_pending_inprocs_before_reap ();
     static_cast<mailbox_t *> (_mailbox)->clear_signalers ();
 

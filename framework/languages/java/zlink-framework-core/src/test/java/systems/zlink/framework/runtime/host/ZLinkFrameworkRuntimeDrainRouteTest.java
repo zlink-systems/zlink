@@ -122,6 +122,47 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
     }
 
     @Test
+    void shutdownSealsMeshAdmissionAndPublishesDrainingBeforeAcceptedWorkCompletes()
+        throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addRouteMesh("shutdown-mesh")
+            .listen("inproc://shutdown-mesh-" + UUID.randomUUID());
+        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(
+                 options, new ZLinkJavaBackendAdapterFactory())) {
+            long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (!runtime.isReady() && System.nanoTime() < deadline) {
+                Thread.sleep(5);
+            }
+            assertTrue(runtime.isReady());
+            var drainsField = ZLinkFrameworkRuntime.class.getDeclaredField("meshDrains");
+            drainsField.setAccessible(true);
+            var drains = (systems.zlink.framework.runtime.internal.drain
+                .ZLinkMeshDrainCoordinator) drainsField.get(runtime);
+            var nodesField = ZLinkFrameworkRuntime.class.getDeclaredField("meshNodes");
+            nodesField.setAccessible(true);
+            var node = ((systems.zlink.framework.runtime.mesh.ZLinkMeshNodesRuntime)
+                nodesField.get(runtime)).nodesByName().get("shutdown-mesh");
+            var gateField = node.getClass().getDeclaredField("peerAdmissionSealed");
+            gateField.setAccessible(true);
+            var seal = (java.util.function.BooleanSupplier) gateField.get(node);
+            assertFalse(seal.getAsBoolean());
+            try (var claim = drains.tryClaim("shutdown-mesh")) {
+                assertTrue(claim != null);
+                var termination = runtime.shutdown(Duration.ofSeconds(5)).toCompletableFuture();
+                assertTrue(seal.getAsBoolean());
+                assertEquals(ZLinkFrameworkRuntimeState.DRAINING, runtime.status().state());
+                assertEquals(systems.zlink.framework.runtime.internal.binding.spot
+                    .MeshNodeState.DRAINING, node.status().state());
+                assertFalse(termination.isDone());
+                claim.close();
+                var result = termination.get(5, TimeUnit.SECONDS);
+                assertEquals(ZLinkFrameworkTerminationOutcome.STOPPED, result.outcome());
+                assertEquals(ZLinkFrameworkTerminationReason.NONE, result.reason());
+            }
+        }
+    }
+
+    @Test
     void drainWaiterTimeoutDoesNotCompleteSharedDrainState() {
         CompletableFuture<String> shared = new CompletableFuture<>();
 
