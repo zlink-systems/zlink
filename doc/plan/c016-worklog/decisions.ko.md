@@ -1349,3 +1349,4 @@ after(1-run, load ≤1.9): DD 64B 47.4%·256B 56.9%·1024B 58.2%·4096B 96.5%·6
 5. **java raw mesh terminal retention**: D-095 잔여 wall-clock → monotonic.
 6. **java M6A/TransportIdentity fixture의 retry 대기**: 런타임이 CLOSED를 replace 자격과 동시에 게시하므로 불필요 → 제거(리팩터, 단언 유지).
 7. **cpp `common_e2e_inventory` 278**: 결과에 따라 — feature-map이 요구하는 common e2e scenario를 cpp가 실제로 구현하지 않았으면 구현(A), inventory 파서/맵 drift면 gate 수정(B). 별도 조사 job.
+- **D-098 item 8(2026-09-06, 승인 B):** java raw mesh `markPeerIntentsActive`가 늦은 READY(endpoint/RID 일치)로 이미 `closedPeerIntents`에 게시된 terminal intent를 다시 활성화한다 → 종료는 terminal: closed intent는 READY로 재활성화하지 않는다(새 intent만 활성화). 기존 fixture retry loop가 이를 가렸다(item 6 제거로 노출). 새 상태·generation 없음, 규칙 2→1.

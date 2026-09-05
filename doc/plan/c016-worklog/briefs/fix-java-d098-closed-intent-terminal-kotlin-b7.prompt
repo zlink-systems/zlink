@@ -1,0 +1,22 @@
+# Job (implement, model astra): java — D-098 item 8 approved (B): a closed intent is terminal — `markPeerIntentsActive` must not re-activate an intent already published in `closedPeerIntents` on a late READY (endpoint/RID match); build on the uncommitted java diff from `fix-java-d098-seal-inbound-retention-fixtures` (sealed inbound Hello, monotonic retention, fixture retry removal). Then root-cause the kotlin ZoneWorld B7 (JoinSpot) failure + client timeout seen in that job's single run
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `decisions.ko.md` D-098 (items 3, 5, 6, 8), the previous report
+`doc/plan/c016-worklog/fix-java-d098-seal-inbound-retention-fixtures-summary.md` (whole file: the `m6a-first-failure.trace` sequence, the kotlin B7 failure evidence paths), and
+`03-spot-actor/03-mesh-node.ko.md` §7.1, `05-transport-liveness` §5. **Keep the existing uncommitted java diff** (ZLinkJavaRawMeshNode.java, M6A/ShutdownSeal/TransportIdentity tests,
+new TerminalRetentionTest) and build on it. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages, shared_sample; do not commit.
+Env: `framework/languages/java`, `TMPDIR=/dev/shm/zlink-tmp-java`, `unset ZLINK_LIBRARY_PATH`, gradle under `flock -w7200 /tmp/zlink-jvm-gate.lock`, samples under
+`flock -w7200 /tmp/zlink-samples-gate.lock` (+ jvm lock for the aggregate). Installed Core 785b647b… (rebuild10; a Core change `1899e82f1a` is committed but not yet packaged — do
+not rebuild packages).
+
+## Part 1 — closed intent terminal (item 8)
+`ZLinkJavaRawMeshNode.java` ~:6793 `markPeerIntentsActive` removes the intent from `closedPeerIntents` when a late READY matches by endpoint/RID; ~:6844 published the closure.
+Rule: a closed intent stays closed; a READY that matches only a closed intent belongs to no intent (Core's connect intent for a retired endpoint is retired by
+`cleanupClosedPeerEndpoint`; if such a READY still arrives, it is drained/closed by the existing untracked-transport handling — say which). Deterministic regression in
+TransportIdentityTest (late READY after closure → intent stays closed, replacement eligible). Then M6A ×10, ShutdownSeal ×10 (trace on/off), TransportIdentity ×10, full
+`:zlink-framework-core:test contractTest --continue --rerun` ×2 (verify the `:test` task ran) — all 0 fail.
+## Part 2 — kotlin ZoneWorld B7
+Reproduce kotlin ZoneWorld (`bash samples/kotlin/ZoneWorld/run_sample.sh`) ×2 keeping logs; correlate the B7 JoinSpot failure and the client timeout (ledger, zone-node/gateway
+logs, termination cause events). Decide whether it is (a) the java runtime (shared with kotlin) — e.g. the item-3 seal change or the admission ordering fixes — (b) the kotlin
+sample, or (c) environment; fix at the owner (no timeouts widened). Java ZoneWorld must also pass ×1. If the cause is Core, STOP with a C-API sequence.
+## Deliverable
+`doc/plan/c016-worklog/fix-java-d098-closed-intent-terminal-kotlin-b7-summary.md` (per part: sequence, cause file:line, fix, four lines, rule count, results table, BLOCKERS).
