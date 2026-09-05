@@ -1347,8 +1347,9 @@ public sealed class RelocationBehaviorConformanceTests
 
     private static async Task WaitUntilAsync(Func<ValueTask<bool>> predicate)
     {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
-        while (DateTimeOffset.UtcNow < deadline)
+        var deadlineTimeout = TimeSpan.FromSeconds(15);
+        var deadlineStarted = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
         {
             if (await predicate()) return;
             await Task.Delay(10);

@@ -880,8 +880,9 @@ public sealed class ClientServerChannelRuntimeTests
             var ownerId = first.GetRequiredService<ZLinkLocationRuntime>()
                 .OwnerId;
             ZLinkClientServerServerDescriptor? updated = null;
-            var updateDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-            while (DateTime.UtcNow < updateDeadline)
+            var updateDeadlineTimeout = TimeSpan.FromSeconds(5);
+            var updateDeadlineStarted = Stopwatch.GetTimestamp();
+            while (Stopwatch.GetElapsedTime(updateDeadlineStarted) < updateDeadlineTimeout)
             {
                 updated = (await store.ListClientServersAsync(
                         "work",
@@ -1680,8 +1681,8 @@ public sealed class ClientServerChannelRuntimeTests
         TimeSpan timeout)
     {
         var received = Received.Create();
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
+        var deadlineStarted = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(deadlineStarted) < timeout)
         {
             if (receive(received))
                 return received;

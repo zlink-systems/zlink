@@ -208,7 +208,8 @@ public sealed class ChannelOutboundTerminalTests
 
                 //  The raw dealer may not have finished connecting yet; retry the
                 //  admission hello until the transport accepts it.
-                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+                var deadlineTimeout = TimeSpan.FromSeconds(5);
+                var deadlineStarted = Stopwatch.GetTimestamp();
                 while (true)
                 {
                     var hello = ZLinkClientServerControlProtocol.EncodeHello(
@@ -224,7 +225,7 @@ public sealed class ChannelOutboundTerminalTests
                             .Async(CancellationToken.None));
                         break;
                     }
-                    catch (ZlinkSubmitException) when (DateTime.UtcNow < deadline)
+                    catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
                     {
                         await Task.Delay(20);
                     }
@@ -409,10 +410,10 @@ public sealed class ChannelOutboundTerminalTests
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var deadlineStarted = Stopwatch.GetTimestamp();
         while (!condition())
         {
-            if (DateTime.UtcNow >= deadline)
+            if (Stopwatch.GetElapsedTime(deadlineStarted) >= timeout)
                 throw new TimeoutException("Channel outbound condition was not reached.");
             await Task.Delay(10);
         }

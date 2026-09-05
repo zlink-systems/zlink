@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -233,9 +234,9 @@ public sealed class RouteCodecTests
         IRouterSocket router,
         TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var deadlineStarted = Stopwatch.GetTimestamp();
         var received = Received.Create();
-        while (DateTime.UtcNow < deadline)
+        while (Stopwatch.GetElapsedTime(deadlineStarted) < timeout)
         {
             if (router.Recv(received, RecvFlags.DontWait))
                 return received;
@@ -281,9 +282,9 @@ public sealed class RouteCodecTests
         string payload,
         TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var deadlineStarted = Stopwatch.GetTimestamp();
         using var received = Received.Create();
-        while (DateTime.UtcNow < deadline)
+        while (Stopwatch.GetElapsedTime(deadlineStarted) < timeout)
         {
             using (var message = Message.From(payload))
             {

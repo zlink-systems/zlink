@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Timers;
 
@@ -568,10 +569,11 @@ public sealed class TimerLifecycleTests
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
-        var timeoutAt = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+        var timeout = TimeSpan.FromSeconds(5);
+        var started = Stopwatch.GetTimestamp();
         while (!condition())
         {
-            if (DateTimeOffset.UtcNow >= timeoutAt)
+            if (Stopwatch.GetElapsedTime(started) >= timeout)
                 throw new TimeoutException("The expected timer state was not reached.");
             await Task.Delay(10);
         }

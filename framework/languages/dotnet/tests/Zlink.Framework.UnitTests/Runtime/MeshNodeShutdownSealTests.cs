@@ -373,7 +373,8 @@ public sealed class MeshNodeShutdownSealTests
 
     private static async Task SendAsync(IDealerSocket socket, byte[] head)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        var deadlineTimeout = TimeSpan.FromSeconds(2);
+        var deadlineStarted = Stopwatch.GetTimestamp();
         while (true)
         {
             try
@@ -382,7 +383,7 @@ public sealed class MeshNodeShutdownSealTests
                 await socket.Send().Message(message).Async(CancellationToken.None);
                 return;
             }
-            catch (ZlinkSubmitException) when (DateTime.UtcNow < deadline)
+            catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
             {
                 await Task.Delay(10);
             }
@@ -392,8 +393,9 @@ public sealed class MeshNodeShutdownSealTests
     // Skips liveness probes; returns once a route Admit arrives.
     private static async Task ReceiveAdmitAsync(IDealerSocket socket)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-        while (DateTime.UtcNow < deadline)
+        var deadlineTimeout = TimeSpan.FromSeconds(2);
+        var deadlineStarted = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
         {
             using var received = Received.Create();
             if (socket.Recv(received, RecvFlags.DontWait))
@@ -433,10 +435,11 @@ public sealed class MeshNodeShutdownSealTests
         Func<bool> condition,
         TimeSpan? timeout = null)
     {
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        var deadlineTimeout = timeout ?? TimeSpan.FromSeconds(5);
+        var deadlineStarted = Stopwatch.GetTimestamp();
         while (!condition())
         {
-            if (DateTime.UtcNow >= deadline)
+            if (Stopwatch.GetElapsedTime(deadlineStarted) >= deadlineTimeout)
                 throw new TimeoutException("The managed MeshNode condition was not reached.");
             await Task.Delay(10);
         }

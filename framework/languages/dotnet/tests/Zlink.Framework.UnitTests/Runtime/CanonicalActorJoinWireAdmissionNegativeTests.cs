@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using System.Net;
 using System.Net.Sockets;
@@ -449,7 +450,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             string meshName,
             string sourceEndpoint)
         {
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            var deadlineTimeout = TimeSpan.FromSeconds(2);
+            var deadlineStarted = Stopwatch.GetTimestamp();
             while (true)
             {
                 try
@@ -466,7 +468,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                     await source.Send().Message(hello).Async(CancellationToken.None);
                     return;
                 }
-                catch (ZlinkSubmitException) when (DateTime.UtcNow < deadline)
+                catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
                 {
                     await Task.Delay(10);
                 }
@@ -475,8 +477,9 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
 
         internal static async Task<Received> ReceiveAsync(IDealerSocket source)
         {
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-            while (DateTime.UtcNow < deadline)
+            var deadlineTimeout = TimeSpan.FromSeconds(2);
+            var deadlineStarted = Stopwatch.GetTimestamp();
+            while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
             {
                 var received = Received.Create();
                 if (source.Recv(received, RecvFlags.DontWait))
@@ -489,10 +492,11 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
 
         internal static async Task WaitUntilAsync(Func<bool> condition)
         {
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            var deadlineTimeout = TimeSpan.FromSeconds(2);
+            var deadlineStarted = Stopwatch.GetTimestamp();
             while (!condition())
             {
-                if (DateTime.UtcNow >= deadline)
+                if (Stopwatch.GetElapsedTime(deadlineStarted) >= deadlineTimeout)
                     throw new TimeoutException("Wire admission setup did not complete.");
                 await Task.Delay(10);
             }

@@ -11138,8 +11138,8 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public async Task<ObservedMessageFlow> WaitAsync(TimeSpan timeout)
         {
-            var deadline = DateTime.UtcNow + timeout;
-            while (DateTime.UtcNow < deadline)
+            var deadlineStarted = Stopwatch.GetTimestamp();
+            while (Stopwatch.GetElapsedTime(deadlineStarted) < timeout)
             {
                 var observed = Events.FirstOrDefault(flow => flow.Phase == "sent");
                 if (observed is not null) return observed;
@@ -11153,8 +11153,8 @@ public sealed partial class EntrySpotActorDispatchTests
             string outcome,
             TimeSpan timeout)
         {
-            var deadline = DateTime.UtcNow + timeout;
-            while (DateTime.UtcNow < deadline)
+            var deadlineStarted = Stopwatch.GetTimestamp();
+            while (Stopwatch.GetElapsedTime(deadlineStarted) < timeout)
             {
                 var observed = Events.FirstOrDefault(flow => flow.Outcome == outcome);
                 if (observed is not null) return observed;

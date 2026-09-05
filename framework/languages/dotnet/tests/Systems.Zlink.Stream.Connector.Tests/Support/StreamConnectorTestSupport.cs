@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
@@ -88,11 +89,11 @@ public sealed partial class StreamConnectorTests
         Func<bool> predicate,
         TimeSpan timeout)
     {
-        var deadline = DateTimeOffset.UtcNow + timeout;
+        var deadlineStarted = Stopwatch.GetTimestamp();
         while (!predicate())
         {
             await connector.Dispatch.Async();
-            if (DateTimeOffset.UtcNow >= deadline) throw new TimeoutException("Connector dispatch timeout.");
+            if (Stopwatch.GetElapsedTime(deadlineStarted) >= timeout) throw new TimeoutException("Connector dispatch timeout.");
 
             await Task.Delay(TimeSpan.FromMilliseconds(10));
         }
@@ -102,10 +103,10 @@ public sealed partial class StreamConnectorTests
         Func<bool> predicate,
         TimeSpan timeout)
     {
-        var deadline = DateTimeOffset.UtcNow + timeout;
+        var deadlineStarted = Stopwatch.GetTimestamp();
         while (!predicate())
         {
-            if (DateTimeOffset.UtcNow >= deadline) throw new TimeoutException("Condition wait timeout.");
+            if (Stopwatch.GetElapsedTime(deadlineStarted) >= timeout) throw new TimeoutException("Condition wait timeout.");
 
             await Task.Delay(TimeSpan.FromMilliseconds(10));
         }

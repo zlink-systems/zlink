@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Net;
@@ -609,8 +610,9 @@ public sealed class RouteMeshRuntimeServiceTests
         Func<ZLinkRouteMeshStatus, bool> predicate,
         TimeSpan? timeout = null)
     {
-        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(30));
-        while (DateTimeOffset.UtcNow < deadline)
+        var deadlineTimeout = timeout ?? TimeSpan.FromSeconds(30);
+        var deadlineStarted = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
         {
             var status = runtime.GetStatus(RuntimeFixture.MeshName);
             if (predicate(status))

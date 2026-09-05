@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Stream.Connector.Contracts;
@@ -432,10 +433,11 @@ public sealed class ActorHandlerActivationTests
 
     private static async Task WaitUntilAsync(Func<bool> predicate)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        var deadlineTimeout = TimeSpan.FromSeconds(5);
+        var deadlineStarted = Stopwatch.GetTimestamp();
         while (!predicate())
         {
-            if (DateTime.UtcNow >= deadline)
+            if (Stopwatch.GetElapsedTime(deadlineStarted) >= deadlineTimeout)
                 throw new TimeoutException("The expected cleanup did not complete.");
             await Task.Delay(10);
         }

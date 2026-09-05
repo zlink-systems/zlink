@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Contracts;
@@ -1383,10 +1384,11 @@ public sealed class StreamSessionForcedCleanupTests
 
     private static async Task WaitUntilAsync(Func<bool> predicate)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        var deadlineTimeout = TimeSpan.FromSeconds(2);
+        var deadlineStarted = Stopwatch.GetTimestamp();
         while (!predicate())
         {
-            Assert.True(DateTime.UtcNow < deadline);
+            Assert.True(Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout);
             await Task.Delay(5);
         }
     }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Zlink.Framework.Runtime.Backend.Contracts;
 
 namespace Zlink.Framework.UnitTests;
@@ -186,13 +187,14 @@ public sealed class BackendAdapterFactoryTests
             publisher.Publish(topic).Message(published).Submit();
 
         var events = new PollEvent[2];
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        var deadlineTimeout = TimeSpan.FromSeconds(2);
+        var deadlineStarted = Stopwatch.GetTimestamp();
         var subscriberReady = false;
         var dealerCompletionReady = false;
         while ((!subscriberReady || !dealerCompletionReady)
-               && DateTime.UtcNow < deadline)
+               && Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
         {
-            var remaining = deadline - DateTime.UtcNow;
+            var remaining = deadlineTimeout - Stopwatch.GetElapsedTime(deadlineStarted);
             if (remaining <= TimeSpan.Zero)
                 break;
             var ready = poller.Wait(events, remaining);
@@ -314,8 +316,8 @@ public sealed class BackendAdapterFactoryTests
         IRouterSocket router,
         TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
+        var deadlineStarted = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(deadlineStarted) < timeout)
         {
             var received = Received.Create();
             if (router.Recv(received, RecvFlags.DontWait)) return received;

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Framework.Runtime.Protocol;
@@ -417,10 +418,11 @@ public sealed class BoundSessionReplacementLifecycleTests
 
     private static async Task WaitUntilAsync(Func<bool> predicate)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        var deadlineTimeout = TimeSpan.FromSeconds(2);
+        var deadlineStarted = Stopwatch.GetTimestamp();
         while (!predicate())
         {
-            Assert.True(DateTime.UtcNow < deadline);
+            Assert.True(Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout);
             await Task.Delay(1);
         }
     }

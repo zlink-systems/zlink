@@ -3986,8 +3986,10 @@ public sealed partial class StatefulServiceRuntimeTests
             "retention-owner",
             107,
             1);
+        var deadlineStarted = Stopwatch.GetTimestamp();
+        var deadlineNow = DateTimeOffset.UtcNow;
         var deadline = checked(
-            (ulong)DateTimeOffset.UtcNow.AddMilliseconds(500)
+            (ulong)deadlineNow.AddMilliseconds(500)
                 .ToUnixTimeMilliseconds());
         const string spotId = "retention-spot";
         Assert.Equal(
@@ -4020,7 +4022,8 @@ public sealed partial class StatefulServiceRuntimeTests
             default);
         var afterDeadline = DateTimeOffset.FromUnixTimeMilliseconds(
             checked((long)deadline)).AddMilliseconds(25);
-        var wait = afterDeadline - DateTimeOffset.UtcNow;
+        var wait = afterDeadline - deadlineNow
+            - Stopwatch.GetElapsedTime(deadlineStarted);
         if (wait > TimeSpan.Zero)
             await Task.Delay(wait);
         Assert.Equal(

@@ -1035,8 +1035,9 @@ public sealed class CanonicalActorJoinIngressReplyTests
         ZLinkManagedMeshNode target,
         TimeSpan? timeout = null)
     {
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(2));
-        while (DateTime.UtcNow < deadline)
+        var deadlineTimeout = timeout ?? TimeSpan.FromSeconds(2);
+        var deadlineStarted = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
         {
             using var ready = new MeshReadyBatch();
             target.DrainReady(
@@ -1071,8 +1072,9 @@ public sealed class CanonicalActorJoinIngressReplyTests
             ZLinkManagedMeshNode source,
             MeshOperationId operationId)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-        while (DateTime.UtcNow < deadline)
+        var deadlineTimeout = TimeSpan.FromSeconds(2);
+        var deadlineStarted = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
         {
             using var ready = new MeshReadyBatch();
             source.DrainReady(
@@ -1115,8 +1117,9 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
     private static async Task<Received> ReceiveAsync(IDealerSocket source)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-        while (DateTime.UtcNow < deadline)
+        var deadlineTimeout = TimeSpan.FromSeconds(2);
+        var deadlineStarted = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
         {
             var received = Received.Create();
             if (source.Recv(received, RecvFlags.DontWait))
@@ -1131,8 +1134,9 @@ public sealed class CanonicalActorJoinIngressReplyTests
         ISocketMonitor monitor,
         MonitorEventType expected)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-        while (DateTime.UtcNow < deadline)
+        var deadlineTimeout = TimeSpan.FromSeconds(2);
+        var deadlineStarted = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
         {
             var value = monitor.Recv(RecvFlags.DontWait);
             if (value?.Event == expected)
@@ -1146,7 +1150,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
         IDealerSocket source,
         string sourceEndpoint)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        var deadlineTimeout = TimeSpan.FromSeconds(2);
+        var deadlineStarted = Stopwatch.GetTimestamp();
         while (true)
         {
             try
@@ -1163,7 +1168,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 await source.Send().Message(hello).Async(CancellationToken.None);
                 return;
             }
-            catch (ZlinkSubmitException) when (DateTime.UtcNow < deadline)
+            catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
             {
                 await Task.Delay(10);
             }
