@@ -2263,6 +2263,7 @@ struct socket_readable_watch_t
     uv_poll_t poll;
     napi_env env;
     napi_ref callback;
+    napi_async_context async_context;
     bool closing;
     bool closed;
     bool finalized;
@@ -2280,6 +2281,10 @@ static void socket_readable_watch_closed (uv_handle_t *handle)
     socket_readable_watch_t *watch =
       static_cast<socket_readable_watch_t *> (handle->data);
     watch->closed = true;
+    if (watch->async_context) {
+        napi_async_destroy (watch->env, watch->async_context);
+        watch->async_context = NULL;
+    }
     if (watch->callback) {
         napi_delete_reference (watch->env, watch->callback);
         watch->callback = NULL;
@@ -2324,12 +2329,16 @@ static void socket_readable_watch_ready (
     napi_value receiver;
     napi_value status_value;
     napi_get_reference_value (watch->env, watch->callback, &callback);
-    napi_get_undefined (watch->env, &receiver);
+    napi_get_global (watch->env, &receiver);
     napi_create_int32 (watch->env, status, &status_value);
     napi_value argv[] = {status_value};
     napi_value ignored;
-    napi_call_function (
-      watch->env, receiver, callback, sizeof (argv) / sizeof (*argv), argv,
+    // This callback enters JavaScript from libuv, not from a JavaScript call.
+    // MakeCallback completes the Node callback scope, including its Promise
+    // microtasks, before another event-loop callback starts.
+    napi_make_callback (
+      watch->env, watch->async_context, receiver, callback,
+      sizeof (argv) / sizeof (*argv), argv,
       &ignored);
     napi_close_handle_scope (watch->env, scope);
 }
@@ -2375,6 +2384,7 @@ napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
     memset (&watch->poll, 0, sizeof (watch->poll));
     watch->env = env;
     watch->callback = NULL;
+    watch->async_context = NULL;
     watch->closing = false;
     watch->closed = false;
     watch->finalized = false;
@@ -2389,6 +2399,18 @@ napi_value socket_readable_watch_start (napi_env env, napi_callback_info info)
         watch->finalized = true;
         close_socket_readable_watch (watch);
         napi_throw_error (env, NULL, "socket readable watch callback retention failed");
+        return NULL;
+    }
+    // The retained callback is also the async resource, so its existing
+    // reference keeps that resource alive until the uv handle closes.
+    napi_value resource_name;
+    if (napi_create_string_utf8 (
+          env, "zlink:completion", NAPI_AUTO_LENGTH, &resource_name) != napi_ok
+        || napi_async_init (
+          env, argv[1], resource_name, &watch->async_context) != napi_ok) {
+        watch->finalized = true;
+        close_socket_readable_watch (watch);
+        napi_throw_error (env, NULL, "completion async resource creation failed");
         return NULL;
     }
     const int start_result = uv_poll_start (
