@@ -16,9 +16,12 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
     private Task? _disposeTask;
     private long _nextSequence;
     private bool _closed;
+    internal TimeProvider TimeProvider { get; }
+    internal TimeSpan Elapsed => TimeProvider.GetElapsedTime(0, TimeProvider.GetTimestamp());
 
-    public ZLinkTimerScheduler()
+    public ZLinkTimerScheduler(TimeProvider? timeProvider = null)
     {
+        TimeProvider = timeProvider ?? TimeProvider.System;
         _pump = RunAsync(_stopSource.Token);
     }
 
@@ -46,7 +49,7 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
 
     internal void Schedule(
         ZLinkTimer timer,
-        DateTimeOffset dueAt,
+        TimeSpan dueAt,
         long version)
     {
         AwaitStateLane(_lane.RunAsync(() =>
@@ -56,7 +59,7 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
             _queue.Enqueue(
                 new ScheduledTimer(timer, version),
                 new ZLinkTimerScheduleKey(
-                    dueAt.UtcTicks,
+                    dueAt.Ticks,
                     ++_nextSequence));
         }));
         SignalWake();
@@ -154,9 +157,9 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         }
 
         _queue.TryPeek(out _, out var key);
-        var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
-        if (key.UtcTicks > nowTicks)
-            return (false, default, TimeSpan.FromTicks(key.UtcTicks - nowTicks));
+        var nowTicks = Elapsed.Ticks;
+        if (key.ElapsedTicks > nowTicks)
+            return (false, default, TimeSpan.FromTicks(key.ElapsedTicks - nowTicks));
 
         return (true, _queue.Dequeue(), TimeSpan.Zero);
     }
@@ -187,12 +190,12 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         long Version);
 
     private readonly record struct ZLinkTimerScheduleKey(
-        long UtcTicks,
+        long ElapsedTicks,
         long Sequence) : IComparable<ZLinkTimerScheduleKey>
     {
         public int CompareTo(ZLinkTimerScheduleKey other)
         {
-            var byDeadline = UtcTicks.CompareTo(other.UtcTicks);
+            var byDeadline = ElapsedTicks.CompareTo(other.ElapsedTicks);
             return byDeadline != 0
                 ? byDeadline
                 : Sequence.CompareTo(other.Sequence);

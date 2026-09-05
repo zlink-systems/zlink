@@ -2290,7 +2290,7 @@ public sealed class SessionActorCoordinatorTests
             await ZLinkSessionActorCoordinator
                 .ConfirmBindingWithRetryAsync<int>(
                     "actor-bind-exhausted",
-                    DateTime.UtcNow + TimeSpan.FromMilliseconds(120),
+                    System.Diagnostics.Stopwatch.GetElapsedTime(0) + TimeSpan.FromMilliseconds(120),
                     _ =>
                     {
                         attempts++;
@@ -2316,7 +2316,7 @@ public sealed class SessionActorCoordinatorTests
             await ZLinkSessionActorCoordinator
                 .ConfirmBindingWithRetryAsync<int>(
                     "actor-bind-fatal",
-                    DateTime.UtcNow + TimeSpan.FromSeconds(30),
+                    System.Diagnostics.Stopwatch.GetElapsedTime(0) + TimeSpan.FromSeconds(30),
                     _ =>
                     {
                         attempts++;

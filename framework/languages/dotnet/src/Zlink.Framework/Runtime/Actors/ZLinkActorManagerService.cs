@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Locations;
@@ -229,6 +230,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         CancellationToken cancellationToken)
     {
         var deadlineAt = DateTimeOffset.UtcNow.Add(timeout);
+        var started = Stopwatch.GetTimestamp();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeout);
         using var operation = runtime.EnterOperation();
@@ -449,7 +451,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     }
                 }
 
-                var remaining = deadlineAt - DateTimeOffset.UtcNow;
+                var remaining = timeout - Stopwatch.GetElapsedTime(started);
                 if (remaining <= TimeSpan.Zero)
                     throw CreateActorCreationUnavailableException(actorId);
                 // The mesh durable sender keeps this reservation's encoded

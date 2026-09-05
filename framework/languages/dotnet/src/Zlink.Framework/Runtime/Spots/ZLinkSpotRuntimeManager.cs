@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
@@ -150,7 +151,8 @@ internal sealed class ZLinkSpotRuntimeManager(
         var locationStore = _locationStore
             ?? throw new InvalidOperationException(
                 "Remote User Spot creation requires a Location Store.");
-        var deadlineAt = DateTimeOffset.UtcNow.Add(timeout);
+        var deadlineUnixMs = checked((ulong)DateTimeOffset.UtcNow.Add(timeout).ToUnixTimeMilliseconds());
+        var deadlineAt = Stopwatch.GetElapsedTime(0) + timeout;
         using var deadlineToken = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken);
         deadlineToken.CancelAfter(timeout);
@@ -327,7 +329,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                         $"User Spot '{requestedSpotId}' reservation changed.",
                         ZLinkRetryAdvice.RetryAfterBackoff);
             }
-            var deadline = checked((ulong)deadlineAt.ToUnixTimeMilliseconds());
+            var deadline = deadlineUnixMs;
             var fence = new ObjectReservationFence(
                 snapshot.ReservationVersion,
                 snapshot.StoreVersion,
@@ -354,7 +356,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                 }
                 else
                 {
-                    var remaining = deadlineAt - DateTimeOffset.UtcNow;
+                    var remaining = deadlineAt - Stopwatch.GetElapsedTime(0);
                     if (remaining <= TimeSpan.Zero)
                         throw new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.Unavailable,
@@ -493,7 +495,7 @@ internal sealed class ZLinkSpotRuntimeManager(
         string spotId,
         string stableType,
         ZLinkAuthoritySnapshot current,
-        DateTimeOffset deadline,
+        TimeSpan deadline,
         CancellationToken cancellationToken)
     {
         while (true)
@@ -537,7 +539,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                                 relocation.State.TargetNodeRid)),
                         ZLinkSpotCreateState.Existing,
                         null);
-                if (DateTimeOffset.UtcNow >= deadline)
+                if (Stopwatch.GetElapsedTime(0) >= deadline)
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.DeadlineExceeded,
                         $"Timed out while joining relocating User Spot '{spotId}'.",
@@ -578,7 +580,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                     ZLinkFrameworkErrorKind.Unavailable,
                     $"User Spot '{spotId}' creation changed.",
                     ZLinkRetryAdvice.RetryAfterBackoff);
-            if (DateTimeOffset.UtcNow >= deadline)
+            if (Stopwatch.GetElapsedTime(0) >= deadline)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.DeadlineExceeded,
                     $"Timed out while joining User Spot '{spotId}' creation.",
@@ -662,8 +664,9 @@ internal sealed class ZLinkSpotRuntimeManager(
         CancellationToken cancellationToken)
     {
         var spotId = spot.SpotId;
-        var deadlineAt = DateTimeOffset.UtcNow
-            .Add(_frameworkRegistration.DefaultRequestTimeout);
+        var timeout = _frameworkRegistration.DefaultRequestTimeout;
+        var deadlineUnixMs = checked((ulong)DateTimeOffset.UtcNow.Add(timeout).ToUnixTimeMilliseconds());
+        var deadlineAt = Stopwatch.GetElapsedTime(0) + timeout;
         if (_locationStore is not null)
         {
             var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId);
@@ -704,7 +707,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                     if (source is not null
                         && authority.NodeRid != source.Node.RoutingId)
                     {
-                        var remaining = deadlineAt - DateTimeOffset.UtcNow;
+                        var remaining = deadlineAt - Stopwatch.GetElapsedTime(0);
                         if (remaining <= TimeSpan.Zero)
                             throw CloseDeadlineElapsed(spotId);
                         var closed = await source.Node.CloseUserSpotAsync(
@@ -716,8 +719,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                                     authority.NodeGeneration,
                                     found.Snapshot.AuthorityOwnerGeneration,
                                     found.Snapshot.StoreVersion),
-                                checked((ulong)deadlineAt
-                                    .ToUnixTimeMilliseconds()),
+                                deadlineUnixMs,
                                 remaining,
                                 cancellationToken)
                             .ConfigureAwait(false);
@@ -737,7 +739,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                     }
                 }
 
-                if (DateTimeOffset.UtcNow >= deadlineAt)
+                if (Stopwatch.GetElapsedTime(0) >= deadlineAt)
                     throw CloseDeadlineElapsed(spotId);
                 await Task.Delay(
                         TimeSpan.FromMilliseconds(10),

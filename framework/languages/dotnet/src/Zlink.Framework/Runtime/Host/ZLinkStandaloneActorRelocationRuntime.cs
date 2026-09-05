@@ -47,6 +47,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         DateTimeOffset absoluteDeadline,
         CancellationToken cancellationToken)
     {
+        var deadline = Stopwatch.GetElapsedTime(0) + (absoluteDeadline - DateTimeOffset.UtcNow);
         var sourceActivation = actorState.LiveActivation;
         var destination = ResolveDestination(sourceActivation, target);
         var actor = actorState.Actor;
@@ -184,7 +185,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         sourceNode.Node.MeshStatus(),
                         sourceNode.Node.MeshPeers(),
                         semanticSealRecords,
-                        RemainingTimeout(absoluteDeadline),
+                        RemainingTimeout(deadline),
                         cancellationToken)
                     .ConfigureAwait(false);
                 precommitSnapshot = await precommit.BeginPreparingAsync(
@@ -253,7 +254,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         target.Rid,
                         prepare,
                         transferPayload,
-                        RemainingTimeout(absoluteDeadline),
+                        RemainingTimeout(deadline),
                         cancellationToken)
                     .ConfigureAwait(false);
                 var commitBoundary = actorState.Handoff
@@ -267,7 +268,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         sourceNode.Node.MeshStatus(),
                         sourceNode.Node.MeshPeers(),
                         acceptedRecords,
-                        RemainingTimeout(absoluteDeadline),
+                        RemainingTimeout(deadline),
                         cancellationToken)
                     .ConfigureAwait(false);
                 var data = acceptedRecords
@@ -639,9 +640,9 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             .ConfigureAwait(false);
     }
 
-    private static TimeSpan RemainingTimeout(DateTimeOffset absoluteDeadline)
+    private static TimeSpan RemainingTimeout(TimeSpan deadline)
     {
-        var remaining = absoluteDeadline - DateTimeOffset.UtcNow;
+        var remaining = deadline - Stopwatch.GetElapsedTime(0);
         return remaining > TimeSpan.Zero
             ? remaining
             : TimeSpan.FromTicks(1);
@@ -1332,7 +1333,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
 
     private async ValueTask SweepExpiredTargetStagesAsync()
     {
-        var cutoff = TimeProvider.System.GetUtcNow() - TargetStageTtl;
+        var cutoff = Stopwatch.GetElapsedTime(0) - TargetStageTtl;
         foreach (var pair in _targetAttempts)
         {
             if (!TryAcquireTargetAttempt(pair.Key, pair.Value, out var lease))
@@ -3032,7 +3033,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal TargetStage Stage { get; } = stage;
-        internal DateTimeOffset CreatedAt { get; } = TimeProvider.System.GetUtcNow();
+        internal TimeSpan CreatedAt { get; } = Stopwatch.GetElapsedTime(0);
         internal bool IsCompleted => Volatile.Read(ref _completed) != 0;
         internal Task Terminal => _terminal.Task;
 
@@ -3078,7 +3079,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         internal long NextArrivalIndex => _acceptedFrames.Count == 0
             ? 1
             : checked(_acceptedFrames[^1].ArrivalIndex + 1);
-        internal DateTimeOffset CreatedAt { get; } = TimeProvider.System.GetUtcNow();
+        internal TimeSpan CreatedAt { get; } = Stopwatch.GetElapsedTime(0);
         internal bool AuthorityPublished { get; set; }
 
         private uint _relayCrcState = uint.MaxValue;

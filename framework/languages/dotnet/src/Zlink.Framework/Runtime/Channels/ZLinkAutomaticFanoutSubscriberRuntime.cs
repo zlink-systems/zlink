@@ -243,7 +243,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
         private ZLinkFanoutPublisherDescriptor _descriptor = descriptor;
         private ZLinkFanoutPublisherConnectionState _state =
             ZLinkFanoutPublisherConnectionState.Connecting;
-        private DateTimeOffset _lastActivity = owner._time.GetUtcNow();
+        private long _lastActivity = owner._time.GetTimestamp();
         private string? _lastFailure;
         private bool _ready;
         private Task? _loop;
@@ -343,7 +343,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
                     () => _descriptor.Endpoint).ConfigureAwait(false));
                 await _lane.RunAsync(() =>
                 {
-                    _lastActivity = owner._time.GetUtcNow();
+                    _lastActivity = owner._time.GetTimestamp();
                     _lastFailure = null;
                 }).ConfigureAwait(false);
 
@@ -400,8 +400,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
                 var lastActivity = await _lane.RunAsync(
                     () => _lastActivity).ConfigureAwait(false);
                 if (!ZLinkFanoutLivenessProtocol.IsInboundTimedOut(
-                        lastActivity,
-                        owner._time.GetUtcNow()))
+                        owner._time.GetElapsedTime(lastActivity)))
                     continue;
                 await _lane.RunAsync(
                     () => _lastFailure = "fanout publisher inbound timeout")
@@ -415,7 +414,7 @@ internal sealed class ZLinkAutomaticFanoutSubscriberRuntime
         {
             AwaitStateLane(_lane.RunAsync(() =>
             {
-                _lastActivity = owner._time.GetUtcNow();
+                _lastActivity = owner._time.GetTimestamp();
                 _ready = true;
                 _state = ZLinkFanoutPublisherConnectionState.Ready;
                 _lastFailure = null;

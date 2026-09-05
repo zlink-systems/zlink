@@ -1370,7 +1370,7 @@ internal abstract partial class ZLinkSpotActivation
                 targetAuthorityOwnerGeneration,
                 SourceOwnerToken,
                 targetOwner,
-                DateTimeOffset.UtcNow + duration);
+                Stopwatch.GetElapsedTime(0) + duration);
         Volatile.Write(ref _messageFollow, messageFollow);
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"message_follow_registered target_rid={targetNodeRid}");
@@ -1392,7 +1392,7 @@ internal abstract partial class ZLinkSpotActivation
         var messageFollow = Volatile.Read(ref _messageFollow);
         if (messageFollow is null)
             return ZLinkSpotMessageFollowResult.NotApplicable;
-        var now = DateTimeOffset.UtcNow;
+        var now = Stopwatch.GetElapsedTime(0);
         var currentSourceOwner =
             _runtime.LocationLifecycle?.OwnerToken;
         if (!messageFollow.MatchesSourceRoute(

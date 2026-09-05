@@ -21,7 +21,6 @@ internal static class ZLinkFanoutLivenessProtocol
         && parts[0].AsReadOnlySpan().SequenceEqual(Payload);
 
     internal static bool IsInboundTimedOut(
-        DateTimeOffset lastActivity,
-        DateTimeOffset now) =>
-        now - lastActivity >= InboundTimeout;
+        TimeSpan elapsed) =>
+        elapsed >= InboundTimeout;
 }

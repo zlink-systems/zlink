@@ -44,7 +44,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
             AdmissionExecution execution;
             if (_pending.TryGetValue(request.HandoffId, out var pending))
             {
-                if (pending.Deadline <= _timeProvider.GetUtcNow())
+                if (pending.Deadline <= _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp()))
                 {
                     RemovePendingLocked(
                         request.HandoffId,
@@ -118,7 +118,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
         {
             if (_pending.TryGetValue(request.HandoffId, out var pending))
             {
-                if (pending.Deadline <= _timeProvider.GetUtcNow())
+                if (pending.Deadline <= _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp()))
                 {
                     RemovePendingLocked(request.HandoffId, pending);
                     return null;
@@ -195,13 +195,13 @@ internal sealed class ZLinkActorHandoffAdmissions(
         var pending = new PendingAdmission(
             request,
             targetSpotId,
-            deadline,
+            _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp()) + (deadline - _timeProvider.GetUtcNow()),
             reply);
         var added = await _lane.RunAsync(() =>
         {
             if (_pending.TryGetValue(request.HandoffId, out var existing))
             {
-                if (existing.Deadline <= _timeProvider.GetUtcNow())
+                if (existing.Deadline <= _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp()))
                 {
                     RemovePendingLocked(
                         request.HandoffId,
@@ -258,7 +258,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
                 || !pending.Matches(request, targetSpotId))
                 throw new InvalidOperationException(
                     $"Actor '{request.ActorId}' does not have a matching pending handoff admission '{request.HandoffId}'.");
-            if (pending.Deadline <= _timeProvider.GetUtcNow())
+            if (pending.Deadline <= _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp()))
             {
                 RemovePendingLocked(request.HandoffId, pending);
                 throw new ZLinkFrameworkException(
@@ -282,7 +282,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
             if (!_pending.TryGetValue(request.HandoffId, out var pending))
                 return;
             pending.ValidateCommit(request, targetSpotId);
-            if (pending.Deadline <= _timeProvider.GetUtcNow())
+            if (pending.Deadline <= _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp()))
             {
                 RemovePendingLocked(request.HandoffId, pending);
                 return;
@@ -363,7 +363,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
                     targetSpotId,
                     reply,
                     reply.Accepted && preparedCompletionTimeout is { } timeout
-                        ? _timeProvider.GetUtcNow() + timeout
+                        ? _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp()) + timeout
                         : null));
         });
 
@@ -446,7 +446,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
                 || !terminal.Matches(request, targetSpotId)
                 || terminal.Phase != ZLinkActorCommitPhase.Prepared
                 || terminal.PreparedCompletionDeadline is not { } deadline
-                || deadline > _timeProvider.GetUtcNow())
+                || deadline > _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp()))
                 return false;
 
             terminal.Reply = rejectedReply;
@@ -571,7 +571,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
     {
         try
         {
-            var delay = pending.Deadline - _timeProvider.GetUtcNow();
+            var delay = pending.Deadline - _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp());
             if (delay > TimeSpan.Zero)
                 await Task.Delay(delay, _timeProvider, cancellationToken).ConfigureAwait(false);
         }
@@ -653,13 +653,13 @@ internal sealed class ZLinkActorHandoffAdmissions(
     private sealed class PendingAdmission(
         ZLinkRemoteActorAdmissionRequest request,
         string targetSpotId,
-        DateTimeOffset deadline,
+        TimeSpan deadline,
         ZLinkRemoteActorAdmissionReply reply)
     {
         public string ActorId { get; } = request.ActorId;
         public string HandoffId { get; } = request.HandoffId;
 
-        public DateTimeOffset Deadline { get; } = deadline;
+        public TimeSpan Deadline { get; } = deadline;
 
         public ZLinkRemoteActorAdmissionReply Reply { get; } = reply;
 
@@ -781,7 +781,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
         ZLinkRemoteActorJoinRequest request,
         string targetSpotId,
         ZLinkRemoteActorJoinReply reply,
-        DateTimeOffset? preparedCompletionDeadline)
+        TimeSpan? preparedCompletionDeadline)
     {
         public ZLinkRemoteActorJoinRequest Request { get; } = request;
 
@@ -790,7 +790,7 @@ internal sealed class ZLinkActorHandoffAdmissions(
 
         public ZLinkRemoteActorJoinReply Reply { get; set; } = reply;
 
-        public DateTimeOffset? PreparedCompletionDeadline { get; } = preparedCompletionDeadline;
+        public TimeSpan? PreparedCompletionDeadline { get; } = preparedCompletionDeadline;
 
         public ZLinkActorCommitPhase Phase { get; set; } = reply.Accepted
             ? ZLinkActorCommitPhase.Prepared

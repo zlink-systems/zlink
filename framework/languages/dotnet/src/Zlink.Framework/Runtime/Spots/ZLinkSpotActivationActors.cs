@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -620,11 +621,14 @@ internal abstract partial class ZLinkSpotActivation
         CancellationToken cancellationToken,
         DateTimeOffset? absoluteDeadline)
     {
+        var localDeadline = absoluteDeadline is { } value
+            ? Stopwatch.GetElapsedTime(0) + (value - DateTimeOffset.UtcNow)
+            : (TimeSpan?)null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (absoluteDeadline is { } deadline
-                && deadline <= DateTimeOffset.UtcNow)
+            if (localDeadline is { } deadline
+                && deadline <= Stopwatch.GetElapsedTime(0))
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.DeadlineExceeded,
                     "Actor membership post-commit lifecycle did not finish before the deadline.",
@@ -641,9 +645,9 @@ internal abstract partial class ZLinkSpotActivation
             catch
             {
                 var delay = TimeSpan.FromMilliseconds(10);
-                if (absoluteDeadline is { } deadlineValue)
+                if (localDeadline is { } deadlineValue)
                 {
-                    var remaining = deadlineValue - DateTimeOffset.UtcNow;
+                    var remaining = deadlineValue - Stopwatch.GetElapsedTime(0);
                     if (remaining <= TimeSpan.Zero)
                         throw new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.DeadlineExceeded,

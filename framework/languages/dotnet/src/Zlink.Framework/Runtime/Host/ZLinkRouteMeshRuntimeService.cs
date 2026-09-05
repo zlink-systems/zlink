@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
@@ -739,7 +740,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
         private Task? _pump;
         private readonly List<ZLinkObservationQueue<ZLinkRouteMeshStatus>> _observers = [];
         private readonly Dictionary<RoutingId, ZLinkMeshNodeDescriptor> _descriptors = [];
-        private DateTimeOffset _nextDescriptorPoll;
+        private TimeSpan _nextDescriptorPoll;
         private string? _lastLocationState;
         private ZLinkRouteMeshStatus? _lastStatus;
 
@@ -908,9 +909,9 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IDi
             if (_owner._locationQuery is null
                 || !await _lane.RunAsync(() =>
                 {
-                    if (DateTimeOffset.UtcNow < _nextDescriptorPoll)
+                    if (Stopwatch.GetElapsedTime(0) < _nextDescriptorPoll)
                         return false;
-                    _nextDescriptorPoll = DateTimeOffset.UtcNow.AddMilliseconds(100);
+                    _nextDescriptorPoll = Stopwatch.GetElapsedTime(0) + TimeSpan.FromMilliseconds(100);
                     return true;
                 }).ConfigureAwait(false))
                 return;

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Spots;
@@ -256,7 +257,7 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "InMesh is valid only for an Instance Spot intent.");
         var operationTimeout = _timeout ?? runtime.Registration.DefaultRequestTimeout;
-        var deadline = DateTimeOffset.UtcNow + operationTimeout;
+        var deadline = Stopwatch.GetElapsedTime(0) + operationTimeout;
         var handle = _exactSpotIdCall
             ? await runtime.ResolveSpotHandleAsync(target.SpotId, cancellationToken)
                 .ConfigureAwait(false)
@@ -375,9 +376,9 @@ internal sealed class ZLinkInstanceSpotRequestCall<TRequest>(
             Result: ZlinkRequestException.ErrorCode.Conflict
         };
 
-    private static TimeSpan Remaining(DateTimeOffset deadline)
+    private static TimeSpan Remaining(TimeSpan deadline)
     {
-        var remaining = deadline - DateTimeOffset.UtcNow;
+        var remaining = deadline - Stopwatch.GetElapsedTime(0);
         if (remaining <= TimeSpan.Zero)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,

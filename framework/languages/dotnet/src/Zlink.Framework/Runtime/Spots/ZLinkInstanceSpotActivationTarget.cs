@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Collections.Concurrent;
@@ -754,6 +755,9 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
         ZLinkServiceWireCodec.RequestSourceFence requestSource,
         CancellationToken cancellationToken)
     {
+        var deadline = Stopwatch.GetElapsedTime(0)
+            + (DateTimeOffset.FromUnixTimeMilliseconds(checked((long)operation.DeadlineUnixMs))
+                - DateTimeOffset.UtcNow);
         var current = reserve switch
         {
             ZLinkObjectReserveResult.AlreadyExists value => value.Current,
@@ -840,8 +844,7 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                         // winner route is temporarily unavailable.
                     }
 
-                    var forwardRemaining = checked((long)operation.DeadlineUnixMs)
-                                           - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    var forwardRemaining = (deadline - Stopwatch.GetElapsedTime(0)).TotalMilliseconds;
                     if (forwardRemaining <= 0)
                         throw new TimeoutException(
                             $"Instance Spot '{operation.Target.TargetSpotId}' activation forwarding deadline elapsed.");
@@ -928,8 +931,7 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 return terminal;
             }
 
-            var remaining = checked((long)operation.DeadlineUnixMs)
-                            - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var remaining = (deadline - Stopwatch.GetElapsedTime(0)).TotalMilliseconds;
             if (remaining <= 0)
                 throw new TimeoutException(
                     $"Instance Spot '{operation.Target.TargetSpotId}' activation deadline elapsed.");

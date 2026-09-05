@@ -2,8 +2,8 @@ using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Service;
 
-// Absolute operation deadlines must continue moving forward when the system
-// wall clock is adjusted backwards.
+// Wire admission preserves the existing UTC high-water boundary. Once an
+// operation is admitted, its local deadline and retention use elapsed time.
 internal sealed class ZLinkDeadlineClock
 {
     private readonly TimeProvider _timeProvider;
@@ -36,6 +36,12 @@ internal sealed class ZLinkDeadlineClock
             return _observedUtc.ToUnixTimeMilliseconds();
         }));
     }
+
+    internal TimeSpan Elapsed =>
+        _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp());
+
+    internal TimeSpan FromUnixTimeMilliseconds(long deadline) =>
+        Elapsed + TimeSpan.FromMilliseconds(deadline - GetUnixTimeMilliseconds());
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkActorMessageFollower
@@ -79,7 +80,8 @@ internal sealed class ZLinkActorMessageFollower
                     capability);
                 var pending = new PendingDirectReply(
                     directReply,
-                    routeContext.DeadlineUnixMs);
+                    routeContext.DeadlineUnixMs,
+                    _runtime.Registration.DefaultRequestTimeout);
                 if (!_directReplyCompletions.TryRegister(replyKey, pending))
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.Unavailable,
@@ -228,7 +230,8 @@ internal sealed class ZLinkActorMessageFollower
 
         var capability = CreateReplyCapability(replyNodeRid, deadlineUnixMs);
         var key = new DirectReplyKey(actorId, requestId, capability);
-        var pending = new PendingDirectReply(directReply, deadlineUnixMs);
+        var pending = new PendingDirectReply(
+            directReply, deadlineUnixMs, _runtime.Registration.DefaultRequestTimeout);
         if (!_directReplyCompletions.TryRegister(key, pending))
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
@@ -393,12 +396,7 @@ internal sealed class ZLinkActorMessageFollower
     {
         try
         {
-            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var deadline = ResolveDeadlineUnixMs(
-                pending.DeadlineUnixMs,
-                now,
-                _runtime.Registration.DefaultRequestTimeout);
-            var remaining = Math.Max(0, deadline - now);
+            var remaining = (pending.Deadline - Stopwatch.GetElapsedTime(0)).TotalMilliseconds;
             if (remaining > 0)
                 await Task.Delay(
                         TimeSpan.FromMilliseconds(remaining),
@@ -448,14 +446,6 @@ internal sealed class ZLinkActorMessageFollower
             ? DirectReplyDeliveryResult.Submitted
             : DirectReplyDeliveryResult.TerminalRejected);
     }
-
-    private static long ResolveDeadlineUnixMs(
-        ulong deadlineUnixMs,
-        long now,
-        TimeSpan fallbackTimeout) =>
-        deadlineUnixMs is > 0 and <= long.MaxValue
-            ? checked((long)deadlineUnixMs)
-            : checked(now + (long)fallbackTimeout.TotalMilliseconds);
 
     internal static ZLinkBackendActorRouteContext AdvanceRoute(
         ZLinkActorMessageFollowRoute messageFollowRoute,
@@ -853,9 +843,14 @@ internal sealed class ZLinkActorMessageFollower
 
     private sealed class PendingDirectReply(
         Func<IReadOnlyList<Message>, SendFlags, SubmitResult> reply,
-        ulong deadlineUnixMs)
+        ulong deadlineUnixMs,
+        TimeSpan fallbackTimeout)
     {
         private int _state;
+        internal TimeSpan Deadline { get; } = Stopwatch.GetElapsedTime(0)
+            + (deadlineUnixMs is > 0 and <= long.MaxValue
+                ? DateTimeOffset.FromUnixTimeMilliseconds((long)deadlineUnixMs) - DateTimeOffset.UtcNow
+                : fallbackTimeout);
 
         public Func<IReadOnlyList<Message>, SendFlags, SubmitResult> Reply { get; } =
             reply;
@@ -871,9 +866,7 @@ internal sealed class ZLinkActorMessageFollower
             {
                 if (DeadlineUnixMs is 0 or > long.MaxValue)
                     return TimeSpan.MaxValue;
-                var milliseconds = checked(
-                    (long)DeadlineUnixMs
-                    - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                var milliseconds = (Deadline - Stopwatch.GetElapsedTime(0)).TotalMilliseconds;
                 return milliseconds <= 0
                     ? TimeSpan.Zero
                     : TimeSpan.FromMilliseconds(milliseconds);

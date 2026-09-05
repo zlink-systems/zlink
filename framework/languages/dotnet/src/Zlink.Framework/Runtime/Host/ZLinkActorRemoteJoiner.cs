@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
@@ -46,6 +47,9 @@ internal sealed class ZLinkActorRemoteJoiner(
             + $"authority_gen={snapshot.AuthorityOwnerGeneration} "
             + $"lease_gen={snapshot.OwnerLeaseGeneration} "
             + $"descriptor_revision={target.DescriptorRevision}");
+        var effectiveDeadline = absoluteDeadline ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
+        var deadline = (Utc: effectiveDeadline,
+            Monotonic: Stopwatch.GetElapsedTime(0) + RemainingTimeout(effectiveDeadline));
         return SubmitRoutedJoinActorAsync(
             actor,
             actorRef,
@@ -54,7 +58,7 @@ internal sealed class ZLinkActorRemoteJoiner(
             request,
             operationId,
             cancellationToken,
-            absoluteDeadline);
+            deadline);
     }
 
     public ValueTask<ZLinkActorJoinResult> JoinAsync(
@@ -95,6 +99,8 @@ internal sealed class ZLinkActorRemoteJoiner(
             runtime.Flow.CaptureEnabled);
         var effectiveDeadline = absoluteDeadline
                                 ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
+        var deadline = (Utc: effectiveDeadline,
+            Monotonic: Stopwatch.GetElapsedTime(0) + RemainingTimeout(effectiveDeadline));
         var activation = spots.GetActivationBySpotId(state, spotId);
         if (activation is not null)
         {
@@ -110,14 +116,14 @@ internal sealed class ZLinkActorRemoteJoiner(
                     activation.SpotId,
                     activation.ChannelName,
                     request,
-                    RemainingTimeout(effectiveDeadline),
+                    RemainingTimeout(deadline.Monotonic),
                     cancellationToken)
                 .ConfigureAwait(false);
         }
 
         var remoteAddress = await ExecuteWithDeadlineAsync(
                 token => ResolveRemoteActorJoinTargetAsync(spotId, token),
-                RemainingTimeout(effectiveDeadline),
+                RemainingTimeout(deadline.Monotonic),
                 cancellationToken)
             .ConfigureAwait(false);
         return await SubmitRoutedJoinActorAsync(
@@ -128,7 +134,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 request,
                 operationId,
                 cancellationToken,
-                effectiveDeadline)
+                deadline)
             .ConfigureAwait(false);
     }
 
@@ -140,7 +146,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         ZLinkMessage request,
         ZLinkActorJoinOperationId? operationId,
         CancellationToken cancellationToken,
-        DateTimeOffset? absoluteDeadline = null)
+        (DateTimeOffset Utc, TimeSpan Monotonic) deadline)
     {
         if (string.IsNullOrWhiteSpace(actorState.ActorType))
             throw new ZLinkFrameworkException(
@@ -159,9 +165,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                 ZLinkFrameworkErrorKind.Rejected,
                 $"Actor type '{actorType}' relocation policy is not registered on the source node.");
 
-        var effectiveDeadline = absoluteDeadline
-                                ?? DateTimeOffset.UtcNow
-                                    + registration.DefaultRequestTimeout;
         return await SubmitRoutedJoinActorCoreAsync(
                 actor,
                 actorRef,
@@ -172,7 +175,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 handoffId,
                 relocation,
                 operationId,
-                effectiveDeadline,
+                deadline,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -199,9 +202,12 @@ internal sealed class ZLinkActorRemoteJoiner(
         }
     }
 
-    internal static TimeSpan RemainingTimeout(DateTimeOffset absoluteDeadline)
+    internal static TimeSpan RemainingTimeout(DateTimeOffset absoluteDeadline) =>
+        RemainingTimeout(Stopwatch.GetElapsedTime(0) + (absoluteDeadline - DateTimeOffset.UtcNow));
+
+    internal static TimeSpan RemainingTimeout(TimeSpan deadline)
     {
-        var remaining = absoluteDeadline - DateTimeOffset.UtcNow;
+        var remaining = deadline - Stopwatch.GetElapsedTime(0);
         if (remaining <= TimeSpan.Zero)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
@@ -220,7 +226,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         string handoffId,
         ZLinkObjectRelocationRegistration relocation,
         ZLinkActorJoinOperationId? operationId,
-        DateTimeOffset absoluteDeadline,
+        (DateTimeOffset Utc, TimeSpan Monotonic) deadline,
         CancellationToken cancellationToken)
     {
         var authorityStore = registration.Locations.ResolveStore()
@@ -229,7 +235,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         var authorityRead = await ExecuteWithDeadlineAsync(
                 token => authorityStore.ReadAuthorityAsync(
                     ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.Context.ActorId), token),
-                RemainingTimeout(absoluteDeadline),
+                RemainingTimeout(deadline.Monotonic),
                 cancellationToken)
             .ConfigureAwait(false);
         if (authorityRead is not ZLinkAuthorityReadResult.Found authority
@@ -284,7 +290,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                         actorAuthorityOwnerGeneration,
                         predictedPayloadBytes,
                         operationId,
-                        absoluteDeadline,
+                        deadline,
                         reservation => targetReservationRoute = reservation,
                         (acceptedRef, acceptedReply) =>
                         {
@@ -425,7 +431,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         ulong actorAuthorityOwnerGeneration,
         long predictedPayloadBytes,
         ZLinkActorJoinOperationId? operationId,
-        DateTimeOffset absoluteDeadline,
+        (DateTimeOffset Utc, TimeSpan Monotonic) deadline,
         Action<TargetAdmissionReservationRoute> setTargetReservation,
         Action<ZLinkBackendActorRef, ZLinkMessage> setTargetAccepted,
         Action markSourceCaptureStarted,
@@ -436,7 +442,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         var sourceSpotId = ResolveSourceSpotId(sourceAuthority);
         var sourceActivation = actorState.LiveActivation;
 
-        var admissionDeadline = absoluteDeadline;
+        var admissionDeadline = deadline.Utc;
         var sourceNode = runtime.GetSpotNodeRuntime(actorRef.NodeRid);
         var canonicalRequest = CreateCanonicalActorJoinRequest(
             actorRef,
@@ -466,7 +472,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                     canonicalTransport,
                     canonicalRequest,
                     predictedPayloadBytes,
-                    RemainingTimeout(absoluteDeadline),
+                    RemainingTimeout(deadline.Monotonic),
                     cancellationToken)
                 .ConfigureAwait(false)
             : null;
@@ -477,7 +483,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 target,
                 async snapshot =>
                 {
-                    var requestTimeout = RemainingTimeout(absoluteDeadline);
+                    var requestTimeout = RemainingTimeout(deadline.Monotonic);
                     var started = System.Diagnostics.Stopwatch.GetTimestamp();
                     var admissionHeader = ZLinkClientCallCodec.CreateEnvelope(
                         ZLinkMessageKind.Request,
@@ -610,7 +616,7 @@ internal sealed class ZLinkActorRemoteJoiner(
             routerChannelId));
         return await ExecuteWithDeadlineAsync(
                 CompleteRelocationAsync,
-                RemainingTimeout(absoluteDeadline),
+                RemainingTimeout(deadline.Monotonic),
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -888,7 +894,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                     targetNodeRid,
                     prepare,
                     transferPayload,
-                    RemainingTimeout(absoluteDeadline),
+                    RemainingTimeout(deadline.Monotonic),
                     cancellationToken)
                 .ConfigureAwait(false);
             var commitBoundary = actorState.Handoff.FreezeCaptureCommitBoundary();
@@ -979,7 +985,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                     {
                         using var sourceCleanupCancellation =
                             CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
-                        var sourceCleanupRemaining = absoluteDeadline - DateTimeOffset.UtcNow;
+                        var sourceCleanupRemaining = deadline.Monotonic - Stopwatch.GetElapsedTime(0);
                         if (sourceCleanupRemaining <= TimeSpan.Zero)
                             sourceCleanupCancellation.Cancel();
                         else
@@ -1290,7 +1296,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         ulong authorityOwnerGeneration,
         ulong ownerLeaseGeneration,
         string routerChannelId,
-        DateTimeOffset absoluteDeadline,
+        (DateTimeOffset Utc, TimeSpan Monotonic) deadline,
         CancellationToken cancellationToken,
         Func<IReadOnlyList<Message>> createParts)
     {
@@ -1306,7 +1312,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                             authorityOwnerGeneration,
                             ownerLeaseGeneration,
                             createParts(),
-                            RemainingTimeout(absoluteDeadline),
+                            RemainingTimeout(deadline.Monotonic),
                             token)
                         .ConfigureAwait(false);
                     return ZLinkRemoteActorJoinPackets.DecodeJoinReplyAndDispose(

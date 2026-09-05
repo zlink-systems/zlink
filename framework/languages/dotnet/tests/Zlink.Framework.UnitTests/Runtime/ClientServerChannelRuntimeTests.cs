@@ -114,6 +114,54 @@ public sealed class ClientServerChannelRuntimeTests
         }
     }
 
+    [Theory]
+    [InlineData(2, 5)]
+    [InlineData(2, -5)]
+    [InlineData(30, 5)]
+    [InlineData(30, -5)]
+    public async Task ReadinessWaitUsesMonotonicRequestTimeoutAndFiveSecondCap(
+        int requestTimeoutSeconds,
+        int wallJumpSeconds)
+    {
+        var time = new ReadinessTimeProvider(wallJumpSeconds);
+        await using var client = new ZLinkClientServerClientRuntime(
+            "work", null!, null!, null!,
+            TimeSpan.FromSeconds(requestTimeoutSeconds),
+            CancellationToken.None, null!, timeProvider: time);
+
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            client.RequestAsync([], TimeSpan.FromSeconds(requestTimeoutSeconds),
+                CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(2)));
+
+        Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+        Assert.InRange(time.Elapsed.TotalSeconds,
+            Math.Min(requestTimeoutSeconds, 5),
+            Math.Min(requestTimeoutSeconds, 5) + 0.5);
+        Assert.Equal(0, time.WallReads);
+    }
+
+    private sealed class ReadinessTimeProvider(int wallJumpSeconds) : TimeProvider
+    {
+        private readonly ManualTimeProvider _time = new();
+        internal TimeSpan Elapsed { get; private set; }
+        internal int WallReads { get; private set; }
+        public override long TimestampFrequency => _time.TimestampFrequency;
+        public override DateTimeOffset GetUtcNow()
+        {
+            WallReads++;
+            return _time.GetUtcNow();
+        }
+        public override long GetTimestamp()
+        {
+            var timestamp = _time.GetTimestamp();
+            var step = TimeSpan.FromMilliseconds(250);
+            Elapsed += step;
+            _time.AdvanceMonotonicOnly(step);
+            _time.AdvanceWallClockOnly(TimeSpan.FromSeconds(wallJumpSeconds));
+            return timestamp;
+        }
+    }
+
     [Fact]
     public async Task ClientRoleWithoutReadyTargetUsesAdmissionDeadlineNotConfigurationError()
     {

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 namespace Zlink.Framework.Runtime.Streams;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -454,7 +455,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         // The bind confirm can race auto-discovery admission of the actor's
         // node at startup; retriable route failures retry within the request
         // timeout instead of failing the session's first authenticate.
-        var deadline = DateTime.UtcNow + runtime.Registration.DefaultRequestTimeout;
+        var deadline = Stopwatch.GetElapsedTime(0) + runtime.Registration.DefaultRequestTimeout;
         var response = await ConfirmBindingWithRetryAsync(
                 actor.ActorId,
                 deadline,
@@ -510,7 +511,7 @@ internal sealed class ZLinkSessionActorCoordinator(
     // inline loop used, only the exhausted-window error kind differs.
     internal static async ValueTask<TResponse> ConfirmBindingWithRetryAsync<TResponse>(
         string actorId,
-        DateTime deadline,
+        TimeSpan deadline,
         Func<CancellationToken, ValueTask<TResponse>> attemptAsync,
         CancellationToken cancellationToken)
     {
@@ -525,7 +526,7 @@ internal sealed class ZLinkSessionActorCoordinator(
                 when (failure.RetryAdvice != ZLinkRetryAdvice.DoNotRetry
                       || failure.Kind == ZLinkFrameworkErrorKind.NotFound)
             {
-                if (DateTime.UtcNow >= deadline)
+                if (Stopwatch.GetElapsedTime(0) >= deadline)
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.DeadlineExceeded,
                         $"Actor '{actorId}' session bind retries exhausted"

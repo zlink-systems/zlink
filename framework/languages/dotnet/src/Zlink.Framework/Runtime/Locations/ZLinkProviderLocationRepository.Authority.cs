@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -386,7 +387,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             return await ReserveCoreAsync(
                     request,
                     0,
-                    DateTimeOffset.UtcNow + CounterRetryWindow,
+                    Stopwatch.GetElapsedTime(0) + CounterRetryWindow,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -399,7 +400,7 @@ internal sealed partial class ZLinkProviderLocationRepository
     private async ValueTask<ZLinkObjectReserveResult> ReserveCoreAsync(
         ZLinkObjectReservationRequest request,
         int counterRetry,
-        DateTimeOffset retryDeadline,
+        TimeSpan retryDeadline,
         CancellationToken cancellationToken)
     {
         ValidateReservation(request);
@@ -420,7 +421,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     .ConfigureAwait(false);
             if (reclaim == StaleAuthorityReclaimResult.Conflict
                 && counterRetry < CounterRetryLimit
-                && DateTimeOffset.UtcNow < retryDeadline)
+                && Stopwatch.GetElapsedTime(0) < retryDeadline)
             {
                 await DelayCounterRetryAsync(
                         counterRetry,
@@ -543,7 +544,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             .ConfigureAwait(false);
         if (result is ZLinkStoreWriteResult.Conflict
             && counterRetry < CounterRetryLimit
-            && DateTimeOffset.UtcNow < retryDeadline
+            && Stopwatch.GetElapsedTime(0) < retryDeadline
             && await ReadAuthorityRecordAsync(
                     request.Key,
                     cancellationToken)
@@ -730,7 +731,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             reservation,
             readyPayload,
             0,
-            DateTimeOffset.UtcNow + CounterRetryWindow,
+            Stopwatch.GetElapsedTime(0) + CounterRetryWindow,
             cancellationToken);
 
     public ValueTask<ZLinkObjectCreationCompleteResult>
@@ -742,7 +743,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             reservation,
             completion,
             0,
-            DateTimeOffset.UtcNow + CounterRetryWindow,
+            Stopwatch.GetElapsedTime(0) + CounterRetryWindow,
             cancellationToken);
 
     private async ValueTask<ZLinkObjectCreationCompleteResult>
@@ -750,7 +751,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             ZLinkObjectReservation reservation,
             ZLinkObjectCreationCompletion completion,
             int counterRetry,
-            DateTimeOffset retryDeadline,
+            TimeSpan retryDeadline,
             CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(reservation);
@@ -906,7 +907,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     raced.Record);
 
             if (counterRetry < CounterRetryLimit
-                && DateTimeOffset.UtcNow < retryDeadline)
+                && Stopwatch.GetElapsedTime(0) < retryDeadline)
             {
                 var unchangedAuthority = await ReadAuthorityRecordAsync(
                         reservation.Key,
@@ -1040,7 +1041,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         return await PrepareAggregateCoreAsync(
                 request,
                 0,
-                DateTimeOffset.UtcNow + CounterRetryWindow,
+                Stopwatch.GetElapsedTime(0) + CounterRetryWindow,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -1049,7 +1050,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         PrepareAggregateCoreAsync(
             ZLinkAggregatePrepareRequest request,
             int counterRetry,
-            DateTimeOffset retryDeadline,
+            TimeSpan retryDeadline,
             CancellationToken cancellationToken)
     {
         ValidateAggregate(request);
@@ -1310,7 +1311,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             }
             if (result is ZLinkStoreWriteResult.Conflict
                 && counterRetry < CounterRetryLimit
-                && DateTimeOffset.UtcNow < retryDeadline)
+                && Stopwatch.GetElapsedTime(0) < retryDeadline)
             {
                 var terminal = await ReadRecordAsync<AggregateRecord>(
                         key,
@@ -1402,7 +1403,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             ZLinkAggregateFence fence,
             CancellationToken cancellationToken = default)
     {
-        var retryDeadline = DateTimeOffset.UtcNow + CounterRetryWindow;
+        var retryDeadline = Stopwatch.GetElapsedTime(0) + CounterRetryWindow;
         return await CommitAggregateCoreAsync(
                 fence,
                 retryAttempt: 0,
@@ -1417,7 +1418,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             ZLinkAggregateFence fence,
             CancellationToken cancellationToken = default)
     {
-        var retryDeadline = DateTimeOffset.UtcNow + CounterRetryWindow;
+        var retryDeadline = Stopwatch.GetElapsedTime(0) + CounterRetryWindow;
         return await CommitAggregateCoreAsync(
                 fence,
                 retryAttempt: 0,
@@ -1431,7 +1432,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         CommitAggregateCoreAsync(
             ZLinkAggregateFence fence,
             int retryAttempt,
-            DateTimeOffset retryDeadline,
+            TimeSpan retryDeadline,
             CancellationToken cancellationToken,
             bool allowPreparingTarget)
     {
@@ -1631,7 +1632,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             }
             if (reconciled?.Record.Status == AggregateStatus.Prepared
                 && retryAttempt < CounterRetryLimit
-                && DateTimeOffset.UtcNow < retryDeadline)
+                && Stopwatch.GetElapsedTime(0) < retryDeadline)
             {
                 await DelayCounterRetryAsync(
                         retryAttempt,
@@ -3978,7 +3979,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         ZLinkObjectReservation reservation,
         ReadOnlyMemory<byte> readyPayload,
         int counterRetry,
-        DateTimeOffset retryDeadline,
+        TimeSpan retryDeadline,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(reservation);
@@ -4061,7 +4062,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         if (result is not ZLinkStoreWriteResult.Applied applied)
         {
             if (counterRetry < CounterRetryLimit
-                && DateTimeOffset.UtcNow < retryDeadline)
+                && Stopwatch.GetElapsedTime(0) < retryDeadline)
             {
                 var unchangedAuthority = await ReadAuthorityRecordAsync(
                         reservation.Key,
@@ -4415,10 +4416,10 @@ internal sealed partial class ZLinkProviderLocationRepository
 
     private static async ValueTask DelayCounterRetryAsync(
         int retry,
-        DateTimeOffset deadline,
+        TimeSpan deadline,
         CancellationToken cancellationToken)
     {
-        var remaining = deadline - DateTimeOffset.UtcNow;
+        var remaining = deadline - Stopwatch.GetElapsedTime(0);
         if (remaining <= TimeSpan.Zero)
             return;
         var exponentialMilliseconds = Math.Min(
