@@ -1,0 +1,17 @@
+# Job (STAGE 2, approved A, model astra): cpp — durable operation replay scope covers the handover single timeout and lost reply
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·교차언어 대조) and `framework/AGENTS.md`, then the APPROVED diagnosis `doc/plan/c016-worklog/diag-exhaustion-kind-parity.md` (your language section: retry predicate/exhaustion mapping file:line, binding admission marker, 3-row matrix, 최소 수정·회귀). Spec: `framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md` sender replay bullets (durable lifecycle operations replay with the same OperationId on any outcome without a terminal envelope — missing route, the single handover timeout, lost reply; whole remaining deadline per attempt, no split; exhaustion kind follows the cause: never admitted → Unavailable, admitted reply never arrived → DeadlineExceeded; application requests never replay). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion or widen a deadline; no second poller, no retry constant tables, no errno re-classification (use the binding typed result as the admission marker); do not commit. Local packages were rebuilt at 09:49 (Core 7ffb8e55d9, java c9d294c44f); do not rebuild. Class A (contract adaptation) — implement exactly the diagnosis' minimal fix + regression; if the diagnosis turns out incomplete, STOP and report instead of improvising. Env: cpp build dir `framework/languages/cpp/build/linux-ninja-c-e2e` (`cmake --build ... -j4`), `TMPDIR=/dev/shm/zlink-tmp-cpp`.
+
+## Scope (diagnosis §C++)
+- `raw_mesh_node_owner.cpp` replays only `route_unavailable`; an admitted request that ends `timed_out` (the handover single
+  timeout, a lost reply) terminates immediately. Per the spec, replay the same OperationId/correlation on `timed_out` too while
+  the operation deadline remains, whole remaining deadline per attempt; exhaustion kind stays as committed in c835f5b325
+  (never admitted → route_unavailable → Unavailable; admitted-then-no-reply → timed_out → DeadlineExceeded). The raw owner
+  remains the single owner of the retry predicate.
+- Regression in `test_cpp_framework_m6b_runtime.cpp` (or execution tests): handover single timeout → second attempt succeeds
+  within the original deadline; admitted reply withheld for the whole deadline → DeadlineExceeded (existing case stays).
+- Verify: four unit binaries, `ctest -R 'm6a|m6b|channel_messaging|execution|raw_route_port'`, full `ctest -j2` once (known
+  C: inventory 278), samples TicTacToe + GameQuest 1× (`ZLINK_CPP_BUILD_DIR=... bash framework/languages/cpp/samples/run_samples.sh <S>`).
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-cpp-replay-scope-summary.md`: diff, the four lines, results, BLOCKERS.

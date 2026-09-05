@@ -1,0 +1,17 @@
+# Job (STAGE 2, approved A, model astra): java — durable lifecycle operations follow the sender replay policy and exhaustion kind (Actor Join, Actor create, bound-session bind)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·교차언어 대조) and `framework/AGENTS.md`, then the APPROVED diagnosis `doc/plan/c016-worklog/diag-exhaustion-kind-parity.md` (your language section: retry predicate/exhaustion mapping file:line, binding admission marker, 3-row matrix, 최소 수정·회귀). Spec: `framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md` sender replay bullets (durable lifecycle operations replay with the same OperationId on any outcome without a terminal envelope — missing route, the single handover timeout, lost reply; whole remaining deadline per attempt, no split; exhaustion kind follows the cause: never admitted → Unavailable, admitted reply never arrived → DeadlineExceeded; application requests never replay). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion or widen a deadline; no second poller, no retry constant tables, no errno re-classification (use the binding typed result as the admission marker); do not commit. Local packages were rebuilt at 09:49 (Core 7ffb8e55d9, java c9d294c44f); do not rebuild. Class A (contract adaptation) — implement exactly the diagnosis' minimal fix + regression; if the diagnosis turns out incomplete, STOP and report instead of improvising. Env: `framework/languages/java`, `TMPDIR=/dev/shm/zlink-tmp-java`, never export a directory-valued `ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-jvm-gate.lock` around every gradle invocation. Note D-B97 (`decisions.ko.md`): the Java binding's async submit now distinguishes the four typed cases without errno — consume those typed results only.
+
+## Scope (diagnosis §Java): Actor Join, Actor create, bound-session bind
+- Replace the fixed 2 s bound-bind budget and the one-shot Join/create attempts with replay of the same OperationId on
+  `NotConnected` (pre-admission), the single handover `TIMED_OUT`, and lost reply, each attempt with the whole remaining
+  deadline; exhaustion kind by cause (never admitted → Unavailable via the existing internal kind; admitted-then-no-reply →
+  DeadlineExceeded). Remove the pre-admission guard that reported DeadlineExceeded. Keep the target-side terminal record
+  replay untouched.
+- Regression (unit, `zlink-framework-core`): the 3-row matrix per operation (route absent whole deadline → Unavailable;
+  admitted then reply withheld → DeadlineExceeded; handover single timeout → replay succeeds within the original deadline).
+- Verify: the touched test classes, `./gradlew --no-daemon :zlink-framework-core:test` once (known C: two
+  `ZLinkJavaRawMeshNodeM6ATest` — do not touch them), samples TicTacToe + GameQuest 1× each (`bash framework/languages/java/samples/java/<S>/run_sample.sh`).
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-java-durable-replay-summary.md`: diff, the four lines (owner / spec / parity / class), matrix results, gate counts, BLOCKERS.
