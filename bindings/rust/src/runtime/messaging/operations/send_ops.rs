@@ -327,7 +327,7 @@ pub(super) fn submit_shared_part_sequence(
                 }));
             }
             let rc = submit(attempt.as_mut_ptr(), part_flag, is_final);
-            let errno = ffi::zlink_errno();
+            let errno = if rc == 0 { 0 } else { ffi::zlink_errno() };
             ffi::zlink_msg_close(attempt.as_mut_ptr());
             (rc, errno)
         };

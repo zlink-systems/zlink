@@ -215,39 +215,7 @@ is_supported_transport_for_pattern() {
     esac
 }
 
-prepare_core_runtime() {
-    local native_dir="${ZLINK_RUST_NATIVE_DIR:-${CORE_LIB_DIR}}"
-    local runtime="${native_dir}/libzlink.so"
-    [[ -f "${runtime}" ]] || runtime="${native_dir}/libzlink.so.${ZLINK_CORE_VERSION}"
-    if [[ ! -f "${runtime}" ]]; then
-        echo "Rust perf runtime not found: ${native_dir}" >&2
-        echo "Build core/build or set ZLINK_RUST_NATIVE_DIR." >&2
-        exit 1
-    fi
-    local resolved_lib
-    resolved_lib="$(readlink -f "${runtime}" 2>/dev/null || echo "${runtime}")"
-    if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 0 ]]; then
-    local newer_source
-    newer_source="$(
-        find "${REPO_DIR}/core/src" "${REPO_DIR}/core/include" \
-            -type f -newer "${resolved_lib}" -print -quit 2>/dev/null || true
-    )"
-    if [[ -n "${newer_source}" ]]; then
-        echo "Error: stale core runtime detected for bindings/rust/perf." >&2
-        echo "  runtime: ${resolved_lib}" >&2
-        echo "  newer source: ${newer_source}" >&2
-        echo "Rebuild core/build before running run_benchmarks.sh." >&2
-        exit 1
-    fi
-    fi
-    echo "Rust perf runtime: ${resolved_lib}"
-    echo "Rust perf runtime sha256: $(sha256sum "${resolved_lib}" | awk '{print $1}')"
-    export PERF_CORE_SOURCE="${ZLINK_CORE_SOURCE}"
-    export PERF_CORE_VERSION="${ZLINK_CORE_VERSION}"
-    export PERF_CORE_RUNTIME="${resolved_lib}"
-    export ZLINK_RUST_NATIVE_DIR="${native_dir}"
-    export LD_LIBRARY_PATH="${native_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-}
+source "${SCRIPT_DIR}/core_runtime.sh"
 
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 TAG_SUFFIX=""
