@@ -1,0 +1,12 @@
+# Job: node DeliveryDispatch — intermittent `NotFound` for the bound `courier-b` actor route (STAGE 1: diagnosis only, no code)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·교차언어 대조·진단 먼저) and `framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion or widen a deadline; do not commit. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock` around every npm/test invocation; do not rebuild Core/local packages. STAGE 1 = NO CODE CHANGES (temporary trace sinks allowed, removed before finishing).
+
+## Facts
+`doc/plan/c016-worklog/stage1-node-gate-integrity-summary.md` "Failure table": in the standard gate's `sample-regression.test.js` test 48 (`node run_samples.sh executes every sample self-check`) the DeliveryDispatch sample intermittently fails: `courier-b` was bound in the session and relayed to courier-node-1, yet the public actor request that assigns the second delivery returned `NotFound` for that already bind-relayed actor. Reproduce with `bash samples/run_samples.sh DeliveryDispatch.Ts` (read the runner for selectors/run-dir preservation) up to 8×, using the existing message-flow tracer and `ZLINK_DEBUG_FRAMEWORK_*` traces first.
+
+## Deliverable — `doc/plan/c016-worklog/diag-node-deliverydispatch-courier-notfound.md`
+1. Determinism table and the failing run's timeline: bind relay (command 36/33) admission on courier-node-1, the Location Store / route cache state the request consulted, the actor request's resolve → dispatch → terminal, and which node answered NotFound and why (no route snapshot? stale route cache after relocation? binding fence generation mismatch?).
+2. Owner layer per spec for the decision that produced NotFound (routing 08-routing, session-actor-binding 02, location-relocation) with clause citations; is the framework re-implementing or duplicating a lower-layer decision at that site?
+3. Cross-language parity: how cpp/dotnet/java DeliveryDispatch + their runtimes handle the same bind-then-request sequence (file:line); do they pass the same scenario (earlier gates: cpp/dotnet/java DeliveryDispatch all green)?
+4. Classification A/B/C/D with the evidence, proposed minimal fix location and the regression that would prove it. STOP after the diagnosis.

@@ -1,0 +1,36 @@
+# Job (STAGE 2, approved B): cpp — pre-admission route retry exhaustion must end as `Unavailable`, not `DeadlineExceeded`
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·교차언어 대조) and
+`doc/plan/c016-worklog/stage1-cpp-request-terminal-separation-summary.md` (diagnosis; its BLOCKER section is the input).
+Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages;
+never lower an assertion or widen a deadline; do not commit. Env: cpp build dir `framework/languages/cpp/build/linux-ninja-c-e2e`
+(`cmake --build ... -j4`), `TMPDIR=/dev/shm/zlink-tmp-cpp`. Do not rebuild Core/local packages.
+
+## Approved diagnosis (supervisor)
+- Owner layer: framework error model (`00-foundation/07-framework-error-model.ko.md:75-85`) and routing
+  (`03-spot-actor/08-routing.ko.md:322-331`): a route that was never admitted / lost = `Unavailable`; only an actual reply
+  deadline expiry = `DeadlineExceeded`. Sender replay policy: `03-spot-actor/04-actor-model.ko.md` (new bullets after
+  "Terminal record가 original deadline 뒤 5분…"): retry within the whole remaining deadline, end with DeadlineExceeded only
+  when the deadline itself is exhausted while an admitted request is outstanding.
+- Defect: `raw_mesh_node_owner.cpp:230-235` retries initial `route_unavailable`; when the deadline runs out during that
+  pre-admission retry, `request_bound_session_bind()` (`raw_mesh_node_owner.cpp:1922-1939`) designates
+  `operation_terminal_t::timed_out`, and `mesh_node_runtime.cpp:3850-3857` cannot tell "retry exhausted, never admitted"
+  from "admitted, reply timed out", so it maps both to `DeadlineExceeded`. Restored m6b assertion
+  (`test_cpp_framework_m6b_runtime.cpp:1320`) fails on this. Class B (pre-existing defect, exposed once the ENOENT merge
+  was undone).
+
+## What to do
+1. Carry the terminal kind through: the raw owner reports a distinct terminal (e.g. `route_unavailable` exhausted vs
+   `timed_out` after admission) — one owner of that decision (the raw owner knows whether any attempt was admitted). The
+   mesh runtime maps exhausted-before-admission → `Unavailable`, admitted-then-no-reply → `DeadlineExceeded`. No second
+   classification table; reuse the adapter's structured result from stage 1.
+2. Cross-language parity (report, do not edit): how dotnet (`ZLinkSubmitFailureMapper` / actor join terminal), java and
+   node map "never admitted within the deadline" — same kind? If a language differs, list it as a follow-up.
+3. Regression: the restored m6b case + a focused unit test in `test_cpp_framework_m6b_runtime.cpp` or the execution tests
+   that drives both terminals (route absent for the whole deadline → Unavailable; admitted, reply withheld → DeadlineExceeded).
+4. Verify: the four unit binaries + `ctest -R 'm6a|m6b|channel_messaging|execution|raw_route_port'`; then the full
+   `ctest --test-dir ... -j2` once (known C: inventory 278).
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-cpp-route-retry-terminal-kind-summary.md`: diff, the four lines (owner layer / spec clause /
+parity / class), results, BLOCKERS.
