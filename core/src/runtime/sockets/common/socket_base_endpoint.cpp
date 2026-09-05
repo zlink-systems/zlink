@@ -328,6 +328,9 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_,
                 return -1;
             }
 
+            // Connect-before-bind re-enters admission through a bind command,
+            // so the connector direction must survive on the pipe itself.
+            new_pipes[0]->set_locally_initiated (true);
             new_pipes[0]->set_transport_pair (lane, pair_id, pair_generation);
             new_pipes[1]->set_transport_pair (lane, pair_id, pair_generation);
             if (paired_transport && transport_lane_count != 0) {

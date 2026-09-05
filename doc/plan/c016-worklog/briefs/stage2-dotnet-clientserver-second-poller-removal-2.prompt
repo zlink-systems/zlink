@@ -1,0 +1,36 @@
+# Job (STAGE 2 round 2, approved, model astra): dotnet ClientServer — finish verification of the second-poller/manual-reconnect removal with the production ROUTER policy
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3, `framework/AGENTS.md`, and the round-1 report
+`doc/plan/c016-worklog/stage2-dotnet-clientserver-second-poller-removal-summary.md` (deleted/kept inventory is approved; its
+BLOCKER is resolved by the supervisor as follows). Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion or widen a deadline; never re-add a
+poller or a manual reconnect loop; do not commit. Env (never `--artifacts-path`, never `ulimit -v`): `export
+TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false
+MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg |
+awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; cd framework/languages/dotnet; flock
+-w7200 /tmp/zlink-dotnet-gate.lock dotnet test ...`. Another dotnet job edits the Actor Join/create/User Spot durable sender
+files — do not touch them; you own `Runtime/Channels/ZLinkClientServerClientRuntime.cs` and `ClientServerChannelRuntimeTests.cs`.
+
+## Supervisor decision on the round-1 BLOCKER
+The production ClientServer server ROUTER uses HANDOVER (`ZLinkChannelBundleFactory.cs:55`, `router.Options.Handover = true`);
+the malformed-control fixture's raw ROUTER (`ClientServerChannelRuntimeTests.cs:1774`) uses the Core default REJECT, which the
+product never runs. Under REJECT a same-RID reconnect arriving before the old pipe's termination is rejected by design and the
+request submitted right after the DEALER's READY edge times out — the removed manual reconnect loop had masked that by
+re-admitting repeatedly (a workaround). The REJECT reconnect semantics (D-B104 spec gap #1: should a REJECT ROUTER close the
+duplicate so the DEALER auto-reconnects? does the DEALER's READY edge imply ROUTER admission?) are recorded as a Core/spec
+follow-up for the user, NOT to be solved in the framework or the fixture. Therefore: align the fixture's raw ROUTER with the
+production policy (HANDOVER), via the same option the factory sets, and keep the assertions unchanged. Class A (test double
+aligned to the real configuration), with a note in the summary.
+
+## What to do
+1. Apply the fixture policy alignment (one place; if several fixtures build raw ROUTERs for ClientServer, use a shared helper).
+2. Verify: `ClientServerChannelRuntimeTests` full class 1×, `MalformedPushedControl_ReconnectsAndReadmits` 5× under 6 CPU hogs
+   (`yes > /dev/null` ×6, kill afterwards), `StatefulServiceRuntimeTests` 1×, full unit gate once
+   (`--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests' --blame-hang --blame-hang-timeout 10m`; the durable-replay
+   job may still have uncommitted edits in other files — report any failure outside ClientServer with attribution, do not
+   fix), samples SupportChat + ShoppingMall 1× (`bash framework/languages/dotnet/samples/run_samples.sh <S>`).
+3. Note for parity (report only): node `channel-socket-registry.ts:879` still re-registers manually after a close.
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-dotnet-clientserver-second-poller-removal-2-summary.md`: fixture change, results table, the four
+lines, the REJECT follow-up note, BLOCKERS.

@@ -5,10 +5,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 SETUP_TEARDOWN_TESTCONTEXT
@@ -561,6 +564,254 @@ scenario_result_t run_scenario (bool tcp_, int reconnect_ivl_ms_)
     return result;
 }
 
+void run_simultaneous_reciprocal (bool tcp_, bool connect_alias_,
+                                  int delayed_bind_ = -1)
+{
+    for (int iteration = 0; iteration < 20; ++iteration) {
+        void *routers[] = {test_context_socket (ZLINK_SOCKET_ROUTER),
+                           test_context_socket (ZLINK_SOCKET_ROUTER)};
+        const char *rids[] = {"A", "Z"};
+        const char *payloads[] = {"request-from-A", "request-from-Z"};
+        const char *replies[] = {"reply-to-A", "reply-to-Z"};
+        void *monitors[2];
+        std::vector<observed_event_t> events[2];
+        char endpoints[2][MAX_SOCKET_STRING];
+        for (int i = 0; i < 2; ++i) {
+            configure_router (routers[i], rids[i], 100);
+            monitors[i] = open_monitor (routers[i]);
+            if (tcp_)
+                bind_loopback_ipv4 (routers[i], endpoints[i],
+                                    sizeof (endpoints[i]));
+            else {
+                snprintf (endpoints[i], sizeof (endpoints[i]),
+                          "inproc://simultaneous-%s-%d", rids[i], iteration);
+                if (i != delayed_bind_)
+                    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK,
+                                           zlink_bind (routers[i], endpoints[i]));
+            }
+            if (connect_alias_)
+                set_connect_routing_id (routers[i], rids[1 - i]);
+        }
+
+        std::mutex sync;
+        std::condition_variable start;
+        int waiting = 0;
+        bool released = false;
+        zlink_connect_result_t connected[2];
+        clock_type::time_point started[2];
+        const auto connect_peer = [&](int i) {
+            {
+                std::unique_lock<std::mutex> lock (sync);
+                ++waiting;
+                start.notify_all ();
+                start.wait (lock, [&] { return released; });
+            }
+            started[i] = clock_type::now ();
+            connected[i] = zlink_connect (routers[i], endpoints[1 - i]);
+        };
+        if (delayed_bind_ >= 0) {
+            // Mesh nodes may start one at a time: the first node's outbound
+            // intent exists before the second node binds and connects back.
+            const int first = 1 - delayed_bind_;
+            started[first] = clock_type::now ();
+            connected[first] = zlink_connect (routers[first],
+                                               endpoints[delayed_bind_]);
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_BIND_OK,
+              zlink_bind (routers[delayed_bind_], endpoints[delayed_bind_]));
+            started[delayed_bind_] = clock_type::now ();
+            connected[delayed_bind_] = zlink_connect (routers[delayed_bind_],
+                                                       endpoints[first]);
+        } else {
+            std::thread a (connect_peer, 0);
+            std::thread z (connect_peer, 1);
+            {
+                std::unique_lock<std::mutex> lock (sync);
+                start.wait (lock, [&] { return waiting == 2; });
+                released = true;
+                start.notify_all ();
+            }
+            a.join ();
+            z.join ();
+        }
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, connected[0]);
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, connected[1]);
+        wait_for_initial_ready (routers[0], routers[1], monitors[0], monitors[1],
+                                &events[0], &events[1]);
+
+        void *poller = zlink_poller_new ();
+        TEST_ASSERT_NOT_NULL (poller);
+        for (int i = 0; i < 2; ++i)
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_CONFIG_OK,
+              zlink_poller_add (poller, routers[i], NULL,
+                                ZLINK_POLLIN | ZLINK_POLLCOMPLETION));
+
+        zlink_completion_id_t ids[2] = {0, 0};
+        int disconnected[2] = {0, 0};
+        bool complete[2] = {false, false};
+        const auto submit = [&](int i) {
+            zlink_routing_id_t target = {};
+            target.size = 1;
+            target.data[0] = rids[1 - i][0];
+            zlink_msg_t part;
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_CONFIG_OK,
+              zlink_msg_init_size (&part, strlen (payloads[i])));
+            memcpy (zlink_msg_data (&part), payloads[i], strlen (payloads[i]));
+            const zlink_submit_result_t result = zlink_request_part (
+              routers[i], &target, &part, ZLINK_SEND_FLAGS_DONTWAIT,
+              ZLINK_PART_FINAL, 3000, NULL, &ids[i]);
+            TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
+            if (result == ZLINK_SUBMIT_NOT_CONNECTED) {
+                TEST_ASSERT_EQUAL_INT (0, disconnected[i]++);
+                ids[i] = 0;
+            } else {
+                TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, result);
+                TEST_ASSERT_NOT_EQUAL (0, ids[i]);
+            }
+        };
+        submit (0);
+        submit (1);
+        const clock_type::time_point deadline =
+          clock_type::now () + std::chrono::milliseconds (wait_ms);
+        while (clock_type::now () < deadline && (!complete[0] || !complete[1])) {
+            for (int i = 0; i < 2; ++i) {
+                drain_monitor (monitors[i], &events[i]);
+                // A replacement can retire an admitted request before its
+                // peer receives it. Drain requests and terminals together.
+                zlink_msg_t part;
+                TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&part));
+                const zlink_routing_id_t *source = NULL;
+                zlink_reply_token_t token = 0;
+                zlink_part_flag_t flag = ZLINK_PART_MORE;
+                const zlink_recv_result_t received = zlink_router_recv_part (
+                  routers[i], &source, &token, &part, &flag,
+                  ZLINK_RECV_FLAGS_DONTWAIT);
+                if (received == ZLINK_RECV_OK) {
+                    TEST_ASSERT_NOT_NULL (source);
+                    TEST_ASSERT_EQUAL_UINT8 (1, source->size);
+                    TEST_ASSERT_EQUAL_MEMORY (rids[1 - i], source->data, 1);
+                    TEST_ASSERT_NOT_EQUAL (0, token);
+                    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, flag);
+                    TEST_ASSERT_EQUAL_UINT64 (strlen (payloads[1 - i]),
+                                              zlink_msg_size (&part));
+                    TEST_ASSERT_EQUAL_MEMORY (payloads[1 - i],
+                                               zlink_msg_data (&part),
+                                               strlen (payloads[1 - i]));
+                    received_request_t request = {*source, token};
+                    TEST_ASSERT_EQUAL_INT (
+                      ZLINK_SUBMIT_OK,
+                      reply_request (routers[i], request, replies[1 - i]));
+                } else
+                    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, received);
+                TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
+
+                zlink_completion_t completion = {};
+                completion.struct_size = sizeof (completion);
+                const zlink_recv_result_t result = zlink_completion_recv (
+                  routers[i], &completion, ZLINK_RECV_FLAGS_DONTWAIT);
+                if (result == ZLINK_RECV_OK) {
+                    TEST_ASSERT_FALSE (complete[i]);
+                    TEST_ASSERT_EQUAL_UINT64 (ids[i], completion.completion_id);
+                    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST,
+                                           completion.kind);
+                    if (completion.request_result == ZLINK_REQUEST_NOT_CONNECTED) {
+                        TEST_ASSERT_EQUAL_INT (0, disconnected[i]++);
+                        ids[i] = 0;
+                    } else {
+                        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK,
+                                               completion.request_result);
+                        TEST_ASSERT_EQUAL_UINT64 (1, completion.reply_part_count);
+                        TEST_ASSERT_EQUAL_UINT64 (
+                          strlen (replies[i]),
+                          zlink_msg_size (&completion.reply_parts[0]));
+                        TEST_ASSERT_EQUAL_MEMORY (
+                          replies[i], zlink_msg_data (&completion.reply_parts[0]),
+                          strlen (replies[i]));
+                        complete[i] = true;
+                    }
+                    zlink_completion_close (&completion);
+                } else
+                    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, result);
+                if (!complete[i] && ids[i] == 0)
+                    submit (i);
+            }
+            if (!complete[0] || !complete[1]) {
+                zlink_poller_event_t event;
+                zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
+                TEST_ASSERT_TRUE (zlink_poller_wait (poller, &event, 1, 10,
+                                                     &error) >= 0);
+                TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
+            }
+        }
+        TEST_ASSERT_TRUE_MESSAGE (complete[0] && complete[1],
+                                   "both reciprocal requests must complete");
+        TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
+
+        // Initial readiness may precede the reciprocal admission. Observe
+        // both physical Application connections before checking the survivor.
+        std::set<uint64_t> ready_connections[2];
+        const clock_type::time_point ready_deadline =
+          clock_type::now () + std::chrono::milliseconds (wait_ms);
+        while (clock_type::now () < ready_deadline
+               && (ready_connections[0].size () < 2
+                   || ready_connections[1].size () < 2)) {
+            drive_and_drain (routers[0], routers[1], monitors[0], monitors[1],
+                             &events[0], &events[1], 10);
+            for (int i = 0; i < 2; ++i) {
+                for (size_t j = 0; j < events[i].size (); ++j) {
+                    const zlink_monitor_event_t &event = events[i][j].event;
+                    if (event.event == ZLINK_EVENT_CONNECTION_READY
+                        && event.transport_lane
+                             == ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION
+                        && event.connection_id != 0)
+                        ready_connections[i].insert (event.connection_id);
+                }
+            }
+        }
+        for (int i = 0; i < 2; ++i)
+            TEST_ASSERT_EQUAL_UINT64 (2, ready_connections[i].size ());
+        for (int i = 0; i < 2; ++i) {
+            const zlink_completion_id_t id =
+              submit_request (routers[i], rids[1 - i], "survivor", 3000);
+            const received_request_t request =
+              receive_request (routers[1 - i], rids[i], "survivor");
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_SUBMIT_OK,
+              reply_request (routers[1 - i], request, "survivor-reply"));
+            assert_request_ok (routers[i], id, "survivor-reply");
+        }
+
+        for (int i = 0; i < 2; ++i) {
+            drain_monitor (monitors[i], &events[i]);
+            TEST_ASSERT_EQUAL_INT (
+              0, count_events_after (events[i], ZLINK_EVENT_DISCONNECTED,
+                                      clock_type::time_point ()));
+            TEST_ASSERT_EQUAL_INT (
+              0, count_events_after (events[i], ZLINK_EVENT_CLOSED,
+                                      clock_type::time_point ()));
+        }
+        printf ("RESULT simultaneous transport=%s alias=%d delayed_bind=%d "
+                "iteration=%d "
+                "connect_delta_us=%lld not_connected_a=%d not_connected_z=%d "
+                "reply_a=ok reply_z=ok survivor_a=ok survivor_z=ok\n",
+                tcp_ ? "tcp" : "inproc", connect_alias_ ? 1 : 0,
+                delayed_bind_, iteration,
+                static_cast<long long> (
+                  std::chrono::duration_cast<std::chrono::microseconds> (
+                    started[0] < started[1] ? started[1] - started[0]
+                                             : started[0] - started[1]).count ()),
+                disconnected[0], disconnected[1]);
+        fflush (stdout);
+        for (int i = 0; i < 2; ++i)
+            TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK,
+                                   zlink_monitor_close (&monitors[i]));
+        for (int i = 0; i < 2; ++i)
+            test_context_socket_close_zero_linger (routers[i]);
+    }
+}
+
 void run_same_direction_takeover (bool tcp_)
 {
     void *requester = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -689,6 +940,46 @@ void test_same_direction_takeover_inproc ()
     run_same_direction_takeover (false);
 }
 
+void test_simultaneous_reciprocal_tcp ()
+{
+    run_simultaneous_reciprocal (true, false);
+}
+
+void test_simultaneous_reciprocal_tcp_alias ()
+{
+    run_simultaneous_reciprocal (true, true);
+}
+
+void test_simultaneous_reciprocal_inproc ()
+{
+    run_simultaneous_reciprocal (false, false);
+}
+
+void test_simultaneous_reciprocal_inproc_alias ()
+{
+    run_simultaneous_reciprocal (false, true);
+}
+
+void test_reciprocal_inproc_connect_before_bind_a_first ()
+{
+    run_simultaneous_reciprocal (false, false, 1);
+}
+
+void test_reciprocal_inproc_connect_before_bind_a_first_alias ()
+{
+    run_simultaneous_reciprocal (false, true, 1);
+}
+
+void test_reciprocal_inproc_connect_before_bind_z_first ()
+{
+    run_simultaneous_reciprocal (false, false, 0);
+}
+
+void test_reciprocal_inproc_connect_before_bind_z_first_alias ()
+{
+    run_simultaneous_reciprocal (false, true, 0);
+}
+
 int main ()
 {
     setup_test_environment ();
@@ -706,6 +997,14 @@ int main ()
     RUN_SELECTED (test_reciprocal_handover_inproc_1000ms);
     RUN_SELECTED (test_same_direction_takeover_tcp);
     RUN_SELECTED (test_same_direction_takeover_inproc);
+    RUN_SELECTED (test_simultaneous_reciprocal_tcp);
+    RUN_SELECTED (test_simultaneous_reciprocal_tcp_alias);
+    RUN_SELECTED (test_simultaneous_reciprocal_inproc);
+    RUN_SELECTED (test_simultaneous_reciprocal_inproc_alias);
+    RUN_SELECTED (test_reciprocal_inproc_connect_before_bind_a_first);
+    RUN_SELECTED (test_reciprocal_inproc_connect_before_bind_a_first_alias);
+    RUN_SELECTED (test_reciprocal_inproc_connect_before_bind_z_first);
+    RUN_SELECTED (test_reciprocal_inproc_connect_before_bind_z_first_alias);
 #undef RUN_SELECTED
     return UNITY_END ();
 }
