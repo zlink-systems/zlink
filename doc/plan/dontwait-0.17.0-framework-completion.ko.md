@@ -180,4 +180,5 @@
 - [x] cpp `b890e2e718`: sealed inbound Hello 무응답; unit 42/42, 샘플 7/7 재확인
 - [x] (범위 외로 확정, 2026-09-06 사용자: e2e 요구는 cross-language E2E만) cpp `common_e2e_inventory` 278 open(cpp 공통 e2e 시나리오 122개 미구현 등) — job 중단·편집 폐기, 별도 계획으로 남김
 - [x] rebuild11(Core 8c547d87… = `1899e82f1a`) → gate11(2026-09-06 04:21~05:07): java 7+kotlin 7 PASS, node 7 + npm test 1604/0, dotnet 7 + aggregate + ZoneWorld×2 PASS, dotnet unit 1978/0 + join 16/0 + SampleRegression 157/0, **java core/contract 0 fail(간헐 3건 근본 수정 뒤 첫 전체 green)**, cross-language E2E(cpp all-stage·node smoke 19·java-cross) passed
-- [ ] 진행 중: cpp ZoneWorld가 새 Core에서 runner-driven lifecycle lane(C3/D2/E5)에서 EADDRINUSE(errno 98) — SO_REUSEPORT 제거로 드러난 cpp runner/sample의 port 공유 의존 여부 vs Core의 정당한 rebind 거부 여부 조사 job(astra)
+- [x] cpp ZoneWorld EADDRINUSE = cpp framework 결함(discovery publish 뒤 manual publisher 경로까지 실행 → 같은 주소에 두 번째 XPUB bind; SO_REUSEPORT가 가림) `bd0d499189`(ZoneWorld 3/3); cpp DeliveryDispatch readiness marker 누락 = sample의 stdout 행 경합(reporter 3→공유 streambuf 1) `6cd7b172ce`(샘플 7/7)
+- [ ] 진행 중: cpp `test_cpp_framework_m6a_runtime`이 전체 unit 실행에서 1회 `double free or corruption` abort(단독 통과) — 메모리 안전성 결함으로 취급, ASan 빌드로 원인 추적(Claude agent)
