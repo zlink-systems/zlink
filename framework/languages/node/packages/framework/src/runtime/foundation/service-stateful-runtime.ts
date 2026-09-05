@@ -4006,6 +4006,7 @@ export class ServiceStatefulRuntime {
   ): Promise<ServiceUserSpotOperationResult> {
     this.requireOpen();
     const deadlineMs = Date.now() + Math.max(1, timeoutMs);
+    let wasAdmitted = false;
     let parts: readonly Buffer[];
     // This path is limited to durable lifecycle operations. A rejected raw
     // request has no terminal envelope, so replay the byte-identical header;
@@ -4013,7 +4014,7 @@ export class ServiceStatefulRuntime {
     for (;;) {
       const remainingMs = deadlineMs - Date.now();
       if (remainingMs <= 0) {
-        throw userSpotOperationDeadlineExceeded(operationKind);
+        throw userSpotOperationExhausted(operationKind, wasAdmitted);
       }
       try {
         parts = targetNodeRid === this.nodeRid
@@ -4021,9 +4022,10 @@ export class ServiceStatefulRuntime {
           : await this.raw.requestService(targetNodeRid, [header], remainingMs);
         break;
       } catch (error) {
+        if (userSpotRequestWasAdmitted(error)) wasAdmitted = true;
         const retryDelayMs = Math.min(20, deadlineMs - Date.now());
         if (retryDelayMs <= 0) {
-          throw userSpotOperationDeadlineExceeded(operationKind, error);
+          throw userSpotOperationExhausted(operationKind, wasAdmitted, error);
         }
         await new Promise(resolve => setTimeout(resolve, retryDelayMs));
       }
@@ -5176,12 +5178,24 @@ function operationReplayExpired(deadlineUnixMs: bigint): boolean {
     + BigInt(USER_SPOT_OPERATION_REPLAY_RETENTION_MS);
 }
 
-function userSpotOperationDeadlineExceeded(
+function userSpotRequestWasAdmitted(error: unknown): boolean {
+  // Binding request TimedOut is emitted only after admission; NotConnected is
+  // a pre-admission submit failure and must not change the operation's cause.
+  return typeof error === 'object'
+    && error !== null
+    && 'result' in error
+    && error.result === RequestResult.TimedOut;
+}
+
+function userSpotOperationExhausted(
   operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate',
+  wasAdmitted: boolean,
   cause?: unknown
 ): ZLinkFrameworkException {
   return createInternalFrameworkException(
-    ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+    wasAdmitted
+      ? ZLinkFrameworkInternalErrorKind.DeadlineExceeded
+      : ZLinkFrameworkInternalErrorKind.RouteNotConnected,
     `${operationKind} exhausted its end-to-end deadline.`,
     true,
     cause
