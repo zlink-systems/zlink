@@ -1,0 +1,19 @@
+# Job (fix, model astra): cpp DeliveryDispatch fails on the rebuild11 Core in the aggregate: `run_sample.sh:309-310` "Expected dispatch route readiness exactly 1 time(s), found 0." (the dispatch role never printed the readiness marker from `Server/Configuration/sample_readiness.hpp:81-86`); it passed on the previous Core. Root-cause — likely another duplicate bind that SO_REUSEPORT masked (Core `1899e82f1a` removed it), or a listener/rebind sequencing defect in the cpp framework/sample
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `decisions.ko.md` D-098 item 1,
+`doc/plan/c016-worklog/core-endpoint-release-all-transports-summary.md` and `fix-cpp-zoneworld-rebind-after-core-release-summary.md` (the sibling defect: discovery publish fell through
+to the manual publisher and bound a second XPUB — fixed in channel_outbound_exchange.cpp `da…`; DeliveryDispatch's delivery_status_publisher uses channel request, not fanout, so
+this is a different spot), the DeliveryDispatch sample spec and the cpp sample (`framework/languages/cpp/samples/DeliveryDispatch/**`, `run_sample.sh`). Never modify `core/**`,
+`bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages, shared_sample; do not commit. Env: `framework/languages/cpp`, `cmake --build build -j4`, samples under
+`flock -w7200 /tmp/zlink-samples-gate.lock`. The runner deletes the run dir on failure (`run_sample.sh:53`) — run it with the preserve option or copy the role/flow logs before
+cleanup (edit the runner only to keep evidence, and revert that edit unless it is a genuine runner defect).
+
+## What to do
+1. Reproduce `bash samples/DeliveryDispatch/run_sample.sh` (×3) keeping role logs; find why the dispatch role never reaches RouteMesh readiness: EADDRINUSE on a listener bind
+   (which address, which second binder — courier-session? a second channel host in the same process?), a bind sequencing issue (bind before a previous unbind completed —
+   note Core now completes the release before returning, so a *legit* rebind must work), or something unrelated to bind.
+2. Fix at the owner (cpp framework or the sample). If Core refuses a rebind the contract allows, STOP with a public C-API sequence.
+3. Verify: DeliveryDispatch ×3 (exit 0), then `bash samples/run_samples.sh` once (7/7, all self-checks), cpp unit ctest.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-cpp-deliverydispatch-route-readiness-summary.md` (sequence, cause file:line, fix, four lines, rule count, results, BLOCKERS).
