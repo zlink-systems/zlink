@@ -1188,3 +1188,7 @@ production ClientServer 서버는 HANDOVER(`ZLinkChannelBundleFactory.cs:55`)이
 **결정(감독, 11:35)**: REJECT는 등록하지 않은 중복 pipe를 즉시 close → connector가 종료를 관찰하고 connect intent로 재시도, old pipe 종료 뒤 시도가 admission; 거부된 pipe의 request는 즉시 `REQUEST_NOT_CONNECTED`; READY는 transport 연결이지 RID admission이 아님. spec §4 반영(ko/en), Core 구현·계약 테스트 job(astra).
 node `channel-socket-registry.ts:879`의 수동 재등록은 parity 후속.
 
+
+## D-B107 (2026-09-05 11:50, 머신 B) .NET binding hot-path pass 1(astra) — 즉시 SEND 완료 등록 제거 등, DD 44.7→66.7%, PUBSUB 44.8→71.4%, REQREP 51.6/53.6→58.1/57.2%
+원인: 0.17.0 wait-token 포트 뒤 .NET `CompletionOwner`가 즉시 성공하는 SEND에도 entry/Task/GCHandle/registry 등록(856 B/호출), capturing delegate submit, `CloneParts`의 managed wrapper 복제, 수신마다 `Array.Resize` — 제출 구간 할당의 86~87%가 binding. 변경(공개 API·ownership·error 계약 불변, spec gap 없음): noncancelable 즉시 SEND는 ID 0 성공 시 `Task.CompletedTask`·토큰 발생 뒤에만 등록, struct submitter, native scratch `zlink_msg_copy`(Core가 실패 part도 소비하므로 snapshot 자체는 필요), 수신 header 배열 ArrayPool, GCHandle 대신 socket 수명 opaque context. 러너 `PERF_PART_COUNT` getter 캐시(24 B/조회, 별도).
+gate: dotnet tests 208/208, samples 7/7, 새 `test_hot_path_ownership_contract` 31 case × 5회. after report는 worktree 삭제로 유실(수치는 요약 표; 앞으로 worktree 제거 전 report 복사). 다음: 리뷰 pass 2. 커밋: 아래 해시.
