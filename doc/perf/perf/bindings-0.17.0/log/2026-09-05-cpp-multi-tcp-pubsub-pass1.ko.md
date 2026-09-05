@@ -47,3 +47,17 @@ aggregate throughput(size 비율 평균) **81.5%**, latency 평균 **1.08x** →
 - 수신 경로 Core 경계 대조: `zlink_subscribe_part` 2.00/message, `zlink_msg_close` 2.00/message로 C와 동일; C++ 순증은 wrapper의 empty-output preflight `zlink_msg_size` 약 1회/message. completion·`std::function`·lock 없음. poller wrapper 전체 0.13%.
 - 공개 contract 유지 후보 4개 모두 5% 미만(preflight 상태화 ≤1%, topic SSO fast path <0.6%, poller bookkeeping 0.13%, rollback 경로 0%) → **no-go**. §7.5에 따라 두 pass 뒤 `보류(81.5%)`로 확정.
 - 18.5%p 전부를 binding에 귀속하지 않는다: profile·교차 실행이 뒷받침하는 subscriber wrapper 비용은 5~6%. 나머지는 lossy 경로에서 **runner parity 차이**가 키운 것으로 본다: (1) C multi PUBSUB server는 client START 뒤 size마다 auto-HWM을 재계산·적용하고 C++ server는 bind/connect 전에 1회만(report의 server SNDHWM 1 MiB vs 4 MiB 불일치의 원인), (2) SUB filter C `""` vs C++ `"bench"`, (3) C++ client의 topic 문자열·routing-id size 추가 검사, (4) deadline/100 ms poll 규칙. → **runner parity 수정 트랙(가이드 §5: library 효과와 분리)**: C++ multi PUBSUB server의 HWM 재계산 시점을 C에 맞춘 뒤 별도 report로 재판정. 사용자 확인 뒤 진행.
+
+## 러너 parity 수정(D-B90, `53d599aa00`) 뒤 3-run 재짝지음 (11:03~11:06 KST, `p1cpp-pubsub-r3b`)
+
+C `perf_c_multi_linux_20260905_110309_p1cpp-pubsub-r3b.txt`, C++ `perf_cpp_multi_linux_20260905_110443_p1cpp-pubsub-r3b.txt`. 100 clients, 5초, 3-run 평균, Core `0c39ed2e52` Release lib(10:48 재빌드), C++ library 코드 변경 없음.
+
+| size | C Kmsg/s | C++ Kmsg/s | ratio | C ms | C++ ms | lat |
+|---|---|---|---|---|---|---|
+| 64 | 783.2 | 663.3 | 84.7% | 1604.6 | 1566.7 | 0.98x |
+| 256 | 784.6 | 662.3 | 84.4% | 1906.7 | 1951.4 | 1.02x |
+| 1024 | 902.4 | 792.9 | 87.9% | 947.1 | 1051.9 | 1.11x |
+| 4096 | 688.2 | 625.9 | 90.9% | 333.7 | 365.0 | 1.09x |
+| 65536 | 68.7 | 81.2 | 118.2% | 180.5 | 123.9 | 0.69x |
+
+aggregate throughput **93.2%**(앞선 3-run 81.5%; 러너 효과라 library 개선으로 합산하지 않음), latency 0.98x. 목표 95%에 1.8%p 미달 → `보류(93.2%)`로 판정값 갱신(두 pass 완료). server Auto-HWM detail은 64/256/65536B 일치, 1024/4096B는 C 4 MiB vs C++ 1 MiB로 여전히 번갈아 다름 — 같은 per-size lifecycle(D-B105)에서 C 자체도 size별로 1/4 MiB가 오가므로 auto-HWM balanced 스냅숏의 비결정성으로 보이며 Core auto-HWM 관찰 항목으로 남긴다.
