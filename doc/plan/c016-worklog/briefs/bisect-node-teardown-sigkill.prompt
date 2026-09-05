@@ -1,32 +1,34 @@
-# Job (bisect, model astra): find the commit that made node sample roles stop exiting at teardown (TicTacToe `play-b`, Bingo `matchmaking`/`play-a`)
+# Job (bisect, model astra): find the commit since the all-green baseline that made node sample roles stop exiting at teardown
 
-You are a codex sub-agent under a Claude supervisor. Premise from the user: every sample exited cleanly before today's work; the
-teardown SIGKILLs are a regression introduced by today's commits (node framework, node binding, or Core). Read `AGENTS.md` (root)
-§3 (진단 먼저), `doc/plan/c016-worklog/gate-final-cpp-node-samples-2-summary.md` (Node table). No source/test changes; do not commit.
-Another job (`diag-node-teardown-sigkill`) captures stacks on the main tree concurrently — do not modify the main tree; use worktrees.
-Env for every sample run: `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`
-(serialize with the other job), the runner `bash samples/run_samples.sh TicTacToe.Ts` — NOTE the runner must be today's version
-`9a0371fea7` (reports SIGKILL as failure); copy `framework/languages/node/samples/run-sample.mjs` + `run_samples.sh` from main HEAD
-into each worktree before running so the oracle is the same everywhere. Oracle: exit 0 and no SIGKILLed role = GOOD.
+You are a codex sub-agent under a Claude supervisor. Premise (user, plan `doc/plan/dontwait-0.17.0-framework-completion.ko.md` line 4):
+at baseline `seven-samples-green-v1` = **4bad5ac979 (2026-08-29)** all 7 samples in all 4 languages were green and exited cleanly;
+everything since (the 0.16.0 pull-completion campaign and the 0.17.0 DONTWAIT campaign, 3 days of work) is the regression window.
+No source/test changes; do not commit. Another job (`diag-node-teardown-sigkill`) captures stacks on the main tree — do not modify the
+main tree; use worktrees. Env for sample runs: `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200
+/tmp/zlink-node-gate.lock`. ORACLE: today's runner (`framework/languages/node/samples/run-sample.mjs` + `run_samples.sh` from main
+HEAD, commit 9a0371fea7 — it reports a SIGKILLed role as failure; the old runner hid it) copied into each worktree; `bash
+samples/run_samples.sh TicTacToe.Ts` exit 0 with no SIGKILLed role = GOOD; SIGKILLed role = BAD. Confirm each boundary 2×.
 
-## Candidates (today, oldest first)
-node framework: 4d263e66b9 (DONTWAIT async path), 285cfa522a, 8dd97bda2d, 71202e4947, 58f063db88, 81a1f6fbfc (deliver async terminal),
-927e3a0f68 (resolver), 8e509bb143 (bind deadline owner), 619a09043d (ClientServer reconnect removal).
-node binding: 4f503b76d3, a9eb6c5a77, b145f86501, 31139dd137 (monitors as Poller sources).
-Core: 50d77800f2, 89ed9be356, 7d8205a028, 29add0ac81, 5e26e72806, 900ea8319e, 7ffb8e55d9, 1c69086a4a, 8b82d51b75, 0c39ed2e52,
-7cbf12de41, c84a139145, cb62cb89f8.
+## Window and layers (since 4bad5ac979)
+- framework/node (`framework/languages/node/packages`): 22 commits — `git log --oneline --no-merges 4bad5ac979..HEAD -- framework/languages/node/packages`
+- bindings/node: 19 commits — `... -- bindings/node`
+- core/src: 56 commits — `... -- core/src`
+The node binding's native module and the Core library it loads: read `bindings/node` build/packaging to learn how the .node addon
+locates `libzlink.so` (bundled in the tgz under `.artifacts/wsl/npm`, or dynamic). This decides how to vary Core independently.
 
 ## Method
-1. First split by layer with the CURRENT packages (12:54: Core + node binding at main): run node framework at `8dd97bda2d`
-   (before today's runtime changes) in a git worktree `/home/hep7/project/zlink-node-bisect` (`git worktree add --detach`,
-   `cd framework/languages/node && npm install --no-audit --no-fund` pointing at the same `.artifacts/wsl/npm` tarballs, `npm run build`),
-   with today's runner copied in. GOOD → the regression is in today's node framework commits → bisect them (71202e4947 …
-   619a09043d) the same way. BAD → the regression is in Core or the node binding → bisect the Core library: build Core at
-   candidate commits in `/home/hep7/project/zlink-core-b` (`nice -n 10 env JOBS=4 scripts/build-core.sh dev`; never touch main's
-   `core/build-dev`) and run TicTacToe with `LD_LIBRARY_PATH=<worktree>/core/build-dev/lib` (verify with `ldd`/`/proc/<pid>/maps`
-   that the role processes actually load that library; if the node binding embeds libzlink, say so and bisect via a rebuilt tgz
-   only if cheap). For the node binding candidates, rebuild the tgz at the candidate commit only if the Core bisect exonerates Core.
-2. Each step: TicTacToe.Ts 2× (must agree), Bingo.Ts 1× as confirmation at the found boundary.
-3. Deliverable: `doc/plan/c016-worklog/bisect-node-teardown-sigkill.md`: the bisect table (commit, layer, result), the FIRST BAD
-   commit, and the one-paragraph mechanism hypothesis linking that commit to the stuck role (to be confirmed by the stack job).
-   Clean up the node worktree; leave `zlink-core-b` at whatever commit you last built (say which).
+1. Split by layer first. Build a node worktree `/home/hep7/project/zlink-node-bisect` at 4bad5ac979 for `framework/languages/node`
+   only (the framework at baseline) but consume the CURRENT packages (12:54 `.artifacts/wsl/npm` tarballs; adjust `package.json`
+   file: paths if they differ at baseline) + today's runner. If the baseline framework is GOOD on current packages → the regression
+   is in framework/node → `git bisect` over the 22 framework commits (build + oracle per step). If BAD → Core or node binding:
+   build Core at 4bad5ac979 in `/home/hep7/project/zlink-core-b` (`nice -n 10 env JOBS=4 scripts/build-core.sh dev`; never touch
+   main's `core/build-dev`) and run the baseline framework against it (`LD_LIBRARY_PATH` if dynamic; if the tgz bundles the library,
+   rebuild only the node tgz at the candidate via `scripts/local-package/build-wsl.sh node` in the worktree with a Core prefix
+   materialized from that worktree build — see `scripts/local-package/README.ko.md`; keep artifacts under the worktree, never
+   overwrite main's `.artifacts/wsl`). GOOD → bisect Core (56) / node binding (19) by rebuilding at candidates. Baseline expected
+   GOOD by premise; if the baseline itself is BAD with the current runner, say so explicitly (that would refute the premise) and
+   still bisect for the earliest BAD.
+2. Each bisect step: TicTacToe.Ts 2× (agree), Bingo.Ts at the found boundary.
+3. Deliverable `doc/plan/c016-worklog/bisect-node-teardown-sigkill.md`: layer split result, bisect table (commit, layer, result),
+   FIRST BAD commit with its diff summary, mechanism hypothesis for the stuck role. Remove the node worktree at the end; leave
+   `zlink-core-b` at the last built commit (say which).
