@@ -1,5 +1,85 @@
 #!/usr/bin/env bash
 
+declare -Ag ZLINK_SAMPLE_STOPPED_ROLES=()
+declare -Ag ZLINK_SAMPLE_REPORTED_SIGKILLS=()
+
+zlink_sample_in_cleanup() {
+  local function_name=""
+  for function_name in "${FUNCNAME[@]:1}"; do
+    [[ "${function_name}" == "cleanup" ]] && return 0
+  done
+  return 1
+}
+
+zlink_sample_role_name_for_pid() {
+  local pid="$1"
+  local stdout_path=""
+  stdout_path="$(readlink "/proc/${pid}/fd/1" 2>/dev/null || true)"
+  if [[ -n "${stdout_path}" ]]; then
+    basename "${stdout_path}" .log
+    return 0
+  fi
+
+  local argument=""
+  while IFS= read -r -d '' argument; do
+    if [[ "${argument}" == *.dll ]]; then
+      basename "${argument}" .dll
+      return 0
+    fi
+  done <"/proc/${pid}/cmdline" 2>/dev/null
+  printf 'pid-%s\n' "${pid}"
+}
+
+kill() {
+  local signal="${1:-}"
+  local pid="${2:-}"
+  local in_cleanup=0
+  if zlink_sample_in_cleanup; then in_cleanup=1; fi
+  if [[ "${pid}" =~ ^[0-9]+$ && -n "${ZLINK_SAMPLE_TEARDOWN_STATUS_FILE:-}" ]]; then
+    if [[ "${signal}" == "-INT" || "${signal}" == "-SIGINT" || "${signal}" == "-2" ]]; then
+      local role=""
+      local status=0
+      role="$(zlink_sample_role_name_for_pid "${pid}")"
+      builtin kill "$@" || status=$?
+      if (( status == 0 )); then
+        ZLINK_SAMPLE_STOPPED_ROLES["${pid}"]="${role}"
+      fi
+      return "${status}"
+    elif [[ ( "${signal}" == "-9" || "${signal}" == "-KILL" || "${signal}" == "-SIGKILL" ) &&
+            ( -n "${ZLINK_SAMPLE_STOPPED_ROLES[${pid}]:-}" || "${in_cleanup}" == "1" ) ]]; then
+      local role="${ZLINK_SAMPLE_STOPPED_ROLES[${pid}]:-}"
+      local status=0
+      if [[ -z "${role}" ]]; then
+        role="$(zlink_sample_role_name_for_pid "${pid}")"
+      fi
+      builtin kill "$@" || status=$?
+      if (( status == 0 )); then
+        printf '%s\t%s\n' "${pid}" "${role}" >>"${ZLINK_SAMPLE_TEARDOWN_STATUS_FILE}"
+        ZLINK_SAMPLE_REPORTED_SIGKILLS["${pid}"]=1
+      fi
+      return "${status}"
+    fi
+  fi
+  builtin kill "$@"
+}
+
+wait() {
+  local pid="${1:-}"
+  local status=0
+  local in_cleanup=0
+  if zlink_sample_in_cleanup; then in_cleanup=1; fi
+  builtin wait "$@" || status=$?
+  if [[ ( "${status}" == "137" || "${status}" == "-9" ) &&
+        "${pid}" =~ ^[0-9]+$ && -n "${ZLINK_SAMPLE_TEARDOWN_STATUS_FILE:-}" &&
+        ( -n "${ZLINK_SAMPLE_STOPPED_ROLES[${pid}]:-}" || "${in_cleanup}" == "1" ) &&
+        -z "${ZLINK_SAMPLE_REPORTED_SIGKILLS[${pid}]:-}" ]]; then
+    local role="${ZLINK_SAMPLE_STOPPED_ROLES[${pid}]:-pid-${pid}}"
+    printf '%s\t%s\n' "${pid}" "${role}" >>"${ZLINK_SAMPLE_TEARDOWN_STATUS_FILE}"
+    ZLINK_SAMPLE_REPORTED_SIGKILLS["${pid}"]=1
+  fi
+  return "${status}"
+}
+
 zlink_sample_copy_evidence() {
   local run_dir="$1"
   local sample_name="$2"

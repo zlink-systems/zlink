@@ -2,6 +2,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $script:SampleProcesses = @()
+$script:SampleProcessNames = @{}
 
 function Invoke-SampleDockerCommand {
     param(
@@ -375,6 +376,7 @@ function Start-SampleDotnetAssembly {
         -RedirectStandardError (Join-Path $LogDirectory "$Name.err.log") `
         -PassThru
     $script:SampleProcesses += $process
+    $script:SampleProcessNames[$process.Id] = $Name
     return $process
 }
 
@@ -391,6 +393,8 @@ function Invoke-SampleDotnetRun {
 }
 
 function Stop-SampleProcesses {
+    $teardownFailures = @()
+    $forcedProcessIds = @{}
     for ($i = $script:SampleProcesses.Count - 1; $i -ge 0; $i--) {
         $process = $script:SampleProcesses[$i]
         try {
@@ -414,15 +418,29 @@ function Stop-SampleProcesses {
     foreach ($process in $script:SampleProcesses) {
         try {
             if (-not $process.HasExited) {
+                $name = $script:SampleProcessNames[$process.Id]
+                if ([string]::IsNullOrWhiteSpace($name)) { $name = "pid-$($process.Id)" }
+                $teardownFailures += "Sample role $name (pid $($process.Id)) exited during cleanup with status -9 (SIGKILL)."
+                $forcedProcessIds[$process.Id] = $true
                 $process.Kill($true)
             }
             $process.WaitForExit()
+            if (-not $forcedProcessIds.ContainsKey($process.Id) -and
+                ($process.ExitCode -eq 137 -or $process.ExitCode -eq -9)) {
+                $name = $script:SampleProcessNames[$process.Id]
+                if ([string]::IsNullOrWhiteSpace($name)) { $name = "pid-$($process.Id)" }
+                $message = "Sample role $name (pid $($process.Id)) exited during cleanup with status $($process.ExitCode)."
+                if ($message -notin $teardownFailures) { $teardownFailures += $message }
+            }
         }
         catch {
         }
         finally {
             $process.Dispose()
         }
+    }
+    if ($teardownFailures.Count -gt 0) {
+        throw ($teardownFailures -join [Environment]::NewLine)
     }
 }
 

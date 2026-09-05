@@ -38,8 +38,11 @@ const dockerCommandTimeoutMs = 10_000;
 let redisContainer;
 let failed = false;
 let cleaning = false;
+const deferredOutput = [];
 
 async function main() {
+  const failures = [];
+  let cleanupFailed = false;
   try {
     runDir = fs.mkdtempSync(path.join(os.tmpdir(), `zlink-${sampleName.toLowerCase()}-`));
     fs.chmodSync(runDir, 0o700);
@@ -51,14 +54,25 @@ async function main() {
     run('npm', ['run', 'build'], { cwd: sampleRoot });
     const redisEndpoint = await startRedis();
     const context = createContext(redisEndpoint);
-    await runSample(context);
-    console.log(`PASS ${sampleName}`);
+    const writeLine = console.log;
+    console.log = (...args) => deferredOutput.push({ args, kind: 'log' });
+    try {
+      await runSample(context);
+    } finally {
+      console.log = writeLine;
+    }
   } catch (error) {
     failed = true;
-    printLogs();
-    throw error;
+    failures.push(error);
   } finally {
-    await cleanup();
+    try {
+      await cleanup();
+    } catch (error) {
+      failed = true;
+      cleanupFailed = true;
+      failures.push(error);
+    }
+    if (failures.length > 0 && !cleanupFailed) printLogs();
     if (runDir !== undefined) {
       if (runnerOptions.keepRunDir || failed) {
         console.log(`runDir=${runDir}`);
@@ -67,6 +81,13 @@ async function main() {
       }
     }
   }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, `${sampleName} failed during execution and cleanup.`);
+  for (const entry of deferredOutput) {
+    if (entry.kind === 'log') console.log(...entry.args);
+    else process.stdout.write(entry.value);
+  }
+  console.log(`PASS ${sampleName}`);
 }
 
 function createContext(redisEndpoint) {
@@ -143,7 +164,7 @@ function createContext(redisEndpoint) {
       if (result.error) throw result.error;
       const captured = `${result.stdout ?? ''}${result.stderr ?? ''}`;
       fs.writeFileSync(browserLog, captured, { mode: 0o600 });
-      process.stdout.write(captured);
+      deferredOutput.push({ kind: 'write', value: captured });
       if (result.status !== 0) {
         throw new Error(`browser sample exited with ${result.status}. See ${browserLog}.`);
       }
@@ -354,8 +375,10 @@ function startNode(name, entry, args, env) {
     stdio: ['ignore', output, output]
   });
   fs.closeSync(output);
-  const state = { child, logPath, name, status: undefined };
+  const state = { child, exitCode: undefined, logPath, name, signalCode: undefined, status: undefined };
   child.once('exit', (code, signal) => {
+    state.exitCode = code;
+    state.signalCode = signal;
     state.status = code ?? (signal ? 1 : 0);
   });
   return state;
@@ -455,18 +478,32 @@ function platformExecutable(executable) {
 async function cleanup() {
   if (cleaning) return;
   cleaning = true;
-  for (const { child } of children.reverse()) {
+  const teardownFailures = new Map();
+  for (const state of children) {
+    if (state.exitCode === 137 || state.exitCode === -9 || state.signalCode === 'SIGKILL') {
+      teardownFailures.set(state, state.signalCode ?? state.exitCode);
+    }
+  }
+  for (const { child } of [...children].reverse()) {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGINT');
   }
   await sleep(500);
-  for (const { child } of children) {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  for (const state of children) {
+    const { child } = state;
+    if (child.exitCode === null && child.signalCode === null) {
+      if (child.kill('SIGKILL')) teardownFailures.set(state, 'SIGKILL');
+    }
   }
   if (redisContainer) {
     removeRedisAttempt(redisContainer, '');
   }
   for (const leasePath of portLeases.values()) fs.rmSync(leasePath, { force: true });
   portLeases.clear();
+  if (teardownFailures.size > 0) {
+    throw new Error([...teardownFailures]
+      .map(([state, status]) => `Sample role ${state.name} exited during cleanup with status ${status}.`)
+      .join('\n'));
+  }
 }
 
 function printLogs() {
