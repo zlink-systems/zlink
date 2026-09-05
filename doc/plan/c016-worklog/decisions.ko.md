@@ -1188,3 +1188,9 @@ production ClientServer 서버는 HANDOVER(`ZLinkChannelBundleFactory.cs:55`)이
 **결정(감독, 11:35)**: REJECT는 등록하지 않은 중복 pipe를 즉시 close → connector가 종료를 관찰하고 connect intent로 재시도, old pipe 종료 뒤 시도가 admission; 거부된 pipe의 request는 즉시 `REQUEST_NOT_CONNECTED`; READY는 transport 연결이지 RID admission이 아님. spec §4 반영(ko/en), Core 구현·계약 테스트 job(astra).
 node `channel-socket-registry.ts:879`의 수동 재등록은 parity 후속.
 
+## D-089 (2026-09-05 11:45, 머신 A) Core 회귀 — `7cbf12de41`(monitor lease 유지) 이후 close 중 completion poller 해제가 async executor를 재시작해 `zlink_close()`가 반환하지 않음(cpp 샘플 exit 137)
+진단 `diag-cpp-sample-cleanup-137.md`: `release_completion_poller`(참조 1→0) → `resume_completion_processing_if_needed`(close 상태 미확인) → `ensure_completion_processing` →
+`start_async_mailbox_processing`이 `async_processing_done=false`로 되돌려 close waiter가 새 executor 뒤에서 무기한 대기. 공개 C API 재현 300/300(직전) → 정지(직후). Core B.
+수정 원칙: close 수락 뒤 executor를 시작/재개하지 않음(기존 closing 상태 사용, 새 flag·wait predicate 변경 금지). Core job(astra, worktree b).
+관측 후속: dotnet/node 샘플 runner는 role SIGKILL을 exit 0 뒤에 숨긴다 — runner가 SIGKILL을 실패로 보고해야 함(진단 시 확인).
+
