@@ -58,22 +58,9 @@ internal sealed partial class ZLinkProviderLocationRepository
             ZLinkAuthorityMutation mutation,
             CancellationToken cancellationToken = default)
     {
-        // A NewOwner CAS also moves two shared placement counters. Retry only
-        // while the authority version itself remains unchanged so unrelated
-        // counter contention cannot become a false relocation conflict.
-        var retriesAllocationContention = mutation is ZLinkAuthorityMutation.Put
-        {
-            GenerationTransition: ZLinkAuthorityGenerationTransition.NewOwner,
-            TargetAllocation: not null
-        };
-        if (!retriesAllocationContention)
-            return await CompareExchangeAuthorityCoreAsync(
-                    key,
-                    expectedStoreVersion,
-                    mutation,
-                    cancellationToken)
-                .ConfigureAwait(false);
-
+        // Authority writes share owner and capacity conditions. Apply the
+        // same contention rule to every mutation: an unchanged authority
+        // version permits resubmission; a changed version ends this CAS.
         const int maximumAllocationContentionRetries = 8;
         for (var attempt = 0; ; attempt++)
         {

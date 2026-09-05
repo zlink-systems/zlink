@@ -1147,6 +1147,40 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Fact]
+    public async Task SharedOpaqueProvider_ConcurrentActorDeletesReleaseSharedCapacity()
+    {
+        var provider = new ConcurrencyTrackingLocationStore(
+            new ZLinkInMemoryProviderLocationStore());
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner = await ClaimAsync(repository, "delete-owner");
+        var descriptor = Descriptor("delete-node", owner);
+        _ = await repository.UpdateMeshNodeAsync(
+            descriptor,
+            ZLinkLocationWriteIntent.NewClaim);
+        var actors = new List<(ZLinkAuthorityKey Key, ZLinkAuthoritySnapshot Snapshot)>();
+        for (var index = 0; index < 2; index++)
+        {
+            var request = Reservation($"actor:delete-contention:{index}", descriptor, owner);
+            var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+                await repository.ReserveAsync(request));
+            var created = Assert.IsType<ZLinkObjectCommitResult.Committed>(
+                await repository.CommitAsync(reserved.Reservation, new byte[] { 0x23 }));
+            actors.Add((request.Key, created.Snapshot));
+        }
+
+        var results = await Task.WhenAll(actors.Select(actor =>
+            repository.CompareExchangeAuthorityAsync(
+                actor.Key,
+                actor.Snapshot.StoreVersion,
+                new ZLinkAuthorityMutation.Delete()).AsTask()));
+
+        Assert.All(results, result => Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(result));
+        foreach (var actor in actors)
+            Assert.IsType<ZLinkAuthorityReadResult.Missing>(
+                await repository.ReadAuthorityAsync(actor.Key));
+    }
+
+    [Fact]
     public async Task SharedOpaqueProvider_ConcurrentDistinctCommitsRetryCapacityContention()
     {
         var provider = new ZLinkInMemoryProviderLocationStore();
