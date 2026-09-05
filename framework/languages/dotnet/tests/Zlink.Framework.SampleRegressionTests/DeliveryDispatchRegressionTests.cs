@@ -108,10 +108,9 @@ public sealed partial class RegressionTests
             "DELIVERYDISPATCH_REDIS_ENDPOINT");
         Assert.Contains("write_role_config", shellRunner, StringComparison.Ordinal);
         Assert.Contains("deliverydispatch=completed", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("topology=ready", shellRunner, StringComparison.Ordinal);
         Assert.Contains("deliverydispatch-reassignment=completed", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("deliverydispatch-server-evidence=completed", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("deliverydispatch-runner-evidence=completed", shellRunner, StringComparison.Ordinal);
+        Assert.Contains("wait_log_count \"client server-evidence completion\" \"deliverydispatch-server-evidence=completed\" \"${LOG_DIR}/client.log\" 1",
+            shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("message flow", shellRunner, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("SAMPLE_LOG_DIR=\"${RUN_DIR}/sample-logs\"", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("FLOW_LOG_DIR", shellRunner, StringComparison.Ordinal);
@@ -124,10 +123,28 @@ public sealed partial class RegressionTests
         Assert.Contains("if ($RedisContainer)", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("Write-RoleConfig", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("deliverydispatch=completed", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("topology=ready", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("deliverydispatch-reassignment=completed", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("deliverydispatch-server-evidence=completed", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("deliverydispatch-runner-evidence=completed", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("Wait-DeliveryDispatchLogCount \"client server-evidence completion\" $clientLog \"deliverydispatch-server-evidence=completed\" 1",
+            powershellRunner, StringComparison.Ordinal);
+        // Common sample §10.1 requires every route and both courier actor routes.
+        foreach (var node in new[]
+                 {
+                     "tracking", "customer-gateway", "courier-session", "courier-node-1",
+                     "courier-node-2", "dispatch"
+                 })
+        {
+            Assert.Contains($"\"deliverydispatch-ready kind=route node={node}\" \"${{LOG_DIR}}/{node}.log\" 1",
+                shellRunner, StringComparison.Ordinal);
+            Assert.Contains($"(Join-Path $LogDir \"{node}.log\") \"deliverydispatch-ready kind=route node={node}\" 1",
+                powershellRunner, StringComparison.Ordinal);
+        }
+        foreach (var node in new[] { "courier-node-1", "courier-node-2" })
+        {
+            Assert.Contains($"\"deliverydispatch-ready kind=actor-route node=dispatch target={node}\" \"${{LOG_DIR}}/dispatch.log\" 1",
+                shellRunner, StringComparison.Ordinal);
+            Assert.Contains($"(Join-Path $LogDir \"dispatch.log\") \"deliverydispatch-ready kind=actor-route node=dispatch target={node}\" 1",
+                powershellRunner, StringComparison.Ordinal);
+        }
         Assert.DoesNotContain("message flow", powershellRunner, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("$SampleLogDir = Join-Path $RunDir \"sample-logs\"", powershellRunner,
             StringComparison.Ordinal);
@@ -216,10 +233,15 @@ public sealed partial class RegressionTests
         Assert.Contains("ExpectNone<OfferDeliveryNotify>()", clientScenario, StringComparison.Ordinal);
         Assert.Contains("ZlinkStreamAssert.Ensure", clientScenario, StringComparison.Ordinal);
         Assert.DoesNotContain("WaitForStatusSequenceAsync(", clientScenario, StringComparison.Ordinal);
-        Assert.Contains("deliverydispatch courier-session: bound courier=courier-a", shellRunner,
+        Assert.Contains("deliverydispatch-courier bound courier={CourierId}", courierBinder,
             StringComparison.Ordinal);
-        Assert.Contains("deliverydispatch courier-session: bound courier=courier-b", shellRunner,
-            StringComparison.Ordinal);
+        foreach (var courier in new[] { "courier-a", "courier-b" })
+        {
+            Assert.Contains($"\"deliverydispatch-courier bound courier={courier}\" \"${{LOG_DIR}}/courier-session.log\" 1",
+                shellRunner, StringComparison.Ordinal);
+            Assert.Contains($"(Join-Path $LogDir \"courier-session.log\") \"deliverydispatch-courier bound courier={courier}\" 1",
+                powershellRunner, StringComparison.Ordinal);
+        }
         Assert.DoesNotContain("CourierGateway", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("deliverydispatch.courier", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("courier-gateway", shellRunner, StringComparison.Ordinal);

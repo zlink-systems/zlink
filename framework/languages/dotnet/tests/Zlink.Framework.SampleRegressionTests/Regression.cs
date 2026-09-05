@@ -315,9 +315,18 @@ public sealed partial class RegressionTests
             .ToArray();
         Assert.NotEmpty(hostFiles);
 
-        var allText = string.Join(Environment.NewLine, hostFiles.Select(File.ReadAllText));
+        // Scope this readiness check to /health handlers. Operational relocation
+        // queries can share their host file (08-location-maintenance §3).
+        var healthHandler = new Regex(
+            "MapGet\\(\"/health\",(?<handler>(?:[^()]|\\((?<depth>)|\\)(?<-depth>))*)(?(depth)(?!))\\)",
+            RegexOptions.CultureInvariant);
+        var handlers = hostFiles.SelectMany(file => healthHandler.Matches(File.ReadAllText(file))
+            .Cast<Match>().Select(match => match.Groups["handler"].Value)).ToArray();
+        Assert.NotEmpty(handlers);
+        var allText = string.Join(Environment.NewLine, handlers);
 
         Assert.Contains("IZLinkLocationReadiness", allText, StringComparison.Ordinal);
+        Assert.Contains("readiness.IsPeerReadyAsync(", allText, StringComparison.Ordinal);
         Assert.DoesNotContain("IZLinkLocationRuntimeQuery", allText, StringComparison.Ordinal);
     }
 
@@ -451,7 +460,8 @@ public sealed partial class RegressionTests
             "common",
             "spec",
             "server",
-            "11-spot-model.ko.md"));
+            "03-spot-actor",
+            "01-spot-model.ko.md"));
         var ticTacToeSampleSpec = File.ReadAllText(Path.Combine(
             frameworkDocRoot,
             "common",

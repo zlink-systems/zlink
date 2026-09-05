@@ -90,7 +90,10 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("rm -f \"${SHOPPINGMALL_LOG_DIR}\"/*.log", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("SHOPPINGMALL_STARTUP_DELAY_SECONDS", shellRunner, StringComparison.Ordinal);
         Assert.Contains("shoppingmall=completed", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("shoppingmall-server-evidence=completed", shellRunner, StringComparison.Ordinal);
+        Assert.Contains("/self-check/assert", shellRunner, StringComparison.Ordinal);
+        Assert.Contains("grep -q '\"passed\":true'", shellRunner, StringComparison.Ordinal);
+        Assert.Contains("wait_log_contains commerce-evidence \"${LOG_DIR}/api-a.log\" \"shoppingmall-evidence order=\"",
+            shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("message flow", shellRunner, StringComparison.OrdinalIgnoreCase);
 
         Assert.Contains("$RunId = \"$PID-$([Guid]::NewGuid().ToString('N'))\"", powershellRunner,
@@ -107,12 +110,21 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("$SHOPPINGMALL_BASE_PORT", powershellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("$SHOPPINGMALL_STORE_DIR", powershellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("SHOPPINGMALL_STARTUP_DELAY_SECONDS", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("Assert-SampleLogContains -LogDirectory $SampleLogDir -Pattern \"shoppingmall=completed\"",
+        Assert.Contains("Wait-ShoppingMallLogContains \"client-completed\" (Join-Path $SampleLogDir \"client.log\") \"shoppingmall=completed\"",
             powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("Join-Path $LogDir \"workflow-a.out.log\"", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("Join-Path $LogDir \"workflow-b.out.log\"", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("No workflow instance recorded a shoppingmall order start", powershellRunner,
+        foreach (var node in new[] { "workflow-a", "workflow-b" })
+        {
+            Assert.Contains($"wait_log_contains {node}-order \"${{LOG_DIR}}/{node}.log\" \"shoppingmall-order started order=\"",
+                shellRunner, StringComparison.Ordinal);
+            Assert.Contains($"Wait-ShoppingMallLogContains \"{node}-order\" (Join-Path $LogDir \"{node}.out.log\") \"shoppingmall-order started order=\"",
+                powershellRunner, StringComparison.Ordinal);
+        }
+        Assert.Contains("/self-check/assert", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("if (-not $assertion.Passed)", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("throw \"ShoppingMall server evidence assertion failed.\"", powershellRunner,
             StringComparison.Ordinal);
+        Assert.Contains("Wait-ShoppingMallLogContains \"commerce-evidence\" (Join-Path $LogDir \"api-a.out.log\") \"shoppingmall-evidence order=\"",
+            powershellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("message flow", powershellRunner, StringComparison.OrdinalIgnoreCase);
 
         Assert.Contains("RedisEndpoint", topology, StringComparison.Ordinal);
