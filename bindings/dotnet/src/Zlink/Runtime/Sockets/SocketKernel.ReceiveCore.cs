@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Systems.Zlink.Runtime.Native;
@@ -84,6 +85,13 @@ internal sealed partial class SocketKernel
             singlePart?.Dispose();
             throw;
         }
+        finally
+        {
+            // FromNativeParts has moved every live part into the result; the
+            // catch path closes any remaining parts before returning storage.
+            if (nativeParts.Length != 0)
+                ArrayPool<ZlinkMsg>.Shared.Return(nativeParts);
+        }
     }
 
     private bool ReceiveRoutedParts(int flags,
@@ -164,6 +172,13 @@ internal sealed partial class SocketKernel
             CloseNativeParts(nativeParts, nativePartCount);
             singlePart?.Dispose();
             throw;
+        }
+        finally
+        {
+            // FromNativeParts has moved every live part into the result; the
+            // catch path closes any remaining parts before returning storage.
+            if (nativeParts.Length != 0)
+                ArrayPool<ZlinkMsg>.Shared.Return(nativeParts);
         }
     }
 
@@ -251,6 +266,13 @@ internal sealed partial class SocketKernel
             CloseNativeParts(nativeParts, nativePartCount);
             singlePart?.Dispose();
             throw;
+        }
+        finally
+        {
+            // FromNativeParts has moved every live part into the result; the
+            // catch path closes any remaining parts before returning storage.
+            if (nativeParts.Length != 0)
+                ArrayPool<ZlinkMsg>.Shared.Return(nativeParts);
         }
     }
 
@@ -377,6 +399,13 @@ internal sealed partial class SocketKernel
             singlePart?.Dispose();
             throw;
         }
+        finally
+        {
+            // FromNativeParts has moved every live part into the result; the
+            // catch path closes any remaining parts before returning storage.
+            if (nativeParts.Length != 0)
+                ArrayPool<ZlinkMsg>.Shared.Return(nativeParts);
+        }
     }
 
     private static ZlinkMsg MoveStoredPart(ref ZlinkMsg source)
@@ -402,9 +431,17 @@ internal sealed partial class SocketKernel
     private static void AppendNativePart(ref ZlinkMsg[] nativeParts,
         ref int count, ref ZlinkMsg source)
     {
-        if (count == nativeParts.Length) Array.Resize(ref nativeParts, count == 0 ? 4 : count * 2);
+        if (count == nativeParts.Length)
+        {
+            var expanded = ArrayPool<ZlinkMsg>.Shared.Rent(count == 0 ? 4 : checked(count * 2));
+            nativeParts.AsSpan(0, count).CopyTo(expanded);
+            if (nativeParts.Length != 0)
+                ArrayPool<ZlinkMsg>.Shared.Return(nativeParts);
+            nativeParts = expanded;
+        }
 
-        nativeParts[count++] = MoveStoredPart(ref source);
+        nativeParts[count] = MoveStoredPart(ref source);
+        count++;
     }
 
     private static void CloseNativeParts(ZlinkMsg[] parts, int count)

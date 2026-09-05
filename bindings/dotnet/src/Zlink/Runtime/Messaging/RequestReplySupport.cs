@@ -212,19 +212,66 @@ internal static class RequestReplySupport
     internal static void SubmitPreservingOnFailure(
         IReadOnlyList<Message> parts, NativePartSubmitter submit)
     {
+        var submitter = new DelegatePartSubmitter(submit);
+        SubmitPreservingOnFailure(parts, ref submitter);
+    }
+
+    internal static void SubmitPreservingOnFailure<T>(
+        IReadOnlyList<Message> parts, ref T submitter)
+        where T : struct, INativePartSubmitter<T>
+    {
         EnsureParts(parts, nameof(parts));
-        var clones = CloneParts(parts);
+        ZlinkMsg[]? rented = null;
+        var nativeParts = parts.Count <= NativeMessageParts.StackPartLimit
+            ? stackalloc ZlinkMsg[NativeMessageParts.StackPartLimit]
+            : rented = ArrayPool<ZlinkMsg>.Shared.Rent(parts.Count);
+        var built = 0;
         try
         {
-            SubmitOwnedParts(clones, submit);
+            // Core consumes every submitted part, including failures. Keep the
+            // caller's originals until FINAL succeeds, but hold the temporary
+            // shared references directly in native storage, without wrappers
+            // or another init/move round trip. Copy the whole record before
+            // submitting its prefix so validation failure cannot stage a part.
+            for (; built < parts.Count; built++)
+                parts[built].CopyTo(ref nativeParts[built]);
+            for (var i = 0; i < built; i++)
+            {
+                var rc = T.Submit(ref submitter, ref nativeParts[i],
+                    i + 1 < built ? NativeMethods.ZlinkPartFlag.More
+                        : NativeMethods.ZlinkPartFlag.Final);
+                if (rc != 0)
+                    throw ZlinkException.CreateSubmitException(
+                        NativeMethods.zlink_errno());
+            }
             ConsumeParts(parts);
         }
         finally
         {
-            DisposeParts(clones);
+            for (var i = 0; i < built; i++)
+                NativeMethods.zlink_msg_close(ref nativeParts[i]);
+            if (rented != null)
+                ArrayPool<ZlinkMsg>.Shared.Return(rented);
         }
+    }
+
+    private readonly struct DelegatePartSubmitter(NativePartSubmitter submit)
+        : INativePartSubmitter<DelegatePartSubmitter>
+    {
+        public static int Submit(ref DelegatePartSubmitter self,
+            ref ZlinkMsg part, NativeMethods.ZlinkPartFlag flag) =>
+            self.Invoke(ref part, flag);
+
+        private int Invoke(ref ZlinkMsg part, NativeMethods.ZlinkPartFlag flag)
+            => submit(ref part, flag);
     }
 
     internal delegate int NativePartSubmitter(
         ref ZlinkMsg nativePart, NativeMethods.ZlinkPartFlag partFlag);
+}
+
+internal interface INativePartSubmitter<T> where T : struct, INativePartSubmitter<T>
+{
+    static abstract int Submit(ref T self, ref ZlinkMsg part,
+        NativeMethods.ZlinkPartFlag flag);
 }

@@ -4,7 +4,8 @@ using Systems.Zlink;
 
 public static class PerfSocketIo
 {
-    public static int MeasurementPartCount =>
+    // Each size runs in its own process with a fixed part-count setting.
+    public static int MeasurementPartCount { get; } =
         string.Equals(Environment.GetEnvironmentVariable("PERF_PART_COUNT"), "1",
             StringComparison.Ordinal) ? 1 : 2;
 

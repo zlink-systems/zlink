@@ -25,6 +25,7 @@ internal sealed class CompletionOwner
     private long _runtimeEpoch;
     private bool _runtimePumpStarted;
     private bool _closing;
+    private long _nextContext;
 
     internal CompletionOwner(IntPtr handle, SocketType socketType)
     {
@@ -42,20 +43,31 @@ internal sealed class CompletionOwner
                 return Task.FromCanceled(cancellationToken);
             EnsureOpenForSubmit();
 
-            var entry = new SendCompletionEntry(target, cancellationToken);
-            Register(entry);
-
-            var attempt = SubmitSend(target, parts, DontWait,
-                entry.Context);
+            // Keep cancellation registration before admission for cancelable
+            // calls. The common noncancelable path needs no entry or Task until
+            // Core actually returns a writable token. Drain shares _submitSync,
+            // so that token cannot be pulled before registration and Arm.
+            SendCompletionEntry? entry = null;
+            var context = NextContext();
+            if (cancellationToken.CanBeCanceled)
+            {
+                entry = new SendCompletionEntry(target, cancellationToken);
+                Register(entry, context);
+            }
+            var attempt = SubmitSend(target, parts, DontWait, context);
             if (attempt.Failure is null)
             {
                 if (attempt.CompletionId != 0)
                 {
                     var failure = CreateProtocolFailure();
+                    if (entry is null)
+                        return Task.FromException(failure);
                     entry.CompleteInitialFailure(failure);
                     return entry.Task;
                 }
 
+                if (entry is null)
+                    return Task.CompletedTask;
                 entry.CompleteInitialSuccess();
                 return entry.Task;
             }
@@ -63,6 +75,11 @@ internal sealed class CompletionOwner
             if (IsBackpressured(attempt.Failure)
                 && attempt.CompletionId != 0)
             {
+                if (entry is null)
+                {
+                    entry = new SendCompletionEntry(target, cancellationToken);
+                    Register(entry, context, admittedSubmit: true);
+                }
                 Message[]? retained = null;
                 try
                 {
@@ -86,7 +103,7 @@ internal sealed class CompletionOwner
             var submitFailure = IsBackpressured(attempt.Failure)
                 ? CreateProtocolFailure()
                 : attempt.Failure;
-            entry.AbortBeforeNativeWait(submitFailure);
+            entry?.AbortBeforeNativeWait(submitFailure);
             throw submitFailure;
         }
     }
@@ -114,25 +131,24 @@ internal sealed class CompletionOwner
 
             // Even a caller-visible false result has a native WRITABLE waiter.
             // Keep a payload-free sink alive until that exact token is pulled.
-            var entry = new SendCompletionEntry(target);
-            Register(entry);
-            var attempt = SubmitSend(target, parts, DontWait, entry.Context);
+            var context = NextContext();
+            var attempt = SubmitSend(target, parts, DontWait, context);
             if (attempt.Failure is null)
             {
                 if (attempt.CompletionId != 0)
                 {
                     var failure = CreateProtocolFailure();
-                    entry.AbortBeforeNativeWait(failure);
                     throw failure;
                 }
 
-                entry.CompleteInitialSuccess();
                 return true;
             }
 
             if (IsBackpressured(attempt.Failure)
                 && attempt.CompletionId != 0)
             {
+                var entry = new SendCompletionEntry(target);
+                Register(entry, context, admittedSubmit: true);
                 entry.Arm(attempt.CompletionId);
                 StartRuntimePump();
                 return false;
@@ -141,7 +157,6 @@ internal sealed class CompletionOwner
             var submitFailure = IsBackpressured(attempt.Failure)
                 ? CreateProtocolFailure()
                 : attempt.Failure;
-            entry.AbortBeforeNativeWait(submitFailure);
             throw submitFailure;
         }
     }
@@ -407,15 +422,21 @@ internal sealed class CompletionOwner
                 "STREAM sends contain exactly one message part.", nameof(parts));
     }
 
-    private void Register(CompletionEntry entry)
+    // Core treats user_context as an opaque value. The registry roots entries;
+    // monotonically increasing socket-local identities never reuse a GCHandle
+    // address and require no managed/native handle-table round trip.
+    private IntPtr NextContext() => checked((IntPtr)(++_nextContext));
+
+    private void Register(CompletionEntry entry, IntPtr context = default,
+        bool admittedSubmit = false)
     {
         lock (_sync)
         {
-            if (_closing)
+            if (_closing && !admittedSubmit)
                 throw new ZlinkSubmitException(SubmitResult.Terminated,
                     (int)ErrorCode.EShutdown);
-            var root = GCHandle.Alloc(entry, GCHandleType.Normal);
-            var context = GCHandle.ToIntPtr(root);
+            if (context == IntPtr.Zero)
+                context = NextContext();
             entry.Attach(this, context);
             _entries.Add(context, entry);
         }
@@ -450,80 +471,99 @@ internal sealed class CompletionOwner
                 || !ReferenceEquals(current, entry))
                 return;
             _entries.Remove(context);
-            GCHandle.FromIntPtr(context).Free();
         }
     }
 
     private SendAttempt SubmitSend(RoutingId? target,
         IReadOnlyList<Message> parts, int flags, IntPtr userContext)
     {
-        unsafe
+        var submitter = new SendPartSubmitter
         {
-            ZlinkRoutingId nativeTarget = default;
-            var routed = target.HasValue;
-            if (routed)
-                nativeTarget = target!.Value.ToNative();
-            ulong completionId = 0;
-            var completionIdPointer = &completionId;
-            try
+            Handle = _handle,
+            Target = target.HasValue ? target.Value.ToNative() : default,
+            Routed = target.HasValue,
+            Flags = flags,
+            Context = userContext
+        };
+        try
+        {
+            RequestReplySupport.SubmitPreservingOnFailure(parts, ref submitter);
+            return new SendAttempt(submitter.CompletionId, null);
+        }
+        catch (Exception exception)
+        {
+            return new SendAttempt(submitter.CompletionId, exception);
+        }
+    }
+
+    private unsafe struct SendPartSubmitter : INativePartSubmitter<SendPartSubmitter>
+    {
+        internal IntPtr Handle, Context;
+        internal ZlinkRoutingId Target;
+        internal bool Routed;
+        internal int Flags;
+        internal ulong CompletionId;
+
+        public static int Submit(ref SendPartSubmitter self,
+            ref ZlinkMsg part, NativeMethods.ZlinkPartFlag flag)
+        {
+            var final = flag == NativeMethods.ZlinkPartFlag.Final;
+            var context = final ? self.Context : IntPtr.Zero;
+            fixed (ulong* id = &self.CompletionId)
             {
-                RequestReplySupport.SubmitPreservingOnFailure(parts,
-                    (ref ZlinkMsg nativePart,
-                        NativeMethods.ZlinkPartFlag partFlag) =>
-                    {
-                        var final = partFlag ==
-                            NativeMethods.ZlinkPartFlag.Final;
-                        var context = final ? userContext : IntPtr.Zero;
-                        var idOut = final && userContext != IntPtr.Zero
-                            ? completionIdPointer : null;
-                        return routed
-                            ? NativeMethods.zlink_send_part_rid(_handle,
-                                ref nativeTarget, ref nativePart, flags,
-                                partFlag, context, idOut)
-                            : NativeMethods.zlink_send_part(_handle,
-                                ref nativePart, flags, partFlag, context,
-                                idOut);
-                    });
-                return new SendAttempt(completionId, null);
-            }
-            catch (Exception exception)
-            {
-                return new SendAttempt(completionId, exception);
+                var idOut = final && context != IntPtr.Zero ? id : null;
+                return self.Routed
+                    ? NativeMethods.zlink_send_part_rid(self.Handle,
+                        ref self.Target, ref part, self.Flags, flag, context, idOut)
+                    : NativeMethods.zlink_send_part(self.Handle,
+                        ref part, self.Flags, flag, context, idOut);
             }
         }
     }
 
-    private unsafe SendAttempt SubmitRequest(RoutingId? target,
+    private SendAttempt SubmitRequest(RoutingId? target,
         IReadOnlyList<Message> parts, uint timeoutMs, int flags,
         IntPtr userContext)
     {
-        ZlinkRoutingId nativeTarget = default;
-        ZlinkRoutingId* targetPointer = null;
-        if (target.HasValue)
+        var submitter = new RequestPartSubmitter
         {
-            nativeTarget = target.Value.ToNative();
-            targetPointer = &nativeTarget;
-        }
-        ulong completionId = 0;
-        var completionIdPointer = &completionId;
+            Handle = _handle,
+            Target = target.HasValue ? target.Value.ToNative() : default,
+            Routed = target.HasValue,
+            Flags = flags,
+            TimeoutMs = timeoutMs,
+            Context = userContext
+        };
         try
         {
-            RequestReplySupport.SubmitPreservingOnFailure(parts,
-                (ref ZlinkMsg nativePart,
-                    NativeMethods.ZlinkPartFlag partFlag) =>
-                {
-                    var final = partFlag == NativeMethods.ZlinkPartFlag.Final;
-                    return NativeMethods.zlink_request_part(_handle,
-                        targetPointer, ref nativePart, flags, partFlag,
-                        final ? timeoutMs : 0,
-                        final ? userContext : IntPtr.Zero,
-                        final ? completionIdPointer : null);
-                });
-            return new SendAttempt(completionId, null);
+            RequestReplySupport.SubmitPreservingOnFailure(parts, ref submitter);
+            return new SendAttempt(submitter.CompletionId, null);
         }
         catch (Exception exception)
         {
-            return new SendAttempt(completionId, exception);
+            return new SendAttempt(submitter.CompletionId, exception);
+        }
+    }
+
+    private unsafe struct RequestPartSubmitter : INativePartSubmitter<RequestPartSubmitter>
+    {
+        internal IntPtr Handle, Context;
+        internal ZlinkRoutingId Target;
+        internal bool Routed;
+        internal int Flags;
+        internal uint TimeoutMs;
+        internal ulong CompletionId;
+
+        public static int Submit(ref RequestPartSubmitter self,
+            ref ZlinkMsg part, NativeMethods.ZlinkPartFlag flag)
+        {
+            var final = flag == NativeMethods.ZlinkPartFlag.Final;
+            fixed (ZlinkRoutingId* target = &self.Target)
+            fixed (ulong* id = &self.CompletionId)
+                return NativeMethods.zlink_request_part(self.Handle,
+                    self.Routed ? target : null, ref part, self.Flags, flag,
+                    final ? self.TimeoutMs : 0,
+                    final ? self.Context : IntPtr.Zero, final ? id : null);
         }
     }
 
@@ -703,7 +743,7 @@ internal sealed class CompletionOwner
     {
         // A poll/drain failure must not leave an awaiter unresolved. Native may
         // still own each published token, so entries become payload-free
-        // tombstones and retain their GCHandle until that token is pulled by a
+        // tombstones and retain their registry identity until that token is pulled by a
         // later pump/public poller or the socket closes.
         lock (_submitSync)
         {
