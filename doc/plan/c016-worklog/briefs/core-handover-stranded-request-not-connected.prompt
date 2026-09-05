@@ -1,0 +1,32 @@
+# Job (Core, model astra): a REQUEST pinned to a transport pair superseded by HANDOVER completes immediately with ZLINK_REQUEST_NOT_CONNECTED
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §2/§3/§4, `CONTRIBUTING.ko.md` §4/§5 (Core tests use the
+public C API only; `ctest -j2`; §5 gate before handing back), and the amended spec `core/doc/spec/core/socket/README.ko.md` §4
+(RID duplicate policy, commit bb730c654f): "그 pair가 handover로 물러나는 즉시 해당 request를 `ZLINK_REQUEST_NOT_CONNECTED`(errno
+`EHOSTUNREACH`)로 정확히 한 번 종결하며, request의 자기 timeout까지 기다리지 않는다." Never modify any `doc/spec/**`,
+`bindings/**`, `framework/**`; do not commit. WORK ONLY IN THE WORKTREE `/home/hep7/project/zlink-core-a` (detached at main HEAD):
+`cd /home/hep7/project/zlink-core-a && nice -n 10 env JOBS=4 scripts/build-core.sh dev` there. Never touch
+`/home/hep7/project/zlink/core/build-dev` (framework gates link it). Other gates run on this machine; keep parallelism ≤ 4.
+
+## Context (D-B96, `doc/plan/c016-worklog/decisions.ko.md`)
+Reciprocal HANDOVER collapses to one direction by RID comparison (`core/src/runtime/sockets/router/router_admission.cpp:302-335`);
+the losing direction's lanes stay as standby (`:364-379`, `:398-416`, `_standby_pipes`) and a REQUEST admitted on the losing
+direction is pinned to that pair (`socket_request_reply_submit_api.cpp:121-180` pair/generation fence) and today ends only at its
+own timeout with `ZLINK_REQUEST_TIMED_OUT`. The public contract test `core/tests/integration/test_router_reciprocal_handover_lanes.cpp:395-434`
+pins that timeout. Same-direction HANDOVER (a reconnecting pipe takes over the existing one) strands requests the same way.
+
+## What to do
+1. At the point where a pair is superseded (reciprocal collapse and same-direction takeover), complete every pending REQUEST
+   pinned to the superseded pair exactly once with `ZLINK_REQUEST_NOT_CONNECTED` + `EHOSTUNREACH` (existing result 109),
+   through the normal completion record path (poller drains it like any request terminal). Keep the pair/generation reply
+   fence, the standby pipe behaviour, and reply pinning unchanged. One owner: the router admission/handover code decides
+   supersession; the request-reply state machine completes — do not add a second bookkeeping structure if the pending pool
+   already indexes by pair.
+2. Contract tests: update `test_router_reciprocal_handover_lanes.cpp` (losing request → `REQUEST_NOT_CONNECTED`, completion
+   observed well before its 2 s timeout, e.g. < 200 ms; the resend on the winning direction succeeds) and add the same-direction
+   takeover case (tcp + inproc). Keep the D-B94 handover latency test green.
+3. Gate: `ctest --test-dir core/build-dev -j2` in the worktree (full), the CONTRIBUTING §5 checks, and — because this touches the
+   request hot path — the hotpath policy check if `scripts/` provides one (report numbers; do not tune).
+4. Deliverable: `doc/plan/c016-worklog/core-handover-stranded-request-summary.md` in the MAIN tree (/home/hep7/project/zlink):
+   cause sites, diff summary (file:line), spec clause, test names + counts, hotpath numbers, BLOCKERS. Leave the diff
+   uncommitted in the worktree; the supervisor applies it to main.

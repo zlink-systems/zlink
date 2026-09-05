@@ -1,0 +1,33 @@
+# Job (STAGE 1+2, model astra): java — complete the durable-replay diagnosis (typed result loss in raw mesh, bind replay ownership) and implement
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3, `framework/AGENTS.md`, the parity diagnosis
+`doc/plan/c016-worklog/diag-exhaustion-kind-parity.md` §Java, and the blocked report `stage2-java-durable-replay-summary.md`
+(its BLOCKERS are your stage-1 input). Spec: `framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md`
+sender replay bullets, plus Core §4 as amended in bb730c654f (a request stranded by HANDOVER now completes immediately with
+`REQUEST_NOT_CONNECTED`; Core implementation is in progress in a separate job — treat NOT_CONNECTED as the handover marker).
+Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages;
+never lower an assertion or widen a deadline; no errno re-classification (D-B97: the java binding gives 4 typed cases); do
+not commit. Env: `framework/languages/java`, `TMPDIR=/dev/shm/zlink-tmp-java`, never export a directory-valued
+`ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-jvm-gate.lock` around every gradle invocation. Packages rebuilt 09:49
+(java `c9d294c44f`); do not rebuild.
+
+## Stage 1 (write `doc/plan/c016-worklog/stage2-java-durable-replay-2-diagnosis.md` first)
+1. Typed result preservation: `ZLinkJavaRawMeshNode.requestResult()` (`:3612-3623`) maps `ZlinkSubmitException` to
+   `INTERNAL_ERROR`; actor create (`:3489-3498`, `:3854-3858`) and bound bind (`:2910-2920`, preflight `:2873-2880`) lose the
+   phase and the typed kind. Decide the single owner that preserves phase (initial submit vs request completion) + typed
+   result for the durable path — compare cpp `raw_route_port.hpp:51-70` — and the minimal change that keeps
+   `requestResult()`'s other callers correct (or splits a durable-only variant if the shared helper cannot carry phase).
+2. Bind replay ownership: `ZLinkBoundSessionRuntime.java:168-173` re-calls `bindActor().submit()` per retry;
+   `ZLinkJavaStreamSocket.java:337-355` allocates a new binding generation inside submit; `ZLinkJavaRawMeshNode.java:2889-2901`
+   makes a new correlation/header. Per spec, replay must reuse the same OperationId/encoded header. Decide where the replay
+   loop must live (the boundary that owns the identity), matching how node (`service-stateful-runtime.ts` replay helper) and
+   cpp (`raw_mesh_node_owner.cpp` infrastructure_request_retry_state_t) do it. Classify A/B.
+## Stage 2 (implement only if stage 1 classifies A or B; STOP only for a Core/binding defect)
+Implement the minimal fix for Actor Join, Actor create and bound-session bind: replay on outcomes without a terminal
+envelope (`NOT_CONNECTED` pre-admission or handover-stranded, lost reply), whole remaining deadline per attempt (remove the
+fixed 2 s bound budget), exhaustion kind by cause using the binding typed result as the admission marker. Regression: the
+3-row matrix per operation in `zlink-framework-core` tests. Verify: touched test classes, `:zlink-framework-core:test` once
+(known C: two `ZLinkJavaRawMeshNodeM6ATest`), samples TicTacToe + GameQuest 1×.
+## Deliverable
+`doc/plan/c016-worklog/stage2-java-durable-replay-2-summary.md`: diff, the four lines (owner / spec / parity / class),
+matrix results, gate counts, BLOCKERS.
