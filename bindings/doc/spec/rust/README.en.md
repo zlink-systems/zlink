@@ -293,6 +293,14 @@ public contract methods.
 - A `Spot` handle is obtained via `SpotNode::create_spot(...)`, `entry_spot()`, `get_or_create_spot(...)`, or `spot_lookup(...)`. Direct `Spot` construction is not public.
 - An Actor handle is created via `SpotNode::create_actor(...)`. Direct Actor construction is not public.
 - `Poller::new(...)`, `Timer::new(...)`, and the timer-on-SPOT helpers create eventing resources.
+- `Poller` accepts a socket monitor as a source through
+  `add_monitor(&self, monitor: &SocketMonitor, events: i16, slot: usize) -> Result<(), ConfigError>`,
+  `modify_monitor(&self, monitor: &SocketMonitor, events: i16) -> Result<(), ConfigError>` and
+  `remove_monitor(&self, monitor: &SocketMonitor) -> Result<bool, ConfigError>` (common spec "Monitor sources in
+  `Poller`"). `SocketMonitor` does not implement the socket-only sealed `Pollable` (this protects the `proxy`
+  argument contract). Only `POLLIN` is valid for a monitor; any other mask is rejected with
+  `ConfigError(ConfigResult::InvalidArgument)`. Drain with `recv_with_flags(RecvFlags::DONT_WAIT)` after readiness;
+  `PollEvent` reports it as `PollSourceKind::Socket`.
 - `AtomicCounter::new()`, `Stopwatch::start()`, `Thread::start(...)` create caller-owned utility resources.
 - Version and capability lookup, strerror, proxy, sleep, and the multipart cleanup helper are public crate functions. The FFI calls behind these functions stay private.
 

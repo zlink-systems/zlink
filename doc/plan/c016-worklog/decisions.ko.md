@@ -1148,3 +1148,7 @@ native addon 변경 없음. 테스트 `poller_monitor.test.ts`(READY/DISCONNECTE
 ## D-B100 (2026-09-05 10:25, 머신 B) bindings parity — Java `Poller` monitor source 구현·spec 명시; 잘못된 mask의 typed 오류는 `INVALID_ARGUMENT`로 통일
 Java `Poller.add/modify/remove(SocketMonitor, ...)`(socket overload와 같은 형태), `NativePoller`가 monitor native handle을 Core poller에 전달, completion owner 미적용, `PollEvent`는 socket과 같은 slot. 샘플 `SampleSupport`의 sleep/blocking monitor 대기를 poller drain으로.
 job은 잘못된 mask를 `NOT_SUPPORTED`로 냈으나 Node/Rust가 `InvalidArgument`(EINVAL)라 감독자가 `INVALID_ARGUMENT`로 통일(C++는 Core로 pass-through — 후속 확인 항목). 테스트 `MonitorPollingContractTest` 3 case × 5회(worktree), main에서 3/3; `tests/run_tests.sh` 전체·samples 7/7(worktree). Java spec(ko/en) 문장 추가. 커밋 `820b878567`.
+
+## D-B101 (2026-09-05 10:35, 머신 B) bindings parity — Rust `Poller` monitor source(`add_monitor/modify_monitor/remove_monitor`) 구현·spec 명시
+`SocketMonitor: Pollable`은 채택하지 않음(sealed `Pollable`이 public `proxy`의 socket 전용 인자 계약이라 monitor를 넣으면 `proxy(&monitor, ...)`가 컴파일되는 잘못된 표면이 생김) → 별도 `*_monitor` 메서드. `POLLIN`만 허용, 그 외 `ConfigError(InvalidArgument, EINVAL)`, completion owner 미적용, `PollSourceKind::Socket`.
+샘플 blocking `monitor.recv()` → poller drain. 테스트 `monitor_tests.rs` 3 case × 5회, `run_tests.sh` 14/14, clippy `-D warnings`, fmt. Rust spec(ko/en) 문장 추가. 커밋: 아래 해시.

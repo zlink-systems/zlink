@@ -54,6 +54,7 @@ Registering a socket with a public `Poller` for `POLLCOMPLETION` transfers
 completion-queue ownership to that poller. Include `POLLOUT` in the mask and
 keep calling `Poller::wait()` while it drives backpressured SEND or REQUEST
 futures.
+Register a `SocketMonitor` with `Poller::add_monitor`; monitors accept only `POLLIN` and are drained with `recv_with_flags(RecvFlags::DONT_WAIT)` after readiness.
 REQUEST admission can use the same WRITABLE path. A successful REQUEST FINAL
 reserves a different nonzero completion ID and then completes with its reply or
 terminal result through `CompletionKind::Request` and `POLLCOMPLETION`.

@@ -7,7 +7,7 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
-use zlink::SocketMonitor;
+use zlink::{POLLIN, PollEvent, Poller, RecvFlags, SocketMonitor};
 
 struct ThreadWake(Thread);
 
@@ -41,26 +41,51 @@ pub fn tcp_endpoint() -> String {
 }
 
 pub fn wait_connected(monitors: &[&SocketMonitor]) {
-    for monitor in monitors {
-        loop {
-            let event = monitor.recv().expect("monitor recv failed");
-            if event.is_connection_ready()
-                || monitor.status().expect("monitor status failed").is_ready()
+    let poller = Poller::new().expect("monitor poller creation failed");
+    let mut ready = vec![false; monitors.len()];
+    for (slot, monitor) in monitors.iter().enumerate() {
+        poller
+            .add_monitor(monitor, POLLIN, slot)
+            .expect("monitor poller registration failed");
+    }
+
+    let mut events = vec![PollEvent::default(); monitors.len().max(1)];
+    while ready.iter().any(|item| !item) {
+        let count = poller.wait(&mut events, -1).expect("monitor poll failed");
+        for poll_event in events.iter().take(count) {
+            let monitor = monitors[poll_event.slot];
+            while let Some(event) = monitor
+                .recv_with_flags(RecvFlags::DONT_WAIT)
+                .expect("monitor recv failed")
             {
-                break;
+                if event.is_connection_ready()
+                    || monitor.status().expect("monitor status failed").is_ready()
+                {
+                    ready[poll_event.slot] = true;
+                }
             }
         }
     }
 }
 
 pub fn wait_stream_connected(monitor: &SocketMonitor) {
+    let poller = Poller::new().expect("monitor poller creation failed");
+    poller
+        .add_monitor(monitor, POLLIN, 0)
+        .expect("monitor poller registration failed");
+    let mut events = [PollEvent::default()];
     loop {
-        let event = monitor.recv().expect("monitor recv failed");
-        if event.is_accepted()
-            || event.is_connection_ready()
-            || monitor.status().expect("monitor status failed").is_ready()
+        poller.wait(&mut events, -1).expect("monitor poll failed");
+        while let Some(event) = monitor
+            .recv_with_flags(RecvFlags::DONT_WAIT)
+            .expect("monitor recv failed")
         {
-            break;
+            if event.is_accepted()
+                || event.is_connection_ready()
+                || monitor.status().expect("monitor status failed").is_ready()
+            {
+                return;
+            }
         }
     }
 }
