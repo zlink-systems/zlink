@@ -62,6 +62,18 @@ internal static class SocketInterop
         return concrete;
     }
 
+    internal static SocketMonitor RequireMonitor(ISocketMonitor monitor,
+        string paramName)
+    {
+        if (monitor == null)
+            throw new ArgumentNullException(paramName);
+        if (monitor is not SocketMonitor concrete)
+            throw new ArgumentException(
+                "monitor must be a concrete zlink socket monitor instance",
+                paramName);
+        return concrete;
+    }
+
     internal static Timer RequireTimer(IZlinkTimer timer, string paramName)
     {
         if (timer == null)

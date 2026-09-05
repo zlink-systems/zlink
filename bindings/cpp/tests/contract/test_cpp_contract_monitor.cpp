@@ -233,6 +233,68 @@ void test_socket_monitor_exposes_connection_identity ()
     assert (observed_ready);
 }
 
+void test_monitor_poller_mask_and_drain (bool tcp_)
+{
+    zlink::context_t ctx;
+    zlink::pair_socket_t server (ctx);
+    zlink::pair_socket_t client (ctx);
+    auto monitor = server.monitor_open (zlink::monitor_event::connection_ready);
+    zlink::poller_t poller;
+    const auto invalid_masks = {
+      zlink::poll_event_flag_t::pollout,
+      zlink::poll_event_flag_t::pollcompletion,
+      static_cast<zlink::poll_event_flag_t> (ZLINK_POLLIN | ZLINK_POLLOUT),
+      static_cast<zlink::poll_event_flag_t> (ZLINK_POLLIN | ZLINK_POLLCOMPLETION),
+      static_cast<zlink::poll_event_flag_t> (ZLINK_POLLERR),
+      static_cast<zlink::poll_event_flag_t> (ZLINK_POLLPRI),
+      static_cast<zlink::poll_event_flag_t> (0x4000)};
+    for (const auto mask : invalid_masks) {
+        bool rejected = false;
+        try {
+            poller.add (monitor, mask, 71);
+        } catch (const zlink::config_error_t &error) {
+            assert (error.result () == zlink::config_result_t::invalid_argument);
+            rejected = true;
+        }
+        assert (rejected);
+        assert (poller.size () == 0);
+    }
+    poller.add (monitor, zlink::poll_event_flag_t::none, 71);
+    server.bind (tcp_ ? "tcp://127.0.0.1:*"
+                     : zlink_cpp_contract::unique_inproc ("monitor-poller-mask"));
+    client.connect (server.options ().last_endpoint ());
+    zlink::poll_event_t event;
+    assert (poller.wait (&event, 1, std::chrono::milliseconds (0)) == 0);
+    poller.modify (monitor, zlink::poll_event_flag_t::pollin);
+    for (const auto mask : invalid_masks) {
+        bool rejected = false;
+        try {
+            poller.modify (monitor, mask);
+        } catch (const zlink::config_error_t &error) {
+            assert (error.result () == zlink::config_result_t::invalid_argument);
+            rejected = true;
+        }
+        assert (rejected);
+        assert (poller.size () == 1);
+    }
+    assert (poller.wait (&event, 1, std::chrono::milliseconds (2000)) == 1);
+    assert (event.source_kind == zlink::poll_source_kind_t::socket);
+    assert (event.slot == 71);
+    assert (event.revents == zlink::poll_event_flag_t::pollin);
+    // Remove a ready source before draining: queued records must not leak through.
+    assert (poller.remove (monitor));
+    assert (poller.size () == 0);
+    assert (poller.wait (&event, 1, std::chrono::milliseconds (0)) == 0);
+    poller.add (monitor, zlink::poll_event_flag_t::pollin, 72);
+    assert (poller.wait (&event, 1, std::chrono::milliseconds (2000)) == 1);
+    assert (event.slot == 72);
+    const auto ready = monitor.recv (zlink::recv_flags_t::dontwait);
+    assert (ready && ready->event == zlink::monitor_event::connection_ready);
+    assert (!monitor.recv (zlink::recv_flags_t::dontwait));
+    assert (poller.wait (&event, 1, std::chrono::milliseconds (0)) == 0);
+    assert (poller.remove (monitor));
+}
+
 void test_socket_monitor_and_poller_size ()
 {
     zlink::context_t ctx;
@@ -514,6 +576,8 @@ int main ()
     test_socket_monitor_open_recv_snapshot ();
     test_socket_monitor_hwm_bytes_are_forwarded_exactly ();
     test_socket_monitor_exposes_connection_identity ();
+    test_monitor_poller_mask_and_drain (false);
+    test_monitor_poller_mask_and_drain (true);
     test_socket_monitor_and_poller_size ();
     test_poller_wait_buffer_returns_slot ();
     test_socket_only_poller_modify_rebuilds_cached_items ();

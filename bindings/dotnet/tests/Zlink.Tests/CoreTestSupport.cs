@@ -45,13 +45,16 @@ internal static class CoreTestSupport
         {
             using ISocketMonitor monitor = socket.MonitorOpen(
                 SocketEvent.ConnectionReady);
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-            while (DateTime.UtcNow < deadline)
+            using var poller = global::Systems.Zlink.Zlink.CreatePoller();
+            poller.Add(monitor, PollEventFlags.PollIn, 0);
+            var ready = new PollEvent[1];
+            long deadline = Environment.TickCount64 + 5000;
+            while (!monitor.Status().IsReady && Environment.TickCount64 < deadline)
             {
-                if (monitor.Status().IsReady)
+                var remaining = Math.Max(0, deadline - Environment.TickCount64);
+                if (poller.Wait(ready, TimeSpan.FromMilliseconds(remaining)) == 0)
                     break;
-                _ = monitor.Recv(RecvFlags.DontWait);
-                Thread.Sleep(1);
+                while (monitor.Recv(RecvFlags.DontWait) != null) { }
             }
             if (!monitor.Status().IsReady)
                 throw new TimeoutException("socket did not become ready");

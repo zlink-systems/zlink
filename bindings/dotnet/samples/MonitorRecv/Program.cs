@@ -21,10 +21,10 @@ internal static class Program
         server.Bind(endpoint);
         client.Connect(endpoint);
 
-        MonitorEvent serverEvent = serverMonitor.Recv()
-            ?? throw new TimeoutException("Timed out waiting for server monitor event.");
-        MonitorEvent clientEvent = clientMonitor.Recv()
-            ?? throw new TimeoutException("Timed out waiting for client monitor event.");
+        MonitorEvent serverEvent = SampleSupport.WaitMonitorEvent(serverMonitor,
+            5000, SocketEvent.ConnectionReady);
+        MonitorEvent clientEvent = SampleSupport.WaitMonitorEvent(clientMonitor,
+            5000, SocketEvent.ConnectionReady);
         if (serverEvent.Event != MonitorEventType.ConnectionReady
             || clientEvent.Event != MonitorEventType.ConnectionReady)
         {

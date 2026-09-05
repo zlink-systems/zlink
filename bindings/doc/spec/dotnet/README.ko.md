@@ -157,6 +157,11 @@ bindings/dotnet/
 - 공개 생성은 공개 계약이 명시적으로 구체 값 타입을 요구하지 않는 한 `IContext`, socket 인터페이스, `ISpotNode`, `IPoller`, `IZlinkTimer` 같은 공개 계약을 반환한다.
 - `Context`, socket 클래스, `SpotNode`, `Poller`, `Timer` 같은 런타임 클래스는 구현 소유자이며 소비자 표면으로 선호되는 대상이 아니다.
 
+`IPoller`는 `void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot)`, `void Modify(ISocketMonitor monitor, PollEventFlags events)`,
+`bool Remove(ISocketMonitor monitor)`로 socket monitor를 source로 받는다(공통 spec "`Poller`의 monitor source"); one-shot
+`ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>, ...)`도 유지한다. monitor mask는 `PollIn` 또는 `None`만 유효하고 다른 bit는
+`ZlinkConfigException`(`ErrorCode.InvalidArgument`)로 거절한다. ready 뒤 `Receive`/`TryReceive`(DONTWAIT)로 drain한다.
+
 `Runtime/Buffers`, `Runtime/Handles`, `Runtime/Options`는 구현 지원 카테고리다.
 .NET 바인딩에는 숨겨야 할 실제 네이티브 ownership, routing-id 인코딩,
 옵션 검증 결정이 존재하기 때문에 이 폴더들이 존재한다. 다른 바인딩은 이

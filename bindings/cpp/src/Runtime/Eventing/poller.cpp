@@ -636,6 +636,9 @@ void poller_t::add (timer_t &timer_, std::uintptr_t slot_)
 
 void poller_t::add (socket_monitor_t &monitor_, poll_event_flag_t events_, std::uintptr_t slot_)
 {
+    if ((static_cast<short> (events_)
+         & ~static_cast<short> (poll_event_flag_t::pollin)) != 0)
+        throw config_error_t (config_result_t::invalid_argument, EINVAL);
     _impl->add_socket (zlink::detail::native_handle (monitor_), events_, slot_, true);
 }
 
@@ -658,6 +661,9 @@ void poller_t::modify_fd (int fd_, poll_event_flag_t events_)
 
 void poller_t::modify (socket_monitor_t &monitor_, poll_event_flag_t events_)
 {
+    if ((static_cast<short> (events_)
+         & ~static_cast<short> (poll_event_flag_t::pollin)) != 0)
+        throw config_error_t (config_result_t::invalid_argument, EINVAL);
     _impl->modify_socket (zlink::detail::native_handle (monitor_), events_);
 }
 

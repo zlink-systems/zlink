@@ -27,6 +27,13 @@ internal static class EnumValidation
                 "Unknown socket monitor event flag.");
     }
 
+    internal static void EnsureMonitorPollEvents(PollEventFlags events)
+    {
+        if ((events & ~PollEventFlags.PollIn) != 0)
+            throw new ZlinkConfigException(ConfigResult.InvalidArgument,
+                (int)ErrorCode.EInval);
+    }
+
     internal static void EnsurePollEvents(PollEventFlags events, string paramName)
     {
         if (((int)events & ~(int)ValidPollEvents) != 0)
