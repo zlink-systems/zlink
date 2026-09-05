@@ -300,10 +300,7 @@ export class ZLinkClientServerLocationRuntime {
         {
           onTransportReady: (routingId, endpoint) => {
             void this.handleTransportReady(connectionId, routingId, endpoint)
-              .catch(error => {
-                this.locationRuntime.reportDiscoveryFailure(error);
-                void this.closeConnection(connectionId);
-              });
+              .catch(error => this.locationRuntime.reportDiscoveryFailure(error));
           },
           onTerminated: () => {
             void this.handleConnectionTerminated(connectionId);
@@ -365,6 +362,15 @@ export class ZLinkClientServerLocationRuntime {
         if (this.connections.get(connectionId) === current.target) current.target.state = 'ready';
       });
       await this.removeSupersededConnections(current.target);
+    } catch (error) {
+      const isCurrent = await this.lane.run(() =>
+        this.connections.get(connectionId) === current.target);
+      if (!isCurrent) return;
+      if (error instanceof ZLinkConfigurationException) {
+        current.target.dealer = undefined;
+        await this.sockets.closeClientServerConnection(connectionId);
+      }
+      throw error;
     } finally {
       await this.lane.run(() => {
         if (this.connections.get(connectionId) === current.target) current.target.handshakeInFlight = false;
@@ -388,9 +394,16 @@ export class ZLinkClientServerLocationRuntime {
   }
 
   private async handleConnectionTerminated(connectionId: string): Promise<void> {
-    const removed = await this.lane.run(() => this.connections.delete(connectionId));
-    if (!removed) return;
-    await this.sockets.disconnectClientServerConnection(connectionId);
+    await this.lane.run(() => {
+      const current = this.connections.get(connectionId);
+      if (current === undefined) return;
+      // Replacing the logical attempt fences its late reply while Core retains the socket intent.
+      this.connections.set(connectionId, {
+        ...current,
+        state: 'pending',
+        handshakeInFlight: false
+      });
+    });
   }
 
   private async closeConnection(connectionId: string): Promise<void> {

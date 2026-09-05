@@ -31,14 +31,32 @@ if (( $# > 0 )); then
   SAMPLES=("$@")
 fi
 
+RUNNER_STATE_DIR="$(mktemp -d)"
+trap 'rm -rf "${RUNNER_STATE_DIR}"' EXIT
+
 for sample in "${SAMPLES[@]}"; do
   case "${sample}" in
     TicTacToe|Bingo|SupportChat|ShoppingMall|DeliveryDispatch|GameQuest|ZoneWorld)
-      bash "${SCRIPT_DIR}/${sample}/run_sample.sh"
       ;;
     *)
       echo "Unknown .NET sample '${sample}'." >&2
       exit 2
       ;;
   esac
+  output_file="${RUNNER_STATE_DIR}/${sample}.output"
+  teardown_status_file="${RUNNER_STATE_DIR}/${sample}.teardown"
+  : >"${teardown_status_file}"
+  runner_status=0
+  ZLINK_SAMPLE_TEARDOWN_STATUS_FILE="${teardown_status_file}" \
+    bash "${SCRIPT_DIR}/${sample}/run_sample.sh" >"${output_file}" 2>&1 || runner_status=$?
+  if [[ -s "${teardown_status_file}" ]]; then
+    while IFS=$'\t' read -r pid role; do
+      echo "Sample role ${role} (pid ${pid}) exited during cleanup with status 137 (SIGKILL)." >&2
+    done <"${teardown_status_file}"
+    exit 137
+  fi
+  cat "${output_file}"
+  if (( runner_status != 0 )); then
+    exit "${runner_status}"
+  fi
 done

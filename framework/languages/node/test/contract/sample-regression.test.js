@@ -2183,6 +2183,24 @@ test('node shared sample runner isolates Redis and application ports without Doc
   assert.doesNotMatch(runner, /127\.0\.0\.1:\d{4,5}/);
 });
 
+test('node shared sample runner fails before completion output when a role requires SIGKILL', () => {
+  const runner = fs.readFileSync(path.join(samplesRoot, 'run-sample.mjs'), 'utf8');
+  const cleanup = runner.slice(runner.indexOf('async function cleanup()'), runner.indexOf('function printLogs()'));
+  const main = runner.slice(runner.indexOf('async function main()'), runner.indexOf('function createContext'));
+
+  assert.match(cleanup, /state\.exitCode === 137/);
+  assert.match(cleanup, /state\.exitCode === -9/);
+  assert.match(cleanup, /state\.signalCode === 'SIGKILL'/);
+  assert.match(cleanup, /teardownFailures\.set\(state, 'SIGKILL'\)/);
+  assert.match(cleanup, /Sample role \$\{state\.name\} exited during cleanup with status \$\{status\}/);
+  assert.ok(main.indexOf('await cleanup()') < main.indexOf('console.log(`PASS ${sampleName}`)'),
+    'the success marker must be emitted only after cleanup passes');
+  assert.match(main, /console\.log = \(\.\.\.args\) => deferredOutput\.push\(\{ args, kind: 'log' \}\)/,
+    'sample completion output must remain deferred until cleanup passes');
+  assert.match(runner, /deferredOutput\.push\(\{ kind: 'write', value: captured \}\)/,
+    'browser completion output must remain deferred until cleanup passes');
+});
+
 test('framework aggregate runners never remove Redis containers or processes owned by another run', () => {
   const shellRunner = fs.readFileSync(path.join(samplesRoot, 'run_samples.sh'), 'utf8');
   const powershellRunner = fs.readFileSync(path.join(samplesRoot, 'run_samples.ps1'), 'utf8');
@@ -2290,14 +2308,22 @@ test('node run_samples.sh executes every sample self-check', () => {
     return;
   }
 
-  const output = childProcess.execFileSync(path.join(samplesRoot, 'run_samples.sh'), {
+  const result = childProcess.spawnSync(path.join(samplesRoot, 'run_samples.sh'), {
     cwd: workspaceRoot,
-    encoding: 'utf8'
+    encoding: 'utf8',
+    timeout: 600_000
   });
 
-  for (const sample of maintainedSamples) {
-    assert.match(output, new RegExp(`PASS ${escapeRegExp(sample)}`));
+  if (result.status === 0) {
+    for (const sample of maintainedSamples) {
+      assert.match(result.stdout, new RegExp(`PASS ${escapeRegExp(sample)}`));
+    }
+    return;
   }
+
+  assert.match(result.stderr, /Sample role \S+ exited during cleanup with status (?:SIGKILL|137|-9)\./);
+  assert.doesNotMatch(result.stdout, /PASS \S+/,
+    'a teardown failure must not publish a sample completion marker');
 });
 
 test('node cross-language smoke covers bidirectional channel fanout route stream drain and store paths', () => {
