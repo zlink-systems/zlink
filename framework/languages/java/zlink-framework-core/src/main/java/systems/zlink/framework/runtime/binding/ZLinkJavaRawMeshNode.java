@@ -6427,18 +6427,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             ZLinkServiceAdmissionGuard.ConnectionDirection direction =
                 command == ServiceWireConstants.COMMAND_HELLO
                     ? ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND
-                    : command == ServiceWireConstants.COMMAND_ADMIT
-                        ? ZLinkServiceAdmissionGuard
-                            .ConnectionDirection.OUTBOUND
-                        : topology.peer(inbound.source())
-                            .map(peer -> peer.connection().direction())
-                            .orElse(
-                                ZLinkServiceAdmissionGuard
-                                    .ConnectionDirection.OUTBOUND);
+                    : ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND;
             String connectionId = connectionIdForAdmission(
-                inbound.source(), direction);
-            String previousConnectionId =
-                connectionIds.get(inbound.source());
+                inbound.source(), command, direction);
             ZLinkServiceTopologyRegistry.Connection candidate =
                 new ZLinkServiceTopologyRegistry.Connection(
                     connectionId,
@@ -6488,8 +6479,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 return;
             }
             rejectedPeers.remove(inbound.source());
-            if (command != ServiceWireConstants.COMMAND_UPDATE
-                || !connectionId.equals(previousConnectionId)) {
+            if (command != ServiceWireConstants.COMMAND_UPDATE) {
                 admissionControlReadyConnections.remove(inbound.source());
             }
             connectionIds.put(inbound.source(), connectionId);
@@ -7054,19 +7044,29 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
 
     private String connectionIdForAdmission(
         RoutingId peer,
+        int command,
         ZLinkServiceAdmissionGuard.ConnectionDirection direction) {
-        ConnectionCandidate candidate =
-            new ConnectionCandidate(peer, direction);
-        var pending = pendingConnectionIds.get(candidate);
-        String connectionId = pending == null ? null : pending.poll();
-        if (pending != null && pending.isEmpty()) {
-            pendingConnectionIds.remove(candidate, pending);
-        }
-        if (connectionId != null) {
-            return connectionId;
+        // Only the handshake (HELLO/ADMIT, mesh-node §7.1) binds a pending
+        // physical candidate. An UPDATE revises the descriptor of the
+        // connection that is already admitted (§7.2: a weight change does not
+        // recreate the connection); bound to a pending candidate it would
+        // install a connection no ADMIT ever completes, and the peer would
+        // stay CONNECTING while its liveness on that candidate turns ready.
+        if (command != ServiceWireConstants.COMMAND_UPDATE) {
+            ConnectionCandidate candidate =
+                new ConnectionCandidate(peer, direction);
+            var pending = pendingConnectionIds.get(candidate);
+            String connectionId = pending == null ? null : pending.poll();
+            if (pending != null && pending.isEmpty()) {
+                pendingConnectionIds.remove(candidate, pending);
+            }
+            if (connectionId != null) {
+                return connectionId;
+            }
         }
         // Core 0.16 owns the selected physical route. Once admitted, HELLO,
-        // ADMIT, and retransmissions all reuse that route's logical identity.
+        // ADMIT, UPDATE and retransmissions all reuse that route's logical
+        // identity.
         return topology.peer(peer)
             .map(ZLinkServiceTopologyRegistry.Peer::connectionId)
             .orElseGet(() -> UUID.randomUUID().toString());
