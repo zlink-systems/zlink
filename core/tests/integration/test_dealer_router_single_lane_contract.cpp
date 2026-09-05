@@ -3661,6 +3661,9 @@ void test_sl_monitor_reply_token_reconnect_uses_current_application ()
     const received_part_t final = receive_part (requester);
     TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, final.part_flag);
     TEST_ASSERT_EQUAL_STRING (retired_final, final.payload.c_str ());
+    zlink_completion_t retired_completion = receive_completion (requester);
+    assert_request_completion (&retired_completion, requester_id,
+                               ZLINK_REQUEST_NOT_CONNECTED);
     assert_no_completion (requester, 100);
 
     const zlink_completion_id_t current_requester_id =

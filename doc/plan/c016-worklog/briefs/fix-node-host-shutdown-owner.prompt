@@ -1,0 +1,45 @@
+# Job (fix, model astra): node host `shutdown()` does not finish — five Framework-owned defects found by the teardown job (BLOCKERS of `fix-node-teardown-sigkill-summary.md`) — fix at the owner, make the two red host contract tests green, all 7 node samples must exit cleanly
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·원칙이 단순해지는 근본 수정·중복 금지)
+and §4, `framework/AGENTS.md`, then `doc/plan/c016-worklog/fix-node-teardown-sigkill-summary.md` (whole file, especially §BLOCKERS — that
+table IS your approved diagnosis) and the spec it cites: `framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.{ko,en}.md`
+§14 (HostShutdown: callbacks → local scope cleanup → Stopped only after all owned resources are released; Actor membership does not
+gate shutdown) and `03-spot-actor/03-mesh-node.ko.md` (which channels a node publishes Draining for). Never modify `core/**`, `bindings/**`,
+any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages, `framework/languages/shared_sample/**`; never widen a
+grace/deadline or add a timer/retry/second poller as the fix; do not commit. The working tree already holds the previous job's
+uncommitted node changes (Nest → `shutdown()`, STREAM control async terminal, runner reaping) plus its new contract tests — KEEP THEM,
+build on them. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200
+/tmp/zlink-node-gate.lock`; do not reinstall packages (installed Core sha256 98f34996…). Cross-language reference for every fix: java
+`ZLinkFrameworkRuntime.closeAllAsync()` / Instance `close(HOST_SHUTDOWN)` and the dotnet `ZLinkFrameworkDrainExecutor` — node must end
+with the same rule set, not a node-specific one.
+
+## The five defects (fix each at its single owner; state rule count before/after)
+1. `runtime/host/index.ts:1888-1893` — after `publishHostDraining()` succeeds the shutdown path unconditionally waits a polling interval
+   (default 1000 ms) → with the runner's 500 ms grace, roles are SIGKILLed before Spot teardown starts. Remove the wait that has no
+   contract basis (§14 orders callbacks → cleanup; publication is fire-and-observe). Do NOT touch the runner grace.
+2. `spots/index.ts:1102-1107` waits for the Spot collection to empty after `requestDrainClose()`, but `spot-activation-state.ts:376-378,419-421`
+   refuses to start close while joined Actors remain (`canClose=false`) → SupportChat/ZoneWorld hang. HostShutdown must close scopes
+   regardless of membership (§14) — implement in the Spot lifecycle owner; one close rule, no shutdown-specific bypass flag layered on top.
+3. `spot-activation.ts:738-743` runs close as a detached task and `spots/index.ts:1107` observes only collection removal → a throwing
+   `onClosing()` yields `Stopped` instead of `ForceStopped/TeardownFailed`. Route the close terminal (incl. error) to the shared
+   shutdown owner so the outcome is observed once, at one place.
+4. `host/index.ts:1918-1920` force-stop waits for the same drain with no bound; `spot-activation.ts:979-982` does not pass the host's
+   remaining deadline to `invokeSpotClosing()` so `spot-closing.ts:6` 30 000 ms applies. Propagate the single host deadline (already
+   owned by `shutdown({deadlineMs})`) — no new budget.
+5. `host/index.ts:1781-1785` calls `setChannelWeight()` for client-only memberships; startup registers only server channels
+   (`spot-node-runtime-manager.ts:360-364`) so `node-raw-mesh-backend.ts:457` rejects them and force-stop is entered (ZoneWorld
+   `zoneworld.report`/`zoneworld.zones`). Publish Draining only for the memberships the local server owner actually registered — reuse that
+   owner's list, do not register client memberships as fake servers.
+
+## Verify (all required)
+- `npm run build`, `npm run typecheck`, lint on touched files.
+- `test/contract/nestjs-shutdown.test.js` 4/4 (the callback-failure and deadline cases must now pass without changing the assertions),
+  `stream-heartbeat-shutdown`, `sample-runner-teardown`, and every contract test of the touched subsystems (spots, spot-activation, host).
+- All 7 node samples individually: exit 0 and no role SIGKILLed at cleanup (TicTacToe, SupportChat, ZoneWorld were the reds), then
+  `bash samples/run_samples.sh` once (aggregate exit 0), then `npm test` once (0 fail).
+- If a sample still fails for a reason outside these five, root-cause it the same way (owner + spec clause) and fix it; do not leave a
+  "known red".
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-host-shutdown-owner-summary.md`: per-defect diff (file:line) + owner layer + spec clause + cross-language
+parity + class (the four lines), rule count before/after per owner, the results table (samples, aggregate, npm test), BLOCKERS.

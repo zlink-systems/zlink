@@ -47,7 +47,7 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
     void read_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void write_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void hiccuped (zlink::pipe_t *pipe_) ZLINK_FINAL;
-    void pipe_peer_terminated (zlink::pipe_t *pipe_) ZLINK_FINAL;
+    void pipe_peer_terminated (zlink::pipe_t *pipe_, bool drain_complete_) ZLINK_FINAL;
     void pipe_terminated (zlink::pipe_t *pipe_) ZLINK_FINAL;
 
     //  Delivers a message. Returns 0 if successful; -1 otherwise.

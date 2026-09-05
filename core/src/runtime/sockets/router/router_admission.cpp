@@ -5,7 +5,6 @@
 #include "sockets/router/router.hpp"
 #include "sockets/router/router_debug.hpp"
 
-#include "api/socket/socket_request_reply_internal.hpp"
 #include "core/c_api_copy_internal.hpp"
 #include "core/pipe.hpp"
 #include "protocol/wire.hpp"
@@ -360,8 +359,9 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
           existing_outpipe->locally_initiated != locally_initiated_;
         if (!_handover && !same_local_endpoint_reconnect
             && !(paired_application && reciprocal_duplicate)) {
-            // A rejected identity is terminal for this pipe, not an identity
-            // frame that may arrive later. Retire it outside the route locks.
+            // An anonymous duplicate can never carry routed traffic. Close
+            // it outside the route/transport locks so its connector observes
+            // termination and retries through its existing connect intent.
             if (actions_ && pipe_->retain_lifetime_ref ())
                 actions_->terminate_pipe = pipe_;
             return false;
@@ -405,11 +405,8 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
         const bool old_locally_initiated = existing_outpipe->locally_initiated;
         const uint32_t old_peer_weight = existing_outpipe->weight;
         old_pipe->invalidate_router_route_binding ();
-        if (actions_) {
-            actions_->superseded_pair_id = old_pipe->get_transport_pair_id ();
-            actions_->superseded_pair_generation =
-              old_pipe->get_transport_pair_generation ();
-        }
+        if (actions_ && old_pipe->retain_lifetime_ref ())
+            actions_->superseded_pipe = old_pipe;
         erase_out_pipe (old_pipe);
         old_pipe->set_router_socket_routing_id (new_routing_id);
         add_out_pipe (ZLINK_MOVE (new_routing_id), old_pipe, old_locally_initiated);
@@ -453,15 +450,12 @@ void router_t::finish_route_adoption (pipe_t *adopted_pipe_,
     if (!actions_)
         return;
     const bool route_published = actions_->cache_completion;
-    if (actions_->superseded_pair_id != 0) {
-        // A standby retains its lanes, but requests already admitted there
-        // cannot follow the replacement route. Complete outside the route
-        // and transport locks through the pending record's terminal owner.
-        socket_reqrep_internal::fail_pending_requests_for_transport_pair (
-          request_reply_state (), actions_->superseded_pair_id,
-          actions_->superseded_pair_generation);
-        actions_->superseded_pair_id = 0;
-        actions_->superseded_pair_generation = 0;
+    if (actions_->superseded_pipe) {
+        // A standby keeps its physical lanes, but supersession ends this
+        // socket's request use of the pair just like a physical detach.
+        pipe_peer_terminated (actions_->superseded_pipe);
+        actions_->superseded_pipe->release_lifetime_ref ();
+        actions_->superseded_pipe = NULL;
     }
     if (actions_->terminate_pipe) {
         actions_->terminate_pipe->terminate (true);

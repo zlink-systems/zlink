@@ -450,9 +450,9 @@ void zlink::session_base_t::hiccuped (pipe_t *)
     zlink_assert (false);
 }
 
-void zlink::session_base_t::pipe_peer_terminated (pipe_t *pipe_)
+void zlink::session_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_complete_)
 {
-    if (pipe_ != _pipe || _pending || !_engine)
+    if (!drain_complete_ || pipe_ != _pipe || _pending || !_engine)
         return;
 
     _engine->terminate ();

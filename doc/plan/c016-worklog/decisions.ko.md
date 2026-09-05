@@ -1231,3 +1231,11 @@ Core 버그 수정(B): ① ws/tls connecter가 event마다 endpoint pair를 생�
 spec gap → 결정: REJECT로 닫힌 pipe에 admit된 REQUEST를 §4대로 `NOT_CONNECTED`로 끝내려면 ROUTER→connector wire 거부 사유(ZMP ERROR code 신설 + close 순서 계약)가 필요(현재 ZMP는 HELLO/READY/ERROR뿐, 거부 사유 없음). 사용자 원칙(단순·중복 없음)에 따라 프로토콜을 늘리지 않고 **§4의 REJECT 특례 문장을 제거**: 거부된 pipe의 종료는 다른 physical 단절과 구분되지 않으므로 그 요청은 timeout budget을 유지하다 자기 timeout으로 종결(재연결 흐름은 HANDOVER 권장). spec ko/en 수정, 테스트 REJECT 셀 기대치 = reply/timeout/not_connected 합 20(3회 green).
 gate: worktree identity 5/5, integration 121/121, 전체 171/171; main dev 전체 171/171, boundary 3회. Release+LTO hotpath_gate는 측정 체인 뒤 1회. 커밋 `349040d3e6`.
 **A용 한 줄: Core 수정 커밋 `349040d3e6` + §4 REJECT 규칙 단순화 — framework ClientServer가 REJECT ROUTER에서 NOT_CONNECTED를 기대하는 코드가 있으면 timeout/HANDOVER 기준으로 정리(D-088 해소).**
+
+## D-091 (2026-09-05 14:10, 머신 A) 결정 — D-B112의 §4 REJECT 문구("자기 timeout으로 종결")는 D-090으로 대체; Core 수정 3건은 그대로 수용
+
+- 충돌: B의 `349040d3e6`(D-B112)는 §4를 "거부된 pipe의 request는 wire에 거부 사유가 없으므로 다른 physical 단절과 같이 timeout budget을 유지하다 자기 timeout으로 종결"로 되돌렸고, A의 D-090(`40137f1bd0`)은 "submit 시점 pair 종료 → 원인 불문 즉시 `REQUEST_NOT_CONNECTED`" 단일 규칙을 §6 표에 넣었다. 두 문장은 양립 불가.
+- 판단: D-B112의 전제(NOT_CONNECTED로 종결하려면 wire 거부 사유가 필요)는 성립하지 않는다. D-090은 request 소유자(DEALER 쪽 `pipe_peer_terminated()`)가 **자기 pair의 종료**만으로 종결하므로 프로토콜 신설이 없다. 규칙 수는 D-B112 방식이 2(physical 단절·REJECT = timeout 유지 / handover 물러남 = NOT_CONNECTED)이고 D-090이 1이다. "원칙이 단순해지는 쪽"인 D-090 유지.
+- B가 만든 `test_socket_disconnect_boundary`의 REJECT 단언은 `reply_ok + timed_out + not_connected == 20`이라 D-090과 양립한다. D-B112의 Core 수정(ws/tls connect 시도별 endpoint identity 1개, inproc command-owner 단일 획득, REJECT 즉시 close)은 그대로 병합했고 REJECT close 구현은 하나만 남겼다(`router_admission.cpp` 충돌은 주석만).
+- 스펙 반영(A 직접): §4 REJECT 문장 ko/en, `zlink_disconnect` 단락의 종결 요약 ko/en을 §6 단일 규칙과 일치시켰다. 병합 후 Core 전체 gate를 worktree b에서 재검증한다.
+- **B용 한 줄: §4 REJECT는 D-090(pair 종료 → 즉시 NOT_CONNECTED, 규칙 1개)으로 확정. "자기 timeout으로 종결" 문구를 다시 넣지 말 것. framework가 REJECT ROUTER에서 NOT_CONNECTED를 기대하는 코드는 그대로 유효.**

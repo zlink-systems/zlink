@@ -159,10 +159,10 @@ routing id가 들어왔을 때의 정책을 정한다. 값은 `int`로 설정하
 `ZLINK_RID_DUPLICATE_REJECT`는 기존 pipe를 유지하고 새 중복 pipe를 등록하지
 않으며, 등록하지 않은 중복 pipe는 즉시 닫는다. 따라서 connector는 그 pipe의 종료를
 monitor로 관찰하고 connect intent에 따라 다시 연결하며, 기존 pipe가 종료된 뒤의 시도가
-admission된다. 거부된 pipe의 종료는 connector에게 다른 physical 단절과 구분되지 않으므로(wire에 거부
-사유 없음), 그 pipe에 이미 admit된 request는 다른 일시적 단절과 같이 payload replay 없이 기존 correlation·
-timeout budget을 유지하다가 자기 timeout으로 종결된다. 재연결이 잦은 흐름은 `ZLINK_RID_DUPLICATE_HANDOVER`를
-권장한다. Connector가 관찰하는 READY event는 transport 연결
+admission된다. wire에 거부 사유는 없으며 connector는 자기 pair의 종료만 관찰한다. 거부된 pipe에
+이미 admit된 request는 그 pair가 종료되는 즉시 §6 completion 표의 단일 규칙(submit 시점 pair 종료, 원인
+불문)에 따라 `ZLINK_REQUEST_NOT_CONNECTED`(errno `EHOSTUNREACH`)로 정확히 한 번 종결되고 caller가 다시
+보낸다. 재연결이 잦은 흐름은 `ZLINK_RID_DUPLICATE_HANDOVER`를 권장한다. Connector가 관찰하는 READY event는 transport 연결
 성립을 뜻하며 peer ROUTER의 routing id admission을 뜻하지 않는다. `ZLINK_RID_DUPLICATE_HANDOVER`에서는 같은 방향에서 다시 연결한 pipe가
 기존 pipe를 인수한다. 서로 반대 방향의 pipe가 충돌하면 두 peer의 routing id를
 비교해 양쪽이 같은 방향 하나를 선택한다. 그 선택으로 물러나는 방향에서 이미 admit된
@@ -871,8 +871,8 @@ ZLINK_EXPORT zlink_connect_result_t zlink_disconnect (void *s_, const char *addr
 `zlink_connect(endpoint)`가 시작하는 새 연결 시도는 겹칠 수 있으며, 새 시도의 진행은 monitor event 소비나 이전
 연결의 terminal edge 관찰을 조건으로 하지 않는다(05-polling §3 command progress). 원격 ROUTER에 남아 있는 같은
 RID의 등록은 §4 RID duplicate policy(REJECT/HANDOVER)로 처리한다. 제거된 연결에 admit되어 있던 REQUEST의 종결은
-completion 계약을 따른다: 명시적 endpoint·logical RID 제거는 `NOT_FOUND`, 반대 방향 handover로 물러나는 pair는
-`NOT_CONNECTED`, 일시적 physical 단절은 payload replay 없이 기존 correlation·timeout budget 유지.
+completion 계약을 따른다: 명시적 endpoint·logical RID 제거는 `NOT_FOUND`, 그 외 submit 시점 pair의 종료(일시적
+physical 단절, handover로 물러남, REJECT로 닫힘)는 원인 불문 `NOT_CONNECTED`(§6 completion 표).
 
 **반환값:** 성공 시 `ZLINK_CONNECT_OK`, 실패 시 `zlink_connect_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 

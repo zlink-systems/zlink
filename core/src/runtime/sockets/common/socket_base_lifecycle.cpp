@@ -1176,6 +1176,18 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
             return false;
         }
 
+        // An empty mailbox is not idle while a pipe still owes a termination
+        // acknowledgement. Its peer can enqueue that acknowledgement only
+        // after this executor yields; retain the command owner until then.
+        {
+            scoped_lock_t pipes_lock (monitor_runtime ().sync);
+            for (size_t i = 0;
+                 i != endpoint_runtime ().attached_pipe_count (); ++i) {
+                if (!endpoint_runtime ().attached_pipe (i)->is_lifecycle_active ())
+                    return false;
+            }
+        }
+
 #ifdef ZLINK_BUILD_TESTS
         invoke_async_owner_transition_test_hook (
           async_owner_test_idle_stop_gate_held);
