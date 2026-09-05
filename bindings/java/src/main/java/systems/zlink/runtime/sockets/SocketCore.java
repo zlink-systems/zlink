@@ -105,6 +105,18 @@ final class SocketCore {
 
     void disconnectRid(RoutingId peerRid) {
         Objects.requireNonNull(peerRid, "peerRid");
+        if (completionOwner != null) {
+            completionOwner.withSendSequenceLock(() -> {
+                disconnectRidNative(peerRid);
+                completionOwner.markTargetRemoved(peerRid);
+                return null;
+            });
+            return;
+        }
+        disconnectRidNative(peerRid);
+    }
+
+    private void disconnectRidNative(RoutingId peerRid) {
         try (Arena arena = Arena.ofConfined()) {
             byte[] value = InternalAccess.routingIdTrustedBytes(peerRid);
             MemorySegment nativeRid = arena.allocate(NativeLayouts.ROUTING_ID_LAYOUT);

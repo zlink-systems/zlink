@@ -31,7 +31,6 @@ import systems.zlink.contracts.sockets.PairSocket;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SubmitResult;
-import systems.zlink.runtime.nativeapi.NativeErrno;
 
 class DontWaitBackpressureContractTest {
     private static final long HWM_BYTES = 512L;
@@ -208,7 +207,6 @@ class DontWaitBackpressureContractTest {
                 ZlinkSubmitException failure = (ZlinkSubmitException)
                     terminal.getCause();
                 assertEquals(SubmitResult.NOT_FOUND, failure.getResult());
-                assertEquals(NativeErrno.ENOENT, failure.getNativeErrno());
             }
         }
     }
@@ -263,8 +261,6 @@ class DontWaitBackpressureContractTest {
                 ZlinkSubmitException failure = (ZlinkSubmitException)
                     terminal.getCause();
                 assertEquals(SubmitResult.TERMINATED, failure.getResult());
-                assertEquals(NativeErrno.ESHUTDOWN,
-                    failure.getNativeErrno());
             }
         }
     }

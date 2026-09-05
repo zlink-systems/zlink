@@ -1126,3 +1126,11 @@ handover 시 종료되지 않고 active duplicate standby(`:364-379`, `:398-416`
 `07-router.ko.md:153-155` §5(standby 보관·재선택)가 이를 명시하므로 계약대로. (b) active direction 양쪽 동일. (c) 패배 방향에 admit된 REQUEST는 자기 timeout으로 정확히 1회 `REQUEST_TIMED_OUT`(pair/generation fence `socket_request_reply_submit_api.cpp:121-180`), 재전송은 승자 방향 성공.
 (d) standby가 남아 있는 상태에서 제출한 승자 방향 첫 REQUEST 정상 완료. gate: 5/5 반복, tcp/100 ms 20/20, integration 92/92(worktree), main dev 트리 3/3.
 **A용 한 줄: spec대로 동작 확인 (`test_router_reciprocal_handover_lanes`) — dotnet Mesh의 settlement·re-pin 코드는 Core survivor를 그대로 쓰면 되며, "패배 lane 종료 대기"는 계약이 아니므로 삭제 가능.**
+
+## D-B97 (2026-09-05 09:50, 머신 B) 작업 6 확정 — Java async submit은 errno 없이 4 case를 typed result로 구분(spec대로); tcp disconnectRid/WRITABLE race 1건 binding 수정
+공개 `ZlinkSubmitException#getResult()`·`SubmitResult`만으로 exact-route loss `NOT_CONNECTED`, admission 거절 `NOT_ADMITTED`(ROUTER→DEALER typed request), capacity `BACKPRESSURED`+wait token→WRITABLE 재제출 1회, 명시 제거 `NOT_FOUND`, close `TERMINATED`를
+구분(inproc/tcp, `AsyncSubmitTypedResultContractTest` 8 case × 5회 40/40). 새 public 타입 없음(spec `bindings/doc/spec/README.ko.md:4210-4232`, `core/doc/spec/core/03-errors.ko.md:334-352`, `socket/README.ko.md:982-989, 1018-1022`).
+binding 버그 → 수정: `disconnectRid()`가 completion owner의 send/drain 직렬화 밖에서 실행돼 이미 큐에 있던 stale WRITABLE wake로 재제출하면 `NOT_CONNECTED`로 끝나던 race — `SocketCore.disconnectRid`를 같은 lock으로 직렬화하고 pending에 target 제거 표식을 남겨
+재제출/TERMINAL 모두 `NOT_FOUND`로 종결(`CompletionOwner.markTargetRemoved`). 기존 `DontWaitBackpressureContractTest`의 raw errno assertion 제거. gate: Java 129 tests(3 skipped) green, samples 7/7.
+교차 parity 후보(다른 7 binding에 같은 race가 있는지 확인 항목으로 추가): "명시적 disconnectRid 뒤 stale WRITABLE 재제출 → NOT_FOUND".
+**A용 한 줄: spec대로 동작 확인(`AsyncSubmitTypedResultContractTest`) + binding race 수정 커밋(아래 해시) — java framework의 errno 재분류 표·`NOT_ADMITTED` 전체 허용은 삭제 가능.**
