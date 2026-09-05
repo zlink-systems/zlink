@@ -19,31 +19,7 @@ WAIT_ATTEMPTS=300
 
 cleanup() {
   find "${RUN_DIR}" -type f -name "*.json" -delete 2>/dev/null || true
-  for ((i=${#PIDS[@]}-1; i>=0; i--)); do
-    local pid="${PIDS[$i]}"
-    if kill -0 "${pid}" 2>/dev/null; then
-      kill -INT "${pid}" 2>/dev/null || true
-    fi
-  done
-  for _ in $(seq 1 20); do
-    local any_alive=0
-    for pid in "${PIDS[@]}"; do
-      if kill -0 "${pid}" 2>/dev/null; then
-        any_alive=1
-        break
-      fi
-    done
-    if [[ "${any_alive}" == "0" ]]; then
-      break
-    fi
-    sleep 0.1
-  done
-  for pid in "${PIDS[@]}"; do
-    if kill -0 "${pid}" 2>/dev/null; then
-      kill -9 "${pid}" 2>/dev/null || true
-    fi
-    wait "${pid}" 2>/dev/null || true
-  done
+  zlink_sample_stop_processes "${PIDS[@]}"
   if [[ -n "${REDIS_CONTAINER}" ]]; then
     zlink_redis_remove_by_id "${REDIS_CONTAINER}" || true
   fi
@@ -343,9 +319,19 @@ CLOSED_MISSION="$(find_closed_mission)"
 touch "${CLOSE_REPLAY_RELEASE_FILE}"
 wait_log_contains "${LOG_DIR}/client.log" "gamequest-client owner-loss-armed player=player-alice"
 OWNER_MISSION="$(find_owner_mission)"
-kill -9 "${SERVER_PIDS["${OWNER_MISSION}"]}"
+OWNER_PID="${SERVER_PIDS["${OWNER_MISSION}"]}"
+kill -9 "${OWNER_PID}"
+OWNER_STATUS=0
+wait "${OWNER_PID}" || OWNER_STATUS=$?
+if [[ "${OWNER_STATUS}" != "137" ]]; then
+  echo "owner Mission process exited with unexpected status ${OWNER_STATUS}" >&2
+  exit 1
+fi
+remove_owned_pid "${OWNER_PID}"
+unset 'SERVER_PIDS[${OWNER_MISSION}]'
 touch "${OWNER_LOSS_RELEASE_FILE}"
 wait "${CLIENT_PID}"
+remove_owned_pid "${CLIENT_PID}"
 
 # Section 10.1: counted across both node logs against a lower bound. An actor send handler runs on
 # the node where the actor lives, not where the stream arrived, so per-node counts are unsatisfiable.

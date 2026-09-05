@@ -36,7 +36,7 @@ kill() {
   local in_cleanup=0
   if zlink_sample_in_cleanup; then in_cleanup=1; fi
   if [[ "${pid}" =~ ^[0-9]+$ && -n "${ZLINK_SAMPLE_TEARDOWN_STATUS_FILE:-}" ]]; then
-    if [[ "${signal}" == "-INT" || "${signal}" == "-SIGINT" || "${signal}" == "-2" ]]; then
+    if [[ "${signal}" == "-TERM" || "${signal}" == "-SIGTERM" || "${signal}" == "-15" ]]; then
       local role=""
       local status=0
       role="$(zlink_sample_role_name_for_pid "${pid}")"
@@ -78,6 +78,49 @@ wait() {
     ZLINK_SAMPLE_REPORTED_SIGKILLS["${pid}"]=1
   fi
   return "${status}"
+}
+
+zlink_sample_stop_processes() {
+  local pids=("$@")
+  local i pid any_alive
+  for ((i=${#pids[@]}-1; i>=0; i--)); do
+    pid="${pids[$i]}"
+    if kill -0 "${pid}" 2>/dev/null; then
+      # Bash background jobs inherit ignored SIGINT; ConsoleLifetime handles SIGTERM.
+      kill -TERM "${pid}" 2>/dev/null || true
+    fi
+  done
+  # 05-host-relocation-flow §17: Shutdown's default deadline is 30 seconds.
+  for ((i=0; i<300; i++)); do
+    any_alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "${pid}" 2>/dev/null; then
+        any_alive=1
+        break
+      fi
+    done
+    [[ "${any_alive}" == "0" ]] && break
+    sleep 0.1
+  done
+  for ((i=${#pids[@]}-1; i>=0; i--)); do
+    pid="${pids[$i]}"
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -KILL "${pid}" 2>/dev/null || true
+    fi
+  done
+  for pid in "${pids[@]}"; do
+    wait "${pid}" 2>/dev/null || true
+  done
+}
+
+remove_owned_pid() {
+  local completed_pid="$1"
+  local active=()
+  local pid
+  for pid in "${PIDS[@]:-}"; do
+    [[ "$pid" == "$completed_pid" ]] || active+=("$pid")
+  done
+  PIDS=("${active[@]}")
 }
 
 zlink_sample_copy_evidence() {

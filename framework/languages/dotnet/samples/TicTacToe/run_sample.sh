@@ -18,34 +18,7 @@ TICTACTOE_REDIS_KEY_PREFIX="tictactoe:dotnet:${RUN_ID}:"
 
 cleanup() {
   find "${RUN_DIR}" -type f -name "*.json" -delete 2>/dev/null || true
-  for ((i=${#PIDS[@]}-1; i>=0; i--)); do
-    local pid="${PIDS[$i]}"
-    if kill -0 "${pid}" 2>/dev/null; then
-      kill -INT "${pid}" 2>/dev/null || true
-    fi
-  done
-  for _ in $(seq 1 20); do
-    local any_alive=0
-    for pid in "${PIDS[@]}"; do
-      if kill -0 "${pid}" 2>/dev/null; then
-        any_alive=1
-        break
-      fi
-    done
-    if [[ "${any_alive}" == "0" ]]; then
-      break
-    fi
-    sleep 0.1
-  done
-  for ((i=${#PIDS[@]}-1; i>=0; i--)); do
-    local pid="${PIDS[$i]}"
-    if kill -0 "${pid}" 2>/dev/null; then
-      kill -9 "${pid}" 2>/dev/null || true
-    fi
-  done
-  for pid in "${PIDS[@]}"; do
-    wait "${pid}" 2>/dev/null || true
-  done
+  zlink_sample_stop_processes "${PIDS[@]}"
   if [[ -n "${REDIS_CONTAINER_ID}" ]]; then
     zlink_redis_remove_by_id "${REDIS_CONTAINER_ID}" || true
   fi

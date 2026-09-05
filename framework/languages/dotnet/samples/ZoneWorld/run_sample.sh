@@ -81,15 +81,7 @@ REDIS_CONTAINER=""
 
 cleanup() {
   find "${RUN_DIR}" -type f -name "*.json" -delete 2>/dev/null || true
-  for pid in "${PIDS[@]:-}"; do
-    # Scenario shutdown semantics are tested explicitly below. EXIT cleanup only owns test
-    # processes, so stop them immediately instead of entering every server's bounded drain and
-    # making a completed or failed runner wait for several overlapping drain windows.
-    kill -KILL "$pid" 2>/dev/null || true
-  done
-  for pid in "${PIDS[@]:-}"; do
-    wait "$pid" 2>/dev/null || true
-  done
+  zlink_sample_stop_processes "${PIDS[@]}"
   if [[ -n "$REDIS_CONTAINER" ]]; then
     zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
@@ -226,16 +218,6 @@ start() {
   PIDS+=($!)
   NODE_PID[$name]=$!
   echo "    started $name (pid ${PIDS[-1]})"
-}
-
-remove_owned_pid() {
-  local completed_pid="$1"
-  local active=()
-  local pid
-  for pid in "${PIDS[@]:-}"; do
-    [[ "$pid" == "$completed_pid" ]] || active+=("$pid")
-  done
-  PIDS=("${active[@]}")
 }
 
 # ZW-B4·ZW-C2·ZW-E5 assert what happens when a node goes away, so the runner has to take one
