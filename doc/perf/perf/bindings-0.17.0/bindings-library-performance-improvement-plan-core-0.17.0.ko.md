@@ -1125,7 +1125,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/rust/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미달` — `tcp` 4 pattern before 19:28~19:31 KST(Core `a40cb46335`): DD 63.0%, DR/RR REQREP 65.9/68.2%, PUBSUB 83.2%; 자체 pass 1 job(astra) 진행 중; [log](log/2026-09-05-rust-multi-tcp-before.ko.md)
+- Multi 상태: `미달` — before 19:28: DD 63.0%, REQREP 65.9/68.2%, PUBSUB 83.2% → pass 1(`4163072701`) quiet 3-run 21:48: DD 64.7%(목표 95), DR/RR 66.1/69.1%(85), PUBSUB 93.8%(95, 최소 85 충족); 리뷰 pass 2 예정; [log](log/2026-09-05-rust-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.6.1 Single suite
