@@ -51,6 +51,7 @@ type is as follows.
 | Source | `POLLIN` | `POLLOUT` | Additional readiness and rules |
 |---|---|---|---|
 | raw socket | A complete record can be received | A submit retry is worthwhile (socket-wide aggregate). Level-held while an unread `ZLINK_COMPLETION_WRITABLE` record exists | Per-socket receive mode applies. A closed registered socket reports `ZLINK_POLLERR` once |
+| socket monitor | A monitor event can be received | Unsupported | Drain with `zlink_socket_monitor_recv()`. A monitor handle is registered with the poller through the same functions as a raw socket (socket/README, "paths that notify the application") |
 | timer | A fire count can be received | Unsupported | Drain with `zlink_timer_recv()` |
 | FD | Platform-readable | Platform-writable | Platform `POLLPRI` maps to `ZLINK_POLLPRI`; all other platform error bits map to `ZLINK_POLLERR` |
 

@@ -2252,10 +2252,19 @@ socket monitor 가 방출하는 이벤트. 모든 바인딩이 **필수 노출**
 | 구성 | 타입 | 의미 |
 |------|------|------|
 | `event` | `MonitorEventType` (enum) | 이벤트 종류 (CONNECTION_READY, CONNECTED, DISCONNECTED 등) |
-| `value` | `uint32` | 이벤트 별 상세 값 (예: DISCONNECTED 시 reason code) |
+| `value` | `uint64` | 이벤트 별 상세 값 (예: DISCONNECTED 시 reason code) |
 | `routing_id` | `RoutingId?` | 해당 peer routing id (없는 이벤트는 null) |
 | `local_addr` | `string` | 로컬 endpoint |
 | `remote_addr` | `string` | 원격 endpoint |
+| `connection_id` | `uint64` | 물리적 transport 시도 식별자(Core 06-monitoring §3.1). 같은 시도의 READY/DISCONNECTED/CLOSED는 같은 nonzero 값 |
+| `transport_lane` | `TransportLane` (enum: Application=0, Completion=1) | 이벤트가 속한 physical connection의 lane |
+| `flags` | `uint32` (bit flags) | READY edge 등 이벤트 보조 플래그(Core `zlink_monitor_event_t.flags`) |
+
+native 레이아웃을 수동으로 mirror하는 바인딩(.NET, Java, Python, Rust)은 Core 공개 struct의 크기 800 B와 `connection_id`/`transport_lane`/`flags`의 offset 784/792/796을 회귀 테스트로 고정한다.
+
+#### `Poller`의 monitor source
+
+모든 바인딩의 public `Poller`는 raw socket·timer·FD 외에 socket monitor를 source로 등록/수정/제거할 수 있어야 한다(Core 05-polling §3 "socket monitor" 행). monitor는 `POLLIN` readiness만 내며 ready 뒤 `Monitor.recv`(DONTWAIT)로 drain한다. 등록 표면은 언어 관례를 따르되(오버로드, 별도 `add_monitor` 계열, 또는 monitor가 socket source 타입을 만족), spec에 그 이름을 명시하고 Poller 테스트가 monitor 등록·drain을 검증한다.
 
 #### `MonitorStatus`
 
@@ -4761,6 +4770,7 @@ ownership 관리, native loader, package boundary, hot path 최적화를 함께 
 
 ### Conditional: Poller 테스트
 - raw socket readiness 또는 fd readiness가 public poller API로 전달되는지 확인한다.
+- socket monitor를 poller에 등록해 `POLLIN` readiness 뒤 monitor event를 drain할 수 있는지 확인한다.
 - poller가 지원하지 않는 service-specific handle을 조용히 받아들이지 않는지 확인한다.
 - readiness event 값은 data plane contract를 대체하지 않는다는 점을 검증한다.
 
