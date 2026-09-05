@@ -864,7 +864,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/java/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미달` — `tcp` 4 pattern before 11:44~11:49 KST: DD 50.8%(64 KiB 18%), DR/RR REQREP 15.1/24.0%, PUBSUB 81.0% → 자체 pass 1(astra, `java-perf-pass1-summary.md`, 12:13 after): DD 54.7%(64B 82.3%, 256B 76.9%, 1024B 67.4%이나 **4096B 35.8%·64K 10.9%로 회귀**), DR/RR REQREP 52.6/72.5%(REQREP socket별 worker 대기를 poller 1회 처리 뒤로 이동, native scratch), PUBSUB 88.4%. DD 큰 메시지 회귀 원인: 백프레셔마다 runtime owner의 private poller/control pair 생성·파괴(64K에서 6 submit당 1회, `ControlWake.create`가 binding CPU 81%) → pass 1은 미커밋, 구조 개선 pass 1b(astra, 제어점 단일화) 진행 중; [log](log/2026-09-05-java-multi-tcp-before.ko.md)
+- Multi 상태: `미달/통과` — before 11:44 → pass 1+1b(`82b0fd9f38`: REQREP 일괄 settlement, Context당 completion pump 1개) → 조용한 머신 3-run 15:23 KST: DD 70.8%(목표 90), DR 54.7%(70), RR 58.5%(70) `미달`, PUBSUB 102.9% `통과`; 리뷰 pass 2(구조 후보) 예정; [log](log/2026-09-05-java-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.3.1 Single suite
@@ -918,12 +918,12 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미달(55.9%) | 미달(55.8%) | 미달(61.9%) | 미달(62.2%) | 미달(18.0%) | 미측정 | before; aggregate 50.8%(목표 90%), latency 0.30x; 64 KiB 18.0%(큰 메시지 경로); 처리량 Java/C 583.6/1043.8, 561.9/1007.6, 559.6/903.6, 227.1/365.3, 14.0/77.7 Kmsg/s; `p1java`; C `perf_c_multi_linux_20260905_114449_p1java.txt`, Java `perf_java_multi_linux_20260905_114527.txt`; [log](log/2026-09-05-java-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_DEALER_DEALER` | 미달(75.9%) | 미달(72.9%) | 미달(77.0%) | 미달(66.1%) | 미달(62.2%) | 미측정 | pass 1+1b(`82b0fd9f38`) 뒤 3-run `p1java-r3q`: aggregate **70.8%**(목표 90%, 최소 70% 충족; before 50.8), latency 0.47x; 처리량 Java/C 757.0/998.0, 691.0/947.2, 606.7/787.6, 198.6/300.4, 39.9/64.2 Kmsg/s; 리뷰 pass 2 전; [log](log/2026-09-05-java-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미달(5.0%) | 미달(8.8%) | 미달(8.6%) | 미달(10.6%) | 미달(42.7%) | 미측정 | before; aggregate 15.1%(목표 70%), latency 2.32x; 9.6~15k ops/s로 고정(직렬화 의심); 처리량 Java/C 9.6/192.8, 14.8/168.2, 15.0/174.4, 14.9/141.3, 9.6/22.6 Kops/s; C `..._114559_p1java.txt`, Java `..._114633.txt`; [log](log/2026-09-05-java-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미달(37.0%) | 미달(38.5%) | 미달(44.8%) | 미달(44.4%) | 미달(108.8%) | 미측정 | pass 1+1b 뒤 3-run: **54.7%**(목표 70%; before 15.1), latency 0.64x; 처리량 Java/C 71.2/192.3, 64.1/166.6, 75.2/168.0, 57.1/128.5, 24.5/22.5 Kops/s; 리뷰 pass 2 전; [log](log/2026-09-05-java-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미달(10.0%) | 미달(10.8%) | 미달(11.4%) | 미달(13.3%) | 미달(74.6%) | 미측정 | before; aggregate 24.0%(목표 70%), latency 2.09x; 처리량 Java/C 14.1/141.5, 14.3/132.2, 14.1/123.5, 14.5/109.4, 10.0/13.5 Kops/s; C `..._114705_p1java.txt`, Java `..._114742.txt`; [log](log/2026-09-05-java-multi-tcp-before.ko.md) |
-| `tcp` | `MULTI_PUBSUB` | 미달(74.1%) | 미달(69.4%) | 미달(74.6%) | 미달(74.8%) | 미달(112.3%) | 미측정 | before; aggregate 81.0%(목표 90%), latency 1.04x; 처리량 Java/C 458.1/618.3, 520.6/749.6, 591.8/792.9, 509.8/681.7, 70.7/62.9 Kmsg/s; C `..._114814_p1java.txt`, Java `..._114848.txt`; [log](log/2026-09-05-java-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미달(39.8%) | 미달(31.3%) | 미달(58.2%) | 미달(68.3%) | 미달(95.0%) | 미측정 | pass 1+1b 뒤 3-run: **58.5%**(목표 70%; before 24.0), latency 0.73x; 처리량 Java/C 70.7/177.5, 40.3/128.6, 72.8/125.1, 71.3/104.4, 19.7/20.8 Kops/s; 리뷰 pass 2 전; [log](log/2026-09-05-java-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_PUBSUB` | 통과(102.5%) | 통과(101.3%) | 통과(97.4%) | 통과(83.9%) | 통과(129.2%) | 미측정 | pass 1+1b 뒤 3-run: **102.9%** `통과`(목표 90%; before 81.0), latency 0.99x; 처리량 Java/C 583.5/569.2, 668.0/659.4, 709.5/728.5, 485.4/578.8, 74.9/58.0 Kmsg/s; [log](log/2026-09-05-java-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
