@@ -1,0 +1,22 @@
+# Job (fix, model astra): java `ZLinkJavaRawMeshNodeM6ATest.descriptorFenceReplacesEndpointOnlyIntent` still fails in the class run on rebuild9 (Core D-094 `08e5b9c183` packaged; `observedInprocCloseDoesNotFenceDescriptorReplacement` now passes; java transport-identity fix `ea0d47e1b8` in place) — 1245 run / 1 failed (gate9a `java-coretest`). Finish the root cause
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `doc/plan/c016-worklog/fix-java-descriptor-fence-class-run-summary.md`
+(observed sequence for this test: first replace throws as expected; after `peer.close()` + replacement peer bind, intent 2 gets READY 1436/lane 0 then a completion-lane
+DISCONNECTED 1439/lane 1 emptied it — now fixed by recorded-transport attribution — and the final assertion at java:601 expected an IllegalStateException that did not come),
+`fix-java-mesh-transport-identity-summary.md`, `decisions.ko.md` D-092/D-094/D-096, and the spec `03-spot-actor/03-mesh-node.ko.md` §7.1 (descriptor fence replaces an
+endpoint-only intent; when must the replace throw). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages; do not commit.
+Env: `framework/languages/java`, `TMPDIR=/dev/shm/zlink-tmp-java`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-jvm-gate.lock`; another java job edits the kotlin
+module/samples and `ZLinkJavaRawSpotNode`/`ZLinkJavaStreamSocket` — `git status` first, keep to `ZLinkJavaRawMeshNode.java` and its tests. Installed Core 2055a581… (do not rebuild).
+
+## What to do
+1. Reproduce in the class run (`--tests '...ZLinkJavaRawMeshNodeM6ATest'`, with `ZLINK_JAVA_STREAM_TRACE=1`), capture the exact assertion now failing (java:601? or another)
+   and the monitor/intent sequence around it. Determine whether (a) the test's expectation matches §7.1 given Core now REJECTs the duplicate and keeps the existing pipe
+   (D-094) — i.e. after the replacement peer is admitted on intent 3, does a further `replacePeerConnection` with the same descriptor have to throw, or is it idempotent per
+   §7.1? — or (b) the java node still closes/loses the intent through another path (auto-reconnect of the old inproc intent that D-092 now schedules promptly; stale native
+   endpoint registration `cleanupClosedPeerEndpoint` returning early for inproc).
+2. Fix at the owner (java raw mesh node) with a unit regression, or — if the test's expectation contradicts §7.1 — say exactly which clause and STOP (the supervisor decides
+   the spec). No Core change; if Core misbehaves, STOP with a C-API sequence.
+3. Verify: M6A class ×3; `:zlink-framework-core:test contractTest` once (0 fail expected now).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-java-descriptor-fence-3-summary.md`: sequence, cause file:line, fix, four lines, rule count, results, BLOCKERS.
