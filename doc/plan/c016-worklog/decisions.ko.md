@@ -1176,3 +1176,12 @@ spec gap(사용자 결정): (1) terminal edge 소비 전 같은 socket에서 즉
 ## D-B105 (2026-09-05 10:50, 머신 B) D-B90 정정 — multi 하네스 lifecycle은 C·C++ 모두 size별 process 쌍(정책 §3.4)이라 lifecycle gap 없음; C++ 러너 수정(`53d599aa00`)으로 서버 auto-HWM 재계산 시점만 맞춤
 astra 조사(`cpp-harness-summary.md`): `PERF_MULTI_TEST_POLICY.md:594-610` §3.4/§3.5가 size마다 독립 server/client process 쌍을 요구하고, C 하네스(`bindings/c/perf/run_comparison.py:2909,2950`)와 C++·다른 6 binding 모두 이를 따른다. 앞선 job의 "C는 한 lifecycle에 모든 size" 진단은 C 바이너리 능력과 공식 wrapper 호출을 혼동한 것 → 하네스 변경 없음(정책 위반이 됨).
 남은 관찰: C 서버 SNDHWM이 size별로 1 MiB/4 MiB 번갈아 찍힘(같은 per-size lifecycle에서) — C++ 서버 재계산 시점을 C에 맞춘 뒤 paired report에서 다시 대조(다음 PUBSUB 3-run 때). library 판정과 무관.
+
+## D-088 (2026-09-05 11:30, 머신 A) REJECT ROUTER의 same-RID 재연결 의미 — spec gap(사용자 결정), dotnet ClientServer fixture는 production HANDOVER로 정렬
+dotnet ClientServer의 두 번째 poller·수동 reconnect 제거(`stage2-dotnet-clientserver-second-poller-removal-summary.md`) 검증 중 공개 API로 재현: ROUTER가 기본 REJECT일 때
+DEALER가 `disconnect(endpoint)` → 그 endpoint의 Disconnected 관찰 → `connect(endpoint)` → READY edge 뒤 제출한 request가 서버에 도착하지 않고 timeout(부하 시 1/5).
+HANDOVER는 5/5 정상. 원인은 REJECT 정책상 old pipe 종료 처리 전에 도착한 same-RID 새 pipe가 거부되는 것이며, 제거한 수동 reconnect loop가 반복 admission으로 이를 가리고 있었다.
+production ClientServer 서버는 HANDOVER(`ZLinkChannelBundleFactory.cs:55`)이므로 fixture의 raw ROUTER(REJECT)를 production 정책으로 정렬한다(assertion 불변).
+**spec gap(사용자 결정, D-B104 #1과 동일)**: REJECT ROUTER가 old pipe 종료 전 도착한 same-RID pipe를 어떻게 처리하는가(거부+close → DEALER 자동 재연결? DEALER READY edge가 ROUTER admission을 뜻하는가?).
+node `channel-socket-registry.ts:879`의 수동 재등록은 parity 후속.
+
