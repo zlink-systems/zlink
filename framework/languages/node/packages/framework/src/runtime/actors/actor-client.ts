@@ -309,14 +309,20 @@ export class DefaultZLinkActorClient implements ZLinkActorClient {
         'Actor direct messaging requires a Location Store.'
       );
     }
-    const row = await resolver.resolveDirectActorRoute(actorId, signal);
-    if (row === undefined) {
+    const resolution = await resolver.resolveDirectActorRoute(actorId, signal);
+    if (resolution.kind === 'missing') {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
         `Actor route '${actorId}' was not found.`
       );
     }
-    return row;
+    if (resolution.kind === 'owner_unavailable') {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable,
+        `Actor route '${actorId}' owner lease is unavailable.`
+      );
+    }
+    return resolution.route;
   }
 
   private invalidateActorRoute(actorId: string): void {

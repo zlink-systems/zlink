@@ -418,17 +418,17 @@ export class ZLinkFrameworkRuntimeHost implements
       nativeActorNodeProvider: () => this.spotNodeRuntime?.primaryMeshNode,
       nativeActorMeshNameProvider: () => this.meshRouters.primaryMeshName(),
       actorAuthorityFenceResolver: async (actorId, signal) => {
-        const route = await this.createActorLocationResolver()
+        const resolution = await this.createActorLocationResolver()
           ?.resolveDirectActorRoute(actorId, signal);
-        return route === undefined
+        return resolution === undefined || resolution.kind !== 'ready'
           ? undefined
           : {
-              authorityOwnerGeneration: route.authorityOwnerGeneration,
-              ownerLeaseGeneration: route.ownerLeaseGeneration,
-              ownerId: route.ownerId,
-              ownerNodeGeneration: route.ownerNodeGeneration,
-              authorityStoreVersion: route.authorityStoreVersion,
-              actorType: route.actorType
+              authorityOwnerGeneration: resolution.route.authorityOwnerGeneration,
+              ownerLeaseGeneration: resolution.route.ownerLeaseGeneration,
+              ownerId: resolution.route.ownerId,
+              ownerNodeGeneration: resolution.route.ownerNodeGeneration,
+              authorityStoreVersion: resolution.route.authorityStoreVersion,
+              actorType: resolution.route.actorType
             };
       },
       confirmRemoteActorSessionBinding: (actor, sessionRid, signal, options) => {

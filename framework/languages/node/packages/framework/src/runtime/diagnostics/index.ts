@@ -58,6 +58,25 @@ import { normalizeOpaqueRoutingId } from '../routing-id';
 const ZLINK_DISCONNECT_REASON_HANDSHAKE_FAILED = 3;
 const detachedStateLaneResource = new AsyncResource('zlink:location-runtime-monitoring-source');
 
+export interface ZLinkActorOwnerLeaseObservation {
+  readonly actorId: string;
+  readonly authorityGeneration: bigint;
+  readonly remainingLeaseMs: number;
+  readonly decision: 'owner_unavailable';
+}
+
+/** Emits high-cardinality resolver detail only on the existing relocation debug path. */
+export function emitActorOwnerLeaseObservation(
+  observation: ZLinkActorOwnerLeaseObservation
+): void {
+  if (process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION !== '1') return;
+  console.error(
+    '[zlink.runtime.relocation]',
+    'actor_route.owner_lease_observed',
+    observation
+  );
+}
+
 /** Runtime composition port. It is intentionally absent from the public contract barrel. */
 export interface ZLinkRuntimeEventPublisher {
   register<TEvent extends ZLinkRuntimeEvent>(handler: ZLinkRuntimeEventHandler<TEvent>): void;

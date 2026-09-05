@@ -25,6 +25,12 @@ function relocationAuthorityPayload(payload) {
   });
 }
 
+async function resolveReadyActorRoute(resolver, actorId) {
+  const resolution = await resolver.resolveDirectActorRoute(actorId);
+  assert.equal(resolution.kind, 'ready');
+  return resolution.route;
+}
+
 test('service authority relocation rewrite replaces owner and target route', () => {
   const rewritten = internal.rewriteServiceAuthorityRoute(
     internal.encodeServiceInstanceAuthorityPayload({
@@ -343,16 +349,16 @@ test('authority Actor route carries every fence and a changed StoreVersion inval
     monotonicNowMs: () => 0
   });
 
-  const first = await resolver.resolveDirectActorRoute('actor-1');
+  const first = await resolveReadyActorRoute(resolver, 'actor-1');
   assert.equal(first.authorityStoreVersion, 'v1');
   assert.equal(first.authorityOwnerGeneration, 17n);
   assert.equal(first.ownerLeaseGeneration, 13n);
-  await resolver.resolveDirectActorRoute('actor-1');
+  await resolveReadyActorRoute(resolver, 'actor-1');
   assert.equal(reads, 1);
 
   storeVersion = 'v2';
   resolver.observeActorAuthorityVersion('actor-1', 'v2');
-  assert.equal((await resolver.resolveDirectActorRoute('actor-1')).authorityStoreVersion, 'v2');
+  assert.equal((await resolveReadyActorRoute(resolver, 'actor-1')).authorityStoreVersion, 'v2');
   assert.equal(reads, 2);
 });
 
@@ -394,7 +400,7 @@ test('authority Actor route projects a foreign payload from the canonical outer 
     monotonicNowMs: () => 0
   });
 
-  const route = await resolver.resolveDirectActorRoute('foreign-actor');
+  const route = await resolveReadyActorRoute(resolver, 'foreign-actor');
   assert.equal(route.actorType, 'ForeignPlayer');
   assert.equal(route.actorRef.actorId, 'foreign-actor');
   assert.equal(route.actorRef.objectGeneration, 7n);
@@ -455,7 +461,7 @@ test('Message Follow invalidation deletes only the exact cached Actor route fenc
     routeCacheMaxAgeMs: 15_000,
     monotonicNowMs: () => 0
   });
-  await resolver.resolveDirectActorRoute('actor-follow');
+  await resolveReadyActorRoute(resolver, 'actor-follow');
 
   nodeRid = 'node-b';
   nodeGeneration = 19n;
@@ -469,7 +475,7 @@ test('Message Follow invalidation deletes only the exact cached Actor route fenc
     authorityOwnerGeneration: 17n,
     ownerLeaseGeneration: 13n
   }), false);
-  assert.equal((await resolver.resolveDirectActorRoute('actor-follow')).actorRef.nodeRid, 'node-a');
+  assert.equal((await resolveReadyActorRoute(resolver, 'actor-follow')).actorRef.nodeRid, 'node-a');
 
   assert.equal(resolver.invalidateActorRouteIfMatches({
     actorId: 'actor-follow',
@@ -479,7 +485,7 @@ test('Message Follow invalidation deletes only the exact cached Actor route fenc
     authorityOwnerGeneration: 17n,
     ownerLeaseGeneration: 13n
   }), true);
-  assert.equal((await resolver.resolveDirectActorRoute('actor-follow')).actorRef.nodeRid, 'node-b');
+  assert.equal((await resolveReadyActorRoute(resolver, 'actor-follow')).actorRef.nodeRid, 'node-b');
 });
 
 test('Session Actor relay route is the stored binding route rather than a per-message Store lookup', async () => {

@@ -6465,19 +6465,22 @@ test('runtime host relays bound remote actor request through route channel and c
   });
   host.createActorLocationResolver = () => ({
     resolveDirectActorRoute: async () => ({
-      meshName: 'room.route',
-      actorRef: {
-        actorId: 'actor-remote',
-        objectGeneration: 7n,
+      kind: 'ready',
+      route: {
         meshName: 'room.route',
-        nodeRid: 'play-node'
-      },
-      actorType: 'Player',
-      ownerNodeGeneration: 1n,
-      ownerId: 'owner-a',
-      ownerLeaseGeneration: 1n,
-      authorityOwnerGeneration: 1n,
-      authorityStoreVersion: '1'
+        actorRef: {
+          actorId: 'actor-remote',
+          objectGeneration: 7n,
+          meshName: 'room.route',
+          nodeRid: 'play-node'
+        },
+        actorType: 'Player',
+        ownerNodeGeneration: 1n,
+        ownerId: 'owner-a',
+        ownerLeaseGeneration: 1n,
+        authorityOwnerGeneration: 1n,
+        authorityStoreVersion: '1'
+      }
     })
   });
   host.routeTransport.requestRawToSpot = async (remoteAddress, request, options) => {
@@ -6578,7 +6581,7 @@ test('M1 bound Actor request uses its stored Session route without a per-message
       if (bindingInstalled) {
         throw new Error('per-message Location resolve is forbidden for a bound Actor request');
       }
-      return undefined;
+      return { kind: 'missing' };
     }
   });
   const routed = [];
@@ -6697,7 +6700,7 @@ test('service-wire relocation replaces a learned source packet route before the 
   sessionHost.createActorLocationResolver = () => ({
     // A Session owner must still use its command-44 ActorRef while the
     // durable location lookup is converging.
-    resolveDirectActorRoute: async () => undefined
+    resolveDirectActorRoute: async () => ({ kind: 'missing' })
   });
 
   const targetActor = { context: { actorId } };

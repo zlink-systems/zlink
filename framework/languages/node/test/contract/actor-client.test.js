@@ -62,9 +62,31 @@ function actorLocation(actorId = 'actor-1', generation = 1n, meshName = 'play-me
 
 function createResolver(resolve = ({ actorId }) => actorLocation(actorId)) {
   return {
-    resolveDirectActorRoute: (actorId, signal) => resolve({ actorId }, signal),
+    async resolveDirectActorRoute(actorId, signal) {
+      const route = await resolve({ actorId }, signal);
+      return route === undefined
+        ? { kind: 'missing' }
+        : { kind: 'ready', route };
+    },
     invalidateActorRoute() {}
   };
+}
+
+function createStoreResolver(authority, remainingLeaseMs) {
+  const unusedStore = {};
+  return new framework.ZLinkStoreLocationResolvers({
+    stores: {
+      authorityStore: { async readAuthority() { return authority; } },
+      locationStore: unusedStore,
+      peerStore: unusedStore,
+      spotStore: unusedStore,
+      actorStore: unusedStore,
+      routeStore: unusedStore
+    },
+    leaseTracker: {
+      async remainingOwnerTokenLeaseMs() { return remainingLeaseMs; }
+    }
+  });
 }
 
 const operationId = Object.freeze({ high: 1n, low: 2n });
@@ -507,5 +529,79 @@ test('actor client preserves ActorRouteNotFound for a missing actor route', asyn
   await assert.rejects(
     () => client.requestToActor('missing-actor', new ActorAsk('ping')).submit(),
     (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound
+  );
+});
+
+test('direct actor resolver maps an active authority with an expired owner lease to Unavailable', async () => {
+  const resolver = createStoreResolver({
+    kind: 'snapshot',
+    allocation: { state: 'active' },
+    payload: Buffer.alloc(0),
+    objectGeneration: 1n,
+    ownerId: 'owner-a',
+    ownerLeaseGeneration: 3n,
+    authorityOwnerGeneration: 7n
+  }, 0);
+
+  const previousDebug = process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
+  const originalError = console.error;
+  const observations = [];
+  process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = '1';
+  console.error = (...args) => observations.push(args);
+  let resolution;
+  try {
+    resolution = await resolver.resolveDirectActorRoute('actor-1');
+  } finally {
+    console.error = originalError;
+    if (previousDebug === undefined) {
+      delete process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
+    } else {
+      process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = previousDebug;
+    }
+  }
+  assert.deepEqual(resolution, {
+    kind: 'owner_unavailable',
+    authorityGeneration: 7n,
+    remainingLeaseMs: 0
+  });
+  assert.deepEqual(observations, [[
+    '[zlink.runtime.relocation]',
+    'actor_route.owner_lease_observed',
+    {
+      actorId: 'actor-1',
+      authorityGeneration: 7n,
+      remainingLeaseMs: 0,
+      decision: 'owner_unavailable'
+    }
+  ]]);
+
+  const client = createActorClient({
+    nodeProvider: () => ({ sendToActor() { throw new Error('must not submit'); } }),
+    locationResolver: () => resolver
+  });
+  await assert.rejects(
+    () => client.sendToActor('actor-1', new ActorNotify('ping')).submit(),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+      && framework.internalFrameworkErrorKind(error)
+        === framework.ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable
+  );
+});
+
+test('direct actor resolver maps a missing authority snapshot to NotFound', async () => {
+  const resolver = createStoreResolver({ kind: 'missing' }, 0);
+
+  assert.deepEqual(await resolver.resolveDirectActorRoute('missing-actor'), {
+    kind: 'missing'
+  });
+
+  const client = createActorClient({
+    nodeProvider: () => ({ sendToActor() { throw new Error('must not submit'); } }),
+    locationResolver: () => resolver
+  });
+  await assert.rejects(
+    () => client.sendToActor('missing-actor', new ActorNotify('ping')).submit(),
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound
+      && framework.internalFrameworkErrorKind(error)
+        === framework.ZLinkFrameworkInternalErrorKind.ActorRouteNotFound
   );
 });

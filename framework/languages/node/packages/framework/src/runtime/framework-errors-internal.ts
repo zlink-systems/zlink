@@ -47,7 +47,8 @@ export enum ZLinkFrameworkInternalErrorKind {
   RelocationDisabled = 'relocationDisabled',
   RelocationTargetUnavailable = 'relocationTargetUnavailable',
   RelocationFailed = 'relocationFailed',
-  InvalidOperation = 'invalidOperation'
+  InvalidOperation = 'invalidOperation',
+  ActorRouteUnavailable = 'actorRouteUnavailable'
 }
 
 const INTERNAL_TO_PUBLIC: Readonly<Record<ZLinkFrameworkInternalErrorKind, ZLinkFrameworkErrorKind>> = Object.freeze({
@@ -91,7 +92,8 @@ const INTERNAL_TO_PUBLIC: Readonly<Record<ZLinkFrameworkInternalErrorKind, ZLink
   [ZLinkFrameworkInternalErrorKind.RelocationDisabled]: ZLinkFrameworkErrorKind.Rejected,
   [ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable]: ZLinkFrameworkErrorKind.Unavailable,
   [ZLinkFrameworkInternalErrorKind.RelocationFailed]: ZLinkFrameworkErrorKind.InternalFailure,
-  [ZLinkFrameworkInternalErrorKind.InvalidOperation]: ZLinkFrameworkErrorKind.InvalidOperation
+  [ZLinkFrameworkInternalErrorKind.InvalidOperation]: ZLinkFrameworkErrorKind.InvalidOperation,
+  [ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable]: ZLinkFrameworkErrorKind.Unavailable
 });
 
 export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES: Readonly<Record<ZLinkFrameworkInternalErrorKind, number>> = Object.freeze({
@@ -135,7 +137,8 @@ export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES: Readonly<Record<ZLinkFr
   [ZLinkFrameworkInternalErrorKind.RelocationDisabled]: 37,
   [ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable]: 38,
   [ZLinkFrameworkInternalErrorKind.RelocationFailed]: 39,
-  [ZLinkFrameworkInternalErrorKind.InvalidOperation]: 40
+  [ZLinkFrameworkInternalErrorKind.InvalidOperation]: 40,
+  [ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable]: 41
 });
 
 const INTERNAL_KIND_BY_WIRE_FAILURE_CODE: ReadonlyMap<number, ZLinkFrameworkInternalErrorKind> = new Map<number, ZLinkFrameworkInternalErrorKind>([
@@ -149,7 +152,7 @@ const INTERNAL_KIND_BY_WIRE_FAILURE_CODE: ReadonlyMap<number, ZLinkFrameworkInte
 
 const WIRE_TERMINAL_RESULT_BY_FAILURE_CODE: ReadonlyMap<number, number> = new Map([
   ...[1, 6, 8, 9, 10, 11, 14].map(code => [code, 102] as const),
-  ...[2, 5, 13, 17, 19, 20, 35].map(code => [code, 105] as const),
+  ...[2, 5, 13, 17, 19, 20, 35, 42].map(code => [code, 105] as const),
   ...[3, 4, 7, 21, 33, 34].map(code => [code, 107] as const),
   ...[12, 16].map(code => [code, 104] as const),
   ...[15, 18, 22].map(code => [code, 106] as const)

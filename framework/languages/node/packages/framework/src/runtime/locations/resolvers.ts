@@ -57,6 +57,7 @@ import {
 } from './lease-tracker';
 import { routingIdsEqual } from '../routing-id';
 import { ZLinkStateLane } from '../execution/state-lane';
+import { emitActorOwnerLeaseObservation } from '../diagnostics';
 
 export interface ZLinkStoreLocationResolverStores {
   readonly authorityStore: ZLinkAuthorityStore;
@@ -141,6 +142,15 @@ export interface ZLinkResolvedActorRoute {
   /** Exact enclosing User Spot authority used by remote Actor packet relay. */
   readonly enclosingSpotRoute?: ZLinkSpotRouteTarget;
 }
+
+export type ZLinkDirectActorRouteResolution =
+  | { readonly kind: 'ready'; readonly route: ZLinkResolvedActorRoute }
+  | { readonly kind: 'missing' }
+  | {
+      readonly kind: 'owner_unavailable';
+      readonly authorityGeneration: bigint;
+      readonly remainingLeaseMs: number;
+    };
 
 export interface ZLinkActorRouteInvalidationFence {
   readonly actorId: string;
@@ -365,13 +375,14 @@ export class ZLinkStoreLocationResolvers implements
 
   async resolveActorRef(actorId: string, signal?: AbortSignal): Promise<ActorRef | undefined> {
     const direct = await this.resolveDirectActorRoute(actorId, signal);
-    if (direct !== undefined) {
+    if (direct.kind === 'ready') {
       return {
-        ...direct.actorRef,
-        ownershipGeneration: direct.authorityOwnerGeneration,
-        ownerLeaseGeneration: direct.ownerLeaseGeneration
+        ...direct.route.actorRef,
+        ownershipGeneration: direct.route.authorityOwnerGeneration,
+        ownerLeaseGeneration: direct.route.ownerLeaseGeneration
       } as ActorRef;
     }
+    if (direct.kind === 'owner_unavailable') return undefined;
     // An authority row is the canonical Actor location. If it exists but is
     // not active or its owner lease is expired, the legacy location projection
     // must not resurrect a stale route while recovery is pending.
@@ -388,14 +399,16 @@ export class ZLinkStoreLocationResolvers implements
   async resolveDirectActorRoute(
     actorId: string,
     signal?: AbortSignal
-  ): Promise<ZLinkResolvedActorRoute | undefined> {
+  ): Promise<ZLinkDirectActorRouteResolution> {
     const cached = await this.lane.run(() => this.getCachedCore(this.directActorRoutes, actorId));
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) return { kind: 'ready', route: cached };
     const current = await this.options.stores.authorityStore.readAuthority(
       encodeAuthorityKey('actor', actorId),
       signal
     );
-    if (current.kind !== 'snapshot' || current.allocation.state !== 'active') return undefined;
+    if (current.kind !== 'snapshot' || current.allocation.state !== 'active') {
+      return { kind: 'missing' };
+    }
     const decoded = decodeActorAuthorityIdentity(
       serviceRelocationAuthorityApplicationPayload(current.payload),
       current.objectGeneration
@@ -408,17 +421,33 @@ export class ZLinkStoreLocationResolvers implements
       currentOwner,
       signal
     );
-    if (remainingLeaseMs <= 0) return undefined;
+    if (remainingLeaseMs <= 0) {
+      const unavailable = {
+        kind: 'owner_unavailable' as const,
+        authorityGeneration: current.authorityOwnerGeneration,
+        remainingLeaseMs
+      };
+      emitActorOwnerLeaseObservation({
+        actorId,
+        authorityGeneration: unavailable.authorityGeneration,
+        remainingLeaseMs,
+        decision: 'owner_unavailable'
+      });
+      return unavailable;
+    }
     if (
       decoded === undefined
       || decoded.actor.actorId !== actorId
       || decoded.actor.objectGeneration !== current.objectGeneration
     ) {
-      return await this.cacheDirectActorRoute(
+      const route = await this.cacheDirectActorRoute(
         actorId,
         projectCanonicalActorRoute(current, actorId),
         remainingLeaseMs
       );
+      return route === undefined
+        ? { kind: 'missing' }
+        : { kind: 'ready', route };
     }
     let enclosingSpotRoute: ZLinkSpotRouteTarget | undefined;
     if (decoded.spotKind === ZLinkSpotKind.User) {
@@ -429,7 +458,7 @@ export class ZLinkStoreLocationResolvers implements
           error instanceof ZLinkFrameworkException
           && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound
         ) {
-          return undefined;
+          return { kind: 'missing' };
         }
         throw error;
       }
@@ -452,7 +481,10 @@ export class ZLinkStoreLocationResolvers implements
         : {}),
       enclosingSpotRoute
     };
-    return await this.cacheDirectActorRoute(actorId, route, remainingLeaseMs);
+    const cachedRoute = await this.cacheDirectActorRoute(actorId, route, remainingLeaseMs);
+    return cachedRoute === undefined
+      ? { kind: 'missing' }
+      : { kind: 'ready', route: cachedRoute };
   }
 
   private async cacheDirectActorRoute(
