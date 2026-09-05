@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include <zlink/Contracts/Eventing/poller.hpp>
+#include <zlink/Contracts/Messaging/request_result.hpp>
 #include <zlink/Contracts/Messaging/received.hpp>
 #include <zlink/Contracts/Sockets/results.hpp>
 #include <zlink/framework/contracts/dispatch/task.hpp>
@@ -47,10 +48,25 @@ enum class raw_request_result_t
     failed
 };
 
+enum class raw_request_failure_phase_t
+{
+    initial_admission,
+    completion_terminal
+};
+
+struct raw_request_failure_t
+{
+    raw_request_failure_phase_t phase;
+    std::optional<zlink::submit_result_t> submit_result;
+    std::optional<zlink::request_result_t> request_result;
+    int internal_errno = 0;
+};
+
 struct raw_request_completion_t
 {
     raw_request_result_t result = raw_request_result_t::failed;
     raw_message_t parts;
+    std::optional<raw_request_failure_t> failure;
 };
 
 class raw_route_port_t

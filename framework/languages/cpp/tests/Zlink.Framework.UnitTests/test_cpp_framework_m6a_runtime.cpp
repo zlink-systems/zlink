@@ -2937,17 +2937,23 @@ void verify_relocation_prepare_failed_reply_with_mismatched_identity_is_fenced (
 
 int main ()
 {
-    using zlink::framework::detail::backend::transient_route_errno;
-    assert (transient_route_errno (EHOSTUNREACH));
-    assert (transient_route_errno (ENETUNREACH));
-    assert (transient_route_errno (ENOTCONN));
-    //  Regression: Core answers a routed submit whose target RID is not in the
-    //  ROUTER routing map with ZLINK_SUBMIT_NOT_FOUND + ENOENT. Dropping it out
-    //  of this set classified "route not admitted yet" as a permanent failure,
-    //  so verify_bound_session_bind_retries_until_route_is_admitted below never
-    //  re-sent after admit_pair and the target mailbox stayed empty.
-    assert (transient_route_errno (ENOENT));
-    assert (!transient_route_errno (EINVAL));
+    using zlink::framework::detail::backend::raw_request_failure_phase_t;
+    using zlink::framework::detail::backend::transient_route_failure;
+    assert (transient_route_failure (
+      zlink::submit_result_t::not_connected, EHOSTUNREACH,
+      raw_request_failure_phase_t::initial_admission));
+    assert (transient_route_failure (
+      zlink::submit_result_t::not_connected, ENOTCONN,
+      raw_request_failure_phase_t::initial_admission));
+    assert (transient_route_failure (
+      zlink::submit_result_t::not_admitted, ECONNREFUSED,
+      raw_request_failure_phase_t::initial_admission));
+    assert (!transient_route_failure (
+      zlink::submit_result_t::not_found, ENOENT,
+      raw_request_failure_phase_t::completion_terminal));
+    assert (!transient_route_failure (
+      zlink::submit_result_t::not_connected, EINVAL,
+      raw_request_failure_phase_t::initial_admission));
     verify_actor_create_command_49_roundtrip ();
     verify_bound_session_bind_retries_until_route_is_admitted ();
     verify_bound_session_bind_permanent_absence_is_bounded ();

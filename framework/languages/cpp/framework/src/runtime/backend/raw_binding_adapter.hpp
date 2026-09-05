@@ -84,8 +84,6 @@ inline raw_request_result_t map_binding_request_result (
             return raw_request_result_t::ok;
         case zlink::request_result_t::timed_out:
             return raw_request_result_t::timed_out;
-        case zlink::request_result_t::not_connected:
-            return raw_request_result_t::not_connected;
         case zlink::request_result_t::terminated:
             return raw_request_result_t::terminated;
         default:
@@ -93,17 +91,21 @@ inline raw_request_result_t map_binding_request_result (
     }
 }
 
-//  Route absence that a bounded retry can still resolve, as opposed to a
-//  permanent failure. ENOENT belongs here: Core reports a routed submit whose
-//  target RID is not in the ROUTER routing map as ZLINK_SUBMIT_NOT_FOUND with
-//  ENOENT (core socket spec, ROUTER §"Routing map에 RID가 없으면"), which is the
-//  same "the route has not been admitted yet" condition as EHOSTUNREACH — the
-//  peer may still be admitted before the operation deadline.
-inline bool transient_route_errno (int error) noexcept
+// Core socket README "submit retry" owns this table. Only an initial local
+// submit failure can be a transient route absence. In particular, ENOENT on a
+// completion terminal means disconnect_rid retired an already-issued WRITABLE
+// token and must not be replayed.
+inline bool transient_route_failure (
+  zlink::submit_result_t result,
+  int error,
+  raw_request_failure_phase_t phase) noexcept
 {
-    return error == ENOENT || error == ENOTCONN || error == EHOSTUNREACH
-           || error == ENETUNREACH || error == ECONNREFUSED
-           || error == ECONNRESET || error == ECONNABORTED;
+    if (phase != raw_request_failure_phase_t::initial_admission)
+        return false;
+    if (result == zlink::submit_result_t::not_connected)
+        return error == ENOTCONN || error == EHOSTUNREACH;
+    return result == zlink::submit_result_t::not_admitted
+           && error == ECONNREFUSED;
 }
 
 } // namespace zlink::framework::detail::backend

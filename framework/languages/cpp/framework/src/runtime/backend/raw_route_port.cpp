@@ -130,13 +130,9 @@ task_t<raw_request_completion_t> raw_route_port_t::request (
     }
     auto messages = materialize_binding_parts (parts);
     std::optional<zlink::async_result_t<std::vector<zlink::message_t>>> pending;
-    //  Route selection now happens synchronously inside .async() (Core's
-    //  routed admission resolves the target pipe at submit time), so an
-    //  unreachable/unadmitted route can throw here rather than only when the
-    //  pending result is later awaited. The try must wrap construction of
-    //  `pending`, not just the co_await, or that synchronous throw escapes
-    //  uncaught and bypasses the route_unavailable retry classification
-    //  below.
+    // Route selection happens synchronously inside .async(). Keep that initial
+    // admission boundary separate from the pending terminal: the same errno
+    // has different meaning after Core has issued a WRITABLE wait token.
     try {
         {
             std::lock_guard lock (*_socket_mutex);
@@ -152,26 +148,44 @@ task_t<raw_request_completion_t> raw_route_port_t::request (
             }
             pending.emplace (std::move (operation).timeout (timeout).async ());
         }
+    }
+    catch (const zlink::submit_error_t &error) {
+        const auto phase = raw_request_failure_phase_t::initial_admission;
+        const auto result =
+          transient_route_failure (error.result (), error.internal_errno (), phase)
+            ? raw_request_result_t::route_unavailable
+          : error.result () == zlink::submit_result_t::terminated
+            ? raw_request_result_t::terminated
+            : raw_request_result_t::failed;
+        co_return raw_request_completion_t{
+          result,
+          {},
+          raw_request_failure_t{
+            phase, error.result (), std::nullopt, error.internal_errno ()}};
+    }
+
+    try {
         auto reply = co_await std::move (*pending);
         co_return raw_request_completion_t{
           raw_request_result_t::ok, copy_binding_parts (reply)};
     }
     catch (const zlink::request_error_t &error) {
         co_return raw_request_completion_t{
-          transient_route_errno (error.internal_errno ())
-            ? raw_request_result_t::route_unavailable
-            : map_binding_request_result (error.result ()), {}};
+          map_binding_request_result (error.result ()), {},
+          raw_request_failure_t{
+            raw_request_failure_phase_t::completion_terminal,
+            std::nullopt, error.result (), error.internal_errno ()}};
     }
     catch (const zlink::submit_error_t &error) {
-        const auto result =
-          transient_route_errno (error.internal_errno ())
-            ? raw_request_result_t::route_unavailable
-          : error.result () == zlink::submit_result_t::not_connected
-            ? raw_request_result_t::not_connected
-          : error.result () == zlink::submit_result_t::terminated
+        const auto result = error.result () == zlink::submit_result_t::terminated
             ? raw_request_result_t::terminated
             : raw_request_result_t::failed;
-        co_return raw_request_completion_t{result, {}};
+        co_return raw_request_completion_t{
+          result,
+          {},
+          raw_request_failure_t{
+            raw_request_failure_phase_t::completion_terminal,
+            error.result (), std::nullopt, error.internal_errno ()}};
     }
 }
 
