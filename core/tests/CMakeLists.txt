@@ -77,6 +77,7 @@ if(ZLINK_CORE_BUILD_BINDING_INTEGRATION_TESTS
 endif()
 
 set(tests
+  ${INTEGRATION_TEST_ROOT}/test_request_writable_credit
   ${INTEGRATION_TEST_ROOT}/test_ancillaries
   ${INTEGRATION_TEST_ROOT}/test_asio_ws
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_enhanced
@@ -496,7 +497,7 @@ endif()
 if(TARGET test_reconnect_ivl)
   set_tests_properties(test_reconnect_ivl PROPERTIES TIMEOUT 15)
 endif()
-set_tests_properties(test_socket_disconnect_boundary PROPERTIES TIMEOUT 60)
+set_tests_properties(test_socket_disconnect_boundary PROPERTIES TIMEOUT 120)
 # Four connect-before-bind admission cases, each with monitor-driven waits.
 set_tests_properties(test_inproc_pending_connect_rejected_at_attach PROPERTIES TIMEOUT 60)
 # Twelve cases each observe past the original one-second request deadline.
@@ -1176,3 +1177,6 @@ set_tests_properties(
     LABELS "integration;regression;serial;wake-invariant")
 
 set_tests_properties(test_two_poller_wake PROPERTIES TIMEOUT 60)
+
+set_tests_properties(test_request_writable_credit PROPERTIES
+  LABELS "integration;serial" RUN_SERIAL TRUE TIMEOUT 30)

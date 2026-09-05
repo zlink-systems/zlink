@@ -294,6 +294,7 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _out_complete_record_pending (false),
     _transport_pair_write_held (false),
     _remote_flow_paused (false),
+    _request_correlation_release_epoch (0),
     _request_correlation_waiting (false),
     _request_correlation_activation_pending (false),
     _out_owner_message_started (false),
@@ -1562,7 +1563,7 @@ zlink::pipe_t::write_state_admission_unlocked () const
 }
 
 bool zlink::pipe_t::try_reserve_request_correlation (
-  uint64_t accounted_bytes_)
+  uint64_t accounted_bytes_, uint64_t *release_epoch_out_)
 {
     if (accounted_bytes_ == 0)
         accounted_bytes_ = 1;
@@ -1604,6 +1605,8 @@ bool zlink::pipe_t::try_reserve_request_correlation (
     // window owns its admission after the peer has dequeued the request.
     if (overflow || work_overflow || work_full || count_full) {
         _request_correlation_waiting = true;
+        if (release_epoch_out_)
+            *release_epoch_out_ = request_correlation_release_epoch ();
         errno = ENOBUFS;
         return false;
     }
@@ -1612,6 +1615,11 @@ bool zlink::pipe_t::try_reserve_request_correlation (
     _request_correlation_work += work_charge;
     ++_request_correlation_count;
     return true;
+}
+
+uint64_t zlink::pipe_t::request_correlation_release_epoch () const
+{
+    return _request_correlation_release_epoch.load (std::memory_order_acquire);
 }
 
 void zlink::pipe_t::release_request_correlation (uint64_t accounted_bytes_)
@@ -1632,6 +1640,10 @@ void zlink::pipe_t::release_request_correlation (uint64_t accounted_bytes_)
         _request_correlation_work -= work_charge;
         --_request_correlation_count;
         if (_request_correlation_waiting) {
+            // Only a reservation return advances this edge. Snapshotting it
+            // under the same lock as refusal closes the token-registration race.
+            _request_correlation_release_epoch.fetch_add (
+              1, std::memory_order_release);
             _request_correlation_waiting = false;
             _request_correlation_activation_pending = true;
             generation = _out_generation;
@@ -2775,6 +2787,7 @@ void zlink::pipe_t::process_activate_write (uint64_t generation_,
                                             uint64_t bytes_read_)
 {
     bool notify = false;
+    bool correlation_released = false;
     {
         scoped_fast_lock_t lock (_out_sync);
 
@@ -2783,6 +2796,7 @@ void zlink::pipe_t::process_activate_write (uint64_t generation_,
         // byte-credit generation before the owner processes the command.
         if (_request_correlation_activation_pending) {
             _request_correlation_activation_pending = false;
+            correlation_released = true;
             // Preserve the cause until the socket consumes the corresponding
             // write activation. An ordinary send may have succeeded after the
             // request was rejected, but that must not consume this wake.
@@ -2810,6 +2824,8 @@ void zlink::pipe_t::process_activate_write (uint64_t generation_,
         }
     }
 
+    if (correlation_released)
+        _sink->request_correlation_released (this);
     if (notify)
         _sink->write_activated (this);
 }

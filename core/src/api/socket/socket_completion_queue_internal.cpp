@@ -7,6 +7,7 @@
 #include <new>
 
 #include "api/socket/socket_completion_queue_internal.hpp"
+#include "core/pipe.hpp"
 #include "utils/allocator.hpp"
 #include "utils/err.hpp"
 
@@ -76,6 +77,7 @@ void reset_reservation (
     node_->outstanding_next = NULL;
     node_->ready = false;
     node_->writable_wait_linked = false;
+    node_->request_wait.clear ();
 }
 
 zlink::socket_completion::reservation_t *recycle_reservation_locked (
@@ -235,7 +237,8 @@ int zlink::socket_completion::reserve (
 int zlink::socket_completion::reserve_writable_wait (
   queue_state_t *state_, void *user_context_,
   const zlink_routing_id_t *peer_rid_, reservation_t **reservation_out_,
-  zlink_completion_id_t *completion_id_out_)
+  zlink_completion_id_t *completion_id_out_,
+  request_writable_wait_t *request_wait_)
 {
     if (!state_ || !reservation_out_ || !completion_id_out_) {
         errno = EFAULT;
@@ -258,6 +261,8 @@ int zlink::socket_completion::reserve_writable_wait (
     }
 
     reservation_t *const node = *reservation_out_;
+    if (request_wait_)
+        node->request_wait.swap (*request_wait_);
     node->writable_wait_next = NULL;
     node->writable_wait_linked = true;
     if (state_->writable_wait_tail)
@@ -354,7 +359,8 @@ int enqueue_ready (zlink::socket_completion::queue_state_t *state_,
 
 int zlink::socket_completion::publish_writable_waiters (
   queue_state_t *state_, const zlink_routing_id_t *target_rid_or_null_,
-  zlink_send_complete_result_t result_, int terminal_errno_)
+  zlink_send_complete_result_t result_, int terminal_errno_,
+  bool correlation_released_)
 {
     if (!state_) {
         errno = EFAULT;
@@ -372,7 +378,23 @@ int zlink::socket_completion::publish_writable_waiters (
     int published = 0;
     while (current) {
         reservation_t *const next = current->writable_wait_next;
-        if (!writable_target_matches (current, target_rid_or_null_)) {
+        bool matches = writable_target_matches (current, target_rid_or_null_);
+        if (result_ != ZLINK_SEND_TERMINAL) {
+            if (correlation_released_) {
+                matches = false;
+                for (request_writable_wait_t::const_iterator it =
+                       current->request_wait.begin ();
+                     it != current->request_wait.end (); ++it) {
+                    if (it->first->request_correlation_release_epoch ()
+                        != it->second) {
+                        matches = true;
+                        break;
+                    }
+                }
+            } else
+                matches = matches && current->request_wait.empty ();
+        }
+        if (!matches) {
             previous = current;
             current = next;
             continue;
@@ -391,6 +413,7 @@ int zlink::socket_completion::publish_writable_waiters (
             1, std::memory_order_release);
         zlink_assert (previous_count > 0);
 
+        current->request_wait.clear ();
         current->completion.send_result = result_;
         current->completion.send_terminal_errno = terminal_errno_;
         append_ready_locked (state_, current);
@@ -517,6 +540,7 @@ void zlink::socket_completion::close (queue_state_t *state_,
         reservation_t *const next = waiter->writable_wait_next;
         waiter->writable_wait_next = NULL;
         waiter->writable_wait_linked = false;
+        waiter->request_wait.clear ();
         waiter->completion.send_result = ZLINK_SEND_TERMINAL;
         waiter->completion.send_terminal_errno = state_->lifecycle_errno;
         append_ready_locked (state_, waiter);

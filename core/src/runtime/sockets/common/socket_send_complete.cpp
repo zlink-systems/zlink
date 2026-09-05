@@ -109,11 +109,12 @@ bool zlink::socket_base_t::xsend_writable_target_for_pipe (
 }
 
 void zlink::socket_base_t::publish_send_writable_target (
-  const zlink_routing_id_t *target_rid_or_null_)
+  const zlink_routing_id_t *target_rid_or_null_, bool correlation_released_)
 {
     const int saved_errno = errno;
     const int published = socket_completion::publish_writable_waiters (
-      &completion_runtime (), target_rid_or_null_, ZLINK_SEND_ADMITTED, 0);
+      &completion_runtime (), target_rid_or_null_, ZLINK_SEND_ADMITTED, 0,
+      correlation_released_);
     if (published > 0) {
         // The completion command supplies async-owner progress and
         // POLLCOMPLETION. signal() is deliberately unconditional here: an
@@ -123,6 +124,13 @@ void zlink::socket_base_t::publish_send_writable_target (
         static_cast<mailbox_t *> (_mailbox)->signal ();
     }
     errno = saved_errno;
+}
+
+void zlink::socket_base_t::request_correlation_released (pipe_t *pipe_)
+{
+    LIBZLINK_UNUSED (pipe_);
+    if (has_send_writable_wait ())
+        publish_send_writable_target (NULL, true);
 }
 
 void zlink::socket_base_t::notify_send_writable (pipe_t *pipe_)
@@ -160,7 +168,8 @@ void zlink::socket_base_t::notify_send_writable (pipe_t *pipe_)
 
 int zlink::socket_base_t::register_send_writable_wait_after_failure (
   int failure_errno_, const zlink_routing_id_t *target_rid_or_null_,
-  void *user_context_, zlink_completion_id_t *completion_id_out_)
+  void *user_context_, zlink_completion_id_t *completion_id_out_,
+  socket_completion::request_writable_wait_t *request_wait_)
 {
     if (completion_id_out_)
         *completion_id_out_ = 0;
@@ -187,11 +196,12 @@ int zlink::socket_base_t::register_send_writable_wait_after_failure (
         return -1;
     }
 
+    const bool correlation_wait = request_wait_ && !request_wait_->empty ();
     socket_completion::reservation_t *reservation = NULL;
     zlink_completion_id_t completion_id = 0;
     if (socket_completion::reserve_writable_wait (
           &completion_runtime (), user_context_, target_rid_or_null_,
-          &reservation, &completion_id)
+          &reservation, &completion_id, request_wait_)
         != 0)
         return -1;
     zlink_assert (reservation);
@@ -204,7 +214,9 @@ int zlink::socket_base_t::register_send_writable_wait_after_failure (
     // credit recovery across many sockets into a serialized submit-side loop.
     std::atomic_thread_fence (std::memory_order_seq_cst);
     bool ready = false;
-    {
+    if (correlation_wait)
+        publish_send_writable_target (NULL, true);
+    else {
         socket_public_send_scope_t readiness_scope (
           lifecycle_coordinator (), true);
         if (readiness_scope.acquired ())

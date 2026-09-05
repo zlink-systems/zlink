@@ -120,6 +120,10 @@ struct i_pipe_events
 
     virtual void read_activated (zlink::pipe_t *pipe_) = 0;
     virtual void write_activated (zlink::pipe_t *pipe_) = 0;
+    virtual void request_correlation_released (zlink::pipe_t *pipe_)
+    {
+        LIBZLINK_UNUSED (pipe_);
+    }
     virtual void hiccuped (zlink::pipe_t *pipe_) = 0;
     virtual void pipe_peer_terminated (zlink::pipe_t *pipe_, bool drain_complete_) = 0;
     virtual void pipe_terminated (zlink::pipe_t *pipe_) = 0;
@@ -246,7 +250,9 @@ class pipe_t ZLINK_FINAL : public object_t,
     // Request correlation remains live after the application queue releases
     // its byte credit. Keep that second lifetime bounded per physical route so
     // a fast request lane cannot indefinitely outrun its completion lane.
-    bool try_reserve_request_correlation (uint64_t accounted_bytes_);
+    bool try_reserve_request_correlation (
+      uint64_t accounted_bytes_, uint64_t *release_epoch_out_ = NULL);
+    uint64_t request_correlation_release_epoch () const;
     void release_request_correlation (uint64_t accounted_bytes_);
     static uint64_t frame_accounted_bytes (const msg_t *msg_);
     uint64_t planned_in_hwm () const;
@@ -734,6 +740,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     // A request-only admission miss does not remove this pipe from ordinary
     // send scheduling. It still needs one owner-thread wake when terminal
     // completion returns correlation capacity.
+    std::atomic<uint64_t> _request_correlation_release_epoch;
     bool _request_correlation_waiting;
     bool _request_correlation_activation_pending;
     //  Set while the pipe's owner holds an accepted message that has not been
