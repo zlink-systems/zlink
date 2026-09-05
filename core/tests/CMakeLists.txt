@@ -105,6 +105,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_helper_interleave
   ${INTEGRATION_TEST_ROOT}/test_proxy
   ${INTEGRATION_TEST_ROOT}/test_pubsub
+  ${INTEGRATION_TEST_ROOT}/test_pubsub_churn_dist
   ${INTEGRATION_TEST_ROOT}/test_reconnect_ivl
   ${INTEGRATION_TEST_ROOT}/test_reconnect_options
   ${INTEGRATION_TEST_ROOT}/test_socket_disconnect_boundary
@@ -1154,6 +1155,16 @@ set_tests_properties(
     RUN_SERIAL TRUE
     TIMEOUT 180
     RESOURCE_LOCK "${NETWORK_INTEGRATION_RESOURCE_LOCK}")
+
+if(TARGET test_pubsub_churn_dist)
+  set_tests_properties(
+    test_pubsub_churn_dist
+    PROPERTIES
+      LABELS "regression;serial"
+      RUN_SERIAL TRUE
+      TIMEOUT 180
+      RESOURCE_LOCK "${NETWORK_INTEGRATION_RESOURCE_LOCK}")
+endif()
 
 add_test(NAME test_wake_invariants COMMAND test_wake_invariants)
 add_test(NAME test_two_poller_wake COMMAND test_two_poller_wake)
