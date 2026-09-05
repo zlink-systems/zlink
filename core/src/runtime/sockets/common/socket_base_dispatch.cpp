@@ -221,23 +221,23 @@ bool zlink::socket_base_t::acquire_completion_poller (void *owner_)
         }
         quiesce_async_owner =
           lifecycle_coordinator ().is_async_mailbox_active ()
-          && current_async_mailbox_dispatch_socket () != this;
+          && current_async_mailbox_dispatch_socket () != this
+          && stop_async_mailbox_processing ();
         if (quiesce_async_owner)
             invalidate_completion_processing_owner ();
 
         const uint32_t previous =
           _completion_poller_refs.fetch_add (1, std::memory_order_acq_rel);
         zlink_assert (previous == 0);
-        if (quiesce_async_owner) {
-            stop_async_mailbox_processing ();
-        } else {
+        if (!quiesce_async_owner) {
             publish_completion_processing_owner ();
         }
     }
-    //  With no async completion consumer, the public poller can process mailbox
-    //  commands and completions itself.  Quiescing the second mailbox owner
-    //  also keeps normal receive readiness single-threaded while the poller
-    //  registration exists.
+    // A monitor must keep processing commands
+    // even when the application never waits on its completion poller. The
+    // owner gate and completion reference fence only completion drain; the
+    // async executor already skips that drain while a public poller owns it.
+    // Without a monitor the executor can still hand commands to the poller.
     if (quiesce_async_owner) {
         wait_async_quiesced (10000);
         // The wait runs outside the drain fence. Recheck the exact owner and

@@ -9,6 +9,7 @@ set(REGISTERED_TESTS)
 set(SPLIT_ONLY_TEST_TARGETS
     test_backpressure_matrix
     test_backpressure_oneway_matrix
+    test_disconnect_progress
     test_dealer_router_single_lane_contract)
 set(INTEGRATION_TEST_ROOT "integration")
 set(E2E_TEST_ROOT "e2e")
@@ -112,6 +113,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_xpub_nodrop
   ${INTEGRATION_TEST_ROOT}/test_timer_poller
   ${INTEGRATION_TEST_ROOT}/test_polling_contract
+  ${INTEGRATION_TEST_ROOT}/test_disconnect_progress
   ${INTEGRATION_TEST_ROOT}/test_phase3_completion_contract
   ${INTEGRATION_TEST_ROOT}/test_phase3_request_reply_contract
   ${INTEGRATION_TEST_ROOT}/test_request_writable_contract
@@ -614,6 +616,22 @@ function(add_env_case_test test_name target_name test_case)
             ZLINK_TEST_CASE=${test_case}
             $<TARGET_FILE:${target_name}>)
 endfunction()
+
+foreach(transport tcp inproc)
+  foreach(mask in completion)
+    foreach(operation automatic disconnect request)
+      foreach(wait idle blocked)
+        set(case "${transport}_${mask}_${operation}_${wait}")
+        set(name "test_disconnect_progress_${case}")
+        add_env_case_test(${name} test_disconnect_progress ${case})
+        set_tests_properties(${name} PROPERTIES
+          LABELS "integration;serial"
+          RUN_SERIAL TRUE
+          TIMEOUT 10)
+      endforeach()
+    endforeach()
+  endforeach()
+endforeach()
 
 function(extract_named_unity_cases out_var source_file macro_name)
   file(
