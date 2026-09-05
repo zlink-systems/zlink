@@ -304,7 +304,7 @@ export class ZLinkEntrySpotActivation {
     this.lifecycleMetrics.opened('entry');
   }
 
-  async dispose(): Promise<void> {
+  async dispose(deadline?: Date): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
     const errors: unknown[] = [];
@@ -318,7 +318,8 @@ export class ZLinkEntrySpotActivation {
     if (this.initialized) {
       await cleanup(() => this.serial.execute(() => invokeSpotClosing(
         this.entrySpot.onClosing?.bind(this.entrySpot),
-        ZLinkSpotCloseReason.HostShutdown
+        ZLinkSpotCloseReason.HostShutdown,
+        deadline
       )));
     }
     await cleanup(() => this.actorDispatch?.dispose());

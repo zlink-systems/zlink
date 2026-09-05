@@ -326,7 +326,6 @@ async function runFullLane(ctx) {
     'target-after-maintenance',
     'SIGTERM'
   );
-  await stopNormalTopology(ctx);
   recordVerdict(verdicts, 'ZW-G5');
   assertCompleteVerdicts(verdicts);
   console.log('topology=ready');
@@ -539,20 +538,6 @@ async function zoneNodeConfig(ctx, shared, nodeId, name, overrides = {}) {
     }
   };
   return { value, path: ctx.writeConfig(name, value) };
-}
-
-async function stopNormalTopology(ctx) {
-  for (const name of [
-    'zone-node-1',
-    'zone-node-2',
-    'target-after-failure',
-    'target-after-maintenance',
-    'zone-node-3',
-    'gateway',
-    'ops'
-  ]) {
-    await ctx.stop(name, 'SIGKILL');
-  }
 }
 
 function specialClientConfig(ctx, shared, gateway, ops, scenarios, targetNodeId) {

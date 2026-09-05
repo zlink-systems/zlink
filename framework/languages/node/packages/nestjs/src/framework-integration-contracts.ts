@@ -39,7 +39,8 @@ export interface ZLinkWorkerOptions {
   readonly maxQueueLength: number;
 }
 
-export interface ZLinkNestIntegrationRuntimeHost {
+export interface ZLinkNestIntegrationRuntimeHost
+  extends Pick<import('@zlink-systems/framework').ZLinkFrameworkRuntime, 'shutdown'> {
   readonly channelRuntimeOptions: unknown;
   readonly routeMeshRuntimeOptions:
     import('@zlink-systems/framework').ZLinkRouteMeshRuntimeOptions;
@@ -50,7 +51,6 @@ export interface ZLinkNestIntegrationRuntimeHost {
   readonly fanoutRuntime: import('@zlink-systems/framework').ZLinkFanoutRuntime;
   createLocationHandleResolver(): unknown;
   start(): Promise<void>;
-  stop(): Promise<void>;
   onApplicationBootstrap?(): Promise<void> | void;
   onApplicationShutdown?(): Promise<void> | void;
 }

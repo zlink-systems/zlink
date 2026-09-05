@@ -8,10 +8,13 @@ const DEFAULT_CLEANUP_TIMEOUT_MS = 30_000;
 export async function invokeSpotClosing(
   callback: ((context: ZLinkSpotClosingContext, cleanupSignal: AbortSignal) => Promise<void>) | undefined,
   reason: ZLinkSpotCloseReason,
-  timeoutMs = DEFAULT_CLEANUP_TIMEOUT_MS
+  cleanupDeadline: Date | number = DEFAULT_CLEANUP_TIMEOUT_MS
 ): Promise<void> {
   if (callback === undefined) return;
-  const deadline = new Date(Date.now() + timeoutMs);
+  const deadline = new Date(cleanupDeadline instanceof Date
+    ? cleanupDeadline.getTime()
+    : Date.now() + cleanupDeadline);
+  const timeoutMs = Math.max(0, deadline.getTime() - Date.now());
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<void>(resolve => {
@@ -20,11 +23,10 @@ export async function invokeSpotClosing(
       resolve();
     }, timeoutMs);
   });
-  const operation = callback({ reason, deadline }, controller.signal);
   try {
+    const operation = callback({ reason, deadline }, controller.signal);
     await Promise.race([operation, expired]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
-    void operation.catch(() => undefined);
   }
 }

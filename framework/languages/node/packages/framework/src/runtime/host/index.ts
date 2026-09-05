@@ -965,11 +965,11 @@ export class ZLinkFrameworkRuntimeHost implements
     if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) {
       return Promise.reject(new RangeError('Shutdown deadlineMs must be greater than zero.'));
     }
-    this.runtimeDeadline = new Date(Date.now() + deadlineMs);
     if (this.shutdownOperation === undefined) {
+      this.runtimeDeadline = new Date(Date.now() + deadlineMs);
       this.relocationStopStarting?.abort(new Error('Shutdown requested.'));
       this.shutdownOperationStartedAt = performance.now();
-      this.shutdownOperation = this.runShutdown(deadlineMs);
+      this.shutdownOperation = this.runShutdown(this.runtimeDeadline);
     }
     return waitForRuntimeOperation(this.shutdownOperation, options?.signal);
   }
@@ -1059,7 +1059,7 @@ export class ZLinkFrameworkRuntimeHost implements
     }
   }
 
-  private async runShutdown(deadlineMs: number): Promise<ZLinkFrameworkTerminationResult> {
+  private async runShutdown(deadline: Date): Promise<ZLinkFrameworkTerminationResult> {
     try {
       this.admission.close();
       this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
@@ -1071,7 +1071,7 @@ export class ZLinkFrameworkRuntimeHost implements
       // host no longer accepts work. This prevents status polling from racing
       // with the coordinator's synchronous seal step.
       const unscopedStreamDrain = this.streamRuntime?.notifyUnscopedServerDrain();
-      const shutdown = this.routeMeshCoordinator.shutdownHost(deadlineMs);
+      const shutdown = this.routeMeshCoordinator.shutdownHost(deadline);
       const drain = await shutdown;
       await unscopedStreamDrain;
       await this.stop();
@@ -1082,6 +1082,9 @@ export class ZLinkFrameworkRuntimeHost implements
             ? ZLinkFrameworkTerminationReason.DeadlineExceeded
             : ZLinkFrameworkTerminationReason.TeardownFailed
         });
+      }
+      if (Date.now() >= deadline.getTime()) {
+        throw createDeadlineExceededError('Shutdown resource cleanup exceeded its deadline.');
       }
       return this.completeTermination({
         outcome: ZLinkFrameworkTerminationOutcome.Stopped,
@@ -1499,6 +1502,7 @@ export class ZLinkFrameworkRuntimeHost implements
     await stopRuntimeParts({
       state,
       locationSnapshot,
+      cleanupDeadline: this.runtimeDeadline,
       streamRuntime,
       spotNodeRuntime,
       channelRuntime,
@@ -1720,9 +1724,7 @@ export class ZLinkFrameworkRuntimeHost implements
   }
 
   async onApplicationShutdown(): Promise<void> {
-    // Process shutdown is teardown only. Applications must call relocate()
-    // explicitly when they need service-preserving handoff.
-    await this.stop();
+    await this.shutdown();
   }
 
   private async performMeshDrain(
@@ -1739,7 +1741,7 @@ export class ZLinkFrameworkRuntimeHost implements
   }
 
   private async performMeshShutdown(meshName: string, signal: AbortSignal): Promise<void> {
-    await this.spotManager?.drainForShutdown(meshName, signal);
+    await this.spotManager?.drainForShutdown(meshName, signal, this.runtimeDeadline);
     await awaitWithDrainSignal(
       this.streamRuntime?.notifyServerDrain(meshName),
       signal
@@ -1780,11 +1782,10 @@ export class ZLinkFrameworkRuntimeHost implements
   ): Promise<void> {
     const node = this.spotNodeRuntime?.meshNode(meshName);
     if (node !== undefined) {
-      await Promise.all(Object.keys(
-        this.options.registration.spotNodes.get(meshName)?.meshChannels ?? {}
-      ).map(async (channelName) => {
-        await node.setChannelWeight(channelName, 0);
-      }));
+      await Promise.all((this.spotNodeRuntime?.serverChannels(meshName) ?? [])
+        .map(async ([channelName]) => {
+          await node.setChannelWeight(channelName, 0);
+        }));
     }
     await this.spotNodeRuntime?.publishMeshNodeState(
       ZLinkFrameworkRuntimeState.Draining,
@@ -1887,13 +1888,6 @@ export class ZLinkFrameworkRuntimeHost implements
     } catch (error) {
       throw new ZLinkDrainingStatePublishError(error);
     }
-    if (this.locationOwner.currentRuntime !== undefined) {
-      await waitForDrainRetry(
-        this.options.registration.locations.options.pollingIntervalMs
-          ?? zlinkDefaultLocationOptions.pollingIntervalMs,
-        signal
-      );
-    }
   }
 
   private async cleanupOwnerForDrain(signal: AbortSignal): Promise<void> {
@@ -1919,7 +1913,7 @@ export class ZLinkFrameworkRuntimeHost implements
 
   private async forceStopMesh(meshName: string): Promise<void> {
     await waitForForcedSessionNotification(this.streamRuntime?.notifyServerDrain(meshName));
-    await this.spotManager?.drainForShutdown(meshName);
+    await this.spotManager?.drainForShutdown(meshName, undefined, this.runtimeDeadline);
   }
 
   private registerInstanceApplicationLifecycle(

@@ -154,10 +154,10 @@ export class ZLinkManagedStream implements ZLinkStream {
     await this.closeForReason(ZLinkStreamCloseReasonCode.ServerDrain, 'server drain', signal);
   }
 
-  writeControl(name: string): boolean {
+  async writeControl(name: string): Promise<void> {
     const control = NativeMessage.from(encodeStreamControlFrame(name));
     try {
-      return this.socket.send(this.backendRoutingId(), control, 0);
+      await this.socket.submit(this.backendRoutingId(), control);
     } finally {
       control.close();
     }

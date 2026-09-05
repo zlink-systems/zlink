@@ -342,10 +342,7 @@ export function createRuntimeHost(
     await runtime.start();
   };
   runtime.onModuleDestroy = async () => {
-    // Nest application-context teardown does not necessarily run OS-signal
-    // shutdown hooks. Close the runtime here as well; stop is idempotent after
-    // an ordered shutdown has already completed.
-    await runtime.stop();
+    await runtime.shutdown();
   };
   runtime.onApplicationBootstrap = async () => {};
   return runtime;

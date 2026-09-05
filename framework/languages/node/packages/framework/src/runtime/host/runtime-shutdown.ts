@@ -22,6 +22,7 @@ export interface ZLinkRuntimeStartRollbackParts {
 
 export interface ZLinkRuntimeStopParts {
   readonly state: ZLinkFrameworkExecutionState;
+  readonly cleanupDeadline?: Date;
   readonly locationSnapshot: ZLinkLocationRuntimeStopSnapshot;
   readonly streamRuntime?: ZLinkStreamRuntimeManager;
   readonly spotNodeRuntime?: ZLinkSpotNodeRuntimeManager;
@@ -46,7 +47,7 @@ export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<vo
   state.abortController.abort();
   const errors: unknown[] = [];
   await runShutdownStep(errors, () => parts.streamRuntime?.dispose());
-  await runShutdownStep(errors, () => parts.spotNodeRuntime?.dispose());
+  await runShutdownStep(errors, () => parts.spotNodeRuntime?.dispose(undefined, parts.cleanupDeadline));
   await runShutdownStep(errors, () => parts.channelRuntime?.dispose());
   await runShutdownStep(errors, () => parts.serviceRelocation?.dispose());
   await runShutdownStep(errors, () => parts.locationSnapshot.lifecycle?.dispose());

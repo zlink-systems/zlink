@@ -4331,3 +4331,57 @@ function dispatchErrorReporter(_legacyObserverType, sink, mode = 'errors') {
     }
   );
 }
+
+test('HostShutdown closes occupied User and Instance scopes with membership visible to callbacks', async () => {
+  const actor = { context: { actorId: 'shutdown-member' } };
+  const closed = [];
+  const activations = new Map();
+  class OccupiedSpot {
+    async onClosing(context) {
+      assert.equal(context.reason, framework.ZLinkSpotCloseReason.HostShutdown);
+      assert.equal(activations.get(String(this.context.spotId)).resolveJoinedActor('shutdown-member'), actor);
+      closed.push(String(this.context.spotId));
+    }
+  }
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [OccupiedSpot],
+    instanceSpotFactories: new Map([['test.mesh', new Map([['occupied', OccupiedSpot]])]]),
+    actorCountProvider: () => 1
+  });
+  await manager.create('test.mesh', OccupiedSpot);
+  await manager.materializeInstance('test.mesh', 'occupied', zlink.RoutingId.from('occupied-instance'));
+  for (const activation of manager.activations.activeActivations()) {
+    activation.commitActorJoin(actor);
+    activations.set(String(activation.spotId), activation);
+    assert.equal(await manager.close('test.mesh', activation.spotId), false);
+  }
+  await manager.drainForShutdown('test.mesh');
+  assert.deepEqual(closed.sort(), [...activations.keys()].sort());
+  assert.deepEqual(await manager.list('test.mesh'), []);
+});
+
+test('HostShutdown observes callback errors only after all Spot cleanup terminals', async () => {
+  const failure = new Error('shutdown callback failed');
+  let finishClosing;
+  let otherClosing;
+  const started = new Promise(resolve => { otherClosing = resolve; });
+  class FailingSpot { async onClosing() { throw failure; } }
+  class PendingSpot {
+    async onClosing() {
+      otherClosing();
+      await new Promise(resolve => { finishClosing = resolve; });
+    }
+  }
+  const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [FailingSpot, PendingSpot] });
+  await manager.create('test.mesh', FailingSpot);
+  await manager.create('test.mesh', PendingSpot);
+  let settled = false;
+  const draining = manager.drainForShutdown('test.mesh');
+  const observed = assert.rejects(draining, error => error === failure).then(() => { settled = true; });
+  await started;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, false);
+  finishClosing();
+  await observed;
+  assert.deepEqual(await manager.list('test.mesh'), []);
+});

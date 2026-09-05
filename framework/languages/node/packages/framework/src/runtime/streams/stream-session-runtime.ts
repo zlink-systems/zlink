@@ -256,23 +256,19 @@ export class ZLinkStreamSessionRuntime {
       terminalOwner?.close();
     };
     if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
-      if (messageToBytes(payload).length === 0) {
-        if (decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PONG) {
-          this.awaitingPongSince = undefined;
+      if (
+        messageToBytes(payload).length === 0
+        && (decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PONG
+          || decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PING)
+      ) {
+        void this.handleControl(decodedHeader, payload).catch(error => {
+          this.options.onError?.(error);
+        }).finally(() => {
           applicationJobPermit?.releaseAfterInternalProcessing();
           payload.close();
           releaseTerminal();
-          return;
-        }
-        if (
-          decodedHeader.name === ZLINK_STREAM_HEARTBEAT_PING
-          && this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PONG)
-        ) {
-          applicationJobPermit?.releaseAfterInternalProcessing();
-          payload.close();
-          releaseTerminal();
-          return;
-        }
+        });
+        return;
       }
       this.enqueueControl(
         async () => {
@@ -594,13 +590,7 @@ export class ZLinkStreamSessionRuntime {
       return;
     }
     if (header.name === ZLINK_STREAM_HEARTBEAT_PING) {
-      if (!this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PONG)) {
-        await this.closeForLiveness(
-          ZLinkStreamCloseReasonCode.TransportError,
-          'transport_error',
-          'Heartbeat pong send failed.'
-        );
-      }
+      await this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PONG);
       return;
     }
     await this.closeForLiveness(
@@ -616,7 +606,9 @@ export class ZLinkStreamSessionRuntime {
     }
     this.livenessTimer = this.livenessClock.setTimer(() => {
       this.livenessTimer = undefined;
-    this.serial.executeInfrastructure(async () => this.runLivenessCheck());
+      this.serial.executeInfrastructure(
+        async () => this.runLivenessCheck(), {}, error => this.options.onError?.(error)
+      );
     }, ZLINK_STREAM_HEARTBEAT_INTERVAL_MS);
   }
 
@@ -644,14 +636,7 @@ export class ZLinkStreamSessionRuntime {
       );
       return;
     }
-    if (!this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PING)) {
-      await this.closeForLiveness(
-        ZLinkStreamCloseReasonCode.TransportError,
-        'transport_error',
-        'Heartbeat ping send failed.'
-      );
-      return;
-    }
+    await this.stream.writeControl(ZLINK_STREAM_HEARTBEAT_PING);
     this.awaitingPongSince ??= now;
     this.scheduleLivenessCheck();
   }

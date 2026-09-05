@@ -783,3 +783,44 @@ test('application shutdown hook tears down without implicitly relocating', async
   await host.onApplicationShutdown();
   assert.equal(stopped, 1);
 });
+
+test('Shared shutdown keeps the first absolute deadline', async () => {
+  const host = new internal.ZLinkFrameworkRuntimeHost({ registration: internal.createFrameworkRegistration() });
+  let finishShutdown;
+  let observedDeadline;
+  host.routeMeshCoordinator.shutdownHost = async deadline => {
+    observedDeadline = deadline;
+    await new Promise(resolve => { finishShutdown = resolve; });
+    return { kind: 'drained' };
+  };
+  const first = host.shutdown({ deadlineMs: 50 });
+  const joined = host.shutdown({ deadlineMs: 30_000 });
+  assert.equal(host.runtimeDeadline, observedDeadline);
+  finishShutdown();
+  assert.equal(await first, await joined);
+});
+
+test('Host Draining publishes weights only for locally registered server channels', async () => {
+  const meshName = `shutdown-channels.${process.pid}`;
+  const registration = internal.createFrameworkRegistrationWithBuilder(builder => {
+    const mesh = builder.addRouteMesh(meshName)
+      .listen(`inproc://${meshName}`)
+      .routingId(`shutdown-channel-node-${process.pid}`);
+    mesh.channel('server-channel').server();
+    mesh.channel('client-channel').client();
+  });
+  const host = new internal.ZLinkFrameworkRuntimeHost({ registration });
+  await host.start();
+  const result = await host.shutdown({ deadlineMs: 1000 });
+  assert.equal(result.outcome, framework.ZLinkFrameworkTerminationOutcome.Stopped);
+  assert.equal(result.reason, framework.ZLinkFrameworkTerminationReason.None);
+});
+
+test('Shutdown deadline includes final owned resource cleanup', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'] });
+  const host = new internal.ZLinkFrameworkRuntimeHost({ registration: internal.createFrameworkRegistration() });
+  host.stop = async () => { t.mock.timers.tick(51); };
+  const result = await host.shutdown({ deadlineMs: 50 });
+  assert.equal(result.outcome, framework.ZLinkFrameworkTerminationOutcome.ForceStopped);
+  assert.equal(result.reason, framework.ZLinkFrameworkTerminationReason.DeadlineExceeded);
+});

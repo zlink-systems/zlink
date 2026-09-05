@@ -77,7 +77,7 @@ export async function runSample(ctx) {
   await ctx.waitLog('browser-client', 'gamequest-owner awaiting-termination player=player-alice');
   await waitCombinedLog(ctx, ['mission-a', 'mission-b'], 'gamequest-owner ready player=player-alice node=');
   const owner = ownerRole(ctx, 'player-alice');
-  ctx.signal(owner, 'SIGKILL');
+  await ctx.stop(owner, 'SIGKILL');
   await browser.complete();
 
   await verifyEvidence(ctx);
