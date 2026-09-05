@@ -1,0 +1,14 @@
+# Job (implement, model astra): D-095 approved (B) — implement your proposal in `fix-node-clientserver-readiness-cap-summary.md`: the ClientServer readiness wait in `channel-socket-registry.ts:645` (`awaitClientDealerForOutbound`) measures its deadline with `performance.now()`; the existing polling timer delay is `min(5 ms, remaining)`; no second timer/state. Then audit the rest of `framework/languages/node/packages/framework/src` for `Date.now()` used to compute an elapsed duration or deadline (not a timestamp) and move each to the same monotonic source — one time source for durations (rule count 2 → 1 per owner)
+
+You are a codex sub-agent under a Claude supervisor. Read `decisions.ko.md` D-095 and your diagnosis. Rules as before (never `core/**`, `bindings/**`, any
+`doc/spec/**`, other languages; do not commit; env `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`,
+`flock -w7200 /tmp/zlink-node-gate.lock`; another node job edits STREAM/DeliveryDispatch files — `git status` first, avoid those files). Timestamps that are
+*reported* (flow logs, descriptors, lease expiry compared against store time) stay wall-clock — list them and say why each stays.
+
+## Verify
+Regression test: wall-clock jump forward/backward during the wait does not change the readiness duration (monotonic-measured 5000 ≤ elapsed < 8000 kept);
+`client-server-location-runtime.test.js` 3×; touched subsystems' contract tests; `npm run typecheck`; `npm test` once (report the `sample-regression` file
+separately — DeliveryDispatch STREAM regression is under Core investigation).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-clientserver-readiness-cap-2-summary.md`: per-site table (file:line, duration vs timestamp, changed/kept), four lines, rule count, results, BLOCKERS.

@@ -1,0 +1,21 @@
+# Job (Core fix, model astra): raw STREAM (tcp/ws, no ZMP pair) — explicit `zlink_disconnect_rid()` closes the connection but never publishes the DISCONNECTED monitor event (found by `core-stream-delivery-regression-599b4a75ef-summary.md` § 공개 C API 재현: `stream.cpp:368-397` terminate(true) → `session_base.cpp:453-462` → `asio_engine.cpp:390-406` terminate() skips the error()/DISCONNECTED path; `socket_base_api.cpp:1751` publishes only when `pair_id != 0`); pre-existing. One physical termination event claim for paired and raw transports
+
+You are a codex sub-agent under a Claude supervisor. Read `CONTRIBUTING.ko.md` §4/§5, `AGENTS.md` §3, `core/doc/spec/core/socket/08-stream.ko.md` §4·§6.3·§9,
+`socket/README.ko.md` §4·§6, `05-polling.ko.md` §3, `06-monitoring.ko.md` §3.1 and §9 (:539-543: one DISCONNECTED contract independent of transport), and the report
+above (whole file, incl. its A/B of the owner file). Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do not commit. WORK ONLY IN
+`/home/hep7/project/zlink-core-a` — it already holds the uncommitted new test `core/tests/integration/test_stream_multiclient_delivery.cpp` + CMake registration
+(keep them; they are your failing test: explicit RID removal case), on base `ccb418b6ee`+: first `git stash -u && git checkout -q --detach bf937cb79a && git stash pop`
+(resolve trivially if needed). Never touch main's `core/build-dev`; another Core job runs in worktree b. Build: `nice -n 10 env JOBS=4 scripts/build-core.sh dev`.
+
+## Fix (single owner)
+The report's recommendation: unify the physical termination event claim so that engine-initiated and socket-initiated terminations of a raw transport publish
+DISCONNECTED exactly once through the same claim paired transports use (no STREAM-only branch, no second event path). Rule count: termination observation
+2 → 1 (paired: shared claim / raw: engine publish → one claim). Preserve D-092 (event at peer termination) and the no-duplicate guarantee.
+
+## Verify
+`test_stream_multiclient_delivery` all cases `--repeat until-fail:10` (tcp + ws, peer close and explicit disconnect_rid); targeted
+`test_stream|test_router_reject_disconnected_without_app_recv|test_monitor|test_transport_matrix|test_socket_disconnect_boundary`; full ctest once (hotpath n/a).
+
+## Deliverable
+`doc/plan/c016-worklog/core-stream-disconnect-rid-disconnected-summary.md` in MAIN (cause, fix, owner / spec clause / parity (bindings/frameworks rely on
+DISCONNECTED for STREAM session cleanup — name the consumers) / class, rule count, results, BLOCKERS); `git add -N . && git diff HEAD > /home/hep7/project/zlink-core-a/core-stream-disconnected.patch`.

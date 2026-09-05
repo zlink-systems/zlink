@@ -1,0 +1,23 @@
+# Job (Core fix, model astra): D-094 — remove the `same_local_endpoint_reconnect` bypass in ROUTER admission; RID duplicate policy is decided by REJECT/HANDOVER only
+
+You are a codex sub-agent under a Claude supervisor. Read `CONTRIBUTING.ko.md` §4/§5, `AGENTS.md` §3, `core/doc/spec/core/socket/README.ko.md` §4 (REJECT keeps
+the existing pipe and does not register the duplicate; HANDOVER: same-direction reconnect takes over; reciprocal collapse D-B96), `doc/plan/c016-worklog/decisions.ko.md`
+D-088, D-091, D-092, D-094, and `fix-java-descriptor-fence-class-run-summary.md` (the C-API repro `/tmp/zlink-java-m6a-diagnosis/reject_same_socket.cpp` and the
+observed sequence). Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do not commit. WORK ONLY IN `/home/hep7/project/zlink-core-b`:
+`git reset -q --hard && git clean -fdq core && git checkout -q --detach b4a0cf8421`. Never touch main's `core/build-dev`; another Core job runs in worktree a (do not touch).
+Build: `nice -n 10 env JOBS=4 scripts/build-core.sh dev`.
+
+## What to do
+1. `core/src/runtime/sockets/router/router_admission.cpp:353-362` (introduced by `d314e96fd8`): delete the `same_local_endpoint_reconnect` exception so that under
+   REJECT the new pipe is always the one closed (existing admitted pipe untouched, request/reply continue) and under HANDOVER the new pipe takes over. Keep the
+   reciprocal-duplicate rule (D-B96). Then examine the ordering concern the removed comment described ("old pipe keeps the RID until its terminate command is
+   processed, new generation stays anonymous"): with D-092 the old pipe's termination is observed promptly; show with a test that a reconnect arriving before
+   the old pipe's terminate command is processed is REJECTed, the connector's intent retries, and the retry is admitted once the old pipe is gone — no extra
+   rule. If some path still needs the old pipe to be released synchronously, fix that owner (termination processing order), not admission.
+2. Contract test `core/tests/integration/test_router_same_socket_reconnect_policy.cpp` (tcp + inproc): (a) REJECT: existing pipe kept, new connection observes
+   DISCONNECTED without app recv (D-092), request/reply on the existing pipe still works, no DISCONNECTED on the existing connection id; (b) HANDOVER: new pipe
+   takes over, old lanes standby, D-090 request completion; (c) ordering case above. Register in `core/tests/CMakeLists.txt`.
+3. Gate: new test `--repeat until-fail:10`; targeted `test_router_reject_duplicate|test_router_reject_disconnected_without_app_recv|test_socket_disconnect_boundary|
+   test_router_reciprocal_handover_lanes|test_ctx_term_fixed_rid_handover|test_router_handover|test_inproc_pending_connect_rejected_at_attach`; full ctest once (hotpath n/a).
+4. Deliverable in MAIN: `doc/plan/c016-worklog/core-remove-same-local-endpoint-reconnect-summary.md` (cause, fix, owner / spec clause / parity / class, rule
+   count 3→2, results, BLOCKERS); `git add -N . && git diff HEAD > /home/hep7/project/zlink-core-b/core-d094.patch`.

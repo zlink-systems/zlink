@@ -1,0 +1,27 @@
+# Job (fix, model astra): java raw mesh node attributes a DISCONNECTED of a *different* attempt/lane to the current intent because `TransportIdentity.matches` compares endpoint keys only — the intent is closed by a foreign termination edge (found by `fix-java-descriptor-fence-class-run-summary.md`)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `framework/doc/framework/common/spec/server/02-channel-transport/05-transport-liveness.{ko,en}.md`
+(monitor `connection_id` is diagnostic only — not a physical fence — D-086 2(b)), `03-spot-actor/03-mesh-node.ko.md` (connection intents, replacement), and
+`doc/plan/c016-worklog/fix-java-descriptor-fence-class-run-summary.md` (§descriptorFence… observed sequence: intent 2 got READY 1436/lane 0, then a completion-lane
+DISCONNECTED 1439/lane 1 emptied intent 2's transport set and closed it before application DISCONNECTED 1436 arrived; `ZLinkJavaRawMeshNode.java:7256-7263`
+`TransportIdentity.matches`, `:6774-6788` removeIf/close). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages;
+do not commit. Another java job edits Spot/Stream/shutdown files — `git status` first; keep your edits to `ZLinkJavaRawMeshNode.java` and its tests. Env:
+`framework/languages/java`, `TMPDIR=/dev/shm/zlink-tmp-java`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-jvm-gate.lock`.
+
+Context: Core D-094 (removing the `same_local_endpoint_reconnect` admission bypass) is being fixed separately; the M6A tests will only go fully green after that
+Core fix is packaged. Your job is the java-owned defect: an intent must be closed only by the termination of a transport that belongs to it.
+
+## Fix (single owner)
+Intent ↔ transport attribution: the raw mesh node already records the READY it admitted for an intent (connection identity + lane). A DISCONNECTED closes the
+intent only when it terminates a recorded transport of that intent (same connection identity — the one the framework itself recorded from the READY it acted
+on — and lane); a DISCONNECTED for an endpoint the intent never admitted must not empty its set. Do not build a new pair/generation state machine (D-086 2(b)):
+use the identity the node already stores at READY. State rule count before/after (attribution rule: endpoint-key match → recorded-transport match).
+Compare with dotnet `ZLinkMeshPeerAdmission`/`ZLinkManagedMeshNode` (after `3810baab93` it no longer re-filters by physical direction; how does it attribute
+DISCONNECTED to an intent?) and node's mesh backend; the java rule must be the same one.
+
+## Verify
+Unit regression (foreign-lane DISCONNECTED does not close the intent; own-transport DISCONNECTED does); `ZLinkJavaRawMeshNodeM6ATest` class 3× — report per-test
+results honestly (the two Core-dependent cases may still fail until D-094 is packaged; say which assertion and why); `:zlink-framework-core:test contractTest` once.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-java-mesh-transport-identity-summary.md`: cause file:line, fix, four lines, rule count, results, BLOCKERS.

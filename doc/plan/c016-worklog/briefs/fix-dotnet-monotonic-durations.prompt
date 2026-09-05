@@ -1,0 +1,23 @@
+# Job (fix, model astra): D-095 — dotnet framework computes elapsed durations/deadlines/retention from `DateTime.UtcNow` in places (`ZLinkClientServerClientRuntime.cs:592-605` readiness cap; `ZLinkDirectReplyCompletionRegistry.cs:35,64` terminal-record retention → `DirectReplyCompletionRegistryTests.cs:60` failed in the unit gate; others?) — this host's wall clock jumps ±5 s, and by spec these are elapsed times. One monotonic time source per owner
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`, `decisions.ko.md` D-095,
+the ClientServer spec (`02-channel-transport/02-channel-messaging.ko.md:170-174` min(request timeout, 5 s) wait), `04-actor-model.ko.md` §5 (terminal record
+retained 5 min after the original deadline), and the two dotnet reports that hit the clock: `fix-dotnet-shoppingmall-relocation-root-and-final-gate-summary.md`
+(§ liveness 대기 시간 측정: UTC jumped ~5 s; test helpers moved to Stopwatch) and `fix-dotnet-zoneworld-g4-lifecycle-terminal-2-summary.md` §BLOCKERS
+(DirectReplyCompletionRegistryTests). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages; do not commit.
+dotnet env block (`TMPDIR=/dev/shm/zlink-tmp-dotnet`, `ZLINK_LIBRARY_PATH=core/build-dev/lib`, hash-keyed `NUGET_PACKAGES`, `flock -w7200 /tmp/zlink-dotnet-gate.lock`).
+
+## What to do
+1. Audit `framework/languages/dotnet/src/**` for `DateTime.UtcNow`/`DateTimeOffset.UtcNow` used in subtraction/comparison to bound a wait, compute remaining
+   deadline, expire a retained record, or pace a retry. Classify each site: duration (→ the runtime's existing `TimeProvider`/monotonic `Stopwatch`-based
+   clock — reuse the one already injected where present; do not add a second clock abstraction) vs timestamp (reported, or compared with store/lease
+   time from another process — stays wall clock, say why).
+2. Fix the duration sites (at least the two named), keeping deadlines/retention values unchanged. Tests: the failing `DirectReplyCompletionRegistryTests`
+   re-registration case must pass deterministically under a fake time provider that jumps the wall clock; readiness cap regression with wall-clock jump.
+3. Run: focused tests for touched owners, then the unit half `--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests'` once (0 fail expected except
+   the known intermittent `DurableSenderPreservesExhaustionCauseAndOriginalOperation(14, withheld)` — if you see it, capture its output and whether a clock
+   source is involved).
+Cross-language: java registry uses `System.nanoTime()`; node is being fixed in parallel (`fix-node-clientserver-readiness-cap-2`).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-monotonic-durations-summary.md`: site table (file:line, class, changed/kept), four lines, rule count per owner, results, BLOCKERS.
