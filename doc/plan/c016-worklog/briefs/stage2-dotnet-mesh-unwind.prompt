@@ -1,0 +1,53 @@
+# Job (STAGE 2, approved D-removal): dotnet Mesh — delete the framework-side physical HANDOVER state machine and rely on the Core survivor
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·교차언어 대조), then the
+approved diagnosis: `doc/plan/c016-worklog/review-campaign-dotnet.md` (rows `b28eb24270` four parts, `ebff5b3e1b`, "C++ 비대칭
+monitor 기반 결정" table, 재수정 권고 1·3), `review-layer-ownership-audit.md` §3 (.NET inventory), §10 order 1/6, §11, and the
+B session's confirmations in `decisions.ko.md`: **D-B96** (Core reciprocal HANDOVER works per spec: the losing direction's two
+lanes stay as standby and are never closed automatically; the survivor's first REQUEST completes while standby lanes exist;
+a REQUEST admitted on the losing direction times out exactly once and the caller resends) and **D-B94** (the tcp same-RID
+admission latency was a Core bug, fixed `7ffb8e55d9`; local packages have been rebuilt with it). Never modify `core/**`,
+`bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion or widen
+a deadline; do not commit. Env (never `--artifacts-path`, never `ulimit -v`): `export TMPDIR=/dev/shm/zlink-tmp-dotnet
+ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1
+DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export
+NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; cd framework/languages/dotnet; flock -w7200
+/tmp/zlink-dotnet-gate.lock dotnet test ...`. Do NOT touch `ZLinkClientServerClientRuntime.cs` (separate stage, waits for B task 4).
+
+## What to delete / converge (in `ZLinkManagedMeshNode.cs`, `ZLinkMeshPeerAdmission.cs`, `ZLinkMeshPeer.cs`)
+1. Reciprocal settlement: `BeginReciprocalHandoverSettlement`, `ObserveReciprocalHandoverDisconnect`, the lane disconnect mask
+   (`ReciprocalHandoverPending/DisconnectMask/RetiredDirection/RetiredEndpoint` on the peer), and the deferred `Admitted`
+   publication. Publish `Admitted` as soon as the logical survivor is selected (as cpp `service_topology_registry.cpp:281-309`
+   and node `raw-service-mesh-runtime.ts:740-767` do). The losing direction's in-flight request timing out once is the
+   contract; the durable-operation replay policy (04-actor-model sender bullets) covers the resend.
+2. Physical pair re-pin and pair-based ingress fence: `_transportPairsByRid` rewrites in `CompletePeerAdmissionUnderLock` and
+   the ready handler, `_readyOutboundEndpoints`/`_readyInboundRids` as admission inputs, the `HasCurrentInfrastructureControlSource`
+   / `HasCurrentApplicationSource` pair veto on received records (`:5128-5192`, `:5586-5605`), and the reply pair epoch
+   invalidation (`_nativeReplyEpochsByTransportPair`, `:6133-6153`, `:8895-8976`, `:10437-10455`). Routed receive is identified
+   by the logical RID; Core owns physical pipe selection (05-transport-liveness as amended in `3a2ada8187`: connection_id is
+   diagnostic only). Keep monitor observation for readiness/liveness only.
+3. `RetireDuplicatePeer`'s physical retirement decisions (which endpoint/RID to disconnect to make Core pick a survivor): remove;
+   Core already collapsed the duplicate. Keep the framework's logical duplicate bookkeeping (one ready logical peer,
+   `NotRequired` handling) — that is framework-owned.
+4. `ebff5b3e1b` inbound-intent reuse in `ConnectPeer`: remove (mixed manual/automatic duplicates converge through the
+   ordinary duplicate admission, topology spec :688-700), unless the pair-fence removal above does not by itself make
+   TicTacToe's JoinGameNotify path pass — in that case STOP and report the trace (do not keep the reuse as a fix).
+KEEP: the unilateral Hello outbound fallback (`FindReadyOutboundCandidate` may stay only if it no longer reads a
+monitor-derived pair index; otherwise re-express it over the connection candidate registry like cpp
+`raw_mesh_connection_candidates_t::for_handshake`), the `DisconnectTransport` endpoint-vs-RID ownership rule, descriptor /
+generation admission fences, liveness deadlines, the DEALER-ownership fixture fix.
+
+## Verify (all on the rebuilt packages)
+- `ZLinkMeshPeerAdmissionTests`, `StatefulServiceRuntimeTests` (incl. `BilateralCallerFirstAdmissionCompletesImmediateActorRequestOnSurvivor`
+  — if it now observes the one-time handover timeout, that is the contract: change the test to expect completion via replay
+  within its deadline, or, if it asserts "no timeout ever", report it as a test stricter than spec and leave it red with the
+  reason), `RelocatedActorReplyCompletesTheOriginalRemoteCallerExactlyOnce`, the three `RemoteActorStaleAuthority*`,
+  `ServiceRuntimeFoundationTests`, and the Canonical family 3× (`--blame-hang --blame-hang-timeout 5m`; the three tests red
+  in `stage1-dotnet-sub-poller-and-fixture-summary.md` are expected green now that D-086 is fixed and the fixture competition
+  is live). Then the full unit gate once (`--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests'`), and the
+  TicTacToe + SupportChat samples 1× each (`bash framework/languages/dotnet/samples/run_samples.sh <Sample>`).
+- Report every remaining red honestly with its attribution; no mitigation.
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-dotnet-mesh-unwind-summary.md`: deleted/kept inventory (site → verdict), the four lines
+(owner / spec clause / parity / class) per change group, results table, BLOCKERS.

@@ -122,3 +122,12 @@
 - node lint `spot-timer.ts:137` (2026-08 이후 불변, DONTWAIT 무관)
 - java M6A 2건 + JavaDocumentationRegression 1건 (0.16 전환 커밋에도 존재)
 - cpp `common_e2e_inventory` 278 (feature-map 미충족 inventory gate)
+
+### F. 2026-09-05 전수 리뷰 이후 (사용자 지시: 완화 금지·근본원인·하위 계층 재구현 제거)
+- [x] 리뷰 4건(`review-campaign-{dotnet,java,cpp-node}.md`, `review-layer-ownership-audit.md`) — dotnet Mesh/ClientServer의 물리 상태기계·pair fence(D/C), cpp ENOENT 병합(D), node half-budget(C), SupportChat 예산(C), java M6A 2건은 `e65abaf7ac` 회귀 확인
+- [x] AGENTS.md §3/§4 필수 규칙(계층 소유권·금지 패턴·교차언어 대조·진단 먼저) `6ad197b14b`; spec 결정 2(b) `3a2ada8187`, 5 `3a2ada8187`+`662e191536`
+- [x] 1단계(B 무의존): dotnet SUB 특례 제거 + Canonical fixture 경쟁 복원(3 red, D-086 귀속) `5883711e88`; cpp ENOENT 재분리(m6b red, terminal 종류 미분리) `6b18a3f445`; node gate false-green 제거(1560/1559/1) + SupportChat 값 복원 + replay 정책(원인 (b) route 미admit) `71202e4947`; node 소진 종류 `21c12eb02e`
+- [x] B 확정: D-B94 D-086은 **Core 버그**(same-RID tcp replacement가 pair ID 재사용) 수정 `7ffb8e55d9`; D-B95 java monitor ABI 수정 `c9d294c44f`(inproc/CLOSED id는 Core 후속, Poller monitor 등록은 spec gap); D-B96 reciprocal HANDOVER spec대로(패배 lane standby 유지) → dotnet settlement 삭제 근거
+- [ ] cpp 2단계 terminal 종류(route retry 소진 → Unavailable) 진행 중; node 진단 2건(DeliveryDispatch courier NotFound, m6b InvalidState) 진행 중
+- [ ] 로컬 패키지 재빌드(`7ffb8e55d9`·`c9d294c44f` 포함) → dotnet Mesh 걷어내기 2단계(brief `stage2-dotnet-mesh-unwind.prompt`) → Canonical 3 red 재검증 → dotnet ClientServer second poller/수동 reconnect 제거(B 작업 4 결과 대기) → java 합성 connection id·errno 표 제거(B 작업 5·6) → cpp replay 범위 진단 → 4언어 최종 게이트 재실행
+
