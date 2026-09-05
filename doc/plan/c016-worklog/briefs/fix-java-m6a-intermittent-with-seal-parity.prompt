@@ -1,0 +1,23 @@
+# Job (fix, model astra): java `ZLinkJavaRawMeshNodeM6ATest` is intermittent with the uncommitted D-097 parity diff in the tree: full gate 1252/1 (`descriptorFenceReplacesEndpointOnlyIntent`), class run 1: `replacementDoesNotSkipAConnectionBeforeItsReadyEvent` FAILED, class run 2: 28/28. Before the parity diff (commit `ea71eab005`) the class was 28/28 ×3. Root-cause the race the parity change exposes or introduces; the class must pass ×10
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `doc/plan/c016-worklog/fix-java-mesh-shutdown-seal-parity-summary.md`
+(the uncommitted diff you build on: seal predicate in `announceExpectedPeers`, Draining descriptor publication consolidation of three publish loops into one, shutdown
+publishes Draining on the raw node, new `ZLinkJavaRawMeshNodeShutdownSealTest`), `fix-java-descriptor-fence-3-summary.md`, `fix-java-mesh-transport-identity-summary.md`,
+decisions D-092/D-094/D-096/D-097, spec `03-spot-actor/03-mesh-node.ko.md` §6·§7.1 and `05-host-relocation-flow` §14 step 1. Never modify `core/**`, `bindings/**`, any
+`doc/spec/**`, `framework/doc/framework/**`, other languages; do not commit; keep the existing uncommitted java diff (do `git stash` only if you restore it). Env:
+`framework/languages/java`, `TMPDIR=/dev/shm/zlink-tmp-java`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-jvm-gate.lock`; XML results in
+`zlink-framework-core/build/test-results/test/`. Installed Core 2055a581….
+
+## What to do
+1. Run the M6A class with `ZLINK_JAVA_STREAM_TRACE=1` until a failure reproduces (≤10 runs, `--rerun`), keep the trace of the failing run for each distinct failing test
+   (`replacementDoesNotSkipAConnectionBeforeItsReadyEvent`, `descriptorFenceReplacesEndpointOnlyIntent`).
+2. Identify what the parity diff changed in the sequence: the consolidated publish loop (does it now publish descriptors/Updates at a moment that races the replacement
+   READY edge or intent bookkeeping?), the seal predicate evaluation (does `isSealed` read a coordinator that the test fixture seals/unseals?), the shutdown Draining
+   publication on the raw node. Compare with the pre-parity behavior (`git stash` → run → `git stash pop`) only to confirm the delta, not to bisect.
+3. Fix at the owner: one publish rule that does not reorder admission/replacement observation; no sleeps/retries/timeouts in tests or runtime. Keep the parity semantics
+   (no Hello after the seal; Draining Update to admitted peers).
+4. Verify: M6A class ×10 (`--rerun`, all 28 pass every time), `ZLinkJavaRawMeshNodeShutdownSealTest`, `ZLinkJavaRawMeshNodeTransportIdentityTest`, then
+   `:zlink-framework-core:test contractTest --continue` once (0 fail).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-java-m6a-intermittent-with-seal-parity-summary.md`: failing traces, cause file:line, fix, four lines, rule count, results (×10 table), BLOCKERS.
