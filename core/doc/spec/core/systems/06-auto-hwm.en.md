@@ -403,6 +403,9 @@ publishes no part on the wire and does not invoke its handler. Capacity exhausti
 not block another pair or ordinary sends on the same pipe. Reply, timeout, disconnect, and close
 return the work and count reservations together. When a terminal reply or timeout returns the
 reservations, it wakes request-submit recovery on the pipe owner that held that reservation.
+A wait token returned by a refused `DONTWAIT FINAL` request uses that reservation return as its wake
+condition; recovery of physical write credit alone does not emit `ZLINK_COMPLETION_WRITABLE` (socket
+README, REQUEST DONTWAIT).
 
 ### Message-Path Cost Limits
 
