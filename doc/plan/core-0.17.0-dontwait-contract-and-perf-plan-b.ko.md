@@ -93,6 +93,8 @@ rust 실행기 spin 제거(172k → 259k), python 7.9k → 20k. 표는 인계 �
 - [ ] bindings 성능 측정·개선 — §6 실행 계획대로. 진행: C++ Multi tcp before/pass1/pass2 완료(DD 통과 90.8%, REQREP 보류 57/68%, PUBSUB 미달 93.3%; 커밋 `ee50ebaeaf`·`6e8d798bac`), tls/ws/wss before 측정 완료(기록 중), C 러너 ws/wss 4096B REQREP 붕괴는 러너 제출 턴 수정 `21746768ca`(D-B89)로 해소·재측정 `57e262e71b`; C++ Multi 4 transport 판정 확정(tcp DD 통과, 나머지 보류/PUBSUB tls·ws·wss 통과), Single 7 pattern before 완료·수신 경로 pass 1 진행 중(07:17~); 다음 single pass 2·REQREP pass → .NET
 - [x] 인계 문서 최종 갱신(REQUEST 계약·해시, 2026-09-05 05:45)
 - [x] 아침 요약 — `doc/plan/c016-worklog/morning-summary-2026-09-05-B.ko.md`(07:30 KST, job 결과는 추가 갱신)
+- [x] A 후속 6건(`handoff-B-followups-D086-D087.ko.md`) — 전부 push, 결과표는 인계 문서 §8 (D-B93~D-B97, D-B102, D-B104); hotpath_gate(Release+LTO, `0c39ed2e52`) 결과 대기
+- [x] bindings parity(사용자 지시 "모든 bindings 동일 동작·사용성") — spec `c6d491e3e8`, Rust `NOT_ADMITTED` `bd84afc447`, 레이아웃 테스트 `90ad19f0e5`, Poller monitor source 5 binding(D-B98~D-B103); 남은 확인: C++/.NET/C의 monitor mask typed 거절 통일
 
 ## 6. bindings 성능 계획(0.17.0) 실행 계획
 
