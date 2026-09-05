@@ -10,6 +10,14 @@
 
 #include <zlink.h>
 
+#if PY_VERSION_HEX < 0x030A0000
+static PyObject *Py_NewRef (PyObject *object)
+{
+    Py_INCREF (object);
+    return object;
+}
+#endif
+
 typedef int (*publish_part_fn) (
   void *, const char *, zlink_msg_t *, zlink_send_flags_t, zlink_part_flag_t);
 
@@ -1897,7 +1905,22 @@ static PyObject *py_msg_bytes (PyObject *self, PyObject *arg)
     return result;
 }
 
+#include "hotpath.h"
+
 static PyMethodDef zlink_native_methods[] = {
+  {"message_data", py_message_data, METH_VARARGS, "Build the writable ctypes-backed Message view."},
+  {"msg_close", py_msg_close, METH_O, "Close one native message."},
+  {"start_request", py_start_request, METH_VARARGS, "Materialize, submit and register one managed request."},
+  {"start_send", py_start_send, METH_VARARGS, "Materialize, submit and register one managed send."},
+  {"completion_messages", py_completion_messages, METH_VARARGS, "Clone completion payload into independent Messages."},
+  {"install_owner_methods", py_install_owner_methods, METH_O, "Install the native completion drain loop."},
+  {"recv_into", py_recv_into, METH_VARARGS, "Receive into public storage."},
+  {"router_recv_into", py_router_recv_into, METH_VARARGS, "Receive routing and reply metadata into public storage."},
+  {"subscribe_into", py_subscribe_into, METH_VARARGS, "Receive a topic into public storage."},
+  {"install_entry_methods", py_install_entry_methods, METH_VARARGS, "Install native completion entry operations."},
+  {"materialize_parts", py_materialize_parts, METH_VARARGS, "Build independently owned native parts."},
+  {"submit_storage", py_submit_storage, METH_VARARGS, "Submit stable native part storage."},
+  {"build_received_parts", py_build_received_parts, METH_VARARGS, "Build fresh received message wrappers."},
   {"msg_init_buffer", py_msg_init_buffer, METH_VARARGS, "Initialize one copied message."},
   {"msg_clone", py_msg_clone, METH_VARARGS, "Initialize one shared native clone."},
   {"msg_bytes", py_msg_bytes, METH_O, "Copy one message into Python bytes."},
@@ -1946,6 +1969,10 @@ PyMODINIT_FUNC PyInit__zlink_native (void)
     module = PyModule_Create (&zlink_native_module);
     if (!module)
         return NULL;
+    if (init_hotpath_names () < 0) {
+        Py_DECREF (module);
+        return NULL;
+    }
     Py_INCREF (&socket_send_op_type);
     if (PyModule_AddObject (module, "SocketSendOp", (PyObject *) &socket_send_op_type) != 0) {
         Py_DECREF (&socket_send_op_type);

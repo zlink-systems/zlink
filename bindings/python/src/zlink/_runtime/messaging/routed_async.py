@@ -18,6 +18,7 @@ from ..._native.ffi import (
     ZLINK_SEND_ADMITTED,
     ZLINK_SEND_TERMINAL,
     ZlinkCompletion,
+    ZlinkMsg,
     ZlinkPollerEvent,
     lib,
 )
@@ -35,6 +36,7 @@ from ..handles.native_support import (
     _copy_routing_id,
     _raise_result_error,
     _request_result_from_code,
+    _native_extension,
 )
 from .message_materializer import Message
 from .native_parts import _materialize_native_parts
@@ -224,12 +226,17 @@ class _CompletionEntry:
                 else:
                     value = []
                     try:
-                        for index in range(int(completion.reply_part_count)):
-                            message = Message.__new__(Message)
-                            message._msg = _clone_native_msg(completion.reply_parts[index])
-                            message._valid = True
-                            message._keepalive = None
-                            value.append(message)
+                        if _native_extension is not None:
+                            value = _native_extension.completion_messages(
+                                completion, Message, ZlinkMsg
+                            )
+                        else:
+                            for index in range(int(completion.reply_part_count)):
+                                message = Message.__new__(Message)
+                                message._msg = _clone_native_msg(completion.reply_parts[index])
+                                message._valid = True
+                                message._keepalive = None
+                                value.append(message)
                     except BaseException:
                         _close_messages(value)
                         value = None
@@ -449,28 +456,9 @@ class _RequestEntry(_CompletionEntry):
                 lib().zlink_msg_close(ctypes.byref(native))
         return retain
 
-    def clone_payload(self):
-        clones = []
-        with self.condition:
-            if self.payload is None:
-                return None
-            try:
-                for native in self.payload:
-                    clones.append(_clone_native_msg(native))
-            except BaseException:
-                for clone in clones:
-                    lib().zlink_msg_close(ctypes.byref(clone))
-                raise
-        return clones
-
-    def _release_payload(self):
-        with self.condition:
-            native_parts = self.payload
-            self.payload = None
-            self.target = None
-        if native_parts is not None:
-            for native in native_parts:
-                lib().zlink_msg_close(ctypes.byref(native))
+    # SEND and REQUEST retain the same independently owned native snapshot.
+    clone_payload = _SendEntry.clone_payload
+    _release_payload = _SendEntry._release_payload
 
     @property
     def waiting_admission(self):
@@ -498,6 +486,10 @@ class _RequestEntry(_CompletionEntry):
             )
             return
         super().shutdown()
+
+
+if _native_extension is not None:
+    _native_extension.install_entry_methods(_CompletionEntry, _SendEntry, _RequestEntry)
 
 
 class _DrainResult:
@@ -971,6 +963,11 @@ class CompletionOwner:
             lib().zlink_msg_close(ctypes.byref(native))
 
     def _submit_parts(self, target, native_parts, flags, entry=None, timeout_ms=None):
+        if _native_extension is not None:
+            return _native_extension.submit_storage(
+                self._socket._handle, target, native_parts, flags,
+                0 if entry is None else entry.context, timeout_ms,
+            )
         try:
             native_rid = None if target is None else _copy_routing_id(target)
         except BaseException:
@@ -1134,6 +1131,11 @@ class CompletionOwner:
                 self._schedule_runtime_owner_locked(entry.loop)
 
     async def submit_send(self, target, payload):
+        if _native_extension is not None:
+            entry = _native_extension.start_send(
+                self, target, payload, asyncio.get_running_loop()
+            )
+            return await entry.wait_async()
         native_parts = _materialize_native_parts(payload)
         entry = _SendEntry(
             asyncio.get_running_loop(),
@@ -1173,6 +1175,11 @@ class CompletionOwner:
                 self._schedule_runtime_owner_locked(entry.loop)
 
     async def submit_request(self, target, payload, timeout_ms):
+        if _native_extension is not None:
+            entry = _native_extension.start_request(
+                self, target, payload, asyncio.get_running_loop(), int(timeout_ms)
+            )
+            return await entry.wait_async()
         native_parts = _materialize_native_parts(payload)
         entry = _RequestEntry(asyncio.get_running_loop(), timeout_ms)
         with self._lock:
@@ -1335,3 +1342,7 @@ class CompletionOwner:
 
 
 __all__ = ["CompletionOwner"]
+
+
+if _native_extension is not None:
+    _native_extension.install_owner_methods(CompletionOwner)

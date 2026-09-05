@@ -16,6 +16,8 @@ from ..handles.native_support import (
     _close_multipart,
     _clone_native_msg,
     _init_msg_from_buffer,
+    _native_extension,
+    _as_bytes_view,
 )
 
 
@@ -31,6 +33,11 @@ def _payload_parts(payload):
 
 def _materialize_native_parts(payload):
     """Create one independently owned native part for each public payload."""
+
+    if _native_extension is not None:
+        return _native_extension.materialize_parts(
+            payload, ZlinkMsg, Message, ReceivedMessage, _as_bytes_view
+        )
 
     native_parts = []
     try:

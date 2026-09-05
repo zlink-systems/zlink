@@ -9,6 +9,76 @@ from zlink._runtime.handles import native_support
 from zlink._runtime.messaging.routed_async import _SendEntry
 
 
+@pytest.mark.parametrize("part_count", [1, 2, 9, 17])
+def test_native_submission_preserves_mixed_public_parts(part_count):
+    async def exercise():
+        with zlink.create_context() as context:
+            with zlink.create_pair_socket(context) as sender, zlink.create_pair_socket(context) as receiver:
+                sender.bind("inproc://pass2-mixed-parts")
+                receiver.connect("inproc://pass2-mixed-parts")
+                receiver.send().message(b"ready").submit_sync()
+                with zlink.create_received() as ready:
+                    assert sender.recv_into(ready)
+                with zlink.Message.from_(b"owned") as owned:
+                    choices = [owned, bytearray(b"mutable"), memoryview(b"strided")[::2], b""]
+                    payloads = [choices[i % len(choices)] for i in range(part_count)]
+                    expected = [value.to_bytes() if value is owned else bytes(value) for value in payloads]
+                    await sender.send().messages(*payloads).submit()
+                    choices[1][:] = b"changed"
+                    assert owned.to_bytes() == b"owned"
+                    with zlink.create_received() as received:
+                        assert receiver.recv_into(received)
+                        assert received.to_bytes_list() == expected
+                        snapshots = [part.data for part in received.parts]
+                        previous = received.parts
+                        assert not receiver.recv_into(received, flags=zlink.RecvFlags.DONT_WAIT)
+                        assert received.parts is previous
+                    assert [bytes(view) for view in snapshots] == expected
+
+    asyncio.run(exercise())
+
+
+def test_completion_clones_survive_source_close():
+    import ctypes
+    from zlink._native.ffi import ZlinkCompletion, ZlinkMsg
+    from zlink._runtime.messaging.message_materializer import Message
+
+    with zlink.Message.from_(b"reply" * 20000) as source:
+        # Borrow the original header address: copying msg bytes would duplicate
+        # ownership flags without updating the source's native refcount state.
+        completion = ZlinkCompletion()
+        completion.reply_part_count = 1
+        completion.reply_parts = ctypes.pointer(source._msg)
+        messages = native_support._native_extension.completion_messages(completion, Message, ZlinkMsg)
+    try:
+        assert messages[0].to_bytes() == b"reply" * 20000
+        assert messages[0].size() == 100000
+    finally:
+        for message in messages:
+            message.close()
+
+
+def test_materialization_failure_preserves_caller_message():
+    from zlink._runtime.messaging.native_parts import _materialize_native_parts
+
+    with zlink.Message.from_(b"caller") as owned:
+        with pytest.raises(TypeError):
+            _materialize_native_parts([owned, bytearray(b"staged"), object()])
+        assert owned.to_bytes() == b"caller"
+
+
+def test_message_data_keeps_writable_view_and_cache_contract():
+    with zlink.Message.from_(b"mutable") as message:
+        view = message.data
+        assert view is message.data
+        assert not view.readonly
+        assert view.format == "B"
+        view[0] = ord("M")
+        assert message.to_bytes() == b"Mutable"
+    assert bytes(message.data) == b""
+    message.close()
+
+
 @pytest.mark.parametrize("use_extension", [True, False])
 @pytest.mark.parametrize("source", [
     b"", b"a\x00b", bytearray(b"mutable"),
