@@ -12,7 +12,7 @@ use crate::ffi;
 use crate::internal::{CompletionEntry, CompletionOwner, RoutedHandle};
 use crate::message::{Message, RoutingId};
 use crate::messaging_operations::{Empty, MessageParts, RequestOp, RequestOpStorage};
-use crate::native_errors::{check_submit_rc, submit_error_from_errno};
+use crate::native_errors::{check_submit_rc, submit_error_from_errno, submit_error_from_rc};
 use crate::socket::submit_part_sequence;
 
 use super::send_ops::submit_shared_part_sequence;
@@ -295,10 +295,7 @@ fn submit_request_attempt(
                 entry.publish_request(completion_id);
                 return Ok(Ok(RequestAttempt::Admitted));
             }
-            if rc == SubmitResult::Backpressured as i32
-                && errno == libc::EAGAIN
-                && completion_id != 0
-            {
+            if rc == SubmitResult::Backpressured as i32 && completion_id != 0 {
                 entry.publish_writable(completion_id);
                 return Ok(Ok(RequestAttempt::Waiting));
             }
@@ -309,14 +306,14 @@ fn submit_request_attempt(
                     live_token: true,
                 }));
             }
-            if rc == SubmitResult::Ok as i32 || errno == libc::EAGAIN {
+            if rc == SubmitResult::Ok as i32 || rc == SubmitResult::Backpressured as i32 {
                 return Ok(Err(RequestAttemptError::without_token(SubmitError::new(
                     SubmitResult::InternalError,
                     libc::EPROTO,
                 ))));
             }
             Ok(Err(RequestAttemptError::without_token(
-                submit_error_from_errno(errno),
+                submit_error_from_rc(rc, errno),
             )))
         })
         .map_err(RequestAttemptError::without_token)?

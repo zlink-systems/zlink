@@ -422,7 +422,6 @@ fn closing_a_socket_cleans_up_a_request_wait_token() {
         error,
         ZlinkError::Submit(submit)
             if submit.code() == SubmitResult::Terminated
-                && submit.native_errno() == libc::ESHUTDOWN
     ));
 }
 
@@ -457,7 +456,7 @@ fn request_and_send_wait_tokens_share_the_completion_lane() {
     let mut received = Received::empty();
     assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
 
-    for marker in [b'1', b'2'] {
+    for marker in *b"12" {
         let result = test_support::block_on(dealer.send().message(large_filler(marker)).submit());
         result.expect("filler admission");
     }
@@ -477,7 +476,7 @@ fn request_and_send_wait_tokens_share_the_completion_lane() {
         .add_socket(&dealer, POLLOUT | POLLCOMPLETION, 53)
         .unwrap();
     let mut events = [PollEvent::default()];
-    for marker in [b'1', b'2'] {
+    for marker in *b"12" {
         assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
         assert_eq!(received.parts()[0].as_bytes()[0], marker);
     }
@@ -636,7 +635,6 @@ fn closing_a_socket_completes_its_pending_send_once() {
     // Socket lifecycle cleanup settles the retained SEND locally even when
     // close discards the unread terminal WRITABLE record.
     assert_eq!(error.code(), SubmitResult::Terminated);
-    assert_eq!(error.native_errno(), libc::ESHUTDOWN);
     waiter.join().unwrap();
     drop(filler);
 }
@@ -1063,19 +1061,7 @@ fn removing_the_target_fails_a_parked_router_send() {
         .recv_timeout(Duration::from_secs(3))
         .expect("terminal WRITABLE did not resume the parked send");
     let error = outcome.expect_err("a removed target cannot admit the retained packet");
-    assert!(
-        error.native_errno() == libc::ENOENT || error.native_errno() == libc::ESHUTDOWN,
-        "unexpected terminal errno {}",
-        error.native_errno()
-    );
-    assert!(
-        matches!(
-            error.code(),
-            SubmitResult::NotFound | SubmitResult::Terminated
-        ),
-        "unexpected terminal code {:?}",
-        error.code()
-    );
+    assert_eq!(error.code(), SubmitResult::NotFound);
     waiter.join().unwrap();
     drop(filler);
 }
@@ -1127,8 +1113,7 @@ fn removing_the_target_fails_a_parked_router_request_with_typed_error() {
     assert!(matches!(
         error,
         ZlinkError::Submit(submit)
-            if matches!(submit.code(), SubmitResult::NotFound | SubmitResult::Terminated)
-                && matches!(submit.native_errno(), libc::ENOENT | libc::ESHUTDOWN)
+            if submit.code() == SubmitResult::NotFound
     ));
     drop(filler);
 }

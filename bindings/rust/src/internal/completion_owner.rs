@@ -25,7 +25,8 @@ use crate::error::{
 use crate::ffi;
 use crate::message::{Message, RoutingId};
 use crate::native_errors::{
-    check_config_rc, check_recv_rc, request_error_from_result, submit_error_from_errno,
+    check_config_rc, check_recv_rc, request_error_from_result, send_terminal_error,
+    submit_error_from_errno,
 };
 
 /// Reactor thread wait bound. The thread wakes early on any completion record;
@@ -728,7 +729,7 @@ fn writable_outcome(
         } else if send_result == ffi::zlink_send_complete_result_t::ZLINK_SEND_TERMINAL
             && send_terminal_errno != 0
         {
-            Err(submit_error_from_errno(send_terminal_errno))
+            Err(send_terminal_error(send_terminal_errno))
         } else {
             Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO))
         };
@@ -835,13 +836,7 @@ fn request_result_from_native(result: ffi::zlink_request_result_t) -> RequestRes
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use std::task::{Wake, Waker};
-
-    struct NoopWake;
-    impl Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
-    }
+    use std::task::Waker;
 
     #[test]
     fn capture_before_publish_joins_exactly_once() {
@@ -852,10 +847,10 @@ mod tests {
         completion.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
         entry.capture(&mut completion);
 
-        let waker = Waker::from(Arc::new(NoopWake));
-        assert!(entry.poll_writable(&waker).is_pending());
+        let waker = Waker::noop();
+        assert!(entry.poll_writable(waker).is_pending());
         entry.publish_writable(41);
-        assert!(matches!(entry.poll_writable(&waker), Poll::Ready(Ok(()))));
+        assert!(matches!(entry.poll_writable(waker), Poll::Ready(Ok(()))));
     }
 
     #[test]
@@ -871,8 +866,8 @@ mod tests {
         };
         let captured = entry.capture_parked(&parked);
         assert!(!captured.detached);
-        let waker = Waker::from(Arc::new(NoopWake));
-        assert!(matches!(entry.poll_writable(&waker), Poll::Ready(Ok(()))));
+        let waker = Waker::noop();
+        assert!(matches!(entry.poll_writable(waker), Poll::Ready(Ok(()))));
     }
 
     #[test]
@@ -885,22 +880,22 @@ mod tests {
         wrong.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
         entry.capture(&mut wrong);
 
-        let waker = Waker::from(Arc::new(NoopWake));
-        assert!(entry.poll_writable(&waker).is_pending());
+        let waker = Waker::noop();
+        assert!(entry.poll_writable(waker).is_pending());
 
         let mut expected = ffi::zlink_completion_t::empty();
         expected.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
         expected.completion_id = 41;
         expected.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
         entry.capture(&mut expected);
-        assert!(matches!(entry.poll_writable(&waker), Poll::Ready(Ok(()))));
+        assert!(matches!(entry.poll_writable(waker), Poll::Ready(Ok(()))));
     }
 
     #[test]
     fn writable_target_must_match() {
         let target = RoutingId::from(b"expected-target");
         let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, Some(target));
-        let waker = Waker::from(Arc::new(NoopWake));
+        let waker = Waker::noop();
 
         entry.publish_writable(51);
         let mut wrong_target = ffi::zlink_completion_t::empty();
@@ -910,7 +905,7 @@ mod tests {
         wrong_target.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
         entry.capture(&mut wrong_target);
         assert!(matches!(
-            entry.poll_writable(&waker),
+            entry.poll_writable(waker),
             Poll::Ready(Err(error))
                 if error.code() == SubmitResult::InternalError
                     && error.native_errno() == libc::EPROTO
@@ -921,7 +916,7 @@ mod tests {
     fn writable_entry_rearms_with_each_new_token() {
         let target = RoutingId::from(b"expected-target");
         let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, Some(target));
-        let waker = Waker::from(Arc::new(NoopWake));
+        let waker = Waker::noop();
 
         for token in [52, 53] {
             entry.publish_writable(token);
@@ -931,14 +926,14 @@ mod tests {
             completion.peer_rid = *target.as_raw();
             completion.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
             entry.capture(&mut completion);
-            assert!(matches!(entry.poll_writable(&waker), Poll::Ready(Ok(()))));
+            assert!(matches!(entry.poll_writable(waker), Poll::Ready(Ok(()))));
         }
     }
 
     #[test]
     fn request_entry_moves_from_writable_to_request_completion() {
         let entry = CompletionEntry::new(CompletionEntryKind::Request, None);
-        let waker = Waker::from(Arc::new(NoopWake));
+        let waker = Waker::noop();
 
         entry.publish_writable(54);
         let mut writable = ffi::zlink_completion_t::empty();
@@ -946,7 +941,7 @@ mod tests {
         writable.completion_id = 54;
         writable.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
         entry.capture(&mut writable);
-        assert!(matches!(entry.poll_writable(&waker), Poll::Ready(Ok(()))));
+        assert!(matches!(entry.poll_writable(waker), Poll::Ready(Ok(()))));
 
         entry.publish_request(55);
         let mut request = ffi::zlink_completion_t::empty();
@@ -955,7 +950,7 @@ mod tests {
         request.request_result = ffi::zlink_request_result_t::ZLINK_REQUEST_OK;
         entry.capture(&mut request);
         assert!(matches!(
-            entry.poll_request(&waker),
+            entry.poll_request(waker),
             Poll::Ready(Ok(parts)) if parts.is_empty()
         ));
     }
@@ -965,9 +960,9 @@ mod tests {
         let entry = CompletionEntry::new(CompletionEntryKind::Request, None);
         entry.publish_writable(56);
         entry.shutdown();
-        let waker = Waker::from(Arc::new(NoopWake));
+        let waker = Waker::noop();
         assert!(matches!(
-            entry.poll_writable(&waker),
+            entry.poll_writable(waker),
             Poll::Ready(Err(error))
                 if error.code() == SubmitResult::Terminated
                     && error.native_errno() == libc::ESHUTDOWN
@@ -990,9 +985,9 @@ mod tests {
             completion.send_terminal_errno = errno;
             entry.capture(&mut completion);
 
-            let waker = Waker::from(Arc::new(NoopWake));
+            let waker = Waker::noop();
             assert!(matches!(
-                entry.poll_writable(&waker),
+                entry.poll_writable(waker),
                 Poll::Ready(Err(error))
                     if error.code() == expected && error.native_errno() == errno
             ));
