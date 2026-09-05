@@ -1,0 +1,39 @@
+# Job (debug + fix, model astra): dotnet — ZoneWorld ZW-G4 interrupted operation is not Unavailable; runtime termination reports ForceStopped/TeardownFailed (7 roles) and ForceStopped/DeadlineExceeded (ShoppingMall) although processes exit 0
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·원칙이 단순해지는 근본 수정·중복 금지),
+`framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`, and `doc/plan/c016-worklog/fix-dotnet-sample-teardown-137-summary.md`
+§BLOCKERS (evidence under `final-aggregate/evidence/*/logs/` as named there). Premise (user): at baseline `seven-samples-green-v1`
+(4bad5ac979) all dotnet samples passed with clean STOPPED/None; these are regressions introduced since (framework unwind 3975cea255,
+durable sender d6ec19765e, ClientServer removal 05b53a8098, Core fixes) — find the cause, fix at the owner. Debug and fix in this job.
+Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages,
+`framework/languages/shared_sample/**`; never widen deadlines; do not commit. Env (never `--artifacts-path`, never `ulimit -v`):
+`export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false
+MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}');
+export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; flock -w7200 /tmp/zlink-dotnet-gate.lock ...`. Runners now use
+SIGTERM + contract-bound observation (committed). STOP only for a Core/binding defect (public-API repro description).
+
+## Item A — ZoneWorld ZW-G4 (functional)
+The G4 crash-boundary scenario kills the target node; the client's interrupted operation must end `Unavailable` (08-routing :322-331,
+error model :75-85; the D-084/crash-boundary port af7afd28e7 implemented this) but now waits for `CrashRelocationProbeRes` and fails
+"interrupted operation did not end Unavailable". Trace the operation: with the durable sender (d6ec19765e) does the interrupted
+request now replay/keep waiting instead of ending Unavailable when the target generation is gone? (The sender must not retry an
+operation whose target lifecycle generation disappeared — that is Unavailable by spec, not a replay case.) Or did the mesh unwind
+change which terminal the join path reports? Fix at the owner; regression test in `StatefulServiceRuntimeTests`/ZoneWorld regression.
+
+## Item B — termination outcomes
+Roles exit 0 but report `ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED reason=TEARDOWN_FAILED` (TicTacToe play-b, Bingo play-a,
+SupportChat support, DeliveryDispatch courier-node-1/2 + customer-gateway, GameQuest api-b) or `DEADLINE_EXCEEDED` (ShoppingMall
+workflow-a). Per 05-host-relocation-flow §14 the outcome must be `Stopped/None` when teardown completes. Get the underlying
+exception/cause from `ZLinkFrameworkShutdown`/host coordinator (add a temporary sink if the lifecycle logger drops it, remove
+after): which owned resource fails to release — a socket/poller left by the unwind or ClientServer removal? the durable sender's
+pending operation at stop? a drain that now waits on Core completion that never comes? Fix at the owner with one shutdown-order rule;
+regression: a host stop test asserting Stopped/None with each channel kind active.
+
+## Verify
+ZoneWorld 2×, then all 7 dotnet samples individually + aggregate (`bash framework/languages/dotnet/samples/run_samples.sh`), every
+role log ends with `outcome=STOPPED`; `StatefulServiceRuntimeTests` + `ServiceRuntimeFoundationTests` + full unit gate once
+(`FullyQualifiedName!~CanonicalActorJoinIngressReplyTests`).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-zoneworld-g4-and-teardown-outcomes-summary.md`: per item cause (file:line), diff, the four lines
++ rule count, results, BLOCKERS.
