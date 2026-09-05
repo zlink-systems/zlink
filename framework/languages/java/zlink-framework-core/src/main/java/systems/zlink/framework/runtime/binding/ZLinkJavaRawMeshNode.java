@@ -153,8 +153,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         admittedPeerObjectRoles = new ConcurrentHashMap<>();
     private final Set<RoutingId> notRequiredPeers =
         ConcurrentHashMap.newKeySet();
-    private final Set<RoutingId> disconnectedPeers =
-        ConcurrentHashMap.newKeySet();
     private final Set<RoutingId> rejectedPeers =
         ConcurrentHashMap.newKeySet();
     private final Set<Long> closedPeerIntents =
@@ -1036,7 +1034,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 admittedPeerChannels.remove(removed.expectedRoutingId());
                 admittedPeerObjectRoles.remove(removed.expectedRoutingId());
                 notRequiredPeers.remove(removed.expectedRoutingId());
-                disconnectedPeers.remove(removed.expectedRoutingId());
                 rejectedPeers.remove(removed.expectedRoutingId());
                 nextAnnouncementNanos.remove(removed.expectedRoutingId());
                 String connectionId =
@@ -1129,8 +1126,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                         : rejectedPeers.contains(
                             entry.getValue().expectedRoutingId())
                         ? MeshPeerState.ERROR
-                        : disconnectedPeers.contains(
-                            entry.getValue().expectedRoutingId())
+                        // CLOSED is the intent's closed fact (mesh-node
+                        // §7.1 (3)): the same publication that permits
+                        // replacePeerConnection.
+                        : closedPeerIntents.contains(entry.getKey())
                             ? MeshPeerState.CLOSED
                             : MeshPeerState.CONNECTING,
                 entry.getValue().expectedLifecycleGeneration(),
@@ -1208,7 +1207,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         String endpoint,
         long lifecycleGeneration) {
         knownPeerChannels.remove(peerRid);
-        disconnectedPeers.remove(peerRid);
         automaticNotRequiredPeers.put(
             peerRid,
             new AutomaticNotRequiredPeer(
@@ -4166,7 +4164,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         Map<String, Integer> snapshot = Map.copyOf(validated);
         admittedPeerChannels.put(peerRoutingId, snapshot);
         knownPeerChannels.put(peerRoutingId, snapshot);
-        disconnectedPeers.remove(peerRoutingId);
     }
 
     @Override
@@ -6479,9 +6476,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 return;
             }
             rejectedPeers.remove(inbound.source());
-            if (command != ServiceWireConstants.COMMAND_UPDATE) {
-                admissionControlReadyConnections.remove(inbound.source());
-            }
+            // The admission-ready marker names the connection whose Admit
+            // exchange completed; isReadyPeer compares it with the selected
+            // connection, so a handshake that installs a new connection
+            // leaves the old marker inert without clearing it here. A
+            // repeated Hello/Admit on the selected connection is an
+            // idempotent admission (mesh-node §7.1): it changes no peer
+            // state, so a concurrent reader never observes the peer
+            // dropping out of readiness between a clear and the re-mark.
             connectionIds.put(inbound.source(), connectionId);
             streamTrace(STREAM_TRACE ? "admission-stage stage=application-pair-installed"
                 + " command=" + command
@@ -7011,10 +7013,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         }
         admissionControlReadyConnections.remove(peer, connectionId);
         connectionIds.remove(peer, connectionId);
-        boolean wasAdmitted = admittedPeerChannels.remove(peer) != null;
-        if (wasAdmitted && !notRequiredPeers.contains(peer)) {
-            disconnectedPeers.add(peer);
-        }
+        admittedPeerChannels.remove(peer);
         if (!notRequiredPeers.contains(peer)) {
             admittedPeerObjectRoles.remove(peer);
         }
@@ -7025,7 +7024,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private void forgetKnownPeerChannelsIfUntracked(RoutingId peer) {
         if (!hasPeerExpectation(peer)) {
             knownPeerChannels.remove(peer);
-            disconnectedPeers.remove(peer);
         }
     }
 

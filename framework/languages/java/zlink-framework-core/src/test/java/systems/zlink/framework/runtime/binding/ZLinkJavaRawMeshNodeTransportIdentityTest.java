@@ -249,6 +249,61 @@ final class ZLinkJavaRawMeshNodeTransportIdentityTest {
     }
 
     @Test
+    void closedIsPublishedExactlyWhenReplacementBecomesEligible() throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh");
+             var peer = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setBind("inproc://closed-eligibility-local-" + System.nanoTime());
+            peer.setBind("inproc://closed-eligibility-peer-" + System.nanoTime());
+            node.start();
+            peer.setRoutingId(PEER);
+            peer.start();
+            installIntent(node);
+            ready(node, 1436, 0);
+            Method register = ZLinkJavaRawMeshNode.class.getDeclaredMethod(
+                "registerTransportConnection", MonitorEvent.class, RoutingId.class);
+            register.setAccessible(true);
+            String connection = (String) register.invoke(
+                node, event(MonitorEventType.CONNECTION_READY, 1436, 0), PEER);
+            var topologyField = ZLinkJavaRawMeshNode.class.getDeclaredField("topology");
+            topologyField.setAccessible(true);
+            var topology = (ZLinkServiceTopologyRegistry) topologyField.get(node);
+            var peerTopology = (ZLinkServiceTopologyRegistry) topologyField.get(peer);
+            assertEquals(ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                topology.admit(peerTopology.localDescriptor(),
+                    new ZLinkServiceTopologyRegistry.Connection(connection,
+                        ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
+                        "outbound:" + ENDPOINT + ":" + connection)));
+            var connectionsField = ZLinkJavaRawMeshNode.class.getDeclaredField("connectionIds");
+            connectionsField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            var connections = (Map<RoutingId, String>) connectionsField.get(node);
+            connections.put(PEER, connection);
+            node.admitPeerChannels(PEER, Map.of());
+            assertEquals(MeshPeerState.CONNECTING, peerState(node, INTENT));
+
+            // The admitted connection's liveness close, in the order the
+            // monitor drain applies it: terminal transport cleanup first,
+            // then the intent's closed publication.
+            Method terminal = ZLinkJavaRawMeshNode.class.getDeclaredMethod(
+                "cleanupTerminalTransport", MonitorEvent.class, RoutingId.class);
+            terminal.setAccessible(true);
+            MonitorEvent disconnected = event(MonitorEventType.DISCONNECTED, 1436, 0);
+            boolean admittedClosed = (boolean) terminal.invoke(node, disconnected, PEER);
+            assertTrue(admittedClosed);
+            // CLOSED is the public form of replacement eligibility (mesh-node
+            // §7.1 (3)); a caller that acts on it must not be rejected.
+            assertEquals(isClosed(node), peerState(node, INTENT) == MeshPeerState.CLOSED,
+                "CLOSED published before replacement eligibility");
+            assertEquals(MeshPeerState.CONNECTING, peerState(node, INTENT));
+
+            terminate(node, disconnected, admittedClosed);
+            assertTrue(isClosed(node));
+            assertEquals(MeshPeerState.CLOSED, peerState(node, INTENT));
+        }
+    }
+
+    @Test
     void observedInprocCloseRetiresTheCoreConnectIntent() throws Exception {
         RoutingId localRid = RoutingId.from("jvm-retire-intent-local");
         RoutingId peerRid = RoutingId.from("jvm-retire-intent-peer");

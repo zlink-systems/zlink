@@ -52,7 +52,7 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
             String remoteEndpoint = endpoint(peer);
             RoutingId remoteRid = peer.routingId();
             peer.close();
-            await(() -> !admitted(local));
+            await(() -> closed(local));
             try (var replacement = new ZLinkJavaRawMeshNode(context, "mesh")) {
                 replacement.setRoutingId(remoteRid);
                 replacement.setBind(remoteEndpoint);
@@ -104,7 +104,7 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
             String remoteEndpoint = endpoint(peer);
             RoutingId remoteRid = peer.routingId();
             peer.close();
-            await(() -> !admitted(local));
+            await(() -> closed(local));
             try (var replacement = new ZLinkJavaRawMeshNode(context, "mesh")) {
                 replacement.setRoutingId(remoteRid);
                 replacement.setBind(remoteEndpoint);
@@ -180,6 +180,80 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
         }
     }
 
+    @Test
+    void repeatedHelloOrAdmitOnTheSelectedConnectionNeverClearsAdmissionReadiness()
+        throws Exception {
+        try (var context = Zlink.createContext();
+             var left = new ZLinkJavaRawMeshNode(context, "mesh");
+             var right = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            start(left, "repeat-left");
+            start(right, "repeat-right");
+            left.connectPeer(endpoint(right), right.routingId());
+            await(() -> admitted(left) && admitted(right));
+            await(() -> ready(right, left.routingId()));
+            // Observe the admission-ready marker itself: the transient a
+            // concurrent peers()/send caller could hit lies inside one
+            // dispatch turn, so sampling readiness from outside cannot
+            // pin it deterministically.
+            var field = ZLinkJavaRawMeshNode.class
+                .getDeclaredField("admissionControlReadyConnections");
+            field.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            var readiness = new RecordingReadiness((java.util.Map<RoutingId, String>) field.get(right));
+            field.set(right, readiness);
+            for (int command : new int[] {
+                    ServiceWireConstants.COMMAND_HELLO,
+                    ServiceWireConstants.COMMAND_ADMIT,
+                    ServiceWireConstants.COMMAND_HELLO}) {
+                long marked = readiness.marks(left.routingId());
+                // Same descriptor, same selected connection: an idempotent
+                // admission (mesh-node §7.1). Its completion re-marks the
+                // connection (Admit received, or the Admit reply sent).
+                sendAdmission(left, right, command);
+                await(() -> readiness.marks(left.routingId()) > marked);
+                assertEquals(0, readiness.clears(left.routingId()),
+                    "command " + command + " cleared admission readiness");
+                assertTrue(ready(right, left.routingId()));
+            }
+            assertEquals(1, right.peers().size());
+        }
+    }
+
+    private static final class RecordingReadiness
+        extends java.util.concurrent.ConcurrentHashMap<RoutingId, String> {
+        private final java.util.Map<RoutingId, Integer> marks =
+            new java.util.concurrent.ConcurrentHashMap<>();
+        private final java.util.Map<RoutingId, Integer> clears =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+        RecordingReadiness(java.util.Map<RoutingId, String> current) {
+            super(current);
+        }
+
+        @Override public String put(RoutingId key, String value) {
+            marks.merge(key, 1, Integer::sum);
+            return super.put(key, value);
+        }
+
+        @Override public String remove(Object key) {
+            clears.merge((RoutingId) key, 1, Integer::sum);
+            return super.remove(key);
+        }
+
+        @Override public boolean remove(Object key, Object value) {
+            clears.merge((RoutingId) key, 1, Integer::sum);
+            return super.remove(key, value);
+        }
+
+        int marks(RoutingId peer) {
+            return marks.getOrDefault(peer, 0);
+        }
+
+        int clears(RoutingId peer) {
+            return clears.getOrDefault(peer, 0);
+        }
+    }
+
     private static boolean completed(List<String> records, ZLinkJavaRawMeshNode node, String command) {
         return records.stream().anyMatch(s -> s.contains("rid=" + node.routingId() + " ")
             && s.contains("mesh_peer_admission_accepted") && s.contains("command=" + command));
@@ -240,6 +314,14 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
 
     private static boolean admitted(ZLinkJavaRawMeshNode node) {
         return node.peers().stream().anyMatch(p -> p.state() == MeshPeerState.ADMITTED);
+    }
+
+    // Manual re-connection of a fixed RID requires the previous pipe's
+    // confirmed close (mesh-node §7.1 (3)), which peers() publishes as
+    // CLOSED. "Not ADMITTED" is weaker: CONNECTING still owns a reconnecting
+    // Core intent and replacePeerConnection rejects it.
+    private static boolean closed(ZLinkJavaRawMeshNode node) {
+        return node.peers().stream().anyMatch(p -> p.state() == MeshPeerState.CLOSED);
     }
 
     private static Object field(Object owner, String name) throws ReflectiveOperationException {

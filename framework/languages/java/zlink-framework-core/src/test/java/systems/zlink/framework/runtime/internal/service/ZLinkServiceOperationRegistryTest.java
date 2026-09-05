@@ -99,12 +99,19 @@ final class ZLinkServiceOperationRegistryTest {
                  new ZLinkServiceOperationRegistry(scheduler)) {
             var operation = registry.register(Duration.ofSeconds(1));
             AtomicInteger callbacks = new AtomicInteger();
-            operation.completion().whenComplete((ignored, failure) ->
+            // The terminal runs on the completion lane (spec 01 §11). join()
+            // on the source stage returns when the source completes, not
+            // when its dependents have run; the dependent stage returned by
+            // whenComplete is what completes after the callback returned.
+            var observed = operation.completion().whenComplete((ignored, failure) ->
                 callbacks.incrementAndGet());
 
             assertTrue(operation.completion().cancel(false));
             assertEquals(0, registry.pendingCount());
             assertThrows(CancellationException.class, operation.completion()::join);
+            CompletionException relayed =
+                assertThrows(CompletionException.class, observed::join);
+            assertTrue(relayed.getCause() instanceof CancellationException);
             registry.close();
             assertEquals(1, callbacks.get());
             assertFalse(registry.complete(operation.id(), "late"));
