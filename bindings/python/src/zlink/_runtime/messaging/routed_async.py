@@ -87,11 +87,16 @@ class _CompletionEntry:
         "completion_id",
     )
 
-    def __init__(self, kind, loop=None):
+    def __init__(self, kind, loop=None, *, condition=None):
         self.kind = kind
         self.loop = loop
-        self.future = None if loop is None else loop.create_future()
-        self.condition = threading.Condition()
+        # SEND needs an awaitable only after admission actually parks.
+        self.future = (
+            loop.create_future()
+            if loop is not None and kind != ZLINK_COMPLETION_SEND
+            else None
+        )
+        self.condition = threading.Condition() if condition is None else condition
         self._published = False
         self._captured = False
         self._settled = False
@@ -324,6 +329,13 @@ class _CompletionEntry:
         _close_messages(value)
 
     async def wait_async(self):
+        with self.condition:
+            if self.future is None:
+                if self._settled:
+                    if self._error is not None:
+                        raise self._error
+                    return self._value
+                self.future = self.loop.create_future()
         try:
             return await asyncio.shield(self.future)
         except asyncio.CancelledError:
@@ -361,8 +373,8 @@ class _SendEntry(_CompletionEntry):
 
     __slots__ = ("target", "payload")
 
-    def __init__(self, loop, target, native_parts):
-        super().__init__(ZLINK_COMPLETION_SEND, loop)
+    def __init__(self, loop, target, native_parts, *, condition=None):
+        super().__init__(ZLINK_COMPLETION_SEND, loop, condition=condition)
         self.target = None if target is None else bytes(target)
         self.payload = native_parts
 
@@ -1038,6 +1050,10 @@ class CompletionOwner:
                 entry.fail(error)
                 self._unregister(entry)
                 return
+            # Admission and token publication share the drain owner's lock.
+            # A successful SEND never enters either completion registry.
+            if completion_id != 0:
+                self._entries[entry.context] = entry
             if rc == int(SubmitResult.OK):
                 if completion_id != 0:
                     entry.await_writable(completion_id)
@@ -1058,7 +1074,8 @@ class CompletionOwner:
                 entry.fail(self._submit_error(rc, native_errno))
 
             if entry.releasable:
-                self._unregister(entry)
+                if self._entries.get(entry.context) is entry:
+                    self._unregister(entry)
             else:
                 self._schedule_runtime_owner_locked(entry.loop)
 
@@ -1122,13 +1139,16 @@ class CompletionOwner:
             asyncio.get_running_loop(),
             target,
             native_parts,
+            condition=self._state_changed,
         )
-        try:
-            self._register(entry)
-        except BaseException:
-            entry._release_payload()
-            raise
-        self._attempt_send(entry)
+        with self._lock:
+            if self._shutdown:
+                entry._release_payload()
+                raise SubmitError(
+                    SubmitResult.INVALID_STATE,
+                    getattr(errno, "ESHUTDOWN", errno.ECANCELED),
+                )
+            self._attempt_send(entry)
         await entry.wait_async()
 
     def submit_send_sync(self, target, payload):

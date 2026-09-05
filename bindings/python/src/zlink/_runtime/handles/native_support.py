@@ -19,6 +19,11 @@ from ...contracts.errors.errors import (
 )
 from ..._native.ffi import ZlinkMsg, ZlinkRoutingId, lib
 
+try:
+    from ..._native import _zlink_native as _native_extension
+except ImportError:  # Extension-free installations retain the ctypes path.
+    _native_extension = None
+
 
 def _request_result_from_code(code):
     try:
@@ -201,6 +206,8 @@ def _msg_refcnt(msg):
 
 
 def _msg_to_bytes(msg):
+    if _native_extension is not None:
+        return _native_extension.msg_bytes(msg)
     size = _msg_size(msg)
     if size <= 0:
         return b""
@@ -211,6 +218,12 @@ def _msg_to_bytes(msg):
 
 
 def _init_msg_from_buffer(msg, data, *, borrow):
+    if not borrow and _native_extension is not None:
+        source = data if isinstance(data, bytes) else _as_bytes_view(data)
+        rc, native_errno = _native_extension.msg_init_buffer(msg, source)
+        if rc != 0:
+            _raise_result_error(ConfigError, ConfigResult, rc, native_errno)
+        return None
     ptr, size, keepalive = _send_buffer(data)
     if borrow:
         data_ptr = ctypes.c_void_p(ptr if isinstance(ptr, int) else ctypes.cast(ptr, ctypes.c_void_p).value or 0)
@@ -228,6 +241,11 @@ def _init_msg_from_buffer(msg, data, *, borrow):
 
 def _clone_native_msg(src):
     dst = ZlinkMsg()
+    if _native_extension is not None:
+        rc, native_errno = _native_extension.msg_clone(dst, src)
+        if rc != 0:
+            _raise_result_error(ConfigError, ConfigResult, rc, native_errno)
+        return dst
     rc = lib().zlink_msg_init(ctypes.byref(dst))
     if rc != 0:
         _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
