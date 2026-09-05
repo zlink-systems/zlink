@@ -1,0 +1,31 @@
+# Job (Core, model astra): polling §3 progress — disconnect terminal and auto-reconnect must progress without an application poll; same-endpoint reconnect goes to a new pipe
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §2/§3/§4, `CONTRIBUTING.ko.md` §4/§5 (public C API
+tests only; `ctest -j2`; §5 gate), `core/doc/spec/core/05-polling.ko.md` §3 (lost-wake / progress), `core/doc/spec/core/socket/README.ko.md`
+(connect/disconnect/reconnect intent, monitor events), `core/doc/spec/core/06-monitoring.ko.md`. Never modify any `doc/spec/**`,
+`bindings/**`, `framework/**`; do not commit. WORK ONLY IN THE WORKTREE `/home/hep7/project/zlink-core-b` (detached at main HEAD):
+`cd /home/hep7/project/zlink-core-b && nice -n 10 env JOBS=4 scripts/build-core.sh dev`. Never touch `/home/hep7/project/zlink/core/build-dev`.
+Another Core job runs in `/home/hep7/project/zlink-core-a` — independent tree.
+
+## Why (framework evidence, `doc/plan/c016-worklog/review-layer-ownership-audit.md` §4 and §11 item 2)
+The .NET ClientServer client (`ZLinkClientServerClientRuntime.cs`, `ReconnectAsync`) reported that after `disconnect(endpoint)` the
+terminal monitor edge (Disconnected/Closed) did not progress for ~5 s unless the application kept polling the socket, so the
+framework created a SECOND POLLIN poller on the same socket to drive Core command progress (round-2 trace in
+`bucketF-dotnet-clientserver-readmit-2-summary.md`). If Core requires an application poll for its own disconnect command to
+progress, that is a polling §3 lost-wake/progress violation; if it does not, the framework poller is a workaround to delete.
+
+## What to do (public C API contract tests, tcp + inproc)
+1. DEALER connected+admitted to a ROUTER endpoint; the application registers the DEALER on a public poller but (a) is blocked
+   in `zlink_poller_wait`, (b) is NOT waiting at all (idle). Server closes/`disconnect`s the pipe → assert the Disconnected monitor
+   event and the automatic reconnect READY arrive within a bounded time in both cases without any application poll.
+2. Application calls `zlink_disconnect(endpoint)` then immediately `zlink_connect(endpoint)` on the same socket (before the
+   terminal edge) → assert the Disconnected/Closed edge of the old pipe arrives, the new pipe becomes READY, and a REQUEST
+   submitted right after `connect` is queued on the NEW pipe (its reply arrives), never on the retiring one. Measure the time
+   between `disconnect()` return and the terminal edge with no application poll.
+3. If any case stalls (edge only after an application poll, or the request lands on the retiring pipe): root-cause in
+   `core/src/**` (command mailbox processing / reaper / connecter reconnect path), fix minimally, keep the tests as the
+   regression; full `ctest -j2` in the worktree + §5 checks + hotpath policy check if `scripts/` provides one.
+   If everything progresses per spec: say so with the measured bounds (that authorises deleting the framework's second poller).
+4. Deliverable: `doc/plan/c016-worklog/core-disconnect-progress-summary.md` in the MAIN tree: results table (case × transport
+   × with/without poll × elapsed ms), cause + diff summary if fixed, test names, gate counts, BLOCKERS. Leave the diff
+   uncommitted in the worktree.
