@@ -1038,7 +1038,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/go/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미측정`
+- Multi 상태: `미달` — `tcp` 4 pattern before 17:46~17:51 KST(Core job 빌드와 겹쳐 참고값): DD 31.5%, DR/RR REQREP 2.9/2.8%(1.1~1.5k ops/s 고정), PUBSUB 47.3%; 자체 pass 1 job(astra) 진행 중; [log](log/2026-09-05-go-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.5.1 Single suite
@@ -1092,12 +1092,12 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 미달(20.2%) | 미달(24.0%) | 미달(22.1%) | 미달(50.3%) | 미달(40.9%) | 미측정 | before(참고: Core job 빌드와 겹침); aggregate 31.5%(목표 65%), latency 43x(큐); 처리량 Go/C 202.9/1003.8, 190.2/793.1, 106.5/481.3, 82.8/164.8, 18.4/45.1 Kmsg/s; `p1go`; [log](log/2026-09-05-go-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미달(1.4%) | 미달(1.2%) | 미달(1.6%) | 미달(1.6%) | 미달(9.0%) | 미측정 | before; aggregate 2.9%(목표 53%), latency 0.11x; 1.1~1.5k ops/s 고정(요청당 ~70 ms); 처리량 Go/C 1.5/112.5, 1.4/120.0, 1.5/97.4, 1.4/92.7, 1.2/13.3 Kops/s; [log](log/2026-09-05-go-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미달(1.4%) | 미달(1.3%) | 미달(1.4%) | 미달(1.7%) | 미달(8.0%) | 미측정 | before; aggregate 2.8%(목표 53%), latency 0.20x; 처리량 Go/C 1.4/97.0, 1.3/99.4, 1.2/90.2, 1.3/73.7, 1.1/13.3 Kops/s; [log](log/2026-09-05-go-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_PUBSUB` | 미달(31.0%) | 미달(29.0%) | 미달(33.9%) | 미달(32.4%) | 미달(110.0%) | 미측정 | before; aggregate 47.3%(목표 65%), latency 1.73x; 처리량 Go/C 148.4/479.4, 150.8/519.8, 189.7/559.2, 158.5/489.0, 52.2/47.5 Kmsg/s; [log](log/2026-09-05-go-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
