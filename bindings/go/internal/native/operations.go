@@ -63,7 +63,7 @@ type sendBuilderPart struct {
 }
 
 type sendBuilder struct {
-	first [1]sendBuilderPart
+	first [2]sendBuilderPart
 	parts []sendBuilderPart
 	count int
 	submitOnce
@@ -90,21 +90,21 @@ func (b *sendBuilder) Bytes(data []byte) SendSubmitOp {
 }
 
 func (b *sendBuilder) append(part sendBuilderPart) {
-	if b.count == 0 {
-		b.first[0] = part
-		b.count = 1
+	if b.count < len(b.first) {
+		b.first[b.count] = part
+		b.count++
 		return
 	}
-	if b.count == 1 {
-		b.parts = append(b.parts, b.first[0])
+	if b.count == len(b.first) {
+		b.parts = append(b.parts, b.first[:]...)
 	}
 	b.parts = append(b.parts, part)
 	b.count++
 }
 
 func (b *sendBuilder) builderParts() []sendBuilderPart {
-	if b.count == 1 {
-		return b.first[:]
+	if b.count <= len(b.first) {
+		return b.first[:b.count]
 	}
 	return b.parts
 }

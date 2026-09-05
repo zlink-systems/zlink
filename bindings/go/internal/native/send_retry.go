@@ -2,6 +2,11 @@
 
 package native
 
+/*
+#include "zlink.h"
+*/
+import "C"
+
 // sendRetryPayload owns an immutable logical multipart record while a
 // DONTWAIT send waits for its WRITABLE token. Core consumes every native part
 // passed to an admission attempt, so each attempt is made from a clone of
@@ -18,21 +23,29 @@ func newSendRetryPayload(parts []sendBuilderPart) (*sendRetryPayload, error) {
 	}
 
 	payload := &sendRetryPayload{owned: make([]*Message, len(parts)), sources: parts}
+	// Retained wrappers have one backing allocation. Keep the existing pointer
+	// view so SEND and REQUEST use the same multipart copy/cleanup path.
+	storage := make([]Message, len(parts))
 	for i, part := range parts {
-		var (
-			owned *Message
-			err   error
-		)
+		owned := &storage[i]
+		var err error
 		switch {
 		case part.bytes:
-			owned, err = NewMessage(part.data)
+			err = initNativeMessageFromBytes(&owned.msg, part.data)
 		case part.message == nil || part.message.closed:
 			err = configInvalidArgumentError()
 		default:
-			owned, err = part.message.clone()
+			err = configErrorFromResult(C.zlink_msg_init(&owned.msg))
+			if err == nil {
+				err = configErrorFromResult(C.zlink_msg_copy(&owned.msg, &part.message.msg))
+				if err != nil {
+					_ = owned.Close()
+				}
+			}
 		}
 		if err != nil {
-			closeMessageSlice(payload.owned[:i])
+			payload.owned = payload.owned[:i]
+			payload.close()
 			return nil, err
 		}
 		payload.owned[i] = owned

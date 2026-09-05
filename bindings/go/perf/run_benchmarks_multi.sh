@@ -1104,16 +1104,17 @@ shutdown_server() {
     eval "exec ${control_fd}>&-"
   fi
   if wait_for_pid "${pid}" "${SERVER_SHUTDOWN_TIMEOUT_SECONDS}"; then
-    wait "${pid}" 2>/dev/null || true
-    return
+    wait "${pid}" 2>/dev/null
+    return $?
   fi
   kill_process_tree "${pid}"
   if wait_for_pid "${pid}" "${SERVER_SHUTDOWN_TIMEOUT_SECONDS}"; then
     wait "${pid}" 2>/dev/null || true
-    return
+    return 1
   fi
   kill -9 "${pid}" 2>/dev/null || true
   wait "${pid}" 2>/dev/null || true
+  return 1
 }
 
 resolve_client_timeout_seconds() {
@@ -1197,6 +1198,7 @@ run_multi_process_case() {
   local srv_out client_out client_err server_fifo ready_line endpoint
   local server_pid server_control_fd client_pid client_control_fd client_fifo client_ready_line server_start_ready_line
   local client_timeout case_status case_gomaxprocs
+  local reqrep_client=0
   case_gomaxprocs="$(resolve_case_gomaxprocs "${pattern}" "${transport}" "${size}")"
   srv_out="$(mktemp "${TMP_DIR}/server.XXXXXX")"
   client_out="$(mktemp "${TMP_DIR}/client.XXXXXX")"
@@ -1218,13 +1220,13 @@ run_multi_process_case() {
 
   ready_line="$(wait_for_ready_or_unsupported "${srv_out}" "${SERVER_READY_TIMEOUT_SECONDS}" || true)"
   if [[ "${ready_line}" == UNSUPPORTED,* ]]; then
-    shutdown_server "${server_pid}" "${server_control_fd}"
+    shutdown_server "${server_pid}" "${server_control_fd}" || true
     cat "${srv_out}" > "${case_log}"
     rm -f "${srv_out}" "${client_out}" "${client_err}"
     return 1
   fi
   if [[ "${ready_line}" != READY,* ]]; then
-    shutdown_server "${server_pid}" "${server_control_fd}"
+    shutdown_server "${server_pid}" "${server_control_fd}" || true
     cat "${srv_out}" > "${case_log}"
     printf 'FAIL,current,%s,%s,%s,server_ready_timeout\n' "${pattern}" "${transport}" "${size}" >> "${case_log}"
     rm -f "${srv_out}" "${client_out}" "${client_err}"
@@ -1268,6 +1270,26 @@ run_multi_process_case() {
       fi
     fi
     exec {client_control_fd}>&- || true
+  elif [[ "${pattern}" == "MULTI_DEALER_ROUTER_REQREP" || "${pattern}" == "MULTI_ROUTER_ROUTER_REQREP" ]]; then
+    reqrep_client=1
+    client_fifo="$(mktemp -u "${TMP_DIR}/client_fifo.XXXXXX")"
+    mkfifo "${client_fifo}"
+    run_go_perf ./perf/multi \
+      --role client \
+      --pattern "${pattern}" \
+      --transport "${transport}" \
+      --msg-size "${size}" \
+      --duration "${duration}" \
+      --clients "${clients}" \
+      --endpoint "${endpoint}" \
+      < "${client_fifo}" > "${client_out}" 2> "${client_err}" &
+    client_pid=$!
+    exec {client_control_fd}> "${client_fifo}"
+    rm -f "${client_fifo}"
+    client_ready_line="$(wait_for_file_prefix "${client_out}" "CLIENT_DONE," "${client_timeout}" || true)"
+    if [[ "${client_ready_line}" != "CLIENT_DONE,${size}" ]]; then
+      case_status=1
+    fi
   elif [[ "${pattern}" == "MULTI_STREAM" ]]; then
     # Shared C reference client; the Go binding has no STREAM client
     # (measured surface is the Go STREAM server).
@@ -1325,7 +1347,22 @@ run_multi_process_case() {
     fi
   fi
 
-  shutdown_server "${server_pid}" "${server_control_fd}"
+  if ! shutdown_server "${server_pid}" "${server_control_fd}"; then
+    case_status=1
+  fi
+  if (( reqrep_client )); then
+    # Completion targets outlive the server's last reply. CLIENT_DONE ends
+    # measurement; only the STOP below permits client socket teardown.
+    { printf 'STOP\n' >&"${client_control_fd}"; } 2>/dev/null || true
+    exec {client_control_fd}>&- || true
+    if ! wait_for_pid "${client_pid}" "${SERVER_SHUTDOWN_TIMEOUT_SECONDS}"; then
+      case_status=1
+      kill_process_tree "${client_pid}"
+      wait "${client_pid}" 2>/dev/null || true
+    elif ! wait "${client_pid}"; then
+      case_status=1
+    fi
+  fi
   {
     cat "${srv_out}"
     if [[ -s "${client_out}" ]]; then

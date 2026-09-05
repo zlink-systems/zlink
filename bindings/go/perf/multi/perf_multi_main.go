@@ -108,14 +108,12 @@ func runMultiClientRole(cfg multiConfig, endpoint string) {
 		result := runMultiDealerRouterClient(cfg, endpoint)
 		printMultiResult(cfg, result)
 	case "MULTI_DEALER_ROUTER_REQREP":
-		result := runMultiDealerRouterReqRepClient(cfg, endpoint)
-		printMultiResult(cfg, result)
+		runMultiDealerRouterReqRepClient(cfg, endpoint)
 	case "MULTI_ROUTER_ROUTER_SENDSEND":
 		result := runMultiRouterRouterClientRole(cfg, endpoint)
 		printMultiResult(cfg, result)
 	case "MULTI_ROUTER_ROUTER_REQREP":
-		result := runMultiRouterRouterReqRepClient(cfg, endpoint)
-		printMultiResult(cfg, result)
+		runMultiRouterRouterReqRepClient(cfg, endpoint)
 	// MULTI_STREAM has no Go client role: the shared C
 	// perf_stream_client binary is the reference client (spawned by
 	// run_benchmarks_multi.sh).
