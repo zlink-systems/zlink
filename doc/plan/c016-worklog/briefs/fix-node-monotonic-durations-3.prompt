@@ -1,0 +1,19 @@
+# Job (implement, model astra): finish D-095 for node — the 10 remaining duration sites your previous run left out because of the (now finished) STREAM job, and make `npm test` green under the monotonic contract
+
+You are a codex sub-agent under a Claude supervisor. Continue from `doc/plan/c016-worklog/fix-node-clientserver-readiness-cap-2-summary.md` (your own report:
+§Date.now 호출 지점 감사 and §BLOCKERS). The working tree still holds your uncommitted changes — keep them. The STREAM/DeliveryDispatch job has finished, so
+`runtime/streams/stream-session-runtime.ts:90` (liveness duration) and `runtime/foundation/service-stateful-runtime.ts:1147,1632,4035,4081,4094,4762,4805,4826,5218`
+(Message Follow retention, durable operation deadlines incl. STREAM bind, replay retention) are yours now: move each duration to the same monotonic source
+(`performance.now()` + existing relative timers), keep reported/wire/store timestamps on wall clock, values unchanged. Then fix the two `npm test` reds you
+reported: `test/contract/stream-runtime.test.js:1187` injects an epoch `Date.now() - 1` into `retryRemoteSessionBindingSend` whose owner
+(`host/actor-packet-relay.ts:556,607`) now takes a monotonic deadline — adapt the test to the owner's contract (no epoch/monotonic dual acceptance in the
+runtime), and the topology projection file failure (read its assertion; fix the owner or the test's time source, never the deadline values). Rules as before
+(never `core/**`, `bindings/**`, any `doc/spec/**`, other languages; do not commit; env `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`,
+`unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`; sample runs under `flock -w7200 /tmp/zlink-samples-gate.lock`).
+
+## Verify
+touched-owner contract tests; `npm run typecheck`; `npm test` once (0 fail; the `sample-regression` file runs the real samples — the host clock is stable now,
+so DeliveryDispatch must pass; if a sample fails, report the role/transition honestly).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-monotonic-durations-3-summary.md`: per-site table for the 10 sites, test changes with rationale, rule count, results, BLOCKERS.
