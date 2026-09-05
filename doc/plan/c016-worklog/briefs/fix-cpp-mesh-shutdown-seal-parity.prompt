@@ -1,0 +1,25 @@
+# Job (fix, model astra): cpp framework — D-097 parity: the raw mesh node must consult the host shutdown admission seal before starting a peer admission (no Hello after the seal; Draining Update only; peer loss does not undo Draining), and a duplicate/idempotent admission must take the same completion diagnostic path as an accepted one
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `framework/languages/cpp/AGENTS.md` (if present), the spec
+`framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md` §14 step 1 (just amended: "같은 seal을 mesh node도 따른다…"),
+`03-spot-actor/03-mesh-node.ko.md` §6·§7.1, `decisions.ko.md` D-097, and the dotnet reference implementation `fix-dotnet-zoneworld-e5-shutdown-hello-2-summary.md`
+(seal owner exposed to the mesh node through the backend contract; pump skips Hello while sealed; one Draining-preserving state rule for admission completion,
+liveness expiry, transport disconnect, control-send failure; idempotent admission emits the completion diagnostic without re-raising PeerAdmitted). Never modify
+`core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages, `framework/languages/shared_sample/**`; do not commit. Env:
+`framework/languages/cpp`, build dir `build` (`cmake --build build -j4`), tests via `ctest --test-dir build -L framework-unit`, samples under
+`flock -w7200 /tmp/zlink-samples-gate.lock bash samples/run_samples.sh`. Core prefix is current (rebuild9).
+
+## Pointers (from the dotnet report)
+`framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp:3863-3885` starts admission on the READY edge without a seal check; `:2897-2908`
+answers a duplicate admission with Admit only (no completion diagnostic). Find the cpp host's shutdown seal owner (drain/admission gate equivalent of dotnet
+`ZLinkDrainAdmissionGate`) and how Relocate's Draining differs from the shutdown seal (must not be confused).
+
+## Fix (single owner each; rule count before/after)
+1. Seal → mesh: the mesh node reads the existing host shutdown seal (no new flag) before submitting a Hello; sealed → no Hello for Connecting peers, Draining
+   Update to admitted peers continues; the peer-loss transitions (disconnect, liveness expiry, send failure) keep Draining after the seal (one state rule).
+2. Duplicate/idempotent admission: same completion diagnostic (the log/flow event the ZoneWorld runner reads) as Accept; no duplicate PeerAdmitted event.
+3. Tests: unit (a) sealed node + peer loss → no Hello, stays Draining, drain completes; (b) unsealed still re-admits; (c) crossed Hello/Admit both sides emit the
+   completion diagnostic. Then `bash samples/run_samples.sh` once (7/7 + self-checks) and the cpp unit ctest.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-cpp-mesh-shutdown-seal-parity-summary.md`: diff file:line, four lines, rule counts, results, BLOCKERS.
