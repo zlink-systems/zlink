@@ -1,0 +1,22 @@
+# Job (STAGE 2, approved B, model sol): cpp m6b — `verify_unadmitted_request_is_rejected_without_framework_queue` fixture must receive the hello DATA before awaiting the native reply
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (가장 단순한 근본 수정) and the approved diagnosis
+`doc/plan/c016-worklog/diag-cpp-m6b-unadmitted-request.md` (§최소 수정안과 회귀). Never modify `core/**`, `bindings/**`, any
+`doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, framework runtime sources, other languages; never lower an assertion;
+do not commit. Env: `TMPDIR=/dev/shm/zlink-tmp-cpp`, build dir `framework/languages/cpp/build/linux-ninja-c-e2e` (`cmake --build ... -j4`).
+
+## Approved diagnosis
+With Core 7cbf12de41 the target's monitor lease keeps processing, so the framework hello DATA reaches the test's raw DEALER
+promptly and sits at the count-1 FIFO head; the fixture only calls `await_native_reply()` (`:5241`, helper `:81-85`) and never
+receives that DATA, so the native reply behind it is never delivered and the request ends REQUEST_TIMED_OUT (5 s). Class B
+(test fixture). Simplest fix: the fixture receives (and discards or asserts) the hello DATA on the DEALER before awaiting the
+native reply — no runtime change, no timeout change.
+
+## What to do
+1. Apply the simplest fixture change in `test_cpp_framework_m6b_runtime.cpp` (the function at `:5201`, helper if shared).
+2. Verify: `test_cpp_framework_m6b_runtime` binary 3×, `ctest -R 'm6b'`.
+3. Report (no fix): the binding's error text for typed result 101 rendered as "Network is unreachable (errno=110)" —
+   file:line in `bindings/cpp` where the message is composed (follow-up for the binding owner).
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-cpp-m6b-unadmitted-fixture-summary.md`: diff, the four lines, results, the binding message note.
