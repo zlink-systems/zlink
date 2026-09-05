@@ -534,7 +534,8 @@ class socket_base_t : public own_t,
     // physical admission attempt reports backpressure or an unready target.
     int register_send_writable_wait_after_failure (
       int failure_errno_, const zlink_routing_id_t *target_rid_or_null_,
-      void *user_context_, zlink_completion_id_t *completion_id_out_);
+      void *user_context_, zlink_completion_id_t *completion_id_out_,
+      socket_completion::request_writable_wait_t *request_wait_ = NULL);
     bool has_send_writable_wait () const;
     int request_admission_submit (
       zlink_msg_t *parts_, size_t part_count_,
@@ -650,6 +651,7 @@ class socket_base_t : public own_t,
     //  i_pipe_events interface implementation.
     void read_activated (pipe_t *pipe_) ZLINK_FINAL;
     void write_activated (pipe_t *pipe_) ZLINK_FINAL;
+    void request_correlation_released (pipe_t *pipe_) ZLINK_FINAL;
     void hiccuped (pipe_t *pipe_) ZLINK_FINAL;
     void pipe_peer_terminated (pipe_t *pipe_, bool drain_complete_ = true) ZLINK_FINAL;
     void pipe_terminated (pipe_t *pipe_) ZLINK_FINAL;
@@ -1058,7 +1060,8 @@ class socket_base_t : public own_t,
                                bool transport_output_,
                                bool consume_primary_signaler_);
     void publish_send_writable_target (
-      const zlink_routing_id_t *target_rid_or_null_);
+      const zlink_routing_id_t *target_rid_or_null_,
+      bool correlation_released_ = false);
     void publish_send_writable_terminal (
       const zlink_routing_id_t *target_rid_or_null_, int terminal_errno_);
 

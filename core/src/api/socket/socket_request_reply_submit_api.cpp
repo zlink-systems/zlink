@@ -5,6 +5,7 @@
 #include <chrono>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <thread>
 
 #include "api/socket/request_reply_protocol_internal.hpp"
@@ -30,7 +31,9 @@ struct pending_pair_observer_t
         pending (NULL),
         accounted_bytes (0),
         reserved_pipe (NULL),
-        reservation_committed (false)
+        reservation_committed (false),
+        request_wait (NULL),
+        observer_errno (0)
     {
     }
 
@@ -44,6 +47,8 @@ struct pending_pair_observer_t
     uint64_t accounted_bytes;
     zlink::pipe_t *reserved_pipe;
     bool reservation_committed;
+    zlink::socket_completion::request_writable_wait_t *request_wait;
+    int observer_errno;
     std::unique_lock<std::mutex> publication_lock;
 };
 
@@ -105,11 +110,24 @@ bool publish_pending_pair_before_flush (
             errno = EHOSTUNREACH;
             return false;
         }
+        uint64_t release_epoch = 0;
         if (!pipe_->try_reserve_request_correlation (
-              observer->accounted_bytes)) {
+              observer->accounted_bytes, &release_epoch)) {
             const int saved_errno = errno;
-            pipe_->release_lifetime_ref ();
             observer->publication_lock.unlock ();
+            if (saved_errno == ENOBUFS && observer->request_wait) {
+                try {
+                    std::shared_ptr<zlink::pipe_t> refused (
+                      pipe_, [] (zlink::pipe_t *p_) { p_->release_lifetime_ref (); });
+                    observer->request_wait->push_back (
+                      std::make_pair (refused, release_epoch));
+                } catch (const std::bad_alloc &) {
+                    observer->observer_errno = ENOMEM;
+                    errno = ENOMEM;
+                    return false;
+                }
+            } else
+                pipe_->release_lifetime_ref ();
             errno = saved_errno;
             return false;
         }
@@ -155,7 +173,8 @@ int submit_pull_dontwait_request (
   zlink::socket_base_t *socket_, const zlink_routing_id_t *peer_rid_,
   zlink_msg_t *parts_, size_t part_count_,
   const std::shared_ptr<reqrep::socket_request_reply_state_t> &state_,
-  const reqrep::pending_request_token_t &token_)
+  const reqrep::pending_request_token_t &token_,
+  zlink::socket_completion::request_writable_wait_t *request_wait_)
 {
     if (!socket_ || !parts_ || part_count_ == 0 || !state_) {
         errno = EFAULT;
@@ -164,6 +183,7 @@ int submit_pull_dontwait_request (
 
     pending_pair_observer_t observer;
     observer.state = state_;
+    observer.request_wait = request_wait_;
     observer.identity = token_.identity;
     observer.accounted_bytes = request_correlation_accounted_bytes (
       parts_, part_count_ - 1, &parts_[part_count_ - 1]);
@@ -171,7 +191,10 @@ int submit_pull_dontwait_request (
     const int rc = socket_->request_admission_submit (
       parts_, part_count_, peer_rid_, &publish_pending_pair_before_flush,
       &observer);
-    const int saved_errno = errno;
+    // The transport admission enum does not classify observer allocation
+    // failures. Preserve that error alongside the correlation refusal cause.
+    const int saved_errno =
+      observer.observer_errno ? observer.observer_errno : errno;
     if (rc != 0) {
         errno = saved_errno;
         return -1;
@@ -228,7 +251,8 @@ zlink_submit_result_t finish_dontwait_request_admission_failure (
   void *user_context_,
   const std::shared_ptr<reqrep::socket_request_reply_state_t> &state_,
   const reqrep::pending_request_identity_t &identity_, int failure_errno_,
-  zlink_completion_id_t *completion_id_out_)
+  zlink_completion_id_t *completion_id_out_,
+  zlink::socket_completion::request_writable_wait_t *request_wait_)
 {
     // A mandatory ROUTER route miss is connectivity, not lookup ownership.
     const int normalized_errno =
@@ -241,7 +265,8 @@ zlink_submit_result_t finish_dontwait_request_admission_failure (
         return failure;
 
     if (socket_->register_send_writable_wait_after_failure (
-          normalized_errno, peer_rid_, user_context_, completion_id_out_)
+          normalized_errno, peer_rid_, user_context_, completion_id_out_,
+          request_wait_)
         != 0)
         return zlink::submit_result_internal::from_errno (errno);
     return ZLINK_SUBMIT_BACKPRESSURED;
@@ -785,11 +810,12 @@ zlink_submit_result_t request_part_common (
               zlink::submit_result_internal::from_errno (saved_errno));
         }
 
+        zlink::socket_completion::request_writable_wait_t request_wait;
         const int submit_rc =
           flags_ == ZLINK_DONTWAIT
             ? submit_pull_dontwait_request (
                 socket_handle_.socket, peer_rid_, part_, 1,
-                request_state, pending_token)
+                request_state, pending_token, &request_wait)
             : submit_pull_blocking_request (
                 socket_handle_.socket, peer_rid_, part_, 1,
                 request_state, pending_token);
@@ -800,7 +826,7 @@ zlink_submit_result_t request_part_common (
                 return finish_dontwait_request_admission_failure (
                   socket_handle_.socket, peer_rid_, user_context_,
                   request_state, pending_token.identity, saved_errno,
-                  completion_id_out_);
+                  completion_id_out_, &request_wait);
             errno = saved_errno;
             return finish_request_submit_failure (
               request_state, pending_token.identity,
@@ -895,11 +921,12 @@ zlink_submit_result_t request_part_common (
           zlink::submit_result_internal::from_errno (saved_errno));
     }
     state_lock.unlock ();
+    zlink::socket_completion::request_writable_wait_t request_wait;
     const int submit_rc =
       flags_ == ZLINK_DONTWAIT
         ? submit_pull_dontwait_request (
             socket_handle_.socket, peer_rid_, request_parts.data (),
-            request_parts.size (), request_state, pending_token)
+            request_parts.size (), request_state, pending_token, &request_wait)
         : submit_pull_blocking_request (
             socket_handle_.socket, peer_rid_, request_parts.data (),
             request_parts.size (), request_state, pending_token);
@@ -909,7 +936,7 @@ zlink_submit_result_t request_part_common (
         if (flags_ == ZLINK_DONTWAIT)
             return finish_dontwait_request_admission_failure (
               socket_handle_.socket, peer_rid_, user_context_, request_state,
-              pending_token.identity, saved_errno, completion_id_out_);
+              pending_token.identity, saved_errno, completion_id_out_, &request_wait);
         errno = saved_errno;
         return finish_request_submit_failure (
           request_state, pending_token.identity,

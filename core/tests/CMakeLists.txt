@@ -77,6 +77,7 @@ if(ZLINK_CORE_BUILD_BINDING_INTEGRATION_TESTS
 endif()
 
 set(tests
+  ${INTEGRATION_TEST_ROOT}/test_request_writable_credit
   ${INTEGRATION_TEST_ROOT}/test_ancillaries
   ${INTEGRATION_TEST_ROOT}/test_asio_ws
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_enhanced
@@ -1175,3 +1176,6 @@ set_tests_properties(
     LABELS "integration;regression;serial;wake-invariant")
 
 set_tests_properties(test_two_poller_wake PROPERTIES TIMEOUT 60)
+
+set_tests_properties(test_request_writable_credit PROPERTIES
+  LABELS "integration;serial" RUN_SERIAL TRUE TIMEOUT 30)

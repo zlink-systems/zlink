@@ -9,12 +9,19 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
+#include <utility>
+#include <vector>
 
 namespace zlink
 {
+class pipe_t;
 namespace socket_completion
 {
+// Refused candidates and their pipe-owned reservation-return edge. No payload.
+typedef std::vector<std::pair<std::shared_ptr<pipe_t>, uint64_t> >
+  request_writable_wait_t;
 // A reservation is counted from REQUEST FINAL acceptance or WRITABLE wait-token
 // issuance until the public completion record is dequeued. Terminal publication
 // is allocation-free.
@@ -37,6 +44,7 @@ struct reservation_t
     bool ready;
     bool writable_wait_linked;
     bool heap_owned;
+    request_writable_wait_t request_wait;
 };
 
 struct queue_state_t
@@ -74,13 +82,17 @@ int reserve_writable_wait (queue_state_t *state_,
                            void *user_context_,
                            const zlink_routing_id_t *peer_rid_,
                            reservation_t **reservation_out_,
-                           zlink_completion_id_t *completion_id_out_);
+                           zlink_completion_id_t *completion_id_out_,
+                           request_writable_wait_t *request_wait_ = NULL);
 void release (queue_state_t *state_, reservation_t *reservation_);
-// A NULL target matches only the size-zero PAIR/DEALER waiter group.
+// Physical credit and terminal publication match the target (NULL means the
+// size-zero PAIR/DEALER group). Correlation publication instead checks each
+// refused pipe's return edge, independently of physical readiness and routes.
 int publish_writable_waiters (queue_state_t *state_,
                               const zlink_routing_id_t *target_rid_or_null_,
                               zlink_send_complete_result_t result_,
-                              int terminal_errno_);
+                              int terminal_errno_,
+                              bool correlation_released_ = false);
 int publish_request (queue_state_t *state_,
                      reservation_t *reservation_,
                      zlink_request_result_t result_,
