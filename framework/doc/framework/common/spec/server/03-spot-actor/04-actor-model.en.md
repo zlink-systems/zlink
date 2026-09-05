@@ -778,9 +778,12 @@ ActorId isn't used as a metric label.
   terminal envelope was received is not resent.
 - Each attempt uses the operation's entire remaining deadline; the deadline is
   not split across attempts. There is no attempt limit; when the whole deadline
-  is exhausted the operation ends with `DeadlineExceeded`. The target's terminal
-  record guarantees that execution is not duplicated, so the sender does not
-  guess whether execution happened.
+  is exhausted the operation ends, and the cause decides the kind: exhausted
+  without any attempt ever being admitted (route absent) ends with
+  `Unavailable` per the [error model](../00-foundation/07-framework-error-model.en.md);
+  exhausted while an admitted request's reply never arrived ends with
+  `DeadlineExceeded`. The target's terminal record guarantees that execution is
+  not duplicated, so the sender does not guess whether execution happened.
 - Destroy accepts only the same generation and doesn't retarget to a new
   incarnation.
 
