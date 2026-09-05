@@ -122,6 +122,13 @@ int zlink::socket_base_t::ensure_completion_processing ()
         return 0;
 
     socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+    // A poller can release its lifetime pin after close has been accepted.
+    // Keep owner acquisition, including the quiescence wait, inside the
+    // existing admission gate so close cannot hand off to the reaper first.
+    socket_public_api_scope_t admission (lifecycle);
+    if (!admission.acquired ())
+        return -1;
+
     for (;;) {
         bool wait_for_quiescence = false;
         bool started_here = false;
