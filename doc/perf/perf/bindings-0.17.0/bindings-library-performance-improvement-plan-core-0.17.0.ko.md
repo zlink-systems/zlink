@@ -777,7 +777,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/dotnet/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미측정`
+- Multi 상태: `미달` — `tcp` 4 pattern before 11:07~11:14 KST: DD 44.7%, DR/RR REQREP 51.6/53.6%, PUBSUB 44.8%(작은 메시지 고정 비용 C의 3~4배, 과거 p10보다 낮아 0.17.0 포트 회귀 의심); 자체 pass 1 job(astra) 진행 중; [log](log/2026-09-05-dotnet-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.2.1 Single suite
@@ -831,12 +831,12 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 미달(24.0%) | 미달(27.4%) | 미달(31.1%) | 미달(51.0%) | 미달(90.0%) | 미측정 | before(개선 pass 전); aggregate 44.7%(목표 85%), latency 18.2x(큐 깊이, 판정 제외); 처리량 .NET/C 269.7/1121.9, 289.1/1056.1, 295.8/951.9, 192.1/376.5, 71.8/79.8 Kmsg/s; `p1dotnet`; C `perf_c_multi_linux_20260905_110735_p1dotnet.txt`, .NET `perf_dotnet_multi_linux_20260905_110803.txt`; [log](log/2026-09-05-dotnet-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미달(27.4%) | 미달(37.4%) | 미달(37.1%) | 미달(44.8%) | 미달(111.1%) | 미측정 | before; aggregate 51.6%(목표 70%), latency 0.54x; 처리량 .NET/C 48.9/178.4, 60.7/162.5, 59.6/160.8, 59.9/133.6, 26.6/23.9 Kops/s; C `..._110836_p1dotnet.txt`, .NET `..._110902.txt`; [log](log/2026-09-05-dotnet-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미달(23.5%) | 미달(33.1%) | 미달(36.9%) | 미달(47.6%) | 미달(126.9%) | 미측정 | before; aggregate 53.6%(목표 70%), latency 0.63x; 처리량 .NET/C 42.1/178.8, 53.1/160.5, 53.8/145.8, 53.5/112.6, 24.9/19.6 Kops/s; C `..._110955_p1dotnet.txt`, .NET `..._111021.txt`; [log](log/2026-09-05-dotnet-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_PUBSUB` | 미달(25.5%) | 미달(37.5%) | 미달(36.8%) | 미달(44.6%) | 미달(79.6%) | 미측정 | before; aggregate 44.8%(목표 85%), latency 1.41x; 처리량 .NET/C 189.2/741.6, 242.3/646.0, 269.1/731.9, 248.7/558.3, 51.0/64.1 Kmsg/s; C `..._111113_p1dotnet.txt`, .NET `..._111140.txt`; [log](log/2026-09-05-dotnet-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
