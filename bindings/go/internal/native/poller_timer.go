@@ -6,6 +6,21 @@ package native
 #include <stdint.h>
 #include "zlink.h"
 
+typedef struct {
+    int count;
+    zlink_config_result_t result;
+    int native_errno;
+} zlink_go_poller_wait_result;
+
+static inline zlink_go_poller_wait_result zlink_go_poller_wait(
+    void *poller, zlink_poller_event_t *events, int capacity, long timeout) {
+    zlink_go_poller_wait_result out = {0, ZLINK_CONFIG_OK, 0};
+    out.count = zlink_poller_wait(poller, events, capacity, timeout, &out.result);
+    if (out.count < 0)
+        out.native_errno = zlink_errno();
+    return out;
+}
+
 static inline zlink_config_result_t zlink_go_poller_add_slot(
     void *poller_, void *socket_, uintptr_t slot_, short events_) {
     return zlink_poller_add(poller_, socket_, (void *)slot_, events_);
@@ -441,7 +456,6 @@ func (p *Poller) Wait(events []PollEvent, timeout time.Duration) (int, error) {
 	if len(events) == 0 {
 		return 0, configErrorFromResult(C.ZLINK_CONFIG_INVALID_ARGUMENT)
 	}
-	var errCode C.zlink_config_result_t
 	ms, err := durationToMillis(timeout)
 	if err != nil {
 		return 0, err
@@ -450,23 +464,19 @@ func (p *Poller) Wait(events []PollEvent, timeout time.Duration) (int, error) {
 		p.waitEvents = make([]C.zlink_poller_event_t, len(events))
 	}
 	nativeEvents := p.waitEvents[:len(events)]
-	count := C.zlink_poller_wait(
-		handle,
-		(*C.zlink_poller_event_t)(unsafe.Pointer(&nativeEvents[0])),
-		C.int(len(events)),
-		C.long(ms),
-		&errCode)
+	count, errCode, nativeErrno := nativePollerWait(
+		handle, &nativeEvents[0], len(events), int64(ms))
 	if count < 0 {
-		if errCode != 0 {
-			if errCode == C.ZLINK_CONFIG_INTERNAL_ERROR && currentErrno() == int(C.EINTR) {
-				return 0, nil
-			}
-			return 0, configErrorFromResult(errCode)
-		}
-		if currentErrno() == int(C.EINTR) {
+		if (errCode == ConfigOK || errCode == ConfigInternalError) && nativeErrno == int(C.EINTR) {
 			return 0, nil
 		}
-		return 0, configErrorFromErrno(currentErrno())
+		if errCode != ConfigOK {
+			if nativeErrno == 0 {
+				nativeErrno = int(C.EIO)
+			}
+			return 0, &ConfigError{Result: errCode, nativeErrno: nativeErrno}
+		}
+		return 0, configErrorFromErrno(nativeErrno)
 	}
 	readyCount := int(count)
 	if cap(p.waitSlots) < readyCount {
@@ -585,4 +595,11 @@ func Poll(items []PollItem, timeout time.Duration) (int, error) {
 		items[i].REvents = PollEventFlag(converted[i].revents)
 	}
 	return int(count), nil
+}
+
+// nativePollerWait captures the thread-local error before cgo can resume Go on
+// another OS thread. Both public and runtime polling use this boundary.
+func nativePollerWait(poller unsafe.Pointer, events *C.zlink_poller_event_t, capacity int, timeout int64) (int, ConfigResult, int) {
+	result := C.zlink_go_poller_wait(poller, events, C.int(capacity), C.long(timeout))
+	return int(result.count), ConfigResult(result.result), int(result.native_errno)
 }

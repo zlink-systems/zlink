@@ -143,7 +143,7 @@ func (r RoutingID) toC() C.zlink_routing_id_t {
 	var out C.zlink_routing_id_t
 	out.size = C.uint8_t(r.size)
 	if r.size > 0 {
-		C.memcpy(unsafe.Pointer(&out.data[0]), unsafe.Pointer(&r.data[0]), C.size_t(r.size))
+		copy(unsafe.Slice((*byte)(unsafe.Pointer(&out.data[0])), int(r.size)), r.data[:r.size])
 	}
 	return out
 }

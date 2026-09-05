@@ -80,12 +80,12 @@ func newSendRetryState(
 	core *socketCore,
 	target *RoutingID,
 	parts []sendBuilderPart,
-) (*sendRetryState, error) {
+) (sendRetryState, error) {
 	payload, err := newSendRetryPayload(parts)
 	if err != nil {
-		return nil, err
+		return sendRetryState{}, err
 	}
-	state := &sendRetryState{core: core, payload: payload}
+	state := sendRetryState{core: core, payload: payload}
 	if target != nil {
 		state.target = *target
 		state.hasTarget = true
@@ -249,23 +249,58 @@ func submitManagedSend(
 	if err != nil {
 		return err
 	}
-	entry := newSendCompletionEntry(ctx, send)
-	if err := core.completion.register(entry); err != nil {
-		send.payload.close()
-		entry.failSubmit()
-		entry.deleteHandle()
-		return err
-	}
 	if err := contextError(ctx); err != nil {
 		send.payload.close()
-		entry.finishSend(err)
-		core.completion.unregister(entry)
 		return err
 	}
-
-	if entry.attemptSend() {
-		core.completion.unregister(entry)
+	// Only the nonblocking native admission and wait-token publication share
+	// the drain owner's lock. No completion wait or payload preparation holds it.
+	key := nextCompletionContext()
+	owner := core.completion
+	owner.mu.Lock()
+	if owner.shutdown {
+		owner.mu.Unlock()
+		send.payload.close()
+		return &SubmitError{Result: SubmitInvalidState, nativeErrno: int(C.ESHUTDOWN)}
 	}
+	completionID, err := send.attempt(key)
+	if err == nil && completionID == 0 {
+		owner.mu.Unlock()
+		send.payload.takeSourceOwnership()
+		send.payload.close()
+		return nil
+	}
+	var submitErr *SubmitError
+	if !errors.As(err, &submitErr) || submitErr.Result != SubmitBackpressured ||
+		submitErr.internalErrno() != int(C.EAGAIN) || completionID == 0 {
+		owner.mu.Unlock()
+		send.payload.close()
+		if err == nil || (submitErr != nil && submitErr.Result == SubmitBackpressured) {
+			return &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
+		}
+		return err
+	}
+	// A token now exists. Publish the entry before a drain can look it up;
+	// immediate admission has no entry, channel, or global handle registration.
+	retry := new(sendRetryState)
+	*retry = send
+	entry := newSendCompletionEntry(nil, retry, key)
+	entry.owner = owner
+	entry.attemptMu.Lock()
+	owner.entries[key] = entry
+	owner.mu.Unlock()
+	send.payload.takeSourceOwnership()
+	entry.publishSendWait(completionID)
+	if activateErr := entry.setWritableWaiting(true); activateErr != nil {
+		entry.mu.Lock()
+		entry.err = activateErr
+		entry.publicDone = true
+		close(entry.done)
+		entry.mu.Unlock()
+		send.payload.close()
+	}
+	entry.attemptMu.Unlock()
+	entry.enableCancellation(ctx)
 	return entry.waitSend()
 }
 
@@ -293,7 +328,6 @@ func submitCompletionRequest(
 	entry := newCompletionEntry(completionRequest, ctx)
 	if err := core.completion.register(entry); err != nil {
 		entry.failSubmit()
-		entry.deleteHandle()
 		return nil, err
 	}
 	if err := contextError(ctx); err != nil {

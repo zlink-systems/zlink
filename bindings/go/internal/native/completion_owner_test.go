@@ -9,7 +9,7 @@ import (
 
 func TestImmediateSendRegistrationDoesNotStartRuntimeDrain(t *testing.T) {
 	owner := newCompletionOwner(nil)
-	entry := newSendCompletionEntry(context.Background(), nil)
+	entry := newSendCompletionEntry(context.Background(), nil, nextCompletionContext())
 	if err := owner.register(entry); err != nil {
 		t.Fatalf("register(send) error = %v", err)
 	}
@@ -63,7 +63,6 @@ func TestRequestTerminalErrorPreservesCauseCategory(t *testing.T) {
 
 func TestRequestCompletionEntryJoinsCaptureBeforePublish(t *testing.T) {
 	entry := newCompletionEntry(completionRequest, context.Background())
-	defer entry.deleteHandle()
 	entry.capture(nil, nil)
 	select {
 	case <-entry.done:
@@ -80,7 +79,6 @@ func TestRequestCompletionEntryJoinsCaptureBeforePublish(t *testing.T) {
 func TestCompletionEntryDropsLateRequestPartsAfterCallerCancellation(t *testing.T) {
 	waitCtx, cancel := context.WithCancel(context.Background())
 	entry := newCompletionEntry(completionRequest, waitCtx)
-	defer entry.deleteHandle()
 	cancel()
 	if _, err := entry.waitRequest(); !errors.Is(err, context.Canceled) {
 		t.Fatalf("waitRequest() error = %v, want context.Canceled", err)
@@ -97,21 +95,132 @@ func TestCompletionEntryDropsLateRequestPartsAfterCallerCancellation(t *testing.
 	}
 }
 
-func TestInactiveRuntimeKeepsOwnershipWhenSubmitRegistersBeforeRetire(t *testing.T) {
-	owner := newCompletionOwner(nil)
-	runtime := &runtimeCompletionDrain{}
-	owner.runtime = runtime
-
-	if _, active := owner.runtimeEvents(runtime); active {
-		t.Fatal("empty completion owner unexpectedly reported an active runtime")
+func TestRuntimeOwnerReusesPollerAcrossCompletedRequests(t *testing.T) {
+	ctx, err := NewContext()
+	if err != nil {
+		t.Fatal(err)
 	}
-	entry := &completionEntry{handleKey: 1}
-	owner.entries[entry.handleKey] = entry
-
-	if owner.exitInactiveRuntime(runtime) {
-		t.Fatal("runtime exited after an entry registered in the idle-retirement window")
+	defer ctx.Close()
+	server, err := ctx.RouterSocket()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if owner.runtime != runtime {
-		t.Fatal("runtime ownership was cleared while a registered entry still needed it")
+	defer server.Close()
+	client, err := ctx.DealerSocket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	endpoint := "inproc://completion-owner-reuse"
+	if err := server.Bind(endpoint); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Connect(endpoint); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		for i := 0; i < 20; i++ {
+			var r Received
+			ok, err := server.Recv(&r, RecvFlagsNone)
+			if err != nil || !ok {
+				done <- err
+				return
+			}
+			err = r.Reply().Message(r.Parts()[0]).Submit(context.Background())
+			r.Close()
+			if err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	var first *runtimeCompletionDrain
+	for i := 0; i < 20; i++ {
+		parts, err := client.Request().Bytes([]byte("echo")).Submit(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(parts) != 1 || string(parts[0].Data()) != "echo" {
+			t.Fatal("reply payload changed")
+		}
+		MultipartClose(parts)
+		owner := client.completion
+		owner.mu.Lock()
+		current := owner.runtime
+		owner.mu.Unlock()
+		if current == nil {
+			t.Fatal("completed request discarded socket-owned runtime")
+		}
+		if first == nil {
+			first = current
+		} else if first != current {
+			t.Fatal("request created a second runtime poller")
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-first.done:
+	default:
+		t.Fatal("socket close did not join its idle runtime")
+	}
+}
+
+func TestImmediateManagedSendAllocationBudget(t *testing.T) {
+	ctx, err := NewContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctx.Close()
+	sender, err := ctx.PairSocket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+	receiver, err := ctx.PairSocket()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+	if err = receiver.Bind("inproc://send-allocation-budget"); err != nil {
+		t.Fatal(err)
+	}
+	if err = sender.Connect("inproc://send-allocation-budget"); err != nil {
+		t.Fatal(err)
+	}
+	data := make([]byte, 64)
+	exchange := func() {
+		body, err := NewMessage(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tail, err := NewMessageWithSize(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = sender.Send().MoveMessage(body).Message(tail).Submit(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		var received Received
+		if ok, err := receiver.Recv(&received, RecvFlagsNone); err != nil || !ok {
+			t.Fatalf("recv=(%v,%v)", ok, err)
+		}
+		if !body.closed || !tail.closed {
+			t.Fatal("admitted send did not consume its sources")
+		}
+		received.Close()
+	}
+	exchange()
+	// Two public input messages, the builder, retained native packet and receive
+	// wrappers are included. The pre-optimization path allocated 32 objects;
+	// admitting a send must not reintroduce completion entries/channels/handles.
+	if allocations := testing.AllocsPerRun(100, exchange); allocations > 22 {
+		t.Fatalf("immediate two-part send/receive allocated %.0f objects, budget 22", allocations)
 	}
 }

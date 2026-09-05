@@ -1614,7 +1614,7 @@ a plain thread; Go's canonical `Submit(ctx) error` is synchronous and waits
 inside Core. **Request**'s canonical terminal keeps
 the language-native suspension surface: C++ `async()`, .NET `Async(...)`,
 Java/Node/Python/Rust `submit()` (an async return type), Kotlin
-`submit().await()`, and the completion channel returned by Go `Submit(ctx)`. A
+`submit().await()`, and Go `Submit(ctx)` (a synchronous terminal that parks the calling goroutine until completion — Go's native suspension is the goroutine and concurrency comes from goroutines; Go spec `Submit(context.Context) ([]*Message, error)`). A
 request builder keeps callback and blocking compatibility terminals only in
 C++, whose existing terminals are `submit()`, `submit(callback)`, and
 `async()`. Other languages do not pair such terminals, and no language adds a

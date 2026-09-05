@@ -1360,8 +1360,8 @@ Java·Node·Python·Rust `submit()`이다. C++는 plain-thread용 blocking `subm
 제공하고, Go의 canonical `Submit(ctx) error`는 Core 안에서 대기하는 동기 terminal이다.
 **Request**의 canonical terminal은 언어 native
 suspension 표면을 유지한다: C++ `async()`, .NET `Async(...)`, Java·Node·Python·Rust
-`submit()`(async 반환 타입), Kotlin `submit().await()`, Go `Submit(ctx)`가 반환하는 completion
-channel. C++만 기존 `submit()`·`submit(callback)`·`async()` 세 terminal을 유지한다.
+`submit()`(async 반환 타입), Kotlin `submit().await()`, Go `Submit(ctx)`(호출 goroutine을 완료까지 대기시키는 동기 terminal —
+Go의 native suspension은 goroutine이며 동시 요청은 goroutine으로 만든다; Go spec `Submit(context.Context) ([]*Message, error)`). C++만 기존 `submit()`·`submit(callback)`·`async()` 세 terminal을 유지한다.
 다른 언어는 callback·blocking 호환 terminal을 함께 두지 않으며 `request_async` 같은
 새 operation 시작점도 만들지 않는다.
 

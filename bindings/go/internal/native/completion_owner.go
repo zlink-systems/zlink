@@ -11,8 +11,8 @@ import "C"
 import (
 	"context"
 	"errors"
-	"runtime/cgo"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -35,7 +35,7 @@ const (
 
 // completionEntry is the two-phase join between the native submit return and
 // a completion captured by whichever drain owner currently owns the socket.
-// The cgo handle is only an opaque lookup key; Core never dereferences it.
+// The context key is only an opaque lookup key; Core never dereferences it.
 type completionEntry struct {
 	kind                 completionOperationKind
 	send                 *sendRetryState
@@ -57,9 +57,17 @@ type completionEntry struct {
 	owner           *completionOwner
 	writableWaiting bool
 
-	handle     cgo.Handle
-	handleKey  uintptr
-	deleteOnce sync.Once
+	handleKey uintptr
+}
+
+var completionContextSequence atomic.Uintptr
+
+func nextCompletionContext() uintptr {
+	key := completionContextSequence.Add(1)
+	if key == 0 {
+		panic("zlink: completion context space exhausted")
+	}
+	return key
 }
 
 func newCompletionEntry(kind completionOperationKind, ctx context.Context) *completionEntry {
@@ -68,21 +76,19 @@ func newCompletionEntry(kind completionOperationKind, ctx context.Context) *comp
 		done:        make(chan struct{}),
 		settledDone: make(chan struct{}),
 	}
-	entry.handle = cgo.NewHandle(entry)
-	entry.handleKey = uintptr(entry.handle)
+	entry.handleKey = nextCompletionContext()
 	entry.enableCancellation(ctx)
 	return entry
 }
 
-func newSendCompletionEntry(ctx context.Context, send *sendRetryState) *completionEntry {
+func newSendCompletionEntry(ctx context.Context, send *sendRetryState, key uintptr) *completionEntry {
 	entry := &completionEntry{
 		kind:        completionSendRetry,
 		send:        send,
 		done:        make(chan struct{}),
 		settledDone: make(chan struct{}),
 	}
-	entry.handle = cgo.NewHandle(entry)
-	entry.handleKey = uintptr(entry.handle)
+	entry.handleKey = key
 	entry.enableCancellation(ctx)
 	return entry
 }
@@ -101,13 +107,6 @@ func (e *completionEntry) enableCancellation(ctx context.Context) {
 		e.stopCancel = stop
 		e.mu.Unlock()
 	}
-}
-
-func (e *completionEntry) deleteHandle() {
-	if e == nil {
-		return
-	}
-	e.deleteOnce.Do(func() { e.handle.Delete() })
 }
 
 func (e *completionEntry) publish(completionID uint64) {
@@ -343,7 +342,7 @@ func (e *completionEntry) waitSettled() { <-e.settledDone }
 
 type runtimeCompletionDrain struct {
 	poller unsafe.Pointer
-	events C.short
+	wake   chan struct{}
 	stop   chan struct{}
 	done   chan struct{}
 }
@@ -353,12 +352,11 @@ type runtimeCompletionDrain struct {
 type completionOwner struct {
 	socket unsafe.Pointer
 
-	mu              sync.Mutex
-	entries         map[uintptr]*completionEntry
-	publicOwner     *Poller
-	runtime         *runtimeCompletionDrain
-	writableWaiters int
-	shutdown        bool
+	mu          sync.Mutex
+	entries     map[uintptr]*completionEntry
+	publicOwner *Poller
+	runtime     *runtimeCompletionDrain
+	shutdown    bool
 }
 
 func newCompletionOwner(socket unsafe.Pointer) *completionOwner {
@@ -376,15 +374,15 @@ func (o *completionOwner) register(entry *completionEntry) error {
 	}
 	entry.owner = o
 	o.entries[entry.handleKey] = entry
-	// An immediately admitted SEND has no completion record. Keep its entry
-	// visible to an already-active drain, but create a runtime drain only after
-	// the initial attempt actually returns a wait token.
+	// REQUEST may complete before submit returns. SEND registers only after
+	// receiving a wait token, while the drain owner lock excludes lookup.
 	if entry.kind == completionRequest && o.publicOwner == nil && o.runtime == nil {
 		if err := o.startRuntimeLocked(); err != nil {
 			delete(o.entries, entry.handleKey)
 			return err
 		}
 	}
+	o.wakeRuntimeLocked()
 	return nil
 }
 
@@ -396,12 +394,10 @@ func (o *completionOwner) unregister(entry *completionEntry) {
 	if current := o.entries[entry.handleKey]; current == entry {
 		if entry.writableWaiting {
 			entry.writableWaiting = false
-			o.writableWaiters--
 		}
 		delete(o.entries, entry.handleKey)
 	}
 	o.mu.Unlock()
-	entry.deleteHandle()
 }
 
 func (o *completionOwner) startRuntimeLocked() error {
@@ -418,7 +414,7 @@ func (o *completionOwner) startRuntimeLocked() error {
 	}
 	runtime := &runtimeCompletionDrain{
 		poller: poller,
-		events: events,
+		wake:   make(chan struct{}, 1),
 		stop:   make(chan struct{}),
 		done:   make(chan struct{}),
 	}
@@ -441,27 +437,26 @@ func (o *completionOwner) setWritableWaiting(entry *completionEntry, waiting boo
 	}
 	entry.writableWaiting = waiting
 	if waiting {
-		o.writableWaiters++
 		if o.publicOwner == nil && o.runtime == nil {
 			if err := o.startRuntimeLocked(); err != nil {
 				entry.writableWaiting = false
-				o.writableWaiters--
 				return err
 			}
 		}
-	} else {
-		o.writableWaiters--
 	}
+	o.wakeRuntimeLocked()
 	return nil
 }
 
-func (o *completionOwner) runtimeEvents(runtime *runtimeCompletionDrain) (C.short, bool) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.shutdown || o.runtime != runtime || o.publicOwner != nil || len(o.entries) == 0 {
-		return 0, false
+// wakeRuntimeLocked wakes a parked goroutine; it never creates another native
+// progress thread or poller. The owner lock protects runtime lifetime.
+func (o *completionOwner) wakeRuntimeLocked() {
+	if o.runtime != nil {
+		select {
+		case o.runtime.wake <- struct{}{}:
+		default:
+		}
 	}
-	return C.short(C.ZLINK_POLLCOMPLETION), true
 }
 
 func (o *completionOwner) runtimeLoop(runtime *runtimeCompletionDrain) {
@@ -472,69 +467,33 @@ func (o *completionOwner) runtimeLoop(runtime *runtimeCompletionDrain) {
 			return
 		default:
 		}
-		events, active := o.runtimeEvents(runtime)
+		o.mu.Lock()
+		active := len(o.entries) != 0
+		o.mu.Unlock()
 		if !active {
-			if o.exitInactiveRuntime(runtime) {
+			// A socket with no pending work parks in Go, releasing its OS thread.
+			// Registration and stop are the only wake sources while idle.
+			select {
+			case <-runtime.stop:
 				return
+			case <-runtime.wake:
 			}
 			continue
 		}
-		if events != runtime.events {
-			if err := configErrorFromResult(C.zlink_poller_modify(
-				runtime.poller, o.socket, events)); err != nil {
-				o.failRuntimeLoop(runtime)
-				return
-			}
-			runtime.events = events
-		}
-
 		var event C.zlink_poller_event_t
-		var result C.zlink_config_result_t
-		// Block when there is no completion. The bounded native wait lets
-		// socket/context shutdown join this goroutine without a polling spin.
-		count := C.zlink_poller_wait(runtime.poller, &event, 1, 100, &result)
+		count, _, errno := nativePollerWait(runtime.poller, &event, 1, 100)
 		if count > 0 {
 			if _, err := o.drain(false); err != nil {
 				o.failRuntimeLoop(runtime)
 				return
 			}
-			continue
-		}
-		if count < 0 {
-			errno := currentErrno()
+		} else if count < 0 {
 			if errno != int(C.EINTR) && errno != int(C.EAGAIN) {
 				o.failRuntimeLoop(runtime)
 				return
 			}
 		}
 	}
-}
-
-// exitInactiveRuntime rechecks the condition which made runtimeEvents inactive.
-// A submit may register between those two calls; in that case this loop still
-// owns the runtime and must keep running.
-func (o *completionOwner) exitInactiveRuntime(runtime *runtimeCompletionDrain) bool {
-	if o == nil || runtime == nil {
-		return true
-	}
-	o.mu.Lock()
-	if o.shutdown || o.runtime != runtime || o.publicOwner != nil {
-		o.mu.Unlock()
-		return true
-	}
-	if len(o.entries) != 0 {
-		o.mu.Unlock()
-		return false
-	}
-	// Keep the runtime published while its poller is destroyed. Socket close
-	// takes the same owner lock before deciding which runtime to join, so it
-	// cannot tear down the socket concurrently with this registered poller.
-	handle := runtime.poller
-	_ = closeErrorFromResult(C.zlink_poller_destroy(&handle))
-	runtime.poller = nil
-	o.runtime = nil
-	o.mu.Unlock()
-	return true
 }
 
 func (o *completionOwner) failRuntimeLoop(runtime *runtimeCompletionDrain) {
@@ -550,7 +509,7 @@ func (o *completionOwner) failRuntimeLoop(runtime *runtimeCompletionDrain) {
 	for _, entry := range o.entries {
 		entries = append(entries, entry)
 	}
-	// As in idle retirement, keep close from tearing down the socket until the
+	// Keep close from tearing down the socket until the
 	// failed runtime poller is no longer registered on it.
 	handle := runtime.poller
 	_ = closeErrorFromResult(C.zlink_poller_destroy(&handle))
@@ -703,7 +662,7 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 	if completionID != expectedID {
 		// The expected native token is still live. Fail the caller and release its
 		// packet, but retain this entry so the eventual matching record cannot
-		// outlive and alias a deleted cgo handle.
+		// outlive its matching wait token.
 		e.mu.Lock()
 		if !e.publicDone {
 			e.err = &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
@@ -971,12 +930,7 @@ func adoptCompletionParts(completion *C.zlink_completion_t) ([]*Message, error) 
 	parts := make([]*Message, 0, count)
 	for i := range raw {
 		message := &Message{}
-		if err := configErrorFromResult(C.zlink_msg_init(&message.msg)); err != nil {
-			MultipartClose(parts)
-			return nil, err
-		}
-		if err := configErrorFromResult(C.zlink_msg_move(&message.msg, &raw[i])); err != nil {
-			_ = message.Close()
+		if err := configErrorFromResult(C.zlink_msg_adopt(&message.msg, &raw[i])); err != nil {
 			MultipartClose(parts)
 			return nil, err
 		}
@@ -1007,6 +961,5 @@ func (o *completionOwner) shutdownOwner() {
 	stopRuntimeCompletionDrain(runtime)
 	for _, entry := range entries {
 		entry.shutdown()
-		entry.deleteHandle()
 	}
 }

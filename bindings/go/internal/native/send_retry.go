@@ -2,8 +2,6 @@
 
 package native
 
-import "sync"
-
 // sendRetryPayload owns an immutable logical multipart record while a
 // DONTWAIT send waits for its WRITABLE token. Core consumes every native part
 // passed to an admission attempt, so each attempt is made from a clone of
@@ -11,9 +9,7 @@ import "sync"
 type sendRetryPayload struct {
 	owned []*Message
 
-	consumeOnOwnership []*Message
-	consumeOnce        sync.Once
-	closeOnce          sync.Once
+	sources []sendBuilderPart
 }
 
 func newSendRetryPayload(parts []sendBuilderPart) (*sendRetryPayload, error) {
@@ -21,8 +17,7 @@ func newSendRetryPayload(parts []sendBuilderPart) (*sendRetryPayload, error) {
 		return nil, configInvalidArgumentError()
 	}
 
-	payload := &sendRetryPayload{owned: make([]*Message, len(parts))}
-	moveSources := make([]*Message, 0, len(parts))
+	payload := &sendRetryPayload{owned: make([]*Message, len(parts)), sources: parts}
 	for i, part := range parts {
 		var (
 			owned *Message
@@ -35,13 +30,6 @@ func newSendRetryPayload(parts []sendBuilderPart) (*sendRetryPayload, error) {
 			err = configInvalidArgumentError()
 		default:
 			owned, err = part.message.clone()
-			if err == nil {
-				if part.move {
-					moveSources = append(moveSources, part.message)
-				} else {
-					payload.consumeOnOwnership = append(payload.consumeOnOwnership, part.message)
-				}
-			}
 		}
 		if err != nil {
 			closeMessageSlice(payload.owned[:i])
@@ -53,7 +41,11 @@ func newSendRetryPayload(parts []sendBuilderPart) (*sendRetryPayload, error) {
 	// MoveMessage transfers ownership when Submit starts. Delay the transfer
 	// until every part has been validated and retained so a later invalid part
 	// cannot consume an earlier one.
-	closeMessageSlice(moveSources)
+	for _, part := range parts {
+		if part.move {
+			_ = part.message.Close()
+		}
+	}
 	return payload, nil
 }
 
@@ -65,19 +57,21 @@ func (p *sendRetryPayload) takeSourceOwnership() {
 	if p == nil {
 		return
 	}
-	p.consumeOnce.Do(func() {
-		closeMessageSlice(p.consumeOnOwnership)
-		p.consumeOnOwnership = nil
-	})
+
+	for _, part := range p.sources {
+		if part.message != nil && !part.move {
+			_ = part.message.Close()
+		}
+	}
+	p.sources = nil
 }
 
 func (p *sendRetryPayload) close() {
 	if p == nil {
 		return
 	}
-	p.closeOnce.Do(func() {
-		closeMessageSlice(p.owned)
-		p.owned = nil
-		p.consumeOnOwnership = nil
-	})
+
+	closeMessageSlice(p.owned)
+	p.owned = nil
+	p.sources = nil
 }
