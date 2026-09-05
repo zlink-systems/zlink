@@ -727,11 +727,30 @@ void verify_local_node_submit_bridge ()
         }));
         assert (probe->completed == 0);
     }
-    const auto capacity_while_handlers_are_pending =
-      application_jobs->snapshot ();
-    assert (capacity_while_handlers_are_pending
-              .effective_max_queued_application_jobs == 1);
-    assert (capacity_while_handlers_are_pending.permits_in_use == 0);
+    {
+        // The receive pump shares this queue and can reserve the released
+        // permit. Acquire it through the same FIFO to prove that neither
+        // pending handler retains capacity, independent of pump scheduling.
+        using permit_t =
+          zlink::framework::runtime::application_job_queue_t::permit_t;
+        auto released_capacity =
+          std::make_shared<std::promise<std::optional<permit_t>>> ();
+        auto available = released_capacity->get_future ();
+        auto waiter = application_jobs->wait_for_supply (
+          [released_capacity] (std::optional<permit_t> permit) {
+              released_capacity->set_value (std::move (permit));
+          });
+        assert (available.wait_for (1s) == std::future_status::ready);
+        auto permit = available.get ();
+        assert (permit);
+        const auto capacity_while_handlers_are_pending =
+          application_jobs->snapshot ();
+        assert (capacity_while_handlers_are_pending
+                  .effective_max_queued_application_jobs == 1);
+        assert (capacity_while_handlers_are_pending.reserved_supply_permits == 1);
+        assert (capacity_while_handlers_are_pending.queued_application_jobs == 0);
+        assert (capacity_while_handlers_are_pending.permits_in_use == 1);
+    }
 
     {
         std::lock_guard lock (probe->mutex);
