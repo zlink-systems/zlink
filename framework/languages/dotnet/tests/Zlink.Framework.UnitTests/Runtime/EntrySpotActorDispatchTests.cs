@@ -7101,6 +7101,105 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
+    [Theory]
+    [InlineData(RequestResult.NotConnected, ZLinkFrameworkErrorKind.Unavailable)]
+    [InlineData(RequestResult.TimedOut, ZLinkFrameworkErrorKind.DeadlineExceeded)]
+    [InlineData(RequestResult.Ok, ZLinkFrameworkErrorKind.Rejected)]
+    public async Task DeferredJoin_ReportsSenderTerminalAfterAdmissionDeadline(
+        RequestResult terminal, ZLinkFrameworkErrorKind expected)
+    {
+        var admission = new TaskCompletionSource<(ActorJoinCallback Callback, TimeSpan Timeout)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var node = new CanonicalJoinSpotNode
+        {
+            CanonicalActorJoinHandler = (callback, timeout) =>
+                admission.SetResult((callback, timeout))
+        };
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, includeSpotRoute: true);
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var timeout = TimeSpan.FromMilliseconds(200);
+            var join = new ZLinkDeferredActorJoin(runtime,
+                runtime.GetOrCreateActorState(actor.ActorId), actor, actorRef.Generation,
+                "spot-ready", ZLinkMessage.Empty, timeout);
+            join.ReserveBarrier();
+            join.Activate();
+            var submitted = await admission.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.InRange(submitted.Timeout, TimeSpan.Zero, timeout);
+            // Native terminal draining can resume after the deadline instant.
+            // Only the sender can classify its admission/exhaustion history.
+            await Task.Delay(submitted.Timeout + TimeSpan.FromMilliseconds(50));
+            Assert.False(actor.JoinCompletion.Task.IsCompleted);
+            submitted.Callback(new ZLinkBackendActorJoinResult(
+                terminal, 1, actorRef with { NodeRid = node.CanonicalRequest.TargetNodeRid },
+                "spot-ready", 0, 0,
+                JoinedSpotGeneration: node.CanonicalRequest.TargetSpotGeneration), Array.Empty<Message>());
+            var completion = await actor.JoinCompletion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            if (terminal == RequestResult.Ok)
+                Assert.IsType<ZLinkActorJoinCompletion.Rejected>(completion);
+            else
+                Assert.Equal(expected, Assert.IsType<ZLinkActorJoinCompletion.Failed>(completion).Kind);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task DeferredJoin_LocalAdmissionKeepsCapturedDeadline()
+    {
+        var probe = new BlockingActorJoinProbe();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(new CapturingSpotNode(),
+            userSpotType: typeof(DeadlineActorJoinSpot), blockingActorJoinProbe: probe);
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var target = await runtime.CreateAsync<DeadlineActorJoinSpot>();
+            var join = new ZLinkDeferredActorJoin(runtime,
+                runtime.GetOrCreateActorState(actor.ActorId), actor, actorRef.Generation,
+                target.Spot.SpotId, ZLinkMessage.Empty, TimeSpan.FromMilliseconds(200));
+            join.ReserveBarrier();
+            join.Activate();
+            await probe.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var completion = await actor.JoinCompletion.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded,
+                Assert.IsType<ZLinkActorJoinCompletion.Failed>(completion).Kind);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task LocalJoin_WithoutCapturedDeadlineKeepsCallerCancellation()
+    {
+        var probe = new BlockingActorJoinProbe();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(new CapturingSpotNode(),
+            userSpotType: typeof(DeadlineActorJoinSpot), blockingActorJoinProbe: probe,
+            defaultRequestTimeout: TimeSpan.FromMilliseconds(100));
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var target = await runtime.CreateAsync<DeadlineActorJoinSpot>();
+            var join = runtime.JoinActorAsync(target.Spot.SpotId, actor,
+                ZLinkMessage.Empty, CancellationToken.None).AsTask();
+            await probe.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await Task.Delay(150);
+            Assert.False(join.IsCompleted);
+            probe.Release.TrySetResult();
+            Assert.IsType<ZLinkActorJoinResult.Rejected>(
+                await join.WaitAsync(TimeSpan.FromSeconds(2)));
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task DeferredJoin_UsesTheCapturedActorGeneration_WhenRegistryPublishesASuccessor()
     {
@@ -8647,6 +8746,14 @@ public sealed partial class EntrySpotActorDispatchTests
         public string ActorId { get; } = actorId;
 
         public IZLinkActorContext Context { get; } = context ?? new TestActorContext(actorId);
+        public TaskCompletionSource<ZLinkActorJoinCompletion> JoinCompletion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ValueTask OnJoinCompletedAsync(
+            ZLinkActorJoinCompletion completion, CancellationToken cancellationToken = default)
+        {
+            JoinCompletion.TrySetResult(completion);
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class ProbeActorFactory : IZLinkActorFactory
@@ -9252,6 +9359,25 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public TaskCompletionSource Release { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class DeadlineActorJoinSpot(
+        IZLinkSpotContext context, BlockingActorJoinProbe probe) : IZLinkSpot<ProbeActor>
+    {
+        public IZLinkSpotContext Context { get; } = context;
+
+        public async ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+            string actorId, ZLinkMessage request, CancellationToken cancellationToken)
+        {
+            probe.Started.TrySetResult();
+            await probe.Release.Task.WaitAsync(cancellationToken);
+            return ZLinkSpotActorJoinResult.Reject();
+        }
+
+        public ValueTask OnJoinedActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+        public ValueTask OnLeaveActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
     }
 
     private sealed class BlockingActorJoinSpot(
@@ -10120,7 +10246,31 @@ public sealed partial class EntrySpotActorDispatchTests
             CancellationToken cancellationToken = default) =>
             inner.ScanAsync(request, cancellationToken);
     }
-    private sealed class CapturingSpotNode :
+    private sealed class CanonicalJoinSpotNode : CapturingSpotNode,
+        IZLinkBackendCanonicalActorJoin
+    {
+        public Action<ActorJoinCallback, TimeSpan>? CanonicalActorJoinHandler { get; init; }
+        public ZLinkBackendCanonicalActorJoinRequest CanonicalRequest { get; private set; }
+
+        public bool CanRequestCanonicalActorJoin(ZLinkBackendCanonicalActorJoinRequest request) =>
+            CanonicalActorJoinHandler is not null;
+
+        public bool RequestCanonicalActorJoin(
+            ZLinkBackendCanonicalActorJoinRequest request,
+            ActorJoinCallback callback,
+            TimeSpan? timeout,
+            out ulong correlation)
+        {
+            correlation = 1;
+            CanonicalRequest = request;
+            if (CanonicalActorJoinHandler is null) return false;
+            CanonicalActorJoinHandler(callback, timeout!.Value);
+            return true;
+        }
+
+    }
+
+    private class CapturingSpotNode :
         IZLinkBackendSpotNode,
         IZLinkBackendAuthorityObserver,
         IZLinkBackendRequestSourceFenceObserver,

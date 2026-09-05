@@ -65,6 +65,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly Dictionary<ulong, Peer> _peersByIntent = new();
     private readonly Dictionary<RoutingId, Peer> _peersByRid = new();
     private readonly Dictionary<RoutingId, ZLinkMeshPeerExpectation> _peerExpectations = new();
+    private event Action<RoutingId>? PeerConnectionIntentRemoved;
     private readonly ZLinkMeshConnectionCandidates _connectionCandidates = new();
     private readonly ZLinkMeshPeerAdmission _peerAdmission = new();
     private readonly ConcurrentDictionary<MailboxKey, OwnedMailbox> _ownedMailboxes = new();
@@ -427,11 +428,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RunState(() =>
         {
             if (_peerExpectations.TryGetValue(peerRid, out var expected)
-                && string.Equals(
-                    expected.Endpoint,
-                    endpoint,
-                    StringComparison.Ordinal))
-                _peerExpectations.Remove(peerRid);
+                && !string.Equals(expected.Endpoint, endpoint, StringComparison.Ordinal))
+                return;
+            _peerExpectations.Remove(peerRid);
+            NotifyPeerConnectionIntentRemoved(peerRid);
         });
     }
 
@@ -442,7 +442,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (!_peersByIntent.Remove(connectionIntentId, out var peer))
                 return;
             RemovePeer(peer, disconnect: true);
+            NotifyPeerConnectionIntentRemoved(peer.ExpectedRid ?? peer.RoutingId);
         });
+    }
+
+    private void NotifyPeerConnectionIntentRemoved(RoutingId target)
+    {
+        // Location intent removal is terminal only after the last admitted
+        // route is gone. Physical disconnect never publishes this transition.
+        if (!_peerExpectations.ContainsKey(target)
+            && (!_peersByRid.TryGetValue(target, out var admitted) || !admitted.Admitted))
+            PeerConnectionIntentRemoved?.Invoke(target);
     }
 
     public bool RemovePeerConnectionIfNotAdmitted(ulong connectionIntentId)
@@ -465,6 +475,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // must not tear down a replacement intent that already claimed the
             // same endpoint during a rolling RID handover.
             RemovePeer(peer, disconnect: !replacementUsesEndpoint);
+            NotifyPeerConnectionIntentRemoved(peer.ExpectedRid ?? peer.RoutingId);
             return true;
         });
     }
@@ -474,11 +485,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RunState(() =>
         {
             if (!_peersByRid.TryGetValue(peerRid, out var peer))
+            {
+                NotifyPeerConnectionIntentRemoved(peerRid);
                 return;
+            }
             if (lifecycleGeneration != 0
                 && lifecycleGeneration != peer.LifecycleGeneration)
                 return;
             RemovePeer(peer, disconnect: true);
+            NotifyPeerConnectionIntentRemoved(peerRid);
         });
     }
 
@@ -4280,16 +4295,36 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         PendingOperation pending,
         IReadOnlyList<ReadOnlyMemory<byte>> wire)
     {
-        if (!RunInboundOperation(() => CompleteNativeDurableRequestAsync(
-                targetRid,
-                targetNodeGeneration,
-                pending,
-                wire,
-                pending.Kind == MeshOperationKind.ActorJoin
-                    ? CompleteNativeActorJoinRequest
-                    : CompleteNativeInfrastructureRequest,
-                _stop?.Token ?? CancellationToken.None)))
+        Action<PendingOperation, RequestResult, IReadOnlyList<Message>> complete =
+            pending.Kind == MeshOperationKind.ActorJoin
+                ? CompleteNativeActorJoinRequest
+                : CompleteNativeInfrastructureRequest;
+        var pendingToken = pending.Token;
+        void OnIntentRemoved(RoutingId target)
+        {
+            if (target == targetRid)
+                complete(pending, RequestResult.NotConnected, Array.Empty<Message>());
+        }
+
+        RunState(() => PeerConnectionIntentRemoved += OnIntentRemoved);
+        if (!RunInboundOperation(async () =>
+            {
+                try
+                {
+                    await CompleteNativeDurableRequestAsync(
+                            targetRid, targetNodeGeneration, pending, wire, complete,
+                            pendingToken, _stop?.Token ?? CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    RunState(() => PeerConnectionIntentRemoved -= OnIntentRemoved);
+                }
+            }))
+        {
+            RunState(() => PeerConnectionIntentRemoved -= OnIntentRemoved);
             return SubmitResult.Terminated;
+        }
 
         Publish(MeshMonitorEventKind.MessageSubmitted, peerRid: targetRid);
         return SubmitResult.Ok;
@@ -9188,10 +9223,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         PendingOperation pending,
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         Action<PendingOperation, RequestResult, IReadOnlyList<Message>> complete,
+        CancellationToken pendingToken,
         CancellationToken cancellationToken)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken, pending.Token);
+            cancellationToken, pendingToken);
         try
         {
             var replies = await ZLinkDurableRequest.RequestAsync(

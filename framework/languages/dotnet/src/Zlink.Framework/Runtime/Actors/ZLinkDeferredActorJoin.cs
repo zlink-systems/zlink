@@ -225,19 +225,17 @@ internal sealed class ZLinkDeferredActorJoin(
                 return;
             }
 
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            deadline.CancelAfter(remaining);
             if (_targetCompletion is { } targetCompletion)
             {
                 try
                 {
-                    await targetCompletion.WaitAsync(deadline.Token)
+                    await targetCompletion.WaitAsync(remaining, cancellationToken)
                         .ConfigureAwait(false);
                     barrier = actorState.ReserveDeferredJoinBarrierAfterTarget();
                 }
                 catch (Exception exception)
                 {
-                    var kind = MapFailure(exception, deadline);
+                    var kind = MapFailure(exception);
                     Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                         $"deferred_join_target_wait_failed kind={kind} {exception}");
                     await NotifySourceAsync(
@@ -273,14 +271,14 @@ internal sealed class ZLinkDeferredActorJoin(
                             actor,
                             request,
                             _operationId,
-                            deadline.Token,
+                            cancellationToken,
                             _absoluteDeadline)
                         .ConfigureAwait(false)
                     : await runtime.JoinActorEntrySpotAsync(
                             actor,
                             request,
                             _operationId,
-                            deadline.Token,
+                            cancellationToken,
                             _absoluteDeadline)
                         .ConfigureAwait(false);
 
@@ -307,7 +305,7 @@ internal sealed class ZLinkDeferredActorJoin(
             }
             catch (Exception exception)
             {
-                var kind = MapFailure(exception, deadline);
+                var kind = MapFailure(exception);
                 //  The completion carries only a kind, so without this the
                 //  originating exception is lost and every throw site that maps
                 //  to the same kind looks identical from the outside. Trace it on
@@ -367,8 +365,7 @@ internal sealed class ZLinkDeferredActorJoin(
     }
 
     private ZLinkFrameworkErrorKind MapFailure(
-        Exception exception,
-        CancellationTokenSource deadline)
+        Exception exception)
     {
         if (exception is ZLinkFrameworkException framework)
             return framework.Kind;
@@ -376,7 +373,7 @@ internal sealed class ZLinkDeferredActorJoin(
             && runtime.ShutdownToken.IsCancellationRequested)
             return ZLinkFrameworkErrorKind.ShuttingDown;
         if (exception is TimeoutException
-            || exception is OperationCanceledException && deadline.IsCancellationRequested)
+            || exception is OperationCanceledException)
             return ZLinkFrameworkErrorKind.DeadlineExceeded;
         return ZLinkFrameworkErrorKind.InternalFailure;
     }
