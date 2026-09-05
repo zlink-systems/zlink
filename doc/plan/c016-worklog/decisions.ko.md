@@ -1252,7 +1252,7 @@ gate: worktree identity 5/5, integration 121/121, 전체 171/171; main dev 전�
 
 ## D-B114 (2026-09-05 16:30, 머신 B) Node pass 1b(astra) — 공유 completion pump 후보 기각(64K REQREP 붕괴), N-API callback scope 수정만 채택; **REQREP 지연의 주범은 서버 수신 경로**(TCP recv→ROUTER recv_part 128 ms)
 요청 1건 수명 계측(C ABI interposer + JS preload, DR/tcp/64B/100 clients): 제출→Core admission 0.005 ms, wire 0.12 ms, **서버 TCP 수신→Core `router_recv_part` 128 ms**, reply→client 0.19 ms, client TCP 수신→completion pull 1.2 ms, pull→Promise 0.6→0.01 ms. 즉 client completion 경로가 아니라 **Node ROUTER 서버의 수신 backlog**가 왕복 130 ms(보고 latency 65 ms)와 요청의 58% timeout을 만든다(submit 223,700 중 TimedOut 129,136). 빈 FD callback은 mailbox FD(`ZLINK_OPT_FD`)를 completion wake로 쓰는 구조(요청당 0.7회)로 보조 원인.
-기각: Context당 공유 Core poller/worker/delivery FD pump — 기능 gate·20셀 complete이나 DR/RR 64K 807/585 ops/s(추가 delivery hop). 채택: `napi_async_init`/`napi_make_callback` 기반 callback scope(ALS 문맥 회귀 수정, `completion_progress.test.ts`), 공개 API 불변, spec gap 없음. gate `npm test` 131/131 + samples. 다음: pass 1c — 서버 수신 경로(ROUTER recv 루프·틱당 drain 수·poller 대기) 원인 확정·수정. 커밋: 아래 해시.
+기각: Context당 공유 Core poller/worker/delivery FD pump — 기능 gate·20셀 complete이나 DR/RR 64K 807/585 ops/s(추가 delivery hop). 채택: `napi_async_init`/`napi_make_callback` 기반 callback scope(ALS 문맥 회귀 수정, `completion_progress.test.ts`), 공개 API 불변, spec gap 없음. gate `npm test` 131/131 + samples. 다음: pass 1c — 서버 수신 경로(ROUTER recv 루프·틱당 drain 수·poller 대기) 원인 확정·수정. 커밋 `6c2cb784c0`.
 ## D-093 (2026-09-05 16:10, 머신 A) 결정 — durable operation의 "target lifecycle 종료" 신호와 deadline 소유자(ZoneWorld G4)
 
 - 진단(`fix-dotnet-zoneworld-g4-lifecycle-terminal-summary.md`) 승인: **B 기존 결함**. Core는 pair 종료를 98 ms에 NOT_CONNECTED로 전달했고, 남은 것은 Framework 규칙이다.
