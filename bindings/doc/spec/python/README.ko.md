@@ -179,6 +179,13 @@ native `FINAL` 전에 provisional registry에 등록하고 submit publish와 com
 또는 detached state를 한 건 이상 완전 처리했다는 progress event다. Public poller owner에서
 blocking request를 사용하면 다른 thread가 wait loop를 계속 실행해야 한다.
 
+`Poller.add_monitor(monitor: MonitorSocket, events: PollEventFlag, slot: int) -> None`,
+`Poller.modify_monitor(monitor: MonitorSocket, events: PollEventFlag) -> None`,
+`Poller.remove_monitor(monitor: MonitorSocket) -> None`는 socket monitor를 poller source로 등록·수정·제거한다
+(공통 spec "`Poller`의 monitor source"). 기존 `add_socket/modify_socket/remove_socket`도 monitor를 수용한다.
+monitor에는 `PollEventFlag.POLLIN`만 유효하고 다른 bit가 있으면 typed `ConfigResult.INVALID_ARGUMENT`로 거절한다.
+ready 뒤 `monitor.recv(RecvFlags.DONT_WAIT)`로 drain하며 poll event는 socket과 같은 slot/source kind로 보고한다.
+
 `ReplyToken`은 module-private `_reply_token_from_native`만 만들며 public construction과
 serialization을 거부한다. Factory는 `object.__new__(ReplyToken)`과 `object.__setattr__`로
 private `_owner`·`_value`를 채운다. Equality와 hash는 owner identity와 opaque value를 함께 사용한다.

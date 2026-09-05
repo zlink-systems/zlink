@@ -5,8 +5,6 @@ import time
 import zlink
 
 
-_MONITOR_POLL_SLEEP_S = 0.005
-_MONITOR_WAIT = threading.Event()
 _ALLOCATED_TCP_PORTS = set()
 
 
@@ -22,12 +20,15 @@ def tcp_endpoint():
 
 
 def _poll_monitor_event(monitor, timeout_ms):
-    deadline = time.monotonic() + (timeout_ms / 1000.0)
-    while time.monotonic() < deadline:
-        if monitor.status().is_ready():
-            return monitor.recv()
-        _MONITOR_WAIT.wait(_MONITOR_POLL_SLEEP_S)
-    return None
+    with zlink.create_poller() as poller:
+        poller.add_monitor(monitor, zlink.PollEventFlag.POLLIN, 0)
+        events = zlink.create_poll_events(1)
+        try:
+            if poller.wait(events, timeout_ms):
+                return monitor.recv(flags=zlink.RecvFlags.DONT_WAIT)
+            return None
+        finally:
+            poller.remove_monitor(monitor)
 
 
 def wait_connected(*monitors, timeout_ms=5000):

@@ -1,15 +1,18 @@
 # SPDX-License-Identifier: MPL-2.0
 
 import ctypes
+import errno
 import time
 
 from ...contracts.errors.codes import CloseResult, ConfigResult
 from ...contracts.errors.errors import CloseError, ConfigError, RecvError
 from ...contracts.eventing.codes import PollEventFlag, PollSourceKind
 from ...contracts.eventing.poller import PollEvent, PollEvents
+from ...contracts.eventing.monitor import MonitorSocket
 from ...contracts.sockets.codes import RecvResult
 from ..._native.ffi import ZlinkPollerEvent, lib
 from ..handles.native_support import _raise_last_error, _raise_result_error
+from .monitor import NativeMonitorSocket
 
 
 class NativePollEvents:
@@ -77,12 +80,18 @@ class NativePoller:
         self._socket_registrations = {}
 
     @staticmethod
+    def _validate_monitor_events(socket, events):
+        if isinstance(socket, NativeMonitorSocket) and int(events) & ~int(PollEventFlag.POLLIN):
+            raise ConfigError(ConfigResult.INVALID_ARGUMENT, errno.EINVAL)
+
+    @staticmethod
     def _completion_owner(socket, events):
         if int(events) & int(PollEventFlag.POLLCOMPLETION):
             return getattr(socket, "_completion_owner", None)
         return None
 
     def add_socket(self, socket, events, slot):
+        self._validate_monitor_events(socket, events)
         user_data = ctypes.c_void_p(_validate_slot(slot))
         owner = self._completion_owner(socket, events)
         if owner is not None:
@@ -93,6 +102,18 @@ class NativePoller:
                 owner.transfer_to_runtime(self)
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
         self._socket_registrations[int(socket._handle)] = [socket, int(events), owner]
+
+    def add_monitor(self, monitor: MonitorSocket, events: PollEventFlag, slot: int) -> None:
+        """Register a monitor for POLLIN; see Poller.add_monitor."""
+        self.add_socket(monitor, events, slot)
+
+    def modify_monitor(self, monitor: MonitorSocket, events: PollEventFlag) -> None:
+        """Change a monitor registration's POLLIN interest."""
+        self.modify_socket(monitor, events)
+
+    def remove_monitor(self, monitor: MonitorSocket) -> None:
+        """Unregister a monitor before closing it."""
+        self.remove_socket(monitor)
 
     def add_fd(self, fd, events, slot):
         user_data = ctypes.c_void_p(_validate_slot(slot))
@@ -107,6 +128,7 @@ class NativePoller:
             _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
 
     def modify_socket(self, socket, events):
+        self._validate_monitor_events(socket, events)
         key = int(socket._handle)
         registration = self._socket_registrations.get(key)
         old_owner = None if registration is None else registration[2]

@@ -29,12 +29,23 @@ def main():
                             raise AssertionError("monitor sample expected idle client snapshot before connect")
                         server.bind(endpoint)
                         client.connect(endpoint)
-                        server_event = server_monitor.recv()
-                        client_event = client_monitor.recv()
-                        if not (int(server_event.event) & int(zlink.MonitorEventMask.CONNECTION_READY)):
-                            raise AssertionError("monitor sample expected server CONNECTION_READY")
-                        if not (int(client_event.event) & int(zlink.MonitorEventMask.CONNECTION_READY)):
-                            raise AssertionError("monitor sample expected client CONNECTION_READY")
+                        with zlink.create_poller() as poller:
+                            monitors = (server_monitor, client_monitor)
+                            for slot, monitor in enumerate(monitors):
+                                poller.add_monitor(monitor, zlink.PollEventFlag.POLLIN, slot)
+                            events = zlink.create_poll_events(2)
+                            pending = {0, 1}
+                            while pending:
+                                if poller.wait(events, 5000) == 0:
+                                    raise TimeoutError("monitor sample expected CONNECTION_READY")
+                                for index in range(events.ready_count):
+                                    slot = events.slot(index)
+                                    monitor = monitors[slot]
+                                    while (event := monitor.recv(flags=zlink.RecvFlags.DONT_WAIT)) is not None:
+                                        if int(event.event) & int(zlink.MonitorEventMask.CONNECTION_READY):
+                                            pending.discard(slot)
+                            for monitor in monitors:
+                                poller.remove_monitor(monitor)
                 print('[monitor/recv] recv: "connection-ready"')
 
 

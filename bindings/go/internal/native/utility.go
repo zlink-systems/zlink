@@ -21,6 +21,8 @@ import (
 	"unsafe"
 )
 
+// SocketTarget is a native socket source, including *SocketMonitor for poller
+// registration. Monitor sources support only PollIn readiness.
 type SocketTarget interface {
 	raw() unsafe.Pointer
 }

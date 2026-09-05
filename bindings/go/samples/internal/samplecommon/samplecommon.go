@@ -93,45 +93,34 @@ func WaitConnected(serverMon, clientMon *zlink.SocketMonitor) {
 }
 
 func waitConnectedMonitor(mon *zlink.SocketMonitor) {
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		event, err := mon.Recv(zlink.RecvFlagsDontWait)
-		if err != nil {
-			var recvErr *zlink.RecvError
-			if !errors.As(err, &recvErr) || recvErr.Result != zlink.RecvNoData {
-				Must(err)
-			}
-		} else if event != nil && event.IsConnectionReady() {
-			return
-		}
-
-		status, statusErr := mon.Status()
-		Must(statusErr)
-		if status.IsReady() {
-			return
-		}
-		time.Sleep(time.Millisecond)
+	if !WaitMonitorEvent(mon).IsConnectionReady() {
+		Must(fmt.Errorf("expected CONNECTION_READY"))
 	}
-	Must(fmt.Errorf("timed out waiting for socket connection"))
 }
 
 func WaitMonitorEvent(mon *zlink.SocketMonitor) *zlink.MonitorEvent {
-	type result struct {
-		event *zlink.MonitorEvent
-		err   error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		event, err := mon.Recv(0)
-		ch <- result{event: event, err: err}
-	}()
-	select {
-	case out := <-ch:
-		Must(out.err)
-		return out.event
-	case <-time.After(5 * time.Second):
+	poller, err := zlink.NewPoller()
+	Must(err)
+	defer poller.Close()
+	Must(poller.AddMonitor(mon, zlink.PollIn, 0))
+	defer func() { Must(poller.RemoveMonitor(mon)) }()
+	events := make([]zlink.PollEvent, 1)
+	n, err := poller.Wait(events, 5*time.Second)
+	Must(err)
+	if n == 0 {
 		Must(fmt.Errorf("timed out waiting for monitor event"))
-		return nil
+	}
+	var first *zlink.MonitorEvent
+	for {
+		event, err := mon.Recv(zlink.RecvFlagsDontWait)
+		var recvErr *zlink.RecvError
+		if errors.As(err, &recvErr) && recvErr.Result == zlink.RecvNoData {
+			return first
+		}
+		Must(err)
+		if first == nil {
+			first = event
+		}
 	}
 }
 
