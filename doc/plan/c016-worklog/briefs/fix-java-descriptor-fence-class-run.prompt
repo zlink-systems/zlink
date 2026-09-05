@@ -1,0 +1,25 @@
+# Job (fix, model astra): java `ZLinkJavaRawMeshNodeM6ATest.descriptorFenceReplacesEndpointOnlyIntent` fails only in the class run on the rebuild7 Core ("Expected IllegalStateException, nothing thrown" at the first `replacePeerConnection`: the endpoint-only intent is already closed when it should still be open); passes alone
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `framework/languages/java/AGENTS.md`,
+`core/doc/spec/core/socket/README.ko.md` §4 (RID duplicate REJECT/HANDOVER, connector observes termination and reconnects per intent),
+`framework/doc/framework/common/spec/server/03-spot-actor/03-mesh-node.ko.md` (connection intents, descriptor fence, replacement) and
+`doc/plan/c016-worklog/core-send-routing-id-assert-summary.md` (unresolved item 1: hypothesis — D-B112's REJECT close creates a reconnect loop in which the
+connector supersedes/terminates its own admitted pipe and the peer rejects the new one, closing the fenced endpoint-only intent). Never modify
+`core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages; do not commit. Env: `framework/languages/java`,
+`TMPDIR=/dev/shm/zlink-tmp-java`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-jvm-gate.lock`. Installed Core 1c7887c3… (do not rebuild packages).
+Another java job may have just finished editing Spot lifecycle / sample files — `git status` first and keep your edits to the raw mesh node/its tests.
+
+## What to do
+1. Reproduce: `./gradlew --no-daemon :zlink-framework-core:test --tests 'systems.zlink.framework.runtime.binding.ZLinkJavaRawMeshNodeM6ATest'` (fails
+   4/4 in the class run per the previous report) vs `--tests '*descriptorFenceReplacesEndpointOnlyIntent'` alone (passes). Trace `peerIntentIsClosed(staleIntentId)`
+   for the endpoint-only intent between `awaitTransport` and `replacePeerConnection`: which event closes it (DISCONNECTED of a REJECTed duplicate pipe?
+   a second connect attempt from the same node? state shared across tests in the class — static registries, executor, RID/intent id counters)? The
+   endpoints are nanoTime-unique per test, so cross-test coupling must come through process-wide state or through the same-RID REJECT path.
+2. Root-cause and fix at the owner: if the raw mesh node closes an intent on a physical DISCONNECTED that belongs to a superseded/rejected duplicate
+   pipe rather than to the intent's admitted pipe, the intent lifecycle must key on the admitted pipe/connection identity (one rule for HANDOVER and
+   REJECT), not on any DISCONNECTED for the endpoint; if the test order leaks state, fix the owner of that state (not the test order). If the cause is
+   in Core (e.g., the REJECT-close reconnect loop itself is wrong per §4), STOP with a precise C-API sequence and report.
+3. Regression test at the layer you fixed; run the whole M6A class 3× and `:zlink-framework-core:test contractTest` once (0 fail).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-java-descriptor-fence-class-run-summary.md`: sequence, cause file:line, fix, four lines, rule count, results, BLOCKERS.

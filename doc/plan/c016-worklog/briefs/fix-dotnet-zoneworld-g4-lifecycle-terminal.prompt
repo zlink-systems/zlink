@@ -1,0 +1,46 @@
+# Job (fix, model astra): dotnet ZoneWorld G4 — after the target crashes, Core completes the admitted request NOT_CONNECTED in ~100 ms, but the durable sender keeps replaying into submit NotConnected until the *join's own* deadline cancels it (DeadlineExceeded) instead of the operation ending `Unavailable` when the fixed target's lifecycle is gone (spec 08-routing) — one deadline owner, one lifecycle-terminal rule; parity with node/java which pass G4
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3/§4, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`, then
+`doc/plan/c016-worklog/fix-dotnet-shoppingmall-relocation-root-and-final-gate-summary.md` §BLOCKERS (the G4 trace: actor `g4-crash-681980`,
+`g4-terminal/evidence/ZoneWorld/logs/zone-node-1.log:577` NotConnected/109 at 98 ms, `:580-623` native resubmits rejected NotConnected/2, `:1594`
+upper join cancelled at its deadline, `:1607` probe response sent) and the spec:
+- `framework/doc/framework/common/spec/server/03-spot-actor/08-routing.ko.md` table "Resolve 뒤 일어난 일": *owner process가 종료되었거나 owner가
+  다른 node로 바뀌어 찾은 route를 쓸 수 없다 → current operation을 `Unavailable`로 끝낸다; Framework는 새 owner에게 자동으로 다시 보내지 않는다*.
+- `03-spot-actor/04-actor-model.ko.md` §5 sender bullets (lines ~662-679): durable lifecycle operations replay the same OperationId while no
+  terminal envelope arrived, whole remaining deadline, exhaustion kind by cause (never admitted → Unavailable; admitted reply never arrived →
+  DeadlineExceeded).
+- `05-location-relocation/*` crash relocation probe flow (ZoneWorld G4: the client expects `Unavailable` for the interrupted op).
+Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never widen a deadline; no
+second poller/timer/monitor state; do not commit. Before any dotnet build/test wait until `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/rebuild7.done`
+exists (a package rebuild is running; verify the nupkg's libzlink sha differs from c5f62fb1…). dotnet env block: `export TMPDIR=/dev/shm/zlink-tmp-dotnet
+ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1;
+pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16};
+cd framework/languages/dotnet; flock -w7200 /tmp/zlink-dotnet-gate.lock …`. Sample runs also take `flock -w7200 /tmp/zlink-samples-gate.lock` (cross-language).
+
+## Diagnosis direction (verify, do not assume)
+The replay policy applies while the *same* target route may come back (transient disconnect / handover). When the fixed target's lifecycle is
+terminal (peer process gone: mesh peer removed / lifecycle generation retired / probe says crashed), 08-routing ends the current operation
+`Unavailable` at once — no replay, no wait for the deadline. Today (a) `ZLinkDurableRequest` replays regardless of the target lifecycle, and
+(b) the join (`ZLinkActorRemoteJoiner.cs:1046`) runs its own deadline/cancellation in parallel to the sender's deadline, so the join reports
+DeadlineExceeded/TaskCanceledException before the sender's exhaustion kind is ever produced. Two deadline owners and a missing lifecycle-terminal
+rule. **Parity first**: read how node (`framework/languages/node/packages/framework/src/runtime/...` durable request/replay + actor remote join)
+and java (`ZLinkJavaDurableRequest.java`, `ZLinkActorRemoteJoiner`-equivalent) end this exact G4 case with `Unavailable` — both languages pass
+ZoneWorld G4 on the same Core — and make dotnet follow the same rule set (which layer observes the target lifecycle, who owns the deadline).
+
+## Fix (single owner)
+- One deadline owner for a durable operation: the operation (sender) owns the remaining deadline; callers await its terminal and do not race a
+  second timer. Remove the competing cancellation, do not add a third.
+- One lifecycle-terminal rule: when the fixed target's lifecycle ends, the operation ends `Unavailable` immediately (spec row); replay only while
+  the route may return. Implement where node/java implement it (do not add a dotnet-only state machine).
+- Regression tests at that layer: (1) admitted request → pair terminated → target lifecycle terminal → `Unavailable` promptly, no replay after the
+  terminal; (2) transient disconnect (lifecycle alive) → replay continues per policy; (3) exhaustion kinds unchanged. Keep existing
+  `DurableSenderRuntimeTests` assertions.
+- State rule count before/after.
+
+## Verify
+ZoneWorld sample twice (G4 must observe `Unavailable`; all roles except the intentional crash `Stopped/None`), then `bash samples/run_samples.sh`
+aggregate once (exit 0), then the unit half `--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests'` once (expect 1948+/0).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-zoneworld-g4-lifecycle-terminal-summary.md`: parity findings (node/java rule), cause file:line, fix, four lines,
+rule count, results table, BLOCKERS.

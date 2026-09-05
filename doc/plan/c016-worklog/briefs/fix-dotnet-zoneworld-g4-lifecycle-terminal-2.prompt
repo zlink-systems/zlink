@@ -1,0 +1,31 @@
+# Job (implement, model astra): dotnet ZoneWorld G4 — implement D-093 (approved B): durable operation ends `Unavailable` when the logical lifecycle owner removes the target's connection intent with no admitted peer left; sender is the single deadline owner during admission
+
+You are a codex sub-agent under a Claude supervisor. Your diagnosis `doc/plan/c016-worklog/fix-dotnet-zoneworld-g4-lifecycle-terminal-summary.md` is
+**approved as B** — read `doc/plan/c016-worklog/decisions.ko.md` D-093 for the two rules you must implement (no other rules). Read `AGENTS.md` §3/§4,
+`framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`,
+`doc/site/**`, other languages; never widen a deadline; no new monitor state/timer/poller/retired-generation map; do not commit. Env: the dotnet
+env block from the previous brief (`TMPDIR=/dev/shm/zlink-tmp-dotnet`, `ZLINK_LIBRARY_PATH=core/build-dev/lib`, hash-keyed `NUGET_PACKAGES`,
+`flock -w7200 /tmp/zlink-dotnet-gate.lock`); package Core sha 1c7887c3…. Sample runs additionally under `flock -w7200 /tmp/zlink-samples-gate.lock`
+(a cross-language sample gate is running; wait your turn).
+
+## Implement (single owner each)
+1. Lifecycle-terminal rule (D-093 rule 1): the durable operation (`ZLinkDurableRequest` / its caller in `ZLinkManagedMeshNode`) ends `Unavailable`
+   immediately when the target node's connection intent has been removed by the Location/auto-connect owner (`ZLinkManagedMeshNode.cs:438` path,
+   `ZLinkLocationAutoConnectHost.cs:694`) AND no admitted peer for that target remains. Physical disconnect alone (`RemovePeer(disconnect:false)`,
+   `RequireDirectPeer` NotConnected) keeps replaying per 04-actor-model §5. Use the existing intent-removal transition (expose it to the sender
+   through the existing mesh node API, do not duplicate its state).
+2. Single deadline owner (D-093 rule 2): remove the competing deadline CTS in `ZLinkDeferredActorJoin.cs:228/276/283` and
+   `ZLinkActorRemoteJoiner.cs:162/187` for the admission wait; they pass the deadline to the operation and await its terminal. Preserve the
+   existing deadline guarantees for predecessor/authority I/O/post-admission relocation (say how). Owners 3 → 1.
+3. Regression tests (unit): (a) admitted request → NOT_CONNECTED → intent removed + no peer → `Unavailable` promptly, no further replay;
+   (b) physical disconnect only → replay continues → reconnect → completes; (c) exhaustion kinds unchanged (existing DurableSenderRuntimeTests
+   stay); (d) deferred join reports the sender's terminal kind, not TaskCanceled.
+
+## Verify
+ZoneWorld twice (G4 observes `Unavailable`; roles except the intentional crash `Stopped/None`); `bash samples/run_samples.sh` once (exit 0);
+unit half `--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests'` once (0 fail); `DurableRequestTests|DurableSender*` focused.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-zoneworld-g4-lifecycle-terminal-2-summary.md`: diff file:line per rule, four lines, rule count (deadline owners
+3→1, lifecycle-terminal rule 0→1 as spec'd), results table, BLOCKERS. Also state what the java sender/sample and node join need for parity (do
+not change them).
