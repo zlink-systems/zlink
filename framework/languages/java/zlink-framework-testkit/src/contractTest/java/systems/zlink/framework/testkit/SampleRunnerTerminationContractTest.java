@@ -18,6 +18,55 @@ final class SampleRunnerTerminationContractTest {
     Path temporaryRoot;
 
     @Test
+    void teardownFailureEscapesExitTrapAndAggregateConditionalWithoutPidArray()
+        throws Exception {
+        Path logs = writeRoleLog("teardown",
+            "ZLINK_FRAMEWORK_READY\n"
+                + "ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED reason=TEARDOWN_FAILED\n");
+        Path sample = temporaryRoot.resolve("sample.sh");
+        Files.writeString(sample, """
+            #!/usr/bin/env bash
+            source "$1"
+            log_dir="$2"
+            ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="role.log"
+            trap 'cleanup; exit 0' EXIT
+            exit 0
+            """);
+        Process process = new ProcessBuilder("bash", "-c", """
+            if bash "$1" "$2" "$3"; then
+              exit 0
+            else
+              exit 1
+            fi
+            """, "aggregate", sample.toString(),
+            samplesRoot().resolve("runner-common.sh").toString(), logs.toString())
+            .redirectErrorStream(true).start();
+        assertTrue(process.waitFor(10, TimeUnit.SECONDS));
+        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertNotEquals(0, process.exitValue(), output);
+        assertTrue(output.contains("Framework lifecycle evidence is incomplete"), output);
+    }
+
+    @Test
+    void restartChecksCurrentProcessAndExcludesOnlyTheIntentionalCrash() throws Exception {
+        Path logs = writeRoleLog("restarted",
+            "ZLINK_FRAMEWORK_READY\n"
+                + "ZLINK_FRAMEWORK_READY\n"
+                + "ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED reason=TEARDOWN_FAILED\n");
+        Process process = new ProcessBuilder("bash", "-c", """
+            source "$1"
+            ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="role.log"
+            declare -A ZLINK_SAMPLE_FRAMEWORK_ROLE_LOG_OFFSETS=([role.log]=2)
+            zlink_sample_verify_framework_termination "$2"
+            """, "restart", samplesRoot().resolve("runner-common.sh").toString(), logs.toString())
+            .redirectErrorStream(true).start();
+        assertTrue(process.waitFor(10, TimeUnit.SECONDS));
+        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertNotEquals(0, process.exitValue(), output);
+        assertTrue(output.contains("READY=1 TERMINATION=1 STOPPED_NONE=0 FORCE_STOPPED=1"), output);
+    }
+
+    @Test
     void cleanupAcceptsOnlyGracefulFrameworkTerminationForBothLogDirectoryNames()
         throws Exception {
         for (String variableName : List.of("log_dir", "LOG_DIR")) {

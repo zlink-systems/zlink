@@ -145,15 +145,19 @@ zlink_sample_verify_framework_termination() {
   fi
   for role_log in "${role_logs[@]}"; do
     local log_file="${log_dir}/${role_log}"
+    local first_line=1
+    if declare -p ZLINK_SAMPLE_FRAMEWORK_ROLE_LOG_OFFSETS >/dev/null 2>&1; then
+      first_line="${ZLINK_SAMPLE_FRAMEWORK_ROLE_LOG_OFFSETS[$role_log]:-1}"
+    fi
     if [[ ! -f "${log_file}" ]]; then
       echo "Framework role log is missing: ${log_file}" >&2
       failed=1
       continue
     fi
-    ready_count="$(grep -c 'ZLINK_FRAMEWORK_READY' "${log_file}" 2>/dev/null || true)"
-    termination_count="$(grep -c 'ZLINK_FRAMEWORK_TERMINATION outcome=' "${log_file}" 2>/dev/null || true)"
-    stopped_count="$(grep -c 'ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE' "${log_file}" 2>/dev/null || true)"
-    force_stopped_count="$(grep -c 'ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED' "${log_file}" 2>/dev/null || true)"
+    ready_count="$(tail -n +"${first_line}" "${log_file}" | grep -c 'ZLINK_FRAMEWORK_READY' || true)"
+    termination_count="$(tail -n +"${first_line}" "${log_file}" | grep -c 'ZLINK_FRAMEWORK_TERMINATION outcome=' || true)"
+    stopped_count="$(tail -n +"${first_line}" "${log_file}" | grep -c 'ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE' || true)"
+    force_stopped_count="$(tail -n +"${first_line}" "${log_file}" | grep -c 'ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED' || true)"
     if [[ "${ready_count}" != "1" || "${termination_count}" != "1" \
         || "${stopped_count}" != "1" || "${force_stopped_count}" != "0" ]]; then
       echo "Framework lifecycle evidence is incomplete: ${log_file}" >&2
@@ -243,14 +247,14 @@ cleanup() {
       echo "Sample cleanup exceeded the graceful shutdown deadline." >&2
       cleanup_status=1
     fi
-    if [[ "${status}" == "0" && "${cleanup_status}" == "0" ]]; then
-      if ! zlink_sample_verify_framework_termination "${zlink_sample_log_dir}"; then
-        cleanup_status=1
-      fi
+  fi
+  if [[ "${status}" == "0" && "${cleanup_status}" == "0" ]]; then
+    if ! zlink_sample_verify_framework_termination "${zlink_sample_log_dir}"; then
+      cleanup_status=1
     fi
-    if [[ "${status}" != "0" || "${cleanup_status}" != "0" ]]; then
-      zlink_sample_preserve_logs "${zlink_sample_log_dir}"
-    fi
+  fi
+  if [[ "${status}" != "0" || "${cleanup_status}" != "0" ]]; then
+    zlink_sample_preserve_logs "${zlink_sample_log_dir}"
   fi
   if [[ -n "${redis_container_id:-}" ]]; then
     zlink_redis_remove_by_id "${redis_container_id}" || true

@@ -219,7 +219,9 @@ public final class PlayerActor implements ZLinkActor {
 
     private static String mapFailure(String kind) {
         return switch (kind) {
-            case "UNAVAILABLE", "DEADLINE_EXCEEDED", "SHUTTING_DOWN" -> "Unavailable";
+            case "UNAVAILABLE" -> "Unavailable";
+            case "DEADLINE_EXCEEDED" -> "DeadlineExceeded";
+            case "SHUTTING_DOWN" -> "ShuttingDown";
             case "NOT_FOUND" -> "NotFound";
             case "CAPACITY_EXCEEDED" -> "CapacityExceeded";
             case "REJECTED" -> "Rejected";

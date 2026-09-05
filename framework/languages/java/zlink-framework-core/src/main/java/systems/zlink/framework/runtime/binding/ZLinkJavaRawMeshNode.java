@@ -6983,12 +6983,23 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     }
 
     private void forgetKnownPeerChannelsIfUntracked(RoutingId peer) {
-        boolean hasIntent = peerIntents.values().stream()
-            .anyMatch(intent -> peer.equals(intent.expectedRoutingId()));
-        if (!hasIntent && !peerAdmissionExpectations.containsKey(peer)) {
+        if (!hasPeerExpectation(peer)) {
             knownPeerChannels.remove(peer);
             disconnectedPeers.remove(peer);
         }
+    }
+
+    private boolean hasPeerExpectation(RoutingId peer) {
+        return peerAdmissionExpectations.containsKey(peer)
+            || peerIntents.entrySet().stream().anyMatch(entry ->
+                peer.equals(entry.getValue().expectedRoutingId())
+                    || peer.equals(peerIntentRoutingIds.get(entry.getKey())));
+    }
+
+    boolean targetLifecycleEnded(RoutingId target) {
+        // Location owns logical removal. A physical disconnect still has an
+        // expectation and must retain durable replay (routing §2, actor model §5).
+        return !hasPeerExpectation(target) && !isReadyPeer(target);
     }
 
     private String connectionIdForAdmission(
@@ -7121,7 +7132,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 requireStarted();
                 return prepare.get();
             }, (frames, remaining) -> requestApplication(target, frames, remaining),
-            timeout);
+            () -> targetLifecycleEnded(target), timeout);
     }
 
     private CompletionStage<List<byte[]>> requestApplication(

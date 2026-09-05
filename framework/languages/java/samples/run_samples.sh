@@ -3,12 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SAMPLES_DIR="$ROOT_DIR/samples"
-CORE_LIB="$ROOT_DIR/../../../.artifacts/wsl/install/zlink-core/0.17.0/lib/libzlink.so"
 MANIFEST="$SAMPLES_DIR/sample-manifest.env"
-
-if [[ -f "$CORE_LIB" ]]; then
-  export ZLINK_LIBRARY_PATH="$CORE_LIB"
-fi
 
 cd "$ROOT_DIR"
 source "$MANIFEST"
