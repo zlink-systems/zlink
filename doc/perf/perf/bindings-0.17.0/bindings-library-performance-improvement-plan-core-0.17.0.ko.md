@@ -777,7 +777,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/dotnet/perf`
 - Single 상태: `미측정`
-- Multi 상태: `보류` — `tcp` 4 pattern 판정 확정(조용한 머신 3-run 15:07 KST): DD 61.1%, DR 58.5%, RR 68.0%, PUBSUB 56.9% 모두 `보류`(before 44.7/51.6/53.6/44.8; pass 1 `b4fc201f7e`, pass 2 `5dc05bfb3e`; §7.5 두 pass 완료·계약 유지 후보 소진); tls/ws/wss·Single 미측정(다음 언어 뒤 회귀); [log](log/2026-09-05-dotnet-multi-tcp-before.ko.md)
+- Multi 상태: `보류` — Core `a40cb46335`+pass 3 재판정(quiet 3-run 20:04 KST): DD 59.6%, DR 58.3%, RR 67.0%, PUBSUB 61.3% 모두 `보류`(64 KiB 셀 106→114~131%로 회복; 15:07 판정 61.1/58.5/68.0/56.9)(before 44.7/51.6/53.6/44.8; pass 1 `b4fc201f7e`, pass 2 `5dc05bfb3e`; §7.5 두 pass 완료·계약 유지 후보 소진); tls/ws/wss·Single 미측정(다음 언어 뒤 회귀); [log](log/2026-09-05-dotnet-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.2.1 Single suite
@@ -864,7 +864,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/java/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미달/통과` — before 11:44 → pass 1+1b(`82b0fd9f38`: REQREP 일괄 settlement, Context당 completion pump 1개) → 조용한 머신 3-run 15:23 KST: DD 70.8%(목표 90), DR 54.7%(70), RR 58.5%(70) `미달`, PUBSUB 102.9% `통과`; 리뷰 pass 2(구조 후보) 예정; [log](log/2026-09-05-java-multi-tcp-before.ko.md)
+- Multi 상태: `미달/통과` — before 11:44 → pass 1+1b(`82b0fd9f38`: REQREP 일괄 settlement, Context당 completion pump 1개) → 3-run 15:23: DD 70.8/DR 54.7/RR 58.5/PUBSUB 102.9 → pass 2(`6402fcabc4`)+Core `a40cb46335` 재판정 3-run 20:18: DD 80.9%(목표 90, 최소 70 충족), DR 59.4%(70), RR 58.7%(70), PUBSUB 80.9%(90; lossy 변동) `미달`; [log](log/2026-09-05-java-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.3.1 Single suite
@@ -951,7 +951,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/node/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미달` — before 13:53 → pass 1(`f69558af55`: multipart Buffer 경로) DD 27.6→41.2% → pass 1b(`6c2cb784c0`: 공유 pump 기각, N-API callback scope) → pass 1c(`8ec82c4be7`: 서버 수신 metadata·reply Buffer) DR/RR REQREP 18.7/17.9→28.7/31.1%, PUBSUB 34.8%. REQREP는 요청당 ~60 ms 고정 지연·timeout 35~55%가 남음(요청 수명 계측: 서버 TCP 수신→ROUTER recv 128 ms 구간; 클라이언트 WRITABLE 재제출 루프 의심 → Core 조사 D-B117). 판정은 Core 결과 뒤 quiet 3-run; [log](log/2026-09-05-node-multi-tcp-before.ko.md)
+- Multi 상태: `미달` — before 13:53 → pass 1(`f69558af55`: multipart Buffer 경로) DD 27.6→41.2% → pass 1b(`6c2cb784c0`: 공유 pump 기각, N-API callback scope) → pass 1c(`8ec82c4be7`: 서버 수신 metadata·reply Buffer) DR/RR REQREP 18.7/17.9→28.7/31.1%, PUBSUB 34.8%. REQREP는 요청당 ~60 ms 고정 지연·timeout 35~55%가 남음(요청 수명 계측: 서버 TCP 수신→ROUTER recv 128 ms 구간; 클라이언트 WRITABLE 재제출 루프 의심 → Core 조사 D-B117). Core `a40cb46335` 재판정 3-run 20:33: DD 33.3%, DR/RR 23.5/24.4%(64K 69/60% 회복, 작은 크기 ~50 ms 고정 지연 잔존 → pass 1d); [log](log/2026-09-05-node-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.4.1 Single suite
