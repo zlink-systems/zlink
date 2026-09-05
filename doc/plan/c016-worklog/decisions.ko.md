@@ -1143,4 +1143,4 @@ gate: `bindings/rust/tests/run_tests.sh` 14/14 suite PASS(samples 포함), clipp
 
 ## D-B99 (2026-09-05 10:05, 머신 B) bindings parity — Poller monitor source: Node 구현·spec 명시(Java/Rust/Python/Go 진행 중)
 공통 spec(`c6d491e3e8`)에 따라 Node `Poller.add/modify/remove`에 `SocketMonitor` overload(`Pollable = BaseSocket | SocketMonitor | Timer | number`), monitor는 `PollIn`만(그 외 typed `InvalidArgument`), completion owner 미적용, `PollEvents.source(index)` source identity, 샘플 sleep 루프 → poller drain.
-native addon 변경 없음. 테스트 `poller_monitor.test.ts`(READY/DISCONNECTED drain, modify/remove, typed 오류) 5/5, `npm test` 전체+samples 7/7. Node 언어 spec(ko/en)에 signature 문장 추가(감독자). 커밋: 아래 해시.
+native addon 변경 없음. 테스트 `poller_monitor.test.ts`(READY/DISCONNECTED drain, modify/remove, typed 오류) 5/5, `npm test` 전체+samples 7/7. Node 언어 spec(ko/en)에 signature 문장 추가(감독자). 커밋 `31139dd137`.
