@@ -567,6 +567,15 @@ and errno. Each item maps to one test.
   `transport_lane`; only a ROUTER-ROUTER Completion physical event reports Completion.
 - `connection_id` is a diagnostic and correlation value; no public API uses it to select a
   send or reply target.
+  A REQUEST completion does not return the `connection_id` of the physical connection the request was
+  admitted on or the reply was received on either (nor is a request guaranteed to use the same physical
+  connection as its reply).
+- `CLOSED` reports that a TCP/IPC/WS/TLS connect attempt (connecter) or a listener closed the OS transport
+  handle it owns. The end of an established connection is reported, for every transport, by a single
+  `DISCONNECTED`; a further `CLOSED` for that connection is not guaranteed (a `CLOSED` observed after a
+  server close belongs to the failed new attempt of the automatic reconnect and carries the same
+  `connection_id` as its `CONNECT_DELAYED`). An inproc peer detach is reported as `DISCONNECTED` and emits
+  no `CLOSED`. While the connect intent remains, automatic reconnection continues after `DISCONNECTED`.
 
 **Event-data ownership**
 

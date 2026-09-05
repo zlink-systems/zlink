@@ -918,6 +918,17 @@ ZLINK_EXPORT zlink_connect_result_t zlink_disconnect (void *s_, const char *addr
 
 Removes a previously established connection.
 
+A successful `zlink_disconnect(endpoint)` removes that local connection registration and its automatic
+reconnect intent. A later new submit never selects the removed connection for admission again. The
+asynchronous teardown of the removed connection's physical resources may overlap with the new attempt
+started by a following `zlink_connect(endpoint)`, and the new attempt's progress does not depend on monitor
+event consumption or on observing the previous connection's terminal edge (05-polling §3 command
+progress). A same-RID registration still present on the remote ROUTER is handled by the §4 RID duplicate
+policy (REJECT/HANDOVER). A REQUEST admitted on the removed connection ends per the completion contract:
+explicit endpoint/logical RID removal is `NOT_FOUND`, a pair yielding to an opposite-direction handover is
+`NOT_CONNECTED`, and a transient physical disconnect keeps the existing correlation and timeout budget with
+no payload replay.
+
 **Returns:** `ZLINK_CONNECT_OK` on success; otherwise a `zlink_connect_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 
 **See also:** `zlink_connect`

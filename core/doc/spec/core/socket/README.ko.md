@@ -864,6 +864,14 @@ ZLINK_EXPORT zlink_connect_result_t zlink_disconnect (void *s_, const char *addr
 
 이전에 설정된 연결을 제거한다.
 
+성공한 `zlink_disconnect(endpoint)`는 해당 local 연결 등록과 자동 재연결 intent를 제거한다. 이후의 새 submit은
+제거된 연결을 admission 대상으로 다시 선택하지 않는다. 제거된 연결의 physical 자원 정리(비동기)와 뒤이은
+`zlink_connect(endpoint)`가 시작하는 새 연결 시도는 겹칠 수 있으며, 새 시도의 진행은 monitor event 소비나 이전
+연결의 terminal edge 관찰을 조건으로 하지 않는다(05-polling §3 command progress). 원격 ROUTER에 남아 있는 같은
+RID의 등록은 §4 RID duplicate policy(REJECT/HANDOVER)로 처리한다. 제거된 연결에 admit되어 있던 REQUEST의 종결은
+completion 계약을 따른다: 명시적 endpoint·logical RID 제거는 `NOT_FOUND`, 반대 방향 handover로 물러나는 pair는
+`NOT_CONNECTED`, 일시적 physical 단절은 payload replay 없이 기존 correlation·timeout budget 유지.
+
 **반환값:** 성공 시 `ZLINK_CONNECT_OK`, 실패 시 `zlink_connect_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 
 **참고:** `zlink_connect`
