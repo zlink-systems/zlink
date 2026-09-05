@@ -15,27 +15,27 @@ pub struct Ready;
 
 #[derive(Default)]
 pub(crate) struct MessageParts {
-    first: Option<Message>,
+    inline: [Option<Message>; 2],
     rest: Vec<Message>,
 }
 
 impl MessageParts {
     pub(crate) fn push(&mut self, message: Message) {
-        if self.first.is_none() {
-            self.first = Some(message);
+        if let Some(slot) = self.inline.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(message);
         } else {
             self.rest.push(message);
         }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.first.is_none()
+        self.inline[0].is_none()
     }
     pub(crate) fn len(&self) -> usize {
-        usize::from(self.first.is_some()) + self.rest.len()
+        self.inline.iter().flatten().count() + self.rest.len()
     }
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Message> {
-        self.first.iter_mut().chain(self.rest.iter_mut())
+        self.inline.iter_mut().flatten().chain(self.rest.iter_mut())
     }
 }
 
@@ -105,6 +105,7 @@ unsafe impl Send for ReplyOpStorage {}
 macro_rules! first_part {
     ($name:ident) => {
         impl $name<Empty> {
+            #[inline]
             pub fn message(self, message: Message) -> $name<Ready> {
                 let $name { mut inner, .. } = self;
                 inner.parts.push(message);
@@ -120,6 +121,7 @@ macro_rules! first_part {
 macro_rules! more_parts {
     ($name:ident) => {
         impl $name<Ready> {
+            #[inline]
             pub fn message(mut self, message: Message) -> Self {
                 self.inner.parts.push(message);
                 self

@@ -99,9 +99,10 @@ func (s *sendRetryState) attempt(userContext uintptr) (uint64, error) {
 	}
 
 	var completionID C.zlink_completion_id_t
-	var rid C.zlink_routing_id_t
+	var rid *C.zlink_routing_id_t
 	if s.hasTarget {
-		rid = s.target.toC()
+		value := s.target.toC()
+		rid = &value
 	}
 	err := submitMultipartFromClones(s.payload.owned, false, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
 		var finalContext C.uintptr_t
@@ -116,7 +117,7 @@ func (s *sendRetryState) attempt(userContext uintptr) (uint64, error) {
 				finalContext, completionOut))
 		}
 		return submitErrorFromResult(C.zlink_go_send_part_rid_with_context(
-			s.core.raw(), &rid, part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
+			s.core.raw(), rid, part, C.ZLINK_SEND_FLAGS_DONTWAIT, partFlag,
 			finalContext, completionOut))
 	})
 	return uint64(completionID), err
@@ -138,10 +139,9 @@ func (s *requestRetryState) attempt(userContext uintptr) (uint64, error) {
 	}
 
 	var completionID C.zlink_completion_id_t
-	var rid C.zlink_routing_id_t
 	var ridPointer *C.zlink_routing_id_t
 	if s.hasTarget {
-		rid = s.target.toC()
+		rid := s.target.toC()
 		ridPointer = &rid
 	}
 	err := submitMultipartFromClones(s.payload.owned, false, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
@@ -337,10 +337,9 @@ func submitCompletionRequest(
 	}
 
 	var completionID C.zlink_completion_id_t
-	var rid C.zlink_routing_id_t
 	var ridPointer *C.zlink_routing_id_t
 	if target != nil {
-		rid = target.toC()
+		rid := target.toC()
 		ridPointer = &rid
 	}
 	err = submitMultipartFromBuilderParts(parts, func(part *C.zlink_msg_t, partFlag C.zlink_part_flag_t) error {
