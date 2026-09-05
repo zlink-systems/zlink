@@ -1,0 +1,24 @@
+# Job (binding fix, model astra): java binding — `context.shutdown(); context.close();` (the documented order the framework uses) throws `SubmitResult.TERMINATED` (errno 156384765) from `CompletionPump.close()` because it sends on the control wake socket of an already-shut-down context; this surfaces as `ForceStopped/TeardownFailed` on java Bingo session/play roles and the ZoneWorld gateway
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `bindings/AGENTS.md` (if present), `bindings/doc/spec/java/**` (Context
+lifecycle: shutdown then close; socket/pump cleanup), `bindings/doc/spec/async-execution-model.ko.md` (§ context termination waiter cleanup, ~:119-120),
+`doc/plan/c016-worklog/fix-java-bingo-teardown-and-runner-evidence-summary.md` §1 (your diagnosis: `NativeContext.java:280`, `CompletionPump.java:222,327`,
+public-API repro `/tmp/java-bingo-fix-evidence/ContextShutdownRepro.java`, logs there), and `decisions.ko.md` D-B111 (one completion pump per Context —
+the recent restructuring that owns this code). Never modify any `doc/spec/**`, `core/**`, `framework/**`, other bindings; do not commit. Scope:
+`bindings/java/**` only. B (another machine) also edits `bindings/java` for perf — `git status`/`git log -3 -- bindings/java` first and keep the diff
+minimal and local to the pump/context lifecycle. Do NOT rebuild the local packages (the supervisor does); verify with the binding's own gradle tests
+(`cd bindings/java && ./gradlew --no-daemon test` under `flock -w7200 /tmp/zlink-jvm-gate.lock`, `TMPDIR=/dev/shm/zlink-tmp-java`) and by running the
+repro against the freshly built binding classes (`ZLINK_LIBRARY_PATH` unset → the binding's bundled Core; if the binding build needs the Core prefix,
+use `~/.cache/zlink/core`).
+
+## Fix (single owner)
+The Context lifecycle owner (shutdown/close) must complete the completion pump's teardown after shutdown without submitting on a terminated
+socket: after `shutdown()` the pump's wake path is already closed/terminating, so `close()` must join/release the pump through the termination it
+already observes (one teardown rule: "shutdown terminates, close releases"), not by a control send that can only succeed on a live context. Do not
+catch-and-ignore TERMINATED at the caller; do not add a second wake mechanism. State rule count before/after. Regression test in `bindings/java`
+tests: create context → ROUTER/DEALER request actually received (pump exists) → close sockets → `shutdown()` → `close()` succeeds; also `close()`
+alone still succeeds; also `shutdown()` twice / `close()` after both is idempotent per spec.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-java-binding-completion-pump-close-after-shutdown-summary.md`: cause file:line, fix, four lines (owner / spec clause /
+parity with dotnet `Context.cs:153-165` and node context teardown / class), rule count, test results, BLOCKERS. Leave the diff uncommitted.
