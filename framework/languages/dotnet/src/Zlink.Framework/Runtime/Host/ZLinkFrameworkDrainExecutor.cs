@@ -4,7 +4,6 @@ namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
 {
-    private static readonly TimeSpan SchedulerJitterBudget = TimeSpan.FromMilliseconds(100);
     private readonly ZLinkDrainExecutionOperations _operations;
     private readonly ZLinkLocationOptions _locationOptions;
     private readonly ILogger<ZLinkFrameworkDrainExecutor>? _logger;
@@ -126,9 +125,6 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                 ShutdownStep("publish_serving_weight");
                 if (!await PublishServingWeightAsync(deadlineToken).ConfigureAwait(false))
                     return Result(ZLinkDrainForceReason.DrainingStatePublishFailed);
-                ShutdownStep("wait_descriptor_propagation");
-                await WaitForDescriptorPropagationAsync(deadlineToken).ConfigureAwait(false);
-                ShutdownStep("descriptor_propagated");
             }
 
             if (intent == ZLinkFrameworkLifecycleIntent.Shutdown)
@@ -451,20 +447,6 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             Volatile.Read(ref _shutdownRequested) != 0;
     }
 
-    private async ValueTask WaitForDescriptorPropagationAsync(
-        CancellationToken cancellationToken)
-    {
-        var propagationDelay = CalculatePropagationDelay(_locationOptions);
-        if (!_operations.HasAutoConnect) return;
-        _logger?.LogInformation(
-            "ZLink drain propagation bound polling={PollingInterval} storeReadTimeout={StoreReadTimeout} schedulerJitterBudget={SchedulerJitterBudget} total={PropagationBound}",
-            _locationOptions.PollingInterval,
-            ZLinkLocationStoreRead.Timeout,
-            SchedulerJitterBudget,
-            propagationDelay);
-        await Task.Delay(propagationDelay, cancellationToken).ConfigureAwait(false);
-    }
-
     public async ValueTask ForceStopAsync(
         ZLinkDrainForceReason reason,
         CancellationToken cancellationToken)
@@ -583,11 +565,6 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             }
         }
     }
-
-    internal static TimeSpan CalculatePropagationDelay(ZLinkLocationOptions options) =>
-        options.PollingInterval
-        + ZLinkLocationStoreRead.Timeout
-        + SchedulerJitterBudget;
 
     private async ValueTask<bool> PublishServingWeightAsync(CancellationToken cancellationToken)
     {

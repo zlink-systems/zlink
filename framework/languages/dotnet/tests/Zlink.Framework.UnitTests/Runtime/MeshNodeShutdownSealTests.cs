@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Systems.Zlink.Framework.Runtime.Protocol;
@@ -5,7 +6,7 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 namespace Zlink.Framework.UnitTests;
 
 // Spec 30 §14 step 1 (D-097): the mesh node follows the host's shutdown
-// admission seal. After the seal it starts no new peer admission (Hello),
+// admission seal. After the seal it neither starts nor accepts peer admission,
 // already-admitted peers still receive the Draining Update, and peer loss
 // (transport disconnect, liveness expiry, failed control send) never undoes
 // the published Draining. Service-wire §5: a repeated Hello/Admit that carries
@@ -139,6 +140,112 @@ public sealed class MeshNodeShutdownSealTests
         Assert.Equal(admitted.LifecycleGeneration, current.LifecycleGeneration);
         Assert.Equal(admitted.DescriptorRevision, current.DescriptorRevision);
         Assert.Equal(admitted.LastChangedMs, current.LastChangedMs);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InboundHello_FollowsTheHostShutdownSeal(bool sealedForShutdown)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        var gate = new ZLinkDrainAdmissionGate();
+        var sealObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        node.SetPeerAdmissionSealGate(() =>
+        {
+            sealObserved.TrySetResult();
+            return gate.IsSealedForShutdown;
+        });
+        var suffix = Guid.NewGuid().ToString("N");
+        var endpoint = AllocateTcpEndpoint();
+        node.SetRoutingId(RoutingId.From($"inbound-node-{suffix}"));
+        node.SetBind(endpoint);
+        node.AddChannel(MeshName);
+        using var monitor = node.OpenMonitor();
+        node.Start();
+        if (sealedForShutdown)
+        {
+            gate.ClaimShutdown();
+            node.PublishDraining();
+        }
+        var state = node.Status().State;
+        using var peer = context.CreateDealerSocket();
+        peer.SetRoutingId(RoutingId.From($"inbound-peer-{suffix}"));
+        peer.Connect(endpoint);
+
+        await SendAsync(peer, ZLinkServiceWireCodec.EncodeRouteAdmission(
+            ServiceWireConstants.Command.Hello,
+            MeshName,
+            $"inproc://inbound-peer-{suffix}",
+            lifecycleGeneration: 7,
+            descriptorRevision: 3,
+            new Dictionary<string, uint>(StringComparer.Ordinal),
+            objectRole: (byte)ZLinkMeshNodeObjectRole.Server));
+        // With no outbound intent, only the inbound Hello queries this gate.
+        await sealObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        if (sealedForShutdown)
+        {
+            Assert.Equal(state, node.Status().State);
+            Assert.Equal(0U, node.Status().AdmittedPeerCount);
+            Assert.Empty(node.Peers());
+            Assert.Equal(0UL, monitor.Status().PeerAdmitted);
+            Assert.Equal(0UL, monitor.Status().PeerRejected);
+            await AssertNoAdmitAsync(peer);
+        }
+        else
+        {
+            await ReceiveAdmitAsync(peer);
+            Assert.Equal(1U, node.Status().AdmittedPeerCount);
+            Assert.Equal(MeshPeerState.Admitted, Assert.Single(node.Peers()).State);
+            Assert.Equal(1UL, monitor.Status().PeerAdmitted);
+        }
+    }
+
+    [Fact]
+    public async Task SealedNode_IgnoresRepeatedHello_ButProcessesAdmittedPeerUpdate()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        var gate = new ZLinkDrainAdmissionGate();
+        node.SetPeerAdmissionSealGate(() => gate.IsSealedForShutdown);
+        var suffix = Guid.NewGuid().ToString("N");
+        var endpoint = AllocateTcpEndpoint();
+        node.SetRoutingId(RoutingId.From($"update-node-{suffix}"));
+        node.SetBind(endpoint);
+        node.AddChannel(MeshName);
+        using var monitor = node.OpenMonitor();
+        node.Start();
+        using var peer = context.CreateDealerSocket();
+        peer.SetRoutingId(RoutingId.From($"update-peer-{suffix}"));
+        peer.Connect(endpoint);
+        byte[] Descriptor(ServiceWireConstants.Command command, ulong revision, byte state) =>
+            ZLinkServiceWireCodec.EncodeRouteAdmission(
+                command, MeshName, $"inproc://update-peer-{suffix}",
+                lifecycleGeneration: 7, descriptorRevision: revision,
+                new Dictionary<string, uint>(StringComparer.Ordinal),
+                objectRole: (byte)ZLinkMeshNodeObjectRole.Server,
+                runtimeState: state);
+
+        await SendAsync(peer, Descriptor(ServiceWireConstants.Command.Hello, 3, 1));
+        await ReceiveAdmitAsync(peer);
+        Assert.Equal(1UL, monitor.Status().PeerAdmitted);
+        gate.ClaimShutdown();
+        node.PublishDraining();
+
+        // If the sealed Hello mutates the descriptor to revision 99, the
+        // following revision-4 Update cannot be accepted as the next revision.
+        await SendAsync(peer, Descriptor(ServiceWireConstants.Command.Hello, 99, 1));
+        await SendAsync(peer, Descriptor(ServiceWireConstants.Command.Update, 4, 2));
+        await WaitUntilAsync(() => node.Peers().Any(remote =>
+            remote.DescriptorRevision == 4 && remote.State == MeshPeerState.Draining));
+
+        Assert.Equal(1U, node.Status().AdmittedPeerCount);
+        Assert.Equal(MeshNodeState.Draining, node.Status().State);
+        Assert.Equal(0UL, monitor.Status().PeerRejected);
+        Assert.Equal(0UL, monitor.Status().ProtocolErrors);
+        await AssertNoAdmitAsync(peer);
     }
 
     [Fact]
@@ -303,6 +410,23 @@ public sealed class MeshNodeShutdownSealTests
             await Task.Delay(10);
         }
         throw new TimeoutException("The route Admit reply was not received.");
+    }
+
+    private static async Task AssertNoAdmitAsync(IDealerSocket socket)
+    {
+        var started = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(started) < TimeSpan.FromMilliseconds(200))
+        {
+            using var received = Received.Create();
+            if (socket.Recv(received, RecvFlags.DontWait))
+            {
+                if (ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                        received.FirstPart().AsSpan(), out var command, out _, out _))
+                    Assert.NotEqual(ServiceWireConstants.Command.Admit, command);
+                continue;
+            }
+            await Task.Delay(10);
+        }
     }
 
     private static async Task WaitUntilAsync(

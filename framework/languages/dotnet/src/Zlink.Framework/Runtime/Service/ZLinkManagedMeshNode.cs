@@ -123,7 +123,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private volatile Func<bool>? _flowCaptureEnabled;
 
     // Spec 30 §14 step 1: the host's shutdown admission seal, consulted before
-    // this node starts a peer admission (Hello). The host drain gate owns the
+    // this node starts or accepts peer admission (Hello). The host drain gate owns the
     // seal; a gate-less standalone node keeps admitting peers.
     private volatile Func<bool>? _peerAdmissionSealed;
 
@@ -8085,6 +8085,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             + $"command={command} endpoint={admission.AdvertisedEndpoint} "
             + $"lifecycle={admission.LifecycleGeneration} "
             + $"revision={admission.DescriptorRevision}");
+        if (command == ServiceWireConstants.Command.Hello
+            && _peerAdmissionSealed?.Invoke() == true)
+            return;
         if (!string.Equals(admission.MeshName, _meshName, StringComparison.Ordinal))
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
