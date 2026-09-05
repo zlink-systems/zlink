@@ -674,8 +674,10 @@ ActorId는 metric label로 사용하지 않는다.
   모든 경우다. Route 부재, handover에 따른 1회 timeout, reply 유실이 여기에 든다. Terminal
   envelope를 받은 operation은 재전송하지 않는다.
 - 각 attempt는 operation의 남은 deadline 전부를 사용하고 attempt마다 deadline을 분할하지
-  않는다. 횟수 제한은 없으며 전체 deadline이 소진되면 `DeadlineExceeded`로 종결한다. 중복 실행
-  방지는 target의 terminal record가 보장하므로 sender는 실행 여부를 추정하지 않는다.
+  않는다. 횟수 제한은 없으며 전체 deadline이 소진되면 종결한다. 종결 종류는 원인이 정한다:
+  한 번도 admission되지 못한 채(route 부재) 소진되면 [오류 모델](../00-foundation/07-framework-error-model.ko.md)의
+  `Unavailable`, admission된 request의 reply를 받지 못한 채 소진되면 `DeadlineExceeded`다.
+  중복 실행 방지는 target의 terminal record가 보장하므로 sender는 실행 여부를 추정하지 않는다.
 - Destroy가 같은 generation만 인정하고 새 incarnation으로 다시 지정하지 않는다.
 
 ---

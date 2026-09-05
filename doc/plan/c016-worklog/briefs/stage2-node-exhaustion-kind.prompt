@@ -1,0 +1,14 @@
+# Job (STAGE 2, approved A): node — durable operation exhaustion kind follows the cause (Unavailable when never admitted, DeadlineExceeded when an admitted reply never arrived)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·교차언어 대조·진단 먼저) and `framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion or widen a deadline; do not commit. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock` around every npm/test invocation; do not rebuild Core/local packages. Only touch `packages/framework/src/runtime/foundation/service-stateful-runtime.ts` (the replay path committed as "durable operation replay follows the sender policy") and its tests under `test/m6b/`; two diagnosis-only jobs run concurrently on other node files.
+
+## Approved diagnosis
+Spec (`framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md`, sender bullets; corrected in `662e191536`): when the whole deadline is exhausted, the kind follows the cause — exhausted without any attempt ever being admitted (every attempt ended pre-admission: NotConnected/route absent) → `Unavailable` (error model 07-framework-error-model :75-85); exhausted while an admitted request's reply never arrived → `DeadlineExceeded`. The current code (`userSpotOperationDeadlineExceeded`) always throws DeadlineExceeded. Owner: framework durable lifecycle operations. Parity: the cpp stage-2 job is implementing the same mapping from the raw owner's terminal kind. Class A.
+
+## What to do
+1. Track per operation whether any attempt was admitted (the binding's typed result distinguishes pre-admission submit failures from a request that was admitted and then timed out — use that, do not infer from timing); on exhaustion map accordingly with the existing internal/public error kinds.
+2. Regression in `test/m6b/m6b-user-spot-terminal-replay.contract.ts`: route absent for the whole deadline → Unavailable; admitted then reply withheld until the deadline → DeadlineExceeded; the existing replay tests stay green.
+3. Verify: the m6b replay contract file, `user-spot-native-two-process.test.js` 3×, typecheck + lint on the touched file.
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-node-exhaustion-kind-summary.md`: diff, the four lines (owner / spec clause / parity / class), results, BLOCKERS.

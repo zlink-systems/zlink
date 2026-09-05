@@ -4007,22 +4007,24 @@ export class ServiceStatefulRuntime {
     this.requireOpen();
     const deadlineMs = Date.now() + Math.max(1, timeoutMs);
     let parts: readonly Buffer[];
+    // This path is limited to durable lifecycle operations. A rejected raw
+    // request has no terminal envelope, so replay the byte-identical header;
+    // decode failures below are received envelopes and are not replayed.
     for (;;) {
       const remainingMs = deadlineMs - Date.now();
       if (remainingMs <= 0) {
-        throw new Error(`${operationKind} timed out before terminal replay.`);
+        throw userSpotOperationDeadlineExceeded(operationKind);
       }
-      // Keep part of the end-to-end deadline available for the target's
-      // operation-terminal replay when a reply is lost after execution.
-      const attemptTimeoutMs = Math.max(1, Math.ceil(remainingMs / 2));
       try {
         parts = targetNodeRid === this.nodeRid
-          ? await this.requestLocalInfrastructure(header, correlation, attemptTimeoutMs)
-          : await this.raw.requestService(targetNodeRid, [header], attemptTimeoutMs);
+          ? await this.requestLocalInfrastructure(header, correlation, remainingMs)
+          : await this.raw.requestService(targetNodeRid, [header], remainingMs);
         break;
       } catch (error) {
         const retryDelayMs = Math.min(20, deadlineMs - Date.now());
-        if (retryDelayMs <= 0) throw error;
+        if (retryDelayMs <= 0) {
+          throw userSpotOperationDeadlineExceeded(operationKind, error);
+        }
         await new Promise(resolve => setTimeout(resolve, retryDelayMs));
       }
     }
@@ -5172,6 +5174,18 @@ function userSpotDeadline(deadlineUnixMs: bigint): {
 function operationReplayExpired(deadlineUnixMs: bigint): boolean {
   return BigInt(Date.now()) > deadlineUnixMs
     + BigInt(USER_SPOT_OPERATION_REPLAY_RETENTION_MS);
+}
+
+function userSpotOperationDeadlineExceeded(
+  operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate',
+  cause?: unknown
+): ZLinkFrameworkException {
+  return createInternalFrameworkException(
+    ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+    `${operationKind} exhausted its end-to-end deadline.`,
+    true,
+    cause
+  );
 }
 
 function remainingDeadlineMs(deadlineUnixMs: bigint): number {

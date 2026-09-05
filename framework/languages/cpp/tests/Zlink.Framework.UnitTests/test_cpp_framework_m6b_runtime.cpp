@@ -1302,8 +1302,9 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
     assert (invalidations == 1);
     assert (route_resolutions == 0);
 
-    // A route that remains unavailable exhausts the bounded retry and maps
-    // the raw timed_out terminal to deadline_exceeded at this layer.
+    // The route snapshot exists but its owner route cannot be used. Routing
+    // spec 08 §2 ends that operation as Unavailable; error model §5 reserves
+    // DeadlineExceeded for an admitted request whose reply misses its deadline.
     const runtime::spot_address_t disconnected_route{
       "m6b-mesh",
       zlink::routing_id_t::from ("unconnected-bound-session-target"),
@@ -1317,7 +1318,7 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
         .result ();
     assert (!transport_failure);
     assert (transport_failure.error_kind ()
-            == framework_error_kind_t::deadline_exceeded);
+            == framework_error_kind_t::unavailable);
     assert (invalidations == 1);
     assert (route_resolutions == 0);
 

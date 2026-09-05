@@ -945,10 +945,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework
     zlink::cpp
     Threads::Threads)
+  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_raw_route_port_contract)
   add_test(NAME test_cpp_framework_raw_route_port_contract
     COMMAND test_cpp_framework_raw_route_port_contract)
   set_tests_properties(test_cpp_framework_raw_route_port_contract PROPERTIES
-    LABELS "framework-contract;framework-foundation;raw-binding"
+    LABELS "framework-contract;framework-unit;framework-foundation;raw-binding"
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_service_wire_codec

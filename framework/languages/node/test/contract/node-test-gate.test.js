@@ -12,8 +12,14 @@ test('node runtime and coverage gates isolate native test handles and concurrent
   for (const scriptName of ['run_node_runtime_gate.js', 'run_node_coverage_gate.js']) {
     const source = fs.readFileSync(path.join(workspaceRoot, 'scripts', scriptName), 'utf8');
     assert.match(source, /acquireNodeTestGateLock/);
-    assert.match(source, /--test-force-exit/);
   }
+
+  const runtimeGate = fs.readFileSync(path.join(workspaceRoot, 'scripts', 'run_node_runtime_gate.js'), 'utf8');
+  assert.doesNotMatch(runtimeGate, /--test-force-exit/);
+  assert.match(runtimeGate, /timeout: 600000/);
+  assert.match(runtimeGate, /plan=.*announced=/);
+  assert.match(runtimeGate, /plan=.*completed=/);
+  assert.match(runtimeGate, /completedTestCount !== expectedTestCount/);
 });
 
 test('node test gate lock rejects a live owner and releases after owner exit', async () => {

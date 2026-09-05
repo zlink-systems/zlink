@@ -1,0 +1,12 @@
+# Job: node m6b — pre-existing bound-session path failure `InvalidState(8)` reproduced alone (STAGE 1: diagnosis only, no code)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·교차언어 대조·진단 먼저) and `framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion or widen a deadline; do not commit. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock` around every npm/test invocation; do not rebuild Core/local packages. STAGE 1 = NO CODE CHANGES (temporary trace sinks allowed, removed before finishing).
+
+## Facts
+`doc/plan/c016-worklog/stage1-node-first-reply-loss-summary.md` reports the full M6B verification as 108 pass / 2 fail: one passed on re-run (name it and record its determinism), the other is a bound-session path test that fails deterministically alone with `InvalidState(8)` (the Core/binding result `ZLINK_SUBMIT_INVALID_STATE`+`EBUSY` family — e.g. "reply before the REQUEST FINAL", or a wait token reused; see `core/doc/spec/core/socket/README.ko.md` submit result table and `07-router.ko.md:300-310`). Identify the exact test, run it 3× alone and 1× inside the m6b file.
+
+## Deliverable — `doc/plan/c016-worklog/diag-node-m6b-bound-session-invalidstate.md`
+1. The exact submit call that returns InvalidState (file:line, socket type, operation: send/request/reply, token state), the Core/binding clause that defines that result, and the timeline (existing traces first).
+2. Owner layer: is the framework violating the binding's operation-order contract (e.g. replying twice, replying before FINAL, reusing a consumed ReplyToken), or is it a framework state machine duplicating what the binding already sequences? Cite the clause.
+3. Cross-language parity: the equivalent bound-session path in cpp/dotnet/java (file:line) and whether their m6b equivalents pass.
+4. Classification A/B/C/D, minimal fix location, the regression that would prove it, and — if the evidence points at Core/binding — a public-API repro description for the B session. STOP after the diagnosis.
