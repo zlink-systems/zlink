@@ -2649,7 +2649,7 @@ Bindings that mirror the native layout by hand (.NET, Java, Python, Rust) pin th
 
 #### Monitor sources in `Poller`
 
-Every binding's public `Poller` must be able to add/modify/remove a socket monitor as a source in addition to raw sockets, timers and FDs (Core 05-polling §3, "socket monitor" row). A monitor only reports `POLLIN` readiness and is drained with `Monitor.recv` (DONTWAIT) after it is ready. The registration surface follows the language's conventions (an overload, a dedicated `add_monitor` family, or the monitor satisfying the socket source type), the language spec names it, and the Poller test verifies monitor registration and drain.
+Every binding's public `Poller` must be able to add/modify/remove a socket monitor as a source in addition to raw sockets, timers and FDs (Core 05-polling §3, "socket monitor" row). A monitor only reports `POLLIN` readiness and is drained with `Monitor.recv` (DONTWAIT) after it is ready. A monitor registration or modification whose mask contains any readiness bit other than `POLLIN` (`POLLOUT`, `POLLCOMPLETION`, ...) is rejected by the binding with a typed `ConfigResult.INVALID_ARGUMENT` (the Core accepts the registration, so this is binding input validation). The registration surface follows the language's conventions (an overload, a dedicated `add_monitor` family, or the monitor satisfying the socket source type), the language spec names it, and the Poller test verifies monitor registration and drain.
 
 #### `MonitorStatus`
 

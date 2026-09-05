@@ -2264,7 +2264,7 @@ native 레이아웃을 수동으로 mirror하는 바인딩(.NET, Java, Python, R
 
 #### `Poller`의 monitor source
 
-모든 바인딩의 public `Poller`는 raw socket·timer·FD 외에 socket monitor를 source로 등록/수정/제거할 수 있어야 한다(Core 05-polling §3 "socket monitor" 행). monitor는 `POLLIN` readiness만 내며 ready 뒤 `Monitor.recv`(DONTWAIT)로 drain한다. 등록 표면은 언어 관례를 따르되(오버로드, 별도 `add_monitor` 계열, 또는 monitor가 socket source 타입을 만족), spec에 그 이름을 명시하고 Poller 테스트가 monitor 등록·drain을 검증한다.
+모든 바인딩의 public `Poller`는 raw socket·timer·FD 외에 socket monitor를 source로 등록/수정/제거할 수 있어야 한다(Core 05-polling §3 "socket monitor" 행). monitor는 `POLLIN` readiness만 내며 ready 뒤 `Monitor.recv`(DONTWAIT)로 drain한다. monitor 등록/수정에 `POLLIN` 외의 readiness bit(`POLLOUT`, `POLLCOMPLETION` 등)가 있으면 바인딩이 typed `ConfigResult.INVALID_ARGUMENT`로 거절한다(Core는 등록 자체를 허용하므로 바인딩 입력 검증). 등록 표면은 언어 관례를 따르되(오버로드, 별도 `add_monitor` 계열, 또는 monitor가 socket source 타입을 만족), spec에 그 이름을 명시하고 Poller 테스트가 monitor 등록·drain을 검증한다.
 
 #### `MonitorStatus`
 
