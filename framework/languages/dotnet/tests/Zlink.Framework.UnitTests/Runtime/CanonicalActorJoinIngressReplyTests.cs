@@ -478,13 +478,16 @@ public sealed class CanonicalActorJoinIngressReplyTests
     }
 
     [Fact]
-    public async Task CanonicalActorJoinRequest_LateFirstTerminalUsesOpaqueReplyThenStopsRetrying()
+    public async Task CanonicalActorJoinRequest_OpaqueReplyStopsOnlyOnCoreTerminal()
     {
         var attempts = 0;
+        var coreTerminal = 0;
         await using var runtime = await ConnectedRuntime.CreateAsync(_ =>
         {
             Interlocked.Increment(ref attempts);
-            return SubmitResult.Backpressured;
+            return Volatile.Read(ref coreTerminal) == 0
+                ? SubmitResult.Backpressured
+                : SubmitResult.Terminated;
         });
         await using var monitor = runtime.Target.OpenMonitor();
         var staleRequest = CreateRequest(
@@ -507,11 +510,16 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
 
         await runtime.DisconnectSourceAsync();
+        var attemptsBeforeCoreTerminal = Volatile.Read(ref attempts);
+        await WaitUntilAsync(() =>
+            Volatile.Read(ref attempts) > attemptsBeforeCoreTerminal);
+        Assert.Equal(0UL, monitor.Status().ProtocolErrors);
+        Volatile.Write(ref coreTerminal, 1);
         await WaitUntilAsync(() => monitor.Status().ProtocolErrors != 0);
         var attemptsAtDiscard = Volatile.Read(ref attempts);
         await runtime.ReconnectAsync();
         Assert.Equal(
-            SubmitResult.Backpressured,
+            SubmitResult.Terminated,
             staleIngress.ReplyTerminal(
                 RequestResult.InternalError,
                 (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
@@ -526,15 +534,17 @@ public sealed class CanonicalActorJoinIngressReplyTests
     }
 
     [Fact]
-    public async Task CanonicalActorJoinRequest_HandoverKeepsPriorReplyEpochUntilExactDisconnect()
+    public async Task CanonicalActorJoinRequest_HandoverLeavesReplyRouteToCore()
     {
         var attempts = 0;
-        var allowSubmit = 0;
+        var submitMode = 0;
         await using var runtime = await ConnectedRuntime.CreateAsync(reply =>
         {
             Interlocked.Increment(ref attempts);
-            if (Volatile.Read(ref allowSubmit) == 0)
+            if (Volatile.Read(ref submitMode) == 0)
                 return SubmitResult.Backpressured;
+            if (Volatile.Read(ref submitMode) == 1)
+                return SubmitResult.Terminated;
             reply.Submit();
             return SubmitResult.Ok;
         });
@@ -563,20 +573,23 @@ public sealed class CanonicalActorJoinIngressReplyTests
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
 
         await runtime.SendPriorHelloAsync();
-        await WaitUntilAsync(() =>
-            monitor.Status().ProtocolErrors > protocolErrors);
-        var protocolErrorsAfterStaleHello = monitor.Status().ProtocolErrors;
+        await Task.Delay(150);
+        Assert.Equal(protocolErrors, monitor.Status().ProtocolErrors);
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
 
         await runtime.DisconnectPriorSourceAsync();
+        await Task.Delay(150);
+        Assert.Equal(protocolErrors, monitor.Status().ProtocolErrors);
+        Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
+        Volatile.Write(ref submitMode, 1);
         await WaitUntilAsync(() =>
-            monitor.Status().ProtocolErrors > protocolErrorsAfterStaleHello);
+            monitor.Status().ProtocolErrors > protocolErrors);
         var attemptsAfterDisconnect = Volatile.Read(ref attempts);
         await Task.Delay(150);
         Assert.Equal(attemptsAfterDisconnect, Volatile.Read(ref attempts));
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
 
-        Volatile.Write(ref allowSubmit, 1);
+        Volatile.Write(ref submitMode, 2);
         var replacementRequest = staleRequest with { Correlation = 57 };
         var replacementReplyTask = SendRequestAsync(runtime.Source, replacementRequest);
         var replacementIngress = await ReceiveActorJoinAsync(runtime.Target);
@@ -717,7 +730,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
     }
 
     [Fact]
-    public async Task ActorCreateCompletion_AfterHandoverHello_UsesCapturedReplyRoute()
+    public async Task ActorCreateCompletion_AfterHandoverTimeout_ReplaysOnCurrentRoute()
     {
         await using var runtime = await ConnectedRuntime.CreateAsync(reply =>
         {
@@ -768,7 +781,12 @@ public sealed class CanonicalActorJoinIngressReplyTests
                     "mesh",
                     runtime.TargetRid))));
 
-        var parts = await replyTask.WaitAsync(TimeSpan.FromSeconds(2));
+        var timeout = await Assert.ThrowsAsync<ZlinkRequestException>(
+            () => replyTask);
+        Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, timeout.Result);
+
+        var replay = SendActorCreateRequestAsync(runtime.Source, operation);
+        var parts = await replay.WaitAsync(TimeSpan.FromSeconds(2));
         try
         {
             var reply = DecodeReply(parts, correlation);

@@ -28,17 +28,8 @@ internal sealed class ZLinkMeshPeer(
     internal IReadOnlyDictionary<string, uint> Channels { get; set; } =
         new Dictionary<string, uint>(StringComparer.Ordinal);
     internal ZLinkServiceWireCodec.AdmissionRecord? Admission { get; set; }
-    // Native request reply tokens are scoped to the exact paired transport
-    // that delivered the request. The logical RID can survive a ROUTER
-    // handover, so it is not a physical-connection fence.
-    internal ZLinkTransportPairIdentity TransportPair { get; set; }
-    internal ZLinkNativeReplyPeerEpoch NativeReplyEpoch { get; set; } = new();
     internal MeshPeerState State { get; set; } = MeshPeerState.Configured;
     internal bool Admitted { get; set; }
-    internal bool ReciprocalHandoverPending { get; set; }
-    internal uint ReciprocalHandoverDisconnectMask { get; set; }
-    internal ZLinkServiceConnectionDirection ReciprocalRetiredDirection { get; set; }
-    internal string ReciprocalRetiredEndpoint { get; set; } = string.Empty;
     internal ZLinkServiceLiveness? Liveness { get; set; }
     internal long NextAdmissionTimestamp { get; set; }
     internal ulong LastChangedMs { get; set; } =
@@ -61,37 +52,4 @@ internal sealed class ZLinkMeshPeer(
                 ? (ZLinkMeshNodeObjectRole)admission.ObjectRole
                 : ZLinkMeshNodeObjectRole.None
         };
-}
-
-internal readonly record struct ZLinkTransportPairIdentity(
-    ulong Id,
-    ulong Generation)
-{
-    internal bool IsValid => Id != 0;
-}
-
-internal sealed class ZLinkNativeReplyPeerEpoch
-{
-    private int _invalidated;
-
-    internal ZLinkNativeReplyPeerEpoch(
-        ZLinkTransportPairIdentity transportPair = default)
-    {
-        TransportPair = transportPair;
-    }
-
-    internal ZLinkTransportPairIdentity TransportPair { get; private set; }
-    internal bool IsValid => Volatile.Read(ref _invalidated) == 0;
-
-    internal bool TryAttach(ZLinkTransportPairIdentity transportPair)
-    {
-        if (!transportPair.IsValid)
-            return false;
-        if (TransportPair.IsValid)
-            return TransportPair == transportPair;
-        TransportPair = transportPair;
-        return true;
-    }
-
-    internal void Invalidate() => Interlocked.Exchange(ref _invalidated, 1);
 }
