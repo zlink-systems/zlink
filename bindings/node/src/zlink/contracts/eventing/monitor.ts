@@ -164,3 +164,6 @@ export interface MonitorSocket {
   /** Close the monitor and release its resources. */
   close(): void;
 }
+
+/** Canonical socket-monitor name used by event-source APIs. */
+export type SocketMonitor = MonitorSocket;

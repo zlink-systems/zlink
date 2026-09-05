@@ -44,7 +44,8 @@ Aligned Node bindings for `libzlink`.
 - context option facade: `ContextOptions`
 - socket option access: `socket.options.*`
 - monitors: `monitorOpen(events?, monitorHwmBytes?)` with default `ALL` events
-  and the Core-default queue HWM, then pull with `recv(flags?)`
+  and the Core-default queue HWM; register the monitor with `Poller.add(...,
+  [PollEventFlag.PollIn], slot)` and drain ready events with `recv(DontWait)`
 
 `Context.options` should be configured immediately after constructing the
 context and before creating sockets.

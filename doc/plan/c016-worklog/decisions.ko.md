@@ -1140,3 +1140,7 @@ binding 버그 → 수정: `disconnectRid()`가 completion owner의 send/drain �
 spec `bindings/doc/spec/README.ko.md:4030-4050, 4210-4228`(submit enum 1:1 typed 매핑), `core/.../socket/README.ko.md:1018-1055`, `03-errors.ko.md:334-352`(ENOBUFS=backpressure). 수정: rc 0~13을 `SubmitResult`에 1:1 매핑(C `zlink_errno.h` 값과 대조 확인), errno는 보조;
 wait-token terminal은 `ENOENT→NotFound`, `ETERM/ESHUTDOWN→Terminated`, 그 외 `InternalError`(C++/.NET과 동일 규칙). 새 public variant 없음. 테스트: ROUTER→DEALER request 즉시 `NotAdmitted` 회귀 5/5, enum 매핑·ENOBUFS·terminal unit test, contract test에서 raw errno assertion 제거.
 gate: `bindings/rust/tests/run_tests.sh` 14/14 suite PASS(samples 포함), clippy `-D warnings` 0, fmt, diff-check. 커밋 `bd84afc447`.
+
+## D-B99 (2026-09-05 10:05, 머신 B) bindings parity — Poller monitor source: Node 구현·spec 명시(Java/Rust/Python/Go 진행 중)
+공통 spec(`c6d491e3e8`)에 따라 Node `Poller.add/modify/remove`에 `SocketMonitor` overload(`Pollable = BaseSocket | SocketMonitor | Timer | number`), monitor는 `PollIn`만(그 외 typed `InvalidArgument`), completion owner 미적용, `PollEvents.source(index)` source identity, 샘플 sleep 루프 → poller drain.
+native addon 변경 없음. 테스트 `poller_monitor.test.ts`(READY/DISCONNECTED drain, modify/remove, typed 오류) 5/5, `npm test` 전체+samples 7/7. Node 언어 spec(ko/en)에 signature 문장 추가(감독자). 커밋 `31139dd137`.

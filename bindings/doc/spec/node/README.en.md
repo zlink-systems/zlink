@@ -498,6 +498,11 @@ factories and public contract methods.
   Actor construction is not public.
 - `createPoller()`, `createTimer()`, and `createTimer(spot)` create eventing
   resources.
+- `Pollable` is `BaseSocket | SocketMonitor | Timer | number`, and `Poller.add/modify/remove`
+  provide `SocketMonitor` overloads (common spec "Monitor sources in `Poller`"). Only
+  `PollEventFlag.PollIn` is valid for a socket monitor; any other readiness mask is rejected
+  with a typed `ConfigResult.InvalidArgument`. Drain with `monitor.recv(RecvFlags.DontWait)`
+  after readiness; `PollEvents.source(index)` returns the registered monitor object.
 - Package-root factory/helper functions such as version, capability lookup,
   strerror, proxy, sleep, and multipart-cleanup helpers are public contract
   functions. The native calls behind them stay in runtime modules.

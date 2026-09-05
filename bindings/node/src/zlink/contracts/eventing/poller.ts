@@ -2,10 +2,16 @@
 
 import type { BaseSocket } from '../sockets';
 import type { PollEventFlagValue } from '../sockets/socket_constants';
+import type { SocketMonitor } from './monitor';
 import type { Timer } from './timer';
+
+/** A source that can be identified in a poll result; numbers are raw file descriptors. */
+export type Pollable = BaseSocket | SocketMonitor | Timer | number;
 
 /** One ready source reported by {@link Poller.wait}. */
 export interface PollEvent {
+  /** The registered object, or the raw file descriptor, that became ready. */
+  readonly source: Pollable;
   /** Whether the ready source is a socket, file descriptor, or timer. */
   readonly sourceKind: number;
   /** The caller token supplied when the source was registered. */
@@ -24,6 +30,8 @@ export interface PollEvents {
   readonly readyCount: number;
   /** The source kind of the result at `index`. */
   sourceKind(index: number): number;
+  /** The registered object, or raw file descriptor, for the result at `index`. */
+  source(index: number): Pollable;
   /** The caller token of the result at `index`. */
   slot(index: number): number;
   /** The fired-event mask of the result at `index`. */
@@ -36,18 +44,24 @@ export interface PollEvents {
   close(): void;
 }
 
-/** Multiplexes sockets, file descriptors, and timers, reporting which become ready on a single wait. */
+/** Multiplexes sockets, socket monitors, file descriptors, and timers. */
 export interface Poller {
   /** The number of registered sources. */
   readonly size: number;
   /** Register `socket` to be watched for `events`; `slot` is echoed back in the matching result. */
   add(socket: BaseSocket, events: readonly PollEventFlagValue[], slot: number): void;
+  /** Register `monitor`; socket monitors support `PollIn` only. */
+  add(monitor: SocketMonitor, events: readonly PollEventFlagValue[], slot: number): void;
   /** Register `timer`; its expirations surface as poll events tagged with `slot`. */
   add(timer: Timer, slot: number): void;
   /** Change the watched events for an already-registered socket. */
   modify(socket: BaseSocket, events: readonly PollEventFlagValue[]): void;
+  /** Change a monitor registration; socket monitors support `PollIn` only. */
+  modify(monitor: SocketMonitor, events: readonly PollEventFlagValue[]): void;
   /** Unregister `socket`; return true when it was registered. */
   remove(socket: BaseSocket): boolean;
+  /** Unregister `monitor`; return true when it was registered. */
+  remove(monitor: SocketMonitor): boolean;
   /** Unregister `timer`; return true when it was registered. */
   remove(timer: Timer): boolean;
   /** Register raw file descriptor `fd` to be watched for `events`; `slot` is echoed back. */

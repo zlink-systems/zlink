@@ -171,6 +171,7 @@ test('poller writes reusable event buffer and dispatches by slot', () => {
     assert.equal(count, 1);
     assert.equal(events.readyCount, 1);
     assert.equal(events.sourceKind(0), 1);
+    assert.strictEqual(events.source(0), receiver);
     assert.equal(events.slot(0), 7);
     assert.equal(events.hasEvent(0, zlink.PollEventFlag.PollIn), true);
     assert.throws(() => events.slot(1), RangeError);
@@ -269,11 +270,13 @@ test('poller distinguishes socket and timer events in one buffer', () => {
         const count = poller.wait(events, 200);
         for (let i = 0; i < count; i += 1) {
             if (events.sourceKind(i) === 1) {
+                assert.strictEqual(events.source(i), receiver);
                 assert.equal(events.slot(i), 41);
                 assert.equal(recvText(receiver), 'socket');
                 sawSocket = true;
             }
             else if (events.sourceKind(i) === 3) {
+                assert.strictEqual(events.source(i), timer);
                 assert.equal(events.slot(i), 42);
                 assert.equal(timer.recv(), 1n);
                 sawTimer = true;
