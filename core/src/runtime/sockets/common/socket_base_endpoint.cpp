@@ -423,8 +423,18 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_,
                     new_pipes[0]->hold_writes_until_transport_pair_ready ();
                     new_pipes[1]->hold_writes_until_transport_pair_ready ();
                 }
+                const int saved_errno = errno;
+                const bool peer_progress_started =
+                  transport_lane_count == 1u
+                  && peer.socket->ensure_async_command_processing () == 0;
+                errno = saved_errno;
                 const bool bind_sent =
                   send_bind (peer.socket, new_pipes[1], lane_index != 0);
+                const int bind_errno = errno;
+                if (peer_progress_started)
+                    peer.socket->request_unowned_async_command_processing_stop (
+                      true);
+                errno = bind_errno;
                 if (!bind_sent) {
                     if (peer_seqnum_reserved)
                         send_inproc_connected (peer.socket);
@@ -938,6 +948,38 @@ void zlink::socket_base_t::add_endpoint (const endpoint_uri_pair_t &endpoint_pai
       endpoint_pair_.identifier (), endpoint_pipe_t (endpoint_, pipe_, endpoint_pair_.local_type));
 }
 
+void zlink::socket_base_t::terminate_inproc_pipe_with_peer_progress (pipe_t *pipe_)
+{
+    if (!pipe_)
+        return;
+
+    pipe_t *const peer = pipe_->retain_peer_snapshot ();
+    socket_base_t *peer_socket = NULL;
+    bool peer_progress_started = false;
+    const int saved_errno = errno;
+    const bool paired_transport =
+      options.type == ZLINK_CORE_SOCKET_DEALER
+      || options.type == ZLINK_CORE_SOCKET_ROUTER;
+    if (paired_transport && pipe_->get_transport_lane_count () == 1u && peer
+        && !peer->is_session_pipe () && peer->_sink) {
+        peer->set_nodelay ();
+        peer_socket = static_cast<socket_base_t *> (peer->_sink);
+        peer_progress_started =
+          peer_socket->ensure_async_command_processing () == 0;
+    }
+
+    pipe_->send_disconnect_msg ();
+    // Explicit endpoint disconnect should not defer pipe teardown. The
+    // non-inproc term_endpoint path also uses terminate(false).
+    pipe_->terminate (false);
+
+    if (peer_progress_started)
+        peer_socket->request_unowned_async_command_processing_stop (true);
+    if (peer)
+        peer->release_lifetime_ref ();
+    errno = saved_errno;
+}
+
 int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
 {
     if (unlikely (_ctx_terminated)) {
@@ -997,10 +1039,42 @@ int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
         //  through to the local cleanup.
         (void) get_ctx ()->materialize_pending_inproc (endpoint_uri_str, this);
         fail_public_pending_for_endpoint (endpoint_uri_str);
-        const int inproc_rc = unregister_endpoint (endpoint_uri_str, this) == 0
-                                ? 0
-                                : endpoint_runtime ().inprocs.erase_pipes (endpoint_uri_str);
-        return inproc_rc;
+        if (unregister_endpoint (endpoint_uri_str, this) == 0) {
+            std::vector<pipe_t *> attached;
+            std::vector<pipe_t *> terminating;
+            snapshot_attached_pipes (&attached);
+            for (size_t i = 0; i != attached.size (); ++i) {
+                pipe_t *const pipe = attached[i];
+                if (pipe
+                    && pipe->get_endpoint_pair ().identifier ()
+                         == endpoint_uri_str) {
+                    if (pipe->retain_lifetime_ref ())
+                        terminating.push_back (pipe);
+                    terminate_inproc_pipe_with_peer_progress (pipe);
+                }
+            }
+            // Complete the local half of the inproc termination handshake
+            // before returning the explicit disconnect. The peer executor
+            // sends the first ack asynchronously; this socket is the current
+            // public command owner and must drain that ack so the peer can
+            // receive the reciprocal ack without another application call.
+            const int disconnect_errno = errno;
+            for (int attempt = 0; attempt != 20; ++attempt) {
+                bool complete = true;
+                for (size_t i = 0; i != terminating.size (); ++i)
+                    complete = complete
+                               && terminating[i]->has_completed_termination ();
+                if (complete)
+                    break;
+                (void) process_commands (10, false);
+            }
+            for (size_t i = 0; i != terminating.size (); ++i)
+                terminating[i]->release_lifetime_ref ();
+            errno = disconnect_errno;
+            return 0;
+        }
+        return endpoint_runtime ().inprocs.erase_pipes (endpoint_uri_str,
+                                                        this);
     }
 
     const std::string resolved_endpoint_uri =

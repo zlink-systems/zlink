@@ -2,6 +2,7 @@
 
 #include "utils/precompiled.hpp"
 
+#include "sockets/common/socket_base.hpp"
 #include "sockets/common/socket_runtime.hpp"
 
 void zlink::socket_endpoint_runtime_t::attach_pipe (pipe_t *pipe_)
@@ -96,7 +97,8 @@ void zlink::socket_inprocs_t::emplace (const char *endpoint_uri_, pipe_t *pipe_)
     _inprocs.ZLINK_MAP_INSERT_OR_EMPLACE (std::string (endpoint_uri_), pipe_);
 }
 
-int zlink::socket_inprocs_t::erase_pipes (const std::string &endpoint_uri_str_)
+int zlink::socket_inprocs_t::erase_pipes (const std::string &endpoint_uri_str_,
+                                          socket_base_t *owner_)
 {
     const std::pair<map_t::iterator, map_t::iterator> range =
       _inprocs.equal_range (endpoint_uri_str_);
@@ -105,12 +107,8 @@ int zlink::socket_inprocs_t::erase_pipes (const std::string &endpoint_uri_str_)
         return -1;
     }
 
-    for (map_t::iterator it = range.first; it != range.second; ++it) {
-        it->second->send_disconnect_msg ();
-        // Explicit endpoint disconnect should not defer pipe teardown.
-        // The non-inproc term_endpoint path also uses terminate(false).
-        it->second->terminate (false);
-    }
+    for (map_t::iterator it = range.first; it != range.second; ++it)
+        owner_->terminate_inproc_pipe_with_peer_progress (it->second);
     _inprocs.erase (range.first, range.second);
     return 0;
 }
