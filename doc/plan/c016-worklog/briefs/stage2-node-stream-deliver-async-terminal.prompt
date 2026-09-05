@@ -1,0 +1,12 @@
+# Job (STAGE 2, approved B): node — bound-session STREAM push uses the binding async terminal; the deliver catch classifies typed terminals only
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·교차언어 대조) and `framework/AGENTS.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion or widen a deadline; do not commit. Local packages were rebuilt at 09:49 with Core `7ffb8e55d9` (D-086) and java `c9d294c44f`. Do not rebuild Core/local packages. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock` around every npm/test invocation. Another node job edits `packages/framework/src/runtime/locations/resolvers.ts` / `actors/actor-client.ts` — do not touch those; you own `packages/framework/src/runtime/backend/node/node-raw-mesh-backend.ts` (deliver path), `service-stateful-runtime.ts` only where the deliver result is consumed (`:3599-3605`, `:4149-4160`), and `test/m6b/**`.
+
+## Approved diagnosis
+`doc/plan/c016-worklog/diag-node-stream-deliver-catchall.md` §6 (minimal fix) and §7 (regression): (1) deliver via the binding's async `submit()` and await it — the binding owns BACKPRESSURED → exact WRITABLE resubmit; (2) the catch classifies typed terminal results only: closed/not-connected → request session close through the existing STREAM close/unbind lifecycle; backpressure/timeout → typed failure without deleting the session target; unknown errors rethrown; (3) decode and message-builder errors stay outside the transport catch; (4) no second poller, retry queue, timeout increase, or string-based classification. Owner: binding async terminal (DONTWAIT/WRITABLE), framework session lifecycle (close detection). Parity: cpp `stream_host_service.cpp`, dotnet, java `submitOwnedStreamFrameAsync` use the async terminal. Class B.
+
+## Verify
+`raw backend dispatches Spot requests and Actor sends through M6B owners` 3×, the full `npm run verify:m6b-runtime`, the regression tests from diagnosis §7 (typed backpressure keeps the session; closed terminal closes it; unknown error propagates), `npm run typecheck`, lint on touched files, then the SupportChat and TicTacToe samples 1× each (`bash samples/run_samples.sh SupportChat.Ts`, `TicTacToe.Ts`).
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-node-stream-deliver-async-terminal-summary.md`: diff, the four lines (owner / spec clause / parity / class), results, BLOCKERS.
