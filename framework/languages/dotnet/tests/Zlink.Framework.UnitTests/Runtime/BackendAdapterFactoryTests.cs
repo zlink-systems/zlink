@@ -127,6 +127,106 @@ public sealed class BackendAdapterFactoryTests
             "Zlink.Framework.Runtime.Messaging.ZLinkRequestCompletionPump"));
     }
 
+    [Fact]
+    public async Task PublicPoller_SubPollIn_AndDealerCompletion_ProgressTogether()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var publisher = context.CreateXPubSocket();
+        using var subscriber = context.CreateSubSocket();
+        using var router = context.CreateRouterSocket();
+        using var dealer = context.CreateDealerSocket();
+        using var poller = Systems.Zlink.Zlink.CreatePoller();
+        var suffix = Guid.NewGuid().ToString("N");
+        var publishEndpoint = $"inproc://poller-sub-{suffix}";
+        var requestEndpoint = $"inproc://poller-dealer-{suffix}";
+        const string topic = "contract";
+        const nuint subscriberSlot = 1;
+        const nuint dealerSlot = 2;
+
+        publisher.Options.ReceiveTimeout = TimeSpan.FromSeconds(2);
+        router.Options.ReceiveTimeout = TimeSpan.FromSeconds(2);
+        publisher.Bind(publishEndpoint);
+        subscriber.Connect(publishEndpoint);
+        subscriber.SetSubscription(topic);
+        var subscription = new SubscriptionEvent();
+        Assert.True(publisher.ReceiveSubscriptionEvent(subscription));
+        Assert.True(subscription.Subscribed);
+        Assert.Equal(topic, subscription.Topic);
+
+        router.Bind(requestEndpoint);
+        dealer.Connect(requestEndpoint);
+        using (var handshake = Message.From("ready"))
+            dealer.Send().Message(handshake).Submit();
+        using (var received = Received.Create())
+            Assert.True(router.Recv(received));
+
+        poller.Add(subscriber, PollEventFlags.PollIn, subscriberSlot);
+        poller.Add(dealer, PollEventFlags.PollCompletion, dealerSlot);
+
+        Task<IReadOnlyList<Message>> requestTask;
+        using (var request = Message.From("request"))
+        {
+            requestTask = dealer.Request()
+                .Message(request)
+                .Timeout(TimeSpan.FromSeconds(2))
+                .Async(CancellationToken.None);
+        }
+
+        using (var received = Received.Create())
+        {
+            Assert.True(router.Recv(received));
+            using var reply = Message.From("reply");
+            router.Reply(
+                    Assert.IsType<RoutingId>(received.RoutingId),
+                    Assert.IsType<ReplyToken>(received.ReplyToken))
+                .Message(reply)
+                .Submit();
+        }
+        using (var published = Message.From("published"))
+            publisher.Publish(topic).Message(published).Submit();
+
+        var events = new PollEvent[2];
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        var subscriberReady = false;
+        var dealerCompletionReady = false;
+        while ((!subscriberReady || !dealerCompletionReady)
+               && DateTime.UtcNow < deadline)
+        {
+            var remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+                break;
+            var ready = poller.Wait(events, remaining);
+            for (var index = 0; index < ready; index++)
+            {
+                if (events[index].Slot == subscriberSlot)
+                    subscriberReady =
+                        (events[index].Revents & PollEventFlags.PollIn) != 0;
+                if (events[index].Slot == dealerSlot)
+                    dealerCompletionReady =
+                        (events[index].Revents & PollEventFlags.PollCompletion) != 0;
+            }
+        }
+
+        Assert.True(subscriberReady);
+        Assert.True(dealerCompletionReady);
+        using (var published = new TopicMessage())
+        {
+            Assert.True(subscriber.Subscribe(published, RecvFlags.DontWait));
+            Assert.Equal(topic, published.Topic);
+            Assert.Equal("published", published.SinglePartOrThrow().GetString());
+        }
+
+        var replyParts = await requestTask.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            Assert.Equal("reply", Assert.Single(replyParts).GetString());
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(replyParts);
+        }
+    }
+
     private static async Task AssertSpotBackendAsync(
         IZLinkBackendRuntimeContext context)
     {
