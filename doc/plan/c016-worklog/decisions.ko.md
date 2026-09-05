@@ -1321,4 +1321,4 @@ callgrind(C vs Rust, DD/DR 64B) 대조로 확정한 비용: 2-part staging의 Ve
 
 ## D-B125 (2026-09-05 21:15, 머신 B) C++ Single REQREP 2%의 원인은 library가 아니라 **러너 모델 차이** — C single REQREP 러너는 HWM backpressure까지 포화 제출(64건마다 completion poll, 처리량 단계 뒤 1초 latency 단계), C++ 러너는 요청 1건마다 reply를 기다림
 astra 계측(`cpp-perf-single-reqrep-pass1-summary.md`): 요청 1건 수명 117 µs = admission 11 + 전송 38 + 서버 12 + 회신 35 + notify→cond_wait 복귀 17 + 다음 제출 3 µs — 중간 future/scheduler hop 없음, 50/25 ms wait timeout 경로도 아님. 즉 C++ library 비용은 왕복당 수 µs이고 8.5k ops/s는 "한 번에 1건" 러너 모델의 결과(C 391k는 pipelining). library 후보 no-go(요청 thread 직접 drain은 public poller 소유권 위반), 변경 0.
-결정: `PERF_SINGLE_TEST_POLICY`(single reqrep: 처리량 단계는 포화 제출·완료 집계, latency 단계 분리)에 맞춰 **C++ single REQREP 러너를 C와 같은 모델로 수정**(러너 변경, library 효과와 합산 금지). 다른 6개 binding의 single REQREP 러너도 같은 모델인지 확인(Single suite 측정 전 선결). astra 러너 job 실행. 커밋: 아래 해시.
+결정: `PERF_SINGLE_TEST_POLICY`(single reqrep: 처리량 단계는 포화 제출·완료 집계, latency 단계 분리)에 맞춰 **C++ single REQREP 러너를 C와 같은 모델로 수정**(러너 변경, library 효과와 합산 금지). 다른 6개 binding의 single REQREP 러너도 같은 모델인지 확인(Single suite 측정 전 선결). astra 러너 job 실행. 커밋 `25c0d7cd4b`.
