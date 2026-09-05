@@ -8,6 +8,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
@@ -20,6 +21,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 final class ZLinkJavaDurableRequest {
     private final Supplier<List<byte[]>> prepare;
     private final BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit;
+    private final BooleanSupplier targetLifecycleEnded;
     private final CompletableFuture<List<byte[]>> completion = new CompletableFuture<>();
     private final long deadline;
     private List<byte[]> frames;
@@ -29,23 +31,33 @@ final class ZLinkJavaDurableRequest {
     private ZLinkJavaDurableRequest(
         Supplier<List<byte[]>> prepare,
         BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit,
+        BooleanSupplier targetLifecycleEnded,
         Duration timeout) {
         this.prepare = prepare;
         this.submit = submit;
+        this.targetLifecycleEnded = targetLifecycleEnded;
         this.deadline = System.nanoTime() + timeout.toNanos();
     }
 
     static CompletionStage<List<byte[]>> request(
         Supplier<List<byte[]>> prepare,
         BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit,
+        BooleanSupplier targetLifecycleEnded,
         Duration timeout) {
-        var request = new ZLinkJavaDurableRequest(prepare, submit, timeout);
+        var request = new ZLinkJavaDurableRequest(
+            prepare, submit, targetLifecycleEnded, timeout);
         request.attempt();
         return request.completion;
     }
 
     private void attempt() {
         if (completion.isDone()) {
+            return;
+        }
+        if (targetLifecycleEnded.getAsBoolean()) {
+            completion.completeExceptionally(new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                "durable request target lifecycle ended", lastFailure));
             return;
         }
         if (deadline - System.nanoTime() <= 0) {
@@ -112,13 +124,9 @@ final class ZLinkJavaDurableRequest {
 
     private void retry() {
         long remaining = deadline - System.nanoTime();
-        if (remaining <= 0) {
-            exhaust();
-            return;
-        }
         ZLinkProcessExecutionLanes.deadlines().schedule(
             this::attempt,
-            Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(10)),
+            Math.max(0, Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(10))),
             TimeUnit.NANOSECONDS);
     }
 

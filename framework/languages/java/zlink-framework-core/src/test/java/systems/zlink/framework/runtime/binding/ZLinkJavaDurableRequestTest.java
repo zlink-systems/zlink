@@ -8,6 +8,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -25,6 +26,41 @@ import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 final class ZLinkJavaDurableRequestTest {
     enum Operation { ACTOR_JOIN, ACTOR_CREATE, BOUND_SESSION_BIND }
 
+    @Test
+    void logicalTargetRemovalEndsAdmittedReplayAsUnavailable() throws Exception {
+        var ended = new AtomicBoolean();
+        var disconnected = new ZlinkRequestException(RequestResult.NOT_CONNECTED);
+        var submitted = new CompletableFuture<List<byte[]>>();
+        var attempts = new AtomicInteger();
+        var completion = ZLinkJavaDurableRequest.request(
+            () -> List.of(new byte[] {1}), (frames, remaining) -> {
+                attempts.incrementAndGet();
+                return submitted;
+            }, ended::get, Duration.ofSeconds(5)).toCompletableFuture();
+
+        ended.set(true);
+        submitted.completeExceptionally(disconnected);
+
+        var failure = assertThrows(java.util.concurrent.ExecutionException.class,
+            () -> completion.get(1, TimeUnit.SECONDS));
+        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
+            assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+        assertEquals(1, attempts.get(), "removed target must not be resubmitted");
+    }
+
+    @Test
+    void removedTargetIsNotSubmittedEvenBeforeFirstAdmission() {
+        var attempts = new AtomicInteger();
+        var completion = ZLinkJavaDurableRequest.request(
+            () -> List.of(new byte[] {1}), (frames, remaining) -> {
+                attempts.incrementAndGet();
+                return CompletableFuture.completedFuture(List.of());
+            }, () -> true, Duration.ofSeconds(5));
+        assertFailure(completion.toCompletableFuture(),
+            ZLinkFrameworkErrorKind.UNAVAILABLE, null);
+        assertEquals(0, attempts.get());
+    }
+
     @ParameterizedTest
     @EnumSource(Operation.class)
     void neverAdmittedExhaustsAsUnavailable(Operation operation) throws Exception {
@@ -36,7 +72,7 @@ final class ZLinkJavaDurableRequestTest {
                 assertSame(header, frames);
                 attempts.incrementAndGet();
                 return CompletableFuture.failedFuture(failure);
-            }, Duration.ofMillis(80));
+            }, () -> false, Duration.ofMillis(80));
         assertFailure(completion.toCompletableFuture(),
             ZLinkFrameworkErrorKind.UNAVAILABLE, failure);
         assertTrue(attempts.get() > 1);
@@ -55,7 +91,7 @@ final class ZLinkJavaDurableRequestTest {
                 CompletableFuture.delayedExecutor(remaining.toNanos(), TimeUnit.NANOSECONDS)
                     .execute(() -> pending.completeExceptionally(failure));
                 return pending;
-            }, Duration.ofMillis(80));
+            }, () -> false, Duration.ofMillis(80));
         assertFailure(completion.toCompletableFuture(),
             ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, failure);
         assertEquals(1, attempts.get(), "the attempt owns the whole remaining deadline");
@@ -90,7 +126,7 @@ final class ZLinkJavaDurableRequestTest {
                         new ZlinkRequestException(RequestResult.NOT_CONNECTED));
                 }
                 return CompletableFuture.completedFuture(terminal);
-            }, timeout);
+            }, () -> false, timeout);
         assertSame(terminal, completion.toCompletableFuture().get(1, TimeUnit.SECONDS));
         assertEquals(1, preparations.get());
         assertEquals(2, attempts.get());
@@ -104,7 +140,7 @@ final class ZLinkJavaDurableRequestTest {
             (frames, remaining) -> {
                 submits.incrementAndGet();
                 return CompletableFuture.completedFuture(List.of());
-            }, Duration.ofMillis(30));
+            }, () -> false, Duration.ofMillis(30));
         assertFailure(completion.toCompletableFuture(),
             ZLinkFrameworkErrorKind.UNAVAILABLE, null);
         assertEquals(0, submits.get());
@@ -119,7 +155,7 @@ final class ZLinkJavaDurableRequestTest {
             (frames, remaining) -> CompletableFuture.failedFuture(
                 attempts.incrementAndGet() == 1
                     ? new ZlinkRequestException(RequestResult.NOT_CONNECTED) : last),
-            Duration.ofMillis(80));
+            () -> false, Duration.ofMillis(80));
         assertFailure(completion.toCompletableFuture(),
             ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, last);
         assertTrue(attempts.get() > 1);
@@ -129,7 +165,7 @@ final class ZLinkJavaDurableRequestTest {
     void synchronousSubmitFailureRetainsItsTypedCause() {
         var failure = new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
         var completion = ZLinkJavaDurableRequest.request(() -> List.of(new byte[] {1}),
-            (frames, remaining) -> { throw failure; }, Duration.ofMillis(30));
+            (frames, remaining) -> { throw failure; }, () -> false, Duration.ofMillis(30));
         assertFailure(completion.toCompletableFuture(),
             ZLinkFrameworkErrorKind.UNAVAILABLE, failure);
     }
@@ -142,7 +178,7 @@ final class ZLinkJavaDurableRequestTest {
             (frames, remaining) -> {
                 attempts.incrementAndGet();
                 return CompletableFuture.completedFuture(List.of(new byte[] {0}));
-            }, Duration.ofSeconds(1))
+            }, () -> false, Duration.ofSeconds(1))
             .thenApply(frames -> { throw malformed; });
         assertSame(malformed, assertThrows(CompletionException.class,
             () -> completion.toCompletableFuture().join()).getCause());
@@ -154,7 +190,7 @@ final class ZLinkJavaDurableRequestTest {
         var failure = new ZlinkSubmitException(SubmitResult.TERMINATED);
         var completion = ZLinkJavaDurableRequest.request(() -> List.of(new byte[] {1}),
             (frames, remaining) -> CompletableFuture.failedFuture(failure),
-            Duration.ofSeconds(1));
+            () -> false, Duration.ofSeconds(1));
         assertSame(failure, assertThrows(CompletionException.class,
             () -> completion.toCompletableFuture().join()).getCause());
     }
