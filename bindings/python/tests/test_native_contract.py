@@ -25,6 +25,9 @@ def test_ffi_layouts_are_the_core_0_17_layouts():
     assert (ctypes.sizeof(ZlinkRoutingId), ctypes.alignment(ZlinkRoutingId)) == (256, 1)
     assert (ctypes.sizeof(ZlinkCompletion), ctypes.alignment(ZlinkCompletion)) == (312, 8)
     assert (ctypes.sizeof(ZlinkMonitorEvent), ctypes.alignment(ZlinkMonitorEvent)) == (800, 8)
+    assert ZlinkMonitorEvent.connection_id.offset == 784
+    assert ZlinkMonitorEvent.transport_lane.offset == 792
+    assert ZlinkMonitorEvent.flags.offset == 796
     assert (ctypes.sizeof(ZlinkMonitorStatus), ctypes.alignment(ZlinkMonitorStatus)) == (232, 8)
     assert (ctypes.sizeof(ZlinkSocketMonitorOpenOptions), ctypes.alignment(ZlinkSocketMonitorOpenOptions)) == (16, 8)
     expected_poll_item = (24, 8) if os.name == "nt" else (16, 8)

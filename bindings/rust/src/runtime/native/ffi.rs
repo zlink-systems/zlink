@@ -439,6 +439,32 @@ pub struct zlink_monitor_event_t {
     pub flags: u32,
 }
 
+#[cfg(test)]
+mod monitor_event_layout_tests {
+    use super::zlink_monitor_event_t;
+    use std::mem::{MaybeUninit, size_of};
+
+    #[test]
+    fn monitor_event_layout_matches_c_abi() {
+        let value = MaybeUninit::<zlink_monitor_event_t>::uninit();
+        let base = value.as_ptr();
+
+        assert_eq!(size_of::<zlink_monitor_event_t>(), 800);
+        assert_eq!(
+            unsafe { core::ptr::addr_of!((*base).connection_id) as usize - base as usize },
+            784
+        );
+        assert_eq!(
+            unsafe { core::ptr::addr_of!((*base).transport_lane) as usize - base as usize },
+            792
+        );
+        assert_eq!(
+            unsafe { core::ptr::addr_of!((*base).flags) as usize - base as usize },
+            796
+        );
+    }
+}
+
 pub type zlink_socket_monitor_event_t = zlink_monitor_event_t;
 
 #[repr(C)]
