@@ -9,3 +9,4 @@
 - [2026-09-05-dotnet-multi-tcp-before.ko.md](2026-09-05-dotnet-multi-tcp-before.ko.md) — .NET Multi tcp 4 pattern paired before(44.7/51.6/53.6/44.8%)
 - [2026-09-05-java-multi-tcp-before.ko.md](2026-09-05-java-multi-tcp-before.ko.md) — Java Multi tcp 4 pattern paired before(50.8/15.1/24.0/81.0%)
 - [2026-09-05-node-multi-tcp-before.ko.md](2026-09-05-node-multi-tcp-before.ko.md) — Node Multi tcp 4 pattern paired before(27.6/18.7/17.9/28.6%)
+- [2026-09-05-go-multi-tcp-before.ko.md](2026-09-05-go-multi-tcp-before.ko.md) — Go Multi tcp 4 pattern paired before(31.5/2.9/2.8/47.3%)
