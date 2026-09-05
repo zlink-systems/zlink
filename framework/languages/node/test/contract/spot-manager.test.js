@@ -3923,6 +3923,36 @@ test('spot timer rejects invalid options', async () => {
   );
 });
 
+test('Spot timer callbacks advance nominal ticks when platform delays truncate fractional milliseconds', async () => {
+  await withFakeTimerClock(async (clock) => {
+    const ticks = [];
+    class BotTickHandler {
+      async handle(_spot, tick) {
+        ticks.push(tick);
+        if (ticks.length === 1) clock.advanceBy(0.25);
+      }
+    }
+    class BotSpot {
+      async onInitialize() {
+        await this.context.addTimer('bot-tick', 500, BotTickHandler);
+      }
+    }
+    const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [BotSpot] });
+    const created = await manager.create('test.mesh', BotSpot);
+    try {
+      await clock.runNext();
+      await clock.runNext();
+      await clock.runNext();
+      assert.deepEqual(ticks.map(tick => tick.deliveryIndex), [1n, 2n, 3n]);
+      assert.deepEqual(ticks.map(tick => tick.scheduledIndex), [1n, 2n, 3n]);
+      assert.deepEqual(ticks.map(tick => tick.skippedTicks), [0n, 0n, 0n]);
+      assert.ok(ticks.every(tick => tick.scheduledIndex >= tick.deliveryIndex));
+    } finally {
+      await manager.close('test.mesh', created.spotId);
+    }
+  }, delay => Math.max(1, Math.trunc(delay)));
+});
+
 test('spot managed timer keeps elapsed scheduling monotonic and relocation cursors in Unix milliseconds', async (t) => {
   await withFakeTimerClock(async (clock) => {
     const wallStart = 1_800_000_000_000;
@@ -4152,7 +4182,7 @@ test('spot timer handlers retain one instance for the Spot activation', async ()
   assert.equal(disposes, 1);
 });
 
-async function withFakeTimerClock(run) {
+async function withFakeTimerClock(run, platformDelay = delay => delay) {
   const originalNow = Object.getOwnPropertyDescriptor(performance, 'now');
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
@@ -4165,7 +4195,7 @@ async function withFakeTimerClock(run) {
     const timer = {
       id: nextId++,
       callback,
-      delay: Number(delay) || 0,
+      delay: platformDelay(Number(delay) || 0),
       cleared: false,
       unref() {}
     };

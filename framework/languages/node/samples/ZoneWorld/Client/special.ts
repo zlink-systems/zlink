@@ -388,33 +388,66 @@ async function runBots(gatewayEndpoint: string, opsEndpoint: string): Promise<vo
   const ops = connector(opsEndpoint);
   try {
     await Promise.all([game.connect(), ops.connect()]);
-    await watch(ops);
+    const nodes = await watch(ops);
     const joined = await joinAndWaitForOwnedState(game, 'player-f');
     await resetMaintenance(ops);
-    await setMaintenance(ops, NodeIds.east, true);
     await verifyRepresentativeBotMovement(game);
     console.log('scenario ZW-F1 passed');
-    await ops.request(new AnnounceWorldReq('bot-path-check')).packetName(PacketNames.announceWorldReq).submit();
+    await verifyBotReversalOnRejection(game, ops, nodes);
+    console.log('scenario ZW-F3 passed');
+    // ZW-F4 is negative evidence the runner reads from the owner logs: this traffic walks
+    // every push path (announce, rejected move, tick) while bots share the zone.
+    await ops.request(new AnnounceWorldReq('bots receive nothing')).packetName(PacketNames.announceWorldReq).submit();
     await expectRejected(game, -40, joined.y, MoveRejectReasons.outOfRange);
     await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-      .where((message) => message.payload.players.some((player) => player.isBot)).submit();
-    console.log('scenario ZW-F3 passed');
-    const peak = await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-      .where((message) => message.payload.players.some((player) =>
-        player.playerId === BotIds.northEastX && player.zoneId === ZoneIds.northWest && player.x >= 46))
-      .timeout(60_000).submit();
-    const candidate = peak.payload.players.find((player) =>
-      player.playerId === BotIds.northEastX && player.zoneId === ZoneIds.northWest && player.x >= 46);
-    if (candidate === undefined) throw new Error('ZW-F4 boundary bot disappeared.');
-    await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-      .where((message) => message.payload.players.some((player) =>
-        player.playerId === candidate.playerId && player.x < candidate.x))
-      .timeout(60_000).submit();
+      .where((message) => message.payload.players.some((player) => player.isBot))
+      .timeout(20_000).submit();
     console.log('scenario ZW-F4 passed');
   } finally {
-    await setMaintenance(ops, NodeIds.east, false).catch(() => undefined);
     await closeAll(game, ops);
   }
+}
+
+// An X bot whose next step crosses the vertical boundary is refused by the maintained
+// destination owner and turns around. The destination owner comes from the Ops report,
+// so the assertion holds whichever node currently owns each north zone.
+async function verifyBotReversalOnRejection(
+  game: ZlinkStreamConnector,
+  ops: ZlinkStreamConnector,
+  nodes: WatchNodesRes
+): Promise<void> {
+  const boundary = await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+    .where((message) => findAboutToCross(message.payload) !== undefined)
+    .timeout(30_000).submit();
+  const bot = findAboutToCross(boundary.payload);
+  if (bot === undefined) throw new Error('ZW-F3 boundary observation lost its bot.');
+  const eastbound = bot.zoneId === ZoneIds.northWest;
+  const targetNodeId = requireZoneOwner(nodes, eastbound ? ZoneIds.northEast : ZoneIds.northWest).nodeId;
+  await setMaintenance(ops, targetNodeId, true);
+  try {
+    let peak = bot.x;
+    const reversed = await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+      .where((message) => {
+        const current = message.payload.players.find((player) => player.playerId === bot.playerId);
+        if (current === undefined) return false;
+        if (eastbound ? current.x > peak : current.x < peak) peak = current.x;
+        return eastbound ? current.x < peak : current.x > peak;
+      })
+      .timeout(30_000).submit();
+    const after = requirePlayer(reversed.payload.players, bot.playerId);
+    zlinkStreamAssert.ensure(
+      eastbound ? after.x < peak : after.x > peak,
+      `Bot '${bot.playerId}' refused entry to '${targetNodeId}' under maintenance did not turn around.`
+    );
+  } finally {
+    await setMaintenance(ops, targetNodeId, false);
+  }
+}
+
+function findAboutToCross(state: ZoneStateNotify): PlayerView | undefined {
+  return state.players.find((player) => player.isBot && player.playerId.endsWith('-x')
+    && ((player.zoneId === ZoneIds.northWest && player.x + ZoneWorldSpec.botStep >= ZoneWorldSpec.zoneSplit)
+      || (player.zoneId === ZoneIds.northEast && player.x - ZoneWorldSpec.botStep < ZoneWorldSpec.zoneSplit)));
 }
 
 async function verifyRepresentativeBotMovement(game: ZlinkStreamConnector): Promise<void> {

@@ -424,11 +424,16 @@ export class ZLinkManagedTimer implements ZLinkTimer {
   }
 
   private selectScheduledIndex(): bigint {
+    const nextScheduledIndex = this.lastScheduledIndex + 1n;
     if (this.options.overrunPolicy === ZLinkTimerOverrunPolicy.DelayNextTick) {
-      return this.lastScheduledIndex + 1n;
+      return nextScheduledIndex;
     }
 
-    const dueScheduledIndex = BigInt(Math.max(1, Math.floor(this.elapsedMs() / this.periodMs)));
+    // The due tick is the latest nominal tick the monotonic clock has reached, but never
+    // one that was already delivered: the platform timer truncates the delay to whole
+    // milliseconds and may start the callback a fraction before the nominal due time.
+    const elapsedIndex = BigInt(Math.floor(this.elapsedMs() / this.periodMs));
+    const dueScheduledIndex = elapsedIndex > nextScheduledIndex ? elapsedIndex : nextScheduledIndex;
     if (this.options.overrunPolicy === ZLinkTimerOverrunPolicy.SkipLateTicks) {
       return dueScheduledIndex;
     }
@@ -439,7 +444,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
       return dueScheduledIndex - maxCatchUpTicks + 1n;
     }
 
-    return this.lastScheduledIndex + 1n;
+    return nextScheduledIndex;
   }
 
   private elapsedMs(): number {
