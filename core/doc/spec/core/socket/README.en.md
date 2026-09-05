@@ -165,8 +165,12 @@ observes another peer with the same routing id. The option value is an
 new duplicate pipe; the unregistered duplicate pipe is closed immediately. The
 connector therefore observes that pipe's termination through its monitor and
 reconnects per its connect intent, and an attempt made after the existing pipe
-has terminated is admitted. A request already submitted on the rejected pipe
-ends exactly once with `ZLINK_REQUEST_NOT_CONNECTED` (errno `EHOSTUNREACH`). The
+has terminated is admitted. The connector cannot tell the rejected pipe's
+termination from any other physical disconnect (the wire carries no rejection
+reason), so a request already admitted on that pipe keeps its correlation and
+timeout budget without payload replay, like any transient disconnect, and ends
+with its own timeout. Flows that reconnect often should use
+`ZLINK_RID_DUPLICATE_HANDOVER`. The
 READY event a connector observes means the transport connection was established,
 not that the peer ROUTER admitted the routing id. Under `ZLINK_RID_DUPLICATE_HANDOVER`, a reconnecting pipe
 in the same direction takes over the existing pipe. If pipes in opposite

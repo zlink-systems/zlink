@@ -159,8 +159,10 @@ routing id가 들어왔을 때의 정책을 정한다. 값은 `int`로 설정하
 `ZLINK_RID_DUPLICATE_REJECT`는 기존 pipe를 유지하고 새 중복 pipe를 등록하지
 않으며, 등록하지 않은 중복 pipe는 즉시 닫는다. 따라서 connector는 그 pipe의 종료를
 monitor로 관찰하고 connect intent에 따라 다시 연결하며, 기존 pipe가 종료된 뒤의 시도가
-admission된다. 거부된 pipe에 이미 제출된 request는 `ZLINK_REQUEST_NOT_CONNECTED`(errno
-`EHOSTUNREACH`)로 정확히 한 번 종결된다. Connector가 관찰하는 READY event는 transport 연결
+admission된다. 거부된 pipe의 종료는 connector에게 다른 physical 단절과 구분되지 않으므로(wire에 거부
+사유 없음), 그 pipe에 이미 admit된 request는 다른 일시적 단절과 같이 payload replay 없이 기존 correlation·
+timeout budget을 유지하다가 자기 timeout으로 종결된다. 재연결이 잦은 흐름은 `ZLINK_RID_DUPLICATE_HANDOVER`를
+권장한다. Connector가 관찰하는 READY event는 transport 연결
 성립을 뜻하며 peer ROUTER의 routing id admission을 뜻하지 않는다. `ZLINK_RID_DUPLICATE_HANDOVER`에서는 같은 방향에서 다시 연결한 pipe가
 기존 pipe를 인수한다. 서로 반대 방향의 pipe가 충돌하면 두 peer의 routing id를
 비교해 양쪽이 같은 방향 하나를 선택한다. 그 선택으로 물러나는 방향에서 이미 admit된

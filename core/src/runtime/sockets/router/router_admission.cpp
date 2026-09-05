@@ -359,8 +359,13 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
         const bool reciprocal_duplicate =
           existing_outpipe->locally_initiated != locally_initiated_;
         if (!_handover && !same_local_endpoint_reconnect
-            && !(paired_application && reciprocal_duplicate))
+            && !(paired_application && reciprocal_duplicate)) {
+            // A rejected identity is terminal for this pipe, not an identity
+            // frame that may arrive later. Retire it outside the route locks.
+            if (actions_ && pipe_->retain_lifetime_ref ())
+                actions_->terminate_pipe = pipe_;
             return false;
+        }
 
         if (!duplicate_pipe_should_replace (*existing_outpipe, routing_id_, locally_initiated_)) {
             unsigned char buf[5];

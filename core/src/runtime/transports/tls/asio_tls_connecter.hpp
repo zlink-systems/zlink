@@ -12,6 +12,7 @@
 #include <memory>
 
 #include "utils/fd.hpp"
+#include "core/endpoint.hpp"
 #include "core/own.hpp"
 #include "utils/stdint.hpp"
 #include "core/io_object.hpp"
@@ -107,6 +108,8 @@ class asio_tls_connecter_t ZLINK_FINAL : public own_t, public io_object_t
 
     //  String representation of endpoint to connect to
     std::string _endpoint_str;
+    //  One identity shared by all events and the engine of this attempt.
+    endpoint_uri_pair_t _attempt_endpoint_pair;
 
     //  Reference to the session we belong to.
     zlink::session_base_t *const _session;

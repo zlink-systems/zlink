@@ -991,7 +991,6 @@ int zlink::socket_base_t::ensure_async_command_processing (bool retain_)
     socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
     for (;;) {
         bool wait_for_quiescence = false;
-        bool started_here = false;
         {
             socket_public_api_scope_t admission (lifecycle);
             if (!admission.acquired ())
@@ -1017,7 +1016,6 @@ int zlink::socket_base_t::ensure_async_command_processing (bool retain_)
                 }
                 if (start_async_mailbox_processing (io_thread) != 0)
                     return -1;
-                started_here = true;
             }
         }
 
@@ -1029,8 +1027,8 @@ int zlink::socket_base_t::ensure_async_command_processing (bool retain_)
             }
             continue;
         }
-        if (started_here)
-            lifecycle.wait_async_started (1000);
+        // Command ownership is installed already. Its first callback may
+        // need this same I/O thread (inproc reconnect bootstraps its peer).
         return 0;
     }
 }
@@ -1116,8 +1114,10 @@ void zlink::socket_base_t::request_unowned_async_command_processing_stop (
   bool wait_for_quiescence_)
 {
     socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+    // A callback must leave the shared executor available to the peer whose
+    // mailbox it is stopping. Only an external caller can wait for detach.
     if (wait_for_quiescence_
-        && current_async_mailbox_dispatch_socket () != this) {
+        && current_async_mailbox_dispatch_socket () == NULL) {
         const bool stop_started = stop_async_mailbox_processing (true);
         if (stop_started || lifecycle.is_async_quiesce_pending ())
             wait_async_quiesced (10000);
@@ -1181,6 +1181,18 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
           async_owner_test_idle_stop_gate_held);
 #endif
 
+        // An empty mailbox can still owe a pipe termination acknowledgement.
+        // Keep its executor installed until the existing pipe lifecycle owner
+        // removes that pipe; the later ack must not require an application poll.
+        {
+            scoped_lock_t endpoint_lock (monitor_runtime ().sync);
+            const socket_endpoint_runtime_t &endpoints = endpoint_runtime ();
+            for (size_t i = 0; i != endpoints.attached_pipe_count (); ++i) {
+                const pipe_t *const pipe = endpoints.attached_pipe (i);
+                if (pipe && !pipe->is_lifecycle_active ())
+                    return false;
+            }
+        }
         mailbox_t *const mailbox = static_cast<mailbox_t *> (_mailbox);
         // Keep the owner gate across the final empty check, physical detach and
         // lifecycle publication. An acquire therefore either cancels the
