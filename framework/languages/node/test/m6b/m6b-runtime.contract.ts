@@ -4011,6 +4011,38 @@ test('reply, timeout and shutdown races settle each Promise exactly once', async
   await shutdownResult;
 });
 
+test('durable sender owns deadline settlement while the registry retains identity and cancellation', async () => {
+  const clock = new ManualClock();
+  const registry = new OperationRegistry<string>(clock, 1);
+  const operations = new ServiceTerminalOperationRegistry(registry);
+  const pending = operations.reserve(10, 'sender');
+  assert.throws(() => operations.reserve(10, 'sender'), /capacity/i);
+  clock.fireAll();
+  assert.equal(operations.isPending(pending.id), true);
+  assert.equal(registry.size, 1);
+  const exhausted = new Error('sender classified exhaustion');
+  const rejected = assert.rejects(pending.promise, error => error === exhausted);
+  assert.equal(operations.fail(pending.id, exhausted), true);
+  assert.equal(operations.reply(pending.id, 'late'), false);
+  assert.equal(operations.fail(pending.id, exhausted), false);
+  await rejected;
+  assert.equal(registry.size, 0);
+
+  const cancelled = operations.reserve(10, 'sender');
+  const cancellation = assert.rejects(cancelled.promise, OperationCancelledError);
+  assert.equal(operations.cancel(cancelled.id), true);
+  clock.fireAll();
+  await cancellation;
+  assert.equal(registry.size, 0);
+
+  const closed = operations.reserve(10, 'sender');
+  const shutdown = assert.rejects(closed.promise, OperationCancelledError);
+  operations.close();
+  clock.fireAll();
+  await shutdown;
+  assert.equal(registry.size, 0);
+});
+
 test('bound session transition wire format fences the binding generation', async () => {
   const header = encodeBoundSessionBindHeader(
     23n,

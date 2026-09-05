@@ -11,7 +11,8 @@ const {
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const {
   RequestResult,
-  SubmitResult
+  SubmitResult,
+  ZLinkBackendResultError
 } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
 const {
@@ -130,7 +131,7 @@ test('clearing an Actor packet target preserves Session relocation terminal owne
   assert.equal(ownershipClears, 0);
 });
 
-test('managed stream binds Session Actors through the Framework service without binding service APIs', async () => {
+test('managed stream binds Session Actors through the Framework service without binding service APIs', async (t) => {
   const actor = {
     actorId: 'actor-framework-service',
     generation: 7n,
@@ -140,10 +141,25 @@ test('managed stream binds Session Actors through the Framework service without 
   const bindings = [];
   const bindAuthorities = [];
   let bindAttempts = 0;
+  const transportAttempts = [];
+  const serviceRuntime = new ServiceStatefulRuntime({
+    setServiceIngress() {},
+    async requestService(_targetNodeRid, parts) {
+      transportAttempts.push(Buffer.from(parts[0]));
+      if (transportAttempts.length === 1) {
+        throw new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
+      }
+      const request = serviceStatefulWire.decodeStatefulHeader(parts[0]);
+      return [serviceStatefulWire.encodeStatefulReply(request.correlation, RequestResult.Ok, 0, {
+        kind: 'streamBind', bindingGeneration: 1n, authorityOwnerGeneration: 9n
+      })];
+    }
+  }, 'session-owner', 3n);
+  t.after(() => serviceRuntime.close());
   let nextOperation = 1n;
-  const operation = (kind) => {
+  const operation = (kind, promise) => {
     const id = { high: 0n, low: nextOperation++ };
-    operations.set(id.low, kind);
+    operations.set(id.low, { kind, promise });
     return id;
   };
   const service = {
@@ -162,39 +178,34 @@ test('managed stream binds Session Actors through the Framework service without 
       };
     },
     lookupActor() { return operation('lookup'); },
-    bindActor(sessionRid, value, _timeoutMs, _onBindingReplaced, actorAuthority) {
+    bindActor(sessionRid, value, timeoutMs, onBindingReplaced, actorAuthority) {
       bindAttempts += 1;
       bindAuthorities.push(actorAuthority);
-      if (bindAttempts === 1) {
-        throw Object.assign(new Error('diagnostic text is not part of classification'), {
-          result: SubmitResult.NotConnected
-        });
-      }
-      bindings.push({
-        sessionRid,
-        actor: value,
-        bindingGeneration: 1n,
-        membershipEpoch: 1n
-      });
-      return operation('bind');
+      const pending = serviceRuntime.bindSession(
+        sessionRid, value, timeoutMs, async () => true,
+        onBindingReplaced, undefined, actorAuthority
+      );
+      return operation('bind', pending.promise);
     },
     unbindActor() { return operation('unbind'); },
     bindings() { return bindings; },
     sendToActor() { return 0; }
   };
   const completions = {
-    submit(operation) {
+    async submit(operation) {
       const id = operation();
-      const kind = operations.get(id.low);
-      return Promise.resolve({
-        terminalResult: 0,
-        failureErrno: 0,
+      const { kind, promise } = operations.get(id.low);
+      const result = await promise;
+      if (kind === 'bind') bindings.push(...serviceRuntime.allSessionBindings());
+      return {
+        terminalResult: result?.terminalResult ?? 0,
+        failureErrno: result?.failureCode ?? 0,
         operationKind: 0,
         kindData: kind === 'lookup'
           ? { kind: 'actorLookupCompletion', location: { actor } }
           : null,
         parts: []
-      });
+      };
     }
   };
   const rawStreamSocket = {
@@ -226,13 +237,13 @@ test('managed stream binds Session Actors through the Framework service without 
   }, 1000, undefined, undefined, actorAuthority);
 
   assert.equal(bindings.length, 1);
-  assert.equal(bindAttempts, 2);
+  assert.equal(bindAttempts, 1);
+  assert.equal(transportAttempts.length, 2);
+  assert.deepEqual(transportAttempts[1], transportAttempts[0]);
+  assert.deepEqual(serviceStatefulWire.decodeStatefulHeader(transportAttempts[0]).actor, {
+    actor, targetNodeGeneration: 3n, authorityOwnerGeneration: 9n, ownerLeaseGeneration: 10n
+  });
   assert.deepEqual(bindAuthorities, [
-    {
-      targetNodeGeneration: 3n,
-      authorityOwnerGeneration: 9n,
-      ownerLeaseGeneration: 10n
-    },
     {
       targetNodeGeneration: 3n,
       authorityOwnerGeneration: 9n,
@@ -276,10 +287,11 @@ test('session Actor bind forwards the resolved Location authority to the native 
   assert.deepEqual(bindCalls[0][4], actorAuthority);
 });
 
-test('managed stream bind admission deadline preserves the route failure as a typed DeadlineExceeded', async () => {
+test('managed stream preserves synchronous service failure without reserving another bind operation', async () => {
   const routeFailure = Object.assign(new Error('remote route is not connected'), {
     result: SubmitResult.NotConnected
   });
+  let bindAttempts = 0;
   const service = {
     start() {}, shutdown() { return 0; }, close() {},
     status() {
@@ -289,7 +301,7 @@ test('managed stream bind admission deadline preserves the route failure as a ty
       };
     },
     lookupActor() { return { low: 1n }; },
-    bindActor() { throw routeFailure; },
+    bindActor() { bindAttempts++; throw routeFailure; },
     unbindActor() { throw new Error('not used'); },
     bindings() { return []; }, sendToActor() { return 0; }
   };
@@ -322,13 +334,8 @@ test('managed stream bind admission deadline preserves the route failure as a ty
       actorId: 'actor-deadline', objectGeneration: 1n, meshName: 'play', nodeRid: 'node-a'
     }, 0),
     (error) => {
-      assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.DeadlineExceeded);
-      assert.equal(
-        framework.internalFrameworkErrorKind(error),
-        framework.ZLinkFrameworkInternalErrorKind.DeadlineExceeded
-      );
-      assert.equal(error.cause, routeFailure);
-      assert.match(error.message, /actor bind deadline/);
+      assert.equal(error, routeFailure);
+      assert.equal(bindAttempts, 1);
       return true;
     }
   );

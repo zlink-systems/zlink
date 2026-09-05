@@ -205,6 +205,24 @@ bool reqrep::take_next_socket_pending_request_for_logical_rid_locked (
     return false;
 }
 
+bool reqrep::take_next_socket_pending_request_for_transport_pair_locked (
+  reqrep::socket_request_reply_state_t *state_, uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_, reqrep::pending_request_t *pending_out_)
+{
+    if (!state_ || transport_pair_id_ == 0 || transport_pair_generation_ == 0)
+        return false;
+    for (reqrep::pending_request_store_t::iterator pending =
+           state_->pending_requests.begin ();
+         pending != state_->pending_requests.end (); ++pending) {
+        if (pending->second.transport_pair_id == transport_pair_id_
+            && pending->second.transport_pair_generation
+                 == transport_pair_generation_)
+            return take_pending_request (&state_->pending_requests, pending,
+                                         pending_out_);
+    }
+    return false;
+}
+
 bool reqrep::take_next_socket_pending_request_locked (
   reqrep::socket_request_reply_state_t *state_,
   reqrep::pending_request_t *pending_out_)

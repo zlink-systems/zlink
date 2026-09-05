@@ -5,6 +5,7 @@
 #include "sockets/router/router.hpp"
 #include "sockets/router/router_debug.hpp"
 
+#include "api/socket/socket_request_reply_internal.hpp"
 #include "core/c_api_copy_internal.hpp"
 #include "core/pipe.hpp"
 #include "protocol/wire.hpp"
@@ -399,6 +400,11 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
         const bool old_locally_initiated = existing_outpipe->locally_initiated;
         const uint32_t old_peer_weight = existing_outpipe->weight;
         old_pipe->invalidate_router_route_binding ();
+        if (actions_) {
+            actions_->superseded_pair_id = old_pipe->get_transport_pair_id ();
+            actions_->superseded_pair_generation =
+              old_pipe->get_transport_pair_generation ();
+        }
         erase_out_pipe (old_pipe);
         old_pipe->set_router_socket_routing_id (new_routing_id);
         add_out_pipe (ZLINK_MOVE (new_routing_id), old_pipe, old_locally_initiated);
@@ -442,6 +448,16 @@ void router_t::finish_route_adoption (pipe_t *adopted_pipe_,
     if (!actions_)
         return;
     const bool route_published = actions_->cache_completion;
+    if (actions_->superseded_pair_id != 0) {
+        // A standby retains its lanes, but requests already admitted there
+        // cannot follow the replacement route. Complete outside the route
+        // and transport locks through the pending record's terminal owner.
+        socket_reqrep_internal::fail_pending_requests_for_transport_pair (
+          request_reply_state (), actions_->superseded_pair_id,
+          actions_->superseded_pair_generation);
+        actions_->superseded_pair_id = 0;
+        actions_->superseded_pair_generation = 0;
+    }
     if (actions_->terminate_pipe) {
         actions_->terminate_pipe->terminate (true);
         actions_->terminate_pipe->release_lifetime_ref ();

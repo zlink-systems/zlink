@@ -1,6 +1,7 @@
 import {
   ZLinkFrameworkInternalErrorKind,
-  createInternalFrameworkException
+  createInternalFrameworkException,
+  wireReplyFailureException
 } from '../framework-errors-internal';
 import type {
   ActorRef,
@@ -209,18 +210,19 @@ export class ZLinkManagedStream implements ZLinkStream {
         );
       }
       await this.requireSuccessfulCompletion(
-        this.submitNativeSessionBind(
-          route.service,
-          route.completions,
-          nativeActor,
-          timeoutMs,
-          signal,
-          onBindingReplaced === undefined
-            ? undefined
-            : (_actorId, retiredSession, replacedActor) => {
-                onBindingReplaced(replacedActor, retiredSession);
-              },
-          toStreamSessionActorAuthorityFence(authorityFence)
+        route.completions.submit(
+          () => route.service.bindActor(
+            this.backendRoutingId(),
+            nativeActor,
+            timeoutMs,
+            onBindingReplaced === undefined
+              ? undefined
+              : (_actorId, retiredSession, replacedActor) => {
+                  onBindingReplaced(replacedActor, retiredSession);
+                },
+            toStreamSessionActorAuthorityFence(authorityFence)
+          ),
+          signal
         ),
         `Actor '${actor.actorId}' native session bind`,
       );
@@ -429,58 +431,14 @@ export class ZLinkManagedStream implements ZLinkStream {
         completion.terminalResult !== 0
         && !acceptedTerminalResults.has(completion.terminalResult)
       ) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+        throw wireReplyFailureException(
+          completion.terminalResult,
+          completion.failureErrno,
           `${operationName} failed with result ${completion.terminalResult} (errno ${completion.failureErrno}).`
         );
       }
     } finally {
       closeMeshCompletion(completion);
-    }
-  }
-
-  private async submitNativeSessionBind(
-    service: StreamSessionService,
-    completions: ZLinkMeshCompletionTable,
-    actor: ZLinkBackendActorRef,
-    timeoutMs: number,
-    signal?: AbortSignal,
-    onBindingReplaced?: (
-      actor: string,
-      retiredSession: ServiceRetiredBoundSessionRouteFence,
-      replacedActor: ServiceActorRef
-    ) => void,
-    actorAuthority?: StreamSessionActorAuthorityFence
-  ): Promise<ZLinkMeshCompletion> {
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      throwIfAborted(signal);
-      try {
-        return completions.submit(
-          () => service.bindActor(
-            this.backendRoutingId(),
-            actor,
-            Math.max(0, deadline - Date.now()),
-            onBindingReplaced,
-            actorAuthority
-          ),
-          signal
-        );
-      } catch (error) {
-        if (!isBackendNotConnectedError(error)) {
-          throw error;
-        }
-        if (Date.now() >= deadline) {
-          const status = service.status();
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-            `STREAM session '${this.sessionId}' was not admitted before the actor bind deadline `
-            + `(active sessions ${status.sessionCount}).`,
-            error
-          );
-        }
-        await waitForSessionAdmission(signal);
-      }
     }
   }
 
@@ -548,18 +506,4 @@ function toStreamSessionActorAuthorityFence(
     authorityOwnerGeneration: fence.authorityOwnerGeneration,
     ownerLeaseGeneration: fence.ownerLeaseGeneration
   };
-}
-
-function waitForSessionAdmission(signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', aborted);
-      resolve();
-    }, 5);
-    const aborted = () => {
-      clearTimeout(timer);
-      reject(signal?.reason);
-    };
-    signal?.addEventListener('abort', aborted, { once: true });
-  });
 }

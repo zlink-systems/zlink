@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto';
+import { ZLinkFrameworkException } from '../../../contracts';
+import { internalFrameworkWireReply } from '../../framework-errors-internal';
 import {
   Message,
   RoutingId as BindingRoutingId,
@@ -2477,6 +2479,9 @@ export function genericOperationFailure(error: unknown): RawServiceRequestResult
 }
 
 function statefulOperationFailure(error: unknown): RawServiceRequestResult {
+  if (error instanceof ZLinkFrameworkException) {
+    return internalFrameworkWireReply(error);
+  }
   if (error instanceof OperationTimeoutError) {
     return { terminalResult: RequestResult.TimedOut, failureCode: 0 };
   }

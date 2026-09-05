@@ -117,10 +117,14 @@ class router_t : public routing_socket_base_t
     {
         route_adoption_actions_t () :
             terminate_pipe (NULL),
+            superseded_pair_id (0),
+            superseded_pair_generation (0),
             cache_completion (false)
         {
         }
         pipe_t *terminate_pipe;
+        uint64_t superseded_pair_id;
+        uint64_t superseded_pair_generation;
         bool cache_completion;
     };
 

@@ -66,7 +66,7 @@ export class OperationRegistry<T> {
     }
   }
 
-  reserve(timeoutMs: number): PendingOperation<T> {
+  reserve(timeoutMs: number, timeoutOwner: 'registry' | 'sender' = 'registry'): PendingOperation<T> {
     if (this.closed) throw new Error('Operation registry is closed.');
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
       throw new RangeError('timeoutMs must be a non-negative finite number.');
@@ -85,10 +85,14 @@ export class OperationRegistry<T> {
     });
     const entry: Entry<T> = { generation, resolve, reject };
     this.entries.set(id, entry);
-    entry.timer = this.clock.setTimeout(
-      () => this.rejectIfCurrent(id, generation, new OperationTimeoutError(id)),
-      timeoutMs
-    );
+    // Durable senders classify exhaustion from admission history. Keep their
+    // identity and cancellation here without racing that decision with a timer.
+    if (timeoutOwner === 'registry') {
+      entry.timer = this.clock.setTimeout(
+        () => this.rejectIfCurrent(id, generation, new OperationTimeoutError(id)),
+        timeoutMs
+      );
+    }
     return { id, promise };
   }
 

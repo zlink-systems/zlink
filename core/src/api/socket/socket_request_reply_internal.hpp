@@ -125,8 +125,8 @@ struct pending_request_t
     pending_request_t &operator= (const pending_request_t &) = delete;
 
     pending_request_identity_t identity;
-    // Stable logical owner snapshots. Physical pair identity is only a stale
-    // reply fence; explicit endpoint/RID removal resolves by these values.
+    // Explicit endpoint/RID removal resolves by logical owner; handover and
+    // the stale reply fence use the submit-time physical pair identity.
     fixed_routing_id_key_t logical_rid;
     uint64_t transport_pair_id;
     uint64_t transport_pair_generation;
@@ -620,6 +620,9 @@ bool take_next_socket_pending_request_for_logical_endpoint_locked (
 bool take_next_socket_pending_request_for_logical_rid_locked (
   socket_request_reply_state_t *state_, const zlink_routing_id_t *logical_rid_,
   pending_request_t *pending_out_);
+bool take_next_socket_pending_request_for_transport_pair_locked (
+  socket_request_reply_state_t *state_, uint64_t transport_pair_id_,
+  uint64_t transport_pair_generation_, pending_request_t *pending_out_);
 bool take_next_socket_pending_request_locked (
   socket_request_reply_state_t *state_, pending_request_t *pending_out_);
 
@@ -650,6 +653,9 @@ void fail_pending_requests_for_logical_endpoint (
 void fail_pending_requests_for_logical_rid (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   const zlink_routing_id_t *logical_rid_);
+void fail_pending_requests_for_transport_pair (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_);
 int drain_close_request_reply_socket (const socket_handle_t &handle_);
 void cleanup_request_reply_socket (const socket_handle_t &handle_);
 

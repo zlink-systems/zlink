@@ -16,7 +16,8 @@ SETUP_TEARDOWN_TESTCONTEXT
 namespace
 {
 const int wait_ms = 5000;
-const uint32_t losing_request_timeout_ms = 600;
+const uint32_t losing_request_timeout_ms = 2000;
+const int handover_completion_limit_ms = 200;
 
 typedef std::chrono::steady_clock clock_type;
 
@@ -34,7 +35,7 @@ struct received_request_t
 
 struct scenario_result_t
 {
-    int losing_timeout_ms;
+    int losing_completion_ms;
     int standby_observation_ms;
     int arbitration_disconnects_a;
     int arbitration_disconnects_z;
@@ -116,11 +117,11 @@ void drive_and_drain (void *router_a_, void *router_z_, void *monitor_a_,
                       std::vector<observed_event_t> *events_z_, int slice_ms_)
 {
     zlink_pollitem_t items[] = {
-      {router_a_, 0, ZLINK_POLLIN | ZLINK_POLLCOMPLETION, 0},
-      {router_z_, 0, ZLINK_POLLIN | ZLINK_POLLCOMPLETION, 0},
-      {monitor_a_, 0, ZLINK_POLLIN, 0},
-      {monitor_z_, 0, ZLINK_POLLIN, 0}};
-    (void) zlink_poll (items, 4, slice_ms_, NULL);
+      {router_a_, 0, ZLINK_POLLIN, 0},
+      {router_z_, 0, ZLINK_POLLIN, 0}};
+    zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
+    TEST_ASSERT_TRUE (zlink_poll (items, 2, slice_ms_, &error) >= 0);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
     drain_monitor (monitor_a_, events_a_);
     drain_monitor (monitor_z_, events_z_);
 }
@@ -280,7 +281,8 @@ received_request_t receive_request (void *router_, const char *source_rid_,
         }
         TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, result);
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
-        msleep (1);
+        zlink_pollitem_t item = {router_, 0, ZLINK_POLLIN, 0};
+        (void) zlink_poll (&item, 1, wait_ms, NULL);
     }
     TEST_FAIL_MESSAGE ("timed out waiting for ROUTER request");
     return received_request_t ();
@@ -301,28 +303,39 @@ zlink_submit_result_t reply_request (void *router_,
     return result;
 }
 
+void *open_completion_poller (void *router_)
+{
+    void *poller = zlink_poller_new ();
+    TEST_ASSERT_NOT_NULL (poller);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_poller_add (poller, router_, router_, ZLINK_POLLCOMPLETION));
+    return poller;
+}
+
 zlink_completion_t receive_completion (void *router_,
                                        zlink_completion_id_t expected_id_)
 {
-    const clock_type::time_point deadline =
-      clock_type::now () + std::chrono::milliseconds (wait_ms);
-    while (clock_type::now () < deadline) {
-        zlink_completion_t completion;
-        memset (&completion, 0, sizeof (completion));
-        completion.struct_size = sizeof (completion);
-        const zlink_recv_result_t result = zlink_completion_recv (
-          router_, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
-        if (result == ZLINK_RECV_OK) {
-            TEST_ASSERT_EQUAL_UINT64 (expected_id_, completion.completion_id);
-            return completion;
-        }
-        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, result);
-        msleep (1);
-    }
-    TEST_FAIL_MESSAGE ("timed out waiting for REQUEST completion");
-    zlink_completion_t unreachable;
-    memset (&unreachable, 0, sizeof (unreachable));
-    return unreachable;
+    void *poller = open_completion_poller (router_);
+    zlink_poller_event_t event;
+    memset (&event, 0, sizeof (event));
+    zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
+    TEST_ASSERT_EQUAL_INT (
+      1, zlink_poller_wait (poller, &event, 1, wait_ms, &error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
+    TEST_ASSERT_EQUAL_PTR (router_, event.socket);
+    TEST_ASSERT_TRUE ((event.events & ZLINK_POLLCOMPLETION) != 0);
+
+    zlink_completion_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.struct_size = sizeof (completion);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_completion_recv (router_, &completion, ZLINK_RECV_FLAGS_DONTWAIT));
+    if (expected_id_ != 0)
+        TEST_ASSERT_EQUAL_UINT64 (expected_id_, completion.completion_id);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
+    return completion;
 }
 
 void assert_request_ok (void *router_, zlink_completion_id_t completion_id_,
@@ -342,18 +355,38 @@ void assert_request_ok (void *router_, zlink_completion_id_t completion_id_,
 
 void assert_no_completion (void *router_, int duration_ms_)
 {
-    const clock_type::time_point deadline =
-      clock_type::now () + std::chrono::milliseconds (duration_ms_);
-    do {
-        zlink_completion_t completion;
-        memset (&completion, 0, sizeof (completion));
-        completion.struct_size = sizeof (completion);
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_RECV_NO_DATA,
-          zlink_completion_recv (router_, &completion,
-                                 ZLINK_RECV_FLAGS_DONTWAIT));
-        msleep (1);
-    } while (clock_type::now () < deadline);
+    void *poller = open_completion_poller (router_);
+    zlink_poller_event_t event;
+    zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
+    TEST_ASSERT_EQUAL_INT (
+      0, zlink_poller_wait (poller, &event, 1, duration_ms_, &error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
+    zlink_completion_t completion;
+    memset (&completion, 0, sizeof (completion));
+    completion.struct_size = sizeof (completion);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_NO_DATA,
+      zlink_completion_recv (router_, &completion, ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
+}
+
+int assert_handover_completion (void *router_, zlink_completion_id_t id_,
+                                clock_type::time_point started_at_,
+                                std::set<zlink_completion_id_t> *pending_ids_ = NULL)
+{
+    zlink_completion_t completion = receive_completion (router_, id_);
+    if (pending_ids_)
+        TEST_ASSERT_EQUAL_UINT64 (1, pending_ids_->erase (completion.completion_id));
+    const int elapsed_ms = static_cast<int> (
+      std::chrono::duration_cast<std::chrono::milliseconds> (
+        clock_type::now () - started_at_).count ());
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_NOT_CONNECTED,
+                           completion.request_result);
+    TEST_ASSERT_EQUAL_UINT64 (0, completion.reply_part_count);
+    zlink_completion_close (&completion);
+    TEST_ASSERT_LESS_THAN_INT (handover_completion_limit_ms, elapsed_ms);
+    return elapsed_ms;
 }
 
 scenario_result_t run_scenario (bool tcp_, int reconnect_ivl_ms_)
@@ -392,7 +425,6 @@ scenario_result_t run_scenario (bool tcp_, int reconnect_ivl_ms_)
                             &events_z);
     const zlink_auto_hwm_budget_snapshot_t one_pair = budget_snapshot ();
 
-    const clock_type::time_point losing_submitted_at = clock_type::now ();
     const zlink_completion_id_t losing_id = submit_request (
       router_z, "A", "losing-request", losing_request_timeout_ms);
     const received_request_t losing_request =
@@ -407,7 +439,11 @@ scenario_result_t run_scenario (bool tcp_, int reconnect_ivl_ms_)
                               &events_a, &events_z, arbitration_started_at,
                               one_pair);
 
-    (void) losing_request;
+    const int losing_completion_elapsed_ms = assert_handover_completion (
+      router_z, losing_id, arbitration_started_at);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      reply_request (router_a, losing_request, "late-losing-reply"));
 
     // This is the first request after A -> Z has attached, while Z -> A is
     // still physically present. It must complete on the selected direction.
@@ -420,17 +456,14 @@ scenario_result_t run_scenario (bool tcp_, int reconnect_ivl_ms_)
                                           "winner-first-reply"));
     assert_request_ok (router_a, winner_id, "winner-first-reply");
 
-    zlink_completion_t losing_completion =
-      receive_completion (router_z, losing_id);
-    const int losing_timeout_elapsed_ms = static_cast<int> (
-      std::chrono::duration_cast<std::chrono::milliseconds> (
-        clock_type::now () - losing_submitted_at)
-        .count ());
-    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, losing_completion.kind);
-    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_TIMED_OUT,
-                           losing_completion.request_result);
-    TEST_ASSERT_EQUAL_UINT64 (0, losing_completion.reply_part_count);
-    zlink_completion_close (&losing_completion);
+    const zlink_completion_id_t retry_id =
+      submit_request (router_z, "A", "retry-on-winner", 3000);
+    const received_request_t retry_request =
+      receive_request (router_a, "Z", "retry-on-winner");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      reply_request (router_a, retry_request, "retry-on-winner-reply"));
+    assert_request_ok (router_z, retry_id, "retry-on-winner-reply");
     assert_no_completion (router_z, 50);
 
     const int observation_ms = std::max (250, reconnect_ivl_ms_ * 2);
@@ -460,8 +493,7 @@ scenario_result_t run_scenario (bool tcp_, int reconnect_ivl_ms_)
       0, arbitration_closed_z,
       "Z unexpectedly closed reciprocal standby during handover");
 
-    // Remove only the losing Z -> A connector. The surviving A -> Z pair must
-    // serve both the retried Application request and its Completion reply.
+    // Remove only the losing Z -> A connector after the successful retry.
     const clock_type::time_point explicit_disconnect_at = clock_type::now ();
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
                            zlink_disconnect (router_z, endpoint_a));
@@ -489,18 +521,12 @@ scenario_result_t run_scenario (bool tcp_, int reconnect_ivl_ms_)
     TEST_ASSERT_TRUE_MESSAGE (detached,
                               "explicit loser disconnect did not retire two lanes");
 
-    const zlink_completion_id_t retry_id =
-      submit_request (router_z, "A", "retry-on-winner", 3000);
-    const received_request_t retry_request =
-      receive_request (router_a, "Z", "retry-on-winner");
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      reply_request (router_a, retry_request, "retry-on-winner-reply"));
-    assert_request_ok (router_z, retry_id, "retry-on-winner-reply");
-    assert_no_completion (router_z, 50);
+    // The original request deadline must not publish a second terminal,
+    // including after the retired standby physically detaches.
+    assert_no_completion (router_z, losing_request_timeout_ms);
 
     scenario_result_t result;
-    result.losing_timeout_ms = losing_timeout_elapsed_ms;
+    result.losing_completion_ms = losing_completion_elapsed_ms;
     result.standby_observation_ms = static_cast<int> (
       std::chrono::duration_cast<std::chrono::milliseconds> (
         explicit_disconnect_at - arbitration_started_at)
@@ -517,14 +543,14 @@ scenario_result_t run_scenario (bool tcp_, int reconnect_ivl_ms_)
     printf ("RESULT transport=%s reconnect_ivl_ms=%d standby_observed_ms=%d "
             "arbitration_disconnected_a=%d arbitration_disconnected_z=%d "
             "arbitration_closed_a=%d arbitration_closed_z=%d "
-            "losing_timeout_ms=%d "
+            "losing_completion_ms=%d "
             "explicit_disconnected_a=%d explicit_disconnected_z=%d "
             "winner_direction=A->Z winner_first=ok retry=ok\n",
             tcp_ ? "tcp" : "inproc", reconnect_ivl_ms_,
             result.standby_observation_ms,
             result.arbitration_disconnects_a,
             result.arbitration_disconnects_z, result.arbitration_closed_a,
-            result.arbitration_closed_z, result.losing_timeout_ms,
+            result.arbitration_closed_z, result.losing_completion_ms,
             result.explicit_disconnects_a, result.explicit_disconnects_z);
     fflush (stdout);
 
@@ -534,6 +560,110 @@ scenario_result_t run_scenario (bool tcp_, int reconnect_ivl_ms_)
     test_context_socket_close_zero_linger (router_a);
     return result;
 }
+
+void run_same_direction_takeover (bool tcp_)
+{
+    void *requester = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *old_peer = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *new_peer = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *other_peer = test_context_socket (ZLINK_SOCKET_ROUTER);
+    configure_router (requester, "R", 100);
+    configure_router (old_peer, "S", 100);
+    configure_router (new_peer, "S", 100);
+    configure_router (other_peer, "T", 100);
+    void *monitor = open_monitor (requester);
+    void *old_monitor = open_monitor (old_peer);
+    void *new_monitor = open_monitor (new_peer);
+    void *other_monitor = open_monitor (other_peer);
+    std::vector<observed_event_t> events;
+    std::vector<observed_event_t> old_events;
+    std::vector<observed_event_t> new_events;
+    std::vector<observed_event_t> other_events;
+    char old_endpoint[MAX_SOCKET_STRING];
+    char new_endpoint[MAX_SOCKET_STRING];
+    char other_endpoint[MAX_SOCKET_STRING];
+    if (tcp_) {
+        bind_loopback_ipv4 (old_peer, old_endpoint, sizeof (old_endpoint));
+        bind_loopback_ipv4 (new_peer, new_endpoint, sizeof (new_endpoint));
+        bind_loopback_ipv4 (other_peer, other_endpoint, sizeof (other_endpoint));
+    } else {
+        strcpy (old_endpoint, "inproc://same-direction-old");
+        strcpy (new_endpoint, "inproc://same-direction-new");
+        strcpy (other_endpoint, "inproc://same-direction-other");
+        TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (old_peer, old_endpoint));
+        TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (new_peer, new_endpoint));
+        TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (other_peer, other_endpoint));
+    }
+    set_connect_routing_id (requester, "S");
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
+                           zlink_connect (requester, old_endpoint));
+    wait_for_initial_ready (requester, old_peer, monitor, old_monitor,
+                            &events, &old_events);
+    events.clear ();
+    set_connect_routing_id (requester, "T");
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
+                           zlink_connect (requester, other_endpoint));
+    wait_for_initial_ready (requester, other_peer, monitor, other_monitor,
+                            &events, &other_events);
+    const zlink_completion_id_t other_id =
+      submit_request (requester, "T", "unaffected", losing_request_timeout_ms);
+    const received_request_t other_request =
+      receive_request (other_peer, "R", "unaffected");
+
+    const size_t pending_count = 3;
+    std::set<zlink_completion_id_t> losing_ids;
+    received_request_t losing_requests[pending_count];
+    for (size_t i = 0; i < pending_count; ++i) {
+        losing_ids.insert (submit_request (requester, "S", "superseded",
+                                           losing_request_timeout_ms));
+        losing_requests[i] = receive_request (old_peer, "R", "superseded");
+    }
+
+    events.clear ();
+    set_connect_routing_id (requester, "S");
+    const clock_type::time_point started_at = clock_type::now ();
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK,
+                           zlink_connect (requester, new_endpoint));
+    wait_for_initial_ready (requester, new_peer, monitor, new_monitor,
+                            &events, &new_events);
+    int elapsed_ms = 0;
+    for (size_t i = 0; i < pending_count; ++i)
+        elapsed_ms = assert_handover_completion (requester, 0, started_at,
+                                                 &losing_ids);
+    TEST_ASSERT_TRUE (losing_ids.empty ());
+
+    // A reply submitted after handover still uses the old request's pair.
+    // It cannot consume a replacement request or create another terminal.
+    for (size_t i = 0; i < pending_count; ++i)
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK,
+          reply_request (old_peer, losing_requests[i], "late-reply"));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_SUBMIT_OK,
+      reply_request (other_peer, other_request, "unaffected-reply"));
+    assert_request_ok (requester, other_id, "unaffected-reply");
+    const zlink_completion_id_t retry_id =
+      submit_request (requester, "S", "retry", losing_request_timeout_ms);
+    const received_request_t retry = receive_request (new_peer, "R", "retry");
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
+                           reply_request (new_peer, retry, "retry-reply"));
+    assert_request_ok (requester, retry_id, "retry-reply");
+    assert_no_completion (requester, losing_request_timeout_ms);
+    printf ("RESULT same_direction transport=%s pending=%zu "
+            "handover_completion_ms=%d unaffected=ok retry=ok duplicate=0\n",
+            tcp_ ? "tcp" : "inproc", pending_count, elapsed_ms);
+    fflush (stdout);
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&other_monitor));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&new_monitor));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&old_monitor));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&monitor));
+    test_context_socket_close_zero_linger (requester);
+    test_context_socket_close_zero_linger (other_peer);
+    test_context_socket_close_zero_linger (new_peer);
+    test_context_socket_close_zero_linger (old_peer);
+}
+
 }
 
 #define DEFINE_SCENARIO_TEST(transport_, tcp_, interval_)                         \
@@ -548,6 +678,16 @@ DEFINE_SCENARIO_TEST (tcp, true, 1000)
 DEFINE_SCENARIO_TEST (inproc, false, 10)
 DEFINE_SCENARIO_TEST (inproc, false, 100)
 DEFINE_SCENARIO_TEST (inproc, false, 1000)
+
+void test_same_direction_takeover_tcp ()
+{
+    run_same_direction_takeover (true);
+}
+
+void test_same_direction_takeover_inproc ()
+{
+    run_same_direction_takeover (false);
+}
 
 int main ()
 {
@@ -564,6 +704,8 @@ int main ()
     RUN_SELECTED (test_reciprocal_handover_inproc_10ms);
     RUN_SELECTED (test_reciprocal_handover_inproc_100ms);
     RUN_SELECTED (test_reciprocal_handover_inproc_1000ms);
+    RUN_SELECTED (test_same_direction_takeover_tcp);
+    RUN_SELECTED (test_same_direction_takeover_inproc);
 #undef RUN_SELECTED
     return UNITY_END ();
 }
