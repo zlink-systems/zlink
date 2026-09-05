@@ -1,0 +1,21 @@
+# Job (Core, model astra): verify the reduced disconnect-progress fix on top of main (B's D-B102 inproc identity/reconnect fixes are already in)
+
+You are a codex sub-agent under a Claude supervisor. Read `CONTRIBUTING.ko.md` §4/§5 and `doc/plan/c016-worklog/core-disconnect-progress-summary.md`
+(the earlier job's report). Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do not commit. WORK ONLY IN
+`/home/hep7/project/zlink-core-b` (now detached at main HEAD with the reduced patch applied: `socket_base_dispatch.cpp` +
+`socket_base_lifecycle.cpp` = "completion poller acquisition must not stop the monitor's command lease" fix, plus the new
+`core/tests/integration/test_disconnect_progress.cpp` and its CMake registration). The earlier job's other two fixes (inproc
+monitor identity, inproc reconnect after peer detach) were dropped because main already contains B's equivalent
+`1c69086a4a` (D-B102). Never touch `/home/hep7/project/zlink/core/build-dev`.
+
+## What to do
+1. `cd /home/hep7/project/zlink-core-b && nice -n 10 env JOBS=4 scripts/build-core.sh dev`.
+2. Run `ctest --test-dir core/build-dev -R '^test_disconnect_progress_' -j2 --repeat until-fail:5 --output-on-failure` (24 cases × 5).
+   If an inproc case fails because B's D-B102 semantics differ from what the test assumed (e.g. CLOSED emission, id
+   assignment), adjust ONLY the test's expectation to the spec as B implemented it (`core/doc/spec/core/06-monitoring.ko.md`,
+   D-B102 in `decisions.ko.md`) and say exactly what changed; never touch Core sources for that. If a tcp case fails, that is a
+   real problem — report with the log, do not mask.
+3. Then `ctest --test-dir core/build-dev -j2 -R '^test_single_lane_|test_router_reciprocal_handover_lanes|test_ctx_term_fixed_rid_handover|test_wake'`
+   and the full `ctest -j2` once (known: hotpath_gate n/a on the dev tree).
+4. Deliverable: `doc/plan/c016-worklog/core-disconnect-progress-verify-summary.md` in the MAIN tree: results table, any test
+   adjustment with reason, BLOCKERS. Leave the worktree diff uncommitted.
