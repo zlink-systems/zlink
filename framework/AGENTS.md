@@ -103,6 +103,13 @@ Server public contract의 단일 규범 원천은 `framework/doc/framework/commo
   담당자(사람/조정자)가 하고, 필요 시 4언어에 일괄 전파한다. 계약과 구현이 충돌하면 어느 쪽이
   잘못됐는지 먼저 보고한다.
 
+- **소유 계층 확인이 먼저다.** 연결 선택·교체, reconnect, handover 수렴, completion drain, DONTWAIT
+  재제출, errno 분류, reply 라우팅은 Core·binding이 소유한다(`core/doc/spec/core/socket/README.ko.md`
+  §RID 중복 정책, `05-polling.ko.md`, `bindings/doc/spec/**`). Framework는 그 결과를 관찰하고 logical
+  handshake·descriptor·liveness만 소유한다. 한 언어에서만 물리 상태기계(pair index, lane mask, 두 번째
+  poller, 수동 reconnect)가 필요해 보이면 그 언어의 다른 root cause를 의심하고 cpp·node 구현과 먼저
+  대조한다(2026-09-05 리뷰: `doc/plan/c016-worklog/review-layer-ownership-audit.md`).
+
 ## 언어별 게이트·환경 주의
 
 - **게이트 명령**: C++ `ctest`(빌드 디렉터리 재사용, `-L framework-unit`); .NET

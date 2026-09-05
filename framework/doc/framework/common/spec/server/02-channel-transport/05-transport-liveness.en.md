@@ -262,12 +262,15 @@ confirmed.
 Connection replacement uses the node RID, security identity, and lifecycle generation
 supplied by the current descriptor as the admission fence. Once these descriptor expectations
 form a complete set, an endpoint-only manual intent with generation 0 cannot weaken this check. The
-existing connection requests physical-pair termination with the same `transportPairId` and
-`transportPairGeneration` obtained from the monitor event, and replaces the connection only
-after it observes that pair's close snapshot or disconnect event. An endpoint-level
-disconnect may be used for an initial connection whose pair identity is not available, but a
-successful call alone is not proof that the physical close has completed. A new connection
-for the same endpoint is created only after the close has been observed.
+existing connection requests termination at the endpoint level and is replaced only after
+the close snapshot or disconnect event of that endpoint's current physical connection has
+been observed. A successful call alone is not proof that the physical close has completed. A
+new connection for the same endpoint is created only after the close has been observed. The
+`connection_id` of a monitor event is used only for diagnostics and correlation, never as a
+fence identifying a physical pair, as a send/reply target, or as a reconnect condition. Core
+owns the selection and replacement of physical pipes; the framework determines the current
+connection from the descriptor's RID, security identity, and lifecycle generation together
+with the observation order of monitor events.
 
 Orderly close and transport disconnect don't wait 15 seconds. A late-arriving ACK or frame
 from a previous physical connection can't change the new connection's state.

@@ -51,9 +51,25 @@
   호출부의 수동 encode/decode로 내부 연결 문제를 우회하지 않는다.
 - 비자명한 설계는 최소 두 대안을 비교하되, 요청하지 않은 장문의 설계 문서를 만들지 않는다.
   인터페이스를 단순하게 유지하고 자료구조와 protocol 결정은 소유 모듈 안에 숨긴다.
-- POSDDD를 명시적으로 요청받으면
+- **계층 소유권(필수).** 어떤 결정(연결 선택·교체, reconnect, handover 수렴, completion drain,
+  DONTWAIT 재제출, errno 분류, reply 라우팅, 재전송)을 코드에 넣기 전에 그 결정을 소유한 계층을
+  spec 조항으로 먼저 확인한다. Core·binding이 소유한 결정을 Framework에서 다시 구현하거나 같은
+  사실을 두 곳의 상태로 유지하지 않는다. 하위 계층이 spec과 다르게 동작하면 상위에서 보상하지
+  말고 하위 계층의 버그로 보고한다(공개 API repro 포함).
+- **금지 패턴.** 다음은 원인 수정이 아니라 우회이므로 하지 않는다: timeout·budget·retry 횟수 증가,
+  "안전을 위한" 재시도나 순서 변경, monitor event로 만든 별도 pair·generation 상태로 수신 frame을
+  걸러내기, 같은 socket에 두 번째 poller, 예외를 삼키는 catch-all, 실패를 없애기 위한 fixture 조건
+  완화, 구현에 맞춘 assertion 변경.
+- **교차언어 대조(필수).** Framework runtime 동작을 바꾸기 전에 같은 상황을 다른 언어 구현이 어떻게
+  처리하는지 확인한다. 한 언어만 변경이 필요하면 그 이유가 구조적 차이인지 다른 root cause의
+  증상인지 완료 보고에 적는다.
+- **진단 먼저, 구현은 승인 뒤.** Framework runtime 수정은 두 단계로 한다. 1단계는 코드 변경 없이
+  원인 `file:line`, 소유 계층과 spec 조항, 교차언어 대조, 변경 분류(A 계약 적응 / B 기존 결함 /
+  C 우회 / D spec gap)를 보고한다. 감독이 A 또는 B로 승인한 뒤에만 2단계 구현을 시작한다.
+- POSDDD 원칙 문서
   [`doc/principal/dev/posddd.ko.md`](./doc/principal/dev/posddd.ko.md)와
-  [`doc/principal/dev/zlink-system-design-principles.ko.md`](./doc/principal/dev/zlink-system-design-principles.ko.md)를 읽고 적용한다.
+  [`doc/principal/dev/zlink-system-design-principles.ko.md`](./doc/principal/dev/zlink-system-design-principles.ko.md)는
+  요청과 무관하게 runtime 변경 시 항상 적용한다.
 
 ## 4. 검증과 완료 보고
 
@@ -63,6 +79,8 @@
 - Core를 바꾸고 Framework에서 검증할 때는 local Core library와 binding package가 실제로 갱신됐는지
   먼저 확인한다. 세부 절차는 `scripts/local-package/README.ko.md`를 따른다.
 - 완료 보고에는 결과, 변경 파일, 실행한 test와 남은 실패만 적는다. 진행 이력을 반복하지 않는다.
+- Runtime 변경의 완료 보고에는 소유 계층·spec 조항·교차언어 대조 결과·변경 분류(A/B/C/D)를 한 줄씩
+  함께 적는다. 이 네 줄이 없거나 분류가 C/D인 변경은 감독이 커밋하지 않는다.
 - 사용자와의 한국어 기술 설명은
   [`doc/principal/documentation/documentation-principles.ko.md`](./doc/principal/documentation/documentation-principles.ko.md)를 따른다.
 
