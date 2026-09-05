@@ -1,0 +1,22 @@
+# Job: cpp + node 7-sample gates on the 12:54 packages (Core 0145f5a59a / 7cbf12de41 / cb62cb89f8 included); runners now report SIGKILL as failure
+
+You are a codex sub-agent under a Claude supervisor. Execution/classification job (no source edits). Read `AGENTS.md` (root) §2/§4 and
+`doc/plan/c016-worklog/gate-final-cpp-node-samples-summary.md` (commands). Do not modify source/tests/runners, nothing under
+`core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`. Do not rebuild Core or packages. Do NOT run
+cpp and node concurrently (port collisions): cpp first, then node. A dotnet gate runs concurrently — do not touch dotnet/java.
+
+## Environment
+- cpp: `ZLINK_CPP_BUILD_DIR=/home/hep7/project/zlink/framework/languages/cpp/build/linux-ninja-c-e2e` — first reconfigure/build
+  against the new install (`cd framework/languages/cpp && cmake --preset linux-ninja-debug -B build/linux-ninja-c-e2e && cmake --build build/linux-ninja-c-e2e -j4`),
+  `TMPDIR=/dev/shm/zlink-tmp-cpp`. Runner `framework/languages/cpp/samples/run_samples.sh <Sample>`.
+- node: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`;
+  `npm run build` once first; runner `bash samples/run_samples.sh <Sample.Ts|ZoneWorld>`.
+
+## What to run
+For each language the 7 samples individually (exit, duration, marker; the runner now fails on any role SIGKILL — record the role
+names if so) then the aggregate once. Re-run a failure once for determinism. Classify (A/B/C/D/E) with `file:line`; a teardown
+SIGKILL is the primary thing to watch (Core D-089 fix cb62cb89f8 is in these packages — expect clean exits).
+
+## Deliverable
+`doc/plan/c016-worklog/gate-final-cpp-node-samples-2-summary.md`: two 7-row tables + aggregates, failures, commands, logs under
+`zlink-work/c016/logs/gate-final-samples2-<lang>-*.log`, BLOCKERS. Do not commit.
