@@ -951,7 +951,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/node/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미달` — before 13:53 → pass 1(`f69558af55`: multipart Buffer 경로) DD 27.6→41.2% → pass 1b(`6c2cb784c0`: 공유 pump 기각, N-API callback scope) → pass 1c(`8ec82c4be7`: 서버 수신 metadata·reply Buffer) DR/RR REQREP 18.7/17.9→28.7/31.1%, PUBSUB 34.8%. REQREP는 요청당 ~60 ms 고정 지연·timeout 35~55%가 남음(요청 수명 계측: 서버 TCP 수신→ROUTER recv 128 ms 구간; 클라이언트 WRITABLE 재제출 루프 의심 → Core 조사 D-B117). Core `a40cb46335` 재판정 3-run 20:33: DD 33.3%, DR/RR 23.5/24.4%(64K 69/60% 회복, 작은 크기 ~50 ms 고정 지연 잔존 → pass 1d); [log](log/2026-09-05-node-multi-tcp-before.ko.md)
+- Multi 상태: `미달` — before 13:53 → pass 1(`f69558af55`: multipart Buffer 경로) DD 27.6→41.2% → pass 1b(`6c2cb784c0`: 공유 pump 기각, N-API callback scope) → pass 1c(`8ec82c4be7`: 서버 수신 metadata·reply Buffer) DR/RR REQREP 18.7/17.9→28.7/31.1%, PUBSUB 34.8%. REQREP는 요청당 ~60 ms 고정 지연·timeout 35~55%가 남음(요청 수명 계측: 서버 TCP 수신→ROUTER recv 128 ms 구간; 클라이언트 WRITABLE 재제출 루프 의심 → Core 조사 D-B117). Core `a40cb46335` quiet 3-run 22:10(4 pattern): DD 35.9%(목표 60, 최소 35 충족), DR/RR 24.3/24.8%(60), PUBSUB 30.2%(60) — 작은 크기 REQREP ~50 ms 고정 지연 잔존 → pass 1d(client completion 대기 구조); [log](log/2026-09-05-node-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.4.1 Single suite
@@ -1125,7 +1125,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/rust/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미달` — `tcp` 4 pattern before 19:28~19:31 KST(Core `a40cb46335`): DD 63.0%, DR/RR REQREP 65.9/68.2%, PUBSUB 83.2%; 자체 pass 1 job(astra) 진행 중; [log](log/2026-09-05-rust-multi-tcp-before.ko.md)
+- Multi 상태: `미달` — before 19:28: DD 63.0%, REQREP 65.9/68.2%, PUBSUB 83.2% → pass 1(`4163072701`) quiet 3-run 21:48: DD 64.7%(목표 95), DR/RR 66.1/69.1%(85), PUBSUB 93.8%(95, 최소 85 충족); 리뷰 pass 2 예정; [log](log/2026-09-05-rust-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.6.1 Single suite
@@ -1212,7 +1212,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/python/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미달` — `tcp` 4 pattern before 19:32~19:38 KST(Core `a40cb46335`): DD 6.6%(15k msg/s 고정), DR/RR REQREP 14.2/15.4%, PUBSUB 26.2%; 자체 pass 1 job(astra) 진행 중; [log](log/2026-09-05-python-multi-tcp-before.ko.md)
+- Multi 상태: `미달` — before 19:32: DD 6.6%, REQREP 14.2/15.4%, PUBSUB 26.2% → pass 1(`72d6f8ec8a`: ctypes 11→4회/메시지) quiet 3-run 22:26: DD 9.2%(22.6k msg/s), DR/RR 15.2/16.5%, PUBSUB 28.8%(목표 60) — GIL 아래 Python 79 함수/메시지가 상한, pass 2(C 확장 hot path) 예정; [log](log/2026-09-05-python-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.7.1 Single suite
