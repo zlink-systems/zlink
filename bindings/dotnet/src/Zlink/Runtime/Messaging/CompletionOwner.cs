@@ -256,14 +256,28 @@ internal sealed class CompletionOwner
         lock (_submitSync)
         {
             EnsureOpenForSubmit();
-            var nativeTarget = target.ToNative();
-            RequestReplySupport.SubmitPreservingOnFailure(parts,
-                (ref ZlinkMsg nativePart,
-                    NativeMethods.ZlinkPartFlag partFlag) =>
-                    NativeMethods.zlink_reply_part(_handle,
-                        ref nativeTarget, replyToken.Value, ref nativePart,
-                        partFlag));
+            var submitter = new ReplyPartSubmitter
+            {
+                Handle = _handle,
+                Target = target.ToNative(),
+                ReplyToken = replyToken.Value
+            };
+            RequestReplySupport.SubmitPreservingOnFailure(parts, ref submitter);
         }
+    }
+
+    // Like send and request, synchronous reply keeps its native arguments on
+    // the stack. The submitter never escapes SubmitPreservingOnFailure.
+    private struct ReplyPartSubmitter : INativePartSubmitter<ReplyPartSubmitter>
+    {
+        internal IntPtr Handle;
+        internal ZlinkRoutingId Target;
+        internal ulong ReplyToken;
+
+        public static int Submit(ref ReplyPartSubmitter self,
+            ref ZlinkMsg part, NativeMethods.ZlinkPartFlag flag) =>
+            NativeMethods.zlink_reply_part(self.Handle, ref self.Target,
+                self.ReplyToken, ref part, flag);
     }
 
     internal bool TransferToPublic(object pollerOwner)
@@ -640,7 +654,13 @@ internal sealed class CompletionOwner
 
         // Start on the shared managed scheduler so a caller's single-threaded
         // SynchronizationContext cannot own or block completion progress.
-        _ = Task.Run(() => RuntimePump(epoch));
+        // Scope both captures after the early returns: an existing pump or a
+        // public drain owner needs no scheduled callback or closure allocation.
+        {
+            var owner = this;
+            var pumpEpoch = epoch;
+            _ = Task.Run(() => owner.RuntimePump(pumpEpoch));
+        }
     }
 
     private void RuntimePump(long epoch)
