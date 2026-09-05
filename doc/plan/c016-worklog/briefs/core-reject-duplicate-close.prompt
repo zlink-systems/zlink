@@ -1,0 +1,28 @@
+# Job (Core, model astra): REJECT policy closes the unregistered duplicate pipe immediately; requests on it end REQUEST_NOT_CONNECTED
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §2/§3/§4, `CONTRIBUTING.ko.md` §4/§5 (public C API
+tests only; `ctest -j2`; §5 gate), the amended `core/doc/spec/core/socket/README.ko.md` §4 (`ZLINK_RID_DUPLICATE_REJECT`: the
+unregistered duplicate pipe is closed immediately; the connector observes its termination and reconnects per its connect intent;
+an attempt after the existing pipe terminated is admitted; a request already submitted on the rejected pipe ends exactly once
+with `ZLINK_REQUEST_NOT_CONNECTED`/`EHOSTUNREACH`; READY means transport connection, not RID admission) and `07-router.ko.md`.
+Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do not commit. WORK ONLY IN `/home/hep7/project/zlink-core-a`
+(detached at main HEAD): `cd /home/hep7/project/zlink-core-a && nice -n 10 env JOBS=4 scripts/build-core.sh dev`. Never touch main's
+`core/build-dev` or `/home/hep7/project/zlink-core-b`.
+
+## Evidence (D-088, `stage2-dotnet-clientserver-second-poller-removal-summary.md` BLOCKERS)
+Public API repro: tcp ROUTER (REJECT default) + DEALER; first request OK; DEALER `disconnect(endpoint)`, observe that endpoint's
+Disconnected on the DEALER monitor, `connect(endpoint)`, wait for the READY edge, submit one request → the server never receives it
+and the request times out (1 s). Cause: the ROUTER still holds the old pipe (its termination not yet processed) and rejects the
+new same-RID pipe without closing it, so the DEALER stays on a pipe that can never carry traffic.
+
+## What to do
+1. In ROUTER admission (`router_admission.cpp` REJECT branch of identify_peer): keep the existing pipe, do NOT register the duplicate,
+   and close the duplicate pipe immediately (orderly, through the existing pipe termination path so the connector gets
+   Disconnected/Closed and its reconnect intent re-arms). Pending REQUESTs pinned to that pipe complete once with
+   REQUEST_NOT_CONNECTED via the same terminal helper used by 8b82d51b75 (no second bookkeeping).
+2. Contract test (tcp + inproc): the D-088 sequence — after the old pipe terminates, the connector's next attempt is admitted and
+   a request succeeds; a request submitted on the rejected pipe completes NOT_CONNECTED within ~100 ms, never a timeout; existing
+   REJECT tests (`test_router_handover` etc.) stay green. 20 reps.
+3. Full `ctest -j2` + §5 checks (hotpath check if `scripts/` provides one; report numbers).
+4. Deliverable: `doc/plan/c016-worklog/core-reject-duplicate-close-summary.md` in the MAIN tree: cause sites, diff summary
+   (file:line), test names/counts, BLOCKERS. Leave the diff uncommitted in the worktree.
