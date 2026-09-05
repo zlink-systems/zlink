@@ -1,0 +1,31 @@
+# Job (fix, model astra): node sample roles do not exit at teardown — three owners fixed per the approved diagnosis
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·원칙이 단순해지는 근본 수정·중복 금지),
+`framework/AGENTS.md`, and the approved diagnosis `doc/plan/c016-worklog/diag-node-teardown-sigkill.md` (§판정, §Framework host의 누락과
+소유 계약, §ZoneWorld Ops의 별도 STREAM 원인, §Sample별 검증 결과와 runner 오분류, §수정 후보와 회귀 검증). Never modify `core/**`,
+`bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages, `framework/languages/shared_sample/**`;
+never widen a grace deadline as the fix; do not commit. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset
+ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`. `node_modules/@zlink-systems/zlink` now carries the 12:54 Core
+(`prebuilds/linux-x64/libzlink.so.0.17.0` sha256 98f34996…) — do not reinstall packages.
+
+## Three fixes (each at its owner; no new timers/state; report rule count before/after)
+1. Framework host lifecycle: the Nest integration ends with the host `stop()` (transport only) instead of `shutdown()`, leaving
+   User/Instance Spot timers alive while the runtime reports Stopped → the process never exits. Make the Nest shutdown hook call the
+   host's `shutdown()` (the single owner of teardown per 05-host-relocation-flow §14: Stopped only after all owned resources are
+   released); remove any duplicate partial-stop path so there is one shutdown owner. Regression: a contract test that after
+   `app.close()` no framework timers/handles remain (`process._getActiveHandles()` filtered to framework-owned) and the process can
+   exit.
+2. ZoneWorld Ops: the heartbeat control send uses the binding's sync `submit_sync()` (Core NONE) on the JS main thread, blocking the
+   SIGINT handler while admission waits. Use the binding async terminal (same owner as the deliver fix `81a1f6fbfc`); no framework
+   retry/timer. Regression: Ops exits on SIGINT while heartbeat admission is pending.
+3. Sample runner: GameQuest's owner-loss scenario SIGKILLs the owner intentionally (`run_sample.sh`/scenario), and the runner's
+   cleanup then counts that already-killed role as a teardown failure. Follow the java runner semantics (reap the intentional kill
+   in the scenario step; only roles still alive at cleanup count) — one rule for "who is a teardown failure". Keep the SIGKILL
+   reporting from 9a0371fea7 for every other role.
+
+## Verify
+All 7 node samples individually (exit 0, no SIGKILLed role) + the aggregate `bash samples/run_samples.sh` once; `npm run typecheck`,
+lint on touched files, touched contract tests, `npm test` once.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-teardown-sigkill-summary.md`: diff per owner, the four lines + rule count, results table, BLOCKERS.
