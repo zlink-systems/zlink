@@ -7,3 +7,4 @@
 - [2026-09-05-cpp-single-before.ko.md](2026-09-05-cpp-single-before.ko.md) — C++ Single suite 7 pattern × 6 transport paired before(one-way latency=큐 깊이 해석, 수신 경로 pass 1 착수)
 - [2026-09-05-cpp-single-recv-pass1.ko.md](2026-09-05-cpp-single-recv-pass1.ko.md) — C++ Single 수신 경로 pass 1(library no-go, 러너 getenv 버그 수정) + one-way 5 pattern 재짝지음
 - [2026-09-05-dotnet-multi-tcp-before.ko.md](2026-09-05-dotnet-multi-tcp-before.ko.md) — .NET Multi tcp 4 pattern paired before(44.7/51.6/53.6/44.8%)
+- [2026-09-05-java-multi-tcp-before.ko.md](2026-09-05-java-multi-tcp-before.ko.md) — Java Multi tcp 4 pattern paired before(50.8/15.1/24.0/81.0%)
