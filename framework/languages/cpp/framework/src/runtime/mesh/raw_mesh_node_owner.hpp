@@ -13,6 +13,7 @@
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -65,6 +66,7 @@ struct raw_mesh_node_options_t
     zlink::auto_hwm_profile auto_hwm_profile =
       zlink::auto_hwm_profile::balanced;
     std::shared_ptr<application_job_queue_t> application_jobs;
+    std::shared_ptr<const std::atomic_bool> shutdown_admission_seal;
 };
 
 struct raw_mesh_byte_vector_less_t
@@ -182,6 +184,7 @@ class raw_mesh_node_owner_t
     std::string endpoint () const;
     zlink::context_t &context ();
     service_topology_registry_t &topology () noexcept;
+    task_t<void> publish_draining ();
     service_liveness_registry_t &liveness () noexcept;
     service_mailbox_t &mailbox () noexcept;
 

@@ -1106,6 +1106,21 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-m6-runtime;topology;mailbox;liveness;raw-binding"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_mesh_shutdown_seal
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_shutdown_seal.cpp)
+  target_compile_features(test_cpp_framework_mesh_shutdown_seal PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_mesh_shutdown_seal PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+  target_link_libraries(test_cpp_framework_mesh_shutdown_seal PRIVATE
+    zlink_framework_m6a_runtime Threads::Threads)
+  zlink_framework_cpp_enable_test_assertions(test_cpp_framework_mesh_shutdown_seal)
+  add_test(NAME test_cpp_framework_mesh_shutdown_seal
+    COMMAND test_cpp_framework_mesh_shutdown_seal)
+  set_tests_properties(test_cpp_framework_mesh_shutdown_seal PROPERTIES
+    LABELS "framework-unit;topology;liveness;raw-binding"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_m6b_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp)
   target_compile_features(test_cpp_framework_m6b_runtime PRIVATE cxx_std_20)

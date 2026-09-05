@@ -797,6 +797,9 @@ void mesh_node_runtime_t::start ()
                                     *_state->routing_id);
         })
         .get ();
+    node_options.mesh.shutdown_admission_seal = spot_state->lane.run ([&] {
+        return spot_state->drain_flag;
+    }).get ();
     auto node = std::make_shared<host::public_host_runtime_t> (std::move (node_options));
     /* flow-correlation §4: thread the flow-capture provider so the host's
      * cold decode paths skip flow validation/materialization at level Off. */

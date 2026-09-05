@@ -590,6 +590,11 @@ void verify_descriptor_retire_order_and_pre_seal_rollback ()
     assert (read_mesh_state (store, "vertical-order", *first->routing_id)
             == framework_runtime_state_t::draining);
 
+    for (const auto &node : service.nodes ()) {
+        assert (node->status ().state
+                == zlink::framework::runtime::host::node_status_t::state_t::draining);
+    }
+
     const auto history = store.state_history ();
     const auto first_retiring = std::find (
       history.begin (), history.end (), framework_runtime_state_t::relocating);
@@ -1340,6 +1345,46 @@ void verify_slow_observer_does_not_block_stop ()
     node->stop ();
 }
 
+void verify_host_shutdown_seal_reaches_raw_mesh ()
+{
+    namespace mesh = zlink::framework::runtime::mesh;
+    auto registration = make_node ("tcp://127.0.0.1:0", "seal-owner");
+    auto seal = std::make_shared<std::atomic_bool> (false);
+    zlink::framework::detail::spot_node_runtime_t (registration->spot_state)
+      .bind_drain_flag (seal);
+    zlink::framework::detail::mesh_node_runtime_t node (registration);
+    node.start ();
+    auto remote_options = mesh::raw_mesh_node_options_t{
+      node.native_node ().transport ().topology ().local_descriptor ()};
+    remote_options.descriptor.node_routing_id = {'s', 'i', 'l', 'e', 'n', 't'};
+    remote_options.descriptor.advertised_endpoint = "tcp://127.0.0.1:0";
+    remote_options.descriptor.state = mesh::service_node_state_t::preparing;
+    remote_options.shutdown_admission_seal = seal;
+    mesh::raw_mesh_node_owner_t remote (std::move (remote_options));
+    remote.start ();
+    seal->store (true, std::memory_order_release);
+    auto &transport = node.native_node ().transport ();
+    assert (transport.connect_peer (remote.endpoint (), remote.topology ().local_descriptor ()));
+    std::size_t ready = 0;
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    while (ready == 0 && std::chrono::steady_clock::now () < deadline) {
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        transport.drain_monitor_events (now).result ().value ();
+        ready += remote.drain_monitor_events (now).result ().value ();
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (ready != 0);
+    const auto quiet_until = std::chrono::steady_clock::now () + 200ms;
+    while (std::chrono::steady_clock::now () < quiet_until) {
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        transport.drain_monitor_events (now).result ().value ();
+        assert (remote.pump_one (now).result ().value () == mesh::raw_mesh_pump_result_t::no_data);
+        std::this_thread::sleep_for (1ms);
+    }
+    node.stop ();
+    remote.close ();
+}
+
 void verify_fixed_drain_callback_barrier ()
 {
     auto registration = make_node ("tcp://127.0.0.1:0", "drain-barrier");
@@ -1911,6 +1956,7 @@ int main ()
     verify_public_runtime_surface ();
     verify_slow_observer_does_not_block_stop ();
     verify_object_client_registration_boundary ();
+    verify_host_shutdown_seal_reaches_raw_mesh ();
     verify_fixed_drain_callback_barrier ();
     verify_deferred_application_terminal_ownership ();
     verify_descriptor_retire_order_and_pre_seal_rollback ();
