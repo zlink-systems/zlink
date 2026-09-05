@@ -1038,7 +1038,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/go/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미달` — `tcp` 4 pattern before 17:46~17:51 KST(Core job 빌드와 겹쳐 참고값): DD 31.5%, DR/RR REQREP 2.9/2.8%(1.1~1.5k ops/s 고정), PUBSUB 47.3%; 자체 pass 1 job(astra) 진행 중; [log](log/2026-09-05-go-multi-tcp-before.ko.md)
+- Multi 상태: `미달` — before 17:46: DD 31.5%, REQREP 2.9/2.8%, PUBSUB 47.3% → pass 1(`5e7e68fa6a`)+1b(`53ba0d04a7`: REQREP 러너 socket당 goroutine) quiet 3-run 21:36: DD 53.2%(목표 65), DR/RR 19.0/21.8%(53; 요청 1건 in-flight 모델, D-B127 대기), PUBSUB 54.6%(65); [log](log/2026-09-05-go-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.5.1 Single suite
