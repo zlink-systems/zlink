@@ -296,7 +296,7 @@ public contract methods.
 - `Poller` accepts a socket monitor as a source through
   `add_monitor(&self, monitor: &SocketMonitor, events: i16, slot: usize) -> Result<(), ConfigError>`,
   `modify_monitor(&self, monitor: &SocketMonitor, events: i16) -> Result<(), ConfigError>` and
-  `remove_monitor(&self, monitor: &SocketMonitor) -> Result<bool, ConfigError>` (common spec "Monitor sources in
+  `remove_monitor(&self, monitor: &SocketMonitor) -> Result<(), ConfigError>` (common spec "Monitor sources in
   `Poller`"). `SocketMonitor` does not implement the socket-only sealed `Pollable` (this protects the `proxy`
   argument contract). Only `POLLIN` is valid for a monitor; any other mask is rejected with
   `ConfigError(ConfigResult::InvalidArgument)`. Drain with `recv_with_flags(RecvFlags::DONT_WAIT)` after readiness;

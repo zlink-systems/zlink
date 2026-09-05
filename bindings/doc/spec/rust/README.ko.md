@@ -319,7 +319,7 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   리소스를 생성한다.
 - `Poller`는 `add_monitor(&self, monitor: &SocketMonitor, events: i16, slot: usize) -> Result<(), ConfigError>`,
   `modify_monitor(&self, monitor: &SocketMonitor, events: i16) -> Result<(), ConfigError>`,
-  `remove_monitor(&self, monitor: &SocketMonitor) -> Result<bool, ConfigError>`로 socket monitor를 source로
+  `remove_monitor(&self, monitor: &SocketMonitor) -> Result<(), ConfigError>`로 socket monitor를 source로
   받는다(공통 spec "`Poller`의 monitor source"). `SocketMonitor`는 socket 전용 sealed `Pollable`을 구현하지
   않는다(`proxy` 인자 계약 보호). monitor에는 `POLLIN`만 유효하고 다른 mask는
   `ConfigError(ConfigResult::InvalidArgument)`로 거절한다. ready 뒤 `recv_with_flags(RecvFlags::DONT_WAIT)`로
