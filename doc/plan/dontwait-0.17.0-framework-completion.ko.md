@@ -163,8 +163,10 @@
 - [x] **codex 사용량 한도 도달(19:47, Sep 11 19:46까지 불가)**: 진행 중이던 3 job이 중단 → Claude general-purpose agent로 대체(node F4 timer nominal tick 중복 = Framework spot-timer 결함 B 승인; dotnet D-097 구현; java descriptorFence class-run)
 - [x] 3 agent 결과 커밋(20:30~21:10): node spot-timer nominal index 중복(2→1) + ZoneWorld client F3/F4 규칙(3→1) `bc089b7a6c`(ZoneWorld 3/3, aggregate 7/7, npm test 1604/1604); java mesh intent close 규칙 2→1 + inproc 예외 제거 `ea71eab005`(M6A 28/28 ×3, core 1274/0, contract 96/96); dotnet D-097 `d3d5ac66e9`(seal 뒤 Hello 0, idempotent 완료 진단 통합; ZoneWorld 3/3 E5 admission 관찰, aggregate 7/7, unit half 1975/0)
 - [x] **cross-language E2E(rebuild9 Core) green**: cpp all-stage passed, node smoke 19 ok, java-cross passed(21:04)
-- [ ] 진행 중(21:15): java+kotlin aggregate 재실행(raw mesh 변경 반영 확인); D-097 parity job — cpp(astra 진행 중), java(aggregate 뒤 launch)
-- [ ] 다음: parity 2건 커밋 → 해당 언어 샘플 재확인 → §F 마감·D 항목 체크
+- [x] D-097 parity: cpp `64c2fc7e7c`(seal은 app_state draining atomic 재사용; Draining descriptor·Update 게시; duplicate admission tail 통합; unit 42/42, 샘플 7/7); java `4a76f8b489`(seal predicate = ZLinkMeshDrainCoordinator; publish loop 3→1; + raw mesh admission 관찰 순서 결함 4건 2→1 — M6A 28/28 ×10, core 1256/1256, contract 96/96; java+kotlin aggregate exit 0 ×2)
+- [x] Core `d8b65141a4`: zlink_close가 bound endpoint 등록을 반환 전에 해제(reaper 지연 → 즉시 rebind EADDRINUSE 2991/3000 → 0/3000; 규칙 2→1; ctest 179/179). codex 한도 2차 소진(21:5x) 뒤 Core/java 잔여는 Claude agent
+- [ ] 진행 중(22:57): rebuild10(Core 785b647b…) → **gate10**(cpp/java/node/dotnet 샘플, dotnet ZoneWorld×2, npm test, java core/contract, dotnet SampleRegression·unit 두 절반) → cross-language E2E 재실행(대기열)
+- [ ] 다음: gate10·E2E green 확인 → §D '7 samples × 4언어' 체크 → §F 마감·push
 - [ ] (이전 항목) job 5: Core STREAM 회귀(worktree a), node DD out-of-sequence, java DD courier-session teardown(+종료 원인 로그 단일화), node ClientServer 5 s cap, java M6A class-run 2건. 대기: dotnet `DurableSenderPreservesExhaustionCause` 간헐(Core 수정 뒤 재판정)
 - [ ] 이후: Core 회귀 수정 → rebuild9 → gate9 → cross-language E2E → §F 마감·push
 - [ ] 로컬 패키지 재빌드(`7ffb8e55d9`·`c9d294c44f` 포함) → dotnet Mesh 걷어내기 2단계(brief `stage2-dotnet-mesh-unwind.prompt`) → Canonical 3 red 재검증 → dotnet ClientServer second poller/수동 reconnect 제거(B 작업 4 결과 대기) → java 합성 connection id·errno 표 제거(B 작업 5·6) → cpp replay 범위 진단 → 4언어 최종 게이트 재실행
