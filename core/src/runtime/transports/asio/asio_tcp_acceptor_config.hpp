@@ -46,7 +46,6 @@ inline int configure_asio_tcp_acceptor (acceptor_t &acceptor_,
                                         int address_family_,
                                         const boost::asio::ip::tcp::endpoint &bind_endpoint_,
                                         const options_t &options_,
-                                        bool enable_reuse_port_,
                                         trace_fn_t trace_fn_)
 {
     boost::system::error_code ec;
@@ -70,20 +69,6 @@ inline int configure_asio_tcp_acceptor (acceptor_t &acceptor_,
         errno = acceptor_error_to_errno (ec);
         return -1;
     }
-
-#ifdef SO_REUSEPORT
-    if (enable_reuse_port_) {
-        typedef boost::asio::detail::socket_option::boolean<SOL_SOCKET, SO_REUSEPORT>
-          reuse_port_t;
-        acceptor_.set_option (reuse_port_t (true), ec);
-        if (ec) {
-            trace_fn_ ("set reuse_port", ec, false);
-            ec.clear ();
-        }
-    }
-#else
-    (void) enable_reuse_port_;
-#endif
 
     if (address_family_ == AF_INET6) {
         acceptor_.set_option (boost::asio::ip::v6_only (!options_.ipv6), ec);

@@ -161,6 +161,12 @@ void zlink::object_t::process_command (const command_t &cmd_)
             process_term_ack ();
             break;
 
+        case command_t::release_endpoint:
+            process_release_endpoint ();
+            process_seqnum ();
+            cmd_.args.release_endpoint.completion->set_value ();
+            break;
+
         case command_t::term_endpoint:
             process_term_endpoint (cmd_.args.term_endpoint.endpoint);
             break;
@@ -476,6 +482,21 @@ void zlink::object_t::send_term_ack (own_t *destination_)
     send_command (cmd);
 }
 
+void zlink::object_t::release_endpoint (own_t *destination_)
+{
+    // The listener keeps its I/O-thread ownership. Wait only for endpoint
+    // release, independently of accepted sessions and their linger policy.
+    std::promise<void> completion;
+    std::future<void> released = completion.get_future ();
+    destination_->inc_seqnum ();
+    command_t cmd;
+    cmd.destination = destination_;
+    cmd.type = command_t::release_endpoint;
+    cmd.args.release_endpoint.completion = &completion;
+    send_command (cmd);
+    released.wait ();
+}
+
 void zlink::object_t::send_term_endpoint (own_t *destination_, std::string *endpoint_)
 {
     command_t cmd;
@@ -603,6 +624,11 @@ void zlink::object_t::process_term (int)
 }
 
 void zlink::object_t::process_term_ack ()
+{
+    zlink_assert (false);
+}
+
+void zlink::object_t::process_release_endpoint ()
 {
     zlink_assert (false);
 }

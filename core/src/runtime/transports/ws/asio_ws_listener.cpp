@@ -97,7 +97,7 @@ int zlink::asio_ws_listener_t::set_local_address (const ws_address_t *addr_, boo
       asio_tcp_endpoint_from_sockaddr (addr_->addr ());
 
     if (configure_asio_tcp_acceptor (
-          _acceptor, protocol, addr_->family (), bind_endpoint, options, false,
+          _acceptor, protocol, addr_->family (), bind_endpoint, options,
           [] (const char *stage, const boost::system::error_code &ec, bool) {
               WS_LISTENER_DBG ("Failed to %s: %s", stage, ec.message ().c_str ());
           })
@@ -152,10 +152,9 @@ void zlink::asio_ws_listener_t::process_term (int linger_)
 {
     WS_LISTENER_DBG ("process_term called, linger=%d, accepting=%zu", linger_, _accepting_count);
 
-    _terminating = true;
     _linger = linger_;
 
-    close ();
+    process_release_endpoint ();
 
     //  Process pending handlers
     drain_asio_listener_pending_accepts (_io_context, &_accepting_count);
@@ -337,8 +336,9 @@ void zlink::asio_ws_listener_t::create_engine (fd_t fd_)
     _socket->event_accepted (endpoint_pair, fd_);
 }
 
-void zlink::asio_ws_listener_t::close ()
+void zlink::asio_ws_listener_t::process_release_endpoint ()
 {
+    _terminating = true;
     WS_LISTENER_DBG ("close called");
 
     close_asio_socket_if_open (_acceptor, [this] (fd_t fd) {

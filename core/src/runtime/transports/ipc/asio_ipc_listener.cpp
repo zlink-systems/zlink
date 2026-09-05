@@ -175,7 +175,7 @@ int zlink::asio_ipc_listener_t::set_local_address (const char *addr_)
     _acceptor.listen (options.backlog, ec);
     if (ec) {
         const int tmp_errno = ec.value ();
-        close ();
+        process_release_endpoint ();
         errno = tmp_errno;
         return -1;
     }
@@ -211,10 +211,9 @@ void zlink::asio_ipc_listener_t::process_term (int linger_)
 {
     IPC_LISTENER_DBG ("process_term called, linger=%d, accepting=%zu", linger_, _accepting_count);
 
-    _terminating = true;
     _linger = linger_;
 
-    close ();
+    process_release_endpoint ();
 
     drain_asio_listener_pending_accepts (_io_context, &_accepting_count);
 
@@ -313,8 +312,9 @@ void zlink::asio_ipc_listener_t::create_engine (fd_t fd_)
     _socket->event_accepted (endpoint_pair, fd_);
 }
 
-void zlink::asio_ipc_listener_t::close ()
+void zlink::asio_ipc_listener_t::process_release_endpoint ()
 {
+    _terminating = true;
     if (!_acceptor.is_open ())
         return;
 

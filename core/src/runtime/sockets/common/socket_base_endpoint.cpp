@@ -963,7 +963,7 @@ void zlink::socket_base_t::terminate_inproc_pipe_with_peer_progress (pipe_t *pip
     const bool paired_transport =
       options.type == ZLINK_CORE_SOCKET_DEALER
       || options.type == ZLINK_CORE_SOCKET_ROUTER;
-    if (paired_transport && pipe_->get_transport_lane_count () == 1u && peer
+    if (paired_transport && peer
         && !peer->is_session_pipe () && peer->_sink) {
         peer->set_nodelay ();
         peer_socket = static_cast<socket_base_t *> (peer->_sink);
@@ -1098,6 +1098,8 @@ int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
               it->second.transport_pair_connect_intent->pair_id);
         if (it->second.pipe != NULL)
             it->second.pipe->terminate (false);
+        if (it->second.local_type == endpoint_type_bind)
+            release_endpoint (it->second.endpoint);
         term_child (it->second.endpoint);
     }
 

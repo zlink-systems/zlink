@@ -80,7 +80,7 @@ int zlink::asio_tcp_listener_t::set_local_address (const char *addr_)
       asio_tcp_endpoint_from_sockaddr (_address.addr ());
 
     if (configure_asio_tcp_acceptor (
-          _acceptor, protocol, _address.family (), bind_endpoint, options, true,
+          _acceptor, protocol, _address.family (), bind_endpoint, options,
           [] (const char *stage, const boost::system::error_code &ec, bool) {
               LISTENER_DBG ("Failed to %s: %s", stage, ec.message ().c_str ());
           })
@@ -122,10 +122,9 @@ void zlink::asio_tcp_listener_t::process_term (int linger_)
 {
     LISTENER_DBG ("process_term called, linger=%d, accepting=%zu", linger_, _accepting_count);
 
-    _terminating = true;
     _linger = linger_;
 
-    close ();
+    process_release_endpoint ();
 
     //  Process any pending handlers (including the cancelled async_accept)
     //  to ensure the callback fires while the object is still alive.
@@ -158,7 +157,7 @@ void zlink::asio_tcp_listener_t::on_accept (
     LISTENER_DBG ("on_accept: ec=%s, terminating=%d, pending=%zu", ec.message ().c_str (),
                   _terminating, _accepting_count);
 
-    //  If terminating, just return - process_term already handled everything
+    //  Never create a session from an accept queued before endpoint release.
     if (_terminating) {
         LISTENER_DBG ("on_accept: terminating, ignoring callback");
         //  Close any accepted socket if the accept succeeded during shutdown
@@ -264,8 +263,9 @@ void zlink::asio_tcp_listener_t::create_engine (fd_t fd_)
     _socket->event_accepted (endpoint_pair, fd_);
 }
 
-void zlink::asio_tcp_listener_t::close ()
+void zlink::asio_tcp_listener_t::process_release_endpoint ()
 {
+    _terminating = true;
     LISTENER_DBG ("close called");
 
     close_asio_socket_if_open (_acceptor, [this] (fd_t fd) {

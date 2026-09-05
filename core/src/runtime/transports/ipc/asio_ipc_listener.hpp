@@ -45,7 +45,7 @@ class asio_ipc_listener_t ZLINK_FINAL : public own_t, public io_object_t
                const boost::system::error_code &ec);
 
     void create_engine (fd_t fd_);
-    void close ();
+    void process_release_endpoint () ZLINK_OVERRIDE;
 
     bool apply_accept_filters (fd_t fd_);
 

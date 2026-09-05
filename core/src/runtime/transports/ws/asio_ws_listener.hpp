@@ -64,7 +64,7 @@ class asio_ws_listener_t ZLINK_FINAL : public own_t, public io_object_t
     void create_engine (fd_t fd_);
 
     //  Close the listener
-    void close ();
+    void process_release_endpoint () ZLINK_OVERRIDE;
 
     //  Tune accepted socket
     int tune_socket (fd_t fd_) const;

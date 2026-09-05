@@ -57,7 +57,7 @@ class asio_tcp_listener_t ZLINK_FINAL : public own_t, public io_object_t
     void create_engine (fd_t fd_);
 
     //  Close the listening socket
-    void close ();
+    void process_release_endpoint () ZLINK_OVERRIDE;
 
     //  Tune accepted socket
     int tune_socket (fd_t fd_) const;
@@ -83,7 +83,7 @@ class asio_tcp_listener_t ZLINK_FINAL : public own_t, public io_object_t
     //  Number of outstanding async_accept operations.
     size_t _accepting_count;
 
-    //  True if process_term has been called
+    //  True once the bound endpoint has been released
     bool _terminating;
 
     //  Linger value saved from process_term for deferred termination

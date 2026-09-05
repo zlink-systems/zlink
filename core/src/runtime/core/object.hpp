@@ -95,6 +95,7 @@ class object_t
     void send_term (zlink::own_t *destination_, int linger_);
     void send_term_ack (zlink::own_t *destination_);
     void send_term_endpoint (own_t *destination_, std::string *endpoint_);
+    void release_endpoint (own_t *destination_);
     void send_reconnect_inproc (own_t *destination_, std::string *endpoint_);
     void send_reap (zlink::socket_base_t *socket_);
     void send_reaped ();
@@ -132,6 +133,7 @@ class object_t
     virtual void process_term (int linger_);
     virtual void process_term_ack ();
     virtual void process_term_endpoint (std::string *endpoint_);
+    virtual void process_release_endpoint ();
     virtual void process_reconnect_inproc (std::string *endpoint_);
     virtual void process_reap (zlink::socket_base_t *socket_);
     virtual void process_reaped ();
