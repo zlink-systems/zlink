@@ -104,3 +104,18 @@ framework에서 확인할 점: WRITABLE `send_result == TERMINAL`(ENOENT → Not
 framework 영향: 0.16.0의 "nonzero REQUEST ID = admission 전 pending 수락" 가정 제거. 바인딩의 async request는 BACKPRESSURED+토큰을 SEND와 같은
 토큰 기계로 처리하므로(자기 토큰의 WRITABLE에서만 같은 요청 재제출, admission 뒤 기존 REQUEST completion), framework는 바인딩 request API를
 그대로 쓰면 되고 직접 재시도 루프를 두지 않는다. TERMINAL WRITABLE은 typed 실패(NotFound / Terminated)로 온다.
+
+## 8. A 후속 6건 결과 (2026-09-05 오전, `handoff-B-followups-D086-D087.ko.md` 요청)
+
+| # | 작업 | 결론 (decisions) | 커밋 |
+|---|---|---|---|
+| 3 | reciprocal HANDOVER lane | spec대로 — 패배 lane은 standby 유지, 자동 종료 없음. settlement/re-pin 코드 삭제 가능 (D-B96, `test_router_reciprocal_handover_lanes`) | `a1cbfb3246` |
+| 4 | disconnect progress w/o app poll | Core 버그 3건 수정 — 두 번째 POLLIN poller·수동 reconnect 상태기계 삭제 가능 (D-B104, `test_socket_disconnect_progress_without_app_poll`) | `0c39ed2e52` |
+| 5 | Java monitor identity | Java 레이아웃 버그 수정 + Core identity 결함 3건 수정(inproc id·tcp/ipc attempt id·inproc 재연결) (D-B95, D-B102); tcp CLOSED correlation은 READY==DISCONNECTED, 새 attempt==CLOSED | `c9d294c44f`, `1c69086a4a`, `711fe8a1e3` |
+| 6 | Java typed error | spec대로 4 case 구분 + disconnectRid/WRITABLE race 수정 — errno 표·`NOT_ADMITTED` 전체 허용 삭제 가능 (D-B97) | `76596423ff` |
+| 1 | D-086 admission 지연 | Core 버그(accepted pair ID 재사용) 수정, tcp 4~7 ms; 2 s 기대치 조정 불필요 (D-B94) | `7ffb8e55d9` |
+| 2 | D-087 Java 누수 | 콘텐츠 해시 캐시 (D-B93) | `37af8073a7` |
+
+패키지 재빌드 대상 Core 커밋: `7ffb8e55d9`, `1c69086a4a`, `0c39ed2e52`. Release+LTO hotpath_gate는 `0c39ed2e52` 기준으로 실행해 결과를 D-B104에 추가한다.
+사용자 결정이 필요한 spec gap: (a) inproc peer close 시 CLOSED 이벤트 요구 여부(D-B102), (b) 즉시 `disconnect→connect` 시 old/new overlap 허용 여부·request가 쓴 connection_id 공개 여부(D-B104), (c) Java Poller monitor 등록은 공통 spec 개정(`c6d491e3e8`)으로 해소.
+bindings parity(사용자 지시 "모든 bindings 동일"): spec `c6d491e3e8`; Rust `NOT_ADMITTED` 수정 `bd84afc447`; 레이아웃 테스트 `90ad19f0e5`; Poller monitor source — Node `31139dd137`, Java `820b878567`, Rust `ade06d5514`, Python/Go `3c64aeb481` (D-B98~D-B103).

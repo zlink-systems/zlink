@@ -105,6 +105,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_pubsub
   ${INTEGRATION_TEST_ROOT}/test_reconnect_ivl
   ${INTEGRATION_TEST_ROOT}/test_reconnect_options
+  ${INTEGRATION_TEST_ROOT}/test_socket_disconnect_progress_without_app_poll
   ${INTEGRATION_TEST_ROOT}/test_connect_rid
   ${INTEGRATION_TEST_ROOT}/test_connect_rid_alias_binding
   ${INTEGRATION_TEST_ROOT}/test_pubsub_filter_xpub
@@ -485,6 +486,11 @@ endif()
 # override timeout for these tests
 if(TARGET test_reconnect_ivl)
   set_tests_properties(test_reconnect_ivl PROPERTIES TIMEOUT 15)
+endif()
+if(TARGET test_socket_disconnect_progress_without_app_poll)
+  set_tests_properties(
+    test_socket_disconnect_progress_without_app_poll
+    PROPERTIES TIMEOUT 60)
 endif()
 if(TARGET test_issue_566)
   set_tests_properties(test_issue_566 PROPERTIES TIMEOUT 30)

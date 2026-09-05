@@ -36,3 +36,8 @@ D-B83 Core latency 잔여는 원인별 수정 트랙으로, D-B89 러너 수정 
 ## 5. 진행 중 job
 
 - `b-cpp-single-recv-pass1` 완료(07:35, 위 반영). `b-core-d086`, `b-java-d087` 진행 중(08:25~).
+
+## 6. 오전 추가 (08:20~11:00)
+- 사용자 지시로 결정 항목 5개 감독 판단으로 확정(D-B91), A 후속 6건 전부 완료·push(인계 문서 §8), bindings parity 작업(D-B98~D-B103), Core 수정 3건(`7ffb8e55d9`, `1c69086a4a`, `0c39ed2e52`; hotpath_gate 실행 중).
+- 남은 사용자 결정(spec gap): inproc peer close CLOSED 이벤트, 즉시 disconnect→connect overlap, request가 쓴 connection_id 공개.
+- 이후: hotpath_gate 결과 기록 → C++/.NET/C monitor mask 통일 → bindings 성능 계획 재개(.NET).

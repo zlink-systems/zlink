@@ -246,6 +246,7 @@ class socket_base_t : public own_t,
 {
     friend class reaper_t;
     friend class socket_public_handle_t;
+    friend class socket_inprocs_t;
     friend class submit_progress_wait_scope_t;
 #ifdef ZLINK_BUILD_TESTS
     friend class session_termination_test_access_t;
@@ -992,6 +993,7 @@ class socket_base_t : public own_t,
 
     int connect_internal (const char *endpoint_uri_,
                           bool process_pending_commands_ = true);
+    void terminate_inproc_pipe_with_peer_progress (pipe_t *pipe_);
     int term_endpoint_internal (const char *endpoint_uri_);
     int bind_inproc_endpoint (const char *endpoint_uri_);
     int bind_transport_listener (const std::string &protocol_,

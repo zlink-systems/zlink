@@ -133,7 +133,8 @@ class socket_inprocs_t
 {
   public:
     void emplace (const char *endpoint_uri_, pipe_t *pipe_);
-    int erase_pipes (const std::string &endpoint_uri_str_);
+    int erase_pipes (const std::string &endpoint_uri_str_,
+                     socket_base_t *owner_);
     void erase_pipe (const pipe_t *pipe_);
     bool endpoint_for_pipe (const pipe_t *pipe_, std::string *endpoint_out_) const;
 
