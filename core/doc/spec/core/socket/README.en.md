@@ -162,7 +162,13 @@ observes another peer with the same routing id. The option value is an
 `int`; the default is `ZLINK_RID_DUPLICATE_REJECT`.
 
 `ZLINK_RID_DUPLICATE_REJECT` keeps the existing pipe and does not register the
-new duplicate pipe. Under `ZLINK_RID_DUPLICATE_HANDOVER`, a reconnecting pipe
+new duplicate pipe; the unregistered duplicate pipe is closed immediately. The
+connector therefore observes that pipe's termination through its monitor and
+reconnects per its connect intent, and an attempt made after the existing pipe
+has terminated is admitted. A request already submitted on the rejected pipe
+ends exactly once with `ZLINK_REQUEST_NOT_CONNECTED` (errno `EHOSTUNREACH`). The
+READY event a connector observes means the transport connection was established,
+not that the peer ROUTER admitted the routing id. Under `ZLINK_RID_DUPLICATE_HANDOVER`, a reconnecting pipe
 in the same direction takes over the existing pipe. If pipes in opposite
 directions collide, both peers compare their routing IDs and choose the same
 single direction. A request already admitted on the direction that loses that
