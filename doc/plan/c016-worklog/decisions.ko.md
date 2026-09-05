@@ -1249,3 +1249,10 @@ gate: worktree identity 5/5, integration 121/121, 전체 171/171; main dev 전�
 - 발견: send_routing_id assert 수정 job(`b63f79a3ce`)의 미해결 2번. REJECT ROUTER가 중복 pipe를 `terminate(true)`로 닫으면 connector(ROUTER)는 staged routing-id preamble 때문에 `waiting_for_delimiter`에 머물러, application recv가 preamble을 소진할 때까지 monitor DISCONNECTED가 나오지 않는다. DEALER connector는 즉시 관찰한다.
 - 판단: Core polling §3 command progress / D-B104(disconnect progress는 application poll에 의존하지 않는다)와 §4 "connector는 그 pipe의 종료를 monitor로 관찰하고 connect intent에 따라 다시 연결"이 이미 요구하는 동작이므로 spec gap이 아니라 Core 결함. ROUTER/DEALER 두 경로가 아니라 하나의 종료 관찰 규칙이어야 한다.
 - 조치: Core job(worktree b, astra) — 회귀 테스트(ROUTER connector, REJECT ROUTER, app recv 없이 DISCONNECTED 관찰) + 단일 owner 수정. framework 쪽 보상 금지.
+
+## D-093 (2026-09-05 16:10, 머신 A) 결정 — durable operation의 "target lifecycle 종료" 신호와 deadline 소유자(ZoneWorld G4)
+
+- 진단(`fix-dotnet-zoneworld-g4-lifecycle-terminal-summary.md`) 승인: **B 기존 결함**. Core는 pair 종료를 98 ms에 NOT_CONNECTED로 전달했고, 남은 것은 Framework 규칙이다.
+- 규칙 1 — lifecycle 종료 신호는 **logical 소유자**의 결정 하나다: Location/auto-connect 소유자가 해당 target node의 connection intent(expectation)를 제거하고 그 target에 admitted peer가 남아 있지 않은 상태(`ZLinkManagedMeshNode` `:438` intent 제거 + peer 부재). 물리 disconnect(`RemovePeer(disconnect:false)`)나 peer 부재 단독은 transient이며 replay를 계속한다(04-actor-model §5). 이 조건이 성립하면 08-routing "owner process 종료/owner 변경 → current operation `Unavailable`"에 따라 durable operation을 즉시 `Unavailable`로 종결하고 replay를 멈춘다. 새 상태·timer·monitor 없음: 이미 존재하는 intent 제거 전이를 sender가 구독/조회한다.
+- 규칙 2 — deadline 소유자는 operation(sender) 하나. deferred join(`ZLinkDeferredActorJoin.cs:228`)과 remote transaction wrapper(`ZLinkActorRemoteJoiner.cs:162/187`)는 admission 대기 중 자기 CTS로 경쟁하지 않고 sender terminal을 기다린다(deadline은 operation에 전달만). 소유자 3→1.
+- parity: node ActorJoin은 durable replay 없이 timeout completion에서 peer 상태로 RouteNotConnected로 변환(다른 경로), java durable sender는 lifecycle 판정이 없고 java ZoneWorld sample이 `DEADLINE_EXCEEDED`도 "Unavailable" 문자열로 합쳐 G4를 가린다. 후속: java sender에 같은 규칙 1 적용 + java sample의 오류 통합 제거(별도 job); node는 규칙 1과 동등한지 검토.
