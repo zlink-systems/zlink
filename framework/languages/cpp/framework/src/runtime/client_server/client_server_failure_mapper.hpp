@@ -25,6 +25,7 @@ inline framework_exception_t client_server_operation_exception (
               detail::boundary_error_t::cancelled,
               std::move (operation) + " was cancelled");
         case foundation::operation_terminal_t::transport_failed:
+        case foundation::operation_terminal_t::route_unavailable:
             return detail::make_boundary_exception (
               detail::boundary_error_t::disconnected,
               std::move (operation) + " lost its connection");

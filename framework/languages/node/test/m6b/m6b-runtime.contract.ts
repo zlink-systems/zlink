@@ -6,7 +6,12 @@ import './m6b-execution-policy.contract';
 import './m6b-serial-execution-conformance.contract';
 import './m6b-user-spot-terminal-replay.contract';
 
-import { Message, RequestResult, SubmitResult } from '@zlink-systems/zlink';
+import {
+  Message,
+  RequestResult,
+  SubmitResult,
+  type StreamSocket
+} from '@zlink-systems/zlink';
 import {
   ServiceWireCommand,
   ServiceWireFlag
@@ -6625,29 +6630,30 @@ function closeParts(record: ReceiveRecord): void {
 function createFakeStream(
   delivered: Buffer[],
   state: { disconnected: boolean; backpressured: boolean }
-): unknown {
+): Pick<StreamSocket, 'send'> {
   const createSubmit = () => {
     const pending: Buffer[] = [];
+    const submitPending = (): void => {
+      if (state.disconnected) throw new Error('stream route is disconnected');
+      if (state.backpressured) throw new Error('stream route is backpressured');
+      delivered.push(...pending);
+    };
     const submit = {
       message(part: Uint8Array) {
         pending.push(Buffer.from(part));
         return submit;
       },
-      flags() {
-        return submit;
+      async submit() {
+        submitPending();
       },
-      submit() {
-        if (state.disconnected) throw new Error('stream route is disconnected');
-        if (state.backpressured) return false;
-        delivered.push(...pending);
-        return true;
+      submit_sync() {
+        submitPending();
       }
     };
     return submit;
   };
   return {
-    send: createSubmit,
-    trySend: createSubmit
+    send: createSubmit
   };
 }
 

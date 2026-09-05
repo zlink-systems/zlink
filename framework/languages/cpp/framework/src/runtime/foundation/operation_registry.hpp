@@ -24,7 +24,8 @@ enum class operation_terminal_t
     timed_out,
     cancelled,
     transport_failed,
-    shutdown
+    shutdown,
+    route_unavailable
 };
 
 class operation_completion_dispatcher_t;

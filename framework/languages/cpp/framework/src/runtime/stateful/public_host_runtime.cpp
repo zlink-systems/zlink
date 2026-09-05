@@ -6718,6 +6718,9 @@ void public_host_runtime_t::complete_operation (call_id_t operation,
             case foundation::operation_terminal_t::timed_out:
                 record.terminal_result = static_cast<int> (zlink::request_result_t::timed_out);
                 break;
+            case foundation::operation_terminal_t::route_unavailable:
+                record.terminal_result = static_cast<int> (zlink::request_result_t::not_connected);
+                break;
             case foundation::operation_terminal_t::shutdown:
                 record.terminal_result = static_cast<int> (zlink::request_result_t::terminated);
                 break;

@@ -1322,6 +1322,59 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
     assert (invalidations == 1);
     assert (route_resolutions == 0);
 
+    // The connected route admits this request, but the target withholds its
+    // reply. Only this post-admission deadline expiry is DeadlineExceeded.
+    auto withheld = std::async (
+      std::launch::async,
+      [&] {
+          return source.bind_application_actor_session (
+            actor,
+            zlink::routing_id_t::from (
+              "bound-session-withheld-reply"),
+            2, route, 20ms)
+            .result ();
+      });
+    const auto withheld_deadline =
+      std::chrono::steady_clock::now () + 2s;
+    bool admitted_without_reply = false;
+    while (withheld.wait_for (0ms) != std::future_status::ready
+           && std::chrono::steady_clock::now () < withheld_deadline) {
+        const auto pump =
+          target.native_node ().transport ().pump_one (
+            mesh::service_liveness_registry_t::clock_t::now ())
+            .result ()
+            .value ();
+        assert (pump != mesh::raw_mesh_pump_result_t::protocol_error);
+        if (!admitted_without_reply
+            && pump == mesh::raw_mesh_pump_result_t::infrastructure) {
+            auto claim =
+              target.native_node ().transport ().mailbox ().try_claim (
+                mesh::service_mailbox_domain_t::infrastructure,
+                1, 4096);
+            if (claim && claim->records.size () == 1) {
+                assert (
+                  protocol::decode_header (
+                    claim->records.front ().parts.front ())
+                    .kind
+                  == protocol::command::boundSessionBind);
+                assert (target.native_node ().transport ()
+                          .mailbox ().release (*claim));
+                admitted_without_reply = true;
+            }
+        }
+        (void) source.dispatch_ready (
+          [] (const auto &, const auto &, auto) {});
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (admitted_without_reply);
+    assert (withheld.wait_for (0ms) == std::future_status::ready);
+    const auto reply_timeout = withheld.get ();
+    assert (!reply_timeout);
+    assert (reply_timeout.error_kind ()
+            == framework_error_kind_t::deadline_exceeded);
+    assert (invalidations == 1);
+    assert (route_resolutions == 0);
+
     /* Bind retries are bounded by the binding deadline, not attempt count
      * (dotnet/java parity): both transient outcomes stay retryable on every
      * attempt, while a completed bind never re-enters. */
