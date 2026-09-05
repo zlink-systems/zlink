@@ -1133,4 +1133,4 @@ handover 시 종료되지 않고 active duplicate standby(`:364-379`, `:398-416`
 binding 버그 → 수정: `disconnectRid()`가 completion owner의 send/drain 직렬화 밖에서 실행돼 이미 큐에 있던 stale WRITABLE wake로 재제출하면 `NOT_CONNECTED`로 끝나던 race — `SocketCore.disconnectRid`를 같은 lock으로 직렬화하고 pending에 target 제거 표식을 남겨
 재제출/TERMINAL 모두 `NOT_FOUND`로 종결(`CompletionOwner.markTargetRemoved`). 기존 `DontWaitBackpressureContractTest`의 raw errno assertion 제거. gate: Java 129 tests(3 skipped) green, samples 7/7.
 교차 parity 후보(다른 7 binding에 같은 race가 있는지 확인 항목으로 추가): "명시적 disconnectRid 뒤 stale WRITABLE 재제출 → NOT_FOUND".
-**A용 한 줄: spec대로 동작 확인(`AsyncSubmitTypedResultContractTest`) + binding race 수정 커밋(아래 해시) — java framework의 errno 재분류 표·`NOT_ADMITTED` 전체 허용은 삭제 가능.**
+**A용 한 줄: spec대로 동작 확인(`AsyncSubmitTypedResultContractTest`) + binding race 수정 커밋 `76596423ff` — java framework의 errno 재분류 표·`NOT_ADMITTED` 전체 허용은 삭제 가능.**
