@@ -1,0 +1,25 @@
+# Job (fix, model astra): node `client-server-location-runtime.test.js:1798` "ClientServer send target caps the readiness wait at five seconds" waits 8510–8585 ms (twice, in two full `npm test` runs) but passes alone (36/36) — deterministic ~3.5 s overshoot under the full suite, not random load. Root-cause the wait owner
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, the ClientServer channel spec
+`framework/doc/framework/common/spec/server/02-channel-transport/03-client-server-channel.{ko,en}.md` (send target readiness wait, its cap) and
+`05-transport-liveness`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages; never widen the cap or the
+test bound; do not commit. Another job edits node STREAM/DeliveryDispatch files in the same tree — `git status` first, keep to the ClientServer
+location runtime and its tests. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`.
+
+## Facts
+Gate logs `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate7-node-npmtest.log` (`waited 8585ms`) and
+`gate8-node-npmtest.log` (`waited 8510ms`); the file alone passes. The test asserts the readiness wait ends at the 5 s cap. An overshoot of a
+consistent ~3.5 s points at a structural cause, e.g. the cap being measured from a later point than the test's start, a preceding await inside
+the same operation (resolver/lease lookup) that is not covered by the cap, a timer that the cap does not cancel, or an event-loop blocking call
+elsewhere in the file's earlier tests (a sync native call left pending) that delays the cap timer — find which.
+
+## What to do
+1. Reproduce under the full file and with `node --test` on the whole `test/contract` set if needed; instrument the elapsed segments (temporary, remove).
+2. Fix at the owner: the cap must bound the entire readiness wait from the operation's start with one deadline owner (no second timer). If a
+   previous test leaks state (pending handle/timer) into this one, fix the owner of that state, not the test order.
+3. Regression: the test's assertion stays; add a unit test for the wait owner if the cap accounting changed. Run the file 3× and `npm test` once
+   (the `sample-regression` file may still fail because of the separate DeliveryDispatch STREAM regression under Core investigation — report it,
+   do not touch it).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-clientserver-readiness-cap-summary.md`: segment timings, cause file:line, fix, four lines, rule count, results, BLOCKERS.
