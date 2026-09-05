@@ -1,0 +1,22 @@
+# Job: <language> — <symptom> (STAGE 1: diagnosis only, no code)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 "계층 소유권·금지 패턴·교차언어 대조·진단 먼저",
+`framework/AGENTS.md` "교차언어 불변식". Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`,
+`doc/site/**`. STAGE 1 = NO CODE CHANGES (temporary trace sinks allowed, removed before finishing); do not commit.
+
+## Facts
+<failure, logs, prior evidence file:line>
+
+## Deliverable (STAGE 1) — `doc/plan/c016-worklog/<job>-diagnosis.md`
+1. Cause `file:line` with a trace/timeline (existing message-flow tracing first).
+2. **Owner layer per spec**: which layer owns the decision involved (cite Core/binding/framework clause). Is the framework
+   currently re-implementing or duplicating a lower-layer decision at this site? (list every site)
+3. **Cross-language parity**: how cpp and node handle the same situation (file:line). If only this language needs a change,
+   is that a structural difference or a symptom of another root cause?
+4. **Classification**: A (0.17 contract adaptation, cite clause) / B (pre-existing framework defect, cite the violated clause
+   and why latent before) / C (would be a workaround — name the real cause and the evidence needed) / D (spec gap — cite).
+5. Proposed minimal fix location and the regression test that would prove it; what would break if the compensating code
+   were deleted instead.
+Forbidden as a "fix": timeout/budget/retry increases, "safe" reordering, monitor-pair state to filter frames, second poller,
+catch-all swallow, fixture relaxation, assertion changed to match implementation.
+STOP after the diagnosis. The supervisor approves A/B before STAGE 2 (implementation + regression + verification).
