@@ -24,7 +24,7 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class RelocationBehaviorConformanceTests
 {
     [Fact]
-    public async Task Maintenance_stop_relocates_parallel_standalone_actors_to_target()
+    public async Task Planned_maintenance_relocates_parallel_standalone_actors_before_shutdown()
     {
         var trace = new RelocationBehaviorTrace();
         var locationStore = new RecordingLocationStore(
@@ -66,8 +66,15 @@ public sealed class RelocationBehaviorConformanceTests
                   && target.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
                       .Node.Status().ActivePeerCount == 1);
 
-        var shutdown = await source.Services
-            .GetRequiredService<IZLinkFrameworkRuntime>()
+        var lifecycle = source.Services.GetRequiredService<IZLinkFrameworkRuntime>();
+        var relocated = await lifecycle.RelocateAsync(new ZLinkFrameworkRelocationOptions
+        {
+            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            Deadline = TimeSpan.FromSeconds(30)
+        });
+        Assert.Equal(ZLinkFrameworkRelocationOutcome.Relocated, relocated.Outcome);
+
+        var shutdown = await lifecycle
             .ShutdownAsync(TimeSpan.FromSeconds(30))
             .AsTask()
             .WaitAsync(TimeSpan.FromSeconds(35));

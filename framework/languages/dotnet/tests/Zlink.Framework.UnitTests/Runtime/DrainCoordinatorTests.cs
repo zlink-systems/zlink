@@ -8,10 +8,11 @@ using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
+using Zlink.Framework.UnitTests.Runtime;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class DrainCoordinatorTests
+public sealed class DrainCoordinatorTests : RegistrationValidationSupport
 {
     [Fact]
     public void Propagation_Bound_Is_Polling_Plus_Five_Seconds_And_One_Hundred_Milliseconds()
@@ -27,7 +28,7 @@ public sealed class DrainCoordinatorTests
     }
 
     [Fact]
-    public async Task Drain_Executor_Seals_Before_Publishing_And_Waits_Accepted_Work_Before_Handoff()
+    public async Task Shutdown_Seals_And_Waits_Accepted_Work_Then_Closes_Spots_Without_Relocating_Actors()
     {
         var probe = new DrainExecutionProbe();
         var executor = new ZLinkFrameworkDrainExecutor(
@@ -52,7 +53,6 @@ public sealed class DrainCoordinatorTests
                 "quiesce-serving-channels",
                 "wait-accepted",
                 "wait-accepted-handoffs",
-                "drain-actors",
                 "drain-spots",
                 "drain-sessions",
                 "freeze-owner-writes",
@@ -802,8 +802,8 @@ public sealed class DrainCoordinatorTests
             new[]
             {
                 "stop-mesh-monitoring",
-                "stop-runtime",
                 "stop-auto-connect",
+                "stop-runtime",
                 "cleanup-owner",
                 "stop-location"
             },
@@ -1178,6 +1178,70 @@ public sealed class DrainCoordinatorTests
     }
 
     [Fact]
+    public async Task Host_Stop_With_All_Channel_Kinds_And_An_Actor_Without_Relocation_Target_Is_Stopped()
+    {
+        var streamPort = FindFreeTcpPort();
+        var sessionProbe = new DrainSessionProbe();
+        var trace = new RelocationBehaviorTrace();
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddSingleton(sessionProbe);
+        builder.Services.AddSingleton(trace);
+        builder.Services.AddSingleton(new BehaviorNode("source"));
+        builder.Services.AddZLinkFramework(options =>
+        {
+            options.AddLocationStore(new ZLinkInMemoryProviderLocationStore());
+            var mesh = options.AddRouteMesh("shutdown-mesh")
+                .Listen($"tcp://127.0.0.1:{FindFreeTcpPort()}");
+            mesh.Channel("mesh-work").Server()
+                .AddRequestHandler<TestChannelRequestHandler, TestChannelRequest, TestChannelReply>();
+            mesh.Objects().Server()
+                .AddEntrySpot<BehaviorEntrySpot>()
+                .AddActorFactory<BehaviorActor, BehaviorActorFactory>("shutdown-actor",
+                    factory => factory.DisableRelocation());
+            options.AddClientServerChannel("client-server-work").Client();
+            options.AddClientServerChannel("client-server-work").Server().Listen(0)
+                .AddRequestHandler<TestChannelRequestHandler, TestChannelRequest, TestChannelReply>();
+            options.AddFanoutChannel("events").EnablePublisher().EnableSubscriber()
+                .AddHandler<TestPublishHandler, TestPublishedEvent>();
+            options.AddStreamNode("shutdown-stream")
+                .Bind($"tcp://127.0.0.1:{streamPort}")
+                .AddSession<DrainSession>();
+        });
+        using var host = builder.Build();
+        await host.StartAsync();
+        var routes = host.Services.GetRequiredService<IZLinkRouteClient>();
+        var reply = await routes.RequestToChannel("client-server-work", new TestChannelRequest("active"))
+            .Timeout(TimeSpan.FromSeconds(5)).Async<TestChannelReply>();
+        Assert.Equal("active", reply.Value);
+        await host.Services.GetRequiredService<IZLinkFanoutClient>()
+            .Publish("events", new TestPublishedEvent("active")).Async();
+        var actor = await host.Services.GetRequiredService<IZLinkActorManager>()
+            .GetOrCreate("shutdown-actor-1", "shutdown-actor")
+            .InMesh("shutdown-mesh").Request(new BehaviorCreate(7))
+            .Timeout(TimeSpan.FromSeconds(5)).Async();
+        Assert.IsType<ZLinkActorCreateResult.Created>(actor);
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{streamPort}"),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+                Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false }
+            });
+        await connector.Connect.Async();
+        await connector.Send(new DrainProbeMessage("active")).Async();
+        await sessionProbe.Connected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await host.StopAsync();
+
+        var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
+        Assert.Equal(new ZLinkFrameworkTerminationResult(
+            ZLinkFrameworkTerminationOutcome.Stopped,
+            ZLinkFrameworkTerminationReason.None), runtime.Status.TerminationResult);
+        Assert.DoesNotContain("sourceStateCaptured", trace.Events);
+    }
+
+    [Fact]
     public async Task Framework_Registration_Projects_And_Resets_Host_Capacity()
     {
         const ulong budgetBytes = 4 * 1024 * 1024;
@@ -1438,12 +1502,6 @@ public sealed class DrainCoordinatorTests
             {
                 Events.Add("wait-accepted-handoffs");
                 return Task.CompletedTask;
-            },
-            DrainActors: (_, _) =>
-            {
-                Events.Add("drain-actors");
-                return ValueTask.FromResult(
-                    new ZLinkActorDrainResult(true, null, 0));
             },
             DrainSpots: (relocate, hostShutdown, _, _) =>
             {

@@ -182,11 +182,19 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("rm -f \"${SUPPORTCHAT_LOG_DIR}\"/*.log", shellRunner, StringComparison.Ordinal);
         Assert.Contains("supportchat=completed", shellRunner, StringComparison.Ordinal);
         Assert.Contains("supportchat-closed-typing-ignore=verified", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("supportchat-server-evidence=completed", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("status=WaitingForAgent", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("status=Active", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("status=WaitingForClose", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("status=Closed", shellRunner, StringComparison.Ordinal);
+        // Common sample §10.1: the client owns completion; the runner reads
+        // creation, join and every state transition from the server logs.
+        foreach (var evidence in new[]
+                 {
+                     "created", "agent-joined", "status=WaitingForAgent", "status=Active",
+                     "status=WaitingForClose", "status=Closed"
+                 })
+        {
+            Assert.Contains($"wait_log_at_least 1 \"supportchat-conversation {evidence} conversation=\" \"${{LOG_DIR}}/api.log\" \"${{LOG_DIR}}/support.log\"",
+                shellRunner, StringComparison.Ordinal);
+            Assert.Contains($"Wait-SupportChatLogCount -Path $apiAndSupportLogs -Pattern \"supportchat-conversation {evidence} conversation=\"",
+                powershellRunner, StringComparison.Ordinal);
+        }
         Assert.DoesNotContain("message flow", shellRunner, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("SUPPORTCHAT_STARTUP_DELAY_SECONDS", shellRunner, StringComparison.Ordinal);
 
@@ -225,7 +233,8 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains("supportchat=completed", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("supportchat-closed-typing-ignore=verified", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("supportchat-server-evidence=completed", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("(Join-Path $LogDir \"api.out.log\")", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains("(Join-Path $LogDir \"support.out.log\")", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("status=WaitingForAgent", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("status=Active", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("status=WaitingForClose", powershellRunner, StringComparison.Ordinal);
@@ -281,7 +290,8 @@ public sealed partial class RegressionTests
             availableHandler, StringComparison.Ordinal);
         Assert.Contains("assignment.SetAvailable(actor.ActorId, actor.DisplayName, false)", entrySpot,
             StringComparison.Ordinal);
-        Assert.Contains("support conversation: state changed", conversationSpot, StringComparison.Ordinal);
+        Assert.Contains("supportchat-conversation status={Status} conversation={ConversationId}",
+            conversationSpot, StringComparison.Ordinal);
         Assert.Contains("supportchat-closed-typing-ignore=verified", clientScenario, StringComparison.Ordinal);
         Assert.Contains("ExpectNone<TypingChangedNotify>()", clientScenario, StringComparison.Ordinal);
 

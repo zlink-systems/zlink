@@ -215,29 +215,9 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                 return Result(null);
             }
 
-            var actorsDrained = false;
-            while (!actorsDrained)
-            {
-                ShutdownStep("drain_actors");
-                var actorDrain = await _operations.DrainActors(
-                        absoluteDeadline,
-                        deadlineToken)
-                    .ConfigureAwait(false);
-                committedUnitCount = checked(
-                    committedUnitCount + actorDrain.CommittedUnitCount);
-                if (actorDrain.TerminalReason is not null)
-                    return intent == ZLinkFrameworkLifecycleIntent.Relocate
-                           && committedUnitCount == 0
-                        ? await RollBackBlockedRetireAsync(
-                                actorDrain.TerminalReason.Value,
-                                relocationFence)
-                            .ConfigureAwait(false)
-                        : Result(ZLinkDrainForceReason.RelocationFailed);
-                actorsDrained = actorDrain.Completed;
-                if (!actorsDrained)
-                    await Task.Delay(_locationOptions.PollingInterval, deadlineToken).ConfigureAwait(false);
-            }
-
+            // Host relocation flow §14: shutdown preserves membership for
+            // Spot closing callbacks, then destroys local scopes. Only the
+            // relocation workload owner above may start actor handoffs.
             var spotsDrained = false;
             while (!spotsDrained)
             {
@@ -496,17 +476,17 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         // before that owner can perform the actual bounded teardown.
         var failures = new List<Exception>();
         Capture(_stopMeshMonitoring, failures);
-        await CaptureAsync(
-                "force_runtime",
-                () => _operations.ForceStopRuntime(cancellationToken),
-                failures)
-            .ConfigureAwait(false);
         if (_operations.HasAutoConnect)
             await CaptureAsync(
                     "stop_auto_connect",
                     () => _operations.StopAutoConnect(cancellationToken),
                     failures)
                 .ConfigureAwait(false);
+        await CaptureAsync(
+                "force_runtime",
+                () => _operations.ForceStopRuntime(cancellationToken),
+                failures)
+            .ConfigureAwait(false);
         var ownerCleanupFailed = false;
         if (_operations.HasLocationRuntime)
         {
@@ -665,7 +645,6 @@ internal sealed record ZLinkDrainExecutionOperations(
     Action PublishDrainingToPeers,
     Func<Task> WaitForAcceptedOperations,
     Func<CancellationToken, Task> WaitForAcceptedActorHandoffs,
-    Func<DateTimeOffset, CancellationToken, ValueTask<ZLinkActorDrainResult>> DrainActors,
     Func<bool, bool, DateTimeOffset, CancellationToken,
         ValueTask<ZLinkSpotDrainResult>> DrainSpots,
     Func<ZLinkRelocationWorkloadDrainControl,
@@ -702,7 +681,6 @@ internal sealed record ZLinkDrainExecutionOperations(
         runtime.PublishDrainingToPeers,
         runtime.WaitForAcceptedOperationsForDrainAsync,
         runtime.WaitForAcceptedActorHandoffsAsync,
-        runtime.DrainActorsAsync,
         runtime.TryDrainSpotsAsync,
         runtime.DrainRelocationWorkloadsAsync,
         runtime.DrainStreamSessionsAsync,

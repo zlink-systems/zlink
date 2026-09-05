@@ -324,37 +324,50 @@ public sealed partial class RegressionTests
         var shellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.sh"));
         var powershellRunner = File.ReadAllText(Path.Combine(sampleRoot, "run_sample.ps1"));
 
-        Assert.Contains("stream-inbound sample=TicTacToe", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("stream-inbound sample=TicTacToe .* seq=[0-9]", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("stream-inbound sample=TicTacToe .* name=.*Notify", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("tictactoe-lifecycle actor-bound actor=player-x", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("tictactoe-lifecycle leave-completed actor=player-x", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("tictactoe-lifecycle leave-completed actor=player-o", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("tictactoe-lifecycle actor-destroy-complete actor=player-x", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("tictactoe-lifecycle actor-destroy-complete actor=player-o", shellRunner, StringComparison.Ordinal);
+        // Common sample §10.1 names the client self-check evidence and exact
+        // server lifecycle counts; generic stream diagnostics are not evidence.
+        foreach (var evidence in new[]
+                 {
+                     "observer-subscription=verified subscribed=true",
+                     "observer-win-milestone=verified actor=player-x wins=100",
+                     "reconnected-game-state=verified actor=player-x room=",
+                     "tictactoe=completed"
+                 })
+        {
+            Assert.Contains($"wait_log_count 1 \"{evidence}\" \"${{LOG_DIR}}/client.log\"",
+                shellRunner, StringComparison.Ordinal);
+            Assert.Contains($"Wait-LogCount $clientLog \"{evidence}\" 1",
+                powershellRunner, StringComparison.Ordinal);
+        }
+        Assert.Contains("wait_log_count 1 \"observer-connected endpoint=${PLAY_B_ENDPOINT}\" \"${LOG_DIR}/client.log\"",
+            shellRunner, StringComparison.Ordinal);
+        Assert.Contains("Wait-LogCount $clientLog \"observer-connected endpoint=$playBEndpoint\" 1",
+            powershellRunner, StringComparison.Ordinal);
+        foreach (var (evidence, count) in new[]
+                 {
+                     ("actor-bound actor=player-x", 1),
+                     ("leave-completed actor=player-x", 1),
+                     ("leave-completed actor=player-o", 1),
+                     ("actor-destroy-complete actor=player-x", 1),
+                     ("actor-destroy-complete actor=player-o", 1),
+                     ("actor-destroy-complete actor=observer", 0)
+                 })
+        {
+            Assert.Contains($"wait_log_count {count} \"tictactoe-lifecycle {evidence}\" \"${{LOG_DIR}}\"/play-*.log",
+                shellRunner, StringComparison.Ordinal);
+            Assert.Contains($"Wait-LogCount $playLogs \"tictactoe-lifecycle {evidence}\" {count}",
+                powershellRunner, StringComparison.Ordinal);
+        }
         Assert.Contains("grep -R -q \"dispatch-error\"", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("message flow", shellRunner, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("LeaveGameMsg", shellRunner, StringComparison.Ordinal);
-
-        Assert.Contains("stream-inbound sample=TicTacToe", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("stream-inbound sample=TicTacToe .* seq=[0-9]", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("stream-inbound sample=TicTacToe .* name=.*Notify", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("tictactoe-lifecycle actor-bound actor=player-x", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("tictactoe-lifecycle leave-completed actor=player-x", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("tictactoe-lifecycle leave-completed actor=player-o", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("tictactoe-lifecycle actor-destroy-complete actor=player-x", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("tictactoe-lifecycle actor-destroy-complete actor=player-o", powershellRunner,
-            StringComparison.Ordinal);
         Assert.DoesNotContain("message flow", powershellRunner, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Select-String -Pattern \"dispatch-error\" -List", powershellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("Select-String -Pattern \"dispatch-error\" -Quiet", powershellRunner,
             StringComparison.Ordinal);
-        Assert.Contains("LeaveGameMsg", powershellRunner, StringComparison.Ordinal);
+        var leaveHandler = File.ReadAllText(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
+            "ZLink", "Spots", "TicTacToeGameSpot", "Handlers", "PlayActorLeaveGameHandler.cs"));
+        Assert.Contains("LeaveGameMsg", leaveHandler, StringComparison.Ordinal);
+        Assert.Contains("tictactoe-lifecycle leave-completed actor=", leaveHandler, StringComparison.Ordinal);
     }
 
     [Fact]
