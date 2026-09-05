@@ -335,6 +335,17 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
         pending_connection_.bind_pipe->set_hwms (0, 0);
     }
 
+    // Both inproc routing-id preambles are staged before either socket admits
+    // the pipe, as on the direct connect path. Admission may retire the
+    // bind-side half at once (a REJECT ROUTER closes a duplicate routing id,
+    // the materialization PAIR helper accepts one pipe), and a retired pipe
+    // takes no further writes.
+    if (!completion
+        && pending_connection_.endpoint.options.recv_routing_id
+        && pending_connection_.endpoint.socket->check_tag ()) {
+        send_routing_id (pending_connection_.bind_pipe, bind_options_);
+    }
+
     bool completion_materialized_before_application = false;
     if (!completion && lane_count == 2u && side_ == bind_side) {
         const std::string endpoint_uri =
@@ -369,8 +380,6 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
             pending_connection_.bind_pipe->terminate (false);
             return;
         }
-        bind_socket_->inc_seqnum ();
-        bind_socket_->process_command (cmd);
         if (paired) {
             // The connector may be concurrently sending while bind() owns the
             // bind socket's public synchronization. Queue paired scheduler
@@ -379,16 +388,27 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
             // race and cross-socket lock inversion. pend_connection() already
             // reserved the connector sequence number, so this bind command
             // consumes that reservation.
+            //
+            // The connector's admission is queued before the binder admits,
+            // as on the direct connect path. The binder may retire the pipe
+            // during admission (REJECT); its termination command then follows
+            // the connector's bind in the connector mailbox, so the connector
+            // admits the pipe, drains it, and observes the termination edge
+            // instead of parking a never-admitted pipe until close.
             if (!pending_connection_.connect_pipe->send_bind (
                   pending_connection_.endpoint.socket,
                   pending_connection_.connect_pipe, false)) {
+                pending_connection_.bind_pipe->release_lifetime_ref ();
                 bind_socket_->send_inproc_connected (
                   pending_connection_.endpoint.socket);
                 pending_connection_.connect_pipe->terminate (false);
                 pending_connection_.bind_pipe->terminate (false);
                 return;
             }
-        } else {
+        }
+        bind_socket_->inc_seqnum ();
+        bind_socket_->process_command (cmd);
+        if (!paired) {
             pending_connection_.endpoint.socket->validate_inproc_connection (
               pending_connection_.connect_pipe);
             pending_connection_.endpoint.socket->emit_inproc_connection_ready (
@@ -417,11 +437,5 @@ void zlink::ctx_inproc_registry_t::connect_inproc_sockets (
             pending_connection_.bind_pipe->terminate (false);
             return;
         }
-    }
-
-    if (!completion
-        && pending_connection_.endpoint.options.recv_routing_id
-        && pending_connection_.endpoint.socket->check_tag ()) {
-        send_routing_id (pending_connection_.bind_pipe, bind_options_);
     }
 }

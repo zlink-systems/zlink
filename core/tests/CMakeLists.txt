@@ -124,6 +124,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply
   ${INTEGRATION_TEST_ROOT}/test_router_handover
   ${INTEGRATION_TEST_ROOT}/test_router_reject_duplicate
+  ${INTEGRATION_TEST_ROOT}/test_inproc_pending_connect_rejected_at_attach
   ${INTEGRATION_TEST_ROOT}/test_router_mandatory
   ${INTEGRATION_TEST_ROOT}/test_router_mandatory_hwm
   ${INTEGRATION_TEST_ROOT}/test_router_multiple_dealers
@@ -494,6 +495,8 @@ if(TARGET test_reconnect_ivl)
   set_tests_properties(test_reconnect_ivl PROPERTIES TIMEOUT 15)
 endif()
 set_tests_properties(test_socket_disconnect_boundary PROPERTIES TIMEOUT 60)
+# Four connect-before-bind admission cases, each with monitor-driven waits.
+set_tests_properties(test_inproc_pending_connect_rejected_at_attach PROPERTIES TIMEOUT 60)
 # Twelve cases each observe past the original one-second request deadline.
 set_tests_properties(test_request_explicit_removal_not_found PROPERTIES TIMEOUT 30)
 if(TARGET test_socket_disconnect_progress_without_app_poll)
