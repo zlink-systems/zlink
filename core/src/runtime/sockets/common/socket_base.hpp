@@ -1431,10 +1431,9 @@ class socket_base_t : public own_t,
     transport_pairs_t _transport_pairs;
     typedef std::map<std::string, accepted_transport_pair_identity_t>
       accepted_transport_pairs_t;
-    //  Passive network sessions have no configured endpoint shared by both
-    //  physical connections. READY's adopted Routing-Id is therefore the
-    //  socket-local association key; the values remain local lifetime fences
-    //  and never appear on the wire or public surface.
+    //  READY's Routing-Id associates an incomplete passive lane set. Completed
+    //  pairs keep their physical identity in _transport_pairs; they are never
+    //  candidates for a later handshake, even if the RID is unchanged.
     accepted_transport_pairs_t _accepted_transport_pairs;
     std::deque<transport_pair_key_t> _ready_completion_pairs;
     std::set<transport_pair_key_t> _ready_completion_pair_set;
