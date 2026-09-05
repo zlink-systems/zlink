@@ -1,0 +1,32 @@
+# Job (Core fix, model astra): tcp ROUTER same-RID HANDOVER — the second ROUTER connector with the same RID reaches CONNECTED but never READY on the binder: the accepted engine resolves the pair by peer RID (count-two returns the existing pair id) and the socket treats it as a foreign pipe on an occupied lane and terminates both, before router HANDOVER admission can decide. Fix on top of the D-092 working diff in worktree b
+
+You are a codex sub-agent under a Claude supervisor. Read `CONTRIBUTING.ko.md` §4/§5, `AGENTS.md` §3, `core/doc/spec/core/socket/README.ko.md` §4
+(HANDOVER: a reconnecting pipe in the same direction takes over the existing pipe; REJECT keeps the existing pipe; reciprocal collapse by RID
+comparison; losing lanes standby), the transport pair / connection identity spec sections (D-086 `7ffb8e55d9` pair id per physical connection;
+D-B112 endpoint identity), and `doc/plan/c016-worklog/core-reject-disconnected-without-app-recv-summary.md` §BLOCKERS (your starting point).
+Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do not commit. WORK ONLY IN `/home/hep7/project/zlink-core-b` — **keep the existing
+uncommitted D-092 diff there** (`git status` shows 6 files incl. the new test `test_router_reject_disconnected_without_app_recv.cpp`); build on top of
+it. Never touch main's `core/build-dev`. Build: `nice -n 10 env JOBS=4 scripts/build-core.sh dev`.
+
+## Repro (already in the tree)
+`ZLINK_TEST_CASE=test_router_handover_tcp core/build-dev/bin/test_router_reject_disconnected_without_app_recv` — second ROUTER (same RID, tcp) is
+CONNECTED but the binder never publishes READY; `asio_zmp_engine.cpp:644` looks up the accepted pair by peer RID, `socket_base_api.cpp:86-89` returns the
+existing pair id for count-two, and `socket_base_api.cpp:336-339` (post-patch numbering) treats the new pipe as another pipe on an occupied lane and
+terminates the new pipe and the old pair's application/completion pipes — before `router_admission.cpp` HANDOVER/REJECT runs. Pre-existing (also on
+baseline) per the D-092 report.
+
+## What to do
+1. Root cause: which owner decides the pair identity of an accepted connection whose peer RID already has a pair — the transport engine (physical
+   connection = new pair, D-086) or the socket lane table? Per spec the physical pair identity is per connection; RID duplicate policy is the ROUTER's
+   admission decision. Make the accepted connection get its own pair and reach admission, where HANDOVER takes over (old pipe → standby per D-B96) and
+   REJECT closes the duplicate (D-088). One owner for "which pair does this pipe belong to"; remove the count-two reuse special case if that is the
+   duplicate rule. State rule count before/after.
+2. Regression coverage: the existing new test's `test_router_handover_tcp` + REJECT tcp case must now exercise real admission (assert the binder READY
+   and, for HANDOVER, that the old pipe is standby and the request contract of D-090 holds; for REJECT, DISCONNECTED without app recv per D-092).
+   Add a case for same-RID tcp reconnect with a *different* endpoint identity (client reconnects after network drop) — HANDOVER must take over.
+3. Gate: new test `--repeat until-fail:10` (all cases), targeted `test_router_reject_duplicate|test_socket_disconnect_boundary|test_router_reciprocal_handover_lanes|
+   test_ctx_term_fixed_rid_handover|test_router_handover|test_transport_matrix|test_monitor_connection_identity|test_multi_socket_contract_regressions`, full
+   ctest once (expect only hotpath n/a).
+4. Deliverable in the MAIN tree: `doc/plan/c016-worklog/core-tcp-router-same-rid-handover-pair-summary.md` (cause file:line, fix, owner / spec clause /
+   parity / class, rule count, results, BLOCKERS); `git add -N . && git diff HEAD > /home/hep7/project/zlink-core-b/core-d092-plus-handover.patch`
+   (the combined diff: D-092 + this fix).
