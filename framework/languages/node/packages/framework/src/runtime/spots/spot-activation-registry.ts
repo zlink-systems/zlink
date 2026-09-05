@@ -7,7 +7,8 @@ import type {
 } from '../../contracts';
 import type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contracts';
 import {
-  ZLinkSpotCreateState
+  ZLinkSpotCreateState,
+  ZLinkSpotCloseReason
 } from '../../contracts';
 import type { ZLinkSpotActivation } from './spot-activation-state';
 import { ZLinkSpotCloseOccupiedError } from './spot-activation-state';
@@ -41,7 +42,6 @@ export class ZLinkSpotActivationRegistry {
   private readonly closing = new Map<string, ZLinkSpotCloseOperation>();
   private readonly failedClose = new Set<string>();
   private readonly emptyWaiters = new Set<() => void>();
-  private readonly meshEmptyWaiters = new Map<string, Set<() => void>>();
   private readonly lifecycleMetrics: ZLinkSpotLifecycleMetrics;
   private activeScan: Iterator<ZLinkSpotActivation> | undefined;
 
@@ -152,25 +152,6 @@ export class ZLinkSpotActivationRegistry {
     });
   }
 
-  whenMeshEmpty(meshName: string, signal?: AbortSignal): Promise<void> {
-    if (!this.hasMeshWork(meshName)) return Promise.resolve();
-    if (signal?.aborted === true) return Promise.reject(createAbortError());
-    return new Promise<void>((resolve, reject) => {
-      const waiters = this.meshEmptyWaiters.get(meshName) ?? new Set<() => void>();
-      this.meshEmptyWaiters.set(meshName, waiters);
-      const complete = () => {
-        signal?.removeEventListener('abort', abort);
-        resolve();
-      };
-      const abort = () => {
-        waiters.delete(complete);
-        reject(createAbortError());
-      };
-      waiters.add(complete);
-      signal?.addEventListener('abort', abort, { once: true });
-    });
-  }
-
   register(activation: ZLinkSpotActivation): void {
     const key = spotActivationKey(activation.meshName, activation.spotId);
     if (this.activations.has(key)) {
@@ -203,7 +184,6 @@ export class ZLinkSpotActivationRegistry {
     this.failedClose.delete(key);
     this.lifecycleMetrics.closed('user');
     this.resolveEmptyWaiters();
-    this.resolveMeshEmptyWaiters(meshName);
     return activation;
   }
 
@@ -220,7 +200,8 @@ export class ZLinkSpotActivationRegistry {
     meshName: string,
     spotId: RoutingId,
     close: (activation: ZLinkSpotActivation) => Promise<void>,
-    resourcesReleased: (activation: ZLinkSpotActivation) => boolean
+    resourcesReleased: (activation: ZLinkSpotActivation) => boolean,
+    reason = ZLinkSpotCloseReason.ExplicitClose
   ): ZLinkSpotCloseOperation | undefined {
     const key = spotActivationKey(meshName, spotId);
     const closing = this.closing.get(key);
@@ -228,7 +209,7 @@ export class ZLinkSpotActivationRegistry {
       return { ...closing, started: false };
     }
     const activation = this.activations.get(key);
-    if (activation === undefined || !activation.canClose()) {
+    if (activation === undefined || !activation.canClose(reason)) {
       return undefined;
     }
     const operation = {} as ZLinkSpotCloseOperation;
@@ -253,7 +234,6 @@ export class ZLinkSpotActivationRegistry {
           this.closing.delete(key);
           if (occupiedAfterQuiescence) {
             this.resolveEmptyWaiters();
-            this.resolveMeshEmptyWaiters(meshName);
             return;
           }
           if (completed || resourcesReleased(activation)) {
@@ -265,7 +245,6 @@ export class ZLinkSpotActivationRegistry {
             this.failedClose.add(key);
           }
           this.resolveEmptyWaiters();
-          this.resolveMeshEmptyWaiters(meshName);
         }
       })
       .then(() => !occupiedAfterQuiescence);
@@ -321,7 +300,6 @@ export class ZLinkSpotActivationRegistry {
         if (this.pending.get(key) === pending) {
           this.pending.delete(key);
           this.resolveEmptyWaiters();
-          this.resolveMeshEmptyWaiters(meshName);
         }
       });
       return { owner: true, ready: tracked };
@@ -350,19 +328,6 @@ export class ZLinkSpotActivationRegistry {
     this.emptyWaiters.clear();
   }
 
-  private hasMeshWork(meshName: string): boolean {
-    const prefix = `${meshName}\0`;
-    return [...this.activations.keys(), ...this.pending.keys(), ...this.closing.keys()]
-      .some((key) => key.startsWith(prefix));
-  }
-
-  private resolveMeshEmptyWaiters(meshName: string): void {
-    if (this.hasMeshWork(meshName)) return;
-    const waiters = this.meshEmptyWaiters.get(meshName);
-    if (waiters === undefined) return;
-    this.meshEmptyWaiters.delete(meshName);
-    for (const resolve of waiters) resolve();
-  }
 }
 
 function spotActivationKey(meshName: string, spotId: RoutingId): string {

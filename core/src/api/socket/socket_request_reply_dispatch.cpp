@@ -436,19 +436,19 @@ void fail_pending_requests_for_logical_endpoint (
       });
 }
 
-void fail_pending_requests_for_logical_rid (
+void fail_pending_requests_for_pipe (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
-  const zlink_routing_id_t *logical_rid_)
+  const zlink::pipe_t *pipe_)
 {
-    if (!state_ || !logical_rid_ || logical_rid_->size == 0)
+    if (!state_ || !pipe_)
         return;
 
     fail_matching_pending_requests (
       state_, ZLINK_REQUEST_NOT_FOUND,
-      [logical_rid_] (socket_request_reply_state_t *state,
-                      pending_request_t *pending) {
-          return take_next_socket_pending_request_for_logical_rid_locked (
-            state, logical_rid_, pending);
+      [pipe_] (socket_request_reply_state_t *state,
+                pending_request_t *pending) {
+          return take_next_socket_pending_request_for_pipe_locked (
+            state, pipe_, pending);
       });
 }
 

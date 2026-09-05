@@ -357,10 +357,7 @@ export class ZLinkSpotNodeRuntimeManager {
             ? {}
             : { maintenanceWave: this.options.registration.maintenanceWave })
         });
-        for (const [channelName, channel] of Object.entries(spotNode.meshChannels ?? {})) {
-          if (channel.server !== true) {
-            continue;
-          }
+        for (const [channelName, channel] of this.serverChannels(spotNodeName)) {
           node.addChannelName(channelName);
           if (channel.weight !== undefined) {
             await node.setChannelWeight(channelName, channel.weight);
@@ -513,8 +510,7 @@ export class ZLinkSpotNodeRuntimeManager {
             ?? 128
         },
         channelWeights: Object.fromEntries(
-          Object.entries(registration.meshChannels ?? {})
-            .filter(([, channel]) => channel.server === true)
+          this.serverChannels(meshName)
             .map(([channelName, channel]) => [
               channelName,
               state === ZLinkFrameworkRuntimeState.Draining
@@ -814,7 +810,12 @@ export class ZLinkSpotNodeRuntimeManager {
     await this.entryActivations.get(meshName)?.notifyDisconnectActor(actor, signal);
   }
 
-  async dispose(signal?: AbortSignal): Promise<void> {
+  serverChannels(meshName: string) {
+    return Object.entries(this.options.registration.spotNodes.get(meshName)?.meshChannels ?? {})
+      .filter(([, channel]) => channel.server === true);
+  }
+
+  async dispose(signal?: AbortSignal, deadline?: Date): Promise<void> {
     this.disposed = true;
     const autoConnectLoops = [...this.autoConnectLoops];
     const entryActivations = [...this.entryActivations.values()];
@@ -836,7 +837,7 @@ export class ZLinkSpotNodeRuntimeManager {
     };
     await settle(publishers.map(async (publisher) => publisher.close()));
     await settle(autoConnectLoops.map((loop) => loop.prepareTransportShutdown()));
-    await settle(entryActivations.reverse().map((activation) => activation.dispose()));
+    await settle(entryActivations.reverse().map((activation) => activation.dispose(deadline)));
     await settle(meshPumps.reverse().map((pump) => pump.dispose()));
     await settle(meshNodes.reverse().map(async (node) => {
       node.shutdown(1000);

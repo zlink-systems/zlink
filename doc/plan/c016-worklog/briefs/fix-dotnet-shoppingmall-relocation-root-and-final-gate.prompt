@@ -1,0 +1,37 @@
+# Job (fix, model astra): dotnet ShoppingMall teardown ends `ForceStopped/DeadlineExceeded` — target rejects the published SPOT relocation root ("does not extend its staged root", `ZLinkSpotRetireTransport.cs:708`) while the source waits for publication; fix at the owner, then run the dotnet final gate (7 samples incl. ZoneWorld G4 on the new Core, aggregate, unit gate v10)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3/§4, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`,
+then `doc/plan/c016-worklog/fix-dotnet-zoneworld-g4-and-teardown-outcomes-summary.md` §B4 (your approved diagnosis boundary) and the spec:
+`framework/doc/framework/common/spec/server/05-location-relocation/` (SPOT relocation staging/publication/reconciliation: which root a target
+publishes, what "extends the staged root" means, source generation handling) and `05-host-relocation-flow.{ko,en}.md`. Never modify `core/**`,
+`bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never widen a deadline or relax the root check;
+do not commit. The local package was just rebuilt with the merged Core (D-090: a REQUEST completes NOT_CONNECTED as soon as its submit-time pair
+terminates; explicit endpoint removal → NOT_FOUND is a separate Core job — if you still see TIMED_OUT/101 where the spec says NOT_CONNECTED/
+NOT_FOUND, record it as BLOCKER with the trace, do not work around it in the framework). Verify the package hash before starting:
+`sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg` and the `libzlink.so.0.17.0` inside must differ from 98f34996… (expected c5f62fb1…, built 14:47 from d3ea1e4223).
+
+## Part 1 — ShoppingMall B4 (root cause, one owner)
+Evidence: `scratchpad/fix-dotnet-zoneworld-g4-and-teardown-outcomes/diagnosis-ShoppingMall-cutover/evidence/ShoppingMall/logs/workflow-b.log:153,206-210`
+(target: `ZLinkRelocationDataLostException: Published SPOT relocation root does not extend its staged root`, stack
+`ReconcilePublishedStageAsync ZLinkSpotRetireTransport.cs:708 → ReconcileStageAuthorityAsync :2288 → RunReconciliationLoopAsync :2213`);
+`workflow-a.log:330` source `ForceStopped/DeadlineExceeded` waiting in `ReconcilePublishedAuthorityAsync :349-423`; host waits at
+`ZLinkFrameworkMaintenanceRuntime.cs:479`. Candidate: `ZLinkFrameworkRuntimeSpotRetire.cs:61-65` pre-computed target generation vs the
+source's root/reference. Determine which field of the root prefix mismatches and which side (source staging, target publication, or the
+generation pre-computation) violates the spec, fix that owner, add a regression test at that layer, and compare with java
+`ZLinkUserSpotAggregateStagingOwner.java:474-494` (same rule set expected).
+
+## Part 2 — dotnet final gate (after Part 1)
+dotnet env block: `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false
+MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}');
+export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; cd framework/languages/dotnet; flock -w7200 /tmp/zlink-dotnet-gate.lock …`.
+1. All 7 samples individually (Docker redis): exit 0 AND every role `termination_changed state=Stopped outcome=Stopped reason=None`; ZoneWorld
+   twice (G4 must observe `Unavailable` for the interrupted op on the new Core — if not, capture the flow trace and the request terminal the
+   durable sender received, and STOP on that item with the trace: no framework re-implementation of Core completion).
+2. `bash samples/run_samples.sh` aggregate once (exit 0).
+3. Unit gate v10: `dotnet test tests/Zlink.Framework.UnitTests --blame-hang --blame-hang-timeout 10m` in the two halves the supervisor uses
+   (`--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests'` and `--filter 'FullyQualifiedName~CanonicalActorJoinIngressReplyTests'`),
+   plus `tests/Zlink.Framework.SampleRegressionTests` (expect 157/157). Any red: root-cause + fix at the owner (same rules), rerun the affected half.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-shoppingmall-relocation-root-and-final-gate-summary.md`: B4 cause file:line + fix + the four lines + rule count;
+results table (7 samples × roles outcome, ZoneWorld ×2, aggregate, unit halves, sample regression); BLOCKERS with traces.

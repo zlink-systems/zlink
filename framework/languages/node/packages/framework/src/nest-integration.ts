@@ -74,7 +74,8 @@ export {
   type ZLinkHandlerFilterScopeRunner
 } from './runtime/channels/handler-filter-scope';
 
-export interface ZLinkNestIntegrationRuntimeHost {
+export interface ZLinkNestIntegrationRuntimeHost
+  extends Pick<import('./contracts').ZLinkFrameworkRuntime, 'shutdown'> {
   readonly channelRuntimeOptions: unknown;
   readonly routeMeshRuntimeOptions: ZLinkRouteMeshRuntimeOptions;
   readonly boundSessionFactory: ZLinkBoundSessionFactory;
@@ -84,7 +85,6 @@ export interface ZLinkNestIntegrationRuntimeHost {
   readonly fanoutRuntime: ZLinkFanoutRuntime;
   createLocationHandleResolver(): ZLinkSpotHandleResolver | undefined;
   start(): Promise<void>;
-  stop(): Promise<void>;
   onApplicationBootstrap?(): Promise<void> | void;
   onApplicationShutdown?(): Promise<void> | void;
 }

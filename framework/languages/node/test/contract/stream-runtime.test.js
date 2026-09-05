@@ -90,7 +90,6 @@ test('managed stream synchronous writes preserve blocking defaults and explicit 
     );
     assert.equal(stream.writeRaw(raw), true);
     assert.equal(stream.writeRaw(raw, zlink.SendFlags.DontWait), true);
-    assert.equal(stream.writeControl('heartbeat'), true);
   } finally {
     raw.close();
   }
@@ -98,9 +97,29 @@ test('managed stream synchronous writes preserve blocking defaults and explicit 
   assert.deepEqual(socket.sends.map((args) => args[2]), [
     0,
     0,
-    zlink.SendFlags.DontWait,
-    0
+    zlink.SendFlags.DontWait
   ]);
+});
+
+test('managed stream heartbeat awaits the asynchronous binding terminal', async () => {
+  let complete;
+  let control;
+  const stream = new framework.ZLinkManagedStream({
+    send() { assert.fail('heartbeat must not block in synchronous admission'); },
+    async submit(_routingId, payload) {
+      control = payload;
+      await new Promise(resolve => { complete = resolve; });
+      assert.ok(payload.data().length > 0);
+    }
+  }, 'session-rid');
+  let completed = false;
+  const pending = stream.writeControl('$zlink.heartbeat.ping').then(() => { completed = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(completed, false);
+  assert.ok(control.data().length > 0);
+  complete();
+  await pending;
+  assert.equal(completed, true);
 });
 
 test('clearing an Actor packet target preserves Session relocation terminal ownership', () => {

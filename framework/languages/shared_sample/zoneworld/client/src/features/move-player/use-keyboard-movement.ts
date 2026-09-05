@@ -1,7 +1,7 @@
-import { useEffect } from 'preact/hooks';
+import { useLayoutEffect } from 'preact/hooks';
 
 export function useKeyboardMovement(move: (dx: number, dy: number) => void, enabled: boolean): void {
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!enabled) return undefined;
     const onKey = (event: KeyboardEvent) => {
       const vectors: Record<string, readonly [number, number]> = {

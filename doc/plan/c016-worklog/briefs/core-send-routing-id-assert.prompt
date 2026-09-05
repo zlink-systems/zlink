@@ -1,0 +1,31 @@
+# Job (Core fix, model astra): Core aborts with `Assertion failed: written (core/src/runtime/core/pipe.cpp:210)` (`send_routing_id` → `write_routing_id_and_flush` returned false) under the java framework unit suite on the merged Core (D-090 `40137f1bd0` + D-B112 `349040d3e6`, package hash c5f62fb1…); reproducible twice; the previous package (98f34996…, Core 12:54) did not abort
+
+You are a codex sub-agent under a Claude supervisor. Read `CONTRIBUTING.ko.md` §4/§5, `AGENTS.md` §3, `core/doc/spec/core/socket/README.ko.md` §4
+(RID duplicate policy REJECT/HANDOVER, pipe close) and §6 completion table (D-090 row), `doc/plan/c016-worklog/decisions.ko.md` D-088..D-091 and D-B112.
+Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do not commit. WORK ONLY IN `/home/hep7/project/zlink-core-b`: first `git reset -q --hard
+&& git clean -fdq core && git checkout -q --detach 8159b15752`. Never touch main's `core/build-dev`. Build with `nice -n 10 env JOBS=4 scripts/build-core.sh dev`.
+Another Core job runs in `/home/hep7/project/zlink-core-a` (explicit-removal NOT_FOUND) — do not touch that worktree.
+
+## Symptom
+`framework/languages/java`: `./gradlew --no-daemon :zlink-framework-core:test` (env: `TMPDIR=/dev/shm/zlink-tmp-java`, `unset ZLINK_LIBRARY_PATH`,
+`flock -w7200 /tmp/zlink-jvm-gate.lock`) → "Gradle Test Executor 1 finished with non-zero exit value 134 (SIGABRT)" after
+`Assertion failed: written (/home/hep7/project/zlink/core/src/runtime/core/pipe.cpp:210)`. The java binding loads the Core packaged at 14:47 from
+main HEAD d3ea1e4223 (same Core as 8159b15752). 339 test cases had completed before the abort; the crashing class has no XML in
+`zlink-framework-core/build/test-results/test/`. The full Core ctest (172/173, hotpath n/a) does not hit this.
+
+## What to do
+1. Identify the triggering scenario: run the java suite with `--info` (or `-Dtest.single`/`--tests` bisection over classes) to find the test whose
+   run aborts, read what socket topology it builds (ROUTER duplicate RID? REJECT? inproc connect-before-bind? reciprocal HANDOVER? close during
+   handshake?). You may read java sources; do not change them.
+2. Reproduce in Core: a new integration test (`core/tests/integration/test_send_routing_id_on_terminated_pipe.cpp` or a better name, registered in
+   `core/tests/CMakeLists.txt`) that drives the same sequence through the public C API and aborts on the unfixed tree.
+3. Root cause in the combined D-090 / D-B112 change: `send_routing_id` (session attach) writes into a pipe that is already terminated/terminating —
+   candidates: REJECT `terminate_pipe` closing the duplicate before the session finished attaching; `pipe_peer_terminated()` / D-090 termination
+   order in `pipe.cpp` ~2902 (`acknowledge_peer_termination_unlocked`); D-B112 single inproc command-owner acquisition. Fix at the single owner
+   (the pipe lifecycle must make "write after termination began" impossible or a defined no-op for the session — do not turn the assert into a
+   silent `if (!written) return;` unless the spec says the routing-id write on a terminated pipe is a no-op, and then state why). State rule
+   count before/after.
+4. Gate: new test `--repeat until-fail:10`, targeted (`test_router_reject_duplicate|test_socket_disconnect_boundary|test_router_reciprocal_handover_lanes|
+   test_ctx_term_fixed_rid_handover|test_phase3_request_reply_contract|test_inproc`), full ctest once.
+5. Deliverable in the MAIN tree: `doc/plan/c016-worklog/core-send-routing-id-assert-summary.md` (triggering java test, sequence, cause file:line, fix,
+   owner/spec/parity/class, rule count, results, BLOCKERS); write `git add -N . && git diff HEAD > /home/hep7/project/zlink-core-b/core-send-routing-id.patch`.

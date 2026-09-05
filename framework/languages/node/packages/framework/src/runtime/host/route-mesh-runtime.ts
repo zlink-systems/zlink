@@ -346,12 +346,14 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     return waitForOperation(this.hostOperation, signal);
   }
 
-  shutdownHost(deadlineMs = 30_000, signal?: AbortSignal): Promise<ZLinkMeshDrainResult> {
-    if (!Number.isFinite(deadlineMs) || deadlineMs <= 0) {
+  shutdownHost(deadline: number | Date = 30_000, signal?: AbortSignal): Promise<ZLinkMeshDrainResult> {
+    if (typeof deadline === 'number' && (!Number.isFinite(deadline) || deadline <= 0)) {
       return Promise.reject(new TypeError('Shutdown deadlineMs must be greater than zero.'));
     }
     if (this.shutdownOperation === undefined) {
-      const operation = this.performHostShutdown(deadlineMs);
+      const operation = this.performHostShutdown(
+        deadline instanceof Date ? deadline : new Date(Date.now() + deadline)
+      );
       this.shutdownOperation = operation;
       for (const state of this.states.values()) state.operation ??= operation;
     }
@@ -541,17 +543,16 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
     return result;
   }
 
-  private async performHostShutdown(deadlineMs: number): Promise<ZLinkMeshDrainResult> {
+  private async performHostShutdown(deadlineAt: Date): Promise<ZLinkMeshDrainResult> {
     const entries = [...this.states.entries()];
     if (entries.length === 0) return { kind: 'drained' };
-    const deadlineAt = new Date(Date.now() + deadlineMs);
     for (const [, state] of entries) {
       state.deadline = deadlineAt;
     }
     const deadline = new AbortController();
     const timer = setTimeout(
       () => deadline.abort(createDeadlineExceededError('Shutdown deadline exceeded.')),
-      deadlineMs
+      Math.max(0, deadlineAt.getTime() - Date.now())
     );
     let result: ZLinkMeshDrainResult;
     try {

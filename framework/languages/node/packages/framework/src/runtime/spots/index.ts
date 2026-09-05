@@ -1099,12 +1099,17 @@ export class DefaultZLinkSpotManager {
     return this.activations.list(meshName);
   }
 
-  async drainForShutdown(meshName: string, signal?: AbortSignal): Promise<void> {
-    for (const activation of this.activations.activeActivations()) {
-      if (activation.meshName !== meshName) continue;
-      activation.requestDrainClose(ZLinkSpotCloseReason.HostShutdown);
-    }
-    await this.activations.whenMeshEmpty(meshName, signal);
+  async drainForShutdown(meshName: string, signal?: AbortSignal, deadline?: Date): Promise<void> {
+    const results = await Promise.allSettled(this.activations.activeActivations()
+      .filter(activation => activation.meshName === meshName)
+      .map(activation => this.closeWithReason(
+        meshName, activation.spotId, signal, ZLinkSpotCloseReason.HostShutdown, deadline
+      )));
+    const errors = results
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map(result => result.reason);
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'Spot shutdown cleanup failed.');
   }
 
   async close(meshName: string, spotId: RoutingId, signal?: AbortSignal): Promise<boolean> {
@@ -1120,7 +1125,8 @@ export class DefaultZLinkSpotManager {
     meshName: string,
     spotId: RoutingId,
     signal?: AbortSignal,
-    reason = ZLinkSpotCloseReason.ExplicitClose
+    reason = ZLinkSpotCloseReason.ExplicitClose,
+    deadline?: Date
   ): Promise<boolean> {
     requireMeshName(meshName);
     const key = `${meshName}\0${String(spotId)}`;
@@ -1145,8 +1151,9 @@ export class DefaultZLinkSpotManager {
       const operation = this.activations.startClose(
         meshName,
         spotId,
-        (target) => this.activationLifecycle.closeAfterSeal(target, seal, signal, reason),
-        (target) => this.activationLifecycle.resourcesReleased(target)
+        (target) => this.activationLifecycle.closeAfterSeal(target, seal, signal, reason, deadline),
+        (target) => this.activationLifecycle.resourcesReleased(target),
+        reason
       );
       if (operation === undefined) {
         activation.abortExecutionSeal(seal);

@@ -318,7 +318,6 @@ export class ZLinkSpotActivationLifecycle {
         handlers,
         externalActorCount: () => this.options.actorCountProvider?.(spotId) ?? 0,
         nativeSpot,
-        closeWhenReady: (reason) => this.scheduleDrainClose(meshName, spotId, reason),
         metrics: this.options.metrics
       });
       this.options.registerActivation(activation);
@@ -409,7 +408,6 @@ export class ZLinkSpotActivationLifecycle {
       actorHandlers,
       handlers,
       externalActorCount: () => this.options.actorCountProvider?.(spotId) ?? 0,
-      closeWhenReady: (reason) => this.scheduleDrainClose(meshName, spotId, reason)
     });
     try {
       await instance.configure?.();
@@ -621,7 +619,6 @@ export class ZLinkSpotActivationLifecycle {
         handlers,
         externalActorCount: () => this.options.actorCountProvider?.(spotId) ?? 0,
         nativeSpot,
-        closeWhenReady: (reason) => this.scheduleDrainClose(meshName, spotId, reason),
         metrics: this.options.metrics
       });
       const nativeDispatch = this.actorAdmission.attachNativeActorJoinDispatch(activation, nativeSpot);
@@ -724,24 +721,9 @@ export class ZLinkSpotActivationLifecycle {
       actorHandlers,
       handlers,
       externalActorCount: () => this.options.actorCountProvider?.(spotId) ?? 0,
-      closeWhenReady: (reason) => this.scheduleDrainClose(meshName, spotId, reason),
       metrics: this.options.metrics
     });
     return await this.runCreateLifecycle(activation, spotType, request, locationClaim, undefined, signal);
-  }
-
-  private scheduleDrainClose(
-    meshName: string,
-    spotId: RoutingId,
-    reason: ZLinkSpotCloseReason
-  ): void {
-    const close = async () => {
-      await this.options.closeSpot(meshName, spotId, undefined, reason);
-    };
-    this.options.detachedTaskRunner?.runDetached(`spot drain close ${String(spotId)}`, close);
-    if (this.options.detachedTaskRunner === undefined) {
-      void close().catch(() => undefined);
-    }
   }
 
   private contextClose(
@@ -785,7 +767,8 @@ export class ZLinkSpotActivationLifecycle {
     activation: ZLinkSpotActivation,
     seal: import('../execution').ZLinkExecutionBarrierSeal,
     signal?: AbortSignal,
-    reason = ZLinkSpotCloseReason.ExplicitClose
+    reason = ZLinkSpotCloseReason.ExplicitClose,
+    deadline?: Date
   ): Promise<void> {
     try {
       await activation.waitForExecutionQuiescence(seal, signal);
@@ -798,7 +781,7 @@ export class ZLinkSpotActivationLifecycle {
     // was already queued on the serial executor at that moment. Recheck now
     // that every turn admitted before the seal has finished, and release the
     // seal instead of closing an occupied Spot.
-    if (!activation.canClose()) {
+    if (!activation.canClose(reason)) {
       activation.abortExecutionSeal(seal);
       throw new ZLinkSpotCloseOccupiedError(activation.spotId);
     }
@@ -810,7 +793,8 @@ export class ZLinkSpotActivationLifecycle {
       activation.meshName,
       true,
       signal,
-      reason
+      reason,
+      deadline
     );
   }
 
@@ -935,7 +919,8 @@ export class ZLinkSpotActivationLifecycle {
     locationMeshName: string,
     notifyClosing: boolean,
     signal?: AbortSignal,
-    reason = ZLinkSpotCloseReason.ExplicitClose
+    reason = ZLinkSpotCloseReason.ExplicitClose,
+    deadline?: Date
   ): Promise<void> {
     throwIfAborted(signal);
     const state = this.cleanupStates.get(activation) ?? {
@@ -947,7 +932,7 @@ export class ZLinkSpotActivationLifecycle {
     };
     this.cleanupStates.set(activation, state);
     if (state.inFlight !== undefined) return await state.inFlight;
-    state.inFlight = this.runCleanup(activation, locationMeshName, notifyClosing, reason, state)
+    state.inFlight = this.runCleanup(activation, locationMeshName, notifyClosing, reason, state, deadline)
       .finally(() => { state.inFlight = undefined; });
     return await state.inFlight;
   }
@@ -963,7 +948,8 @@ export class ZLinkSpotActivationLifecycle {
       handlersDisposed: boolean;
       nativeDisposed: boolean;
       locationReleased: boolean;
-    }
+    },
+    deadline?: Date
   ): Promise<void> {
     const errors: unknown[] = [];
     const cleanup = async (operation: () => Promise<void> | void, completed: () => void) => {
@@ -978,7 +964,8 @@ export class ZLinkSpotActivationLifecycle {
       state.closingAttempted = true;
       await cleanup(() => invokeSpotClosing(
         activation.spot.onClosing?.bind(activation.spot),
-        reason
+        reason,
+        deadline
       ), () => undefined);
     }
     if (!state.timersDisposed) {

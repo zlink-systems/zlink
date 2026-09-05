@@ -206,3 +206,40 @@ async function withCompiledSample(sample, entry, run) {
     fs.rmSync(outputRoot, { recursive: true, force: true });
   }
 }
+
+test('SupportChat delayed timer checks idle and close against the domain clock', async (t) => {
+  await withCompiledSample(
+    'SupportChat.Ts',
+    'Server/Support/Infrastructure/ZLink/Spots/ConversationSpot/conversation-spot.ts',
+    async outputRoot => {
+      t.mock.timers.enable({ apis: ['Date'] });
+      const spotRoot = path.join(outputRoot, 'Server/Support/Infrastructure/ZLink/Spots/ConversationSpot');
+      const { ConversationSpot } = require(path.join(spotRoot, 'conversation-spot.js'));
+      const { ConversationIdleTimerHandler } = require(path.join(spotRoot, 'Handlers/conversation-idle-timer-handler.js'));
+      const { SampleTimings } = require(path.join(outputRoot, 'Server/Configuration/sample-names.js'));
+      const events = [];
+      const released = [];
+      const spot = new ConversationSpot(
+        { assignNextAgent: () => undefined },
+        { get: () => undefined },
+        { publish: event => { events.push(event.kind); } }
+      );
+      spot.context = { spotId: 'delayed-conversation' };
+      await spot.onCreate({ decode: () => ({ customerActorId: 'customer-1', customerDisplayName: 'Customer', subject: 'Payment failed' }) });
+      spot.assignAgent('agent-1', 'Agent');
+      await joinConversationActor(spot, {
+        actorId: 'agent-delayed-conversation', participantId: 'agent-1', role: 'Agent', displayName: 'Agent'
+      });
+      events.length = 0;
+      const handler = new ConversationIdleTimerHandler({ released: actorId => released.push(actorId) });
+      const delayedTick = { scheduledAt: new Date(Date.now()) };
+      t.mock.timers.tick(SampleTimings.idleTimeout + 1);
+      await handler.handle(spot, delayedTick);
+      assert.deepEqual(events, ['idle']);
+      t.mock.timers.tick(SampleTimings.closeGraceTimeout + 1);
+      await handler.handle(spot, delayedTick);
+      assert.deepEqual(events, ['idle', 'closed']);
+      assert.deepEqual(released, ['agent-1']);
+    }
+  );
+});

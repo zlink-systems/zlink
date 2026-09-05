@@ -9,35 +9,34 @@ const framework = require('../../packages/framework/dist/internal');
 
 const workspaceRoot = path.resolve(__dirname, '../..');
 
-test('drain keeps the marker observable for one configured polling interval', async () => {
-  const pollingIntervalMs = 30;
+test('Shutdown awaits Draining publication then runs callbacks and cleanup without a polling wait', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const host = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration({
       spotNodes: [{ name: 'game', router: { bind: 'tcp://127.0.0.1:1' } }],
-      locations: { options: { pollingIntervalMs } }
+      locations: { options: { pollingIntervalMs: 1000 } }
     })
   });
-  let markerPublishedAt;
-  let cleanupStartedAt;
+  const events = [];
+  let publish;
   host.locationOwner.runtime = {
     async publishDraining() {
-      markerPublishedAt = performance.now();
-      return true;
+      events.push('publish');
+      return await new Promise(resolve => { publish = resolve; });
     },
-    async cleanupOwner() {
-      cleanupStartedAt = performance.now();
-    }
+    async cleanupOwner() { events.push('owner-cleanup'); }
   };
-  host.serviceRelocation.relocateMesh = async () => {};
-  host.stop = async () => {};
+  host.spotManager = { async drainForShutdown() { events.push('spot-callbacks-and-cleanup'); } };
+  host.stop = async () => { events.push('stop'); };
 
-  assert.deepEqual(await host.routeMeshRuntime.drain('game', 500), { kind: 'drained' });
-  assert.notEqual(markerPublishedAt, undefined);
-  assert.notEqual(cleanupStartedAt, undefined);
-  assert(
-    cleanupStartedAt - markerPublishedAt >= pollingIntervalMs - 5,
-    'owner cleanup started before peers had one polling interval to observe Draining=true'
-  );
+  const shutdown = host.shutdown({ deadlineMs: 500 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(events, ['publish']);
+  publish(true);
+  await new Promise(resolve => setImmediate(resolve));
+  // No timeout has advanced: successful publication is enough to start cleanup (§14).
+  assert.deepEqual(events, ['publish', 'spot-callbacks-and-cleanup', 'owner-cleanup', 'stop']);
+  assert.equal((await shutdown).outcome, framework.ZLinkFrameworkTerminationOutcome.Stopped);
 });
 
 test('SF-C2 uses host relocation and verifies marker, terminal result, and clean exit', () => {

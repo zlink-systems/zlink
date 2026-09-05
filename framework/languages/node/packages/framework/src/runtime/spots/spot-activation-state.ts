@@ -51,7 +51,6 @@ export interface ZLinkSpotActivationOptions {
   readonly handlers: DefaultZLinkSpotHandlerRegistry;
   readonly externalActorCount?: () => number;
   readonly nativeSpot?: ZLinkBackendSpot;
-  readonly closeWhenReady?: (reason: ZLinkSpotCloseReason) => void;
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly executionBarrier?: ZLinkExecutionBarrier;
   actorDispatch?: ZLinkSpotActorJoinDispatch;
@@ -93,10 +92,7 @@ export class ZLinkSpotActivation {
   private readonly joinedActors = new Map<string, ZLinkActor>();
   private readonly departedActorIds = new Set<string>();
   private readonly externalActorCount: () => number;
-  private readonly closeWhenReady?: (reason: ZLinkSpotCloseReason) => void;
   private closeRequested = false;
-  private drainCloseRequested = false;
-  private drainCloseReason = ZLinkSpotCloseReason.HostShutdown;
   private idleEvictionRequested = false;
   private relocationReadyWaiter?: {
     readonly resolve: () => void;
@@ -133,7 +129,6 @@ export class ZLinkSpotActivation {
     this.handlers = options.handlers;
     this.externalActorCount = options.externalActorCount ?? (() => 0);
     this.nativeSpot = options.nativeSpot;
-    this.closeWhenReady = options.closeWhenReady;
     this.actorDispatch = options.actorDispatch;
   }
 
@@ -370,10 +365,11 @@ export class ZLinkSpotActivation {
   commitActorDeparture(actorId: string): void {
     this.departedActorIds.add(actorId);
     this.joinedActors.delete(actorId);
-    this.notifyCloseReady();
   }
 
-  canClose(): boolean {
+  canClose(reason = ZLinkSpotCloseReason.ExplicitClose): boolean {
+    // Host shutdown closes scopes while membership remains valid (§14).
+    if (reason === ZLinkSpotCloseReason.HostShutdown) return true;
     const forceClose = this.closeRequested && !this.idleEvictionRequested;
     return this.joinedActors.size === 0 && (forceClose || this.externalActorCount() === 0);
   }
@@ -407,19 +403,6 @@ export class ZLinkSpotActivation {
       && !this.serial.hasPendingWork
       && !this.timers.hasActiveTimers
       && nowMs - this.serial.lastActivityAt >= timeoutMs;
-  }
-
-  requestDrainClose(reason: ZLinkSpotCloseReason): void {
-    this.closeRequested = true;
-    this.drainCloseRequested = true;
-    this.drainCloseReason = reason;
-    this.notifyCloseReady();
-  }
-
-  private notifyCloseReady(): void {
-    if (this.drainCloseRequested && this.canClose()) {
-      this.closeWhenReady?.(this.drainCloseReason);
-    }
   }
 
   private async notifyRelocationReadyCompleted(

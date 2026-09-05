@@ -58,6 +58,7 @@ async function main() {
     console.log = (...args) => deferredOutput.push({ args, kind: 'log' });
     try {
       await runSample(context);
+      ensureChildrenRunning();
     } finally {
       console.log = writeLine;
     }
@@ -126,12 +127,9 @@ function createContext(redisEndpoint) {
       state.expectedStop = true;
       if (state.child.exitCode === null && state.child.signalCode === null) state.child.kill(signal);
       await waitForExit(state);
-    },
-    signal(name, signal = 'SIGINT') {
-      const state = children.find((entry) => entry.name === name);
-      if (!state) throw new Error(`Unknown sample process '${name}'.`);
-      state.expectedStop = true;
-      if (state.child.exitCode === null && state.child.signalCode === null) state.child.kill(signal);
+      if (signal === 'SIGKILL' ? state.signalCode !== signal : state.exitCode !== 0 && state.signalCode !== signal) {
+        throw new Error(`${name} stopped with ${state.signalCode ?? state.exitCode}, expected ${signal}.`);
+      }
     },
     waitTcp,
     waitHttp,
@@ -479,17 +477,16 @@ async function cleanup() {
   if (cleaning) return;
   cleaning = true;
   const teardownFailures = new Map();
-  for (const state of children) {
-    if (state.exitCode === 137 || state.exitCode === -9 || state.signalCode === 'SIGKILL') {
-      teardownFailures.set(state, state.signalCode ?? state.exitCode);
-    }
-  }
-  for (const { child } of [...children].reverse()) {
+  const active = children.filter(({ child }) => child.exitCode === null && child.signalCode === null);
+  for (const { child } of [...active].reverse()) {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGINT');
   }
   await sleep(500);
-  for (const state of children) {
+  for (const state of active) {
     const { child } = state;
+    if (state.exitCode === 137 || state.exitCode === -9 || state.signalCode === 'SIGKILL') {
+      teardownFailures.set(state, state.signalCode ?? state.exitCode);
+    }
     if (child.exitCode === null && child.signalCode === null) {
       if (child.kill('SIGKILL')) teardownFailures.set(state, 'SIGKILL');
     }

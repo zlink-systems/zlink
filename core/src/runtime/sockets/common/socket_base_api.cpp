@@ -240,6 +240,8 @@ int zlink::socket_base_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
     }
 
     fail_blocking_send_waits_for_logical_target (peer_rid_, ENOENT);
+    socket_reqrep_internal::fail_pending_requests_for_pipe (
+      request_reply_state (), match);
     match->terminate (false);
     return 0;
 }
