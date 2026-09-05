@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
@@ -16,9 +17,12 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.eventing.MonitorEvent;
 import systems.zlink.contracts.eventing.MonitorEventType;
+import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceAdmissionGuard;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 
 final class ZLinkJavaRawMeshNodeTransportIdentityTest {
     private static final long INTENT = 2;
@@ -132,6 +136,115 @@ final class ZLinkJavaRawMeshNodeTransportIdentityTest {
             terminateAdmitted(node, event(MonitorEventType.DISCONNECTED, 1442, 0));
             assertFalse(node.hasLivePeerIntent(ENDPOINT));
             assertTrue(isClosed(node));
+        }
+    }
+
+    @Test
+    void lateReadyKeepsAdmissionIdentityWhenHelloInferredTheOppositeDirection()
+        throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh");
+             var peer = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setBind("inproc://late-ready-local-" + System.nanoTime());
+            peer.setBind("inproc://late-ready-peer-" + System.nanoTime());
+            node.start();
+            peer.setRoutingId(PEER);
+            peer.start();
+            var topologyField = ZLinkJavaRawMeshNode.class.getDeclaredField("topology");
+            topologyField.setAccessible(true);
+            var topology = (ZLinkServiceTopologyRegistry) topologyField.get(node);
+            var peerTopology = (ZLinkServiceTopologyRegistry) topologyField.get(peer);
+            String admitted = "wire-admitted-before-ready";
+            assertEquals(ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                topology.admit(peerTopology.localDescriptor(),
+                    new ZLinkServiceTopologyRegistry.Connection(admitted,
+                        ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
+                        "hello-inferred-inbound")));
+            var connectionsField = ZLinkJavaRawMeshNode.class.getDeclaredField("connectionIds");
+            connectionsField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            var connections = (Map<RoutingId, String>) connectionsField.get(node);
+            connections.put(PEER, admitted);
+
+            Method register = ZLinkJavaRawMeshNode.class.getDeclaredMethod(
+                "registerTransportConnection", MonitorEvent.class, RoutingId.class);
+            register.setAccessible(true);
+            assertEquals(admitted, register.invoke(node,
+                event(MonitorEventType.CONNECTION_READY, 520, 0), PEER));
+        }
+    }
+
+    @Test
+    void unmappedTerminationPreservesAdmissionCompletion() throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            var completedField = ZLinkJavaRawMeshNode.class
+                .getDeclaredField("admissionControlReadyConnections");
+            completedField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            var completed = (Map<RoutingId, String>) completedField.get(node);
+            completed.put(PEER, "admitted-connection");
+
+            Method terminal = ZLinkJavaRawMeshNode.class.getDeclaredMethod(
+                "cleanupTerminalTransport", MonitorEvent.class, RoutingId.class);
+            terminal.setAccessible(true);
+            assertFalse((boolean) terminal.invoke(node,
+                event(MonitorEventType.DISCONNECTED, 182, 0), PEER));
+            assertEquals("admitted-connection", completed.get(PEER),
+                "an unassociated attempt cannot revoke the admitted connection");
+        }
+    }
+
+    @Test
+    void requestedClosePublishesReplacementEligibilityAfterEndpointRetirement()
+        throws Exception {
+        assertEndpointRetiredBeforeClosed(false);
+    }
+
+    @Test
+    void admittedClosePublishesReplacementEligibilityAfterEndpointRetirement()
+        throws Exception {
+        assertEndpointRetiredBeforeClosed(true);
+    }
+
+    private static void assertEndpointRetiredBeforeClosed(boolean admitted)
+        throws Exception {
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            installIntent(node);
+            ready(node, 1436, 0);
+            if (!admitted) {
+                requestClose(node);
+            }
+            var routerField = ZLinkJavaRawMeshNode.class.getDeclaredField("router");
+            routerField.setAccessible(true);
+            var retired = new java.util.concurrent.atomic.AtomicBoolean();
+            RouterSocket router = (RouterSocket) Proxy.newProxyInstance(
+                RouterSocket.class.getClassLoader(),
+                new Class<?>[] {RouterSocket.class},
+                (proxy, method, args) -> {
+                    if (!method.getName().equals("disconnect")) {
+                        throw new AssertionError("unexpected router call: " + method);
+                    }
+                    assertEquals(ENDPOINT, args[0]);
+                    // A caller can observe replacement eligibility while the
+                    // pump is retiring the endpoint. It must remain fenced
+                    // until that operation can no longer close a new intent.
+                    assertFalse(isClosed(node),
+                        "replacement became eligible before endpoint retirement");
+                    retired.set(true);
+                    return null;
+                });
+            routerField.set(node, router);
+            try {
+                terminate(node, event(MonitorEventType.DISCONNECTED, 1436, 0),
+                    admitted);
+                assertTrue(retired.get());
+                assertTrue(isClosed(node));
+                assertFalse(node.isPeerConnectionClosing(INTENT));
+            } finally {
+                routerField.set(node, null);
+            }
         }
     }
 

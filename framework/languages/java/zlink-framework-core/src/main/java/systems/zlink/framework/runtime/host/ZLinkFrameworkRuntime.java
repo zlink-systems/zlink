@@ -312,8 +312,10 @@ public final class ZLinkFrameworkRuntime
                 true,
                 this.applicationJobQueue);
         }
-        this.meshNodes.nodesByName().forEach((meshName, node) ->
-            this.channels.registerSpotRouterNode(meshName, node.spotNode()));
+        this.meshNodes.nodesByName().forEach((meshName, node) -> {
+            node.setPeerAdmissionSealGate(() -> this.meshDrains.isSealed(meshName));
+            this.channels.registerSpotRouterNode(meshName, node.spotNode());
+        });
         if (this.locationStores != null
             && this.locationStores.unifiedStore()
                 instanceof ZLinkLocationRepository store) {
@@ -2091,6 +2093,9 @@ public final class ZLinkFrameworkRuntime
     }
 
     private void runDrain() {
+        meshNodes.nodesByName().values().forEach(
+            systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode
+                ::markServiceDraining);
         CompletionStage<Void> markerPublished = locationAutoConnectHost == null
             ? CompletableFuture.completedFuture(null)
             : locationAutoConnectHost.markDraining();
