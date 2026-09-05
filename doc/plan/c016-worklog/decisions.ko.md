@@ -1331,4 +1331,4 @@ astra 러너 parity job(`cpp-single-reqrep-runner-summary.md`) BLOCKED: (B1) 고
 B 권고(단순화 원칙): (1) binding 러너의 포화 제출 경계 = 공개 poller의 raw socket `POLLOUT` level(05-polling §3: "submit 재시도 가치 있음")로 정의 — `async()`를 POLLOUT이 켜진 동안만 제출하고 꺼지면 poller wait. binding이 WRITABLE을 내부 소비해도 POLLOUT level은 공개 계약이므로 새 API 없이 표현 가능(검증 필요). (2) C 러너를 정책(같은 구간 throughput+latency)에 맞추고 별도 latency 단계를 없앰 — canonical 기준이 바뀌므로 single suite 기준값 재측정. 결정 전까지 C++ Single REQREP 행은 "러너 모델 차이(참고값)"로 표기.
 
 ## D-B128 (2026-09-05 23:00, 머신 B) Rust 리뷰 pass 2(astra) — reply adopt-in-place(FFI init/move 2회→adopt), 나머지 후보 no-go(snapshot 제거는 ownership 위반, scratch 단일 init <5%, RwLock 경합 0.47% Ir, pending 번들은 이미 Arc 1개, wrapper pool은 금지)
-after(1-run, load ≤1.9): DD 64B 47.4%·256B 56.9%·1024B 58.2%·4096B 96.5%·64K 176%, DR 77.8/81.0/86.5/93.2/74.3%(≈82.6%), RR 유사. gate 14/14·samples, clippy, fmt, diff-check, 공개 API 불변, spec gap 없음. 판정은 quiet 3-run. 커밋: 아래 해시.
+after(1-run, load ≤1.9): DD 64B 47.4%·256B 56.9%·1024B 58.2%·4096B 96.5%·64K 176%, DR 77.8/81.0/86.5/93.2/74.3%(≈82.6%), RR 유사. gate 14/14·samples, clippy, fmt, diff-check, 공개 API 불변, spec gap 없음. 판정은 quiet 3-run. 커밋 `ddb614faf9`.
