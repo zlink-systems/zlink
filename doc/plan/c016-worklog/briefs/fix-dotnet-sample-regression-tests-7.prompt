@@ -1,0 +1,35 @@
+# Job (fix, model astra): dotnet `Zlink.Framework.SampleRegressionTests` — 7 tests fail (150/157); all seven were green at the campaign baseline `4bad5ac979` (2026-08-29), so each is a regression introduced by a campaign change — find the change, fix at the owner
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3/§4, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`.
+Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; do not commit. Another
+job is editing dotnet runtime files (`ZLinkFrameworkDrainExecutor.cs`, `ZLinkDurableRequest.cs`, `ZLinkManagedMeshNode.cs`, runtime tests) —
+do not touch those files; your scope is the sample regression tests, samples, runners, and dotnet docs they check.
+
+## Failing tests (whole class run: 150 pass / 7 fail)
+`ShoppingMall_Runner_Uses_Isolated_Docker_Redis_And_Redis_Stores`, `Sample_Health_Checks_Use_Location_Readiness`,
+`DeliveryDispatch_Contracts_Match_Common_Role_Model`, `SupportChat_Runner_Uses_Isolated_Docker_Redis_And_Location_Store`,
+`DotNet_Docs_Keep_Actor_Destroy_Entry_Owned`, `DeliveryDispatch_Runner_Uses_Isolated_Docker_Redis_And_Location_Store`,
+`TicTacToe_Runner_Verifies_Client_And_Server_Evidence`.
+
+## Method (per test)
+1. Run the test, read the assertion. `git log -p 4bad5ac979..HEAD -- <files the test reads>` to find the campaign commit that changed the
+   checked artifact (runner script, sample source, docs, shared runner `redis-common.sh` — e.g. `8e76335988` moved cleanup ownership into
+   `redis-common.sh`, `9a0371fea7`/`stage2-sample-runners-report-sigkill` changed runner reporting).
+2. Decide which side drifted: (a) the sample/runner/doc lost something the test rightly guards (health checks use location readiness,
+   isolated Docker redis per runner, client+server evidence, entry-owned actor destroy, DeliveryDispatch common role model) → restore it at
+   the owner; (b) the test asserts the *old shape* of an intentionally consolidated runner (one cleanup owner in `redis-common.sh`) → update the
+   test to check the invariant through the new owner (the invariant itself stays; do not delete the check). Record which for each test with
+   the commit hash that caused it.
+3. Never weaken an invariant; never add a runner-local duplicate of something `redis-common.sh` now owns.
+
+## Verify
+dotnet env block: `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false
+MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}');
+export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; cd framework/languages/dotnet; flock -w7200 /tmp/zlink-dotnet-gate.lock dotnet
+test tests/Zlink.Framework.SampleRegressionTests`. Whole class must be 157/157. If you changed a runner or sample, run that sample once
+(`bash samples/<Sample>/run_sample.sh` with the Docker redis, exit 0) — a runner change without a sample run is not verified.
+Cross-language check: if the invariant is checked by the node/java sample regression tests too, state whether their samples still satisfy it.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-sample-regression-tests-7-summary.md`: per test — assertion, causing commit, side that drifted (a/b), fix
+file:line, owner layer / spec clause / parity / class, results (157/157 + sample runs), BLOCKERS.
