@@ -1,0 +1,11 @@
+# Job (fix, model astra): cpp — D-098 item 3: a shutdown-sealed raw mesh node answers no inbound Hello with Admit (§14 step 1 amended: neither starts nor accepts a new peer admission); Update from already-admitted peers still processed; Draining Update still sent
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `decisions.ko.md` D-097/D-098, `05-host-relocation-flow` §14, and
+`fix-cpp-mesh-shutdown-seal-parity-summary.md` (your seal wiring: raw options carry the host `app_state_t::draining` atomic). Never modify `core/**`, `bindings/**`, any
+`doc/spec/**`, `framework/doc/framework/**`, other languages, shared_sample; do not commit. Env: `framework/languages/cpp`, `cmake --build build -j4`, `ctest --test-dir build -L
+framework-unit`, samples under `flock -w7200 /tmp/zlink-samples-gate.lock bash samples/run_samples.sh`.
+
+Implement in `raw_mesh_node_owner.cpp` (inbound admission handling): sealed → inbound Hello gets no Admit and no admission state change; Update from an admitted peer still
+processed; Draining Update still sent. Unit tests: sealed inbound Hello → no Admit; unsealed → admitted; admitted peer's Update after the seal → processed. Rule count. Verify: cpp
+unit ctest (all), `bash samples/run_samples.sh` once (7/7). Deliverable: `doc/plan/c016-worklog/fix-cpp-d098-seal-inbound-summary.md` (diff file:line, four lines, rule count, results,
+BLOCKERS).

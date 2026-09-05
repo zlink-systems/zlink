@@ -1,0 +1,18 @@
+# Job (fix, model astra): dotnet — D-098 item 3: a shutdown-sealed mesh node answers no inbound Hello with Admit (spec §14 step 1 amended: "새 peer admission을 시작하지도 수락하지도 않는다"); item 4: remove `ZLinkFrameworkDrainExecutor.WaitForDescriptorPropagationAsync`'s time wait after a successful Draining publication (no §14 basis; node removed its equivalent in 8159b15752, java runDrain has none) — the drain waits on the publication terminal only
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`, `decisions.ko.md` D-097/D-098,
+`05-location-relocation/05-host-relocation-flow.{ko,en}.md` §14, and `fix-dotnet-zoneworld-e5-shutdown-hello-2-summary.md` (the seal gate wiring you extend). Never modify
+`core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages, shared_sample; never widen waits; do not commit. dotnet env block + locks as usual
+(`/tmp/zlink-dotnet-gate.lock`; samples also `/tmp/zlink-samples-gate.lock`). Package: rebuild10 (Core 785b647b…).
+
+## Implement (single owner each; rule counts)
+3. In the mesh node's inbound admission path, when the host seal (IsSealedForShutdown) is set: an inbound Hello gets no Admit (no state change, no PeerAdmitted); Update from an
+   already-admitted peer is still processed; existing peers still receive Draining Update. Use the gate you already wired (no new flag). Unit tests: sealed node + inbound Hello →
+   no Admit sent, peer not admitted; unsealed → admitted; already-admitted peer's Update after the seal → processed.
+4. `ZLinkFrameworkDrainExecutor.cs` (~:454 `WaitForDescriptorPropagationAsync`): remove the time-based wait; the drain proceeds once the Draining publication completed (Location
+   Store write terminal). Adjust/replace any test that asserted the wait; keep the ordering assertions (publish → callbacks → cleanup). Rule count: publication step 2 → 1.
+## Verify
+DrainCoordinatorTests + MeshNodeShutdownSealTests + touched owners; ZoneWorld ×2 (E5 restart admission observed; no post-seal Admit sent — check logs), `bash samples/run_samples.sh`
+once, unit half `--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests'` once (0 fail).
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-d098-seal-inbound-and-propagation-wait-summary.md` (diff file:line, four lines, rule counts, results, BLOCKERS).

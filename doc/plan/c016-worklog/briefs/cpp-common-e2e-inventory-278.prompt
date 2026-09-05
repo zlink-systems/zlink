@@ -1,0 +1,21 @@
+# Job (implement, model astra, xhigh): cpp `test_cpp_framework_common_e2e_inventory` reports 278 open conditions over the 361 common e2e scenarios (14 configs): feature-map-missing=94, source-missing=122, incomplete-status=62 — bring the cpp framework's common E2E coverage to the gate's requirement
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `framework/languages/cpp/e2e/verify_common_inventory.sh` (the gate), the
+common e2e inventory `framework/doc/framework/common/e2e/**` (scenario ids per config, e.g. SA-E2E-xx, IS-E2E-xx), the cpp feature map it checks, and how dotnet/node/java
+implement the same scenario ids (their `e2e/` runners and sources — they pass their inventory gates; copy the rule set, not the code). Never modify `core/**`, `bindings/**`, any
+`doc/spec/**`, `framework/doc/framework/**`, `framework/doc/framework/common/e2e/**` (the inventory is the contract), other languages; do not commit. Env: `framework/languages/cpp`;
+build `cmake --build build -j4` (e2e binaries may use `build/linux-ninja-c-e2e` — see `e2e/run_e2e_all.sh`); e2e runs under `flock -w7200 /tmp/zlink-samples-gate.lock` (they use Docker
+redis/ports).
+
+## Method
+1. Run the gate; classify the 278: (A) scenario truly not implemented in cpp → implement scenario source + runner entry per config (same public framework API the samples use;
+   no test-only runtime hooks); (B) implemented but the feature-map/status file or runner id drifted → fix the map/status/runner registration (the gate script itself only if it
+   mis-parses — say why). Work config by config (largest gaps first: InstanceSpot 31 map-missing, SubmitAdmission source-missing 13 …), running each config's `run_e2e.sh` after
+   implementing it (must pass), and re-running the inventory gate after each config.
+2. Keep going until the inventory gate passes (0 open) or you hit a scenario the cpp framework cannot express without a framework feature — then STOP on that scenario, list
+   the exact spec clause and missing API, and continue with the others. Write progress to the summary as you go (per config: before/after counts, files) so a cut-off leaves a
+   usable record.
+## Verify
+`ctest --test-dir build -R test_cpp_framework_common_e2e_inventory` PASS; `e2e/run_e2e_all.sh` (or per-config runners) green for every config you touched; cpp unit ctest unchanged.
+## Deliverable
+`doc/plan/c016-worklog/cpp-common-e2e-inventory-278-summary.md` (per-config table, A/B classification, remaining STOP items with spec clause, results, BLOCKERS).

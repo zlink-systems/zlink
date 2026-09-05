@@ -1,0 +1,19 @@
+# Job (fix, model astra): java — D-098 item 3: a shutdown-sealed raw mesh node answers no inbound Hello with Admit (§14 step 1 amended); item 5: raw mesh local terminal retention uses monotonic time (D-095 residual, `ZLinkJavaRawMeshNode.java` ~7513-7517, 7680-7693 wall clock); item 6: remove the now-unneeded fixture retry waits (M6A `awaitReplacement` retry loop, TransportIdentity extra `!hasLivePeerIntent` wait) since the runtime publishes CLOSED exactly when replacement becomes eligible (`3b5274a809`)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `decisions.ko.md` D-095/D-097/D-098, `05-host-relocation-flow` §14, and the recent
+java reports (`fix-java-mesh-shutdown-seal-parity-summary.md`, `fix-java-m6a-intermittent-with-seal-parity-summary.md`, `fix-java-unit-intermittents-2-summary.md`) so you build on the
+committed code. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages; do not commit. Env: `framework/languages/java`,
+`TMPDIR=/dev/shm/zlink-tmp-java`, `unset ZLINK_LIBRARY_PATH`, gradle under `flock -w7200 /tmp/zlink-jvm-gate.lock`, samples under `flock -w7200 /tmp/zlink-samples-gate.lock`
+(plus the jvm lock for the aggregate). Installed Core 785b647b… (rebuild10).
+
+## Implement (single owner each; rule counts)
+3. Inbound Hello while `ZLinkMeshDrainCoordinator.isSealed(mesh)`: no Admit, no admission state change; Update from an already-admitted peer still processed; Draining Update still
+   sent. Unit tests as for dotnet (sealed inbound Hello → no Admit; unsealed → admitted; admitted peer's Update after seal → processed).
+5. Terminal retention (`~7513-7517`, `7680-7693`): monotonic (System.nanoTime), same retention value; timestamps reported on the wire stay wall clock. Regression with a fake clock
+   jump.
+6. Fixtures: remove the retry loop / extra wait; assertions unchanged; M6A ×10 and TransportIdentity ×10 must stay green (the ×10 proves the runtime publication order).
+## Verify
+`:zlink-framework-core:test contractTest --continue --rerun` ×2 (0 fail; check the `:test` task actually ran), `ZLINK_SAMPLE_LANGUAGES=java bash samples/run_samples.sh` once
+(7/7, ZoneWorld E5 observed), kotlin ZoneWorld once.
+## Deliverable
+`doc/plan/c016-worklog/fix-java-d098-seal-inbound-retention-fixtures-summary.md` (diff file:line, four lines, rule counts, results, BLOCKERS).

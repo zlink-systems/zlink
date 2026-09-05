@@ -1,0 +1,22 @@
+# Job (Core fix, model astra): D-098 items 1+2 — (1) tcp/ipc listener close/unbind must complete the fd close before the public call returns (today SO_REUSEPORT hides the async close: an immediate rebind "succeeds" while the old listener still exists); one endpoint-release rule for every transport, matching inproc (`d8b65141a4`); (2) `zlink_unbind(inproc)` on a 2-lane (ROUTER↔ROUTER) pair takes ~200 ms because `terminate_inproc_pipe_with_peer_progress` drives the peer's command processing only when lane_count == 1 → same progress rule for any lane count
+
+You are a codex sub-agent under a Claude supervisor. Read `CONTRIBUTING.ko.md` §4/§5, `AGENTS.md` §3, `core/doc/spec/core/socket/README.ko.md` § zlink_close / zlink_bind (EADDRINUSE) /
+zlink_unbind, `decisions.ko.md` D-098 (items 1, 2), and `doc/plan/c016-worklog/core-close-releases-inproc-endpoint-summary.md` (the inproc fix and both observations). Never modify any
+`doc/spec/**`, `bindings/**`, `framework/**`; do not commit. WORK ONLY IN `/home/hep7/project/zlink-core-a`: `git reset -q --hard && git clean -fdq core && git checkout -q --detach 34dfa9d947`.
+Never touch main's `core/build-dev`. Build: `nice -n 10 env JOBS=4 scripts/build-core.sh dev`.
+
+## (1) listener release
+`asio_tcp_listener.cpp:83` enables SO_REUSEPORT; on unbind/close the listener fd is closed on the I/O thread later (listener process_term). Make the fd close part of the
+completion the caller observes (before ZLINK_CLOSE_OK / unbind returns) — the same rule as inproc — and remove the reliance on SO_REUSEPORT for rebind (keep it only if a
+documented reason exists; say which). Check ipc and ws/tls listeners too. Contract test: close/unbind a tcp listener → immediately bind the same port from a new socket in the
+same context → succeeds AND no connection is accepted by the old listener (connect after rebind lands on the new one); ×100 under load. Do not add a bind-side wait/retry.
+## (2) inproc unbind latency
+`socket_base_endpoint.cpp:969` (`terminate_inproc_pipe_with_peer_progress`) drives peer progress only for lane_count == 1, so the 20×10 ms handshake wait at `:1053-1061` is
+consumed for 2-lane pairs (~200 ms per unbind). Drive the same progress for every lane count (one rule); test: ROUTER↔ROUTER inproc unbind completes in < 50 ms ×50, and the
+existing unbind semantics (peer observes DISCONNECTED, pending requests NOT_FOUND per D-090/NOT_FOUND rule) hold.
+## Gate
+New tests `--repeat until-fail:10`; targeted `test_close_releases_inproc_endpoint|test_transport_matrix|test_monitor|test_request_explicit_removal_not_found|test_socket_disconnect_boundary|
+test_router_same_socket_reconnect_policy`; full `ctest -j2 -E '^hotpath_gate$'` once (all pass).
+## Deliverable
+`doc/plan/c016-worklog/core-endpoint-release-all-transports-summary.md` in MAIN (cause, fix, owner / spec clause / parity / class, rule counts, results, BLOCKERS);
+`git add -N . && git diff HEAD -- core > /home/hep7/project/zlink-core-a/core-d098.patch`.
