@@ -1179,7 +1179,7 @@ astra 조사(`cpp-harness-summary.md`): `PERF_MULTI_TEST_POLICY.md:594-610` §3.
 
 ## D-B106 (2026-09-05 11:30, 머신 B) bindings parity — C++·.NET monitor mask typed 거절(`InvalidArgument`) + .NET `IPoller` monitor Add/Modify/Remove; 8 binding 통일 완료
 공통 spec(`a009a36a6a`)대로 C++ `poller_t::add/modify(socket_monitor_t&)`가 `pollin` 외 bit를 `config_error_t(invalid_argument, EINVAL)`로 거절, .NET은 reusable `IPoller`에 monitor 오버로드 추가(기존에 one-shot `ZlinkPoll.Poll`만 있었음)와 같은 mask 검증(`ZlinkConfigException` InvalidArgument), 샘플/테스트 헬퍼의 monitor sleep 대기 → poller drain.
-gate: C++ contract 16/16 + samples 7/7, monitor contract 5회; .NET 200/200 + samples 7/7, 새 테스트 5회. C++/.NET spec(ko/en) 문장 추가. 남은 불일치(별도): C++ 미등록 `remove`가 `invalid_argument`를 던지나 Core polling §7은 NOT_FOUND — 후속 확인. 커밋: 아래 해시.
+gate: C++ contract 16/16 + samples 7/7, monitor contract 5회; .NET 200/200 + samples 7/7, 새 테스트 5회. C++/.NET spec(ko/en) 문장 추가. 남은 불일치(별도): C++ 미등록 `remove`가 `invalid_argument`를 던지나 Core polling §7은 NOT_FOUND — 후속 확인. 커밋 `da2c679aaa`.
 ## D-088 (2026-09-05 11:30, 머신 A) REJECT ROUTER의 same-RID 재연결 의미 — spec gap(사용자 결정), dotnet ClientServer fixture는 production HANDOVER로 정렬
 dotnet ClientServer의 두 번째 poller·수동 reconnect 제거(`stage2-dotnet-clientserver-second-poller-removal-summary.md`) 검증 중 공개 API로 재현: ROUTER가 기본 REJECT일 때
 DEALER가 `disconnect(endpoint)` → 그 endpoint의 Disconnected 관찰 → `connect(endpoint)` → READY edge 뒤 제출한 request가 서버에 도착하지 않고 timeout(부하 시 1/5).
