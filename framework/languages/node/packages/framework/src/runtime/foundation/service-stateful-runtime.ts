@@ -1629,7 +1629,8 @@ export class ServiceStatefulRuntime {
     bindingIngress?: ServiceSessionBindingIngressPort,
     actorAuthority?: StreamSessionActorAuthorityFence
   ): ServiceStatefulPendingOperation {
-    const pending = this.operations.reserve(timeoutMs);
+    const deadlineMs = Date.now() + timeoutMs;
+    const pending = this.operations.reserve(timeoutMs, 'sender');
     const generation = this.nextSessionSequence++;
     const localBinding: ServiceSessionBinding = {
       actor,
@@ -1710,16 +1711,28 @@ export class ServiceStatefulRuntime {
       return pending;
     }
     const previousDelivery = this.sessionDeliveries.get(deliveryKey);
-    const bindingActorFence: ServiceActorRouteFence = actorAuthority === undefined
-      ? this.actorFence(actor)
-      : { actor, ...actorAuthority };
-    const header = encodeBoundSessionBindHeader(
-      pending.id,
-      bindingActorFence,
-      sessionRid,
-      { state: 'active', generation }
+    let bindingActorFence: ServiceActorRouteFence;
+    let header: Buffer;
+    try {
+      bindingActorFence = actorAuthority === undefined
+        ? this.actorFence(actor)
+        : { actor, ...actorAuthority };
+      header = encodeBoundSessionBindHeader(
+        pending.id,
+        bindingActorFence,
+        sessionRid,
+        { state: 'active', generation }
+      );
+    } catch (error) {
+      this.operations.fail(pending.id, error);
+      return pending;
+    }
+    void this.requestDurableOperation(
+      actor.nodeRid, header, pending.id, 'streamBind', deadlineMs
+    ).then(
+      reply => this.completeRemoteReply(pending, actor.nodeRid, 'streamBind', undefined, reply),
+      error => this.operations.fail(pending.id, error)
     );
-    this.submitRequest(pending, actor.nodeRid, [header], timeoutMs, 'streamBind');
     return {
       id: pending.id,
       promise: pending.promise.then(result => {
@@ -4018,36 +4031,10 @@ export class ServiceStatefulRuntime {
     operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate',
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult> {
-    this.requireOpen();
-    const deadlineMs = Date.now() + Math.max(1, timeoutMs);
-    let wasAdmitted = false;
-    let parts: readonly Buffer[];
-    // This path is limited to durable lifecycle operations. A rejected raw
-    // request has no terminal envelope, so replay the byte-identical header;
-    // decode failures below are received envelopes and are not replayed.
-    for (;;) {
-      const remainingMs = deadlineMs - Date.now();
-      if (remainingMs <= 0) {
-        throw userSpotOperationExhausted(operationKind, wasAdmitted);
-      }
-      try {
-        parts = targetNodeRid === this.nodeRid
-          ? await this.requestLocalInfrastructure(header, correlation, remainingMs)
-          : await this.raw.requestService(targetNodeRid, [header], remainingMs);
-        break;
-      } catch (error) {
-        if (userSpotRequestWasAdmitted(error)) wasAdmitted = true;
-        const retryDelayMs = Math.min(20, deadlineMs - Date.now());
-        if (retryDelayMs <= 0) {
-          throw userSpotOperationExhausted(operationKind, wasAdmitted, error);
-        }
-        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
-      }
-    }
-    //  Spec 32-framework-error-model:58-60, 91-92 — a reply that cannot be
-    //  processed must surface to the awaiting lifecycle caller (User Spot
-    //  create/close, Actor create) as a Framework ProtocolError, not as the
-    //  codec's untyped ServiceWireProtocolError.
+    const parts = await this.requestDurableOperation(
+      targetNodeRid, header, correlation, operationKind, Date.now() + Math.max(1, timeoutMs)
+    );
+    // A received envelope, including a decode failure, ends sender replay.
     try {
       if (parts.length < 1 || parts.length > 2) {
         throw new ServiceWireProtocolError('Invalid creation operation reply parts.');
@@ -4075,6 +4062,41 @@ export class ServiceStatefulRuntime {
       };
     } catch (error) {
       throw translateWireReplyDecodeError(error);
+    }
+  }
+
+  private async requestDurableOperation(
+    targetNodeRid: string,
+    header: Buffer,
+    correlation: bigint,
+    operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate' | 'streamBind',
+    deadlineMs: number
+  ): Promise<readonly Buffer[]> {
+    let wasAdmitted = false;
+    // This path is limited to durable lifecycle operations. A rejected raw
+    // request has no terminal envelope, so replay the byte-identical header;
+    // callers decode received envelopes after leaving this loop.
+    for (;;) {
+      this.requireOpen();
+      const remainingMs = deadlineMs - Date.now();
+      if (remainingMs <= 0) {
+        throw durableOperationExhausted(operationKind, wasAdmitted);
+      }
+      try {
+        return targetNodeRid === this.nodeRid
+          ? await this.requestLocalInfrastructure(header, correlation, remainingMs)
+          : await this.raw.requestService(targetNodeRid, [header], remainingMs);
+      } catch (error) {
+        // Bind consumes only typed transport failures. Programming errors and
+        // non-replayable terminals retain their original failure.
+        if (operationKind === 'streamBind' && !durableBindRequestCanReplay(error)) throw error;
+        if (durableRequestWasAdmitted(error)) wasAdmitted = true;
+        const retryDelayMs = Math.min(20, deadlineMs - Date.now());
+        if (retryDelayMs <= 0) {
+          throw durableOperationExhausted(operationKind, wasAdmitted, error);
+        }
+        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+      }
     }
   }
 
@@ -5197,17 +5219,18 @@ function operationReplayExpired(deadlineUnixMs: bigint): boolean {
     + BigInt(USER_SPOT_OPERATION_REPLAY_RETENTION_MS);
 }
 
-function userSpotRequestWasAdmitted(error: unknown): boolean {
-  // Binding request TimedOut is emitted only after admission; NotConnected is
-  // a pre-admission submit failure and must not change the operation's cause.
+function durableRequestWasAdmitted(error: unknown): boolean {
+  // Request NotConnected includes Core handover of an admitted request. The
+  // submit/request phase, rather than the result number, owns this distinction.
+  if (isZLinkBackendResultError(error)) return error.operation === 'request';
   return typeof error === 'object'
     && error !== null
     && 'result' in error
     && error.result === RequestResult.TimedOut;
 }
 
-function userSpotOperationExhausted(
-  operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate',
+function durableOperationExhausted(
+  operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate' | 'streamBind',
   wasAdmitted: boolean,
   cause?: unknown
 ): ZLinkFrameworkException {
@@ -5219,6 +5242,15 @@ function userSpotOperationExhausted(
     true,
     cause
   );
+}
+
+function durableBindRequestCanReplay(error: unknown): boolean {
+  if (!isZLinkBackendResultError(error)) return false;
+  return error.operation === 'request'
+    ? error.result === RequestResult.NotConnected || error.result === RequestResult.TimedOut
+    : error.result === SubmitResult.NotConnected
+      || error.result === SubmitResult.NotAdmitted
+      || error.result === SubmitResult.Backpressured;
 }
 
 function remainingDeadlineMs(deadlineUnixMs: bigint): number {
