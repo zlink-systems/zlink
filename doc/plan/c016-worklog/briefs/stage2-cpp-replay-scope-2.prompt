@@ -1,0 +1,29 @@
+# Job (STAGE 2 round 2, approved A, model astra): cpp — durable replay covers the handover-stranded request now that Core completes it immediately
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3, the round-1 report
+`doc/plan/c016-worklog/stage2-cpp-replay-scope-summary.md` (its BLOCKER is resolved: Core now completes a request pinned to a
+pair superseded by HANDOVER immediately with `ZLINK_REQUEST_NOT_CONNECTED`, spec `core/doc/spec/core/socket/README.ko.md` §4
+bb730c654f, implementation committed on main in `core/src/runtime/sockets/router/router_admission.cpp` + request/reply
+pending API, contract test `core/tests/integration/test_router_reciprocal_handover_lanes.cpp`). Never modify `core/**`,
+`bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion or
+split a deadline; do not commit. IMPORTANT: `core/build-dev` on main does NOT yet contain that Core commit (rebuild is
+scheduled after the dotnet job finishes) — build a Core for your verification in the worktree
+`/home/hep7/project/zlink-core-a` (already at main's parent; run `git -C /home/hep7/project/zlink-core-a checkout --detach <main HEAD>`
+then `nice -n 10 env JOBS=4 scripts/build-core.sh dev` there) and point the cpp framework build at it: configure a separate
+cpp build dir `framework/languages/cpp/build/linux-ninja-replay` with the cpp binding/Core from that worktree (read
+`framework/languages/cpp/CMakeLists.txt` / presets for how the Core prefix is located; if the framework only consumes the
+installed `.artifacts/wsl/install/zlink-cpp` package, STOP and report — the supervisor will rebuild packages first).
+Env: `TMPDIR=/dev/shm/zlink-tmp-cpp`.
+
+## What to do
+1. `raw_mesh_node_owner.cpp` retry predicate: with Core returning `NOT_CONNECTED` for a stranded request, confirm the existing
+   `route_unavailable` replay already covers the handover row (the adapter maps initial/terminal `NOT_CONNECTED+EHOSTUNREACH`
+   to `route_unavailable`?) — verify against `raw_binding_adapter.hpp` (stage-1 separation) and fix the mapping if the
+   completion-phase `NOT_CONNECTED` is not classified as replayable. Keep `timed_out` (admitted, no reply) terminal.
+2. Regression: an m6b (or execution) test where the first request is admitted on the losing direction of a reciprocal
+   handover and completes NOT_CONNECTED, then the same OperationId/correlation succeeds on the winner within the original
+   deadline — use the real Core (worktree build), not a scripted terminal.
+3. Verify: four unit binaries + `ctest -R 'm6a|m6b|channel_messaging|execution|raw_route_port'` in the replay build dir.
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-cpp-replay-scope-2-summary.md`: diff, the four lines, results, BLOCKERS.
