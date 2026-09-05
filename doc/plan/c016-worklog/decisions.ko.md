@@ -1201,7 +1201,7 @@ gate: dotnet tests 208/208, samples 7/7, 새 `test_hot_path_ownership_contract` 
 
 ## D-B108 (2026-09-05 12:00, 머신 B) .NET hot-path pass 2(astra 리뷰 기반) — reply 제출 closure 제거(384→32 B/op), pump closure 지연; 처리량 판정은 조용한 머신에서 paired 3-run으로 확정 예정
 후보 7개 중 2개 채택(reply `ReplyPartSubmitter` struct, `StartRuntimePump` closure 지연), 5개 no-go(inline first entry·TCS 합침·adopt-in-place·scratch close·수신 collection 재사용: 효과 <2.4% 또는 계약 변경). 최소 경로 REQREP managed 할당 1,024→640 B/op. gate: dotnet 217/217, samples 7/7, `test_hot_path_ownership_contract` +7 case, spec gap 없음(공개 API·ownership 불변).
-공식 after(Java 측정과 동시, Core lib 재빌드로 artifact 불일치)는 인과 판정 보류 → Java pass 1 종료 뒤 조용한 머신에서 C·.NET paired 3-run으로 4 pattern 판정값 확정(§7.5). 커밋: 아래 해시.
+공식 after(Java 측정과 동시, Core lib 재빌드로 artifact 불일치)는 인과 판정 보류 → Java pass 1 종료 뒤 조용한 머신에서 C·.NET paired 3-run으로 4 pattern 판정값 확정(§7.5). 커밋 `5dc05bfb3e`.
 ## D-090 (2026-09-05 12:00, 머신 A) 결정 — REQUEST 종결 규칙 단일화: submit 시점 pair가 종료되면(원인 불문) 즉시 `REQUEST_NOT_CONNECTED`
 REJECT-close job(`core-reject-duplicate-close-summary.md`) BLOCKER 1: 거부된 pipe의 DEALER pending REQUEST를 종결하려면 ROUTER→DEALER로 거부 사유를 wire로 전달해야 했다(새 protocol 의미 = 규칙 추가).
 대신 §6의 "transient physical disconnect → replay 없이 budget 유지" 행을 없애고 하나의 규칙으로 통일: reply는 submit 시점 pair로만 전달되므로(§4 pinning) 그 pair가 어떤 이유로든 종료되면
