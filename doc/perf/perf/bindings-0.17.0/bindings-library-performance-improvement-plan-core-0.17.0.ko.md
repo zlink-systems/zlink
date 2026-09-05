@@ -864,7 +864,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/java/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미달` — `tcp` 4 pattern before 11:44~11:49 KST: DD 50.8%(64 KiB 18%), DR/RR REQREP 15.1/24.0%(10~15k ops/s 고정), PUBSUB 81.0%; 자체 pass 1 job(astra) 진행 중; [log](log/2026-09-05-java-multi-tcp-before.ko.md)
+- Multi 상태: `미달` — `tcp` 4 pattern before 11:44~11:49 KST: DD 50.8%(64 KiB 18%), DR/RR REQREP 15.1/24.0%, PUBSUB 81.0% → 자체 pass 1(astra, `java-perf-pass1-summary.md`, 12:13 after): DD 54.7%(64B 82.3%, 256B 76.9%, 1024B 67.4%이나 **4096B 35.8%·64K 10.9%로 회귀**), DR/RR REQREP 52.6/72.5%(REQREP socket별 worker 대기를 poller 1회 처리 뒤로 이동, native scratch), PUBSUB 88.4%. DD 큰 메시지 회귀 원인: 백프레셔마다 runtime owner의 private poller/control pair 생성·파괴(64K에서 6 submit당 1회, `ControlWake.create`가 binding CPU 81%) → pass 1은 미커밋, 구조 개선 pass 1b(astra, 제어점 단일화) 진행 중; [log](log/2026-09-05-java-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.3.1 Single suite
