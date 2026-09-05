@@ -1,0 +1,26 @@
+# Job (Core fix, model astra): on top of the D-094 working diff in worktree b — the remaining red case `ZLINK_TEST_CASE=test_reject_retry_tcp` of `test_router_same_socket_reconnect_policy`: a connector's retry attempt collides with the *previous* attempt's still-open Completion lane (same RID, incomplete pair) → `ZLINK_PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY`. ZMP §4.1 already says: when one lane of a count-2 set fails/is rejected, the connector closes BOTH lanes and re-opens the set with a new local generation — enforce that single lane-set rule at the owner
+
+You are a codex sub-agent under a Claude supervisor. Read `CONTRIBUTING.ko.md` §4/§5, `AGENTS.md` §3, `core/doc/spec/core/protocol/01-zmp.ko.md` §4.1 (lines ~176-262 and
+the summary bullets ~506-521: count-2 lane set, duplicate lane → protocol error for the whole set, "count 2의 한 lane이 끊기면 두 lane을 모두 닫고 같은 새 local
+generation으로 다시 연다"), `core/doc/spec/core/socket/README.ko.md` §4 (REJECT closes the duplicate pipe; connector reconnects per intent), decisions D-092/D-094, and
+`doc/plan/c016-worklog/core-remove-same-local-endpoint-reconnect-summary.md` §BLOCKERS 1 (gdb evidence `/tmp/zlink-core-d094-gdb-pair.log`: server `completion=true`,
+`reject_pipes={new completion, NULL, existing completion}`). Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do not commit. WORK ONLY IN
+`/home/hep7/project/zlink-core-b` — **keep the existing uncommitted D-094 diff** (8 files incl. `test_router_same_socket_reconnect_policy.cpp`); build on top. Never touch
+main's `core/build-dev`. Build: `nice -n 10 env JOBS=4 scripts/build-core.sh dev`.
+
+## Analysis direction
+When the binder REJECTs the Application lane of a count-2 attempt, the attempt's Completion lane stays half-open on the connector and in the binder's incomplete
+pair (joined by RID). The connector's intent then starts the next attempt whose Completion lane arrives while the old one is still registered → duplicate lane →
+READY protocol error for the set (spec-conformant symptom of a connector that did not tear down its whole lane set first). Owner: the connector-side lane-set
+lifecycle (session/pair generation) — a lane failure or rejection must close both lanes of that generation and only then re-open with the next generation
+(one rule, spec line ~253). Check also the binder side: an incomplete pair whose Application lane was rejected/terminated must not keep accepting sibling
+lanes (the pair is dead once any lane of it terminates). Do not add a retry/delay or accept duplicate lanes.
+
+## Verify
+`test_router_same_socket_reconnect_policy` all cases `--repeat until-fail:10` (incl. `test_reject_retry_tcp`); targeted
+`test_router_reject_duplicate|test_router_reject_disconnected_without_app_recv|test_socket_disconnect_boundary|test_router_reciprocal_handover_lanes|test_transport_matrix|
+test_monitor_connection_identity|test_multi_socket_contract_regressions|test_inproc_pending_connect_rejected_at_attach`; full ctest once (hotpath excluded).
+
+## Deliverable
+`doc/plan/c016-worklog/core-lane-set-teardown-on-reject-summary.md` in MAIN (cause file:line, fix, owner / spec clause / parity / class, rule count, results, BLOCKERS);
+combined patch `git add -N . && git diff HEAD > /home/hep7/project/zlink-core-b/core-d094-plus-laneset.patch`.
