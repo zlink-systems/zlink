@@ -112,6 +112,12 @@ internal sealed class ZLinkDrainAdmissionGate
 
     public bool IsSealed => RunState(() => _sealed != 0);
 
+    //  Spec 30 §14 step 1: the mesh node follows the host's *shutdown* seal
+    //  (no new peer admission). A relocation fence also seals application
+    //  admission but is not a shutdown, so the owner decides.
+    internal bool IsSealedForShutdown =>
+        RunState(() => _sealed != 0 && _owner == ZLinkDrainOwner.Shutdown);
+
     public void Seal() => RunState(() => _sealed = 1);
 
     public void Reset()

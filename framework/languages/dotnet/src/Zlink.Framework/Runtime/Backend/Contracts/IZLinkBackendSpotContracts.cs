@@ -16,6 +16,13 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
     {
     }
 
+    // Spec 30 §14 step 1: the host's shutdown admission seal is followed by
+    // the mesh node, which then starts no new peer admission (Hello). Default
+    // keeps fakes and gate-less standalone nodes admitting peers.
+    void SetPeerAdmissionSealGate(Func<bool> sealedForShutdown)
+    {
+    }
+
     RoutingId RoutingId { get; }
 
     void SetRoutingId(RoutingId routingId);

@@ -129,6 +129,7 @@
         <Compile Include="Runtime/MessagePayloadOwnershipConvergenceTests.cs"/>
         <Compile Include="Runtime/MeshCompletionTableConvergenceTests.cs"/>
         <Compile Include="Runtime/MeshNodeRouteDispatcherTests.cs"/>
+        <Compile Include="Runtime/MeshNodeShutdownSealTests.cs"/>
         <Compile Include="Runtime/PublicContractSnapshotTests.cs"/>
         <Compile Include="Runtime/SerialExecutionQueueBenchmarkTests.cs"/>
         <Compile Include="Runtime/SerialExecutorLayerContractTests.cs"/>
