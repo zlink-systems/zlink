@@ -165,6 +165,10 @@ void zlink::object_t::process_command (const command_t &cmd_)
             process_term_endpoint (cmd_.args.term_endpoint.endpoint);
             break;
 
+        case command_t::reconnect_inproc:
+            process_reconnect_inproc (cmd_.args.reconnect_inproc.endpoint);
+            break;
+
         case command_t::reap:
             process_reap (cmd_.args.reap.socket);
             break;
@@ -481,6 +485,15 @@ void zlink::object_t::send_term_endpoint (own_t *destination_, std::string *endp
     send_command (cmd);
 }
 
+void zlink::object_t::send_reconnect_inproc (own_t *destination_, std::string *endpoint_)
+{
+    command_t cmd;
+    cmd.destination = destination_;
+    cmd.type = command_t::reconnect_inproc;
+    cmd.args.reconnect_inproc.endpoint = endpoint_;
+    send_command (cmd);
+}
+
 void zlink::object_t::send_reap (class socket_base_t *socket_)
 {
     command_t cmd;
@@ -595,6 +608,11 @@ void zlink::object_t::process_term_ack ()
 }
 
 void zlink::object_t::process_term_endpoint (std::string *)
+{
+    zlink_assert (false);
+}
+
+void zlink::object_t::process_reconnect_inproc (std::string *)
 {
     zlink_assert (false);
 }

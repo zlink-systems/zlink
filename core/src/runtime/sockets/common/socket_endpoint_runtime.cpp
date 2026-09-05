@@ -123,3 +123,19 @@ void zlink::socket_inprocs_t::erase_pipe (const pipe_t *pipe_)
             break;
         }
 }
+
+bool zlink::socket_inprocs_t::endpoint_for_pipe (
+  const pipe_t *pipe_, std::string *endpoint_out_) const
+{
+    if (!pipe_ || !endpoint_out_)
+        return false;
+
+    for (map_t::const_iterator it = _inprocs.begin (), end = _inprocs.end ();
+         it != end; ++it) {
+        if (it->second != pipe_)
+            continue;
+        *endpoint_out_ = it->first;
+        return true;
+    }
+    return false;
+}

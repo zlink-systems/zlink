@@ -223,7 +223,8 @@ int zlink::socket_base_t::connect (const char *endpoint_uri_)
     return connect_internal (endpoint_uri_);
 }
 
-int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
+int zlink::socket_base_t::connect_internal (const char *endpoint_uri_,
+                                            bool process_pending_commands_)
 {
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
@@ -236,9 +237,12 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
         return -1;
     }
 
-    int rc = process_commands (0, false);
-    if (unlikely (rc != 0))
-        return -1;
+    int rc = 0;
+    if (process_pending_commands_) {
+        rc = process_commands (0, false);
+        if (unlikely (rc != 0))
+            return -1;
+    }
 
     std::string protocol;
     std::string address;
@@ -331,14 +335,18 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_)
                 new_pipes[1]->set_transport_lane_count (transport_lane_count);
             }
             // Inproc has no engine/session boundary that would normally
-            // publish endpoint metadata.  Give both pipe halves the same
-            // immutable logical endpoint identity before either half is
-            // attached so pending SEND/REQUEST records can survive a
-            // physical detach and re-key to the reconnect for this endpoint.
+            // publish endpoint metadata. Give both pipe halves the same
+            // physical connection identity before either half is attached.
+            endpoint_uri_pair_t connect_endpoint_pair =
+              make_unconnected_connect_endpoint_pair (endpoint_uri_);
+            endpoint_uri_pair_t bind_endpoint_pair =
+              make_unconnected_bind_endpoint_pair (endpoint_uri_);
+            bind_endpoint_pair.connection_id =
+              connect_endpoint_pair.connection_id.load ();
             new_pipes[0]->set_endpoint_pair (
-              make_unconnected_connect_endpoint_pair (endpoint_uri_));
+              ZLINK_MOVE (connect_endpoint_pair));
             new_pipes[1]->set_endpoint_pair (
-              make_unconnected_bind_endpoint_pair (endpoint_uri_));
+              ZLINK_MOVE (bind_endpoint_pair));
             if (lane == transport_lane_application && peer.socket) {
                 get_ctx ()->record_auto_hwm_endpoint_policy (
                   make_auto_hwm_queue_policy (
@@ -527,10 +535,14 @@ int zlink::socket_base_t::materialize_inproc_completion_lane (
     new_pipes[0]->set_transport_lane_count (2);
     new_pipes[1]->set_transport_lane_count (2);
     new_pipes[0]->set_locally_initiated (true);
-    new_pipes[0]->set_endpoint_pair (
-      make_unconnected_connect_endpoint_pair (endpoint_uri_));
-    new_pipes[1]->set_endpoint_pair (
-      make_unconnected_bind_endpoint_pair (endpoint_uri_));
+    endpoint_uri_pair_t connect_endpoint_pair =
+      make_unconnected_connect_endpoint_pair (endpoint_uri_);
+    endpoint_uri_pair_t bind_endpoint_pair =
+      make_unconnected_bind_endpoint_pair (endpoint_uri_);
+    bind_endpoint_pair.connection_id =
+      connect_endpoint_pair.connection_id.load ();
+    new_pipes[0]->set_endpoint_pair (ZLINK_MOVE (connect_endpoint_pair));
+    new_pipes[1]->set_endpoint_pair (ZLINK_MOVE (bind_endpoint_pair));
     new_pipes[0]->set_max_message_bytes (
       finite_max_message_bytes (bind_options_.maxmsgsize));
     new_pipes[1]->set_max_message_bytes (

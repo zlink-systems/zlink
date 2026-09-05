@@ -1369,6 +1369,15 @@ void zlink::socket_base_t::process_term_endpoint (std::string *endpoint_)
     delete endpoint_;
 }
 
+void zlink::socket_base_t::process_reconnect_inproc (std::string *endpoint_)
+{
+    // This callback already owns command dispatch, so the inproc connect path
+    // must not try to drain the same mailbox recursively.
+    if (!is_terminating () && endpoint_)
+        (void) connect_internal (endpoint_->c_str (), false);
+    delete endpoint_;
+}
+
 void zlink::socket_base_t::set_all_pipes_nodelay ()
 {
     for (size_t i = 0, size = endpoint_runtime ().attached_pipe_count (); i != size; ++i) {

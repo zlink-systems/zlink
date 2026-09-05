@@ -1152,3 +1152,11 @@ job은 잘못된 mask를 `NOT_SUPPORTED`로 냈으나 Node/Rust가 `InvalidArgum
 ## D-B101 (2026-09-05 10:35, 머신 B) bindings parity — Rust `Poller` monitor source(`add_monitor/modify_monitor/remove_monitor`) 구현·spec 명시
 `SocketMonitor: Pollable`은 채택하지 않음(sealed `Pollable`이 public `proxy`의 socket 전용 인자 계약이라 monitor를 넣으면 `proxy(&monitor, ...)`가 컴파일되는 잘못된 표면이 생김) → 별도 `*_monitor` 메서드. `POLLIN`만 허용, 그 외 `ConfigError(InvalidArgument, EINVAL)`, completion owner 미적용, `PollSourceKind::Socket`.
 샘플 blocking `monitor.recv()` → poller drain. 테스트 `monitor_tests.rs` 3 case × 5회, `run_tests.sh` 14/14, clippy `-D warnings`, fmt. Rust spec(ko/en) 문장 추가. 커밋 `ade06d5514`.
+
+## D-B102 (2026-09-05 11:35, 머신 B) 작업 5 Core 후속 확정 — monitor connection identity Core 결함 3건 수정(inproc id 분열·tcp/ipc attempt id 재발급·inproc 자동 재연결 소실); inproc CLOSED는 spec gap
+공개 C API 관찰(`test_monitor_connection_identity`, tcp/ipc/inproc × READY/DISCONNECTED/CLOSED/재연결/explicit disconnect/client close 11 case): 수정 전 inproc READY≠DISCONNECTED id, tcp CLOSED가 새 endpoint id, inproc 서버 re-bind 뒤 재연결 없음.
+원인·수정: (1) inproc 양 pipe half가 별도 endpoint pair id(`socket_base_endpoint.cpp:340-347,538-544`) → 같은 connection id 공유, termination record도 pipe의 transport connection id 사용; (2) tcp/ipc connecter가 DELAYED/RETRIED/engine/CLOSED마다 새 pair 생성 → `_attempt_endpoint_pair`를 attempt당 1회(`asio_tcp_connecter.cpp`, `asio_ipc_connecter.cpp`);
+(3) inproc peer detach 뒤 connector pipe가 pending connect로 재등록되지 않음 → `reconnect_inproc` self-command(`command.hpp`, `object.*`, `socket_base_api.cpp:1740-1751,1915-1920`). 공개 ABI 불변. spec `06-monitoring.ko.md:69-72,92-95,523-536`.
+tcp/ipc에서 서버 close 뒤 관찰되는 CLOSED는 이전 READY transport가 아니라 이후 자동 재연결의 실패한 새 attempt이므로 올바른 correlation은 READY==DISCONNECTED, 새 CONNECT_DELAYED==CLOSED(Java `@Disabled` tcp CLOSED case는 이 기대치를 잘못 세움 → Java 테스트 정정 후속).
+spec gap(사용자 결정): inproc peer close에 CLOSED 이벤트를 요구할지 — Core inproc 경로엔 `event_closed` 호출이 없고 spec에 CLOSED의 transport-독립 trigger 정의 없음. 후속 확인: WS/TLS connecter의 attempt identity parity(선택 범위), inproc peer command progress(작업 4와 연계).
+gate: worktree RelWithDebInfo 신규 5/5, monitor 13/13, integration 94/94, hotpath 제외 144/144; main dev 트리 신규 1/1, monitor 13/13, 전체(hotpath 제외) 144/144. Release+LTO hotpath_gate는 작업 4 병합 뒤 1회. 커밋: 아래 해시.
