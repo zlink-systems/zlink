@@ -171,6 +171,31 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     @Test
+    void synchronousDisconnectSubmissionFailureStillUnbindsEveryActor() {
+        FakeStream stream = new FakeStream();
+        ZLinkSessionActorsRuntime runtime = runtime(stream);
+        ZLinkSessionActor first = runtime.bind(
+            new ActorRef("actor-1", 7, MESH, NODE_A)).toCompletableFuture().join();
+        runtime.bind(new ActorRef("actor-2", 8, MESH, NODE_B))
+            .toCompletableFuture().join();
+        var rejected = new ZlinkSubmitException(SubmitResult.NOT_CONNECTED);
+        stream.disconnectSubmissionFailure = rejected;
+
+        CompletionException failure = assertThrows(CompletionException.class,
+            () -> runtime.notifyDisconnectedAll().toCompletableFuture().join());
+
+        assertSame(rejected, failure.getCause());
+        assertEquals(2, stream.disconnectNotifications);
+        assertEquals(Set.of("actor-1", "actor-2"), Set.copyOf(stream.unbinds));
+        assertEquals(2, stream.unbinds.size());
+        assertTrue(runtime.bound().isEmpty());
+        assertTrue(first.notifyDisconnected().toCompletableFuture()
+            .isCompletedExceptionally());
+        assertEquals(2, stream.disconnectNotifications);
+        assertEquals(2, stream.unbinds.size());
+    }
+
+    @Test
     void physicalDisconnectUsesTheLifecycleCallbackDeadline() {
         FakeStream stream = new FakeStream();
         ZLinkSessionActorsRuntime runtime = runtime(stream);
@@ -744,6 +769,7 @@ final class ZLinkSessionActorBindingContractTest {
             new java.util.concurrent.CopyOnWriteArrayList<>();
         private boolean deferBoundPushAdmission;
         private int disconnectNotifications;
+        private RuntimeException disconnectSubmissionFailure;
         private int disconnectedPeers;
         private long nextIngressSequence = 1;
         private boolean closed;
@@ -921,6 +947,11 @@ final class ZLinkSessionActorBindingContractTest {
             if (ZLinkActorSpotRoutePackets.SESSION_DISCONNECTED_PACKET_NAME.equals(
                     header.packetName())) {
                 disconnectNotifications++;
+                if (disconnectSubmissionFailure != null) {
+                    RuntimeException failure = disconnectSubmissionFailure;
+                    disconnectSubmissionFailure = null;
+                    throw failure;
+                }
                 if (pendingDisconnectNotification != null) {
                     CompletableFuture<List<Message>> pending =
                         pendingDisconnectNotification;

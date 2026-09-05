@@ -32,6 +32,7 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -497,11 +498,13 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             result.complete(null);
             return result;
         }
-        CompletionStage<Void> notification = managedActor.isPresent() && !nativeRebound
+        // Synchronous notification rejection must still reach unbind and settle disconnect.
+        CompletionStage<Void> notification = ZLinkHandlerStages.fromStageSupplier(() ->
+            managedActor.isPresent() && !nativeRebound
             ? (actors.clearSessionBinding(managedActor.get(), bindingToken)
                 ? actors.notifyDisconnected(managedActor.get())
                 : CompletableFuture.completedFuture(null))
-            : notifyRemoteDisconnected();
+            : notifyRemoteDisconnected());
         notification.toCompletableFuture()
             .orTimeout(
                 timeout.toMillis(),
