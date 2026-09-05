@@ -401,21 +401,21 @@ bool has_pending_request_work (const std::shared_ptr<socket_request_reply_state_
 template <typename TakePending>
 static void fail_matching_pending_requests (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
-  TakePending take_pending_)
+  zlink_request_result_t result_, TakePending take_pending_)
 {
     const int saved_errno = errno;
     while (true) {
-        pending_request_t not_found;
+        pending_request_t pending;
         bool found = false;
         {
             std::lock_guard<std::mutex> lock (state_->mutex);
-            found = take_pending_ (state_.get (), &not_found);
+            found = take_pending_ (state_.get (), &pending);
         }
         if (!found)
             break;
-        not_found.correlation.release ();
+        pending.correlation.release ();
         (void) publish_pending_request_completion (
-          state_, &not_found, ZLINK_REQUEST_NOT_FOUND, NULL, 0);
+          state_, &pending, result_, NULL, 0);
     }
     errno = saved_errno;
 }
@@ -428,8 +428,9 @@ void fail_pending_requests_for_logical_endpoint (
         return;
 
     fail_matching_pending_requests (
-      state_, [&logical_endpoint_] (socket_request_reply_state_t *state,
-                                    pending_request_t *pending) {
+      state_, ZLINK_REQUEST_NOT_FOUND,
+      [&logical_endpoint_] (socket_request_reply_state_t *state,
+                            pending_request_t *pending) {
           return take_next_socket_pending_request_for_logical_endpoint_locked (
             state, logical_endpoint_, pending);
       });
@@ -443,10 +444,27 @@ void fail_pending_requests_for_logical_rid (
         return;
 
     fail_matching_pending_requests (
-      state_, [logical_rid_] (socket_request_reply_state_t *state,
-                              pending_request_t *pending) {
+      state_, ZLINK_REQUEST_NOT_FOUND,
+      [logical_rid_] (socket_request_reply_state_t *state,
+                      pending_request_t *pending) {
           return take_next_socket_pending_request_for_logical_rid_locked (
             state, logical_rid_, pending);
+      });
+}
+
+void fail_pending_requests_for_transport_pair (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  uint64_t transport_pair_id_, uint64_t transport_pair_generation_)
+{
+    if (!state_ || transport_pair_id_ == 0 || transport_pair_generation_ == 0)
+        return;
+
+    fail_matching_pending_requests (
+      state_, zlink::request_result_internal::from_errno (EHOSTUNREACH),
+      [transport_pair_id_, transport_pair_generation_]
+      (socket_request_reply_state_t *state, pending_request_t *pending) {
+          return take_next_socket_pending_request_for_transport_pair_locked (
+            state, transport_pair_id_, transport_pair_generation_, pending);
       });
 }
 
