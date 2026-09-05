@@ -93,6 +93,8 @@ internal sealed class ZLinkActorRemoteJoiner(
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled);
+        var effectiveDeadline = absoluteDeadline
+                                ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
         var activation = spots.GetActivationBySpotId(state, spotId);
         if (activation is not null)
         {
@@ -108,12 +110,14 @@ internal sealed class ZLinkActorRemoteJoiner(
                     activation.SpotId,
                     activation.ChannelName,
                     request,
+                    RemainingTimeout(effectiveDeadline),
                     cancellationToken)
                 .ConfigureAwait(false);
         }
 
-        var remoteAddress = await ResolveRemoteActorJoinTargetAsync(
-                spotId,
+        var remoteAddress = await ExecuteWithDeadlineAsync(
+                token => ResolveRemoteActorJoinTargetAsync(spotId, token),
+                RemainingTimeout(effectiveDeadline),
                 cancellationToken)
             .ConfigureAwait(false);
         return await SubmitRoutedJoinActorAsync(
@@ -124,7 +128,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 request,
                 operationId,
                 cancellationToken,
-                absoluteDeadline)
+                effectiveDeadline)
             .ConfigureAwait(false);
     }
 
@@ -158,22 +162,17 @@ internal sealed class ZLinkActorRemoteJoiner(
         var effectiveDeadline = absoluteDeadline
                                 ?? DateTimeOffset.UtcNow
                                     + registration.DefaultRequestTimeout;
-        var timeout = RemainingTimeout(effectiveDeadline);
-        return await ExecuteWithDeadlineAsync(
-                timeoutToken => SubmitRoutedJoinActorCoreAsync(
-                    actor,
-                    actorRef,
-                    actorState,
-                    target,
-                    request,
-                    actorType,
-                    handoffId,
-                    relocation,
-                    operationId,
-                    effectiveDeadline,
-                    timeoutToken,
-                    cancellationToken),
-                timeout,
+        return await SubmitRoutedJoinActorCoreAsync(
+                actor,
+                actorRef,
+                actorState,
+                target,
+                request,
+                actorType,
+                handoffId,
+                relocation,
+                operationId,
+                effectiveDeadline,
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -200,7 +199,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         }
     }
 
-    private static TimeSpan RemainingTimeout(DateTimeOffset absoluteDeadline)
+    internal static TimeSpan RemainingTimeout(DateTimeOffset absoluteDeadline)
     {
         var remaining = absoluteDeadline - DateTimeOffset.UtcNow;
         if (remaining <= TimeSpan.Zero)
@@ -222,14 +221,15 @@ internal sealed class ZLinkActorRemoteJoiner(
         ZLinkObjectRelocationRegistration relocation,
         ZLinkActorJoinOperationId? operationId,
         DateTimeOffset absoluteDeadline,
-        CancellationToken cancellationToken,
-        CancellationToken admissionCancellationToken)
+        CancellationToken cancellationToken)
     {
         var authorityStore = registration.Locations.ResolveStore()
                              ?? throw new InvalidOperationException(
                                  "Actor handoff requires a location store.");
-        var authorityRead = await authorityStore.ReadAuthorityAsync(
-                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.Context.ActorId),
+        var authorityRead = await ExecuteWithDeadlineAsync(
+                token => authorityStore.ReadAuthorityAsync(
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.Context.ActorId), token),
+                RemainingTimeout(absoluteDeadline),
                 cancellationToken)
             .ConfigureAwait(false);
         if (authorityRead is not ZLinkAuthorityReadResult.Found authority
@@ -302,8 +302,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                         },
                         () => sourceLeft = true,
                         relocationMetric,
-                        cancellationToken,
-                        admissionCancellationToken)
+                        cancellationToken)
                     .ConfigureAwait(false);
                 if (result is not ZLinkActorJoinResult.Accepted)
                 {
@@ -432,8 +431,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         Action markSourceCaptureStarted,
         Action markSourceLeft,
         ZLinkRuntimeMetrics.ZLinkRelocationMetricOperation relocationMetric,
-        CancellationToken cancellationToken,
-        CancellationToken admissionCancellationToken)
+        CancellationToken cancellationToken)
     {
         var sourceSpotId = ResolveSourceSpotId(sourceAuthority);
         var sourceActivation = actorState.LiveActivation;
@@ -469,7 +467,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                     canonicalRequest,
                     predictedPayloadBytes,
                     RemainingTimeout(absoluteDeadline),
-                    admissionCancellationToken)
+                    cancellationToken)
                 .ConfigureAwait(false)
             : null;
         handoffId = canonicalAdmission?.HandoffId ?? handoffId;
@@ -536,7 +534,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                                     remaining,
                                     token);
                             },
-                            admissionCancellationToken)
+                            cancellationToken)
                         .ConfigureAwait(false);
                     ZLinkFrameworkDebugLog.SpotDiscovery(
                         $"admit_reply_received actor={actor.Context.ActorId}");
@@ -546,7 +544,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                         snapshot.SpotId);
                     return (Snapshot: snapshot, Reply: reply);
                 },
-                admissionCancellationToken)
+                cancellationToken)
             .ConfigureAwait(false);
         var targetNodeRid = admission.Snapshot.NodeRid;
         var targetSpotId = admission.Snapshot.SpotId;
@@ -610,391 +608,401 @@ internal sealed class ZLinkActorRemoteJoiner(
             targetReservation.TargetSpotAuthorityOwnerGeneration,
             admission.Snapshot.OwnerLeaseGeneration,
             routerChannelId));
-        var authorityRecheck = await authorityStore.ReadAuthorityAsync(
-                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.Context.ActorId),
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (authorityRecheck is not ZLinkAuthorityReadResult.Found currentAuthority
-            || currentAuthority.Snapshot.ObjectGeneration != actorRef.Generation
-            || currentAuthority.Snapshot.AuthorityOwnerGeneration
-               != actorAuthorityOwnerGeneration)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                $"Actor '{actor.Context.ActorId}' authority changed during relocation preflight.");
-        var hasBoundSession = actorState.TryGetBoundSession(out var boundSession);
-        //  The seal branch is conditional, so its trace being absent means
-        //  "skipped" just as often as "never reached". Record the condition.
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"preflight_done actor={actor.Context.ActorId} has_bound_session={hasBoundSession}");
-        if (hasBoundSession && boundSession.SessionNodeRid is null)
-            boundSession = boundSession with { SessionNodeRid = actorRef.NodeRid };
-        //  The relocation coordinator fence (owner/lease/node/store-version)
-        //  is required on every ZLJR request, bound session or not: the
-        //  target's ZLJR decoder rejects an empty/zero fence as malformed
-        //  recovery regardless of whether a session happens to be bound.
-        //  Only session seal/binding stays conditional on hasBoundSession.
-        var sessionRelocationContext = ZLinkSessionRelocationContext.Create(
-            Guid.ParseExact(handoffId, "N"),
-            currentAuthority.Snapshot.OwnerId,
-            checked((ulong)currentAuthority.Snapshot.OwnerLeaseGeneration),
-            sourceAuthority.NodeRid,
-            sourceAuthority.NodeGeneration,
-            currentAuthority.Snapshot.StoreVersion);
-        if (hasBoundSession)
-        {
-            actorState.RememberSourceSessionRelocation(
-                handoffId,
-                sessionRelocationContext);
-            boundSession = boundSession with
-            {
-                BindingGeneration = boundSession.BindingGeneration == 0
-                    ? 1
-                    : boundSession.BindingGeneration,
-                ObjectGeneration = actorRef.Generation,
-                AuthorityOwnerGeneration = actorAuthorityOwnerGeneration,
-                SessionOwnerNodeGeneration =
-                    boundSession.SessionOwnerNodeGeneration == 0
-                        ? ResolveSessionOwnerNodeGeneration(
-                            boundSession.SessionNodeRid ?? actorRef.NodeRid)
-                        : boundSession.SessionOwnerNodeGeneration
-            };
-            await SealBoundSessionRouteAsync(
-                    actor.Context.ActorId,
-                    actorRef.NodeRid,
-                    boundSession,
-                    sessionRelocationContext,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            actorState.BindSession(
-                boundSession.SessionNodeRid,
-                boundSession.SessionRid,
-                boundSession.BindingToken,
-                boundSession.BindingGeneration,
-                boundSession.ObjectGeneration,
-                boundSession.AuthorityOwnerGeneration,
-                boundSession.MeshName,
-                boundSession.TargetNodeGeneration,
-                boundSession.OwnerLeaseGeneration,
-                boundSession.SessionOwnerNodeGeneration,
-                boundSession.AcceptedHighWater);
-        }
-
-        ZLinkCapturedActorRelocationState relocationState;
-        relocationMetric.Start();
-        _ = await actorState.BeginHandoffCaptureAsync(cancellationToken)
-            .ConfigureAwait(false);
-        markSourceCaptureStarted();
-        relocationState = await CaptureRelocationStateAsync(
-                relocation,
-                actor,
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (relocationState.Payload.LongLength
-            > ZLinkRemoteActorJoinPackets.SnapshotApplicationStateReservationBytes)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Rejected,
-                $"Actor '{actor.Context.ActorId}' relocation adapter returned more than 64 MiB.");
-
-        // A locally bound session records no SessionNodeRid (null means "this
-        // node"); the join commit crosses nodes, so the target must receiver
-        // the concrete session node rid — the actor's current owner node — or
-        // its pushes can never route back to the session.
-        //  Spec 30 §11: the SafeToShutdown obligation starts at seal, not
-        //  at cutover — waiting until CommitMessageFollow would let a
-        //  shutdown query race the seal-to-cutover window. Attaching the
-        //  token in the same locked call as the seal itself closes the
-        //  window where a status read could observe the seal without the
-        //  obligation counted, or an abort could race the attach.
-        actorState.Handoff.SealCapture(runtime.BeginPendingRelocationUnit());
-        var committedFrames = actorState.Handoff.SnapshotFrames();
-        var relocationStore = registration.Locations.ResolveRelocationStore()
-                              ?? throw new ZLinkConfigurationException(
-                                  "Cross-node Actor relocation requires a Relocation Store.");
-        var relocationId = Guid.ParseExact(handoffId, "N");
-        var authorityKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(
-            actor.Context.ActorId);
-        // The immutable root cannot contain its own reference, checksum, or
-        // digest. Recovery persists this exact sentinel; startup verifies the
-        // real root against the published authority instead.
-        var pendingReference = new ZLinkRelocationManifestReference(
-            "pending",
-            0,
-            relocationId,
-            1,
-            new byte[32]);
-        var requestTemplate = ZLinkRemoteActorJoinPackets.CreateJoinRequest(
-            actor.Context.ActorId,
-            actorType,
-            handoffId,
-            sourceSpotId,
-            actorRef.NodeRid,
-            actorRef.Generation,
-            actorAuthorityOwnerGeneration,
-            boundSession.SessionNodeRid,
-            boundSession.SessionRid,
-            relocationState.ContentType,
-            pendingReference,
-             request,
-             registration.Codecs,
-	             hasBoundSession ? boundSession : null,
-	             targetReservation,
-                 sessionRelocationContext,
-                 actorNodeGeneration:
-                     currentAuthority.Snapshot.Allocation
-                         .DescriptorLifecycleGeneration,
-	                 expectedOwnerLeaseGeneration: checked(
-	                     (ulong)currentAuthority.Snapshot.OwnerLeaseGeneration),
-                     targetAttemptGeneration:
-                         ZLinkStandaloneActorRelocationRuntime
-                             .InitialTargetAttemptGeneration);
-        var recovery = new ZLinkActorRelocationRecoveryRecord(
-            requestTemplate,
-            targetSpotId,
-            targetNodeRid.ToBytes().ToArray(),
-            targetReservation.TargetNodeGeneration,
-            targetReservation.TargetSpotGeneration,
-            targetReservation.TargetAuthorityOwnerGeneration,
-            operationId?.High ?? 0,
-            operationId?.Low ?? 0,
-            operationId is null
-                ? null
-                : admissionReply.RecoveryReplyContentType
-                  ?? admissionReply.ReplyContentType,
-            operationId is null ? [] : admissionReply.Reply);
-        var targetDescriptor = (await authorityStore.ListAllMeshNodesAsync(
-                sourceAuthority.MeshName,
-                cancellationToken)
-            .ConfigureAwait(false)).SingleOrDefault(
-            descriptor => descriptor.Rid == targetNodeRid);
-        if (targetDescriptor is null
-            || targetDescriptor.LifecycleGeneration
-               != targetReservation.TargetNodeGeneration
-            || targetDescriptor.LeaseGeneration <= 0
-            || string.IsNullOrWhiteSpace(targetDescriptor.OwnerId))
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.DataLost,
-                $"Actor '{actor.Context.ActorId}' target owner fence changed before root preparation.",
-                retryAdvice: ZLinkRetryAdvice.DoNotRetry);
-        var targetActor = new ZLinkBackendActorRef(
-            targetNodeRid,
-            actor.Context.ActorId,
-            actorRef.Generation);
-        var acceptedRecords = committedFrames.Select(frame =>
-                new ZLinkActorAcceptedRecord(
-                    frame,
-                    frame.RequestSource
-                    ?? throw new ZLinkRelocationDataLostException(
-                        $"Actor '{actor.Context.ActorId}' accepted journal lost its source fence."),
-                    targetActor))
-            .ToArray();
-        var precommit = new ZLinkStandaloneActorRelocationPrecommitCoordinator(
-            authorityStore);
-        var precommitSnapshot = await precommit.BeginPreparingAsync(
-                currentAuthority.Snapshot,
-                sourceAuthority,
-                relocationId,
-                registration.ApplicationVersion,
-                cancellationToken)
-            .ConfigureAwait(false);
-        var relocationEnvelope =
-            ZLinkStandaloneActorRelocationRuntime.CreateImmutableRoot(
-                precommitSnapshot,
-                sourceAuthority,
-                new ZLinkStandaloneActorRelocationDestination(
-                    targetSpotId,
-                    targetReservation.TargetSpotGeneration,
-                    admission.Snapshot.SpotKind,
-                    targetNodeRid,
-                    targetReservation.TargetNodeGeneration,
-                    sourceAuthority.MeshName,
-                    new ZLinkLocationOwnerToken(
-                        targetDescriptor.OwnerId,
-                        targetDescriptor.LeaseGeneration)),
-                relocationId,
-                relocationState.Payload,
-                acceptedRecords,
-                hasBoundSession
-                    ? ZLinkRemoteActorJoinPackets.DecodeBoundSessionRoute(
-                        requestTemplate)
-                    : default,
-                ZLinkActorRemoteJoinRecoveryCodec.Encode(recovery),
-                relocationState.ContentType
-                == ZLinkRemoteActorJoinPackets.SnapshotRelocationContentType
-                    ? ZLinkObjectMaintenancePolicyKind.Snapshot
-                    : ZLinkObjectMaintenancePolicyKind.Recreate);
-        var initialEnvelope = ZLinkCanonicalActorRelocationWriter.CreateInitial(
-            relocationEnvelope,
-            registration.ApplicationVersion);
-        //  Direct transfer (spec 28 §4.2): the encoded envelope stays in
-        //  source memory and is streamed as relocationState chunks — the
-        //  Relocation Store holds no handoff payload.
-        //  Spec 28 direct transfer: clamp to the target's advertised
-        //  receive-chunk-limit in addition to this node's own configured
-        //  chunk limit.
-        var effectiveChunkLimit = ZLinkRemoteActorJoinPackets
-            .EffectiveDirectTransferChunkLimit(
-                registration.Locations.Options.RelocationPayloadChunkLimit,
-                targetReservation.ReceiveChunkLimitBytes);
-        var transferPayload = ZLinkRelocationTransferPayload.Create(
-            initialEnvelope,
-            effectiveChunkLimit);
-        var prepared = new ZLinkPreparedRelocation(
-            new ZLinkRelocationStored(
-                string.Empty,
-                transferPayload.ChecksumCrc32c,
-                default,
-                default),
-            initialEnvelope)
-        {
-            LogicalLength = transferPayload.TotalLength,
-            LogicalChecksumCrc32c = transferPayload.ChecksumCrc32c,
-            ChunkCount = transferPayload.ChunkCount
-        };
-        precommitSnapshot = await precommit.CaptureAsync(
-                precommitSnapshot,
-                initialEnvelope,
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (sourceNode.Node is not IZLinkBackendCanonicalRelocation canonical)
-            throw new ZLinkConfigurationException(
-                "The source MeshNode does not support canonical relocation commands.");
-        //  The Coordinator fence (owner/lease/node/StoreVersion) is a single
-        //  pre-precommit value shared by the durable ZLJR recovery record
-        //  (sessionRelocationContext above) and this command-40 Prepare —
-        //  never the post-BeginPreparing/post-Capture precommitSnapshot,
-        //  whose StoreVersion has already moved past what ZLJR carries. The
-        //  cpp reference source builds exactly one `coordinator` from the
-        //  pre-precommit authority snapshot and reuses it for both wire
-        //  messages (mesh_node_runtime.cpp's relocate_application_actor).
-        //  ObjectGeneration/AuthorityOwnerGeneration/OwnerId/LeaseGeneration
-        //  are unaffected by this swap: BeginPreparingAsync/CaptureAsync
-        //  preserve them (ZLinkAuthorityGenerationTransition.Preserve) and
-        //  only rotate Payload/StoreVersion.
-        var prepare = ZLinkStandaloneActorRelocationRuntime.CreatePrepare(
-            currentAuthority.Snapshot,
-            sourceAuthority,
-            targetDescriptor,
-            initialEnvelope,
-            transferPayload,
-            registration.ApplicationVersion);
-        _ = await canonical.PrepareCanonicalRelocationAsync(
-                targetNodeRid,
-                prepare,
-                transferPayload,
+        return await ExecuteWithDeadlineAsync(
+                CompleteRelocationAsync,
                 RemainingTimeout(absoluteDeadline),
                 cancellationToken)
             .ConfigureAwait(false);
-        var commitBoundary = actorState.Handoff.FreezeCaptureCommitBoundary();
-        var cutoverRecords = commitBoundary.Frames.Select(frame =>
-                new ZLinkActorAcceptedRecord(
-                    frame,
-                    frame.RequestSource
-                    ?? throw new ZLinkRelocationDataLostException(
-                        $"Actor '{actor.Context.ActorId}' accepted journal lost its source fence."),
-                    targetActor))
-            .ToArray();
-        //  Spec 28 §4.4: the pre-boundary relay batch is encoded once so the
-        //  cutover boundary CRC covers exactly the relayed bytes.
-        var boundaryRecords = cutoverRecords
-            .Skip(acceptedRecords.Length)
-            .Select(accepted => (ReadOnlyMemory<byte>)
-                ZLinkCanonicalActorAcceptedJournal.Encode(accepted, actorRef))
-            .ToArray();
-        foreach (var encodedRecord in boundaryRecords)
-            await canonical.SendCanonicalRelocationDataAsync(
+
+        async ValueTask<ZLinkActorJoinResult> CompleteRelocationAsync(
+            CancellationToken cancellationToken)
+        {
+            var authorityRecheck = await authorityStore.ReadAuthorityAsync(
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.Context.ActorId),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (authorityRecheck is not ZLinkAuthorityReadResult.Found currentAuthority
+                || currentAuthority.Snapshot.ObjectGeneration != actorRef.Generation
+                || currentAuthority.Snapshot.AuthorityOwnerGeneration
+                   != actorAuthorityOwnerGeneration)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    $"Actor '{actor.Context.ActorId}' authority changed during relocation preflight.");
+            var hasBoundSession = actorState.TryGetBoundSession(out var boundSession);
+            //  The seal branch is conditional, so its trace being absent means
+            //  "skipped" just as often as "never reached". Record the condition.
+            ZLinkFrameworkDebugLog.SpotDiscovery(
+                $"preflight_done actor={actor.Context.ActorId} has_bound_session={hasBoundSession}");
+            if (hasBoundSession && boundSession.SessionNodeRid is null)
+                boundSession = boundSession with { SessionNodeRid = actorRef.NodeRid };
+            //  The relocation coordinator fence (owner/lease/node/store-version)
+            //  is required on every ZLJR request, bound session or not: the
+            //  target's ZLJR decoder rejects an empty/zero fence as malformed
+            //  recovery regardless of whether a session happens to be bound.
+            //  Only session seal/binding stays conditional on hasBoundSession.
+            var sessionRelocationContext = ZLinkSessionRelocationContext.Create(
+                Guid.ParseExact(handoffId, "N"),
+                currentAuthority.Snapshot.OwnerId,
+                checked((ulong)currentAuthority.Snapshot.OwnerLeaseGeneration),
+                sourceAuthority.NodeRid,
+                sourceAuthority.NodeGeneration,
+                currentAuthority.Snapshot.StoreVersion);
+            if (hasBoundSession)
+            {
+                actorState.RememberSourceSessionRelocation(
+                    handoffId,
+                    sessionRelocationContext);
+                boundSession = boundSession with
+                {
+                    BindingGeneration = boundSession.BindingGeneration == 0
+                        ? 1
+                        : boundSession.BindingGeneration,
+                    ObjectGeneration = actorRef.Generation,
+                    AuthorityOwnerGeneration = actorAuthorityOwnerGeneration,
+                    SessionOwnerNodeGeneration =
+                        boundSession.SessionOwnerNodeGeneration == 0
+                            ? ResolveSessionOwnerNodeGeneration(
+                                boundSession.SessionNodeRid ?? actorRef.NodeRid)
+                            : boundSession.SessionOwnerNodeGeneration
+                };
+                await SealBoundSessionRouteAsync(
+                        actor.Context.ActorId,
+                        actorRef.NodeRid,
+                        boundSession,
+                        sessionRelocationContext,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                actorState.BindSession(
+                    boundSession.SessionNodeRid,
+                    boundSession.SessionRid,
+                    boundSession.BindingToken,
+                    boundSession.BindingGeneration,
+                    boundSession.ObjectGeneration,
+                    boundSession.AuthorityOwnerGeneration,
+                    boundSession.MeshName,
+                    boundSession.TargetNodeGeneration,
+                    boundSession.OwnerLeaseGeneration,
+                    boundSession.SessionOwnerNodeGeneration,
+                    boundSession.AcceptedHighWater);
+            }
+
+            ZLinkCapturedActorRelocationState relocationState;
+            relocationMetric.Start();
+            _ = await actorState.BeginHandoffCaptureAsync(cancellationToken)
+                .ConfigureAwait(false);
+            markSourceCaptureStarted();
+            relocationState = await CaptureRelocationStateAsync(
+                    relocation,
+                    actor,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (relocationState.Payload.LongLength
+                > ZLinkRemoteActorJoinPackets.SnapshotApplicationStateReservationBytes)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Rejected,
+                    $"Actor '{actor.Context.ActorId}' relocation adapter returned more than 64 MiB.");
+
+            // A locally bound session records no SessionNodeRid (null means "this
+            // node"); the join commit crosses nodes, so the target must receiver
+            // the concrete session node rid — the actor's current owner node — or
+            // its pushes can never route back to the session.
+            //  Spec 30 §11: the SafeToShutdown obligation starts at seal, not
+            //  at cutover — waiting until CommitMessageFollow would let a
+            //  shutdown query race the seal-to-cutover window. Attaching the
+            //  token in the same locked call as the seal itself closes the
+            //  window where a status read could observe the seal without the
+            //  obligation counted, or an abort could race the attach.
+            actorState.Handoff.SealCapture(runtime.BeginPendingRelocationUnit());
+            var committedFrames = actorState.Handoff.SnapshotFrames();
+            var relocationStore = registration.Locations.ResolveRelocationStore()
+                                  ?? throw new ZLinkConfigurationException(
+                                      "Cross-node Actor relocation requires a Relocation Store.");
+            var relocationId = Guid.ParseExact(handoffId, "N");
+            var authorityKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(
+                actor.Context.ActorId);
+            // The immutable root cannot contain its own reference, checksum, or
+            // digest. Recovery persists this exact sentinel; startup verifies the
+            // real root against the published authority instead.
+            var pendingReference = new ZLinkRelocationManifestReference(
+                "pending",
+                0,
+                relocationId,
+                1,
+                new byte[32]);
+            var requestTemplate = ZLinkRemoteActorJoinPackets.CreateJoinRequest(
+                actor.Context.ActorId,
+                actorType,
+                handoffId,
+                sourceSpotId,
+                actorRef.NodeRid,
+                actorRef.Generation,
+                actorAuthorityOwnerGeneration,
+                boundSession.SessionNodeRid,
+                boundSession.SessionRid,
+                relocationState.ContentType,
+                pendingReference,
+                 request,
+                 registration.Codecs,
+                     hasBoundSession ? boundSession : null,
+                     targetReservation,
+                     sessionRelocationContext,
+                     actorNodeGeneration:
+                         currentAuthority.Snapshot.Allocation
+                             .DescriptorLifecycleGeneration,
+                         expectedOwnerLeaseGeneration: checked(
+                             (ulong)currentAuthority.Snapshot.OwnerLeaseGeneration),
+                         targetAttemptGeneration:
+                             ZLinkStandaloneActorRelocationRuntime
+                                 .InitialTargetAttemptGeneration);
+            var recovery = new ZLinkActorRelocationRecoveryRecord(
+                requestTemplate,
+                targetSpotId,
+                targetNodeRid.ToBytes().ToArray(),
+                targetReservation.TargetNodeGeneration,
+                targetReservation.TargetSpotGeneration,
+                targetReservation.TargetAuthorityOwnerGeneration,
+                operationId?.High ?? 0,
+                operationId?.Low ?? 0,
+                operationId is null
+                    ? null
+                    : admissionReply.RecoveryReplyContentType
+                      ?? admissionReply.ReplyContentType,
+                operationId is null ? [] : admissionReply.Reply);
+            var targetDescriptor = (await authorityStore.ListAllMeshNodesAsync(
+                    sourceAuthority.MeshName,
+                    cancellationToken)
+                .ConfigureAwait(false)).SingleOrDefault(
+                descriptor => descriptor.Rid == targetNodeRid);
+            if (targetDescriptor is null
+                || targetDescriptor.LifecycleGeneration
+                   != targetReservation.TargetNodeGeneration
+                || targetDescriptor.LeaseGeneration <= 0
+                || string.IsNullOrWhiteSpace(targetDescriptor.OwnerId))
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DataLost,
+                    $"Actor '{actor.Context.ActorId}' target owner fence changed before root preparation.",
+                    retryAdvice: ZLinkRetryAdvice.DoNotRetry);
+            var targetActor = new ZLinkBackendActorRef(
+                targetNodeRid,
+                actor.Context.ActorId,
+                actorRef.Generation);
+            var acceptedRecords = committedFrames.Select(frame =>
+                    new ZLinkActorAcceptedRecord(
+                        frame,
+                        frame.RequestSource
+                        ?? throw new ZLinkRelocationDataLostException(
+                            $"Actor '{actor.Context.ActorId}' accepted journal lost its source fence."),
+                        targetActor))
+                .ToArray();
+            var precommit = new ZLinkStandaloneActorRelocationPrecommitCoordinator(
+                authorityStore);
+            var precommitSnapshot = await precommit.BeginPreparingAsync(
+                    currentAuthority.Snapshot,
+                    sourceAuthority,
+                    relocationId,
+                    registration.ApplicationVersion,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var relocationEnvelope =
+                ZLinkStandaloneActorRelocationRuntime.CreateImmutableRoot(
+                    precommitSnapshot,
+                    sourceAuthority,
+                    new ZLinkStandaloneActorRelocationDestination(
+                        targetSpotId,
+                        targetReservation.TargetSpotGeneration,
+                        admission.Snapshot.SpotKind,
+                        targetNodeRid,
+                        targetReservation.TargetNodeGeneration,
+                        sourceAuthority.MeshName,
+                        new ZLinkLocationOwnerToken(
+                            targetDescriptor.OwnerId,
+                            targetDescriptor.LeaseGeneration)),
+                    relocationId,
+                    relocationState.Payload,
+                    acceptedRecords,
+                    hasBoundSession
+                        ? ZLinkRemoteActorJoinPackets.DecodeBoundSessionRoute(
+                            requestTemplate)
+                        : default,
+                    ZLinkActorRemoteJoinRecoveryCodec.Encode(recovery),
+                    relocationState.ContentType
+                    == ZLinkRemoteActorJoinPackets.SnapshotRelocationContentType
+                        ? ZLinkObjectMaintenancePolicyKind.Snapshot
+                        : ZLinkObjectMaintenancePolicyKind.Recreate);
+            var initialEnvelope = ZLinkCanonicalActorRelocationWriter.CreateInitial(
+                relocationEnvelope,
+                registration.ApplicationVersion);
+            //  Direct transfer (spec 28 §4.2): the encoded envelope stays in
+            //  source memory and is streamed as relocationState chunks — the
+            //  Relocation Store holds no handoff payload.
+            //  Spec 28 direct transfer: clamp to the target's advertised
+            //  receive-chunk-limit in addition to this node's own configured
+            //  chunk limit.
+            var effectiveChunkLimit = ZLinkRemoteActorJoinPackets
+                .EffectiveDirectTransferChunkLimit(
+                    registration.Locations.Options.RelocationPayloadChunkLimit,
+                    targetReservation.ReceiveChunkLimitBytes);
+            var transferPayload = ZLinkRelocationTransferPayload.Create(
+                initialEnvelope,
+                effectiveChunkLimit);
+            var prepared = new ZLinkPreparedRelocation(
+                new ZLinkRelocationStored(
+                    string.Empty,
+                    transferPayload.ChecksumCrc32c,
+                    default,
+                    default),
+                initialEnvelope)
+            {
+                LogicalLength = transferPayload.TotalLength,
+                LogicalChecksumCrc32c = transferPayload.ChecksumCrc32c,
+                ChunkCount = transferPayload.ChunkCount
+            };
+            precommitSnapshot = await precommit.CaptureAsync(
+                    precommitSnapshot,
+                    initialEnvelope,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (sourceNode.Node is not IZLinkBackendCanonicalRelocation canonical)
+                throw new ZLinkConfigurationException(
+                    "The source MeshNode does not support canonical relocation commands.");
+            //  The Coordinator fence (owner/lease/node/StoreVersion) is a single
+            //  pre-precommit value shared by the durable ZLJR recovery record
+            //  (sessionRelocationContext above) and this command-40 Prepare —
+            //  never the post-BeginPreparing/post-Capture precommitSnapshot,
+            //  whose StoreVersion has already moved past what ZLJR carries. The
+            //  cpp reference source builds exactly one `coordinator` from the
+            //  pre-precommit authority snapshot and reuses it for both wire
+            //  messages (mesh_node_runtime.cpp's relocate_application_actor).
+            //  ObjectGeneration/AuthorityOwnerGeneration/OwnerId/LeaseGeneration
+            //  are unaffected by this swap: BeginPreparingAsync/CaptureAsync
+            //  preserve them (ZLinkAuthorityGenerationTransition.Preserve) and
+            //  only rotate Payload/StoreVersion.
+            var prepare = ZLinkStandaloneActorRelocationRuntime.CreatePrepare(
+                currentAuthority.Snapshot,
+                sourceAuthority,
+                targetDescriptor,
+                initialEnvelope,
+                transferPayload,
+                registration.ApplicationVersion);
+            _ = await canonical.PrepareCanonicalRelocationAsync(
                     targetNodeRid,
-                    new ZLinkServiceWireCodec.RelocationDataRecord(
+                    prepare,
+                    transferPayload,
+                    RemainingTimeout(absoluteDeadline),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var commitBoundary = actorState.Handoff.FreezeCaptureCommitBoundary();
+            var cutoverRecords = commitBoundary.Frames.Select(frame =>
+                    new ZLinkActorAcceptedRecord(
+                        frame,
+                        frame.RequestSource
+                        ?? throw new ZLinkRelocationDataLostException(
+                            $"Actor '{actor.Context.ActorId}' accepted journal lost its source fence."),
+                        targetActor))
+                .ToArray();
+            //  Spec 28 §4.4: the pre-boundary relay batch is encoded once so the
+            //  cutover boundary CRC covers exactly the relayed bytes.
+            var boundaryRecords = cutoverRecords
+                .Skip(acceptedRecords.Length)
+                .Select(accepted => (ReadOnlyMemory<byte>)
+                    ZLinkCanonicalActorAcceptedJournal.Encode(accepted, actorRef))
+                .ToArray();
+            foreach (var encodedRecord in boundaryRecords)
+                await canonical.SendCanonicalRelocationDataAsync(
+                        targetNodeRid,
+                        new ZLinkServiceWireCodec.RelocationDataRecord(
+                            prepare.RelocationId,
+                            prepare.TargetAttemptGeneration,
+                            prepare.Coordinator,
+                            1,
+                            prepare.Object,
+                            new ZLinkServiceWireCodec.FrozenRecord(encodedRecord)),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            await canonical.SendCanonicalRelocationCutoverAsync(
+                    targetNodeRid,
+                    new ZLinkServiceWireCodec.RelocationCutoverRecord(
                         prepare.RelocationId,
                         prepare.TargetAttemptGeneration,
                         prepare.Coordinator,
                         1,
                         prepare.Object,
-                        new ZLinkServiceWireCodec.FrozenRecord(encodedRecord)),
+                        checked((ulong)boundaryRecords.Length),
+                        ZLinkRelocationBoundaryBatch.ComputeChecksum(
+                            boundaryRecords)),
                     cancellationToken)
                 .ConfigureAwait(false);
-        await canonical.SendCanonicalRelocationCutoverAsync(
-                targetNodeRid,
-                new ZLinkServiceWireCodec.RelocationCutoverRecord(
-                    prepare.RelocationId,
+            var published = await ZLinkStandaloneActorRelocationRuntime
+                .WaitForCommittedTargetAuthorityAsync(
+                    authorityStore,
+                    authorityKey,
+                    sourceAuthoritySnapshot,
+                    prepared.Relocation,
+                    relocationId,
+                    targetDescriptor,
                     prepare.TargetAttemptGeneration,
-                    prepare.Coordinator,
-                    1,
-                    prepare.Object,
-                    checked((ulong)boundaryRecords.Length),
-                    ZLinkRelocationBoundaryBatch.ComputeChecksum(
-                        boundaryRecords)),
-                cancellationToken)
-            .ConfigureAwait(false);
-        var published = await ZLinkStandaloneActorRelocationRuntime
-            .WaitForCommittedTargetAuthorityAsync(
-                authorityStore,
-                authorityKey,
-                sourceAuthoritySnapshot,
-                prepared.Relocation,
-                relocationId,
-                targetDescriptor,
-                prepare.TargetAttemptGeneration,
-                cancellationToken)
-            .ConfigureAwait(false);
-        var resultActorRef = targetActor;
-        setTargetAccepted(resultActorRef, admissionReplyMessage);
-        if (resultActorRef.Generation != actorRef.Generation)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                $"Actor '{actor.Context.ActorId}' target changed ObjectGeneration during handoff.");
-        var trailingFrames = actorState.Handoff.CutoverCaptureToMessageFollow(
-            cutoverRecords.Length,
-            actorRef,
-            resultActorRef,
-            routerChannelId,
-            sourceAuthority.NodeGeneration,
-            admission.Snapshot.NodeGeneration,
-            actorAuthorityOwnerGeneration,
-            published.AuthorityOwnerGeneration,
-            checked((ulong)runtime.LocationLifecycle!.OwnerToken.LeaseGeneration),
-            admission.Snapshot.OwnerLeaseGeneration);
-        markSourceLeft();
-        var trailingDeliveries = runtime.RelayStandaloneActorRelocationTrailing(
-            actorState,
-            actorRef,
-            trailingFrames);
-        actorState.Handoff.CommitMessageFollow(
-            registration.Locations.Options.MessageFollowDuration,
-            registration.Locations.Options.RelocationCutoverWaitTimeout);
-        if (trailingDeliveries.Count != 0
-            && (await Task.WhenAll(trailingDeliveries).ConfigureAwait(false))
-            .Any(static delivered => !delivered))
-            throw new ZLinkRelocationDataLostException(
-                $"Actor '{actor.Context.ActorId}' could not deliver its pre-cutover Message Follow backlog.");
-        if (!runtime.TryRunDetached(
-                "actor-source-handoff-cleanup",
-                async shutdownToken =>
-                {
-                    using var sourceCleanupCancellation =
-                        CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
-                    var sourceCleanupRemaining = absoluteDeadline - DateTimeOffset.UtcNow;
-                    if (sourceCleanupRemaining <= TimeSpan.Zero)
-                        sourceCleanupCancellation.Cancel();
-                    else
-                        sourceCleanupCancellation.CancelAfter(sourceCleanupRemaining);
-                    await ReconcileCommittedSourceHandoffAsync(
-                            actor,
-                            sourceActivation,
-                            actorState,
-                            actorRef,
-                            resultActorRef,
-                            sourceAuthoritySnapshot,
-                            sourceCleanupCancellation.Token)
-                        .ConfigureAwait(false);
-                    runtime.LogActorHandoff(
-                        $"source_handoff_completed actor={actor.Context.ActorId}");
-                }))
-            runtime.LogActorHandoff(
-                $"source_handoff_schedule_rejected actor={actor.Context.ActorId}");
-        actorState.ForgetSourceSessionRelocation(handoffId);
-        return new ZLinkActorJoinResult.Accepted(
-            resultActorRef.ToNative(sourceAuthority.MeshName),
-            admissionReplyMessage);
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var resultActorRef = targetActor;
+            setTargetAccepted(resultActorRef, admissionReplyMessage);
+            if (resultActorRef.Generation != actorRef.Generation)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    $"Actor '{actor.Context.ActorId}' target changed ObjectGeneration during handoff.");
+            var trailingFrames = actorState.Handoff.CutoverCaptureToMessageFollow(
+                cutoverRecords.Length,
+                actorRef,
+                resultActorRef,
+                routerChannelId,
+                sourceAuthority.NodeGeneration,
+                admission.Snapshot.NodeGeneration,
+                actorAuthorityOwnerGeneration,
+                published.AuthorityOwnerGeneration,
+                checked((ulong)runtime.LocationLifecycle!.OwnerToken.LeaseGeneration),
+                admission.Snapshot.OwnerLeaseGeneration);
+            markSourceLeft();
+            var trailingDeliveries = runtime.RelayStandaloneActorRelocationTrailing(
+                actorState,
+                actorRef,
+                trailingFrames);
+            actorState.Handoff.CommitMessageFollow(
+                registration.Locations.Options.MessageFollowDuration,
+                registration.Locations.Options.RelocationCutoverWaitTimeout);
+            if (trailingDeliveries.Count != 0
+                && (await Task.WhenAll(trailingDeliveries).ConfigureAwait(false))
+                .Any(static delivered => !delivered))
+                throw new ZLinkRelocationDataLostException(
+                    $"Actor '{actor.Context.ActorId}' could not deliver its pre-cutover Message Follow backlog.");
+            if (!runtime.TryRunDetached(
+                    "actor-source-handoff-cleanup",
+                    async shutdownToken =>
+                    {
+                        using var sourceCleanupCancellation =
+                            CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
+                        var sourceCleanupRemaining = absoluteDeadline - DateTimeOffset.UtcNow;
+                        if (sourceCleanupRemaining <= TimeSpan.Zero)
+                            sourceCleanupCancellation.Cancel();
+                        else
+                            sourceCleanupCancellation.CancelAfter(sourceCleanupRemaining);
+                        await ReconcileCommittedSourceHandoffAsync(
+                                actor,
+                                sourceActivation,
+                                actorState,
+                                actorRef,
+                                resultActorRef,
+                                sourceAuthoritySnapshot,
+                                sourceCleanupCancellation.Token)
+                            .ConfigureAwait(false);
+                        runtime.LogActorHandoff(
+                            $"source_handoff_completed actor={actor.Context.ActorId}");
+                    }))
+                runtime.LogActorHandoff(
+                    $"source_handoff_schedule_rejected actor={actor.Context.ActorId}");
+            actorState.ForgetSourceSessionRelocation(handoffId);
+            return new ZLinkActorJoinResult.Accepted(
+                resultActorRef.ToNative(sourceAuthority.MeshName),
+                admissionReplyMessage);
+        }
     }
 
     private ZLinkBackendCanonicalActorJoinRequest CreateCanonicalActorJoinRequest(
@@ -1572,6 +1580,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         string targetSpotId,
         string channelName,
         ZLinkMessage request,
+        TimeSpan timeout,
         CancellationToken cancellationToken)
     {
         var encodedRequest = request.Encode(registration.Codecs);
@@ -1608,7 +1617,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 targetSpotId,
                 joinParts,
                 completion.Complete,
-                registration.DefaultRequestTimeout);
+                timeout);
         }
         finally
         {

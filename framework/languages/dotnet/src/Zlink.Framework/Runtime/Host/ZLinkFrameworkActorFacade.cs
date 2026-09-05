@@ -73,7 +73,6 @@ internal sealed class ZLinkFrameworkActorFacade(
                 cancellationToken,
                 effectiveDeadline).ConfigureAwait(false);
 
-        ZLinkSpotActorJoinResult joinResult;
         var sourceActivation = actorState.Activation;
         if (localActivation is not null
             && ReferenceEquals(sourceActivation, localActivation))
@@ -81,41 +80,53 @@ internal sealed class ZLinkFrameworkActorFacade(
                 ToActorRef(actorState),
                 ZLinkMessage.Empty);
 
-        if (localActivation is not null
-            && sourceActivation is not null
-            && !ReferenceEquals(sourceActivation, localActivation))
+        if (absoluteDeadline is null)
+            return await JoinLocalActorAsync(cancellationToken).ConfigureAwait(false);
+        return await ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
+                JoinLocalActorAsync,
+                ZLinkActorRemoteJoiner.RemainingTimeout(effectiveDeadline),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        async ValueTask<ZLinkActorJoinResult> JoinLocalActorAsync(CancellationToken cancellationToken)
         {
-            joinResult = await localActivation.AdmitActorJoinFromCallerTurnAsync(
-                    actor,
-                    request,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            if (joinResult.Accepted)
-                await localActivation.CommitActorJoinFromCallerTurnAsync(
+            ZLinkSpotActorJoinResult joinResult;
+            if (localActivation is not null
+                && sourceActivation is not null
+                && !ReferenceEquals(sourceActivation, localActivation))
+            {
+                joinResult = await localActivation.AdmitActorJoinFromCallerTurnAsync(
                         actor,
+                        request,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (joinResult.Accepted)
+                    await localActivation.CommitActorJoinFromCallerTurnAsync(
+                            actor,
+                            cancellationToken,
+                            effectiveDeadline)
+                        .ConfigureAwait(false);
+            }
+            else if (localActivation is not null)
+                joinResult = await localActivation.JoinActorAsync(
+                        actor,
+                        request,
                         cancellationToken,
                         effectiveDeadline)
                     .ConfigureAwait(false);
-        }
-        else if (localActivation is not null)
-            joinResult = await localActivation.JoinActorAsync(
+            else
+                joinResult = await spots.JoinActorAsync(
+                    state,
+                    spotId,
                     actor,
                     request,
                     cancellationToken,
-                    effectiveDeadline)
-                .ConfigureAwait(false);
-        else
-            joinResult = await spots.JoinActorAsync(
-                state,
-                spotId,
-                actor,
-                request,
-                cancellationToken,
-                effectiveDeadline).ConfigureAwait(false);
-        var reply = joinResult.Reply ?? ZLinkMessage.Empty;
-        return joinResult.Accepted
-            ? new ZLinkActorJoinResult.Accepted(ToActorRef(actorState), reply)
-            : RejectedWithTrace(reply, "facade");
+                    effectiveDeadline).ConfigureAwait(false);
+            var reply = joinResult.Reply ?? ZLinkMessage.Empty;
+            return joinResult.Accepted
+                ? new ZLinkActorJoinResult.Accepted(ToActorRef(actorState), reply)
+                : RejectedWithTrace(reply, "facade");
+        }
     }
 
     public async ValueTask<ZLinkActorJoinResult> JoinActorEntrySpotAsync(
@@ -141,7 +152,12 @@ internal sealed class ZLinkFrameworkActorFacade(
                     ?? throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.InvalidOperation,
                         "Actor Entry Spot Join requires a Location Store.");
-        var descriptors = await store.ListAllMeshNodesAsync(meshName, cancellationToken)
+        var effectiveDeadline = absoluteDeadline
+                                ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
+        var descriptors = await ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
+                token => store.ListAllMeshNodesAsync(meshName, token),
+                ZLinkActorRemoteJoiner.RemainingTimeout(effectiveDeadline),
+                cancellationToken)
             .ConfigureAwait(false);
         var eligible = descriptors
             .Where(candidate => ZLinkActorManagerService.IsEligibleCandidate(
@@ -163,12 +179,16 @@ internal sealed class ZLinkFrameworkActorFacade(
                                 ZLinkFrameworkErrorKind.NotFound,
                                 $"Actor '{actor.Context.ActorId}' does not have a current node identity.");
         if (target.Rid == sourceNodeRid)
-            return await _entrySpotJoin.JoinAsync(
-                    target.Rid,
-                    actor,
-                    request,
+        {
+            if (absoluteDeadline is null)
+                return await _entrySpotJoin.JoinAsync(target.Rid, actor, request, cancellationToken)
+                    .ConfigureAwait(false);
+            return await ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
+                    token => _entrySpotJoin.JoinAsync(target.Rid, actor, request, token),
+                    ZLinkActorRemoteJoiner.RemainingTimeout(effectiveDeadline),
                     cancellationToken)
                 .ConfigureAwait(false);
+        }
 
         var actorRef = actorState.NativeActorRef
                        ?? throw new ZLinkFrameworkException(
@@ -181,7 +201,7 @@ internal sealed class ZLinkFrameworkActorFacade(
                 request,
                 operationId,
                 cancellationToken,
-                absoluteDeadline)
+                effectiveDeadline)
             .ConfigureAwait(false);
     }
 

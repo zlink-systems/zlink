@@ -6,6 +6,108 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed partial class StatefulServiceRuntimeTests
 {
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public async Task DurableSenderIntentRemovalEndsUnavailableWhilePhysicalDisconnectReplays(
+        bool removeIntent, bool removeExpectationFirst, bool ownerDisconnects)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = NewNode(context, "lifecycle-source");
+        var replySubmissions = 0;
+        await using var target = new ZLinkManagedMeshNode(context, "mesh",
+            nativeTerminalReplySubmitOverride: reply =>
+            {
+                if (Interlocked.Increment(ref replySubmissions) > 1)
+                    reply.Submit();
+                return SubmitResult.Ok;
+            });
+        target.SetRoutingId(RoutingId.From("lifecycle-target"));
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceEndpoint = $"inproc://lifecycle-source-{suffix}";
+        var targetEndpoint = $"inproc://lifecycle-target-{suffix}";
+        source.SetBind(sourceEndpoint);
+        target.SetBind(targetEndpoint);
+        var createTarget = new RecordingActorCreateOperationTarget("mesh");
+        target.SetActorCreateOperationTarget(createTarget);
+        source.SetPeerExpectation(target.RoutingId, targetEndpoint,
+            ZLinkServiceSecurityIdentity.Plaintext, target.Status().LifecycleGeneration);
+        source.Start();
+        target.Start();
+        // The source has an inbound peer, so closing the target's outbound
+        // connection produces a physical disconnect without an automatic reconnect.
+        if (ownerDisconnects)
+            source.ConnectPeer(targetEndpoint, target.RoutingId);
+        else
+            target.ConnectPeer(sourceEndpoint, source.RoutingId);
+        await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 1
+                                   && target.Status().AdmittedPeerCount == 1);
+        var operation = source.AllocateOperationId();
+        var timeout = TimeSpan.FromSeconds(5);
+        var reservation = new ObjectReservationFence("lifecycle-reservation",
+            "lifecycle-store", 11, 13, target.RoutingId,
+            target.Status().LifecycleGeneration, "lifecycle-owner", 7, 1);
+        Assert.Equal(SubmitResult.Ok, source.CreateActorRemote(target.RoutingId,
+            "lifecycle-actor", "Sample.LifecycleActor", reservation,
+            checked((ulong)DateTimeOffset.UtcNow.Add(timeout).ToUnixTimeMilliseconds()),
+            operation, timeout));
+        await WaitUntilAsync(() => Volatile.Read(ref replySubmissions) == 1);
+        Assert.Equal(1, createTarget.CreateCount);
+        if (removeExpectationFirst)
+        {
+            source.RemovePeerExpectation(target.RoutingId, targetEndpoint);
+            Assert.DoesNotContain(DrainRecords(source), record => record.OperationId == operation);
+        }
+        var removedAt = Stopwatch.GetTimestamp();
+        if (ownerDisconnects)
+            source.DisconnectPeer(target.RoutingId);
+        else
+            target.DisconnectPeer(source.RoutingId);
+        await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 0);
+        if (!ownerDisconnects)
+        {
+            await Task.Delay(100);
+            Assert.DoesNotContain(DrainRecords(source), record => record.OperationId == operation);
+        }
+
+        if (removeIntent)
+        {
+            if (!ownerDisconnects)
+            {
+                removedAt = Stopwatch.GetTimestamp();
+                // The owner also revisits removal when a previously admitted
+                // peer disappears after its expectation was already removed.
+                source.RemovePeerExpectation(target.RoutingId, targetEndpoint);
+            }
+            var (completion, parts) = DrainCompletion(source, operation);
+            ZLinkMessageParts.DisposeAll(parts);
+            Assert.Equal((int)RequestResult.NotConnected, completion.TerminalResult);
+            Assert.True(Stopwatch.GetElapsedTime(removedAt) < TimeSpan.FromSeconds(1));
+        }
+        if (ownerDisconnects)
+            source.ConnectPeer(targetEndpoint, target.RoutingId);
+        else
+            target.ConnectPeer(sourceEndpoint, source.RoutingId);
+        await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 1
+                                   && target.Status().AdmittedPeerCount == 1);
+        if (removeIntent)
+        {
+            await Task.Delay(100);
+            Assert.Equal(1, Volatile.Read(ref replySubmissions));
+            Assert.DoesNotContain(DrainRecords(source), record => record.OperationId == operation);
+        }
+        else
+        {
+            var (completion, parts) = DrainCompletion(source, operation);
+            ZLinkMessageParts.DisposeAll(parts);
+            Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
+            Assert.Equal(2, Volatile.Read(ref replySubmissions));
+        }
+        Assert.Equal(1, createTarget.CreateCount);
+    }
+
     public static IEnumerable<object[]> DurableSenderCases()
     {
         foreach (var operation in new[] { MeshOperationKind.ActorJoin,
