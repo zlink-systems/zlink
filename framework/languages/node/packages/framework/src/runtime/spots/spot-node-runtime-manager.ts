@@ -1272,7 +1272,7 @@ export class ZLinkSpotNodeRuntimeManager {
         settled: false
       };
       if (timeoutMs !== -1) {
-        waiter.deadlineMs = Date.now() + Math.max(0, timeoutMs);
+        waiter.deadlineMs = performance.now() + Math.max(0, timeoutMs);
       }
       queue.waiters.push(waiter);
       queue.count += 1;
@@ -1305,7 +1305,7 @@ export class ZLinkSpotNodeRuntimeManager {
       const waiter = this.takePublishSlotWaiter(queue);
       if (waiter === undefined) continue;
       if (waiter.settled) continue;
-      if (waiter.deadlineMs !== undefined && Date.now() >= waiter.deadlineMs) {
+      if (waiter.deadlineMs !== undefined && performance.now() >= waiter.deadlineMs) {
         this.cleanupPublishSlotWaiter(waiter);
         waiter.settled = true;
         waiter.resolve(false);

@@ -482,7 +482,7 @@ function claimDeferredJoin(state: ZLinkActorRuntimeState): void {
 }
 
 function remainingJoinTimeout(deadline: number): number {
-  const remaining = deadline - Date.now();
+  const remaining = deadline - performance.now();
   if (remaining <= 0) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
@@ -499,7 +499,7 @@ function createDeferredJoinDeadline(timeoutMs: number): {
   close(): void;
 } {
   const controller = new AbortController();
-  const atMs = Date.now() + timeoutMs;
+  const atMs = performance.now() + timeoutMs;
   const timer = setTimeout(() => controller.abort(createInternalFrameworkException(
     ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
     'Deferred Actor join exceeded its absolute deadline.',

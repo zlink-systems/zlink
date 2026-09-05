@@ -691,13 +691,13 @@ async function submitJoinWhenConnected<T>(
   timeoutMs: number | undefined,
   signal: AbortSignal | undefined
 ): Promise<T> {
-  const deadline = Date.now() + Math.min(timeoutMs ?? 5_000, 5_000);
+  const deadline = performance.now() + Math.min(timeoutMs ?? 5_000, 5_000);
   for (;;) {
     throwIfAborted(signal);
     try {
       return submit();
     } catch (error) {
-      if (!isBackendNotConnectedError(error) || Date.now() >= deadline) {
+      if (!isBackendNotConnectedError(error) || performance.now() >= deadline) {
         throw error;
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 10));

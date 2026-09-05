@@ -586,8 +586,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     ) => ReturnType<Parameters<ZLinkMeshCompletionTable['submit']>[0]>
   ): Promise<ZLinkMeshCompletion> {
     const effectiveTimeoutMs = Math.max(1, timeoutMs ?? 30_000);
-    const deadlineMs = Date.now() + effectiveTimeoutMs;
-    const remainingTimeoutMs = deadlineMs - Date.now();
+    const deadlineMs = performance.now() + effectiveTimeoutMs;
+    const remainingTimeoutMs = deadlineMs - performance.now();
     if (remainingTimeoutMs <= 0) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
@@ -596,7 +596,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     }
     try {
       return await this.completionTable(meshName).submit(
-        () => attempt(Math.max(1, remainingTimeoutMs)),
+        () => attempt(Math.max(1, Math.ceil(remainingTimeoutMs))),
         signal
       );
     } catch (error) {

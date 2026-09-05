@@ -475,7 +475,8 @@ implements ServiceAsyncInstanceActivationAuthority {
     deadlineUnixMs: bigint
   ): Promise<Extract<ServiceInstanceAuthorityRead, { readonly kind: 'ready' }>> {
     const key = authorityKey(target.targetSpotId);
-    while (BigInt(Date.now()) <= deadlineUnixMs) {
+    const deadlineMs = performance.now() + Number(deadlineUnixMs - BigInt(Date.now()));
+    while (performance.now() <= deadlineMs) {
       const current = await this.options.store.readAuthority(key);
       if (current.kind === 'snapshot') {
         if (
@@ -490,7 +491,7 @@ implements ServiceAsyncInstanceActivationAuthority {
       } else {
         throw new Error('Concurrent Instance activation ended before the Ready barrier.');
       }
-      await waitForActivationJoin(deadlineUnixMs);
+      await waitForActivationJoin(deadlineMs);
     }
     throw new Error(
       `Concurrent Instance activation for '${target.targetSpotId}' did not reach Ready before deadline.`
@@ -502,7 +503,8 @@ implements ServiceAsyncInstanceActivationAuthority {
     deadlineUnixMs: bigint
   ): Promise<void> {
     const key = authorityKey(target.targetSpotId);
-    while (BigInt(Date.now()) <= deadlineUnixMs) {
+    const deadlineMs = performance.now() + Number(deadlineUnixMs - BigInt(Date.now()));
+    while (performance.now() <= deadlineMs) {
       const current = await this.options.store.readAuthority(key);
       if (current.kind !== 'snapshot') return;
       const decoded = decodeServiceInstanceAuthorityPayload(current.payload);
@@ -515,7 +517,7 @@ implements ServiceAsyncInstanceActivationAuthority {
         throw new Error('Instance authority changed to a different Spot while closing.');
       }
       if (decoded.state !== 'closing') return;
-      await waitForActivationJoin(deadlineUnixMs);
+      await waitForActivationJoin(deadlineMs);
     }
     throw new Error(
       `Instance Spot '${target.targetSpotId}' close did not release authority before deadline.`
@@ -601,8 +603,8 @@ function readyExisting(
   return { kind: 'ready', route: routeFromSnapshot(snapshot) };
 }
 
-async function waitForActivationJoin(deadlineUnixMs: bigint): Promise<void> {
-  const remaining = Number(deadlineUnixMs - BigInt(Date.now()));
+async function waitForActivationJoin(deadlineMs: number): Promise<void> {
+  const remaining = deadlineMs - performance.now();
   if (remaining <= 0) return;
   await new Promise<void>((resolve) => {
     setTimeout(resolve, Math.min(ACTIVATION_JOIN_POLL_INTERVAL_MS, remaining));

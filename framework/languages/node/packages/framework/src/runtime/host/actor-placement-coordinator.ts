@@ -76,6 +76,7 @@ export class ZLinkActorPlacementCoordinator {
     signal?: AbortSignal
   ): Promise<ZLinkActorCreateResult> {
     const deadline = createDeadline(timeoutMs, signal);
+    const deadlineMs = performance.now() + timeoutMs;
     const deadlineUnixMs = Date.now() + timeoutMs;
     const contentReference = encodeLocationCreationContent(requestPayload);
     const requestSha256 = createHash('sha256').update(requestPayload).digest();
@@ -159,7 +160,7 @@ export class ZLinkActorPlacementCoordinator {
             target,
             deadlineUnixMs
           ),
-          Math.max(1, deadlineUnixMs - Date.now())
+          Math.max(1, Math.ceil(deadlineMs - performance.now()))
         );
         if (
           remote.terminalResult !== RequestResult.Ok

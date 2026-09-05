@@ -1,0 +1,24 @@
+# Job (fix, model astra): kotlin DeliveryDispatch `courier-session` still ends `ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED reason=TEARDOWN_FAILED` on rebuild9 (java variant now Stopped/None after `4d38c4f9e7`) — the kotlin sample/module path to the STREAM–Actor unbind differs; find where and fix at the owner
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `doc/plan/c016-worklog/fix-java-deliverydispatch-courier-session-teardown-summary.md`
+(the java fix: binding removed at every unbind terminal in `ZLinkJavaRawSpotNode`/`ZLinkJavaStreamSocket`; the termination event now carries stage/exception/cause fields),
+`05-location-relocation/05-host-relocation-flow.{ko,en}.md` §14, `04-session/02-session-actor-binding.ko.md` §7, and the DeliveryDispatch sample spec. Never modify
+`core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages, `framework/languages/shared_sample/**`; do not commit. Env:
+`framework/languages/java`, `TMPDIR=/dev/shm/zlink-tmp-java`, `unset ZLINK_LIBRARY_PATH`, gradle under `flock -w7200 /tmp/zlink-jvm-gate.lock`, sample runs under
+`flock -w7200 /tmp/zlink-samples-gate.lock` (a gate is running; wait your turn). Installed binding: rebuild9 (Core 2055a581…); do not rebuild packages.
+
+## Evidence
+Gate log `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate9a-java-samples.log` (tail): all 7 java samples completed, kotlin
+GameQuest completed, then kotlin DeliveryDispatch `build/sample-logs/courier-session.log` → `READY=1 TERMINATION=1 STOPPED_NONE=0 FORCE_STOPPED=1`. Reproduce:
+`ZLINK_SAMPLE_LANGUAGES=kotlin bash samples/run_samples.sh DeliveryDispatch` (or `bash samples/kotlin/DeliveryDispatch/run_sample.sh`) ×2, keep `build/sample-logs/`;
+read the final termination event's stage/exception/cause fields (added by the java fix) — if the fields are missing in the kotlin run, the kotlin module bypasses
+the shared reporting path and that is a finding too.
+
+## Fix
+Compare the kotlin CourierSession (sample) and the `zlink-framework-kotlin` module's session/actor bind/unbind path with the java one: whichever owner still holds
+the failed-unbind binding (or reports the failure differently) gets the same single rule (binding removed at every unbind terminal; failure propagated once).
+No sample-level catch/retry. Regression test in the kotlin module or the shared core test. Then: kotlin DeliveryDispatch ×2 (all hosts Stopped/None),
+`bash samples/run_samples.sh` (java+kotlin) once exit 0, `./gradlew --no-daemon :zlink-framework-core:test :zlink-framework-kotlin:test contractTest` once.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-kotlin-deliverydispatch-courier-session-teardown-summary.md`: cause file:line, fix, four lines, rule count, results, BLOCKERS.

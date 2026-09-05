@@ -148,7 +148,7 @@ export class ZLinkSpotRoutedFrameDispatch {
     }
   }
 
-  async drain(received: ZLinkBackendReceived | undefined = undefined, retryDeadlineMs = Date.now()): Promise<void> {
+  async drain(received: ZLinkBackendReceived | undefined = undefined, retryDeadlineMs = performance.now()): Promise<void> {
     if (this.routeDraining) {
       if (received !== undefined) {
         try {
@@ -180,7 +180,7 @@ export class ZLinkSpotRoutedFrameDispatch {
         } catch (error) {
           if (isRouteRecvRetryable(error)) {
             closeReceivedQuietly(received);
-            if (Date.now() < retryDeadlineMs) {
+            if (performance.now() < retryDeadlineMs) {
               setTimeout(() => void this.drain(undefined, retryDeadlineMs), 10);
             }
             return;

@@ -28,7 +28,7 @@ export class ZLinkSpotSerialTurnExecutor {
   private turnSequence = 0;
   private executionBarrier: ZLinkExecutionBarrier | undefined;
   private resumedOwnerTurn: ZLinkSpotSerialTurn | undefined;
-  private lastActivityAtMs = Date.now();
+  private lastActivityAtMs = performance.now();
   activeTurnId = 0;
 
   constructor(
@@ -134,7 +134,7 @@ export class ZLinkSpotSerialTurnExecutor {
       readonly signal?: AbortSignal;
     } = {}
   ): Promise<void> {
-    this.lastActivityAtMs = Date.now();
+    this.lastActivityAtMs = performance.now();
     let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
     try {
       barrierClaim = await this.executionBarrier?.enter();
@@ -178,7 +178,7 @@ export class ZLinkSpotSerialTurnExecutor {
     operation: () => Promise<T> | T,
     workOptions: ZLinkSerialWorkOptions = {}
   ): Promise<T> {
-    this.lastActivityAtMs = Date.now();
+    this.lastActivityAtMs = performance.now();
     let barrierClaim: ZLinkExecutionBarrierClaim | undefined;
     try {
       barrierClaim = await this.executionBarrier?.enter();
@@ -193,7 +193,7 @@ export class ZLinkSpotSerialTurnExecutor {
     operation: () => Promise<T> | T,
     workOptions: ZLinkSerialWorkOptions = {}
   ): Promise<T> {
-    this.lastActivityAtMs = Date.now();
+    this.lastActivityAtMs = performance.now();
     // Application admission crosses the async barrier boundary before it
     // reaches the scheduler. Give an already-authorized framework turn that
     // same boundary so it cannot overtake admitted application records.
@@ -204,7 +204,7 @@ export class ZLinkSpotSerialTurnExecutor {
   private async enqueueContinuationTurn<T>(
     operation: () => Promise<T> | T
   ): Promise<T> {
-    this.lastActivityAtMs = Date.now();
+    this.lastActivityAtMs = performance.now();
     await Promise.resolve();
     return await this.scheduler.submitContinuation(operation);
   }
@@ -256,7 +256,7 @@ export class ZLinkSpotSerialTurnExecutor {
     );
     const wrapped = async () => {
       this.depth += 1;
-      this.lastActivityAtMs = Date.now();
+      this.lastActivityAtMs = performance.now();
       this.turnSequence += 1;
       const turnId = this.turnSequence;
       this.activeTurnId = turnId;

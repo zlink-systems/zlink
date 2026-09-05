@@ -1,0 +1,24 @@
+# Job (fix, model astra): node ZoneWorld — shared browser test `operations page applies owner-targeted maintenance and diagnostics` fails: after clicking `Maintain` on the east node the `Restore` button does not appear within 5,000 ms (shared `zoneworld/client/tests/live/server.spec.ts:52`); zone-node-2 logged `maintenance cache updated node=zone-node-2 enabled=true` (`zone-node-2.log:284`) and a node-status submission (`:313`), so the transition is lost between the node status submission and the Ops page (Ops server → browser ws STREAM push or the Ops page's status projection)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, the ZoneWorld sample spec
+`framework/doc/framework/common/sample/zoneworld/README.ko.md` (Ops page: maintenance/diagnostics, node status push, §9 scenario ledger) and the STREAM/heartbeat
+spec (`02-channel-transport/05-transport-liveness` §1 STREAM heartbeat). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`,
+other languages; `framework/languages/shared_sample/**` only if the defect is in the shared UI (then say so explicitly, keep the assertion/5 s bound); do not commit.
+Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`; sample runs under
+`flock -w7200 /tmp/zlink-samples-gate.lock`. The host clock is stable now (systemd-timesyncd masked at 17:50) — do not attribute to clock jumps without evidence.
+
+## Evidence
+`/dev/shm/zlink-tmp-node/zlink-zoneworld-L5RbQp/logs/` (`shared-browser-playwright.log:13-39`, `zone-node-2.log`, `ops.log`), copies in
+`/tmp/zlink-node-d095-3/zoneworld-failure/`. Also earlier today ZoneWorld passed in the node aggregate several times (gate7, gate8) — compare with the recent node
+changes: `8159b15752` (STREAM writeControl awaits the async terminal; server-membership Draining), `9981c9fd6e` (D-095: STREAM session liveness and durable
+deadlines on performance.now()). If the Ops → browser push path is what changed (e.g. a liveness/heartbeat deadline now measured differently closes or
+throttles the ws session; or a status projection deadline), that is the prime suspect.
+
+## What to do
+1. Reproduce: run ZoneWorld individually ×2 (`samples/run_samples.sh` entry or `run-sample.mjs ZoneWorld`), keep logs; enable the sample's message-flow
+   provider (as the DD job did with a preload) to correlate the node-status submission → Ops receipt → ws push → browser receipt.
+2. Root-cause at the owner (Ops server projection, STREAM session push, or shared UI) and fix; regression test at that layer.
+3. Verify: ZoneWorld ×3 (exit 0, all 35 ledger verdicts), `bash samples/run_samples.sh` once, `npm test` once (0 fail).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-zoneworld-ops-maintenance-restore-summary.md`: correlated sequence, cause file:line (+ causing commit if any), fix, four lines, rule count, results, BLOCKERS.

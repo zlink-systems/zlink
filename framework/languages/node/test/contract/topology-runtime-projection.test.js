@@ -583,7 +583,7 @@ test('Relocate spends one absolute deadline across preflight publication and res
   };
   host.publishHostRelocated = async () => {};
 
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   const result = await host.relocate({
     mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
     deadlineMs: 200
@@ -817,9 +817,10 @@ test('Host Draining publishes weights only for locally registered server channel
 });
 
 test('Shutdown deadline includes final owned resource cleanup', async (t) => {
-  t.mock.timers.enable({ apis: ['Date'] });
+  let nowMs = 0;
+  t.mock.method(performance, 'now', () => nowMs);
   const host = new internal.ZLinkFrameworkRuntimeHost({ registration: internal.createFrameworkRegistration() });
-  host.stop = async () => { t.mock.timers.tick(51); };
+  host.stop = async () => { nowMs += 51; };
   const result = await host.shutdown({ deadlineMs: 50 });
   assert.equal(result.outcome, framework.ZLinkFrameworkTerminationOutcome.ForceStopped);
   assert.equal(result.reason, framework.ZLinkFrameworkTerminationReason.DeadlineExceeded);

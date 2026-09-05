@@ -100,6 +100,7 @@ export class ZLinkUserSpotCreationCoordinator {
     discard?: (signal?: AbortSignal) => Promise<void>
   ): Promise<ZLinkUserSpotCreationResult> {
     const deadline = createDeadline(request.timeoutMs, request.signal);
+    const deadlineMs = performance.now() + request.timeoutMs;
     const deadlineUnixMs = Date.now() + request.timeoutMs;
     const signal = deadline.signal;
     signal.throwIfAborted();
@@ -236,7 +237,8 @@ export class ZLinkUserSpotCreationCoordinator {
             current,
             target.nodeRid,
             target.nodeGeneration,
-            deadlineUnixMs
+            deadlineUnixMs,
+            deadlineMs
           );
         } finally {
           deadline.close();
@@ -321,7 +323,8 @@ export class ZLinkUserSpotCreationCoordinator {
             reserved.creating,
             target.nodeRid,
             target.nodeGeneration,
-            deadlineUnixMs
+            deadlineUnixMs,
+            deadlineMs
           );
     } finally {
       deadline.close();
@@ -825,7 +828,8 @@ export class ZLinkUserSpotCreationCoordinator {
     snapshot: ZLinkAuthoritySnapshot,
     targetNodeRid: RoutingId,
     targetNodeGeneration: bigint,
-    deadlineUnixMs: number
+    deadlineUnixMs: number,
+    deadlineMs: number
   ): Promise<ZLinkUserSpotCreationResult> {
     const remote = this.options.remoteCreate;
     const pending = snapshot.pendingCreation;
@@ -835,7 +839,7 @@ export class ZLinkUserSpotCreationCoordinator {
         'Remote User Spot creation transport is not configured.'
       );
     }
-    const timeoutMs = deadlineUnixMs - Date.now();
+    const timeoutMs = Math.ceil(deadlineMs - performance.now());
     if (timeoutMs <= 0) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.DeadlineExceeded,

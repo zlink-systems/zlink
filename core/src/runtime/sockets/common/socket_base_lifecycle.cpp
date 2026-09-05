@@ -1392,7 +1392,10 @@ void zlink::socket_base_t::process_term (int linger_)
 
 void zlink::socket_base_t::process_term_endpoint (std::string *endpoint_)
 {
-    term_endpoint_internal (endpoint_->c_str ());
+    // Both sessions can end the same connect intent. Once its exact key is
+    // gone, a later command must not resolve its address to another intent.
+    if (endpoint_runtime ().endpoints.count (*endpoint_) != 0)
+        term_endpoint_internal (endpoint_->c_str ());
     delete endpoint_;
 }
 

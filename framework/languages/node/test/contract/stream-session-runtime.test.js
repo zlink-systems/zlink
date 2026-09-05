@@ -713,6 +713,36 @@ test('stream session runtime closes an unanswered heartbeat with heartbeat_timeo
   await runtime.dispose();
 });
 
+for (const wallJumpMs of [60_000, -60_000]) {
+  test(`default STREAM liveness clock ignores a ${wallJumpMs} ms wall-clock jump`, async (t) => {
+    let elapsedMs = 0;
+    t.mock.method(performance, 'now', () => elapsedMs);
+    const wallNow = Date.now();
+    const socket = new FakeStreamSocket();
+    const runtime = createStreamRuntime({
+      socket,
+      sessionFactory(context) { return { context }; }
+    });
+    t.after(() => runtime.dispose());
+    runtime.start();
+    runtime.markConnected('monotonic-heartbeat');
+    await new Promise(resolve => setImmediate(resolve));
+    const session = runtime.findSession('monotonic-heartbeat');
+    elapsedMs = 1000;
+    await session.runLivenessCheck();
+    assert.equal(controlHeader(socket.sent.at(-1)).name, '$zlink.heartbeat.ping');
+
+    t.mock.method(Date, 'now', () => wallNow + wallJumpMs);
+    elapsedMs = 5999;
+    await session.runLivenessCheck();
+    assert.deepEqual(socket.disconnects, []);
+    elapsedMs = 6000;
+    await session.runLivenessCheck();
+    assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1], 3);
+    assert.deepEqual(socket.disconnects, ['monotonic-heartbeat']);
+  });
+}
+
 test('stream session runtime closes application-idle sessions with idle_timeout', async () => {
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();

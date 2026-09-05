@@ -792,7 +792,7 @@ export class DefaultZLinkSpotManager {
       activation === undefined
       || activation.domain.kind !== 'instance'
       || !activation.isIdleFor(
-        Date.now(),
+        performance.now(),
         this.options.instanceSpotIdleTimeoutMs?.get(meshName) ?? 0
       )
     ) {
@@ -921,7 +921,7 @@ export class DefaultZLinkSpotManager {
     if (this.idleSweepRunning) return;
     this.idleSweepRunning = true;
     try {
-      const now = Date.now();
+      const now = performance.now();
       for (const activation of this.activations.nextActiveActivationBatch()) {
         const timeoutMs = this.options.instanceSpotIdleTimeoutMs?.get(activation.meshName) ?? 0;
         if (

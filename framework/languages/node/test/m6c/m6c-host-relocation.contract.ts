@@ -655,9 +655,9 @@ test('an explicit Failed(53) on the Prepare reply leg rejects promptly with its 
       ) => Promise<unknown>;
     };
     try {
-      const started = Date.now();
+      const started = performance.now();
       await assert.rejects(
-        internals.sendControl('mesh-a', 'target', prepare, undefined, Date.now() + 60_000),
+        internals.sendControl('mesh-a', 'target', prepare, undefined, performance.now() + 60_000),
         (error: unknown) => {
           assert.ok(error instanceof ZLinkFrameworkException, 'must reject with a typed framework exception');
           assert.equal(error.kind, expectedKind, `failureCode ${failureCode} must classify as ${expectedKind}`);
@@ -665,7 +665,7 @@ test('an explicit Failed(53) on the Prepare reply leg rejects promptly with its 
         }
       );
       assert.ok(
-        Date.now() - started < 1_000,
+        performance.now() - started < 1_000,
         'the explicit Failed must resolve the ACK promptly, not via the 60s deadline'
       );
     } finally {
@@ -900,7 +900,7 @@ test('target-only CAS reconciles an unknown response to the exact committed owne
       prepareFingerprint: 'prepare',
       authenticatedSourceNodeRid: coordinator.nodeRid,
       envelope,
-      restoreDeadlineAtMs: Date.now() + 10_000
+      restoreDeadlineAtMs: performance.now() + 10_000
     },
     staging: { primaryAuthorityKey: actorKey, envelope }
   }, {
@@ -1605,7 +1605,7 @@ test('a target-side restore failure delivers Failed(53) end to end and restores 
   console.warn = () => {};
   console.error = () => {};
   try {
-    const started = Date.now();
+    const started = performance.now();
     await assert.rejects(harness.relocate(), (error: unknown) => {
       assert.ok(error instanceof ZLinkFrameworkException, 'must reject with a typed framework exception');
       assert.equal(
@@ -1615,7 +1615,7 @@ test('a target-side restore failure delivers Failed(53) end to end and restores 
       return true;
     });
     assert.ok(
-      Date.now() - started < 5_000,
+      performance.now() - started < 5_000,
       'the explicit Failed must resolve the relocation well before the 30s control deadline'
     );
     assert.equal(

@@ -738,8 +738,11 @@ void zlink::session_base_t::timer_event (int id_)
 
 void zlink::session_base_t::process_conn_failed ()
 {
-    std::string *ep = new (std::string);
-    _addr->to_string (*ep);
+    // Endpoint registration belongs to the original connect URI. A resolved
+    // address can name another live intent on this socket (e.g. localhost
+    // alongside 127.0.0.1), so it cannot identify the intent being terminated.
+    std::string *ep = new std::string (
+      _addr->protocol + "://" + _addr->address);
     send_term_endpoint (_socket, ep);
 }
 
@@ -765,11 +768,8 @@ void zlink::session_base_t::reconnect ()
     //  Reconnect.
     if (options.reconnect_ivl > 0)
         start_connecting (true);
-    else {
-        std::string *ep = new (std::string);
-        _addr->to_string (*ep);
-        send_term_endpoint (_socket, ep);
-    }
+    else
+        process_conn_failed ();
 
     //  For subscriber sockets we hiccup the inbound pipe, which will cause
     //  the socket object to resend all the subscriptions.
@@ -807,11 +807,8 @@ void zlink::session_base_t::start_transport_pair_reconnect (bool force_)
     reset ();
     if (options.reconnect_ivl > 0)
         start_connecting (true);
-    else {
-        std::string *ep = new (std::string);
-        _addr->to_string (*ep);
-        send_term_endpoint (_socket, ep);
-    }
+    else
+        process_conn_failed ();
 }
 
 void zlink::session_base_t::retain_socket_pipe (pipe_t *pipe_)

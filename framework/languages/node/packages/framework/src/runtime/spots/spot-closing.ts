@@ -14,7 +14,9 @@ export async function invokeSpotClosing(
   const deadline = new Date(cleanupDeadline instanceof Date
     ? cleanupDeadline.getTime()
     : Date.now() + cleanupDeadline);
-  const timeoutMs = Math.max(0, deadline.getTime() - Date.now());
+  const timeoutMs = Math.max(0, cleanupDeadline instanceof Date
+    ? cleanupDeadline.getTime() - Date.now()
+    : cleanupDeadline);
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<void>(resolve => {

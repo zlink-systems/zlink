@@ -501,7 +501,7 @@ export class ZLinkActorPacketRelay {
     //  converging); failing the request on the fence check would surface a
     //  NotFound for a Spot that exists and is Ready on its owner. Clear the
     //  stale hint and re-resolve with a short bound instead.
-    const fenceRetryDeadlineMs = Date.now() + 1_000;
+    const fenceRetryDeadlineMs = performance.now() + 1_000;
     for (;;) {
       try {
         if (await this.relayRemoteActorPacket(actor, frameHeader, payload, signal)) {
@@ -512,7 +512,7 @@ export class ZLinkActorPacketRelay {
         if (
           !(error instanceof Error
             && error.message.includes('no complete Ready authority fence'))
-          || Date.now() >= fenceRetryDeadlineMs
+          || performance.now() >= fenceRetryDeadlineMs
         ) {
           throw error;
         }
@@ -553,7 +553,7 @@ export class ZLinkActorPacketRelay {
       await this.retryRemoteSessionBindingSend(
         withDefaultSpotKind(target),
         request,
-        Date.now() + REMOTE_SESSION_BIND_RETRY_DEADLINE_MS,
+        performance.now() + REMOTE_SESSION_BIND_RETRY_DEADLINE_MS,
         REMOTE_SESSION_BIND_RETRY_INITIAL_DELAY_MS
       );
       return;
@@ -604,7 +604,7 @@ export class ZLinkActorPacketRelay {
         { packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET }
       );
     } catch (error) {
-      if (Date.now() >= deadline) {
+      if (performance.now() >= deadline) {
         //  Spec 32-framework-error-model: DeadlineExceeded(7). Retry
         //  exhaustion on the one-way bind send remains diagnostics-only but
         //  the caller waits for its bounded submission terminal so later

@@ -1723,20 +1723,41 @@ void zlink::socket_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_compl
     socket_reqrep_internal::fail_pending_requests_for_transport_pair (
       request_reply_state (), pipe_->get_transport_pair_id (),
       pipe_->get_transport_pair_generation ());
+    const uint64_t pair_id = pipe_->get_transport_pair_id ();
+    const uint64_t pair_generation = pipe_->get_transport_pair_generation ();
+    const bool completion =
+      pair_id != 0 && pipe_->get_transport_lane () == transport_lane_completion;
+    const blob_t &routing_id = pipe_->get_routing_id ();
+    const unsigned char *routing_id_data = routing_id.data ();
+    const size_t routing_id_size = routing_id.size ();
+    if (pair_id != 0 && !pipe_->is_locally_initiated ()) {
+        const blob_t &accepted_identity =
+          pipe_->get_transport_peer_identity ();
+        release_accepted_transport_pair (
+          accepted_identity.size () != 0 ? accepted_identity.data ()
+                                         : routing_id_data,
+          accepted_identity.size () != 0 ? accepted_identity.size ()
+                                         : routing_id_size,
+          pair_id, pair_generation);
+    }
+    if (!completion
+        && (options.type == ZLINK_CORE_SOCKET_PAIR
+            || options.type == ZLINK_CORE_SOCKET_DEALER
+            || options.type == ZLINK_CORE_SOCKET_ROUTER
+            || options.type == ZLINK_CORE_SOCKET_SUB
+            || options.type == ZLINK_CORE_SOCKET_XSUB)) {
+        // Retire routing at the logical termination transition, after its
+        // receive scope ends. Waiting for final pipe release lets an unread
+        // preamble retain the RID and reject every subsequent reconnect.
+        defer_socket_msg_pipe_termination (pipe_);
+    }
     // The claim is shared with the transport-error producer and final release.
     // Keep the inproc registration until release: close also uses it to find
     // pending peers that still need an owner for their termination handshake.
     if (!pipe_->try_claim_transport_disconnected_event ())
         return;
-    const uint64_t pair_id = pipe_->get_transport_pair_id ();
-    const uint64_t pair_generation = pipe_->get_transport_pair_generation ();
-    const bool completion =
-      pair_id != 0 && pipe_->get_transport_lane () == transport_lane_completion;
     endpoint_uri_pair_t endpoint_pair = pipe_->get_endpoint_pair ();
     endpoint_pair.connection_id = pipe_->get_transport_connection_id ();
-    const blob_t &routing_id = pipe_->get_routing_id ();
-    const unsigned char *routing_id_data = routing_id.data ();
-    const size_t routing_id_size = routing_id.size ();
     // Only the connecting socket records a pipe in inprocs. Explicit
     // zlink_disconnect erases that record before termination, whereas an
     // unexpected peer detach leaves it available as the reconnect intent.
@@ -1779,19 +1800,8 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
     const uint64_t pair_id = pipe_ ? pipe_->get_transport_pair_id () : 0;
     const uint64_t pair_generation =
       pipe_ ? pipe_->get_transport_pair_generation () : 0;
-    pipe_peer_terminated (pipe_);
     const bool completion =
       pipe_ && pair_id != 0 && pipe_->get_transport_lane () == transport_lane_completion;
-    if (pipe_ && pair_id != 0 && !pipe_->is_locally_initiated ()) {
-        const blob_t &accepted_identity =
-          pipe_->get_transport_peer_identity ();
-        release_accepted_transport_pair (
-          accepted_identity.size () != 0 ? accepted_identity.data ()
-                                         : routing_id_data,
-          accepted_identity.size () != 0 ? accepted_identity.size ()
-                                         : routing_id_size,
-          pair_id, pair_generation);
-    }
     bool application_attached = pair_id == 0;
     bool release_paused_pair_accounting = false;
     pipe_t *paused_pair_application = NULL;
@@ -1862,19 +1872,6 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
             xpipe_terminated (pipe_);
             notify_receive_progress_locked ();
         }
-    }
-    if (!completion
-        && (options.type == ZLINK_CORE_SOCKET_PAIR
-            || options.type == ZLINK_CORE_SOCKET_DEALER
-            || options.type == ZLINK_CORE_SOCKET_ROUTER
-            || options.type == ZLINK_CORE_SOCKET_SUB
-            || options.type == ZLINK_CORE_SOCKET_XSUB)) {
-        // process_commands() owns an outer receive scope around this callback.
-        // Retain the pipe and defer assembly/routing teardown until that scope
-        // is fully gone; direct I/O sees the non-active tombstone immediately.
-        // STREAM and the remaining socket families keep their teardown wholly
-        // in xpipe_terminated() and must not retain an unused queue node.
-        defer_socket_msg_pipe_termination (pipe_);
     }
     if (!completion) {
         socket_reqrep_internal::forget_dealer_reply_targets_for_pipe (

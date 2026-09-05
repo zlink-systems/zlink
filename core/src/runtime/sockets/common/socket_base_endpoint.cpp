@@ -995,10 +995,6 @@ int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
         return -1;
     }
 
-    const int rc = process_commands (0, false);
-    if (unlikely (rc != 0))
-        return -1;
-
     std::string uri_protocol;
     std::string uri_path;
     if (parse_uri (endpoint_uri_, uri_protocol, uri_path) || check_protocol (uri_protocol)) {
@@ -1122,6 +1118,9 @@ int zlink::socket_base_t::term_endpoint (const char *endpoint_uri_)
     if (!admission.acquired ())
         return -1;
     socket_public_api_lock_scope_t guard (lifecycle_coordinator ());
+    const int rc = process_commands (0, false);
+    if (unlikely (rc != 0))
+        return -1;
     return term_endpoint_internal (endpoint_uri_);
 }
 

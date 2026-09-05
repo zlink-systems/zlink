@@ -404,7 +404,7 @@ export class ServiceStatefulRuntime {
   }) => void;
   private readonly admittedUserSpotOperations = new Map<string, {
     readonly request: string;
-    readonly deadlineUnixMs: bigint;
+    readonly replayExpiresAtMs: number;
     readonly result: Promise<ServiceUserSpotOperationResult>;
     settled: boolean;
   }>();
@@ -1144,7 +1144,7 @@ export class ServiceStatefulRuntime {
     this.spotMessageFollowSuppression.retainRoute(state.suppressionFence);
     state.expiresAtMs = durationMs === 0
       ? Number.MAX_SAFE_INTEGER
-      : Date.now() + durationMs;
+      : performance.now() + durationMs;
     await this.drainSpotMessageFollow(state);
     if (durationMs === 0) this.removeSpotMessageFollow(state);
     return true;
@@ -1629,7 +1629,7 @@ export class ServiceStatefulRuntime {
     bindingIngress?: ServiceSessionBindingIngressPort,
     actorAuthority?: StreamSessionActorAuthorityFence
   ): ServiceStatefulPendingOperation {
-    const deadlineMs = Date.now() + timeoutMs;
+    const deadlineMs = performance.now() + timeoutMs;
     const pending = this.operations.reserve(timeoutMs, 'sender');
     const generation = this.nextSessionSequence++;
     const localBinding: ServiceSessionBinding = {
@@ -3904,7 +3904,7 @@ export class ServiceStatefulRuntime {
     let admitted = this.admittedUserSpotOperations.get(operationKey);
     if (
       admitted?.settled === true
-      && operationReplayExpired(admitted.deadlineUnixMs)
+      && operationReplayExpired(admitted.replayExpiresAtMs)
     ) {
       this.admittedUserSpotOperations.delete(operationKey);
       admitted = undefined;
@@ -3934,6 +3934,9 @@ export class ServiceStatefulRuntime {
         );
         return 'infrastructure';
       }
+      const replayExpiresAtMs = performance.now()
+        + Number(record.deadlineUnixMs - BigInt(Date.now()))
+        + USER_SPOT_OPERATION_REPLAY_RETENTION_MS;
       const handler = this.userSpotOperationHandler;
       const result = handler === undefined
         ? Promise.resolve<ServiceUserSpotOperationResult>({
@@ -3943,7 +3946,7 @@ export class ServiceStatefulRuntime {
         : this.executeUserSpotOperation(handler, record);
       admitted = {
         request: encodedRequest,
-        deadlineUnixMs: record.deadlineUnixMs,
+        replayExpiresAtMs,
         result,
         settled: false
       };
@@ -3984,7 +3987,7 @@ export class ServiceStatefulRuntime {
 
   private releaseExpiredUserSpotOperations(): void {
     for (const [key, operation] of this.admittedUserSpotOperations) {
-      if (operation.settled && operationReplayExpired(operation.deadlineUnixMs)) {
+      if (operation.settled && operationReplayExpired(operation.replayExpiresAtMs)) {
         this.admittedUserSpotOperations.delete(key);
       }
     }
@@ -4032,7 +4035,7 @@ export class ServiceStatefulRuntime {
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult> {
     const parts = await this.requestDurableOperation(
-      targetNodeRid, header, correlation, operationKind, Date.now() + Math.max(1, timeoutMs)
+      targetNodeRid, header, correlation, operationKind, performance.now() + Math.max(1, timeoutMs)
     );
     // A received envelope, including a decode failure, ends sender replay.
     try {
@@ -4078,7 +4081,7 @@ export class ServiceStatefulRuntime {
     // callers decode received envelopes after leaving this loop.
     for (;;) {
       this.requireOpen();
-      const remainingMs = deadlineMs - Date.now();
+      const remainingMs = Math.ceil(deadlineMs - performance.now());
       if (remainingMs <= 0) {
         throw durableOperationExhausted(operationKind, wasAdmitted);
       }
@@ -4091,7 +4094,7 @@ export class ServiceStatefulRuntime {
         // non-replayable terminals retain their original failure.
         if (operationKind === 'streamBind' && !durableBindRequestCanReplay(error)) throw error;
         if (durableRequestWasAdmitted(error)) wasAdmitted = true;
-        const retryDelayMs = Math.min(20, deadlineMs - Date.now());
+        const retryDelayMs = Math.min(20, deadlineMs - performance.now());
         if (retryDelayMs <= 0) {
           throw durableOperationExhausted(operationKind, wasAdmitted, error);
         }
@@ -4759,7 +4762,7 @@ export class ServiceStatefulRuntime {
     if (state === undefined || !sameDirectSpotRoute(state.source, wire.target)) {
       return undefined;
     }
-    if (state.expiresAtMs !== undefined && state.expiresAtMs <= Date.now()) {
+    if (state.expiresAtMs !== undefined && state.expiresAtMs <= performance.now()) {
       this.failExpiredSpotMessageFollow(state);
       return undefined;
     }
@@ -4802,7 +4805,7 @@ export class ServiceStatefulRuntime {
     state.draining = true;
     try {
       while (state.queuedCount > 0 && this.spotMessageFollow.get(state.seal.key) === state) {
-        if (state.expiresAtMs === undefined || state.expiresAtMs <= Date.now()) {
+        if (state.expiresAtMs === undefined || state.expiresAtMs <= performance.now()) {
           this.failExpiredSpotMessageFollow(state);
           return;
         }
@@ -4823,7 +4826,7 @@ export class ServiceStatefulRuntime {
             try {
               const remainingMs = Math.max(
                 1,
-                Math.min(30_000, state.expiresAtMs - Date.now())
+                Math.min(30_000, Math.ceil(state.expiresAtMs - performance.now()))
               );
               const reply = await this.raw.requestService(
                 state.target.targetNodeRid,
@@ -5214,9 +5217,8 @@ function userSpotDeadline(deadlineUnixMs: bigint): {
   };
 }
 
-function operationReplayExpired(deadlineUnixMs: bigint): boolean {
-  return BigInt(Date.now()) > deadlineUnixMs
-    + BigInt(USER_SPOT_OPERATION_REPLAY_RETENTION_MS);
+function operationReplayExpired(replayExpiresAtMs: number): boolean {
+  return performance.now() > replayExpiresAtMs;
 }
 
 function durableRequestWasAdmitted(error: unknown): boolean {

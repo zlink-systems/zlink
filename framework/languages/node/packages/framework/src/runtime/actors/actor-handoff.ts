@@ -904,7 +904,7 @@ export class ZLinkActorHandoffCoordinator {
           // fences. The departed fence keeps its exact-fence Message Follow
           // chain: relay through it instead of a terminal stale verdict.
           if (followRoute !== undefined) {
-            if (Date.now() >= followRoute.expiresAt) {
+            if (performance.now() >= followRoute.expiresAt) {
               this.removeMessageFollowRoute(followRoute);
               this.options.onMarker?.('message_follow_rejected', actorId);
               return Promise.reject(actorLocationStale(actorId));
@@ -952,7 +952,7 @@ export class ZLinkActorHandoffCoordinator {
       }
       return undefined;
     }
-    if (Date.now() >= followRoute.expiresAt) {
+    if (performance.now() >= followRoute.expiresAt) {
       this.removeMessageFollowRoute(followRoute);
       this.options.onMarker?.('message_follow_rejected', actorId);
       return Promise.reject(actorLocationStale(actorId));
@@ -1252,7 +1252,7 @@ export class ZLinkActorHandoffCoordinator {
       sourceOwner,
       targetOwner
     );
-    const expiresAt = Date.now() + this.messageFollowDurationMs;
+    const expiresAt = performance.now() + this.messageFollowDurationMs;
     const entry = {
       key,
       oldGeneration,

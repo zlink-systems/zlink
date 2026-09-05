@@ -342,24 +342,12 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
 {
     const out_pipe_t *const existing_outpipe = lookup_out_pipe (routing_id_);
     if (existing_outpipe) {
-        //  A reconnect from the same locally initiated endpoint replaces its
-        //  previous generation even when general ROUTER handover is disabled.
-        //  Otherwise the old pipe can keep the routing ID until its terminate
-        //  command is processed and the new generation remains anonymous.
-        const std::string &new_endpoint =
-          pipe_->get_endpoint_pair ().identifier ();
-        const std::string &existing_endpoint =
-          existing_outpipe->pipe->get_endpoint_pair ().identifier ();
-        const bool same_local_endpoint_reconnect =
-          locally_initiated_ && existing_outpipe->locally_initiated
-          && !new_endpoint.empty () && new_endpoint == existing_endpoint;
         const bool paired_application =
           pipe_->get_transport_pair_id () != 0
           && pipe_->get_transport_lane () == transport_lane_application;
         const bool reciprocal_duplicate =
           existing_outpipe->locally_initiated != locally_initiated_;
-        if (!_handover && !same_local_endpoint_reconnect
-            && !(paired_application && reciprocal_duplicate)) {
+        if (!_handover && !(paired_application && reciprocal_duplicate)) {
             // An anonymous duplicate can never carry routed traffic. Close
             // it outside the route/transport locks so its connector observes
             // termination and retries through its existing connect intent.
