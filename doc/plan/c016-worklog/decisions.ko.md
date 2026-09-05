@@ -1171,4 +1171,4 @@ Go: `AddMonitor/ModifyMonitor/RemoveMonitor`(기존 `SocketTarget` 경로에 위
 ③ bound inproc endpoint의 server `zlink_disconnect`가 attached pipe를 종료하지 않음 → matching pipe no-delay 종료 + lifetime pin 아래 양방향 ack drain(`:1042`). spec `05-polling.ko.md:72-81`(lost wake 금지), `socket/README.ko.md:825-827,851-861`.
 gate: worktree 신규 5/5 ×2, 지정 회귀 5/5, 전체 145/145; main dev 4/4 + 전체 145/145. Release+LTO hotpath_gate 별도 실행(결과 아래 추가).
 spec gap(사용자 결정): (1) terminal edge 소비 전 같은 socket에서 즉시 `disconnect(endpoint)→connect(endpoint)` 시 새 connect가 이전 physical terminal을 기다리는지 / old·new overlap 허용인지 — 현재 REJECT는 timing에 따라 reply OK/timeout, HANDOVER는 새 connection으로 OK; (2) request/reply가 쓴 physical connection_id를 돌려주는 공개 API 없음(필요하면 계약 추가).
-**A용 한 줄: Core 버그 → 수정 커밋(아래 해시). dotnet/java ClientServer의 두 번째 POLLIN poller와 수동 reconnect 상태기계는 삭제 가능(Core가 app poll 없이 진행). 패키지 재빌드 대상 Core 커밋: `7ffb8e55d9`, `1c69086a4a`, 이 커밋.**
+**A용 한 줄: Core 버그 → 수정 커밋 `0c39ed2e52`. dotnet/java ClientServer의 두 번째 POLLIN poller와 수동 reconnect 상태기계는 삭제 가능(Core가 app poll 없이 진행). 패키지 재빌드 대상 Core 커밋: `7ffb8e55d9`, `1c69086a4a`, `0c39ed2e52`.**
