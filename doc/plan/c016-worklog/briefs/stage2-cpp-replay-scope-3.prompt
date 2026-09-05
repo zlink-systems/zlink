@@ -1,0 +1,27 @@
+# Job (STAGE 2 round 3, approved A, model astra): cpp — completion-phase NOT_CONNECTED is replayable; handover-stranded request replays on the survivor
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 and the round-2 report
+`doc/plan/c016-worklog/stage2-cpp-replay-scope-2-summary.md` (§매핑 조사 = the approved diagnosis: request-completion
+`NOT_CONNECTED`+`EHOSTUNREACH` reaches `map_binding_request_result()` in `raw_binding_adapter.hpp:79-91` which has no
+`not_connected` branch → `failed` → `transport_failed`, so the durable owner does not replay it). Spec: Core socket README §4
+(bb730c654f: a request pinned to a pair superseded by HANDOVER completes immediately with REQUEST_NOT_CONNECTED — implemented
+8b82d51b75) and `04-actor-model.ko.md` sender bullets. Local packages were rebuilt at 10:55 WITH that Core commit
+(`.artifacts/wsl/install/zlink-cpp`, core/build-dev). Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion or split a deadline; do not commit.
+Env: `TMPDIR=/dev/shm/zlink-tmp-cpp`; reconfigure/build `framework/languages/cpp/build/linux-ninja-c-e2e` against the new
+install (`cmake --preset linux-ninja-debug -B build/linux-ninja-c-e2e` from `framework/languages/cpp`, then `cmake --build ... -j4`).
+
+## What to do
+1. `raw_binding_adapter.hpp`: map the request-completion typed `NOT_CONNECTED` (+`EHOSTUNREACH`/`ENOTCONN`) to the replayable
+   `route_unavailable` outcome — one owner (the adapter) for both phases; keep `timed_out` (admitted, no reply) terminal and
+   keep the wait-token `ENOENT` permanent. No second table.
+2. `raw_mesh_node_owner.cpp`: confirm the existing replay predicate now covers the handover row without a new predicate; the
+   exhaustion mapping from c835f5b325 stays (never admitted → Unavailable; admitted-then-no-reply → DeadlineExceeded).
+3. Regression (real Core, m6b or execution tests): the first request is admitted on the losing direction of a reciprocal
+   handover, completes NOT_CONNECTED within ~20 ms, and the same OperationId/correlation succeeds on the survivor within the
+   original deadline; the existing admitted-reply-withheld → DeadlineExceeded case stays.
+4. Verify: four unit binaries + `ctest -R 'm6a|m6b|channel_messaging|execution|raw_route_port'`, then full `ctest -j2` once
+   (known C: inventory 278), samples TicTacToe + GameQuest 1× (`ZLINK_CPP_BUILD_DIR=... bash framework/languages/cpp/samples/run_samples.sh <S>`).
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-cpp-replay-scope-3-summary.md`: diff, the four lines, results, BLOCKERS.
