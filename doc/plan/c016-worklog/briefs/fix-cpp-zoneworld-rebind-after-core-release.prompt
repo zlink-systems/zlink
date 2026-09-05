@@ -1,0 +1,22 @@
+# Job (fix, model astra): cpp ZoneWorld fails on the rebuild11 Core (`1899e82f1a`: listener fd released before close/unbind returns, SO_REUSEPORT removed) — `Unknown error 502 (errno=98)` (EADDRINUSE) during the runner-driven lifecycle lanes (C3/D2/E5 not reached, A3 maintenance not applied, restarted zone-node-2 comes up with `zones=` empty and `RouteMesh channel send target was not found`); java/node/dotnet ZoneWorld pass on the same Core, and cpp passed on the previous Core. Root-cause: does the cpp sample/runner (or cpp framework) rely on two listeners coexisting on one port (a restarted/replacement node binding while the old process still holds the port), or does Core now refuse a legitimate rebind?
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `decisions.ko.md` D-098 item 1, `doc/plan/c016-worklog/core-endpoint-release-all-transports-summary.md`
+(what Core changed: fd release completes before close/unbind returns; SO_REUSEPORT dropped, SO_REUSEADDR kept), the ZoneWorld sample spec
+(`framework/doc/framework/common/sample/zoneworld/README.ko.md` §9 lifecycle lanes C3/D2/E5, restart/replacement sequencing) and the cpp runner/sample
+(`framework/languages/cpp/samples/ZoneWorld/**`). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages, shared_sample; do not commit.
+Env: `framework/languages/cpp`, `cmake --build build -j4`, samples under `flock -w7200 /tmp/zlink-samples-gate.lock` (a gate may hold it; wait). Core prefix = rebuild11 (8c547d87…).
+
+## Evidence
+Failed run preserved: `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/cpp-zoneworld-fail-run/` (logs/), gate log
+`scratchpad/gate11-cpp-samples.log`. Compare with the dotnet/java/node runners' E5/C3 sequencing (they stop the old node and wait for its exit / port release before
+starting the replacement, or use a fresh port). Determine the exact bind that got EADDRINUSE (which process, which port, what still held it — old process not exited?
+draining old node still listening? a second in-process bind of the same endpoint?).
+## Fix (at the owner)
+- If the cpp runner/sample starts the replacement while the old node still holds the port → sequence it like the other languages (observe the old process/listener
+  termination first); no sleeps/retries.
+- If the cpp framework itself binds the same endpoint twice (e.g. re-bind on lifecycle restart before unbind completed) → fix that owner.
+- If Core refuses a rebind that the public contract allows (same context, after close/unbind returned; or after the old process exited) → STOP with a public C-API sequence.
+## Verify
+ZoneWorld ×3 (exit 0, all ledger verdicts), `bash samples/run_samples.sh` once (7/7), cpp unit ctest.
+## Deliverable
+`doc/plan/c016-worklog/fix-cpp-zoneworld-rebind-after-core-release-summary.md` (sequence, cause file:line, fix, four lines, rule count, results, BLOCKERS).
