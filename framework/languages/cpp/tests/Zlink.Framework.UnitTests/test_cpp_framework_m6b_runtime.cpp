@@ -2501,6 +2501,102 @@ mesh::service_node_descriptor_t descriptor (std::string rid)
             mesh::service_node_state_t::preparing};
 }
 
+void verify_actor_create_replays_after_reciprocal_handover ()
+{
+    using completion_t = std::pair<foundation::operation_terminal_t,
+                                   std::vector<std::uint8_t>>;
+    mesh::raw_mesh_node_owner_t source ({descriptor ("Z-handover-source")});
+    mesh::raw_mesh_node_owner_t target ({descriptor ("A-handover-target")});
+    source.start ();
+    target.start ();
+    const auto source_descriptor = source.topology ().local_descriptor ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    assert (source.connect_peer (target.endpoint (), target_descriptor));
+    const auto pump = [&] {
+        const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+        (void) source.drain_monitor_events (now);
+        (void) target.drain_monitor_events (now);
+        assert (await_task (source.pump_one (now))
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+        assert (await_task (target.pump_one (now))
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+    };
+    const auto admission_deadline = std::chrono::steady_clock::now () + 2s;
+    while ((!source.topology ().peer (target_descriptor.node_routing_id)
+            || !target.topology ().peer (source_descriptor.node_routing_id))
+           && std::chrono::steady_clock::now () < admission_deadline)
+        pump ();
+    assert (source.topology ().peer (target_descriptor.node_routing_id));
+    assert (target.topology ().peer (source_descriptor.node_routing_id));
+
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    const protocol::actor_create_header_t request{
+      0, {source_descriptor.lifecycle_generation, 37},
+      source_descriptor.node_routing_id, source_descriptor.lifecycle_generation,
+      "handover-actor", "player",
+      {"handover-reservation", "handover-store", 1, 1,
+       target_descriptor.node_routing_id, target_descriptor.lifecycle_generation,
+       "handover-owner", 1, 1},
+      static_cast<std::uint64_t> (
+        std::chrono::duration_cast<std::chrono::milliseconds> (
+          std::chrono::system_clock::now ().time_since_epoch () + 2s).count ())};
+    std::promise<completion_t> promise;
+    auto completion = promise.get_future ();
+    assert (await_task (source.request_actor_create (
+      target_descriptor.node_routing_id, request,
+      std::chrono::duration_cast<std::chrono::milliseconds> (
+        deadline - std::chrono::steady_clock::now ()),
+      [&promise] (auto terminal, auto payload) {
+          promise.set_value ({terminal, std::move (payload)});
+      })));
+    const auto receive = [&] {
+        std::optional<mesh::service_mailbox_claim_t> claim;
+        while (!claim && std::chrono::steady_clock::now () < deadline) {
+            pump ();
+            claim = target.mailbox ().try_claim (
+              mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+        }
+        assert (claim && claim->records.size () == 1);
+        return *claim;
+    };
+    auto losing = receive ();
+    const auto first = protocol::decode_actor_create_header (
+      losing.records.front ().parts.front ());
+    assert (first.operation == request.operation);
+    assert (first.correlation != 0);
+    assert (losing.records.front ().reply_token);
+    assert (completion.wait_for (0ms) == std::future_status::timeout);
+    assert (target.mailbox ().release (losing));
+
+    // Receipt proves admission on Z -> A. Withhold its reply, then let Core
+    // select A -> Z; only the durable owner resubmits the operation.
+    const auto handover_started = std::chrono::steady_clock::now ();
+    assert (target.connect_peer (source.endpoint (), source_descriptor));
+    auto survivor = receive ();
+    const auto replay = protocol::decode_actor_create_header (
+      survivor.records.front ().parts.front ());
+    assert (replay == first);
+    assert (survivor.records.front ().correlation == losing.records.front ().correlation);
+    assert (completion.wait_for (0ms) == std::future_status::timeout);
+    assert (target.reply_actor_create (
+      survivor.records.front (),
+      {{replay.correlation, 0, 0}, protocol::actor_create_result_t::created,
+       target_descriptor.node_routing_id, replay.actor_id, 1}));
+    assert (target.mailbox ().release (survivor));
+    while (completion.wait_for (0ms) != std::future_status::ready
+           && std::chrono::steady_clock::now () < deadline)
+        pump ();
+    assert (completion.wait_for (0ms) == std::future_status::ready);
+    assert (std::chrono::steady_clock::now () < deadline);
+    assert (completion.get ().first == foundation::operation_terminal_t::completed);
+    std::cout << "handover durable_replay_us="
+              << std::chrono::duration_cast<std::chrono::microseconds> (
+                   std::chrono::steady_clock::now () - handover_started).count ()
+              << " same_operation=1 same_correlation=1 same_deadline=1 result=completed\n";
+    source.close ();
+    target.close ();
+}
+
 stateful::object_ref_t create_ready (
   stateful::stateful_object_runtime_t &runtime,
   stateful::create_request_t request)
@@ -6915,6 +7011,7 @@ void verify_relocation_failure_code_classification_is_distinct ()
 
 int main ()
 {
+    verify_actor_create_replays_after_reciprocal_handover ();
     verify_message_follow_invalidation_subscriptions_are_lifetime_safe ();
     verify_actor_calls_keep_selected_route_until_follow_notice ();
     verify_session_relocation_gateway_commit_is_atomic ();

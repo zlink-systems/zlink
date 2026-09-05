@@ -9,6 +9,7 @@
 #include <cassert>
 #include <chrono>
 #include <optional>
+#include <iostream>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -112,6 +113,62 @@ void verify_missing_rid_is_initial_not_connected_without_wait_token ()
     port.close ();
 }
 
+void verify_handover_request_completion_is_replayable ()
+{
+    zlink::context_t context;
+    zlink::router_socket_t target (context), source (context);
+    const auto target_rid = zlink::routing_id_t::from ("A");
+    const auto source_rid = zlink::routing_id_t::from ("Z");
+    target.set_routing_id (target_rid);
+    source.set_routing_id (source_rid);
+    for (auto *socket : {&target, &source}) {
+        socket->options ().linger (0ms);
+        socket->options ().mandatory (true);
+        socket->options ().rid_duplicate_policy (
+          zlink::rid_duplicate_policy_t::handover);
+    }
+    target.bind ("inproc://framework-handover-A");
+    source.bind ("inproc://framework-handover-Z");
+    auto ready = source.monitor_open (zlink::monitor_event::connection_ready);
+    source.options ().connect_routing_id (target_rid);
+    source.connect ("inproc://framework-handover-A");
+    assert (wait_for_monitor_event (
+      ready, zlink::monitor_event::connection_ready, 2s));
+    backend::raw_route_port_t source_port (source), target_port (target);
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    auto pending = source_port.request (target_rid.to_bytes (), request_parts (), 2s);
+    std::optional<backend::raw_received_t> admitted;
+    while (!admitted && std::chrono::steady_clock::now () < deadline)
+        admitted = target_port.receive_if_ready (target_port.poll (1ms));
+    assert (admitted && admitted->reply_token);
+    assert (!pending.await_ready ());
+
+    // Z -> A is admitted first; reciprocal A -> Z supersedes that pair.
+    const auto handover_started = std::chrono::steady_clock::now ();
+    target.options ().connect_routing_id (source_rid);
+    target.connect ("inproc://framework-handover-Z");
+    while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline)
+        (void) source_port.poll (1ms);
+    assert (pending.await_ready ());
+    const auto elapsed = std::chrono::steady_clock::now () - handover_started;
+    const auto &completion = pending.result ().value ();
+    assert (completion.result == backend::raw_request_result_t::route_unavailable);
+    assert (completion.failure);
+    assert (completion.failure->phase
+            == backend::raw_request_failure_phase_t::completion_terminal);
+    assert (!completion.failure->submit_result);
+    assert (completion.failure->request_result == zlink::request_result_t::not_connected);
+    // The binding completion owner normalizes typed NOT_CONNECTED to ENOTCONN.
+    assert (completion.failure->internal_errno == ENOTCONN);
+    assert (elapsed < 20ms);
+    std::cout << "handover completion_us="
+              << std::chrono::duration_cast<std::chrono::microseconds> (elapsed).count ()
+              << " typed=NOT_CONNECTED errno=ENOTCONN outcome=route_unavailable\n";
+    source_port.close ();
+    target_port.close ();
+    ready.close ();
+}
+
 void verify_disconnect_rid_ends_issued_wait_token_with_enoent ()
 {
     zlink::context_t context;
@@ -169,6 +226,7 @@ void verify_disconnect_rid_ends_issued_wait_token_with_enoent ()
 
 int main ()
 {
+    verify_handover_request_completion_is_replayable ();
     verify_missing_rid_is_initial_not_connected_without_wait_token ();
     verify_disconnect_rid_ends_issued_wait_token_with_enoent ();
     return 0;

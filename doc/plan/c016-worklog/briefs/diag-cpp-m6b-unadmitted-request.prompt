@@ -1,0 +1,22 @@
+# Job (STAGE 1, model astra): cpp m6b `verify_unadmitted_request_is_rejected_without_framework_queue` aborts awaiting the native reply on the rebuilt packages
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·교차언어 대조·진단 먼저). STAGE 1 = diagnosis only, NO source/test changes (temporary trace sinks allowed, removed before finishing); never modify any `doc/spec/**`; do not commit. Env: `TMPDIR=/dev/shm/zlink-tmp-cpp`, cpp build dir `framework/languages/cpp/build/linux-ninja-c-e2e` (built against the 10:55 packages); core/build-dev has Core 8b82d51b75 (stranded REQUEST -> immediate REQUEST_NOT_CONNECTED), 0c39ed2e52 (D-B104 inproc progress), 1c69086a4a (D-B102 identity), 7cbf12de41 (monitor lease). Do not rebuild core/build-dev or the packages; for an old-vs-new Core comparison build the OLD Core in `/home/hep7/project/zlink-core-b` (`git -C /home/hep7/project/zlink-core-b checkout --detach 7d8205a028^`... use the commit BEFORE 7ffb8e55d9 = `git log --oneline -1 7ffb8e55d9^`) with `nice -n 10 env JOBS=4 scripts/build-core.sh dev` there and point `ZLINK_LIBRARY_PATH`/`LD_LIBRARY_PATH` at that lib for the comparison run only. Other jobs run concurrently on dotnet and in `/home/hep7/project/zlink-core-a` — do not touch those.
+
+## Facts (`stage2-cpp-replay-scope-3-summary.md` BLOCKERS)
+`test_cpp_framework_m6b_runtime.cpp:5201-5241`: a request to a DEALER peer that was never admitted must be rejected without
+entering the framework queue. The mesh trace reaches `application-drop reason=peer-not-admitted action=reply-not-connected`,
+then the test's `await_native_reply()` (direct binding await, bypasses the framework adapter) throws
+`Network is unreachable (errno=110)` instead of receiving the expected native reply. Passed on the 09:49 packages.
+
+## Deliverable — `doc/plan/c016-worklog/diag-cpp-m6b-unadmitted-request.md`
+1. Timeline with the binding/Core typed result at the await: is the request now completed early with
+   REQUEST_NOT_CONNECTED by Core 8b82d51b75 (the peer's pair considered superseded / never admitted) before the framework's
+   `reply-not-connected` control reply arrives, so the test's expected reply frame is never delivered? Compare with the OLD
+   Core (worktree build) to confirm which Core commit changed the observation.
+2. Decide per spec: Core socket README §4 (amended) + 07-router — does the immediate NOT_CONNECTED completion apply to a
+   request whose target pipe was never admitted (not a HANDOVER supersession)? If Core now completes requests that the
+   spec says should be delivered a reply, that is a Core over-reach (report with a public C API repro); if the framework's
+   `reply-not-connected` control reply is now redundant with the Core terminal, the framework/test expectation must change
+   (class A) — say which.
+3. Owner layer, parity (how dotnet/java/node observe an unadmitted-peer request now), class, minimal fix + regression.
+   STOP after the diagnosis.
