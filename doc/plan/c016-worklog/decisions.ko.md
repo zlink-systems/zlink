@@ -1100,3 +1100,13 @@ server·client를 C 러너 의미에 맞춤)은 별도 트랙·별도 report로 
 디렉터리). `ZLINK_LIBRARY_PATH` 우선순위·`LOADED_LIBRARY_PATHS` 의미 유지. spec(`bindings/doc/spec/java`)에는 로더 경로 계약 없음(파일 목록만) → spec gap 없음.
 회귀 테스트 `LibraryLoaderTest`(캐시 재사용·temp 증가 0 / 손상 시 재추출 / 캐시 불가 시 fallback 로드 — 별도 JVM probe). gate(JDK 22): `tests/run_tests.sh`
 117/117, samples 7/7, `git diff --check`. job 요약 `java-d087-summary.md`. 커밋 `37af8073a7`(A는 이 커밋 뒤 로컬 패키지 재빌드).
+
+## D-B94 (2026-09-05 09:15, 머신 B) D-086 확정 — Core 버그: tcp same-RID replacement가 이전 connection의 accepted transport pair ID를 재사용해 pair-table에서 양쪽 pipe가 거부됨 → 수정
+원인(`core/src/runtime/sockets/common/socket_base_api.cpp:66-136`, `asio_zmp_engine.cpp:644`): count-1 Application lane의 새 tcp connection이 같은 RID의 기존 accepted pair ID를 그대로 받아
+같은 pair-table slot에 들어가고, 중복 lane 검사(`socket_base_api.cpp:328`)가 기존·신규 pipe를 모두 reject → ROUTER HANDOVER 정책(`router_admission.cpp:337`)에 도달하기 전에
+세션 종료·재연결이 반복되어 admission이 reconnect 경쟁에 좌우됨(0.1~2.9 s, 10 ms interval에서는 6 s 내 미admission). inproc은 connection별 pair ID를 직접 쓰므로 무관.
+spec(`socket/README.ko.md:151,159-165`, `07-router.ko.md:153`)은 종료 확인 대기를 요구하지 않고 기존 pipe standby 유지를 정하므로 구현 결함.
+수정: count-1은 기존 매핑이 있어도 새 pair ID를 배정(매핑 교체; 이전 pipe release는 ID 일치 시에만 삭제), count-2(2-lane)는 기존 매핑 재사용. 공개 API/ABI 불변, hot path 아님.
+결과: tcp 4~7 ms(p95 6 ms, reconnect 10/100/1000 ms × 20회), inproc 0 ms. 회귀 테스트 `test_ctx_term_fixed_rid_handover`(integration;serial, tcp p95 < 200 ms assert).
+gate(worktree Release+LTO): ctest 143/143, 신규 5/5, single-lane 29/29 ×2, hotpath_gate 0.9952/0.9962/1.0005/0.9988 PASS; main dev 트리에서 신규+관련 4/4, 신규 3회 반복 green.
+**A용 한 줄: Core 버그 → 수정 커밋 `7ffb8e55d9`. framework 2 s 기대치 조정 불필요; A는 로컬 Core/binding 패키지 재빌드 후 handover 테스트 재실행.**

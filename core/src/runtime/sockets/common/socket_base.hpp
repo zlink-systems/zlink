@@ -558,7 +558,8 @@ class socket_base_t : public own_t,
     int send_timeout_ms () const { return options.sndtimeo; }
     int adopt_accepted_transport_pair (
       const unsigned char *peer_routing_id_, size_t peer_routing_id_size_,
-      uint64_t *pair_id_out_, uint64_t *generation_out_);
+      unsigned char lane_count_, uint64_t *pair_id_out_,
+      uint64_t *generation_out_);
     void release_accepted_transport_pair (
       const unsigned char *peer_routing_id_, size_t peer_routing_id_size_,
       uint64_t pair_id_, uint64_t generation_);
