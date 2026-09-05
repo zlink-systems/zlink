@@ -73,6 +73,10 @@ canceled packet is not retransmitted.
 - poller registrations borrow socket and timer handles; remove a source before
   closing it and serialize one poller's add/modify/remove/wait operations
 
+## Poller
+
+`Poller.AddMonitor(monitor *SocketMonitor, events PollEventFlag, slot uintptr) error`, `ModifyMonitor(monitor, events) error`, and `RemoveMonitor(monitor) error` alias the socket methods; monitors accept only `PollIn`, followed by `Recv(RecvFlagsDontWait)` until `RecvError.Result == RecvNoData`.
+
 ## Message Payload Lifetime
 
 `Message.Data()` returns a zero-copy view over native message storage. The

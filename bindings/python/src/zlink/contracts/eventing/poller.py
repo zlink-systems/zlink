@@ -3,7 +3,8 @@
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from .codes import PollSourceKind
+from .codes import PollEventFlag, PollSourceKind
+from .monitor import MonitorSocket
 
 
 @dataclass(frozen=True)
@@ -64,12 +65,31 @@ class PollEvents(Protocol):
 
 @runtime_checkable
 class Poller(Protocol):
-    """Multiplexes sockets, file descriptors, and timers, reporting which become
-    ready on a single wait."""
+    """Multiplexes sockets, socket monitors, file descriptors, and timers,
+    reporting which become ready on a single wait."""
 
     def add_socket(self, socket, events, slot):
         """Register ``socket`` to be watched for ``events``; ``slot`` is echoed
-        back in the matching result."""
+        back in the matching result. Also accepts :class:`MonitorSocket` with
+        ``POLLIN`` only; drain it with ``recv(flags=RecvFlags.DONT_WAIT)``."""
+        ...
+
+    def add_monitor(self, monitor: MonitorSocket, events: PollEventFlag, slot: int) -> None:
+        """Register a monitor with ``POLLIN`` and a caller slot.
+
+        Alias of ``add_socket``. Other readiness flags raise ``ConfigError``
+        with ``ConfigResult.INVALID_ARGUMENT``. After readiness, drain
+        ``monitor.recv(flags=RecvFlags.DONT_WAIT)`` until it returns ``None``.
+        Remove the monitor before closing it.
+        """
+        ...
+
+    def modify_monitor(self, monitor: MonitorSocket, events: PollEventFlag) -> None:
+        """Alias of ``modify_socket``; monitors accept only ``POLLIN``."""
+        ...
+
+    def remove_monitor(self, monitor: MonitorSocket) -> None:
+        """Alias of ``remove_socket``; unregister the borrowed monitor."""
         ...
 
     def add_fd(self, fd, events, slot):
@@ -83,7 +103,7 @@ class Poller(Protocol):
         ...
 
     def modify_socket(self, socket, events):
-        """Change the watched events for an already-registered socket."""
+        """Change watched events for a socket or monitor; monitors accept only ``POLLIN``."""
         ...
 
     def modify_fd(self, fd, events):
@@ -92,7 +112,7 @@ class Poller(Protocol):
         ...
 
     def remove_socket(self, socket):
-        """Unregister ``socket``."""
+        """Unregister a socket or monitor."""
         ...
 
     def remove_fd(self, fd):

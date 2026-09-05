@@ -135,6 +135,7 @@ class socket_inprocs_t
     void emplace (const char *endpoint_uri_, pipe_t *pipe_);
     int erase_pipes (const std::string &endpoint_uri_str_);
     void erase_pipe (const pipe_t *pipe_);
+    bool endpoint_for_pipe (const pipe_t *pipe_, std::string *endpoint_out_) const;
 
     template <typename Visitor> void for_each_unique_endpoint (Visitor visitor_) const
     {

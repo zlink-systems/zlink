@@ -33,23 +33,21 @@ public class MonitorConnectionIdentityContractTest {
         verifyReadyAndDisconnectedIdentity(TestSupport.tcpEndpoint());
     }
 
-    @Disabled("Core emits inproc READY and DISCONNECTED with different identities")
     @Test
     public void inprocReadyAndDisconnectedKeepIdentityAcrossReconnect() {
         verifyReadyAndDisconnectedIdentity(TestSupport.inprocEndpoint(
             "monitor-connection-identity"));
     }
 
-    @Disabled("Core emits TCP CLOSED with a new endpoint identity")
     @Test
-    public void tcpClosedKeepsReadyConnectionIdentity() {
-        verifyClosedIdentity(TestSupport.tcpEndpoint());
+    public void tcpClosedKeepsReconnectAttemptIdentity() {
+        verifyClosedReconnectAttemptIdentity(TestSupport.tcpEndpoint());
     }
 
-    @Disabled("Core does not emit CLOSED for an inproc peer shutdown")
+    @Disabled("spec gap: inproc peer close emits no CLOSED — D-B102")
     @Test
     public void inprocClosedKeepsReadyConnectionIdentity() {
-        verifyClosedIdentity(TestSupport.inprocEndpoint(
+        verifyClosedReconnectAttemptIdentity(TestSupport.inprocEndpoint(
             "monitor-closed-identity"));
     }
 
@@ -87,13 +85,14 @@ public class MonitorConnectionIdentityContractTest {
         }
     }
 
-    private static void verifyClosedIdentity(String endpoint) {
+    private static void verifyClosedReconnectAttemptIdentity(String endpoint) {
         TestSupport.assumeNative();
 
         try (Context context = Zlink.createContext();
              DealerSocket client = context.createDealerSocket();
              SocketMonitor monitor = client.monitorOpen(
                  MonitorEventType.CONNECTION_READY,
+                 MonitorEventType.CONNECT_DELAYED,
                  MonitorEventType.DISCONNECTED,
                  MonitorEventType.CLOSED)) {
             client.setRoutingId(RoutingId.from("monitor-closed-client"));
@@ -107,9 +106,42 @@ public class MonitorConnectionIdentityContractTest {
             MonitorEvent disconnected = awaitEvent(monitor,
                 MonitorEventType.DISCONNECTED);
             assertSameIdentity(ready, disconnected);
-            assertSameIdentity(ready,
-                awaitEvent(monitor, MonitorEventType.CLOSED));
+            assertClosedReconnectAttempt(monitor, ready);
         }
+    }
+
+    private static void assertClosedReconnectAttempt(SocketMonitor monitor,
+                                                      MonitorEvent ready) {
+        long deadline = System.nanoTime()
+            + Duration.ofMillis(TestSupport.DEFAULT_TIMEOUT_MS).toNanos();
+        List<MonitorEvent> observed = new ArrayList<>();
+        MonitorEvent delayed = null;
+        while (System.nanoTime() < deadline) {
+            MonitorEvent event = monitor.recv(RecvFlags.DONT_WAIT);
+            if (event == null) {
+                LockSupport.parkNanos(1_000_000L);
+                continue;
+            }
+            observed.add(event);
+            if (event.event() == MonitorEventType.CONNECT_DELAYED) {
+                delayed = event;
+            } else if (event.event() == MonitorEventType.CLOSED) {
+                assertTrue(event.connectionId() != 0,
+                    () -> "CLOSED has zero connectionId: " + event);
+                assertNotEquals(ready.connectionId(), event.connectionId(),
+                    () -> "reconnect attempt reused READY identity: ready="
+                        + ready + ", closed=" + event);
+                assertEquals(ready.transportLane(), event.transportLane(),
+                    () -> "transport lane changed between READY and CLOSED: ready="
+                        + ready + ", closed=" + event);
+                if (delayed != null) {
+                    assertSameIdentity(delayed, event);
+                }
+                return;
+            }
+        }
+        throw new AssertionError("monitor event timed out: expected="
+            + MonitorEventType.CLOSED + ", observed=" + observed);
     }
 
     private static RouterSocket openServer(Context context, String endpoint) {

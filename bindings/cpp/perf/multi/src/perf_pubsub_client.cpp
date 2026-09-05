@@ -62,7 +62,7 @@ pubsub_recv_result_t recv_one_pubsub_message (zlink::sub_socket_t &sock,
         return pubsub_recv_error;
     }
 
-    if ((source_rid && source_rid->size () > 0) || topic != k_topic) {
+    if (source_rid || topic.size () != std::strlen (k_topic)) {
         return pubsub_recv_payload;
     }
 
@@ -177,7 +177,7 @@ class pubsub_client_bench_t
             _holders.emplace_back (new zlink::sub_socket_t (_ctx.ctx ()));
             zlink::sub_socket_t &sock = *_holders.back ();
 
-            (void) sock.set_subscription (std::string (k_topic));
+            (void) sock.set_subscription (std::string ());
             perf::multi::apply_benchmark_socket_options (sock, _settings, _transport);
             if (!perf::multi::setup_tls_client (sock, _transport))
                 return false;
@@ -246,6 +246,7 @@ class pubsub_client_bench_t
               std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
             if (poll_wait.count () <= 0)
                 poll_wait = std::chrono::milliseconds (1);
+            poll_wait = std::min (poll_wait, std::chrono::milliseconds (100));
 
             if (_poll_events.size () < _sockets.size ())
                 _poll_events.resize (_sockets.size ());
@@ -266,6 +267,10 @@ class pubsub_client_bench_t
                     continue;
 
                 for (;;) {
+                    if (std::chrono::steady_clock::now () >= deadline) {
+                        phase_done = true;
+                        break;
+                    }
                     perf_metric::header_t header = {};
                     const pubsub_recv_result_t recv_rc =
                       recv_one_pubsub_message (*sock, _msg_size, &header);
@@ -275,7 +280,7 @@ class pubsub_client_bench_t
                         break;
                     if (recv_rc == pubsub_recv_stop) {
                         phase_done = true;
-                        continue;
+                        break;
                     }
 
                     if (header.phase != static_cast<uint8_t> (perf_metric::phase_active)

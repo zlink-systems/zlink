@@ -990,7 +990,8 @@ class socket_base_t : public own_t,
     //  Delay actual destruction of the socket.
     void process_destroy () ZLINK_FINAL;
 
-    int connect_internal (const char *endpoint_uri_);
+    int connect_internal (const char *endpoint_uri_,
+                          bool process_pending_commands_ = true);
     int term_endpoint_internal (const char *endpoint_uri_);
     int bind_inproc_endpoint (const char *endpoint_uri_);
     int bind_transport_listener (const std::string &protocol_,
@@ -1349,6 +1350,7 @@ class socket_base_t : public own_t,
     void process_bind (zlink::pipe_t *pipe_) ZLINK_FINAL;
     void process_term (int linger_) ZLINK_FINAL;
     void process_term_endpoint (std::string *endpoint_) ZLINK_FINAL;
+    void process_reconnect_inproc (std::string *endpoint_) ZLINK_FINAL;
     void process_transport_pair_owner_request (
       zlink::session_base_t *session_, int peer_socket_type_,
       uint64_t connection_id_, uint64_t pair_id_, uint64_t generation_,

@@ -212,6 +212,25 @@ func (p *Poller) Size() int {
 	return int(size)
 }
 
+// AddMonitor registers a borrowed socket monitor with a caller slot. Only PollIn
+// is supported; other readiness flags return ConfigInvalidArgument. After Wait,
+// drain monitor.Recv(RecvFlagsDontWait) until RecvError.Result is RecvNoData.
+// Remove the monitor before closing it. This is an alias of AddSocket.
+func (p *Poller) AddMonitor(monitor *SocketMonitor, events PollEventFlag, slot uintptr) error {
+	return p.AddSocket(monitor, events, slot)
+}
+
+// ModifyMonitor changes a monitor's PollIn interest; it is an alias of ModifySocket.
+func (p *Poller) ModifyMonitor(monitor *SocketMonitor, events PollEventFlag) error {
+	return p.ModifySocket(monitor, events)
+}
+
+// RemoveMonitor unregisters a borrowed monitor; it is an alias of RemoveSocket.
+func (p *Poller) RemoveMonitor(monitor *SocketMonitor) error {
+	return p.RemoveSocket(monitor)
+}
+
+// AddSocket registers a socket or *SocketMonitor; monitors support only PollIn.
 func (p *Poller) AddSocket(socket SocketTarget, events PollEventFlag, slot uintptr) error {
 	if p == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
@@ -224,6 +243,9 @@ func (p *Poller) AddSocket(socket SocketTarget, events PollEventFlag, slot uintp
 	raw, err := socketHandle(socket)
 	if err != nil {
 		return err
+	}
+	if _, monitor := socket.(*SocketMonitor); monitor && events & ^PollIn != 0 {
+		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
 	entry := p.makeEntry(pollerEntrySocket, socket, raw, 0, nil, slot, events)
 	entry.owner = completionOwnerOf(socket)
@@ -246,6 +268,7 @@ func (p *Poller) AddSocket(socket SocketTarget, events PollEventFlag, slot uintp
 	return nil
 }
 
+// ModifySocket changes the interest of a socket or monitor; monitors support only PollIn.
 func (p *Poller) ModifySocket(socket SocketTarget, events PollEventFlag) error {
 	if p == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}
@@ -258,6 +281,9 @@ func (p *Poller) ModifySocket(socket SocketTarget, events PollEventFlag) error {
 	raw, err := socketHandle(socket)
 	if err != nil {
 		return err
+	}
+	if _, monitor := socket.(*SocketMonitor); monitor && events & ^PollIn != 0 {
+		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
 	}
 	entry := p.sockets[uintptr(raw)]
 	if entry == nil {
@@ -287,6 +313,7 @@ func (p *Poller) ModifySocket(socket SocketTarget, events PollEventFlag) error {
 	return nil
 }
 
+// RemoveSocket unregisters a socket or monitor.
 func (p *Poller) RemoveSocket(socket SocketTarget) error {
 	if p == nil {
 		return &ConfigError{Result: ConfigInvalidHandle, nativeErrno: int(C.EFAULT)}

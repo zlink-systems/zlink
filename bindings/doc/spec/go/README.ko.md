@@ -76,6 +76,13 @@ Poller가 등록한 socket과 timer는 해당 resource의 handle을 빌려 사�
 source를 `Close`하기 전에 poller에서 제거해야 하며, 하나의 poller에 대한 add,
 modify, remove와 wait 호출은 호출자가 직렬화한다.
 
+`(*Poller).AddMonitor(monitor *SocketMonitor, events PollEventFlag, slot uintptr) error`,
+`(*Poller).ModifyMonitor(monitor *SocketMonitor, events PollEventFlag) error`,
+`(*Poller).RemoveMonitor(monitor *SocketMonitor) error`는 socket monitor를 poller source로 등록·수정·제거한다
+(공통 spec "`Poller`의 monitor source"). 기존 `AddSocket/ModifySocket/RemoveSocket`(`SocketTarget`)도 monitor를
+수용한다. monitor에는 `POLLIN`만 유효하고 다른 bit는 typed `ConfigResult` `InvalidArgument`로 거절한다. ready 뒤
+`monitor.Recv(RecvFlagsDontWait)`로 drain하며 poll event는 socket과 같은 slot/source kind로 보고한다.
+
 ## Byte HWM과 Auto-HWM
 
 HWM의 계산과 queue admission은 Core가 담당한다. Go 바인딩은

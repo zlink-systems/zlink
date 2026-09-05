@@ -79,6 +79,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_ancillaries
   ${INTEGRATION_TEST_ROOT}/test_asio_ws
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_enhanced
+  ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_connection_identity
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_socket_contract
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_perf_contract
   ${INTEGRATION_TEST_ROOT}/monitoring/test_multi_stream_server_reassembly
@@ -354,6 +355,12 @@ foreach(test_source ${tests})
 
     set_tests_properties(${test} PROPERTIES TIMEOUT 10)
     if(${test} STREQUAL "test_router_handover")
+      set_tests_properties(
+        ${test}
+        PROPERTIES
+          TIMEOUT 30)
+    endif()
+    if(${test} STREQUAL "test_monitor_connection_identity")
       set_tests_properties(
         ${test}
         PROPERTIES

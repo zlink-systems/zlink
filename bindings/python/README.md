@@ -70,6 +70,10 @@ events use `receive_subscription_event_into()`.
 Resource owners support synchronous and asynchronous context manager cleanup.
 Utility facades include `Stopwatch` and `AtomicCounter`.
 
+## Poller
+
+`Poller.add_monitor(monitor: MonitorSocket, events: PollEventFlag, slot: int)`, `modify_monitor(monitor, events)`, and `remove_monitor(monitor)` alias the socket methods; monitors accept only `POLLIN`, followed by `recv(flags=RecvFlags.DONT_WAIT)` until `None`.
+
 ## Native loading
 
 The wheel loads its packaged native runtime. Source builds require an explicit

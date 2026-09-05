@@ -198,6 +198,14 @@ operation; a late completion releases the payload and state.
 drained the native queue and fully processed at least one live awaitable or detached state. Under public
 poller ownership, using a blocking request requires another thread to continue executing the wait loop.
 
+`Poller.add_monitor(monitor: MonitorSocket, events: PollEventFlag, slot: int) -> None`,
+`Poller.modify_monitor(monitor: MonitorSocket, events: PollEventFlag) -> None` and
+`Poller.remove_monitor(monitor: MonitorSocket) -> None` register, modify and remove a socket monitor as a
+poller source (common spec "Monitor sources in `Poller`"); the existing `add_socket/modify_socket/remove_socket`
+also accept a monitor. Only `PollEventFlag.POLLIN` is valid for a monitor; any other bit is rejected with a typed
+`ConfigResult.INVALID_ARGUMENT`. Drain with `monitor.recv(RecvFlags.DONT_WAIT)` after readiness; the poll event
+reports the monitor through the same slot and source kind as a socket.
+
 Only module-private `_reply_token_from_native` creates a `ReplyToken`; public construction and
 serialization are rejected. The factory fills private `_owner` and `_value` through
 `object.__new__(ReplyToken)` and `object.__setattr__`. Equality and hashing use both owner identity and

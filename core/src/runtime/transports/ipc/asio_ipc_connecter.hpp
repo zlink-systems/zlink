@@ -11,6 +11,7 @@
 #include <string>
 
 #include "utils/fd.hpp"
+#include "core/endpoint.hpp"
 #include "core/own.hpp"
 #include "core/io_object.hpp"
 
@@ -59,6 +60,8 @@ class asio_ipc_connecter_t ZLINK_FINAL : public own_t, public io_object_t
 
     address_t *const _addr;
     std::string _endpoint_str;
+    //  Shared by every monitor event emitted for one physical connect attempt.
+    endpoint_uri_pair_t _attempt_endpoint_pair;
 
     zlink::session_base_t *const _session;
     zlink::socket_base_t *const _socket_ptr;

@@ -91,6 +91,8 @@ zlink::asio_ipc_connecter_t::asio_ipc_connecter_t (io_thread_t *io_thread_,
     zlink_assert (_addr);
     zlink_assert (_addr->protocol == protocol_name::ipc);
     _addr->to_string (_endpoint_str);
+    _attempt_endpoint_pair =
+      make_unconnected_connect_endpoint_pair (_endpoint_str);
 
     IPC_CONNECTER_DBG ("Constructor called, endpoint=%s, this=%p", _endpoint_str.c_str (),
                        static_cast<void *> (this));
@@ -149,6 +151,8 @@ void zlink::asio_ipc_connecter_t::timer_event (int id_)
 void zlink::asio_ipc_connecter_t::start_connecting ()
 {
     IPC_CONNECTER_DBG ("start_connecting: endpoint=%s", _endpoint_str.c_str ());
+    _attempt_endpoint_pair =
+      make_unconnected_connect_endpoint_pair (_endpoint_str);
 
     if (_addr->resolved.ipc_addr != NULL) {
         LIBZLINK_DELETE (_addr->resolved.ipc_addr);
@@ -181,7 +185,7 @@ void zlink::asio_ipc_connecter_t::start_connecting ()
 
     add_connect_timer ();
 
-    _socket_ptr->event_connect_delayed (make_unconnected_connect_endpoint_pair (_endpoint_str),
+    _socket_ptr->event_connect_delayed (_attempt_endpoint_pair,
                                         connect_delayed_errno_value ());
 }
 
@@ -233,8 +237,7 @@ void zlink::asio_ipc_connecter_t::add_reconnect_timer ()
     start_asio_timer_if_positive (interval, &_reconnect_timer_started, [this] (int interval) {
         IPC_CONNECTER_DBG ("add_reconnect_timer: interval=%d", interval);
         add_timer (interval, reconnect_timer_id);
-        _socket_ptr->event_connect_retried (make_unconnected_connect_endpoint_pair (_endpoint_str),
-                                            interval);
+        _socket_ptr->event_connect_retried (_attempt_endpoint_pair, interval);
     });
 }
 
@@ -247,7 +250,9 @@ void zlink::asio_ipc_connecter_t::create_engine (fd_t fd_, const std::string &lo
 {
     IPC_CONNECTER_DBG ("create_engine: fd=%d, local=%s", fd_, local_address_.c_str ());
 
-    const endpoint_uri_pair_t endpoint_pair (local_address_, _endpoint_str, endpoint_type_connect);
+    endpoint_uri_pair_t endpoint_pair (
+      local_address_, _endpoint_str, endpoint_type_connect);
+    endpoint_pair.connection_id = _attempt_endpoint_pair.connection_id.load ();
 
     std::unique_ptr<i_asio_transport> transport (new (std::nothrow) ipc_transport_t ());
     alloc_assert (transport.get ());
@@ -276,7 +281,7 @@ void zlink::asio_ipc_connecter_t::close ()
     IPC_CONNECTER_DBG ("close called");
 
     close_asio_socket_if_open (_socket, [this] (fd_t fd) {
-        _socket_ptr->event_closed (make_unconnected_connect_endpoint_pair (_endpoint_str), fd);
+        _socket_ptr->event_closed (_attempt_endpoint_pair, fd);
     });
 }
 

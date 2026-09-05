@@ -90,6 +90,8 @@ zlink::asio_tcp_connecter_t::asio_tcp_connecter_t (io_thread_t *io_thread_,
 #endif
     zlink_assert (is_tcp_protocol);
     _addr->to_string (_endpoint_str);
+    _attempt_endpoint_pair =
+      make_unconnected_connect_endpoint_pair (_endpoint_str);
 
     CONNECTER_DBG ("Constructor called, endpoint=%s, this=%p", _endpoint_str.c_str (),
                    static_cast<void *> (this));
@@ -149,6 +151,8 @@ void zlink::asio_tcp_connecter_t::timer_event (int id_)
 void zlink::asio_tcp_connecter_t::start_connecting ()
 {
     CONNECTER_DBG ("start_connecting: endpoint=%s", _endpoint_str.c_str ());
+    _attempt_endpoint_pair =
+      make_unconnected_connect_endpoint_pair (_endpoint_str);
 
     //  Resolve the address if not already done
     if (_addr->resolved.tcp_addr != NULL) {
@@ -215,7 +219,7 @@ void zlink::asio_tcp_connecter_t::start_connecting ()
     //  Add userspace connect timeout
     add_connect_timer ();
 
-    _socket_ptr->event_connect_delayed (make_unconnected_connect_endpoint_pair (_endpoint_str),
+    _socket_ptr->event_connect_delayed (_attempt_endpoint_pair,
                                         connect_delayed_errno_value ());
 }
 
@@ -288,8 +292,7 @@ void zlink::asio_tcp_connecter_t::add_reconnect_timer ()
     start_asio_timer_if_positive (interval, &_reconnect_timer_started, [this] (int interval) {
         CONNECTER_DBG ("add_reconnect_timer: interval=%d", interval);
         add_timer (interval, reconnect_timer_id);
-        _socket_ptr->event_connect_retried (make_unconnected_connect_endpoint_pair (_endpoint_str),
-                                            interval);
+        _socket_ptr->event_connect_retried (_attempt_endpoint_pair, interval);
     });
 }
 
@@ -302,7 +305,9 @@ void zlink::asio_tcp_connecter_t::create_engine (fd_t fd_, const std::string &lo
 {
     CONNECTER_DBG ("create_engine: fd=%d, local=%s", fd_, local_address_.c_str ());
 
-    const endpoint_uri_pair_t endpoint_pair (local_address_, _endpoint_str, endpoint_type_connect);
+    endpoint_uri_pair_t endpoint_pair (
+      local_address_, _endpoint_str, endpoint_type_connect);
+    endpoint_pair.connection_id = _attempt_endpoint_pair.connection_id.load ();
 
     //  Create the engine object for this connection using true proactor mode.
     i_engine *engine = NULL;
@@ -334,7 +339,7 @@ void zlink::asio_tcp_connecter_t::close ()
     CONNECTER_DBG ("close called");
 
     close_asio_socket_if_open (_socket, [this] (fd_t fd) {
-        _socket_ptr->event_closed (make_unconnected_connect_endpoint_pair (_endpoint_str), fd);
+        _socket_ptr->event_closed (_attempt_endpoint_pair, fd);
     });
 }
 

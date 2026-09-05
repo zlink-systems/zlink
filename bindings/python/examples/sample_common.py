@@ -26,15 +26,20 @@ def wait_connected(*monitors, timeout_ms=5000):
     remaining = set(range(len(monitors)))
     deadline = time.monotonic() + timeout_ms / 1000.0
 
-    while remaining and time.monotonic() < deadline:
-        for i in list(remaining):
-            event = monitors[i].recv(zlink.RecvFlags.DONT_WAIT)
-            if event is not None and (event.event & event_mask):
-                remaining.discard(i)
-        if remaining:
-            time.sleep(0.005)
-
-    if remaining:
-        raise TimeoutError(
-            f"wait_connected: {len(remaining)} monitor(s) did not report ready"
-        )
+    with zlink.create_poller() as poller:
+        events = zlink.create_poll_events(max(1, len(monitors)))
+        for i, monitor in enumerate(monitors):
+            poller.add_monitor(monitor, zlink.PollEventFlag.POLLIN, i)
+        while remaining:
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0 or poller.wait(events, remaining_ms) == 0:
+                raise TimeoutError(
+                    f"wait_connected: {len(remaining)} monitor(s) did not report ready"
+                )
+            for index in range(events.ready_count):
+                i = events.slot(index)
+                while (event := monitors[i].recv(flags=zlink.RecvFlags.DONT_WAIT)) is not None:
+                    if int(event.event) & event_mask:
+                        remaining.discard(i)
+        for monitor in monitors:
+            poller.remove_monitor(monitor)

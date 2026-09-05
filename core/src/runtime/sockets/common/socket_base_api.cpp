@@ -1726,6 +1726,7 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
     std::vector<unsigned char> routing_id_copy;
     if (pipe_) {
         endpoint_pair = pipe_->get_endpoint_pair ();
+        endpoint_pair.connection_id = pipe_->get_transport_connection_id ();
         const blob_t &routing_id = pipe_->get_routing_id ();
         if (routing_id.size () > 0)
             routing_id_copy.assign (routing_id.data (), routing_id.data () + routing_id.size ());
@@ -1739,6 +1740,14 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
       pipe_ ? pipe_->get_transport_pair_generation () : 0;
     const bool completion =
       pipe_ && pair_id != 0 && pipe_->get_transport_lane () == transport_lane_completion;
+    // Only the connecting socket records a pipe in inprocs. Explicit
+    // zlink_disconnect erases that record before termination, whereas an
+    // unexpected peer detach leaves it available as the reconnect intent.
+    std::string inproc_reconnect_endpoint;
+    const bool reconnect_inproc =
+      pipe_ && !completion && !is_terminating () && options.reconnect_ivl > 0
+      && endpoint_runtime ().inprocs.endpoint_for_pipe (
+        pipe_, &inproc_reconnect_endpoint);
     // A locally requested endpoint termination may tear the engine down
     // without entering asio_engine_t::error(). Publish its physical disconnect
     // here. The per-pipe claim makes this mutually exclusive with the normal
@@ -1903,6 +1912,12 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
         //  happens here instead of racing us.
         paired_pipe->release_lifetime_ref ();
     }
+
+    // pipe_terminated runs under the command owner. Queue the reconnect so
+    // connect_internal does not re-enter that owner while handling this pipe.
+    if (reconnect_inproc && !is_terminating ())
+        send_reconnect_inproc (
+          this, new std::string (inproc_reconnect_endpoint));
 }
 
 zlink::pipe_t *
