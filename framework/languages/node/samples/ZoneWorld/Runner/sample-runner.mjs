@@ -199,9 +199,6 @@ async function runFullLane(ctx) {
     .join('\n');
   const spawned = new Set([...botLogs.matchAll(/bot spawned bot=([^ ]+)/g)].map((match) => match[1]));
   if (spawned.size !== 8) throw new Error(`ZW-F1 expected 8 spawned bots, observed ${spawned.size}.`);
-  if (/No current session binding exists for actor 'bot-/.test(botLogs)) {
-    throw new Error('ZW-F3 attempted to push to an unbound bot actor.');
-  }
   recordVerdict(verdicts, 'ZW-F2');
   const bots = startScenarioClient(
     ctx,
@@ -212,6 +209,13 @@ async function runFullLane(ctx) {
   await bots.complete();
   process.stdout.write(bots.output());
   collectVerdicts(verdicts, bots.output());
+  // ZW-F4 negative evidence covers the traffic the F client just drove through the push paths.
+  const pushLogs = ['zone-node-1', 'zone-node-2']
+    .map((name) => fs.readFileSync(path.join(ctx.logDir, `${name}.log`), 'utf8'))
+    .join('\n');
+  if (/No current session binding exists for actor 'bot-/.test(pushLogs)) {
+    throw new Error('ZW-F4 attempted to push to an unbound bot actor.');
+  }
 
   const transition = startScenarioClient(
     ctx,
