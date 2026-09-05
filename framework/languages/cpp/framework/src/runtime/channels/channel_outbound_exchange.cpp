@@ -1673,6 +1673,7 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
                   std::move (serialized.content_type),
                   std::move (payload),
                   resolve_send_wait_timeout (timeout));
+                co_return;
             }
             catch (const framework_exception_t &) { throw; }
             catch (const std::exception &error) {

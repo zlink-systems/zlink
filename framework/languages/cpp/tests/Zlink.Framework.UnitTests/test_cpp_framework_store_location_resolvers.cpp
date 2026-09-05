@@ -1402,7 +1402,7 @@ class auto_connect_publish_client_t final : public zlink::framework::hosted_serv
         auto publisher = _app->advanced ().zlink ().publisher ();
         for (int attempt = 0; attempt < 80; ++attempt) {
             try {
-                publisher
+                co_await publisher
                   .publish (
                     "events", "profile.changed",
                     blocked_auto_connect_event_t{attempt + 1})
@@ -1421,7 +1421,7 @@ class auto_connect_publish_client_t final : public zlink::framework::hosted_serv
         }
         for (int attempt = 0; attempt < 80; ++attempt) {
             try {
-                publisher.publish ("events", "profile.changed", auto_connect_event_t{attempt + 1})
+                co_await publisher.publish ("events", "profile.changed", auto_connect_event_t{attempt + 1})
                   .async ();
             }
             catch (const std::exception &error) {
@@ -2974,6 +2974,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AppFanoutPublishUsesLocationAutoConn
     ASSERT_NE (nullptr, client);
     EXPECT_TRUE (client->observed) << client->last_error;
     EXPECT_GT (auto_connect_event_handler_t::observed_value.load (std::memory_order_acquire), 0);
+    EXPECT_TRUE (client->last_error.empty ()) << client->last_error;
     EXPECT_TRUE (auto_connect_event_handler_t::same_scope.load ());
     EXPECT_EQ (0, blocked_auto_connect_event_handler_t::observed_count.load ());
     EXPECT_GT (
