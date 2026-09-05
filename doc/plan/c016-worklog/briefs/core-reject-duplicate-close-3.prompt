@@ -1,0 +1,29 @@
+# Job (Core round 3, model astra): finish D-090 — update the five contract assertions that encoded the removed rules, complete the inproc single-fixture 20/20, full gate
+
+You are a codex sub-agent under a Claude supervisor. Read `CONTRIBUTING.ko.md` §4/§5, your round-2 report
+`doc/plan/c016-worklog/core-reject-duplicate-close-2-summary.md` (keep its diff in `/home/hep7/project/zlink-core-a`; do not
+revert), decision D-090 in `decisions.ko.md`, and the amended spec `core/doc/spec/core/socket/README.ko.md` §6 completion table:
+a pending REQUEST completes exactly once with `ZLINK_REQUEST_NOT_CONNECTED`/`EHOSTUNREACH` as soon as its submit-time transport pair
+terminates, whatever the cause; `NOT_FOUND` stays for explicit endpoint / logical RID removal; `TIMED_OUT` only for an admitted
+request whose pair stays alive and whose reply never arrives. Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do
+not commit. WORK ONLY IN `/home/hep7/project/zlink-core-a`; never touch main's `core/build-dev` or `zlink-core-b`.
+
+## Supervisor decision (spec changed → these assertions must follow the spec; this is the intended contract change, not masking)
+Update exactly these expectations to D-090 semantics, nothing else in those tests:
+- `test_socket_disconnect_progress_without_app_poll.cpp:509` — request on the rejected pipe: expect NOT_CONNECTED (109), not TIMED_OUT.
+- `test_phase3_request_reply_contract.cpp:1086/:1102` (`…survives_physical_detach_and_same_rid_reconnect_without_replay`) — after the
+  physical detach the pinned request completes NOT_CONNECTED immediately (no reply after reconnect, no timeout wait); rename the
+  test to state the new contract.
+- `test_phase3_request_reply_contract.cpp:2818` — pinned pending after the responder's physical close: NOT_CONNECTED (109); the
+  explicit logical RID removal case keeps NOT_FOUND (102).
+- `test_zmp_metadata.cpp:2066` — pipe closed by an invalid completion kind: pending completes NOT_CONNECTED, not TIMED_OUT.
+- `test_dealer_router_single_lane_contract.cpp:3664` — after the previous pair is gone, expect exactly one payload-less REQUEST
+  NOT_CONNECTED completion (helper `:657`), not `assert_no_completion()`.
+Then: the D-088 inproc single fixture (reject → pending NOT_CONNECTED → old pipe terminates → next attempt admitted → request OK)
+20/20; the tcp counterpart 20/20; `test_router_reciprocal_handover_lanes`, `test_disconnect_progress`, `test_close_completion_poller_release`,
+`test_ctx_term_fixed_rid_handover` green; full `ctest -j2` (only hotpath_gate n/a on the dev tree); §5 checks; C++/Python binding
+checks as in round 1.
+
+## Deliverable
+`doc/plan/c016-worklog/core-reject-duplicate-close-3-summary.md`: per-assertion change with the spec clause, test counts, full gate
+result, BLOCKERS. Leave the diff uncommitted in the worktree.

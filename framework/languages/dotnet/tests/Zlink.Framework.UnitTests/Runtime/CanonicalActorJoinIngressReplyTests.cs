@@ -134,6 +134,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         ReplySubmitOperation? firstReplyRoute = null;
+        var replySubmits = 0;
         await using var source = new ZLinkManagedMeshNode(context, "mesh");
         await using var target = new ZLinkManagedMeshNode(
             context,
@@ -144,6 +145,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 if (ReferenceEquals(firstReplyRoute, reply))
                     return SubmitResult.Ok;
                 reply.Submit();
+                Interlocked.Increment(ref replySubmits);
                 return SubmitResult.Ok;
             });
         var suffix = Guid.NewGuid().ToString("N");
@@ -193,6 +195,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             "application/json",
             "{}"u8.ToArray());
 
+        var admissionDeadline = DateTimeOffset.UtcNow.AddSeconds(8)
+            .ToUnixTimeMilliseconds();
         Assert.Equal(
             SubmitResult.Ok,
             source.TryRequestCanonicalActorJoin(
@@ -201,20 +205,57 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 TimeSpan.FromSeconds(8)));
 
         var firstIngress = await ReceiveActorJoinAsync(target);
-        using var firstReply = Message.From(
-            "{\"reason\":\"ZoneMaintenance\"}"u8);
+        Assert.Equal(new MeshOperationId(0, operationId.Low), firstIngress.OperationId);
+        var admissions = new ZLinkActorHandoffAdmissions();
+        var executions = 0;
+        ValueTask<ZLinkRemoteActorAdmissionReply> AdmitAsync(MeshReceiveRecord ingress) =>
+            admissions.AdmitAsync(
+                new ZLinkRemoteActorAdmissionRequest(
+                    request.Actor.ActorId,
+                    "Sample.Actor",
+                    "source-spot",
+                    sourceRid.ToBytes().ToArray(),
+                    request.ContentType,
+                    request.ApplicationPayload.ToArray(),
+                    ZLinkRemoteActorJoinPackets.CreateCanonicalHandoffId(
+                        sourceRid,
+                        request.Actor.ActorId,
+                        request.Actor.Generation,
+                        request.ActorNodeGeneration,
+                        ingress.OperationId.Low),
+                    admissionDeadline),
+                targetSpotId,
+                _ =>
+                {
+                    Interlocked.Increment(ref executions);
+                    return ValueTask.FromResult(new ZLinkRemoteActorAdmissionReply(
+                        false,
+                        "application/json",
+                        "{\"reason\":\"ZoneMaintenance\"}"u8.ToArray(),
+                        admissionDeadline));
+                },
+                CancellationToken.None);
+        var firstDecision = await AdmitAsync(firstIngress);
+        using var firstReply = Message.From(firstDecision.Reply);
         Assert.Equal(
             SubmitResult.Ok,
             firstIngress.ReplyJoin(
                 ActorJoinResult.Rejected,
                 [firstReply]));
 
+        // The lower source RID's outbound direction wins reciprocal HANDOVER.
+        // Core ends the admitted attempt with NOT_CONNECTED, so the sender can
+        // replay inside the original deadline without an artificial attempt cut.
+        source.ConnectPeer(targetEndpoint, targetRid);
+
         var retryIngress = await ReceiveActorJoinAsync(
             target,
             TimeSpan.FromSeconds(7));
         Assert.Equal(firstIngress.OperationId, retryIngress.OperationId);
-        using var retryReply = Message.From(
-            "{\"reason\":\"ZoneMaintenance\"}"u8);
+        var retryDecision = await AdmitAsync(retryIngress);
+        Assert.Same(firstDecision, retryDecision);
+        Assert.Equal(1, Volatile.Read(ref executions));
+        using var retryReply = Message.From(retryDecision.Reply);
         Assert.Equal(
             SubmitResult.Ok,
             retryIngress.ReplyJoin(
@@ -226,6 +267,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             operationId);
         try
         {
+            Assert.Equal(operationId, completion.OperationId);
             Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
             var join = Assert.IsType<ActorJoinCompletion>(
                 completion.JoinCompletion);
@@ -234,10 +276,12 @@ public sealed class CanonicalActorJoinIngressReplyTests
             Assert.Equal(
                 "{\"reason\":\"ZoneMaintenance\"}"u8.ToArray(),
                 applicationReply.AsReadOnlyMemory().ToArray());
+            Assert.Equal(1, Volatile.Read(ref replySubmits));
         }
         finally
         {
             ZLinkMessageParts.DisposeAll(replyParts);
+            await admissions.ResetGenerationAsync();
         }
     }
 
@@ -573,6 +617,9 @@ public sealed class CanonicalActorJoinIngressReplyTests
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
 
         await runtime.SendPriorHelloAsync();
+        // The old Hello's Admit follows the current logical RID route. Consume
+        // that DATA before waiting for a REPLY, which cannot overtake it.
+        using var priorAdmission = await ReceiveAsync(runtime.Source);
         await Task.Delay(150);
         Assert.Equal(protocolErrors, monitor.Status().ProtocolErrors);
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);

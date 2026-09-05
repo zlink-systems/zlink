@@ -1,0 +1,36 @@
+# Job (STAGE 1+2, model astra): dotnet Canonical residual reds on the 12:54 packages — `CanonicalActorJoinRequest_HandoverLeavesReplyRouteToCore` and `ManagedSource_Command28Request_Retries_Same_Correlation_After_Lost_Reply`
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 (계층 소유권·금지 패턴·원칙이 단순해지는 근본 수정·중복 금지·
+진단 먼저), `framework/AGENTS.md`. Context: the dotnet mesh unwind (3975cea255), durable sender (d6ec19765e), ClientServer removal
+(05b53a8098); Core fixes now in the 12:54 packages: 8b82d51b75 (a REQUEST pinned to a pair superseded by HANDOVER completes immediately
+NOT_CONNECTED), 0145f5a59a (inproc connect-before-bind direction flag), 7cbf12de41 (monitor command lease), cb62cb89f8 (close vs
+executor restart). Spec: Core socket README §4 and §6 as amended (D-090: a REQUEST completes NOT_CONNECTED as soon as its submit-time
+pair terminates, any cause — Core implementation for the general case is still in progress; today HANDOVER supersession is
+implemented), 04-actor-model sender bullets (whole remaining deadline per attempt; replay only on outcomes without a terminal
+envelope; admitted-then-no-reply → DeadlineExceeded). Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages; never lower an assertion or widen a deadline; do not commit.
+Env (never `--artifacts-path`, never `ulimit -v`): `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; cd framework/languages/dotnet; flock -w7200 /tmp/zlink-dotnet-gate.lock dotnet test ...`.
+STOP only for a Core/binding defect (public-API repro description).
+
+## Gate v9 (`scratchpad/gate-v9-canonical.log`): Canonical 14/16, rest 1939/1939
+1. `CanonicalActorJoinRequest_HandoverLeavesReplyRouteToCore` — the replacement submits `ReplyJoin(Ok)` on the target ingress
+   of a new request, but the caller ends TimedOut(101) (`stage2-dotnet-mesh-unwind-summary.md` B3). Stage 1: trace which pair
+   the reply is pinned to vs which pair the caller's request used (Core pins the reply to the submit-time pair; after the
+   unwind the framework no longer re-pins) — is the framework replying to the wrong correlation/route, is the test's raw
+   fixture replying on a pipe Core superseded (then the request should have completed NOT_CONNECTED immediately — check that
+   completion arrives; if it does not, that is a Core defect → STOP and report), or does the test assert a behaviour the amended
+   spec no longer defines (then it is the test that encodes a removed rule)? Classify A/B/C/D; minimal fix.
+2. `ManagedSource_Command28Request_Retries_Same_Correlation_After_Lost_Reply` — the fixture withholds the first reply while the
+   pair stays alive and expects a second ingress within 7 s of an 8 s operation; that relied on the removed fixed 5 s attempt
+   cut. Under the sender policy a withheld reply on a live pair cannot be detected before the deadline (admitted → no reply →
+   DeadlineExceeded); a reply is "lost" in practice because the pair terminates, which Core now reports as NOT_CONNECTED. Rewrite
+   the fixture to the spec: simulate the lost reply as a pair termination (the losing HANDOVER direction, or the raw peer
+   closing the pipe) so Core completes the first attempt NOT_CONNECTED and the sender replays with the same OperationId/
+   correlation within the original deadline; keep the assertion "same correlation, exactly one execution". Class B (fixture
+   encodes a removed rule) unless stage 1 shows otherwise.
+## Verify
+Canonical family 3× (`--blame-hang --blame-hang-timeout 5m`), `StatefulServiceRuntimeTests` 1×, full gate once
+(`FullyQualifiedName!~CanonicalActorJoinIngressReplyTests`), samples TicTacToe + SupportChat 1× (runner now fails on role SIGKILL).
+## Deliverable
+`doc/plan/c016-worklog/stage12-dotnet-canonical-residual-summary.md` (+ `-diagnosis.md` first): timeline per test, the four lines,
+rule count before/after, results, BLOCKERS.

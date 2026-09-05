@@ -714,6 +714,31 @@ public sealed partial class RegressionTests
     }
 
     [Fact]
+    public void SampleRunnersFailWhenRoleCleanupRequiresSigkill()
+    {
+        var samplesRoot = Path.Combine(ResolveDotnetRoot(), "samples");
+        var shellRunner = File.ReadAllText(Path.Combine(samplesRoot, "run_samples.sh"));
+        var shellHelper = File.ReadAllText(Path.Combine(samplesRoot, "redis-common.sh"));
+        var powershellHelper = File.ReadAllText(Path.Combine(samplesRoot, "sample_runner.ps1"));
+
+        Assert.Contains("ZLINK_SAMPLE_TEARDOWN_STATUS_FILE", shellRunner, StringComparison.Ordinal);
+        Assert.Contains("Sample role ${role} (pid ${pid}) exited during cleanup with status 137 (SIGKILL).",
+            shellRunner, StringComparison.Ordinal);
+        Assert.True(shellRunner.IndexOf("[[ -s \"${teardown_status_file}\" ]]", StringComparison.Ordinal) <
+            shellRunner.IndexOf("cat \"${output_file}\"", StringComparison.Ordinal));
+        Assert.Contains("builtin kill \"$@\"", shellHelper, StringComparison.Ordinal);
+        Assert.Contains("ZLINK_SAMPLE_TEARDOWN_STATUS_FILE", shellHelper, StringComparison.Ordinal);
+        Assert.Contains("$script:SampleProcessNames[$process.Id] = $Name", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("$process.ExitCode -eq 137 -or $process.ExitCode -eq -9", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("exited during cleanup with status -9 (SIGKILL).", powershellHelper,
+            StringComparison.Ordinal);
+        Assert.Contains("throw ($teardownFailures -join [Environment]::NewLine)", powershellHelper,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ZoneWorldBrowserLoadsRunnerProvidedStaticConfiguration()
     {
         var browserRoot = Path.GetFullPath(Path.Combine(
