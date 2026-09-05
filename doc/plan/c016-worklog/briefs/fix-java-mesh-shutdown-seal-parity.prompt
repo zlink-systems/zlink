@@ -1,0 +1,21 @@
+# Job (fix, model astra): java framework — D-097 parity: `ZLinkJavaRawMeshNode` must consult the host shutdown admission seal before re-submitting Hello (no Hello after the seal; Draining Update only; peer loss does not undo Draining), and an idempotent admission must take the same completion diagnostic path as an accepted one
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, the spec
+`framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md` §14 step 1 (amended for D-097), `03-spot-actor/03-mesh-node.ko.md`
+§6·§7.1, `decisions.ko.md` D-097, the dotnet reference `fix-dotnet-zoneworld-e5-shutdown-hello-2-summary.md`, and the recent java raw mesh changes
+(`fix-java-descriptor-fence-3-summary.md`, `fix-java-mesh-transport-identity-summary.md`) so you build on them. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, other languages, `framework/languages/shared_sample/**`; do not commit. Env: `framework/languages/java`, `TMPDIR=/dev/shm/zlink-tmp-java`,
+`unset ZLINK_LIBRARY_PATH`, gradle under `flock -w7200 /tmp/zlink-jvm-gate.lock`, samples under `flock -w7200 /tmp/zlink-samples-gate.lock`. Installed Core 2055a581….
+
+## Pointers
+`ZLinkJavaRawMeshNode.java` ~6842-6882 re-submits Hello whenever the topology has no admitted peer, with no seal query; the host seal owner candidate is
+`ZLinkMeshDrainCoordinator.isSealed` — check whether Relocate seals that coordinator too (the shutdown seal must be distinguishable, as dotnet's `IsSealedForShutdown`).
+Duplicate/idempotent admission: find the java equivalent of the Accept/Idempotent decision and make the completion diagnostic (the log the ZoneWorld runner reads:
+`mesh_peer_admission_accepted … command=Admit` or java's equivalent marker) shared.
+
+## Fix (single owner each; rule count before/after) + tests (sealed + peer loss → no Hello, Draining kept, drain completes; unsealed re-admits; crossed Hello/Admit
+completion diagnostic on both sides). Verify: `:zlink-framework-core:test contractTest` once (0 fail), `ZLINK_SAMPLE_LANGUAGES=java bash samples/run_samples.sh` once (7/7;
+ZoneWorld E5 admission observed), kotlin ZoneWorld once.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-java-mesh-shutdown-seal-parity-summary.md`: diff file:line, four lines, rule counts, results, BLOCKERS.

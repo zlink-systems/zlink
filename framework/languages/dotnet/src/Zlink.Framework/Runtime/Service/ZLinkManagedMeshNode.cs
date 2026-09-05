@@ -122,6 +122,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     // historical always-on behavior.
     private volatile Func<bool>? _flowCaptureEnabled;
 
+    // Spec 30 §14 step 1: the host's shutdown admission seal, consulted before
+    // this node starts a peer admission (Hello). The host drain gate owns the
+    // seal; a gate-less standalone node keeps admitting peers.
+    private volatile Func<bool>? _peerAdmissionSealed;
+
     private IRouterSocket? _socket;
     private IDisposable? _receiveFlowRegistration;
     private ISocketMonitor? _socketMonitor;
@@ -236,6 +241,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         ArgumentNullException.ThrowIfNull(flowCaptureEnabled);
         _flowCaptureEnabled = flowCaptureEnabled;
+    }
+
+    internal void SetPeerAdmissionSealGate(Func<bool> sealedForShutdown)
+    {
+        ArgumentNullException.ThrowIfNull(sealedForShutdown);
+        _peerAdmissionSealed = sealedForShutdown;
     }
 
     public void SetObjectRole(ZLinkMeshNodeObjectRole objectRole)
@@ -8086,6 +8097,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Peer peer;
         ZLinkServiceAdmissionDecision decision;
         var publishAdmitted = false;
+        var admissionCompleted = false;
         {
             var preferredDirection = command == ServiceWireConstants.Command.Hello
                 ? ZLinkServiceConnectionDirection.Inbound
@@ -8295,38 +8307,41 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 Publish(MeshMonitorEventKind.PeerRejected, peerRid: sourceRid);
                 return;
             }
-            if (decision == ZLinkServiceAdmissionDecision.Idempotent)
+            // An Idempotent decision (service-wire §5: a repeated Hello/Admit
+            // carrying the current descriptor) is a completed admission too.
+            // It changes no peer state - descriptor, physical pipe and
+            // liveness epoch stay - but it takes the same completion tail as
+            // Accept below: the Admit reply and the completion diagnostic.
+            // Crossed Hello/Admit exchanges otherwise left one side without
+            // the `command=Admit` completion that operators read as proof the
+            // routed path is usable.
+            if (decision == ZLinkServiceAdmissionDecision.Accept)
             {
-                if (command == ServiceWireConstants.Command.Hello)
-                    SendAdmission(
-                        peer,
-                        ServiceWireConstants.Command.Admit,
-                        admissionResponse);
-                return;
+                if (!_peersByIntent.ContainsKey(peer.Intent))
+                    _peersByIntent.Add(peer.Intent, peer);
+                // Descriptor updates preserve the current liveness epoch.
+                peer.RoutingId = sourceRid;
+                if (peer.Direction == ZLinkServiceConnectionDirection.Inbound
+                    || peer.PhysicalRoutingId.IsEmpty)
+                    peer.PhysicalRoutingId = sourceRid;
+                peer.LifecycleGeneration = admission.LifecycleGeneration;
+                peer.DescriptorRevision = admission.DescriptorRevision;
+                peer.Channels = admission.Channels;
+                peer.Admission = admission;
+                // A descriptor update changes neither the admitted physical pipe
+                // nor its liveness epoch (service-wire §5). Replacing this state
+                // here drops an outstanding probe/ACK fence while a relocation
+                // drain is using the same target connection.
+                if (peer.Liveness is null)
+                    peer.Liveness = new ZLinkServiceLiveness(
+                        Stopwatch.GetTimestamp(),
+                        peer.ConnectionGeneration);
+                peer.LastChangedMs = checked((ulong)Environment.TickCount64);
+                _peersByRid[sourceRid] = peer;
+                CompletePeerAdmissionUnderLock(peer);
+                publishAdmitted = true;
             }
-            if (!_peersByIntent.ContainsKey(peer.Intent))
-                _peersByIntent.Add(peer.Intent, peer);
-            // Descriptor updates preserve the current liveness epoch.
-            peer.RoutingId = sourceRid;
-            if (peer.Direction == ZLinkServiceConnectionDirection.Inbound
-                || peer.PhysicalRoutingId.IsEmpty)
-                peer.PhysicalRoutingId = sourceRid;
-            peer.LifecycleGeneration = admission.LifecycleGeneration;
-            peer.DescriptorRevision = admission.DescriptorRevision;
-            peer.Channels = admission.Channels;
-            peer.Admission = admission;
-            // A descriptor update changes neither the admitted physical pipe
-            // nor its liveness epoch (service-wire §5). Replacing this state
-            // here drops an outstanding probe/ACK fence while a relocation
-            // drain is using the same target connection.
-            if (peer.Liveness is null)
-                peer.Liveness = new ZLinkServiceLiveness(
-                    Stopwatch.GetTimestamp(),
-                    peer.ConnectionGeneration);
-            peer.LastChangedMs = checked((ulong)Environment.TickCount64);
-            _peersByRid[sourceRid] = peer;
-            CompletePeerAdmissionUnderLock(peer);
-            publishAdmitted = true;
+            admissionCompleted = peer.Admitted;
         }
 
         if (command == ServiceWireConstants.Command.Hello)
@@ -8334,13 +8349,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 peer,
                 ServiceWireConstants.Command.Admit,
                 admissionResponse);
-        if (publishAdmitted)
-        {
+        if (admissionCompleted)
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"mesh_peer_admission_accepted local={_routingId} peer={sourceRid} "
                 + $"command={command} endpoint={admission.AdvertisedEndpoint} "
                 + $"lifecycle={admission.LifecycleGeneration} "
                 + $"revision={admission.DescriptorRevision}");
+        if (publishAdmitted)
+        {
             Publish(MeshMonitorEventKind.PeerAdmitted, peerRid: sourceRid);
             Publish(MeshMonitorEventKind.StateChanged);
         }
@@ -8357,12 +8373,25 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         peer.LastChangedMs = checked((ulong)Environment.TickCount64);
         if (!peer.RoutingId.IsEmpty)
             _peersByRid[peer.RoutingId] = peer;
-        // Remote admission traffic must never reopen this node after its
-        // relocation drain has published Draining.
-        if (_state != MeshNodeState.Draining)
-            _state = MeshNodeState.Ready;
+        SetTopologyStateUnderLock(MeshNodeState.Ready);
         RebuildChannelSelectionPlansUnderLock();
     }
+
+    // Peer admission and peer loss derive the node's topology state, but a
+    // published Draining is owned by the drain (relocation or shutdown, spec
+    // 30 §14 step 1) and is never undone by remote admission traffic,
+    // transport disconnect, liveness expiry or a failed control send.
+    private void SetTopologyStateUnderLock(MeshNodeState next)
+    {
+        if (_state != MeshNodeState.Draining)
+            _state = next;
+    }
+
+    private void SetPeerLossStateUnderLock() =>
+        SetTopologyStateUnderLock(
+            _peersByRid.Count == 0
+                ? MeshNodeState.Started
+                : MeshNodeState.PartialReady);
 
     private void ProcessLiveness(
         RoutingId sourceRid,
@@ -8440,6 +8469,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         DrainTransportDisconnects(now);
         RetryPendingNativeTerminalReplies();
         var peers = RunState(() => _peersByIntent.Values.ToArray());
+        bool? admissionSealed = null;
 
         foreach (var peer in peers)
         {
@@ -8452,6 +8482,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     continue;
                 if (now >= peer.NextAdmissionTimestamp)
                 {
+                    // Spec 30 §14 step 1: after the host's shutdown seal the
+                    // node starts no new peer admission. The reconnect intent
+                    // stays (Core owns the pipe); only the Hello is withheld.
+                    // Already-admitted peers still receive the Draining Update.
+                    admissionSealed ??= _peerAdmissionSealed?.Invoke() == true;
+                    if (admissionSealed.Value)
+                        continue;
                     var shouldSendAdmission = RunState(() =>
                     {
                         if (!_peersByIntent.TryGetValue(peer.Intent, out var current)
@@ -8488,9 +8525,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         _peersByRid.Remove(peer.RoutingId);
                     RebuildChannelSelectionPlansUnderLock();
                     peer.NextAdmissionTimestamp = now;
-                    _state = _peersByRid.Count == 0
-                        ? MeshNodeState.Started
-                        : MeshNodeState.PartialReady;
+                    SetPeerLossStateUnderLock();
                     return true;
                 });
                 if (closed)
@@ -8647,9 +8682,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     _peersByRid.Remove(peer.RoutingId);
                 RebuildChannelSelectionPlansUnderLock();
                 peer.NextAdmissionTimestamp = now;
-                _state = _peersByRid.Count == 0
-                    ? MeshNodeState.Started
-                    : MeshNodeState.PartialReady;
+                SetPeerLossStateUnderLock();
                 return peer.RoutingId;
             });
 
@@ -10968,9 +11001,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     _peersByRid.Remove(peer.RoutingId);
                 RebuildChannelSelectionPlansUnderLock();
                 peer.NextAdmissionTimestamp = Stopwatch.GetTimestamp();
-                _state = _peersByRid.Count == 0
-                    ? MeshNodeState.Started
-                    : MeshNodeState.PartialReady;
+                SetPeerLossStateUnderLock();
                 publishClosed = true;
                 closedRid = peer.RoutingId;
             }
