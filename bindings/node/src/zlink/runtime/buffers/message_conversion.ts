@@ -10,19 +10,29 @@ import {
   type MessageSnapshot
 } from '../messaging/message_snapshot';
 
-function normalizeBufferLike(value: MessageLike, label = 'value'): Buffer {
+function normalizeBufferLike(value: MessageLike, label: string | number = 'value'): Buffer {
   if (Buffer.isBuffer(value)) return value;
   if (value instanceof Uint8Array) {
     return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
   }
   if (typeof value === 'string') return Buffer.from(value);
-  throw new TypeError(`${label} must be Buffer, Uint8Array, or string`);
+  throw new TypeError(`${typeof label === 'number' ? `parts[${label}]` : label} must be Buffer, Uint8Array, or string`);
 }
 
 export function toMessageParts(parts: readonly MessageLike[]): Array<Buffer | MessageSnapshot> {
-  return parts.map((part, index) =>
-    part instanceof Message ? messageToSnapshot(part) : normalizeBufferLike(part, `parts[${index}]`)
-  );
+  let converted: Array<Buffer | MessageSnapshot> | undefined;
+  for (let index = 0; index < parts.length; ++index) {
+    const part = parts[index];
+    const normalized = part instanceof Message
+      ? messageToSnapshot(part) : normalizeBufferLike(part, index);
+    if (converted === undefined && normalized !== part) {
+      converted = parts.slice(0, index) as Buffer[];
+    }
+    converted?.push(normalized);
+  }
+  // Native submit only reads the list and copies Buffer bytes synchronously.
+  // Allocate a replacement list only when an element actually needs conversion.
+  return converted ?? parts as Buffer[];
 }
 
 export function normalizeOperationPayload(parts: MessageLike | readonly MessageLike[]): Buffer | MessageSnapshot | Array<Buffer | MessageSnapshot> {
