@@ -419,6 +419,21 @@ static PyObject *native_parts_owner_to_bytes (native_parts_owner_t *owner, PyObj
     return PyBytes_FromStringAndSize ((const char *) data, (Py_ssize_t) size);
 }
 
+static int init_cloned_message (zlink_msg_t *destination,
+                                zlink_msg_t *source,
+                                int *err)
+{
+    int rc = zlink_msg_init (destination);
+    *err = rc == 0 ? 0 : zlink_errno ();
+    if (rc == 0) {
+        rc = zlink_msg_copy (destination, source);
+        *err = rc == 0 ? 0 : zlink_errno ();
+        if (rc != 0)
+            zlink_msg_close (destination);
+    }
+    return rc;
+}
+
 static PyObject *native_parts_owner_copy_native_to (native_parts_owner_t *owner,
                                                     PyObject *args)
 {
@@ -438,9 +453,7 @@ static PyObject *native_parts_owner_copy_native_to (native_parts_owner_t *owner,
     }
 
     destination = (zlink_msg_t *) (uintptr_t) destination_value;
-    rc = zlink_msg_copy (destination, &owner->parts[index]);
-    if (rc != 0)
-        err = zlink_errno ();
+    rc = init_cloned_message (destination, &owner->parts[index], &err);
     return result_tuple (rc, err);
 }
 
@@ -483,7 +496,7 @@ static PyMethodDef native_parts_owner_methods[] = {
   {"data", (PyCFunction) native_parts_owner_data, METH_O, "Return part memoryview."},
   {"to_bytes", (PyCFunction) native_parts_owner_to_bytes, METH_O, "Return part bytes."},
   {"_copy_native_to", (PyCFunction) native_parts_owner_copy_native_to, METH_VARARGS,
-   "Copy a native received part into initialized internal storage."},
+   "Initialize internal storage with a shared received part."},
   {"close_part", (PyCFunction) native_parts_owner_close_part, METH_O, "Close one part."},
   {"close", (PyCFunction) native_parts_owner_close, METH_NOARGS, "Close all parts."},
   {NULL, NULL, 0, NULL},
@@ -1820,7 +1833,74 @@ static PyObject *py_subscribe_owner (PyObject *self, PyObject *args)
     return Py_BuildValue ("iiNNN", rc, err, routing_obj, topic_obj, owner_obj);
 }
 
+/* Single-message storage operations. No socket call or multipart staging lives
+ * here; Python retains the storage and the existing completion owner. */
+static PyObject *py_msg_init_buffer (PyObject *self, PyObject *args)
+{
+    Py_buffer destination, source;
+    int rc, err;
+    (void) self;
+    if (!PyArg_ParseTuple (args, "w*y*", &destination, &source))
+        return NULL;
+    if (destination.len != sizeof (zlink_msg_t)) {
+        PyBuffer_Release (&source);
+        PyBuffer_Release (&destination);
+        PyErr_SetString (PyExc_ValueError, "invalid native message storage");
+        return NULL;
+    }
+    zlink_msg_t *msg = (zlink_msg_t *) destination.buf;
+    rc = zlink_msg_init_size (msg, (size_t) source.len);
+    err = rc == 0 ? 0 : zlink_errno ();
+    if (rc == 0 && source.len)
+        memcpy (zlink_msg_data (msg), source.buf, (size_t) source.len);
+    PyBuffer_Release (&source);
+    PyBuffer_Release (&destination);
+    return result_tuple (rc, err);
+}
+
+static PyObject *py_msg_clone (PyObject *self, PyObject *args)
+{
+    Py_buffer destination, source;
+    int rc, err;
+    (void) self;
+    if (!PyArg_ParseTuple (args, "w*y*", &destination, &source))
+        return NULL;
+    if (destination.len != sizeof (zlink_msg_t)
+        || source.len != sizeof (zlink_msg_t)) {
+        PyBuffer_Release (&source);
+        PyBuffer_Release (&destination);
+        PyErr_SetString (PyExc_ValueError, "invalid native message storage");
+        return NULL;
+    }
+    zlink_msg_t *msg = (zlink_msg_t *) destination.buf;
+    rc = init_cloned_message (msg, (zlink_msg_t *) source.buf, &err);
+    PyBuffer_Release (&source);
+    PyBuffer_Release (&destination);
+    return result_tuple (rc, err);
+}
+
+static PyObject *py_msg_bytes (PyObject *self, PyObject *arg)
+{
+    Py_buffer source;
+    (void) self;
+    if (PyObject_GetBuffer (arg, &source, PyBUF_SIMPLE) != 0)
+        return NULL;
+    if (source.len != sizeof (zlink_msg_t)) {
+        PyBuffer_Release (&source);
+        PyErr_SetString (PyExc_ValueError, "invalid native message storage");
+        return NULL;
+    }
+    zlink_msg_t *msg = (zlink_msg_t *) source.buf;
+    PyObject *result = PyBytes_FromStringAndSize (
+      zlink_msg_data (msg), (Py_ssize_t) zlink_msg_size (msg));
+    PyBuffer_Release (&source);
+    return result;
+}
+
 static PyMethodDef zlink_native_methods[] = {
+  {"msg_init_buffer", py_msg_init_buffer, METH_VARARGS, "Initialize one copied message."},
+  {"msg_clone", py_msg_clone, METH_VARARGS, "Initialize one shared native clone."},
+  {"msg_bytes", py_msg_bytes, METH_O, "Copy one message into Python bytes."},
   {"socket_send_op", py_socket_send_op, METH_O, "Create a native simple socket send builder."},
   {"routed_send_op", py_routed_send_op, METH_VARARGS,
    "Create a native routed socket send builder."},

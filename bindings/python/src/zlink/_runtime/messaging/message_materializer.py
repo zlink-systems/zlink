@@ -69,12 +69,8 @@ class ReceivedMessage:
             return None
 
         native = ZlinkMsg()
-        rc = lib().zlink_msg_init(ctypes.byref(native))
-        if rc != 0:
-            _raise_result_error(ConfigError, ConfigResult, rc, lib().zlink_errno())
         rc, native_errno = copy_native_to(self._index, ctypes.addressof(native))
         if rc != 0:
-            lib().zlink_msg_close(ctypes.byref(native))
             _raise_result_error(ConfigError, ConfigResult, rc, native_errno)
         return native
 
