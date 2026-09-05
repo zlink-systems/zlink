@@ -1,0 +1,16 @@
+역할: zlink Rust 바인딩 hot-path 개선 pass 1 담당(gpt-6-astra). 작업 트리: /home/hep7hep7/project/zlink-wt-rust-perf (detached @ main; core/build·core/build-dev symlink — core/** 아래 cmake/build/clean 금지, 라이브러리 `core/build/lib/libzlink.so.0.17.0`). 수정 범위 bindings/rust/** 만(공개 API 시그니처·ownership·error contract·측정 의미 유지; spec·doc·core·다른 binding 금지; 러너 scheduler/drain/fairness 변경 금지 — 러너 버그는 고치되 별도 항목). git commit/push/reset/checkout/stash 금지. cargo는 `CARGO_TARGET_DIR=/home/hep7hep7/project/zlink-work/c016/rust-target-perf1` `-j3`; 공식 테스트 `bindings/rust/tests/run_tests.sh`(러너가 Core 재빌드를 시도하면 중단하고 BLOCKERS). 진행 로그 /home/hep7hep7/project/zlink-work/c016/rust-perf-pass1-progress.md 한 줄씩 append(3분마다 한 줄 이상), 종료 시 `EXIT:<code>`. 요약 /home/hep7hep7/project/zlink-work/c016/rust-perf-pass1-summary.md (원인 표, 변경, before/after 표, gate, spec gap 여부, BLOCKERS). after report는 /home/hep7hep7/project/zlink-work/c016/reports/ 로 복사. **측정 규칙: 벤치·프로파일은 `uptime` 1분 load ≤ 3에서만(다른 측정과 겹치지 않게), 진행 로그에 load 기록.**
+
+배경: 계획서 `doc/perf/perf/bindings-0.17.0/bindings-library-performance-improvement-plan-core-0.17.0.ko.md` §7.4-9~11, 가이드 `doc/perf/BINDINGS_OPTIMIZATION_GUIDE.ko.md`(§2, §3, §4 기각 목록 금지). 참고 요약(같은 계획의 앞선 언어): `doc/plan/c016-worklog/{cpp-perf-pass1,cpp-perf-pass2,dotnet-perf-pass1,java-perf-pass1b,go-perf-pass1}-summary.md` — 공통 패턴: 즉시 성공 SEND에도 완료 등록/할당, 백프레셔마다 owner 리소스 생성, 수신 wrapper 재할당, 공개 wrapper 이동 비용. 사용자 원칙: 규칙 단순·중복 없음·제어 한 곳·POSDDD. Rust 관련 이력: `bindings/rust` 0.17.0 wait-token 포트(`85eb9425a1`), 리뷰(`9f2342cf27`: no spin, lazy token registration), REQUEST 포트(`9728a0e081`), typed result 수정(`bd84afc447`).
+Rust paired before(C 직후 Rust, multi tcp, 100 clients, 5초, 1 run, 2026-09-05 19:28~19:31, Core `a40cb46335`; C `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260905_19{28..31}*_p1rust.txt`, Rust `bindings/rust/perf/results/multi/report/` 같은 시각; 처리량 Rust/C):
+- DEALER_DEALER: 64B 43.6%(494.7k vs 1134.4k), 256B 46.7%, 1024B 47.8%, 4096B 76.7%, 64K 100.1% → 63.0%(목표 95%, 최소 85%).
+- DEALER_ROUTER_REQREP: 67.8%(108.6k vs 160.1k ops/s), 63.5%, 70.0%, 65.8%, 62.4% → 65.9%(목표 85%).
+- ROUTER_ROUTER_REQREP: 67.3%, 66.0%, 66.1%, 69.3%, 72.3% → 68.2%(목표 85%).
+- PUBSUB: 67.7%, 71.1%, 84.6%, 87.0%, 105.4% → 83.2%(목표 95%).
+작은 메시지 고정 비용(DD 44~48%, PUBSUB 68~71%)이 주 과제. 코드: `bindings/rust/src/runtime/messaging/operations/{send_ops.rs,routed_async.rs}`, `src/internal/completion_owner.rs`, `src/runtime/native/ffi.rs`, `src/runtime/eventing/poller.rs`, 러너 `bindings/rust/perf/multi/**`.
+
+할 일:
+1. 비용 위치 확인(추측 금지): `perf`가 없으면 valgrind callgrind(`~/.local/bin/valgrid`가 아니라 `~/.local/bin/valgrind --tool=callgrind`)로 DD 64B·DR_REQREP 64B client(10 clients, 1초)를 C 러너와 같은 조건으로 프로파일해 메시지/요청당 Ir·할당(`Box`/`Vec`/`Arc`/`String`)·FFI 호출 수·복사를 C 대비 표로. binding vs 러너 계층을 가른다.
+2. 가이드 §2로 판정하고 수정(즉시 성공 경로 무할당·무락, 거절 경로 O(1), 완료 진행 제어점 하나, 수신 direct·wrapper 재사용). 기각 목록(§4) 금지.
+3. after 측정(규칙 준수): `CARGO_TARGET_DIR=... bash bindings/rust/perf/run_benchmarks_multi.sh --pattern DEALER_DEALER,DEALER_ROUTER_REQREP,ROUTER_ROUTER_REQREP,PUBSUB --transports tcp --msg-sizes 64,256,1024,4096,65536 --clients 100 --duration 5 --runs 1`, before/C 대비 표.
+4. Gate: `bindings/rust/tests/run_tests.sh` 전체(samples 포함), 관련 테스트 5회, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, `git diff --check`, 공개 API 불변, spec gap 여부.
+메모리 11 GB, 다른 job 동시: `-j3`. 상한 90분.

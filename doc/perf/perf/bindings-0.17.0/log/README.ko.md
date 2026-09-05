@@ -11,3 +11,4 @@
 - [2026-09-05-node-multi-tcp-before.ko.md](2026-09-05-node-multi-tcp-before.ko.md) — Node Multi tcp 4 pattern paired before(27.6/18.7/17.9/28.6%)
 - [2026-09-05-go-multi-tcp-before.ko.md](2026-09-05-go-multi-tcp-before.ko.md) — Go Multi tcp 4 pattern paired before(31.5/2.9/2.8/47.3%)
 - [2026-09-05-rust-multi-tcp-before.ko.md](2026-09-05-rust-multi-tcp-before.ko.md) — Rust Multi tcp 4 pattern paired before(63.0/65.9/68.2/83.2%)
+- [2026-09-05-python-multi-tcp-before.ko.md](2026-09-05-python-multi-tcp-before.ko.md) — Python Multi tcp 4 pattern paired before(6.6/14.2/15.4/26.2%)

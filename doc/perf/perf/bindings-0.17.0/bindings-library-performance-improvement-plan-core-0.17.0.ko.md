@@ -1212,7 +1212,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/python/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미측정`
+- Multi 상태: `미달` — `tcp` 4 pattern before 19:32~19:38 KST(Core `a40cb46335`): DD 6.6%(15k msg/s 고정), DR/RR REQREP 14.2/15.4%, PUBSUB 26.2%; 자체 pass 1 job(astra) 진행 중; [log](log/2026-09-05-python-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.7.1 Single suite
@@ -1266,12 +1266,12 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 미달(1.6%) | 미달(1.7%) | 미달(2.2%) | 미달(4.8%) | 미달(22.6%) | 미측정 | before; aggregate 6.6%(목표 60%), 15k msg/s 고정(메시지당 ~65 µs Python 고정 비용); 처리량 Py/C 15.2/922.3, 15.4/889.2, 15.3/688.4, 15.2/319.2, 13.4/59.2 Kmsg/s; `p1python`; [log](log/2026-09-05-python-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미달(7.8%) | 미달(7.6%) | 미달(8.2%) | 미달(9.6%) | 미달(37.9%) | 미측정 | before; aggregate 14.2%(목표 60%), latency 5.99x; 처리량 Py/C 13.2/169.4, 13.0/170.3, 12.9/157.8, 12.5/130.6, 9.4/24.8 Kops/s; [log](log/2026-09-05-python-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미달(8.7%) | 미달(8.7%) | 미달(8.9%) | 미달(9.9%) | 미달(40.7%) | 미측정 | before; aggregate 15.4%(목표 60%), latency 6.80x; 처리량 Py/C 11.9/137.1, 11.8/136.1, 11.4/128.4, 11.3/113.7, 8.7/21.3 Kops/s; [log](log/2026-09-05-python-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_PUBSUB` | 미달(21.7%) | 미달(17.2%) | 미달(13.7%) | 미달(18.0%) | 미달(60.5%) | 미측정 | before; aggregate 26.2%(목표 60%), latency 1.09x; 처리량 Py/C 141.1/651.6, 134.6/780.4, 123.9/903.0, 124.7/691.1, 43.4/71.6 Kmsg/s; [log](log/2026-09-05-python-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
