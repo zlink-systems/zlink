@@ -1125,7 +1125,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/rust/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미측정`
+- Multi 상태: `미달` — `tcp` 4 pattern before 19:28~19:31 KST(Core `a40cb46335`): DD 63.0%, DR/RR REQREP 65.9/68.2%, PUBSUB 83.2%; 자체 pass 1 job(astra) 진행 중; [log](log/2026-09-05-rust-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.6.1 Single suite
@@ -1179,12 +1179,12 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 미달(43.6%) | 미달(46.7%) | 미달(47.8%) | 미달(76.7%) | 미달(100.1%) | 미측정 | before; aggregate 63.0%(목표 95%), latency 34x(큐); 처리량 Rust/C 494.7/1134.4, 498.5/1066.7, 411.0/859.7, 205.3/267.8, 56.6/56.5 Kmsg/s; `p1rust`; [log](log/2026-09-05-rust-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미달(67.8%) | 미달(63.5%) | 미달(70.0%) | 미달(65.8%) | 미달(62.4%) | 미측정 | before; aggregate 65.9%(목표 85%), latency 1.43x; 처리량 Rust/C 108.6/160.1, 101.9/160.5, 104.7/149.6, 92.8/140.9, 14.7/23.5 Kops/s; [log](log/2026-09-05-rust-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미달(67.3%) | 미달(66.0%) | 미달(66.1%) | 미달(69.3%) | 미달(72.3%) | 미측정 | before; aggregate 68.2%(목표 85%), latency 1.54x; 처리량 Rust/C 97.4/144.8, 90.2/136.7, 89.2/135.0, 81.0/116.8, 15.9/22.1 Kops/s; [log](log/2026-09-05-rust-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_PUBSUB` | 미달(67.7%) | 미달(71.1%) | 미달(84.6%) | 미달(87.0%) | 미달(105.4%) | 미측정 | before; aggregate 83.2%(목표 95%), latency 0.96x; 처리량 Rust/C 443.9/655.3, 588.6/828.3, 719.7/850.3, 584.1/671.2, 67.5/64.0 Kmsg/s; [log](log/2026-09-05-rust-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
