@@ -13,17 +13,22 @@ import {
   encodeStatefulReply
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
 
-test('command 48 transport retry preserves its operation ID and close fence', async () => {
+test('command 48 replays a lost reply with the same operation ID inside the original deadline', async () => {
   const requests: Buffer[] = [];
+  const attemptTimeouts: number[] = [];
+  const deadlineMs = Date.now() + 500;
   const raw = {
     setServiceIngress() {},
     async requestService(
       _targetNodeRid: string,
-      parts: readonly Uint8Array[]
+      parts: readonly Uint8Array[],
+      timeoutMs: number
     ): Promise<readonly Buffer[]> {
       const head = Buffer.from(parts[0]!);
       requests.push(head);
+      attemptTimeouts.push(timeoutMs);
       if (requests.length === 1) {
+        await new Promise(resolve => setTimeout(resolve, 40));
         throw new Error('simulated reply-route disconnect');
       }
       const decoded = decodeStatefulHeader(head);
@@ -53,21 +58,31 @@ test('command 48 transport retry preserves its operation ID and close fence', as
         authorityOwnerGeneration: 29n,
         expectedStoreVersion: 'version-31'
       },
-      deadlineUnixMs: BigInt(Date.now() + 5_000)
+      deadlineUnixMs: BigInt(deadlineMs)
     },
-    1_000
+    500
   );
 
   assert.equal(result.terminalResult, RequestResult.Ok);
   assert.deepEqual(result.tail, { kind: 'userSpotClose', closed: true });
   assert.equal(requests.length, 2);
   assert.deepEqual(requests[1], requests[0]);
+  const first = decodeStatefulHeader(requests[0]!);
+  const second = decodeStatefulHeader(requests[1]!);
+  assert.equal(first.kind, 'userSpotClose');
+  assert.equal(second.kind, 'userSpotClose');
+  assert.deepEqual(second.operation, first.operation);
+  assert(attemptTimeouts[0]! > 400);
+  assert(attemptTimeouts[1]! > 0 && attemptTimeouts[1]! < attemptTimeouts[0]!);
+  assert(Date.now() < deadlineMs);
   runtime.close();
 });
 
-test('command 48 reserves deadline for terminal replay after a transport timeout', async () => {
+test('command 48 gives a healthy first attempt the whole remaining deadline', async () => {
   const requests: Buffer[] = [];
   const attemptTimeouts: number[] = [];
+  const healthyDurationMs = 180;
+  const operationTimeoutMs = 300;
   const raw = {
     setServiceIngress() {},
     async requestService(
@@ -78,10 +93,11 @@ test('command 48 reserves deadline for terminal replay after a transport timeout
       const head = Buffer.from(parts[0]!);
       requests.push(head);
       attemptTimeouts.push(timeoutMs);
-      if (requests.length === 1) {
+      if (timeoutMs <= healthyDurationMs) {
         await new Promise(resolve => setTimeout(resolve, timeoutMs));
-        throw new Error('simulated reply timeout');
+        throw new Error('healthy operation was cut short');
       }
+      await new Promise(resolve => setTimeout(resolve, healthyDurationMs));
       const decoded = decodeStatefulHeader(head);
       assert.equal(decoded.kind, 'userSpotClose');
       return [
@@ -110,16 +126,16 @@ test('command 48 reserves deadline for terminal replay after a transport timeout
           authorityOwnerGeneration: 29n,
           expectedStoreVersion: 'version-31'
         },
-        deadlineUnixMs: BigInt(Date.now() + 500)
+        deadlineUnixMs: BigInt(Date.now() + operationTimeoutMs)
       },
-      500
+      operationTimeoutMs
     );
 
     assert.equal(result.terminalResult, RequestResult.Ok);
     assert.deepEqual(result.tail, { kind: 'userSpotClose', closed: true });
-    assert.equal(requests.length, 2);
-    assert.deepEqual(requests[1], requests[0]);
-    assert(attemptTimeouts[0]! > 0 && attemptTimeouts[0]! < 500);
+    assert.equal(requests.length, 1);
+    assert(attemptTimeouts[0]! > healthyDurationMs);
+    assert(attemptTimeouts[0]! > operationTimeoutMs / 2);
   } finally {
     runtime.close();
   }
