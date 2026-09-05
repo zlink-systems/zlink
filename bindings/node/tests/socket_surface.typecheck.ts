@@ -8,6 +8,9 @@ const dealer = zlink.createDealerSocket(ctx);
 const router = zlink.createRouterSocket(ctx);
 const stream = zlink.createStreamSocket(ctx);
 const monitor = pair.monitorOpen();
+const monitorSource: zlink.SocketMonitor = monitor;
+const pollableMonitor: zlink.Pollable = monitorSource;
+void pollableMonitor;
 const poller = zlink.createPoller();
 const events = zlink.createPollEvents(8);
 const timer = zlink.createTimer();
@@ -54,9 +57,14 @@ void packetReceived;
 
 monitor.recv(zlink.RecvFlags.DontWait);
 monitor.status();
+poller.add(monitor, [zlink.PollEventFlag.PollIn], 3);
+poller.modify(monitor, [zlink.PollEventFlag.PollIn]);
+poller.remove(monitor);
 poller.add(pair, [zlink.PollEventFlag.PollCompletion], 1);
 poller.add(timer, 2);
 poller.wait(events, 0);
+const readySource: zlink.Pollable = events.source(0);
+void readySource;
 
 // @ts-expect-error send has no timeout stage
 pair.send().message('legacy').timeout(1);

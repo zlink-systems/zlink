@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 import type { PollEventFlagValue } from '../../contracts/sockets/socket_constants';
+import type { Pollable } from '../../contracts/eventing/poller';
 import { closeCall } from '../errors/native_errors';
 import { NativeHandle } from '../handles/native_handle';
 import { requireNative } from '../native/native';
@@ -9,6 +10,7 @@ export class PollEvents extends NativeHandle {
   private _readyCount = 0;
   private _nativeReadyCount = 0;
   private _synthetic: ReadonlyArray<{
+    source: Pollable;
     sourceKind: number;
     slot: number;
     revents: number;
@@ -25,6 +27,11 @@ export class PollEvents extends NativeHandle {
   }
 
   get readyCount(): number { return this._readyCount; }
+
+  source(index: number): Pollable {
+    this.checkReadyIndex(index);
+    return this._synthetic[index].source;
+  }
 
   sourceKind(index: number): number {
     this.checkReadyIndex(index);
@@ -76,6 +83,7 @@ export class PollEvents extends NativeHandle {
   markCombined(
     nativeCount: number,
     entries: ReadonlyArray<{
+      source: Pollable;
       sourceKind: number;
       slot: number;
       revents: number;

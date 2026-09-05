@@ -465,6 +465,11 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
   공개되지 않는다.
 - `createPoller()`, `createTimer()`, `createTimer(spot)`은 eventing 리소스를
   생성한다.
+- `Pollable`은 `BaseSocket | SocketMonitor | Timer | number`이며 `Poller.add/modify/remove`는
+  `SocketMonitor` overload를 제공한다(공통 spec "`Poller`의 monitor source"). socket monitor에는
+  `PollEventFlag.PollIn`만 유효하고 다른 readiness mask는 typed `ConfigResult.InvalidArgument`로
+  거절한다. ready 뒤 `monitor.recv(RecvFlags.DontWait)`로 drain하며 `PollEvents.source(index)`가
+  등록한 monitor 객체를 돌려준다.
 - 버전, capability 조회, strerror, proxy, sleep, multipart cleanup 헬퍼 같은 패키지
   루트 팩토리/헬퍼 함수는 공개 계약 함수다. 이 함수들 뒤의 네이티브 호출은 런타임
   모듈에 머문다.

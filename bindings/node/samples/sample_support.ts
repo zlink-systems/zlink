@@ -29,16 +29,25 @@ async function waitUntil(predicate, timeoutMs: number, message: string): Promise
 }
 
 async function waitForConnectionReady(monitor, zlink, timeoutMs = 5000) {
+  const poller = zlink.createPoller();
+  const events = zlink.createPollEvents(1);
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const event = monitor.recv(zlink.RecvFlags.DontWait);
-    if (event && event.event === zlink.MonitorEventType.ConnectionReady) {
-      return event;
+  poller.add(monitor, [zlink.PollEventFlag.PollIn], 1);
+  try {
+    while (Date.now() < deadline) {
+      const remaining = Math.max(1, deadline - Date.now());
+      if (poller.wait(events, remaining) === 0) continue;
+      for (;;) {
+        const event = monitor.recv(zlink.RecvFlags.DontWait);
+        if (!event) break;
+        if (event.event === zlink.MonitorEventType.ConnectionReady) {
+          return event;
+        }
+      }
     }
-    if (monitor.status().isReady()) {
-      return null;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1));
+  } finally {
+    events.close();
+    poller.close();
   }
   throw new Error('connection-ready monitor event timed out');
 }
