@@ -116,6 +116,6 @@ framework 영향: 0.16.0의 "nonzero REQUEST ID = admission 전 pending 수락" 
 | 1 | D-086 admission 지연 | Core 버그(accepted pair ID 재사용) 수정, tcp 4~7 ms; 2 s 기대치 조정 불필요 (D-B94) | `7ffb8e55d9` |
 | 2 | D-087 Java 누수 | 콘텐츠 해시 캐시 (D-B93) | `37af8073a7` |
 
-패키지 재빌드 대상 Core 커밋: `7ffb8e55d9`, `1c69086a4a`, `0c39ed2e52`. Release+LTO hotpath_gate는 `0c39ed2e52` 기준으로 실행해 결과를 D-B104에 추가한다.
+패키지 재빌드 대상 Core 커밋: `7ffb8e55d9`, `1c69086a4a`, `0c39ed2e52`. Release+LTO hotpath_gate PASS(`0c39ed2e52`, 11:00 KST, D-B104).
 사용자 결정이 필요한 spec gap: (a) inproc peer close 시 CLOSED 이벤트 요구 여부(D-B102), (b) 즉시 `disconnect→connect` 시 old/new overlap 허용 여부·request가 쓴 connection_id 공개 여부(D-B104), (c) Java Poller monitor 등록은 공통 spec 개정(`c6d491e3e8`)으로 해소.
 bindings parity(사용자 지시 "모든 bindings 동일"): spec `c6d491e3e8`; Rust `NOT_ADMITTED` 수정 `bd84afc447`; 레이아웃 테스트 `90ad19f0e5`; Poller monitor source — Node `31139dd137`, Java `820b878567`, Rust `ade06d5514`, Python/Go `3c64aeb481` (D-B98~D-B103).
