@@ -9,6 +9,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <syncstream>
 #include <thread>
 #include <utility>
 
@@ -83,7 +84,8 @@ class route_readiness_service_t final : public hosted_service_t
     {
         if (!snapshot.is_ready || state->reported.exchange (true, std::memory_order_acq_rel))
             return;
-        std::cout << "deliverydispatch-ready kind=route node=" << node_name << std::endl;
+        std::osyncstream (std::cout)
+          << "deliverydispatch-ready kind=route node=" << node_name << std::endl;
     }
 
     std::string _node_name;
@@ -170,8 +172,9 @@ class actor_route_readiness_service_t final : public hosted_service_t
           });
         if (!target_ready || state->reported.exchange (true, std::memory_order_acq_rel))
             return;
-        std::cout << "deliverydispatch-ready kind=actor-route node=dispatch target="
-                  << target_node_name << std::endl;
+        std::osyncstream (std::cout)
+          << "deliverydispatch-ready kind=actor-route node=dispatch target="
+          << target_node_name << std::endl;
     }
 
     std::string _mesh_name;

@@ -1392,6 +1392,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30)
 
   add_zlink_framework_test(
+    test_cpp_framework_deliverydispatch_readiness
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_deliverydispatch_readiness.cpp
+    "framework-unit;framework-regression")
+  add_zlink_framework_test(
     test_cpp_framework_app_host
     tests/Zlink.Framework.UnitTests/test_cpp_framework_app_host.cpp
     "framework-unit;framework-host;framework-config;framework-http;framework-http-e2e")
