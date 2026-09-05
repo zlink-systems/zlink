@@ -3908,12 +3908,14 @@ void zlink::pipe_t::account_inbound_frame (
     const bool lwm_reached = lwm > 0 && credit_delta >= lwm;
     bool waiter_lwm_reached = false;
     bool blocked_writer_drained = false;
+    bool writer_waiting = false;
     pipe_t *const peer = get_peer ();
-    if (!lwm_reached && credit_delta > 0 && peer) {
-        bool writer_waiting =
+    if (credit_delta > 0 && peer) {
+        writer_waiting =
           peer->_waiting_for_byte_credit.load (std::memory_order_acquire);
-        if (!writer_waiting && prefetched_batch_exhausted_) {
-            // Close the sub-LWM drain race against the writer's matching
+        if (!writer_waiting
+            && (lwm_reached || prefetched_batch_exhausted_)) {
+            // Close the credit-boundary race against the writer's matching
             // waiter-before-credit fence. Either this second load observes
             // the waiter or the writer's credit recheck observes our update.
             std::atomic_thread_fence (std::memory_order_seq_cst);
@@ -3953,8 +3955,12 @@ void zlink::pipe_t::account_inbound_frame (
       && (lwm_reached || waiter_lwm_reached || blocked_writer_drained);
     if (credit_boundary) {
         _last_credit_bytes_read = _bytes_read;
-        send_activate_write (peer, _in_generation, _msgs_read,
-                             _bytes_read);
+        // Active writers sample published credit when their cached window
+        // fills. Only a writer that parked for credit needs an owner-thread
+        // activation; periodic credit snapshots must not schedule I/O work.
+        if (writer_waiting)
+            send_activate_write (peer, _in_generation, _msgs_read,
+                                 _bytes_read);
     }
     if (!_registry_accounting && credit_boundary)
         get_ctx ()->_physical_queue_registry.refresh_application_hwm_if_drained (
