@@ -1109,4 +1109,4 @@ spec(`socket/README.ko.md:151,159-165`, `07-router.ko.md:153`)은 종료 확인 
 수정: count-1은 기존 매핑이 있어도 새 pair ID를 배정(매핑 교체; 이전 pipe release는 ID 일치 시에만 삭제), count-2(2-lane)는 기존 매핑 재사용. 공개 API/ABI 불변, hot path 아님.
 결과: tcp 4~7 ms(p95 6 ms, reconnect 10/100/1000 ms × 20회), inproc 0 ms. 회귀 테스트 `test_ctx_term_fixed_rid_handover`(integration;serial, tcp p95 < 200 ms assert).
 gate(worktree Release+LTO): ctest 143/143, 신규 5/5, single-lane 29/29 ×2, hotpath_gate 0.9952/0.9962/1.0005/0.9988 PASS; main dev 트리에서 신규+관련 4/4, 신규 3회 반복 green.
-**A용 한 줄: Core 버그 → 수정 커밋(아래 해시). framework 2 s 기대치 조정 불필요; A는 로컬 Core/binding 패키지 재빌드 후 handover 테스트 재실행.**
+**A용 한 줄: Core 버그 → 수정 커밋 `7ffb8e55d9`. framework 2 s 기대치 조정 불필요; A는 로컬 Core/binding 패키지 재빌드 후 handover 테스트 재실행.**
