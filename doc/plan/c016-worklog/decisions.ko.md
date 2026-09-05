@@ -1350,3 +1350,9 @@ after(1-run, load ≤1.9): DD 64B 47.4%·256B 56.9%·1024B 58.2%·4096B 96.5%·6
 6. **java M6A/TransportIdentity fixture의 retry 대기**: 런타임이 CLOSED를 replace 자격과 동시에 게시하므로 불필요 → 제거(리팩터, 단언 유지).
 7. **cpp `common_e2e_inventory` 278**: 결과에 따라 — feature-map이 요구하는 common e2e scenario를 cpp가 실제로 구현하지 않았으면 구현(A), inventory 파서/맵 drift면 gate 수정(B). 별도 조사 job.
 - **D-098 item 8(2026-09-06, 승인 B):** java raw mesh `markPeerIntentsActive`가 늦은 READY(endpoint/RID 일치)로 이미 `closedPeerIntents`에 게시된 terminal intent를 다시 활성화한다 → 종료는 terminal: closed intent는 READY로 재활성화하지 않는다(새 intent만 활성화). 기존 fixture retry loop가 이를 가렸다(item 6 제거로 노출). 새 상태·generation 없음, 규칙 2→1.
+
+## D-099 (2026-09-06 08:40, 머신 A) 재검증 결과 — B의 Core `bf28780d51`(STREAM fragment drain) 이후 STREAM 관련 red 3건, 원인 조사 중
+
+- pull 뒤 rebuild13(Core 083588b4…)으로 4언어 전체 재검증: cpp unit 43/43·샘플 7/7, java 7+kotlin 7, dotnet 7 + SampleRegression + unit main 통과. **red**: node ZoneWorld gateway 프로세스가 `ConfigError: disconnect_rid failed: No such file or directory`(706/errno 2)를 `RawStreamSessionService.deliver`에서 미처리 예외로 던져 종료(node framework 결함: 이미 없는 세션 close는 완료로 처리해야 함 → job); dotnet ZoneWorld 2회차 ZW-A1 "target zone admission completed before JoinWorldRes"·G3; node contract `stream-actor-bind-replay` "every attempt uses the whole remaining original deadline" 간헐(새 Core 1/2 pass).
+- 세 건 모두 STREAM 경로이고 이전 Core(gate12)에서는 green → `bf28780d51`이 STREAM 전달 의미(패킷 간 순서·readiness·drain 중 공정성/command 진행)를 바꿨는지 Core job(worktree a, xhigh)이 공개 C-API 재현으로 판정 중. 개선(입력 잔류 방지)은 유지하고 계약을 복원하는 방향, 불가하면 revert.
+- **B용 한 줄: `bf28780d51` 이후 dotnet ZoneWorld A1(STREAM reply가 admission 알림에 추월당함)·node stream-actor-bind-replay 간헐이 새로 나타났다. 결과가 나올 때까지 STREAM drain 경로 추가 변경은 보류 요청.**

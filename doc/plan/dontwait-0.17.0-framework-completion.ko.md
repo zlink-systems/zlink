@@ -184,3 +184,9 @@
 - [x] cpp M6A abort 원인 = **Core 메모리 안전성 결함(B)**: PUB/XPUB에서 `attach_pipe`가 이미 종료 완료된 pipe에 `dist_t::attach` 없이 조기 반환(_array_index=-1)하는데 `pipe_terminated`는 `dist_t::pipe_terminated`를 호출해 `array_t::erase(-1)`로 버퍼 앞 8바이트 OOB write(ASan 스택 확보, 공개 C-API 재현 `pub_churn.cpp` 55/200 process 재현)
 - [x] Core `f57c73b040`: dist_t/lb_t::pipe_terminated가 fq_t처럼 membership을 확인(attach/terminate 규칙 2→1); 공개 API 회귀 test_pubsub_churn_dist(ASan 0 error, 부하 10/10), 전체 ctest 181/181
 - [x] **§G 마감(2026-09-06 07:24)**: rebuild12(Core 23673ae4… = `f57c73b040`) → cpp unit ×3 43/43(M6A abort 미재발) → gate12 전부 green: cpp unit+7샘플, java 7+kotlin 7(host role 전부 Stopped/None), node 7 + npm test 1604/0, dotnet 7 + aggregate + ZoneWorld×2, dotnet unit 1978/0 + join 16/0 + SampleRegression 157/0, java core/contract 0 fail → cross-language E2E(cpp all-stage·node smoke 19·java-cross) passed. 최종 HEAD = 이 커밋(origin/main 동일). 미커밋 잔여 없음(provenance 산출물 제외). 범위 외로 남긴 것: cpp `common_e2e_inventory` 278(공통 e2e 시나리오 구현, 별도 계획), kotlin ZoneWorld B7 1회 실패(미재현·원인 미확정, 예외 상세 손실)
+
+### H. pull 뒤 전체 재검증 (2026-09-06 07:4x~, 사용자 지시)
+- [x] pull: B의 Core `bf28780d51`(STREAM fragment drain) 1건 유입 → rebuild13(Core 083588b4…)
+- [x] green: cpp unit 43/43 + 샘플 7/7, java 7 + kotlin 7, dotnet 7 + aggregate, dotnet SampleRegression 157/0 + unit main 1978/0, java core/contract 0 fail
+- [ ] red(D-099): node ZoneWorld gateway crash(`disconnect_rid` NOT_FOUND를 미처리 예외로 → node framework job), dotnet ZoneWorld 2회차 A1/G3, node contract `stream-actor-bind-replay` 간헐 — Core `bf28780d51` 회귀 여부 조사 job(worktree a, xhigh)
+- [ ] 이후: 원인 수정·커밋 → rebuild14 → gate14 + E2E → §H 마감
