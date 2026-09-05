@@ -145,7 +145,7 @@ public final class ZLinkActorCreationCoordinator
                     return completedResult(found.terminal());
                 }
                 if (System.currentTimeMillis() >= deadline) {
-                    return deadlineFailed("Actor create deadline expired");
+                    return admissionUnavailable("Actor create deadline expired");
                 }
                 return selectTarget(
                         actorType, deadline, excludedTargets)
@@ -186,7 +186,7 @@ public final class ZLinkActorCreationCoordinator
                 + " target=" + target.rid()
                 + " generation=" + target.lifecycleGeneration() : null);
             if (System.currentTimeMillis() >= deadline) {
-                return deadlineFailed(
+                return admissionUnavailable(
                     "Actor placement target is no longer ready");
             }
             return awaitConflict().thenCompose(ignored ->
@@ -796,7 +796,7 @@ public final class ZLinkActorCreationCoordinator
                                 "Actor capacity exceeded"));
                     }
                     if (System.currentTimeMillis() >= deadline) {
-                        return deadlineFailed(
+                        return admissionUnavailable(
                             "No Ready Actor placement target");
                     }
                     return awaitConflict().thenCompose(
@@ -1051,10 +1051,10 @@ public final class ZLinkActorCreationCoordinator
         return CompletableFuture.failedFuture(frameworkFailure(kind, message));
     }
 
-    private static <T> CompletionStage<T> deadlineFailed(String message) {
+    private static <T> CompletionStage<T> admissionUnavailable(String message) {
         return CompletableFuture.failedFuture(
             frameworkFailure(
-                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 message));
     }
 

@@ -1377,11 +1377,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             Duration timeout) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(timeout, "timeout");
-        if (!canRequestCanonicalActorJoin(request)) {
-            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                "canonical actorJoin target is not authority-observed and admitted"));
-        }
         final long correlation = allocateCorrelation();
         final List<byte[]> frames;
         try {
@@ -1411,7 +1406,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
                 "canonical actorJoin request is invalid", invalid));
         }
-        return requestApplication(request.targetNodeRid(), frames, timeout)
+        return requestDurable(request.targetNodeRid(),
+                () -> canRequestCanonicalActorJoin(request) ? frames : null,
+                timeout)
             .thenApply(reply -> decodeCanonicalActorJoinReply(
                 correlation,
                 request,
@@ -2870,75 +2867,43 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         long bindingGeneration,
         boolean active,
         Duration timeout) {
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-            topology == null ? Optional.empty() : topology.peer(actor.nodeRid());
-        long ownerLeaseGeneration =
-            ((ZLinkJavaRawSpotNode) spotNode())
-                .actorAuthorityOwnerLeaseGeneration(actor);
-        if (peer.isEmpty() || ownerLeaseGeneration <= 0) {
-            return CompletableFuture.failedFuture(
-                new ZlinkRequestException(RequestResult.NOT_CONNECTED));
-        }
         if (actor.generation() <= 0
             || bindingGeneration == 0
             || authorityOwnerGeneration <= 0) {
             return CompletableFuture.failedFuture(
-                new IllegalArgumentException(
-                    "remote Actor binding fence is invalid"));
+                new IllegalArgumentException("remote Actor binding fence is invalid"));
         }
         long correlation = allocateCorrelation();
-        byte[] frame = statefulWire.encodeBoundSessionBindHeader(
-            new ZLinkServiceM6BWireCodec.BoundSessionBind(
-                correlation,
-                new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                    actor,
-                    peer.orElseThrow().descriptor()
-                        .lifecycleGeneration(),
-                    authorityOwnerGeneration,
-                    ownerLeaseGeneration),
-                sessionRid,
-                active,
-                bindingGeneration));
-        CompletableFuture<Void> completion = new CompletableFuture<>();
-        ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
-        port.request(
-                requireStarted(),
-                actor.nodeRid(),
-                List.of(frame),
-                timeout)
-            .whenComplete((replyFrames, failure) -> {
-                RequestResult result = requestResult(failure);
-                List<byte[]> replies = replyFrames == null
-                    ? List.of()
-                    : replyFrames;
-                if (!terminal.tryWin(requestTerminalCause(result))) {
-                    return;
+        return requestDurable(actor.nodeRid(), () -> {
+                Optional<ZLinkServiceTopologyRegistry.Peer> peer = topology == null
+                    ? Optional.empty() : topology.peer(actor.nodeRid());
+                long ownerLeaseGeneration = ((ZLinkJavaRawSpotNode) spotNode())
+                    .actorAuthorityOwnerLeaseGeneration(actor);
+                if (peer.isEmpty() || ownerLeaseGeneration <= 0) {
+                    return null;
                 }
-                if (result
-                    != RequestResult.OK) {
-                    completion.completeExceptionally(
-                        new ZlinkRequestException(result));
-                    return;
+                return List.of(statefulWire.encodeBoundSessionBindHeader(
+                    new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                        correlation,
+                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                            actor, peer.orElseThrow().descriptor().lifecycleGeneration(),
+                            authorityOwnerGeneration, ownerLeaseGeneration),
+                        sessionRid, active, bindingGeneration)));
+            }, timeout)
+            .thenAccept(replies -> {
+                if (replies.size() != 1) {
+                    throw new IllegalArgumentException(
+                        "bound session binding reply frame count");
                 }
-                try {
-                    if (replies.size() != 1) {
-                        throw new IllegalArgumentException(
-                            "bound session binding reply frame count");
-                    }
-                    ZLinkServiceM6AWireCodec.Reply reply =
-                        wire.decodeReplyHeader(replies.getFirst());
-                    if (reply.correlation() != correlation
-                        || reply.terminalResult() != 0
-                        || reply.failureCode() != 0) {
-                        throw new IllegalArgumentException(
-                            "bound session binding was rejected");
-                    }
-                    completion.complete(null);
-                } catch (RuntimeException decodeFailure) {
-                    completion.completeExceptionally(decodeFailure);
+                ZLinkServiceM6AWireCodec.Reply reply =
+                    wire.decodeReplyHeader(replies.getFirst());
+                if (reply.correlation() != correlation
+                    || reply.terminalResult() != 0
+                    || reply.failureCode() != 0) {
+                    throw new IllegalArgumentException(
+                        "bound session binding was rejected");
                 }
             });
-        return completion;
     }
 
     @Override
@@ -3446,58 +3411,24 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     operationLow,
                     intent));
         }
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-            topology == null
-                ? Optional.empty()
-                : topology.peer(targetNodeRid);
-        if (peer.isEmpty() || localDescriptor == null
-            || !isReadyPeer(peer.orElseThrow())) {
-            return CompletableFuture.failedFuture(
-                new IllegalStateException(
-                    "remote Actor create target is not connected"));
-        }
-        if (!intent.reservation().targetNodeRid()
-                .equals(targetNodeRid)
-            || intent.reservation().targetNodeGeneration()
-                != peer.orElseThrow().descriptor()
-                    .lifecycleGeneration()) {
-            return CompletableFuture.failedFuture(
-                new IllegalStateException(
-                    "remote Actor create target is not connected"));
-        }
-        ZLinkServiceOperationRegistry.Operation<
-            ZLinkInternalMeshNode.ActorCreateResponse> operation =
-                operations.register(timeout);
-        ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();
-        operation.completion().whenComplete((ignored, failure) ->
-            terminal.tryWin(completionTerminalCause(failure)));
-        long attemptCorrelation = allocateCorrelation();
-        var command = new ZLinkServiceM6BWireCodec.ActorCreate(
-            attemptCorrelation,
-            operationHigh,
-            operationLow,
-            routingId,
-            localDescriptor.lifecycleGeneration(),
-            intent.actorId(),
-            intent.stableType(),
-            intent.reservation(),
-            intent.deadlineUnixMs());
-        requestApplication(
-                targetNodeRid,
-                List.of(statefulWire.encodeActorCreateHeader(command)),
-                timeout)
-            .whenComplete((replyFrames, failure) -> {
-                RequestResult result = requestResult(failure);
-                if (!terminal.tryWin(requestTerminalCause(result))) {
-                    return;
+        long correlation = allocateCorrelation();
+        return requestDurable(targetNodeRid, () -> {
+                Optional<ZLinkServiceTopologyRegistry.Peer> peer = topology == null
+                    ? Optional.empty() : topology.peer(targetNodeRid);
+                if (peer.isEmpty() || localDescriptor == null
+                    || !isReadyPeer(peer.orElseThrow())
+                    || !intent.reservation().targetNodeRid().equals(targetNodeRid)
+                    || intent.reservation().targetNodeGeneration()
+                        != peer.orElseThrow().descriptor().lifecycleGeneration()) {
+                    return null;
                 }
-                completeActorCreate(
-                    operation.id(),
-                    attemptCorrelation,
-                    result,
-                    replyFrames == null ? List.of() : replyFrames);
-            });
-        return operation.completion();
+                var command = new ZLinkServiceM6BWireCodec.ActorCreate(
+                    correlation, operationHigh, operationLow, routingId,
+                    localDescriptor.lifecycleGeneration(), intent.actorId(),
+                    intent.stableType(), intent.reservation(), intent.deadlineUnixMs());
+                return List.of(statefulWire.encodeActorCreateHeader(command));
+            }, timeout)
+            .thenApply(frames -> decodeActorCreate(correlation, frames));
     }
 
     @Override
@@ -3846,18 +3777,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         }
     }
 
-    private void completeActorCreate(
-        UUID operationId,
+    private ZLinkInternalMeshNode.ActorCreateResponse decodeActorCreate(
         long correlation,
-        RequestResult result,
         List<byte[]> frames) {
-        if (result != RequestResult.OK) {
-            operations.completeExceptionally(
-                operationId,
-                new IllegalStateException(
-                    "remote Actor create transport failed: " + result));
-            return;
-        }
         try {
             if (frames.isEmpty() || frames.size() > 2) {
                 throw new ZLinkFrameworkException(
@@ -3890,26 +3812,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                         terminal.creation(),
                         frames.get(1));
             }
-            operations.complete(
-                operationId,
-                new ZLinkInternalMeshNode.ActorCreateResponse(
-                    statefulWire.encodeCreationOperationTerminal(
-                        terminal)));
+            return new ZLinkInternalMeshNode.ActorCreateResponse(
+                statefulWire.encodeCreationOperationTerminal(terminal));
         } catch (ZLinkFrameworkException failure) {
-            operations.completeExceptionally(operationId, failure);
+            throw failure;
         } catch (IllegalArgumentException failure) {
             //  A codec/malformed-wire failure (ZLinkServiceWireException and
             //  friends derive from IllegalArgumentException) means the reply
             //  can't be processed -> ProtocolError
             //  (spec 32-framework-error-model:91-92).
-            operations.completeExceptionally(
-                operationId,
-                new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                    "remote Actor create reply could not be processed",
-                    failure));
-        } catch (RuntimeException failure) {
-            operations.completeExceptionally(operationId, failure);
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "remote Actor create reply could not be processed", failure);
         }
     }
 
@@ -7197,6 +7111,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         List<byte[]> frames) {
         streamTrace(STREAM_TRACE ? "application-send target=" + target : null);
         return port.send(requireStarted(), target, frames);
+    }
+
+    private CompletionStage<List<byte[]>> requestDurable(
+        RoutingId target,
+        Supplier<List<byte[]>> prepare,
+        Duration timeout) {
+        return ZLinkJavaDurableRequest.request(() -> {
+                requireStarted();
+                return prepare.get();
+            }, (frames, remaining) -> requestApplication(target, frames, remaining),
+            timeout);
     }
 
     private CompletionStage<List<byte[]>> requestApplication(

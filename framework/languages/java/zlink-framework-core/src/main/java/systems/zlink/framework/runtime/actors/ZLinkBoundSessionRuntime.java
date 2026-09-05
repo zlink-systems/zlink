@@ -132,12 +132,8 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                 String message =
                     "remote bound session route was not ready before timeout: "
                         + actorId;
-                //  Spec 32-framework-error-model:90 — an operation that does
-                //  not complete within its deadline is DeadlineExceeded, not a
-                //  raw language timeout. The TimeoutException cause is kept
-                //  for diagnostics.
                 return new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
                     message,
                     new TimeoutException(message));
             });
@@ -165,12 +161,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
         RoutingId sessionRid,
         ZLinkBackendActorRef targetActor,
         Duration timeout) {
-        return ZLinkActorRetryScheduler.bindRelayUntilAccepted(
-            timeout,
-            () -> stream.bindActor(sessionRid, targetActor)
-                .submit(Duration.ofSeconds(2)),
-            ignored -> false,
-            ZLinkActorSubmitFaults::retryableBoundSessionBindFailure);
+        return stream.bindActor(sessionRid, targetActor).submit(timeout);
     }
 
     static CompletionStage<Void> ignoreMissingBinding(CompletionStage<Void> stage) {

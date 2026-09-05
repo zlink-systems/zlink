@@ -231,7 +231,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         if (remaining == null) {
             return CompletableFuture.failedFuture(
                 new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
                     "Actor join deadline elapsed before admission"));
         }
         return executeAfterPredecessor(operationId, deadlineNanos);
@@ -244,7 +244,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         if (remaining == null) {
             return CompletableFuture.failedFuture(
                 new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
                     "Actor join deadline elapsed at predecessor gate"));
         }
         traceJoinSent();
@@ -692,29 +692,13 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         Duration remaining = remainingTimeout(deadlineNanos);
         if (remaining == null) {
             return CompletableFuture.failedFuture(new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
                 "Actor join deadline elapsed before canonical admission"));
         }
         byte[] payload = requestPart.toByteArray();
         ZLinkInternalMeshNode.CanonicalActorJoinRequest canonical =
             canonicalActorJoinRequest(sourceActor, authority, target, entryTarget, payload);
         return meshNode.requestCanonicalActorJoin(canonical, remaining)
-            .exceptionallyCompose(failure -> {
-                Throwable cause = unwrap(failure);
-                if (cause instanceof ZlinkRequestException requestFailure
-                    && requestFailure.getResult() == RequestResult.TIMED_OUT
-                    && target.targetNodeGeneration() != 0
-                    && !meshNode.isCanonicalRelocationTargetAdmitted(
-                        target.targetNodeRid(),
-                        target.targetNodeGeneration())) {
-                    return CompletableFuture.failedFuture(
-                        new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.UNAVAILABLE,
-                            "wire Actor join target RouteMesh peer became unavailable",
-                            requestFailure));
-                }
-                return CompletableFuture.failedFuture(cause);
-            })
             .thenCompose(reply -> {
                 Message applicationReply = reply.applicationReply().isEmpty()
                     ? Message.from(new byte[0])
