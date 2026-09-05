@@ -1,0 +1,29 @@
+# Job (STAGE 2 round 2, approved B, model astra): node — STREAM actor bind: one owner of the operation deadline (durable sender), then the replay policy
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3, `framework/AGENTS.md`, the parity diagnosis
+`doc/plan/c016-worklog/diag-exhaustion-kind-parity.md` §Node and the round-1 report `stage2-node-stream-actor-bind-replay-summary.md`
+(BLOCKERS = the approved additional diagnosis). Spec: `04-actor-model.ko.md` sender replay bullets; Core §4 amended in bb730c654f
+(a handover-stranded request completes immediately with `REQUEST_NOT_CONNECTED`; Core implementation in progress — treat
+NOT_CONNECTED as the handover marker). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`,
+`doc/site/**`, other languages; never lower an assertion, widen/split a deadline, or add a second poller/retry table; do not
+commit. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`.
+STOP only for a Core/binding defect.
+
+## Approved design (supervisor)
+Round 1 found two owners of the bind deadline: `bindSession()` reserves a pending operation whose `OperationRegistry.reserve()`
+timer (`operation-registry.ts:88-90`) unconditionally ends it with `OperationTimeoutError` at the original timeout, while the
+durable sender (`service-stateful-runtime.ts:4021-4045`) tracks the same deadline and the admission history. AGENTS §3
+forbids two owners of one decision. Resolution: **the durable sender owns deadline termination**; for durable lifecycle
+operations the registry keeps pending lifetime/identity but does not arm its own timeout (or it delegates termination to the
+sender's typed exhaustion), so the pending settles exactly once with the sender's result (Unavailable when never admitted,
+DeadlineExceeded when an admitted reply never arrived, success on replay). Keep the registry timer for non-durable pending
+kinds that have no sender loop, if any. Reuse the existing create-sender helper (`requestUserSpotOperation` loop) for bind so
+replay uses the same OperationId/encoded header (stable identity), whole remaining deadline per attempt.
+
+## Verify
+3-row matrix contract tests for STREAM actor bind (route absent whole deadline → Unavailable; admitted then reply withheld →
+DeadlineExceeded; NOT_CONNECTED then route ready → replay succeeds within the original deadline), the existing bind/registry
+tests, `npm run typecheck`, lint on touched files, `npm run verify:m6b-runtime`, samples TicTacToe.Ts + SupportChat.Ts 1×.
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-node-stream-actor-bind-replay-2-summary.md`: diff, the four lines, matrix results, BLOCKERS.
