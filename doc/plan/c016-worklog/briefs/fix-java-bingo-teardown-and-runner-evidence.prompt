@@ -1,0 +1,39 @@
+# Job (fix, model astra): java Bingo roles `session-b`/`play-b` end `ZLINK_FRAMEWORK_TERMINATION outcome=FORCE_STOPPED reason=TEARDOWN_FAILED` yet `samples/run_samples.sh` exits 0; plus the ZoneWorld sample merges DEADLINE_EXCEEDED/SHUTTING_DOWN into the "Unavailable" string (hides G4 failures) — fix at the owners
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `framework/languages/java/AGENTS.md`, the spec
+`framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.{ko,en}.md` §14 (HostShutdown → callbacks → local cleanup →
+`Stopped/None`; callback exception = `ForceStopped/TeardownFailed`), `03-spot-actor/08-routing.ko.md` (owner gone → `Unavailable`), and the ZoneWorld
+sample spec `framework/doc/framework/common/sample/zoneworld/README.ko.md` §9 (G4 expects `Unavailable`). Never modify `core/**`, `bindings/**`, any
+`doc/spec/**`, `framework/doc/framework/**`, `doc/site/**`, other languages, `framework/languages/shared_sample/**`; never widen a grace/deadline; do not
+commit. Env: `framework/languages/java`, `TMPDIR=/dev/shm/zlink-tmp-java`, `unset ZLINK_LIBRARY_PATH`, gradle under `flock -w7200 /tmp/zlink-jvm-gate.lock`,
+every sample run under `flock -w7200 /tmp/zlink-samples-gate.lock` (cross-language gate; wait your turn). The installed java binding carries Core
+1c7887c3… (rebuild7, 15:57) — do not rebuild packages.
+
+## Facts
+Supervisor's serialized gate (`/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate7-java-samples.log:181-190`):
+Bingo `session-b.log` and `play-b.log` show `READY=1 TERMINATION=1 STOPPED_NONE=0 FORCE_STOPPED=1`, `outcome=FORCE_STOPPED reason=TEARDOWN_FAILED`;
+`runner-common.sh:157-161` prints "Framework lifecycle evidence is incomplete" but the aggregate still exited 0. The role logs were overwritten by later
+samples — rerun Bingo first (`bash samples/java/Bingo/run_sample.sh` or the aggregate's per-sample entry) and keep the logs. dotnet and node treat any
+role not ending `Stopped/None` as a sample failure (dotnet runners `8e76335988`, node `8159b15752`).
+
+## Fix (single owner each; rule count before/after)
+1. Bingo teardown: find which Spot/Instance cleanup callback throws (or which owned resource fails to release) in session-b/play-b at HostShutdown —
+   framework `ZLinkFrameworkRuntime.closeAllAsync()` / `ZLinkSpotLifecycle` / `ZLinkInstanceSpotActivation.close(HOST_SHUTDOWN)` or the sample's
+   own `onClosing`. Root-cause it (compare with the dotnet fixes B1–B3 in `fix-dotnet-zoneworld-g4-and-teardown-outcomes-summary.md`: shutdown
+   starting relocations, discovery/runtime stop order, authority Delete + shared capacity counter CAS contention — java's repository batches capacity
+   on Delete the same way, so the same contention is a prime suspect). Fix at the owner, regression test at that layer.
+2. Runner: "lifecycle evidence incomplete" must fail the sample and the aggregate (one rule: every host role ends `Stopped/None`, the `client` CLI and
+   an intentional crash role excepted as in dotnet/node). No new reporting path — make the existing evidence check the failure owner.
+3. ZoneWorld sample `samples/java/ZoneWorld/Server/.../zone/actors/PlayerActor.java:222`: only `UNAVAILABLE` maps to the client-visible "Unavailable";
+   `DEADLINE_EXCEEDED`/`SHUTTING_DOWN` keep their own kinds (compare the node/dotnet ZoneWorld servers and the sample spec; the client assertion
+   stays). Then run ZoneWorld and report honestly whether G4 still passes — if G4 now fails with DeadlineExceeded, that is the java durable sender
+   lacking D-093 rule 1 (see `decisions.ko.md` D-093): implement rule 1 in `ZLinkJavaDurableRequest`/mesh node the same way (lifecycle terminal =
+   Location/auto-connect owner removed the target's connection intent and no admitted peer remains → `Unavailable`; physical disconnect alone keeps
+   replaying), with a unit regression, and re-run ZoneWorld.
+
+## Verify
+Bingo ×2 and ZoneWorld ×2 individually (all host roles `Stopped/None`, G4 `Unavailable`), `bash samples/run_samples.sh` once (exit 0), `./gradlew
+--no-daemon :zlink-framework-core:test contractTest` once (0 fail).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-java-bingo-teardown-and-runner-evidence-summary.md`: per item cause file:line, fix, four lines, rule count, results table, BLOCKERS.

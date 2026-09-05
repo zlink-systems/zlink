@@ -1,0 +1,30 @@
+# Job (fix, model astra): cpp `zlink_cpp_framework_mesh_node_vertical_test` aborts at `verify_local_node_submit_bridge()` — `capacity_while_handlers_are_pending.permits_in_use == 0` fails on the rebuild7 Core (1c7887c3…); cpp samples were 7/7 on the 12:54 Core (98f34996…). Root-cause (framework or Core), fix at the owner, then the cpp sample aggregate
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `framework/languages/cpp/AGENTS.md`, the spec on the
+application job queue / permits (`framework/doc/framework/common/spec/server/01-execution/*` application job queue, local node send bridge) and
+`03-spot-actor/03-mesh-node.ko.md` (local node delivery). Never modify any `doc/spec/**`, `bindings/**`, `framework/doc/framework/**`, other languages;
+do not commit. cpp framework work happens in the main tree `framework/languages/cpp`; if the cause is in Core, reproduce and fix it ONLY in the
+detached worktree `/home/hep7/project/zlink-core-a` (`git reset -q --hard && git clean -fdq core && git checkout -q --detach $(git -C /home/hep7/project/zlink rev-parse HEAD)`,
+build `nice -n 10 env JOBS=4 scripts/build-core.sh dev`, never touch main's `core/build-dev`), leave the diff uncommitted and write
+`git add -N . && git diff HEAD > /home/hep7/project/zlink-core-a/core-cpp-permits.patch`. Sample runs under `flock -w7200 /tmp/zlink-samples-gate.lock`.
+
+## Facts
+`bash samples/run_samples.sh` (cpp) first runs the cpp unit ctest; log `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate7-cpp-samples.log:91-117`:
+`test_cpp_framework_mesh_node_vertical.cpp:734: verify_local_node_submit_bridge(): Assertion 'capacity_while_handlers_are_pending.permits_in_use == 0' failed`
+(two LocalRouteProbe handlers entered and gated, queue max 1; the local node submit bridge must not hold application-job permits while handlers
+are pending). The cpp framework and cpp binding sources are unchanged today; the Core changed between the passing run and now: D-090 `40137f1bd0`
+(REQUEST completes NOT_CONNECTED on submit-time pair termination; pipe termination path), D-B112 `349040d3e6` (ws/tls endpoint identity, single inproc
+command-owner acquisition, REJECT closes duplicate pipe), `ccb418b6ee` (explicit removal → NOT_FOUND), `b63f79a3ce` (inproc pending-connect preamble
+staging order). Read those diffs (`git show <hash> -- core/src`) against how `submit_local_node_send` / the local route bridge delivers to handlers and
+where permits are acquired/released (`application_job_queue_t`, mesh_node_host_service_t local delivery). Do not bisect by rebuilding many Cores —
+reason from the diffs and the permit accounting, confirm with one targeted experiment.
+
+## Verify
+`cd framework/languages/cpp && ctest --test-dir build -R zlink_cpp_framework_mesh_node_vertical_test --output-on-failure --repeat until-fail:5`, the whole
+cpp unit ctest, then `bash samples/run_samples.sh` (7 samples + self-checks, exit 0) under the samples lock. If the fix is in Core, also run the Core
+targeted ctest in the worktree (`test_inproc|test_router_reject_duplicate|test_phase3_request_reply_contract`) and report that the cpp test passes
+against the worktree's `core/build-dev/lib` (`LD_LIBRARY_PATH` for the cpp unit binary only).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-cpp-mesh-node-vertical-permits-summary.md`: cause file:line (which Core/framework change altered permit accounting), fix,
+four lines, rule count, results table, BLOCKERS.
