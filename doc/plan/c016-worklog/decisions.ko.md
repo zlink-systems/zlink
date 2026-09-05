@@ -1119,3 +1119,10 @@ Core 결함(binding 아님, 후속 Core job): (1) inproc READY와 DISCONNECTED�
 (2) tcp CLOSED가 READY/DISCONNECTED의 id 대신 새 endpoint id를 씀(`asio_tcp_connecter.cpp:332-338`), inproc은 peer close에서 CLOSED 미방출. spec `06-monitoring.ko.md:67-72`("connection_id는 하나의 물리적 transport 시도를 식별")에 어긋남. 해당 3 케이스는 `@Disabled`로 고정.
 spec gap(사용자 결정 필요, 사용자 지시 "모든 bindings 동일 동작·사용성"에 따라 **추가 권고**): Java `Poller`에 `SocketMonitor` readiness 등록 표면 없음(C++ `poller.add(socket_monitor_t&)`, .NET `ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>)` 있음; Java spec `README.ko.md:175-185, 1088-1092`에 signature 없음). 8 bindings 교차 조사 뒤 spec 개정안과 함께 결정 요청.
 **A용 한 줄: binding 버그 → 수정 커밋 `c9d294c44f`, tcp identity는 spec대로 동작 확인(`MonitorConnectionIdentityContractTest`); inproc/CLOSED identity는 Core 결함 → 후속 D-B9x.**
+
+## D-B96 (2026-09-05 09:45, 머신 B) 작업 3 확정 — reciprocal HANDOVER는 spec대로 동작(패배 lane은 standby 유지, 자동 종료 없음); Core 수정 없음
+공개 C API 계약 테스트 `test_router_reciprocal_handover_lanes`(tcp/inproc × RECONNECT_IVL 10/100/1000 ms): (a) 양쪽이 RID byte 비교로 같은 `A→Z` 방향 선택(`router_admission.cpp:302-335`), 패배 `Z→A`의 Application/Completion 두 lane은
+handover 시 종료되지 않고 active duplicate standby(`:364-379`, `:398-416`, `_standby_pipes`)로 남음 — 관찰 구간(650 ms / 2 s) 동안 양쪽 monitor DISCONNECTED/CLOSED 0회; 명시 해제 시에만 lane당 DISCONNECTED 2회(tcp). spec `socket/README.ko.md:145-165` §4,
+`07-router.ko.md:153-155` §5(standby 보관·재선택)가 이를 명시하므로 계약대로. (b) active direction 양쪽 동일. (c) 패배 방향에 admit된 REQUEST는 자기 timeout으로 정확히 1회 `REQUEST_TIMED_OUT`(pair/generation fence `socket_request_reply_submit_api.cpp:121-180`), 재전송은 승자 방향 성공.
+(d) standby가 남아 있는 상태에서 제출한 승자 방향 첫 REQUEST 정상 완료. gate: 5/5 반복, tcp/100 ms 20/20, integration 92/92(worktree), main dev 트리 3/3.
+**A용 한 줄: spec대로 동작 확인 (`test_router_reciprocal_handover_lanes`) — dotnet Mesh의 settlement·re-pin 코드는 Core survivor를 그대로 쓰면 되며, "패배 lane 종료 대기"는 계약이 아니므로 삭제 가능.**
