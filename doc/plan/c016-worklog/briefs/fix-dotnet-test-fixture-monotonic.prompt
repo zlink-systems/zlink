@@ -1,0 +1,11 @@
+# Job (fix, model astra): dotnet unit-test fixtures still measure waits with `DateTime.UtcNow` (e.g. the Canonical actor-join fixture's `ReceiveAsync` 2 s wait — `Canonical_actor_join_malformed_body_returns_protocol_error` timed out once in an extended focused run); D-095 applies to fixtures too — one monotonic time source for every test-side wait/deadline
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/languages/dotnet/AGENTS.md`, `decisions.ko.md` D-095, and
+`doc/plan/c016-worklog/fix-dotnet-monotonic-durations-summary.md` (the runtime audit; the two test helpers already moved to Stopwatch in `3810baab93`). Scope: `framework/languages/dotnet/tests/**`
+only (never `src/**`, `core/**`, `bindings/**`, any `doc/spec/**`, other languages); do not commit. dotnet env block + `flock -w7200 /tmp/zlink-dotnet-gate.lock`.
+
+Audit `DateTime.UtcNow`/`DateTimeOffset.UtcNow` in the test projects: every wait/deadline/elapsed measurement moves to `Stopwatch`/`TimeProvider` (keep the same bounds — never widen);
+timestamps that are *data* under test (wire deadlines, store times, reported fields) stay. Report the per-site table. Verify: the touched test classes, then the unit half
+`--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests'` once and the join half once (0 fail), SampleRegressionTests once.
+
+Deliverable: `doc/plan/c016-worklog/fix-dotnet-test-fixture-monotonic-summary.md` (site table, results, BLOCKERS).
