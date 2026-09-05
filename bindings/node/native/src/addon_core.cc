@@ -686,8 +686,16 @@ napi_value create_recv_message_value (napi_env env,
 
     napi_value parts_array;
     napi_create_array_with_length (env, part_count, &parts_array);
+    // Routing metadata belongs to the received message, not each part.
+    // The JS materializer freezes this shared object before exposing it.
+    napi_value properties = create_message_properties_snapshot (
+      env, &routing_id, NULL, false);
     for (size_t i = 0; i < part_count; ++i) {
-        napi_value part = create_message_snapshot_value (env, &routing_id, &parts[i]);
+        napi_value part = create_message_snapshot_value (env, NULL, &parts[i]);
+        if (!part)
+            return NULL;
+        if (properties)
+            napi_set_named_property (env, part, "properties", properties);
         napi_set_element (env, parts_array, static_cast<uint32_t> (i), part);
     }
 
