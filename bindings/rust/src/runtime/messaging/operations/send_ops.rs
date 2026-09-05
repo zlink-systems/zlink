@@ -12,7 +12,7 @@ use crate::internal::{CompletionEntry, CompletionEntryKind, CompletionOwner, Rou
 use crate::messaging_operations::{
     Empty, MessageParts, PublishOp, PublishOpStorage, SendOp, SendOpStorage,
 };
-use crate::native_errors::{check_submit_rc, submit_error_from_errno};
+use crate::native_errors::{check_submit_rc, submit_error_from_errno, submit_error_from_rc};
 use crate::socket::submit_part_sequence;
 
 pub(crate) fn socket_send_op(
@@ -394,17 +394,17 @@ fn submit_send_attempt(
         }
         return Ok(SendAttempt::Admitted);
     }
-    if rc == SubmitResult::Backpressured as i32 && errno == libc::EAGAIN && completion_id != 0 {
+    if rc == SubmitResult::Backpressured as i32 && completion_id != 0 {
         return Ok(SendAttempt::Waiting(completion_id));
     }
-    if completion_id != 0 || errno == libc::EAGAIN {
+    if completion_id != 0 || rc == SubmitResult::Backpressured as i32 {
         return Err(SendAttemptError {
             error: SubmitError::new(SubmitResult::InternalError, libc::EPROTO),
             live_token: (completion_id != 0).then_some(completion_id),
         });
     }
-    Err(SendAttemptError::without_token(submit_error_from_errno(
-        errno,
+    Err(SendAttemptError::without_token(submit_error_from_rc(
+        rc, errno,
     )))
 }
 

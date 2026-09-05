@@ -11,24 +11,69 @@ pub(crate) fn last_errno() -> i32 {
 pub(crate) fn submit_result_from_errno(err: i32) -> SubmitResult {
     match err {
         0 => SubmitResult::Ok,
-        libc::EAGAIN => SubmitResult::Backpressured,
+        libc::EAGAIN | libc::ETIMEDOUT | libc::ENOBUFS => SubmitResult::Backpressured,
         libc::ENOTCONN | libc::EHOSTUNREACH => SubmitResult::NotConnected,
         libc::ENOENT => SubmitResult::NotFound,
+        libc::EACCES | libc::ECONNREFUSED | libc::EPROTOTYPE => SubmitResult::NotAdmitted,
         libc::ECANCELED | libc::ESHUTDOWN => SubmitResult::Terminated,
         x if x == eterm() => SubmitResult::Terminated,
         libc::EFAULT => SubmitResult::InvalidHandle,
-        libc::EINVAL => SubmitResult::InvalidArgument,
+        libc::EINVAL | libc::EMSGSIZE => SubmitResult::InvalidArgument,
         libc::ENOTSUP => SubmitResult::NotSupported,
         x if x == eopnotsupp() => SubmitResult::NotSupported,
-        libc::EBUSY => SubmitResult::InvalidState,
+        libc::EBUSY | libc::ESTALE | libc::EALREADY => SubmitResult::InvalidState,
+        libc::EDEADLK | libc::EPERM => SubmitResult::ThreadViolation,
         x if x == emthread() => SubmitResult::ThreadViolation,
-        libc::ENOMEM | libc::ENOBUFS => SubmitResult::OutOfMemory,
+        libc::ENOMEM => SubmitResult::OutOfMemory,
+        libc::EOVERFLOW => SubmitResult::SeqExhausted,
         _ => SubmitResult::InternalError,
     }
 }
 
 pub(crate) fn submit_error_from_errno(err: i32) -> SubmitError {
     SubmitError::new(submit_result_from_errno(err), err)
+}
+
+pub(crate) fn submit_result_from_rc(rc: i32) -> Option<SubmitResult> {
+    match rc {
+        0 => Some(SubmitResult::Ok),
+        1 => Some(SubmitResult::Backpressured),
+        2 => Some(SubmitResult::NotConnected),
+        3 => Some(SubmitResult::NotFound),
+        4 => Some(SubmitResult::Terminated),
+        5 => Some(SubmitResult::InvalidHandle),
+        6 => Some(SubmitResult::InvalidArgument),
+        7 => Some(SubmitResult::NotSupported),
+        8 => Some(SubmitResult::InvalidState),
+        9 => Some(SubmitResult::ThreadViolation),
+        10 => Some(SubmitResult::OutOfMemory),
+        11 => Some(SubmitResult::SeqExhausted),
+        12 => Some(SubmitResult::InternalError),
+        13 => Some(SubmitResult::NotAdmitted),
+        _ => None,
+    }
+}
+
+pub(crate) fn submit_error_from_rc(rc: i32, native_errno: i32) -> SubmitError {
+    let code = submit_result_from_rc(rc).unwrap_or_else(|| {
+        if rc == -1 {
+            submit_result_from_errno(native_errno)
+        } else {
+            SubmitResult::InternalError
+        }
+    });
+    SubmitError::new(code, native_errno)
+}
+
+pub(crate) fn send_terminal_error(native_errno: i32) -> SubmitError {
+    let code = if native_errno == libc::ENOENT {
+        SubmitResult::NotFound
+    } else if native_errno == libc::ESHUTDOWN || native_errno == eterm() {
+        SubmitResult::Terminated
+    } else {
+        SubmitResult::InternalError
+    };
+    SubmitError::new(code, native_errno)
 }
 
 fn recv_result_from_errno(err: i32) -> RecvResult {
@@ -121,13 +166,10 @@ pub(crate) fn config_validation_error() -> ConfigError {
 }
 
 pub(crate) fn check_submit_rc(rc: i32) -> Result<(), SubmitError> {
-    if rc == 0 {
+    if rc == SubmitResult::Ok as i32 {
         Ok(())
     } else {
-        Err(SubmitError::new(
-            submit_result_from_errno(last_errno()),
-            last_errno(),
-        ))
+        Err(submit_error_from_rc(rc, last_errno()))
     }
 }
 
@@ -231,5 +273,67 @@ const fn eshutdown() -> i32 {
     )))]
     {
         libc::EPIPE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_native_submit_result_has_an_exact_typed_mapping() {
+        let expected = [
+            SubmitResult::Ok,
+            SubmitResult::Backpressured,
+            SubmitResult::NotConnected,
+            SubmitResult::NotFound,
+            SubmitResult::Terminated,
+            SubmitResult::InvalidHandle,
+            SubmitResult::InvalidArgument,
+            SubmitResult::NotSupported,
+            SubmitResult::InvalidState,
+            SubmitResult::ThreadViolation,
+            SubmitResult::OutOfMemory,
+            SubmitResult::SeqExhausted,
+            SubmitResult::InternalError,
+            SubmitResult::NotAdmitted,
+        ];
+
+        for result in expected {
+            assert_eq!(submit_result_from_rc(result as i32), Some(result));
+            if result != SubmitResult::Ok {
+                let error = submit_error_from_rc(result as i32, libc::EIO);
+                assert_eq!(error.code(), result);
+                assert_eq!(error.native_errno(), libc::EIO);
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_enobufs_is_backpressure_not_out_of_memory() {
+        assert_eq!(
+            submit_error_from_rc(-1, libc::ENOBUFS).code(),
+            SubmitResult::Backpressured
+        );
+    }
+
+    #[test]
+    fn terminal_send_errno_has_a_narrow_typed_mapping() {
+        assert_eq!(
+            send_terminal_error(libc::ENOENT).code(),
+            SubmitResult::NotFound
+        );
+        assert_eq!(
+            send_terminal_error(libc::ESHUTDOWN).code(),
+            SubmitResult::Terminated
+        );
+        assert_eq!(
+            send_terminal_error(eterm()).code(),
+            SubmitResult::Terminated
+        );
+        assert_eq!(
+            send_terminal_error(libc::EAGAIN).code(),
+            SubmitResult::InternalError
+        );
     }
 }

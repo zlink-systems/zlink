@@ -1,0 +1,10 @@
+역할: zlink bindings 회귀 테스트 추가 담당(sol medium, 기계적). 작업 트리: /home/hep7hep7/project/zlink-wt-abi-tests (detached @ main; core/build·core/build-dev는 메인 트리 symlink — core/** 아래 cmake/build/clean 금지). 수정 범위: bindings/dotnet/tests/**, bindings/python/tests/** (또는 python 테스트 디렉터리), bindings/rust/tests/** 및 각 binding의 native 레이아웃 정의 파일(수정이 필요할 때만). **spec 수정 금지.** git commit/push/reset/checkout/stash 금지. 진행 로그 /home/hep7hep7/project/zlink-work/c016/abi-tests-progress.md 한 줄씩 append(3분마다 한 줄 이상), 종료 시 `EXIT:<code>`. 요약 /home/hep7hep7/project/zlink-work/c016/abi-tests-summary.md (추가한 테스트 이름·파일, 실행 결과, BLOCKERS). Rust cargo는 `CARGO_TARGET_DIR=/home/hep7hep7/project/zlink-work/c016/rust-target-abi` `-j2`; dotnet은 `dotnet test` 프로젝트 문서의 공식 스크립트; python은 `bindings/python`의 공식 테스트 스크립트(가상환경/의존은 README대로).
+
+배경: Core 공개 struct `zlink_monitor_event_t`(`core/include/zlink/eventing/api.h:38-53`)는 800 B이며 `connection_id` offset 784, `transport_lane` 792, `flags` 796이다(`sizeof/offsetof`로 검증됨). Java는 수동 레이아웃에 잘못된 필드 2개가 남아 816 B로 어긋났던 버그를 고치고 `NativeLayoutsTest`가 숫자를 고정했다(커밋 c9d294c44f). 수동 FFI mirror를 쓰는 .NET(`bindings/dotnet/src/Zlink/Runtime/Native/NativeTypes*.cs`의 `StructLayout` monitor event)·Rust(`bindings/rust/src/runtime/native/ffi.rs:429-442` `#[repr(C)]`)·Python(`bindings/python/src/zlink/_native/ffi.py:18-20, 45-55` ctypes; 기존 테스트는 size/alignment 800/8만 확인)에는 숫자 offset 회귀 검사가 없다.
+
+할 일(각 binding):
+1. .NET: 테스트 프로젝트(`bindings/dotnet/tests/Zlink.Tests/`)에 `Unsafe.SizeOf<...>() == 800`(또는 `Marshal.SizeOf`)과 `Marshal.OffsetOf(...)` 784/792/796 assertion 테스트 추가.
+2. Rust: `std::mem::size_of::<...>() == 800`, `memoffset` 없이 `core::ptr::addr_of!`/`offset_of!`(toolchain 지원 시) 또는 수동 계산으로 784/792/796 assertion 테스트 추가.
+3. Python: 기존 ctypes size 테스트에 `Struct.connection_id.offset == 784` 등 세 offset assertion 추가.
+4. 각 binding의 공식 테스트 스크립트로 해당 테스트 파일(가능하면 전체)을 실행해 green 확인, `git diff --check`. 레이아웃이 실제로 어긋나 있으면 고치지 말고 BLOCKERS에 적는다(감독자가 처리).
+상한 40분.

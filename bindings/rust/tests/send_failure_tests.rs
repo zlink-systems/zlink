@@ -6,7 +6,9 @@ mod test_support;
 use std::thread;
 use std::time::Duration;
 
-use zlink::{Context, Message, RoutingId, SendFlags, SubmitResult};
+use zlink::{
+    Context, Message, Received, RecvFlags, RoutingId, SendFlags, SubmitResult, ZlinkError,
+};
 
 #[test]
 fn sync_blocking_terminal_admits_a_send() {
@@ -74,7 +76,41 @@ fn routed_send_to_missing_target_is_immediately_not_connected() {
         std::task::Poll::Pending => panic!("missing route incorrectly returned a wait token"),
     };
     assert_eq!(error.code(), SubmitResult::NotConnected);
-    assert_eq!(error.native_errno(), libc::EHOSTUNREACH);
+}
+
+#[test]
+fn router_request_to_a_dealer_is_immediately_not_admitted() {
+    let ctx = Context::new().unwrap();
+    let router = ctx.router_socket().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    let dealer_rid = RoutingId::from(b"request-rejecting-dealer");
+    dealer.set_routing_id(&dealer_rid).unwrap();
+    router.bind("inproc://sf-request-not-admitted").unwrap();
+    dealer.connect("inproc://sf-request-not-admitted").unwrap();
+
+    // A completed DATA transfer is the route/type barrier for the targeted
+    // request below.
+    dealer
+        .send()
+        .message(Message::try_from(b"route-ready").unwrap())
+        .submit_sync()
+        .unwrap();
+    let mut received = Received::empty();
+    assert!(router.recv(&mut received, RecvFlags::NONE).unwrap());
+
+    let mut request = Box::pin(
+        router
+            .request(&dealer_rid)
+            .message(Message::try_from(b"wrong-peer-type").unwrap())
+            .submit(),
+    );
+    let error = match test_support::poll_once(&mut request) {
+        std::task::Poll::Ready(Err(ZlinkError::Submit(error))) => error,
+        std::task::Poll::Ready(Err(other)) => panic!("unexpected request error: {other}"),
+        std::task::Poll::Ready(Ok(_)) => panic!("request to DEALER was admitted"),
+        std::task::Poll::Pending => panic!("request to DEALER returned a wait token"),
+    };
+    assert_eq!(error.code(), SubmitResult::NotAdmitted);
 }
 
 #[test]

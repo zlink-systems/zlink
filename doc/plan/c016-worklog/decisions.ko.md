@@ -1134,3 +1134,9 @@ binding 버그 → 수정: `disconnectRid()`가 completion owner의 send/drain �
 재제출/TERMINAL 모두 `NOT_FOUND`로 종결(`CompletionOwner.markTargetRemoved`). 기존 `DontWaitBackpressureContractTest`의 raw errno assertion 제거. gate: Java 129 tests(3 skipped) green, samples 7/7.
 교차 parity 후보(다른 7 binding에 같은 race가 있는지 확인 항목으로 추가): "명시적 disconnectRid 뒤 stale WRITABLE 재제출 → NOT_FOUND".
 **A용 한 줄: spec대로 동작 확인(`AsyncSubmitTypedResultContractTest`) + binding race 수정 커밋 `76596423ff` — java framework의 errno 재분류 표·`NOT_ADMITTED` 전체 허용은 삭제 가능.**
+
+## D-B98 (2026-09-05 10:00, 머신 B) parity 조사 후속 — Rust binding 버그: submit rc를 버리고 errno로 재분류해 `NOT_ADMITTED` 손실 → 수정
+`native_errors.rs:168-173` `check_submit_rc`와 async SEND/REQUEST 최종 분기(`send_ops.rs:397-408`, `routed_async.rs:294-317`)가 nonzero rc를 버리고 `last_errno()`로 `SubmitResult`를 재분류(→ `NOT_ADMITTED`가 다른 값으로, `ENOBUFS`는 `OutOfMemory`).
+spec `bindings/doc/spec/README.ko.md:4030-4050, 4210-4228`(submit enum 1:1 typed 매핑), `core/.../socket/README.ko.md:1018-1055`, `03-errors.ko.md:334-352`(ENOBUFS=backpressure). 수정: rc 0~13을 `SubmitResult`에 1:1 매핑(C `zlink_errno.h` 값과 대조 확인), errno는 보조;
+wait-token terminal은 `ENOENT→NotFound`, `ETERM/ESHUTDOWN→Terminated`, 그 외 `InternalError`(C++/.NET과 동일 규칙). 새 public variant 없음. 테스트: ROUTER→DEALER request 즉시 `NotAdmitted` 회귀 5/5, enum 매핑·ENOBUFS·terminal unit test, contract test에서 raw errno assertion 제거.
+gate: `bindings/rust/tests/run_tests.sh` 14/14 suite PASS(samples 포함), clippy `-D warnings` 0, fmt, diff-check. 커밋: 아래 해시.
