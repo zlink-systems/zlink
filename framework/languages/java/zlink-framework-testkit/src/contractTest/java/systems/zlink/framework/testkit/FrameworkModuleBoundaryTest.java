@@ -115,6 +115,7 @@ final class FrameworkModuleBoundaryTest {
             "import systems.zlink.contracts.sockets.AutoHwmProfile;",
             "import systems.zlink.contracts.sockets.RecvFlags;",
             "import systems.zlink.contracts.sockets.RecvResult;",
+            "import systems.zlink.contracts.sockets.ReceiveFlowState;",
             "import systems.zlink.contracts.sockets.SubmitResult;",
             "import systems.zlink.contracts.messaging.Received;",
             "import systems.zlink.contracts.messaging.TopicMessage;",
