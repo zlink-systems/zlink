@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
@@ -989,10 +990,10 @@ public sealed class ClientServerChannelRuntimeTests
         Func<bool> condition,
         TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var startedAt = Stopwatch.GetTimestamp();
         while (!condition())
         {
-            if (DateTime.UtcNow >= deadline)
+            if (Stopwatch.GetElapsedTime(startedAt) >= timeout)
                 throw new TimeoutException("ClientServer condition was not reached.");
             await Task.Delay(10);
         }

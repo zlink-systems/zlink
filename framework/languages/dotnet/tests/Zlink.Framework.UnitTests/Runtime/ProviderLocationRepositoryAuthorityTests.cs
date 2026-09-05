@@ -1830,6 +1830,57 @@ public sealed class ProviderLocationRepositoryAuthorityTests
             await recovering.CommitAggregateAsync(abandonedFence));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SharedOpaqueProvider_PreserveAggregateCompletesWhileOwnerDrains(bool drainBeforePrepare)
+    {
+        var repository = new ZLinkProviderLocationRepository(new ZLinkInMemoryProviderLocationStore());
+        var owner = await ClaimAsync(repository, "normalizing-owner");
+        var descriptor = Descriptor("normalizing-target", owner);
+        _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
+        var creation = Reservation("actor:normalizing", descriptor, owner);
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await repository.ReserveAsync(creation));
+        var initial = Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await repository.CommitAsync(reserved.Reservation, new byte[] { 0x31 })).Snapshot;
+        var draining = descriptor with
+        {
+            DescriptorRevision = descriptor.DescriptorRevision + 1,
+            State = ZLinkFrameworkRuntimeState.Draining
+        };
+        var request = AggregateRequest(
+            [new ZLinkAggregateParticipant(creation.Key, initial.StoreVersion,
+                ZLinkAuthorityGenerationTransition.Preserve, new byte[] { 0x32 }, ReadOnlyMemory<byte>.Empty)],
+            descriptor, owner) with { Capacity = new ZLinkCapacityVector(0, 0, null) };
+        if (drainBeforePrepare)
+            _ = await repository.UpdateMeshNodeAsync(draining, ZLinkLocationWriteIntent.Renew);
+        var prepared = Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(
+            await repository.PrepareAggregateAsync(request));
+        if (!drainBeforePrepare)
+            _ = await repository.UpdateMeshNodeAsync(draining, ZLinkLocationWriteIntent.Renew);
+
+        Assert.Equal(ZLinkAggregateCommitResult.Committed,
+            await repository.CommitAggregateForRecoveryAsync(prepared.Fence));
+        var normalized = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+            await repository.ReadAuthorityAsync(creation.Key)).Snapshot;
+        Assert.Equal(new byte[] { 0x32 }, normalized.Payload.ToArray());
+        Assert.Equal(initial.ObjectGeneration, normalized.ObjectGeneration);
+        Assert.Equal(initial.AuthorityOwnerGeneration, normalized.AuthorityOwnerGeneration);
+        Assert.Equal(initial.OwnerId, normalized.OwnerId);
+        Assert.Equal(initial.Allocation, normalized.Allocation);
+        Assert.IsType<ZLinkAggregatePrepareResult.Conflict>(await repository.PrepareAggregateAsync(
+            request with
+            {
+                AggregateId = Guid.NewGuid(),
+                Participants = [request.Participants[0] with
+                {
+                    ExpectedStoreVersion = normalized.StoreVersion,
+                    OwnerTransition = ZLinkAuthorityGenerationTransition.NewOwner
+                }]
+            }));
+    }
+
     [Fact]
     public async Task SharedOpaqueProvider_StaleParticipantDoesNotClaimStagingOrCapacity()
     {

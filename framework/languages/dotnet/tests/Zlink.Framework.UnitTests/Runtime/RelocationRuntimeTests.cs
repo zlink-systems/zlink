@@ -998,6 +998,86 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
+    public async Task CanonicalTargetStagingKeepsSourceCasRecoveryOutsideThePublishedRoot()
+    {
+        var (stage, candidate) = CreateCanonicalPublishedReconciliationFixture();
+        var key = Assert.Single(stage.Envelope.Participants).AuthorityKey;
+        var source = candidate.Authorities[0].Snapshot with
+        {
+            StoreVersion = "source-cas-version",
+            Payload = CanonicalFixtureAuthorityPayload(),
+            AuthorityOwnerGeneration = stage.SourceAuthorityOwnerGeneration
+        };
+        var store = new RecordingAuthorityStore();
+        store.Seed(key, source);
+        var request = new ZLinkCanonicalSpotStageContext(
+            stage.Envelope.AggregateId, 1, 1, "mesh",
+            stage.SourceNodeRid.ToHex(), 1, "source-owner", 1,
+            RoutingId.From("target").ToHex(), 1, "target-owner", 1,
+            "room", "Game.Room", false, "", 37, []);
+
+        var (envelope, recoveries) = await ZLinkSpotRetireTargetRuntime
+            .BindCanonicalAuthorityInventoryAsync(
+                store, candidate.Envelope, request, CancellationToken.None);
+        Assert.True(Assert.Single(envelope.Participants).RecoveryPayload.IsEmpty);
+        var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(recoveries[key].Span);
+        Assert.Equal(source.StoreVersion, recovery.ExpectedStoreVersion);
+        Assert.Equal(source.AuthorityOwnerGeneration, recovery.AuthorityOwnerGeneration);
+        Assert.Equal(source.Payload.ToArray(), recovery.AuthorityPayload.ToArray());
+        stage = stage with { Envelope = envelope, SourceRecoveries = recoveries };
+        using var services = new ServiceCollection().BuildServiceProvider();
+        var target = new ZLinkSpotRetireTargetRuntime(
+            services, null!, new ZLinkFrameworkRegistration());
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            target.ReconcilePublishedStageAsync(stage, candidate, cancellation.Token).AsTask());
+        Assert.Equal(1, Volatile.Read(ref stage.AuthorityPublished));
+        Assert.Equal(("published-root", 37U), stage.GetFinalRoot());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SourceObservesTargetAuthorityWithItsOwnRootOrAfterNormalization(bool normalized)
+    {
+        var (stage, candidate) = CreateCanonicalPublishedReconciliationFixture();
+        var participant = Assert.Single(stage.Envelope.Participants) with
+        {
+            RecoveryPayload = CanonicalFixtureRecovery()
+        };
+        var snapshot = candidate.Authorities[0].Snapshot;
+        var descriptor = snapshot.Allocation.Descriptor;
+        var owner = new ZLinkLocationOwnerToken(snapshot.OwnerId, snapshot.OwnerLeaseGeneration);
+        if (normalized)
+            snapshot = snapshot with
+            {
+                Payload = ZLinkSpotRetireTargetRuntime.BuildTargetReadyPayload(
+                    participant.ObjectKind, CanonicalFixtureAuthorityPayload(),
+                    descriptor.Rid, 1, owner, stage.Envelope.AggregateId)
+            };
+        var store = new RecordingAuthorityStore();
+        store.Seed(participant.AuthorityKey, snapshot);
+        using var services = new ServiceCollection().BuildServiceProvider();
+        var target = new ZLinkSpotRetireTargetRuntime(
+            services, null!, new ZLinkFrameworkRegistration());
+        var sourcePublication = new ZLinkAggregateRelocationPublished(
+            new ZLinkAggregateFence(stage.Envelope.AggregateId, 1),
+            new ZLinkRelocationStored("source-staging-root", 19, default, DateTimeOffset.UtcNow),
+            stage.Envelope with { Participants = [participant] });
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(stage.TargetAuthorityOwnerGeneration,
+            await target.ReconcilePublishedAuthorityAsync(
+                store,
+                new ZLinkSpotRetireReservation(null!, descriptor, 1,
+                    new ZLinkCapacityVector(0, 0, null), owner),
+                sourcePublication, cancellation.Token));
+        Assert.Single(store.Events);
+    }
+
+    [Fact]
     public void CanonicalStagingRejectsAuthorityGenerationOtherThanPreparedTarget()
     {
         var (stage, _) = CreateCanonicalPublishedReconciliationFixture();
@@ -4496,6 +4576,9 @@ public sealed class RelocationRuntimeTests
 
         private int _concurrentAggregateCommitPublished;
         private readonly object _aggregatePublicationGate = new();
+
+        internal void Seed(ZLinkAuthorityKey key, ZLinkAuthoritySnapshot snapshot) =>
+            _snapshots[key.Value] = snapshot;
 
         internal int PublishedCount => _snapshots.Count;
         internal TimeSpan ReadDelay { get; init; }
