@@ -3,12 +3,13 @@
 package systems.zlink.samples;
 
 import systems.zlink.contracts.eventing.MonitorEventType;
+import systems.zlink.contracts.eventing.PollEventFlags;
+import systems.zlink.contracts.eventing.PollEvents;
+import systems.zlink.contracts.eventing.Poller;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.core.Zlink;
-import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.sockets.RecvFlags;
-import systems.zlink.contracts.sockets.RecvResult;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -105,42 +106,42 @@ final class SampleSupport {
 
     private static void waitConnectedMonitor(SocketMonitor monitor) {
         long deadlineNanos = System.nanoTime() + TIMEOUT.toNanos();
-        while (System.nanoTime() < deadlineNanos) {
-            systems.zlink.contracts.eventing.MonitorEvent event = null;
-            try {
-                event = monitor.recv(RecvFlags.DONT_WAIT);
-            } catch (ZlinkRecvException ex) {
-                if (ex.getResult() != RecvResult.NO_DATA) {
-                    throw ex;
+        try (Poller poller = Zlink.createPoller()) {
+            poller.add(monitor, 0L, PollEventFlags.POLLIN);
+            PollEvents ready = new PollEvents(1);
+            while (System.nanoTime() < deadlineNanos) {
+                Duration remaining = Duration.ofNanos(
+                    deadlineNanos - System.nanoTime());
+                if (poller.wait(ready, remaining) == 0) {
+                    break;
                 }
-            }
-            if (event != null) {
+                var event = monitor.recv(RecvFlags.DONT_WAIT);
+                if (event == null) {
+                    continue;
+                }
                 if (event.event() == MonitorEventType.CONNECTION_READY) {
                     return;
                 }
                 throw new IllegalStateException(
                     "unexpected monitor event: " + event.event());
             }
-
-            // ROUTER monitor queues can require socket activity before the
-            // connection-ready record becomes readable. Status is the public
-            // readiness snapshot for that case.
-            if (monitor.status().isReady()) {
-                return;
-            }
-            sleepQuietly("waiting for socket connection");
         }
         throw new IllegalStateException("socket connection timed out");
     }
 
     static void waitStreamConnected(SocketMonitor monitor) {
-        while (true) {
-            var event = monitor.recv();
-            if (event.event() == MonitorEventType.ACCEPTED
-                || event.event() == MonitorEventType.CONNECTION_READY) {
-                return;
+        try (Poller poller = Zlink.createPoller()) {
+            poller.add(monitor, 0L, PollEventFlags.POLLIN);
+            PollEvents ready = new PollEvents(1);
+            while (poller.wait(ready, TIMEOUT) != 0) {
+                var event = monitor.recv(RecvFlags.DONT_WAIT);
+                if (event != null && (event.event() == MonitorEventType.ACCEPTED
+                    || event.event() == MonitorEventType.CONNECTION_READY)) {
+                    return;
+                }
             }
         }
+        throw new IllegalStateException("stream connection timed out");
     }
 
     static void waitPubSubReady(SocketMonitor pubMonitor,
@@ -232,12 +233,17 @@ final class SampleSupport {
 
     private static void waitMonitorEvent(SocketMonitor monitor,
                                          MonitorEventType eventType) {
-        while (true) {
-            var event = monitor.recv();
-            if (event.event() == eventType) {
-                return;
+        try (Poller poller = Zlink.createPoller()) {
+            poller.add(monitor, 0L, PollEventFlags.POLLIN);
+            PollEvents ready = new PollEvents(1);
+            while (poller.wait(ready, TIMEOUT) != 0) {
+                var event = monitor.recv(RecvFlags.DONT_WAIT);
+                if (event != null && event.event() == eventType) {
+                    return;
+                }
             }
         }
+        throw new IllegalStateException("monitor event timed out: " + eventType);
     }
 
     @FunctionalInterface

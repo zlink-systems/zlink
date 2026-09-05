@@ -96,6 +96,8 @@ public final class InternalAccess {
 
     public interface MonitorAccess {
         SocketMonitor create(MemorySegment handle, boolean own);
+
+        MemorySegment handle(SocketMonitor monitor);
     }
 
     public static void register(ContextAccess access) {
@@ -130,6 +132,10 @@ public final class InternalAccess {
     public static SocketMonitor monitorSocket(MemorySegment handle,
                                               boolean own) {
         return monitorAccess().create(handle, own);
+    }
+
+    public static MemorySegment monitorHandle(SocketMonitor monitor) {
+        return monitorAccess().handle(monitor);
     }
 
     public static void contextSetOption(Context context, ContextOption option,

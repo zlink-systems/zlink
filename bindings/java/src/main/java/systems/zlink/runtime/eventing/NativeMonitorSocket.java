@@ -25,8 +25,17 @@ public final class NativeMonitorSocket implements SocketMonitor {
     private final boolean own;
 
     static {
-        InternalAccess.register((InternalAccess.MonitorAccess)
-            NativeMonitorSocket::new);
+        InternalAccess.register(new InternalAccess.MonitorAccess() {
+            @Override
+            public SocketMonitor create(MemorySegment handle, boolean own) {
+                return new NativeMonitorSocket(handle, own);
+            }
+
+            @Override
+            public MemorySegment handle(SocketMonitor monitor) {
+                return ((NativeMonitorSocket) monitor).handle();
+            }
+        });
     }
 
     NativeMonitorSocket(MemorySegment handle, boolean own) {
