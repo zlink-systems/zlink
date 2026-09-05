@@ -317,6 +317,13 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   생성은 공개되지 않는다.
 - `Poller::new(...)`, `Timer::new(...)`, 그리고 timer-on-SPOT 헬퍼가 eventing
   리소스를 생성한다.
+- `Poller`는 `add_monitor(&self, monitor: &SocketMonitor, events: i16, slot: usize) -> Result<(), ConfigError>`,
+  `modify_monitor(&self, monitor: &SocketMonitor, events: i16) -> Result<(), ConfigError>`,
+  `remove_monitor(&self, monitor: &SocketMonitor) -> Result<(), ConfigError>`로 socket monitor를 source로
+  받는다(공통 spec "`Poller`의 monitor source"). `SocketMonitor`는 socket 전용 sealed `Pollable`을 구현하지
+  않는다(`proxy` 인자 계약 보호). monitor에는 `POLLIN`만 유효하고 다른 mask는
+  `ConfigError(ConfigResult::InvalidArgument)`로 거절한다. ready 뒤 `recv_with_flags(RecvFlags::DONT_WAIT)`로
+  drain하며 `PollEvent`는 `PollSourceKind::Socket`으로 보고한다.
 - `AtomicCounter::new()`, `Stopwatch::start()`, `Thread::start(...)`는 호출자가
   소유하는 유틸리티 리소스를 생성한다.
 - Version, capability 조회, strerror, proxy, sleep, multipart cleanup 헬퍼는 공개

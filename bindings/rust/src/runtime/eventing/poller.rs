@@ -5,12 +5,13 @@ use std::os::fd::RawFd;
 use std::os::windows::io::RawSocket as RawFd;
 use std::sync::Arc;
 
+use crate::SocketMonitor;
 use crate::error::{ConfigError, RecvError};
 use crate::ffi;
 use crate::internal::{PollerSocketRegistration, PollerStorage, TimerStorage};
 use crate::native_errors::{check_config_rc, check_recv_rc, last_errno};
 use crate::poller_contracts::{
-    POLLCOMPLETION, PollEvent, PollItem, PollSourceKind, Pollable, Poller, Timer,
+    POLLCOMPLETION, POLLIN, PollEvent, PollItem, PollSourceKind, Pollable, Poller, Timer,
 };
 
 pub(crate) fn poller_new() -> Result<Poller, ConfigError> {
@@ -139,6 +140,40 @@ impl PollerStorage {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn add_monitor(
+        &self,
+        monitor: &SocketMonitor,
+        events: i16,
+        slot: usize,
+    ) -> Result<(), ConfigError> {
+        validate_monitor_events(events)?;
+        check_config_rc(unsafe {
+            ffi::zlink_poller_add(
+                self.handle,
+                monitor_native_handle(monitor),
+                slot as *mut c_void,
+                events,
+            )
+        })
+    }
+
+    pub(crate) fn modify_monitor(
+        &self,
+        monitor: &SocketMonitor,
+        events: i16,
+    ) -> Result<(), ConfigError> {
+        validate_monitor_events(events)?;
+        check_config_rc(unsafe {
+            ffi::zlink_poller_modify(self.handle, monitor_native_handle(monitor), events)
+        })
+    }
+
+    pub(crate) fn remove_monitor(&self, monitor: &SocketMonitor) -> Result<(), ConfigError> {
+        check_config_rc(unsafe {
+            ffi::zlink_poller_remove(self.handle, monitor_native_handle(monitor))
+        })
     }
 
     pub(crate) fn add_fd(&self, fd: RawFd, events: i16, slot: usize) -> Result<(), ConfigError> {
@@ -392,6 +427,20 @@ impl Drop for TimerStorage {
 
 fn timer_native_handle(timer: &Timer) -> *mut c_void {
     timer.inner.handle
+}
+
+fn monitor_native_handle(monitor: &SocketMonitor) -> *mut c_void {
+    monitor.inner.handle
+}
+
+fn validate_monitor_events(events: i16) -> Result<(), ConfigError> {
+    if events != POLLIN {
+        return Err(ConfigError::new(
+            crate::error::ConfigResult::InvalidArgument,
+            libc::EINVAL,
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn pollable_handle(source: &dyn Pollable) -> Result<*mut c_void, ConfigError> {

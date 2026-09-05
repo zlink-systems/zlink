@@ -5,9 +5,129 @@ use std::thread;
 use std::time::Duration;
 
 use zlink::{
-    Context, MonitorEvent, MonitorEventFlags, MonitorEventType, RecvError, SocketMonitor,
+    ConfigResult, Context, MonitorEvent, MonitorEventFlags, MonitorEventType, POLLCOMPLETION,
+    POLLIN, POLLOUT, PollEvent, PollSourceKind, Poller, RecvError, RecvFlags, SocketMonitor,
     SocketMonitorEventMask, SocketMonitorOpenOptions,
 };
+
+fn tcp_endpoint() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    format!("tcp://127.0.0.1:{port}")
+}
+
+fn wait_for_polled_monitor_event(
+    poller: &Poller,
+    monitor: &SocketMonitor,
+    expected_slot: usize,
+    predicate: impl Fn(&MonitorEvent) -> bool,
+) -> MonitorEvent {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut poll_events = [PollEvent::default()];
+    loop {
+        let now = std::time::Instant::now();
+        assert!(now < deadline, "timed out waiting for monitor event");
+        let timeout_ms = (deadline - now).as_millis().min(i64::MAX as u128) as i64;
+        let count = poller.wait(&mut poll_events, timeout_ms).unwrap();
+        if count == 0 {
+            continue;
+        }
+        assert_eq!(poll_events[0].source_kind, PollSourceKind::Socket);
+        assert_eq!(poll_events[0].slot, expected_slot);
+        assert!(poll_events[0].is_readable());
+        while let Some(event) = monitor.recv_with_flags(RecvFlags::DONT_WAIT).unwrap() {
+            if predicate(&event) {
+                return event;
+            }
+        }
+    }
+}
+
+fn assert_monitor_poller_lifecycle(endpoint: &str) {
+    let ctx = Context::new().unwrap();
+    let mut router = ctx.router_socket().unwrap();
+    router.bind(endpoint).unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    let monitor = SocketMonitor::open(&dealer).unwrap();
+    let poller = Poller::new().unwrap();
+    poller.add_monitor(&monitor, POLLIN, 73).unwrap();
+
+    dealer.connect(endpoint).unwrap();
+    wait_for_polled_monitor_event(&poller, &monitor, 73, |event| event.is_connection_ready());
+
+    router.close().unwrap();
+    wait_for_polled_monitor_event(&poller, &monitor, 73, |event| event.is_disconnected());
+    poller.remove_monitor(&monitor).unwrap();
+    assert_eq!(poller.size(), 0);
+
+    let endpoint_after_remove = if endpoint.starts_with("tcp://") {
+        tcp_endpoint()
+    } else {
+        format!("{endpoint}-after-remove")
+    };
+    let router_after_remove = ctx.router_socket().unwrap();
+    router_after_remove.bind(&endpoint_after_remove).unwrap();
+    let dealer_after_remove = ctx.dealer_socket().unwrap();
+    let monitor_after_remove = SocketMonitor::open(&dealer_after_remove).unwrap();
+    let poller_after_remove = Poller::new().unwrap();
+    poller_after_remove
+        .add_monitor(&monitor_after_remove, POLLIN, 74)
+        .unwrap();
+    poller_after_remove
+        .remove_monitor(&monitor_after_remove)
+        .unwrap();
+    dealer_after_remove.connect(&endpoint_after_remove).unwrap();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut poll_events = [PollEvent::default()];
+    loop {
+        assert_eq!(poller_after_remove.wait(&mut poll_events, 0).unwrap(), 0);
+        while let Some(event) = monitor_after_remove
+            .recv_with_flags(RecvFlags::DONT_WAIT)
+            .unwrap()
+        {
+            if event.is_connection_ready() {
+                return;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "monitor received no ready event after poller removal"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn socket_monitor_poller_lifecycle_inproc() {
+    assert_monitor_poller_lifecycle("inproc://monitor-poller-lifecycle");
+}
+
+#[test]
+fn socket_monitor_poller_lifecycle_tcp() {
+    assert_monitor_poller_lifecycle(&tcp_endpoint());
+}
+
+#[test]
+fn socket_monitor_poller_rejects_non_readable_masks() {
+    let ctx = Context::new().unwrap();
+    let dealer = ctx.dealer_socket().unwrap();
+    let monitor = SocketMonitor::open(&dealer).unwrap();
+    let poller = Poller::new().unwrap();
+
+    for events in [POLLOUT, POLLCOMPLETION, POLLIN | POLLOUT] {
+        let error = poller.add_monitor(&monitor, events, 1).unwrap_err();
+        assert_eq!(error.code(), ConfigResult::InvalidArgument);
+        assert_eq!(error.native_errno(), libc::EINVAL);
+    }
+
+    poller.add_monitor(&monitor, POLLIN, 1).unwrap();
+    let error = poller.modify_monitor(&monitor, POLLCOMPLETION).unwrap_err();
+    assert_eq!(error.code(), ConfigResult::InvalidArgument);
+    assert_eq!(error.native_errno(), libc::EINVAL);
+    poller.remove_monitor(&monitor).unwrap();
+}
 
 #[test]
 fn flow_state_event_constants_match_c_abi_and_are_in_all() {

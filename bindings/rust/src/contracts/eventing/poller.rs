@@ -2,6 +2,7 @@ use std::any::Any;
 use std::os::fd::RawFd;
 use std::sync::Arc;
 
+use crate::SocketMonitor;
 use crate::error::{ConfigError, RecvError};
 use crate::internal::{PollerStorage, TimerStorage};
 
@@ -36,7 +37,7 @@ pub trait Pollable: Any + private::Sealed {
 /// Source kind reported by the poller when an event fires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PollSourceKind {
-    /// The event came from a socket.
+    /// The event came from a socket or socket monitor.
     Socket,
     /// The event came from a raw file descriptor.
     Fd,
@@ -92,7 +93,7 @@ pub struct PollItem {
     pub revents: i16,
 }
 
-/// Poller for monitoring socket readiness, file descriptors, and timers.
+/// Poller for monitoring socket and monitor readiness, file descriptors, and timers.
 pub struct Poller {
     pub(crate) inner: Box<PollerStorage>,
 }
@@ -130,6 +131,27 @@ impl Poller {
     /// Remove a socket from the poller.
     pub fn remove_socket(&self, socket: &dyn Pollable) -> Result<(), ConfigError> {
         self.inner.remove_socket(socket)
+    }
+
+    /// Registers a socket monitor for readable events; `slot` is echoed back
+    /// in the matching [`PollEvent`]. Only [`POLLIN`] is valid for monitors.
+    pub fn add_monitor(
+        &self,
+        monitor: &SocketMonitor,
+        events: i16,
+        slot: usize,
+    ) -> Result<(), ConfigError> {
+        self.inner.add_monitor(monitor, events, slot)
+    }
+
+    /// Modifies a previously added socket monitor. Only [`POLLIN`] is valid.
+    pub fn modify_monitor(&self, monitor: &SocketMonitor, events: i16) -> Result<(), ConfigError> {
+        self.inner.modify_monitor(monitor, events)
+    }
+
+    /// Removes a socket monitor from the poller.
+    pub fn remove_monitor(&self, monitor: &SocketMonitor) -> Result<(), ConfigError> {
+        self.inner.remove_monitor(monitor)
     }
 
     /// Registers raw file descriptor `fd` to be watched for `events`; `slot` is
