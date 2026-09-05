@@ -131,8 +131,6 @@ bool perf_pubsub_server (const std::string &lib_name, const std::string &transpo
         return false;
 
     perf::multi::apply_benchmark_socket_options (publisher.sock (), settings, transport);
-    if (!perf::multi::recalculate_auto_hwm (ctx))
-        return false;
     if (!perf::multi::setup_tls_server (publisher.sock (), transport))
         return false;
 
@@ -140,8 +138,6 @@ bool perf_pubsub_server (const std::string &lib_name, const std::string &transpo
       publisher.sock (), transport, "cpp_multi_pubsub", settings.server_bind_port);
     if (endpoint.empty ())
         return false;
-    perf::multi::emit_auto_hwm_detail (publisher.sock (), "server", "server", transport, msg_size,
-                                       "pub");
 
     perf::multi::print_ready (endpoint);
 
@@ -150,6 +146,12 @@ bool perf_pubsub_server (const std::string &lib_name, const std::string &transpo
                   << ",size=" << msg_size << std::endl;
         return false;
     }
+
+    perf::multi::apply_benchmark_hwm (publisher.sock (), settings.hwm, settings.hwm);
+    if (!perf::multi::recalculate_auto_hwm (ctx))
+        return false;
+    perf::multi::emit_auto_hwm_detail (publisher.sock (), "server", "server", transport, msg_size,
+                                       "pub");
 
     const uint32_t run_id = 1U;
     uint64_t seq = 1;
