@@ -139,6 +139,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_zmp_ws_wss
   ${INTEGRATION_TEST_ROOT}/test_stream_socket
   ${INTEGRATION_TEST_ROOT}/test_stream_threadsafe
+  ${INTEGRATION_TEST_ROOT}/test_stream_multiclient_delivery
   ${INTEGRATION_TEST_ROOT}/test_stream_send_blocking_wakeup
   ${INTEGRATION_TEST_ROOT}/test_stream_fastpath
   ${INTEGRATION_TEST_ROOT}/test_transport_matrix

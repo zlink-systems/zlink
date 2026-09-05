@@ -887,7 +887,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     std::atomic<int> _peer_socket_type;
     std::atomic<uint64_t> _peer_weight_connection_id;
     std::atomic<uint32_t> _peer_weight;
-    std::atomic<bool> _transport_disconnected_event_claimed;
+    std::atomic<uint64_t> _transport_disconnected_event_connection_id;
 
     // Disconnect msg
     msg_t _disconnect_msg;

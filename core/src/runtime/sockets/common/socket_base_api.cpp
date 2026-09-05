@@ -1748,12 +1748,10 @@ void zlink::socket_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_compl
     // Physical termination is observable before inbound records are drained.
     // Keep the existing claim shared with the transport-error producer so
     // final pipe release cannot publish a second edge.
-    if (pair_id != 0) {
-        event_disconnected (
-          endpoint_pair, ZLINK_DISCONNECT_UNKNOWN, routing_id_data,
-          routing_id_size, pipe_->get_transport_lane (), pair_id,
-          pair_generation);
-    }
+    event_disconnected (
+      endpoint_pair, ZLINK_DISCONNECT_UNKNOWN, routing_id_data,
+      routing_id_size, pipe_->get_transport_lane (), pair_id,
+      pair_generation);
     // pipe_peer_terminated runs under the command owner. Queue the reconnect so
     // connect_internal does not re-enter that owner while handling this pipe.
     if (reconnect_inproc && !is_terminating ())
