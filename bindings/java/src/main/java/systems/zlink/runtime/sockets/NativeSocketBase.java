@@ -94,9 +94,9 @@ abstract class NativeSocketBase implements Socket {
 
             @Override
             public int completionDrain(Socket socket,
-                                       boolean waitForSettlement) {
+                                       java.util.List<Runnable> settlements) {
                 return nativeSocket(socket).runtime.completionOwner().drain(
-                    waitForSettlement);
+                    settlements);
             }
 
             @Override

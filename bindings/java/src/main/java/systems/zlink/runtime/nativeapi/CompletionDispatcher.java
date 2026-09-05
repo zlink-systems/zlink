@@ -2,6 +2,8 @@
 
 package systems.zlink.runtime.nativeapi;
 
+import java.lang.foreign.MemorySegment;
+import systems.zlink.runtime.sockets.CompletionPump;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Objects;
@@ -27,6 +29,7 @@ public final class CompletionDispatcher implements AutoCloseable {
     private final ExecutorService workers;
     private int activeLanes;
     private boolean closed;
+    private CompletionPump completionPump;
 
     public CompletionDispatcher(String threadName) {
         this(threadName, Math.min(MAX_CONTEXT_WORKERS,
@@ -47,6 +50,23 @@ public final class CompletionDispatcher implements AutoCloseable {
         });
     }
 
+    private CompletionPump completionPump(MemorySegment context) {
+        synchronized (lifecycleLock) {
+            if (completionPump == null)
+                completionPump = new CompletionPump(context);
+            return completionPump;
+        }
+    }
+
+    public void closeNativeWait() {
+        CompletionPump pump;
+        synchronized (lifecycleLock) {
+            pump = completionPump;
+        }
+        if (pump != null)
+            pump.close();
+    }
+
     public CompletionLane acquireLane() {
         synchronized (lifecycleLock) {
             if (closed) {
@@ -63,6 +83,7 @@ public final class CompletionDispatcher implements AutoCloseable {
 
     @Override
     public void close() {
+        closeNativeWait();
         boolean shutdown;
         synchronized (lifecycleLock) {
             if (closed) {
@@ -114,6 +135,10 @@ public final class CompletionDispatcher implements AutoCloseable {
 
         private CompletionLane(CompletionDispatcher dispatcher) {
             this.dispatcher = dispatcher;
+        }
+
+        public CompletionPump completionPump(MemorySegment context) {
+            return dispatcher.completionPump(context);
         }
 
         public void dispatch(Runnable completion) {

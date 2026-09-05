@@ -244,25 +244,39 @@ public final class NativePoller implements Poller {
                 DurationConversions.toIntMillis(timeout, "timeout"), waitErrorOut);
             if (readyCount < 0)
                 throw ZlinkException.fromLastError(systems.zlink.contracts.errors.ErrorCategory.CONFIG);
-            for (int i = 0; i < readyCount; i++) {
-                int revents = NativePollEvents.revents(nativeEvents, i);
-                Integer index = socketIndexes.get(
-                    NativePollEvents.socket(nativeEvents, i));
-                if (index == null) {
-                    continue;
+            List<Runnable> settlements = null;
+            try {
+                for (int i = 0; i < readyCount; i++) {
+                    int revents = NativePollEvents.revents(nativeEvents, i);
+                    Integer index = socketIndexes.get(
+                        NativePollEvents.socket(nativeEvents, i));
+                    if (index == null) {
+                        continue;
+                    }
+                    PollItem item = items.get(index);
+                    boolean ownsCompletions = (item.events
+                        & PollEventFlags.POLLCOMPLETION.mask()) != 0;
+                    boolean completionWake = (revents
+                        & (PollEventFlags.POLLCOMPLETION.mask()
+                            | PollEventFlags.POLLOUT.mask())) != 0;
+                    if (ownsCompletions && completionWake) {
+                        if (settlements == null) {
+                            settlements = new ArrayList<>();
+                        }
+                        int progress = InternalAccess.completionDrain(
+                            item.socket, settlements);
+                        if (progress == 0) {
+                            NativePollEvents.revents(nativeEvents, i,
+                                revents & ~PollEventFlags.POLLCOMPLETION.mask());
+                        }
+                    }
                 }
-                PollItem item = items.get(index);
-                boolean ownsCompletions = (item.events
-                    & PollEventFlags.POLLCOMPLETION.mask()) != 0;
-                boolean completionWake = (revents
-                    & (PollEventFlags.POLLCOMPLETION.mask()
-                        | PollEventFlags.POLLOUT.mask())) != 0;
-                if (ownsCompletions && completionWake) {
-                    int progress = InternalAccess.completionDrain(
-                        item.socket, true);
-                    if (progress == 0) {
-                        NativePollEvents.revents(nativeEvents, i,
-                            revents & ~PollEventFlags.POLLCOMPLETION.mask());
+            } finally {
+                // Dispatch every ready socket before waiting for workers. The
+                // same context lanes still settle stages off the wait thread.
+                if (settlements != null) {
+                    for (Runnable settlement : settlements) {
+                        settlement.run();
                     }
                 }
             }

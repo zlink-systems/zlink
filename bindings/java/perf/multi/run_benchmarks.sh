@@ -851,9 +851,20 @@ fi
 if [[ "${ZLINK_CORE_RELEASE_MODE}" -eq 0 ]] && find "${REPO_DIR}/core/include" "${REPO_DIR}/core/src" \
     -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' \) \
     -newer "${CORE_RUNTIME}" -print -quit | grep -q .; then
-  echo "core runtime is older than core source: ${CORE_RUNTIME}" >&2
-  echo "Run: cmake --build core/build" >&2
-  exit 1
+  # A linked build can belong to another checkout. Its source timestamps are
+  # authoritative only when both source trees have identical contents.
+  build_source="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' \
+    "${REPO_DIR}/core/build/CMakeCache.txt" 2>/dev/null || true)"
+  if [[ -z "${build_source}" || "${build_source}" == "${REPO_DIR}/core" ]] \
+    || ! diff -qr "${build_source}/include" "${REPO_DIR}/core/include" >/dev/null \
+    || ! diff -qr "${build_source}/src" "${REPO_DIR}/core/src" >/dev/null \
+    || find "${build_source}/include" "${build_source}/src" \
+      -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.c' -o -name '*.cc' -o -name '*.cpp' \) \
+      -newer "${CORE_RUNTIME}" -print -quit | grep -q .; then
+    echo "core runtime is older than core source: ${CORE_RUNTIME}" >&2
+    echo "Run: cmake --build core/build" >&2
+    exit 1
+  fi
 fi
 export ZLINK_LIBRARY_PATH="${CORE_RUNTIME}"
 echo "Perf runtime libzlink: ${CORE_RUNTIME}"
