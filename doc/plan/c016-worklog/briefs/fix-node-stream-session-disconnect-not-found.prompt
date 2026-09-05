@@ -1,0 +1,26 @@
+# Job (fix, model astra): node ZoneWorld gateway process crashed with an unhandled `ConfigError: disconnect_rid failed: No such file or directory` (code 706, errno 2) thrown from `RawStreamSessionService.deliver` (`node-raw-mesh-backend.js:1106` → `deliverBoundSession` → `handleIngress` → mesh pump) — the framework asked Core to disconnect a STREAM session RID that Core no longer had and treated NOT_FOUND as fatal, killing the process ("gateway exited before the sample client ran", cleanup SIGKILL of zone nodes)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `core/doc/spec/core/socket/README.ko.md` § zlink_disconnect_rid (returns
+`ZLINK_CONNECT_NOT_FOUND` when the target is absent — a terminal fact, not an error to retry) and §6, `04-session/01-stream-session.ko.md` (session lifecycle, session-gone
+handling), `bindings/doc/spec/node/README.ko.md` (ConfigError/result 706 mapping), and the recent node STREAM commits (`8159b15752` STREAM async terminal, `9981c9fd6e`).
+Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages, shared_sample; do not commit. Env: `framework/languages/node`,
+`TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`; samples under `flock -w7200 /tmp/zlink-samples-gate.lock` (a gate may hold
+it; wait). Installed Core 083588b4… (rebuild13; includes B's STREAM change bf28780d51 — a separate Core job investigates it; do not compensate for Core timing here).
+
+## Evidence
+`/dev/shm/zlink-tmp-node/zlink-zoneworld-I8r3Nz/logs/gateway.log` (lines 7-24: the ConfigError and stack), gate log
+`/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/gate13-node-samples.log`.
+
+## Fix (single owner)
+In the STREAM session service owner (`packages/framework/src/runtime/backend/node/node-raw-mesh-backend.ts` deliver path and any other `disconnect_rid`/session-close call
+sites): "closing a session that Core no longer has" is a completed close (idempotent) — map the binding's NOT_FOUND result to the session-closed outcome at that owner, no
+catch-all, and the session's local state is cleaned exactly as for a normal close. Any other disconnect_rid failure stays an error with its typed kind. Regression test:
+deliver to a bound session whose RID Core already dropped → no throw, session closed once, ingress pump continues. Also check dotnet/java equivalents (`ZLinkBoundSessionService`,
+`ZLinkJavaStreamSocket` close paths) for the same NOT_FOUND handling and state parity (report; do not change other languages).
+
+## Verify
+`stream-runtime`, `stream-session-runtime`, `raw-service-mesh` contract tests; ZoneWorld ×3 (exit 0, all verdicts); `bash samples/run_samples.sh` once; `npm test` once (report
+`stream-actor-bind-replay.test.js` separately if it fails — it is under the Core investigation).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-stream-session-disconnect-not-found-summary.md` (sequence, cause file:line, fix, four lines, rule count, results, BLOCKERS).
