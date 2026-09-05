@@ -7,6 +7,71 @@ namespace Systems.Zlink.Tests;
 
 public sealed class test_monitor_contract
 {
+    [Theory]
+    [InlineData("inproc")]
+    [InlineData("tcp")]
+    public void monitor_poller_mask_and_drain(string transport)
+    {
+        Assert.True(CoreTestSupport.IsNativeAvailable());
+        using var ctx = Zlink.CreateContext();
+        using var server = ctx.CreatePairSocket();
+        using var client = ctx.CreatePairSocket();
+        using ISocketMonitor monitor = server.MonitorOpen(SocketEvent.ConnectionReady);
+        using IPoller poller = Zlink.CreatePoller();
+        PollEventFlags[] invalidMasks = {
+            PollEventFlags.PollOut, PollEventFlags.PollCompletion,
+            PollEventFlags.PollIn | PollEventFlags.PollOut,
+            PollEventFlags.PollIn | PollEventFlags.PollCompletion,
+            PollEventFlags.PollErr, PollEventFlags.PollPri,
+            (PollEventFlags)0x4000
+        };
+        foreach (var mask in invalidMasks)
+        {
+            var error = Assert.Throws<ZlinkConfigException>(() =>
+                poller.Add(monitor, mask, 71));
+            Assert.Equal(ZlinkConfigException.ErrorCode.InvalidArgument, error.Result);
+            Assert.Equal(0, poller.Size);
+            error = Assert.Throws<ZlinkConfigException>(() =>
+                ZlinkPoll.Poll(new[] { monitor }, new[] { mask },
+                    new PollEventFlags[1], 0));
+            Assert.Equal(ZlinkConfigException.ErrorCode.InvalidArgument, error.Result);
+        }
+        poller.Add(monitor, PollEventFlags.None, 71);
+        var endpoint = transport == "inproc"
+            ? $"inproc://monitor-poller-{Guid.NewGuid():N}"
+            : CoreTestSupport.NewEndpoint(transport, "monitor-poller");
+        server.Bind(endpoint);
+        client.Connect(endpoint);
+        var events = new PollEvent[1];
+        Assert.Equal(0, poller.Wait(events, TimeSpan.Zero));
+        poller.Modify(monitor, PollEventFlags.PollIn);
+        foreach (var mask in invalidMasks)
+        {
+            var error = Assert.Throws<ZlinkConfigException>(() =>
+                poller.Modify(monitor, mask));
+            Assert.Equal(ZlinkConfigException.ErrorCode.InvalidArgument, error.Result);
+            Assert.Equal(1, poller.Size);
+        }
+        Assert.Equal(1, poller.Wait(events, TimeSpan.FromSeconds(2)));
+        Assert.Equal(PollSourceKind.Socket, events[0].SourceKind);
+        Assert.Equal((nuint)71, events[0].Slot);
+        Assert.Equal(PollEventFlags.PollIn, events[0].Revents);
+        Assert.True(poller.Remove(monitor));
+        Assert.False(poller.Remove(monitor));
+        Assert.Equal(0, poller.Size);
+        Assert.Equal(0, poller.Wait(events, TimeSpan.Zero));
+        poller.Add(monitor, PollEventFlags.PollIn, 72);
+        Assert.Equal(1, poller.Wait(events, TimeSpan.FromSeconds(2)));
+        Assert.Equal((nuint)72, events[0].Slot);
+        Assert.Equal(MonitorEventType.ConnectionReady,
+            Assert.IsType<MonitorEvent>(monitor.Recv(RecvFlags.DontWait)).Event);
+        Assert.Null(monitor.Recv(RecvFlags.DontWait));
+        Assert.Equal(0, poller.Wait(events, TimeSpan.Zero));
+        poller.Clear();
+        Assert.Equal(0, poller.Size);
+        Assert.False(poller.Remove(monitor));
+    }
+
     [Fact]
     public void native_monitor_event_layout_matches_c_abi()
     {

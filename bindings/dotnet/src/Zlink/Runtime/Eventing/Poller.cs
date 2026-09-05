@@ -58,6 +58,18 @@ internal sealed class Poller : NativeOwner, IPoller
             null, events, slot, completionOwner, ownsCompletion));
     }
 
+    public void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot)
+    {
+        EnsureNotDisposed();
+        var concreteMonitor = SocketInterop.RequireMonitor(monitor, nameof(monitor));
+        EnumValidation.EnsureMonitorPollEvents(events);
+        var rc = NativeMethods.zlink_poller_add(_handle, concreteMonitor.Handle,
+            SlotToUserData(slot), (short)events);
+        ZlinkException.ThrowConfigIfError(rc);
+        RegisterItem(new PollItem(PollItemKind.Monitor, null, concreteMonitor.Handle,
+            0, null, events, slot, null, false) { Monitor = concreteMonitor });
+    }
+
     public void AddFd(int fd, PollEventFlags events, nuint slot)
     {
         EnsureNotDisposed();
@@ -123,6 +135,20 @@ internal sealed class Poller : NativeOwner, IPoller
             item.CompletionOwner!.TransferToRuntime(this);
     }
 
+    public void Modify(ISocketMonitor monitor, PollEventFlags events)
+    {
+        EnsureNotDisposed();
+        var concreteMonitor = SocketInterop.RequireMonitor(monitor, nameof(monitor));
+        EnumValidation.EnsureMonitorPollEvents(events);
+        var index = FindMonitor(concreteMonitor);
+        if (index < 0)
+            throw new ArgumentException("monitor is not registered", nameof(monitor));
+        var rc = NativeMethods.zlink_poller_modify(_handle, concreteMonitor.Handle,
+            (short)events);
+        ZlinkException.ThrowConfigIfError(rc);
+        _items[index].Events = events;
+    }
+
     public void ModifyFd(int fd, PollEventFlags events)
     {
         EnsureNotDisposed();
@@ -154,6 +180,19 @@ internal sealed class Poller : NativeOwner, IPoller
         UnregisterItem(index);
         if (item.OwnsCompletion)
             item.CompletionOwner!.TransferToRuntime(this);
+        return true;
+    }
+
+    public bool Remove(ISocketMonitor monitor)
+    {
+        EnsureNotDisposed();
+        var concreteMonitor = SocketInterop.RequireMonitor(monitor, nameof(monitor));
+        var index = FindMonitor(concreteMonitor);
+        if (index < 0)
+            return false;
+        var rc = NativeMethods.zlink_poller_remove(_handle, _items[index].SocketHandle);
+        ZlinkException.ThrowConfigIfError(rc);
+        UnregisterItem(index);
         return true;
     }
 
@@ -370,6 +409,15 @@ internal sealed class Poller : NativeOwner, IPoller
         return -1;
     }
 
+    private int FindMonitor(SocketMonitor monitor)
+    {
+        for (var i = 0; i < _items.Count; i++)
+            if (_items[i].Kind == PollItemKind.Monitor
+                && ReferenceEquals(_items[i].Monitor, monitor))
+                return i;
+        return -1;
+    }
+
     private int FindFd(int fd)
     {
         for (var i = 0; i < _items.Count; i++)
@@ -457,6 +505,7 @@ internal sealed class Poller : NativeOwner, IPoller
     private enum PollItemKind
     {
         Socket,
+        Monitor,
         Fd,
         Timer
     }
@@ -481,6 +530,7 @@ internal sealed class Poller : NativeOwner, IPoller
 
         public PollItemKind Kind { get; }
         public IZlinkSocket? Socket { get; }
+        public SocketMonitor? Monitor { get; init; }
         public IntPtr SocketHandle { get; }
         public int Fd { get; }
         public Timer? Timer { get; }

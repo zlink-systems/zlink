@@ -48,18 +48,6 @@ public static partial class ZlinkPoll
             writeRevents: true);
     }
 
-    private static SocketMonitor RequireMonitor(ISocketMonitor monitor,
-        string paramName)
-    {
-        if (monitor == null)
-            throw new ArgumentNullException(paramName);
-        if (monitor is not SocketMonitor concrete)
-            throw new ArgumentException(
-                "monitor must be a concrete zlink socket monitor instance",
-                paramName);
-        return concrete;
-    }
-
     private static int PollSocketsCore(IReadOnlyList<IZlinkSocket> sockets,
         IReadOnlyList<PollEventFlags>? events, Span<PollEventFlags> revents,
         int timeoutMs, bool writeRevents)
@@ -126,13 +114,17 @@ public static partial class ZlinkPoll
         if (count <= 0)
             return 0;
 
+        if (events != null)
+            for (var i = 0; i < count; i++)
+                EnumValidation.EnsureMonitorPollEvents(events[i]);
+
         long boundedTimeoutMs = Math.Max(0, timeoutMs);
         if (OperatingSystem.IsWindows())
         {
             var items = EnsureWindowsCapacity(count);
             for (var i = 0; i < count; i++)
             {
-                items[i].Socket = RequireMonitor(monitors[i],
+                items[i].Socket = SocketInterop.RequireMonitor(monitors[i],
                     nameof(monitors)).Handle;
                 items[i].Fd = 0;
                 items[i].Events = (short)(events == null
@@ -154,7 +146,7 @@ public static partial class ZlinkPoll
         var unixItems = EnsureUnixCapacity(count);
         for (var i = 0; i < count; i++)
         {
-            unixItems[i].Socket = RequireMonitor(monitors[i],
+            unixItems[i].Socket = SocketInterop.RequireMonitor(monitors[i],
                 nameof(monitors)).Handle;
             unixItems[i].Fd = 0;
             unixItems[i].Events = (short)(events == null

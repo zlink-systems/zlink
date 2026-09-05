@@ -62,30 +62,7 @@ public static class SampleSupport
     private static void WaitConnectedMonitor(ISocketMonitor monitor,
         int timeoutMs)
     {
-        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (DateTime.UtcNow < deadline)
-        {
-            MonitorEvent? evt = monitor.Recv(RecvFlags.DontWait);
-            if (evt != null)
-            {
-                if (evt.Event == MonitorEventType.ConnectionReady)
-                    return;
-
-                throw new InvalidOperationException(
-                    $"Unexpected monitor event {evt.Event}.");
-            }
-
-            // ROUTER monitor queues can require socket activity before the
-            // connection-ready record becomes readable. Status is the public
-            // readiness snapshot for that case; PUB/SUB still completes from
-            // the monitor event above before status becomes ready.
-            if (monitor.Status().IsReady)
-                return;
-
-            Thread.Sleep(1);
-        }
-
-        throw new TimeoutException("Timed out waiting for socket connection.");
+        _ = WaitMonitorEvent(monitor, timeoutMs, SocketEvent.ConnectionReady);
     }
 
     public static MonitorEvent WaitMonitorEvent(ISocketMonitor monitor,
@@ -97,15 +74,18 @@ public static class SampleSupport
                 nameof(expectedEvents));
         }
 
-        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (DateTime.UtcNow < deadline)
+        using var poller = global::Systems.Zlink.Zlink.CreatePoller();
+        poller.Add(monitor, PollEventFlags.PollIn, 0);
+        var ready = new PollEvent[1];
+        long deadline = Environment.TickCount64 + timeoutMs;
+        while (Environment.TickCount64 < deadline)
         {
+            var remaining = Math.Max(0, deadline - Environment.TickCount64);
+            if (poller.Wait(ready, TimeSpan.FromMilliseconds(remaining)) == 0)
+                break;
             MonitorEvent? evt = monitor.Recv(RecvFlags.DontWait);
             if (evt is null)
-            {
-                Thread.Sleep(1);
                 continue;
-            }
 
             for (int i = 0; i < expectedEvents.Length; i++)
             {

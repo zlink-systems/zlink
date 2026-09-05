@@ -49,6 +49,10 @@ public static partial class ZlinkPoll
     ///     <paramref name="events" /> requested per monitor, writing the events that
     ///     fired into <paramref name="revents" /> at matching indexes.
     /// </summary>
+    /// <remarks>
+    ///     Monitor masks accept only PollIn or None. Other bits throw
+    ///     ZlinkConfigException with InvalidArgument.
+    /// </remarks>
     /// <returns>The number of monitors with events; 0 on timeout.</returns>
     public static int Poll(IReadOnlyList<ISocketMonitor> monitors,
         IReadOnlyList<PollEventFlags> events, Span<PollEventFlags> revents,

@@ -155,6 +155,12 @@ bindings/dotnet/
 - Public creation returns a public contract such as `IContext`, a socket interface, `ISpotNode`, `IPoller`, or `IZlinkTimer`, unless the public contract explicitly requires a concrete value type.
 - Runtime classes such as `Context`, a socket class, `SpotNode`, `Poller`, or `Timer` are implementation owners, not the preferred consumer surface.
 
+`IPoller` accepts a socket monitor as a source through `void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot)`,
+`void Modify(ISocketMonitor monitor, PollEventFlags events)` and `bool Remove(ISocketMonitor monitor)` (common spec "Monitor
+sources in `Poller`"); the one-shot `ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>, ...)` remains. A monitor mask accepts only
+`PollIn` or `None`; any other bit is rejected with `ZlinkConfigException` (`ErrorCode.InvalidArgument`). Drain with
+`Receive`/`TryReceive` (DONTWAIT) after readiness.
+
 `Runtime/Buffers`, `Runtime/Handles`, and `Runtime/Options` are
 implementation-support categories. These folders exist because real
 native ownership, routing-id encoding, and option validation decisions

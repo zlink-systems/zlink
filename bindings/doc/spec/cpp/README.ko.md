@@ -234,6 +234,11 @@ Layout 섹션이다. 이 C++ README는 그 카테고리의 C++ 투영만 정의�
 | Service | `spot_node_t`, `spot_t`, `actor_ref_t`, actor 생명주기 모델, service operation 빌더 | `Contracts/Service/` |
 | Errors | 공개 예외와 result 도메인 타입 | `Contracts/Errors/` |
 
+`poller_t`는 `void add(socket_monitor_t &monitor_, poll_event_flag_t events_, std::uintptr_t slot_)`,
+`void modify(socket_monitor_t &monitor_, poll_event_flag_t events_)`, `bool remove(socket_monitor_t &monitor_)`로 socket monitor를
+source로 받는다(공통 spec "`Poller`의 monitor source"). monitor mask는 `pollin` 또는 none만 유효하고 다른 bit는
+`config_error_t(config_result_t::invalid_argument)`로 거절한다. ready 뒤 `socket_monitor_t::recv(DONTWAIT)`로 drain한다.
+
 위 지도는 공개 API 색인이다. 계약 표면 개요의 C++ 등가물이며, `IContext`, `ISpot`,
 `IActor` 같은 추상 인터페이스를 의미하지 않는다. 공개 리소스 객체는 호출자가 진정한 대체
 동작을 필요로 하지 않는 한 구체 RAII 파사드로 유지한다. 좁은 인터페이스는 codec, callback,

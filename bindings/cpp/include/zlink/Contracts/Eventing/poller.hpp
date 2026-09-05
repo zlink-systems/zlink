@@ -33,6 +33,8 @@ class poller_t
     bool valid () const noexcept;
     int size () const;
 
+    /// Monitor masks accept pollin or none; other bits throw config_error_t
+    /// with config_result_t::invalid_argument. Drain readiness with recv(dontwait).
     void add (socket_monitor_t &monitor_, poll_event_flag_t events_, std::uintptr_t slot_);
     void add (socket_t &socket_, poll_event_flag_t events_, std::uintptr_t slot_);
 
@@ -40,6 +42,8 @@ class poller_t
     void add (timer_t &timer_, std::uintptr_t slot_);
 
     void modify_fd (int fd_, poll_event_flag_t events_);
+    /// Changes a monitor mask; bits outside pollin throw config_error_t
+    /// with config_result_t::invalid_argument.
     void modify (socket_monitor_t &monitor_, poll_event_flag_t events_);
     void modify (socket_t &socket_, poll_event_flag_t events_);
 

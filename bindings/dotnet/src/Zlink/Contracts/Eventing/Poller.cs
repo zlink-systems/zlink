@@ -3,7 +3,7 @@
 namespace Systems.Zlink;
 
 /// <summary>
-///     Multiplexes sockets, file descriptors, and timers, reporting which become
+///     Multiplexes sockets, monitors, file descriptors, and timers, reporting which become
 ///     ready on a single wait.
 /// </summary>
 public interface IPoller : IDisposable, IAsyncDisposable
@@ -29,6 +29,13 @@ public interface IPoller : IDisposable, IAsyncDisposable
     void Add(IZlinkSocket socket, PollEventFlags events, nuint slot);
 
     /// <summary>
+    ///     Registers a monitor with a caller slot. Only PollIn or None is valid;
+    ///     other bits throw ZlinkConfigException with InvalidArgument.
+    ///     After readiness, drain monitor events with Recv(DontWait).
+    /// </summary>
+    void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot);
+
+    /// <summary>
     ///     Registers raw file descriptor <paramref name="fd" /> to be watched for
     ///     <paramref name="events" />; <paramref name="slot" /> is echoed back in the
     ///     matching <see cref="PollEvent" />.
@@ -47,6 +54,12 @@ public interface IPoller : IDisposable, IAsyncDisposable
     void Modify(IZlinkSocket socket, PollEventFlags events);
 
     /// <summary>
+    ///     Changes a registered monitor's mask. Only PollIn or None is valid;
+    ///     other bits throw ZlinkConfigException with InvalidArgument.
+    /// </summary>
+    void Modify(ISocketMonitor monitor, PollEventFlags events);
+
+    /// <summary>
     ///     Changes the watched events for an already-registered file descriptor.
     /// </summary>
     void ModifyFd(int fd, PollEventFlags events);
@@ -56,6 +69,10 @@ public interface IPoller : IDisposable, IAsyncDisposable
     /// </summary>
     /// <returns>true when it was registered; otherwise false.</returns>
     bool Remove(IZlinkSocket socket);
+
+    /// <summary>Unregisters a monitor.</summary>
+    /// <returns>true when it was registered; otherwise false.</returns>
+    bool Remove(ISocketMonitor monitor);
 
     /// <summary>
     ///     Unregisters <paramref name="timer" />.
