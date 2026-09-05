@@ -713,9 +713,10 @@ void zlink::stream_t::clear_packet_receive_queue ()
 
 int zlink::stream_t::pump_packet_receive_queue ()
 {
-    const size_t max_raw_chunks_per_pump = 64;
-    size_t raw_chunks = 0;
-    while (!packet_queue_at_limit () && raw_chunks < max_raw_chunks_per_pump) {
+    // Readiness means a complete packet, not a fixed number of raw chunks.
+    // Stopping on a chunk budget can strand already-readable input after its
+    // activation was consumed. Decode until a packet is ready or input ends.
+    while (_packet_receive_queue.empty ()) {
         msg_t raw;
         bool local_raw = false;
         pipe_t *source_pipe = NULL;
@@ -750,7 +751,6 @@ int zlink::stream_t::pump_packet_receive_queue ()
                 errno_assert (close_rc == 0);
                 source_pipe->terminate (false);
                 _fq.deactivate (source_pipe);
-                ++raw_chunks;
                 continue;
             }
             source_rid.size = sizeof (routing_id);
@@ -771,7 +771,6 @@ int zlink::stream_t::pump_packet_receive_queue ()
                 errno_assert (close_rc == 0);
                 errno = saved_errno;
             }
-            ++raw_chunks;
             continue;
         }
 
@@ -793,7 +792,6 @@ int zlink::stream_t::pump_packet_receive_queue ()
             const int close_rc = raw.close ();
             errno_assert (close_rc == 0);
         }
-        ++raw_chunks;
     }
     return 0;
 }
@@ -824,10 +822,9 @@ int zlink::stream_t::xrecv_packet_header (msg_t *header_out_)
         : _packet_receive_accounted_bytes - record.accounted_bytes;
     _packet_receive_queue.pop_front ();
 
-    // Refill immediately after releasing queue credit so a packet already
-    // buffered in a raw chunk keeps POLLIN level-triggered without waiting for
-    // a transport activation that has already happened.
-    (void) pump_packet_receive_queue ();
+    // Both receive and POLLIN refill an empty queue, including a retained raw
+    // chunk. Let those demand points own decoding; refilling after every pop
+    // repeats pipe probes while complete packets are still queued.
     return 0;
 }
 
