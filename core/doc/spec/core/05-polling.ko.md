@@ -47,6 +47,7 @@ readiness를 기다리는 방법은 두 가지다.
 | Source | `POLLIN` | `POLLOUT` | 추가 readiness·규칙 |
 |---|---|---|---|
 | raw socket | complete record를 수신할 수 있음 | submit 재시도 가치가 있음(socket 전체 집계). 읽지 않은 `ZLINK_COMPLETION_WRITABLE` record가 있는 동안 level로 유지 | socket별 receive mode 적용. close된 등록 socket은 `ZLINK_POLLERR` 1회 |
+| socket monitor | monitor event를 받을 수 있음 | 미지원 | `zlink_socket_monitor_recv()`로 drain. monitor handle은 raw socket과 같은 등록 함수로 poller에 넣는다(socket/README §"application에 알리는 경로") |
 | timer | fire count를 받을 수 있음 | 미지원 | `zlink_timer_recv()`로 drain |
 | FD | platform readable | platform writable | platform `POLLPRI`는 `ZLINK_POLLPRI`, 그 밖의 platform 오류 bit는 `ZLINK_POLLERR`로 변환 |
 

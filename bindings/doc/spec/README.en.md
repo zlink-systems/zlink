@@ -2637,10 +2637,19 @@ expose.**
 | Member | Type | Meaning |
 |------|------|------|
 | `event` | `MonitorEventType` (enum) | The event kind (CONNECTION_READY, CONNECTED, DISCONNECTED, and so on) |
-| `value` | `uint32` | A per-event detail value (for example, the reason code on DISCONNECTED) |
+| `value` | `uint64` | A per-event detail value (for example, the reason code on DISCONNECTED) |
 | `routing_id` | `RoutingId?` | The matching peer routing id (null for an event without one) |
 | `local_addr` | `string` | The local endpoint |
 | `remote_addr` | `string` | The remote endpoint |
+| `connection_id` | `uint64` | Identifier of one physical transport attempt (Core 06-monitoring §3.1). READY/DISCONNECTED/CLOSED of the same attempt carry the same nonzero value |
+| `transport_lane` | `TransportLane` (enum: Application=0, Completion=1) | The lane of the physical connection the event belongs to |
+| `flags` | `uint32` (bit flags) | Auxiliary event flags such as the READY edge (Core `zlink_monitor_event_t.flags`) |
+
+Bindings that mirror the native layout by hand (.NET, Java, Python, Rust) pin the Core public struct size of 800 B and the `connection_id`/`transport_lane`/`flags` offsets 784/792/796 with a regression test.
+
+#### Monitor sources in `Poller`
+
+Every binding's public `Poller` must be able to add/modify/remove a socket monitor as a source in addition to raw sockets, timers and FDs (Core 05-polling §3, "socket monitor" row). A monitor only reports `POLLIN` readiness and is drained with `Monitor.recv` (DONTWAIT) after it is ready. The registration surface follows the language's conventions (an overload, a dedicated `add_monitor` family, or the monitor satisfying the socket source type), the language spec names it, and the Poller test verifies monitor registration and drain.
 
 #### `MonitorStatus`
 
@@ -5478,6 +5487,8 @@ following criteria.
 ### Conditional: Poller Tests
 - Confirm raw socket readiness or fd readiness is delivered through the
   public poller API.
+- Confirm a socket monitor can be registered with the poller and its events
+  drained after `POLLIN` readiness.
 - Confirm the poller doesn't silently accept a service-specific handle
   it doesn't support.
 - Verify a readiness event value does not replace the data-plane
