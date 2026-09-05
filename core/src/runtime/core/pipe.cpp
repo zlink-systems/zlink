@@ -2902,64 +2902,70 @@ void zlink::pipe_t::acknowledge_peer_termination_unlocked (
 {
     transition_to_inactive_state_unlocked (state_);
     _out_pipe = NULL;
-    if (_sink)
-        _sink->pipe_peer_terminated (this);
     (void) send_pipe_term_ack (get_peer ());
 }
 
 void zlink::pipe_t::process_pipe_term ()
 {
-    scoped_fast_lock_t lock (_out_sync);
-    pipe_debug_log (this, "process_pipe_term", _state, _delay,
-                    _endpoint_pair.identifier ().c_str ());
+    bool drain_complete = false;
+    {
+        scoped_fast_lock_t lock (_out_sync);
+        pipe_debug_log (this, "process_pipe_term", _state, _delay,
+                        _endpoint_pair.identifier ().c_str ());
 
-    //  Peer-induced termination is logically one-shot. During cascading
-    //  socket teardown we can observe a duplicate term command after
-    //  we've already transitioned into a peer-terminated state; treat that as
-    //  an idempotent no-op instead of asserting.
-    if (_state == waiting_for_delimiter) {
-        return;
-    }
-    if (_state == term_ack_sent || _state == term_req_sent2) {
-        (void) send_pipe_term_ack (get_peer ());
-        return;
-    }
-
-    zlink_assert (_state == active || _state == delimiter_received || _state == term_req_sent1);
-
-    //  This is the simple case of peer-induced termination. If there are no
-    //  more pending messages to read, or if the pipe was configured to drop
-    //  pending messages, we can move directly to the term_ack_sent state.
-    //  Otherwise we'll hang up in waiting_for_delimiter state till all
-    //  pending messages are read.
-    if (_state == active) {
-        bool pending_to_read = false;
-        if (_in_pipe) {
-            msg_t delimiter;
-            const ypipe_read_result_t delimiter_result =
-              _in_pipe->read_if (&delimiter, &consume_if_delimiter, NULL);
-            pending_to_read = delimiter_result == ypipe_read_rejected;
+        //  Peer-induced termination is logically one-shot. During cascading
+        //  socket teardown we can observe a duplicate term command after
+        //  we've already transitioned into a peer-terminated state; treat that as
+        //  an idempotent no-op instead of asserting.
+        if (_state == waiting_for_delimiter) {
+            return;
+        }
+        if (_state == term_ack_sent || _state == term_req_sent2) {
+            (void) send_pipe_term_ack (get_peer ());
+            return;
         }
 
-        if (_delay && pending_to_read) {
-            transition_to_inactive_state_unlocked (waiting_for_delimiter);
-        } else {
+        zlink_assert (_state == active || _state == delimiter_received || _state == term_req_sent1);
+
+        //  This is the simple case of peer-induced termination. If there are no
+        //  more pending messages to read, or if the pipe was configured to drop
+        //  pending messages, we can move directly to the term_ack_sent state.
+        //  Otherwise we'll hang up in waiting_for_delimiter state till all
+        //  pending messages are read.
+        if (_state == active) {
+            bool pending_to_read = false;
+            if (_in_pipe) {
+                msg_t delimiter;
+                const ypipe_read_result_t delimiter_result =
+                  _in_pipe->read_if (&delimiter, &consume_if_delimiter, NULL);
+                pending_to_read = delimiter_result == ypipe_read_rejected;
+            }
+
+            if (_delay && pending_to_read) {
+                transition_to_inactive_state_unlocked (waiting_for_delimiter);
+            } else {
+                acknowledge_peer_termination_unlocked (term_ack_sent);
+            }
+        }
+
+        //  Delimiter happened to arrive before the term command. Now we have the
+        //  term command as well, so we can move straight to term_ack_sent state.
+        else if (_state == delimiter_received) {
             acknowledge_peer_termination_unlocked (term_ack_sent);
         }
-    }
 
-    //  Delimiter happened to arrive before the term command. Now we have the
-    //  term command as well, so we can move straight to term_ack_sent state.
-    else if (_state == delimiter_received) {
-        acknowledge_peer_termination_unlocked (term_ack_sent);
+        //  This is the case where both ends of the pipe are closed in parallel.
+        //  We simply reply to the request by ack and continue waiting for our
+        //  own ack.
+        else if (_state == term_req_sent1) {
+            acknowledge_peer_termination_unlocked (term_req_sent2);
+        }
+        drain_complete = _state != waiting_for_delimiter;
     }
-
-    //  This is the case where both ends of the pipe are closed in parallel.
-    //  We simply reply to the request by ack and continue waiting for our
-    //  own ack.
-    else if (_state == term_req_sent1) {
-        acknowledge_peer_termination_unlocked (term_req_sent2);
-    }
+    // Pending correlation release can acquire the pipe's outbound gate.
+    // Notify the owner only after the termination transition releases it.
+    if (_sink)
+        _sink->pipe_peer_terminated (this, drain_complete);
 }
 
 void zlink::pipe_t::process_pipe_term_ack ()

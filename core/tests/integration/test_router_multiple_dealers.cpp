@@ -40,7 +40,7 @@ class pipe_cleanup_sink_t : public zlink::i_pipe_events
         ++write_activated_count;
     }
     void hiccuped (zlink::pipe_t *) ZLINK_OVERRIDE {}
-    void pipe_peer_terminated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void pipe_peer_terminated (zlink::pipe_t *, bool) ZLINK_OVERRIDE {}
     void pipe_terminated (zlink::pipe_t *) ZLINK_OVERRIDE
     {
         ++terminated_count;
@@ -2057,7 +2057,7 @@ void test_dist_message_preflight_consumes_published_credit_before_owner_wake ()
                 dist->activated (pipe_);
         }
         void hiccuped (zlink::pipe_t *) ZLINK_OVERRIDE {}
-        void pipe_peer_terminated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+        void pipe_peer_terminated (zlink::pipe_t *, bool) ZLINK_OVERRIDE {}
         void pipe_terminated (zlink::pipe_t *) ZLINK_OVERRIDE
         {
             ++terminated_count;
@@ -2167,7 +2167,7 @@ void test_passive_hwm_probe_does_not_consume_write_activation ()
             lb->activated (pipe_);
         }
         void hiccuped (zlink::pipe_t *) ZLINK_OVERRIDE {}
-        void pipe_peer_terminated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+        void pipe_peer_terminated (zlink::pipe_t *, bool) ZLINK_OVERRIDE {}
         void pipe_terminated (zlink::pipe_t *) ZLINK_OVERRIDE
         {
             ++terminated_count;

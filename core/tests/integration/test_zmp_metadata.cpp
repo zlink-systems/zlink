@@ -2063,7 +2063,7 @@ void test_completion_lane_rejects_data_and_request_kinds_without_completing_them
           receive_request_completion_eventually (server);
         TEST_ASSERT_EQUAL_UINT64 (completion_id,
                                   request_completion.completion_id);
-        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_TIMED_OUT,
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_NOT_CONNECTED,
                                request_completion.request_result);
         zlink_completion_close (&request_completion);
         msleep (SETTLE_TIME);

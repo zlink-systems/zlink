@@ -1265,10 +1265,11 @@ void zlink::socket_base_t::end_public_part_receive_delivery_hold (
               transport_pair_key_t (0, 0);
         }
 
-        if (held_pipe)
-            (void) reclassify_transport_pair_application_head (held_pipe);
-        notify_receive_progress_locked ();
         if (held_pipe) {
+            (void) reclassify_transport_pair_application_head (held_pipe);
+            // A failed receive with no suppressed pipe made no progress.
+            // Waking its own blocking retry would starve the command owner.
+            notify_receive_progress_locked ();
             held_pipe->release_inbound_read_ref ();
             held_pipe->release_lifetime_ref ();
         }
@@ -1713,9 +1714,12 @@ void zlink::socket_base_t::hiccuped (pipe_t *pipe_)
         xhiccuped (pipe_);
 }
 
-void zlink::socket_base_t::pipe_peer_terminated (pipe_t *pipe_)
+void zlink::socket_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_complete_)
 {
-    LIBZLINK_UNUSED (pipe_);
+    LIBZLINK_UNUSED (drain_complete_);
+    socket_reqrep_internal::fail_pending_requests_for_transport_pair (
+      request_reply_state (), pipe_->get_transport_pair_id (),
+      pipe_->get_transport_pair_generation ());
 }
 
 void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
@@ -1738,6 +1742,7 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
     const uint64_t pair_id = pipe_ ? pipe_->get_transport_pair_id () : 0;
     const uint64_t pair_generation =
       pipe_ ? pipe_->get_transport_pair_generation () : 0;
+    pipe_peer_terminated (pipe_);
     const bool completion =
       pipe_ && pair_id != 0 && pipe_->get_transport_lane () == transport_lane_completion;
     // Only the connecting socket records a pipe in inprocs. Explicit

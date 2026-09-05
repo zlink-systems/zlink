@@ -1,0 +1,16 @@
+# Job (Core verify, model astra): build and gate the D-090 diff (REJECT close + single REQUEST termination rule + inproc overlap fix + 5 assertion updates) on top of main HEAD, which now also has the D-089 close fix (cb62cb89f8)
+
+You are a codex sub-agent under a Claude supervisor. Read `CONTRIBUTING.ko.md` §4/§5 and `doc/plan/c016-worklog/core-reject-duplicate-close-3-summary.md`
+(round 3 ran 170/171 on an older base without cb62cb89f8; the only failure was `test_close_completion_poller_release`, expected to pass
+now). Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do not commit. WORK ONLY IN `/home/hep7/project/zlink-core-b`
+(detached at main HEAD with the D-090 patch applied — `git status` shows ~23 files). Never touch main's `core/build-dev`.
+
+## What to do
+1. `nice -n 10 env JOBS=4 scripts/build-core.sh dev`.
+2. `ctest --test-dir core/build-dev -j2 -R 'test_router_reject_duplicate|test_close_completion_poller_release|test_disconnect_progress|test_router_reciprocal_handover_lanes|test_ctx_term_fixed_rid_handover|test_socket_disconnect_progress_without_app_poll|^test_single_lane_' --output-on-failure`,
+   then `--repeat until-fail:5` on `test_router_reject_duplicate` and `test_close_completion_poller_release`.
+3. Full `ctest --test-dir core/build-dev -j2 --output-on-failure` once (known: hotpath_gate n/a on the dev tree).
+4. If anything fails: root-cause it in the combined change (do not change assertions or Core policy; fix only a genuine
+   interaction bug between the D-089 admission scope and the D-090 termination path) and re-run; report the diff.
+5. Deliverable: `doc/plan/c016-worklog/core-d090-verify-on-main-summary.md` in the MAIN tree: counts per step, any fix with
+   file:line, BLOCKERS. Leave the worktree diff uncommitted.

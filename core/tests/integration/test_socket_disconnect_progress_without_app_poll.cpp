@@ -506,7 +506,7 @@ void run_immediate_reconnect_request_case (transport_t transport_,
         TEST_ASSERT_EQUAL_UINT64 (strlen ("reply-new-connection"),
                                   zlink_msg_size (&reply.reply_parts[0]));
     } else {
-        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_TIMED_OUT,
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_NOT_CONNECTED,
                                reply.request_result);
         TEST_ASSERT_EQUAL_UINT64 (0, reply.reply_part_count);
     }

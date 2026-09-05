@@ -435,8 +435,7 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_,
                   send_bind (peer.socket, new_pipes[1], lane_index != 0);
                 const int bind_errno = errno;
                 if (peer_progress_started)
-                    peer.socket->request_unowned_async_command_processing_stop (
-                      true);
+                    peer.socket->request_unowned_async_command_processing_stop ();
                 errno = bind_errno;
                 if (!bind_sent) {
                     if (peer_seqnum_reserved)
@@ -977,7 +976,7 @@ void zlink::socket_base_t::terminate_inproc_pipe_with_peer_progress (pipe_t *pip
     pipe_->terminate (false);
 
     if (peer_progress_started)
-        peer_socket->request_unowned_async_command_processing_stop (true);
+        peer_socket->request_unowned_async_command_processing_stop ();
     if (peer)
         peer->release_lifetime_ref ();
     errno = saved_errno;

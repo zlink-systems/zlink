@@ -324,7 +324,7 @@ class pipe_completion_order_sink_t : public zlink::i_pipe_events
     void read_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
     void write_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
     void hiccuped (zlink::pipe_t *) ZLINK_OVERRIDE {}
-    void pipe_peer_terminated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void pipe_peer_terminated (zlink::pipe_t *, bool) ZLINK_OVERRIDE {}
 
     void pipe_terminated (zlink::pipe_t *) ZLINK_OVERRIDE
     {
@@ -346,7 +346,7 @@ class passive_pipe_sink_t : public zlink::i_pipe_events
     void read_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
     void write_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
     void hiccuped (zlink::pipe_t *) ZLINK_OVERRIDE {}
-    void pipe_peer_terminated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void pipe_peer_terminated (zlink::pipe_t *, bool) ZLINK_OVERRIDE {}
     void pipe_terminated (zlink::pipe_t *) ZLINK_OVERRIDE
     {
         ++completion_count;
@@ -363,7 +363,7 @@ class concurrent_pipe_sink_t : public zlink::i_pipe_events
     void read_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
     void write_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
     void hiccuped (zlink::pipe_t *) ZLINK_OVERRIDE {}
-    void pipe_peer_terminated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void pipe_peer_terminated (zlink::pipe_t *, bool) ZLINK_OVERRIDE {}
     void pipe_terminated (zlink::pipe_t *) ZLINK_OVERRIDE
     {
         completion_count.fetch_add (1, std::memory_order_relaxed);

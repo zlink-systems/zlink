@@ -651,7 +651,7 @@ class socket_base_t : public own_t,
     void read_activated (pipe_t *pipe_) ZLINK_FINAL;
     void write_activated (pipe_t *pipe_) ZLINK_FINAL;
     void hiccuped (pipe_t *pipe_) ZLINK_FINAL;
-    void pipe_peer_terminated (pipe_t *pipe_) ZLINK_FINAL;
+    void pipe_peer_terminated (pipe_t *pipe_, bool drain_complete_ = true) ZLINK_FINAL;
     void pipe_terminated (pipe_t *pipe_) ZLINK_FINAL;
     //  Releases the gauge slot and closes the pause duration for a pair that
     //  is torn down while paused, which never gets a RESUMED of its own.

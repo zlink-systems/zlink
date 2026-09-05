@@ -1047,7 +1047,7 @@ void test_dealer_request_with_only_zero_weight_router_gets_wait_token ()
     test_context_socket_close_zero_linger (router);
 }
 
-void test_admitted_request_survives_physical_detach_and_same_rid_reconnect_without_replay ()
+void test_admitted_request_completes_not_connected_on_physical_detach_without_replay_after_same_rid_reconnect ()
 {
     const char *const endpoint =
       "inproc://phase3-admitted-request-physical-reconnect";
@@ -1082,8 +1082,16 @@ void test_admitted_request_survives_physical_detach_and_same_rid_reconnect_witho
 
     test_context_socket_close_zero_linger (first_router);
     first_router = NULL;
-    // Physical paired-pipe termination is not a REQUEST terminal owner.
-    assert_no_completion_for (dealer, 40);
+    zlink_completion_t completion = receive_completion_eventually (dealer);
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
+    TEST_ASSERT_EQUAL_UINT64 (request_id, completion.completion_id);
+    TEST_ASSERT_EQUAL_PTR (&request_context, completion.user_context);
+    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_NOT_CONNECTED,
+                           completion.request_result);
+    TEST_ASSERT_NULL (completion.reply_parts);
+    TEST_ASSERT_EQUAL_UINT64 (0, completion.reply_part_count);
+    zlink_completion_close (&completion);
+    assert_empty_completion (completion);
 
     void *replacement_router = test_context_socket (ZLINK_SOCKET_ROUTER);
     TEST_ASSERT_NOT_NULL (replacement_router);
@@ -1094,17 +1102,6 @@ void test_admitted_request_survives_physical_detach_and_same_rid_reconnect_witho
     // A DATA marker on the replacement route must be its first record. The
     // admitted REQUEST payload is never replayed after reconnect.
     prime_router_dealer_route (dealer, replacement_router);
-
-    zlink_completion_t completion = receive_completion_eventually (dealer);
-    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
-    TEST_ASSERT_EQUAL_UINT64 (request_id, completion.completion_id);
-    TEST_ASSERT_EQUAL_PTR (&request_context, completion.user_context);
-    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_TIMED_OUT,
-                           completion.request_result);
-    TEST_ASSERT_NULL (completion.reply_parts);
-    TEST_ASSERT_EQUAL_UINT64 (0, completion.reply_part_count);
-    zlink_completion_close (&completion);
-    assert_empty_completion (completion);
     assert_no_completion_for (dealer, 20);
 
     test_context_socket_close_zero_linger (replacement_router);
@@ -2815,7 +2812,7 @@ void test_completion_pipe_budget_is_fair_and_stale_requeue_is_fenced ()
         TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, detached_result);
         TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST,
                                detached_completion.kind);
-        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_NOT_FOUND,
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_NOT_CONNECTED,
                                detached_completion.request_result);
         TEST_ASSERT_EQUAL_UINT64 (0,
                                   detached_completion.reply_part_count);
@@ -3114,7 +3111,7 @@ int main ()
     RUN_PHASE3_REQUEST_TEST (
       test_dealer_request_with_only_zero_weight_router_gets_wait_token);
     RUN_PHASE3_REQUEST_TEST (
-      test_admitted_request_survives_physical_detach_and_same_rid_reconnect_without_replay);
+      test_admitted_request_completes_not_connected_on_physical_detach_without_replay_after_same_rid_reconnect);
     RUN_PHASE3_REQUEST_TEST (test_request_completions_are_drained_once_by_id);
     RUN_PHASE3_REQUEST_TEST (
       test_router_reply_registry_capacity_fair_pollin_and_round_robin_redrive);
