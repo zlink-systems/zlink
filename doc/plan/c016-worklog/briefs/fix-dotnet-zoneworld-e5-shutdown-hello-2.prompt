@@ -1,0 +1,19 @@
+# Job (implement, model astra): D-097 approved (B) — implement both items of your diagnosis `fix-dotnet-zoneworld-e5-shutdown-hello-summary.md`: (1) idempotent admissions share the single completion diagnostic path (E5 runner evidence); (2) after the host shutdown seal the mesh node starts no new peer admission (no Hello submission) and peer transitions do not overwrite the Draining state — judged by the existing host admission gate seal, no new flag/timer
+
+You are a codex sub-agent under a Claude supervisor. Read `decisions.ko.md` D-097 and your diagnosis. Rules as in your previous brief (never `core/**`, `bindings/**`, any
+`doc/spec/**`, `framework/doc/framework/**`, other languages, shared_sample; never widen the runner wait; do not commit; dotnet env block; sample runs under
+`flock -w7200 /tmp/zlink-samples-gate.lock`). Package: rebuild9 (Core 2055a581…).
+
+## Implement (single owner each; rule count before/after)
+1. `ZLinkManagedMeshNode` admission: the guard's `Idempotent` outcome takes the same completion diagnostic path as `Accept` (the `mesh_peer_admission_accepted … command=Admit`
+   completion log the runner reads) without re-raising PeerAdmitted or resetting descriptor/liveness epoch. Diagnostic policies 2 → 1.
+2. Seal → mesh: expose the existing `ZLinkDrainAdmissionGate` seal (owned by the host, `ZLinkFrameworkRuntime.cs:444-455`) to the mesh node's admission start (infrastructure
+   pump Hello submission `:8437-8468` / send path `:10621-10665`); when sealed for shutdown: no new Hello, already-admitted peers still get Draining Update; the three
+   Connecting transitions (transport disconnect `:8607-8663`, liveness expiry `:8476-8499`, control-send failure `:10930-10978`) must not move `_state` back to
+   Started/PartialReady after the seal (reuse the Draining-preserving condition that `:8362-8363` already applies). Relocate's Draining is unaffected (it does not seal).
+3. Tests: unit — (a) crossed Hello/Admit: both sides log the completion; (b) sealed node + peer disconnect → no Hello submitted, state stays Draining, drain completes;
+   (c) unsealed node still re-admits. Then ZoneWorld ×3 (exit 0, all verdicts; E5 restart admission observed each time), `bash samples/run_samples.sh` once, unit half
+   `--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests'` once.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-zoneworld-e5-shutdown-hello-2-summary.md`: diff file:line per item, four lines, rule counts, results, BLOCKERS; state what java/cpp need for parity.
