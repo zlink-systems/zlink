@@ -1151,4 +1151,4 @@ job은 잘못된 mask를 `NOT_SUPPORTED`로 냈으나 Node/Rust가 `InvalidArgum
 
 ## D-B101 (2026-09-05 10:35, 머신 B) bindings parity — Rust `Poller` monitor source(`add_monitor/modify_monitor/remove_monitor`) 구현·spec 명시
 `SocketMonitor: Pollable`은 채택하지 않음(sealed `Pollable`이 public `proxy`의 socket 전용 인자 계약이라 monitor를 넣으면 `proxy(&monitor, ...)`가 컴파일되는 잘못된 표면이 생김) → 별도 `*_monitor` 메서드. `POLLIN`만 허용, 그 외 `ConfigError(InvalidArgument, EINVAL)`, completion owner 미적용, `PollSourceKind::Socket`.
-샘플 blocking `monitor.recv()` → poller drain. 테스트 `monitor_tests.rs` 3 case × 5회, `run_tests.sh` 14/14, clippy `-D warnings`, fmt. Rust spec(ko/en) 문장 추가. 커밋: 아래 해시.
+샘플 blocking `monitor.recv()` → poller drain. 테스트 `monitor_tests.rs` 3 case × 5회, `run_tests.sh` 14/14, clippy `-D warnings`, fmt. Rust spec(ko/en) 문장 추가. 커밋 `ade06d5514`.
