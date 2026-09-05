@@ -17,8 +17,8 @@ internal sealed partial class SocketKernel
         out MultipartMessageCollection? parts,
         bool allowNoData = false)
     {
-        var nativeParts = Array.Empty<ZlinkMsg>();
-        var nativePartCount = 0;
+        var receivedParts = Array.Empty<Message>();
+        var receivedPartCount = 0;
         singlePart = null;
         parts = null;
         try
@@ -44,14 +44,14 @@ internal sealed partial class SocketKernel
                     if (rc != 0)
                     {
                         var errno = NativeMethods.zlink_errno();
-                        if (allowNoData && nativePartCount == 0
+                        if (allowNoData && receivedPartCount == 0
                                         && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
                                             or ErrorCode.EBusy)
                             return false;
                         throw ZlinkException.CreateRecvException(errno);
                     }
 
-                    if (hasMore == 0 && nativePartCount == 0)
+                    if (hasMore == 0 && receivedPartCount == 0)
                     {
                         // Pool-aware adoption: in routed echo workloads the
                         // Message wrapper lifetime is bounded by the caller's
@@ -62,7 +62,7 @@ internal sealed partial class SocketKernel
                         return true;
                     }
 
-                    AppendNativePart(ref nativeParts, ref nativePartCount,
+                    AppendNativePart(ref receivedParts, ref receivedPartCount,
                         ref part);
                     ownsNativePart = false;
                     if (hasMore == 0)
@@ -75,22 +75,23 @@ internal sealed partial class SocketKernel
                 }
             }
 
-            parts = MultipartMessageCollection.FromNativeParts(nativeParts,
-                nativePartCount);
+            parts = MultipartMessageCollection.FromMessages(receivedParts,
+                receivedPartCount, rented: true);
+            receivedParts = Array.Empty<Message>();
             return true;
         }
         catch
         {
-            CloseNativeParts(nativeParts, nativePartCount);
+            DisposeReceivedParts(receivedParts, receivedPartCount);
             singlePart?.Dispose();
             throw;
         }
         finally
         {
-            // FromNativeParts has moved every live part into the result; the
-            // catch path closes any remaining parts before returning storage.
-            if (nativeParts.Length != 0)
-                ArrayPool<ZlinkMsg>.Shared.Return(nativeParts);
+            // The result takes the pooled storage on success; only a failed
+            // assembly returns its storage here.
+            if (receivedParts.Length != 0)
+                ArrayPool<Message>.Shared.Return(receivedParts, clearArray: true);
         }
     }
 
@@ -108,8 +109,8 @@ internal sealed partial class SocketKernel
             return ReceiveRouterParts(flags, out routingId, out replyToken,
                 out singlePart, out parts, allowNoData);
 
-        var nativeParts = Array.Empty<ZlinkMsg>();
-        var nativePartCount = 0;
+        var receivedParts = Array.Empty<Message>();
+        var receivedPartCount = 0;
         try
         {
             while (true)
@@ -134,7 +135,7 @@ internal sealed partial class SocketKernel
                     if (rc != 0)
                     {
                         var errno = NativeMethods.zlink_errno();
-                        if (allowNoData && nativePartCount == 0
+                        if (allowNoData && receivedPartCount == 0
                                         && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
                                             or ErrorCode.EBusy)
                             return false;
@@ -143,14 +144,14 @@ internal sealed partial class SocketKernel
 
                     if (!routingId.HasValue)
                         routingId = RoutingIdSnapshot.FromPointer(sourceNodeRid);
-                    if (basicHasMore == 0 && nativePartCount == 0)
+                    if (basicHasMore == 0 && receivedPartCount == 0)
                     {
                         singlePart = Message.AdoptNativeFromPool(ref part);
                         ownsNativePart = false;
                         return true;
                     }
 
-                    AppendNativePart(ref nativeParts, ref nativePartCount,
+                    AppendNativePart(ref receivedParts, ref receivedPartCount,
                         ref part);
                     ownsNativePart = false;
                     if (basicHasMore == 0)
@@ -163,22 +164,23 @@ internal sealed partial class SocketKernel
                 }
             }
 
-            parts = MultipartMessageCollection.FromNativeParts(nativeParts,
-                nativePartCount);
+            parts = MultipartMessageCollection.FromMessages(receivedParts,
+                receivedPartCount, rented: true);
+            receivedParts = Array.Empty<Message>();
             return true;
         }
         catch
         {
-            CloseNativeParts(nativeParts, nativePartCount);
+            DisposeReceivedParts(receivedParts, receivedPartCount);
             singlePart?.Dispose();
             throw;
         }
         finally
         {
-            // FromNativeParts has moved every live part into the result; the
-            // catch path closes any remaining parts before returning storage.
-            if (nativeParts.Length != 0)
-                ArrayPool<ZlinkMsg>.Shared.Return(nativeParts);
+            // The result takes the pooled storage on success; only a failed
+            // assembly returns its storage here.
+            if (receivedParts.Length != 0)
+                ArrayPool<Message>.Shared.Return(receivedParts, clearArray: true);
         }
     }
 
@@ -188,8 +190,8 @@ internal sealed partial class SocketKernel
         out MultipartMessageCollection? parts,
         bool allowNoData)
     {
-        var nativeParts = Array.Empty<ZlinkMsg>();
-        var nativePartCount = 0;
+        var receivedParts = Array.Empty<Message>();
+        var receivedPartCount = 0;
         routingId = default;
         replyToken = 0;
         singlePart = null;
@@ -219,7 +221,7 @@ internal sealed partial class SocketKernel
                     if (rc != 0)
                     {
                         var errno = NativeMethods.zlink_errno();
-                        if (allowNoData && nativePartCount == 0
+                        if (allowNoData && receivedPartCount == 0
                                         && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
                                             or ErrorCode.EBusy)
                             return false;
@@ -227,13 +229,13 @@ internal sealed partial class SocketKernel
                         throw ZlinkException.CreateRecvException(errno);
                     }
 
-                    if (nativePartCount == 0)
+                    if (receivedPartCount == 0)
                     {
                         routingId = RoutingIdSnapshot.FromPointer(sourceNodeRid);
                         replyToken = receivedReplyToken;
                     }
 
-                    if (hasMore == 0 && nativePartCount == 0)
+                    if (hasMore == 0 && receivedPartCount == 0)
                     {
                         // Pool-aware adoption: in routed echo workloads the
                         // Message wrapper lifetime is bounded by the caller's
@@ -244,7 +246,7 @@ internal sealed partial class SocketKernel
                         return true;
                     }
 
-                    AppendNativePart(ref nativeParts, ref nativePartCount,
+                    AppendNativePart(ref receivedParts, ref receivedPartCount,
                         ref part);
                     ownsNativePart = false;
                     if (hasMore == 0)
@@ -257,22 +259,23 @@ internal sealed partial class SocketKernel
                 }
             }
 
-            parts = MultipartMessageCollection.FromNativeParts(nativeParts,
-                nativePartCount);
+            parts = MultipartMessageCollection.FromMessages(receivedParts,
+                receivedPartCount, rented: true);
+            receivedParts = Array.Empty<Message>();
             return true;
         }
         catch
         {
-            CloseNativeParts(nativeParts, nativePartCount);
+            DisposeReceivedParts(receivedParts, receivedPartCount);
             singlePart?.Dispose();
             throw;
         }
         finally
         {
-            // FromNativeParts has moved every live part into the result; the
-            // catch path closes any remaining parts before returning storage.
-            if (nativeParts.Length != 0)
-                ArrayPool<ZlinkMsg>.Shared.Return(nativeParts);
+            // The result takes the pooled storage on success; only a failed
+            // assembly returns its storage here.
+            if (receivedParts.Length != 0)
+                ArrayPool<Message>.Shared.Return(receivedParts, clearArray: true);
         }
     }
 
@@ -282,8 +285,8 @@ internal sealed partial class SocketKernel
         out Message? singlePart, out MultipartMessageCollection? parts,
         bool allowNoData = false)
     {
-        var nativeParts = Array.Empty<ZlinkMsg>();
-        var nativePartCount = 0;
+        var receivedParts = Array.Empty<Message>();
+        var receivedPartCount = 0;
         routingId = default;
         topicLength = 0;
         singlePart = null;
@@ -292,7 +295,7 @@ internal sealed partial class SocketKernel
         {
             while (true)
             {
-                var firstPart = nativePartCount == 0;
+                var firstPart = receivedPartCount == 0;
                 ZlinkMsg part = default;
                 var ownsNativePart = false;
                 if (!firstPart)
@@ -350,7 +353,7 @@ internal sealed partial class SocketKernel
                         if (firstPart)
                             reusableSinglePart.CloseAfterFailedNativeReceive();
                         var errno = NativeMethods.zlink_errno();
-                        if (allowNoData && nativePartCount == 0
+                        if (allowNoData && receivedPartCount == 0
                                         && ZlinkException.MapErrorCode(errno) is ErrorCode.EAgain
                                             or ErrorCode.EBusy)
                             return false;
@@ -371,11 +374,11 @@ internal sealed partial class SocketKernel
                     }
 
                     if (firstPart)
-                        AppendNativePart(ref nativeParts, ref nativePartCount,
+                        AppendNativePart(ref receivedParts, ref receivedPartCount,
                             ref reusableSinglePart.Handle);
                     else
                     {
-                        AppendNativePart(ref nativeParts, ref nativePartCount,
+                        AppendNativePart(ref receivedParts, ref receivedPartCount,
                             ref part);
                         ownsNativePart = false;
                     }
@@ -389,65 +392,49 @@ internal sealed partial class SocketKernel
                 }
             }
 
-            parts = MultipartMessageCollection.FromNativeParts(nativeParts,
-                nativePartCount);
+            parts = MultipartMessageCollection.FromMessages(receivedParts,
+                receivedPartCount, rented: true);
+            receivedParts = Array.Empty<Message>();
             return true;
         }
         catch
         {
-            CloseNativeParts(nativeParts, nativePartCount);
+            DisposeReceivedParts(receivedParts, receivedPartCount);
             singlePart?.Dispose();
             throw;
         }
         finally
         {
-            // FromNativeParts has moved every live part into the result; the
-            // catch path closes any remaining parts before returning storage.
-            if (nativeParts.Length != 0)
-                ArrayPool<ZlinkMsg>.Shared.Return(nativeParts);
+            // The result takes the pooled storage on success; only a failed
+            // assembly returns its storage here.
+            if (receivedParts.Length != 0)
+                ArrayPool<Message>.Shared.Return(receivedParts, clearArray: true);
         }
     }
 
-    private static ZlinkMsg MoveStoredPart(ref ZlinkMsg source)
-    {
-        ZlinkMsg stored = default;
-        var initRc = NativeMethods.zlink_msg_init(ref stored);
-        if (initRc != 0)
-            throw ZlinkException.CreateRecvException(NativeMethods.zlink_errno());
-        try
-        {
-            var rc = NativeMethods.zlink_msg_move(ref stored, ref source);
-            if (rc != 0)
-                throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
-            return stored;
-        }
-        catch
-        {
-            NativeMethods.zlink_msg_close(ref stored);
-            throw;
-        }
-    }
-
-    private static void AppendNativePart(ref ZlinkMsg[] nativeParts,
+    private static void AppendNativePart(ref Message[] receivedParts,
         ref int count, ref ZlinkMsg source)
     {
-        if (count == nativeParts.Length)
+        if (count == receivedParts.Length)
         {
-            var expanded = ArrayPool<ZlinkMsg>.Shared.Rent(count == 0 ? 4 : checked(count * 2));
-            nativeParts.AsSpan(0, count).CopyTo(expanded);
-            if (nativeParts.Length != 0)
-                ArrayPool<ZlinkMsg>.Shared.Return(nativeParts);
-            nativeParts = expanded;
+            var expanded = ArrayPool<Message>.Shared.Rent(
+                count == 0 ? 4 : checked(count * 2));
+            receivedParts.AsSpan(0, count).CopyTo(expanded);
+            if (receivedParts.Length != 0)
+                ArrayPool<Message>.Shared.Return(receivedParts, clearArray: true);
+            receivedParts = expanded;
         }
 
-        nativeParts[count] = MoveStoredPart(ref source);
+        // Move once, directly into the public part's native header. There is
+        // no intermediate native vector to initialize, move, and close again.
+        receivedParts[count] = Message.MoveFromNative(ref source);
         count++;
     }
 
-    private static void CloseNativeParts(ZlinkMsg[] parts, int count)
+    private static void DisposeReceivedParts(Message[] parts, int count)
     {
         for (var i = 0; i < count; i++)
-            NativeMethods.zlink_msg_close(ref parts[i]);
+            parts[i].Dispose();
     }
 
     private static unsafe byte[]? CopyRoutingIdBytes(IntPtr routingIdPtr)

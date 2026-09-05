@@ -1163,7 +1163,10 @@ When the target has write credit again, exactly one `ZLINK_COMPLETION_WRITABLE`
 record (`send_result == ZLINK_SEND_ADMITTED`) with the same token and context,
 and the submitted RID on ROUTER, follows; the caller drains the queue to
 `NO_DATA` and resubmits the same request with `DONTWAIT`. The resubmit also
-makes one admission attempt and receives a new token if refused again. Target
+makes one admission attempt and receives a new token if refused again. When the refusal is due to the pair's
+correlation work/count limit (systems/06-auto-hwm, work budget), that token emits WRITABLE **only when
+the pair's correlation reservation is returned** (terminal reply, timeout, disconnect), not when physical
+write credit alone recovers — the recovery of the refusing resource is the sole wake condition (one rule). Target
 granularity, wake edges, the level-held `ZLINK_POLLOUT` and
 `ZLINK_POLLCOMPLETION`, and the token end conditions (the WRITABLE record,
 explicit target removal with `ZLINK_SEND_TERMINAL` and `ENOENT`, socket close

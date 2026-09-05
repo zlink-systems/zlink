@@ -1064,7 +1064,9 @@ Part는 소비·폐기되므로 caller는 보관한 복사본으로 같은 reque
 credit이 생기면 같은 토큰·context와 ROUTER의 submit RID를 담은 `ZLINK_COMPLETION_WRITABLE`
 record(`send_result == ZLINK_SEND_ADMITTED`)가 정확히 한 건 뒤따르고, caller는 queue를 `NO_DATA`까지
 비운 뒤 같은 request를 `DONTWAIT`로 다시 제출한다. 재제출도 admission을 한 번만 시도하며 다시
-거절되면 새 토큰을 받는다. 토큰의 target 단위, wake edge, `ZLINK_POLLOUT`·`ZLINK_POLLCOMPLETION`
+거절되면 새 토큰을 받는다. 거절 원인이 pair의 correlation work·count 한도 부족(systems/06-auto-hwm §work budget)이면
+그 토큰은 **해당 pair의 correlation reservation이 반환될 때(terminal reply·timeout·disconnect)만** WRITABLE을 발행하고,
+physical write credit만 회복된 상태에서는 발행하지 않는다(거절 원인이 되는 자원의 회복만 wake 조건이다 — 규칙 하나). 토큰의 target 단위, wake edge, `ZLINK_POLLOUT`·`ZLINK_POLLCOMPLETION`
 level 유지와 종료 조건(WRITABLE record, 명시적 target 제거의 `ZLINK_SEND_TERMINAL`+`ENOENT`, socket
 close·context termination의 `ZLINK_SEND_TERMINAL`+lifecycle errno)은
 [part send](#part-send와-pending-admission)의 SEND 대기 토큰과 같다. Mandatory ROUTER route가 없는

@@ -19,7 +19,7 @@ import {
 import {
   normalizeOperationPayload,
 } from '../buffers/message_conversion';
-import { normalizeRoutingId } from '../core/routing_id';
+import { normalizeRoutingId, routingIdFromOwnedBuffer } from '../core/routing_id';
 import { ConnectableSocket } from './socket_base';
 import {
   Message,
@@ -189,7 +189,7 @@ export class RoutedMessageSocket extends ConnectableSocket {
       this.sendReceivedManaged(routingId, parts),
     reply: (routingId: Buffer, token: import('../../contracts').ReplyToken,
             parts: readonly Message[]) =>
-      this.replyToRoutedMessage(RoutingId.from(routingId), token, parts),
+      this.replyToRoutedMessage(routingIdFromOwnedBuffer(routingId), token, parts),
   };
   protected sendDirect(routingId: RoutingId, payload: MessageLike | readonly MessageLike[]): void {
     const normalizedRoutingId = normalizeRoutingId(routingId);

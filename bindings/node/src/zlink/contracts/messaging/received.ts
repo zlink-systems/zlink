@@ -14,9 +14,10 @@ interface SendContext {
 }
 
 const replyTokenOwnerIds = new WeakMap<object, number>();
-const replyTokenValues = new WeakMap<ReplyToken, { owner: object; value: bigint }>();
 let nextReplyTokenOwnerId = 1;
 let makeReplyToken!: (owner: object, value: bigint) => ReplyToken;
+let tokenOwnerMatches!: (token: ReplyToken, owner: object) => boolean;
+let tokenNativeValue!: (token: ReplyToken) => bigint;
 
 /** Opaque capability required to reply to one ROUTER request. */
 export class ReplyToken {
@@ -29,13 +30,24 @@ export class ReplyToken {
     }
     this.#owner = owner;
     this.#value = value;
-    replyTokenValues.set(this, { owner, value });
     Object.freeze(this);
   }
 
   static {
     makeReplyToken = (owner: object, value: bigint): ReplyToken =>
       new ReplyToken(replyTokenSecret, owner, value);
+    // Keep the capability in its private fields only. Package-private
+    // readers use the same brand check instead of duplicating every token
+    // in a WeakMap with a second owner/value record.
+    tokenOwnerMatches = (token, owner) =>
+      typeof token === 'object' && token !== null
+      && #owner in token && token.#owner === owner;
+    tokenNativeValue = (token) => {
+      if (typeof token !== 'object' || token === null || !(#value in token)) {
+        throw new TypeError('invalid ReplyToken');
+      }
+      return token.#value;
+    };
   }
 
   equals(other: ReplyToken): boolean {
@@ -67,14 +79,12 @@ export function createReplyToken(owner: object, value: bigint): ReplyToken {
 
 /** @internal */
 export function replyTokenOwnerMatches(token: ReplyToken, owner: object): boolean {
-  return replyTokenValues.get(token)?.owner === owner;
+  return tokenOwnerMatches(token, owner);
 }
 
 /** @internal */
 export function replyTokenNativeValue(token: ReplyToken): bigint {
-  const state = replyTokenValues.get(token);
-  if (!state) throw new TypeError('invalid ReplyToken');
-  return state.value;
+  return tokenNativeValue(token);
 }
 
 function invalidReplyContextError(): SubmitError {

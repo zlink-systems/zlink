@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 using System.Collections;
-using Systems.Zlink.Runtime.Native;
+using System.Buffers;
 
 namespace Systems.Zlink;
 
@@ -9,11 +9,14 @@ internal sealed class MultipartMessageCollection : IReadOnlyList<Message>, IDisp
 {
     private readonly int _count;
     private Message[]? _messages;
+    private readonly bool _rented;
 
-    private MultipartMessageCollection(Message[] messages)
+    private MultipartMessageCollection(Message[] messages, int count = -1,
+        bool rented = false)
     {
         _messages = messages;
-        _count = messages.Length;
+        _count = count < 0 ? messages.Length : count;
+        _rented = rented;
     }
 
     internal bool IsSinglePart => Count == 1;
@@ -25,8 +28,9 @@ internal sealed class MultipartMessageCollection : IReadOnlyList<Message>, IDisp
             return;
         _messages = null;
 
-        for (var i = 0; i < messages.Length; i++)
+        for (var i = 0; i < _count; i++)
             messages[i].Dispose();
+        ReturnStorage(messages);
     }
 
     public int Count => _count;
@@ -36,7 +40,7 @@ internal sealed class MultipartMessageCollection : IReadOnlyList<Message>, IDisp
         get
         {
             var messages = GetMessages();
-            if ((uint)index >= (uint)messages.Length)
+            if ((uint)index >= (uint)_count)
                 throw new ArgumentOutOfRangeException(nameof(index));
             return messages[index];
         }
@@ -44,9 +48,9 @@ internal sealed class MultipartMessageCollection : IReadOnlyList<Message>, IDisp
 
     public IEnumerator<Message> GetEnumerator()
     {
-        var messages = GetMessages();
-        for (var i = 0; i < messages.Length; i++)
-            yield return messages[i];
+        _ = GetMessages();
+        for (var i = 0; i < _count; i++)
+            yield return this[i];
     }
 
     IEnumerator IEnumerable.GetEnumerator()
@@ -54,9 +58,11 @@ internal sealed class MultipartMessageCollection : IReadOnlyList<Message>, IDisp
         return GetEnumerator();
     }
 
-    internal static MultipartMessageCollection FromMessages(Message[] messages)
+    internal static MultipartMessageCollection FromMessages(Message[] messages,
+        int count = -1, bool rented = false)
     {
-        return new MultipartMessageCollection(messages ?? Array.Empty<Message>());
+        return new MultipartMessageCollection(messages ?? Array.Empty<Message>(),
+            count, rented);
     }
 
     internal static MultipartMessageCollection FromSingle(Message message)
@@ -66,55 +72,23 @@ internal sealed class MultipartMessageCollection : IReadOnlyList<Message>, IDisp
         return new MultipartMessageCollection(new[] { message });
     }
 
-    internal static MultipartMessageCollection FromNativeSingle(ref ZlinkMsg nativePart)
-    {
-        var message = Message.AdoptNative(ref nativePart);
-        try
-        {
-            return FromSingle(message);
-        }
-        catch
-        {
-            message.Dispose();
-            throw;
-        }
-    }
-
-    internal static MultipartMessageCollection FromNativeParts(ZlinkMsg[] nativeParts)
-    {
-        return FromNativeParts(nativeParts, nativeParts?.Length ?? 0);
-    }
-
-    internal static MultipartMessageCollection FromNativeParts(ZlinkMsg[] nativeParts,
-        int nativePartCount)
-    {
-        if (nativeParts == null)
-            return new MultipartMessageCollection(Array.Empty<Message>());
-        if ((uint)nativePartCount > (uint)nativeParts.Length)
-            throw new ArgumentOutOfRangeException(nameof(nativePartCount));
-        var messages = new Message[nativePartCount];
-        var built = 0;
-        try
-        {
-            for (; built < nativePartCount; built++)
-                messages[built] = Message.MoveFromNative(ref nativeParts[built]);
-            return new MultipartMessageCollection(messages);
-        }
-        catch
-        {
-            for (var i = 0; i < built; i++)
-                messages[i].Dispose();
-            throw;
-        }
-    }
-
     internal Message[] TakeMessages()
     {
         var messages = _messages;
         if (messages == null)
             return Array.Empty<Message>();
+        // Public ownership transfer needs independent, exact-length storage.
+        // The collection's private pooled buffer cannot escape its lifetime.
+        var result = _rented ? messages.AsSpan(0, _count).ToArray() : messages;
         _messages = null;
-        return messages;
+        ReturnStorage(messages);
+        return result;
+    }
+
+    private void ReturnStorage(Message[] messages)
+    {
+        if (_rented)
+            ArrayPool<Message>.Shared.Return(messages, clearArray: true);
     }
 
     private Message[] GetMessages()
