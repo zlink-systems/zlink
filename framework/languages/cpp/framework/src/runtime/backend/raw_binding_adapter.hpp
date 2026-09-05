@@ -84,6 +84,10 @@ inline raw_request_result_t map_binding_request_result (
             return raw_request_result_t::ok;
         case zlink::request_result_t::timed_out:
             return raw_request_result_t::timed_out;
+        case zlink::request_result_t::not_connected:
+            // Core completes requests pinned to a superseded handover pair
+            // immediately; the durable operation owner may replay them.
+            return raw_request_result_t::route_unavailable;
         case zlink::request_result_t::terminated:
             return raw_request_result_t::terminated;
         default:
@@ -92,9 +96,9 @@ inline raw_request_result_t map_binding_request_result (
 }
 
 // Core socket README "submit retry" owns this table. Only an initial local
-// submit failure can be a transient route absence. In particular, ENOENT on a
-// completion terminal means disconnect_rid retired an already-issued WRITABLE
-// token and must not be replayed.
+// submit failure can be a transient route absence. Request completions use the
+// typed mapping above. A submit completion with ENOENT means disconnect_rid
+// retired an already-issued WRITABLE token and must not be replayed.
 inline bool transient_route_failure (
   zlink::submit_result_t result,
   int error,
