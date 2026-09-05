@@ -70,7 +70,6 @@ export interface ZLinkClientServerServerSocketIdentity {
 export interface ZLinkClientServerConnectionCallbacks {
   readonly onTransportReady: (routingId: string, endpoint: string) => void;
   readonly onTerminated: (routingId: string | undefined, endpoint: string) => void;
-  readonly reconnectOnTermination?: boolean;
 }
 
 type ClientServerDiscoveryDescriptor =
@@ -85,6 +84,7 @@ interface ClientServerPhysicalConnection {
   readonly aliases: Set<string>;
   readonly callbacksByAlias: Map<string, ZLinkClientServerConnectionCallbacks>;
   physicalConnectionId: symbol;
+  terminationRequested: boolean;
   readyConnectionId?: string;
   admittedDescriptor?: ClientServerDiscoveryDescriptor;
   nextProbeAt?: number;
@@ -400,7 +400,8 @@ export class ZLinkChannelSocketRegistry {
       monitor,
       aliases: new Set([connectionId]),
       callbacksByAlias: new Map([[connectionId, callbacks]]),
-      physicalConnectionId: Symbol(connectionId)
+      physicalConnectionId: Symbol(connectionId),
+      terminationRequested: false
     };
     this.clientServerConnections.set(connectionId, connection);
     this.ensureClientServerLivenessTimer();
@@ -414,6 +415,8 @@ export class ZLinkChannelSocketRegistry {
         }
         const routingId = event.routingId === undefined ? undefined : String(event.routingId);
         if (event.nativeEvent === ZLinkSocketNativeEventType.ConnectionReady) {
+          // This single-endpoint DEALER also receives its disconnected ready-count snapshot.
+          if (event.value === 0n || connection.terminationRequested) return;
           connection.physicalConnectionId = Symbol(connectionId);
           connection.admissionAttempt = undefined;
           for (const currentCallbacks of [...connection.callbacksByAlias.values()]) {
@@ -426,6 +429,10 @@ export class ZLinkChannelSocketRegistry {
           || event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedNoDetail
           || event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedProtocol
           || event.nativeEvent === ZLinkSocketNativeEventType.HandshakeFailedAuth) {
+          if (connection.terminationRequested
+            && (event.remoteAddr !== connection.endpoint
+              || (event.nativeEvent !== ZLinkSocketNativeEventType.Disconnected
+                && event.nativeEvent !== ZLinkSocketNativeEventType.Closed))) return;
           connection.physicalConnectionId = Symbol(connectionId);
           connection.admissionAttempt = undefined;
           if (connection.readyConnectionId !== undefined) {
@@ -433,6 +440,11 @@ export class ZLinkChannelSocketRegistry {
           }
           for (const currentCallbacks of [...connection.callbacksByAlias.values()]) {
             currentCallbacks.onTerminated(routingId, event.remoteAddr);
+          }
+          if (connection.terminationRequested) {
+            connection.terminationRequested = false;
+            // Explicit disconnect removes intent; restore it once after this endpoint closes.
+            connection.dealer.connect(connection.endpoint);
           }
         }
       });
@@ -484,28 +496,14 @@ export class ZLinkChannelSocketRegistry {
     await this.disposeClientServerPhysical(connectionId, current);
   }
 
-  async disconnectClientServerConnection(connectionId: string): Promise<void> {
-    const current = this.clientServerConnections.get(connectionId);
-    if (current === undefined) return;
-    this.clientServerConnections.delete(connectionId);
-    current.aliases.delete(connectionId);
-    current.callbacksByAlias.delete(connectionId);
-    this.clientServerReadyIdentities.delete(connectionId);
-    if (current.aliases.size > 0) return;
-    await this.disposeClientServerPhysical(connectionId, current, false);
-  }
-
   private async disposeClientServerPhysical(
     connectionId: string,
-    current: ClientServerPhysicalConnection,
-    disconnectTransport = true
+    current: ClientServerPhysicalConnection
   ): Promise<void> {
-    if (disconnectTransport) {
-      try {
-        current.dealer.disconnect(current.endpoint);
-      } catch {
-        // Disposal below is the terminal cleanup if the transport already closed.
-      }
+    try {
+      current.dealer.disconnect(current.endpoint);
+    } catch {
+      // Disposal below is the terminal cleanup if the transport already closed.
     }
     this.ownedMonitors.delete(current.monitor);
     this.unregisterReceiveFlowSocket(current.dealer);
@@ -871,22 +869,7 @@ export class ZLinkChannelSocketRegistry {
       this.drainClientServerControl(connectionId, connection);
       if (connection.deadlineAt === undefined) continue;
       if (nowMs >= connection.deadlineAt) {
-        this.removeReadyConnection(connectionId);
-        const callbacks = [...connection.callbacksByAlias.values()];
-        for (const currentCallbacks of callbacks) {
-          currentCallbacks.onTerminated(undefined, connection.endpoint);
-        }
-        if (callbacks.some(value => value.reconnectOnTermination === true)
-          && [...connection.aliases].some(
-            alias => this.clientServerConnections.get(alias) === connection
-          )) {
-          try {
-            connection.dealer.disconnect(connection.endpoint);
-            connection.dealer.connect(connection.endpoint);
-          } catch (error) {
-            this.oneWayFailureSink?.(error);
-          }
-        }
+        this.requestClientServerEndpointTermination(connectionId, connection);
         continue;
       }
       if (connection.nextProbeAt === undefined || nowMs < connection.nextProbeAt) continue;
@@ -1198,13 +1181,9 @@ export class ZLinkChannelSocketRegistry {
     this.openClientServerConnection(channelName, connectionId, endpoint, {
       onTransportReady: () => {
         void this.admitConfiguredClientServerConnection(channelName, connectionId)
-          .catch(error => {
-            this.removeReadyConnection(connectionId);
-            this.oneWayFailureSink?.(error);
-          });
+          .catch(error => this.oneWayFailureSink?.(error));
       },
-      onTerminated: () => this.removeReadyConnection(connectionId),
-      reconnectOnTermination: true
+      onTerminated: () => this.removeReadyConnection(connectionId)
     });
   }
 
@@ -1242,6 +1221,12 @@ export class ZLinkChannelSocketRegistry {
           `ClientServer '${channelName}' admission was stale.`
         );
       }
+    } catch (error) {
+      if (this.clientServerConnections.get(connectionId) !== connection
+        || connection.physicalConnectionId !== physicalConnectionId
+        || connection.admissionAttempt !== admissionAttempt) return;
+      this.removeReadyConnection(connectionId);
+      throw error;
     } finally {
       if (this.clientServerConnections.get(connectionId) === connection
         && connection.admissionAttempt === admissionAttempt) {
@@ -1252,13 +1237,9 @@ export class ZLinkChannelSocketRegistry {
 
   private drainClientServerControl(
     connectionId: string,
-    connection: {
-      readonly channelName: string;
-      readonly dealer: ZLinkBackendDealerSocket;
-      readonly physicalConnectionId: symbol;
-      readonly readablePoller: ZLinkBackendReadablePoller;
-    }
+    connection: ClientServerPhysicalConnection
   ): void {
+    if (connection.terminationRequested) return;
     for (;;) {
       if (!connection.readablePoller.wait(0)) return;
       const received = connection.dealer.recv(1);
@@ -1288,11 +1269,28 @@ export class ZLinkChannelSocketRegistry {
         }
         this.applyClientServerDescriptorUpdate(connectionId, connection, record.admission);
       } catch (error) {
-        this.removeReadyConnection(connectionId);
+        this.requestClientServerEndpointTermination(connectionId, connection);
         this.oneWayFailureSink?.(error);
+        return;
       } finally {
         received.close();
       }
+    }
+  }
+
+  private requestClientServerEndpointTermination(
+    connectionId: string,
+    connection: ClientServerPhysicalConnection
+  ): void {
+    if (connection.terminationRequested) return;
+    connection.terminationRequested = true;
+    connection.physicalConnectionId = Symbol(connectionId);
+    connection.admissionAttempt = undefined;
+    this.removeReadyConnection(connectionId);
+    try {
+      connection.dealer.disconnect(connection.endpoint);
+    } catch (error) {
+      this.oneWayFailureSink?.(error);
     }
   }
 
