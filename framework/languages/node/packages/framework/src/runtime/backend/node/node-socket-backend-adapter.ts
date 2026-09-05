@@ -271,7 +271,7 @@ export function wrapSocket<T extends { close(): void }>(
       );
     },
     disconnectPeer(routingId: unknown): void {
-      (nativeInstance as T & { disconnectRid(value: unknown): void }).disconnectRid(toNativeRoutingId(routingId));
+      disconnectStreamPeer(nativeInstance as T & { disconnectRid(value: unknown): void }, routingId);
     },
     async bindActor(_sessionRid: unknown, _actor: unknown, _timeoutMs: number, _signal?: AbortSignal): Promise<void> {
       throw new Error(
@@ -288,6 +288,19 @@ export function wrapSocket<T extends { close(): void }>(
     }
   };
   return adapter as unknown as T & ZLinkBackendObject;
+}
+
+export function disconnectStreamPeer(
+  socket: { disconnectRid(routingId: unknown): void },
+  routingId: unknown
+): void {
+  try {
+    socket.disconnectRid(toNativeRoutingId(routingId));
+  } catch (error) {
+    // An absent RID has already completed the physical close. The existing
+    // session lifecycle still owns local cleanup and unbind.
+    if (!isBindingNotFound(error)) throw error;
+  }
 }
 
 function requireSocketOptions<TOptions>(socket: { readonly options?: TOptions }): TOptions {

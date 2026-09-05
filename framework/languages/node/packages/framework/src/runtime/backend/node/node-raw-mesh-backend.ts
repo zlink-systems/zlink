@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { disconnectStreamPeer } from './node-socket-backend-adapter';
 import { ZLinkFrameworkException } from '../../../contracts';
 import { internalFrameworkWireReply } from '../../framework-errors-internal';
 import {
@@ -2015,7 +2016,7 @@ class RawStreamSessionService implements StreamSessionService {
         case SubmitResult.Terminated:
           // Let the socket monitor drive the existing STREAM close/unbind
           // lifecycle instead of maintaining a second session-close state.
-          this.stream.disconnectRid(target as unknown as BindingRoutingId);
+          disconnectStreamPeer(this.stream, target);
           throw new ZLinkBackendResultError(
             'submit',
             error.result,
