@@ -1345,7 +1345,9 @@ public sealed class ClientServerChannelRuntimeTests
         var port = ReservePort();
         var endpoint = $"tcp://127.0.0.1:{port}";
         using var context = Systems.Zlink.Zlink.CreateContext();
-        using var router = context.CreateRouterSocket();
+        using var router = CreateClientServerRouter(context);
+        var serverRid = RoutingId.From("notation-server");
+        router.SetRoutingId(serverRid);
         router.Bind(endpoint);
 
         var locationProvider = new ZLinkInMemoryProviderLocationStore();
@@ -1355,7 +1357,6 @@ public sealed class ClientServerChannelRuntimeTests
         try
         {
             var transport = clientRuntime.GetClientServerClientRuntime("work");
-            var serverRid = RoutingId.From("notation-server");
             var expected = new ZLinkClientServerServerDescriptor(
                 "work",
                 serverRid,
@@ -1563,7 +1564,7 @@ public sealed class ClientServerChannelRuntimeTests
         var port = ReservePort();
         var endpoint = $"tcp://127.0.0.1:{port}";
         using var context = Systems.Zlink.Zlink.CreateContext();
-        using var router = context.CreateRouterSocket();
+        using var router = CreateClientServerRouter(context);
         router.Bind(endpoint);
         await using var client = CreateClient(port);
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -1711,12 +1712,65 @@ public sealed class ClientServerChannelRuntimeTests
     }
 
     [Fact]
+    public async Task RemoteDisconnect_ReadmitsTheExistingClientConnection()
+    {
+        var port = ReservePort();
+        var endpoint = $"tcp://127.0.0.1:{port}";
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = CreateClientServerRouter(context);
+        router.Bind(endpoint);
+        await using var client = CreateClient(port);
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            using var firstHello = await PollReceivedAsync(
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5));
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(
+                firstHello.Parts, out _));
+            ReplyAdmission(router, firstHello, endpoint);
+            await WaitUntilAsync(
+                () => transport.ReadyCount == 1,
+                TimeSpan.FromSeconds(5));
+            var clientRid = firstHello.RoutingId
+                ?? throw new InvalidOperationException("missing client routing id");
+
+            router.DisconnectRid(clientRid);
+
+            using var secondHello = await PollReceivedAsync(
+                storage => TryReceive(router, storage),
+                TimeSpan.FromSeconds(5));
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(
+                secondHello.Parts, out _));
+            Assert.Equal(clientRid, secondHello.RoutingId);
+            Assert.Equal(1, transport.PhysicalConnectionCount);
+            Assert.Equal(0, transport.ReadyCount);
+            ReplyAdmission(router, secondHello, endpoint);
+            await WaitUntilAsync(
+                () => transport.ReadyCount == 1,
+                TimeSpan.FromSeconds(5));
+
+            // A physical reconnect performs one service handshake. No delayed
+            // admission fallback may submit another Hello on the admitted peer.
+            await Task.Delay(TimeSpan.FromMilliseconds(200));
+            using var unexpected = Received.Create();
+            Assert.False(TryReceive(router, unexpected));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task MalformedPushedControl_ReconnectsAndReadmits()
     {
         var port = ReservePort();
         var endpoint = $"tcp://127.0.0.1:{port}";
         using var context = Systems.Zlink.Zlink.CreateContext();
-        using var router = context.CreateRouterSocket();
+        using var router = CreateClientServerRouter(context);
         router.Bind(endpoint);
         await using var client = CreateClient(port);
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
@@ -1776,6 +1830,14 @@ public sealed class ClientServerChannelRuntimeTests
         {
             await runtime.StopAsync(CancellationToken.None);
         }
+    }
+
+    private static IRouterSocket CreateClientServerRouter(IContext context)
+    {
+        var router = context.CreateRouterSocket();
+        // Match the production ClientServer server's duplicate-RID policy.
+        router.Options.Handover = true;
+        return router;
     }
 
     private static bool TryReceive(IRouterSocket router, Received storage)

@@ -134,6 +134,9 @@
 - [x] java durable replay(A+B): `ZLinkJavaDurableRequest` 단일 소유, core test 1221/0 — **M6A 2건 해소**(재빌드된 java binding D-B95)
 - [x] node STREAM bind deadline 단일 소유(B, `8e509bb143`); Core 작업 7 stranded REQUEST 즉시 NOT_CONNECTED(`8b82d51b75`); Core 작업 4 = B D-B104(`0c39ed2e52`) + 여기서 발견한 completion-poller/monitor-lease 결함(`7cbf12de41`, 24 case 120/120)
 - [x] dotnet Mesh 걷어내기(D 제거, `3975cea255`, −640줄): admission 8/8·foundation 59/59·샘플 green; 잔여 red = 동시 reciprocal을 Core가 same-direction replacement로 분류(B1, Core 조사 job) + durable create 2 s 소진(B2, Core 7로 해소 예상) → rebuild4(10:55) 후 gate v8 재검증 중
-- [ ] 진행 중: dotnet gate v8(새 패키지), cpp replay 3차(astra), Core 동시 reciprocal 분류(astra). 이후: dotnet ClientServer second poller·수동 reconnect 제거(Core `7cbf12de41`+D-B104 근거 확보), dotnet Actor Join replay, 최종 재배포 + 4언어 게이트
+- [x] Core: 동시 reciprocal 오분류 = inproc connect-before-bind에서 locally-initiated flag 유실(B, `0145f5a59a`, 800/800); REJECT 정책 spec 결정 D-088(중복 pipe 즉시 close, `fadfac1c4e`) → Core job 진행 중; monitor-lease 수정(`7cbf12de41`)의 close 회귀 D-089(completion 해제가 executor 재시작 → `zlink_close` 정지, cpp 샘플 137) → Core job 진행 중
+- [x] cpp replay 3차(A, completion NOT_CONNECTED replay, `b76d8c1e00`); cpp m6b 미승인 request red = fixture가 hello DATA 미수신(B) → fixture job
+- [x] dotnet durable sender `ZLinkDurableRequest`(A, `d6ec19765e`, 16/16); dotnet ClientServer second poller·수동 reconnect 삭제 1차(−280줄, fixture REJECT→production HANDOVER 정렬 2차 진행 중)
+- [ ] 진행 중: Core REJECT-close, Core close 회귀, cpp m6b fixture, dotnet ClientServer 2차. 이후: 재배포(rebuild5: `0145f5a59a`+`7cbf12de41`+REJECT-close+close 회귀) → dotnet gate v9(잔여 red 5+1 재검증)·cpp 샘플 재실행 → 4언어 최종 게이트 → §F 마감
 - [ ] 로컬 패키지 재빌드(`7ffb8e55d9`·`c9d294c44f` 포함) → dotnet Mesh 걷어내기 2단계(brief `stage2-dotnet-mesh-unwind.prompt`) → Canonical 3 red 재검증 → dotnet ClientServer second poller/수동 reconnect 제거(B 작업 4 결과 대기) → java 합성 connection id·errno 표 제거(B 작업 5·6) → cpp replay 범위 진단 → 4언어 최종 게이트 재실행
 

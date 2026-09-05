@@ -5237,6 +5237,12 @@ void verify_unadmitted_request_is_rejected_without_framework_queue ()
     assert (target.mailbox ().pending_messages (
               mesh::service_mailbox_domain_t::application) == 0);
 
+    zlink::received_t hello;
+    assert (source.recv (hello) == 0);
+    assert (hello.parts ().size () == 1);
+    assert (protocol::decode_header (hello.parts ().front ().to_bytes ()).kind
+            == protocol::command::hello);
+
     auto rejected_reply =
       await_native_reply (std::move (request)).result ().value ();
     assert (rejected_reply.size () == 1);
