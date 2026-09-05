@@ -179,4 +179,5 @@
 - [x] java `81dad6324d`: sealed inbound Hello 무응답 + retention nanoTime + fixture retry 제거 + (드러난 결함) closed intent terminal(늦은 READY 재활성화 금지, D-098 item 8) — M6A/Seal/Identity ×10, full core gate ×2 0 fail, java 7/7 + kotlin ZoneWorld ×2(이전 B7 1회 실패는 미재현·원인 미확정으로 추적)
 - [x] cpp `b890e2e718`: sealed inbound Hello 무응답; unit 42/42, 샘플 7/7 재확인
 - [x] (범위 외로 확정, 2026-09-06 사용자: e2e 요구는 cross-language E2E만) cpp `common_e2e_inventory` 278 open(cpp 공통 e2e 시나리오 122개 미구현 등) — job 중단·편집 폐기, 별도 계획으로 남김
-- [ ] 진행 중: rebuild11(Core `1899e82f1a`) → gate11(4언어 샘플·npm test·java core/contract·dotnet unit/SampleRegression) → cross-language E2E → §G 마감
+- [x] rebuild11(Core 8c547d87… = `1899e82f1a`) → gate11(2026-09-06 04:21~05:07): java 7+kotlin 7 PASS, node 7 + npm test 1604/0, dotnet 7 + aggregate + ZoneWorld×2 PASS, dotnet unit 1978/0 + join 16/0 + SampleRegression 157/0, **java core/contract 0 fail(간헐 3건 근본 수정 뒤 첫 전체 green)**, cross-language E2E(cpp all-stage·node smoke 19·java-cross) passed
+- [ ] 진행 중: cpp ZoneWorld가 새 Core에서 runner-driven lifecycle lane(C3/D2/E5)에서 EADDRINUSE(errno 98) — SO_REUSEPORT 제거로 드러난 cpp runner/sample의 port 공유 의존 여부 vs Core의 정당한 rebind 거부 여부 조사 job(astra)
