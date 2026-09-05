@@ -2227,7 +2227,7 @@ final class ZLinkJavaRawSpotNode
             bindingGeneration,
             false,
             timeout)
-            .thenRun(() -> removeStreamBinding(
+            .whenComplete((ignored, failure) -> removeStreamBinding(
                 sessionRid, actor, bindingGeneration, stream));
     }
 

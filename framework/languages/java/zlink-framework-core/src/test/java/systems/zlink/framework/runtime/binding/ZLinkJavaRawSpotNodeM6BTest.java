@@ -2120,6 +2120,55 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     }
 
     @Test
+    void failedDisconnectUnbindIsTerminalAndSocketCloseDoesNotResubmitIt()
+        throws Exception {
+        AtomicInteger unbindAttempts = new AtomicInteger();
+        var ended = new systems.zlink.framework.errors.ZLinkFrameworkException(
+            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+            "durable request target lifecycle ended");
+        try (var context = Zlink.createContext();
+             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from("ended-unbind-node"));
+            var lifecycle = new ZLinkJavaStreamSocket.BoundSessionLifecycle() {
+                @Override
+                public CompletionStage<Void> bind(
+                    RoutingId sessionRid, ZLinkBackendActorRef actor,
+                    long generation, Duration timeout) {
+                    return CompletableFuture.completedFuture(null);
+                }
+
+                @Override
+                public CompletionStage<Void> unbind(
+                    RoutingId sessionRid, ZLinkBackendActorRef actor,
+                    long generation, Duration timeout) {
+                    unbindAttempts.incrementAndGet();
+                    return CompletableFuture.failedFuture(ended);
+                }
+            };
+            var stream = new ZLinkJavaStreamSocket(
+                context.createStreamSocket(), node, null, lifecycle);
+            try {
+                stream.startSessionService();
+                var session = RoutingId.from("ended-unbind-session");
+                var actor = new ZLinkBackendActorRef(
+                    RoutingId.from("ended-actor-node"), "ended-actor", 1);
+                stream.bindActor(session, actor).submit(Duration.ofSeconds(1))
+                    .toCompletableFuture().get(1, TimeUnit.SECONDS);
+
+                var failure = assertThrows(ExecutionException.class, () ->
+                    stream.unbindActor(session, actor.actorId())
+                        .submit(Duration.ofSeconds(1)).toCompletableFuture()
+                        .get(1, TimeUnit.SECONDS));
+                assertEquals(ended, failure.getCause());
+                assertDoesNotThrow(stream::close);
+                assertEquals(1, unbindAttempts.get());
+            } finally {
+                stream.close();
+            }
+        }
+    }
+
+    @Test
     void streamCloseWaitsForSlowUnbindWithinTheLifecycleBound()
         throws Exception {
         try (var context = Zlink.createContext();
