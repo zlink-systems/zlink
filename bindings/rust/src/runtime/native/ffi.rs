@@ -596,6 +596,7 @@ unsafe extern "C" {
     pub fn zlink_msg_init_size(msg: *mut zlink_msg_t, size: usize) -> c_int;
     pub fn zlink_msg_close(msg: *mut zlink_msg_t) -> c_int;
     pub fn zlink_msg_move(dest: *mut zlink_msg_t, src: *mut zlink_msg_t) -> c_int;
+    pub fn zlink_msg_adopt(dest: *mut zlink_msg_t, src: *mut zlink_msg_t) -> c_int;
     pub fn zlink_msg_copy(dest: *mut zlink_msg_t, src: *mut zlink_msg_t) -> c_int;
     pub fn zlink_msg_data(msg: *mut zlink_msg_t) -> *mut c_void;
     pub fn zlink_msg_size(msg: *const zlink_msg_t) -> usize;

@@ -786,30 +786,40 @@ fn completion_outcome(
                     completion.request_result,
                 )))
             } else {
-                Ok(take_completion_parts(
-                    completion.reply_parts,
-                    completion.reply_part_count,
-                ))
+                take_completion_parts(completion.reply_parts, completion.reply_part_count)
             };
             CompletionOutcome::Request(outcome)
         }
     }
 }
 
-fn take_completion_parts(parts: *mut ffi::zlink_msg_t, count: usize) -> Vec<Message> {
-    let mut out = Vec::with_capacity(count);
+fn take_completion_parts(
+    parts: *mut ffi::zlink_msg_t,
+    count: usize,
+) -> Result<Vec<Message>, RequestError> {
+    let mut out = Vec::<Message>::with_capacity(count);
     if parts.is_null() {
-        return out;
+        return Ok(out);
     }
     for index in 0..count {
         unsafe {
-            let mut native = std::mem::MaybeUninit::<ffi::zlink_msg_t>::uninit();
-            ffi::zlink_msg_init(native.as_mut_ptr());
-            ffi::zlink_msg_move(native.as_mut_ptr(), parts.add(index));
-            out.push(Message::from_raw(native.assume_init()));
+            // Message owns only its native frame. Adopt into the spare Vec
+            // element without constructing or moving an initialized wrapper.
+            // Field projection makes no assumption about Rust struct layout.
+            let destination = out.as_mut_ptr().add(index);
+            let raw = std::ptr::addr_of_mut!((*destination).inner.raw);
+            if ffi::zlink_msg_adopt(raw, parts.add(index)) != 0 {
+                return Err(RequestError::new(
+                    RequestResult::InternalError,
+                    ffi::zlink_errno(),
+                ));
+            }
+            // Only successfully initialized elements may be dropped. The
+            // completion still owns each emptied source header and closes it.
+            out.set_len(index + 1);
         }
     }
-    out
+    Ok(out)
 }
 
 fn request_result_from_native(result: ffi::zlink_request_result_t) -> RequestResult {
@@ -837,6 +847,78 @@ fn request_result_from_native(result: ffi::zlink_request_result_t) -> RequestRes
 mod tests {
     use super::*;
     use std::task::Waker;
+
+    #[test]
+    fn adopted_reply_parts_outlive_completion_storage_and_shared_sources() {
+        for sizes in [vec![], vec![0], vec![64, 0], vec![16, 1024, 65536]] {
+            let mut originals: Vec<Message> = sizes
+                .iter()
+                .enumerate()
+                .map(|(index, size)| Message::try_from(vec![index as u8 + 1; *size]).unwrap())
+                .collect();
+            let mut sources: Vec<ffi::zlink_msg_t> = originals
+                .iter_mut()
+                .map(|original| unsafe {
+                    let mut source = std::mem::MaybeUninit::uninit();
+                    assert_eq!(ffi::zlink_msg_init(source.as_mut_ptr()), 0);
+                    assert_eq!(
+                        ffi::zlink_msg_copy(source.as_mut_ptr(), original.raw_mut()),
+                        0
+                    );
+                    source.assume_init()
+                })
+                .collect();
+
+            let reply = take_completion_parts(sources.as_mut_ptr(), sources.len()).unwrap();
+            for source in &mut sources {
+                unsafe {
+                    assert_eq!(ffi::zlink_msg_size(source), 0);
+                    assert_eq!(ffi::zlink_msg_close(source), 0);
+                }
+            }
+            drop(sources);
+            drop(originals);
+
+            assert_eq!(reply.len(), sizes.len());
+            for (index, (part, size)) in reply.iter().zip(&sizes).enumerate() {
+                assert_eq!(part.as_bytes(), vec![index as u8 + 1; *size]);
+                assert_eq!(part.ref_count(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn failed_reply_adoption_releases_only_the_adopted_prefix() {
+        let mut original = Message::try_from(vec![7; 1024]).unwrap();
+        let mut sources: [ffi::zlink_msg_t; 3] = std::array::from_fn(|_| unsafe {
+            let mut source = std::mem::MaybeUninit::uninit();
+            assert_eq!(ffi::zlink_msg_init(source.as_mut_ptr()), 0);
+            assert_eq!(
+                ffi::zlink_msg_copy(source.as_mut_ptr(), original.raw_mut()),
+                0
+            );
+            source.assume_init()
+        });
+        unsafe {
+            assert_eq!(ffi::zlink_msg_close(&mut sources[1]), 0);
+        }
+
+        let error = take_completion_parts(sources.as_mut_ptr(), sources.len())
+            .err()
+            .expect("invalid native source");
+        assert_eq!(error.code(), RequestResult::InternalError);
+        assert_eq!(error.native_errno(), libc::EFAULT);
+        // The first source was adopted then dropped on error; the last source
+        // remains owned by the completion, together with its empty prefix.
+        assert_eq!(original.ref_count(), 2);
+        unsafe {
+            assert_eq!(ffi::zlink_msg_size(&sources[0]), 0);
+            assert_eq!(ffi::zlink_msg_size(&sources[2]), 1024);
+            assert_eq!(ffi::zlink_msg_close(&mut sources[0]), 0);
+            assert_eq!(ffi::zlink_msg_close(&mut sources[2]), 0);
+        }
+        assert_eq!(original.ref_count(), 1);
+    }
 
     #[test]
     fn capture_before_publish_joins_exactly_once() {
