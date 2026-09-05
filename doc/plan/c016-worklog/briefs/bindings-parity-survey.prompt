@@ -1,0 +1,11 @@
+역할: zlink 8개 bindings 교차 parity 조사(read-only, sol high). 작업 트리: /home/hep7hep7/project/zlink (main, 읽기 전용 — **파일 수정·빌드·테스트 실행 금지**, git은 조회만). 진행 로그 /home/hep7hep7/project/zlink-work/c016/bindings-parity-survey-progress.md 한 줄씩 append(3분마다 한 줄 이상), 종료 시 `EXIT:<code>`. 요약 /home/hep7hep7/project/zlink-work/c016/bindings-parity-survey-summary.md.
+
+배경: 사용자 지시 "모든 bindings가 동일한 동작성·사용성을 가지도록". Java에서 확정한 4개 표면을 8개 bindings(c, cpp, dotnet, java, node, python, go, rust — 각 `bindings/<lang>/`)에서 대조한다. 각 binding의 spec은 `bindings/doc/spec/<lang>/README.ko.md`, 공통 spec `bindings/doc/spec/README.ko.md`, Core spec `core/doc/spec/core/06-monitoring.ko.md`, `03-errors.ko.md`, `socket/README.ko.md`.
+
+조사 표면(각 binding × 각 항목을 `있음/없음/부분`과 `file:line`, spec 조항 유무로 표):
+1. **Monitor event identity**: 공개 monitor 이벤트가 Core의 `connection_id`(uint64)·`transport_lane`·`flags`(READY edge 등)를 노출하는지; native 레이아웃이 Core 공개 struct `zlink_monitor_event_t`(`core/include/zlink/eventing/api.h`, 800 B, connection_id 784 / transport_lane 792 / flags 796)와 정확히 일치하는지(Java는 816 B로 잘못돼 있었음 — 다른 binding의 FFI 레이아웃/struct 정의를 실제 숫자로 확인: dotnet `StructLayout`, node N-API, python ctypes/cffi, go cgo, rust bindgen/repr(C), cpp 헤더 직접 사용).
+2. **Poller monitor 등록**: 공개 Poller가 socket monitor를 readiness 대상으로 등록/제거할 수 있는지(C++ `poller.add(socket_monitor_t&)`, .NET `ZlinkPoll.Poll(IReadOnlyList<ISocketMonitor>)`), 없으면 사용자가 monitor를 어떻게 drain하는지(별도 스레드? fd? 폴링 루프?). spec에 signature가 있는지.
+3. **Typed submit/error result**: async send/request 경로에서 (a) exact-route loss `NOT_CONNECTED`, (b) admission 거절 `NOT_ADMITTED`, (c) `BACKPRESSURED`+wait token → WRITABLE, (d) wait-token terminal(명시적 제거 `ENOENT` / close TERMINAL)이 **raw errno 없이 구분되는 typed result/예외 타입**으로 나오는지; 각 binding의 error 매핑 파일(`error_mapping`, `NativeSubmitErrors`, `errors.hpp`, `ZlinkException` 등)에서 4 case의 타입 이름.
+4. **네이티브 라이브러리 로딩**: 패키지에 native lib를 번들해 임시 디렉터리에 추출하는 binding(java는 콘텐츠 해시 캐시 `~/.cache/zlink/native/<sha256>/`로 수정됨, 커밋 37af8073a7)이 또 있는지(dotnet runtimes/ 폴더 직접 로드? node prebuild? python wheel 내 .so 직접 로드? go/rust는 링크?) — 추출형이면 누수 가능성과 캐시 정책.
+
+산출(요약 파일): 항목별 8-binding 비교표, 각 binding의 gap 목록(무엇을 추가/수정해야 Java·C++·.NET과 같아지는지, 예상 변경 범위 파일), spec에 근거가 없는 항목(= spec gap, 사용자 결정 필요)과 근거가 있는데 구현이 빠진 항목(= binding 버그)을 분리. 추측 금지: 각 셀에 `file:line` 근거. 상한 45분.
