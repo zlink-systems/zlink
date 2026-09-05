@@ -15,6 +15,9 @@ const skippedTestFiles = new Set(
     .filter((value) => value.length > 0)
 );
 const skipped = [];
+const failedTestFiles = [];
+let expectedTestCount = 0;
+let completedTestCount = 0;
 
 if (expectedMajor !== 0 && actualMajor !== expectedMajor) {
   console.error(`Expected Node ${expectedMajor}, got ${process.version}.`);
@@ -44,17 +47,32 @@ for (const testFile of listTestFiles(path.join(nodeRoot, 'test'))) {
   }
   //  타임아웃이 없으면 suite가 멈췄을 때 게이트가 실패가 아니라 "영원히 진행 중"이
   //  된다. 실제로 그 상태에서 부분 로그를 통과로 오인하기 쉬웠다.
-  run(relative, process.execPath, [
+  const result = runTestFile(relative, [
     '--test',
-    '--test-force-exit',
     '--test-timeout=600000',
     testFile
   ]);
+  expectedTestCount += result.announced;
+  completedTestCount += result.completed;
+  if (!result.passed) failedTestFiles.push(relative);
 }
 releaseGateLock();
 if (skipped.length > 0) {
   console.error(`Framework CI skipped ${skipped.length} test file(s): ${skipped.join(', ')}`);
   process.exit(2);
+}
+if (completedTestCount !== expectedTestCount) {
+  console.error(
+    `Runtime test aggregate is incomplete: announced ${expectedTestCount}, completed ${completedTestCount}.`
+  );
+  process.exit(1);
+}
+console.log(
+  `-- runtime test integrity: announced=${expectedTestCount} completed=${completedTestCount}`
+);
+if (failedTestFiles.length > 0) {
+  console.error(`Framework runtime tests failed in ${failedTestFiles.length} file(s): ${failedTestFiles.join(', ')}`);
+  process.exit(1);
 }
 
 function relativePath(base, file) {
@@ -75,6 +93,68 @@ function run(label, command, args) {
     console.error(`${label} failed with exit code ${result.status ?? 1}.`);
     process.exit(result.status ?? 1);
   }
+}
+
+function runTestFile(label, args) {
+  console.log(`-- ${label}`);
+  const result = childProcess.spawnSync(process.execPath, args, {
+    cwd: nodeRoot,
+    encoding: 'utf8',
+    env: process.env,
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: 600000
+  });
+  process.stdout.write(result.stdout ?? '');
+  process.stderr.write(result.stderr ?? '');
+
+  const tap = inspectTap(result.stdout ?? '');
+  const integrityErrors = [];
+  if (tap.plan === undefined) integrityErrors.push('missing top-level TAP plan');
+  if (tap.summary === undefined) integrityErrors.push('missing TAP test summary');
+  if (tap.plan !== undefined && tap.plan !== tap.announced) {
+    integrityErrors.push(`plan=${tap.plan}, announced=${tap.announced}`);
+  }
+  if (tap.plan !== undefined && tap.plan !== tap.completed) {
+    integrityErrors.push(`plan=${tap.plan}, completed=${tap.completed}`);
+  }
+  if (tap.summary !== undefined && tap.summary !== tap.completed) {
+    integrityErrors.push(`summary=${tap.summary}, completed=${tap.completed}`);
+  }
+  if (result.error) {
+    integrityErrors.push(
+      result.error.code === 'ETIMEDOUT'
+        ? 'parent watchdog expired after 600000ms'
+        : `runner error: ${result.error.message}`
+    );
+  }
+  if (integrityErrors.length > 0) {
+    console.error(`${label} produced incomplete TAP: ${integrityErrors.join('; ')}.`);
+  }
+  if (result.status !== 0 && !result.error) {
+    console.error(`${label} failed with exit code ${result.status ?? 1}.`);
+  }
+
+  return {
+    announced: tap.announced,
+    completed: tap.completed,
+    passed: result.status === 0 && integrityErrors.length === 0
+  };
+}
+
+function inspectTap(output) {
+  let announced = 0;
+  let completed = 0;
+  let plan;
+  let summary;
+  for (const line of output.split(/\r?\n/)) {
+    if (/^# Subtest: /.test(line)) announced += 1;
+    if (/^(?:ok|not ok) \d+ - /.test(line)) completed += 1;
+    const planMatch = /^1\.\.(\d+)$/.exec(line);
+    if (planMatch !== null) plan = Number(planMatch[1]);
+    const summaryMatch = /^# tests (\d+)$/.exec(line);
+    if (summaryMatch !== null) summary = Number(summaryMatch[1]);
+  }
+  return { announced, completed, plan, summary };
 }
 
 function listTestFiles(root) {
