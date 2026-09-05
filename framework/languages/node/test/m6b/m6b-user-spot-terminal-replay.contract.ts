@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { RequestResult } from '@zlink-systems/zlink';
+import { RequestError, RequestResult } from '@zlink-systems/zlink';
+import {
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException
+} from '../../packages/framework/src/contracts';
 import type {
   RawServiceMeshRuntime
 } from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
@@ -136,6 +140,89 @@ test('command 48 gives a healthy first attempt the whole remaining deadline', as
     assert.equal(requests.length, 1);
     assert(attemptTimeouts[0]! > healthyDurationMs);
     assert(attemptTimeouts[0]! > operationTimeoutMs / 2);
+  } finally {
+    runtime.close();
+  }
+});
+
+test('command 48 exhaustion is Unavailable when no attempt was admitted', async () => {
+  let attempts = 0;
+  const raw = {
+    setServiceIngress() {},
+    async requestService(): Promise<readonly Buffer[]> {
+      attempts += 1;
+      throw new RequestError(RequestResult.NotConnected);
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'source-node', 17n);
+
+  try {
+    await assert.rejects(
+      () => runtime.requestUserSpotClose(
+        'absent-node',
+        {
+          sourceNodeRid: 'source-node',
+          sourceNodeGeneration: 17n,
+          target: {
+            spotId: 'absent-route-spot',
+            objectGeneration: 19n,
+            targetNodeRid: 'absent-node',
+            targetNodeGeneration: 23n,
+            authorityOwnerGeneration: 29n,
+            expectedStoreVersion: 'version-31'
+          },
+          deadlineUnixMs: BigInt(Date.now() + 80)
+        },
+        80
+      ),
+      (error: unknown) => error instanceof ZLinkFrameworkException
+        && error.kind === ZLinkFrameworkErrorKind.Unavailable
+    );
+    assert(attempts > 0);
+  } finally {
+    runtime.close();
+  }
+});
+
+test('command 48 exhaustion is DeadlineExceeded after an admitted reply is withheld', async () => {
+  let attempts = 0;
+  const raw = {
+    setServiceIngress() {},
+    async requestService(
+      _targetNodeRid: string,
+      _parts: readonly Uint8Array[],
+      timeoutMs: number
+    ): Promise<readonly Buffer[]> {
+      attempts += 1;
+      await new Promise(resolve => setTimeout(resolve, timeoutMs));
+      throw new RequestError(RequestResult.TimedOut);
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = new ServiceStatefulRuntime(raw, 'source-node', 17n);
+
+  try {
+    await assert.rejects(
+      () => runtime.requestUserSpotClose(
+        'target-node',
+        {
+          sourceNodeRid: 'source-node',
+          sourceNodeGeneration: 17n,
+          target: {
+            spotId: 'withheld-reply-spot',
+            objectGeneration: 19n,
+            targetNodeRid: 'target-node',
+            targetNodeGeneration: 23n,
+            authorityOwnerGeneration: 29n,
+            expectedStoreVersion: 'version-31'
+          },
+          deadlineUnixMs: BigInt(Date.now() + 80)
+        },
+        80
+      ),
+      (error: unknown) => error instanceof ZLinkFrameworkException
+        && error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded
+    );
+    assert.equal(attempts, 1);
   } finally {
     runtime.close();
   }

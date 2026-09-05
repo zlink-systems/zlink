@@ -1,0 +1,29 @@
+# Job (STAGE 2, approved A): node m6b — the fake STREAM socket in `m6b-runtime.contract.ts` lacks the binding's `submit_sync()` terminal
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` (root) §3 and the approved diagnosis
+`doc/plan/c016-worklog/diag-node-m6b-bound-session-invalidstate.md`. Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/framework/**`, `doc/site/**`, other languages, or runtime sources; never lower an assertion; do not commit.
+Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`, `unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`
+around every npm/test invocation. Another job runs on `samples/DeliveryDispatch.Ts/**` — only touch `test/m6b/**`.
+
+## Approved diagnosis
+`createFakeStream()` (`test/m6b/m6b-runtime.contract.ts:6625-6651`) offers `message()/flags()/submit()` only; the runtime's
+routed STREAM send terminal is `stream.send(rid).message(...).submit_sync()` (`node-raw-mesh-backend.ts:1997-2004`, per the
+node binding spec's sync/awaitable terminal pair). The `TypeError` is caught and surfaces as a local `protocolError` →
+`SubmitResult.InvalidState(8)`. Class A (test double behind the 0.17 binding terminal contract). Owner: test fixture.
+Parity: cpp/dotnet/java m6b equivalents pass.
+
+## What to do
+1. Make the fake `StreamSocket` implement the binding's current send/reply builder surface (`submit_sync()` and the async
+   terminal as the real `StreamSocket` type declares — give the fake the real type so TypeScript checks the contract instead
+   of `unknown`), recording the same observable calls the test asserts.
+2. Re-run `raw backend dispatches Spot requests and Actor sends through M6B owners` 3× and the full
+   `npm run verify:m6b-runtime` once. Also run `remote User Spot target executes once and rewrites correlation on terminal
+   replay` 5× alone and record its determinism (it flaked once earlier).
+3. Note (no fix here): the runtime turned an internal `TypeError` into `InvalidState(8)` via the delivery catch — report
+   whether that catch boundary swallows non-transport exceptions (AGENTS §3 forbidden pattern "catch-all") as a follow-up
+   with file:line.
+
+## Deliverable
+`doc/plan/c016-worklog/stage2-node-m6b-fake-stream-submit-sync-summary.md`: diff, results, the flake determinism table, the
+catch-boundary note, BLOCKERS.
