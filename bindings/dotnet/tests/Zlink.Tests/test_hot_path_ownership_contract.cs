@@ -168,4 +168,137 @@ public sealed class test_hot_path_ownership_contract
         }
     }
 
+    [Theory]
+    [InlineData(2)]
+    [InlineData(9)]
+    [InlineData(33)]
+    public void reused_receive_storage_does_not_reanimate_previous_collection(int count)
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+        using var context = Zlink.CreateContext();
+        using var sender = context.CreateDealerSocket();
+        using var receiver = context.CreateDealerSocket();
+        var endpoint = CoreTestSupport.NewEndpoint("inproc", "receive-storage");
+        receiver.Bind(endpoint);
+        sender.Connect(endpoint);
+        using var received = Received.Create();
+
+        void Send(string text)
+        {
+            using var part = Message.From(text);
+            var operation = sender.Send().Message(part);
+            for (var i = 1; i < count; i++)
+                operation.Message(part);
+            operation.Submit();
+        }
+
+        Send("first");
+        Assert.True(receiver.Recv(received));
+        var previous = received.Parts;
+        using var iterator = previous.GetEnumerator();
+        Assert.True(iterator.MoveNext());
+        Assert.Equal("first", iterator.Current.GetString());
+
+        Send("second");
+        Assert.True(receiver.Recv(received));
+        Assert.NotSame(previous, received.Parts);
+        Assert.Equal(count, previous.Count);
+        Assert.Throws<ObjectDisposedException>(() => previous[0]);
+        Assert.Throws<ObjectDisposedException>(() => iterator.MoveNext());
+        Assert.All(received.Parts, part => Assert.Equal("second", part.GetString()));
+    }
+    [Fact]
+    public async Task completed_request_keeps_its_task_and_result_across_later_requests()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+        using var context = Zlink.CreateContext();
+        using var dealer = context.CreateDealerSocket();
+        using var router = context.CreateRouterSocket();
+        var endpoint = CoreTestSupport.NewEndpoint("inproc", "request-identity");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        using var received = Received.Create();
+
+        Task<IReadOnlyList<Message>> Exchange(string text)
+        {
+            using var part = Message.From(text);
+            var pending = dealer.Request().Message(part)
+                .Timeout(TimeSpan.FromSeconds(2)).Async();
+            Assert.True(router.Recv(received));
+            router.Reply(received.RoutingId!.Value, received.ReplyToken!)
+                .Message(received.Parts[0]).Submit();
+            return pending;
+        }
+
+        var first = Exchange("first");
+        var firstResult = await first;
+        try
+        {
+            var second = Exchange("second");
+            var secondResult = await second;
+            try
+            {
+                Assert.NotSame(first, second);
+                Assert.Same(firstResult, await first);
+                Assert.Equal("first", firstResult[0].GetString());
+                Assert.Equal("second", secondResult[0].GetString());
+            }
+            finally
+            {
+                Zlink.MultipartClose(secondResult);
+            }
+        }
+        finally
+        {
+            Zlink.MultipartClose(firstResult);
+        }
+    }
+    [Fact]
+    public async Task concurrent_public_drain_joins_backpressured_send_publication()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+        const int count = 256;
+        using var context = Zlink.CreateContext();
+        context.Options.AutoHwmEnabled = false;
+        using var sender = context.CreateDealerSocket();
+        using var receiver = context.CreateDealerSocket();
+        sender.Options.SendHighWaterMark = 65_536 + 128;
+        receiver.Options.ReceiveHighWaterMark = 65_536 + 128;
+        receiver.Options.ReceiveTimeout = TimeSpan.FromSeconds(3);
+        var endpoint = CoreTestSupport.NewEndpoint("inproc", "send-publication");
+        receiver.Bind(endpoint);
+        sender.Connect(endpoint);
+        using var completions = Zlink.CreatePoller();
+        completions.Add(sender, PollEventFlags.PollCompletion, 1);
+
+        var sending = Task.Run(async () =>
+        {
+            for (var i = 0; i < count; i++)
+            {
+                using var sequence = Message.From(i.ToString());
+                using var body = Message.Allocate(65_536);
+                await sender.Send().Message(sequence).Message(body).Async();
+            }
+        });
+        var receiving = Task.Run(() =>
+        {
+            using var received = Received.Create();
+            for (var i = 0; i < count; i++)
+            {
+                Assert.True(receiver.Recv(received));
+                Assert.Equal(2, received.Parts.Count);
+                Assert.Equal(i.ToString(), received.Parts[0].GetString());
+            }
+        });
+        var events = new PollEvent[1];
+        while (!sending.IsCompleted && !receiving.IsFaulted)
+        {
+            if (completions.Wait(events, TimeSpan.FromSeconds(3)) == 0)
+                Assert.True(sending.IsCompleted);
+        }
+        await Task.WhenAll(sending, receiving).WaitAsync(TimeSpan.FromSeconds(3));
+    }
 }
