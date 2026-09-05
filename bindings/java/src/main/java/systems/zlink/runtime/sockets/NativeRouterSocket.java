@@ -56,17 +56,10 @@ final class NativeRouterSocket extends NativeSocketBase implements RouterSocket 
     public boolean recv(Received result, RecvFlags flags) {
         java.util.Objects.requireNonNull(result, "result");
         java.util.Objects.requireNonNull(flags, "flags");
-        if (flags == RecvFlags.DONT_WAIT) {
-            boolean ok = InternalAccess.routerRecvInto(routedRequests, result,
-                flags);
-            if (ok) attachSendSender(result);
-            return ok;
-        }
-        Received fresh = InternalAccess.routerRecv(routedRequests, flags);
-        if (fresh == null) return false;
-        ContractAccess.receivedAdoptFrom(result, fresh);
-        attachSendSender(result);
-        return true;
+        boolean ok = InternalAccess.routerRecvInto(routedRequests, result,
+            flags);
+        if (ok) attachSendSender(result);
+        return ok;
     }
 
     void attachSendSender(Received result) {
