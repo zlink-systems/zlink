@@ -1243,3 +1243,9 @@ gate: worktree identity 5/5, integration 121/121, 전체 171/171; main dev 전�
 ## D-B113 (2026-09-05 14:55, 머신 B) Node hot-path pass 1(astra) — multipart Buffer 경로 정리로 DD 27.6→41.2%; REQREP는 요청당 ~57 ms 고정 지연(빈 FD wake·완료 진행 비용)이 남아 pass 1b
 변경(`bindings/node/native/src/addon_core.cc`, `addon_exports.cc`, `addon_message_parts.h` 제거, `runtime/buffers/message_conversion.ts`): 정상 경로의 변환 배열·진단 문자열 할당 제거, N-API 경계 정리(공개 시그니처 불변, spec gap 없음). after(1 run, load ≤3): DD 27.6→41.2%(64K 44→75%), PUBSUB 28.6→31.0%, DR/RR REQREP 18.7/17.9→20.3/18.1%(변화 없음). gate: `npm test` 126/126, 관련 24 tests × 5, samples.
 남은 원인(진단): REQREP 요청 52k건에 completion callback 344k·pull 396k(빈 FD wake), 요청당 mean latency 52~62 ms로 고정 — 완료가 FD wake가 아니라 주기적 진행에 얹혀 있는 형태. Java 1b와 같은 방식으로 완료 진행 제어점을 하나로 재설계하는 pass 1b(astra) 실행. 커밋 `f69558af55`.
+
+## D-092 (2026-09-05 15:50, 머신 A) 결정 — ROUTER connector는 REJECT로 닫힌 pipe의 DISCONNECTED를 application recv 없이 관찰해야 한다(D-B104 "progress without app poll"의 적용, spec gap 아님)
+
+- 발견: send_routing_id assert 수정 job(`b63f79a3ce`)의 미해결 2번. REJECT ROUTER가 중복 pipe를 `terminate(true)`로 닫으면 connector(ROUTER)는 staged routing-id preamble 때문에 `waiting_for_delimiter`에 머물러, application recv가 preamble을 소진할 때까지 monitor DISCONNECTED가 나오지 않는다. DEALER connector는 즉시 관찰한다.
+- 판단: Core polling §3 command progress / D-B104(disconnect progress는 application poll에 의존하지 않는다)와 §4 "connector는 그 pipe의 종료를 monitor로 관찰하고 connect intent에 따라 다시 연결"이 이미 요구하는 동작이므로 spec gap이 아니라 Core 결함. ROUTER/DEALER 두 경로가 아니라 하나의 종료 관찰 규칙이어야 한다.
+- 조치: Core job(worktree b, astra) — 회귀 테스트(ROUTER connector, REJECT ROUTER, app recv 없이 DISCONNECTED 관찰) + 단일 owner 수정. framework 쪽 보상 금지.

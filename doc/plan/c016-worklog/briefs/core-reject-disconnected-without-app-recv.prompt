@@ -1,0 +1,27 @@
+# Job (Core fix, model astra): a ROUTER connector whose pipe was closed by a REJECT ROUTER observes the DISCONNECTED monitor event only after an application recv drains the staged routing-id preamble; DEALER connectors observe it immediately — one termination-observation rule (D-092)
+
+You are a codex sub-agent under a Claude supervisor. Read `CONTRIBUTING.ko.md` §4/§5, `AGENTS.md` §3, `core/doc/spec/core/socket/README.ko.md` §4
+(REJECT: "connector는 그 pipe의 종료를 monitor로 관찰하고 connect intent에 따라 다시 연결"), Core polling spec §3 command progress, and
+`doc/plan/c016-worklog/decisions.ko.md` D-B104, D-088, D-091, D-092. Never modify any `doc/spec/**`, `bindings/**`, `framework/**`; do not
+commit. WORK ONLY IN `/home/hep7/project/zlink-core-b`: first `git reset -q --hard && git clean -fdq core && git checkout -q --detach b63f79a3ce`. Never
+touch main's `core/build-dev`. Build: `nice -n 10 env JOBS=4 scripts/build-core.sh dev`.
+
+## Facts (from doc/plan/c016-worklog/core-send-routing-id-assert-summary.md, unresolved item 2)
+REJECT closes the duplicate pipe with `terminate(true)` (`router_admission.cpp` ~366/461). On the connector side a ROUTER socket has the
+peer's routing-id preamble staged in the pipe; termination leaves the pipe in `waiting_for_delimiter` until an application recv drains the
+preamble, so the monitor DISCONNECTED edge (and the reconnect per connect intent) is delayed until the application happens to recv. A DEALER
+connector observes DISCONNECTED immediately. Reproduce with the public API: ROUTER(RID A) connects to ROUTER(REJECT policy) twice (or a second
+socket with the same RID) so the second pipe is rejected; the connector never calls recv; assert DISCONNECTED for the rejected connection_id
+arrives within the command-progress bound with only `zlink_socket_monitor_recv`/`zlink_poll` on the monitor (no app recv) — this fails today.
+
+## What to do
+1. New contract test `core/tests/integration/test_router_reject_disconnected_without_app_recv.cpp` (tcp + inproc; ROUTER and DEALER connector;
+   REJECT and HANDOVER binder) registered in `core/tests/CMakeLists.txt`.
+2. Fix at the single owner of pipe termination observation (pipe/session termination → socket monitor edge), so the rule is one for all socket
+   kinds: termination of a pipe publishes its DISCONNECTED edge regardless of undrained preamble. Do not add a ROUTER-specific drain helper or a
+   second observation path. State rule count before/after and whether the staged preamble's lifetime changes.
+3. Gate: new test `--repeat until-fail:10`; targeted `test_inproc_pending_connect_rejected_at_attach|test_router_reject_duplicate|
+   test_socket_disconnect_boundary|test_socket_disconnect_progress_without_app_poll|test_router_reciprocal_handover_lanes|test_monitor`; full ctest
+   once (hotpath n/a on dev).
+4. Deliverable in the MAIN tree: `doc/plan/c016-worklog/core-reject-disconnected-without-app-recv-summary.md` (cause file:line, fix, owner /
+   spec clause / parity / class, rule count, results, BLOCKERS); `git add -N . && git diff HEAD > /home/hep7/project/zlink-core-b/core-d092.patch`.

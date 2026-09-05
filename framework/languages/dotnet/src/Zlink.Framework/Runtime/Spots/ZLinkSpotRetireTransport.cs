@@ -328,6 +328,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         CancellationToken cancellationToken)
     {
         return await ReconcilePublishedAuthorityAsync(
+                registration.Locations.ResolveStore()
+                ?? throw new ZLinkConfigurationException(
+                    "Location Store is not registered."),
                 reservation, relocation, cancellationToken)
             .ConfigureAwait(false);
     }
@@ -347,14 +350,12 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         return ValueTask.CompletedTask;
     }
 
-    private async ValueTask<ulong> ReconcilePublishedAuthorityAsync(
+    internal async ValueTask<ulong> ReconcilePublishedAuthorityAsync(
+        IZLinkLocationRepository store,
         ZLinkSpotRetireReservation reservation,
         ZLinkAggregateRelocationPublished relocation,
         CancellationToken cancellationToken)
     {
-        var store = registration.Locations.ResolveStore()
-            ?? throw new ZLinkConfigurationException(
-                "Location Store is not registered.");
         var deadline = DateTimeOffset.UtcNow
             + registration.DefaultRequestTimeout;
         var spot = relocation.Envelope.Participants.Single(
@@ -372,14 +373,24 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                    == reservation.TargetDescriptor
                 && found.Snapshot.Allocation.DescriptorLifecycleGeneration
                    == reservation.TargetDescriptorLifecycleGeneration
-                && ZLinkRelocationAuthorityPayloadCodec.TryDecode(
+                && found.Snapshot.ObjectGeneration == spot.ObjectGeneration
+                && found.Snapshot.AuthorityOwnerGeneration
+                   > spot.AuthorityOwnerGeneration
+                && found.Snapshot.OwnerId == reservation.TargetOwner.OwnerId
+                && found.Snapshot.OwnerLeaseGeneration
+                   == reservation.TargetOwner.LeaseGeneration
+                && (ZLinkRelocationAuthorityPayloadCodec.TryDecode(
                     found.Snapshot.Payload.Span, out var publication)
                 && publication.AggregateId == relocation.Fence.AggregateId
                 && publication.AggregateGeneration
                    == relocation.Fence.AggregateGeneration
-                && publication.Reference == relocation.Relocation.Reference
-                && publication.ChecksumCrc32c
-                   == relocation.Relocation.ChecksumCrc32c)
+                || ZLinkAggregateRelocationCoordinator.IsExactNormalizedTargetAuthority(
+                    found.Snapshot,
+                    spot,
+                    relocation.Fence.AggregateId,
+                    reservation.TargetDescriptor,
+                    reservation.TargetDescriptorLifecycleGeneration,
+                    reservation.TargetOwner)))
                 return found.Snapshot.AuthorityOwnerGeneration;
             if (DateTimeOffset.UtcNow >= deadline)
             {
@@ -1150,9 +1161,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         var participants = stage.Envelope.Participants.Select(state =>
         {
             var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
-                state.RecoveryPayload.Span);
+                stage.SourceRecoveries[state.AuthorityKey].Span);
             return new ZLinkAggregateRelocationParticipant(
-                state,
+                state with { RecoveryPayload = stage.SourceRecoveries[state.AuthorityKey] },
                 recovery.ExpectedStoreVersion,
                 ZLinkAuthorityGenerationTransition.NewOwner,
                 recovery.AuthorityPayload,
@@ -1283,7 +1294,10 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     requireCompleted: true),
                 _ => false
             };
-        var envelope = await BindCanonicalAuthorityInventoryAsync(
+        var (envelope, sourceRecoveries) = await BindCanonicalAuthorityInventoryAsync(
+                registration.Locations.ResolveStore()
+                ?? throw new ZLinkConfigurationException(
+                    "Location Store is not registered."),
                 transferredEnvelope,
                 request,
                 cancellationToken)
@@ -1309,6 +1323,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     cancellationToken,
                     stagedBeforeCutover: true)
                 .ConfigureAwait(false);
+            stage = stage with { SourceRecoveries = sourceRecoveries };
         }
         catch
         {
@@ -1327,14 +1342,18 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         return true;
     }
 
-    private async ValueTask<ZLinkRelocationEnvelope>
+    internal static async ValueTask<(ZLinkRelocationEnvelope Envelope,
+        IReadOnlyDictionary<ZLinkAuthorityKey, ReadOnlyMemory<byte>> SourceRecoveries)>
         BindCanonicalAuthorityInventoryAsync(
+            IZLinkLocationRepository authorityStore,
             ZLinkRelocationEnvelope envelope,
             ZLinkCanonicalSpotStageContext request,
             CancellationToken cancellationToken)
     {
         if (envelope.CanonicalLogicalStream.IsEmpty)
-            return envelope;
+            return (envelope, envelope.Participants.ToDictionary(
+                static state => state.AuthorityKey,
+                static state => state.RecoveryPayload));
         var orderedStates = envelope.Participants
             .OrderBy(static participant => participant.CanonicalParticipantId)
             .ToArray();
@@ -1350,10 +1369,9 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId))
                 .OrderBy(static key => key.Value, StringComparer.Ordinal))
             .ToArray();
-        var authorityStore = registration.Locations.ResolveStore()
-                             ?? throw new ZLinkConfigurationException(
-                                 "Location Store is not registered.");
         var bound = new ZLinkRelocationParticipantEnvelope[orderedStates.Length];
+        var sourceRecoveries =
+            new Dictionary<ZLinkAuthorityKey, ReadOnlyMemory<byte>>();
         for (var index = 0; index < keys.Length; index++)
         {
             var read = await authorityStore.ReadAuthorityAsync(
@@ -1380,8 +1398,10 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 AuthorityKey = keys[index],
                 ObjectKind = objectKind,
                 ObjectGeneration = found.Snapshot.ObjectGeneration,
-                AuthorityOwnerGeneration = found.Snapshot.AuthorityOwnerGeneration,
-                RecoveryPayload = ZLinkCanonicalParticipantRecoveryCodec.Encode(
+                AuthorityOwnerGeneration = found.Snapshot.AuthorityOwnerGeneration
+            };
+            sourceRecoveries.Add(keys[index],
+                ZLinkCanonicalParticipantRecoveryCodec.Encode(
                     new ZLinkCanonicalParticipantRecovery(
                         keys[index],
                         objectKind,
@@ -1390,14 +1410,13 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                         found.Snapshot.StoreVersion,
                         stableType,
                         authorityPayload,
-                        ReadOnlyMemory<byte>.Empty))
-            };
+                        ReadOnlyMemory<byte>.Empty)));
         }
-        return envelope with
+        return (envelope with
         {
             AggregateGeneration = request.AggregateGeneration,
             Participants = bound
-        };
+        }, sourceRecoveries);
     }
 
     private async ValueTask<bool> IsSourceFenceCurrentAsync(
@@ -1833,7 +1852,11 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 || !ZLinkAggregateRelocationCoordinator
                     .IsExactNormalizedTargetAuthority(
                         found.Snapshot,
-                        participant,
+                        participant with
+                        {
+                            RecoveryPayload = stage.SourceRecoveries.GetValueOrDefault(
+                                participant.AuthorityKey)
+                        },
                         stage.Envelope.AggregateId,
                         new ZLinkMeshNodeDescriptorKey(
                             stage.SourceMeshName,
@@ -2522,6 +2545,11 @@ internal sealed record TargetStage(
     ulong TargetOwnerLeaseGeneration,
     ulong TargetAttemptGeneration) : ITargetStageEntry
 {
+    internal IReadOnlyDictionary<ZLinkAuthorityKey, ReadOnlyMemory<byte>>
+        SourceRecoveries { get; init; } = Envelope.Participants.ToDictionary(
+            static participant => participant.AuthorityKey,
+            static participant => participant.RecoveryPayload);
+
     public int AuthorityPublished;
     public int Published;
     public int AdmissionOpened;

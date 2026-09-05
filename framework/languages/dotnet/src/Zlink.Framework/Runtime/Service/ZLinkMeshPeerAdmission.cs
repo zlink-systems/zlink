@@ -43,8 +43,6 @@ internal sealed class ZLinkMeshPeerAdmission
         ArgumentNullException.ThrowIfNull(advertisedEndpoint);
 
         if (peersByRid.TryGetValue(sourceRid, out var exact)
-            && (candidateDirection is null
-                || exact.Direction == candidateDirection)
             && (exact.Admitted
                 || command == ServiceWireConstants.Command.Update
                 || command == ServiceWireConstants.Command.Hello
@@ -75,9 +73,6 @@ internal sealed class ZLinkMeshPeerAdmission
             // to the sole configured outbound intent just as the C++ candidate
             // registry falls back to the only opposite-direction connection.
         }
-
-        if (candidateDirection == ZLinkServiceConnectionDirection.Inbound)
-            return null;
 
         var candidates = peers
             .Where(peer =>

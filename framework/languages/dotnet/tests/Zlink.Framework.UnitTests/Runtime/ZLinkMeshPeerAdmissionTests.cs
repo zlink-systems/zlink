@@ -31,6 +31,30 @@ public sealed class ZLinkMeshPeerAdmissionTests
         Assert.Same(identityMatch, selected);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Admit_on_selected_inbound_pair_matches_current_logical_outbound_intent(bool alreadyAdmitted)
+    {
+        var sourceRid = RoutingId.From("remote-node");
+        var outbound = Peer(1, "tcp://remote", sourceRid);
+        outbound.RoutingId = sourceRid;
+        outbound.Admitted = alreadyAdmitted;
+        var peersByRid = new Dictionary<RoutingId, ZLinkMeshPeer>();
+        if (alreadyAdmitted)
+            peersByRid.Add(sourceRid, outbound);
+        var matcher = new ZLinkMeshPeerAdmission();
+
+        Assert.Same(outbound, matcher.FindForAdmission(
+            peersByRid, [outbound], sourceRid,
+            ServiceWireConstants.Command.Admit, outbound.Endpoint,
+            ZLinkServiceConnectionDirection.Inbound));
+        Assert.Null(matcher.FindForAdmission(
+            new Dictionary<RoutingId, ZLinkMeshPeer>(), [], sourceRid,
+            ServiceWireConstants.Command.Admit, outbound.Endpoint,
+            ZLinkServiceConnectionDirection.Inbound));
+    }
+
     [Fact]
     public void Admission_does_not_guess_when_unknown_intents_are_ambiguous()
     {

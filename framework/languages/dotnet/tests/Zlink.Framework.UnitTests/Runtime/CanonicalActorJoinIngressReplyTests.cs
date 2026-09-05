@@ -1,4 +1,5 @@
 using Systems.Zlink.Framework.Runtime.Protocol;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -1103,10 +1104,10 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        var startedAt = Stopwatch.GetTimestamp();
         while (!condition())
         {
-            if (DateTime.UtcNow >= deadline)
+            if (Stopwatch.GetElapsedTime(startedAt) >= TimeSpan.FromSeconds(2))
                 throw new TimeoutException("Canonical actorJoin setup did not complete.");
             await Task.Delay(10);
         }

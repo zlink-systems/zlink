@@ -1090,6 +1090,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                 null,
                 null,
                 cancellationToken,
+                requireNewPlacementEligibility: request.Participants.Any(
+                    static participant => participant.OwnerTransition
+                        == ZLinkAuthorityGenerationTransition.NewOwner),
                 allowPreparingTarget: request.AllowPreparingTarget)
             .ConfigureAwait(false);
         if (target is null)
@@ -1466,6 +1469,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                 null,
                 null,
                 cancellationToken,
+                requireNewPlacementEligibility: request.Participants.Any(
+                    static participant => participant.OwnerTransition
+                        == ZLinkAuthorityGenerationTransition.NewOwner),
                 allowPreparingTarget: allowPreparingTarget)
             .ConfigureAwait(false);
         if (target is null) return ZLinkAggregateCommitResult.Stale;
