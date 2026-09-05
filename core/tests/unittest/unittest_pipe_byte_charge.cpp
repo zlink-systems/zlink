@@ -1,14 +1,15 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
-//  Plan §8.1 contract tests for the two pieces of pipe arithmetic that the
-//  byte-HWM contract fixes exactly: the per-frame charge (§3.1) and the low
-//  water mark with its hint (§3.2). Both are pure functions of their inputs,
-//  so they are asserted here rather than inferred from transport behaviour.
+//  Byte-HWM contract tests for per-frame charge, low water marks and credit
+//  wakeups. Arithmetic and pipe mailbox behavior are checked independently
+//  of transport timing.
 
 #include "../testutil_unity.hpp"
 
 #include "core/msg.hpp"
 #include "core/pipe.hpp"
+#include "core/command.hpp"
+#include "api/socket/socket_api_internal.hpp"
 
 void setUp ()
 {
@@ -166,6 +167,106 @@ void test_hint_at_or_above_hwm_clamps_and_keeps_a_floor_of_one ()
     TEST_ASSERT_EQUAL_UINT64 (
       1, zlink::pipe_t::test_apply_lwm_hint (1, 1, 50));
 }
+
+struct credit_pipe_sink_t : zlink::i_pipe_events
+{
+    int writes = 0;
+    int credit_recoveries = 0;
+    int terminated = 0;
+    void read_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void write_activated (zlink::pipe_t *pipe_) ZLINK_OVERRIDE
+    {
+        ++writes;
+        // The socket owner consumes this marker to publish send recovery.
+        if (pipe_->take_hwm_credit_recovery ())
+            ++credit_recoveries;
+    }
+    void hiccuped (zlink::pipe_t *) ZLINK_OVERRIDE {}
+    void pipe_peer_terminated (zlink::pipe_t *, bool) ZLINK_OVERRIDE {}
+    void pipe_terminated (zlink::pipe_t *) ZLINK_OVERRIDE { ++terminated; }
+};
+
+int drain_credit_commands (zlink::socket_base_t *socket_)
+{
+    int activations = 0;
+    zlink::command_t command;
+    while (socket_->get_mailbox ()->recv (&command, 0) == 0) {
+        if (command.type == zlink::command_t::activate_write)
+            ++activations;
+        command.destination->process_command (command);
+    }
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+    return activations;
+}
+
+void test_dequeue_notifies_only_a_writer_waiting_for_credit ()
+{
+    setup_test_context ();
+    void *writer = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *reader = test_context_socket (ZLINK_SOCKET_PAIR);
+    zlink::socket_base_t *writer_core = as_socket_handle (writer).socket;
+    zlink::socket_base_t *reader_core = as_socket_handle (reader).socket;
+    // Distinct socket mailboxes make every credit command observable before
+    // its owner processes it. No transport timing is involved.
+    zlink::object_t *parents[] = {writer_core, reader_core};
+    zlink::pipe_t *pipes[2];
+    const uint64_t charge = sizeof (zlink::msg_t) + 64;
+    const uint64_t hwms[] = {2 * charge, 2 * charge};
+    const bool conflates[] = {false, false};
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflates, true));
+    credit_pipe_sink_t sink;
+    pipes[0]->set_event_sink (&sink);
+    pipes[1]->set_event_sink (&sink);
+
+    const auto write_frame = [&] () {
+        zlink::msg_t frame;
+        TEST_ASSERT_SUCCESS_ERRNO (frame.init_size (64));
+        TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&frame));
+        drain_credit_commands (reader_core);
+    };
+    const auto read_frame = [&] () {
+        zlink::msg_t frame;
+        TEST_ASSERT_SUCCESS_ERRNO (frame.init ());
+        TEST_ASSERT_TRUE (pipes[1]->read (&frame));
+        TEST_ASSERT_SUCCESS_ERRNO (frame.close ());
+    };
+
+    int active_writer_commands = 0;
+    // Cross several LWM and cached-HWM boundaries without ever parking.
+    for (int i = 0; i != 8; ++i) {
+        write_frame ();
+        read_frame ();
+        active_writer_commands += drain_credit_commands (writer_core);
+    }
+
+    write_frame ();
+    write_frame ();
+    TEST_ASSERT_FALSE (pipes[0]->check_write ());
+    read_frame ();
+    const int waiting_writer_commands = drain_credit_commands (writer_core);
+    const int resumed_writers = sink.writes;
+    const int credit_recoveries = sink.credit_recoveries;
+    TEST_ASSERT_TRUE (pipes[0]->check_write ());
+    read_frame ();
+    const int resumed_writer_commands = drain_credit_commands (writer_core);
+
+    pipes[0]->terminate (false);
+    pipes[1]->terminate (false);
+    drain_credit_commands (reader_core);
+    drain_credit_commands (writer_core);
+    drain_credit_commands (reader_core);
+    TEST_ASSERT_EQUAL_INT (2, sink.terminated);
+    test_context_socket_close_zero_linger (reader);
+    test_context_socket_close_zero_linger (writer);
+    teardown_test_context ();
+
+    TEST_ASSERT_EQUAL_INT (0, active_writer_commands);
+    TEST_ASSERT_EQUAL_INT (1, waiting_writer_commands);
+    TEST_ASSERT_EQUAL_INT (1, resumed_writers);
+    TEST_ASSERT_EQUAL_INT (1, credit_recoveries);
+    TEST_ASSERT_EQUAL_INT (0, resumed_writer_commands);
+}
 }
 
 int main ()
@@ -178,5 +279,6 @@ int main ()
     RUN_TEST (test_positive_hint_below_default_is_used);
     RUN_TEST (test_absent_hint_and_unlimited_hwm_leave_the_default);
     RUN_TEST (test_hint_at_or_above_hwm_clamps_and_keeps_a_floor_of_one);
+    RUN_TEST (test_dequeue_notifies_only_a_writer_waiting_for_credit);
     return UNITY_END ();
 }
