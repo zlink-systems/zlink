@@ -53,8 +53,10 @@ func runMultiDealerDealerServer(cfg multiConfig) {
 			}
 			perfcommon.Must(fmt.Errorf("multi dealer/dealer server poll: %w", pollErr))
 		}
+		// An interrupted public wait may return no event before StopAt.
+		// The active deadline, checked above, owns the measurement boundary.
 		if event == nil {
-			break
+			continue
 		}
 		if event.Revents&perfcommon.ZLinkPollIn == 0 {
 			continue

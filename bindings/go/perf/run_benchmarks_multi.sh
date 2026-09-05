@@ -1487,13 +1487,6 @@ for pattern_index in "${!PATTERNS[@]}"; do
           FAILURES+=("${pattern} current ${transport} ${size}B: no_result_lines")
         else
           append_case_output "${case_log}"
-          case_result_lines="$(count_result_lines "${pattern}" "${transport}" "${size}" "${case_log}")"
-          if [[ "${case_result_lines}" -gt 0 ]]; then
-            result_lines=$((result_lines + case_result_lines))
-            progress_table_header
-            progress_case_row "${pattern}" "${size}" "${case_log}"
-            continue
-          fi
           if grep -Eq '^UNSUPPORTED,' "${case_log}" || is_unsupported_output "${case_log}"; then
             echo "UNSUPPORTED,current,${pattern},${transport}" >> "${RAW_RESULTS_FILE}"
             unsupported=$((unsupported + 1))
@@ -1564,7 +1557,7 @@ fi
 
 expected_result_lines=$((expected_cases * 5))
 status="partial"
-if [[ "${result_lines}" -eq "${expected_result_lines}" ]]; then
+if [[ "${result_lines}" -eq "${expected_result_lines}" && "${fail}" -eq 0 ]]; then
   status="complete"
 fi
 

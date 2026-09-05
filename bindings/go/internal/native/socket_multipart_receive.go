@@ -27,19 +27,6 @@ func recvMultipart(reuse []*Message, flags RecvFlags, recv multipartRecvFunc) ([
 	parts := reuse[:0]
 	recvFlags := C.zlink_recv_flags_t(flags)
 	for {
-		var part C.zlink_msg_t
-		if err := configErrorFromResult(C.zlink_msg_init(&part)); err != nil {
-			closeMessageSlice(parts)
-			return nil, err
-		}
-
-		var hasMore C.zlink_part_flag_t
-		if err := recv(&part, &hasMore, recvFlags); err != nil {
-			_ = configErrorFromResult(C.zlink_msg_close(&part))
-			closeMessageSlice(parts)
-			return nil, err
-		}
-
 		var msg *Message
 		if len(parts) < len(reuse) {
 			msg = reuse[len(parts)]
@@ -50,8 +37,14 @@ func recvMultipart(reuse []*Message, flags RecvFlags, recv multipartRecvFunc) ([
 		} else {
 			msg = &Message{}
 		}
-		if err := configErrorFromResult(C.zlink_msg_adopt(&msg.msg, &part)); err != nil {
-			_ = configErrorFromResult(C.zlink_msg_close(&part))
+		if err := configErrorFromResult(C.zlink_msg_init(&msg.msg)); err != nil {
+			closeMessageSlice(parts)
+			return nil, err
+		}
+		var hasMore C.zlink_part_flag_t
+		if err := recv(&msg.msg, &hasMore, recvFlags); err != nil {
+			_ = configErrorFromResult(C.zlink_msg_close(&msg.msg))
+			msg.closed = true
 			closeMessageSlice(parts)
 			return nil, err
 		}
