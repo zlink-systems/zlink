@@ -1191,7 +1191,7 @@ node `channel-socket-registry.ts:879`의 수동 재등록은 parity 후속.
 
 ## D-B107 (2026-09-05 11:50, 머신 B) .NET binding hot-path pass 1(astra) — 즉시 SEND 완료 등록 제거 등, DD 44.7→66.7%, PUBSUB 44.8→71.4%, REQREP 51.6/53.6→58.1/57.2%
 원인: 0.17.0 wait-token 포트 뒤 .NET `CompletionOwner`가 즉시 성공하는 SEND에도 entry/Task/GCHandle/registry 등록(856 B/호출), capturing delegate submit, `CloneParts`의 managed wrapper 복제, 수신마다 `Array.Resize` — 제출 구간 할당의 86~87%가 binding. 변경(공개 API·ownership·error 계약 불변, spec gap 없음): noncancelable 즉시 SEND는 ID 0 성공 시 `Task.CompletedTask`·토큰 발생 뒤에만 등록, struct submitter, native scratch `zlink_msg_copy`(Core가 실패 part도 소비하므로 snapshot 자체는 필요), 수신 header 배열 ArrayPool, GCHandle 대신 socket 수명 opaque context. 러너 `PERF_PART_COUNT` getter 캐시(24 B/조회, 별도).
-gate: dotnet tests 208/208, samples 7/7, 새 `test_hot_path_ownership_contract` 31 case × 5회. after report는 worktree 삭제로 유실(수치는 요약 표; 앞으로 worktree 제거 전 report 복사). 다음: 리뷰 pass 2. 커밋: 아래 해시.
+gate: dotnet tests 208/208, samples 7/7, 새 `test_hot_path_ownership_contract` 31 case × 5회. after report는 worktree 삭제로 유실(수치는 요약 표; 앞으로 worktree 제거 전 report 복사). 다음: 리뷰 pass 2. 커밋 `b4fc201f7e`.
 ## D-089 (2026-09-05 11:45, 머신 A) Core 회귀 — `7cbf12de41`(monitor lease 유지) 이후 close 중 completion poller 해제가 async executor를 재시작해 `zlink_close()`가 반환하지 않음(cpp 샘플 exit 137)
 진단 `diag-cpp-sample-cleanup-137.md`: `release_completion_poller`(참조 1→0) → `resume_completion_processing_if_needed`(close 상태 미확인) → `ensure_completion_processing` →
 `start_async_mailbox_processing`이 `async_processing_done=false`로 되돌려 close waiter가 새 executor 뒤에서 무기한 대기. 공개 C API 재현 300/300(직전) → 정지(직후). Core B.
