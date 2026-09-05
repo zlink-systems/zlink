@@ -25,6 +25,9 @@ bindings/java/build/docs/javadoc/index.html
 
 ## DONTWAIT send and completions
 
+`Poller` accepts socket monitors as socket-kind sources for `POLLIN`; drain a
+ready monitor with `SocketMonitor.recv(RecvFlags.DONT_WAIT)`.
+
 `SendSubmitOperation.submit()` is the asynchronous convenience path. Each
 native attempt uses DONTWAIT. Immediate admission completes the returned stage
 without a SEND completion. If Core reports `BACKPRESSURED` with `EAGAIN`, Core
