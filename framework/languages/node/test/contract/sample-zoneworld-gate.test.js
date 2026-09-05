@@ -160,7 +160,9 @@ test('ZoneWorld replacements start empty and prove on-demand creation after the 
     gatewayProbes,
     /class CreateFreshActorProbeHandler[\s\S]*?\.getOrCreate\(request\.actorId, ZoneWorldNames\.playerActorType\)[\s\S]*?\.inMesh\(ZoneWorldNames\.zoneMesh\)[\s\S]*?\.submit\(\)/
   );
-  assert.match(zoneNodeMain, /new ReportNodeStatusMsg\([\s\S]*?\[\.\.\.state\.zones\(\)\]/);
+  const reports = read('samples/ZoneWorld/Server/ZoneNode/Infrastructure/ZLink/Monitoring/ops-report-adapter.ts');
+  assert.match(reports, /new ReportNodeStatusMsg\([\s\S]*?\[\.\.\.this\.state\.zones\(\)\]/);
+  assert.match(zoneNodeMain, /await reports\.reportNodeStatus\(\)/);
   assert.match(runner, /zoneCapacity:\s*2/);
 });
 

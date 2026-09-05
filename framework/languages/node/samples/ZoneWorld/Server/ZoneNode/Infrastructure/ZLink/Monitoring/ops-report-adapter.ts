@@ -6,13 +6,30 @@ import {
   type ZLinkRouteClient
 } from '@zlink-systems/framework';
 import { ZLINK_ROUTE_CLIENT } from '@zlink-systems/nestjs';
-import { ReportSpotEventMsg } from '../../../../../Shared/contracts';
+import { ReportNodeStatusMsg, ReportSpotEventMsg } from '../../../../../Shared/contracts';
 import { ZoneWorldNames } from '../../../../../Shared/spec';
+import { NodeRuntimeState } from '../../../Domain/node-runtime-state';
 
-/** Sends provider-neutral Spot failure reports to the Ops application channel. */
+/** Sends node status and Spot failure reports to the Ops application channel. */
 @Injectable()
 class OpsReportAdapter {
-  constructor(@Inject(ZLINK_ROUTE_CLIENT) private readonly channels: ZLinkRouteClient) {}
+  constructor(
+    @Inject(ZLINK_ROUTE_CLIENT) private readonly channels: ZLinkRouteClient,
+    private readonly state: NodeRuntimeState
+  ) {}
+
+  async reportNodeStatus(): Promise<void> {
+    await this.channels.sendToChannel(
+      ZoneWorldNames.reportChannel,
+      new ReportNodeStatusMsg(
+        this.state.nodeId,
+        [...this.state.zones()],
+        this.state.playerCount(),
+        this.state.ownMaintenance()
+      )
+    ).submit();
+    console.log(`node status submitted node=${this.state.nodeId}`);
+  }
 
   async reportSpotEvent(nodeId: string, kind: string, detail: string): Promise<void> {
     const message = new ReportSpotEventMsg(
