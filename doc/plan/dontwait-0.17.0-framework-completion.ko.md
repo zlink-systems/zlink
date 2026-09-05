@@ -174,9 +174,9 @@
 
 
 ### G. 잔여 이슈 일괄 수정 (2026-09-06, 사용자 지시 "남은 이슈도 모두 수정") — D-098
-- [ ] Core(worktree a): tcp/ipc listener fd close를 close/unbind 반환 전에 완료(SO_REUSEPORT 우회 제거, 전 transport 단일 규칙) + inproc 2-lane unbind 200 ms 지연(peer progress lane 수 무관) — astra job
-- [ ] dotnet: sealed node는 inbound Hello에 Admit 안 함(§14 보강) + `WaitForDescriptorPropagationAsync` 시간 대기 제거 — astra job
-- [ ] java: sealed inbound Hello 무응답 + raw mesh terminal retention monotonic(D-095 잔여) + M6A/TransportIdentity fixture retry 대기 제거 — astra job
-- [ ] cpp: sealed inbound Hello 무응답 — astra job
+- [x] Core `1899e82f1a`: tcp/ipc/ws/tls/wss listener fd 해제를 close/unbind 반환 전 완료(endpoint-release command completion; SO_REUSEPORT 제거) + inproc 2-lane unbind peer progress(191 ms → <300 µs); 규칙 4→2, ctest 180/180
+- [x] dotnet `147b2b07ae`: sealed inbound Hello 무응답 + propagation 시간 대기 제거(2→1); ZoneWorld ×2 seal 뒤 Hello/Admit 0, unit half 1978/0, aggregate 7/7; 테스트 fixture 시간원 32곳 Stopwatch `ebab877246`
+- [x] java `81dad6324d`: sealed inbound Hello 무응답 + retention nanoTime + fixture retry 제거 + (드러난 결함) closed intent terminal(늦은 READY 재활성화 금지, D-098 item 8) — M6A/Seal/Identity ×10, full core gate ×2 0 fail, java 7/7 + kotlin ZoneWorld ×2(이전 B7 1회 실패는 미재현·원인 미확정으로 추적)
+- [x] cpp `b890e2e718`: sealed inbound Hello 무응답; unit 42/42, 샘플 7/7 재확인
 - [x] (범위 외로 확정, 2026-09-06 사용자: e2e 요구는 cross-language E2E만) cpp `common_e2e_inventory` 278 open(cpp 공통 e2e 시나리오 122개 미구현 등) — job 중단·편집 폐기, 별도 계획으로 남김
-- [ ] 이후: Core 변경 → rebuild11 → gate11(4언어) → §G 마감
+- [ ] 진행 중: rebuild11(Core `1899e82f1a`) → gate11(4언어 샘플·npm test·java core/contract·dotnet unit/SampleRegression) → cross-language E2E → §G 마감
