@@ -117,9 +117,9 @@ final class SampleReleaseGateContractTest {
         assertTrue(aggregateRunner.contains("bash \"$script\""),
             "aggregate sample runner must invoke non-executable sample scripts through Bash");
         String aggregatePowerShellRunner = Files.readString(samplesRoot.resolve("run_samples.ps1"));
-        assertTrue(aggregatePowerShellRunner.contains("ZLINK_LIBRARY_PATH")
-                && aggregatePowerShellRunner.contains(".artifacts/wsl/install/zlink-core/0.17.0/lib/libzlink.so"),
-            "aggregate PowerShell sample runner must use the packaged 0.17.0 core runtime");
+        assertFalse(aggregatePowerShellRunner.contains("ZLINK_LIBRARY_PATH"),
+            "aggregate PowerShell sample runner must preserve the caller's native library selection; "
+                + "an unset path uses the installed binding package");
 
         for (String language : REQUIRED_LANGUAGES) {
             Path languageRoot = samplesRoot.resolve(language);
