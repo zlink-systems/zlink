@@ -951,7 +951,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/node/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미달` — `tcp` 4 pattern before 13:53~14:00 KST: DD 27.6%, DR/RR REQREP 18.7/17.9%(8~15k ops/s 고정), PUBSUB 28.6%; 자체 pass 1 job(astra) 진행 중; [log](log/2026-09-05-node-multi-tcp-before.ko.md)
+- Multi 상태: `미달` — before 13:53 → pass 1(`f69558af55`: multipart Buffer 경로) DD 27.6→41.2% → pass 1b(`6c2cb784c0`: 공유 pump 기각, N-API callback scope) → pass 1c(`8ec82c4be7`: 서버 수신 metadata·reply Buffer) DR/RR REQREP 18.7/17.9→28.7/31.1%, PUBSUB 34.8%. REQREP는 요청당 ~60 ms 고정 지연·timeout 35~55%가 남음(요청 수명 계측: 서버 TCP 수신→ROUTER recv 128 ms 구간; 클라이언트 WRITABLE 재제출 루프 의심 → Core 조사 D-B117). 판정은 Core 결과 뒤 quiet 3-run; [log](log/2026-09-05-node-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.4.1 Single suite
