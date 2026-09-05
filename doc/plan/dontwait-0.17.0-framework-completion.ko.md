@@ -172,3 +172,11 @@
 - [x] (기록) Core 회귀 수정 → rebuild9 → gate9 → cross-language E2E → §F 마감
 - [x] (전부 완료: rebuild4~10, dotnet Mesh 2단계 `3975cea255`, Canonical 16/16, ClientServer poller/reconnect 제거 `05b53a8098`, java 합성 connection id·errno 표 제거(B D-B95/D-B97 뒤 framework에는 진단 문자열 2곳만 잔존), cpp replay `b76d8c1e00`, 최종 gate10) 로컬 패키지 재빌드(`7ffb8e55d9`·`c9d294c44f` 포함) → dotnet Mesh 걷어내기 2단계(brief `stage2-dotnet-mesh-unwind.prompt`) → Canonical 3 red 재검증 → dotnet ClientServer second poller/수동 reconnect 제거(B 작업 4 결과 대기) → java 합성 connection id·errno 표 제거(B 작업 5·6) → cpp replay 범위 진단 → 4언어 최종 게이트 재실행
 
+
+### G. 잔여 이슈 일괄 수정 (2026-09-06, 사용자 지시 "남은 이슈도 모두 수정") — D-098
+- [ ] Core(worktree a): tcp/ipc listener fd close를 close/unbind 반환 전에 완료(SO_REUSEPORT 우회 제거, 전 transport 단일 규칙) + inproc 2-lane unbind 200 ms 지연(peer progress lane 수 무관) — astra job
+- [ ] dotnet: sealed node는 inbound Hello에 Admit 안 함(§14 보강) + `WaitForDescriptorPropagationAsync` 시간 대기 제거 — astra job
+- [ ] java: sealed inbound Hello 무응답 + raw mesh terminal retention monotonic(D-095 잔여) + M6A/TransportIdentity fixture retry 대기 제거 — astra job
+- [ ] cpp: sealed inbound Hello 무응답 — astra job
+- [ ] cpp `common_e2e_inventory` 278 open(feature-map-missing 94 · source-missing 122 · incomplete-status 62, 14 config·361 scenario) — 실제 미구현 시나리오 구현(A)/맵·러너 drift 수정(B) — astra xhigh job(대규모, 여러 회차 예상)
+- [ ] 이후: Core 변경 → rebuild11 → gate11(4언어) → §G 마감
