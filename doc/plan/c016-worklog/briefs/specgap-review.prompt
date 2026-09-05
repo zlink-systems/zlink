@@ -1,0 +1,10 @@
+역할: zlink Core spec gap 3건에 대한 권고안 리뷰(gpt-6-astra, **읽기 전용** — 파일 수정·빌드·테스트 실행 금지, git 조회만). 작업 트리: /home/hep7hep7/project/zlink (main). 진행 로그 /home/hep7hep7/project/zlink-work/c016/specgap-review-progress.md 한 줄씩 append(3분마다 한 줄 이상), 종료 시 `EXIT:<code>`. 요약 /home/hep7hep7/project/zlink-work/c016/specgap-review-summary.md (한국어).
+
+배경: 오늘 Core 조사에서 spec에 정의가 없는 항목 3건이 나왔고(근거: `doc/plan/c016-worklog/decisions.ko.md`의 D-B102, D-B104; 요약 `core-monid-summary.md`, `core-task4-summary.md`, `core-task4m-summary.md`; 테스트 `core/tests/integration/monitoring/test_monitor_connection_identity.cpp`, `core/tests/integration/test_socket_disconnect_progress_without_app_poll.cpp`), 감독자가 권고안을 냈다. 사용자에게 설명하기 전에 각 권고안이 spec 전체(특히 `core/doc/spec/core/06-monitoring.ko.md`, `05-polling.ko.md`, `socket/README.ko.md` §4 RID duplicate policy·connect/disconnect·close lifecycle, `07-router.ko.md`, `03-errors.ko.md`)·framework 사용 방식(`framework/dotnet`, `framework/java`의 ClientServer/Mesh reconnect·handover 코드, 읽기만)·다른 transport 동작과 모순이 없는지, 더 나은 대안이 있는지 검토한다.
+
+항목과 권고안:
+1. **inproc peer close 시 `CLOSED` 이벤트**: tcp/ipc/ws/tls는 transport close에 CLOSED를 내지만 inproc 경로에는 `event_closed` 호출이 없고 spec에 CLOSED의 transport-독립 발생 조건이 없다. 권고: "CLOSED = 물리 transport(fd/listener) close"로 정의하고 inproc은 DISCONNECTED로 끝난다고 spec에 명시(코드 변경 없음). 대안: 모든 transport에서 lifecycle 종료 = CLOSED로 정하고 inproc에도 방출.
+2. **terminal edge 소비 전 같은 socket에서 즉시 `zlink_disconnect(endpoint)` → `zlink_connect(endpoint)`**: 현재 REJECT 정책이면 timing에 따라 이전 pipe로 가서 reply timeout 또는 OK, HANDOVER면 새 pipe로 성공. 권고: "새 connect는 이전 physical terminal과 무관한 새 connection이며 이전 pipe에 admit된 request는 자기 timeout으로 끝난다(HANDOVER 권장)"로 현재 동작을 계약으로 고정. 대안: 새 connect가 이전 terminal을 기다린 뒤 진행(직렬화).
+3. **request/reply가 사용한 physical `connection_id`를 돌려주는 공개 API**: 없음(connection_id는 진단용, reply token opaque). 권고: 추가하지 않음. 대안: completion record에 진단 필드로 추가.
+
+산출(요약): 항목별로 (a) 관련 spec 조항 인용(파일:줄), (b) 권고안이 기존 계약·framework 사용과 모순되는지, (c) 대안과 비교(장단점, 영향받는 코드/바인딩/framework 범위), (d) 최종 의견(권고안 채택/수정/대안)과 그 이유, (e) 채택 시 spec에 넣을 문장 초안(ko). 마지막에 사용자용 한 문단 요약(비전문가도 이해하게, 비유 가능). 상한 30분.
