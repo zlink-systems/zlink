@@ -1242,4 +1242,4 @@ gate: worktree identity 5/5, integration 121/121, 전체 171/171; main dev 전�
 
 ## D-B113 (2026-09-05 14:55, 머신 B) Node hot-path pass 1(astra) — multipart Buffer 경로 정리로 DD 27.6→41.2%; REQREP는 요청당 ~57 ms 고정 지연(빈 FD wake·완료 진행 비용)이 남아 pass 1b
 변경(`bindings/node/native/src/addon_core.cc`, `addon_exports.cc`, `addon_message_parts.h` 제거, `runtime/buffers/message_conversion.ts`): 정상 경로의 변환 배열·진단 문자열 할당 제거, N-API 경계 정리(공개 시그니처 불변, spec gap 없음). after(1 run, load ≤3): DD 27.6→41.2%(64K 44→75%), PUBSUB 28.6→31.0%, DR/RR REQREP 18.7/17.9→20.3/18.1%(변화 없음). gate: `npm test` 126/126, 관련 24 tests × 5, samples.
-남은 원인(진단): REQREP 요청 52k건에 completion callback 344k·pull 396k(빈 FD wake), 요청당 mean latency 52~62 ms로 고정 — 완료가 FD wake가 아니라 주기적 진행에 얹혀 있는 형태. Java 1b와 같은 방식으로 완료 진행 제어점을 하나로 재설계하는 pass 1b(astra) 실행. 커밋: 아래 해시.
+남은 원인(진단): REQREP 요청 52k건에 completion callback 344k·pull 396k(빈 FD wake), 요청당 mean latency 52~62 ms로 고정 — 완료가 FD wake가 아니라 주기적 진행에 얹혀 있는 형태. Java 1b와 같은 방식으로 완료 진행 제어점을 하나로 재설계하는 pass 1b(astra) 실행. 커밋 `f69558af55`.
