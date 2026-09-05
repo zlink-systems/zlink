@@ -16,16 +16,39 @@ final class ZLinkFrameworkShutdown {
         Supplier<CompletionStage<Void>>> actions =
         new ArrayDeque<>();
 
-    void defer(Runnable action) {
-        actions.push(() -> ZLinkTeardownExecutor.submit(action));
+    void defer(String stage, Runnable action) {
+        deferStage(stage, () -> ZLinkTeardownExecutor.submit(action));
     }
 
-    void deferStage(Supplier<CompletionStage<Void>> action) {
-        actions.push(action);
+    void deferStage(String stage, Supplier<CompletionStage<Void>> action) {
+        actions.push(() -> atStage(stage, action));
+    }
+
+    static CompletionStage<Void> atStage(
+        String stage, Supplier<CompletionStage<Void>> action) {
+        try {
+            return action.get().exceptionallyCompose(error ->
+                CompletableFuture.failedFuture(new Failure(stage, unwrap(error))));
+        } catch (RuntimeException error) {
+            return CompletableFuture.failedFuture(new Failure(stage, error));
+        }
+    }
+
+    static final class Failure extends RuntimeException {
+        private final String stage;
+
+        Failure(String stage, Throwable cause) {
+            super(cause.getMessage(), cause, true, false);
+            this.stage = stage;
+        }
+
+        String stage() {
+            return stage;
+        }
     }
 
     CompletionStage<Void> closeAsync() {
-        AtomicReference<RuntimeException> failure =
+        AtomicReference<Throwable> failure =
             new AtomicReference<>();
         CompletionStage<Void> chain =
             CompletableFuture.completedFuture(null);
@@ -40,7 +63,7 @@ final class ZLinkFrameworkShutdown {
 
     private static CompletionStage<Void> invoke(
         Supplier<CompletionStage<Void>> action,
-        AtomicReference<RuntimeException> failure) {
+        AtomicReference<Throwable> failure) {
         try {
             return action.get()
                 .toCompletableFuture()
@@ -49,7 +72,7 @@ final class ZLinkFrameworkShutdown {
                     ACTION_TIMEOUT_SECONDS,
                     TimeUnit.SECONDS)
                 .handle((ignored, error) -> {
-                if (error != null && !(unwrap(error) instanceof ZlinkCloseException)) {
+                if (error != null && !(unwrap(error).getCause() instanceof ZlinkCloseException)) {
                     recordFailure(failure, unwrap(error));
                 }
                 return null;
@@ -62,22 +85,20 @@ final class ZLinkFrameworkShutdown {
         }
     }
 
-    private static RuntimeException unwrap(Throwable error) {
+    private static Throwable unwrap(Throwable error) {
         Throwable value = error;
         while ((value instanceof CompletionException
             || value instanceof ExecutionException)
             && value.getCause() != null) {
             value = value.getCause();
         }
-        return value instanceof RuntimeException runtime
-            ? runtime
-            : new RuntimeException(value);
+        return value;
     }
 
     private static void recordFailure(
-        AtomicReference<RuntimeException> target,
-        RuntimeException error) {
-        RuntimeException first = target.get();
+        AtomicReference<Throwable> target,
+        Throwable error) {
+        Throwable first = target.get();
         if (first == null) {
             target.compareAndSet(null, error);
         } else {

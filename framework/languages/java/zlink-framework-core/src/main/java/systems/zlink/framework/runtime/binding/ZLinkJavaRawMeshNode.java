@@ -6671,7 +6671,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             if (peer.isEmpty()) {
                 if (event.event() == MonitorEventType.DISCONNECTED
                     || event.event() == MonitorEventType.CLOSED) {
-                    markPeerIntentsClosed(event, null);
+                    markPeerIntentsClosed(event);
                 }
                 continue;
             }
@@ -6716,7 +6716,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     // exact zero-ready candidate snapshot.
                     admissionControlReadyConnections.remove(peerRid);
                 }
-                markPeerIntentsClosed(event, peerRid);
+                markPeerIntentsClosed(event);
             }
         }
     }
@@ -6741,8 +6741,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         MonitorEvent event,
         RoutingId peerRid) {
         peerIntents.forEach((intentId, intent) -> {
-            if (!closeRequestedPeerIntents.contains(intentId)
-                && matchesMonitorPeer(intentId, intent, event, peerRid)) {
+            if (matchesMonitorPeer(intentId, intent, event, peerRid)) {
+                peerIntentTransports.computeIfAbsent(
+                    intentId,
+                    ignored -> ConcurrentHashMap.newKeySet())
+                    .add(TransportIdentity.from(event));
+                if (closeRequestedPeerIntents.contains(intentId)) {
+                    return;
+                }
                 closedPeerIntents.remove(intentId);
                 livePeerIntents.add(intentId);
                 if (peerRid != null
@@ -6757,30 +6763,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     // ESTABLISHED with no HELLO ever exchanged.
                     peerIntentRoutingIds.put(intentId, peerRid);
                 }
-                peerIntentTransports.computeIfAbsent(
-                    intentId,
-                    ignored -> ConcurrentHashMap.newKeySet())
-                    .add(TransportIdentity.from(event));
             }
         });
     }
 
-    private void markPeerIntentsClosed(
-        MonitorEvent event,
-        RoutingId peerRid) {
+    private void markPeerIntentsClosed(MonitorEvent event) {
         peerIntents.forEach((intentId, intent) -> {
             Set<TransportIdentity> transports =
                 peerIntentTransports.get(intentId);
             boolean matchedTransport = transports != null
                 && transports.removeIf(transport -> transport.matches(event));
-            boolean closingUntrackedTransport =
-                closeRequestedPeerIntents.contains(intentId)
-                    && (transports == null || transports.isEmpty())
-                    && matchesMonitorPeer(intentId, intent, event, peerRid);
-            if (!matchedTransport && !closingUntrackedTransport) {
+            if (!matchedTransport) {
                 return;
             }
-            if (transports == null || transports.isEmpty()) {
+            if (transports.isEmpty()) {
                 closedPeerIntents.add(intentId);
                 closeRequestedPeerIntents.remove(intentId);
                 livePeerIntents.remove(intentId);
@@ -7242,25 +7238,21 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     }
 
     private record TransportIdentity(
-        String eventKey,
         long connectionId,
         int lane) {
 
         static TransportIdentity from(MonitorEvent event) {
             return new TransportIdentity(
-                transportEventKey(event),
                 event.connectionId(),
                 event.transportLane());
         }
 
         boolean matches(MonitorEvent event) {
-            if (connectionId != 0
-                && event.connectionId() != 0
+            // Correlate termination with the READY this intent recorded;
+            // endpoint reuse does not make another attempt or lane its own.
+            return connectionId != 0
                 && connectionId == event.connectionId()
-                && lane == event.transportLane()) {
-                return true;
-            }
-            return eventKey.equals(transportEventKey(event));
+                && lane == event.transportLane();
         }
     }
 

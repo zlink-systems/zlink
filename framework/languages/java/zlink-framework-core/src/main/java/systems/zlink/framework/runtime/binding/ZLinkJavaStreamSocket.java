@@ -370,7 +370,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                 sessionRid,
                 binding,
                 timeout);
-            return unbound.thenRun(() ->
+            return unbound.whenComplete((ignored, failure) ->
                 bindings.remove(key, binding));
         };
     }

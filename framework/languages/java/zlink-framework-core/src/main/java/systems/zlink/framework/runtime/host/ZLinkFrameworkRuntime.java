@@ -1505,7 +1505,8 @@ public final class ZLinkFrameworkRuntime
             }
             terminalTermination.set(terminal);
             lastTerminationResult.set(mapPublicTerminationResult(terminal));
-            publishRuntimeState(ZLinkFrameworkRuntimeState.STOPPED);
+            publishRuntimeState(ZLinkFrameworkRuntimeState.STOPPED,
+                result instanceof InternalForceStopped forced ? forced.failure() : failure);
             completion.complete(terminal);
         });
     }
@@ -1876,6 +1877,11 @@ public final class ZLinkFrameworkRuntime
 
     private void publishRuntimeState(
         ZLinkFrameworkRuntimeState state) {
+        publishRuntimeState(state, null);
+    }
+
+    private void publishRuntimeState(
+        ZLinkFrameworkRuntimeState state, Throwable terminationFailure) {
         runtimeState.set(state);
         if (objectDescriptors != null
             && (state == ZLinkFrameworkRuntimeState.RELOCATING
@@ -1893,7 +1899,13 @@ public final class ZLinkFrameworkRuntime
         long sequence = terminationSequence.incrementAndGet();
         var status = runtimeStatus(sequence);
         if (eventDispatcher != null) {
-            eventDispatcher.publishHostStatus(status);
+            Throwable actual = terminationFailure == null ? null : unwrapCompletionFailure(terminationFailure);
+            String stage = "shutdown";
+            if (actual instanceof ZLinkFrameworkShutdown.Failure staged) {
+                stage = staged.stage();
+                actual = staged.getCause();
+            }
+            eventDispatcher.publishHostStatus(status, stage, actual);
         }
         runtimeStatusPublisher.signal();
         routeMeshRuntime.signalAll();
@@ -1984,41 +1996,41 @@ public final class ZLinkFrameworkRuntime
         // Close completion admission after accepted runtime components have
         // finished their teardown, so graceful drain can still publish the
         // replies it already accepted.
-        shutdown.defer(this::closeHandlerExecutor);
-        shutdown.defer(this::closeBackendContext);
-        shutdown.defer(routeMeshRuntime::close);
+        shutdown.defer("executor_close", this::closeHandlerExecutor);
+        shutdown.defer("context_close", this::closeBackendContext);
+        shutdown.defer("route_mesh_close", routeMeshRuntime::close);
         if (authorityRouteRuntime != null) {
-            shutdown.defer(authorityRouteRuntime::close);
+            shutdown.defer("authority_route_close", authorityRouteRuntime::close);
         }
         if (storeLocationResolvers != null) {
-            shutdown.defer(storeLocationResolvers::close);
+            shutdown.defer("location_resolvers_close", storeLocationResolvers::close);
         }
-        shutdown.defer(meshNodes::close);
+        shutdown.defer("mesh_nodes_close", meshNodes::close);
         if (locationRuntime != null) {
-            shutdown.defer(locationRuntime::close);
-            shutdown.defer(locationLifecycle::close);
-            shutdown.deferStage(locationRuntime::stop);
+            shutdown.defer("location_close", locationRuntime::close);
+            shutdown.defer("location_lifecycle_close", locationLifecycle::close);
+            shutdown.deferStage("location_stop", locationRuntime::stop);
             if (objectDescriptors != null) {
-                shutdown.deferStage(objectDescriptors::remove);
+                shutdown.deferStage("descriptor_remove", objectDescriptors::remove);
             }
         }
         if (spots != null) {
-            shutdown.deferStage(() -> {
+            shutdown.deferStage("spot_close", () -> {
                 if (spotRuntimeStopped.compareAndSet(false, true)) {
                     return spots.closeAsync();
                 }
                 return CompletableFuture.completedFuture(null);
             });
         }
-        shutdown.defer(channels::close);
+        shutdown.defer("channel_close", channels::close);
         if (locationAutoConnectHost != null) {
-            shutdown.deferStage(locationAutoConnectHost::stop);
+            shutdown.deferStage("auto_connect_stop", locationAutoConnectHost::stop);
         }
         if (actors != null) {
-            shutdown.deferStage(actors::closeAsync);
+            shutdown.deferStage("instance_close", actors::closeAsync);
         }
         if (streams != null) {
-            shutdown.deferStage(streams::closeAsync);
+            shutdown.deferStage("stream_close", streams::closeAsync);
         }
         return shutdown.closeAsync().whenComplete((ignored, failure) -> {
             if (!drainStarted.get() && failure == null) {
@@ -2084,7 +2096,8 @@ public final class ZLinkFrameworkRuntime
             : locationAutoConnectHost.markDraining();
         markerPublished.whenComplete((ignored, publishFailure) -> {
             if (publishFailure != null) {
-                forceStop(InternalDrainForceReason.DRAINING_STATE_PUBLISH_FAILED);
+                forceStop(InternalDrainForceReason.DRAINING_STATE_PUBLISH_FAILED,
+                    new ZLinkFrameworkShutdown.Failure("draining_publication", publishFailure));
                 return;
             }
             CompletionStage<Void> meshBarrier =
@@ -2107,32 +2120,33 @@ public final class ZLinkFrameworkRuntime
                 .whenComplete((barrierIgnored, barrierFailure) -> {
                 if (barrierFailure != null) {
                     forceStop(
-                        InternalDrainForceReason.TEARDOWN_FAILED);
+                        InternalDrainForceReason.TEARDOWN_FAILED,
+                        new ZLinkFrameworkShutdown.Failure("application_barrier", barrierFailure));
                     return;
                 }
                 CompletionStage<Void> serverStreamBarrier = streams == null
                     ? CompletableFuture.completedFuture(null)
-                    : streams.awaitDrainBarrier()
-                        .thenCompose(streamIgnored -> streams.notifyServerDrain());
+                    : ZLinkFrameworkShutdown.atStage("stream_drain", () -> streams.awaitDrainBarrier()
+                        .thenCompose(streamIgnored -> streams.notifyServerDrain()));
                 CompletionStage<Void> actorShutdown =
                     serverStreamBarrier.thenCompose(streamIgnored ->
                         actors == null
                             ? CompletableFuture
                                 .completedFuture(null)
-                            : actors.closeAsync());
+                            : ZLinkFrameworkShutdown.atStage("instance_close", actors::closeAsync));
                 CompletionStage<Void> spotDrain = actorShutdown.thenCompose(
                     streamIgnored -> spots == null
                         ? CompletableFuture.completedFuture(null)
-                        : spots.continueDrain(
+                        : ZLinkFrameworkShutdown.atStage("spot_close", () -> spots.continueDrain(
                             systems.zlink.framework.spots
                                 .ZLinkSpotCloseReason.HOST_SHUTDOWN,
                             Optional.ofNullable(
                                     terminationDeadline.get())
-                                .orElseGet(Instant::now)));
+                                .orElseGet(Instant::now))));
                 spotDrain.thenCompose(spotIgnored -> awaitWorkloadsDrained())
                     .whenComplete((workloadsIgnored, workloadFailure) -> {
                 if (workloadFailure != null) {
-                    forceStop(InternalDrainForceReason.TEARDOWN_FAILED);
+                    forceStop(InternalDrainForceReason.TEARDOWN_FAILED, workloadFailure);
                     return;
                 }
                 completeDrain();
@@ -2236,20 +2250,24 @@ public final class ZLinkFrameworkRuntime
                     drained.complete(new InternalDrained());
                 } else {
                     completeForcedStop(
-                        InternalDrainForceReason.OWNER_CLEANUP_FAILED);
+                        InternalDrainForceReason.OWNER_CLEANUP_FAILED, failure);
                 }
             });
     }
 
     private void forceStop(InternalDrainForceReason reason) {
+        forceStop(reason, null);
+    }
+
+    private void forceStop(InternalDrainForceReason reason, Throwable failure) {
         if (!drainTerminalStarted.compareAndSet(false, true)) {
             return;
         }
-        ZLinkTeardownExecutor.execute(() -> forceStopOnTeardownThread(reason));
+        ZLinkTeardownExecutor.execute(() -> forceStopOnTeardownThread(reason, failure));
     }
 
     private void forceStopOnTeardownThread(
-        InternalDrainForceReason initialReason) {
+        InternalDrainForceReason initialReason, Throwable initialFailure) {
         if (drained.isDone()) {
             return;
         }
@@ -2265,13 +2283,14 @@ public final class ZLinkFrameworkRuntime
             .whenComplete((ignored, failure) -> {
                 completeForcedStop(failure == null
                     ? requestedReason
-                    : InternalDrainForceReason.TEARDOWN_FAILED);
+                    : InternalDrainForceReason.TEARDOWN_FAILED,
+                    initialFailure != null ? initialFailure : failure);
             });
     }
 
     private void completeForcedStop(
-        InternalDrainForceReason reason) {
-        drained.complete(new InternalForceStopped(reason));
+        InternalDrainForceReason reason, Throwable failure) {
+        drained.complete(new InternalForceStopped(reason, failure));
     }
 
     private void closeHandlerExecutor() {
@@ -2344,7 +2363,7 @@ public final class ZLinkFrameworkRuntime
     }
 
     private record InternalForceStopped(
-        InternalDrainForceReason reason) implements InternalDrainResult {
+        InternalDrainForceReason reason, Throwable failure) implements InternalDrainResult {
     }
 
     private enum InternalDrainForceReason {

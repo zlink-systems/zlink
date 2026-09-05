@@ -165,11 +165,9 @@ void zlink::session_base_t::snapshot_peer_routing_id (blob_t *routing_id_) const
 
 bool zlink::session_base_t::try_claim_transport_disconnected_event ()
 {
-    // Unpaired transports retain their historical engine-owned publication.
-    // Paired transports share the claim with socket-side pipe termination so
-    // an explicit disconnect, which need not report an engine error locally,
-    // still has one reliable physical event without duplicating a later error.
-    if (_transport_pair_id == 0 || !_socket_pipe)
+    // Every established transport shares the socket endpoint's claim with
+    // pipe termination. A failed handshake may not have created a pipe yet.
+    if (!_socket_pipe)
         return true;
     return _socket_pipe->try_claim_transport_disconnected_event ();
 }

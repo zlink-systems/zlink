@@ -361,7 +361,7 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _peer_socket_type (0),
     _peer_weight_connection_id (UINT64_MAX),
     _peer_weight (UINT32_MAX),
-    _transport_disconnected_event_claimed (false),
+    _transport_disconnected_event_connection_id (0),
     _pending_peer_weight (pending_peer_weight_unset),
     _pending_peer_weight_sequence (0),
     _pending_flow_state (flow_state::receive_flow_running),
@@ -3480,11 +3480,12 @@ uint64_t zlink::pipe_t::get_transport_connection_id () const
 
 bool zlink::pipe_t::try_claim_transport_disconnected_event ()
 {
-    bool expected = false;
-    return get_transport_connection_id () != 0
-           && _transport_disconnected_event_claimed.compare_exchange_strong (
-             expected, true, std::memory_order_acq_rel,
-             std::memory_order_acquire);
+    // A raw connector can reuse this pipe across reconnects. Claim the
+    // physical connection, so replacing it does not inherit the old claim.
+    const uint64_t connection_id = get_transport_connection_id ();
+    return connection_id != 0
+           && _transport_disconnected_event_connection_id.exchange (
+                connection_id, std::memory_order_acq_rel) != connection_id;
 }
 
 uint64_t zlink::pipe_t::get_route_incarnation_id () const
