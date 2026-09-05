@@ -165,8 +165,13 @@ observes another peer with the same routing id. The option value is an
 new duplicate pipe; the unregistered duplicate pipe is closed immediately. The
 connector therefore observes that pipe's termination through its monitor and
 reconnects per its connect intent, and an attempt made after the existing pipe
-has terminated is admitted. A request already submitted on the rejected pipe
-ends exactly once with `ZLINK_REQUEST_NOT_CONNECTED` (errno `EHOSTUNREACH`). The
+has terminated is admitted. The wire carries no rejection reason; the connector
+only observes the termination of its own pair. A request already admitted on
+the rejected pipe therefore ends exactly once with `ZLINK_REQUEST_NOT_CONNECTED`
+(errno `EHOSTUNREACH`) as soon as that pair terminates, under the single rule of
+the section 6 completion table (submit-time pair terminated, whatever the
+cause), and the caller resubmits. Flows that reconnect often should use
+`ZLINK_RID_DUPLICATE_HANDOVER`. The
 READY event a connector observes means the transport connection was established,
 not that the peer ROUTER admitted the routing id. Under `ZLINK_RID_DUPLICATE_HANDOVER`, a reconnecting pipe
 in the same direction takes over the existing pipe. If pipes in opposite
@@ -925,9 +930,9 @@ started by a following `zlink_connect(endpoint)`, and the new attempt's progress
 event consumption or on observing the previous connection's terminal edge (05-polling §3 command
 progress). A same-RID registration still present on the remote ROUTER is handled by the §4 RID duplicate
 policy (REJECT/HANDOVER). A REQUEST admitted on the removed connection ends per the completion contract:
-explicit endpoint/logical RID removal is `NOT_FOUND`, a pair yielding to an opposite-direction handover is
-`NOT_CONNECTED`, and a transient physical disconnect keeps the existing correlation and timeout budget with
-no payload replay.
+explicit endpoint/logical RID removal is `NOT_FOUND`; any other termination of the submit-time pair (transient
+physical disconnect, yielding to a handover, REJECT close) is `NOT_CONNECTED` whatever the cause (section 6
+completion table).
 
 **Returns:** `ZLINK_CONNECT_OK` on success; otherwise a `zlink_connect_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 

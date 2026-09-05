@@ -951,7 +951,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/node/perf`
 - Single 상태: `미측정`
-- Multi 상태: `미측정`
+- Multi 상태: `미달` — `tcp` 4 pattern before 13:53~14:00 KST: DD 27.6%, DR/RR REQREP 18.7/17.9%(8~15k ops/s 고정), PUBSUB 28.6%; 자체 pass 1 job(astra) 진행 중; [log](log/2026-09-05-node-multi-tcp-before.ko.md)
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.4.1 Single suite
@@ -1005,12 +1005,12 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 미달(15.8%) | 미달(17.5%) | 미달(20.4%) | 미달(39.9%) | 미달(44.2%) | 미측정 | before; aggregate 27.6%(목표 60%), latency 204x(큐 깊이, 판정 제외); 처리량 Node/C 160.7/1017.4, 166.7/955.0, 169.7/832.4, 126.0/315.6, 26.8/60.7 Kmsg/s; `p1node`; Node `perf_node_multi_linux_20260905_135524_p1node.txt`; [log](log/2026-09-05-node-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미달(7.6%) | 미달(6.2%) | 미달(5.3%) | 미달(9.7%) | 미달(64.9%) | 미측정 | before; aggregate 18.7%(목표 60%), latency 42x; 8~15k ops/s 고정; 처리량 Node/C 11.0/145.3, 10.1/163.5, 8.3/155.3, 11.9/122.9, 14.4/22.2 Kops/s; Node `..._135649_p1node.txt`; [log](log/2026-09-05-node-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미달(5.5%) | 미달(5.2%) | 미달(6.0%) | 미달(13.0%) | 미달(59.8%) | 미측정 | before; aggregate 17.9%(목표 60%), latency 55x; 처리량 Node/C 9.7/176.4, 7.5/144.4, 8.4/139.6, 14.8/113.7, 12.9/21.5 Kops/s; Node `..._135755_p1node.txt`; [log](log/2026-09-05-node-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_PUBSUB` | 미달(19.0%) | 미달(21.2%) | 미달(20.1%) | 미달(22.6%) | 미달(60.1%) | 미측정 | before; aggregate 28.6%(목표 60%), latency 0.91x; 처리량 Node/C 111.7/588.1, 164.8/778.0, 170.7/849.2, 146.2/646.5, 41.1/68.4 Kmsg/s; Node `..._135859_p1node.txt`; [log](log/2026-09-05-node-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |

@@ -103,6 +103,8 @@ zlink::asio_ws_connecter_t::asio_ws_connecter_t (io_thread_t *io_thread_,
 #endif
     zlink_assert (is_ws_protocol);
     _addr->to_string (_endpoint_str);
+    _attempt_endpoint_pair =
+      make_unconnected_connect_endpoint_pair (_endpoint_str);
 
     WS_CONNECTER_DBG ("Constructor called, endpoint=%s, this=%p", _endpoint_str.c_str (),
                       static_cast<void *> (this));
@@ -160,6 +162,8 @@ void zlink::asio_ws_connecter_t::timer_event (int id_)
 
 void zlink::asio_ws_connecter_t::start_connecting ()
 {
+    _attempt_endpoint_pair =
+      make_unconnected_connect_endpoint_pair (_endpoint_str);
     WS_CONNECTER_DBG ("start_connecting: endpoint=%s", _endpoint_str.c_str ());
 
     //  Resolve the WebSocket address if not already done
@@ -253,7 +257,7 @@ void zlink::asio_ws_connecter_t::start_connecting ()
     //  Add connect timeout
     add_connect_timer ();
 
-    _socket_ptr->event_connect_delayed (make_unconnected_connect_endpoint_pair (_endpoint_str),
+    _socket_ptr->event_connect_delayed (_attempt_endpoint_pair,
                                         connect_delayed_errno_value ());
 }
 
@@ -324,7 +328,7 @@ void zlink::asio_ws_connecter_t::add_reconnect_timer ()
     start_asio_timer_if_positive (interval, &_reconnect_timer_started, [this] (int interval) {
         WS_CONNECTER_DBG ("add_reconnect_timer: interval=%d", interval);
         add_timer (interval, reconnect_timer_id);
-        _socket_ptr->event_connect_retried (make_unconnected_connect_endpoint_pair (_endpoint_str),
+        _socket_ptr->event_connect_retried (_attempt_endpoint_pair,
                                             interval);
     });
 }
@@ -351,8 +355,9 @@ void zlink::asio_ws_connecter_t::create_engine (fd_t fd_, const std::string &loc
     else if (!_secure && remote_endpoint.compare (0, 6, "wss://") == 0)
         remote_endpoint.replace (0, 6, "ws://");
 
-    const endpoint_uri_pair_t endpoint_pair (local_endpoint, remote_endpoint,
-                                             endpoint_type_connect);
+    endpoint_uri_pair_t endpoint_pair (local_endpoint, remote_endpoint,
+                                       endpoint_type_connect);
+    endpoint_pair.connection_id = _attempt_endpoint_pair.connection_id.load ();
 
     std::unique_ptr<i_asio_transport> transport;
 #if defined ZLINK_HAVE_WSS
@@ -435,7 +440,7 @@ void zlink::asio_ws_connecter_t::close ()
     WS_CONNECTER_DBG ("close called");
 
     close_asio_socket_if_open (_socket, [this] (fd_t fd) {
-        _socket_ptr->event_closed (make_unconnected_connect_endpoint_pair (_endpoint_str), fd);
+        _socket_ptr->event_closed (_attempt_endpoint_pair, fd);
     });
 }
 

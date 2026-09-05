@@ -1223,3 +1223,19 @@ DD 큰 메시지: Java `CompletionOwner`가 백프레셔 시 runtime owner(worke
 ## D-B111 (2026-09-05 13:45, 머신 B) Java hot-path pass 1+1b(astra) 커밋 — Context당 completion pump 1개로 owner 구조 단일화(코드 −525줄), REQREP 15/24→54/73%, DD 4096/64K 회귀 해소; 최종 판정은 paired 3-run
 pass 1b: 백프레셔마다 socket별 runtime owner(worker+private poller+control pair)를 만들고 idle에 닫던 구조를 **Context당 native completion poller·control pair·wait thread 1개를 lazy 생성해 Context close까지 유지**하는 `CompletionDispatcher`로 대체(제어점 하나, spec은 socket별 owner를 요구하지 않음 → spec gap 없음). DD 64K owner lifecycle 4,753→O(1)(100 poller/100 pair).
 진단 after(1 run, load 2.2): DD 54.7→65.0%(64B 74.8, 256B 63.7, 1024B 76.1, 4096B 83.7, 64K 26.7), DR 52.6→54.3%, RR 72.5→72.7%, PUBSUB 88.4→78.4%(1-run 변동 여부는 3-run으로). gate: Java 전체 green, 관련 contract 5회, 공개 API 108 classfile 동일. 러너 freshness guard(main Core 소스 mtime) 완화도 포함(내용 동일·binary가 더 새로우면 허용). 커밋 `82b0fd9f38`. 판정값은 조용한 머신 paired 3-run으로 확정.
+
+## D-B112 (2026-09-05 14:00, 머신 B) disconnect 경계 검증 결과 — Core 수정 3건 + §4 REJECT 특례 제거(규칙 단일화, 프로토콜 신설 없음)
+astra 검증(`core-boundary-summary.md`, `core-boundary2-summary.md`; 테스트 `test_socket_disconnect_boundary` tcp/ipc/inproc/ws × REJECT/HANDOVER 각 20회, `test_monitor_connection_identity` tcp/ipc/inproc/ws/tls 19 case):
+Core 버그 수정(B): ① ws/tls connecter가 event마다 endpoint pair를 생성해 같은 attempt의 connection_id가 바뀜 → tcp/ipc와 같이 attempt당 1회(`asio_ws_connecter.cpp`, `asio_tls_connecter.cpp`; ID 생성 위치 4→1); ② inproc command-only owner 획득 완료 조건 2→1, 별도 synchronous wait 경로 제거(`socket_base_endpoint.cpp:431,979`, `socket_base_lifecycle.cpp`); ③ REJECT 시 새 중복 pipe 즉시 종료(`router_admission.cpp`).
+경계 검증: HANDOVER 4 transport 20/20 reply OK, 명시 제거된 연결의 REQUEST C는 `NOT_FOUND` 20/20, 새 READY는 monitor 소비 없이 20/20 — D-B109 경계 충족.
+spec gap → 결정: REJECT로 닫힌 pipe에 admit된 REQUEST를 §4대로 `NOT_CONNECTED`로 끝내려면 ROUTER→connector wire 거부 사유(ZMP ERROR code 신설 + close 순서 계약)가 필요(현재 ZMP는 HELLO/READY/ERROR뿐, 거부 사유 없음). 사용자 원칙(단순·중복 없음)에 따라 프로토콜을 늘리지 않고 **§4의 REJECT 특례 문장을 제거**: 거부된 pipe의 종료는 다른 physical 단절과 구분되지 않으므로 그 요청은 timeout budget을 유지하다 자기 timeout으로 종결(재연결 흐름은 HANDOVER 권장). spec ko/en 수정, 테스트 REJECT 셀 기대치 = reply/timeout/not_connected 합 20(3회 green).
+gate: worktree identity 5/5, integration 121/121, 전체 171/171; main dev 전체 171/171, boundary 3회. Release+LTO hotpath_gate는 측정 체인 뒤 1회. 커밋 `349040d3e6`.
+**A용 한 줄: Core 수정 커밋 `349040d3e6` + §4 REJECT 규칙 단순화 — framework ClientServer가 REJECT ROUTER에서 NOT_CONNECTED를 기대하는 코드가 있으면 timeout/HANDOVER 기준으로 정리(D-088 해소).**
+
+## D-091 (2026-09-05 14:10, 머신 A) 결정 — D-B112의 §4 REJECT 문구("자기 timeout으로 종결")는 D-090으로 대체; Core 수정 3건은 그대로 수용
+
+- 충돌: B의 `349040d3e6`(D-B112)는 §4를 "거부된 pipe의 request는 wire에 거부 사유가 없으므로 다른 physical 단절과 같이 timeout budget을 유지하다 자기 timeout으로 종결"로 되돌렸고, A의 D-090(`40137f1bd0`)은 "submit 시점 pair 종료 → 원인 불문 즉시 `REQUEST_NOT_CONNECTED`" 단일 규칙을 §6 표에 넣었다. 두 문장은 양립 불가.
+- 판단: D-B112의 전제(NOT_CONNECTED로 종결하려면 wire 거부 사유가 필요)는 성립하지 않는다. D-090은 request 소유자(DEALER 쪽 `pipe_peer_terminated()`)가 **자기 pair의 종료**만으로 종결하므로 프로토콜 신설이 없다. 규칙 수는 D-B112 방식이 2(physical 단절·REJECT = timeout 유지 / handover 물러남 = NOT_CONNECTED)이고 D-090이 1이다. "원칙이 단순해지는 쪽"인 D-090 유지.
+- B가 만든 `test_socket_disconnect_boundary`의 REJECT 단언은 `reply_ok + timed_out + not_connected == 20`이라 D-090과 양립한다. D-B112의 Core 수정(ws/tls connect 시도별 endpoint identity 1개, inproc command-owner 단일 획득, REJECT 즉시 close)은 그대로 병합했고 REJECT close 구현은 하나만 남겼다(`router_admission.cpp` 충돌은 주석만).
+- 스펙 반영(A 직접): §4 REJECT 문장 ko/en, `zlink_disconnect` 단락의 종결 요약 ko/en을 §6 단일 규칙과 일치시켰다. 병합 후 Core 전체 gate를 worktree b에서 재검증한다.
+- **B용 한 줄: §4 REJECT는 D-090(pair 종료 → 즉시 NOT_CONNECTED, 규칙 1개)으로 확정. "자기 timeout으로 종결" 문구를 다시 넣지 말 것. framework가 REJECT ROUTER에서 NOT_CONNECTED를 기대하는 코드는 그대로 유효.**
