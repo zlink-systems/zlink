@@ -848,8 +848,9 @@ admission seal to the whole host. It doesn't guarantee stateful workload continu
 completes within a fixed time, in this order.
 
 1. Changes the host to `Draining` and closes new application admission and the start of
-   new relocation units. The mesh node follows the same seal: it starts no new peer
-   admission (no Hello) and sends already-admitted peers only the `Draining` Update. A
+   new relocation units. The mesh node follows the same seal: it neither starts nor accepts
+   a new peer admission (sends no Hello, answers no inbound Hello with Admit) and sends
+   already-admitted peers only the `Draining` Update. A
    peer's transport loss, liveness expiry, or send failure after the seal does not move the
    node state back before `Draining`.
 2. Publishes a `Draining` descriptor, excluding it from new selection and placement.

@@ -1339,3 +1339,13 @@ after(1-run, load ≤1.9): DD 64B 47.4%·256B 56.9%·1024B 58.2%·4096B 96.5%·6
 
 ## D-B130 (2026-09-05 23:58, 머신 B) Python pass 2(astra) — 제출·수신·completion drain hot path를 C 확장으로(Python 함수/메시지 79→9, DD 9.0→16.1%, DR/RR 14.9/16.5→17.7/20.1%, PUBSUB 28.7→31.8%)
 `_zlink_native.c`+`hotpath.h`: 제출(materialize→part submit→token 등록)·수신 wrapper 구성·completion drain 루프를 C 함수 하나씩으로, `Message.data`/close native boundary, per-part GIL 경계. 공개 API 불변, spec gap 없음. job은 마지막 전체 gate 중 모델 capacity 오류로 종료 → 감독자가 main에서 `build_ext --inplace --force` + `run_tests.sh` 216 passed(4 subtests)·samples 7/7 재확인. 남은 상한: 러너/asyncio 측 Python 호출과 GIL(목표 60% 미달; DD 34k msg/s). 판정은 quiet 3-run(내일). 커밋 `2ad52c4e11`(뒤따른 `f7a32ddec9`는 같은 제목이 붙은 해시 기록 커밋).
+
+## D-098 (2026-09-06 00:50, 머신 A) 결정 — 잔여 이슈 일괄 정리 규칙
+
+1. **Endpoint 해제는 transport 불문 하나의 규칙**: bind를 끝내는 공개 호출(`zlink_unbind`, `zlink_close`)이 반환하기 전에 그 endpoint를 다시 bind할 수 있어야 한다. inproc은 `d8b65141a4`로 충족; tcp/ipc listener는 SO_REUSEPORT가 fd 비동기 close를 가려 "겉보기 rebind 성공 + 이전 listener 잔존" 상태를 만든다 → listener fd close도 호출 반환 전에 완료한다(SO_REUSEPORT에 의존하는 우회 제거). spec gap 아님(§ zlink_close "관련된 모든 자원을 해제").
+2. **inproc unbind 2-lane 지연**: `terminate_inproc_pipe_with_peer_progress`가 lane_count==1에서만 peer command 진행을 구동 → lane 수와 무관하게 같은 진행 규칙(2→1). 결과는 같고 200 ms 대기만 사라진다.
+3. **Sealed node의 inbound Hello**(D-097 보강): shutdown seal 뒤 node는 새 peer를 admit하지 않는다 — inbound Hello에 Admit을 보내지 않고(무응답; 상대 intent는 Draining descriptor·종료 관찰로 재시도) 이미 admit된 peer의 Update/Draining만 처리한다. §14 step 1 "신규 admission을 닫는다"의 mesh 적용. dotnet/java/cpp 동일.
+4. **dotnet `WaitForDescriptorPropagationAsync`**: §14 게시 성공 뒤 시간 대기 근거 없음(node 8159b15752와 동일 판단) → 제거, publication terminal만 기다린다.
+5. **java raw mesh terminal retention**: D-095 잔여 wall-clock → monotonic.
+6. **java M6A/TransportIdentity fixture의 retry 대기**: 런타임이 CLOSED를 replace 자격과 동시에 게시하므로 불필요 → 제거(리팩터, 단언 유지).
+7. **cpp `common_e2e_inventory` 278**: 결과에 따라 — feature-map이 요구하는 common e2e scenario를 cpp가 실제로 구현하지 않았으면 구현(A), inventory 파서/맵 drift면 gate 수정(B). 별도 조사 job.

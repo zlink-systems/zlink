@@ -764,8 +764,9 @@ application 작업을 받지 않도록 바꾸는 동작을 [admission seal](../0
 보장하지 않으며 다음 순서로 정해진 시간 안에 완료한다.
 
 1. Host를 `Draining`으로 바꾸고 신규 application admission과 새 relocation unit 시작을 닫는다.
-   같은 seal을 mesh node도 따른다: 새 peer admission(Hello)을 시작하지 않고, 이미 admit된
-   peer에는 `Draining` Update만 보낸다. Peer의 transport 단절·liveness 만료·전송 실패가 seal 뒤의
+   같은 seal을 mesh node도 따른다: 새 peer admission을 시작하지도 수락하지도 않는다(Hello를
+   보내지 않고, inbound Hello에 Admit을 보내지 않는다). 이미 admit된 peer에는 `Draining` Update만
+   보낸다. Peer의 transport 단절·liveness 만료·전송 실패가 seal 뒤의
    node 상태를 `Draining` 이전으로 되돌리지 않는다.
 2. `Draining` descriptor를 게시해 새 selection과 placement에서 제외한다.
 3. 이미 수락한 handler, request completion, relocation unit과 session barrier를 deadline까지
