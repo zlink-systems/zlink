@@ -364,6 +364,8 @@ int zlink::socket_base_t::process_commands (
     socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
     mailbox_t *const mailbox = static_cast<mailbox_t *> (_mailbox);
     const bool async_executor = current_async_mailbox_dispatch_socket () == this;
+    const bool owns_control_scope =
+      async_executor || lifecycle.public_api_sync_owned_by_current_thread ();
     const wait_timeout_budget_t wait_budget (_clock, timeout_);
     bool pair_pipe_lifetime_sync_required = false;
     bool woke_since_last_claim = false;
@@ -371,10 +373,12 @@ int zlink::socket_base_t::process_commands (
       receive.command_drain_active);
 
     while (true) {
-        // Once the mailbox handoff begins, the async executor is the sole
-        // command progress owner. A public path must not wait for that owner
-        // while it can re-enter this socket during command dispatch.
-        if (async_mailbox_owns_commands () && !async_executor) {
+        // A serialized control call must apply earlier commands before it
+        // changes endpoint state. The API -> command_owner_sync lock order
+        // makes that drain exclusive with async command dispatch.
+        // Unlocked progress probes still defer to the async executor: waiting
+        // for it there can deadlock with a callback that re-enters the socket.
+        if (async_mailbox_owns_commands () && !owns_control_scope) {
             if (_ctx_terminated) {
                 errno = ETERM;
                 return -1;
@@ -419,7 +423,7 @@ int zlink::socket_base_t::process_commands (
             // Close the handoff race between the lock-free owner check above
             // and acquiring the command scope. The pending bit remains set
             // until the async owner has been installed.
-            if (async_mailbox_owns_commands () && !async_executor) {
+            if (async_mailbox_owns_commands () && !owns_control_scope) {
                 if (_ctx_terminated) {
                     errno = ETERM;
                     return -1;

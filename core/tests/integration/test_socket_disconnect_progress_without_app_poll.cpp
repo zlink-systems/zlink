@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <vector>
 
@@ -585,6 +586,8 @@ void test_stream_disconnect_reconnect_without_application_poll ()
     event_observation_t event;
     TEST_ASSERT_TRUE (wait_monitor_event (
       monitor, ZLINK_EVENT_CONNECTION_READY, 0, true, event_timeout_ms, &event));
+    const uint64_t original_connection_id = event.event.connection_id;
+    TEST_ASSERT_NOT_EQUAL (0, original_connection_id);
     const zlink_routing_id_t original_rid = event.event.routing_id;
     TEST_ASSERT_EQUAL_UINT (4, original_rid.size);
 
@@ -592,10 +595,13 @@ void test_stream_disconnect_reconnect_without_application_poll ()
     // to process the pipe termination acknowledgement after this call returns.
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_disconnect (server, endpoint));
     TEST_ASSERT_TRUE (wait_monitor_event (
-      monitor, ZLINK_EVENT_DISCONNECTED, 0, false, event_timeout_ms, &event));
+      monitor, ZLINK_EVENT_DISCONNECTED, original_connection_id, false,
+      event_timeout_ms, &event));
     TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (server, endpoint));
     TEST_ASSERT_TRUE (wait_monitor_event (
       monitor, ZLINK_EVENT_CONNECTION_READY, 0, true, event_timeout_ms, &event));
+    TEST_ASSERT_NOT_EQUAL (0, event.event.connection_id);
+    TEST_ASSERT_NOT_EQUAL (original_connection_id, event.event.connection_id);
     TEST_ASSERT_EQUAL_UINT (4, event.event.routing_id.size);
     TEST_ASSERT_TRUE (memcmp (original_rid.data, event.event.routing_id.data,
                              original_rid.size) != 0);
@@ -645,19 +651,26 @@ int main ()
 {
     setup_test_environment (60);
     UNITY_BEGIN ();
-    RUN_TEST (test_stream_disconnect_reconnect_without_application_poll);
-    RUN_TEST (test_stream_disconnect_reconnect_on_single_io_thread);
-    RUN_TEST (test_tcp_registered_without_waiter_progresses);
-    RUN_TEST (test_tcp_without_registration_progresses);
-    RUN_TEST (test_inproc_registered_without_waiter_progresses);
-    RUN_TEST (test_inproc_without_registration_progresses);
-    RUN_TEST (test_tcp_registered_server_disconnect_progresses);
-    RUN_TEST (test_tcp_unregistered_server_disconnect_progresses);
-    RUN_TEST (test_inproc_registered_server_disconnect_progresses);
-    RUN_TEST (test_inproc_unregistered_server_disconnect_progresses);
-    RUN_TEST (test_tcp_immediate_disconnect_connect_default_policy_observation);
-    RUN_TEST (test_inproc_immediate_disconnect_connect_default_policy_observation);
-    RUN_TEST (test_tcp_immediate_disconnect_connect_handover_uses_replacement);
-    RUN_TEST (test_inproc_immediate_disconnect_connect_handover_uses_replacement);
+#define RUN_SELECTED_TEST(test_)                                               \
+    do {                                                                       \
+        const char *const selected = getenv ("ZLINK_TEST_CASE");                 \
+        if (!selected || !*selected || strcmp (selected, #test_) == 0)           \
+            RUN_TEST (test_);                                                   \
+    } while (false)
+    RUN_SELECTED_TEST (test_stream_disconnect_reconnect_without_application_poll);
+    RUN_SELECTED_TEST (test_stream_disconnect_reconnect_on_single_io_thread);
+    RUN_SELECTED_TEST (test_tcp_registered_without_waiter_progresses);
+    RUN_SELECTED_TEST (test_tcp_without_registration_progresses);
+    RUN_SELECTED_TEST (test_inproc_registered_without_waiter_progresses);
+    RUN_SELECTED_TEST (test_inproc_without_registration_progresses);
+    RUN_SELECTED_TEST (test_tcp_registered_server_disconnect_progresses);
+    RUN_SELECTED_TEST (test_tcp_unregistered_server_disconnect_progresses);
+    RUN_SELECTED_TEST (test_inproc_registered_server_disconnect_progresses);
+    RUN_SELECTED_TEST (test_inproc_unregistered_server_disconnect_progresses);
+    RUN_SELECTED_TEST (test_tcp_immediate_disconnect_connect_default_policy_observation);
+    RUN_SELECTED_TEST (test_inproc_immediate_disconnect_connect_default_policy_observation);
+    RUN_SELECTED_TEST (test_tcp_immediate_disconnect_connect_handover_uses_replacement);
+    RUN_SELECTED_TEST (test_inproc_immediate_disconnect_connect_handover_uses_replacement);
+#undef RUN_SELECTED_TEST
     return UNITY_END ();
 }
