@@ -1372,7 +1372,7 @@ class socket_base_t : public own_t,
     bool _manual_rcvhwm;
     //  Serializes completion drains and the async-worker/public-poller owner
     //  transition.
-    mutable mutex_t _completion_owner_sync;
+    mutable recursive_mutex_t _completion_owner_sync;
     // Even generations denote no stable completion owner (or an ownership
     // handoff); odd generations denote an installed public-poller or retained
     // async owner. A request can validate the same odd generation twice and
@@ -1381,7 +1381,7 @@ class socket_base_t : public own_t,
     std::atomic<uint32_t> _completion_poller_refs;
     std::atomic<void *> _completion_poller_owner;
     std::atomic<bool> _request_completion_pending;
-    mutable mutex_t _transport_pair_owner_progress_sync;
+    mutable recursive_mutex_t _transport_pair_owner_progress_sync;
     uint32_t _transport_pair_owner_progress_refs;
     bool _async_command_processing_stop_requested;
     std::atomic<bool> _async_command_processing_retained;
@@ -1389,7 +1389,7 @@ class socket_base_t : public own_t,
     //  updates and monitor snapshots run on public threads. Keep the socket
     //  plan and the option values used to derive it in one snapshot domain.
     //  This lock is never acquired by send admission.
-    mutable mutex_t _auto_hwm_sync;
+    mutable recursive_mutex_t _auto_hwm_sync;
     auto_hwm_context_plan_t _auto_hwm_context_plan;
     auto_hwm_socket_plan_t _auto_hwm_socket_plan;
     uint64_t _auto_hwm_last_recalc_ms;
@@ -1415,7 +1415,7 @@ class socket_base_t : public own_t,
     //  and Completion pipe consumption all run under this mutex; the pipes
     //  themselves are drained outside it so completion processing never runs
     //  with the table locked.
-    mutable mutex_t _transport_pairs_sync;
+    mutable recursive_mutex_t _transport_pairs_sync;
     transport_pairs_t _transport_pairs;
     typedef std::map<std::string, accepted_transport_pair_identity_t>
       accepted_transport_pairs_t;

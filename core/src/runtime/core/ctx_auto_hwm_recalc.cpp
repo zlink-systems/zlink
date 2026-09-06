@@ -217,7 +217,7 @@ void zlink::ctx_t::auto_hwm_recalc_task ()
 
 zlink::auto_hwm_budget_input_t zlink::ctx_t::auto_hwm_budget_input () const
 {
-    scoped_lock_t locker (const_cast<mutex_t &> (_opt_sync));
+    scoped_lock_t locker (const_cast<recursive_mutex_t &> (_opt_sync));
     return _auto_hwm.budget_input ();
 }
 

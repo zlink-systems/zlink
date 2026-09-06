@@ -41,7 +41,7 @@ set(unittests
     unittest_ypipe
     unittest_poller
     unittest_socket_poller
-    unittest_fast_mutex
+    unittest_mutex
     unittest_mtrie
     unittest_ip_resolver
     unittest_ipc_address

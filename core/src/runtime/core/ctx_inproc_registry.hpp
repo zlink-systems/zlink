@@ -72,7 +72,7 @@ class ctx_inproc_registry_t
     typedef std::map<std::string, endpoint_t> endpoints_t;
     typedef std::multimap<std::string, pending_connection_t> pending_connections_t;
 
-    mutable mutex_t _sync;
+    mutable recursive_mutex_t _sync;
     endpoints_t _endpoints;
     pending_connections_t _pending_connections;
 };

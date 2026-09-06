@@ -690,6 +690,10 @@ bool zlink::object_t::send_pipe_command (pipe_t *destination_,
     cmd_.destination = destination_;
     if (!destination_->retain_lifetime_ref ())
         return false;
+    //  Self-dispatch runs the handler synchronously on the caller's stack, not
+    //  through the mailbox. A caller that passes the inline flag must therefore
+    //  hold no plain (non-recursive) mutex that the handler could take -- the
+    //  pipe's own _out_sync above all.
     if (allow_self_dispatch_ && destination_->get_tid () == _tid)
         destination_->process_command (cmd_);
     else

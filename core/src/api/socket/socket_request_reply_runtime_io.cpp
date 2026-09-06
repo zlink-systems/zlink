@@ -1456,7 +1456,7 @@ int send_completion_staged_frames_on_pipe (
         // Multipart rollback spans several pipe lock acquisitions and keeps
         // the generation gate. A complete single-part reply validates its
         // connection under the pipe's existing terminal write/flush lock.
-        zlink::scoped_optional_fast_lock_t transport_generation_lock (
+        zlink::scoped_optional_lock_t transport_generation_lock (
           total_part_count > 1 ? &completion_->transport_sync () : NULL);
         const uint64_t transport_connection_id =
           completion_->get_transport_connection_id ();

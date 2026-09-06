@@ -377,6 +377,16 @@ inline size_t next_stream_target_after_full_hit (size_t current_,
     return grown > current_ ? grown : 0;
 }
 
+//  A read that returned less than it asked for means the kernel receive queue
+//  was emptied by that very read: a stream socket returns everything it has up
+//  to the requested length. Reading again can only produce EAGAIN, so the
+//  engine treats a short read as "socket drained" both for read-target growth
+//  and for ending the read drain loop.
+inline bool stream_read_filled_request (size_t request_size_, size_t bytes_)
+{
+    return request_size_ != 0 && bytes_ >= request_size_;
+}
+
 inline bool can_grow_stream_target (int socket_type_, const void *codec_, size_t current_, size_t max_)
 {
     return socket_type_ == ZLINK_CORE_SOCKET_STREAM && codec_ != NULL && max_ > current_;
@@ -395,13 +405,8 @@ inline size_t next_decoder_read_target (int socket_type_,
     if (!can_grow_stream_target (socket_type_, decoder_, current_, max_))
         return 0;
 
-    if (last_read_had_partial_prefix_ || last_read_request_size_ == 0) {
-        if (full_hits_)
-            *full_hits_ = 0;
-        return 0;
-    }
-
-    if (bytes_transferred_ < last_read_request_size_) {
+    if (last_read_had_partial_prefix_
+        || !stream_read_filled_request (last_read_request_size_, bytes_transferred_)) {
         if (full_hits_)
             *full_hits_ = 0;
         return 0;

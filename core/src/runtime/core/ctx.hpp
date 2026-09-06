@@ -181,7 +181,7 @@ class ctx_t ZLINK_FINAL
     //  sockets, empty_slots, terminating. It also synchronises
     //  access to zombie sockets as such (as opposed to slots) and provides
     //  a memory barrier to ensure that all CPU cores see the same data.
-    mutex_t _slot_sync;
+    recursive_mutex_t _slot_sync;
     ctx_socket_registry_t _socket_registry;
     std::vector<socket_public_handle_t *> _public_socket_handles;
 
@@ -193,7 +193,7 @@ class ctx_t ZLINK_FINAL
     thread_ctx_t _thread_context;
 
     //  Synchronisation of access to context options.
-    mutable mutex_t _opt_sync;
+    mutable recursive_mutex_t _opt_sync;
 
     //  Maximum socket ID.
     static atomic_counter_t max_socket_id;
@@ -212,11 +212,11 @@ class ctx_t ZLINK_FINAL
     // are control-plane state. Keep them independent from the socket slot
     // registry so pipe/monitor callbacks never need _slot_sync merely to
     // request a replan.
-    mutable mutex_t _auto_hwm_state_sync;
+    mutable recursive_mutex_t _auto_hwm_state_sync;
     // Serializes complete replans without holding _slot_sync across socket
     // monitor/option locks. It is a control-path lock and never participates
     // in message admission.
-    mutex_t _auto_hwm_recalc_sync;
+    recursive_mutex_t _auto_hwm_recalc_sync;
     // Protected by _auto_hwm_state_sync. Once set, teardown must never publish
     // another context-owned auto-HWM task.
     bool _auto_hwm_recalc_stopped;

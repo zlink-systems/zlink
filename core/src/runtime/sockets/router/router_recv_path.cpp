@@ -104,7 +104,7 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
     bool scheduler_registered = false;
     route_adoption_actions_t adoption_actions;
     {
-        scoped_fast_lock_t generation_lock (pipe_->transport_sync ());
+        scoped_lock_t generation_lock (pipe_->transport_sync ());
         std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
         const bool routing_id_ok = identify_peer (
           pipe_, locally_initiated_, &adoption_actions);
@@ -161,7 +161,7 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
     bool route_adopted = false;
     route_adoption_actions_t adoption_actions;
     {
-        scoped_fast_lock_t generation_lock (pipe_->transport_sync ());
+        scoped_lock_t generation_lock (pipe_->transport_sync ());
         std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
         const std::map<pipe_t *, bool>::iterator it =
           _anonymous_pipes.find (pipe_);

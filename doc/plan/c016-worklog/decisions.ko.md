@@ -1632,3 +1632,6 @@ P0 job(sonnet). (1) `stream_tcp` 셀: STREAM tcp bind + raw BSD TCP 클라이언
 - 환경: 이 WSL2 커널에서 TSan 바이너리는 `setarch $(uname -m) -R` 필요(S-2 발견). TSan 트리 baseline에 기존 `ypipe_t::check_read` ↔ `mailbox_t::reschedule_if_needed` race 경고(알려진 오탐, CMakeLists 주석).
 - **perf/c multi 기준값 의심**: 게이트의 standalone 2패턴 run이 RR_SENDSEND 247.5 / RR_REQREP 175.8 Kops/s로 Phase 0(7패턴 순차 run) 111.5 / 73.0의 2.2~2.4배. 옵션 동일, 패턴 집합만 다름. 순차 실행이 뒤 패턴을 눌렀는지 재측정 job(sonnet) 투입. 결과에 따라 §7.4 multi 기준을 standalone 값으로 교체.
 - 투입: 게이트 s2-s9(sonnet, 10회 hang 검사 포함), S-3(decoder 버퍼), S-1(activate_read, S-2 diff 위에서).
+
+## D-B145 (2026-09-07 02:00, 머신 B) 게이트 s2-s9 결과 — 채택 보류 2건 조사 중
+`gate-s2-s9-summary.md`: patch 충돌 0, ctest 208/208(hotpath_gate dev 제외), 5회 suite 81/81, mirror 12/12, **hotpath 5셀 0.96~0.99(모두 개선)**, with_stream 6셀 기준 이상. 보류 사유: (1) 10회 hang 검사에서 `test_close_completion_poller_release` 3/10 실패(1회 10 s timeout, "Expected 1 Was 0"), standalone 3/3 통과. S-10 게이트(잠금 변경 없음)에서도 부하 중 1회 실패했으므로 기존 간헐 가능성 — 진단 job(opus)이 pre-campaign 트리(`6f64e76b51`)와 비교 재현 중. (2) perf/c single ROUTER_ROUTER 0.95(경계) — 부하 조건 불명, A/B job이 조용한 조건에서 old/new lib 비교 중(multi 2.2× 의문도 같은 job). 두 결과 전까지 main 작업 트리의 S-2+S-9 patch는 미커밋 상태로 둔다.

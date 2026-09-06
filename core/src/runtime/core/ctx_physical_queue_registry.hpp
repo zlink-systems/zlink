@@ -156,7 +156,7 @@ class ctx_physical_queue_registry_t
   private:
     uint64_t allocate_queue_id_unlocked ();
 
-    mutable mutex_t _sync;
+    mutable recursive_mutex_t _sync;
     std::map<uint64_t, physical_queue_handle_t> _directions;
     uint64_t _next_queue_id;
     uint64_t _application_reserved_minimum_bytes;

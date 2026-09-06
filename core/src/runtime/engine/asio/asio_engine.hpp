@@ -215,7 +215,7 @@ class asio_engine_t : public i_engine
 
     //  Drain a bounded number of immediately available STREAM reads after an
     //  async callback to reduce callback churn on small payloads.
-    void maybe_drain_stream_reads ();
+    void maybe_drain_stream_reads (size_t last_read_bytes_);
 
     bool buffer_stream_backpressure_read (size_t bytes_transferred_);
 

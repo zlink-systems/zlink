@@ -13,7 +13,7 @@
 #include "sockets/common/socket_base.hpp"
 #include "sockets/internal/fq.hpp"
 #include "core/ctx_physical_queue_registry.hpp"
-#include "utils/fast_mutex.hpp"
+#include "utils/mutex.hpp"
 #include "utils/stdint.hpp"
 
 namespace zlink
@@ -92,7 +92,7 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
     {
         typedef std::map<uint32_t, zlink::pipe_t *> routes_t;
 
-        fast_mutex_t sync;
+        mutex_t sync;
         routes_t routes;
     };
 

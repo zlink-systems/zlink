@@ -25,7 +25,7 @@ class thread_ctx_t
 
   private:
     //  Synchronisation of access to thread options.
-    mutable mutex_t _opt_sync;
+    mutable recursive_mutex_t _opt_sync;
 
     //  Thread parameters.
     int _thread_priority;

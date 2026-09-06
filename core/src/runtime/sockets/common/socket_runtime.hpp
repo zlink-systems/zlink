@@ -255,9 +255,9 @@ struct socket_monitor_runtime_t
     bool lossy;
     // Serializes public monitor replacement without extending the event-state
     // lock across context/socket creation or async mailbox ownership changes.
-    mutex_t operation_sync;
-    mutable mutex_t sync;
-    mutex_t queue_sync;
+    recursive_mutex_t operation_sync;
+    mutable recursive_mutex_t sync;
+    recursive_mutex_t queue_sync;
     condition_variable_t queue_cv;
     std::deque<socket_monitor_event_record_t> queue;
     uint64_t queue_hwm_bytes;
@@ -308,7 +308,7 @@ struct socket_receive_runtime_t
     {
     }
 
-    mutex_t command_owner_sync;
+    recursive_mutex_t command_owner_sync;
     std::atomic<bool> async_command_handoff_pending;
     // Published before the command owner clears the mailbox pending hint and
     // retained until every claimed command-side state change is visible.
@@ -379,7 +379,7 @@ struct socket_receive_runtime_t
     std::atomic<uint8_t> receive_owner;
 
   public:
-    mutex_t sync;
+    recursive_mutex_t sync;
     condition_variable_t progress_cv;
     uint64_t progress_epoch;
     uint32_t waiters;
@@ -675,7 +675,7 @@ struct socket_blocking_send_runtime_t
 {
     socket_blocking_send_runtime_t () {}
 
-    mutable mutex_t sync;
+    mutable recursive_mutex_t sync;
     std::map<routed_send_target_key_t, blocking_send_wait_state_t>
       logical_waits;
 };
@@ -703,7 +703,7 @@ struct socket_dispatch_bridge_t
     // receive mutex. Routing cleanup must wait until that outer scope
     // is gone, so keep a lifetime-pinned intrusive queue with no allocation
     // failure in the terminal path.
-    mutex_t deferred_socket_msg_termination_sync;
+    recursive_mutex_t deferred_socket_msg_termination_sync;
     pipe_t *deferred_socket_msg_termination_head;
     pipe_t *deferred_socket_msg_termination_tail;
 };
@@ -721,7 +721,7 @@ struct socket_submit_progress_runtime_t
     {
     }
 
-    mutex_t sync;
+    recursive_mutex_t sync;
     condition_variable_t cv;
     std::atomic<uint64_t> epoch;
     std::atomic<uint32_t> waiters;
@@ -829,7 +829,7 @@ class socket_lifecycle_coordinator_t
     // off to the complete-record submit.
     std::atomic<bool> public_multipart_control_boundary;
     std::atomic<bool> deferred_peer_controls_pending;
-    mutex_t async_done_mu;
+    recursive_mutex_t async_done_mu;
     condition_variable_t async_done_cv;
 
   private:

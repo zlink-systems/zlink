@@ -122,7 +122,7 @@ class session_termination_test_access_t
 
     static bool waiting_for_delimiter (pipe_t *pipe_)
     {
-        scoped_fast_lock_t lock (pipe_->_out_sync);
+        scoped_lock_t lock (pipe_->_out_sync);
         return pipe_->_state == pipe_t::waiting_for_delimiter;
     }
 
@@ -161,11 +161,11 @@ class session_termination_test_access_t
     static void prepare_reciprocal_pipe_ack (pipe_t *local_, pipe_t *peer_)
     {
         {
-            scoped_fast_lock_t lock (local_->_out_sync);
+            scoped_lock_t lock (local_->_out_sync);
             local_->_state = pipe_t::term_req_sent1;
         }
         {
-            scoped_fast_lock_t lock (peer_->_out_sync);
+            scoped_lock_t lock (peer_->_out_sync);
             peer_->_state = pipe_t::term_ack_sent;
             peer_->_out_pipe = NULL;
         }
@@ -174,12 +174,12 @@ class session_termination_test_access_t
     static void prepare_concurrent_pipe_acks (pipe_t *first_, pipe_t *second_)
     {
         {
-            scoped_fast_lock_t lock (first_->_out_sync);
+            scoped_lock_t lock (first_->_out_sync);
             first_->_state = pipe_t::term_req_sent2;
             first_->_out_pipe = NULL;
         }
         {
-            scoped_fast_lock_t lock (second_->_out_sync);
+            scoped_lock_t lock (second_->_out_sync);
             second_->_state = pipe_t::term_req_sent2;
             second_->_out_pipe = NULL;
         }

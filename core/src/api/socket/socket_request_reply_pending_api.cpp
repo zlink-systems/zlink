@@ -149,7 +149,7 @@ bool reqrep::take_pending_reply_from_transport_locked (
     // Keep validation and pending removal in one generation decision: either
     // this frame consumes the submit-time request, or teardown wins and leaves
     // the pending record intact for its terminal owner.
-    zlink::scoped_fast_lock_t generation_lock (source_pipe_->transport_sync ());
+    zlink::scoped_lock_t generation_lock (source_pipe_->transport_sync ());
     if (source_pipe_->get_transport_connection_id () != source_connection_id_
         || !source_pipe_->is_lifecycle_active ()
         || !application->transport_pair_application_ready_cached ())

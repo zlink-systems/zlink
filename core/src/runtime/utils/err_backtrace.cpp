@@ -14,7 +14,7 @@
 
 void zlink::print_backtrace (void)
 {
-    static zlink::mutex_t mtx;
+    static zlink::recursive_mutex_t mtx;
     mtx.lock ();
     Dl_info dl_info;
     unw_cursor_t cursor;

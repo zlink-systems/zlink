@@ -17,7 +17,7 @@
 #include "core/endpoint.hpp"
 #include "core/msg.hpp"
 #include "core/pipe_stream_packet_state.hpp"
-#include "utils/fast_mutex.hpp"
+#include "utils/mutex.hpp"
 #include "utils/macros.hpp"
 
 namespace zlink
@@ -87,7 +87,12 @@ struct transport_lifetime_t
     std::atomic<bool> stream_connect_event_emitted;
     // Rare physical-transport generation changes and STREAM parser/callback
     // publication share this gate. Hot connection-id reads remain atomic.
-    fast_mutex_t transport_sync;
+    // One transport_lifetime_t is created by pipepair() and shared by both
+    // pipes of the pair, so this is a single lock for the pair, not a per-pipe
+    // one. It is a plain (non-recursive) mutex: nothing reached under it may
+    // take it again -- in particular apply_peer_weight() overrides and every
+    // sink callback invoked from a critical section that holds it.
+    mutex_t transport_sync;
     pipe_stream_packet_state_t stream_packet_state;
 };
 
@@ -262,7 +267,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool mark_stream_connect_event_emitted ();
     bool mark_connection_ready_event_emitted ();
     stream_packet_state_t &stream_packet_state ();
-    fast_mutex_t &transport_sync ();
+    mutex_t &transport_sync ();
     void close_stream_route ();
     bool stream_route_closed () const;
 
@@ -905,7 +910,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     uint64_t _pending_flow_state_sequence;
     bool _pending_flow_state_valid;
     uint64_t _pending_peer_control_sequence;
-    mutable fast_mutex_t _out_sync;
+    mutable mutex_t _out_sync;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (pipe_t)
 };

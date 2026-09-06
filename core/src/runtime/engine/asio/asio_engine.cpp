@@ -1027,10 +1027,10 @@ void zlink::asio_engine_t::on_read_complete (const boost::system::error_code &ec
     if (_pipeline.in_read_drain)
         return;
 
-    maybe_drain_stream_reads ();
+    maybe_drain_stream_reads (bytes_transferred);
 }
 
-void zlink::asio_engine_t::maybe_drain_stream_reads ()
+void zlink::asio_engine_t::maybe_drain_stream_reads (size_t last_read_bytes_)
 {
     if (_connection_facade.terminating || _pipeline.io_error)
         return;
@@ -1048,9 +1048,17 @@ void zlink::asio_engine_t::maybe_drain_stream_reads ()
     _pipeline.in_read_drain = true;
     size_t drained_loops = 0;
     size_t drained_bytes = 0;
+    //  The read that got us here already tells us whether the socket still has
+    //  data: only a read that filled its whole request can have left some
+    //  behind. A shorter one emptied the receive queue, so draining again would
+    //  buy nothing but an EAGAIN recv syscall per message.
+    size_t last_bytes = last_read_bytes_;
+    size_t last_request = _pipeline.last_read_request_size;
 
     while (!_connection_facade.terminating && !_pipeline.io_error && !_pipeline.read_pending
            && _input_stop_reason == input_running
+           && zlink::asio_stream_fastpath_policy::stream_read_filled_request (last_request,
+                                                                             last_bytes)
            && drained_loops < asio_stream_read_drain_max_loops
            && drained_bytes < asio_stream_read_drain_max_bytes) {
         const bool progressed = speculative_read ();
@@ -1061,6 +1069,8 @@ void zlink::asio_engine_t::maybe_drain_stream_reads ()
         if (_pipeline.last_speculative_read_bytes == 0)
             break;
         drained_bytes += _pipeline.last_speculative_read_bytes;
+        last_bytes = _pipeline.last_speculative_read_bytes;
+        last_request = _pipeline.last_read_request_size;
     }
 
     _pipeline.in_read_drain = false;

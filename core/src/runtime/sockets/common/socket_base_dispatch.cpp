@@ -483,7 +483,7 @@ void zlink::socket_base_t::apply_recorded_peer_weight (pipe_t *pipe_)
 {
     if (!pipe_)
         return;
-    scoped_fast_lock_t generation_lock (pipe_->transport_sync ());
+    scoped_lock_t generation_lock (pipe_->transport_sync ());
     uint32_t weight = 100;
     if (pipe_->peer_weight (&weight))
         (void) accept_peer_weight (pipe_, weight);

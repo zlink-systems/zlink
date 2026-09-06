@@ -72,7 +72,7 @@ class control_runtime_t
     ctx_t *_ctx;
     std::string _thread_name;
     thread_t _thread;
-    mutex_t _sync;
+    recursive_mutex_t _sync;
     condition_variable_t _cv;
     std::map<uint64_t, task_entry_t> _tasks;
     std::multimap<uint64_t, uint64_t> _schedule;

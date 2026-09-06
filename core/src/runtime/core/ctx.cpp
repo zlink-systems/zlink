@@ -305,7 +305,7 @@ int zlink::ctx_t::close_socket_and_wait (socket_base_t *&socket_, int timeout_ms
 
 size_t zlink::ctx_t::socket_count () const
 {
-    scoped_lock_t locker (const_cast<mutex_t &> (_slot_sync));
+    scoped_lock_t locker (const_cast<recursive_mutex_t &> (_slot_sync));
     return _socket_registry.socket_count ();
 }
 

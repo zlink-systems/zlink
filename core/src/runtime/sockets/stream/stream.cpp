@@ -176,7 +176,7 @@ zlink::stream_t::~stream_t ()
           _route_publication_mutex);
         for (size_t i = 0; i < route_shard_count; ++i) {
             route_shard_t &shard = _route_shards[i];
-            scoped_fast_lock_t shard_lock (shard.sync);
+            scoped_lock_t shard_lock (shard.sync);
             for (route_shard_t::routes_t::const_iterator route =
                    shard.routes.begin ();
                  route != shard.routes.end (); ++route) {
@@ -210,7 +210,7 @@ bool zlink::stream_t::publish_route_locked (uint32_t routing_id_,
         return false;
 
     route_shard_t &shard = route_shard_for (routing_id_);
-    scoped_fast_lock_t shard_lock (shard.sync);
+    scoped_lock_t shard_lock (shard.sync);
     route_shard_t::routes_t::iterator route = shard.routes.find (routing_id_);
     if (route != shard.routes.end ())
         return route->second == pipe_;
@@ -260,7 +260,7 @@ void zlink::stream_t::xpipe_terminated (pipe_t *pipe_)
             for (size_t shard_index = 0; shard_index < route_shard_count;
                  ++shard_index) {
                 route_shard_t &shard = _route_shards[shard_index];
-                scoped_fast_lock_t shard_lock (shard.sync);
+                scoped_lock_t shard_lock (shard.sync);
                 route_shard_t::routes_t::iterator route = shard.routes.begin ();
                 while (route != shard.routes.end ()) {
                     if (route->second != pipe_) {
@@ -295,7 +295,7 @@ int zlink::stream_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
     route_shard_t &shard = route_shard_for (routing_id);
     bool terminated = false;
     {
-        scoped_fast_lock_t shard_lock (shard.sync);
+        scoped_lock_t shard_lock (shard.sync);
         route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
         if (it != shard.routes.end () && it->second) {
             // STREAM close must preserve frames that were accepted before
@@ -796,7 +796,7 @@ int zlink::stream_t::xsend (
     if (!_more_out && !(msg_->flags () & msg_t::more) && msg_->get_routing_id () != 0) {
         const uint32_t routing_id = msg_->get_routing_id ();
         route_shard_t &shard = route_shard_for (routing_id);
-        scoped_fast_lock_t shard_lock (shard.sync);
+        scoped_lock_t shard_lock (shard.sync);
 
         route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
         if (it == shard.routes.end () || !it->second) {
@@ -841,7 +841,7 @@ int zlink::stream_t::xsend (
 
             const uint32_t routing_id = get_uint32 (static_cast<unsigned char *> (msg_->data ()));
             route_shard_t &shard = route_shard_for (routing_id);
-            scoped_fast_lock_t shard_lock (shard.sync);
+            scoped_lock_t shard_lock (shard.sync);
             route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
             if (it == shard.routes.end () || !it->second) {
                 errno = EHOSTUNREACH;
@@ -946,7 +946,7 @@ int zlink::stream_t::xsend_routed (
 
     const uint32_t routing_id = get_uint32 (target_rid_->data);
     route_shard_t &shard = route_shard_for (routing_id);
-    scoped_fast_lock_t shard_lock (shard.sync);
+    scoped_lock_t shard_lock (shard.sync);
     route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
     if (it == shard.routes.end () || !it->second) {
         errno = EHOSTUNREACH;
@@ -1005,7 +1005,7 @@ int zlink::stream_t::xselect_routed_submit_target (
     }
     const uint32_t routing_id = get_uint32 (router_rid_or_null_->data);
     route_shard_t &shard = route_shard_for (routing_id);
-    scoped_fast_lock_t shard_lock (shard.sync);
+    scoped_lock_t shard_lock (shard.sync);
     route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
     if (it == shard.routes.end () || !it->second) {
         errno = EHOSTUNREACH;
@@ -1107,7 +1107,7 @@ bool zlink::stream_t::xsend_writable_target_ready (
     routing_id = get_uint32 (target_rid_or_null_->data);
 
     route_shard_t &shard = route_shard_for (routing_id);
-    scoped_fast_lock_t shard_lock (shard.sync);
+    scoped_lock_t shard_lock (shard.sync);
     const route_shard_t::routes_t::const_iterator it =
       shard.routes.find (routing_id);
     if (it == shard.routes.end () || !it->second
@@ -1130,7 +1130,7 @@ bool zlink::stream_t::xsend_writable_target_known (
     const uint32_t routing_id = get_uint32 (target_rid_or_null_->data);
 
     route_shard_t &shard = route_shard_for (routing_id);
-    scoped_fast_lock_t shard_lock (shard.sync);
+    scoped_lock_t shard_lock (shard.sync);
     const route_shard_t::routes_t::const_iterator it =
       shard.routes.find (routing_id);
     return it != shard.routes.end () && it->second
@@ -1147,7 +1147,7 @@ bool zlink::stream_t::xsend_writable_target_for_pipe (
         return false;
 
     route_shard_t &shard = route_shard_for (routing_id);
-    scoped_fast_lock_t shard_lock (shard.sync);
+    scoped_lock_t shard_lock (shard.sync);
     const route_shard_t::routes_t::const_iterator it =
       shard.routes.find (routing_id);
     if (it == shard.routes.end () || it->second != pipe_)
@@ -1232,7 +1232,7 @@ bool zlink::stream_t::identify_peer (pipe_t *pipe_, bool locally_initiated_)
     uint32_t routing_id_value = 0;
     bool published = false;
     {
-        scoped_fast_lock_t transport_gate (pipe_->transport_sync ());
+        scoped_lock_t transport_gate (pipe_->transport_sync ());
         if (pipe_->stream_route_closed ())
             return false;
         peer = pipe_->retain_peer_snapshot ();
