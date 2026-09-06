@@ -1474,3 +1474,10 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 - 게이트 drift: `verify:m6a-runtime`(41건, TypeScript contract)이 `npm test`에 없어 위 결함들을 검출하지 못했음 → `package.json`의 `test`에 편입(커밋).
 - 미확정: M6A test 39(`bilateral endpoint-only manual connections learn peer RIDs and converge`) 1회 간헐 실패(request 제출 뒤 application 수신 대기) — 두 peer가 Object Server라 NotRequired 경로와 무관. 100회·최종 10회 통과. 별도 진단 범위로 남김(node 큐).
 - 커밋: `22ab7f4a13`(seal), `a58c6b6b81`(durable Join), `fd89e4e721`(lifecycle 종료·typed replay), `3e4013854e`(fixture), `1bd70a6f0e`(NotRequired handshake).
+
+## D-117 (2026-09-06, 머신 A) framework perf 규격 개정 적용 — 적합성 검토(§7 18개 개정, 13→11 병합)와 redline 초안을 감독자가 검토 후 반영
+
+- 적용: `framework/doc/framework/common/perf/README.{ko,en}.md` 전체 개정(1,418→1,838행). 표준 scenario 13→11(§10.5에 ordinary/Yield × SpotId 1/16 비교 셀 통합), baseline은 §11.1 session-echo-only(첫 검증 baseline), §11.2 channel-echo-only(RouteMesh·ClientServer 두 셀 필수 — 감독자 결정), §11.3 spot-local은 §10.7 참조. connector-only 제거. 규칙 소유: scenario 이름·payload matrix·CLI·schema는 이 문서, 언어 계획은 도구·metadata만.
+- 검토서의 SUPERVISOR-DECIDE 01~10(logicalStreams 10000·timeout 1000/5000/30000 ms·worker pool 8/4096/60000 ms·xorshift32 workload·schema v2 decimal-string 64-bit·ns ticks·nearest-rank percentile·HTTP admin·manual channel baseline·SHA-256 variant·fanout 분모·RSS 100 ms·driver slot·§23 manifest)은 harness 기본값이며 runtime 계약이 아니므로 초안대로 채택. 구현 중 근거가 생기면 값만 바꾼다.
+- 미결로 기록: SUPERVISOR-DECIDE-11(cpp Session relay 선언 `05-actors.ko.md:289` vs header `relay_request`), -12(dotnet `07-stream-session.ko.md:172` RelayAsync one-way 설명 vs session binding §의 Actor reply가 original STREAM 완료) — language-projections pass에서 소유 문서 확정. 언어별 perf 계획 문서(`framework/doc/framework/perf/bindings/*.md`)의 옛 이름은 redline이 손대지 않았으므로 후속 정리.
+- 다음: dotnet canonical runner 구현 job 1단계(harness·DTO·schema·timing·error mapping·metrics endpoint·격리 runner + session-echo-only + channel-echo-only 두 셀), 2단계(나머지 표준 9개).
