@@ -1662,3 +1662,6 @@ S-12(opus, `core-rf-S-12-summary.md`): 3/3 실패 추적 동일 — `zlink_close
 
 ## D-B154 (2026-09-07 04:00, 머신 B) S-11 결과 — `_in_active`·`_state` atomic 승격, `_state_active` 미러 삭제, Ir −4.2 %; 게이트 대기
 S-11(opus, `core-rf-S-11-summary.md`): TSan으로 두 쓰기 주체가 다른 배타 영역(poller = `receive.sync`, 공개 recv = lease)임을 확인 → (B) atomic 승격 채택. (A) lease 소유는 POLLIN level을 pipe가 active partition에 들어가기 전에 계산하게 돼(05-polling lost wake) 기각 + 새 플래그·적용 규칙 추가라 POSDDD 위반. S-1이 미룬 `_state` atomic 승격과 `_state_active` 미러 삭제(−1 중복 상태) 동시 수행, 63 호출 지점 무변경. TSan `_in_active` race 소멸(`test_two_poller_wake` 3 경고 → 0). Ir/msg 9,887 → **9,474**(−4.2 %), 호출 횟수 동일(wake 진리표 불변). lost-wake 세트 until-fail:10 ×2 통과. 분류 B. D 후보 등록(§7.5): `receive_once_guarded` — 공개 receive lease가 command owner를 배타하지 않는 구조(fq active partition도 같은 노출) — 04-thread-safety 소유권·성능 예산 결정 필요, 별도 job. 게이트 s12 종료 뒤 게이트 s11.
+
+## D-B155 (2026-09-07 04:20, 머신 B) S-12 채택 커밋 `73e6c54c60`; 게이트 s11 투입; 다음은 G-0 조용한 재기준
+게이트 s12(`gate-s12-summary.md`): stress baseline 2/50 → **0/50**, CLOSE_BUSY 계약 12/12, 5회 suite 230/230, hotpath 5셀 ≈1.00(stream_tcp 1.0001), mirror 32/32. 새 간헐 관찰: `test_single_lane_flow_snapshot_accounting`(부하 중 1회, solo 3/3) — 백로그. 게이트 s11 투입(마지막 2S job). 이후 순서: 모든 job 종료 → G-0(load < 1, with_stream 4스택 runs 3 + perf/c 스크린 runs 3 + 전 size) → G-A 공통 경로 프로파일 → G-job → Phase 3.
