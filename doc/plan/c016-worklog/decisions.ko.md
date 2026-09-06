@@ -1442,3 +1442,14 @@ Gate drift(F-R7-10/11): relocation conformance fixture의 옛 식별자·옛 기
 
 - node 전체 gate 재실행 중 `sample-regression`이 DeliveryDispatch 포트 29136 `EADDRINUSE`로 1건 실패(동시에 돌던 job의 gate가 SIGTERM으로 중단된 직후). 조사에서 `vite preview --host 127.0.0.1 --port 28xxx/29xxx` + `esbuild --service` 프로세스 16세트가 이전 ZoneWorld sample 실행들에서 남아 있었다(`/dev/shm/zlink-tmp-node/zlink-zoneworld-*/work/zoneworld-browser-dist`). 수동으로 종료했다.
 - 판단: sample runner의 cleanup 규칙(`framework/doc/framework/common/sample/README.ko.md` — 이번 run이 소유한 PID만, 잔류 없음) 위반. 원인은 node ZoneWorld runner가 browser preview 서버를 자식으로 추적하지 않는 것으로 보이며, 별도 job(node sample runner, 스펙 변경 없음)으로 root-fix한다. 포트 충돌 재발 방지책(포트 회피·재시도)은 두지 않는다.
+
+## D-113 (2026-09-06 12:49, 머신 A) Core perf 회귀 점검 — `hotpath_gate`(Release+LTO, callgrind) PASS on Core `8c30be709e`(= 0.17.0 재검증 Core `7738b8fd41` 이후 변경 없음)
+
+새 worktree `/home/hep7/project/zlink-core-gate`(origin/main detached, `core/build-gate`, LTO 켜짐)에서 `ctest -R hotpath_gate`: 4 cell 모두 ±5% 안.
+| cell | reference | measured | ratio |
+|---|---|---|---|
+| dealer_dealer_inproc | 3455.381 | 3421.992 | 0.9903 |
+| dealer_router_reqrep_inproc | 12054.895 | 12131.631 | 1.0064 |
+| pair_inproc | 2681.957 | 2683.537 | 1.0006 |
+| router_router_tcp | 2972.882 | 2968.118 | 0.9984 |
+§5.2 release 비교(C perf vs 직전 release)는 release 준비 단계 항목(D-104 B3)으로 남긴다. 기준값 갱신 없음.
