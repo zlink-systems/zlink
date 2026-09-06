@@ -228,9 +228,10 @@ impl SendFuture {
     fn arm(&mut self, completion_id: u64) -> Result<(), SubmitError> {
         let operation = self.operation.as_ref().expect("active send");
         let owner = Arc::clone(&operation.completion_owner);
-        let entry = Arc::clone(self.entry.get_or_insert_with(|| {
-            CompletionEntry::new(CompletionEntryKind::SendRetry, operation.target)
-        }));
+        let entry = Arc::clone(
+            self.entry
+                .get_or_insert_with(|| CompletionEntry::new(CompletionEntryKind::SendRetry)),
+        );
         owner.register_send_token(self.context, &entry, completion_id)
     }
 

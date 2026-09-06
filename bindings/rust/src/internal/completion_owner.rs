@@ -23,7 +23,7 @@ use crate::error::{
     ConfigError, ConfigResult, RecvError, RequestError, RequestResult, SubmitError, SubmitResult,
 };
 use crate::ffi;
-use crate::message::{Message, RoutingId};
+use crate::message::Message;
 use crate::native_errors::{
     check_config_rc, check_recv_rc, request_error_from_result, send_terminal_error,
     submit_error_from_errno,
@@ -58,7 +58,6 @@ struct CaptureResult {
 #[derive(Clone, Copy)]
 struct ParkedWritable {
     completion_id: u64,
-    peer_rid: ffi::zlink_routing_id_t,
     send_result: ffi::zlink_send_complete_result_t,
     send_terminal_errno: i32,
 }
@@ -78,16 +77,14 @@ struct EntryState {
 /// One provisional send or request operation.
 pub(crate) struct CompletionEntry {
     kind: CompletionEntryKind,
-    expected_target: Option<RoutingId>,
     state: Mutex<EntryState>,
     changed: Condvar,
 }
 
 impl CompletionEntry {
-    pub(crate) fn new(kind: CompletionEntryKind, expected_target: Option<RoutingId>) -> Arc<Self> {
+    pub(crate) fn new(kind: CompletionEntryKind) -> Arc<Self> {
         Arc::new(Self {
             kind,
-            expected_target,
             state: Mutex::new(EntryState {
                 completion_id: 0,
                 published: false,
@@ -144,16 +141,14 @@ impl CompletionEntry {
     }
 
     fn capture(&self, completion: &mut ffi::zlink_completion_t) -> CaptureResult {
-        let outcome = completion_outcome(self.kind, self.expected_target.as_ref(), completion);
+        let outcome = completion_outcome(self.kind, completion);
         self.capture_outcome(outcome)
     }
 
     fn capture_parked(&self, parked: &ParkedWritable) -> CaptureResult {
         let outcome = writable_outcome(
-            self.expected_target.as_ref(),
             ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE,
             parked.completion_id,
-            &parked.peer_rid,
             parked.send_result,
             parked.send_terminal_errno,
         );
@@ -367,9 +362,8 @@ impl CompletionOwner {
 
     pub(crate) fn register_request(
         self: &Arc<Self>,
-        target: Option<RoutingId>,
     ) -> Result<(Arc<CompletionEntry>, *mut c_void), SubmitError> {
-        let entry = CompletionEntry::new(CompletionEntryKind::Request, target);
+        let entry = CompletionEntry::new(CompletionEntryKind::Request);
         let context = self.next_context();
         let mut state = self.state.lock().expect("completion owner");
         if state.shutdown {
@@ -499,7 +493,6 @@ impl CompletionOwner {
                     // not landed yet; replay this record when it does.
                     let parked = ParkedWritable {
                         completion_id: completion.completion_id,
-                        peer_rid: completion.peer_rid,
                         send_result: completion.send_result,
                         send_terminal_errno: completion.send_terminal_errno,
                     };
@@ -705,34 +698,24 @@ impl CompletionOwner {
 }
 
 fn writable_outcome(
-    expected_target: Option<&RoutingId>,
     kind: ffi::zlink_completion_kind_t,
     completion_id: u64,
-    peer_rid: &ffi::zlink_routing_id_t,
     send_result: ffi::zlink_send_complete_result_t,
     send_terminal_errno: i32,
 ) -> CompletionOutcome {
-    let target_matches = match expected_target {
-        Some(expected) => {
-            peer_rid.size as usize == expected.size()
-                && peer_rid.data[..expected.size()] == expected.as_bytes()[..]
-        }
-        None => peer_rid.size == 0,
+    let result = if kind != ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE {
+        Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO))
+    } else if send_result == ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED
+        && send_terminal_errno == 0
+    {
+        Ok(())
+    } else if send_result == ffi::zlink_send_complete_result_t::ZLINK_SEND_TERMINAL
+        && send_terminal_errno != 0
+    {
+        Err(send_terminal_error(send_terminal_errno))
+    } else {
+        Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO))
     };
-    let result =
-        if kind != ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE || !target_matches {
-            Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO))
-        } else if send_result == ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED
-            && send_terminal_errno == 0
-        {
-            Ok(())
-        } else if send_result == ffi::zlink_send_complete_result_t::ZLINK_SEND_TERMINAL
-            && send_terminal_errno != 0
-        {
-            Err(send_terminal_error(send_terminal_errno))
-        } else {
-            Err(SubmitError::new(SubmitResult::InternalError, libc::EPROTO))
-        };
     CompletionOutcome::Writable {
         completion_id,
         result,
@@ -741,7 +724,6 @@ fn writable_outcome(
 
 fn completion_outcome(
     kind: CompletionEntryKind,
-    expected_target: Option<&RoutingId>,
     completion: &mut ffi::zlink_completion_t,
 ) -> CompletionOutcome {
     struct CloseGuard(*mut ffi::zlink_completion_t);
@@ -754,10 +736,8 @@ fn completion_outcome(
 
     match kind {
         CompletionEntryKind::SendRetry => writable_outcome(
-            expected_target,
             completion.kind,
             completion.completion_id,
-            &completion.peer_rid,
             completion.send_result,
             completion.send_terminal_errno,
         ),
@@ -765,10 +745,8 @@ fn completion_outcome(
             if completion.kind == ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE =>
         {
             writable_outcome(
-                expected_target,
                 completion.kind,
                 completion.completion_id,
-                &completion.peer_rid,
                 completion.send_result,
                 completion.send_terminal_errno,
             )
@@ -846,6 +824,7 @@ fn request_result_from_native(result: ffi::zlink_request_result_t) -> RequestRes
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::RoutingId;
     use std::task::Waker;
 
     #[test]
@@ -922,7 +901,7 @@ mod tests {
 
     #[test]
     fn capture_before_publish_joins_exactly_once() {
-        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, None);
+        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
         let mut completion = ffi::zlink_completion_t::empty();
         completion.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
         completion.completion_id = 41;
@@ -937,12 +916,10 @@ mod tests {
 
     #[test]
     fn parked_writable_replays_like_a_live_record() {
-        let target = RoutingId::from(b"parked-target");
-        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, Some(target));
+        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
         entry.publish_writable(71);
         let parked = ParkedWritable {
             completion_id: 71,
-            peer_rid: *target.as_raw(),
             send_result: ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED,
             send_terminal_errno: 0,
         };
@@ -954,7 +931,7 @@ mod tests {
 
     #[test]
     fn mismatched_writable_token_cannot_resume_the_expected_waiter() {
-        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, None);
+        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
         entry.publish_writable(41);
         let mut wrong = ffi::zlink_completion_t::empty();
         wrong.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
@@ -974,18 +951,44 @@ mod tests {
     }
 
     #[test]
-    fn writable_target_must_match() {
-        let target = RoutingId::from(b"expected-target");
-        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, Some(target));
+    fn writable_for_waiter_token_is_delivered_without_peer_rid_reverification() {
+        for kind in [CompletionEntryKind::SendRetry, CompletionEntryKind::Request] {
+            for capture_first in [false, true] {
+                let entry = CompletionEntry::new(kind);
+                let waker = Waker::noop();
+                let mut completion = ffi::zlink_completion_t::empty();
+                completion.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
+                completion.completion_id = 51;
+                // Deliberately vary Core-owned metadata: only the wait token
+                // determines which packet resumes in the binding.
+                completion.peer_rid = *RoutingId::from(b"core-peer").as_raw();
+                completion.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
+
+                if capture_first {
+                    entry.capture(&mut completion);
+                    assert!(entry.poll_writable(waker).is_pending());
+                    entry.publish_writable(51);
+                } else {
+                    entry.publish_writable(51);
+                    assert!(entry.poll_writable(waker).is_pending());
+                    entry.capture(&mut completion);
+                }
+                assert!(matches!(entry.poll_writable(waker), Poll::Ready(Ok(()))));
+                assert!(entry.poll_writable(waker).is_pending());
+            }
+        }
+    }
+
+    #[test]
+    fn writable_entry_rejects_non_writable_completion_kind() {
+        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
         let waker = Waker::noop();
 
         entry.publish_writable(51);
-        let mut wrong_target = ffi::zlink_completion_t::empty();
-        wrong_target.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
-        wrong_target.completion_id = 51;
-        wrong_target.peer_rid = *RoutingId::from(b"other-target").as_raw();
-        wrong_target.send_result = ffi::zlink_send_complete_result_t::ZLINK_SEND_ADMITTED;
-        entry.capture(&mut wrong_target);
+        let mut wrong_kind = ffi::zlink_completion_t::empty();
+        wrong_kind.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_REQUEST;
+        wrong_kind.completion_id = 51;
+        entry.capture(&mut wrong_kind);
         assert!(matches!(
             entry.poll_writable(waker),
             Poll::Ready(Err(error))
@@ -997,7 +1000,7 @@ mod tests {
     #[test]
     fn writable_entry_rearms_with_each_new_token() {
         let target = RoutingId::from(b"expected-target");
-        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, Some(target));
+        let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
         let waker = Waker::noop();
 
         for token in [52, 53] {
@@ -1014,7 +1017,7 @@ mod tests {
 
     #[test]
     fn request_entry_moves_from_writable_to_request_completion() {
-        let entry = CompletionEntry::new(CompletionEntryKind::Request, None);
+        let entry = CompletionEntry::new(CompletionEntryKind::Request);
         let waker = Waker::noop();
 
         entry.publish_writable(54);
@@ -1039,7 +1042,7 @@ mod tests {
 
     #[test]
     fn request_writable_shutdown_is_a_typed_submit_failure() {
-        let entry = CompletionEntry::new(CompletionEntryKind::Request, None);
+        let entry = CompletionEntry::new(CompletionEntryKind::Request);
         entry.publish_writable(56);
         entry.shutdown();
         let waker = Waker::noop();
@@ -1058,7 +1061,7 @@ mod tests {
             (libc::ENOENT, SubmitResult::NotFound),
             (156_384_765, SubmitResult::Terminated),
         ] {
-            let entry = CompletionEntry::new(CompletionEntryKind::SendRetry, None);
+            let entry = CompletionEntry::new(CompletionEntryKind::SendRetry);
             entry.publish_writable(61);
             let mut completion = ffi::zlink_completion_t::empty();
             completion.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_WRITABLE;
@@ -1078,7 +1081,7 @@ mod tests {
 
     #[test]
     fn detached_late_completion_discards_outcome_after_cleanup() {
-        let entry = CompletionEntry::new(CompletionEntryKind::Request, None);
+        let entry = CompletionEntry::new(CompletionEntryKind::Request);
         entry.detach();
         let mut completion = ffi::zlink_completion_t::empty();
         completion.kind = ffi::zlink_completion_kind_t::ZLINK_COMPLETION_REQUEST;
