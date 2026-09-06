@@ -1180,12 +1180,12 @@ test('runtime weight changes increment the local descriptor revision and preserv
     }
   });
   const initial = runtime.topology.localDescriptor();
-  await runtime.updateLocalWeights({ placementWeight: 0 });
+  await runtime.updateLocalDescriptor({ placementWeight: 0 });
   const placement = runtime.topology.localDescriptor();
   assert.equal(placement.descriptorRevision, initial.descriptorRevision + 1n);
   assert.equal(placement.placementWeight, 0);
 
-  await runtime.updateLocalWeights({
+  await runtime.updateLocalDescriptor({
     channelName: 'alpha',
     channelWeight: 10_000
   });

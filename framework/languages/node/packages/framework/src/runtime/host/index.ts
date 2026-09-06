@@ -1787,10 +1787,7 @@ export class ZLinkFrameworkRuntimeHost implements
   ): Promise<void> {
     const node = this.spotNodeRuntime?.meshNode(meshName);
     if (node !== undefined) {
-      await Promise.all((this.spotNodeRuntime?.serverChannels(meshName) ?? [])
-        .map(async ([channelName]) => {
-          await node.setChannelWeight(channelName, 0);
-        }));
+      await node.publishDraining?.();
     }
     await this.spotNodeRuntime?.publishMeshNodeState(
       ZLinkFrameworkRuntimeState.Draining,
@@ -2683,6 +2680,7 @@ export class ZLinkFrameworkRuntimeHost implements
     }).create();
     return {
       ...options,
+      peerAdmissionSealed: (meshName: string) => !this.admission.accepts(meshName),
       messageFollowReceiver: (record: ServiceMessageFollowRecord) => {
         if (record.source.kind === 'actor') {
           this.actorClientLocationResolver?.invalidateActorRouteIfMatches({

@@ -90,6 +90,7 @@ export interface ZLinkBackendMeshNode {
     >
   ): Promise<boolean>;
   shutdown(timeoutMs: number): RequestResult;
+  publishDraining?(): Promise<void>;
   close(): void;
   addChannelName(name: string): void;
   setChannelWeight(name: string, weight: number): Promise<void>;
@@ -739,6 +740,7 @@ export interface ZLinkMeshBackendAdapter {
       readonly trustProfile?: string;
       readonly applicationJobQueue: import('../../application-jobs/contracts').ApplicationJobQueuePort;
       readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;
+      readonly peerAdmissionSealed?: () => boolean;
     }
   ): ZLinkBackendMeshNode;
 }

@@ -96,6 +96,7 @@ export interface RawServiceMeshRuntimeOptions {
   readonly peerTimeoutMs?: number;
   readonly bindingPort: ZLinkRawBindingPort;
   readonly applicationJobQueue?: ApplicationJobQueuePort;
+  readonly peerAdmissionSealed?: () => boolean;
   readonly onReceiveFlowConfigFailure?: (error: unknown) => void;
   readonly onMailboxReady?: (domain: 'application' | 'infrastructure') => void;
   readonly onPeerNotRequired?: (
@@ -174,6 +175,7 @@ export class RawServiceMeshRuntime {
   private monitorDrainBuffer: ZLinkRawMonitorRecord[] = [];
   private readonly bindingPort: ZLinkRawBindingPort;
   private readonly applicationJobQueue: ApplicationJobQueuePort;
+  private readonly peerAdmissionSealed?: () => boolean;
   private readonly applicationJobStop = new AbortController();
   private readonly onPeerNotRequired?: RawServiceMeshRuntimeOptions['onPeerNotRequired'];
   private readonly onPeerDisconnected?: RawServiceMeshRuntimeOptions['onPeerDisconnected'];
@@ -199,6 +201,7 @@ export class RawServiceMeshRuntime {
       throw new TypeError('Raw service runtime requires the host Application Job Queue.');
     }
     this.applicationJobQueue = options.applicationJobQueue;
+    this.peerAdmissionSealed = options.peerAdmissionSealed;
     this.onPeerNotRequired = options.onPeerNotRequired;
     this.onPeerDisconnected = options.onPeerDisconnected;
     this.onProtocolError = options.onProtocolError;
@@ -361,7 +364,7 @@ export class RawServiceMeshRuntime {
   }
 
   async announcePeer(nodeRoutingId: string): Promise<boolean> {
-    if (!this.expectedPeers.has(nodeRoutingId)) return false;
+    if (!this.expectedPeers.has(nodeRoutingId) || this.peerAdmissionSealed?.() === true) return false;
     return this.send(
       nodeRoutingId,
       [encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())]
@@ -395,13 +398,16 @@ export class RawServiceMeshRuntime {
     return accepted;
   }
 
-  async updateLocalWeights(options: {
+  async updateLocalDescriptor(options: {
     readonly placementWeight?: number;
     readonly channelName?: string;
     readonly channelWeight?: number;
+    readonly state?: 'draining';
   }): Promise<void> {
     const current = this.topology.localDescriptor();
-    const channels = options.channelName === undefined
+    const channels = options.state === 'draining'
+      ? current.channels.map(channel => ({ ...channel, weight: 0 }))
+      : options.channelName === undefined
       ? current.channels
       : current.channels.map(channel =>
           channel.name === options.channelName
@@ -410,6 +416,7 @@ export class RawServiceMeshRuntime {
     const next = {
       ...current,
       descriptorRevision: current.descriptorRevision + 1n,
+      state: options.state ?? current.state,
       placementWeight: options.placementWeight ?? current.placementWeight,
       channels
     };
@@ -699,6 +706,7 @@ export class RawServiceMeshRuntime {
         && received.parts[0]!.byteLength === 0
       )
     ) {
+      if (this.peerAdmissionSealed?.() === true) return 'dropped';
       return await this.send(
         received.sourceRid,
         [encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor())]
@@ -708,6 +716,9 @@ export class RawServiceMeshRuntime {
     }
     try {
       const header = decodeHeader(received.parts[0]!);
+      if (header.command === M6aServiceWireCommand.hello && this.peerAdmissionSealed?.() === true) {
+        return 'dropped';
+      }
       if (
         header.command === M6aServiceWireCommand.hello
         || header.command === M6aServiceWireCommand.admit

@@ -214,7 +214,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     routingId: string | undefined,
     private readonly bindingPort: ZLinkRawBindingPort,
     private readonly applicationJobQueue?: ApplicationJobQueuePort,
-    private readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void
+    private readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void,
+    private readonly peerAdmissionSealed?: () => boolean
   ) {
     if (meshName.length === 0) throw new TypeError('MeshName must be non-empty.');
     if (routingId === undefined || routingId.length === 0) {
@@ -366,6 +367,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         this.resolveAdvertisedEndpoint(boundEndpoint),
       bindingPort: this.bindingPort,
       applicationJobQueue: this.requireApplicationJobQueue(),
+      peerAdmissionSealed: this.peerAdmissionSealed,
       onReceiveFlowConfigFailure: this.applicationJobReceiveFlowFailureSink,
       onMailboxReady: (domain) => this.readyHandler?.(
         domain === 'application' ? ReadyDomain.Application : ReadyDomain.Infrastructure
@@ -436,6 +438,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return RequestResult.Ok;
   }
 
+  async publishDraining(): Promise<void> {
+    for (const name of this.channels.keys()) this.channels.set(name, 0);
+    await this.requireRuntime().updateLocalDescriptor({ state: 'draining' });
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -460,7 +467,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     if (this.channels.get(name) === validated) return;
     this.channels.set(name, validated);
     if (this.runtime !== undefined) {
-      await this.runtime.updateLocalWeights({
+      await this.runtime.updateLocalDescriptor({
         channelName: name,
         channelWeight: validated
       });
@@ -472,7 +479,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     if (this.placementWeight === validated) return;
     this.placementWeight = validated;
     if (this.runtime !== undefined) {
-      await this.runtime.updateLocalWeights({ placementWeight: validated });
+      await this.runtime.updateLocalDescriptor({ placementWeight: validated });
     }
   }
 

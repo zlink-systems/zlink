@@ -129,6 +129,7 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
   readonly detachedTaskRunner?: ZLinkDetachedTaskRunner;
   readonly applicationJobQueue?: ApplicationJobQueue;
   readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;
+  readonly peerAdmissionSealed?: (meshName: string) => boolean;
   readonly meshRecordDispatcher?: (
     meshName: string,
     owner: ReadyRecord,
@@ -286,7 +287,8 @@ export class ZLinkSpotNodeRuntimeManager {
         routingId,
         applicationJobQueue: this.applicationJobQueue,
         applicationJobReceiveFlowFailureSink:
-          this.options.applicationJobReceiveFlowFailureSink
+          this.options.applicationJobReceiveFlowFailureSink,
+        peerAdmissionSealed: () => this.options.peerAdmissionSealed?.(spotNodeName) ?? false
       });
       node.setMailboxRecordDroppedHandler?.((record) =>
         this.options.dispatchErrors?.report({
