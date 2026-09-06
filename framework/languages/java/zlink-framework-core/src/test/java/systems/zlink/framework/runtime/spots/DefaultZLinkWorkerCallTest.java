@@ -57,7 +57,7 @@ class DefaultZLinkWorkerCallTest {
                 }).yield());
             assertEquals(
                 ZLinkFrameworkErrorKind
-                    .NOT_CONFIGURED,
+                    .INVALID_OPERATION,
                 failure.kind());
         }
         assertEquals(0, executions.get());
