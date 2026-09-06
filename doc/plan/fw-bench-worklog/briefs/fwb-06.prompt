@@ -1,0 +1,26 @@
+# job fwb-06 — Phase 4: Kotlin bench 구현
+
+모델: opus. 상한 1 h. 단독 실행.
+규격 전체. 참조: fwb-05가 만든 Java 구성(Gradle·proto 생성 재사용).
+
+## 목표
+
+framework/languages/java/bench/with-grpc/ 안에 Kotlin 구성을 추가하거나 별도 모듈로 만든다.
+
+- grpc-kotlin: grpc-kotlin coroutine stub. ZLink 쪽이 zlink-framework-kotlin 의 suspend
+  인터페이스를 쓰므로 gRPC도 coroutine stub이어야 공정하다. coroutine stub을 쓸 수 없으면
+  blocking stub을 쓰되 그 사유를 결과에 기록한다(규격 §8.1).
+- zlink-kotlin: bindings/kotlin 의 raw binding, ROUTER↔ROUTER (규격 §1.3)
+- zlink-framework-kotlin: zlink-framework-kotlin 의 RouteMesh channel request/send,
+  codec은 Java 것을 공유
+
+포트 대역은 규격 §9의 kotlin 대역(5101-5109).
+
+## 주의
+
+JVM warmup은 fwb-05와 같은 기준으로 두고 값을 기록한다.
+client CPU 95% 초과 셀은 포화 표시.
+
+## 산출·금지
+
+fwb-04와 동일. 18셀, payload별 0.80 판정, 게이트 결과. 커밋 금지.

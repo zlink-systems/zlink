@@ -1,0 +1,27 @@
+# job fwb-07 — Phase 5: C++ bench 구현
+
+모델: opus. 상한 1.5 h. 단독 실행.
+규격 전체. 참조: framework/languages/dotnet/bench/with-grpc/
+
+## 목표
+
+framework/languages/cpp/bench/with-grpc/ 에 CMake 타깃으로 client 1 + server 3.
+
+- grpc-cpp: 시스템 libgrpc++ (이 머신 1.51.1)와 grpc_cpp_plugin 을 사용한다.
+  vcpkg로 gRPC를 빌드하지 않는다. gRPC 버전을 결과에 반드시 남긴다.
+- zlink-cpp: bindings/cpp 의 raw binding, ROUTER↔ROUTER (규격 §1.3)
+- zlink-framework-cpp: framework/languages/cpp/framework 의 RouteMesh channel request/send,
+  codec은 zlink::framework_codec_protobuf
+
+포트 대역은 규격 §9의 cpp 대역(5111-5119).
+
+## 주의
+
+C++ raw binding은 C API의 얇은 계층이므로 zlink-cpp / zlink-c 가 1.0 근처여야 한다.
+크게 낮으면 bench 구현 문제일 가능성을 먼저 확인하고 원인을 보고한다.
+
+빌드가 20코어를 점유하므로 빌드를 먼저 끝내고 그다음에 측정한다. 빌드와 측정을 섞지 않는다.
+
+## 산출·금지
+
+fwb-04와 동일. 18셀, payload별 0.80 판정, 게이트 결과. 커밋 금지.
