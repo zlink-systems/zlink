@@ -137,6 +137,67 @@ drain 대기를 넣은 뒤 18셀 전부 완료, 실패 0, 오염 0.
   단정하지 않는다. 판정은 KMSG/s로 하고 지연은 함께 기록한다.
 - **후속**: 0.18.0 후보 — framework send 경로의 backpressure와 drain 특성.
 
+## FB-010 — .NET raw request는 window 100 중 8.4만 유지한다 (harness 결함)
+
+- **관찰** (job `fwb-02`): Little's law로 확인한 실제 in-flight 수.
+
+  | 행 | 처리량/s | 평균 ms | in-flight |
+  |---|---|---|---|
+  | `grpc-c` | 64,567 | 1.529 | 98.7 |
+  | `zlink-c` | 425,907 | 0.213 | 90.7 |
+  | `grpc-dotnet` | 196,191 | 0.468 | 91.8 |
+  | `zlink-framework-dotnet` | 3,017 | 32.818 | 99.0 |
+  | **`zlink-dotnet` (raw)** | 37,113 | 0.225 | **8.4** |
+
+- **원인**: `RunRawRequestBytesAsync`에서 동기적으로 완료된 request가 `pending`에 들어가지
+  않아 `pending.Count`가 실제 깊이를 낮게 센다. 같은 harness가 같은 run에서 gRPC 91.8,
+  framework 99.0을 유지하므로 window 로직 자체는 동작한다. raw ZLink 경로에 한정된 결함이다.
+- **결정** (2026-09-07, 감독관): `zlink-dotnet / zlink-c` 두 셀을 **`unsupported`로 표시하고
+  값을 인용하지 않는다.** 0.087·0.166은 window 8 실험을 window 91 실험으로 나눈 값이다.
+- **적용**: Phase 2가 harness를 복제하기 **전에** 고친다. 고치지 않으면 네 언어가 같은
+  결함을 물려받고 formula 1이 다섯 언어 전부에서 무의미해진다.
+
+## FB-011 — 0.80 판정 전에 G5를 행 단위로 강제한다
+
+- **관찰**: 3회 ROUTER run에서 gRPC 12행 전부와 `zlink-dotnet` raw request 4행은 ±7.7% 이내로
+  통과하는데, ZLink 10개 행이 실패한다. 최악은 `zlink-c` request-window @4096의 **75.7%**
+  스프레드(214.7 / 396.4 / 225.6 KOPS)다. 같은 run에서 다른 행들이 안정적으로 수렴하므로
+  머신 잡음이 아니다.
+- **결정**: 어떤 0.80 판정도 **분자와 분모가 모두 G5를 통과한 행**으로만 낸다. 통과하지
+  못한 행으로 만든 비율은 중앙값으로 계산했더라도 싣지 않는다.
+- **현재 상태**: 네 판정값 중 **양쪽이 G5를 통과하는 것은 하나도 없다.**
+
+## FB-012 — saturation flood 뒤 framework route가 영구히 끊긴다 (framework 결함)
+
+- **관찰** (job `fwb-02`): @1024 framework send-saturation flood 뒤 RouteMesh peer 연결이
+  끊기고 재연결되지 않아 이후 framework 셀 세 개가 전부 실패한다.
+  `Channel request to 'bench' failed because the target route is not connected.`
+  `dotnet-router-1`과 `dotnet-dealer-1`에서 재현됐다.
+- **성격**: harness 결함이 아니라 **framework 결함**이다. 이 캠페인은 고치지 않는다.
+- **영향**: framework @4096 셀이 3회 중 2회만 측정됐다. 이 상태로는 framework의 4096
+  거동을 신뢰할 수 없다.
+- **후속**: 0.18.0 후보. saturation 뒤 RouteMesh peer 연결 유지와 재연결.
+
+## FB-013 — send-saturation 처리량은 active window 경계에서 표본화한다
+
+- **관찰** (job `fwb-02`): 현재 구현은 **drain이 끝난 뒤** server snapshot을 읽는다
+  (`Client/Program.cs:510`, `:524`). 그래서 표의 값은 server의 소비율이 아니라
+  "결국 server가 받은 것으로 걸러진 client 제출률"이다. framework @1024 run 2는 표에
+  125.9 KOPS인데 실제 소비율은 629,403 / 21.235 s ≈ **29.6 KOPS**로, 표가 약 4.2배 부풀린다.
+  gRPC·raw는 drain이 0.2~0.5초라 차이가 무시할 수준이다.
+- **결정** (2026-09-07, 감독관): **규격 §5가 이미 "server가 active phase에서 받은 messages
+  수"라고 정하고 있다.** 현재 구현이 그 계약을 어기고 있는 것이므로, 규격을 바꾸는 것이
+  아니라 구현을 규격에 맞춘다. snapshot을 **active window가 닫히는 시점**에 읽고, drain은
+  settle 용도로만 쓴다. 관측한 drain 시간은 셀마다 따로 기록한다.
+- **효과**: framework send 값이 크게 내려간다. 그것이 그 스택이 실제로 지탱하는 소비율이다.
+
+## FB-014 — C bench의 send-saturation은 client 제출 수를 센다 (G3 실패)
+
+- **관찰** (job `fwb-02`): `run_send_loop`가 `r.completed = seq`로 client 자신의 제출 수를
+  기록한다. 규격 §5는 server 수신 수를 요구한다. C harness에는 server stats endpoint가 없다.
+- **결정**: `zlink-c`·`grpc-c`의 send-saturation 4셀을 **판정에서 `unsupported`로 둔다.**
+- **성격**: 기존 결함이며 이 캠페인이 만든 것이 아니다.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
@@ -149,5 +210,6 @@ drain 대기를 넣은 뒤 18셀 전부 완료, 실패 0, 오염 0.
 
 | job | Phase | 모델 | 상태 | 결과 |
 |---|---|---|---|---|
-| `fwb-02` | 0 | opus | 코드 변경 완료, 측정 진행 중 | raw ROUTER↔ROUTER 전환(.NET·C), 기존 결함 2건(FB-006·FB-007) 수정 |
+| `fwb-02` | 0 | opus | 1차 완료·커밋 `7ecb81a461` | ROUTER 전환, harness 결함 4건 수정, FB-008 구현, gated pass 8/8. 판정은 FB-010·FB-011로 보류 |
+| `fwb-02b` | 0 | opus | 진행 중 | FB-010 window 회계, FB-013 snapshot 시점, 재측정 |
 | `fwb-01` | 1(문서) | opus | 완료·커밋 `146db4da4c` | 규격 5언어 중립화(ko 338행·en 359행), FB-001~003 반영. 고정값·RPC 미변경 확인. FB-004·FB-005 추가 지시 |
