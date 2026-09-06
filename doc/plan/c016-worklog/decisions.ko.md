@@ -1437,3 +1437,8 @@ Gate drift(F-R7-10/11): relocation conformance fixture의 옛 식별자·옛 기
 
 - D-104의 F-R2-5·B2, D-106의 F-R1-9/13/20, D-109의 bindings 구현 9건(F-R3-1, 2, 11~17), D-103에서 "B가 하는 중"으로 적은 Core perf 회귀 점검(release build hotpath gate)은 모두 A(이 세션)의 큐다. `0.18.0-candidates.ko.md`의 담당 열을 A로 고쳤다.
 - 순서: (1) 진행 중인 framework 수정 job과 스펙 redline 적용, (2) bindings 구현 9건은 코드 재검증 뒤 언어별 job(두 writer 없음), (3) Core hot path 항목은 0.18.0 후보로 유지하되 Core perf 회귀 점검(hotpath_gate, Release+LTO)은 framework gate가 조용할 때 A가 실행.
+
+## D-112 (2026-09-06, 머신 A) 발견 — node ZoneWorld sample runner가 `vite preview`(+esbuild service) 프로세스를 정리하지 않고 남긴다
+
+- node 전체 gate 재실행 중 `sample-regression`이 DeliveryDispatch 포트 29136 `EADDRINUSE`로 1건 실패(동시에 돌던 job의 gate가 SIGTERM으로 중단된 직후). 조사에서 `vite preview --host 127.0.0.1 --port 28xxx/29xxx` + `esbuild --service` 프로세스 16세트가 이전 ZoneWorld sample 실행들에서 남아 있었다(`/dev/shm/zlink-tmp-node/zlink-zoneworld-*/work/zoneworld-browser-dist`). 수동으로 종료했다.
+- 판단: sample runner의 cleanup 규칙(`framework/doc/framework/common/sample/README.ko.md` — 이번 run이 소유한 PID만, 잔류 없음) 위반. 원인은 node ZoneWorld runner가 browser preview 서버를 자식으로 추적하지 않는 것으로 보이며, 별도 job(node sample runner, 스펙 변경 없음)으로 root-fix한다. 포트 충돌 재발 방지책(포트 회피·재시도)은 두지 않는다.
