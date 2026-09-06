@@ -78,6 +78,7 @@ endif()
 
 set(tests
   ${INTEGRATION_TEST_ROOT}/test_request_writable_credit
+  ${INTEGRATION_TEST_ROOT}/test_ready_empty_pipe_first_data
   ${INTEGRATION_TEST_ROOT}/test_ancillaries
   ${INTEGRATION_TEST_ROOT}/test_asio_ws
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_enhanced

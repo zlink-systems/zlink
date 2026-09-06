@@ -1877,7 +1877,10 @@ bool zlink::pipe_t::release_writes_for_transport_pair ()
     if (!_transport_pair_write_held)
         return false;
     _transport_pair_write_held = false;
-    if (_state != active || !check_hwm_unlocked ())
+    // The routing-id preamble may still consume the cached credit. Reuse
+    // normal admission's snapshot/waiter/recheck so either read order wakes
+    // the writer when the empty pipe can admit its first complete message.
+    if (_state != active || !hwm_credit_ready_unlocked (NULL))
         return false;
     _out_active = true;
     //  This transition removes only the transport-wait cause. A remote PAUSE
