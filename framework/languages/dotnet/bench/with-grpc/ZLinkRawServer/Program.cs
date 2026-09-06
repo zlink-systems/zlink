@@ -24,6 +24,11 @@ app.MapGet("/bench/stats", (BenchServerMetrics metrics) => Results.Ok(metrics.Sn
 using var context = Zlink.CreateContext();
 using var requestRouter = context.CreateRouterSocket();
 using var commandRouter = context.CreateRouterSocket();
+// FB-001 / bench spec 1.3: a ROUTER client addresses this server by routing id,
+// so both sockets must announce their well-known id before bind. A DEALER client
+// ignores these ids, so the legacy DEALER->ROUTER configuration still works.
+requestRouter.SetRoutingId(RoutingId.From(BenchRoutingIds.RawRequestServer));
+commandRouter.SetRoutingId(RoutingId.From(BenchRoutingIds.RawCommandServer));
 requestRouter.Bind(endpoint);
 commandRouter.Bind(commandEndpoint);
 
@@ -54,7 +59,7 @@ static void RunRequestRouter(IRouterSocket router, BenchServerMetrics metrics)
             }
 
             var body = PayloadPart(received);
-            if (received.RequestSeq.HasValue)
+            if (received.ReplyToken is not null)
             {
                 ReplyMultipart(received, body);
             }
@@ -62,6 +67,14 @@ static void RunRequestRouter(IRouterSocket router, BenchServerMetrics metrics)
             {
                 SendMultipart(received, body);
             }
+        }
+        catch (ZlinkRecvException ex) when (ex.Result == ZlinkRecvException.ErrorCode.NoData)
+        {
+            // A blocking Recv returns `false` only under RecvFlags.DontWait; with
+            // RecvFlags.None an expired RCVTIMEO surfaces as NoData/EAGAIN. Core
+            // spec 07-router sec.8 defines that as "no record available", not a
+            // failure, so it must not be logged or counted as a server error.
+            continue;
         }
         catch (Exception ex)
         {
@@ -105,6 +118,12 @@ static void RunCommandRouter(IRouterSocket router, BenchServerMetrics metrics)
 
             var body = PayloadPart(received);
             metrics.Record(DecodeRawPayload(body));
+        }
+        catch (ZlinkRecvException ex) when (ex.Result == ZlinkRecvException.ErrorCode.NoData)
+        {
+            // See RunRequestRouter: NoData/EAGAIN from a blocking Recv is a normal
+            // idle return, not an error.
+            continue;
         }
         catch (Exception ex)
         {

@@ -276,6 +276,22 @@ int main ()
         std::fprintf (stderr, "zlink server: failed to create context/socket\n");
         return 2;
     }
+    // FB-001: the raw C row is measured as ROUTER<->ROUTER. The client ROUTER
+    // addresses these sockets by routing id, so both sockets must announce a
+    // well-known routing id before bind. A DEALER client ignores these ids, so
+    // setting them keeps the legacy DEALER->ROUTER configuration working too.
+    const std::string request_routing_id =
+      zlink_c_bench::env_string ("ZLINK_REQUEST_ROUTING_ID", "zlink-c-bench-request-server");
+    const std::string send_routing_id =
+      zlink_c_bench::env_string ("ZLINK_SEND_ROUTING_ID", "zlink-c-bench-send-server");
+    if (zlink_set_routing_id (request_router, request_routing_id.data (),
+                              request_routing_id.size ())
+          != ZLINK_CONFIG_OK
+        || zlink_set_routing_id (send_router, send_routing_id.data (), send_routing_id.size ())
+             != ZLINK_CONFIG_OK) {
+        std::fprintf (stderr, "zlink server: set_routing_id failed errno=%d\n", zlink_errno ());
+        return 2;
+    }
     if (zlink_bind (request_router, request_endpoint.c_str ()) != ZLINK_BIND_OK
         || zlink_bind (send_router, send_endpoint.c_str ()) != ZLINK_BIND_OK) {
         std::fprintf (stderr, "zlink server: bind failed errno=%d\n", zlink_errno ());

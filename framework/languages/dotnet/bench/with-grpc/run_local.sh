@@ -14,10 +14,14 @@ RUN_STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
 OUTPUT="${OUTPUT:-${ROOT_DIR}/log/with_grpc_dotnet_${RUN_STAMP}}"
 REPORT_FILE="${REPORT_FILE:-with_grpc_dotnet_${RUN_STAMP}.txt}"
 
+# SKIP_BUILD=1 keeps the build out of a measurement window (plan 3.2: no build
+# may overlap a measurement). Pre-build the same four projects, then measure.
+if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
 dotnet build "${ROOT_DIR}/GrpcServer/WithGrpcBench.GrpcServer.csproj" -c "${CONFIGURATION}"
 dotnet build "${ROOT_DIR}/ZLinkServer/WithGrpcBench.ZLinkServer.csproj" -c "${CONFIGURATION}"
 dotnet build "${ROOT_DIR}/ZLinkRawServer/WithGrpcBench.ZLinkRawServer.csproj" -c "${CONFIGURATION}"
 dotnet build "${ROOT_DIR}/Client/WithGrpcBench.Client.csproj" -c "${CONFIGURATION}"
+fi
 
 grpc_log="${OUTPUT}/grpc-server.log"
 zlink_log="${OUTPUT}/zlink-server.log"
@@ -66,6 +70,7 @@ dotnet run --no-build -c "${CONFIGURATION}" --project "${ROOT_DIR}/Client/WithGr
   --command-settle-ms "${COMMAND_SETTLE_MS:-200}" \
   --configuration "${CONFIGURATION}" \
   --timeout-seconds "${TIMEOUT_SECONDS:-300}" \
+  --raw-socket "${RAW_SOCKET:-router}" \
   --output "${OUTPUT}" \
   --report-file "${REPORT_FILE}" \
   "$@"

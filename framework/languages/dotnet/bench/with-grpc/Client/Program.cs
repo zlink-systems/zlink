@@ -56,6 +56,9 @@ using var rawContext = Systems.Zlink.Zlink.CreateContext();
 var metadata = await CreateMetadataAsync(options);
 
 var results = new List<BenchResult>();
+var failures = new List<string>();
+var contaminated = new List<string>();
+var drainState = new DrainState();
 foreach (var payloadSize in options.PayloadSizes)
 {
     if (options.Scenario is "all" or "request" or "request-serial")
@@ -63,8 +66,8 @@ foreach (var payloadSize in options.PayloadSizes)
         Console.Error.WriteLine($"[bench] request payload={payloadSize} mode=serial");
         if (options.ShouldRunImplementation("grpc-dotnet"))
         {
-            Console.Error.WriteLine("[bench] running grpc-dotnet-request-serial");
-            results.Add(await RunRequestSerialAsync(
+            await AddCellAsync(results, failures, contaminated, drainState, "grpc-dotnet-request-serial", async () =>
+                await RunRequestSerialAsync(
                 "grpc-dotnet-request-serial",
                 payloadSize,
                 options,
@@ -73,20 +76,18 @@ foreach (var payloadSize in options.PayloadSizes)
                 {
                     return await grpc.EchoAsync(payload, cancellationToken: ct);
                 }));
-            Console.Error.WriteLine("[bench] finished grpc-dotnet-request-serial");
         }
 
         if (options.ShouldRunImplementation("zlink-dotnet"))
         {
-            Console.Error.WriteLine("[bench] running zlink-dotnet-request-serial");
-            results.Add(await RunRawRequestSerialAsync(rawContext, payloadSize, options));
-            Console.Error.WriteLine("[bench] finished zlink-dotnet-request-serial");
+            await AddCellAsync(results, failures, contaminated, drainState, "zlink-dotnet-request-serial", async () =>
+                await RunRawRequestSerialAsync(rawContext, payloadSize, options));
         }
 
         if (options.ShouldRunImplementation("zlink-framework-dotnet"))
         {
-            Console.Error.WriteLine("[bench] running zlink-framework-dotnet-request-serial");
-            results.Add(await RunRequestSerialAsync(
+            await AddCellAsync(results, failures, contaminated, drainState, "zlink-framework-dotnet-request-serial", async () =>
+                await RunRequestSerialAsync(
                 "zlink-framework-dotnet-request-serial",
                 payloadSize,
                 options,
@@ -96,7 +97,6 @@ foreach (var payloadSize in options.PayloadSizes)
                     return await zlink.RequestToChannel("bench", payload)
                         .Async<BenchPayload>(ct);
                 }));
-            Console.Error.WriteLine("[bench] finished zlink-framework-dotnet-request-serial");
         }
     }
 
@@ -105,8 +105,8 @@ foreach (var payloadSize in options.PayloadSizes)
         Console.Error.WriteLine($"[bench] request payload={payloadSize} mode=window window={options.RequestWindow}");
         if (options.ShouldRunImplementation("grpc-dotnet"))
         {
-            Console.Error.WriteLine("[bench] running grpc-dotnet-request-window");
-            results.Add(await RunRequestAsync(
+            await AddCellAsync(results, failures, contaminated, drainState, "grpc-dotnet-request-window", async () =>
+                await RunRequestAsync(
                 "grpc-dotnet-request-window",
                 payloadSize,
                 options,
@@ -115,20 +115,18 @@ foreach (var payloadSize in options.PayloadSizes)
                 {
                     return await grpc.EchoAsync(payload, cancellationToken: ct);
                 }));
-            Console.Error.WriteLine("[bench] finished grpc-dotnet-request-window");
         }
 
         if (options.ShouldRunImplementation("zlink-dotnet"))
         {
-            Console.Error.WriteLine("[bench] running zlink-dotnet-request-window");
-            results.Add(await RunRawRequestAsync(rawContext, payloadSize, options));
-            Console.Error.WriteLine("[bench] finished zlink-dotnet-request-window");
+            await AddCellAsync(results, failures, contaminated, drainState, "zlink-dotnet-request-window", async () =>
+                await RunRawRequestAsync(rawContext, payloadSize, options));
         }
 
         if (options.ShouldRunImplementation("zlink-framework-dotnet"))
         {
-            Console.Error.WriteLine("[bench] running zlink-framework-dotnet-request-window");
-            results.Add(await RunRequestAsync(
+            await AddCellAsync(results, failures, contaminated, drainState, "zlink-framework-dotnet-request-window", async () =>
+                await RunRequestAsync(
                 "zlink-framework-dotnet-request-window",
                 payloadSize,
                 options,
@@ -138,7 +136,6 @@ foreach (var payloadSize in options.PayloadSizes)
                     return await zlink.RequestToChannel("bench", payload)
                         .Async<BenchPayload>(ct);
                 }));
-            Console.Error.WriteLine("[bench] finished zlink-framework-dotnet-request-window");
         }
     }
 
@@ -147,36 +144,35 @@ foreach (var payloadSize in options.PayloadSizes)
         Console.Error.WriteLine($"[bench] send payload={payloadSize} concurrency={options.SendConcurrency}");
         if (options.ShouldRunImplementation("grpc-dotnet"))
         {
-            Console.Error.WriteLine("[bench] running grpc-dotnet-send-saturation");
-            results.Add(await RunSendAsync(
+            await AddCellAsync(results, failures, contaminated, drainState, "grpc-dotnet-send-saturation", async () =>
+                await RunSendAsync(
                 "grpc-dotnet-send-saturation",
                 payloadSize,
                 options,
                 options.GrpcStatsUrl,
+                drainState,
                 async (_, payload, ct) => await grpc.CommandAsync(payload, cancellationToken: ct)));
-            Console.Error.WriteLine("[bench] finished grpc-dotnet-send-saturation");
         }
 
         if (options.ShouldRunImplementation("zlink-dotnet"))
         {
-            Console.Error.WriteLine("[bench] running zlink-dotnet-send-saturation");
-            results.Add(await RunRawSendAsync(rawContext, payloadSize, options));
-            Console.Error.WriteLine("[bench] finished zlink-dotnet-send-saturation");
+            await AddCellAsync(results, failures, contaminated, drainState, "zlink-dotnet-send-saturation", async () =>
+                await RunRawSendAsync(rawContext, payloadSize, options, drainState));
         }
 
         if (options.ShouldRunImplementation("zlink-framework-dotnet"))
         {
-            Console.Error.WriteLine("[bench] running zlink-framework-dotnet-send-saturation");
-            results.Add(await RunSendAsync(
+            await AddCellAsync(results, failures, contaminated, drainState, "zlink-framework-dotnet-send-saturation", async () =>
+                await RunSendAsync(
                 "zlink-framework-dotnet-send-saturation",
                 payloadSize,
                 options,
                 options.ZLinkStatsUrl,
+                drainState,
                 async (_, payload, ct) =>
                 {
                     await zlink.SendToChannel("bench", payload).Async(ct);
                 }));
-            Console.Error.WriteLine("[bench] finished zlink-framework-dotnet-send-saturation");
         }
     }
 }
@@ -195,6 +191,50 @@ await File.WriteAllTextAsync(
     resultFile,
     JsonSerializer.Serialize(report, jsonOptions));
 await File.WriteAllTextAsync(options.ReportPath, FormatText(report));
+
+// BENCH_POLICY 6.6 style failure summary. A cell that failed is absent from the
+// tables above; it is listed here and in failures.txt so a partial run can never
+// be mistaken for a complete one.
+if (failures.Count > 0 || contaminated.Count > 0 || drainState.Observations.Count > 0)
+{
+    var summary = new StringBuilder();
+    if (drainState.Observations.Count > 0)
+    {
+        summary.AppendLine("## Drain (FB-008)");
+        foreach (var observation in drainState.Observations)
+        {
+            summary.AppendLine($"- {observation}");
+        }
+
+        summary.AppendLine();
+    }
+
+    if (contaminated.Count > 0)
+    {
+        summary.AppendLine("## Contaminated (excluded from tables and judgement)");
+        foreach (var cell in contaminated)
+        {
+            summary.AppendLine($"- {cell}");
+        }
+
+        summary.AppendLine();
+    }
+
+    summary.AppendLine("## Failures");
+    foreach (var failure in failures)
+    {
+        summary.AppendLine($"- {failure}");
+    }
+
+    var text = summary.ToString();
+    Console.Error.Write(text);
+    await File.AppendAllTextAsync(options.ReportPath, Environment.NewLine + text);
+    await File.WriteAllTextAsync(Path.Combine(options.Output, "failures.txt"), text);
+}
+
+Console.Error.WriteLine(
+    $"[bench] cells completed={results.Count} failed={failures.Count} "
+    + $"contaminated={contaminated.Count}");
 
 await zlinkHost.StopAsync();
 
@@ -397,6 +437,7 @@ static async ValueTask<BenchResult> RunSendAsync(
     int payloadSize,
     BenchOptions options,
     string statsUrl,
+    DrainState drain,
     Func<int, BenchPayload, CancellationToken, ValueTask> operation)
 {
     using var cts = new CancellationTokenSource(options.Timeout);
@@ -456,7 +497,18 @@ static async ValueTask<BenchResult> RunSendAsync(
 
     var attempted = sent + 1;
     var expectedServerMessages = Math.Max(0, attempted - errors);
-    var server = await WaitForServerStatsAsync(http, statsUrl, expectedServerMessages, options.CommandSettleMs, cts.Token);
+    // FB-008: settle is a bounded wait that CONFIRMS the server drained, not a
+    // fixed sleep. If the bound expires while the server is still advancing, the
+    // next cell on this same server is marked contaminated and excluded.
+    var outcome = await WaitForServerDrainAsync(
+        http,
+        statsUrl,
+        expectedServerMessages,
+        options.CommandSettleMs,
+        options.DrainBoundMs,
+        cts.Token);
+    var server = outcome.Snapshot;
+    drain.RecordDrain(ImplementationOf(name), name, outcome.DrainMs, outcome.BoundHit, options.DrainBoundMs);
     var missing = Math.Max(0, attempted - errors - server.ActiveMessages);
 
     return new BenchResult(
@@ -485,18 +537,29 @@ static async ValueTask<BenchResult> RunSendAsync(
 static async ValueTask<BenchResult> RunRawSendAsync(
     IContext context,
     int payloadSize,
-    BenchOptions options)
+    BenchOptions options,
+    DrainState drain)
 {
-    using var socket = context.CreateDealerSocket();
-    socket.SetRoutingId(RoutingId.From(
-        Encoding.ASCII.GetBytes($"bench-send-{Environment.ProcessId}")));
-    socket.Connect(options.ZLinkRawCommandEndpoint);
+    using var socket = RawBenchSocket.Create(
+        context,
+        options.RawSocket,
+        RoutingId.From(Encoding.ASCII.GetBytes($"bench-send-{Environment.ProcessId}")),
+        RoutingId.From(BenchRoutingIds.RawCommandServer),
+        options.ZLinkRawCommandEndpoint);
+    await EnsureRawRouteReadyAsync(
+        socket,
+        options,
+        token => RawSendAsync(
+            socket,
+            BenchMetricHeaders.CreatePayload(payloadSize, options.RunId, BenchPhase.Warmup, 0UL),
+            token));
 
     return await RunSendAsync(
         "zlink-dotnet-send-saturation",
         payloadSize,
         options,
         options.ZLinkRawStatsUrl,
+        drain,
         (_, payload, cancellationToken) =>
             RawSendAsync(socket, payload, cancellationToken));
 }
@@ -506,10 +569,17 @@ static async ValueTask<BenchResult> RunRawRequestSerialAsync(
     int payloadSize,
     BenchOptions options)
 {
-    using var socket = context.CreateDealerSocket();
-    socket.SetRoutingId(RoutingId.From(
-        Encoding.ASCII.GetBytes($"bench-request-serial-{Environment.ProcessId}")));
-    socket.Connect(options.ZLinkRawEndpoint);
+    using var socket = RawBenchSocket.Create(
+        context,
+        options.RawSocket,
+        RoutingId.From(Encoding.ASCII.GetBytes($"bench-request-serial-{Environment.ProcessId}")),
+        RoutingId.From(BenchRoutingIds.RawRequestServer),
+        options.ZLinkRawEndpoint);
+    await EnsureRawRouteReadyAsync(
+        socket,
+        options,
+        async token => await RawRequestBytesAsync(
+            socket, payloadSize, options.RunId, BenchPhase.Warmup, 0UL, token));
 
     return await RunRawRequestSerialBytesAsync(
         "zlink-dotnet-request-serial",
@@ -524,10 +594,17 @@ static async ValueTask<BenchResult> RunRawRequestAsync(
     int payloadSize,
     BenchOptions options)
 {
-    using var socket = context.CreateDealerSocket();
-    socket.SetRoutingId(RoutingId.From(
-        Encoding.ASCII.GetBytes($"bench-request-{Environment.ProcessId}")));
-    socket.Connect(options.ZLinkRawEndpoint);
+    using var socket = RawBenchSocket.Create(
+        context,
+        options.RawSocket,
+        RoutingId.From(Encoding.ASCII.GetBytes($"bench-request-{Environment.ProcessId}")),
+        RoutingId.From(BenchRoutingIds.RawRequestServer),
+        options.ZLinkRawEndpoint);
+    await EnsureRawRouteReadyAsync(
+        socket,
+        options,
+        async token => await RawRequestBytesAsync(
+            socket, payloadSize, options.RunId, BenchPhase.Warmup, 0UL, token));
 
     return await RunRawRequestBytesAsync(
         "zlink-dotnet-request-window",
@@ -542,7 +619,7 @@ static async ValueTask<BenchResult> RunRawRequestSerialBytesAsync(
     int payloadSize,
     BenchOptions options,
     string statsUrl,
-    IDealerSocket socket)
+    RawBenchSocket socket)
 {
     using var cts = new CancellationTokenSource(options.Timeout);
     using var http = new HttpClient();
@@ -633,7 +710,7 @@ static async ValueTask<BenchResult> RunRawRequestBytesAsync(
     int payloadSize,
     BenchOptions options,
     string statsUrl,
-    IDealerSocket socket)
+    RawBenchSocket socket)
 {
     using var cts = new CancellationTokenSource(options.Timeout);
     using var requestStop = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
@@ -771,7 +848,7 @@ static async ValueTask<BenchResult> RunRawRequestBytesAsync(
 }
 
 static ValueTask<long> RawRequestAsync(
-    IDealerSocket socket,
+    RawBenchSocket socket,
     BenchPayload payload,
     uint runId,
     BenchPhase phase,
@@ -788,7 +865,7 @@ static ValueTask<long> RawRequestAsync(
         cancellationToken);
 
 static ValueTask<long> RawRequestBytesAsync(
-    IDealerSocket socket,
+    RawBenchSocket socket,
     int payloadSize,
     uint runId,
     BenchPhase phase,
@@ -804,7 +881,7 @@ static ValueTask<long> RawRequestBytesAsync(
         cancellationToken);
 
 static async ValueTask<long> RawRequestMessageAsync(
-    IDealerSocket socket,
+    RawBenchSocket socket,
     Message body,
     uint runId,
     BenchPhase phase,
@@ -892,8 +969,145 @@ static long ValidateRawReply(ReadOnlySpan<byte> reply, uint runId, BenchPhase ph
     return Math.Max(0, BenchMetricHeaders.NowNs() - header.SentTimestampNs) / 1000;
 }
 
+// FB-008: bounded, drain-confirming settle.
+//
+// The previous behaviour slept up to --command-settle-ms and returned even if the
+// server was still receiving, so a saturating cell's backlog rolled into the next
+// cell on the same server. Here the server's received count is polled until it
+// stops advancing for `quietMs`, bounded by `boundMs`. "Stopped advancing" is the
+// drain signal: if the server never receives everything the client submitted, the
+// count stalls below `expected` and that still means nothing is in flight.
+static async ValueTask<DrainOutcome> WaitForServerDrainAsync(
+    HttpClient http,
+    string statsUrl,
+    long expectedServerMessages,
+    int quietMs,
+    int boundMs,
+    CancellationToken cancellationToken)
+{
+    var watch = Stopwatch.StartNew();
+    var latest = BenchServerSnapshot.Empty;
+    var lastCount = -1L;
+    var lastChange = TimeSpan.Zero;
+
+    while (watch.Elapsed < TimeSpan.FromMilliseconds(boundMs))
+    {
+        latest = await http.GetFromJsonAsync<BenchServerSnapshot>(
+                     $"{statsUrl}/bench/stats", cancellationToken)
+                 ?? latest;
+        var count = latest.ActiveMessages + latest.Errors;
+        if (count != lastCount)
+        {
+            lastCount = count;
+            lastChange = watch.Elapsed;
+        }
+        else if ((watch.Elapsed - lastChange).TotalMilliseconds >= quietMs)
+        {
+            return new DrainOutcome(latest, watch.Elapsed.TotalMilliseconds, false);
+        }
+
+        await Task.Delay(10, cancellationToken);
+    }
+
+    return new DrainOutcome(latest, watch.Elapsed.TotalMilliseconds, true);
+}
+
+/// <summary>
+///     Which of the three implementations a cell name belongs to. Contamination is
+///     scoped per implementation because each one has its own server process: the
+///     framework backlog that killed request-serial @4096 was invisible to the
+///     grpc and raw cells that ran between the two framework cells.
+/// </summary>
+static string ImplementationOf(string cellName)
+{
+    foreach (var pattern in new[] { "request-serial", "request-window", "send-saturation" })
+    {
+        if (cellName.EndsWith(pattern, StringComparison.Ordinal))
+        {
+            return cellName[..^(pattern.Length + 1)];
+        }
+    }
+
+    return cellName;
+}
+
+// Cell-level failure isolation. A single cell that throws (for example the
+// framework channel request timing out during warmup) previously escaped as an
+// unhandled exception and killed the whole process, destroying the other 17
+// cells of the run. Record the failure, leave the cell absent from the report so
+// it reads as `unsupported`, and continue. No retry and no fabricated result:
+// this only stops one bad cell from taking the run down with it.
+static async ValueTask AddCellAsync(
+    List<BenchResult> results,
+    List<string> failures,
+    List<string> contaminated,
+    DrainState drain,
+    string name,
+    Func<ValueTask<BenchResult>> body)
+{
+    // FB-008: a cell that follows a server which failed to drain is excluded from
+    // the tables and from every judgement rather than measured and published.
+    if (drain.TryTakeContamination(ImplementationOf(name), out var reason))
+    {
+        contaminated.Add($"{name}: {reason}");
+        Console.Error.WriteLine($"[bench] CONTAMINATED {name}: {reason}");
+        return;
+    }
+
+    Console.Error.WriteLine($"[bench] running {name}");
+    try
+    {
+        results.Add(await body());
+        Console.Error.WriteLine($"[bench] finished {name}");
+    }
+    catch (Exception ex)
+    {
+        var detail = $"{name}: {ex.GetType().Name}: {ex.Message}";
+        failures.Add(detail);
+        Console.Error.WriteLine($"[bench] FAILED {detail}");
+    }
+}
+
+// A ROUTER addressing a peer by routing id fails with NOT_CONNECTED until that
+// peer's routing id is in the local routing map (core spec 07-router 6/7), and a
+// freshly connected DEALER fails its first submit with ENOTCONN for the same
+// underlying reason: connect has not completed. Every cell builds its own socket,
+// so wait once, before warmup, so no measured window contains connect latency.
+//
+// This applies to BOTH configurations deliberately. Giving the readiness wait only
+// to ROUTER would bias the DEALER-vs-ROUTER comparison this job exists to produce.
+// It runs entirely before the /bench/reset that opens the active phase and changes
+// no measurement condition (duration, window, payload, concurrency).
+static async ValueTask EnsureRawRouteReadyAsync(
+    RawBenchSocket socket,
+    BenchOptions options,
+    Func<CancellationToken, ValueTask> probe)
+{
+    using var cts = new CancellationTokenSource(options.Timeout);
+    var deadline = Stopwatch.GetTimestamp() + (Stopwatch.Frequency * RawBenchSocket.RouteReadyTimeoutSeconds);
+    Exception? last = null;
+    while (Stopwatch.GetTimestamp() < deadline)
+    {
+        try
+        {
+            await probe(cts.Token).ConfigureAwait(false);
+            return;
+        }
+        catch (Exception ex)
+        {
+            last = ex;
+            await Task.Delay(20, cts.Token).ConfigureAwait(false);
+        }
+    }
+
+    throw new InvalidOperationException(
+        $"Raw {(socket.IsRouter ? "ROUTER" : "DEALER")} route to the bench server was "
+        + $"not ready within {RawBenchSocket.RouteReadyTimeoutSeconds}s.",
+        last);
+}
+
 static async ValueTask RawSendAsync(
-    IDealerSocket socket,
+    RawBenchSocket socket,
     BenchPayload payload,
     CancellationToken cancellationToken)
 {
@@ -1119,6 +1333,7 @@ static string FormatText(BenchReport report)
         builder.AppendLine($"  zlink_stats_url: {report.Metadata.ZLinkStatsUrl}");
         builder.AppendLine($"  zlink_raw_endpoint: {report.Metadata.ZLinkRawEndpoint}");
         builder.AppendLine($"  zlink_raw_command_endpoint: {report.Metadata.ZLinkRawCommandEndpoint}");
+        builder.AppendLine($"  raw_socket: {report.Metadata.RawSocket}");
         builder.AppendLine($"  zlink_raw_stats_url: {report.Metadata.ZLinkRawStatsUrl}");
         builder.AppendLine($"  result_json: {report.Metadata.ResultJson}");
         builder.AppendLine($"  report_txt: {report.Metadata.ReportText}");
@@ -1174,6 +1389,7 @@ static async ValueTask<BenchReportMetadata> CreateMetadataAsync(BenchOptions opt
         options.ZLinkRawEndpoint,
         options.ZLinkRawCommandEndpoint,
         options.ZLinkRawStatsUrl,
+        options.RawSocket,
         Path.Combine(options.Output, "results.json"),
         options.ReportPath);
 }
@@ -1325,6 +1541,7 @@ internal sealed record BenchReportMetadata(
     string ZLinkRawEndpoint,
     string ZLinkRawCommandEndpoint,
     string ZLinkRawStatsUrl,
+    string RawSocket,
     string ResultJson,
     string ReportText)
 {
@@ -1342,6 +1559,7 @@ internal sealed record BenchReportMetadata(
 	        0,
 	        0,
 	        0,
+	        "",
 	        "",
 	        "",
 	        "",
@@ -1458,6 +1676,105 @@ internal sealed record BenchResult(
     }
 }
 
+/// <summary>
+///     The raw ZLink bench socket. FB-001 / bench spec 1.3 require the
+///     <c>zlink-dotnet</c> row to be ROUTER-ROUTER so that
+///     <c>zlink-framework-dotnet / zlink-dotnet</c> measures framework-layer cost
+///     alone. The DEALER-ROUTER configuration is kept behind --raw-socket dealer
+///     so both configurations remain measurable.
+/// </summary>
+internal readonly record struct DrainOutcome(
+    BenchServerSnapshot Snapshot, double DrainMs, bool BoundHit);
+
+internal sealed class DrainState
+{
+    private readonly Dictionary<string, string> _contaminated = new(StringComparer.Ordinal);
+    private readonly List<string> _observations = [];
+
+    public IReadOnlyList<string> Observations => _observations;
+
+    public void RecordDrain(
+        string implementation, string cell, double drainMs, bool boundHit, int boundMs)
+    {
+        _observations.Add(boundHit
+            ? $"{cell}: server did NOT drain within the {boundMs} ms bound"
+            : $"{cell}: server drained in {drainMs:F0} ms");
+        Console.Error.WriteLine(
+            $"[bench] drain {cell}: {drainMs:F0} ms bound_hit={boundHit}");
+        if (boundHit)
+        {
+            _contaminated[implementation] =
+                $"the preceding {implementation} send-saturation cell did not drain "
+                + $"within the {boundMs} ms bound";
+        }
+    }
+
+    /// <summary>Consumes the mark so only the next cell on that server is excluded.</summary>
+    public bool TryTakeContamination(string implementation, out string reason)
+    {
+        if (_contaminated.TryGetValue(implementation, out reason!))
+        {
+            _contaminated.Remove(implementation);
+            return true;
+        }
+
+        reason = "";
+        return false;
+    }
+}
+
+internal sealed class RawBenchSocket : IDisposable
+{
+    private readonly IDealerSocket? _dealer;
+    private readonly IRouterSocket? _router;
+    private readonly RoutingId _peer;
+
+    private RawBenchSocket(IDealerSocket? dealer, IRouterSocket? router, RoutingId peer)
+    {
+        _dealer = dealer;
+        _router = router;
+        _peer = peer;
+    }
+
+    /// <summary>Bounded pre-warmup wait for the peer routing id to appear.</summary>
+    public const int RouteReadyTimeoutSeconds = 15;
+
+    public bool IsRouter => _router is not null;
+
+    public static RawBenchSocket Create(
+        IContext context,
+        string mode,
+        RoutingId self,
+        RoutingId peer,
+        string endpoint)
+    {
+        if (string.Equals(mode, "dealer", StringComparison.Ordinal))
+        {
+            var dealer = context.CreateDealerSocket();
+            dealer.SetRoutingId(self);
+            dealer.Connect(endpoint);
+            return new RawBenchSocket(dealer, null, peer);
+        }
+
+        var router = context.CreateRouterSocket();
+        router.SetRoutingId(self);
+        router.Connect(endpoint);
+        return new RawBenchSocket(null, router, peer);
+    }
+
+    public RequestOperation Request() =>
+        _router is not null ? _router.Request(_peer) : _dealer!.Request();
+
+    public SendOperation Send() =>
+        _router is not null ? _router.Send(_peer) : _dealer!.Send();
+
+    public void Dispose()
+    {
+        _dealer?.Dispose();
+        _router?.Dispose();
+    }
+}
+
 internal sealed record BenchOptions(
     string Scenario,
     string Implementation,
@@ -1468,6 +1785,7 @@ internal sealed record BenchOptions(
     int Warmup,
     int DurationSeconds,
     int CommandSettleMs,
+    int DrainBoundMs,
     string GrpcUrl,
     string ZLinkEndpoint,
     string GrpcStatsUrl,
@@ -1475,6 +1793,7 @@ internal sealed record BenchOptions(
     string ZLinkRawEndpoint,
     string ZLinkRawCommandEndpoint,
     string ZLinkRawStatsUrl,
+    string RawSocket,
     uint RunId,
     string Output,
     string ReportFile,
@@ -1499,6 +1818,7 @@ internal sealed record BenchOptions(
             ParseInt(Value(args, "--warmup"), 1000),
             ParseInt(Value(args, "--duration-seconds") ?? Value(args, "--duration"), 5),
             ParseInt(Value(args, "--command-settle-ms"), 200),
+            ParseInt(Value(args, "--drain-bound-ms"), 30_000),
             Value(args, "--grpc-url") ?? "http://127.0.0.1:5071",
             Value(args, "--zlink-endpoint") ?? "tcp://127.0.0.1:5072",
             Value(args, "--grpc-stats-url") ?? "http://127.0.0.1:5074",
@@ -1506,6 +1826,9 @@ internal sealed record BenchOptions(
             Value(args, "--zlink-raw-endpoint") ?? "tcp://127.0.0.1:5075",
             Value(args, "--zlink-raw-command-endpoint") ?? "tcp://127.0.0.1:5077",
             Value(args, "--zlink-raw-stats-url") ?? "http://127.0.0.1:5076",
+            Value(args, "--raw-socket")
+                ?? Environment.GetEnvironmentVariable("RAW_SOCKET")
+                ?? "router",
             (uint)Random.Shared.Next(1, int.MaxValue),
             Value(args, "--output") ?? "log/latest",
             Value(args, "--report-file") ?? $"with_grpc_dotnet_{reportStamp}.txt",
@@ -1528,6 +1851,11 @@ internal sealed record BenchOptions(
         {
             throw new InvalidOperationException(
                 "Implementation must be one of all, grpc-dotnet, zlink-dotnet, zlink-framework-dotnet.");
+        }
+
+        if (RawSocket is not "router" and not "dealer")
+        {
+            throw new InvalidOperationException("RawSocket must be router or dealer.");
         }
 
         if (PayloadSizes.Length == 0)

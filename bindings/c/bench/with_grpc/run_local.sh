@@ -15,6 +15,9 @@ MAX_OUTSTANDING="${MAX_OUTSTANDING:-4096}"
 DRAIN_TIMEOUT_MS="${DRAIN_TIMEOUT_MS:-5000}"
 ENABLE_ZMQ_SEND_SEND="${ENABLE_ZMQ_SEND_SEND:-0}"
 
+# SKIP_BUILD=1 keeps the build out of a measurement window (plan 3.2: no build
+# may overlap a measurement). Pre-build with the same targets, then measure.
+if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
 cmake -S "${REPO_ROOT}/bindings/c" -B "${BUILD_DIR}" \
   -DZLINK_C_BUILD_BENCHES=ON \
   -DZLINK_C_BUILD_BENCH_GRPC_COMPARE=ON
@@ -31,6 +34,7 @@ if [[ "${ENABLE_ZMQ_SEND_SEND}" == "1" ]]; then
   )
 fi
 cmake --build "${BUILD_DIR}" --target "${build_targets[@]}" -j"$(nproc)"
+fi
 
 mkdir -p "${OUTPUT}"
 : >"${REPORT_PATH}"
@@ -48,14 +52,31 @@ export WINDOW_SIZE
 export MAX_OUTSTANDING
 export DRAIN_TIMEOUT_MS
 
-setsid "${zlink_server}" >"${OUTPUT}/zlink-server.log" 2>&1 &
-zlink_pid=$!
-setsid "${grpc_server}" >"${OUTPUT}/grpc-server.log" 2>&1 &
-grpc_pid=$!
+# `setsid` forks when the caller is not already a process-group leader, so `$!`
+# is a short-lived wrapper rather than the server. SERVER_PID is what the client
+# samples server CPU/RSS from, and killing the wrapper's group does not reach the
+# server, so each server records its own pid into a pidfile and we read that.
+start_server() {
+  local name="$1" binary="$2" pidfile="${OUTPUT}/$1.pid"
+  rm -f "${pidfile}"
+  setsid bash -c 'echo $$ >"$1"; exec "$2"' _ "${pidfile}" "${binary}" \
+    >"${OUTPUT}/${name}.log" 2>&1 &
+  for _ in $(seq 1 200); do
+    if [[ -s "${pidfile}" ]]; then
+      cat "${pidfile}"
+      return 0
+    fi
+    sleep 0.05
+  done
+  echo "[bench] failed to start ${name}" >&2
+  return 1
+}
+
+zlink_pid="$(start_server zlink-server "${zlink_server}")"
+grpc_pid="$(start_server grpc-server "${grpc_server}")"
 zmq_pid=""
 if [[ "${ENABLE_ZMQ_SEND_SEND}" == "1" ]]; then
-  setsid "${zmq_server}" >"${OUTPUT}/zmq-server.log" 2>&1 &
-  zmq_pid=$!
+  zmq_pid="$(start_server zmq-server "${zmq_server}")"
 fi
 
 cleanup() {

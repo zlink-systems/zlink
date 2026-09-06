@@ -151,6 +151,15 @@ This reasoning depends on the premise that only one pattern is measured at a tim
 that runs two patterns concurrently is added, the premise no longer holds and this endpoint
 configuration must be revisited.
 
+The settle between cells follows this contract. After a cell completes, do not wait a fixed time.
+Poll the server's received count until it stops advancing, with an upper bound on that wait. If the
+count has not stopped advancing within the bound, record that fact and the observed drain time in
+the results, and mark the next cell that uses the same server as contaminated, excluding it from the
+tables and from every judgement. A contaminated cell is not measured and published. The observed
+drain time is recorded per cell in the results. This bound is not a formality; it is load-bearing.
+A bound set too small loses cells even on a healthy run, so it must be large enough that a healthy
+run never reaches it. The reference value is 30 seconds.
+
 ## 4. Output Format
 
 The report table is grouped by pattern, with the implementation name shown on each row. The
