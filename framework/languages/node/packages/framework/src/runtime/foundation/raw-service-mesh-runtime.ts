@@ -774,7 +774,7 @@ export class RawServiceMeshRuntime {
           nowMs,
           expected
         );
-        if (result !== 'admitted') {
+        if (result !== 'admitted' && result !== 'notRequired') {
           const detail = result === 'invalidDescriptor'
             ? describeInvalidAdmissionDescriptor(
               descriptor,
@@ -787,19 +787,21 @@ export class RawServiceMeshRuntime {
             + (detail === undefined ? '.' : ` (${detail}).`)
           );
           await this.send(received.sourceRid, [encodeReject(admissionReason(result))]);
-          if (result === 'notRequired') {
-            this.retireNotRequiredExpectedPeer(
-              received.sourceRid,
-              descriptor.advertisedEndpoint
-            );
-          }
           return 'infrastructure';
         }
-        this.selectBilateralConnection(descriptor);
+        if (result === 'admitted') this.selectBilateralConnection(descriptor);
         if (header.command === M6aServiceWireCommand.hello) {
+          // Hello supplies only the sender's descriptor. Even NotRequired
+          // peers must receive ours before the intent owner closes transport;
+          // submitting a response does not guarantee delivery before close.
           await this.send(
             received.sourceRid,
             [encodeRouteMeshAdmission(M6aServiceWireCommand.admit, this.topology.localDescriptor())]
+          );
+        } else if (result === 'notRequired') {
+          this.retireNotRequiredExpectedPeer(
+            received.sourceRid,
+            descriptor.advertisedEndpoint
           );
         }
         return 'infrastructure';
