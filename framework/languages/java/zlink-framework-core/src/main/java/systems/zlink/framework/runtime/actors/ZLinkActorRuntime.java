@@ -2631,7 +2631,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
         final void setMesh(String value) {
             if (selectedMesh != null) {
-                throw new IllegalStateException("Mesh was already set");
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "Mesh was already set");
             }
             if (value == null || value.isBlank()) {
                 throw new IllegalArgumentException("meshName is required");
@@ -2641,7 +2643,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
         final void setRequest(ZLinkMessage value) {
             if (requestSet) {
-                throw new IllegalStateException("request was already set");
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "request was already set");
             }
             request = Objects.requireNonNull(value, "request");
             requestSet = true;
@@ -2649,7 +2653,9 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
         final void setTimeout(Duration value) {
             if (timeoutSet) {
-                throw new IllegalStateException("timeout was already set");
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "timeout was already set");
             }
             if (value == null || value.isZero() || value.isNegative()) {
                 throw new IllegalArgumentException("timeout must be positive");
@@ -2661,7 +2667,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         final CompletionStage<ZLinkActorCreateResult> submitOperation() {
             if (!submitted.compareAndSet(false, true)) {
                 return CompletableFuture.failedFuture(
-                    new IllegalStateException(
+                    new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
                         "Actor creation call was already submitted"));
             }
             return submitCreate(
