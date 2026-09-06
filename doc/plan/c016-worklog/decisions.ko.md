@@ -1542,3 +1542,9 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 
 - 사용자가 직접 push한 Core 변경(STREAM pull delivery 단순화 + disconnect progress 수정, spec 4개 동반 개정: socket README, 08-stream, protocol/02-raw, 02-message). 감독자 main에 rebase로 통합(`76290abd2a` 이후).
 - 영향 범위 확인 의무: 6 binding의 STREAM 송신·수신 경로와 contract test, framework STREAM session(packet framing은 송신 multipart가 아니므로 계약상 영향 없음이 기대). rebuild15 뒤 최종 gate에 **binding gate 7종**(`bindings/<lang>/tests/run_tests.sh`)을 추가해 확인한다. hotpath_gate는 D-118 + 이 커밋이 합쳐진 Core로 재실행(worktree, Core 빌드 1개 규칙).
+
+## D-130 (2026-09-06, 머신 A) perf phase 1 후속 진단 결과 — RouteMesh 4096 timeout은 미재현(재측정 보류), Session shutdown의 blocking 거부 send는 Framework 결함(B)
+
+- A: quiet 5회 + 인공 부하 3회 + 실부하 1회 모두 오류 0. 원인 미확정. D-118 Core(rebuild15) 뒤 같은 조건으로 재측정한다. 원래 16건을 해소로 표시하지 않는다.
+- B: `ZLinkStreamSessionTable.RejectNewSession`이 seal 뒤 closing control을 `SendFlags.None`(blocking 1000 ms)으로 공유 lane 안에서 보내고 host cancellation과 무관 → 64 connections 5.8 s, 512에서 75 s 미종료(SIGKILL). node/java는 async submit. 수정 job(`fix-dotnet-session-reject-blocking-send`) 예약 — control 제출 경로 하나(비차단), host deadline 관찰, NotConnected-to-closed-peer는 정상 teardown, 원인 예외 보존. dotnet MeshNode admit 간헐 job과 파일이 겹치지 않도록 범위 지정.
+- 하네스는 결함 없음(SIGTERM → StopAsync 대기). runner의 5 s SIGKILL 유예는 유지.
