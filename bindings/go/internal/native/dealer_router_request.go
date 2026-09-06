@@ -123,16 +123,6 @@ func (s *sendRetryState) attempt(userContext uintptr) (uint64, error) {
 	return uint64(completionID), err
 }
 
-func (s *sendRetryState) matchesTarget(actual RoutingID) bool {
-	if s == nil {
-		return false
-	}
-	if !s.hasTarget {
-		return actual.Size() == 0
-	}
-	return s.target.Equal(actual)
-}
-
 func (s *requestRetryState) attempt(userContext uintptr) (uint64, error) {
 	if s == nil || s.core == nil || s.payload == nil {
 		return 0, &SubmitError{Result: SubmitInvalidHandle, nativeErrno: int(C.EFAULT)}
@@ -158,16 +148,6 @@ func (s *requestRetryState) attempt(userContext uintptr) (uint64, error) {
 			partTimeout, finalContext, completionOut))
 	})
 	return uint64(completionID), err
-}
-
-func (s *requestRetryState) matchesTarget(actual RoutingID) bool {
-	if s == nil {
-		return false
-	}
-	if !s.hasTarget {
-		return actual.Size() == 0
-	}
-	return s.target.Equal(actual)
 }
 
 func (e *completionEntry) attemptSend() bool {

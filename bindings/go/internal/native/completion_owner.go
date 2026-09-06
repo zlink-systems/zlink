@@ -21,7 +21,6 @@ type completionOperationKind uint8
 type requestWritableRecord struct {
 	completionID uint64
 	contextKey   uintptr
-	peerRID      RoutingID
 	sendResult   C.zlink_send_complete_result_t
 	terminalErr  int
 }
@@ -640,7 +639,6 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 	e.attemptMu.Lock()
 
 	completionID := uint64(completion.completion_id)
-	peerRID := routingIDFromC(completion.peer_rid)
 
 	e.mu.Lock()
 	if e.settled {
@@ -681,8 +679,7 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 	}
 
 	if completion.kind != C.ZLINK_COMPLETION_WRITABLE ||
-		contextKey != e.handleKey ||
-		!e.send.matchesTarget(peerRID) {
+		contextKey != e.handleKey {
 		e.setWritableWaiting(false)
 		e.send.payload.close()
 		e.finishSend(&SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)})
@@ -739,7 +736,6 @@ func (e *completionEntry) captureRequestWritable(completion *C.zlink_completion_
 	record := requestWritableRecord{
 		completionID: uint64(completion.completion_id),
 		contextKey:   contextKey,
-		peerRID:      routingIDFromC(completion.peer_rid),
 		sendResult:   C.zlink_send_complete_result_t(completion.send_result),
 		terminalErr:  int(completion.send_terminal_errno),
 	}
@@ -779,7 +775,7 @@ func (e *completionEntry) captureRequestWritableRecordLocked(record requestWrita
 	e.mu.Unlock()
 
 	if !published || record.completionID != expectedID || record.contextKey != e.handleKey ||
-		e.request == nil || !e.request.matchesTarget(record.peerRID) {
+		e.request == nil {
 		// A mismatched token can still be followed by the expected native token.
 		// Keep the cgo handle registered in that case so it cannot be reused.
 		if published && record.completionID != expectedID {
