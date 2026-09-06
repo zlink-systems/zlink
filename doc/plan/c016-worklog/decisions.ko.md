@@ -1533,3 +1533,7 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 - 진단: `requestSync`가 native `zlink_completion_recv(NONE)` loop로 자기 completion까지 읽어 public owner를 우회. dotnet/python은 다른 thread의 owner가 entry를 완료하지만 Node는 JS thread 하나뿐이라 blocking 중 public poller가 진행할 수 없고, poller 객체는 Worker로 공유 불가(`DataCloneError`, napi_env 비공유), `uv_run` 재진입 금지. 별도 poller/thread·busy wait는 금지된 mitigation.
 - 결정: Node의 동기 terminal은 실행 동안 completion 소비자이며, 받은 다른 completion은 반환 뒤 owner의 drain 규칙(F-R3-12로 NO_DATA 경계 적용)으로 전달한다 — 언어 투영으로 node README에 명시(bindings/doc/spec/node/README §naming). async-execution-model §4의 "단일 소비자"는 "동시에 하나"로 충족. 규칙 2 → 1(동기 호출 = 그 시점의 owner).
 - 남은 결함: recvTimeout이 request timeout보다 짧을 때 `Backpressured`로 분류(기대 `TimedOut`) — native loop가 RCVTIMEO를 대기로 씀. 0.18.0 후보(동기 대기 계약 결정과 함께).
+
+## D-128 (2026-09-06, 머신 A) 옛 perf 정책 트리 `framework/doc/framework/perf/`(README + bindings/{cpp,dotnet,java,node} ko/en 10개) 삭제
+
+- D-117로 전면 개정한 `framework/doc/framework/common/perf/README`가 시나리오 이름·CLI·schema·§17 언어별 표준 위치를 소유한다. 옛 트리는 이전 모델(`client_server_request_reply` 등 옛 이름, measurement_layer, BenchmarkDotNet 선택지)을 서술하고 공통 README §17과 중복이며, 문서·site·README 어디에서도 링크하지 않는다(link check bad 0). 언어별 도구·metadata는 phase 1 runner(`framework/languages/dotnet/perf/scripts/environment.py`, `collect_env.sh`)가 결과 파일에 기록하므로 별도 계획 문서가 필요 없다. 규칙 소유자 2 → 1.
