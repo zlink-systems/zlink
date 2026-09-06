@@ -183,7 +183,9 @@ spec gap = 코드 동작이 `core/doc/spec`·공개 헤더 주석·공개 계약
 |---|---|---|---|---|---|---|
 | 참고(A, 09-06 오전) | `core_after_a_release` | 271.3 / 349.0 = 0.78 | 246.5 / 316.1 = 0.78 | 29.1 / 37.2 = 0.78 | 353 / 358 / 228 | — |
 | **Phase 0 기준** | `285f37792d` (lib 20:41), results/20260906_214620 | 268.9 / 322.0 = **0.835** | 243.0 / 316.4 = **0.768** | 30.4 / 39.2 = **0.775** | 332 / 334 / 223 (asio 283 / 290 / 311) | 측정 job 보고 참조 |
-| S-1 뒤 | | | | | | |
+| S-4+S-10 (`597f134d68`) | 게이트 s4-s10 | 267.8 / 342.5 = 0.782 | 252.5 / 318.0 = 0.794 | 31.2 / 39.3 = 0.793 | — | 2.7 |
+| +S-2+S-9 (`e1db6f1f72`) | 게이트 s2-s9 | 기준 이상(6셀) | | | — | — |
+| +S-1 (`baaa68d67b`) | 게이트 s1 | 286.7 / 350.4 = **0.818** | 262.4 / 327.2 = **0.802** | 33.5 / 40.6 = **0.824** | — | — |
 
 ### 7.2 perf/c 1024 B 경량 3셀 (tcp, Phase 0 기준 대비 비율)
 
@@ -197,7 +199,7 @@ spec gap = 코드 동작이 `core/doc/spec`·공개 헤더 주석·공개 계약
 
 | 셀 | reference | 최신 |
 |---|---|---|
-| stream_tcp (신설) | | |
+| stream_tcp (신설, D-B142) | 15540.39 → 14623.47 (S-1, D-B150) | |
 | router_router_tcp | 2972.88 | |
 | dealer_dealer_inproc | 3455.38 | |
 | dealer_router_reqrep_inproc | 12054.89 | |
@@ -232,9 +234,9 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 
 ## 8. 체크리스트
 
-- [ ] Phase 0: Release 빌드, with_stream 기준 표(§7.1), 경량 3셀 기준, hotpath `stream_tcp` 셀 커밋
-- [ ] Phase 1: S-A 프로파일 표, S-B 경로 비용 표, G-A 공통 경로 표 → 원인별 job 목록 S-·G-(D-B141)
-- [ ] Phase 2S: S-1 … (각 채택/기각, 커밋 해시, zlink/asio 비율 추이)
+- [x] Phase 0: Release 빌드, with_stream 기준 표(§7.1), 경량 3셀 기준, hotpath `stream_tcp` 셀 커밋(`6f64e76b51`, D-B142 — harness가 I/O 스레드를 안 세던 결함도 수정)
+- [x] Phase 1: S-A 프로파일 표, S-B 경로 비용 표 → 원인별 job 목록(D-B140·D-B141). G-A(공통 경로 프로파일)는 Phase 2G 시작 시 수행
+- [ ] Phase 2S: 채택 S-4·S-10(`597f134d68`), S-2·S-9(`e1db6f1f72`), S-1(`baaa68d67b`); 기각 S-5(가설 반박, layering → R4 S-13); 진행 S-3(게이트), S-11(`_in_active`), S-12(close lost-wake, 기존 결함); 누적 Ir/msg 11,096 → 9,887(−10.9 %), zlink/asio 0.835/0.768/0.775 → 0.818/0.802/0.824
 - [ ] Phase 2G: 스크린 셀 재측정 표, G-1 … (각 채택/기각, 커밋 해시, 패턴별 전 size 비율)
 - [ ] Phase 3: R1 stream · R2 raw/engine · R3 pipe · R4 socket_base · R5 request_reply · R6 session/registry · R7 api/core · R8 sockets 나머지 · R9 transports · R10 core 나머지 · R11 utils (인벤토리 → 적용, 커밋 해시)
 - [ ] Phase 4: 최종 표, hotpath 5셀 PASS, ctest 전체, 스펙 문구 정합, 종결 D-B1xx
