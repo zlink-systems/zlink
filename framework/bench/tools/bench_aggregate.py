@@ -30,7 +30,7 @@ from benchagg.analysis import (  # noqa: E402
     language_verdict,
     ordered_keys,
 )
-from benchagg.model import PAYLOAD_SIZES  # noqa: E402
+from benchagg.model import JUDGEMENT_PATTERN, PAYLOAD_SIZES  # noqa: E402
 from benchagg.readers import ReportError, read_runs  # noqa: E402
 from benchagg.render import (  # noqa: E402
     render_contaminated,
@@ -60,6 +60,15 @@ def parse_args(argv=None):
         type=int,
         default=3,
         help="runs a row needs before G5 can pass it (plan 6 fixes 3)",
+    )
+    parser.add_argument(
+        "--judgement-pattern",
+        default=JUDGEMENT_PATTERN,
+        help=(
+            "pattern the two spec 7.2 ratios are computed on "
+            f"(default {JUDGEMENT_PATTERN}); selects the input rows only, "
+            "the 0.80 threshold and the G5 rule are unchanged"
+        ),
     )
     parser.add_argument("--json-out", help="write the normalized cells and verdicts here")
     parser.add_argument(
@@ -95,7 +104,7 @@ def build(args):
     run_set = read_runs(run_dirs)
     rows = build_rows(run_set, min_runs_for_g5=args.min_runs)
     sizes = tuple(int(part) for part in args.payload_sizes.split(","))
-    judgements = judge_language(rows, args.lang, args.baseline, sizes)
+    judgements = judge_language(rows, args.lang, args.baseline, sizes, args.judgement_pattern)
     return run_set, rows, sizes, judgements
 
 
@@ -120,7 +129,7 @@ def emit(args, run_set, rows, sizes, judgements) -> str:
         out.append("\n## Contaminated cells (FB-008, excluded from tables and judgement)\n")
         out.append(render_contaminated(run_set.contaminated()))
     if args.format in ("full", "judgement"):
-        out.append("\n## Judgement (spec 7.2, FB-005, FB-011)\n")
+        out.append(f"\n## Judgement (spec 7.2) on `{args.judgement_pattern}`\n")
         out.append(render_judgement_table(judgements))
         status, reason = language_verdict(judgements)
         out.append(f"\n**{args.lang}: {status}** — {reason}")

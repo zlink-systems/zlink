@@ -22,7 +22,12 @@ from typing import Any
 #: Patterns the bench spec defines. A runner may emit more (the C bench emits
 #: ``request-saturation`` and ``send-blocking``); those are outside the spec and
 #: are dropped with a note rather than silently folded into a table.
-PATTERNS: tuple[str, ...] = ("request-serial", "request-window", "send-saturation")
+PATTERNS: tuple[str, ...] = (
+    "request-serial",
+    "request-window",
+    "request-backpressure",
+    "send-saturation",
+)
 
 #: Payload sizes the spec fixes (spec 2, spec 3).
 PAYLOAD_SIZES: tuple[int, ...] = (1024, 4096)
@@ -53,8 +58,13 @@ JUDGEMENT_THRESHOLD = 0.80
 #: single-threaded client, which tops out near 5% on a 20-core machine.
 CLIENT_SATURATION_FRACTION = 0.95
 
-#: spec 7.2 / FB-003: judgement runs on this pattern only.
-JUDGEMENT_PATTERN = "request-window"
+#: spec 7.2: the default reference pattern for the two ratios. The spec makes
+#: ``request-backpressure`` the reference, because a ratio taken under a depth
+#: the numerator never reaches reports that imposed depth rather than the layer
+#: cost. ``request-window`` stays selectable so the fixed-depth judgement can be
+#: computed and reported beside it. Only the pattern this selects changes: the
+#: 0.80 threshold, the G5 spread limit and the both-payloads rule do not.
+JUDGEMENT_PATTERN = "request-backpressure"
 
 
 @dataclass(frozen=True, order=True)

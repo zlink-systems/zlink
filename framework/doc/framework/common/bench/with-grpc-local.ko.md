@@ -74,6 +74,7 @@ gRPC HTTP/2 frame, protobuf field overhead, ZLink envelope, ZMP header는 이 �
 |-----------|------|-------------------|-----------------|------|
 | `request-serial` | unary `Echo` RPC | raw request 전송과 reply 수신 | channel request 호출 | 요청 하나를 보내고 reply 완료 뒤 다음 요청을 보낸다 |
 | `request-window` | unary `Echo` RPC | raw request 전송과 reply 수신 | channel request 호출 | 최대 `request_window`개의 미완료 request를 유지한다 |
+| `request-backpressure` | unary `Echo` RPC | raw request 전송과 reply 수신 | channel request 호출 | 미완료 request 수에 상한을 두지 않는다. admission backpressure를 만날 때까지 연속 제출한다 |
 | `send-saturation` | unary `Command` RPC, 응답은 `Empty` | raw 단방향 send 제출 | channel send 제출 | reply payload가 없는 command 경로를 비교한다 |
 
 세 구현이 사용하는 API 이름은 언어마다 다르지만 계약은 같다. `.NET`에서 framework channel
@@ -86,6 +87,47 @@ request는 `RequestToChannel(...).Async<TReply>()`이고 channel send는
 `request-window`는 ZLink request가 reply를 기다리지 않고 다음 request를 제출할 수 있다는 점을
 반영한다. client는 active phase 동안 최대 `request_window`개의 미완료 request를 유지한다.
 reply 하나가 도착하면 해당 slot에서 다음 request를 바로 보낸다. 기본 `request_window`는 `100`이다.
+
+`request-backpressure`는 미완료 request 수에 application 상한을 두지 않는다. client는 reply를
+기다리지 않고 admission backpressure를 만날 때까지 request를 연속 제출하고, 재개 신호에서
+이어서 제출한다. gRPC 쪽도 같은 모양으로 자기 flow control이 제출을 막을 때까지 제출한다.
+어느 쪽에도 application 상한을 두지 않는다.
+
+**이 패턴에서 미완료 깊이는 설정값이 아니라 측정값이다.** 스택이 도달한 깊이는 그 스택의
+설계가 정하는 결과이므로 결과의 일부로 기록한다(§5.2).
+
+**이 패턴은 언어에 따라 두 변종으로 실행되며, 결과에 어느 변종인지 반드시 표시한다.**
+
+| 변종 | 대상 | 제출을 멈추는 것 |
+|---|---|---|
+| admission backpressure 변종 | C | 제출 terminal이 `DONTWAIT` admission을 거절한다 |
+| cooperative yield 변종 | `.NET`·Node·Java·Kotlin | 거절이 없다. 제출과 completion pump 사이의 협력적 yield가 제출 속도를 정한다 |
+
+이 구분은 표기상의 것이 아니다. C의 public request terminal은 `DONTWAIT` admission이 거절되면
+`ZLINK_SUBMIT_BACKPRESSURED`를 caller에게 돌려준다. `.NET`·Node·Java의 public async request
+terminal은 backpressure를 caller에게 돌려주지 않고 terminal 안에서 WRITABLE token을 기다렸다가
+같은 packet을 다시 제출한다. 곧 **관리형 binding 네 행에서는 제출을 거절하는 신호가 존재하지
+않으므로, 그 행은 "admission backpressure를 만날 때까지 제출한 것이 아니다."** 그 행에서 깊이를
+정하는 것은 제출 속도와 완료 속도가 균형을 이루는 지점이다.
+
+관리형 네 행의 결과를 admission backpressure 변종과 같은 것으로 읽으면 안 된다. 두 변종은 같은
+패턴 이름을 쓰지만 제출을 멈추는 기전이 다르다.
+
+두 request 패턴은 서로 다른 질문에 답하며 한쪽이 다른 쪽을 대체하지 않는다.
+
+| 패턴 | 답하는 질문 |
+|---|---|
+| `request-window` | 외부에서 정한 깊이를 강제했을 때 그 스택이 어떻게 동작하는가 |
+| `request-backpressure` | transport가 허용하는 만큼 제출하는 서비스가 실제로 얻는 것은 무엇인가 |
+
+`request-window`는 깊이를 조건으로 고정하므로, 그 조건을 지탱하지 못하는 스택에서는 처리량
+비율이 요청당 비용이 아니라 도달 깊이를 보고한다. `request-backpressure`는 그 고정을 없애지만
+깊이 차이를 없애지는 않는다. 두 패턴 모두 §5.2의 깊이 지표와 함께 읽어야 한다.
+
+이 저장소의 perf 규약은 이미 inflight 깊이를 인위적으로 고정하지 않고 admission backpressure를
+만날 때까지 연속 제출하도록 정하고 있다(`doc/perf/PERF_MULTI_TEST_POLICY.md`의 request/reply
+client 항목, `doc/perf/PERF_POLICY.md`의 app 고정 window 항목). 이 bench가 `request-window`
+하나만 두었던 것은 그 규약과 어긋난 부분이었고, `request-backpressure`가 그 간극을 메운다.
 
 `send-saturation`은 request/reply와 섞어 평균 내지 않는다. 이 패턴은 command 계열의 상대
 비용을 따로 보기 위한 항목이다.
@@ -121,7 +163,9 @@ bench에서 옳은 비교인 이유는 아래와 같다.
 - warmup 뒤 정해진 시간의 measured active 구간을 실행한다. warmup 길이는 언어마다 다르게
   두고 사용한 값을 결과에 기록한다(§8.2).
 - 기본 payload 크기는 `1024,4096` bytes다.
-- 기본 `request_window`는 `100`이다.
+- 기본 `request_window`는 `100`이며 이 값은 `request-window` 패턴에만 적용한다.
+  `request-backpressure` 패턴에는 미완료 request 상한 설정이 없다. 이 패턴에서 깊이는
+  설정하는 조건이 아니라 측정해 기록하는 결과다(§5.2).
 - 기본 send concurrency는 `8`이다.
 - gRPC와 ZLink framework는 같은 protobuf DTO를 사용한다. ZLink raw binding은 framework를
   거치지 않을 뿐 wire 모양은 같다. envelope 헤더 part 하나와 protobuf로 인코딩한
@@ -257,6 +301,29 @@ CPU가 binding의 native I/O thread를 함께 셌고, Java에서는 GC와 JIT th
 선언하지 않은 결과는 포화 여부를 판정할 수 없으며, 판정하지 못했다는 사실을 결과에 남긴다.
 계측기를 선언하지 않은 옛 결과는 프로세스 core 수를 선언한 것으로 읽는다.
 
+### 5.2 미완료 깊이는 셀마다 기록한다
+
+request 계열 셀은 아래 세 값을 셀마다 함께 기록한다. 세 값은 선택 항목이 아니다.
+
+| 지표 | 의미 |
+|---|---|
+| `peak_in_flight` | active 구간에서 관측한 미완료 request 수의 최댓값 |
+| 깊이 | 처리량 x 평균 latency로 계산한 평균 미완료 수(Little's law) |
+| `abandoned` | drain 상한에 이를 때까지 완료되지 않은 request 수 |
+
+`request-window`에서 이 세 값은 **설정한 깊이를 그 스택이 실제로 지탱했는지**를 판정한다.
+`peak_in_flight`가 설정값에 이르지 못한 셀은 harness가 window를 채우지 못한 것과 스택이 그
+깊이까지만 도달한 것을 구분해야 하므로, 두 값을 함께 기록하지 않으면 잘못된 전제가 그대로
+남는다.
+
+`request-backpressure`에서 이 세 값은 **결과 자체**다. 깊이를 설정하지 않으므로 스택이 도달한
+깊이는 그 스택의 설계가 정한 결과이고, 처리량과 같은 자격으로 표에 싣는다. 도달 깊이를 빼고
+처리량만 인용하면 서로 다른 깊이에서 얻은 값을 같은 조건의 값처럼 읽게 된다.
+
+`abandoned`가 0이 아닌 셀과 오류가 0이 아닌 셀은 처리량 비교에 쓰지 않는다. 그 셀이 보고하는
+것은 속도가 아니라 완료되지 않은 request가 있었다는 사실이다. 이 사실은 성능 항목이 아니라
+정확성 항목으로 기록한다.
+
 ## 6. 측정 payload header
 
 측정 payload 앞에는 `bindings/c/perf`의 metric header와 같은 의미의 29-byte header를 넣는다.
@@ -294,7 +361,8 @@ client stopwatch만으로 단방향 처리량을 과장하지 않기 위한 기�
 - payload size
 - warmup과 active duration 설정
 - gRPC와 ZLink endpoint
-- request window 값
+- request window 값(`request-window` 패턴) 또는 도달 깊이(`request-backpressure` 패턴)
+- 셀마다의 `peak_in_flight`, 깊이, `abandoned`(§5.2)
 - send concurrency 값
 - client CPU와 포화 여부(§5.1)
 - 결과 JSON 원본
@@ -317,10 +385,41 @@ zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework 추가 비용 통
 기록한다. `1024`에서 기준을 유지하다가 `4096`에서 떨어지는 스택에는 실제 문제가 있고, 보고서는
 어차피 두 크기를 모두 표시하므로 payload별 판정은 추가 비용 없이 그 문제를 드러낸다.
 
-이 기준은 request-window처럼 ZLink가 reply를 기다리지 않고 다음 request를 보낼 수 있는 패턴을
-중심으로 적용한다. `request-window`가 판정에 적합한 셀인 이유는 gRPC unary `Echo`와 ZLink
-request가 같은 보장, 곧 서버가 처리했다는 확인을 주기 때문이다. `request-serial`은 한 번에
-하나만 처리하는 사용 패턴의 왕복 지연을 보기 위한 보조 지표로 남긴다.
+이 기준은 ZLink가 reply를 기다리지 않고 다음 request를 보낼 수 있는 패턴에 적용한다. 그런
+패턴이 판정에 적합한 이유는 gRPC unary `Echo`와 ZLink request가 같은 보장, 곧 서버가 처리했다는
+확인을 주기 때문이다. `request-serial`은 한 번에 하나만 처리하는 사용 패턴의 왕복 지연을 보기
+위한 보조 지표로 남긴다.
+
+**판정의 기준 패턴은 `request-backpressure`다.** 언어 통과 여부는 이 패턴에서 두 payload 크기
+모두 기준을 만족할 때 결정한다. `request-window`에서 계산한 같은 두 식은 따로 계산해 함께
+기록하되, 언어 통과 여부를 결정하지 않는다.
+
+기준 패턴을 이렇게 두는 근거는 아래와 같다.
+
+- 두 식은 모두 같은 조건에서 잰 두 행의 비율이므로, 그 조건은 분자와 분모가 실제로 도달할 수
+  있는 조건이어야 한다. 도달하지 못하는 조건에서 계산한 비율은 계층 비용이 아니라 그 조건을
+  보고한다.
+- 고정 window는 어떤 서비스도 자기 자신에게 부과하지 않는 조건이다. 그 조건에서 나온 낮은
+  비율은 "요청당 비용이 크다"가 아니라 "그 깊이에 도달하지 못했다"를 뜻할 수 있고, 두 원인은
+  같은 숫자로 나타나므로 비율만으로는 구분되지 않는다.
+- `request-backpressure`는 각 스택이 자기 설계가 허용하는 깊이에 도달한 상태에서 비율을
+  계산하므로, 정상적으로 제출하는 호출자가 실제로 얻는 값을 비교한다. 이것이 "binding 계층의
+  기본 성능"이 뜻해야 하는 것이다.
+
+**판정의 근거가 언어에 따라 종류가 다르다는 것을 함께 적는다.** 다섯 언어 가운데 C만
+admission backpressure 변종으로 측정되고 나머지 넷은 cooperative yield 변종으로 측정된다(§2).
+곧 formula 1의 분모와 분자는 제출을 멈추는 기전이 서로 다른 두 실행이다. 이 사실을 표시하지
+않은 비율은 게재하지 않는다.
+
+**이 선택이 해결하지 않는 것을 함께 적는다.** `request-backpressure`는 깊이 고정을 없앨 뿐
+깊이 차이를 없애지 않는다. 자기 backpressure로 낮은 깊이에 머무는 스택은 이 패턴에서도 낮은
+비율을 내고, 비율만으로는 요청당 비용과 도달 깊이를 여전히 가르지 못한다. **그래서 두 패턴
+어느 쪽이든 §5.2의 깊이 세 값을 함께 싣지 않은 비율은 게재하지 않는다.**
+
+**고정 window에서 관측한 유실과 미완료는 이 판정으로 대체되지 않는다.** `request-window`에서
+`abandoned`나 오류가 발생한 스택은 정확성 항목의 결함을 가진 것이며, `request-backpressure`에서
+기준을 통과하더라도 그 결함은 그대로 남는다. 두 결과는 각각 기록하고, 성능 판정이 정확성
+관측을 가리지 않게 한다.
 
 두 번째 식은 §1.3의 소켓 구성을 지켰을 때에만 framework 계층 비용을 나타낸다.
 

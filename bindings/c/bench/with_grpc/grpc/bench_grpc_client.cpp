@@ -3,6 +3,8 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include <climits>
+#include <cstdio>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -152,9 +154,24 @@ zlink_c_bench::result_t run_request_async (
                             ? static_cast<double> (submit_stop - submit_start) / 1000000.0
                             : 0.0;
     }
-    while (outstanding.load (std::memory_order_relaxed) > 0)
+    // spec 3: the drain is bounded. Without a bound an uncapped submission
+    // phase can leave this loop waiting indefinitely, and a wedged cell would
+    // hang the run instead of being recorded as a wedged cell.
+    const auto drain_deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::milliseconds (zlink_c_bench::env_int ("DRAIN_TIMEOUT_MS", 5000));
+    while (outstanding.load (std::memory_order_relaxed) > 0
+           && std::chrono::steady_clock::now () < drain_deadline)
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
     const auto stop = std::chrono::steady_clock::now ();
+    // spec 5.2: peak depth and abandoned, per cell. window 0 means no imposed
+    // ceiling (the request-backpressure pattern).
+    std::fprintf (stderr,
+                  "[bench] window %s: peak_in_flight=%llu of %llu abandoned=%d\n",
+                  scenario, static_cast<unsigned long long> (max_outstanding_seen),
+                  static_cast<unsigned long long> (
+                    max_outstanding == INT_MAX ? 0 : max_outstanding),
+                  outstanding.load (std::memory_order_relaxed));
     cq.Shutdown ();
     completion_thread.join ();
 
@@ -307,11 +324,17 @@ int main ()
     auto channel = grpc::CreateCustomChannel (target, grpc::InsecureChannelCredentials (), args);
     auto stub = zlink_c_bench_grpc::BenchService::NewStub (channel);
     for (const size_t size : zlink_c_bench::parse_sizes ()) {
+        std::fprintf (stderr, "[bench] request payload=%zu\n", size);
         if (zlink_c_bench::scenario_enabled (scenarios, "request-serial"))
             zlink_c_bench::print_result (run_request_serial (stub.get (), size));
         if (zlink_c_bench::scenario_enabled (scenarios, "request-window"))
             zlink_c_bench::print_result (
               run_request_async (stub.get (), size, window, "grpc-c-request-window"));
+        // spec 2 request-backpressure: no application ceiling. gRPC submits
+        // until its own flow control stops it.
+        if (zlink_c_bench::scenario_enabled (scenarios, "request-backpressure"))
+            zlink_c_bench::print_result (run_request_async (
+              stub.get (), size, INT_MAX, "grpc-c-request-backpressure"));
         if (zlink_c_bench::scenario_enabled (scenarios, "request-saturation"))
             zlink_c_bench::print_result (run_request_async (stub.get (), size, max_outstanding,
                                                             "grpc-c-request-saturation"));

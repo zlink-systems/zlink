@@ -112,7 +112,13 @@ class AcceptanceTest(unittest.TestCase):
     def setUpClass(cls):
         cls.run_set = read_runs(RUNS)
         cls.rows = build_rows(cls.run_set)
-        cls.judgements = judge_language(cls.rows, "dotnet")
+        # The gated2 fixture is Phase 0 data, measured only at the fixed
+        # window, so this acceptance case names that pattern rather than
+        # inheriting whichever pattern the spec currently makes the
+        # judgement reference.
+        cls.judgements = judge_language(
+            cls.rows, "dotnet", "zlink-c", (1024, 4096), "request-window"
+        )
 
     def row(self, impl, pattern, size):
         row = self.rows.get(CellKey(impl, pattern, size))

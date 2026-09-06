@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <thread>
@@ -333,6 +334,46 @@ zlink_c_bench::result_t run_request_serial (void *dealer,
                                   &latency, metrics);
 }
 
+// Bounded readiness before any measured phase. A ROUTER's first request races
+// the connection handshake, and a 500 ms sleep is not a proof that the route
+// exists. The race is invisible while an application window caps the submit
+// loop at a small depth, because the first hundred requests are slow enough
+// for the route to come up. With no window the loop submits thousands into a
+// route that is not established yet, every one of them expires at its reply
+// timeout, and the cell reports zero completions.
+//
+// The probe drives ONE request at a time through the same submit and poll path
+// the measured phases use, so readiness proves the path the cells will use. It
+// runs outside every measured phase.
+bool await_request_ready (void *dealer,
+                          const zlink_routing_id_t *target_rid,
+                          void *poller,
+                          int timeout_ms)
+{
+    const auto deadline =
+      std::chrono::steady_clock::now () + std::chrono::milliseconds (timeout_ms);
+    uint64_t seq = 0;
+    while (std::chrono::steady_clock::now () < deadline) {
+        zlink_c_bench::latency_sampler_t latency (16);
+        callback_state_t cb;
+        cb.latency = &latency;
+        request_metrics_t metrics;
+        if (submit_request_once (dealer, target_rid, 1024, 0, seq++,
+                                 ZLINK_SEND_FLAGS_DONTWAIT, &cb, &metrics)) {
+            const auto attempt_deadline =
+              std::min (deadline,
+                        std::chrono::steady_clock::now () + std::chrono::milliseconds (250));
+            while (cb.outstanding.load (std::memory_order_acquire) > 0
+                   && std::chrono::steady_clock::now () < attempt_deadline)
+                (void) poll_once (poller, dealer, &cb, 10);
+            if (cb.completed.load (std::memory_order_relaxed) > 0)
+                return true;
+        }
+        std::this_thread::sleep_for (std::chrono::milliseconds (10));
+    }
+    return false;
+}
+
 zlink_c_bench::result_t run_request_window (void *dealer,
                                             const zlink_routing_id_t *target_rid,
                                             void *poller,
@@ -372,6 +413,17 @@ zlink_c_bench::result_t run_request_window (void *dealer,
     }
     drain_requests (poller, dealer, &cb);
     const auto stop = std::chrono::steady_clock::now ();
+    // spec 5.2: peak depth and abandoned are required per cell. They go to
+    // stderr in the marker form the aggregator already parses, so the report
+    // table keeps the column layout every earlier span was read with.
+    // window 0 means no imposed ceiling (the request-backpressure pattern).
+    std::fprintf (stderr,
+                  "[bench] window %s: peak_in_flight=%llu of %llu abandoned=%llu\n",
+                  scenario,
+                  static_cast<unsigned long long> (metrics.max_outstanding),
+                  static_cast<unsigned long long> (window == UINT64_MAX ? 0 : window),
+                  static_cast<unsigned long long> (
+                    cb.outstanding.load (std::memory_order_acquire)));
     return finish_request_result (scenario, size, start, stop, resources, &cb, &latency, metrics);
 }
 
@@ -608,13 +660,31 @@ int main ()
     zlink_poller_add (poller, request_dealer, request_dealer, ZLINK_POLLCOMPLETION);
     std::this_thread::sleep_for (std::chrono::milliseconds (500));
     std::fprintf (stderr, "zlink client: raw socket mode=%s\n", use_router ? "router" : "dealer");
+    const bool ready = await_request_ready (
+      request_dealer, request_rid, poller,
+      zlink_c_bench::env_int ("ROUTE_READY_MS", 15000));
+    std::fprintf (stderr, "[bench] route ready=%s\n", ready ? "true" : "false");
     for (const size_t size : zlink_c_bench::parse_sizes ()) {
+        // The depth markers above carry no size of their own; this is what makes
+        // the aggregator's attribution deterministic rather than positional.
+        std::fprintf (stderr, "[bench] request payload=%zu\n", size);
         if (zlink_c_bench::scenario_enabled (scenarios, "request-serial"))
             zlink_c_bench::print_result (run_request_serial (request_dealer, request_rid, poller, size));
         if (zlink_c_bench::scenario_enabled (scenarios, "request-window"))
             zlink_c_bench::print_result (
               run_request_window (request_dealer, request_rid, poller, size, window,
                                   "zlink-c-request-window"));
+        // spec 2 request-backpressure: no application ceiling on outstanding
+        // requests. UINT64_MAX makes the window test in the submit loop
+        // unreachable, so the only thing that stops submission is the request
+        // terminal refusing DONTWAIT admission with ZLINK_SUBMIT_BACKPRESSURED.
+        // C is the admission-backpressure variant of the pattern; the managed
+        // bindings cannot observe that refusal and run the cooperative-yield
+        // variant instead.
+        if (zlink_c_bench::scenario_enabled (scenarios, "request-backpressure"))
+            zlink_c_bench::print_result (
+              run_request_window (request_dealer, request_rid, poller, size, UINT64_MAX,
+                                  "zlink-c-request-backpressure"));
         if (zlink_c_bench::scenario_enabled (scenarios, "request-saturation"))
             zlink_c_bench::print_result (run_request_window (
               request_dealer, request_rid, poller, size, saturation_window,

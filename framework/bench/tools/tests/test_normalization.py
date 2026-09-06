@@ -169,11 +169,35 @@ class ExclusionTest(unittest.TestCase):
         self.assertEqual(row.excluded_runs, ["r4"])
         self.assertEqual(len(run_set.contaminated()), 1)
 
-    def _judgement(self, numerator_cells, denominator_cells, numerator="zlink-node"):
+    def _judgement(self, numerator_cells, denominator_cells, numerator="zlink-node",
+                   pattern="request-window"):
+        """These cases exercise G5, saturation and publication, not pattern choice.
+
+        They name the pattern explicitly so that changing which pattern the spec
+        makes the judgement reference cannot silently rewrite what they assert.
+        """
         rows = build_rows(run_set_of(*numerator_cells, *denominator_cells))
         return judge_pair(
-            rows, f"{numerator} / zlink-c", numerator, "zlink-c", 1024
+            rows, f"{numerator} / zlink-c", numerator, "zlink-c", 1024, pattern
         )
+
+    def test_default_judgement_pattern_is_backpressure(self):
+        """spec 7.2: the ratios reference the pattern with no imposed depth.
+
+        A ratio taken at a depth the numerator never reaches reports the imposed
+        depth rather than the layer cost, so the default must not be the fixed
+        window.
+        """
+        from benchagg.model import JUDGEMENT_PATTERN
+
+        self.assertEqual(JUDGEMENT_PATTERN, "request-backpressure")
+        steady = [cell("zlink-node", "request-backpressure", 1024, f"r{i}", 100.0)
+                  for i in range(3)]
+        baseline = [cell("zlink-c", "request-backpressure", 1024, f"c{i}", 110.0)
+                    for i in range(3)]
+        rows = build_rows(run_set_of(*steady, *baseline))
+        judgement = judge_pair(rows, "zlink-node / zlink-c", "zlink-node", "zlink-c", 1024)
+        self.assertEqual(judgement.status, "published")
 
     def test_publishes_only_when_both_sides_pass_g5(self):
         steady = [cell("zlink-node", "request-window", 1024, f"r{i}", 100.0) for i in range(3)]

@@ -79,6 +79,7 @@ ZMP header aren't included in this size.
 |-----------|------|-------------------|-----------------|------|
 | `request-serial` | unary `Echo` RPC | raw request send and reply receive | channel request call | Sends one request and sends the next only after the reply completes |
 | `request-window` | unary `Echo` RPC | raw request send and reply receive | channel request call | Keeps up to `request_window` incomplete requests |
+| `request-backpressure` | unary `Echo` RPC | raw request send and reply receive | channel request call | Puts no ceiling on incomplete requests. Submits continuously until admission backpressure |
 | `send-saturation` | unary `Command` RPC, replying `Empty` | raw one-way send submission | channel send submission | Compares the command path, which has no reply payload |
 
 The API names the three implementations use differ per language, but the contract is the same. In
@@ -92,6 +93,51 @@ meant to show the cost of a "process one at a time" usage pattern.
 reply. During the active phase, the client keeps up to `request_window` incomplete requests. As
 soon as one reply arrives, the next request is sent immediately in that slot. The default
 `request_window` is `100`.
+
+`request-backpressure` puts no application ceiling on the number of incomplete requests. Without
+waiting for replies, the client submits requests continuously until it meets admission
+backpressure, and resumes submitting when it is signalled to. The gRPC side has the same shape: it
+submits until its own flow control stops it. Neither side gets an application ceiling.
+
+**In this pattern the incomplete depth is a measurement, not a setting.** The depth a stack reaches
+is an outcome its design decides, so it is recorded as part of the result (§5.2).
+
+**This pattern runs as two variants depending on the language, and the result must state which
+variant it is.**
+
+| Variant | Applies to | What stops submission |
+|---|---|---|
+| Admission-backpressure variant | C | The submit terminal refuses `DONTWAIT` admission |
+| Cooperative-yield variant | `.NET`, Node, Java, Kotlin | Nothing refuses. The cooperative yield between submission and the completion pump sets the submission rate |
+
+This distinction is not notational. C's public request terminal returns
+`ZLINK_SUBMIT_BACKPRESSURED` to the caller when `DONTWAIT` admission is refused. The public async
+request terminal in `.NET`, Node, and Java does not return backpressure to the caller; inside the
+terminal it waits for the WRITABLE token and resubmits the same packet. That is, **in the four
+managed binding rows no signal refusing a submission exists, so those rows did not "submit until
+admission backpressure."** What sets depth in those rows is the point where submission rate and
+completion rate balance.
+
+The four managed rows must not be read as the same thing as the admission-backpressure variant.
+The two variants share a pattern name but differ in the mechanism that stops submission.
+
+The two request patterns answer different questions, and neither replaces the other.
+
+| Pattern | The question it answers |
+|---|---|
+| `request-window` | How does this stack behave when an externally chosen depth is imposed on it |
+| `request-backpressure` | What does a service actually get when it submits as fast as the transport allows |
+
+Because `request-window` fixes depth as a condition, a stack that cannot sustain that condition
+makes the throughput ratio report the depth reached rather than the per-request cost.
+`request-backpressure` removes that fixing, but it does not remove the depth difference. Both
+patterns must be read together with the depth metrics of §5.2.
+
+This repository's perf convention already requires that inflight depth not be fixed artificially
+and that requests be submitted continuously until admission backpressure (the request/reply client
+items in `doc/perf/PERF_MULTI_TEST_POLICY.md`, and the fixed application window item in
+`doc/perf/PERF_POLICY.md`). This bench having only `request-window` was a divergence from that
+convention, and `request-backpressure` closes the gap.
 
 `send-saturation` isn't averaged together with request/reply. This pattern exists to look at the
 command family's relative cost separately.
@@ -128,7 +174,10 @@ one-way send. Under this condition the difference was N times.
 - Runs a fixed-duration measured active window after warmup. The warmup length is set per language
   and the value used is recorded in the result (§8.2).
 - The default payload size is `1024,4096` bytes.
-- The default `request_window` is `100`.
+- The default `request_window` is `100`, and it applies only to the `request-window` pattern.
+  The `request-backpressure` pattern has no incomplete-request ceiling setting. In that
+  pattern depth is not a condition that is set but a result that is measured and recorded
+  (§5.2).
 - The default send concurrency is `8`.
 - gRPC and ZLink framework use the same protobuf DTO. The ZLink raw binding skips the framework but
   puts the same shape on the wire: two parts, an envelope header part and a protobuf-encoded
@@ -275,6 +324,30 @@ and in the report. A result that declares no instrument or no ceiling cannot hav
 judged, and the fact that it could not be judged is recorded in the result. An older result that
 declares no instrument is read as having declared process cores used.
 
+### 5.2 Incomplete Depth Is Recorded Per Cell
+
+Request-family cells record the three values below for every cell. The three are not optional.
+
+| Metric | Meaning |
+|---|---|
+| `peak_in_flight` | The maximum number of incomplete requests observed during the active window |
+| Depth | The mean incomplete count calculated as throughput x mean latency (Little's law) |
+| `abandoned` | The number of requests that did not complete by the drain bound |
+
+In `request-window` these three decide **whether the stack actually sustained the depth that was
+set**. A cell whose `peak_in_flight` never reached the configured value has to be separated into
+"the harness could not fill the window" and "the stack only reaches this depth"; without recording
+both values, a wrong premise survives.
+
+In `request-backpressure` these three **are the result**. Since no depth is configured, the depth a
+stack reaches is an outcome its design decides, and it goes into the table with the same standing
+as throughput. Quoting throughput without the depth reached makes values obtained at different
+depths read as values from the same condition.
+
+Cells with a nonzero `abandoned` and cells with nonzero errors are not used for throughput
+comparison. What such a cell reports is not a speed but the fact that some requests did not
+complete. That fact is recorded as a correctness item, not a performance item.
+
 ## 6. The Measurement Payload Header
 
 A 29-byte header with the same meaning as `bindings/c/perf`'s metric header is placed at the front
@@ -314,7 +387,9 @@ information alongside it.
 - Payload size
 - Warmup and active duration configuration
 - gRPC and ZLink endpoint
-- The request window value
+- The request window value (`request-window` pattern) or the depth reached
+  (`request-backpressure` pattern)
+- Per-cell `peak_in_flight`, depth, and `abandoned` (§5.2)
 - The send concurrency value
 - Client CPU and whether the cell was saturated (§5.1)
 - The original result JSON
@@ -339,11 +414,46 @@ the per-payload values are always recorded as they are. A stack that holds the c
 but degrades at `4096` has a real problem, and since the report shows both sizes anyway, a
 per-payload gate exposes that problem at no added cost.
 
-This criterion is applied mainly to patterns like request-window, where ZLink can send the next
-request without waiting for the reply. `request-window` is the sound judgement cell because gRPC
-unary `Echo` and a ZLink request give the same guarantee, namely confirmation that the server
-processed the message. `request-serial` is kept as a supplementary metric for looking at the
-round-trip latency of a process-one-at-a-time usage pattern.
+This criterion is applied to patterns where ZLink can send the next request without waiting for the
+reply. Such a pattern is the sound judgement cell because gRPC unary `Echo` and a ZLink request
+give the same guarantee, namely confirmation that the server processed the message.
+`request-serial` is kept as a supplementary metric for looking at the round-trip latency of a
+process-one-at-a-time usage pattern.
+
+**The reference pattern for judgement is `request-backpressure`.** Whether a language passes is
+decided by that pattern satisfying the criterion at both payload sizes. The same two formulas
+computed on `request-window` are calculated separately and recorded alongside, but they do not
+decide whether a language passes.
+
+The grounds for choosing the reference pattern this way are below.
+
+- Both formulas are ratios of two rows measured under one condition, so that condition has to be
+  one the numerator and the denominator can actually reach. A ratio computed under a condition that
+  is not reached reports that condition rather than the layer cost.
+- A fixed window is a condition no service imposes on itself. A low ratio under it can mean "the
+  per-request cost is high" or "that depth was never reached", and because both causes appear as
+  the same number, the ratio alone does not separate them.
+- `request-backpressure` computes the ratio with each stack at the depth its own design allows, so
+  it compares what a caller submitting normally actually gets. That is what "the binding layer's
+  baseline performance" has to mean.
+
+**That the basis of judgement differs in kind between languages is recorded with it.** Of the five
+languages only C is measured with the admission-backpressure variant; the other four are measured
+with the cooperative-yield variant (§2). That is, the denominator and the numerator of formula 1
+are two runs whose mechanism for stopping submission differs. A ratio that does not state this is
+not published.
+
+**What this choice does not solve is recorded with it.** `request-backpressure` removes the fixing
+of depth, not the difference in depth. A stack that stays at a low depth through its own
+backpressure still produces a low ratio in this pattern, and the ratio alone still fails to
+separate per-request cost from depth reached. **So for either pattern, a ratio published without
+the three depth values of §5.2 beside it is not published at all.**
+
+**Loss and non-completion observed under a fixed window are not superseded by this judgement.** A
+stack that produced `abandoned` requests or errors under `request-window` has a defect in the
+correctness category, and that defect remains even if the same stack passes the criterion under
+`request-backpressure`. The two results are recorded separately so that a performance judgement
+does not hide a correctness observation.
 
 The second formula represents the framework layer cost only when the socket configuration in §1.3
 is observed.
