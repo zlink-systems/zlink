@@ -46,9 +46,12 @@ G5_SPREAD_LIMIT_PERCENT = 10.0
 #: spec 7.2 / FB-003: the layer ratios pass at 0.80.
 JUDGEMENT_THRESHOLD = 0.80
 
-#: spec 5.1 / G6: above this client CPU the cell measured the client runtime,
-#: not the transport, so it may not decide a throughput comparison.
-CLIENT_SATURATION_PERCENT = 95.0
+#: spec 5.1 / G6: at this fraction of the client parallelism ceiling the cell
+#: measured the client runtime, not the transport, so it may not decide a
+#: throughput comparison. The ceiling is declared per language, not assumed: a
+#: percentage of every logical core cannot express the saturation of a
+#: single-threaded client, which tops out near 5% on a 20-core machine.
+CLIENT_SATURATION_FRACTION = 0.95
 
 #: spec 7.2 / FB-003: judgement runs on this pattern only.
 JUDGEMENT_PATTERN = "request-window"
@@ -88,6 +91,13 @@ class Cell:
     server_cpu_percent: float | None = None
     server_memory_mb: float | None = None
 
+    #: spec 5.1: CPU the client used, expressed as cores rather than as a share
+    #: of the machine, and the parallelism ceiling the harness declared for that
+    #: client. Both are needed to judge saturation; neither substitutes for the
+    #: other.
+    client_cores: float | None = None
+    client_parallelism_ceiling: float | None = None
+
     # Diagnostics. FB-017 (depth), FB-008 (drain), spec 5 / G3 (server-counted
     # send throughput). ``None`` means the runner did not report the value, which
     # is not the same as zero and is never rendered as one.
@@ -121,10 +131,23 @@ class Cell:
         return self.throughput_per_second * self.latency_mean_ms / 1000.0
 
     @property
+    def saturation_evaluated(self) -> bool:
+        """Whether spec 5.1 could be applied at all to this cell."""
+        return self.client_cores is not None and bool(self.client_parallelism_ceiling)
+
+    @property
     def client_saturated(self) -> bool:
-        """spec 5.1: the client, not the transport, set this cell's ceiling."""
-        cpu = self.client_cpu_percent
-        return cpu is not None and cpu > CLIENT_SATURATION_PERCENT
+        """spec 5.1: the client runtime, not the transport, set this ceiling.
+
+        A cell that declares no ceiling is not saturated here -- it is simply not
+        judged, and ``saturation_evaluated`` says so. Treating an undeclared
+        ceiling as saturation would exclude every legacy result; treating it as
+        proof of headroom would be the error spec 5.1 exists to prevent, which is
+        why the unevaluated state is carried rather than collapsed either way.
+        """
+        if not self.saturation_evaluated:
+            return False
+        return self.client_cores >= CLIENT_SATURATION_FRACTION * self.client_parallelism_ceiling
 
     @property
     def send_throughput_server_counted(self) -> bool | None:

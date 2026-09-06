@@ -19,11 +19,15 @@ from benchagg.analysis import build_rows, judge_pair, spread_percent  # noqa: E4
 from benchagg.model import Cell, CellKey, RunSet  # noqa: E402
 from benchagg.readers import (  # noqa: E402
     ReportError,
+    apply_client_ceiling,
     cells_from_report,
     detect_throughput_scale,
+    diagnostics_from_results_json,
     parse_contaminated,
     parse_diagnostics,
+    parse_options,
     parse_result_lines,
+    read_run,
     split_scenario,
 )
 
@@ -197,17 +201,78 @@ class ExclusionTest(unittest.TestCase):
         self.assertEqual(judgement.status, "unsupported")
         self.assertIn("G5 needs 3", judgement.reason)
 
-    def test_a_client_saturated_row_cannot_decide_a_ratio(self):
-        """spec 5.1 and G6: that cell measured the client, not the transport."""
+    def test_a_saturated_single_threaded_client_cannot_decide_a_ratio(self):
+        """spec 5.1, FB-019: a Node-shaped client pegging its one core.
+
+        On a 20-core machine this reads 4.9% of the machine. The percentage rule
+        this replaced would have called it idle and published the ratio.
+        """
         saturated = [
-            cell("zlink-node", "request-window", 1024, f"r{i}", 100.0, client_cpu_percent=99.0)
+            cell(
+                "zlink-node", "request-window", 1024, f"r{i}", 100.0,
+                client_cpu_percent=4.9, client_cores=0.98, client_parallelism_ceiling=1,
+            )
             for i in range(3)
         ]
         baseline = [cell("zlink-c", "request-window", 1024, f"c{i}", 110.0) for i in range(3)]
         judgement = self._judgement(saturated, baseline)
         self.assertEqual(judgement.status, "unsupported")
         self.assertIn("client-saturated", judgement.reason)
+        self.assertIn("0.98 of 1 declared core", judgement.reason)
         self.assertIn("spec 5.1", judgement.reason)
+
+    def test_a_multi_core_client_below_its_ceiling_is_not_saturated(self):
+        """The gated2 shape: 7.38 cores against a declared ceiling of 20."""
+        busy = [
+            cell(
+                "zlink-node", "request-window", 1024, f"r{i}", 100.0,
+                client_cpu_percent=36.9, client_cores=7.38, client_parallelism_ceiling=20,
+            )
+            for i in range(3)
+        ]
+        baseline = [cell("zlink-c", "request-window", 1024, f"c{i}", 110.0) for i in range(3)]
+        rows = build_rows(run_set_of(*busy, *baseline))
+        row = rows[CellKey("zlink-node", "request-window", 1024)]
+        self.assertTrue(row.saturation_evaluated)
+        self.assertFalse(row.client_saturated)
+        self.assertEqual(row.saturation_text(), "no")
+        judgement = self._judgement(busy, baseline)
+        self.assertEqual(judgement.status, "published")
+
+    def test_the_boundary_is_the_declared_fraction_not_the_ceiling(self):
+        """0.95 of the ceiling, so 19 of 20 cores is already saturated."""
+        for cores, expected in ((18.9, False), (19.0, True), (20.0, True)):
+            rows = build_rows(
+                run_set_of(
+                    *[
+                        cell(
+                            "zlink-node", "request-window", 1024, f"r{i}", 100.0,
+                            client_cores=cores, client_parallelism_ceiling=20,
+                        )
+                        for i in range(3)
+                    ]
+                )
+            )
+            row = rows[CellKey("zlink-node", "request-window", 1024)]
+            self.assertEqual(row.client_saturated, expected, f"{cores} cores of 20")
+
+    def test_saturation_is_not_judged_without_a_declared_ceiling(self):
+        """Legacy output declares no ceiling. That is unjudged, not unsaturated.
+
+        It must not block a judgement either, or every result measured before
+        FB-019 would become unpublishable retroactively.
+        """
+        legacy = [
+            cell("zlink-node", "request-window", 1024, f"r{i}", 100.0, client_cpu_percent=36.9)
+            for i in range(3)
+        ]
+        baseline = [cell("zlink-c", "request-window", 1024, f"c{i}", 110.0) for i in range(3)]
+        rows = build_rows(run_set_of(*legacy, *baseline))
+        row = rows[CellKey("zlink-node", "request-window", 1024)]
+        self.assertFalse(row.saturation_evaluated)
+        self.assertFalse(row.client_saturated)
+        self.assertEqual(row.saturation_text(), "not judged")
+        self.assertEqual(self._judgement(legacy, baseline).status, "published")
 
     def test_a_client_counted_send_row_cannot_decide_a_ratio(self):
         """G3 and FB-014: without a server receive count the number is a submit rate."""
@@ -238,6 +303,170 @@ class ExclusionTest(unittest.TestCase):
             )
         )[CellKey("zlink-node", "request-window", 1024)]
         self.assertAlmostEqual(row.in_flight_depth, 8.0, places=6)
+
+
+class DeclaredCeilingTest(unittest.TestCase):
+    def test_reads_the_declaration_out_of_the_options_header(self):
+        text = (
+            "  payload_sizes: 1024,4096\n"
+            "  client_parallelism_ceiling: 1\n"
+            "  logical_cores: 20\n"
+            "  report_txt: /tmp/a:b/report.txt\n"
+            "| a table row | that must be ignored |\n"
+            + result_lines("zlink-node-request-window", 1024, 100.0, 0.1024)
+        )
+        options = parse_options(text)
+        self.assertEqual(options["client_parallelism_ceiling"], 1.0)
+        self.assertEqual(options["logical_cores"], 20.0)
+        self.assertEqual(options["payload_sizes"], "1024,4096")
+        self.assertEqual(options["report_txt"], "/tmp/a:b/report.txt")
+
+    def test_derives_cores_from_a_machine_wide_percentage(self):
+        cells, _ = cells_from_report(
+            result_lines(
+                "zlink-node-request-window", 1024, 100.0, 0.1024, client_cpu_percent=4.9
+            ),
+            "r1",
+        )
+        apply_client_ceiling(cells, ceiling=1.0, logical_cores=20.0)
+        self.assertAlmostEqual(cells[0].client_cores, 0.98, places=6)
+        self.assertTrue(cells[0].saturation_evaluated)
+        self.assertTrue(cells[0].client_saturated)
+
+    def test_leaves_cores_unknown_when_the_core_count_is_not_declared(self):
+        cells, _ = cells_from_report(
+            result_lines(
+                "zlink-node-request-window", 1024, 100.0, 0.1024, client_cpu_percent=4.9
+            ),
+            "r1",
+        )
+        apply_client_ceiling(cells, ceiling=1.0, logical_cores=None)
+        self.assertIsNone(cells[0].client_cores)
+        self.assertFalse(cells[0].saturation_evaluated)
+
+    def test_structured_cores_are_not_overwritten_by_derivation(self):
+        cells, _ = cells_from_report(
+            result_lines(
+                "zlink-node-request-window", 1024, 100.0, 0.1024, client_cpu_percent=4.9
+            ),
+            "r1",
+        )
+        cells[0].client_cores = 0.5
+        apply_client_ceiling(cells, ceiling=1.0, logical_cores=20.0)
+        self.assertEqual(cells[0].client_cores, 0.5)
+
+
+class StructuredDiagnosticsTest(unittest.TestCase):
+    """FB-021: values that decide publication travel as data, not as prose."""
+
+    PAYLOAD = {
+        "metadata": {"diagnosticsSchema": "with-grpc-cell-v1"},
+        "results": [
+            {
+                "scenario": "zlink-node-request-window",
+                "payloadSize": 1024,
+                "peakInFlight": 100,
+                "requestWindow": 100,
+                "abandoned": 0,
+                "clientCores": 0.98,
+                "clientParallelismCeiling": 1,
+            },
+            {
+                "scenario": "zlink-node-send-saturation",
+                "payloadSize": 1024,
+                "drainMs": 16674,
+                "drainBoundHit": False,
+                "serverReceivedAtClose": 228385,
+                "contaminated": True,
+                "contaminationReason": "previous cell did not drain",
+            },
+        ],
+    }
+
+    def test_reads_diagnostics_from_a_declaring_results_json(self):
+        found = diagnostics_from_results_json(self.PAYLOAD)
+        window = found[("zlink-node-request-window", 1024)]
+        self.assertEqual(window["peak_in_flight"], 100)
+        self.assertEqual(window["client_cores"], 0.98)
+        self.assertEqual(window["client_parallelism_ceiling"], 1)
+        send = found[("zlink-node-send-saturation", 1024)]
+        self.assertEqual(send["drain_ms"], 16674)
+        self.assertTrue(send["contaminated"])
+
+    def test_ignores_a_results_json_that_declares_no_schema(self):
+        """Older .NET output. It falls through to the prose reader instead."""
+        legacy = {"metadata": {}, "results": self.PAYLOAD["results"]}
+        self.assertEqual(diagnostics_from_results_json(legacy), {})
+
+    def _write_run(self, run_dir, results_payload, declare_ceiling):
+        import json as _json
+
+        report = ""
+        if declare_ceiling:
+            report += "  client_parallelism_ceiling: 1\n"
+        report += result_lines("zlink-node-request-window", 1024, 100.0, 0.1024)
+        with open(os.path.join(run_dir, "report.txt"), "w") as handle:
+            handle.write(report)
+        with open(os.path.join(run_dir, "stdout.txt"), "w") as handle:
+            handle.write(
+                "[bench] request payload=1024 mode=window window=100\n"
+                "[bench] window zlink-node-request-window: peak_in_flight=7 of 100 abandoned=93\n"
+            )
+        with open(os.path.join(run_dir, "results.json"), "w") as handle:
+            _json.dump(results_payload, handle)
+
+    def test_results_json_is_preferred_over_the_printed_lines(self):
+        """The prose says depth 7; the structured record says 100. Data wins."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as run_dir:
+            self._write_run(run_dir, self.PAYLOAD, declare_ceiling=True)
+            cells, notes = read_run(run_dir)
+
+        self.assertEqual(cells[0].peak_in_flight, 100)
+        self.assertEqual(cells[0].abandoned, 0)
+        self.assertEqual(cells[0].client_cores, 0.98)
+        self.assertTrue(any("results.json" in note for note in notes))
+
+    def test_prose_is_used_when_results_json_does_not_declare(self):
+        """Older output. The fallback is still there and still works."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as run_dir:
+            self._write_run(run_dir, {"metadata": {}, "results": []}, declare_ceiling=False)
+            cells, notes = read_run(run_dir)
+
+        self.assertEqual(cells[0].peak_in_flight, 7)
+        self.assertEqual(cells[0].abandoned, 93)
+        self.assertTrue(any("legacy" in note for note in notes))
+
+
+    def test_a_contaminated_cell_with_no_metrics_is_still_reported(self):
+        """FB-008: a contaminated cell was never measured, so it has no row.
+
+        It must still appear as excluded rather than disappear from the run.
+        """
+        import json as _json
+        import tempfile
+
+        payload = {
+            "metadata": {
+                "diagnosticsSchema": "with-grpc-cell-v1",
+                "contaminatedCells": [
+                    "zlink-node-request-serial@4096: previous cell did not drain"
+                ],
+            },
+            "results": [],
+        }
+        with tempfile.TemporaryDirectory() as run_dir:
+            self._write_run(run_dir, payload, declare_ceiling=True)
+            cells, _ = read_run(run_dir)
+
+        excluded = [c for c in cells if c.contaminated]
+        self.assertEqual(len(excluded), 1)
+        self.assertEqual(str(excluded[0].key), "zlink-node-request-serial@4096")
+        self.assertIn("did not drain", excluded[0].contamination_reason)
+        self.assertIsNone(excluded[0].throughput_per_second)
 
 
 if __name__ == "__main__":

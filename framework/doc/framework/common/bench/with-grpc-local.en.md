@@ -224,14 +224,22 @@ a reply, throughput isn't calculated from the client's submission call count alo
 
 ### 5.1 The Client Saturation Rule
 
-`Client CPU` is recorded for every cell. It isn't optional.
+`Client CPU` is recorded for every cell. It isn't optional. A percentage alone cannot decide
+saturation, so **the number of cores used is recorded alongside the percentage.** The percentage is
+taken against all of the machine's logical cores. On a machine with 20 logical cores, a
+single-threaded client that fully occupies one core still reads 5%, and no fixed percentage
+threshold can catch that saturation.
 
-A cell whose client CPU exceeded 95% is marked as a saturated cell and isn't used for throughput
-ranking. In that cell the limit was set by the client runtime, not by the transport. A saturated
-cell's throughput is recorded only as "the value observed with this client configuration."
+Saturation is judged against **the client parallelism ceiling that each language's harness
+declares**. A cell whose cores used reach 0.95 of the declared ceiling is marked as a saturated cell
+and is excluded from throughput ranking. In that cell the limit was set by the client runtime, not
+by the transport. A saturated cell's throughput is recorded only as "the value observed with this
+client configuration."
 
-This rule applies most often to Node. The Node client runs on a single thread, so the client
-reaches its limit first even in a range where the transport could handle more.
+The declared ceiling differs per language, so it is recorded in the cell record and in the report.
+The Node client runs on a single thread, so it declares a ceiling of `1`. A result that declares no
+ceiling cannot have its saturation judged, and the fact that it could not be judged is recorded in
+the result.
 
 ## 6. The Measurement Payload Header
 
@@ -319,11 +327,12 @@ most expensive." A table holding a cross-language comparison places this ratio a
 
 ### 7.4 Unit Alignment
 
-Log units can differ per runner. The C report of `bindings/c/bench/with_grpc` records the
-`throughput` value in KOPS, while the other languages' with-grpc reports record the `RESULT` line's
-`throughput` value as completions per second. When comparing the C value with another language's
-value directly, divide the other language's value by 1000 to align it to KOPS before calculating
-the ratio.
+Section 4 fixes the throughput unit as completions per second. Even when a runner records the value
+at a different scale, the shared aggregator (`framework/bench/tools/`) recovers that scale from
+`bandwidth` (which section 5 fixes as MB/s) and normalizes it, so comparison and judgement are
+always made from the aggregator's output. The table a language client prints for itself is a
+convenience for checking a single run directly, not a basis for judgement. Ratios are not calculated
+by reading a runner's report directly.
 
 Results are interpreted only as "faster/slower under this condition." No claim of general
 production performance or superiority across every payload is made.

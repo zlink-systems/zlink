@@ -174,6 +174,59 @@ def cells_from_report(text: str, run: str, source: str = "") -> tuple[list[Cell]
     return cells, notes
 
 
+_OPTION_LINE = re.compile(r"^  ([a-z_][a-z0-9_]*): (.*)$")
+
+#: Keys the aggregator reads out of a runner's effective-options header.
+#: ``client_parallelism_ceiling`` is spec 5.1's declared ceiling.
+#: ``logical_cores`` lets a runner that reports only a machine-wide percentage
+#: still yield cores used, without which spec 5.1 cannot be applied at all.
+_OPTION_NUMBERS = ("client_parallelism_ceiling", "logical_cores")
+
+
+def parse_options(text: str) -> dict[str, Any]:
+    """Read the ``  key: value`` effective-options header both shapes emit."""
+    out: dict[str, Any] = {}
+    for line in text.splitlines():
+        if line.startswith("RESULT,") or line.lstrip().startswith("|"):
+            continue
+        match = _OPTION_LINE.match(line)
+        if not match:
+            continue
+        key, value = match.group(1), match.group(2).strip()
+        if key in _OPTION_NUMBERS:
+            try:
+                out[key] = float(value)
+            except ValueError:
+                continue
+        else:
+            out[key] = value
+    return out
+
+
+def apply_client_ceiling(
+    cells: list[Cell],
+    ceiling: float | None,
+    logical_cores: float | None,
+) -> None:
+    """Attach spec 5.1's declared ceiling and, where derivable, cores used.
+
+    A cell that already carries ``client_cores`` (structured input) keeps it. A
+    cell that carries only a machine-wide percentage gets cores from that
+    percentage and the declared logical core count -- and gets nothing at all
+    when the count was not declared, which leaves saturation unjudged rather
+    than silently unsaturated.
+    """
+    for cell in cells:
+        if ceiling and cell.client_parallelism_ceiling is None:
+            cell.client_parallelism_ceiling = ceiling
+        if (
+            cell.client_cores is None
+            and logical_cores
+            and cell.client_cpu_percent is not None
+        ):
+            cell.client_cores = cell.client_cpu_percent / 100.0 * logical_cores
+
+
 # --- diagnostics -----------------------------------------------------------
 #
 # FB-008 and FB-017 values reach the aggregator on stdout today, because the
@@ -299,6 +352,8 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
             "client_memory_mb",
             "server_cpu_percent",
             "server_memory_mb",
+            "client_cores",
+            "client_parallelism_ceiling",
             "peak_in_flight",
             "request_window",
             "abandoned",
@@ -315,8 +370,74 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
     return cells
 
 
+#: ``results.json`` fields a harness writes when it carries diagnostics as data.
+#: The camelCase names are the .NET report's convention; the values are the same
+#: ones the prose reader has to recover from printed text.
+_RESULTS_JSON_FIELDS = {
+    "peakInFlight": "peak_in_flight",
+    "requestWindow": "request_window",
+    "abandoned": "abandoned",
+    "drainMs": "drain_ms",
+    "drainBoundHit": "drain_bound_hit",
+    "serverReceivedAtClose": "server_received_at_close",
+    "contaminated": "contaminated",
+    "contaminationReason": "contamination_reason",
+    "clientCores": "client_cores",
+    "clientParallelismCeiling": "client_parallelism_ceiling",
+}
+
+
+def diagnostics_from_results_json(payload: dict[str, Any]) -> dict[tuple[str, int], dict[str, Any]]:
+    """Read diagnostics out of a ``results.json`` that declares the v1 schema.
+
+    Values that decide publication -- reached depth, drain, contamination, cores
+    used -- must travel as data. A harness that does not declare the schema is
+    older output and is read by the prose reader instead (FB-021).
+    """
+    metadata = payload.get("metadata") or {}
+    if metadata.get("diagnosticsSchema") != CELL_JSON_VERSION:
+        return {}
+    out: dict[tuple[str, int], dict[str, Any]] = {}
+    for result in payload.get("results", []):
+        scenario = result.get("scenario")
+        size = result.get("payloadSize")
+        if scenario is None or size is None:
+            continue
+        entry = {
+            field: result[name]
+            for name, field in _RESULTS_JSON_FIELDS.items()
+            if result.get(name) is not None
+        }
+        if entry:
+            out[(scenario, int(size))] = entry
+    return out
+
+
+def contaminated_from_results_json(payload: dict[str, Any]) -> dict[str, str]:
+    """FB-008 exclusions from a declaring ``results.json``.
+
+    A contaminated cell was never measured, so it has no result entry to carry a
+    flag; the run records it in metadata instead, as ``"<scenario>@<size>: why"``.
+    """
+    metadata = payload.get("metadata") or {}
+    if metadata.get("diagnosticsSchema") != CELL_JSON_VERSION:
+        return {}
+    out: dict[str, str] = {}
+    for item in metadata.get("contaminatedCells", []):
+        cell, _, reason = str(item).partition(":")
+        if cell:
+            out[cell.strip()] = reason.strip()
+    return out
+
+
 def read_run(run_dir: str, source: str = "") -> tuple[list[Cell], list[str]]:
-    """Read one run directory into normalized cells plus notes."""
+    """Read one run directory into normalized cells plus notes.
+
+    Preference order for diagnostics: a fully structured ``cells.json``, then a
+    ``results.json`` that declares the v1 diagnostics schema, and only then the
+    printed ``[bench]`` lines. The last of those is what older output leaves
+    behind; it is a fallback, not a transport (FB-021).
+    """
     run = os.path.basename(os.path.normpath(run_dir))
     cell_json = os.path.join(run_dir, "cells.json")
     if os.path.isfile(cell_json):
@@ -329,14 +450,39 @@ def read_run(run_dir: str, source: str = "") -> tuple[list[Cell], list[str]]:
     if not os.path.isfile(report):
         raise ReportError(f"{run_dir}: no cells.json and no report.txt")
     with open(report, encoding="utf-8", errors="replace") as handle:
-        cells, notes = cells_from_report(handle.read(), run, source)
+        report_text = handle.read()
+    cells, notes = cells_from_report(report_text, run, source)
+    options = parse_options(report_text)
 
     diagnostics: dict[tuple[str, int], dict[str, Any]] = {}
     contaminated: dict[str, str] = {}
-    for text in _diagnostic_texts(run_dir):
-        for key, entry in parse_diagnostics(text).items():
-            diagnostics.setdefault(key, {}).update(entry)
-        contaminated.update(parse_contaminated(text))
+
+    results_json = os.path.join(run_dir, "results.json")
+    structured: dict[tuple[str, int], dict[str, Any]] = {}
+    structured_contamination: dict[str, str] = {}
+    declared = False
+    if os.path.isfile(results_json):
+        try:
+            with open(results_json, encoding="utf-8") as handle:
+                payload = json.load(handle)
+            structured = diagnostics_from_results_json(payload)
+            structured_contamination = contaminated_from_results_json(payload)
+            declared = (payload.get("metadata") or {}).get(
+                "diagnosticsSchema"
+            ) == CELL_JSON_VERSION
+        except (json.JSONDecodeError, OSError):
+            declared = False
+    if declared:
+        diagnostics.update(structured)
+        contaminated.update(structured_contamination)
+        notes.append(f"{run}: diagnostics read from results.json ({CELL_JSON_VERSION})")
+    else:
+        for text in _diagnostic_texts(run_dir):
+            for key, entry in parse_diagnostics(text).items():
+                diagnostics.setdefault(key, {}).update(entry)
+            contaminated.update(parse_contaminated(text))
+        if diagnostics or contaminated:
+            notes.append(f"{run}: diagnostics recovered from printed [bench] lines (legacy)")
 
     for cell in cells:
         entry = diagnostics.get((cell.key.scenario(), cell.key.payload_size))
@@ -347,8 +493,37 @@ def read_run(run_dir: str, source: str = "") -> tuple[list[Cell], list[str]]:
         if reason is not None:
             cell.contaminated = True
             cell.contamination_reason = reason
-    if contaminated:
-        notes.append(f"{run}: {len(contaminated)} contaminated cell(s) excluded (FB-008)")
+
+    measured = {str(cell.key) for cell in cells}
+    for name, reason in contaminated.items():
+        if name in measured:
+            continue
+        scenario, _, size = name.partition("@")
+        split = split_scenario(scenario)
+        if split is None or not size.isdigit():
+            continue
+        cells.append(
+            Cell(
+                key=CellKey(split[0], split[1], int(size)),
+                run=run,
+                source=source,
+                contaminated=True,
+                contamination_reason=reason,
+            )
+        )
+
+    apply_client_ceiling(
+        cells,
+        options.get("client_parallelism_ceiling"),
+        options.get("logical_cores"),
+    )
+    if not any(cell.saturation_evaluated for cell in cells):
+        notes.append(
+            f"{run}: no client parallelism ceiling declared; spec 5.1 saturation not judged"
+        )
+    excluded = [c for c in cells if c.contaminated]
+    if excluded:
+        notes.append(f"{run}: {len(excluded)} contaminated cell(s) excluded (FB-008)")
     return cells, notes
 
 

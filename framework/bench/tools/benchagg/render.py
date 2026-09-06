@@ -127,9 +127,10 @@ def render_median_table(rows: dict[CellKey, Row], payload_sizes, implementations
     """Medians in markdown, the shape a language summary document carries."""
     header = (
         "| Pattern | Size | Implementation | Throughput | Lat.Mean(ms) | Lat.P95(ms) "
-        "| Lat.P99(ms) | Client CPU% | Client MB | Server CPU% | Server MB | drain ms |"
+        "| Lat.P99(ms) | Client CPU% | Client cores | Client MB | Server CPU% | Server MB "
+        "| drain ms |"
     )
-    lines = [header, "|" + "---|" * 12]
+    lines = [header, "|" + "---|" * 13]
     for key in ordered_keys(rows, payload_sizes, implementations):
         row = rows[key]
         value = row.values
@@ -141,6 +142,7 @@ def render_median_table(rows: dict[CellKey, Row], payload_sizes, implementations
             f"| {_num(value.get('latency_mean_ms'), 3)} | {_num(value.get('latency_p95_ms'), 3)} "
             f"| {_num(value.get('latency_p99_ms'), 3)} "
             f"| {'n/a' if cpu is None else f'{cpu:.1f}' + ('*' if row.client_saturated else '')} "
+            f"| {_num(value.get('client_cores'), 2)} "
             f"| {_num(value.get('client_memory_mb'), 1)} "
             f"| {_num(value.get('server_cpu_percent'), 1)} "
             f"| {_num(value.get('server_memory_mb'), 1)} "
@@ -158,15 +160,15 @@ def render_diagnostics_table(rows: dict[CellKey, Row], payload_sizes, implementa
     """
     header = (
         "| Pattern | Size | Implementation | peak_in_flight | window | abandoned "
-        "| depth (thr x lat) | drain ms | drain bound hit | client CPU% | saturated "
-        "| send counted by |"
+        "| depth (thr x lat) | drain ms | drain bound hit | client cores | declared ceiling "
+        "| saturated | send counted by |"
     )
-    lines = [header, "|" + "---|" * 12]
+    lines = [header, "|" + "---|" * 13]
     for key in ordered_keys(rows, payload_sizes, implementations):
         row = rows[key]
         depth = row.in_flight_depth
-        cpu = row.values.get("client_cpu_percent")
         drain = row.values.get("drain_ms")
+        ceiling = row.client_parallelism_ceiling
         if row.send_server_counted is None:
             counted = "—"
         else:
@@ -179,8 +181,9 @@ def render_diagnostics_table(rows: dict[CellKey, Row], payload_sizes, implementa
             f"| {'n/a' if depth is None else f'{depth:.1f}'} "
             f"| {'—' if drain is None else f'{drain:.0f}'} "
             f"| {'yes' if row.drain_bound_hit else 'no'} "
-            f"| {'n/a' if cpu is None else f'{cpu:.1f}'} "
-            f"| {'**yes**' if row.client_saturated else 'no'} | {counted} |"
+            f"| {_num(row.values.get('client_cores'), 2)} "
+            f"| {'—' if ceiling is None else f'{ceiling:g}'} "
+            f"| {row.saturation_text()} | {counted} |"
         )
     return "\n".join(lines)
 

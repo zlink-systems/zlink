@@ -13,7 +13,7 @@ import statistics
 from dataclasses import dataclass, field
 
 from .model import (
-    CLIENT_SATURATION_PERCENT,
+    CLIENT_SATURATION_FRACTION,
     G5_SPREAD_LIMIT_PERCENT,
     JUDGEMENT_PATTERN,
     JUDGEMENT_THRESHOLD,
@@ -33,6 +33,7 @@ _MEDIAN_FIELDS = (
     "client_memory_mb",
     "server_cpu_percent",
     "server_memory_mb",
+    "client_cores",
     "drain_ms",
 )
 
@@ -54,6 +55,10 @@ class Row:
     #: FB-017 asks whether the harness can fill the window at all, which one run
     #: reaching it answers; the low end is kept beside it so a run that could not
     #: is still visible.
+    #: spec 5.1: the ceiling the client harness declared. Constant within a run,
+    #: so it is carried rather than averaged.
+    client_parallelism_ceiling: float | None = None
+
     peak_in_flight: int | None = None
     peak_in_flight_min: int | None = None
     request_window: int | None = None
@@ -81,9 +86,20 @@ class Row:
         return throughput * latency / 1000.0
 
     @property
+    def saturation_evaluated(self) -> bool:
+        return self.values.get("client_cores") is not None and bool(self.client_parallelism_ceiling)
+
+    @property
     def client_saturated(self) -> bool:
-        cpu = self.values.get("client_cpu_percent")
-        return cpu is not None and cpu > CLIENT_SATURATION_PERCENT
+        """spec 5.1 on the row medians, against the declared ceiling."""
+        if not self.saturation_evaluated:
+            return False
+        return self.values["client_cores"] >= CLIENT_SATURATION_FRACTION * self.client_parallelism_ceiling
+
+    def saturation_text(self) -> str:
+        if not self.saturation_evaluated:
+            return "not judged"
+        return "**yes**" if self.client_saturated else "no"
 
     def g5_text(self) -> str:
         if self.spread_percent is None:
@@ -136,6 +152,8 @@ def build_row(run_set: RunSet, key: CellKey, min_runs_for_g5: int = 3) -> Row | 
     row.request_window = max(windows) if windows else None
     abandoned = [c.abandoned for c in cells if c.abandoned is not None]
     row.abandoned = max(abandoned) if abandoned else None
+    ceilings = [c.client_parallelism_ceiling for c in cells if c.client_parallelism_ceiling]
+    row.client_parallelism_ceiling = max(ceilings) if ceilings else None
     row.drain_bound_hit = any(c.drain_bound_hit for c in cells)
     counted = [c.send_throughput_server_counted for c in cells]
     counted = [c for c in counted if c is not None]
@@ -192,8 +210,8 @@ def _block_reason(role: str, row: Row | None, key: CellKey) -> str | None:
         )
     if row.client_saturated:
         return (
-            f"{role} {key} is client-saturated at "
-            f"{row.values['client_cpu_percent']:.1f}% (spec 5.1, G6)"
+            f"{role} {key} is client-saturated at {row.values['client_cores']:.2f} of "
+            f"{row.client_parallelism_ceiling:g} declared core(s) (spec 5.1, G6)"
         )
     if row.send_server_counted is False:
         return f"{role} {key} throughput is client-counted, not server-counted (G3, FB-014)"

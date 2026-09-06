@@ -66,7 +66,7 @@ foreach (var payloadSize in options.PayloadSizes)
         Console.Error.WriteLine($"[bench] request payload={payloadSize} mode=serial");
         if (options.ShouldRunImplementation("grpc-dotnet"))
         {
-            await AddCellAsync(results, failures, contaminated, drainState, "grpc-dotnet-request-serial", async () =>
+            await AddCellAsync(results, failures, contaminated, drainState, payloadSize, "grpc-dotnet-request-serial", async () =>
                 await RunRequestSerialAsync(
                 "grpc-dotnet-request-serial",
                 payloadSize,
@@ -80,13 +80,13 @@ foreach (var payloadSize in options.PayloadSizes)
 
         if (options.ShouldRunImplementation("zlink-dotnet"))
         {
-            await AddCellAsync(results, failures, contaminated, drainState, "zlink-dotnet-request-serial", async () =>
+            await AddCellAsync(results, failures, contaminated, drainState, payloadSize, "zlink-dotnet-request-serial", async () =>
                 await RunRawRequestSerialAsync(rawContext, payloadSize, options));
         }
 
         if (options.ShouldRunImplementation("zlink-framework-dotnet"))
         {
-            await AddCellAsync(results, failures, contaminated, drainState, "zlink-framework-dotnet-request-serial", async () =>
+            await AddCellAsync(results, failures, contaminated, drainState, payloadSize, "zlink-framework-dotnet-request-serial", async () =>
                 await RunRequestSerialAsync(
                 "zlink-framework-dotnet-request-serial",
                 payloadSize,
@@ -105,7 +105,7 @@ foreach (var payloadSize in options.PayloadSizes)
         Console.Error.WriteLine($"[bench] request payload={payloadSize} mode=window window={options.RequestWindow}");
         if (options.ShouldRunImplementation("grpc-dotnet"))
         {
-            await AddCellAsync(results, failures, contaminated, drainState, "grpc-dotnet-request-window", async () =>
+            await AddCellAsync(results, failures, contaminated, drainState, payloadSize, "grpc-dotnet-request-window", async () =>
                 await RunRequestAsync(
                 "grpc-dotnet-request-window",
                 payloadSize,
@@ -119,13 +119,13 @@ foreach (var payloadSize in options.PayloadSizes)
 
         if (options.ShouldRunImplementation("zlink-dotnet"))
         {
-            await AddCellAsync(results, failures, contaminated, drainState, "zlink-dotnet-request-window", async () =>
+            await AddCellAsync(results, failures, contaminated, drainState, payloadSize, "zlink-dotnet-request-window", async () =>
                 await RunRawRequestAsync(rawContext, payloadSize, options));
         }
 
         if (options.ShouldRunImplementation("zlink-framework-dotnet"))
         {
-            await AddCellAsync(results, failures, contaminated, drainState, "zlink-framework-dotnet-request-window", async () =>
+            await AddCellAsync(results, failures, contaminated, drainState, payloadSize, "zlink-framework-dotnet-request-window", async () =>
                 await RunRequestAsync(
                 "zlink-framework-dotnet-request-window",
                 payloadSize,
@@ -144,7 +144,7 @@ foreach (var payloadSize in options.PayloadSizes)
         Console.Error.WriteLine($"[bench] send payload={payloadSize} concurrency={options.SendConcurrency}");
         if (options.ShouldRunImplementation("grpc-dotnet"))
         {
-            await AddCellAsync(results, failures, contaminated, drainState, "grpc-dotnet-send-saturation", async () =>
+            await AddCellAsync(results, failures, contaminated, drainState, payloadSize, "grpc-dotnet-send-saturation", async () =>
                 await RunSendAsync(
                 "grpc-dotnet-send-saturation",
                 payloadSize,
@@ -156,13 +156,13 @@ foreach (var payloadSize in options.PayloadSizes)
 
         if (options.ShouldRunImplementation("zlink-dotnet"))
         {
-            await AddCellAsync(results, failures, contaminated, drainState, "zlink-dotnet-send-saturation", async () =>
+            await AddCellAsync(results, failures, contaminated, drainState, payloadSize, "zlink-dotnet-send-saturation", async () =>
                 await RunRawSendAsync(rawContext, payloadSize, options, drainState));
         }
 
         if (options.ShouldRunImplementation("zlink-framework-dotnet"))
         {
-            await AddCellAsync(results, failures, contaminated, drainState, "zlink-framework-dotnet-send-saturation", async () =>
+            await AddCellAsync(results, failures, contaminated, drainState, payloadSize, "zlink-framework-dotnet-send-saturation", async () =>
                 await RunSendAsync(
                 "zlink-framework-dotnet-send-saturation",
                 payloadSize,
@@ -180,7 +180,17 @@ foreach (var payloadSize in options.PayloadSizes)
 Print(results);
 
 var resultFile = Path.Combine(options.Output, "results.json");
-var report = new BenchReport(metadata, results);
+
+// FB-021: results.json is the channel a consumer reads. Everything the run
+// learned about a cell goes into it here, so nothing that decides publication
+// is left only in printed output.
+var reportedResults = results
+    .Select(result => result.WithDiagnostics(
+        CellDiagnostics.TryGet(result.Scenario, result.PayloadSize)))
+    .ToList();
+var report = new BenchReport(
+    metadata with { ContaminatedCells = [.. contaminated] },
+    reportedResults);
 var jsonOptions = new JsonSerializerOptions
 {
     WriteIndented = true,
@@ -529,6 +539,14 @@ static async ValueTask<BenchResult> RunSendAsync(
         $"[bench] boundary {name}: server_received_at_close={server.ActiveMessages}"
         + $" post_drain={outcome.Snapshot.ActiveMessages} drain_ms={outcome.DrainMs:F0}");
 
+    // FB-021: the same values as data. The printed line above stays for a person
+    // watching a run; it is not the channel the aggregator reads.
+    var sendDiagnostic = CellDiagnostics.For(name, payloadSize);
+    sendDiagnostic.DrainMs = outcome.DrainMs;
+    sendDiagnostic.DrainBoundHit = outcome.BoundHit;
+    sendDiagnostic.ServerReceivedAtClose = server.ActiveMessages;
+    sendDiagnostic.ServerReceivedPostDrain = outcome.Snapshot.ActiveMessages;
+
     return new BenchResult(
         name,
         "KMSG/s",
@@ -824,6 +842,13 @@ static async ValueTask<BenchResult> RunRawRequestBytesAsync(
         $"[bench] window {name}: peak_in_flight={peakInFlight} of {options.RequestWindow}"
         + $" abandoned={abandoned}");
 
+    // FB-021: FB-017's depth is what separates "the harness cannot fill the
+    // window" from "the stack reaches only this depth", so it travels as data.
+    var windowDiagnostic = CellDiagnostics.For(name, payloadSize);
+    windowDiagnostic.PeakInFlight = peakInFlight;
+    windowDiagnostic.RequestWindow = options.RequestWindow;
+    windowDiagnostic.Abandoned = abandoned;
+
     total.Stop();
     var clientCpuSeconds = resources.CpuSeconds();
     var clientMemoryMb = resources.WorkingSetMb();
@@ -1048,6 +1073,7 @@ static async ValueTask AddCellAsync(
     List<string> failures,
     List<string> contaminated,
     DrainState drain,
+    int payloadSize,
     string name,
     Func<ValueTask<BenchResult>> body)
 {
@@ -1055,7 +1081,7 @@ static async ValueTask AddCellAsync(
     // the tables and from every judgement rather than measured and published.
     if (drain.TryTakeContamination(ImplementationOf(name), out var reason))
     {
-        contaminated.Add($"{name}: {reason}");
+        contaminated.Add($"{name}@{payloadSize}: {reason}");
         Console.Error.WriteLine($"[bench] CONTAMINATED {name}: {reason}");
         return;
     }
@@ -1299,6 +1325,9 @@ static string FormatText(BenchReport report)
         builder.AppendLine($"  payload_sizes: {string.Join(",", report.Metadata.PayloadSizes)}");
         builder.AppendLine($"  request_window: {report.Metadata.RequestWindow}");
         builder.AppendLine($"  send_concurrency: {report.Metadata.SendConcurrency}");
+        builder.AppendLine($"  logical_cores: {report.Metadata.LogicalCores}");
+        builder.AppendLine(
+            $"  client_parallelism_ceiling: {report.Metadata.ClientParallelismCeiling}");
         builder.AppendLine($"  latency_sample_limit: {report.Metadata.LatencySampleLimit}");
         builder.AppendLine($"  warmup: {report.Metadata.Warmup}");
         builder.AppendLine($"  duration_seconds: {report.Metadata.DurationSeconds}");
@@ -1518,6 +1547,22 @@ internal sealed record BenchReportMetadata(
     string ResultJson,
     string ReportText)
 {
+    /// <summary>
+    ///     FB-021: presence of this declaration is how a consumer knows the
+    ///     per-cell diagnostics below are present as data. Output without it is
+    ///     older and carries those values only in printed lines.
+    /// </summary>
+    public string DiagnosticsSchema => CellDiagnostics.Schema;
+
+    /// <summary>Bench spec 5.1: what the client CPU percentage is taken against.</summary>
+    public int LogicalCores => Environment.ProcessorCount;
+
+    /// <summary>Bench spec 5.1: the declared client parallelism ceiling.</summary>
+    public int ClientParallelismCeiling => Environment.ProcessorCount;
+
+    /// <summary>FB-008: cells excluded from the tables and from every judgement.</summary>
+    public string[] ContaminatedCells { get; init; } = [];
+
     public static BenchReportMetadata Empty { get; } = new(
         default,
         "",
@@ -1568,6 +1613,46 @@ internal sealed record BenchResult(
     double ServerCpuSeconds,
     double ServerWorkingSetMb)
 {
+    // FB-021 diagnostics, attached after the cell runs. Null means the cell has
+    // no such value (a request cell has no drain), never zero.
+    public long? PeakInFlight { get; init; }
+    public int? RequestWindow { get; init; }
+    public long? Abandoned { get; init; }
+    public double? DrainMs { get; init; }
+    public bool? DrainBoundHit { get; init; }
+    public long? ServerReceivedAtClose { get; init; }
+    public long? ServerReceivedPostDrain { get; init; }
+
+    /// <summary>
+    ///     Bench spec 5.1: CPU the client used expressed as cores. A percentage
+    ///     of every logical core cannot express the saturation of a client that
+    ///     is limited to fewer, so both forms are recorded.
+    /// </summary>
+    public double ClientCores => ClientCpuSeconds / Math.Max(0.001, ElapsedSeconds);
+
+    /// <summary>
+    ///     Bench spec 5.1: the client parallelism ceiling this harness declares.
+    ///     The .NET client dispatches over the thread pool, so its ceiling is the
+    ///     machine's logical core count. A single-threaded client declares 1.
+    /// </summary>
+    public int ClientParallelismCeiling => Environment.ProcessorCount;
+
+    public BenchResult WithDiagnostics(CellDiagnostic? diagnostic)
+    {
+        return diagnostic is null
+            ? this
+            : this with
+            {
+                PeakInFlight = diagnostic.PeakInFlight,
+                RequestWindow = diagnostic.RequestWindow,
+                Abandoned = diagnostic.Abandoned,
+                DrainMs = diagnostic.DrainMs,
+                DrainBoundHit = diagnostic.DrainBoundHit,
+                ServerReceivedAtClose = diagnostic.ServerReceivedAtClose,
+                ServerReceivedPostDrain = diagnostic.ServerReceivedPostDrain,
+            };
+    }
+
     private double LatencyMeanMicros => ServerMeanMicros ?? MeanMicros;
     private double LatencyP95Micros => ServerP95Micros ?? P95Micros;
     private double LatencyP99Micros => ServerP99Micros ?? P99Micros;
@@ -1658,6 +1743,52 @@ internal sealed record BenchResult(
 /// </summary>
 internal readonly record struct DrainOutcome(
     BenchServerSnapshot Snapshot, double DrainMs, bool BoundHit);
+
+/// <summary>
+///     FB-021: per-cell diagnostics collected while a cell runs and attached to
+///     its <see cref="BenchResult"/> before serialization. Reached depth, drain
+///     time, the active-window boundary count and the declared client
+///     parallelism ceiling all decide whether a number may be published, so they
+///     belong in <c>results.json</c> rather than only in printed output that a
+///     consumer would have to parse back out of prose.
+/// </summary>
+internal sealed class CellDiagnostic
+{
+    public long? PeakInFlight { get; set; }
+    public int? RequestWindow { get; set; }
+    public long? Abandoned { get; set; }
+    public double? DrainMs { get; set; }
+    public bool? DrainBoundHit { get; set; }
+    public long? ServerReceivedAtClose { get; set; }
+    public long? ServerReceivedPostDrain { get; set; }
+}
+
+internal static class CellDiagnostics
+{
+    public const string Schema = "with-grpc-cell-v1";
+
+    private static readonly Dictionary<string, CellDiagnostic> Entries =
+        new(StringComparer.Ordinal);
+
+    private static string Key(string scenario, int payloadSize) => $"{scenario}@{payloadSize}";
+
+    public static CellDiagnostic For(string scenario, int payloadSize)
+    {
+        var key = Key(scenario, payloadSize);
+        if (!Entries.TryGetValue(key, out var entry))
+        {
+            entry = new CellDiagnostic();
+            Entries[key] = entry;
+        }
+
+        return entry;
+    }
+
+    public static CellDiagnostic? TryGet(string scenario, int payloadSize)
+    {
+        return Entries.GetValueOrDefault(Key(scenario, payloadSize));
+    }
+}
 
 internal sealed class DrainState
 {
