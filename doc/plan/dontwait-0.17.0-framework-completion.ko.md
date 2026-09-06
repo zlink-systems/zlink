@@ -188,5 +188,5 @@
 ### H. pull 뒤 전체 재검증 (2026-09-06 07:4x~, 사용자 지시)
 - [x] pull: B의 Core `bf28780d51`(STREAM fragment drain) 1건 유입 → rebuild13(Core 083588b4…)
 - [x] green: cpp unit 43/43 + 샘플 7/7, java 7 + kotlin 7, dotnet 7 + aggregate, dotnet SampleRegression 157/0 + unit main 1978/0, java core/contract 0 fail
-- [ ] red(D-099): node ZoneWorld gateway crash(`disconnect_rid` NOT_FOUND를 미처리 예외로 → node framework job), dotnet ZoneWorld 2회차 A1/G3, node contract `stream-actor-bind-replay` 간헐 — Core `bf28780d51` 회귀 여부 조사 job(worktree a, xhigh)
-- [ ] 이후: 원인 수정·커밋 → rebuild14 → gate14 + E2E → §H 마감
+- [x] red 3건 전부 근본 수정: node gateway crash = node framework가 이미 없는 세션의 `disconnect_rid` NOT_FOUND를 치명 예외로 전파 → 완료된 close로 처리(핸들러 2→1) `62ee78e3f5`; Core `bf28780d51`은 긴 partial packet drain이 poller 진행을 독점 → bounded step + 재wake `7738b8fd41`(B 의도 유지, 182/182); dotnet ZoneWorld G3→A1 = outbound intent 제거 시 native endpoint 등록 잔존(판정 2→1, D-100) `28c6c567ae`; node replay 테스트는 fixture 시간원 결함 `d9f6fc24b6`
+- [ ] 진행 중: rebuild14(Core `7738b8fd41` + B `0add1dd621`) → cpp unit → gate14(4언어) → cross-language E2E → §H 마감
