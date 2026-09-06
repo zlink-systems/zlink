@@ -1686,3 +1686,6 @@ G-0c(load 0.09, runs 3): multi DD 905.1 / DR_SENDSEND 273.9 / RR_SENDSEND 242.5 
 - R1-AB(sonnet, `core-rf-R1-AB-summary.md`): stream_dispatch_lifecycle.cpp 병합·삭제, 미사용 include, dead 기본 인자, `packet_record_t` 수동 move 삭제(deque가 호출 안 함 확인), route-shard 조회 8곳 → `find_route_locked` 1개. −132행. ctest 33/33 ×5. 축소셀 Ir/msg 9,554(+0.8 %, 셀 잡음 범위) → hotpath 게이트로 판정.
 - R2(opus, `core-rf-R2-summary.md`): −421/+147, 9파일. `prepare_gather_output` STREAM 분기 4갈래·중복 가드·`asio_error_handler.hpp`·`c_single_allocator` 삭제; `restart_input_internal` 279행 → 48행 + 헬퍼 3, pending-buffer 큐/풀을 `asio_rx_chunk_t` 하나로 통합(규칙 3개 감소). 부수 결함 수정(B): 비-STREAM drain이 마지막 메시지 EAGAIN에서 소비 바이트를 안 잘라 다음 restart 때 중복 디코딩. ctest 35/35 ×5, 축소셀 Ir/msg 9,445(−0.3 %), recv 2.000/msg 유지. D-f 등록(gather env knob 3개 무효 → 스펙 문장).
 - R3·R4 재개(동시 빌드 2개 규칙). 게이트는 r1+r2 묶음 → r3+r4 묶음 순, 그 뒤 G-A 재투입.
+
+## D-B162 (2026-09-07 08:10, 사용자 지적) 비교군 정정 — zlink는 pull 모델, 기준은 zmq
+사용자: "zlink는 pull 방식인데". I/O↔앱 핸드오프는 설계이므로 D-c(핸드오프 제거) 철회. 1차 목표를 zmq(같은 pull 모델) 대비 ≥ 1.0으로 개정(idle G-0b: 64 B 0.91, 1024 B 0.98, 64 KiB 1.27; zmq는 G-0 1차 값이라 재측정 필요). asio 대비는 참고. G-A 브리프에 zmq 서버 나란히 프로파일 추가. 남은 대상 = 핸드오프 단가(command 2회/msg, eventfd 0.5회, ctxsw 2×).

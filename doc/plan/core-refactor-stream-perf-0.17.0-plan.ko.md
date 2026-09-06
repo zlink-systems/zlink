@@ -39,7 +39,7 @@
 - 64 KiB에서는 zlink 서버 CPU가 228%로 asio(327%)보다 낮다. 여기서는 I/O 스레드가 놀고 있다는 뜻이므로 wake·flow control(credit)·write batching 쪽이 병목이다. `zlink_packet`이 zlink보다 15% 높은 것도 앱 쪽 프레임 재조립이 비용임을 보여 준다.
 - 벤치 서버(`stacks/zlink/test_scenario_stream_zlink.cpp`)는 poller → `zlink_recv_part` → 프레임 판정 → `zlink_send_part_rid` 에코 구조이며 앱 스레드가 별도다. asio 스택은 io_context 워커 안에서 read→write를 바로 잇는다. zlink는 구조상 I/O 스레드 ↔ 앱 스레드 핸드오프(ypipe + mailbox wake)가 한 번씩 더 있으므로 그 핸드오프를 **메시지마다가 아니라 묶음마다** 치르게 하는 것이 격차를 메우는 핵심 방향이다.
 
-목표: 세 크기 모두 zlink/asio ≥ 0.95 (64·1024 B는 zmq도 넘는다). 중간 목표 0.90.
+목표(2026-09-07 개정): **구조가 같은 pull 모델인 zmq 대비 세 크기 모두 ≥ 1.0**이 1차 목표(idle G-0b 기준 0.91 / 0.98 / 1.27). asio(push, 핸드오프 없음) 대비는 참고 지표로만 기록한다. 남은 격차는 핸드오프의 유무가 아니라 단가(메시지당 mailbox command 2회, eventfd write 0.5회, 컨텍스트 스위치 2×)다.
 
 ### 1.2 STREAM 데이터 경로와 파일
 
@@ -235,7 +235,7 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 |---|---|---|---|---|
 | D-a | S-B | 08-stream §4 118-120·README part send: 앱 send를 N개/T µs 묶어 I/O 스레드에 알림 → 제출 경계 지연 관측(§4.1-3) | 핸드오프 command 수 감소 | 대기 |
 | D-b | S-B | 05-polling POLLIN/POLLOUT level 조건: `poller_wait`의 command drain을 rdtsc로 스킵 | poller 비용 | 대기 |
-| D-c | S-B | 04-thread-safety·02-threading-model: STREAM 앱 처리를 I/O 스레드에서 직접(핸드오프 제거) | 최대(asio와 동일 구조) | 대기 |
+| ~~D-c~~ | S-B | ~~핸드오프 제거~~ — **철회(2026-09-07, 사용자 지적)**: zlink는 pull 모델이라 I/O↔앱 핸드오프는 설계 자체이며 zmq도 같다. 비교군을 asio(push)가 아니라 zmq(pull)로 두고 핸드오프 단가(command 2회/msg, eventfd, ctxsw 2×)를 줄이는 것만 대상 | — | 철회 |
 | D-d | S-B | 06-auto-hwm 스냅샷 정의: credit published store를 경계에서만 | 소 | 대기 |
 | D-e | S-11 | 04-thread-safety 소유권: 공개 receive lease가 command owner를 배타하도록 할지(`receive_once_guarded`·fq active partition의 TSan race). 계약 문장 변경이 아니라 소유 규칙 결정 + 성능 예산 | 정확성(잠재 race 제거), 성능은 −일 수 있음 | 대기 |
 | D-f | R2 | 08-stream "런타임 기본값": `ZLINK_ASIO_STREAM_GATHER_THRESHOLD`·`..._TINY_GATHER_THRESHOLD`·`..._DISABLE_GATHER` env가 S-4·R2 이후 어떤 동작에도 영향 없음(STREAM raw 엔진은 gather 불가). 접근자·문서 삭제는 스펙 문장 변경 | 구조(죽은 knob 3개 제거) | 대기 |
