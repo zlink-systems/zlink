@@ -61,3 +61,17 @@
 - **wire §5**: 5초/15초·ACK 판정 규칙을 liveness 참조로, wire는 schema·epoch만.
 - **wire §3.2**: 100 ms 종료 시점 → session binding §14 참조.
 - **liveness §10**: 수신 상한 검증을 본문(건수 64 고정, byte·시간 재량)과 정합.
+
+## 7. Foundation·execution (D-119 ~ D-122)
+행동 변경 없음. 30 ko/en 쌍. 핵심은 "한 규칙, 한 소유자"로 흩어진 서술을 걷어낸 것이다.
+- **Gate·turn·Yield·Actor claim의 소유자 = 실행 계약(02-handler-turn) §2·§3·§16**: interaction-model의 gate 표, Spot 모델의 queue/gate 그림, Spot 메시징 §3·§5.4, Actor 모델 §3, Stage wrapper §3·§5·§6, timer, lifecycle, framework-api §Yield, submit §1의 Yield 표가 모두 같은 내용을 되풀이하고 있었다. 이제 §2가 mode별 gate 공유 범위(SpotWide/Instance 공유, Entry Spot은 Spot gate + Actor별 gate, PerActor는 Actor·Spot·timer별), §3이 Yield의 gate 반납과 Actor queue claim 유지, §16이 call별 Yield 제공 목록과 잘못된 문맥의 `InvalidOperation`을 소유한다. 나머지 문서는 한 줄 링크. (Yield 목록 3 → 1, gate/claim 6 → 2)
+- **Admission seal의 소유자 = Host relocation §14·§15**: interaction-model·cancellation §5·mesh §8·layering §4의 "Relocating/Draining 때 무엇을 막는가" 서술을 제거하고 host 문서로 연결. layering의 9단계 종료 순서는 host §14의 6단계(closing callback이 teardown보다 앞)로 대체. Glossary "admission seal"은 실행 순서를 정하는 gate·용량 permit과 다른 판정임을 명시. (5 → 2)
+- **Mesh §8 정정(D-120)**: "unit seal 뒤 `Draining`" → 모든 unit 분리 시 host는 `Relocated`, `Draining`은 Shutdown만 진입(host §3 상태표와 정합).
+- **Binding cancellation(D-119, F-R4-1)**: "Core가 payload를 소유한 뒤 취소하면 caller만 취소, late completion은 정리" 문장이 submit·cancellation 문서에 6번 있었다. 소유자는 bindings async-execution-model §6이므로 Framework는 "binding에 넘기기 전 자기 queue 대기의 취소"만 정의하고 링크. mermaid 두 개 제거. (6 → 1)
+- **Bounded queue 오류의 소유자 = 오류 모델 §5**(anchor `bounded-queue-failure`): local `CapacityExceeded` / remote `Unavailable` 선택이 handler-turn §6 표, backpressure §8, Spot 메시징 §5.3·§5.4, lifecycle §9에 흩어져 있었다. §9 검증에 "호출자가 받는 오류" 관찰 3항목 추가. (5 → 1)
+- **공정성 상한·양보 부채(D-121)**: Actor §4는 "값이 없어 정성적"이라 했지만 실행 §7과 dotnet/node/java 구현은 10 ms·8 turn을 갖는다. Actor §4의 mode별 부채 표(SpotWide·Entry·Instance = 공유 gate 하나)는 세 구현(모두 실행 queue마다 부채)과 달랐다. 실행 §7이 "부채는 직렬 실행 객체마다, mode는 gate 공유 범위만 바꾼다" + 경계 조건 표를 소유하고, §7·§9의 "spec-gap 후보" 문장은 "같은 값·같은 확인 지점"으로 확정. (6 → 2)
+- **Glossary 신규 9개**: Actor, execution gate, handler turn, state lane, application lane, lifecycle lane, completion dispatcher, source-local admission, 양보 부채. 미참조 정의 13개(durable activation inbox, recovery receipt, routing-id conflict 등)에 첫 사용 링크. `#snapshot`(일반)과 `#publish-target-snapshot` 분리.
+- **Backpressure 정의**: local byte HWM만 쓰던 정의에 remote PAUSED/RUNNING receive-flow를 포함(Core socket receive-flow 계약 링크) — 4언어 모두 setter를 소비하므로 local만 설명하면 불충분.
+- **Retained Core lease 잔재 제거(F-R4-7)**: payload §8·wire·relocation §4.3의 "Core lease 반환" 서술 → Framework payload 저장소 수명(§8 `retained-record-children`)과 Core HWM 계상(Core socket)으로 분리.
+- **Payload §9 검증**: 내부 white-box 8항목을 §2·§3·§7 규칙 문단의 "내부 확인 조건"으로 옮기고 §9는 codec callback 호출 횟수·해제 callback 등 인터페이스 관찰만.
+- **Role 용어(D-122)**: glossary "Channel Client와 Server role"을 RouteMesh 등록 역할로 한정. ClientServer의 Server가 Client에 업무 호출을 시작하지 못하는 규칙은 ClientServer §1 소유. worker scheduler `CapacityExceeded`(SD-03)는 유지.
