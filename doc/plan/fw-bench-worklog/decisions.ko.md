@@ -343,6 +343,50 @@ drain 대기를 넣은 뒤 18셀 전부 완료, 실패 0, 오염 0.
   같은 붕괴를 보이면 bench 밖의 문제이고, 보이지 않으면 bench를 먼저 의심한다.
 - **성격이 정해지기 전까지 Node의 어떤 판정도 게재하지 않는다.**
 
+## FB-026 — Node binding의 client socket wedge (bench 밖에서 재현됨)
+
+- **판정** (job `fwb-04b`): FB-025의 붕괴는 **bench 밖에서 재현된다.** harness를 전혀
+  import하지 않고 `@zlink-systems/zlink`만 쓰는 재현 코드
+  (`framework/languages/node/bench/with-grpc/repro/`)가 같은 현상을 만든다. **harness는
+  혐의를 벗었다.**
+- **관찰** (ROUTER↔ROUTER, 1024 B, blocking-recv server):
+
+  | window | 처리량 | 오류 | p50 | max |
+  |---|---|---|---|---|
+  | 8 | 48,491/s | **0** | 0.144 ms | 1.4 ms |
+  | 16 | 3,353/s | 16 | 0.159 ms | 3001 ms |
+  | 24 | 935/s | 24 | 0.201 ms | 3001 ms |
+  | 100 | 1,134/s | 74 | 0.592 ms | 3001 ms |
+
+  `max`가 정확히 request timeout이므로 느린 완료가 아니라 **만료되는 정지**다.
+  p50은 끝까지 1 ms 미만이다. 정상 흐름과 멈춘 집합이 공존한다.
+- **성격**:
+  1. server pump 구현 문제가 아니다. blocking-recv server와 spin pump 둘 다에서 나온다.
+  2. 제출 루프 모양 문제가 아니다. batch 모양에서도 나온다.
+  3. **동시성 깊이 문제가 아니다.** 100개 동시 요청 one-shot은 1.1 ms에 100/100 완료된다.
+     지속적인 부하가 있어야 발생한다.
+  4. **client socket에 한정된 hard wedge다.** window 32에서 `completed`가 251 ms에
+     12,600에 도달한 뒤 남은 2.8초 동안 **한 번도 전진하지 않고** `inFlight`가 32에 고정된다.
+     그 socket이 멈춘 동안 **같은 server에 새로 붙인 client ROUTER는 1.5 ms에 100/100을
+     완료한다.** server는 정상이고 멈춘 것은 client socket이다.
+  5. 간헐적이다. 한 번은 141,481건을 처리한 뒤, 다른 때는 12,600건 뒤에 멈췄다.
+- **처리**: 이 캠페인은 고치지 않는다. **0.18.0 후보이며 우선순위가 높다.** 완료가 영구히
+  멈추는 것은 성능 특성이 아니라 정지 결함이다.
+
+## FB-027 — Node는 0.80 판정을 게재하지 않는다. 그 사실이 Node의 결과다
+
+- **관찰** (job `fwb-04b`): `zlink-node-request-window`의 event loop 사용률이 **window 8,
+  즉 FB-026 정지가 발생하지 않는 구성에서도 1.000**이다. 같은 run에서 `grpc-node`는
+  0.671~0.732로 포화가 아니다.
+- **의미**: Node에서 ZLink client 경로는 **transport가 상한이 되기 전에 JS thread를 먼저
+  채운다.** 규격 §5.1에 따라 그 셀은 포화로 표시되고 처리량 우열 판정에서 제외되므로,
+  formula 1의 분자가 게재 조건을 만족하지 못한다.
+- **결정** (2026-09-07, 감독관): **Node의 0.80 판정을 게재하지 않는다.** 이것을 실패나
+  누락으로 적지 않는다. **"Node에서는 ZLink client 경로가 transport보다 먼저 JS thread를
+  포화시킨다"가 Node에 대해 이 캠페인이 낸 결론이고, 판정 불가는 그 결론의 결과다.**
+- 표는 그대로 싣는다. 처리량·지연·event loop 사용률·drain 시간은 정보를 담고 있다.
+  게재하지 않는 것은 0.80 비율뿐이다.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
