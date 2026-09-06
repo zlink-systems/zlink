@@ -1,0 +1,10 @@
+{
+  "name": "@zlink-systems/with-grpc-bench-node",
+  "version": "0.0.0",
+  "private": true,
+  "description": "with-grpc local bench, node language row (spec framework/doc/framework/common/bench/with-grpc-local.ko.md)",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.12.6",
+    "@grpc/proto-loader": "^0.7.13"
+  }
+}
