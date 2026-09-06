@@ -1,0 +1,15 @@
+# Job: node samples — D-112: ZoneWorld runner leaks `vite preview` + `esbuild --service` processes
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 2 h. Read `AGENTS.md` §2/§3/§4.1/§5, `framework/AGENTS.md`, and the sample runner rules in `framework/doc/framework/common/sample/README.ko.md` (cleanup: a run terminates only the PIDs it owns, leaves nothing behind, no port reuse tricks). Campaign rules: no mitigations (no `pkill -f` sweeps of unrelated processes, no sleeps, no port randomization to dodge EADDRINUSE), one owner per rule, regression check per fix. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`, other languages, or `framework/languages/node/packages/**`/`test/**` (another job owns those). Do not commit. Scope: `framework/languages/node/samples/**`, `framework/languages/node/e2e/**` runner scripts and their shared helpers under `framework/languages/node/scripts/**` if the leak is there.
+
+## Evidence
+D-112 in `doc/plan/c016-worklog/decisions.ko.md:1441`: after node gates, 16 sets of `vite preview --host 127.0.0.1 --port 28xxx/29xxx` + `esbuild --service` remained, later causing DeliveryDispatch `EADDRINUSE 127.0.0.1:29136` in `sample-regression.test.js`. Right now `pgrep -af 'vite preview'` shows 7 leaked servers from today's gates and `/dev/shm/zlink-tmp-node/` holds many `zlink-zoneworld-*` work dirs. Record their PIDs/ports/parents (`ps -o pid,ppid,pgid,lstart,args`) as the baseline before you change anything, then terminate only those you identified as leaked ZoneWorld children (record what you killed).
+
+## Task
+1. Find where the ZoneWorld browser preview server is spawned (runner script / helper) and why it outlives the run: not tracked in the runner's child list, spawned detached / in its own process group, cleanup path skipped on SIGTERM/timeout, or the esbuild service child of vite not reaped. Cover both the normal exit path and the SIGTERM/timeout path the gate harness uses (the leak appeared after a gate was killed).
+2. Root fix at the owner: the runner owns every process it starts (track PIDs or a process group it created), terminates them on every exit path, waits for exit, and removes its `/dev/shm/zlink-tmp-node/zlink-zoneworld-*` work dir. One cleanup rule, not per-exit-path special cases.
+3. Regression check: a script or test that runs the ZoneWorld sample once (normal exit) and once with SIGTERM mid-run, then asserts no `vite preview`/`esbuild --service` process whose parent chain belonged to the run remains and the work dir is gone. Put it where the sample runner's other checks live.
+4. Gate: `flock /tmp/zlink-samples-gate.lock flock /tmp/zlink-node-gate.lock bash <the samples runner used by npm test>` — all 7 samples pass; before/after `pgrep -af 'vite preview|esbuild --service'` shows zero new processes.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-zoneworld-preview-leak-summary.md`: baseline process table, root cause file:line, fix, regression check, gate result, BLOCKERS. Do not print it to stdout.

@@ -1,0 +1,14 @@
+# Job: java framework — make ZLinkClientServerReadyWaitTest deterministic by injecting the runtime's monotonic clock
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 2 h. Read `AGENTS.md` §2/§3/§4.1/§5 and `framework/AGENTS.md`. Campaign rules: no mitigations (do NOT widen tolerances, add retries, sleeps, or skip), one owner per rule, public API unchanged, no behavior change. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`, other languages. Do not commit. Work in `framework/languages/java`; take `/tmp/zlink-java-gate.lock` (flock) for gradle runs.
+
+## Problem
+`zlink-framework-core/src/test/java/systems/zlink/framework/runtime/channels/ZLinkClientServerReadyWaitTest.java` asserts real elapsed time: `assertElapsed(started, 145, 250)`, `(395, 500)`, and `forwarded <= 250 ms` after a 150 ms scheduled admit on a 400 ms call. Under machine load (loadavg > 20) the runtime fixes its deadline several ms after the test's `System.nanoTime()` and the assertions fail (`readiness must consume the operation's timeout: PT0.25711401S`); alone it passes. Evidence: `zlink-work/c016/gates/java-r8-gate.log:46-50`, `zlink-framework-core/build/test-results/test/TEST-...ReadyWaitTest.xml` (first run). The contract under test (F-R5-9/D-093: one call deadline, ready wait consumes it, request forwards the remainder, 5 s cap) is correct; the test's dependence on scheduler latency is the defect.
+
+## Task
+1. Find the clock the ClientServer client runtime uses to fix the call deadline and compute the remainder (D-095 monotonic; e.g. `ZLinkClientServerClientRuntime` / the operation's deadline owner). If it already has a clock seam (a `LongSupplier`/`Clock`-like dependency or a constructor parameter), use it. If not, add a package-private/internal seam with the production default = the existing monotonic source — no behavior change, no new public API.
+2. Rewrite the three timing tests to drive that clock: advance it to exactly +150 ms when admitting, assert the forwarded remainder is exactly 250 ms, the expiry case completes with DEADLINE_EXCEEDED exactly at the original deadline, and the 5 s cap case forwards exactly the cap-derived value. Keep the real-time tests only where they assert ordering, not durations. The node reference did this in `framework/languages/node/test/contract/client-server-location-runtime.test.js` (controlled monotonic clock for exact boundaries) — mirror that shape.
+3. Verify: the class 20x with artificial load (e.g. `stress-ng --cpu 20` or a parallel `yes > /dev/null` ×20 for the duration) → 20/20, then the full `./gradlew test` under the lock → 0 failures.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-java-readywait-clock-summary.md`: seam used/added (file:line), test changes, load-run and gate results, BLOCKERS. Do not print it to stdout.
