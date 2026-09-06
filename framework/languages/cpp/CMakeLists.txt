@@ -1109,12 +1109,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   add_test(NAME test_cpp_framework_r6_create_lifecycle
     COMMAND test_cpp_framework_m6a_runtime --r6-create-lifecycle)
   set_tests_properties(test_cpp_framework_r6_create_lifecycle PROPERTIES
-    LABELS "framework-unit;framework-r6-parity" TIMEOUT 30)
+    LABELS "framework-unit;framework-regression" TIMEOUT 30)
 
   add_test(NAME test_cpp_framework_r6_join_durable
     COMMAND test_cpp_framework_m6a_runtime --r6-join-durable)
   set_tests_properties(test_cpp_framework_r6_join_durable PROPERTIES
-    LABELS "framework-unit;framework-r6-parity" TIMEOUT 30)
+    LABELS "framework-unit;framework-regression" TIMEOUT 30)
 
   add_executable(test_cpp_framework_mesh_shutdown_seal
     tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_shutdown_seal.cpp)
@@ -1426,6 +1426,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::framework_codec_protobuf)
   target_include_directories(test_cpp_framework_actor_gateway PRIVATE
     ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+  foreach(reconcile_case source no-commit target indeterminate)
+    add_test(NAME test_cpp_framework_reconcile_${reconcile_case}
+      COMMAND test_cpp_framework_actor_gateway --reconcile-${reconcile_case})
+    set_tests_properties(test_cpp_framework_reconcile_${reconcile_case} PROPERTIES
+      LABELS "framework-unit;framework-regression;framework-actor;relocation"
+      TIMEOUT 30)
+  endforeach()
   target_link_libraries(test_cpp_framework_app_host PRIVATE zlink::http_client)
   if(ZLINK_FRAMEWORK_CPP_ENABLE_COVERAGE)
     set(ZLINK_FRAMEWORK_HTTP_TEST_HTTP_ENDPOINT "http://127.0.0.1:18180")
@@ -1572,7 +1579,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_test(NAME test_cpp_framework_r6_creation_terminal
     COMMAND test_cpp_framework_opaque_store_providers --gtest_filter=*CreationTerminal*)
   set_tests_properties(test_cpp_framework_r6_creation_terminal PROPERTIES
-    LABELS "framework-unit;framework-r6-parity" TIMEOUT 30)
+    LABELS "framework-unit;framework-regression" TIMEOUT 30)
 
   add_executable(test_cpp_framework_location_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime.cpp)

@@ -2584,12 +2584,10 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
     namespace runtime = zlink::framework::runtime;
     namespace stateful = zlink::framework::runtime::stateful;
 
-    // Regression pin (spec 28 relay-ready irreversibility, finding [C]):
-    // once past relay-ready, a reconcile deadline must never blindly replay
-    // locally -- if the Location Store shows the target actually committed,
-    // the deadline handler must adopt the captured target route (and drain
-    // any parked backlog by forwarding), exactly like the cold-probe path,
-    // never reopen the source for local dispatch.
+    // 04-relocation-flow.ko.md §9, paragraph after the failure table:
+    // after accepted relay-ready and an unknown cutover result, a visible
+    // target commit adopts the target route and forward-drains the backlog.
+    // Source dispatch must never reopen.
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
       std::make_shared<runtime::offload_executor_t> (1, 16, "reconcile-adopt-worker");
@@ -2615,10 +2613,12 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
                                        "mesh", "actor-b"}};
     node->relocation_authority = authority;
 
+    const auto before_reconcile = std::chrono::steady_clock::now ();
     node->actor_transfer_coordinator.mark_reconcile (
       key, std::chrono::milliseconds (20),
       reconcile_target_context_t{target_route, target_actor, source_fence, target_fence,
                                  "transfer-reconcile"});
+    const auto after_reconcile = std::chrono::steady_clock::now ();
 
     // A packet parked while reconcile was pending must actually be drained
     // by forwarding to the adopted target -- not merely have its route
@@ -2641,8 +2641,14 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
                             {},
                             false});
 
-    std::this_thread::sleep_for (std::chrono::milliseconds (30));
-    (void) spots.cleanup_expired_actor_admissions ();
+    if (spots.cleanup_expired_actor_admissions_at (
+          before_reconcile + std::chrono::milliseconds (19)) != 0
+        || relay_calls.load (std::memory_order_acquire) != 0
+        || !node->actor_transfer_coordinator.blocks_dispatch (key))
+        return 6;
+    if (spots.cleanup_expired_actor_admissions_at (
+          after_reconcile + std::chrono::milliseconds (20)) != 1)
+        return 7;
 
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
     while (node->actor_transfer_coordinator.phase (key).has_value ()
@@ -2671,130 +2677,6 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
     if (!spot_matches)
         return 3;
     if (!node_matches)
-        return 4;
-    return 0;
-}
-
-int reconcile_deadline_restores_actor_to_local_service ()
-{
-    using namespace zlink::framework;
-    using namespace zlink::framework::detail;
-    namespace runtime = zlink::framework::runtime;
-    namespace stateful = zlink::framework::runtime::stateful;
-
-    // Regression pin (spec 28 relay-ready irreversibility, finding [C]):
-    // when the Location Store shows no evidence any target ever committed
-    // (no record at all), the source really does still own the Actor, so a
-    // reconcile deadline restores local servability -- now justified by
-    // store truth rather than blind assumption.
-    serializer_registry_t serializers;
-    auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
-    node->worker_executor =
-      std::make_shared<runtime::offload_executor_t> (1, 16, "reconcile-worker");
-    node->channel_runtime = std::make_shared<channel_runtime_state_t> ();
-    node->channel_runtime->serializers = &serializers;
-
-    auto spot = std::make_shared<spot_context_state_t> ();
-    spot->node = node;
-    spot->node_rid = node_rid_t::from_string ("actor-a");
-    spot->spot_id = spot_id_t ("actor-a-entry");
-    spot->spot_name = "entry";
-    spot->spot_instance = std::make_shared<int> (1);
-    spot->channel_runtime = std::make_shared<channel_runtime_state_t> ();
-    spot->channel_runtime->serializers = &serializers;
-    spot->serial_executor = node->worker_executor;
-    node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
-
-    spot_node_builder_state_t::actor_factory_registration_t factory;
-    factory.actor_type = std::type_index (typeid (int));
-    factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
-    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
-    node->actor_factories.emplace ("player", std::move (factory));
-
-    const auto actor = test_actor_ref ("actor-a", "player", "reconcile-actor", 1);
-    const auto key = std::string ("player:reconcile-actor");
-    node->actor_instances.emplace (key, std::make_shared<int> (7));
-    node->actor_spot_ids.emplace (key, spot->spot_id);
-    node->actor_generations.emplace (key, 1);
-
-    std::atomic_bool handler_ran{false};
-    spot->handlers.push_back (
-      spot_handler_descriptor_t{spot_handler_kind_t::actor_send, "ReconcileProbe", "",
-                                std::type_index (typeid (int)), std::type_index (typeid (void)),
-                                std::type_index (typeid (int)), std::type_index (typeid (void))});
-    spot->handler_invokers.push_back (
-      [&handler_ran] (void *, void *, service_provider_t &, serializer_registry_t &,
-                      const zlink::message_t &,
-                      const spot_inbound_message_t &) -> task_t<zlink::message_t> {
-          handler_ran.store (true, std::memory_order_release);
-          co_return zlink::message_t{};
-      });
-
-    const auto source_fence =
-      runtime::protocol::actor_route_fence_t{"reconcile-actor", 1, {}, 0, 5, 1};
-    const auto target_fence =
-      runtime::protocol::actor_route_fence_t{"reconcile-actor", 1, {}, 0, 6, 2};
-    const auto target_actor = test_actor_ref ("actor-b", "player", "reconcile-actor", 1);
-    const auto target_route =
-      spot_route_t{node_rid_t::from_string ("actor-b"), spot_id_t ("target-spot"), ""};
-    // No record at all: the store has no evidence any target ever committed.
-    auto authority = std::make_shared<fixed_reconcile_authority_store_t> ();
-    node->relocation_authority = authority;
-
-    // Mirrors fail_remote_actor_transfer(actor, true): the ambiguous-outcome
-    // path, bounded by a short deadline for this test.
-    node->actor_transfer_coordinator.mark_reconcile (
-      key, std::chrono::milliseconds (20),
-      reconcile_target_context_t{target_route, target_actor, source_fence, target_fence,
-                                 "transfer-reconcile"});
-
-    service_collection_t services;
-    auto provider = services.build_provider ();
-    actor_gateway_runtime_t gateway;
-    spot_inbound_message_t metadata;
-
-    spot_node_runtime_t spots (node);
-    auto sent =
-      spots.relay_actor_packet (actor, gateway.actor_context (actor), stream_message_kind_t::send,
-                                "ReconcileProbe", zlink::message_t::from (std::string ("probe")),
-                                provider, serializers, std::move (metadata), nullptr);
-
-    const auto sent_result = finite_task_result (std::move (sent));
-    if (!sent_result || !*sent_result)
-        return 1;
-    // reconcile is a "moving" phase for try_append_backlog: the packet
-    // parks rather than dispatching immediately.
-    if (handler_ran.load (std::memory_order_acquire))
-        return 2;
-
-    std::this_thread::sleep_for (std::chrono::milliseconds (30));
-    (void) spots.cleanup_expired_actor_admissions ();
-    // The deadline bounds the reconcile phase itself; assert that bound
-    // directly (the move must be gone once expired), not just an
-    // observable side effect of it.
-    if (node->actor_transfer_coordinator.phase (key).has_value ())
-        return 3;
-
-    // Assert a bounded, observable outcome per spec 28, not just coordinator
-    // state: a fresh request must be served, not parked again -- the Actor
-    // is genuinely back in local service.
-    spot_inbound_message_t follow_up_metadata;
-    auto follow_up =
-      spots.relay_actor_packet (actor, gateway.actor_context (actor), stream_message_kind_t::send,
-                                "ReconcileProbe", zlink::message_t::from (std::string ("probe-2")),
-                                provider, serializers, std::move (follow_up_metadata), nullptr);
-    const auto follow_up_result = finite_task_result (std::move (follow_up));
-    if (!follow_up_result || !*follow_up_result)
-        return 4;
-
-    const auto handler_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
-    while (!handler_ran.load (std::memory_order_acquire)
-           && std::chrono::steady_clock::now () < handler_deadline) {
-        std::this_thread::yield ();
-    }
-    if (!handler_ran.load (std::memory_order_acquire))
-        return 5;
-    if (node->actor_transfer_coordinator.phase (key).has_value ())
         return 4;
     return 0;
 }
@@ -3065,19 +2947,18 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     return 0;
 }
 
-int reconcile_deadline_fast_fails_when_store_is_indeterminate ()
+int reconcile_deadline_fast_fails_without_target_commit (
+  std::shared_ptr<fixed_reconcile_authority_store_t> authority)
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
 
-    // Regression pin (spec 28 relay-ready irreversibility, finding [C]):
-    // an unreadable/unconfigured Location Store at reconcile-deadline
-    // expiry is genuinely indeterminate -- it must never be treated as
-    // license to blind-replay locally (that could reopen a source the
-    // target already committed past). The Actor stays unavailable: the
-    // move is never closed, so newly arriving traffic keeps parking (and
-    // gets fast-failed on the next sweep) instead of being served locally.
+    // 04-relocation-flow.ko.md §9, paragraph after the failure table:
+    // after relay-ready is accepted, an unknown cutover cannot reopen source
+    // dispatch even when the Store still shows the source. The target may
+    // continue its CAS within Restore validity. At the reconciliation deadline,
+    // held requests must end Unavailable and the source must stay sealed.
     serializer_registry_t serializers;
     auto node = std::make_shared<spot_node_builder_state_t> ("actor-a");
     node->worker_executor =
@@ -3128,11 +3009,14 @@ int reconcile_deadline_fast_fails_when_store_is_indeterminate ()
     const auto target_actor = test_actor_ref ("actor-b", "player", "reconcile-actor", 1);
     const auto target_route =
       spot_route_t{node_rid_t::from_string ("actor-b"), spot_id_t ("target-spot"), ""};
-    // relocation_authority left unconfigured -- an unreadable store.
+    node->relocation_authority = std::move (authority);
+    const auto before_reconcile = std::chrono::steady_clock::now ();
     node->actor_transfer_coordinator.mark_reconcile (
       key, std::chrono::milliseconds (20),
       reconcile_target_context_t{target_route, target_actor, source_fence, target_fence,
                                  "transfer-reconcile"});
+
+    const auto after_reconcile = std::chrono::steady_clock::now ();
 
     // A parked *request* (not just a send) must actually receive an
     // explicit failure reply -- "bounded wait then requestFailed", not
@@ -3163,6 +3047,7 @@ int reconcile_deadline_fast_fails_when_store_is_indeterminate ()
     // parking-node and initiating-fence dimensions, a hand-written backlog
     // with no matching pending entry only exercises the intentional drop.
     std::atomic_int local_reply_calls{0};
+    std::atomic_bool local_reply_was_unavailable{false};
     auto reply_host = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
       .mesh = {.descriptor = {.mesh_name = "reconcile-indeterminate",
                               .node_routing_id =
@@ -3172,10 +3057,18 @@ int reconcile_deadline_fast_fails_when_store_is_indeterminate ()
                               .advertised_endpoint = "tcp://127.0.0.1:0"}}});
     host::reply_token_t local_reply;
     local_reply.host = std::move (reply_host);
-    local_reply.local_reply = [&local_reply_calls] (const std::vector<zlink::message_t> &) {
-        local_reply_calls.fetch_add (1, std::memory_order_acq_rel);
-        return true;
-    };
+    local_reply.local_reply =
+      [&local_reply_calls, &local_reply_was_unavailable] (
+        const std::vector<zlink::message_t> &parts) {
+          runtime::messaging::envelope_codec_t codec;
+          const auto header = codec.decode_header (runtime::messaging::message_parts_t (parts));
+          local_reply_was_unavailable.store (
+            header && header.value ().kind == runtime::messaging::message_kind_t::error
+              && header.value ().error_code == "unavailable",
+            std::memory_order_release);
+          local_reply_calls.fetch_add (1, std::memory_order_acq_rel);
+          return true;
+      };
     node->pending_handoff_requests.emplace (
       spot_node_builder_state_t::pending_handoff_request_key_t{
         zlink::routing_id_t::from ("remote-caller-node").to_hex (), 111, 222, {}},
@@ -3206,10 +3099,17 @@ int reconcile_deadline_fast_fails_when_store_is_indeterminate ()
     if (handler_ran.load (std::memory_order_acquire))
         return 2;
 
-    std::this_thread::sleep_for (std::chrono::milliseconds (30));
-    (void) spots.cleanup_expired_actor_admissions ();
-    // Unlike the store-shows-source-owns case, the move must NOT be closed:
-    // an indeterminate outcome never reopens local dispatch.
+    // Drive the existing monotonic sweep clock across the deadline without
+    // sleeping. Before expiry the reply must remain parked.
+    if (spots.cleanup_expired_actor_admissions_at (
+          before_reconcile + std::chrono::milliseconds (19)) != 0
+        || local_reply_calls.load (std::memory_order_acquire) != 0)
+        return 9;
+    const auto expired = after_reconcile + std::chrono::milliseconds (20);
+    if (spots.cleanup_expired_actor_admissions_at (expired) != 1)
+        return 10;
+    // No target commit is visible: keep the move sealed, regardless of
+    // whether the Store returned source evidence, no record, or no answer.
     if (!node->actor_transfer_coordinator.phase (key).has_value ())
         return 3;
     if (*node->actor_transfer_coordinator.phase (key) != actor_move_phase_t::reconcile)
@@ -3217,8 +3117,13 @@ int reconcile_deadline_fast_fails_when_store_is_indeterminate ()
     if (terminal_calls.load (std::memory_order_acquire) != 0
         || local_reply_calls.load (std::memory_order_acquire) != 1)
         return 7;
-    if (terminal_was_failure.load (std::memory_order_acquire))
+    if (terminal_was_failure.load (std::memory_order_acquire)
+        || !local_reply_was_unavailable.load (std::memory_order_acquire))
         return 8;
+    if (!node->pending_handoff_requests.empty ()
+        || !node->actor_transfer_coordinator.blocks_dispatch (key)
+        || node->actor_routes.contains (key))
+        return 11;
 
     // A fresh request still cannot reach the handler -- it parks again
     // rather than being served, because the Actor genuinely stays
@@ -3231,10 +3136,40 @@ int reconcile_deadline_fast_fails_when_store_is_indeterminate ()
     const auto follow_up_result = finite_task_result (std::move (follow_up));
     if (!follow_up_result || !*follow_up_result)
         return 5;
-    std::this_thread::sleep_for (std::chrono::milliseconds (100));
+    (void) spots.cleanup_expired_actor_admissions_at (expired);
+    node->worker_executor->drain ();
     if (handler_ran.load (std::memory_order_acquire))
         return 6;
+    if (local_reply_calls.load (std::memory_order_acquire) != 1
+        || !node->actor_transfer_coordinator.blocks_dispatch (key)
+        || node->actor_routes.contains (key))
+        return 12;
     return 0;
+}
+
+int reconcile_deadline_fast_fails_when_store_shows_source ()
+{
+    namespace stateful = zlink::framework::runtime::stateful;
+    auto authority = std::make_shared<fixed_reconcile_authority_store_t> ();
+    // This record still names actor-a, not the expected actor-b commit. Its
+    // matching source fence used to authorize the unsafe source_owns replay.
+    const auto source = stateful::object_ref_t{
+      stateful::object_kind_t::actor, "reconcile-actor", 1, 5, "mesh", "actor-a"};
+    authority->record = stateful::authority_relocation_reference_t{
+      .source = source, .target = source};
+    return reconcile_deadline_fast_fails_without_target_commit (std::move (authority));
+}
+
+int reconcile_deadline_fast_fails_when_store_has_no_commit ()
+{
+    // A missing relocation record also used to authorize source_owns replay.
+    return reconcile_deadline_fast_fails_without_target_commit (
+      std::make_shared<fixed_reconcile_authority_store_t> ());
+}
+
+int reconcile_deadline_fast_fails_when_store_is_indeterminate ()
+{
+    return reconcile_deadline_fast_fails_without_target_commit (nullptr);
 }
 
 int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
@@ -5167,8 +5102,20 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     return next_succeeded && next_terminal_calls.load (std::memory_order_relaxed) == 1 ? 0 : 10;
 }
 
-int main ()
+int main (int argc, char **argv)
 {
+    if (argc == 2) {
+        const std::string test (argv[1]);
+        if (test == "--reconcile-source")
+            return reconcile_deadline_fast_fails_when_store_shows_source ();
+        if (test == "--reconcile-no-commit")
+            return reconcile_deadline_fast_fails_when_store_has_no_commit ();
+        if (test == "--reconcile-target")
+            return reconcile_deadline_adopts_target_when_store_shows_committed ();
+        if (test == "--reconcile-indeterminate")
+            return reconcile_deadline_fast_fails_when_store_is_indeterminate ();
+        return 1;
+    }
     if (const auto protobuf_bound =
           generated_protobuf_bound_session_uses_typed_serializer_codec ();
         protobuf_bound != 0) {
@@ -5282,9 +5229,13 @@ int main ()
         leave_race != 0) {
         return 310 + leave_race;
     }
-    if (const auto reconcile_trap = reconcile_deadline_restores_actor_to_local_service ();
+    if (const auto reconcile_trap = reconcile_deadline_fast_fails_when_store_shows_source ();
         reconcile_trap != 0) {
         return 320 + reconcile_trap;
+    }
+    if (const auto no_commit = reconcile_deadline_fast_fails_when_store_has_no_commit ();
+        no_commit != 0) {
+        return 360 + no_commit;
     }
     if (const auto reconcile_adopt = reconcile_deadline_adopts_target_when_store_shows_committed ();
         reconcile_adopt != 0) {

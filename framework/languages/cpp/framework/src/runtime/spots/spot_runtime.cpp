@@ -6173,16 +6173,11 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
         for (const auto &[actor_ref, transfer_id] : removed_route_markers)
             emit_actor_transfer_marker ("message_follow_route_removed", actor_ref, transfer_id);
     }
-    // A reconcile-phase move (genuinely ambiguous FINALIZE outcome, spec 28)
-    // is bounded by reconcile_deadline (move_state_t) so it cannot park
-    // requests in the backlog forever. Once past relay-ready, FINALIZE may
-    // already have reached the target, so a stuck reconcile must never
-    // blindly replay locally on timer expiry (spec 28 relay-ready
-    // irreversibility) -- reconcile each expired one against the Location
-    // Store's actual authority instead: adopt the target route if it
-    // committed, restore locally only if the store still shows the source
-    // as owner, and otherwise fast-fail whatever is parked and remain
-    // unavailable (never silent parking).
+    // After relay-ready is accepted, an unknown cutover outcome cannot reopen
+    // source dispatch (04-relocation-flow §9). At the reconciliation deadline,
+    // adopt a visible target commit or fail the parked requests Unavailable.
+    // A source-owner snapshot cannot authorize replay: the target may still
+    // commit within its Restore validity.
     const auto expired_reconciles = _state->actor_transfer_coordinator.reconcile_keys_expired (now);
     for (const auto &expired : expired_reconciles) {
         const auto &key = expired.actor_key;
@@ -6212,56 +6207,35 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
             continue;
         }
 
-        enum class reconcile_outcome_t
-        {
-            target_committed,
-            source_owns,
-            indeterminate
-        };
-        auto outcome = reconcile_outcome_t::indeterminate;
+        bool target_committed = false;
         {
             const auto relocation_authority =
               _state->lane.run ([&] { return _state->relocation_authority; }).get ();
-            if (!relocation_authority) {
-                outcome = reconcile_outcome_t::indeterminate;
-            } else {
+            if (relocation_authority) {
                 try {
                     const auto current = relocation_authority->read (
                       runtime::stateful::object_kind_t::actor, key.substr (separator + 1));
-                    if (!current) {
-                        outcome = reconcile_outcome_t::source_owns;
-                    } else if (current->target.key == expired.context->target_fence.actor_id
-                               && current->target.object_generation
-                                    == expired.context->target_fence.object_generation
-                               && current->target.node_id
-                                    == std::string (
-                                      expired.context->target_actor.node_rid ().value ())
-                               && current->target.authority_owner_generation
-                                    == expired.context->target_fence.authority_owner_generation) {
-                        outcome = reconcile_outcome_t::target_committed;
-                    } else if (current->source.key == expired.context->source_fence.actor_id
-                               && current->source.object_generation
-                                    == expired.context->source_fence.object_generation
-                               && current->source.authority_owner_generation
-                                    == expired.context->source_fence.authority_owner_generation) {
-                        outcome = reconcile_outcome_t::source_owns;
-                    } else {
-                        outcome = reconcile_outcome_t::indeterminate;
-                    }
+                    target_committed =
+                      current && current->target.key == expired.context->target_fence.actor_id
+                      && current->target.object_generation
+                           == expired.context->target_fence.object_generation
+                      && current->target.node_id
+                           == expired.context->target_actor.node_rid ().value ()
+                      && current->target.authority_owner_generation
+                           == expired.context->target_fence.authority_owner_generation;
                 }
                 catch (...) {
-                    outcome = reconcile_outcome_t::indeterminate;
+                    target_committed = false;
                 }
             }
         }
         if (actor_transfer_marker_enabled ()) {
             emit_actor_transfer_marker (
-              outcome == reconcile_outcome_t::target_committed ? "reconcile_deadline_adopted_target"
-              : outcome == reconcile_outcome_t::source_owns    ? "reconcile_deadline_restored_local"
-                                                               : "reconcile_deadline_fast_failed",
+              target_committed ? "reconcile_deadline_adopted_target"
+                               : "reconcile_deadline_fast_failed",
               actor_ref, key);
         }
-        if (outcome == reconcile_outcome_t::target_committed) {
+        if (target_committed) {
             const auto state = _state;
             const auto ctx = *expired.context;
             const auto transfer_id = ctx.transfer_id.empty () ? key : ctx.transfer_id;
@@ -6285,8 +6259,6 @@ spot_node_runtime_t::cleanup_expired_actor_admissions_at (std::chrono::steady_cl
                 auto task = fast_fail_reconcile_backlog (actor_ref, key);
                 detail::observe_task_completion (task, [] (const result_t<void> &) {});
             }
-        } else if (outcome == reconcile_outcome_t::source_owns) {
-            replay_actor_handoff_until_move_closed (actor_ref, key);
         } else {
             auto task = fast_fail_reconcile_backlog (actor_ref, key);
             detail::observe_task_completion (task, [] (const result_t<void> &) {});
