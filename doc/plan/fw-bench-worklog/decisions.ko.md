@@ -387,6 +387,29 @@ drain 대기를 넣은 뒤 18셀 전부 완료, 실패 0, 오염 0.
 - 표는 그대로 싣는다. 처리량·지연·event loop 사용률·drain 시간은 정보를 담고 있다.
   게재하지 않는 것은 0.80 비율뿐이다.
 
+## FB-028 — Node framework의 공개 protobuf codec은 bytes를 표현하지 못한다
+
+- **관찰** (job `fwb-04b`, 감독관 검증 완료): `packages/framework-codec-protobuf`의
+  `encodeDynamicValue`(`src/dynamic-value-wire.ts:34-58`)는 `boolean`·`number`·`string`·
+  `object`만 처리한다. **Buffer·Uint8Array 분기가 없다.** Buffer는 `object`로 떨어져
+  바이트마다 키 항목이 하나씩 생긴다.
+- **측정**: 1024바이트 `bytes body`가 **20,412바이트(19.9배)** 로 인코딩되고 bytes가 아니라
+  평범한 object로 디코딩된다.
+- **영향**: 규격 §2가 payload를 protobuf `bytes body`의 크기로 고정하므로, Node framework
+  행은 **규격이 정한 payload를 실을 수 없다.** 여섯 셀을 `unsupported`로 두고 사유를
+  declaration gap으로 남긴다. 규격 §10.1이 C++·.NET relay에 대해 쓰는 방식과 같다.
+- **판단**: 다른 payload로 바꿔 재지 않는다. 그러면 다른 실험을 재는 것이다.
+  `src/internal.ts`의 비공개 경로로 우회하지 않는다(G4).
+- **후속**: 0.18.0 후보. messaging framework의 공개 codec이 이진 payload를 실을 수 없는 것은
+  bench의 문제가 아니라 제품의 제약이다.
+
+## 감독관 수용 — `zlink-c` 기준선 재실행 생략
+
+job `fwb-04b`가 Node pass에서 `zlink-c` 기준선을 다시 재지 않았고 그 사실을 먼저 알렸다.
+근거는 그 값의 유일한 소비처가 formula 1인데 FB-027이 Node의 0.80 비율을 게재하지 않기로
+정했으므로 게재되는 어떤 값도 바뀌지 않는다는 것이다. **타당하므로 수용한다.** 지시에서
+벗어난 것을 묻히지 않고 먼저 보고한 처리가 옳다.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
