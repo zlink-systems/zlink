@@ -633,7 +633,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         private string? _admittedIdentity;
         private ZLinkClientServerControlProtocol.Admission? _currentAdmission;
         private readonly CancellationTokenSource _admissionStop;
-        private readonly List<Task> _admissionTasks = [];
+        private readonly List<Task> _requestTasks = [];
         private Task? _controlTask;
         private Task? _livenessTask;
         private Task? _monitorTask;
@@ -884,16 +884,16 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             await failures.CaptureAsync(
                     () => new ValueTask(_admissionStop.CancelAsync()))
                 .ConfigureAwait(false);
-            var (admissionTasks, controlTask, livenessTask, monitorTask) =
+            var (requestTasks, controlTask, livenessTask, monitorTask) =
                 RunState(() => (
-                    _admissionTasks.ToArray(),
+                    _requestTasks.ToArray(),
                     _controlTask,
                     _livenessTask,
                     _monitorTask));
-            foreach (var admissionTask in admissionTasks)
+            foreach (var requestTask in requestTasks)
                 await failures.CaptureAsync(
                         () => new ValueTask(
-                            IgnoreCancellationAsync(admissionTask)))
+                            IgnoreCancellationAsync(requestTask)))
                     .ConfigureAwait(false);
             if (controlTask is not null)
                 await failures.CaptureAsync(
@@ -1076,9 +1076,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         physicalGeneration,
                         attempt,
                         _admissionStop.Token);
-                _admissionTasks.RemoveAll(
-                    static candidate => candidate.IsCompleted);
-                _admissionTasks.Add(admissionTask);
+                _requestTasks.RemoveAll(
+                    static candidate => candidate.IsCompletedSuccessfully || candidate.IsCanceled);
+                _requestTasks.Add(admissionTask);
             });
         }
 
@@ -1330,24 +1330,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                             received.Parts,
                             out var ackId))
                     {
-                        var accepted = RunState(() =>
-                        {
-                            if (_outstandingProbeId != ackId)
-                                return false;
-                            _outstandingProbeId = null;
-                            _lastPeerActivity = _time.GetTimestamp();
-                            if (_currentAdmission is
-                                {
-                                    State: ZLinkFrameworkRuntimeState.Serving,
-                                    Weight: > 0
-                                })
-                                _ready = true;
-                            return true;
-                        });
-                        if (!accepted)
-                            continue;
-                        _onSelectionChanged();
-                        Interlocked.Increment(ref _livenessAckCount);
+                        AcceptLivenessAck(ackId);
                         continue;
                     }
                     var restartReason =
@@ -1383,88 +1366,98 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                await Task.Delay(
-                        TimeSpan.FromSeconds(5),
-                        cancellationToken)
+                await Task.Delay(TimeSpan.FromSeconds(5), _time, cancellationToken)
                     .ConfigureAwait(false);
-                var probeState = RunState(() =>
+                var timedOut = RunState(() =>
                 {
-                    if (_disposed)
-                        return (Disposed: true, TimedOut: false,
-                            ProbeId: 0UL, PhysicalGeneration: 0UL);
-                    var timedOut = false;
+                    if (_disposed || _currentAdmission is null)
+                        return false;
                     if (_time.GetElapsedTime(_lastPeerActivity) >= TimeSpan.FromSeconds(15))
-                    {
-                        timedOut = true;
-                    }
-                    _outstandingProbeId ??= AllocateProbeId();
-                    return (Disposed: false, TimedOut: timedOut,
-                        ProbeId: _outstandingProbeId.Value,
-                        PhysicalGeneration: _physicalGeneration);
-                });
-                if (probeState.Disposed)
-                    return;
-                if (probeState.TimedOut)
-                {
-                    RequestEndpointTermination("liveness:timeout");
-                    continue;
-                }
-                var probe =
-                    ZLinkClientServerControlProtocol.EncodeLivenessProbe(
-                        probeState.ProbeId);
-                IReadOnlyList<Message> reply;
-                try
-                {
-                    reply = await Socket.Request()
-                        .Message(probe)
-                        .Timeout(TimeSpan.FromSeconds(15))
-                        .Async(cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                    when (cancellationToken.IsCancellationRequested)
-                {
-                    probe.Dispose();
-                    return;
-                }
-                catch
-                {
-                    probe.Dispose();
-                    continue;
-                }
-                try
-                {
-                    Interlocked.Increment(ref _sentLivenessProbeCount);
-                    if (!ZLinkClientServerControlProtocol.TryDecodeLivenessAck(
-                            reply,
-                            out var ackId))
-                        continue;
-                    var acknowledged = RunState(() =>
-                    {
-                        if (_disposed
-                            || _physicalGeneration != probeState.PhysicalGeneration
-                            || _outstandingProbeId != ackId)
-                            return false;
-                        _outstandingProbeId = null;
-                        _lastPeerActivity = _time.GetTimestamp();
-                        if (_currentAdmission is
-                            {
-                                State: ZLinkFrameworkRuntimeState.Serving,
-                                Weight: > 0
-                                })
-                            _ready = true;
                         return true;
-                    });
-                    if (!acknowledged)
-                        continue;
-                    _onSelectionChanged();
-                    Interlocked.Increment(ref _livenessAckCount);
-                }
-                finally
-                {
-                    ZLinkMessageParts.DisposeAll(reply);
-                }
+
+                    _outstandingProbeId ??= AllocateProbeId();
+                    Task requestTask;
+                    using (ExecutionContext.SuppressFlow())
+                        requestTask = RequestLivenessProbeAsync(
+                            _outstandingProbeId.Value,
+                            _physicalGeneration,
+                            cancellationToken);
+                    _requestTasks.RemoveAll(
+                        static candidate => candidate.IsCompletedSuccessfully || candidate.IsCanceled);
+                    _requestTasks.Add(requestTask);
+                    return false;
+                });
+                if (timedOut)
+                    RequestEndpointTermination("liveness:timeout");
             }
+        }
+
+        private async Task RequestLivenessProbeAsync(
+            ulong probeId,
+            ulong physicalGeneration,
+            CancellationToken cancellationToken)
+        {
+            using var probe = ZLinkClientServerControlProtocol.EncodeLivenessProbe(probeId);
+            IReadOnlyList<Message> reply;
+            try
+            {
+                // Keep the Core request/reply envelope; reply completion must
+                // not delay the next probe or the connection's deadline check.
+                var request = Socket.Request()
+                    .Message(probe)
+                    .Timeout(TimeSpan.FromSeconds(15))
+                    .Async(cancellationToken);
+                Interlocked.Increment(ref _sentLivenessProbeCount);
+                reply = await request.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (ZlinkRequestException exception)
+                when (exception.Result is ZlinkRequestException.ErrorCode.TimedOut
+                    or ZlinkRequestException.ErrorCode.NotConnected
+                    or ZlinkRequestException.ErrorCode.NotFound
+                    or ZlinkRequestException.ErrorCode.Terminated)
+            {
+                // Only a matching ACK supplies liveness evidence. The single
+                // periodic loop owns expiry when no evidence arrives.
+                return;
+            }
+            try
+            {
+                if (ZLinkClientServerControlProtocol.TryDecodeLivenessAck(reply, out var ackId))
+                    AcceptLivenessAck(ackId, physicalGeneration);
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(reply);
+            }
+        }
+
+        private void AcceptLivenessAck(ulong ackId, ulong? physicalGeneration = null)
+        {
+            var accepted = RunState(() =>
+            {
+                if (_disposed
+                    || physicalGeneration is { } generation && _physicalGeneration != generation
+                    || _outstandingProbeId != ackId)
+                    return false;
+                _outstandingProbeId = null;
+                _lastPeerActivity = _time.GetTimestamp();
+                if (_currentAdmission is
+                    {
+                        State: ZLinkFrameworkRuntimeState.Serving,
+                        Weight: > 0
+                    })
+                    _ready = true;
+                return true;
+            });
+            if (!accepted)
+                return;
+            _onSelectionChanged();
+            Interlocked.Increment(ref _livenessAckCount);
         }
 
         private bool IsCurrentAttempt(

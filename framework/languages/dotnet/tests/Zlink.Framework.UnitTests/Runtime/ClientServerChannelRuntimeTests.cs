@@ -1676,6 +1676,113 @@ public sealed class ClientServerChannelRuntimeTests
         }
     }
 
+    [Fact]
+    public async Task LivenessWithoutAcks_ProbesEveryFiveSecondsAndExpiresAtFifteenSeconds()
+    {
+        var port = ReservePort();
+        var endpoint = $"tcp://127.0.0.1:{port}";
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = CreateClientServerRouter(context);
+        router.Bind(endpoint);
+        await using var client = CreateClient(port);
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            using var hello = await PollReceivedAsync(
+                storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
+            ReplyAdmission(router, hello, endpoint);
+            await WaitUntilAsync(() => transport.ReadyCount == 1, TimeSpan.FromSeconds(5));
+            var admittedAt = Stopwatch.GetTimestamp();
+
+            using var first = await PollReceivedAsync(
+                storage => TryReceive(router, storage), TimeSpan.FromSeconds(6));
+            var firstAt = Stopwatch.GetTimestamp();
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(first.Parts, out var firstId));
+            Assert.NotNull(first.ReplyToken);
+            Assert.NotEqual(0UL, firstId);
+            Assert.InRange(Stopwatch.GetElapsedTime(admittedAt, firstAt).TotalSeconds, 4, 6);
+
+            using var second = await PollReceivedAsync(
+                storage => TryReceive(router, storage), TimeSpan.FromSeconds(6));
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(second.Parts, out var secondId));
+            Assert.NotNull(second.ReplyToken);
+            Assert.Equal(firstId, secondId);
+            Assert.InRange(Stopwatch.GetElapsedTime(firstAt).TotalSeconds, 4, 6);
+            Assert.Equal(1, transport.ReadyCount);
+
+            try
+            {
+                await WaitUntilAsync(() => transport.ReadyCount == 0, TimeSpan.FromSeconds(7));
+            }
+            catch (TimeoutException exception)
+            {
+                throw new TimeoutException(
+                    $"elapsed={Stopwatch.GetElapsedTime(admittedAt)}; sent={transport.SentLivenessProbeCount}; "
+                    + $"acks={transport.LivenessAckCount}; {transport.AdmissionDiagnostics}", exception);
+            }
+            Assert.InRange(Stopwatch.GetElapsedTime(admittedAt).TotalSeconds, 14, 17);
+            Assert.Equal(0, transport.LivenessAckCount);
+            Assert.Equal(2, transport.SentLivenessProbeCount);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task LivenessDelayedAcks_DoNotShiftTheFiveSecondProbeCadence()
+    {
+        var port = ReservePort();
+        var endpoint = $"tcp://127.0.0.1:{port}";
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = CreateClientServerRouter(context);
+        router.Bind(endpoint);
+        await using var client = CreateClient(port);
+        var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        try
+        {
+            var transport = runtime.GetClientServerClientRuntime("work");
+            using var hello = await PollReceivedAsync(
+                storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
+            ReplyAdmission(router, hello, endpoint);
+            await WaitUntilAsync(() => transport.ReadyCount == 1, TimeSpan.FromSeconds(5));
+            var previousAt = Stopwatch.GetTimestamp();
+            ulong previousId = 0;
+
+            for (var index = 0; index < 3; index++)
+            {
+                using var probe = await PollReceivedAsync(
+                    storage => TryReceive(router, storage), TimeSpan.FromSeconds(6));
+                var receivedAt = Stopwatch.GetTimestamp();
+                Assert.True(ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probe.Parts, out var probeId));
+                Assert.NotEqual(previousId, probeId);
+                Assert.NotEqual(0UL, probeId);
+                Assert.NotNull(probe.ReplyToken);
+                Assert.InRange(Stopwatch.GetElapsedTime(previousAt, receivedAt).TotalSeconds, 4, 6);
+                Assert.Equal(1, transport.ReadyCount);
+
+                await Task.Delay(TimeSpan.FromSeconds(2));
+                using var ack = ZLinkClientServerControlProtocol.EncodeLivenessAck(probeId);
+                probe.Reply().Message(ack).Submit();
+                var expectedAcks = index + 1;
+                await WaitUntilAsync(
+                    () => transport.LivenessAckCount == expectedAcks, TimeSpan.FromSeconds(1));
+                previousAt = receivedAt;
+                previousId = probeId;
+            }
+            Assert.Equal(1, transport.ReadyCount);
+            Assert.Equal(3, transport.SentLivenessProbeCount);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     private static async Task<Received> PollReceivedAsync(
         Func<Received, bool> receive,
         TimeSpan timeout)
