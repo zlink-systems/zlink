@@ -712,7 +712,15 @@ class pipe_t ZLINK_FINAL : public object_t,
     upipe_t *_out_pipe;
 
     //  Can the pipe be read from / written to?
-    bool _in_active;
+    //  `_in_active` is the inbound reader's "the queue looked empty" hint.
+    //  Two owners touch it: the lock-free public receive lease
+    //  (check_read()/read_internal()/probe_normalized_head_kind()) and the
+    //  command owner (process_activate_read()), which run under different
+    //  exclusion (the receive lease vs the socket's receive `sync`). It is
+    //  therefore an atomic; it carries no payload -- the frames themselves
+    //  cross through the inbound ypipe's own release/acquire -- so a stale
+    //  read only costs the reader one extra `_in_pipe->check_read()`.
+    std::atomic<bool> _in_active;
     bool _out_active;
     //  Mirrors membership in the socket's active public receive partition.
     //  The socket owner publishes transitions here so count-1 head
@@ -814,7 +822,13 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Sink to send events to.
     i_pipe_events *_sink;
 
-    lifecycle_state_t _state;
+    //  Lifecycle state. Written only by the pipe's own owner (every write
+    //  goes through transition_to_inactive_state_unlocked() under
+    //  `_out_sync`), but read without that lock from the inbound receive
+    //  lease (check_read()/read_internal()) and from is_lifecycle_active()
+    //  on other threads, so the member itself carries the ordering. This
+    //  replaces the former `_state_active` mirror.
+    std::atomic<lifecycle_state_t> _state;
 
     //  If true, we receive all the pending inbound messages before
     //  terminating. If false, we terminate immediately when the peer
@@ -885,10 +899,6 @@ class pipe_t ZLINK_FINAL : public object_t,
     std::atomic<unsigned char> _transport_lane_count;
     std::atomic<bool> _transport_pair_application_ready;
     pipe_t *_transport_pair_completion_pipe;
-    //  Lock-free mirror of `_state == active`. `_state` only ever leaves
-    //  `active`, so every transition clears this flag under `_out_sync` and
-    //  readers never need that lock.
-    std::atomic<bool> _state_active;
     const bool _registry_accounting;
     uint64_t _transport_pair_id;
     uint64_t _transport_pair_generation;

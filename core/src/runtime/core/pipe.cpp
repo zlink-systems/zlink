@@ -353,7 +353,6 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _transport_lane_count (0),
     _transport_pair_application_ready (false),
     _transport_pair_completion_pipe (NULL),
-    _state_active (true),
     _registry_accounting (registry_accounting_),
     _transport_pair_id (0),
     _transport_pair_generation (0),
@@ -547,7 +546,7 @@ bool zlink::pipe_t::has_completed_termination () const
 
 bool zlink::pipe_t::is_lifecycle_active () const
 {
-    return _state_active.load (std::memory_order_acquire);
+    return _state.load (std::memory_order_acquire) == active;
 }
 
 void zlink::pipe_t::set_transport_pair_application_ready (bool ready_)
@@ -1029,14 +1028,15 @@ bool zlink::pipe_t::check_read ()
     // Hot path: PAIR/DEALER steady-state recv reaches this path for every
     // message. Any extra locking or bookkeeping here shows up directly in
     // small-message throughput.
-    if (unlikely (_state != active && _state != waiting_for_delimiter))
+    const lifecycle_state_t state = _state.load (std::memory_order_acquire);
+    if (unlikely (state != active && state != waiting_for_delimiter))
         return false;
-    if (unlikely (!_in_active)) {
+    if (unlikely (!_in_active.load (std::memory_order_acquire))) {
         // Recover from a missed read-activation edge if data is already
         // visible in the inbound pipe.
         if (!_in_pipe->check_read ())
             return false;
-        _in_active = true;
+        _in_active.store (true, std::memory_order_release);
     }
 
     // Inspect and consume a delimiter in one queue operation. In particular,
@@ -1045,7 +1045,7 @@ bool zlink::pipe_t::check_read ()
     const ypipe_read_result_t delimiter_result =
       _in_pipe->read_if (&delimiter, &consume_if_delimiter, NULL);
     if (delimiter_result == ypipe_read_empty) {
-        _in_active = false;
+        _in_active.store (false, std::memory_order_release);
         return false;
     }
     if (delimiter_result == ypipe_read_consumed) {
@@ -1059,7 +1059,8 @@ bool zlink::pipe_t::check_read ()
 zlink::pipe_normalized_head_kind_t
 zlink::pipe_t::probe_normalized_head_kind ()
 {
-    if (unlikely (_state != active && _state != waiting_for_delimiter))
+    const lifecycle_state_t state = _state.load (std::memory_order_acquire);
+    if (unlikely (state != active && state != waiting_for_delimiter))
         return pipe_head_empty;
 
     // Arm before observing publication. If the writer publishes first, the
@@ -1072,7 +1073,7 @@ zlink::pipe_t::probe_normalized_head_kind ()
     if (!_in_pipe->probe_if_published (&probe_normalized_head, &probe))
         return pipe_head_empty;
 
-    _in_active = true;
+    _in_active.store (true, std::memory_order_release);
     _head_reclassify_wake.store (head_reclassify_idle,
                                  std::memory_order_release);
     return probe.kind;
@@ -1137,7 +1138,8 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
                                    bool *admission_failed_out_,
                                    bool *admission_consumed_out_)
 {
-    if (unlikely (_state != active && _state != waiting_for_delimiter))
+    const lifecycle_state_t state = _state.load (std::memory_order_acquire);
+    if (unlikely (state != active && state != waiting_for_delimiter))
         return false;
     if (WithAdmission) {
         if (admission_failed_out_)
@@ -1145,10 +1147,10 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
         if (admission_consumed_out_)
             *admission_consumed_out_ = false;
     }
-    if (unlikely (!_in_active)) {
+    if (unlikely (!_in_active.load (std::memory_order_acquire))) {
         if (!_in_pipe->check_read ())
             return false;
-        _in_active = true;
+        _in_active.store (true, std::memory_order_release);
     }
 
     bool prefetched_batch_exhausted = false;
@@ -1167,7 +1169,7 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
                 if (probe.result != 0 && admission_failed_out_)
                     *admission_failed_out_ = true;
                 if (read_result == ypipe_read_empty)
-                    _in_active = false;
+                    _in_active.store (false, std::memory_order_release);
                 errno = probe.error_number;
                 return false;
             }
@@ -1193,7 +1195,7 @@ bool zlink::pipe_t::read_internal (msg_t *msg_,
                 return true;
             }
         } else if (!_in_pipe->read (msg_, &prefetched_batch_exhausted)) {
-            _in_active = false;
+            _in_active.store (false, std::memory_order_release);
             return false;
         }
 
@@ -2738,18 +2740,19 @@ void zlink::pipe_t::flush ()
 void zlink::pipe_t::process_activate_read ()
 {
     // Hot path: every message that finds the inbound reader asleep runs this
-    // command. `_state` and `_in_active` are the inbound reader's own state --
+    // command. `_state` and `_in_active` are the inbound receive cluster:
     // check_read()/read() test and assign exactly these two members with no
-    // `_out_sync` held (see the identical guard at the top of check_read()),
-    // because the inbound reader is a single owner and every `_state` write
-    // is published by that same owner. `_out_sync` therefore protects nothing
-    // here that the reader does not already own, so the wake-or-not decision
-    // is taken without it. The lock is kept only for the head-reclassify
+    // `_out_sync` held (see the identical guard at the top of check_read()).
+    // `_out_sync` therefore protects nothing here, so the wake-or-not
+    // decision is taken without it; the two members carry their own ordering
+    // because the command owner and the public receive lease are different
+    // exclusion domains. The lock is kept only for the head-reclassify
     // branch below, which reads the outbound topology cluster.
-    if (_state != active && _state != waiting_for_delimiter)
+    const lifecycle_state_t state = _state.load (std::memory_order_acquire);
+    if (state != active && state != waiting_for_delimiter)
         return;
-    if (!_in_active) {
-        _in_active = true;
+    if (!_in_active.load (std::memory_order_acquire)) {
+        _in_active.store (true, std::memory_order_release);
         _sink->read_activated (this);
         return;
     }
@@ -2762,7 +2765,8 @@ void zlink::pipe_t::process_activate_read ()
     bool notify = false;
     {
         scoped_lock_t lock (_out_sync);
-        if ((_state == active || _state == waiting_for_delimiter) && _in_active
+        if ((_state == active || _state == waiting_for_delimiter)
+            && _in_active.load (std::memory_order_acquire)
             && _head_reclassify_wake.load (std::memory_order_acquire)
                  != head_reclassify_idle
             && peer_uses_routed_protocol_unlocked () && _transport_pair_id != 0
@@ -2905,8 +2909,7 @@ void zlink::pipe_t::transition_to_inactive_state_unlocked (
   lifecycle_state_t state_)
 {
     zlink_assert (state_ != active);
-    _state = state_;
-    _state_active.store (false, std::memory_order_release);
+    _state.store (state_, std::memory_order_release);
 }
 
 void zlink::pipe_t::acknowledge_peer_termination_unlocked (
@@ -3225,7 +3228,7 @@ void zlink::pipe_t::hiccup ()
         _in_pipe = new (std::nothrow) ypipe_t<msg_t, message_pipe_granularity> ();
 
     alloc_assert (_in_pipe);
-    _in_active = true;
+    _in_active.store (true, std::memory_order_release);
     get_ctx ()->_physical_queue_registry.advance_generation (_in_physical_queue);
     _in_generation = get_ctx ()->_physical_queue_registry.generation (
       _in_physical_queue);
