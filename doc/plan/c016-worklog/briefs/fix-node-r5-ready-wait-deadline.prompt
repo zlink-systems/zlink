@@ -26,3 +26,12 @@ remaining time; long timeout still caps the wait at 5 s.
 
 ## Deliverable
 `doc/plan/c016-worklog/fix-node-r5-ready-wait-deadline-summary.md`.
+
+## Cause 2 — F-R7-4 node parity (found by the dotnet job, D-107)
+`framework/languages/node/packages/framework/src/runtime/host/index.ts:1883` (`publishHostDraining` `while` loop) and `:1898`
+(`cleanupOwnerForDrain` `for (;;)`) retry the publication / owner cleanup after a failure with a timed wait. Spec: host relocation
+flow §14 step 2 (publication terminal only, no timed wait) and step 5/6 (bounded results). Fix as dotnet did
+(`ZLinkFrameworkDrainExecutor.cs` on main after the supervisor's commit): consume the first terminal once — success → next step,
+failure → the existing `DrainingStatePublishFailed` / owner-cleanup-failed result with the cause recorded; delete the loops. Tests:
+first-failure ends shutdown within one polling interval (monotonic), success path unchanged, cleanup failure → existing
+teardown-failed result. Keep this a separable diff from cause 1.

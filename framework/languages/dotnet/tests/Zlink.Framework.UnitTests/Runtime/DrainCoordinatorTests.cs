@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.AspNetCore;
@@ -745,38 +747,172 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     }
 
     [Fact]
-    public async Task Serving_Weight_Store_Failure_Retries_After_Admission_Is_Sealed()
+    public async Task Serving_Weight_Store_Failure_Consumes_First_Terminal_After_Admission_Seal()
     {
         var probe = new DrainExecutionProbe { WeightAlwaysFails = true };
         var executor = new ZLinkFrameworkDrainExecutor(
             probe.Operations with { HasAutoConnect = false },
-            new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(1) });
-        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(30));
+            new ZLinkLocationOptions { PollingInterval = TimeSpan.FromSeconds(2) });
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var started = Stopwatch.GetTimestamp();
 
-        var reason = await executor.ExecuteAsync(TimeSpan.FromMilliseconds(30), deadline.Token);
+        var reason = await executor.ExecuteAsync(TimeSpan.FromSeconds(5), deadline.Token);
 
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(2));
         Assert.Equal(ZLinkDrainForceReason.DrainingStatePublishFailed, reason);
-        Assert.True(probe.WeightAttempts > 1);
-        Assert.Equal("seal-admission", probe.Events[0]);
+        Assert.Equal(1, probe.WeightAttempts);
+        Assert.Equal(new[] { "seal-admission", "quiesce-serving-channels" }, probe.Events);
     }
 
     [Fact]
-    public async Task Marker_Store_Failure_Retries_Until_Deadline_After_Admission_Seal()
+    public async Task Marker_Store_Failure_Consumes_First_Terminal_After_Admission_Seal()
     {
         var probe = new DrainExecutionProbe { MarkerAlwaysFails = true };
         var executor = new ZLinkFrameworkDrainExecutor(
             probe.Operations,
-            new ZLinkLocationOptions { PollingInterval = TimeSpan.FromMilliseconds(1) });
-        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(30));
+            new ZLinkLocationOptions { PollingInterval = TimeSpan.FromSeconds(2) });
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var started = Stopwatch.GetTimestamp();
 
         var reason = await executor.ExecuteAsync(
-            TimeSpan.FromMilliseconds(30),
+            TimeSpan.FromSeconds(5),
             deadline.Token);
 
+        Assert.True(Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(2));
         Assert.Equal(ZLinkDrainForceReason.DrainingStatePublishFailed, reason);
-        Assert.True(probe.MarkerAttempts > 1);
+        Assert.Equal(1, probe.MarkerAttempts);
+        Assert.Equal(new[] { "seal-admission", "marker" }, probe.Events);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Shutdown_Publication_Failure_Consumes_First_Terminal(
+        bool servingWeight,
+        bool throws)
+    {
+        var probe = new DrainExecutionProbe();
+        var logger = new DrainFailureLogger();
+        var pollingInterval = TimeSpan.FromSeconds(2);
+        var storeFailure = new InvalidOperationException("store publication failed once");
+        var attempts = 0;
+        ValueTask<bool> Publish(CancellationToken _)
+        {
+            probe.Events.Add(servingWeight ? "quiesce-serving-channels" : "marker");
+            if (++attempts > 1) return ValueTask.FromResult(true);
+            return throws
+                ? ValueTask.FromException<bool>(storeFailure)
+                : ValueTask.FromResult(false);
+        }
+        var operations = servingWeight
+            ? probe.Operations with { QuiesceServingChannels = Publish }
+            : probe.Operations with { MarkDraining = Publish };
+        var executor = new ZLinkFrameworkDrainExecutor(
+            operations,
+            new ZLinkLocationOptions { PollingInterval = pollingInterval },
+            logger);
+        using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
+        var started = Stopwatch.GetTimestamp();
+
+        var result = await coordinator.DrainAsync(TimeSpan.FromSeconds(5));
+
+        var elapsed = Stopwatch.GetElapsedTime(started);
+        Assert.True(elapsed < pollingInterval, $"Shutdown took {elapsed}; polling interval is {pollingInterval}.");
+        var forced = Assert.IsType<ForceStopped>(result);
+        Assert.Equal(ZLinkDrainForceReason.DrainingStatePublishFailed, forced.Reason);
+        Assert.Equal(1, attempts);
         Assert.Equal("seal-admission", probe.Events[0]);
-        Assert.All(probe.Events.Skip(1), static item => Assert.Equal("marker", item));
+        Assert.DoesNotContain("wait-accepted", probe.Events);
+        Assert.DoesNotContain("drain-spots", probe.Events);
+        Assert.Equal(1, probe.Events.Count(static item => item == "cleanup-owner"));
+        Assert.Equal("stop-location", probe.Events[^1]);
+        var failure = Assert.IsType<ZLinkDrainForceException>(Assert.Single(logger.Failures));
+        Assert.Equal(ZLinkDrainForceReason.DrainingStatePublishFailed, failure.Reason);
+        if (throws) Assert.Same(storeFailure, failure.InnerException);
+        else Assert.IsType<InvalidOperationException>(failure.InnerException);
+    }
+
+    [Fact]
+    public async Task Shutdown_Success_Consumes_First_Terminals_Without_Polling()
+    {
+        var probe = new DrainExecutionProbe();
+        var pollingInterval = TimeSpan.FromSeconds(2);
+        var executor = new ZLinkFrameworkDrainExecutor(
+            probe.Operations,
+            new ZLinkLocationOptions { PollingInterval = pollingInterval });
+        using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
+        using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            coordinator,
+            new ZLinkFrameworkHostLifecycleState(),
+            static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
+            static _ => ValueTask.FromResult(true));
+        var started = Stopwatch.GetTimestamp();
+
+        var result = await runtime.ShutdownAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(Stopwatch.GetElapsedTime(started) < pollingInterval);
+        Assert.Equal(ZLinkFrameworkTerminationOutcome.Stopped, result.Outcome);
+        Assert.Equal(ZLinkFrameworkTerminationReason.None, result.Reason);
+        Assert.IsType<Drained>(await coordinator.DrainAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(1, probe.MarkerAttempts);
+        Assert.Equal(1, probe.WeightAttempts);
+        Assert.Equal(1, probe.Events.Count(static item => item == "cleanup-owner"));
+        Assert.True(probe.Events.IndexOf("marker") < probe.Events.IndexOf("quiesce-serving-channels"));
+        Assert.True(probe.Events.IndexOf("quiesce-serving-channels") < probe.Events.IndexOf("wait-accepted"));
+        Assert.True(probe.Events.IndexOf("wait-accepted") < probe.Events.IndexOf("drain-spots"));
+        Assert.True(probe.Events.IndexOf("drain-spots") < probe.Events.IndexOf("cleanup-owner"));
+        Assert.True(probe.Events.IndexOf("cleanup-owner") < probe.Events.IndexOf("stop-runtime"));
+        Assert.Equal("stop-location", probe.Events[^1]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Shutdown_Owner_Cleanup_Failure_Consumes_First_Terminal(bool throwsSynchronously)
+    {
+        var probe = new DrainExecutionProbe();
+        var logger = new DrainFailureLogger();
+        var pollingInterval = TimeSpan.FromSeconds(2);
+        var storeFailure = new InvalidOperationException("owner cleanup failed once");
+        var attempts = 0;
+        var executor = new ZLinkFrameworkDrainExecutor(
+            probe.Operations with
+            {
+                CleanupOwner = _ =>
+                {
+                    probe.Events.Add("cleanup-owner");
+                    if (++attempts > 1) return ValueTask.CompletedTask;
+                    if (throwsSynchronously) throw storeFailure;
+                    return ValueTask.FromException(storeFailure);
+                }
+            },
+            new ZLinkLocationOptions { PollingInterval = pollingInterval },
+            logger);
+        using var coordinator = new ZLinkDrainCoordinator(new ZLinkDrainAdmissionGate(), executor);
+        using var runtime = new ZLinkFrameworkMaintenanceRuntime(
+            coordinator,
+            new ZLinkFrameworkHostLifecycleState(),
+            static (_, _, _) => ValueTask.FromResult<ZLinkFrameworkRelocationReason?>(null),
+            static _ => ValueTask.FromResult(true));
+        var started = Stopwatch.GetTimestamp();
+
+        var result = await runtime.ShutdownAsync(TimeSpan.FromSeconds(5));
+
+        var elapsed = Stopwatch.GetElapsedTime(started);
+        Assert.True(elapsed < pollingInterval, $"Shutdown took {elapsed}; polling interval is {pollingInterval}.");
+        Assert.Equal(ZLinkFrameworkTerminationOutcome.ForceStopped, result.Outcome);
+        Assert.Equal(ZLinkFrameworkTerminationReason.TeardownFailed, result.Reason);
+        var forced = Assert.IsType<ForceStopped>(await coordinator.DrainAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(ZLinkDrainForceReason.OwnerCleanupFailed, forced.Reason);
+        Assert.Equal(1, attempts);
+        Assert.True(probe.Events.IndexOf("drain-spots") < probe.Events.IndexOf("cleanup-owner"));
+        Assert.Equal(1, probe.Events.Count(static item => item == "stop-runtime"));
+        Assert.Equal("stop-location", probe.Events[^1]);
+        var failure = Assert.IsType<ZLinkDrainForceException>(Assert.Single(logger.Failures));
+        Assert.Equal(ZLinkDrainForceReason.OwnerCleanupFailed, failure.Reason);
+        Assert.Same(storeFailure, failure.InnerException);
     }
 
     [Fact]
@@ -1435,6 +1571,25 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                     failureReason,
                     [new InvalidOperationException("owner cleanup failed")]);
             return;
+        }
+    }
+
+    private sealed class DrainFailureLogger : ILogger<ZLinkFrameworkDrainExecutor>
+    {
+        public List<Exception> Failures { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (exception is not null) Failures.Add(exception);
         }
     }
 

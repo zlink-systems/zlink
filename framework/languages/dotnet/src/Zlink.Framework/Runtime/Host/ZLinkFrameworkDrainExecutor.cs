@@ -120,11 +120,9 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             if (intent == ZLinkFrameworkLifecycleIntent.Shutdown)
             {
                 ShutdownStep("publish_draining_marker");
-                if (!await PublishDrainingMarkerAsync(deadlineToken).ConfigureAwait(false))
-                    return Result(ZLinkDrainForceReason.DrainingStatePublishFailed);
+                await PublishDrainingMarkerAsync(deadlineToken).ConfigureAwait(false);
                 ShutdownStep("publish_serving_weight");
-                if (!await PublishServingWeightAsync(deadlineToken).ConfigureAwait(false))
-                    return Result(ZLinkDrainForceReason.DrainingStatePublishFailed);
+                await PublishServingWeightAsync(deadlineToken).ConfigureAwait(false);
             }
 
             if (intent == ZLinkFrameworkLifecycleIntent.Shutdown)
@@ -282,13 +280,17 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                 await _operations.FreezeOwnerWrites(deadlineToken).ConfigureAwait(false);
             if (_operations.HasAutoConnect)
                 await _operations.StopAutoConnect(deadlineToken).ConfigureAwait(false);
-            if (!await CleanupOwnerAsync(deadlineToken).ConfigureAwait(false))
-                return Result(ZLinkDrainForceReason.OwnerCleanupFailed);
+            await CleanupOwnerAsync(deadlineToken).ConfigureAwait(false);
             _stopMeshMonitoring();
             await _operations.StopRuntime(deadlineToken).ConfigureAwait(false);
             if (_operations.HasLocationRuntime)
                 await _operations.StopLocation(deadlineToken).ConfigureAwait(false);
             return Result(null);
+        }
+        catch (ZLinkDrainForceException failure)
+        {
+            _logger?.LogError(failure, "ZLink drain operation failed with '{Reason}'.", failure.Reason);
+            return Result(failure.Reason);
         }
         catch (OperationCanceledException) when (
             deadlineToken.IsCancellationRequested
@@ -451,7 +453,6 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         ZLinkDrainForceReason reason,
         CancellationToken cancellationToken)
     {
-        _ = reason;
         // The runtime force-stop owner sends the ServerDrain notification and
         // cancels session work before disposing the component state. Waiting
         // for the same sessions here would consume the entire force budget
@@ -472,18 +473,23 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         var ownerCleanupFailed = false;
         if (_operations.HasLocationRuntime)
         {
-            using var cleanupBound = CancellationTokenSource
-                .CreateLinkedTokenSource(cancellationToken);
-            cleanupBound.CancelAfter(TimeSpan.FromSeconds(2));
-            try
+            // OwnerCleanupFailed already consumed this operation's terminal.
+            // Forced teardown still closes the remaining location resources.
+            if (reason != ZLinkDrainForceReason.OwnerCleanupFailed)
             {
-                await _operations.CleanupOwner(cleanupBound.Token).ConfigureAwait(false);
-            }
-            catch (Exception error)
-            {
-                ownerCleanupFailed = true;
-                failures.Add(error);
-                LogCleanupFailure("cleanup_owner", error);
+                using var cleanupBound = CancellationTokenSource
+                    .CreateLinkedTokenSource(cancellationToken);
+                cleanupBound.CancelAfter(TimeSpan.FromSeconds(2));
+                try
+                {
+                    await _operations.CleanupOwner(cleanupBound.Token).ConfigureAwait(false);
+                }
+                catch (Exception error)
+                {
+                    ownerCleanupFailed = true;
+                    failures.Add(error);
+                    LogCleanupFailure("cleanup_owner", error);
+                }
             }
             await CaptureAsync(
                     "stop_location",
@@ -509,80 +515,44 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         }
     }
 
-    private async ValueTask<bool> PublishDrainingMarkerAsync(CancellationToken cancellationToken)
+    private async ValueTask PublishDrainingMarkerAsync(CancellationToken cancellationToken)
     {
-        if (!_operations.HasAutoConnect) return true;
-        while (true)
+        if (!_operations.HasAutoConnect) return;
+        try
         {
-            try
-            {
-                if (await _operations.MarkDraining(cancellationToken).ConfigureAwait(false))
-                    return true;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return false;
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                await Task.Delay(_locationOptions.PollingInterval, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return false;
-            }
+            if (!await _operations.MarkDraining(cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("Draining descriptor publication returned false.");
+        }
+        catch (Exception error)
+        {
+            throw new ZLinkDrainForceException(ZLinkDrainForceReason.DrainingStatePublishFailed, [error]);
         }
     }
 
-    private async ValueTask<bool> CleanupOwnerAsync(CancellationToken cancellationToken)
+    private async ValueTask CleanupOwnerAsync(CancellationToken cancellationToken)
     {
-        if (!_operations.HasLocationRuntime) return true;
-        while (true)
+        if (!_operations.HasLocationRuntime) return;
+        try
         {
-            try
-            {
-                await _operations.CleanupOwner(cancellationToken).ConfigureAwait(false);
-                return true;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return false;
-            }
-            catch
-            {
-                try
-                {
-                    await Task.Delay(_locationOptions.PollingInterval, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    return false;
-                }
-            }
+            await _operations.CleanupOwner(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            throw new ZLinkDrainForceException(ZLinkDrainForceReason.OwnerCleanupFailed, [error]);
         }
     }
 
-    private async ValueTask<bool> PublishServingWeightAsync(CancellationToken cancellationToken)
+    private async ValueTask PublishServingWeightAsync(CancellationToken cancellationToken)
     {
-        while (!cancellationToken.IsCancellationRequested)
+        try
         {
-            if (await _operations.QuiesceServingChannels(cancellationToken).ConfigureAwait(false))
-                return true;
-            try
-            {
-                await Task.Delay(_locationOptions.PollingInterval, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return false;
-            }
+            if (!await _operations.QuiesceServingChannels(cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("Serving weight publication returned false.");
         }
-
-        return false;
+        catch (Exception error)
+        {
+            throw new ZLinkDrainForceException(ZLinkDrainForceReason.DrainingStatePublishFailed, [error]);
+        }
     }
 
     private static async ValueTask CaptureAsync(
