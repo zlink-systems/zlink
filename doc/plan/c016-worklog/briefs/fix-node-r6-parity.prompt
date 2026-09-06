@@ -1,0 +1,52 @@
+# Job: node framework — three parity defects from the R6 spec review (F-R6-4, F-R6-5, F-R6-6 + B3)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h.
+Read `AGENTS.md` (root) §2/§3/§4.1/§5, `framework/AGENTS.md` and the language AGENTS.md first. Campaign rules
+(`doc/plan/c016-worklog/decisions.ko.md` D-098, D-101, D-105): one owner per rule, fewer rules, no mitigations
+(no timeouts/retries/second pollers/catch-alls), cross-language parity mandatory, every fix carries a regression
+test, monotonic clocks for durations (D-095). Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/**`, `doc/site/**`, other languages trees. Never lower an assertion. Do not commit — the
+supervisor commits per cause; keep each cause in a separable diff and describe the split in the summary.
+The spec sentences you implement were just committed by the supervisor on `main` (read them fresh):
+- `framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md` §8.1 (durable operation replay owner,
+  replay condition = typed transient transport failure only, deadline kinds, lifecycle-terminal → immediate `Unavailable`,
+  deadline owner = operation), §9 observations;
+- `03-mesh-node.ko.md` §7.1 connection intent rules; `05-location-relocation/05-host-relocation-flow.ko.md` §14 step 1
+  (mesh follows the host shutdown seal: no Hello, no Admit to inbound Hello, Draining Update only);
+- `05-spot-actor-membership.ko.md` §2 (creation terminal record: Created/Rejected/Failed published together with the
+  authority/capacity transition; retained 5 min after the original deadline; identified by source RID + lifecycle
+  generation + OperationId).
+Reference implementations that already satisfy these rules: dotnet `framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs`
+(seal check `:8078`, `:8482`; intent-removal → durable pending `:460`, `:4304`), `Runtime/Messaging/ZLinkDurableRequest.cs`,
+`Runtime/Locations/ZLinkProviderLocationRepository.Authority.cs:833-924` (single conditional write of authority + terminal);
+java `ZLinkJavaDurableRequest.java`, `ZLinkJavaRawMeshNode.java:6353,6919,7047`.
+Diagnosis source: `doc/plan/c016-worklog/spec-review/R6-fw-spot-actor-summary.md` (supervisor-verified in D-105).
+
+## Causes (fix in this order, one separable diff each, regression test each)
+1. **F-R6-4 — raw mesh admission ignores the host shutdown seal.** `framework/languages/node/packages/framework/src/runtime/foundation/raw-service-mesh-runtime.ts:695-745`
+   sends Hello on an empty frame and admits/answers an inbound Hello with Admit without consulting the host admission
+   seal that `runtime/host/route-mesh-runtime.ts:464,513,571` applies (`options.admission.seal`); `announceExpectedPeers`
+   keeps sending Hello during drain. Wire the *existing* seal (one judgment, no new flag) into: outbound Hello
+   (announce/empty-frame), inbound Hello → no Admit, while Update/Draining for already-admitted peers continues.
+   Mirror dotnet `:8078`/`:8482`. Test: after shutdown starts, a new peer Hello gets no Admit and no Hello is sent;
+   admitted peers still receive the Draining Update.
+2. **F-R6-5 — Actor Join is not a durable operation.** `runtime/foundation/service-stateful-runtime.ts:4252-4300`
+   (`submitActorJoin` → `submitRequest` → single `raw.requestService`; failure → `operations.fail`). Route the remote
+   Join admission through the existing `requestDurableOperation` (add `actorJoin` to its operation-kind union) with
+   the same OperationId and the caller's whole remaining deadline; a typed transient transport failure replays, a
+   terminal envelope ends it. Test: a Join whose first attempt hits route-unavailable/disconnect completes with the
+   original terminal after reconnection within the deadline (compare dotnet canonical Join tests).
+3. **F-R6-6 — durable sender does not consume lifecycle termination; catch-all replay.** `requestDurableOperation`
+   (`:4071-4100`) loops on `requireOpen` + deadline only. (a) When the logical owner removes the target node's
+   connection intent and no admitted peer remains, end the operation immediately with `Unavailable` by observing the
+   existing intent-removal transition (no new monitor/timer/state). (b) Replay only typed transient transport
+   failures for every operation kind (today only `streamBind` uses `durableBindRequestCanReplay`); protocol/encode
+   errors end the operation with that error. Tests for both.
+
+## Gates
+`cd framework/languages/node && flock -w7200 /tmp/zlink-node-gate.lock npm test` (must stay 0 failures; 1613 baseline),
+plus the new tests 5× each. Do not run sample runners (supervisor gate). No `--forceExit`/timeouts added.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-r6-parity-summary.md`: per cause — spec clause, cause `file:line`, fix, regression
+test, diff split (files per cause), gate results, BLOCKERS. Do not print the report to stdout.

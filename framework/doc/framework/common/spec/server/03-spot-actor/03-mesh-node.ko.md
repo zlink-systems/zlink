@@ -325,8 +325,8 @@ Automatic RouteMesh에서는 RID가 더 작은 MeshNode만 connect를 시작한�
   관찰이지 새 연결 의도가 아니므로, 제거된 intent를 다시 활성화하지 않고 새 intent만 활성화한다.
   이를 위한 별도 generation이나 상태는 두지 않는다.
 - **Intent 제거와 admitted peer 부재가 함께 성립한 상태가 그 peer의 lifecycle 종료다.** Transport
-  단절이나 peer 부재 단독은 재연결로 회복될 수 있는 transient 상태이며, 둘의 조합만이 durable
-  operation의 replay를 멈추는 신호다([Actor 모델 §8.1](04-actor-model.ko.md#81-실패)).
+  단절이나 peer 부재 단독은 재연결로 회복될 수 있는 transient 상태다. 이 사실을 durable operation이
+  어떻게 소비하는지는 [Actor 모델 §8.1](04-actor-model.ko.md#81-실패)이 정한다.
 
 다음 그림은 물리 connection이 성립되는 순서를 보여준다 — handshake로 교환한
 identity가 admission 판단을 통과해야 physical pipe가 ready 상태가 된다. Application이

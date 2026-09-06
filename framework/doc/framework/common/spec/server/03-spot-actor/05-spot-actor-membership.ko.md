@@ -109,9 +109,10 @@ terminal service operation이다. Target은 active Actor membership과 relocatio
 6. 생성 callback이 거절하면 같은 terminal `Commit`이 Ready와 active capacity를
    만들지 않고 Creating authority와 reserved allocation·typed capacity bundle을 정리하면서 `Rejected`
    result를 publish한다.
-7. Node 종료, timeout 또는 callback exception에서는 `Abort`가 그 Creating
-   authority와 `Reserved` allocation·typed capacity bundle을 정리하고 `Failed`
-   failure를 publish한다.
+7. Callback exception이나 timeout에서는 그 target의 `Abort`가 Creating authority와 `Reserved`
+   allocation·typed capacity bundle을 정리하고 `Failed` failure를 publish한다. Node 종료로 남은
+   reservation은 recovery cleanup의 `Abort`가 정리하며 terminal record는 만들지 않는다(아래
+   terminal record 문단).
 
 Reservation에는 어떤 object를 어느 target에 만들 것인지, 필요한 capacity와 현재
 owner를 검증할 정보가 들어간다. 정확히는 object kind, global key, stable type,
@@ -499,10 +500,10 @@ abort·정리한 뒤 새 identity의 준비를 만든다 — 나중 attempt가 �
 상한이 없으므로 어느 배치에서도 보장되는 32 KiB의 보수 chunk 크기(chunk 하나의 encoded
 크기)로 전송한다.
 
-**Relay-ready reply가 accepted 상태가 되기 전에 명시적으로 실패하면, 그 뒤에는 cutover
-submit 결과와 관계없이 source를 복원하지 않는다.** Target commit(Location Store CAS)이
-성공한 뒤부터는 이동이 확정된 것으로 보고, 실패해도 이미 이동한 상태를 되돌리지 않기
-때문이다. 이 불변조건은 Actor Join, User Spot aggregate relocation(§6)과 §7 실패 처리
+**Relay-ready reply가 accepted 상태가 되기 전의 명시적 실패만 target staging을 폐기하고 source를
+복원하며, accepted 뒤에는 cutover submit 결과와 관계없이 source를 복원하지 않는다.** Target
+commit(Location Store CAS)이 성공한 뒤부터는 이동이 확정된 것으로 보고, 실패해도 이미 이동한
+상태를 되돌리지 않기 때문이다. 이 불변조건은 Actor Join, User Spot aggregate relocation(§6)과 §7 실패 처리
 범위에 공통으로 적용되며, 아래 세 곳은 모두 이 조항을 가리킨다.
 
 `Accepted`와 `Rejected`는 동시에 발생하지 않는 서로 다른 결과이므로 다이어그램에서
@@ -628,14 +629,9 @@ Message Follow와 target direct message는 기존 Actor queue 경로를 사용�
 ## 5. Spot 종료와 lifecycle callback
 
 Spot의 terminal lifecycle callback은 `OnClosing(ClosingContext)`이다. Actor는 항상 Entry
-또는 User Spot에 속하므로 Actor별 closing callback을 제공하지 않는다. `ClosingContext`는 다음 닫힌 reason과
-operation의 absolute deadline을 제공한다.
-
-| 값 | Reason | 호출 조건 |
-|---:|---|---|
-| 0 | `ExplicitClose` | Application이 User·Instance Spot의 close를 시작하여 해당 local instance를 정상적으로 정리한다. |
-| 1 | `HostShutdown` | Relocation 없이 host `Shutdown`이 local Entry·User·Instance Spot을 정리한다. |
-| 2 | `RelocationOut` | User·Instance Spot owner commit 뒤 source local instance를 정리한다. |
+또는 User Spot에 속하므로 Actor별 closing callback을 제공하지 않는다. `ClosingContext`는 닫힌 reason 네 값(`ExplicitClose`·`HostShutdown`·`RelocationOut`·`IdleEvicted`)과
+operation의 absolute deadline을 제공한다. Reason별 값·호출 조건과 Spot 종류별 적용 범위는
+[Spot 모델 §3.4](01-spot-model.ko.md#34-spot-instance가-종료될-때-호출하는-callback)의 표가 소유한다.
 
 Standalone Actor 이동은 Entry Spot 자체를 닫지 않으므로 Entry Spot의 `OnClosing`을
 호출하지 않는다. Infrastructure relocation에서는 Actor membership callback도

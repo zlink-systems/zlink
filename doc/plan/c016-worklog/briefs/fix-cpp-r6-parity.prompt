@@ -1,0 +1,50 @@
+# Job: cpp framework — three parity defects from the R6 spec review (F-R6-5, F-R6-6, F-R6-8)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h.
+Read `AGENTS.md` (root) §2/§3/§4.1/§5, `framework/AGENTS.md` and the language AGENTS.md first. Campaign rules
+(`doc/plan/c016-worklog/decisions.ko.md` D-098, D-101, D-105): one owner per rule, fewer rules, no mitigations
+(no timeouts/retries/second pollers/catch-alls), cross-language parity mandatory, every fix carries a regression
+test, monotonic clocks for durations (D-095). Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/**`, `doc/site/**`, other languages trees. Never lower an assertion. Do not commit — the
+supervisor commits per cause; keep each cause in a separable diff and describe the split in the summary.
+The spec sentences you implement were just committed by the supervisor on `main` (read them fresh):
+- `framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md` §8.1 (durable operation replay owner,
+  replay condition = typed transient transport failure only, deadline kinds, lifecycle-terminal → immediate `Unavailable`,
+  deadline owner = operation), §9 observations;
+- `03-mesh-node.ko.md` §7.1 connection intent rules; `05-location-relocation/05-host-relocation-flow.ko.md` §14 step 1
+  (mesh follows the host shutdown seal: no Hello, no Admit to inbound Hello, Draining Update only);
+- `05-spot-actor-membership.ko.md` §2 (creation terminal record: Created/Rejected/Failed published together with the
+  authority/capacity transition; retained 5 min after the original deadline; identified by source RID + lifecycle
+  generation + OperationId).
+Reference implementations that already satisfy these rules: dotnet `framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs`
+(seal check `:8078`, `:8482`; intent-removal → durable pending `:460`, `:4304`), `Runtime/Messaging/ZLinkDurableRequest.cs`,
+`Runtime/Locations/ZLinkProviderLocationRepository.Authority.cs:833-924` (single conditional write of authority + terminal);
+java `ZLinkJavaDurableRequest.java`, `ZLinkJavaRawMeshNode.java:6353,6919,7047`.
+Diagnosis source: `doc/plan/c016-worklog/spec-review/R6-fw-spot-actor-summary.md` (supervisor-verified in D-105).
+
+## Causes (fix in this order, one separable diff each, regression test each)
+1. **F-R6-6 — create retry state ignores lifecycle termination.** `framework/languages/cpp/framework/src/runtime/mesh/raw_mesh_node_owner.cpp:193-300`
+   (`submit`/`settle`/`schedule_retry`) replays `route_unavailable` until the deadline and has no input for "target
+   intent removed and no admitted peer". Consume the existing intent-removal transition (the owner that removes the
+   expectation/intent, cf. `:2062` and the mesh peer registry) to fail the operation immediately with the
+   `unavailable` terminal; keep transport-only loss replaying. No new monitor/timer/state.
+2. **F-R6-5 — Actor Join is not a durable operation.** `raw_mesh_node_owner.cpp:2135` (`request_actor_join`, one
+   `port->request`) and `mesh_node_runtime.cpp:2822-2862` classify a single attempt's failure as the Join result.
+   Route the remote Join admission through the same durable sender as create (same OperationId, whole remaining
+   deadline, typed transient failures replay, terminal envelope ends). Keep the existing failure classification for
+   the terminal (protocol_error / deadline_exceeded / unavailable).
+3. **F-R6-8 — creation terminal published in a second write.** `framework/languages/cpp/framework/src/runtime/locations/provider_location_repository.hpp:681-745`
+   (`complete_creation`) runs `commit`/`abort` and then a separate `write` for the terminal key. Publish the
+   authority/capacity transition and the terminal record in one conditional provider write (as dotnet
+   `ZLinkProviderLocationRepository.Authority.cs:833-924` and node `location-store-repository.ts:1423-1474` do).
+   Test: a provider failure injected between the two former writes can no longer leave Ready authority without a
+   terminal; replay after commit returns the stored terminal.
+
+## Gates
+Build with the `linux-ninja-debug` preset (`framework/languages/cpp`; see `framework/languages/cpp/AGENTS.md`), then
+`flock -w7200 /tmp/zlink-cpp-gate.lock ctest --test-dir framework/languages/cpp/build/linux-ninja-debug --output-on-failure`
+(43/43 baseline) plus the new tests 5×. Do not run sample runners.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-cpp-r6-parity-summary.md`: per cause — spec clause, cause `file:line`, fix, regression test,
+diff split, gate results, BLOCKERS. Do not print the report to stdout.

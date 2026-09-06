@@ -362,9 +362,8 @@ attempts connect and reconnect only while the intent exists.
   state is kept for this.
 - **The state in which intent removal and the absence of an admitted peer hold together is
   that peer's lifecycle termination.** Transport loss or the mere absence of a peer is a
-  transient state that reconnection can recover, and only the combination is the signal
-  that stops a durable operation's replay
-  ([Actor Model §8.1](04-actor-model.en.md#81-failure)).
+  transient state that reconnection can recover. How a durable operation consumes this
+  fact is defined by [Actor Model §8.1](04-actor-model.en.md#81-failure).
 
 The following diagram shows the order in which a physical connection is
 established — the identity exchanged in the handshake must pass admission

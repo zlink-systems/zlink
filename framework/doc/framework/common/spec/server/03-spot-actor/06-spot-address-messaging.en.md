@@ -681,7 +681,7 @@ seal is relayed via the committed Message Follow route.
 |---|---|
 | Create and cold activation with no or multiple object-role Mesh candidates | Ends with a §3/§4 typed error (`NotConfigured`/`InvalidOperation`/`NotFound`). |
 | No Ready authority | `NotFound`. |
-| The generation differs | `InvalidOperation`. |
+| The generation of a control addressed by `ActorRef`/`SpotRef` differs from the current generation (a direct message doesn't compare generations, per [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not)) | `InvalidOperation`. |
 | The [owner fence](../00-foundation/02-glossary.en.md#owner-fence) differs | `Unavailable`. |
 | New admission requested on a `Closing` or `Draining` owner | Rejected. |
 | Ingress arrives on the source route after a relocation seal | Not rejected — retained in the relocation hold. |

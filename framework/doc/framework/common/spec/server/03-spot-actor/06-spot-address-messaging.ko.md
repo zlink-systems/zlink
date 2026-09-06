@@ -558,7 +558,7 @@ source ingress hold는 commit된 Message Follow route로 relay한다.
 |---|---|
 | Object role Mesh 후보가 없거나 여러 개인 create와 cold activation | §3·§4의 typed error(`NotConfigured`·`InvalidOperation`·`NotFound`)로 끝난다. |
 | Ready authority가 없다 | `NotFound`다. |
-| generation이 다르다 | `InvalidOperation`이다. |
+| `ActorRef`·`SpotRef`로 지정한 control의 generation이 current generation과 다르다(direct message는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-쓰고-어디에-쓰지-않는가)대로 generation을 비교하지 않는다) | `InvalidOperation`이다. |
 | [owner fence](../00-foundation/02-glossary.ko.md#owner-fence)가 다르다 | `Unavailable`이다. |
 | `Closing` 또는 `Draining` owner에 신규 admission을 요청했다 | 거부한다. |
 | Relocation seal 이후 source route로 ingress가 도착했다 | 거부하지 않고 relocation hold에 보관한다. |

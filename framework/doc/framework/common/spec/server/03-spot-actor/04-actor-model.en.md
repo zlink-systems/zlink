@@ -156,8 +156,8 @@ synchronously as a startup configuration error, without leaving any partial
 record.
 
 A cross-node Join's application reply is also at most 1 MiB. The request's and
-reply's size limits are independent of each other. Even when storing both for
-crash recovery, they aren't merged into one 1 MiB limit.
+reply's size limits are independent of each other and aren't merged into one 1 MiB
+limit.
 
 An Actor send/request handler, and a User/Entry Spot's
 packet/request/subscription/timer handler, can register a local member
@@ -685,10 +685,33 @@ During drain, new Actor creation and membership assignment are blocked.
 Already-accepted Actor turns and control transactions proceed to the
 deadline.
 
-When a durable lifecycle operation carrying an `OperationId` (create, join, and
-the like — the replay rules in
-[§9](#9-implementation-and-contract-test-verification-requirements)) ends
-before its deadline is decided by these two rules.
+The resend (replay) and termination of a durable lifecycle operation carrying an
+`OperationId` (Actor create/join, session bind, and so on) are decided by the
+following rules. How the target retains and re-encodes the terminal record is
+owned by
+[membership §2](05-spot-actor-membership.en.md#2-the-process-that-confirms-only-one-object-is-created).
+
+- **The replayer is the framework runtime that started the operation, and only
+  durable lifecycle operations carrying an `OperationId` are replayed.**
+  Application requests are never resent automatically, as
+  [§5.1](#51-route-cache-and-generation) states — a request whose execution is
+  unknown must not run on two owners. The "caller resends after the handover"
+  in the Core socket contract means the application for application requests
+  and the framework for durable operations.
+- **The only replay condition is a typed transient transport failure with no
+  terminal envelope received (a missing route, the single timeout caused by a
+  handover, a lost reply, a disconnect).** A protocol error, an encode or
+  configuration failure, or a typed non-replayable terminal ends the operation
+  with that failure at once — resending the same input wouldn't change the
+  result. An operation whose terminal envelope (`Created`, `Existing`,
+  `Rejected`, `Failed`, and so on) was received is not resent.
+- **Each attempt uses the entire remaining deadline and there is no attempt
+  limit.** The cause decides the kind of exhaustion: exhausted without any
+  attempt ever being admitted ends with `Unavailable` per the
+  [error model](../00-foundation/07-framework-error-model.en.md); exhausted
+  while an admitted request's reply never arrived ends with
+  `DeadlineExceeded`. The target's terminal record guarantees that execution is
+  not duplicated, so the sender does not guess whether execution happened.
 
 - **The only signal that stops replay before the deadline is the target node's
   lifecycle termination.** That judgment is the fact that the logical owner
@@ -781,34 +804,22 @@ ActorId isn't used as a metric label.
 - A different operation observing Creating receives `Existing` after Ready,
   and competes for a new reservation after rejection/failure cleanup,
   without sharing an earlier application reply.
-- Only a resend with the same source Node RID/lifecycle
-  generation/`OperationId` reads the correlation-free semantic terminal
-  envelope and re-encodes the reply with the current correlation/reply
-  route.
-- `Rejected` and `Failed` don't create Ready authority or active capacity —
-  they return reserved capacity.
-- A terminal record allows replay of the same operation for 5 minutes after
-  the original deadline, and the Actor can be re-created via a new reservation
-  if there's no Ready authority after the TTL.
-- The resender (replayer) is the framework runtime that started the operation.
-  Only framework durable lifecycle operations that carry an `OperationId`
-  (Actor create/join, session bind, and so on) are resent with the same
-  `OperationId`; application requests are never resent automatically, as
-  [§5.1](#51-route-cache-and-generation) states. The "caller resends after the
-  handover" in the Core socket contract means the application for application
-  requests and the framework for durable lifecycle operations.
-- The resend condition is any case in which no terminal envelope (`Created`,
-  `Existing`, `Rejected`, `Failed`, and so on) was received: a missing route,
-  the single timeout caused by a handover, or a lost reply. An operation whose
-  terminal envelope was received is not resent.
-- Each attempt uses the operation's entire remaining deadline; the deadline is
-  not split across attempts. There is no attempt limit; when the whole deadline
-  is exhausted the operation ends, and the cause decides the kind: exhausted
-  without any attempt ever being admitted (route absent) ends with
-  `Unavailable` per the [error model](../00-foundation/07-framework-error-model.en.md);
-  exhausted while an admitted request's reply never arrived ends with
-  `DeadlineExceeded`. The target's terminal record guarantees that execution is
-  not duplicated, so the sender does not guess whether execution happened.
+- A create resent with the same source Node RID, lifecycle generation and
+  `OperationId` receives the same semantic result as the first attempt
+  (`Created`, `Rejected`, `Failed` and the optional reply) within 5 minutes
+  after the original deadline, and after that is re-created through a new
+  reservation when no Ready authority exists.
+- After `Rejected` or `Failed`, `Find` doesn't find the Actor and the reserved
+  capacity is returned.
+- A durable lifecycle operation (Actor create/join, session bind) continues
+  with the same `OperationId` after a missing route, the single timeout caused
+  by a handover, or a lost reply, and receives its original terminal within the
+  deadline; an application request is not resent automatically in the same
+  situation.
+- A durable operation that was never admitted by the deadline ends with
+  `Unavailable`, one admitted but left without a reply by the deadline ends
+  with `DeadlineExceeded`, and a typed non-transient failure such as a protocol
+  error or an encode failure ends it with that failure at once.
 - When the logical owner removes the connection intent for the target node of
   a durable operation that is replaying and no admitted peer remains on that
   node, the operation ends with `Unavailable` before its deadline. When only a

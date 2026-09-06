@@ -207,12 +207,12 @@ commit 순서는
 terminal lifecycle callback이다. Framework는 callback을 실행할 때 종료 이유와
 absolute deadline을 전달한다.
 
-| 종료 이유 | Entry Spot | User Spot | Instance Spot | 호출 조건 |
-|---|---:|---:|---:|---|
-| `ExplicitClose` | X | O | O | Application이 User·Instance Spot close를 시작하고 해당 local instance를 정상적으로 정리할 때 호출한다. |
-| `HostShutdown` | O | O | O | Relocation 없이 host가 local Spot을 정리할 때 호출한다. |
-| `RelocationOut` | X | O | O | User·Instance Spot owner를 target으로 commit한 뒤 source local instance를 정리할 때 호출한다. |
-| `IdleEvicted` | X | X | O | Instance Spot이 쓰지 않고 남아 있는 시간 기준을 넘겨 local instance를 내릴 때 호출한다. |
+| 값 | 종료 이유 | Entry Spot | User Spot | Instance Spot | 호출 조건 |
+|---:|---|---:|---:|---:|---|
+| 0 | `ExplicitClose` | X | O | O | Application이 User·Instance Spot close를 시작하고 해당 local instance를 정상적으로 정리할 때 호출한다. |
+| 1 | `HostShutdown` | O | O | O | Relocation 없이 host가 local Spot을 정리할 때 호출한다. |
+| 2 | `RelocationOut` | X | O | O | User·Instance Spot owner를 target으로 commit한 뒤 source local instance를 정리할 때 호출한다. |
+| 3 | `IdleEvicted` | X | X | O | Instance Spot이 쓰지 않고 남아 있는 시간 기준을 넘겨 local instance를 내릴 때 호출한다. |
 
 User Spot에 Actor membership이 남아 있어 explicit close가 `false`로 끝나면
 `OnClosingAsync`를 호출하지 않는다. Standalone Actor만 다른 Entry Spot으로 이동하는

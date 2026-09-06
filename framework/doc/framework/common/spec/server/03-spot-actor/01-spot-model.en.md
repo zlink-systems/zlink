@@ -231,12 +231,12 @@ commit order are defined by
 callback of an Entry/User/Instance Spot instance. The framework passes the
 termination reason and absolute deadline when running the callback.
 
-| Termination reason | Entry Spot | User Spot | Instance Spot | Call condition |
-|---|---:|---:|---:|---|
-| `ExplicitClose` | X | O | O | Called when the application starts a User/Instance Spot close, normally cleaning up that local instance. |
-| `HostShutdown` | O | O | O | Called when the host cleans up a local Spot without relocation. |
-| `RelocationOut` | X | O | O | Called after committing a User/Instance Spot owner to the target, cleaning up the source local instance. |
-| `IdleEvicted` | X | X | O | Called when an Instance Spot exceeds the idle criterion and the local instance is evicted. |
+| Value | Termination reason | Entry Spot | User Spot | Instance Spot | Call condition |
+|---:|---|---:|---:|---:|---|
+| 0 | `ExplicitClose` | X | O | O | Called when the application starts a User/Instance Spot close, normally cleaning up that local instance. |
+| 1 | `HostShutdown` | O | O | O | Called when the host cleans up a local Spot without relocation. |
+| 2 | `RelocationOut` | X | O | O | Called after committing a User/Instance Spot owner to the target, cleaning up the source local instance. |
+| 3 | `IdleEvicted` | X | X | O | Called when an Instance Spot exceeds the idle criterion and the local instance is evicted. |
 
 If a User Spot still has Actor membership and explicit close ends `false`,
 `OnClosingAsync` isn't called. A move of only a standalone Actor to a

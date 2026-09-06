@@ -621,8 +621,9 @@ the route resolver returns rather than the Location Store.
   connecting `Missing` only to the creation coordinator and `Unavailable`
   only to the terminal completion mapper.
 - The positive route cache's lifetime doesn't exceed `MessageFollowDuration`.
-- Target admission verifies the resolved object/owner generation and
-  lease fence, and doesn't retarget to a new incarnation.
+- Target admission verifies the resolved owner's authority owner generation and lease
+  fence, excludes a direct message's `ObjectGeneration` from the target judgment per §2.6,
+  and doesn't retarget to a new incarnation.
 
 **Move And Message Follow**
 

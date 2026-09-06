@@ -539,8 +539,9 @@ timeout, cancellation 또는 shutdown 가운데 먼저 확정된 terminal 결과
 - Resolver 결과가 `Missing`과 `Unavailable`을 서로 다른 tag로 돌려주고, `Missing`은
   creation coordinator에만, `Unavailable`은 terminal completion mapper에만 연결된다.
 - Positive route cache의 수명이 `MessageFollowDuration`을 넘지 않는다.
-- Target admission이 찾은 object·owner generation과 lease fence를
-  검증하며 새 incarnation으로 다시 지정하지 않는다.
+- Target admission은 찾은 owner의 authority owner generation과 lease fence를 검증하고, direct
+  message의 `ObjectGeneration`은 §2.6대로 대상 판정에서 제외하며, 새 incarnation으로 다시 지정하지
+  않는다.
 
 **이동과 Message Follow**
 

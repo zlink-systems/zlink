@@ -135,8 +135,7 @@ deadline을 계산한다. Timeout 기본값은 5초이며, 명시한 값은 mill
 record를 남기지 않고 동기 startup configuration error로 실패한다.
 
 Cross-node Join의 application reply도 최대 1 MiB다. Request와 reply의 크기 제한은
-서로 독립적이다. Crash recovery를 위해 둘을 저장할 때도 하나의 1 MiB 제한으로
-합치지 않는다.
+서로 독립적이며 하나의 1 MiB 제한으로 합치지 않는다.
 
 Actor send/request handler와 User·Entry Spot의 packet·request·subscription·timer handler에서 local member
 Actor의 Join을 등록할 수 있다. [Factory](../00-foundation/02-glossary.ko.md#factory)(등록된
@@ -605,8 +604,24 @@ Handler가 없거나 decode가 실패하거나 application handler가 예외를 
 Drain 중에는 새로운 Actor 생성과 membership 배정을 막는다. 이미 수락한 Actor turn과
 control transaction은 deadline까지 진행한다.
 
-`OperationId`를 가진 durable lifecycle operation(create·join 등, [§9](#9-구현-및-contract-test-검증-요구)의
-재전송 규칙)이 deadline 전에 끝나는 경우는 다음 두 규칙이 정한다.
+`OperationId`를 가진 durable lifecycle operation(Actor create·join, session bind 등)의 재전송(replay)과
+종료는 다음 규칙이 정한다. Target이 terminal record를 보존·재인코딩하는 방법은
+[membership §2](05-spot-actor-membership.ko.md#2-object를-하나만-생성하도록-확정하는-과정)가 소유한다.
+
+- **Replay의 주체는 그 operation을 시작한 Framework runtime이고, 대상은 `OperationId`를 가진 durable
+  lifecycle operation뿐이다.** Application request는 [§5.1](#51-route-cache와-generation)대로 자동
+  재전송하지 않는다 — 실행 여부를 알 수 없는 request가 두 owner에서 중복 실행되는 것을 막기
+  위해서다. Core socket 계약의 "Caller는 handover 뒤 다시 보낸다"는 application request에서는
+  application, durable operation에서는 Framework를 뜻한다.
+- **Replay 조건은 terminal envelope를 받지 못한 typed transient transport 실패(route 부재, handover에
+  따른 1회 timeout, reply 유실, 단절)뿐이다.** Protocol error, encode·configuration 실패, typed
+  non-replayable terminal은 그 실패로 즉시 끝난다 — 같은 입력을 다시 보내도 결과가 달라지지 않기
+  때문이다. Terminal envelope(`Created`·`Existing`·`Rejected`·`Failed` 등)를 받은 operation은 다시
+  보내지 않는다.
+- **각 attempt는 남은 deadline 전부를 쓰고 횟수 제한이 없다.** Deadline 소진의 종류는 원인이 정한다:
+  한 번도 admission되지 못한 채 소진되면 [오류 모델](../00-foundation/07-framework-error-model.ko.md)의
+  `Unavailable`, admission된 request의 reply를 받지 못한 채 소진되면 `DeadlineExceeded`다. 중복
+  실행 방지는 target의 terminal record가 보장하므로 sender는 실행 여부를 추정하지 않는다.
 
 - **Replay를 deadline 전에 멈추는 신호는 target node의 lifecycle 종료 하나다.** 그 판정은
   logical owner(Location·auto-connect 소유자)가 target node의
@@ -676,25 +691,16 @@ ActorId는 metric label로 사용하지 않는다.
   추가로 실행하지 않고 같은 attempt의 완료를 기다린다.
 - Creating을 관찰한 서로 다른 operation은 Ready 뒤 `Existing`을 받고, rejection·failure
   cleanup 뒤 새 reservation을 경쟁하며 앞선 application reply를 공유하지 않는다.
-- 같은 source Node RID·lifecycle generation·`OperationId`의 재전송만 correlation-free
-  semantic terminal envelope를 읽고 현재 correlation·reply route로 reply를 다시 encode한다.
-- `Rejected`와 `Failed`가 Ready authority와 active capacity를 만들지 않고 reserved
-  capacity를 반환한다.
-- Terminal record가 original deadline 뒤 5분 동안 같은 operation의 replay를 허용하고,
-  TTL 뒤 Ready authority가 없으면 새 reservation으로 다시 생성할 수 있다.
-- 재전송(replay)의 주체는 그 operation을 시작한 Framework runtime이다. `OperationId`를 가진
-  Framework durable lifecycle operation(Actor create·join, session bind 등)만 같은
-  `OperationId`로 재전송하며, application request는 [§5.1](#51-route-cache와-generation)대로
-  자동 재전송하지 않는다. Core socket 계약의 "Caller는 handover 뒤 다시 보낸다"는
-  application request에서는 application, durable lifecycle operation에서는 Framework를 뜻한다.
-- 재전송 조건은 terminal envelope(`Created`·`Existing`·`Rejected`·`Failed` 등)를 받지 못한
-  모든 경우다. Route 부재, handover에 따른 1회 timeout, reply 유실이 여기에 든다. Terminal
-  envelope를 받은 operation은 재전송하지 않는다.
-- 각 attempt는 operation의 남은 deadline 전부를 사용하고 attempt마다 deadline을 분할하지
-  않는다. 횟수 제한은 없으며 전체 deadline이 소진되면 종결한다. 종결 종류는 원인이 정한다:
-  한 번도 admission되지 못한 채(route 부재) 소진되면 [오류 모델](../00-foundation/07-framework-error-model.ko.md)의
-  `Unavailable`, admission된 request의 reply를 받지 못한 채 소진되면 `DeadlineExceeded`다.
-  중복 실행 방지는 target의 terminal record가 보장하므로 sender는 실행 여부를 추정하지 않는다.
+- 같은 source Node RID·lifecycle generation·`OperationId`로 다시 보낸 create는 original deadline 뒤
+  5분 안에서는 처음과 같은 semantic 결과(`Created`·`Rejected`·`Failed`와 optional reply)를 받고,
+  그 뒤 Ready authority가 없으면 새 reservation으로 다시 생성된다.
+- `Rejected`·`Failed` 뒤에는 `Find`가 Actor를 찾지 못하고 reserved capacity가 반환된다.
+- Durable lifecycle operation(Actor create·join, session bind)은 route 부재·handover에 따른 1회
+  timeout·reply 유실 뒤에도 같은 `OperationId`로 이어져 deadline 안에 원래 terminal을 받고,
+  application request는 같은 상황에서 자동으로 다시 보내지지 않는다.
+- Durable operation이 deadline까지 한 번도 admission되지 못하면 `Unavailable`, admission된 뒤 reply
+  없이 deadline이 지나면 `DeadlineExceeded`로 끝나며, protocol error·encode 실패 같은 typed
+  non-transient 실패는 그 실패로 즉시 끝난다.
 - Replay 중인 durable operation의 target node에 대해 logical owner가 connection intent를
   제거하고 그 node에 admitted peer가 없으면, operation이 deadline 전에 `Unavailable`로 끝난다.
   Transport 단절만 일어난 경우에는 끝나지 않고 재연결 뒤 같은 `OperationId`로 replay가 이어진다.

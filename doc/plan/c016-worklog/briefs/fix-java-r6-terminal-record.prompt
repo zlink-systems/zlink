@@ -1,0 +1,49 @@
+# Job: java framework — provider authority repository never stores the creation terminal (F-R6-7)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h.
+Read `AGENTS.md` (root) §2/§3/§4.1/§5, `framework/AGENTS.md` and the language AGENTS.md first. Campaign rules
+(`doc/plan/c016-worklog/decisions.ko.md` D-098, D-101, D-105): one owner per rule, fewer rules, no mitigations
+(no timeouts/retries/second pollers/catch-alls), cross-language parity mandatory, every fix carries a regression
+test, monotonic clocks for durations (D-095). Never modify `core/**`, `bindings/**`, any `doc/spec/**`,
+`framework/doc/**`, `doc/site/**`, other languages trees. Never lower an assertion. Do not commit — the
+supervisor commits per cause; keep each cause in a separable diff and describe the split in the summary.
+The spec sentences you implement were just committed by the supervisor on `main` (read them fresh):
+- `framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md` §8.1 (durable operation replay owner,
+  replay condition = typed transient transport failure only, deadline kinds, lifecycle-terminal → immediate `Unavailable`,
+  deadline owner = operation), §9 observations;
+- `03-mesh-node.ko.md` §7.1 connection intent rules; `05-location-relocation/05-host-relocation-flow.ko.md` §14 step 1
+  (mesh follows the host shutdown seal: no Hello, no Admit to inbound Hello, Draining Update only);
+- `05-spot-actor-membership.ko.md` §2 (creation terminal record: Created/Rejected/Failed published together with the
+  authority/capacity transition; retained 5 min after the original deadline; identified by source RID + lifecycle
+  generation + OperationId).
+Reference implementations that already satisfy these rules: dotnet `framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs`
+(seal check `:8078`, `:8482`; intent-removal → durable pending `:460`, `:4304`), `Runtime/Messaging/ZLinkDurableRequest.cs`,
+`Runtime/Locations/ZLinkProviderLocationRepository.Authority.cs:833-924` (single conditional write of authority + terminal);
+java `ZLinkJavaDurableRequest.java`, `ZLinkJavaRawMeshNode.java:6353,6919,7047`.
+Diagnosis source: `doc/plan/c016-worklog/spec-review/R6-fw-spot-actor-summary.md` (supervisor-verified in D-105).
+
+## Cause
+`framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/internal/locations/ZLinkProviderAuthorityRepository.java`:
+`readCreationTerminal` (`:736-741`) returns `ZLinkCreationTerminalMissing` unconditionally; `commit` (`:609-675`) takes
+the `terminal` argument but writes only authority + capacity; `reject` (`:723-734`) drops the terminal; the abort
+variant with a terminal does not persist it either. The in-memory store (`ZLinkInMemoryAuthorityStore.java:541`)
+does keep terminals, so tests pass while the provider (Redis) path cannot restore the same OperationId's result —
+`ZLinkActorCreationCoordinator.java:353` relies on it. Spec: membership §2 (terminal published together with the
+authority/capacity transition; retained until original deadline + 5 min; keyed by source RID + lifecycle generation +
+OperationId). Reference: dotnet `ZLinkProviderLocationRepository.Authority.cs:833-924`, node
+`location-store-repository.ts:1423-1474` (one conditional write with the terminal put and a TTL).
+
+## What to do
+Store the terminal record (envelope + SHA-256 + expiry) in the same conditional write as the authority/capacity
+transition for Created, Rejected and Failed; `readCreationTerminal` reads it and validates the identity triple;
+recovery-cleanup abort (no terminal argument) stays terminal-free (spec §2 step 7). Regression tests against the
+provider repository with a fake provider (replay returns the stored terminal; expiry honored; identity mismatch →
+Missing; the two abort variants differ). Kotlin shares the Java path — no separate change expected; say so if true.
+
+## Gates
+`cd framework/languages/java && flock -w7200 /tmp/zlink-java-gate.lock ./gradlew test` (0 failures baseline) plus the
+new tests 5×. Do not run sample runners.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-java-r6-terminal-record-summary.md`: spec clause, cause `file:line`, fix, regression tests,
+gate results, BLOCKERS. Do not print the report to stdout.

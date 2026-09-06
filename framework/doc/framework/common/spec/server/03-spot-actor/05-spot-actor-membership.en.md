@@ -132,9 +132,11 @@ before admission.
    create Ready or active capacity — it cleans up the Creating authority and
    reserved allocation/typed capacity bundle and publishes a `Rejected`
    result.
-7. On node termination, timeout, or a callback exception, `Abort` cleans up
-   that Creating authority and the `Reserved` allocation/typed capacity
-   bundle and publishes a `Failed` failure.
+7. On a callback exception or timeout, that target's `Abort` cleans up the Creating
+   authority and the `Reserved` allocation/typed capacity bundle and publishes a
+   `Failed` failure. A reservation left behind by node termination is cleaned up by
+   recovery cleanup's `Abort`, which creates no terminal record (the terminal-record
+   paragraph below).
 
 The reservation carries which object to create on which target, and the
 information needed to verify capacity and current owner. Precisely, it
@@ -608,8 +610,9 @@ preparation on the Restore request, and since there's no negotiated chunk
 limit, it transfers with a conservative chunk size of 32 KiB (the encoded
 size of one chunk) guaranteed in any deployment.
 
-**If an explicit failure occurs before relay-ready is accepted, source
-isn't restored afterward regardless of cutover-submit result.** This is
+**Only an explicit failure before the relay-ready reply is accepted discards the
+target staging and restores the source; after it is accepted, the source isn't
+restored regardless of the cutover-submit result.** This is
 because, once target commit (the Location Store CAS) succeeds, the move is
 considered confirmed, and an already-moved state isn't rolled back even on
 failure. This invariant applies in common to Actor Join, User Spot
@@ -759,14 +762,10 @@ Actor queue path.
 
 A Spot's terminal lifecycle callback is `OnClosing(ClosingContext)`. Since
 an Actor always belongs to an Entry or User Spot, a separate per-Actor
-closing callback isn't provided. `ClosingContext` provides the following
-closing reasons and the operation's absolute deadline.
-
-| Value | Reason | Call condition |
-|---:|---|---|
-| 0 | `ExplicitClose` | The application starts a User/Instance Spot close, normally cleaning up that local instance. |
-| 1 | `HostShutdown` | Host `Shutdown`, without relocation, cleans up a local Entry/User/Instance Spot. |
-| 2 | `RelocationOut` | The source local instance is cleaned up after a User/Instance Spot owner commit. |
+closing callback isn't provided. `ClosingContext` provides the closed set of four reasons (`ExplicitClose`,
+`HostShutdown`, `RelocationOut`, `IdleEvicted`) and the operation's absolute deadline.
+The value, call condition and per-Spot-kind scope of each reason are owned by the table in
+[Spot Model §3.4](01-spot-model.en.md#34-the-callback-called-when-a-spot-instance-terminates).
 
 A standalone Actor move doesn't close the Entry Spot itself, so it doesn't
 call the Entry Spot's `OnClosing`. Infrastructure relocation also doesn't
