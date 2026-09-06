@@ -1,0 +1,25 @@
+# Job: redline draft of the framework foundation + execution specs (R4 doc-only findings + F-R6-2) — report only
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h. Read `AGENTS.md` §2/§3/§5.
+Hard rules: READ the spec files, do NOT modify any file under `framework/doc/**`, `core/**`, `bindings/**`, `doc/site/**`. Write only the redline directory named below (full revised copies of the listed files, ko and en where an en twin exists) plus `changes.md`. No builds/tests/benchmarks, no state-changing git commands, do not commit. Quality bar: `doc/principal/documentation/spec-writing-guide.ko.md` (§2.4 bold rule + reason; §3.2 glossary first-use link; §3.4 new term → glossary entry in the glossary redline copy; §4.3 one layer per rule; §4.4 contract vs implementation narrative, `**언어별 재량**` only with the parity reason; §9.3 verification = interface observations only). Keep ko/en structurally identical. Do not restate a rule owned by another document — link it. Do not change behavior: every finding you apply is `행동 변경: 없음`; if applying a finding would change what an application observes, stop and mark it `SUPERVISOR-DECIDE` in changes.md instead. For each finding, re-verify the cited `file:line` and the implementation claim before editing; if a claim does not hold, do not apply it and say why in changes.md. `changes.md` = table finding-id → files → old lines → what changed → verification note, plus glossary terms added and SUPERVISOR-DECIDE items.
+
+## Inputs
+- Findings: `doc/plan/c016-worklog/spec-review/R4-fw-foundation-execution-summary.md` — apply F-R4-1, 2, 3, 4, 7, 8, 9, 10, 11,
+  12, 13, 14, 15, 16, 17, 18, 19 (the supervisor's verification notes are in `doc/plan/c016-worklog/decisions.ko.md` D-110; F-R4-5
+  and F-R4-6 are 0.18.0 behavior items — do not apply). Also apply F-R6-2 from
+  `doc/plan/c016-worklog/spec-review/R6-fw-spot-actor-summary.md` (gate/turn/Yield/Actor-claim rules owned by
+  `01-execution/02-handler-turn-and-execution-gate` §2·§3; `03-spot-actor/01-spot-model`, `02-spot-messaging`, `04-actor-model`,
+  `07-stage-wrapper-on-spot`, `10-spot-timer`, `09-object-lifecycle` keep only their own contracts and link).
+- Recent supervisor edits already on `main` (read them fresh; do not undo): D-101/D-104…D-108 changes in `03-spot-actor/03-mesh-node`
+  §7.1, `04-actor-model` §8.1/§9, `05-spot-actor-membership` §2/§4/§5, `05-host-relocation-flow` §14/§16, `02-channel-transport/*`,
+  `06-observability/*`, and the glossary `connection-intent` entry.
+- Files to revise (write revised copies under `doc/plan/c016-worklog/framework-foundation-redline/<same relative path>`):
+  `framework/doc/framework/common/spec/server/00-foundation/*.ko.md` + `.en.md` (glossary, overview, interaction model, message
+  model, framework API, error model, layering — only the ones a finding touches), `01-execution/*.ko.md` + `.en.md`, and the
+  `03-spot-actor` files F-R6-2 touches. For F-R4-12 add the missing first-use links in the spec files that introduce the 13 terms;
+  for F-R4-13 add the 9 glossary entries in the glossary's fixed format (`<a id>` + `###` + table rows per guide §3.4) and link
+  the first use; for F-R4-18 give `Publish target snapshot` its own anchor id `publish-target-snapshot` and retarget links
+  (list every retargeted link in changes.md).
+
+## Deliverable
+`doc/plan/c016-worklog/framework-foundation-redline/` (revised copies + `changes.md`). Do not print the files to stdout.

@@ -1,0 +1,26 @@
+# Job: redline draft of the bindings spec (R3 doc-only findings) — report only
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h. Read `AGENTS.md` §2/§3/§5.
+Hard rules: READ the spec files, do NOT modify any file under `framework/doc/**`, `core/**`, `bindings/**`, `doc/site/**`. Write only the redline directory named below (full revised copies of the listed files, ko and en where an en twin exists) plus `changes.md`. No builds/tests/benchmarks, no state-changing git commands, do not commit. Quality bar: `doc/principal/documentation/spec-writing-guide.ko.md` (§2.4 bold rule + reason; §3.2 glossary first-use link; §3.4 new term → glossary entry in the glossary redline copy; §4.3 one layer per rule; §4.4 contract vs implementation narrative, `**언어별 재량**` only with the parity reason; §9.3 verification = interface observations only). Keep ko/en structurally identical. Do not restate a rule owned by another document — link it. Do not change behavior: every finding you apply is `행동 변경: 없음`; if applying a finding would change what an application observes, stop and mark it `SUPERVISOR-DECIDE` in changes.md instead. For each finding, re-verify the cited `file:line` and the implementation claim before editing; if a claim does not hold, do not apply it and say why in changes.md. `changes.md` = table finding-id → files → old lines → what changed → verification note, plus glossary terms added and SUPERVISOR-DECIDE items.
+
+## Inputs
+- Findings: `doc/plan/c016-worklog/spec-review/R3-bindings-summary.md` — apply the doc-only set the supervisor accepted in
+  `doc/plan/c016-worklog/decisions.ko.md` D-109: F-R3-3, F-R3-4, F-R3-5, F-R3-6, F-R3-7, F-R3-8, F-R3-9, F-R3-10, and the one
+  sentence of F-R3-1 ("바인딩은 socket-local context·token으로 찾은 WRITABLE을 해당 waiter에 전달하며 Core가 보장한 submit RID
+  echo를 다시 판정하지 않는다"). F-R3-2 and F-R3-11…17 are implementation items owned by machine B — do NOT write them as new
+  spec rules; where the current text already states the rule, leave it.
+- Owner documents you must link instead of restating: Core `core/doc/spec/core/socket/README.ko.md` (part send / REQUEST DONTWAIT /
+  completion pull and ownership / HWM admission), `core/doc/spec/core/06-monitoring.ko.md` (ABI v4), `bindings/doc/spec/async-execution-model.ko.md`
+  (completion owner, provisional registry → replace the algorithm with the join contract of F-R3-5).
+- Files to revise (write revised copies under `doc/plan/c016-worklog/bindings-spec-redline/<same relative path>`):
+  `bindings/doc/spec/README.ko.md` + `README.en.md`, `async-execution-model.ko.md` (+ `.en.md` if present),
+  `async-coroutine-policy.ko.md` + `.en.md`, and the language READMEs `c`, `cpp`, `java`, `node`, `dotnet`, `go`, `rust`,
+  `python` (`README.ko.md` and any `.en.md` twin). Language READMEs keep only type/signature/lifetime-API differences for the
+  consolidated rules (F-R3-3/4/5) and a link to the common owner.
+- The stale sections of the common README (callback model: 2977-2983, 3093-3099, 3128-3141, 3179-3197; `zlink_send_async` /
+  Core-retained retry: 1328-1334, 1433-1439; codec extension policy: 3775-3848) are rewritten to the current 0.17.0 pull-completion
+  and wait-token model in the fewest sentences that keep every observable contract; wire-internal statements about `request_seq`
+  stay only if the Core socket README still owns them (check; otherwise link or drop).
+
+## Deliverable
+`doc/plan/c016-worklog/bindings-spec-redline/` (revised copies + `changes.md`). Do not print the files to stdout.
