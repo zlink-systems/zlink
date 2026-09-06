@@ -230,7 +230,7 @@ final class CompletionOwner implements AutoCloseable {
             SubmitAttempt attempt = submitPartsAttempt(target, parts,
                 flags, timeoutMillis(timeout), state.context(), true,
                 true, 0L);
-            requireRequestSuccess(attempt);
+            requireSuccess(attempt);
             closeParts(parts);
             if (attempt.completionId() == 0L) {
                 throw new ZlinkSubmitException(
@@ -903,20 +903,8 @@ final class CompletionOwner implements AutoCloseable {
         }
     }
 
-    private static void requireRequestSuccess(SubmitAttempt attempt) {
-        if (attempt.result() != SubmitResult.OK) {
-            throw new ZlinkSubmitException(attempt.result(), attempt.errno());
-        }
-    }
-
     private static ZlinkSubmitException submitFailure(
             SubmitAttempt attempt) {
-        if (attempt.result() == SubmitResult.BACKPRESSURED
-                && NativeSubmitErrors.isBackpressured(attempt.errno())
-                && attempt.completionId() == 0L) {
-            return new ZlinkSubmitException(SubmitResult.INTERNAL_ERROR,
-                attempt.errno());
-        }
         return new ZlinkSubmitException(attempt.result(), attempt.errno());
     }
 
