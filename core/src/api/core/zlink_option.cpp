@@ -150,6 +150,19 @@ zlink_get_option (void *handle_, zlink_option_t option_, void *optval_, size_t *
             errno = EINVAL;
             return ZLINK_CONFIG_INVALID_ARGUMENT;
         }
+        if (option_ == ZLINK_OPT_TYPE) {
+            //  The public contract exposes zlink_socket_type_t, not the core enum.
+            const int public_type =
+              public_socket_type_from_core_type (socket_type_of (target.socket));
+            if (public_type < 0 || !optval_ || !optvallen_
+                || *optvallen_ < sizeof (int)) {
+                errno = EINVAL;
+                return ZLINK_CONFIG_INVALID_ARGUMENT;
+            }
+            *static_cast<int *> (optval_) = public_type;
+            *optvallen_ = sizeof (int);
+            return ZLINK_CONFIG_OK;
+        }
         return zlink::config_result_internal::from_rc (
           target.socket->getsockopt (socket_option, optval_, optvallen_));
     }

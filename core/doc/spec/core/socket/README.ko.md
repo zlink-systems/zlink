@@ -348,7 +348,7 @@ typedef enum zlink_option_t {
   ZLINK_OPT_RCVBUF                    = 0x3006,  // kernel 수신 buffer 크기 (int; -1=OS 기본값 유지, 0 이상=OS에 크기 요청)
   ZLINK_OPT_FD                        = 0x3007,  // file descriptor (zlink_fd_t, 읽기 전용)
   ZLINK_OPT_EVENTS                    = 0x3008,  // 이벤트 상태 bitmask (int, 읽기 전용)
-  ZLINK_OPT_TYPE                      = 0x3009,  // socket type (int, 읽기 전용)
+  ZLINK_OPT_TYPE                      = 0x3009,  // socket type (`zlink_socket_type_t` 값을 int로, 읽기 전용)
   ZLINK_OPT_LINGER                    = 0x300A,  // 종료 시 대기 (ms, int; -1=무한, 0=즉시)
   ZLINK_OPT_RECONNECT_IVL             = 0x300B,  // 초기 재연결 간격 (ms, int)
   ZLINK_OPT_BACKLOG                   = 0x300C,  // listener backlog (int)

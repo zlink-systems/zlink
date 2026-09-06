@@ -1567,3 +1567,7 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 - 함께 드러난 Core 결함(B) 채택: 공개 blocking FINAL의 wake 후 재시도가 auto-HWM `blocked_ratio` 분자·분모에 재기록(666,666 ≠ 계약 1,000,000) → 기존 `logical_wait_registered`로 첫 admission만 기록(규칙 2 → 1; auto-hwm §5, monitoring §6.3). 패치는 사용자 STREAM 커밋(`973ebe30d5`)과 test 5개 파일에서 충돌 → rebase job(`core-tests-rebase`)으로 통합 후 적용.
 - 추가 보고: (1) `zlink_get_option(ZLINK_OPT_TYPE)`이 ROUTER에서 내부 enum 6을 반환(공개 계약은 `zlink_socket_type_t` 0x1005) — 공개 API 결함, 감독자가 수정(D-134). (2) `test_stream_packet_progress` STREAM shutdown 간헐(shutdown이 monitor quiescence를 기다리는 동안 termination 발행 지연) — 별도 진단. (3) `test_endpoint_release` 10 s timeout 1회.
 - README/CONTRIBUTING 규칙 문장은 job 제안대로 감독자가 적용(rebase 패치와 함께).
+
+## D-134 (2026-09-06, 머신 A) `zlink_get_option(ZLINK_OPT_TYPE)`은 공개 `zlink_socket_type_t` 값을 반환한다 (내부 core enum 누출 수정)
+
+- Core 테스트 job의 공개 C 재현: ROUTER에서 `observed=6`(내부 `ZLINK_CORE_SOCKET_ROUTER`), 기대 `0x1005`. 공개 계약(socket README 옵션 표 "socket type (int, 읽기 전용)")은 `zlink_socket_type_t`뿐이므로 내부 값 노출은 결함(B). 수정: `zlink_option.cpp`의 TYPE 읽기에서 `public_socket_type_from_core_type`(신규, `core_socket_type_from_public_type`의 역함수)로 변환. 스펙 옵션 표 주석을 "`zlink_socket_type_t` 값을 int로"로 명시. 공개 C 회귀 테스트는 rebase 패치(D-133) 적용 뒤 integration에 추가(같은 CMakeLists 충돌 회피).

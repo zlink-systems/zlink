@@ -157,6 +157,30 @@ static inline int core_socket_type_from_public_type (zlink_socket_type_t type_)
     }
 }
 
+static inline int public_socket_type_from_core_type (int type_)
+{
+    switch (type_) {
+        case ZLINK_CORE_SOCKET_PAIR:
+            return ZLINK_SOCKET_PAIR;
+        case ZLINK_CORE_SOCKET_PUB:
+            return ZLINK_SOCKET_PUB;
+        case ZLINK_CORE_SOCKET_SUB:
+            return ZLINK_SOCKET_SUB;
+        case ZLINK_CORE_SOCKET_DEALER:
+            return ZLINK_SOCKET_DEALER;
+        case ZLINK_CORE_SOCKET_ROUTER:
+            return ZLINK_SOCKET_ROUTER;
+        case ZLINK_CORE_SOCKET_XPUB:
+            return ZLINK_SOCKET_XPUB;
+        case ZLINK_CORE_SOCKET_XSUB:
+            return ZLINK_SOCKET_XSUB;
+        case ZLINK_CORE_SOCKET_STREAM:
+            return ZLINK_SOCKET_STREAM;
+        default:
+            return -1;
+    }
+}
+
 static inline bool is_send_only_socket_type (int type_)
 {
     return type_ == ZLINK_CORE_SOCKET_PUB;

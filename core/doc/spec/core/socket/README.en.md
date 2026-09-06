@@ -367,7 +367,7 @@ typedef enum zlink_option_t {
   ZLINK_OPT_RCVBUF                    = 0x3006,  // Kernel receive-buffer size (int; -1=keep OS default, >=0=request size from OS)
   ZLINK_OPT_FD                        = 0x3007,  // File descriptor (zlink_fd_t, read-only)
   ZLINK_OPT_EVENTS                    = 0x3008,  // Event-state bitmask (int, read-only)
-  ZLINK_OPT_TYPE                      = 0x3009,  // Socket type (int, read-only)
+  ZLINK_OPT_TYPE                      = 0x3009,  // Socket type (`zlink_socket_type_t` value as int, read-only)
   ZLINK_OPT_LINGER                    = 0x300A,  // Shutdown wait (ms, int; -1=infinite, 0=immediate)
   ZLINK_OPT_RECONNECT_IVL             = 0x300B,  // Initial reconnect interval (ms, int)
   ZLINK_OPT_BACKLOG                   = 0x300C,  // Listener backlog (int)
