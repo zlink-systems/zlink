@@ -2737,28 +2737,41 @@ void zlink::pipe_t::flush ()
 
 void zlink::pipe_t::process_activate_read ()
 {
+    // Hot path: every message that finds the inbound reader asleep runs this
+    // command. `_state` and `_in_active` are the inbound reader's own state --
+    // check_read()/read() test and assign exactly these two members with no
+    // `_out_sync` held (see the identical guard at the top of check_read()),
+    // because the inbound reader is a single owner and every `_state` write
+    // is published by that same owner. `_out_sync` therefore protects nothing
+    // here that the reader does not already own, so the wake-or-not decision
+    // is taken without it. The lock is kept only for the head-reclassify
+    // branch below, which reads the outbound topology cluster.
+    if (_state != active && _state != waiting_for_delimiter)
+        return;
+    if (!_in_active) {
+        _in_active = true;
+        _sink->read_activated (this);
+        return;
+    }
+    //  An awake reader only needs a wake when a count-1 head reclassification
+    //  was armed. That marker is atomic, so the common "nothing armed" answer
+    //  costs one relaxed-ordered load instead of a lock round trip.
+    if (likely (_head_reclassify_wake.load (std::memory_order_acquire)
+                == head_reclassify_idle))
+        return;
     bool notify = false;
     {
         scoped_lock_t lock (_out_sync);
-        if (_state == active || _state == waiting_for_delimiter) {
-            if (!_in_active) {
-                _in_active = true;
-                notify = true;
-            } else if (_head_reclassify_wake.load (
-                         std::memory_order_acquire)
-                         != head_reclassify_idle
-                       && peer_uses_routed_protocol_unlocked ()
-                       && _transport_pair_id != 0
-                       && _transport_lane == transport_lane_application
-                       && _transport_lane_count.load (
-                            std::memory_order_acquire)
-                            == 1u
-                       && (!_session_pipe || !_session_io_writer)) {
-                notify =
-                  _head_reclassify_wake.exchange (
-                    head_reclassify_idle, std::memory_order_acq_rel)
-                  != head_reclassify_idle;
-            }
+        if ((_state == active || _state == waiting_for_delimiter) && _in_active
+            && _head_reclassify_wake.load (std::memory_order_acquire)
+                 != head_reclassify_idle
+            && peer_uses_routed_protocol_unlocked () && _transport_pair_id != 0
+            && _transport_lane == transport_lane_application
+            && _transport_lane_count.load (std::memory_order_acquire) == 1u
+            && (!_session_pipe || !_session_io_writer)) {
+            notify = _head_reclassify_wake.exchange (
+                       head_reclassify_idle, std::memory_order_acq_rel)
+                     != head_reclassify_idle;
         }
     }
     if (notify)

@@ -1602,75 +1602,79 @@ void zlink::socket_base_t::drain_claimed_completion_pipe (
 
 void zlink::socket_base_t::read_activated (pipe_t *pipe_)
 {
-    if (pipe_ && pipe_->get_transport_pair_id () != 0
-        && pipe_->get_transport_lane () == transport_lane_application
-        && pipe_->get_transport_lane_count () == 1u) {
-        {
-            receive_runtime_t &receive = receive_runtime ();
-            scoped_lock_t receive_lock (receive.sync);
-            (void) reclassify_transport_pair_application_head (pipe_);
-            notify_receive_progress_locked ();
+    //  Hot path: STREAM/PAIR/DEALER pipes carry no transport pair, so one
+    //  identifier load decides the whole classification. Only a paired pipe
+    //  pays for the lane tests.
+    const uint64_t pair_id = pipe_ ? pipe_->get_transport_pair_id () : 0;
+    if (unlikely (pair_id != 0)) {
+        const transport_lane_t lane = pipe_->get_transport_lane ();
+        if (lane == transport_lane_application
+            && pipe_->get_transport_lane_count () == 1u) {
+            {
+                receive_runtime_t &receive = receive_runtime ();
+                scoped_lock_t receive_lock (receive.sync);
+                (void) reclassify_transport_pair_application_head (pipe_);
+                notify_receive_progress_locked ();
+            }
+            if (completion_drain_permitted ())
+                process_ready_completion_pipes ();
+            return;
         }
-        if (completion_drain_permitted ())
-            process_ready_completion_pipes ();
-        return;
-    }
-    if (pipe_ && pipe_->get_transport_pair_id () != 0
-        && pipe_->get_transport_lane () == transport_lane_completion) {
-        const bool can_drain = completion_drain_permitted ();
-        bool claimed = false;
-        bool queued = false;
-        pipe_t *retained_completion = NULL;
-        const transport_pair_key_t pair_key (pipe_->get_transport_pair_id (),
-                                             pipe_->get_transport_pair_generation ());
-        {
-            scoped_lock_t lock (_transport_pairs_sync);
-            transport_pairs_t::iterator it = _transport_pairs.find (pair_key);
-            if (it != _transport_pairs.end () && it->second.ready
-                && it->second.completion_source () == pipe_
-                && !it->second.draining) {
-                claimed = true;
-                if (can_drain) {
-                    const bool lifetime_retained =
-                      pipe_->retain_lifetime_ref ();
-                    if (lifetime_retained
-                        && pipe_->retain_inbound_read_ref ()) {
-                        retained_completion = pipe_;
-                        it->second.draining = true;
-                    } else {
-                        if (lifetime_retained)
-                            pipe_->release_lifetime_ref ();
-                        claimed = false;
+        if (lane == transport_lane_completion) {
+            const bool can_drain = completion_drain_permitted ();
+            bool claimed = false;
+            bool queued = false;
+            pipe_t *retained_completion = NULL;
+            const transport_pair_key_t pair_key (pipe_->get_transport_pair_id (),
+                                                 pipe_->get_transport_pair_generation ());
+            {
+                scoped_lock_t lock (_transport_pairs_sync);
+                transport_pairs_t::iterator it = _transport_pairs.find (pair_key);
+                if (it != _transport_pairs.end () && it->second.ready
+                    && it->second.completion_source () == pipe_
+                    && !it->second.draining) {
+                    claimed = true;
+                    if (can_drain) {
+                        const bool lifetime_retained =
+                          pipe_->retain_lifetime_ref ();
+                        if (lifetime_retained
+                            && pipe_->retain_inbound_read_ref ()) {
+                            retained_completion = pipe_;
+                            it->second.draining = true;
+                        } else {
+                            if (lifetime_retained)
+                                pipe_->release_lifetime_ref ();
+                            claimed = false;
+                        }
+                    } else if (_ready_completion_pair_set.insert (pair_key).second) {
+                        _ready_completion_pairs.push_back (pair_key);
+                        queued = true;
                     }
-                } else if (_ready_completion_pair_set.insert (pair_key).second) {
-                    _ready_completion_pairs.push_back (pair_key);
-                    queued = true;
                 }
             }
+            if (!claimed)
+                return;
+            if (!can_drain) {
+                //  No owner is draining on this thread. Record the readiness so the
+                //  completion owner wakes up and drains the pipe itself.
+                if (queued)
+                    notify_request_completion ();
+                return;
+            }
+            drain_claimed_completion_pipe (pair_key.first, pair_key.second,
+                                           retained_completion);
+            retained_completion->release_inbound_read_ref ();
+            retained_completion->release_lifetime_ref ();
+            return;
         }
-        if (!claimed)
-            return;
-        if (!can_drain) {
-            //  No owner is draining on this thread. Record the readiness so the
-            //  completion owner wakes up and drains the pipe itself.
-            if (queued)
-                notify_request_completion ();
-            return;
+        {
+            scoped_lock_t lock (_transport_pairs_sync);
+            transport_pairs_t::const_iterator it =
+              _transport_pairs.find (transport_pair_key_t (
+                pair_id, pipe_->get_transport_pair_generation ()));
+            if (it == _transport_pairs.end () || !it->second.ready)
+                return;
         }
-        drain_claimed_completion_pipe (pair_key.first, pair_key.second,
-                                       retained_completion);
-        retained_completion->release_inbound_read_ref ();
-        retained_completion->release_lifetime_ref ();
-        return;
-    }
-    if (pipe_ && pipe_->get_transport_pair_id () != 0) {
-        scoped_lock_t lock (_transport_pairs_sync);
-        transport_pairs_t::const_iterator it =
-          _transport_pairs.find (transport_pair_key_t (
-            pipe_->get_transport_pair_id (),
-            pipe_->get_transport_pair_generation ()));
-        if (it == _transport_pairs.end () || !it->second.ready)
-            return;
     }
     receive_runtime_t &receive = receive_runtime ();
     scoped_lock_t receive_lock (receive.sync);
