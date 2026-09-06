@@ -41,8 +41,8 @@ executor까지 전달한다. public API와 timeout, retry, timer는 추가하거
   인스턴스를 보존한다.
 - `Runtime/Streams/ZLinkStreamNodeRuntime.cs:104-111,527-638`: ingress cancellation을 session
   admission에 전달하고 seal/force-stop async 경로를 연결했다.
-- `Runtime/Host/ZLinkFrameworkDrainExecutor.cs:48-58,112-118,452-471`,
-  `Runtime/Host/ZLinkFrameworkRuntime.cs:445-460,1024-1037`와
+- `Runtime/Host/ZLinkFrameworkDrainExecutor.cs:48-58,94-124,459-475`,
+  `Runtime/Host/ZLinkFrameworkRuntime.cs:444-460,1027-1037`와
   `Runtime/Host/ZLinkFrameworkRuntimeState.cs:153-163`: coordinator가 소유한 shutdown deadline token을
   최초 seal부터 STREAM session owner까지 전달한다. force-stop에서는 seal 직후 시작된 rejection이
   캡처한 orderly token을 active-session teardown보다 먼저 취소한 뒤 bounded force stop을 await한다.
@@ -69,7 +69,7 @@ executor까지 전달한다. public API와 timeout, retry, timer는 추가하거
 | 집중 `StreamSessionForcedCleanupTests|DrainCoordinatorTests` | **86/86 통과**, 64/256 public 회귀와 seal deadline 선취소 포함 |
 | unit split `FullyQualifiedName!~CanonicalActorJoinIngressReplyTests` | **2009/2009 통과**, 3분 6초 |
 | unit complement `FullyQualifiedName~CanonicalActorJoinIngressReplyTests` | **16/16 통과**, 22초 |
-| `Zlink.Framework.SampleRegressionTests` | **157/157 통과**, 400 ms |
+| `Zlink.Framework.SampleRegressionTests` | **157/157 통과**, 402 ms |
 | `samples/run_samples.sh` | **7/7 통과**, ZoneWorld 전체 relocation/maintenance 포함 |
 | perf Client/SessionServer/ChannelServer Release build | **통과**, 오류 0 |
 | `git diff --check` | **통과** |
@@ -82,14 +82,14 @@ Release build에는 기존 `Runtime/Spots/ZLinkSpotNodeCatalog.cs:768`의 CS8619
 진단의 read-only harness
 `/dev/shm/zlink-perf-dotnet/diag-followup-20260906/repro-tools/zlink-perf-followup-eventpipe-stacks.py`를
 수정 없이 사용했다. 세 role의 Release DLL을 먼저 갱신하고 새 output root
-`/dev/shm/zlink-perf-dotnet/fix-session-reject-20260906-final2`에서 session-echo-only,
+`/dev/shm/zlink-perf-dotnet/fix-session-reject-20260906-final3`에서 session-echo-only,
 64 connections, payload 4096, warmup 1초, 측정 2초를 3회 실행했다.
 
 | run | harness | SIGTERM → server exit | exit | host termination |
 |---|---|---:|---:|---|
-| eventpipe-stacks-session-1 | valid | **0.327 s** | 0 | Stopped / None |
-| eventpipe-stacks-session-2 | valid | **0.352 s** | 0 | Stopped / None |
-| eventpipe-stacks-session-3 | valid | **0.452 s** | 0 | Stopped / None |
+| eventpipe-stacks-session-1 | valid | **0.428 s** | 0 | Stopped / None |
+| eventpipe-stacks-session-2 | valid | **0.276 s** | 0 | Stopped / None |
+| eventpipe-stacks-session-3 | valid | **0.327 s** | 0 | Stopped / None |
 
 세 run 모두 외부 75초 관찰 cap이나 Framework orderly deadline에 닿지 않았고 SIGKILL 없이
 자체 종료했다. 확대 검증은 unit public contract에서 256 sessions까지 실행해 통과했으므로 별도
