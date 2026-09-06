@@ -3,6 +3,8 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.UUID;
 import java.util.function.BiFunction;
+import java.util.function.LongConsumer;
+import java.util.function.LongSupplier;
 import systems.zlink.framework.monitoring.ZLinkClientServerRuntime;
 import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
@@ -159,11 +161,7 @@ public final class ZLinkChannelRuntime
             thread.setDaemon(true);
             return thread;
         });
-    private final ScheduledExecutorService timeoutExecutor = Executors.newSingleThreadScheduledExecutor(task -> {
-        Thread thread = new Thread(task, "zlink-java-channel-timeout");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final ScheduledExecutorService timeoutExecutor;
     // Provider/backend work can block without occupying the deadline thread.
     // Each periodic source below owns one admission bit, so this shared
     // virtual-thread lane receives at most one queued or running task from
@@ -430,8 +428,39 @@ public final class ZLinkChannelRuntime
                 Supplier<Boolean>,
                 Runnable,
                 CompletionStage<Void>>> admission) {
+        this(backend, context, ownsContext, backendFactory, adapterOptions,
+            registration, serializer, handlerFactory, eventDispatcher, admission,
+            System::nanoTime, java.util.concurrent.locks.LockSupport::parkNanos,
+            Executors.newSingleThreadScheduledExecutor(task -> {
+                Thread thread = new Thread(task, "zlink-java-channel-timeout");
+                thread.setDaemon(true);
+                return thread;
+            }));
+    }
+
+    ZLinkChannelRuntime(
+        ZLinkChannelBackendAdapter backend,
+        ZLinkBackendContext context,
+        boolean ownsContext,
+        ZLinkBackendAdapterProvider backendFactory,
+        ZLinkBackendAdapterOptions adapterOptions,
+        ZLinkFrameworkRegistration registration,
+        ZLinkMessageSerializer serializer,
+        ZLinkHandlerActivator handlerFactory,
+        ZLinkRuntimeEventDispatcher eventDispatcher,
+        BiFunction<
+            ZLinkBackendObject,
+            ZLinkBackendAdmissionKey,
+            BiFunction<
+                Supplier<Boolean>,
+                Runnable,
+                CompletionStage<Void>>> admission,
+        LongSupplier nanoTime,
+        LongConsumer parkNanos,
+        ScheduledExecutorService timeoutExecutor) {
+        this.timeoutExecutor = timeoutExecutor;
         this.sockets = new ZLinkChannelSocketRegistry(
-            registration.applicationJobQueue());
+            registration.applicationJobQueue(), nanoTime, parkNanos);
         this.clientServerRuntime = new ZLinkClientServerRuntimeView(
             sockets,
             () -> hostState.get());
@@ -480,7 +509,8 @@ public final class ZLinkChannelRuntime
             timeoutExecutor,
             replyDecoder,
             this::sendToSpotViaRouterChannel,
-            this::requestToSpotViaRouterChannel);
+            this::requestToSpotViaRouterChannel,
+            nanoTime);
         this.dispatchReporter = new ZLinkChannelDispatchReporter(dispatchErrors);
         this.messageDispatcher = new ZLinkChannelMessageDispatcher(
             dispatchRegistry,

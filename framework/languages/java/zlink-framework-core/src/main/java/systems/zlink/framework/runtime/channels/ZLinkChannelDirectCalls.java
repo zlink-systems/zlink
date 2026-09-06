@@ -310,7 +310,7 @@ final class RequestCall implements ZLinkRequestCall {
         if (duplicate != null) {
             return duplicate;
         }
-        long started = System.nanoTime();
+        long started = runtime.nanoTime();
         try (var flowScope = runtime.enterApplicationFlow()) {
             CompletableFuture<TReply> result = new CompletableFuture<>();
             String reqPacket = packetName.orElse(null);
@@ -336,7 +336,7 @@ final class RequestCall implements ZLinkRequestCall {
                     boolean timedOut = error instanceof TimeoutException
                         || (error != null && error.getCause() instanceof TimeoutException);
                     ZLinkRuntimeMetrics.record("zlink.mesh_node.request.duration",
-                        Duration.ofNanos(System.nanoTime() - started),
+                        Duration.ofNanos(runtime.nanoTime() - started),
                         metricTags.duration(timedOut, error != null));
                     if (timedOut) {
                         ZLinkRuntimeMetrics.increment(
@@ -349,8 +349,8 @@ final class RequestCall implements ZLinkRequestCall {
             result.whenComplete((ignored, error) -> requestParts.forEach(Message::close));
             try {
                 ZLinkBackendDealerSocket target = resolveClient.apply(
-                    timeout.minusNanos(System.nanoTime() - started));
-                Duration remaining = timeout.minusNanos(System.nanoTime() - started);
+                    timeout.minusNanos(runtime.nanoTime() - started));
+                Duration remaining = timeout.minusNanos(runtime.nanoTime() - started);
                 if (remaining.isZero() || remaining.isNegative()) {
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,

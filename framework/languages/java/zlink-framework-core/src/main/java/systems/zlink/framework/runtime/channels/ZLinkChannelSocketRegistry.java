@@ -46,12 +46,16 @@ import systems.zlink.framework.runtime.internal.dispatch
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import java.util.function.Supplier;
+import java.util.function.LongConsumer;
+import java.util.function.LongSupplier;
 
 final class ZLinkChannelSocketRegistry {
     private static final long READY_POLL_INTERVAL_MILLIS = 5;
 
     private final Map<String, ChannelRegistration> registrations = new HashMap<>();
     private final ZLinkApplicationJobQueue applicationJobQueue;
+    private final LongSupplier nanoTime;
+    private final LongConsumer parkNanos;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<ZLinkBackendObject,
         ZLinkApplicationJobReceiveFlowController.Registration>
@@ -89,7 +93,16 @@ final class ZLinkChannelSocketRegistry {
     }
 
     ZLinkChannelSocketRegistry(ZLinkApplicationJobQueue applicationJobQueue) {
+        this(applicationJobQueue, System::nanoTime, LockSupport::parkNanos);
+    }
+
+    ZLinkChannelSocketRegistry(
+        ZLinkApplicationJobQueue applicationJobQueue,
+        LongSupplier nanoTime,
+        LongConsumer parkNanos) {
         this.applicationJobQueue = applicationJobQueue;
+        this.nanoTime = nanoTime;
+        this.parkNanos = parkNanos;
     }
 
     // The package-private surface remains synchronous: registration and
@@ -264,17 +277,17 @@ final class ZLinkChannelSocketRegistry {
     ZLinkBackendDealerSocket awaitClientForOutbound(
         String channelName,
         Duration bound) {
-        long deadline = System.nanoTime() + bound.toNanos();
+        long deadline = nanoTime.getAsLong() + bound.toNanos();
         while (true) {
             ZLinkBackendDealerSocket ready = clientForOutbound(channelName);
             if (ready != null) {
                 return ready;
             }
-            long remaining = deadline - System.nanoTime();
+            long remaining = deadline - nanoTime.getAsLong();
             if (remaining <= 0) {
                 return null;
             }
-            LockSupport.parkNanos(
+            parkNanos.accept(
                 Math.min(
                     TimeUnit.MILLISECONDS.toNanos(
                         READY_POLL_INTERVAL_MILLIS),

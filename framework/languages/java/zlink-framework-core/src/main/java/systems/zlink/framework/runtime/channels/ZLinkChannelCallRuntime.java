@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.LongSupplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -54,6 +55,7 @@ final class ZLinkChannelCallRuntime {
 
     private final ZLinkMessageFlowTracer flow;
     private final ScheduledExecutorService timeoutExecutor;
+    private final LongSupplier nanoTime;
     private final ZLinkChannelReplyDecoder replyDecoder;
     private final SpotSend spotSend;
     private final SpotRequest spotRequest;
@@ -66,11 +68,26 @@ final class ZLinkChannelCallRuntime {
         ZLinkChannelReplyDecoder replyDecoder,
         SpotSend spotSend,
         SpotRequest spotRequest) {
+        this(flow, timeoutExecutor, replyDecoder, spotSend, spotRequest, System::nanoTime);
+    }
+
+    ZLinkChannelCallRuntime(
+        ZLinkMessageFlowTracer flow,
+        ScheduledExecutorService timeoutExecutor,
+        ZLinkChannelReplyDecoder replyDecoder,
+        SpotSend spotSend,
+        SpotRequest spotRequest,
+        LongSupplier nanoTime) {
         this.flow = flow;
         this.timeoutExecutor = timeoutExecutor;
+        this.nanoTime = nanoTime;
         this.replyDecoder = replyDecoder;
         this.spotSend = spotSend;
         this.spotRequest = spotRequest;
+    }
+
+    long nanoTime() {
+        return nanoTime.getAsLong();
     }
 
     ZLinkMessageFlowTracer flow() {
