@@ -15,6 +15,9 @@ const { decodeActorJoin28 } = require(
 );
 
 const CANONICAL_ACTOR_JOIN_PACKET = 'ZLinkFrameworkActorJoinRequest';
+// Service-wire command byte of the Actor Join header frame (offset 3, after
+// the ZM magic and the wire version).
+const ACTOR_JOIN_WIRE_COMMAND = 28;
 const mode = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
 let userSpotTargetJoined;
@@ -84,20 +87,25 @@ function installCanonicalWireProbe(app, meshName) {
   const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
   const nativeNode = runtime.spotNodeRuntime?.meshNode(meshName);
   const stateful = nativeNode?.stateful;
-  if (stateful === undefined || typeof stateful.submitRequest !== 'function') {
-    throw new Error('canonical Actor Join wire probe could not find the active Node service runtime');
+  const serviceTransport = stateful?.raw;
+  if (serviceTransport === undefined
+    || typeof serviceTransport.requestService !== 'function') {
+    throw new Error('canonical Actor Join wire probe could not find the active Node service transport');
   }
 
-  const originalSubmitRequest = stateful.submitRequest;
-  stateful.submitRequest = function submitRequestWithCanonicalProbe(
-    pending,
+  // The Actor Join wire command is the only command carried by a command-28
+  // header, and every remote Join attempt - the plain sender and the durable
+  // lifecycle sender that replays frozen frames alike - hands its frames to
+  // this one service transport call. Observing the transport instead of one
+  // sender method keeps the probe attached when the runtime changes which
+  // sender owns a Join.
+  const originalRequestService = serviceTransport.requestService;
+  serviceTransport.requestService = function requestServiceWithCanonicalProbe(
     targetNodeRid,
     parts,
-    timeoutMs,
-    operationKind,
-    actor
+    timeoutMs
   ) {
-    if (operationKind === 'actorJoin') {
+    if (parts[0]?.[3] === ACTOR_JOIN_WIRE_COMMAND) {
       try {
         const decoded = decodeActorJoin28(parts);
         const packetName = decoded.payload?.packetName ?? '<none>';
@@ -116,15 +124,7 @@ function installCanonicalWireProbe(app, meshName) {
         appendFlow(`canonical actorJoin: wire_command=decode-failed error=${String(error)}`);
       }
     }
-    return originalSubmitRequest.call(
-      this,
-      pending,
-      targetNodeRid,
-      parts,
-      timeoutMs,
-      operationKind,
-      actor
-    );
+    return originalRequestService.call(this, targetNodeRid, parts, timeoutMs);
   };
 
   if (args['force-private-join'] === '1') {
