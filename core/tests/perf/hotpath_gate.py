@@ -20,6 +20,7 @@ CELLS = (
     "dealer_router_reqrep_inproc",
     "pair_inproc",
     "router_router_tcp",
+    "stream_tcp",
 )
 DEFAULT_ITERATIONS = 20_000
 REQREP_ITERATIONS = 5_000
@@ -123,7 +124,7 @@ def measure_cell(
         command = [
             valgrind,
             "--tool=callgrind",
-            "--collect-atstart=no",
+            "--instr-atstart=no",
             f"--callgrind-out-file={output}",
             "--error-exitcode=99",
             str(bench),
