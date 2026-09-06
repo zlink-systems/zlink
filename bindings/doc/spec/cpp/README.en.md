@@ -395,7 +395,9 @@ artifact. The finished binding therefore keeps the following build rules.
 `zlink.hpp` projects these categories into the `zlink` namespace.
 
 - `Core/`: context, context options, routing id, utility resources, and public free functions such as version or capability helpers.
-- `Messaging/`: message, received metadata, topic message, subscription event, stream packet value, builder payload helpers. A codec helper is not included in the C++ binding package — framework-level serialization is handled by a framework codec extension.
+- `Messaging/`: message, received metadata, topic message, subscription event, stream
+  packet values, and builder payload helpers. Codec distribution scope follows the
+  [common raw payload policy](../README.en.md#binding-raw-scope).
 - `Sockets/`: socket operations, socket family, typed options, request/reply, publish/subscribe surfaces.
 - `Eventing/`: monitor, monitor snapshot/event, poller, poll event, timer, public poll helpers.
 - `Service/`: SPOT node, SPOT handle, the topology model, actor ref, actor lifecycle, operation builders.
@@ -437,7 +439,7 @@ artifact. The finished binding therefore keeps the following build rules.
 - The terminal for a raw ROUTER/`received_t` reply is the synchronous one-shot
   `reply_submit_operation_t::submit() -> void`. It submits a terminal reply or
   error reply with one native call. A DEALER peer is subject to Application
-  HWM, `PAUSED`, and `SNDTIMEO`, so the result can be `BACKPRESSURED`; a ROUTER
+  [HWM](../../../../core/doc/spec/core/glossary.en.md#hwm) (the queue byte threshold), `PAUSED`, and `SNDTIMEO`, so the result can be `BACKPRESSURED`; a ROUTER
   peer uses the HWM-free Completion connection. `NOT_CONNECTED`, `TERMINATED`,
   `INVALID_ARGUMENT`, and other submit failures are delivered immediately as
   `submit_error_t`.
@@ -490,10 +492,8 @@ to their current values, clears epoch counters, and increments
 `measurement_epoch`. `application_accounted_bytes` and the three
 owner-lifecycle fields are ABI-reserved and always zero.
 
-The C++ binding does not decide send or receive admission. Core returns
-backpressure when the accounted bytes retained by a pipe reach the applied HWM,
-and the binding carries that result and timeout through the existing operation
-builder contract. `0 bytes` means unlimited; it does not mean one message.
+Planning, manual overrides, and admission follow the [Core HWM contract](../README.en.md#hwm-calculation-and-admission).
+`0 bytes` means unlimited, not an allowance for one message.
 
 `socket.monitor_open(events, monitor_hwm_bytes)` and
 `socket_monitor_t::open(socket, events, monitor_hwm_bytes)` take a
@@ -501,13 +501,9 @@ builder contract. `0 bytes` means unlimited; it does not mean one message.
 forwarded unchanged as the exact monitor queue byte HWM. There is no
 message-count overload or alias.
 
-Core byte HWM counts only payload retained by a Core queue, and its charge ends
-at receive dequeue. Ordinary `recv(received_t&)`,
-`subscribe(topic_message_t&)`, `recv(message_t&)`, and `subscribe_part(...)`
-transfer normal C++ ownership of parts and routing/topic/request metadata into
-the output object. Copying, closing, or destroying that object manages payload
-lifetime, not Core HWM credit or application byte capacity. No separate
-retained receive or lease handle exists in a public or internal API.
+The outputs of `recv(received_t&)`, `subscribe(topic_message_t&)`, `recv(message_t&)`, and
+`subscribe_part(...)` manage part and routing/topic/request metadata lifetime through C++ copy,
+`close()`, and destruction. The [common receive ownership contract](../README.en.md#receive-ownership) defines the boundary with receive accounting.
 
 The public contract has no `auto_hwm_msg_unit_bytes` or slot, size-cap, or connection-bucket planner
 properties or aliases. The monitor snapshot projects
@@ -517,28 +513,10 @@ and queue counts come from `core_hwm_budget_snapshot_t`.
 
 ## Receive flow state
 
-The binding exposes the Core receive-flow state as
-`zlink::receive_flow_state_t`, an `enum class` over `int` with `running = 0`
-and `paused = 1`. `socket_t::set_receive_flow_state(receive_flow_state_t)`
-sets it. The method returns `void` and follows the C++ error policy: a failing
-`zlink_config_result_t` is thrown as a `config_error_t` carrying that result
-value, so `ZLINK_CONFIG_NOT_SUPPORTED` on a socket that doesn't support receive
-flow becomes a `config_error_t` with the not-supported result. Setting the
-state the socket already holds returns normally and throws nothing.
-
-The observation surface follows the C contract, so the constant and metric
-names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
-`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
-with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
-and `FLOW_STATE_STALE_EPOCH` (`1 << 3`), the status detail bit `FLOW_STATE`
-(`1 << 5`), and the five status
-fields `flow_paused_connections`, `flow_pause_applied_total`,
-`flow_resume_applied_total`, `flow_state_stale_total`, and
-`flow_pause_duration_ms`, projected with this language's naming convention.
-
-Flow-state frames stay inside Core. The binding calls the setter, reads the
-monitor events and the snapshot fields, and never encodes, decodes, sends, or
-receives a flow-state frame itself.
+`zlink::receive_flow_state_t` is an `enum class` over `int` with `running = 0` and `paused = 1`.
+The setter is `void socket_t::set_receive_flow_state(receive_flow_state_t)`; a failed native
+result is thrown as `config_error_t` carrying that result.
+State, result, and monitor projection follow the [common receive-flow contract](../README.en.md#receive-flow-projection).
 
 ## Feature scope
 
@@ -563,9 +541,8 @@ A C++ caller never has to reason about cleaning up a C handle.
 - A move-only resource class is preferred over shared ownership of a mutable handle.
 - A message value supports an efficient move, and an explicit copy when a copy is requested.
 - The data-plane receive and subscribe paths use caller-provided storage.
-- A `received_t` or `topic_message_t` owns only the C++ lifetime of received
-  parts and metadata. Core HWM byte charge ends at dequeue and is not tied to
-  copying, closing, or dropping the output object.
+- Receive-result lifetime APIs follow the C++ output-object description in
+  [64-bit byte HWM and the monitoring contract](#64-bit-byte-hwm-and-the-monitoring-contract).
 - A service control/admission receive path, such as Actor join request receive, may use an optional or a typed result return when that's clearer for a C++ caller — but it must still distinguish no-data from a hard receive failure.
 - A callback keeps the native callback lifetime and the user callable's lifetime internally consistent.
 
@@ -621,17 +598,15 @@ types.
 
 ## Pull completion public contract
 
-The C++ package uses Core 0.16.0 as an exact dependency.
+C++ package information follows its [distribution metadata](../../../cpp/CMakeLists.txt); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-The C++ runtime hides native completion IDs, `user_context`, and raw drain and converts them into a
-blocking result or `async_result_t`. Blocking send/request use Core `NONE`; `async()` uses Core
-`DONTWAIT`. Completion-backed operation state is registered in a provisional registry before native
-`FINAL` and completes exactly once after submit publication and completion capture join. Dropping an
-`async_result_t` only detaches the waiter; it does not cancel the Core operation.
+C++ provides blocking `submit()` and `async()` returning `async_result_t`.
+Completion-wait lifetime ends through `async_result_t` drop.
 
-`poll_event_flag_t::pollcompletion` is a progress event indicating that the public poller's wait thread
-drained the native queue and fully processed at least one live waiter or detached state. While a public
-poller is the owner, another thread must execute the wait loop for a blocking request to progress.
+Native completion IDs, `user_context`, and raw drain are not public APIs.
+Submission results follow the [common result projection](../README.en.md#submit-result-projection);
+completion joins, lifetime, and progress conditions for `poll_event_flag_t::pollcompletion` follow the
+[async execution model](../async-execution-model.en.md).
 
 Only a ROUTER REQUEST receive creates a `reply_token_t`. The token carries a shared owner tag created by
 the ROUTER wrapper and an opaque value. Equality, hashing, and reply-owner validation use both values.
@@ -753,12 +728,9 @@ Each item maps to one contract test.
 
 - Every socket's send factory returns `send_operation_t`, and blocking `submit()` and `async()` observe
   the `NONE` and `DONTWAIT` completion boundaries respectively.
-- Request exposes only timeout, a blocking result, and `async()`. A non-OK completion ends with a typed
-  error and does not expose the error payload.
-- After `async_result_t` drop, a late completion does not complete the waiter again and releases the
-  native aggregate.
-- Under public poller ownership, a completion-backed terminal progresses when a wait loop runs, and
-  `pollcompletion` returns only after settlement or cleanup finishes.
+- Request exposes only timeout, a blocking result, and `async()`.
+- Common completion, cancellation, and poller observations follow the
+  [execution-model verification requirements](../async-execution-model.en.md#7-implementation-and-contract-test-verification-requirements).
 - When HWM/`PAUSED` waiting expires for a raw reply submitted to a DEALER peer,
   `submit_error_t` reports `BACKPRESSURED`; a reply submitted to a ROUTER peer
   retains the HWM-free result of the Completion connection.

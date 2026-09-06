@@ -133,22 +133,14 @@ rules.
 
 ## Byte HWM and Auto-HWM
 
-In C, the Core ABI provides the HWM contract directly. `ZLINK_OPT_SNDHWM`
+In C, the Core ABI provides the [HWM](../../../../core/doc/spec/core/glossary.en.md#hwm) (the queue byte threshold) contract directly. `ZLINK_OPT_SNDHWM`
 and `ZLINK_OPT_RCVHWM` are `uint64_t` accounted-byte limits, and
 `zlink_set_option()` and `zlink_get_option()` receive exactly 8 bytes of
 storage. The manual default is `4,096,000 bytes`, and `0` means unlimited.
 
-The context memory limit and Core budget are byte-valued `uint64_t` options;
-the profile uses its canonical option. Core applies the profile ratio exactly
-once and calculates planned byte HWM using physical directional queues as the
-denominator.
-
-Setting a directional HWM makes that direction a manual override. Automatic
-HWM recalculates only directions without an override. Core decides actual
-admission from the accounted bytes retained by its pipe; the C caller does not
-accumulate a separate message count or payload size. A submit that reaches the
-HWM reports backpressure according to that socket's blocking, non-blocking, and
-timeout contract.
+The context memory limit and Core budget use byte-valued `uint64_t` options; the profile uses
+its canonical option. Planning, manual overrides, and admission follow
+[Core HWM calculation and admission](../README.en.md#hwm-calculation-and-admission).
 
 In `zlink_monitor_status_t` ABI version 4, planned, applied, and deferred HWM
 values and in-flight usage use bytes. `snd_pending_msgs` and
@@ -162,9 +154,7 @@ provided.
 
 ## Receive flow state
 
-The C binding exposes the Core receive-flow surface unchanged. Every name
-below is the Core name, and `bindings/c/include` carries the same declarations
-as `core/include`.
+C exposes `zlink_receive_flow_state_t` and the following Core function unchanged.
 
 ```c
 typedef enum zlink_receive_flow_state_t
@@ -177,29 +167,10 @@ ZLINK_EXPORT zlink_config_result_t zlink_socket_set_receive_flow_state (
   void *handle_, zlink_receive_flow_state_t state_);
 ```
 
-The call returns `zlink_config_result_t` and records the detailed cause in
-`zlink_errno()`, following the same rule as every other configuration call. A
-repeat of the current state is `ZLINK_CONFIG_OK`. An out-of-range state is
-`ZLINK_CONFIG_INVALID_ARGUMENT` with `EINVAL`. A socket type other than DEALER
-or ROUTER is `ZLINK_CONFIG_NOT_SUPPORTED` with `ENOTSUP`. A close that won
-admission is `ZLINK_CONFIG_INVALID_STATE` with `ESHUTDOWN`, and a close that
-already finished is `ZLINK_CONFIG_INVALID_HANDLE`. The formal result table
-lives in the Core error specification.
-
-The observation surface is also the Core surface:
-
-| Kind | Names |
-|---|---|
-| Events | `ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED` (`1u << 16`), `..._SEND_FLOW_RESUMED` (`1u << 17`), `..._FLOW_STATE_STALE` (`1u << 18`), with the short aliases `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, `ZLINK_EVENT_FLOW_STATE_STALE`; `ZLINK_SOCKET_MONITOR_EVENT_ALL` is `0x7FFFFu` |
-| Event flags | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` (`1u << 1`), `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` (`1u << 3`), read from `zlink_monitor_event_t.flags` |
-| Detail bit | `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` (`1u << 5`) |
-| Status fields | `flow_paused_connections`, `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`, `flow_pause_duration_ms`, all `uint64_t` appended at the end of `zlink_monitor_status_t` |
-
-`ZLINK_MONITOR_STATUS_ABI_VERSION` is `4u`. A caller passes a structure of the
-current layout; there is no size or version negotiation.
-
-Flow-state frames are a Core-internal completion-lane detail. The C binding
-declares no function that receives, sends, encodes, or decodes one.
+The return value is `zlink_config_result_t`; `zlink_errno()` provides the detailed error.
+State, result, and monitor projection follow the [common receive-flow contract](../README.en.md#receive-flow-projection).
+The [Core monitoring ABI](../../../../core/doc/spec/core/06-monitoring.en.md#61-abi-version-and-layout)
+owns the C enum, event, flag, and status-field declarations.
 
 ## Required feature coverage
 
@@ -283,19 +254,15 @@ existing Spot routed send/request.
 
 ## Pull completion and STREAM packets
 
-The C header and library project the Core 0.16.0 ABI without alteration.
+The C header and library ABI version follows [Core release metadata](../../../../VERSION).
 
-C exposes SEND and REQUEST completions as raw tagged records. `ZLINK_POLLCOMPLETION` is
-non-consuming level readiness indicating that the next `zlink_completion_recv()` can return one
-record. Poller wait does not consume a record, so the caller repeats DONTWAIT recv for every ready
-socket through `ZLINK_RECV_NO_DATA`. One poller registration owns the completion bit of a socket, and
-the application also maintains exactly one completion drain owner.
-
-When a `DONTWAIT FINAL` send cannot obtain immediate local admission, Core retains the payload and
-returns a nonzero completion ID. ID `0` means that admission has already completed or the operation was
-not accepted, so no later completion follows. A successful request `FINAL` always returns a nonzero ID.
-The completion ID and `user_context` are correlation values, not cancellation handles or callback
-arguments.
+C exposes REQUEST and WRITABLE through a `zlink_completion_t` output.
+[Core completion pull and ownership](../../../../core/doc/spec/core/socket/README.en.md#completion-pull-and-ownership)
+owns the receive and cleanup functions, readiness, and single drain owner.
+SEND/REQUEST results, IDs, wait tokens, input retention, and resubmission conditions follow
+[Core part send](../../../../core/doc/spec/core/socket/README.en.md#part-send-and-pending-admission) and
+[Core request](../../../../core/doc/spec/core/socket/README.en.md#request-and-reply).
+C adds no language terminal or completion registry.
 
 A ROUTER REQUEST receive returns a nonzero `zlink_reply_token_t`. The token is an opaque capability
 scoped to the responder ROUTER socket and source logical RID. A DATA token is `0`. After receiving every
@@ -313,7 +280,8 @@ typedef uint64_t zlink_reply_token_t;
 
 typedef enum zlink_completion_kind_t {
   ZLINK_COMPLETION_SEND = 1,
-  ZLINK_COMPLETION_REQUEST = 2
+  ZLINK_COMPLETION_REQUEST = 2,
+  ZLINK_COMPLETION_WRITABLE = 3
 } zlink_completion_kind_t;
 
 typedef enum zlink_send_complete_result_t {
@@ -434,10 +402,8 @@ to one contract test.
 
 **Submit and completion**
 
-- When `DONTWAIT FINAL` obtains immediate admission, ID `0` and no completion are observed. When Core
-  accepts it as pending, a nonzero ID and one SEND completion are observed.
-- A successful REQUEST `FINAL` returns a nonzero ID and exactly one REQUEST completion containing a
-  reply, timeout, or terminal result.
+Submit results, IDs, and REQUEST/WRITABLE observations follow the
+[Core submit/completion verification requirements](../../../../core/doc/spec/core/socket/README.en.md#8-implementation-and-contract-test-verification-requirements).
 - `ZLINK_POLLCOMPLETION` does not consume a record in wait. Once a DONTWAIT drain empties the queue,
   recv returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 - Closing an output after successful completion recv restores an empty aggregate that preserves

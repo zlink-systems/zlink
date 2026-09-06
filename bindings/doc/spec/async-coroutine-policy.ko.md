@@ -21,7 +21,7 @@ terminal은 Core `NONE`, awaitable terminal은 Core `DONTWAIT`를 사용한다. 
 
 | Operation | Public 완료 경계 |
 |---|---|
-| Send | Blocking terminal은 local admission까지 기다리고, awaitable terminal은 native completion을 drain한 뒤 끝난다. |
+| Send | [Submit 결과 투영](README.ko.md#submit-result-projection)의 admission 결과. |
 | Request | Blocking·awaitable terminal 모두 reply, timeout 또는 terminal request error까지 기다린다. |
 | Publish | lossy/NODROP flag를 사용하며 submit 결과는 synchronous다. |
 | Reply | Socket `SNDTIMEO`를 따르는 synchronous `NONE` admission으로 끝난다. |
@@ -51,35 +51,18 @@ Builder는 payload를 part 단위로 모으고 한 번만 submit할 수 있다. 
 언어별 message ownership을 유지한다. Submit 실패 때 lvalue·managed message를 복구하던 binding은
 staging에서 복구하고, rvalue·move input은 소비한다. 이 동작은 재전송 queue가 아니다.
 
-## 3. Awaitable 완료와 registry
+## 3. Awaitable 완료
 
-Awaitable send/request, blocking request와 Go `Submit(context.Context)`는 native `FINAL` 전에
-stable `user_context`로 찾을 수 있는 provisional state를 socket-local registry에 등록한다.
-Submit outcome publish와 completion capture가 모두 끝났을 때만 public terminal을 정확히 한 번
-끝낸다. Native submit 실패는 state를 제거한 뒤 exact submit error로 끝나고 completion을 만들지
-않는다. Successful send ID `0`은 inline success이며, successful request는 항상 nonzero ID다.
-
-Completion이 submit 반환 전에 drain되면 binding은 `user_context`로 state를 찾아 result와 native
-ownership을 capture한다. Submit outcome·ID·Core ownership publish와 합류하기 전에는 waiter를
-끝내지 않는다. Cancellation이나 Future drop이 먼저 확정된 state도 late completion 또는 lifecycle
-cleanup까지 registry에 남겨 native payload를 정리한다. 세부 상태 전이와 caller wait cancellation
-경계는 [비동기 실행 모델](async-execution-model.ko.md)이 정의한다.
-
-Non-OK request completion은 고수준 binding의 기존 typed request error로 끝난다. Error payload를
-새 public collection이나 error property로 공개하지 않는다. Binding은 language message로 옮기기
-전에 native completion을 정확히 한 번 닫는다. `OK` reply만 language message collection으로
-소유권을 옮기며 conversion 실패 때 이미 만든 wrapper와 남은 native part를 모두 정리한다.
+Submit 결과는 [공통 결과 투영](README.ko.md#submit-result-projection)을 따른다.
+완료 합류·context 수명·정확히 한 번의 정리는
+[비동기 실행 모델](async-execution-model.ko.md#5-submit-결과와-completion의-합류)이,
+언어 wait 취소와 typed request error는
+[caller wait cancellation](async-execution-model.ko.md#6-caller-wait-cancellation)이 소유한다.
 
 ## 4. PollCompletion과 pull event
 
-C의 `PollCompletion`은 다음 raw completion recv가 성공할 수 있다는 non-consuming level
-readiness다. 고수준 binding의 `PollCompletion`은 native queue를 `NO_DATA`까지 비우고 live waiter
-settle 또는 detached state cleanup까지 끝낸 뒤 한 건 이상을 처리했다는 progress event다.
-
-Public poller에 socket을 등록하면 그 `wait()` thread가 drain owner가 된다. 등록하지 않은 socket은
-binding runtime이 owner다. 등록·수정·제거는 owner를 원자적으로 이전한다. Public poller owner가
-`wait()`를 실행하지 않으면 해당 socket의 completion-backed terminal도 진행하지 않는다.
-`POLLIN`이 함께 준비돼도 completion drain은 application DATA를 소비하지 않는다.
+Raw readiness와 고수준 progress의 구분, `NO_DATA`까지의 drain, public poller로의 owner 이전은
+[비동기 실행 모델](async-execution-model.ko.md#4-poller와-completion-drain)을 따른다.
 
 ## 5. ReplyToken과 reply
 
@@ -136,16 +119,13 @@ test 하나로 이어진다.
 
 **완료와 cancellation**
 
-- Successful nonzero submit과 pre-return completion이 경합해도 terminal은 submit publish와
-  completion capture 뒤 정확히 한 번 끝난다.
-- Caller wait cancellation 또는 Future drop 뒤 late completion은 public waiter를 다시 끝내지 않고
-  native payload와 registry state를 정리한다.
-- Non-OK request completion은 typed request error만 공개하며 error payload accessor를 만들지 않는다.
+Submit 경합·cancellation·request error의 관측은
+[공통 실행 모델의 검증 요구](async-execution-model.ko.md#7-구현-및-contract-test-검증-요구)를 따른다.
 
 **Poller와 token**
 
-- Public poller 등록·제거가 drain owner를 원자적으로 이전하고, `PollCompletion`은 완전히 처리한
-  completion이 있을 때만 progress를 반환한다.
+Poller의 관측은 [공통 실행 모델의 검증 요구](async-execution-model.ko.md#7-구현-및-contract-test-검증-요구)를 따른다.
+
 - ROUTER REQUEST receive가 만든 token은 같은 socket·value에서 같고 다른 socket에서는 다르며,
   invalid token과 다른 owner token은 native reply 전에 거부된다.
 

@@ -22,7 +22,7 @@ completion.
 
 | Operation | Public completion boundary |
 |---|---|
-| Send | A blocking terminal waits through local admission. An awaitable terminal finishes after draining the native completion. |
+| Send | The admission outcome in [Submit result projection](README.en.md#submit-result-projection). |
 | Request | Both blocking and awaitable terminals wait for the reply, timeout, or terminal request error. |
 | Publish | Uses lossy/NODROP flags and has a synchronous submit result. |
 | Reply | Finishes with synchronous `NONE` admission subject to socket `SNDTIMEO`. |
@@ -54,40 +54,18 @@ preserve their existing language-specific message ownership. A binding that rest
 managed message after submit failure restores it from staging; an rvalue or move input is consumed.
 This behavior is not a retransmission queue.
 
-## 3. Awaitable completion and registry
+## 3. Awaitable completion
 
-Awaitable send/request, blocking request, and Go `Submit(context.Context)` register provisional state
-in a socket-local registry before native `FINAL`, addressable by a stable `user_context`. The public
-terminal completes exactly once only after both the submit outcome has been published and the
-completion has been captured. Native submit failure removes the state and completes with the exact
-submit error without creating a completion. Successful send ID `0` is inline success; a successful
-request always has a nonzero ID.
-
-If a completion is drained before submit returns, the binding locates the state through `user_context`
-and captures the result and native ownership. It does not complete the waiter until that capture joins
-the publication of the submit outcome, ID, and Core ownership. State whose cancellation or Future drop
-was decided first also remains in the registry until a late completion or lifecycle cleanup releases
-the native payload. The [async execution model](async-execution-model.en.md) defines the detailed state
-transitions and caller wait cancellation boundary.
-
-A non-OK request completion ends with the high-level binding's existing typed request error. It does not
-expose the error payload through a new public collection or error property. The binding closes the native
-completion exactly once before moving it into a language message. Only an `OK` reply transfers ownership
-into a language message collection; conversion failure releases both wrappers already created and all
-remaining native parts.
+Submit results follow the [common result projection](README.en.md#submit-result-projection).
+The [async execution model](async-execution-model.en.md#5-joining-submit-results-and-completions)
+owns completion joins, context lifetime, and exactly-once cleanup;
+[caller wait cancellation](async-execution-model.en.md#6-caller-wait-cancellation)
+owns language wait cancellation and typed request errors.
 
 ## 4. PollCompletion and pull events
 
-C `PollCompletion` is non-consuming level readiness indicating that the next raw completion receive can
-succeed. High-level binding `PollCompletion` is a progress event: it means the binding drained the native
-queue through `NO_DATA` and completed live waiter settlement or detached-state cleanup for at least one
-completion.
-
-When a socket is registered with a public poller, that poller's `wait()` thread becomes the drain owner.
-The binding runtime owns an unregistered socket. Registration, modification, and removal transfer
-ownership atomically. If a public poller owner does not execute `wait()`, completion-backed terminals for
-that socket do not progress. Even when `POLLIN` is ready at the same time, completion drain does not
-consume application DATA.
+The [async execution model](async-execution-model.en.md#4-pollers-and-completion-drain)
+defines raw readiness versus high-level progress, drain through `NO_DATA`, and owner transfer to a public poller.
 
 ## 5. ReplyToken and reply
 
@@ -145,16 +123,13 @@ item maps to one contract test.
 
 **Completion and cancellation**
 
-- Even when a successful nonzero submit races with a pre-return completion, the terminal completes
-  exactly once after submit publication and completion capture join.
-- After caller wait cancellation or Future drop, a late completion does not complete the public waiter
-  again and releases the native payload and registry state.
-- A non-OK request completion exposes only a typed request error and creates no error-payload accessor.
+Submit-race, cancellation, and request-error observations follow the
+[common execution model's verification requirements](async-execution-model.en.md#7-implementation-and-contract-test-verification-requirements).
 
 **Poller and token**
 
-- Public poller registration and removal transfer the drain owner atomically, and `PollCompletion`
-  reports progress only when a completion has been processed fully.
+Poller observations follow the [common execution model's verification requirements](async-execution-model.en.md#7-implementation-and-contract-test-verification-requirements).
+
 - Tokens created by ROUTER REQUEST receive are equal for the same socket and value and unequal across
   sockets; invalid tokens and tokens owned by another socket are rejected before native reply.
 

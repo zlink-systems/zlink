@@ -580,7 +580,7 @@ Runtime owns:
 - native downcalls;
 - native struct mirrors;
 - message marshalling;
-- socket-local provisional completion registry and drain owner;
+- socket-local completion operation state and drain owner;
 - receive cursors;
 - part-loop sequencing;
 - native error mapping;
@@ -656,16 +656,14 @@ dropping the copy for a subscriber whose queue is full; `NODROP` returns an imme
 The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
 `ReplySubmitOperation.submit() -> void`. It creates no `CompletionStage`, accepts no send flags,
 and submits a terminal reply or error reply with one native call. A DEALER peer is subject to
-Application HWM, `PAUSED`, and `SNDTIMEO`, so the result can be `BACKPRESSURED`; a ROUTER peer uses
+Application [HWM](../../../../core/doc/spec/core/glossary.en.md#hwm) (the queue byte threshold), `PAUSED`, and `SNDTIMEO`, so the result can be `BACKPRESSURED`; a ROUTER peer uses
 the HWM-free Completion connection. `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other
 submit failures are delivered immediately as `ZlinkSubmitException`.
 
 ### Completion pull
 
-Completion-backed state is registered in a provisional registry before native `FINAL`. A stage or
-blocking request completes exactly once after native submit-outcome publication joins completion
-capture. Stage cancellation completes only the waiter; the socket-local drain owner releases payload
-and state on late completion.
+Stage and blocking results and completion-lifetime APIs follow the [pull completion public contract](#pull-completion-public-contract).
+The [common execution model](../async-execution-model.en.md#5-joining-submit-results-and-completions) owns submit/completion joins.
 
 Do not add separate operation-start families such as `sendNoWait`, `sendWithFlags`,
 `requestAsync`, `publishWithFlags`, or a `send(message)` shortcut.
@@ -716,13 +714,9 @@ boolean ok = router.recv(received, RecvFlags.DONT_WAIT);
 No-data is a normal `false` result for caller-provided no-wait receive.
 Hard receive failures throw the documented exception type.
 
-Core byte-HWM charge ends when ordinary `recv(...)` or `subscribe(...)`
-dequeues the payload. `Received` and `TopicMessage` own only the Java lifetime
-of parts, routing ID, `ReplyToken`, topic, and multipart framing. Closing
-or reusing the output cleans up payload and metadata but does not participate
-in Core HWM accounting. No separate retained receive, raw lease handle,
-application byte capacity, or duplicate accounting state exists in a public or
-internal API.
+`Received` and `TopicMessage` preserve parts, routing ID, `ReplyToken`, topic, and multipart
+framing; `close()` and reuse for the next receive release the payload and metadata.
+The [common receive ownership contract](../README.en.md#receive-ownership) defines the boundary with receive accounting.
 
 SPOT readable dispatch events are readiness notifications. Callers drain the
 corresponding receive API until no-data.
@@ -800,17 +794,8 @@ hard limit. If an explicit input exceeds a finite hard limit Core detected, the
 binding preserves the existing configuration exception corresponding to
 `EINVAL` and does not clamp the value.
 
-Core applies the profile ratio to the memory limit exactly once, or uses an
-explicit Core budget unchanged, then calculates planned byte HWM per physical
-directional queue. A direction on which the caller sets `sendHwm(...)` or `recvHwm(...)`
-becomes a manual override and is not changed by later automatic HWM
-recalculation.
-
-The Java binding does not recount queued messages or payloads. When the actual
-accounted bytes in a Core pipe reach the applied HWM, the native submit result
-reports backpressure and the Java operation preserves it through the existing
-result and timeout contract. A `long` value of `0` means unlimited. Negative
-values are not valid HWM inputs.
+HWM planning, manual overrides, admission, and value projection follow [Core HWM calculation and admission](../README.en.md#hwm-calculation-and-admission).
+A `long` value of `0` means unlimited; negative HWM inputs are rejected.
 
 `monitorOpen(monitorHwmBytes, events...)` accepts a non-negative `long` byte
 value for the monitor queue. Zero selects the Core monitor default; a positive
@@ -823,7 +808,8 @@ or alias.
 - A deferred value is meaningful only when its matching `autoHwmDeferredSendHwmValid()` or `autoHwmDeferredRecvHwmValid()` method returns `true`.
 - A pending-message value remains a count diagnostic and does not share a name with a byte field.
 - Pending bytes are exposed separately through `sndPendingBytes()` and `rcvPendingBytes()`.
-- A snapshot whose `abiVersion()` is not `3`, or whose `structSize()` differs from the binding layout, raises `UnsupportedOperationException`. An older monitoring layout is not accepted.
+- If `abiVersion()` or `structSize()` is incompatible with the [current Core monitor layout](../../../../core/doc/spec/core/06-monitoring.en.md#61-abi-version-and-layout),
+  raise `UnsupportedOperationException`.
 
 `CoreHwmBudgetSnapshot` projects ABI version/size, configured/runtime/resolved
 memory limits, configured/effective budgets, planned/applied/manual-reserved
@@ -845,28 +831,11 @@ and retain their existing lifetime and ownership contract.
 
 ## Receive flow state
 
-The binding exposes the Core receive-flow state as the `ReceiveFlowState`
-enum with `RUNNING(0)` and `PAUSED(1)`. The public setter is the common
-socket-option facade method `receiveFlowState(ReceiveFlowState)`. It returns
-`void` and follows the Java error policy: a non-zero native result is thrown as
-a `ZlinkConfigException` carrying the matching `ConfigResult`, so a socket
-that doesn't support receive flow raises `ZlinkConfigException` with the
-not-supported result. A null argument raises `NullPointerException` before any native call.
-Setting the state the socket already holds returns normally.
-
-The observation surface follows the C contract, so the constant and metric
-names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
-`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
-with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
-and `FLOW_STATE_STALE_EPOCH` (`1 << 3`), the status detail bit `FLOW_STATE`
-(`1 << 5`), and the five status
-fields `flow_paused_connections`, `flow_pause_applied_total`,
-`flow_resume_applied_total`, `flow_state_stale_total`, and
-`flow_pause_duration_ms`, projected with this language's naming convention.
-
-Flow-state frames stay inside Core. The binding calls the setter, reads the
-monitor events and the snapshot fields, and never encodes, decodes, sends, or
-receives a flow-state frame itself.
+The `ReceiveFlowState` enum provides `RUNNING(0)` and `PAUSED(1)`. The common socket-option
+facade's `receiveFlowState(ReceiveFlowState)` returns `void` and throws a
+`ZlinkConfigException` carrying the failed native `ConfigResult`. A null argument is
+rejected with `NullPointerException` before the native call.
+State, result, and monitor projection follow the [common receive-flow contract](../README.en.md#receive-flow-projection).
 
 ## Error And Result Policy
 
@@ -1023,20 +992,16 @@ bridge details.
 
 ## Pull completion public contract
 
-The Java package uses Core 0.16.0 as an exact dependency.
+Java package information follows its [distribution metadata](../../../java/build.gradle); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-The Java runtime drains native completions and converts them into blocking results or
-`CompletionStage`. `submit_sync()` uses Core `NONE`; `submit()` uses Core `DONTWAIT`. Kotlin uses this
-Java contract without creating an independent native ABI or token wrapper.
+Java provides blocking `submit_sync()` and `submit()` returning `CompletionStage`.
+Kotlin uses the same Java contract without an independent native ABI or token wrapper.
+Caller wait cancellation is expressed through stage cancellation.
 
-Completion-backed state is registered in a provisional registry before native `FINAL`. A
-`CompletionStage` or blocking request completes exactly once after submit-outcome publication and
-completion capture have both finished. Stage cancellation ends only the caller wait and does not cancel
-the Core operation; a late completion releases the native payload.
-
-`PollEventFlags.POLLCOMPLETION` is a progress event indicating that the public poller's wait thread
-drained the native queue and fully processed at least one live stage or detached state. Under public
-poller ownership, using a blocking request requires another thread to continue executing the wait loop.
+Native completion IDs, `user_context`, and raw drain are not public APIs.
+Submission results follow the [common result projection](../README.en.md#submit-result-projection);
+completion joins, lifetime, and progress conditions for `PollEventFlags.POLLCOMPLETION` follow the
+[async execution model](../async-execution-model.en.md).
 
 Only ROUTER REQUEST receive creates a `ReplyToken`. During class initialization, it registers a private
 constructor method reference with non-exported `ContractAccess.ReplyTokenAccess`. Equality and hashing
@@ -1141,13 +1106,8 @@ events. Each item maps to one contract test.
 - PAIR, DEALER, ROUTER, and STREAM send factories return one `SendOperation` family.
 - Send/request expose only the flag-free async and synchronous terminals in the Public interface section
   and retain request timeout.
-- Even when completion drains before submit returns, the stage completes exactly once after joining
-  submit publication.
-- After stage cancellation, a late completion does not complete the stage again and releases the native
-  payload.
-- A non-OK request completion exposes only a typed request exception and does not expose the error
-  payload.
-- `POLLCOMPLETION` returns only after stage settlement or detached cleanup finishes.
+- Common completion, cancellation, and poller observations follow the
+  [execution-model verification requirements](../async-execution-model.en.md#7-implementation-and-contract-test-verification-requirements).
 - When HWM/`PAUSED` waiting expires for a raw reply submitted to a DEALER peer,
   `ZlinkSubmitException` reports `BACKPRESSURED`; a reply submitted to a ROUTER
   peer retains the HWM-free result of the Completion connection.

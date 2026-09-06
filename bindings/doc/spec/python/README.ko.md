@@ -6,14 +6,14 @@ title: "Python 바인딩 공개 계약"
 [스펙 목록](../README.ko.md) | [이전: Node.js](../node/README.ko.md) | [다음: Go](../go/README.ko.md)
 <!-- bindings-nav:end -->
 
-# Python binding Core 0.16.0 공개 계약
+# Python binding Core 공개 계약
 
-> **이 장이 정의하는 것** — `zlink` Python package가 Core 0.16.0 raw messaging 위에 제공하는
+> **이 장이 정의하는 것** — `zlink` Python package가 Core raw messaging 위에 제공하는
 > 공개 타입·소유권·오류 계약.
 
-- 이 문서는 `zlink` Python package가 제공하는 Core 0.16.0 raw messaging 계약을 정의한다.
+- 이 문서는 `zlink` Python package가 제공하는 Core raw messaging 계약을 정의한다.
 - 이 문서와 공개 header가 정의하지 않는 기능은 Python binding 계약이 아니다.
-- Python 3.9 이상을 지원하며 package version은 `0.16.0`이다.
+- Python 3.9 이상 지원과 package 버전은 [배포 metadata](../../../python/pyproject.toml)를 따른다.
 - 현재 native package target은 Linux x86_64이며, 다른 target은 별도 candidate payload와 clean consumer 검증 전까지 이 계약의 지원 범위가 아니다.
 
 | 절 | 다루는 내용 |
@@ -56,7 +56,7 @@ handle, FFI symbol, native struct를 public type으로 노출하지 않는다.
 
 ## Byte HWM과 Auto-HWM
 
-HWM의 계산과 queue admission은 Core가 담당한다. Python의
+[HWM](../../../../core/doc/spec/core/glossary.ko.md#hwm)(queue의 byte 보관량을 제한하는 기준)의 계산과 queue admission은 Core가 담당한다. Python의
 `send_high_water_mark`와 `receive_high_water_mark`는 byte 단위의 `int`이며
 음수가 아닌 `uint64_t` 범위만 허용한다. 바인딩은 값을 정확히 8-byte option으로
 Core에 전달하고 getter도 Core의 64-bit 값을 Python `int`로 반환한다. 값 `0`은
@@ -105,17 +105,15 @@ oversize·blocked·aggregate flag, `budget_generation`과 `measurement_epoch`을
   metadata가 `Received`에 기록되고, `close()` 또는 context manager 종료 시 native parts를 해제한다.
 - `Received`의 `parts`가 제공하는 native view는 owner가 열린 동안만 유효하다. 다른 수명으로 넘겨야
   하면 `to_bytes()` 또는 `to_bytes_list()`로 값을 복사한다.
-Core byte HWM charge는 일반 `recv_into`와 `subscribe_into`가 payload를 dequeue할 때
-끝난다. `Received`와 `TopicMessage`는 native part, routing ID, reply token, topic과
-multipart framing의 Python 수명만 소유한다. `close()`, context manager 종료 또는 저장소
-재사용을 Core HWM accounting에 연결하지 않는다. 별도 retained receive, raw lease handle,
-application byte capacity, allowance 또는 중복 accounting 상태는 public이나 internal
-API에 두지 않는다.
+
+`Received`와 `TopicMessage`는 native part, routing ID, reply token, topic과 multipart
+framing을 보존하고 `close()`, context manager 종료 또는 저장소 재사용으로 정리한다.
+수신 회계와 결과 수명의 경계는 [공통 수신 ownership 계약](../README.ko.md#receive-ownership)을 따른다.
 
 ## 송수신과 no-data
 
-- Send·request builder의 완료 경계, provisional registry와 cancellation은
-  [비동기 완료 표면 정책](../async-coroutine-policy.ko.md)을 따른다.
+- Send·request builder의 완료 경계는 [비동기 완료 표면 정책](../async-coroutine-policy.ko.md)을,
+  완료 합류와 cancellation은 [비동기 실행 모델](../async-execution-model.ko.md)을 따른다.
 - Reply와 publish는 synchronous `submit()`으로 끝난다. Publish flags는 별도 `PublishOp`만
   제공한다.
 - `RecvFlags.DONT_WAIT`를 사용한 caller-provided receive는 message가 없을 때 `False`를 반환한다.
@@ -128,23 +126,10 @@ DEALER와 ROUTER request/reply는 Core routing metadata와 `ReplyToken`을 보�
 
 ## Receive flow state
 
-이 바인딩은 Core의 receive-flow 상태를 `ReceiveFlowState` `IntEnum`으로 노출한다.
-`RUNNING = 0`, `PAUSED = 1`이며 설정은 `Socket.set_receive_flow_state(state)`다. 반환값은
-`None`이고 Python 에러 정책을 따른다. 0이 아닌 native 결과는 해당 `ConfigResult`와 native
-errno를 담은 `ConfigError`를 발생시키므로, completion lane이 없는 socket은
-`ConfigResult.NOT_SUPPORTED`를 담은 `ConfigError`를 발생시킨다. 이미 유지하는 상태를 다시
-설정하면 정상 반환한다.
-
-관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
-`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
-`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
-`FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
-bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
-`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
-`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
-
-Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
-field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
+`ReceiveFlowState`는 `RUNNING = 0`, `PAUSED = 1`인 `IntEnum`이다.
+`Socket.set_receive_flow_state(state)`는 `None`을 반환하며 실패한 native `ConfigResult`와
+errno를 담은 `ConfigError`를 발생시킨다.
+상태·결과·monitor 투영은 [공통 receive-flow 계약](../README.ko.md#receive-flow-projection)을 따른다.
 
 ## Error
 
@@ -167,17 +152,14 @@ Core result를 반환하는 호출은 Python의 대응 error에 `result`, `code`
 
 ## Pull completion 공개 계약
 
-Python package는 Core 0.16.0을 exact dependency로 사용한다.
+Python package 정보는 [배포 metadata](../../../python/pyproject.toml)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Python runtime은 native completion을 drain해 blocking result 또는 awaitable로 바꾼다.
-`submit_sync()`는 Core `NONE`, `submit()`은 Core `DONTWAIT`를 사용한다. Completion-backed state는
-native `FINAL` 전에 provisional registry에 등록하고 submit publish와 completion capture가 합류한
-뒤 정확히 한 번 끝낸다. Awaitable cancellation은 Core operation을 취소하지 않고 caller wait만
-끝내며 late completion은 payload와 state를 정리한다.
+Python은 blocking `submit_sync()`와 awaitable을 반환하는 `submit()`을 제공한다.
+Caller wait 취소는 awaitable cancellation으로 표현한다.
 
-`PollEventFlag.POLLCOMPLETION`은 public poller의 wait thread가 native queue를 비우고 live awaitable
-또는 detached state를 한 건 이상 완전 처리했다는 progress event다. Public poller owner에서
-blocking request를 사용하면 다른 thread가 wait loop를 계속 실행해야 한다.
+Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
+제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)을, 완료 합류·수명과
+`PollEventFlag.POLLCOMPLETION`의 진행 조건은 [비동기 실행 모델](../async-execution-model.ko.md)을 따른다.
 
 `Poller.add_monitor(monitor: MonitorSocket, events: PollEventFlag, slot: int) -> None`,
 `Poller.modify_monitor(monitor: MonitorSocket, events: PollEventFlag) -> None`,
@@ -306,12 +288,8 @@ test 하나로 이어진다.
 - Send/request는 §Public interface의 flag 없는 awaitable·sync terminal만 제공하고 request timeout은
   유지한다.
 - `publish(topic)`은 별도 `PublishOp`를 반환하고 publish flags와 synchronous submit을 제공한다.
-- Submit 반환 전 completion이 drain돼도 awaitable은 submit publish와 합류한 뒤 정확히 한 번
-  끝난다.
-- Awaitable cancellation 뒤 late completion은 awaitable을 다시 끝내지 않고 native payload를
-  정리한다.
-- Non-OK request completion은 typed exception만 제공하고 error payload를 공개하지 않는다.
-- `POLLCOMPLETION`은 settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+- 완료·cancellation·poller의 공통 관측은
+  [실행 모델 검증 요구](../async-execution-model.ko.md#7-구현-및-contract-test-검증-요구)를 따른다.
 
 **ReplyToken과 STREAM**
 

@@ -72,8 +72,7 @@ Rust 바인딩을 변경할 때 이 경로를 일관되게 사용한다.
 - crate-private 구체 저장소: `bindings/rust/src/internal.rs`.
 - 네이티브 브릿지/아티팩트: `bindings/rust/src/runtime/native/`,
   `bindings/rust/native/`, `bindings/rust/include/` 아래 private 모듈.
-- 코덱 crate: 제공하지 않는다. Rust 바인딩은 raw `Message`와 byte payload API만
-  유지한다.
+- Codec 배포 범위: [공통 raw payload 정책](../README.ko.md#binding-raw-scope)을 따른다.
 - 테스트: `bindings/rust/tests/`.
 - 샘플: `bindings/rust/samples/`.
 - Perf: `bindings/rust/perf/`.
@@ -397,12 +396,12 @@ Trait는 호출자에게 대체 가능한 동작이나 generic bound가 필요�
   `Backpressured` 오류).
 - Send Future는 Core `DONTWAIT` completion을 socket-local owner가 drain할 때 진행한다.
   `submit_sync()`는 Core `NONE` admission을 사용한다. Future drop은 waiter만 detach하며 late
-  completion은 provisional registry와 native payload를 정리한다.
+  completion은 completion operation state와 native payload를 정리한다.
 - PUB/XPUB `publish`와 ROUTER reply는 별도의 동기
   operation 계약을 유지한다. Raw ROUTER/`Received` reply의 terminal은
   `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`인 one-shot이다. Native reply를
   한 번 호출해 terminal reply 또는 error reply를 제출한다. DEALER peer에는 Application
-  HWM·PAUSED와 `SNDTIMEO`를 적용하여 `BACKPRESSURED`가 될 수 있고, ROUTER peer에는 HWM 없는
+  [HWM](../../../../core/doc/spec/core/glossary.ko.md#hwm)(queue의 byte 보관량을 제한하는 기준)·PAUSED와 `SNDTIMEO`를 적용하여 `BACKPRESSURED`가 될 수 있고, ROUTER peer에는 HWM 없는
   Completion connection을 사용한다. `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`와 그 밖의
   submit 실패는 즉시 `Err(SubmitError)`로 반환한다.
 
@@ -432,17 +431,14 @@ HWM의 계산과 queue admission은 Core가 담당한다.
 무제한이다.
 
 Context option은 byte 단위 Core memory limit·budget과 profile을 Core에 그대로 전달한다.
-Profile 비율 계산과 physical directional queue별 분배는 Core가 정확히 한 번 수행한다.
-Caller가 방향별 HWM을 설정하면 그 방향은 manual override가 되어 Auto-HWM 재계산에서
-제외된다.
+계산·수동 override·admission은 [Core HWM 계산·admission](../README.ko.md#hwm-계산과-admission)을 따른다.
 Context는 `core_hwm_budget_snapshot()`과 `reset_core_hwm_budget_metrics()`를 제공한다.
 Rust binding은 runtime memory hint를 만들지 않는다. 입력 우선순위는 수동 Core budget,
 명시 memory limit, Core fallback 순서다. 명시 입력이 Core가 감지한 finite hard limit보다
 크면 `EINVAL`에 대응하는 기존 config error를 그대로 전달하고 clamp하지 않는다.
 
-실제 pipe에 쌓인 accounted byte가 applied HWM에 도달하면 Core가
-backpressure를 결정한다. Rust 바인딩은 message 수를 다시 세지 않고 Core result를
-`Result` 기반 operation 계약으로 전달한다.
+Core 제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)에 따라
+Rust `Result`로 전달한다.
 `SocketMonitorOpenOptions::monitor_hwm_bytes`는
 `SocketMonitor::open_with_options`를 통해 정확한 `u64` byte 값으로 전달된다. `0`은
 Core monitor 기본값을 선택하고, 양수는 변환 없이 전달한다. Message-count alias나
@@ -464,25 +460,12 @@ version/size 불일치는 unsupported error다.
 
 ## Receive flow state
 
-이 바인딩은 Core의 receive-flow 상태를 `ReceiveFlowState` enum으로 노출한다.
-`Running = 0`, `Paused = 1`이며 설정 함수는 socket의 공통 option facade에서 접근하는
-`CommonSocketOptions::set_receive_flow_state(&self, value: ReceiveFlowState)
--> Result<(), ConfigError>`다. Rust 에러 정책을 따른다. 성공은 `Ok(())`이고 실패는
-`Err(ConfigError)`인데, 이 바인딩은 `ConfigResult`를 반환된 result 코드가 아니라 native
-errno에서 도출한다. 따라서 receive-flow를 지원하지 않는 socket의 `ENOTSUP`은
-`ConfigResult::NotSupported`가 되고 `EINVAL`은 `ConfigResult::InvalidArgument`가 된다.
-이미 유지하는 상태를 다시 설정하면 `Ok(())`를 반환한다.
-
-관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
-`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
-`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
-`FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
-bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
-`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
-`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
-
-Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
-field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
+`ReceiveFlowState` enum은 `Running = 0`, `Paused = 1`을 제공한다.
+Socket의 공통 option facade에 있는
+`CommonSocketOptions::set_receive_flow_state(&self, value: ReceiveFlowState) -> Result<(), ConfigError>`는
+성공 시 `Ok(())`, 실패 시 `Err(ConfigError)`를 반환한다. `ConfigResult`는 native errno에서
+변환하며 `ENOTSUP`은 `NotSupported`, `EINVAL`은 `InvalidArgument`다.
+상태·결과·monitor 투영은 [공통 receive-flow 계약](../README.ko.md#receive-flow-projection)을 따른다.
 
 ## 필수 능력 커버리지
 
@@ -516,12 +499,10 @@ boolean은 논리적 spot을 생성한 호출에서만 `true`이다.
 
 - 데이터 플레인 receive와 subscribe API는 재사용 가능한 호출자 소유 결과
   저장소를 사용한다.
-- Core byte HWM charge는 일반 `recv`와 `subscribe`가 payload를 dequeue할 때 끝난다.
-  `Received`와 `TopicMessage`는 part와 metadata의 Rust 수명만 소유하며 재사용,
-  consuming accessor 또는 `Drop`을 Core HWM accounting에 연결하지 않는다.
-  별도 retained receive, raw lease handle 또는 application byte capacity는 public이나
-  internal API에 두지 않는다. ROUTER routing ID와 `ReplyToken`, SUB topic/routing ID
-  metadata는 일반 typed receive가 보존한다.
+- `Received`와 `TopicMessage`는 part와 metadata를 소유하고 재사용, consuming accessor 또는
+  `Drop`으로 수명을 관리한다. 일반 typed receive는 ROUTER routing ID와 `ReplyToken`,
+  SUB topic/routing ID metadata를 보존한다.
+  수신 회계와 결과 수명의 경계는 [공통 수신 ownership 계약](../README.ko.md#receive-ownership)을 따른다.
 - non-blocking no-data는 hard receive 실패와 구별된다.
 - SPOT readable dispatch 이벤트는 readiness 알림이다. 호출자는 매칭되는 receive
   API를 no-data가 될 때까지 비운다.
@@ -610,17 +591,14 @@ Rust는 Actor와 Spot route 조회 결과를 공개 값 타입으로 노출한�
 
 ## Pull completion 공개 계약
 
-Rust crate는 Core 0.16.0을 exact dependency로 사용한다.
+Rust package 정보는 [배포 metadata](../../../rust/Cargo.toml)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Rust runtime은 native completion을 drain해 blocking `Result` 또는 runtime-independent `Future`로
-바꾼다. `submit_sync()`는 Core `NONE`, `submit()`은 Core `DONTWAIT`를 사용한다.
-Completion-backed state는 native `FINAL` 전에 provisional registry에 등록하고 submit publish와
-completion capture가 합류한 뒤 정확히 한 번 끝낸다. Future drop이나 executor task abort는 Core
-operation을 취소하지 않고 waiter만 detach하며 late completion은 payload와 state를 정리한다.
+Rust는 blocking `Result`를 반환하는 `submit_sync()`와 runtime-independent `Future`를 반환하는 `submit()`을 제공한다.
+완료 대기 객체의 수명 종료는 Future drop 또는 executor task abort로 표현한다.
 
-`POLLCOMPLETION`은 public poller의 wait thread가 native queue를 비우고 live Future 또는 detached
-state를 한 건 이상 완전 처리했다는 progress event다. Public poller owner에서 blocking request를
-사용하면 다른 thread가 wait loop를 계속 실행해야 한다.
+Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
+제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)을, 완료 합류·수명과
+`POLLCOMPLETION`의 진행 조건은 [비동기 실행 모델](../async-execution-model.ko.md)을 따른다.
 
 `ReplyToken`은 ROUTER wrapper가 만든 `Arc<RouterOwnerTag>`와 opaque value를 함께 보유한다.
 `pub(crate) fn from_native(owner, value)`만 token을 만들며 equality·hash와 reply owner 검증은
@@ -744,12 +722,8 @@ test 하나로 이어진다.
 
 - 모든 socket의 send factory가 `SendOp<Empty>`를 반환하고 send/request는 §Public interface의
   flag 없는 Future·sync terminal만 제공한다.
-- Submit 반환 전 completion이 drain돼도 Future는 submit publish와 합류한 뒤 정확히 한 번
-  끝난다.
-- Future drop 또는 task abort 뒤 late completion은 Future를 다시 끝내지 않고 native aggregate를
-  정리한다.
-- Non-OK request completion은 typed `ZlinkError`만 제공하고 error payload를 공개하지 않는다.
-- `POLLCOMPLETION`은 Future settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+- 완료·cancellation·poller의 공통 관측은
+  [실행 모델 검증 요구](../async-execution-model.ko.md#7-구현-및-contract-test-검증-요구)를 따른다.
 - Raw reply를 DEALER peer로 제출해 HWM·PAUSED 대기가 만료하면
   `BACKPRESSURED` code를 가진 `Err(SubmitError)`가 관찰되고, ROUTER peer로 제출하면 Completion
   connection의 HWM-free 결과가 유지된다.

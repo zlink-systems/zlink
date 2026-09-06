@@ -6,9 +6,9 @@ title: "Go 바인딩 공개 계약"
 [스펙 목록](../README.ko.md) | [이전: Python](../python/README.ko.md) | [다음: Rust](../rust/README.ko.md)
 <!-- bindings-nav:end -->
 
-# Go binding Core 0.16.0 공개 계약
+# Go binding Core 공개 계약
 
-> **이 장이 정의하는 것** — Go binding이 Core 0.16.0 raw C API 위에
+> **이 장이 정의하는 것** — Go binding이 Core raw C API 위에
 > 제공하는 공개 type·ownership·오류 계약.
 
 이 문서는 Go binding의 공개 계약을 정의한다. 다른 언어에만 있는 기능은 이 문서의
@@ -18,7 +18,7 @@ signature는 `bindings/go/contracts/`와 module root의 동일한 projection을 
 
 | 절 | 다루는 내용 |
 |---|---|
-| [Module과 공개 package](#module과-공개-package) | import path, internal 경계, Core 0.16.0 raw 범위 |
+| [Module과 공개 package](#module과-공개-package) | import path, internal 경계, Core raw 범위 |
 | [공개 계약 범주](#공개-계약-범주) | 범주별 공개 개념 표 |
 | [Context와 resource 수명](#context와-resource-수명) | Context/socket/monitor/poller/timer 소유·해제 규칙 |
 | [Byte HWM과 Auto-HWM](#byte-hwm과-auto-hwm) | Go `uint64`와 Core `uint64_t` byte HWM의 매핑 |
@@ -40,7 +40,7 @@ Runtime handle, cgo declaration, native struct, completion drain state와 buffer
 marshalling은 `internal/native`의 구현 세부사항이다. 이 타입과 package는 consumer
 계약이 아니다.
 
-- Package 계약은 Core 0.16.0 raw C API를 투영한다.
+- Package 계약은 Core raw C API를 투영한다.
 - Context, Message, raw socket, monitor, poller, timer와 utility는 포함하지만 Spot, Actor, MeshNode와 service operation은 포함하지 않는다.
 - Go module에는 message별 codec 등록 API도 없다.
 - Message와 byte payload의 기본 경로는 binding이 제공하는 typed API를 사용한다.
@@ -85,16 +85,13 @@ modify, remove와 wait 호출은 호출자가 직렬화한다.
 
 ## Byte HWM과 Auto-HWM
 
-HWM의 계산과 queue admission은 Core가 담당한다. Go 바인딩은
+[HWM](../../../../core/doc/spec/core/glossary.ko.md#hwm)(queue의 byte 보관량을 제한하는 기준)의 계산과 queue admission은 Core가 담당한다. Go 바인딩은
 `SetSendHighWaterMark(uint64)`와 `SetReceiveHighWaterMark(uint64)`의 값을 Core의
 8-byte `uint64_t` option으로 손실 없이 전달한다. Getter도 Core의 전체 범위를
 `uint64`로 반환한다. 값 `0`은 무제한이다.
 
-Context memory limit·Core budget은 byte 값으로, profile은 정식 profile option으로 Core에
-전달한다. Core가 profile 비율을 정확히 한 번 적용하고 physical directional queue별 planned
-byte HWM을 계산한다.
-Caller가 방향별 HWM을 설정하면 그 방향은 수동 override가 되어 Auto-HWM
-재계산에서 제외된다.
+Context memory limit·Core budget의 byte 값과 profile option을 Core에 전달한다.
+계산·수동 override·admission은 [Core HWM 계산·admission](../README.ko.md#hwm-계산과-admission)을 따른다.
 
 입력 우선순위는 수동 Core budget, 명시 memory limit, Go runtime에 설정된 유한한
 memory limit hint, Core fallback 순서다. 앞의 두 값을 지정하면 runtime hint를 자동
@@ -102,11 +99,9 @@ memory limit hint, Core fallback 순서다. 앞의 두 값을 지정하면 runti
 Core가 감지한 finite hard limit보다 크면 `EINVAL`에 대응하는 기존 config error를 그대로
 전달하고 clamp하지 않는다.
 
-실제 pipe에 쌓인 accounted byte가 applied HWM에 도달하면 Core가
-backpressure를 결정한다. Go 바인딩은 message 수를 다시 세지 않으며 Core result를
-기존 operation과 error 계약으로 전달한다. `MonitorStatus`의 planned, applied,
-deferred HWM과 in-flight 사용량은 `uint64` byte다. Pending message count는 표시용
-진단이며 slot·message-unit·size-cap·connection-bucket property는 제공하지 않는다.
+`MonitorStatus`의 planned, applied, deferred HWM과 in-flight 사용량은 `uint64` byte다.
+Pending message count는 별도 진단값이며 slot·message-unit·size-cap·connection-bucket
+property는 제공하지 않는다.
 
 ## Message와 ownership
 
@@ -126,8 +121,7 @@ message 밖으로 연장해야 할 때는 `Message.Bytes`가 snapshot을 만든�
 명시적으로 close한다. `Recv` 계열이 caller-provided output을 받는 경우 output
 객체의 기존 parts를 정리한 뒤 새 native parts와 metadata를 채운다.
 
-Core byte HWM charge는 일반 `Recv`와 `Subscribe`가 part를 dequeue할 때 끝난다.
-따라서 application 수신 결과의 수명은 HWM accounting에 남지 않는다.
+수신 회계와 결과 수명의 경계는 [공통 수신 ownership 계약](../README.ko.md#receive-ownership)을 따른다.
 
 ## Socket operation
 
@@ -174,15 +168,11 @@ Caller-provided receive method는 `(bool, error)`를 반환한다. `bool`이 `fa
 `RecvFlagsDontWait`에서 읽을 데이터가 없었다는 뜻이며 error는 nil이다. `bool`이
 `true`이면 output에 하나 이상의 결과가 채워졌다. 실제 실패는 `*RecvError`다.
 
-Core byte HWM charge는 `Recv` 또는 `Subscribe`가 payload를 dequeue할 때 끝난다.
-`Received`와 `TopicMessage`는 part, Routing ID, `ReplyToken`, topic과 multipart
-framing의 Go 수명만 소유한다. `Close`와 저장소 재사용은 그 payload와 metadata를
-정리하지만 Core HWM accounting에는 관여하지 않는다. 별도 retained receive, native
-lease handle, application byte capacity 또는 중복 accounting 상태는 public이나
-internal API에 두지 않는다.
+`Received`와 `TopicMessage`는 part, Routing ID, `ReplyToken`, topic과 multipart framing을
+보존한다. 결과를 정리하는 Go API는 [Message와 ownership](#message와-ownership)을 따른다.
 
 Socket monitor는 typed event mask로 열고 `MonitorEvent`, `MonitorStatus`를 제공한다.
-Core 0.16.0의 각 monitor event mask와 delivered event value는 대응하는 typed constant로
+Core의 각 monitor event mask와 delivered event value는 대응하는 typed constant로
 제공한다. `MonitorEventMask`는 monitor를 열 때 사용하고 `MonitorEventType`은
 수신한 `MonitorEvent.Event`를 검사할 때 사용한다.
 `OpenSocketMonitor(socket, options...)`는 `MonitorEventMask`와
@@ -208,24 +198,11 @@ public pull method가 event와 fire count를 반환한다.
 
 ## Receive flow state
 
-이 바인딩은 Core의 receive-flow 상태를 `ReceiveFlowState` 타입으로 노출한다. 값은
-`ReceiveFlowRunning`과 `ReceiveFlowPaused`이며 설정은
-`SetReceiveFlowState(ReceiveFlowState) error`다. Go error contract를 따른다. 성공은 `nil`
-error이고, 실패는 native `zlink_config_result_t`를 `Result`로, native errno를 errno로 담은
-`*ConfigError`다. 따라서 completion lane이 없는 socket은 `ConfigNotSupported`를 담은
-`*ConfigError`를 반환한다. Handle이 nil이거나 이미 닫혔으면 Core를 호출하지 않고
-`ConfigInvalidHandle`을 반환한다. 이미 유지하는 상태를 다시 설정하면 `nil`을 반환한다.
-
-관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
-`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
-`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
-`FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
-bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
-`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
-`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
-
-Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
-field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
+`ReceiveFlowState` 타입은 `ReceiveFlowRunning`, `ReceiveFlowPaused`를 제공한다.
+`SetReceiveFlowState(ReceiveFlowState) error`는 성공 시 `nil`, 실패 시 native result와
+errno를 담은 `*ConfigError`를 반환한다. Nil 또는 닫힌 handle은 native 호출 전에
+`ConfigInvalidHandle`로 거부한다.
+상태·결과·monitor 투영은 [공통 receive-flow 계약](../README.ko.md#receive-flow-projection)을 따른다.
 
 ## Error contract
 
@@ -257,12 +234,13 @@ allowlist.json`은 header file set, SHA-256, cgo raw symbol과 local native help
 machine-readable 형태로 고정한다. `zlink/service/` 및 이전 service symbol은
 allowlist에 없다.
 
-Module package는 다음 file proxy layout을 사용한다.
+Module package는 다음 file proxy layout을 사용한다. `<version>`은
+[Core release metadata](../../../../VERSION)의 release 버전이다.
 
 ```text
-zlink.systems/zlink/@v/v0.16.0.info
-zlink.systems/zlink/@v/v0.16.0.mod
-zlink.systems/zlink/@v/v0.16.0.zip
+zlink.systems/zlink/@v/v<version>.info
+zlink.systems/zlink/@v/v<version>.mod
+zlink.systems/zlink/@v/v<version>.zip
 ```
 
 지원 platform runtime은 module의 `native/<platform>/` 아래에 포함한다. Package
@@ -282,16 +260,14 @@ GoDoc과 process sample의 검증 진입점은 `bindings/go/README.godoc.md`,
 
 ## Pull completion 공개 계약
 
-Go module은 Core 0.16.0을 exact dependency로 사용한다.
+Go package 정보는 [배포 metadata](../../../go/go.mod)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Go는 `Submit(context.Context)` terminal 하나를 사용한다. Runtime은 Core `DONTWAIT`로 제출한 뒤
-socket-local owner가 completion을 drain할 때까지 goroutine을 기다리게 한다. `Context`는 native
-operation을 취소하지 않으며 caller wait만 끝낸다. Request cancellation이 먼저 확정되면
-`(nil, ctx.Err())`를 반환하고 late completion은 payload를 정리한다.
+Go는 호출 goroutine에서 완료를 기다리는 `Submit(context.Context)` terminal 하나를 제공한다.
+Caller wait 취소 입력은 `context.Context`이고 request의 취소 결과는 `(nil, ctx.Err())`다.
 
-`PollCompletion`은 public poller의 wait goroutine이 native queue를 비우고 live waiter 또는
-detached state를 한 건 이상 완전 처리했다는 progress event다. Public poller owner에서
-`Submit(ctx)`를 사용하면 다른 goroutine이 wait loop를 계속 실행해야 한다.
+Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
+제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)을, 완료 합류·수명과
+`PollCompletion`의 진행 조건은 [비동기 실행 모델](../async-execution-model.ko.md)을 따른다.
 
 `ReplyToken`은 package 내부에서 ROUTER REQUEST receive가 struct literal로 만든다. Zero value는
 invalid이며 owner pointer와 opaque value를 함께 비교한다. `StreamPacket`의 zero value는 empty
@@ -416,11 +392,8 @@ Public Go interface, 반환값과 poller event만으로 다음을 확인한다. 
   `([]*Message, nil)`, non-OK completion은 `(nil, typed request error)`를 반환한다.
 - Go·Python과 공유하지 않는 send flags는 `PublishSubmitOp`에만 있으며 publish submit은
   `(bool, error)` 결과를 유지한다.
-- Submit 반환 전 completion이 drain돼도 result는 submit publish와 합류한 뒤 정확히 한 번
-  반환된다.
-- Context cancellation이 먼저 확정되면 `(nil, ctx.Err())`를 반환하고 late completion은 result를
-  다시 전달하지 않는다.
-- Public poller owner에서 다른 goroutine이 `wait()`를 실행할 때 `Submit(ctx)`가 진행한다.
+- 완료·cancellation·poller의 공통 관측은
+  [실행 모델 검증 요구](../async-execution-model.ko.md#7-구현-및-contract-test-검증-요구)를 따른다.
 
 **ReplyToken과 STREAM**
 

@@ -80,8 +80,7 @@ contract/runtime 소유, 공개 계약 카테고리, 파일 분할 기준, 검�
 - 네이티브 브리지/아티팩트: `bindings/dotnet/src/Zlink/Runtime/Native/`,
   `bindings/dotnet/native/`. NuGet package 안에서는 이 파일들이
   `runtimes/<rid>/native/` 구조로 배치된다.
-- 코덱 package: 제공하지 않는다. .NET 바인딩은 raw `Message`와 byte payload API만
-  유지한다.
+- Codec 배포 범위: [공통 raw payload 정책](../README.ko.md#binding-raw-scope)을 따른다.
 - 테스트: `bindings/dotnet/tests/Zlink.Tests/`.
 - 샘플: `bindings/dotnet/samples/`.
 - Perf: `bindings/dotnet/perf/`.
@@ -298,7 +297,7 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
 - `Send`, routed send, `Publish`, `Request`, `Reply`, SPOT 연산, Actor
   location/세션 연산은 fluent operation builder를 반환한다.
 - PUB/XPUB `Publish(topic)`의 terminal은 동기 `PublishSubmitOperation.Submit()
-  -> void`다. 기본 PUB 의미론은 lossy이므로 publisher는 HWM에서 대기하지
+  -> void`다. 기본 PUB 의미론은 lossy이므로 publisher는 [HWM](../../../../core/doc/spec/core/glossary.ko.md#hwm)(queue의 byte 보관량을 제한하는 기준)에서 대기하지
   않는다. `NODROP`에서 가득 찬 subscriber는 그 자리에서
   `ZlinkSubmitException`(`Result == Backpressured`)으로 표면화되고, 재시도
   정책은 어플리케이션이 소유한다. `TryPublish(topic)`는 같은 backpressure를
@@ -343,7 +342,7 @@ receive-path 값을 캐시할 수 있지만, equality와 공개 동작은 오직
 - Request의 `Submit()`과 `Async(CancellationToken)`은 reply·timeout·typed error까지 기다린다.
   Builder의 `Timeout(...)`은 Core request timeout을 설정한다.
 - `CancellationToken`은 native 호출 전 차단 또는 successful submit 뒤 caller wait cancellation만
-  표현한다. Late completion은 runtime drain이 payload와 provisional state를 정리한다.
+  표현한다. Late completion은 runtime drain이 payload와 operation state를 정리한다.
 - Publish는 별도 operation의 synchronous `Submit()`을 유지한다.
 
 ## Contract 폴더 레이아웃
@@ -478,13 +477,10 @@ object identity 기반 dictionary 조회를 포함해 다시 사용하면 안 �
   버퍼를 유지해 다음 `Subscribe`에서 재사용하게 한다. `TopicMessage`가 열린 상태에서만
   사용할 수 있으며 terminal `Dispose()` 뒤에는 `ObjectDisposedException`을 던지고 객체를
   다시 열지 않는다.
-- Core byte HWM charge는 일반 `Recv(Received, ...)`와
-  `Subscribe(TopicMessage, ...)`가 payload를 dequeue할 때 끝난다. `Received`와
-  `TopicMessage`는 part와 metadata의 관리 객체 수명만 소유하며, `Dispose()`,
-  `ReleaseForReuse()` 또는 같은 저장소 재사용을 Core HWM accounting에 연결하지 않는다.
-- 별도 retained receive, lease handle 또는 application byte capacity는 public이나
-  internal API에 두지 않는다. 일반 receive는 Router source RID와 nullable `ReplyToken`,
-  SUB topic과 source RID를 그대로 보존한다.
+- `Received`와 `TopicMessage`는 part와 metadata의 관리 객체 수명을 소유하며,
+  `Dispose()`, `ReleaseForReuse()` 또는 저장소 재사용으로 정리한다. 일반 receive는 Router
+  source RID와 nullable `ReplyToken`, SUB topic과 source RID를 보존한다.
+  수신 회계와 결과 수명의 경계는 [공통 수신 ownership 계약](../README.ko.md#receive-ownership)을 따른다.
 - `false`는 `RecvFlags.DontWait`를 사용한 nonblocking receive에서만 데이터
   없음을 의미한다.
 - 실제 receive 실패(데이터 없음이 아닌 실패)는 `ZlinkRecvException`을 던진다.
@@ -554,14 +550,7 @@ memory limit hint, Core fallback 순서다. 앞의 두 값을 지정하면 GC hi
 감지한 finite hard limit보다 크면 `EINVAL`에 대응하는 기존 config exception을 그대로
 전달하고 clamp하지 않는다.
 
-Core는 memory limit에 profile 비율을 정확히 한 번 적용하거나 명시 Core budget을 그대로
-사용해 physical directional queue별 planned byte HWM을 계산한다. Caller가
-`SendHighWaterMark`나 `ReceiveHighWaterMark`를 설정한 방향은 수동 override가
-되며 이후 Auto-HWM 재계산이 그 값을 변경하지 않는다.
-
-.NET 바인딩은 queue의 message나 payload를 다시 세지 않는다. Core pipe의 실제
-accounted byte가 applied HWM에 도달하면 native submit 결과가 backpressure를
-나타내고, .NET operation은 기존 result·timeout 계약에 따라 이를 전달한다.
+HWM 계산·수동 override·admission과 값 투영은 [Core HWM 계산·admission](../README.ko.md#hwm-계산과-admission)을 따른다.
 `0UL`은 무제한이다.
 
 `MonitorOpen(events, monitorHwmBytes)`는 monitor queue의 정확한 `ulong` byte 값을
@@ -586,30 +575,16 @@ oversize·blocked·aggregate flag, `BudgetGeneration`과 `MeasurementEpoch`을 �
 재기준화하며 epoch counter를 0으로 만든 뒤 `MeasurementEpoch`을 증가시킨다. ABI
 version/size가 맞지 않으면 `NotSupportedException`이다.
 
-Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`는 선택한 exact
-target의 HWM credit을 기다리는 동안 request의 원래 deadline을 유지한다.
-호출자는 별도 retry나 polling을 구현하지 않는다.
+Request/reply API는 HWM 값을 인자로 받지 않는다. `Async(...)`의 timeout과 대기는
+[공통 request timeout](../README.ko.md#timeout)과
+[완료 실행 모델](../async-execution-model.ko.md)을 따른다.
 
 ## Receive flow state
 
-이 바인딩은 Core의 receive-flow 상태를 `ReceiveFlowState` enum으로 노출한다.
-`Running = 0`, `Paused = 1`이며 설정은 `ISocket.SetReceiveFlowState(ReceiveFlowState)`다.
-반환형은 `void`이고 .NET 에러 정책을 따른다. 0이 아닌 native `zlink_config_result_t`는
-해당 `ConfigResult`를 `ErrorCode`로 담은 `ZlinkConfigException`으로 던지므로, receive-flow를
-지원하지 않는 socket type(DEALER·ROUTER 외)은 `ConfigResult.NotSupported`를 담은
-`ZlinkConfigException`을 발생시킨다.
-이미 유지하는 상태를 다시 설정하면 정상 반환한다.
-
-관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
-`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
-`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
-`FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
-bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
-`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
-`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
-
-Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
-field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
+`ReceiveFlowState` enum은 `Running = 0`, `Paused = 1`을 제공한다.
+`void ISocket.SetReceiveFlowState(ReceiveFlowState)`는 실패한 native `ConfigResult`를
+`ZlinkConfigException.ErrorCode`로 변환해 `Result`에 담은 `ZlinkConfigException`을 던진다.
+상태·결과·monitor 투영은 [공통 receive-flow 계약](../README.ko.md#receive-flow-projection)을 따른다.
 
 ## 에러 및 검증 정책
 
@@ -696,17 +671,14 @@ field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 �
 
 ## Pull completion 공개 계약
 
-.NET package는 Core 0.16.0을 exact dependency로 사용한다.
+.NET package 정보는 [배포 metadata](../../../dotnet/src/Zlink/Zlink.csproj)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-.NET runtime은 native completion을 drain해 blocking result 또는 `Task`로 바꾼다. `Submit()`은
-Core `NONE`, `Async()`는 Core `DONTWAIT`를 사용한다. Completion-backed state는 native `FINAL`
-전에 provisional registry에 등록하고 submit publish와 completion capture가 합류한 뒤 정확히 한
-번 끝난다. `CancellationToken`은 native operation 취소가 아니라 호출 전 차단 또는 successful
-submit 뒤 Task wait cancellation만 표현한다.
+.NET은 blocking `Submit()`과 `Task`를 반환하는 `Async(CancellationToken)`을 제공한다.
+Caller wait 취소 입력은 `CancellationToken`이다.
 
-`PollEventFlags.PollCompletion`은 public poller의 wait thread가 native queue를 비우고 live Task
-또는 detached state를 한 건 이상 완전 처리했다는 progress event다. Public poller owner에서
-blocking request를 사용하면 다른 thread가 wait loop를 계속 실행해야 한다.
+Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
+제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)을, 완료 합류·수명과
+`PollEventFlags.PollCompletion`의 진행 조건은 [비동기 실행 모델](../async-execution-model.ko.md)을 따른다.
 
 `ReplyToken`은 ROUTER REQUEST receive만 만드는 sealed reference type이다. Owner object identity와
 opaque value를 함께 비교하며 raw 값을 문자열로도 공개하지 않는다. `StreamPacket`은 factory로
@@ -820,11 +792,8 @@ test 하나로 이어진다.
 
 - Send와 request factory가 `SendOperation`·`RequestOperation`을 반환하고 §Public interface의
   terminal signature만 제공한다.
-- Submit 반환 전 completion이 drain돼도 Task는 submit publish와 합류한 뒤 정확히 한 번 끝난다.
-- `CancellationToken` 취소가 먼저 확정되면 Task만 취소되고 late completion은 Task를 다시
-  끝내지 않으며 native payload를 정리한다.
-- Non-OK request completion은 기존 typed exception만 발생시키고 error payload를 공개하지 않는다.
-- Public poller의 `PollCompletion`은 Task settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+- 완료·cancellation·poller의 공통 관측은
+  [실행 모델 검증 요구](../async-execution-model.ko.md#7-구현-및-contract-test-검증-요구)를 따른다.
 - Raw reply를 DEALER peer로 제출해 HWM·PAUSED 대기가 만료하면 `ZlinkSubmitException`의
   `Backpressured`가 관찰되고, ROUTER peer로 제출하면 Completion connection의 HWM-free 결과가 유지된다.
 

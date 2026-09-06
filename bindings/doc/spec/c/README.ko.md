@@ -138,20 +138,14 @@ C는 ABI 기준선이며 래퍼 바인딩 인터페이스 규칙을 채택하지
 
 ## Byte HWM과 Auto-HWM
 
-C에서는 Core ABI가 HWM 계약을 직접 제공한다. `ZLINK_OPT_SNDHWM`과
+C에서는 Core ABI가 [HWM](../../../../core/doc/spec/core/glossary.ko.md#hwm)(queue의 byte 보관량을 제한하는 기준) 계약을 직접 제공한다. `ZLINK_OPT_SNDHWM`과
 `ZLINK_OPT_RCVHWM`은 `uint64_t` accounted-byte 상한이며
 `zlink_set_option()`과 `zlink_get_option()`에 정확히 8-byte 저장 공간을
 전달한다. 수동 기본값은 `4,096,000 bytes`이고 `0`은 무제한이다.
 
 Context memory limit·Core budget은 byte 단위 `uint64_t` option으로, profile은 정식
-profile option으로 전달한다. Core가 profile 비율을 정확히 한 번 적용하고 physical
-directional queue 수를 분모로 planned byte HWM을 계산한다.
-
-사용자가 방향별 HWM을 직접 설정하면 그 방향은 수동 override가 된다. Auto-HWM은
-override하지 않은 방향만 다시 계산한다. 실제 admission은 Core pipe에 보관된
-accounted byte를 기준으로 하며 C 호출자가 message 수나 payload 크기를 따로
-누적하지 않는다. HWM에 도달한 submit은 해당 socket의 blocking·non-blocking과
-timeout 계약에 따라 backpressure 결과를 반환한다.
+profile option으로 전달한다. 계산·수동 override·admission은
+[Core HWM 계산·admission](../README.ko.md#hwm-계산과-admission)을 따른다.
 
 `zlink_monitor_status_t` ABI version 4의 planned, applied, deferred HWM과
 in-flight 사용량은 byte 단위다. `snd_pending_msgs`와 `rcv_pending_msgs`는 표시용
@@ -164,8 +158,7 @@ option이다. `0`은 Core 기본값을 선택하고, 양수는 정확한 byte �
 
 ## Receive flow state
 
-C 바인딩은 Core의 receive-flow 표면을 그대로 노출한다. 아래 이름은 모두 Core의 이름이며
-`bindings/c/include`는 `core/include`와 같은 선언을 담는다.
+C는 `zlink_receive_flow_state_t`와 다음 Core 함수를 그대로 노출한다.
 
 ```c
 typedef enum zlink_receive_flow_state_t
@@ -178,27 +171,10 @@ ZLINK_EXPORT zlink_config_result_t zlink_socket_set_receive_flow_state (
   void *handle_, zlink_receive_flow_state_t state_);
 ```
 
-이 함수는 `zlink_config_result_t`를 반환하고 자세한 원인을 `zlink_errno()`에 기록한다.
-다른 configuration 호출과 같은 규칙이다. 현재 상태를 다시 설정하면 `ZLINK_CONFIG_OK`다.
-범위 밖 state는 `EINVAL`과 함께 `ZLINK_CONFIG_INVALID_ARGUMENT`, DEALER와 ROUTER가 아닌
-socket 유형은 `ENOTSUP`과 함께 `ZLINK_CONFIG_NOT_SUPPORTED`다. Close가 admission을 먼저
-얻으면 `ESHUTDOWN`과 함께 `ZLINK_CONFIG_INVALID_STATE`이고, close가 이미 끝났으면
-`ZLINK_CONFIG_INVALID_HANDLE`이다. 정식 결과 표는 Core error 스펙이 소유한다.
-
-관측 표면도 Core의 표면 그대로다.
-
-| 종류 | 이름 |
-|---|---|
-| Event | `ZLINK_SOCKET_MONITOR_EVENT_SEND_FLOW_PAUSED` (`1u << 16`), `..._SEND_FLOW_RESUMED` (`1u << 17`), `..._FLOW_STATE_STALE` (`1u << 18`)와 짧은 alias `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, `ZLINK_EVENT_FLOW_STATE_STALE`. `ZLINK_SOCKET_MONITOR_EVENT_ALL`은 `0x7FFFFu`다 |
-| Event flag | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` (`1u << 1`), `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` (`1u << 3`). `zlink_monitor_event_t.flags`에서 읽는다 |
-| Detail bit | `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` (`1u << 5`) |
-| Status field | `zlink_monitor_status_t` 끝에 덧붙은 `uint64_t` 5개: `flow_paused_connections`, `flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`, `flow_pause_duration_ms` |
-
-`ZLINK_MONITOR_STATUS_ABI_VERSION`은 `4u`다. 호출자는 현재 layout의 구조체를 전달하며 크기나
-version 협상은 없다.
-
-Flow-state frame은 Core 내부의 completion-lane 세부 사항이다. C 바인딩은 이 frame을 수신,
-송신, encode 또는 decode하는 함수를 선언하지 않는다.
+반환값은 `zlink_config_result_t`, 상세 오류는 `zlink_errno()`로 읽는다.
+상태·결과·monitor 투영은 [공통 receive-flow 계약](../README.ko.md#receive-flow-projection)을 따른다.
+C의 enum·event·flag·status field 선언은
+[Core monitoring ABI](../../../../core/doc/spec/core/06-monitoring.ko.md#61-abi-version과-layout)가 소유한다.
 
 ## 필수 기능 커버리지
 
@@ -295,18 +271,15 @@ route 조회 뒤 기존 Spot routed send/request로 처리한다.
 
 ## Pull completion과 STREAM packet
 
-C header와 library는 Core 0.16.0 ABI를 그대로 투영한다.
+C header와 library의 ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-C는 SEND·REQUEST completion을 raw tagged record로 공개한다. `ZLINK_POLLCOMPLETION`은
-다음 `zlink_completion_recv()`가 한 건을 반환할 수 있다는 non-consuming level readiness다.
-Poller wait는 record를 소비하지 않으므로 caller는 준비된 socket마다 DONTWAIT recv를
-`ZLINK_RECV_NO_DATA`까지 반복한다. Socket 하나의 completion bit는 poller registration 하나만
-소유하며, application도 completion drain owner를 하나만 둔다.
-
-`DONTWAIT FINAL` send가 즉시 local admission되지 않으면 Core가 payload를 보관하고 nonzero
-completion ID를 반환한다. ID `0`은 이미 admission됐거나 operation을 접수하지 않았으므로 후속
-completion이 없다는 뜻이다. Request의 successful `FINAL`은 항상 nonzero ID를 반환한다.
-Completion ID와 `user_context`는 correlation 값이며 취소 handle이나 callback 인자가 아니다.
+C는 REQUEST·WRITABLE을 `zlink_completion_t` output으로 노출한다. Completion을 읽고 정리하는
+함수, readiness와 단일 drain owner는
+[Core completion pull과 ownership](../../../../core/doc/spec/core/socket/README.ko.md#completion-pull과-ownership)이 소유한다.
+SEND·REQUEST의 result·ID·대기 토큰·입력 보관 및 재제출 조건은
+[Core part send](../../../../core/doc/spec/core/socket/README.ko.md#part-send와-pending-admission)와
+[Core request](../../../../core/doc/spec/core/socket/README.ko.md#request와-reply)를 따른다.
+C는 언어 terminal이나 completion registry를 추가하지 않는다.
 
 ROUTER REQUEST receive는 nonzero `zlink_reply_token_t`를 반환한다. Token은 responder ROUTER
 socket과 source logical RID 범위의 opaque capability다. DATA의 token은 `0`이다. Application은
@@ -324,7 +297,8 @@ typedef uint64_t zlink_reply_token_t;
 
 typedef enum zlink_completion_kind_t {
   ZLINK_COMPLETION_SEND = 1,
-  ZLINK_COMPLETION_REQUEST = 2
+  ZLINK_COMPLETION_REQUEST = 2,
+  ZLINK_COMPLETION_WRITABLE = 3
 } zlink_completion_kind_t;
 
 typedef enum zlink_send_complete_result_t {
@@ -445,10 +419,8 @@ Public C ABI, 반환값·errno와 poller event만으로 다음을 확인한다. 
 
 **Submit과 completion**
 
-- `DONTWAIT FINAL`이 즉시 admission되면 ID `0`과 completion 없음이 관찰되고, Core pending으로
-  접수되면 nonzero ID와 SEND completion 한 건이 관찰된다.
-- Successful REQUEST `FINAL`은 nonzero ID를 반환하고 reply·timeout·terminal 중 REQUEST
-  completion 한 건만 반환한다.
+Submit 결과·ID와 REQUEST·WRITABLE 관측은
+[Core submit·completion 검증 요구](../../../../core/doc/spec/core/socket/README.ko.md#8-구현-및-contract-test-검증-요구)를 따른다.
 - `ZLINK_POLLCOMPLETION`은 wait에서 record를 소비하지 않으며 DONTWAIT drain 뒤 queue가 비면
   `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다.
 - Successful completion recv 뒤 close하면 output이 `struct_size`를 보존한 empty aggregate가 되고

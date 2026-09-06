@@ -73,7 +73,7 @@ camelCase 메서드, PascalCase 공개 타입, TypeScript에 어울리는 곳에
 - 패키지 projection: 패키지 entrypoint에서 export되고 발행된 TypeScript 정의에
   선언된 심볼.
 - 내부 구현: 네이티브 addon 모듈, 비공개 소스 모듈, N-API 핸들,
-  completion drain owner와 provisional registry, 컨버터, raw part-loop 헬퍼.
+  completion drain owner와 completion operation state, 컨버터, raw part-loop 헬퍼.
 - 패키지 경계: `package.json` exports는 문서화된 공개 entrypoint만 노출한다.
 - 문서 역할: 이 README는 형태와 의미적 범위(semantic coverage)를 정의한다. 정확한
   공개 멤버 목록은 패키지 entrypoint와 선언이 소유한다.
@@ -91,8 +91,7 @@ Node/TypeScript 바인딩을 변경할 때 다음 경로를 일관되게 사용�
   `bindings/node/native/`, `bindings/node/prebuilds/`, 그리고 생성되는 런타임
   로딩 코드.
 - 생성 산출물: `bindings/node/dist/`. 계약 소스가 아니다.
-- Codec package: 제공하지 않는다. Node 바인딩은 raw `Message`와 byte payload API만
-  유지한다.
+- Codec 배포 범위: [공통 raw payload 정책](../README.ko.md#binding-raw-scope)을 따른다.
 - 테스트: `bindings/node/tests/`.
 - 샘플: `bindings/node/samples/`.
 - Perf: `bindings/node/perf/`.
@@ -103,7 +102,7 @@ Node/TypeScript 바인딩을 변경할 때 다음 경로를 일관되게 사용�
 - 소스 디렉터리 이름은 소문자를 사용한다. `src/zlink/Contracts`나 `src/zlink/Runtime`을 만들지 않는다. 이런 이름은 공개 deep-import 표면으로 오인될 수 있다.
 - `src/zlink/contracts`는 공개 TypeScript 타입, 클래스, 빌더, enum, 에러, 팩토리 반환 계약을 소유한다. 패키지 entrypoint나 런타임 팩토리 모듈이 팩토리 구현을 소유한다.
 - `src/zlink/runtime`은 네이티브 기반 런타임 구현, 네이티브 addon 호출, 핸들 owner,
-  completion drain owner와 provisional registry, 마샬링, 플랫폼 로딩을 소유한다.
+  completion drain owner와 completion operation state, 마샬링, 플랫폼 로딩을 소유한다.
 
 다음 트리가 정렬된 구현 구조다.
 
@@ -536,7 +535,7 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
 - Raw ROUTER/`Received` reply의 terminal은
   `ReplySubmitOperation.submit(): void`인 동기 one-shot이다. Promise를 반환하지 않고
   terminal reply 또는 error reply를 native 호출 한 번으로 제출한다. DEALER peer에는 Application
-  HWM·PAUSED와 `SNDTIMEO`를 적용하여 `BACKPRESSURED`가 될 수 있고, ROUTER peer에는 HWM 없는
+  [HWM](../../../../core/doc/spec/core/glossary.ko.md#hwm)(queue의 byte 보관량을 제한하는 기준)·PAUSED와 `SNDTIMEO`를 적용하여 `BACKPRESSURED`가 될 수 있고, ROUTER peer에는 HWM 없는
   Completion connection을 사용한다. `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`와 그 밖의
   submit 실패는 즉시 `SubmitError`로 발생한다.
 - PUB/XPUB의 `publish(topic).message(...).submit()`은 동기 `void` 종단이다. 기본
@@ -592,15 +591,8 @@ interface CommonSocketOptions {
 hard limit을 직접 결합하지 않는다. 명시 입력이 Core가 감지한 finite hard limit보다 크면
 `EINVAL`에 대응하는 기존 config error를 그대로 전달하고 clamp하지 않는다.
 
-Core는 memory limit에 profile 비율을 정확히 한 번 적용하거나 명시 Core budget을 그대로
-사용해 physical directional queue별 planned byte HWM을 계산한다. Caller가 `sendHwm`이나 `recvHwm`을
-설정한 방향은 수동 override가 되며 이후 Auto-HWM 재계산이 그 값을 변경하지
-않는다.
-
-Node.js 바인딩은 queue의 message나 payload를 다시 세지 않는다. Core pipe의
-실제 accounted byte가 applied HWM에 도달하면 native submit 결과가
-backpressure를 나타내고, Node.js operation은 기존 result·timeout 계약에 따라
-이를 전달한다. `0n`은 무제한이다.
+HWM 계산·수동 override·admission과 값 투영은 [Core HWM 계산·admission](../README.ko.md#hwm-계산과-admission)을 따른다.
+`0n`은 무제한이다.
 
 `monitorOpen(events?, monitorHwmBytes?)`는 monitor queue에 `bigint` byte 값만 받는다.
 `0n`은 Core monitor 기본값을 선택하고, 양수는 변환 없이 전달한다. `number` 값이나
@@ -625,23 +617,10 @@ peak를 current로 재기준화하며 epoch counter를 0으로 만든 뒤 `measu
 
 ## Receive flow state
 
-이 바인딩은 Core의 receive-flow 상태를 동결된 `ReceiveFlowState` 상수 객체로 노출한다.
-`RUNNING: 0`, `PAUSED: 1`이며 같은 이름의 값 타입도 함께 제공한다. 설정은
-`Socket.setReceiveFlowState(state)`다. 반환형은 `void`이고 Node 에러 정책을 따른다. 0이
-아닌 native config 결과는 native errno를 담은 config 범주의 `ZlinkError`로 발생시키므로,
-receive-flow를 지원하지 않는 socket은 not-supported에 해당하는 config 범주 오류를 발생시킨다.
-이미 유지하는 상태를 다시 설정하면 정상 반환한다.
-
-관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
-`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
-`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
-`FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
-bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
-`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
-`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
-
-Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
-field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
+`ReceiveFlowState`는 `RUNNING: 0`, `PAUSED: 1`을 담은 동결된 상수 객체이며 같은
+이름의 값 타입도 제공한다. `Socket.setReceiveFlowState(state)`는 `void`를 반환하며
+native config 실패를 native errno가 포함된 config 범주의 `ZlinkError`로 전달한다.
+상태·결과·monitor 투영은 [공통 receive-flow 계약](../README.ko.md#receive-flow-projection)을 따른다.
 
 ## 필수 기능 범위
 
@@ -681,13 +660,11 @@ Node는 `SpotNode.getOrCreateSpot(spotRid)`를 노출한다. 이는
   addon이 만든 JavaScript 소유 `Buffer`를 payload로 사용하는 `Message`가 된다. Payload를
   읽을 때 추가 native 호출이 발생하지 않으며 `Message`를 닫아도 `Buffer`의 수명 규칙은
   Node가 관리한다.
-- Core byte HWM charge는 일반 `recv`와 `subscribe`가 message를 dequeue할 때 끝난다.
-  결과 객체는 `Message`, `Buffer`와 metadata의 JavaScript 수명만 소유하며, 재사용이나
-  close를 Core HWM accounting에 연결하지 않는다.
-- 일반 receive는 multipart framing과 metadata를 보존한다. Router는 source `RoutingId`와
-  nullable `ReplyToken`, Sub와 XSub는 topic과 Core가 제공한 source
-  `RoutingId`를 유지한다. 별도 retained receive, raw lease handle, application byte
-  capacity, accounting setter 또는 part 단위 release는 public이나 internal API에 두지 않는다.
+- 결과 객체는 `Message`, `Buffer`와 metadata의 JavaScript 수명을 관리하며 재사용하거나
+  `close()`로 정리한다. 일반 receive는 multipart framing, Router source `RoutingId`와
+  nullable `ReplyToken`, Sub·XSub topic과 Core가 제공한 source `RoutingId`를 보존한다.
+  수신 회계와 결과 수명의 경계는 [공통 수신 ownership 계약](../README.ko.md#receive-ownership)을 따른다.
+  Node의 public·internal 수신 API에는 part 단위 release가 없다.
 - Actor join 요청 receive 같은 서비스 제어/admission receive 경로는 재사용 가능한
   데이터 평면 저장보다 더 명확할 때 nullable, `undefined`, 또는 태그된 결과 반환
   형태를 사용할 수 있다. 그래도 no-data와 throw된 하드 receive 에러는 구별한다.
@@ -713,8 +690,8 @@ output이 empty다.
 - 핫 경로에서는 reflection 식 속성 walking, 문자열 lookup에 의한 동적 dispatch,
   피할 수 있는 할당, 피할 수 있는 `Buffer` 복사, 숨은 sleep, busy wait, 광범위한
   락, worker-thread join을 사용하지 않는다.
-- send completion과 request reply는 Core callback을 native TSFN으로 전달한다. binding은
-  자체 thread, queue, retry, readiness/admission pump를 만들지 않는다.
+- Send·request 결과의 전달은 [공통 completion owner](../async-execution-model.ko.md#4-poller와-completion-drain)를,
+  재제출할 입력의 보관은 [공통 결과 투영](../README.ko.md#submit-result-projection)을 따른다.
 - Poll 결과 materialization은 이벤트별 reflective enum 스캐닝이 아니라 고정 매핑
   테이블을 사용한다.
 - Perf, 샘플, 테스트는 공개 패키지 entrypoint만 import 한다.
@@ -779,17 +756,14 @@ Node는 Actor와 Spot route 조회 결과를 공개 JavaScript 객체와 일치�
 
 ## Pull completion 공개 계약
 
-Node package는 Core 0.16.0을 exact dependency로 사용한다.
+Node package 정보는 [배포 metadata](../../../node/package.json)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Node runtime은 native completion을 drain해 blocking result 또는 `Promise`로 바꾼다.
-`submit_sync()`는 Core `NONE`, `submit()`은 Core `DONTWAIT`를 사용한다. Completion-backed state는
-native `FINAL` 전에 provisional registry에 등록하고 submit publish와 completion capture가 합류한
-뒤 정확히 한 번 끝낸다. Promise를 더 이상 기다리지 않아도 native operation은 취소하지 않으며
-late completion은 payload와 state를 정리한다.
+Node는 blocking `submit_sync()`와 `Promise`를 반환하는 `submit()`을 제공한다.
+Promise를 더 이상 기다리지 않는 경우에도 아래 공통 완료 수명 계약을 따른다.
 
-`PollEventFlag.PollCompletion`은 public poller의 wait thread가 native queue를 비우고 live Promise
-또는 detached state를 한 건 이상 완전 처리했다는 progress event다. Public poller owner에서
-blocking request를 사용하면 다른 thread가 wait loop를 계속 실행해야 한다.
+Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
+제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)을, 완료 합류·수명과
+`PollEventFlag.PollCompletion`의 진행 조건은 [비동기 실행 모델](../async-execution-model.ko.md)을 따른다.
 
 `ReplyToken`은 class static block이 설치한 module-private `makeReplyToken(owner, value)` closure만
 만든다. Constructor sentinel은 export하지 않는다. Equality와 hash는 owner identity와 opaque
@@ -889,12 +863,8 @@ Public TypeScript declaration, JavaScript result·error와 poller event만으로
 - PAIR·DEALER·ROUTER·STREAM send factory가 하나의 `SendOperation` family를 반환한다.
 - Send/request는 §Public interface의 flag 없는 Promise·sync terminal만 제공하고 request timeout은
   유지한다.
-- Submit 반환 전 completion이 drain돼도 Promise는 submit publish와 합류한 뒤 정확히 한 번
-  settle된다.
-- Promise를 더 이상 기다리지 않는 state의 late completion은 public result를 다시 전달하지 않고
-  native aggregate를 정리한다.
-- Non-OK request completion은 typed error만 제공하고 error payload를 공개하지 않는다.
-- `PollCompletion`은 Promise settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+- 완료·cancellation·poller의 공통 관측은
+  [실행 모델 검증 요구](../async-execution-model.ko.md#7-구현-및-contract-test-검증-요구)를 따른다.
 - Raw reply를 DEALER peer로 제출해 HWM·PAUSED 대기가 만료하면 `SubmitError`의
   `BACKPRESSURED`가 관찰되고, ROUTER peer로 제출하면 Completion connection의 HWM-free 결과가 유지된다.
 

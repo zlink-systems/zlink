@@ -837,8 +837,7 @@ runtime/native bridge 역할에만 존재하며 public contract 역할로 만들
 
 - Framework extension package와 namespace는 각 framework 언어의 canonical identity
   아래에 둔다. 예: `.NET`은 `Zlink.Framework.*`, Java는 `systems.zlink.framework.*`.
-- Go, Python, Rust는 현재 framework target이 아니므로 binding-owned codec module을
-  추가하지 않는다.
+- Binding과 codec의 배포 경계는 [raw payload 배포 범위](#binding-raw-scope)를 따른다.
 - Node extension package 이름은 생태계 관례를 따르되, public identity가 `zlink`와
   `zlink.systems` 도메인에서 벗어나지 않게 한다.
 - 새 문서, 샘플, 테스트는 canonical identity만 사용한다.
@@ -1194,7 +1193,7 @@ streamSocket.bindActor(sessionRid, actorRef)
   `onSubscribe` 류 direct topic callback 을 public 으로 노출하면 안 된다.
 - `ROUTER` inbound routed traffic 은 단일 routed recv 표면으로 수신한다.
   바인딩 runtime은 내부에서 `zlink_router_recv_part()` 를 사용하고, public
-  표면에는 aggregate routed recv와 request completion callback 만 노출한다.
+  표면에는 aggregate routed recv와 [공통 request 완료 표면](async-coroutine-policy.ko.md#6-언어별-terminal-interface)만 노출한다.
   direct receive callback 은 제공하지 않는다.
 - core raw `STREAM` 은 `recv`, raw callback (`zlink_recv_handler()`),
   packet callback (`zlink_stream_packet_handler()`) 의 세 모드 중 하나를
@@ -1222,7 +1221,7 @@ streamSocket.bindActor(sessionRid, actorRef)
   `Actor Dispatch Binding Contract` 절과 `Actor Dispatch Policy` 절을 따른다.
 #### Auto-HWM와 SpotNode 옵션
 
-- HWM의 계산과 queue admission은 Core가 담당한다. 바인딩은 Core의 option과
+- [HWM](../../../core/doc/spec/core/glossary.ko.md#hwm)(queue의 byte 보관량을 제한하는 기준)의 계산과 queue admission은 Core가 담당한다. 바인딩은 Core의 option과
   monitoring 결과를 언어별 타입으로 변환할 뿐, message 수를 세거나 HWM을 다시
   계산하지 않는다.
 - `ZLINK_OPT_SNDHWM`과 `ZLINK_OPT_RCVHWM`은 방향별 pipe에 실제로 보관된
@@ -1282,27 +1281,18 @@ streamSocket.bindActor(sessionRid, actorRef)
   directional queue count로 사용하지 않는다. `outstandingApplicationLeaseCount`,
   `retiredQueueCount`, `deferredOriginCreditBytes`도 ABI 호환용 예약 필드이며 항상 `0`이다.
   Binding은 이 예약 필드를 application lifetime이나 Framework queue accounting에 사용하지 않는다.
-- `MonitorStatus`는 Core monitoring ABI v3의 byte HWM·pending 진단을 투영한다. Legacy
-  message-unit, slot, size-cap과 connection-bucket planner property는 alias 없이 제거한다.
+- `MonitorStatus`의 version·size·field는
+  [Core monitoring ABI](../../../core/doc/spec/core/06-monitoring.ko.md#61-abi-version과-layout)에
+  맞춰 투영한다. Legacy message-unit, slot, size-cap과 connection-bucket planner property는
+  alias 없이 제거한다.
 
 ##### HWM 계산과 admission
 
-Core는 context memory input, profile, physical directional queue registry와 byte
-water-filling으로 queue별 planned HWM을 계산한다. Binding은 이 계산 입력을 message 수나
-planning unit으로 변환하지 않는다.
-
-Auto-HWM은 사용자가 방향별 HWM을 직접 지정하지 않은 physical queue에만 planned 값을
-적용한다. Topology가 바뀌면 Core가 재계산하며, 새 목표가 현재 보관량보다 작으면 새 admission을
-막고 drain 뒤 applied HWM을 전환한다.
-
-실제 write admission은 Core가 pipe에 보관한 frame의 accounted byte를 누적하여
-판단한다. Accounted byte가 HWM에 도달하면 이후 write는 byte credit이 반환될
-때까지 backpressure를 받는다. 비어 있는 pipe에는 HWM보다 큰 complete message
-하나를 허용할 수 있지만, 그 뒤의 write는 다시 제한한다. 끝나지 않은 multipart
-message에는 이 예외를 적용하지 않는다.
-
-Pending message count는 표시용 진단이며 admission 기준이 아니다. Planned, applied,
-deferred HWM과 pending/accounted 값은 byte 단위이고, binding은 Core ABI 값과 flag를 그대로 보존한다.
+Queue별 HWM 계산·수동 override·재계산은
+[Core Auto HWM](../../../core/doc/spec/core/systems/06-auto-hwm.ko.md)이,
+write 수락 조건은 [Core HWM admission](../../../core/doc/spec/core/socket/README.ko.md#transportbuffer)이
+소유한다. Binding은 입력을 message 수나 planning unit으로 바꾸지 않고 Core ABI의 byte 값과
+flag를 그대로 투영한다.
 
 ##### Receive ownership과 routed 완료
 
@@ -1311,61 +1301,61 @@ SNDHWM·RCVHWM, peer PAUSED와 `SNDTIMEO` admission을 적용하며 `BACKPRESSUR
 가능하다. ROUTER peer로 보내는 reply는 현재 ready Completion pipe의 HWM-free admission을 사용한다.
 Binding은 peer type에 따른 Core native result를 전달하며 별도 retry나 readiness adapter를 만들지 않는다.
 
-Core byte HWM은 Core queue가 실제로 보관하는 physical frame charge, 즉 payload byte와
-`sizeof(zlink_msg_t)` metadata charge를 계산한다. Receive가 complete message를 dequeue해
-binding에 넘기면 그 charge는 끝난다. Binding의 일반 `recv`와 `subscribe`는
-message part, routing ID, request sequence와 topic metadata의 정상 ownership을
-`Received`·`TopicMessage` 계열 결과로 옮긴다. 결과는 언어별 close/dispose/drop 또는 다음
-receive까지 payload를 소유하지만, 그 application lifetime을 Core HWM accounting에 다시
-연결하지 않는다. 별도 retained receive, raw lease handle, application byte capacity를
-public 또는 internal 경로에 두지 않는다.
+<a id="receive-ownership"></a>
 
-Framework가 handler 실행량을 제한할 때는 자기 application job queue의 개수를 별도로
-계산한다. Binding은 그 queue count를 Core byte snapshot에 합치지 않는다. Framework가 Core
-receive를 늦춰야 할 때 사용하는 동적 제어 경계는 socket의 `RUNNING`/`PAUSED` receive-flow
-state setter 하나다.
+- **수신 결과는 언어별 수명 규칙으로 payload를 소유하되, Core dequeue에서 끝난 HWM charge를 결과의 보유·재사용·정리와 다시 연결하지 않는다.**
+  Core queue의 보관량과 Application의 payload 수명은 서로 다른 관리 대상이기 때문이다.
+  Charge의 범위와 종료 시점은 [Core 수신 회계](../../../core/doc/spec/core/systems/06-auto-hwm.ko.md#receive-dequeue와-queue-generation)가
+  소유한다. 일반 `recv`·`subscribe`는 part와 routing·reply·topic metadata를
+  `Received`·`TopicMessage` 계열 결과에 보존한다. 정리 API는 언어별 README를 따른다.
+  별도 retained receive, raw lease handle, application byte capacity·allowance 또는 중복 회계 상태는
+  public·internal 경로에 두지 않는다.
 
-HWM-managed PAIR **send**와 DEALER/ROUTER **routed send**의 비동기 terminal은 Core
-`zlink_send_async`와 send-completion을 감싼다. 즉시 admission은 operation id `0`을 반환하며
-binding이 awaitable을 즉시 완료한다. Core가 HWM 대기와 재시도, operation deadline,
-route 종료와 cancel을 소유하고, nonzero id를 받은 pending operation마다 정확히 한 번
-completion을 전달한다. Binding은 park queue, readiness callback 재시도 또는 deadline timer를
-두지 않는다. pending 상한은 기본 unlimited이며, application이 nonzero 상한을 명시한 경우에만
-초과 submit의 즉시 실패 정책을 소유한다.
+Binding은 Framework의 application job queue count를 Core byte snapshot에 합치지 않는다.
+
+<a id="receive-flow-projection"></a>
+
+##### Receive-flow 투영
+
+- **모든 바인딩은 Core receive-flow setter의 상태 전이·결과와 monitor 관측값을 손실 없이 투영하며 flow-state frame의 처리는 Core에 둔다.**
+  언어별 상태·오류 표현이 Core의 flow 제어 의미를 바꾸지 않도록 하기 위해서다.
+  상태 설정·반복 설정·미지원 socket 결과는
+  [Core receive-flow setter](../../../core/doc/spec/core/socket/README.ko.md#zlink_socket_set_receive_flow_state)가,
+  event·flag·status field는 [Core monitoring](../../../core/doc/spec/core/06-monitoring.ko.md)이 소유한다.
+
+<a id="submit-result-projection"></a>
+
+##### Submit 결과 투영
+
+고수준 바인딩은 native 제출 결과를 아래 언어 완료 결과에 연결한다. Native result·ID·part 소비와
+대기 토큰의 조건은 [Core part send](../../../core/doc/spec/core/socket/README.ko.md#part-send와-pending-admission)와
+[Core REQUEST DONTWAIT](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)가 소유한다.
+
+| Native 제출 결과 | 고수준 바인딩의 결과 |
+|---|---|
+| SEND `OK`·ID `0` | 즉시 admission 성공으로 terminal을 끝낸다. |
+| REQUEST `OK`·nonzero ID | 해당 REQUEST completion을 언어 결과에 연결한다. |
+| `BACKPRESSURED`·`EAGAIN`·nonzero 대기 토큰 | 바인딩이 재제출할 입력을 보관하고 WRITABLE을 기다린다. Core의 drain·재제출 계약에 따라 같은 operation을 계속한다. |
+| 대기 토큰 없는 submit 실패 | 해당 submit error로 terminal을 끝낸다. |
+
+- **바인딩은 socket-local context·token으로 찾은 WRITABLE을 해당 waiter에 전달하며 Core가 보장한 submit RID echo를 다시 판정하지 않는다.**
+  RID echo의 소유자는 [Core completion record 계약](../../../core/doc/spec/core/socket/README.ko.md#completion-pull과-ownership)이기 때문이다.
+
+완료 소비와 submit 경합은 [비동기 실행 모델의 합류 계약](async-execution-model.ko.md#5-submit-결과와-completion의-합류)을 따른다.
 
 Part 단위 Core API를 사용하는 binding은 **송신 경로에 자체 lock이나 gate를 두지 않는다.**
-multipart record는 Core에서 all-or-nothing이다. Core는 socket별 transaction state로 다른 sender의
-part가 sequence 사이에 삽입되지 않게 보호하며, 이미 열린 sequence와 경합하는 attempt는 부분 제출을
-peer에 남기지 않고 통째로 거부한다. 그래도 동기 send 호출에 실제 전달한 native part는 성공과 일반
-실패 모두에서 Core가 소비한다. 예외는 STREAM backpressure의 `EAGAIN`이며, 이때만 해당 native part가
-보존된다. 공개 API가 실패 시 message를 보존하는 binding은 독립적으로 소유한 staging copy를 Core에
-전달해 그 계약을 구현한다. 따라서 같은 socket에 대한 **동시 multipart 제출은 어플리케이션의
-책임**이며, binding은 이를
-직렬화하거나 대기시키거나 재시도하지 않고 Core의 결과를 그대로 전달한다. 이는 백프레셔 정책과
-같은 원칙이다. close와 in-flight 제출의 경합도 Core lifecycle gate가 소유한다. 다른 thread가 같은
-핸들에서 admitted API를 실행 중이면 close는 `EBUSY`이고, close가 accepted된 뒤 새 API 진입은
-`ESHUTDOWN`이다. binding은 별도 multipart ABI나 public transaction abstraction을 추가하지 않는다.
+Multipart 원자성·part 소비·동시 제출 결과는
+[Core part send](../../../core/doc/spec/core/socket/README.ko.md#part-send와-pending-admission)가,
+close와 in-flight 제출의 경합은
+[Core thread safety](../../../core/doc/spec/core/socket/README.ko.md#2-스레드-안전성)가 소유한다.
+공개 API가 실패 시 message를 보존하는 binding은 독립적으로 소유한 staging copy를 Core에
+전달해 그 계약을 구현한다. Binding은 별도 multipart ABI나 public transaction abstraction을
+추가하지 않는다.
 
-**Request**는 다르다: reply 완료는 Core가 구동한다. Reply handler callback은
-terminal을 한 번만 인수한다. 언어 future·promise가 completion 호출 thread에서 user
-continuation을 inline으로 실행할 수 있으면, binding은 이미 존재하는 socket completion
-dispatcher로 completion을 넘겨 native callback thread 밖에서 재개한다. Request는 최초 제출 뒤 기존 reply
-correlation을 유지하며 reply, timeout, disconnect, termination, cancellation 중 하나로
-끝난다 — timeout은 이미 Core 소유다(`ZLINK_REQUEST_TIMED_OUT`). 최초 deadline은 대기 중
-연장하지 않는다. Request만을 위한 스레드, admission·재시도 queue나 timer를 추가하지
-않는다.
-
-Routed **send**의 언어별 비동기 terminal은 C++ `async()`, .NET `Async(...)`,
-Java·Node·Python·Rust `submit()`이다. C++는 plain-thread용 blocking `submit()`도
-제공하고, Go의 canonical `Submit(ctx) error`는 Core 안에서 대기하는 동기 terminal이다.
-**Request**의 canonical terminal은 언어 native
-suspension 표면을 유지한다: C++ `async()`, .NET `Async(...)`, Java·Node·Python·Rust
-`submit()`(async 반환 타입), Kotlin `submit().await()`, Go `Submit(ctx)`(호출 goroutine을 완료까지 대기시키는 동기 terminal —
-Go의 native suspension은 goroutine이며 동시 요청은 goroutine으로 만든다; Go spec `Submit(context.Context) ([]*Message, error)`). C++만 기존 `submit()`·`submit(callback)`·`async()` 세 terminal을 유지한다.
-다른 언어는 callback·blocking 호환 terminal을 함께 두지 않으며 `request_async` 같은
-새 operation 시작점도 만들지 않는다.
-
-언어별 HWM 값 표현과 범위는 다음과 같다.
+Request reply 완료·timeout과 언어 wait cancellation의 경계는
+[Timeout](#timeout)과 [비동기 실행 모델](async-execution-model.ko.md#6-caller-wait-cancellation)을 따른다.
+Send·request의 언어별 awaitable·blocking terminal signature는
+[공통 terminal interface](async-coroutine-policy.ko.md#6-언어별-terminal-interface)가 소유한다.
 
 | 바인딩 | 공개 값 표현 | Core 전달 규칙 |
 |---|---|---|
@@ -1430,13 +1420,10 @@ Go의 native suspension은 goroutine이며 동시 요청은 goroutine으로 만�
   수행하면 안 된다. 바인딩도 같은 전제를 두고 lazy bootstrap 로직을 올리지 않는다.
 #### Send completion, Peer 가중치, STREAM 수신 모드
 
-- `zlink_send_complete_handler()`는 `zlink_send_async()`가 nonzero id로 수용한
-  pending operation의 최종 결과를 전달한다. operation id `0`은 즉시 admission이며
-  callback이 없다. `ZLINK_POLLCOMPLETION`은 같은 callback과
-  `zlink_send_complete_event_t`의 dispatch를 `zlink_poller_wait()` 호출 thread로
-  옮긴다. `ZLINK_POLLOUT`은 동기 nonblocking send를 다시 시도할 수 있다는
-  readiness 값이며 async send completion과 같은 축이 아니다. 공개 send-ready
-  handler는 없다.
+- Send 결과는 [Submit 결과 투영](#submit-result-projection)을,
+  `PollCompletion`과 완료 전달은 [비동기 실행 모델](async-execution-model.ko.md#4-poller와-completion-drain)을 따른다.
+  Raw `ZLINK_POLLOUT`과 `ZLINK_POLLCOMPLETION`의 관계는
+  [Core part send](../../../core/doc/spec/core/socket/README.ko.md#part-send와-pending-admission)가 소유한다.
 - 바인딩은 peer 가중치 surface 를 언어별 typed option/property 로 노출해야
   한다. 설정 대상은 `ROUTER`, `DEALER`이며 값 범위는
   `0..10000`, 기본값은 `100`이다. `0`은 새 outbound 선택에서 제외를 뜻한다.
@@ -1969,9 +1956,8 @@ SPOT operation builder 대상의 작업 시작점은 `requestToChannel` /
 `RouterSocket` 의 작업 시작점은 `request` / `request(peer)` 이다. 어느
 시작점이든 완료 방식은 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.ko.md)에
 정의한 언어별 마지막 실행 메서드로 선택한다.
-- **성공 시 reply payload 의 `List<Message>` 만 반환한다.** caller 는 이미
-  자기가 보낸 request 의 routing_id 와 request_seq 를 알고 있으므로
-  `Received` 를 되돌려 받을 필요가 없다. 별도 `Reply` 타입은 만들지 않는다.
+- **성공 시 reply payload의 `List<Message>`만 반환한다.** 요청 대상 metadata를
+  `Received`로 다시 감싸지 않으며 별도 `Reply` 타입은 만들지 않는다.
 - multipart reply 가 가능하므로 단일 `Message` 가 아닌 `List<Message>` 를
   반환한다. 단일 part reply 는 `list[0]` 으로 꺼낸다.
 
@@ -2278,7 +2264,7 @@ socket monitor 가 제공하는 런타임 상태 스냅샷. 모든 바인딩이 
 | `snd_pending_msgs` | `uint64` | 송신 큐 대기 메시지 수 |
 | `rcv_pending_msgs` | `uint64` | 수신 큐 대기 메시지 수 |
 | `snd_pending_bytes`, `rcv_pending_bytes` | `uint64` | 송수신 queue의 현재 pending accounted byte |
-| `auto_hwm_*` diagnostic fields | enum / number / bigint | C `zlink_monitor_status_t` ABI v3의 canonical 필드를 같은 의미로 노출한다. enabled, profile, role, policy class, planned/applied/deferred SND·RCV HWM byte, effective buffer byte, 최근 재계산 시각·이유, blocked ratio, SND·RCV in-flight byte, minimum Core charge와 oversize 진단을 포함한다 |
+| `auto_hwm_*` diagnostic fields | enum / number / bigint | C `zlink_monitor_status_t` [현재 Core monitoring ABI](../../../core/doc/spec/core/06-monitoring.ko.md#61-abi-version과-layout)의 canonical 필드를 같은 의미로 노출한다. enabled, profile, role, policy class, planned/applied/deferred SND·RCV HWM byte, effective buffer byte, 최근 재계산 시각·이유, blocked ratio, SND·RCV in-flight byte, minimum Core charge와 oversize 진단을 포함한다 |
 | `is_ready()` | `bool` | raw socket monitor source에서만 `state_flags` 의 ready 비트 확인 편의 메서드 |
 
 Monitor open option은 `monitor_hwm_bytes` 하나만 사용한다. `0`은 Core 기본값을 선택하고 양수는
@@ -2972,17 +2958,11 @@ application payload part 수와 ownership을 보존하고 내부 metadata를 공
 
 #### 설계 원칙
 
-- Request-reply는 첫 application part의 ZMP header metadata로 전달한다.
-  Public `zlink_msg_t` marker API나 protocol payload part는 사용하지 않는다.
-- dispatch, pending map, timeout, reply 매칭은 core C API 에서 처리한다.
-  바인딩은 이 로직을 다시 구현하지 않는다.
-- core 는 callback 기반 비동기 모델을 제공한다.
-  바인딩은 [바인딩 비동기 실행 표면 정책](async-coroutine-policy.ko.md)에 따라
-  callback 위에 언어별 완료 객체 반환 표면을 얹을 수 있다. coroutine 연결은 framework가
-  맡는다.
-- `request()` 는 thread blocking API 가 아니다.
-- request-reply 는 Router/Dealer 소켓과 SPOT 의 기능 확장이다.
-  별도 추상 레이어가 아니라 기존 표면에 역할을 얹는다.
+Native request 제출·reply 매칭·timeout은
+[Core request 계약](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)이 소유한다.
+바인딩의 완료 전달은 [비동기 실행 모델](async-execution-model.ko.md#4-poller와-completion-drain)을,
+언어별 blocking·awaitable 표면은 [terminal 정책](async-coroutine-policy.ko.md#6-언어별-terminal-interface)을 따른다.
+Request-reply는 Router/Dealer 소켓과 SPOT의 기능 확장이다.
 
 #### 공개 표면에 두지 않는 API
 
@@ -3019,51 +2999,11 @@ public surface 의 일부가 아니다. 바인딩은 다음 함수나 상수를 
 
 #### C API 표면
 
-**공통 타입:**
-
-```c
-typedef void (*zlink_reply_handler_fn)(
-    zlink_request_result_t result_,
-    zlink_msg_t *parts,
-    size_t part_count,
-    void *userdata);
-
-```
-
-`ZLINK_REQUEST_OK`이면 `parts`의 모든 message 소유권이 callback으로
-이전된다. callback은 반환하기 전에 각 message를 정확히 한 번 해제하거나
-binding 소유 message 객체로 move/adopt한다. `parts` 배열 자체는 callback
-반환 시점까지만 유효하다. 유효한 wire error reply에서도 Core C callback은 errno part 뒤의
-message 소유권과 errno를 매핑한 non-OK `zlink_request_result_t`를 받는다. 상위 binding은 이
-message를 해제하고 언어별 error 경로만 공개한다.
-
-**Socket API:**
-
-```c
-zlink_submit_result_t zlink_dealer_request_part(void *dealer,
-    zlink_msg_t *part, zlink_send_flags_t flags,
-    zlink_part_flag_t part_flag, uint32_t timeout_ms,
-    zlink_reply_handler_fn handler, void *userdata);
-
-zlink_submit_result_t zlink_dealer_reply_part(void *dealer,
-    uint64_t request_seq, zlink_msg_t *part,
-    zlink_part_flag_t part_flag);
-
-zlink_submit_result_t zlink_router_request_part(void *router,
-    const zlink_routing_id_t *peer_rid, zlink_msg_t *part,
-    zlink_send_flags_t flags, zlink_part_flag_t part_flag,
-    uint32_t timeout_ms, zlink_reply_handler_fn handler,
-    void *userdata);
-
-zlink_submit_result_t zlink_router_reply_part(void *router,
-    const zlink_routing_id_t *peer_rid, uint64_t request_seq,
-    zlink_msg_t *part, zlink_part_flag_t part_flag);
-
-zlink_recv_result_t zlink_router_recv_part(void *router,
-    const zlink_routing_id_t **source_node_rid_out,
-    uint64_t *request_seq_out, zlink_msg_t *part_out,
-    zlink_part_flag_t *has_more_out, zlink_recv_flags_t flags);
-```
+Raw socket request·reply·ROUTER receive의 선언은
+[Core request와 reply](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)와
+[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#routedsubscription-receive-family)를 따른다.
+Completion record와 반환된 reply part의 수명은
+[Core completion pull과 ownership](../../../core/doc/spec/core/socket/README.ko.md#completion-pull과-ownership)이 소유한다.
 
 **SPOT service-layer operation 이름 (binding-level 개념):**
 
@@ -3090,18 +3030,11 @@ zlink_handler_result_t zlink_spot_dispatch_event_handler(void *spot, ...);
 
 #### 수신 Dispatch 모델
 
-core 가 request-reply dispatch 를 처리한다. 바인딩은 dispatch owner 를 구현하지 않는다.
-
-- `request_seq = 0` 이면 ordinary message.
-- `request_seq != 0` 이면 request-reply message.
-- Core는 socket이 발급한 `request_seq`로 pending completion을 찾고, 등록한 transport pair
-  ID·generation과 일치하는 reply만 적용한다.
-- 매칭 실패한 reply (stray/late reply) 는 drop 한다.
-- Reply 가능한 ROUTER record는 `zlink_router_recv_part()` typed surface로 받는다.
-  ROUTER에 대한 generic `zlink_recv_part()` 호출은 `EOPNOTSUPP`로 거부한다.
-- ROUTER 의 raw request-reply 수신 plane 은 **단일 표면**이다. 이 C API는
-  `source_node_rid`와 `request_seq`만 반환하며 SPOT 전용 routing context는
-  별도 service-layer API가 소유한다.
+ROUTER application record의 종류·source RID·reply token은
+[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#routedsubscription-receive-family)가 소유한다.
+Reply 매칭은 [Core request 계약](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)을,
+매칭된 결과의 언어 전달은 [공통 completion owner](async-execution-model.ko.md#4-poller와-completion-drain)를 따른다.
+SPOT 전용 routing context는 별도 service-layer API가 소유한다.
 
 #### Request API 변형
 
@@ -3127,74 +3060,49 @@ high-level request 완료는 첫 reply 1건으로 끝난다.
 
 #### Timeout
 
-- timeout 은 core 가 관리한다. 바인딩은 timeout 로직을 구현하지 않는다.
-- 기본 timeout: `5000ms`. per-call > socket default > 구현 기본 `5000ms`.
-- `timeout_ms = 0` 이면 socket default timeout 을 사용한다.
-- timeout 은 send 대기 + reply 대기를 합산한 전체 경과 시간에 적용된다.
-- timeout 시 core 가 pending map 에서 제거하고 callback 에 `ZLINK_REQUEST_TIMED_OUT` 전달.
-- timeout 후 late reply 는 core 가 drop 한다.
+- **Request builder의 timeout은 [Core admission부터 흐르는 reply timeout](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)에 대응한다.**
+  Core가 시작점·기본값·`0`의 해석과 만료를 소유하므로 바인딩은 별도 타이머로 다시 계산하지 않는다.
+  언어 대기의 취소는 [caller wait cancellation](async-execution-model.ko.md#6-caller-wait-cancellation)을 따른다.
 
 #### Pending map
 
-- `request_seq` 채번, pending 등록, reply 매칭, timeout 제거 모두 core 에서 한다.
-- 바인딩은 pending map 을 별도로 유지하지 않는다.
-- 바인딩이 유지하는 것은 callback → Future/Promise resolve 매핑뿐이다.
+Wire request correlation은 [Core request 계약](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)이
+소유한다. 바인딩이 연결하는 것은 submit 결과·completion과 언어 terminal이며,
+그 수명과 합류는 [비동기 실행 모델](async-execution-model.ko.md#5-submit-결과와-completion의-합류)이 소유한다.
 
 #### Wire format
 
-아래 ZMP wire 값은 [Core ZMP 스펙](../../../core/doc/spec/core/protocol/01-zmp.ko.md)의 계약을
-인용한다. Binding은 이 값을 직접 만들거나 해석하지 않는다.
-
-- `request_seq` 는 부호 없는 64비트 정수 (8바이트, network byte order).
-- 시작값 `1`. Ordinary data frame에는 sequence extension이 없다.
-- overflow 시 `1` 로 wrap. outstanding 충돌값은 건너뛴다.
-- Ordinary data는 8 byte ZMP header의 kind가 `0x00`이다. Request, reply와 error reply의 첫
-  application frame은 kind와 8 byte Big Endian sequence를 포함한 16 byte header를 사용한다.
-- Multipart의 둘째 application frame부터 kind는 ordinary data이고 payload part 수는 binding이
-  전달한 수와 같다.
-- 바인딩은 ZMP header metadata를 직접 만들거나 파싱하지 않는다. Core가 처리한다.
+ZMP kind·sequence·header byte 배치와 검증은
+[Core ZMP 스펙](../../../core/doc/spec/core/protocol/01-zmp.ko.md)이 소유한다.
+바인딩은 wire metadata를 직접 만들거나 해석하지 않으며,
+[Request-Reply 정책](#request-reply-정책)의 payload 경계를 유지한다.
 
 #### 반환 타입
 
 - `request()` 성공 시 **reply payload `List<Message>` 만** 반환한다
   (`Vec<Message>` / `IReadOnlyList<Message>` / `Message[]` /
   `tuple[Message, ...]` 등 언어별 리스트 타입).
-- caller 는 이미 자기가 보낸 request 의 대상 routing_id 와 request_seq 를
-  알고 있으므로, 그걸 wrap 한 `Received` 를 되돌려받을 필요가 없다.
+- 요청 대상의 metadata를 reply payload와 함께 `Received`로 다시 감싸지 않는다.
 - 별도 `Reply` 타입은 만들지 않는다.
 - multipart reply 지원이 목적이므로 단일 `Message` 가 아닌 리스트 형태다.
   단일 part reply 는 `parts[0]` 으로 꺼낸다.
-- request handler (서버 측) 는 `peer_rid`, `request_seq`, payload 를 함께
-  전달한다. 별도 `Request` 타입이나 `onRequest` 전용 callback 은 만들지
-  않는다. (server 측은 누가 어떤 request_seq 로 보냈는지 알아야 하므로
-  차이가 있다.)
+- 응답자의 수신 metadata는 [Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#routedsubscription-receive-family)와
+  [ReplyToken 정책](async-coroutine-policy.ko.md#5-replytoken과-reply)을 따른다.
+  별도 `Request` 타입이나 `onRequest` 전용 callback은 만들지 않는다.
 
 #### 소유권
 
-- `request()` / `reply()` 호출 시 메시지 ownership 은 기존 send 계약을 따른다.
-- request가 성공적으로 완료되면 callback의 모든 message part 소유권이
-  binding callback으로 이전된다. binding은 각 part를 언어별 리스트의
-  message 객체로 move/adopt하고 각 native message를 정확히 한 번 해제한다.
-  native `parts` 배열 자체는 callback 반환 후 무효다.
-- 소켓 close 시 core 가 pending map 의 모든 미완료 request 를 `ZLINK_REQUEST_TERMINATED` callback 으로 reject 한다.
+Request·reply 입력은 기존 send ownership 계약을 따른다. Native reply array와 part 정리는
+[Core completion ownership](../../../core/doc/spec/core/socket/README.ko.md#completion-pull과-ownership)을,
+언어 payload 변환과 close 시 미완료 terminal 처리는
+[비동기 실행 모델](async-execution-model.ko.md#5-submit-결과와-completion의-합류)을 따른다.
 
-#### Callback 계약
+#### 언어 완료 결과
 
-- callback 은 정확히 한 번 호출된다.
-  성공이면 `result = OK` + reply parts, 실패면 `result != OK` +
-  empty/null/Err 경로로 전달된다.
-- Core C callback이 유효한 wire error reply의 errno part 뒤 payload를 받더라도 binding은 이를
-  해제하고 public 성공 payload로 노출하지 않는다.
-- core callback 시그니처: `void(zlink_request_result_t result_, zlink_msg_t *parts_, size_t part_count_, void *userdata_)`
-- 언어별 패턴 (per-function `RequestError` 계승):
-  - C++: `std::function<void(request_result_t, std::vector<message_t>)>`
-  - Java: `BiConsumer<RequestResult, List<Message>>`
-  - .NET: `Action<RequestResult, IReadOnlyList<Message>>`
-  - Node: `(result: RequestResult, parts: Message[]) => void`
-  - Python: `callback(result: RequestResult, parts: list[Message])`
-  - Go: `func(RequestResult, []*Message)` (실패 시 nil/empty 허용)
-  - Rust: `FnOnce(Result<Vec<Message>, RequestError>)` (Rust 관용구;
-    `RequestError::code` 가 `RequestResult` 에 대응)
+Request 성공 payload와 typed error, cancellation 이후 완료는
+[공통 완료 계약](async-execution-model.ko.md#6-caller-wait-cancellation)을 따른다.
+언어별 완료 타입과 terminal signature는
+[terminal interface](async-coroutine-policy.ko.md#6-언어별-terminal-interface)를 따른다.
 
 ### SPOT Messaging 정책
 
@@ -3570,7 +3478,7 @@ callback 안에서는 event 로 알려진 plane 을 drain 할 수 있어야 한�
 |-----------|----------|
 | `PAIR` / `DEALER` | runtime은 `zlink_recv_part()` 를 사용하고 public 표면은 aggregate recv |
 | `SUB` / `XSUB` | runtime은 `zlink_subscribe_part()` 를 사용하고 public 표면은 aggregate topic recv |
-| `ROUTER` | runtime은 `zlink_router_recv_part()` 를 사용하고 public 표면은 aggregate routed recv. request completion 은 `zlink_reply_handler_fn` 으로 유지 |
+| `ROUTER` | Runtime은 `zlink_router_recv_part()`를 사용하고 public 표면은 aggregate routed recv다. Request 완료는 [공통 실행 모델](async-execution-model.ko.md#4-poller와-completion-drain)을 따른다. |
 | `STREAM` | 아래 세 모드 중 하나 (상호 배타). raw recv / `zlink_recv_handler()` / `zlink_stream_packet_handler()` |
 | `SPOT` | `zlink_spot_recv_part()` + `zlink_spot_subscribe_part()` + `zlink_spot_recv_subscription_event()` + `zlink_spot_recv_actor_lifecycle()` + `zlink_spot_dispatch_event_handler()`. direct routed callback은 노출하지 않는다 |
 
@@ -3598,20 +3506,10 @@ zlink_recv_result_t zlink_spot_recv_actor_lifecycle(void *spot, ...);
 
 #### Router 수신 (routed 통합 recv 표면)
 
-```c
-zlink_recv_result_t zlink_router_recv_part(void *router,
-    const zlink_routing_id_t **source_node_rid_out,
-    uint64_t *request_seq_out,
-    zlink_msg_t *part_out, zlink_part_flag_t *has_more_out,
-    zlink_recv_flags_t flags);
-```
-
-- ROUTER 의 raw request-reply 수신은 단일 plane 이다. 이 C API는
-  `source_node_rid`와 `request_seq`만 반환하며 SPOT 전용 routing context는
-  별도 service-layer API가 소유한다.
-- `request_seq == 0` 이면 fire-and-forget. `request_seq != 0` 이면 request.
-- 바인딩은 ROUTER data-plane callback install surface 를 별도로 노출하지 않는다.
-  request completion callback 은 `request(...)` 경로에서만 유지한다.
+ROUTER DATA·REQUEST의 raw 수신 signature와 metadata는
+[Core routed receive](../../../core/doc/spec/core/socket/README.ko.md#routedsubscription-receive-family)를,
+request 결과의 전달은 [공통 completion owner](async-execution-model.ko.md#4-poller와-completion-drain)를 따른다.
+SPOT 전용 routing context는 별도 service-layer API가 소유한다.
 
 #### Pub/Sub 수신
 
@@ -3773,98 +3671,31 @@ SpotNode의 node-level 옵션은 `zlink_set_spot_node_option()` 계열로 다룬
     불가능하면 문서에 copy 가능성을 명시한다.
 
 ### Codec / Serializer Extension 모듈 정책
-- `Message` 와 multipart transport 자체는 계속 canonical binding core contract 다.
-- protobuf / json / messagepack codec-aware domain conversion 은
-  **binding core 위에 올라가는 정식 별도 extension contract** 로 취급한다.
-- 단, `C` binding 은 예외다. `C`는 raw transport contract 를 기본 public surface 로
-  유지하며, codec-aware domain conversion 을 기본 binding contract 로 요구하지
-  않는다.
-- 따라서 `Parse(...)`, `Serialize(...)`, `ToMessage(...)`, `FromMessage(...)`
-  같은 helper 를 public 으로 노출할 수 있다. 다만 이 helper 는 binding core
-  package/module 에 섞으면 안 된다.
-- Required rules:
-  - binding core package/module 은 codec-agnostic 해야 한다.
-  - binding core 가 protobuf/json/messagepack dependency 를 필수 의존성으로
-    끌고 들어오면 안 된다.
-  - `C` binding 은 raw byte/message contract 만 정식으로 유지하면 되며,
-    protobuf/json helper 를 public contract 로 추가할 의무가 없다.
-  - `C`를 제외한 binding 은 codec extension layer 를 public contract 로 두며,
-    `protobuf`, `json`, `messagepack` 세 codec 을 지원해야 한다.
-  - `C`를 제외한 binding 의 `protobuf`, `json`, `messagepack` extension 은
-    각각 **core binding 과 별도 배포 단위** 로 제공해야 한다.
-  - third-party buffer adapter extension 도 같은 원칙을 따른다.
-    core binding 과 별도 배포 단위로 제공해야 하며, core binding 이 그
-    extension dependency 를 필수로 요구하면 안 된다.
-  - codec extension 은 core binding 에 의존할 수 있지만, core binding 이 codec
-    extension 에 의존하면 안 된다.
-  - codec extension 이 추가되어도 canonical recv/request/reply contract 는 계속
-    `Message`, `List<Message>`, `Received`, `TopicMessage` 기준으로 유지한다.
-  - codec extension 은 object <-> `Message` encode/decode helper 계약만 정의한다.
-    payload 타입에 필요한 parser, schema, generated type 입력을 받는 것은 허용된다.
-  - codec extension 은 transport 결과 타입을 domain object 로 바꾸는 helper 를
-    추가할 수 있지만, raw transport contract 자체를 대체하면 안 된다.
-  - codec extension 문서는 packet name 추론 규칙, high-level outbound serializer
-    lookup, typed request/reply decode 정책을 정의하지 않는다.
-  - framework 가 존재하는 언어에서는 위 정책을 framework 문서가 담당한다.
-    codec extension 문서는 low-level encode/decode helper 입력 조건만 설명한다.
-- 이유:
-  - raw transport 사용자에게 특정 codec dependency 를 강제하지 않기 위함이다.
-  - 언어별 codec 생태계 선택이 다르므로 core binding 이 한 구현체에 잠기지
-    않게 하기 위함이다.
-  - high-level domain helper 와 low-level transport ownership 계약을 분리해서
-    변경 파급을 줄이기 위함이다.
 
-JSON codec baseline by language:
+<a id="binding-raw-scope"></a>
 
-| Language | JSON baseline |
+- **바인딩은 raw `Message`·byte payload 계약만 배포하고 codec extension 배포 단위를 소유하지 않는다.**
+  Raw transport 사용자가 특정 직렬화 형식이나 구현체를 필수로 설치하지 않도록 하기 위해서다.
+  `Message`, `List<Message>`, `Received`, `TopicMessage`의 transport 계약은 그대로 유지한다.
+  Binding core는 protobuf·JSON·MessagePack 또는 codec extension을 필수 의존성으로 요구하지 않는다.
+  Framework의 serializer 선택과 typed 변환은 해당 Framework 문서가 소유한다.
+
+- **Third-party buffer adapter는 core binding과 별도 배포하고 core의 필수 의존성으로 넣지 않는다.**
+  특정 버퍼 라이브러리의 수명 API를 사용하는 선택적 통합이기 때문이다.
+  버퍼 지원 범위와 수명 설명은 [고성능 버퍼 생태계 정책](#고성능-버퍼-생태계-정책-recommended)을 따른다.
+
+언어별 문서는 아래 package 위치와 언어별 public 타입을 안내한다.
+
+| 언어 | Binding package source |
 |---|---|
-| C | none required |
-| C++ | `nlohmann/json` |
-| .NET | `System.Text.Json` |
-| Java | `Jackson` |
-| Node | built-in `JSON.parse` / `JSON.stringify` |
-| Python | stdlib `json` |
-| Go | `encoding/json` |
-| Rust | `serde_json` |
-
-- 이 표는 "json codec extension 을 public 으로 노출할 때 기본으로 삼는 구현체"를
-  뜻한다.
-- 다른 json 라이브러리를 추가 지원할 수는 있다. 다만 public contract 와 sample,
-  test, 기본 동작 기준은 위 표를 따른다.
-- Node 는 built-in JSON 이 plain object encode/decode 의 기준이며, typed
-  validation 은 별도 schema/parser object 위에 얹을 수 있다.
-
-MessagePack codec baseline by language:
-
-| Language | MessagePack baseline |
-|---|---|
-| C | none required |
-| C++ | `msgpack-c` |
-| .NET | `MessagePack for C#` |
-| Java | `jackson-dataformat-msgpack` |
-| Node | `@msgpack/msgpack` |
-| Python | `msgpack` |
-| Go | `vmihailenco/msgpack/v5` |
-| Rust | `rmp-serde` |
-
-Bindings는 더 이상 codec extension 배포 단위를 정의하지 않는다.
-
-| Language | Core binding root | Binding-owned codec package 정책 |
-|---|---|---|
-| C | `bindings/c/include/zlink/`, `bindings/c/src/` | 없음 |
-| C++ | `bindings/cpp/include/zlink/` | 없음. framework 직렬화는 `framework/languages/cpp/extensions/`에서 다룬다 |
-| .NET | `bindings/dotnet/src/Zlink/` | 없음. framework 직렬화는 `framework/languages/dotnet/src/`에서 다룬다 |
-| Java | `bindings/java/src/main/java/systems/zlink/` | 없음. framework 직렬화는 `framework/languages/java/`에서 다룬다 |
-| Node | `bindings/node/src/` | 없음. framework 직렬화는 `framework/languages/node/packages/`에서 다룬다 |
-| Python | `bindings/python/src/zlink/` | 없음. raw `Message`/bytes만 유지한다 |
-| Go | `bindings/go/` | 없음. raw `Message`/bytes만 유지한다 |
-| Rust | `bindings/rust/src/` | 없음. raw `Message`/bytes만 유지한다 |
-
-- 배치 규칙:
-  - codec helper source를 core socket/message namespace와 같은 디렉터리에 직접 섞지 않는다.
-  - 언어별 codec spec 문서는 raw-only 정책을 설명하고, 해당 언어가 framework target이면
-    framework codec extension 위치를 안내한다.
-  - binding sample과 test는 raw `Message`/bytes 동작을 검증한다.
+| C | `bindings/c/include/zlink/`, `bindings/c/src/` |
+| C++ | `bindings/cpp/include/zlink/` |
+| .NET | `bindings/dotnet/src/Zlink/` |
+| Java | `bindings/java/src/main/java/systems/zlink/` |
+| Node | `bindings/node/src/` |
+| Python | `bindings/python/src/zlink/` |
+| Go | `bindings/go/` |
+| Rust | `bindings/rust/src/` |
 
 ### 외부 버퍼 Attach / Release Hook 정책
 - C API 의 `zlink_msg_init_data(..., zlink_free_fn*, hint)` 는 **external buffer
@@ -4064,7 +3895,7 @@ ROUTER/`Received` reply도 대상 peer가 DEALER이면 single Application connec
 `SNDTIMEO` admission 때문에 `BACKPRESSURED`를 반환할 수 있다. 대상 peer가 ROUTER이면 HWM 없는
 Completion connection에 한 번 제출하므로 HWM backpressure를 반환하지 않는다.
 
-##### `zlink_request_result_t` (request completion callback)
+##### `zlink_request_result_t` (REQUEST completion)
 
 | 값 | 상수 | 내부 errno | 의미 |
 |----|------|-----------|------|
@@ -4601,7 +4432,7 @@ ownership 관리, native loader, package boundary, hot path 최적화를 함께 
 - blocking/non-blocking 계약 변경: behavior test 동반
 - ownership/receive shape 변경: callback regression 또는 ownership test 동반
 - option surface 변경: typed option surface test와 negative 역할 test 동반
-- codec extension 변경: 해당 codec extension test 동반
+
 - helper/facade 변경: helper/facade contract test 동반
 - hot path 구현 변경: optimization guard test 또는 perf regression gate 동반
 
@@ -4784,10 +4615,11 @@ ownership 관리, native loader, package boundary, hot path 최적화를 함께 
 - service test는 service layer 바인딩 계약 검증이 목적이다. core service 전체
   matrix를 모든 언어에서 다시 실행하지 않는다.
 
-### Conditional: Codec 테스트
-- codec extension package를 제공하는 바인딩은 codec별 payload roundtrip을 검증한다.
-- core binding package가 codec dependency를 필수로 끌어들이지 않는지 확인한다.
-- serializer 선택 규칙이 있는 언어는 기본 serializer와 오류 경로를 검증한다.
+### Raw payload 배포 검증
+
+추가 serializer module을 설치하지 않고 공개 binding API로 raw message를 송수신하면
+payload byte와 multipart part 수가 유지된다.
+배포 범위는 [raw payload 정책](#binding-raw-scope)을 따른다.
 
 ### Conditional: Sample Smoke 테스트
 - sample suite를 제공하는 바인딩은 canonical sample set의 실행 smoke를 제공한다.

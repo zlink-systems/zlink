@@ -60,15 +60,14 @@ Awaitable은 비동기 완료를 담는 언어별 값을 함께 가리키는 문
 
 ## 4. Poller와 completion drain
 
-C에서 `ZLINK_POLLCOMPLETION`은 다음 `zlink_completion_recv()`가 한 건을 반환할 수 있다는
-non-consuming level readiness다. `zlink_poller_wait()`는 completion을 소비하지 않는다.
-Caller는 준비된 socket마다 `zlink_completion_recv(..., ZLINK_RECV_FLAGS_DONTWAIT)`를
-`ZLINK_RECV_NO_DATA`까지 반복한다.
+C의 raw readiness, `zlink_completion_recv()`와 record 수명은
+[Core completion pull과 ownership](../../../core/doc/spec/core/socket/README.ko.md#completion-pull과-ownership)이
+소유한다.
 
-Raw completion을 공개하지 않는 고수준 binding은 socket마다 drain owner를 하나만 둔다.
-Socket을 public poller에 `PollCompletion`으로 등록하지 않았으면 binding runtime이 owner다.
-등록하면 `wait()` 호출 thread로 owner를 원자적으로 이전하고, 제거하거나 completion bit를
-빼면 runtime owner로 되돌린다. 두 owner가 같은 queue를 동시에 비우지 않는다.
+- **고수준 바인딩은 socket마다 completion을 읽어 언어 terminal로 전달하는 주체(completion owner)를 하나만 둔다.**
+  같은 queue의 record를 두 주체가 소비하지 않도록 하기 위해서다. Public poller에
+  `PollCompletion`으로 등록하지 않았으면 runtime이 owner이고, 등록하면 `wait()` 호출
+  thread로 원자적으로 이전한다. 제거하거나 completion bit를 빼면 runtime owner로 되돌린다.
 
 고수준 `PollCompletion`은 native queue에서 한 건 이상을 꺼내 live waiter를 끝내거나 detached
 state를 정리한 뒤 반환하는 completion progress event다. 반환할 때 queue가 이미 비어 있을 수
@@ -81,43 +80,45 @@ thread·goroutine이 `wait()` loop를 계속 실행해야 한다. 같은 실행 
 blocking terminal을 직렬로 호출하지 않는다. Binding은 blocking terminal을 위해 owner를
 가져오거나 별도 drain thread를 만들지 않는다.
 
-## 5. Provisional registry와 완료 합류
+## 5. Submit 결과와 completion의 합류
 
-Completion-backed terminal은 native `FINAL` 호출 전에 language operation state를 stable
-`user_context`로 찾을 수 있도록 socket-local registry에 provisional 상태로 등록한다.
-Completion ID는 native 호출이 반환하기 전에는 알 수 없으므로 ID를 key로 먼저 등록하지 않는다.
+- **바인딩은 Core에 전달한 context의 유효 수명을 보장하고 submit 결과와 completion이 경합해도 언어 terminal을 정확히 한 번 끝내며 남은 native payload를 정확히 한 번 정리한다.**
+  Completion은 submit 반환 전에 읽힐 수 있으므로, 반환 순서가 결과 유실·중복 완료·중복
+  해제로 이어져서는 안 된다. Context의 native 수명은
+  [Core part send](../../../core/doc/spec/core/socket/README.ko.md#part-send와-pending-admission)와
+  [request 계약](../../../core/doc/spec/core/socket/README.ko.md#request와-reply)이 소유한다.
+  내부 확인 조건은 각 native payload에 해제 또는 언어 소유권 이전이 한 번만 대응하는 것이다.
 
-Submit과 completion은 다음 순서로 합류한다.
+Submit 반환값과 대기 토큰을 언어 결과로 연결하는 기준은
+[공통 결과 투영](README.ko.md#submit-result-projection)을 따른다. Completion이 먼저 도착해도
+해당 submit 결과와 합류하기 전에는 terminal을 끝내지 않는다. 조기 completion을 처리한
+`wait()`도 합류 후 settle 또는 cleanup이 끝나기 전에는 `PollCompletion` progress를 반환하지
+않는다. Blocking send와 reply에는 completion을 기다리는 합류가 없다.
 
-1. Native submit이 실패하면 ID `0`을 확인하고 provisional state를 제거한 뒤 submit error로
-   terminal을 끝낸다. 이 경로에는 completion이 생기지 않는다.
-2. Successful send가 ID `0`을 반환하면 inline success로 terminal을 끝내고 state를 제거한다.
-3. Successful request 또는 nonzero send ID는 submit outcome, ID와 Core ownership을 provisional
-   state에 원자적으로 publish한다.
-4. Completion이 submit 반환보다 먼저 drain되면 `user_context`로 state를 찾아 result와 native
-   aggregate ownership을 capture한다.
-5. Submit publish와 completion capture가 모두 끝났을 때만 public terminal을 정확히 한 번
-   끝내고 registry entry를 한 번 제거한다.
-
-Pre-return completion을 처리한 `wait()`도 publish와 capture가 합류해 settle 또는 cleanup이
-끝나기 전에는 `PollCompletion` progress를 반환하지 않는다. Blocking send와 reply는 completion을
-만들지 않으므로 provisional registry를 사용하지 않는다.
+**언어별 재량** — 등록 시점과 자료구조는 구현이 정한다. Submit 반환 전 등록, drain과 등록의
+직렬화, 조기 record 보관은 모두 위 완료·수명 결과를 보존할 때만 동등한 방법이다.
+동등성은 [검증 요구](#7-구현-및-contract-test-검증-요구)의 terminal 결과·오류·완료 횟수와
+cancellation 이후 관측으로 확인한다.
 
 ## 6. Caller wait cancellation
 
 고수준 cancellation은 Core operation 취소가 아니라 caller가 language terminal을 기다리는
 행위의 취소다.
 
-- Native 호출 전에 cancellation이 확정되면 Core를 호출하거나 provisional state를 남기지 않는다.
+- Native 호출 전에 cancellation이 확정되면 Core를 호출하거나 operation state를 남기지 않는다.
 - Native 호출 중 cancellation과 submit failure가 경합하면 native 반환까지 cancellation claim만
   기록한다. Submit이 실패하면 정확한 submit error가 우선한다.
 - Successful submit 뒤 cancellation이나 Future drop이 먼저 확정되면 live waiter만 한 번
-  canceled 또는 detached 상태로 끝낸다. Registry state는 late completion이나 socket/context
+  canceled 또는 detached 상태로 끝낸다. Operation state는 late completion이나 socket/context
   lifecycle cleanup까지 유지한다.
 - Late completion은 native payload와 state를 정리하지만 public waiter를 다시 끝내지 않는다.
   Cancellation이 먼저 확정된 successful ID `0` send도 success로 다시 끝내지 않는다.
 - Socket close나 context termination으로 completion을 받을 수 없으면 live waiter만
-  shutdown 또는 terminated error로 끝내고 모든 registry state를 제거한다.
+  shutdown 또는 terminated error로 끝내고 모든 operation state를 제거한다.
+
+- **성공한 REQUEST reply만 언어 message collection으로 소유권을 옮기고, 변환 실패 시 이미 만든 wrapper와 남은 native part를 함께 정리한다.**
+  부분 변환으로 payload의 소유자가 사라지거나 둘이 되지 않도록 하기 위해서다.
+  Native array의 정리 방법은 [Core completion ownership](../../../core/doc/spec/core/socket/README.ko.md#completion-pull과-ownership)을 따른다.
 
 Request completion이 non-OK이면 고수준 binding은 typed request error만 공개한다. Error-reply
 payload는 language message collection이나 error property로 옮기지 않고 user-visible error를
@@ -131,25 +132,27 @@ Public terminal, public poller event와 언어별 cancellation 결과만으로 �
 
 **완료와 drain**
 
-- C poller가 `ZLINK_POLLCOMPLETION`을 반환한 뒤 raw drain을 시작하면 queue의 record를 한 번씩
-  받을 수 있고, poller wait 자체는 record를 소비하지 않는다.
-- 고수준 poller가 `PollCompletion`을 반환하면 native completion을 한 건 이상 완전 처리했으며,
-  그 event 뒤 raw receive 성공이나 public waiter의 새 상태 변화는 보장되지 않는다.
-- Public poller owner에서 다른 thread·goroutine이 `wait()`를 실행하면 blocking request와 Go
-  `Submit(context.Context)`가 진행하고, `wait()`가 없으면 binding이 queue를 임의로 가져오지 않는다.
+C의 raw completion 관측은
+[Core 검증 요구](../../../core/doc/spec/core/socket/README.ko.md#8-구현-및-contract-test-검증-요구)를 따른다.
+
+- 고수준 `PollCompletion`을 관측해도 public awaitable의 새 상태 변화가 필요하지 않으며,
+  함께 준비된 DATA는 뒤의 application receive에서 읽을 수 있다.
+- Public poller에 completion을 등록한 socket에서 다른 thread·goroutine이 `wait()`를
+  실행하면 blocking request와 Go `Submit(context.Context)`가 완료를 받을 수 있다.
 
 **Submit과 completion 경합**
 
-- Native submit 실패는 exact submit error로 한 번 끝나며 completion progress를 만들지 않는다.
-- Successful ID `0` send는 한 번 성공하고, nonzero completion이 submit 반환 전에 drain돼도
-  public terminal은 submit publish와 합류한 뒤 한 번만 끝난다.
-- Successful request는 nonzero completion과 합류하며 result conversion 또는 cleanup 뒤 registry
-  entry를 한 번 제거한다.
+- 대기 토큰 없이 실패하는 native 제출과 같은 입력을 고수준 terminal로 제출하면 해당
+  submit error를 한 번 받는다.
+- 즉시 admission된 send의 terminal은 한 번 성공하며 완료 record를 기다리느라 멈추지 않는다.
+- 응답자가 즉시 reply하는 여러 request를 제출하면 각 terminal은 해당 reply의 part 순서와
+  byte를 한 번만 반환한다.
 
 **Cancellation과 lifecycle**
 
-- 호출 전 cancellation은 native operation을 시작하지 않고 caller terminal만 취소한다.
-- Successful submit 뒤 wait cancellation이나 Future drop은 waiter를 한 번 끝내며 late completion은
-  waiter를 다시 끝내지 않고 payload를 정리한다.
-- Socket close와 context termination은 live waiter를 해당 lifecycle error로 끝내고 detached
-  state와 native payload를 남기지 않는다.
+- 호출 전에 취소한 send·request는 caller terminal에 취소를 반환하고 peer에 해당 message를 보내지 않는다.
+- Successful submit 뒤 caller wait 취소가 먼저 확정되면 뒤의 reply가 caller의 취소 결과를
+  성공 결과로 바꾸거나 terminal을 다시 완료하지 않는다.
+- Socket close와 context termination은 live waiter를 해당 lifecycle error로 끝낸다.
+- Non-OK request 결과는 typed request error로 관측하며 error reply의 payload를 성공값이나
+  error property로 받지 않는다. Go의 결과는 `(nil, error)`다.

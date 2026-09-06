@@ -410,8 +410,8 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
 - `Core/`: context, context 옵션, routing id, utility 리소스, 그리고 version 또는
   역할 헬퍼 같은 공개 free function.
 - `Messaging/`: message, received metadata, topic message, subscription event, stream
-  packet 값, 빌더 payload 헬퍼. codec helper는 C++ 바인딩 package에 포함하지
-  않고, framework 수준 직렬화는 framework codec extension에서 다룬다.
+  packet 값, 빌더 payload 헬퍼. Codec 배포 범위는
+  [공통 raw payload 정책](../README.ko.md#binding-raw-scope)을 따른다.
 - `Sockets/`: socket 동작, socket family, 타입 지정 옵션, request/reply, publish/subscribe
   표면.
 - `Eventing/`: monitor, monitor snapshot/event, poller, poll event, timer, 공개 poll
@@ -471,7 +471,7 @@ C++가 header-only를 벗어나면 바인딩은 컴파일된 산출물을 하나
   `ZLINK_PUB_OPT_NODROP`의 backpressure는 동기 submit에서만 표면화한다.
 - Raw ROUTER/`received_t` reply의 terminal은
   `reply_submit_operation_t::submit() -> void`인 동기 one-shot이다. Terminal reply와 error
-  reply를 native 호출 한 번으로 제출한다. DEALER peer에는 Application HWM·PAUSED와
+  reply를 native 호출 한 번으로 제출한다. DEALER peer에는 Application [HWM](../../../../core/doc/spec/core/glossary.ko.md#hwm)(queue의 byte 보관량을 제한하는 기준)·PAUSED와
   `SNDTIMEO`를 적용하여 `BACKPRESSURED`가 될 수 있고, ROUTER peer에는 HWM 없는 Completion
   connection을 사용한다. `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`와 그 밖의 submit
   실패는 즉시 `submit_error_t`로 전달한다.
@@ -519,9 +519,7 @@ owner-lifecycle 필드는 ABI 예약 필드이며 항상 `0`이다. Metrics rese
 current·pending·queue count를 유지하고 budgeted/completion peak를 각 current로
 재기준화하며 epoch counter를 0으로 만든 뒤 `measurement_epoch`을 증가시킨다.
 
-실제 send/receive admission은 C++ 바인딩이 판단하지 않는다. Core pipe가 보관한
-accounted byte가 적용된 HWM에 도달하면 Core가 backpressure를 반환한다. C++
-바인딩은 그 결과와 timeout을 기존 operation builder 계약에 따라 전달한다.
+계산·수동 override·admission은 [Core HWM 계약](../README.ko.md#hwm-계산과-admission)을 따른다.
 `0 bytes`는 무제한이며 message 한 건을 허용한다는 뜻이 아니다.
 
 `socket.monitor_open(events, monitor_hwm_bytes)`와
@@ -529,12 +527,9 @@ accounted byte가 적용된 HWM에 도달하면 Core가 backpressure를 반환�
 `0`은 Core monitor 기본값을 선택하고, 양수는 정확한 monitor queue byte HWM으로
 변환 없이 전달한다. Message-count overload나 alias는 없다.
 
-Core byte HWM은 Core queue가 실제로 보관하는 payload만 계산하며 receive dequeue에서
-charge가 끝난다. 일반 `recv(received_t&)`, `subscribe(topic_message_t&)`,
-`recv(message_t&)`, `subscribe_part(...)`는 part와 routing/topic/request metadata의
-정상 C++ ownership만 출력 객체로 옮긴다. 출력 객체의 복사, `close()`와 소멸은 payload
-수명을 관리하지만 Core HWM credit이나 application byte capacity를 관리하지 않는다.
-별도 retained receive나 lease handle은 public 또는 internal API에 두지 않는다.
+`recv(received_t&)`, `subscribe(topic_message_t&)`, `recv(message_t&)`, `subscribe_part(...)`의
+출력 객체는 C++ copy·`close()`·소멸자로 part와 routing/topic/request metadata의 수명을 관리한다.
+수신 회계와 결과 수명의 경계는 [공통 수신 ownership 계약](../README.ko.md#receive-ownership)을 따른다.
 
 Legacy `auto_hwm_msg_unit_bytes`, slot·size-cap·connection-bucket planner property는 alias 없이
 제거한다. Monitor snapshot은 Core monitoring ABI v4의 byte pending field를 투영하고,
@@ -543,24 +538,10 @@ context-wide budget·accounting·queue count는 `core_hwm_budget_snapshot_t`에�
 
 ## Receive flow state
 
-이 바인딩은 Core의 receive-flow 상태를 `zlink::receive_flow_state_t`로 노출한다.
-`int` 기반 `enum class`이며 `running = 0`, `paused = 1`이다. 설정 함수는
-`socket_t::set_receive_flow_state(receive_flow_state_t)`다. 반환형은 `void`이고 C++ 에러
-정책을 따른다. 실패한 `zlink_config_result_t`는 그 result 값을 담은 `config_error_t`로
-던지므로, receive-flow를 지원하지 않는 socket의 `ZLINK_CONFIG_NOT_SUPPORTED`는 not-supported
-result를 담은 `config_error_t`가 된다. 이미 유지하는 상태를 다시 설정하면 예외 없이
-정상 반환한다.
-
-관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
-`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
-`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
-`FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
-bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
-`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
-`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
-
-Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
-field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
+`zlink::receive_flow_state_t`는 `int` 기반 `enum class`이며 `running = 0`, `paused = 1`이다.
+Setter는 `void socket_t::set_receive_flow_state(receive_flow_state_t)`이며 실패한
+native result를 담은 `config_error_t`를 던진다.
+상태·결과·monitor 투영은 [공통 receive-flow 계약](../README.ko.md#receive-flow-projection)을 따른다.
 
 ## 기능 범위
 
@@ -592,8 +573,8 @@ C++ 호출자는 C 핸들 정리를 추론하지 않아도 된다.
 - mutable 핸들을 공유 소유하는 대신 move-only 리소스 클래스를 선호한다.
 - 메시지 값은 효율적인 move를 지원하고, 복사를 요청할 때 명시적 copy를 지원한다.
 - data-plane 수신과 subscribe 경로는 호출자가 제공하는 저장소를 쓴다.
-- `received_t`와 `topic_message_t`는 수신 part와 metadata의 C++ 수명만 소유한다.
-  Core HWM byte charge는 dequeue에서 끝나며 출력 객체의 copy/close/drop과 연결하지 않는다.
+- 수신 결과의 수명 API는 [64-bit byte HWM과 monitoring 계약](#64-bit-byte-hwm과-monitoring-계약)의
+  C++ 출력 객체 설명을 따른다.
 - Actor join 요청 수신처럼 service 제어/입장 수신 경로는 C++ 호출자에게 더 명확하면
   optional이나 타입 지정 결과 반환을 써도 된다. 다만 data 없음과 강한 수신 실패는 여전히
   구분해야 한다.
@@ -661,17 +642,14 @@ C++는 Actor와 Spot 라우트 조회 결과를 구체 계약 타입으로 노�
 
 ## Pull completion 공개 계약
 
-C++ package는 Core 0.16.0을 exact dependency로 사용한다.
+C++ package 정보는 [배포 metadata](../../../cpp/CMakeLists.txt)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-C++ runtime은 native completion ID, `user_context`와 raw drain을 숨기고 blocking 결과 또는
-`async_result_t`로 바꾼다. Blocking send/request는 Core `NONE`, `async()`는 Core `DONTWAIT`를
-사용한다. Completion-backed operation state는 native `FINAL` 전에 provisional registry에
-등록하고 submit publish와 completion capture가 합류한 뒤 정확히 한 번 끝낸다. `async_result_t`
-drop은 waiter를 detach할 뿐 Core operation을 취소하지 않는다.
+C++는 blocking `submit()`과 `async_result_t`를 반환하는 `async()`를 제공한다.
+완료 대기 객체의 수명 종료는 `async_result_t` drop으로 표현한다.
 
-`poll_event_flag_t::pollcompletion`은 public poller의 wait thread가 native queue를 비우고 live
-waiter 또는 detached state를 한 건 이상 완전 처리했다는 progress event다. Public poller가
-owner이면 다른 thread가 wait loop를 실행해야 blocking request가 진행한다.
+Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
+제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)을, 완료 합류·수명과
+`poll_event_flag_t::pollcompletion`의 진행 조건은 [비동기 실행 모델](../async-execution-model.ko.md)을 따른다.
 
 ROUTER REQUEST receive만 `reply_token_t`를 만든다. Token은 ROUTER wrapper가 만든 shared owner
 tag와 opaque value를 함께 보유한다. Equality·hash와 reply owner 검증은 두 값을 사용한다.
@@ -794,12 +772,9 @@ test 하나로 이어진다.
 
 - 모든 socket의 send factory가 `send_operation_t`를 반환하고 blocking `submit()`과
   `async()`가 각각 `NONE`과 `DONTWAIT` 완료 경계를 관찰한다.
-- Request는 timeout·blocking result·`async()`만 제공하고 non-OK completion은 typed error로
-  끝나며 error payload를 공개하지 않는다.
-- `async_result_t` drop 뒤 late completion은 waiter를 다시 끝내지 않고 native aggregate를
-  정리한다.
-- Public poller owner에서 wait loop가 있을 때 completion-backed terminal이 진행하고,
-  `pollcompletion`은 settle 또는 cleanup이 끝난 뒤에만 반환된다.
+- Request는 timeout·blocking result·`async()`만 제공한다.
+- 완료·cancellation·poller의 공통 관측은
+  [실행 모델 검증 요구](../async-execution-model.ko.md#7-구현-및-contract-test-검증-요구)를 따른다.
 - Raw reply를 DEALER peer로 제출해 HWM·PAUSED 대기가 만료하면 `submit_error_t`의
   `BACKPRESSURED`가 관찰되고, ROUTER peer로 제출하면 Completion connection의 HWM-free 결과가 유지된다.
 

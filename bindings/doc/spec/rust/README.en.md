@@ -70,7 +70,7 @@ Use these paths consistently when changing the Rust binding.
 - Runtime implementation: private modules under `bindings/rust/src/runtime/`.
 - crate-private concrete storage: `bindings/rust/src/internal.rs`.
 - Native bridge/artifacts: private modules under `bindings/rust/src/runtime/native/`, `bindings/rust/native/`, `bindings/rust/include/`.
-- Codec crate: none provided. The Rust binding keeps only the raw `Message` and byte-payload API.
+- Codec distribution scope: follow the [common raw payload policy](../README.en.md#binding-raw-scope).
 - Tests: `bindings/rust/tests/`.
 - Samples: `bindings/rust/samples/`.
 - Perf: `bindings/rust/perf/`.
@@ -350,7 +350,7 @@ public crate items and re-exports.
 - PUB/XPUB `publish` and ROUTER reply retain separate synchronous operation contracts. The raw
   ROUTER/`Received` reply terminal is the one-shot
   `ReplyOp<Ready>::submit() -> Result<(), SubmitError>`. It submits a terminal reply or error reply
-  with one native call. A DEALER peer is subject to Application HWM, `PAUSED`, and `SNDTIMEO`, so the
+  with one native call. A DEALER peer is subject to Application [HWM](../../../../core/doc/spec/core/glossary.en.md#hwm) (the queue byte threshold), `PAUSED`, and `SNDTIMEO`, so the
   result can be `BACKPRESSURED`; a ROUTER peer uses the HWM-free Completion connection.
   `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other submit failures return immediately as
   `Err(SubmitError)`.
@@ -377,11 +377,8 @@ Core owns HWM calculation and queue admission.
 8-byte options. Their getters return Core's full `uint64_t` range as `u64`.
 `0` means unlimited.
 
-Context options pass the byte-valued Core memory limit and budget, plus the
-profile, unchanged to Core. Core applies the profile ratio and distributes the
-result across physical directional queues exactly once. Setting a directional
-HWM makes that direction a manual override and excludes it from automatic HWM
-recalculation.
+Context options pass the byte-valued Core memory limit and budget, and the profile, unchanged to Core.
+Planning, manual overrides, and admission follow [Core HWM calculation and admission](../README.en.md#hwm-calculation-and-admission).
 Context provides `core_hwm_budget_snapshot()` and
 `reset_core_hwm_budget_metrics()`. The Rust binding supplies no runtime memory
 hint. Input precedence is manual Core budget, explicit memory limit, then Core
@@ -389,9 +386,8 @@ fallback. If an explicit input exceeds a finite hard limit Core detected, the
 binding preserves the existing configuration error corresponding to `EINVAL`
 and does not clamp the value.
 
-Core decides backpressure when the accounted bytes retained by a pipe reach
-the applied HWM. The Rust binding does not recount messages and maps Core's
-result through its `Result`-based operation contract.
+Core submission results map to Rust `Result` through the
+[common result projection](../README.en.md#submit-result-projection).
 `SocketMonitorOpenOptions::monitor_hwm_bytes`, passed through
 `SocketMonitor::open_with_options`, is an exact `u64` byte value. Zero selects
 the Core monitor default; a positive value is forwarded unchanged, with no
@@ -417,30 +413,12 @@ error.
 
 ## Receive flow state
 
-The binding exposes the Core receive-flow state as the `ReceiveFlowState`
-enum with `Running = 0` and `Paused = 1`. The setter is
-`CommonSocketOptions::set_receive_flow_state(&self, value: ReceiveFlowState)
--> Result<(), ConfigError>`, reached through the socket's common-options
-facade. It follows the Rust error policy: success is `Ok(())`, and a failure is
-`Err(ConfigError)` whose `ConfigResult` this binding derives from the native
-errno rather than from the returned result code. `ENOTSUP` therefore becomes
-`ConfigResult::NotSupported` for a socket that doesn't support receive flow, and
-`EINVAL` becomes `ConfigResult::InvalidArgument`. Setting the state the socket
-already holds returns `Ok(())`.
-
-The observation surface follows the C contract, so the constant and metric
-names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
-`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
-with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
-and `FLOW_STATE_STALE_EPOCH` (`1 << 3`), the status detail bit `FLOW_STATE`
-(`1 << 5`), and the five status
-fields `flow_paused_connections`, `flow_pause_applied_total`,
-`flow_resume_applied_total`, `flow_state_stale_total`, and
-`flow_pause_duration_ms`, projected with this language's naming convention.
-
-Flow-state frames stay inside Core. The binding calls the setter, reads the
-monitor events and the snapshot fields, and never encodes, decodes, sends, or
-receives a flow-state frame itself.
+The `ReceiveFlowState` enum provides `Running = 0` and `Paused = 1`.
+On the socket's common-option facade,
+`CommonSocketOptions::set_receive_flow_state(&self, value: ReceiveFlowState) -> Result<(), ConfigError>`
+returns `Ok(())` on success or `Err(ConfigError)` on failure. `ConfigResult` is converted from
+native errno: `ENOTSUP` becomes `NotSupported`, and `EINVAL` becomes `InvalidArgument`.
+State, result, and monitor projection follow the [common receive-flow contract](../README.en.md#receive-flow-projection).
 
 ## Required capability coverage
 
@@ -470,12 +448,10 @@ logical spot.
 ## Receive and Subscribe shape
 
 - Data-plane receive and subscribe APIs use a reusable, caller-owned result storage.
-- Core byte-HWM charge ends when ordinary `recv` or `subscribe` dequeues the
-  payload. `Received` and `TopicMessage` own only the Rust lifetime of parts
-  and metadata; reuse, consuming accessors, and `Drop` do not participate in
-  Core HWM accounting. No separate retained receive, raw lease handle, or
-  application byte capacity exists in a public or internal API. Ordinary typed receive preserves
-  ROUTER routing ID and `ReplyToken`, and SUB topic/routing ID metadata.
+- `Received` and `TopicMessage` own parts and metadata, with lifetime managed through reuse,
+  consuming accessors, or `Drop`. Ordinary typed receive preserves ROUTER routing ID and
+  `ReplyToken`, and SUB topic/routing ID metadata.
+  The [common receive ownership contract](../README.en.md#receive-ownership) defines the boundary with receive accounting.
 - Non-blocking no-data is distinguished from a hard receive failure.
 - A SPOT readable dispatch event is a readiness notification. The caller drains the matching receive API until it returns no-data.
 - Returned message data has clear ownership and lifetime. Borrowed data never outlives its native owner.
@@ -539,18 +515,15 @@ Rust exposes Actor and Spot route lookup results as public value types.
 
 ## Pull completion public contract
 
-The Rust crate uses Core 0.16.0 as an exact dependency.
+Rust package information follows its [distribution metadata](../../../rust/Cargo.toml); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-The Rust runtime drains native completions and converts them into blocking `Result` values or
-runtime-independent Futures. `submit_sync()` uses Core `NONE`; `submit()` uses Core `DONTWAIT`.
-Completion-backed state is registered in a provisional registry before native `FINAL` and completes
-exactly once after submit publication and completion capture join. Future drop or executor task abort
-ends only the waiter and does not cancel the Core operation; a late completion releases the payload and
-state.
+Rust provides `submit_sync()` returning a blocking `Result` and `submit()` returning a runtime-independent `Future`.
+Completion-wait lifetime ends through Future drop or executor task abort.
 
-`POLLCOMPLETION` is a progress event indicating that the public poller's wait thread drained the native
-queue and fully processed at least one live Future or detached state. Under public poller ownership,
-using a blocking request requires another thread to continue executing the wait loop.
+Native completion IDs, `user_context`, and raw drain are not public APIs.
+Submission results follow the [common result projection](../README.en.md#submit-result-projection);
+completion joins, lifetime, and progress conditions for `POLLCOMPLETION` follow the
+[async execution model](../async-execution-model.en.md).
 
 A `ReplyToken` carries both an `Arc<RouterOwnerTag>` created by the ROUTER wrapper and an opaque value.
 Only `pub(crate) fn from_native(owner, value)` creates a token; equality, hashing, and reply-owner
@@ -672,12 +645,8 @@ item maps to one contract test.
 
 - Every socket's send factory returns `SendOp<Empty>`, and send/request expose only the flag-free Future
   and synchronous terminals in the Public interface section.
-- Even when completion drains before submit returns, the Future completes exactly once after joining
-  submit publication.
-- After Future drop or task abort, a late completion does not complete the Future again and releases the
-  native aggregate.
-- A non-OK request completion exposes only typed `ZlinkError` and does not expose the error payload.
-- `POLLCOMPLETION` returns only after Future settlement or detached cleanup finishes.
+- Common completion, cancellation, and poller observations follow the
+  [execution-model verification requirements](../async-execution-model.en.md#7-implementation-and-contract-test-verification-requirements).
 - When HWM/`PAUSED` waiting expires for a raw reply submitted to a DEALER peer,
   `Err(SubmitError)` carries the `BACKPRESSURED` code; a reply submitted to a
   ROUTER peer retains the HWM-free result of the Completion connection.

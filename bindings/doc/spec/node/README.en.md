@@ -96,8 +96,7 @@ Use these paths consistently when changing the Node/TypeScript binding.
   `bindings/node/native/`, `bindings/node/prebuilds/`, and generated runtime
   loading code.
 - Generated output: `bindings/node/dist/`. Not contract source.
-- Codec package: not provided. The Node binding keeps only the raw `Message`
-  and byte payload APIs.
+- Codec distribution scope: follow the [common raw payload policy](../README.en.md#binding-raw-scope).
 - Tests: `bindings/node/tests/`.
 - Samples: `bindings/node/samples/`.
 - Perf: `bindings/node/perf/`.
@@ -578,7 +577,7 @@ using TypeScript spelling.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
   `ReplySubmitOperation.submit(): void`. It returns no Promise and submits a
   terminal reply or error reply with one native call. A DEALER peer is subject
-  to Application HWM, `PAUSED`, and `SNDTIMEO`, so the result can be
+  to Application [HWM](../../../../core/doc/spec/core/glossary.en.md#hwm) (the queue byte threshold), `PAUSED`, and `SNDTIMEO`, so the result can be
   `BACKPRESSURED`; a ROUTER peer uses the HWM-free Completion connection.
   `NOT_CONNECTED`, `TERMINATED`, `INVALID_ARGUMENT`, and other submit failures
   are thrown immediately as `SubmitError`.
@@ -640,15 +639,8 @@ hard limit. If an explicit input exceeds a finite hard limit Core detected, the
 binding preserves the existing configuration error corresponding to `EINVAL`
 and does not clamp the value.
 
-Core applies the profile ratio to the memory limit exactly once, or uses an
-explicit Core budget unchanged, then calculates planned byte HWM per physical directional queue. A
-direction on which the caller sets `sendHwm` or `recvHwm` becomes a manual
-override and is not changed by later automatic HWM recalculation.
-
-The Node.js binding does not recount queued messages or payloads. When the
-actual accounted bytes in a Core pipe reach the applied HWM, the native submit
-result reports backpressure and the Node.js operation preserves it through the
-existing result and timeout contract. `0n` means unlimited.
+HWM planning, manual overrides, admission, and value projection follow [Core HWM calculation and admission](../README.en.md#hwm-calculation-and-admission).
+`0n` means unlimited.
 
 `monitorOpen(events?, monitorHwmBytes?)` accepts only a `bigint` byte value for
 the monitor queue. `0n` selects the Core monitor default; a positive value is
@@ -678,27 +670,10 @@ error, not `TypeError`.
 
 ## Receive flow state
 
-The binding exposes the Core receive-flow state as the frozen `ReceiveFlowState`
-constant object with `RUNNING: 0` and `PAUSED: 1`, and the matching value type.
-`Socket.setReceiveFlowState(state)` sets it. It returns `void` and follows the
-Node error policy: a non-zero native config result is raised as a `ZlinkError`
-of the config category carrying the native errno, so a socket that doesn't
-support receive flow raises the config-category error for not-supported.
-Setting the state the socket already holds returns normally.
-
-The observation surface follows the C contract, so the constant and metric
-names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
-`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
-with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
-and `FLOW_STATE_STALE_EPOCH` (`1 << 3`), the status detail bit `FLOW_STATE`
-(`1 << 5`), and the five status
-fields `flow_paused_connections`, `flow_pause_applied_total`,
-`flow_resume_applied_total`, `flow_state_stale_total`, and
-`flow_pause_duration_ms`, projected with this language's naming convention.
-
-Flow-state frames stay inside Core. The binding calls the setter, reads the
-monitor events and the snapshot fields, and never encodes, decodes, sends, or
-receives a flow-state frame itself.
+`ReceiveFlowState` is a frozen constant object containing `RUNNING: 0` and `PAUSED: 1`,
+with a value type of the same name. `Socket.setReceiveFlowState(state)` returns `void`
+and reports native config failure as a config-category `ZlinkError` carrying the native errno.
+State, result, and monitor projection follow the [common receive-flow contract](../README.en.md#receive-flow-projection).
 
 ## Required Capability Coverage
 
@@ -739,15 +714,11 @@ created the logical spot.
   `Buffer` created by the addon. Reading the payload does not require another
   native call, and Node manages the `Buffer` lifetime after the `Message` is
   closed.
-- Core byte-HWM charge ends when ordinary `recv` or `subscribe` dequeues the
-  message. The result object owns only the JavaScript lifetime of its `Message`
-  values, buffers, and metadata. Reusing or closing it does not participate in
-  Core HWM accounting.
-- Ordinary receive preserves multipart framing and metadata: source `RoutingId` plus nullable
-  `ReplyToken` for Router, and
-  topic plus any Core-provided source `RoutingId` for Sub and XSub. No separate
-  retained receive, raw lease handle, application byte capacity, accounting
-  setter, or per-part release exists in a public or internal API.
+- Result objects manage the JavaScript lifetime of `Message`, `Buffer`, and metadata through
+  reuse or `close()`. Ordinary receive preserves multipart framing, the Router source
+  `RoutingId` and nullable `ReplyToken`, and the Sub/XSub topic and Core-provided source `RoutingId`.
+  The [common receive ownership contract](../README.en.md#receive-ownership) defines the boundary with receive accounting.
+  Node's public and internal receive APIs have no per-part release.
 - A service control/admission receive path such as Actor join request
   receive can use a nullable, `undefined`, or tagged result-return shape
   when that is clearer than reusable data-plane storage. It still
@@ -776,8 +747,8 @@ error.
 - A hot path does not use reflection-style property walking, dynamic
   dispatch by string lookup, avoidable allocation, avoidable `Buffer`
   copies, hidden sleeps, busy waits, broad locks, or worker-thread joins.
-- Request progress is shared per native handle while a request is
-  outstanding.
+- Send/request result delivery follows the [common completion owner](../async-execution-model.en.md#4-pollers-and-completion-drain);
+  input retention for resubmission follows the [common result projection](../README.en.md#submit-result-projection).
 - Poll result materialization uses a fixed mapping table, not per-event
   reflective enum scanning.
 - Perf, samples, and tests import only the public package entrypoint.
@@ -851,17 +822,15 @@ objects with matching TypeScript declarations.
 
 ## Pull completion public contract
 
-The Node package uses Core 0.16.0 as an exact dependency.
+Node package information follows its [distribution metadata](../../../node/package.json); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-The Node runtime drains native completions and converts them into blocking results or `Promise`.
-`submit_sync()` uses Core `NONE`; `submit()` uses Core `DONTWAIT`. Completion-backed state is registered
-in a provisional registry before native `FINAL` and completes exactly once after submit publication and
-completion capture join. No longer waiting for a Promise does not cancel the native operation; a late
-completion releases the payload and state.
+Node provides blocking `submit_sync()` and `submit()` returning `Promise`.
+No longer waiting for a Promise follows the common completion-lifetime contract below.
 
-`PollEventFlag.PollCompletion` is a progress event indicating that the public poller's wait thread
-drained the native queue and fully processed at least one live Promise or detached state. Under public
-poller ownership, using a blocking request requires another thread to continue executing the wait loop.
+Native completion IDs, `user_context`, and raw drain are not public APIs.
+Submission results follow the [common result projection](../README.en.md#submit-result-projection);
+completion joins, lifetime, and progress conditions for `PollEventFlag.PollCompletion` follow the
+[async execution model](../async-execution-model.en.md).
 
 Only module-private `makeReplyToken(owner, value)`, installed by a class static block, creates a
 `ReplyToken`; the constructor sentinel is not exported. Equality and hashing use both owner identity and
@@ -957,12 +926,8 @@ poller events. Each item maps to one contract test.
 - PAIR, DEALER, ROUTER, and STREAM send factories return one `SendOperation` family.
 - Send/request expose only the flag-free Promise and synchronous terminals in the Public interface
   section and retain request timeout.
-- Even when completion drains before submit returns, the Promise settles exactly once after joining
-  submit publication.
-- A late completion for state whose Promise is no longer awaited does not deliver another public result
-  and releases the native aggregate.
-- A non-OK request completion exposes only a typed error and does not expose the error payload.
-- `PollCompletion` returns only after Promise settlement or detached cleanup finishes.
+- Common completion, cancellation, and poller observations follow the
+  [execution-model verification requirements](../async-execution-model.en.md#7-implementation-and-contract-test-verification-requirements).
 - When HWM/`PAUSED` waiting expires for a raw reply submitted to a DEALER peer,
   `SubmitError` reports `BACKPRESSURED`; a reply submitted to a ROUTER peer
   retains the HWM-free result of the Completion connection.

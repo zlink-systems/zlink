@@ -6,10 +6,10 @@ title: "Go Bindings Public Contract"
 [Spec index](../README.en.md) | [Previous: Python](../python/README.en.md) | [Next: Rust](../rust/README.en.md)
 <!-- bindings-nav:end -->
 
-# Go binding Core 0.16.0 public contract
+# Go binding Core public contract
 
 > **What this chapter defines** — the public type, ownership, and error
-> contract the Go binding provides on top of the Core 0.16.0 raw C API.
+> contract the Go binding provides on top of the Core raw C API.
 
 This document defines the Go binding's public contract. Features that exist only in other languages
 are not part of this contract. Confirm the exact Go
@@ -18,7 +18,7 @@ matching projection at the module root.
 
 | Section | Covers |
 |---|---|
-| [Module and public package](#module-and-public-package) | Import path, the internal boundary, the Core 0.16.0 raw scope |
+| [Module and public package](#module-and-public-package) | Import path, the internal boundary, the Core raw scope |
 | [Public contract categories](#public-contract-categories) | A table of public concepts by category |
 | [Context and resource lifetime](#context-and-resource-lifetime) | Ownership/release rules for Context/socket/monitor/poller/timer |
 | [Byte HWM and Auto-HWM](#byte-hwm-and-auto-hwm) | Mapping between Go `uint64` and Core `uint64_t` byte HWM |
@@ -42,7 +42,7 @@ buffer marshalling are implementation
 details of `internal/native`. These types and this package are not part of
 the consumer contract.
 
-- The package contract projects the Core 0.16.0 raw C API.
+- The package contract projects the Core raw C API.
 - It includes Context, Message, raw sockets, monitor, poller, timer, and utility, but not Spot, Actor, MeshNode, or service operations.
 - The Go module has no per-message codec registration API either.
 - The default path for messages and byte payloads uses the typed API the binding provides.
@@ -90,17 +90,14 @@ the monitor through the same slot and source kind as a socket.
 
 ## Byte HWM and Auto-HWM
 
-Core owns HWM calculation and queue admission. The Go binding validates the
+Core owns [HWM](../../../../core/doc/spec/core/glossary.en.md#hwm) (the queue byte threshold) calculation and queue admission. The Go binding validates the
 `uint64` passed to `SetSendHighWaterMark(uint64)` and
 `SetReceiveHighWaterMark(uint64)`, then preserves it in Core's 8-byte
 `uint64_t` option. Getters return Core's full range as `uint64`. `0` means
 unlimited.
 
-The context passes the byte-valued memory limit and Core budget, plus the
-canonical profile option, to Core. Core applies the profile ratio exactly once
-and calculates planned byte HWM per physical directional queue. Setting a directional
-HWM makes that direction a manual override and excludes it from automatic HWM
-recalculation.
+Pass the byte-valued context memory limit and Core budget, and the profile option, to Core.
+Planning, manual overrides, and admission follow [Core HWM calculation and admission](../README.en.md#hwm-calculation-and-admission).
 
 Input precedence is manual Core budget, explicit memory limit, a finite memory-
 limit hint configured in the Go runtime, then Core fallback. Setting either of
@@ -109,12 +106,9 @@ does not combine the hint with Core's hard limit. If an explicit input exceeds
 a finite hard limit Core detected, the binding preserves the existing
 configuration error corresponding to `EINVAL` and does not clamp the value.
 
-Core decides backpressure when the accounted bytes retained by a pipe reach
-the applied HWM. The Go binding does not recount messages and passes Core's
-result through the existing operation and error contract. Planned, applied,
-and deferred HWM and in-flight usage in `MonitorStatus` are `uint64` bytes.
-Pending-message counts remain display diagnostics; no slot, message-unit,
-size-cap, or connection-bucket property is exposed.
+Planned, applied, and deferred HWM and in-flight usage in `MonitorStatus` are `uint64` bytes.
+Pending-message counts remain separate diagnostics; no slot, message-unit, size-cap, or
+connection-bucket property is exposed.
 
 ## Message and ownership
 
@@ -136,9 +130,7 @@ explicitly closed after use. When a `Recv` family
 method takes caller-provided output, it clears that output object's
 existing parts before filling in the new native parts and metadata.
 
-Core byte-HWM charge ends when ordinary `Recv` or `Subscribe` dequeues a part.
-The lifetime of an application receive result therefore does not remain in HWM
-accounting.
+The [common receive ownership contract](../README.en.md#receive-ownership) defines the boundary with receive accounting.
 
 ## Socket operation
 
@@ -187,15 +179,11 @@ A caller-provided receive method returns `(bool, error)`. If `bool` is
 error is nil. If `bool` is `true`, the output has been filled with one or
 more results. A real failure is `*RecvError`.
 
-Core byte-HWM charge ends when `Recv` or `Subscribe` dequeues the payload.
-`Received` and `TopicMessage` own only the Go lifetime of parts, routing ID,
-`ReplyToken`, topic, and multipart framing. `Close` and storage reuse clean
-up that payload and metadata but do not participate in Core HWM accounting. No
-separate retained receive, native lease handle, application byte capacity, or
-duplicate accounting state exists in a public or internal API.
+`Received` and `TopicMessage` preserve parts, routing ID, `ReplyToken`, topic, and multipart
+framing. Go result-cleanup APIs follow [Message and ownership](#message-and-ownership).
 
 A socket monitor is opened with a typed event mask and provides
-`MonitorEvent` and `MonitorStatus`. Each Core 0.16.0 monitor event mask and
+`MonitorEvent` and `MonitorStatus`. Each Core monitor event mask and
 delivered event value is provided as its matching typed constant.
 `MonitorEventMask` is used to open a monitor, and `MonitorEventType` is
 used to check a received `MonitorEvent.Event`.
@@ -223,29 +211,11 @@ timer return events and fire counts.
 
 ## Receive flow state
 
-The binding exposes the Core receive-flow state as the `ReceiveFlowState`
-type with `ReceiveFlowRunning` and `ReceiveFlowPaused`.
-`SetReceiveFlowState(ReceiveFlowState) error` sets it. It follows the Go error
-contract: success is a `nil` error, and a failure is a `*ConfigError` whose
-`Result` is the native `zlink_config_result_t` and whose errno is the native
-errno, so a socket without a completion lane returns a `*ConfigError` with
-`ConfigNotSupported`. A nil or closed handle returns `ConfigInvalidHandle`
-without calling into Core. Setting the state the socket already holds returns
-`nil`.
-
-The observation surface follows the C contract, so the constant and metric
-names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
-`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
-with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
-and `FLOW_STATE_STALE_EPOCH` (`1 << 3`), the status detail bit `FLOW_STATE`
-(`1 << 5`), and the five status
-fields `flow_paused_connections`, `flow_pause_applied_total`,
-`flow_resume_applied_total`, `flow_state_stale_total`, and
-`flow_pause_duration_ms`, projected with this language's naming convention.
-
-Flow-state frames stay inside Core. The binding calls the setter, reads the
-monitor events and the snapshot fields, and never encodes, decodes, sends, or
-receives a flow-state frame itself.
+The `ReceiveFlowState` type provides `ReceiveFlowRunning` and `ReceiveFlowPaused`.
+`SetReceiveFlowState(ReceiveFlowState) error` returns `nil` on success or a `*ConfigError`
+carrying the native result and errno on failure. A nil or closed handle is rejected with
+`ConfigInvalidHandle` before the native call.
+State, result, and monitor projection follow the [common receive-flow contract](../README.en.md#receive-flow-projection).
 
 ## Error contract
 
@@ -279,12 +249,13 @@ SHA-256, cgo raw symbols, and local native helpers in a machine-readable
 form. `zlink/service/` and earlier service symbols are not in the
 allowlist.
 
-The module package uses the following file proxy layout.
+The module package uses the following file proxy layout. `<version>` is the release version
+in [Core release metadata](../../../../VERSION).
 
 ```text
-zlink.systems/zlink/@v/v0.16.0.info
-zlink.systems/zlink/@v/v0.16.0.mod
-zlink.systems/zlink/@v/v0.16.0.zip
+zlink.systems/zlink/@v/v<version>.info
+zlink.systems/zlink/@v/v<version>.mod
+zlink.systems/zlink/@v/v<version>.zip
 ```
 
 The supported platform runtimes are included under the module's
@@ -305,16 +276,15 @@ and `bindings/go/samples/run_samples.sh`.
 
 ## Pull completion public contract
 
-The Go module uses Core 0.16.0 as an exact dependency.
+Go package information follows its [distribution metadata](../../../go/go.mod); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-Go uses one `Submit(context.Context)` terminal. The runtime submits with Core `DONTWAIT` and waits the
-goroutine until the socket-local owner drains the completion. A `Context` ends only the caller wait; it
-does not cancel the native operation. If request cancellation is decided first, submit returns
-`(nil, ctx.Err())`, and a late completion releases its payload.
+Go provides one `Submit(context.Context)` terminal that waits for completion on the calling goroutine.
+The caller wait cancellation input is `context.Context`, and a canceled request returns `(nil, ctx.Err())`.
 
-`PollCompletion` is a progress event indicating that the public poller's wait goroutine drained the
-native queue and fully processed at least one live waiter or detached state. Under public poller
-ownership, another goroutine must continue executing the wait loop while `Submit(ctx)` is in use.
+Native completion IDs, `user_context`, and raw drain are not public APIs.
+Submission results follow the [common result projection](../README.en.md#submit-result-projection);
+completion joins, lifetime, and progress conditions for `PollCompletion` follow the
+[async execution model](../async-execution-model.en.md).
 
 A ROUTER REQUEST receive creates a `ReplyToken` as a struct literal inside the package. Its zero value is
 invalid, and equality compares both the owner pointer and opaque value. The zero value of `StreamPacket`
@@ -436,11 +406,8 @@ maps to one contract test.
   `([]*Message, nil)`, and a non-OK completion returns `(nil, typed request error)`.
 - Send flags not shared by Go and Python appear only on `PublishSubmitOp`, and publish submit retains its
   `(bool, error)` result.
-- Even when completion drains before submit returns, the result is returned exactly once after joining
-  submit publication.
-- If Context cancellation is decided first, submit returns `(nil, ctx.Err())`; a late completion does
-  not deliver the result again.
-- Under public poller ownership, `Submit(ctx)` progresses when another goroutine executes `wait()`.
+- Common completion, cancellation, and poller observations follow the
+  [execution-model verification requirements](../async-execution-model.en.md#7-implementation-and-contract-test-verification-requirements).
 
 **ReplyToken and STREAM**
 

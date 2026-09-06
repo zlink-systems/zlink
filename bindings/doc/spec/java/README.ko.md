@@ -561,7 +561,7 @@ Runtime이 소유하는 것:
 - native downcall;
 - native struct mirror;
 - 메시지 marshalling;
-- socket-local provisional completion registry와 drain owner;
+- socket-local completion operation state와 drain owner;
 - receive cursor;
 - part-loop sequencing;
 - native error mapping;
@@ -638,17 +638,15 @@ lossy publish는 subscriber queue가 가득 차도 해당 subscriber 복사본�
 Raw ROUTER/`Received` reply의 terminal은
 `ReplySubmitOperation.submit() -> void`인 동기 one-shot이다. `CompletionStage`를
 반환하지 않고 terminal reply 또는 error reply를 native 호출 한 번으로 제출한다. DEALER peer에는
-Application HWM·PAUSED와 `SNDTIMEO`를 적용하여 `BACKPRESSURED`가 될 수 있고, ROUTER peer에는
+Application [HWM](../../../../core/doc/spec/core/glossary.ko.md#hwm)(queue의 byte 보관량을 제한하는 기준)·PAUSED와 `SNDTIMEO`를 적용하여 `BACKPRESSURED`가 될 수 있고, ROUTER peer에는
 HWM 없는 Completion connection을 사용한다. `NOT_CONNECTED`, `TERMINATED`,
 `INVALID_ARGUMENT`와 그 밖의 submit 실패는 즉시
 `ZlinkSubmitException`으로 전달한다.
 
 ### Completion pull
 
-Completion-backed state는 native `FINAL` 전에 provisional registry에 등록한다. Native submit
-outcome publish와 completion capture가 합류한 뒤 stage 또는 blocking request를 정확히 한 번
-끝낸다. Stage cancellation은 waiter만 끝내며 late completion은 socket-local drain owner가
-payload와 state를 정리한다.
+Stage·blocking 결과와 완료 수명 API는 [Pull completion 공개 계약](#pull-completion-공개-계약)을 따른다.
+Submit과 completion의 합류는 [공통 실행 모델](../async-execution-model.ko.md#5-submit-결과와-completion의-합류)이 소유한다.
 
 `sendNoWait`, `sendWithFlags`, `requestAsync`, `publishWithFlags`,
 `send(message)` shortcut 같은 별도의 operation-start 계열을 추가하지 않는다.
@@ -700,12 +698,9 @@ boolean ok = router.recv(received, RecvFlags.DONT_WAIT);
 호출자가 제공하는 no-wait receive에서 no-data는 정상적인 `false` 결과다. 하드
 수신 실패는 문서화된 exception 타입을 던진다.
 
-Core byte HWM charge는 일반 `recv(...)`와 `subscribe(...)`가 payload를 dequeue할
-때 끝난다. `Received`와 `TopicMessage`는 part, Routing ID, `ReplyToken`,
-topic과 multipart framing의 Java 수명만 소유한다. `close()`와 다음 수신 저장소
-재사용은 payload와 metadata를 정리하지만 Core HWM accounting에는 관여하지 않는다.
-별도 retained receive, raw lease handle, application byte capacity 또는 중복
-accounting 상태는 public이나 internal API에 두지 않는다.
+`Received`와 `TopicMessage`는 part, Routing ID, `ReplyToken`, topic과 multipart framing을
+보존하며 `close()`와 다음 수신 저장소 재사용으로 payload와 metadata를 정리한다.
+수신 회계와 결과 수명의 경계는 [공통 수신 ownership 계약](../README.ko.md#receive-ownership)을 따른다.
 
 SPOT readable dispatch 이벤트는 readiness 알림이다. 호출자는 대응하는 receive
 API를 no-data가 될 때까지 drain한다.
@@ -779,15 +774,8 @@ public class CommonSocketOptions {
 hard limit을 직접 결합하지 않는다. 명시 입력이 Core가 감지한 finite hard limit보다 크면
 `EINVAL`에 대응하는 기존 config exception을 그대로 전달하고 clamp하지 않는다.
 
-Core는 memory limit에 profile 비율을 정확히 한 번 적용하거나 명시 Core budget을 그대로
-사용해 physical directional queue별 planned byte HWM을 계산한다. Caller가 `sendHwm(...)`이나
-`recvHwm(...)`을 설정한 방향은 수동 override가 되며 이후 Auto-HWM 재계산이
-그 값을 변경하지 않는다.
-
-Java 바인딩은 queue의 message나 payload를 다시 세지 않는다. Core pipe의 실제
-accounted byte가 applied HWM에 도달하면 native submit 결과가 backpressure를
-나타내고, Java operation은 기존 result·timeout 계약에 따라 이를 전달한다.
-`long` 값 `0`은 무제한이다. 음수 값은 HWM 입력으로 허용하지 않는다.
+HWM 계산·수동 override·admission과 값 투영은 [Core HWM 계산·admission](../README.ko.md#hwm-계산과-admission)을 따른다.
+`long` 값 `0`은 무제한이며 음수 HWM 입력은 거부한다.
 
 `monitorOpen(monitorHwmBytes, events...)`는 monitor queue의 음수가 아닌 `long` byte
 값을 받는다. `0`은 Core monitor 기본값을 선택하고, 양수는 변환 없이 전달한다.
@@ -799,7 +787,8 @@ Java와 Kotlin 모두 message-count overload나 alias를 노출하지 않는다.
 - Deferred 값은 대응하는 `autoHwmDeferredSendHwmValid()` 또는 `autoHwmDeferredRecvHwmValid()`가 `true`일 때만 유효하다.
 - Pending message 값은 count 진단값으로 남고 byte field와 이름을 공유하지 않는다.
 - Pending byte는 `sndPendingBytes()`와 `rcvPendingBytes()`로 별도 노출한다.
-- `abiVersion()`이 `3`이 아니거나 `structSize()`가 binding layout과 다르면 `UnsupportedOperationException`을 발생시킨다. 이전 monitoring layout은 받지 않는다.
+- `abiVersion()`·`structSize()`가 [현재 Core monitor layout](../../../../core/doc/spec/core/06-monitoring.ko.md#61-abi-version과-layout)과
+  맞지 않으면 `UnsupportedOperationException`을 발생시킨다.
 
 `CoreHwmBudgetSnapshot`은 ABI version/size, configured/runtime/resolved memory limit,
 configured/effective budget, planned/applied/manual-reserved HWM, Core queue/application/current/
@@ -818,24 +807,11 @@ Java와 Kotlin은 같은 Java method를 호출한다. 별도 Kotlin adapter나 �
 
 ## Receive flow state
 
-이 바인딩은 Core의 receive-flow 상태를 `ReceiveFlowState` enum으로 노출한다.
-`RUNNING(0)`, `PAUSED(1)`이며 공개 setter는 공통 socket option facade의
-`receiveFlowState(ReceiveFlowState)`다. 반환형은 `void`이고 Java 에러 정책을 따른다. 0이
-아닌 native 결과는 해당 `ConfigResult`를 담은 `ZlinkConfigException`으로 던지므로,
-receive-flow를 지원하지 않는 socket은 not-supported result를 담은 `ZlinkConfigException`을
-발생시킨다. 인자가 null이면 native 호출 전에 `NullPointerException`이 발생한다. 이미
-유지하는 상태를 다시 설정하면 정상 반환한다.
-
-관측 표면은 C 계약을 따르며 상수와 metric 이름은 C 계층이 확정한다. Monitor event
-`SEND_FLOW_PAUSED`, `SEND_FLOW_RESUMED`, `FLOW_STATE_STALE`(`1 << 16`, `1 << 17`,
-`1 << 18`, 전체 mask `0x7FFFF`), event flag `SEND_FLOW_WRITABLE`(`1 << 1`),
-`FLOW_STATE_STALE_EPOCH`(`1 << 3`), status detail
-bit `FLOW_STATE`(`1 << 5`), status field 5개 `flow_paused_connections`,
-`flow_pause_applied_total`, `flow_resume_applied_total`, `flow_state_stale_total`,
-`flow_pause_duration_ms`를 이 언어의 이름 규칙으로 투영한다.
-
-Flow-state frame은 Core 안에 머문다. 바인딩은 setter를 호출하고 monitor event와 snapshot
-field를 읽을 뿐, flow-state frame을 직접 encode, decode, 송신 또는 수신하지 않는다.
+`ReceiveFlowState` enum은 `RUNNING(0)`, `PAUSED(1)`을 제공한다. 공통 socket option
+facade의 `receiveFlowState(ReceiveFlowState)`는 `void`를 반환하며 실패한 native
+`ConfigResult`를 담은 `ZlinkConfigException`을 던진다. Null 인자는 native 호출 전에
+`NullPointerException`으로 거부한다.
+상태·결과·monitor 투영은 [공통 receive-flow 계약](../README.ko.md#receive-flow-projection)을 따른다.
 
 ## Error And Result Policy
 
@@ -987,20 +963,15 @@ interface나 operation contract가 native bridge 세부에 의존하는 결과�
 
 ## Pull completion 공개 계약
 
-Java package는 Core 0.16.0을 exact dependency로 사용한다.
+Java package 정보는 [배포 metadata](../../../java/build.gradle)를, Core ABI 버전은 [Core release metadata](../../../../VERSION)를 따른다.
 
-Java runtime은 native completion을 drain해 blocking result 또는 `CompletionStage`로 바꾼다.
-`submit_sync()`는 Core `NONE`, `submit()`은 Core `DONTWAIT`를 사용한다. Kotlin은 독립 native
-ABI나 token wrapper를 만들지 않고 이 Java 계약을 사용한다.
+Java는 blocking `submit_sync()`와 `CompletionStage`를 반환하는 `submit()`을 제공한다.
+Kotlin은 독립 native ABI나 token wrapper 없이 같은 Java 계약을 사용한다.
+Caller wait 취소는 stage cancellation으로 표현한다.
 
-Completion-backed state는 native `FINAL` 전에 provisional registry에 등록한다. Submit outcome
-publish와 completion capture가 모두 끝난 뒤 `CompletionStage` 또는 blocking request를 정확히 한
-번 끝낸다. Stage cancellation은 Core operation을 취소하지 않고 caller wait만 끝내며 late
-completion은 native payload를 정리한다.
-
-`PollEventFlags.POLLCOMPLETION`은 public poller의 wait thread가 native queue를 비우고 live stage
-또는 detached state를 한 건 이상 완전 처리했다는 progress event다. Public poller owner에서
-blocking request를 사용하면 다른 thread가 wait loop를 계속 실행해야 한다.
+Native completion ID·`user_context`·raw drain은 public API에 노출하지 않는다.
+제출 결과는 [공통 결과 투영](../README.ko.md#submit-result-projection)을, 완료 합류·수명과
+`PollEventFlags.POLLCOMPLETION`의 진행 조건은 [비동기 실행 모델](../async-execution-model.ko.md)을 따른다.
 
 `ReplyToken`은 ROUTER REQUEST receive만 만들며 class initialization 때 non-exported
 `ContractAccess.ReplyTokenAccess`에 private constructor method reference를 등록한다. Equality와
@@ -1108,10 +1079,8 @@ Public Java interface, `CompletionStage`·exception과 poller event만으로 다
 - PAIR·DEALER·ROUTER·STREAM send factory가 하나의 `SendOperation` family를 반환한다.
 - Send/request는 §Public interface의 flag 없는 async·sync terminal만 제공하고 request timeout은
   유지한다.
-- Submit 반환 전 completion이 drain돼도 stage는 submit publish와 합류한 뒤 정확히 한 번 끝난다.
-- Stage cancellation 뒤 late completion은 stage를 다시 끝내지 않고 native payload를 정리한다.
-- Non-OK request completion은 typed request exception만 제공하고 error payload를 공개하지 않는다.
-- `POLLCOMPLETION`은 stage settle 또는 detached cleanup이 끝난 뒤에만 반환된다.
+- 완료·cancellation·poller의 공통 관측은
+  [실행 모델 검증 요구](../async-execution-model.ko.md#7-구현-및-contract-test-검증-요구)를 따른다.
 - Raw reply를 DEALER peer로 제출해 HWM·PAUSED 대기가 만료하면 `ZlinkSubmitException`의
   `BACKPRESSURED`가 관찰되고, ROUTER peer로 제출하면 Completion connection의 HWM-free 결과가 유지된다.
 

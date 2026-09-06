@@ -79,7 +79,7 @@ Use the following paths consistently when changing the .NET binding.
 - Public contract: `bindings/dotnet/src/Zlink/Contracts/`.
 - Runtime implementation: `bindings/dotnet/src/Zlink/Runtime/`.
 - Native bridge/artifacts: `bindings/dotnet/src/Zlink/Runtime/Native/`, `bindings/dotnet/native/`. Inside the NuGet package, these files are laid out under `runtimes/<rid>/native/`.
-- Codec package: none provided. The .NET binding keeps only the raw `Message` and byte-payload API.
+- Codec distribution scope: follow the [common raw payload policy](../README.en.md#binding-raw-scope).
 - Tests: `bindings/dotnet/tests/Zlink.Tests/`.
 - Samples: `bindings/dotnet/samples/`.
 - Perf: `bindings/dotnet/perf/`.
@@ -268,7 +268,7 @@ behavior are defined only by the immutable byte value.
 - A reply builder collects its payload and ends with `Submit()`.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot
   `ReplySubmitOperation.Submit() -> void`. It submits a terminal reply or error
-  reply with one native call. A DEALER peer is subject to Application HWM,
+  reply with one native call. A DEALER peer is subject to Application [HWM](../../../../core/doc/spec/core/glossary.en.md#hwm) (the queue byte threshold),
   `PAUSED`, and `SNDTIMEO`, so the result can be `Backpressured`; a ROUTER peer
   uses the HWM-free Completion connection. `NotConnected`, `Terminated`,
   `InvalidArgument`, and other submit failures immediately throw
@@ -290,7 +290,7 @@ behavior are defined only by the immutable byte value.
 - Request `Submit()` and `Async(CancellationToken)` wait through reply, timeout, or typed error. The
   builder's `Timeout(...)` sets the Core request timeout.
 - `CancellationToken` represents either rejection before the native call or caller-wait cancellation
-  after successful submit. Runtime drain releases the payload and provisional state on late completion.
+  after successful submit. Runtime drain releases the payload and operation state on late completion.
 - Publish retains synchronous `Submit()` on a separate operation.
 
 ## Contract folder layout
@@ -401,14 +401,10 @@ allocation-free draining.
   internal topic receive buffers for a later `Subscribe` call. It is valid only while the
   `TopicMessage` is open; after terminal `Dispose()` it throws `ObjectDisposedException` and
   does not reopen the object.
-- Core byte-HWM charge ends when ordinary `Recv(Received, ...)` or
-  `Subscribe(TopicMessage, ...)` dequeues the payload. `Received` and
-  `TopicMessage` own only the managed lifetime of parts and metadata;
-  `Dispose()`, `ReleaseForReuse()`, and storage reuse do not participate in Core
-  HWM accounting.
-- No separate retained receive, lease handle, or application byte capacity
-  exists in a public or internal API. Ordinary receive preserves the Router source RID and nullable
-  `ReplyToken`, and the SUB topic and source RID.
+- `Received` and `TopicMessage` own the managed lifetime of parts and metadata, released through
+  `Dispose()`, `ReleaseForReuse()`, or storage reuse. Ordinary receive preserves the Router
+  source RID and nullable `ReplyToken`, and the SUB topic and source RID.
+  The [common receive ownership contract](../README.en.md#receive-ownership) defines the boundary with receive accounting.
 - `false` means no data only for a non-blocking receive using `RecvFlags.DontWait`.
 - A real receive failure (one that is not simply no-data) throws `ZlinkRecvException`.
 - A control-plane API such as monitor recv or timer recv may keep a nullable return form when no-data is a natural value shape.
@@ -465,16 +461,8 @@ combine the hint with Core's hard limit. If an explicit input exceeds a finite
 hard limit Core detected, the binding preserves the existing configuration
 exception corresponding to `EINVAL` and does not clamp the value.
 
-Core applies the profile ratio to the memory limit exactly once, or uses an
-explicit Core budget unchanged, then calculates planned byte HWM per physical directional queue. A
-direction on which the caller sets `SendHighWaterMark` or
-`ReceiveHighWaterMark` becomes a manual override and is not changed by later
-automatic HWM recalculation.
-
-The .NET binding does not recount queued messages or payloads. When the actual
-accounted bytes in a Core pipe reach the applied HWM, the native submit result
-reports backpressure and the .NET operation preserves it through the existing
-result and timeout contract. `0UL` means unlimited.
+HWM planning, manual overrides, admission, and value projection follow [Core HWM calculation and admission](../README.en.md#hwm-calculation-and-admission).
+`0UL` means unlimited.
 
 `MonitorOpen(events, monitorHwmBytes)` accepts an exact `ulong` byte value for
 the monitor queue. `0UL` selects the Core monitor default; a positive value is
@@ -501,34 +489,16 @@ current, clears epoch counters, and increments `MeasurementEpoch`.
 ABI-reserved and always zero. A budget snapshot ABI version/size mismatch
 throws `NotSupportedException`.
 
-Request/reply APIs take no HWM value as an argument. While `Async(...)` waits
-for HWM credit on the selected exact target, it preserves the request's
-original deadline. The caller implements neither retry nor polling.
+Request/reply APIs take no HWM value as an argument. Timeout and waiting in `Async(...)` follow
+the [common request timeout](../README.en.md#timeout) and
+[completion execution model](../async-execution-model.en.md).
 
 ## Receive flow state
 
-The binding exposes the Core receive-flow state as the `ReceiveFlowState`
-enum with `Running = 0` and `Paused = 1`. `ISocket.SetReceiveFlowState(ReceiveFlowState)`
-sets it. The method returns `void` and follows the .NET error policy: a
-non-zero native `zlink_config_result_t` is thrown as a `ZlinkConfigException`
-whose `ErrorCode` is the matching `ConfigResult`, so a socket type that does not
-support receive flow (other than DEALER or ROUTER) raises `ZlinkConfigException`
-with `ConfigResult.NotSupported`.
-Setting the state the socket already holds returns normally.
-
-The observation surface follows the C contract, so the constant and metric
-names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
-`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
-with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
-and `FLOW_STATE_STALE_EPOCH` (`1 << 3`), the status detail bit `FLOW_STATE`
-(`1 << 5`), and the five status
-fields `flow_paused_connections`, `flow_pause_applied_total`,
-`flow_resume_applied_total`, `flow_state_stale_total`, and
-`flow_pause_duration_ms`, projected with this language's naming convention.
-
-Flow-state frames stay inside Core. The binding calls the setter, reads the
-monitor events and the snapshot fields, and never encodes, decodes, sends, or
-receives a flow-state frame itself.
+The `ReceiveFlowState` enum provides `Running = 0` and `Paused = 1`.
+`void ISocket.SetReceiveFlowState(ReceiveFlowState)` throws a `ZlinkConfigException` whose
+`Result` carries the failed native `ConfigResult` as `ZlinkConfigException.ErrorCode`.
+State, result, and monitor projection follow the [common receive-flow contract](../README.en.md#receive-flow-projection).
 
 ## Error and validation policy
 
@@ -591,18 +561,15 @@ commands from `bindings/dotnet/`.
 
 ## Pull completion public contract
 
-The .NET package uses Core 0.16.0 as an exact dependency.
+.NET package information follows its [distribution metadata](../../../dotnet/src/Zlink/Zlink.csproj); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-The .NET runtime drains native completions and converts them into blocking results or `Task`. `Submit()`
-uses Core `NONE`; `Async()` uses Core `DONTWAIT`. Completion-backed state is registered in a
-provisional registry before native `FINAL` and completes exactly once after submit publication and
-completion capture join. `CancellationToken` represents rejection before the native operation or Task
-wait cancellation after successful submit; it does not cancel the native operation.
+.NET provides blocking `Submit()` and `Async(CancellationToken)` returning `Task`.
+The caller wait cancellation input is `CancellationToken`.
 
-`PollEventFlags.PollCompletion` is a progress event indicating that the public poller's wait thread
-drained the native queue and fully processed at least one live Task or detached state. When a public
-poller owns the queue, using a blocking request requires another thread to continue executing the wait
-loop.
+Native completion IDs, `user_context`, and raw drain are not public APIs.
+Submission results follow the [common result projection](../README.en.md#submit-result-projection);
+completion joins, lifetime, and progress conditions for `PollEventFlags.PollCompletion` follow the
+[async execution model](../async-execution-model.en.md).
 
 `ReplyToken` is a sealed reference type created only by ROUTER REQUEST receive. It compares both owner
 object identity and an opaque value, and does not expose the raw value even as a string. `StreamPacket`
@@ -714,13 +681,8 @@ item maps to one contract test.
 
 - Send and request factories return `SendOperation` and `RequestOperation` and expose only the terminal
   signatures in the Public interface section.
-- Even when completion drains before submit returns, the Task completes exactly once after joining
-  submit publication.
-- When `CancellationToken` cancellation is decided first, only the Task is canceled; a late completion
-  does not complete the Task again and releases the native payload.
-- A non-OK request completion throws only the existing typed exception and does not expose the error
-  payload.
-- Public poller `PollCompletion` returns only after Task settlement or detached cleanup finishes.
+- Common completion, cancellation, and poller observations follow the
+  [execution-model verification requirements](../async-execution-model.en.md#7-implementation-and-contract-test-verification-requirements).
 - When HWM/`PAUSED` waiting expires for a raw reply submitted to a DEALER peer,
   `ZlinkSubmitException` reports `Backpressured`; a reply submitted to a ROUTER
   peer retains the HWM-free result of the Completion connection.

@@ -993,8 +993,7 @@ repository owner's name into a canonical public identifier.
 - A framework extension package and namespace stays under that
   framework language's canonical identity. For example, `.NET` uses
   `Zlink.Framework.*`, and Java uses `systems.zlink.framework.*`.
-- Go, Python, and Rust are not currently framework targets, so they do
-  not add a binding-owned codec module.
+- The [raw payload distribution scope](#binding-raw-scope) defines the boundary between bindings and codecs.
 - A Node extension package's name follows ecosystem convention, but its
   public identity must not drift outside the `zlink` and
   `zlink.systems` domain.
@@ -1416,8 +1415,8 @@ is the baseline.
   callback for raw `SUB`, `XSUB`, or SPOT subscribe receive.
 - `ROUTER` inbound routed traffic is received through a single routed
   recv surface. The binding runtime uses `zlink_router_recv_part()`
-  internally, and exposes only the aggregate routed recv and the request
-  completion callback on the public surface. It does not provide a
+  internally, and exposes only aggregate routed recv and the
+  [common request completion surface](async-coroutine-policy.en.md#6-per-language-terminal-interfaces). It does not provide a
   direct receive callback.
 - Core's raw `STREAM` is an exceptional type that picks one of three
   modes: `recv`, the raw callback (`zlink_recv_handler()`), or the packet
@@ -1451,7 +1450,7 @@ is the baseline.
 
 #### Auto-HWM And SpotNode Options
 
-- Core owns HWM calculation and queue admission. A binding only maps Core
+- Core owns [HWM](../../../core/doc/spec/core/glossary.en.md#hwm) (the queue byte threshold) calculation and queue admission. A binding only maps Core
   options and monitoring results to language-specific types; it does not count
   messages or recalculate an HWM.
 - `ZLINK_OPT_SNDHWM` and `ZLINK_OPT_RCVHWM` limit the accounted bytes actually
@@ -1520,30 +1519,16 @@ is the baseline.
   `retiredQueueCount`, and `deferredOriginCreditBytes` are also ABI-reserved and
   always `0`. A binding does not use these reserved fields for application
   lifetime or Framework queue accounting.
-- `MonitorStatus` projects Core monitoring ABI v3 byte HWM and pending
-  diagnostics. Legacy message-unit, slot, size-cap, and connection-bucket
-  planner properties are removed without aliases.
+- Project `MonitorStatus` version, size, and fields according to the
+  [Core monitoring ABI](../../../core/doc/spec/core/06-monitoring.en.md#61-abi-version-and-layout).
+  Remove legacy message-unit, slot, size-cap, and connection-bucket planner properties without aliases.
 
 ##### HWM Calculation And Admission
 
-Core calculates per-queue planned HWM values from context memory inputs, the
-profile, the physical directional queue registry, and byte water-filling. A
-binding does not transform those inputs into message counts or a planning unit.
-
-Automatic HWM applies a planned value only to physical queues without a manual
-directional HWM override. Core recalculates when topology changes. If a new
-target is below the bytes already retained, Core blocks new admission and
-switches the applied HWM after drain.
-
-Core decides write admission by accumulating the accounted bytes of frames
-retained by a pipe. Once those bytes reach the HWM, later writes receive
-backpressure until byte credit returns. An empty pipe may admit one complete
-message larger than its HWM, after which later writes are limited again. This
-exception does not apply to an incomplete multipart message.
-
-Pending message counts are display diagnostics, not admission inputs. Planned,
-applied, and deferred HWM and pending/accounted values use bytes. A binding
-preserves Core ABI values and flags unchanged.
+[Core Auto HWM](../../../core/doc/spec/core/systems/06-auto-hwm.en.md) owns per-queue planning,
+manual overrides, and recalculation; [Core HWM admission](../../../core/doc/spec/core/socket/README.en.md#transportbuffer)
+owns write acceptance. A binding preserves Core ABI byte values and flags without converting inputs
+into message counts or planning units.
 
 ##### Receive ownership and routed completion
 
@@ -1554,71 +1539,62 @@ peer use HWM-free admission on the current ready Completion pipe. A binding
 passes through Core's native result for the peer type and adds no separate retry
 or readiness adapter.
 
-Core byte HWM accounts the physical-frame charge retained by a Core queue:
-payload bytes plus the `sizeof(zlink_msg_t)` metadata charge. The charge ends
-when receive dequeues the complete message and hands it to the binding.
-Ordinary binding `recv` and `subscribe` transfer normal ownership of message
-parts, routing IDs, request sequences, and topic metadata into a
-`Received`/`TopicMessage`-family result. The result owns the payload until the
-language-specific close, dispose, drop, or next receive, but that application
-lifetime is never joined back into Core HWM accounting. No separate retained
-receive, raw lease handle, or application byte capacity exists in either the
-public or internal binding path.
+<a id="receive-ownership"></a>
 
-A Framework that limits handler work counts its own application jobs
-separately. The binding never adds that queue count to a Core byte snapshot.
-The single dynamic control boundary a Framework uses to slow Core receive is
-the socket's `RUNNING`/`PAUSED` receive-flow-state setter.
+- **A receive result owns its payload under the language's lifetime rules without reconnecting retention, reuse, or cleanup to the HWM charge that ended at Core dequeue.**
+  Core queue occupancy and application payload lifetime are separate responsibilities.
+  [Core receive accounting](../../../core/doc/spec/core/systems/06-auto-hwm.en.md#receive-dequeue-and-queue-generation)
+  owns the charge and its end point. Ordinary `recv` and `subscribe` preserve parts and
+  routing, reply, and topic metadata in a `Received`/`TopicMessage`-family result.
+  Each language README defines its cleanup APIs. Public and internal paths expose no separate
+  retained receive, raw lease handle, application byte capacity or allowance, or duplicate accounting state.
 
-The asynchronous terminal for HWM-managed PAIR **send** and DEALER/ROUTER
-**routed send** wraps Core `zlink_send_async` and send completion. Core owns HWM
-wait/retry, the operation deadline, route termination, and cancellation.
-Immediate admission returns operation id zero and the binding completes the
-awaitable locally. Core delivers exactly one completion for every pending
-operation with a non-zero id. A binding owns no park queue,
-readiness-callback retry, or deadline timer. Pending bounds default to
-unlimited; the application owns immediate overload policy only when it
-explicitly configures a non-zero bound.
+A binding does not add Framework application-job queue counts to Core byte snapshots.
 
-A binding that uses part-level Core APIs adds **no lock or gate of its own on
-the send path.** A multipart record is all-or-nothing in Core. Core's
-per-socket transaction state keeps another sender's parts from being inserted
-into a sequence, and an attempt that races an already open sequence is
-rejected as a whole, leaving no partial record visible to the peer. Core still
-consumes every native part actually passed to a synchronous send call on both
-success and ordinary failure; only a STREAM backpressure result with `EAGAIN`
-preserves that native part. A binding whose public API preserves a message on
-failure does so by submitting an independently owned staging copy. Concurrent
-multipart submits on one socket are therefore **the application's
-responsibility**: the binding neither
-serializes, waits, nor retries, and reports Core's result unchanged — the same
-principle that governs backpressure policy. The race between close and an
-in-flight submit is likewise owned by Core's lifecycle gate: close returns
-`EBUSY` while another thread runs an admitted API on the same handle, and a
-new API entry after close is accepted returns `ESHUTDOWN`. A binding adds no
-multipart ABI or public transaction abstraction.
+<a id="receive-flow-projection"></a>
 
-**Request** is different: Core drives reply completion. A reply-handler callback
-takes the terminal exactly once. If a language future or promise can run user
-continuations inline on the completing thread, the binding hands completion to
-an existing socket completion dispatcher so resumption happens outside the
-native callback thread. A request keeps the existing reply correlation after
-its initial submit until reply, timeout, disconnect, termination, or
-cancellation — timeout is already Core-owned (`ZLINK_REQUEST_TIMED_OUT`).
-Waiting never extends the original deadline. A binding adds no request-specific
-thread, admission/retry queue, or timer.
+##### Receive-flow projection
 
-Routed **send**'s asynchronous terminal is C++ `async()`, .NET `Async(...)`,
-and Java/Node/Python/Rust `submit()`. C++ also provides blocking `submit()` for
-a plain thread; Go's canonical `Submit(ctx) error` is synchronous and waits
-inside Core. **Request**'s canonical terminal keeps
-the language-native suspension surface: C++ `async()`, .NET `Async(...)`,
-Java/Node/Python/Rust `submit()` (an async return type), Kotlin
-`submit().await()`, and Go `Submit(ctx)` (a synchronous terminal that parks the calling goroutine until completion — Go's native suspension is the goroutine and concurrency comes from goroutines; Go spec `Submit(context.Context) ([]*Message, error)`). A
-request builder keeps callback and blocking compatibility terminals only in
-C++, whose existing terminals are `submit()`, `submit(callback)`, and
-`async()`. Other languages do not pair such terminals, and no language adds a
-new operation start point such as `request_async`.
+- **Every binding projects Core receive-flow setter transitions, results, and monitor observations without loss, leaving flow-state frame processing to Core.**
+  Language-specific state and error representations must preserve Core flow-control semantics.
+  The [Core receive-flow setter](../../../core/doc/spec/core/socket/README.en.md#zlink_socket_set_receive_flow_state)
+  owns state setting, repeated setting, and unsupported-socket results;
+  [Core monitoring](../../../core/doc/spec/core/06-monitoring.en.md) owns events, flags, and status fields.
+
+<a id="submit-result-projection"></a>
+
+##### Submit result projection
+
+A high-level binding connects native submission results to the language outcomes below. Native results,
+IDs, part consumption, and wait-token conditions belong to
+[Core part send](../../../core/doc/spec/core/socket/README.en.md#part-send-and-pending-admission) and
+[Core REQUEST DONTWAIT](../../../core/doc/spec/core/socket/README.en.md#request-and-reply).
+
+| Native submission result | High-level binding outcome |
+|---|---|
+| SEND `OK`, ID `0` | Complete the terminal with immediate admission success. |
+| REQUEST `OK`, nonzero ID | Connect the corresponding REQUEST completion to the language result. |
+| `BACKPRESSURED`, `EAGAIN`, nonzero wait token | Retain the input for resubmission and wait for WRITABLE. Continue the same operation according to Core's drain and resubmission contract. |
+| Submit failure without a wait token | Complete the terminal with that submit error. |
+
+- **The binding delivers a WRITABLE found by socket-local context and token to its waiter without rechecking Core's guaranteed submit RID echo.**
+  The [Core completion record contract](../../../core/doc/spec/core/socket/README.en.md#completion-pull-and-ownership)
+  owns that RID echo.
+
+Completion consumption and submit races follow the [async execution model's join contract](async-execution-model.en.md#5-joining-submit-results-and-completions).
+
+A binding that uses part-level Core APIs adds **no lock or gate of its own on the send path.**
+[Core part send](../../../core/doc/spec/core/socket/README.en.md#part-send-and-pending-admission)
+owns multipart atomicity, part consumption, and concurrent-submission results;
+[Core thread safety](../../../core/doc/spec/core/socket/README.en.md#2-thread-safety)
+owns the race between close and an in-flight submission. A binding whose public API preserves a
+message on failure submits an independently owned staging copy to Core to implement that contract.
+A binding adds no multipart ABI or public transaction abstraction.
+
+Request reply completion, timeout, and language wait cancellation follow
+[Timeout](#timeout) and the [async execution model](async-execution-model.en.md#6-caller-wait-cancellation).
+The [common terminal interfaces](async-coroutine-policy.en.md#6-per-language-terminal-interfaces)
+own each language's awaitable and blocking send/request signatures.
 
 Each binding maps HWM values as follows.
 
@@ -1693,13 +1669,10 @@ Each binding maps HWM values as follows.
   premise and does not layer lazy bootstrap logic on top.
 #### Send Completion, Peer Weight, And STREAM Receive Modes
 
-- `zlink_send_complete_handler()` delivers the final result of a pending
-  operation accepted by `zlink_send_async()` with a non-zero id. Operation id
-  zero means immediate admission and no callback. `ZLINK_POLLCOMPLETION` transfers dispatch
-  of that same callback and `zlink_send_complete_event_t` to the thread calling
-  `zlink_poller_wait()`. `ZLINK_POLLOUT` is readiness to retry a synchronous
-  nonblocking send; it is not async-send completion. No public send-ready
-  handler exists.
+- Send outcomes follow [Submit result projection](#submit-result-projection);
+  `PollCompletion` and completion delivery follow the [async execution model](async-execution-model.en.md#4-pollers-and-completion-drain).
+  [Core part send](../../../core/doc/spec/core/socket/README.en.md#part-send-and-pending-admission)
+  owns the relationship between raw `ZLINK_POLLOUT` and `ZLINK_POLLCOMPLETION`.
 - A binding must expose the peer-weight surface as a per-language typed
   option/property. It applies to `ROUTER` and `DEALER`; the value range
   is `0..10000`, and the default is `100`. `0` means exclusion from new
@@ -2322,10 +2295,8 @@ For a SPOT operation builder target, the work start point is
 mode is selected through the per-language final execution method the
 [bindings async execution surface policy](async-coroutine-policy.en.md)
 defines.
-- **On success, it returns only the reply payload's `List<Message>`.**
-  The caller already knows the `routing_id` and `request_seq` of the
-  request it sent, so it does not need `Received` back. A separate
-  `Reply` type is not created.
+- **On success, return only the reply payload's `List<Message>`.** Do not wrap request-target
+  metadata in `Received` or introduce a separate `Reply` type.
 - Because multipart reply is possible, it returns `List<Message>`, not a
   single `Message`. A single-part reply is retrieved with `list[0]`.
 
@@ -2664,7 +2635,7 @@ every binding to expose.**
 | `snd_pending_msgs` | `uint64` | The number of messages pending in the send queue |
 | `rcv_pending_msgs` | `uint64` | The number of messages pending in the receive queue |
 | `snd_pending_bytes`, `rcv_pending_bytes` | `uint64` | Current pending accounted bytes in the send and receive queues |
-| `auto_hwm_*` diagnostic fields | enum / number / bigint | Exposes canonical `zlink_monitor_status_t` ABI v3 fields unchanged: enabled, profile, role, policy class, planned/applied/deferred SND and RCV HWM bytes, effective buffer bytes, last recalculation time and reason, blocked ratio, SND and RCV in-flight bytes, minimum Core charge, and oversize diagnostics |
+| `auto_hwm_*` diagnostic fields | enum / number / bigint | Exposes canonical `zlink_monitor_status_t` [current Core monitoring ABI](../../../core/doc/spec/core/06-monitoring.en.md#61-abi-version-and-layout) fields unchanged: enabled, profile, role, policy class, planned/applied/deferred SND and RCV HWM bytes, effective buffer bytes, last recalculation time and reason, blocked ratio, SND and RCV in-flight bytes, minimum Core charge, and oversize diagnostics |
 | `is_ready()` | `bool` | A convenience method that checks the ready bit in `state_flags`, for a raw socket monitor source only |
 
 Monitor open uses only `monitor_hwm_bytes`. Zero selects the Core default;
@@ -3425,19 +3396,12 @@ keeping internal metadata out of the public surface.
 
 #### Design Principles
 
-- Request-reply is carried by ZMP header metadata on the first application
-  part. No public `zlink_msg_t` marker API or protocol payload part is used.
-- Dispatch, the pending map, timeout, and reply matching are all handled
-  in the core C API. A binding does not reimplement this logic.
-- Core provides a callback-based async model. A binding can layer a
-  per-language completion-object-return surface on top of the callback,
-  per the
-  [bindings async execution surface policy](async-coroutine-policy.en.md).
-  A coroutine connection is the framework's responsibility.
-- `request()` is not a thread-blocking API.
-- Request-reply is a capability extension of the Router/Dealer sockets
-  and SPOT — not a separate abstraction layer; it layers a role on top of
-  the existing surface.
+The [Core request contract](../../../core/doc/spec/core/socket/README.en.md#request-and-reply)
+owns native request submission, reply matching, and timeout. Binding completion delivery follows
+the [async execution model](async-execution-model.en.md#4-pollers-and-completion-drain);
+language-specific blocking and awaitable surfaces follow the
+[terminal policy](async-coroutine-policy.en.md#6-per-language-terminal-interfaces).
+Request-reply is a capability extension of Router/Dealer sockets and SPOT.
 
 #### APIs Not On The Public Surface
 
@@ -3478,52 +3442,11 @@ marker state inside a `Message` object.
 
 #### C API Surface
 
-**Shared type:**
-
-```c
-typedef void (*zlink_reply_handler_fn)(
-    zlink_request_result_t result_,
-    zlink_msg_t *parts,
-    size_t part_count,
-    void *userdata);
-
-```
-
-On `ZLINK_REQUEST_OK`, ownership of every message in `parts` transfers to
-the callback. The callback releases each message exactly once or moves it
-into binding-owned message objects before returning. The `parts` array itself
-is valid only until the callback returns. For a valid wire error reply, the
-Core C callback also receives ownership of the messages after the errno part
-and a non-OK `zlink_request_result_t` mapped from that errno. A higher-level
-binding releases those messages and exposes only its language-specific error path.
-
-**Socket API:**
-
-```c
-zlink_submit_result_t zlink_dealer_request_part(void *dealer,
-    zlink_msg_t *part, zlink_send_flags_t flags,
-    zlink_part_flag_t part_flag, uint32_t timeout_ms,
-    zlink_reply_handler_fn handler, void *userdata);
-
-zlink_submit_result_t zlink_dealer_reply_part(void *dealer,
-    uint64_t request_seq, zlink_msg_t *part,
-    zlink_part_flag_t part_flag);
-
-zlink_submit_result_t zlink_router_request_part(void *router,
-    const zlink_routing_id_t *peer_rid, zlink_msg_t *part,
-    zlink_send_flags_t flags, zlink_part_flag_t part_flag,
-    uint32_t timeout_ms, zlink_reply_handler_fn handler,
-    void *userdata);
-
-zlink_submit_result_t zlink_router_reply_part(void *router,
-    const zlink_routing_id_t *peer_rid, uint64_t request_seq,
-    zlink_msg_t *part, zlink_part_flag_t part_flag);
-
-zlink_recv_result_t zlink_router_recv_part(void *router,
-    const zlink_routing_id_t **source_node_rid_out,
-    uint64_t *request_seq_out, zlink_msg_t *part_out,
-    zlink_part_flag_t *has_more_out, zlink_recv_flags_t flags);
-```
+Raw socket request, reply, and ROUTER receive declarations follow
+[Core request and reply](../../../core/doc/spec/core/socket/README.en.md#request-and-reply) and
+[Core routed receive](../../../core/doc/spec/core/socket/README.en.md#routed-and-subscription-receive-family).
+[Core completion pull and ownership](../../../core/doc/spec/core/socket/README.en.md#completion-pull-and-ownership)
+owns completion records and the lifetime of returned reply parts.
 
 **SPOT service-layer operation names (binding-level concepts):**
 
@@ -3549,20 +3472,12 @@ function declarations. See `core/include/zlink.h` for the actual Core C request-
 
 #### Receive Dispatch Model
 
-Core handles request-reply dispatch. A binding does not implement a
-dispatch owner.
-
-- `request_seq = 0` means an ordinary message.
-- `request_seq != 0` means a request-reply message.
-- Core locates a pending completion by the socket-issued `request_seq` and applies only a reply
-  whose transport pair ID and generation match the registered request.
-- A reply that fails to match (a stray/late reply) is dropped.
-- A reply-capable ROUTER record is received through the typed
-  `zlink_router_recv_part()` surface. Calling generic `zlink_recv_part()`
-  for a ROUTER is rejected with `EOPNOTSUPP`.
-- ROUTER's raw request-reply receive plane is a **single surface**. This C
-  API returns only `source_node_rid` and `request_seq`; SPOT-specific routing
-  context is owned by a separate service-layer API.
+[Core routed receive](../../../core/doc/spec/core/socket/README.en.md#routed-and-subscription-receive-family)
+owns ROUTER application record kinds, source RIDs, and reply tokens. Reply matching follows
+the [Core request contract](../../../core/doc/spec/core/socket/README.en.md#request-and-reply);
+delivery of matched results to the language follows the
+[common completion owner](async-execution-model.en.md#4-pollers-and-completion-drain).
+SPOT-specific routing context belongs to a separate service-layer API.
 
 #### Request API Variants
 
@@ -3592,92 +3507,51 @@ reply.
 
 #### Timeout
 
-- Timeout is managed by core. A binding does not implement timeout
-  logic.
-- The default timeout is `5000ms`. Priority: per-call > socket default >
-  the implementation default `5000ms`.
-- `timeout_ms = 0` uses the socket's default timeout.
-- Timeout applies to the total elapsed time — send wait plus reply
-  wait combined.
-- On timeout, core removes the entry from the pending map and delivers
-  `ZLINK_REQUEST_TIMED_OUT` to the callback.
-- Core drops a late reply that arrives after timeout.
+- **The request builder's timeout corresponds to [Core's reply timeout, measured from admission](../../../core/doc/spec/core/socket/README.en.md#request-and-reply).**
+  Core owns the start point, defaults, the meaning of `0`, and expiry, so a binding does not
+  recalculate it with a separate timer. Cancellation of the language wait follows
+  [caller wait cancellation](async-execution-model.en.md#6-caller-wait-cancellation).
 
 #### Pending Map
 
-- Assigning `request_seq`, pending registration, reply matching, and
-  timeout removal are all done in core.
-- A binding does not maintain a separate pending map.
-- The only thing a binding maintains is the callback → Future/Promise
-  resolve mapping.
+The [Core request contract](../../../core/doc/spec/core/socket/README.en.md#request-and-reply)
+owns wire request correlation. A binding associates submit results and completions with language
+terminals; the [async execution model](async-execution-model.en.md#5-joining-submit-results-and-completions)
+owns their lifetime and join.
 
 #### Wire Format
 
-The ZMP wire values below cite the contract in the
-[Core ZMP specification](../../../core/doc/spec/core/protocol/01-zmp.en.md). A binding neither
-constructs nor interprets them directly.
-
-- `request_seq` is an unsigned 64-bit integer (8 bytes, network byte
-  order).
-- The starting value is `1`. An ordinary data frame has no sequence
-  extension.
-- On overflow, it wraps to `1`. A value that collides with an
-  outstanding one is skipped.
-- Ordinary data uses kind `0x00` in an 8-byte ZMP header. The first
-  application frame of a request, reply, or error reply uses a 16-byte
-  header containing the kind and an 8-byte Big Endian sequence.
-- From the second application frame of a multipart record, the kind is
-  ordinary data, and the payload part count equals the count supplied by
-  the binding.
-- A binding neither constructs nor parses ZMP header metadata. Core
-  handles it.
+The [Core ZMP specification](../../../core/doc/spec/core/protocol/01-zmp.en.md)
+owns ZMP kinds, sequences, header byte layout, and validation. A binding neither constructs nor
+interprets wire metadata and preserves the payload boundary in the [Request-Reply policy](#request-reply-policy).
 
 #### Return Type
 
 - On success, `request()` returns **only the reply payload's
   `List<Message>`** (a per-language list type such as `Vec<Message>`,
   `IReadOnlyList<Message>`, `Message[]`, or `tuple[Message, ...]`).
-- The caller already knows the target routing_id and request_seq of the
-  request it sent, so it does not need a `Received` wrapping that back.
+- Do not wrap request-target metadata together with the reply payload in a `Received`.
 - A separate `Reply` type is not created.
 - Because multipart reply support is the goal, it's a list shape rather
   than a single `Message`. A single-part reply is retrieved with
   `parts[0]`.
-- A request handler (server side) delivers `peer_rid`, `request_seq`,
-  and the payload together. A separate `Request` type or a dedicated
-  `onRequest` callback is not created. (This differs because the server
-  side needs to know who sent which request_seq.)
+- Responder receive metadata follows [Core routed receive](../../../core/doc/spec/core/socket/README.en.md#routed-and-subscription-receive-family)
+  and the [ReplyToken policy](async-coroutine-policy.en.md#5-replytoken-and-reply).
+  Do not introduce a separate `Request` type or dedicated `onRequest` callback.
 
 #### Ownership
 
-- Message ownership on a `request()`/`reply()` call follows the existing
-  send contract.
-- On successful request completion, ownership of every callback message part
-  transfers to the binding callback. The binding moves or adopts each part
-  into the per-language list and releases each native message exactly once;
-  the native `parts` array itself is invalid after the callback returns.
-- On socket close, core rejects every outstanding request in the pending
-  map with a `ZLINK_REQUEST_TERMINATED` callback.
+Request and reply inputs follow the existing send ownership contract. Native reply-array and part
+cleanup follow [Core completion ownership](../../../core/doc/spec/core/socket/README.en.md#completion-pull-and-ownership);
+language payload conversion and unfinished terminals on close follow the
+[async execution model](async-execution-model.en.md#5-joining-submit-results-and-completions).
 
-#### Callback Contract
+#### Language completion results
 
-- The callback is called exactly once. On success it's delivered as
-  `result = OK` plus reply parts; on failure, `result != OK` plus an
-  empty/null/Err path.
-- Even when the Core C callback receives payload after a valid wire error
-  reply's errno part, a binding releases it and does not expose it as public
-  success payload.
-- The core callback signature:
-  `void(zlink_request_result_t result_, zlink_msg_t *parts_, size_t part_count_, void *userdata_)`
-- Per-language patterns (inheriting the per-function `RequestError`):
-  - C++: `std::function<void(request_result_t, std::vector<message_t>)>`
-  - Java: `BiConsumer<RequestResult, List<Message>>`
-  - .NET: `Action<RequestResult, IReadOnlyList<Message>>`
-  - Node: `(result: RequestResult, parts: Message[]) => void`
-  - Python: `callback(result: RequestResult, parts: list[Message])`
-  - Go: `func(RequestResult, []*Message)` (nil/empty allowed on failure)
-  - Rust: `FnOnce(Result<Vec<Message>, RequestError>)` (Rust idiom;
-    `RequestError::code` maps to `RequestResult`)
+Request success payloads, typed errors, and completion after cancellation follow the
+[common completion contract](async-execution-model.en.md#6-caller-wait-cancellation).
+Language completion types and terminal signatures follow the
+[terminal interfaces](async-coroutine-policy.en.md#6-per-language-terminal-interfaces).
 
 ### SPOT Messaging Policy
 
@@ -4099,7 +3973,7 @@ able to drain the plane the event announced.
 |-----------|----------|
 | `PAIR` / `DEALER` | The runtime uses `zlink_recv_part()`; the public surface is aggregate recv |
 | `SUB` / `XSUB` | The runtime uses `zlink_subscribe_part()`; the public surface is aggregate topic recv |
-| `ROUTER` | The runtime uses `zlink_router_recv_part()`; the public surface is aggregate routed recv. Request completion stays on `zlink_reply_handler_fn` |
+| `ROUTER` | Runtime uses `zlink_router_recv_part()` and the public surface is aggregate routed recv. Request completion follows the [common execution model](async-execution-model.en.md#4-pollers-and-completion-drain). |
 | `STREAM` | One of three modes below (mutually exclusive). Raw recv / `zlink_recv_handler()` / `zlink_stream_packet_handler()` |
 | `SPOT` | `zlink_spot_recv_part()` + `zlink_spot_subscribe_part()` + `zlink_spot_recv_subscription_event()` + `zlink_spot_recv_actor_lifecycle()` + `zlink_spot_dispatch_event_handler()`. Does not expose a direct routed callback |
 
@@ -4131,22 +4005,10 @@ zlink_recv_result_t zlink_spot_recv_actor_lifecycle(void *spot, ...);
 
 #### Router Receive (unified routed recv surface)
 
-```c
-zlink_recv_result_t zlink_router_recv_part(void *router,
-    const zlink_routing_id_t **source_node_rid_out,
-    uint64_t *request_seq_out,
-    zlink_msg_t *part_out, zlink_part_flag_t *has_more_out,
-    zlink_recv_flags_t flags);
-```
-
-- ROUTER's raw request-reply receive is a single plane. This C API returns
-  only `source_node_rid` and `request_seq`; SPOT-specific routing context is
-  owned by a separate service-layer API.
-- `request_seq == 0` means fire-and-forget. `request_seq != 0` means a
-  request.
-- A binding does not separately expose a ROUTER data-plane callback
-  install surface. The request completion callback stays only on the
-  `request(...)` path.
+Raw ROUTER DATA/REQUEST receive signatures and metadata follow
+[Core routed receive](../../../core/doc/spec/core/socket/README.en.md#routed-and-subscription-receive-family);
+request-result delivery follows the [common completion owner](async-execution-model.en.md#4-pollers-and-completion-drain).
+SPOT-specific routing context belongs to a separate service-layer API.
 
 #### Pub/Sub Receive
 
@@ -4329,114 +4191,31 @@ Recommended priority:
     of a copy.
 
 ### Codec/Serializer Extension Module Policy
-- `Message` and multipart transport itself remain the canonical binding
-  core contract.
-- protobuf/json/messagepack codec-aware domain conversion is treated as
-  **a formal, separate extension contract layered on top of the binding
-  core**.
-- The `C` binding is the exception. `C` keeps the raw transport contract
-  as its default public surface, and does not require codec-aware
-  domain conversion as part of the default binding contract.
-- So it may expose a helper such as `Parse(...)`, `Serialize(...)`,
-  `ToMessage(...)`, or `FromMessage(...)` publicly. This helper must not
-  be mixed into the binding core package/module, however.
-- Required rules:
-  - The binding core package/module must be codec-agnostic.
-  - The binding core must not pull in a protobuf/json/messagepack
-    dependency as a required dependency.
-  - The `C` binding only needs to keep the raw byte/message contract
-    formal, and has no obligation to add a protobuf/json helper as a
-    public contract.
-  - Every binding except `C` keeps the codec extension layer as a public
-    contract, and must support the three codecs `protobuf`, `json`,
-    `messagepack`.
-  - For every binding except `C`, the `protobuf`, `json`, and
-    `messagepack` extensions must each be provided as **a distribution
-    unit separate from the core binding**.
-  - A third-party buffer adapter extension follows the same principle.
-    It must be provided as a distribution unit separate from the core
-    binding, and the core binding must not require that extension
-    dependency.
-  - A codec extension can depend on the binding core, but the binding
-    core must not depend on a codec extension.
-  - Even once a codec extension is added, the canonical recv/request/
-    reply contract stays based on `Message`, `List<Message>`,
-    `Received`, `TopicMessage`.
-  - A codec extension defines only the object <-> `Message` encode/
-    decode helper contract. It's allowed to take a parser, schema, or
-    generated-type input needed for the payload type.
-  - A codec extension can add a helper that turns a transport result
-    type into a domain object, but it must not replace the raw
-    transport contract itself.
-  - A codec extension document does not define packet-name inference
-    rules, high-level outbound serializer lookup, or a typed
-    request/reply decode policy.
-  - In a language that has a framework, the framework documentation
-    owns the policy above. The codec extension document describes only
-    the low-level encode/decode helper's input conditions.
-- Reasons:
-  - To avoid forcing a specific codec dependency on a raw-transport
-    user.
-  - Because codec-ecosystem choice differs by language, to keep the
-    binding core from locking onto one implementation.
-  - To separate the high-level domain helper from the low-level
-    transport ownership contract, reducing change amplification.
 
-JSON codec baseline by language:
+<a id="binding-raw-scope"></a>
 
-| Language | JSON baseline |
+- **Bindings distribute only raw `Message` and byte-payload contracts and own no codec-extension distribution units.**
+  A raw-transport user must not need to install a particular serialization format or implementation.
+  The transport contracts for `Message`, `List<Message>`, `Received`, and `TopicMessage` remain unchanged.
+  Binding core does not require protobuf, JSON, MessagePack, or codec extensions as dependencies.
+  Each Framework's documentation owns serializer selection and typed conversion.
+
+- **Distribute third-party buffer adapters separately from core binding without making them core dependencies.**
+  They are optional integrations with a particular buffer library's lifetime APIs.
+  Buffer support and lifetime descriptions follow the [high-performance buffer ecosystem policy](#high-performance-buffer-ecosystem-policy-recommended).
+
+Language documents identify the package locations below and their language-specific public types.
+
+| Language | Binding package source |
 |---|---|
-| C | none required |
-| C++ | `nlohmann/json` |
-| .NET | `System.Text.Json` |
-| Java | `Jackson` |
-| Node | built-in `JSON.parse` / `JSON.stringify` |
-| Python | stdlib `json` |
-| Go | `encoding/json` |
-| Rust | `serde_json` |
-
-- This table means "the implementation treated as the default when
-  exposing a json codec extension publicly."
-- Additional support for a different json library is possible. But the
-  public contract, samples, tests, and default-behavior baseline follow
-  the table above.
-- On Node, the built-in JSON is the baseline for plain-object encode/
-  decode, and typed validation can be layered on top of a separate
-  schema/parser object.
-
-MessagePack codec baseline by language:
-
-| Language | MessagePack baseline |
-|---|---|
-| C | none required |
-| C++ | `msgpack-c` |
-| .NET | `MessagePack for C#` |
-| Java | `jackson-dataformat-msgpack` |
-| Node | `@msgpack/msgpack` |
-| Python | `msgpack` |
-| Go | `vmihailenco/msgpack/v5` |
-| Rust | `rmp-serde` |
-
-Bindings no longer define a codec extension distribution unit.
-
-| Language | Core binding root | Binding-owned codec package policy |
-|---|---|---|
-| C | `bindings/c/include/zlink/`, `bindings/c/src/` | None |
-| C++ | `bindings/cpp/include/zlink/` | None. Framework serialization is handled in `framework/languages/cpp/extensions/` |
-| .NET | `bindings/dotnet/src/Zlink/` | None. Framework serialization is handled in `framework/languages/dotnet/src/` |
-| Java | `bindings/java/src/main/java/systems/zlink/` | None. Framework serialization is handled in `framework/languages/java/` |
-| Node | `bindings/node/src/` | None. Framework serialization is handled in `framework/languages/node/packages/` |
-| Python | `bindings/python/src/zlink/` | None. Keeps only raw `Message`/bytes |
-| Go | `bindings/go/` | None. Keeps only raw `Message`/bytes |
-| Rust | `bindings/rust/src/` | None. Keeps only raw `Message`/bytes |
-
-- Placement rules:
-  - Do not mix codec helper source directly into the same directory as
-    the core socket/message namespace.
-  - A per-language codec spec document explains the raw-only policy, and
-    if that language is a framework target, points to the framework
-    codec extension's location.
-  - Binding samples and tests verify raw `Message`/bytes behavior.
+| C | `bindings/c/include/zlink/`, `bindings/c/src/` |
+| C++ | `bindings/cpp/include/zlink/` |
+| .NET | `bindings/dotnet/src/Zlink/` |
+| Java | `bindings/java/src/main/java/systems/zlink/` |
+| Node | `bindings/node/src/` |
+| Python | `bindings/python/src/zlink/` |
+| Go | `bindings/go/` |
+| Rust | `bindings/rust/src/` |
 
 ### External Buffer Attach/Release Hook Policy
 - The C API's `zlink_msg_init_data(..., zlink_free_fn*, hint)` provides
@@ -4667,7 +4446,7 @@ Application connection is subject to HWM, `PAUSED`, and `SNDTIMEO`. When the
 target peer is a ROUTER, the reply makes one submission to the HWM-free
 Completion connection and does not return HWM backpressure.
 
-##### `zlink_request_result_t` (request completion callback)
+##### `zlink_request_result_t` (REQUEST completion)
 
 | Value | Constant | Internal errno | Meaning |
 |----|------|-----------|------|
@@ -5274,7 +5053,7 @@ Required test rules on a policy change:
   regression or ownership test
 - an option surface change: accompanied by a typed option surface test
   and a negative role test
-- a codec extension change: accompanied by that codec extension's test
+
 - a helper/facade change: accompanied by a helper/facade contract test
 - a hot-path implementation change: accompanied by an optimization
   guard test or a perf regression gate
@@ -5506,13 +5285,11 @@ following criteria.
   contract. It does not re-run the entire core service matrix in every
   language.
 
-### Conditional: Codec Tests
-- A binding that provides a codec extension package verifies a
-  per-codec payload round trip.
-- Confirm the core binding package doesn't pull in a codec dependency as
-  required.
-- A language with a serializer-selection rule verifies the default
-  serializer and its error path.
+### Raw Payload Distribution Verification
+
+Sending and receiving raw messages through public binding APIs without installing an additional
+serializer module preserves payload bytes and multipart part counts.
+The [raw payload policy](#binding-raw-scope) defines the distribution scope.
 
 ### Conditional: Sample Smoke Tests
 - A binding that provides a sample suite provides a run smoke test for

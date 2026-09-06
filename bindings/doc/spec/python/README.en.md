@@ -6,15 +6,15 @@ title: "Python Bindings Public Contract"
 [Spec index](../README.en.md) | [Previous: Node.js](../node/README.en.md) | [Next: Go](../go/README.en.md)
 <!-- bindings-nav:end -->
 
-# Python binding Core 0.16.0 public contract
+# Python binding Core public contract
 
 > **What this chapter defines** — the public type, ownership, and error
-> contract the `zlink` Python package provides on top of Core 0.16.0 raw
+> contract the `zlink` Python package provides on top of Core raw
 > messaging.
 
-- This document defines the Core 0.16.0 raw messaging contract the `zlink` Python package provides.
+- This document defines the Core raw messaging contract the `zlink` Python package provides.
 - A feature not defined by this document and the public header is not part of the Python binding contract.
-- It supports Python 3.9 and later; the package version is `0.16.0`.
+- Python 3.9-and-later support and the package version follow the [distribution metadata](../../../python/pyproject.toml).
 - The current native package target is Linux x86_64; other targets are outside this contract's supported scope until a separate candidate payload and clean-consumer verification exist.
 
 | Section | Covers |
@@ -62,7 +62,7 @@ by the contract module in the same directory and the public header.
 
 ## Byte HWM and Auto-HWM
 
-Core owns HWM calculation and queue admission. Python
+Core owns [HWM](../../../../core/doc/spec/core/glossary.en.md#hwm) (the queue byte threshold) calculation and queue admission. Python
 `send_high_water_mark` and `receive_high_water_mark` are byte-valued `int`
 properties and accept only the non-negative `uint64_t` range. The binding
 passes each value to Core as an exact 8-byte option, and a getter returns
@@ -114,18 +114,15 @@ gauges, rebases both peaks to current, clears epoch counters, and increments
 - `Received` is a receive storage the caller creates. On a successful `recv_into(received)`, the parts and routing metadata are recorded into `Received`; native parts are released on `close()` or context-manager exit.
 - The native view `Received`'s `parts` provides is valid only while its owner stays open. If it must outlive that, copy the value with `to_bytes()` or `to_bytes_list()`.
 
-Core byte-HWM charge ends when ordinary `recv_into` or `subscribe_into`
-dequeues the payload. `Received` and `TopicMessage` own only the Python
-lifetime of native parts, routing ID, reply token, topic, and multipart
-framing. Closing, leaving a context manager, or reusing storage does not
-participate in Core HWM accounting. No separate retained receive, raw lease
-handle, application byte capacity, allowance, or duplicate accounting state
-exists in a public or internal API.
+
+`Received` and `TopicMessage` preserve native parts, routing ID, reply token, topic, and
+multipart framing, released through `close()`, context-manager exit, or storage reuse.
+The [common receive ownership contract](../README.en.md#receive-ownership) defines the boundary with receive accounting.
 
 ## Send/receive and no-data
 
-- Send/request builder completion boundaries, the provisional registry, and cancellation follow the
-  [async completion surface policy](../async-coroutine-policy.en.md).
+- Send/request builder completion boundaries follow the [async completion surface policy](../async-coroutine-policy.en.md);
+  completion joins and cancellation follow the [async execution model](../async-execution-model.en.md).
 - Reply and publish end with synchronous `submit()`. Only a separate `PublishOp` provides publish
   flags.
 - Caller-provided receive with `RecvFlags.DONT_WAIT` returns `False` when no message is available.
@@ -140,27 +137,10 @@ contract tests.
 
 ## Receive flow state
 
-The binding exposes the Core receive-flow state as the `ReceiveFlowState`
-`IntEnum` with `RUNNING = 0` and `PAUSED = 1`.
-`Socket.set_receive_flow_state(state)` sets it. It returns `None` and follows
-the Python error policy: a non-zero native result raises `ConfigError` carrying
-the matching `ConfigResult` and the native errno, so a socket without a
-completion lane raises `ConfigError` with `ConfigResult.NOT_SUPPORTED`. Setting
-the state the socket already holds returns normally.
-
-The observation surface follows the C contract, so the constant and metric
-names are fixed by the C layer: the monitor events `SEND_FLOW_PAUSED`,
-`SEND_FLOW_RESUMED`, and `FLOW_STATE_STALE` (`1 << 16`, `1 << 17`, `1 << 18`,
-with the full mask `0x7FFFF`), the event flags `SEND_FLOW_WRITABLE` (`1 << 1`),
-and `FLOW_STATE_STALE_EPOCH` (`1 << 3`), the status detail bit `FLOW_STATE`
-(`1 << 5`), and the five status
-fields `flow_paused_connections`, `flow_pause_applied_total`,
-`flow_resume_applied_total`, `flow_state_stale_total`, and
-`flow_pause_duration_ms`, projected with this language's naming convention.
-
-Flow-state frames stay inside Core. The binding calls the setter, reads the
-monitor events and the snapshot fields, and never encodes, decodes, sends, or
-receives a flow-state frame itself.
+`ReceiveFlowState` is an `IntEnum` with `RUNNING = 0` and `PAUSED = 1`.
+`Socket.set_receive_flow_state(state)` returns `None` and raises `ConfigError` carrying
+the failed native `ConfigResult` and errno.
+State, result, and monitor projection follow the [common receive-flow contract](../README.en.md#receive-flow-projection).
 
 ## Error
 
@@ -186,17 +166,15 @@ checking targets the Python 3.9 target `pyrightconfig.json` specifies, and
 
 ## Pull completion public contract
 
-The Python package uses Core 0.16.0 as an exact dependency.
+Python package information follows its [distribution metadata](../../../python/pyproject.toml); the Core ABI version follows [Core release metadata](../../../../VERSION).
 
-The Python runtime drains native completions and converts them into blocking results or awaitables.
-`submit_sync()` uses Core `NONE`; `submit()` uses Core `DONTWAIT`. Completion-backed state is registered
-in a provisional registry before native `FINAL` and completes exactly once after submit publication and
-completion capture join. Awaitable cancellation ends only the caller wait and does not cancel the Core
-operation; a late completion releases the payload and state.
+Python provides blocking `submit_sync()` and `submit()` returning an awaitable.
+Caller wait cancellation is expressed through awaitable cancellation.
 
-`PollEventFlag.POLLCOMPLETION` is a progress event indicating that the public poller's wait thread
-drained the native queue and fully processed at least one live awaitable or detached state. Under public
-poller ownership, using a blocking request requires another thread to continue executing the wait loop.
+Native completion IDs, `user_context`, and raw drain are not public APIs.
+Submission results follow the [common result projection](../README.en.md#submit-result-projection);
+completion joins, lifetime, and progress conditions for `PollEventFlag.POLLCOMPLETION` follow the
+[async execution model](../async-execution-model.en.md).
 
 `Poller.add_monitor(monitor: MonitorSocket, events: PollEventFlag, slot: int) -> None`,
 `Poller.modify_monitor(monitor: MonitorSocket, events: PollEventFlag) -> None` and
@@ -322,12 +300,8 @@ item maps to one contract test.
 - Send/request expose only the flag-free awaitable and synchronous terminals in the Public interface
   section and retain request timeout.
 - `publish(topic)` returns a separate `PublishOp` with publish flags and synchronous submit.
-- Even when completion drains before submit returns, the awaitable completes exactly once after joining
-  submit publication.
-- After awaitable cancellation, a late completion does not complete the awaitable again and releases the
-  native payload.
-- A non-OK request completion exposes only a typed exception and does not expose the error payload.
-- `POLLCOMPLETION` returns only after settlement or detached cleanup finishes.
+- Common completion, cancellation, and poller observations follow the
+  [execution-model verification requirements](../async-execution-model.en.md#7-implementation-and-contract-test-verification-requirements).
 
 **ReplyToken and STREAM**
 
