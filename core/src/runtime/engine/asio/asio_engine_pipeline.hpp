@@ -10,12 +10,15 @@
 
 namespace zlink
 {
-struct asio_stream_rx_chunk_t
+//  One buffered read that arrived while input was stopped. Bytes the decoder
+//  already consumed are dropped by advancing offset, never by moving the tail
+//  of the vector, so a partially drained chunk costs nothing to keep.
+struct asio_rx_chunk_t
 {
     std::vector<unsigned char> data;
     size_t offset;
 
-    asio_stream_rx_chunk_t () : offset (0) {}
+    asio_rx_chunk_t () : offset (0) {}
     size_t size () const { return data.size () > offset ? data.size () - offset : 0; }
 };
 
@@ -50,10 +53,8 @@ struct asio_engine_pipeline_t
 
     std::vector<unsigned char> read_buffer;
     std::vector<unsigned char> write_buffer;
-    std::deque<std::vector<unsigned char>> pending_buffers;
-    std::deque<asio_stream_rx_chunk_t> pending_stream_rx_chunks;
-    std::vector<std::vector<unsigned char>> pending_buffer_pool;
-    std::vector<asio_stream_rx_chunk_t> pending_stream_rx_chunk_pool;
+    std::deque<asio_rx_chunk_t> pending_rx_chunks;
+    std::vector<asio_rx_chunk_t> pending_rx_chunk_pool;
     std::vector<unsigned char> pending_read_buffer;
     bool read_from_pending_pool;
     size_t last_speculative_read_bytes;

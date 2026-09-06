@@ -6,7 +6,6 @@
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO && defined ZLINK_HAVE_ASIO_SSL
 
 #include "engine/asio/asio_debug.hpp"
-#include "engine/asio/asio_error_handler.hpp"
 
 #include <boost/asio/buffer.hpp>
 #include <openssl/err.h>

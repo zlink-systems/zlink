@@ -14,34 +14,6 @@ namespace zlink
 {
 struct shared_message_memory_allocator_state_t;
 
-// Static buffer policy.
-class c_single_allocator
-{
-  public:
-    explicit c_single_allocator (std::size_t bufsize_) :
-        _buf_size (bufsize_), _buf (static_cast<unsigned char *> (std::malloc (_buf_size)))
-    {
-        alloc_assert (_buf);
-    }
-
-    ~c_single_allocator () { std::free (_buf); }
-
-    unsigned char *allocate () { return _buf; }
-
-    void deallocate () {}
-
-    std::size_t size () const { return _buf_size; }
-
-    //  This buffer is fixed, size must not be changed
-    void resize (std::size_t new_size_) { LIBZLINK_UNUSED (new_size_); }
-
-  private:
-    std::size_t _buf_size;
-    unsigned char *_buf;
-
-    ZLINK_NON_COPYABLE_NOR_MOVABLE (c_single_allocator)
-};
-
 // This allocator allocates a reference counted buffer which is used by v2_decoder_t
 // to use zero-copy msg::init_data to create messages with memory from this buffer as
 // data storage.

@@ -98,9 +98,11 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
 
     struct packet_record_t
     {
+        // Only ever constructed in place (std::deque::emplace_back) and
+        // accessed by reference (front/back); std::deque never relocates
+        // existing elements on push/pop at its ends, so this record is never
+        // copied or moved.
         packet_record_t ();
-        packet_record_t (packet_record_t &&other_);
-        packet_record_t &operator= (packet_record_t &&other_);
         ~packet_record_t ();
 
         uint32_t source_rid;
@@ -108,16 +110,19 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
         zlink::msg_t body;
         uint64_t accounted_bytes;
 
-      private:
-        packet_record_t (const packet_record_t &);
-        packet_record_t &operator= (const packet_record_t &);
+        ZLINK_NON_COPYABLE_NOR_MOVABLE (packet_record_t)
     };
 
     route_shard_t &route_shard_for (uint32_t routing_id_);
+    // Precondition: caller already holds shard_.sync (matches every call
+    // site's existing scoped_lock_t). Returns the routed pipe, or NULL if no
+    // route is published for routing_id_.
+    static zlink::pipe_t *find_route_locked (route_shard_t &shard_,
+                                             uint32_t routing_id_);
     bool publish_route_locked (uint32_t routing_id_,
                                zlink::pipe_t *pipe_);
     bool identify_peer (pipe_t *pipe_, bool locally_initiated_);
-    void maybe_emit_connect_event (pipe_t *pipe_, uint32_t routing_id_value_ = 0);
+    void maybe_emit_connect_event (pipe_t *pipe_);
     void queue_stream_notify (uint32_t routing_id_);
     bool packet_queue_at_limit () const;
     int enqueue_packet (uint32_t source_rid_,

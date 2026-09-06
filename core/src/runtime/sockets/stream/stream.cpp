@@ -10,11 +10,8 @@
 #include "utils/err.hpp"
 #include "utils/likely.hpp"
 #include "utils/routing_id.hpp"
-#include <chrono>
 #include <cstring>
 #include <limits>
-#include <new>
-#include <thread>
 
 namespace
 {
@@ -83,47 +80,6 @@ zlink::stream_t::packet_record_t::packet_record_t () :
     errno_assert (header_rc == 0);
     const int body_rc = body.init ();
     errno_assert (body_rc == 0);
-}
-
-zlink::stream_t::packet_record_t::packet_record_t (packet_record_t &&other_) :
-    source_rid (other_.source_rid),
-    accounted_bytes (other_.accounted_bytes)
-{
-    const int header_rc = header.init ();
-    errno_assert (header_rc == 0);
-    const int body_rc = body.init ();
-    errno_assert (body_rc == 0);
-    const int header_move_rc = header.move (other_.header);
-    errno_assert (header_move_rc == 0);
-    const int body_move_rc = body.move (other_.body);
-    errno_assert (body_move_rc == 0);
-    other_.accounted_bytes = 0;
-    other_.source_rid = 0;
-}
-
-zlink::stream_t::packet_record_t &zlink::stream_t::packet_record_t::operator= (
-  packet_record_t &&other_)
-{
-    if (this == &other_)
-        return *this;
-
-    const int header_close_rc = header.close ();
-    errno_assert (header_close_rc == 0);
-    const int header_init_rc = header.init ();
-    errno_assert (header_init_rc == 0);
-    const int body_close_rc = body.close ();
-    errno_assert (body_close_rc == 0);
-    const int body_init_rc = body.init ();
-    errno_assert (body_init_rc == 0);
-    const int header_move_rc = header.move (other_.header);
-    errno_assert (header_move_rc == 0);
-    const int body_move_rc = body.move (other_.body);
-    errno_assert (body_move_rc == 0);
-    source_rid = other_.source_rid;
-    accounted_bytes = other_.accounted_bytes;
-    other_.accounted_bytes = 0;
-    other_.source_rid = 0;
-    return *this;
 }
 
 zlink::stream_t::packet_record_t::~packet_record_t ()
@@ -199,6 +155,13 @@ zlink::stream_t::~stream_t ()
 zlink::stream_t::route_shard_t &zlink::stream_t::route_shard_for (uint32_t routing_id_)
 {
     return _route_shards[routing_id_ % route_shard_count];
+}
+
+zlink::pipe_t *zlink::stream_t::find_route_locked (route_shard_t &shard_,
+                                                   uint32_t routing_id_)
+{
+    const route_shard_t::routes_t::iterator it = shard_.routes.find (routing_id_);
+    return it == shard_.routes.end () ? NULL : it->second;
 }
 
 bool zlink::stream_t::publish_route_locked (uint32_t routing_id_,
@@ -296,13 +259,13 @@ int zlink::stream_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
     bool terminated = false;
     {
         scoped_lock_t shard_lock (shard.sync);
-        route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
-        if (it != shard.routes.end () && it->second) {
+        pipe_t *const route_pipe = find_route_locked (shard, routing_id);
+        if (route_pipe) {
             // STREAM close must preserve frames that were accepted before
             // the disconnect request. The peer receives the pipe delimiter
             // only after those frames, which enables protocol-level closing
             // notifications without a timing workaround.
-            it->second->terminate (true);
+            route_pipe->terminate (true);
             terminated = true;
         }
     }
@@ -798,13 +761,12 @@ int zlink::stream_t::xsend (
         route_shard_t &shard = route_shard_for (routing_id);
         scoped_lock_t shard_lock (shard.sync);
 
-        route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
-        if (it == shard.routes.end () || !it->second) {
+        pipe_t *const out = find_route_locked (shard, routing_id);
+        if (!out) {
             errno = EHOSTUNREACH;
             return -1;
         }
 
-        pipe_t *out = it->second;
         if (msg_->size () == 0) {
             out->terminate (false);
         } else {
@@ -842,13 +804,13 @@ int zlink::stream_t::xsend (
             const uint32_t routing_id = get_uint32 (static_cast<unsigned char *> (msg_->data ()));
             route_shard_t &shard = route_shard_for (routing_id);
             scoped_lock_t shard_lock (shard.sync);
-            route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
-            if (it == shard.routes.end () || !it->second) {
+            pipe_t *const route_pipe = find_route_locked (shard, routing_id);
+            if (!route_pipe) {
                 errno = EHOSTUNREACH;
                 return -1;
             }
 
-            _current_out = it->second;
+            _current_out = route_pipe;
             const pipe_message_admission_t write_admission =
               _current_out->check_write_admission ();
             if (write_admission != pipe_message_admission_ready) {
@@ -947,12 +909,11 @@ int zlink::stream_t::xsend_routed (
     const uint32_t routing_id = get_uint32 (target_rid_->data);
     route_shard_t &shard = route_shard_for (routing_id);
     scoped_lock_t shard_lock (shard.sync);
-    route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
-    if (it == shard.routes.end () || !it->second) {
+    pipe_t *const out = find_route_locked (shard, routing_id);
+    if (!out) {
         errno = EHOSTUNREACH;
         return -1;
     }
-    pipe_t *out = it->second;
     uint64_t pair_id = 0;
     uint64_t pair_generation = 0;
     const bool exact_pair_requested = expected_transport_pair_id_ != 0
@@ -1006,8 +967,8 @@ int zlink::stream_t::xselect_routed_submit_target (
     const uint32_t routing_id = get_uint32 (router_rid_or_null_->data);
     route_shard_t &shard = route_shard_for (routing_id);
     scoped_lock_t shard_lock (shard.sync);
-    route_shard_t::routes_t::iterator it = shard.routes.find (routing_id);
-    if (it == shard.routes.end () || !it->second) {
+    pipe_t *const route_pipe = find_route_locked (shard, routing_id);
+    if (!route_pipe) {
         errno = EHOSTUNREACH;
         return -1;
     }
@@ -1015,7 +976,7 @@ int zlink::stream_t::xselect_routed_submit_target (
                                 router_rid_or_null_->size,
                                 &target_out_->peer_rid);
     if (!stream_exact_target_identity (
-          it->second, &target_out_->transport_pair_id,
+          route_pipe, &target_out_->transport_pair_id,
           &target_out_->transport_pair_generation)) {
         errno = EHOSTUNREACH;
         return -1;
@@ -1108,17 +1069,15 @@ bool zlink::stream_t::xsend_writable_target_ready (
 
     route_shard_t &shard = route_shard_for (routing_id);
     scoped_lock_t shard_lock (shard.sync);
-    const route_shard_t::routes_t::const_iterator it =
-      shard.routes.find (routing_id);
-    if (it == shard.routes.end () || !it->second
-        || !it->second->is_lifecycle_active ())
+    pipe_t *const route_pipe = find_route_locked (shard, routing_id);
+    if (!route_pipe || !route_pipe->is_lifecycle_active ())
         return false;
     uint64_t pair_id = 0;
     uint64_t pair_generation = 0;
-    if (!stream_exact_target_identity (it->second, &pair_id,
+    if (!stream_exact_target_identity (route_pipe, &pair_id,
                                        &pair_generation))
         return false;
-    return it->second->check_write_admission ()
+    return route_pipe->check_write_admission ()
            == pipe_message_admission_ready;
 }
 
@@ -1131,10 +1090,8 @@ bool zlink::stream_t::xsend_writable_target_known (
 
     route_shard_t &shard = route_shard_for (routing_id);
     scoped_lock_t shard_lock (shard.sync);
-    const route_shard_t::routes_t::const_iterator it =
-      shard.routes.find (routing_id);
-    return it != shard.routes.end () && it->second
-           && it->second->is_lifecycle_active ();
+    pipe_t *const route_pipe = find_route_locked (shard, routing_id);
+    return route_pipe && route_pipe->is_lifecycle_active ();
 }
 
 bool zlink::stream_t::xsend_writable_target_for_pipe (
@@ -1148,9 +1105,7 @@ bool zlink::stream_t::xsend_writable_target_for_pipe (
 
     route_shard_t &shard = route_shard_for (routing_id);
     scoped_lock_t shard_lock (shard.sync);
-    const route_shard_t::routes_t::const_iterator it =
-      shard.routes.find (routing_id);
-    if (it == shard.routes.end () || it->second != pipe_)
+    if (find_route_locked (shard, routing_id) != pipe_)
         return false;
 
     memset (target_rid_out_, 0, sizeof (*target_rid_out_));
@@ -1272,13 +1227,11 @@ bool zlink::stream_t::identify_peer (pipe_t *pipe_, bool locally_initiated_)
     return true;
 }
 
-void zlink::stream_t::maybe_emit_connect_event (pipe_t *pipe_, uint32_t routing_id_value_)
+void zlink::stream_t::maybe_emit_connect_event (pipe_t *pipe_)
 {
     zlink_assert (pipe_);
 
-    uint32_t resolved_routing_id = routing_id_value_;
-    if (resolved_routing_id == 0)
-        resolved_routing_id = pipe_->get_server_socket_routing_id ();
+    const uint32_t resolved_routing_id = pipe_->get_server_socket_routing_id ();
     if (resolved_routing_id == 0)
         return;
 
@@ -1295,4 +1248,14 @@ void zlink::stream_t::queue_stream_notify (uint32_t routing_id_)
 {
     if (routing_id_ != 0)
         _stream_notify_routing_ids.push_back (routing_id_);
+}
+
+int zlink::stream_t::stream_mark_raw_part_receive ()
+{
+    if (options.stream_recv_mode != ZLINK_STREAM_RECV_MODE_RAW) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    return 0;
 }

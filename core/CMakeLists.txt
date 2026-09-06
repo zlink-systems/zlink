@@ -929,8 +929,7 @@ set(socket-router-sources
     src/runtime/sockets/router/router_send_path.cpp)
 
 set(socket-stream-sources
-    src/runtime/sockets/stream/stream.cpp
-    src/runtime/sockets/stream/stream_dispatch_lifecycle.cpp)
+    src/runtime/sockets/stream/stream.cpp)
 
 set(socket-pubsub-sources
     src/runtime/sockets/pubsub/pub.cpp

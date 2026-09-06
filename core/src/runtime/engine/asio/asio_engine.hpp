@@ -204,8 +204,21 @@ class asio_engine_t : public i_engine
     //  Fill output buffer and start async write
     void process_output ();
 
-    //  Internal implementation of restart_input
+    //  Outcome of one restart_input drain step.
+    enum drain_result_t
+    {
+        drain_done,     //  step finished, carry on with the next one
+        drain_stopped,  //  backpressure: input stays stopped, restart_input succeeds
+        drain_failed    //  restart_input fails
+    };
+
+    //  Internal implementation of restart_input, in three steps that share
+    //  classify_drain_stop() as their single stop rule.
     bool restart_input_internal ();
+    drain_result_t classify_drain_stop (int rc_);
+    drain_result_t retry_stopped_message ();
+    drain_result_t drain_current_input ();
+    drain_result_t drain_pending_chunks ();
     int retry_decoder_allocation ();
     void stop_input_for_current_backpressure ();
 
@@ -235,7 +248,6 @@ class asio_engine_t : public i_engine
 
     void destroy_after_callbacks ();
 
-    bool use_stream_rx_slab () const;
     void prime_stream_decoder_read_target ();
     void maybe_grow_stream_decoder_read_target (size_t bytes_transferred_);
     void apply_pending_stream_encoder_resize ();

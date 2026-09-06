@@ -26,7 +26,7 @@ namespace zlink
 //  Derived class should implement individual state machine actions.
 //
 //  Buffer management is done by an allocator policy.
-template <typename T, typename A = c_single_allocator> class decoder_base_t : public i_decoder
+template <typename T, typename A> class decoder_base_t : public i_decoder
 {
   public:
     explicit decoder_base_t (const size_t buf_size_) :

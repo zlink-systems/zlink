@@ -61,11 +61,6 @@ inline bool enable_speculative_write ()
     return true;
 }
 
-inline bool enable_rx_slab ()
-{
-    return true;
-}
-
 inline bool enable_non_tcp_spec_read ()
 {
     return env::flag_enabled ("ZLINK_ASIO_STREAM_ENABLE_NON_TCP_SPEC_READ");
