@@ -410,13 +410,67 @@ G1~G4를 만족하지 못한 셀은 `unsupported`로 기록하고 완료 개수�
 - [x] Phase 6 — 통합 검증 구간 5언어 전부 통과, 재측정 불필요
 - [x] Phase 6 — 통합 보고서 `fw-bench-worklog/report-with-grpc-5lang.ko.md`
 - [x] 결정 기록 FB-001~FB-041, 후속 후보 0.18.0 이관
+- [ ] Phase 7 — backpressure 모델 측정(§11), 보고서에 비교표 추가
 
-## 11. 캠페인 종료 (2026-09-07)
+## 11. Phase 7 — backpressure 모델 측정 (2026-09-07 추가)
 
-마지막 commit `bf93d23686`. 보고서는
-[`fw-bench-worklog/report-with-grpc-5lang.ko.md`](fw-bench-worklog/report-with-grpc-5lang.ko.md).
+### 추가 이유
 
-### 결과
+Phase 0~6은 `request_window` 100 고정으로 측정했다. 규격의 기본값이었기 때문이다. 그 결과
+관리형 런타임 binding 셋이 그 깊이에서 무너져 판정 스무 개 중 열여덟이 `unsupported`가
+됐고, 원래 요청한 gRPC 대비 비교표가 나오지 않았다.
+
+**window 100은 규격의 기본값이지 법칙이 아니다.** 사용자 지시(2026-09-07)로 inflight 개수를
+제어하지 않고 backpressure가 정하게 두는 측정을 추가한다.
+
+### 감독관 판단 정정
+
+감독관은 처음에 "고정 window를 낮추자"고 제안하고, backpressure 모델에 대해서는 "gRPC와
+ZLink가 서로 다른 깊이로 흘러가면 비교가 성립하지 않는다"고 반대했다. **그 반대는 틀렸고
+철회했다.**
+
+실제 서비스는 미완료 요청을 임의의 N개로 묶지 않는다. 밀어 넣고 transport가 밀어낸다.
+**각 스택이 도달하는 깊이는 그 스택 설계의 결과이지 맞춰야 할 조건이 아니다.** window를
+억지로 같게 만드는 쪽이 오히려 인위적이며, 한쪽은 참게 하고 다른 쪽은 무리하게 만든다.
+
+이는 저장소의 기존 perf 정책과도 일치한다. `PERF_MULTI_TEST_POLICY.md:138`·`:164`,
+`PERF_POLICY.md:230`이 inflight 깊이를 인위적으로 고정하지 않고 admission backpressure까지
+연속 제출하도록 이미 정하고 있다.
+
+### 측정 방법
+
+- **양쪽 다 app 레벨 window를 제거한다.** ZLink는 공개 async terminal의 admission
+  backpressure까지, gRPC는 자기 flow control이 밀어낼 때까지 제출한다. 인위적 상한 없음.
+  어느 쪽도 inflight 1로 직렬화하지 않는다(perf 정책이 금지).
+- **도달 깊이를 결과로 측정한다.** `peak_in_flight`, 처리량 × 평균 지연으로 계산한 실제 깊이,
+  abandoned를 언어·구현마다 표에 싣는다. 이전에는 우리가 정하는 조건이었고 이제 측정 대상이다.
+- 나머지 조건은 그대로다. payload, send concurrency, warmup, active duration, ROUTER 3회,
+  측정 규율(빌드는 구간 밖, `flock`, 매 run 전 loadavg 2.0 미만과 기록).
+- `request-serial`은 원래 깊이 1이고 `send-saturation`은 send concurrency가 지배하므로
+  영향이 없다. 기존 값이 그대로 선다.
+
+### 이 측정이 답하는 것
+
+| 결과 | 의미 |
+|---|---|
+| backpressure가 동작 가능한 깊이로 묶어준다 | 비교표가 채워진다. 원래 요청한 산출 |
+| 자기 admission control만으로 밀었는데도 멈춘다 | **window 100 결과보다 강한 발견.** 정상적인 흐름 제어만으로 호출자가 고장난 상태에 도달한다는 뜻 |
+
+### 보고서 처리
+
+window 100 표를 **대체하지 않고 나란히 싣는다.** 두 표가 다른 질문에 답한다.
+
+- backpressure 표 — 정상 동작 조건에서 gRPC 대비 어떤가
+- window 100 표 — 어디서부터 멈추는가
+
+window 100 결과를 빼면 "동시 요청을 깊게 쓰면 멈춘다"는 사실이 사라진다. 운영에서 만나는 문제다.
+
+## 12. 캠페인 종료 (2026-09-07)
+
+Phase 0~6 종료 commit `eafdad0405`. Phase 7 진행 중.
+보고서는 [`fw-bench-worklog/report-with-grpc-5lang.ko.md`](fw-bench-worklog/report-with-grpc-5lang.ko.md).
+
+### Phase 0~6 결과
 
 게재 조건을 만족한 판정은 스무 개 중 둘이고 둘 다 기준 미달이다(`.NET` 0.084, C++ 0.774).
 나머지 열여덟은 `unsupported`이며 막힌 이유가 언어마다 다르다.
@@ -432,4 +486,3 @@ G1~G4를 만족하지 못한 셀은 `unsupported`로 기록하고 완료 개수�
 | 우선순위 0 결함 3건 | Node client socket 정지, Java raw reply 유실, handler 생성 실패의 무성 수락·폐기. 처리 순서 |
 | 판정 기준(FB-034) | formula 1의 공유 분모가 재현성 미달이라 어느 언어도 통과할 수 없다. 분모 안정화 시점 |
 | 보고서 공개 범위 | 현재 `plan/` 아래. guide나 site로 옮길지, 옮긴다면 규격 §7의 환경 정보 동반 |
-| 원래 요청과의 차이 | "gRPC 대비 5언어 비교표"가 대부분 `unsupported`로 나온 것에 대한 판단 |
