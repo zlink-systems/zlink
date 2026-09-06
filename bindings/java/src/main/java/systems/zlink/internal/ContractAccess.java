@@ -210,6 +210,12 @@ public final class ContractAccess {
                                         replySender,
                                     Runnable onTerminalState);
 
+        void populateRoutedParts(Received received, byte[] routingIdBytes,
+                                  Message[] parts, long replyTokenValue,
+                                  boolean hasReplyToken,
+                                  BiConsumer<List<Message>, SendFlags> replySender,
+                                  Runnable onTerminalState);
+
         void forceMaterialize(Received received);
 
         List<Message> takeParts(Received received);
@@ -726,6 +732,15 @@ public final class ContractAccess {
         receivedAccess().populateRoutedTwoParts(received, routingIdBytes,
             firstPart, secondPart, replyTokenValue, hasReplyToken,
             replySender, onTerminalState);
+    }
+
+    public static void receivedPopulateRoutedParts(
+      Received received, byte[] routingIdBytes, Message[] parts,
+      long replyTokenValue, boolean hasReplyToken,
+      BiConsumer<List<Message>, SendFlags> replySender,
+      Runnable onTerminalState) {
+        receivedAccess().populateRoutedParts(received, routingIdBytes, parts,
+            replyTokenValue, hasReplyToken, replySender, onTerminalState);
     }
 
     /** Runtime-only access cache for receive hot paths. */

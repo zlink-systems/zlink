@@ -35,8 +35,7 @@ import java.util.function.Function;
  */
 public final class Received implements AutoCloseable {
     // Callers may pass the same Received instance to multiple recv calls. The
-    // binding refills internal state via adoptFrom() in place, avoiding the
-    // per-recv Received allocation.
+    // binding refills internal state in place, avoiding a per-recv envelope.
     private long replyTokenValue;
     private boolean hasReplyToken;
     private ReplyToken replyToken;
@@ -149,6 +148,18 @@ public final class Received implements AutoCloseable {
             }
 
             @Override
+            public void populateRoutedParts(Received received,
+                                            byte[] routingIdBytes,
+                                            Message[] parts,
+                                            long replyTokenValue,
+                                            boolean hasReplyToken,
+                                            BiConsumer<List<Message>, SendFlags> replySender,
+                                            Runnable onTerminalState) {
+                received.populateRoutedParts(routingIdBytes, parts,
+                    replyTokenValue, hasReplyToken, replySender, onTerminalState);
+            }
+
+            @Override
             public void forceMaterialize(Received received) {
                 received.forceMaterialize();
             }
@@ -196,7 +207,7 @@ public final class Received implements AutoCloseable {
      * Create an empty {@code Received} for caller-provided storage. Hand the
      * same instance to {@code recv(Received, ...)} across calls to avoid the
      * per-recv allocation; the binding overwrites the internal state on each
-     * successful receive via {@code adoptFrom}.
+     * successful receive.
      */
     public Received() {
         this.replyTokenValue = 0L;
@@ -245,39 +256,8 @@ public final class Received implements AutoCloseable {
             }
             return;
         }
-        // Discard any prior owned state without recycling the parts list,
-        // so we can reuse it without reallocation.
-        if (realizedParts != null && !realizedParts.isEmpty()) {
-            ArrayList<Message> previousParts = realizedParts;
-            realizedParts = null;
-            partsView = null;
-            for (int i = 0; i < previousParts.size(); i++) {
-                Message part = previousParts.get(i);
-                if (part != null) {
-                    try { part.closeFromOwner(); } catch (RuntimeException ignored) {}
-                }
-            }
-            previousParts.clear();
-            this.realizedParts = previousParts;
-        }
-        ContractAccess.ReceivedPartCursor pendingCursor = cursor;
-        cursor = null;
-        closeCursorQuietly(pendingCursor);
-        this.closed = false;
-        this.routingId = null;
-        this.routingIdBytes = routingIdBytes;
-        this.replyTokenValue = replyTokenValue;
-        this.hasReplyToken = hasReplyToken;
-        this.replySender = replySender;
-        this.sendSubmitter = null;
-        this.sendBlockingSubmitter = null;
-        this.routedReplySender = null;
-        this.onTerminalState = onTerminalState;
-        if (this.realizedParts == null) {
-            this.realizedParts = new ArrayList<>(1);
-        }
-        this.realizedParts.add(singlePart);
-        this.partsView = null;
+        prepareRoutedStorage(routingIdBytes, 1, replyTokenValue, hasReplyToken,
+            replySender, onTerminalState).add(singlePart);
     }
 
     /** Fill caller-owned receive storage directly for the common 2-part case. */
@@ -291,6 +271,28 @@ public final class Received implements AutoCloseable {
         Objects.requireNonNull(firstPart, "firstPart");
         Objects.requireNonNull(secondPart, "secondPart");
 
+        ArrayList<Message> storage = prepareRoutedStorage(routingIdBytes, 2,
+            replyTokenValue, hasReplyToken, replySender, onTerminalState);
+        storage.add(firstPart);
+        storage.add(secondPart);
+    }
+
+    void populateRoutedParts(byte[] routingIdBytes, Message[] parts,
+                             long replyTokenValue, boolean hasReplyToken,
+                             BiConsumer<List<Message>, SendFlags> replySender,
+                             Runnable onTerminalState) {
+        Objects.requireNonNull(parts, "parts");
+        ArrayList<Message> storage = prepareRoutedStorage(routingIdBytes,
+            parts.length, replyTokenValue, hasReplyToken, replySender,
+            onTerminalState);
+        for (Message part : parts)
+            storage.add(part);
+    }
+
+    private ArrayList<Message> prepareRoutedStorage(byte[] routingIdBytes,
+            int partCount, long replyTokenValue, boolean hasReplyToken,
+            BiConsumer<List<Message>, SendFlags> replySender,
+            Runnable onTerminalState) {
         ArrayList<Message> storage = realizedParts;
         realizedParts = null;
         partsView = null;
@@ -321,11 +323,10 @@ public final class Received implements AutoCloseable {
         routedReplySender = null;
         this.onTerminalState = onTerminalState;
         if (storage == null) {
-            storage = new ArrayList<>(2);
+            storage = new ArrayList<>(partCount);
         }
-        storage.add(firstPart);
-        storage.add(secondPart);
         realizedParts = storage;
+        return storage;
     }
 
     private boolean isReusablePlainSinglePartState() {

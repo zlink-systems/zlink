@@ -85,10 +85,7 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
     /**
      * Receives into caller-provided {@link Received} storage.
      *
-     * <p>HOT PATH: single-part routed messages without request metadata fill
-     * {@code target} directly and avoid a fresh {@link Received} allocation.
-     * Multipart and request/reply messages use the fallback path so observable
-     * recv semantics stay identical across message shapes.
+     * Completed parts and routing metadata populate the target directly.
      * Returns {@code true} on data, {@code false} on EAGAIN with
      * {@link RecvFlags#DONT_WAIT}.
      */
@@ -125,14 +122,6 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
     public void finishClose() {
     }
 
-    /**
-     * Variant of {@link #recvDirectOnceImpl} for caller-provided storage.
-     *
-     * <p>HOT PATH: single-part routed messages without request metadata
-     * populate {@code target} via {@link Received#populateRoutedSinglePart},
-     * avoiding the fresh {@link Received} allocation used by the fallback path.
-     * Other paths use the existing receive-and-adopt flow.
-     */
     private boolean recvDirectOnceIntoImpl(Received target, RecvFlags flags,
                                            boolean nullOnNoData) {
         RecvOutScratch scratch = RECV_OUT_SCRATCH.get();
@@ -206,31 +195,26 @@ final class NativeRouterReceiveSupport implements AutoCloseable {
                     return true;
                 }
 
-                // Three-or-more parts are uncommon. Preserve the existing
-                // allocate-and-adopt path after retaining the two parts that
-                // have already been consumed from Core.
                 ArrayList<Message> parts = new ArrayList<>();
                 parts.add(firstPart);
                 parts.add(secondPart);
-                Message[] partsArray = recvRemainingMultipartParts(parts,
-                    scratch, flags);
-                Received fresh;
-                if (replyTokenValue == 0L) {
-                    byte[] nodeRidBytes =
-                        NativeRoutingIds.readBytesOut(sourceNodeRidOut);
-                    fresh = InternalAccess.received(nodeRidBytes, partsArray,
-                        true, 0L, false, null, null);
-                } else {
-                    RoutingId nodeRid =
-                        NativeRoutingIds.readOut(sourceNodeRidOut);
-                    fresh = InternalAccess.received(nodeRid, partsArray, true,
-                        replyTokenValue, true,
-                        replySender(nodeRid, replyTokenValue), null);
-                }
                 firstPartConsumed = true;
                 secondPartConsumed = true;
-                ContractAccess.receivedAdoptFrom(target, fresh);
-                return true;
+                boolean adopted = false;
+                try {
+                    Message[] partsArray = recvRemainingMultipartParts(parts,
+                        scratch, flags);
+                    byte[] nodeRidBytes =
+                        NativeRoutingIds.readBytesOut(sourceNodeRidOut);
+                    ContractAccess.receivedPopulateRoutedParts(target,
+                        nodeRidBytes, partsArray, replyTokenValue,
+                        replyTokenValue != 0L, null, null);
+                    adopted = true;
+                    return true;
+                } finally {
+                    if (!adopted)
+                        Message.closeAll(parts);
+                }
             } finally {
                 if (!secondPartConsumed) {
                     try {

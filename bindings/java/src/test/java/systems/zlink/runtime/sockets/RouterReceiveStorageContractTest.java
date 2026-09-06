@@ -15,6 +15,49 @@ import systems.zlink.contracts.sockets.*;
 
 class RouterReceiveStorageContractTest {
     @Test
+    void threePartRoutedReceiveReusesCallerStorageAndReplacesMetadata() throws Exception {
+        TestSupport.assumeNative();
+        try (Context context = Zlink.createContext();
+             DealerSocket dealer = context.createDealerSocket();
+             RouterSocket router = context.createRouterSocket();
+             Received received = new Received()) {
+            String endpoint = TestSupport.inprocEndpoint("three-part-storage");
+            router.bind(endpoint);
+            dealer.connect(endpoint);
+            dealer.send().message(Message.from("previous")).submit_sync();
+            assertTrue(router.recv(received, RecvFlags.NONE));
+            RoutingId source = received.getRoutingId().orElseThrow();
+            var storageField = Received.class.getDeclaredField("realizedParts");
+            storageField.setAccessible(true);
+            Object storage = storageField.get(received);
+            for (boolean request : new boolean[] {true, false}) {
+                java.util.concurrent.CompletableFuture<List<Message>> future = null;
+                if (request) {
+                    future = dealer.request().message(Message.from("one"))
+                        .message(Message.from("two")).message(Message.from("three"))
+                        .timeout(Duration.ofSeconds(2)).submit().toCompletableFuture();
+                } else {
+                    dealer.send().message(Message.from("one"))
+                        .message(Message.from("two")).message(Message.from("three"))
+                        .submit_sync();
+                }
+                assertTrue(router.recv(received, RecvFlags.NONE));
+                assertSame(storage, storageField.get(received),
+                    "3-part receive must fill existing storage without adopting an envelope");
+                assertEquals(source, received.getRoutingId().orElseThrow());
+                assertEquals(request, received.replyToken().isPresent());
+                assertEquals(List.of("one", "two", "three"), received.parts().stream()
+                    .map(Message::toUtf8String).toList());
+                if (request) {
+                    received.reply().message(Message.from("reply")).submit();
+                    Message.closeAll(future.get(TestSupport.DEFAULT_TIMEOUT_MS,
+                        java.util.concurrent.TimeUnit.MILLISECONDS));
+                }
+            }
+        }
+    }
+
+    @Test
     void blockingAndNoWaitPreserveMultipartRepliesAndStorageOnNoData() {
         TestSupport.assumeNative();
         try (Context context = Zlink.createContext();
@@ -43,6 +86,9 @@ class RouterReceiveStorageContractTest {
                     assertEquals(count, received.parts().size());
                     assertTrue(received.getRoutingId().isPresent());
                     assertTrue(received.replyToken().isPresent());
+                    for (int i = 0; i < count; i++)
+                        assertEquals("part-" + i,
+                            received.parts().get(i).toUtf8String());
                     Message first = received.firstPart();
                     if (flags == RecvFlags.NONE) {
                         ZlinkRecvException empty = assertThrows(ZlinkRecvException.class,
