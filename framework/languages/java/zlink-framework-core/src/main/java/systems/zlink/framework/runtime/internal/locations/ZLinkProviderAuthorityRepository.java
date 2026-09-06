@@ -613,6 +613,10 @@ final class ZLinkProviderAuthorityRepository {
         ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(reservation, "reservation");
         Objects.requireNonNull(readyPayload, "readyPayload");
+        if (terminal != null) {
+            requireTerminal(
+                reservation, terminal, ZLinkCreationTerminalState.CREATED);
+        }
         ZLinkStoreKey key = authorityKey(reservation.authorityKey());
         var opaqueCancellation = adapt(cancellation);
         return provider.read(key, opaqueCancellation).thenCompose(read -> {
@@ -629,94 +633,50 @@ final class ZLinkProviderAuthorityRepository {
                         ? ZLinkObjectCommitResult.ALREADY_COMMITTED
                         : ZLinkObjectCommitResult.STALE);
             }
-            return readCapacity(current.allocation(), opaqueCancellation)
-                .thenCompose(capacity -> {
-                    if (capacity.isEmpty()) {
-                        return completed(ZLinkObjectCommitResult.STALE);
-                    }
-                    CapacitySnapshot stored = capacity.orElseThrow();
-                    CapacityRecord nextCapacity = stored.record().transition(
-                        current.allocation().capacityBundle());
-                    if (nextCapacity == null) {
-                        return completed(ZLinkObjectCommitResult.STALE);
-                    }
-                    AuthorityRecord next = new AuthorityRecord(
-                        readyPayload,
-                        current.objectGeneration(),
-                        current.authorityOwnerGeneration(),
-                        current.ownerId(),
-                        current.ownerLeaseGeneration(),
-                        withState(
-                            current.allocation(),
-                            ZLinkPlacementAllocationState.ACTIVE),
-                        Optional.empty());
-                    return provider.write(
-                            new ZLinkStoreWriteRequest(
-                                List.of(
-                                    new ZLinkStoreVersionCondition(
-                                        key, found.value().version()),
-                                    new ZLinkStoreVersionCondition(
-                                        stored.key(),
-                                        stored.value().version())),
-                                List.of(
-                                    new ZLinkStorePut(
-                                        key, encode(next), null),
-                                    new ZLinkStorePut(
-                                        stored.key(),
-                                        encodeCapacity(nextCapacity),
-                                        null))),
-                            opaqueCancellation)
-                        .thenApply(result -> result
-                            instanceof ZLinkStoreWriteApplied
-                            ? ZLinkObjectCommitResult.COMMITTED
-                            : ZLinkObjectCommitResult.STALE);
-                });
+            return writeCreationTransition(
+                    key, found.value(), current, readyPayload, terminal,
+                    opaqueCancellation)
+                .thenApply(applied -> applied
+                    ? ZLinkObjectCommitResult.COMMITTED
+                    : ZLinkObjectCommitResult.STALE);
         });
     }
 
     CompletionStage<ZLinkObjectAbortResult> abort(
         ZLinkObjectReservation reservation,
         ZLinkStoreCancellation cancellation) {
+        return abortCreation(reservation, null, cancellation);
+    }
+
+    CompletionStage<ZLinkObjectAbortResult> abort(
+        ZLinkObjectReservation reservation,
+        ZLinkCreationOperationTerminal terminal,
+        ZLinkStoreCancellation cancellation) {
+        requireTerminal(reservation, terminal, ZLinkCreationTerminalState.FAILED);
+        return abortCreation(reservation, terminal, cancellation);
+    }
+
+    private CompletionStage<ZLinkObjectAbortResult> abortCreation(
+        ZLinkObjectReservation reservation,
+        ZLinkCreationOperationTerminal terminal,
+        ZLinkStoreCancellation cancellation) {
+        Objects.requireNonNull(reservation, "reservation");
         ZLinkStoreKey key = authorityKey(reservation.authorityKey());
         var opaqueCancellation = adapt(cancellation);
         return provider.read(key, opaqueCancellation).thenCompose(read -> {
-            if (!(read instanceof ZLinkStoreReadFound found)
-                || decode(found.value().bytes()).aggregate() != null
-                || !matches(decode(found.value().bytes()), reservation)) {
+            if (!(read instanceof ZLinkStoreReadFound found)) {
                 return completed(ZLinkObjectAbortResult.STALE);
             }
             AuthorityRecord current = decode(found.value().bytes());
-            return readCapacity(current.allocation(), opaqueCancellation)
-                .thenCompose(capacity -> {
-                    if (capacity.isEmpty()) {
-                        return completed(ZLinkObjectAbortResult.STALE);
-                    }
-                    CapacitySnapshot stored = capacity.orElseThrow();
-                    CapacityRecord next = stored.record().adjustPending(
-                        current.allocation().capacityBundle(), -1);
-                    if (next == null) {
-                        return completed(ZLinkObjectAbortResult.STALE);
-                    }
-                    return provider.write(
-                            new ZLinkStoreWriteRequest(
-                                List.of(
-                                    new ZLinkStoreVersionCondition(
-                                        key, found.value().version()),
-                                    new ZLinkStoreVersionCondition(
-                                        stored.key(),
-                                        stored.value().version())),
-                                List.of(
-                                    new ZLinkStoreDelete(key),
-                                    new ZLinkStorePut(
-                                        stored.key(),
-                                        encodeCapacity(next),
-                                        null))),
-                            opaqueCancellation)
-                        .thenApply(result -> result
-                            instanceof ZLinkStoreWriteApplied
-                            ? ZLinkObjectAbortResult.ABORTED
-                            : ZLinkObjectAbortResult.STALE);
-                });
+            if (current.aggregate() != null || !matches(current, reservation)) {
+                return completed(ZLinkObjectAbortResult.STALE);
+            }
+            return writeCreationTransition(
+                    key, found.value(), current, null, terminal,
+                    opaqueCancellation)
+                .thenApply(applied -> applied
+                    ? ZLinkObjectAbortResult.ABORTED
+                    : ZLinkObjectAbortResult.STALE);
         });
     }
 
@@ -724,20 +684,218 @@ final class ZLinkProviderAuthorityRepository {
         ZLinkObjectReservation reservation,
         ZLinkCreationOperationTerminal terminal,
         ZLinkStoreCancellation cancellation) {
-        Objects.requireNonNull(terminal, "terminal");
-        return abort(reservation, cancellation).thenApply(result -> switch (
-            result) {
-            case ABORTED -> ZLinkObjectRejectResult.REJECTED;
-            case ALREADY_ABORTED -> ZLinkObjectRejectResult.ALREADY_REJECTED;
-            case STALE -> ZLinkObjectRejectResult.STALE;
-        });
+        requireTerminal(
+            reservation, terminal, ZLinkCreationTerminalState.REJECTED);
+        return abortCreation(reservation, terminal, cancellation)
+            .thenApply(result -> switch (result) {
+                case ABORTED -> ZLinkObjectRejectResult.REJECTED;
+                case ALREADY_ABORTED -> ZLinkObjectRejectResult.ALREADY_REJECTED;
+                case STALE -> ZLinkObjectRejectResult.STALE;
+            });
+    }
+
+    private CompletionStage<Boolean> writeCreationTransition(
+        ZLinkStoreKey key,
+        ZLinkStoreValue authority,
+        AuthorityRecord current,
+        byte[] readyPayload,
+        ZLinkCreationOperationTerminal terminal,
+        systems.zlink.framework.locationprovider.ZLinkStoreCancellation
+            cancellation) {
+        return readCapacity(current.allocation(), cancellation)
+            .thenCompose(capacity -> {
+                if (capacity.isEmpty()) {
+                    return completed(false);
+                }
+                CapacitySnapshot stored = capacity.orElseThrow();
+                CapacityRecord nextCapacity = readyPayload == null
+                    ? stored.record().adjustPending(
+                        current.allocation().capacityBundle(), -1)
+                    : stored.record().transition(
+                        current.allocation().capacityBundle());
+                if (nextCapacity == null) {
+                    return completed(false);
+                }
+                List<ZLinkStoreCondition> conditions = new ArrayList<>(List.of(
+                    new ZLinkStoreVersionCondition(key, authority.version()),
+                    new ZLinkStoreVersionCondition(
+                        stored.key(), stored.value().version())));
+                List<ZLinkStoreMutation> mutations = new ArrayList<>();
+                if (readyPayload == null) {
+                    mutations.add(new ZLinkStoreDelete(key));
+                } else {
+                    AuthorityRecord next = new AuthorityRecord(
+                        readyPayload,
+                        current.objectGeneration(),
+                        current.authorityOwnerGeneration(),
+                        current.ownerId(),
+                        current.ownerLeaseGeneration(),
+                        withState(
+                            current.allocation(), ZLinkPlacementAllocationState.ACTIVE),
+                        Optional.empty());
+                    mutations.add(new ZLinkStorePut(key, encode(next), null));
+                }
+                mutations.add(new ZLinkStorePut(
+                    stored.key(), encodeCapacity(nextCapacity), null));
+                if (terminal != null) {
+                    Duration retention = Duration.between(
+                        stored.value().storeNow(), terminal.expiresAt());
+                    if (retention.isZero() || retention.isNegative()) {
+                        throw new IllegalArgumentException(
+                            "terminal expiresAt must be later than provider store time");
+                    }
+                    ZLinkStoreKey terminalKey =
+                        creationTerminalKey(terminal.operation());
+                    conditions.add(new ZLinkStoreMissingCondition(terminalKey));
+                    // A full 1 MiB envelope needs its own provider value.
+                    mutations.add(new ZLinkStorePut(
+                        terminalKey, encodeTerminal(terminal), retention));
+                    mutations.add(new ZLinkStorePut(
+                        creationTerminalPayloadKey(terminal.operation()),
+                        terminal.terminalEnvelope(), retention));
+                }
+                return provider.write(
+                        new ZLinkStoreWriteRequest(conditions, mutations),
+                        cancellation)
+                    .thenApply(result -> result instanceof ZLinkStoreWriteApplied);
+            });
     }
 
     CompletionStage<ZLinkCreationTerminalReadResult> readCreationTerminal(
         ZLinkCreationOperationIdentity operation,
         ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(operation, "operation");
-        return completed(new ZLinkCreationTerminalMissing());
+        return provider.read(creationTerminalKey(operation), adapt(cancellation))
+            .thenCompose(read -> {
+                if (!(read instanceof ZLinkStoreReadFound found)) {
+                    return completed(new ZLinkCreationTerminalMissing());
+                }
+                return provider.read(
+                        creationTerminalPayloadKey(operation), adapt(cancellation))
+                    .thenApply(payload -> {
+                        if (!(payload instanceof ZLinkStoreReadFound
+                                payloadFound)) {
+                            return new ZLinkCreationTerminalMissing();
+                        }
+                        ZLinkCreationOperationTerminal terminal = decodeTerminal(
+                            found.value().bytes(), payloadFound.value().bytes());
+                        if (!terminal.operation().equals(operation)
+                            || !terminal.expiresAt().isAfter(
+                                payloadFound.value().storeNow())) {
+                            return new ZLinkCreationTerminalMissing();
+                        }
+                        if (!terminalChecksumMatches(terminal)) {
+                            throw new IllegalStateException(
+                                "Location Store creation terminal checksum is invalid");
+                        }
+                        return new ZLinkCreationTerminalFound(terminal);
+                    });
+            });
+    }
+
+    private static void requireTerminal(
+        ZLinkObjectReservation reservation,
+        ZLinkCreationOperationTerminal terminal,
+        ZLinkCreationTerminalState expectedState) {
+        Objects.requireNonNull(terminal, "terminal");
+        if (!terminal.reservation().equals(reservation)) {
+            throw new IllegalArgumentException(
+                "terminal reservation must match the exact reservation");
+        }
+        if (terminal.state() != expectedState) {
+            throw new IllegalArgumentException(
+                "terminal state must be " + expectedState);
+        }
+        if (!terminalChecksumMatches(terminal)) {
+            throw new IllegalArgumentException(
+                "terminalSha256 does not match terminalEnvelope");
+        }
+    }
+
+    private static boolean terminalChecksumMatches(
+        ZLinkCreationOperationTerminal terminal) {
+        return Arrays.equals(terminal.terminalSha256(),
+            ZLinkAggregateInventoryStore.sha256(terminal.terminalEnvelope()));
+    }
+
+    private static ZLinkStoreKey creationTerminalKey(
+        ZLinkCreationOperationIdentity operation) {
+        return new ZLinkStoreKey("zlink:v11:creation-terminal:"
+            + operation.sourceNodeRid().toHex() + ":"
+            + Long.toUnsignedString(operation.sourceLifecycleGeneration()) + ":"
+            + Long.toUnsignedString(operation.operationIdHigh(), 16) + ":"
+            + Long.toUnsignedString(operation.operationIdLow(), 16));
+    }
+
+    private static ZLinkStoreKey creationTerminalPayloadKey(
+        ZLinkCreationOperationIdentity operation) {
+        return new ZLinkStoreKey(
+            creationTerminalKey(operation).value() + ":payload");
+    }
+
+    private static byte[] encodeTerminal(
+        ZLinkCreationOperationTerminal terminal) {
+        try {
+            var bytes = new ByteArrayOutputStream();
+            var out = new DataOutputStream(bytes);
+            out.writeInt(1);
+            var operation = terminal.operation();
+            writeBytes(out, operation.sourceNodeRid().toBytes());
+            out.writeLong(operation.sourceLifecycleGeneration());
+            out.writeLong(operation.operationIdHigh());
+            out.writeLong(operation.operationIdLow());
+            var reservation = terminal.reservation();
+            out.writeUTF(reservation.authorityKey());
+            out.writeUTF(reservation.storeVersion());
+            out.writeLong(reservation.objectGeneration());
+            out.writeLong(reservation.authorityOwnerGeneration());
+            out.writeUTF(reservation.reservationVersion());
+            out.writeUTF(reservation.targetDescriptor().meshName());
+            writeBytes(out, reservation.targetDescriptor().rid().toBytes());
+            out.writeLong(reservation.targetDescriptorLifecycleGeneration());
+            out.writeUTF(reservation.targetOwner().ownerId());
+            out.writeLong(reservation.targetOwner().leaseGeneration());
+            out.writeUTF(terminal.state().name());
+            writeBytes(out, terminal.terminalSha256());
+            out.writeLong(terminal.expiresAt().getEpochSecond());
+            out.writeInt(terminal.expiresAt().getNano());
+            out.flush();
+            return bytes.toByteArray();
+        } catch (IOException failure) {
+            throw new IllegalStateException(
+                "Failed to encode creation terminal", failure);
+        }
+    }
+
+    private static ZLinkCreationOperationTerminal decodeTerminal(
+        byte[] bytes, byte[] envelope) {
+        try {
+            var in = new DataInputStream(new ByteArrayInputStream(bytes));
+            if (in.readInt() != 1) {
+                throw new IOException("unrecognized creation terminal record version");
+            }
+            var operation = new ZLinkCreationOperationIdentity(
+                RoutingId.from(readBytes(in)),
+                in.readLong(), in.readLong(), in.readLong());
+            var reservation = new ZLinkObjectReservation(
+                in.readUTF(), in.readUTF(), in.readLong(), in.readLong(), in.readUTF(),
+                new ZLinkMeshNodeDescriptorKey(
+                    in.readUTF(), RoutingId.from(readBytes(in))),
+                in.readLong(),
+                new ZLinkLocationOwnerToken(in.readUTF(), in.readLong()));
+            var terminal = new ZLinkCreationOperationTerminal(
+                operation, reservation,
+                ZLinkCreationTerminalState.valueOf(in.readUTF()),
+                envelope, readBytes(in),
+                Instant.ofEpochSecond(in.readLong(), in.readInt()));
+            if (in.available() != 0) {
+                throw new IOException("creation terminal record has trailing bytes");
+            }
+            return terminal;
+        } catch (IOException | IllegalArgumentException failure) {
+            throw new IllegalStateException(
+                "Location Store creation terminal is invalid", failure);
+        }
     }
 
     CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(

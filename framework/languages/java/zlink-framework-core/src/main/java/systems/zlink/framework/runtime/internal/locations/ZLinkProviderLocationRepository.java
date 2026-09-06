@@ -191,7 +191,7 @@ public final class ZLinkProviderLocationRepository
         ZLinkObjectReservation reservation,
         ZLinkCreationOperationTerminal terminal,
         ZLinkStoreCancellation cancellation) {
-        return authority.abort(reservation, cancellation);
+        return authority.abort(reservation, terminal, cancellation);
     }
 
     @Override
