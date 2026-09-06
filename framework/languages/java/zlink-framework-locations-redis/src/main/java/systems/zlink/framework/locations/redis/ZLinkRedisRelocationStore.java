@@ -25,7 +25,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 
 public final class ZLinkRedisRelocationStore
     implements ZLinkRelocationStore, AutoCloseable {
-    private static final int MAX_COMPONENT_BYTES = 64 * 1024 * 1024;
+    private static final int MAX_ENCODED_BLOB_BYTES = 64 * 1024 * 1024 + 23;
     private static final String PUT = """
         if redis.replicate_commands then redis.replicate_commands() end
         local time = redis.call('TIME')
@@ -176,9 +176,9 @@ public final class ZLinkRedisRelocationStore
 
     private static byte[] requirePayload(byte[] payload) {
         byte[] snapshot = Objects.requireNonNull(payload, "payload").clone();
-        if (snapshot.length > MAX_COMPONENT_BYTES) {
+        if (snapshot.length > MAX_ENCODED_BLOB_BYTES) {
             throw new IllegalArgumentException(
-                "relocation Store component exceeds 64 MiB");
+                "relocation Store encoded blob exceeds 64 MiB + 23 bytes");
         }
         return snapshot;
     }
