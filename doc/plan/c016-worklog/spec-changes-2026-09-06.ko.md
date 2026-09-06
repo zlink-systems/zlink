@@ -75,3 +75,13 @@
 - **Retained Core lease 잔재 제거(F-R4-7)**: payload §8·wire·relocation §4.3의 "Core lease 반환" 서술 → Framework payload 저장소 수명(§8 `retained-record-children`)과 Core HWM 계상(Core socket)으로 분리.
 - **Payload §9 검증**: 내부 white-box 8항목을 §2·§3·§7 규칙 문단의 "내부 확인 조건"으로 옮기고 §9는 codec callback 호출 횟수·해제 callback 등 인터페이스 관찰만.
 - **Role 용어(D-122)**: glossary "Channel Client와 Server role"을 RouteMesh 등록 역할로 한정. ClientServer의 Server가 Client에 업무 호출을 시작하지 못하는 규칙은 ClientServer §1 소유. worker scheduler `CapacityExceeded`(SD-03)는 유지.
+
+## 8. Language projections (D-123 ~ D-124)
+행동 변경 없음. 35 ko/en 쌍. 언어별 interface 문서가 공통 규칙을 다시 쓰던 부분을 걷어내고 이름·타입 투영만 남겼다.
+- **유실 counter(F-R8-1)**: cpp/dotnet/java/kotlin/node 5개 문서가 각각 "구독마다 0 시작, 단조 증가, 2^63-1 포화, queue 가득 참으로 종료 안 함"을 되풀이했다. Runtime monitoring §7.2가 소유하고 언어 문서는 타입(`std::uint64_t`/`ulong`/`long`/`bigint`)만 적는다. (5 → 1)
+- **Actor Create/GetOrCreate single-use(F-R8-2)**: 5개 언어 문서 + submit §1이 "중복 option·terminal 재호출 = InvalidOperation"을 각자 정의. Actor 모델 §6.2가 소유. Java 구현이 이 규칙을 어기던 것(F-R8-15)과 execution-context 거부 kind가 `NOT_CONFIGURED`였던 것(D-123)은 코드 수정으로 맞췄다.
+- **Command 44 route 갱신(F-R8-4)**: cpp 04-spots·java·kotlin·node 문서는 "응답이 없으면 정해진 간격으로 다시 보낸다", cpp 06-stream-session은 "한 번만 send, 재전송 없음"으로 서로 달랐다. 네 runtime 코드는 모두 단회 제출·무응답. Session binding §8.2가 "response 없이 한 번 제출, 재전송 없음, seal timeout이 미도착 처리 소유"를 소유하고, 언어 문서 12곳은 한 줄 링크. §8.2에 "같은 ObjectGeneration에만 적용·rebind 아님·다른 Actor route 유지"도 모았다. (12 → 1)
+- **Cold activation 절차(F-R8-20)**: cpp/dotnet/java/kotlin/node 문서가 7~9단계 절차 + Mermaid를 각각 복제(type/Mesh 선택 오류 kind 포함). Spot address messaging §4·§5가 소유하고 언어 문서는 marker overload·완료 타입만. Stored intent 재개 범위는 Object lifecycle §3. Mermaid 8개 제거.
+- **HTTP client 의존 방향(F-R8-5)**: HTTP 12는 "HTTP client → framework 계약", 실행 문서 05는 "framework → HTTP client"로 역방향이었다. HTTP scope §1.3이 소유. ".NET Contracts assembly 분리"를 모든 언어의 binary 경계로 일반화하지 않음(cpp target·java core project·node package는 Framework를 참조).
+- **선언 정정**: NestJS `configureInboundDispatch(): ZLinkInboundDispatchOptions` 누락 복원(F-R8-6), Kotlin generated `onCreateActor` 반환형 `CompletionStage<ZLinkActorCreateResponse>`(F-R8-7).
+- **미적용(0.18.0, D-114)**: HTTP Yield 제거, cpp HTTP blocking fetch·deadline, HTTP one-way 완료 경계, fixed RID, cpp raw timer event, cpp Session bind 반환형·local create 문서 누락, node HTTP `InternalFailure`.
