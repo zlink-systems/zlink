@@ -509,6 +509,7 @@ if(ZLINK_CPP_BUILD_TESTS)
     test_cpp_contract_socket.cpp
     test_cpp_contract_request_reply.cpp
     test_cpp_contract_request_writable_retry.cpp
+    test_cpp_contract_send_runtime_owner.cpp
     test_cpp_contract_exact_target_retry.cpp
     test_cpp_contract_exact_request_target.cpp
     test_cpp_contract_options.cpp
@@ -537,6 +538,19 @@ if(ZLINK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_contract_exact_request_target PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
   )
+
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    foreach(test_name IN ITEMS
+        test_cpp_contract_writable_token_delivery
+        test_cpp_contract_completion_drain_order)
+      add_cpp_contract_test(${test_name} "tests/contract/${test_name}.cpp")
+      target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src)
+      target_link_options(${test_name} PRIVATE
+        "LINKER:--wrap=zlink_send_part_rid"
+        "LINKER:--wrap=zlink_request_part"
+        "LINKER:--wrap=zlink_completion_recv")
+    endforeach()
+  endif()
 
   add_cpp_binding_executable(
     test_cpp_send_close_stress

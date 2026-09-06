@@ -64,10 +64,9 @@ async_result_t<void> submit_send_awaitable (
         // Most DONTWAIT sends are admitted immediately. Submit first so that
         // path takes neither the completion-owner lock nor a waiter-map node.
         // A concurrent drain retains an early WRITABLE record by this entry's
-        // unique context until registration replays it.
+        // unique context until registration joins the owning drain.
         if (!entry->start_send (true)) {
             runtime->completion->register_send_entry (entry);
-            entry->detach_send_sources ();
         }
     }
     catch (...) {

@@ -27,6 +27,7 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
 {
   public:
     enum class kind_t { send_retry, request };
+    enum class capture_result_t { pending, terminal, retry };
 
     explicit completion_entry_t (
       async_operation_state_t<void> *send_result_,
@@ -49,7 +50,8 @@ class completion_entry_t : public std::enable_shared_from_this<completion_entry_
     void start_request ();
     void publish (uint64_t completion_id_) noexcept;
     void fail_submit () noexcept;
-    bool capture (zlink_completion_t &completion_) noexcept;
+    capture_result_t capture (zlink_completion_t &completion_) noexcept;
+    bool retry () noexcept;
     void terminate (int terminal_errno_) noexcept;
     void wait_settled () noexcept;
     std::vector<message_t> wait_request ();
@@ -114,7 +116,7 @@ class completion_owner_t : public std::enable_shared_from_this<completion_owner_
     std::shared_ptr<completion_entry_t> _inline_entry;
     std::pmr::unordered_map<void *, std::shared_ptr<completion_entry_t>> _entries;
     std::pmr::unordered_map<void *, zlink_completion_t> _early_send_completions;
-    size_t _send_entry_count = 0;
+    std::condition_variable _send_registered;
     const void *_public_owner = nullptr;
     std::thread _runtime_thread;
     uint64_t _runtime_generation = 0;

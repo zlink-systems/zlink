@@ -9,7 +9,6 @@
 
 #include <cerrno>
 #include <chrono>
-#include <cstring>
 #include <exception>
 #include <system_error>
 
@@ -307,7 +306,8 @@ void completion_entry_t::fail_submit () noexcept
     _changed.notify_all ();
 }
 
-bool completion_entry_t::capture (zlink_completion_t &completion_) noexcept
+completion_entry_t::capture_result_t
+completion_entry_t::capture (zlink_completion_t &completion_) noexcept
 {
     completion_guard_t guard (completion_);
 
@@ -318,33 +318,21 @@ bool completion_entry_t::capture (zlink_completion_t &completion_) noexcept
         const zlink_send_complete_result_t send_result = completion_.send_result;
         const int terminal_errno = completion_.send_terminal_errno;
 
-        bool routing_id_matches = true;
-        const zlink_routing_id_t *const expected_rid =
-          target_first_rid_native (_send_operation->raw.target);
-        if (expected_rid) {
-            routing_id_matches = completion_.peer_rid.size == expected_rid->size
-              && std::memcmp (completion_.peer_rid.data, expected_rid->data,
-                              expected_rid->size)
-                   == 0;
-        } else
-            routing_id_matches = completion_.peer_rid.size == 0;
-
         {
             std::unique_lock<std::mutex> lock (_mutex);
             _changed.wait (lock, [this] { return _published || _settled; });
             if (_settled)
-                return true;
+                return capture_result_t::terminal;
             if (completion_id != _completion_id || user_context != this)
-                return false;
+                return capture_result_t::pending;
             _published = false;
             _completion_id = 0;
         }
 
-        if (completion_kind != ZLINK_COMPLETION_WRITABLE
-            || !routing_id_matches) {
+        if (completion_kind != ZLINK_COMPLETION_WRITABLE) {
             fail_send (std::make_exception_ptr (
               submit_error_t (submit_result_t::internal_error, EPROTO)));
-            return true;
+            return capture_result_t::terminal;
         }
 
         if (send_result != ZLINK_SEND_ADMITTED || terminal_errno != 0) {
@@ -353,16 +341,10 @@ bool completion_entry_t::capture (zlink_completion_t &completion_) noexcept
               ? send_terminal_result (error)
               : submit_result_t::internal_error;
             fail_send (std::make_exception_ptr (submit_error_t (result, error)));
-            return true;
+            return capture_result_t::terminal;
         }
 
-        try {
-            return submit_send_attempt (false);
-        }
-        catch (...) {
-            fail_send (std::current_exception ());
-            return true;
-        }
+        return capture_result_t::retry;
     }
 
     bool waiting_writable = false;
@@ -370,10 +352,10 @@ bool completion_entry_t::capture (zlink_completion_t &completion_) noexcept
         std::unique_lock<std::mutex> lock (_mutex);
         _changed.wait (lock, [this] { return _published || _settled; });
         if (_settled)
-            return true;
+            return capture_result_t::terminal;
         if (completion_.completion_id != _completion_id
             || completion_.user_context != this)
-            return false;
+            return capture_result_t::pending;
         waiting_writable = _request_waiting_writable;
         if (waiting_writable) {
             _published = false;
@@ -382,23 +364,10 @@ bool completion_entry_t::capture (zlink_completion_t &completion_) noexcept
     }
 
     if (waiting_writable) {
-        bool routing_id_matches = true;
-        const zlink_routing_id_t *const expected_rid =
-          target_first_rid_native (_request_operation->raw.target);
-        if (expected_rid) {
-            routing_id_matches = completion_.peer_rid.size == expected_rid->size
-              && std::memcmp (completion_.peer_rid.data, expected_rid->data,
-                              expected_rid->size)
-                   == 0;
-        } else {
-            routing_id_matches = completion_.peer_rid.size == 0;
-        }
-
-        if (completion_.kind != ZLINK_COMPLETION_WRITABLE
-            || !routing_id_matches) {
+        if (completion_.kind != ZLINK_COMPLETION_WRITABLE) {
             fail_request (std::make_exception_ptr (
               submit_error_t (submit_result_t::internal_error, EPROTO)));
-            return true;
+            return capture_result_t::terminal;
         }
         if (completion_.send_result != ZLINK_SEND_ADMITTED
             || completion_.send_terminal_errno != 0) {
@@ -411,16 +380,10 @@ bool completion_entry_t::capture (zlink_completion_t &completion_) noexcept
                 : submit_result_t::internal_error;
             fail_request (std::make_exception_ptr (
               submit_error_t (result, error)));
-            return true;
+            return capture_result_t::terminal;
         }
 
-        try {
-            return submit_request_attempt (false);
-        }
-        catch (...) {
-            fail_request (std::current_exception ());
-            return true;
-        }
+        return capture_result_t::retry;
     }
 
     std::vector<message_t> parts;
@@ -446,12 +409,27 @@ bool completion_entry_t::capture (zlink_completion_t &completion_) noexcept
 
     std::unique_lock<std::mutex> lock (_mutex);
     if (_captured)
-        return _settled;
+        return _settled ? capture_result_t::terminal : capture_result_t::pending;
     _failure = std::move (failure);
     _reply_parts = std::move (parts);
     _captured = true;
     settle_if_joined (lock);
-    return _settled;
+    return _settled ? capture_result_t::terminal : capture_result_t::pending;
+}
+
+bool completion_entry_t::retry () noexcept
+{
+    try {
+        return _kind == kind_t::send_retry ? submit_send_attempt (false)
+                                          : submit_request_attempt (false);
+    }
+    catch (...) {
+        if (_kind == kind_t::send_retry)
+            fail_send (std::current_exception ());
+        else
+            fail_request (std::current_exception ());
+        return true;
+    }
 }
 
 void completion_entry_t::terminate (int terminal_errno_) noexcept
@@ -567,8 +545,6 @@ void completion_owner_t::register_send_entry (
     if (!entry_ || entry_->kind () != completion_entry_t::kind_t::send_retry)
         throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
 
-    zlink_completion_t early_completion{};
-    bool has_early_completion = false;
     std::unique_lock<std::mutex> lock (_mutex);
     if (_shutdown)
         throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
@@ -581,49 +557,27 @@ void completion_owner_t::register_send_entry (
         if (!inserted.second)
             throw submit_error_t (submit_result_t::invalid_state, EBUSY);
     }
-    ++_send_entry_count;
-
-    const auto early = _early_send_completions.find (entry_.get ());
-    if (early != _early_send_completions.end ()) {
-        early_completion = early->second;
-        _early_send_completions.erase (early);
-        has_early_completion = true;
-    }
-
-    // SEND retry progress belongs to the application's public poller. Stop the
-    // REQUEST fallback owner before the first DONTWAIT attempt can publish a
-    // WRITABLE completion; otherwise that private thread could consume it.
     if (!_public_owner)
-        stop_runtime_owner_locked (lock);
-    lock.unlock ();
-
-    if (has_early_completion && entry_->capture (early_completion))
-        unregister_entry (entry_.get ());
+        start_runtime_owner_locked ();
+    // Detach before publishing the entry to a concurrent drain. The runtime
+    // owner may immediately resubmit it once this lock is released.
+    entry_->detach_send_sources ();
+    // An early WRITABLE stays with the drain that received it. Registration
+    // only joins that drain; it never resubmits from the submitting thread.
+    _early_send_completions.erase (entry_.get ());
+    _send_registered.notify_all ();
 }
 
 void completion_owner_t::unregister_entry (completion_entry_t *entry_) noexcept
 {
-    try {
-        std::unique_lock<std::mutex> lock (_mutex);
-        if (_inline_entry.get () == entry_) {
-            if (_inline_entry->kind () == completion_entry_t::kind_t::send_retry
-                && _send_entry_count != 0)
-                --_send_entry_count;
-            _inline_entry.reset ();
-        } else {
-            const auto found = _entries.find (entry_);
-            if (found == _entries.end ())
-                return;
-            if (found->second->kind () == completion_entry_t::kind_t::send_retry
-                && _send_entry_count != 0)
-                --_send_entry_count;
-            _entries.erase (found);
-        }
-        if (!_shutdown && !_public_owner && _send_entry_count == 0
-            && (_inline_entry || !_entries.empty ()))
-            start_runtime_owner_locked ();
-    }
-    catch (...) {
+    std::lock_guard<std::mutex> lock (_mutex);
+    // Failed registration releases a drain waiting for this provisional SEND.
+    _early_send_completions.erase (entry_);
+    _send_registered.notify_all ();
+    if (_inline_entry.get () == entry_) {
+        _inline_entry.reset ();
+    } else {
+        _entries.erase (entry_);
     }
 }
 
@@ -631,29 +585,51 @@ size_t completion_owner_t::drain (bool wait_for_publish_,
                                   uint64_t runtime_generation_)
 {
     size_t processed = 0;
+    std::vector<std::shared_ptr<completion_entry_t>> retries;
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        if (_shutdown
+            || (!wait_for_publish_
+                && (_runtime_stop || _public_owner
+                    || runtime_generation_ != _runtime_generation)))
+            return processed;
+    }
+    // Ownership transfer joins this entire drain, including its retries.
+    // Stopping between records would strand a WRITABLE already captured here.
     for (;;) {
         {
             std::lock_guard<std::mutex> lock (_mutex);
-            if (_shutdown
-                || (!wait_for_publish_
-                    && (_runtime_stop || _public_owner
-                        || _send_entry_count != 0
-                        || runtime_generation_ != _runtime_generation)))
-                break;
+            if (_shutdown)
+                return processed;
         }
         zlink_completion_t completion{};
         completion.struct_size = sizeof (completion);
         const zlink_recv_result_t rc = zlink_completion_recv (
           _socket, &completion, static_cast<zlink_recv_flags_t> (ZLINK_DONTWAIT));
-        if (rc == ZLINK_RECV_NO_DATA)
+        if (rc == ZLINK_RECV_NO_DATA) {
+            for (const auto &entry : retries) {
+                {
+                    std::lock_guard<std::mutex> lock (_mutex);
+                    if (_shutdown)
+                        return processed;
+                }
+                if (entry->retry ())
+                    unregister_entry (entry.get ());
+            }
             break;
-        if (rc != ZLINK_RECV_OK)
-            throw recv_error_t (static_cast<recv_result_t> (rc), zlink_errno ());
+        }
+        if (rc != ZLINK_RECV_OK) {
+            const int error = zlink_errno ();
+            for (const auto &entry : retries) {
+                entry->terminate (error);
+                unregister_entry (entry.get ());
+            }
+            throw recv_error_t (static_cast<recv_result_t> (rc), error);
+        }
 
         std::shared_ptr<completion_entry_t> entry;
-        bool retained_early_send = false;
         {
-            std::lock_guard<std::mutex> lock (_mutex);
+            std::unique_lock<std::mutex> lock (_mutex);
             if (_inline_entry.get () == completion.user_context)
                 entry = _inline_entry;
             else {
@@ -663,21 +639,36 @@ size_t completion_owner_t::drain (bool wait_for_publish_,
             }
             if (!entry && !_shutdown && completion.user_context
                      && completion.kind == ZLINK_COMPLETION_WRITABLE) {
-                // async SEND submits before taking the owner/map locks. If a
-                // concurrent public/runtime drain wins that short window,
-                // retain its exact token until register_send_entry replays it.
-                // The map node is allocated only on actual backpressure.
+                // SEND's immediate-admission path skips registry locks. Join
+                // an early token with registration here so the same owner
+                // captures it and reaches NO_DATA before any resubmission.
                 const auto inserted = _early_send_completions.emplace (
                   completion.user_context, completion);
-                retained_early_send = inserted.second;
+                if (inserted.second) {
+                    _send_registered.wait (lock, [&] {
+                        return _shutdown
+                          || _early_send_completions.find (completion.user_context)
+                               == _early_send_completions.end ();
+                    });
+                    _early_send_completions.erase (completion.user_context);
+                    if (_inline_entry.get () == completion.user_context)
+                        entry = _inline_entry;
+                    else {
+                        const auto found = _entries.find (completion.user_context);
+                        if (found != _entries.end ())
+                            entry = found->second;
+                    }
+                }
             }
         }
         if (entry) {
-            const bool terminal = entry->capture (completion);
-            if (terminal) {
+            const auto result = entry->capture (completion);
+            if (result == completion_entry_t::capture_result_t::terminal) {
                 unregister_entry (entry.get ());
+            } else if (result == completion_entry_t::capture_result_t::retry) {
+                retries.push_back (std::move (entry));
             }
-        } else if (!retained_early_send) {
+        } else {
             zlink_completion_close (&completion);
         }
         ++processed;
@@ -687,8 +678,7 @@ size_t completion_owner_t::drain (bool wait_for_publish_,
 
 void completion_owner_t::start_runtime_owner_locked ()
 {
-    if (_runtime_poller || _runtime_thread.joinable () || _shutdown
-        || _send_entry_count != 0)
+    if (_runtime_poller || _runtime_thread.joinable () || _shutdown)
         return;
     _runtime_poller = zlink_poller_new ();
     if (!_runtime_poller)
@@ -794,7 +784,7 @@ void completion_owner_t::transfer_to_runtime (const void *poller_owner_) noexcep
         if (_public_owner != poller_owner_)
             return;
         _public_owner = nullptr;
-        if ((_inline_entry || !_entries.empty ()) && _send_entry_count == 0) {
+        if (_inline_entry || !_entries.empty ()) {
             try {
                 start_runtime_owner_locked ();
             }
@@ -815,6 +805,7 @@ void completion_owner_t::shutdown (int terminal_errno_) noexcept
     if (_shutdown)
         return;
     _shutdown = true;
+    _send_registered.notify_all ();
     stop_runtime_owner_locked (lock);
     std::shared_ptr<completion_entry_t> inline_entry = std::move (_inline_entry);
     auto entries = std::move (_entries);
@@ -824,7 +815,6 @@ void completion_owner_t::shutdown (int terminal_errno_) noexcept
         zlink_completion_close (&completion);
     }
     _early_send_completions.clear ();
-    _send_entry_count = 0;
     lock.unlock ();
     if (inline_entry)
         inline_entry->terminate (terminal_errno_);
