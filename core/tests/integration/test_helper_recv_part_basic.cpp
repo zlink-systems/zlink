@@ -2,8 +2,6 @@
 
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
-#include "../src/api/socket/socket_request_reply_internal.hpp"
-#include "../src/api/socket/request_reply_protocol_internal.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -210,49 +208,6 @@ void test_recv_part_reads_each_part_and_tracks_has_more ()
     test_context_socket_close_zero_linger (router);
 }
 
-void test_router_direct_single_part_uses_owned_source_rid_storage ()
-{
-    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
-    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (dealer, "D1", 2));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_bind (router, "inproc://helper-router-direct-source-rid-storage"));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_connect (dealer, "inproc://helper-router-direct-source-rid-storage"));
-    set_recv_timeout_ms (router, 3000);
-    msleep (SETTLE_TIME);
-
-    socket_handle_t router_handle = as_socket_handle (router);
-    TEST_ASSERT_NOT_NULL (router_handle.socket);
-
-    zlink_msg_t outbound;
-    init_part (&outbound, "single");
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_send (dealer, &outbound, 1, static_cast<zlink_send_flags_t> (0)));
-
-    const zlink_routing_id_t *source_rid = NULL;
-    uint64_t request_seq = 0;
-    zlink_msg_t *parts = NULL;
-    size_t part_count = 0;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::socket_reqrep_internal::recv_router_message_direct (
-        as_socket_handle (router), &source_rid, &request_seq, &parts,
-        &part_count, 0));
-
-    TEST_ASSERT_EQUAL_PTR (
-      router_handle.socket->last_recv_source_rid_view (), source_rid);
-    TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
-    TEST_ASSERT_EQUAL_UINT8 (2, source_rid->size);
-    TEST_ASSERT_EQUAL_MEMORY ("D1", source_rid->data, 2);
-    TEST_ASSERT_EQUAL_UINT64 (1, part_count);
-    TEST_ASSERT_EQUAL_MEMORY ("single", zlink_msg_data (&parts[0]), 6);
-    zlink_multipart_close (parts, part_count);
-
-    router_handle = socket_handle_t ();
-    test_context_socket_close_zero_linger (dealer);
-    test_context_socket_close_zero_linger (router);
-}
 
 void test_router_recv_part_metadata_view_invalidates_on_next_recv_like_call ()
 {
@@ -457,121 +412,7 @@ void test_subscribe_part_reports_needed_topic_size_without_consuming_payload ()
     test_context_socket_close_zero_linger (pub);
 }
 
-void test_subscribe_receive_surfaces_reject_request_metadata_after_topic ()
-{
-    for (int aggregate = 0; aggregate <= 1; ++aggregate) {
-        void *pub = test_context_socket (ZLINK_SOCKET_PUB);
-        void *sub = test_context_socket (ZLINK_SOCKET_SUB);
-        TEST_ASSERT_NOT_NULL (pub);
-        TEST_ASSERT_NOT_NULL (sub);
 
-        char endpoint[96];
-        snprintf (endpoint, sizeof (endpoint),
-                  "inproc://subscribe-later-request-kind-%d", aggregate);
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (pub, endpoint));
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, endpoint));
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_set_subscription (sub, ""));
-        set_recv_timeout_ms (sub, 1000);
-        msleep (SETTLE_TIME * 6);
-
-        zlink_msg_t payload;
-        init_part (&payload, "metadata-after-topic");
-        TEST_ASSERT_SUCCESS_ERRNO (
-          reinterpret_cast<zlink::msg_t *> (&payload)
-            ->set_request_reply_metadata (
-              zlink::request_reply::request_type, 77 + aggregate));
-        TEST_ASSERT_SUCCESS_ERRNO (
-          zlink_publish (pub, "topic", &payload, 1,
-                         ZLINK_SEND_FLAGS_NONE));
-
-        errno = 0;
-        int observed_errno = 0;
-        if (aggregate) {
-            zlink_msg_t *parts = NULL;
-            size_t part_count = 0;
-            char topic[16];
-            size_t topic_len = sizeof (topic);
-            TEST_ASSERT_EQUAL_INT (
-              ZLINK_RECV_INTERNAL_ERROR,
-              zlink_subscribe (sub, NULL, &parts, &part_count, topic,
-                               &topic_len, ZLINK_RECV_FLAGS_NONE));
-            observed_errno = errno;
-            TEST_ASSERT_NULL (parts);
-            TEST_ASSERT_EQUAL_UINT64 (0, part_count);
-        } else {
-            char topic[16];
-            size_t topic_len = 0;
-            zlink_msg_t part;
-            TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-            zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-            TEST_ASSERT_EQUAL_INT (
-              ZLINK_RECV_INTERNAL_ERROR,
-              zlink_subscribe_part (
-                sub, NULL, topic, sizeof (topic), &topic_len, &part,
-                &has_more, ZLINK_RECV_FLAGS_NONE));
-            observed_errno = errno;
-            TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
-            unsigned char kind = 0xff;
-            uint64_t sequence = UINT64_MAX;
-            TEST_ASSERT_FALSE (
-              reinterpret_cast<zlink::msg_t *> (&part)
-                ->get_request_reply_metadata (&kind, &sequence));
-            TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
-        }
-        TEST_ASSERT_EQUAL_INT (EPROTO, observed_errno);
-
-        test_context_socket_close_zero_linger (sub);
-        test_context_socket_close_zero_linger (pub);
-    }
-}
-
-void test_filtered_subscribe_still_rejects_request_metadata_in_record_tail ()
-{
-    void *pub = test_context_socket (ZLINK_SOCKET_PUB);
-    void *sub = test_context_socket (ZLINK_SOCKET_SUB);
-    TEST_ASSERT_NOT_NULL (pub);
-    TEST_ASSERT_NOT_NULL (sub);
-    // Deliver a topic that does not match the SUB-side filter so xhas_in()
-    // must drain and structurally validate the complete record.  Keep the SUB
-    // itself non-inverted: only the publisher-side distribution is inverted.
-    const int invert = 1;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_option (pub, ZLINK_OPT_INVERT_MATCHING, &invert,
-                        sizeof (invert)));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_bind (pub, "inproc://filtered-subscribe-later-kind"));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_connect (sub, "inproc://filtered-subscribe-later-kind"));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_subscription (sub, "wanted"));
-    set_recv_timeout_ms (sub, 1000);
-    msleep (SETTLE_TIME * 6);
-
-    zlink_msg_t payload;
-    init_part (&payload, "filtered-metadata");
-    TEST_ASSERT_SUCCESS_ERRNO (
-      reinterpret_cast<zlink::msg_t *> (&payload)
-        ->set_request_reply_metadata (
-          zlink::request_reply::request_type, 99));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_publish (pub, "other-topic", &payload, 1,
-                     ZLINK_SEND_FLAGS_NONE));
-
-    zlink_msg_t *parts = NULL;
-    size_t part_count = 0;
-    char topic[32];
-    size_t topic_len = sizeof (topic);
-    errno = 0;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_INTERNAL_ERROR,
-      zlink_subscribe (sub, NULL, &parts, &part_count, topic, &topic_len,
-                       ZLINK_RECV_FLAGS_NONE));
-    TEST_ASSERT_EQUAL_INT (EPROTO, errno);
-    TEST_ASSERT_NULL (parts);
-    TEST_ASSERT_EQUAL_UINT64 (0, part_count);
-
-    test_context_socket_close_zero_linger (sub);
-    test_context_socket_close_zero_linger (pub);
-}
 
 int main (void)
 {
@@ -579,14 +420,9 @@ int main (void)
 
     UNITY_BEGIN ();
     RUN_TEST (test_recv_part_reads_each_part_and_tracks_has_more);
-    RUN_TEST (test_router_direct_single_part_uses_owned_source_rid_storage);
     RUN_TEST (test_router_recv_part_metadata_view_invalidates_on_next_recv_like_call);
     RUN_TEST (
       test_subscribe_part_reports_needed_topic_size_without_consuming_payload);
-    RUN_TEST (
-      test_subscribe_receive_surfaces_reject_request_metadata_after_topic);
-    RUN_TEST (
-      test_filtered_subscribe_still_rejects_request_metadata_in_record_tail);
     const int rc = UNITY_END ();
     fflush (NULL);
     std::_Exit (rc);

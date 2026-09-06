@@ -21,6 +21,7 @@
 
 #include "../testutil_unity.hpp"
 
+#include "core/options.hpp"
 #include "engine/asio/asio_stream_fastpath_policy.hpp"
 
 #include <unity.h>

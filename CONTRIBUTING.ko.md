@@ -100,6 +100,13 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - §6의 release 비교는 release 준비 단계에서 실행한다(변경 단위 의무는 `hotpath_gate` 하나 —
   [`10-hot-path.ko.md` §5](core/doc/spec/core/systems/10-hot-path.ko.md)).
 
+### Core 테스트의 인터페이스 경계
+
+- Integration·contract·e2e 테스트는 `core/include`의 공개 C API만 사용하고 shared `libzlink`에 연결한다.
+- 내부 자료구조·fault injection·owner 상태 assertion은 `core/tests/unittest`에 두고, 한 번 컴파일한 non-LTO `test-core` archive를 사용한다.
+- 테스트 코드와 공용 helper에 Core의 private header·symbol을 노출하거나, 테스트 실행 파일마다 제품 Core archive를 LTO 링크하지 않는다.
+- 테스트를 분리할 때는 원본 assertion의 이동·공개 관찰 대체·중복 제거 근거와 CTest lane을 함께 대조하며, 제품 LTO 설정과 hotpath 기준은 유지한다.
+
 ## 6. 성능 판정
 
 - 판정 기준은 스펙 [`10-hot-path.ko.md` §5](core/doc/spec/core/systems/10-hot-path.ko.md)가

@@ -394,6 +394,8 @@ int zlink::socket_base_t::wait_for_completion_submit_admission (
             if (!physical_scope.acquired ())
                 return -1;
             if (process_submit_commands () == 0) {
+                // The registered wait already owns this submission's first
+                // admission; a wake must not add another metric attempt.
                 admission_rc = try_admit_send_parts_scoped (
                   parts_, part_count_,
                   target ? *target : empty_routed_send_target,
@@ -401,7 +403,8 @@ int zlink::socket_base_t::wait_for_completion_submit_admission (
                   false, true,
                   transient_raw_target
                     ? transient_routed_target_or_null_
-                    : NULL);
+                    : NULL,
+                  NULL, !logical_wait_registered);
             }
             admission_errno = errno;
 

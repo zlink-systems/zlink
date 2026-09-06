@@ -1,7 +1,5 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 #include "testutil.hpp"
-#include "../src/api/socket/socket_api_internal.hpp"
-#include "../src/runtime/core/recv_internal.hpp"
 #include "testutil_unity.hpp"
 #include "certs/test_certs.hpp"
 
@@ -11,7 +9,6 @@
 #include <stdlib.h>
 
 #if defined _WIN32
-#include "utils/windows.hpp"
 #include <direct.h>
 #if defined _MSC_VER
 #if defined ZLINK_HAVE_IPC
@@ -64,16 +61,16 @@ static void recv_bounce_msg (void *socket_)
     zlink_msg_t msg;
     zlink_msg_init (&msg);
 
-    socket_handle_t handle = as_socket_handle (socket_);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink::recv_msg_internal (handle.socket, &msg, 0));
+    zlink_part_flag_t more = ZLINK_PART_FINAL;
+    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, socket_, 0, &more));
     TEST_ASSERT_EQUAL_STRING (bounce_content, static_cast<const char *> (zlink_msg_data (&msg)));
-    TEST_ASSERT_TRUE (test_msg_has_more (&msg));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, more);
     zlink_msg_close (&msg);
 
     zlink_msg_init (&msg);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink::recv_msg_internal (handle.socket, &msg, 0));
+    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, socket_, 0, &more));
     TEST_ASSERT_EQUAL_STRING (bounce_content, static_cast<const char *> (zlink_msg_data (&msg)));
-    TEST_ASSERT_FALSE (test_msg_has_more (&msg));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
     zlink_msg_close (&msg);
 }
 
@@ -107,9 +104,8 @@ static void send_bounce_msg_may_fail (void *socket_)
 static void recv_bounce_msg_fail (void *socket_)
 {
     int timeout = 250;
-    socket_handle_t handle = as_socket_handle (socket_);
-    TEST_ASSERT_TRUE (
-      zlink::wait_socket_events_internal (handle.socket, 1, timeout) <= 0);
+    zlink_pollitem_t item = {socket_, 0, ZLINK_POLLIN, 0};
+    TEST_ASSERT_EQUAL_INT (0, zlink_poll (&item, 1, timeout, NULL));
 }
 
 void expect_bounce_fail (void *server_, void *client_)
@@ -131,8 +127,7 @@ void expect_bounce_fail (void *server_, void *client_)
 char *s_recv (void *socket_)
 {
     char buffer[256];
-    socket_handle_t handle = as_socket_handle (socket_);
-    int size = zlink::recv_buffer_internal (handle.socket, buffer, 255, 0);
+    int size = zlink_recv (socket_, buffer, 255, 0);
     if (size == -1)
         return NULL;
     if (size > 255)
@@ -169,16 +164,15 @@ void s_recv_seq (void *socket_, ...)
     zlink_msg_t msg;
     zlink_msg_init (&msg);
 
-    int more;
+    zlink_part_flag_t more = ZLINK_PART_FINAL;
 
     va_list ap;
     va_start (ap, socket_);
     const char *data = va_arg (ap, const char *);
 
     while (true) {
-        socket_handle_t handle = as_socket_handle (socket_);
         TEST_ASSERT_SUCCESS_ERRNO (
-          zlink::recv_msg_internal (handle.socket, &msg, 0));
+          test_recv_single_msg (&msg, socket_, 0, &more));
 
         if (!data)
             TEST_ASSERT_EQUAL_INT (0, zlink_msg_size (&msg));
@@ -187,8 +181,6 @@ void s_recv_seq (void *socket_, ...)
 
         data = va_arg (ap, const char *);
         bool end = data == SEQ_END;
-
-        more = test_msg_has_more (&msg) ? 1 : 0;
 
         TEST_ASSERT_TRUE (!more == end);
         if (end)

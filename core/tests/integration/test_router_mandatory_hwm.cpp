@@ -89,8 +89,11 @@ void test_router_mandatory_hwm ()
 
     //  Get message from dealer to know when connection is ready
     send_string_expect_success (dealer, "Hello", 0);
-    recv_string_expect_success (router, "X", 0);
+    recv_routed_string_expect_success (router, "Hello", "X");
 
+    zlink_routing_id_t target = {};
+    target.size = 1;
+    target.data[0] = 'X';
     int i;
     const int buf_size = 65536;
     const uint8_t buf[buf_size] = {0};
@@ -98,11 +101,10 @@ void test_router_mandatory_hwm ()
     for (i = 0; i < 100000; ++i) {
         if (TRACE_ENABLED)
             fprintf (stderr, "Sending message %d ...\n", i);
-        const int rc = zlink_send (router, "X", 1, ZLINK_DONTWAIT | ZLINK_SNDMORE);
+        const int rc = test_stream_send_bytes (router, &target, buf, sizeof (buf), ZLINK_DONTWAIT);
         if (rc == -1 && zlink_errno () == EAGAIN)
             break;
-        TEST_ASSERT_EQUAL_INT (1, rc);
-        send_array_expect_success (router, buf, ZLINK_DONTWAIT);
+        TEST_ASSERT_EQUAL_INT (sizeof (buf), rc);
     }
     // This should fail after one message but kernel buffering could
     // skew results
@@ -112,11 +114,10 @@ void test_router_mandatory_hwm ()
     for (; i < 100000; ++i) {
         if (TRACE_ENABLED)
             fprintf (stderr, "Sending message %d (part 2) ...\n", i);
-        const int rc = zlink_send (router, "X", 1, ZLINK_DONTWAIT | ZLINK_SNDMORE);
+        const int rc = test_stream_send_bytes (router, &target, buf, sizeof (buf), ZLINK_DONTWAIT);
         if (rc == -1 && zlink_errno () == EAGAIN)
             break;
-        TEST_ASSERT_EQUAL_INT (1, rc);
-        send_array_expect_success (router, buf, ZLINK_DONTWAIT);
+        TEST_ASSERT_EQUAL_INT (sizeof (buf), rc);
     }
     // This should fail after two messages but kernel buffering could
     // skew results
@@ -154,7 +155,7 @@ void test_router_send_rid_mandatory_hwm ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, my_endpoint));
 
     send_string_expect_success (dealer, "Hello", 0);
-    recv_string_expect_success (router, "X", 0);
+    recv_routed_string_expect_success (router, "Hello", "X");
 
     zlink_routing_id_t rid;
     memset (&rid, 0, sizeof (rid));
@@ -209,7 +210,7 @@ void test_router_send_rid_multipart_hwm_is_backpressure ()
       zlink_set_option (dealer, ZLINK_OPT_RCVHWM, &rcvhwm, sizeof (rcvhwm)));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
     send_string_expect_success (dealer, "Hello", 0);
-    recv_string_expect_success (router, "X", 0);
+    recv_routed_string_expect_success (router, "Hello", "X");
 
     zlink_routing_id_t rid;
     memset (&rid, 0, sizeof (rid));

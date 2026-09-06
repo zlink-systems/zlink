@@ -105,6 +105,13 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - The release comparison of §6 runs during release preparation (the per-change obligation is
   `hotpath_gate` alone — [`10-hot-path.en.md` §5](core/doc/spec/core/systems/10-hot-path.en.md)).
 
+### Interface boundary of Core tests
+
+- Integration, contract, and end-to-end tests use only the public C API headers under `core/include` and link the shared `libzlink`.
+- Assertions about private Core structures, injected failures, and implementation-owned state live under `core/tests/unittest` and link the single non-LTO `test-core` archive compiled once.
+- Test code and shared helpers never expose private Core headers or symbols, and no test executable LTO-links the production Core archive.
+- When splitting a test, record where each original assertion moved, which public observation replaced it, and which duplicates were removed, together with its CTest lane; production LTO settings and the hotpath reference stay untouched.
+
 ## 6. Performance judgement
 
 - The criteria are owned by the spec [`10-hot-path.en.md` §5](core/doc/spec/core/systems/10-hot-path.en.md):

@@ -6,7 +6,9 @@
 #include <string.h>
 
 #if defined _WIN32
-#include "utils/windows.hpp"
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
 #endif
 
 SETUP_TEARDOWN_TESTCONTEXT

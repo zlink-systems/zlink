@@ -77,22 +77,23 @@ void test_multipart_message ()
 
     //  Receive and verify all parts
     zlink_msg_t msg;
+    zlink_part_flag_t more = ZLINK_PART_FINAL;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
-    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, client, 0));
+    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, client, 0, &more));
     TEST_ASSERT_EQUAL_STRING (part1, static_cast<const char *> (zlink_msg_data (&msg)));
-    TEST_ASSERT_TRUE (test_msg_has_more (&msg));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, more);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
-    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, client, 0));
+    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, client, 0, &more));
     TEST_ASSERT_EQUAL_STRING (part2, static_cast<const char *> (zlink_msg_data (&msg)));
-    TEST_ASSERT_TRUE (test_msg_has_more (&msg));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, more);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
-    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, client, 0));
+    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, client, 0, &more));
     TEST_ASSERT_EQUAL_STRING (part3, static_cast<const char *> (zlink_msg_data (&msg)));
-    TEST_ASSERT_FALSE (test_msg_has_more (&msg));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
 
     test_context_socket_close (client);
@@ -162,12 +163,12 @@ void test_pubsub_pattern ()
     //  Send messages
     const char *topics[] = {"Topic A", "Topic B", "Topic C"};
     for (int i = 0; i < 3; i++) {
-        send_string_expect_success (pub, topics[i], 0);
+        send_published_string_expect_success (pub, topics[i], "");
     }
 
     //  Receive messages
     for (int i = 0; i < 3; i++) {
-        recv_string_expect_success (sub, topics[i], 0);
+        recv_subscribed_string_expect_success (sub, topics[i], "");
     }
 
     test_context_socket_close (sub);
@@ -195,28 +196,15 @@ void test_dealer_router_pattern ()
     const char *msg = "Request from dealer";
     send_string_expect_success (dealer, msg, 0);
 
-    //  Router receives message with identity
-    zlink_msg_t recv_identity, recv_msg;
-    zlink_msg_init (&recv_identity);
-    zlink_msg_init (&recv_msg);
+    //  The source identity is an output of the public ROUTER receive.
+    const zlink_routing_id_t source =
+      recv_routed_string_expect_success (router, msg, identity);
+    TEST_ASSERT_EQUAL_INT (static_cast<int> (strlen (identity)), source.size);
 
-    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&recv_identity, router, 0));
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (strlen (identity)), zlink_msg_size (&recv_identity));
-
-    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&recv_msg, router, 0));
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (strlen (msg)), zlink_msg_size (&recv_msg));
-
-    //  Router replies to dealer
     const char *reply = "Reply from router";
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send (router, zlink_msg_data (&recv_identity),
-                                           zlink_msg_size (&recv_identity), ZLINK_SNDMORE));
-    send_string_expect_success (router, reply, 0);
-
-    //  Dealer receives reply
+    TEST_ASSERT_EQUAL_INT (static_cast<int> (strlen (reply)),
+      test_stream_send_bytes (router, &source, reply, strlen (reply), 0));
     recv_string_expect_success (dealer, reply, 0);
-
-    zlink_msg_close (&recv_identity);
-    zlink_msg_close (&recv_msg);
 
     test_context_socket_close (dealer);
     test_context_socket_close (router);
@@ -298,23 +286,20 @@ void test_xpub_xsub_pattern ()
 
     msleep (SETTLE_TIME);
 
-    //  Subscribe via XSUB (send subscription message)
-    const char sub_msg[] = {1, 'A'}; //  Subscribe to "A"
-    TEST_ASSERT_EQUAL_INT (2, zlink_send (xsub, sub_msg, sizeof (sub_msg), 0));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_subscription (xsub, "A"));
 
-    //  XPUB receives subscription notification
-    char sub_recv[32];
-    int sub_size = zlink_recv (xpub, sub_recv, sizeof (sub_recv), 0);
-    TEST_ASSERT_EQUAL_INT (2, sub_size);
-    TEST_ASSERT_EQUAL_INT (1, sub_recv[0]); //  Subscribe
-    TEST_ASSERT_EQUAL_INT ('A', sub_recv[1]);
+    char topic[32];
+    size_t topic_size = sizeof (topic);
+    int subscribed = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
+      zlink_subscription_event (xpub, NULL, &subscribed, topic, &topic_size, 0));
+    TEST_ASSERT_EQUAL_INT (1, subscribed);
+    TEST_ASSERT_EQUAL_UINT (1, topic_size);
+    TEST_ASSERT_EQUAL_INT ('A', topic[0]);
 
-    //  Publish message
     const char *topic_msg = "ABC";
-    send_string_expect_success (xpub, topic_msg, 0);
-
-    //  XSUB receives message
-    recv_string_expect_success (xsub, topic_msg, 0);
+    send_published_string_expect_success (xpub, topic_msg, "");
+    recv_subscribed_string_expect_success (xsub, topic_msg, "");
 
     test_context_socket_close (xsub);
     test_context_socket_close (xpub);

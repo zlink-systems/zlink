@@ -3,7 +3,6 @@
 #include "testutil.hpp"
 #include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
-#include "../../src/runtime/sockets/common/socket_base.hpp"
 
 #include <atomic>
 #include <condition_variable>
@@ -138,14 +137,12 @@ void send_single_payload (void *socket_, const char *payload_)
 
 void send_router_envelope_payload (void *router_, const char *target_rid_, const char *payload_)
 {
-    zlink_msg_t parts[2];
-    const size_t target_size = std::strlen (target_rid_);
+    zlink_routing_id_t target = {};
+    target.size = static_cast<uint8_t> (std::strlen (target_rid_));
+    memcpy (target.data, target_rid_, target.size);
     const size_t payload_size = std::strlen (payload_);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&parts[0], target_size));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&parts[1], payload_size));
-    memcpy (zlink_msg_data (&parts[0]), target_rid_, target_size);
-    memcpy (zlink_msg_data (&parts[1]), payload_, payload_size);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send (router_, parts, 2, 0));
+    TEST_ASSERT_EQUAL_INT (static_cast<int> (payload_size),
+      test_stream_send_bytes (router_, &target, payload_, payload_size, 0));
 }
 
 void delivery_ready_monitor_handler (const zlink_monitor_event_t *event_, void *userdata_)
@@ -446,14 +443,27 @@ void recv_subscribe_expect_topic_and_payload (void *sub_, const std::string &pay
     zlink_multipart_close (parts, part_count);
 }
 
-void recv_subscribe_expect_payload_without_topic_copy (void *sub_, const std::string &payload_)
+void recv_subscribe_expect_payload_after_topic_size_query (void *sub_, const std::string &payload_)
 {
     size_t topic_len = 0;
     zlink_msg_t *parts = NULL;
     size_t part_count = 0;
 
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_subscribe (sub_, NULL, &parts, &part_count, NULL, &topic_len, 0));
+    zlink_msg_t queried_part;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&queried_part));
+    zlink_part_flag_t queried_more = ZLINK_PART_MORE;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_BUFFER_TOO_SMALL, zlink_subscribe_part (
+      sub_, NULL, NULL, 0, &topic_len, &queried_part, &queried_more,
+      ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ENOBUFS, zlink_errno ());
+    TEST_ASSERT_EQUAL_UINT64 (std::strlen (k_pubsub_topic), topic_len);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&queried_part));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, queried_more);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&queried_part));
+
+    std::vector<char> topic (topic_len);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_subscribe (
+      sub_, NULL, &parts, &part_count, topic.data (), &topic_len, 0));
     TEST_ASSERT_EQUAL_UINT64 (std::strlen (k_pubsub_topic), topic_len);
     TEST_ASSERT_EQUAL_UINT64 (1, part_count);
     TEST_ASSERT_NOT_NULL (parts);
@@ -463,7 +473,7 @@ void recv_subscribe_expect_payload_without_topic_copy (void *sub_, const std::st
     zlink_multipart_close (parts, part_count);
 }
 
-void recv_subscribe_expect_payload_parts_without_topic_copy (void *sub_,
+void recv_subscribe_expect_payload_parts_after_topic_size_query (void *sub_,
                                                              const std::string &part_a_,
                                                              const std::string &part_b_)
 {
@@ -471,8 +481,21 @@ void recv_subscribe_expect_payload_parts_without_topic_copy (void *sub_,
     zlink_msg_t *parts = NULL;
     size_t part_count = 0;
 
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_subscribe (sub_, NULL, &parts, &part_count, NULL, &topic_len, 0));
+    zlink_msg_t queried_part;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&queried_part));
+    zlink_part_flag_t queried_more = ZLINK_PART_MORE;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_BUFFER_TOO_SMALL, zlink_subscribe_part (
+      sub_, NULL, NULL, 0, &topic_len, &queried_part, &queried_more,
+      ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_INT (ENOBUFS, zlink_errno ());
+    TEST_ASSERT_EQUAL_UINT64 (std::strlen (k_pubsub_topic), topic_len);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&queried_part));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, queried_more);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&queried_part));
+
+    std::vector<char> topic (topic_len);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_subscribe (
+      sub_, NULL, &parts, &part_count, topic.data (), &topic_len, 0));
     TEST_ASSERT_EQUAL_UINT64 (std::strlen (k_pubsub_topic), topic_len);
     TEST_ASSERT_EQUAL_UINT64 (2, part_count);
     TEST_ASSERT_NOT_NULL (parts);
@@ -997,7 +1020,7 @@ void test_pubsub_repeated_topic_keeps_delivering_after_peer_disconnect ()
     test_context_socket_close_zero_linger (pub);
 }
 
-void test_pubsub_subscribe_can_skip_topic_copy_and_keep_multipart_payload ()
+void test_pubsub_subscribe_can_query_topic_size_and_keep_multipart_payload ()
 {
     void *pub = test_context_socket (ZLINK_SOCKET_PUB);
     void *sub = test_context_socket (ZLINK_SOCKET_SUB);
@@ -1023,12 +1046,12 @@ void test_pubsub_subscribe_can_skip_topic_copy_and_keep_multipart_payload ()
 
     const std::string single = make_fixed_size_payload ('S', 1, 64);
     publish_payload (pub, single);
-    recv_subscribe_expect_payload_without_topic_copy (sub, single);
+    recv_subscribe_expect_payload_after_topic_size_query (sub, single);
 
     const std::string part_a = make_fixed_size_payload ('A', 2, 32);
     const std::string part_b = make_fixed_size_payload ('B', 3, 48);
     publish_two_part_payload (pub, part_a, part_b);
-    recv_subscribe_expect_payload_parts_without_topic_copy (sub, part_a, part_b);
+    recv_subscribe_expect_payload_parts_after_topic_size_query (sub, part_a, part_b);
 
     close_delivery_ready_monitor (&sub_monitor);
     close_delivery_ready_monitor (&pub_monitor);
@@ -1137,48 +1160,6 @@ void test_pubsub_publish_is_safe_from_multiple_threads ()
     test_context_socket_close_zero_linger (pub);
 }
 
-void test_pubsub_publish_rollback_preserves_next_topic_boundary ()
-{
-    void *pub = test_context_socket (ZLINK_SOCKET_XPUB);
-    void *sub = test_context_socket (ZLINK_SOCKET_SUB);
-
-    set_timeout_opts (pub);
-    set_timeout_opts (sub);
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_subscription (sub, k_pubsub_topic));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_bind (pub, "inproc://pubsub_publish_eagain_preserves_boundary"));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_connect (sub, "inproc://pubsub_publish_eagain_preserves_boundary"));
-    const uint8_t subscription_frame[] = {1, 'b', 'e', 'n', 'c', 'h'};
-    recv_array_expect_success (pub, subscription_frame, sizeof (subscription_frame));
-
-    zlink_msg_t topic_part;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&topic_part, std::strlen (k_pubsub_topic)));
-    memcpy (zlink_msg_data (&topic_part), k_pubsub_topic, std::strlen (k_pubsub_topic));
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (std::strlen (k_pubsub_topic)),
-                           test_send_single_msg (&topic_part, pub, ZLINK_SNDMORE));
-
-    socket_handle_t pub_handle = as_socket_handle (pub);
-    zlink::socket_base_t *pub_socket = pub_handle.socket;
-    TEST_ASSERT_SUCCESS_ERRNO (pub_socket->rollback ());
-    pub_handle = socket_handle_t ();
-
-    char topic[32];
-    memset (topic, 0, sizeof (topic));
-    size_t topic_len = sizeof (topic);
-    zlink_msg_t *parts = NULL;
-    size_t part_count = 0;
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA, zlink_subscribe (sub, NULL, &parts, &part_count,
-                                                                topic, &topic_len, ZLINK_DONTWAIT));
-    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-
-    const std::string recovered_payload = make_fixed_size_payload ('W', 1, 64);
-    publish_payload (pub, recovered_payload);
-    recv_subscribe_expect_topic_and_payload (sub, recovered_payload);
-    test_context_socket_close_zero_linger (sub);
-    test_context_socket_close_zero_linger (pub);
-}
 
 int main ()
 {
@@ -1193,8 +1174,7 @@ int main ()
     RUN_TEST (test_pubsub_subscribe_dontwait_preserves_perf_contract_during_burst);
     RUN_TEST (test_pubsub_repeated_topic_stops_delivery_after_unsubscribe);
     RUN_TEST (test_pubsub_repeated_topic_keeps_delivering_after_peer_disconnect);
-    RUN_TEST (test_pubsub_subscribe_can_skip_topic_copy_and_keep_multipart_payload);
+    RUN_TEST (test_pubsub_subscribe_can_query_topic_size_and_keep_multipart_payload);
     RUN_TEST (test_pubsub_publish_is_safe_from_multiple_threads);
-    RUN_TEST (test_pubsub_publish_rollback_preserves_next_topic_boundary);
     return UNITY_END ();
 }

@@ -18,19 +18,26 @@ void test_more ()
     send_string_expect_success (sc, "A", ZLINK_SNDMORE);
     send_string_expect_success (sc, "B", 0);
 
-    //  Routing id comes first.
+    //  The public receive returns the source id beside the first payload part.
     zlink_msg_t msg;
+    const zlink_routing_id_t *source = NULL;
+    zlink_reply_token_t token;
+    zlink_part_flag_t more = ZLINK_PART_FINAL;
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
-    TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, sb, 0));
-    TEST_ASSERT_TRUE (test_msg_has_more (&msg));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
+      zlink_router_recv_part (sb, &source, &token, &msg, &more, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_NOT_NULL (source);
+    TEST_ASSERT_GREATER_THAN_UINT (0, source->size);
+    TEST_ASSERT_EQUAL_UINT (1, zlink_msg_size (&msg));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, more);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
 
-    //  Then the first part of the message body.
-    TEST_ASSERT_EQUAL_INT (1, TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, sb, 0)));
-    TEST_ASSERT_TRUE (test_msg_has_more (&msg));
-
-    //  And finally, the second part of the message body.
-    TEST_ASSERT_EQUAL_INT (1, TEST_ASSERT_SUCCESS_ERRNO (test_recv_single_msg (&msg, sb, 0)));
-    TEST_ASSERT_FALSE (test_msg_has_more (&msg));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&msg));
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
+      zlink_router_recv_part (sb, &source, &token, &msg, &more, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_UINT (1, zlink_msg_size (&msg));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&msg));
 
     //  Deallocate the infrastructure.
     test_context_socket_close (sc);

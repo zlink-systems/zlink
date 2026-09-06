@@ -4,6 +4,15 @@ cmake_minimum_required(VERSION 3.10)
 # On Windows: solution file will be called tests.sln
 project(tests)
 
+# Integration targets see the same Core headers and declarations as consumers.
+# Only the unittest directory inherits the private implementation include roots.
+get_directory_property(CORE_TEST_INTERNAL_INCLUDE_DIRS INCLUDE_DIRECTORIES)
+set_property(DIRECTORY PROPERTY INCLUDE_DIRECTORIES
+  "${ZLINK_CORE_SOURCE_DIR}/include;${CMAKE_CURRENT_SOURCE_DIR};${CMAKE_CURRENT_BINARY_DIR};${BUNDLED_BOOST_INCLUDE_DIR}")
+get_directory_property(test_definitions COMPILE_DEFINITIONS)
+list(REMOVE_ITEM test_definitions ZLINK_INTERNAL_BUILD=1 ZLINK_BUILD_TESTS=1)
+set_property(DIRECTORY PROPERTY COMPILE_DEFINITIONS "${test_definitions}")
+
 set(TEST_PTY_WRAPPER "${CMAKE_CURRENT_LIST_DIR}/run_under_pty.sh")
 set(REGISTERED_TESTS)
 set(SPLIT_ONLY_TEST_TARGETS
@@ -137,7 +146,6 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_router_multiple_dealers
   ${INTEGRATION_TEST_ROOT}/test_probe_router
   ${INTEGRATION_TEST_ROOT}/test_router_concurrent_routed_recv
-  ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply_receive_transaction
   ${INTEGRATION_TEST_ROOT}/test_flow_state_paired
   ${INTEGRATION_TEST_ROOT}/test_flow_state_c_api
   ${INTEGRATION_TEST_ROOT}/test_zmp_metadata
@@ -286,14 +294,21 @@ set(TESTUTIL_SOURCES
   testutil_unity.cpp
   testutil_unity.hpp)
 
-# Shared library builds export only the public zlink_* C API (Windows DLL
-# exports and the Linux version script agree on this), so Core tests link the
-# static library to reach private helper symbols without expanding the ABI.
-add_library(testutil-static STATIC ${TESTUTIL_SOURCES})
-target_link_libraries(
-  testutil-static
-  libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} unity)
-set(TESTUTIL_LIB testutil-static)
+# Compile test helpers once. Their only Core dependency is the public header;
+# the interface target supplies the shared runtime to public API tests.
+configure_file(test_platform.hpp.in test_platform.hpp)
+add_library(testutil-common STATIC ${TESTUTIL_SOURCES})
+target_include_directories(testutil-common PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}"
+  "${ZLINK_CORE_SOURCE_DIR}/include")
+# A helper archive is reused by shared and static test consumers on Windows;
+# plain public function declarations work with either the import lib or objects.
+target_compile_definitions(testutil-common PRIVATE ZLINK_NO_EXPORT)
+target_link_libraries(testutil-common PUBLIC
+  ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} unity)
+add_library(testutil INTERFACE)
+target_link_libraries(testutil INTERFACE testutil-common libzlink)
+set(TESTUTIL_LIB testutil)
 
 add_subdirectory(unittest)
 
@@ -401,12 +416,6 @@ foreach(test_source ${tests})
         PROPERTIES
           TIMEOUT 120)
     endif()
-    if(${test} STREQUAL "test_zmp_request_reply_receive_transaction")
-      set_tests_properties(
-        ${test}
-        PROPERTIES
-          TIMEOUT 30)
-    endif()
     if(${test} STREQUAL "test_proxy")
       set_tests_properties(
         ${test}
@@ -418,14 +427,6 @@ foreach(test_source ${tests})
     endif()
     set_tests_properties(${test} PROPERTIES SKIP_RETURN_CODE 77)
 
-    # Automatically set library path for tests to find libzlink shared library
-    if(WIN32)
-      set_tests_properties(${test} PROPERTIES ENVIRONMENT "PATH=$<TARGET_FILE_DIR:libzlink>;$ENV{PATH}")
-    elseif(APPLE)
-      set_tests_properties(${test} PROPERTIES ENVIRONMENT "DYLD_LIBRARY_PATH=$<TARGET_FILE_DIR:libzlink>:$ENV{DYLD_LIBRARY_PATH}")
-    else()
-      set_tests_properties(${test} PROPERTIES ENVIRONMENT "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:libzlink>:$ENV{LD_LIBRARY_PATH}")
-    endif()
   endif()
 
   if(QNX)
@@ -443,22 +444,9 @@ add_executable(
 set_target_properties(test_pub_monitor_close_full_mask PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(
   test_pub_monitor_close_full_mask
-  libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
+  libzlink ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
 add_test(NAME test_pub_monitor_close_full_mask COMMAND test_pub_monitor_close_full_mask)
 set_tests_properties(test_pub_monitor_close_full_mask PROPERTIES TIMEOUT 10 SKIP_RETURN_CODE 77)
-if(WIN32)
-  set_tests_properties(
-    test_pub_monitor_close_full_mask
-    PROPERTIES ENVIRONMENT "PATH=$<TARGET_FILE_DIR:libzlink>;$ENV{PATH}")
-elseif(APPLE)
-  set_tests_properties(
-    test_pub_monitor_close_full_mask
-    PROPERTIES ENVIRONMENT "DYLD_LIBRARY_PATH=$<TARGET_FILE_DIR:libzlink>:$ENV{DYLD_LIBRARY_PATH}")
-elseif(BUILD_SHARED)
-  set_tests_properties(
-    test_pub_monitor_close_full_mask
-    PROPERTIES ENVIRONMENT "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:libzlink>:$ENV{LD_LIBRARY_PATH}")
-endif()
 
 if(TARGET test_scenario_stream_client)
   target_sources(
@@ -481,12 +469,7 @@ if(TARGET test_scenario_stream_zmq)
   target_link_libraries(test_scenario_stream_zmq
                         ${STREAM_SCENARIO_ZMQ_LIBRARY_FILE})
 
-  if(WIN32)
-    set_tests_properties(
-      test_scenario_stream_zmq
-      PROPERTIES ENVIRONMENT
-                 "PATH=${STREAM_SCENARIO_ZMQ_RUNTIME_DIR};$<TARGET_FILE_DIR:libzlink>;$ENV{PATH}")
-  elseif(APPLE)
+  if(APPLE)
     set_tests_properties(
       test_scenario_stream_zmq
       PROPERTIES ENVIRONMENT
@@ -801,9 +784,11 @@ set(BACKPRESSURE_ONEWAY_REGRESSION_TEST_SPECS
 
 set(H3_FLOW_CONTRACT_TEST_SPECS
     test_gap_h3_flow_same_state=same-state
-    test_gap_h3_flow_resumed_stale=resumed-stale
     test_gap_h3_flow_hwm_resumed=hwm-resumed
     test_gap_h3_flow_event_mask=mask
+    )
+set(H3_FLOW_UNIT_TEST_SPECS
+    test_gap_h3_flow_resumed_stale=resumed-stale
     test_gap_h3_flow_ordering=ordering)
 
 set(DEALER_ROUTER_SINGLE_LANE_CONTRACT_TEST_SPECS
@@ -914,6 +899,11 @@ if(TARGET test_flow_state_c_api)
     ${H3_FLOW_CONTRACT_TEST_NAMES}
     PROPERTIES TIMEOUT 15)
 endif()
+add_env_case_suite(
+  unittest_flow_state_monitor H3_FLOW_UNIT_TEST_SPECS H3_FLOW_UNIT_TEST_NAMES)
+set_tests_properties(${H3_FLOW_UNIT_TEST_NAMES}
+  PROPERTIES LABELS "unittest;parallel-safe" TIMEOUT 15)
+
 if(TARGET test_dealer_router_single_lane_contract)
   extract_case_names_from_specs(
     DEALER_ROUTER_SINGLE_LANE_CONTRACT_CASES
@@ -1172,13 +1162,13 @@ add_test(NAME test_wake_invariants COMMAND test_wake_invariants)
 add_test(NAME test_two_poller_wake COMMAND test_two_poller_wake)
 add_test(
   NAME test_wake_invariant_hwm_lwm_shrink
-  COMMAND test_router_multiple_dealers)
+  COMMAND unittest_router_pipe_contract)
 add_test(
   NAME test_wake_invariant_completion_owner
   COMMAND
     ${CMAKE_COMMAND} -E env
     ZLINK_TEST_CASE=test_blocking_request_send_drains_owned_completions_to_break_hwm_cycle
-    $<TARGET_FILE:test_phase3_request_reply_contract>)
+    $<TARGET_FILE:unittest_phase3_request_reply_owners>)
 
 set_tests_properties(
   test_wake_invariants
@@ -1192,7 +1182,42 @@ set_tests_properties(
     RESOURCE_LOCK "${NETWORK_INTEGRATION_RESOURCE_LOCK}"
     LABELS "integration;regression;serial;wake-invariant")
 
+set_tests_properties(
+  test_wake_invariant_hwm_lwm_shrink test_wake_invariant_completion_owner
+  PROPERTIES LABELS "unittest;regression;parallel-safe;wake-invariant"
+    RUN_SERIAL FALSE RESOURCE_LOCK "")
+
 set_tests_properties(test_two_poller_wake PROPERTIES TIMEOUT 60)
 
 set_tests_properties(test_request_writable_credit PROPERTIES
   LABELS "integration;serial" RUN_SERIAL TRUE TIMEOUT 30)
+
+# Production library and hotpath benchmark keep their configured IPO policy.
+# Test executables and their shared helper archive never need an LTO link.
+get_property(test_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(test_target ${test_targets})
+  if(NOT test_target STREQUAL "hotpath_bench")
+    set_property(TARGET ${test_target} PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
+    get_target_property(test_target_type ${test_target} TYPE)
+    if(test_target_type STREQUAL "EXECUTABLE")
+      set_property(TARGET ${test_target} APPEND PROPERTY
+        BUILD_RPATH "$<TARGET_FILE_DIR:libzlink>")
+    endif()
+  endif()
+endforeach()
+
+# This also covers split-case registrations and standalone C/contract tests.
+if(WIN32)
+  string(REPLACE ";" "\\;" test_runtime_path "$ENV{PATH}")
+  get_property(directory_tests DIRECTORY PROPERTY TESTS)
+  foreach(test_name ${directory_tests})
+    if(NOT test_name STREQUAL "hotpath_gate")
+      set(test_runtime_dirs "$<TARGET_FILE_DIR:libzlink>")
+      if(test_name STREQUAL "test_scenario_stream_zmq")
+        string(APPEND test_runtime_dirs "\\;${STREAM_SCENARIO_ZMQ_RUNTIME_DIR}")
+      endif()
+      set_property(TEST ${test_name} APPEND PROPERTY ENVIRONMENT
+        "PATH=${test_runtime_dirs}\\;${test_runtime_path}")
+    endif()
+  endforeach()
+endif()

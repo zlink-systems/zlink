@@ -313,18 +313,6 @@ void test_ctx_option_auto_hwm_round_trip ()
       zlink_ctx_get (get_test_context (), ZLINK_CTX_OPT_AUTO_HWM_PROFILE, NULL));
 }
 
-static zlink_auto_hwm_budget_snapshot_t read_auto_hwm_budget_snapshot (void *ctx_)
-{
-    zlink_auto_hwm_budget_snapshot_t snapshot;
-    memset (&snapshot, 0, sizeof (snapshot));
-    snapshot.abi_version = ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1;
-    snapshot.struct_size = sizeof (snapshot);
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_ctx_get_auto_hwm_budget_snapshot (ctx_, &snapshot));
-    return snapshot;
-}
-
 void test_ctx_option_auto_hwm_memory_budget_round_trip_and_snapshot ()
 {
     void *ctx = get_test_context ();
@@ -434,7 +422,7 @@ void test_auto_hwm_metrics_reset_clears_pipe_oversize_counters ()
     test_context_socket_close_zero_linger (receiver);
 }
 
-void test_auto_hwm_blocked_ratio_counts_only_first_physical_attempt ()
+static void run_auto_hwm_public_blocking_send (bool multipart_)
 {
     void *ctx = get_test_context ();
     void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
@@ -459,15 +447,9 @@ void test_auto_hwm_blocked_ratio_counts_only_first_physical_attempt ()
       zlink_connect (sender, "inproc://auto-hwm-blocked-ratio"));
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_reset_auto_hwm_budget_metrics (ctx));
-    std::vector<char> oversized_more (
-      static_cast<size_t> (physical_hwm), 'm');
-    TEST_ASSERT_FAILURE_ERRNO (
-      EAGAIN,
-      zlink_send (sender, oversized_more.data (), oversized_more.size (),
-                  ZLINK_DONTWAIT | ZLINK_SNDMORE));
-    TEST_ASSERT_EQUAL_UINT32 (
-      1000000, read_auto_hwm_budget_snapshot (ctx).blocked_ratio_ppm);
-
+    // Raw nonfinal-frame admission is covered by
+    // unittest_auto_hwm_physical_attempt. Public MORE stages a part; the
+    // complete FINAL submissions below exercise public physical admission.
     char payload[message_size];
     memset (payload, 'b', sizeof (payload));
     int queued = 0;
@@ -484,6 +466,12 @@ void test_auto_hwm_blocked_ratio_counts_only_first_physical_attempt ()
 
     std::future<int> blocked_send =
       std::async (std::launch::async, [&] () {
+          if (multipart_) {
+              const int prefix_rc =
+                zlink_send (sender, payload, sizeof (payload), ZLINK_SNDMORE);
+              if (prefix_rc != static_cast<int> (sizeof (payload)))
+                  return prefix_rc;
+          }
           return zlink_send (sender, payload, sizeof (payload), 0);
       });
 
@@ -498,6 +486,7 @@ void test_auto_hwm_blocked_ratio_counts_only_first_physical_attempt ()
     TEST_ASSERT_EQUAL_UINT32 (1000000, blocked.blocked_ratio_ppm);
 
     char received[message_size];
+    int drained = 0;
     for (int i = 0; i < queued
                     && blocked_send.wait_for (std::chrono::milliseconds (0))
                          != std::future_status::ready;
@@ -505,6 +494,7 @@ void test_auto_hwm_blocked_ratio_counts_only_first_physical_attempt ()
         TEST_ASSERT_EQUAL_INT (
           static_cast<int> (sizeof (received)),
           zlink_recv (receiver, received, sizeof (received), 0));
+        ++drained;
         (void) blocked_send.wait_for (std::chrono::milliseconds (20));
     }
     const std::future_status resumed =
@@ -515,7 +505,26 @@ void test_auto_hwm_blocked_ratio_counts_only_first_physical_attempt ()
 
     const zlink_auto_hwm_budget_snapshot_t after =
       read_auto_hwm_budget_snapshot (ctx);
+    // Auto HWM excludes retries after the same public submission wakes.
     TEST_ASSERT_EQUAL_UINT32 (1000000, after.blocked_ratio_ppm);
+
+    for (; drained < queued; ++drained) {
+        TEST_ASSERT_EQUAL_INT (
+          static_cast<int> (sizeof (received)),
+          zlink_recv (receiver, received, sizeof (received), 0));
+        TEST_ASSERT_EQUAL_MEMORY (payload, received, sizeof (payload));
+    }
+    zlink_msg_t *delivered = NULL;
+    size_t delivered_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK, zlink_recv (receiver, NULL, &delivered, &delivered_count, 0));
+    TEST_ASSERT_EQUAL_UINT64 (multipart_ ? 2 : 1, delivered_count);
+    for (size_t i = 0; i < delivered_count; ++i) {
+        TEST_ASSERT_EQUAL_UINT64 (sizeof (payload), zlink_msg_size (&delivered[i]));
+        TEST_ASSERT_EQUAL_MEMORY (payload, zlink_msg_data (&delivered[i]),
+                                  sizeof (payload));
+    }
+    zlink_multipart_close (delivered, delivered_count);
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_reset_auto_hwm_budget_metrics (ctx));
     const zlink_auto_hwm_budget_snapshot_t reset =
@@ -523,6 +532,63 @@ void test_auto_hwm_blocked_ratio_counts_only_first_physical_attempt ()
     TEST_ASSERT_EQUAL_UINT64 (after.measurement_epoch + 1,
                               reset.measurement_epoch);
     TEST_ASSERT_EQUAL_UINT32 (0, reset.blocked_ratio_ppm);
+
+    test_context_socket_close_zero_linger (sender);
+    test_context_socket_close_zero_linger (receiver);
+}
+
+void test_auto_hwm_public_blocking_send_reports_backpressure_and_reset ()
+{
+    run_auto_hwm_public_blocking_send (false);
+}
+
+void test_auto_hwm_public_multipart_retry_counts_one_submission ()
+{
+    run_auto_hwm_public_blocking_send (true);
+}
+
+void test_auto_hwm_distinct_public_submissions_are_counted_separately ()
+{
+    void *ctx = get_test_context ();
+    void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
+    const size_t message_size = 64;
+    const uint64_t physical_hwm = 8u * (message_size + sizeof (zlink_msg_t));
+    const uint64_t endpoint_hwm = physical_hwm / 2;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (receiver, ZLINK_OPT_RCVHWM, &endpoint_hwm,
+                        sizeof (endpoint_hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (sender, ZLINK_OPT_SNDHWM, &endpoint_hwm,
+                        sizeof (endpoint_hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (receiver, "inproc://auto-hwm-distinct-submissions"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (sender, "inproc://auto-hwm-distinct-submissions"));
+
+    char payload[message_size];
+    memset (payload, 'b', sizeof (payload));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_ctx_reset_auto_hwm_budget_metrics (ctx));
+    TEST_ASSERT_EQUAL_INT (
+      static_cast<int> (sizeof (payload)),
+      zlink_send (sender, payload, sizeof (payload), ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_UINT32 (
+      0, read_auto_hwm_budget_snapshot (ctx).blocked_ratio_ppm);
+
+    // Keep the first record queued: the empty-pipe oversize exception must
+    // not admit this independent FINAL submission.
+    std::vector<char> oversized_final (static_cast<size_t> (physical_hwm), 'm');
+    TEST_ASSERT_FAILURE_ERRNO (
+      EAGAIN,
+      zlink_send (sender, oversized_final.data (), oversized_final.size (),
+                  ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_UINT32 (
+      500000, read_auto_hwm_budget_snapshot (ctx).blocked_ratio_ppm);
+    char received[message_size];
+    TEST_ASSERT_EQUAL_INT (
+      static_cast<int> (sizeof (received)),
+      zlink_recv (receiver, received, sizeof (received), 0));
+    TEST_ASSERT_EQUAL_MEMORY (payload, received, sizeof (payload));
 
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (receiver);
@@ -698,10 +764,8 @@ void test_auto_hwm_inproc_pending_router_router_adds_completion_after_bind ()
     TEST_ASSERT_EQUAL_UINT64 (
       2, snapshot.active_completion_directional_queue_count);
 
-    send_string_expect_success (client, "SERVER", ZLINK_SNDMORE);
-    send_string_expect_success (client, "payload", 0);
-    recv_string_expect_success (server, "CLIENT", 0);
-    recv_string_expect_success (server, "payload", 0);
+    send_routed_string_expect_success (client, "SERVER", "payload");
+    recv_routed_string_expect_success (server, "payload", "CLIENT");
 
     test_context_socket_close (client);
     test_context_socket_close (server);
@@ -754,8 +818,7 @@ void test_auto_hwm_inproc_atomic_minimum_reservation_preserves_pending_connectio
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, endpoint));
     send_string_expect_success (first, "still-connected", 0);
-    recv_string_expect_success (router, "D1", 0);
-    recv_string_expect_success (router, "still-connected", 0);
+    recv_routed_string_expect_success (router, "still-connected", "D1");
 
     test_context_socket_close_zero_linger (rejected);
     test_context_socket_close_zero_linger (first);
@@ -1103,7 +1166,9 @@ int main (void)
     RUN_TEST (test_ctx_option_auto_hwm_memory_budget_round_trip_and_snapshot);
     RUN_TEST (test_ctx_option_auto_hwm_budget_snapshot_abi_and_reset);
     RUN_TEST (test_auto_hwm_metrics_reset_clears_pipe_oversize_counters);
-    RUN_TEST (test_auto_hwm_blocked_ratio_counts_only_first_physical_attempt);
+    RUN_TEST (test_auto_hwm_public_blocking_send_reports_backpressure_and_reset);
+    RUN_TEST (test_auto_hwm_public_multipart_retry_counts_one_submission);
+    RUN_TEST (test_auto_hwm_distinct_public_submissions_are_counted_separately);
     RUN_TEST (test_auto_hwm_applied_limit_blocks_and_resumes_after_drain);
     RUN_TEST (test_auto_hwm_physical_queue_registry_counts_inproc_pair_once);
     RUN_TEST (test_auto_hwm_inproc_manual_endpoint_resolution_counts_queue_once);

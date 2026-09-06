@@ -28,15 +28,17 @@ void test_basic ()
 
     //  Send a message to an unknown peer with the default setting
     //  This will not report any error
-    send_string_expect_success (router, "UNKNOWN", ZLINK_SNDMORE);
-    send_string_expect_success (router, "DATA", 0);
+    send_routed_string_expect_success (router, "UNKNOWN", "DATA");
 
     //  Send a message to an unknown peer with mandatory routing
     //  This will fail
     mandatory = 1;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_router_option (router, ZLINK_ROUTER_OPT_MANDATORY, &mandatory, sizeof (mandatory)));
-    int rc = zlink_send (router, "UNKNOWN", 7, ZLINK_SNDMORE);
+    zlink_routing_id_t unknown = {};
+    unknown.size = 7;
+    memcpy (unknown.data, "UNKNOWN", unknown.size);
+    int rc = test_stream_send_bytes (router, &unknown, "DATA", 4, ZLINK_DONTWAIT);
     TEST_ASSERT_EQUAL_INT (-1, rc);
     TEST_ASSERT_EQUAL_INT (EHOSTUNREACH, errno);
 
@@ -47,12 +49,11 @@ void test_basic ()
 
     //  Get message from dealer to know when connection is ready
     send_string_expect_success (dealer, "Hello", 0);
-    recv_string_expect_success (router, "X", 0);
+    recv_routed_string_expect_success (router, "Hello", "X");
 
     //  Send a message to connected dealer now
     //  It should work
-    send_string_expect_success (router, "X", ZLINK_SNDMORE);
-    send_string_expect_success (router, "Hello", 0);
+    send_routed_string_expect_success (router, "X", "Hello");
 
     test_context_socket_close (router);
     test_context_socket_close (dealer);

@@ -55,12 +55,9 @@ void test_router_auto_id_format ()
     const char payload[] = "hello";
     send_string_expect_success (client, payload, 0);
 
-    unsigned char routing_id[255];
-    const int rid_size =
-      TEST_ASSERT_SUCCESS_ERRNO (zlink_recv (server, routing_id, sizeof (routing_id), 0));
-    TEST_ASSERT_EQUAL_INT (16, rid_size);
-    TEST_ASSERT_EQUAL_MEMORY (auto_routing_id, routing_id, auto_routing_id_size);
-    recv_string_expect_success (server, payload, 0);
+    const zlink_routing_id_t source = recv_routed_string_expect_success (server, payload);
+    TEST_ASSERT_EQUAL_INT (16, source.size);
+    TEST_ASSERT_EQUAL_MEMORY (auto_routing_id, source.data, auto_routing_id_size);
 
     close_sync_socket_zero_linger (client);
     close_sync_socket_zero_linger (server);

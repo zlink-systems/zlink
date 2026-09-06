@@ -180,16 +180,17 @@ void test_callback_dispatch_same_direction_reconnect_handover ()
     char buffer[255];
     bool handed_over = false;
     for (int i = 0; i < 50 && !handed_over; ++i) {
-        send_string_expect_success (client, "S", ZLINK_SNDMORE);
-        send_string_expect_success (client, "recovered", 0);
-        const int rc = zlink_recv (server_two, buffer, sizeof buffer, 0);
+        send_routed_string_expect_success (client, "S", "recovered");
+        zlink_routing_id_t source = {};
+        const int rc = test_recv_router (server_two, buffer, sizeof buffer, 0, &source);
         if (rc == -1) {
             TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
             continue;
         }
-        TEST_ASSERT_EQUAL_INT (1, rc);
-        TEST_ASSERT_EQUAL_INT ('C', buffer[0]);
-        recv_string_expect_success (server_two, "recovered", 0);
+        TEST_ASSERT_EQUAL_INT (1, source.size);
+        TEST_ASSERT_EQUAL_INT ('C', source.data[0]);
+        TEST_ASSERT_EQUAL_INT (9, rc);
+        TEST_ASSERT_EQUAL_MEMORY ("recovered", buffer, 9);
         handed_over = true;
     }
     TEST_ASSERT_TRUE_MESSAGE (
@@ -199,10 +200,8 @@ void test_callback_dispatch_same_direction_reconnect_handover ()
     //  transport-pair identity while the owner validates the replacement.
     //  Preserve the displaced pipe as standby instead of terminating it at
     //  routing-id handover time.
-    send_string_expect_success (server_one, "C", ZLINK_SNDMORE);
-    send_string_expect_success (server_one, "standby", 0);
-    TEST_ASSERT_GREATER_THAN_INT (0, zlink_recv (client, buffer, sizeof buffer, 0));
-    recv_string_expect_success (client, "standby", 0);
+    send_routed_string_expect_success (server_one, "C", "standby");
+    recv_routed_string_expect_success (client, "standby");
 
     test_context_socket_close_zero_linger (client);
     test_context_socket_close_zero_linger (server_two);
@@ -251,14 +250,12 @@ void test_callback_dispatch_cross_direction_duplicate_converges ()
     // and start an endless reconnect/handover loop.
     msleep (SETTLE_TIME);
     for (int i = 0; i < 10; ++i) {
-        send_string_expect_success (client, "A", ZLINK_SNDMORE);
-        send_string_expect_success (client, "stable", 0);
-        recv_string_expect_success (server_one, "Z", 0);
-        recv_string_expect_success (server_one, "stable", 0);
+        send_routed_string_expect_success (client, "A", "stable");
+        recv_routed_string_expect_success (server_one, "stable", "Z");
     }
 
     char buffer[255];
-    TEST_ASSERT_FAILURE_ERRNO (EAGAIN, zlink_recv (server_two, buffer, sizeof buffer, 0));
+    TEST_ASSERT_FAILURE_ERRNO (EAGAIN, test_recv_router (server_two, buffer, sizeof buffer, 0));
 
     //  The losing physical direction remains as an idle standby. When the
     //  selected direction closes, ROUTER promotes the existing standby
@@ -267,22 +264,26 @@ void test_callback_dispatch_cross_direction_duplicate_converges ()
     server_one = NULL;
     bool recovered = false;
     for (int i = 0; i < 50 && !recovered; ++i) {
-        const int rc = zlink_send (client, "A", 1, ZLINK_SNDMORE);
+        zlink_routing_id_t target = {};
+        target.size = 1;
+        target.data[0] = 'A';
+        const int rc = test_stream_send_bytes (client, &target, "recovered", 9, 0);
         if (rc == -1) {
             TEST_ASSERT_EQUAL_INT (EHOSTUNREACH, errno);
             msleep (10);
             continue;
         }
-        TEST_ASSERT_EQUAL_INT (1, rc);
-        send_string_expect_success (client, "recovered", 0);
-        const int received = zlink_recv (server_two, buffer, sizeof buffer, 0);
+        TEST_ASSERT_EQUAL_INT (9, rc);
+        zlink_routing_id_t source = {};
+        const int received = test_recv_router (server_two, buffer, sizeof buffer, 0, &source);
         if (received == -1) {
             TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
             continue;
         }
-        TEST_ASSERT_EQUAL_INT (1, received);
-        TEST_ASSERT_EQUAL_INT ('Z', buffer[0]);
-        recv_string_expect_success (server_two, "recovered", 0);
+        TEST_ASSERT_EQUAL_INT (1, source.size);
+        TEST_ASSERT_EQUAL_INT ('Z', source.data[0]);
+        TEST_ASSERT_EQUAL_INT (9, received);
+        TEST_ASSERT_EQUAL_MEMORY ("recovered", buffer, 9);
         recovered = true;
     }
     TEST_ASSERT_TRUE_MESSAGE (
@@ -431,10 +432,8 @@ void test_async_handshake_preserves_outgoing_direction ()
     msleep (SETTLE_TIME);
 
     for (int i = 0; i < 10; ++i) {
-        send_string_expect_success (client, "S", ZLINK_SNDMORE);
-        send_string_expect_success (client, "stable", 0);
-        recv_string_expect_success (server_one, "C", 0);
-        recv_string_expect_success (server_one, "stable", 0);
+        send_routed_string_expect_success (client, "S", "stable");
+        recv_routed_string_expect_success (server_one, "stable", "C");
     }
 
     char buffer[255];

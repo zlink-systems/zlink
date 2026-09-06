@@ -1,7 +1,43 @@
 # CMake build script for Zlink unit tests
 cmake_minimum_required(VERSION 3.10)
 
+include_directories(${CORE_TEST_INTERNAL_INCLUDE_DIRS})
+add_compile_definitions(ZLINK_INTERNAL_BUILD=1 ZLINK_BUILD_TESTS=1)
+# Internal class layouts must use the same configure probes as Core objects.
+# Public helpers deliberately do not include this private configuration header.
+get_target_property(CORE_TEST_BINARY_DIR test-core BINARY_DIR)
+if(MSVC)
+  add_compile_options("/FI${CORE_TEST_BINARY_DIR}/platform.hpp")
+else()
+  add_compile_options(-include "${CORE_TEST_BINARY_DIR}/platform.hpp")
+endif()
+
 set(unittests
+    unittest_auto_hwm_physical_attempt
+    unittest_zmp_engine_controls
+    unittest_pubsub_raw_hwm
+    unittest_ws_transport_config
+    unittest_single_lane_accounting
+    unittest_submit_errors
+    unittest_submit_retry
+    unittest_router_message_envelope
+    unittest_complete_record_admission
+    unittest_router_pipe_contract
+    unittest_xsub_pipe_termination
+    unittest_router_peer_weight
+    unittest_receive_metadata
+    unittest_publish_rollback
+    unittest_monitor_ready_drain
+    unittest_proxy_metadata
+    unittest_monitor_queue_accounting
+    unittest_zmp_pair_lifecycle
+    unittest_ws_metadata
+    unittest_phase3_request_reply_owners
+    unittest_flow_state_socket
+    unittest_flow_state_monitor
+    unittest_ctx_lifecycle
+    unittest_router_receive_queue
+    unittest_receive_transaction
     unittest_ypipe
     unittest_poller
     unittest_socket_poller
@@ -55,7 +91,8 @@ foreach(test ${unittests})
       "${Zlink_SOURCE_DIR}/../lib")
   endif()
 
-  target_link_libraries(${test} testutil-static)
+  target_link_libraries(${test} testutil-common test-core)
+  set_property(TARGET ${test} PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
 
   if(RT_LIBRARY)
     target_link_libraries(${test} ${RT_LIBRARY})
@@ -78,12 +115,6 @@ foreach(test ${unittests})
   set_tests_properties(${test} PROPERTIES TIMEOUT 10)
   set_tests_properties(${test} PROPERTIES LABELS "unittest;parallel-safe")
 
-  # Unit tests link through testutil-static and the static core library only.
-  # Some CMake versions still propagate the shared libzlink target through
-  # legacy link settings, so strip it after all per-test libraries are added.
-  get_target_property(LIBS ${test} LINK_LIBRARIES)
-  list(REMOVE_ITEM LIBS libzlink)
-  set_target_properties(${test} PROPERTIES LINK_LIBRARIES "${LIBS}")
 endforeach()
 
 zlink_warn_unregistered_tests(

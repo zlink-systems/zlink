@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 
+#include "sockets/common/routed_submit_target.hpp"
 #include "../testutil_unity.hpp"
 
 #include "core/ctx.hpp"

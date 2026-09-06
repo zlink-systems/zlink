@@ -14,6 +14,14 @@
 
 ## Lane Policy
 
+## Interface Boundary
+
+- Integration, contract, and end-to-end tests use only the public C API headers under `core/include` and link the shared `libzlink`, with the same exported-symbol boundary as application code.
+- Assertions about private Core structures, injected failures, and implementation-owned state belong under `core/tests/unittest`; unit executables link the single non-LTO `test-core` archive.
+- Shared test helpers (`testutil*`) stay public-API-only; platform feature selection is generated locally for tests, and private Core configuration is owned by the unit-test build.
+- Test executables and test support archives do not enable IPO; production libraries and the hotpath benchmark keep their configured LTO policy.
+
+
 Tests are classified along two axes:
 
 - category: `unittest`, `integration`, `e2e`, `regression`

@@ -1544,9 +1544,9 @@ set(ZLINK_BUILD_TESTS ${_zlink_build_tests_effective})
 if(ZLINK_BUILD_TESTS AND (NOT BUILD_SHARED OR NOT BUILD_STATIC))
   message(
     FATAL_ERROR
-      "Core tests require BUILD_SHARED=ON and BUILD_STATIC=ON. Private C++ and "
-      "test-only checks link the static library without expanding the shared ABI, "
-      "while the public-surface contract inspects the shared library exports. "
+      "Core tests require BUILD_SHARED=ON and BUILD_STATIC=ON. Interface tests "
+      "link the shared library, unit tests use non-IPO implementation objects, "
+      "and the hotpath benchmark retains the production static library. "
       "Enable both library targets, or disable tests with BUILD_TESTS=OFF and "
       "ZLINK_BUILD_TESTS=OFF.")
 endif()
@@ -1559,6 +1559,18 @@ if(ZLINK_BUILD_TESTS)
 endif()
 
 if(ZLINK_BUILD_TESTS)
+  # Unit tests inspect Core implementation objects. Compile those once without
+  # IPO instead of performing a full Core LTO link for every unit executable.
+  add_library(test-core STATIC ${sources})
+  set_target_properties(test-core PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+  target_compile_definitions(test-core PUBLIC ZLINK_STATIC PRIVATE ZLINK_BUILD_TESTS=1)
+  target_include_directories(test-core PRIVATE ${BUNDLED_BOOST_INCLUDE_DIR})
+  target_include_directories(test-core PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_BINARY_DIR}")
+  # Reuse the Core archive's platform dependency list without linking its LTO
+  # objects. Sanitizer/compiler settings remain inherited from this directory.
+  target_link_libraries(test-core PUBLIC
+    $<TARGET_PROPERTY:libzlink-static,INTERFACE_LINK_LIBRARIES>)
   enable_testing() # Enable testing only works in root scope
   add_subdirectory(tests)
 endif()
@@ -1775,13 +1787,15 @@ if (ENABLE_CLANG)
   include(ClangFormat)
 endif()
 
-# Shared and static MSVC builds can both generate the precompiled header. Add an
-# ordering dependency so they do not write the PCH concurrently.
+# MSVC Core targets share precompiled-header output. Order their writers.
 if(MSVC
    AND ENABLE_PRECOMPILED
    AND BUILD_SHARED
    AND BUILD_STATIC)
   add_dependencies(libzlink-static libzlink)
+  if(TARGET test-core)
+    add_dependencies(test-core libzlink-static)
+  endif()
 endif()
 
 option(ENABLE_NO_EXPORT "Build with empty ZLINK_EXPORT macro, bypassing platform-based automated detection" OFF)

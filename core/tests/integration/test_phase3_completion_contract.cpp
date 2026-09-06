@@ -2,6 +2,7 @@
 
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
+#include "completion_test_helpers.hpp"
 
 #include <atomic>
 #include <cstdlib>
@@ -11,7 +12,6 @@
 
 SETUP_TEARDOWN_TESTCONTEXT
 
-extern "C" void zlink_test_set_submit_retry_fault (int count_, int err_);
 
 namespace
 {
@@ -24,41 +24,9 @@ bool should_run_phase3_completion_test (const char *name_)
     return !selected || !*selected || strcmp (selected, name_) == 0;
 }
 
-void init_part (zlink_msg_t *part_, const std::string &payload_)
-{
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK, zlink_msg_init_size (part_, payload_.size ()));
-    if (!payload_.empty ())
-        memcpy (zlink_msg_data (part_), payload_.data (), payload_.size ());
-}
 
-void assert_part_consumed (zlink_msg_t *part_)
-{
-    TEST_ASSERT_NOT_NULL (part_);
-    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (part_));
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (part_));
-}
 
-void init_empty_completion (zlink_completion_t *completion_)
-{
-    memset (completion_, 0, sizeof (*completion_));
-    completion_->struct_size = sizeof (*completion_);
-}
 
-void assert_empty_completion (const zlink_completion_t &completion_)
-{
-    TEST_ASSERT_EQUAL_UINT32 (sizeof (zlink_completion_t),
-                              completion_.struct_size);
-    TEST_ASSERT_EQUAL_INT (0, completion_.kind);
-    TEST_ASSERT_EQUAL_UINT64 (0, completion_.completion_id);
-    TEST_ASSERT_NULL (completion_.user_context);
-    TEST_ASSERT_EQUAL_UINT (0, completion_.peer_rid.size);
-    TEST_ASSERT_EQUAL_INT (0, completion_.send_result);
-    TEST_ASSERT_EQUAL_INT (0, completion_.send_terminal_errno);
-    TEST_ASSERT_EQUAL_INT (0, completion_.request_result);
-    TEST_ASSERT_NULL (completion_.reply_parts);
-    TEST_ASSERT_EQUAL_UINT64 (0, completion_.reply_part_count);
-}
 
 void configure_small_pair_hwm (void *socket_)
 {
@@ -178,19 +146,6 @@ void receive_pair_multipart (void *receiver_, const std::string &first_,
     zlink_multipart_close (parts, part_count);
 }
 
-void assert_no_completion (void *socket_)
-{
-    zlink_completion_t completion;
-    init_empty_completion (&completion);
-    errno = 0;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_NO_DATA,
-      zlink_completion_recv (socket_, &completion,
-                             ZLINK_RECV_FLAGS_DONTWAIT));
-    TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-    assert_empty_completion (completion);
-    zlink_completion_close (&completion);
-}
 
 void *make_writable_completion_poller (void *socket_, void *user_data_)
 {
@@ -508,76 +463,7 @@ void test_pair_none_timeout_has_zero_id_no_completion_and_consumes_input ()
     test_context_socket_close_zero_linger (receiver);
 }
 
-void test_none_pre_return_out_of_memory_and_internal_error_are_distinct ()
-{
-    void *sender = NULL;
-    void *receiver = NULL;
-    setup_pair ("inproc://phase3-none-pre-return-errors", &sender, &receiver,
-                false);
 
-    const int injected_errnos[] = {ENOMEM, EIO};
-    const zlink_submit_result_t expected_results[] = {
-      ZLINK_SUBMIT_OUT_OF_MEMORY, ZLINK_SUBMIT_INTERNAL_ERROR};
-    for (size_t i = 0; i != 2; ++i) {
-        zlink_test_set_submit_retry_fault (1, injected_errnos[i]);
-        zlink_msg_t part;
-        init_part (&part, i == 0 ? "oom" : "runtime");
-        zlink_completion_id_t completion_id = UINT64_MAX;
-        errno = 0;
-        TEST_ASSERT_EQUAL_INT (
-          expected_results[i],
-          zlink_send_part (sender, &part, ZLINK_SEND_FLAGS_NONE,
-                           ZLINK_PART_FINAL, NULL, &completion_id));
-        TEST_ASSERT_EQUAL_INT (injected_errnos[i], zlink_errno ());
-        TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
-        assert_part_consumed (&part);
-
-        zlink_completion_t completion;
-        init_empty_completion (&completion);
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_RECV_NO_DATA,
-          zlink_completion_recv (sender, &completion,
-                                 ZLINK_RECV_FLAGS_DONTWAIT));
-        TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
-        assert_empty_completion (completion);
-    }
-    zlink_test_set_submit_retry_fault (0, 0);
-
-    test_context_socket_close_zero_linger (sender);
-    test_context_socket_close_zero_linger (receiver);
-}
-
-void test_dontwait_non_admission_failures_are_synchronous_zero_id ()
-{
-    void *sender = NULL;
-    void *receiver = NULL;
-    setup_pair ("inproc://phase3-dontwait-synchronous-errors", &sender,
-                &receiver, false);
-
-    const int injected_errnos[] = {ENOMEM, EIO};
-    const zlink_submit_result_t expected_results[] = {
-      ZLINK_SUBMIT_OUT_OF_MEMORY, ZLINK_SUBMIT_INTERNAL_ERROR};
-    for (size_t i = 0; i != 2; ++i) {
-        zlink_test_set_submit_retry_fault (1, injected_errnos[i]);
-
-        zlink_msg_t part;
-        init_part (&part, "synchronous-dontwait-failure");
-        zlink_completion_id_t completion_id = UINT64_MAX;
-        errno = 0;
-        TEST_ASSERT_EQUAL_INT (
-          expected_results[i],
-          zlink_send_part (sender, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                           ZLINK_PART_FINAL, NULL, &completion_id));
-        TEST_ASSERT_EQUAL_INT (injected_errnos[i], zlink_errno ());
-        TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
-        assert_part_consumed (&part);
-        zlink_test_set_submit_retry_fault (0, 0);
-        assert_no_completion (sender);
-    }
-
-    test_context_socket_close_zero_linger (sender);
-    test_context_socket_close_zero_linger (receiver);
-}
 
 void test_socket_close_terminalizes_and_reclaims_wait_tokens ()
 {
@@ -1766,10 +1652,6 @@ int main ()
       test_send_id_is_zeroed_before_validation_and_input_is_consumed);
     RUN_PHASE3_COMPLETION_TEST (
       test_pair_none_timeout_has_zero_id_no_completion_and_consumes_input);
-    RUN_PHASE3_COMPLETION_TEST (
-      test_none_pre_return_out_of_memory_and_internal_error_are_distinct);
-    RUN_PHASE3_COMPLETION_TEST (
-      test_dontwait_non_admission_failures_are_synchronous_zero_id);
     RUN_PHASE3_COMPLETION_TEST (
       test_socket_close_terminalizes_and_reclaims_wait_tokens);
     RUN_PHASE3_COMPLETION_TEST (

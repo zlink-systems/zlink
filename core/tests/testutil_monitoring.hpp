@@ -3,9 +3,8 @@
 #ifndef __TESTUTIL_MONITORING_HPP_INCLUDED__
 #define __TESTUTIL_MONITORING_HPP_INCLUDED__
 
-#include "../include/zlink.h"
-#include "../src/runtime/core/internal_defs.hpp"
-#include "utils/stdint.hpp"
+#include <zlink.h>
+#include <stdint.h>
 
 #include <stddef.h>
 #include <atomic>

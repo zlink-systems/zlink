@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 #include "testutil_unity.hpp"
-#include "../src/runtime/core/recv_internal.hpp"
 
 #include <stdlib.h>
 #include <string.h>
@@ -174,9 +173,8 @@ void recv_string_expect_success (void *socket_, const char *str_, int flags_)
                                        "used for strings longer than 255 "
                                        "characters");
 
-    socket_handle_t handle = as_socket_handle (socket_);
     const int rc = TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::recv_buffer_internal (handle.socket, buffer, sizeof (buffer), flags_));
+      zlink_recv (socket_, buffer, sizeof (buffer), flags_));
     TEST_ASSERT_EQUAL_INT ((int) len, rc);
     if (str_)
         TEST_ASSERT_EQUAL_STRING_LEN (str_, buffer, len);
@@ -341,3 +339,89 @@ void make_random_ipc_endpoint (char *out_endpoint_)
     make_random_ipc_endpoint (out_endpoint_, MAX_SOCKET_STRING);
 }
 #endif
+
+zlink_routing_id_t recv_routed_string_expect_success (
+  void *socket_, const char *payload_, const char *expected_rid_,
+  zlink_part_flag_t expected_more_)
+{
+    zlink_msg_t part;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
+    const zlink_routing_id_t *source = NULL;
+    zlink_reply_token_t token = 0;
+    zlink_part_flag_t more;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_router_recv_part (
+      socket_, &source, &token, &part, &more, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_NOT_NULL (source);
+    TEST_ASSERT_GREATER_THAN_UINT (0, source->size);
+    const zlink_routing_id_t result = *source;
+    if (expected_rid_) {
+        TEST_ASSERT_EQUAL_UINT (strlen (expected_rid_), source->size);
+        TEST_ASSERT_EQUAL_MEMORY (expected_rid_, source->data, source->size);
+    }
+    const size_t length = payload_ ? strlen (payload_) : 0;
+    TEST_ASSERT_EQUAL_UINT (length, zlink_msg_size (&part));
+    if (length)
+        TEST_ASSERT_EQUAL_MEMORY (payload_, zlink_msg_data (&part), length);
+    TEST_ASSERT_EQUAL_INT (expected_more_, more);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+    return result;
+}
+
+void send_routed_string_expect_success (
+  void *socket_, const char *routing_id_, const char *payload_)
+{
+    zlink_routing_id_t rid = {};
+    TEST_ASSERT_LESS_OR_EQUAL_UINT (sizeof (rid.data), strlen (routing_id_));
+    rid.size = static_cast<uint8_t> (strlen (routing_id_));
+    memcpy (rid.data, routing_id_, rid.size);
+    const size_t length = payload_ ? strlen (payload_) : 0;
+    TEST_ASSERT_EQUAL_INT (static_cast<int> (length),
+                           test_stream_send_bytes (socket_, &rid, payload_, length, 0));
+}
+
+void send_published_string_expect_success (
+  void *publisher_, const char *topic_, const char *payload_)
+{
+    const size_t size = payload_ ? strlen (payload_) : 0;
+    zlink_msg_t part;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&part, size));
+    if (size)
+        memcpy (zlink_msg_data (&part), payload_, size);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, zlink_publish_part (
+      publisher_, topic_, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL));
+}
+
+void recv_subscribed_string_expect_success (
+  void *subscriber_, const char *topic_, const char *payload_)
+{
+    const size_t topic_size = strlen (topic_);
+    std::vector<char> topic (topic_size + 1);
+    size_t received_topic_size = 0;
+    zlink_msg_t part;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
+    zlink_part_flag_t more = ZLINK_PART_MORE;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_subscribe_part (
+      subscriber_, NULL, topic.data (), topic.size (), &received_topic_size,
+      &part, &more, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_UINT64 (topic_size, received_topic_size);
+    if (topic_size)
+        TEST_ASSERT_EQUAL_MEMORY (topic_, topic.data (), topic_size);
+    const size_t size = payload_ ? strlen (payload_) : 0;
+    TEST_ASSERT_EQUAL_UINT64 (size, zlink_msg_size (&part));
+    if (size)
+        TEST_ASSERT_EQUAL_MEMORY (payload_, zlink_msg_data (&part), size);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, more);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+}
+
+zlink_auto_hwm_budget_snapshot_t read_auto_hwm_budget_snapshot (void *ctx_)
+{
+    zlink_auto_hwm_budget_snapshot_t snapshot;
+    memset (&snapshot, 0, sizeof (snapshot));
+    snapshot.abi_version = ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1;
+    snapshot.struct_size = sizeof (snapshot);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_ctx_get_auto_hwm_budget_snapshot (ctx_, &snapshot));
+    return snapshot;
+}

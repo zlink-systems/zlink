@@ -59,16 +59,14 @@ void test_wrong_send_helper_aborts_open_sequence_after_bad_recv_attempt ()
       ZLINK_SUBMIT_OK,
       zlink_send_part (dealer, &final_part, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL, NULL, NULL));
 
-    recv_string_expect_success (router, "D1", 0);
-    recv_string_expect_success (router, "part-2", 0);
+    recv_routed_string_expect_success (router, "part-2", "D1");
 
     zlink_msg_t next_msg;
     init_part (&next_msg, "after-reset");
     TEST_ASSERT_EQUAL_INT (
       ZLINK_SUBMIT_OK,
       zlink_send_part (dealer, &next_msg, static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL, NULL, NULL));
-    recv_string_expect_success (router, "D1", 0);
-    recv_string_expect_success (router, "after-reset", 0);
+    recv_routed_string_expect_success (router, "after-reset", "D1");
 
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
