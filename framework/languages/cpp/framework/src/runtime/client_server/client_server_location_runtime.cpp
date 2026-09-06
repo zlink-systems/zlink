@@ -14,6 +14,7 @@
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Eventing/poller.hpp>
 #include <zlink/Contracts/Messaging/message.hpp>
+#include <zlink/framework/contracts/monitoring/framework_runtime.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -398,15 +399,6 @@ client_server_location_runtime_t::build_snapshot_locked (
                  ? std::numeric_limits<int>::max ()
                  : static_cast<int> (value);
     };
-    const auto append_server = [&] (
-      client_server_server_snapshot_t server,
-      bool count_as_client_target) {
-        if (count_as_client_target && server.ready && server.weight > 0)
-            ++result.ready_server_count;
-        result.servers.push_back (std::move (server));
-    };
-
-    std::set<std::string> client_target_identities;
     const auto client = _clients.find (channel_name);
     if (client != _clients.end ()) {
         result.connection_intent_count =
@@ -428,10 +420,8 @@ client_server_location_runtime_t::build_snapshot_locked (
               .descriptor_source =
                 key.starts_with ("manual|") ? "manual" : "location_store",
               .last_failure = std::nullopt};
-            client_target_identities.insert (
-              snapshot.server_rid.to_hex () + "|"
-              + std::to_string (snapshot.lifecycle_generation));
-            append_server (std::move (snapshot), true);
+            result.selectable = result.selectable || ready;
+            result.servers.push_back (std::move (snapshot));
             const auto pending = connection.owner->pending_request_count ();
             const auto current = static_cast<std::size_t> (
               std::max (0, result.pending_request_count));
@@ -448,28 +438,32 @@ client_server_location_runtime_t::build_snapshot_locked (
         const auto admission = local_server->second->owner->descriptor ();
         const auto local_rid = zlink::routing_id_t::from (
           admission.server_routing_id);
-        const auto local_identity =
-          local_rid.to_hex () + "|"
-          + std::to_string (admission.lifecycle_generation);
-        if (!client_target_identities.contains (local_identity)) {
-            const auto transport_ready =
-              admission.state == mesh::service_node_state_t::serving
-              && admission.weight > 0;
-            append_server (client_server_server_snapshot_t{
-              .server_rid = local_rid,
-              .lifecycle_generation = admission.lifecycle_generation,
-              .weight = static_cast<int> (admission.weight),
-              .ready = transport_ready,
-              .state = snapshot_state (
-                client_server_framework_state (admission.state),
-                transport_ready),
-              .descriptor_source = "local",
-              .last_failure = std::nullopt},
-              false);
-        }
+        const auto transport_ready =
+          admission.state == mesh::service_node_state_t::serving
+          && admission.weight > 0;
+        client_server_server_snapshot_t snapshot{
+          .server_rid = local_rid,
+          .lifecycle_generation = admission.lifecycle_generation,
+          .weight = static_cast<int> (admission.weight),
+          .ready = transport_ready,
+          .state = snapshot_state (
+            client_server_framework_state (admission.state),
+            transport_ready),
+          .descriptor_source = "local",
+          .last_failure = std::nullopt};
+        const auto existing = std::find_if (
+          result.servers.begin (), result.servers.end (), [&] (const auto &server) {
+              return server.server_rid == snapshot.server_rid
+                     && server.lifecycle_generation == snapshot.lifecycle_generation;
+          });
+        if (existing == result.servers.end ())
+            result.servers.push_back (std::move (snapshot));
+        else
+            *existing = std::move (snapshot);
     }
-    result.selectable = configured->client.enabled
-                        && result.ready_server_count > 0;
+    result.ready_server_count = to_count (std::count_if (
+      result.servers.begin (), result.servers.end (),
+      [] (const auto &server) { return server.ready; }));
     const auto sequence = _snapshot_sequences.find (channel_name);
     result.sequence = sequence == _snapshot_sequences.end ()
                         ? 0
@@ -529,7 +523,9 @@ client_server_location_runtime_t::observe (
 
 bool client_server_location_runtime_t::is_ready (std::string channel_name) const
 {
-    return snapshot (std::move (channel_name)).selectable;
+    auto services = _services;
+    return services.get_required<framework_runtime_t> ().status ().is_ready
+           && snapshot (std::move (channel_name)).ready_server_count > 0;
 }
 
 void client_server_location_runtime_t::publish_snapshot_changes ()

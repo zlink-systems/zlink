@@ -8,6 +8,7 @@
 
 #include <zlink/framework.hpp>
 
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -43,6 +44,104 @@ struct network_probe_handler_t
 
     void handle (const network_probe_message_t &) {}
 };
+
+struct readiness_case_t
+{
+    const char *channel_name;
+    zlink::framework::client_server_role_t role;
+    int ready_server_count;
+};
+
+constexpr std::array readiness_cases{
+  readiness_case_t{"ready-server", zlink::framework::client_server_role_t::server, 1},
+  readiness_case_t{"zero-weight-server", zlink::framework::client_server_role_t::server, 0},
+  readiness_case_t{"client-without-server", zlink::framework::client_server_role_t::client, 0},
+  readiness_case_t{"client-and-server", zlink::framework::client_server_role_t::client_and_server, 1}};
+
+class preparing_readiness_probe_t final : public zlink::framework::hosted_service_t
+{
+  public:
+    zlink::framework::task_t<void> start (
+      zlink::framework::service_provider_t &services) override
+    {
+        const auto &host = services.get_required<zlink::framework::framework_runtime_t> ();
+        const auto &runtime = services.get_required<zlink::framework::client_server_runtime_t> ();
+        assert (host.status ().state == zlink::framework::framework_runtime_state_t::preparing);
+        for (const auto &test : readiness_cases) {
+            const auto snapshot = runtime.snapshot (test.channel_name);
+            assert (snapshot.ready_server_count == test.ready_server_count);
+            assert (!runtime.is_ready (test.channel_name));
+        }
+        co_return;
+    }
+
+    void stop () noexcept override {}
+};
+
+void verify_client_server_readiness_counts_local_ready_servers ()
+{
+    auto app = zlink::framework::app_t::create ();
+    app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+        options.handlers ().group ("readiness").add_send<network_probe_handler_t> ();
+        options.add_client_server_channel ("ready-server")
+          .server ().listen ().set_weight (100).add_handler_group ("readiness");
+        options.add_client_server_channel ("zero-weight-server")
+          .server ().listen ().set_weight (0).add_handler_group ("readiness");
+        options.add_client_server_channel ("client-without-server")
+          .client ().connect ("tcp://127.0.0.1:1");
+        auto both = options.add_client_server_channel ("client-and-server");
+        both.server ().listen ().set_weight (100).add_handler_group ("readiness");
+        both.client ();
+    });
+    app.add_hosted_service (std::make_unique<preparing_readiness_probe_t> ());
+    auto provider = app.advanced ().services ().build_provider ();
+    const auto &runtime = provider.get_required<zlink::framework::client_server_runtime_t> ();
+    for (const auto &test : readiness_cases) {
+        assert (!runtime.is_ready (test.channel_name));
+        assert (runtime.snapshot (test.channel_name).ready_server_count == 0);
+    }
+
+    char program[] = "client-server-readiness";
+    char *arguments[] = {program, nullptr};
+    std::atomic_int exit_code{-1};
+    std::thread app_thread ([&] {
+        exit_code.store (app.run (1, arguments), std::memory_order_release);
+    });
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while (!app.is_ready () && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+    assert (app.runtime_state () == zlink::framework::framework_runtime_state_t::serving);
+
+    while (!runtime.snapshot ("client-and-server").selectable
+           && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::sleep_for (1ms);
+
+    for (const auto &test : readiness_cases) {
+        const auto snapshot = runtime.snapshot (test.channel_name);
+        assert (snapshot.local_role == test.role);
+        assert (snapshot.ready_server_count == test.ready_server_count);
+        assert (runtime.is_ready (test.channel_name) == (test.ready_server_count > 0));
+        assert (snapshot.selectable
+                == (test.role == zlink::framework::client_server_role_t::client_and_server));
+    }
+
+    auto &channels = provider.get_required<zlink::framework::channel_client_t> ();
+    const auto send = channels.send ("ready-server", network_probe_message_t{}).async ().result ();
+    assert (!send);
+    assert (send.error_kind () == zlink::framework::framework_error_kind_t::not_configured);
+    const auto request = channels.request_to_channel ("ready-server", network_probe_message_t{})
+                           .async<network_probe_message_t> ().result ();
+    assert (!request);
+    assert (request.error_kind () == zlink::framework::framework_error_kind_t::not_configured);
+
+    app.request_stop ();
+    app_thread.join ();
+    assert (exit_code.load (std::memory_order_acquire) == 0);
+    for (const auto &test : readiness_cases) {
+        assert (!runtime.is_ready (test.channel_name));
+        assert (runtime.snapshot (test.channel_name).ready_server_count == 0);
+    }
+}
 
 void verify_network_defaults_are_deferred_until_apply ()
 {
@@ -291,6 +390,7 @@ void verify_client_server_terminal_errors_preserve_public_boundaries ()
 
 int main ()
 {
+    verify_client_server_readiness_counts_local_ready_servers ();
     verify_network_defaults_are_deferred_until_apply ();
     verify_client_server_terminal_errors_preserve_public_boundaries ();
     verify_client_server_runtime_projection_and_observation ();
