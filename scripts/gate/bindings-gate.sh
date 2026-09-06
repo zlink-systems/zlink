@@ -5,7 +5,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"; cd "$Z"; require_quiet || exi
 LIB="$Z/core/build-dev/lib"; INC="$Z/core/include"
 run c        bindings/c      env ZLINK_C_CORE_BUILD_DIR="$Z/core/build-dev" ZLINK_CORE_INCLUDE_DIR="$INC" bash tests/run_tests.sh
 run cpp      bindings/cpp    env ZLINK_CORE_SOURCE=local ZLINK_CPP_CORE_BUILD_DIR="$Z/core/build-dev" ZLINK_BUILD_JOBS=4 bash tests/run_tests.sh
-run dotnet   bindings/dotnet env ZLINK_LIBRARY_PATH="$LIB" TMPDIR=/dev/shm/zlink-tmp-dotnet bash tests/run_tests.sh
+run dotnet   bindings/dotnet env ZLINK_LIBRARY_PATH="$LIB" TMPDIR=/dev/shm/zlink-tmp-dotnet UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 bash tests/run_tests.sh
 run go       bindings/go     bash tests/run_tests.sh
 run java     bindings/java   env ZLINK_CORE_SOURCE=local ZLINK_CORE_INCLUDE_DIR="$INC" ZLINK_CORE_LIB_DIR="$LIB" bash tests/run_tests.sh
 run node     bindings/node   env ZLINK_CORE_SOURCE=local ZLINK_LIBRARY_PATH="$LIB/libzlink.so.0.17.0" LD_LIBRARY_PATH="$LIB" bash tests/run_tests.sh
