@@ -14,7 +14,7 @@ import {
 } from './opaque-redis-scripts';
 import { asArray, asString, toNumber } from './redis-values';
 
-const MAX_BLOB_BYTES = 64 * 1024 * 1024;
+const MAX_ENCODED_BLOB_BYTES = 64 * 1024 * 1024 + 23;
 
 /** Redis implementation of immutable relocation blob storage. */
 export class ZLinkRedisRelocationStore implements ZLinkRelocationStore {
@@ -124,8 +124,8 @@ function requireReference(reference: ZLinkBlobReference): string {
 }
 
 function requirePayload(payload: Uint8Array): void {
-  if (payload.byteLength > MAX_BLOB_BYTES) {
-    throw new RangeError('Relocation Store blob exceeds 64 MiB.');
+  if (payload.byteLength > MAX_ENCODED_BLOB_BYTES) {
+    throw new RangeError('Relocation Store encoded blob exceeds 64 MiB + 23 bytes.');
   }
 }
 
