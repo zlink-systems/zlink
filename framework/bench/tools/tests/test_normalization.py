@@ -169,9 +169,11 @@ class ExclusionTest(unittest.TestCase):
         self.assertEqual(row.excluded_runs, ["r4"])
         self.assertEqual(len(run_set.contaminated()), 1)
 
-    def _judgement(self, numerator_cells, denominator_cells):
+    def _judgement(self, numerator_cells, denominator_cells, numerator="zlink-node"):
         rows = build_rows(run_set_of(*numerator_cells, *denominator_cells))
-        return judge_pair(rows, "zlink-node / zlink-c", "zlink-node", "zlink-c", 1024)
+        return judge_pair(
+            rows, f"{numerator} / zlink-c", numerator, "zlink-c", 1024
+        )
 
     def test_publishes_only_when_both_sides_pass_g5(self):
         steady = [cell("zlink-node", "request-window", 1024, f"r{i}", 100.0) for i in range(3)]
@@ -268,6 +270,68 @@ class ExclusionTest(unittest.TestCase):
         judgement = self._judgement(node, baseline)
         self.assertEqual(judgement.status, "unsupported")
         self.assertIn("0.97 of 1 declared event_loop_utilization", judgement.reason)
+
+    def test_submit_thread_cores_decides_saturation_for_cpp(self):
+        """FB-037: the cpp shape, from the measured span.
+
+        ``zlink-cpp`` request-window reads 1.92 PROCESS cores because Core runs
+        native I/O threads in the client process, and 0.955 SUBMIT cores because
+        exactly one application thread runs the harness's submit loop and its
+        completion drain. The declared ceiling is that one thread, so the
+        instrument reads 0.955 of 1 and the cell IS saturated: the client
+        runtime, not the transport, set this ceiling.
+        """
+        cpp = [
+            cell(
+                "zlink-cpp", "request-window", 1024, f"r{i}", 100.0,
+                client_cpu_percent=9.6, client_cores=1.92,
+                client_parallelism_ceiling=1.0,
+                client_saturation_metric="submit_thread_cores",
+                submit_thread_cores=0.955,
+            )
+            for i in range(3)
+        ]
+        baseline = [cell("zlink-c", "request-window", 1024, f"c{i}", 110.0) for i in range(3)]
+        rows = build_rows(run_set_of(*cpp, *baseline))
+        row = rows[CellKey("zlink-cpp", "request-window", 1024)]
+        self.assertEqual(row.saturation_metric, "submit_thread_cores")
+        self.assertTrue(row.saturation_evaluated)
+        self.assertTrue(row.client_saturated)
+        judgement = self._judgement(cpp, baseline, numerator="zlink-cpp")
+        self.assertEqual(judgement.status, "unsupported")
+        # The reason names the instrument and the ceiling, so a reader can see
+        # WHICH measurement excluded the row rather than only that one did.
+        self.assertIn("of 1 declared submit_thread_cores", judgement.reason)
+        self.assertIn("client-saturated", judgement.reason)
+
+    def test_process_cores_would_compare_unlike_quantities_across_the_cpp_rows(self):
+        """FB-037: why cpp declares an instrument instead of counting the process.
+
+        The two rows a spec 7.2 judgement divides read almost the same on the
+        DECLARED instrument (0.955 and 0.695 submit cores) but very differently
+        on process cores (1.92 and 0.698), because only the ZLink row carries
+        Core's native I/O threads. Reading the gRPC row on process cores leaves
+        it unsaturated while the ZLink row is marked -- the mark would then be
+        reporting which row links Core, not which row was client-bound.
+        """
+        grpc = [
+            cell(
+                "grpc-cpp", "request-window", 1024, f"r{i}", 64.0,
+                client_cores=0.698, client_parallelism_ceiling=1.0,
+                client_saturation_metric="submit_thread_cores",
+                submit_thread_cores=0.695,
+            )
+            for i in range(3)
+        ]
+        rows = build_rows(run_set_of(*grpc))
+        row = rows[CellKey("grpc-cpp", "request-window", 1024)]
+        self.assertFalse(row.client_saturated)
+        self.assertEqual(row.saturation_text(), "no")
+        # The same row read on process cores against the same declared ceiling
+        # would sit at 0.698, still under; the ZLink row at 1.92 would be over.
+        # The instrument is what keeps the two commensurate.
+        self.assertAlmostEqual(row.values["client_cores"], 0.698)
+        self.assertAlmostEqual(row.values["submit_thread_cores"], 0.695)
 
     def test_a_multi_core_client_below_its_ceiling_is_not_saturated(self):
         """The gated2 shape: 7.38 cores against a declared ceiling of 20."""

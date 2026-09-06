@@ -1,0 +1,3 @@
+# Build output. The bench is configured and built outside every measurement
+# window (plan 3.2, G7), so the tree is local and never committed.
+build/

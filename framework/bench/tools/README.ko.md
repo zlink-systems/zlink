@@ -123,6 +123,33 @@ core 전체에 대한 값이라, 논리 core 20개인 머신에서 단일 스레
 core 수는 구조화 입력의 `client_cores`를 그대로 쓰고, 없으면 옵션 머리글의 `logical_cores`와
 백분율로 계산한다. 둘 다 없으면 포화를 판정하지 않고 그 사실을 결과에 남긴다.
 
+### 계측기는 언어가 선언한다 (FB-023 · FB-032 · FB-037)
+
+집계기는 `client_saturation_metric`이 이름한 계측기를 그대로 읽는다. 지원하는 이름은 넷이다.
+
+| 이름 | 선언 언어 | 재는 것 |
+|---|---|---|
+| `client_cores` | `.NET`, 선언이 없는 옛 결과 | 프로세스 전체 CPU ÷ 경과 시간 |
+| `event_loop_utilization` | Node | `performance.eventLoopUtilization()` |
+| `jvm_thread_cores` | Java, Kotlin | 제출 스레드의 `ThreadMXBean` CPU |
+| `submit_thread_cores` | C++ | 제출·완료 드레인을 도는 application thread의 `CLOCK_THREAD_CPUTIME_ID` |
+
+**프로세스 CPU는 ZLink client의 포화 계측기로 쓸 수 없다.** 이것은 언어 하나의 사정이 아니라
+세 언어에서 서로 다른 이유로 같은 결론이 나온 캠페인 수준의 결과다. Node에서는 프로세스 CPU가
+binding의 native I/O thread를 함께 셌고, Java에서는 GC와 JIT thread를 셌고, C++에서는 다시
+binding I/O thread를 센다. 다섯 언어 중 넷이 프로세스 CPU가 아닌 것을 선언했다.
+
+문제는 임계값이 아니라 **판정식이 나누는 두 행 사이의 비교 가능성**이다. 실측된 C++ 값이
+그것을 가장 짧게 보여준다.
+
+| 행 | 선언 계측기 | 프로세스 core |
+|---|---|---|
+| `zlink-cpp` request-window | 0.955 | **1.92** |
+| `grpc-cpp` request-window | 0.695 | **0.698** |
+
+두 행의 프로세스 core 차이는 client 런타임의 바쁨이 아니라 **어느 행이 Core를 링크하는가**다.
+그 값으로 포화를 판정하면 표시가 그 사실을 보고하게 된다.
+
 ## 실제 in-flight 깊이
 
 처리량 × 평균 지연(Little's law)을 셀마다 낸다. Phase 0에서 설정 window 100에 대해 실제 깊이가

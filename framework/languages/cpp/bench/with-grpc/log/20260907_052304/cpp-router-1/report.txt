@@ -1,0 +1,121 @@
+options: raw_socket=router window=100 send_concurrency=8 duration=5.0 warmup=5.0 logical_cores=20 client_parallelism_ceiling=1 client_saturation_metric=submit_thread_cores grpc_version=1.51.1 loadavg1=2.48
+      | grpc-cpp-request-serial    | 1024     |     16.356 KOPS    |    16.748 MB/s |      0.059 ms |      0.081 ms |      0.133 ms |       1.8% |     15.9 MB |       2.6% |     15.2 MB |
+      | zlink-cpp-request-serial   | 1024     |      8.972 KOPS    |     9.188 MB/s |      0.111 ms |      0.141 ms |      0.202 ms |       2.3% |     17.0 MB |       1.4% |      7.8 MB |
+      | grpc-cpp-request-serial    | 4096     |     15.152 KOPS    |    62.061 MB/s |      0.064 ms |      0.083 ms |      0.122 ms |       1.9% |     17.3 MB |       2.6% |     15.1 MB |
+      | zlink-cpp-request-serial   | 4096     |      8.794 KOPS    |    36.018 MB/s |      0.113 ms |      0.147 ms |      0.223 ms |       2.3% |     17.4 MB |       1.4% |      7.9 MB |
+      | grpc-cpp-request-window    | 1024     |     65.805 KOPS    |    67.384 MB/s |      1.518 ms |      1.684 ms |      1.782 ms |       3.6% |     20.9 MB |      26.9% |     34.6 MB |
+      | zlink-cpp-request-window   | 1024     |    330.164 KOPS    |   338.088 MB/s |      0.302 ms |      0.353 ms |      0.408 ms |       9.5% |     21.7 MB |       8.7% |     33.0 MB |
+      | grpc-cpp-request-window    | 4096     |     63.449 KOPS    |   259.889 MB/s |      1.575 ms |      1.804 ms |      2.006 ms |       3.7% |     22.3 MB |      27.0% |     42.0 MB |
+      | zlink-cpp-request-window   | 4096     |    278.284 KOPS    |  1139.851 MB/s |      0.359 ms |      0.412 ms |      0.445 ms |      10.4% |     23.5 MB |       9.6% |     33.7 MB |
+      | grpc-cpp-send-saturation   | 1024     |     45.186 KMSG/s  |    46.270 MB/s |      0.112 ms |      0.166 ms |      0.211 ms |       3.2% |     23.7 MB |      11.0% |     41.8 MB |
+      | zlink-cpp-send-saturation  | 1024     |    696.423 KMSG/s  |   713.137 MB/s |      0.443 ms |      0.987 ms |      1.100 ms |       8.2% |     23.7 MB |       5.2% |     52.6 MB |
+      | grpc-cpp-send-saturation   | 4096     |     44.468 KMSG/s  |   182.142 MB/s |      0.114 ms |      0.165 ms |      0.212 ms |       3.3% |     23.7 MB |      10.9% |     42.8 MB |
+      | zlink-cpp-send-saturation  | 4096     |    514.679 KMSG/s  |  2108.124 MB/s |      0.378 ms |      0.492 ms |      0.585 ms |       8.3% |     23.7 MB |       6.3% |     41.4 MB |
+RESULT,current,grpc-cpp-request-serial,local,1024,throughput,16355.911
+RESULT,current,grpc-cpp-request-serial,local,1024,bandwidth,16.748
+RESULT,current,grpc-cpp-request-serial,local,1024,latency,0.059
+RESULT,current,grpc-cpp-request-serial,local,1024,latency_p95,0.081
+RESULT,current,grpc-cpp-request-serial,local,1024,latency_p99,0.133
+RESULT,current,grpc-cpp-request-serial,local,1024,client_cpu_percent,1.833
+RESULT,current,grpc-cpp-request-serial,local,1024,client_memory_mb,15.914
+RESULT,current,grpc-cpp-request-serial,local,1024,server_cpu_percent,2.584
+RESULT,current,grpc-cpp-request-serial,local,1024,server_memory_mb,15.199
+RESULT,current,zlink-cpp-request-serial,local,1024,throughput,8972.242
+RESULT,current,zlink-cpp-request-serial,local,1024,bandwidth,9.188
+RESULT,current,zlink-cpp-request-serial,local,1024,latency,0.111
+RESULT,current,zlink-cpp-request-serial,local,1024,latency_p95,0.141
+RESULT,current,zlink-cpp-request-serial,local,1024,latency_p99,0.202
+RESULT,current,zlink-cpp-request-serial,local,1024,client_cpu_percent,2.337
+RESULT,current,zlink-cpp-request-serial,local,1024,client_memory_mb,16.969
+RESULT,current,zlink-cpp-request-serial,local,1024,server_cpu_percent,1.411
+RESULT,current,zlink-cpp-request-serial,local,1024,server_memory_mb,7.812
+RESULT,current,grpc-cpp-request-serial,local,4096,throughput,15151.552
+RESULT,current,grpc-cpp-request-serial,local,4096,bandwidth,62.061
+RESULT,current,grpc-cpp-request-serial,local,4096,latency,0.064
+RESULT,current,grpc-cpp-request-serial,local,4096,latency_p95,0.083
+RESULT,current,grpc-cpp-request-serial,local,4096,latency_p99,0.122
+RESULT,current,grpc-cpp-request-serial,local,4096,client_cpu_percent,1.876
+RESULT,current,grpc-cpp-request-serial,local,4096,client_memory_mb,17.281
+RESULT,current,grpc-cpp-request-serial,local,4096,server_cpu_percent,2.554
+RESULT,current,grpc-cpp-request-serial,local,4096,server_memory_mb,15.082
+RESULT,current,zlink-cpp-request-serial,local,4096,throughput,8793.513
+RESULT,current,zlink-cpp-request-serial,local,4096,bandwidth,36.018
+RESULT,current,zlink-cpp-request-serial,local,4096,latency,0.113
+RESULT,current,zlink-cpp-request-serial,local,4096,latency_p95,0.147
+RESULT,current,zlink-cpp-request-serial,local,4096,latency_p99,0.223
+RESULT,current,zlink-cpp-request-serial,local,4096,client_cpu_percent,2.329
+RESULT,current,zlink-cpp-request-serial,local,4096,client_memory_mb,17.438
+RESULT,current,zlink-cpp-request-serial,local,4096,server_cpu_percent,1.439
+RESULT,current,zlink-cpp-request-serial,local,4096,server_memory_mb,7.895
+RESULT,current,grpc-cpp-request-window,local,1024,throughput,65804.719
+RESULT,current,grpc-cpp-request-window,local,1024,bandwidth,67.384
+RESULT,current,grpc-cpp-request-window,local,1024,latency,1.518
+RESULT,current,grpc-cpp-request-window,local,1024,latency_p95,1.684
+RESULT,current,grpc-cpp-request-window,local,1024,latency_p99,1.782
+RESULT,current,grpc-cpp-request-window,local,1024,client_cpu_percent,3.563
+RESULT,current,grpc-cpp-request-window,local,1024,client_memory_mb,20.875
+RESULT,current,grpc-cpp-request-window,local,1024,server_cpu_percent,26.940
+RESULT,current,grpc-cpp-request-window,local,1024,server_memory_mb,34.645
+RESULT,current,zlink-cpp-request-window,local,1024,throughput,330164.411
+RESULT,current,zlink-cpp-request-window,local,1024,bandwidth,338.088
+RESULT,current,zlink-cpp-request-window,local,1024,latency,0.302
+RESULT,current,zlink-cpp-request-window,local,1024,latency_p95,0.353
+RESULT,current,zlink-cpp-request-window,local,1024,latency_p99,0.408
+RESULT,current,zlink-cpp-request-window,local,1024,client_cpu_percent,9.497
+RESULT,current,zlink-cpp-request-window,local,1024,client_memory_mb,21.656
+RESULT,current,zlink-cpp-request-window,local,1024,server_cpu_percent,8.675
+RESULT,current,zlink-cpp-request-window,local,1024,server_memory_mb,32.961
+RESULT,current,grpc-cpp-request-window,local,4096,throughput,63449.491
+RESULT,current,grpc-cpp-request-window,local,4096,bandwidth,259.889
+RESULT,current,grpc-cpp-request-window,local,4096,latency,1.575
+RESULT,current,grpc-cpp-request-window,local,4096,latency_p95,1.804
+RESULT,current,grpc-cpp-request-window,local,4096,latency_p99,2.006
+RESULT,current,grpc-cpp-request-window,local,4096,client_cpu_percent,3.708
+RESULT,current,grpc-cpp-request-window,local,4096,client_memory_mb,22.281
+RESULT,current,grpc-cpp-request-window,local,4096,server_cpu_percent,27.036
+RESULT,current,grpc-cpp-request-window,local,4096,server_memory_mb,42.020
+RESULT,current,zlink-cpp-request-window,local,4096,throughput,278283.954
+RESULT,current,zlink-cpp-request-window,local,4096,bandwidth,1139.851
+RESULT,current,zlink-cpp-request-window,local,4096,latency,0.359
+RESULT,current,zlink-cpp-request-window,local,4096,latency_p95,0.412
+RESULT,current,zlink-cpp-request-window,local,4096,latency_p99,0.445
+RESULT,current,zlink-cpp-request-window,local,4096,client_cpu_percent,10.411
+RESULT,current,zlink-cpp-request-window,local,4096,client_memory_mb,23.531
+RESULT,current,zlink-cpp-request-window,local,4096,server_cpu_percent,9.567
+RESULT,current,zlink-cpp-request-window,local,4096,server_memory_mb,33.660
+RESULT,current,grpc-cpp-send-saturation,local,1024,throughput,45185.884
+RESULT,current,grpc-cpp-send-saturation,local,1024,bandwidth,46.270
+RESULT,current,grpc-cpp-send-saturation,local,1024,latency,0.112
+RESULT,current,grpc-cpp-send-saturation,local,1024,latency_p95,0.166
+RESULT,current,grpc-cpp-send-saturation,local,1024,latency_p99,0.211
+RESULT,current,grpc-cpp-send-saturation,local,1024,client_cpu_percent,3.187
+RESULT,current,grpc-cpp-send-saturation,local,1024,client_memory_mb,23.688
+RESULT,current,grpc-cpp-send-saturation,local,1024,server_cpu_percent,10.992
+RESULT,current,grpc-cpp-send-saturation,local,1024,server_memory_mb,41.758
+RESULT,current,zlink-cpp-send-saturation,local,1024,throughput,696423.153
+RESULT,current,zlink-cpp-send-saturation,local,1024,bandwidth,713.137
+RESULT,current,zlink-cpp-send-saturation,local,1024,latency,0.443
+RESULT,current,zlink-cpp-send-saturation,local,1024,latency_p95,0.987
+RESULT,current,zlink-cpp-send-saturation,local,1024,latency_p99,1.100
+RESULT,current,zlink-cpp-send-saturation,local,1024,client_cpu_percent,8.200
+RESULT,current,zlink-cpp-send-saturation,local,1024,client_memory_mb,23.688
+RESULT,current,zlink-cpp-send-saturation,local,1024,server_cpu_percent,5.155
+RESULT,current,zlink-cpp-send-saturation,local,1024,server_memory_mb,52.566
+RESULT,current,grpc-cpp-send-saturation,local,4096,throughput,44468.320
+RESULT,current,grpc-cpp-send-saturation,local,4096,bandwidth,182.142
+RESULT,current,grpc-cpp-send-saturation,local,4096,latency,0.114
+RESULT,current,grpc-cpp-send-saturation,local,4096,latency_p95,0.165
+RESULT,current,grpc-cpp-send-saturation,local,4096,latency_p99,0.212
+RESULT,current,grpc-cpp-send-saturation,local,4096,client_cpu_percent,3.254
+RESULT,current,grpc-cpp-send-saturation,local,4096,client_memory_mb,23.688
+RESULT,current,grpc-cpp-send-saturation,local,4096,server_cpu_percent,10.893
+RESULT,current,grpc-cpp-send-saturation,local,4096,server_memory_mb,42.758
+RESULT,current,zlink-cpp-send-saturation,local,4096,throughput,514678.783
+RESULT,current,zlink-cpp-send-saturation,local,4096,bandwidth,2108.124
+RESULT,current,zlink-cpp-send-saturation,local,4096,latency,0.378
+RESULT,current,zlink-cpp-send-saturation,local,4096,latency_p95,0.492
+RESULT,current,zlink-cpp-send-saturation,local,4096,latency_p99,0.585
+RESULT,current,zlink-cpp-send-saturation,local,4096,client_cpu_percent,8.343
+RESULT,current,zlink-cpp-send-saturation,local,4096,client_memory_mb,23.688
+RESULT,current,zlink-cpp-send-saturation,local,4096,server_cpu_percent,6.337
+RESULT,current,zlink-cpp-send-saturation,local,4096,server_memory_mb,41.441

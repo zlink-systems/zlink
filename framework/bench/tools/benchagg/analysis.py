@@ -36,6 +36,7 @@ _MEDIAN_FIELDS = (
     "client_cores",
     "event_loop_utilization",
     "jvm_thread_cores",
+    "submit_thread_cores",
     "drain_ms",
 )
 
@@ -60,8 +61,9 @@ class Row:
     #: spec 5.1: the ceiling the client harness declared. Constant within a run,
     #: so it is carried rather than averaged.
     client_parallelism_ceiling: float | None = None
-    #: FB-023: the instrument the harness declared for this row. Rows that name
-    #: none are read as ``client_cores``.
+    #: FB-023 / FB-032 / FB-037: the instrument the harness declared for this row.
+    #: Rows that name none are read as ``client_cores``, which is what every
+    #: result predating the declaration meant.
     client_saturation_metric: str | None = None
 
     peak_in_flight: int | None = None

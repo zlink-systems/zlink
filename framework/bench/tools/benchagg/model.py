@@ -122,9 +122,24 @@ class Cell:
     #: ceiling: both are "the threads this harness offers its own submit path".
     #: GC and JIT threads are not JVM threads and never appear in ThreadMXBean, so
     #: they cannot inflate it.
+    #: The cpp row declares ``submit_thread_cores``: CPU charged to the single
+    #: application thread its drivers run submit and completion drain on
+    #: (CLOCK_THREAD_CPUTIME_ID), against a declared ceiling of 1. It is the same
+    #: correction for the third time and for a third reason (FB-037). Measured,
+    #: ``zlink-cpp`` request-window reads 0.955 submit cores against 1.92 process
+    #: cores -- the difference is Core's native I/O threads -- while ``grpc-cpp``
+    #: reads 0.695 against 0.698. Process cores would divide unlike quantities
+    #: between exactly the two rows a spec 7.2 judgement compares.
+    #:
+    #: Across the campaign this is now a language-neutral result rather than three
+    #: coincidences: node's process CPU counted native I/O threads, java's counted
+    #: GC and JIT threads, cpp's counts binding I/O threads. Three languages,
+    #: three different reasons, the same wrong answer -- which is why spec 5.1
+    #: makes the instrument a per-language DECLARATION instead of fixing one.
     client_saturation_metric: str | None = None
     event_loop_utilization: float | None = None
     jvm_thread_cores: float | None = None
+    submit_thread_cores: float | None = None
 
     # Diagnostics. FB-017 (depth), FB-008 (drain), spec 5 / G3 (server-counted
     # send throughput). ``None`` means the runner did not report the value, which

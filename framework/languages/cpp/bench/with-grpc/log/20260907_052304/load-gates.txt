@@ -1,0 +1,4 @@
+cpp-router-1 loadavg1=1.41 gate=2.0 at=2026-09-07T05:23:04+09:00
+cpp-router-2 loadavg1=1.93 gate=2.0 at=2026-09-07T05:25:27+09:00
+cpp-router-3 loadavg1=1.81 gate=2.0 at=2026-09-07T05:28:11+09:00
+cpp-dealer-1 loadavg1=1.79 gate=2.0 at=2026-09-07T05:31:34+09:00
