@@ -1376,3 +1376,9 @@ after(1-run, load ≤1.9): DD 64B 47.4%·256B 56.9%·1024B 58.2%·4096B 96.5%·6
 - 규칙 수: 새 규칙 0. 이미 구현·검증된 결정을 스펙이 명시하도록 한 것뿐이다.
 - 발견(리뷰 inventory로 이관): `scripts/verify-framework-doc-contracts.sh`가 baseline(`4e8182af01`)에서 이미 두 곳 실패 — (a) `verify-framework-submit-api.sh --contract`: cpp `task_t<void> submit()` 패턴이 `cfa70e8a68`(C++ async terminal naming) 이후 계약 문서와 어긋남; (b) `run-framework-relocation-conformance.mjs --list`: dotnet `SessionActorCoordinatorTests`에 conformance fixture가 요구하는 `Canonical_Seal_Retries_Target_Push_Until_Command_44_Commits` 식별자 없음. `docs.yml`은 이 게이트를 `continue-on-error`로 돌려 신호만 남긴다. 스펙 심층 리뷰(D-102)의 "게이트 drift" 항목으로 처리한다.
 - **D-101 보정(사용자 지시 "스펙 작성은 스펙 작성 문서대로"):** `doc/principal/documentation/spec-writing-guide.ko.md`에 맞춰 같은 내용을 다시 배치 — (a) 새 용어 `connection intent`를 용어집(ko/en)에 먼저 등록(§3.4), (b) 규칙은 산문 절에 "굵은 규칙 + 이유" 불릿으로(§2.4/§4.4: MeshNode §7.1, Actor §8.1, liveness §2에 내부 확인 조건 표기), (c) 검증 요구 절에는 인터페이스 관찰 항목만(§9.3: MeshNode §10 2건, Actor §9 2건, Core socket §8 1건). 규칙 수 변화 없음.
+
+## D-103 (2026-09-06, 머신 A) 발견 — framework 7축 perf 규격의 runner가 어느 언어에도 없다; framework 성능 baseline은 runner 구현이 선행돼야 한다(사용자 결정 요청)
+
+- 조사(`framework-perf-runner-inventory.md`): 공통 규격(7축 × 1/4 KiB, 공통 CLI, result 스키마, `/perf/*` endpoint)은 문서만 있고 5언어 모두 구현 0. 존재하는 것은 규격 이전 ad-hoc 벤치(cpp connector perf·entry-spot micro, dotnet with-grpc channel request/reply, node entry-spot micro)뿐이며 java/kotlin은 없음. CI도 돌리지 않음. 언어별 perf 계획 문서와 공통 규격의 시나리오 이름이 서로 다름.
+- 판단: "framework 성능 개선"은 측정 없이 시작할 수 없다. bindings 수준 perf(B, `doc/perf/**`)는 존재하지만 framework dispatch·session·actor·pub/sub 경로는 측정되지 않는다. 선택지 — (a) 공통 규격대로 runner를 구현(dotnet을 canonical로 먼저, 이어 cpp/java/kotlin/node; 규격의 CLI·스키마 그대로, 공개 API만 사용), (b) 규격 이전 ad-hoc 벤치로 임시 baseline만 기록하고 스펙 리뷰의 `lower-layer-reverification` 항목 제거 효과는 bindings perf로만 간접 확인. 권고 (a): 규격이 이미 있고 runner 없이는 개선 주장을 검증할 수 없다. 사용자 결정 뒤 진행.
+- 즉시 정리 가능: dead baseline 파일 2개, 시나리오 이름 통일(문서, 행동 변경 없음).
