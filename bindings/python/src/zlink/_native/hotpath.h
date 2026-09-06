@@ -1484,22 +1484,16 @@ static PyObject *py_start_request (PyObject *self, PyObject *args)
                 goto done;
         }
         PyObject *failure = NULL;
-        if (rc == ZLINK_SUBMIT_BACKPRESSURED) {
-            if (err != EAGAIN || !completion_id) {
-                PyObject *errors = PyImport_ImportModule ("zlink.contracts.errors.errors");
-                failure = errors ? hot_call (errors, hp_SubmitError, "ii", ZLINK_SUBMIT_INTERNAL_ERROR, EPROTO) : NULL;
-                Py_XDECREF (errors);
-            } else {
-                PyObject *retained = hot_call (entry, hp_retain_retry, "OO", target, payload);
-                if (!retained) {
-                    PyObject *type, *tb;
-                    PyErr_Fetch (&type, &failure, &tb);
-                    PyErr_NormalizeException (&type, &failure, &tb);
-                    Py_XDECREF (type);
-                    Py_XDECREF (tb);
-                }
-                Py_XDECREF (retained);
+        if (rc == ZLINK_SUBMIT_BACKPRESSURED && err == EAGAIN && completion_id) {
+            PyObject *retained = hot_call (entry, hp_retain_retry, "OO", target, payload);
+            if (!retained) {
+                PyObject *type, *tb;
+                PyErr_Fetch (&type, &failure, &tb);
+                PyErr_NormalizeException (&type, &failure, &tb);
+                Py_XDECREF (type);
+                Py_XDECREF (tb);
             }
+            Py_XDECREF (retained);
         } else if (completion_id)
             failure = hot_call (owner, hp__submit_error, "ii", rc, err);
         else {
