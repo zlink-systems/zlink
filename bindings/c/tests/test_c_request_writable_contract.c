@@ -515,16 +515,35 @@ static int test_terminal_writable (int iteration)
     CHECK (poller != NULL);
     CHECK (zlink_poller_add (poller, client, &poller_context, ZLINK_POLLCOMPLETION)
            == ZLINK_CONFIG_OK);
-    CHECK (wait_for_completion (poller, client, &poller_context) == 0);
-    zlink_completion_t terminal;
-    CHECK (receive_completion (client, &terminal) == 0);
-    CHECK (terminal.kind == ZLINK_COMPLETION_WRITABLE);
-    CHECK (terminal.completion_id == wait_token);
-    CHECK (terminal.user_context == &request_context);
-    CHECK (terminal.send_result == ZLINK_SEND_TERMINAL);
-    CHECK (terminal.send_terminal_errno == ENOENT);
-    CHECK (check_rid (&terminal.peer_rid, &target) == 0);
-    zlink_completion_close (&terminal);
+    /* Explicit removal ends everything queued for the target (socket README
+       completion table): the wait token gets its terminal WRITABLE and every
+       accepted REQUEST completes with NOT_FOUND. The order is not fixed. */
+    size_t terminals = 0;
+    size_t not_found = 0;
+    while (terminals + not_found < accepted + 1) {
+        CHECK (wait_for_completion (poller, client, &poller_context) == 0);
+        zlink_completion_t completion;
+        while (receive_completion (client, &completion) == 0) {
+            if (completion.kind == ZLINK_COMPLETION_WRITABLE) {
+                CHECK (completion.completion_id == wait_token);
+                CHECK (completion.user_context == &request_context);
+                CHECK (completion.send_result == ZLINK_SEND_TERMINAL);
+                CHECK (completion.send_terminal_errno == ENOENT);
+                CHECK (check_rid (&completion.peer_rid, &target) == 0);
+                ++terminals;
+            } else {
+                CHECK (completion.kind == ZLINK_COMPLETION_REQUEST);
+                CHECK (completion.completion_id != wait_token);
+                CHECK (completion.user_context == &request_context);
+                CHECK (completion.request_result == ZLINK_REQUEST_NOT_FOUND);
+                CHECK (check_rid (&completion.peer_rid, &target) == 0);
+                ++not_found;
+            }
+            zlink_completion_close (&completion);
+        }
+    }
+    CHECK (terminals == 1);
+    CHECK (not_found == accepted);
     CHECK (check_no_completion (client) == 0);
 
     CHECK (zlink_poller_destroy (&poller) == ZLINK_CLOSE_OK);
