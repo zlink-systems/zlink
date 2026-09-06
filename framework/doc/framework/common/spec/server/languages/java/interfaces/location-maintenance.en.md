@@ -263,9 +263,11 @@ first message and creation information of an Instance Spot cold
 activation, and recording the reply payload and terminal result of a
 pending request completed after relocation.
 
-One blob is at most 64 MiB. The framework splits a stored logical
-stream of at most 256 GiB into at most 4,096 64-MiB chunks and an
-immutable root manifest. The framework computes and verifies checksum
+One data chunk is at most 64 MiB of application bytes; the limit of the
+encoded blob the provider receives is owned by
+[Relocation Store Redis §3](../../../05-location-relocation/03-relocation-store-redis.en.md#3-reference-and-storage-size).
+The framework splits a stored logical stream of at most 256 GiB into at
+most 4,096 64-MiB chunks and an immutable root manifest. The framework computes and verifies checksum
 and the root/chunk relationship, and the provider doesn't interpret the
 manifest.
 

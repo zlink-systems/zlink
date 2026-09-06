@@ -29,8 +29,9 @@ The following boundaries of the Java contract apply to Kotlin unchanged.
  pending request completed after relocation.
 - Retrying with the same reference and same bytes is AlreadyStored;
  different bytes is Conflict.
-- One blob is at most 64 MiB, and the framework composes a logical
- stream of at most 256 GiB from at most 4,096 chunks.
+- One data chunk is at most 64 MiB of application bytes, and the framework composes a
+ logical stream of at most 256 GiB from at most 4,096 chunks. The encoded blob limit is
+ owned by [Relocation Store Redis §3](../../../05-location-relocation/03-relocation-store-redis.en.md#3-reference-and-storage-size).
 - The ownership and close order after Store registration are the same
  as the Java contract. The provider manages the shared connection
  lease.

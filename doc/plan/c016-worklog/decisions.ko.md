@@ -1505,3 +1505,8 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 
 - SD-03: lifecycle §의 worker scheduler 자리·배치 수용량 `CapacityExceeded`는 오류 모델 §5의 자원 소유 기준(source runtime이 소유하는 자리)과 일치하므로 변경하지 않는다.
 - SD-04: 기존 정의 "Server role은 Client의 송신 기능도 포함"은 ClientServer Channel §1(Server는 Client에 새 업무 호출을 시작하지 못함)과 충돌. 결정: 용어를 RouteMesh의 ChannelName별 등록 역할로 한정하고, ClientServer의 Client·Server는 "같은 이름, 다른 계약"으로 ClientServer §1을 소유자로 연결. `ZLinkClientServerRole` 표기는 ClientServer 문서를 따른다고만 적는다. 용어 분리(새 이름)는 하지 않는다 — 코드 표기가 이미 두 곳에서 다르고 새 이름은 규칙을 늘린다.
+
+## D-123 (2026-09-06, 머신 A) Java execution-context 거부의 오류 kind는 `INVALID_OPERATION` (F-R8-16 후속, B 승인)
+
+- `ZLinkSuspendInvocationContext.invalid()`가 owner turn 밖 Yield·미지원 Yield·같은 gate 대기 등 모든 execution-context 거부를 `NOT_CONFIGURED`로 만들었다. 실행 계약 §16("Owner turn 밖의 `Yield` 호출은 submission·queue 변경 전에 `InvalidOperation`")과 §6(같은 gate 대기 금지 → `InvalidOperation`), dotnet `ZLinkApplicationExecutionContext.RequireYieldTurn/SameGate`(InvalidOperation)와 대조해 B(기존 결함)로 승인. `ZLinkExecutionGuardTest:62`·`DefaultZLinkWorkerCallTest:60`의 기대값도 계약대로 정정. 규칙 수 변화 없음(kind 1 → 1, 값만 정정).
+- 함께 적용: F-R8-15(Create/GetOrCreate 중복 옵션·재제출 `INVALID_OPERATION`), F-R8-16(Kotlin `KotlinSingleUse` 제거, Java call이 제출 상태 소유), F-R8-14(Redis provider encoded 상한 `64 MiB + 23`). Java/Kotlin interface 문서의 "Blob 하나는 최대 64 MiB"는 data chunk(application bytes) 기준으로 고치고 encoded 상한은 Relocation Store Redis §3 링크(문서 owner 1개).

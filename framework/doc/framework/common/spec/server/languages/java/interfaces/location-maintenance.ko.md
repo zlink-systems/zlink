@@ -235,7 +235,9 @@ Source가 payload를 memory에 유지한 채 source–target ordered mesh 연결
 memory가 복원 원본이다. 이 Store에 남는 정상 실행 책임은 Instance Spot cold activation의 최초
 message·생성 정보 기록과 relocation 뒤 완료되는 pending request의 reply payload·terminal 결과 기록이다.
 
-Blob 하나는 최대 64 MiB다. Framework는 저장하는 최대 256 GiB logical stream을 최대 4,096개의
+Data chunk 하나는 application bytes 기준 최대 64 MiB이고, provider가 받는 encoded blob의 상한은
+[Relocation Store Redis §3](../../../05-location-relocation/03-relocation-store-redis.ko.md#3-reference와-저장-크기)이 소유한다.
+Framework는 저장하는 최대 256 GiB logical stream을 최대 4,096개의
 64 MiB chunk와 immutable root manifest로 나눈다. Checksum과 root·chunk 관계는 Framework가 계산하고
 검증하며 provider는 manifest를 해석하지 않는다.
 
