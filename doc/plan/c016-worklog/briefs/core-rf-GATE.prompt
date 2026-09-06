@@ -1,0 +1,15 @@
+gate job (sonnet): 감독관이 지정한 job 묶음을 main에 포팅하고 채택 게이트를 한 번 돌린다. 코드 판단·수정 금지(포팅 충돌만 기계적으로 해결하고 보고). 커밋 금지.
+
+입력(감독관이 채움): job 목록과 worktree 경로, 예: S-4 ~/project/zlink-work/s4, S-10 ~/project/zlink-work/s10.
+
+절차:
+1. 메인 저장소 /home/hep7hep7/project/zlink에서 `git status --short`가 비어 있는지 확인(비어 있지 않으면 목록을 보고하고 멈춤). `git pull --rebase -q`.
+2. 각 worktree의 diff를 main에 적용: `cd <worktree> && git diff > /tmp/claude-1000/-home-hep7hep7-project-zlink/a5b31a9a-1a3b-4bcb-a080-53988ed569cb/scratchpad/<job>.patch`, 메인에서 `git apply --3way`. 충돌은 hunk 단위로 양쪽 의도가 명백할 때만 해결하고 보고서에 hunk를 인용; 아니면 멈추고 보고. **적용 뒤 `git diff --stat -- core/include core/src/libzlink.vers`가 비어 있어야 한다**(비어 있지 않으면 즉시 멈춤 — 공개 인터페이스 변경 금지).
+3. 빌드: `JOBS=6 scripts/build-core.sh dev` (core/build-dev). 실패 시 오류 전문 보고 후 멈춤.
+4. 테스트: `ctest --test-dir core/build-dev -j2 --output-on-failure` 전체 1회(hotpath_gate는 dev 트리에 없음 — 정상). 실패가 있으면 그 테스트만 3회 재실행해 간헐/고정 구분. 포팅한 job이 바꾼 suite(브리프의 `ctest -R` 패턴 합집합)는 5회.
+5. 공개 인터페이스 확인: `git diff --stat -- core/include core/src/libzlink.vers` 비어 있음 재확인, mirror cmp — `scripts/gate/README.md`에서 8 헤더 × 4 mirror 비교 절차를 찾아 실행(없으면 `find . -path ./core -prune -o -name 'zlink*.h' -print`로 bindings 안의 헤더 사본을 찾아 `cmp`).
+6. release lib: `JOBS=6 scripts/build-core.sh release --lib-only` (core/build). 
+7. hotpath_gate(5셀): `JOBS=6 cmake --build core/build-gate --target hotpath_bench -j6` 후 `flock <PERF_LOCK> python3 core/tests/perf/hotpath_gate.py --bench core/build-gate/bin/hotpath_bench --reference core/tests/perf/hotpath_reference.json --valgrind ~/.local/bin/valgrind`. 셀별 값·ratio·PASS/FAIL. +5% 넘게 **좋아진** 셀은 FAIL로 나오므로 값을 보고만 하고 reference는 고치지 않는다(감독관이 갱신).
+8. 성능(감독관 지정 셀, 모두 `flock <PERF_LOCK>` 로): 기본 = with_stream `--stack zlink,asio --size all --ccu 1000 --runs 1 --reuse-build` + perf/c 1024 B tcp 경량 3셀(single ROUTER_ROUTER: `bindings/c/perf/run_benchmarks.sh` 해당 옵션; multi RR_SENDSEND·RR_REQREP: `run_benchmarks_multi.sh --transports tcp --runs 1 --patterns ROUTER_ROUTER_SENDSEND,ROUTER_ROUTER_REQREP` + 1024 size 옵션). 기준값은 계획 §7.1·§7.2. load average 기록.
+9. 보고서: doc/plan/c016-worklog/gate-<묶음>-summary.md — 적용한 patch·충돌, 빌드 결과, ctest 요약(총/실패/간헐), 5회 suite 결과, 인터페이스 확인 결과, hotpath 5셀 표, 성능 표(기준 대비 비율), load avg. 메인 저장소의 working tree는 patch 적용 상태 그대로 둔다(감독관이 커밋).
+PERF_LOCK = /tmp/claude-1000/-home-hep7hep7-project-zlink/a5b31a9a-1a3b-4bcb-a080-53988ed569cb/scratchpad/PERF_LOCK
