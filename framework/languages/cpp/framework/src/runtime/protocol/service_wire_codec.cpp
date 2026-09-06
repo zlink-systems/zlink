@@ -391,6 +391,58 @@ actor_route_fence_t read_actor_route_fence (
 
 } // namespace
 
+std::vector<std::uint8_t> pack_infrastructure_reply (
+  const std::vector<std::vector<std::uint8_t>> &parts)
+{
+    std::size_t size = 1;
+    for (const auto &part : parts) {
+        if (part.size () > std::numeric_limits<std::uint32_t>::max ())
+            throw service_wire_error_t (
+              "infrastructure reply part is too large");
+        size += 4 + part.size ();
+    }
+    std::vector<std::uint8_t> packed;
+    packed.reserve (size);
+    packed.push_back (static_cast<std::uint8_t> (parts.size ()));
+    for (const auto &part : parts) {
+        const auto length = static_cast<std::uint32_t> (part.size ());
+        packed.push_back (
+          static_cast<std::uint8_t> ((length >> 24u) & 0xffu));
+        packed.push_back (
+          static_cast<std::uint8_t> ((length >> 16u) & 0xffu));
+        packed.push_back (
+          static_cast<std::uint8_t> ((length >> 8u) & 0xffu));
+        packed.push_back (static_cast<std::uint8_t> (length & 0xffu));
+        packed.insert (packed.end (), part.begin (), part.end ());
+    }
+    return packed;
+}
+
+std::vector<std::vector<std::uint8_t>>
+unpack_infrastructure_reply (const std::vector<std::uint8_t> &packed)
+{
+    if (packed.empty () || packed.front () == 0 || packed.front () > 2) {
+        throw service_wire_error_t ("invalid packed infrastructure reply");
+    }
+    std::size_t offset = 1;
+    std::vector<std::vector<std::uint8_t>> parts;
+    parts.reserve (packed.front ());
+    for (std::uint8_t index = 0; index < packed.front (); ++index) {
+        const auto length = read_u32 (packed, offset);
+        if (packed.size () - offset < length) {
+            throw service_wire_error_t ("truncated packed infrastructure reply");
+        }
+        parts.emplace_back (packed.begin () + static_cast<std::ptrdiff_t> (offset),
+                            packed.begin () + static_cast<std::ptrdiff_t> (offset + length));
+        offset += length;
+    }
+    if (offset != packed.size ()) {
+        throw service_wire_error_t ("packed infrastructure reply has trailing bytes");
+    }
+    return parts;
+}
+
+
 std::vector<std::uint8_t> encode_node_send_header ()
 {
     return {magic[0], magic[1], wire_major,

@@ -1111,6 +1111,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   set_tests_properties(test_cpp_framework_r6_create_lifecycle PROPERTIES
     LABELS "framework-unit;framework-r6-parity" TIMEOUT 30)
 
+  add_test(NAME test_cpp_framework_r6_join_durable
+    COMMAND test_cpp_framework_m6a_runtime --r6-join-durable)
+  set_tests_properties(test_cpp_framework_r6_join_durable PROPERTIES
+    LABELS "framework-unit;framework-r6-parity" TIMEOUT 30)
+
   add_executable(test_cpp_framework_mesh_shutdown_seal
     tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_shutdown_seal.cpp)
   target_compile_features(test_cpp_framework_mesh_shutdown_seal PRIVATE cxx_std_20)

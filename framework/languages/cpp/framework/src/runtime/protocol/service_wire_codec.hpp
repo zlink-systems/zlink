@@ -26,6 +26,12 @@ class service_wire_error_t : public std::runtime_error
     using std::runtime_error::runtime_error;
 };
 
+// Internal operation completion payload; the service wire frames are preserved.
+std::vector<std::uint8_t> pack_infrastructure_reply (
+  const std::vector<std::vector<std::uint8_t>> &parts);
+std::vector<std::vector<std::uint8_t>> unpack_infrastructure_reply (
+  const std::vector<std::uint8_t> &packed);
+
 struct liveness_record_t
 {
     command kind;

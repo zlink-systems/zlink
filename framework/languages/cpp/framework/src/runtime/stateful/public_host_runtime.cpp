@@ -411,29 +411,6 @@ bool is_request (record_kind_t kind)
            || kind == record_kind_t::spot_request || kind == record_kind_t::actor_request;
 }
 
-std::vector<std::vector<std::uint8_t>>
-unpack_infrastructure_reply (const std::vector<std::uint8_t> &packed)
-{
-    if (packed.empty () || packed.front () == 0 || packed.front () > 2) {
-        throw protocol::service_wire_error_t ("invalid packed infrastructure reply");
-    }
-    std::size_t offset = 1;
-    std::vector<std::vector<std::uint8_t>> parts;
-    parts.reserve (packed.front ());
-    for (std::uint8_t index = 0; index < packed.front (); ++index) {
-        const auto length = read_u32 (packed, offset);
-        if (packed.size () - offset < length) {
-            throw protocol::service_wire_error_t ("truncated packed infrastructure reply");
-        }
-        parts.emplace_back (packed.begin () + static_cast<std::ptrdiff_t> (offset),
-                            packed.begin () + static_cast<std::ptrdiff_t> (offset + length));
-        offset += length;
-    }
-    if (offset != packed.size ()) {
-        throw protocol::service_wire_error_t ("packed infrastructure reply has trailing bytes");
-    }
-    return parts;
-}
 
 std::string user_spot_operation_key (const std::vector<std::uint8_t> &source,
                                      std::uint64_t source_generation,
@@ -1924,7 +1901,7 @@ task_t<bool> public_host_runtime_t::activate_instance_spot_remote (
           std::optional<protocol::application_payload_t> application_reply;
           if (terminal == foundation::operation_terminal_t::completed) {
               try {
-                  const auto parts = unpack_infrastructure_reply (packed);
+                  const auto parts = protocol::unpack_infrastructure_reply (packed);
                   reply = protocol::decode_reply_header (parts.front ());
                   if (parts.size () == 2)
                       application_reply = protocol::decode_application_payload (parts[1], capture);
@@ -2183,7 +2160,7 @@ public_host_runtime_t::create_user_spot_remote (const zlink::routing_id_t &targe
           std::optional<protocol::application_payload_t> application_reply;
           if (terminal == foundation::operation_terminal_t::completed) {
               try {
-                  const auto parts = unpack_infrastructure_reply (packed);
+                  const auto parts = protocol::unpack_infrastructure_reply (packed);
                   reply = protocol::decode_user_spot_create_reply (parts.front ());
                   if (parts.size () == 2)
                       application_reply = protocol::decode_application_payload (parts[1], capture);
@@ -2254,7 +2231,7 @@ public_host_runtime_t::create_actor_remote (const zlink::routing_id_t &target_no
           std::optional<protocol::application_payload_t> application_reply;
           if (terminal == foundation::operation_terminal_t::completed) {
               try {
-                  const auto parts = unpack_infrastructure_reply (packed);
+                  const auto parts = protocol::unpack_infrastructure_reply (packed);
                   reply = protocol::decode_actor_create_reply (parts.front ());
                   if (parts.size () == 2)
                       application_reply = protocol::decode_application_payload (parts[1], capture);
@@ -2291,7 +2268,7 @@ public_host_runtime_t::close_user_spot_remote (const zlink::routing_id_t &target
           protocol::user_spot_close_reply_t reply;
           if (terminal == foundation::operation_terminal_t::completed) {
               try {
-                  const auto parts = unpack_infrastructure_reply (packed);
+                  const auto parts = protocol::unpack_infrastructure_reply (packed);
                   if (parts.size () != 1)
                       throw protocol::service_wire_error_t (
                         "User Spot close reply carries a payload");

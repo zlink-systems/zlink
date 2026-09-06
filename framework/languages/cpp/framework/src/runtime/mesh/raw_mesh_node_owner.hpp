@@ -390,15 +390,11 @@ class raw_mesh_node_owner_t
     bool reply_relocation_failed (
       const service_mailbox_record_t &request,
       const protocol::relocation_failed_t &failure);
-    // actorJoin(28): direct request/reply over the ROUTER port, mirroring
-    // request_relocation_prepare's shape (this call owns the correlation
-    // fence itself rather than registering with the operation registry,
-    // since — unlike actorCreate/userSpotClose — there is no reservation to
-    // retry against). A missing outcome.reply carries the failure class
-    // (deadline_exceeded on timeout, unavailable on routing/transport loss,
-    // protocol_error on a malformed or identity-mismatched reply); the
-    // caller must have set request.correlation to a value it can recognize
-    // on return.
+    // actorJoin(28): durable admission over the ROUTER port.
+    // The durable sender preserves this correlation and the encoded request
+    // across typed transient failures within one deadline. Missing reply
+    // carries the operation terminal: unavailable, deadline_exceeded, or
+    // protocol_error. The caller supplies the stable operation correlation.
     task_t<actor_join_wire_outcome_t>
     request_actor_join (
       const std::vector<std::uint8_t> &target_routing_id,

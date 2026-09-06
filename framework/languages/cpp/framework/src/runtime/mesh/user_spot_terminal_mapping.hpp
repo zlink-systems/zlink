@@ -91,6 +91,8 @@ inline framework_error_kind_t map_user_spot_operation_failure (
               header, creation);
         case foundation::operation_terminal_t::timed_out:
             return framework_error_kind_t::deadline_exceeded;
+        case foundation::operation_terminal_t::protocol_error:
+            return framework_error_kind_t::protocol_error;
         case foundation::operation_terminal_t::transport_failed:
         case foundation::operation_terminal_t::route_unavailable:
             return framework_error_kind_t::unavailable;

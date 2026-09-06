@@ -2835,19 +2835,6 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
                     "wire Actor join reply was malformed or identity-fenced"),
                   "wire Actor join reply was malformed or identity-fenced");
             case runtime::mesh::actor_join_wire_failure_t::deadline_exceeded:
-                // The raw request only knows that no reply arrived before its
-                // deadline.  If the exact target incarnation disappeared in
-                // the meantime, the semantic failure is route/owner loss,
-                // not an otherwise-live peer taking too long to reply.
-                if (!has_admitted_peer (s->target.node_rid,
-                                        observed.target_node_generation)) {
-                    co_return fail_remote_actor_join (
-                      *s,
-                      result_t<actor_join_reply_t>::failure (
-                        framework_error_kind_t::unavailable,
-                        "wire Actor join target RouteMesh peer became unavailable"),
-                      "wire Actor join target RouteMesh peer became unavailable");
-                }
                 co_return fail_remote_actor_join (
                   *s,
                   result_t<actor_join_reply_t>::failure (

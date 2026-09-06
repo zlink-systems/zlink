@@ -24,6 +24,7 @@ enum class operation_terminal_t
     timed_out,
     cancelled,
     transport_failed,
+    protocol_error,
     shutdown,
     route_unavailable
 };

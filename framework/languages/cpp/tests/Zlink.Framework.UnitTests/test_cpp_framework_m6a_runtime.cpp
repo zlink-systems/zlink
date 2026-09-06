@@ -2606,6 +2606,137 @@ std::optional<mesh::service_mailbox_claim_t> claim_actor_join (
     return claim;
 }
 
+void verify_actor_join_durable_replay ()
+{
+    for (const bool handover : {false, true}) {
+        mesh::raw_mesh_node_owner_t source ({descriptor ("Z-join-replay-source")});
+        mesh::raw_mesh_node_owner_t target ({descriptor ("A-join-replay-target")});
+        source.start ();
+        target.start ();
+        const auto local = source.topology ().local_descriptor ();
+        const auto remote = target.topology ().local_descriptor ();
+        source.expect_peer (remote);
+        const auto pump = [&] {
+            const auto now = std::chrono::steady_clock::now ();
+            (void) source.drain_monitor_events (now);
+            (void) target.drain_monitor_events (now);
+            assert (await_task (source.pump_one (now))
+                    != mesh::raw_mesh_pump_result_t::protocol_error);
+            assert (await_task (target.pump_one (now))
+                    != mesh::raw_mesh_pump_result_t::protocol_error);
+        };
+        if (handover) {
+            assert (source.connect_peer (target.endpoint (), remote));
+            const auto deadline = std::chrono::steady_clock::now () + 2s;
+            while ((!source.topology ().peer (remote.node_routing_id)
+                    || !target.topology ().peer (local.node_routing_id))
+                   && std::chrono::steady_clock::now () < deadline)
+                pump ();
+            assert (source.topology ().peer (remote.node_routing_id));
+            assert (target.topology ().peer (local.node_routing_id));
+        }
+        const auto request = actor_join_request (local, remote, 81, "join-actor", "join-spot");
+        const std::optional<protocol::application_payload_t> payload{
+          {"Join", "application/json", bytes ("{\"value\":7}")}};
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        auto pending = source.request_actor_join (remote.node_routing_id, request, payload, 2s);
+        assert (!pending.await_ready ());
+        const auto receive = [&] {
+            std::optional<mesh::service_mailbox_claim_t> claim;
+            while (!claim && std::chrono::steady_clock::now () < deadline) {
+                pump ();
+                claim = target.mailbox ().try_claim (
+                  mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+            }
+            assert (claim && claim->records.size () == 1);
+            return *claim;
+        };
+        std::optional<mesh::service_mailbox_record_t> first;
+        if (handover) {
+            auto claim = receive ();
+            first = claim.records.front ();
+            assert (first->reply_token);
+            assert (target.mailbox ().release (claim));
+            assert (!pending.await_ready ());
+            assert (target.connect_peer (source.endpoint (), local));
+        } else {
+            assert (source.connect_peer (target.endpoint (), remote));
+        }
+        auto claim = receive ();
+        const auto &record = claim.records.front ();
+        const auto decoded = protocol::decode_actor_join_28 (record.parts);
+        assert (decoded.correlation == request.correlation);
+        if (first)
+            assert (record.parts == first->parts);
+        assert (!pending.await_ready ());
+        assert (target.reply_actor_join (
+          record, protocol::actor_join_result_t::accepted,
+          protocol::actor_join_reply_spot_ref_t{"join-spot", 9}, 3, 8192, 0, 0, payload));
+        assert (target.mailbox ().release (claim));
+        while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline)
+            pump ();
+        assert (pending.await_ready ());
+        const auto outcome = await_task (std::move (pending));
+        assert (outcome.reply && outcome.reply->join_result == protocol::actor_join_result_t::accepted);
+        assert (outcome.application_reply == payload);
+        assert (std::chrono::steady_clock::now () < deadline);
+        source.close ();
+        target.close ();
+    }
+}
+
+void verify_actor_join_durable_terminals ()
+{
+    mesh::raw_mesh_node_owner_t source ({descriptor ("join-terminal-source")});
+    source.start ();
+    const auto local = source.topology ().local_descriptor ();
+    const auto remote = descriptor ("join-terminal-target", "tcp://127.0.0.1:1");
+    const auto request = actor_join_request (local, remote, 93, "join-actor", "join-spot");
+    source.expect_peer (remote);
+    const auto started = std::chrono::steady_clock::now ();
+    const auto expired = await_task (source.request_actor_join (
+      remote.node_routing_id, request, std::nullopt, 50ms));
+    assert (std::chrono::steady_clock::now () - started >= 40ms);
+    assert (!expired.reply && expired.failure == mesh::actor_join_wire_failure_t::unavailable);
+    auto pending = source.request_actor_join (remote.node_routing_id, request, std::nullopt, 2s);
+    assert (!pending.await_ready ());
+    source.forget_peer (remote.node_routing_id, remote.advertised_endpoint);
+    const auto deadline = std::chrono::steady_clock::now () + 250ms;
+    while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline)
+        std::this_thread::yield ();
+    assert (pending.await_ready ());
+    const auto ended = await_task (std::move (pending));
+    assert (!ended.reply && ended.failure == mesh::actor_join_wire_failure_t::unavailable);
+    mesh::raw_mesh_node_owner_t target ({descriptor ("join-admitted-target")});
+    target.start ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    admit_pair (source, target, target_descriptor);
+    const auto admitted_request = actor_join_request (
+      local, target_descriptor, 95, "join-actor", "join-spot");
+    const auto admitted_at = std::chrono::steady_clock::now ();
+    auto admitted = source.request_actor_join (
+      target_descriptor.node_routing_id, admitted_request, std::nullopt, 200ms);
+    const auto claim = claim_actor_join (target);
+    assert (claim && claim->records.front ().reply_token);
+    assert (target.mailbox ().release (*claim));
+    // Physical loss preserves the source's logical connection intent.
+    // Local disconnect_rid instead retires issued wait tokens with a typed
+    // non-replayable ENOENT (covered by the raw port contract test).
+    target.close ();
+    const auto completion_deadline = admitted_at + 500ms;
+    while (!admitted.await_ready () && std::chrono::steady_clock::now () < completion_deadline) {
+        const auto now = std::chrono::steady_clock::now ();
+        (void) source.drain_monitor_events (now);
+        (void) await_task (source.pump_one (now));
+    }
+    assert (admitted.await_ready ());
+    const auto lost_reply = await_task (std::move (admitted));
+    assert (std::chrono::steady_clock::now () - admitted_at >= 150ms);
+    assert (!lost_reply.reply
+            && lost_reply.failure == mesh::actor_join_wire_failure_t::deadline_exceeded);
+    source.close ();
+}
+
 // Accepted case: the tail's spot ref, membershipEpoch, and
 // receiveChunkLimitBytes must all thread through unchanged from the
 // receiver's reply_actor_join call to the originate side's decoded tail —
@@ -3011,6 +3142,14 @@ int main (int argc, char **argv)
         verify_actor_create_intent_removal_ends_operation ();
         return 0;
     }
+    if (argc == 2 && std::string_view (argv[1]) == "--r6-join-durable") {
+        verify_actor_join_durable_replay ();
+        verify_actor_join_durable_terminals ();
+        verify_actor_join_rejected_reply_completes_typed_failure ();
+        verify_actor_join_wrong_source_generation_is_fenced ();
+        verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ();
+        return 0;
+    }
     using zlink::framework::detail::backend::raw_request_failure_phase_t;
     using zlink::framework::detail::backend::transient_route_failure;
     assert (transient_route_failure (
@@ -3059,6 +3198,8 @@ int main (int argc, char **argv)
     verify_raw_owner_node_send_and_liveness ();
     verify_relocation_prepare_failed_reply_resolves_promptly_with_identity_fencing ();
     verify_relocation_prepare_failed_reply_with_mismatched_identity_is_fenced ();
+    verify_actor_join_durable_replay ();
+    verify_actor_join_durable_terminals ();
     verify_actor_join_accepted_reply_threads_chunk_limit_and_epoch ();
     verify_actor_join_rejected_reply_completes_typed_failure ();
     verify_actor_join_wrong_source_generation_is_fenced ();

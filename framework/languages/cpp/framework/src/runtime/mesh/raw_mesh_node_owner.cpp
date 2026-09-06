@@ -129,33 +129,6 @@ std::size_t raw_received_bytes (
     return total;
 }
 
-std::vector<std::uint8_t> pack_infrastructure_reply (
-  const detail::backend::raw_message_t &parts)
-{
-    std::size_t size = 1;
-    for (const auto &part : parts) {
-        if (part.size () > std::numeric_limits<std::uint32_t>::max ())
-            throw protocol::service_wire_error_t (
-              "infrastructure reply part is too large");
-        size += 4 + part.size ();
-    }
-    std::vector<std::uint8_t> packed;
-    packed.reserve (size);
-    packed.push_back (static_cast<std::uint8_t> (parts.size ()));
-    for (const auto &part : parts) {
-        const auto length = static_cast<std::uint32_t> (part.size ());
-        packed.push_back (
-          static_cast<std::uint8_t> ((length >> 24u) & 0xffu));
-        packed.push_back (
-          static_cast<std::uint8_t> ((length >> 16u) & 0xffu));
-        packed.push_back (
-          static_cast<std::uint8_t> ((length >> 8u) & 0xffu));
-        packed.push_back (static_cast<std::uint8_t> (length & 0xffu));
-        packed.insert (packed.end (), part.begin (), part.end ());
-    }
-    return packed;
-}
-
 class infrastructure_request_retry_state_t final :
     public std::enable_shared_from_this<infrastructure_request_retry_state_t>
 {
@@ -197,7 +170,7 @@ class infrastructure_request_retry_state_t final :
         const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
           _deadline - clock_t::now ());
         if (remaining <= std::chrono::milliseconds::zero ()) {
-            fail (foundation::operation_terminal_t::route_unavailable);
+            exhaust ();
             return;
         }
         auto running = std::make_shared<
@@ -223,24 +196,24 @@ class infrastructure_request_retry_state_t final :
             return;
         }
         auto completion = settled.value ();
+        _admitted |= completion.failure
+                     && completion.failure->request_result.has_value ();
         trace_mesh (
           "infrastructure-request-result correlation="
           + std::to_string (_correlation)
           + " result="
           + std::to_string (static_cast<int> (completion.result)));
         if (completion.result
-            == detail::backend::raw_request_result_t::route_unavailable) {
+              == detail::backend::raw_request_result_t::route_unavailable
+            || completion.result
+                 == detail::backend::raw_request_result_t::timed_out) {
             schedule_retry ();
             return;
         }
         if (completion.result
             != detail::backend::raw_request_result_t::ok) {
             const auto terminal =
-              completion.result
-                  == detail::backend::raw_request_result_t::timed_out
-                ? foundation::operation_terminal_t::timed_out
-              : completion.result
-                    == detail::backend::raw_request_result_t::terminated
+              completion.result == detail::backend::raw_request_result_t::terminated
                 ? foundation::operation_terminal_t::shutdown
                 : foundation::operation_terminal_t::transport_failed;
             fail (terminal);
@@ -265,7 +238,7 @@ class infrastructure_request_retry_state_t final :
               _operation, std::move (payload));
         }
         catch (const protocol::service_wire_error_t &) {
-            fail (foundation::operation_terminal_t::transport_failed);
+            fail (foundation::operation_terminal_t::protocol_error);
         }
     }
 
@@ -275,7 +248,7 @@ class infrastructure_request_retry_state_t final :
             return;
         const auto now = clock_t::now ();
         if (now >= _deadline) {
-            fail (foundation::operation_terminal_t::route_unavailable);
+            exhaust ();
             return;
         }
         _retry_timer.expires_at (std::min (
@@ -297,6 +270,12 @@ class infrastructure_request_retry_state_t final :
         (void) _operations->fail (_operation, terminal);
     }
 
+    void exhaust ()
+    {
+        fail (_admitted ? foundation::operation_terminal_t::timed_out
+                        : foundation::operation_terminal_t::route_unavailable);
+    }
+
     std::shared_ptr<detail::backend::raw_route_port_t> _port;
     std::shared_ptr<foundation::operation_registry_t> _operations;
     foundation::call_id_t _operation;
@@ -306,6 +285,7 @@ class infrastructure_request_retry_state_t final :
     std::function<std::vector<std::uint8_t> (
       const detail::backend::raw_message_t &)> _decode_reply;
     clock_t::time_point _deadline;
+    bool _admitted = false;
     boost::asio::steady_timer _retry_timer;
 };
 
@@ -1881,7 +1861,7 @@ task_t<bool> raw_mesh_node_owner_t::request_user_spot_create (
                 "failed User Spot create reply carries a payload");
           if (parts.size () == 2)
               (void) protocol::decode_application_payload (parts[1], false);
-          return pack_infrastructure_reply (parts);
+          return protocol::pack_infrastructure_reply (parts);
       },
       timeout, std::move (callback));
 }
@@ -1938,6 +1918,7 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     std::uint64_t correlation = 0;
     foundation::call_id_t id{};
+    detail::backend::raw_message_t request_parts;
     bool registered = false;
     {
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -1945,8 +1926,10 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
         if (port) {
             correlation = take_reply_route_id_locked ();
             id = operation_id (local.lifecycle_generation, correlation);
+            record.correlation = correlation;
+            request_parts = {protocol::encode_bound_session_bind (record)};
             registered = operations->register_operation (
-              id, deadline + infrastructure_not_connected_retry_interval,
+              id, foundation::operation_registry_t::clock_t::time_point::max (),
               std::move (callback), actor_owner_routing_id);
         }
     }
@@ -1957,9 +1940,6 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
     if (!registered)
         co_return false;
 
-    record.correlation = correlation;
-    detail::backend::raw_message_t request_parts{
-      protocol::encode_bound_session_bind (record)};
     co_return co_await submit_registered_infrastructure_request_with_retry (
       std::move (port), operations, id, correlation,
       actor_owner_routing_id, std::move (request_parts),
@@ -2051,7 +2031,7 @@ task_t<bool> raw_mesh_node_owner_t::request_actor_create (
                     "failed Actor create reply carries a payload");
               if (parts.size () == 2)
                   (void) protocol::decode_application_payload (parts[1], false);
-              return pack_infrastructure_reply (parts);
+              return protocol::pack_infrastructure_reply (parts);
           }, timeout, std::move (callback));
     }
 
@@ -2065,6 +2045,7 @@ task_t<bool> raw_mesh_node_owner_t::request_actor_create (
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     std::uint64_t correlation = 0;
     foundation::call_id_t id{};
+    detail::backend::raw_message_t request_parts;
     bool registered = false;
     {
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -2072,8 +2053,10 @@ task_t<bool> raw_mesh_node_owner_t::request_actor_create (
         if (port) {
             correlation = take_reply_route_id_locked ();
             id = operation_id (local.lifecycle_generation, correlation);
+            request.correlation = correlation;
+            request_parts = {protocol::encode_actor_create_header (request)};
             registered = operations->register_operation (
-              id, deadline + infrastructure_not_connected_retry_interval,
+              id, foundation::operation_registry_t::clock_t::time_point::max (),
               std::move (callback), target_routing_id);
         }
     }
@@ -2084,12 +2067,6 @@ task_t<bool> raw_mesh_node_owner_t::request_actor_create (
     if (!registered)
         co_return false;
 
-    detail::backend::raw_message_t request_parts{
-      [request = std::move (request)] (
-        std::uint64_t correlation) mutable {
-          request.correlation = correlation;
-          return protocol::encode_actor_create_header (request);
-      } (correlation)};
     co_return co_await submit_registered_infrastructure_request_with_retry (
       std::move (port), operations, id, correlation,
       std::move (target_routing_id), std::move (request_parts),
@@ -2105,7 +2082,7 @@ task_t<bool> raw_mesh_node_owner_t::request_actor_create (
                 "failed Actor create reply carries a payload");
           if (parts.size () == 2)
               (void) protocol::decode_application_payload (parts[1], false);
-          return pack_infrastructure_reply (parts);
+          return protocol::pack_infrastructure_reply (parts);
       }, deadline);
 }
 
@@ -2116,6 +2093,7 @@ raw_mesh_node_owner_t::request_actor_join (
   const std::optional<protocol::application_payload_t> &payload,
   std::chrono::milliseconds timeout)
 {
+    const auto deadline = foundation::operation_registry_t::clock_t::now () + timeout;
     actor_join_wire_outcome_t outcome;
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
@@ -2163,36 +2141,47 @@ raw_mesh_node_owner_t::request_actor_join (
     catch (const std::invalid_argument &) {
         throw protocol::service_wire_error_t ("invalid Actor join request");
     }
-    auto pending = port->request (target_routing_id, parts, timeout);
-    const auto completed = co_await pending;
-    if (completed.result != detail::backend::raw_request_result_t::ok) {
-        outcome.failure =
-          completed.result == detail::backend::raw_request_result_t::timed_out
-            ? actor_join_wire_failure_t::deadline_exceeded
-            : actor_join_wire_failure_t::unavailable;
-        co_return outcome;
+    using completion_t = std::pair<foundation::operation_terminal_t,
+                                   std::vector<std::uint8_t>>;
+    auto completion = std::make_shared<detail::task_completion_source_t<completion_t>> ();
+    auto pending = completion->task ();
+    foundation::call_id_t id{};
+    {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        id = operation_id (_topology.local_descriptor ().lifecycle_generation,
+                           take_reply_route_id_locked ());
+        // The durable sender owns the deadline and its admission-dependent
+        // terminal. Registry expiry must not race that classification.
+        if (!_operations->register_operation (
+              id, foundation::operation_registry_t::clock_t::time_point::max (),
+              [completion] (auto terminal, auto packed) {
+                  completion->complete (result_t<completion_t>::success (
+                    {terminal, std::move (packed)}));
+              }, target_routing_id)) {
+            outcome.failure = actor_join_wire_failure_t::unavailable;
+            co_return outcome;
+        }
     }
-    if (completed.parts.empty () || completed.parts.size () > 2) {
-        //  A conformant peer never produces this part count for a
-        //  reply(20)+actorJoin tail — malformed wire, not unavailability.
-        outcome.failure = actor_join_wire_failure_t::protocol_error;
+    (void) co_await submit_registered_infrastructure_request_with_retry (
+      std::move (port), _operations, id, request.correlation, target_routing_id,
+      std::move (parts), protocol::pack_infrastructure_reply, deadline);
+    const auto [terminal, packed] = co_await pending;
+    if (terminal != foundation::operation_terminal_t::completed) {
+        outcome.failure = terminal == foundation::operation_terminal_t::timed_out
+                            ? actor_join_wire_failure_t::deadline_exceeded
+                          : terminal == foundation::operation_terminal_t::protocol_error
+                            ? actor_join_wire_failure_t::protocol_error
+                            : actor_join_wire_failure_t::unavailable;
         co_return outcome;
     }
     try {
-        auto reply =
-          protocol::decode_actor_join_reply (completed.parts.front ());
-        // Exact-identity fencing: a reply whose correlation does not match
-        // the request this call sent is a stale or misrouted reply and must
-        // not resolve this call either way.
-        if (reply.header.correlation != request.correlation) {
-            outcome.failure = actor_join_wire_failure_t::protocol_error;
-            co_return outcome;
-        }
-        if (completed.parts.size () == 2) {
+        const auto reply_parts = protocol::unpack_infrastructure_reply (packed);
+        auto reply = protocol::decode_actor_join_reply (reply_parts.front ());
+        if (reply_parts.size () == 2) {
             //  Surface the decoded application reply to the caller instead
             //  of validating and discarding it.
             outcome.application_reply = protocol::decode_application_payload (
-              completed.parts[1], false);
+              reply_parts[1], false);
         }
         outcome.reply = std::move (reply);
         co_return outcome;
@@ -2347,7 +2336,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
                   (void) protocol::decode_application_payload (
                     reply_parts[1], false);
               (void) operations->complete (
-                id, pack_infrastructure_reply (reply_parts));
+                id, protocol::pack_infrastructure_reply (reply_parts));
           }
           catch (const protocol::service_wire_error_t &) {
               //  Spec 32-framework-error-model:91-92 — a reply that can't be
@@ -2356,7 +2345,7 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
               //  and sink classify it via reply_header_exception.
               (void) operations->complete (
                 id,
-                pack_infrastructure_reply (
+                protocol::pack_infrastructure_reply (
                   detail::backend::raw_message_t{
                     protocol::encode_reply_header (correlation, 104, 16)}));
           }
@@ -2390,7 +2379,7 @@ task_t<bool> raw_mesh_node_owner_t::request_user_spot_close (
               throw protocol::service_wire_error_t (
                 "User Spot close reply must contain one header");
           (void) protocol::decode_user_spot_close_reply (parts.front ());
-          return pack_infrastructure_reply (parts);
+          return protocol::pack_infrastructure_reply (parts);
       },
       timeout, std::move (callback));
 }
@@ -2461,7 +2450,7 @@ bool raw_mesh_node_owner_t::reply_infrastructure (
           operation_id (
             local.lifecycle_generation,
             *request.correlation),
-          pack_infrastructure_reply ({std::move (header)}));
+          protocol::pack_infrastructure_reply ({std::move (header)}));
     }
     if (!request.reply_token)
         return false;
@@ -2510,7 +2499,7 @@ bool raw_mesh_node_owner_t::reply_user_spot_create (
           operation_id (
             local.lifecycle_generation,
             *request.correlation),
-          pack_infrastructure_reply (parts));
+          protocol::pack_infrastructure_reply (parts));
     }
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
@@ -2554,7 +2543,7 @@ bool raw_mesh_node_owner_t::reply_actor_create (
         return _operations->complete (
           operation_id (local.lifecycle_generation,
                         *request.correlation),
-          pack_infrastructure_reply (parts));
+          protocol::pack_infrastructure_reply (parts));
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
@@ -2631,7 +2620,7 @@ bool raw_mesh_node_owner_t::reply_instance_spot_activation (
           operation_id (
             local.lifecycle_generation,
             *request.correlation),
-          pack_infrastructure_reply (parts));
+          protocol::pack_infrastructure_reply (parts));
     }
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
