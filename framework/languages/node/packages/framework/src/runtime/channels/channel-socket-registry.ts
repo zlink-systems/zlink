@@ -735,8 +735,20 @@ export class ZLinkChannelSocketRegistry {
 
   clientServerActiveTargets(
     channelName: string
-  ): readonly Parameters<ServiceDiscoveryRegistry['admitClientServer']>[0][] {
-    return this.clientServerDiscovery.clientServerDescriptors(channelName);
+  ): readonly Pick<ClientServerDiscoveryDescriptor, 'serverRoutingId' | 'weight' | 'state'>[] {
+    const descriptors = this.clientServerDiscovery.clientServerDescriptors(channelName);
+    const local = this.clientServerServerDescriptors.get(channelName);
+    if (local === undefined || descriptors.some(descriptor =>
+      descriptor.serverRoutingId === local.serverRid
+      && descriptor.lifecycleGeneration === local.lifecycleGeneration)) return descriptors;
+
+    return [...descriptors, {
+      serverRoutingId: local.serverRid,
+      weight: local.weight,
+      state: discoveryAvailabilityForRuntimeState(local.state)
+    }].sort((left, right) =>
+      left.serverRoutingId < right.serverRoutingId ? -1
+        : left.serverRoutingId > right.serverRoutingId ? 1 : 0);
   }
 
   hasKnownClientServerTargets(channelName: string): boolean {

@@ -69,16 +69,12 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
       target => target.state === ZLinkPeerState.Ready && target.weight > 0
     ).length;
     const hostState = this.hostState();
-    const hostReady = runtimeStateIsReady(hostState);
+    const isReady = topologyRuntimeIsReady(hostState, readyTargetCount);
     return {
       channelName,
       localRole: topology.localRole,
-      state: hostReady
-        ? readyTargetCount > 0
-          ? ZLinkTopologyState.Ready
-          : ZLinkTopologyState.Degraded
-        : topologyStateForHost(hostState),
-      isReady: topologyRuntimeIsReady(hostState, readyTargetCount),
+      state: isReady ? ZLinkTopologyState.Ready : topologyStateForHost(hostState),
+      isReady,
       readyTargetCount,
       targets,
       sequence: this.sequence,
