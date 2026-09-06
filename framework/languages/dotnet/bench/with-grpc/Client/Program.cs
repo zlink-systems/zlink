@@ -497,9 +497,19 @@ static async ValueTask<BenchResult> RunSendAsync(
 
     var attempted = sent + 1;
     var expectedServerMessages = Math.Max(0, attempted - errors);
-    // FB-008: settle is a bounded wait that CONFIRMS the server drained, not a
-    // fixed sleep. If the bound expires while the server is still advancing, the
-    // next cell on this same server is marked contaminated and excluded.
+
+    // FB-013: throughput is sampled AT THE ACTIVE-WINDOW BOUNDARY. Spec 5 defines
+    // the count as what the server received during the active phase, so reading
+    // the snapshot after the drain (as this did) counted messages that landed
+    // seconds after the window closed -- it reported the client's submit rate,
+    // not the server's consumption rate. For the framework row that overstated
+    // consumption by about 4.2x.
+    var boundary = await http.GetFromJsonAsync<BenchServerSnapshot>(
+                       $"{statsUrl}/bench/stats", cts.Token)
+                   ?? BenchServerSnapshot.Empty;
+
+    // FB-008: the drain stays, purely as settle plus contamination detection. Its
+    // observed time is still recorded per cell as a reported result.
     var outcome = await WaitForServerDrainAsync(
         http,
         statsUrl,
@@ -507,9 +517,17 @@ static async ValueTask<BenchResult> RunSendAsync(
         options.CommandSettleMs,
         options.DrainBoundMs,
         cts.Token);
-    var server = outcome.Snapshot;
     drain.RecordDrain(ImplementationOf(name), name, outcome.DrainMs, outcome.BoundHit, options.DrainBoundMs);
-    var missing = Math.Max(0, attempted - errors - server.ActiveMessages);
+
+    // Throughput, latency and resource figures come from the boundary sample.
+    var server = boundary;
+    // `missing` means "submitted but never received at all", so it is computed
+    // against the post-drain total rather than the boundary sample -- otherwise
+    // messages merely still in flight would be counted as lost.
+    var missing = Math.Max(0, attempted - errors - outcome.Snapshot.ActiveMessages);
+    Console.Error.WriteLine(
+        $"[bench] boundary {name}: server_received_at_close={server.ActiveMessages}"
+        + $" post_drain={outcome.Snapshot.ActiveMessages} drain_ms={outcome.DrainMs:F0}");
 
     return new BenchResult(
         name,
@@ -730,8 +748,25 @@ static async ValueTask<BenchResult> RunRawRequestBytesAsync(
     using var reset = await http.PostAsync($"{statsUrl}/bench/reset", null, cts.Token);
     reset.EnsureSuccessStatusCode();
 
-    var pending = new List<PendingRawRequest>(options.RequestWindow);
+    // FB-010: window accounting.
+    //
+    // The previous loop gated admission on `pending.Count` and, on every drain,
+    // scanned all pending tasks and built a `Task.WhenAny` over up to
+    // RequestWindow of them. That is O(window) work per completed request, which
+    // capped the submit rate so hard that the raw row sustained 8.4 requests in
+    // flight against a configured window of 100 (the same harness reached 91.8
+    // for gRPC and 99.0 for framework in the same runs).
+    //
+    // Admission is now a semaphore with RequestWindow permits: one permit is
+    // taken per submit and released by the request's own continuation, so the
+    // cost per request is O(1) and in-flight depth is exactly
+    // `RequestWindow - slots.CurrentCount`. This does not change what
+    // `request-window` means -- it makes the client actually hold the window the
+    // spec already specifies.
     var metrics = new RawRequestWindowMetrics(options.LatencySampleLimit);
+    var metricsGate = new object();
+    var slots = new SemaphoreSlim(options.RequestWindow, options.RequestWindow);
+    var peakInFlight = 0;
     var next = 0UL;
     var resources = ResourceSample.Start();
     var total = Stopwatch.StartNew();
@@ -739,84 +774,55 @@ static async ValueTask<BenchResult> RunRawRequestBytesAsync(
 
     while (total.Elapsed < activeUntil)
     {
-        while (total.Elapsed < activeUntil
-               && pending.Count < options.RequestWindow)
+        await slots.WaitAsync(cts.Token).ConfigureAwait(false);
+        if (total.Elapsed >= activeUntil)
         {
-            var sequence = next++;
-            try
-            {
-                var request = RawRequestBytesAsync(
-                    socket,
-                    payloadSize,
-                    options.RunId,
-                    BenchPhase.Active,
-                    sequence,
-                    requestStop.Token);
-                if (request.IsCompletedSuccessfully)
-                {
-                    metrics.RecordSuccess(request.Result);
-                }
-                else
-                {
-                    pending.Add(new PendingRawRequest(request.AsTask()));
-                }
-            }
-            catch
-            {
-                metrics.RecordError();
-            }
-        }
-
-        if (DrainCompletedRawRequests(
-                pending,
-                metrics) == 0
-            && pending.Count > 0)
-        {
-            await WaitAnyPendingRawRequestAsync(
-                pending,
-                Timeout.InfiniteTimeSpan,
-                cts.Token);
-            DrainCompletedRawRequests(
-                pending,
-                metrics);
-        }
-    }
-
-    var drainUntil = total.Elapsed + TimeSpan.FromMilliseconds(5000);
-    while (pending.Count > 0 && total.Elapsed < drainUntil)
-    {
-        if (DrainCompletedRawRequests(
-                pending,
-                metrics) != 0)
-            continue;
-
-        var remaining = drainUntil - total.Elapsed;
-        if (remaining <= TimeSpan.Zero
-            || !await WaitAnyPendingRawRequestAsync(
-                pending,
-                remaining,
-                cts.Token))
+            slots.Release();
             break;
+        }
+
+        var inFlight = options.RequestWindow - slots.CurrentCount;
+        if (inFlight > peakInFlight)
+        {
+            peakInFlight = inFlight;
+        }
+
+        var sequence = next++;
+        _ = TrackRawRequestAsync(
+            RawRequestBytesAsync(
+                socket,
+                payloadSize,
+                options.RunId,
+                BenchPhase.Active,
+                sequence,
+                requestStop.Token),
+            slots,
+            metrics,
+            metricsGate);
     }
 
-    DrainCompletedRawRequests(
-        pending,
-        metrics);
-    if (pending.Count > 0)
+    // Settle: let the requests already in flight finish. Bounded, and anything
+    // still outstanding at the bound is counted as an error rather than dropped.
+    var drainUntil = total.Elapsed + TimeSpan.FromMilliseconds(5000);
+    while (slots.CurrentCount < options.RequestWindow && total.Elapsed < drainUntil)
     {
-        metrics.RecordErrors(pending.Count);
-        var abandoned = pending.Select(static item => item.Task).ToArray();
-        requestStop.Cancel();
-        try
-        {
-            await Task.WhenAll(abandoned).ConfigureAwait(false);
-        }
-        catch
-        {
-            // The requests were already counted as failed at the drain bound.
-        }
-        pending.Clear();
+        await Task.Delay(1, cts.Token).ConfigureAwait(false);
     }
+
+    var abandoned = options.RequestWindow - slots.CurrentCount;
+    if (abandoned > 0)
+    {
+        lock (metricsGate)
+        {
+            metrics.RecordErrors(abandoned);
+        }
+
+        requestStop.Cancel();
+    }
+
+    Console.Error.WriteLine(
+        $"[bench] window {name}: peak_in_flight={peakInFlight} of {options.RequestWindow}"
+        + $" abandoned={abandoned}");
 
     total.Stop();
     var clientCpuSeconds = resources.CpuSeconds();
@@ -1078,6 +1084,35 @@ static async ValueTask AddCellAsync(
 // to ROUTER would bias the DEALER-vs-ROUTER comparison this job exists to produce.
 // It runs entirely before the /bench/reset that opens the active phase and changes
 // no measurement condition (duration, window, payload, concurrency).
+// FB-010: one request's lifetime. Records its own result and releases its
+// admission permit, so the submit loop never scans or waits on a task list.
+static async Task TrackRawRequestAsync(
+    ValueTask<long> request,
+    SemaphoreSlim slots,
+    RawRequestWindowMetrics metrics,
+    object metricsGate)
+{
+    try
+    {
+        var elapsedMicros = await request.ConfigureAwait(false);
+        lock (metricsGate)
+        {
+            metrics.RecordSuccess(elapsedMicros);
+        }
+    }
+    catch
+    {
+        lock (metricsGate)
+        {
+            metrics.RecordError();
+        }
+    }
+    finally
+    {
+        slots.Release();
+    }
+}
+
 static async ValueTask EnsureRawRouteReadyAsync(
     RawBenchSocket socket,
     BenchOptions options,
@@ -1232,67 +1267,7 @@ static async ValueTask WaitAnyPendingRequestAsync(
     }
 }
 
-static int DrainCompletedRawRequests(
-    List<PendingRawRequest> pending,
-    RawRequestWindowMetrics metrics)
-{
-    var drained = 0;
-    for (var index = pending.Count - 1; index >= 0; index--)
-    {
-        var item = pending[index];
-        if (!item.Task.IsCompleted)
-            continue;
 
-        pending.RemoveAt(index);
-        drained++;
-        try
-        {
-            metrics.RecordSuccess(item.Task.GetAwaiter().GetResult());
-        }
-        catch
-        {
-            metrics.RecordError();
-        }
-    }
-
-    return drained;
-}
-
-static async ValueTask<bool> WaitAnyPendingRawRequestAsync(
-    List<PendingRawRequest> pending,
-    TimeSpan timeout,
-    CancellationToken cancellationToken)
-{
-    var tasks = ArrayPool<Task<long>>.Shared.Rent(pending.Count);
-    try
-    {
-        for (var index = 0; index < pending.Count; index++)
-            tasks[index] = pending[index].Task;
-
-        var completion = Task.WhenAny(
-            new ArraySegment<Task<long>>(tasks, 0, pending.Count));
-        if (timeout == Timeout.InfiniteTimeSpan)
-        {
-            await completion.WaitAsync(cancellationToken);
-            return true;
-        }
-
-        try
-        {
-            await completion.WaitAsync(timeout, cancellationToken);
-            return true;
-        }
-        catch (TimeoutException)
-        {
-            return false;
-        }
-    }
-    finally
-    {
-        Array.Clear(tasks, 0, pending.Count);
-        ArrayPool<Task<long>>.Shared.Return(tasks);
-    }
-}
 
 static void AddLatencySampleLocked(List<long> samples, object gate, long elapsedMicros, int limit)
 {
@@ -1452,8 +1427,6 @@ internal readonly record struct PendingBenchRequest(
     Task<BenchPayload> Task,
     long Started,
     ulong Sequence);
-
-internal readonly record struct PendingRawRequest(Task<long> Task);
 
 internal sealed class RawRequestWindowMetrics
 {
