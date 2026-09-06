@@ -474,18 +474,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 return true;
             if (peer.State is MeshPeerState.Admitted or MeshPeerState.Draining)
                 return false;
-            var replacementUsesEndpoint = _peersByIntent.Values.Any(otherPeer =>
-                !ReferenceEquals(otherPeer, peer)
-                && string.Equals(
-                    otherPeer.Endpoint,
-                    peer.Endpoint,
-                    StringComparison.Ordinal)
-                && otherPeer.State != MeshPeerState.Closed);
             _peersByIntent.Remove(connectionIntentId);
-            // Socket disconnect is endpoint-scoped. A stale non-admitted intent
-            // must not tear down a replacement intent that already claimed the
-            // same endpoint during a rolling RID handover.
-            RemovePeer(peer, disconnect: !replacementUsesEndpoint);
+            RemovePeer(peer, disconnect: true);
             NotifyPeerConnectionIntentRemoved(peer.ExpectedRid ?? peer.RoutingId);
             return true;
         });
@@ -11202,6 +11192,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 var replacementUsesEndpoint = _peersByIntent.Values.Any(
                     otherPeer =>
                         !ReferenceEquals(otherPeer, peer)
+                        && otherPeer.Direction == ZLinkServiceConnectionDirection.Outbound
                         && string.Equals(
                             otherPeer.Endpoint,
                             peer.Endpoint,
@@ -11219,8 +11210,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     return;
                 }
 
-                // With no replacement, removing an outbound peer must also
-                // cancel the binding's endpoint reconnect intent. Otherwise a
+                // Only another outbound intent owns the endpoint registration;
+                // an inbound peer merely advertises that endpoint. Removing the
+                // last outbound intent must cancel its reconnect intent, or a
                 // later intent for the same endpoint inherits the old physical
                 // RID even when the removed peer had already been admitted.
                 _socket!.Disconnect(peer.Endpoint);
