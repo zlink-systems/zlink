@@ -20,7 +20,7 @@
 | 최우선 | **STREAM 소켓 성능**. 다른 스택과 같은 asio 위에서 돌면서 20% 낮고, 예전에는 더 높았던 적도 있으므로 구조상 불가능한 격차가 아니다. |
 | 역할 | 감독관(Claude Fable, 이 세션) = 초기 분석·브리프·감독·리뷰·게이트·커밋. 코드 변경·측정·프로파일은 **서브에이전트(opus·sonnet)**. |
 
-감독관은 코드를 직접 고치지 않는다. 예외는 리뷰에서 발견한 한두 줄 정정과 결정 기록·스펙 문구(계약 아님) 커밋뿐이다.
+감독관은 코드를 직접 고치지 않고 빌드·측정도 직접 돌리지 않는다. 예외는 결정 기록·계획 문서·브리프 커밋뿐이다. 리뷰에서 발견한 정정도 job에 되돌려 보낸다.
 
 ## 1. 현재 상태
 
@@ -79,9 +79,9 @@ STREAM 전용 파일은 4개(`stream.cpp` 1298, `stream.hpp` 163, `stream_batch_
 
 | 역할 | 담당 | 하는 일 |
 |---|---|---|
-| 감독관 | Claude Fable(이 세션) | 계획·브리프, job 투입과 3분 간격 생존 확인, 리뷰(diff·스펙 대조·테스트), 게이트, 커밋·push, decisions 기록 |
+| 감독관 | Claude Fable(이 세션) | 초기 분석(이 문서 §1)까지만 직접. 그 뒤로는 **브리프 작성, job 투입과 3분 간격 생존 확인, 결과 리뷰(diff·스펙 대조·보고서), 채택 판정, 커밋·push, decisions 기록**만 한다. 빌드·측정·게이트 실행·테스트·코드 수정은 전부 서브에이전트(사용자 지시 2026-09-06 22:05) |
 | 분석·설계·성능 job | **opus** | 프로파일·비용 분해, 원인 1개 = job 1개 수정, 경계를 다시 긋는 POSDDD 리팩토링(R1·R3·R4) |
-| 기계적 정리·측정 job | **sonnet** | dead code 삭제, 중복 helper 통합, 파일 분할·이름 정리(R2·R5·R6와 opus job 후속), with_stream·perf/c 실행과 표 작성, hotpath STREAM 셀 추가 |
+| 기계적 정리·측정·게이트 job | **sonnet** | dead code 삭제, 중복 helper 통합, 파일 분할·이름 정리(R2·R5·R6와 opus job 후속), with_stream·perf/c 실행과 표 작성, hotpath STREAM 셀 추가, **채택 전 게이트 일괄 실행**(main 포팅 빌드, ctest 전체, 변경 suite 5회, mirror cmp, hotpath_gate, 성능 확인 셀)과 결과 표 보고 |
 | 리뷰 보조 | opus(읽기 전용) | 감독관 리뷰 전에 계약 위반·숨은 동작 변화 독립 점검(불일치 시 감독관이 코드로 확정) |
 
 job 규칙(CONTRIBUTING §10): **원인 하나 = job 하나, 1.5 h 상한**, 게이트·측정 루프는 감독관이 한 번. 동시 job ≤ 4, 빌드 `JOBS≤6`(11 GB), **측정 중 다른 빌드·job·벤치 금지**. job은 각자 detached worktree(`~/project/zlink-work/<job>`)에서 겹치지 않는 파일만. 브랜치 없음, main에 단위별 커밋·push.
@@ -107,7 +107,7 @@ job 규칙(CONTRIBUTING §10): **원인 하나 = job 하나, 1.5 h 상한**, 게
 ### Phase 2S — STREAM 성능 job (opus, 원인당 1개, 파일이 겹치지 않으면 2개 병렬)
 
 각 job: worktree → 수정 → 관련 suite(`test_stream_*`, 공개 C STREAM 계약 테스트) 5회 → with_stream `--stack zlink,asio --size all --runs 1` → 요약(메시지당 비용 변화 포함).
-감독관: 리뷰 → main 포팅 → dev `ctest -j2` 전체 → with_stream runs=1(개선 확인 시 runs=3 확정) → 1024 B 경량 3셀 → hotpath_gate(5셀) → 채택 시 커밋·push, D-B14x 기록.
+감독관 리뷰 → 게이트 job(sonnet): main 포팅 → dev `ctest -j2` 전체 → with_stream runs=1(개선 확인 시 runs=3 확정) → 1024 B 경량 3셀 → hotpath_gate(5셀) → 결과 표 → 감독관 판정, 채택 시 커밋·push, D-B14x 기록.
 반복 종료 조건: 세 크기 zlink/asio ≥ 0.95, 또는 남은 원인이 모두 D(계약 변경 필요)이거나 설계 과제(auto-HWM 예산·I/O batching 정책 등)여서 사용자 결정이 필요할 때. 설계 과제는 선택지·예상 이득·계약 영향을 한 표로 올린다.
 
 ### Phase 2G — 전반 성능 job (opus, 원인당 1개)
