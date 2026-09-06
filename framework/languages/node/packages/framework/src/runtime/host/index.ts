@@ -1880,12 +1880,8 @@ export class ZLinkFrameworkRuntimeHost implements
   private async publishHostDraining(signal: AbortSignal): Promise<void> {
     try {
       const runtime = this.locationOwner.currentRuntime;
-      while (runtime !== undefined && !await runtime.publishDraining(signal)) {
-        await waitForDrainRetry(
-          this.options.registration.locations.options.pollingIntervalMs
-            ?? zlinkDefaultLocationOptions.pollingIntervalMs,
-          signal
-        );
+      if (runtime !== undefined && !await runtime.publishDraining(signal)) {
+        throw new Error('Draining descriptor publication returned false.');
       }
     } catch (error) {
       throw new ZLinkDrainingStatePublishError(error);
@@ -1895,21 +1891,10 @@ export class ZLinkFrameworkRuntimeHost implements
   private async cleanupOwnerForDrain(signal: AbortSignal): Promise<void> {
     const runtime = this.locationOwner.currentRuntime;
     if (runtime === undefined) return;
-    for (;;) {
-      try {
-        await runtime.cleanupOwner(signal);
-        return;
-      } catch {
-        try {
-          await waitForDrainRetry(
-            this.options.registration.locations.options.pollingIntervalMs
-              ?? zlinkDefaultLocationOptions.pollingIntervalMs,
-            signal
-          );
-        } catch (error) {
-          throw new ZLinkOwnerCleanupError(error);
-        }
-      }
+    try {
+      await runtime.cleanupOwner(signal);
+    } catch (error) {
+      throw new ZLinkOwnerCleanupError(error);
     }
   }
 
@@ -3267,21 +3252,6 @@ class ZLinkDrainingStatePublishError extends Error {
     super('Failed to publish draining peer rows.', { cause });
     this.name = 'ZLinkDrainingStatePublishError';
   }
-}
-
-function waitForDrainRetry(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.reject(createDeadlineExceededError('Drain deadline exceeded.'));
-  return new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, delayMs);
-    const onAbort = () => {
-      clearTimeout(timeout);
-      reject(createDeadlineExceededError('Drain deadline exceeded.'));
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
 }
 
 function resolveBackendAdapterFactory(internalOptions: unknown): ZLinkBackendAdapterFactory {

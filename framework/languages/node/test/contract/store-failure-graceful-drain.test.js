@@ -39,6 +39,63 @@ test('Shutdown awaits Draining publication then runs callbacks and cleanup witho
   assert.equal((await shutdown).outcome, framework.ZLinkFrameworkTerminationOutcome.Stopped);
 });
 
+for (const failure of ['publication-false', 'publication-throw', 'owner-cleanup']) {
+  test(`Shutdown consumes the first ${failure} terminal without a polling wait`, { timeout: 5_000 }, async (t) => {
+    const pollingIntervalMs = 1_000;
+    const host = new framework.ZLinkFrameworkRuntimeHost({
+      registration: framework.createFrameworkRegistration({
+        spotNodes: [{ name: 'game', router: { bind: 'tcp://127.0.0.1:1' } }],
+        locations: { options: { pollingIntervalMs } }
+      })
+    });
+    const cause = new Error(`${failure} store failure`);
+    let publications = 0;
+    let cleanups = 0;
+    let stops = 0;
+    let observedFailure;
+    host.locationOwner.runtime = {
+      async publishDraining() {
+        publications++;
+        if (failure === 'publication-throw') throw cause;
+        return failure !== 'publication-false';
+      },
+      async cleanupOwner() {
+        cleanups++;
+        throw cause;
+      }
+    };
+    host.spotManager = { async drainForShutdown() {} };
+    host.stop = async () => { stops++; };
+    const operation = failure === 'owner-cleanup' ? 'cleanupOwnerForDrain' : 'publishHostDraining';
+    const original = host[operation].bind(host);
+    t.mock.method(host, operation, async (...args) => {
+      try {
+        return await original(...args);
+      } catch (error) {
+        observedFailure = error;
+        throw error;
+      }
+    });
+
+    const startedAt = performance.now();
+    const result = await host.shutdown({ deadlineMs: 2_500 });
+    const elapsed = performance.now() - startedAt;
+    assert.ok(elapsed < pollingIntervalMs, `first failure finished shutdown after ${elapsed} ms`);
+    assert.equal(result.outcome, framework.ZLinkFrameworkTerminationOutcome.ForceStopped);
+    assert.equal(result.reason, framework.ZLinkFrameworkTerminationReason.TeardownFailed);
+    assert.equal(publications, 1);
+    assert.equal(cleanups, failure === 'owner-cleanup' ? 1 : 0);
+    assert.equal(stops, 1);
+    assert.equal(observedFailure.name, failure === 'owner-cleanup'
+      ? 'ZLinkOwnerCleanupError' : 'ZLinkDrainingStatePublishError');
+    if (failure === 'publication-false') {
+      assert.equal(observedFailure.cause.message, 'Draining descriptor publication returned false.');
+    } else {
+      assert.equal(observedFailure.cause, cause);
+    }
+  });
+}
+
 test('SF-C2 uses host relocation and verifies marker, terminal result, and clean exit', () => {
   const provider = read('e2e/DiscoveryRegistryHa/Server/Provider/Endpoints/provider-endpoints.ts');
   const providerHost = read('e2e/DiscoveryRegistryHa/Server/Provider/provider-host-factory.ts');
