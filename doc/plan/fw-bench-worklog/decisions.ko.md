@@ -89,6 +89,36 @@
 - **처리**: 각 서버가 자기 PID를 pidfile에 기록하고 runner가 그 값을 읽도록 바꿨다.
 - **주의**: 과거 C bench 결과의 server CPU·memory 수치를 이 캠페인의 비교에 인용하지 않는다.
 
+## FB-008 — 셀 사이 backlog 전이를 settle이 막아야 한다
+
+- **관찰** (job `fwb-02`): `zlink-framework-dotnet-request-serial` @4096 셀이 run 1과 run 3에서
+  `zlink error code 101` TimedOut으로 실패했다. 원인은 시작 경합이 아니라 **앞 셀의 잔여
+  backlog**다. 바로 앞 셀 `zlink-framework-dotnet-send-saturation`은 5초 × 8-way flood이고
+  framework send의 p95는 약 718 ms(같은 조건 raw는 1.7 ms)다. client의 settle이
+  `--command-settle-ms` 기본 200 ms로 고정돼 있고 서버가 비워지지 않아도 그대로 반환하므로,
+  다음 패턴의 첫 request가 남은 backlog 뒤에 줄을 서서 framework request timeout을 넘긴다.
+- **결정** (2026-09-06, 감독관): settle은 고정 시간 대기가 아니라 **서버가 비워졌음을 확인하는
+  유한 대기**여야 한다. 상한 안에 비워지지 않으면 그 사실을 기록하고 **다음 셀을 오염된 것으로
+  표시**한다. 조용히 측정해서 표에 싣지 않는다.
+- **근거**: 규격 어디에도 settle 값이 없다. `--command-settle-ms`는 client 구현 세부이지
+  고정 계약값이 아니므로 이 수정은 측정 조건 변경 금지에 걸리지 않는다. 반대로 지금 상태를
+  두면 셀 하나가 다음 셀을 죽이는 harness를 4개 언어에 그대로 복제하게 된다.
+- **FB-004와의 관계**: FB-004는 두 ZLink 행의 endpoint 개수 차이가 셀을 오염하지 않는다고
+  판단했고 그 근거(한 번에 한 패턴만 측정)는 여전히 유효하다. 다만 그때 고려하지 않은
+  오염 경로가 하나 더 있었다. **같은 프로세스에서 이어 도는 셀 사이의 서버 backlog 전이**다.
+  FB-008이 그 경로를 막는다.
+- **적용**: job `fwb-02`가 harness에 구현하고, 규격 §3에 계약으로 추가한다. Phase 2~5의 네
+  언어는 이 계약을 구현한 상태로 만든다.
+
+## FB-009 — framework send 경로의 saturation 지연은 결과로 기록한다
+
+- **관찰** (job `fwb-02`): `send-saturation` 조건에서 framework send의 p95가 약 718 ms,
+  같은 조건 raw binding이 약 1.7 ms였다.
+- **처리**: 이 캠페인은 원인을 고치지 않는다. 값을 그대로 보고서에 싣고 후속 후보로 올린다.
+  saturation 셀의 지연은 sender가 receiver를 앞지를 때 자연히 커지므로 이 값 하나로 결함을
+  단정하지 않는다. 판정은 KMSG/s로 하고 지연은 함께 기록한다.
+- **후속**: 0.18.0 후보 — framework send 경로의 backpressure와 drain 특성.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
