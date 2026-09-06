@@ -316,7 +316,6 @@ private class JavaActorClient(
 
 private class JavaActorCreateCall(
     private var call: ZLinkActorCreateCall,
-    private val terminal: KotlinSingleUse = KotlinSingleUse(),
 ) : ZLinkKotlinActorCreateCall {
     override fun inMesh(meshName: String): ZLinkKotlinActorCreateCall =
         apply { call = call.inMesh(meshName) }
@@ -328,19 +327,16 @@ private class JavaActorCreateCall(
         apply { call = call.timeout(timeout) }
 
     override suspend fun await(): ZLinkActorCreateResult {
-        terminal.enter()
         return awaitFrameworkStage(call.submit())
     }
 
     override suspend fun yield(): ZLinkActorCreateResult {
-        terminal.enter()
         return awaitFrameworkStage(call.yield())
     }
 }
 
 private class JavaActorGetOrCreateCall(
     private var call: ZLinkActorGetOrCreateCall,
-    private val terminal: KotlinSingleUse = KotlinSingleUse(),
 ) : ZLinkKotlinActorCreateCall {
     override fun inMesh(meshName: String): ZLinkKotlinActorCreateCall =
         apply { call = call.inMesh(meshName) }
@@ -352,12 +348,10 @@ private class JavaActorGetOrCreateCall(
         apply { call = call.timeout(timeout) }
 
     override suspend fun await(): ZLinkActorCreateResult {
-        terminal.enter()
         return awaitFrameworkStage(call.submit())
     }
 
     override suspend fun yield(): ZLinkActorCreateResult {
-        terminal.enter()
         return awaitFrameworkStage(call.yield())
     }
 }
