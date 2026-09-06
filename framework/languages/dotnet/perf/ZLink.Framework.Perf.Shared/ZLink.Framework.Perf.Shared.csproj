@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <Content Include="histogram-bounds.json" CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="../../src/Zlink.Framework.Contracts/Zlink.Framework.Contracts.csproj" />
+    <ProjectReference Include="../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj" />
+  </ItemGroup>
+</Project>
