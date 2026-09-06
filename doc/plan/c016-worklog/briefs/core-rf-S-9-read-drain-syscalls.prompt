@@ -1,0 +1,8 @@
+job S-9: TCP 수신 경로의 여분 `recv` syscall 제거(메시지당 3회 → 1~2회). 공통 규칙 _common-rules.md 적용. worktree ~/project/zlink-work/s9.
+
+근거: doc/plan/c016-worklog/core-rf-S-A-stream-profile.md §2·§4#2·§6-2. callgrind 실측(1024 B): zlink `recv` 3.000/msg vs asio 1.000. read drain 루프(`core/src/runtime/engine/asio/asio_engine.cpp:1043-1080`)가 EAGAIN까지 더 읽고, speculative read(`:539-580`, `:466-509`)가 한 번 더 붙는다. sys CPU 8.8 vs 7.6 µs/msg.
+목표: 메시지 하나가 도착했을 때 커널로 가는 `recv` 횟수를 줄인다. 설계 비교: (A) 짧은 read(요청 길이보다 적게 읽힘)를 "소켓이 비었다"로 해석해 즉시 async wait로 돌아감(EAGAIN 확인 read 제거 — Linux에서 짧은 read 뒤에 데이터가 남는 경우는 드물고, 남더라도 epoll level 트리거로 다시 깨어남), (B) speculative read를 첫 read가 버퍼를 가득 채웠을 때만 시도, (C) 둘 다. 각 안에서 대용량(64 KiB) 처리량이 떨어지지 않는지(첫 read가 가득 찼을 때는 계속 읽어야 함) 확인. ZMP 엔진도 같은 read 경로를 쓰면 전 패턴 공통 이득 — perf/c 경량 3셀로 확인.
+주의: S-4 job이 같은 파일의 write 쪽(`prepare_gather_output`, :689, :757-802, :1350)을 고치고 있다. read 경로만 만지고, S-4 diff가 main에 먼저 들어가면 감독관이 알려 줄 때 rebase한다.
+소유 계층·spec: systems/03-io-thread(§ read/drain 서술), 10-hot-path, socket/08-stream(D-099 drain 규칙: 도착한 fragment로 조립 + bounded step — 이는 STREAM PACKET 모드 규칙이며 raw read 횟수와 무관함을 보고서에 확인). 계약 변경 없음. 관측 가능한 동작(도착 순서·READY·POLLIN level)은 동일해야 한다.
+범위 파일: core/src/runtime/engine/asio/asio_engine.{cpp,hpp} read 경로, asio_engine_pipeline.hpp, transports/asio/asio_tcp_tuning.hpp(읽기).
+검증: `ctest -R 'stream|engine|asio|raw|zmp|large|64k|fragment|progress'` 5회, TSan 1회. 성능: with_stream zlink,asio size all runs 1(64 KiB 포함 필수) + perf/c 1024 B tcp 경량 3셀 runs 1. 확인 지표: 가능하면 callgrind 축소셀(S-A 보고서 §0의 방법, scratchpad S-A/ 스크립트 재사용)로 `recv` 호출 횟수/msg가 실제로 줄었는지.

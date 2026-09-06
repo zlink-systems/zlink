@@ -1,0 +1,7 @@
+job S-10: 핫 경로의 동적 TLS(`__tls_get_addr`) 접근 제거. 공통 규칙 _common-rules.md 적용. worktree ~/project/zlink-work/s10.
+
+근거: S-A 보고서 §3·§4#4·§6-3. callgrind 실측: `__tls_get_addr` 31.9회/msg = 383 Ir/msg(3.4 %), asio 0. 공유 라이브러리 안의 `thread_local`이 general-dynamic TLS 모델로 컴파일돼 접근마다 `__tls_get_addr` 호출. 알려진 예: `sockets/common/socket_message_recv_api.cpp`의 `recv_tls_view`(`zlink::recv_tls_view::storage()` 0.80 %).
+목표: 메시지당 TLS 조회를 0~2회로. 절차: (1) `thread_local`·`__thread`·`pthread_getspecific` 사용처 전수 목록(file:line, 호출 빈도 추정). (2) 설계 비교: (A) 빌드 플래그 `-ftls-model=initial-exec`를 libzlink 컴파일에 적용(dlopen되는 라이브러리에서는 static TLS 블록 한도 문제가 있으므로 bindings(python/node/java/dotnet은 dlopen)에서 실패하지 않는지 근거 조사 — glibc의 dlopen initial-exec 예약 크기와 zlink TLS 총량 비교), (B) 소스 수준: 핫 경로 함수가 진입 시 TLS 주소를 한 번 얻어 지역 포인터로 쓰기(`storage()` 호출 1회로 접기), (C) 불필요한 thread_local 자체 제거(해당 상태가 정말 스레드별이어야 하는지 — 예: recv view가 호출자 스택 객체로 갈 수 있는지). 적은 규칙·적은 위험 순으로 채택. (A)는 CMakeLists 변경이므로 공개 인터페이스는 아니지만 bindings 로딩 영향을 반드시 근거로 남긴다.
+소유 계층·spec: systems/04-thread-safety, 10-hot-path. 계약 변경 없음.
+범위 파일: thread_local 사용처(조사 결과에 따름), core/CMakeLists.txt(플래그 안이면), core/src/runtime/utils/*.hpp.
+검증: `ctest -R 'recv|stream|router|dealer|poll'` 5회, bindings c·python 스모크(`bindings/c/tests/run_tests.sh`, python은 PYTHON_EXECUTABLE=$HOME/project/zlink/.artifacts/wsl/python-build-venv/bin/python 로 dlopen 경로 확인) — (A) 채택 시 필수. 성능: with_stream zlink,asio size all runs 1 + callgrind 축소셀로 `__tls_get_addr` 횟수/msg 확인.
