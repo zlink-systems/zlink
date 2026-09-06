@@ -1,0 +1,44 @@
+# Job: dotnet framework — shutdown consumes the first terminal of Draining publication; no timed wait or resubmit (F-R7-4)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 2 h.
+Read `AGENTS.md` (root) §2/§3/§4.1/§5, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`. Campaign rules
+(`doc/plan/c016-worklog/decisions.ko.md` D-098 item 4, D-101, D-105): no mitigations (no timeouts/retries/second
+pollers/catch-alls), one owner per rule, regression test per fix, monotonic durations. Never modify `core/**`,
+`bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`, other languages. Never lower an assertion. Do not
+commit.
+
+## Spec
+`framework/doc/framework/common/spec/server/05-location-relocation/05-host-relocation-flow.ko.md` §14 step 2:
+"`Draining` descriptor를 게시해 새 selection과 placement에서 제외한다. 게시의 terminal(성공 또는 실패)만 기다리며,
+게시 뒤 전파를 위한 시간 대기는 두지 않는다." Step 6 defines the bounded outcomes (`Stopped/None`,
+`ForceStopped/DeadlineExceeded`, `ForceStopped/TeardownFailed`).
+
+## Cause (verified by the supervisor, D-106)
+`framework/languages/dotnet/src/Zlink.Framework/Runtime/Host/ZLinkFrameworkDrainExecutor.cs`:
+`PublishDrainingMarkerAsync` loops: a `false` from `MarkDraining` or any exception is swallowed, then
+`Task.Delay(_locationOptions.PollingInterval)` and the same publication is resubmitted until the deadline token
+cancels. `PublishServingWeightAsync` (`QuiesceServingChannels` false → delay → retry) and `CleanupOwnerAsync`
+(exception → delay → retry) have the same shape. These are the timed-wait/resubmit mitigations §14 forbids; they
+burn the shutdown deadline before `wait_accepted_operations`. Java/Kotlin and Node consume the first terminal.
+
+## What to do
+Each of the three steps consumes the first terminal of its operation exactly once: success → next step;
+failure (false or exception) → the existing result path (`DrainingStatePublishFailed` for the two publications;
+the existing teardown-failure result for owner cleanup), recorded in the failure list the executor already keeps.
+Remove the `while (true)` + `Task.Delay` loops; add no new state. Regression tests: (1) a store whose
+`MarkDraining` fails once ends shutdown with `DrainingStatePublishFailed` without waiting `PollingInterval`
+(assert elapsed < PollingInterval using a monotonic clock/`TimeProvider`); (2) success path unchanged; (3) owner
+cleanup failure → existing teardown-failed result, no retry. Check `ZoneWorld`/`ShoppingMall` sample expectations
+that might have relied on the retry (search tests for `DrainingStatePublishFailed`).
+
+## Gates
+dotnet env block (never `--artifacts-path`, never `ulimit -v`): `export TMPDIR=/dev/shm/zlink-tmp-dotnet
+ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1
+DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}');
+export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; cd framework/languages/dotnet;
+flock -w7200 /tmp/zlink-dotnet-gate.lock dotnet test tests/Zlink.Framework.UnitTests --blame-hang --blame-hang-timeout 10m`
+(1981 passed baseline, 0 failures) plus the new tests 5×. Do not run sample runners.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-r7-shutdown-publish-terminal-summary.md`: spec clause, cause `file:line`, fix,
+regression tests, gate results, BLOCKERS. Do not print the report to stdout.

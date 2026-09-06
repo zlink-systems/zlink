@@ -1486,3 +1486,22 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 
 - 진단(`diag-go-request-writable-retry-prime-summary.md`, 공개 C 재현 `/tmp/zlink-go-prime/request-prime.c`, HWM=1 대조군 80/81): `pipe.cpp:1874-1882` `release_writes_for_transport_pair()`가 hold 해제 시 `check_hwm_unlocked()`로 sender의 cached credit만 보고(inproc RID preamble 80 bytes가 회계에 포함되어 full), `_out_active`를 false로 남긴 채 credit waiter도 등록하지 않는다. ROUTER가 preamble을 읽고 게시한 read credit(`pipe.cpp:3898-3903`)은 waiter가 없어 `activate_write`를 만들지 않는다(`:3956-3963`). 결과: SEND → BACKPRESSURED+token, WRITABLE 없음. 위반 조항: socket README §6 credit·WRITABLE 진행 계약, auto-hwm §5 "빈 queue는 HWM 초과 complete message 한 건 수락".
 - 결정: Core 수정(A). 방향은 진단대로 hold 해제에 기존 `hwm_credit_ready_unlocked()`(`:1794-1806`)의 snapshot·waiter 등록·재확인 규칙을 재사용(새 timer·retry·상태 없음). 공개 C-API 회귀 테스트(`test_ready_empty_pipe_first_data`: inproc/tcp × HWM 1, preamble 뒤 첫 DATA가 admission되거나 토큰이 WRITABLE로 이어짐) + hotpath_gate. worktree `zlink-core-gate`에서 작업, main `core/build-dev`는 framework gate가 조용할 때 재빌드·패키지 갱신.
+
+## D-119 (2026-09-06, 머신 A) Framework foundation·execution redline 채택 — R4 문서 finding 17개 + F-R6-2 (SD-01…SD-04는 아래 D-120~D-122)
+
+- 검토: `framework-foundation-redline/changes.md`의 30 ko/en 쌍 diff를 직접 대조했다. 위임 대상 절이 실제로 그 내용을 소유하는지 확인 — layering 정리 순서 9단계 → host relocation §14(6단계 + closing callback이 teardown보다 앞섬), cancellation §3 → bindings async-execution-model §6(caller-wait cancellation·late completion 정리), interaction §Relocating/Draining → host §14·§15(placement 제외 표), handler-turn §6 표 → backpressure §8·오류 모델 §5·Spot 메시징 §5.3, payload §9 내부 조건 8개 → §2·§3·§7 규칙 문단의 내부 확인 조건. Core anchor(`#zlink_socket_set_receive_flow_state`, `#transportbuffer`)와 오류 모델 §9 placement capacity 문장(lifecycle §의 기존 규칙) 확인. 링크 검사 bad 0, ko/en heading 수 일치.
+- 행동 변경 없음. Glossary 132 → 141(Actor, execution gate, handler turn, state lane, application lane, lifecycle lane, completion dispatcher, source-local admission, 양보 부채), 미참조 정의 13 → 0, `#snapshot`/`#publish-target-snapshot` 분리(retarget 4곳). F-R4-5·F-R4-6은 0.18.0 후보 유지.
+
+## D-120 (2026-09-06, 머신 A) SD-01 — Mesh §8의 "unit seal 뒤 `Draining`" 문장은 host 상태표와 충돌, `Relocated`로 정정
+
+- Host relocation §3 상태표: `Relocating → Relocated`(모든 unit 분리), `Draining`은 `Shutdown`만 진입(§3 예제 "성공하면 Relocated 상태로 남는다"). Mesh §8이 relocation 완료를 `Draining`으로 쓴 것은 잔재. 정정: "모든 unit이 source dispatch에서 분리되면 host는 `Relocated`가 된다. `Draining`은 `Shutdown`이 admission을 닫을 때만 진입하며 전이는 Host relocation §3이 소유." 규칙 2 → 1(owner = host §3).
+
+## D-121 (2026-09-06, 머신 A) SD-02 — 공정성 상한·양보 부채의 소유자는 실행 계약 §7 하나, 부채 단위는 실행 객체(queue 쌍)
+
+- Actor §4는 "owner 점유 상한에 값이 없어 정성적"이라 썼으나 실행 §7과 구현(dotnet `ZLinkSerialExecutionQueue._lifecycleYieldDebt`/`LifecycleBurstLimit`, node `serial-execution-queue.ts` `ownerTimeBudget: 10`·`lifecycleBurstLimit: 8`, java `DEFAULT_LIFECYCLE_BURST_LIMIT = 8`)은 10 ms·8 turn을 갖는다. Actor §4의 mode별 부채 표(`SpotWide`·Entry·Instance = 공유 gate 하나)는 구현과 다르다 — 세 구현 모두 부채·연속 횟수를 직렬 실행 queue(실행 객체)마다 둔다. Entry Spot Actor는 §2대로 Actor별 gate이므로 표의 Entry Spot 행도 틀렸다.
+- 결정: Actor §4는 "lifecycle queue 우선" 규칙만 남기고 상한·부채는 실행 §7 링크. 실행 §7에 "연속 횟수와 양보 부채는 직렬 실행 객체마다 따로 둔다; mode는 gate 공유 범위만 바꾼다" 규칙 + 경계 조건 표(Actor §4에서 이동). §7·§9의 "spec-gap 후보" 문장은 "같은 값·같은 확인 지점, 실행 객체마다 적용"으로 확정(node `ownerTimeBudget`이 queue별 claim에서 확인). 규칙 6 → 2(SD-02 잔여 해소). 구현 변경 없음. 검증: 기존 §16 부채 관찰 항목 유지.
+
+## D-122 (2026-09-06, 머신 A) SD-03 유지, SD-04 — glossary "Channel Client와 Server role"은 RouteMesh 등록 역할로 범위를 한정
+
+- SD-03: lifecycle §의 worker scheduler 자리·배치 수용량 `CapacityExceeded`는 오류 모델 §5의 자원 소유 기준(source runtime이 소유하는 자리)과 일치하므로 변경하지 않는다.
+- SD-04: 기존 정의 "Server role은 Client의 송신 기능도 포함"은 ClientServer Channel §1(Server는 Client에 새 업무 호출을 시작하지 못함)과 충돌. 결정: 용어를 RouteMesh의 ChannelName별 등록 역할로 한정하고, ClientServer의 Client·Server는 "같은 이름, 다른 계약"으로 ClientServer §1을 소유자로 연결. `ZLinkClientServerRole` 표기는 ClientServer 문서를 따른다고만 적는다. 용어 분리(새 이름)는 하지 않는다 — 코드 표기가 이미 두 곳에서 다르고 새 이름은 규칙을 늘린다.
