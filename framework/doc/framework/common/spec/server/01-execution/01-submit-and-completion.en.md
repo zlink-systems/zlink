@@ -98,6 +98,10 @@ is no normal-completion value; completion only means the source-local admission 
 defined by the operation family accepted the message. Remote handler execution, subscriber
 receipt, remote Spot queue acceptance, or application callback completion are not awaited.
 
+The transport-facing stream write used from a session callback (synchronous `bool` return) is not a
+call of this section; it follows the transport execution-context contract of
+[STREAM session](../04-session/01-stream-session.en.md).
+
 | Target kind | admission boundary |
 |---|---|
 | Remote target | Local transport queue |
