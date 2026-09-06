@@ -19,6 +19,7 @@ import {
 import type {
   ZLinkRawBindingPort,
   ZLinkRawHostPort,
+  ZLinkRawMonitorRecord,
   ZLinkRawRouterPort
 } from '../../packages/framework/src/runtime/backend/raw-binding-port';
 import {
@@ -251,7 +252,7 @@ test('RouteMesh hello advertises the configured host instead of the bind host', 
       assert.equal(endpoint, 'tcp://127.0.0.2:0');
     },
     localEndpoint: () => 'tcp://127.0.0.2:28730',
-    monitor: () => ({ statusReady: () => false, close() {} }),
+    monitor: () => ({ drain: () => 0, statusReady: () => false, close() {} }),
     connectToRoutingId(routingId: string, endpoint: string) {
       assert.equal(routingId, 'peer-node');
       assert.equal(endpoint, 'tcp://127.0.0.1:28731');
@@ -681,7 +682,7 @@ test('raw monitor admits a discovered same-RID replacement only after its exact 
     descriptorRevision: 1n
   };
   const oldConnection = 'old-physical-pair';
-  const disconnectedPairs: Array<readonly [bigint, bigint]> = [];
+  const disconnectedEndpoints: string[] = [];
   const disconnectedRids: string[] = [];
   const helloTargets: string[] = [];
   const internal = runtime as unknown as {
@@ -698,24 +699,13 @@ test('raw monitor admits a discovered same-RID replacement only after its exact 
       discriminator: string;
       localAddress: string;
       remoteAddress: string;
-      transportPairId?: bigint;
-      transportPairGeneration?: bigint;
     }>>;
     connectionIds: Map<string, string>;
-    monitorEvents: Array<{
-      event: number;
-      value: number;
-      routingId: string;
-      localAddress: string;
-      remoteAddress: string;
-      transportPairId: bigint;
-      transportPairGeneration: bigint;
-      flags: number;
-    }>;
+    monitorEvents: ZLinkRawMonitorRecord[];
     router: {
       send(targetRid: string, parts: readonly Uint8Array[]): Promise<void>;
       disconnectRid(routingId: string): void;
-      disconnectTransportPair(pairId: bigint, generation: bigint): void;
+      disconnect(endpoint: string): void;
     };
     admitPeer(
       descriptor: ServiceNodeDescriptor,
@@ -725,8 +715,6 @@ test('raw monitor admits a discovered same-RID replacement only after its exact 
         discriminator: string;
         localAddress: string;
         remoteAddress: string;
-        transportPairId?: bigint;
-        transportPairGeneration?: bigint;
       },
       nowMs: number,
       expected: {
@@ -743,8 +731,8 @@ test('raw monitor admits a discovered same-RID replacement only after its exact 
     disconnectRid(routingId): void {
       disconnectedRids.push(routingId);
     },
-    disconnectTransportPair(pairId, generation): void {
-      disconnectedPairs.push([pairId, generation]);
+    disconnect(endpoint): void {
+      disconnectedEndpoints.push(endpoint);
     }
   };
   internal.connectionCandidates.set(old.nodeRoutingId, new Map([[oldConnection, {
@@ -752,9 +740,7 @@ test('raw monitor admits a discovered same-RID replacement only after its exact 
     direction: 'outbound',
     discriminator: 'initiator:local',
     localAddress: 'tcp://local:40001',
-    remoteAddress: old.advertisedEndpoint,
-    transportPairId: 101n,
-    transportPairGeneration: 7n
+    remoteAddress: old.advertisedEndpoint
   }]]));
   internal.connectionIds.set(old.nodeRoutingId, oldConnection);
   assert.equal(runtime.topology.admit(old, oldConnection, undefined, 'initiator:local'), 'admitted');
@@ -777,18 +763,17 @@ test('raw monitor admits a discovered same-RID replacement only after its exact 
   assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), true);
   internal.monitorEvents.push({
     event: 0x1000,
-    value: 1,
+    value: 1n,
     routingId: old.nodeRoutingId,
     localAddress: 'tcp://local:40002',
     remoteAddress: replacement.advertisedEndpoint,
-    transportPairId: 202n,
-    transportPairGeneration: 8n,
+    connectionId: 202n,
     flags: 1
   });
 
   assert.equal(await runtime.drainMonitorEvents(), 1);
   assert.deepEqual(helloTargets, [old.nodeRoutingId]);
-  assert.deepEqual(disconnectedPairs, []);
+  assert.deepEqual(disconnectedEndpoints, []);
   assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, oldConnection);
   assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), true);
 
@@ -799,18 +784,22 @@ test('raw monitor admits a discovered same-RID replacement only after its exact 
   assert.equal(runtime.topology.peer(old.nodeRoutingId)?.descriptor.lifecycleGeneration, replacement.lifecycleGeneration);
   assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, replacementCandidate.connectionId);
   assert.equal(runtime.liveness.isReady(old.nodeRoutingId, replacementCandidate.connectionId), false);
-  assert.deepEqual(disconnectedPairs, [[101n, 7n]]);
+  assert.equal(runtime.liveness.isReady(old.nodeRoutingId, oldConnection), false);
+  // Core owns physical replacement through REJECT/HANDOVER. Framework must
+  // preserve the replacement intent while applying the descriptor fence.
+  assert.deepEqual(disconnectedEndpoints, []);
+  assert.deepEqual(disconnectedRids, []);
 
   const lateOldCandidate = {
     ...replacementCandidate,
-    connectionId: 'late-old-physical-pair',
-    transportPairId: 303n,
-    transportPairGeneration: 9n
+    connectionId: 'late-old-physical-pair'
   };
   assert.equal(internal.admitPeer(old, lateOldCandidate, 3, expected), 'invalidDescriptor');
   assert.equal(runtime.topology.peer(old.nodeRoutingId)?.descriptor.lifecycleGeneration, replacement.lifecycleGeneration);
   assert.equal(runtime.topology.peer(old.nodeRoutingId)?.connectionId, replacementCandidate.connectionId);
-  assert.deepEqual(disconnectedPairs, [[101n, 7n], [303n, 9n]]);
+  assert.deepEqual(disconnectedEndpoints, []);
+  assert.deepEqual(disconnectedRids, []);
+  assert.deepEqual(internal.expectedPeers.get(old.nodeRoutingId), expected);
 });
 
 test('raw monitor ignores a late disconnect from the superseded physical connection', async () => {
@@ -842,49 +831,34 @@ test('raw monitor ignores a late disconnect from the superseded physical connect
   assert.equal(internal.connectionIds.get('peer'), currentConnection);
 });
 
-test('raw monitor fences paired transport lanes and ignores ready-count snapshots', async () => {
+test('raw monitor consumes logical ready edges and peer termination, ignoring ready-count snapshots', async () => {
   const runtime = rawServiceRuntime({ descriptor: descriptor('local') });
   const peer = { ...descriptor('peer-paired'), state: 'serving' as const };
   const internal = runtime as unknown as {
     connectionCandidates: Map<string, Map<string, { connectionId: string }>>;
-    monitorEvents: Array<{
-      event: number;
-      value: number;
-      routingId: string;
-      localAddress: string;
-      remoteAddress: string;
-      connectionId?: bigint;
-      transportPairId?: bigint;
-      transportPairGeneration?: bigint;
-      transportLane?: number;
-      flags?: number;
-    }>;
+    monitorEvents: ZLinkRawMonitorRecord[];
   };
-  const pairId = 41n;
-  const pairGeneration = 3n;
+  // Core aggregates the ROUTER lanes into one logical ready edge. Monitor
+  // records expose a connection ID for correlation, not a transport-pair API.
   internal.monitorEvents.push(
     {
       event: 0x1000,
-      value: 1,
+      value: 1n,
       routingId: peer.nodeRoutingId,
       localAddress: 'tcp://local:41001',
       remoteAddress: peer.advertisedEndpoint,
       connectionId: 101n,
-      transportPairId: pairId,
-      transportPairGeneration: pairGeneration,
-      transportLane: 1,
+      transportLane: 0,
       flags: 1
     },
     {
       event: 0x1000,
-      value: 2,
+      value: 1n,
       routingId: peer.nodeRoutingId,
       localAddress: 'tcp://local:41001',
       remoteAddress: peer.advertisedEndpoint,
       connectionId: 102n,
-      transportPairId: pairId,
-      transportPairGeneration: pairGeneration,
-      transportLane: 0,
+      transportLane: 1,
       flags: 0
     }
   );
@@ -899,14 +873,12 @@ test('raw monitor fences paired transport lanes and ignores ready-count snapshot
 
   internal.monitorEvents.push({
     event: 0x0200,
-    value: 3,
+    value: 3n,
     routingId: peer.nodeRoutingId,
-    localAddress: 'tcp://completion-local:51001',
-    remoteAddress: 'tcp://completion-remote:52001',
-    connectionId: 104n,
-    transportPairId: pairId,
-    transportPairGeneration: pairGeneration,
-    transportLane: 1,
+    localAddress: 'tcp://local:41001',
+    remoteAddress: peer.advertisedEndpoint,
+    connectionId: 101n,
+    transportLane: 0,
     flags: 0
   });
   assert.equal(await runtime.drainMonitorEvents(), 1);
@@ -914,18 +886,17 @@ test('raw monitor fences paired transport lanes and ignores ready-count snapshot
 
   internal.monitorEvents.push({
     event: 0x0200,
-    value: 4,
+    value: 4n,
     routingId: peer.nodeRoutingId,
-    localAddress: 'tcp://different-local:51001',
-    remoteAddress: 'tcp://different-remote:52001',
-    connectionId: 103n,
-    transportPairId: pairId,
-    transportPairGeneration: pairGeneration,
-    transportLane: 0,
+    localAddress: 'tcp://completion-local:51001',
+    remoteAddress: 'tcp://completion-remote:52001',
+    connectionId: 102n,
+    transportLane: 1,
     flags: 0
   });
   assert.equal(await runtime.drainMonitorEvents(), 1);
   assert.equal(runtime.topology.peer(peer.nodeRoutingId), undefined);
+  assert.equal(internal.connectionCandidates.has(peer.nodeRoutingId), false);
 });
 
 test('raw disconnect fences a late lifecycle generation after peer replacement', () => {
