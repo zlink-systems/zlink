@@ -105,11 +105,26 @@ class Cell:
     #: that actually limits the client -- may be far from its limit, so counting
     #: cores against a ceiling of 1 marks every cell and the mark stops carrying
     #: information. Node therefore declares ``event_loop_utilization`` (ceiling
-    #: 1.0); the core-counting languages declare ``client_cores``. A cell that
+    #: 1.0); java declares ``jvm_thread_cores``; the remaining core-counting
+    #: languages declare ``client_cores``. A cell that
     #: names no metric is read as ``client_cores``, which is what every result
     #: predating this decision meant.
+    #: The java row's instrument: CPU charged to the JVM threads this harness runs
+    #: its SUBMIT loop on, divided by elapsed time, against the submit parallelism
+    #: it declares (1 for the serial and window drivers, the send concurrency for
+    #: the send driver). Process cores are wrong for java for the same reason they
+    #: are wrong for node and for a reason of their own. 94% of the process CPU of
+    #: a ``zlink-java`` send cell is Core's native I/O threads running no user code
+    #: against 3% for ``grpc-java``, so ``client_cores`` divides unlike quantities
+    #: between the two rows a judgement compares; and on a 20-core ceiling the
+    #: largest reading observed was 0.154 of it, so the mark could never fire.
+    #: Counting only the submit threads keeps the instrument commensurate with the
+    #: ceiling: both are "the threads this harness offers its own submit path".
+    #: GC and JIT threads are not JVM threads and never appear in ThreadMXBean, so
+    #: they cannot inflate it.
     client_saturation_metric: str | None = None
     event_loop_utilization: float | None = None
+    jvm_thread_cores: float | None = None
 
     # Diagnostics. FB-017 (depth), FB-008 (drain), spec 5 / G3 (server-counted
     # send throughput). ``None`` means the runner did not report the value, which

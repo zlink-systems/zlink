@@ -8,8 +8,11 @@ rules would have rejected, so they are tested even though nothing has hit them.
 
 from __future__ import annotations
 
+import json
 import os
+import pathlib
 import sys
+import tempfile
 import unittest
 
 _TOOLS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -516,3 +519,88 @@ class StructuredDiagnosticsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JvmThreadCoresInstrumentTest(unittest.TestCase):
+    """FB-023 extended: java declares a third instrument.
+
+    Process cores cannot judge the java client. In a ``zlink-java`` send cell 94%
+    of process CPU is Core's native I/O threads running no user code, against 3%
+    in ``grpc-java``, so ``client_cores`` compares unlike quantities between the
+    two rows a 0.80 ratio divides; and the largest reading ever observed on this
+    machine was 0.154 of a 20-core ceiling, so the mark could not fire at all.
+    """
+
+    def _cell(self, **kwargs):
+        cell = Cell(key=CellKey("zlink-java", "request-window", 1024), run="java-router-1")
+        cell.throughput_per_second = 1000.0
+        for name, value in kwargs.items():
+            setattr(cell, name, value)
+        return cell
+
+    def test_declared_instrument_is_read_from_its_own_field(self):
+        cell = self._cell(
+            client_saturation_metric="jvm_thread_cores",
+            jvm_thread_cores=0.97,
+            client_cores=2.4,
+            client_parallelism_ceiling=1.0,
+        )
+        self.assertEqual(cell.saturation_metric, "jvm_thread_cores")
+        self.assertEqual(cell.saturation_value, 0.97)
+        self.assertTrue(cell.saturation_evaluated)
+        # 0.97 >= 0.95 * 1.0
+        self.assertTrue(cell.client_saturated)
+
+    def test_process_cores_do_not_decide_when_jvm_cores_are_declared(self):
+        # Process cores are far above the ceiling because Core's native I/O
+        # threads are counted; the declared instrument must ignore them.
+        cell = self._cell(
+            client_saturation_metric="jvm_thread_cores",
+            jvm_thread_cores=0.10,
+            client_cores=2.17,
+            client_parallelism_ceiling=1.0,
+        )
+        self.assertFalse(cell.client_saturated)
+
+    def test_missing_reading_is_not_judged_rather_than_unsaturated(self):
+        cell = self._cell(
+            client_saturation_metric="jvm_thread_cores",
+            client_parallelism_ceiling=1.0,
+        )
+        self.assertFalse(cell.saturation_evaluated)
+        self.assertFalse(cell.client_saturated)
+
+    def test_send_cell_is_judged_against_the_send_concurrency(self):
+        cell = Cell(key=CellKey("zlink-java", "send-saturation", 4096), run="java-router-1")
+        cell.throughput_per_second = 1000.0
+        cell.client_saturation_metric = "jvm_thread_cores"
+        cell.jvm_thread_cores = 7.7
+        cell.client_parallelism_ceiling = 8.0
+        self.assertTrue(cell.client_saturated)
+        cell.jvm_thread_cores = 3.0
+        self.assertFalse(cell.client_saturated)
+
+    def test_reader_accepts_the_field_from_cells_json(self):
+        payload = {
+            "schema": "with-grpc-cell-v1",
+            "cells": [
+                {
+                    "implementation": "zlink-java",
+                    "pattern": "request-window",
+                    "payload_size": 1024,
+                    "throughput_per_second": 1234.0,
+                    "bandwidth_mb_s": 1.263,
+                    "client_saturation_metric": "jvm_thread_cores",
+                    "jvm_thread_cores": 0.42,
+                    "client_parallelism_ceiling": 1,
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            run = pathlib.Path(directory) / "java-router-1"
+            run.mkdir()
+            (run / "cells.json").write_text(json.dumps(payload), encoding="utf-8")
+            cells, _notes = read_run(run)
+        self.assertEqual(len(cells), 1)
+        self.assertEqual(cells[0].jvm_thread_cores, 0.42)
+        self.assertEqual(cells[0].saturation_value, 0.42)

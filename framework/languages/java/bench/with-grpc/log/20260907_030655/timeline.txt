@@ -1,0 +1,28 @@
+2026-09-07T03:06:55+09:00 measured span begin: java=openjdk version "22.0.2" 2024-07-16 commit=dcded04dbe
+2026-09-07T03:06:55+09:00 loadavg at span begin: 0.63 0.62 0.56 3/737 77477
+2026-09-07T03:06:55+09:00 loadavg gate for java-router-1: 0.63
+2026-09-07T03:06:55+09:00 run java-router-1 start (raw-socket=router)
+2026-09-07T03:06:56+09:00 servers ready after 2s
+2026-09-07T03:16:22+09:00 run java-router-1 end rc=0
+2026-09-07T03:16:22+09:00 loadavg gate for java-router-2: 2.71
+2026-09-07T03:16:22+09:00 loadavg 2.71 >= 2.0; waiting
+2026-09-07T03:16:42+09:00 loadavg after wait for java-router-2: 1.94
+2026-09-07T03:16:42+09:00 run java-router-2 start (raw-socket=router)
+2026-09-07T03:16:43+09:00 servers ready after 2s
+2026-09-07T03:26:09+09:00 run java-router-2 end rc=0
+2026-09-07T03:26:09+09:00 loadavg gate for java-router-3: 3.89
+2026-09-07T03:26:09+09:00 loadavg 3.89 >= 2.0; waiting
+2026-09-07T03:26:54+09:00 loadavg after wait for java-router-3: 1.89
+2026-09-07T03:26:54+09:00 run java-router-3 start (raw-socket=router)
+2026-09-07T03:26:55+09:00 servers ready after 2s
+2026-09-07T03:36:22+09:00 run java-router-3 end rc=0
+2026-09-07T03:36:22+09:00 loadavg at span end: 4.30 2.53 1.91 1/736 87913
+2026-09-07T03:36:22+09:00 measured span end
+2026-09-07T03:43:51+09:00 measured span begin: java=openjdk version "22.0.2" 2024-07-16 commit=dcded04dbe
+2026-09-07T03:43:51+09:00 loadavg at span begin: 1.96 2.73 2.26 1/731 64044
+2026-09-07T03:43:51+09:00 loadavg gate for java-dealer-1: 1.96
+2026-09-07T03:43:51+09:00 run java-dealer-1 start (raw-socket=dealer)
+2026-09-07T03:43:52+09:00 servers ready after 2s
+2026-09-07T03:53:18+09:00 run java-dealer-1 end rc=0
+2026-09-07T03:53:18+09:00 loadavg at span end: 3.16 2.68 2.41 1/738 67354
+2026-09-07T03:53:18+09:00 measured span end

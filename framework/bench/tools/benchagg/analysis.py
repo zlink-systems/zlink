@@ -35,6 +35,7 @@ _MEDIAN_FIELDS = (
     "server_memory_mb",
     "client_cores",
     "event_loop_utilization",
+    "jvm_thread_cores",
     "drain_ms",
 )
 

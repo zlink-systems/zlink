@@ -1,0 +1,9 @@
+## Drain (FB-008)
+- grpc-java-send-saturation@1024: drain_ms=341 bound_hit=false bound_ms=30000
+- zlink-java-send-saturation@1024: drain_ms=306 bound_hit=false bound_ms=30000
+- zlink-framework-java-send-saturation@1024: drain_ms=2307 bound_hit=false bound_ms=30000
+- grpc-java-send-saturation@4096: drain_ms=311 bound_hit=false bound_ms=30000
+- zlink-java-send-saturation@4096: drain_ms=362 bound_hit=false bound_ms=30000
+- zlink-framework-java-send-saturation@4096: drain_ms=999 bound_hit=false bound_ms=30000
+
+## Failures

@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package zlink.framework.bench.withgrpc;
+
+option java_package = "systems.zlink.bench.withgrpc.proto";
+option java_outer_classname = "BenchProto";
+option java_multiple_files = true;
+
+import "google/protobuf/empty.proto";
+
+// FB-002: two RPCs only. No client-streaming RPC is added for the send row --
+// the send comparison uses this unary Command returning Empty.
+service BenchService {
+  rpc Echo(BenchPayload) returns (BenchPayload);
+  rpc Command(BenchPayload) returns (google.protobuf.Empty);
+}
+
+message BenchPayload {
+  bytes body = 1;
+}

@@ -1,0 +1,10 @@
+2026-09-07T03:26:56.248+09:00  INFO 84753 --- [           main] s.z.bench.withgrpc.client.BenchClient    : Starting BenchClient using Java 22.0.2 with PID 84753 (/home/hep7/project/zlink/framework/languages/java/bench/with-grpc/client/build/install/bench-client/lib/client.jar started by hep7 in /home/hep7/project/zlink/framework/languages/java/bench/with-grpc)
+2026-09-07T03:26:56.249+09:00  INFO 84753 --- [           main] s.z.bench.withgrpc.client.BenchClient    : No active profile set, falling back to 1 default profile: "default"
+2026-09-07T03:26:56.728+09:00  INFO 84753 --- [           main] systems.zlink.framework.runtime          : ZLink runtime status changed
+2026-09-07T03:26:56.729+09:00  INFO 84753 --- [           main] s.z.f.r.host.ZLinkFrameworkRuntime       : ZLINK_FRAMEWORK_READY
+2026-09-07T03:26:56.741+09:00  INFO 84753 --- [           main] s.z.bench.withgrpc.client.BenchClient    : Started BenchClient in 0.678 seconds (process running for 1.1)
+2026-09-07T03:26:56.759+09:00  INFO 84753 --- [-raw-mesh-bench] s.z.f.r.binding.ZLinkJavaRawMeshNode     : ZLINK_FRAMEWORK_PEER_READY mesh=bench peer=bench-server
+2026-09-07T03:36:19.751+09:00  INFO 84753 --- [           main] systems.zlink.framework.runtime          : ZLink runtime status changed
+2026-09-07T03:36:19.751+09:00  INFO 84753 --- [           main] systems.zlink.framework.runtime          : ZLink runtime status changed
+2026-09-07T03:36:19.754+09:00  INFO 84753 --- [mework-teardown] systems.zlink.framework.runtime          : ZLink runtime status changed
+2026-09-07T03:36:19.761+09:00  INFO 84753 --- [mework-teardown] systems.zlink.framework.runtime          : ZLink runtime status changed
