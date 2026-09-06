@@ -1537,3 +1537,8 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 ## D-128 (2026-09-06, 머신 A) 옛 perf 정책 트리 `framework/doc/framework/perf/`(README + bindings/{cpp,dotnet,java,node} ko/en 10개) 삭제
 
 - D-117로 전면 개정한 `framework/doc/framework/common/perf/README`가 시나리오 이름·CLI·schema·§17 언어별 표준 위치를 소유한다. 옛 트리는 이전 모델(`client_server_request_reply` 등 옛 이름, measurement_layer, BenchmarkDotNet 선택지)을 서술하고 공통 README §17과 중복이며, 문서·site·README 어디에서도 링크하지 않는다(link check bad 0). 언어별 도구·metadata는 phase 1 runner(`framework/languages/dotnet/perf/scripts/environment.py`, `collect_env.sh`)가 결과 파일에 기록하므로 별도 계획 문서가 필요 없다. 규칙 소유자 2 → 1.
+
+## D-129 (2026-09-06 15:30, 사용자 커밋 `973ebe30d5`) Core STREAM 송신은 `FINAL` 단일 part — `MORE`는 `NOT_SUPPORTED`+`ENOTSUP`; RAW 수신 record는 단일 part
+
+- 사용자가 직접 push한 Core 변경(STREAM pull delivery 단순화 + disconnect progress 수정, spec 4개 동반 개정: socket README, 08-stream, protocol/02-raw, 02-message). 감독자 main에 rebase로 통합(`76290abd2a` 이후).
+- 영향 범위 확인 의무: 6 binding의 STREAM 송신·수신 경로와 contract test, framework STREAM session(packet framing은 송신 multipart가 아니므로 계약상 영향 없음이 기대). rebuild15 뒤 최종 gate에 **binding gate 7종**(`bindings/<lang>/tests/run_tests.sh`)을 추가해 확인한다. hotpath_gate는 D-118 + 이 커밋이 합쳐진 Core로 재실행(worktree, Core 빌드 1개 규칙).
