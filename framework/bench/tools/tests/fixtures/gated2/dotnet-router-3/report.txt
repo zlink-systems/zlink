@@ -1,0 +1,187 @@
+  generated_utc: 2026-09-06T15:46:45.6850376+00:00
+  commit: d96e4b7031
+  cpu: Intel(R) Core(TM) Ultra 7 265K
+  os: Ubuntu 24.04.4 LTS
+  dotnet_sdk: 8.0.130
+  configuration: Release
+  payload_sizes: 1024,4096
+  request_window: 100
+  send_concurrency: 8
+  latency_sample_limit: 200000
+  warmup: 1000
+  duration_seconds: 5
+  grpc_url: http://127.0.0.1:5071
+  grpc_stats_url: http://127.0.0.1:5074
+  zlink_endpoint: tcp://127.0.0.1:5072
+  zlink_stats_url: http://127.0.0.1:5073
+  zlink_raw_endpoint: tcp://127.0.0.1:5075
+  zlink_raw_command_endpoint: tcp://127.0.0.1:5077
+  raw_socket: router
+  zlink_raw_stats_url: http://127.0.0.1:5076
+  result_json: /home/hep7/project/zlink/zlink-work/fwb-02/gated2/dotnet-router-3/results.json
+  report_txt: /home/hep7/project/zlink/zlink-work/fwb-02/gated2/dotnet-router-3/report.txt
+    Testing local:
+    Testing local:
+    Testing local:
+RESULT,current,grpc-dotnet-request-serial,local,1024,throughput,6851.000
+RESULT,current,grpc-dotnet-request-serial,local,1024,bandwidth,7.015
+RESULT,current,grpc-dotnet-request-serial,local,1024,latency,0.144
+RESULT,current,grpc-dotnet-request-serial,local,1024,latency_p95,0.260
+RESULT,current,grpc-dotnet-request-serial,local,1024,latency_p99,0.303
+RESULT,current,grpc-dotnet-request-serial,local,1024,client_cpu_percent,6.450
+RESULT,current,grpc-dotnet-request-serial,local,1024,client_memory_mb,115.773
+RESULT,current,grpc-dotnet-request-serial,local,1024,server_cpu_percent,5.460
+RESULT,current,grpc-dotnet-request-serial,local,1024,server_memory_mb,178.125
+RESULT,current,zlink-dotnet-request-serial,local,1024,throughput,7420.600
+RESULT,current,zlink-dotnet-request-serial,local,1024,bandwidth,7.599
+RESULT,current,zlink-dotnet-request-serial,local,1024,latency,0.133
+RESULT,current,zlink-dotnet-request-serial,local,1024,latency_p95,0.156
+RESULT,current,zlink-dotnet-request-serial,local,1024,latency_p99,0.188
+RESULT,current,zlink-dotnet-request-serial,local,1024,client_cpu_percent,3.630
+RESULT,current,zlink-dotnet-request-serial,local,1024,client_memory_mb,120.617
+RESULT,current,zlink-dotnet-request-serial,local,1024,server_cpu_percent,1.670
+RESULT,current,zlink-dotnet-request-serial,local,1024,server_memory_mb,119.375
+RESULT,current,zlink-framework-dotnet-request-serial,local,1024,throughput,1995.000
+RESULT,current,zlink-framework-dotnet-request-serial,local,1024,bandwidth,2.043
+RESULT,current,zlink-framework-dotnet-request-serial,local,1024,latency,0.500
+RESULT,current,zlink-framework-dotnet-request-serial,local,1024,latency_p95,0.657
+RESULT,current,zlink-framework-dotnet-request-serial,local,1024,latency_p99,0.910
+RESULT,current,zlink-framework-dotnet-request-serial,local,1024,client_cpu_percent,3.500
+RESULT,current,zlink-framework-dotnet-request-serial,local,1024,client_memory_mb,142.199
+RESULT,current,zlink-framework-dotnet-request-serial,local,1024,server_cpu_percent,8.160
+RESULT,current,zlink-framework-dotnet-request-serial,local,1024,server_memory_mb,437.188
+RESULT,current,grpc-dotnet-request-window,local,1024,throughput,201528.400
+RESULT,current,grpc-dotnet-request-window,local,1024,bandwidth,206.365
+RESULT,current,grpc-dotnet-request-window,local,1024,latency,0.457
+RESULT,current,grpc-dotnet-request-window,local,1024,latency_p95,1.447
+RESULT,current,grpc-dotnet-request-window,local,1024,latency_p99,1.967
+RESULT,current,grpc-dotnet-request-window,local,1024,client_cpu_percent,36.900
+RESULT,current,grpc-dotnet-request-window,local,1024,client_memory_mb,154.898
+RESULT,current,grpc-dotnet-request-window,local,1024,server_cpu_percent,29.280
+RESULT,current,grpc-dotnet-request-window,local,1024,server_memory_mb,486.828
+RESULT,current,zlink-dotnet-request-window,local,1024,throughput,36399.600
+RESULT,current,zlink-dotnet-request-window,local,1024,bandwidth,37.273
+RESULT,current,zlink-dotnet-request-window,local,1024,latency,0.221
+RESULT,current,zlink-dotnet-request-window,local,1024,latency_p95,0.352
+RESULT,current,zlink-dotnet-request-window,local,1024,latency_p99,0.420
+RESULT,current,zlink-dotnet-request-window,local,1024,client_cpu_percent,5.810
+RESULT,current,zlink-dotnet-request-window,local,1024,client_memory_mb,164.117
+RESULT,current,zlink-dotnet-request-window,local,1024,server_cpu_percent,2.150
+RESULT,current,zlink-dotnet-request-window,local,1024,server_memory_mb,341.094
+RESULT,current,zlink-framework-dotnet-request-window,local,1024,throughput,3663.200
+RESULT,current,zlink-framework-dotnet-request-window,local,1024,bandwidth,3.751
+RESULT,current,zlink-framework-dotnet-request-window,local,1024,latency,28.045
+RESULT,current,zlink-framework-dotnet-request-window,local,1024,latency_p95,104.709
+RESULT,current,zlink-framework-dotnet-request-window,local,1024,latency_p99,174.524
+RESULT,current,zlink-framework-dotnet-request-window,local,1024,client_cpu_percent,3.680
+RESULT,current,zlink-framework-dotnet-request-window,local,1024,client_memory_mb,195.367
+RESULT,current,zlink-framework-dotnet-request-window,local,1024,server_cpu_percent,5.240
+RESULT,current,zlink-framework-dotnet-request-window,local,1024,server_memory_mb,486.078
+RESULT,current,grpc-dotnet-send-saturation,local,1024,throughput,45283.200
+RESULT,current,grpc-dotnet-send-saturation,local,1024,bandwidth,46.370
+RESULT,current,grpc-dotnet-send-saturation,local,1024,latency,0.090
+RESULT,current,grpc-dotnet-send-saturation,local,1024,latency_p95,0.112
+RESULT,current,grpc-dotnet-send-saturation,local,1024,latency_p99,0.137
+RESULT,current,grpc-dotnet-send-saturation,local,1024,client_cpu_percent,9.310
+RESULT,current,grpc-dotnet-send-saturation,local,1024,client_memory_mb,197.414
+RESULT,current,grpc-dotnet-send-saturation,local,1024,server_cpu_percent,7.610
+RESULT,current,grpc-dotnet-send-saturation,local,1024,server_memory_mb,492.898
+RESULT,current,zlink-dotnet-send-saturation,local,1024,throughput,403641.600
+RESULT,current,zlink-dotnet-send-saturation,local,1024,bandwidth,413.329
+RESULT,current,zlink-dotnet-send-saturation,local,1024,latency,0.377
+RESULT,current,zlink-dotnet-send-saturation,local,1024,latency_p95,1.141
+RESULT,current,zlink-dotnet-send-saturation,local,1024,latency_p99,9.716
+RESULT,current,zlink-dotnet-send-saturation,local,1024,client_cpu_percent,15.770
+RESULT,current,zlink-dotnet-send-saturation,local,1024,client_memory_mb,188.926
+RESULT,current,zlink-dotnet-send-saturation,local,1024,server_cpu_percent,6.590
+RESULT,current,zlink-dotnet-send-saturation,local,1024,server_memory_mb,500.824
+RESULT,current,zlink-framework-dotnet-send-saturation,local,1024,throughput,47473.000
+RESULT,current,zlink-framework-dotnet-send-saturation,local,1024,bandwidth,48.612
+RESULT,current,zlink-framework-dotnet-send-saturation,local,1024,latency,1125.549
+RESULT,current,zlink-framework-dotnet-send-saturation,local,1024,latency_p95,2607.411
+RESULT,current,zlink-framework-dotnet-send-saturation,local,1024,latency_p99,2738.059
+RESULT,current,zlink-framework-dotnet-send-saturation,local,1024,client_cpu_percent,30.460
+RESULT,current,zlink-framework-dotnet-send-saturation,local,1024,client_memory_mb,1226.582
+RESULT,current,zlink-framework-dotnet-send-saturation,local,1024,server_cpu_percent,51.450
+RESULT,current,zlink-framework-dotnet-send-saturation,local,1024,server_memory_mb,2049.801
+RESULT,current,grpc-dotnet-request-serial,local,4096,throughput,6827.800
+RESULT,current,grpc-dotnet-request-serial,local,4096,bandwidth,27.967
+RESULT,current,grpc-dotnet-request-serial,local,4096,latency,0.144
+RESULT,current,grpc-dotnet-request-serial,local,4096,latency_p95,0.193
+RESULT,current,grpc-dotnet-request-serial,local,4096,latency_p99,0.236
+RESULT,current,grpc-dotnet-request-serial,local,4096,client_cpu_percent,5.660
+RESULT,current,grpc-dotnet-request-serial,local,4096,client_memory_mb,1231.227
+RESULT,current,grpc-dotnet-request-serial,local,4096,server_cpu_percent,5.370
+RESULT,current,grpc-dotnet-request-serial,local,4096,server_memory_mb,508.211
+RESULT,current,zlink-dotnet-request-serial,local,4096,throughput,7688.200
+RESULT,current,zlink-dotnet-request-serial,local,4096,bandwidth,31.491
+RESULT,current,zlink-dotnet-request-serial,local,4096,latency,0.127
+RESULT,current,zlink-dotnet-request-serial,local,4096,latency_p95,0.155
+RESULT,current,zlink-dotnet-request-serial,local,4096,latency_p99,0.218
+RESULT,current,zlink-dotnet-request-serial,local,4096,client_cpu_percent,4.000
+RESULT,current,zlink-dotnet-request-serial,local,4096,client_memory_mb,1232.320
+RESULT,current,zlink-dotnet-request-serial,local,4096,server_cpu_percent,1.530
+RESULT,current,zlink-dotnet-request-serial,local,4096,server_memory_mb,547.855
+RESULT,current,zlink-framework-dotnet-request-serial,local,4096,throughput,2221.600
+RESULT,current,zlink-framework-dotnet-request-serial,local,4096,bandwidth,9.100
+RESULT,current,zlink-framework-dotnet-request-serial,local,4096,latency,0.448
+RESULT,current,zlink-framework-dotnet-request-serial,local,4096,latency_p95,0.540
+RESULT,current,zlink-framework-dotnet-request-serial,local,4096,latency_p99,0.646
+RESULT,current,zlink-framework-dotnet-request-serial,local,4096,client_cpu_percent,3.580
+RESULT,current,zlink-framework-dotnet-request-serial,local,4096,client_memory_mb,1283.414
+RESULT,current,zlink-framework-dotnet-request-serial,local,4096,server_cpu_percent,7.910
+RESULT,current,zlink-framework-dotnet-request-serial,local,4096,server_memory_mb,1749.984
+RESULT,current,grpc-dotnet-request-window,local,4096,throughput,127192.800
+RESULT,current,grpc-dotnet-request-window,local,4096,bandwidth,520.982
+RESULT,current,grpc-dotnet-request-window,local,4096,latency,0.736
+RESULT,current,grpc-dotnet-request-window,local,4096,latency_p95,1.726
+RESULT,current,grpc-dotnet-request-window,local,4096,latency_p99,2.005
+RESULT,current,grpc-dotnet-request-window,local,4096,client_cpu_percent,33.850
+RESULT,current,grpc-dotnet-request-window,local,4096,client_memory_mb,1282.621
+RESULT,current,grpc-dotnet-request-window,local,4096,server_cpu_percent,29.520
+RESULT,current,grpc-dotnet-request-window,local,4096,server_memory_mb,509.617
+RESULT,current,zlink-dotnet-request-window,local,4096,throughput,35065.800
+RESULT,current,zlink-dotnet-request-window,local,4096,bandwidth,143.630
+RESULT,current,zlink-dotnet-request-window,local,4096,latency,0.222
+RESULT,current,zlink-dotnet-request-window,local,4096,latency_p95,0.357
+RESULT,current,zlink-dotnet-request-window,local,4096,latency_p99,0.424
+RESULT,current,zlink-dotnet-request-window,local,4096,client_cpu_percent,5.780
+RESULT,current,zlink-dotnet-request-window,local,4096,client_memory_mb,1286.840
+RESULT,current,zlink-dotnet-request-window,local,4096,server_cpu_percent,2.150
+RESULT,current,zlink-dotnet-request-window,local,4096,server_memory_mb,485.973
+RESULT,current,zlink-framework-dotnet-request-window,local,4096,throughput,2740.800
+RESULT,current,zlink-framework-dotnet-request-window,local,4096,bandwidth,11.226
+RESULT,current,zlink-framework-dotnet-request-window,local,4096,latency,35.429
+RESULT,current,zlink-framework-dotnet-request-window,local,4096,latency_p95,104.810
+RESULT,current,zlink-framework-dotnet-request-window,local,4096,latency_p99,107.148
+RESULT,current,zlink-framework-dotnet-request-window,local,4096,client_cpu_percent,3.190
+RESULT,current,zlink-framework-dotnet-request-window,local,4096,client_memory_mb,1351.477
+RESULT,current,zlink-framework-dotnet-request-window,local,4096,server_cpu_percent,4.280
+RESULT,current,zlink-framework-dotnet-request-window,local,4096,server_memory_mb,1750.969
+RESULT,current,grpc-dotnet-send-saturation,local,4096,throughput,41843.400
+RESULT,current,grpc-dotnet-send-saturation,local,4096,bandwidth,171.391
+RESULT,current,grpc-dotnet-send-saturation,local,4096,latency,0.101
+RESULT,current,grpc-dotnet-send-saturation,local,4096,latency_p95,0.127
+RESULT,current,grpc-dotnet-send-saturation,local,4096,latency_p99,0.170
+RESULT,current,grpc-dotnet-send-saturation,local,4096,client_cpu_percent,9.720
+RESULT,current,grpc-dotnet-send-saturation,local,4096,client_memory_mb,1350.820
+RESULT,current,grpc-dotnet-send-saturation,local,4096,server_cpu_percent,8.890
+RESULT,current,grpc-dotnet-send-saturation,local,4096,server_memory_mb,511.648
+RESULT,current,zlink-dotnet-send-saturation,local,4096,throughput,385029.000
+RESULT,current,zlink-dotnet-send-saturation,local,4096,bandwidth,1577.079
+RESULT,current,zlink-dotnet-send-saturation,local,4096,latency,0.557
+RESULT,current,zlink-dotnet-send-saturation,local,4096,latency_p95,4.107
+RESULT,current,zlink-dotnet-send-saturation,local,4096,latency_p99,7.258
+RESULT,current,zlink-dotnet-send-saturation,local,4096,client_cpu_percent,19.090
+RESULT,current,zlink-dotnet-send-saturation,local,4096,client_memory_mb,1352.391
+RESULT,current,zlink-dotnet-send-saturation,local,4096,server_cpu_percent,7.990
+RESULT,current,zlink-dotnet-send-saturation,local,4096,server_memory_mb,502.289
+RESULT,current,zlink-framework-dotnet-send-saturation,local,4096,throughput,44921.400
+RESULT,current,zlink-framework-dotnet-send-saturation,local,4096,bandwidth,183.998
+RESULT,current,zlink-framework-dotnet-send-saturation,local,4096,latency,1555.895
+RESULT,current,zlink-framework-dotnet-send-saturation,local,4096,latency_p95,2970.658
+RESULT,current,zlink-framework-dotnet-send-saturation,local,4096,latency_p99,3095.129
+RESULT,current,zlink-framework-dotnet-send-saturation,local,4096,client_cpu_percent,30.750
+RESULT,current,zlink-framework-dotnet-send-saturation,local,4096,client_memory_mb,3922.547
+RESULT,current,zlink-framework-dotnet-send-saturation,local,4096,server_cpu_percent,52.230
+RESULT,current,zlink-framework-dotnet-send-saturation,local,4096,server_memory_mb,3964.035

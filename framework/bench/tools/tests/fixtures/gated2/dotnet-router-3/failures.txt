@@ -1,0 +1,9 @@
+## Drain (FB-008)
+- grpc-dotnet-send-saturation: server drained in 235 ms
+- zlink-dotnet-send-saturation: server drained in 359 ms
+- zlink-framework-dotnet-send-saturation: server drained in 14479 ms
+- grpc-dotnet-send-saturation: server drained in 216 ms
+- zlink-dotnet-send-saturation: server drained in 363 ms
+- zlink-framework-dotnet-send-saturation: server drained in 13286 ms
+
+## Failures

@@ -128,7 +128,7 @@ DEALER→ROUTER 구성은 `--raw-socket dealer` 옵션으로 남아 있으며, �
 | `zlink-c` | 83.5 | 87.6 |
 | `grpc-dotnet` | 93.6 | 95.8 |
 | **`zlink-dotnet`** | **8.0** | **7.7** |
-| `zlink-framework-dotnet` | 102.7 | 98.6 |
+| `zlink-framework-dotnet` | 102.7 | 98.7 |
 
 `zlink-dotnet`만 100에서 크게 벗어난다. 이 값의 의미는 §6에서 설명한다.
 

@@ -1,0 +1,57 @@
+[bench] request payload=1024 mode=serial
+[bench] running grpc-dotnet-request-serial
+[bench] finished grpc-dotnet-request-serial
+[bench] running zlink-dotnet-request-serial
+[bench] finished zlink-dotnet-request-serial
+[bench] running zlink-framework-dotnet-request-serial
+[bench] finished zlink-framework-dotnet-request-serial
+[bench] request payload=1024 mode=window window=100
+[bench] running grpc-dotnet-request-window
+[bench] finished grpc-dotnet-request-window
+[bench] running zlink-dotnet-request-window
+[bench] window zlink-dotnet-request-window: peak_in_flight=97 of 100 abandoned=0
+[bench] finished zlink-dotnet-request-window
+[bench] running zlink-framework-dotnet-request-window
+[bench] finished zlink-framework-dotnet-request-window
+[bench] send payload=1024 concurrency=8
+[bench] running grpc-dotnet-send-saturation
+[bench] drain grpc-dotnet-send-saturation: 243 ms bound_hit=False
+[bench] boundary grpc-dotnet-send-saturation: server_received_at_close=231946 post_drain=231946 drain_ms=243
+[bench] finished grpc-dotnet-send-saturation
+[bench] running zlink-dotnet-send-saturation
+[bench] drain zlink-dotnet-send-saturation: 361 ms bound_hit=False
+[bench] boundary zlink-dotnet-send-saturation: server_received_at_close=2059374 post_drain=2059374 drain_ms=361
+[bench] finished zlink-dotnet-send-saturation
+[bench] running zlink-framework-dotnet-send-saturation
+[bench] drain zlink-framework-dotnet-send-saturation: 16674 ms bound_hit=False
+[bench] boundary zlink-framework-dotnet-send-saturation: server_received_at_close=233143 post_drain=712881 drain_ms=16674
+[bench] finished zlink-framework-dotnet-send-saturation
+[bench] request payload=4096 mode=serial
+[bench] running grpc-dotnet-request-serial
+[bench] finished grpc-dotnet-request-serial
+[bench] running zlink-dotnet-request-serial
+[bench] finished zlink-dotnet-request-serial
+[bench] running zlink-framework-dotnet-request-serial
+[bench] finished zlink-framework-dotnet-request-serial
+[bench] request payload=4096 mode=window window=100
+[bench] running grpc-dotnet-request-window
+[bench] finished grpc-dotnet-request-window
+[bench] running zlink-dotnet-request-window
+[bench] window zlink-dotnet-request-window: peak_in_flight=100 of 100 abandoned=0
+[bench] finished zlink-dotnet-request-window
+[bench] running zlink-framework-dotnet-request-window
+[bench] finished zlink-framework-dotnet-request-window
+[bench] send payload=4096 concurrency=8
+[bench] running grpc-dotnet-send-saturation
+[bench] drain grpc-dotnet-send-saturation: 222 ms bound_hit=False
+[bench] boundary grpc-dotnet-send-saturation: server_received_at_close=207576 post_drain=207576 drain_ms=222
+[bench] finished grpc-dotnet-send-saturation
+[bench] running zlink-dotnet-send-saturation
+[bench] drain zlink-dotnet-send-saturation: 374 ms bound_hit=False
+[bench] boundary zlink-dotnet-send-saturation: server_received_at_close=1915387 post_drain=1915387 drain_ms=374
+[bench] finished zlink-dotnet-send-saturation
+[bench] running zlink-framework-dotnet-send-saturation
+[bench] drain zlink-framework-dotnet-send-saturation: 12968 ms bound_hit=False
+[bench] boundary zlink-framework-dotnet-send-saturation: server_received_at_close=215867 post_drain=604556 drain_ms=12968
+[bench] finished zlink-framework-dotnet-send-saturation
+[bench] cells completed=18 failed=0 contaminated=0
