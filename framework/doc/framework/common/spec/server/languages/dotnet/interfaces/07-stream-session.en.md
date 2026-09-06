@@ -184,8 +184,10 @@ A different Actor binding of the same Session and
 the physical STREAM connection aren't changed.
 
 `RelayAsync(...)` is a one-way operation that completes normally once the
-Actor relay accepts source-local admission. A request reply is submitted
-explicitly through the session callback's `IZLinkSessionClient.Reply(...)`.
+Actor relay accepts source-local admission. For a request relayed to a bound Actor,
+the typed reply returned by the Actor handler completes the original STREAM
+correlation once ([Session–Actor binding §12](../../../04-session/02-session-actor-binding.en.md#12-failure-and-errors)).
+Only a request the session callback handles itself is submitted through `IZLinkSessionClient.Reply(...)`.
 
 Packet and lifecycle callbacks of the same session run serially.
 Handshake and node-scope errors are reported through runtime monitoring

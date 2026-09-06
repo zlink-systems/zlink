@@ -323,11 +323,15 @@ class session_actor_t {
 public:
  const actor_ref_t &ref() const noexcept;
  task_t<void> relay(const message_t &payload);
- task_t<void> relay(
- const session_message_context_t &context,
- const message_t &payload);
+ task_t<void> relay(std::string packet_name, const message_t &payload);
+ relay_request_call_t relay_request(const message_t &payload);
+ relay_request_call_t relay_request(std::string packet_name, const message_t &payload);
  task_t<void> notify_disconnected();
 };
+
+`relay(...)` is the common contract's one-way push. `relay_request(...)` and the `packet_name`
+overloads are C++-only surfaces; the common [Session–Actor binding](../../../04-session/02-session-actor-binding.en.md)
+defines no Actor-to-session request. Aligning this surface with the other languages is a 0.18.0 candidate.
 
 class session_actor_manager_t {
 public:

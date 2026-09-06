@@ -170,7 +170,9 @@ Relocation은 같은 ObjectGeneration을 유지하며 해당 Actor의 binding ro
 다른 Actor binding과 physical STREAM connection은 변경하지 않는다.
 
 `RelayAsync(...)`는 Actor relay가 source-local admission을 수락하면 정상 완료하는 one-way operation이다.
-Request reply는 session callback의 `IZLinkSessionClient.Reply(...)`로 명시적으로 제출한다.
+Bound Actor로 relay된 request의 reply는 Actor handler가 반환한 typed reply가 original STREAM correlation을
+한 번 완료한다([Session–Actor binding §12](../../../04-session/02-session-actor-binding.ko.md#12-실패와-오류)).
+Session callback이 직접 처리하는 request만 `IZLinkSessionClient.Reply(...)`로 제출한다.
 
 같은 session의 packet과 lifecycle callback은 직렬로 실행한다. Handshake와 node 범위 오류는 runtime
 monitoring으로 보고하며 `OnErrorAsync(...)`에 전달하지 않는다.
