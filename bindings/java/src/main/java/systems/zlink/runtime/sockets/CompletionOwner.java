@@ -269,16 +269,6 @@ final class CompletionOwner implements AutoCloseable {
         }
     }
 
-    void markTargetRemoved(RoutingId target) {
-        // A WRITABLE record may already be queued when disconnectRid wins.
-        // Mark the Java-owned retry state before it can consume that stale
-        // wake and reclassify its retry as a fresh missing-route failure.
-        for (Pending<?> state : new ArrayList<>(pending.values())) {
-            if (Objects.equals(state.target, target))
-                state.markTargetRemoved();
-        }
-    }
-
     NoWaitAttempt trackNoWaitSend(RoutingId target,
                                    NoWaitSubmitter submitter) {
         Objects.requireNonNull(submitter, "submitter");
@@ -819,9 +809,7 @@ final class CompletionOwner implements AutoCloseable {
         if (isWritableWait(attempt)) {
             state.armWritable(attempt.completionId());
         } else {
-            state.reject(state.targetRemoved()
-                ? new ZlinkSubmitException(SubmitResult.NOT_FOUND)
-                : submitFailure(attempt));
+            state.reject(submitFailure(attempt));
         }
     }
 
@@ -852,9 +840,7 @@ final class CompletionOwner implements AutoCloseable {
         if (isWritableWait(attempt)) {
             state.armWritable(attempt.completionId());
         } else {
-            state.reject(state.targetRemoved()
-                ? new ZlinkRequestException(RequestResult.NOT_FOUND)
-                : submitFailure(attempt));
+            state.reject(submitFailure(attempt));
         }
     }
 
@@ -981,7 +967,6 @@ final class CompletionOwner implements AutoCloseable {
         private long completionId;
         private Object result;
         private boolean requestAdmitted;
-        private boolean targetRemoved;
 
         Pending(long token, PendingKind kind, RoutingId target,
                 List<Message> retained, int requestTimeoutMs) {
@@ -1025,14 +1010,6 @@ final class CompletionOwner implements AutoCloseable {
                     requestAdmitted = false;
             }
             signalDrainProgress();
-        }
-
-        synchronized void markTargetRemoved() {
-            targetRemoved = true;
-        }
-
-        synchronized boolean targetRemoved() {
-            return targetRemoved;
         }
 
         void capture(Object value) {
@@ -1106,19 +1083,9 @@ final class CompletionOwner implements AutoCloseable {
                     failure = new ZlinkSubmitException(
                         SubmitResult.INTERNAL_ERROR);
                 } else if (completion.sendResult() == SEND_TERMINAL) {
-                    if (targetRemoved) {
-                        failure = kind == PendingKind.REQUEST
-                            ? new ZlinkRequestException(
-                                RequestResult.NOT_FOUND)
-                            : new ZlinkSubmitException(
-                                SubmitResult.NOT_FOUND);
-                    } else {
-                        failure = kind == PendingKind.REQUEST
-                            ? terminalRequestFailure(
-                                completion.terminalErrno())
-                            : terminalSendFailure(
-                                completion.terminalErrno());
-                    }
+                    failure = kind == PendingKind.REQUEST
+                        ? terminalRequestFailure(completion.terminalErrno())
+                        : terminalSendFailure(completion.terminalErrno());
                 } else if (completion.sendResult() != SEND_ADMITTED) {
                     failure = new ZlinkSubmitException(
                         SubmitResult.INTERNAL_ERROR,

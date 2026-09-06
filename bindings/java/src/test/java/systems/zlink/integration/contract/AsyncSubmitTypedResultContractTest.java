@@ -136,14 +136,26 @@ class AsyncSubmitTypedResultContractTest {
                  DealerSocket dealer = context.createDealerSocket()) {
                 configureSmallHwm(router);
                 configureSmallHwm(dealer);
-                connect(transport, router, dealer, dealerId, "terminal");
-
-                PendingSend pending = fillUntilBackpressured(router,
-                    dealerId);
+                // Weight zero keeps this token unissued until removal. HWM
+                // can recover as the TCP I/O thread drains, publishing a
+                // WRITABLE whose later resubmit correctly sees NOT_CONNECTED.
+                dealer.options().peerWeight(0);
+                dealer.setRoutingId(dealerId);
+                String endpoint = transport.endpoint("terminal");
+                router.bind(endpoint);
+                dealer.connect(endpoint);
+                dealer.send().message(Message.from("ready")).submit_sync();
+                try (Received received = new Received()) {
+                    assertTrue(router.recv(received, RecvFlags.NONE));
+                    assertEquals(dealerId, received.getRoutingId().orElseThrow());
+                }
+                CompletableFuture<Void> pending = router.send(dealerId)
+                    .message(Message.from(payload(0))).submit().toCompletableFuture();
+                assertFalse(pending.isDone(), "zero-weight target must retain its wait token");
                 router.disconnectRid(dealerId);
 
                 ExecutionException terminal = assertThrows(
-                    ExecutionException.class, () -> pending.completion().get(
+                    ExecutionException.class, () -> pending.get(
                         TestSupport.DEFAULT_TIMEOUT_MS,
                         TimeUnit.MILLISECONDS));
                 ZlinkSubmitException failure = (ZlinkSubmitException)
