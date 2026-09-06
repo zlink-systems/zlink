@@ -638,7 +638,10 @@ final class ZLinkClientServerM6ARuntimeTest {
         try {
             runtime.start(List.of(client, server)).toCompletableFuture().join();
 
-            assertSame(dealer, sockets.clientForOutbound("orders"));
+            assertSame(
+                dealer,
+                sockets.awaitClientForOutbound(
+                    "orders", Duration.ofSeconds(1)));
             runtime.stop().toCompletableFuture().join();
         } finally {
             runtime.close();
