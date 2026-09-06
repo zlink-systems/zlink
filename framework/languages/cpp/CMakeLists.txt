@@ -1716,6 +1716,23 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   set_tests_properties(test_cpp_framework_gtest_harness PROPERTIES
     LABELS "framework-unit;framework-regression;gtest"
     TIMEOUT 30)
+  add_executable(test_cpp_framework_redis_blob_bound
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_redis_blob_bound.cpp)
+  zlink_enable_coverage(test_cpp_framework_redis_blob_bound)
+  target_compile_features(test_cpp_framework_redis_blob_bound PRIVATE cxx_std_20)
+  target_compile_definitions(test_cpp_framework_redis_blob_bound PRIVATE
+    ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
+  target_include_directories(test_cpp_framework_redis_blob_bound BEFORE PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/fake_redis
+    ${ZLINK_FRAMEWORK_CPP_DIR}/extensions/framework-locations-redis/include)
+  target_link_libraries(test_cpp_framework_redis_blob_bound PRIVATE
+    zlink::framework
+    GTest::gtest_main)
+  add_test(NAME test_cpp_framework_redis_blob_bound
+    COMMAND test_cpp_framework_redis_blob_bound)
+  set_tests_properties(test_cpp_framework_redis_blob_bound PROPERTIES
+    LABELS "framework-unit;framework-regression;framework-location;redis"
+    TIMEOUT 30)
   if(TARGET redis++::redis++ OR TARGET redis++::redis++_static)
     add_executable(test_cpp_framework_locations_redis
       tests/Zlink.Framework.UnitTests/test_cpp_framework_locations_redis.cpp)

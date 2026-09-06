@@ -967,8 +967,9 @@ class redis_relocation_store_t final : public relocation_store_t
                                    std::chrono::milliseconds retention) override
     {
         validate (reference, retention);
-        if (payload.size () > 64u * 1024u * 1024u)
-            throw std::invalid_argument ("relocation blob exceeds 64 MiB");
+        // Provider input includes the data chunk's 23-byte immutable envelope.
+        if (payload.size () > 64u * 1024u * 1024u + 23u)
+            throw std::invalid_argument ("relocation encoded blob exceeds 64 MiB + 23 bytes");
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
         std::vector<std::byte> owned (payload.begin (), payload.end ());
         return _worker.submit<blob_put_result_t> (
