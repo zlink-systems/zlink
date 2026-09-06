@@ -31,9 +31,7 @@ void make_rid (const char *value_, zlink_routing_id_t *out_)
 
 void recv_router_payload_expect_success (void *router_, const char *payload_)
 {
-    char source[256];
-    TEST_ASSERT_GREATER_THAN (0, zlink_recv (router_, source, sizeof (source), 0));
-    recv_string_expect_success (router_, payload_, 0);
+    recv_routed_string_expect_success (router_, payload_);
 }
 
 //  Send a directed payload by RID until the route is admitted, then confirm the
@@ -183,12 +181,12 @@ void back_to_back_aliases_bind_distinct_routes ()
     directed_send_when_ready (client, &rid_a, server_a, "to-a");
     //  The A payload must not have leaked to server B.
     TEST_ASSERT_FAILURE_ERRNO (EAGAIN,
-                               zlink_recv (server_b, buffer, sizeof (buffer), 0));
+                               test_recv_router (server_b, buffer, sizeof (buffer), 0));
 
     directed_send_when_ready (client, &rid_b, server_b, "to-b");
     //  And the B payload must not have leaked to server A.
     TEST_ASSERT_FAILURE_ERRNO (EAGAIN,
-                               zlink_recv (server_a, buffer, sizeof (buffer), 0));
+                               test_recv_router (server_a, buffer, sizeof (buffer), 0));
 
     test_context_socket_close_zero_linger (client);
     test_context_socket_close_zero_linger (server_a);

@@ -11,7 +11,7 @@ void expect_no_additional_probe (void *server_)
 {
     unsigned char buffer[1];
     errno = 0;
-    TEST_ASSERT_EQUAL_INT (-1, zlink_recv (server_, buffer, sizeof (buffer), ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (-1, test_recv_router (server_, buffer, sizeof (buffer), ZLINK_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
 }
 }
@@ -33,20 +33,16 @@ void test_probe_router_router ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, my_endpoint));
 
     //  We expect a routing id=X + empty message from client
-    recv_string_expect_success (server, "X", 0);
-    unsigned char buffer[255];
-    TEST_ASSERT_EQUAL_INT (0, TEST_ASSERT_SUCCESS_ERRNO (zlink_recv (server, buffer, 255, 0)));
+    recv_routed_string_expect_success (server, "", "X");
     expect_no_additional_probe (server);
 
     //  Send a message to client now
-    send_string_expect_success (server, "X", ZLINK_SNDMORE);
-    send_string_expect_success (server, "Hello", 0);
+    send_routed_string_expect_success (server, "X", "Hello");
 
     // receive the routing ID, which is auto-generated in this case, since the
     // peer did not set one explicitly
-    TEST_ASSERT_EQUAL_INT (16, TEST_ASSERT_SUCCESS_ERRNO (zlink_recv (client, buffer, 255, 0)));
-
-    recv_string_expect_success (client, "Hello", 0);
+    const zlink_routing_id_t source = recv_routed_string_expect_success (client, "Hello");
+    TEST_ASSERT_EQUAL_INT (16, source.size);
 
     test_context_socket_close (server);
     test_context_socket_close (client);
@@ -69,14 +65,11 @@ void test_probe_router_dealer ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, my_endpoint));
 
     //  We expect a routing id=X + empty message from client
-    recv_string_expect_success (server, "X", 0);
-    unsigned char buffer[255];
-    TEST_ASSERT_EQUAL_INT (0, TEST_ASSERT_SUCCESS_ERRNO (zlink_recv (server, buffer, 255, 0)));
+    recv_routed_string_expect_success (server, "", "X");
     expect_no_additional_probe (server);
 
     //  Send a message to client now
-    send_string_expect_success (server, "X", ZLINK_SNDMORE);
-    send_string_expect_success (server, "Hello", 0);
+    send_routed_string_expect_success (server, "X", "Hello");
 
     recv_string_expect_success (client, "Hello", 0);
 
@@ -99,10 +92,7 @@ void test_probe_router_router_inproc ()
       zlink_set_router_option (client, ZLINK_ROUTER_OPT_PROBE, &probe, sizeof (probe)));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, "inproc://probe-router-router"));
 
-    recv_string_expect_success (server, "X", 0);
-    unsigned char buffer[1];
-    TEST_ASSERT_EQUAL_INT (
-      0, TEST_ASSERT_SUCCESS_ERRNO (zlink_recv (server, buffer, sizeof (buffer), 0)));
+    recv_routed_string_expect_success (server, "", "X");
     expect_no_additional_probe (server);
 
     test_context_socket_close (server);
@@ -132,17 +122,13 @@ void test_probe_dealer_inproc_connect_before_bind_preserves_application_gate ()
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_bind (server, "inproc://probe-dealer-deferred-bind"));
 
-    recv_string_expect_success (server, "X", 0);
-    unsigned char buffer[1];
-    TEST_ASSERT_EQUAL_INT (
-      0, TEST_ASSERT_SUCCESS_ERRNO (zlink_recv (server, buffer, sizeof (buffer), 0)));
+    recv_routed_string_expect_success (server, "", "X");
     expect_no_additional_probe (server);
 
     // Once admission is Ready, the same Application lane accepts and delivers
     // ordinary payload without replaying the earlier rejected send.
     send_string_expect_success (client, "ready", 0);
-    recv_string_expect_success (server, "X", 0);
-    recv_string_expect_success (server, "ready", 0);
+    recv_routed_string_expect_success (server, "ready", "X");
     expect_no_additional_probe (server);
 
     test_context_socket_close (server);

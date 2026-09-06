@@ -3,6 +3,7 @@
 #include "../testutil_unity.hpp"
 
 #include "core/auto_hwm_policy.hpp"
+#include "core/msg.hpp"
 #include "core/ctx_physical_queue_registry.hpp"
 
 #include <atomic>

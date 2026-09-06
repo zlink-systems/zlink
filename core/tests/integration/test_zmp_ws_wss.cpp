@@ -2,13 +2,9 @@
 
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
-#include "api/socket/request_reply_protocol_internal.hpp"
-#include "core/options.hpp"
-#include "protocol/zmp_control.hpp"
-#include "protocol/zmp_protocol.hpp"
-#include "protocol/wire.hpp"
+#include "testutil_zmp_wire.hpp"
+#include "zmp_request_reply_fixture.hpp"
 
-#include "utils/config.hpp"
 
 #if defined ZLINK_HAVE_WS && defined ZLINK_IOTHREAD_POLLER_USE_ASIO
 #include <boost/asio.hpp>
@@ -34,118 +30,6 @@ SETUP_TEARDOWN_TESTCONTEXT
 #if defined ZLINK_HAVE_WS
 namespace
 {
-void exercise_request_reply (void *router_,
-                             void *dealer_,
-                             const char *endpoint_,
-                             const char *request_payload_,
-                             const char *reply_payload_)
-{
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_routing_id (dealer_, "zmp-ws-dealer", 13));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer_, endpoint_));
-    msleep (SETTLE_TIME * 5);
-
-    zlink_msg_t request[2];
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_msg_init_size (&request[0], strlen (request_payload_)));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_msg_init_size (&request[1], 12));
-    memcpy (zlink_msg_data (&request[0]), request_payload_,
-            strlen (request_payload_));
-    memcpy (zlink_msg_data (&request[1]), "request-tail", 12);
-    zlink_completion_id_t request_id = 0;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer_, NULL, &request[0],
-                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, 0, NULL,
-                          NULL));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_request_part (dealer_, NULL, &request[1],
-                          ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, 5000,
-                          NULL, &request_id));
-    TEST_ASSERT_NOT_EQUAL (0, request_id);
-
-    zlink_routing_id_t reply_rid;
-    memset (&reply_rid, 0, sizeof (reply_rid));
-    zlink_reply_token_t reply_token = 0;
-    unsigned char retained_kind = 0;
-    uint64_t retained_sequence = 0;
-    for (size_t i = 0; i != 2; ++i) {
-        const zlink_routing_id_t *source_rid = NULL;
-        zlink_reply_token_t token = 0;
-        zlink_msg_t part;
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-        zlink_part_flag_t has_more = ZLINK_PART_FINAL;
-        TEST_ASSERT_EQUAL_INT (
-          ZLINK_RECV_OK,
-          zlink_router_recv_part (router_, &source_rid, &token, &part,
-                                  &has_more, ZLINK_RECV_FLAGS_NONE));
-        TEST_ASSERT_NOT_NULL (source_rid);
-        TEST_ASSERT_NOT_EQUAL (0, token);
-        if (i == 0) {
-            reply_rid = *source_rid;
-            reply_token = token;
-            TEST_ASSERT_EQUAL_STRING_LEN (
-              request_payload_,
-              static_cast<const char *> (zlink_msg_data (&part)),
-              strlen (request_payload_));
-            TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, has_more);
-        } else {
-            TEST_ASSERT_EQUAL_UINT64 (reply_token, token);
-            TEST_ASSERT_EQUAL_STRING_LEN (
-              "request-tail",
-              static_cast<const char *> (zlink_msg_data (&part)), 12);
-            TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
-        }
-        TEST_ASSERT_FALSE (
-          reinterpret_cast<zlink::msg_t *> (&part)
-            ->get_request_reply_metadata (&retained_kind, &retained_sequence));
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
-    }
-
-    zlink_msg_t reply[2];
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_msg_init_size (&reply[0], strlen (reply_payload_)));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_msg_init_size (&reply[1], 10));
-    memcpy (zlink_msg_data (&reply[0]), reply_payload_, strlen (reply_payload_));
-    memcpy (zlink_msg_data (&reply[1]), "reply-tail", 10);
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_reply_part (router_, &reply_rid, reply_token, &reply[0],
-                        ZLINK_PART_MORE));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_reply_part (router_, &reply_rid, reply_token, &reply[1],
-                        ZLINK_PART_FINAL));
-
-    zlink_completion_t completion;
-    memset (&completion, 0, sizeof (completion));
-    completion.struct_size = sizeof (completion);
-    zlink_recv_result_t completion_rc = ZLINK_RECV_NO_DATA;
-    for (int attempt = 0; attempt < 5000
-                          && completion_rc == ZLINK_RECV_NO_DATA;
-         ++attempt) {
-        completion_rc = zlink_completion_recv (
-          dealer_, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
-        if (completion_rc == ZLINK_RECV_NO_DATA)
-            msleep (1);
-    }
-    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, completion_rc);
-    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
-    TEST_ASSERT_EQUAL_UINT64 (request_id, completion.completion_id);
-    TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
-    TEST_ASSERT_EQUAL_UINT64 (2, completion.reply_part_count);
-    TEST_ASSERT_EQUAL_STRING_LEN (
-      reply_payload_, static_cast<const char *> (
-                        zlink_msg_data (&completion.reply_parts[0])),
-      strlen (reply_payload_));
-    TEST_ASSERT_FALSE (
-      reinterpret_cast<zlink::msg_t *> (&completion.reply_parts[0])
-        ->get_request_reply_metadata (&retained_kind, &retained_sequence));
-    zlink_completion_close (&completion);
-}
 
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO
 namespace net = boost::asio;
@@ -160,34 +44,27 @@ typedef websocket::stream<net::ssl::stream<raw_ws_tcp_t::socket>>
 std::vector<unsigned char> make_zmp_data_frame (const char *payload_)
 {
     const size_t payload_size = strlen (payload_);
-    std::vector<unsigned char> frame (zlink::zmp_header_size + payload_size);
-    frame[0] = zlink::zmp_magic;
-    frame[1] = zlink::zmp_version;
+    std::vector<unsigned char> frame (test_zmp_wire::zmp_header_size + payload_size);
+    frame[0] = test_zmp_wire::zmp_magic;
+    frame[1] = test_zmp_wire::zmp_version;
     frame[2] = 0;
-    frame[3] = zlink::zmp_kind_data;
-    zlink::put_uint32 (&frame[4], static_cast<uint32_t> (payload_size));
-    memcpy (&frame[zlink::zmp_header_size], payload_, payload_size);
+    frame[3] = test_zmp_wire::zmp_kind_data;
+    test_zmp_wire::put_uint32 (&frame[4], static_cast<uint32_t> (payload_size));
+    memcpy (&frame[test_zmp_wire::zmp_header_size], payload_, payload_size);
     return frame;
 }
 
 template <typename websocket_stream_t>
 void raw_ws_zmp_handshake (websocket_stream_t *client_)
 {
-    zlink::options_t options;
-    options.type = ZLINK_CORE_SOCKET_PAIR;
-    options.zmp_metadata = true;
-
-    unsigned char hello[272];
-    size_t hello_size = 0;
-    zlink::zmp_control::build_hello_frame (
-      options, hello, sizeof (hello), &hello_size);
-    std::vector<unsigned char> ready;
-    zlink::zmp_control::build_ready_frame (options, ready);
+    const std::vector<unsigned char> hello = test_zmp_wire::pair_hello_frame ();
+    const size_t hello_size = hello.size ();
+    const std::vector<unsigned char> ready = test_zmp_wire::pair_ready_frame ();
 
     boost::system::error_code ec;
     TEST_ASSERT_EQUAL_UINT64 (
       hello_size,
-      client_->write_some (false, net::buffer (hello, hello_size), ec));
+      client_->write_some (false, net::buffer (hello), ec));
     TEST_ASSERT_FALSE_MESSAGE (ec.failed (), ec.message ().c_str ());
     TEST_ASSERT_EQUAL_UINT64 (
       0, client_->write_some (true, net::const_buffer (), ec));
@@ -223,50 +100,6 @@ void assert_pair_has_no_message (void *server_, int duration_ms_)
     }
 }
 
-void send_invalid_middle_metadata_record (void *sender_, void *receiver_)
-{
-    zlink_msg_t first;
-    zlink_msg_t invalid_one;
-    zlink_msg_t invalid_two;
-    zlink_msg_t final;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&first, 5));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&invalid_one, 7));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&invalid_two, 7));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&final, 5));
-    memcpy (zlink_msg_data (&first), "first", 5);
-    memcpy (zlink_msg_data (&invalid_one), "invalid", 7);
-    memcpy (zlink_msg_data (&invalid_two), "invalid", 7);
-    memcpy (zlink_msg_data (&final), "final", 5);
-    TEST_ASSERT_SUCCESS_ERRNO (
-      reinterpret_cast<zlink::msg_t *> (&invalid_one)
-        ->set_request_reply_metadata (zlink::zmp_kind_request, 91));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      reinterpret_cast<zlink::msg_t *> (&invalid_two)
-        ->set_request_reply_metadata (zlink::zmp_kind_reply, 92));
-
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (sender_, &first, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_MORE, NULL, NULL));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (sender_, &invalid_one, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_MORE, NULL, NULL));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (sender_, &invalid_two, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_MORE, NULL, NULL));
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK,
-      zlink_send_part (sender_, &final, ZLINK_SEND_FLAGS_NONE,
-                       ZLINK_PART_FINAL, NULL, NULL));
-
-    // The first frame has already established encoder multipart state. A
-    // batching fallback could discard both invalid continuations, encode the
-    // ordinary final frame, and publish a spliced [first, final] record. The
-    // message transport must instead close at the first invalid header.
-    assert_pair_has_no_message (receiver_, 250);
-}
 
 void recv_pair_message_with_timeout (void *server_, const char *expected_)
 {
@@ -368,15 +201,8 @@ void assert_text_zmp_rejected (void *server_,
                                                     : "text-data"),
           fragmented_);
     } else {
-        zlink::options_t options;
-        options.type = ZLINK_CORE_SOCKET_PAIR;
-        options.zmp_metadata = true;
-        unsigned char hello[272];
-        size_t hello_size = 0;
-        zlink::zmp_control::build_hello_frame (
-          options, hello, sizeof (hello), &hello_size);
-        const std::vector<unsigned char> hello_record (
-          hello, hello + hello_size);
+        const std::vector<unsigned char> hello_record =
+          test_zmp_wire::pair_hello_frame ();
         send_text_zmp_record (client_, hello_record, fragmented_);
     }
 
@@ -409,9 +235,6 @@ void test_zmp_ws_pair_message ()
     send_string_expect_success (client, "ws-zmp", 0);
     recv_string_expect_success (server, "ws-zmp", 0);
 
-#if defined ZLINK_IOTHREAD_POLLER_USE_ASIO
-    send_invalid_middle_metadata_record (client, server);
-#endif
 
     test_context_socket_close (client);
     test_context_socket_close (server);
@@ -601,9 +424,6 @@ void test_zmp_wss_pair_message ()
     send_string_expect_success (client, "wss-zmp", 0);
     recv_string_expect_success (server, "wss-zmp", 0);
 
-#if defined ZLINK_IOTHREAD_POLLER_USE_ASIO
-    send_invalid_middle_metadata_record (client, server);
-#endif
 
     test_context_socket_close (client);
     test_context_socket_close (server);

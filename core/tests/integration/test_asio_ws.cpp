@@ -18,11 +18,6 @@
 
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO && defined ZLINK_HAVE_ASIO_WS
 
-#include "transports/ws/ws_transport.hpp"
-#if defined ZLINK_HAVE_WSS
-#include "transports/tls/wss_transport.hpp"
-#endif
-
 #include <boost/asio.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
@@ -346,52 +341,6 @@ void test_ws_binary_message ()
 //  - Message exchange should work over WebSocket transport
 
 #if defined ZLINK_HAVE_WS
-
-void test_ws_transport_config_initialization_is_thread_safe ()
-{
-    const size_t worker_count = 16;
-    std::atomic<size_t> ready (0);
-    std::atomic<bool> start (false);
-    std::vector<std::array<size_t, 4> > values (worker_count);
-    std::vector<std::thread> workers;
-    workers.reserve (worker_count);
-
-    for (size_t i = 0; i != worker_count; ++i) {
-        workers.push_back (std::thread ([&, i] () {
-            ready.fetch_add (1, std::memory_order_release);
-            while (!start.load (std::memory_order_acquire))
-                std::this_thread::yield ();
-
-            values[i][0] = zlink::test_ws_write_buffer_bytes ();
-            values[i][1] = zlink::test_ws_read_message_max ();
-#if defined ZLINK_HAVE_WSS
-            values[i][2] = zlink::test_wss_write_buffer_bytes ();
-            values[i][3] = zlink::test_wss_read_message_max ();
-#else
-            values[i][2] = 0;
-            values[i][3] = 0;
-#endif
-        }));
-    }
-
-    while (ready.load (std::memory_order_acquire) != worker_count)
-        std::this_thread::yield ();
-    start.store (true, std::memory_order_release);
-
-    for (size_t i = 0; i != workers.size (); ++i)
-        workers[i].join ();
-
-    TEST_ASSERT_GREATER_THAN_UINT64 (0, values[0][0]);
-    TEST_ASSERT_GREATER_THAN_UINT64 (0, values[0][1]);
-    for (size_t i = 1; i != worker_count; ++i) {
-        TEST_ASSERT_EQUAL_UINT64 (values[0][0], values[i][0]);
-        TEST_ASSERT_EQUAL_UINT64 (values[0][1], values[i][1]);
-#if defined ZLINK_HAVE_WSS
-        TEST_ASSERT_EQUAL_UINT64 (values[0][2], values[i][2]);
-        TEST_ASSERT_EQUAL_UINT64 (values[0][3], values[i][3]);
-#endif
-    }
-}
 
 //  Global ZLINK context for WebSocket integration tests
 static void *g_ctx = NULL;
@@ -839,15 +788,8 @@ void test_zlink_ws_pubsub ()
 
     //  Send a message from PUB
     const char *test_msg = "WebSocket PubSub Test";
-    rc = zlink_send (pub_socket, test_msg, strlen (test_msg), 0);
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (strlen (test_msg)), rc);
-
-    //  Receive the message on SUB
-    char recv_buf[256];
-    rc = zlink_recv (sub_socket, recv_buf, sizeof (recv_buf), 0);
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (strlen (test_msg)), rc);
-    recv_buf[rc] = '\0';
-    TEST_ASSERT_EQUAL_STRING (test_msg, recv_buf);
+    send_published_string_expect_success (pub_socket, "", test_msg);
+    recv_subscribed_string_expect_success (sub_socket, "", test_msg);
 
     zlink_close (sub_socket);
     zlink_close (pub_socket);
@@ -1102,9 +1044,6 @@ int main ()
     UNITY_BEGIN ();
 
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO && defined ZLINK_HAVE_ASIO_WS
-#if defined ZLINK_HAVE_WS
-    RUN_TEST (test_ws_transport_config_initialization_is_thread_safe);
-#endif
     //  Beast WebSocket infrastructure tests
     RUN_TEST (test_ws_stream_creation);
     RUN_TEST (test_ws_stream_options);

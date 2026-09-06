@@ -48,11 +48,11 @@ void test_router_2_router (bool named_)
 */
     //  Send some data.
 
-    send_string_expect_success (rconn1, rconn1routing_id, ZLINK_SNDMORE);
-    send_string_expect_success (rconn1, msg, 0);
+    send_routed_string_expect_success (rconn1, rconn1routing_id, msg);
 
-    //  Receive the name.
-    const int routing_id_len = zlink_recv (rbind, buff, 256, 0);
+    const zlink_routing_id_t source = recv_routed_string_expect_success (rbind, msg);
+    const int routing_id_len = source.size;
+    memcpy (buff, source.data, source.size);
     if (named_) {
         TEST_ASSERT_EQUAL_INT (strlen (y_routing_id), routing_id_len);
         TEST_ASSERT_EQUAL_STRING_LEN (y_routing_id, buff, routing_id_len);
@@ -60,17 +60,10 @@ void test_router_2_router (bool named_)
         TEST_ASSERT_EQUAL_INT (16, routing_id_len);
     }
 
-    //  Receive the data.
-    recv_string_expect_success (rbind, msg, 0);
-
-    //  Send some data back.
-    const int ret = zlink_send (rbind, buff, routing_id_len, ZLINK_SNDMORE);
-    TEST_ASSERT_EQUAL_INT (routing_id_len, ret);
-    send_string_expect_success (rbind, "ok", 0);
+    TEST_ASSERT_EQUAL_INT (2, test_stream_send_bytes (rbind, &source, "ok", 2, 0));
 
     //  If bound socket identity naming a problem, we'll likely see something funky here.
-    recv_string_expect_success (rconn1, rconn1routing_id, 0);
-    recv_string_expect_success (rconn1, "ok", 0);
+    recv_routed_string_expect_success (rconn1, "ok", rconn1routing_id);
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_unbind (rbind, my_endpoint));
     test_context_socket_close (rbind);
@@ -110,8 +103,7 @@ void test_router_2_router_while_receiving ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (yconn, x_endpoint));
 
     //  Send some data from Y to X.
-    send_string_expect_success (yconn, x_routing_id, ZLINK_SNDMORE);
-    send_string_expect_success (yconn, msg, 0);
+    send_routed_string_expect_success (yconn, x_routing_id, msg);
 
     // wait for the Y->X message to be received
     msleep (SETTLE_TIME);
@@ -122,19 +114,17 @@ void test_router_2_router_while_receiving ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (xbind, z_endpoint));
 
     //  Try to send some data from X to Z.
-    send_string_expect_success (xbind, z_routing_id, ZLINK_SNDMORE);
-    send_string_expect_success (xbind, msg, 0);
+    send_routed_string_expect_success (xbind, z_routing_id, msg);
 
     // wait for the X->Z message to be received (so that our non-blocking check will actually
     // fail if the message is routed to Y)
     msleep (SETTLE_TIME);
 
     // nothing should have been received on the Y socket
-    TEST_ASSERT_FAILURE_ERRNO (EAGAIN, zlink_recv (yconn, buff, 256, ZLINK_DONTWAIT));
+    TEST_ASSERT_FAILURE_ERRNO (EAGAIN, test_recv_router (yconn, buff, 256, ZLINK_DONTWAIT));
 
     // the message should have been received on the Z socket
-    recv_string_expect_success (zbind, x_routing_id, 0);
-    recv_string_expect_success (zbind, msg, 0);
+    recv_routed_string_expect_success (zbind, msg, x_routing_id);
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_unbind (xbind, x_endpoint));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_unbind (zbind, z_endpoint));
@@ -187,10 +177,8 @@ void test_duplicate_connect_rid_without_handover ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint_one));
     msleep (SETTLE_TIME);
 
-    send_string_expect_success (client, dup_routing_id, ZLINK_SNDMORE);
-    send_string_expect_success (client, "first", 0);
-    recv_string_expect_success (server_one, client_routing_id, 0);
-    recv_string_expect_success (server_one, "first", 0);
+    send_routed_string_expect_success (client, dup_routing_id, "first");
+    recv_routed_string_expect_success (server_one, "first", client_routing_id);
 
     //  Duplicate connect with same CONNECT_ROUTING_ID must not abort.
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_router_option (client, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID,
@@ -203,13 +191,11 @@ void test_duplicate_connect_rid_without_handover ()
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (server_two, ZLINK_OPT_RCVTIMEO, &timeout, sizeof (timeout)));
 
-    send_string_expect_success (client, dup_routing_id, ZLINK_SNDMORE);
-    send_string_expect_success (client, "second", 0);
+    send_routed_string_expect_success (client, dup_routing_id, "second");
 
     //  Without handover, duplicate RID stays on first connection.
-    recv_string_expect_success (server_one, client_routing_id, 0);
-    recv_string_expect_success (server_one, "second", 0);
-    TEST_ASSERT_FAILURE_ERRNO (EAGAIN, zlink_recv (server_two, buffer, sizeof (buffer), 0));
+    recv_routed_string_expect_success (server_one, "second", client_routing_id);
+    TEST_ASSERT_FAILURE_ERRNO (EAGAIN, test_recv_router (server_two, buffer, sizeof (buffer), 0));
 
     test_context_socket_close (client);
     test_context_socket_close (server_two);
@@ -249,10 +235,8 @@ void test_duplicate_connect_rid_with_handover ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint_one));
     msleep (SETTLE_TIME);
 
-    send_string_expect_success (client, dup_routing_id, ZLINK_SNDMORE);
-    send_string_expect_success (client, "first", 0);
-    recv_string_expect_success (server_one, client_routing_id, 0);
-    recv_string_expect_success (server_one, "first", 0);
+    send_routed_string_expect_success (client, dup_routing_id, "first");
+    recv_routed_string_expect_success (server_one, "first", client_routing_id);
 
     //  Duplicate connect with same CONNECT_ROUTING_ID must hand over to second
     //  connection when handover is enabled.
@@ -266,12 +250,10 @@ void test_duplicate_connect_rid_with_handover ()
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (server_two, ZLINK_OPT_RCVTIMEO, &timeout, sizeof (timeout)));
 
-    send_string_expect_success (client, dup_routing_id, ZLINK_SNDMORE);
-    send_string_expect_success (client, "second", 0);
+    send_routed_string_expect_success (client, dup_routing_id, "second");
 
-    recv_string_expect_success (server_two, client_routing_id, 0);
-    recv_string_expect_success (server_two, "second", 0);
-    TEST_ASSERT_FAILURE_ERRNO (EAGAIN, zlink_recv (server_one, buffer, sizeof (buffer), 0));
+    recv_routed_string_expect_success (server_two, "second", client_routing_id);
+    TEST_ASSERT_FAILURE_ERRNO (EAGAIN, test_recv_router (server_one, buffer, sizeof (buffer), 0));
 
     test_context_socket_close (client);
     test_context_socket_close (server_two);
@@ -321,14 +303,13 @@ void test_router_disconnect_rid_terminates_matching_peer ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
 
     send_string_expect_success (dealer, "hello", 0);
-    recv_string_expect_success (router, client_routing_id, 0);
-    recv_string_expect_success (router, "hello", 0);
+    recv_routed_string_expect_success (router, "hello", client_routing_id);
 
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_disconnect_rid (router, &rid));
     msleep (SETTLE_TIME);
 
     errno = 0;
-    TEST_ASSERT_EQUAL_INT (-1, zlink_recv (router, buffer, sizeof (buffer), ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (-1, test_recv_router (router, buffer, sizeof (buffer), ZLINK_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
 
     test_context_socket_close (dealer);

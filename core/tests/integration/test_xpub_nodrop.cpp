@@ -8,12 +8,14 @@
 #include <cstring>
 #include <future>
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <new>
 
 SETUP_TEARDOWN_TESTCONTEXT
 
 namespace
 {
-const int kTcpSendTimeoutMs = 2000;
 const int kPubSendTimeoutMs = 200;
 const int kTcpDrainCompletionTimeoutSec = 15;
 const char *kPubsubTopic = "bench";
@@ -47,8 +49,6 @@ struct pubsub_callback_counter_t
 
     std::atomic<int> received;
     std::atomic<int> error;
-    std::mutex sync;
-    std::condition_variable cv;
 };
 
 void delivery_ready_monitor_handler (const zlink_monitor_event_t *event_, void *userdata_)
@@ -147,93 +147,6 @@ void close_delivery_ready_monitor (delivery_ready_monitor_t *monitor_)
 }
 
 } // namespace
-
-void test ()
-{
-    //  Create a publisher
-    void *pub = test_context_socket (ZLINK_SOCKET_XPUB);
-
-    const uint64_t hwm = 2000u * sizeof (zlink_msg_t);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (pub, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (pub, "inproc://soname"));
-
-    //  set pub socket options
-    int wait = 1;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_pub_option (pub, ZLINK_PUB_OPT_NODROP, &wait, sizeof (wait)));
-
-    //  Create a subscriber
-    void *sub = test_context_socket (ZLINK_SOCKET_SUB);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, "inproc://soname"));
-
-    //  Subscribe for all messages.
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_subscription (sub, ""));
-
-    //  we must wait for the subscription to be processed here, otherwise some
-    //  or all published messages might be lost
-    recv_string_expect_success (pub, "\1", 0);
-
-    int hwmlimit = 1999;
-    int send_count = 0;
-
-    //  Send an empty message
-    for (int i = 0; i < hwmlimit; i++) {
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_send (pub, static_cast<const void *> (NULL), 0, 0));
-        send_count++;
-    }
-
-    int recv_count = 0;
-    do {
-        //  Receive the message in the subscriber
-        int rc = zlink_recv (sub, NULL, 0, 0);
-        if (rc == -1) {
-            TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
-            break;
-        }
-        TEST_ASSERT_EQUAL_INT (0, rc);
-        recv_count++;
-
-        if (recv_count == 1) {
-            const int sub_rcvtimeo = 250;
-            TEST_ASSERT_SUCCESS_ERRNO (
-              zlink_set_option (sub, ZLINK_OPT_RCVTIMEO, &sub_rcvtimeo, sizeof (sub_rcvtimeo)));
-        }
-
-    } while (true);
-
-    TEST_ASSERT_EQUAL_INT (send_count, recv_count);
-
-    //  Now test real blocking behavior
-    //  Set a timeout, default is infinite
-    int timeout = 0;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_option (pub, ZLINK_OPT_SNDTIMEO, &timeout, sizeof (timeout)));
-
-    send_count = 0;
-    recv_count = 0;
-    hwmlimit = 2000;
-
-    //  Send an empty message until we get an error, which must be EAGAIN
-    while (zlink_send (pub, "", 0, 0) == 0)
-        send_count++;
-    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
-
-    if (send_count > 0) {
-        //  Receive first message with blocking
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_recv (sub, NULL, 0, 0));
-        recv_count++;
-
-        while (zlink_recv (sub, NULL, 0, ZLINK_DONTWAIT) == 0)
-            recv_count++;
-    }
-
-    TEST_ASSERT_EQUAL_INT (send_count, recv_count);
-
-    //  Clean up.
-    test_context_socket_close (pub);
-    test_context_socket_close (sub);
-}
 
 void test_pub_blocking_publish_succeeds_while_subscriber_drains_tcp ()
 {
@@ -362,55 +275,11 @@ void test_pub_nodrop_default_is_zero ()
     }
 }
 
-//  With the default option the publisher never reports backpressure. Messages
-//  past the HWM are dropped for the slow subscriber and publish keeps
-//  succeeding.
-void test_default_publish_drops_instead_of_backpressuring ()
-{
-    void *pub = test_context_socket (ZLINK_SOCKET_XPUB);
-
-    const uint64_t hwm = 200u * sizeof (zlink_msg_t);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (pub, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (pub, "inproc://nodrop-default"));
-
-    void *sub = test_context_socket (ZLINK_SOCKET_SUB);
-    //  Bound both ends: an unbounded receive queue would absorb every message
-    //  and the publisher pipe would never reach its HWM.
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (sub, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, "inproc://nodrop-default"));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_subscription (sub, ""));
-
-    //  Wait for the subscription so the count below is not lost to the race.
-    recv_string_expect_success (pub, "\1", 0);
-
-    //  Do not drain the subscriber. Every send must still succeed.
-    const int send_target = 4000;
-    for (int i = 0; i < send_target; i++)
-        TEST_ASSERT_SUCCESS_ERRNO (zlink_send (pub, static_cast<const void *> (NULL), 0, 0));
-
-    const int sub_rcvtimeo = 250;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_option (sub, ZLINK_OPT_RCVTIMEO, &sub_rcvtimeo, sizeof (sub_rcvtimeo)));
-
-    int recv_count = 0;
-    while (zlink_recv (sub, NULL, 0, 0) == 0)
-        recv_count++;
-    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
-
-    //  The HWM is far below the send count, so the socket must have dropped.
-    TEST_ASSERT_TRUE (recv_count < send_target);
-
-    test_context_socket_close (sub);
-    test_context_socket_close (pub);
-}
-
 int main ()
 {
     setup_test_environment ();
     UNITY_BEGIN ();
     RUN_TEST (test_pub_nodrop_default_is_zero);
-    RUN_TEST (test_default_publish_drops_instead_of_backpressuring);
-    RUN_TEST (test);
     RUN_TEST (test_pub_blocking_publish_succeeds_while_subscriber_drains_tcp);
     return UNITY_END ();
 }

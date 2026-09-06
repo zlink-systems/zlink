@@ -157,11 +157,11 @@ static void run_pubsub (const char *transport_)
     msleep (SETTLE_TIME);
 
     // Prime subscription propagation before checking the real payload.
-    send_string_expect_success (pub, "warmup", 0);
+    send_published_string_expect_success (pub, "matrix", "warmup");
     msleep (SETTLE_TIME);
-    recv_string_expect_success (sub, "warmup", 0);
-    send_string_expect_success (pub, "pubsub-hello", 0);
-    recv_string_expect_success (sub, "pubsub-hello", 0);
+    recv_subscribed_string_expect_success (sub, "matrix", "warmup");
+    send_published_string_expect_success (pub, "matrix", "pubsub-hello");
+    recv_subscribed_string_expect_success (sub, "matrix", "pubsub-hello");
 
     close_sync_socket (sub);
     close_sync_socket (pub);
@@ -193,11 +193,9 @@ static void run_router_dealer (const char *transport_)
 
     send_string_expect_success (dealer, "dealer-msg", 0);
 
-    recv_string_expect_success (router, "DEALER1", 0);
-    recv_string_expect_success (router, "dealer-msg", 0);
+    recv_routed_string_expect_success (router, "dealer-msg", "DEALER1");
 
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send (router, "DEALER1", 7, ZLINK_SNDMORE));
-    send_string_expect_success (router, "router-reply", 0);
+    send_routed_string_expect_success (router, "DEALER1", "router-reply");
     recv_string_expect_success (dealer, "router-reply", 0);
 
     close_sync_socket (dealer);
@@ -229,17 +227,13 @@ static void run_router_router (const char *transport_)
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, endpoint));
     msleep (SETTLE_TIME);
 
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send (client, "SERVER", 6, ZLINK_SNDMORE));
-    send_string_expect_success (client, "router-msg", 0);
+    send_routed_string_expect_success (client, "SERVER", "router-msg");
 
-    recv_string_expect_success (server, "CLIENT", 0);
-    recv_string_expect_success (server, "router-msg", 0);
+    recv_routed_string_expect_success (server, "router-msg", "CLIENT");
 
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send (server, "CLIENT", 6, ZLINK_SNDMORE));
-    send_string_expect_success (server, "router-reply", 0);
+    send_routed_string_expect_success (server, "CLIENT", "router-reply");
 
-    recv_string_expect_success (client, "SERVER", 0);
-    recv_string_expect_success (client, "router-reply", 0);
+    recv_routed_string_expect_success (client, "router-reply", "SERVER");
 
     close_sync_socket (client);
     close_sync_socket (server);

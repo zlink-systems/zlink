@@ -247,7 +247,7 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
   void *observer_userdata_, bool request_admission_,
   bool manage_public_send_recovery_,
   const zlink_routing_id_t *transient_target_rid_,
-  pipe_t *transient_selected_pipe_)
+  pipe_t *transient_selected_pipe_, bool record_context_admission_)
 {
     if (!parts_ || part_count_ == 0 || !scope.acquired ()) {
         errno = EFAULT;
@@ -295,8 +295,9 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
         }
         if (xtry_send_complete_record (
               reinterpret_cast<msg_t *> (parts_), count)) {
-            _auto_hwm_send_attempts.fetch_add (
-              static_cast<uint64_t> (count), std::memory_order_relaxed);
+            if (record_context_admission_)
+                _auto_hwm_send_attempts.fetch_add (
+                  static_cast<uint64_t> (count), std::memory_order_relaxed);
             if (manage_public_send_recovery_)
                 clear_public_send_recovery_state ();
             return 0;
@@ -377,7 +378,8 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
                          ? send_direct_with_retry (
                              &rid, msg, flags, scope, NULL, 0, false,
                              attempted_pipe_out_, target_.transport_pair_id,
-                             target_.transport_pair_generation, true,
+                             target_.transport_pair_generation,
+                             record_context_admission_,
                              frame_commands_already_processed,
                              observe_commit ? observer_ : NULL,
                              observe_commit ? observer_userdata_ : NULL, NULL,
@@ -385,7 +387,8 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
                              manage_public_send_recovery_, request_admission_)
                          : send_direct_with_retry (
                              NULL, msg, flags, scope, NULL, 0, false, NULL, 0,
-                             0, true, frame_commands_already_processed,
+                             0, record_context_admission_,
+                             frame_commands_already_processed,
                              observe_commit ? observer_ : NULL,
                              observe_commit ? observer_userdata_ : NULL, NULL,
                              0, manage_public_send_recovery_);

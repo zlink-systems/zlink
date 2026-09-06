@@ -137,7 +137,7 @@ void test_typed_raw_socket_options ()
     value = 0;
     size = sizeof (value);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_get_option (xpub, ZLINK_OPT_TYPE, &value, &size));
-    TEST_ASSERT_EQUAL_INT (ZLINK_CORE_SOCKET_XPUB, value);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SOCKET_XPUB, value);
 
     value = -1;
     size = sizeof (value);

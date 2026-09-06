@@ -3,22 +3,24 @@
 #ifndef __TESTUTIL_HPP_INCLUDED__
 #define __TESTUTIL_HPP_INCLUDED__
 
-#if defined ZLINK_CUSTOM_PLATFORM_HPP
-#include "platform.hpp"
-#else
-#include "../src/runtime/platform.hpp"
-#endif
-#include "../include/zlink.h"
-#include "../src/runtime/core/internal_defs.hpp"
-#include "../src/runtime/utils/fd.hpp"
-#include "utils/stdint.hpp"
+#include "test_platform.hpp"
+#include <zlink.h>
+#include <stdint.h>
+#include <assert.h>
+#include <errno.h>
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string>
 
 //  For AF_INET and IPPROTO_TCP
 #if defined _WIN32
-#include "utils/windows.hpp"
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
 #if defined(__MINGW32__)
 #include <unistd.h>
 #endif
@@ -34,7 +36,7 @@
 //  get test failures on slower systems due to binds/connects not
 //  settled. Tested to work reliably at 1 msec on a fast PC.
 #define SETTLE_TIME 300 //  In msec
-//  Commonly used buffer size for ZLINK_INTERNAL_OPT_LAST_ENDPOINT
+//  Commonly used buffer size for ZLINK_OPT_LAST_ENDPOINT
 //  this used to be sizeof ("tcp://[::ffff:127.127.127.127]:65536"), but this
 //  may be too short for ipc wildcard binds, e.g.
 #define MAX_SOCKET_STRING 256
@@ -130,8 +132,12 @@ inline const void *as_setsockopt_opt_t (const void *opt_)
 }
 #endif
 
-using zlink::fd_t;
-using zlink::retired_fd;
+typedef zlink_fd_t fd_t;
+#ifdef _WIN32
+static const fd_t retired_fd = INVALID_SOCKET;
+#else
+static const fd_t retired_fd = -1;
+#endif
 
 //  In MSVC prior to v14, snprintf is not available
 //  The closest implementation is the _snprintf_s function

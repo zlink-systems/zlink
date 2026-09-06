@@ -2,6 +2,7 @@
 
 #include "testutil.hpp"
 #include "testutil_unity.hpp"
+#include "contract_socket_pair_fixture.hpp"
 
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
@@ -303,10 +304,7 @@ void run_two_reader_record_test ()
     TEST_ASSERT_NOT_NULL (receiver);
     TEST_ASSERT_NOT_NULL (sender);
 
-    const char *endpoint = "inproc://router-record-receive-transaction";
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (receiver, endpoint));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sender, endpoint));
-    msleep (SETTLE_TIME);
+    contract_socket_pair_t pair (receiver, sender);
     send_request_record (sender, 101, "first");
     send_request_record (sender, 102, "second");
 
@@ -976,11 +974,7 @@ void test_router_capacity_reservation_is_atomic_and_non_consuming ()
     void *sender = test_context_socket (ZLINK_SOCKET_DEALER);
     TEST_ASSERT_NOT_NULL (router);
     TEST_ASSERT_NOT_NULL (sender);
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_bind (router, "inproc://router-record-capacity-reservation"));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_connect (sender, "inproc://router-record-capacity-reservation"));
-    msleep (SETTLE_TIME);
+    contract_socket_pair_t pair (router, sender);
 
     socket_handle_t handle = as_socket_handle (router);
     const std::shared_ptr<

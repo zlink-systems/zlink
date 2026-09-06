@@ -395,7 +395,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
 
     prepare_direct_send_message (msg_, flags_);
 
-    _auto_hwm_send_attempts.fetch_add (1, std::memory_order_relaxed);
+    if (record_context_admission_)
+        _auto_hwm_send_attempts.fetch_add (1, std::memory_order_relaxed);
     pipe_message_admission_t first_admission =
       pipe_message_admission_invalid;
 #ifdef ZLINK_BUILD_TESTS

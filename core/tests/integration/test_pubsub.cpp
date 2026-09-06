@@ -24,11 +24,11 @@ void test (const char *address)
     //  Wait a bit till the subscription gets to the publisher
     msleep (SETTLE_TIME);
 
-    //  Send an empty message
-    send_string_expect_success (publisher, "test", 0);
+    //  Publish and receive the same payload through the public topic API.
+    send_published_string_expect_success (publisher, "test", "test");
 
     //  Receive the message in the subscriber
-    recv_string_expect_success (subscriber, "test", 0);
+    recv_subscribed_string_expect_success (subscriber, "test", "test");
 
     //  Clean up.
     test_context_socket_close (publisher);

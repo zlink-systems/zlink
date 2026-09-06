@@ -1286,7 +1286,8 @@ class socket_base_t : public own_t,
       bool request_admission_ = false,
       bool manage_public_send_recovery_ = true,
       const zlink_routing_id_t *transient_target_rid_ = NULL,
-      zlink::pipe_t *transient_selected_pipe_ = NULL);
+      zlink::pipe_t *transient_selected_pipe_ = NULL,
+      bool record_context_admission_ = true);
     struct submit_timeout_budget_t;
     struct completion_submit_wait_context_t;
     struct request_submit_selection_t;

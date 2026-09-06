@@ -4,9 +4,6 @@
 #include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
 
-#include "core/msg.hpp"
-#include "core/pipe_stream_packet_state.hpp"
-#include "utils/config.hpp"
 
 #include <errno.h>
 #include <stdio.h>
@@ -151,11 +148,11 @@ static void send_stream_msg (void *socket_,
                              const void *data_,
                              size_t size_)
 {
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (stream_routing_id_size),
-                           TEST_ASSERT_SUCCESS_ERRNO (zlink_send (
-                             socket_, routing_id_, stream_routing_id_size, ZLINK_SNDMORE)));
-    TEST_ASSERT_EQUAL_INT ((int) size_,
-                           TEST_ASSERT_SUCCESS_ERRNO (zlink_send (socket_, data_, size_, 0)));
+    zlink_routing_id_t rid = {};
+    rid.size = static_cast<uint8_t> (stream_routing_id_size);
+    memcpy (rid.data, routing_id_, stream_routing_id_size);
+    TEST_ASSERT_EQUAL_INT (static_cast<int> (size_),
+      test_stream_send_bytes (socket_, &rid, data_, size_, 0));
 }
 
 static bool recv_stream_routing_id_and_payload (void *socket_,

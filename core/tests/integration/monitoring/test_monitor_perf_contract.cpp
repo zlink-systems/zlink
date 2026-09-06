@@ -3,7 +3,6 @@
 #include "testutil.hpp"
 #include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
-#include "api/socket/socket_api_internal.hpp"
 #undef MAX_SOCKET_STRING
 
 #include <algorithm>
@@ -701,8 +700,8 @@ void test_pubsub_perf_like_monitor_sockopts_preserve_connect_ready ()
     close_perf_like_connect_monitor (&client_monitor);
     close_perf_like_connect_monitor (&server_monitor);
 
-    send_string_expect_success (server, "pubsub-monitor-payload", 0);
-    recv_string_expect_success (client, "pubsub-monitor-payload", 0);
+    send_published_string_expect_success (server, "", "pubsub-monitor-payload");
+    recv_subscribed_string_expect_success (client, "", "pubsub-monitor-payload");
 
     close_socket_zero_linger (client);
     close_socket_zero_linger (server);
@@ -775,17 +774,32 @@ void test_dealer_router_perf_like_client_monitor_preserves_bidirectional_deliver
 
     send_string_expect_success (client, "dealer-router-monitor-ping", 0);
 
+    zlink_msg_t incoming;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&incoming));
+    const zlink_routing_id_t *source_rid = NULL;
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    uint64_t request_seq = UINT64_MAX;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv_part (
+      server, &source_rid, &request_seq, &incoming, &has_more,
+      ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
     unsigned char rid_buf[255];
-    const int rid_size =
-      TEST_ASSERT_SUCCESS_ERRNO (zlink_recv (server, rid_buf, sizeof (rid_buf), 0));
+    const int rid_size = source_rid->size;
+    memcpy (rid_buf, source_rid->data, source_rid->size);
     TEST_ASSERT_EQUAL_INT (sizeof (dealer_id) - 1, rid_size);
     TEST_ASSERT_EQUAL_MEMORY (dealer_id, rid_buf, rid_size);
-    recv_string_expect_success (server, "dealer-router-monitor-ping", 0);
+    TEST_ASSERT_EQUAL_MEMORY ("dealer-router-monitor-ping", zlink_msg_data (&incoming),
+                              zlink_msg_size (&incoming));
+    TEST_ASSERT_EQUAL_UINT64 (26, zlink_msg_size (&incoming));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&incoming));
 
-    TEST_ASSERT_EQUAL_INT (
-      rid_size, TEST_ASSERT_SUCCESS_ERRNO (
-                  zlink_send (server, rid_buf, static_cast<size_t> (rid_size), ZLINK_SNDMORE)));
-    send_string_expect_success (server, "dealer-router-monitor-pong", 0);
+    zlink_routing_id_t destination_rid = {};
+    destination_rid.size = static_cast<uint8_t> (rid_size);
+    memcpy (destination_rid.data, rid_buf, rid_size);
+    TEST_ASSERT_EQUAL_INT (26, test_stream_send_bytes (
+      server, &destination_rid, "dealer-router-monitor-pong", 26, 0));
     recv_string_expect_success (client, "dealer-router-monitor-pong", 0);
 
     close_socket_zero_linger (client);
@@ -824,29 +838,55 @@ void test_router_router_perf_like_client_monitor_preserves_bidirectional_deliver
     TEST_ASSERT_TRUE (wait_perf_like_connect_ready (&client_monitor, 3000));
     close_perf_like_connect_monitor (&client_monitor);
 
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (sizeof (server_id) - 1),
-                           TEST_ASSERT_SUCCESS_ERRNO (zlink_send (
-                             client, server_id, sizeof (server_id) - 1, ZLINK_SNDMORE)));
-    send_string_expect_success (client, "router-router-monitor-ping", 0);
+    zlink_routing_id_t server_rid = {};
+    server_rid.size = static_cast<uint8_t> (sizeof (server_id) - 1);
+    memcpy (server_rid.data, server_id, server_rid.size);
+    TEST_ASSERT_EQUAL_INT (26, test_stream_send_bytes (
+      client, &server_rid, "router-router-monitor-ping", 26, 0));
 
+    zlink_msg_t incoming;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&incoming));
+    const zlink_routing_id_t *source_rid = NULL;
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    uint64_t request_seq = UINT64_MAX;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv_part (
+      server, &source_rid, &request_seq, &incoming, &has_more,
+      ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
     unsigned char rid_buf[255];
-    const int rid_size =
-      TEST_ASSERT_SUCCESS_ERRNO (zlink_recv (server, rid_buf, sizeof (rid_buf), 0));
+    const int rid_size = source_rid->size;
+    memcpy (rid_buf, source_rid->data, source_rid->size);
     TEST_ASSERT_EQUAL_INT (sizeof (client_id) - 1, rid_size);
     TEST_ASSERT_EQUAL_MEMORY (client_id, rid_buf, rid_size);
-    recv_string_expect_success (server, "router-router-monitor-ping", 0);
+    TEST_ASSERT_EQUAL_MEMORY ("router-router-monitor-ping", zlink_msg_data (&incoming),
+                              zlink_msg_size (&incoming));
+    TEST_ASSERT_EQUAL_UINT64 (26, zlink_msg_size (&incoming));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&incoming));
 
-    TEST_ASSERT_EQUAL_INT (
-      rid_size, TEST_ASSERT_SUCCESS_ERRNO (
-                  zlink_send (server, rid_buf, static_cast<size_t> (rid_size), ZLINK_SNDMORE)));
-    send_string_expect_success (server, "router-router-monitor-pong", 0);
+    zlink_routing_id_t destination_rid = {};
+    destination_rid.size = static_cast<uint8_t> (rid_size);
+    memcpy (destination_rid.data, rid_buf, rid_size);
+    TEST_ASSERT_EQUAL_INT (26, test_stream_send_bytes (
+      server, &destination_rid, "router-router-monitor-pong", 26, 0));
 
-    unsigned char reply_rid[255];
-    const int reply_rid_size =
-      TEST_ASSERT_SUCCESS_ERRNO (zlink_recv (client, reply_rid, sizeof (reply_rid), 0));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&incoming));
+    source_rid = NULL;
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_router_recv_part (
+      client, &source_rid, &request_seq, &incoming, &has_more,
+      ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_UINT64 (0, request_seq);
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+    const unsigned char *reply_rid = source_rid->data;
+    const int reply_rid_size = source_rid->size;
     TEST_ASSERT_EQUAL_INT (sizeof (server_id) - 1, reply_rid_size);
     TEST_ASSERT_EQUAL_MEMORY (server_id, reply_rid, reply_rid_size);
-    recv_string_expect_success (client, "router-router-monitor-pong", 0);
+    TEST_ASSERT_EQUAL_MEMORY ("router-router-monitor-pong", zlink_msg_data (&incoming),
+                              zlink_msg_size (&incoming));
+    TEST_ASSERT_EQUAL_UINT64 (26, zlink_msg_size (&incoming));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&incoming));
 
     close_socket_zero_linger (client);
     close_socket_zero_linger (server);

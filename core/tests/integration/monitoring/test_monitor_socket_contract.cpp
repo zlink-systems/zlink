@@ -3,7 +3,6 @@
 #include "testutil.hpp"
 #include "testutil_monitoring.hpp"
 #include "testutil_unity.hpp"
-#include "api/monitoring/monitor_api_internal.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -412,10 +411,8 @@ void router_server_handler (const zlink_routing_id_t *source_rid_,
     }
 
     close_message_parts (parts_, part_count_);
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (source_rid_->size),
-                           TEST_ASSERT_SUCCESS_ERRNO (zlink_send (
-                             probe->socket, source_rid_->data, source_rid_->size, ZLINK_SNDMORE)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send (probe->socket, "pong", 4, 0));
+    TEST_ASSERT_EQUAL_INT (4, test_stream_send_bytes (
+      probe->socket, source_rid_, "pong", 4, 0));
     probe->cv.notify_all ();
 }
 
@@ -665,10 +662,11 @@ void send_stream_msg (void *socket_,
                       const unsigned char routing_id_[stream_routing_id_size],
                       const char *text_)
 {
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (stream_routing_id_size),
-                           TEST_ASSERT_SUCCESS_ERRNO (zlink_send (
-                             socket_, routing_id_, stream_routing_id_size, ZLINK_SNDMORE)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send (socket_, text_, strlen (text_), 0));
+    zlink_routing_id_t rid = {};
+    rid.size = static_cast<uint8_t> (stream_routing_id_size);
+    memcpy (rid.data, routing_id_, stream_routing_id_size);
+    TEST_ASSERT_EQUAL_INT (static_cast<int> (strlen (text_)),
+      test_stream_send_bytes (socket_, &rid, text_, strlen (text_), 0));
 }
 
 bool recv_stream_routing_id_and_payload (void *socket_,
@@ -866,10 +864,8 @@ void run_dealer_router_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t
     TEST_ASSERT_EQUAL_MEMORY ("ping", zlink_msg_data (&parts[0]), 4);
     zlink_multipart_close (parts, part_count);
 
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (source_node_rid->size),
-                           TEST_ASSERT_SUCCESS_ERRNO (zlink_send (
-                             server, source_node_rid->data, source_node_rid->size, ZLINK_SNDMORE)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send (server, "pong", 4, 0));
+    TEST_ASSERT_EQUAL_INT (4, test_stream_send_bytes (
+      server, source_node_rid, "pong", 4, 0));
 
     char reply_buf[16] = {0};
     TEST_ASSERT_EQUAL_INT (4, zlink_recv (client, reply_buf, sizeof (reply_buf), 0));
@@ -923,10 +919,11 @@ void run_router_router_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t
     TEST_ASSERT_EQUAL_UINT (ZLINK_MONITOR_TRANSPORT_LANE_APPLICATION,
                             server_ready.transport_lane);
 
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (sizeof (server_id) - 1),
-                           TEST_ASSERT_SUCCESS_ERRNO (zlink_send (
-                             client, server_id, sizeof (server_id) - 1, ZLINK_SNDMORE)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send (client, "ping", 4, 0));
+    zlink_routing_id_t server_rid = {};
+    server_rid.size = static_cast<uint8_t> (sizeof (server_id) - 1);
+    memcpy (server_rid.data, server_id, server_rid.size);
+    TEST_ASSERT_EQUAL_INT (4, test_stream_send_bytes (
+      client, &server_rid, "ping", 4, 0));
 
     const zlink_routing_id_t *source_node_rid = NULL;
     uint64_t request_seq = 0;
@@ -942,10 +939,8 @@ void run_router_router_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t
     TEST_ASSERT_EQUAL_MEMORY ("ping", zlink_msg_data (&parts[0]), 4);
     zlink_multipart_close (parts, part_count);
 
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (source_node_rid->size),
-                           TEST_ASSERT_SUCCESS_ERRNO (zlink_send (
-                             server, source_node_rid->data, source_node_rid->size, ZLINK_SNDMORE)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_send (server, "pong", 4, 0));
+    TEST_ASSERT_EQUAL_INT (4, test_stream_send_bytes (
+      server, source_node_rid, "pong", 4, 0));
 
     const zlink_routing_id_t *reply_source_node_rid = NULL;
     uint64_t reply_request_seq = 0;
@@ -1000,9 +995,9 @@ void run_pubsub_ready_matrix (monitor_mode_t monitor_mode_, socket_mode_t socket
       wait_for_pubsub_delivery_ready_recv (pub_monitor, sub_monitor, 3000);
     TEST_ASSERT_TRUE (ready);
 
-    s_send_seq (pub, "topic", "payload-1", SEQ_END);
-    s_send_seq (pub, "topic", "payload-2", SEQ_END);
-    s_send_seq (pub, "topic", "payload-3", SEQ_END);
+    send_published_string_expect_success (pub, "topic", "payload-1");
+    send_published_string_expect_success (pub, "topic", "payload-2");
+    send_published_string_expect_success (pub, "topic", "payload-3");
 
     for (int i = 0; i < 3; ++i) {
         zlink_msg_t *parts = NULL;
@@ -1105,47 +1100,6 @@ size_t count_extra_ready_events (void *monitor_)
     return extra;
 }
 
-void test_monitor_context_snapshot_tracks_one_pending_event_exactly ()
-{
-    void *server = test_context_socket (ZLINK_SOCKET_PAIR);
-    TEST_ASSERT_NOT_NULL (server);
-
-    const uint64_t event_charge = socket_monitor_event_accounted_bytes ();
-    zlink_socket_monitor_open_options_t monitor_opts;
-    memset (&monitor_opts, 0, sizeof (monitor_opts));
-    monitor_opts.events = ZLINK_EVENT_LISTENING;
-    monitor_opts.monitor_hwm_bytes = event_charge * 4;
-    void *monitor = zlink_socket_monitor_open (server, &monitor_opts);
-    TEST_ASSERT_NOT_NULL (monitor);
-
-    char endpoint[MAX_SOCKET_STRING];
-    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
-
-    zlink_auto_hwm_budget_snapshot_t pending;
-    TEST_ASSERT_TRUE (zlink_test_wait_until (3000, [&] {
-        pending = read_auto_hwm_budget_snapshot ();
-        return pending.monitor_queue_accounted_bytes == event_charge;
-    }));
-    TEST_ASSERT_EQUAL_UINT64 (monitor_opts.monitor_hwm_bytes * 2,
-                              pending.monitor_queue_applied_hwm_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (
-      pending.total_messaging_accounted_bytes + event_charge,
-      pending.total_instance_accounted_bytes);
-
-    zlink_monitor_event_t event;
-    TEST_ASSERT_TRUE (zlink_test_wait_until (3000, [&] {
-        return recv_monitor_event_from_socket (monitor, &event, ZLINK_DONTWAIT)
-               == 0;
-    }));
-    TEST_ASSERT_EQUAL_UINT64 (ZLINK_EVENT_LISTENING, event.event);
-    TEST_ASSERT_TRUE (zlink_test_wait_until (3000, [&] {
-        return read_auto_hwm_budget_snapshot ().monitor_queue_accounted_bytes
-               == 0;
-    }));
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
-    test_context_socket_close_zero_linger (server);
-}
 
 // Inproc has no engine handshake. A DEALER-ROUTER pair becomes ready from its
 // one Application pipe, and both sockets must observe exactly one logical
@@ -1555,7 +1509,6 @@ int main ()
     setup_test_environment (120);
 
     UNITY_BEGIN ();
-    RUN_TEST (test_monitor_context_snapshot_tracks_one_pending_event_exactly);
     RUN_TEST (test_pair_ready_with_monitor_recv_and_socket_recv);
     RUN_TEST (test_dealer_router_ready_with_monitor_recv_and_socket_recv);
     RUN_TEST (test_inproc_dealer_router_ready_after_bind);

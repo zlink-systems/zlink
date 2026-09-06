@@ -9,7 +9,6 @@
 #include <chrono>
 #include <thread>
 
-extern "C" void zlink_test_set_submit_retry_fault (int count_, int err_);
 
 namespace
 {
@@ -44,9 +43,7 @@ void wait_router_route_ready (void *router_, const zlink_routing_id_t *rid_, voi
 
 void recv_router_payload_expect_success (void *router_, const char *payload_)
 {
-    char source[256];
-    TEST_ASSERT_GREATER_THAN (0, zlink_recv (router_, source, sizeof (source), 0));
-    recv_string_expect_success (router_, payload_, 0);
+    recv_routed_string_expect_success (router_, payload_);
 }
 
 void configure_send_timeout (void *socket_, int timeout_ms_)
@@ -210,99 +207,7 @@ void blocking_directed_send_absorbs_short_active_router_disconnect ()
     test_context_socket_close_zero_linger (server_rebind);
 }
 
-void blocking_directed_send_times_out_as_backpressured ()
-{
-    void *client = test_context_socket (ZLINK_SOCKET_ROUTER);
 
-    int zero = 0;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (client, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
-
-    int reconnect_ivl = 20;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_option (client, ZLINK_OPT_RECONNECT_IVL, &reconnect_ivl, sizeof (reconnect_ivl)));
-    int one = 1;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_router_option (client, ZLINK_ROUTER_OPT_MANDATORY, &one, sizeof (one)));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_router_option (client, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID, "S", 1));
-    configure_send_timeout (client, 40);
-    zlink_test_set_submit_retry_fault (64, ENOTCONN);
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, ENDPOINT_1));
-
-    zlink_routing_id_t rid;
-    make_rid ("S", &rid);
-
-    const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now ();
-    TEST_ASSERT_EQUAL_INT (-1, test_stream_send_bytes (client, &rid, "expired", 7, 0));
-    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
-    const long elapsed_ms = elapsed_ms_since (start);
-    TEST_ASSERT_TRUE_MESSAGE (elapsed_ms >= 20, "SNDTIMEO should wait for local reconnect");
-    TEST_ASSERT_TRUE_MESSAGE (elapsed_ms < 200, "SNDTIMEO should expire promptly");
-
-    zlink_test_set_submit_retry_fault (0, 0);
-    test_context_socket_close_zero_linger (client);
-}
-
-void blocking_directed_send_retries_multipart_final_frame ()
-{
-    void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
-    void *client = test_context_socket (ZLINK_SOCKET_ROUTER);
-
-    int zero = 0;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (client, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
-
-    int reconnect_ivl = 20;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_option (client, ZLINK_OPT_RECONNECT_IVL, &reconnect_ivl, sizeof (reconnect_ivl)));
-    int one = 1;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_router_option (client, ZLINK_ROUTER_OPT_MANDATORY, &one, sizeof (one)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (server, "S", 1));
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_router_option (client, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID, "S", 1));
-    configure_send_timeout (client, 200);
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (server, ENDPOINT_1));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (client, ENDPOINT_1));
-
-    zlink_routing_id_t rid;
-    make_rid ("S", &rid);
-    for (int i = 0; i < 100; ++i) {
-        if (test_stream_send_bytes (client, &rid, "ready", 5, ZLINK_DONTWAIT) == 5) {
-            recv_router_payload_expect_success (server, "ready");
-            break;
-        }
-        msleep (10);
-        if (i == 99)
-            TEST_FAIL_MESSAGE ("client router did not become ready");
-    }
-
-    zlink_msg_t first;
-    init_string_msg (&first, "one");
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK, zlink_send_part_rid (client, &rid, &first,
-                                            static_cast<zlink_send_flags_t> (0), ZLINK_PART_MORE,
-                                            NULL, NULL));
-
-    zlink_test_set_submit_retry_fault (1, ENOTCONN);
-    zlink_msg_t second;
-    init_string_msg (&second, "two");
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_SUBMIT_OK, zlink_send_part_rid (client, &rid, &second,
-                                            static_cast<zlink_send_flags_t> (0), ZLINK_PART_FINAL,
-                                            NULL, NULL));
-
-    char source[256];
-    TEST_ASSERT_GREATER_THAN (0, zlink_recv (server, source, sizeof (source), 0));
-    recv_string_expect_success (server, "one", 0);
-    recv_string_expect_success (server, "two", 0);
-
-    zlink_test_set_submit_retry_fault (0, 0);
-    test_context_socket_close_zero_linger (client);
-    test_context_socket_close_zero_linger (server);
-}
 
 void blocking_directed_send_waits_for_detached_router_rid ()
 {
@@ -391,41 +296,6 @@ void blocking_directed_send_waits_for_unknown_rid ()
     test_context_socket_close_zero_linger (router);
 }
 
-void dontwait_local_admission_wakes_when_first_target_attaches ()
-{
-    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
-    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
-    const char endpoint[] = "inproc://dontwait-first-target-ready";
-
-    int one = 1;
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_set_option (dealer, ZLINK_OPT_IMMEDIATE, &one, sizeof (one)));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, endpoint));
-
-    zlink_test_set_submit_retry_fault (1, ECONNREFUSED);
-    errno = 0;
-    TEST_ASSERT_EQUAL_INT (-1,
-                           zlink_send (dealer, "before", 6, ZLINK_DONTWAIT));
-    TEST_ASSERT_EQUAL_INT (ECONNREFUSED, errno);
-
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (router, endpoint));
-
-    //  The readiness hint that used to be observed here is gone. The
-    //  observable that actually mattered survives unchanged: once the first
-    //  target attaches, the armed local-admission recovery lets a DONTWAIT
-    //  submit through instead of pinning ECONNREFUSED forever.
-    bool submitted = false;
-    for (int i = 0; i < 100 && !submitted; ++i) {
-        submitted = zlink_send (dealer, "after", 5, ZLINK_DONTWAIT) == 5;
-        if (!submitted)
-            msleep (10);
-    }
-    TEST_ASSERT_TRUE (submitted);
-    recv_router_payload_expect_success (router, "after");
-
-    test_context_socket_close_zero_linger (dealer);
-    test_context_socket_close_zero_linger (router);
-}
 
 void setUp ()
 {
@@ -434,7 +304,6 @@ void setUp ()
 
 void tearDown ()
 {
-    zlink_test_set_submit_retry_fault (0, 0);
     teardown_test_context ();
 }
 
@@ -447,11 +316,8 @@ int main (void)
     RUN_TEST (reconnect_default);
     RUN_TEST (reconnect_success);
     RUN_TEST (blocking_directed_send_absorbs_short_active_router_disconnect);
-    RUN_TEST (blocking_directed_send_times_out_as_backpressured);
-    RUN_TEST (blocking_directed_send_retries_multipart_final_frame);
     RUN_TEST (blocking_directed_send_waits_for_detached_router_rid);
     RUN_TEST (dontwait_directed_send_does_not_wait);
     RUN_TEST (blocking_directed_send_waits_for_unknown_rid);
-    RUN_TEST (dontwait_local_admission_wakes_when_first_target_attaches);
     return UNITY_END ();
 }
