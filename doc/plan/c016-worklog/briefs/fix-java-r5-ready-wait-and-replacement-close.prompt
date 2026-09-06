@@ -26,3 +26,14 @@ same step); delete the 25 ms schedule. Test: after the callback terminal the ret
 
 ## Deliverable
 `doc/plan/c016-worklog/fix-java-r5-ready-wait-and-replacement-close-summary.md` (two separable diffs).
+
+## Cause 3 — spring-boot-starter tests fail at HEAD (found by the java R6 job; pre-existing)
+`zlink-framework-spring-boot-starter/src/test/java/systems/zlink/framework/spring/HostTest.java:51`
+(`host_startsAndStops_frameworkRuntimeContext`) and `ZLinkFrameworkAutoConfigurationTest.java:722`
+(`autoConfigurationAppliesCustomizersBeforeRuntimeStarts`) expect `socketMonitor.onEvent` in the fake backend call list, but
+`zlink-framework-testkit/.../FakeZLinkBackendAdapterFactory.java:1671` `FakeSocketMonitor` implements only `recv()`; the runtime's
+monitor path no longer calls `onEvent` (find which commit changed the runtime and cite it). Decide from the spec which side is the
+contract (monitor events are pulled via the completion/monitor recv model, see `core/doc/spec/core/06-monitoring.ko.md` and the
+framework monitoring spec): most likely the tests' expectation is stale — then update the expectation to the current observable
+(the runtime consumed the monitor via `recv`), not the fake. Do not weaken the assertion below what the spec guarantees. Keep this a
+separable diff. Gate: `./gradlew test` must reach 0 failures across all modules (core 1279, kotlin 67, redis 27, codec 3, spring 39).
