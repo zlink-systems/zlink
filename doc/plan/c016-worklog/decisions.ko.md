@@ -1575,3 +1575,7 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 ## D-135 (2026-09-06, 머신 A) hotpath reference `pair_inproc` 2681.96 → 2505.36 재기준 — 사용자 STREAM 커밋(`973ebe30d5`)이 PAIR inproc 명령 수를 6.6% 줄임
 
 - 독립 확인: gate worktree를 origin/main(`5b749308e1`)으로 두고 hotpath_gate 실행 → `pair_inproc` 2505.360 (ratio 0.9342, 나머지 3셀 PASS). Core 테스트 rebase 브랜치도 2518.344(0.9390). D-118 job은 `c169e29eac`(STREAM 커밋 이전)에서 1.0024였고, D-134(option get)는 hot path가 아니므로 감소분은 `973ebe30d5`(msg/own/socket_base_msg 정리)의 효과다. gate는 ±5% 양방향이므로 의도된 개선은 reference를 갱신해야 통과한다. 새 reference = main 측정값 2505.36. 다른 3셀은 유지(각 ±1.2% 이내).
+
+## D-136 (2026-09-06 19:5x, 머신 A) main HEAD(`27f25eaf0b`) Core gate — unit 57/57, integration 127/128, hotpath 4/4(D-135 reference), 잔여 간헐 2건
+
+- gate worktree Release+LTO: unittest 57/57, regression PASS, hotpath dealer_dealer 0.9894 / reqrep 1.0062 / pair 1.0052 / router_router_tcp 1.0004 모두 PASS. integration 1건 실패: 사용자 커밋 `973ebe30d5`의 새 테스트 `test_socket_disconnect_progress_without_app_poll` `test_inproc_unregistered_server_disconnect_progresses`(`:302` DISCONNECTED 이벤트 3 s 내 미관찰; 당시 load 22, diag job 병행). 단독 5/5 PASS → 간헐. `test_flow_state_paired` peer-weight replay 간헐(진단 job 실행 중)과 함께 monitor 이벤트 전달 시점 계열로 묶어 같은 진단에서 원인을 확정한다. 두 테스트 모두 timeout·assertion 변경 없음.
