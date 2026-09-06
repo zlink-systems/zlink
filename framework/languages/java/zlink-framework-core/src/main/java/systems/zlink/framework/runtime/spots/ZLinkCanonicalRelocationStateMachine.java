@@ -17,6 +17,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.LongSupplier;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkRequestException;
@@ -74,6 +75,8 @@ final class ZLinkCanonicalRelocationStateMachine
     private final ZLinkAggregateRelocationCoordinator coordinator;
     private final ZLinkSpotRetireControl.TargetEndpoint target;
     private final RetentionScheduler retentionScheduler;
+    private final LongSupplier monotonicNanos;
+    private final DelayScheduler delayScheduler;
     private final ZLinkRelocationPayloadTransfer.Options transferOptions;
     private final ZLinkRelocationPayloadTransfer.Budget budget;
     private final RoutingId localNodeRid;
@@ -100,7 +103,8 @@ final class ZLinkCanonicalRelocationStateMachine
             locations,
             coordinator,
             target,
-            ZLinkCanonicalRelocationStateMachine::scheduleAt);
+            ZLinkCanonicalRelocationStateMachine::scheduleAt,
+            ZLinkRelocationPayloadTransfer.Options.defaults());
     }
 
     ZLinkCanonicalRelocationStateMachine(
@@ -131,6 +135,30 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkSpotRetireControl.TargetEndpoint target,
         RetentionScheduler retentionScheduler,
         ZLinkRelocationPayloadTransfer.Options transferOptions) {
+        this(
+            node,
+            meshName,
+            entrySpotId,
+            locations,
+            coordinator,
+            target,
+            retentionScheduler,
+            transferOptions,
+            System::nanoTime,
+            ZLinkCanonicalRelocationStateMachine::scheduleAfter);
+    }
+
+    ZLinkCanonicalRelocationStateMachine(
+        ZLinkInternalMeshNode node,
+        String meshName,
+        String entrySpotId,
+        ZLinkLocationRepository locations,
+        ZLinkAggregateRelocationCoordinator coordinator,
+        ZLinkSpotRetireControl.TargetEndpoint target,
+        RetentionScheduler retentionScheduler,
+        ZLinkRelocationPayloadTransfer.Options transferOptions,
+        LongSupplier monotonicNanos,
+        DelayScheduler delayScheduler) {
         this.node = Objects.requireNonNull(node, "node");
         this.meshName = requireText(meshName, "meshName");
         this.entrySpotId = entrySpotId;
@@ -139,6 +167,10 @@ final class ZLinkCanonicalRelocationStateMachine
         this.target = Objects.requireNonNull(target, "target");
         this.retentionScheduler = Objects.requireNonNull(
             retentionScheduler, "retentionScheduler");
+        this.monotonicNanos = Objects.requireNonNull(
+            monotonicNanos, "monotonicNanos");
+        this.delayScheduler = Objects.requireNonNull(
+            delayScheduler, "delayScheduler");
         this.transferOptions = Objects.requireNonNull(
             transferOptions, "transferOptions");
         this.budget = new ZLinkRelocationPayloadTransfer.Budget(
@@ -200,7 +232,8 @@ final class ZLinkCanonicalRelocationStateMachine
                     "duplicate canonical relocation prepare differs"));
             }
             attempt.activeWaiters().incrementAndGet();
-            long readyDeadlineNanos = System.nanoTime() + timeout.toNanos();
+            long readyDeadlineNanos = monotonicNanos.getAsLong()
+                + timeout.toNanos();
             return awaitReadyWithPrepareResend(
                     targetNodeRid,
                     attempt,
@@ -430,8 +463,7 @@ final class ZLinkCanonicalRelocationStateMachine
                     "Late or duplicate canonical PREPARE is a no-op: "
                         + fence.id());
                 return request
-                    ? failed(new IllegalStateException(
-                        "terminal canonical relocation prepare cannot reply"))
+                    ? CompletableFuture.completedFuture(encodeReady(prepare))
                     : CompletableFuture.completedFuture(null);
             }
             return failed(new IllegalArgumentException(
@@ -607,17 +639,28 @@ final class ZLinkCanonicalRelocationStateMachine
             .execute(cleanup);
     }
 
+    private static void scheduleAfter(Duration delay, Runnable work) {
+        CompletableFuture.delayedExecutor(
+                delay.toNanos(), TimeUnit.NANOSECONDS)
+            .execute(work);
+    }
+
     private CompletionStage<Void> sendReady(
         RoutingId source,
         ZLinkCanonicalRelocationProtocol.Prepare prepare) {
-        return send(source, ZLinkCanonicalRelocationProtocol.encodeReady(
+        return send(source, encodeReady(prepare));
+    }
+
+    private static byte[] encodeReady(
+        ZLinkCanonicalRelocationProtocol.Prepare prepare) {
+        return ZLinkCanonicalRelocationProtocol.encodeReady(
             new ZLinkCanonicalRelocationProtocol.Ready(
                 prepare.id(),
                 prepare.targetAttemptGeneration(),
                 prepare.coordinator(),
                 prepare.target(),
                 prepare.object(),
-                ZLinkCanonicalRelocationProtocol.TARGET)));
+                ZLinkCanonicalRelocationProtocol.TARGET));
     }
 
     private CompletionStage<byte[]> replyReady(
@@ -638,14 +681,7 @@ final class ZLinkCanonicalRelocationStateMachine
                             attempt.prepare().object().kind())));
             }
             armCutoverFallback(fence, attempt);
-            return ZLinkCanonicalRelocationProtocol.encodeReady(
-                new ZLinkCanonicalRelocationProtocol.Ready(
-                    attempt.prepare().id(),
-                    attempt.prepare().targetAttemptGeneration(),
-                    attempt.prepare().coordinator(),
-                    attempt.prepare().target(),
-                    attempt.prepare().object(),
-                    ZLinkCanonicalRelocationProtocol.TARGET));
+            return encodeReady(attempt.prepare());
         });
     }
 
@@ -944,10 +980,9 @@ final class ZLinkCanonicalRelocationStateMachine
 
     private void scheduleCutoverFallback(
         Fence fence, TargetAttempt attempt) {
-        CompletableFuture.delayedExecutor(
-                transferOptions.cutoverWaitTimeout().toMillis(),
-                TimeUnit.MILLISECONDS)
-            .execute(() -> publishTarget(fence, attempt, true)
+        delayScheduler.schedule(
+            transferOptions.cutoverWaitTimeout(),
+            () -> publishTarget(fence, attempt, true)
                 .exceptionally(ignored -> null));
     }
 
@@ -1540,7 +1575,7 @@ final class ZLinkCanonicalRelocationStateMachine
         SourceAttempt attempt,
         long deadlineNanos,
         boolean submitFirst) {
-        long remainingNanos = deadlineNanos - System.nanoTime();
+        long remainingNanos = deadlineNanos - monotonicNanos.getAsLong();
         if (remainingNanos <= 0) {
             return failed(new TimeoutException(
                 "relocation relay readiness timed out"));
@@ -1548,6 +1583,14 @@ final class ZLinkCanonicalRelocationStateMachine
         Duration slice = Duration.ofNanos(
             Math.min(remainingNanos, TimeUnit.SECONDS.toNanos(1)));
         CompletionStage<Void> submitted = CompletableFuture.completedFuture(null);
+        CompletableFuture<Void> readyOrRetry = new CompletableFuture<>();
+        attempt.ready().whenComplete((ignored, failure) -> {
+            if (failure == null) {
+                readyOrRetry.complete(null);
+            } else {
+                readyOrRetry.completeExceptionally(unwrap(failure));
+            }
+        });
         if (submitFirst && !attempt.ready().isDone()) {
             if (node instanceof ZLinkInternalMeshNode
                     .CanonicalRelocationPrepareRequestReplySupport) {
@@ -1563,9 +1606,14 @@ final class ZLinkCanonicalRelocationStateMachine
                         Byte.toUnsignedInt(encoded[3]),
                         encoded));
                 reply.whenComplete((ignored, failure) -> {
-                    if (failure != null
-                        && !isRetryablePrepareRequestFailure(failure)) {
-                        attempt.ready().completeExceptionally(unwrap(failure));
+                    if (failure == null) {
+                        return;
+                    }
+                    if (isRetryablePrepareRequestFailure(failure)) {
+                        readyOrRetry.complete(null);
+                    } else {
+                        attempt.ready().completeExceptionally(
+                            unwrap(failure));
                     }
                 });
             } else {
@@ -1581,18 +1629,23 @@ final class ZLinkCanonicalRelocationStateMachine
         return submitted
             .exceptionallyCompose(failure -> failed(unwrap(failure)))
             .thenCompose(ignored -> timed(
-                    attempt.ready(), slice, "relocation relay readiness")
+                    readyOrRetry, slice, "relocation relay readiness")
                 .handle((ready, failure) -> {
-                    if (failure == null) {
-                        return CompletableFuture.<Void>completedFuture(null);
+                    if (failure == null && attempt.ready().isDone()) {
+                        return attempt.ready();
                     }
-                    if (unwrap(failure) instanceof TimeoutException
-                        && deadlineNanos - System.nanoTime() > 0) {
+                    if ((failure == null
+                            || unwrap(failure) instanceof TimeoutException)
+                        && deadlineNanos - monotonicNanos.getAsLong() > 0) {
                         return awaitReadyWithPrepareResend(
                             targetNodeRid, attempt, deadlineNanos, true)
                             .toCompletableFuture();
                     }
-                    return CompletableFuture.<Void>failedFuture(unwrap(failure));
+                    return CompletableFuture.<Void>failedFuture(
+                        failure == null
+                            ? new TimeoutException(
+                                "relocation relay readiness timed out")
+                            : unwrap(failure));
                 })
                 .thenCompose(stage -> stage));
     }
@@ -1652,7 +1705,7 @@ final class ZLinkCanonicalRelocationStateMachine
         return chain;
     }
 
-    private static CompletionStage<Void> timed(
+    private CompletionStage<Void> timed(
         CompletionStage<Void> stage,
         Duration timeout,
         String operation) {
@@ -1664,9 +1717,9 @@ final class ZLinkCanonicalRelocationStateMachine
                 result.completeExceptionally(unwrap(failure));
             }
         });
-        CompletableFuture.delayedExecutor(
-                timeout.toMillis(), TimeUnit.MILLISECONDS)
-            .execute(() -> result.completeExceptionally(
+        delayScheduler.schedule(
+            timeout,
+            () -> result.completeExceptionally(
                 new TimeoutException(operation + " timed out")));
         return result;
     }
@@ -1845,6 +1898,11 @@ final class ZLinkCanonicalRelocationStateMachine
     @FunctionalInterface
     interface RetentionScheduler {
         void schedule(Instant deadline, Runnable cleanup);
+    }
+
+    @FunctionalInterface
+    interface DelayScheduler {
+        void schedule(Duration delay, Runnable work);
     }
 
     private static final class TargetAttempt {

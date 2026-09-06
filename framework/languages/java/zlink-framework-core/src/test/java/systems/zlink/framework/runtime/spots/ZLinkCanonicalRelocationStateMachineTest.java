@@ -515,6 +515,39 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 SubmitResult.BACKPRESSURED)));
     }
 
+    @Test
+    void exactPrepareRequestAfterTargetCutoverRepliesReady() throws Exception {
+        Fixture fixture = fixture();
+        var request = fixture.request(new byte[] {1});
+
+        fixture.source.stage(
+                fixture.targetRid, request, Duration.ofSeconds(2))
+            .toCompletableFuture().join();
+        Object attempt = targetAttempt(fixture.target, request.fence());
+        var prepare = (ZLinkCanonicalRelocationProtocol.Prepare)
+            attemptMember(attempt, "prepare");
+        byte[] encodedPrepare =
+            ZLinkCanonicalRelocationProtocol.encodePrepare(prepare);
+        fixture.source.publish(
+                fixture.targetRid, request.fence(), Duration.ofSeconds(2))
+            .toCompletableFuture().join();
+
+        byte[] encodedReady = fixture.target.apply(
+                fixture.sourceRid,
+                2L,
+                ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                encodedPrepare)
+            .toCompletableFuture().join();
+        var ready = ZLinkCanonicalRelocationProtocol.decodeReady(encodedReady);
+
+        assertEquals(prepare.id(), ready.id());
+        assertEquals(
+            ZLinkCanonicalRelocationProtocol.TARGET,
+            ready.senderRole());
+        assertEquals(1, fixture.endpoint.staged.get(),
+            "an exact terminal PREPARE must not stage the target again");
+    }
+
     private Fixture fixture() {
         return fixture(null);
     }
@@ -605,7 +638,24 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             ? requestReplyNode(
                 sourceRid, 11, target, sourceCommands)
             : node(sourceRid, 11, target, sourceCommands);
-        if (retentionScheduler == null) {
+        if (disconnectFirstPrepare) {
+            ZLinkCanonicalRelocationStateMachine.RetentionScheduler retention =
+                (deadline, cleanup) -> { };
+            ZLinkCanonicalRelocationStateMachine.DelayScheduler delay =
+                (duration, work) -> { };
+            source.set(new ZLinkCanonicalRelocationStateMachine(
+                sourceNode,
+                "mesh", "source-entry", locations, coordinator,
+                new CountingEndpoint(), retention,
+                ZLinkRelocationPayloadTransfer.Options.defaults(),
+                () -> 1L, delay));
+            target.set(new ZLinkCanonicalRelocationStateMachine(
+                node(targetRid, 12, source, targetCommands),
+                "mesh", "target-entry", locations, coordinator, endpoint,
+                retention,
+                ZLinkRelocationPayloadTransfer.Options.defaults(),
+                () -> 1L, delay));
+        } else if (retentionScheduler == null) {
             source.set(new ZLinkCanonicalRelocationStateMachine(
                 sourceNode,
                 "mesh", "source-entry", locations, coordinator,
