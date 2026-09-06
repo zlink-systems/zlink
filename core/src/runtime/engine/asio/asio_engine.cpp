@@ -858,20 +858,6 @@ bool zlink::asio_engine_t::use_stream_rx_slab () const
     return _options.type == ZLINK_CORE_SOCKET_STREAM && asio_stream_enable_rx_slab;
 }
 
-bool zlink::asio_engine_t::use_stream_dynamic_read_growth () const
-{
-    return zlink::asio_stream_fastpath_policy::can_grow_stream_target (
-      _options.type, _decoder, _pipeline.stream_decoder_read_target_size,
-      _pipeline.stream_decoder_read_target_max);
-}
-
-bool zlink::asio_engine_t::use_stream_dynamic_write_growth () const
-{
-    return zlink::asio_stream_fastpath_policy::can_grow_stream_target (
-      _options.type, _encoder, _pipeline.stream_encoder_write_target_size,
-      _pipeline.stream_encoder_write_target_max);
-}
-
 void zlink::asio_engine_t::prime_stream_decoder_read_target ()
 {
     if (_options.type != ZLINK_CORE_SOCKET_STREAM || !_decoder)

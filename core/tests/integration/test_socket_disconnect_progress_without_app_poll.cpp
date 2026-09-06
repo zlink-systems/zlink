@@ -564,9 +564,56 @@ void test_tcp_unregistered_server_disconnect_progresses ()
     run_disconnect_progress_case (transport_tcp, false, server_disconnect);
 }
 
+void test_stream_disconnect_reconnect_without_application_poll ()
+{
+    void *server = new_socket (ZLINK_SOCKET_STREAM);
+    void *client = new_socket (ZLINK_SOCKET_STREAM);
+    const zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_RAW;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &mode,
+                               sizeof (mode)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_stream_option (client, ZLINK_STREAM_OPT_RECV_MODE, &mode,
+                               sizeof (mode)));
+    set_int_option (client, ZLINK_OPT_RECONNECT_IVL, reconnect_ivl_ms);
+    void *monitor = open_client_monitor (client);
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (client, endpoint));
+    event_observation_t event;
+    TEST_ASSERT_TRUE (wait_monitor_event (
+      monitor, ZLINK_EVENT_CONNECTION_READY, 0, true, event_timeout_ms, &event));
+    const zlink_routing_id_t original_rid = event.event.routing_id;
+    TEST_ASSERT_EQUAL_UINT (4, original_rid.size);
+
+    // The server has neither a monitor nor an application poller/data receiver
+    // to process the pipe termination acknowledgement after this call returns.
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_disconnect (server, endpoint));
+    TEST_ASSERT_TRUE (wait_monitor_event (
+      monitor, ZLINK_EVENT_DISCONNECTED, 0, false, event_timeout_ms, &event));
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (server, endpoint));
+    TEST_ASSERT_TRUE (wait_monitor_event (
+      monitor, ZLINK_EVENT_CONNECTION_READY, 0, true, event_timeout_ms, &event));
+    TEST_ASSERT_EQUAL_UINT (4, event.event.routing_id.size);
+    TEST_ASSERT_TRUE (memcmp (original_rid.data, event.event.routing_id.data,
+                             original_rid.size) != 0);
+    TEST_ASSERT_EQUAL_INT (0, zlink_close (monitor));
+    close_socket (client);
+    close_socket (server);
+}
+
 void test_inproc_registered_server_disconnect_progresses ()
 {
     run_disconnect_progress_case (transport_inproc, true, server_disconnect);
+}
+
+void test_stream_disconnect_reconnect_on_single_io_thread ()
+{
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_ctx_set (get_test_context (), ZLINK_IO_THREADS, 1));
+    test_stream_disconnect_reconnect_without_application_poll ();
 }
 
 void test_inproc_unregistered_server_disconnect_progresses ()
@@ -598,6 +645,8 @@ int main ()
 {
     setup_test_environment (60);
     UNITY_BEGIN ();
+    RUN_TEST (test_stream_disconnect_reconnect_without_application_poll);
+    RUN_TEST (test_stream_disconnect_reconnect_on_single_io_thread);
     RUN_TEST (test_tcp_registered_without_waiter_progresses);
     RUN_TEST (test_tcp_without_registration_progresses);
     RUN_TEST (test_inproc_registered_without_waiter_progresses);

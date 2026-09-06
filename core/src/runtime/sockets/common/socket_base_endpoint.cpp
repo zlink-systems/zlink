@@ -1119,11 +1119,28 @@ int zlink::socket_base_t::term_endpoint (const char *endpoint_uri_)
     socket_public_api_scope_t admission (lifecycle_coordinator ());
     if (!admission.acquired ())
         return -1;
-    socket_public_api_lock_scope_t guard (lifecycle_coordinator ());
-    const int rc = process_commands (0, false);
-    if (unlikely (rc != 0))
-        return -1;
-    return term_endpoint_internal (endpoint_uri_);
+
+    {
+        socket_public_api_lock_scope_t guard (lifecycle_coordinator ());
+        const int rc = process_commands (0, false);
+        if (unlikely (rc != 0))
+            return -1;
+        if (term_endpoint_internal (endpoint_uri_) != 0)
+            return -1;
+    }
+
+    // Install progress after the synchronous listener release has completed:
+    // its I/O thread must not wait on our API lock while we wait for it. The
+    // normal idle boundary retains the executor until child/pipe teardown ends.
+    // A zero-I/O-thread context keeps the synchronous inproc teardown path.
+    transport_pair_owner_progress_scope_t progress_owner (this);
+    if (get_ctx ()->choose_io_thread (0)) {
+        if (acquire_transport_pair_owner_progress () != 0)
+            return -1;
+        *progress_owner.held_state () = true;
+    }
+
+    return 0;
 }
 
 int zlink::socket_base_t::term_peer_rid (const zlink_routing_id_t *peer_rid_)

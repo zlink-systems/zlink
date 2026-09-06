@@ -389,6 +389,158 @@ static void receiver (void *socket_)
     TEST_ASSERT_EQUAL_INT (ETERM, errno);
 }
 
+struct concurrent_shutdown_start_gate_t
+{
+    concurrent_shutdown_start_gate_t () : ready (0), go (false) {}
+
+    std::mutex sync;
+    std::condition_variable changed;
+    int ready;
+    bool go;
+};
+
+void test_ctx_shutdown_releases_concurrent_receive_and_send_after_backpressure ()
+{
+    const size_t message_size = 64;
+    const uint64_t hwm =
+      4u * (static_cast<uint64_t> (message_size) + sizeof (zlink_msg_t));
+    const int infinite_timeout = -1;
+    const int zero_linger = 0;
+    const char *const endpoint =
+      "inproc://ctx-shutdown-concurrent-blockers";
+
+    void *ctx = zlink_ctx_new ();
+    TEST_ASSERT_NOT_NULL (ctx);
+    void *socket = zlink_socket (ctx, ZLINK_SOCKET_PAIR);
+    void *peer = zlink_socket (ctx, ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (socket);
+    TEST_ASSERT_NOT_NULL (peer);
+
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (socket, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (socket, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (peer, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (peer, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (socket, ZLINK_OPT_SNDTIMEO, &infinite_timeout,
+                        sizeof (infinite_timeout)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (socket, ZLINK_OPT_RCVTIMEO, &infinite_timeout,
+                        sizeof (infinite_timeout)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (socket, ZLINK_OPT_LINGER, &zero_linger,
+                        sizeof (zero_linger)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (peer, ZLINK_OPT_LINGER, &zero_linger,
+                        sizeof (zero_linger)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (peer, endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (socket, endpoint));
+
+    char payload[message_size];
+    char received_probe[message_size];
+    memset (payload, 'q', sizeof (payload));
+    memset (received_probe, 0, sizeof (received_probe));
+
+    // A blocking transfer establishes the inproc pipe before the HWM fill.
+    TEST_ASSERT_EQUAL_INT (
+      static_cast<int> (message_size),
+      zlink_send (socket, payload, sizeof (payload), 0));
+    TEST_ASSERT_EQUAL_INT (
+      static_cast<int> (message_size),
+      zlink_recv (peer, received_probe, sizeof (received_probe), 0));
+
+    int queued = 0;
+    while (queued < 512
+           && zlink_send (socket, payload, sizeof (payload), ZLINK_DONTWAIT)
+                == static_cast<int> (message_size))
+        ++queued;
+    TEST_ASSERT_GREATER_THAN_INT (0, queued);
+    TEST_ASSERT_LESS_THAN_INT (512, queued);
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+
+    zlink_msg_t recv_part;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&recv_part));
+    zlink_msg_t send_part;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK, zlink_msg_init_size (&send_part, message_size));
+    memset (zlink_msg_data (&send_part), 's', message_size);
+    zlink_part_flag_t recv_part_flag = ZLINK_PART_MORE;
+    zlink_recv_result_t recv_result = ZLINK_RECV_INTERNAL_ERROR;
+    int recv_errno = 0;
+    concurrent_shutdown_start_gate_t start_gate;
+    const auto wait_for_start = [&start_gate] {
+        std::unique_lock<std::mutex> lock (start_gate.sync);
+        ++start_gate.ready;
+        start_gate.changed.notify_all ();
+        start_gate.changed.wait (lock, [&start_gate] { return start_gate.go; });
+    };
+    std::thread receiver_thread ([&] {
+        wait_for_start ();
+        errno = 0;
+        recv_result = zlink_recv_part (socket, NULL, &recv_part,
+                                       &recv_part_flag,
+                                       ZLINK_RECV_FLAGS_NONE);
+        recv_errno = zlink_errno ();
+    });
+
+    zlink_submit_result_t send_result = ZLINK_SUBMIT_INTERNAL_ERROR;
+    int send_errno = 0;
+    zlink_completion_id_t completion_id = UINT64_MAX;
+    std::thread sender_thread ([&] {
+        wait_for_start ();
+        errno = 0;
+        send_result = zlink_send_part (
+          socket, &send_part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL,
+          NULL, &completion_id);
+        send_errno = zlink_errno ();
+    });
+
+    bool workers_ready = false;
+    {
+        // Public C API exposes the established HWM refusal, but not whether a
+        // particular blocking call has parked. Release both calls together so
+        // shutdown races their entry without relying on a settling sleep.
+        std::unique_lock<std::mutex> lock (start_gate.sync);
+        workers_ready = start_gate.changed.wait_for (
+          lock, std::chrono::seconds (3),
+          [&start_gate] { return start_gate.ready == 2; });
+        start_gate.go = true;
+        start_gate.changed.notify_all ();
+    }
+
+    const zlink_close_result_t shutdown_result = zlink_ctx_shutdown (ctx);
+    receiver_thread.join ();
+    sender_thread.join ();
+
+    TEST_ASSERT_TRUE (workers_ready);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, shutdown_result);
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_TERMINATED, recv_result);
+    TEST_ASSERT_EQUAL_INT (ETERM, recv_errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&recv_part));
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, recv_part_flag);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&recv_part));
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_TERMINATED, send_result);
+    TEST_ASSERT_EQUAL_INT (ETERM, send_errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
+    TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&send_part));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&send_part));
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (socket));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (peer));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_ctx_term (ctx));
+}
+
 void test_ctx_destroy ()
 {
     //  Set up our context and sockets
@@ -1517,6 +1669,8 @@ int main (void)
     RUN_CTX_DESTROY_TEST (test_ctx_term_with_open_socket_monitors);
     RUN_CTX_DESTROY_TEST (test_router_router_connection_ready);
     RUN_CTX_DESTROY_TEST (test_ctx_shutdown);
+    RUN_CTX_DESTROY_TEST (
+      test_ctx_shutdown_releases_concurrent_receive_and_send_after_backpressure);
     RUN_CTX_DESTROY_TEST (test_ctx_shutdown_socket_opened_after);
     RUN_CTX_DESTROY_TEST (test_ctx_shutdown_only_socket_opened_after);
     RUN_CTX_DESTROY_TEST (

@@ -96,6 +96,9 @@ with `zlink_msg_copy()`.
 
 ## 4. Multipart
 
+This section applies to sockets that support multipart. STREAM uses
+[single-part sends and RAW/PACKET receive](socket/08-stream.en.md).
+
 Multipart is the transfer of multiple frames (parts) as one logical message. Core treats the
 parts from `ZLINK_PART_MORE` through `ZLINK_PART_FINAL` as one logical multipart sequence. The
 internal structure that prevents another sender's parts from being inserted into this sequence

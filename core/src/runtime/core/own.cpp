@@ -66,7 +66,11 @@ void zlink::own_t::launch_child (own_t *object_)
 
 void zlink::own_t::term_child (own_t *object_)
 {
-    process_term_req (object_);
+    // launch_child publishes ownership through this mailbox. Termination must
+    // follow that same command order: a public caller can otherwise overtake
+    // the queued own command and mistake a not-yet-adopted child for one that
+    // has already terminated.
+    send_term_req (this, object_);
 }
 
 void zlink::own_t::process_term_req (own_t *object_)
@@ -124,6 +128,11 @@ void zlink::own_t::terminate ()
 bool zlink::own_t::is_terminating () const
 {
     return _terminating;
+}
+
+bool zlink::own_t::has_pending_term_acks () const
+{
+    return _term_acks != 0;
 }
 
 void zlink::own_t::process_term (int linger_)

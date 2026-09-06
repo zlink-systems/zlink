@@ -56,11 +56,6 @@ class router_t : public routing_socket_base_t
     int xselect_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_) ZLINK_OVERRIDE;
-    int xselect_routed_submit_target_internal (
-      const zlink_routing_id_t *router_rid_or_null_,
-      zlink_routed_submit_target_t *target_out_,
-      uint64_t *transport_connection_id_out_,
-      uint64_t *route_incarnation_id_out_) ZLINK_OVERRIDE;
     int xselect_request_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_,

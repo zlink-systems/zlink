@@ -279,7 +279,7 @@ JVMZLINK_LEN32BE_BUILD_DIR="${JVMZLINK_LEN32BE_PROJECT_DIR}/build"
 JVMZLINK_LEN32BE_BIN="${JVMZLINK_LEN32BE_BUILD_DIR}/install/jvmzlink-len32be-stream-server/bin/jvmzlink-len32be-stream-server"
 
 BINDINGS_JAVA_PROJECT_DIR="${ROOT_DIR}/bindings/java"
-ZLINK_CORE_LIBRARY="${BUILD_DIR}/lib/libzlink.so"
+ZLINK_CORE_LIBRARY="${ZLINK_LOCAL_CORE_RUNTIME}"
 
 NETTY_PROJECT_DIR="${STACKS_ROOT_DIR}/netty"
 NETTY_BUILD_DIR="${NETTY_PROJECT_DIR}/build"
@@ -309,7 +309,6 @@ JAVA_BINDINGS_JAR_BUILT=0
 resolve_stack_tuning()
 {
     local stack="$1"
-    local size_hint="${2:-0}"
 
     STACK_SNDBUF=1048576
     STACK_RCVBUF=1048576
@@ -319,36 +318,15 @@ resolve_stack_tuning()
     STACK_ENV_VARS=()
 
     case "${stack}" in
-        cppserver)
-            STACK_IO_THREADS="${SERVER_IO_THREADS}"
-            STACK_SNDBUF=4194304
-            STACK_RCVBUF=4194304
-            STACK_BACKLOG=65535
-            ;;
         dotnet)
-            STACK_IO_THREADS="${SERVER_IO_THREADS}"
-            STACK_SNDBUF=32768
-            STACK_RCVBUF=32768
-            STACK_BACKLOG=32768
-            STACK_TCP_NODELAY=0
-            STACK_ENV_VARS+=("DOTNET_gcServer=1")
-            STACK_ENV_VARS+=("COMPlus_gcServer=1")
+            STACK_ENV_VARS+=("DOTNET_gcServer=1" "COMPlus_gcServer=1")
             ;;
         netzlink|netzlink-len32be)
-            STACK_IO_THREADS="${SERVER_IO_THREADS}"
-            STACK_SNDBUF=8388608
-            STACK_RCVBUF=8388608
-            STACK_BACKLOG=65535
             STACK_ENV_VARS+=("ZLINK_LIBRARY_PATH=${ZLINK_CORE_LIBRARY}")
             STACK_ENV_VARS+=("LD_LIBRARY_PATH=$(dirname "${ZLINK_CORE_LIBRARY}"):${LD_LIBRARY_PATH:-}")
-            STACK_ENV_VARS+=("DOTNET_gcServer=1")
-            STACK_ENV_VARS+=("COMPlus_gcServer=1")
+            STACK_ENV_VARS+=("DOTNET_gcServer=1" "COMPlus_gcServer=1")
             ;;
         jvmzlink|jvmzlink-recv|jvmzlink-len32be)
-            STACK_IO_THREADS="${SERVER_IO_THREADS}"
-            STACK_SNDBUF=8388608
-            STACK_RCVBUF=8388608
-            STACK_BACKLOG=65535
             STACK_ENV_VARS+=("ZLINK_LIBRARY_PATH=${ZLINK_CORE_LIBRARY}")
             STACK_ENV_VARS+=("LD_LIBRARY_PATH=$(dirname "${ZLINK_CORE_LIBRARY}"):${LD_LIBRARY_PATH:-}")
             STACK_ENV_VARS+=(
@@ -356,34 +334,9 @@ resolve_stack_tuning()
             )
             ;;
         netty)
-            STACK_IO_THREADS="${SERVER_IO_THREADS}"
-            STACK_SNDBUF=4194304
-            STACK_RCVBUF=4194304
-            STACK_BACKLOG=65535
             STACK_ENV_VARS+=(
               "JAVA_OPTS=${JAVA_OPTS:-} -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Xms4g -Xmx4g -XX:MaxDirectMemorySize=4g"
             )
-            ;;
-        asio)
-            STACK_IO_THREADS="${SERVER_IO_THREADS}"
-            STACK_SNDBUF=2097152
-            STACK_RCVBUF=2097152
-            ;;
-        zlink|zlink_packet|zlink-len32be)
-            STACK_IO_THREADS="${SERVER_IO_THREADS}"
-            if (( size_hint >= 65536 && STACK_IO_THREADS < 8 )); then
-                STACK_IO_THREADS=8
-            fi
-            STACK_SNDBUF=8388608
-            STACK_RCVBUF=8388608
-            STACK_BACKLOG=65535
-            ;;
-        zmq)
-            STACK_IO_THREADS="${SERVER_IO_THREADS}"
-            STACK_SNDBUF=2097152
-            STACK_RCVBUF=2097152
-            ;;
-        *)
             ;;
     esac
 }
@@ -934,35 +887,19 @@ build_core_targets()
         return 0
     fi
 
-    local needs_zlink_core=0
-    local stack=""
-    for stack in "${RUN_STACKS[@]}"; do
-        case "${stack}" in
-            netzlink|netzlink-len32be|jvmzlink|jvmzlink-recv|jvmzmq|jvmzlink-len32be)
-                needs_zlink_core=1
-                break
-                ;;
-            *)
-                ;;
-        esac
-    done
-
     log "configure bindings/c build"
     cmake -S "${ROOT_DIR}/bindings/c" -B "${BUILD_DIR}" \
         -DZLINK_C_BUILD_BENCHES=ON \
         -DZLINK_C_BUILD_BENCH_STREAMCOMPARE=ON \
+        -DZLINK_C_BUILD_BENCH_ZMQ=OFF \
+        -DZLINK_C_BUILD_BENCH_ROUTER_COMPARE=OFF \
+        -DZLINK_C_BUILD_BENCH_GRPC_COMPARE=OFF \
         -DZLINK_CORE_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core}" \
         -DZLINK_C_CORE_BUILD_DIR="${ZLINK_CORE_PACKAGE_PREFIX:-${ROOT_DIR}/core/build}" >/dev/null
 
-    if [[ "${needs_zlink_core}" -eq 1 ]]; then
-        log "build bench_streamcompare_client + libzlink"
-        cmake --build "${BUILD_DIR}" --target bench_streamcompare_client libzlink \
-            -j"$(nproc)" >/dev/null
-    else
-        log "build bench_streamcompare_client"
-        cmake --build "${BUILD_DIR}" --target bench_streamcompare_client \
-            -j"$(nproc)" >/dev/null
-    fi
+    log "build bench_streamcompare_client"
+    cmake --build "${BUILD_DIR}" --target bench_streamcompare_client \
+        -j"$(nproc)" >/dev/null
 }
 
 prepare_build_directory_policy()
@@ -1260,7 +1197,7 @@ start_server()
             ;;
     esac
 
-    resolve_stack_tuning "${stack}" "${size_hint}"
+    resolve_stack_tuning "${stack}"
 
     cmd+=(
         --host "${host}"
@@ -1631,6 +1568,8 @@ CSV
     prepare_build_directory_policy
 
     build_selected
+    zlink_export_local_core_runtime
+    log "core_runtime=$(readlink -f "${ZLINK_CORE_LIBRARY}")"
 
     if [[ ${#ACTIVE_STACKS[@]} -eq 0 ]]; then
         log "no active stacks after build"

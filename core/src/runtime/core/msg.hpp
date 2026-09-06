@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <cstring>
 #include <type_traits>
 #include <vector>
 
@@ -70,7 +71,12 @@ class msg_t
         shared = 128
     };
 
-    bool check () const;
+    bool check () const
+    {
+        return std::memcmp (_u.base.validity_signature, _validity_signature,
+                            validity_signature_size) == 0
+               && _u.base.type >= type_min && _u.base.type <= type_max;
+    }
     int init ();
 
     int
@@ -178,8 +184,6 @@ class msg_t
     //  references drops to 0, the message is closed and false is returned.
     bool rm_refs (int refs_);
 
-    void shrink (size_t new_size_);
-
     //  Size in bytes of the largest message that is still copied around
     //  rather than being reference-counted.
     enum
@@ -202,6 +206,9 @@ class msg_t
     };
 
   private:
+    static constexpr unsigned char _validity_signature[validity_signature_size] = {
+      0x5a, 0x4c, 0x4d, 0x47};
+
     static void call_dec_ref_on_slice (void *data_, void *hint_);
     zlink::atomic_counter_t *refcnt ();
 

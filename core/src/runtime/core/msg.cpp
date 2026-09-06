@@ -86,21 +86,13 @@ zlink::msg_t::content_t *decode_slice_hint (void *hint_, bool *lmsg_owner_out_)
 }
 }
 
-bool zlink::msg_t::check () const
-{
-    return _u.base.validity_signature[0] == 0x5a
-           && _u.base.validity_signature[1] == 0x4c
-           && _u.base.validity_signature[2] == 0x4d
-           && _u.base.validity_signature[3] == 0x47
-           && _u.base.type >= type_min && _u.base.type <= type_max;
-}
+constexpr unsigned char
+  zlink::msg_t::_validity_signature[zlink::msg_t::validity_signature_size];
 
 void zlink::msg_t::mark_valid (type_t type_)
 {
-    _u.base.validity_signature[0] = 0x5a;
-    _u.base.validity_signature[1] = 0x4c;
-    _u.base.validity_signature[2] = 0x4d;
-    _u.base.validity_signature[3] = 0x47;
+    std::memcpy (_u.base.validity_signature, _validity_signature,
+                 validity_signature_size);
     _u.base.type = static_cast<unsigned char> (type_);
 }
 
@@ -571,30 +563,6 @@ uint32_t zlink::msg_t::refcnt_value () const
     }
 
     return 1;
-}
-
-void zlink::msg_t::shrink (size_t new_size_)
-{
-    //  Check the validity of the message.
-    zlink_assert (check ());
-    zlink_assert (new_size_ <= size ());
-
-    switch (_u.base.type) {
-        case type_vsm:
-            _u.vsm.size = static_cast<unsigned char> (new_size_);
-            break;
-        case type_lmsg:
-            _u.lmsg.content->size = new_size_;
-            break;
-        case type_zclmsg:
-            _u.zclmsg.content->size = new_size_;
-            break;
-        case type_cmsg:
-            _u.cmsg.size = new_size_;
-            break;
-        default:
-            zlink_assert (false);
-    }
 }
 
 unsigned char zlink::msg_t::flags () const

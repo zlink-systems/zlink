@@ -494,19 +494,6 @@ int zlink::socket_base_t::xselect_routed_submit_target (
     return -1;
 }
 
-int zlink::socket_base_t::xselect_routed_submit_target_internal (
-  const zlink_routing_id_t *router_rid_or_null_,
-  zlink_routed_submit_target_t *target_out_,
-  uint64_t *transport_connection_id_out_,
-  uint64_t *route_incarnation_id_out_)
-{
-    if (transport_connection_id_out_)
-        *transport_connection_id_out_ = 0;
-    if (route_incarnation_id_out_)
-        *route_incarnation_id_out_ = 0;
-    return xselect_routed_submit_target (router_rid_or_null_, target_out_);
-}
-
 int zlink::socket_base_t::xselect_request_submit_target (
   const zlink_routing_id_t *router_rid_or_null_,
   zlink_routed_submit_target_t *target_out_,

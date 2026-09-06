@@ -51,7 +51,6 @@ struct physical_queue_registry_snapshot_t
 
     uint64_t active_application_direction_count;
     uint64_t active_completion_direction_count;
-    uint64_t retired_direction_count;
     uint64_t application_current_accounted_bytes;
     uint64_t application_provisional_accounted_bytes;
     uint64_t application_peak_accounted_bytes;
@@ -60,9 +59,6 @@ struct physical_queue_registry_snapshot_t
     uint64_t completion_pending_message_count;
     uint64_t monitor_applied_hwm_bytes;
     uint64_t monitor_current_accounted_bytes;
-    uint64_t application_lease_accounted_bytes;
-    uint64_t outstanding_application_lease_count;
-    uint64_t deferred_origin_credit_bytes;
     uint64_t oversize_admission_count;
     uint64_t largest_oversize_message_bytes;
     uint64_t total_admission_attempts;
@@ -171,11 +167,9 @@ class ctx_physical_queue_registry_t
     std::atomic<uint64_t> _total_admission_attempts;
     std::atomic<uint64_t> _first_blocked_admission_attempts;
     std::atomic<bool> _aggregate_overflow;
-    std::atomic<bool> _decoder_accepting;
 
     void erase_direction_if_retired_and_drained_unlocked (
       const physical_queue_handle_t &direction_);
-    void force_cancel_decoder_reservations ();
     bool sample_application_pipe_queue (
       const physical_queue_handle_t &direction_, uint64_t *provisional_out_,
       uint64_t *committed_out_) const;

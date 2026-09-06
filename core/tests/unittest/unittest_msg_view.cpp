@@ -111,6 +111,49 @@ void test_init_view_from_zcmsg ()
     TEST_ASSERT_EQUAL_INT (1, free_counter);
 }
 
+void test_nested_views_preserve_extent_through_copy_and_move ()
+{
+    unsigned char *payload = static_cast<unsigned char *> (std::malloc (128));
+    TEST_ASSERT_NOT_NULL (payload);
+    for (size_t i = 0; i < 128; ++i)
+        payload[i] = static_cast<unsigned char> (i);
+    int free_counter = 0;
+    zlink::msg_t source;
+    zlink::msg_t view;
+    zlink::msg_t nested;
+    zlink::msg_t copied;
+    zlink::msg_t moved;
+    TEST_ASSERT_EQUAL_INT (
+      0, source.init_data (payload, 128, on_msg_view_test_free, &free_counter));
+    TEST_ASSERT_EQUAL_INT (0, view.init ());
+    TEST_ASSERT_EQUAL_INT (0, nested.init ());
+    TEST_ASSERT_EQUAL_INT (0, copied.init ());
+    TEST_ASSERT_EQUAL_INT (0, moved.init ());
+
+    TEST_ASSERT_EQUAL_INT (0, view.init_view (source, 8, 64));
+    TEST_ASSERT_EQUAL_INT (0, nested.init_view (view, 12, 32));
+    TEST_ASSERT_EQUAL_INT (0, copied.copy (nested));
+    TEST_ASSERT_EQUAL_INT (0, moved.move (nested));
+    TEST_ASSERT_EQUAL_UINT64 (128, source.size ());
+    TEST_ASSERT_EQUAL_UINT64 (64, view.size ());
+    TEST_ASSERT_EQUAL_UINT64 (0, nested.size ());
+    TEST_ASSERT_EQUAL_INT (0, source.close ());
+    TEST_ASSERT_EQUAL_INT (0, view.close ());
+    TEST_ASSERT_EQUAL_INT (0, nested.close ());
+    TEST_ASSERT_EQUAL_INT (0, free_counter);
+
+    TEST_ASSERT_EQUAL_UINT64 (32, moved.size ());
+    TEST_ASSERT_EQUAL_UINT64 (32, copied.size ());
+    TEST_ASSERT_EQUAL_PTR (payload + 20, moved.data ());
+    TEST_ASSERT_EQUAL_PTR (moved.data (), copied.data ());
+    TEST_ASSERT_EQUAL_INT (0, moved.close ());
+    TEST_ASSERT_EQUAL_INT (0, free_counter);
+    TEST_ASSERT_EQUAL_UINT8 (20, static_cast<unsigned char *> (copied.data ())[0]);
+    TEST_ASSERT_EQUAL_UINT8 (51, static_cast<unsigned char *> (copied.data ())[31]);
+    TEST_ASSERT_EQUAL_INT (0, copied.close ());
+    TEST_ASSERT_EQUAL_INT (1, free_counter);
+}
+
 static void init_command_msg (zlink::msg_t &msg_, const size_t size_, const unsigned char flags_)
 {
     TEST_ASSERT_EQUAL_INT (0, msg_.init_size (size_));
@@ -183,6 +226,7 @@ int main (void)
     RUN_TEST (test_init_view_vsm_fallback_copy);
     RUN_TEST (test_init_view_invalid_range);
     RUN_TEST (test_init_view_from_zcmsg);
+    RUN_TEST (test_nested_views_preserve_extent_through_copy_and_move);
     RUN_TEST (test_command_body_size_for_well_formed_commands);
     RUN_TEST (test_command_body_size_clamps_malformed_commands);
 

@@ -94,6 +94,9 @@ thread 규칙은 핸들 단위다. 하나의 `zlink_msg_t` instance를 여러 th
 
 ## 4. Multipart
 
+이 절은 multipart를 지원하는 socket에 적용한다. STREAM은
+[part 하나를 보내는 송신과 RAW/PACKET 수신](socket/08-stream.ko.md)을 사용한다.
+
 여러 frame(part)을 하나의 논리적 message로 묶어 전송하는 방식을 multipart라 한다. Core는
 `ZLINK_PART_MORE`부터 `ZLINK_PART_FINAL`까지의 part를 하나의 논리적 multipart sequence로
 처리한다. 다른 sender의 part가 이 sequence 사이에 삽입되지 않도록 보호하는 내부 구조는

@@ -67,6 +67,9 @@ class own_t : public object_t
     //  Returns true if the object is in process of termination.
     bool is_terminating () const;
 
+    // The command owner must keep running until child termination completes.
+    bool has_pending_term_acks () const;
+
     //  Derived object destroys own_t. There's no point in allowing
     //  others to invoke the destructor. At the same time, it has to be
     //  virtual so that generic own_t deallocation mechanism destroys

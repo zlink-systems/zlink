@@ -1176,6 +1176,12 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
             return false;
         }
 
+        // Only this executor dispatches ownership commands until detach. A
+        // child can still be terminating before its pipe termination reaches
+        // this socket, so the pipe state alone cannot establish idle.
+        if (has_pending_term_acks ())
+            return false;
+
         // An empty mailbox is not idle while a pipe still owes a termination
         // acknowledgement. Its peer can enqueue that acknowledgement only
         // after this executor yields; retain the command owner until then.

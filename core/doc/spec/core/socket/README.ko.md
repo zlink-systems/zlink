@@ -527,10 +527,12 @@ ZLINK_EXPORT zlink_recv_result_t zlink_recv_part (void *s_,
 `source_rid_out_`은 선택 사항이다. Successful receive는 기존 `part_out_` content를 닫고
 새 part의 소유권을 caller에게 옮긴다. Caller는 다음 successful overwrite 전에 message를
 옮기거나 `zlink_msg_close()`로 닫는다. `STREAM`은 Core가 소유한 routing ID view를 반환하고
-PAIR와 DEALER는 `NULL`을 반환한다. `*has_more_out_`은 다음 part가 있으면
-`ZLINK_PART_MORE`, 마지막 part이면 `ZLINK_PART_FINAL`이다.
+PAIR와 DEALER는 `NULL`을 반환한다. PAIR와 DEALER에서 `*has_more_out_`은 다음 part가
+있으면 `ZLINK_PART_MORE`, 마지막 part이면 `ZLINK_PART_FINAL`이다. STREAM RAW 수신은
+성공 시 part 하나와 `ZLINK_PART_FINAL`을 반환한다.
 
-한 multipart record의 첫 part부터 `FINAL`까지 같은 thread와 같은 recv family를 사용한다.
+PAIR와 DEALER에서는 한 multipart record의 첫 part부터 `FINAL`까지 같은 thread와 같은
+recv family를 사용한다.
 다른 thread나 family가 중간에 진입하면 `ZLINK_RECV_BUSY`, `errno == EBUSY`이고
 원래 owner는 staged record를 계속 받을 수 있다. `flags_`는 `NONE` 또는 `DONTWAIT`만 허용한다.
 알 수 없는 bit는 `ZLINK_RECV_INVALID_STATE`, `errno == EINVAL`이다.
@@ -936,13 +938,16 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
   void *user_context_, zlink_completion_id_t *completion_id_out_);
 ```
 
-두 함수는 결과와 관계없이 `part_`를 소비해 빈 initialized 상태로 둔다. `MORE`는
-socket-local sequence에 part를 staging하고 `FINAL`이 성공해야 record 하나로 admission한다.
+두 함수는 결과와 관계없이 `part_`를 소비해 빈 initialized 상태로 둔다. STREAM은
+`FINAL` 단일 part만 지원한다. `MORE` 거절은
+[STREAM 송신 계약](08-stream.ko.md#4-routed-part-send)을 따른다. PAIR·DEALER·ROUTER에서
+`MORE`는 socket-local sequence에 part를 staging하고 `FINAL`이 성공해야 record 하나로 admission한다.
 같은 sequence의 함수 family, target과 flags는 같아야 한다. 중간 실패는 staging한 prefix와
 실패한 part를 모두 폐기한다. 재시도할 caller는 첫 part를 제출하기 전에 전체 record를 따로
 보관해야 한다.
 
-`flags_`는 `NONE` 또는 `DONTWAIT`, `part_flag_`는 `MORE` 또는 `FINAL`만 허용한다. 범위 밖
+`flags_`는 `NONE` 또는 `DONTWAIT`만 허용한다. `part_flag_`의 정의된 값은 `MORE`와 `FINAL`이며,
+STREAM에서는 `FINAL`만 허용한다. 범위 밖
 값과 알 수 없는 bit는 sequence 전체를 폐기하고 `ZLINK_SUBMIT_INVALID_ARGUMENT`,
 `errno == EINVAL`로 실패한다. `completion_id_out_`은 선택 output이며 non-NULL이면 다른
 validation 전에 `0`으로 초기화한다. `user_context_`는 `DONTWAIT FINAL`에서만 non-NULL을
@@ -953,7 +958,7 @@ validation 전에 `0`으로 초기화한다. `user_context_`는 `DONTWAIT FINAL`
 
 | 호출 결과 | submit 반환 | 완료 ID | 후속 completion |
 |---|---|---:|---|
-| `MORE` staging 성공 | `ZLINK_SUBMIT_OK` | 0 | 없음 |
+| PAIR·DEALER·ROUTER의 `MORE` staging 성공 | `ZLINK_SUBMIT_OK` | 0 | 없음 |
 | `NONE FINAL` local send queue admission | `ZLINK_SUBMIT_OK` | 0 | 없음 |
 | `DONTWAIT FINAL` 즉시 admission | `ZLINK_SUBMIT_OK` | 0 | 없음 |
 | `DONTWAIT FINAL` backpressure 또는 target 준비 전 | `ZLINK_SUBMIT_BACKPRESSURED`, `EAGAIN` | nonzero 대기 토큰 | WRITABLE 한 건 |
@@ -1340,8 +1345,10 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
   `ZLINK_COMPLETION_WRITABLE` record를 정확히 한 번 반환하고, caller는 queue를 `NO_DATA`까지 비운 뒤
   같은 record를 다시 제출한다. `NONE FINAL`은 snapshot한 `SNDTIMEO`
   안에서 같은 logical target admission을 기다리며 ID `0`과 completion 없음으로 끝난다.
-- 모든 part 호출은 성공·실패와 관계없이 입력을 소비하며 실패한 FINAL과 staging prefix를 함께
-  폐기한다. ROUTER·STREAM RID에 route가 없으면 `ZLINK_SUBMIT_NOT_CONNECTED`+`EHOSTUNREACH`, ID `0`이고
+- STREAM은 `FINAL` 단일 part만 허용한다. 나머지 인자가 유효한 `MORE` 호출은
+  `ZLINK_SUBMIT_NOT_SUPPORTED`+`ENOTSUP`,
+  ID `0`으로 거절한다. 모든 part 호출은 성공·실패와 관계없이 입력을 소비한다.
+  PAIR·DEALER·ROUTER의 실패한 FINAL은 staging prefix도 함께 폐기한다. ROUTER·STREAM RID에 route가 없으면 `ZLINK_SUBMIT_NOT_CONNECTED`+`EHOSTUNREACH`, ID `0`이고
   completion reservation 상한 초과는 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, ID `0`이다.
 - Core는 SEND·REQUEST payload를 admission 전에 보관하거나 Core 소유의 재시도 FIFO를 두지 않는다. 대기
   토큰은 target 단위(PAIR pipe, DEALER candidate peer 집합, ROUTER·STREAM의 해당 RID)로 예약하며

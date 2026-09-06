@@ -563,11 +563,12 @@ call. `source_rid_out_` is optional. A successful receive closes the existing
 contents of `part_out_` and transfers ownership of the new part to the caller.
 The caller moves the message or closes it with `zlink_msg_close()` before the
 next successful overwrite. STREAM returns a Core-owned routing-ID view; PAIR
-and DEALER return `NULL`. `*has_more_out_` is `ZLINK_PART_MORE` when another
-part follows and `ZLINK_PART_FINAL` for the last part.
+and DEALER return `NULL`. On PAIR and DEALER, `*has_more_out_` is `ZLINK_PART_MORE` when
+another part follows and `ZLINK_PART_FINAL` for the last part. A successful STREAM RAW
+receive returns one part with `ZLINK_PART_FINAL`.
 
-The same thread and receive family receive every part from the first part of a
-multipart record through `FINAL`. Entry by another thread or receive family
+On PAIR and DEALER, the same thread and receive family receive every part from the first
+part of a multipart record through `FINAL`. Entry by another thread or receive family
 mid-record returns `ZLINK_RECV_BUSY` with `errno == EBUSY`; the
 original owner can continue receiving the staged record. `flags_` accepts only
 `NONE` or `DONTWAIT`. An unknown bit returns `ZLINK_RECV_INVALID_STATE` with
@@ -1002,14 +1003,16 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
 ```
 
 Both functions consume `part_` on every result and leave it in an empty,
-initialized state. `MORE` stages a part in a socket-local sequence; a successful
+initialized state. STREAM supports only a single `FINAL` part; `MORE` rejection follows
+the [STREAM send contract](08-stream.en.md#4-routed-part-send).
+On PAIR, DEALER, and ROUTER, `MORE` stages a part in a socket-local sequence; a successful
 `FINAL` admits the sequence as one record. Every call in a sequence uses the
 same function family, target, and flags. An intermediate failure discards both
 the staged prefix and the failing part. A caller that may retry retains a
 separate copy of the complete record before submitting its first part.
 
-`flags_` accepts only `NONE` or `DONTWAIT`, and `part_flag_` accepts only `MORE`
-or `FINAL`. An out-of-range value or unknown bit discards the entire sequence
+`flags_` accepts only `NONE` or `DONTWAIT`. The defined `part_flag_` values are `MORE`
+and `FINAL`; STREAM accepts only `FINAL`. An out-of-range value or unknown bit discards the entire sequence
 and returns `ZLINK_SUBMIT_INVALID_ARGUMENT` with `errno == EINVAL`.
 `completion_id_out_` is optional; when non-NULL it is set to `0` before any
 other validation. `user_context_` may be non-NULL only on a DONTWAIT `FINAL`.
@@ -1020,7 +1023,7 @@ and closes the completion or discards the socket.
 
 | Call result | Submit return | Completion ID | Later completion |
 |---|---|---:|---|
-| Successful `MORE` staging | `ZLINK_SUBMIT_OK` | 0 | none |
+| Successful `MORE` staging on PAIR, DEALER, or ROUTER | `ZLINK_SUBMIT_OK` | 0 | none |
 | `NONE FINAL` local send-queue admission | `ZLINK_SUBMIT_OK` | 0 | none |
 | Immediate `DONTWAIT FINAL` admission | `ZLINK_SUBMIT_OK` | 0 | none |
 | `DONTWAIT FINAL` backpressured or target not ready yet | `ZLINK_SUBMIT_BACKPRESSURED`, `EAGAIN` | nonzero wait token | one WRITABLE record |
@@ -1530,8 +1533,10 @@ connection, options, send/receive/completion functions, return values, and
   caller drains the queue to `NO_DATA` and resubmits the same record. A NONE
   `FINAL` waits for admission to the same logical target within the
   snapshotted `SNDTIMEO` and returns ID `0` with no completion.
-- Every part call consumes its input on success and failure. A failed `FINAL`
-  also discards its staged prefix. A ROUTER or STREAM RID with no route
+- STREAM accepts only a single `FINAL` part; an otherwise-valid `MORE` call returns
+  `ZLINK_SUBMIT_NOT_SUPPORTED`
+  with `ENOTSUP` and ID `0`. Every part call consumes its input on success and failure.
+  A failed `FINAL` on PAIR, DEALER, or ROUTER also discards its staged prefix. A ROUTER or STREAM RID with no route
   returns `ZLINK_SUBMIT_NOT_CONNECTED` with `EHOSTUNREACH` and ID `0`;
   completion reservation exhaustion returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with
   `ENOMEM` and ID `0`.

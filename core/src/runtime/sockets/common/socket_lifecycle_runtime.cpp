@@ -581,7 +581,6 @@ int zlink::socket_lifecycle_coordinator_t::start_async_mailbox_processing (
 
     async_mailbox_active.store (true, std::memory_order_release);
     async_processing_started.store (false, std::memory_order_release);
-    async_processing_done.store (false, std::memory_order_release);
     async_quiesce_pending.store (false, std::memory_order_release);
     async_quiesce_completed.store (false, std::memory_order_release);
     mailbox_->set_io_context (&io_thread_->get_io_context (), handler_, handler_arg_, pre_post_);
@@ -621,7 +620,6 @@ void zlink::socket_lifecycle_coordinator_t::stop_async_mailbox_processing (mailb
         return;
 
     async_mailbox_active.store (false, std::memory_order_release);
-    async_processing_done.store (false, std::memory_order_release);
     async_quiesce_pending.store (true, std::memory_order_release);
     if (mailbox_)
         mailbox_->schedule_if_needed ();
@@ -633,9 +631,8 @@ void zlink::socket_lifecycle_coordinator_t::mark_async_processing_stopped (mailb
         mailbox_->set_io_context (NULL, NULL, NULL, NULL);
 
     if (async_quiesce_pending.load (std::memory_order_acquire)) {
-        async_quiesce_pending.store (false, std::memory_order_release);
-        async_processing_done.store (true, std::memory_order_release);
         async_quiesce_completed.store (true, std::memory_order_release);
+        async_quiesce_pending.store (false, std::memory_order_release);
         scoped_lock_t lock (async_done_mu);
         async_done_cv.broadcast ();
     }
@@ -643,12 +640,12 @@ void zlink::socket_lifecycle_coordinator_t::mark_async_processing_stopped (mailb
 
 void zlink::socket_lifecycle_coordinator_t::wait_async_quiesced (int timeout_ms_)
 {
-    if (async_processing_done.load (std::memory_order_acquire))
+    if (!is_async_quiesce_pending ())
         return;
 
     scoped_lock_t lock (async_done_mu);
     const int wait_timeout_ms = timeout_ms_ < 0 ? -1 : timeout_ms_ > 0 ? timeout_ms_ : 2000;
-    while (!async_processing_done.load (std::memory_order_acquire)) {
+    while (is_async_quiesce_pending ()) {
         const int rc = async_done_cv.wait (&async_done_mu, wait_timeout_ms);
         if (rc != 0)
             break;

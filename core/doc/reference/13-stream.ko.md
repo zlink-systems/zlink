@@ -48,17 +48,17 @@ zlink_send_part_rid(stream_socket, &client_rid, &part, ZLINK_SEND_FLAGS_NONE,
 ```
 
 **Parameters.** `target_rid_`는 이 STREAM socket이 부여한 유효한 4바이트 routing
-ID여야 한다. Multipart sequence의 모든 part는 MORE부터 FINAL까지 같은 RID와 flags를 쓴다.
+ID여야 하며 `part_flag_`는 `ZLINK_PART_FINAL`이다. STREAM은 단일 part를 전송한다.
 
 **Return과 errno.** `zlink_submit_result_t`를 반환한다 — 성공하면
-`ZLINK_SUBMIT_OK`. 연결이 없으면 `ZLINK_SUBMIT_NOT_CONNECTED`. 모든 결과에서 `part_`를
-소비하므로 application-level 복구가 필요하면 첫 part를 호출하기 전에 완성 record의 별도
-복사본을 보관한다.
+`ZLINK_SUBMIT_OK`. 연결이 없으면 `ZLINK_SUBMIT_NOT_CONNECTED`. 공통 인자 검증을 통과한
+`ZLINK_PART_MORE` 호출은
+`ZLINK_SUBMIT_NOT_SUPPORTED`+`ENOTSUP`, ID `0`이며 입력을 전송하지 않는다. 모든 결과에서
+`part_`를 소비하므로 application-level 복구가 필요하면 제출 전에 payload의 별도 복사본을 보관한다.
 
 **선택 기준.** NONE FINAL은 `SNDTIMEO` 안에서 같은 RID의 local admission을 기다린다.
-DONTWAIT는 Core가 완성 record를 보관하면 0이 아닌 completion ID를 반환하며, 이후 같은 RID
-재시도는 Core가 admission 또는 terminal까지 소유한다. Part 실패는 staged prefix를 원자적으로
-폐기한다.
+DONTWAIT는 backpressure이면 payload를 보관하지 않고 0이 아닌 WRITABLE 대기 토큰을
+반환한다. Caller는 completion을 받은 뒤 자신이 보관한 payload를 다시 제출한다.
 
 ---
 

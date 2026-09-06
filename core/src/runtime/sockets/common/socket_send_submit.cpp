@@ -481,18 +481,6 @@ int zlink::socket_base_t::send_completion_submit_blocking (
         errno = ENOTSUP;
         return -1;
     }
-    if ((type == ZLINK_CORE_SOCKET_ROUTER
-         || type == ZLINK_CORE_SOCKET_STREAM)
-        && !valid_routing_id (target_rid_or_null_)) {
-        errno = EINVAL;
-        return -1;
-    }
-    if ((type == ZLINK_CORE_SOCKET_PAIR || type == ZLINK_CORE_SOCKET_DEALER)
-        && target_rid_or_null_) {
-        errno = EINVAL;
-        return -1;
-    }
-
     completion_submit_wait_context_t wait (this);
     std::optional<routed_send_target_key_t> target;
 

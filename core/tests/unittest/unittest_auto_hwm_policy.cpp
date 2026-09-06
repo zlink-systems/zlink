@@ -643,7 +643,6 @@ void test_pipe_rollback_preserves_active_decoder_reservation ()
                               snapshot.application_current_accounted_bytes);
     TEST_ASSERT_EQUAL_UINT64 (0,
                               snapshot.application_provisional_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (0, snapshot.deferred_origin_credit_bytes);
 
     registry.release_decoder_frame (&reservation);
     registry.snapshot (&snapshot);
@@ -651,7 +650,6 @@ void test_pipe_rollback_preserves_active_decoder_reservation ()
                               snapshot.application_current_accounted_bytes);
     TEST_ASSERT_EQUAL_UINT64 (
       0, snapshot.application_provisional_accounted_bytes);
-    TEST_ASSERT_EQUAL_UINT64 (0, snapshot.deferred_origin_credit_bytes);
     release_pipepair_queue_handles (&registry, &first, &second);
 }
 

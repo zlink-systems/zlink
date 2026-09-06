@@ -675,28 +675,31 @@ bool recv_stream_routing_id_and_payload (void *socket_,
                                          zlink_routing_id_t *rid_out_,
                                          zlink_msg_t *payload_out_)
 {
-    zlink_msg_t rid_msg;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&rid_msg));
-    if (test_recv_single_msg (&rid_msg, socket_, 0) < 0) {
-        zlink_msg_close (&rid_msg);
+    const zlink_routing_id_t *source_rid = NULL;
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    const zlink_recv_result_t recv_rc =
+      zlink_recv_part (socket_, &source_rid, payload_out_, &has_more,
+                       ZLINK_RECV_FLAGS_NONE);
+    if (recv_rc != ZLINK_RECV_OK)
         return false;
-    }
 
-    if (zlink_msg_size (&rid_msg) != stream_routing_id_size) {
-        zlink_msg_close (&rid_msg);
+    if (!source_rid || source_rid->size != stream_routing_id_size) {
+        const int close_rc = zlink_msg_close (payload_out_);
+        TEST_ASSERT_SUCCESS_ERRNO (close_rc);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (payload_out_));
         errno = EPROTO;
         return false;
     }
 
-    rid_out_->size = static_cast<uint8_t> (stream_routing_id_size);
-    memcpy (rid_out_->data, zlink_msg_data (&rid_msg), stream_routing_id_size);
-    const bool more = test_msg_has_more (&rid_msg);
-    zlink_msg_close (&rid_msg);
-    if (!more) {
+    *rid_out_ = *source_rid;
+    if (has_more != ZLINK_PART_FINAL) {
+        const int close_rc = zlink_msg_close (payload_out_);
+        TEST_ASSERT_SUCCESS_ERRNO (close_rc);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (payload_out_));
         errno = EPROTO;
         return false;
     }
-    return test_recv_single_msg (payload_out_, socket_, 0) >= 0;
+    return true;
 }
 
 void stream_handler (const zlink_routing_id_t *rid_,

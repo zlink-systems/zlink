@@ -234,7 +234,7 @@ class complete_record_admission_guard_t
         _scope ()
     {
         if (socket_)
-            _scope = socket_->begin_complete_send_scope ();
+            (void) socket_->begin_complete_send_scope (&_scope);
     }
 
     ~complete_record_admission_guard_t ()
@@ -258,7 +258,7 @@ class complete_record_admission_guard_t
     }
 
   private:
-    std::unique_ptr<zlink::socket_public_send_scope_t> _scope;
+    std::optional<zlink::socket_public_send_scope_t> _scope;
 };
 }
 

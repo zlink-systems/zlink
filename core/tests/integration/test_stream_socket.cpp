@@ -37,11 +37,13 @@ static const size_t stream_routing_id_size = 4;
 static const char *const stream_socket_smoke_cases[] = {
   "test_stream_no_data_recv_part_locks_raw_mode",
   "test_stream_successful_recv_part_locks_raw_mode",
-  "test_stream_rejects_unrouted_send_without_poisoning_next_routed_send",
+  "test_stream_raw_inproc_parts_are_independent_final_chunks",
+  "test_stream_rejects_unsupported_send_without_poisoning_routed_final",
   "test_stream_notify_records_and_bind_constraint",
   "test_stream_recv_ready_precedes_first_payload_contract",
   "test_stream_phase3_mode_freeze_contract",
   "test_stream_phase3_packet_pull_contract",
+  "test_stream_packet_peer_isolation_readiness_and_order",
   "test_stream_phase3_packet_maxmsgsize_contract",
   "test_stream_phase3_packet_enqueue_close_race",
 };
@@ -166,31 +168,31 @@ static bool recv_stream_routing_id_and_payload (void *socket_,
         return false;
     }
 
-    zlink_msg_t rid_msg;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&rid_msg));
-    const int rid_rc = test_recv_single_msg (&rid_msg, socket_, flags_);
-    if (rid_rc < 0) {
-        zlink_msg_close (&rid_msg);
+    const zlink_routing_id_t *source_rid = NULL;
+    zlink_part_flag_t has_more = ZLINK_PART_MORE;
+    const zlink_recv_result_t recv_rc = zlink_recv_part (
+      socket_, &source_rid, payload_out_, &has_more,
+      static_cast<zlink_recv_flags_t> (flags_));
+    if (recv_rc != ZLINK_RECV_OK)
         return false;
-    }
 
-    if (zlink_msg_size (&rid_msg) != stream_routing_id_size) {
-        zlink_msg_close (&rid_msg);
+    if (!source_rid || source_rid->size != stream_routing_id_size) {
+        const int close_rc = zlink_msg_close (payload_out_);
+        TEST_ASSERT_SUCCESS_ERRNO (close_rc);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (payload_out_));
         errno = EPROTO;
         return false;
     }
 
-    rid_out_->size = static_cast<uint8_t> (stream_routing_id_size);
-    memcpy (rid_out_->data, zlink_msg_data (&rid_msg), stream_routing_id_size);
-    zlink_msg_close (&rid_msg);
-
-    const bool more = test_msg_has_more (&rid_msg);
-    if (!more) {
+    *rid_out_ = *source_rid;
+    if (has_more != ZLINK_PART_FINAL) {
+        const int close_rc = zlink_msg_close (payload_out_);
+        TEST_ASSERT_SUCCESS_ERRNO (close_rc);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (payload_out_));
         errno = EPROTO;
         return false;
     }
-
-    return test_recv_single_msg (payload_out_, socket_, flags_) >= 0;
+    return true;
 }
 
 static bool wait_stream_notify_record (
@@ -860,8 +862,12 @@ void test_stream_no_data_recv_part_locks_raw_mode ()
                                sizeof (mode)));
 
     zlink_msg_t part;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
-    const zlink_routing_id_t *source_rid = NULL;
+    const char retained_payload[] = "retained";
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_msg_init_size (&part, sizeof (retained_payload)));
+    memcpy (zlink_msg_data (&part), retained_payload, sizeof (retained_payload));
+    const zlink_routing_id_t retained_rid = {};
+    const zlink_routing_id_t *source_rid = &retained_rid;
     zlink_part_flag_t has_more = ZLINK_PART_MORE;
     errno = 0;
     TEST_ASSERT_EQUAL_INT (
@@ -869,6 +875,11 @@ void test_stream_no_data_recv_part_locks_raw_mode ()
       zlink_recv_part (stream, &source_rid, &part, &has_more,
                        ZLINK_RECV_FLAGS_DONTWAIT));
     TEST_ASSERT_EQUAL_INT (EAGAIN, zlink_errno ());
+    TEST_ASSERT_EQUAL_PTR (&retained_rid, source_rid);
+    TEST_ASSERT_EQUAL_INT (ZLINK_PART_MORE, has_more);
+    TEST_ASSERT_EQUAL_UINT64 (sizeof (retained_payload), zlink_msg_size (&part));
+    TEST_ASSERT_EQUAL_MEMORY (retained_payload, zlink_msg_data (&part),
+                              sizeof (retained_payload));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
 
     test_context_socket_close_zero_linger (stream);
@@ -924,13 +935,77 @@ void test_stream_successful_recv_part_locks_raw_mode ()
 }
 #endif
 
+void test_stream_raw_inproc_parts_are_independent_final_chunks ()
+{
+    void *stream = test_context_socket (ZLINK_SOCKET_STREAM);
+    void *peer = test_context_socket (ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (stream);
+    TEST_ASSERT_NOT_NULL (peer);
+
+    const zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_RAW;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_stream_option (stream, ZLINK_STREAM_OPT_RECV_MODE, &mode,
+                               sizeof (mode)));
+
+    const char endpoint[] =
+      "inproc://stream-raw-independent-final-chunks";
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (stream, endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (peer, endpoint));
+
+    const char *const payloads[] = {"multipart-head", "multipart-tail",
+                                    "independent-final"};
+    const zlink_part_flag_t send_flags[] = {
+      ZLINK_PART_MORE, ZLINK_PART_FINAL, ZLINK_PART_FINAL};
+    for (size_t i = 0; i != 3; ++i) {
+        zlink_msg_t part;
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_msg_init_size (&part, strlen (payloads[i])));
+        memcpy (zlink_msg_data (&part), payloads[i], strlen (payloads[i]));
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_OK,
+          zlink_send_part (peer, &part, ZLINK_SEND_FLAGS_NONE,
+                           send_flags[i], NULL, NULL));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+    }
+
+    zlink_routing_id_t expected_rid;
+    memset (&expected_rid, 0, sizeof (expected_rid));
+    for (size_t i = 0; i != 3; ++i) {
+        zlink_msg_t part;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&part));
+        const zlink_routing_id_t *source_rid = NULL;
+        zlink_part_flag_t has_more = ZLINK_PART_MORE;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_RECV_OK,
+          zlink_recv_part (stream, &source_rid, &part, &has_more,
+                           ZLINK_RECV_FLAGS_NONE));
+        TEST_ASSERT_NOT_NULL (source_rid);
+        TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, source_rid->size);
+        if (i == 0)
+            expected_rid = *source_rid;
+        else
+            TEST_ASSERT_EQUAL_UINT8_ARRAY (
+              expected_rid.data, source_rid->data, stream_routing_id_size);
+        TEST_ASSERT_EQUAL_UINT64 (strlen (payloads[i]),
+                                  zlink_msg_size (&part));
+        TEST_ASSERT_EQUAL_MEMORY (payloads[i], zlink_msg_data (&part),
+                                  strlen (payloads[i]));
+        TEST_ASSERT_EQUAL_INT (ZLINK_PART_FINAL, has_more);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+    }
+
+    test_context_socket_close_zero_linger (peer);
+    test_context_socket_close_zero_linger (stream);
+}
+
 #if defined(ZLINK_HAVE_WINDOWS)
-void test_stream_rejects_unrouted_send_without_poisoning_next_routed_send ()
+void test_stream_rejects_unsupported_send_without_poisoning_routed_final ()
 {
     TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
 }
 #else
-void test_stream_rejects_unrouted_send_without_poisoning_next_routed_send ()
+void test_stream_rejects_unsupported_send_without_poisoning_routed_final ()
 {
     void *stream = test_context_socket (ZLINK_SOCKET_STREAM);
     TEST_ASSERT_NOT_NULL (stream);
@@ -978,6 +1053,24 @@ void test_stream_rejects_unrouted_send_without_poisoning_next_routed_send ()
     TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
     TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&unrouted));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&unrouted));
+
+    const zlink_send_flags_t flags[] = {
+      ZLINK_SEND_FLAGS_NONE, ZLINK_SEND_FLAGS_DONTWAIT};
+    for (size_t i = 0; i < sizeof (flags) / sizeof (flags[0]); ++i) {
+        zlink_msg_t prefix;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&prefix, 3));
+        memcpy (zlink_msg_data (&prefix), "BAD", 3);
+        zlink_completion_id_t completion_id = 99;
+        errno = 0;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_SUBMIT_NOT_SUPPORTED,
+          zlink_send_part_rid (stream, &target, &prefix, flags[i],
+                               ZLINK_PART_MORE, NULL, &completion_id));
+        TEST_ASSERT_EQUAL_INT (ENOTSUP, errno);
+        TEST_ASSERT_EQUAL_UINT64 (0, completion_id);
+        TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&prefix));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&prefix));
+    }
 
     const unsigned char expected[] = "GOOD";
     zlink_msg_t routed;
@@ -1404,6 +1497,160 @@ void test_stream_phase3_mode_freeze_contract ()
     test_context_socket_close_zero_linger (client);
     test_context_socket_close_zero_linger (server);
 }
+
+#if defined(ZLINK_HAVE_WINDOWS)
+void test_stream_packet_peer_isolation_readiness_and_order ()
+{
+    TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
+}
+#else
+void test_stream_packet_peer_isolation_readiness_and_order ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_STREAM);
+    TEST_ASSERT_NOT_NULL (server);
+
+    const int zero = 0;
+    const zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_PACKET;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &mode,
+                               sizeof (mode)));
+
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof (endpoint));
+
+    void *poller = zlink_poller_new ();
+    TEST_ASSERT_NOT_NULL (poller);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_poller_add (poller, server, server, ZLINK_POLLIN));
+
+    const int peer_a_fd = connect_raw_tcp (endpoint);
+    const int peer_b_fd = connect_raw_tcp (endpoint);
+    TEST_ASSERT_TRUE (peer_a_fd >= 0);
+    TEST_ASSERT_TRUE (peer_b_fd >= 0);
+    TEST_ASSERT_EQUAL_INT (0, set_raw_fd_timeout (peer_a_fd, 3000));
+    TEST_ASSERT_EQUAL_INT (0, set_raw_fd_timeout (peer_b_fd, 3000));
+
+    const unsigned char peer_a_header[] = "peer-a-large";
+    const std::vector<unsigned char> peer_a_body (64 * 1024, 0xa5);
+    const std::vector<unsigned char> peer_a_frame = build_stream_packet_frame (
+      peer_a_header, sizeof (peer_a_header) - 1, &peer_a_body[0],
+      peer_a_body.size ());
+    TEST_ASSERT_EQUAL_INT (
+      0, send_stream_packet (peer_a_fd, &peer_a_frame[0],
+                             peer_a_frame.size () - 1));
+
+    zlink_poller_event_t event;
+    memset (&event, 0, sizeof (event));
+    TEST_ASSERT_EQUAL_INT (0,
+                           zlink_poller_wait (poller, &event, 1, 50, NULL));
+
+    struct packet_expectation_t
+    {
+        const char *header;
+        const char *body;
+    };
+    const packet_expectation_t peer_b_packets[] = {
+      {"peer-b-1", "first"}, {"peer-b-2", "second"}};
+    const size_t peer_b_packet_count =
+      sizeof (peer_b_packets) / sizeof (peer_b_packets[0]);
+
+    for (size_t i = 0; i != peer_b_packet_count; ++i)
+        TEST_ASSERT_EQUAL_INT (
+          0, send_stream_packet_frame (
+               peer_b_fd,
+               reinterpret_cast<const unsigned char *> (peer_b_packets[i].header),
+               strlen (peer_b_packets[i].header),
+               reinterpret_cast<const unsigned char *> (peer_b_packets[i].body),
+               strlen (peer_b_packets[i].body)));
+
+    zlink_routing_id_t peer_b_rid;
+    memset (&peer_b_rid, 0, sizeof (peer_b_rid));
+    for (size_t i = 0; i != peer_b_packet_count; ++i) {
+        memset (&event, 0, sizeof (event));
+        TEST_ASSERT_EQUAL_INT (
+          1, zlink_poller_wait (poller, &event, 1, i == 0 ? 3000 : 1000,
+                                NULL));
+        TEST_ASSERT_EQUAL_PTR (server, event.socket);
+        TEST_ASSERT_TRUE ((event.events & ZLINK_POLLIN) != 0);
+
+        zlink_msg_t header;
+        zlink_msg_t body;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&header));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&body));
+        const zlink_routing_id_t *source_rid = NULL;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_RECV_OK,
+          zlink_stream_recv_packet (server, &source_rid, &header, &body,
+                                    ZLINK_RECV_FLAGS_DONTWAIT));
+        TEST_ASSERT_NOT_NULL (source_rid);
+        TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, source_rid->size);
+        if (i == 0)
+            peer_b_rid = *source_rid;
+        else
+            TEST_ASSERT_EQUAL_UINT8_ARRAY (peer_b_rid.data, source_rid->data,
+                                           peer_b_rid.size);
+        const size_t expected_header_size = strlen (peer_b_packets[i].header);
+        const size_t expected_body_size = strlen (peer_b_packets[i].body);
+        TEST_ASSERT_EQUAL_UINT64 (expected_header_size, zlink_msg_size (&header));
+        TEST_ASSERT_EQUAL_MEMORY (peer_b_packets[i].header,
+                                  zlink_msg_data (&header), expected_header_size);
+        TEST_ASSERT_EQUAL_UINT64 (expected_body_size, zlink_msg_size (&body));
+        TEST_ASSERT_EQUAL_MEMORY (peer_b_packets[i].body,
+                                  zlink_msg_data (&body), expected_body_size);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&header));
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&body));
+    }
+
+    memset (&event, 0, sizeof (event));
+    TEST_ASSERT_EQUAL_INT (0,
+                           zlink_poller_wait (poller, &event, 1, 50, NULL));
+
+    TEST_ASSERT_EQUAL_INT (
+      0, send_stream_packet (peer_a_fd, &peer_a_frame.back (), 1));
+    memset (&event, 0, sizeof (event));
+    TEST_ASSERT_EQUAL_INT (
+      1, zlink_poller_wait (poller, &event, 1, 3000, NULL));
+    TEST_ASSERT_EQUAL_PTR (server, event.socket);
+    TEST_ASSERT_TRUE ((event.events & ZLINK_POLLIN) != 0);
+
+    zlink_msg_t header;
+    zlink_msg_t body;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&header));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&body));
+    const zlink_routing_id_t *source_rid = NULL;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_stream_recv_packet (server, &source_rid, &header, &body,
+                                ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_NOT_NULL (source_rid);
+    TEST_ASSERT_EQUAL_UINT64 (stream_routing_id_size, source_rid->size);
+    TEST_ASSERT_TRUE (
+      memcmp (source_rid->data, peer_b_rid.data, source_rid->size) != 0);
+    TEST_ASSERT_EQUAL_UINT64 (sizeof (peer_a_header) - 1,
+                              zlink_msg_size (&header));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY (peer_a_header, zlink_msg_data (&header),
+                                   sizeof (peer_a_header) - 1);
+    TEST_ASSERT_EQUAL_UINT64 (peer_a_body.size (), zlink_msg_size (&body));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY (
+      &peer_a_body[0], zlink_msg_data (&body),
+      static_cast<unsigned int> (peer_a_body.size ()));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&header));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&body));
+
+    memset (&event, 0, sizeof (event));
+    TEST_ASSERT_EQUAL_INT (0,
+                           zlink_poller_wait (poller, &event, 1, 50, NULL));
+
+    close_raw_fd (peer_b_fd);
+    close_raw_fd (peer_a_fd);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
+    test_context_socket_close_zero_linger (server);
+}
+#endif
 
 #if defined(ZLINK_HAVE_WINDOWS)
 void test_stream_phase3_packet_pull_contract ()
@@ -2070,9 +2317,12 @@ int main (void)
           "test_stream_successful_recv_part_locks_raw_mode"))
         RUN_TEST (test_stream_successful_recv_part_locks_raw_mode);
     if (should_run_stream_socket_test (
-          "test_stream_rejects_unrouted_send_without_poisoning_next_routed_send"))
+          "test_stream_raw_inproc_parts_are_independent_final_chunks"))
+        RUN_TEST (test_stream_raw_inproc_parts_are_independent_final_chunks);
+    if (should_run_stream_socket_test (
+          "test_stream_rejects_unsupported_send_without_poisoning_routed_final"))
         RUN_TEST (
-          test_stream_rejects_unrouted_send_without_poisoning_next_routed_send);
+          test_stream_rejects_unsupported_send_without_poisoning_routed_final);
     if (should_run_stream_socket_test (
           "test_stream_notify_records_and_bind_constraint"))
         RUN_TEST (test_stream_notify_records_and_bind_constraint);
@@ -2088,6 +2338,9 @@ int main (void)
         RUN_TEST (test_stream_phase3_mode_freeze_contract);
     if (should_run_stream_socket_test ("test_stream_phase3_packet_pull_contract"))
         RUN_TEST (test_stream_phase3_packet_pull_contract);
+    if (should_run_stream_socket_test (
+          "test_stream_packet_peer_isolation_readiness_and_order"))
+        RUN_TEST (test_stream_packet_peer_isolation_readiness_and_order);
     if (should_run_stream_socket_test (
           "test_stream_phase3_packet_maxmsgsize_contract"))
         RUN_TEST (test_stream_phase3_packet_maxmsgsize_contract);

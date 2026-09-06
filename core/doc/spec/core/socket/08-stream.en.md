@@ -113,9 +113,14 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid (
 ```
 
 `target_rid_` is a valid four-byte logical routing ID assigned by STREAM to a connection.
-A multipart uses the same RID, flags, and function family from MORE through FINAL. Every call
-consumes `part_` on success and failure. An intermediate failure discards both the staged prefix
-and the failed part.
+A STREAM send submits one part with `ZLINK_PART_FINAL`. After common argument validation
+succeeds, `ZLINK_PART_MORE` returns
+`ZLINK_SUBMIT_NOT_SUPPORTED`, `errno == ENOTSUP`, and completion ID `0`; it consumes the input
+part without transmitting it. Every call consumes `part_` on both success and failure.
+
+A send-call boundary does not guarantee a matching receive boundary at the peer. Application
+message boundaries come from wire framing. The header and body returned by PACKET receive form
+one packet under [§6](#6-packet-receive-and-framing), not a multipart send sequence.
 
 `NONE FINAL` snapshots `SNDTIMEO` and waits for local queue admission and reconnect of the same
 RID. A `DONTWAIT FINAL` makes exactly one admission attempt. If admitted immediately, it has ID
@@ -169,8 +174,8 @@ data-recv API on the same socket if it must remain valid after that receive.
 
 On success, ownership of the received part transfers to the caller, which
 must call `zlink_msg_close(part_out_)` exactly once. A failure before a part is
-received does not transfer ownership. `*has_more_out_` is `ZLINK_PART_MORE`
-when another part follows and `ZLINK_PART_FINAL` for the last part. A
+received does not transfer ownership. A RAW receive record has one part, and a successful
+receive sets `*has_more_out_` to `ZLINK_PART_FINAL`. A
 `ZLINK_RECV_FLAGS_DONTWAIT` call with no data returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 Timeout and termination for `NONE`, and output invariance, follow the data-recv contract in
 [Socket Common](README.en.md#zlink_recv_part).
@@ -460,8 +465,9 @@ item maps to one test.
 
 **Routed part send**
 
-- Every multipart part uses the same RID, flags, and function family; an intermediate failure
-  atomically discards the staged prefix and failed part.
+- An otherwise-valid `ZLINK_PART_MORE` send returns `ZLINK_SUBMIT_NOT_SUPPORTED` with `ENOTSUP` and ID `0`,
+  and consumes its input. The rejected bytes are not transmitted, and the next `FINAL` send
+  succeeds independently.
 - Sending a zero-length part to a valid target routing ID requests peer
   connection termination and consumes the part.
 - Success and failure both consume `part_` and leave it empty and initialized.
@@ -485,8 +491,7 @@ item maps to one test.
 - On success, ownership of the part transfers to the caller, which must call
   `zlink_msg_close` exactly once. A failure before a part is received does not
   transfer ownership.
-- `*has_more_out_` is `ZLINK_PART_MORE` when another part follows and
-  `ZLINK_PART_FINAL` for the last part.
+- A successful RAW receive sets `*has_more_out_` to `ZLINK_PART_FINAL`.
 - DONTWAIT or a `NONE` timeout with no data returns `ZLINK_RECV_NO_DATA` with `EAGAIN`.
 - The borrowed view from `source_rid_out_` remains valid until entry to the next data recv on the
   same socket or close; poller, completion, and monitor recv and data recv on another socket do not

@@ -379,7 +379,8 @@ void zlink::session_base_t::pipe_terminated (pipe_t *pipe_)
     // Drop the reference to the deallocated pipe if required.
     zlink_assert (pipe_ == _pipe || _terminating_pipes.count (pipe_) == 1);
 
-    if (pipe_ == _pipe) {
+    const bool current_pipe = pipe_ == _pipe;
+    if (current_pipe) {
         // If this is our current pipe, remove it
         release_socket_pipe ();
         _pipe = NULL;
@@ -403,7 +404,8 @@ void zlink::session_base_t::pipe_terminated (pipe_t *pipe_)
     if (_pending && !_pipe && _terminating_pipes.empty ()) {
         _pending = false;
         own_t::process_term (0);
-    } else if (!_pending && !_pipe && _terminating_pipes.empty () && !is_terminating ()) {
+    } else if (current_pipe && !_pending && !_pipe
+               && _terminating_pipes.empty () && !is_terminating ()) {
         if (is_active_transport_pair ()
             && options.transport_pair_state->can_reconnect ())
             start_transport_pair_reconnect (false);
@@ -622,7 +624,7 @@ void zlink::session_base_t::engine_error (bool handshaked_, zlink::i_engine::err
         if (_transport_pair_owner_request_state == transport_pair_owner_pending
             || _transport_pair_owner_request_state
                  == transport_pair_owner_claimed)
-            _transport_pair_owner_request_state = transport_pair_owner_canceled;
+            _transport_pair_owner_request_state = transport_pair_owner_idle;
     }
     release_transport_pair_owner_progress_if_held ();
     if (_pipe)
@@ -748,10 +750,13 @@ void zlink::session_base_t::process_conn_failed ()
 
 void zlink::session_base_t::reconnect ()
 {
-    //  For delayed connect situations, terminate the pipe
-    //  and reestablish later on
-    if (_pipe && options.immediate == 1) {
-        _pipe->hiccup ();
+    // STREAM routes identify one physical connection. Reusing its pipe would
+    // preserve the old RID and suppress the new connection's READY edge.
+    // Delayed-connect sockets likewise create a pipe for each live transport.
+    if (_pipe
+        && (options.immediate == 1 || options.type == ZLINK_CORE_SOCKET_STREAM)) {
+        if (options.type != ZLINK_CORE_SOCKET_STREAM)
+            _pipe->hiccup ();
         _pipe->terminate (false);
         _terminating_pipes.insert (_pipe);
         release_socket_pipe ();
@@ -794,7 +799,6 @@ void zlink::session_base_t::start_transport_pair_reconnect (bool force_)
     _transport_pair_generation =
       options.transport_pair_state->begin_reset ();
     options.transport_pair_generation = _transport_pair_generation;
-    _socket_pipe_bound = false;
 
     if (_pipe) {
         pipe_t *old_pipe = _pipe;
@@ -823,6 +827,7 @@ void zlink::session_base_t::retain_socket_pipe (pipe_t *pipe_)
 
 void zlink::session_base_t::release_socket_pipe ()
 {
+    _socket_pipe_bound = false;
     if (!_socket_pipe)
         return;
     pipe_t *pipe = _socket_pipe;

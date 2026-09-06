@@ -242,36 +242,6 @@ int zlink::socket_base_t::select_routed_submit_target (
     return xselect_routed_submit_target (router_rid_or_null_, target_out_);
 }
 
-int zlink::socket_base_t::select_routed_submit_target_internal (
-  const zlink_routing_id_t *router_rid_or_null_,
-  zlink_routed_submit_target_t *target_out_,
-  uint64_t *transport_connection_id_out_,
-  uint64_t *route_incarnation_id_out_)
-{
-    if (!target_out_ || !transport_connection_id_out_
-        || !route_incarnation_id_out_) {
-        errno = EFAULT;
-        return -1;
-    }
-    memset (target_out_, 0, sizeof (*target_out_));
-    *transport_connection_id_out_ = 0;
-    *route_incarnation_id_out_ = 0;
-
-    socket_public_send_scope_t send_scope (lifecycle_coordinator (), true);
-    if (!send_scope.acquired ())
-        return -1;
-    if (unlikely (_ctx_terminated)) {
-        errno = ETERM;
-        return -1;
-    }
-    if (process_commands (0, true) != 0)
-        return -1;
-
-    return xselect_routed_submit_target_internal (
-      router_rid_or_null_, target_out_, transport_connection_id_out_,
-      route_incarnation_id_out_);
-}
-
 int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_rid_,
                                               msg_t *msg_,
                                               int flags_,
@@ -337,22 +307,6 @@ bool zlink::socket_base_t::begin_complete_send_scope (
         return false;
     }
     return true;
-}
-
-std::unique_ptr<zlink::socket_public_send_scope_t>
-zlink::socket_base_t::begin_complete_send_scope ()
-{
-    std::unique_ptr<socket_public_send_scope_t> send_scope (
-      new (std::nothrow) socket_public_send_scope_t (
-        lifecycle_coordinator (), true,
-        socket_send_admission_complete));
-    if (!send_scope) {
-        errno = ENOMEM;
-        return std::unique_ptr<socket_public_send_scope_t> ();
-    }
-    if (!send_scope->acquired ())
-        return std::unique_ptr<socket_public_send_scope_t> ();
-    return send_scope;
 }
 
 bool zlink::socket_base_t::xsubmit_retry_allowed (const zlink_routing_id_t *target_rid_,

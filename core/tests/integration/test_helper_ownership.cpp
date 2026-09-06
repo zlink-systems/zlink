@@ -194,6 +194,37 @@ void test_send_failures_consume_current_part ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&wrong_publish_type));
 }
 
+void test_invalid_routed_targets_consume_parts_before_blocking_admission ()
+{
+    const zlink_socket_type_t types[] = {ZLINK_SOCKET_ROUTER, ZLINK_SOCKET_STREAM};
+    const zlink_send_flags_t flags[] = {ZLINK_SEND_FLAGS_NONE,
+                                       ZLINK_SEND_FLAGS_DONTWAIT};
+    zlink_routing_id_t empty = {};
+    const zlink_routing_id_t *targets[] = {NULL, &empty};
+
+    for (size_t type = 0; type != 2; ++type) {
+        void *socket = test_context_socket (types[type]);
+        for (size_t flag = 0; flag != 2; ++flag) {
+            for (size_t target = 0; target != 2; ++target) {
+                zlink_msg_t part;
+                init_part (&part, "invalid-target");
+                zlink_completion_id_t token = 99;
+                errno = 0;
+                TEST_ASSERT_EQUAL_INT (
+                  ZLINK_SUBMIT_INVALID_ARGUMENT,
+                  zlink_send_part_rid (socket, targets[target], &part,
+                                       flags[flag], ZLINK_PART_FINAL, NULL,
+                                       &token));
+                TEST_ASSERT_EQUAL_INT (EINVAL, zlink_errno ());
+                TEST_ASSERT_EQUAL_UINT64 (0, token);
+                TEST_ASSERT_EQUAL_UINT64 (0, zlink_msg_size (&part));
+                TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&part));
+            }
+        }
+        test_context_socket_close (socket);
+    }
+}
+
 void test_unrouted_send_part_rejects_routed_only_socket_families ()
 {
     void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
@@ -535,6 +566,7 @@ int main (void)
     RUN_TEST (test_send_part_consumes_input_and_requires_reinit_before_reuse);
     RUN_TEST (test_rejected_send_part_consumes_current_part);
     RUN_TEST (test_send_failures_consume_current_part);
+    RUN_TEST (test_invalid_routed_targets_consume_parts_before_blocking_admission);
     RUN_TEST (test_unrouted_send_part_rejects_routed_only_socket_families);
     RUN_TEST (test_same_thread_failure_aborts_non_publish_sequence);
     RUN_TEST (test_publish_prevalidation_failures_preserve_open_sequence);

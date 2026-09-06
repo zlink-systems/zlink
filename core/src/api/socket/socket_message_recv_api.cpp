@@ -128,9 +128,9 @@ int recv_socket_parts (const socket_handle_t &handle_,
           handle_, parts_out_, part_count_out_, static_cast<int> (flags_));
     }
 
-    const bool strip_recv_routing_id = type == ZLINK_CORE_SOCKET_STREAM;
+    const bool routed_receive = type == ZLINK_CORE_SOCKET_STREAM;
     const bool direct_public_recv_fast =
-      type == ZLINK_CORE_SOCKET_PAIR && !source_rid_out_;
+      routed_receive || (type == ZLINK_CORE_SOCKET_PAIR && !source_rid_out_);
 
     if (direct_public_recv_fast) {
         zlink_msg_t *first_slot = NULL;
@@ -138,8 +138,12 @@ int recv_socket_parts (const socket_handle_t &handle_,
             != 0)
             return -1;
 
-        const int recv_rc = handle_.socket->recv (
-          reinterpret_cast<zlink::msg_t *> (first_slot), flags_);
+        const int recv_rc =
+          routed_receive
+            ? zlink::recv_msg_routed_socket (handle_.socket, first_slot,
+                                             source_rid_out_, flags_)
+            : handle_.socket->recv (
+                reinterpret_cast<zlink::msg_t *> (first_slot), flags_);
         if (recv_rc < 0)
             return -1;
 
@@ -162,34 +166,8 @@ int recv_socket_parts (const socket_handle_t &handle_,
         return -1;
     }
 
-    if (type == ZLINK_CORE_SOCKET_STREAM && source_rid_out_)
-        handle_.socket->copy_last_recv_source_rid (source_rid_out_);
-
     if (!zlink::msg_frame_has_more (first)) {
-        if (strip_recv_routing_id) {
-            zlink_msg_close (&first);
-            errno = 0;
-            return 0;
-        }
         return zlink::recv_tls_view::export_single (&first, parts_out_, part_count_out_);
-    }
-
-    if (strip_recv_routing_id) {
-        if (type == ZLINK_CORE_SOCKET_STREAM && source_rid_out_)
-            zlink::copy_routing_id_from_msg (first, source_rid_out_);
-
-        zlink_msg_close (&first);
-
-        zlink_msg_t payload;
-        zlink_msg_init (&payload);
-        const int payload_rc =
-          zlink::recv_followup_msg_socket (handle_.socket, &payload);
-        if (payload_rc < 0) {
-            zlink_msg_close (&payload);
-            return -1;
-        }
-        return zlink::export_payload_msg_sequence (
-          handle_.socket, &payload, parts_out_, part_count_out_, true);
     }
 
     return zlink::export_payload_msg_sequence (
@@ -208,17 +186,10 @@ int zlink_socket_recv_handle_internal (const socket_handle_t &handle_,
       handle_, source_rid_out_, parts_out_, part_count_out_, flags_);
     if (rc == 0 && parts_out_ && part_count_out_ && *parts_out_
         && *part_count_out_ != 0) {
-        // PAIR and DEALER reject request/reply metadata on continuation
-        // frames before export. STREAM deliberately exposes raw inproc
-        // frames, so retain its defensive per-frame sanitization.
-        if (socket_type (handle_) == ZLINK_CORE_SOCKET_STREAM) {
-            for (size_t i = 0; i < *part_count_out_; ++i)
-                zlink::request_reply::clear_request_reply_metadata (
-                  &(*parts_out_)[i]);
-        } else {
-            zlink::request_reply::clear_request_reply_metadata (
-              &(*parts_out_)[0]);
-        }
+        // PAIR and DEALER validate continuation metadata before export;
+        // STREAM exports one independent RAW chunk per receive.
+        zlink::request_reply::clear_request_reply_metadata (
+          &(*parts_out_)[0]);
     }
     return rc;
 }

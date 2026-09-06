@@ -151,6 +151,7 @@ void zlink::object_t::process_command (const command_t &cmd_)
 
         case command_t::term_req:
             process_term_req (cmd_.args.term_req.object);
+            process_seqnum ();
             break;
 
         case command_t::term:
@@ -458,6 +459,9 @@ void zlink::object_t::send_pipe_hwm (pipe_t *destination_,
 
 void zlink::object_t::send_term_req (own_t *destination_, own_t *object_)
 {
+    // A queued endpoint removal can outlive the child's final acknowledgement.
+    // Retain the command destination through dispatch, just as OWN does.
+    destination_->inc_seqnum ();
     command_t cmd;
     cmd.destination = destination_;
     cmd.type = command_t::term_req;

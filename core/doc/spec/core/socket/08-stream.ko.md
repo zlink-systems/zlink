@@ -109,9 +109,15 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid (
   zlink_completion_id_t *completion_id_out_);
 ```
 
-`target_rid_`는 STREAM이 연결에 부여한 유효한 4 byte logical routing ID다. Multipart는
-`MORE`부터 `FINAL`까지 같은 RID·flags·함수 family를 사용한다. 모든 호출은 성공과 실패 모두
-`part_`를 소비한다. 중간 실패는 staging한 prefix와 실패한 part를 모두 폐기한다.
+`target_rid_`는 STREAM이 연결에 부여한 유효한 4 byte logical routing ID다.
+STREAM 송신은 `ZLINK_PART_FINAL`로 제출하는 단일 part다. 공통 인자 검증을 통과한
+`ZLINK_PART_MORE` 호출은
+`ZLINK_SUBMIT_NOT_SUPPORTED`, `errno == ENOTSUP`, completion ID `0`으로 거절하며
+입력 part를 소비하고 전송하지 않는다. 모든 호출은 성공과 실패 모두 `part_`를 소비한다.
+
+송신 호출의 경계는 peer의 수신 경계를 보장하지 않는다. Application의 메시지 경계는
+wire framing으로 정하며, PACKET 수신의 header/body는 [§6](#6-packet-receive와-framing)의
+한 packet을 구성한다. 이는 송신 multipart sequence가 아니다.
 
 `NONE FINAL`은 `SNDTIMEO`를 snapshot해 같은 RID의 local queue admission과 reconnect를
 기다린다. `DONTWAIT FINAL`은 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`과
@@ -159,8 +165,8 @@ Core 소유 borrowed view — Core가 소유한 memory를 잠시 빌려 읽는 �
 
 성공하면 수신 part의 소유권이 호출자에게 이전되며 호출자는
 `zlink_msg_close(part_out_)`를 정확히 한 번 호출해야 한다. part를 받기 전에 실패하면
-소유권이 이전되지 않는다. `*has_more_out_`은 다음 part가 있으면 `ZLINK_PART_MORE`,
-마지막 part이면 `ZLINK_PART_FINAL`이다. `ZLINK_RECV_FLAGS_DONTWAIT` 호출에 데이터가 없으면
+소유권이 이전되지 않는다. RAW 수신 record는 단일 part이며, 성공 시
+`*has_more_out_`은 `ZLINK_PART_FINAL`이다. `ZLINK_RECV_FLAGS_DONTWAIT` 호출에 데이터가 없으면
 `ZLINK_RECV_NO_DATA`와 `EAGAIN`을 반환한다. `NONE`의 timeout·종료와 output 불변은
 [Socket 공통](README.ko.md#zlink_recv_part)의 data recv 계약을 따른다.
 
@@ -428,8 +434,8 @@ socket/listener 기본값은 다음과 같다.
   monitor pull로 연결·해제 상태와 RID를 받는다.
 
 **Routed part send**
-- Multipart의 모든 part는 같은 RID·flags·함수 family를 사용하고 중간 실패는 staging prefix와
-  실패한 part를 원자적으로 폐기한다.
+- 나머지 인자가 유효한 `ZLINK_PART_MORE` 송신은 `ZLINK_SUBMIT_NOT_SUPPORTED`+`ENOTSUP`, ID `0`으로 거절하고
+  입력을 소비한다. 거절된 bytes는 전송하지 않으며, 다음 `FINAL` 송신은 독립적으로 성공한다.
 - 유효한 target routing ID에 길이 0 part를 보내면 peer 연결 종료를 요청하고 part를
   소비한다.
 - 성공과 실패 모두 `part_`를 소비해 empty initialized 상태로 둔다.
@@ -450,8 +456,7 @@ socket/listener 기본값은 다음과 같다.
 **Raw part receive**
 - 성공하면 part 소유권이 호출자에게 이전되고 `zlink_msg_close`를 정확히 한 번
   호출해야 하며, part를 받기 전에 실패하면 소유권이 이전되지 않는다.
-- `*has_more_out_`은 다음 part가 있으면 `ZLINK_PART_MORE`, 마지막이면
-  `ZLINK_PART_FINAL`이다.
+- RAW 수신 성공 시 `*has_more_out_`은 `ZLINK_PART_FINAL`이다.
 - `DONTWAIT` 또는 `NONE` timeout에 데이터가 없으면 `ZLINK_RECV_NO_DATA`+`EAGAIN`이다.
 - `source_rid_out_`의 borrowed view는 같은 socket의 다음 data recv 진입 또는 close까지 유효하며,
   poller/completion/monitor recv와 다른 socket의 data recv는 이를 무효화하지 않는다.

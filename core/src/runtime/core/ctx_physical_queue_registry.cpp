@@ -260,7 +260,6 @@ void zlink::decoder_frame_reservation_t::reset ()
 zlink::physical_queue_registry_snapshot_t::physical_queue_registry_snapshot_t () :
     active_application_direction_count (0),
     active_completion_direction_count (0),
-    retired_direction_count (0),
     application_current_accounted_bytes (0),
     application_provisional_accounted_bytes (0),
     application_peak_accounted_bytes (0),
@@ -269,9 +268,6 @@ zlink::physical_queue_registry_snapshot_t::physical_queue_registry_snapshot_t ()
     completion_pending_message_count (0),
     monitor_applied_hwm_bytes (0),
     monitor_current_accounted_bytes (0),
-    application_lease_accounted_bytes (0),
-    outstanding_application_lease_count (0),
-    deferred_origin_credit_bytes (0),
     oversize_admission_count (0),
     largest_oversize_message_bytes (0),
     total_admission_attempts (0),
@@ -299,14 +295,12 @@ zlink::ctx_physical_queue_registry_t::ctx_physical_queue_registry_t () :
     _largest_oversize_message_bytes (0),
     _total_admission_attempts (0),
     _first_blocked_admission_attempts (0),
-    _aggregate_overflow (false),
-    _decoder_accepting (true)
+    _aggregate_overflow (false)
 {
 }
 
 zlink::ctx_physical_queue_registry_t::~ctx_physical_queue_registry_t ()
 {
-    force_cancel_decoder_reservations ();
     zlink_assert (_directions.empty ());
     zlink_assert (_application_reserved_minimum_bytes == 0);
 }
@@ -623,8 +617,7 @@ int zlink::ctx_physical_queue_registry_t::reserve_decoder_frame (
     }
     const uint64_t frame_bytes = request_.payload_bytes + metadata_bytes;
 
-    if (!_decoder_accepting.load (std::memory_order_acquire)
-        || direction_->endpoint_refs == 0) {
+    if (direction_->endpoint_refs == 0) {
         errno = ETERM;
         return -1;
     }
@@ -692,8 +685,7 @@ int zlink::ctx_physical_queue_registry_t::commit_decoder_frame (
       && direction_->endpoint_refs.load (std::memory_order_acquire) > 0
       && direction_->generation.load (std::memory_order_acquire)
            == reservation->generation;
-    if (!_decoder_accepting.load (std::memory_order_acquire)
-        || !reservation->active || !same_generation) {
+    if (!reservation->active || !same_generation) {
         failure_errno = ETERM;
     } else if (reservation->payload_bytes != payload_bytes_
                || reservation->msg_flags != msg_flags_) {
@@ -1268,9 +1260,4 @@ void zlink::ctx_physical_queue_registry_t::reset_metrics ()
                                               std::memory_order_relaxed);
     _aggregate_overflow.store (overflow || current.aggregate_overflow,
                                std::memory_order_relaxed);
-}
-
-void zlink::ctx_physical_queue_registry_t::force_cancel_decoder_reservations ()
-{
-    _decoder_accepting.store (false, std::memory_order_release);
 }

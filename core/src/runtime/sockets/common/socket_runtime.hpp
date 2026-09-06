@@ -743,7 +743,6 @@ class socket_lifecycle_coordinator_t
         destroyed (false),
         async_mailbox_active (false),
         async_quiesce_pending (false),
-        async_processing_done (true),
         async_processing_started (false),
         async_quiesce_completed (false),
         public_multipart_control_boundary (false),
@@ -823,7 +822,6 @@ class socket_lifecycle_coordinator_t
     bool destroyed;
     std::atomic<bool> async_mailbox_active;
     std::atomic<bool> async_quiesce_pending;
-    std::atomic<bool> async_processing_done;
     std::atomic<bool> async_processing_started;
     std::atomic<bool> async_quiesce_completed;
     // Completion-aware part APIs stage a multipart locally.  Keep the

@@ -24,10 +24,6 @@ class pipe_t;
 class stream_t ZLINK_FINAL : public routing_socket_base_t
 {
   public:
-    typedef void (*session_observer_fn) (void *userdata_,
-                                         const zlink_routing_id_t *peer_rid_,
-                                         bool connected_);
-
     stream_t (zlink::ctx_t *parent_, uint32_t tid_, int sid_);
     ~stream_t () ZLINK_OVERRIDE;
 
@@ -56,6 +52,13 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
       zlink_routed_submit_target_t *target_out_) ZLINK_OVERRIDE;
     int xterm_peer_rid (const zlink_routing_id_t *peer_rid_) ZLINK_OVERRIDE;
     int xrecv (zlink::msg_t *msg_) ZLINK_OVERRIDE;
+    int xrecv_routed (zlink::msg_t *msg_,
+                      zlink_routing_id_t *source_rid_out_,
+                      uint64_t *connection_id_out_,
+                      zlink::pipe_t **source_pipe_out_,
+                      pipe_t::read_admission_fn *admission_,
+                      void *admission_userdata_,
+                      uint64_t *route_binding_token_out_) ZLINK_OVERRIDE;
     bool xhas_in () ZLINK_OVERRIDE;
     bool xhas_out () ZLINK_OVERRIDE;
     void xread_activated (zlink::pipe_t *pipe_) ZLINK_FINAL;
@@ -72,12 +75,6 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
                      zlink::msg_t *body_out_,
                      int flags_);
 
-    //  Internal session observation. These methods expose only live
-    //  transport membership inside Core; they are not public socket APIs.
-    void peer_routing_ids (std::vector<zlink_routing_id_t> *out_);
-    void set_session_observer (session_observer_fn observer_, void *userdata_);
-    void clear_session_observer (void *userdata_);
-
   private:
     bool xsend_writable_target_ready (
       const zlink_routing_id_t *target_rid_or_null_) ZLINK_OVERRIDE;
@@ -91,22 +88,9 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
         route_shard_count = 64
     };
 
-    struct route_entry_t
-    {
-        route_entry_t () : pipe (NULL), pair_id (0), pair_generation (0) {}
-        explicit route_entry_t (zlink::pipe_t *pipe_) :
-            pipe (pipe_), pair_id (0), pair_generation (0)
-        {
-        }
-
-        zlink::pipe_t *pipe;
-        uint64_t pair_id;
-        uint64_t pair_generation;
-    };
-
     struct route_shard_t
     {
-        typedef std::map<uint32_t, route_entry_t> routes_t;
+        typedef std::map<uint32_t, zlink::pipe_t *> routes_t;
 
         fast_mutex_t sync;
         routes_t routes;
@@ -119,7 +103,7 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
         packet_record_t &operator= (packet_record_t &&other_);
         ~packet_record_t ();
 
-        zlink_routing_id_t source_rid;
+        uint32_t source_rid;
         zlink::msg_t header;
         zlink::msg_t body;
         uint64_t accounted_bytes;
@@ -131,18 +115,15 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
 
     route_shard_t &route_shard_for (uint32_t routing_id_);
     bool publish_route_locked (uint32_t routing_id_,
-                               zlink::pipe_t *pipe_,
-                               bool replace_existing_,
-                               zlink::pipe_t **replaced_pipe_out_);
+                               zlink::pipe_t *pipe_);
     bool identify_peer (pipe_t *pipe_, bool locally_initiated_);
     void maybe_emit_connect_event (pipe_t *pipe_, uint32_t routing_id_value_ = 0);
     void queue_stream_notify (uint32_t routing_id_);
-    void notify_session_observer (uint32_t routing_id_, bool connected_);
     bool packet_queue_at_limit () const;
-    int enqueue_packet (const zlink_routing_id_t &source_rid_,
+    int enqueue_packet (uint32_t source_rid_,
                         zlink::msg_t *header_,
                         zlink::msg_t *body_);
-    int decode_packet_bytes (const zlink_routing_id_t &source_rid_,
+    int decode_packet_bytes (uint32_t source_rid_,
                              zlink::msg_t *raw_,
                              zlink::pipe_t *source_pipe_,
                              size_t start_offset_,
@@ -153,23 +134,17 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
     void clear_pending_packet_input ();
     fq_t _fq;
 
-    bool _prefetched;
-    bool _routing_id_sent;
-    zlink::msg_t _prefetched_id;
-    zlink::msg_t _prefetched_msg;
     std::deque<uint32_t> _stream_notify_routing_ids;
-    zlink::pipe_t *_current_in;
-    bool _more_in;
 
     std::deque<packet_record_t> _packet_receive_queue;
     uint64_t _packet_receive_accounted_bytes;
     zlink::msg_t _packet_pending_input;
     size_t _packet_pending_input_offset;
     zlink::pipe_t *_packet_pending_input_pipe;
-    zlink_routing_id_t _packet_pending_input_rid;
+    uint32_t _packet_pending_input_rid;
     bool _packet_pending_input_valid;
     zlink::msg_t _packet_recv_body;
-    zlink_routing_id_t _packet_recv_rid;
+    uint32_t _packet_recv_rid;
     bool _packet_recv_body_ready;
 
     zlink::pipe_t *_current_out;
@@ -180,9 +155,6 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
     route_shard_t _route_shards[route_shard_count];
 
     mutable std::recursive_mutex _api_mutex;
-    std::mutex _session_observer_mutex;
-    session_observer_fn _session_observer;
-    void *_session_observer_userdata;
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (stream_t)
 };

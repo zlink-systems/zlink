@@ -174,8 +174,7 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
         transport_pair_owner_idle,
         transport_pair_owner_pending,
         transport_pair_owner_claimed,
-        transport_pair_owner_committed,
-        transport_pair_owner_canceled
+        transport_pair_owner_committed
     };
     std::mutex _transport_pair_owner_sync;
     transport_pair_owner_request_state_t _transport_pair_owner_request_state;

@@ -76,16 +76,15 @@ message 두 개로 전달된다.
 > [Socket — STREAM](../socket/08-stream.ko.md)이 소유한다. 이 절은 zlink 내부가 RAW
 > 연결의 message를 표현하고 encode·decode하는 방법을 설명한다.
 
-### STREAM socket 내부 API (multipart)
+### STREAM routing ID와 수신 metadata
 
-zlink 쪽에서는 STREAM socket이 연결된 각 client를 4 byte routing id로 식별한다
-(`uint32`, `stream_t`가 할당·직렬화). 송신과 수신 경로 모두 내부에서 같은 2-frame
-배치를 사용한다.
+STREAM은 연결된 각 client를 `stream_t`가 할당·직렬화한 4 byte routing ID(`uint32`)로
+식별한다. 공개 송신 API는 target RID와 `FINAL` payload 하나를 별도 인자로 받으며,
+wire에는 payload byte만 전송한다.
 
-```
-Frame 1: [Routing ID (4 bytes, uint32)] + MORE flag
-Frame 2: [Payload (N bytes)]
-```
+수신 시 `stream_t`는 source RID와 payload를 한 번의 routed receive에서 별도 출력으로
+반환한다. 공개 `zlink_recv_part()`는 RID를 `source_rid_out_`으로 제공하고 payload를
+`FINAL` 단일 part로 반환한다.
 
 ### 엔진 구성
 

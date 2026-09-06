@@ -442,7 +442,6 @@ class socket_base_t : public own_t,
       std::optional<socket_public_send_scope_t> *scope_out_);
     bool begin_complete_send_scope (
       std::optional<socket_public_send_scope_t> *scope_out_);
-    std::unique_ptr<socket_public_send_scope_t> begin_complete_send_scope ();
     void notify_incremental_send_released ();
     void hold_incremental_send_control_boundary ();
     void clear_incremental_send_control_boundary ();
@@ -523,6 +522,7 @@ class socket_base_t : public own_t,
     int begin_close_handoff ();
     void complete_close_handoff ();
     int peer_command_from_io (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
+    // The public part API has validated the target routing ID and family.
     int send_completion_submit_blocking (
       zlink_msg_t *parts_, size_t part_count_,
       const zlink_routing_id_t *target_rid_or_null_);
@@ -908,11 +908,6 @@ class socket_base_t : public own_t,
     virtual int xselect_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_);
-    virtual int xselect_routed_submit_target_internal (
-      const zlink_routing_id_t *router_rid_or_null_,
-      zlink_routed_submit_target_t *target_out_,
-      uint64_t *transport_connection_id_out_,
-      uint64_t *route_incarnation_id_out_);
     virtual int xselect_request_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
       zlink_routed_submit_target_t *target_out_,
@@ -1280,11 +1275,6 @@ class socket_base_t : public own_t,
   private:
 #endif
     void fail_all_blocking_send_waits (int terminal_errno_);
-    int select_routed_submit_target_internal (
-      const zlink_routing_id_t *router_rid_or_null_,
-      zlink_routed_submit_target_t *target_out_,
-      uint64_t *transport_connection_id_out_,
-      uint64_t *route_incarnation_id_out_);
     int try_admit_send_parts_scoped (
       zlink_msg_t *parts_, size_t part_count_,
       const routed_send_target_key_t &target_, bool has_target_,

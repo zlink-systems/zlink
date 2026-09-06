@@ -232,8 +232,6 @@ class asio_engine_t : public i_engine
     void destroy_after_callbacks ();
 
     bool use_stream_rx_slab () const;
-    bool use_stream_dynamic_read_growth () const;
-    bool use_stream_dynamic_write_growth () const;
     void prime_stream_decoder_read_target ();
     void maybe_grow_stream_decoder_read_target (size_t bytes_transferred_);
     void apply_pending_stream_encoder_resize ();

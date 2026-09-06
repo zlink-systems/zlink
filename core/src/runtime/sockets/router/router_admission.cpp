@@ -27,19 +27,6 @@ int router_t::xselect_routed_submit_target (
       router_rid_or_null_, target_out_, NULL, NULL, false);
 }
 
-int router_t::xselect_routed_submit_target_internal (
-  const zlink_routing_id_t *router_rid_or_null_,
-  zlink_routed_submit_target_t *target_out_,
-  uint64_t *transport_connection_id_out_,
-  uint64_t *route_incarnation_id_out_)
-{
-    std::lock_guard<std::mutex> route_lifecycle_lock (
-      _out_pipes_sync);
-    return select_routed_submit_target_locked (
-      router_rid_or_null_, target_out_, transport_connection_id_out_,
-      route_incarnation_id_out_, true);
-}
-
 int router_t::xselect_request_submit_target (
   const zlink_routing_id_t *router_rid_or_null_,
   zlink_routed_submit_target_t *target_out_,

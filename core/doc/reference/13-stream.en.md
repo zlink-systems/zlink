@@ -48,15 +48,18 @@ zlink_send_part_rid(stream_socket, &client_rid, &part, ZLINK_SEND_FLAGS_NONE,
 ```
 
 **Parameters.** `target_rid_` must be a valid 4-byte routing ID this STREAM socket assigned.
-Every part in a multipart sequence uses the same RID and flags from MORE through FINAL.
+`part_flag_` must be `ZLINK_PART_FINAL`; STREAM transmits a single part.
 
 **Return and errno.** Returns `zlink_submit_result_t` — `ZLINK_SUBMIT_OK` on success.
-`ZLINK_SUBMIT_NOT_CONNECTED` for a missing connection. Every result consumes `part_`; retain a
-separate copy before the first part if the complete record may need application-level recovery.
+`ZLINK_SUBMIT_NOT_CONNECTED` for a missing connection. After common argument validation
+succeeds, `ZLINK_PART_MORE` returns
+`ZLINK_SUBMIT_NOT_SUPPORTED` with `ENOTSUP` and ID `0`, without transmitting the input.
+Every result consumes `part_`; retain a separate payload copy before submission if
+application-level recovery may be needed.
 
 **When to use.** A NONE FINAL blocks for same-RID local admission within `SNDTIMEO`. DONTWAIT may
-return a nonzero completion ID when Core retains the full record; Core then owns same-RID retry
-until admission or a terminal result. A failed part atomically discards the staged prefix.
+return a nonzero WRITABLE wait token on backpressure, without retaining the payload.
+The caller resubmits its retained payload after receiving the completion.
 
 ---
 

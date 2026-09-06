@@ -80,16 +80,15 @@ delivered as two zero-length messages per the
 > This section describes how zlink internals represent, encode, and decode messages on
 > RAW connections.
 
-### STREAM socket internal API (multipart)
+### STREAM routing ID and receive metadata
 
-On the zlink side, a STREAM socket identifies each connected client with a four-byte
-routing ID (`uint32`, assigned and serialized by `stream_t`). Both the send and receive
-paths use the same internal two-frame layout.
+STREAM identifies each connected client with a four-byte routing ID (`uint32`) assigned
+and serialized by `stream_t`. The public send API takes the target RID and one `FINAL`
+payload as separate arguments; only payload bytes are transmitted on the wire.
 
-```
-Frame 1: [Routing ID (4 bytes, uint32)] + MORE flag
-Frame 2: [Payload (N bytes)]
-```
+On receive, `stream_t` returns the source RID and payload as separate outputs from one
+routed receive. Public `zlink_recv_part()` exposes the RID through `source_rid_out_`
+and returns the payload as one `FINAL` part.
 
 ### Engine composition
 
