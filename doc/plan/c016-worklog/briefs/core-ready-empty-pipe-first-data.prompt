@@ -1,0 +1,31 @@
+# Job: Core — first DATA after READY on an empty pipe must be admitted or its wait token must wake (D-118)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h.
+Work ONLY in the detached worktree `/home/hep7/project/zlink-core-gate` (checked out at origin/main; run `git -C /home/hep7/project/zlink-core-gate fetch origin && git -C /home/hep7/project/zlink-core-gate checkout --detach origin/main` first). Never touch `/home/hep7/project/zlink` (the main tree — other gates use its `core/build-dev`). Do not commit; leave the diff in the worktree and write the patch to `/tmp/zlink-core-d118/fix.patch`. Never modify any `doc/spec/**`. Campaign rules: no mitigations (no timers/retries/extra states), one rule, regression test per fix, hot-path changes need the callgrind gate.
+
+## Diagnosis (supervisor-verified, D-118)
+`doc/plan/c016-worklog/diag-go-request-writable-retry-prime-summary.md` §원인과 관측 근거 / §후속 Core 수정 방향; public C repro
+`/tmp/zlink-go-prime/request-prime.c` (build/run commands in the report; it fails on current Core with `SEND result=1 errno=11 id=1`
+and no WRITABLE; HWM 80 fails / 81 passes as a diagnostic control).
+Cause: `core/src/runtime/core/pipe.cpp:1874-1882` `release_writes_for_transport_pair()` decides admission from the sender's cached
+credit only (`check_hwm_unlocked()`), so the 80-byte RID preamble charge makes an HWM-1 pipe look full; it leaves `_out_active=false`
+and registers no credit waiter, so the peer's published read credit (`pipe.cpp:3898-3903`) never triggers `activate_write`
+(`:3956-3963`). Contract violated: socket README §6 (credit / WRITABLE progression), auto-hwm §5 (an empty queue admits one
+complete message even above HWM).
+
+## What to do
+1. Reuse the existing `hwm_credit_ready_unlocked()` (`pipe.cpp:1794-1806`) snapshot → waiter registration → re-check rule at hold
+   release, so that (a) if the peer already published the credit the write becomes active immediately, and (b) otherwise a credit
+   waiter is registered and the later credit publication activates the writer / emits the WRITABLE. Preserve the existing
+   PAUSED and inactive-pipe constraints and the empty-pipe oversize exception. No new state/timer/retry.
+2. Regression test in `core/tests/integration/` (public C API): inproc and tcp, HWM 1, DEALER→ROUTER and ROUTER→ROUTER, both
+   orders (preamble read before / after hold release): the first DATA after both READYs is admitted, or its token gets exactly one
+   WRITABLE and the resubmit succeeds; the ROUTER receives the DATA. Register it in `core/tests/CMakeLists.txt` like its neighbors.
+3. Gates in the worktree: configure `core/build-gate` if needed (`cmake -S core -B core/build-gate -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DWITH_TLS=ON -DBUILD_BENCHMARKS=ON`), build, run the new test 10x, the integration lane
+   (`bash core/tests/run_test_lanes.sh --build-dir core/build-gate` or the ctest labels the neighbors use), and
+   `ctest -R '^hotpath_gate$'` (Release+LTO; must stay within ±5% of `core/tests/perf/hotpath_reference.json`; do not update the
+   reference). Then rebuild `/tmp/zlink-go-prime/request-prime` against the worktree's library and confirm exit 0.
+
+## Deliverable
+`doc/plan/c016-worklog/core-ready-empty-pipe-first-data-summary.md` (in the MAIN tree's doc/plan directory is fine — it is a
+report, not code): cause file:line, fix, tests, gate results incl. hotpath cells, patch path, BLOCKERS. Do not print it to stdout.
