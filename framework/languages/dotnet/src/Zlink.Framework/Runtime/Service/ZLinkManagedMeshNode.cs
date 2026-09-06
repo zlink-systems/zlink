@@ -59,8 +59,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly SemaphoreSlim _routedAdmissionWaiters = new(
         MaxRoutedAdmissionWaiters,
         MaxRoutedAdmissionWaiters);
-    private readonly ConcurrentExclusiveSchedulerPair _routedSubmitScheduler =
-        new(TaskScheduler.Default, maxConcurrencyLevel: 1);
+    private readonly ConcurrentExclusiveSchedulerPair _routedSubmitScheduler;
+    private readonly Func<IRouterSocket, SocketEvent, ISocketMonitor> _openSocketMonitor;
     private readonly Dictionary<ZLinkChannelName, uint> _channels = new();
     private readonly Dictionary<ulong, Peer> _peersByIntent = new();
     private readonly Dictionary<RoutingId, Peer> _peersByRid = new();
@@ -186,7 +186,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         TimeProvider? deadlineTimeProvider = null,
         ZLinkApplicationJobQueue? applicationJobQueue = null,
         Func<ReplySubmitOperation, SubmitResult>?
-            nativeTerminalReplySubmitOverride = null)
+            nativeTerminalReplySubmitOverride = null,
+        TaskScheduler? routedSubmitScheduler = null,
+        Func<IRouterSocket, SocketEvent, ISocketMonitor>? openSocketMonitor = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
@@ -212,6 +214,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             deadlineTimeProvider ?? TimeProvider.System);
         _applicationJobQueue = applicationJobQueue;
         _nativeTerminalReplySubmitOverride = nativeTerminalReplySubmitOverride;
+        _routedSubmitScheduler = new ConcurrentExclusiveSchedulerPair(
+            routedSubmitScheduler ?? TaskScheduler.Default, maxConcurrencyLevel: 1);
+        _openSocketMonitor = openSocketMonitor
+            ?? (static (socket, events) => socket.MonitorOpen(events));
     }
 
     public RoutingId RoutingId => _routingId;
@@ -325,7 +331,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         StringComparison.Ordinal))
                     _advertisedEndpoint = _bindEndpoint;
 
-                socketMonitor = socket.MonitorOpen(
+                socketMonitor = _openSocketMonitor(
+                    socket,
                     SocketEvent.ConnectionReady | SocketEvent.Disconnected);
 
                 poller = Systems.Zlink.Zlink.CreatePoller();
@@ -8095,16 +8102,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var preferredDirection = command == ServiceWireConstants.Command.Hello
                 ? ZLinkServiceConnectionDirection.Inbound
                 : ZLinkServiceConnectionDirection.Outbound;
-            var candidateDirection = _connectionCandidates.ForHandshake(
+            var handshakeCandidate = _connectionCandidates.ForHandshake(
                 sourceRid,
-                preferredDirection)?.Direction;
+                preferredDirection);
             var matchedPeer = _peerAdmission.FindForAdmission(
                 _peersByRid,
                 _peersByIntent.Values,
                 sourceRid,
                 command,
                 admission.AdvertisedEndpoint,
-                candidateDirection);
+                handshakeCandidate?.Direction);
+            var replacesAdmittedPeer =
+                command == ServiceWireConstants.Command.Hello
+                && handshakeCandidate is not null
+                && matchedPeer?.Admitted == true;
             if (matchedPeer is null
                 && command != ServiceWireConstants.Command.Hello)
             {
@@ -8282,6 +8293,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 peer.Admission,
                 command,
                 admission);
+            if (replacesAdmittedPeer
+                && decision == ZLinkServiceAdmissionDecision.Idempotent)
+                decision = ZLinkServiceAdmissionDecision.Accept;
             if (decision == ZLinkServiceAdmissionDecision.Reject)
             {
                 if (_peersByIntent.ContainsKey(peer.Intent))
@@ -8300,6 +8314,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 Publish(MeshMonitorEventKind.PeerRejected, peerRid: sourceRid);
                 return;
             }
+            if (handshakeCandidate is not null
+                && command is ServiceWireConstants.Command.Hello
+                    or ServiceWireConstants.Command.Admit)
+                _connectionCandidates.Consume(
+                    sourceRid,
+                    handshakeCandidate.ConnectionId);
             // An Idempotent decision (service-wire §5: a repeated Hello/Admit
             // carrying the current descriptor) is a completed admission too.
             // It changes no peer state - descriptor, physical pipe and
@@ -8312,6 +8332,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             {
                 if (!_peersByIntent.ContainsKey(peer.Intent))
                     _peersByIntent.Add(peer.Intent, peer);
+                if (replacesAdmittedPeer)
+                {
+                    // READY contributes only a pending physical candidate. The
+                    // successful Hello that consumes it owns replacement: old
+                    // controls are fenced by a new epoch and liveness starts now.
+                    peer.ConnectionGeneration =
+                        checked(++_nextPeerConnectionGeneration);
+                    peer.Liveness = null;
+                }
                 // Descriptor updates preserve the current liveness epoch.
                 peer.RoutingId = sourceRid;
                 if (peer.Direction == ZLinkServiceConnectionDirection.Inbound
@@ -8584,6 +8613,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ZLinkMeshPeerAdmission.FindReadyOutboundCandidate(
                         _peersByIntent.Values,
                         value.RemoteAddr);
+                // READY can be delivered after admission on the same connection.
+                // Admission owns the peer epoch; monitor delivery must preserve
+                // queued controls and the established liveness state.
                 _connectionCandidates.Ready(
                     routingId,
                     value.ConnectionId,
@@ -8591,19 +8623,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         ? ZLinkServiceConnectionDirection.Inbound
                         : ZLinkServiceConnectionDirection.Outbound,
                     value.RemoteAddr);
-                if (_peersByRid.TryGetValue(routingId, out var peer)
-                    && peer.Admitted)
-                {
-                    // A READY edge is transport-liveness evidence only. Give
-                    // a same-RID replacement a fresh probe/ACK generation,
-                    // without pinning logical routing or reply ownership to
-                    // this diagnostic connection id.
-                    peer.ConnectionGeneration =
-                        checked(++_nextPeerConnectionGeneration);
-                    peer.Liveness = new ZLinkServiceLiveness(
-                        Stopwatch.GetTimestamp(),
-                        peer.ConnectionGeneration);
-                }
             });
             return;
         }

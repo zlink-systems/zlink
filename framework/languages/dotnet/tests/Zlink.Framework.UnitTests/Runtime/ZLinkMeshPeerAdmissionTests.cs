@@ -200,6 +200,29 @@ public sealed class ZLinkMeshPeerAdmissionTests
         Assert.Equal(ZLinkServiceConnectionDirection.Inbound, bilateral.Direction);
     }
 
+    [Fact]
+    public void Handshake_candidate_is_pending_until_admission_consumes_it()
+    {
+        var sourceRid = RoutingId.From("remote-node");
+        var candidates = new ZLinkMeshConnectionCandidates();
+        candidates.Ready(
+            sourceRid,
+            11,
+            ZLinkServiceConnectionDirection.Inbound,
+            "tcp://inbound");
+
+        var pending = candidates.ForHandshake(
+            sourceRid,
+            ZLinkServiceConnectionDirection.Inbound);
+
+        Assert.NotNull(pending);
+        Assert.True(candidates.Consume(sourceRid, pending.ConnectionId));
+        Assert.Null(candidates.ForHandshake(
+            sourceRid,
+            ZLinkServiceConnectionDirection.Inbound));
+        Assert.False(candidates.Consume(sourceRid, pending.ConnectionId));
+    }
+
     private static ZLinkMeshPeer Peer(
         ulong intent,
         string endpoint,

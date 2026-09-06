@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using Systems.Zlink.Framework.Runtime.Protocol;
 
 namespace Zlink.Framework.UnitTests;
@@ -15,6 +13,7 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshNodeShutdownSealTests
 {
     private const string MeshName = "orders";
+    private const string EphemeralTcpEndpoint = "tcp://127.0.0.1:0";
 
     [Fact]
     public void DrainGate_SealedForShutdown_OnlyByTheShutdownOwner()
@@ -41,31 +40,43 @@ public sealed class MeshNodeShutdownSealTests
     [Fact]
     public async Task CrossedHelloAdmit_CompletesOnceOnBothSides()
     {
+        var scheduler = new GatedTaskScheduler();
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var left = new ZLinkManagedMeshNode(context, MeshName);
-        await using var right = new ZLinkManagedMeshNode(context, MeshName);
+        await using var left = new ZLinkManagedMeshNode(
+            context, MeshName, routedSubmitScheduler: scheduler);
+        await using var right = new ZLinkManagedMeshNode(
+            context, MeshName, routedSubmitScheduler: scheduler);
         var suffix = Guid.NewGuid().ToString("N");
         var leftRid = RoutingId.From($"crossed-left-{suffix}");
         var rightRid = RoutingId.From($"crossed-right-{suffix}");
-        var leftEndpoint = AllocateTcpEndpoint();
-        var rightEndpoint = AllocateTcpEndpoint();
-
         left.SetRoutingId(leftRid);
-        left.SetBind(leftEndpoint);
+        left.SetBind(EphemeralTcpEndpoint);
         left.AddChannel(MeshName);
-        left.ConnectPeer(rightEndpoint, rightRid);
         right.SetRoutingId(rightRid);
-        right.SetBind(rightEndpoint);
+        right.SetBind(EphemeralTcpEndpoint);
         right.AddChannel(MeshName);
-        right.ConnectPeer(leftEndpoint, leftRid);
         using var leftMonitor = left.OpenMonitor();
         using var rightMonitor = right.OpenMonitor();
 
         // Both sides connect and announce, so each Hello is accepted and the
         // Admit that answers it arrives after the receiver already admitted
         // the same descriptor (the ZoneWorld E5 restart shape).
-        left.Start();
-        right.Start();
+        try
+        {
+            // The actual sockets choose and hold their ports. Keep both Hello
+            // submissions queued until both outbound intents are configured.
+            left.Start();
+            right.Start();
+            var leftEndpoint = left.Status().LocalEndpoint;
+            var rightEndpoint = right.Status().LocalEndpoint;
+            Assert.NotEqual(leftEndpoint, rightEndpoint);
+            left.ConnectPeer(rightEndpoint, rightRid);
+            right.ConnectPeer(leftEndpoint, leftRid);
+        }
+        finally
+        {
+            scheduler.Release();
+        }
         await WaitUntilAsync(() =>
             left.Status().AdmittedPeerCount == 1
             && right.Status().AdmittedPeerCount == 1);
@@ -96,12 +107,12 @@ public sealed class MeshNodeShutdownSealTests
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, MeshName);
         var suffix = Guid.NewGuid().ToString("N");
-        var endpoint = AllocateTcpEndpoint();
         node.SetRoutingId(RoutingId.From($"idempotent-node-{suffix}"));
-        node.SetBind(endpoint);
+        node.SetBind(EphemeralTcpEndpoint);
         node.AddChannel(MeshName);
         using var monitor = node.OpenMonitor();
         node.Start();
+        var endpoint = node.Status().LocalEndpoint;
 
         var peerRid = RoutingId.From($"idempotent-peer-{suffix}");
         using var peer = context.CreateDealerSocket();
@@ -142,6 +153,136 @@ public sealed class MeshNodeShutdownSealTests
         Assert.Equal(admitted.LastChangedMs, current.LastChangedMs);
     }
 
+    [Fact]
+    public async Task SameConnectionHello_WithoutPendingCandidate_PreservesEpochAndLivenessDeadline()
+    {
+        DeferredReadyMonitor? transportMonitor = null;
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            openSocketMonitor: (socket, events) =>
+                transportMonitor = new DeferredReadyMonitor(socket.MonitorOpen(events)));
+        var suffix = Guid.NewGuid().ToString("N");
+        node.SetRoutingId(RoutingId.From($"same-connection-node-{suffix}"));
+        node.SetBind(EphemeralTcpEndpoint);
+        node.AddChannel(MeshName);
+        using var monitor = node.OpenMonitor();
+        node.Start();
+        var endpoint = node.Status().LocalEndpoint;
+        using var peer = context.CreateDealerSocket();
+        peer.SetRoutingId(RoutingId.From($"same-connection-peer-{suffix}"));
+
+        transportMonitor!.ReleaseReady();
+        peer.Connect(endpoint);
+        await transportMonitor.ReadyCaptured;
+        await transportMonitor.ReadyApplied;
+
+        byte[] Hello() => ZLinkServiceWireCodec.EncodeRouteAdmission(
+            ServiceWireConstants.Command.Hello,
+            MeshName,
+            $"inproc://same-connection-peer-{suffix}",
+            lifecycleGeneration: 7,
+            descriptorRevision: 3,
+            new Dictionary<string, uint>(StringComparer.Ordinal),
+            objectRole: (byte)ZLinkMeshNodeObjectRole.Server);
+
+        await SendAsync(peer, Hello());
+        await ReceiveAdmitAsync(peer);
+        var admitted = Assert.Single(node.Peers());
+
+        // The first Hello consumed the only READY candidate. The same physical
+        // connection has no pending replacement candidate, so this Hello keeps
+        // both the connection epoch and its liveness deadline.
+        await SendAsync(peer, Hello());
+        await ReceiveAdmitAsync(peer);
+
+        Assert.Equal(1UL, monitor.Status().PeerAdmitted);
+        Assert.Equal(0UL, monitor.Status().PeerRejected);
+        Assert.Equal(0UL, monitor.Status().ProtocolErrors);
+        var current = Assert.Single(node.Peers());
+        Assert.Equal(admitted.LifecycleGeneration, current.LifecycleGeneration);
+        Assert.Equal(admitted.DescriptorRevision, current.DescriptorRevision);
+        Assert.Equal(admitted.LastChangedMs, current.LastChangedMs);
+    }
+
+    [Fact]
+    public async Task QueuedAdmit_SurvivesConnectionReadyDeliveredAfterHello()
+    {
+        var scheduler = new GatedTaskScheduler();
+        DeferredReadyMonitor? transportMonitor = null;
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            routedSubmitScheduler: scheduler,
+            openSocketMonitor: (socket, events) =>
+                transportMonitor = new DeferredReadyMonitor(socket.MonitorOpen(events)));
+        var suffix = Guid.NewGuid().ToString("N");
+        node.SetRoutingId(RoutingId.From($"late-ready-node-{suffix}"));
+        node.SetBind(EphemeralTcpEndpoint);
+        node.AddChannel(MeshName);
+        using var monitor = node.OpenMonitor();
+        node.Start();
+        var endpoint = node.Status().LocalEndpoint;
+        using var peer = context.CreateDealerSocket();
+        peer.SetRoutingId(RoutingId.From($"late-ready-peer-{suffix}"));
+        peer.Connect(endpoint);
+
+        try
+        {
+            using (var hello = Message.From(ZLinkServiceWireCodec.EncodeRouteAdmission(
+                       ServiceWireConstants.Command.Hello,
+                       MeshName,
+                       $"inproc://late-ready-peer-{suffix}",
+                       lifecycleGeneration: 7,
+                       descriptorRevision: 3,
+                       new Dictionary<string, uint>(StringComparer.Ordinal),
+                       objectRole: (byte)ZLinkMeshNodeObjectRole.Server)))
+                peer.Send().Message(hello).Submit();
+
+            // Hold the queued Admit while its Hello finishes admission. The
+            // transport monitor then delivers the same connection's READY.
+            await scheduler.Queued;
+            Assert.Equal(1U, node.Status().AdmittedPeerCount);
+            var admitted = Assert.Single(node.Peers());
+            await transportMonitor!.ReadyCaptured;
+            transportMonitor.ReleaseReady();
+            await transportMonitor.ReadyApplied;
+
+            // Update follows the queued Admit on the same socket. It makes a
+            // discarded Admit observable as the wrong first record, without a
+            // receive deadline or waiting for an absent message.
+            node.PublishDraining();
+            scheduler.Release();
+            foreach (var expected in new[]
+                     {
+                         ServiceWireConstants.Command.Admit,
+                         ServiceWireConstants.Command.Update
+                     })
+            {
+                using var received = Received.Create();
+                Assert.True(peer.Recv(received));
+                Assert.True(ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                    received.FirstPart().AsSpan(), out var command, out _, out _));
+                Assert.Equal(expected, command);
+            }
+
+            Assert.Equal(1UL, monitor.Status().PeerAdmitted);
+            Assert.Equal(0UL, monitor.Status().PeerRejected);
+            Assert.Equal(0UL, monitor.Status().ProtocolErrors);
+            var current = Assert.Single(node.Peers());
+            Assert.Equal(admitted.LifecycleGeneration, current.LifecycleGeneration);
+            Assert.Equal(admitted.DescriptorRevision, current.DescriptorRevision);
+            Assert.Equal(admitted.LastChangedMs, current.LastChangedMs);
+        }
+        finally
+        {
+            transportMonitor?.ReleaseReady();
+            scheduler.Release();
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -158,12 +299,12 @@ public sealed class MeshNodeShutdownSealTests
             return gate.IsSealedForShutdown;
         });
         var suffix = Guid.NewGuid().ToString("N");
-        var endpoint = AllocateTcpEndpoint();
         node.SetRoutingId(RoutingId.From($"inbound-node-{suffix}"));
-        node.SetBind(endpoint);
+        node.SetBind(EphemeralTcpEndpoint);
         node.AddChannel(MeshName);
         using var monitor = node.OpenMonitor();
         node.Start();
+        var endpoint = node.Status().LocalEndpoint;
         if (sealedForShutdown)
         {
             gate.ClaimShutdown();
@@ -211,12 +352,12 @@ public sealed class MeshNodeShutdownSealTests
         var gate = new ZLinkDrainAdmissionGate();
         node.SetPeerAdmissionSealGate(() => gate.IsSealedForShutdown);
         var suffix = Guid.NewGuid().ToString("N");
-        var endpoint = AllocateTcpEndpoint();
         node.SetRoutingId(RoutingId.From($"update-node-{suffix}"));
-        node.SetBind(endpoint);
+        node.SetBind(EphemeralTcpEndpoint);
         node.AddChannel(MeshName);
         using var monitor = node.OpenMonitor();
         node.Start();
+        var endpoint = node.Status().LocalEndpoint;
         using var peer = context.CreateDealerSocket();
         peer.SetRoutingId(RoutingId.From($"update-peer-{suffix}"));
         peer.Connect(endpoint);
@@ -256,15 +397,16 @@ public sealed class MeshNodeShutdownSealTests
         await using var node = new ZLinkManagedMeshNode(context, MeshName);
         var suffix = Guid.NewGuid().ToString("N");
         var peerRid = RoutingId.From($"sealed-peer-{suffix}");
-        var peerEndpoint = AllocateTcpEndpoint();
+        string peerEndpoint;
         node.SetPeerAdmissionSealGate(() => gate.IsSealedForShutdown);
         node.SetRoutingId(RoutingId.From($"sealed-node-{suffix}"));
-        node.SetBind(AllocateTcpEndpoint());
+        node.SetBind(EphemeralTcpEndpoint);
         node.AddChannel(MeshName);
-        node.ConnectPeer(peerEndpoint, peerRid);
 
-        await using (var peer = StartPeer(context, peerRid, peerEndpoint))
+        await using (var peer = StartPeer(context, peerRid, EphemeralTcpEndpoint))
         {
+            peerEndpoint = peer.Status().LocalEndpoint;
+            node.ConnectPeer(peerEndpoint, peerRid);
             node.Start();
             await WaitUntilAsync(() =>
                 node.Status().AdmittedPeerCount == 1
@@ -316,15 +458,16 @@ public sealed class MeshNodeShutdownSealTests
         await using var node = new ZLinkManagedMeshNode(context, MeshName);
         var suffix = Guid.NewGuid().ToString("N");
         var peerRid = RoutingId.From($"unsealed-peer-{suffix}");
-        var peerEndpoint = AllocateTcpEndpoint();
+        string peerEndpoint;
         node.SetPeerAdmissionSealGate(() => gate.IsSealedForShutdown);
         node.SetRoutingId(RoutingId.From($"unsealed-node-{suffix}"));
-        node.SetBind(AllocateTcpEndpoint());
+        node.SetBind(EphemeralTcpEndpoint);
         node.AddChannel(MeshName);
-        node.ConnectPeer(peerEndpoint, peerRid);
 
-        await using (var peer = StartPeer(context, peerRid, peerEndpoint))
+        await using (var peer = StartPeer(context, peerRid, EphemeralTcpEndpoint))
         {
+            peerEndpoint = peer.Status().LocalEndpoint;
+            node.ConnectPeer(peerEndpoint, peerRid);
             node.Start();
             await WaitUntilAsync(() =>
                 node.Status().AdmittedPeerCount == 1
@@ -356,6 +499,101 @@ public sealed class MeshNodeShutdownSealTests
         Assert.Equal(
             relocationDraining ? MeshPeerState.Draining : MeshPeerState.Admitted,
             Assert.Single(restarted.Peers()).State);
+    }
+
+    private sealed class GatedTaskScheduler : TaskScheduler
+    {
+        private readonly Queue<Task> _tasks = new();
+        private readonly TaskCompletionSource _queued =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private bool _released;
+
+        internal Task Queued => _queued.Task;
+
+        protected override IEnumerable<Task> GetScheduledTasks()
+        {
+            lock (_tasks)
+                return _tasks.ToArray();
+        }
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+
+        protected override void QueueTask(Task task)
+        {
+            lock (_tasks)
+            {
+                if (!_released)
+                {
+                    _tasks.Enqueue(task);
+                    _queued.TrySetResult();
+                    return;
+                }
+            }
+            Schedule(task);
+        }
+
+        internal void Release()
+        {
+            Task[] tasks;
+            lock (_tasks)
+            {
+                _released = true;
+                tasks = _tasks.ToArray();
+                _tasks.Clear();
+            }
+            foreach (var task in tasks)
+                Schedule(task);
+        }
+
+        private void Schedule(Task task) =>
+            ThreadPool.QueueUserWorkItem(_ => TryExecuteTask(task));
+    }
+
+    private sealed class DeferredReadyMonitor(ISocketMonitor inner) : ISocketMonitor
+    {
+        private readonly Queue<MonitorEvent> _ready = new();
+        private readonly TaskCompletionSource _captured =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _applied =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _release;
+        private bool _delivered;
+
+        internal Task ReadyCaptured => _captured.Task;
+        internal Task ReadyApplied => _applied.Task;
+        internal void ReleaseReady() => Volatile.Write(ref _release, 1);
+
+        public MonitorEvent? Recv(RecvFlags flags = RecvFlags.None)
+        {
+            // The owner calls Recv again only after handling the prior event.
+            if (_delivered)
+            {
+                _delivered = false;
+                _applied.TrySetResult();
+            }
+            if (Volatile.Read(ref _release) != 0 && _ready.TryDequeue(out var ready))
+            {
+                _delivered = true;
+                return ready;
+            }
+            while (inner.Recv(flags) is { } value)
+            {
+                if (value.Event == MonitorEventType.ConnectionReady
+                    && (value.Flags & MonitorEventFlags.ConnectionReadyEdge) != 0)
+                {
+                    _ready.Enqueue(value);
+                    _captured.TrySetResult();
+                    continue;
+                }
+                return value;
+            }
+            return null;
+        }
+
+        public MonitorStatus Status() => inner.Status();
+        public void Close() => inner.Close();
+        public void Dispose() => inner.Dispose();
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
     private static ZLinkManagedMeshNode StartPeer(
@@ -445,11 +683,4 @@ public sealed class MeshNodeShutdownSealTests
         }
     }
 
-    private static string AllocateTcpEndpoint()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var endpoint = Assert.IsType<IPEndPoint>(listener.LocalEndpoint);
-        return $"tcp://127.0.0.1:{endpoint.Port}";
-    }
 }

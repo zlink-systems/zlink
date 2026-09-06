@@ -214,7 +214,8 @@ internal sealed class ZLinkMeshConnectionCandidates
         if (!_candidates.TryGetValue(routingId, out var connections))
             return null;
         var preferred = connections
-            .Where(pair => pair.Value.Direction == preferredDirection)
+            .Where(pair => pair.Value.Pending
+                && pair.Value.Direction == preferredDirection)
             .OrderByDescending(static pair => pair.Value.ReadySequence)
             .Select(static pair => new ZLinkMeshConnectionCandidate(
                 pair.Key,
@@ -222,12 +223,23 @@ internal sealed class ZLinkMeshConnectionCandidates
                 pair.Value.RemoteEndpoint))
             .FirstOrDefault();
         return preferred ?? connections
+            .Where(static pair => pair.Value.Pending)
             .OrderByDescending(static pair => pair.Value.ReadySequence)
             .Select(static pair => new ZLinkMeshConnectionCandidate(
                 pair.Key,
                 pair.Value.Direction,
                 pair.Value.RemoteEndpoint))
-            .First();
+            .FirstOrDefault();
+    }
+
+    internal bool Consume(RoutingId routingId, ulong connectionId)
+    {
+        if (!_candidates.TryGetValue(routingId, out var connections)
+            || !connections.TryGetValue(connectionId, out var candidate)
+            || !candidate.Pending)
+            return false;
+        connections[connectionId] = candidate with { Pending = false };
+        return true;
     }
 
     internal ZLinkMeshConnectionCandidateDisconnect? Disconnect(
@@ -286,7 +298,8 @@ internal sealed class ZLinkMeshConnectionCandidates
     private sealed record Candidate(
         ZLinkServiceConnectionDirection Direction,
         string RemoteEndpoint,
-        ulong ReadySequence);
+        ulong ReadySequence,
+        bool Pending = true);
 }
 
 internal sealed record ZLinkMeshConnectionCandidate(
