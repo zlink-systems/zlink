@@ -10,6 +10,17 @@ const {
   ZLinkChannelReceiveLoop
 } = require('../../packages/framework/dist/runtime/channels/channel-receive-loops');
 const {
+  ZLinkChannelOutboundOperations
+} = require('../../packages/framework/dist/runtime/channels/channel-outbound-operations');
+const {
+  ZLinkChannelDispatchServices
+} = require('../../packages/framework/dist/runtime/channels/channel-dispatch-services');
+const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+const {
+  ZLinkBackendResultError,
+  RequestResult
+} = require('../../packages/framework/dist/runtime/backend/runtime-values');
+const {
   ApplicationJobQueue,
   resolveApplicationJobQueueConfiguration
 } = require('../../packages/framework/dist/runtime/host/application-job-queue');
@@ -1751,8 +1762,129 @@ function readyWaitSockets(requestTimeoutMs) {
     'tcp://10.0.0.1:9401',
     { onTransportReady() {}, onTerminated() {} }
   );
-  return { sockets, dealer, created };
+  return { sockets, dealer, created, registration };
 }
+
+function readyWaitClient(t, channelTimeoutMs = 60_000) {
+  const fixture = readyWaitSockets(channelTimeoutMs);
+  const outbound = new ZLinkChannelOutboundOperations(
+    fixture.sockets,
+    { serializers: fixture.registration.messageSerializers },
+    new ZLinkChannelDispatchServices(fixture.registration)
+  );
+  const client = new internal.DefaultZLinkChannelClient(fixture.registration, outbound);
+  class Lookup { id = 1; }
+  t.after(() => fixture.sockets.dispose());
+  return {
+    ...fixture,
+    request: timeoutMs => client.requestToChannel('orders', new Lookup()).timeout(timeoutMs).submit(t.signal),
+    admit: () => fixture.sockets.admitClientServerConnection(
+      discoveryDescriptor('server-a', 100), 'orders-a:7'
+    )
+  };
+}
+
+for (const knownTarget of [false, true]) {
+  test(`ClientServer call deadline bounds a short timeout with ${knownTarget ? 'a weight-zero' : 'no known'} server`, async (t) => {
+    const { request, dealer, sockets } = readyWaitClient(t);
+    if (knownTarget) {
+      sockets.admitClientServerConnection(discoveryDescriptor('server-a', 0), 'orders-a:7');
+    }
+    assert.equal(sockets.hasKnownClientServerTargets('orders'), knownTarget);
+    assert.equal(sockets.clientDealerForOutbound('orders'), undefined);
+    const submitted = t.mock.method(dealer, 'request');
+    const startedAt = performance.now();
+    await assert.rejects(request(200), {
+      kind: knownTarget ? framework.ZLinkFrameworkErrorKind.Unavailable : framework.ZLinkFrameworkErrorKind.NotFound
+    });
+    const elapsed = performance.now() - startedAt;
+    // The extra 50 ms permits event-loop scheduling after the 200 ms deadline, not another wait budget.
+    assert.ok(elapsed >= 200 && elapsed < 250, `200 ms call finished after ${elapsed} ms`);
+    assert.equal(submitted.mock.callCount(), 0);
+  });
+}
+
+test('ClientServer call deadline gives a server admitted after 100 ms only the remaining time', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let nowMs = 0;
+  t.mock.method(performance, 'now', () => nowMs);
+  // A shorter Channel default must not truncate the explicit 200 ms call either.
+  const { request, dealer, admit } = readyWaitClient(t, 50);
+  let submittedAfterMs;
+  let submittedTimeoutMs;
+  let admittedAfterMs;
+  const startedAt = performance.now();
+  dealer.request = async (parts, timeoutMs) => {
+    assert.equal(Number.isInteger(timeoutMs), true, 'binding request timeout must be integer milliseconds');
+    submittedAfterMs = performance.now() - startedAt;
+    submittedTimeoutMs = timeoutMs;
+    const messages = parts.map(part => zlink.Message.from(part));
+    try {
+      const header = channelEnvelope.decodeChannelHeader(messages);
+      return channelEnvelope.encodeChannelReplyParts(header, { found: true })
+        .map(part => zlink.Message.from(part));
+    } finally {
+      channelEnvelope.closeMessages(messages);
+    }
+  };
+  const admission = setTimeout(() => {
+    admittedAfterMs = performance.now() - startedAt;
+    admit();
+  }, 100);
+  t.after(() => clearTimeout(admission));
+  const pending = request(200);
+  nowMs = 100;
+  t.mock.timers.tick(100);
+  assert.deepEqual(await pending, { found: true });
+  assert.equal(admittedAfterMs, 100);
+  assert.equal(submittedTimeoutMs, 100);
+  assert.equal(submittedAfterMs + submittedTimeoutMs, 200);
+});
+
+test('ClientServer call deadline still expires at submission plus timeout after late admission', async (t) => {
+  const { request, dealer, admit } = readyWaitClient(t);
+  let attempts = 0;
+  dealer.request = async (_parts, timeoutMs) => {
+    assert.equal(Number.isInteger(timeoutMs), true, 'binding request timeout must be integer milliseconds');
+    attempts++;
+    await new Promise(resolve => setTimeout(resolve, timeoutMs));
+    throw new ZLinkBackendResultError('request', RequestResult.TimedOut);
+  };
+  const admission = setTimeout(admit, 100);
+  t.after(() => clearTimeout(admission));
+  const startedAt = performance.now();
+  await assert.rejects(request(200), { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded });
+  const elapsed = performance.now() - startedAt;
+  assert.ok(elapsed >= 195 && elapsed < 250, `200 ms call finished after ${elapsed} ms`);
+  assert.equal(attempts, 1);
+});
+
+test('ClientServer call deadline rejects a target selected after the deadline without submitting', async (t) => {
+  const { request, dealer, sockets, admit } = readyWaitClient(t);
+  let nowMs = 0;
+  t.mock.method(performance, 'now', () => nowMs);
+  const select = sockets.clientDealerForOutbound.bind(sockets);
+  t.mock.method(sockets, 'clientDealerForOutbound', channelName => {
+    const selected = select(channelName);
+    nowMs = 200;
+    return selected;
+  });
+  const submitted = t.mock.method(dealer, 'request');
+  admit();
+  await assert.rejects(request(200), { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+  assert.equal(performance.now(), 200);
+  assert.equal(submitted.mock.callCount(), 0);
+});
+
+test('ClientServer call deadline caps a long per-call ready wait at five seconds', { timeout: 7_000 }, async (t) => {
+  const { request, dealer } = readyWaitClient(t, 50);
+  const submitted = t.mock.method(dealer, 'request');
+  const startedAt = performance.now();
+  await assert.rejects(request(60_000), { kind: framework.ZLinkFrameworkErrorKind.NotFound });
+  const elapsed = performance.now() - startedAt;
+  assert.ok(elapsed >= 5_000 && elapsed < 5_500, `5 s ready cap finished after ${elapsed} ms`);
+  assert.equal(submitted.mock.callCount(), 0);
+});
 
 test('ClientServer send target waits for admission already in flight instead of failing at once', async () => {
   const { sockets, dealer, created } = readyWaitSockets(60_000);

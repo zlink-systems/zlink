@@ -158,6 +158,7 @@ export class ZLinkChannelOutboundOperations {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<TReply> {
+    const deadlineAtMs = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
     let correlationId: string | undefined;
     let selectedServerRid: string | undefined;
     let terminalRecorded = false;
@@ -180,8 +181,10 @@ export class ZLinkChannelOutboundOperations {
     };
     try {
       throwIfAborted(signal);
-      const dealer = await this.sockets.awaitClientDealerForOutbound(channelName, signal);
-      if (dealer === undefined) {
+      const dealer = await this.sockets.awaitClientDealerForOutbound(channelName, signal, deadlineAtMs);
+      // Binding timeouts are whole milliseconds; rounding down keeps the call's deadline.
+      const remainingMs = deadlineAtMs === undefined ? undefined : Math.floor(deadlineAtMs - performance.now());
+      if (dealer === undefined || (remainingMs !== undefined && remainingMs <= 0)) {
         throw createInternalFrameworkException(
           this.sockets.hasKnownClientServerTargets(channelName)
             ? ZLinkFrameworkInternalErrorKind.RouteNotConnected
@@ -199,7 +202,7 @@ export class ZLinkChannelOutboundOperations {
         channelName,
         packetName,
         request,
-        timeoutMs,
+        remainingMs,
         undefined,
         this.codecs,
         correlationId,
@@ -219,7 +222,7 @@ export class ZLinkChannelOutboundOperations {
         let replyParts: readonly Message[] = [];
         try {
           try {
-            replyParts = await awaitWithAbort(dealer.request(parts, timeoutMs), signal);
+            replyParts = await awaitWithAbort(dealer.request(parts, remainingMs), signal);
           } catch (error) {
             if (signal?.aborted === true) throw error;
             //  Spec 32-framework-error-model:81-92 — classify the backend request

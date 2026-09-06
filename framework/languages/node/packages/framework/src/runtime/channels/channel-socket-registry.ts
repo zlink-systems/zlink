@@ -626,9 +626,10 @@ export class ZLinkChannelSocketRegistry {
    * Resolves a ClientServer send target, waiting when the ready candidate set is still empty, as
    * `framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md` §3.2 requires: the call waits
    * at call time for a bounded period and then fails with no-target. The bound is the shorter of
-   * this Channel's request timeout and five seconds, mirroring the .NET reference
+   * the call's remaining deadline and five seconds, mirroring the .NET reference
    * `ZLinkClientServerClientRuntime.WaitForReadyAsync`. The wait lives here because this registry
-   * owns ClientServer connections, admission and weighted selection.
+   * owns ClientServer connections, admission and weighted selection. Sends have no per-call
+   * timeout, so they use the Channel's request timeout.
    *
    * The wait only observes admission that is already in flight: it never opens or reconnects a
    * connection, so it cannot trigger the admission it waits for, and Framework startup keeps not
@@ -644,9 +645,18 @@ export class ZLinkChannelSocketRegistry {
    */
   async awaitClientDealerForOutbound(
     channelName: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineAtMs?: number
   ): Promise<ZLinkBackendDealerSocket | undefined> {
-    const deadline = performance.now() + this.clientServerReadyWaitBoundMs(channelName);
+    const startedAtMs = performance.now();
+    const deadline = Math.min(
+      deadlineAtMs ?? startedAtMs + (
+        this.registration.channels.get(channelName)?.requestTimeoutMs
+        ?? this.registration.requestTimeoutMs
+        ?? DEFAULT_REQUEST_TIMEOUT_MS
+      ),
+      startedAtMs + CLIENT_SERVER_READY_WAIT_CAP_MS
+    );
     for (;;) {
       this.drainSocketMonitors();
       const dealer = this.clientDealerForOutbound(channelName);
@@ -658,13 +668,6 @@ export class ZLinkChannelSocketRegistry {
         setTimeout(resolve, Math.min(CLIENT_SERVER_READY_POLL_INTERVAL_MS, remainingMs));
       });
     }
-  }
-
-  private clientServerReadyWaitBoundMs(channelName: string): number {
-    const requestTimeoutMs = this.registration.channels.get(channelName)?.requestTimeoutMs
-      ?? this.registration.requestTimeoutMs
-      ?? DEFAULT_REQUEST_TIMEOUT_MS;
-    return Math.min(requestTimeoutMs, CLIENT_SERVER_READY_WAIT_CAP_MS);
   }
 
   startManualClientServerConnections(): void {
