@@ -1675,3 +1675,6 @@ G-0(sonnet, load 0.5~0.7 시작, HEAD `2529709db6`): with_stream runs 3 zlink/as
 
 ## D-B158 (2026-09-07 05:15, 머신 B) G-0b idle 재측정 — Phase 2S 최종 판정
 G-0b(sonnet, load 0.3~0.9, HEAD `3d84da1fd1`, runs 3): with_stream zlink 289.7 / 267.8 / 32.6 vs asio 352.8 / 325.2 / 41.4 → **0.821 / 0.823 / 0.787**(Phase 0 0.835 / 0.768 / 0.775; zlink 절대 +7.7 % / +10.2 % / +7.2 %). perf/c single 1024 B(순서 PAIR/PUBSUB/DD/DR/DR_REQREP/RR/RR_REQREP): 883.8 / 626.5 / 769.8 / 760.7 / 419.4 / 732.2 / 371.6 = Phase 0 대비 0.99 / 0.97 / 0.98 / 0.99 / 1.00 / 0.98 / **0.94**. 판정: G-0 1차(D-B157)는 오염 확정. Phase 2S 결과 = 1024 B·64 KiB 개선, 64 B 잡음 범위, 목표 0.95에는 미달(남은 격차는 핸드오프 구조 D-c·앱 스레드 1개 관찰 항목이 대부분). single RR_REQREP −6 %는 Phase 2G G-후보(G-R1)로 등록. multi 스크린은 G-0c(idle)로 재기준 후 §7.4 교체.
+
+## D-B159 (2026-09-07 05:20, 머신 B) G-0c idle multi 스크린 = Phase 2G 기준; apply job 4개 빌드 해제; G-A 투입
+G-0c(load 0.09, runs 3): multi DD 905.1 / DR_SENDSEND 273.9 / RR_SENDSEND 242.5 / DR_REQREP 208.5 / RR_REQREP 170.1 / PUBSUB 1009.0 / STREAM 227.1 — Phase 0 대비 +61~+133 %. Phase 0 multi 값(22:02, S-B 분석 job 동시 실행)은 부하 오염으로 폐기. **캠페인이 multi를 그만큼 올렸다고 주장하지 않는다** — 오염 전 idle 값이 없으므로 확인 불가; 이후 판정은 이 값 기준. §7.4 갱신. G0_DONE 마커 생성 → R1-AB·R2·R3·R4-AB 빌드 시작. G-A(공통 경로 callgrind, opus) 투입.
