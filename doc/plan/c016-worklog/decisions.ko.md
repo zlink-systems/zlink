@@ -1689,3 +1689,8 @@ G-0c(load 0.09, runs 3): multi DD 905.1 / DR_SENDSEND 273.9 / RR_SENDSEND 242.5 
 
 ## D-B162 (2026-09-07 08:10, 사용자 지적) 비교군 정정 — zlink는 pull 모델, 기준은 zmq
 사용자: "zlink는 pull 방식인데". I/O↔앱 핸드오프는 설계이므로 D-c(핸드오프 제거) 철회. 1차 목표를 zmq(같은 pull 모델) 대비 ≥ 1.0으로 개정(idle G-0b: 64 B 0.91, 1024 B 0.98, 64 KiB 1.27; zmq는 G-0 1차 값이라 재측정 필요). asio 대비는 참고. G-A 브리프에 zmq 서버 나란히 프로파일 추가. 남은 대상 = 핸드오프 단가(command 2회/msg, eventfd 0.5회, ctxsw 2×).
+
+## D-B163 (2026-09-07 09:10, 머신 B) R3·R4-AB 완료 — 게이트 r1-r2 진행, r3-r4 대기
+- R3(opus, `core-rf-R3-summary.md`, 15파일 +158/−178): `session_base_t::reset()` no-op 삭제, `ZLINK_DEBUG_ROUTER_ROUTE` 추적 63행 + 핫패스 호출 4개 삭제(문서화된 knob 아님), `pipepair()` 10 인자 → 배열 4 + `pipepair_options_t`(호출 4 + 테스트 27). pipe.cpp 분할 미착수: 익명 namespace helper를 공유 헤더로 올려야 해 순수 이동이 아님 → 선행 결정 필요. ctest 72/72 ×4 + 간헐 1(기존), lost-wake 25/25. 축소셀 9,509~9,616(잡음).
+- R4-AB(opus, `core-rf-R4-AB-summary.md`, 9파일 +63/−133): dead typedef, `socket_close_ops` 삭제(호출처 1곳 인라인), monitor 스칼라 wrapper 10개 → `event_scalar()` 1개(payload 동일). **인벤토리 #3(a) 반박**: `record_context_admission_`는 `!logical_wait_registered`로 전달되는 wake 재시도 플래그라 삭제 시 auto-HWM 시도 이중 계수 → 유지. 대신 진짜 죽은 인자 3개 제거(18→15), `send_routed_scoped` 15→5. 프레임 병합(S-13)은 미시도: LTO가 이미 상수 접기해 self 비용 동일(144/127/113) → 이득 근거 없음, 계약 위험만 집중. 축소셀 9,545.
+- 축소 callgrind 셀(CCU 20)의 run 간 편차가 ±1.5 %라 ±1 % 주장에 부적합 — Phase 3 판정은 hotpath 5셀(1연결, 결정적)로만.
