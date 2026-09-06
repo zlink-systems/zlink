@@ -185,30 +185,61 @@ Performance harness가 쓰는 구조를 따른다.
 
 각 Phase는 이전 Phase가 끝난 뒤에 시작한다. Phase 안의 job도 직렬이다.
 
-### Phase 0 — raw 소켓 통일과 기준선 확보 (opus 1 job, ~1.5 h)
+### Phase 0 — raw 소켓 통일과 기준선 확보 (완료 2026-09-07)
 
-FB-001을 먼저 적용한 뒤 첫 숫자를 만든다. 오염된 기준을 5언어로 복제하지 않기 위해 순서가
-이렇게 된다.
+**완료**. 커밋 `7ecb81a461`(ROUTER 통일·harness 결함 4건), `c67d677832`(경계 표본화·admission
+계측), 요약 [`fw-bench-worklog/bench-dotnet-summary.ko.md`](fw-bench-worklog/bench-dotnet-summary.ko.md).
 
-- `.NET` bench의 raw client를 DEALER에서 **ROUTER로 바꾸고** 상대 ROUTER의 routing id를 지정해
-  보낸다. 서버(`ZLinkRawServer/Program.cs`)는 이미 ROUTER이므로 client 쪽만 바뀐다.
-  대상: `framework/languages/dotnet/bench/with-grpc/Client/Program.cs:493,512,530`.
-- `bindings/c/bench/with_grpc`의 `zlink-c`도 같은 구성으로 맞춘다.
-  대상: `zlink/bench_zlink_client.cpp:530-531`. **먼저 `bindings/c/bench/BENCH_POLICY.md`를 읽고**
-  기존 DEALER 셀을 없애야 하는지 옵션으로 병행해야 하는지 판단해 보고한다. 이 캠페인이 쓰는
-  `zlink-c` 값은 ROUTER↔ROUTER 구성이어야 한다.
-- 두 bench를 실행해 3패턴 × 2 payload 결과를 얻는다.
-- 산출: 측정 원본, `zlink-dotnet / zlink-c`와 `zlink-framework-dotnet / zlink-dotnet` 비율.
-- 규격 §7의 0.80 기준을 .NET이 만족하는지 본다. 만족하지 않으면 **원인을 기록만 하고 이
-  캠페인에서 최적화하지 않는다**(별도 job 후보).
-- ROUTER↔ROUTER 전환 전후 값을 둘 다 남긴다. 소켓 패턴이 결과에 준 영향을 보고서가 인용한다.
+이 단계는 기준선을 얻는 것이 목적이었으나, **bench가 동작하지 않는 상태였다는 사실을
+먼저 드러냈다.** 그 발견들이 Phase 1~5의 요구사항을 바꾸었으므로 아래에 남긴다.
 
-### Phase 1 — 규격 언어 중립화와 집계기 분리 (opus 1 job, ~1.5 h)
+| 발견 | 내용 | 이후 단계에 준 영향 |
+|---|---|---|
+| FB-006 | `.NET` bench는 커밋된 상태로 빌드되지 않았다. 한 번도 실행된 적이 없다 | bench를 gate에 편입(0.18.0 후보) |
+| FB-007 | C bench의 server CPU·memory 열이 구조적으로 0이었다 | 과거 C 결과의 server 자원 수치를 인용하지 않는다 |
+| FB-008 | 셀 하나가 다음 셀을 죽였다. settle을 drain 확인으로 바꿈 | 규격 §3 계약, 다섯 언어 공통 |
+| FB-013 | send 처리량을 drain 이후에 표본화해 framework를 4.2배 부풀렸다 | **framework send 우위 2.8배는 계측 artefact였다.** 정정 후 gRPC와 동등 |
+| FB-016 | raw 경로는 단일 스레드 제출 비용에 묶인다(32.2 µs/request, 1.16 코어) | 측정 결과이며 고치지 않는다. 0.18.0 후보 |
+| FB-017 | `peak_in_flight` 계측이 harness 결함과 스택 성질을 구분한다 | **네 언어 harness가 반드시 갖춘다** |
 
-- 규격 문서를 §4의 공통 계약대로 개정한다(한국어·영어 두 파일). FB-001~FB-003을 규격 본문에
-  반영하되 패턴·payload·header·metric 이름 같은 계약 값은 바꾸지 않는다.
-- 공용 집계 스크립트를 만들고 .NET client를 원본 JSON 출력 + 집계기 구조로 바꾼다.
-- **판정**: 개정 전 Phase 0 결과를 집계기에 넣었을 때 Phase 0과 같은 표가 나와야 한다.
+판정 결과: 네 값 중 게시 가능한 것은 `zlink-dotnet / zlink-c` @1024 = **0.084**(기준 미달)
+하나뿐이고 나머지 셋은 재현성 미달로 `unsupported`다. **`.NET`은 통과가 아니며 완전한
+판정도 불가능하다.**
+
+### Phase 1 — 공용 집계기 분리 (opus 1 job, ~1.5 h)
+
+규격 언어 중립화는 Phase 0 이전에 끝났다(커밋 `146db4da4c`, FB-008 계약 포함). 남은 것은
+집계기다. Phase 0이 드러낸 요구사항이 원래 계획보다 늘었다.
+
+집계기가 소유하는 것:
+
+- 규격 §4의 표와 `RESULT` 라인 생성. 언어별 프로세스는 셀 원본만 낸다.
+- **C report 형식 정규화.** C는 처리량을 KOPS로, `.NET`은 초당 완료 수로 낸다. C는 열 구성도
+  다르다(`Submitted`·`Completed`·`Errors`·`Blocked`·`MaxOut`·`SubmitMs`). 집계기가 흡수한다.
+  정규화가 동작하면 규격 §7.4의 수동 1000 나누기 규칙을 삭제할 수 있는지 판단해 제안한다.
+- **행 단위 G5 계산**(FB-011). 3회 실행의 중앙값 대비 스프레드를 행마다 낸다.
+- **판정 게재 여부 판정**(FB-011). 분자와 분모가 **모두** G5를 통과한 판정만 게재하고,
+  그렇지 않으면 `unsupported`와 사유를 낸다. payload 크기별로 따로 낸다(FB-005).
+- **`peak_in_flight`와 abandoned 수**(FB-017), **셀별 drain 시간**(FB-008), **client CPU 포화
+  표시**(규격 §5.1)를 표에 싣는다.
+- **실제 in-flight 깊이**를 처리량 × 평균 지연으로 계산해 함께 낸다. Phase 0에서 이 값이
+  판정을 뒤집었다.
+
+판정 조건: Phase 0의 `gated2` 원본을 집계기에 넣었을 때 [`bench-dotnet-summary.ko.md`]
+(fw-bench-worklog/bench-dotnet-summary.ko.md)의 표와 같은 값이 나와야 한다. 다르면 채택하지 않는다.
+
+### Phase 2~5 공통 요구 (Phase 0이 추가한 것)
+
+네 언어 harness는 아래를 갖춘 상태로 만든다. `.NET` 구현이 정본이다.
+
+| 요구 | 근거 |
+|---|---|
+| `peak_in_flight`와 abandoned 수를 셀마다 출력 | FB-017. 이 한 줄이 "harness가 window를 못 채운다"와 "스택이 그 깊이까지만 낸다"를 구분한다 |
+| send 처리량을 **active window 경계**에서 표본화 | FB-013. drain 이후 표본화는 규격 §5 위반이며 값을 크게 부풀린다 |
+| settle을 server drain 확인으로, 상한 초과 시 같은 server의 다음 셀을 오염 표시 | FB-008, 규격 §3 |
+| 셀 격리 — 한 셀이 실패해도 나머지가 실행 | Phase 0에서 셀 하나가 전체 run을 죽였다 |
+| 측정 전 route readiness 대기(warmup·reset 이전에만) | ROUTER 첫 호출 경합 |
+| raw 행은 ROUTER↔ROUTER | FB-001, 규격 §1.3 |
 
 ### Phase 2 — Node (opus 1 job, ~1.5 h)
 
@@ -257,7 +288,8 @@ FB-001을 먼저 적용한 뒤 첫 숫자를 만든다. 오염된 기준을 5언
 | G4 공개 API만 사용 | private 런타임·reflection·두 번째 poller·재시도 상태를 넣지 않는다. 넣으면 다른 경로를 잰 것이다 |
 | G5 재현성 | 같은 조건 3회 실행의 중앙값 대비 각 실행이 ±10% 안이다. 넘으면 원인을 기록하고 재측정한다 |
 | G6 포화 표시 | client CPU 95% 초과 셀은 포화로 표시하고 처리량 우열 판정에 쓰지 않는다 |
-| G7 격리 | 측정 구간에 다른 빌드·job이 없었음을 로그로 보인다 |
+| G7 격리 | 측정 구간에 다른 빌드·job이 없었음을 로그로 보인다. `dotnet build`의 MSBuild node reuse 데몬이 상속한 flock fd를 붙잡는 문제가 있으므로 `MSBUILDDISABLENODEREUSE=1`로 막고 빌드를 측정 구간 밖에 둔다 |
+| G8 깊이 보고 | 셀마다 `peak_in_flight`와 처리량 × 평균 지연으로 계산한 실제 in-flight 깊이를 함께 낸다. 설정한 window와 실제 깊이가 크게 다르면 그 사실을 결과에 남긴다(FB-017) |
 
 G1~G4를 만족하지 못한 셀은 `unsupported`로 기록하고 완료 개수에 넣지 않는다. 수치를
 만들기 위해 조건을 바꾸지 않는다.
@@ -344,8 +376,9 @@ G1~G4를 만족하지 못한 셀은 `unsupported`로 기록하고 완료 개수�
 
 ## 10. 체크리스트
 
-- [ ] Phase 0 — raw 소켓 ROUTER↔ROUTER 통일(.NET·C), 기준선 측정, `zlink-c` 기준값 확보
-- [ ] Phase 1 — 규격 언어 중립화, 공용 집계기 분리, .NET 재검증
+- [x] Phase 0 — raw 소켓 ROUTER↔ROUTER 통일(.NET·C), harness 결함 4건 수정, 기준선 측정 완료. 게시 판정 1건(0.084 미달), 나머지 3건 `unsupported`
+- [x] 규격 5언어 중립화 (`146db4da4c`, FB-008 계약 포함)
+- [ ] Phase 1 — 공용 집계기 분리, Phase 0 원본으로 재검증
 - [ ] Phase 2 — Node 구현과 18셀 통과
 - [ ] Phase 3 — Java 구현과 18셀 통과
 - [ ] Phase 4 — Kotlin 구현과 18셀 통과 (coroutine stub 결정 기록)
