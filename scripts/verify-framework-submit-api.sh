@@ -67,7 +67,7 @@ if (mode === '--contract') {
   ]));
   const submitPatterns = {
     dotnet: /ValueTask\s+Async\s*\(/,
-    cpp: /task_t<void>\s+submit\s*\(\s*\)/,
+    cpp: /task_t<void>\s+async\s*\(\s*\)/,
     java: /CompletionStage<(?:java\.lang\.)?Void>\s+submit\s*\(/,
     kotlin: /suspend\s+fun\s+await\s*\(\s*\)(?:\s*:\s*Unit)?/,
     node: /submit\([^)]*\): Promise<void>/,
