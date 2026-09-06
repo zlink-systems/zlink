@@ -1,0 +1,2 @@
+zlink client: raw socket mode=router
+[bench] report: /home/hep7/project/zlink/bindings/c/bench/with_grpc/log/verify-20260907_055429/c-router-1/report.txt

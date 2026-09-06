@@ -1,0 +1,8 @@
+2026-09-07T06:12:10+09:00 measured span begin: java=openjdk version "22.0.2" 2024-07-16 commit=64d2ad5b67
+2026-09-07T06:12:10+09:00 loadavg at span begin: 1.78 2.35 1.82 1/739 25580
+2026-09-07T06:12:10+09:00 loadavg gate for kotlin-router-1: 1.78
+2026-09-07T06:12:10+09:00 run kotlin-router-1 start (raw-socket=router)
+2026-09-07T06:12:11+09:00 servers ready after 2s
+2026-09-07T06:21:37+09:00 run kotlin-router-1 end rc=0
+2026-09-07T06:21:37+09:00 loadavg at span end: 5.11 3.07 2.38 1/752 34207
+2026-09-07T06:21:37+09:00 measured span end

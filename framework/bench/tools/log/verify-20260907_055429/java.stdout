@@ -1,0 +1,8 @@
+2026-09-07T06:01:30+09:00 measured span begin: java=openjdk version "22.0.2" 2024-07-16 commit=64d2ad5b67
+2026-09-07T06:01:30+09:00 loadavg at span begin: 1.72 1.63 1.25 1/770 19554
+2026-09-07T06:01:30+09:00 loadavg gate for java-router-1: 1.72
+2026-09-07T06:01:30+09:00 run java-router-1 start (raw-socket=router)
+2026-09-07T06:01:32+09:00 servers ready after 3s
+2026-09-07T06:10:58+09:00 run java-router-1 end rc=0
+2026-09-07T06:10:58+09:00 loadavg at span end: 5.19 2.88 1.94 1/746 24883
+2026-09-07T06:10:58+09:00 measured span end

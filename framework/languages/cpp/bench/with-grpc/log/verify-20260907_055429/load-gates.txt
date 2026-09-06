@@ -1,0 +1,1 @@
+cpp-router-1 loadavg1=1.91 gate=2.0 at=2026-09-07T06:23:10+09:00

@@ -1,0 +1,199 @@
+# with-grpc bench, kotlin row
+  diagnosticsSchema: with-grpc-cell-v1
+  language: kotlin
+  kotlinVersion: 2.2.21
+  javaVersion: 22.0.2
+  javaVendor: Eclipse Adoptium
+  javaVmName: OpenJDK 64-Bit Server VM
+  grpcJavaVersion: 1.72.0
+  grpcKotlinVersion: 1.4.1
+  grpcStub: grpc-kotlin coroutine stub (BenchServiceCoroutineStub)
+  coroutinesVersion: 1.9.0
+  coroutineDispatcher: Dispatchers.Default, CoroutineStart.UNDISPATCHED
+  protobufJavaVersion: 4.30.2
+  grpcServerConfiguration: {'implementation':'grpc-java','serverConfiguration':'io.grpc.ServerBuilder.forPort default configuration, plaintext loopback, grpc-netty-shaded 1.72.0'}
+  serverProcesses: java row binaries (bench-grpc-server, bench-zlink-raw-server, bench-zlink-framework-server) on the kotlin band
+  zlinkBindingVersion: 0.17.0
+  zlinkBindingNote: bindings/kotlin has no native binding of its own; it is systems.zlink:zlink used from kotlin
+  frameworkModule: zlink-framework-kotlin 0.10.0
+  frameworkHost: zlink-framework-spring-boot-starter 0.10.0
+  logical_cores: 20
+  client_saturation_metric: jvm_thread_cores
+  client_parallelism_ceiling: 1 (request drivers) / 8 (send driver)
+  cpu: Intel(R) Core(TM) Ultra 7 265K
+  kernel: 6.6.87.2-microsoft-standard-WSL2
+  commit: 64d2ad5b677d7a0256a1658dbf39c53144ac0d3d
+  rawSocket: router
+  warmupSeconds: 20.0
+  warmupSegmentSeconds: 2.0
+  durationSeconds: 5.0
+  requestWindow: 100
+  sendConcurrency: 8
+  requestTimeoutMs: 30000
+  channel: bench
+  runId: 268397438
+  startedAt: 2026-09-07T06:21:35.239419264+09:00[Asia/Seoul]
+  loadavg1: 5.11
+
+RESULT,current,grpc-kotlin-request-serial,local,1024,throughput,4583.600
+RESULT,current,grpc-kotlin-request-serial,local,1024,bandwidth,4.694
+RESULT,current,grpc-kotlin-request-serial,local,1024,latency,0.218
+RESULT,current,grpc-kotlin-request-serial,local,1024,latency_p95,0.285
+RESULT,current,grpc-kotlin-request-serial,local,1024,latency_p99,0.354
+RESULT,current,grpc-kotlin-request-serial,local,1024,client_cpu_percent,2.980
+RESULT,current,grpc-kotlin-request-serial,local,1024,client_memory_mb,335.836
+RESULT,current,grpc-kotlin-request-serial,local,1024,server_cpu_percent,1.580
+RESULT,current,grpc-kotlin-request-serial,local,1024,server_memory_mb,742.215
+RESULT,current,zlink-kotlin-request-serial,local,1024,throughput,5348.200
+RESULT,current,zlink-kotlin-request-serial,local,1024,bandwidth,5.477
+RESULT,current,zlink-kotlin-request-serial,local,1024,latency,0.187
+RESULT,current,zlink-kotlin-request-serial,local,1024,latency_p95,0.225
+RESULT,current,zlink-kotlin-request-serial,local,1024,latency_p99,0.298
+RESULT,current,zlink-kotlin-request-serial,local,1024,client_cpu_percent,2.610
+RESULT,current,zlink-kotlin-request-serial,local,1024,client_memory_mb,353.398
+RESULT,current,zlink-kotlin-request-serial,local,1024,server_cpu_percent,1.270
+RESULT,current,zlink-kotlin-request-serial,local,1024,server_memory_mb,400.531
+RESULT,current,zlink-framework-kotlin-request-serial,local,1024,throughput,475.600
+RESULT,current,zlink-framework-kotlin-request-serial,local,1024,bandwidth,0.487
+RESULT,current,zlink-framework-kotlin-request-serial,local,1024,latency,2.103
+RESULT,current,zlink-framework-kotlin-request-serial,local,1024,latency_p95,2.576
+RESULT,current,zlink-framework-kotlin-request-serial,local,1024,latency_p99,2.795
+RESULT,current,zlink-framework-kotlin-request-serial,local,1024,client_cpu_percent,1.749
+RESULT,current,zlink-framework-kotlin-request-serial,local,1024,client_memory_mb,398.590
+RESULT,current,zlink-framework-kotlin-request-serial,local,1024,server_cpu_percent,2.289
+RESULT,current,zlink-framework-kotlin-request-serial,local,1024,server_memory_mb,412.957
+RESULT,current,grpc-kotlin-request-window,local,1024,throughput,93047.200
+RESULT,current,grpc-kotlin-request-window,local,1024,bandwidth,95.280
+RESULT,current,grpc-kotlin-request-window,local,1024,latency,1.014
+RESULT,current,grpc-kotlin-request-window,local,1024,latency_p95,1.337
+RESULT,current,grpc-kotlin-request-window,local,1024,latency_p99,1.989
+RESULT,current,grpc-kotlin-request-window,local,1024,client_cpu_percent,27.693
+RESULT,current,grpc-kotlin-request-window,local,1024,client_memory_mb,951.688
+RESULT,current,grpc-kotlin-request-window,local,1024,server_cpu_percent,12.367
+RESULT,current,grpc-kotlin-request-window,local,1024,server_memory_mb,1177.117
+RESULT,current,zlink-kotlin-request-window,local,1024,throughput,0.000
+RESULT,current,zlink-kotlin-request-window,local,1024,bandwidth,0.000
+RESULT,current,zlink-kotlin-request-window,local,1024,latency,0.000
+RESULT,current,zlink-kotlin-request-window,local,1024,latency_p95,0.000
+RESULT,current,zlink-kotlin-request-window,local,1024,latency_p99,0.000
+RESULT,current,zlink-kotlin-request-window,local,1024,client_cpu_percent,0.690
+RESULT,current,zlink-kotlin-request-window,local,1024,client_memory_mb,955.676
+RESULT,current,zlink-kotlin-request-window,local,1024,server_cpu_percent,0.010
+RESULT,current,zlink-kotlin-request-window,local,1024,server_memory_mb,405.531
+RESULT,current,zlink-framework-kotlin-request-window,local,1024,throughput,2303.200
+RESULT,current,zlink-framework-kotlin-request-window,local,1024,bandwidth,2.358
+RESULT,current,zlink-framework-kotlin-request-window,local,1024,latency,1.958
+RESULT,current,zlink-framework-kotlin-request-window,local,1024,latency_p95,2.813
+RESULT,current,zlink-framework-kotlin-request-window,local,1024,latency_p99,3.071
+RESULT,current,zlink-framework-kotlin-request-window,local,1024,client_cpu_percent,5.387
+RESULT,current,zlink-framework-kotlin-request-window,local,1024,client_memory_mb,996.770
+RESULT,current,zlink-framework-kotlin-request-window,local,1024,server_cpu_percent,4.768
+RESULT,current,zlink-framework-kotlin-request-window,local,1024,server_memory_mb,386.223
+RESULT,current,grpc-kotlin-send-saturation,local,1024,throughput,34778.400
+RESULT,current,grpc-kotlin-send-saturation,local,1024,bandwidth,35.613
+RESULT,current,grpc-kotlin-send-saturation,local,1024,latency,0.121
+RESULT,current,grpc-kotlin-send-saturation,local,1024,latency_p95,0.169
+RESULT,current,grpc-kotlin-send-saturation,local,1024,latency_p99,0.197
+RESULT,current,grpc-kotlin-send-saturation,local,1024,client_cpu_percent,13.709
+RESULT,current,grpc-kotlin-send-saturation,local,1024,client_memory_mb,1022.973
+RESULT,current,grpc-kotlin-send-saturation,local,1024,server_cpu_percent,6.620
+RESULT,current,grpc-kotlin-send-saturation,local,1024,server_memory_mb,1195.359
+RESULT,current,zlink-kotlin-send-saturation,local,1024,throughput,369540.200
+RESULT,current,zlink-kotlin-send-saturation,local,1024,bandwidth,378.409
+RESULT,current,zlink-kotlin-send-saturation,local,1024,latency,0.091
+RESULT,current,zlink-kotlin-send-saturation,local,1024,latency_p95,0.268
+RESULT,current,zlink-kotlin-send-saturation,local,1024,latency_p99,0.342
+RESULT,current,zlink-kotlin-send-saturation,local,1024,client_cpu_percent,10.049
+RESULT,current,zlink-kotlin-send-saturation,local,1024,client_memory_mb,1034.836
+RESULT,current,zlink-kotlin-send-saturation,local,1024,server_cpu_percent,4.180
+RESULT,current,zlink-kotlin-send-saturation,local,1024,server_memory_mb,1032.547
+RESULT,current,zlink-framework-kotlin-send-saturation,local,1024,throughput,7434.400
+RESULT,current,zlink-framework-kotlin-send-saturation,local,1024,bandwidth,7.613
+RESULT,current,zlink-framework-kotlin-send-saturation,local,1024,latency,2077.851
+RESULT,current,zlink-framework-kotlin-send-saturation,local,1024,latency_p95,2240.445
+RESULT,current,zlink-framework-kotlin-send-saturation,local,1024,latency_p99,2295.792
+RESULT,current,zlink-framework-kotlin-send-saturation,local,1024,client_cpu_percent,14.737
+RESULT,current,zlink-framework-kotlin-send-saturation,local,1024,client_memory_mb,1111.273
+RESULT,current,zlink-framework-kotlin-send-saturation,local,1024,server_cpu_percent,15.493
+RESULT,current,zlink-framework-kotlin-send-saturation,local,1024,server_memory_mb,878.691
+RESULT,current,grpc-kotlin-request-serial,local,4096,throughput,4755.800
+RESULT,current,grpc-kotlin-request-serial,local,4096,bandwidth,19.480
+RESULT,current,grpc-kotlin-request-serial,local,4096,latency,0.210
+RESULT,current,grpc-kotlin-request-serial,local,4096,latency_p95,0.257
+RESULT,current,grpc-kotlin-request-serial,local,4096,latency_p99,0.312
+RESULT,current,grpc-kotlin-request-serial,local,4096,client_cpu_percent,2.990
+RESULT,current,grpc-kotlin-request-serial,local,4096,client_memory_mb,1111.898
+RESULT,current,grpc-kotlin-request-serial,local,4096,server_cpu_percent,1.540
+RESULT,current,grpc-kotlin-request-serial,local,4096,server_memory_mb,1196.141
+RESULT,current,zlink-kotlin-request-serial,local,4096,throughput,5323.200
+RESULT,current,zlink-kotlin-request-serial,local,4096,bandwidth,21.804
+RESULT,current,zlink-kotlin-request-serial,local,4096,latency,0.188
+RESULT,current,zlink-kotlin-request-serial,local,4096,latency_p95,0.222
+RESULT,current,zlink-kotlin-request-serial,local,4096,latency_p99,0.284
+RESULT,current,zlink-kotlin-request-serial,local,4096,client_cpu_percent,2.710
+RESULT,current,zlink-kotlin-request-serial,local,4096,client_memory_mb,1112.055
+RESULT,current,zlink-kotlin-request-serial,local,4096,server_cpu_percent,1.220
+RESULT,current,zlink-kotlin-request-serial,local,4096,server_memory_mb,1033.953
+RESULT,current,zlink-framework-kotlin-request-serial,local,4096,throughput,492.000
+RESULT,current,zlink-framework-kotlin-request-serial,local,4096,bandwidth,2.015
+RESULT,current,zlink-framework-kotlin-request-serial,local,4096,latency,2.033
+RESULT,current,zlink-framework-kotlin-request-serial,local,4096,latency_p95,2.523
+RESULT,current,zlink-framework-kotlin-request-serial,local,4096,latency_p99,2.604
+RESULT,current,zlink-framework-kotlin-request-serial,local,4096,client_cpu_percent,1.739
+RESULT,current,zlink-framework-kotlin-request-serial,local,4096,client_memory_mb,1112.836
+RESULT,current,zlink-framework-kotlin-request-serial,local,4096,server_cpu_percent,1.490
+RESULT,current,zlink-framework-kotlin-request-serial,local,4096,server_memory_mb,889.063
+RESULT,current,grpc-kotlin-request-window,local,4096,throughput,77348.000
+RESULT,current,grpc-kotlin-request-window,local,4096,bandwidth,316.817
+RESULT,current,grpc-kotlin-request-window,local,4096,latency,1.207
+RESULT,current,grpc-kotlin-request-window,local,4096,latency_p95,1.634
+RESULT,current,grpc-kotlin-request-window,local,4096,latency_p99,2.085
+RESULT,current,grpc-kotlin-request-window,local,4096,client_cpu_percent,24.445
+RESULT,current,grpc-kotlin-request-window,local,4096,client_memory_mb,1533.031
+RESULT,current,grpc-kotlin-request-window,local,4096,server_cpu_percent,11.388
+RESULT,current,grpc-kotlin-request-window,local,4096,server_memory_mb,1217.148
+RESULT,current,zlink-kotlin-request-window,local,4096,throughput,35.200
+RESULT,current,zlink-kotlin-request-window,local,4096,bandwidth,0.144
+RESULT,current,zlink-kotlin-request-window,local,4096,latency,0.729
+RESULT,current,zlink-kotlin-request-window,local,4096,latency_p95,1.266
+RESULT,current,zlink-kotlin-request-window,local,4096,latency_p99,1.295
+RESULT,current,zlink-kotlin-request-window,local,4096,client_cpu_percent,0.685
+RESULT,current,zlink-kotlin-request-window,local,4096,client_memory_mb,1531.863
+RESULT,current,zlink-kotlin-request-window,local,4096,server_cpu_percent,0.005
+RESULT,current,zlink-kotlin-request-window,local,4096,server_memory_mb,1033.953
+RESULT,current,zlink-framework-kotlin-request-window,local,4096,throughput,2298.200
+RESULT,current,zlink-framework-kotlin-request-window,local,4096,bandwidth,9.413
+RESULT,current,zlink-framework-kotlin-request-window,local,4096,latency,1.955
+RESULT,current,zlink-framework-kotlin-request-window,local,4096,latency_p95,2.803
+RESULT,current,zlink-framework-kotlin-request-window,local,4096,latency_p99,3.035
+RESULT,current,zlink-framework-kotlin-request-window,local,4096,client_cpu_percent,5.508
+RESULT,current,zlink-framework-kotlin-request-window,local,4096,client_memory_mb,1538.270
+RESULT,current,zlink-framework-kotlin-request-window,local,4096,server_cpu_percent,5.288
+RESULT,current,zlink-framework-kotlin-request-window,local,4096,server_memory_mb,895.469
+RESULT,current,grpc-kotlin-send-saturation,local,4096,throughput,33351.000
+RESULT,current,grpc-kotlin-send-saturation,local,4096,bandwidth,136.606
+RESULT,current,grpc-kotlin-send-saturation,local,4096,latency,0.128
+RESULT,current,grpc-kotlin-send-saturation,local,4096,latency_p95,0.179
+RESULT,current,grpc-kotlin-send-saturation,local,4096,latency_p99,0.210
+RESULT,current,grpc-kotlin-send-saturation,local,4096,client_cpu_percent,13.789
+RESULT,current,grpc-kotlin-send-saturation,local,4096,client_memory_mb,1546.551
+RESULT,current,grpc-kotlin-send-saturation,local,4096,server_cpu_percent,6.540
+RESULT,current,grpc-kotlin-send-saturation,local,4096,server_memory_mb,1216.793
+RESULT,current,zlink-kotlin-send-saturation,local,4096,throughput,258336.800
+RESULT,current,zlink-kotlin-send-saturation,local,4096,bandwidth,1058.148
+RESULT,current,zlink-kotlin-send-saturation,local,4096,latency,0.083
+RESULT,current,zlink-kotlin-send-saturation,local,4096,latency_p95,0.245
+RESULT,current,zlink-kotlin-send-saturation,local,4096,latency_p99,0.295
+RESULT,current,zlink-kotlin-send-saturation,local,4096,client_cpu_percent,10.370
+RESULT,current,zlink-kotlin-send-saturation,local,4096,client_memory_mb,1548.895
+RESULT,current,zlink-kotlin-send-saturation,local,4096,server_cpu_percent,4.430
+RESULT,current,zlink-kotlin-send-saturation,local,4096,server_memory_mb,1035.281
+RESULT,current,zlink-framework-kotlin-send-saturation,local,4096,throughput,8904.400
+RESULT,current,zlink-framework-kotlin-send-saturation,local,4096,bandwidth,36.472
+RESULT,current,zlink-framework-kotlin-send-saturation,local,4096,latency,766.966
+RESULT,current,zlink-framework-kotlin-send-saturation,local,4096,latency_p95,848.031
+RESULT,current,zlink-framework-kotlin-send-saturation,local,4096,latency_p99,876.283
+RESULT,current,zlink-framework-kotlin-send-saturation,local,4096,client_cpu_percent,13.529
+RESULT,current,zlink-framework-kotlin-send-saturation,local,4096,client_memory_mb,1572.398
+RESULT,current,zlink-framework-kotlin-send-saturation,local,4096,server_cpu_percent,14.289
+RESULT,current,zlink-framework-kotlin-send-saturation,local,4096,server_memory_mb,901.406

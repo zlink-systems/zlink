@@ -1,0 +1,47 @@
+[bench] running grpc-java-request-serial@1024
+[bench] finished grpc-java-request-serial@1024 throughput=5464.4/s cores=0.48 peak_in_flight=1
+[bench] running zlink-java-request-serial@1024
+[bench] finished zlink-java-request-serial@1024 throughput=6294.6/s cores=0.51 peak_in_flight=1
+[bench] running zlink-framework-java-request-serial@1024
+[bench] finished zlink-framework-java-request-serial@1024 throughput=477.8/s cores=0.34 peak_in_flight=1
+[bench] running grpc-java-request-window@1024
+[bench] finished grpc-java-request-window@1024 throughput=117868.2/s cores=3.16 peak_in_flight=100
+[bench] running zlink-java-request-window@1024
+[bench] finished zlink-java-request-window@1024 throughput=0.0/s cores=0.15 peak_in_flight=100
+[bench] running zlink-framework-java-request-window@1024
+[bench] finished zlink-framework-java-request-window@1024 throughput=2195.4/s cores=1.13 peak_in_flight=9
+[bench] running grpc-java-send-saturation@1024
+[bench] finished grpc-java-send-saturation@1024 throughput=38501.2/s cores=1.92 peak_in_flight=8
+[bench] running zlink-java-send-saturation@1024
+[bench] finished zlink-java-send-saturation@1024 throughput=473977.4/s cores=2.08 peak_in_flight=8
+[bench] running zlink-framework-java-send-saturation@1024
+[bench] finished zlink-framework-java-send-saturation@1024 throughput=6579.6/s cores=2.95 peak_in_flight=8
+[bench] running grpc-java-request-serial@4096
+[bench] finished grpc-java-request-serial@4096 throughput=5973.6/s cores=0.50 peak_in_flight=1
+[bench] running zlink-java-request-serial@4096
+[bench] finished zlink-java-request-serial@4096 throughput=6231.2/s cores=0.54 peak_in_flight=1
+[bench] running zlink-framework-java-request-serial@4096
+[bench] finished zlink-framework-java-request-serial@4096 throughput=497.0/s cores=0.34 peak_in_flight=1
+[bench] running grpc-java-request-window@4096
+[bench] finished grpc-java-request-window@4096 throughput=94781.2/s cores=2.85 peak_in_flight=100
+[bench] running zlink-java-request-window@4096
+[bench] finished zlink-java-request-window@4096 throughput=20.0/s cores=0.14 peak_in_flight=100
+[bench] running zlink-framework-java-request-window@4096
+[bench] finished zlink-framework-java-request-window@4096 throughput=2306.4/s cores=1.04 peak_in_flight=12
+[bench] running grpc-java-send-saturation@4096
+[bench] finished grpc-java-send-saturation@4096 throughput=40683.4/s cores=1.98 peak_in_flight=8
+[bench] running zlink-java-send-saturation@4096
+[bench] finished zlink-java-send-saturation@4096 throughput=322707.0/s cores=2.12 peak_in_flight=8
+[bench] running zlink-framework-java-send-saturation@4096
+[bench] finished zlink-framework-java-send-saturation@4096 throughput=9265.6/s cores=2.72 peak_in_flight=8
+## Drain (FB-008)
+- grpc-java-send-saturation@1024: drain_ms=297 bound_hit=false bound_ms=30000
+- zlink-java-send-saturation@1024: drain_ms=308 bound_hit=false bound_ms=30000
+- zlink-framework-java-send-saturation@1024: drain_ms=2511 bound_hit=false bound_ms=30000
+- grpc-java-send-saturation@4096: drain_ms=345 bound_hit=false bound_ms=30000
+- zlink-java-send-saturation@4096: drain_ms=350 bound_hit=false bound_ms=30000
+- zlink-framework-java-send-saturation@4096: drain_ms=1003 bound_hit=false bound_ms=30000
+
+## Failures
+[bench] cells completed=18 failed=0 contaminated=0
+ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE

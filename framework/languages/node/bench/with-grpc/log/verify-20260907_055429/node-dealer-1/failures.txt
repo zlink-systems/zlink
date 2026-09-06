@@ -1,0 +1,13 @@
+## Drain (FB-008)
+- grpc-node-send-saturation@1024: drain_ms=224 bound_hit=false bound_ms=30000
+- zlink-node-send-saturation@1024: drain_ms=526 bound_hit=false bound_ms=30000
+- grpc-node-send-saturation@4096: drain_ms=223 bound_hit=false bound_ms=30000
+- zlink-node-send-saturation@4096: drain_ms=278 bound_hit=false bound_ms=30000
+
+## Failures
+- zlink-framework-node-request-serial@1024: framework host unavailable via @zlink-systems/nestjs: framework-codec-protobuf has no bytes type: a protobuf `bytes body` cannot be expressed through the public codec (a 1024-byte body encodes to 20,412 bytes and decodes as an object). spec section 2 fixes the payload as that field, so this row cannot carry the spec payload
+- zlink-framework-node-request-window@1024: framework host unavailable via @zlink-systems/nestjs: framework-codec-protobuf has no bytes type: a protobuf `bytes body` cannot be expressed through the public codec (a 1024-byte body encodes to 20,412 bytes and decodes as an object). spec section 2 fixes the payload as that field, so this row cannot carry the spec payload
+- zlink-framework-node-send-saturation@1024: framework host unavailable via @zlink-systems/nestjs: framework-codec-protobuf has no bytes type: a protobuf `bytes body` cannot be expressed through the public codec (a 1024-byte body encodes to 20,412 bytes and decodes as an object). spec section 2 fixes the payload as that field, so this row cannot carry the spec payload
+- zlink-framework-node-request-serial@4096: framework host unavailable via @zlink-systems/nestjs: framework-codec-protobuf has no bytes type: a protobuf `bytes body` cannot be expressed through the public codec (a 1024-byte body encodes to 20,412 bytes and decodes as an object). spec section 2 fixes the payload as that field, so this row cannot carry the spec payload
+- zlink-framework-node-request-window@4096: framework host unavailable via @zlink-systems/nestjs: framework-codec-protobuf has no bytes type: a protobuf `bytes body` cannot be expressed through the public codec (a 1024-byte body encodes to 20,412 bytes and decodes as an object). spec section 2 fixes the payload as that field, so this row cannot carry the spec payload
+- zlink-framework-node-send-saturation@4096: framework host unavailable via @zlink-systems/nestjs: framework-codec-protobuf has no bytes type: a protobuf `bytes body` cannot be expressed through the public codec (a 1024-byte body encodes to 20,412 bytes and decodes as an object). spec section 2 fixes the payload as that field, so this row cannot carry the spec payload

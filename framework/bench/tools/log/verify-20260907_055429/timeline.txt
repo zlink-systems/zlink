@@ -1,0 +1,37 @@
+2026-09-07T05:54:29+09:00 verification span 20260907_055429 begin  dry_run=0
+2026-09-07T05:54:29+09:00 commit=64d2ad5b677d7a0256a1658dbf39c53144ac0d3d  branch=main
+2026-09-07T05:54:29+09:00 loadavg at span begin: 0.86 0.35 0.63 2/772 16672
+2026-09-07T05:54:29+09:00 kernel=6.6.87.2-microsoft-standard-WSL2
+2026-09-07T05:54:29+09:00 preflight: all five port bands free
+2026-09-07T05:54:29+09:00 gate dotnet: loadavg1=0.86 gate=2.0
+2026-09-07T05:54:29+09:00 gate dotnet: start at loadavg1=0.86 after 0s wait
+2026-09-07T05:54:29+09:00 run dotnet begin
+2026-09-07T05:56:39+09:00 ps watch dotnet: 12/13 samples saw a matching process (/home/hep7/project/zlink/framework/bench/tools/log/verify-20260907_055429/dotnet.ps.txt)
+2026-09-07T05:56:39+09:00 run dotnet end rc=0 loadavg=4.86 2.16 1.27 1/775 17984
+2026-09-07T05:56:39+09:00 gate node: loadavg1=4.86 gate=2.0
+2026-09-07T05:57:49+09:00 gate node: start at loadavg1=1.71 after 70s wait
+2026-09-07T05:57:49+09:00 run node begin
+2026-09-07T06:01:30+09:00 ps watch node: 21/22 samples saw a matching process (/home/hep7/project/zlink/framework/bench/tools/log/verify-20260907_055429/node.ps.txt)
+2026-09-07T06:01:30+09:00 run node end rc=0 loadavg=1.72 1.63 1.25 2/768 19490
+2026-09-07T06:01:30+09:00 gate java: loadavg1=1.72 gate=2.0
+2026-09-07T06:01:30+09:00 gate java: start at loadavg1=1.72 after 0s wait
+2026-09-07T06:01:30+09:00 run java begin
+2026-09-07T06:11:00+09:00 ps watch java: 56/57 samples saw a matching process (/home/hep7/project/zlink/framework/bench/tools/log/verify-20260907_055429/java.ps.txt)
+2026-09-07T06:11:00+09:00 run java end rc=0 loadavg=5.19 2.88 1.94 2/737 24896
+2026-09-07T06:11:00+09:00 gate kotlin: loadavg1=5.19 gate=2.0
+2026-09-07T06:12:10+09:00 gate kotlin: start at loadavg1=1.78 after 70s wait
+2026-09-07T06:12:10+09:00 run kotlin begin
+2026-09-07T06:21:40+09:00 ps watch kotlin: 56/57 samples saw a matching process (/home/hep7/project/zlink/framework/bench/tools/log/verify-20260907_055429/kotlin.ps.txt)
+2026-09-07T06:21:40+09:00 run kotlin end rc=0 loadavg=4.86 3.05 2.38 2/746 34245
+2026-09-07T06:21:40+09:00 gate cpp: loadavg1=4.86 gate=2.0
+2026-09-07T06:23:10+09:00 gate cpp: start at loadavg1=1.91 after 90s wait
+2026-09-07T06:23:10+09:00 run cpp begin
+2026-09-07T06:25:30+09:00 ps watch cpp: 13/14 samples saw a matching process (/home/hep7/project/zlink/framework/bench/tools/log/verify-20260907_055429/cpp.ps.txt)
+2026-09-07T06:25:30+09:00 run cpp end rc=0 loadavg=2.70 2.70 2.35 4/744 78949
+2026-09-07T06:25:30+09:00 gate cbase: loadavg1=2.70 gate=2.0
+2026-09-07T06:26:00+09:00 gate cbase: start at loadavg1=1.77 after 30s wait
+2026-09-07T06:26:00+09:00 run cbase begin
+2026-09-07T06:27:10+09:00 ps watch cbase: 6/7 samples saw a matching process (/home/hep7/project/zlink/framework/bench/tools/log/verify-20260907_055429/cbase.ps.txt)
+2026-09-07T06:27:10+09:00 run cbase end rc=0 loadavg=1.84 2.46 2.30 2/743 33772
+2026-09-07T06:27:10+09:00 loadavg at span end: 1.84 2.46 2.30 1/743 33776
+2026-09-07T06:27:10+09:00 verification span 20260907_055429 end rc=0

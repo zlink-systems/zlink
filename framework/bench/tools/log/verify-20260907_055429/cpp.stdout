@@ -1,0 +1,22 @@
+06:23:10 run cpp-router-1 stamp=verify-20260907_055429 dry_run=0
+06:23:10 loadavg1=1.91 gate=2.0
+06:23:10 framework server binary absent -- framework cells will be reported as not implemented
+06:23:12 servers started: 2/2 alive (pids 35202 35203)
+  PID     ELAPSED CMD
+35202       00:02 /home/hep7/project/zlink/framework/languages/cpp/bench/with-grpc/build/bench_cpp_grpc_server --endpoint 127.0.0.1:5111 --stats-port 5114
+35203       00:02 /home/hep7/project/zlink/framework/languages/cpp/bench/with-grpc/build/bench_cpp_zlink_server --endpoint tcp://127.0.0.1:5115 --command-endpoint tcp://127.0.0.1:5117 --stats-port 5116
+[bench] cpp client start label=cpp-router-1 loadavg1=1.91
+[bench] grpc-cpp-request-serial      @1024  tput=   15573.4/s depth=  0.97 peak=   1 abandoned=   0 errors=     0 drain=    164ms submit_cores=0.378 process_cores=0.377
+[bench] zlink-cpp-request-serial     @1024  tput=    8496.1/s depth=  1.00 peak=   1 abandoned=   0 errors=     0 drain=    158ms submit_cores=0.188 process_cores=0.463
+[bench] grpc-cpp-request-serial      @4096  tput=   14733.6/s depth=  0.97 peak=   1 abandoned=   0 errors=     0 drain=    163ms submit_cores=0.374 process_cores=0.375
+[bench] zlink-cpp-request-serial     @4096  tput=    8713.9/s depth=  0.99 peak=   1 abandoned=   0 errors=     0 drain=    158ms submit_cores=0.182 process_cores=0.469
+[bench] grpc-cpp-request-window      @1024  tput=   64426.4/s depth= 99.91 peak= 100 abandoned=   0 errors=     0 drain=    213ms submit_cores=0.700 process_cores=0.701
+[bench] zlink-cpp-request-window     @1024  tput=  336891.9/s depth= 99.87 peak= 100 abandoned=   0 errors=     0 drain=    447ms submit_cores=0.954 process_cores=1.925
+[bench] grpc-cpp-request-window      @4096  tput=   62547.9/s depth= 99.90 peak= 100 abandoned=   0 errors=     0 drain=    209ms submit_cores=0.730 process_cores=0.730
+[bench] zlink-cpp-request-window     @4096  tput=  283785.1/s depth= 99.77 peak= 100 abandoned=   0 errors=     0 drain=    400ms submit_cores=0.928 process_cores=2.103
+[bench] grpc-cpp-send-saturation     @1024  tput=   45162.9/s depth=  5.07 peak=   8 abandoned=   0 errors=     0 drain=    195ms submit_cores=0.636 process_cores=0.636
+[bench] zlink-cpp-send-saturation    @1024  tput=  694415.3/s depth=417.25 peak=   8 abandoned=   0 errors=     0 drain=    493ms submit_cores=0.954 process_cores=1.625
+[bench] grpc-cpp-send-saturation     @4096  tput=   44285.4/s depth=  5.06 peak=   8 abandoned=   0 errors=     0 drain=    193ms submit_cores=0.650 process_cores=0.651
+[bench] zlink-cpp-send-saturation    @4096  tput=  478343.0/s depth=198.45 peak=   8 abandoned=   0 errors=     0 drain=    507ms submit_cores=0.822 process_cores=1.618
+[bench] cells completed=12 failed=0 -> /home/hep7/project/zlink/framework/languages/cpp/bench/with-grpc/log/verify-20260907_055429/cpp-router-1/cells.json
+06:25:20 client rc=0

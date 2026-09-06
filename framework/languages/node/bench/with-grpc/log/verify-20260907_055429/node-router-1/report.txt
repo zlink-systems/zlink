@@ -1,0 +1,131 @@
+# with-grpc bench, node row
+# diagnosticsSchema: with-grpc-cell-v1
+# language: node
+# nodeVersion: v22.23.2
+# grpcJsVersion: 1.14.4
+# protoLoaderVersion: 0.7.15
+# zlinkBindingVersion: 0.17.0
+# grpcServerConfiguration: @grpc/grpc-js Server, default options, insecure loopback
+# logical_cores: 20
+# client_saturation_metric: event_loop_utilization
+# client_parallelism_ceiling: 1
+# cpu: Intel(R) Core(TM) Ultra 7 265K
+# kernel: 6.6.87.2-microsoft-standard-WSL2
+# commit: 64d2ad5b677d7a0256a1658dbf39c53144ac0d3d
+# rawSocket: router
+# warmup: 1000
+# durationSeconds: 5
+# requestWindow: 100
+# sendConcurrency: 8
+# runId: 1133019951
+# startedAt: 2026-09-06T20:59:50.214Z
+# loadavg1: 1.7
+
+RESULT,current,grpc-node-request-serial,local,1024,throughput,4215.400
+RESULT,current,grpc-node-request-serial,local,1024,bandwidth,4.317
+RESULT,current,grpc-node-request-serial,local,1024,latency,0.237
+RESULT,current,grpc-node-request-serial,local,1024,latency_p95,0.401
+RESULT,current,grpc-node-request-serial,local,1024,latency_p99,0.559
+RESULT,current,grpc-node-request-serial,local,1024,client_cpu_percent,4.204
+RESULT,current,grpc-node-request-serial,local,1024,client_memory_mb,223.406
+RESULT,current,grpc-node-request-serial,local,1024,server_cpu_percent,1.951
+RESULT,current,grpc-node-request-serial,local,1024,server_memory_mb,82.480
+RESULT,current,zlink-node-request-serial,local,1024,throughput,10391.400
+RESULT,current,zlink-node-request-serial,local,1024,bandwidth,10.641
+RESULT,current,zlink-node-request-serial,local,1024,latency,0.096
+RESULT,current,zlink-node-request-serial,local,1024,latency_p95,0.138
+RESULT,current,zlink-node-request-serial,local,1024,latency_p99,0.236
+RESULT,current,zlink-node-request-serial,local,1024,client_cpu_percent,6.443
+RESULT,current,zlink-node-request-serial,local,1024,client_memory_mb,228.852
+RESULT,current,zlink-node-request-serial,local,1024,server_cpu_percent,5.927
+RESULT,current,zlink-node-request-serial,local,1024,server_memory_mb,64.969
+RESULT,current,grpc-node-request-window,local,1024,throughput,15793.600
+RESULT,current,grpc-node-request-window,local,1024,bandwidth,16.173
+RESULT,current,grpc-node-request-window,local,1024,latency,6.334
+RESULT,current,grpc-node-request-window,local,1024,latency_p95,8.318
+RESULT,current,grpc-node-request-window,local,1024,latency_p99,13.283
+RESULT,current,grpc-node-request-window,local,1024,client_cpu_percent,5.664
+RESULT,current,grpc-node-request-window,local,1024,client_memory_mb,241.043
+RESULT,current,grpc-node-request-window,local,1024,server_cpu_percent,2.434
+RESULT,current,grpc-node-request-window,local,1024,server_memory_mb,134.594
+RESULT,current,zlink-node-request-window,local,1024,throughput,540.600
+RESULT,current,zlink-node-request-window,local,1024,bandwidth,0.554
+RESULT,current,zlink-node-request-window,local,1024,latency,1075.239
+RESULT,current,zlink-node-request-window,local,1024,latency_p95,3.078
+RESULT,current,zlink-node-request-window,local,1024,latency_p99,30001.534
+RESULT,current,zlink-node-request-window,local,1024,client_cpu_percent,5.009
+RESULT,current,zlink-node-request-window,local,1024,client_memory_mb,245.191
+RESULT,current,zlink-node-request-window,local,1024,server_cpu_percent,0.095
+RESULT,current,zlink-node-request-window,local,1024,server_memory_mb,66.203
+RESULT,current,grpc-node-send-saturation,local,1024,throughput,11457.600
+RESULT,current,grpc-node-send-saturation,local,1024,bandwidth,11.733
+RESULT,current,grpc-node-send-saturation,local,1024,latency,0.308
+RESULT,current,grpc-node-send-saturation,local,1024,latency_p95,0.459
+RESULT,current,grpc-node-send-saturation,local,1024,latency_p99,0.581
+RESULT,current,grpc-node-send-saturation,local,1024,client_cpu_percent,4.447
+RESULT,current,grpc-node-send-saturation,local,1024,client_memory_mb,246.152
+RESULT,current,grpc-node-send-saturation,local,1024,server_cpu_percent,2.346
+RESULT,current,grpc-node-send-saturation,local,1024,server_memory_mb,120.723
+RESULT,current,zlink-node-send-saturation,local,1024,throughput,285491.200
+RESULT,current,zlink-node-send-saturation,local,1024,bandwidth,292.343
+RESULT,current,zlink-node-send-saturation,local,1024,latency,76.994
+RESULT,current,zlink-node-send-saturation,local,1024,latency_p95,99.061
+RESULT,current,zlink-node-send-saturation,local,1024,latency_p99,101.517
+RESULT,current,zlink-node-send-saturation,local,1024,client_cpu_percent,5.929
+RESULT,current,zlink-node-send-saturation,local,1024,client_memory_mb,248.070
+RESULT,current,zlink-node-send-saturation,local,1024,server_cpu_percent,6.619
+RESULT,current,zlink-node-send-saturation,local,1024,server_memory_mb,113.129
+RESULT,current,grpc-node-request-serial,local,4096,throughput,4537.000
+RESULT,current,grpc-node-request-serial,local,4096,bandwidth,18.584
+RESULT,current,grpc-node-request-serial,local,4096,latency,0.220
+RESULT,current,grpc-node-request-serial,local,4096,latency_p95,0.324
+RESULT,current,grpc-node-request-serial,local,4096,latency_p99,0.497
+RESULT,current,grpc-node-request-serial,local,4096,client_cpu_percent,3.831
+RESULT,current,grpc-node-request-serial,local,4096,client_memory_mb,260.367
+RESULT,current,grpc-node-request-serial,local,4096,server_cpu_percent,2.129
+RESULT,current,grpc-node-request-serial,local,4096,server_memory_mb,124.027
+RESULT,current,zlink-node-request-serial,local,4096,throughput,10282.400
+RESULT,current,zlink-node-request-serial,local,4096,bandwidth,42.117
+RESULT,current,zlink-node-request-serial,local,4096,latency,0.097
+RESULT,current,zlink-node-request-serial,local,4096,latency_p95,0.131
+RESULT,current,zlink-node-request-serial,local,4096,latency_p99,0.242
+RESULT,current,zlink-node-request-serial,local,4096,client_cpu_percent,6.377
+RESULT,current,zlink-node-request-serial,local,4096,client_memory_mb,262.086
+RESULT,current,zlink-node-request-serial,local,4096,server_cpu_percent,5.876
+RESULT,current,zlink-node-request-serial,local,4096,server_memory_mb,109.887
+RESULT,current,grpc-node-request-window,local,4096,throughput,11067.200
+RESULT,current,grpc-node-request-window,local,4096,bandwidth,45.331
+RESULT,current,grpc-node-request-window,local,4096,latency,9.039
+RESULT,current,grpc-node-request-window,local,4096,latency_p95,12.047
+RESULT,current,grpc-node-request-window,local,4096,latency_p99,18.139
+RESULT,current,grpc-node-request-window,local,4096,client_cpu_percent,5.193
+RESULT,current,grpc-node-request-window,local,4096,client_memory_mb,267.938
+RESULT,current,grpc-node-request-window,local,4096,server_cpu_percent,3.004
+RESULT,current,grpc-node-request-window,local,4096,server_memory_mb,124.652
+RESULT,current,zlink-node-request-window,local,4096,throughput,62.400
+RESULT,current,zlink-node-request-window,local,4096,bandwidth,0.256
+RESULT,current,zlink-node-request-window,local,4096,latency,8982.730
+RESULT,current,zlink-node-request-window,local,4096,latency_p95,30000.761
+RESULT,current,zlink-node-request-window,local,4096,latency_p99,30000.842
+RESULT,current,zlink-node-request-window,local,4096,client_cpu_percent,5.003
+RESULT,current,zlink-node-request-window,local,4096,client_memory_mb,269.656
+RESULT,current,zlink-node-request-window,local,4096,server_cpu_percent,0.081
+RESULT,current,zlink-node-request-window,local,4096,server_memory_mb,110.117
+RESULT,current,grpc-node-send-saturation,local,4096,throughput,10849.600
+RESULT,current,grpc-node-send-saturation,local,4096,bandwidth,44.440
+RESULT,current,grpc-node-send-saturation,local,4096,latency,0.330
+RESULT,current,grpc-node-send-saturation,local,4096,latency_p95,0.487
+RESULT,current,grpc-node-send-saturation,local,4096,latency_p99,0.684
+RESULT,current,grpc-node-send-saturation,local,4096,client_cpu_percent,4.511
+RESULT,current,grpc-node-send-saturation,local,4096,client_memory_mb,268.918
+RESULT,current,grpc-node-send-saturation,local,4096,server_cpu_percent,2.301
+RESULT,current,grpc-node-send-saturation,local,4096,server_memory_mb,126.188
+RESULT,current,zlink-node-send-saturation,local,4096,throughput,166453.400
+RESULT,current,zlink-node-send-saturation,local,4096,bandwidth,681.793
+RESULT,current,zlink-node-send-saturation,local,4096,latency,0.537
+RESULT,current,zlink-node-send-saturation,local,4096,latency_p95,3.412
+RESULT,current,zlink-node-send-saturation,local,4096,latency_p99,5.865
+RESULT,current,zlink-node-send-saturation,local,4096,client_cpu_percent,8.595
+RESULT,current,zlink-node-send-saturation,local,4096,client_memory_mb,270.453
+RESULT,current,zlink-node-send-saturation,local,4096,server_cpu_percent,7.398
+RESULT,current,zlink-node-send-saturation,local,4096,server_memory_mb,152.539

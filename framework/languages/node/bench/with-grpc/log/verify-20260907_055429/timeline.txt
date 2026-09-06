@@ -1,0 +1,8 @@
+2026-09-07T05:57:49+09:00 measured span begin: node=v22.23.2 commit=64d2ad5b67
+2026-09-07T05:57:49+09:00 loadavg gate for node-router-1: 1.71
+2026-09-07T05:57:49+09:00 run node-router-1 start (raw-socket=router)
+2026-09-07T05:59:51+09:00 run node-router-1 end rc=0
+2026-09-07T05:59:51+09:00 loadavg gate for node-dealer-1: 1.70
+2026-09-07T05:59:51+09:00 run node-dealer-1 start (raw-socket=dealer)
+2026-09-07T06:01:27+09:00 run node-dealer-1 end rc=0
+2026-09-07T06:01:27+09:00 measured span end

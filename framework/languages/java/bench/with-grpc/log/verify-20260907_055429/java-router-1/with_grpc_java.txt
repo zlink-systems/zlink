@@ -1,0 +1,191 @@
+# with-grpc bench, java row
+  diagnosticsSchema: with-grpc-cell-v1
+  language: java
+  javaVersion: 22.0.2
+  javaVendor: Eclipse Adoptium
+  javaVmName: OpenJDK 64-Bit Server VM
+  grpcJavaVersion: 1.72.0
+  protobufJavaVersion: 4.30.2
+  grpcServerConfiguration: {'implementation':'grpc-java','serverConfiguration':'io.grpc.ServerBuilder.forPort default configuration, plaintext loopback, grpc-netty-shaded 1.72.0'}
+  zlinkBindingVersion: 0.17.0
+  frameworkHost: zlink-framework-spring-boot-starter 0.10.0
+  logical_cores: 20
+  client_saturation_metric: jvm_thread_cores
+  client_parallelism_ceiling: 1 (request drivers) / 8 (send driver)
+  cpu: Intel(R) Core(TM) Ultra 7 265K
+  kernel: 6.6.87.2-microsoft-standard-WSL2
+  commit: 64d2ad5b677d7a0256a1658dbf39c53144ac0d3d
+  rawSocket: router
+  warmupSeconds: 20.0
+  warmupSegmentSeconds: 2.0
+  durationSeconds: 5.0
+  requestWindow: 100
+  sendConcurrency: 8
+  requestTimeoutMs: 30000
+  channel: bench
+  runId: 1190514824
+  startedAt: 2026-09-07T06:10:56.181771461+09:00[Asia/Seoul]
+  loadavg1: 5.64
+
+RESULT,current,grpc-java-request-serial,local,1024,throughput,5464.400
+RESULT,current,grpc-java-request-serial,local,1024,bandwidth,5.596
+RESULT,current,grpc-java-request-serial,local,1024,latency,0.183
+RESULT,current,grpc-java-request-serial,local,1024,latency_p95,0.238
+RESULT,current,grpc-java-request-serial,local,1024,latency_p99,0.292
+RESULT,current,grpc-java-request-serial,local,1024,client_cpu_percent,2.420
+RESULT,current,grpc-java-request-serial,local,1024,client_memory_mb,337.918
+RESULT,current,grpc-java-request-serial,local,1024,server_cpu_percent,1.860
+RESULT,current,grpc-java-request-serial,local,1024,server_memory_mb,912.508
+RESULT,current,zlink-java-request-serial,local,1024,throughput,6294.600
+RESULT,current,zlink-java-request-serial,local,1024,bandwidth,6.446
+RESULT,current,zlink-java-request-serial,local,1024,latency,0.159
+RESULT,current,zlink-java-request-serial,local,1024,latency_p95,0.205
+RESULT,current,zlink-java-request-serial,local,1024,latency_p99,0.257
+RESULT,current,zlink-java-request-serial,local,1024,client_cpu_percent,2.540
+RESULT,current,zlink-java-request-serial,local,1024,client_memory_mb,367.523
+RESULT,current,zlink-java-request-serial,local,1024,server_cpu_percent,1.470
+RESULT,current,zlink-java-request-serial,local,1024,server_memory_mb,487.305
+RESULT,current,zlink-framework-java-request-serial,local,1024,throughput,477.800
+RESULT,current,zlink-framework-java-request-serial,local,1024,bandwidth,0.489
+RESULT,current,zlink-framework-java-request-serial,local,1024,latency,2.093
+RESULT,current,zlink-framework-java-request-serial,local,1024,latency_p95,2.534
+RESULT,current,zlink-framework-java-request-serial,local,1024,latency_p99,2.671
+RESULT,current,zlink-framework-java-request-serial,local,1024,client_cpu_percent,1.710
+RESULT,current,zlink-framework-java-request-serial,local,1024,client_memory_mb,417.617
+RESULT,current,zlink-framework-java-request-serial,local,1024,server_cpu_percent,1.800
+RESULT,current,zlink-framework-java-request-serial,local,1024,server_memory_mb,360.656
+RESULT,current,grpc-java-request-window,local,1024,throughput,117868.200
+RESULT,current,grpc-java-request-window,local,1024,bandwidth,120.697
+RESULT,current,grpc-java-request-window,local,1024,latency,0.835
+RESULT,current,grpc-java-request-window,local,1024,latency_p95,1.011
+RESULT,current,grpc-java-request-window,local,1024,latency_p99,1.161
+RESULT,current,grpc-java-request-window,local,1024,client_cpu_percent,15.786
+RESULT,current,grpc-java-request-window,local,1024,client_memory_mb,899.855
+RESULT,current,grpc-java-request-window,local,1024,server_cpu_percent,13.887
+RESULT,current,grpc-java-request-window,local,1024,server_memory_mb,1205.480
+RESULT,current,zlink-java-request-window,local,1024,throughput,0.000
+RESULT,current,zlink-java-request-window,local,1024,bandwidth,0.000
+RESULT,current,zlink-java-request-window,local,1024,latency,0.000
+RESULT,current,zlink-java-request-window,local,1024,latency_p95,0.000
+RESULT,current,zlink-java-request-window,local,1024,latency_p99,0.000
+RESULT,current,zlink-java-request-window,local,1024,client_cpu_percent,0.775
+RESULT,current,zlink-java-request-window,local,1024,client_memory_mb,902.508
+RESULT,current,zlink-java-request-window,local,1024,server_cpu_percent,0.005
+RESULT,current,zlink-java-request-window,local,1024,server_memory_mb,492.773
+RESULT,current,zlink-framework-java-request-window,local,1024,throughput,2195.400
+RESULT,current,zlink-framework-java-request-window,local,1024,bandwidth,2.248
+RESULT,current,zlink-framework-java-request-window,local,1024,latency,1.968
+RESULT,current,zlink-framework-java-request-window,local,1024,latency_p95,2.829
+RESULT,current,zlink-framework-java-request-window,local,1024,latency_p99,3.074
+RESULT,current,zlink-framework-java-request-window,local,1024,client_cpu_percent,5.667
+RESULT,current,zlink-framework-java-request-window,local,1024,client_memory_mb,937.352
+RESULT,current,zlink-framework-java-request-window,local,1024,server_cpu_percent,4.968
+RESULT,current,zlink-framework-java-request-window,local,1024,server_memory_mb,373.594
+RESULT,current,grpc-java-send-saturation,local,1024,throughput,38501.200
+RESULT,current,grpc-java-send-saturation,local,1024,bandwidth,39.425
+RESULT,current,grpc-java-send-saturation,local,1024,latency,0.113
+RESULT,current,grpc-java-send-saturation,local,1024,latency_p95,0.168
+RESULT,current,grpc-java-send-saturation,local,1024,latency_p99,0.195
+RESULT,current,grpc-java-send-saturation,local,1024,client_cpu_percent,9.610
+RESULT,current,grpc-java-send-saturation,local,1024,client_memory_mb,1034.672
+RESULT,current,grpc-java-send-saturation,local,1024,server_cpu_percent,7.330
+RESULT,current,grpc-java-send-saturation,local,1024,server_memory_mb,1229.277
+RESULT,current,zlink-java-send-saturation,local,1024,throughput,473977.400
+RESULT,current,zlink-java-send-saturation,local,1024,bandwidth,485.353
+RESULT,current,zlink-java-send-saturation,local,1024,latency,0.080
+RESULT,current,zlink-java-send-saturation,local,1024,latency_p95,0.228
+RESULT,current,zlink-java-send-saturation,local,1024,latency_p99,0.294
+RESULT,current,zlink-java-send-saturation,local,1024,client_cpu_percent,10.380
+RESULT,current,zlink-java-send-saturation,local,1024,client_memory_mb,1055.594
+RESULT,current,zlink-java-send-saturation,local,1024,server_cpu_percent,4.770
+RESULT,current,zlink-java-send-saturation,local,1024,server_memory_mb,1050.082
+RESULT,current,zlink-framework-java-send-saturation,local,1024,throughput,6579.600
+RESULT,current,zlink-framework-java-send-saturation,local,1024,bandwidth,6.738
+RESULT,current,zlink-framework-java-send-saturation,local,1024,latency,2291.690
+RESULT,current,zlink-framework-java-send-saturation,local,1024,latency_p95,2506.275
+RESULT,current,zlink-framework-java-send-saturation,local,1024,latency_p99,2563.604
+RESULT,current,zlink-framework-java-send-saturation,local,1024,client_cpu_percent,14.729
+RESULT,current,zlink-framework-java-send-saturation,local,1024,client_memory_mb,1142.344
+RESULT,current,zlink-framework-java-send-saturation,local,1024,server_cpu_percent,14.819
+RESULT,current,zlink-framework-java-send-saturation,local,1024,server_memory_mb,882.891
+RESULT,current,grpc-java-request-serial,local,4096,throughput,5973.600
+RESULT,current,grpc-java-request-serial,local,4096,bandwidth,24.468
+RESULT,current,grpc-java-request-serial,local,4096,latency,0.167
+RESULT,current,grpc-java-request-serial,local,4096,latency_p95,0.202
+RESULT,current,grpc-java-request-serial,local,4096,latency_p99,0.236
+RESULT,current,grpc-java-request-serial,local,4096,client_cpu_percent,2.490
+RESULT,current,grpc-java-request-serial,local,4096,client_memory_mb,1142.813
+RESULT,current,grpc-java-request-serial,local,4096,server_cpu_percent,1.840
+RESULT,current,grpc-java-request-serial,local,4096,server_memory_mb,1229.434
+RESULT,current,zlink-java-request-serial,local,4096,throughput,6231.200
+RESULT,current,zlink-java-request-serial,local,4096,bandwidth,25.523
+RESULT,current,zlink-java-request-serial,local,4096,latency,0.160
+RESULT,current,zlink-java-request-serial,local,4096,latency_p95,0.207
+RESULT,current,zlink-java-request-serial,local,4096,latency_p99,0.267
+RESULT,current,zlink-java-request-serial,local,4096,client_cpu_percent,2.690
+RESULT,current,zlink-java-request-serial,local,4096,client_memory_mb,1143.438
+RESULT,current,zlink-java-request-serial,local,4096,server_cpu_percent,1.280
+RESULT,current,zlink-java-request-serial,local,4096,server_memory_mb,1051.176
+RESULT,current,zlink-framework-java-request-serial,local,4096,throughput,497.000
+RESULT,current,zlink-framework-java-request-serial,local,4096,bandwidth,2.036
+RESULT,current,zlink-framework-java-request-serial,local,4096,latency,2.013
+RESULT,current,zlink-framework-java-request-serial,local,4096,latency_p95,2.504
+RESULT,current,zlink-framework-java-request-serial,local,4096,latency_p99,2.572
+RESULT,current,zlink-framework-java-request-serial,local,4096,client_cpu_percent,1.719
+RESULT,current,zlink-framework-java-request-serial,local,4096,client_memory_mb,1147.813
+RESULT,current,zlink-framework-java-request-serial,local,4096,server_cpu_percent,1.519
+RESULT,current,zlink-framework-java-request-serial,local,4096,server_memory_mb,893.371
+RESULT,current,grpc-java-request-window,local,4096,throughput,94781.200
+RESULT,current,grpc-java-request-window,local,4096,bandwidth,388.224
+RESULT,current,grpc-java-request-window,local,4096,latency,1.038
+RESULT,current,grpc-java-request-window,local,4096,latency_p95,1.469
+RESULT,current,grpc-java-request-window,local,4096,latency_p99,1.853
+RESULT,current,grpc-java-request-window,local,4096,client_cpu_percent,14.237
+RESULT,current,grpc-java-request-window,local,4096,client_memory_mb,1558.410
+RESULT,current,grpc-java-request-window,local,4096,server_cpu_percent,12.777
+RESULT,current,grpc-java-request-window,local,4096,server_memory_mb,1255.281
+RESULT,current,zlink-java-request-window,local,4096,throughput,20.000
+RESULT,current,zlink-java-request-window,local,4096,bandwidth,0.082
+RESULT,current,zlink-java-request-window,local,4096,latency,0.490
+RESULT,current,zlink-java-request-window,local,4096,latency_p95,0.551
+RESULT,current,zlink-java-request-window,local,4096,latency_p99,0.555
+RESULT,current,zlink-java-request-window,local,4096,client_cpu_percent,0.715
+RESULT,current,zlink-java-request-window,local,4096,client_memory_mb,1561.344
+RESULT,current,zlink-java-request-window,local,4096,server_cpu_percent,0.005
+RESULT,current,zlink-java-request-window,local,4096,server_memory_mb,1051.801
+RESULT,current,zlink-framework-java-request-window,local,4096,throughput,2306.400
+RESULT,current,zlink-framework-java-request-window,local,4096,bandwidth,9.447
+RESULT,current,zlink-framework-java-request-window,local,4096,latency,1.949
+RESULT,current,zlink-framework-java-request-window,local,4096,latency_p95,2.799
+RESULT,current,zlink-framework-java-request-window,local,4096,latency_p99,3.045
+RESULT,current,zlink-framework-java-request-window,local,4096,client_cpu_percent,5.218
+RESULT,current,zlink-framework-java-request-window,local,4096,client_memory_mb,1572.594
+RESULT,current,zlink-framework-java-request-window,local,4096,server_cpu_percent,5.128
+RESULT,current,zlink-framework-java-request-window,local,4096,server_memory_mb,905.559
+RESULT,current,grpc-java-send-saturation,local,4096,throughput,40683.400
+RESULT,current,grpc-java-send-saturation,local,4096,bandwidth,166.639
+RESULT,current,grpc-java-send-saturation,local,4096,latency,0.107
+RESULT,current,grpc-java-send-saturation,local,4096,latency_p95,0.154
+RESULT,current,grpc-java-send-saturation,local,4096,latency_p99,0.179
+RESULT,current,grpc-java-send-saturation,local,4096,client_cpu_percent,9.890
+RESULT,current,grpc-java-send-saturation,local,4096,client_memory_mb,1583.059
+RESULT,current,grpc-java-send-saturation,local,4096,server_cpu_percent,7.230
+RESULT,current,grpc-java-send-saturation,local,4096,server_memory_mb,1255.281
+RESULT,current,zlink-java-send-saturation,local,4096,throughput,322707.000
+RESULT,current,zlink-java-send-saturation,local,4096,bandwidth,1321.808
+RESULT,current,zlink-java-send-saturation,local,4096,latency,0.094
+RESULT,current,zlink-java-send-saturation,local,4096,latency_p95,0.257
+RESULT,current,zlink-java-send-saturation,local,4096,latency_p99,0.353
+RESULT,current,zlink-java-send-saturation,local,4096,client_cpu_percent,10.599
+RESULT,current,zlink-java-send-saturation,local,4096,client_memory_mb,1585.402
+RESULT,current,zlink-java-send-saturation,local,4096,server_cpu_percent,4.960
+RESULT,current,zlink-java-send-saturation,local,4096,server_memory_mb,1056.723
+RESULT,current,zlink-framework-java-send-saturation,local,4096,throughput,9265.600
+RESULT,current,zlink-framework-java-send-saturation,local,4096,bandwidth,37.952
+RESULT,current,zlink-framework-java-send-saturation,local,4096,latency,775.156
+RESULT,current,zlink-framework-java-send-saturation,local,4096,latency_p95,832.182
+RESULT,current,zlink-framework-java-send-saturation,local,4096,latency_p99,846.033
+RESULT,current,zlink-framework-java-send-saturation,local,4096,client_cpu_percent,13.589
+RESULT,current,zlink-framework-java-send-saturation,local,4096,client_memory_mb,1624.309
+RESULT,current,zlink-framework-java-send-saturation,local,4096,server_cpu_percent,14.249
+RESULT,current,zlink-framework-java-send-saturation,local,4096,server_memory_mb,911.652
