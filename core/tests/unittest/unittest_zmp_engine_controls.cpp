@@ -151,6 +151,11 @@ void test_raw_wire_peer_weight_waits_for_exact_pair_readiness ()
         application.pump ();
         TEST_ASSERT_EQUAL_PTR (pipe, application_pipe (application, true));
         TEST_ASSERT_EQUAL_UINT32 (41, owner->test_peer_weight (pipe));
+        //  Applying the cached value at readiness is the actual change
+        //  (ROUTER §5 rule 3, D-137): exactly one event, then nothing more.
+        TEST_ASSERT_TRUE (monitor.next (&record));
+        TEST_ASSERT_EQUAL_UINT64 (ZLINK_EVENT_PEER_WEIGHT_CHANGED, record.event);
+        TEST_ASSERT_EQUAL_UINT64 (41, record.values[0]);
         TEST_ASSERT_FALSE (monitor.next (&record));
         const zlink_routing_id_t *rid = NULL;
         uint64_t sequence = 0;
