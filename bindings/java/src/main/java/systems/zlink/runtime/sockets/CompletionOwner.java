@@ -706,15 +706,11 @@ final class CompletionOwner implements AutoCloseable {
             return new RequestCompletion(completionId, outcome);
         }
 
-        RoutingId peer = NativeRoutingIds.read(completion.asSlice(
-            NativeLayouts.COMPLETION_PEER_RID_OFFSET,
-            NativeLayouts.ROUTING_ID_LAYOUT.byteSize()));
         return new WritableCompletion(kindValue,
             completion.get(ValueLayout.JAVA_LONG,
                 NativeLayouts.COMPLETION_ID_OFFSET),
             completion.get(ValueLayout.ADDRESS,
                 NativeLayouts.COMPLETION_CONTEXT_OFFSET).address(),
-            peer,
             completion.get(ValueLayout.JAVA_INT,
                 NativeLayouts.COMPLETION_SEND_RESULT_OFFSET),
             completion.get(ValueLayout.JAVA_INT,
@@ -977,7 +973,7 @@ final class CompletionOwner implements AutoCloseable {
     }
 
     private record WritableCompletion(int kind, long completionId,
-                                      long context, RoutingId peer,
+                                      long context,
                                       int sendResult, int terminalErrno) {
     }
 
@@ -1118,8 +1114,7 @@ final class CompletionOwner implements AutoCloseable {
                 }
                 if (completion.kind() != CompletionKind.WRITABLE.value()
                         || completion.completionId() != completionId
-                        || completion.context() != token
-                        || !Objects.equals(completion.peer(), target)) {
+                        || completion.context() != token) {
                     failure = new ZlinkSubmitException(
                         SubmitResult.INTERNAL_ERROR);
                 } else if (completion.sendResult() == SEND_TERMINAL) {
