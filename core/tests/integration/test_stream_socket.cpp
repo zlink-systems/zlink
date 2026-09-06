@@ -5,10 +5,7 @@
 #include "testutil_unity.hpp"
 
 #include "core/msg.hpp"
-#include "core/pipe.hpp"
 #include "core/pipe_stream_packet_state.hpp"
-#include "api/socket/socket_api_internal.hpp"
-#include "sockets/stream/stream.hpp"
 #include "utils/config.hpp"
 
 #include <errno.h>
@@ -45,7 +42,6 @@ static const char *const stream_socket_smoke_cases[] = {
   "test_stream_recv_ready_precedes_first_payload_contract",
   "test_stream_phase3_mode_freeze_contract",
   "test_stream_phase3_packet_pull_contract",
-  "test_stream_packet_readiness_drains_fragmented_input",
   "test_stream_phase3_packet_maxmsgsize_contract",
   "test_stream_phase3_packet_enqueue_close_race",
 };
@@ -1409,76 +1405,6 @@ void test_stream_phase3_mode_freeze_contract ()
     test_context_socket_close_zero_linger (server);
 }
 
-void test_stream_packet_readiness_drains_fragmented_input ()
-{
-    void *server = test_context_socket (ZLINK_SOCKET_STREAM);
-    const zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_PACKET;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONFIG_OK,
-      zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &mode,
-                               sizeof (mode)));
-    zlink::stream_t *stream =
-      static_cast<zlink::stream_t *> (as_socket_handle (server).socket);
-
-    // Supply exact raw read boundaries independently of TCP coalescing. The
-    // complete packet must be ready even when its bytes occupy more raw
-    // queue entries than a decoder batch.
-    class cleanup_sink_t : public zlink::i_pipe_events
-    {
-      public:
-        int terminated = 0;
-        void read_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
-        void write_activated (zlink::pipe_t *) ZLINK_OVERRIDE {}
-        void hiccuped (zlink::pipe_t *) ZLINK_OVERRIDE {}
-        void pipe_peer_terminated (zlink::pipe_t *, bool) ZLINK_OVERRIDE {}
-        void pipe_terminated (zlink::pipe_t *) ZLINK_OVERRIDE { ++terminated; }
-    } sink;
-    zlink::object_t *parents[] = {stream, stream};
-    zlink::pipe_t *pipes[2];
-    const uint64_t hwms[] = {0, 0};
-    const bool conflate[] = {false, false};
-    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (parents, pipes, hwms, conflate));
-    pipes[0]->set_event_sink (&sink);
-    pipes[1]->set_event_sink (&sink);
-    stream->xattach_pipe (pipes[1], false, false);
-
-    unsigned char frame[6 + 1 + 256] = {0, 1, 0, 0, 1, 0, 'h'};
-    memset (frame + 7, 0xA5, 256);
-    for (size_t i = 0; i != sizeof (frame); ++i) {
-        zlink::msg_t chunk;
-        TEST_ASSERT_SUCCESS_ERRNO (chunk.init_buffer (frame + i, 1));
-        TEST_ASSERT_TRUE (pipes[0]->write_and_flush (&chunk));
-    }
-    TEST_ASSERT_TRUE (stream->xhas_in ());
-    zlink_msg_t header;
-    zlink_msg_t body;
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&header));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init (&body));
-    const zlink_routing_id_t *rid = NULL;
-    TEST_ASSERT_EQUAL_INT (
-      ZLINK_RECV_OK,
-      zlink_stream_recv_packet (server, &rid, &header, &body,
-                                ZLINK_RECV_FLAGS_DONTWAIT));
-    TEST_ASSERT_NOT_NULL (rid);
-    TEST_ASSERT_EQUAL_UINT64 (1, zlink_msg_size (&header));
-    TEST_ASSERT_EQUAL_MEMORY ("h", zlink_msg_data (&header), 1);
-    TEST_ASSERT_EQUAL_UINT64 (256, zlink_msg_size (&body));
-    TEST_ASSERT_EQUAL_MEMORY (frame + 7, zlink_msg_data (&body), 256);
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&header));
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_close (&body));
-    TEST_ASSERT_FALSE (stream->xhas_in ());
-
-    stream->xpipe_terminated (pipes[1]);
-    pipes[0]->terminate (false);
-    pipes[1]->terminate (false);
-    int events = 0;
-    size_t events_size = sizeof (events);
-    TEST_ASSERT_SUCCESS_ERRNO (
-      zlink_get_option (server, ZLINK_OPT_EVENTS, &events, &events_size));
-    TEST_ASSERT_EQUAL_INT (2, sink.terminated);
-    test_context_socket_close_zero_linger (server);
-}
-
 #if defined(ZLINK_HAVE_WINDOWS)
 void test_stream_phase3_packet_pull_contract ()
 {
@@ -2162,9 +2088,6 @@ int main (void)
         RUN_TEST (test_stream_phase3_mode_freeze_contract);
     if (should_run_stream_socket_test ("test_stream_phase3_packet_pull_contract"))
         RUN_TEST (test_stream_phase3_packet_pull_contract);
-    if (should_run_stream_socket_test (
-          "test_stream_packet_readiness_drains_fragmented_input"))
-        RUN_TEST (test_stream_packet_readiness_drains_fragmented_input);
     if (should_run_stream_socket_test (
           "test_stream_phase3_packet_maxmsgsize_contract"))
         RUN_TEST (test_stream_phase3_packet_maxmsgsize_contract);

@@ -4,6 +4,7 @@
 #include "sockets/stream/stream.hpp"
 #include "sockets/stream/stream_batch_policy.hpp"
 #include "core/c_api_copy_internal.hpp"
+#include "core/mailbox.hpp"
 #include "core/pipe.hpp"
 #include "protocol/wire.hpp"
 #include "utils/err.hpp"
@@ -713,10 +714,18 @@ void zlink::stream_t::clear_packet_receive_queue ()
 
 int zlink::stream_t::pump_packet_receive_queue ()
 {
-    // Readiness means a complete packet, not a fixed number of raw chunks.
-    // Stopping on a chunk budget can strand already-readable input after its
-    // activation was consumed. Decode until a packet is ready or input ends.
+    // Yield partial-packet work to the command owner and the other poller
+    // sources. A continuation wakes both public polling and blocking receive;
+    // it does not claim POLLIN until decoding produces a complete packet.
+    const size_t max_raw_chunks_per_pump = 64;
+    size_t raw_chunks = 0;
     while (_packet_receive_queue.empty ()) {
+        if (raw_chunks == max_raw_chunks_per_pump) {
+            notify_receive_progress_locked ();
+            static_cast<mailbox_t *> (get_mailbox ())->signal ();
+            return 0;
+        }
+        ++raw_chunks;
         msg_t raw;
         bool local_raw = false;
         pipe_t *source_pipe = NULL;
