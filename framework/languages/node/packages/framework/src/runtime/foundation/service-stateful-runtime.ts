@@ -1508,7 +1508,8 @@ export class ServiceStatefulRuntime {
     payload: ServiceApplicationPayload | undefined,
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
-    const pending = this.operations.reserve(timeoutMs);
+    const deadlineMs = performance.now() + timeoutMs;
+    const pending = this.operations.reserve(timeoutMs, targetNodeRid === this.nodeRid ? 'registry' : 'sender');
     const target = this.trySpotFence(targetNodeRid, {
       ...targetSpot,
       generation: targetSpotGeneration
@@ -1519,7 +1520,7 @@ export class ServiceStatefulRuntime {
       targetNodeRid,
       target,
       payload,
-      timeoutMs
+      deadlineMs
     );
     return pending;
   }
@@ -1534,7 +1535,8 @@ export class ServiceStatefulRuntime {
     local: ServiceCanonicalActorJoinCandidate['local'],
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
-    const pending = this.operations.reserve(timeoutMs);
+    const deadlineMs = performance.now() + timeoutMs;
+    const pending = this.operations.reserve(timeoutMs, targetNodeRid === this.nodeRid ? 'registry' : 'sender');
     const target = this.trySpotFence(targetNodeRid, {
       ...targetSpot,
       generation: targetSpotGeneration
@@ -1545,7 +1547,7 @@ export class ServiceStatefulRuntime {
       targetNodeRid,
       target,
       request,
-      timeoutMs,
+      deadlineMs,
       { request, actorFence, local }
     );
     return pending;
@@ -1557,14 +1559,15 @@ export class ServiceStatefulRuntime {
     payload: ServiceApplicationPayload | undefined,
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
-    const pending = this.operations.reserve(timeoutMs);
+    const deadlineMs = performance.now() + timeoutMs;
+    const pending = this.operations.reserve(timeoutMs, targetNodeRid === this.nodeRid ? 'registry' : 'sender');
     this.submitActorJoin(
       pending,
       actor,
       targetNodeRid,
       this.tryEntrySpotFence(targetNodeRid),
       payload,
-      timeoutMs
+      deadlineMs
     );
     return pending;
   }
@@ -1577,14 +1580,15 @@ export class ServiceStatefulRuntime {
     local: ServiceCanonicalActorJoinCandidate['local'],
     timeoutMs: number
   ): ServiceStatefulPendingOperation {
-    const pending = this.operations.reserve(timeoutMs);
+    const deadlineMs = performance.now() + timeoutMs;
+    const pending = this.operations.reserve(timeoutMs, targetNodeRid === this.nodeRid ? 'registry' : 'sender');
     this.submitActorJoin(
       pending,
       actor,
       targetNodeRid,
       this.tryEntrySpotFence(targetNodeRid),
       request,
-      timeoutMs,
+      deadlineMs,
       { request, actorFence, local }
     );
     return pending;
@@ -1728,7 +1732,7 @@ export class ServiceStatefulRuntime {
       return pending;
     }
     void this.requestDurableOperation(
-      actor.nodeRid, header, pending.id, 'streamBind', deadlineMs
+      actor.nodeRid, [header], pending.id, 'streamBind', deadlineMs
     ).then(
       reply => this.completeRemoteReply(pending, actor.nodeRid, 'streamBind', undefined, reply),
       error => this.operations.fail(pending.id, error)
@@ -4035,7 +4039,7 @@ export class ServiceStatefulRuntime {
     timeoutMs: number
   ): Promise<ServiceUserSpotOperationResult> {
     const parts = await this.requestDurableOperation(
-      targetNodeRid, header, correlation, operationKind, performance.now() + Math.max(1, timeoutMs)
+      targetNodeRid, [header], correlation, operationKind, performance.now() + Math.max(1, timeoutMs)
     );
     // A received envelope, including a decode failure, ends sender replay.
     try {
@@ -4070,14 +4074,14 @@ export class ServiceStatefulRuntime {
 
   private async requestDurableOperation(
     targetNodeRid: string,
-    header: Buffer,
+    parts: readonly Buffer[],
     correlation: bigint,
-    operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate' | 'streamBind',
+    operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate' | 'streamBind' | 'actorJoin',
     deadlineMs: number
   ): Promise<readonly Buffer[]> {
     let wasAdmitted = false;
     // This path is limited to durable lifecycle operations. A rejected raw
-    // request has no terminal envelope, so replay the byte-identical header;
+    // request has no terminal envelope, so replay the byte-identical frames;
     // callers decode received envelopes after leaving this loop.
     for (;;) {
       this.requireOpen();
@@ -4087,8 +4091,8 @@ export class ServiceStatefulRuntime {
       }
       try {
         return targetNodeRid === this.nodeRid
-          ? await this.requestLocalInfrastructure(header, correlation, remainingMs)
-          : await this.raw.requestService(targetNodeRid, [header], remainingMs);
+          ? await this.requestLocalInfrastructure(parts[0]!, correlation, remainingMs)
+          : await this.raw.requestService(targetNodeRid, parts, remainingMs);
       } catch (error) {
         // Bind consumes only typed transport failures. Programming errors and
         // non-replayable terminals retain their original failure.
@@ -4251,12 +4255,7 @@ export class ServiceStatefulRuntime {
     }
     void this.raw.requestService(targetNodeRid, parts, timeoutMs).then(
       reply => this.completeRemoteReply(pending, targetNodeRid, operationKind, actor, reply),
-      error => {
-        if (operationKind === 'actorJoin') {
-          this.canonicalActorJoinHandoffs.delete(pending.id);
-        }
-        this.operations.fail(pending.id, error);
-      }
+      error => this.operations.fail(pending.id, error)
     );
   }
 
@@ -4266,7 +4265,7 @@ export class ServiceStatefulRuntime {
     targetNodeRid: string,
     target: ServiceSpotRouteFence | undefined,
     payload: ServiceApplicationPayload | undefined,
-    timeoutMs: number,
+    deadlineMs: number,
     canonical?: ServiceCanonicalActorJoinCandidate
   ): void {
     const actorRoute = canonical === undefined
@@ -4288,10 +4287,9 @@ export class ServiceStatefulRuntime {
         correlation: pending.id
       }));
     }
-    this.submitRequest(
-      pending,
-      targetNodeRid,
-      encodeActorJoin28({
+    let parts: readonly Buffer[];
+    try {
+      parts = encodeActorJoin28({
         correlation: pending.id,
         actor: {
           id: actor.actorId,
@@ -4311,10 +4309,25 @@ export class ServiceStatefulRuntime {
           expectedOwnerLeaseGeneration: target.ownerLeaseGeneration
         },
         ...(payload === undefined ? {} : { payload })
-      }).map(frame => Buffer.from(frame)),
-      timeoutMs,
-      'actorJoin',
-      actor
+      }).map(frame => Buffer.from(frame));
+    } catch (error) {
+      this.canonicalActorJoinHandoffs.delete(pending.id);
+      this.operations.fail(pending.id, error);
+      return;
+    }
+    if (targetNodeRid === this.nodeRid) {
+      this.submitRequest(
+        pending, targetNodeRid, parts, Math.max(0, Math.ceil(deadlineMs - performance.now())),
+        'actorJoin', actor
+      );
+      return;
+    }
+    void this.requestDurableOperation(targetNodeRid, parts, pending.id, 'actorJoin', deadlineMs).then(
+      reply => this.completeRemoteReply(pending, targetNodeRid, 'actorJoin', actor, reply),
+      error => {
+        this.canonicalActorJoinHandoffs.delete(pending.id);
+        this.operations.fail(pending.id, error);
+      }
     );
   }
 
@@ -5232,7 +5245,7 @@ function durableRequestWasAdmitted(error: unknown): boolean {
 }
 
 function durableOperationExhausted(
-  operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate' | 'streamBind',
+  operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate' | 'streamBind' | 'actorJoin',
   wasAdmitted: boolean,
   cause?: unknown
 ): ZLinkFrameworkException {
