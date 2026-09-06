@@ -1056,7 +1056,7 @@ attempt의 payload가 현재 이동에 섞이지 않는다. Location Store는 pa
 | `Captured` | Capture 완료와 목록 내용 확인값. Payload 위치는 기록하지 않는다. | Source가 payload 전체를 memory에 유지하고 있어야 한다. |
 | `Prepared` | Target 시도 번호와 target owner 정보 | Target이 payload 조립과 checksum 확인, Restore와 relocation temporary queue 등록을 끝내야 한다. |
 | Owner 변경 | Target owner와 membership | Restore를 끝내고 Object 하나 또는 User Spot 전체의 CAS가 성공해야 한다. 일반 host capacity accounting은 같은 authority CAS가 소유하지만 relocation 전용 reservation handshake는 없다. |
-| `Completed` | Target dispatch와 필요한 lifecycle을 열고 필요한 Session route update를 보냈다는 상태 | 별도 target completion reply는 없으며 이전 주소를 통한 모든 relay 종료를 기다리지 않는다. 늦은 relay는 Message Follow가 처리한다(§7.3). |
+| `Completed` | Target dispatch와 필요한 lifecycle을 열고 필요한 Session route update를 보냈다는 상태 | 별도 target completion reply는 없으며 이전 주소를 통한 모든 relay 종료를 기다리지 않는다. 늦은 relay는 Message Follow가 처리한다(§7.3). 기록 조건에는 [§9.3](#93-source가-바뀐-뒤-끝난-request를-처리한다)의 수락 request 완료 결과 저장과 전달 대기 0이 포함된다. |
 
 Target은 Restore 요청과 결합 값이 같은 chunk만 조립에 넣는다. 조립한 payload의 checksum이
 선언한 값과 다르거나 이동 대상 목록의 내용 확인값이 다르면 복원과 owner 변경을 시작하지

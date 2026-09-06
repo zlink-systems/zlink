@@ -95,6 +95,9 @@ Send, publish, bound session send, session Actor relay와 명시적인 STREAM se
 message를 수락했다는 뜻이다. Remote handler 실행, subscriber 수신, remote Spot queue
 수락 또는 application callback 완료는 기다리지 않는다.
 
+Session callback이 사용하는 transport-facing stream write(동기 `bool` 반환)는 이 절의 call이
+아니며 [STREAM session](../04-session/01-stream-session.ko.md)의 transport 실행 문맥 계약을 따른다.
+
 | Target 종류 | admission boundary |
 |---|---|
 | Remote target | local transport queue |

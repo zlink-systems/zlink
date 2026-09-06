@@ -1521,3 +1521,9 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 
 - SD-11: cpp `05-actors` exact interface가 `relay(const session_message_context_t&, ...)`를 선언했으나 header(`actor.hpp:874-877`)는 `relay(std::string packet_name, ...)`와 `relay_request(...)` 2종(`relay_request_call_t`)이다. 문서를 header대로 정정. `relay_request`·`packet_name` overload는 C++ 전용 표면(dotnet `RelayAsync(payload)`, java `relay(payload)`/`relay(context,payload)`, node `relay(payload)`/`relay(dispatch,payload)`; 공통 Session binding에는 Actor→session request 없음) — 0.18.0 후보로 기록(제거 또는 이식).
 - SD-12: dotnet `07-stream-session`의 "Request reply는 `IZLinkSessionClient.Reply(...)`로 명시 제출"은 session callback 경로만 맞고, bound Actor로 relay된 request는 Session binding §12·§14("Actor handler가 반환한 reply는 원래 STREAM correlation으로 정확히 한 번 완료")가 소유. 문단을 두 경로로 구분해 정정. 행동 변경 없음.
+
+## D-126 (2026-09-06, 머신 A) R7/R8 잔여 open item 종결 — Location `Completed`, transport-facing stream write, 언어 한정 표면
+
+- Location §8.4 `Completed`(상태 의미: target dispatch·lifecycle open + Session route update 송신)와 §9.3(기록 조건: 수락 request 완료 결과 저장·전달 대기 0)은 충돌이 아니라 의미/조건의 분담이다. §8.4 행에 §9.3 기록 조건 참조를 넣어 owner를 각각 하나로 고정. 상태 삭제·통합 없음.
+- .NET `IZLinkStream.Write`·Node `IZLinkStream.write`(동기 `bool`)는 session callback의 transport-facing write이며 Submit §4의 "명시적 STREAM send·reply" call이 아니다. §4에 범위 문장 추가, 소유는 STREAM session 문서. java/cpp에는 같은 표면이 없으므로 0.18.0 parity 후보.
+- Java `stopSpotRuntime()`·C++ HTTP hosting은 공통 기능의 누락 투영이 아니라 언어 한정 제품 표면으로 분류. 소유 문서는 해당 언어 문서. 제거/승격 판단은 0.18.0 후보 표에 기록.
