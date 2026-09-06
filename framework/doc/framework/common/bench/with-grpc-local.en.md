@@ -135,7 +135,7 @@ one-way send. Under this condition the difference was N times.
   `BenchPayload` part, with the 29-byte measurement header inside that protobuf `bytes body`. This
   shape is not a choice; it is a precondition of the judgement. §7.2 formula 1 divides
   `zlink-<lang>` by `zlink-c`, so two rows with different wire shapes would divide two different
-  experiments (FB-024). The reference implementation is `bindings/c/bench/with_grpc`,
+  experiments. The reference implementation is `bindings/c/bench/with_grpc`,
   `bench_zlink_client.cpp:14-16` and `:130-140`.
 - ZLink uses a manual endpoint connection with no location store.
 - Both ZLink rows use the ROUTER↔ROUTER configuration in §1.3.
@@ -241,20 +241,34 @@ saturated cell and is excluded from throughput ranking. In that cell the limit w
 runtime, not by the transport. A saturated cell's throughput is recorded only as "the value observed
 with this client configuration."
 
-**A harness declares what it measures, not only the ceiling** (FB-023), because the right instrument
+**A harness declares what it measures, not only the ceiling**, because the right instrument
 differs per language. The purpose of the rule is to catch "the client runtime, not the transport, set
 this limit", so the instrument has to measure **the execution resource on which user code runs**.
 
 | Language | Declared instrument | Ceiling |
 |----------|---------------------|---------|
+| `dotnet` | process cores used | the parallelism the harness declares |
 | `node` | `performance.eventLoopUtilization()` from `perf_hooks` | `1.0` |
-| `dotnet`, `java`, `kotlin`, `cpp` | process cores used | the parallelism the harness declares |
+| `java`, `kotlin` | CPU of the submit threads (`ThreadMXBean`, `jvm_thread_cores`) | the submit parallelism the harness declares |
+| `cpp` | CPU of the application thread that runs submit and the completion drain (`CLOCK_THREAD_CPUTIME_ID`, `submit_thread_cores`) | `1` |
+
+`dotnet` is the only language that declares process cores used.
 
 Measurement shows why process cores are the wrong instrument for Node. The ZLink binding runs native
 I/O threads, so process CPU divided by elapsed time reads **1.3-1.4 cores** on that client, and those
 threads run no user code. Against a ceiling of 1 every cell would be marked saturated even with an
 idle JS thread, and the mark would carry no information. What actually limits this client is the one
 JS thread on which user code runs, and event loop utilization measures exactly that.
+
+**Process CPU is not a usable saturation instrument for a ZLink client.** That is why this section
+makes the instrument a per-language declaration. Three languages reached the same conclusion for
+three different reasons: in Node process CPU also counted the binding's native I/O threads, in Java
+it counted GC and JIT threads, and in C++ it again counted the binding's I/O threads. Four of the
+five languages declare something other than process CPU. The problem is not the threshold but
+**whether the two rows a judgement divides are commensurate**. Measured in C++,
+`zlink-cpp` request-window reads 0.950 on its declared instrument but 1.90 in process cores, while
+`grpc-cpp` in the same run reads 0.700 and 0.70 — effectively the same value. Judged on process
+cores, that difference reports which row links Core rather than which row was client-bound.
 
 The declared instrument and ceiling differ per language, so **both** are recorded in the cell record
 and in the report. A result that declares no instrument or no ceiling cannot have its saturation

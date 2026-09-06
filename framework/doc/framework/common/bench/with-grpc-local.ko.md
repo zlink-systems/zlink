@@ -128,7 +128,7 @@ bench에서 옳은 비교인 이유는 아래와 같다.
   `BenchPayload` part 하나, 모두 두 part로 보낸다. 측정 header 29 bytes는 그 protobuf
   `bytes body` 안에 들어간다. 이 모양은 선택이 아니라 판정식의 전제다. §7.2 formula 1이
   `zlink-<lang>`을 `zlink-c`로 나누므로 두 행의 wire 모양이 다르면 서로 다른 실험을
-  나눈 값이 된다(FB-024). 기준 구현은 `bindings/c/bench/with_grpc`의
+  나눈 값이 된다. 기준 구현은 `bindings/c/bench/with_grpc`의
   `bench_zlink_client.cpp:14-16`과 `:130-140`이다.
 - ZLink는 location store 없이 manual endpoint 연결을 사용한다.
 - ZLink 쪽 두 행은 §1.3의 ROUTER↔ROUTER 구성을 사용한다.
@@ -225,20 +225,33 @@ client의 제출 호출 수만으로 처리량을 계산하지 않는다.
 정한 것은 transport가 아니라 client 런타임이기 때문이다. 포화 셀의 처리량은 "이 client 구성에서
 관찰된 값"으로만 기록한다.
 
-**harness는 상한만이 아니라 무엇을 재는지도 함께 선언한다**(FB-023). 맞는 계측기가 언어마다
+**harness는 상한만이 아니라 무엇을 재는지도 함께 선언한다.** 맞는 계측기가 언어마다
 다르기 때문이다. 포화 판정의 목적은 "transport가 아니라 client 런타임이 상한이었다"를 잡는
 것이므로, 계측기는 **user 코드가 도는 실행 자원**을 재야 한다.
 
 | 언어 | 선언 계측기 | 상한 |
 |------|-------------|------|
+| `dotnet` | 프로세스 사용 core 수 | harness가 선언한 병렬도 |
 | `node` | `perf_hooks`의 `performance.eventLoopUtilization()` | `1.0` |
-| `dotnet`·`java`·`kotlin`·`cpp` | 프로세스 사용 core 수 | harness가 선언한 병렬도 |
+| `java`·`kotlin` | 제출 스레드의 CPU (`ThreadMXBean`, `jvm_thread_cores`) | harness가 선언한 제출 병렬도 |
+| `cpp` | 제출과 완료 드레인을 실행하는 application thread의 CPU (`CLOCK_THREAD_CPUTIME_ID`, `submit_thread_cores`) | `1` |
+
+프로세스 사용 core 수를 쓰는 것은 `dotnet` 하나뿐이다.
 
 Node에 프로세스 core 수를 쓰면 안 되는 이유는 실측이 보여준다. ZLink binding은 native I/O
 thread를 돌리므로 프로세스 CPU ÷ 경과 시간이 **1.3~1.4 코어**로 읽히는데, 그 thread들은 user
 코드를 실행하지 않는다. 상한 1에 이 값을 대면 JS thread가 한가해도 모든 셀이 포화로 표시되고
 표시가 정보를 잃는다. 이 client를 실제로 제한하는 것은 user 코드가 도는 JS thread 하나이고
 event loop 사용률이 바로 그것을 잰다.
+
+**프로세스 CPU는 ZLink client의 포화 계측기로 쓸 수 없다.** 이것이 이 절이 계측기를 언어별
+선언으로 두는 이유다. 세 언어가 서로 다른 이유로 같은 결론에 도달했다. Node에서는 프로세스
+CPU가 binding의 native I/O thread를 함께 셌고, Java에서는 GC와 JIT thread를 셌고, C++에서는
+다시 binding의 I/O thread를 셌다. 다섯 언어 중 넷이 프로세스 CPU가 아닌 것을 선언했다.
+문제는 임계값이 아니라 **판정식이 나누는 두 행 사이의 비교 가능성**이다. C++ 실측에서
+`zlink-cpp` request-window는 선언 계측기로 0.950인데 프로세스 core로는 1.90이고, 같은 run의
+`grpc-cpp`는 0.700과 0.70으로 두 값이 사실상 같다. 프로세스 core로 판정하면 그 차이는 client
+포화가 아니라 어느 행이 Core를 링크하는지를 보고하게 된다.
 
 선언한 계측기와 상한은 언어마다 다르므로 셀 원본과 보고서에 **둘 다** 기록한다. 계측기나 상한을
 선언하지 않은 결과는 포화 여부를 판정할 수 없으며, 판정하지 못했다는 사실을 결과에 남긴다.
