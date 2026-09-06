@@ -2642,7 +2642,6 @@ void app_t::_apply_zlink_framework ()
         add_hosted_service (std::make_unique<runtime::http_host_service_t> (
           http_snapshot, _state->health, options.handler_coroutine_workers ()));
     }
-    runtime::configure_handler_coroutine_executor (options.handler_coroutine_workers ());
     detail::configure_handler_invocation_executor ();
     if (_state->framework_hosted_service_position) {
         const auto position = *_state->framework_hosted_service_position;
@@ -2693,6 +2692,10 @@ int app_t::run (int argc, char **argv)
     }
     std::vector<hosted_service_t *> started;
     try {
+        runtime::configure_handler_coroutine_executor (
+          _state->framework_options
+            ? _state->framework_options->handler_coroutine_workers ()
+            : 0);
         _state->start_hosted_services (provider, started);
         auto expected = framework_runtime_state_t::preparing;
         (void) _state->runtime_state.compare_exchange_strong (

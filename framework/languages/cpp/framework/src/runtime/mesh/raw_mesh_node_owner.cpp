@@ -996,8 +996,8 @@ void raw_mesh_node_owner_t::forget_peer (
 void raw_mesh_node_owner_t::end_peer_operations_if_disconnected_locked (
   const std::vector<std::uint8_t> &node_routing_id)
 {
-    // Only logical intent removal consumes this fact. Transport loss alone
-    // leaves the expectation intact and must not end durable operations.
+    // Re-evaluate after either input changes. Transport loss alone retains
+    // the expectation and therefore does not end durable operations.
     if (!_expected_peers.contains (node_routing_id)
         && !_topology.peer (node_routing_id))
         (void) _operations->fail_target (
@@ -3878,12 +3878,16 @@ task_t<std::size_t> raw_mesh_node_owner_t::drain_monitor_events (
             }).get ();
             if (disconnected_node) {
                 _lane.run ([this, &disconnected_node, &connection_id] {
+                    std::lock_guard lifecycle_lock (_lifecycle_mutex);
                     const auto removed = _topology.disconnect (
                       *disconnected_node, connection_id);
                     (void) _liveness.disconnect (
                       *disconnected_node, connection_id);
-                    if (removed)
+                    if (removed) {
                         discard_pending_admissions_locked (*disconnected_node);
+                        end_peer_operations_if_disconnected_locked (
+                          *disconnected_node);
+                    }
                 }).get ();
             }
             static_cast<void> (now);
@@ -3968,6 +3972,7 @@ task_t<service_liveness_tick_t> raw_mesh_node_owner_t::tick_liveness (
             protocol::command::livenessProbe, probe.probe_id));
     }
     _lane.run ([this, &prepared] {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
         for (const auto &timed_out : prepared.result.timed_out_nodes) {
             const auto peer = _topology.peer (timed_out);
             if (!peer)
@@ -3975,8 +3980,8 @@ task_t<service_liveness_tick_t> raw_mesh_node_owner_t::tick_liveness (
             const auto removed = _topology.disconnect (
               timed_out, peer->connection_id);
             if (removed) {
-                std::lock_guard lifecycle_lock (_lifecycle_mutex);
                 discard_pending_admissions_locked (timed_out);
+                end_peer_operations_if_disconnected_locked (timed_out);
             }
         }
     }).get ();

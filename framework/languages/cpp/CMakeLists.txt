@@ -1116,6 +1116,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   set_tests_properties(test_cpp_framework_r6_join_durable PROPERTIES
     LABELS "framework-unit;framework-regression" TIMEOUT 30)
 
+  add_test(NAME test_cpp_framework_r6_join_owner_loss
+    COMMAND test_cpp_framework_m6a_runtime --r6-join-owner-loss)
+  set_tests_properties(test_cpp_framework_r6_join_owner_loss PROPERTIES
+    LABELS "framework-unit;framework-regression" TIMEOUT 30)
+
   add_executable(test_cpp_framework_mesh_shutdown_seal
     tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_shutdown_seal.cpp)
   target_compile_features(test_cpp_framework_mesh_shutdown_seal PRIVATE cxx_std_20)
@@ -1500,6 +1505,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_async_task
     tests/Zlink.Framework.UnitTests/test_cpp_framework_async_task.cpp
     "framework-unit;framework-regression;async")
+  add_zlink_framework_test(
+    test_cpp_framework_executor_owner
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_executor_owner.cpp
+    "framework-unit;framework-regression;framework-host;async")
   add_zlink_framework_test(
     test_cpp_framework_actor_join_handoff_id
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_join_handoff_id.cpp

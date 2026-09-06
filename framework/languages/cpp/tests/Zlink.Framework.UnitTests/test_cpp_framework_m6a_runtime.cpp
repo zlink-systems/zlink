@@ -2737,6 +2737,63 @@ void verify_actor_join_durable_terminals ()
     source.close ();
 }
 
+void verify_actor_join_ends_after_unexpected_admitted_peer_loss (
+  bool monitor_disconnect)
+{
+    mesh::raw_mesh_node_owner_t source (
+      {descriptor (monitor_disconnect ? "join-owner-loss-disconnect-source"
+                                      : "join-owner-loss-liveness-source")});
+    mesh::raw_mesh_node_owner_t target (
+      {descriptor (monitor_disconnect ? "join-owner-loss-disconnect-target"
+                                      : "join-owner-loss-liveness-target")});
+    source.start ();
+    target.start ();
+    const auto local = source.topology ().local_descriptor ();
+    const auto remote = target.topology ().local_descriptor ();
+    admit_pair (source, target, remote);
+
+    const auto request = actor_join_request (
+      local, remote, monitor_disconnect ? 97 : 99,
+      "join-owner-loss-actor", "join-owner-loss-spot");
+    auto pending = source.request_actor_join (
+      remote.node_routing_id, request, std::nullopt, 2s);
+    const auto claim = claim_actor_join (target);
+    assert (claim && claim->records.front ().reply_token);
+    assert (target.mailbox ().release (*claim));
+
+    source.forget_peer (remote.node_routing_id, target.endpoint ());
+    assert (source.topology ().peer (remote.node_routing_id));
+    assert (!pending.await_ready ());
+
+    if (monitor_disconnect) {
+        target.close ();
+        const auto disconnect_deadline = std::chrono::steady_clock::now () + 1s;
+        while (source.topology ().peer (remote.node_routing_id)
+               && std::chrono::steady_clock::now () < disconnect_deadline) {
+            const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+            (void) source.drain_monitor_events (now);
+            (void) await_task (source.pump_one (now));
+        }
+    }
+    else {
+        (void) await_task (source.tick_liveness (
+          mesh::service_liveness_registry_t::clock_t::now () + 16s));
+    }
+
+    assert (!source.topology ().peer (remote.node_routing_id));
+    const auto completion_deadline = std::chrono::steady_clock::now () + 250ms;
+    while (!pending.await_ready ()
+           && std::chrono::steady_clock::now () < completion_deadline)
+        std::this_thread::yield ();
+    assert (pending.await_ready ());
+    const auto outcome = await_task (std::move (pending));
+    assert (!outcome.reply
+            && outcome.failure
+                 == mesh::actor_join_wire_failure_t::unavailable);
+    source.close ();
+    target.close ();
+}
+
 // Accepted case: the tail's spot ref, membershipEpoch, and
 // receiveChunkLimitBytes must all thread through unchanged from the
 // receiver's reply_actor_join call to the originate side's decoded tail —
@@ -3148,6 +3205,11 @@ int main (int argc, char **argv)
         verify_actor_join_rejected_reply_completes_typed_failure ();
         verify_actor_join_wrong_source_generation_is_fenced ();
         verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--r6-join-owner-loss") {
+        verify_actor_join_ends_after_unexpected_admitted_peer_loss (true);
+        verify_actor_join_ends_after_unexpected_admitted_peer_loss (false);
         return 0;
     }
     using zlink::framework::detail::backend::raw_request_failure_phase_t;
