@@ -196,6 +196,7 @@ export class CompletionOwner {
   private readonly byToken = new Map<bigint, CompletionEntry<unknown>>();
   private readonly byId = new Map<bigint, CompletionEntry<unknown>>();
   private readonly retries = new Map<bigint, RetryState>();
+  private readonly writableRetries: CompletionEntry<unknown>[] = [];
   private nextToken = 1n;
   private publicOwner: object | null = null;
   private runtimeWatch: NativeHandle | null = null;
@@ -398,6 +399,7 @@ export class CompletionOwner {
     consumeSubmittedMessages(payload);
     this.publish(entry, result.completionId);
     for (const completion of result.completions) this.capture(completion);
+    this.drain();
     if (!entry.settled) {
       this.failEntry(entry, requestError(RequestResult.InternalError, 'request completion missing'));
     }
@@ -459,6 +461,13 @@ export class CompletionOwner {
       this.capture(completion);
       processed += 1;
     }
+    // Resubmission can enqueue another WRITABLE immediately. It belongs to
+    // the next drain, after this queue has reached NO_DATA.
+    try {
+      for (const entry of this.writableRetries) this.attemptRetry(entry);
+    } finally {
+      this.writableRetries.length = 0;
+    }
     return processed;
   }
 
@@ -478,6 +487,7 @@ export class CompletionOwner {
     this.byToken.clear();
     this.byId.clear();
     this.retries.clear();
+    this.writableRetries.length = 0;
     this.managedWritableWaitCount = 0;
     this.closeRuntimeWatch();
   }
@@ -549,7 +559,7 @@ export class CompletionOwner {
       this.failEntry(entry, error);
       return;
     }
-    this.attemptRetry(entry);
+    this.writableRetries.push(entry);
   }
 
   private attemptRetry(entry: CompletionEntry<unknown>): void {
@@ -682,6 +692,7 @@ export class CompletionOwner {
       this.byToken.clear();
       this.byId.clear();
       this.retries.clear();
+      this.writableRetries.length = 0;
       this.managedWritableWaitCount = 0;
     }
     if (this.byToken.size === 0) this.closeRuntimeWatch();
