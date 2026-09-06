@@ -1,24 +1,71 @@
-# .NET Messaging Local Bench Specification
+# Messaging Local Bench Specification
 
-This document is the standard for comparing the relative cost of gRPC .NET, ZLink raw binding
-.NET, and ZLink framework .NET in the same format on a local development machine. It doesn't
-represent a production environment's mesh, TLS, L7 load balancer, multi-node distribution, or
-network latency.
+This document is the standard for comparing the relative cost of gRPC, the ZLink raw binding, and
+the ZLink framework in the same format on a local development machine. The target languages are
+the five `dotnet`, `node`, `java`, `kotlin`, and `cpp`, and a reference bench written in C is used
+alongside them as the floor value. It doesn't represent a production environment's mesh, TLS, L7
+load balancer, multi-node distribution, or network latency.
+
+**This bench is a service-level comparison.** It measures the cost actually paid when the same
+task is implemented with each stack. It doesn't ask whether the two stacks use the same mechanism
+internally. A difference that arises because a capability exists in only one stack isn't hidden;
+it's left in the result as it is. The question this document answers is "implementing this task
+with gRPC costs this much, implementing it with ZLink costs this much." "Which side is faster when
+the two stacks transmit the same way" isn't this bench's question.
 
 ## 1. Comparison Targets
 
-The comparison targets are the three implementations below. The report table and the `RESULT`
-line use the same names.
+### 1.1 Implementation Names
+
+Three implementations are compared per language. `<lang>` is one of `dotnet`, `node`, `java`,
+`kotlin`, `cpp`. The report table and the `RESULT` line use the same names.
 
 | Implementation Name | Meaning |
 |-----------|------|
-| `grpc-dotnet` | ASP.NET Core gRPC unary RPC |
-| `zlink-dotnet` | The raw .NET binding's DEALER/ROUTER TCP path, bypassing the framework |
-| `zlink-framework-dotnet` | The client/server channel of framework channel messaging |
+| `grpc-<lang>` | That language's gRPC unary RPC |
+| `zlink-<lang>` | The raw binding's ROUTER↔ROUTER TCP path, bypassing the framework |
+| `zlink-framework-<lang>` | The client channel and server channel of framework channel messaging |
 
-The default execution order is also `grpc-dotnet`, `zlink-dotnet`, `zlink-framework-dotnet`. Since
-the three implementations run the same pattern at the same payload size and the same active
-duration, the table shows the three implementations side by side under one pattern.
+The default execution order is `grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`. Since the
+three implementations run the same pattern at the same payload size and the same active duration,
+the table shows the three implementations side by side under one pattern.
+
+### 1.2 The C Reference Bench
+
+`grpc-c` and `zlink-c` from `bindings/c/bench/with_grpc` are kept alongside as the floor
+reference. There's no framework layer in C, so only these two implementations exist there. The
+`zlink-c` `request-window` value is the reference value for judging where each language's raw
+binding stands (§7.2).
+
+### 1.3 The ZLink Socket Axis
+
+Both ZLink rows use **RouteMesh ROUTER↔ROUTER**. This condition isn't optional; it's the contract
+that makes the judgement formula hold.
+
+| Row | Socket Configuration |
+|-----|----------------------|
+| `zlink-framework-<lang>` | RouteMesh's channel request handler and send handler. RouteMesh connects as ROUTER↔ROUTER |
+| `zlink-<lang>` | The raw binding's ROUTER↔ROUTER. The client side also creates a ROUTER and sends by specifying the peer ROUTER's routing id |
+| `zlink-c` | The same ROUTER↔ROUTER configuration as the raw binding row above |
+
+```mermaid
+flowchart LR
+    FC[framework channel client] <--> FS[framework channel server]
+    RC[raw binding ROUTER] <--> RS[raw binding ROUTER]
+```
+
+This contract is needed because of the judgement formula in §7.2.
+`zlink-framework-<lang> / zlink-<lang>` is the ratio for looking at the cost the framework layer
+additionally requires. Only when both rows use the same socket pattern does this ratio isolate the
+framework layer. If the raw row is DEALER→ROUTER, the division result contains both the framework
+layer cost and the socket pattern difference, and that value isn't the framework layer cost.
+
+The current implementation state is recorded alongside. The `.NET` client's raw path and the C
+reference bench's client still create a DEALER
+(`framework/languages/dotnet/bench/with-grpc/Client/Program.cs:493,512,530`,
+`bindings/c/bench/with_grpc/zlink/bench_zlink_client.cpp:530-531`). That change is done in a
+separate task. The table above prescribes the configuration to be used for measurement, and a
+value obtained before that change completes isn't a value that satisfies this specification.
 
 ## 2. Measurement Patterns
 
@@ -28,11 +75,15 @@ ZLink message body. The first 29 bytes are used as the measurement header, and t
 as the business payload area. The gRPC HTTP/2 frame, protobuf field overhead, ZLink envelope, and
 ZMP header aren't included in this size.
 
-| Pattern Name | gRPC .NET | ZLink binding .NET | ZLink framework .NET | Interpretation |
-|-----------|-----------|--------------------|----------------------|------|
-| `request-serial` | unary RPC | raw request callback | `RequestToChannel(...).Async<TReply>()` | Sends one request and sends the next only after the reply completes |
-| `request-window` | unary RPC | raw request callback | `RequestToChannel(...).Async<TReply>()` | Keeps up to `request_window` incomplete requests |
-| `send-saturation` | unary RPC returning empty reply | raw `Dealer.Send().Submit()` | `SendToChannel(...).Submit()` | Compares the command/send path, which has no reply payload |
+| Pattern Name | gRPC | ZLink raw binding | ZLink framework | Interpretation |
+|-----------|------|-------------------|-----------------|------|
+| `request-serial` | unary `Echo` RPC | raw request send and reply receive | channel request call | Sends one request and sends the next only after the reply completes |
+| `request-window` | unary `Echo` RPC | raw request send and reply receive | channel request call | Keeps up to `request_window` incomplete requests |
+| `send-saturation` | unary `Command` RPC, replying `Empty` | raw one-way send submission | channel send submission | Compares the command path, which has no reply payload |
+
+The API names the three implementations use differ per language, but the contract is the same. In
+`.NET`, the framework channel request is `RequestToChannel(...).Async<TReply>()` and the channel
+send is `SendToChannel(...).Submit()`. The per-language modules are in §8.
 
 `request-serial`'s throughput is decided by a single request's round-trip latency. This value is
 meant to show the cost of a "process one at a time" usage pattern.
@@ -42,28 +93,63 @@ reply. During the active phase, the client keeps up to `request_window` incomple
 soon as one reply arrives, the next request is sent immediately in that slot. The default
 `request_window` is `100`.
 
-`send-saturation` isn't averaged together with request/reply. A gRPC empty unary still waits for
-the empty reply, but a ZLink send is a submission path with no reply. This pattern exists to look
-at the command/send family's relative cost separately.
+`send-saturation` isn't averaged together with request/reply. This pattern exists to look at the
+command family's relative cost separately.
+
+### 2.1 The gRPC Counterpart for `send-saturation`
+
+The gRPC side of `send-saturation` uses the current unary
+`Command(BenchPayload) returns (Empty)` as it is. No client-streaming RPC is added, and no RPC is
+added to the proto. The reasons this is the correct comparison for this bench are below.
+
+- In a real service, a call that needs no response is implemented as a unary call with an `Empty`
+  reply. Client-streaming is a form meant for uploads and bulk ingestion, and isn't how a service
+  sends a single command that needs no response.
+- gRPC has no one-way call primitive. So it pays one round trip when handling this task. In a
+  service-level comparison that cost is a value that belongs in the result.
+- Inserting a different usage form on the gRPC side to even out the comparison would measure an
+  implementation that real services don't use.
+
+The reading rule for this cell is fixed alongside. This cell isn't described as a transport-speed
+difference. The correct sentence form is below.
+
+```text
+When a command needs no response, gRPC pays a unary round trip while ZLink completes with a
+one-way send. Under this condition the difference was N times.
+```
 
 ## 3. Execution Conditions
 
 - Run with 1 client process and 1 server process per comparison target.
 - The local runner brings up the gRPC server, ZLink raw binding server, and ZLink framework server
   separately.
-- Only a loopback address (`127.0.0.1`) is used.
+- Only a loopback address (`127.0.0.1`) is used. Ports use the per-language bands in §9.
 - Runs as a Release build.
-- Runs a fixed-duration measured active window after warmup.
+- Runs a fixed-duration measured active window after warmup. The warmup length is set per language
+  and the value used is recorded in the result (§8.2).
 - The default payload size is `1024,4096` bytes.
 - The default `request_window` is `100`.
 - The default send concurrency is `8`.
 - gRPC and ZLink framework use the same protobuf DTO. The ZLink raw binding sends the same bytes
   payload without a protobuf envelope.
 - ZLink uses a manual endpoint connection with no location store.
+- Both ZLink rows use the ROUTER↔ROUTER configuration in §1.3.
 - The ZLink raw binding's request echo endpoint and command receive endpoint are separated. In the
   command measurement, if request echo replies mix into the same socket, the one-way receive volume
   with no reply can't be observed correctly.
 - TLS, compression, service mesh, gateway, and broker are not used.
+- Languages aren't measured at the same time. Only one language is measured at a time.
+
+The two ZLink rows differ in how many endpoints they use. The raw binding row separates its
+request echo endpoint from its command endpoint and so uses two, while the framework row uses one
+RouteMesh connection that carries both a request handler and a send handler. This difference is
+intentional and contaminates no cell, because patterns are measured one at a time. While the
+`send-saturation` cell is measured, only send traffic occurs on either row; while a request-family
+cell is measured, only request traffic occurs on either row.
+
+This reasoning depends on the premise that only one pattern is measured at a time. If a scenario
+that runs two patterns concurrently is added, the premise no longer holds and this endpoint
+configuration must be revisited.
 
 ## 4. Output Format
 
@@ -95,6 +181,9 @@ RESULT,current,zlink-dotnet-request-window,local,1024,latency,0.300
 RESULT,current,zlink-framework-dotnet-request-window,local,1024,latency_p99,1.200
 ```
 
+`<scenario>` is `<implementation name>-<pattern name>`, so the language is part of the name. For
+example, Node's equivalent cell is `zlink-framework-node-request-window`.
+
 The `metric` value uses `throughput`, `bandwidth`, `latency`, `latency_p95`, `latency_p99`,
 `client_cpu_percent`, `client_memory_mb`, `server_cpu_percent`, `server_memory_mb`. The raw value
 of `throughput` is completions per second, and the table displays it divided into `KOPS` or
@@ -122,7 +211,18 @@ echo reply came back. Here, `1 KOPS` means 1,000 request/reply completions per s
 
 `send-saturation` calculates `KMSG/s` based on the number of messages the server received during the
 active phase. Here, `1 KMSG/s` means 1,000 messages per second. Since a ZLink send doesn't wait for
-a reply, throughput isn't calculated from the client's `Submit()` call count alone.
+a reply, throughput isn't calculated from the client's submission call count alone.
+
+### 5.1 The Client Saturation Rule
+
+`Client CPU` is recorded for every cell. It isn't optional.
+
+A cell whose client CPU exceeded 95% is marked as a saturated cell and isn't used for throughput
+ranking. In that cell the limit was set by the client runtime, not by the transport. A saturated
+cell's throughput is recorded only as "the value observed with this client configuration."
+
+This rule applies most often to Node. The Node client runs on a single thread, so the client
+reaches its limit first even in a range where the transport could handle more.
 
 ## 6. The Measurement Payload Header
 
@@ -145,34 +245,133 @@ server read the header to calculate the active-phase message count and server-si
 latency. This approach puts the measurement value inside the payload so a one-way throughput isn't
 overstated by a client stopwatch alone.
 
+This header layout is identical in every language. If a language used a different layout, its
+cells couldn't be placed side by side with the others.
+
 ## 7. Interpreting Results
 
-This bench is a small local comparison tool. To put a performance-superiority statement into a
-result document or guide, keep the following information alongside it.
+This bench is a small local comparison tool.
 
-- CPU, OS, .NET SDK version
+### 7.1 Information Kept Alongside the Result
+
+To put a performance-superiority statement into a result document or guide, keep the following
+information alongside it.
+
+- CPU, OS
+- That language's runtime version and gRPC library version
 - Commit hash
 - Payload size
 - Warmup and active duration configuration
 - gRPC and ZLink endpoint
 - The request window value
 - The send concurrency value
+- Client CPU and whether the cell was saturated (§5.1)
 - The original result JSON
 
-Performance judgment compares within the same ZLink layer, not against gRPC. The raw .NET binding
-is judged against the `zlink-c` request-window result under the same conditions. If the raw .NET
-binding reaches 80% or more of the C result, the binding layer's baseline performance is judged as
-passing. Framework .NET is judged against the raw .NET binding result. If the framework reaches
-80% or more of the raw .NET binding result, the framework's added cost is judged as passing.
+### 7.2 Judgement Between Layers
+
+Performance judgment compares within the same ZLink layer, not against gRPC. The raw binding is
+judged against the `zlink-c` request-window result under the same conditions. If the raw binding
+reaches 80% or more of the C result, the binding layer's baseline performance is judged as
+passing. The framework is judged against the same language's raw binding result. If the framework
+reaches 80% or more of the raw binding result, the framework's added cost is judged as passing.
+
+```text
+at each of payload sizes 1024 and 4096:
+zlink-<lang> / zlink-c                     >= 0.80   binding layer passes
+zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework added cost passes
+```
+
+Both formulas are calculated separately per payload size. A language passes only when it satisfies
+the criterion at both `1024` and `4096`. A result that satisfies only one size isn't a pass, and
+the per-payload values are always recorded as they are. A stack that holds the criterion at `1024`
+but degrades at `4096` has a real problem, and since the report shows both sizes anyway, a
+per-payload gate exposes that problem at no added cost.
 
 This criterion is applied mainly to patterns like request-window, where ZLink can send the next
-request without waiting for the reply. `request-serial` is kept as a supplementary metric for
-looking at the round-trip latency of a process-one-at-a-time usage pattern.
+request without waiting for the reply. `request-window` is the sound judgement cell because gRPC
+unary `Echo` and a ZLink request give the same guarantee, namely confirmation that the server
+processed the message. `request-serial` is kept as a supplementary metric for looking at the
+round-trip latency of a process-one-at-a-time usage pattern.
+
+The second formula represents the framework layer cost only when the socket configuration in §1.3
+is observed.
+
+### 7.3 Cross-Language Reading Rules
+
+Absolute throughput isn't compared across languages. Placing `grpc-node` and `grpc-java` side by
+side is a runtime comparison, not a ZLink comparison. If two languages' throughput differs in the
+table, the cause is mostly the runtime and the gRPC library, and this bench doesn't separate that
+cause out.
+
+What can be read across languages is the ratio. `zlink-framework-<lang> / zlink-<lang>` is a value
+each language calculated against itself, so it can answer "which language's framework layer is the
+most expensive." A table holding a cross-language comparison places this ratio as its main entry.
+
+### 7.4 Unit Alignment
 
 Log units can differ per runner. The C report of `bindings/c/bench/with_grpc` records the
-`throughput` value in KOPS, while the .NET with-grpc report records the `RESULT` line's
-`throughput` value as completions per second. When comparing C and .NET directly, divide the .NET
-value by 1000 to align it to KOPS before calculating the ratio.
+`throughput` value in KOPS, while the other languages' with-grpc reports record the `RESULT` line's
+`throughput` value as completions per second. When comparing the C value with another language's
+value directly, divide the other language's value by 1000 to align it to KOPS before calculating
+the ratio.
 
 Results are interpreted only as "faster/slower under this condition." No claim of general
 production performance or superiority across every payload is made.
+
+## 8. Per-Language Configuration
+
+### 8.1 Modules Used Per Language
+
+| Language | gRPC library and server | Framework module | Raw binding | protobuf codec |
+|------|--------------------------|----------------|-------------|----------------|
+| `dotnet` | ASP.NET Core gRPC | `framework/languages/dotnet/src/Zlink.Framework` | `bindings/dotnet` | `Zlink.Framework.Codecs.Protobuf` |
+| `node` | `@grpc/grpc-js` | `framework/languages/node/packages/framework` | `bindings/node` | `packages/framework-codec-protobuf` |
+| `java` | grpc-java | `zlink-framework-core` | `bindings/java` | `zlink-framework-codec-protobuf` |
+| `kotlin` | grpc-kotlin coroutine stub | `zlink-framework-kotlin` | `bindings/kotlin` | Uses the same codec as Java |
+| `cpp` | system `libgrpc++` and `grpc_cpp_plugin` | `framework/languages/cpp/framework` | `bindings/cpp` | `zlink::framework_codec_protobuf` |
+
+Kotlin uses a suspend interface on the ZLink side, so the gRPC side uses the grpc-kotlin coroutine
+stub as well. Only when the coroutine stub can't be used is the grpc-java blocking stub used, and
+that reason is recorded in the result.
+
+C++ uses the `libgrpc++` installed on the system. gRPC isn't built through vcpkg. This machine's
+version is 1.51.1, and since it's an old version it must be recorded in the result.
+
+### 8.2 Values Set Per Language That Must Be Recorded
+
+The three values below are set differently per language. The goal isn't to make them identical but
+to leave the values used in the result.
+
+| Item | Reason |
+|------|------|
+| Warmup length | The JVM reaches steady state only after JIT warmup finishes. Forcing the same warmup as `.NET` would measure an unwarmed runtime |
+| gRPC server configuration | The default server implementation differs per language. The gRPC side is left at each language's default configuration, and that configuration is recorded in the result |
+| Runtime and gRPC library version | The SDK version, runtime version, and gRPC library version are recorded in the cell's raw output and in the report |
+
+## 9. Port Bands
+
+A per-language band is fixed so that ports don't collide even when five languages' server
+processes exist at the same time. The meaning of an offset within a band is the same in every
+language.
+
+| Language | Band | gRPC | gRPC stats | framework endpoint | framework stats | raw request | raw stats | raw command |
+|------|------|------|------------|--------------------|-----------------|-------------|-----------|-------------|
+| `dotnet` | 5071-5079 | 5071 | 5074 | 5072 | 5073 | 5075 | 5076 | 5077 |
+| `node` | 5081-5089 | 5081 | 5084 | 5082 | 5083 | 5085 | 5086 | 5087 |
+| `java` | 5091-5099 | 5091 | 5094 | 5092 | 5093 | 5095 | 5096 | 5097 |
+| `kotlin` | 5101-5109 | 5101 | 5104 | 5102 | 5103 | 5105 | 5106 | 5107 |
+| `cpp` | 5111-5119 | 5111 | 5114 | 5112 | 5113 | 5115 | 5116 | 5117 |
+| C reference | 6071-6079 | 6071 | none | none | none | 6075 | none | 6077 |
+
+The last two ports of each band (`+8`, `+9`) are left in reserve.
+
+The `dotnet` row is the set of values
+`framework/languages/dotnet/bench/with-grpc/run_local.sh` already uses, and the C reference row is
+the set of values the `bindings/c/bench/with_grpc` server and client already use. The C reference
+bench has no framework layer and no stats endpoint, and the optional ZMQ comparison server uses
+`6079`.
+
+The runner checks that its own band's ports are free before starting a measurement. If one is in
+use it stops instead of moving to another port. Moving a port would make the endpoint recorded in
+the result disagree with the endpoint actually used.
