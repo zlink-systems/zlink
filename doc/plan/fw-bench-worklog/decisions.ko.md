@@ -107,8 +107,26 @@
   판단했고 그 근거(한 번에 한 패턴만 측정)는 여전히 유효하다. 다만 그때 고려하지 않은
   오염 경로가 하나 더 있었다. **같은 프로세스에서 이어 도는 셀 사이의 서버 backlog 전이**다.
   FB-008이 그 경로를 막는다.
-- **적용**: job `fwb-02`가 harness에 구현하고, 규격 §3에 계약으로 추가한다. Phase 2~5의 네
-  언어는 이 계약을 구현한 상태로 만든다.
+- **적용 범위 정정** (2026-09-06, job `fwb-02` 제안을 감독관이 수용): 오염 표시는 "순서상
+  다음 셀"이 아니라 **같은 server를 쓰는 다음 셀**에 한정한다. 구현마다 server process가
+  따로 있고 framework backlog는 framework 셀만 건드린다. 실제로 죽은 셀 사이에 있던
+  grpc·raw 셀은 영향을 받지 않았다. 순서 기준으로 표시하면 멀쩡한 grpc 셀을 빼면서 정작
+  오염된 framework 셀은 싣게 된다.
+- **적용**: job `fwb-02`가 harness에 구현하고 규격 §3에 계약으로 추가한다. Phase 2~5의 네
+  언어는 이 계약을 구현한 상태로 만든다. drain 상한(`--drain-bound-ms`, 기본 30 s)은
+  정상 실행에서 걸리지 않을 만큼 커야 하며 관측한 drain 시간을 셀마다 기록한다.
+
+### FB-008 관측: drain 시간 비대칭 (smoke, send 2초 기준)
+
+| 셀 | @1024 | @4096 |
+|---|---|---|
+| `grpc-dotnet-send-saturation` | 224 ms | 213 ms |
+| `zlink-dotnet-send-saturation` (raw) | 330 ms | 253 ms |
+| `zlink-framework-dotnet-send-saturation` | **5700 ms** | **4820 ms** |
+
+framework server는 2초짜리 send 셀 뒤 약 5초를 비우는 데 쓴다. 기존 200 ms 고정 settle은
+약 5.5초 일찍 반환하고 있었다. 이 값은 harness 주석이 아니라 결과이므로 보고서에 싣는다.
+drain 대기를 넣은 뒤 18셀 전부 완료, 실패 0, 오염 0.
 
 ## FB-009 — framework send 경로의 saturation 지연은 결과로 기록한다
 
