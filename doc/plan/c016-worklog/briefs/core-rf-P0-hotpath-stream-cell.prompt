@@ -1,0 +1,22 @@
+목표: hotpath_gate에 STREAM tcp 셀(`stream_tcp`)을 추가한다. 계약 변경 없음, 테스트 인프라만. 상한 1.5 h.
+
+소유 계층·spec: core/doc/spec/core/systems/10-hot-path.en.md §5.1 (instruction-count gate). STREAM 계약은 core/doc/spec/core/socket/08-stream.ko.md — 이 job은 계약을 읽기만 한다.
+금지: core/src 수정, 공개 헤더 수정, 기존 4개 셀의 측정 코드·reference 변경, 계약 테스트 기대값 수정, 범위 밖 파일 수정.
+범위 파일: core/tests/perf/hotpath_bench.cpp, core/tests/perf/hotpath_gate.py (셀 목록에 이름만 추가), core/tests/perf/hotpath_reference.json (새 키 하나 추가, 값은 측정값), 필요하면 core/tests/CMakeLists.txt (링크만).
+
+설계:
+- `run_one_way`와 같은 구조로 `run_stream_tcp(iterations)`를 만든다. STREAM socket이 `tcp://127.0.0.1:0`(또는 사용 가능한 포트)에 bind하고, 평범한 BSD TCP 소켓(POSIX `socket/connect/send/recv`, Core 미사용)이 클라이언트가 된다. 벤치 서버 with_stream(`bindings/c/bench/with_stream/stacks/zlink/test_scenario_stream_zlink.cpp`)과 같은 앱 패턴: STREAM에서 `zlink_recv_part`로 1024 B 패킷을 받고 같은 RID로 `zlink_send_part_rid(..., ZLINK_PART_FINAL)` 에코. 클라이언트는 매 반복 1024 B를 보내고 1024 B 에코를 blocking recv로 기다린다(한 번에 하나가 in-flight — 결정성 우선).
+- 측정 구간(`collect_scope_t`)에는 반복 루프만 넣는다. 연결 수립·READY 알림 소비·warm-up은 구간 밖. 기존 셀의 warm-up 반복 수를 그대로 쓴다.
+- READY/DISCONNECTED 알림(08-stream 참조: 연결 알림은 payload 1바이트 record)은 warm-up 전에 소비한다. 반복 중 알림이 섞이면 실패로 처리해 결정성을 지킨다.
+- callgrind 계측은 기존 셀과 같은 매크로 사용. 클라이언트 스레드의 명령 수가 측정에 섞이지 않게 기존 셀이 스레드를 어떻게 다루는지(`collect_scope_t`) 확인하고 같은 방식으로.
+- hotpath_gate.py의 셀 목록과 usage 문자열에 `stream_tcp`를 추가한다.
+
+절차:
+1. core/tests/perf/hotpath_bench.cpp 전체와 hotpath_gate.py를 읽고, `router_router_tcp` 셀이 tcp 연결과 warm-up을 어떻게 다루는지 파악.
+2. 구현. 빌드는 gate 트리 하나만: `JOBS=6 cmake --build core/build-gate --target hotpath_bench` (Release+LTO, 이미 구성돼 있음). 다른 트리 빌드 금지.
+3. 수동 실행으로 안정성 확인: `python3 core/tests/perf/hotpath_gate.py --bench core/build-gate/bin/hotpath_bench --reference core/tests/perf/hotpath_reference.json --valgrind ~/.local/bin/valgrind --cells stream_tcp` 를 3회 돌려 값이 ±0.5% 안에서 같은지 본다. reference에 키가 없어 실패하면 `--update-reference`로 한 번 쓴 뒤 다시 3회.
+4. 기존 4셀도 한 번 실행해 값이 reference ±5% 안인지 확인(코드를 건드리지 않았으므로 같아야 함).
+
+보고: 새 셀의 측정값 3회, 기존 4셀 값, 변경 파일, 실행한 명령, 남은 문제. 변경 분류: 테스트 인프라(A/B/C/D 해당 없음). 계약을 바꿔야 했다면 어디서 멈췄는지.
+진행 파일: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/progress-P0-hotpath-stream-cell.md (3분마다 갱신, 커밋하지 않음).
+커밋하지 않는다. 감독관이 리뷰 후 커밋한다.

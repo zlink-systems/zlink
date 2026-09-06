@@ -1,0 +1,15 @@
+목표: with_stream 조건에서 zlink STREAM 서버와 asio 서버의 메시지당 비용을 실측으로 분해한다(perf record). 원인 수정은 하지 않는다. 상한 1.5 h. 읽기·측정 전용, 소스 수정 금지, 커밋 금지.
+
+배경: 계획 §1.1 — CCU 1000 echo에서 zlink/asio = 0.78 (64 B, 1024 B, 64 KiB 동일), zlink 서버 CPU 353% vs asio 303%. 메시지당 고정 비용이 1.5배라는 뜻. 정적 분석 보고서 doc/plan/c016-worklog/core-rf-S-B-stream-path-cost.md가 있으면 먼저 읽고 그 가설을 실측으로 확인·반박한다.
+
+환경: 저장소 /home/hep7hep7/project/zlink, Release+LTO lib core/build/lib/libzlink.so.0.17.0 (심볼은 남아 있는지 `nm -D`/`perf report`로 확인, 없으면 core/build-dev(RelWithDebInfo, LTO OFF)의 lib로 대체하고 그 사실을 표에 명시). with_stream 빌드는 bindings/c/build 안에 있음(`--reuse-build`). perf 도구는 `perf` (없으면 `~/.local/bin`도 확인; 없으면 설치 없이 valgrind callgrind로 대체하고 명시). 머신 16코어 11 GB. 측정 중 다른 빌드·벤치 금지.
+
+절차:
+1. with_stream 러너가 서버·클라이언트를 어떻게 띄우는지 읽는다(run_benchmarks.sh, stacks/zlink, stacks/asio, client). 러너를 그대로 쓰되 서버 프로세스를 `perf record -g -F 999 -p <pid>`로 붙여 throughput 구간(warmup 뒤 5 s)만 잡는다. 러너 수정이 필요하면 복사본 스크립트를 scratch에 만들고 원본은 손대지 않는다.
+2. 셀: zlink 1024 B, zlink 64 B, zlink 65536 B, asio 1024 B (각 1회, CCU 1000, io threads 4).
+3. 각 셀에서: (a) 스레드별 CPU 분포(I/O 스레드 4개 vs 앱 스레드), (b) 상위 30 심볼(children 포함 호출 그래프에서 zlink 라이브러리 내부 프레임 기준), (c) syscall 수: `perf stat -e 'syscalls:sys_enter_write,syscalls:sys_enter_read,syscalls:sys_enter_epoll_wait,syscalls:sys_enter_sendmsg,syscalls:sys_enter_recvmsg,syscalls:sys_enter_writev,syscalls:sys_enter_eventfd2'` 또는 `strace -c -f`(느려지므로 별도 짧은 run) 로 **메시지당** read/write/eventfd write/epoll_wait 횟수, (d) `perf stat -e instructions,context-switches,cpu-migrations` 로 메시지당 명령 수와 컨텍스트 스위치 수(처리한 메시지 수는 러너 metric line에서).
+4. zlink 1024 B vs asio 1024 B를 나란히 놓고, 차이가 나는 항목을 큰 순서로 정리: 메시지당 명령 수, syscall 수(특히 eventfd/epoll = wake), 컨텍스트 스위치, 할당(malloc/free 심볼 비중), 잠금(pthread_mutex_lock/futex 비중), memcpy 비중.
+5. 64 KiB 셀에서는 I/O 스레드 idle 원인(어느 스레드가 무엇을 기다리는지, `perf sched` 또는 off-cpu 관점)을 한 문단으로.
+
+보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/core-rf-S-A-stream-profile.md (한국어, 표 위주, 명령줄과 원본 perf 출력 파일 경로 기록. 원본 데이터는 /tmp/claude-1000/-home-hep7hep7-project-zlink/a5b31a9a-1a3b-4bcb-a080-53988ed569cb/scratchpad/S-A/ 아래). 마지막에 "메시지당 비용 순위 표 + 각 항목의 후보 원인 파일:행 + S-B 가설 중 확인/반박된 것"을 넣는다.
+진행 파일: doc/plan/c016-worklog/progress-S-A.md (3분마다).

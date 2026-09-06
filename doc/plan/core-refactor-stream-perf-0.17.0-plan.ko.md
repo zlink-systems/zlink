@@ -13,7 +13,7 @@
 |---|---|
 | 대상 | `core/` 라이브러리(`core/src/api`, `core/src/runtime`) |
 | 관점 | ① 성능 개선 ② POSDDD(깊은 모듈·경계·정보 은닉) ③ 불필요한 코드 정리(dead code·중복·no-op) |
-| 절대 조건 | **spec gap을 만들지 않는다.** 공개 C API·헤더 주석·`core/doc/spec` 계약과 다른 동작이 생기는 변경은 채택하지 않는다. 계약을 바꿔야만 가능한 개선은 D(spec gap)로 분류해 사용자 결정에 올리고 그 항목은 멈춘다. |
+| 절대 조건 | **공개 인터페이스(헤더·ABI·export 심볼)를 바꾸지 않는다. spec gap을 만들지 않는다.** 공개 C API·헤더 주석·`core/doc/spec` 계약과 다른 동작이 생기는 변경은 채택하지 않는다. 계약을 바꿔야만 가능한 개선은 D(spec gap)로 분류해 사용자 결정에 올리고 그 항목은 멈춘다. |
 | 판정 기준 | **현재 main이 기준이다. 과거 버전 비교·회귀 유입 커밋 추적은 하지 않는다.** STREAM은 `bindings/c/bench/with_stream`에서 **같은 asio 기반의 다른 스택(asio·zmq)** 대비 약 20% 낮으므로 그 격차를 없애는 것이 목표다. **그 외 모든 패턴·transport는 외부 비교군 없이 `bindings/c/perf`(C 러너 single·multi)로 현재 main 대비 개선만 확인한다**(with_zmq는 패턴·transport 범위가 달라 쓰지 않는다). |
 | 채택 규칙 | 성능이 오르지 않아도 **구조가 좋아졌으면 채택**. 성능이 게이트(§4) 밖으로 떨어지면 불채택. |
 | 범위 | 세 축 모두 **Core 전체**가 대상이다: 성능은 7 패턴 × 4 transport 전부, 리팩토링은 `api`·`runtime` 전 모듈. STREAM은 순서만 첫 번째다. |
@@ -148,7 +148,7 @@ spec gap = 코드 동작이 `core/doc/spec`·공개 헤더 주석·공개 계약
 1. **계약 테스트 불변**: `core/tests`의 integration/contract/C 공개 API 테스트는 **기대값을 한 줄도 바꾸지 않고** green이어야 한다. 테스트 기대값을 바꿔야 통과하는 변경은 그 자체가 spec gap이다(unit 테스트는 내부 구조를 따라가므로 이동·삭제 가능, 단 삭제된 검증은 어디로 갔는지 보고).
 2. **스펙 문장 대조**: job은 자기가 만진 경로가 소유된 스펙 절(socket README, 08-stream, 02-raw, 10-hot-path, 06-auto-hwm, 05-polling 등)을 브리프에 적고, 결과 보고에 "이 절의 어느 문장도 다른 동작이 되지 않았다"를 문장 단위로 확인한다. 감독관이 같은 절을 코드와 다시 대조한다.
 3. **관찰 가능한 순서·타이밍 보존**: 완료(completion)·이벤트(READY/DISCONNECTED/monitor)·POLLIN/POLLOUT level·WRITABLE wake의 **순서와 조건**은 그대로여야 한다. wake를 묶거나 batching을 늘려도 "언제 깨어나는가"의 계약 조건(예: 거절한 자원의 회복)은 바뀌지 않는다. 지연·순서를 바꾸는 최적화는 D.
-4. **표면 불변**: 공개 헤더(`core/include/zlink/**`)의 함수·옵션·enum·errno 매핑은 추가·삭제·의미 변경 없음. mirror cmp(8 헤더 × 4)로 확인. 새 옵션으로 성능을 얻는 방식은 D.
+4. **공개 인터페이스 절대 불변**(사용자 지시 2026-09-06 21:55): 공개 헤더(`core/include/zlink/**`)의 함수·시그니처·옵션·enum 값·struct 레이아웃·errno 매핑·export 심볼(`core/src/libzlink.vers`)은 **추가·삭제·의미 변경 모두 금지**. 성능을 위한 새 옵션·새 플래그·새 함수도 금지. 확인: `git diff --stat -- core/include core/src/libzlink.vers`가 비어 있어야 하고, mirror cmp(8 헤더 × 4)와 bindings c·cpp `run_tests.sh` 스모크가 green. 공개 인터페이스를 바꿔야만 얻는 개선은 D로 §7.5에 기록만 한다.
 5. **스펙 diff 0**: 이 캠페인의 커밋에 `core/doc/spec` 변경이 들어간다면 내부 구조 서술(파일 배치·모듈 설명)뿐이어야 하고, 계약 문장 변경은 없어야 한다. 감독관이 커밋 전에 spec diff를 읽고 판정한다.
 
 이 검사에서 걸린 개선은 버리는 것이 아니라 D(spec gap) 항목으로 §7.5에 모아 "어떤 계약을 어떻게 바꾸면 얼마를 얻는가"를 적어 사용자 결정에 올린다. 결정 전에는 구현하지 않는다.
