@@ -1,0 +1,31 @@
+/* SPDX-License-Identifier: MPL-2.0 */
+
+#pragma once
+
+// Test feature selection comes from the same configure probes as the library.
+// Tests do not include the library's private platform or compatibility headers.
+#cmakedefine ZLINK_IOTHREAD_POLLER_USE_ASIO
+#cmakedefine ZLINK_HAVE_IPC
+#cmakedefine ZLINK_HAVE_TLS
+#cmakedefine ZLINK_HAVE_WS
+#cmakedefine ZLINK_HAVE_WSS
+#cmakedefine ZLINK_HAVE_ASIO_SSL
+#cmakedefine ZLINK_HAVE_ASIO_WS
+
+#cmakedefine ZLINK_HAVE_WINDOWS
+#if defined(__CYGWIN__)
+#define ZLINK_HAVE_CYGWIN
+#endif
+#if defined(__linux__)
+#define ZLINK_HAVE_LINUX
+#endif
+#if defined(_AIX)
+#define ZLINK_HAVE_AIX
+#endif
+#if defined(sun) || defined(__sun)
+#define ZLINK_HAVE_SOLARIS
+#endif
+
+#if defined(__VMS)
+#undef ZLINK_HAVE_IPC
+#endif
