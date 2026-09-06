@@ -1467,3 +1467,10 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 - redline(`bindings-spec-redline/changes.md`)을 감독자가 diff로 검토: 공통 README의 옛 Core callback 모델(`zlink_reply_handler_fn`, `request_seq` 채번·pending map, `zlink_send_async`/send_complete_handler, "timeout = send 대기+reply 대기") 절을 현행 pull completion·wait-token 모델과 Core 소유 문서 링크로 교체; codec extension 배포 의무 절을 raw payload 배포 범위 한 규칙으로; 수신 회계·receive-flow·완료 합류 규칙의 소유자를 공통 README 한 곳으로(정의 위치 10→1, 8→1, 9→1); monitor ABI v3 문장 → Core ABI 참조. 8개 언어 README는 타입·signature·수명 API만 남김.
 - 링크 검사(상대 링크·anchor 전수): 새로 추가된 링크는 모두 유효. 검출된 나머지는 HEAD에 이미 있던 `/`가 들어간 제목의 slug 표기 차이(도구 오탐).
 - redline이 적용하지 않은 것(타당): F-R3-5의 "모든 binding이 FINAL 전 등록" 알고리즘 강제(java/go/cpp가 다름 → 합류 계약만), F-R3-6의 Java `codec/zlink-ext-netty`(실제 buffer adapter). SUPERVISOR-DECIDE 4건 중 `request_seq` 공개 범위는 wire-internal로 판단해 삭제 유지, Core README 내부 불일치는 D-106에서 처리됨(잔여는 다음 pass), dotnet `api-reference-comments`의 codec 주석은 별도 정리.
+
+## D-116 (2026-09-06, 머신 A) node R6 parity 3건 + M6A suite 정리 커밋; M6A suite를 npm 게이트에 편입; test 39 간헐 실패 1건 미확정
+
+- 진단 job(`fix-node-m6a-suite-drift-summary.md`): 상시 실패 3건은 fixture drift(monitor port `drain` 누락, 폐기된 transport-pair 종료 API 기대, logical monitor event/lane fixture) — D-092/D-094/D-098 이후 계약에 맞춰 fixture 수정. 간헐 실패(test 34 NotRequired)는 **R6 이전부터 있던 race**: node만 NotRequired Hello에 Reject를 보낸 직후 intent를 제거·연결을 닫아 상대가 descriptor를 받기 전에 끊김(`raw-service-mesh-runtime.ts:777-795, 1557`). cpp/dotnet처럼 Hello→Admit descriptor 교환 뒤 terminal 응답 수신 쪽에서 제거하도록 통합(종료 계기 2→1). 회귀 5건, test 34 100/100·30/30, `npm test` 1665/1665, M6A 41/41×10.
+- 게이트 drift: `verify:m6a-runtime`(41건, TypeScript contract)이 `npm test`에 없어 위 결함들을 검출하지 못했음 → `package.json`의 `test`에 편입(커밋).
+- 미확정: M6A test 39(`bilateral endpoint-only manual connections learn peer RIDs and converge`) 1회 간헐 실패(request 제출 뒤 application 수신 대기) — 두 peer가 Object Server라 NotRequired 경로와 무관. 100회·최종 10회 통과. 별도 진단 범위로 남김(node 큐).
+- 커밋: `22ab7f4a13`(seal), `a58c6b6b81`(durable Join), `fd89e4e721`(lifecycle 종료·typed replay), `3e4013854e`(fixture), `1bd70a6f0e`(NotRequired handshake).

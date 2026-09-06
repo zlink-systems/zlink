@@ -14,7 +14,7 @@
     "test:browser": "node --test test/browser/*.test.js",
     "lint": "eslint \"packages/*/src/**/*.ts\" \"samples/**/*.ts\"",
     "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
-    "test": "node scripts/run_node_runtime_gate.js",
+    "test": "node scripts/run_node_runtime_gate.js && npm run verify:m6a-runtime",
     "verify:ci": "node scripts/run_node_framework_ci_gate.js",
     "verify:p0": "node scripts/run_node_runtime_gate.js",
     "verify:m5-scaffold": "node node_modules/typescript/bin/tsc -p tsconfig.m5-scaffold.json",
