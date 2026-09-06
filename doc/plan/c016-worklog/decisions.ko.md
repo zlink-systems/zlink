@@ -1678,3 +1678,6 @@ G-0b(sonnet, load 0.3~0.9, HEAD `3d84da1fd1`, runs 3): with_stream zlink 289.7 /
 
 ## D-B159 (2026-09-07 05:20, 머신 B) G-0c idle multi 스크린 = Phase 2G 기준; apply job 4개 빌드 해제; G-A 투입
 G-0c(load 0.09, runs 3): multi DD 905.1 / DR_SENDSEND 273.9 / RR_SENDSEND 242.5 / DR_REQREP 208.5 / RR_REQREP 170.1 / PUBSUB 1009.0 / STREAM 227.1 — Phase 0 대비 +61~+133 %. Phase 0 multi 값(22:02, S-B 분석 job 동시 실행)은 부하 오염으로 폐기. **캠페인이 multi를 그만큼 올렸다고 주장하지 않는다** — 오염 전 idle 값이 없으므로 확인 불가; 이후 판정은 이 값 기준. §7.4 갱신. G0_DONE 마커 생성 → R1-AB·R2·R3·R4-AB 빌드 시작. G-A(공통 경로 callgrind, opus) 투입.
+
+## D-B160 (2026-09-07 07:25, 머신 B) WSL 크래시·리부팅 — 동시 빌드 4개 + callgrind(11 GB 초과); 재개 순서
+05:16경 R1-AB·R2·R3·R4-AB dev 빌드(JOBS=6 ×4)와 G-A callgrind가 동시 실행 → WSL 종료(사용자 리부팅 07:23). 손실: /tmp(scratchpad: PERF_LOCK·G0_DONE 마커, S-A callgrind 스크립트), G-A 진행분(보고서 없음). 보존: 4개 worktree diff(r1 4파일, r2 8파일, r3 15파일, r4 9파일), main 깨끗(`c3870804bf`). 규칙 추가(공통 규칙·메모리): JOBS=4, 동시 빌드 ≤ 2, 빌드 중 valgrind 금지. 재개: R1·R2 먼저(빌드·테스트·callgrind) → R3·R4 → G-A 재투입 → 게이트는 묶음별 순차. 감독관 실수 기록: 동시 job 4개 규칙(계획 §2)은 지켰으나 "빌드 단계 동시성"을 따로 제한하지 않았다.
