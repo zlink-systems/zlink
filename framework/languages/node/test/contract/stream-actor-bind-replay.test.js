@@ -32,7 +32,7 @@ function bindFixture(request) {
     setServiceIngress() {},
     async requestService(target, parts, timeoutMs) {
       const attempt = {
-        target, header: Buffer.from(parts[0]), timeoutMs, at: Date.now(),
+        target, header: Buffer.from(parts[0]), timeoutMs, at: performance.now(),
         record: decodeStatefulHeader(parts[0])
       };
       attempts.push(attempt);
@@ -73,7 +73,7 @@ function bindFixture(request) {
   const bindActor = service.bindActor.bind(service);
   service.bindActor = (...args) => {
     bindCalls++;
-    deadline = Date.now() + args[2];
+    deadline = performance.now() + args[2];
     return bindActor(...args);
   };
   const stream = new framework.ZLinkManagedStream({}, 'session-rid', undefined, service, completions);
@@ -92,8 +92,18 @@ function bindFixture(request) {
         assert.equal(attempt.record.correlation, attempts[0].record.correlation);
         assert.deepEqual(attempt.record.binding, attempts[0].record.binding);
         assert(attempt.timeoutMs > 0);
-        assert(Math.abs(attempt.at + attempt.timeoutMs - deadline) <= 1,
-          'every attempt uses the whole remaining original deadline');
+      }
+    },
+    checkDeadlines() {
+      // A controlled clock makes calculation and observation share an instant.
+      // Real-clock reads also include scheduling and instrumentation latency.
+      for (const attempt of attempts) {
+        assert(Number.isInteger(attempt.timeoutMs));
+        const drift = attempt.at + attempt.timeoutMs - deadline;
+        assert(drift >= 0 && drift < 1,
+          `every attempt uses the whole remaining original deadline: ${JSON.stringify({
+            at: attempt.at, timeoutMs: attempt.timeoutMs, deadline, drift
+          })}`);
       }
     },
     close() { runtime.close(); completions.dispose(); }
@@ -104,6 +114,38 @@ function successfulBind(attempt) {
   return [encodeStatefulReply(attempt.record.correlation, RequestResult.Ok, 0, {
     kind: 'streamBind', bindingGeneration: 11n, authorityOwnerGeneration: 9n
   })];
+}
+
+for (const wallJumpMs of [60_000, -60_000]) {
+  test(`STREAM actor bind: each replay uses the remaining monotonic deadline across a ${wallJumpMs} ms wall jump`, async t => {
+    let now = 1000.25;
+    const wallNow = Date.now();
+    t.mock.method(performance, 'now', () => now);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const fixture = bindFixture(() => {
+      throw new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
+    });
+    try {
+      const result = assert.rejects(fixture.bind(80), error => {
+        assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
+        return true;
+      });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(fixture.attempts.length, 1);
+      t.mock.method(Date, 'now', () => wallNow + wallJumpMs);
+      // Include fractional remaining budgets, then exhaust the original deadline.
+      for (const elapsed of [20.25, 20.25, 20.25, 19.25]) {
+        now += elapsed;
+        t.mock.timers.tick(elapsed);
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      await result;
+      assert.deepEqual(fixture.attempts.map(a => a.timeoutMs), [80, 60, 40, 20]);
+      fixture.checkAttempts();
+      fixture.checkDeadlines();
+      assert.equal(fixture.runtime.allSessionBindings().length, 0);
+    } finally { fixture.close(); }
+  });
 }
 
 test('STREAM actor bind: route absent for the whole deadline is Unavailable with no ingress', async () => {
@@ -157,9 +199,9 @@ test('STREAM actor bind: handover NOT_CONNECTED replays stable identity within t
     return terminal;
   });
   try {
-    const start = Date.now();
+    const start = performance.now();
     await fixture.bind(200);
-    assert(Date.now() - start < 200);
+    assert(performance.now() - start < 200);
     assert.equal(fixture.attempts.length, 2);
     assert.equal(executions, 1);
     assert.deepEqual(fixture.runtime.sessionBindings('session-rid').map(b => b.bindingGeneration), [11n]);
