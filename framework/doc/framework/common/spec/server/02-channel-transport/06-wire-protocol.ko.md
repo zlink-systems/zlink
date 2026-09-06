@@ -307,8 +307,8 @@ infrastructure record다. Actor authority source fence와 이전 session owner�
 전달하며 flags, application payload와 ACK를 사용하지 않는다. 보내는 node가 Actor authority target과 일치하는지
 확인하고, 받는 node에서는 이전 session owner identity를 local target fence로 검사한다. 전송과 이전 owner의
 callback·연결 종료는 새 bind terminal을 지연시키거나 되돌리지 않는다. 이전 owner는 retired identity와
-일치하는 record만 적용한다. Callback이 성공 또는 실패로 terminal이 되면 Framework가 `100 ms` 뒤 connection을
-닫으며 outbound queue가 먼저 비어도 이 시간을 줄이지 않는다.
+일치하는 record만 적용한다. 이전 session의 종료 시점(callback terminal 뒤 `100 ms`)은
+[Session·Actor binding §14](../04-session/02-session-actor-binding.ko.md)가 소유한다.
 
 ## 4. Admission과 connection fence
 
@@ -362,9 +362,9 @@ sequenceDiagram
     Note over A: id가 current outstanding과 일치하는 첫 Ack만<br/>15초 deadline 재시작, outstanding 해제
 ```
 
-- Connection마다 outstanding ID는 하나뿐이며, 이미 있으면 같은 ID를 다시 보낸다.
-- 이전 ID, 중복 ACK, 다른 connection의 ACK와 다른 inbound traffic은 diagnostic activity로만 기록하며 deadline을 연장하지 않는다.
-- Orderly disconnect와 raw transport failure는 deadline을 기다리지 않고 즉시 not-ready로 전환한다.
+- Probe 주기(5초), deadline(15초), outstanding ID 하나·같은 ID 재전송, 현재 ID의 첫 ACK만 deadline 갱신,
+  즉시 not-ready 전환 조건 등 **시간·판정 규칙은 [Transport liveness §3·§10](05-transport-liveness.ko.md#3-routemesh와-clientserver)이
+  소유한다.** 이 절은 command schema와 그 record가 타는 connection epoch만 정의한다.
 - Probe, ACK와 timer는 infrastructure reserve에서 처리하며 application queue나 handler에 전달하지 않는다.
 - **admitted된 양쪽 peer가 모두 probe한다.** 5초 probe 의무는 양방향이며, 어느 쪽이 먼저 연결했는지와 무관하게 connection이 admitted되는 순간 시작한다. peer의 probe에 ACK만 응답하고 자신의 probe는 절대 originate하지 않는 node는 비준수다 — 상대는 그 node를 live로 판정하지만 그 node는 역방향을 확인하지 않는다. 다이어그램은 간결성을 위해 한 방향만 보이나, admitted된 각 peer는 상대를 향해 full probe/ACK cycle을 돌린다.
 - **probe와 ACK는 admitted 물리 connection의 현재 epoch를 타며, 그 epoch는 connection lifetime 동안 안정적이다.** `livenessProbe`와 그 `livenessAck`은 admission이 확립한 peer identity와 connection generation으로 보낸다(`scope: admitted-physical-connection-lifetime`). 이미 live 물리 connection에서 admitted된 peer에 대한 중복 re-dial이나 반복 `hello`/`admit`은 idempotent다 — admitted connection을 무효화하지도, connection generation을 회전시키지도 않는다. superseded되었거나 아직 전달되지 않은 generation(상대의 live pipe가 인식하지 못하는 값)으로 stamp된 probe·ACK를 보내는 것은 결함이며, 상대는 이를 "다른 connection의 ACK"로 조용히 버리고 어느 쪽 deadline도 갱신되지 않는다. 새 connection generation은 admitted connection을 실제로 대체하는 진짜 새 물리 connection이 생길 때만([13. Mesh Node](../03-spot-actor/03-mesh-node.ko.md)의 중복 connection 선택 규칙) 발급하며, 변경 없는 descriptor로 이미 admitted된 peer의 매 inbound admission record마다 발급하지 않는다.

@@ -460,9 +460,10 @@ Automatic RouteMesh의 두 MeshNode는 서로를 발견해도 양쪽이 동시�
 두 MeshNode가 RID의 canonical byte order를 같은 방식으로 비교하고, RID가 더 작은 MeshNode만
 상대 endpoint로 연결을 시작한다.
 
-Automatic discovery는 먼저 local과 remote descriptor의 Object role을 확인한다. 두 role이
-모두 `Client`이면 connection intent를 만들지 않는다. 그 밖의 pair에는 RID 순서를 적용하므로
-connect initiator가 하나다.
+Automatic discovery는 먼저 local과 remote descriptor를 확인한다. 양쪽이 모두 Object Client이고
+어느 쪽에도 RouteMesh Channel Server membership(weight `0` 포함)이 없을 때만 connection intent를
+만들지 않는다([§13 Peer 연결](#13-검증-요구)이 이 판정을 소유한다). 그 밖의 pair에는 RID 순서를
+적용하므로 connect initiator가 하나다.
 
 Manual topology에서는 application이 한쪽 endpoint만 등록하거나 양쪽 endpoint를 모두 등록할
 수 있다. 양쪽이 동시에 연결을 시작하면 Framework는 handshake와 admission에서 RID와

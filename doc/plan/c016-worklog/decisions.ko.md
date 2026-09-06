@@ -1415,3 +1415,10 @@ F-R7-3 = F-R6-4(node fix job 진행 중).
 Gate drift(F-R7-10/11): relocation conformance fixture의 옛 식별자·옛 기대 모델 → R8 결과와 함께 gate-drift job.
 보류: "상태 표의 Completed"(location §8.4 vs §9.3) — 다음 pass.
 규칙 수(정의 위치): 15 → 8.
+
+## D-108 (2026-09-06, 머신 A) D-102 R5(framework transport·session) 리뷰 triage — finding 14건 재검증
+
+채택(문서만, ko/en): F-R5-1(service ready 정의의 소유자 = liveness §3/§10 — 경량 적용: 소유 선언 문장만 추가), F-R5-2(pair 생략 조건 "둘 다 Object Client **이고 Server membership 없음**"으로 topology §4·liveness §2의 축약 문장 정정 — 4언어 구현이 완전 조건 사용), F-R5-3(wire §5의 5초/15초·ACK 판정 규칙을 liveness 참조로; wire는 schema·epoch만), F-R5-4(wire §3.2의 100 ms 종료 시점 문장 → session binding §14 참조), F-R5-14(수신 상한 검증 항목을 본문의 "건수 64 고정 + byte·시간 재량"과 정합).
+구현 결함(mitigation·parity, 캠페인 규칙에 따라 수정; 현재 언어별 job 종료 뒤 순차 투입): **F-R5-9** node `channel-socket-registry.ts:664-667`·java `ZLinkChannelRuntime.java:114,1109`가 ClientServer ready 대기를 채널 기본 timeout 기준 min(·,5 s)로 잡고 호출 deadline과 무관 — sender 소유 deadline 하나(dotnet `ZLinkClientServerClientRuntime.cs:232-251`이 기준: 호출 시작부터 계산, 남은 시간만 request에). **F-R5-11** dotnet `RunLivenessLoopAsync`(`:1382-1425`)가 5 s delay 뒤 probe reply를 15 s timeout으로 await → 다음 probe·만료 검사가 밀림; probe 발행과 deadline 판정을 분리. **F-R5-12** dotnet `ZLinkManagedStream.CloseAsync` → `DisconnectRid`가 이미 없는 RID에 예외 전파 — node(D-099 `6e14b3e8fe`)처럼 정확한 NotFound는 성공. **F-R5-13** java `ZLinkStreamRuntime.java:688-701` 100 ms 뒤 closing control 전송 + 25 ms fallback disconnect 예약 — 100 ms에 기존 close를 직접 시작(주석의 "fallback"은 mitigation).
+0.18.0 후보(행동 변경, 설계 단순화): F-R5-5(framework의 물리 pipe 승자 비교 삭제 — Core REJECT/HANDOVER만; lower-layer reverification), F-R5-6(admission 뒤 bootstrap ACK·pair validation 단계 삭제 — java 250 ms probe retry 포함), F-R5-7(endpoint 교체 시 monitor 종료 관찰 대기 삭제 — Core가 disconnect 반환 시 등록 제거 보장 D-098), F-R5-8(RouteMesh select-one의 self Server 포함 여부 — 결정: 포함(topology 4곳 vs messaging 1곳; node가 이미 포함); cpp/dotnet/java 변경), F-R5-10(ClientServer no-ready 결과를 NotFound 하나로 — dotnet DeadlineExceeded·java/node Unavailable 변경).
+규칙 수(문서 정의 위치): 12 → 5.

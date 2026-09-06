@@ -347,9 +347,9 @@ session owner's lifecycle and binding identity, and uses no flags, application p
 acknowledgment. The receiver verifies that the sending node matches the Actor-authority target and
 uses the previous session-owner identity as the local target fence. Delivery and the previous owner's
 callback or connection close neither delay nor roll back the new bind terminal. The previous owner
-applies only a record matching the retired identity. The Framework closes the connection
-`100 ms` after the callback reaches a successful or failed terminal; an empty outbound queue does
-not shorten this delay.
+applies only a record matching the retired identity. When the previous session is closed
+(`100 ms` after the callback terminal) is owned by
+[Session and Actor binding §14](../04-session/02-session-actor-binding.en.md).
 
 ## 4. Admission and Connection Fence
 
@@ -406,9 +406,11 @@ sequenceDiagram
     Note over A: Only the first Ack matching the current outstanding id<br/>restarts the 15s deadline and clears outstanding
 ```
 
-- Each connection has only one outstanding ID at a time; if one is already outstanding, the same ID is sent again.
-- A stale ID, a duplicate ACK, an ACK from a different connection, and other inbound traffic are recorded only as diagnostic activity — they do not extend the deadline.
-- An orderly disconnect or a raw transport failure switches to not-ready immediately, without waiting for the deadline.
+- **The timing and judgment rules — the 5-second probe period, the 15-second deadline, one
+  outstanding ID resent as is, only the first ACK for the current ID refreshing the deadline, the
+  immediate not-ready conditions — are owned by
+  [Transport liveness §3 and §10](05-transport-liveness.en.md#3-routemesh-and-clientserver).** This
+  section defines only the command schema and the connection epoch those records ride.
 - The probe, ACK, and timer are handled by the infrastructure reserve and are not delivered to the application queue or a handler.
 - **Both admitted peers probe.** The 5-second probe obligation is bidirectional and begins the moment a connection is admitted, independent of which side dialed. A node that only answers a peer's probe with an ACK but never originates its own probe is non-conforming: the other side would judge it live while it never confirms the reverse direction. The diagram shows one direction for brevity; each admitted peer runs the full probe/ACK cycle toward the other.
 - **Probe and ACK ride the admitted physical connection's current epoch, and that epoch is stable for the connection's lifetime.** A `livenessProbe` and its `livenessAck` are addressed to the peer identity and connection generation that admission established (`scope: admitted-physical-connection-lifetime`). A redundant re-dial or a repeated `hello`/`admit` for a peer that is already admitted on a live physical connection is idempotent: it neither supersedes the admitted connection nor rotates its connection generation. Emitting a probe or ACK stamped with a superseded or not-yet-delivered generation — one the peer's live pipe does not recognize — is a defect; the peer silently drops it as "an ACK from a different connection," and neither side's deadline is refreshed. A new connection generation is minted only when a genuinely new physical connection replaces the admitted one (per the duplicate-connection selection in [13. Mesh Node](../03-spot-actor/03-mesh-node.en.md)), not on every inbound admission record for an already-admitted, unchanged descriptor.

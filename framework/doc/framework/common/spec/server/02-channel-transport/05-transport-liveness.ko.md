@@ -28,9 +28,10 @@ socket으로 event를 전달하는 기능은
 Framework는 세 연결 방식에 같은 시간 기준을 적용한다. 그러나 양방향 연결과 단방향
 fanout은 연결 상태를 확인하는 방법이 다르다.
 
-RouteMesh에서 양쪽 MeshNode의 Object role이 모두 `Client`이면 peer connection을
-사용하지 않는다. Automatic discovery는 descriptor를 확인해 connection intent를 만들지
-않는다. Manual connection은 handshake에서 두 role을 확인한 뒤 ready 전에 닫는다.
+RouteMesh에서 양쪽 MeshNode가 모두 Object Client이고 어느 쪽에도 RouteMesh Channel Server
+membership이 없으면 peer connection을 사용하지 않는다([Channel topology §13](01-channel-topology.ko.md#13-검증-요구)의
+판정). Automatic discovery는 descriptor를 확인해 connection intent를 만들지 않는다. Manual
+connection은 handshake에서 같은 조건을 확인한 뒤 ready 전에 닫는다.
 Connection이 없으므로 이 pair에는 liveness probe와 deadline을 적용하지 않는다.
 
 | 연결 방식 | Framework가 연결 상태를 확인하는 방법 |
@@ -80,8 +81,10 @@ application option을 사용하지 않는다.
 ## 3. RouteMesh와 ClientServer
 
 Transport 연결, service handshake와 identity 확인을 모두 통과하여 message target으로
-사용할 수 있는 상태를 [ready](../00-foundation/02-glossary.ko.md#ready)라고 한다. RouteMesh와
-ClientServer는 ready가 된 시점부터 15초 deadline을 적용한다.
+사용할 수 있는 상태를 [ready](../00-foundation/02-glossary.ko.md#ready)라고 한다. Service ready의
+정의와 그 관찰 항목(§10)은 이 문서가 소유하며, topology·ClientServer·wire·MeshNode 문서는 ready를
+정의하지 않고 이 정의를 참조한다. RouteMesh와 ClientServer는 ready가 된 시점부터 15초 deadline을
+적용한다.
 
 Manual RouteMesh에서 양쪽 모두 Object Client이고 RouteMesh Channel Server membership도
 없는 pair는 handshake admission에서 `NotRequired` terminal로 끝낸다. 이는 liveness
@@ -374,9 +377,9 @@ handler에 도달하는 값, connection·runtime snapshot이 보여주는 상태
   application metric을 만들지 않는다.
 - 예약 topic의 형식 오류는 해당 publisher만 즉시 not-ready로 만들고 application에
   전달하지 않는다.
-- 수신 상한 3축의 정확한 값은 스펙이 정하지 않으므로 판정하지 않는다. 판정 가능한
-  것은 한 connection이 무한히 수신을 독점하지 않는다는 것과, 상한에 도달한 다음 회전이
-  이번에 멈춘 connection 다음부터 시작한다는 것뿐이다.
+- 한 peer가 계속 message를 쏟아도 다른 peer의 message와 liveness 진행이 함께 계속되고, 상한에
+  도달한 다음 회전이 이번에 멈춘 connection 다음부터 시작한다. 건수 상한 64는 공통 규칙이고 byte·
+  경과 시간 상한은 언어별 재량이므로 값 자체는 판정하지 않는다(§4).
 
 **장애 격리와 authority**
 

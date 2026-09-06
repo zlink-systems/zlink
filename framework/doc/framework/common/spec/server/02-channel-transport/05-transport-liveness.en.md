@@ -29,9 +29,11 @@ events over a separate PUB/SUB socket is
 The framework applies the same time criteria to all three connection methods. But
 bidirectional connections and one-directional fanout check connection status differently.
 
-On a RouteMesh, if the Object role of both MeshNodes is `Client`, the peer connection isn't used.
-Automatic discovery checks the descriptor and doesn't create a connection intent. A manual
-connection checks both roles during the handshake and closes before ready. Since there's no
+On a RouteMesh, if both MeshNodes are Object Client and neither has a RouteMesh Channel Server
+membership, the peer connection isn't used (the judgment of
+[Channel topology §13](01-channel-topology.en.md#13-verification-requirements)). Automatic discovery
+checks the descriptor and doesn't create a connection intent. A manual connection checks the same
+condition during the handshake and closes before ready. Since there's no
 connection, a liveness probe and deadline aren't applied to this pair.
 
 | Connection method | How the framework checks connection status |
@@ -87,6 +89,8 @@ calls, or a language-specific hidden application option.
 
 The state in which transport connection, service handshake, and identity verification all pass,
 making it usable as a message target, is called [ready](../00-foundation/02-glossary.en.md#ready).
+This document owns the definition of service ready and its observable items (§10); the topology,
+ClientServer, wire and MeshNode documents don't define ready and refer to this definition.
 RouteMesh and ClientServer apply the 15-second deadline starting from the moment it becomes
 ready.
 
@@ -407,10 +411,10 @@ contract test.
   dispatch, trace, or application metric.
 - A format error on the reserved topic immediately turns only that publisher not-ready and
   isn't delivered to the application.
-- The precise values of the three receive-cap axes aren't fixed by the spec, so they aren't
-  judged. What can be judged is only that one connection never monopolizes receiving
-  indefinitely, and that the next rotation after the cap is reached starts from right after
-  the connection that stopped this time.
+- While one peer keeps flooding messages, the other peers' messages and liveness keep
+  progressing, and the next rotation after the cap is reached starts from right after the
+  connection that stopped this time. The count cap of 64 is the common rule and the byte and
+  elapsed-time caps are language discretion, so the values themselves aren't judged (§4).
 
 **Failure isolation and authority**
 
