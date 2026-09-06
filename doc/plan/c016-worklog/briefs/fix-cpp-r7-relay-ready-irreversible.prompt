@@ -1,0 +1,29 @@
+# Job: cpp framework — source never reopens dispatch after relay-ready accepted (F-R7-5, D-107)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 2 h. Read `AGENTS.md` (root) §2/§3/§4.1/§5, `framework/AGENTS.md` and the language AGENTS.md. Campaign rules (`doc/plan/c016-worklog/decisions.ko.md` D-098, D-101, D-105, D-107, D-108): one owner per rule, fewer rules, no mitigations (no timeouts/retries/second pollers/catch-alls), cross-language parity mandatory, regression test per fix, monotonic durations (D-095). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`, other languages. Never lower an assertion. Do not commit — keep each cause in a separable diff and describe the split in the summary. Do not run sample runners (supervisor gate).
+
+## Spec (owner, already on main)
+`framework/doc/framework/common/spec/server/05-location-relocation/04-relocation-flow.ko.md` §9 (paragraph after the failure table):
+after the relay-ready reply is accepted, source dispatch is never reopened; on an unknown cutover result the source checks
+the Location Store until the reconciliation deadline — if the target commit is visible it adopts the target route, otherwise it
+ends the held requests with `Unavailable`; a Store snapshot that still shows the source as owner is NOT a basis to reopen
+(the target may keep trying its CAS within its Restore validity). Node and Java already behave this way.
+
+## Cause (verified by the supervisor)
+`framework/languages/cpp/framework/src/runtime/spots/spot_runtime.cpp:6176-6300`: the expired-reconcile sweep maps
+`reconcile_outcome_t::source_owns` to `replay_actor_handoff_until_move_closed(...)` (local replay of the parked backlog).
+
+## What to do
+Remove the `source_owns` reopen path: `source_owns` ends the parked backlog exactly like the indeterminate case
+(`fast_fail_reconcile_backlog`, terminal `Unavailable`), the target-committed path keeps adopting the route. Delete now-dead code
+(`replay_actor_handoff_until_move_closed` if unused, the `source_owns` reconciliation read if it only served the reopen).
+Regression test: unknown cutover + Store still showing source → parked requests end `Unavailable` at the reconcile deadline,
+no local handler execution, no second owner; unknown cutover + Store showing target → route adopted. Check existing tests that
+asserted the old reopen and re-target them to the spec (cite the clause in the test).
+
+## Gates
+`linux-ninja-debug` preset build, `flock -w7200 /tmp/zlink-cpp-gate.lock ctest --test-dir framework/languages/cpp/build/linux-ninja-debug --output-on-failure`
+(0 failures) + the new tests 5×.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-cpp-r7-relay-ready-irreversible-summary.md` (spec clause, cause file:line, fix, tests, gate results, BLOCKERS).

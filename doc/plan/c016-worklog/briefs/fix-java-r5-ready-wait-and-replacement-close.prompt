@@ -1,0 +1,28 @@
+# Job: java framework — ClientServer ready wait bounded by the call deadline (F-R5-9) and replacement close without the 25 ms fallback (F-R5-13), D-108
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 2 h. Read `AGENTS.md` (root) §2/§3/§4.1/§5, `framework/AGENTS.md` and the language AGENTS.md. Campaign rules (`doc/plan/c016-worklog/decisions.ko.md` D-098, D-101, D-105, D-107, D-108): one owner per rule, fewer rules, no mitigations (no timeouts/retries/second pollers/catch-alls), cross-language parity mandatory, regression test per fix, monotonic durations (D-095). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`, other languages. Never lower an assertion. Do not commit — keep each cause in a separable diff and describe the split in the summary. Do not run sample runners (supervisor gate).
+
+## Cause 1 — F-R5-9 (verified)
+`framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/channels/ZLinkChannelRuntime.java:114`
+(`CLIENT_SERVER_READY_WAIT_CAP = 5 s`) and `:1109` (`bound = min(channelTimeout, CAP)`): the ready wait is performed with the
+channel's default timeout when the request call builder is created, so a per-call timeout set later can't bound it, and the
+request then receives its whole timeout. Spec: `02-channel-transport/02-channel-messaging.ko.md` §3.2/§10 + actor-model §8.1
+(deadline owner = the operation). Reference: dotnet `ZLinkClientServerClientRuntime.cs:232-251`. Fix: perform the ready wait at
+submit time with the call's own deadline (min(remaining, 5 s)), pass the remaining time to the request. Tests: short per-call
+timeout with no ready server ends within it (`System.nanoTime()` assertion); late-ready server used with remaining time; 5 s cap.
+Kotlin shares the Java runtime — say so if no separate change is needed.
+
+## Cause 2 — F-R5-13 (verified)
+`framework/languages/java/zlink-framework-core/src/main/java/systems/zlink/framework/runtime/streams/ZLinkStreamRuntime.java:664-705`:
+after the 100 ms replacement timer, `closeReplacedSessionIfExact` sends the closing control and then schedules
+`disconnectReplacedSessionIfExact` 25 ms later as a "fallback". Spec: `04-session/02-session-actor-binding.ko.md` §14 — the previous
+connection is closed 100 ms after the callback terminal; no second timer. dotnet/node/cpp close directly at the 100 ms boundary. Fix:
+at the timer boundary start the existing close directly (send the closing control if the contract keeps it, then disconnect in the
+same step); delete the 25 ms schedule. Test: after the callback terminal the retired session's transport close starts at ~100 ms
+(monotonic, tolerance for scheduler only), never ~125 ms, regardless of whether the peer processes the closing control.
+
+## Gates
+`cd framework/languages/java && flock -w7200 /tmp/zlink-java-gate.lock ./gradlew test` (0 failures) + new tests 5×.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-java-r5-ready-wait-and-replacement-close-summary.md` (two separable diffs).

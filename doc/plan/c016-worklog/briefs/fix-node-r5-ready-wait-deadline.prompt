@@ -1,0 +1,28 @@
+# Job: node framework — ClientServer ready wait bounded by the call's own deadline (F-R5-9, D-108)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 2 h. Read `AGENTS.md` (root) §2/§3/§4.1/§5, `framework/AGENTS.md` and the language AGENTS.md. Campaign rules (`doc/plan/c016-worklog/decisions.ko.md` D-098, D-101, D-105, D-107, D-108): one owner per rule, fewer rules, no mitigations (no timeouts/retries/second pollers/catch-alls), cross-language parity mandatory, regression test per fix, monotonic durations (D-095). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`, other languages. Never lower an assertion. Do not commit — keep each cause in a separable diff and describe the split in the summary. Do not run sample runners (supervisor gate).
+
+## Spec
+`framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md` §3.2/§10 and
+`03-spot-actor/04-actor-model.ko.md` §8.1 (deadline owner = the operation): a ClientServer call waits for a ready server at most
+min(the call's remaining deadline, 5 s), counted from the call's submission, and the subsequent request gets only the remaining
+time of that same deadline. Reference: dotnet `ZLinkClientServerClientRuntime.cs:232-251` (one `timeout`, `_time.GetTimestamp()`
+at start, `remaining = timeout - elapsed`).
+
+## Cause (verified)
+`framework/languages/node/packages/framework/src/runtime/channels/channel-socket-registry.ts:664-667`
+(`clientServerReadyWaitBoundMs`) bounds the ready wait by the channel/host default request timeout, not the call's timeout, and
+`:1684-1692` then passes the whole original `timeoutMs` to `dealer.request`.
+
+## What to do
+Thread the call's deadline (monotonic, `performance.now()`) through the ready wait: bound = min(remaining, 5 s); pass the remaining
+time to the request; a call whose deadline expires during the ready wait ends with the existing no-ready result. Remove the
+channel-default lookup for this bound if nothing else uses it. Regression tests: short per-call timeout (e.g. 200 ms) with no ready
+server ends within that timeout (monotonic assertion, not wall clock); a ready server that appears after 100 ms is used with the
+remaining time; long timeout still caps the wait at 5 s.
+
+## Gates
+`cd framework/languages/node && flock -w7200 /tmp/zlink-node-gate.lock npm test` (0 failures) + new tests 5×.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-r5-ready-wait-deadline-summary.md`.

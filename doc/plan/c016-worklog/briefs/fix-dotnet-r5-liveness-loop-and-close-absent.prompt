@@ -1,0 +1,28 @@
+# Job: dotnet framework — ClientServer liveness probe cadence independent of the probe reply (F-R5-11) and idempotent close of an absent physical session (F-R5-12), D-108
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 2 h. Read `AGENTS.md` (root) §2/§3/§4.1/§5, `framework/AGENTS.md` and the language AGENTS.md. Campaign rules (`doc/plan/c016-worklog/decisions.ko.md` D-098, D-101, D-105, D-107, D-108): one owner per rule, fewer rules, no mitigations (no timeouts/retries/second pollers/catch-alls), cross-language parity mandatory, regression test per fix, monotonic durations (D-095). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`, other languages. Never lower an assertion. Do not commit — keep each cause in a separable diff and describe the split in the summary. Do not run sample runners (supervisor gate).
+
+## Cause 1 — F-R5-11 (verified)
+`framework/languages/dotnet/src/Zlink.Framework/Runtime/Channels/ZLinkClientServerClientRuntime.cs:1382-1425` (`RunLivenessLoopAsync`):
+after the 5 s delay the loop awaits `Socket.Request()...Timeout(15 s).Async()` for the probe reply, so while an ACK is missing the next
+probe and the 15 s expiry check don't run (static path: expiry observed at ~25 s). Spec: `02-channel-transport/05-transport-liveness.ko.md`
+§3/§10 — probes every 5 s with one outstanding ID, the peer becomes not-ready within 15 s after the last normal check; C++/Java/Node
+keep the schedule independent of the reply. Fix: the loop only sends the probe (or resends the outstanding ID) every 5 s and evaluates
+the 15 s deadline on each tick; the ACK is consumed by the existing reply path (no await of the request completion inside the tick).
+No new timer; one schedule. Test: with ACKs suppressed the peer is not-ready at 15 s (±tick), and probes keep arriving every 5 s;
+normal RTT doesn't shift the cadence.
+
+## Cause 2 — F-R5-12 (verified)
+`framework/languages/dotnet/src/Zlink.Framework/Runtime/Streams/ZLinkManagedStream.cs:41` (`CloseAsync` → `DisconnectPeer`) →
+`Runtime/Backend/DotNet/Wrappers/ZLinkBackendStreamSocketWrapper.cs:169` (`DisconnectRid`) propagates the binding's NotFound
+exception when the physical session is already gone. Spec: `04-session/01-stream-session.ko.md` §4.1/§10 — a Framework close of an
+already-gone physical session completes successfully; local session/binding cleanup is finished by the existing lifecycle. Node fixed
+the same thing in `6e14b3e8fe` (D-099): only the exact NotFound of the native disconnect is absorbed; other errors propagate. Do not
+add a catch-all. Test: close of a session whose RID was already disconnected by the peer completes without exception and the
+binding cleanup still runs once; a different native error still propagates.
+
+## Gates
+dotnet env block (never `--artifacts-path`, never `ulimit -v`): `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}; cd framework/languages/dotnet; flock -w7200 /tmp/zlink-dotnet-gate.lock dotnet test tests/Zlink.Framework.UnitTests --blame-hang --blame-hang-timeout 10m` (0 failures) + new tests 5×.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-r5-liveness-loop-and-close-absent-summary.md` (two separable diffs).
