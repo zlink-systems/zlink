@@ -1,0 +1,4 @@
+job G-A (opus, 분석·측정 전용, 포그라운드, 커밋·소스 수정 금지, 상한 1.5 h): 공통 경로 프로파일. S-A의 축소 callgrind 셀 방법(scratchpad S-A/ 스크립트, Release+LTO lib `core/build`)을 perf/c 패턴에 적용한다.
+셀: single ROUTER_ROUTER tcp 1024 B, multi DEALER_DEALER tcp 1024 B, multi DR_REQREP tcp 1024 B, multi PUBSUB tcp 1024 B (각 CCU 축소해 valgrind가 감당하는 크기, S-A와 같은 방식으로 기동분 차감). 각 셀: Ir/msg, 상위 30 심볼(self), pthread_mutex_lock 횟수/msg, mailbox send/recv 횟수/msg, syscall 횟수/msg(read/write/eventfd/epoll), malloc/free/msg.
+출력: (1) 패턴 공통 비용 표(4셀 모두에 나오는 심볼과 그 합 — S-13 layering 537 Ir/msg가 다른 패턴에도 같은지), (2) 패턴 고유 비용 표(예: ROUTER RID 조회, DEALER lb, PUBSUB dist/mtrie, REQREP 메타데이터·completion), (3) 각 고유 비용에 대해 계약 불변(§4.1) 안에서 줄일 방법 1~2개와 예상 이득, D면 D 표시, (4) 예상 이득 순 job 목록 G-1…(원인 하나 = job 하나, 파일 범위·검증 suite·스펙 절 포함). 보고서 doc/plan/c016-worklog/core-rf-G-A-common-path-profile.md.
+측정은 `flock <PERF_LOCK>`. G-0 재기준과 겹치지 않게 G-0 완료 뒤 시작한다(감독관이 투입 시점 조정).

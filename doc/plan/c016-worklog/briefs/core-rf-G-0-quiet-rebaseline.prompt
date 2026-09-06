@@ -1,0 +1,5 @@
+job G-0 (sonnet, 측정 전용, 포그라운드, 커밋 금지): Phase 2S 종료 시점의 **조용한 머신** 재기준. 조건: 다른 job·빌드·테스트가 하나도 없고 `/proc/loadavg` 1분값 < 1.0 (시작 전 확인, 아니면 60 s 폴링). 모든 실행은 `flock <PERF_LOCK>`.
+1. with_stream: `./bindings/c/bench/with_stream/run_benchmarks.sh --stack zlink,zlink_packet,asio,zmq --size all --ccu 1000 --runs 3 --reuse-build` → 4스택 × 3사이즈 median, zlink/asio·zlink/zmq 비율, 서버 CPU%.
+2. perf/c 스크린: single `run_benchmarks.sh`(tcp, 1024, 7 패턴, runs 3) + multi `run_benchmarks_multi.sh --transports tcp --runs 3`(1024, 7 패턴, `PERF_MULTI_STREAM_MSG_SIZES=1024`, label phase2g-rebase). median 기록.
+3. perf/c 전 size: multi `--transports tcp --runs 1` 전 패턴 전 size(기본 size 목록), single tcp 전 size — Phase 2G 판정용 절대 기준(label phase2g-fullsize).
+보고(한국어): 세 표 + load average + 결과 파일 경로. Phase 0 값(계획 §7.1·§7.4)과 나란히 비율 표시. 총 소요 예상 40~60분.
