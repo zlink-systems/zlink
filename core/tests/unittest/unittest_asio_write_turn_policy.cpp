@@ -63,12 +63,13 @@ policy::connection_fastpath_policy_t make_policy_with_capabilities (
   const policy::transport_fastpath_capabilities_t &capabilities_,
   bool legacy_sync_write_ = false,
   bool stream_async_write_ = false,
-  bool non_tcp_speculative_read_ = false)
+  bool non_tcp_speculative_read_ = false,
+  bool protocol_builds_gather_header_ = true)
 {
     const policy::connection_fastpath_diagnostics_t diagnostics = {
       legacy_sync_write_, stream_async_write_, non_tcp_speculative_read_};
     return policy::connection_fastpath_policy_t (
-      socket_type_, transport_name_, capabilities_, diagnostics);
+      socket_type_, transport_name_, capabilities_, protocol_builds_gather_header_, diagnostics);
 }
 
 policy::connection_fastpath_policy_t make_policy (int socket_type_,
@@ -180,17 +181,17 @@ void test_legacy_sync_write_is_snapshotted_per_connection ()
 {
     const policy::connection_fastpath_policy_t before =
       policy::connection_fastpath_policy_t::from_environment (
-        ZLINK_CORE_SOCKET_PAIR, "tcp", make_capabilities (true, true, true));
+        ZLINK_CORE_SOCKET_PAIR, "tcp", make_capabilities (true, true, true), true);
 
     set_diagnostic_option (legacy_sync_write_env, true);
     const policy::connection_fastpath_policy_t enabled =
       policy::connection_fastpath_policy_t::from_environment (
-        ZLINK_CORE_SOCKET_PAIR, "tcp", make_capabilities (true, true, true));
+        ZLINK_CORE_SOCKET_PAIR, "tcp", make_capabilities (true, true, true), true);
 
     set_diagnostic_option (legacy_sync_write_env, false);
     const policy::connection_fastpath_policy_t after =
       policy::connection_fastpath_policy_t::from_environment (
-        ZLINK_CORE_SOCKET_PAIR, "tcp", make_capabilities (true, true, true));
+        ZLINK_CORE_SOCKET_PAIR, "tcp", make_capabilities (true, true, true), true);
 
     TEST_ASSERT_FALSE (before.speculative_write_enabled ());
     TEST_ASSERT_TRUE (enabled.speculative_write_enabled ());
@@ -201,17 +202,17 @@ void test_stream_async_write_is_snapshotted_per_connection ()
 {
     const policy::connection_fastpath_policy_t before =
       policy::connection_fastpath_policy_t::from_environment (
-        ZLINK_CORE_SOCKET_STREAM, "tcp", make_capabilities (true, true, true));
+        ZLINK_CORE_SOCKET_STREAM, "tcp", make_capabilities (true, true, true), true);
 
     set_diagnostic_option (stream_async_write_env, true);
     const policy::connection_fastpath_policy_t async =
       policy::connection_fastpath_policy_t::from_environment (
-        ZLINK_CORE_SOCKET_STREAM, "tcp", make_capabilities (true, true, true));
+        ZLINK_CORE_SOCKET_STREAM, "tcp", make_capabilities (true, true, true), true);
 
     set_diagnostic_option (stream_async_write_env, false);
     const policy::connection_fastpath_policy_t after =
       policy::connection_fastpath_policy_t::from_environment (
-        ZLINK_CORE_SOCKET_STREAM, "tcp", make_capabilities (true, true, true));
+        ZLINK_CORE_SOCKET_STREAM, "tcp", make_capabilities (true, true, true), true);
 
     TEST_ASSERT_TRUE (before.speculative_write_enabled ());
     TEST_ASSERT_FALSE (async.speculative_write_enabled ());
@@ -224,14 +225,14 @@ void test_transport_capabilities_are_snapshotted_per_connection ()
     policy::transport_fastpath_capabilities_t reported = make_capabilities (false, false, false);
     const policy::connection_fastpath_policy_t before =
       policy::connection_fastpath_policy_t::from_environment (
-        ZLINK_CORE_SOCKET_STREAM, "wss", reported);
+        ZLINK_CORE_SOCKET_STREAM, "wss", reported, true);
 
     reported.speculative_write = true;
     reported.speculative_read = true;
     reported.gather_write = true;
     const policy::connection_fastpath_policy_t after =
       policy::connection_fastpath_policy_t::from_environment (
-        ZLINK_CORE_SOCKET_STREAM, "wss", reported);
+        ZLINK_CORE_SOCKET_STREAM, "wss", reported, true);
     set_diagnostic_option (legacy_sync_write_env, false);
 
     TEST_ASSERT_FALSE (before.speculative_write_enabled ());
@@ -263,23 +264,44 @@ void test_transport_capability_matrix ()
     TEST_ASSERT_TRUE (wss.gather_write_enabled ());
 }
 
+//  Gather needs both halves. The raw engine builds no frame header, so no
+//  transport can put a STREAM raw connection on the gather path - and the
+//  write turn must not prepare one.
+void test_gather_needs_both_transport_and_protocol_support ()
+{
+    const policy::connection_fastpath_policy_t raw_on_tcp = make_policy_with_capabilities (
+      ZLINK_CORE_SOCKET_STREAM, "tcp", make_capabilities (true, true, true), false, false, false,
+      false);
+    const policy::connection_fastpath_policy_t zmp_on_tcp = make_policy_with_capabilities (
+      ZLINK_CORE_SOCKET_STREAM, "tcp", make_capabilities (true, true, true), false, false, false,
+      true);
+    const policy::connection_fastpath_policy_t zmp_without_transport =
+      make_policy_with_capabilities (ZLINK_CORE_SOCKET_PAIR, "inproc",
+                                     make_capabilities (false, false, false), false, false, false,
+                                     true);
+
+    TEST_ASSERT_FALSE (raw_on_tcp.gather_write_enabled ());
+    TEST_ASSERT_TRUE (zmp_on_tcp.gather_write_enabled ());
+    TEST_ASSERT_FALSE (zmp_without_transport.gather_write_enabled ());
+}
+
 void test_non_tcp_speculative_read_is_snapshotted_per_connection ()
 {
     const policy::transport_fastpath_capabilities_t wss_capabilities =
       make_capabilities (false, false, true);
     const policy::connection_fastpath_policy_t before =
       policy::connection_fastpath_policy_t::from_environment (
-        ZLINK_CORE_SOCKET_STREAM, "wss", wss_capabilities);
+        ZLINK_CORE_SOCKET_STREAM, "wss", wss_capabilities, true);
 
     set_diagnostic_option (non_tcp_speculative_read_env, true);
     const policy::connection_fastpath_policy_t enabled =
       policy::connection_fastpath_policy_t::from_environment (
-        ZLINK_CORE_SOCKET_STREAM, "wss", wss_capabilities);
+        ZLINK_CORE_SOCKET_STREAM, "wss", wss_capabilities, true);
 
     set_diagnostic_option (non_tcp_speculative_read_env, false);
     const policy::connection_fastpath_policy_t after =
       policy::connection_fastpath_policy_t::from_environment (
-        ZLINK_CORE_SOCKET_STREAM, "wss", wss_capabilities);
+        ZLINK_CORE_SOCKET_STREAM, "wss", wss_capabilities, true);
 
     TEST_ASSERT_FALSE (before.speculative_read_enabled ());
     TEST_ASSERT_TRUE (enabled.speculative_read_enabled ());
@@ -298,6 +320,7 @@ int main ()
     RUN_TEST (test_legacy_sync_write_is_snapshotted_per_connection);
     RUN_TEST (test_stream_async_write_is_snapshotted_per_connection);
     RUN_TEST (test_transport_capabilities_are_snapshotted_per_connection);
+    RUN_TEST (test_gather_needs_both_transport_and_protocol_support);
     RUN_TEST (test_transport_capability_matrix);
     RUN_TEST (test_non_tcp_speculative_read_is_snapshotted_per_connection);
     return UNITY_END ();

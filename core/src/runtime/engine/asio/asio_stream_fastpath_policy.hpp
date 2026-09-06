@@ -146,6 +146,27 @@ inline bool use_speculative_write_for (int socket_type_,
     return transport_supports_speculative_ && diagnostics_.legacy_sync_write;
 }
 
+//  Owns the whole "may this connection use a gather write?" decision.
+//
+//  Gather needs both halves: a transport that can write a header and a body
+//  in one operation, and a protocol whose encoder can emit that header apart
+//  from the body. Only the ZMP engine has the second half - the raw engine
+//  used by STREAM frames nothing, so its body is the whole wire message and
+//  there is no header to gather with (core/doc/spec/core/protocol/02-raw).
+//  Deciding it once here keeps the raw write turn from preparing a gather
+//  that can never be built (see core/doc/spec/core/systems/03-io-thread.ko.md
+//  section 4: one prepared buffer per turn).
+inline bool use_gather_write_for (int socket_type_,
+                                  bool protocol_builds_gather_header_,
+                                  bool transport_supports_gather_)
+{
+    if (!protocol_builds_gather_header_ || !transport_supports_gather_)
+        return false;
+
+    return gather_write_enabled ()
+           || (socket_type_ == ZLINK_CORE_SOCKET_STREAM && stream_gather_enabled ());
+}
+
 inline bool use_speculative_read_for (int socket_type_,
                                       bool tcp_transport_,
                                       bool transport_supports_speculative_,
@@ -166,6 +187,7 @@ class connection_fastpath_policy_t
       int socket_type_,
       const char *transport_name_,
       const transport_fastpath_capabilities_t &capabilities_,
+      bool protocol_builds_gather_header_,
       const connection_fastpath_diagnostics_t &diagnostics_) :
         _tcp_transport (transport_name_ && std::strcmp (transport_name_, "tcp") == 0),
         _speculative_write_enabled (
@@ -174,17 +196,20 @@ class connection_fastpath_policy_t
         _speculative_read_enabled (
           use_speculative_read_for (socket_type_, _tcp_transport,
                                     capabilities_.speculative_read, diagnostics_)),
-        _gather_write_enabled (capabilities_.gather_write)
+        _gather_write_enabled (use_gather_write_for (
+          socket_type_, protocol_builds_gather_header_, capabilities_.gather_write))
     {
     }
 
     static connection_fastpath_policy_t from_environment (
       int socket_type_,
       const char *transport_name_,
-      const transport_fastpath_capabilities_t &capabilities_)
+      const transport_fastpath_capabilities_t &capabilities_,
+      bool protocol_builds_gather_header_)
     {
-        return connection_fastpath_policy_t (
-          socket_type_, transport_name_, capabilities_, load_connection_fastpath_diagnostics ());
+        return connection_fastpath_policy_t (socket_type_, transport_name_, capabilities_,
+                                             protocol_builds_gather_header_,
+                                             load_connection_fastpath_diagnostics ());
     }
 
     bool tcp_transport () const { return _tcp_transport; }

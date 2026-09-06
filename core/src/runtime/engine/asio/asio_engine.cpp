@@ -85,17 +85,9 @@ static std::string get_peer_address (zlink::fd_t s_)
 
 namespace
 {
-const bool asio_gather_write_on = zlink::asio_stream_fastpath_policy::gather_write_enabled ();
-
 const bool asio_single_write_on = zlink::asio_stream_fastpath_policy::single_write_enabled ();
 
 const size_t asio_gather_threshold = zlink::asio_stream_fastpath_policy::gather_threshold ();
-
-// STREAM sockets are latency/throughput sensitive on small frames.
-// Enable gather-write by default for STREAM so we can send
-// `len+header` and body with one transport operation without copying
-// body into encoder batch buffers.
-const bool asio_stream_gather_on = zlink::asio_stream_fastpath_policy::stream_gather_enabled ();
 
 // Keep gather enabled for STREAM once payloads are large enough that copying
 // them into the encoder batch is more expensive than emitting header+body
@@ -138,6 +130,7 @@ make_asio_transport (std::unique_ptr<zlink::i_asio_transport> transport_)
 zlink::asio_engine_t::asio_engine_t (fd_t fd_,
                                      const options_t &options_,
                                      const endpoint_uri_pair_t &endpoint_uri_pair_,
+                                     bool protocol_builds_gather_header_,
                                      std::unique_ptr<i_asio_transport> transport_) :
     _options (options_),
     _inpos (NULL),
@@ -163,7 +156,8 @@ zlink::asio_engine_t::asio_engine_t (fd_t fd_,
         zlink::asio_stream_fastpath_policy::transport_fastpath_capabilities_t{
           _transport_adapter.transport->supports_speculative_write (),
           _transport_adapter.transport->supports_speculative_read (),
-          _transport_adapter.transport->supports_gather_write ()})),
+          _transport_adapter.transport->supports_gather_write ()},
+        protocol_builds_gather_header_)),
     _pipeline (),
     _connection_facade ()
 {
@@ -686,7 +680,7 @@ void zlink::asio_engine_t::start_async_write ()
 
     if (_outsize == 0 || _outpos == NULL) {
         //  No data prepared, try gather path first, then fallback to encoder.
-        if (prepare_gather_output ())
+        if (_connection_fastpath_policy.gather_write_enabled () && prepare_gather_output ())
             return;
         process_output ();
     }
@@ -754,17 +748,13 @@ void zlink::asio_engine_t::start_async_write ()
     }
 }
 
+//  Callers gate this on _connection_fastpath_policy.gather_write_enabled(),
+//  which already settled transport support, protocol support and the
+//  diagnostic env flags once for the connection.
 bool zlink::asio_engine_t::prepare_gather_output ()
 {
     const bool stream_mode = _options.type == ZLINK_CORE_SOCKET_STREAM;
-    const bool gather_enabled =
-      asio_gather_write_on || (stream_mode && asio_stream_gather_on);
 
-    if (!gather_enabled)
-        return false;
-    if (!_transport_adapter.transport
-        || !_connection_fastpath_policy.gather_write_enabled ())
-        return false;
     if (_encoder == NULL || _connection_facade.handshaking)
         return false;
 
@@ -1347,7 +1337,7 @@ void zlink::asio_engine_t::speculative_write ()
     }
 
     //  Try gather path first for large messages.
-    if (prepare_gather_output ())
+    if (_connection_fastpath_policy.gather_write_enabled () && prepare_gather_output ())
         return;
 
     //  Prepare output buffer from encoder

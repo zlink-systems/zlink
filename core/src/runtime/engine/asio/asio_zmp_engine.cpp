@@ -53,7 +53,7 @@ void zlink::test_set_zmp_passive_ready_write_drained_hook (
 zlink::asio_zmp_engine_t::asio_zmp_engine_t (fd_t fd_,
                                              const options_t &options_,
                                              const endpoint_uri_pair_t &endpoint_uri_pair_) :
-    asio_engine_t (fd_, options_, endpoint_uri_pair_),
+    asio_engine_t (fd_, options_, endpoint_uri_pair_, true),
     _hello_sent (false),
     _hello_received (false),
     _ready_sent (false),
@@ -79,7 +79,7 @@ zlink::asio_zmp_engine_t::asio_zmp_engine_t (fd_t fd_,
                                              const options_t &options_,
                                              const endpoint_uri_pair_t &endpoint_uri_pair_,
                                              std::unique_ptr<i_asio_transport> transport_) :
-    asio_engine_t (fd_, options_, endpoint_uri_pair_, std::move (transport_)),
+    asio_engine_t (fd_, options_, endpoint_uri_pair_, true, std::move (transport_)),
     _hello_sent (false),
     _hello_received (false),
     _ready_sent (false),
@@ -108,7 +108,7 @@ zlink::asio_zmp_engine_t::asio_zmp_engine_t (
   const endpoint_uri_pair_t &endpoint_uri_pair_,
   std::unique_ptr<i_asio_transport> transport_,
   std::unique_ptr<boost::asio::ssl::context> ssl_context_) :
-    asio_engine_t (fd_, options_, endpoint_uri_pair_, std::move (transport_)),
+    asio_engine_t (fd_, options_, endpoint_uri_pair_, true, std::move (transport_)),
     _hello_sent (false),
     _hello_received (false),
     _ready_sent (false),

@@ -31,10 +31,6 @@ class asio_raw_engine_t ZLINK_FINAL : public asio_engine_t
 
   protected:
     void plug_internal () ZLINK_OVERRIDE;
-    bool build_gather_header (const msg_t &msg_,
-                              unsigned char *buffer_,
-                              size_t buffer_size_,
-                              size_t &header_size_) ZLINK_OVERRIDE;
 
   private:
     void init_raw_engine ();

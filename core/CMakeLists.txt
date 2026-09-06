@@ -189,6 +189,24 @@ if (NOT MSVC)
   if(CC_HAS_TAUT_WARNING)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-tautological-constant-compare")
   endif()
+
+  # Thread-local storage in a shared library defaults to the general-dynamic
+  # model, so every access goes through a __tls_get_addr call. On the STREAM
+  # hot path that was 31.9 calls per message (3.4 % of all instructions).
+  # initial-exec resolves each access to a thread-pointer offset instead.
+  # The whole library needs 312 bytes of TLS (readelf -lW libzlink.so, PT_TLS
+  # memsz 0x138), and glibc reserves 1664 bytes of static TLS surplus for
+  # dlopened objects (measured on glibc 2.39: a module with 1664 bytes of
+  # initial-exec TLS still dlopens, 1792 does not), so the bindings that dlopen
+  # libzlink (python, node, java, dotnet) keep ample headroom.
+  check_cxx_compiler_flag("-ftls-model=initial-exec" CXX_HAS_TLS_MODEL_FLAG)
+  if(CXX_HAS_TLS_MODEL_FLAG)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ftls-model=initial-exec")
+  endif()
+  check_c_compiler_flag("-ftls-model=initial-exec" CC_HAS_TLS_MODEL_FLAG)
+  if(CC_HAS_TLS_MODEL_FLAG)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ftls-model=initial-exec")
+  endif()
 endif()
 
 # Will be used to add flags to pkg-config useful when apps want to statically link

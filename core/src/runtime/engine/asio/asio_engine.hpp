@@ -45,10 +45,14 @@ class i_asio_transport;
 class asio_engine_t : public i_engine
 {
   public:
+    //  protocol_builds_gather_header_ states, once per connection, whether
+    //  this engine's protocol can emit a frame header apart from the body.
+    //  Only such an engine ever reaches the gather write path.
     asio_engine_t (
       fd_t fd_,
       const options_t &options_,
       const endpoint_uri_pair_t &endpoint_uri_pair_,
+      bool protocol_builds_gather_header_,
       std::unique_ptr<i_asio_transport> transport_ = std::unique_ptr<i_asio_transport> ());
     ~asio_engine_t () ZLINK_OVERRIDE;
 

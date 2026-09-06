@@ -13,7 +13,7 @@
 zlink::asio_raw_engine_t::asio_raw_engine_t (fd_t fd_,
                                              const options_t &options_,
                                              const endpoint_uri_pair_t &endpoint_uri_pair_) :
-    asio_engine_t (fd_, options_, endpoint_uri_pair_)
+    asio_engine_t (fd_, options_, endpoint_uri_pair_, false)
 {
     init_raw_engine ();
 }
@@ -22,7 +22,7 @@ zlink::asio_raw_engine_t::asio_raw_engine_t (fd_t fd_,
                                              const options_t &options_,
                                              const endpoint_uri_pair_t &endpoint_uri_pair_,
                                              std::unique_ptr<i_asio_transport> transport_) :
-    asio_engine_t (fd_, options_, endpoint_uri_pair_, std::move (transport_))
+    asio_engine_t (fd_, options_, endpoint_uri_pair_, false, std::move (transport_))
 {
     init_raw_engine ();
 }
@@ -34,7 +34,7 @@ zlink::asio_raw_engine_t::asio_raw_engine_t (
   const endpoint_uri_pair_t &endpoint_uri_pair_,
   std::unique_ptr<i_asio_transport> transport_,
   std::unique_ptr<boost::asio::ssl::context> ssl_context_) :
-    asio_engine_t (fd_, options_, endpoint_uri_pair_, std::move (transport_)),
+    asio_engine_t (fd_, options_, endpoint_uri_pair_, false, std::move (transport_)),
     _ssl_context (std::move (ssl_context_))
 {
     init_raw_engine ();
@@ -109,18 +109,6 @@ void zlink::asio_raw_engine_t::plug_internal ()
 
     start_async_read ();
     start_async_write ();
-}
-
-bool zlink::asio_raw_engine_t::build_gather_header (const msg_t &msg_,
-                                                    unsigned char *buffer_,
-                                                    size_t buffer_size_,
-                                                    size_t &header_size_)
-{
-    LIBZLINK_UNUSED (msg_);
-    LIBZLINK_UNUSED (buffer_);
-    LIBZLINK_UNUSED (buffer_size_);
-    header_size_ = 0;
-    return false;
 }
 
 #endif // ZLINK_IOTHREAD_POLLER_USE_ASIO
