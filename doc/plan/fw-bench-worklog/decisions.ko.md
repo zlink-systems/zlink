@@ -296,6 +296,53 @@ drain 대기를 넣은 뒤 18셀 전부 완료, 실패 0, 오염 0.
 (2.458 KOPS)으로 계산해 98.649가 나왔다. 반올림 전 중앙값(2458.2/s)으로는 98.657 → **98.7**이다.
 집계기가 맞고 요약이 틀렸다. 결론은 바뀌지 않는다.
 
+## FB-023 — 포화 계측기는 언어마다 다르다. Node는 event loop 사용률을 쓴다
+
+- **관찰** (job `fwb-04`): FB-019에서 감독관이 "Node의 병렬성 상한은 1"이라고 정했는데,
+  `client_cores`를 프로세스 CPU ÷ 경과 시간으로 재면 binding의 native I/O thread가 함께
+  잡혀 ZLink 행에서 **1.31~1.41 코어**가 나온다. 상한 1 기준으로는 거의 모든 셀이 포화로
+  표시되어 표시가 정보를 잃는다.
+- **감독관 정정** (2026-09-07): **FB-019의 상한 값이 아니라 계측기 선택이 틀렸다.**
+  포화 판정의 목적은 "transport가 아니라 client 런타임이 상한이었다"를 잡는 것이고, Node에서
+  그 상한을 정하는 것은 **user 코드가 도는 JS thread**다. binding의 native I/O thread는
+  user 코드를 실행하지 않으므로 프로세스 CPU는 Node에 맞는 계측기가 아니다.
+- **결정**: 각 언어 harness가 **무엇을 재는지와 그 상한을 함께 선언한다.**
+  - Node: `perf_hooks`의 `performance.eventLoopUtilization()`, 상한 `1.0`. 이 값이 0.95
+    이상이면 포화다. 이 환경에서 사용 가능함을 확인했다.
+  - `.NET`·Java·Kotlin·C++: 프로세스 사용 코어 수, 상한은 harness가 선언한 병렬도.
+- **적용**: 규격 §5.1을 계측기 선언까지 포함하도록 고친다. 집계기는 선언된 계측기와 상한을
+  그대로 읽어 0.95 규칙을 적용한다.
+
+## FB-024 — 규격 §3의 raw wire 서술이 두 구현과 어긋난다
+
+- **관찰** (job `fwb-04`, 감독관 검증 완료): 규격 §3(127행)은 raw binding이 payload를
+  "protobuf envelope 없이" 보낸다고 적는다. 그러나 `zlink-c`
+  (`bench_zlink_client.cpp:14-16`의 `k_request_envelope`, `:130-140`의 `0x0a` + varint +
+  payload)와 `zlink-dotnet`은 **JSON envelope 헤더와 protobuf로 인코딩한 `BenchPayload`를
+  두 part로** 보낸다.
+- **결정**: **구현이 맞고 규격 문장이 틀렸다.** formula 1이 `zlink-<lang>`을 `zlink-c`로
+  나누므로 wire 모양이 다르면 서로 다른 실험을 나누게 된다. 규격을 구현에 맞춰 고친다.
+- job `fwb-04`가 구현을 따른 것은 옳은 판단이다.
+
+## FB-025 — `zlink-node` raw request가 window 4를 넘으면 붕괴한다
+
+- **관찰** (job `fwb-04`, smoke 1024 B 2초, raw ROUTER↔ROUTER):
+
+  | window | 처리량 | client 코어 | peak_in_flight |
+  |---|---|---|---|
+  | 1 | 10,507/s | 1.31 | 1 |
+  | 4 | 34,466/s | 1.39 | 4 |
+  | 16 | **1,294/s** | 1.00 | 16 |
+  | 100 | **2,568/s** | 1.00 | 100 |
+
+  window 100에서 평균 174 ms인데 p95는 1.16 ms, p99는 1.57 ms다. 대부분 1 ms에 끝나고
+  소수가 수 초 멈추는 꼬리다. `peak_in_flight`가 설정값에 도달하고 abandoned가 0이므로
+  **harness가 window를 못 채우는 FB-010 유형이 아니다.**
+- **결정**: Node 행을 판정하기 전에 **harness·Node binding·Core 중 어디인지 분리한다.**
+  분리 방법은 bench 밖의 최소 재현이다. `bindings/node`의 자체 perf가 같은 window에서
+  같은 붕괴를 보이면 bench 밖의 문제이고, 보이지 않으면 bench를 먼저 의심한다.
+- **성격이 정해지기 전까지 Node의 어떤 판정도 게재하지 않는다.**
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
@@ -309,6 +356,7 @@ drain 대기를 넣은 뒤 18셀 전부 완료, 실패 0, 오염 0.
 | job | Phase | 모델 | 상태 | 결과 |
 |---|---|---|---|---|
 | `fwb-02` | 0 | opus | 1차 완료·커밋 `7ecb81a461` | ROUTER 전환, harness 결함 4건 수정, FB-008 구현, gated pass 8/8. 판정은 FB-010·FB-011로 보류 |
+| `fwb-04` | 2 | opus | 부분 완료·커밋 (측정 없음) | grpc-node·raw ROUTER 구현, framework 미구현. FB-023~025 발견 |
 | `fwb-03` | 1 | opus | 완료 | 공용 집계기 `framework/bench/tools/`, 28 테스트. Phase 0 재현 확인, FB-019~022 발견 |
 | `fwb-02b` | 0 | opus | 완료·커밋 `c67d677832` | FB-010 판정(b), FB-013 정정, gated2 8/8. ROUTER 3회 18/18 clean |
 | `fwb-01` | 1(문서) | opus | 완료·커밋 `146db4da4c` | 규격 5언어 중립화(ko 338행·en 359행), FB-001~003 반영. 고정값·RPC 미변경 확인. FB-004·FB-005 추가 지시 |
