@@ -1,0 +1,23 @@
+# Job (fix, model astra): dotnet ZoneWorld run 2 (gate13) — after G3 replaces zone-node-2 (new RID published and observed by ops), the runner re-runs A1 on the replacement node and `JoinSpot zone-nw` for actor a1-… fails `Unavailable` with inner `ZlinkRequestException` 109 "target route is not connected" (`ZLinkActorRemoteJoiner.TryRequestCan…`), so `JoinWorldRes` carries the error and A1's `join.Error is null` assertion fails; the same run passed A1 initially and ZoneWorld passed ×2 on the previous Core — root-cause why the replacement node's route to zone-nw's owner was not connected / why the durable join ended Unavailable instead of replaying until the route returned (D-093 rule 1: Unavailable only when the logical owner removed the intent with no admitted peer)
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`, `decisions.ko.md` D-093/D-097/D-098,
+`doc/plan/c016-worklog/core-stream-drain-regression-bf28780d51-summary.md` § dotnet ZoneWorld run 2 (the evidence chain with file:line), the ZoneWorld spec §9 G3/A1, and
+`03-spot-actor/08-routing.ko.md` + `04-actor-model.ko.md` §5 (replay). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages,
+shared_sample; never widen waits; do not commit. dotnet env block + `/tmp/zlink-dotnet-gate.lock`; samples under `/tmp/zlink-samples-gate.lock`. Package: rebuild13 (Core
+083588b4…); a Core drain fix `(HEAD)` is committed but not yet packaged — do not rebuild packages.
+
+## Evidence (preserved)
+`/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/dotnet-zw-a1-fail-run/logs/` (`zone-node-replacement.log:1625` JoinSpot failure,
+`:1636` flow failure, `:1639` JoinWorldRes; `ops.log:2656` replacement RID; `client.log:45` A1 assertion), gate log `scratchpad/gate13-dotnet-zoneworld-2.log`.
+
+## What to do
+1. Reconstruct the replacement node's mesh state at 08:19:50.9: which peer owns zone-nw, was its connection intent present/admitted on the replacement node (mesh_peer_* trace),
+   had the durable JoinSpot been admitted before 109 arrived, and which D-093 condition made the sender end Unavailable (intent removed? never admitted and deadline exhausted?
+   something else). Compare with the first A1 in the same run (passed) and with a passing run.
+2. Root-cause at the owner: replacement-node startup ordering (join before the route to the zone owner is admitted → per spec the request replays while the route may return;
+   ending Unavailable early is a defect unless the intent was truly removed), or the runner re-running A1 before the replacement's routes are ready (then the sample/runner
+   readiness rule is the owner — compare java/node G3→A1 sequencing). Fix with a regression at that layer; no waits added.
+3. Verify: ZoneWorld ×3 (G3 followed by A1 passing each time; all verdicts), `bash samples/run_samples.sh` once, DurableSender/Join focused tests, unit half once.
+
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-zoneworld-g3-a1-joinspot-not-connected-summary.md` (sequence, cause file:line, fix, four lines, rule count, results, BLOCKERS).
