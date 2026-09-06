@@ -1527,3 +1527,9 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 - Location §8.4 `Completed`(상태 의미: target dispatch·lifecycle open + Session route update 송신)와 §9.3(기록 조건: 수락 request 완료 결과 저장·전달 대기 0)은 충돌이 아니라 의미/조건의 분담이다. §8.4 행에 §9.3 기록 조건 참조를 넣어 owner를 각각 하나로 고정. 상태 삭제·통합 없음.
 - .NET `IZLinkStream.Write`·Node `IZLinkStream.write`(동기 `bool`)는 session callback의 transport-facing write이며 Submit §4의 "명시적 STREAM send·reply" call이 아니다. §4에 범위 문장 추가, 소유는 STREAM session 문서. java/cpp에는 같은 표면이 없으므로 0.18.0 parity 후보.
 - Java `stopSpotRuntime()`·C++ HTTP hosting은 공통 기능의 누락 투영이 아니라 언어 한정 제품 표면으로 분류. 소유 문서는 해당 언어 문서. 제거/승격 판단은 0.18.0 후보 표에 기록.
+
+## D-127 (2026-09-06, 머신 A) F-R3-16 — Node 동기 request terminal은 실행 중 completion 소비자다 (설계 결정, 구현 변경 없음)
+
+- 진단: `requestSync`가 native `zlink_completion_recv(NONE)` loop로 자기 completion까지 읽어 public owner를 우회. dotnet/python은 다른 thread의 owner가 entry를 완료하지만 Node는 JS thread 하나뿐이라 blocking 중 public poller가 진행할 수 없고, poller 객체는 Worker로 공유 불가(`DataCloneError`, napi_env 비공유), `uv_run` 재진입 금지. 별도 poller/thread·busy wait는 금지된 mitigation.
+- 결정: Node의 동기 terminal은 실행 동안 completion 소비자이며, 받은 다른 completion은 반환 뒤 owner의 drain 규칙(F-R3-12로 NO_DATA 경계 적용)으로 전달한다 — 언어 투영으로 node README에 명시(bindings/doc/spec/node/README §naming). async-execution-model §4의 "단일 소비자"는 "동시에 하나"로 충족. 규칙 2 → 1(동기 호출 = 그 시점의 owner).
+- 남은 결함: recvTimeout이 request timeout보다 짧을 때 `Backpressured`로 분류(기대 `TimedOut`) — native loop가 RCVTIMEO를 대기로 씀. 0.18.0 후보(동기 대기 계약 결정과 함께).

@@ -572,6 +572,10 @@ using TypeScript spelling.
   name.
 - PAIR, DEALER, ROUTER, and STREAM send use one `SendOperation` family that captures the target.
   `submit_sync()` uses Core `NONE`; `submit()` uses Core `DONTWAIT` completion.
+- **Node has a single JS thread, so while a synchronous terminal runs, that call is the completion
+  consumer.** The designated owner (the public poller) cannot progress concurrently on the same thread.
+  Other completions the synchronous call receives are handed to the owner's drain rule (resubmit after
+  NO_DATA) once it returns.
 - DEALER/ROUTER request provides `submit_sync(): Message[]` and
   `submit(): Promise<Message[]>` and retains the builder's reply timeout.
 - The terminal for a raw ROUTER/`Received` reply is the synchronous one-shot

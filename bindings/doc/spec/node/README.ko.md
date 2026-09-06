@@ -530,6 +530,9 @@ operation을 따라 짓는다. `router_socket.ts`, `spot_node.ts`, `poller.ts`,
   별도 종단 이름을 추가하지 않는다.
 - PAIR·DEALER·ROUTER·STREAM send는 target을 capture한 하나의 `SendOperation` family를
   사용한다. `submit_sync()`는 Core `NONE`, `submit()`은 Core `DONTWAIT` completion을 사용한다.
+- **Node는 JS thread 하나이므로 동기 terminal이 실행되는 동안 그 호출이 completion 소비자다.**
+  지정 owner(public poller)가 같은 thread에서 동시에 진행할 수 없기 때문이다. 동기 호출이
+  받은 다른 completion은 반환 뒤 owner의 drain 규칙(NO_DATA 뒤 재제출)으로 전달한다.
 - DEALER/ROUTER request는 `submit_sync(): Message[]`와 `submit(): Promise<Message[]>`를
   제공하고 builder의 reply timeout을 유지한다.
 - Raw ROUTER/`Received` reply의 terminal은
