@@ -420,11 +420,12 @@ sequence 사이에 삽입되지 않도록 socket별 transaction state가 send �
 
 ### Send
 
-첫 part가 transaction을 시작하고 final part가 commit한다. send가 중간에 실패하면 실패한
-part부터 나머지 part를 모두 close하고 빈 message로 다시 초기화하며, 내부 transaction
-state를 정리해 다음 message가 이전 sequence를 이어받지 않게 한다. 소비된 storage는
-그대로 close하거나 재사용할 수 있지만 내용은 남지 않으므로, 다시 보내려면 caller가
-보관해 둔 복사본으로 첫 part부터 재제출한다.
+첫 part가 transaction을 시작하고 final part가 commit한다. Part 호출이 실패하면 그 호출에 전달된
+part를 소비하고 이미 제출된 staging은 해당 API의 abort 계약([Socket 공통](socket/README.ko.md#part-send와-pending-admission))에
+따라 정리하며, 아직 제출하지 않은 caller 소유 part는 변경하지 않는다. 내부 transaction state를
+정리해 다음 message가 이전 sequence를 이어받지 않게 한다. 소비된 storage는 초기화된 빈 message로
+남으므로 그대로 close하거나 재사용할 수 있고, 다시 보내려면 caller가 보관해 둔 복사본으로 첫
+part부터 재제출한다.
 
 ### Receive
 
@@ -468,7 +469,7 @@ request-reply protocol part를 추가하지 않는다.
 
 **multipart**
 - `zlink_multipart_close`는 배열의 각 요소에 `zlink_msg_close`를 호출한 것과 같은 결과를 남긴다.
-- multipart send가 중간에 실패하면 실패한 part부터 나머지 part가 소비되어 빈 초기화 상태로 남고, 다음 message가 이전 sequence를 이어받지 않는다.
+- multipart send가 중간에 실패하면 그 호출에 전달된 part는 소비되어 빈 초기화 상태로 남고 아직 제출하지 않은 part는 변하지 않으며, 다음 message가 이전 sequence를 이어받지 않는다.
 - 수신자는 `ZLINK_PART_MORE`부터 `ZLINK_PART_FINAL`까지를 하나의 multipart sequence로 받으며, 다른 sender의 part가 그 사이에 섞이지 않는다.
 
 **공통 반환 규약**

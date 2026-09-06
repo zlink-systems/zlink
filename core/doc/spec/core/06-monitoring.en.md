@@ -492,10 +492,9 @@ ZLINK_EXPORT zlink_config_result_t zlink_monitor_status(
 
 This function fills `status_out` according to [§6](#6-status-snapshot). `abi_version` and
 `struct_size` diagnose the current layout returned by Core and are not caller inputs.
-Optional fields absent from `detail_flags` are zero. Core reads the pipe-total field group
-under one lock, which makes that group internally consistent. Auto HWM fields and flow
-counters may be read at different times, so cross-consistency among field groups is not
-guaranteed ([§6.3](#63-byte-and-pending-diagnostic-fields)).
+Optional fields absent from `detail_flags` are zero. The pipe-total field group is internally
+consistent, and cross-consistency with the Auto HWM fields and flow counters is not guaranteed
+([§6.3](#63-byte-and-pending-diagnostic-fields) owns the consistency scope and its mechanism).
 
 **Returns:** A `zlink_config_result_t` value.
 
@@ -576,6 +575,9 @@ and errno. Each item maps to one test.
   server close belongs to the failed new attempt of the automatic reconnect and carries the same
   `connection_id` as its `CONNECT_DELAYED`). An inproc peer detach is reported as `DISCONNECTED` and emits
   no `CLOSED`. While the connect intent remains, automatic reconnection continues after `DISCONNECTED`.
+- When the peer of an established physical connection terminates, `DISCONNECTED` is observed once
+  on the monitor even while no application DATA receive is in progress and received records remain
+  queued (it doesn't depend on the receive drain).
 
 **Event-data ownership**
 
@@ -597,9 +599,9 @@ and errno. Each item maps to one test.
   counts.
 - The three flow counters increase monotonically over the socket lifetime and do not change
   when `zlink_ctx_reset_auto_hwm_budget_metrics` is called.
-- Core reads the pipe-total field group under one lock, so that group is internally
-  consistent. Auto HWM fields and flow counters may be read at different times, so
-  cross-consistency among field groups is not guaranteed.
+- The snapshot's pipe-total field group is internally consistent (for example, the in-flight
+  totals match the sum over pipes), and no same-instant guarantee exists between it and the
+  Auto HWM fields or flow counters.
 
 **Monitor queue budget**
 

@@ -238,7 +238,7 @@ part and the staged parts and closes the sequence.
 This function consumes the content of `part_` on both success and failure. If
 the same content may need to be sent again, the caller must make a separate
 copy before the call regardless of the return value. A consumed `zlink_msg_t`
-must be initialized before it can be reused.
+is left as an initialized empty message, so it can be closed or reused as is.
 
 Pass `ZLINK_DONTWAIT` in `flags_` for non-blocking publishing. A call that
 cannot proceed immediately returns `ZLINK_SUBMIT_BACKPRESSURED`. The ownership

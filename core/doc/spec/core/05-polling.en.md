@@ -66,7 +66,8 @@ succeeds.
 The per-target retry signal is the wait token's `ZLINK_COMPLETION_WRITABLE`
 record, not the `ZLINK_POLLOUT` bit. When a `ZLINK_SEND_FLAGS_DONTWAIT` submit
 returns `ZLINK_SUBMIT_BACKPRESSURED`, the nonzero value in `completion_id_out` is
-the wait token. When that target regains write credit, Core enqueues one
+the wait token. When the resource that refused that submit recovers (the wake
+condition is owned by the [socket README](socket/README.en.md#part-send-and-pending-admission)), Core enqueues one
 WRITABLE record carrying the same token, the same `user_context`, and, for
 ROUTER and STREAM, the submitted RID into the socket-local completion queue.
 The application pulls that record with `zlink_completion_recv()` and uses the

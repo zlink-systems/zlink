@@ -198,10 +198,12 @@ Therefore, requests already sent can complete even while ROUTER-ROUTER Applicati
 is stopped by [backpressure](glossary.en.md#backpressure) (behavior that limits additional
 submissions from a sender when receiving cannot keep pace with processing).
 
-Each lane retains payload only in its directional network pipe. Received application
-payload is not moved to a hidden PAIR queue, and reply payload is not copied to a completion
-deque. The remaining terminal callback metadata queue stores only payloadless timeout,
-disconnect, and shutdown results. This queue is neither a transport lane nor a wire record.
+Received application payload moves from the directional network pipe straight to the public
+receive without passing through a hidden PAIR queue. A REQUEST's reply payload is owned by the
+socket-local completion record until it is received or discarded, and a successful completion
+receive transfers that ownership to the caller without a copy — a contract owned by the
+[socket README's completion ownership](socket/README.en.md#completion-pull-and-ownership). This
+record queue is neither a transport lane nor a wire record.
 
 ### Transport liveness implementation
 

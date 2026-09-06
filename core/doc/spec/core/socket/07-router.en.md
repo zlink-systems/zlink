@@ -191,7 +191,7 @@ exactly one `ZLINK_COMPLETION_WRITABLE` record for that token with
 RID does not wake this token. The caller resubmits its retained record to the same RID with
 `DONTWAIT`. Explicitly removing that RID with `zlink_disconnect_rid()` ends the token with a
 WRITABLE record carrying `ZLINK_SEND_TERMINAL` and `ENOENT`; socket close or context termination
-ends it with `ZLINK_SEND_TERMINAL` and the lifecycle errno. After ID `0`, Core does not replay the
+ends it internally and delivers no record. After ID `0`, Core does not replay the
 payload. [Socket Common](README.en.md#part-send-and-pending-admission) owns ownership and the exact
 result and errno contract.
 
@@ -236,9 +236,10 @@ no token.
 
 `timeout_ms_ == 0` snapshots the `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` value, whose default is
 5,000 ms. The reply timeout starts at outbound local admission, that is, when `ZLINK_SUBMIT_OK` is
-returned, and does not start while a wait token is outstanding. A disconnect after admission does
-not replay the payload; Core retains only correlation and the remaining monotonic budget. Exactly
-one of reply, timeout, and terminal creates the REQUEST completion.
+returned, and does not start while a wait token is outstanding. When the submit-time transport pair
+terminates after admission, the request ends at once with `ZLINK_REQUEST_NOT_CONNECTED` per the
+[Socket Common §6 completion table](README.en.md#request-and-reply), and the payload is not replayed.
+Exactly one of reply, timeout, and terminal creates the REQUEST completion.
 
 ```mermaid
 sequenceDiagram
@@ -487,7 +488,7 @@ and status snapshots. Each item maps to one test.
 - A DONTWAIT FINAL makes one admission attempt. Backpressure or a route that is not ready (transport pair not ready, weight `0`) returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token for that RID, and the caller resubmits the same request after the WRITABLE record with the same token, context, and `peer_rid`. A RID with no mandatory route returns `ZLINK_SUBMIT_NOT_CONNECTED` with `EHOSTUNREACH`, ID `0`, and no token.
 - If the last call uses `timeout_ms_ == 0`, it uses the `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` default.
 - A valid error reply preserves a non-OK `zlink_request_result_t` mapped from errno and the payload after the errno part in the completion; a malformed errno part completes with `ZLINK_REQUEST_PROTOCOL_ERROR` and no payload.
-- The request timeout starts at local admission and does not start while a wait token is outstanding; a disconnect after admission neither replays the payload nor resets the monotonic budget.
+- The request timeout starts at local admission and does not start while a wait token is outstanding; when the submit-time pair terminates after admission, one `ZLINK_REQUEST_NOT_CONNECTED` completion arrives at once without waiting for the timeout.
 - Shared completion-slot exhaustion immediately returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion, regardless of flags.
 
 **Reply**

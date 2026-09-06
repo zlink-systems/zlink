@@ -435,12 +435,13 @@ send path so that another sender's message parts cannot be inserted into this se
 
 ### Send
 
-The first part starts the transaction, and the final part commits it. If a send fails partway
-through, all parts from the failed part through the remaining parts are closed and reinitialized
-as empty messages. The internal transaction state is cleared so that the next message does not
-continue the previous sequence. Consumed storage may be closed or reused as-is, but no content
-remains. To send the message again, the caller resubmits it from the first part using a retained
-copy.
+The first part starts the transaction, and the final part commits it. When a part call fails, it
+consumes the part passed to that call and clears the already-submitted staging per that API's abort
+contract ([Socket Common](socket/README.en.md#part-send-and-pending-admission)); caller-owned parts
+not yet submitted are left unchanged. The internal transaction state is cleared so that the next
+message does not continue the previous sequence. Consumed storage is left as an initialized empty
+message, so it may be closed or reused as is. To send the message again, the caller resubmits it
+from the first part using a retained copy.
 
 ### Receive
 
@@ -498,8 +499,8 @@ Verify the following only through the public surface: the `zlink_msg_*` and
 **Multipart**
 - `zlink_multipart_close` leaves the same result as calling `zlink_msg_close` on every array
   element.
-- If a multipart send fails partway through, all parts from the failed part through the remaining
-  parts are consumed and left in an empty initialized state, and the next message does not
+- If a multipart send fails partway through, the part passed to that call is consumed and left in
+  an empty initialized state, parts not yet submitted are unchanged, and the next message does not
   continue the previous sequence.
 - The receiver obtains the parts from `ZLINK_PART_MORE` through `ZLINK_PART_FINAL` as one
   multipart sequence, with no part from another sender interleaved between them.

@@ -246,8 +246,10 @@ whether the change applied, and only retries the same Store operation if needed.
 confirmation is a procedure to avoid ever creating two owners at once — it isn't failover
 selecting a different target.
 
-During `StoreFailureGrace`, the Framework keeps the last fully-read descriptor list and continues
-liveness checks for existing connections. It doesn't create a new outbound connection. Grace
+During `StoreFailureGrace`, the Framework keeps the last fully-read descriptor list and the
+connection intents for its targets, and continues liveness checks for existing connections. It
+doesn't connect to a new target outside that list (owned by
+[Location Runtime §10](01-location-runtime.en.md)). Grace
 doesn't extend the owner lease or relocation deadline. Once owner eligibility ends, new
 message/timer processing and state changes stop. Once the Store recovers, the owner and the full
 descriptor list are re-confirmed, and only the necessary connection changes are applied.

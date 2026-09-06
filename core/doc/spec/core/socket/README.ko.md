@@ -395,7 +395,7 @@ typedef enum zlink_option_t {
 ```
 
 `zlink_set_option()` / `zlink_get_option()`과 함께 사용하며,
-raw socket과 discovery에 적용된다.
+raw socket에 적용된다.
 
 `ZLINK_OPT_PENDING_MAX_MSGS`와 `ZLINK_OPT_PENDING_MAX_BYTES`는 ABI 호환을 위해 set한 값을 저장하고
 get으로 돌려줄 뿐 Core 동작에 영향을 주지 않는다. Core는 SEND와 REQUEST 어느 쪽의 payload도
@@ -531,7 +531,7 @@ PAIR와 DEALER는 `NULL`을 반환한다. `*has_more_out_`은 다음 part가 있
 `ZLINK_PART_MORE`, 마지막 part이면 `ZLINK_PART_FINAL`이다.
 
 한 multipart record의 첫 part부터 `FINAL`까지 같은 thread와 같은 recv family를 사용한다.
-다른 thread나 family가 중간에 진입하면 `ZLINK_RECV_INVALID_STATE`, `errno == EBUSY`이고
+다른 thread나 family가 중간에 진입하면 `ZLINK_RECV_BUSY`, `errno == EBUSY`이고
 원래 owner는 staged record를 계속 받을 수 있다. `flags_`는 `NONE` 또는 `DONTWAIT`만 허용한다.
 알 수 없는 bit는 `ZLINK_RECV_INVALID_STATE`, `errno == EINVAL`이다.
 
@@ -647,12 +647,12 @@ ZLINK_EXPORT zlink_config_result_t zlink_set_option (void *handle_,
                       size_t optvallen_);
 ```
 
-공통 옵션을 설정한다. `handle_`은 raw socket 또는 discovery다.
+공통 옵션을 설정한다. `handle_`은 지원하는 raw socket이다(discovery 구성은 Core 밖의 계층이 소유한다 — [runtime boundary](../08-runtime-boundary.ko.md)).
 `option_` 매개변수는 `zlink_option_t` enum 값이다. `optval_`
 pointer는 값을 제공하고 `optvallen_`은 크기를 byte 단위로 지정한다.
 `ZLINK_OPT_SNDHWM`과 `ZLINK_OPT_RCVHWM`은 정확한 `uint64_t` 값을 요구한다.
 
-raw socket과 discovery의 설정 시점은 각 option 계약을 따른다.
+설정 시점은 각 option 계약을 따른다.
 
 **반환값:** 성공 시 `ZLINK_CONFIG_OK`, 실패 시 `zlink_config_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 
@@ -674,7 +674,7 @@ ZLINK_EXPORT zlink_config_result_t zlink_get_option (void *handle_,
                       size_t *optvallen_);
 ```
 
-공통 옵션의 현재 값을 가져온다. `handle_`은 raw socket 또는 discovery다. 두 HWM
+공통 옵션의 현재 값을 가져온다. `handle_`은 지원하는 raw socket이다. 두 HWM
 byte-count option에는 `uint64_t` output buffer가 필요하고, 호출할 때
 `*optvallen_`이 정확히 `sizeof(uint64_t)`여야 한다. 더 큰 임시 buffer나 이전
 4-byte 크기를 포함해 그 밖의 크기는 값을 잘라 쓰거나 일부만 채우지 않고
@@ -983,8 +983,10 @@ record를 정리하면 함께 해제한다. 상한이 차면 Core는 operation�
 `ZLINK_SUBMIT_OUT_OF_MEMORY`, `errno == ENOMEM`, ID `0`이고 REQUEST `FINAL`은
 `ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`, ID `0`이다.
 
-대기 토큰의 target에 write credit이 다시 생기면 Core는 `ZLINK_COMPLETION_WRITABLE` record 한 건을
-completion queue에 넣는다. Record의 `completion_id`는 토큰, `user_context`는 submit 값,
+대기 토큰은 **그 제출을 거절한 자원이 회복될 때** 깨어난다 — SEND와 physical backpressure로 거절된
+REQUEST는 target의 write credit, correlation work·count 한도로 거절된 REQUEST는 그 pair의 reservation
+반환([Request와 reply](#request와-reply))이다. 다른 자원의 회복이나 socket 수준 readiness는 이 조건을
+대신하지 않는다. 그때 Core는 `ZLINK_COMPLETION_WRITABLE` record 한 건을 completion queue에 넣는다. Record의 `completion_id`는 토큰, `user_context`는 submit 값,
 `send_result`는 `ZLINK_SEND_ADMITTED`, `send_terminal_errno`는 `0`이며 `peer_rid`는 ROUTER·STREAM에서
 submit RID, PAIR·DEALER에서 empty다. 이 record를 아직 꺼내지 않은 동안 socket의 `ZLINK_POLLOUT`과
 `ZLINK_POLLCOMPLETION`은 모두 level로 true다. Application은 `zlink_completion_recv()`를 `NO_DATA`까지
@@ -1075,8 +1077,8 @@ record(`send_result == ZLINK_SEND_ADMITTED`)가 정확히 한 건 뒤따르고, 
 거절되면 새 토큰을 받는다. 거절 원인이 pair의 correlation work·count 한도 부족(systems/06-auto-hwm §work budget)이면
 그 토큰은 **해당 pair의 correlation reservation이 반환될 때(terminal reply·timeout·disconnect)만** WRITABLE을 발행하고,
 physical write credit만 회복된 상태에서는 발행하지 않는다(거절 원인이 되는 자원의 회복만 wake 조건이다 — 규칙 하나). 토큰의 target 단위, wake edge, `ZLINK_POLLOUT`·`ZLINK_POLLCOMPLETION`
-level 유지와 종료 조건(WRITABLE record, 명시적 target 제거의 `ZLINK_SEND_TERMINAL`+`ENOENT`, socket
-close·context termination의 `ZLINK_SEND_TERMINAL`+lifecycle errno)은
+level 유지와 종료 조건(WRITABLE record, 명시적 target 제거의 `ZLINK_SEND_TERMINAL`+`ENOENT`; socket
+close·context termination은 토큰을 내부에서 끝내고 record를 전달하지 않는다)은
 [part send](#part-send와-pending-admission)의 SEND 대기 토큰과 같다. Mandatory ROUTER route가 없는
 RID는 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`, `errno == EHOSTUNREACH`, ID `0`이며 토큰을 만들지 않는다.
 
@@ -1329,7 +1331,7 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 - `zlink_disconnect_rid`는 대상 없음에 `ZLINK_CONNECT_NOT_FOUND`, 중복 routing id에 `ZLINK_CONNECT_CONFLICT`, lifecycle 소유권 충돌에 `ZLINK_CONNECT_BUSY`다.
 
 - `zlink_unbind` 또는 bind한 socket의 `zlink_close`가 반환한 직후 같은 주소로 `zlink_bind`하면
-  tcp·ipc·inproc 모두 성공하고, 그 뒤 도착한 connect는 새 listener에만 도달한다.
+  지원하는 각 transport에서 성공하고, 그 뒤 도착한 connect는 새 listener에만 도달한다.
 
 **Part send와 completion**
 - `DONTWAIT FINAL`은 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`과 completion 없음이고,

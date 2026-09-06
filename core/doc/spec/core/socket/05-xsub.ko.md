@@ -189,7 +189,7 @@ ZLINK_EXPORT zlink_recv_result_t zlink_subscribe_part (
 소유권을 호출자에게 이전한다. 호출자는 받은 part를
 `zlink_msg_close(part_out_)`로 정확히 한 번 닫아야 한다.
 
-`topic_id_capacity_ == 0`이거나 topic을 담기에 작으면 함수는
+`topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공한다) 함수는
 `*topic_id_len_out_`에 필요한 topic 길이를 기록하고
 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. 이 경우 queue의 topic과
 payload를 소비하지 않으며 `topic_id_len_out_`을 제외한 output과 `part_out_`은
@@ -277,7 +277,7 @@ low water mark, transport backpressure는 그대로 유지된다. XSUB socket의
 
 **topic part 수신**
 - `zlink_subscribe_part`가 성공하면 topic의 binary byte가 NUL 없이 호출자 buffer에 복사되고 payload part의 소유권이 호출자에게 이전된다 — 받은 part는 `zlink_msg_close(part_out_)`로 정확히 한 번 닫는다. raw XSUB에서 `source_rid_out_`은 성공 시 `NULL`이다.
-- `topic_id_capacity_ == 0`이거나 topic을 담기에 작으면 `*topic_id_len_out_`에 필요한 topic 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. queue의 topic과 payload는 소비되지 않고 `topic_id_len_out_`을 제외한 output과 `part_out_`은 변하지 않으며, part 소유권도 이전되지 않으므로 충분한 buffer로 같은 message를 다시 수신할 수 있다.
+- `topic_id_capacity_`가 topic 길이보다 작으면(길이 0 topic은 capacity 0으로 성공) `*topic_id_len_out_`에 필요한 topic 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환한다. queue의 topic과 payload는 소비되지 않고 `topic_id_len_out_`을 제외한 output과 `part_out_`은 변하지 않으며, part 소유권도 이전되지 않으므로 충분한 buffer로 같은 message를 다시 수신할 수 있다.
 - 용량이 0보다 큰데 `topic_id_buf_`가 NULL이면 queue를 검사하거나 소비하기 전에 `ZLINK_RECV_INVALID_HANDLE`과 `EFAULT`를 반환하고 모든 output과 `part_out_`은 변하지 않는다.
 - 한 multipart message는 첫 payload part부터 마지막 part까지 같은 thread에서 이 함수로 계속 수신하며, `*has_more_out_`은 다음 part가 있으면 `ZLINK_PART_MORE`, 마지막이면 `ZLINK_PART_FINAL`이다.
 

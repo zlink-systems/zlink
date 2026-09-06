@@ -324,7 +324,7 @@ object로 전달한다. `ActorRef`·`SpotRef`와 그 안의
 | Resolve 뒤 일어난 일 | 결과 |
 |---|---|
 | 같은 owner에서 object가 close·destroy되고 같은 ID로 새 incarnation이 만들어졌다 | Target queue가 수락하는 시점의 current Ready object가 처리한다. Actor와 Instance Spot을 포함한 모든 Spot direct message에 동일하게 적용한다. |
-| Owner process가 종료되었거나 owner가 다른 node로 바뀌어 찾은 route를 쓸 수 없다 | Current operation을 [`Unavailable`](../00-foundation/07-framework-error-model.ko.md)로 끝낸다. |
+| Owner process가 종료되었거나 owner가 다른 node로 바뀌어 찾은 route를 쓸 수 없다 | Current operation을 [`Unavailable`](../00-foundation/07-framework-error-model.ko.md)로 끝낸다. 이 정책(자동 재제출·자동 재활성화 없음)은 [장애 정책 §4.2](../05-location-relocation/06-failure-failover-policy.ko.md#42-기존-actor와-spot)가 소유한다. |
 
 두 경우 모두 Framework는 실패한 operation을 새 owner에게 **자동으로 다시 보내지 않는다.**
 Application이 새 call을 시작하면 그때 logical ID의 current Ready owner를 다시 확인한다. 이

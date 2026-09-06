@@ -1193,10 +1193,10 @@ Restore 유효시간까지 target owner를 확인하지 못하면 `location_upda
 Target은 application dispatch를 열거나 Session route update를 보내지 않는다. 이미 terminal인
 `RelocationId`에 대한 늦은 Store 응답은 object를 다시 활성화하지 않는다.
 
-`StoreFailureGrace` 동안에는 마지막으로 완전히 읽은 descriptor 목록을 유지한다. 이미
-설정된 transport connection의 연결 상태 판단은 계속하지만 새 outbound connection은 만들지
-않는다. Grace가 끝난 뒤에도 descriptor 전체를 같은 시점의 목록으로 다시 읽기 전에는 새
-connection을 만들지 않는다.
+`StoreFailureGrace` 동안에는 마지막으로 완전히 읽은 descriptor 목록을 유지한다. 그 목록의
+target에 대한 connection intent(아직 연결되지 않은 target 포함)를 유지하고 기존 connection의 연결
+상태 판단을 계속하되, 그 목록 밖의 새 target에는 connect하지 않는다. Grace가 끝난 뒤에도 descriptor
+전체를 같은 시점의 목록으로 다시 읽기 전에는 이 목록을 바꾸지 않는다.
 
 이 유예 시간은 owner lease나 relocation deadline을 연장하지 않는다. §5의 시각을 넘으면
 state를 바꾸는 message와 timer 시작, factory 완료 기록, relocation 변경과 수용 공간 확보를

@@ -330,13 +330,9 @@ attribute key, diagnostics level·sampling rate 설정 interface)만으로 다�
 - 실행 중 tracing을 끈 뒤 새 처리 지점이 기존 flow 정보를 context나 outbound
   envelope에 추가하지 않고, 다시 켠 뒤에는 지나간 처리 단계에 되돌려 적용하지
   않는다.
-- `Off` 경로가 level read와 branch 뒤 즉시 끝나며 event·attribute·log message,
-  timestamp·duration, sampling hash, trace 전용 flow context와 telemetry queue
-  item을 만들지 않는지 allocation과 queue 계측으로 확인한다.
-- Level이나 sampling으로 기록하지 않는 경로가 payload·metadata를 복사하거나 raw
-  event DTO를 만들지 않는다.
-- 새 trace를 추가한 뒤 tracing을 끈 상태에서 그 경로가 문자열·event·lambda 중
-  어느 것도 만들지 않는지 호출부 코드로 확인한다(§5 언어별 재량의 확인 기준).
+- Level이나 sampling으로 기록하지 않는 경로에서는 trace·log에 payload·metadata가 나타나지
+  않는다. `Off` 경로의 allocation·queue·호출부 비용 조건은 §5의 규칙 문단이 내부 확인 조건으로
+  소유한다.
 
 **Provider와 public interface**
 

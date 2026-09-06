@@ -414,7 +414,7 @@ typedef enum zlink_option_t {
 ```
 
 These options are used with `zlink_set_option()` / `zlink_get_option()` and
-apply to raw sockets and discovery.
+apply to raw sockets.
 
 `ZLINK_OPT_PENDING_MAX_MSGS` and `ZLINK_OPT_PENDING_MAX_BYTES` store the set
 value and return it from get for ABI compatibility only; they do not affect
@@ -568,7 +568,7 @@ part follows and `ZLINK_PART_FINAL` for the last part.
 
 The same thread and receive family receive every part from the first part of a
 multipart record through `FINAL`. Entry by another thread or receive family
-mid-record returns `ZLINK_RECV_INVALID_STATE` with `errno == EBUSY`; the
+mid-record returns `ZLINK_RECV_BUSY` with `errno == EBUSY`; the
 original owner can continue receiving the staged record. `flags_` accepts only
 `NONE` or `DONTWAIT`. An unknown bit returns `ZLINK_RECV_INVALID_STATE` with
 `errno == EINVAL`.
@@ -634,7 +634,7 @@ ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part(
 A NULL required handle or output returns `ZLINK_RECV_INVALID_HANDLE` with
 `EFAULT`. Unknown flag bits and entry by a thread or family that does not own
 an in-progress multipart record return `ZLINK_RECV_INVALID_STATE` with
-`EINVAL` and `ZLINK_RECV_INVALID_STATE` with `EBUSY`, respectively. `NONE`
+`EINVAL` and `ZLINK_RECV_BUSY` with `EBUSY`, respectively. `NONE`
 timeouts and termination, DONTWAIT behavior, part ownership, unchanged outputs
 on failure, and borrowed RID lifetime follow the common rules under
 [`zlink_recv_part`](#zlink_recv_part). ROUTER DATA returns its source logical
@@ -699,12 +699,12 @@ ZLINK_EXPORT zlink_config_result_t zlink_set_option (void *handle_,
                       size_t optvallen_);
 ```
 
-Configures a common option. `handle_` may be a raw socket or discovery. The
+Configures a common option. `handle_` is a supported raw socket (discovery configuration is owned by a layer outside Core — [runtime boundary](../08-runtime-boundary.en.md)). The
 `option_` parameter is a value from the `zlink_option_t` enum. The `optval_`
 pointer supplies the value and `optvallen_` specifies its size in bytes.
 `ZLINK_OPT_SNDHWM` and `ZLINK_OPT_RCVHWM` require an exact `uint64_t` value.
 
-Configuration timing for raw sockets and discovery follows each option contract.
+Configuration timing follows each option contract.
 
 **Returns:** `ZLINK_CONFIG_OK` on success; otherwise a `zlink_config_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 
@@ -1058,8 +1058,13 @@ not accept the operation and consumes and discards the entire sequence: a SEND
 and ID `0`; a REQUEST `FINAL` returns `ZLINK_SUBMIT_BACKPRESSURED` with
 `errno == EAGAIN` and ID `0`.
 
-When the target of a wait token has write credit again, Core enqueues one
-`ZLINK_COMPLETION_WRITABLE` record on the completion queue. Its
+A wait token wakes **when the resource that refused its submit recovers** — the
+target's write credit for SEND and for a REQUEST refused by physical
+backpressure, and the pair's reservation return for a REQUEST refused by the
+correlation work/count limit ([Request and reply](#request-and-reply)). The
+recovery of another resource or socket-level readiness doesn't substitute for
+that condition. Core then enqueues one `ZLINK_COMPLETION_WRITABLE` record on
+the completion queue. Its
 `completion_id` is the token, `user_context` is the submitted value,
 `send_result` is `ZLINK_SEND_ADMITTED`, `send_terminal_errno` is `0`, and
 `peer_rid` is the submitted RID for ROUTER and STREAM and empty for PAIR and
@@ -1179,8 +1184,8 @@ the pair's correlation reservation is returned** (terminal reply, timeout, disco
 write credit alone recovers — the recovery of the refusing resource is the sole wake condition (one rule). Target
 granularity, wake edges, the level-held `ZLINK_POLLOUT` and
 `ZLINK_POLLCOMPLETION`, and the token end conditions (the WRITABLE record,
-explicit target removal with `ZLINK_SEND_TERMINAL` and `ENOENT`, socket close
-or context termination with `ZLINK_SEND_TERMINAL` and the lifecycle errno) are
+explicit target removal with `ZLINK_SEND_TERMINAL` and `ENOENT`; socket close
+or context termination ends the token internally and delivers no record) are
 the same as for a SEND wait token in
 [part send](#part-send-and-pending-admission). A RID with no mandatory ROUTER
 route immediately returns `ZLINK_SUBMIT_NOT_CONNECTED` with
@@ -1513,7 +1518,7 @@ connection, options, send/receive/completion functions, return values, and
   `ZLINK_CONNECT_BUSY` for a lifecycle ownership conflict.
 
 - Calling `zlink_bind` on the same address right after `zlink_unbind` (or `zlink_close` of
-  the bound socket) returns succeeds for tcp, ipc, and inproc alike, and a connect arriving
+  the bound socket) returns succeeds on every supported transport, and a connect arriving
   afterwards reaches only the new listener.
 
 **Part send and completion**

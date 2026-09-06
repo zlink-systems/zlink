@@ -232,11 +232,11 @@ RouteMesh placement 상태는 새 object 수락 여부와 현재 active Actor·S
 수와 각 target의 상태·weight를 제공한다. `client_and_server`는 같은 `ChannelName`에
 두 역할이 등록되었다는 뜻이며 별도 registration role이 아니다.
 
-**Automatic fanout publisher는 socket을 연결한 뒤 application record 또는 Framework가
-연결 상태를 확인하려고 주고받는
-[liveness beacon](../00-foundation/02-glossary.ko.md#liveness와-liveness-beacon)을 받으면 ready가
-된다.** Disconnect를 확인하거나 15초 동안 record가 없으면 해당 publisher만 후보에서
-제외한다. 연결 계획이나 `connect` 수락만으로 ready가 되지 않는다.
+**Automatic fanout publisher의 ready 판정은 [transport liveness §4](../02-channel-transport/05-transport-liveness.ko.md#4-classic-fanout)가
+소유하며, monitoring status는 그 결과를 보여 준다.** Publisher별로 첫 application record 또는
+[liveness beacon](../00-foundation/02-glossary.ko.md#liveness와-liveness-beacon) 수신으로 ready가 시작되고
+disconnect나 15초 무수신으로 끝난다는 판정은 그 문서의 규칙이다. 연결 계획이나 `connect` 수락만으로
+ready가 되지 않는다.
 
 ## 6. 상태 변화를 관찰한다 — Sequence와 완전한 status
 

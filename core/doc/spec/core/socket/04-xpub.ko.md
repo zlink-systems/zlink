@@ -169,20 +169,17 @@ topic frame용 storage를 확보하지 못하면 `ZLINK_SUBMIT_OUT_OF_MEMORY`와
 flag를 사용해 `ZLINK_PART_FINAL`까지 이어서 전송한다.
 
 이 함수는 성공과 실패 모두에서 `part_`의 내용을 소비한다. 같은 내용을
-다시 사용할 가능성이 있으면 호출 전에 복사하고, 소비된 `zlink_msg_t`는
-재사용하기 전에 초기화해야 한다.
+다시 사용할 가능성이 있으면 호출 전에 복사한다. 소비된 `zlink_msg_t`는 초기화된 빈
+message로 남으므로 그대로 close하거나 다시 쓸 수 있다.
 
 non-blocking 발행은 `flags_`에
 `ZLINK_DONTWAIT`를 전달하며, 즉시 진행할 수 없으면
 `ZLINK_SUBMIT_BACKPRESSURED`를 반환한다.
 
 Core는 성공한 중간 part를 `ZLINK_PART_FINAL`이 성공할 때까지 하나의 publish
-record로 staging한다. 열린 sequence의 중간 또는 마지막 submit이 실패하면
-이전에 staging한 part와 실패한 part를 원자적으로 폐기하고 sequence를 닫는다.
-subscriber에는 그 record의 어떤 part도 보이지 않는다. 실패한 호출의
-`part_`도 소비되며 다음 publish는 새 record의 첫 part로 시작한다. 따라서
-backpressure를 포함한 실패 뒤에는 보관해 둔 전체 record를 첫 part부터 다시
-제출해야 한다.
+record로 staging한다. 실패 처리는 PUB와 같은 경로이며 [PUB §3](02-pub.ko.md#3-multipart-발행과-publish-record)이
+소유한다: 제출 전 sequence 검증 실패는 호출 part만 소비하고 열린 record를 유지하며, send 단계의
+중간·마지막 submit 실패는 staging한 part와 실패한 part를 원자적으로 폐기하고 sequence를 닫는다.
 
 적용 타입은 raw `PUB`, raw `XPUB`다. 다른 타입은
 `ZLINK_SUBMIT_NOT_SUPPORTED`, `errno == ENOTSUP`이다. 전체 결과 대응은
@@ -208,30 +205,30 @@ ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
 
 recv 모드에서 다음 구독 이벤트를 수신한다. 성공 시
 `source_rid_out_`는 NULL을 허용하는 선택 output이다. NULL이 아니면
-`*source_rid_out_`는 구독 peer의 library 소유 routing ID pointer로 설정되고
-(같은 thread에서 어느 XPUB이든 다음 `zlink_xpub_recv_part` 성공 호출 전까지 유효),
+`*source_rid_out_`는 구독 peer의 Core 소유 routing ID view로 설정되며 수명은
+[Socket 공통의 borrowed RID 규칙](README.ko.md#3-pull-수신과-completion-모델)을 따른다(같은 socket의
+다음 data receive API 진입 또는 close까지 유효),
 `*subscribed_out_`는
 subscribe이면 1, unsubscribe이면 0이다. `topic_id_buf_` /
 `*topic_id_len_out_`에 topic byte가 기록된다(binary-safe).
 
-이 storage는 socket별이 아니라 호출 thread별로 공유되므로 routing ID 값을 후속 호출 이후에도
-보관하려면 반환 즉시 복사해야 한다.
+다른 socket의 receive와 poller·completion·monitor 호출은 이 view의 수명에 영향을 주지 않는다. 값을
+후속 호출 이후에도 보관하려면 반환 즉시 복사한다.
 
-호출자는 `topic_id_capacity_`로 buffer 크기를 전달하며,
-topic이 용량을 초과하면 `*topic_id_len_out_`에 필요한 topic byte 길이를 기록하고
-`errno = EMSGSIZE`로 실패한다. 이때 구독 event는 이미 queue에서 dequeue되었으며,
-충분한 buffer로 같은 event를 다시 수신할 수 없다.
+호출자는 `topic_id_capacity_`로 buffer 크기를 전달하며, topic buffer 부족의 결과는
+[Socket 공통의 typed receive buffer 계약](README.ko.md#3-pull-수신과-completion-모델)을 따른다:
+용량이 topic 길이보다 작으면 `*topic_id_len_out_`에 필요한 길이를 기록하고
+`ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`를 반환하며, event는 보존되어 충분한 buffer의 다음 수신이
+같은 event를 한 번 반환한다.
 
 적용 대상: raw XPUB만.
 
 **반환값:** 성공 시 `ZLINK_RECV_OK`, 실패 시 `zlink_recv_result_t` 값.
-`EAGAIN`/`ETERM` 외의 상세 errno(예: topic 용량 초과 `EMSGSIZE`, XPUB가 아닌
-subject `EINVAL`)는 `ZLINK_RECV_INTERNAL_ERROR`로 표면화되며, `zlink_errno()`는
-진단용 내부 errno를 그대로 유지한다.
+`zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 
 **에러:** `xpub_`가 NULL이면 `EFAULT`. `ZLINK_DONTWAIT`가 설정되고
-이벤트가 없으면 `EAGAIN`. topic이 `topic_id_capacity_`를 초과하면
-`EMSGSIZE`. subject가 XPUB가 아니면 `EINVAL`.
+이벤트가 없으면 `EAGAIN`. topic이 `topic_id_capacity_`보다 길면
+`ZLINK_RECV_BUFFER_TOO_SMALL`과 `ENOBUFS`. subject가 XPUB가 아니면 `ZLINK_RECV_NOT_SUPPORTED`와 `ENOTSUP`.
 
 **참고:** `zlink_publish_part`
 
@@ -262,20 +259,20 @@ low water mark와 transport backpressure는 그대로 유지된다. XPUB socket�
 **구독 이벤트 수신 (`zlink_xpub_recv_part`)**
 - raw XPUB에 구독 이벤트가 있으면 `ZLINK_RECV_OK`와 함께 `*subscribed_out_`(subscribe=1, unsubscribe=0), 구독 peer의 routing ID pointer, topic byte(binary-safe)가 관찰된다.
 - `source_rid_out_`은 NULL을 허용하는 선택 output이다.
-- `*source_rid_out_`의 routing ID pointer는 호출 thread별 storage를 사용하므로, 같은 thread에서 어느 XPUB이든 다음 `zlink_xpub_recv_part` 성공 호출이 덮어쓴다. 값을 보관하려면 반환 즉시 복사한다.
+- `*source_rid_out_`의 routing ID view는 같은 socket의 다음 data receive API 진입 또는 close까지 유효하며, 다른 socket의 receive는 이를 바꾸지 않는다. 값을 보관하려면 반환 즉시 복사한다.
 - `ZLINK_DONTWAIT`가 설정되고 이벤트가 없으면 `EAGAIN`이다.
-- topic이 `topic_id_capacity_`를 초과하면 `*topic_id_len_out_`에 필요 길이를 기록하고 `EMSGSIZE`로 실패한다. 이 event는 이미 dequeue되어 재시도할 수 없다. subject가 XPUB가 아니면 `EINVAL`이다 — 두 경우 모두 공개 결과는 `ZLINK_RECV_INTERNAL_ERROR`로 표면화되고 `zlink_errno()`가 상세 errno를 유지한다.
+- topic이 `topic_id_capacity_`보다 길면 `*topic_id_len_out_`에 필요 길이를 기록하고 `ZLINK_RECV_BUFFER_TOO_SMALL`·`ENOBUFS`를 반환하며, event는 보존되어 충분한 buffer의 다음 수신이 같은 event를 한 번 반환한다. subject가 XPUB가 아니면 `EINVAL`이다 — 두 경우 모두 공개 결과는 `ZLINK_RECV_INTERNAL_ERROR`로 표면화되고 `zlink_errno()`가 상세 errno를 유지한다.
 - `xpub_`가 NULL이면 `EFAULT`다.
 
 **발행과 topic (`zlink_publish_part`)**
 - `topic_id_`가 NULL이 아니면 종료 NUL 앞의 byte가 topic frame으로 message 앞에 추가되고, NULL이면 첫 message frame이 wire prefix 규칙에 따라 topic을 운반한다.
 - topic byte를 포함한 크기 제한을 넘으면 `ZLINK_SUBMIT_INVALID_ARGUMENT`와 `EMSGSIZE`, topic frame용 storage를 확보하지 못하면 `ZLINK_SUBMIT_OUT_OF_MEMORY`와 `ENOMEM`이다.
 - raw `PUB`·raw `XPUB`가 아닌 타입에 호출하면 `ZLINK_SUBMIT_NOT_SUPPORTED`, `errno == ENOTSUP`이다.
-- `part_`는 성공·실패 모두 소비된다 — 소비된 `zlink_msg_t`는 다시 초기화한 뒤에만 재사용할 수 있다.
+- `part_`는 성공·실패 모두 소비되며 초기화된 빈 message로 남는다 — 그대로 close하거나 다시 쓸 수 있다.
 - `ZLINK_DONTWAIT`로 즉시 진행할 수 없으면 `ZLINK_SUBMIT_BACKPRESSURED`다.
 
 **multipart publish record**
-- 열린 sequence의 중간 또는 마지막 submit이 실패하면 subscriber에는 그 record의 어떤 part도 보이지 않고, 다음 publish는 새 record의 첫 part로 시작한다.
+- 열린 sequence의 중간 또는 마지막 submit이 send 단계에서 실패하면 subscriber에는 그 record의 어떤 part도 보이지 않고 다음 publish는 새 record의 첫 part로 시작하며, 제출 전 sequence 검증 실패(topic·flag·thread 불일치)는 호출 part만 소비하고 원래 thread에서 같은 topic·flag로 record를 계속할 수 있다([PUB §3](02-pub.ko.md#3-multipart-발행과-publish-record)).
 - 실패한 호출의 `part_`도 소비되며, backpressure를 포함한 실패 뒤에는 보관해 둔 전체 record를 첫 part부터 다시 제출해야 한다.
 
 **HWM 도달 시 drop과 NODROP**

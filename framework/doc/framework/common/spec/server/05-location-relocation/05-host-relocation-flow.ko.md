@@ -863,8 +863,9 @@ maintenance를 막는 claim을 소유하지 않는다.
 ## 16. 관측 정보
 
 State와 relocation result 변화는 `zlink.runtime.host.relocation_changed`, shutdown result
-변화는 `zlink.runtime.host.termination_changed`로 관찰한다. Terminal event는 observer
-overflow로 잃지 않는다. Relocation event와 제한된 개수의 진단 상태에는 mode와 effective
+변화는 `zlink.runtime.host.termination_changed`로 관찰한다. Terminal status는 중간 status로 덮어쓰지
+않으며, observer의 terminal 보관 상한과 폐기 규칙은 [runtime monitoring §7.2](../06-observability/01-runtime-monitoring.ko.md#72-합치기)가
+소유한다. Relocation event와 제한된 개수의 진단 상태에는 mode와 effective
 target version을 포함한다. Version을 metric label로 추가하지 않는다.
 
 Host state와 terminal 결과는 host status와 structured log에서 확인한다. 집계가 필요하면

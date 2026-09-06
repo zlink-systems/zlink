@@ -961,8 +961,9 @@ monitoring callback doesn't own a claim that blocks maintenance.
 
 State and relocation result changes are observed via
 `zlink.runtime.host.relocation_changed`; shutdown result changes via
-`zlink.runtime.host.termination_changed`. Terminal events aren't lost to observer
-overflow. Relocation events and a limited set of diagnostic states include mode and
+`zlink.runtime.host.termination_changed`. A terminal status isn't overwritten by an
+intermediate status; the observer's terminal retention bound and discard rule are owned by
+[runtime monitoring §7.2](../06-observability/01-runtime-monitoring.en.md#72-coalescing). Relocation events and a limited set of diagnostic states include mode and
 effective target version. Version isn't added as a metric label.
 
 Host state and terminal results are checked in host status and structured logs. When

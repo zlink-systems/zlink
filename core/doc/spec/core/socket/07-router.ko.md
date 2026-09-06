@@ -180,8 +180,8 @@ weight `0`→양수) Core는 그 token의 `ZLINK_COMPLETION_WRITABLE` record를 
 `send_result == ZLINK_SEND_ADMITTED`, `peer_rid`는 제출한 RID다. 다른 RID의 credit은 이 token을
 깨우지 않는다. 호출자는 보관한 record를 같은 RID에 `DONTWAIT`로 다시 제출한다.
 `zlink_disconnect_rid()`로 그 RID를 명시적으로 제거하면 token은
-`ZLINK_SEND_TERMINAL`+`ENOENT`인 WRITABLE record로 끝나고, socket close·context 종료는
-`ZLINK_SEND_TERMINAL`과 lifecycle errno로 끝난다. ID `0` 뒤에는 payload를 replay하지 않는다.
+`ZLINK_SEND_TERMINAL`+`ENOENT`인 WRITABLE record로 끝나고, socket close·context 종료는 token을
+내부에서 끝내며 record를 전달하지 않는다. ID `0` 뒤에는 payload를 replay하지 않는다.
 Ownership과 exact result·errno는 [Socket 공통](README.ko.md#part-send와-pending-admission)을
 따른다.
 
@@ -223,8 +223,9 @@ RID의 credit은 이 token을 발행하지 않는다. Mandatory route가 없는 
 
 `timeout_ms_ == 0`은 `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS`의 기본 5,000 ms를 snapshot한다.
 Reply timeout은 outbound local admission, 즉 `ZLINK_SUBMIT_OK` 반환부터 시작하며 wait token이
-유지되는 동안은 시작하지 않는다. Admission 뒤 disconnect가 발생해도 payload를 replay하지 않고
-correlation과 남은 monotonic budget만 유지한다. Reply·timeout·terminal 중 하나만 REQUEST
+유지되는 동안은 시작하지 않는다. Admission 뒤 submit 시점 transport pair가 종료되면
+[Socket 공통 §6의 completion 표](README.ko.md#request와-reply)대로 즉시 `ZLINK_REQUEST_NOT_CONNECTED`로
+한 번 종결하며 payload를 replay하지 않는다. Reply·timeout·terminal 중 하나만 REQUEST
 completion을 만든다.
 
 ```mermaid
@@ -464,7 +465,7 @@ test 하나로 이어진다.
 - DONTWAIT FINAL은 admission을 한 번만 시도한다. Backpressure나 준비되지 않은 route(transport pair 미준비, weight `0`)는 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID의 nonzero wait token을 반환하고, 같은 token·context·`peer_rid`의 WRITABLE record 뒤 caller가 같은 request를 다시 제출한다. Mandatory route가 없는 RID는 `ZLINK_SUBMIT_NOT_CONNECTED`+`EHOSTUNREACH`, ID `0`, token 없음이다.
 - 마지막 호출의 `timeout_ms_ == 0`은 `ZLINK_ROUTER_OPT_REQUEST_TIMEOUT_MS` 기본값을 사용한다.
 - 유효한 error reply는 errno를 매핑한 non-OK `zlink_request_result_t`와 errno part 뒤의 payload를 completion에 보존하며, malformed errno part는 `ZLINK_REQUEST_PROTOCOL_ERROR`와 payload 없음으로 완료한다.
-- Request timeout은 local admission부터 시작하고 wait token이 유지되는 동안은 시작하지 않으며, admission 뒤 disconnect는 payload를 replay하거나 monotonic budget을 reset하지 않는다.
+- Request timeout은 local admission부터 시작하고 wait token이 유지되는 동안은 시작하지 않으며, admission 뒤 submit 시점 pair가 종료되면 timeout을 기다리지 않고 즉시 `ZLINK_REQUEST_NOT_CONNECTED` completion 하나를 받는다.
 - 공유 completion slot 포화는 flags와 관계없이 즉시 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음으로 실패한다.
 
 **Reply**

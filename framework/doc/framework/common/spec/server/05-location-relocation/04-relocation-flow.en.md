@@ -641,12 +641,14 @@ isn't reopened regardless of the cutover submit's success or failure. If the tar
 then fails, the target removes the prepared unit, and the Session cleans up under its
 own timeout.
 
-Reconciliation for the unknown cutover result above doesn't violate this principle
-either. The irreversibility of relay-ready means that source dispatch reopens only when
-there's evidence the Location Store still shows source as owner — never simply because
-the reconciliation deadline was reached. The deadline only limits how long it can wait
-for that evidence, that is, the time until the source stops holding the request
-indefinitely.
+Reconciliation for the unknown cutover result above follows this principle too. Until
+the reconciliation deadline the source checks the Location Store: if the target commit is
+visible it adopts the target route, otherwise it ends the held requests with
+`Unavailable`. Source dispatch isn't reopened even when the Store still shows the source
+as owner — the target may keep trying its CAS within its own Restore validity, so a
+snapshot read by the source is no basis for the owner transition. The deadline only
+limits how long that check can wait, that is, the time until the source stops holding
+the request indefinitely.
 
 If Store failure continues until Restore validity expires, the Session may end through
 its own separate seal timeout. After the Store recovers, a new Session connection

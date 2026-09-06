@@ -216,8 +216,8 @@ frame용 storage를 확보하지 못하면 `ZLINK_SUBMIT_OUT_OF_MEMORY`와 `ENOM
 뒤 HWM·크기 제한 등으로 실패하면 실패 part와 staging part를 폐기하고 sequence를 닫는다.
 
 이 함수는 성공과 실패 모두에서 `part_`의 내용을 소비한다. 호출자는 반환값과 관계없이
-같은 내용을 다시 보내려면 호출 전에 별도 복사본을 만들어야 하며, 소비된 `zlink_msg_t`를
-다시 사용하려면 먼저 초기화해야 한다.
+같은 내용을 다시 보내려면 호출 전에 별도 복사본을 만들어야 한다. 소비된 `zlink_msg_t`는
+초기화된 빈 message로 남으므로 그대로 close하거나 다시 쓸 수 있다.
 
 non-blocking 발행은 `flags_`에 `ZLINK_DONTWAIT`를 전달한다. 즉시 진행할 수 없으면
 `ZLINK_SUBMIT_BACKPRESSURED`를 반환한다. 반환 결과와 관계없이 `part_`가 소비된다는

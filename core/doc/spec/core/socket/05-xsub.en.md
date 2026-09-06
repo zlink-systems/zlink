@@ -200,8 +200,8 @@ buffer without a NUL and transfers ownership of the payload part to the caller.
 The caller must close the received part exactly once with
 `zlink_msg_close(part_out_)`.
 
-If `topic_id_capacity_ == 0` or is too small for the topic, the function writes
-the required topic length to `*topic_id_len_out_` and returns
+If `topic_id_capacity_` is smaller than the topic length (a zero-length topic
+succeeds with capacity 0), the function writes the required topic length to `*topic_id_len_out_` and returns
 `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. It does not consume the queued
 topic or payload, and leaves `part_out_` and every output other than
 `topic_id_len_out_` unchanged. It also does not transfer part ownership, so the
@@ -325,8 +325,8 @@ to one unit test.
   to the caller. The caller closes the received part exactly once with
   `zlink_msg_close(part_out_)`. On raw XSUB, `source_rid_out_` receives `NULL`
   on success.
-- If `topic_id_capacity_ == 0` or is too small for the topic, the function
-  writes the required topic length to `*topic_id_len_out_` and returns
+- If `topic_id_capacity_` is smaller than the topic length (a zero-length topic
+  succeeds with capacity 0), the function writes the required topic length to `*topic_id_len_out_` and returns
   `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. It does not consume the queued
   topic or payload, leaves `part_out_` and every output other than
   `topic_id_len_out_` unchanged, and does not transfer part ownership, so the

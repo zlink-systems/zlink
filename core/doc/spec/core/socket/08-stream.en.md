@@ -252,7 +252,8 @@ silently drops packets nor creates a separate unbounded queue.
 When a STREAM send returns a nonzero wait token, exactly one `ZLINK_COMPLETION_WRITABLE` record
 for that token is received through `zlink_completion_recv()`: `ZLINK_SEND_ADMITTED` when the same
 RID gains write credit, or `ZLINK_SEND_TERMINAL` when the RID is explicitly removed with
-`zlink_disconnect_rid()` or the socket is closed. Its `peer_rid` preserves the logical RID snapshot
+`zlink_disconnect_rid()`. Socket close ends the token internally and delivers no record, so a result that
+is needed is received before close. Its `peer_rid` preserves the logical RID snapshot
 specified at submit; it does not change to a physical connection identity after reconnect. [Socket Common](README.en.md#completion-pull-and-ownership)
 owns completion draining, reservation bounds, and close.
 
@@ -510,9 +511,11 @@ item maps to one test.
 
 **Completion**
 
-- The WRITABLE record of a nonzero wait token is returned exactly once (`ZLINK_SEND_TERMINAL` on
-  explicit RID removal or close) and preserves in `peer_rid` the logical RID snapshot specified at
-  submit; it does not change to a physical connection identity after reconnect.- `ZLINK_POLLCOMPLETION` is non-consuming level readiness. Draining with
+- The WRITABLE record of a nonzero wait token is returned exactly once on an open socket
+  (`ZLINK_SEND_TERMINAL` on explicit RID removal; no record is returned after close) and preserves in
+  `peer_rid` the logical RID snapshot specified at submit; it does not change to a physical connection
+  identity after reconnect.
+- `ZLINK_POLLCOMPLETION` is non-consuming level readiness. Draining with
   `zlink_completion_recv(DONTWAIT)` through `NO_DATA` clears it.
 
 **Receive flow state and monitor**

@@ -380,7 +380,7 @@ Request submit 성공 뒤에는 nonzero completion ID마다 terminal result를 �
 |---|---|---|
 | `ZLINK_RECV_OK` | - | complete record 하나 이상 수신 |
 | `ZLINK_RECV_NO_DATA` | `EAGAIN`, `ETIMEDOUT` | nonblocking 또는 receive timeout에 data 없음 |
-| `ZLINK_RECV_BUSY` | `EBUSY` | 다른 receive mode 사용 중 |
+| `ZLINK_RECV_BUSY` | `EBUSY` | 다른 receive mode 사용 중, 또는 열린 multipart receive의 owner thread·family가 아닌 호출 |
 | `ZLINK_RECV_TERMINATED` | `ETERM` | Context 종료 |
 | `ZLINK_RECV_INVALID_HANDLE` | `EFAULT` | handle 또는 필수 output pointer가 유효하지 않음 |
 | `ZLINK_RECV_NOT_SUPPORTED` | `ENOTSUP` | handle이 해당 receive를 지원하지 않음 |

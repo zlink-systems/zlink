@@ -200,7 +200,7 @@ function copies the binary topic bytes into the caller's buffer without a NUL by
 ownership of the payload part to the caller. The caller must close the received part exactly once
 with `zlink_msg_close(part_out_)`.
 
-If `topic_id_capacity_ == 0` or is too small for the topic, the function writes the required topic
+If `topic_id_capacity_` is smaller than the topic length (a zero-length topic succeeds with capacity 0), the function writes the required topic
 length to `*topic_id_len_out_` and returns `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. It does not
 consume the queued topic or payload, leaves `part_out_` and every output other than
 `topic_id_len_out_` unchanged, and does not transfer ownership of the part. The caller can retry the same
@@ -291,7 +291,7 @@ and get, `zlink_subscribe_part` results, return values, and errno. Each item map
   a NUL byte and transfers ownership of the payload part to the caller, which calls
   `zlink_msg_close(part_out_)` exactly once.
 - On raw SUB and XSUB, `source_rid_out_` always receives `NULL`.
-- If `topic_id_capacity_` is zero or smaller than the topic, the function writes the required length
+- If `topic_id_capacity_` is smaller than the topic length (a zero-length topic succeeds with capacity 0), the function writes the required length
   to `*topic_id_len_out_` and returns `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. The queued topic
   and payload are not consumed, so a retry with a sufficient buffer receives the same message;
   `part_out_` and every output other than `topic_id_len_out_` remain unchanged.

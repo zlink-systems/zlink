@@ -376,15 +376,10 @@ interface. Each item corresponds to one contract test.
   add existing flow information to the context or outbound envelope, and
   turning it back on doesn't retroactively apply it to a processing stage
   that already passed.
-- Allocation and queue instrumentation confirm that the `Off` path ends
-  immediately after the level read and branch, and doesn't build
-  event/attribute/log message, timestamp/duration, sampling hash,
-  trace-only flow context, or telemetry queue item.
-- A path not recording due to level or sampling doesn't copy
-  payload/metadata or build a raw event DTO.
-- After adding a new trace and turning tracing off, call-site code
-  confirms that path builds no string, event, or lambda (the
-  confirmation criterion for §5's language-specific discretion).
+- On a path that doesn't record because of the level or sampling, no
+  payload or metadata appears in a trace or log. The allocation, queue and
+  call-site cost conditions of the `Off` path are owned as internal check
+  conditions by the rule paragraphs of §5.
 
 **Provider and public interface**
 

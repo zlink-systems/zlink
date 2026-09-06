@@ -100,7 +100,8 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part (
 atomicity.
 
 This function consumes the content of `part_` on both success and failure. If the same content may be
-needed again, copy it before the call. Initialize a consumed `zlink_msg_t` before reusing it. Pass
+needed again, copy it before the call. A consumed `zlink_msg_t` is left as an initialized empty
+message, so it can be closed or reused as is ([Socket Common part ownership](README.en.md#part-send-and-pending-admission)). Pass
 `ZLINK_SEND_FLAGS_NONE` or `ZLINK_SEND_FLAGS_DONTWAIT` in `flags_`. A `NONE FINAL` call snapshots
 `SNDTIMEO` on entry and waits through local queue admission; a `DONTWAIT FINAL` call does not wait.
 [§5 ("Part flow")](#5-implementation-and-contract-test-verification-requirements) states the ID and

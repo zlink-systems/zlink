@@ -379,7 +379,7 @@ The result differs based on what happened to the owner after resolve.
 | What happened after resolve | Result |
 |---|---|
 | The object was closed/destroyed by the same owner and a new incarnation was created under the same ID | Processed by the current Ready object at the moment the target queue accepts it. Applies identically to every Spot direct message, including Actor and Instance Spot. |
-| The owner process terminated, or the owner changed to a different node, so the resolved route can't be used | Ends the current operation with [`Unavailable`](../00-foundation/07-framework-error-model.en.md). |
+| The owner process terminated, or the owner changed to a different node, so the resolved route can't be used | Ends the current operation with [`Unavailable`](../00-foundation/07-framework-error-model.en.md). This policy (no automatic resubmit, no automatic reactivation) is owned by [failure policy §4.2](../05-location-relocation/06-failure-failover-policy.en.md#42-an-existing-actor-and-spot). |
 
 In both cases, the framework **doesn't automatically resend** the failed
 operation to the new owner. Only when the application starts a new call is

@@ -382,8 +382,7 @@ implementation or contract test.
 
 - Instrument name, kind, unit, and allowed label value are the same across
   every language.
-- No mailbox/Spot/Actor-queue or per-turn metric exists, and collection
-  doesn't walk every object or Store record.
+- No mailbox/Spot/Actor-queue or per-turn metric exists.
 - A controlled DEALER-ROUTER reply byte delta appears in
   `zlink.host.core_hwm.accounted` and not in
   `zlink.host.core_hwm.completion_accounted`. ROUTER-ROUTER reply bytes appear

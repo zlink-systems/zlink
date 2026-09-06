@@ -239,8 +239,8 @@ Queue는 `RCVHWM`을 따르며 가득 차면 pipe read를 멈춰 backpressure를
 
 STREAM send가 nonzero wait token을 반환하면 `zlink_completion_recv()`에서 그 token의
 `ZLINK_COMPLETION_WRITABLE` record를 정확히 한 번 받는다 — 같은 RID에 write credit이 생기면
-`ZLINK_SEND_ADMITTED`, `zlink_disconnect_rid()`로 RID를 명시적으로 제거하거나 socket을 close하면
-`ZLINK_SEND_TERMINAL`이다. `peer_rid`는 submit에 지정한 logical RID snapshot이며 reconnect 뒤의
+`ZLINK_SEND_ADMITTED`, `zlink_disconnect_rid()`로 RID를 명시적으로 제거하면 `ZLINK_SEND_TERMINAL`이다.
+Socket close는 토큰을 내부에서 끝내고 record를 전달하지 않으므로 필요한 결과는 close 전에 받는다. `peer_rid`는 submit에 지정한 logical RID snapshot이며 reconnect 뒤의
 physical connection identity로 바뀌지 않는다. Completion drain, reservation 상한과 close
 계약은 [소켓 공통](README.ko.md#completion-pull과-ownership)이 소유한다.
 
@@ -472,9 +472,9 @@ socket/listener 기본값은 다음과 같다.
   않는다.
 
 **Completion**
-- Nonzero wait token의 WRITABLE record는 정확히 한 번 반환되며(명시적 RID 제거·close에서는
-  `ZLINK_SEND_TERMINAL`), `peer_rid`에 submit 시 logical RID snapshot을 보존하고 reconnect 뒤
-  physical connection identity로 바꾸지 않는다.
+- Nonzero wait token의 WRITABLE record는 열린 socket에서 정확히 한 번 반환되며(명시적 RID 제거에서는
+  `ZLINK_SEND_TERMINAL`; close 뒤에는 어떤 record도 반환되지 않는다), `peer_rid`에 submit 시 logical RID
+  snapshot을 보존하고 reconnect 뒤 physical connection identity로 바꾸지 않는다.
 - `ZLINK_POLLCOMPLETION`은 non-consuming level readiness이며 `zlink_completion_recv(DONTWAIT)`로
   `NO_DATA`가 될 때까지 drain하면 내려간다.
 

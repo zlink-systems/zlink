@@ -321,8 +321,8 @@ weight `0`, and `0` peers included), it returns `ZLINK_SUBMIT_BACKPRESSURED` wit
 nonzero wait token, and Core does not retain the payload. When any candidate peer gains write
 capacity, Core produces exactly one `ZLINK_COMPLETION_WRITABLE` record for that token
 (`ZLINK_SEND_ADMITTED`, the same `user_context`, empty `peer_rid`), and the caller resubmits its
-retained record with `DONTWAIT`. The token ends only with the WRITABLE record, or with socket close
-or context termination (`ZLINK_SEND_TERMINAL` and the lifecycle errno). `NONE FINAL` snapshots
+retained record with `DONTWAIT`. The token ends with the WRITABLE record; socket close or context termination
+ends it internally and delivers no record. `NONE FINAL` snapshots
 `SNDTIMEO` on entry, waits through admission, and finishes with ID `0`. [Socket Common](README.en.md#part-send-and-pending-admission)
 owns the detailed result, errno, and context contract.
 
@@ -369,9 +369,10 @@ candidate reports write capacity, a peer confirmed as ROUTER connects, or a weig
 resubmits the same request, the selection procedure at that time picks a ROUTER again.
 
 The reply timeout starts at local send-queue admission, that is, when `ZLINK_SUBMIT_OK` is
-returned. It does not start while a wait token is outstanding. A disconnect after admission
-does not replay the payload; Core retains only correlation and the remaining monotonic timeout
-budget. [Socket Common](README.en.md#completion-pull-and-ownership) owns completion ownership and
+returned. It does not start while a wait token is outstanding. When the submit-time transport
+pair terminates after admission, the request ends at once with `ZLINK_REQUEST_NOT_CONNECTED`,
+whatever the cause, per the [Socket Common §6 completion table](README.en.md#request-and-reply), and
+the payload is not replayed. [Socket Common](README.en.md#completion-pull-and-ownership) owns completion ownership and
 close.
 
 ---
@@ -465,8 +466,9 @@ Verify the following using only the public surface: DEALER option set/get, `zlin
   and Core retains no payload. After the WRITABLE record, the caller resubmits the same request and
   a ROUTER is selected again.
 - The request timeout starts at local queue admission and does not start while a wait token is
-  outstanding. A disconnect after admission neither replays the payload nor resets the remaining
-  monotonic budget.
+  outstanding. When the submit-time pair terminates after admission, one
+  `ZLINK_REQUEST_NOT_CONNECTED` completion arrives at once without waiting for the timeout, and the
+  payload is not replayed.
 - When the completion reservations shared by SEND wait tokens and REQUEST are exhausted, a REQUEST
   FINAL immediately returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN`, ID `0`, and no completion
   regardless of flags, and a DONTWAIT SEND returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM` and

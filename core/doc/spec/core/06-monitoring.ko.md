@@ -474,9 +474,8 @@ ZLINK_EXPORT zlink_config_result_t zlink_monitor_status(
 
 `status_out`을 [§6](#6-status-snapshot)의 규칙대로 채운다. `abi_version`과 `struct_size`는
 Core가 반환한 현재 layout의 진단값이며 caller 입력이 아니다. `detail_flags`에 없는 선택
-field는 0이다. Pipe 합계 field 군은 하나의 lock 안에서 읽어 군 내부의 일관성을
-보장한다. Auto HWM field와 flow counter는 별도 시점에 읽을 수 있으므로 field 군 사이의
-교차 일관성은 보장하지 않는다([§6.3](#63-byte와-pending-진단-field)).
+field는 0이다. Pipe 합계 field 군은 군 내부에서 일관되며, Auto HWM field·flow counter와의 교차 일관성은
+보장하지 않는다([§6.3](#63-byte와-pending-진단-field)이 일관성 범위와 그 메커니즘을 소유한다).
 
 **반환값:** `zlink_config_result_t` 값.
 
@@ -541,6 +540,8 @@ status snapshot, 반환값·errno)만으로 다음을 확인한다. 각 항목�
   추가 `CLOSED`가 반드시 뒤따르는 것은 아니다(서버 close 뒤 관찰되는 `CLOSED`는 이후 자동 재연결의 실패한
   새 attempt이므로 `CONNECT_DELAYED`와 같은 `connection_id`를 갖는다). inproc peer의 단절은 `DISCONNECTED`로
   보고하고 `CLOSED`는 발생시키지 않는다. connect intent가 남아 있으면 `DISCONNECTED` 뒤 자동 재연결은 계속된다.
+- 성립한 physical connection의 peer가 종료되면, application DATA receive가 진행되지 않고 수신 record가
+  queue에 남아 있어도 monitor에서 `DISCONNECTED`가 한 번 관찰된다(수신 drain에 의존하지 않는다).
 
 **Event data 소유권**
 - `zlink_socket_monitor_recv`는 현재 layout 전체를 caller-owned output 구조체에 기록하며, event의
@@ -555,7 +556,7 @@ status snapshot, 반환값·errno)만으로 다음을 확인한다. 각 항목�
   Application accounting field와 `total_messaging_accounted_bytes`에만 반영되고 Completion
   current·peak·pending·direction count에는 반영되지 않는다.
 - flow counter 3개는 socket 수명 동안 단조 증가하고, `zlink_ctx_reset_auto_hwm_budget_metrics`를 호출해도 바뀌지 않는다.
-- pipe 합계 field 군은 하나의 lock 안에서 읽어 군 내부에서 일관되며, Auto HWM field·flow counter는 별도 시점에 읽을 수 있어 field 군 사이의 교차 일관성은 보장하지 않는다.
+- snapshot의 pipe 합계 field 군은 군 내부에서 서로 일관된 값이며(예: in-flight 합계가 개별 pipe 합과 맞음), Auto HWM field·flow counter와는 같은 시점의 값이라고 보장하지 않는다.
 
 **Monitor queue 예산**
 - 양수 `monitor_hwm_bytes`는 변환 없이 정확한 SNDHWM·RCVHWM과 worker admission 상한으로 사용되고, `0`은 unlimited가 아니라 Core가 계산한 기본 byte 값을 선택한다([§5](#5-monitor-queue의-byte-예산)).

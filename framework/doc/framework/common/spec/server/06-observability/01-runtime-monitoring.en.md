@@ -274,13 +274,13 @@ footing with a remote Server. Status provides target count and each
 target's state/weight. `client_and_server` means both roles are registered
 under the same `ChannelName` — it isn't a separate registration role.
 
-**An automatic fanout publisher becomes ready after establishing a socket
-connection and receiving either an application record or the
-[liveness beacon](../00-foundation/02-glossary.en.md#liveness-beacon) the
-framework exchanges to check connection status.** If a disconnect is
-confirmed, or there's no record for 15 seconds, only that publisher is
-excluded from candidates. A connection plan or `connect` acceptance alone
-doesn't make it ready.
+**The ready judgment of an automatic fanout publisher is owned by
+[transport liveness §4](../02-channel-transport/05-transport-liveness.en.md#4-classic-fanout),
+and monitoring status shows its result.** That ready starts per publisher with
+the first application record or
+[liveness beacon](../00-foundation/02-glossary.en.md#liveness-beacon) received
+and ends with a disconnect or 15 seconds without a record is that document's
+rule. A connection plan or `connect` acceptance alone doesn't make it ready.
 
 ## 6. Observing State Changes — Sequence and the Complete Status
 

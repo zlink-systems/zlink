@@ -570,11 +570,12 @@ Reply가 accepted 상태가 된 뒤에는 cutover submit의 성공·실패와 �
 다시 열지 않는다. 이후 target CAS가 실패하면 target은 준비한 unit을 제거하고 Session은 자체
 timeout으로 정리한다.
 
-위 cutover 결과 불명 시 reconciliation도 이 원칙을 어기지 않는다. Relay 수신 준비의
-비가역성은 source dispatch가 오직 Location Store가 source를 여전히 owner로 보여주는 증거가
-있을 때만 다시 열린다는 뜻이며, reconciliation deadline 자체만으로는 다시 열리지 않는다.
-Deadline은 그 증거를 기다릴 수 있는 시간, 즉 source가 요청을 무기한 대기시키지 않고
-멈추기까지의 시간만 제한한다.
+위 cutover 결과 불명 시 reconciliation도 이 원칙을 따른다. Source는 reconciliation deadline까지
+Location Store를 확인해 target commit이 보이면 target route를 채택하고, 보이지 않으면 대기시킨
+request를 `Unavailable`로 끝낸다. Store가 여전히 source를 owner로 보여 주더라도 source dispatch를
+다시 열지 않는다 — target은 자기 Restore 유효시간 안에서 CAS를 계속할 수 있으므로 source가 읽은
+snapshot은 owner 전환의 근거가 되지 못하기 때문이다. Deadline은 그 확인을 기다리는 시간, 즉
+source가 요청을 무기한 대기시키지 않고 멈추기까지의 시간만 제한한다.
 
 Store 장애가 Restore 유효시간까지 계속되면 Session은 별도의 seal timeout으로 종료될 수 있다.
 Store가 정상화된 뒤 새 Session connection은 이전 binding을 복원하지 않고 일반 location

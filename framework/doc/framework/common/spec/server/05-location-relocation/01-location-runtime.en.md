@@ -1308,10 +1308,11 @@ and relocation state. It neither opens application dispatch nor sends a Session 
 update. A late Store response for a terminal `RelocationId` doesn't reactivate the
 object.
 
-During `StoreFailureGrace`, the last fully-read descriptor list is kept. Connection
-status judgment for already-established transport connections continues, but no new
-outbound connection is made. Even after grace ends, no new connection is made until the
-whole descriptor is re-read as a same-point-in-time list.
+During `StoreFailureGrace`, the last fully-read descriptor list is kept. The connection
+intents for the targets in that list (including targets not yet connected) are kept and
+connection-status judgment for existing connections continues, but no connect is made to a
+new target outside that list. Even after grace ends, that list isn't changed until the
+whole descriptor set is re-read as a same-point-in-time list.
 
 This grace period doesn't extend the owner lease or relocation deadline. Once the §5
 time passes, it blocks state-changing messages and timer starts, factory-completion

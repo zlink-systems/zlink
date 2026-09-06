@@ -158,15 +158,15 @@ A multipart message started with `ZLINK_PART_MORE` continues on the same thread 
 topic and flags through `ZLINK_PART_FINAL`.
 
 This function consumes the content of `part_` on both success and failure. If the same content may be needed again, copy it before the
-call, and initialize a consumed `zlink_msg_t` before reuse.
+call. A consumed `zlink_msg_t` is left as an initialized empty message, so it can be closed or reused as is.
 
 Pass `ZLINK_DONTWAIT` in `flags_` for non-blocking publish; a call that cannot
 proceed immediately returns `ZLINK_SUBMIT_BACKPRESSURED`.
 
-Core stages successful intermediate parts as one publish record until `ZLINK_PART_FINAL` succeeds. If an intermediate or final submit in
-the open sequence fails, Core atomically discards the previously staged parts and the failed part and closes the sequence. No part of that
-record becomes visible to subscribers. The failed call still consumes `part_`, and the next publish starts with the first part of a new
-record. Therefore, after any failure, including backpressure, the caller must resubmit the retained entire record from its first part.
+Core stages successful intermediate parts as one publish record until `ZLINK_PART_FINAL` succeeds. Failure handling is the same path
+as PUB and is owned by [PUB §3](02-pub.en.md#3-multipart-publishing-and-the-publish-record): a pre-submit sequence validation failure
+consumes only the called part and keeps the open record, while a send-stage failure of an intermediate or final submit atomically
+discards the staged parts and the failed part and closes the sequence.
 
 Applicable types are raw `PUB` and raw `XPUB`. Other types return `ZLINK_SUBMIT_NOT_SUPPORTED` with `errno == ENOTSUP`. The complete result
 mapping follows the [errno map](../03-errors.en.md#result-and-errno-mapping).
@@ -190,26 +190,27 @@ ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
 ```
 
 Receives the next subscription event in recv mode. On success, `source_rid_out_` is an optional output that may be NULL. When it is not
-NULL, `*source_rid_out_` is set to the library-owned routing ID pointer for the subscribing peer. The pointer remains valid until the next
-successful `zlink_xpub_recv_part` call on any XPUB on the same thread. `*subscribed_out_` is 1 for subscribe or 0 for unsubscribe, and
+NULL, `*source_rid_out_` is set to the Core-owned routing ID view of the subscribing peer, whose lifetime follows the
+[Socket Common borrowed-RID rule](README.en.md#3-pull-receive-and-completion-model) (valid until the same socket's next data receive API
+entry or close). `*subscribed_out_` is 1 for subscribe or 0 for unsubscribe, and
 `topic_id_buf_` / `*topic_id_len_out_` receive the topic bytes (binary-safe).
 
-This storage is shared per calling thread rather than per
-socket, so copy the routing ID immediately if its value must be retained across subsequent calls.
+A receive on another socket and poller, completion or monitor calls don't affect this view's lifetime. Copy the routing ID
+immediately if its value must be retained across subsequent calls.
 
 The caller supplies the buffer size via
-`topic_id_capacity_`. If the topic exceeds the capacity, the function writes the required topic-byte length to `*topic_id_len_out_` and
-fails with `errno = EMSGSIZE`. The subscription event has already been dequeued in this case and cannot be received again with a larger
-buffer.
+`topic_id_capacity_`; a too-small topic buffer follows the
+[Socket Common typed receive buffer contract](README.en.md#3-pull-receive-and-completion-model): when the capacity is smaller than the
+topic length, the function writes the required length to `*topic_id_len_out_` and returns `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`,
+and the event is preserved so the next receive with a sufficient buffer returns the same event once.
 
 Applicable type: raw XPUB only.
 
-**Returns:** `ZLINK_RECV_OK` on success; otherwise a `zlink_recv_result_t` value. Detailed errnos other than `EAGAIN`/`ETERM` (for example,
-`EMSGSIZE` for an over-capacity topic or `EINVAL` for a non-XPUB subject) surface as `ZLINK_RECV_INTERNAL_ERROR`; `zlink_errno()` retains
-the detailed internal errno for diagnostics.
+**Returns:** `ZLINK_RECV_OK` on success; otherwise a `zlink_recv_result_t` value. `zlink_errno()` retains the detailed internal errno for
+diagnostics.
 
-**Errors:** `EFAULT` if `xpub_` is NULL. `EAGAIN` if `ZLINK_DONTWAIT` is set and no event is available. `EMSGSIZE` if the topic exceeds
-`topic_id_capacity_`. `EINVAL` if the subject is not XPUB.
+**Errors:** `EFAULT` if `xpub_` is NULL. `EAGAIN` if `ZLINK_DONTWAIT` is set and no event is available. `ZLINK_RECV_BUFFER_TOO_SMALL` with
+`ENOBUFS` if the topic is longer than `topic_id_capacity_`. `ZLINK_RECV_NOT_SUPPORTED` with `ENOTSUP` if the subject is not XPUB.
 
 **See also:** `zlink_publish_part`
 
@@ -238,9 +239,9 @@ Verify the following only through the public surface (`zlink_set_pub_option`, `z
 
 - When a raw XPUB has a subscription event, the caller observes `ZLINK_RECV_OK` together with `*subscribed_out_` (subscribe=1, unsubscribe=0), the subscribing peer's routing ID pointer, and binary-safe topic bytes.
 - `source_rid_out_` is an optional output that may be NULL.
-- The `*source_rid_out_` routing ID pointer uses per-calling-thread storage, so the next successful `zlink_xpub_recv_part` call on any XPUB on the same thread overwrites it. Copy the value immediately to retain it.
+- The `*source_rid_out_` routing ID view stays valid until the same socket's next data receive API entry or close, and a receive on another socket doesn't change it. Copy the value immediately to retain it.
 - When `ZLINK_DONTWAIT` is set and no event is available, errno is `EAGAIN`.
-- If the topic exceeds `topic_id_capacity_`, the function writes the required length to `*topic_id_len_out_` and fails with `EMSGSIZE`. The event has already been dequeued and cannot be retried. A subject that is not XPUB fails with `EINVAL`. In both cases, the public result surfaces as `ZLINK_RECV_INTERNAL_ERROR`, and `zlink_errno()` retains the detailed errno.
+- If the topic is longer than `topic_id_capacity_`, the function writes the required length to `*topic_id_len_out_` and returns `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`; the event is preserved and the next receive with a sufficient buffer returns it once. A subject that is not XPUB fails with `EINVAL`. In both cases, the public result surfaces as `ZLINK_RECV_INTERNAL_ERROR`, and `zlink_errno()` retains the detailed errno.
 - If `xpub_` is NULL, errno is `EFAULT`.
 
 **Publish and topic (`zlink_publish_part`)**
@@ -248,12 +249,12 @@ Verify the following only through the public surface (`zlink_set_pub_option`, `z
 - When `topic_id_` is not NULL, the bytes before the terminating NUL are prepended to the message as the topic frame. When it is NULL, the first message frame carries the topic according to the wire-prefix convention.
 - Exceeding a size limit that includes the topic bytes returns `ZLINK_SUBMIT_INVALID_ARGUMENT` with `EMSGSIZE`; failure to allocate topic-frame storage returns `ZLINK_SUBMIT_OUT_OF_MEMORY` with `ENOMEM`.
 - Calling the function on a type other than raw `PUB` or raw `XPUB` returns `ZLINK_SUBMIT_NOT_SUPPORTED` with `errno == ENOTSUP`.
-- `part_` is consumed on both success and failure; a consumed `zlink_msg_t` can be reused only after it has been initialized again.
+- `part_` is consumed on both success and failure and is left as an initialized empty message — it can be closed or reused as is.
 - When `ZLINK_DONTWAIT` is used and the call cannot proceed immediately, the result is `ZLINK_SUBMIT_BACKPRESSURED`.
 
 **Multipart publish record**
 
-- If an intermediate or final submit in an open sequence fails, no part of that record becomes visible to subscribers, and the next publish starts with the first part of a new record.
+- If an intermediate or final submit in an open sequence fails at the send stage, no part of that record becomes visible to subscribers and the next publish starts with the first part of a new record; a pre-submit sequence validation failure (topic/flag/thread mismatch) consumes only the called part and the record can be continued from the original thread with the same topic and flag ([PUB §3](02-pub.en.md#3-multipart-publishing-and-the-publish-record)).
 - The failed call also consumes `part_`; after a failure, including backpressure, the caller must resubmit the retained entire record from its first part.
 
 **Drop and NODROP at HWM**

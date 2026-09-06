@@ -99,8 +99,8 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part (
 [§2](#2-multipart-송신과-record-원자성)가 정의한다.
 
 이 함수는 성공과 실패 모두에서 `part_`의 내용을 소비한다. 같은 내용을 다시 사용할 가능성이
-있으면 호출 전에 복사해야 하며, 소비된 `zlink_msg_t`를 다시 사용하려면 먼저 초기화해야
-한다. `flags_`에는 `ZLINK_SEND_FLAGS_NONE` 또는 `ZLINK_SEND_FLAGS_DONTWAIT`를 전달한다. `NONE
+있으면 호출 전에 복사해야 한다. 소비된 `zlink_msg_t`는 초기화된 빈 message로 남으므로 그대로
+close하거나 다시 쓸 수 있다([Socket 공통의 part ownership](README.ko.md#part-send와-pending-admission)). `flags_`에는 `ZLINK_SEND_FLAGS_NONE` 또는 `ZLINK_SEND_FLAGS_DONTWAIT`를 전달한다. `NONE
 FINAL`은 호출 진입 시 `SNDTIMEO`를 snapshot해 local queue admission까지 기다리고, `DONTWAIT
 FINAL`은 기다리지 않는다. 두 경로가 반환하는 ID와 completion은
 [§5 「part 흐름」](#5-구현-및-contract-test-검증-요구)이 관찰 결과로 정리한다. Optional ID

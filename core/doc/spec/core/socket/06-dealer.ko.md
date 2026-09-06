@@ -301,7 +301,7 @@ completion 없음이고, 쓰기 여유가 있는 후보 peer가 없으면(HWM·b
 payload는 유지하지 않는다. 어느 후보 peer든 쓰기 여유가 생기면 그 token의
 `ZLINK_COMPLETION_WRITABLE` record(`ZLINK_SEND_ADMITTED`, 같은 `user_context`, 빈 `peer_rid`)를
 정확히 한 번 만들고, 호출자는 보관한 record를 `DONTWAIT`로 다시 제출한다. Token은 WRITABLE
-record, socket close 또는 context 종료(`ZLINK_SEND_TERMINAL`과 lifecycle errno)로만 끝난다.
+record로 끝나며, socket close·context 종료는 token을 내부에서 끝내고 record를 전달하지 않는다.
 `NONE FINAL`은 호출 진입 시 `SNDTIMEO`를 snapshot해 admission까지 기다리고 ID `0`으로 끝난다.
 상세 result·errno와
 context 계약은 [Socket 공통](README.ko.md#part-send와-pending-admission)을 따른다.
@@ -348,8 +348,9 @@ request 후보 집합 전체다. Core는 request payload를 보관하지 않는�
 선택 절차로 ROUTER를 다시 고른다.
 
 Reply timeout은 local send queue admission, 즉 `ZLINK_SUBMIT_OK` 반환부터 시작한다. Wait token이
-유지되는 동안은 timeout이 시작되지 않는다. Admission 뒤 disconnect가 발생하면 payload를
-replay하지 않고 correlation과 남은 monotonic budget만 유지한다. Completion ownership과 close는
+유지되는 동안은 timeout이 시작되지 않는다. Admission 뒤 submit 시점 transport pair가 종료되면
+[Socket 공통 §6의 completion 표](README.ko.md#request와-reply)대로 원인과 관계없이 즉시
+`ZLINK_REQUEST_NOT_CONNECTED`로 한 번 종결하며 payload를 replay하지 않는다. Completion ownership과 close는
 [Socket 공통](README.ko.md#completion-pull과-ownership)을 따른다.
 
 ---
@@ -436,7 +437,8 @@ snapshot)만으로 다음을 확인한다. 각 항목은 test 하나로 이어�
   payload를 보관하지 않는다. WRITABLE record 뒤 caller가 같은 request를 다시 제출하면 ROUTER를 다시
   선택한다.
 - Request timeout은 local queue admission부터 시작하고 wait token이 유지되는 동안은 시작하지 않는다.
-  Admission 뒤 disconnect는 payload를 replay하지 않으며 남은 monotonic budget을 reset하지 않는다.
+  Admission 뒤 submit 시점 pair가 종료되면 timeout을 기다리지 않고 즉시 `ZLINK_REQUEST_NOT_CONNECTED`
+  completion 하나를 받으며 payload는 replay되지 않는다.
 - SEND wait token과 REQUEST가 공유하는 completion reservation이 포화하면 REQUEST FINAL은 flags와
   관계없이 즉시 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`, ID `0`, completion 없음이고, DONTWAIT
   SEND는 `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, ID `0`이다.

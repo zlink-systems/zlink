@@ -180,10 +180,11 @@ lane을, reply는 Completion lane을 사용한다. 따라서 ROUTER-ROUTER Appli
 [backpressure](glossary.ko.md#backpressure)(수신이 처리 속도를 따라오지 못할 때 sender의 추가
 제출을 제한하는 동작)로 중단되어도 이미 보낸 request를 완료할 수 있다.
 
-각 lane의 payload는 directional network pipe에만 보관한다. 수신한 application payload를
-숨은 PAIR queue로 옮기지 않으며 reply payload를 completion deque로 복사하지 않는다.
-남은 terminal callback metadata queue에는 payload가 없는 timeout·disconnect·shutdown
-결과만 보관한다. 이 queue는 transport lane이나 wire record가 아니다.
+수신한 application payload는 directional network pipe에서 public receive로 바로 이동하며 숨은
+PAIR queue를 거치지 않는다. REQUEST의 reply payload는 socket-local completion record가 수신 또는
+폐기까지 소유하고, 성공한 completion receive가 그 소유권을 caller에게 이전한다(복사 없음) —
+[socket README의 completion ownership](socket/README.ko.md#completion-pull과-ownership)이 소유하는
+계약이다. 이 record queue는 transport lane이나 wire record가 아니다.
 
 ### Transport liveness 구현
 

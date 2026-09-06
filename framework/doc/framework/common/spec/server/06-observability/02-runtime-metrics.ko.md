@@ -325,7 +325,8 @@ storage와 histogram bucket을 구성하지 않는다.
   않는다.**
 - **counter와 updown 갱신은 dispatch ordering을 바꾸지 않는다.**
 - **Observable은 runtime이 이미 유지하는 제한된 크기의 집계값만 읽는다.** Actor·Spot,
-  mailbox 또는 Location Store record 전체를 순회해서 값을 만들지 않는다.
+  mailbox 또는 Location Store record 전체를 순회해서 값을 만들지 않는다. 내부 확인 조건: 수집
+  callback이 object·record 컬렉션을 순회하는 호출부가 없다(코드 검토).
 - Mailbox enqueue·dequeue와 turn마다 counter, timestamp 또는 histogram을 기록하지
   않는다.
 - Provider가 histogram bucket과 aggregation을 정한다.
@@ -340,8 +341,7 @@ storage와 histogram bucket을 구성하지 않는다.
 **이름과 단위**
 
 - 계기 이름, 종류, 단위와 허용 label value가 모든 언어에서 같다.
-- Mailbox·Spot·Actor queue와 turn 단위 metric이 존재하지 않으며, 수집을 위해 전체
-  object나 Store record를 순회하지 않는다.
+- Mailbox·Spot·Actor queue와 turn 단위 metric이 존재하지 않는다.
 - Controlled DEALER-ROUTER reply byte delta는 `zlink.host.core_hwm.accounted`에 나타나고
   `zlink.host.core_hwm.completion_accounted`에는 나타나지 않는다. ROUTER-ROUTER reply byte는
   Completion metric에 나타나며 metric 이름과 label은 topology에 따라 바뀌지 않는다.
