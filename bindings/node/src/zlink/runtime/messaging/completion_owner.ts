@@ -526,16 +526,9 @@ export class CompletionOwner {
     entry: CompletionEntry<unknown>,
     completion: NativeCompletion
   ): void {
-    const retry = this.retries.get(entry.token);
-    const sameTarget = retry !== undefined
-      && (retry.routingId === null
-        ? completion.peerRoutingId === null
-        : completion.peerRoutingId !== null
-          && retry.routingId.equals(completion.peerRoutingId));
     if (completion.kind !== COMPLETION_WRITABLE
         || completion.completionId !== entry.completionId
-        || completion.userContext !== entry.token
-        || !sameTarget) {
+        || completion.userContext !== entry.token) {
       this.failEntry(entry, submitError(
         SubmitResult.InternalError,
         completion.terminalErrno,
