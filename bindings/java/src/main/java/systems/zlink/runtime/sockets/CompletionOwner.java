@@ -83,6 +83,7 @@ final class CompletionOwner implements AutoCloseable {
         new ConcurrentHashMap<>();
     private final Object ownerLock = new Object();
     private final ReentrantLock drainLock = new ReentrantLock();
+    private final List<Pending<?>> retries = new ArrayList<>();
     private final ReentrantReadWriteLock nativeCallGate =
         new ReentrantReadWriteLock();
     private volatile boolean closed;
@@ -618,8 +619,24 @@ final class CompletionOwner implements AutoCloseable {
                 (int) NativeLayouts.COMPLETION_LAYOUT.byteSize());
             int rc = Native.completionRecv(socket.handle(), completion,
                 RECV_DONT_WAIT);
-            if (rc == RecvResult.NO_DATA.value()
-                    || rc == RecvResult.BUSY.value()) {
+            if (rc == RecvResult.NO_DATA.value()) {
+                try {
+                    for (Pending<?> state : retries) {
+                        if (!state.awaitingWritable())
+                            continue;
+                        if (state.kind == PendingKind.REQUEST)
+                            retryRequest(state);
+                        else
+                            retrySend(state);
+                        if (settlements != null && state.terminalDispatched())
+                            settlements.add(state::awaitSettlement);
+                    }
+                } finally {
+                    retries.clear();
+                }
+                break;
+            }
+            if (rc == RecvResult.BUSY.value()) {
                 break;
             }
             if (rc != RecvResult.OK.value()) {
@@ -764,6 +781,7 @@ final class CompletionOwner implements AutoCloseable {
             }
             for (Pending<?> state : new ArrayList<>(pending.values()))
                 state.reject(failure);
+            retries.clear();
         } finally {
             drainLock.unlock();
         }
@@ -860,6 +878,7 @@ final class CompletionOwner implements AutoCloseable {
         runtime.unregister(this);
         rejectPendingClosed();
         pending.clear();
+        retries.clear();
     }
 
     private static boolean isWritableWait(SubmitAttempt attempt) {
@@ -1081,10 +1100,10 @@ final class CompletionOwner implements AutoCloseable {
                 reject(failure);
             } else if (kind == PendingKind.DISCARD_WRITABLE) {
                 completeDiscardInline();
-            } else if (kind == PendingKind.REQUEST) {
-                retryRequest(this);
             } else {
-                retrySend(this);
+                // Core requires the current queue to reach NO_DATA before
+                // a WRITABLE token can trigger another native submission.
+                retries.add(this);
             }
         }
 
