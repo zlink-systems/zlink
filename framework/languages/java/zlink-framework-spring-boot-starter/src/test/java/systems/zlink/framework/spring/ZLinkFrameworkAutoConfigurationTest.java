@@ -710,14 +710,17 @@ final class ZLinkFrameworkAutoConfigurationTest {
     }
 
     @Test
-    void autoConfigurationAppliesCustomizersBeforeRuntimeStarts() {
+    void autoConfigurationAppliesCustomizersBeforeRuntimeStarts() throws Exception {
         FakeZLinkBackendAdapterFactory backendFactory =
             new FakeZLinkBackendAdapterFactory();
+        MonitorRecvProbe monitor = new MonitorRecvProbe();
         try (AnnotationConfigApplicationContext context =
                  new AnnotationConfigApplicationContext()) {
-            context.registerBean(ZLinkBackendAdapterProvider.class, () -> backendFactory);
+            context.registerBean(ZLinkBackendAdapterProvider.class, () -> monitor.observe(backendFactory));
             context.register(TestConfig.class, ZLinkFrameworkAutoConfiguration.class);
             context.refresh();
+            monitor.awaitRecv();
+            assertEquals(List.of("socketMonitor.recv"), monitor.calls());
 
             assertEquals(
                 List.of(
@@ -728,7 +731,6 @@ final class ZLinkFrameworkAutoConfigurationTest {
                     "dealer.setChannelName.profile",
                     "monitoring.open.dealer",
                     "create.socketMonitor",
-                    "socketMonitor.onEvent",
                     "dealer.connect.inproc://profile-server"),
                 backendFactory.calls());
         }
@@ -742,12 +744,12 @@ final class ZLinkFrameworkAutoConfigurationTest {
                 "dealer.setChannelName.profile",
                 "monitoring.open.dealer",
                 "create.socketMonitor",
-                "socketMonitor.onEvent",
                 "dealer.connect.inproc://profile-server",
                 "close.socketMonitor",
                 "close.dealer",
                 "close.context"),
             backendFactory.calls());
+        assertEquals(List.of("socketMonitor.recv", "close.socketMonitor"), monitor.calls());
     }
 
     @Configuration

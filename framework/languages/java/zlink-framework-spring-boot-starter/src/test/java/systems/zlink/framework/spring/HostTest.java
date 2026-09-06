@@ -25,16 +25,19 @@ final class HostTest {
     }
 
     @Test
-    void host_startsAndStops_frameworkRuntimeContext() {
+    void host_startsAndStops_frameworkRuntimeContext() throws Exception {
         FakeZLinkBackendAdapterFactory backendFactory =
             new FakeZLinkBackendAdapterFactory();
+        MonitorRecvProbe monitor = new MonitorRecvProbe();
         ZLinkFrameworkLifecycle lifecycle;
 
         try (AnnotationConfigApplicationContext context =
                  new AnnotationConfigApplicationContext()) {
-            context.registerBean(ZLinkBackendAdapterProvider.class, () -> backendFactory);
+            context.registerBean(ZLinkBackendAdapterProvider.class, () -> monitor.observe(backendFactory));
             context.register(ProfileChannelConfig.class, ZLinkFrameworkAutoConfiguration.class);
             context.refresh();
+            monitor.awaitRecv();
+            assertEquals(List.of("socketMonitor.recv"), monitor.calls());
 
             lifecycle = context.getBean(ZLinkFrameworkLifecycle.class);
 
@@ -46,7 +49,7 @@ final class HostTest {
         // section 4.4 verifies ChannelName, server RID and lifecycle generation
         // on the transport even for a manual endpoint, and spec 55 section 3
         // only marks the connection ready after that admission. The monitor is
-        // subscribed before connect so the readiness event cannot be missed, and
+        // opened before connect so events are queued for pull consumption, and
         // spec 55 section 6 closes it no later than the connection it observes.
         assertEquals(
             List.of(
@@ -57,12 +60,12 @@ final class HostTest {
                 "dealer.setChannelName.profile",
                 "monitoring.open.dealer",
                 "create.socketMonitor",
-                "socketMonitor.onEvent",
                 "dealer.connect.inproc://profile-server",
                 "close.socketMonitor",
                 "close.dealer",
                 "close.context"),
             backendFactory.calls());
+        assertEquals(List.of("socketMonitor.recv", "close.socketMonitor"), monitor.calls());
     }
 
     @Configuration
