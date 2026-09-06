@@ -1571,3 +1571,7 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 ## D-134 (2026-09-06, 머신 A) `zlink_get_option(ZLINK_OPT_TYPE)`은 공개 `zlink_socket_type_t` 값을 반환한다 (내부 core enum 누출 수정)
 
 - Core 테스트 job의 공개 C 재현: ROUTER에서 `observed=6`(내부 `ZLINK_CORE_SOCKET_ROUTER`), 기대 `0x1005`. 공개 계약(socket README 옵션 표 "socket type (int, 읽기 전용)")은 `zlink_socket_type_t`뿐이므로 내부 값 노출은 결함(B). 수정: `zlink_option.cpp`의 TYPE 읽기에서 `public_socket_type_from_core_type`(신규, `core_socket_type_from_public_type`의 역함수)로 변환. 스펙 옵션 표 주석을 "`zlink_socket_type_t` 값을 int로"로 명시. 공개 C 회귀 테스트는 rebase 패치(D-133) 적용 뒤 integration에 추가(같은 CMakeLists 충돌 회피).
+
+## D-135 (2026-09-06, 머신 A) hotpath reference `pair_inproc` 2681.96 → 2505.36 재기준 — 사용자 STREAM 커밋(`973ebe30d5`)이 PAIR inproc 명령 수를 6.6% 줄임
+
+- 독립 확인: gate worktree를 origin/main(`5b749308e1`)으로 두고 hotpath_gate 실행 → `pair_inproc` 2505.360 (ratio 0.9342, 나머지 3셀 PASS). Core 테스트 rebase 브랜치도 2518.344(0.9390). D-118 job은 `c169e29eac`(STREAM 커밋 이전)에서 1.0024였고, D-134(option get)는 hot path가 아니므로 감소분은 `973ebe30d5`(msg/own/socket_base_msg 정리)의 효과다. gate는 ±5% 양방향이므로 의도된 개선은 reference를 갱신해야 통과한다. 새 reference = main 측정값 2505.36. 다른 3셀은 유지(각 ±1.2% 이내).
