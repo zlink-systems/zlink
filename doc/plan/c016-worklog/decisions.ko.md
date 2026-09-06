@@ -1665,3 +1665,7 @@ S-11(opus, `core-rf-S-11-summary.md`): TSan으로 두 쓰기 주체가 다른 �
 
 ## D-B155 (2026-09-07 04:20, 머신 B) S-12 채택 커밋 `73e6c54c60`; 게이트 s11 투입; 다음은 G-0 조용한 재기준
 게이트 s12(`gate-s12-summary.md`): stress baseline 2/50 → **0/50**, CLOSE_BUSY 계약 12/12, 5회 suite 230/230, hotpath 5셀 ≈1.00(stream_tcp 1.0001), mirror 32/32. 새 간헐 관찰: `test_single_lane_flow_snapshot_accounting`(부하 중 1회, solo 3/3) — 백로그. 게이트 s11 투입(마지막 2S job). 이후 순서: 모든 job 종료 → G-0(load < 1, with_stream 4스택 runs 3 + perf/c 스크린 runs 3 + 전 size) → G-A 공통 경로 프로파일 → G-job → Phase 3.
+
+## D-B156 (2026-09-07 04:50, 머신 B) S-11 채택 커밋; Phase 2S 종료 — G-0 조용한 재기준 시작
+게이트 s11(`gate-s11-summary.md`): 충돌 0, 인터페이스 diff 0, ctest 208/209, 5회·until-fail:10 green, hotpath 5셀 PASS(**stream_tcp 1.0005 — 축소셀의 −4.2 %는 1연결 셀에서 안 보임**; 구조·정확성으로 채택), with_stream 단일 run 0.795/0.810/0.801. TSan: S-11 대상 race 소멸, 남은 1건은 §7.5 D-e(`receive_once_guarded` ↔ `notify_receive_progress_locked`). 게이트 job이 main `core/build-tsan`을 GCC용(`ENABLE_TSAN=OFF` + 수동 `-fsanitize=thread`)으로 재구성(빌드 설정만).
+**Phase 2S 집계**: 채택 S-4·S-10·S-2·S-9·S-1·S-12·S-11(코드 커밋 `597f134d68`·`e1db6f1f72`·`baaa68d67b`·`73e6c54c60`·이 커밋), 기각 S-3·S-5(측정으로 반박). hotpath stream_tcp 15540 → 14623(−5.9 %, 게이트 셀), 축소셀 Ir/msg 11,096 → 9,474(−14.6 %). with_stream zlink/asio는 게이트별 단일 run이라 G-0 runs 3 결과로 확정한다.
