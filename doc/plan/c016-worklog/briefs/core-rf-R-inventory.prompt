@@ -1,0 +1,10 @@
+Phase 3 인벤토리 job (sonnet, **읽기 전용**: 빌드·테스트·측정·소스 수정 금지, 커밋 금지, CPU 사용 최소 — 측정 job이 돌고 있다). 상한 1 h.
+입력(감독관이 채움): 모듈 R<n>, 파일 목록.
+기준 문서: doc/principal/dev/posddd.ko.md(특히 "얕은 모듈 스멜 카탈로그", 위험 신호 체크리스트), core/doc/spec/core/systems/08-posd-module-structure.ko.md, 07-core-source-layout.ko.md. 관련 실측: S-A(core-rf-S-A-stream-profile.md)·S-B(core-rf-S-B-stream-path-cost.md)·S-5(core-rf-S-5-summary.md의 layering 537 Ir/msg) 보고서.
+찾을 것(항목마다 `file:line`, 근거, 제안, 예상 변경 반경(파일 수·행 수), 계약 영향(없음 / 있음→D), 예상 성능 영향(없음/이득/위험)):
+1. dead code — 호출자 없는 함수·메서드(`grep -rn` 으로 정의 외 참조 0인 것, 가상 함수는 오버라이드 관계 확인), 항상 같은 값을 갖는 분기·플래그, 제거된 개념의 잔재(예: pending pool, 옛 callback queue), no-op 호출(항상 0/false 반환), 미사용 매개변수(`LIBZLINK_UNUSED`), 미사용 include·멤버.
+2. 중복 — 같은 일을 하는 helper 둘 이상(이름만 다른 것, 복사-수정된 코드), 두 곳에서 유지되는 같은 상태(미러), 같은 판정을 여러 곳에서 반복.
+3. 얕은 모듈 — pass-through 메서드(인자를 그대로 넘기기만), 한 함수가 250행 이상, 매개변수 6개 이상, 정보 누출(호출자가 내부 표현을 알아야 함), 한 개념이 여러 파일에 흩어짐, 한 파일에 여러 개념(파일 크기·책임 목록).
+4. 잘못된 소유 — 다른 계층이 알 필요 없는 상태·함수를 헤더로 노출(특히 socket_base.hpp 같은 큰 헤더), 하위 계층이 상위 계층을 아는 경우.
+5. 이름-개념 불일치 — 이름이 하는 일과 다른 것(예: fast_mutex가 recursive였던 사례).
+출력: doc/plan/c016-worklog/core-rf-R<n>-inventory.md (한국어). 표 1개(번호 | 분류 1~5 | file:line | 관찰 | 제안 | 반경 | 계약 | 성능) + 마지막에 "적용 job 묶음 제안"(서로 파일이 겹치지 않고 각 1.5 h 안에 끝날 단위로 2~4개, 각 묶음의 항목 번호와 순서). 확신 없는 항목은 "확인 필요"로 표시하고 확인 방법을 적는다. 항목 수보다 정확도를 우선한다 — 잘못된 dead code 판정은 빌드를 깨뜨린다.
