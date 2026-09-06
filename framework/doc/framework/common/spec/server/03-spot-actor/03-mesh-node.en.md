@@ -345,19 +345,26 @@ automatic connection competition, only one
 [ready](../00-foundation/02-glossary.en.md#ready) connection is kept, per
 [RouteMesh's Duplicate Peer Connection Rule](../02-channel-transport/01-channel-topology.en.md#automatic-only-the-meshnode-with-the-smaller-rid-starts-the-connection).
 
-The intention to connect to a peer is expressed as one **connection intent** per peer,
-and an intent's lifecycle follows these rules.
+The intention to keep a connection to a specific peer is expressed as a
+[connection intent](../00-foundation/02-glossary.en.md#connection-intent) that the
+application configuration or the auto-connect owner registers once per peer. The runtime
+attempts connect and reconnect only while the intent exists.
 
-- Removing an outbound intent is the same decision as removing the binding's connection
-  registration for that endpoint. The owner of the intent calls the binding's public
-  disconnect; an inbound peer on the same endpoint doesn't own the outbound registration,
-  so its presence is no reason to skip the disconnect. Endpoint replacement is judged in
-  exactly one place.
-- A removed intent is terminal. A late READY (same endpoint and RID) doesn't reactivate a
-  removed intent; it activates only a new intent.
-- The combination of intent removal and no admitted peer is the target-lifecycle
-  termination signal a durable operation observes
-  ([Actor §9](04-actor-model.en.md#9-implementation-and-contract-test-verification-requirements)).
+- **Removing an outbound intent also removes the binding's connection registration for
+  that endpoint, as one decision.** The intent owner calls the binding's public disconnect.
+  An inbound peer on the same endpoint doesn't own the outbound registration, so its
+  presence is no reason to skip the disconnect — if the old registration remains, a Hello
+  sent after reconnecting with a new RID is bound to the old registration and never reaches
+  the peer. Whether an endpoint is being replaced is judged in exactly one place.
+- **A removed intent is terminal.** A late READY for the same endpoint and RID is a
+  leftover observation of an earlier attempt, not a new intention to connect, so it doesn't
+  reactivate the removed intent; only a new intent is activated. No separate generation or
+  state is kept for this.
+- **The state in which intent removal and the absence of an admitted peer hold together is
+  that peer's lifecycle termination.** Transport loss or the mere absence of a peer is a
+  transient state that reconnection can recover, and only the combination is the signal
+  that stops a durable operation's replay
+  ([Actor Model §8.1](04-actor-model.en.md#81-failure)).
 
 The following diagram shows the order in which a physical connection is
 established — the identity exchanged in the handshake must pass admission
@@ -550,6 +557,11 @@ runtime snapshot and event).
   Completion connection and can produce terminal completion before timeout.
 - RouteMesh connection monitoring reports `CONNECTION_READY` once per logical
   peer, and only Completion physical events use the Completion lane value.
+- After removing an outbound intent while an inbound peer on the same endpoint is
+  admitted, reconnecting to that endpoint with a new RID makes the remote node receive the
+  new RID's Hello and complete admission.
+- A late READY arriving for the endpoint and RID of a peer whose intent was removed
+  doesn't report that peer as admitted again.
 
 ---
 

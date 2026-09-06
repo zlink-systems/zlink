@@ -605,6 +605,23 @@ Handler가 없거나 decode가 실패하거나 application handler가 예외를 
 Drain 중에는 새로운 Actor 생성과 membership 배정을 막는다. 이미 수락한 Actor turn과
 control transaction은 deadline까지 진행한다.
 
+`OperationId`를 가진 durable lifecycle operation(create·join 등, [§9](#9-구현-및-contract-test-검증-요구)의
+재전송 규칙)이 deadline 전에 끝나는 경우는 다음 두 규칙이 정한다.
+
+- **Replay를 deadline 전에 멈추는 신호는 target node의 lifecycle 종료 하나다.** 그 판정은
+  logical owner(Location·auto-connect 소유자)가 target node의
+  [connection intent](../00-foundation/02-glossary.ko.md#connection-intent)를 제거했고 그
+  node에 admitted peer가 남아 있지 않다는 사실이며([MeshNode §7.1](03-mesh-node.ko.md#71-peer-연결)),
+  이때 sender는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-쓰고-어디에-쓰지-않는가)의
+  "owner process 종료"대로 operation을 즉시 `Unavailable`로 끝낸다. Transport 단절이나 peer
+  부재 단독은 재연결로 회복될 수 있으므로 replay를 계속한다. Sender는 이 판정을 위해 별도
+  상태·timer·monitor를 두지 않고 이미 존재하는 intent 제거 전이를 조회한다 — 판정 주체가
+  둘이면 같은 target을 한쪽은 종료로, 다른 쪽은 transient로 보는 구간이 생긴다.
+- **Deadline의 소유자는 operation(sender) 하나다.** Deferred join이나 remote transaction
+  wrapper처럼 operation을 감싸는 층은 deadline을 operation에 전달하고 그 terminal을 기다리며,
+  admission 대기 중 자기 timer로 경쟁하지 않는다 — timer가 둘이면 같은 operation이 서로 다른
+  시점·종류로 두 번 끝난다.
+
 ### 8.2 관측 정보
 
 Runtime은 다음 정보를 서로 구분하여 관측할 수 있어야 한다.
@@ -678,16 +695,11 @@ ActorId는 metric label로 사용하지 않는다.
   한 번도 admission되지 못한 채(route 부재) 소진되면 [오류 모델](../00-foundation/07-framework-error-model.ko.md)의
   `Unavailable`, admission된 request의 reply를 받지 못한 채 소진되면 `DeadlineExceeded`다.
   중복 실행 방지는 target의 terminal record가 보장하므로 sender는 실행 여부를 추정하지 않는다.
-- Deadline 전에 replay를 멈추는 신호는 target lifecycle 종료 하나뿐이며, 그 판정은 logical
-  owner(Location·auto-connect 소유자)가 그 target node의 connection intent를 제거했고 그
-  target에 admitted peer가 남아 있지 않다는 사실이다([MeshNode §7.1](03-mesh-node.ko.md#71-peer-연결)의
-  intent 규칙). 이 조건이 성립하면 sender는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-쓰고-어디에-쓰지-않는가)의
-  "owner process 종료" 규칙대로 operation을 즉시 `Unavailable`로 끝낸다. Transport 단절이나
-  peer 부재만으로는 transient이므로 replay를 계속한다. Sender는 이 판정을 위해 별도 상태·timer·
-  monitor를 두지 않고 이미 존재하는 intent 제거 전이를 조회한다.
-- Deadline의 소유자는 operation(sender) 하나다. Deferred join·remote transaction wrapper 등
-  operation을 감싸는 층은 admission 대기 중 자기 timer로 경쟁하지 않고 deadline을 operation에
-  전달한 뒤 operation의 terminal을 기다린다.
+- Replay 중인 durable operation의 target node에 대해 logical owner가 connection intent를
+  제거하고 그 node에 admitted peer가 없으면, operation이 deadline 전에 `Unavailable`로 끝난다.
+  Transport 단절만 일어난 경우에는 끝나지 않고 재연결 뒤 같은 `OperationId`로 replay가 이어진다.
+- Deferred join과 remote transaction wrapper를 거친 호출은 감싼 operation의 terminal과 같은
+  종류·같은 시점에 끝나며, admission 대기 중 wrapper가 먼저 timeout을 만들지 않는다.
 - Destroy가 같은 generation만 인정하고 새 incarnation으로 다시 지정하지 않는다.
 
 ---

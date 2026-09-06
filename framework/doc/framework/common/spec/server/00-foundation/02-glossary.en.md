@@ -584,6 +584,22 @@ Spot direct call.
 | Public composition | Expressed as whether Instance activation is allowed, plus an optional stable type. |
 | Lifetime | Applies only to that single-use call; doesn't carry over to a regular Spot direct or a later call. |
 
+<a id="connection-intent"></a>
+### Connection Intent
+
+A MeshNode's intention to keep a connection to a specific peer node. In manual topology
+the application configuration registers and removes one per peer; in automatic discovery
+the auto-connect owner that reads the Location Store does. The runtime attempts connect
+and reconnect to that peer only while the intent exists, and removing the intent also
+removes the binding's connection registration.
+
+| Item | Content |
+|---|---|
+| Shape | Runtime state, one per peer. No standalone public type. |
+| Creation and management | Created and removed by the application configuration (manual) or the auto-connect owner (automatic). The runtime's READY/DISCONNECTED observations don't create an intent. |
+| Lifetime | From registration until the owner removes it. Removal is terminal; a late READY doesn't revive it. |
+| Application authority | In manual topology the application registers and removes connect targets. In automatic mode the application doesn't handle it directly. |
+
 <a id="cold-activation"></a>
 ### Cold Activation
 

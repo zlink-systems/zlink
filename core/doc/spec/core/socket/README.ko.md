@@ -1324,6 +1324,9 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 - `zlink_bind`는 사용 중인 주소에 `EADDRINUSE`, 없는 interface에 `EADDRNOTAVAIL`, 지원하지 않는 transport에 `EPROTONOSUPPORT`이며, TCP port 0으로 bind하면 `ZLINK_OPT_LAST_ENDPOINT`로 실제 endpoint를 조회할 수 있다.
 - `zlink_disconnect_rid`는 대상 없음에 `ZLINK_CONNECT_NOT_FOUND`, 중복 routing id에 `ZLINK_CONNECT_CONFLICT`, lifecycle 소유권 충돌에 `ZLINK_CONNECT_BUSY`다.
 
+- `zlink_unbind` 또는 bind한 socket의 `zlink_close`가 반환한 직후 같은 주소로 `zlink_bind`하면
+  tcp·ipc·inproc 모두 성공하고, 그 뒤 도착한 connect는 새 listener에만 도달한다.
+
 **Part send와 completion**
 - `DONTWAIT FINAL`은 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`과 completion 없음이고,
   backpressure이거나 target이 준비되지 않았으면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 nonzero 대기

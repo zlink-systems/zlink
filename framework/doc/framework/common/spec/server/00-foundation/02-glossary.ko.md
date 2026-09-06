@@ -542,6 +542,21 @@ Target Spot이 없을 때 새 Instance Spot을 준비해도 된다는 caller의 
 | 공개 구성 | Instance activation 허용 여부와 optional stable type으로 표현한다. |
 | 수명 | 해당 single-use call에만 적용하며 일반 Spot direct나 이후 call에 남지 않는다. |
 
+<a id="connection-intent"></a>
+### Connection intent
+
+MeshNode가 특정 peer node와 연결을 유지하려는 의도다. Manual topology에서는 application
+구성이, automatic discovery에서는 Location Store를 읽는 auto-connect 소유자가 peer마다 하나씩
+등록하고 제거한다. Runtime은 intent가 있는 동안만 그 peer에 connect와 재연결을 시도하며,
+intent를 제거하면 binding의 연결 등록도 함께 제거한다.
+
+| 항목 | 내용 |
+|---|---|
+| 형태 | Peer당 하나인 runtime 상태. 독립된 public type은 없다. |
+| 생성·관리 | Application 구성(manual) 또는 auto-connect 소유자(automatic)가 만들고 제거한다. Runtime의 READY·DISCONNECTED 관찰은 intent를 만들지 않는다. |
+| 수명 | 등록부터 소유자의 제거까지. 제거는 terminal이며 늦은 READY로 되살아나지 않는다. |
+| Application 권한 | Manual topology에서 connect 대상을 등록·제거한다. Automatic에서는 application이 직접 다루지 않는다. |
+
 <a id="cold-activation"></a>
 ### Cold activation
 

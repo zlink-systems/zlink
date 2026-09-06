@@ -1506,6 +1506,10 @@ connection, options, send/receive/completion functions, return values, and
   `ZLINK_CONNECT_CONFLICT` for a duplicate routing ID, and
   `ZLINK_CONNECT_BUSY` for a lifecycle ownership conflict.
 
+- Calling `zlink_bind` on the same address right after `zlink_unbind` (or `zlink_close` of
+  the bound socket) returns succeeds for tcp, ipc, and inproc alike, and a connect arriving
+  afterwards reaches only the new listener.
+
 **Part send and completion**
 - A DONTWAIT `FINAL` makes one admission attempt. Immediate admission returns
   ID `0` and no completion. Backpressure or a target that is not ready yet

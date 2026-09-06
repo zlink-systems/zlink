@@ -685,6 +685,31 @@ During drain, new Actor creation and membership assignment are blocked.
 Already-accepted Actor turns and control transactions proceed to the
 deadline.
 
+When a durable lifecycle operation carrying an `OperationId` (create, join, and
+the like — the replay rules in
+[§9](#9-implementation-and-contract-test-verification-requirements)) ends
+before its deadline is decided by these two rules.
+
+- **The only signal that stops replay before the deadline is the target node's
+  lifecycle termination.** That judgment is the fact that the logical owner
+  (the Location / auto-connect owner) removed the
+  [connection intent](../00-foundation/02-glossary.en.md#connection-intent) for
+  the target node and no admitted peer remains for that node
+  ([MeshNode §7.1](03-mesh-node.en.md#71-peer-connection)); the sender then ends
+  the operation with `Unavailable` immediately, per "owner process terminated"
+  in
+  [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not).
+  Transport loss or the mere absence of a peer can be recovered by
+  reconnection, so replay continues. The sender keeps no separate state, timer,
+  or monitor for this judgment and observes the intent-removal transition that
+  already exists — with two judges, one side would treat the same target as
+  terminated while the other treats it as transient.
+- **The deadline has one owner: the operation (sender).** Layers that wrap an
+  operation — deferred join, remote transaction wrapper — pass the deadline to
+  the operation and wait for its terminal, and don't race with their own timer
+  while admission is pending — with two timers the same operation ends twice,
+  at different times and with different kinds.
+
 ### 8.2 Observability Information
 
 The runtime must be able to observe each of the following separately.
@@ -784,21 +809,14 @@ ActorId isn't used as a metric label.
   exhausted while an admitted request's reply never arrived ends with
   `DeadlineExceeded`. The target's terminal record guarantees that execution is
   not duplicated, so the sender does not guess whether execution happened.
-- The only signal that stops replay before the deadline is target lifecycle
-  termination, and that judgment is the fact that the logical owner (the
-  Location / auto-connect owner) removed the connection intent for that target
-  node and no admitted peer remains for that target (the intent rule in
-  [MeshNode §7.1](03-mesh-node.en.md#71-peer-connection)). When this holds the
-  sender ends the operation with `Unavailable` immediately, per the "owner
-  process terminated" rule in
-  [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not).
-  Transport loss or the mere absence of a peer is transient, so replay
-  continues. The sender keeps no separate state, timer, or monitor for this
-  judgment; it observes the intent-removal transition that already exists.
-- The deadline has one owner: the operation (sender). Layers that wrap an
-  operation — deferred join, remote transaction wrapper — do not race with
-  their own timer while admission is pending; they pass the deadline to the
-  operation and wait for the operation's terminal.
+- When the logical owner removes the connection intent for the target node of
+  a durable operation that is replaying and no admitted peer remains on that
+  node, the operation ends with `Unavailable` before its deadline. When only a
+  transport loss occurs it doesn't end, and replay with the same `OperationId`
+  continues after reconnection.
+- A call that went through deferred join or a remote transaction wrapper ends
+  with the same kind at the same moment as the wrapped operation's terminal,
+  and the wrapper doesn't produce a timeout first while admission is pending.
 - Destroy accepts only the same generation and doesn't retarget to a new
   incarnation.
 

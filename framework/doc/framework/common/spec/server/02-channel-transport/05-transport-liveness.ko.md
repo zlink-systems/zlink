@@ -70,7 +70,8 @@ Framework는 마지막 정상 확인 뒤 connection을 유지할 수 있는 시�
 - **경과 시간·deadline·retention은 언어 runtime의 monotonic clock 하나로 측정한다.** Wall
   clock은 timestamp 표기에만 쓴다. 연결 확인 주기, peer deadline, operation deadline, terminal
   record retention, readiness 대기 상한처럼 "얼마나 지났는가"를 묻는 모든 판정이 대상이다. 호스트
-  wall clock의 조정·점프는 이 판정을 바꾸지 않는다.
+  wall clock의 조정·점프는 이 판정을 바꾸지 않는다. 내부 확인 조건: runtime 코드에서 wall clock
+  값의 차로 경과 시간을 계산하는 곳이 없다(정적 검사).
 
 각 언어의 service runtime은 binding의 public raw socket API와 Framework service
 protocol만 사용한다. Private binding member, native symbol 직접 호출과 언어별 숨은

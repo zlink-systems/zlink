@@ -75,7 +75,9 @@ final time an operation must finish is called a [deadline](../00-foundation/02-g
   single monotonic clock.** The wall clock is used only to render timestamps. Every judgment
   that asks "how much time has passed" — the connection check interval, the peer deadline,
   operation deadlines, terminal-record retention, readiness wait caps — is covered. Host
-  wall-clock adjustments or jumps don't change these judgments.
+  wall-clock adjustments or jumps don't change these judgments. Internal check condition:
+  no place in the runtime code computes elapsed time as a difference of wall-clock values
+  (static check).
 
 Each language's service runtime only uses the binding's public raw socket API and the
 framework service protocol. It doesn't use private binding members, direct native symbol

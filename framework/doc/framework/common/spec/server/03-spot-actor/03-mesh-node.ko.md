@@ -312,17 +312,21 @@ Automatic RouteMesh에서는 RID가 더 작은 MeshNode만 connect를 시작한�
 [RouteMesh의 중복 peer 연결 규칙](../02-channel-transport/01-channel-topology.ko.md#automatic은-rid가-더-작은-meshnode만-연결을-시작한다)에
 따라 [ready](../00-foundation/02-glossary.ko.md#ready) connection 하나만 유지한다.
 
-Peer에 연결하려는 의도는 peer당 하나의 **connection intent**로 표현하며, intent의 lifecycle은
-다음 규칙을 따른다.
+특정 peer와 연결을 유지하려는 의도는 application 구성이나 auto-connect 소유자가 peer마다
+하나씩 등록하는 [connection intent](../00-foundation/02-glossary.ko.md#connection-intent)로
+표현한다. Runtime은 intent가 있는 동안만 connect와 재연결을 시도한다.
 
-- Outbound intent를 제거하는 것은 그 endpoint의 binding 연결 등록을 제거하는 것과 같은
-  결정이다. Intent를 소유한 곳이 binding의 public disconnect를 호출하며, 같은 endpoint에
-  inbound peer가 있어도 그 peer는 outbound 등록의 소유자가 아니므로 disconnect를 생략하는
-  근거가 되지 않는다. Endpoint 교체 판정은 한 곳에서만 한다.
-- 제거된 intent는 terminal이다. 늦게 도착한 READY(같은 endpoint·RID)는 제거된 intent를
-  다시 활성화하지 않으며 새 intent만 활성화한다.
-- Intent 제거와 admitted peer 부재의 조합이 durable operation이 관찰하는 target lifecycle
-  종료 신호다([Actor §9](04-actor-model.ko.md#9-구현-및-contract-test-검증-요구)).
+- **Outbound intent를 제거하면 같은 결정으로 그 endpoint의 binding 연결 등록도 제거한다.**
+  Intent 소유자가 binding의 public disconnect를 호출한다. 같은 endpoint에 inbound peer가 있어도
+  그 peer는 outbound 등록의 소유자가 아니므로 disconnect를 생략할 근거가 아니다 — 옛 등록이
+  남으면 새 RID로 다시 connect한 Hello가 옛 등록에 묶여 상대에 도달하지 않는다. Endpoint 교체
+  여부는 한 곳에서만 판정한다.
+- **제거된 intent는 terminal이다.** 같은 endpoint·RID의 늦은 READY는 이전 attempt의 잔여
+  관찰이지 새 연결 의도가 아니므로, 제거된 intent를 다시 활성화하지 않고 새 intent만 활성화한다.
+  이를 위한 별도 generation이나 상태는 두지 않는다.
+- **Intent 제거와 admitted peer 부재가 함께 성립한 상태가 그 peer의 lifecycle 종료다.** Transport
+  단절이나 peer 부재 단독은 재연결로 회복될 수 있는 transient 상태이며, 둘의 조합만이 durable
+  operation의 replay를 멈추는 신호다([Actor 모델 §8.1](04-actor-model.ko.md#81-실패)).
 
 다음 그림은 물리 connection이 성립되는 순서를 보여준다 — handshake로 교환한
 identity가 admission 판단을 통과해야 physical pipe가 ready 상태가 된다. Application이
@@ -480,6 +484,10 @@ runtime snapshot과 event)만으로 다음을 확인한다.
   ROUTER-ROUTER Completion connection으로 진행해 timeout 전에 terminal completion을 만들 수 있다.
 - RouteMesh connection monitor는 logical peer마다 `CONNECTION_READY`를 한 번 보고하며 Completion
   physical event만 Completion lane 값을 사용한다.
+- 같은 endpoint에 inbound peer가 admitted된 상태에서 outbound intent를 제거한 뒤 새 RID로 같은
+  endpoint에 다시 connect하면, 상대 node가 새 RID의 Hello를 받아 admission을 완료한다.
+- Intent를 제거한 peer의 endpoint·RID로 늦은 READY가 도착해도 그 peer가 다시 admitted 상태로
+  보고되지 않는다.
 
 ---
 
