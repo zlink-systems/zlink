@@ -410,6 +410,40 @@ job `fwb-04b`가 Node pass에서 `zlink-c` 기준선을 다시 재지 않았고 
 정했으므로 게재되는 어떤 값도 바뀌지 않는다는 것이다. **타당하므로 수용한다.** 지시에서
 벗어난 것을 묻히지 않고 먼저 보고한 처리가 옳다.
 
+## FB-029 — Java framework의 channel send가 handler에 닿지 않고 조용히 사라진다
+
+- **관찰** (job `fwb-05`): `zlink-framework-java`의 send-saturation이 0을 낸다. 이는 harness
+  회계 문제가 아니고 Node의 FB-028 같은 codec 표현력 문제도 아니다. Java의 protobuf codec은
+  `bytes`를 정상 처리하고, **같은 channel·같은 `BenchPayload` 타입의 request 경로는 동작한다.**
+- **증거**: message-flow tracing을 켠 server에서 1024건 send 셀이
+  `phase=received` 1024회, `phase=admitted` 1024회, `phase=dispatched` 1024회를 내고
+  (`surface=channel kind=send channel_route=route_mesh packet=BenchPayload`)
+  **`phase=completed`는 0회**다. handler 본문 첫 줄의 무조건 카운터 증가가 실행되지 않는다.
+- **조용히 사라진다는 것이 핵심이다.** client의 `sendToChannel(...).submit()`은 성공으로
+  완료되고(21,688건 제출, 오류 0), `systems.zlink`의 DEBUG 로그에 아무것도 남지 않으며,
+  `ZLinkUnhandledDispatchAction.LOG_AND_DROP`도 아무것도 내지 않는다.
+  `ZLinkMeshApplicationDispatcher.dispatchSend`가 **성공 경로에서만 trace를 남기므로**
+  handler 호출 실패가 삼켜진다.
+- **범위 확인**: 세 가지 등록 형태(`ZLinkSendHandler` + `addSendHandler`,
+  `ZLinkRouteSendHandler` + `addRouteSendHandler`, mesh 수준 `addRouteSendHandler`)가 모두
+  같은 동작을 보인다. content-type 비대칭은 배제됐다. `sendToChannel`과 `requestToChannel`
+  모두 `encoded.contentType()`을 넘긴다. 남은 후보는
+  `invokeRouteSendHandlerCore`/`withDispatchHandlers`의 handler 해석·생성이다.
+- **성격**: 성능 특성이 아니라 **무성 손실 경로**다. 받았다고 기록하고, 수락했다고 기록하고,
+  dispatch했다고 기록한 메시지가 handler에 닿지 않는데 sender는 성공을 받고 로그는 비어 있다.
+- **처리**: 이 캠페인은 고치지 않는다. **0.18.0 후보 우선순위 0.** FB-026 Node wedge와 같은
+  등급이다. 둘 다 성능이 아니라 정확성 결함이다.
+- **부수 관찰**: 실패 경로에 관측이 전혀 없는 것 자체가 별도 항목이다. dispatcher가 성공에서만
+  trace를 남기면 이런 결함은 측정 도구 없이는 발견되지 않는다.
+
+## 감독관 결정 — Java는 send 행을 `unsupported`로 두고 측정을 진행한다
+
+job `fwb-05`가 올린 두 선택지 중 (1)을 채택한다. 판정 패턴은 `request-window`이고 그 경로는
+정상 동작하므로, send 행 없이도 두 판정식의 완전한 판정이 나온다. Node가 codec gap을 다룬
+방식과 같은 처리다. 다만 FB-029의 실패 지점을 좁히는 계측은 **20분 상한**으로 함께 수행한다.
+"handler 해석이 실패한다"까지 좁히면 0.18.0 항목이 실행 가능해지고, 이는 고치는 것이 아니라
+기록하는 일이다.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
