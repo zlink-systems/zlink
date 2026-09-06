@@ -1,0 +1,50 @@
+# Job: node framework — M6A runtime contract suite: 3 constant failures (fixture drift) and 1 intermittent failure with the uncommitted R6 changes
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h. Read `AGENTS.md` (root)
+§2/§3/§4.1/§5, `framework/AGENTS.md`, `framework/languages/node/AGENTS.md`. Campaign rules (D-098, D-105, D-111): root-fix, no
+mitigations (no timeouts/retries/fixture relaxation), never lower an assertion, one cause per separable diff, do not commit.
+Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`, other languages.
+
+## State of the tree (keep all of it)
+`framework/languages/node/**` holds the uncommitted R6 parity fixes (F-R6-4 host seal → raw mesh admission, F-R6-5 durable
+Actor Join, F-R6-6 lifecycle-terminal consumption + typed replay), summary
+`doc/plan/c016-worklog/fix-node-r6-parity-summary.md`, per-cause patches `/tmp/zlink-node-r6-parity/F-R6-{4,5,6}.patch`
+(applying them in order to the committed files reproduces the tree). The full `npm test` gate passed (1660/1660, sample-regression
+green after a port-leak cleanup). The M6A contract suite is NOT part of `npm test`:
+`npm run verify:m6a-runtime` (build `tsconfig.m6a-runtime.json`, run `build/m6a-runtime/.../test/m6a/m6a-runtime.contract.js`).
+Supervisor ran it 10x on the current tree: logs `/tmp/claude-1000/-home-hep7-project-zlink/be443aad-d720-4c23-9860-099f913fdfd4/scratchpad/node-rerun-r6.log.m6a.{1..10}`.
+
+## Facts
+- Constant (10/10): test 5 `RouteMesh hello advertises the configured host instead of the bind host` fails with
+  `this.monitor?.drain is not a function` (`raw-service-mesh-runtime.ts` `pullMonitorEvents` — the test's monitor fixture lacks
+  `drain`); test 18 `raw monitor admits a discovered same-RID replacement only after its exact lifecycle fence`; test 20
+  `raw monitor fences paired transport lanes and ignores ready-count snapshots`. The R6 job reproduced all three on the
+  committed (pre-R6) code too — they predate the R6 changes and look like fixture/expectation drift after D-092 (DISCONNECTED at
+  peer termination), D-094 (REJECT/HANDOVER only), D-098 (closed intent terminal) landed in the runtime.
+- Intermittent: test 34 `raw admission keeps Object Client-only pairs out of liveness and records NotRequired`
+  (`test/m6a/m6a-runtime.contract.ts:1474`) failed 1/10 on the current tree (`pollUntil` 2 s "Timed out waiting for
+  deterministic runtime progress", run 5) and, per the R6 job, 1/5 isolated on the current tree vs 0/25 on the original tree.
+  The failure log shows only one side's NotRequired recorded. F-R6-4 gates Hello/Admit on the host admission seal — check whether
+  the seal (or its default when no host is attached in the fixture) can block or delay the NotRequired handshake on one side.
+
+## What to do
+1. For each constant failure decide from the spec which side drifted (fixture/test vs runtime); cite the clause
+   (`05-transport-liveness`, `01-channel-topology` §13, `06-monitoring` D-092, mesh-node §7.1). Fix the drifted side without
+   weakening the assertion; if the runtime is wrong, fix the runtime with a regression test.
+2. Root-cause the intermittent test 34 with the R6 tree: reproduce (repeat the single test until it fails, add temporary
+   tracing if needed and remove it), identify the cause `file:line`, fix it (if it is in F-R6-4's seal gating, fix that; if it is
+   a pre-existing race the R6 change merely exposed, fix the race). Then run the whole M6A suite 10x with 0 failures and the
+   single test 30x.
+3. Report whether `verify:m6a-runtime` should be part of `npm test` (gate drift) — do not change `package.json` scripts; the
+   supervisor decides.
+4. Keep the R6 patches intact; produce your fix as a separate patch `/tmp/zlink-node-m6a/fix.patch` on top of the tree, and
+   list the per-cause split.
+
+## Gates
+`cd framework/languages/node && flock -w7200 /tmp/zlink-node-gate.lock npm run verify:m6a-runtime` 10x (0 failures), then the
+full `npm test` once under `flock /tmp/zlink-samples-gate.lock flock /tmp/zlink-node-gate.lock` (it runs the sample runner — allowed
+for this job; 0 failures).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-m6a-suite-drift-summary.md`: per cause — spec clause, cause file:line, fix, tests, gate results, the
+gate-drift recommendation, BLOCKERS. Do not print the report to stdout.
