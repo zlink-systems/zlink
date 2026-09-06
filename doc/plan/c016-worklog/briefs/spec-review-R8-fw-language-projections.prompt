@@ -1,0 +1,44 @@
+# Job: spec deep review R8-fw-language-projections (read-only diagnosis, report only)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h.
+Read `AGENTS.md` (root) §2/§3/§5 and `doc/plan/c016-worklog/spec-review/README.ko.md` first — the README
+fixes the review criteria, the findings template and the job split; follow it exactly.
+
+## Hard rules
+- READ-ONLY. Do not modify, create, move or delete any file except your one report file
+  `doc/plan/c016-worklog/spec-review/R8-fw-language-projections-summary.md`. Never touch `core/**`, `bindings/**`,
+  `framework/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`. Do not run builds, tests,
+  benchmarks or git commands that change state (`git diff`/`git log`/`git grep` are fine). Do not commit.
+- Evidence, not opinion: every finding cites spec `file:line` for *every* place the rule is stated and
+  implementation `file:line` per language you examined. If you could not verify a language, say so.
+- One finding = one cause. Do not propose mitigations (timeouts, retries, extra pollers, catch-alls).
+  Every proposal is "N rules → M rules" with the draft sentence of the merged rule.
+- Mark `행동 변경: 있음` whenever an application could observe a difference; the supervisor schedules
+  those for 0.18.0 and applies only `없음` items now — be precise.
+- Do not rewrite spec text at length; a proposal is one merged sentence plus where it lives.
+
+## Scope (read all of it)
+`framework/doc/framework/common/spec/server/languages/**/*.ko.md` (cpp, dotnet, java, kotlin, node interface documents, ≈18,900 lines) and `framework/doc/framework/common/spec/http-client/**/*.ko.md` (≈900 lines)
+
+Implementation evidence: `framework/languages/{cpp,dotnet,java,node,kotlin}/**` public surfaces (the exact interfaces the documents project); the common spec `framework/doc/framework/common/spec/server/0*/` as the rule owner
+
+## What to look for in this scope
+- Language interface documents must *project* the common contract (exact signatures, language idioms), not redefine rules. For every behavioral sentence in a language document (timeouts, ordering, error mapping, retry, admission), decide: (a) restates a common rule → `form` duplicate, link instead; (b) states a rule that exists in no common document → `consolidation` candidate to promote (or a language-only leak); (c) contradicts the common rule → `parity-gap`/`spec-impl-drift`. Produce the per-language counts.
+- Parity matrix across the five languages for the same operation families (submit/request builders, actor join/create, session bind, relocation API, monitoring): where one language documents an option/state the others lack, is it a genuine language discretion (`**언어별 재량**` per guide §4.4, with the "why the observable result is the same" sentence) or an undeclared gap?
+- `gate-drift`: `scripts/verify-framework-submit-api.sh --contract` fails at baseline: the cpp interface doc no longer matches the `task_t<void> submit()` pattern after `cfa70e8a68` (async terminal naming). Determine whether the doc, the script or the code is the drift; report only.
+- http-client: is it self-contained (own error model, own execution model) or does it re-document server execution rules? Flag duplicates.
+
+## Quality bar
+`doc/principal/documentation/spec-writing-guide.ko.md` §1 (reader questions), §2.4/§4.4 (bold rule +
+reason; contract vs implementation narrative; `**언어별 재량**` only with the parity reason), §4.3 (one
+layer per rule), §9.3 (verification section = interface observations only). Campaign rules:
+`doc/plan/c016-worklog/decisions.ko.md` D-090…D-101 are the freshest decisions; the supervisor's
+principles are "one owner per rule", "simple = fewer rules", "no mitigations".
+
+## Deliverable
+`doc/plan/c016-worklog/spec-review/R8-fw-language-projections-summary.md`, in Korean (identifiers/quotes verbatim), with:
+1. 요약 표 (sorted per README priority; columns 번호·제목·분류·행동 변경·규칙 수·성능 영향·확신).
+2. Findings `### F-R8-<k>` in the fixed template, max 20; extra candidates as one-liners.
+3. `## 읽은 범위` — files and line counts actually read; anything skipped and why.
+4. `## BLOCKERS` — questions only the supervisor can answer (spec gaps you must not decide).
+Finish by writing the report; do not print it to stdout.

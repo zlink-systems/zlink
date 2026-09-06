@@ -1,0 +1,45 @@
+# Job: spec deep review R4-fw-foundation-execution (read-only diagnosis, report only)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h.
+Read `AGENTS.md` (root) §2/§3/§5 and `doc/plan/c016-worklog/spec-review/README.ko.md` first — the README
+fixes the review criteria, the findings template and the job split; follow it exactly.
+
+## Hard rules
+- READ-ONLY. Do not modify, create, move or delete any file except your one report file
+  `doc/plan/c016-worklog/spec-review/R4-fw-foundation-execution-summary.md`. Never touch `core/**`, `bindings/**`,
+  `framework/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`. Do not run builds, tests,
+  benchmarks or git commands that change state (`git diff`/`git log`/`git grep` are fine). Do not commit.
+- Evidence, not opinion: every finding cites spec `file:line` for *every* place the rule is stated and
+  implementation `file:line` per language you examined. If you could not verify a language, say so.
+- One finding = one cause. Do not propose mitigations (timeouts, retries, extra pollers, catch-alls).
+  Every proposal is "N rules → M rules" with the draft sentence of the merged rule.
+- Mark `행동 변경: 있음` whenever an application could observe a difference; the supervisor schedules
+  those for 0.18.0 and applies only `없음` items now — be precise.
+- Do not rewrite spec text at length; a proposal is one merged sentence plus where it lives.
+
+## Scope (read all of it)
+`framework/doc/framework/common/spec/server/00-foundation/*.ko.md` (governance, glossary 2,000+ lines, overview, interaction model, message model, framework API, error model, layering) and `01-execution/*.ko.md` (submit/completion, handler turn & execution gate, cancellation & shutdown, job queue & backpressure, payload ownership & codec, state ownership & lanes, serial executor layers) (≈8,700 lines)
+
+Implementation evidence: `framework/languages/{cpp,dotnet,java,node,kotlin}/**` runtime cores (job queue, executor, submit/completion, error mapping)
+
+## What to look for in this scope
+- Glossary hygiene: terms defined in the glossary but never linked from any spec (dead terms), terms used in specs but missing from the glossary, terms whose glossary definition differs from the sentence that introduces them in a spec (§3.2). Produce the lists with counts; that is a `form` finding with rule-count impact.
+- Error model (`07-framework-error-model`) vs the error tables in every other document: each error kind's mapping rule should exist once. Flag documents that redefine when `Unavailable`/`DeadlineExceeded`/`InvalidOperation` apply instead of linking.
+- Execution: job queue backpressure, execution gate, cancellation, shutdown — are there multiple places deciding "accept new work?" (admission seal in relocation §14, execution gate here, mesh seal in mesh-node §8/D-097)? That is `scattered-control`; propose the single owner and how the others reference it.
+- Submit/completion (`01-submit-and-completion`) vs the bindings' async policy (`bindings/doc/spec/async-execution-model.ko.md`): does the framework restate binding-level completion semantics (lower-layer duplication)?
+- Layering doc (`08-layering`): does it promise checks the framework performs on values Core/binding already validate?
+
+## Quality bar
+`doc/principal/documentation/spec-writing-guide.ko.md` §1 (reader questions), §2.4/§4.4 (bold rule +
+reason; contract vs implementation narrative; `**언어별 재량**` only with the parity reason), §4.3 (one
+layer per rule), §9.3 (verification section = interface observations only). Campaign rules:
+`doc/plan/c016-worklog/decisions.ko.md` D-090…D-101 are the freshest decisions; the supervisor's
+principles are "one owner per rule", "simple = fewer rules", "no mitigations".
+
+## Deliverable
+`doc/plan/c016-worklog/spec-review/R4-fw-foundation-execution-summary.md`, in Korean (identifiers/quotes verbatim), with:
+1. 요약 표 (sorted per README priority; columns 번호·제목·분류·행동 변경·규칙 수·성능 영향·확신).
+2. Findings `### F-R4-<k>` in the fixed template, max 20; extra candidates as one-liners.
+3. `## 읽은 범위` — files and line counts actually read; anything skipped and why.
+4. `## BLOCKERS` — questions only the supervisor can answer (spec gaps you must not decide).
+Finish by writing the report; do not print it to stdout.

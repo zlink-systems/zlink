@@ -1,0 +1,44 @@
+# Job: spec deep review R3-bindings (read-only diagnosis, report only)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h.
+Read `AGENTS.md` (root) §2/§3/§5 and `doc/plan/c016-worklog/spec-review/README.ko.md` first — the README
+fixes the review criteria, the findings template and the job split; follow it exactly.
+
+## Hard rules
+- READ-ONLY. Do not modify, create, move or delete any file except your one report file
+  `doc/plan/c016-worklog/spec-review/R3-bindings-summary.md`. Never touch `core/**`, `bindings/**`,
+  `framework/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`. Do not run builds, tests,
+  benchmarks or git commands that change state (`git diff`/`git log`/`git grep` are fine). Do not commit.
+- Evidence, not opinion: every finding cites spec `file:line` for *every* place the rule is stated and
+  implementation `file:line` per language you examined. If you could not verify a language, say so.
+- One finding = one cause. Do not propose mitigations (timeouts, retries, extra pollers, catch-alls).
+  Every proposal is "N rules → M rules" with the draft sentence of the merged rule.
+- Mark `행동 변경: 있음` whenever an application could observe a difference; the supervisor schedules
+  those for 0.18.0 and applies only `없음` items now — be precise.
+- Do not rewrite spec text at length; a proposal is one merged sentence plus where it lives.
+
+## Scope (read all of it)
+`bindings/doc/spec/README.ko.md` (5,334 lines — the common binding contract), `async-execution-model.ko.md`, `async-coroutine-policy.ko.md`, `draft/message-ownership.ko.md`, and the per-language `bindings/doc/spec/{c,cpp,java,node,dotnet,go,rust,python}/README.ko.md` (+ `dotnet/api-reference-comments`)
+
+Implementation evidence: `bindings/{c,cpp,java,node,dotnet,go,rust,python}/**` (public API + completion pump / wait-token handling)
+
+## What to look for in this scope
+- `lower-layer-reverification` is the primary target: bindings that re-check what Core already guarantees — e.g. re-validating readiness before submit, keeping their own pending-request registry with a timer although Core owns request lifetime and delivers NOT_CONNECTED/timeout, inline WRITABLE re-submit before NO_DATA (D-B117 found this in dotnet; check cpp/java), duplicate state ownership between TCS/future and registry (D-B117), per-request goroutine/poller creation (D-B121), temporary re-adoption paths (D-B115). Cite the binding file:line and the Core spec sentence that already guarantees it.
+- Per-language READMEs: any rule that appears only in a language README but is common behavior belongs in the common README (consolidation); any common rule restated in a language README is a duplicate (form §4.3). Build a small table: rule → which language docs restate it.
+- Parity: the 0.17.0 wait-token contract (submit → token → WRITABLE → resubmit; wake = recovery of the rejected resource) across 8 bindings — where does a binding's documented behavior differ (Go's `Submit(ctx)` admission/completion split gap D-B121/D-B123 is known; find others).
+- Single/Multi perf runner policies (`PERF_SINGLE_TEST_POLICY`, D-B125/D-B127) if referenced from the bindings spec: note only contract-level inconsistencies, not runner bugs.
+
+## Quality bar
+`doc/principal/documentation/spec-writing-guide.ko.md` §1 (reader questions), §2.4/§4.4 (bold rule +
+reason; contract vs implementation narrative; `**언어별 재량**` only with the parity reason), §4.3 (one
+layer per rule), §9.3 (verification section = interface observations only). Campaign rules:
+`doc/plan/c016-worklog/decisions.ko.md` D-090…D-101 are the freshest decisions; the supervisor's
+principles are "one owner per rule", "simple = fewer rules", "no mitigations".
+
+## Deliverable
+`doc/plan/c016-worklog/spec-review/R3-bindings-summary.md`, in Korean (identifiers/quotes verbatim), with:
+1. 요약 표 (sorted per README priority; columns 번호·제목·분류·행동 변경·규칙 수·성능 영향·확신).
+2. Findings `### F-R3-<k>` in the fixed template, max 20; extra candidates as one-liners.
+3. `## 읽은 범위` — files and line counts actually read; anything skipped and why.
+4. `## BLOCKERS` — questions only the supervisor can answer (spec gaps you must not decide).
+Finish by writing the report; do not print it to stdout.

@@ -1,0 +1,44 @@
+# Job: spec deep review R1-core-api (read-only diagnosis, report only)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h.
+Read `AGENTS.md` (root) §2/§3/§5 and `doc/plan/c016-worklog/spec-review/README.ko.md` first — the README
+fixes the review criteria, the findings template and the job split; follow it exactly.
+
+## Hard rules
+- READ-ONLY. Do not modify, create, move or delete any file except your one report file
+  `doc/plan/c016-worklog/spec-review/R1-core-api-summary.md`. Never touch `core/**`, `bindings/**`,
+  `framework/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`. Do not run builds, tests,
+  benchmarks or git commands that change state (`git diff`/`git log`/`git grep` are fine). Do not commit.
+- Evidence, not opinion: every finding cites spec `file:line` for *every* place the rule is stated and
+  implementation `file:line` per language you examined. If you could not verify a language, say so.
+- One finding = one cause. Do not propose mitigations (timeouts, retries, extra pollers, catch-alls).
+  Every proposal is "N rules → M rules" with the draft sentence of the merged rule.
+- Mark `행동 변경: 있음` whenever an application could observe a difference; the supervisor schedules
+  those for 0.18.0 and applies only `없음` items now — be precise.
+- Do not rewrite spec text at length; a proposal is one merged sentence plus where it lives.
+
+## Scope (read all of it)
+`core/doc/spec/core/README.ko.md`, `core/doc/spec/core/0[0-8]-*.ko.md`, `core/doc/spec/core/glossary.ko.md`, `core/doc/spec/core/socket/*.ko.md` (≈6,500 lines; the `.en.md` twins must say the same — note any ko/en divergence as `form`)
+
+Implementation evidence: `core/src/**` (public C API implementation; `core/doc/internals/**` is implementation narrative, not contract)
+
+## What to look for in this scope
+- The socket README is 1,415 lines and owns most public behavior (DONTWAIT wait token / WRITABLE, request/reply admission, HWM admission, close/unbind, routing-id termination). Look for the same rule stated in the README *and* in a per-socket file (`socket/06-dealer`, `07-router`, `08-stream`) or in `03-errors`/`05-polling` — each rule must have one owner (§4.3).
+- Recently unified rules (D-090 submit-time pair termination → NOT_CONNECTED; D-092 DISCONNECTED at peer termination; D-094 REJECT/HANDOVER only; D-096; D-098 endpoint release before return; B's D-B119/120 wake condition = recovery of the rejected resource): check the text is now *one* rule each, with no leftover sentences describing the old special cases.
+- Verification sections (`## 8. 구현 및 contract test 검증 요구` in each file): every bullet must be an interface observation that maps to one test; flag white-box items and behavior described in prose but missing from the verification section (§9.3).
+- Complexity candidates: option/enum surfaces that exist only to describe an internal mode; error codes that are never distinguishable by a caller; readiness/notification states that collapse to the same caller-visible outcome.
+
+## Quality bar
+`doc/principal/documentation/spec-writing-guide.ko.md` §1 (reader questions), §2.4/§4.4 (bold rule +
+reason; contract vs implementation narrative; `**언어별 재량**` only with the parity reason), §4.3 (one
+layer per rule), §9.3 (verification section = interface observations only). Campaign rules:
+`doc/plan/c016-worklog/decisions.ko.md` D-090…D-101 are the freshest decisions; the supervisor's
+principles are "one owner per rule", "simple = fewer rules", "no mitigations".
+
+## Deliverable
+`doc/plan/c016-worklog/spec-review/R1-core-api-summary.md`, in Korean (identifiers/quotes verbatim), with:
+1. 요약 표 (sorted per README priority; columns 번호·제목·분류·행동 변경·규칙 수·성능 영향·확신).
+2. Findings `### F-R1-<k>` in the fixed template, max 20; extra candidates as one-liners.
+3. `## 읽은 범위` — files and line counts actually read; anything skipped and why.
+4. `## BLOCKERS` — questions only the supervisor can answer (spec gaps you must not decide).
+Finish by writing the report; do not print it to stdout.

@@ -1,0 +1,45 @@
+# Job: spec deep review R2-core-protocol-systems (read-only diagnosis, report only)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h.
+Read `AGENTS.md` (root) §2/§3/§5 and `doc/plan/c016-worklog/spec-review/README.ko.md` first — the README
+fixes the review criteria, the findings template and the job split; follow it exactly.
+
+## Hard rules
+- READ-ONLY. Do not modify, create, move or delete any file except your one report file
+  `doc/plan/c016-worklog/spec-review/R2-core-protocol-systems-summary.md`. Never touch `core/**`, `bindings/**`,
+  `framework/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`. Do not run builds, tests,
+  benchmarks or git commands that change state (`git diff`/`git log`/`git grep` are fine). Do not commit.
+- Evidence, not opinion: every finding cites spec `file:line` for *every* place the rule is stated and
+  implementation `file:line` per language you examined. If you could not verify a language, say so.
+- One finding = one cause. Do not propose mitigations (timeouts, retries, extra pollers, catch-alls).
+  Every proposal is "N rules → M rules" with the draft sentence of the merged rule.
+- Mark `행동 변경: 있음` whenever an application could observe a difference; the supervisor schedules
+  those for 0.18.0 and applies only `없음` items now — be precise.
+- Do not rewrite spec text at length; a proposal is one merged sentence plus where it lives.
+
+## Scope (read all of it)
+`core/doc/spec/core/protocol/*.ko.md` (ZMP, RAW), `core/doc/spec/core/systems/*.ko.md` (architecture, threading, io thread, thread safety, connection memory, auto-hwm, source layout, hot path) (≈2,600 lines; `.en.md` twins must match)
+
+Implementation evidence: `core/src/**` (zmp engine/handshake, stream engine, io_thread, pipe/hwm, lb/dist)
+
+## What to look for in this scope
+- ZMP §4 handshake and §4.1 lane rules: is the lane-count / lane-duplicate / handover / reciprocal-collapse logic expressed as the minimum rule set? (D-094: REJECT/HANDOVER only; D-096: no wire identifier for concurrent attempts; D-B96 reciprocal collapse by RID comparison is a HANDOVER sub-rule.) Look for admission logic described in *both* the protocol doc and the socket README (`socket/README` §4) — one owner.
+- `06-auto-hwm` (608 lines) vs socket README HWM admission and D-B119/120 wake condition: is the credit/token/wake model stated once? Are there states (BACKPRESSURED, EAGAIN, WRITABLE, token) whose distinctions no caller can observe?
+- STREAM (`08-stream` is in R1, but the RAW protocol and drain rules D-099/`7738b8fd41` are here): is the "bounded 64-chunk step + re-wake" an implementation narrative (§4.4 구현 서술) or leaked into contract text?
+- `systems/*`: separate contract sentences from implementation narrative (§4.4). Threading/thread-safety docs often restate socket README's tiered handle contract — flag duplicates.
+- Hot-path doc (`10-hot-path`): does it list checks the hot path performs that a lower layer (pipe/engine) already guarantees? Those are `lower-layer-reverification` with performance impact.
+
+## Quality bar
+`doc/principal/documentation/spec-writing-guide.ko.md` §1 (reader questions), §2.4/§4.4 (bold rule +
+reason; contract vs implementation narrative; `**언어별 재량**` only with the parity reason), §4.3 (one
+layer per rule), §9.3 (verification section = interface observations only). Campaign rules:
+`doc/plan/c016-worklog/decisions.ko.md` D-090…D-101 are the freshest decisions; the supervisor's
+principles are "one owner per rule", "simple = fewer rules", "no mitigations".
+
+## Deliverable
+`doc/plan/c016-worklog/spec-review/R2-core-protocol-systems-summary.md`, in Korean (identifiers/quotes verbatim), with:
+1. 요약 표 (sorted per README priority; columns 번호·제목·분류·행동 변경·규칙 수·성능 영향·확신).
+2. Findings `### F-R2-<k>` in the fixed template, max 20; extra candidates as one-liners.
+3. `## 읽은 범위` — files and line counts actually read; anything skipped and why.
+4. `## BLOCKERS` — questions only the supervisor can answer (spec gaps you must not decide).
+Finish by writing the report; do not print it to stdout.
