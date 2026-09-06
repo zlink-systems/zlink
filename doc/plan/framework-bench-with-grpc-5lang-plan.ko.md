@@ -400,13 +400,36 @@ G1~G4를 만족하지 못한 셀은 `unsupported`로 기록하고 완료 개수�
 
 ## 10. 체크리스트
 
-- [x] Phase 0 — raw 소켓 ROUTER↔ROUTER 통일(.NET·C), harness 결함 4건 수정, 기준선 측정 완료. 게시 판정 1건(0.084 미달), 나머지 3건 `unsupported`
-- [x] 규격 5언어 중립화 (`146db4da4c`, FB-008 계약 포함)
-- [ ] Phase 1 — 공용 집계기 분리, Phase 0 원본으로 재검증
-- [ ] Phase 2 — Node 구현과 18셀 통과
-- [ ] Phase 3 — Java 구현과 18셀 통과
-- [ ] Phase 4 — Kotlin 구현과 18셀 통과 (coroutine stub 결정 기록)
-- [ ] Phase 5 — C++ 구현과 18셀 통과
-- [ ] Phase 6 — 5언어 순차 재측정 3회, 중앙값 채택
-- [ ] Phase 6 — 통합 보고서 §7.2 구성 전부 작성
-- [ ] 결정 기록 `FB-*` 정리, 후속 후보 이관
+- [x] 규격 5언어 중립화 (`146db4da4c`) — 이후 settle 계약·raw wire·포화 계측기·단위 정규화 정정
+- [x] Phase 0 — raw 소켓 ROUTER↔ROUTER 통일(.NET·C), harness 결함 4건 수정, 기준선 측정
+- [x] Phase 1 — 공용 집계기 분리, Phase 0 원본으로 재검증
+- [x] Phase 2 — Node. 판정 불가(정지·JS thread 포화), framework는 codec gap으로 6셀 미지원
+- [x] Phase 3 — Java. 판정 불가(raw reply 유실), framework 12셀 측정
+- [x] Phase 4 — Kotlin. Java와 같은 서명 재현, framework 깊이 상한 확인
+- [x] Phase 5 — C++. **깊이를 유실 없이 지탱**, 판정 0.774 게재(미달)
+- [x] Phase 6 — 통합 검증 구간 5언어 전부 통과, 재측정 불필요
+- [x] Phase 6 — 통합 보고서 `fw-bench-worklog/report-with-grpc-5lang.ko.md`
+- [x] 결정 기록 FB-001~FB-041, 후속 후보 0.18.0 이관
+
+## 11. 캠페인 종료 (2026-09-07)
+
+마지막 commit `bf93d23686`. 보고서는
+[`fw-bench-worklog/report-with-grpc-5lang.ko.md`](fw-bench-worklog/report-with-grpc-5lang.ko.md).
+
+### 결과
+
+게재 조건을 만족한 판정은 스무 개 중 둘이고 둘 다 기준 미달이다(`.NET` 0.084, C++ 0.774).
+나머지 열여덟은 `unsupported`이며 막힌 이유가 언어마다 다르다.
+
+가장 큰 관측은 판정표 밖에 있다. 동시 미완료 요청 100개에서 C API를 직접 지나는 두 실행은
+오류 없이 깊이를 지탱하고, 관리형 런타임 binding 셋은 서로 다른 세 가지 방식으로 무너진다.
+이 대비가 조사 범위를 Core 공통 경로에서 각 관리형 binding의 완료 전달 계층으로 옮긴다.
+
+### 사용자 결정이 필요한 항목
+
+| 항목 | 내용 |
+|---|---|
+| 우선순위 0 결함 3건 | Node client socket 정지, Java raw reply 유실, handler 생성 실패의 무성 수락·폐기. 처리 순서 |
+| 판정 기준(FB-034) | formula 1의 공유 분모가 재현성 미달이라 어느 언어도 통과할 수 없다. 분모 안정화 시점 |
+| 보고서 공개 범위 | 현재 `plan/` 아래. guide나 site로 옮길지, 옮긴다면 규격 §7의 환경 정보 동반 |
+| 원래 요청과의 차이 | "gRPC 대비 5언어 비교표"가 대부분 `unsupported`로 나온 것에 대한 판단 |
