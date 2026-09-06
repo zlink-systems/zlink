@@ -312,6 +312,18 @@ Automatic RouteMesh에서는 RID가 더 작은 MeshNode만 connect를 시작한�
 [RouteMesh의 중복 peer 연결 규칙](../02-channel-transport/01-channel-topology.ko.md#automatic은-rid가-더-작은-meshnode만-연결을-시작한다)에
 따라 [ready](../00-foundation/02-glossary.ko.md#ready) connection 하나만 유지한다.
 
+Peer에 연결하려는 의도는 peer당 하나의 **connection intent**로 표현하며, intent의 lifecycle은
+다음 규칙을 따른다.
+
+- Outbound intent를 제거하는 것은 그 endpoint의 binding 연결 등록을 제거하는 것과 같은
+  결정이다. Intent를 소유한 곳이 binding의 public disconnect를 호출하며, 같은 endpoint에
+  inbound peer가 있어도 그 peer는 outbound 등록의 소유자가 아니므로 disconnect를 생략하는
+  근거가 되지 않는다. Endpoint 교체 판정은 한 곳에서만 한다.
+- 제거된 intent는 terminal이다. 늦게 도착한 READY(같은 endpoint·RID)는 제거된 intent를
+  다시 활성화하지 않으며 새 intent만 활성화한다.
+- Intent 제거와 admitted peer 부재의 조합이 durable operation이 관찰하는 target lifecycle
+  종료 신호다([Actor §9](04-actor-model.ko.md#9-구현-및-contract-test-검증-요구)).
+
 다음 그림은 물리 connection이 성립되는 순서를 보여준다 — handshake로 교환한
 identity가 admission 판단을 통과해야 physical pipe가 ready 상태가 된다. Application이
 지정하는 논리 target(ChannelName, ActorId, SpotId)이 이 physical pipe를 사용하는

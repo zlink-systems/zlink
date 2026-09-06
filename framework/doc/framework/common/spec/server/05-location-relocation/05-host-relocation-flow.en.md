@@ -853,7 +853,9 @@ completes within a fixed time, in this order.
    already-admitted peers only the `Draining` Update. A
    peer's transport loss, liveness expiry, or send failure after the seal does not move the
    node state back before `Draining`.
-2. Publishes a `Draining` descriptor, excluding it from new selection and placement.
+2. Publishes a `Draining` descriptor, excluding it from new selection and placement. Only
+   the publication's terminal (success or failure) is awaited; there is no timed wait for
+   propagation after publishing.
 3. Processes already-accepted handlers, request completions, relocation units, and
    session barriers up to the deadline.
 4. Doesn't start new object relocation. While Actor membership and local instances

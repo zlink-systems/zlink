@@ -1362,3 +1362,16 @@ after(1-run, load ≤1.9): DD 64B 47.4%·256B 56.9%·1024B 58.2%·4096B 96.5%·6
 
 - 진단(`fix-dotnet-zoneworld-g3-a1-joinspot-not-connected-summary.md`): outbound→inbound 방향 전환 때 `RemovePeerConnectionIfNotAdmitted`(:477-488)와 `DisconnectTransport`(:11204-11226)가 방향을 구분하지 않고 "같은 endpoint의 다른 peer가 있으면 disconnect 생략" → 이전 outbound intent의 native endpoint 등록이 남고, 다음 교체(G3)에서 새 RID로 `SetConnectRoutingId + Connect`해도 Hello가 상대에 도달하지 않아 replacement의 Join이 admission 없이 15 s 소진 → Unavailable/109 → A1 실패.
 - 규칙: logical outbound intent 제거 = 그 endpoint의 native 연결 등록 제거(공개 disconnect 호출, java/node와 동일). endpoint replacement 판정은 `DisconnectTransport` 한 곳(실제 outbound replacement만), `RemovePeerConnectionIfNotAdmitted`의 중복 판단 제거. 판정 위치 2→1, 새 상태 없음. runner 대기·sender retry 추가 금지.
+
+## D-101 (2026-09-06, 머신 A) 스펙 승격 — D-093/095/096/098(1·4·8)/100을 decisions에서 스펙 본문으로 올림(행동 변경 없음)
+
+- 대상과 위치(ko/en 동일):
+  - D-093 → `03-spot-actor/04-actor-model` §9 검증 요구: replay를 멈추는 신호는 target lifecycle 종료 하나(logical owner의 intent 제거 + admitted peer 부재), deadline 소유자는 operation 하나.
+  - D-095 → `02-channel-transport/05-transport-liveness` §2: 경과 시간·deadline·retention은 monotonic clock 하나, wall clock은 timestamp 표기 전용.
+  - D-096 → Core `protocol/01-zmp` §4.1: 같은 Routing-Id의 동시 count-2 attempt는 wire에서 구분되지 않으므로 lane 중복 규칙으로 그 lane set을 닫고 intent 재시도로 수렴; 새 wire 식별자·binder 직렬화 없음.
+  - D-098 item 1 → Core `socket/README` `zlink_unbind`·`zlink_close`: transport 불문 호출 반환 전 endpoint 해제 완료(즉시 rebind 가능).
+  - D-098 item 4 → `05-location-relocation/05-host-relocation-flow` §14 step 2: Draining descriptor 게시는 terminal만 기다리고 시간 대기 없음.
+  - D-098 item 8 + D-100 → `03-spot-actor/03-mesh-node` §7.1: connection intent 규칙 3개(outbound intent 제거 = binding disconnect, 한 곳에서 판정; 제거된 intent는 terminal, 늦은 READY로 재활성화 없음; intent 제거+peer 부재 = lifecycle 종료 신호).
+  - D-097/D-098 item 3은 이미 §14 step 1에 반영됨(변경 없음). D-094는 socket README §4에 이미 반영.
+- 규칙 수: 새 규칙 0. 이미 구현·검증된 결정을 스펙이 명시하도록 한 것뿐이다.
+- 발견(리뷰 inventory로 이관): `scripts/verify-framework-doc-contracts.sh`가 baseline(`4e8182af01`)에서 이미 두 곳 실패 — (a) `verify-framework-submit-api.sh --contract`: cpp `task_t<void> submit()` 패턴이 `cfa70e8a68`(C++ async terminal naming) 이후 계약 문서와 어긋남; (b) `run-framework-relocation-conformance.mjs --list`: dotnet `SessionActorCoordinatorTests`에 conformance fixture가 요구하는 `Canonical_Seal_Retries_Target_Push_Until_Command_44_Commits` 식별자 없음. `docs.yml`은 이 게이트를 `continue-on-error`로 돌려 신호만 남긴다. 스펙 심층 리뷰(D-102)의 "게이트 drift" 항목으로 처리한다.

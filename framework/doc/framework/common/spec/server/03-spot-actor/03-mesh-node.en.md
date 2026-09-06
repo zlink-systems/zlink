@@ -345,6 +345,20 @@ automatic connection competition, only one
 [ready](../00-foundation/02-glossary.en.md#ready) connection is kept, per
 [RouteMesh's Duplicate Peer Connection Rule](../02-channel-transport/01-channel-topology.en.md#automatic-only-the-meshnode-with-the-smaller-rid-starts-the-connection).
 
+The intention to connect to a peer is expressed as one **connection intent** per peer,
+and an intent's lifecycle follows these rules.
+
+- Removing an outbound intent is the same decision as removing the binding's connection
+  registration for that endpoint. The owner of the intent calls the binding's public
+  disconnect; an inbound peer on the same endpoint doesn't own the outbound registration,
+  so its presence is no reason to skip the disconnect. Endpoint replacement is judged in
+  exactly one place.
+- A removed intent is terminal. A late READY (same endpoint and RID) doesn't reactivate a
+  removed intent; it activates only a new intent.
+- The combination of intent removal and no admitted peer is the target-lifecycle
+  termination signal a durable operation observes
+  ([Actor §9](04-actor-model.en.md#9-implementation-and-contract-test-verification-requirements)).
+
 The following diagram shows the order in which a physical connection is
 established — the identity exchanged in the handshake must pass admission
 judgment before the physical pipe becomes ready. How the logical target an

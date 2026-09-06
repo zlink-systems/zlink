@@ -198,7 +198,12 @@ count가 다른 경우, count `1`에 lane `1`이 온 경우, count `2`에서 lan
 제공하지 않는다. DEALER·ROUTER가 아닌 socket pattern은 physical connection 하나를 사용하며
 `Zlink-Lane-Count`와 `Zlink-Lane`을 보내지 않는다.
 
-물리 connection ID와 generation은 wire property나 public target이 아니다. `Zlink-Lane`은
+물리 connection ID와 generation은 wire property나 public target이 아니다. 따라서 같은
+`Routing-Id`로 동시에 진행되는 두 count `2` attempt(예: 같은 socket의 서로 다른 connect
+intent)는 wire에서 구분되지 않는다. Binder는 `Routing-Id`로만 미완성 pair를 결합하므로 두
+attempt의 lane이 섞이면 위의 lane 중복 규칙에 따라 그 lane set을 READY protocol error로 닫고,
+connect intent의 재시도로 수렴한다. 동시 attempt를 구분하는 wire 식별자나 binder 측 admission
+직렬화는 두지 않는다. `Zlink-Lane`은
 physical connection을 분류하는 내부 protocol property다. READY의 `Routing-Id`는 count `2`의
 두 connection이 같은 peer에 속하는지 검증하는 metadata다. Runtime은 ROUTER가 peer를 선택하는
 synthetic routing-id preamble을 Application lane에만 제공한다. Completion lane은 이 preamble과

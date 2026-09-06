@@ -204,6 +204,12 @@ fallback to the old two-lane DEALER-ROUTER form or mixed-version shim. Socket pa
 DEALER and ROUTER use one physical connection and send neither `Zlink-Lane-Count` nor `Zlink-Lane`.
 
 Physical connection IDs and generations are neither wire properties nor public targets.
+Consequently two count `2` attempts in flight at the same time with the same `Routing-Id`
+(for example, different connect intents of one socket) are indistinguishable on the wire.
+The binder joins incomplete pairs by `Routing-Id` alone, so when lanes of the two attempts
+interleave, the duplicate-lane rule above closes that lane set with a READY protocol error
+and the connect intent's retry converges. No wire identifier that distinguishes concurrent
+attempts and no binder-side admission serialization is introduced.
 `Zlink-Lane` is an internal protocol property that classifies the physical connection. The
 `Routing-Id` in READY is metadata used to verify that the two count `2` connections belong to the
 same peer. The runtime exposes the synthetic routing-ID preamble used by a ROUTER to select that

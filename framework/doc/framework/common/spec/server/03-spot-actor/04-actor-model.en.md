@@ -784,6 +784,21 @@ ActorId isn't used as a metric label.
   exhausted while an admitted request's reply never arrived ends with
   `DeadlineExceeded`. The target's terminal record guarantees that execution is
   not duplicated, so the sender does not guess whether execution happened.
+- The only signal that stops replay before the deadline is target lifecycle
+  termination, and that judgment is the fact that the logical owner (the
+  Location / auto-connect owner) removed the connection intent for that target
+  node and no admitted peer remains for that target (the intent rule in
+  [MeshNode §7.1](03-mesh-node.en.md#71-peer-connection)). When this holds the
+  sender ends the operation with `Unavailable` immediately, per the "owner
+  process terminated" rule in
+  [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not).
+  Transport loss or the mere absence of a peer is transient, so replay
+  continues. The sender keeps no separate state, timer, or monitor for this
+  judgment; it observes the intent-removal transition that already exists.
+- The deadline has one owner: the operation (sender). Layers that wrap an
+  operation — deferred join, remote transaction wrapper — do not race with
+  their own timer while admission is pending; they pass the deadline to the
+  operation and wait for the operation's terminal.
 - Destroy accepts only the same generation and doesn't retarget to a new
   incarnation.
 

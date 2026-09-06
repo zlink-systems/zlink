@@ -67,6 +67,10 @@ Framework는 마지막 정상 확인 뒤 connection을 유지할 수 있는 시�
   message를 계속 받아도 이 node가 보낸 message가 peer에 도착하는지는 알 수 없다. 수신만으로
   liveness를 판단하면 한쪽 방향만 끊긴 연결을 정상으로 본다. 일반 application message가
   connection의 deadline을 연장하지 않는 이유가 이것이다(§3).
+- **경과 시간·deadline·retention은 언어 runtime의 monotonic clock 하나로 측정한다.** Wall
+  clock은 timestamp 표기에만 쓴다. 연결 확인 주기, peer deadline, operation deadline, terminal
+  record retention, readiness 대기 상한처럼 "얼마나 지났는가"를 묻는 모든 판정이 대상이다. 호스트
+  wall clock의 조정·점프는 이 판정을 바꾸지 않는다.
 
 각 언어의 service runtime은 binding의 public raw socket API와 Framework service
 protocol만 사용한다. Private binding member, native symbol 직접 호출과 언어별 숨은

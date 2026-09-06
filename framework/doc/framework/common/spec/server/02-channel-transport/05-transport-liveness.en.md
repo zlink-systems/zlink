@@ -71,6 +71,11 @@ final time an operation must finish is called a [deadline](../00-foundation/02-g
   this node reach that peer. Using receive traffic alone for liveness would treat a
   connection broken in one direction as normal. This is why a regular application message
   doesn't extend a connection's deadline (§3).
+- **Elapsed time, deadlines, and retention are measured with the language runtime's
+  single monotonic clock.** The wall clock is used only to render timestamps. Every judgment
+  that asks "how much time has passed" — the connection check interval, the peer deadline,
+  operation deadlines, terminal-record retention, readiness wait caps — is covered. Host
+  wall-clock adjustments or jumps don't change these judgments.
 
 Each language's service runtime only uses the binding's public raw socket API and the
 framework service protocol. It doesn't use private binding members, direct native symbol

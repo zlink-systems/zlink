@@ -768,7 +768,8 @@ application 작업을 받지 않도록 바꾸는 동작을 [admission seal](../0
    보내지 않고, inbound Hello에 Admit을 보내지 않는다). 이미 admit된 peer에는 `Draining` Update만
    보낸다. Peer의 transport 단절·liveness 만료·전송 실패가 seal 뒤의
    node 상태를 `Draining` 이전으로 되돌리지 않는다.
-2. `Draining` descriptor를 게시해 새 selection과 placement에서 제외한다.
+2. `Draining` descriptor를 게시해 새 selection과 placement에서 제외한다. 게시의 terminal
+   (성공 또는 실패)만 기다리며, 게시 뒤 전파를 위한 시간 대기는 두지 않는다.
 3. 이미 수락한 handler, request completion, relocation unit과 session barrier를 deadline까지
    처리한다.
 4. 새 object relocation은 시작하지 않는다. Actor membership과 local instance가 유효한

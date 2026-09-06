@@ -670,6 +670,8 @@ same handle, close fails with `errno=EBUSY`. After close is accepted, new API
 entry fails with `errno=ESHUTDOWN`. Close internally releases pending
 operations and completion or packet records that the application has not yet
 pulled. A caller that needs a result or payload drains the queue before close.
+Endpoints the socket had bound are released before close returns, under the same rule as
+`zlink_unbind`, so the same address can be bound again immediately.
 
 **Returns:** `ZLINK_CLOSE_OK` on success; otherwise a `zlink_close_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 
@@ -905,7 +907,9 @@ Unbind a socket from an address.
 ZLINK_EXPORT zlink_connect_result_t zlink_unbind (void *s_, const char *addr_);
 ```
 
-Removes a previously established binding.
+Removes a previously established binding. Regardless of transport, the endpoint release
+completes before the call returns, so the same address can be bound again immediately. A
+rebind never appears to succeed while the previous listener still exists.
 
 **Returns:** `ZLINK_CONNECT_OK` on success; otherwise a `zlink_connect_result_t` value. `zlink_errno()` retains the detailed internal errno for diagnostics.
 

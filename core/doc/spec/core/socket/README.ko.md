@@ -620,6 +620,8 @@ socket을 닫고 관련된 모든 자원을 해제한다. 송신 대기열에 �
 실패한다. close가 accepted된 뒤 새 API 진입은 `errno=ESHUTDOWN`으로 실패한다.
 Close는 pending operation과 application이 아직 꺼내지 않은 completion·packet을 내부에서
 정리한다. Caller가 결과나 payload를 필요로 하면 close 전에 queue를 비워야 한다.
+Socket이 bind한 endpoint는 `zlink_unbind`와 같은 규칙으로 close가 반환하기 전에 해제되어
+같은 주소를 즉시 다시 bind할 수 있다.
 
 **반환값:** 성공 시 `ZLINK_CLOSE_OK`, 실패 시 `zlink_close_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 
@@ -848,7 +850,9 @@ socket의 주소 binding을 해제한다.
 ZLINK_EXPORT zlink_connect_result_t zlink_unbind (void *s_, const char *addr_);
 ```
 
-이전에 설정된 binding을 제거한다.
+이전에 설정된 binding을 제거한다. Transport에 관계없이 호출이 반환하기 전에 endpoint 해제가
+완료되어, 같은 주소를 즉시 다시 bind할 수 있다. 이전 listener가 남아 있는 상태에서 겉보기
+rebind가 성공하는 일은 없다.
 
 **반환값:** 성공 시 `ZLINK_CONNECT_OK`, 실패 시 `zlink_connect_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 

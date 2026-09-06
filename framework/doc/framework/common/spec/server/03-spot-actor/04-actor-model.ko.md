@@ -678,6 +678,16 @@ ActorId는 metric label로 사용하지 않는다.
   한 번도 admission되지 못한 채(route 부재) 소진되면 [오류 모델](../00-foundation/07-framework-error-model.ko.md)의
   `Unavailable`, admission된 request의 reply를 받지 못한 채 소진되면 `DeadlineExceeded`다.
   중복 실행 방지는 target의 terminal record가 보장하므로 sender는 실행 여부를 추정하지 않는다.
+- Deadline 전에 replay를 멈추는 신호는 target lifecycle 종료 하나뿐이며, 그 판정은 logical
+  owner(Location·auto-connect 소유자)가 그 target node의 connection intent를 제거했고 그
+  target에 admitted peer가 남아 있지 않다는 사실이다([MeshNode §7.1](03-mesh-node.ko.md#71-peer-연결)의
+  intent 규칙). 이 조건이 성립하면 sender는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-쓰고-어디에-쓰지-않는가)의
+  "owner process 종료" 규칙대로 operation을 즉시 `Unavailable`로 끝낸다. Transport 단절이나
+  peer 부재만으로는 transient이므로 replay를 계속한다. Sender는 이 판정을 위해 별도 상태·timer·
+  monitor를 두지 않고 이미 존재하는 intent 제거 전이를 조회한다.
+- Deadline의 소유자는 operation(sender) 하나다. Deferred join·remote transaction wrapper 등
+  operation을 감싸는 층은 admission 대기 중 자기 timer로 경쟁하지 않고 deadline을 operation에
+  전달한 뒤 operation의 terminal을 기다린다.
 - Destroy가 같은 generation만 인정하고 새 incarnation으로 다시 지정하지 않는다.
 
 ---
