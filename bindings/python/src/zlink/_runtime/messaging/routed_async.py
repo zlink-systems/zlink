@@ -813,13 +813,6 @@ class CompletionOwner:
             )
 
     @staticmethod
-    def _completion_target(completion):
-        size = int(completion.peer_rid.size)
-        if size == 0:
-            return None
-        return bytes(completion.peer_rid.data[:size])
-
-    @staticmethod
     def _submit_error(result, native_errno):
         try:
             typed_result = SubmitResult(int(result))
@@ -846,7 +839,6 @@ class CompletionOwner:
         completion_id = int(completion.completion_id)
         context = int(completion.user_context or 0)
         kind = int(completion.kind)
-        target = self._completion_target(completion)
         send_result = int(completion.send_result)
         terminal_errno = int(completion.send_terminal_errno)
         lib().zlink_completion_close(ctypes.byref(completion))
@@ -861,11 +853,7 @@ class CompletionOwner:
             return False
         if entry.settled:
             return False
-        if (
-            kind != ZLINK_COMPLETION_WRITABLE
-            or context != entry.context
-            or target != entry.target
-        ):
+        if kind != ZLINK_COMPLETION_WRITABLE or context != entry.context:
             entry.fail(SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO))
             return False
         if send_result == ZLINK_SEND_TERMINAL:
@@ -1113,12 +1101,13 @@ class CompletionOwner:
                 else:
                     entry.publish_request(completion_id)
                     self._track_native_wait_locked(entry)
-            elif rc == int(SubmitResult.BACKPRESSURED):
-                if completion_id != 0:
-                    entry.await_writable(completion_id)
-                    self._track_native_wait_locked(entry)
-                if native_errno != errno.EAGAIN or completion_id == 0:
-                    entry.fail(SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO))
+            elif (
+                rc == int(SubmitResult.BACKPRESSURED)
+                and native_errno == errno.EAGAIN
+                and completion_id != 0
+            ):
+                entry.await_writable(completion_id)
+                self._track_native_wait_locked(entry)
             else:
                 if completion_id != 0:
                     entry.await_writable(completion_id)
@@ -1204,17 +1193,17 @@ class CompletionOwner:
                     self._unregister(entry)
                     raise SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO)
                 self._finish_request_submit(entry, completion_id, schedule=True)
-            elif rc == int(SubmitResult.BACKPRESSURED):
-                if completion_id != 0:
-                    entry.await_writable(completion_id)
-                    self._track_native_wait_locked(entry)
-                if native_errno != errno.EAGAIN or completion_id == 0:
-                    entry.fail(SubmitError(SubmitResult.INTERNAL_ERROR, errno.EPROTO))
-                else:
-                    try:
-                        entry.retain_retry(target, payload)
-                    except BaseException as error:
-                        entry.fail(error)
+            elif (
+                rc == int(SubmitResult.BACKPRESSURED)
+                and native_errno == errno.EAGAIN
+                and completion_id != 0
+            ):
+                entry.await_writable(completion_id)
+                self._track_native_wait_locked(entry)
+                try:
+                    entry.retain_retry(target, payload)
+                except BaseException as error:
+                    entry.fail(error)
                 if entry.releasable:
                     self._unregister(entry)
                 else:

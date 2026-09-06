@@ -285,8 +285,11 @@ def test_non_ok_request_completion_is_typed_error_without_payload():
     assert closer.closed == 1
 
 
-@pytest.mark.parametrize("mismatch", ("token", "context", "rid"))
+@pytest.mark.parametrize("mismatch", ("token", "context", "kind"))
 def test_writable_completion_rejects_mismatched_send_correlation(mismatch):
+    # The peer RID is Core's echo of the submit RID (socket README part send);
+    # the binding no longer re-verifies it (D-109 F-R3-1), so a RID mismatch
+    # is not a rejection condition here.
     target = b"expected-route"
     socket = type("Socket", (), {"_handle": 1})()
     owner = CompletionOwner(socket)
@@ -303,9 +306,7 @@ def test_writable_completion_rejects_mismatched_send_correlation(mismatch):
     elif mismatch == "context":
         completion.user_context = entry.context + 1
     else:
-        replacement = b"different-route"
-        completion.peer_rid.size = len(replacement)
-        completion.peer_rid.data[: len(replacement)] = replacement
+        completion.kind = ZLINK_COMPLETION_REQUEST
 
     closer = _CompletionCloser()
     with (
