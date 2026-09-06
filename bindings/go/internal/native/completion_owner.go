@@ -18,13 +18,6 @@ import (
 
 type completionOperationKind uint8
 
-type requestWritableRecord struct {
-	completionID uint64
-	contextKey   uintptr
-	sendResult   C.zlink_send_complete_result_t
-	terminalErr  int
-}
-
 var contextTerminatedErrno = int(C.ETERM)
 
 const (
@@ -36,10 +29,9 @@ const (
 // a completion captured by whichever drain owner currently owns the socket.
 // The context key is only an opaque lookup key; Core never dereferences it.
 type completionEntry struct {
-	kind                 completionOperationKind
-	send                 *sendRetryState
-	request              *requestRetryState
-	earlyRequestWritable *requestWritableRecord
+	kind    completionOperationKind
+	send    *sendRetryState
+	request *requestRetryState
 
 	mu              sync.Mutex
 	published       bool
@@ -125,18 +117,6 @@ func (e *completionEntry) publishSendWait(completionID uint64) {
 		e.published = true
 	}
 	e.mu.Unlock()
-}
-
-func (e *completionEntry) publishRequestWait(completionID uint64) *requestWritableRecord {
-	e.mu.Lock()
-	if !e.settled {
-		e.completion = completionID
-		e.published = true
-	}
-	record := e.earlyRequestWritable
-	e.earlyRequestWritable = nil
-	e.mu.Unlock()
-	return record
 }
 
 func (e *completionEntry) finishSend(err error) {
@@ -596,12 +576,26 @@ type completionDrainResult struct {
 
 func (o *completionOwner) drain(waitForPublish bool) (completionDrainResult, error) {
 	var drained completionDrainResult
+	var retries []*completionEntry
 	for {
 		var completion C.zlink_completion_t
 		completion.struct_size = C.uint32_t(C.sizeof_zlink_completion_t)
 		result := C.zlink_completion_recv(
 			o.socket, &completion, C.zlink_recv_flags_t(C.ZLINK_RECV_FLAGS_DONTWAIT))
 		if result == C.ZLINK_RECV_NO_DATA {
+			// A retry can create another completion immediately. It belongs to
+			// the next drain, after this queue has reached NO_DATA.
+			for _, entry := range retries {
+				var terminal bool
+				if entry.kind == completionSendRetry {
+					terminal = entry.attemptSend()
+				} else {
+					terminal = entry.attemptRequest()
+				}
+				if terminal {
+					o.unregister(entry)
+				}
+			}
 			return drained, nil
 		}
 		if err := recvErrorFromResult(result); err != nil {
@@ -615,7 +609,10 @@ func (o *completionOwner) drain(waitForPublish bool) (completionDrainResult, err
 		o.mu.Lock()
 		entry := o.entries[key]
 		o.mu.Unlock()
-		parts, request, terminal, err := captureNativeCompletion(entry, &completion, key)
+		parts, request, terminal, retry, err := captureNativeCompletion(entry, &completion, key)
+		if retry {
+			retries = append(retries, entry)
+		}
 		if entry != nil && request {
 			entry.capture(parts, err)
 			if waitForPublish {
@@ -632,9 +629,9 @@ func (o *completionOwner) drain(waitForPublish bool) (completionDrainResult, err
 	}
 }
 
-func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, contextKey uintptr) bool {
+func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, contextKey uintptr) (terminal, retry bool) {
 	if e == nil || completion == nil || e.kind != completionSendRetry || e.send == nil {
-		return true
+		return true, false
 	}
 	e.attemptMu.Lock()
 
@@ -644,7 +641,7 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 	if e.settled {
 		e.mu.Unlock()
 		e.attemptMu.Unlock()
-		return true
+		return true, false
 	}
 	if !e.published {
 		e.mu.Unlock()
@@ -652,7 +649,7 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 		e.send.payload.close()
 		e.finishSend(&SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)})
 		e.attemptMu.Unlock()
-		return true
+		return true, false
 	}
 	expectedID := e.completion
 	e.mu.Unlock()
@@ -675,7 +672,7 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 			stop()
 		}
 		e.attemptMu.Unlock()
-		return false
+		return false, false
 	}
 
 	if completion.kind != C.ZLINK_COMPLETION_WRITABLE ||
@@ -684,7 +681,7 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 		e.send.payload.close()
 		e.finishSend(&SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)})
 		e.attemptMu.Unlock()
-		return true
+		return true, false
 	}
 
 	sendResult := C.zlink_send_complete_result_t(completion.send_result)
@@ -697,14 +694,14 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 		e.send.payload.close()
 		e.finishSend(sendTerminalError(terminalErrno))
 		e.attemptMu.Unlock()
-		return true
+		return true, false
 	}
 	if sendResult != C.ZLINK_SEND_ADMITTED || terminalErrno != 0 {
 		e.setWritableWaiting(false)
 		e.send.payload.close()
 		e.finishSend(&SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)})
 		e.attemptMu.Unlock()
-		return true
+		return true, false
 	}
 
 	e.mu.Lock()
@@ -712,7 +709,7 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 		settled := e.settled
 		e.mu.Unlock()
 		e.attemptMu.Unlock()
-		return settled
+		return settled, false
 	}
 	e.published = false
 	e.completion = 0
@@ -723,62 +720,35 @@ func (e *completionEntry) captureWritable(completion *C.zlink_completion_t, cont
 		e.send.payload.close()
 		e.finishSend(nil)
 		e.attemptMu.Unlock()
-		return true
+		return true, false
 	}
 	e.attemptMu.Unlock()
-	return e.attemptSend()
+	return false, true
 }
 
-func (e *completionEntry) captureRequestWritable(completion *C.zlink_completion_t, contextKey uintptr) bool {
+func (e *completionEntry) captureRequestWritable(completion *C.zlink_completion_t, contextKey uintptr) (terminal, retry bool) {
 	if e == nil || completion == nil || e.kind != completionRequest {
-		return true
-	}
-	record := requestWritableRecord{
-		completionID: uint64(completion.completion_id),
-		contextKey:   contextKey,
-		sendResult:   C.zlink_send_complete_result_t(completion.send_result),
-		terminalErr:  int(completion.send_terminal_errno),
+		return true, false
 	}
 	e.attemptMu.Lock()
 	defer e.attemptMu.Unlock()
-	e.mu.Lock()
-	if !e.published && !e.settled {
-		// The native drain can observe WRITABLE after Core returns the token but
-		// before the submit goroutine publishes it. Retain the record only on
-		// that refused path; the immediately admitted path stays unchanged.
-		e.earlyRequestWritable = &record
-		e.mu.Unlock()
-		return false
-	}
-	e.mu.Unlock()
-	return e.captureRequestWritableRecordLocked(record)
-}
+	completionID := uint64(completion.completion_id)
 
-func (e *completionEntry) captureRequestWritableRecord(record requestWritableRecord) bool {
-	if e == nil || e.kind != completionRequest {
-		return true
-	}
-	e.attemptMu.Lock()
-	defer e.attemptMu.Unlock()
-	return e.captureRequestWritableRecordLocked(record)
-}
-
-func (e *completionEntry) captureRequestWritableRecordLocked(record requestWritableRecord) bool {
 	e.mu.Lock()
 	if e.settled {
 		e.mu.Unlock()
-		return true
+		return true, false
 	}
 	published := e.published
 	expectedID := e.completion
 	publicDone := e.publicDone
 	e.mu.Unlock()
 
-	if !published || record.completionID != expectedID || record.contextKey != e.handleKey ||
+	if !published || completionID != expectedID || contextKey != e.handleKey ||
 		e.request == nil {
 		// A mismatched token can still be followed by the expected native token.
 		// Keep the cgo handle registered in that case so it cannot be reused.
-		if published && record.completionID != expectedID {
+		if published && completionID != expectedID {
 			if !publicDone {
 				e.mu.Lock()
 				if !e.publicDone {
@@ -791,18 +761,18 @@ func (e *completionEntry) captureRequestWritableRecordLocked(record requestWrita
 			if e.request != nil && e.request.payload != nil {
 				e.request.payload.close()
 			}
-			return false
+			return false, false
 		}
 		e.setWritableWaiting(false)
 		if e.request != nil && e.request.payload != nil {
 			e.request.payload.close()
 		}
 		e.finishSend(&RequestError{Result: RequestInternalError, nativeErrno: int(C.EPROTO)})
-		return true
+		return true, false
 	}
 
-	terminalErrno := record.terminalErr
-	if record.sendResult == C.ZLINK_SEND_TERMINAL {
+	terminalErrno := int(completion.send_terminal_errno)
+	if C.zlink_send_complete_result_t(completion.send_result) == C.ZLINK_SEND_TERMINAL {
 		if terminalErrno == 0 {
 			terminalErrno = int(C.EIO)
 		}
@@ -811,22 +781,22 @@ func (e *completionEntry) captureRequestWritableRecordLocked(record requestWrita
 			e.request.payload.close()
 		}
 		e.finishSend(requestTerminalError(terminalErrno))
-		return true
+		return true, false
 	}
-	if record.sendResult != C.ZLINK_SEND_ADMITTED || terminalErrno != 0 {
+	if C.zlink_send_complete_result_t(completion.send_result) != C.ZLINK_SEND_ADMITTED || terminalErrno != 0 {
 		e.setWritableWaiting(false)
 		if e.request.payload != nil {
 			e.request.payload.close()
 		}
 		e.finishSend(&RequestError{Result: RequestInternalError, nativeErrno: int(C.EPROTO)})
-		return true
+		return true, false
 	}
 
 	e.mu.Lock()
-	if e.settled || !e.published || e.completion != record.completionID {
+	if e.settled || !e.published || e.completion != completionID {
 		settled := e.settled
 		e.mu.Unlock()
-		return settled
+		return settled, false
 	}
 	e.published = false
 	e.completion = 0
@@ -837,6 +807,24 @@ func (e *completionEntry) captureRequestWritableRecordLocked(record requestWrita
 		if e.request.payload != nil {
 			e.request.payload.close()
 		}
+		e.finishSend(nil)
+		return true, false
+	}
+
+	return false, true
+}
+
+func (e *completionEntry) attemptRequest() bool {
+	e.attemptMu.Lock()
+	defer e.attemptMu.Unlock()
+	e.mu.Lock()
+	settled, publicDone := e.settled, e.publicDone
+	e.mu.Unlock()
+	if settled {
+		return true
+	}
+	if publicDone {
+		e.request.payload.close()
 		e.finishSend(nil)
 		return true
 	}
@@ -895,26 +883,28 @@ func captureNativeCompletion(
 	entry *completionEntry,
 	completion *C.zlink_completion_t,
 	contextKey uintptr,
-) (parts []*Message, request bool, terminal bool, err error) {
+) (parts []*Message, request bool, terminal bool, retry bool, err error) {
 	defer C.zlink_completion_close(completion)
 	if entry == nil {
-		return nil, false, false, nil
+		return nil, false, false, false, nil
 	}
 	if entry.kind == completionSendRetry {
-		return nil, false, entry.captureWritable(completion, contextKey), nil
+		terminal, retry = entry.captureWritable(completion, contextKey)
+		return nil, false, terminal, retry, nil
 	}
 	if completion.kind == C.ZLINK_COMPLETION_WRITABLE {
-		return nil, false, entry.captureRequestWritable(completion, contextKey), nil
+		terminal, retry = entry.captureRequestWritable(completion, contextKey)
+		return nil, false, terminal, retry, nil
 	}
 	if completion.kind != C.ZLINK_COMPLETION_REQUEST {
-		return nil, true, true, &RequestError{Result: RequestInternalError, nativeErrno: int(C.EPROTO)}
+		return nil, true, true, false, &RequestError{Result: RequestInternalError, nativeErrno: int(C.EPROTO)}
 	}
 	result := RequestResult(completion.request_result)
 	if result != RequestOK {
-		return nil, true, true, requestCompletionError(result)
+		return nil, true, true, false, requestCompletionError(result)
 	}
 	parts, err = adoptCompletionParts(completion)
-	return parts, true, true, err
+	return parts, true, true, false, err
 }
 
 func adoptCompletionParts(completion *C.zlink_completion_t) ([]*Message, error) {

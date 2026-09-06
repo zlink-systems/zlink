@@ -316,6 +316,9 @@ func submitCompletionRequest(
 		return nil, err
 	}
 
+	// WRITABLE capture joins the initial token publication through the same
+	// per-entry attempt lock used for retries. Only the drain owner retries.
+	entry.attemptMu.Lock()
 	var completionID C.zlink_completion_id_t
 	var ridPointer *C.zlink_routing_id_t
 	if target != nil {
@@ -337,21 +340,22 @@ func submitCompletionRequest(
 	})
 	if err == nil {
 		if completionID == 0 {
+			entry.attemptMu.Unlock()
 			entry.failSubmit()
 			core.completion.unregister(entry)
 			return nil, &SubmitError{Result: SubmitInternalError, nativeErrno: int(C.EPROTO)}
 		}
 		entry.publish(uint64(completionID))
+		entry.attemptMu.Unlock()
 		return entry.waitRequest()
 	}
 
 	var submitErr *SubmitError
 	if errors.As(err, &submitErr) && submitErr.Result == SubmitBackpressured &&
 		submitErr.internalErrno() == int(C.EAGAIN) && completionID != 0 {
-		entry.attemptMu.Lock()
 		retry, snapshotErr := newRequestRetryState(core, target, timeoutMillis, parts)
 		entry.request = retry
-		earlyWritable := entry.publishRequestWait(uint64(completionID))
+		entry.publishSendWait(uint64(completionID))
 		if snapshotErr == nil {
 			retry.payload.takeSourceOwnership()
 		}
@@ -372,12 +376,10 @@ func submitCompletionRequest(
 			}
 		}
 		entry.attemptMu.Unlock()
-		if earlyWritable != nil && entry.captureRequestWritableRecord(*earlyWritable) {
-			core.completion.unregister(entry)
-		}
 		return entry.waitRequest()
 	}
 
+	entry.attemptMu.Unlock()
 	if err != nil {
 		entry.failSubmit()
 		core.completion.unregister(entry)
