@@ -916,7 +916,7 @@ class ZLinkActorCreateCallRuntime implements ZLinkActorCreateCall {
 
   private throwDuplicateOption(option: string): never {
     throw createInternalFrameworkException(
-      ZLinkFrameworkInternalErrorKind.InvalidConfiguration,
+      ZLinkFrameworkInternalErrorKind.InvalidOperation,
       `Actor create option '${option}' was already configured.`
     );
   }
