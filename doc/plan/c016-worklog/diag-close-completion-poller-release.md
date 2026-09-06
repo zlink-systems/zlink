@@ -113,3 +113,6 @@ tid  ZLINKbg/IO/0..3   state=S  wchan=futex_wait_queue
 - 별도의 Core 결함 job으로 분리 권장. 그 job은 3.2의 유실 지점을 계측(예: poller notification이
   등록된 동안의 `_signaler.recv_failable()` 소비 카운터)으로 한 줄까지 확정한 뒤 4-1안을 적용하고,
   검증은 본 문서 2.2의 스트레스 변형(50회 + 동시 `-j4`)으로 0/50 을 확인하면 된다.
+
+
+> **정정(2026-09-07, S-12 job):** §3.2·§4의 "re-arm 부재 lost wake" 가설은 오진이다. ring-buffer 추적 결과 `begin_close_or_fail_busy()`(`socket_lifecycle_runtime.cpp:288`)가 poller의 readiness 샘플(`socket_base_api.cpp:894` admission scope)을 in-flight로 보고 EBUSY를 반환해 closing bit·POLLERR edge가 발행되지 않은 것이다. 상세 `core-rf-S-12-summary.md`.
