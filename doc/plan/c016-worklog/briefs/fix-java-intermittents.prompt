@@ -1,0 +1,13 @@
+# Job: java framework — root-fix two intermittent gate failures (M6A same-process server dealer null; canonical relocation prepare rejected 17)
+
+You are a codex sub-agent under a Claude supervisor. Cap 3 h. Read `AGENTS.md` §2/§3/§4.1/§5, `framework/AGENTS.md`. Campaign rules: NO mitigations (no timeouts/retries/sleeps/skips/wider assertions), one owner per rule, regression test per fix, tests are interface-based and deterministic (inject clocks/schedulers; D-095 monotonic). Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`, other languages. Do not commit. Lock `/tmp/zlink-java-gate.lock` for gradle; check `/proc/loadavg` < 10 and `pgrep -c lto1` == 0 before full gates.
+
+## Failure 1 — `ZLinkClientServerM6ARuntimeTest.sameProcessServerUsesStoreDiscoveryAndExactDealerRouterAdmission` (`:641`)
+Right after the store runtime started, the expected outbound dealer was null; failed in a full gate and in one isolated diagnostic, passed in the final full gate. Evidence: `/tmp/zlink-java-cs-server-ready-20260906/full-gate.log`, `full-gate-results/`, `related-diagnostic-kotlin.log`. Determine whether the dealer creation is asynchronous to the public start/Ready signal the test waits on (runtime: the public Ready must imply the outbound is registered — fix at the owner) or the test reads an internal registry before the contract point (fixture: wait on the public contract).
+
+## Failure 2 — `ZLinkCanonicalRelocationStateMachineTest.actorJoinPrepareRetriesNotConnectedWithinOriginalDeadline` (`:499`)
+`target rejected canonical relocation: 17` in a full gate; passed on rerun. Actor relocation prepare path. Determine what rejection code 17 is at the target (map it), why the target rejected (stale generation/seal/authority race under load?), and whether the source's "retry NotConnected within the original deadline" contract (D-093 one deadline) is violated or the fixture races the target's readiness. Fix at the owner.
+
+For both: reproduce with repeated runs of the class (≥100, with `yes > /dev/null` x20 load if needed), capture the failing state (existing message-flow/diagnostic env vars), then fix; class 300/300; full `./gradlew test` under the lock → 0 failures.
+
+Deliverable: `doc/plan/c016-worklog/fix-java-intermittents-summary.md`. Do not print it.
