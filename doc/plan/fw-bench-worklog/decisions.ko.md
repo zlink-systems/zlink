@@ -652,6 +652,51 @@ job `fwb-04b`가 Node pass에서 `zlink-c` 기준선을 다시 재지 않았고 
 - **보고서 의무**: 데이터가 다섯 구간에서 나왔다는 사실과 검증 결과를 §2 측정 조건에 명시한다.
   검증이 통과했더라도 "한 구간에서 잰 데이터"인 것처럼 쓰지 않는다.
 
+## FB-042 — 관리형 binding의 공개 async request terminal은 admission 거절을 표면화하지 않는다
+
+- **관찰** (job `fwb-09`, 계약 문서 직접 확인): Node `RequestSubmitOperation.submit()`,
+  `.NET` `Async()`, Java `submit()` 모두 **backpressure를 내부에서 흡수한다.** WRITABLE
+  token을 기다렸다가 같은 요청을 재제출하며 **호출자에게 거절을 돌려주지 않는다.**
+- **send에는 있고 request에는 없다**: send terminal은 `TrySubmit()` → bool로 `Backpressured`를
+  표면화한다. request terminal에는 세 binding 어디에도 대응 변형이 없다.
+- **C만 관측 가능하다**: `zlink_request_part`에 `DONTWAIT`을 주면
+  `ZLINK_SUBMIT_BACKPRESSURED`가 온다. C bench의 기존 루프가 이미 backpressure에서
+  멈추는 이유이며 수정이 필요 없는 이유다.
+- **결과**: "공개 terminal의 admission backpressure까지 제출한다"는 **C에서는 표현 가능하고
+  관리형 네 언어에서는 표현 불가능하다.** 저장소 perf 정책(`PERF_MULTI_TEST_POLICY.md:164`)이
+  요구하는 모델을 그 언어들의 공개 API로는 구현할 수 없다는 뜻이다.
+- **처리**: 이 캠페인은 고치지 않는다. **0.18.0 후보.** 공개 API 공백이며, 성능 특성이 아니다.
+
+## FB-043 — 저장소의 두 perf harness가 서로 다르고 하나는 정책을 어긴다
+
+- **관찰** (job `fwb-09`): Node `perf_multi_socket_reqrep.ts`는 socket당 event-loop turn마다
+  하나씩 제출하고 양보해 깊이가 제출·완료 속도 균형점에서 정해지게 둔다. Java
+  `PerfMultiSocketReqRep`은 **socket당 미완료 요청을 정확히 1개로 제한**하며 그렇게 한다고
+  주석에 적혀 있다. 후자는 `PERF_MULTI_TEST_POLICY.md:164`가 명시적으로 금지하는 1:1 직렬화다.
+- **의미**: 같은 정책 아래의 두 harness가 다른 모델을 쓴다. Java의 REQREP perf 수치가
+  inflight 1 왕복 수치일 수 있으며, 그렇다면 정책이 재려던 것과 다른 것을 재고 있다.
+- **처리**: 이 캠페인의 범위 밖이다. **0.18.0 후보로 올린다.** 확인이 필요한 것은 Java perf의
+  REQREP 값이 정책이 정한 모델로 측정된 것인지다.
+
+## 감독관 결정 — 측정 루프는 (a), API 공백은 결과로 기록
+
+job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양보를 유일한 제한으로 두고
+도달 깊이를 결과로 보고, (b) 관리형 terminal에 비차단 admission 변형이 없다는 것을 발견으로
+두고 C·C++만 측정하며 나머지 넷을 공개 API 공백으로 막힘 처리.
+
+**(a)를 채택한다.** 근거:
+
+- (b)는 다섯 언어 중 둘만 측정한다. 이 작업은 사용자가 요청한 비교표를 얻으려는 것이고,
+  방어 가능한 균일한 루프가 존재하는데 순수성 때문에 목표를 버리는 것은 맞바꿈이 나쁘다.
+- 관리형 binding에도 backpressure는 **있다.** terminal 안에서 흡수될 뿐이다. 제출과 완료
+  속도가 균형을 이루는 지점에서 깊이가 정해지는 것은 실제로 일어나는 일이다.
+- 다만 **라벨을 정직하게 붙인다.** 네 행에 대해 이것은 "admission backpressure까지"가 아니라
+  **"연속 제출 + 완료 pump 양보"** 다. 규격과 보고서에 그대로 적는다.
+
+**FB-042를 결과로 싣는다.** 루프를 어떻게 짜든 그 공백은 사실이고, 이 측정이 그것을 드러냈다.
+§5.2의 규칙(abandoned가 0이 아닌 셀은 비율 비교에서 제외)은 그대로 적용한다. 관리형 행이
+깨끗한 셀을 내면 표가 성립하고, 내지 못하면 그것이 답이며 그대로 보고한다.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
