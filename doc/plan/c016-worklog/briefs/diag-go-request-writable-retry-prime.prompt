@@ -1,0 +1,16 @@
+# Job: go binding — pre-existing failure: `TestPublicRequestRetriesExactPacketAfterWritable` route-prime DATA `router.Recv()` returns (false, nil)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 2 h. Read `AGENTS.md` §2/§3/§4.1/§5. Campaign rules (D-098, D-111): root-fix, no mitigations (no sleeps/retries/assertion relaxation), regression test, do not commit. You may modify `bindings/go/**` only; if the cause is in Core (`core/**`), do NOT change Core — write a public C-API reproduction under `/tmp/zlink-go-prime/` and report (the supervisor owns Core changes).
+
+## Facts (from `doc/plan/c016-worklog/fix-bindings-go-r3-summary.md` BLOCKERS)
+- `bindings/go/internal/native/request_writable_retry_test.go:60` (`TestPublicRequestRetriesExactPacketAfterWritable/run-0..4`): the first `route-prime` DATA sent before the REQUEST is never received — `router.Recv()` returns `(false, nil)` — so the test fails before the WRITABLE-retry assertion. Reproduced with the pre-fix completion files (baseline overlay) and a public-API repro: `/tmp/zlink-go-r3/request-prime-repro.go`, logs `/tmp/zlink-go-r3/request-prime-baseline.log`. Go's other tests and samples 7/7 pass on the committed tree (`main` now includes the three R3 go fixes).
+- Core is `core/build-dev` at main (D-090…D-098 admission changes: DISCONNECTED at peer termination, REJECT/HANDOVER only, endpoint release before return, same-RID pair rules). The test may rely on a DATA reaching a ROUTER before that peer's admission/READY (or on a timing the old Core tolerated), or the binding's `Recv` may drop/misroute the first record.
+
+## What to do
+1. Reproduce with the public repro; trace which side loses the DATA (Core admission/preamble path vs go `Recv`) using the Core socket README §4/§6 and D-092/D-094 as the contract. State the contract clause the observed behavior violates, or state that the test expectation is stale against the current contract (cite the clause).
+2. If the binding is at fault: fix with a regression test, `bash bindings/go/tests/run_tests.sh` 0 failures, samples 7/7 (`flock /tmp/zlink-samples-gate.lock`).
+3. If the test is stale: rewrite the test to the current contract without weakening what it verified (exact packet resubmit after WRITABLE), gate as above.
+4. If Core is at fault: repro + `file:line` in `core/src` + the spec clause; do not change Core.
+
+## Deliverable
+`doc/plan/c016-worklog/diag-go-request-writable-retry-prime-summary.md` (cause, fix or Core repro, tests, gate results, BLOCKERS).
