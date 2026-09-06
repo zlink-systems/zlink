@@ -38,7 +38,7 @@ export async function runSample(ctx) {
     'session',
     'supportchat-ready kind=spot-route node=session mesh=supportchat-conversations'
   );
-  ctx.runBrowser({
+  await ctx.runBrowser({
     timeoutMs: 90_000,
     config: { sessionStreamEndpoint },
     proxies: []

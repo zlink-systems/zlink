@@ -59,7 +59,7 @@ export async function runSample(ctx) {
   }
   await waitForLog(ctx, 'dispatch', 'deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-1');
   await waitForLog(ctx, 'dispatch', 'deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-2');
-  ctx.runBrowser({
+  await ctx.runBrowser({
     timeoutMs: 90_000,
     config: {
       dispatchApiHttpUrl: '/api/delivery',

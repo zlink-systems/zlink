@@ -38,6 +38,9 @@ const dockerCommandTimeoutMs = 10_000;
 let redisContainer;
 let failed = false;
 let cleaning = false;
+let stopSignal;
+let interrupt;
+const interrupted = new Promise((resolve) => { interrupt = resolve; });
 const deferredOutput = [];
 
 async function main() {
@@ -48,17 +51,23 @@ async function main() {
     fs.chmodSync(runDir, 0o700);
     logDir = path.join(runDir, 'logs');
     workDir = path.join(runDir, 'work');
-    fs.mkdirSync(logDir, { recursive: true });
+    fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
     fs.mkdirSync(workDir, { recursive: true });
 
-    run('npm', ['run', 'build'], { cwd: sampleRoot });
-    const redisEndpoint = await startRedis();
-    const context = createContext(redisEndpoint);
+    const execute = async () => {
+      await run('npm', ['run', 'build'], { cwd: sampleRoot });
+      assertRunning();
+      const redisEndpoint = await startRedis();
+      assertRunning();
+      await runSample(createContext(redisEndpoint));
+      ensureChildrenRunning();
+    };
     const writeLine = console.log;
     console.log = (...args) => deferredOutput.push({ args, kind: 'log' });
     try {
-      await runSample(context);
-      ensureChildrenRunning();
+      await Promise.race([execute(), interrupted.then(() => {
+        throw new Error(`${sampleName} interrupted by ${stopSignal}.`);
+      })]);
     } finally {
       console.log = writeLine;
     }
@@ -75,12 +84,25 @@ async function main() {
     }
     if (failures.length > 0 && !cleanupFailed) printLogs();
     if (runDir !== undefined) {
-      if (runnerOptions.keepRunDir || failed) {
+      if (runnerOptions.keepRunDir) {
         console.log(`runDir=${runDir}`);
       } else {
-        fs.rmSync(runDir, { recursive: true, force: true });
+        try {
+          if (failed && fs.existsSync(logDir)) {
+            const evidenceDir = path.join(os.tmpdir(), 'zlink-sample-logs', path.basename(runDir));
+            fs.mkdirSync(path.dirname(evidenceDir), { recursive: true, mode: 0o700 });
+            fs.renameSync(logDir, evidenceDir);
+            console.error(`log_dir=${evidenceDir}`);
+          }
+        } finally {
+          fs.rmSync(runDir, { recursive: true, force: true });
+        }
       }
     }
+  }
+  if (stopSignal !== undefined) {
+    for (const error of failures) console.error(error);
+    process.exit(stopSignal === 'SIGINT' ? 130 : 143);
   }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) throw new AggregateError(failures, `${sampleName} failed during execution and cleanup.`);
@@ -117,15 +139,15 @@ function createContext(redisEndpoint) {
       return target;
     },
     async start(name, entry, args = [], extraEnv = {}) {
-      const child = startNode(name, path.join(sampleRoot, entry), args, { ...env, ...extraEnv });
-      children.push(child);
-      return child;
+      return startNode(name, path.join(sampleRoot, entry), args, { ...env, ...extraEnv });
     },
+    startCommand(...args) { return startCommand(...args); },
+    runCommand(...args) { return run(...args); },
     async stop(name, signal = 'SIGINT') {
       const state = children.find((entry) => entry.name === name);
       if (!state) throw new Error(`Unknown sample process '${name}'.`);
       state.expectedStop = true;
-      if (state.child.exitCode === null && state.child.signalCode === null) state.child.kill(signal);
+      signalChild(state, signal);
       await waitForExit(state);
       if (signal === 'SIGKILL' ? state.signalCode !== signal : state.exitCode !== 0 && state.signalCode !== signal) {
         throw new Error(`${name} stopped with ${state.signalCode ?? state.exitCode}, expected ${signal}.`);
@@ -136,10 +158,10 @@ function createContext(redisEndpoint) {
     waitLog,
     waitAnyLog,
     assertLogCount,
-    runNode(entry, args = [], extraEnv = {}) {
-      run(process.execPath, [entry, ...args], { cwd: sampleRoot, env: { ...env, ...extraEnv } });
+    async runNode(entry, args = [], extraEnv = {}) {
+      await run(process.execPath, [entry, ...args], { cwd: sampleRoot, env: { ...env, ...extraEnv } });
     },
-    runBrowser(definition, entryName) {
+    async runBrowser(definition, entryName) {
       const configPath = path.join(runDir, 'browser-runner.json');
       fs.writeFileSync(configPath, `${JSON.stringify(definition, null, 2)}\n`, { mode: 0o600 });
       fs.chmodSync(configPath, 0o600);
@@ -154,17 +176,17 @@ function createContext(redisEndpoint) {
       //  stdout. The client's completion markers are only observable there, and a sample runner
       //  must confirm them from a log rather than trusting the browser's own verdict.
       const browserLog = path.join(logDir, 'browser-client.log');
-      const result = spawnSync(platformExecutable(process.execPath), args, {
+      const state = startCommand('browser-client', process.execPath, args, {
         cwd: sampleRoot,
         env,
-        encoding: 'utf8'
+        expectedStop: true
       });
-      if (result.error) throw result.error;
-      const captured = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-      fs.writeFileSync(browserLog, captured, { mode: 0o600 });
+      await state.exited;
+      if (state.error) throw state.error;
+      const captured = fs.readFileSync(browserLog, 'utf8');
       deferredOutput.push({ kind: 'write', value: captured });
-      if (result.status !== 0) {
-        throw new Error(`browser sample exited with ${result.status}. See ${browserLog}.`);
+      if (state.status !== 0) {
+        throw new Error(`browser sample exited with ${state.status}. See ${browserLog}.`);
       }
     },
     startBrowser(definition, entryName) {
@@ -187,7 +209,6 @@ function createContext(redisEndpoint) {
         args,
         env
       );
-      children.push(state);
       return {
         async complete() {
           if (state.status !== undefined) {
@@ -209,6 +230,19 @@ async function waitForExit(state) {
   const deadline = Date.now() + 10_000;
   while (state.status === undefined && Date.now() < deadline) await sleep(50);
   if (state.status === undefined) throw new Error(`${state.name} did not stop within 10 seconds.`);
+  await state.exited;
+}
+
+function signalChild(state, signal) {
+  if (state.closed || state.child.pid === undefined) return false;
+  if (!state.processGroup) return state.child.kill(signal);
+  try {
+    process.kill(-state.child.pid, signal);
+    return true;
+  } catch (error) {
+    if (error.code !== 'ESRCH') throw error;
+    return false;
+  }
 }
 
 async function reserveBrowserSafePort() {
@@ -217,11 +251,17 @@ async function reserveBrowserSafePort() {
 
 async function reserveLeasedPort(range, purpose) {
   for (let attempt = 0; attempt < 200; attempt += 1) {
+    assertRunning();
     const port = range.min + Math.floor(Math.random() * (range.max - range.min + 1));
     if (reservedPorts.has(port)) continue;
     const leasePath = acquirePortLease(port);
     if (leasePath === undefined) continue;
-    if (await canBind(port)) {
+    const available = await canBind(port);
+    if (stopSignal !== undefined || cleaning) {
+      fs.rmSync(leasePath, { force: true });
+      assertRunning();
+    }
+    if (available) {
       reservedPorts.add(port);
       portLeases.set(port, leasePath);
       return port;
@@ -365,20 +405,51 @@ function parseRunnerOptions(args) {
 }
 
 function startNode(name, entry, args, env) {
+  return startCommand(name, process.execPath, [entry, ...args], { env });
+}
+
+function assertRunning() {
+  if (stopSignal !== undefined || cleaning) throw new Error(`${sampleName} is stopping.`);
+}
+
+function startCommand(name, command, args, options = {}) {
+  assertRunning();
   const logPath = path.join(logDir, `${name}.log`);
   const output = fs.openSync(logPath, 'a');
-  const child = spawn(process.execPath, [entry, ...args], {
-    cwd: sampleRoot,
-    env,
-    stdio: ['ignore', output, output]
-  });
-  fs.closeSync(output);
-  const state = { child, exitCode: undefined, logPath, name, signalCode: undefined, status: undefined };
+  let child;
+  try {
+    child = spawn(platformExecutable(command), args, {
+      cwd: options.cwd ?? sampleRoot,
+      env: options.env ?? process.env,
+      detached: process.platform !== 'win32',
+      // Descendants inherit these pipes. 'close' waits for their output handles too.
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+  } catch (error) {
+    fs.closeSync(output);
+    throw error;
+  }
+  const state = { child, exitCode: undefined, logPath, name, signalCode: undefined,
+    status: undefined, expectedStop: options.expectedStop ?? false,
+    processGroup: process.platform !== 'win32', closed: false };
+  children.push(state);
+  for (const [stream, inherited] of [[child.stdout, process.stdout], [child.stderr, process.stderr]]) {
+    stream.on('data', (chunk) => {
+      fs.writeSync(output, chunk);
+      if (options.inheritOutput) inherited.write(chunk);
+    });
+  }
+  child.once('error', (error) => { state.error = error; });
   child.once('exit', (code, signal) => {
     state.exitCode = code;
     state.signalCode = signal;
     state.status = code ?? (signal ? 1 : 0);
   });
+  state.exited = new Promise((resolve) => child.once('close', () => {
+    state.closed = true;
+    fs.closeSync(output);
+    resolve(state.status);
+  }));
   return state;
 }
 
@@ -439,6 +510,8 @@ async function waitUntil(description, probe) {
 }
 
 function ensureChildrenRunning() {
+  const failedStart = children.find((entry) => entry.error !== undefined);
+  if (failedStart) throw failedStart.error;
   const stopped = children.find((entry) => entry.status !== undefined && entry.expectedStop !== true);
   if (stopped) {
     throw new Error(`${stopped.name} exited before the sample client ran. See ${stopped.logPath}.`);
@@ -446,15 +519,17 @@ function ensureChildrenRunning() {
 }
 
 function run(executable, args, options = {}) {
-  const result = spawnSync(platformExecutable(executable), args, {
-    cwd: options.cwd ?? sampleRoot,
-    env: options.env ?? process.env,
-    stdio: 'inherit'
+  const state = startCommand(`command-${children.length}`, executable, args, {
+    ...options,
+    expectedStop: true,
+    inheritOutput: true
   });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(`${executable} ${args.join(' ')} exited with ${result.status}.`);
-  }
+  return state.exited.then(() => {
+    if (state.error) throw state.error;
+    if (state.status !== 0) {
+      throw new Error(`${executable} ${args.join(' ')} exited with ${state.status}.`);
+    }
+  });
 }
 
 function command(executable, args) {
@@ -474,23 +549,36 @@ function platformExecutable(executable) {
 }
 
 async function cleanup() {
-  if (cleaning) return;
-  cleaning = true;
+  if (cleaning) return cleaning;
+  cleaning = cleanChildren();
+  return cleaning;
+}
+
+async function cleanChildren() {
   const teardownFailures = new Map();
-  const active = children.filter(({ child }) => child.exitCode === null && child.signalCode === null);
-  for (const { child } of [...active].reverse()) {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGINT');
+  const active = children.filter((state) => !state.closed);
+  const exited = active.map((state) => state.exited);
+  for (const state of [...active].reverse()) {
+    signalChild(state, 'SIGTERM');
   }
-  await sleep(500);
+  // Keep the existing grace deadline; finish as soon as the owned processes close.
+  let deadline;
+  try {
+    await Promise.race([Promise.all(exited), new Promise((resolve) => {
+      deadline = setTimeout(resolve, 500);
+    })]);
+  } finally {
+    clearTimeout(deadline);
+  }
   for (const state of active) {
-    const { child } = state;
     if (state.exitCode === 137 || state.exitCode === -9 || state.signalCode === 'SIGKILL') {
       teardownFailures.set(state, state.signalCode ?? state.exitCode);
     }
-    if (child.exitCode === null && child.signalCode === null) {
-      if (child.kill('SIGKILL')) teardownFailures.set(state, 'SIGKILL');
+    if (!state.closed) {
+      if (signalChild(state, 'SIGKILL')) teardownFailures.set(state, 'SIGKILL');
     }
   }
+  await Promise.all(exited);
   if (redisContainer) {
     removeRedisAttempt(redisContainer, '');
   }
@@ -516,9 +604,9 @@ function sleep(milliseconds) {
 }
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.once(signal, () => {
-    failed = true;
-    void cleanup().finally(() => process.exit(signal === 'SIGINT' ? 130 : 143));
+  process.on(signal, () => {
+    stopSignal ??= signal;
+    interrupt();
   });
 }
 

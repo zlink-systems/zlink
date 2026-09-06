@@ -49,7 +49,7 @@ export async function runSample(ctx) {
   await waitMeshReady(ctx, 'api-b', 'room');
   await waitMeshReady(ctx, 'session-a', 'room');
   await waitMeshReady(ctx, 'session-b', 'room');
-  ctx.runBrowser({
+  await ctx.runBrowser({
     timeoutMs: 90_000,
     config: {
       sessionAEndpoint: sessionB.sample.sessionEndpoint,

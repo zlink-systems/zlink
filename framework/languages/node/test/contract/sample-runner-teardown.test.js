@@ -15,7 +15,7 @@ function runner(children) {
   // Run the runner's actual lifecycle functions without its build/Redis/browser entry point.
   const scope = vm.createContext({
     children, cleaning: false, redisContainer: undefined, portLeases: new Map(),
-    process, fs, path, sampleRoot: os.tmpdir(), runnerOptions: {},
+    process, fs, path, setTimeout, clearTimeout, sampleRoot: os.tmpdir(), runnerOptions: {},
     nodeRoot: os.tmpdir(), logDir: os.tmpdir(), runDir: os.tmpdir(), workDir: os.tmpdir(),
     sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
     reserveBrowserSafePort() {}, waitTcp() {}, waitHttp() {}, waitLog() {}, waitAnyLog() {}, assertLogCount() {}
@@ -31,10 +31,11 @@ function runner(children) {
 async function role(t, behavior) {
   const child = spawn(process.execPath, ['-e', `
     const timer = setInterval(() => {}, 1000);
-    process.on('SIGINT', () => { ${behavior} });
+    for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { ${behavior} });
     console.log('ready');
   `], { stdio: ['ignore', 'pipe', 'pipe'] });
-  const state = { child, name: 'role', logPath: 'role.log' };
+  const state = { child, name: 'role', logPath: 'role.log', closed: false };
+  state.exited = new Promise(resolve => child.once('close', () => { state.closed = true; resolve(state.status); }));
   child.once('exit', (code, signal) => {
     state.exitCode = code;
     state.signalCode = signal;

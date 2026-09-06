@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 
 export const sampleName = 'ZoneWorld';
@@ -165,7 +164,7 @@ async function runFullLane(ctx) {
   await ctx.start('zone-node-3', 'dist/Server/ZoneNode/main.js', ['--config', extra.path]);
   await ctx.waitLog('zone-node-3', 'topology=ready node=zone-node-3 zones=');
   await ctx.waitLog('zone-node-3', 'fanout subscriber=ready node=zone-node-3');
-  ctx.runNode(path.join(ctx.sampleRoot, 'dist/Client/special.js'), [
+  await ctx.runNode(path.join(ctx.sampleRoot, 'dist/Client/special.js'), [
     '--config', specialClientConfig(ctx, shared, gateway, ops, 'D2')
   ]);
   await ctx.waitLog('zone-node-3', 'fanout subscriber received announcement');
@@ -224,13 +223,9 @@ async function runFullLane(ctx) {
   );
   await transition.waitFor('scenario ZW-B4-C2-C3 armed');
   const browser = await startSharedBrowser(ctx, gateway, ops, targetNode.nodeId);
-  try {
-    await waitForFile(browser.markerPath, 45_000);
-    await ctx.stop(targetNode.nodeId, 'SIGKILL');
-    await browser.complete();
-  } finally {
-    await browser.dispose();
-  }
+  await waitForFile(browser.markerPath, 45_000);
+  await ctx.stop(targetNode.nodeId, 'SIGKILL');
+  await browser.complete();
   await transition.waitFor('scenario ZW-B4 passed');
   await transition.waitFor('scenario ZW-C2 passed');
   await transition.waitFor('scenario ZW-C3 passed');
@@ -343,12 +338,11 @@ async function runFullLane(ctx) {
 }
 
 async function runB8ChildLane(ctx) {
-  const runner = path.join(ctx.sampleRoot, process.platform === 'win32' ? 'run_sample.ps1' : 'run_sample.sh');
-  if (process.platform === 'win32') {
-    await runCommand('powershell', ['-NoProfile', '-File', runner, '-B8Child'], ctx.sampleRoot);
-  } else {
-    await runCommand('bash', [runner, '--b8-child'], ctx.sampleRoot);
-  }
+  await ctx.runCommand(process.execPath, [
+    path.join(ctx.nodeRoot, 'samples/run-sample.mjs'),
+    path.join(ctx.sampleRoot, 'Runner/sample-runner.mjs'),
+    '--lane', 'b8'
+  ]);
 }
 
 async function runB8Lane(ctx) {
@@ -480,11 +474,6 @@ async function runB8Lane(ctx) {
     console.log('PASS ZoneWorld ZW-B8');
   } finally {
     fs.rmSync(armFile, { force: true });
-    await b8Client?.dispose();
-    for (const proxy of proxies) {
-      if (proxy.child.exitCode === null && proxy.child.signalCode === null) proxy.child.kill('SIGKILL');
-    }
-    await Promise.allSettled(proxies.map((proxy) => proxy.exited));
   }
 }
 
@@ -495,7 +484,8 @@ async function proxiedRouter(ctx) {
 
 function startSessionRouteProxy(ctx, name, port, armFile) {
   const logPath = path.join(ctx.logDir, `session-route-proxy-${name}.log`);
-  const processState = startCommand(
+  const processState = ctx.startCommand(
+    `session-route-proxy-${name}`,
     'python3',
     [
       path.join(ctx.sampleRoot, 'Support/session_route_block_proxy.py'),
@@ -503,8 +493,7 @@ function startSessionRouteProxy(ctx, name, port, armFile) {
       '--target-host', '127.0.0.2', '--target-port', String(port),
       '--arm-file', armFile
     ],
-    ctx.sampleRoot,
-    logPath
+    { cwd: ctx.sampleRoot }
   );
   return { ...processState, logPath };
 }
@@ -558,38 +547,31 @@ function specialClientConfig(ctx, shared, gateway, ops, scenarios, targetNodeId)
 
 function startScenarioClient(ctx, configPath, name, relativeExecutable = 'dist/Client/special.js') {
   const executable = path.join(ctx.sampleRoot, relativeExecutable);
-  const child = spawn(process.execPath, [executable, '--config', configPath], {
+  const state = ctx.startCommand(`client-${name}`, process.execPath, [executable, '--config', configPath], {
     cwd: ctx.sampleRoot,
-    stdio: ['ignore', 'pipe', 'pipe']
+    expectedStop: true
   });
+  const { child } = state;
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk) => { output += chunk.toString(); });
-  let failure;
-  const exited = new Promise((resolve) => child.once('exit', (code) => {
-    if (code !== 0) failure = new Error(`ZoneWorld ${name} client exited with ${code}.\n${output}`);
-    resolve();
-  }));
   const complete = async () => {
-    await exited;
-    if (failure !== undefined) throw failure;
+    const status = await state.exited;
+    if (state.error) throw state.error;
+    if (status !== 0) throw new Error(`ZoneWorld ${name} client exited with ${status}.\n${output}`);
   };
   return {
     async waitFor(marker) {
       const deadline = Date.now() + 60_000;
       while (!output.includes(marker)) {
-        if (child.exitCode !== null) await complete();
+        if (state.closed) await complete();
         if (Date.now() >= deadline) throw new Error(`Timed out waiting for '${marker}'.\n${output}`);
         await delay(50);
       }
     },
     complete,
     output: () => output,
-    isRunning: () => child.exitCode === null && child.signalCode === null,
-    async dispose() {
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-      await exited;
-    }
+    isRunning: () => child.exitCode === null && child.signalCode === null
   };
 }
 
@@ -702,7 +684,7 @@ async function startSharedBrowser(ctx, gateway, ops, lifecycleNodeId) {
   const previewPort = await ctx.port();
   const markerPath = path.join(ctx.runDir, 'browser-lifecycle-armed');
   const playwrightConfig = path.join(ctx.runDir, 'zoneworld-playwright.live.mjs');
-  await runCommand('npm', ['exec', 'vite', 'build', '--', '--outDir', outputDirectory], browserRoot);
+  await ctx.runCommand('npm', ['exec', 'vite', 'build', '--', '--outDir', outputDirectory], { cwd: browserRoot });
   fs.writeFileSync(
     path.join(outputDirectory, 'config.json'),
     `${JSON.stringify({ gateway: gateway.streamEndpoint, ops: ops.streamEndpoint })}\n`,
@@ -715,18 +697,18 @@ async function startSharedBrowser(ctx, gateway, ops, lifecycleNodeId) {
     use: { baseURL: `http://127.0.0.1:${previewPort}`, headless: true },
     metadata: { lifecycleMarker: markerPath, lifecycleNodeId }
   })}\n`, { mode: 0o600 });
-  const preview = startCommand(
+  ctx.startCommand(
+    'shared-browser-preview',
     'npm',
     ['exec', 'vite', 'preview', '--', '--host', '127.0.0.1', '--port', String(previewPort), '--outDir', outputDirectory],
-    browserRoot,
-    path.join(ctx.logDir, 'shared-browser-preview.log')
+    { cwd: browserRoot }
   );
   await ctx.waitTcp(`tcp://127.0.0.1:${previewPort}`);
-  const playwright = startCommand(
+  const playwright = ctx.startCommand(
+    'shared-browser-playwright',
     'npm',
     ['exec', 'playwright', 'test', '--', '--config', playwrightConfig],
-    browserRoot,
-    path.join(ctx.logDir, 'shared-browser-playwright.log')
+    { cwd: browserRoot, expectedStop: true }
   );
   return {
     markerPath,
@@ -734,27 +716,8 @@ async function startSharedBrowser(ctx, gateway, ops, lifecycleNodeId) {
       const status = await playwright.exited;
       if (status !== 0) throw new Error(`Shared ZoneWorld browser lane exited with ${status}.`);
       console.log('shared-browser=completed');
-    },
-    async dispose() {
-      if (playwright.child.exitCode === null && playwright.child.signalCode === null) playwright.child.kill('SIGKILL');
-      if (preview.child.exitCode === null && preview.child.signalCode === null) preview.child.kill('SIGKILL');
-      await Promise.allSettled([playwright.exited, preview.exited]);
     }
   };
-}
-
-function startCommand(command, args, cwd, logPath) {
-  const output = fs.openSync(logPath, 'a');
-  const child = spawn(command, args, { cwd, stdio: ['ignore', output, output] });
-  fs.closeSync(output);
-  const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0))));
-  return { child, exited };
-}
-
-async function runCommand(command, args, cwd) {
-  const child = spawn(command, args, { cwd, stdio: 'inherit' });
-  const status = await new Promise((resolve) => child.once('exit', (code, signal) => resolve(code ?? (signal ? 1 : 0))));
-  if (status !== 0) throw new Error(`Command '${command} ${args.join(' ')}' exited with ${status}.`);
 }
 
 async function waitForFile(target, timeoutMs) {
