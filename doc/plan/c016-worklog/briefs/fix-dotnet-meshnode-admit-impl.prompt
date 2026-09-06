@@ -1,0 +1,13 @@
+# Job: dotnet framework — finish the RouteMesh admission fix per D-132 (READY = candidate only; admission consuming a candidate = replacement → new epoch + fresh liveness)
+
+You are a codex sub-agent under a Claude supervisor. Cap 2.5 h. Read `AGENTS.md` §2/§3/§4.1/§5, `framework/AGENTS.md`. Start from the uncommitted candidate in the working tree (`framework/languages/dotnet/src/Zlink.Framework/Runtime/Service/ZLinkManagedMeshNode.cs`, `tests/.../MeshNodeShutdownSealTests.cs` — READY mutation removed, deterministic late-READY regression, atomic fixture bind) and the phase-1 report `doc/plan/c016-worklog/fix-dotnet-meshnode-admit-intermittent-summary.md`. The supervisor decided the remaining boundary: `doc/plan/c016-worklog/decisions.ko.md` D-132. Campaign rules: no mitigations, one owner per rule, public API unchanged, deterministic interface-based tests. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`, other languages, `perf/**`, `Runtime/Channels/ZLinkClientServerRuntimeService.cs`, `Runtime/Streams/**` (another job). Do not commit. dotnet env `source framework/languages/dotnet/perf/scripts/dotnet-env.sh`; `/tmp/zlink-dotnet-gate.lock`; check `/proc/loadavg` < 10 and `pgrep -c lto1` == 0 before the split gate.
+
+## Rule to implement (D-132, mirrors cpp raw_mesh_node_owner.cpp:2903/3896 and node raw-service-mesh-runtime.ts:1317/1594)
+- `OnSocketMonitorEvent` READY: record a pending physical candidate for the RID; never touch the admitted peer's generation/liveness.
+- Hello admission: if a pending candidate exists for the RID → this is a physical replacement (handover): consume the candidate, new epoch/generation, fresh liveness deadline (the existing creation path at `:8335`), queued controls target the new epoch. If no candidate → idempotent admission: epoch and liveness unchanged, reply Admit for the existing epoch.
+- The control fence (`:10771`) stays as is. No monitor connection_id fence, no timers.
+
+## Tests
+Keep `QueuedAdmit_SurvivesConnectionReadyDeliveredAfterHello`. `RouteAdmission_HandoverStartsFreshLivenessDeadline` (`CanonicalActorJoinIngressReplyTests.cs:732`) must pass unchanged. Add the deterministic complement: same-descriptor Hello on the same connection (no candidate) keeps the epoch and the liveness deadline (no renewal). Class `MeshNodeShutdownSealTests` 300/300 with `yes` x20 load; split unit gate (`--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests'` + complement, `--blame-hang --blame-hang-timeout 10m`) 0 failures; SampleRegression; samples 7/7 under the locks.
+
+Deliverable: `doc/plan/c016-worklog/fix-dotnet-meshnode-admit-impl-summary.md`. Do not print it.
