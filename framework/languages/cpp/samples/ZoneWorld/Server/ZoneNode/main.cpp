@@ -80,7 +80,10 @@ inline void prepare_join (player_actor_t &actor, int x, int y, bool initial, boo
                                    actor.initial_entry ? std::nullopt
                                                        : std::optional<std::string> (actor.zone_id),
                                    crash})
-      .timeout (std::chrono::seconds (15))
+      // The crash probe must outlive the owner lease TTL (15 s) plus the
+      // Location poll so the join ends at the Unavailable boundary, not at
+      // its own deadline (same 30 s the java sample uses for the probe).
+      .timeout (std::chrono::seconds (crash ? 30 : 15))
       .defer ();
 }
 
