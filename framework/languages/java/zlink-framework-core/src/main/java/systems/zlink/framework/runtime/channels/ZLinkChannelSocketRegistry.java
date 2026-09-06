@@ -25,6 +25,7 @@ import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 import systems.zlink.framework.locations.ZLinkLocationRole;
@@ -565,6 +566,12 @@ final class ZLinkChannelSocketRegistry {
         });
     }
 
+    boolean hasUnavailableClientServerConnection(String channelName) {
+        return inStateLane(() -> clientServerConnections.values().stream()
+            .anyMatch(connection -> connection.descriptor().channelName().equals(channelName)
+                && !connection.ready()));
+    }
+
     List<ClientServerTargetSnapshot>
         clientServerTargetSnapshots(String channelName) {
         return inStateLane(() -> clientServerTargetSnapshotsCore(channelName));
@@ -583,18 +590,24 @@ final class ZLinkChannelSocketRegistry {
             if (!descriptor.channelName().equals(channelName)) {
                 continue;
             }
-            String key = descriptor.serverRid().toHex()
-                + '\0' + descriptor.lifecycleGeneration();
             targets.put(
-                key,
+                clientServerLogicalIdentity(descriptor),
                 new ClientServerTargetSnapshot(
-                    descriptor.serverRid(),
+                    descriptor,
                     descriptor.weight(),
-                    connection.ready(),
-                    connection.ready()
-                        && descriptor.state()
-                            == systems.zlink.framework.runtime.host
-                                .ZLinkFrameworkRuntimeState.SERVING));
+                    connection.ready()));
+        }
+        ZLinkClientServerServerDescriptor local =
+            clientServerServerDescriptors.get(channelName);
+        if (local != null) {
+            // Local descriptors exist only after listener setup. The local
+            // server remains a target independently of a Client self-connection.
+            targets.put(
+                clientServerLogicalIdentity(local),
+                new ClientServerTargetSnapshot(
+                    local,
+                    servers.get(channelName).peerWeight(),
+                    true));
         }
         return List.copyOf(targets.values());
     }
@@ -1599,8 +1612,14 @@ final class ZLinkChannelSocketRegistry {
     record ClientServerTargetSnapshot(
         RoutingId nodeRid,
         int weight,
-        boolean connectionReady,
         boolean ready) {
+        ClientServerTargetSnapshot(
+            ZLinkClientServerServerDescriptor descriptor,
+            int weight,
+            boolean connectionReady) {
+            this(descriptor.serverRid(), weight,
+                connectionReady && descriptor.state() == ZLinkFrameworkRuntimeState.SERVING);
+        }
     }
 
     private record AdmissionResult(

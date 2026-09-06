@@ -65,8 +65,7 @@ final class ZLinkClientServerRuntimeView implements ZLinkClientServerRuntime {
         ZLinkFrameworkRuntimeState currentHostState = hostState.get();
         boolean hostServing =
             currentHostState == ZLinkFrameworkRuntimeState.SERVING;
-        boolean ready = hostServing
-            && (server || !client || readyTargetCount > 0);
+        boolean ready = hostServing && readyTargetCount > 0;
         return new ZLinkClientServerStatus(
             channelName,
             role,

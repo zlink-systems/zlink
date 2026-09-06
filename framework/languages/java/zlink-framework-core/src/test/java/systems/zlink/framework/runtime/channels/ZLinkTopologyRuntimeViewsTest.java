@@ -4,10 +4,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Proxy;
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.monitoring.ZLinkTopologyState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
+import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 
 final class ZLinkTopologyRuntimeViewsTest {
     @Test
@@ -17,6 +22,20 @@ final class ZLinkTopologyRuntimeViewsTest {
             new ChannelRegistration("orders", ChannelKind.CLIENT_SERVER);
         clientServer.enableServer();
         sockets.registerChannel(clientServer);
+        RoutingId serverRid = RoutingId.from("local-server");
+        var router = (ZLinkBackendRouterSocket) Proxy.newProxyInstance(
+            ZLinkBackendRouterSocket.class.getClassLoader(),
+            new Class<?>[] {ZLinkBackendRouterSocket.class},
+            (proxy, method, arguments) -> {
+                if (method.getName().equals("peerWeight")) {
+                    return 100;
+                }
+                throw new UnsupportedOperationException(method.getName());
+            });
+        sockets.registerServer("orders", serverRid, router);
+        sockets.setClientServerServerDescriptor("orders", new ZLinkClientServerServerDescriptor(
+            "orders", serverRid, 1, 1, "tcp://127.0.0.1:7001", 100,
+            ZLinkFrameworkRuntimeState.SERVING, "default", "local-owner", 1, Instant.EPOCH));
         ChannelRegistration fanout =
             new ChannelRegistration("events", ChannelKind.FANOUT);
         fanout.enableSubscriber();
@@ -29,10 +48,12 @@ final class ZLinkTopologyRuntimeViewsTest {
             sockets, () -> null, () -> null, hostState::get);
 
         assertTrue(clientServerRuntime.snapshot("orders").isReady());
+        assertEquals(1, clientServerRuntime.snapshot("orders").readyTargetCount());
 
         hostState.set(ZLinkFrameworkRuntimeState.RELOCATING);
 
         assertFalse(clientServerRuntime.snapshot("orders").isReady());
+        assertEquals(1, clientServerRuntime.snapshot("orders").readyTargetCount());
         assertEquals(
             ZLinkTopologyState.STOPPING,
             clientServerRuntime.snapshot("orders").state());

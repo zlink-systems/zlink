@@ -1122,9 +1122,7 @@ public final class ZLinkChannelRuntime
         if (ready != null) {
             return ready;
         }
-        boolean knownUnavailableTarget = sockets.clientServerTargetSnapshots(channelName)
-            .stream()
-            .anyMatch(snapshot -> !snapshot.connectionReady());
+        boolean knownUnavailableTarget = sockets.hasUnavailableClientServerConnection(channelName);
         throw new ZLinkFrameworkException(
             knownUnavailableTarget
                 ? ZLinkFrameworkErrorKind.UNAVAILABLE
