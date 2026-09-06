@@ -1453,3 +1453,11 @@ Gate drift(F-R7-10/11): relocation conformance fixture의 옛 식별자·옛 기
 | pair_inproc | 2681.957 | 2683.537 | 1.0006 |
 | router_router_tcp | 2972.882 | 2968.118 | 0.9984 |
 §5.2 release 비교(C perf vs 직전 release)는 release 준비 단계 항목(D-104 B3)으로 남긴다. 기준값 갱신 없음.
+
+## D-114 (2026-09-06, 머신 A) D-102 R8(언어별 projection 문서·http-client) 리뷰 triage — finding 20건·blocker 6건
+
+문서만(redline job `language-projections-redline` → 감독자 검토·적용): F-R8-1(관측 유실 counter 상한 `2^63-1` 포화를 monitoring §7.2가 소유), F-R8-2(Actor create 불변 조건 소유 = actor-model §6.2), F-R8-4(command 44는 response 없는 one-way — 옛 request/response·주기 재전송 서술 삭제), F-R8-5(HTTP client가 Framework를 소비하는 방향으로 정정), F-R8-6(NestJS `configureInboundDispatch` 투영 정정), F-R8-7(Kotlin generated 선언의 `CompletionStage<ZLinkActorCreateResponse>` 복원), F-R8-20(cold activation 순서는 address messaging §4만 소유, 언어 문서는 marker·타입만).
+gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp 패턴을 `task_t<void> async()`로 수정(커밋) → `verify-framework-doc-contracts.sh`의 첫 실패 해소; 남은 것은 relocation conformance 식별자(F-R7-10/11).
+구현 parity(스펙이 이미 정한 결과와 다름 — 지금 수정, 언어별 job 큐): **F-R8-14** Redis provider가 encoded blob 상한을 64 MiB로 잘라 23-byte envelope 분량의 유효 입력을 거부(cpp/java/node; dotnet이 기준), **F-R8-15** Actor create 중복 옵션·재제출 오류가 java `IllegalStateException`, node `NotConfigured`(스펙: `InvalidOperation`), **F-R8-16** Kotlin wrapper가 Java call과 제출 여부를 이중 소유(15 선행), **F-R8-18** node typed HTTP status≥400을 `Unavailable`로 분류(스펙·3언어: `InternalFailure`).
+0.18.0 후보(공개 API 변경, 결정 기록): **F-R8-8/9/10** HTTP — 결정: 스펙(HTTP 12·06) 유지 = HTTP builder에 Yield 없음, 시도당 timeout, 비동기 terminal만; 5언어 server builder의 HTTP Yield 제거, cpp 전체-deadline·blocking fetch 정리. **F-R8-11** HTTP one-way 완료 경계 — 결정: transport가 request를 송신 대기열에 수락한 시점(admission), response 전 실패는 runtime error 경계; 구현 시 관찰 기준 확정. **F-R8-12** fixed RID — 결정: 제한 규칙을 없애 automatic/object MeshNode에서도 허용(규칙 수 감소; 유일성 충돌은 기존 startup error), cpp/node 검증 완화는 0.18.0. **F-R8-13** cpp Spot timer raw event API 제거. **F-R8-17** cpp session bind를 4언어처럼 직접 비동기 값으로. **F-R8-19** cpp SessionActorManager local create 제거.
+미결(다음 pass): `IZLinkStream.Write`/`ZLinkStream.write`의 소유 절, Java `stopSpotRuntime()`·cpp HTTP hosting의 언어 한정 표면 여부.

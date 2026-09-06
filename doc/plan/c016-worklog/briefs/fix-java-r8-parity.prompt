@@ -1,0 +1,10 @@
+# Job: java/kotlin framework — R8 parity defects: Actor create duplicate-option error (F-R8-15), Kotlin/Java double single-use ownership (F-R8-16), Redis encoded blob bound (F-R8-14)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 2 h. Read `AGENTS.md` §2/§3/§4.1/§5, `framework/AGENTS.md`, `framework/languages/java/AGENTS.md`. Campaign rules (D-098, D-105, D-114): one owner per rule, no mitigations, regression test per fix, never lower an assertion, do not commit, one separable diff per cause. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`, other languages. Diagnosis: `doc/plan/c016-worklog/spec-review/R8-fw-language-projections-summary.md` (re-verify each cited file:line).
+
+1. **F-R8-15** Java Actor creation call: duplicate Mesh/request/timeout options and resubmission throw `IllegalStateException`; spec actor-model §6.2 requires the framework `InvalidOperation` kind before any side effect. Fix in the Java call (single owner); Kotlin forwards.
+2. **F-R8-16** Kotlin `JavaActorCreateCall`/`JavaActorGetOrCreateCall` keep their own `KotlinSingleUse` AtomicBoolean and the Java call keeps another for the same submitted-state; the Java call owns submission and pre-submission rejection (incl. Yield outside the owner turn); the Kotlin wrapper only provides the suspend completion. Remove the duplicate state; tests for resubmit and Yield-outside-turn through Kotlin.
+3. **F-R8-14** official Redis provider rejects encoded blobs above 64 MiB; spec `03-relocation-store-redis.ko.md` §3: `64 MiB + 23 bytes` (data chunk + immutable envelope), as dotnet implements. Fix; test with a fake provider.
+
+Gate: `cd framework/languages/java && flock -w7200 /tmp/zlink-java-gate.lock ./gradlew test` (0 failures across modules) + new tests 5x.
+Deliverable: `doc/plan/c016-worklog/fix-java-r8-parity-summary.md`.

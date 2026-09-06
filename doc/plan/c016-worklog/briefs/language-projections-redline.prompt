@@ -1,0 +1,20 @@
+# Job: redline draft of the framework language projection docs + http-client spec (R8 doc-only findings) — report only
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h. Read `AGENTS.md` §2/§3/§5.
+Hard rules: READ the spec files, do NOT modify any file under `framework/doc/**`, `core/**`, `bindings/**`, `doc/site/**`. Write only the redline directory named below (full revised copies of the listed files, ko and en where an en twin exists) plus `changes.md`. No builds/tests/benchmarks, no state-changing git commands, do not commit. Quality bar: `doc/principal/documentation/spec-writing-guide.ko.md` (§4.3 one layer per rule, §4.4 contract vs implementation narrative, `**언어별 재량**` only with the parity reason, §8.1 language interface docs project exact signatures and link the common owner instead of restating rules). Keep ko/en structurally identical. Do not change behavior; every finding you apply is `행동 변경: 없음`. Re-verify each cited `file:line` and the public declaration claim (read the actual public header/interface source) before editing; if a claim does not hold, do not apply it and say why in changes.md. `changes.md` = table finding-id → files → old lines → what changed → verification note, plus SUPERVISOR-DECIDE items.
+
+## Inputs
+- Findings: `doc/plan/c016-worklog/spec-review/R8-fw-language-projections-summary.md` — apply F-R8-1, F-R8-2, F-R8-4, F-R8-5,
+  F-R8-6, F-R8-7, F-R8-20 (supervisor triage: `doc/plan/c016-worklog/decisions.ko.md` D-114). F-R8-8…19 are behavior items —
+  do NOT apply; where a language doc currently documents a behavior the supervisor moved to 0.18.0 (HTTP Yield, fixed RID
+  allowance, cpp bind builder options, cpp local create, cpp raw timer event), leave the text as is and list it under
+  SUPERVISOR-DECIDE.
+- Files to revise (write copies under `doc/plan/c016-worklog/language-projections-redline/<same relative path>`): the files each
+  finding cites under `framework/doc/framework/common/spec/server/languages/{cpp,dotnet,java,kotlin,node}/**`,
+  `framework/doc/framework/common/spec/http-client/**`, and the owner documents that gain the single owning sentence
+  (`06-observability/01-runtime-monitoring` §7.2 for F-R8-1, `01-execution/01-submit-and-completion` §2 for F-R8-2,
+  `04-session/02-session-actor-binding` §8.2 for F-R8-4, `03-spot-actor/06-spot-address-messaging` §4 for F-R8-20).
+- Recent supervisor edits on main (read fresh, do not undo): D-101, D-104…D-108 changes and the spec-writing-guide conformance.
+
+## Deliverable
+`doc/plan/c016-worklog/language-projections-redline/` (revised copies + `changes.md`). Do not print the files to stdout.

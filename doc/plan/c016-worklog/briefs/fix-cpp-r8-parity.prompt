@@ -1,0 +1,8 @@
+# Job: cpp framework — R8 parity defect: Redis encoded blob bound (F-R8-14)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning high. Cap 1.5 h. Read `AGENTS.md` §2/§3/§4.1/§5, `framework/AGENTS.md`. Campaign rules (D-098, D-114): no mitigations, regression test, never lower an assertion, do not commit. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`, other languages. Diagnosis: `doc/plan/c016-worklog/spec-review/R8-fw-language-projections-summary.md` F-R8-14 (re-verify the cited file:line).
+
+The official Redis relocation-store provider rejects encoded blobs above 64 MiB; spec `05-location-relocation/03-relocation-store-redis.ko.md` §3 defines the bound as a 64 MiB data chunk plus the 23-byte immutable envelope (`64 MiB + 23 bytes`), as dotnet implements. Fix the bound; regression test: `64 MiB + 23` accepted, `+24` rejected (fake provider).
+
+Gate: `linux-ninja-debug` build + `flock -w7200 /tmp/zlink-cpp-gate.lock ctest --test-dir framework/languages/cpp/build/linux-ninja-debug -L framework-unit --output-on-failure` (0 failures) + new test 5x.
+Deliverable: `doc/plan/c016-worklog/fix-cpp-r8-parity-summary.md`.

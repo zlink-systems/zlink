@@ -1,0 +1,10 @@
+# Job: node framework — R8 parity defects: typed HTTP status kind (F-R8-18), Actor create duplicate-option error (F-R8-15), Redis encoded blob bound (F-R8-14)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 2 h. Read `AGENTS.md` §2/§3/§4.1/§5, `framework/AGENTS.md`, `framework/languages/node/AGENTS.md`. Campaign rules (D-098, D-105, D-114): one owner per rule, no mitigations, regression test per fix, never lower an assertion, do not commit, one separable diff per cause. Never modify `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`, other languages. Diagnosis: `doc/plan/c016-worklog/spec-review/R8-fw-language-projections-summary.md` (supervisor-verified D-114; re-verify each cited file:line before editing).
+
+1. **F-R8-18** typed HTTP submission with status ≥ 400 maps to `Unavailable`; spec `http-client/09-error-model.ko.md` §9.1 and cpp/dotnet/java use `InternalFailure` (transport connection failures stay `Unavailable`). Fix the mapping; test both.
+2. **F-R8-15** Actor create/get-or-create call: duplicate Mesh/request/timeout options and resubmission end with internal `InvalidConfiguration` → public `NotConfigured`; spec actor-model §6.2 says `InvalidOperation` before any side effect. Fix; test each duplicate option and a resubmit.
+3. **F-R8-14** Redis relocation-store provider rejects encoded blobs above 64 MiB; spec `05-location-relocation/03-relocation-store-redis.ko.md` §3: the bound is a 64 MiB data chunk plus the 23-byte immutable envelope (`64 MiB + 23`), as dotnet implements. Fix the bound; test `64 MiB + 23` accepted and `+24` rejected (use a fake provider, not a real Redis).
+
+Gate: `cd framework/languages/node && flock -w7200 /tmp/zlink-node-gate.lock npm test` under `flock /tmp/zlink-samples-gate.lock` (0 failures) + new tests 5x.
+Deliverable: `doc/plan/c016-worklog/fix-node-r8-parity-summary.md`.
