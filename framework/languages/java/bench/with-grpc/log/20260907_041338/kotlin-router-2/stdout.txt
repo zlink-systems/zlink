@@ -1,0 +1,10 @@
+2026-09-07T04:23:37.717+09:00  INFO 80499 --- [           main] s.z.b.w.k.BenchKotlinClientKt            : Starting BenchKotlinClientKt using Java 22.0.2 with PID 80499 (/home/hep7/project/zlink/framework/languages/java/bench/with-grpc/kotlin-client/build/install/bench-kotlin-client/lib/kotlin-client.jar started by hep7 in /home/hep7/project/zlink/framework/languages/java/bench/with-grpc)
+2026-09-07T04:23:37.718+09:00  INFO 80499 --- [           main] s.z.b.w.k.BenchKotlinClientKt            : No active profile set, falling back to 1 default profile: "default"
+2026-09-07T04:23:38.270+09:00  INFO 80499 --- [           main] systems.zlink.framework.runtime          : ZLink runtime status changed
+2026-09-07T04:23:38.271+09:00  INFO 80499 --- [           main] s.z.f.r.host.ZLinkFrameworkRuntime       : ZLINK_FRAMEWORK_READY
+2026-09-07T04:23:38.279+09:00  INFO 80499 --- [           main] s.z.b.w.k.BenchKotlinClientKt            : Started BenchKotlinClientKt in 0.784 seconds (process running for 1.314)
+2026-09-07T04:23:38.295+09:00  INFO 80499 --- [-raw-mesh-bench] s.z.f.r.binding.ZLinkJavaRawMeshNode     : ZLINK_FRAMEWORK_PEER_READY mesh=bench peer=bench-server
+2026-09-07T04:33:01.488+09:00  INFO 80499 --- [           main] systems.zlink.framework.runtime          : ZLink runtime status changed
+2026-09-07T04:33:01.488+09:00  INFO 80499 --- [           main] systems.zlink.framework.runtime          : ZLink runtime status changed
+2026-09-07T04:33:01.491+09:00  INFO 80499 --- [mework-teardown] systems.zlink.framework.runtime          : ZLink runtime status changed
+2026-09-07T04:33:01.499+09:00  INFO 80499 --- [mework-teardown] systems.zlink.framework.runtime          : ZLink runtime status changed

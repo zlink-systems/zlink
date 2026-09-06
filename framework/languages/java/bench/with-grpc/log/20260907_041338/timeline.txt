@@ -1,0 +1,26 @@
+2026-09-07T04:13:38+09:00 measured span begin: java=openjdk version "22.0.2" 2024-07-16 commit=129627f8a5
+2026-09-07T04:13:38+09:00 loadavg at span begin: 0.43 0.66 1.06 1/725 75208
+2026-09-07T04:13:38+09:00 loadavg gate for kotlin-router-1: 0.43
+2026-09-07T04:13:38+09:00 run kotlin-router-1 start (raw-socket=router)
+2026-09-07T04:13:39+09:00 servers ready after 2s
+2026-09-07T04:23:10+09:00 run kotlin-router-1 end rc=0
+2026-09-07T04:23:10+09:00 loadavg gate for kotlin-router-2: 2.84
+2026-09-07T04:23:10+09:00 loadavg 2.84 >= 2.0; waiting
+2026-09-07T04:23:35+09:00 loadavg after wait for kotlin-router-2: 1.87
+2026-09-07T04:23:35+09:00 run kotlin-router-2 start (raw-socket=router)
+2026-09-07T04:23:36+09:00 servers ready after 2s
+2026-09-07T04:33:04+09:00 run kotlin-router-2 end rc=0
+2026-09-07T04:33:04+09:00 loadavg gate for kotlin-router-3: 3.49
+2026-09-07T04:33:04+09:00 loadavg 3.49 >= 2.0; waiting
+2026-09-07T04:33:39+09:00 loadavg after wait for kotlin-router-3: 1.94
+2026-09-07T04:33:39+09:00 run kotlin-router-3 start (raw-socket=router)
+2026-09-07T04:33:40+09:00 servers ready after 2s
+2026-09-07T04:43:06+09:00 run kotlin-router-3 end rc=0
+2026-09-07T04:43:06+09:00 loadavg gate for kotlin-dealer-1: 3.78
+2026-09-07T04:43:06+09:00 loadavg 3.78 >= 2.0; waiting
+2026-09-07T04:43:46+09:00 loadavg after wait for kotlin-dealer-1: 1.94
+2026-09-07T04:43:46+09:00 run kotlin-dealer-1 start (raw-socket=dealer)
+2026-09-07T04:43:47+09:00 servers ready after 2s
+2026-09-07T04:53:14+09:00 run kotlin-dealer-1 end rc=0
+2026-09-07T04:53:14+09:00 loadavg at span end: 4.70 2.99 2.48 2/745 91571
+2026-09-07T04:53:14+09:00 measured span end

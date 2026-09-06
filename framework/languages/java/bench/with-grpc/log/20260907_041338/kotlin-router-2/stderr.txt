@@ -1,0 +1,47 @@
+[bench] running grpc-kotlin-request-serial@1024
+[bench] finished grpc-kotlin-request-serial@1024 throughput=4764.6/s cores=0.61 peak_in_flight=1
+[bench] running zlink-kotlin-request-serial@1024
+[bench] finished zlink-kotlin-request-serial@1024 throughput=5322.4/s cores=0.52 peak_in_flight=1
+[bench] running zlink-framework-kotlin-request-serial@1024
+[bench] finished zlink-framework-kotlin-request-serial@1024 throughput=476.2/s cores=0.34 peak_in_flight=1
+[bench] running grpc-kotlin-request-window@1024
+[bench] finished grpc-kotlin-request-window@1024 throughput=94198.0/s cores=5.53 peak_in_flight=100
+[bench] running zlink-kotlin-request-window@1024
+[bench] finished zlink-kotlin-request-window@1024 throughput=0.0/s cores=0.13 peak_in_flight=100
+[bench] running zlink-framework-kotlin-request-window@1024
+[bench] finished zlink-framework-kotlin-request-window@1024 throughput=2360.0/s cores=1.07 peak_in_flight=10
+[bench] running grpc-kotlin-send-saturation@1024
+[bench] finished grpc-kotlin-send-saturation@1024 throughput=35175.8/s cores=2.72 peak_in_flight=8
+[bench] running zlink-kotlin-send-saturation@1024
+[bench] finished zlink-kotlin-send-saturation@1024 throughput=372464.4/s cores=2.03 peak_in_flight=8
+[bench] running zlink-framework-kotlin-send-saturation@1024
+[bench] finished zlink-framework-kotlin-send-saturation@1024 throughput=5393.6/s cores=2.62 peak_in_flight=8
+[bench] running grpc-kotlin-request-serial@4096
+[bench] finished grpc-kotlin-request-serial@4096 throughput=4920.4/s cores=0.60 peak_in_flight=1
+[bench] running zlink-kotlin-request-serial@4096
+[bench] finished zlink-kotlin-request-serial@4096 throughput=5332.8/s cores=0.52 peak_in_flight=1
+[bench] running zlink-framework-kotlin-request-serial@4096
+[bench] finished zlink-framework-kotlin-request-serial@4096 throughput=492.4/s cores=0.34 peak_in_flight=1
+[bench] running grpc-kotlin-request-window@4096
+[bench] finished grpc-kotlin-request-window@4096 throughput=79459.4/s cores=4.83 peak_in_flight=100
+[bench] running zlink-kotlin-request-window@4096
+[bench] finished zlink-kotlin-request-window@4096 throughput=23.8/s cores=0.13 peak_in_flight=100
+[bench] running zlink-framework-kotlin-request-window@4096
+[bench] finished zlink-framework-kotlin-request-window@4096 throughput=2296.8/s cores=1.07 peak_in_flight=12
+[bench] running grpc-kotlin-send-saturation@4096
+[bench] finished grpc-kotlin-send-saturation@4096 throughput=33786.4/s cores=2.73 peak_in_flight=8
+[bench] running zlink-kotlin-send-saturation@4096
+[bench] finished zlink-kotlin-send-saturation@4096 throughput=248268.6/s cores=2.07 peak_in_flight=8
+[bench] running zlink-framework-kotlin-send-saturation@4096
+[bench] finished zlink-framework-kotlin-send-saturation@4096 throughput=8515.0/s cores=2.56 peak_in_flight=8
+## Drain (FB-008)
+- grpc-kotlin-send-saturation@1024: drain_ms=352 bound_hit=false bound_ms=30000
+- zlink-kotlin-send-saturation@1024: drain_ms=311 bound_hit=false bound_ms=30000
+- zlink-framework-kotlin-send-saturation@1024: drain_ms=2569 bound_hit=false bound_ms=30000
+- grpc-kotlin-send-saturation@4096: drain_ms=292 bound_hit=false bound_ms=30000
+- zlink-kotlin-send-saturation@4096: drain_ms=339 bound_hit=false bound_ms=30000
+- zlink-framework-kotlin-send-saturation@4096: drain_ms=1005 bound_hit=false bound_ms=30000
+
+## Failures
+[bench] cells completed=18 failed=0 contaminated=0
+ZLINK_FRAMEWORK_TERMINATION outcome=STOPPED reason=NONE

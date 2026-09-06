@@ -457,20 +457,27 @@ job `fwb-04b`가 Node pass에서 `zlink-c` 기준선을 다시 재지 않았고 
 - **처리**: 고치지 않는다. `request-window`를 Node와 같이 관측된 그대로 보고한다.
   0.18.0 후보. 재현 코드를 저장소에 남긴다.
 
-## FB-031 — 언어를 가로지르는 완료 전달 패턴
+## FB-031 (정정됨) — 완료 전달이 무너지는 지점과, 무엇이 독립 관측인가
 
-세 언어의 raw 행을 나란히 놓으면 하나의 모양이 보인다.
+- **최초 기록이 binding 수를 과다 계산했다.** 감독관이 Node·Java·Kotlin을 세 개의 독립
+  binding으로 적었으나, job `fwb-06`이 정정했다. `bindings/kotlin`에는 native binding이
+  없고 Java의 `systems.zlink:zlink` artifact를 Kotlin에서 쓰는 구조다(저장소 확인 완료 —
+  `bindings/kotlin` 아래에 `samples`만 존재).
 
-| 언어 | 관측 |
-|---|---|
-| C | depth 90.7 유지, 오류 0 |
-| `.NET` | depth 8에 묶임. 제출 비용 때문이며 유실은 없다(FB-016) |
-| Node | depth 8까지 정상, 16 이상에서 socket 정지(FB-026) |
-| Java | depth 4까지 정상, 16 이상에서 reply 유실(FB-030) |
+| 실행 | 관측 | 독립성 |
+|---|---|---|
+| C | depth 90.7 유지, 오류 0 | 독립 |
+| `.NET` | depth 8에 묶임. 제출 비용이며 유실 없음(FB-016) | 독립 |
+| Node | depth 8까지 정상, 16 이상 socket 정지(FB-026) | 독립 |
+| Java | outstanding 2 이상 유실 시작, window 100에서 완료 0(FB-030) | 독립 |
+| Kotlin | Java와 같은 서명 | **Java binding 재사용. 독립 관측 아님** |
 
-C가 depth 90에서 멀쩡하므로 **Core 공통 경로만의 문제로 단정할 수 없고**, 세 binding이 각자
-다른 방식으로 깊이에서 무너지는 것이 공통점이다. 이 관찰 자체를 보고서에 싣는다. 원인 규명은
-이 캠페인의 범위가 아니다.
+- **Kotlin이 더하는 것**은 새 binding이 아니라 **다른 호출 형태에서도 같은 일이 일어난다는
+  사실**이다. coroutine `await`와 blocking `get`은 다른 코드인데 둘 다 정지하고, ROUTER와
+  DEALER 양쪽에서 나온다.
+- **남는 결론**: 독립 관측은 C·`.NET`·Node·Java 네 개다. C만 깊이에서 멀쩡하고 나머지 셋이
+  각각 다른 방식으로 무너진다. C가 depth 90에서 정상이므로 Core 공통 경로만의 문제로 단정할
+  수 없다. C++가 이 대비의 마지막 데이터다(job `fwb-07`).
 
 ## FB-032 — Java의 포화 계측기는 `jvm_thread_cores`로 한다
 
@@ -521,6 +528,35 @@ C가 depth 90에서 멀쩡하므로 **Core 공통 경로만의 문제로 단정�
   기준선 안정화는 이 캠페인의 범위가 아니며 0.18.0 후보로 올린다.
 - **주의**: 이것을 판정 기준을 완화할 근거로 쓰지 않는다. 분모를 안정시키는 것이 답이지
   임계값을 낮추는 것이 답이 아니다.
+
+## FB-035 — FB-033의 범위를 좁힌다. 깊이 상한은 client 언어가 정하지 않는다
+
+- **관찰** (job `fwb-06`): Kotlin framework의 request-window 여덟 셀이 깊이 **4.48~4.57**,
+  `peak_in_flight` 10~12로 Java의 4.5 / 10~11과 일치한다.
+- **정정된 해석** (job `fwb-06`이 감독관 지시보다 좁게 읽었고 그것이 옳다): Kotlin 행은
+  **Java 행의 framework server를 재사용**하므로 server 쪽이 공유된다. 따라서 "두 독립 언어에서
+  확인"이 아니다.
+- **그래도 얻는 것**: Java의 `CompletionStage` 경로와 Kotlin의 suspend 경로는 서로 다른
+  코드인데 **둘 다 4.5에서 멈춘다.** 즉 **깊이 상한을 정하는 것은 client API 계층이 아니다.**
+  FB-033의 후보에서 client 쪽을 제거하고 공유 framework request 경로만 남긴다.
+  server 쪽이라고 단정하지는 않는다. 두 client 모두 같은 framework core를 지난다.
+
+## FB-036 — Kotlin 측정 기록
+
+- 4 run × 18셀 = 72셀, 실패 0, 오염 0, 전 run rc=0.
+- raw request-window 여덟 셀 전부 정지(`peak_in_flight` 100 / abandoned 100 / errors 100,
+  DEALER 포함). 그 여덟 셀 밖의 오류는 네 run 전부에서 0이다. warmup 열 구간이 모두 0이므로
+  정지는 active 구간에서 생긴 것이 아니라 처음부터 있었다.
+- `grpc-kotlin`은 coroutine stub(`BenchServiceCoroutineStub`, `protoc-gen-grpc-kotlin` 1.4.1)을
+  실제로 사용했다. blocking stub 대체가 없었으므로 규격 §8.1의 사유 기록이 필요 없다.
+- 판정 네 건 전부 `unsupported`.
+- G5는 Kotlin 16행 중 15행 통과. `zlink-framework-kotlin` send-saturation @1024이 12.8%로
+  미달하며 원인은 규명하지 않았다.
+- warmup 20초를 Kotlin 자체 데이터로 정당화했다. `grpc-kotlin` request-serial이 3.2배
+  (1580 → 5004) 오르고 3구간(약 6초)부터 중앙값 ±10% 안이다.
+- `zlink-c` request-window @4096이 **네 번째 구간 연속** G5 미달(28.7%). FB-034 강화.
+  Java 구간의 기준선을 재사용했고 그 사실을 요약 §2.8에 명시했다. 두 구간 사이 변경은
+  bench 코드·집계기·문서뿐이며 Core·binding·framework source는 바뀌지 않았다.
 
 ## 범위 밖으로 확인하고 미룬 항목
 

@@ -1,0 +1,11 @@
+2026-09-07T04:13:40.583+09:00  INFO 75393 --- [           main] s.z.b.w.k.BenchKotlinClientKt            : Starting BenchKotlinClientKt using Java 22.0.2 with PID 75393 (/home/hep7/project/zlink/framework/languages/java/bench/with-grpc/kotlin-client/build/install/bench-kotlin-client/lib/kotlin-client.jar started by hep7 in /home/hep7/project/zlink/framework/languages/java/bench/with-grpc)
+2026-09-07T04:13:40.584+09:00  INFO 75393 --- [           main] s.z.b.w.k.BenchKotlinClientKt            : No active profile set, falling back to 1 default profile: "default"
+2026-09-07T04:13:41.083+09:00  INFO 75393 --- [           main] systems.zlink.framework.runtime          : ZLink runtime status changed
+2026-09-07T04:13:41.085+09:00  INFO 75393 --- [           main] s.z.f.r.host.ZLinkFrameworkRuntime       : ZLINK_FRAMEWORK_READY
+2026-09-07T04:13:41.092+09:00  INFO 75393 --- [           main] s.z.b.w.k.BenchKotlinClientKt            : Started BenchKotlinClientKt in 0.705 seconds (process running for 1.164)
+2026-09-07T04:13:41.107+09:00  INFO 75393 --- [-raw-mesh-bench] s.z.f.r.binding.ZLinkJavaRawMeshNode     : ZLINK_FRAMEWORK_PEER_READY mesh=bench peer=bench-server
+2026-09-07T04:17:16.725+09:00 ERROR 75393 --- [channel-timeout] s.z.f.r.d.ZLinkMessageFlowTracer         : zlink flow: event_id=zlink.message_flow phase=reply_received surface=channel kind=request channel=bench channel_route=route_mesh packet=BenchPayload outcome=failed
+2026-09-07T04:23:08.122+09:00  INFO 75393 --- [           main] systems.zlink.framework.runtime          : ZLink runtime status changed
+2026-09-07T04:23:08.123+09:00  INFO 75393 --- [           main] systems.zlink.framework.runtime          : ZLink runtime status changed
+2026-09-07T04:23:08.125+09:00  INFO 75393 --- [mework-teardown] systems.zlink.framework.runtime          : ZLink runtime status changed
+2026-09-07T04:23:08.132+09:00  INFO 75393 --- [mework-teardown] systems.zlink.framework.runtime          : ZLink runtime status changed

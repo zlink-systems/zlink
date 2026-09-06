@@ -1,0 +1,9 @@
+## Drain (FB-008)
+- grpc-kotlin-send-saturation@1024: drain_ms=306 bound_hit=false bound_ms=30000
+- zlink-kotlin-send-saturation@1024: drain_ms=308 bound_hit=false bound_ms=30000
+- zlink-framework-kotlin-send-saturation@1024: drain_ms=2464 bound_hit=false bound_ms=30000
+- grpc-kotlin-send-saturation@4096: drain_ms=333 bound_hit=false bound_ms=30000
+- zlink-kotlin-send-saturation@4096: drain_ms=445 bound_hit=false bound_ms=30000
+- zlink-framework-kotlin-send-saturation@4096: drain_ms=1111 bound_hit=false bound_ms=30000
+
+## Failures
