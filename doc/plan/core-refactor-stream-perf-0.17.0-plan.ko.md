@@ -230,7 +230,12 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 
 | # | 발견 job | 바꿔야 하는 계약(스펙 절·문장) | 예상 이득 | 결정 |
 |---|---|---|---|---|
-| | | | | |
+| D-a | S-B | 08-stream §4 118-120·README part send: 앱 send를 N개/T µs 묶어 I/O 스레드에 알림 → 제출 경계 지연 관측(§4.1-3) | 핸드오프 command 수 감소 | 대기 |
+| D-b | S-B | 05-polling POLLIN/POLLOUT level 조건: `poller_wait`의 command drain을 rdtsc로 스킵 | poller 비용 | 대기 |
+| D-c | S-B | 04-thread-safety·02-threading-model: STREAM 앱 처리를 I/O 스레드에서 직접(핸드오프 제거) | 최대(asio와 동일 구조) | 대기 |
+| D-d | S-B | 06-auto-hwm 스냅샷 정의: credit published store를 경계에서만 | 소 | 대기 |
+| D-e | S-11 | 04-thread-safety 소유권: 공개 receive lease가 command owner를 배타하도록 할지(`receive_once_guarded`·fq active partition의 TSan race). 계약 문장 변경이 아니라 소유 규칙 결정 + 성능 예산 | 정확성(잠재 race 제거), 성능은 −일 수 있음 | 대기 |
+| 관찰 | S-A | 64 KiB에서 zlink 서버 앱 스레드 1개가 93 % 포화(I/O 스레드 45 % idle). 벤치 서버 구조(앱 스레드 1개) 문제이며 Core 계약과 무관 — asio 스택은 io 워커 8개에서 read→write 직결 | — | 기록 |
 
 ## 8. 체크리스트
 
