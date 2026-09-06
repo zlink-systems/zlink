@@ -10,6 +10,7 @@ const { encodeApplicationPayload } = require('../../packages/framework/dist/runt
 function joinFixture(request, { canonical = true, entry = false } = {}) {
   const attempts = [];
   const runtime = new ServiceStatefulRuntime({
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     topology: { peer: rid => rid === 'target-node' ? { descriptor: { lifecycleGeneration: 11n } } : undefined },
     async requestService(target, parts, timeoutMs) {

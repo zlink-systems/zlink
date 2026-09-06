@@ -96,6 +96,7 @@ for (const targetKind of ['entry', 'user']) {
   test(`same-node ${targetKind} Spot Actor Join waits for the gated target lifecycle before public completion`, async () => {
     const queued = [];
     const serviceRuntime = new ServiceStatefulRuntime({
+      observePeerConnectionIntentRemoved() { return () => {}; },
       setServiceIngress() {},
       async reserveLocalIngress() {
         return {

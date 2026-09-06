@@ -70,6 +70,7 @@ test('canonical Actor Join uses the current authority fence when a previous-owne
         return true;
       }
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler: typeof targetIngress) {
       targetIngress = handler;
     },
@@ -126,6 +127,7 @@ test('canonical Actor Join uses the current authority fence when a previous-owne
           }
         : undefined
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     async requestService(_rid: string, parts: readonly Buffer[]) {
       assert.equal(
@@ -240,6 +242,7 @@ test('canonical actorJoin never falls back when the admitted peer capability lis
     topology: {
       peer: () => ({ descriptor: { lifecycleGeneration: 11n, protocolCapabilities: [] } })
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     async requestService(_rid: string, parts: readonly Buffer[]) {
       assert.equal(parts[0]![4], 0);
@@ -295,6 +298,7 @@ test('command 28 accepts only canonical flags-zero records', async () => {
   const runtime = new ServiceStatefulRuntime({
     topology: { peer: () => undefined },
     mailbox: { tryEnqueue() { enqueued += 1; return true; } },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler: typeof ingress) { ingress = handler; }
   } as unknown as RawServiceMeshRuntime, 'node-b', 11n);
   const targetSpot = runtime.createSpot('room-b', 'user');

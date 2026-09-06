@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { awaitWithAbort } from '../abort';
 import { captureZLinkExecutionTurn } from '../execution';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -4079,31 +4080,55 @@ export class ServiceStatefulRuntime {
     operationKind: 'userSpotCreate' | 'userSpotClose' | 'actorCreate' | 'streamBind' | 'actorJoin',
     deadlineMs: number
   ): Promise<readonly Buffer[]> {
+    const stop = new AbortController();
+    const unobserve = this.raw.observePeerConnectionIntentRemoved(nodeRoutingId => {
+      if (nodeRoutingId === targetNodeRid) {
+        stop.abort(createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+          `${operationKind} target node lifecycle ended.`,
+          true
+        ));
+      }
+    });
     let wasAdmitted = false;
-    // This path is limited to durable lifecycle operations. A rejected raw
-    // request has no terminal envelope, so replay the byte-identical frames;
-    // callers decode received envelopes after leaving this loop.
-    for (;;) {
-      this.requireOpen();
-      const remainingMs = Math.ceil(deadlineMs - performance.now());
-      if (remainingMs <= 0) {
-        throw durableOperationExhausted(operationKind, wasAdmitted);
-      }
-      try {
-        return targetNodeRid === this.nodeRid
-          ? await this.requestLocalInfrastructure(parts[0]!, correlation, remainingMs)
-          : await this.raw.requestService(targetNodeRid, parts, remainingMs);
-      } catch (error) {
-        // Bind consumes only typed transport failures. Programming errors and
-        // non-replayable terminals retain their original failure.
-        if (operationKind === 'streamBind' && !durableBindRequestCanReplay(error)) throw error;
-        if (durableRequestWasAdmitted(error)) wasAdmitted = true;
-        const retryDelayMs = Math.min(20, deadlineMs - performance.now());
-        if (retryDelayMs <= 0) {
-          throw durableOperationExhausted(operationKind, wasAdmitted, error);
+    try {
+      // Only durable lifecycle operations replay these frozen frames. Received
+      // envelopes leave this loop before decoding, including failure terminals.
+      for (;;) {
+        this.requireOpen();
+        stop.signal.throwIfAborted();
+        const remainingMs = Math.ceil(deadlineMs - performance.now());
+        if (remainingMs <= 0) throw durableOperationExhausted(operationKind, wasAdmitted);
+        try {
+          return await awaitWithAbort(
+            targetNodeRid === this.nodeRid
+              ? this.requestLocalInfrastructure(parts[0]!, correlation, remainingMs)
+              : this.raw.requestService(targetNodeRid, parts, remainingMs),
+            stop.signal
+          );
+        } catch (error) {
+          stop.signal.throwIfAborted();
+          if (!durableRequestCanReplay(error)) throw error;
+          if (durableRequestWasAdmitted(error)) wasAdmitted = true;
+          const retryDelayMs = Math.min(20, deadlineMs - performance.now());
+          if (retryDelayMs <= 0) {
+            throw durableOperationExhausted(operationKind, wasAdmitted, error);
+          }
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await awaitWithAbort(new Promise<void>(resolve => {
+              timer = setTimeout(resolve, retryDelayMs);
+            }), stop.signal);
+          } finally {
+            if (timer !== undefined) clearTimeout(timer);
+          }
         }
-        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
       }
+    } catch (error) {
+      stop.signal.throwIfAborted();
+      throw error;
+    } finally {
+      unobserve();
     }
   }
 
@@ -5237,11 +5262,7 @@ function operationReplayExpired(replayExpiresAtMs: number): boolean {
 function durableRequestWasAdmitted(error: unknown): boolean {
   // Request NotConnected includes Core handover of an admitted request. The
   // submit/request phase, rather than the result number, owns this distinction.
-  if (isZLinkBackendResultError(error)) return error.operation === 'request';
-  return typeof error === 'object'
-    && error !== null
-    && 'result' in error
-    && error.result === RequestResult.TimedOut;
+  return isZLinkBackendResultError(error) && error.operation === 'request';
 }
 
 function durableOperationExhausted(
@@ -5259,11 +5280,12 @@ function durableOperationExhausted(
   );
 }
 
-function durableBindRequestCanReplay(error: unknown): boolean {
+function durableRequestCanReplay(error: unknown): boolean {
   if (!isZLinkBackendResultError(error)) return false;
   return error.operation === 'request'
     ? error.result === RequestResult.NotConnected || error.result === RequestResult.TimedOut
     : error.result === SubmitResult.NotConnected
+      || error.result === SubmitResult.NotFound
       || error.result === SubmitResult.NotAdmitted
       || error.result === SubmitResult.Backpressured;
 }

@@ -29,6 +29,7 @@ function bindFixture(request) {
   const actor = { nodeRid: 'actor-node', actorId: 'actor-bind-replay', generation: 7n };
   const attempts = [];
   const runtime = new ServiceStatefulRuntime({
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     async requestService(target, parts, timeoutMs) {
       const attempt = {

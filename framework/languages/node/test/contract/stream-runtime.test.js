@@ -162,6 +162,7 @@ test('managed stream binds Session Actors through the Framework service without 
   let bindAttempts = 0;
   const transportAttempts = [];
   const serviceRuntime = new ServiceStatefulRuntime({
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     async requestService(_targetNodeRid, parts) {
       transportAttempts.push(Buffer.from(parts[0]));
@@ -3332,6 +3333,7 @@ test('production command 36 preserves its producer fence without duplicating Loc
   const ingressResults = [];
   let serviceIngress;
   const raw = {
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler) {
       serviceIngress = handler;
     },
@@ -3486,6 +3488,7 @@ test('production command 36 preserves its producer fence without duplicating Loc
 test('M1 actorJoin actual command 36 stays FIFO-held until exact atomic route apply', async () => {
   let serviceIngress;
   const serviceRuntime = new ServiceStatefulRuntime({
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler) {
       serviceIngress = handler;
     }
@@ -3747,6 +3750,7 @@ test('actual command 36 retains the exact physical target after off-wire ownersh
   const aggregate = await testActorRouteAggregate(sourceRef, 8, 4, 'session');
   let serviceIngress;
   const serviceRuntime = new ServiceStatefulRuntime({
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler) {
       serviceIngress = handler;
     }
@@ -3884,6 +3888,7 @@ test('actual command 36 FIFO bounds capacity and settles false throw and duplica
   const aggregate = await testActorRouteAggregate(sourceRef, 8, 2, 'session');
   let serviceIngress;
   const serviceRuntime = new ServiceStatefulRuntime({
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler) {
       serviceIngress = handler;
     }
@@ -5888,6 +5893,7 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
 test('bound-session replacement accepts an authenticated notice despite a stale Actor route projection', async () => {
   let serviceIngress;
   const serviceRuntime = new ServiceStatefulRuntime({
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler) {
       serviceIngress = handler;
     }

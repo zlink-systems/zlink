@@ -24,7 +24,7 @@ import {
   type SendSubmitOperation,
   type Socket
 } from '@zlink-systems/zlink';
-import { isPollerInterruptedError } from './node-backend-adapter-support';
+import { isPollerInterruptedError, translateBindingResultError } from './node-backend-adapter-support';
 import { isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
 import type {
   ZLinkRawBindingPort,
@@ -288,10 +288,14 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     timeoutMs: number
   ): Promise<readonly Buffer[]> {
     this.requireOpen();
-    const replies = await appendRequestParts(this.socket.request(bindingRoutingId(targetRid)), parts)
-      .timeout(timeoutMs)
-      .submit();
-    return copyAndClose(replies);
+    try {
+      const replies = await appendRequestParts(this.socket.request(bindingRoutingId(targetRid)), parts)
+        .timeout(timeoutMs)
+        .submit();
+      return copyAndClose(replies);
+    } catch (error) {
+      throw translateBindingResultError(error);
+    }
   }
 
   receive(dontWait = false): ZLinkRawReceivedRecord | undefined {

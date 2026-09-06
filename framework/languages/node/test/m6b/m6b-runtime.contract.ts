@@ -482,6 +482,7 @@ test('Message Follow invalidates a Spot route only when every source fence still
           ? { descriptor: { lifecycleGeneration: 19n } }
           : undefined
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler: typeof ingress) { ingress = (record) => handler!(withIngressOwner(record)); },
     sendService: () => true
   } as unknown as RawServiceMeshRuntime;
@@ -553,6 +554,7 @@ test('Actor Message Follow reaches the owner cache invalidator only from the adm
           ? { descriptor: { lifecycleGeneration: 23n } }
           : undefined
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler: typeof ingress) { ingress = (record) => handler!(withIngressOwner(record)); },
     sendService: () => true
   } as unknown as RawServiceMeshRuntime;
@@ -767,6 +769,7 @@ test('remote Actor command 49 preserves reservation fences and replays one termi
         ? { descriptor: { lifecycleGeneration: 5n } }
         : undefined
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -878,6 +881,7 @@ test('remote User Spot target executes once and rewrites correlation on terminal
         ? { descriptor: { lifecycleGeneration: 5n } }
         : undefined
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -1103,6 +1107,7 @@ test('remote User Spot command 48 close replays one terminal without closing twi
         ? { descriptor: { lifecycleGeneration: 5n } }
         : undefined
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -1458,6 +1463,7 @@ test('outbound stateful routes use resolved authority generations and never obje
         ? { descriptor: { lifecycleGeneration: 7n } }
         : undefined
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: () => {},
     sendService: async (target: string, parts: readonly Buffer[]) => {
       sent.push({ target, parts });
@@ -1556,6 +1562,7 @@ test('outbound stateful routes use resolved authority generations and never obje
 
 test('general Actor messages resolve the current incarnation while exact controls keep generation fences', async () => {
   const raw = {
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: () => {}
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
@@ -1587,6 +1594,7 @@ test('remote Actor request is fenced as moving when the target mailbox rejects a
     topology: {
       peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler: typeof ingress) {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -1633,6 +1641,7 @@ test('remote Actor request is fenced as moving when the target mailbox rejects a
 test('a new Instance incarnation outranks a reset authority owner generation', async () => {
   const raw = {
     topology: { peer: () => undefined },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     sendService: () => true
   } as unknown as RawServiceMeshRuntime;
@@ -1707,6 +1716,7 @@ test('a new Instance incarnation outranks a reset authority owner generation', a
 test('a Ready Instance terminal forgets its route after local close releases authority', async () => {
   const raw = {
     topology: { peer: () => undefined },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     sendService: () => true
   } as unknown as RawServiceMeshRuntime;
@@ -1777,6 +1787,7 @@ test('direct Spot ingress accepts a prior incarnation route for the current Read
     topology: {
       peer: () => undefined
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler: typeof ingress) {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -1829,6 +1840,7 @@ test('direct Spot application admission accepts a StoreVersion-only authority ad
       topology: {
         peer: () => undefined
       },
+      observePeerConnectionIntentRemoved() { return () => {}; },
       setServiceIngress(handler: typeof ingress) {
         ingress = (record) => handler!(withIngressOwner(record));
       },
@@ -1894,6 +1906,7 @@ test('direct Spot request maps an owner fence mismatch to Unavailable', async ()
     topology: {
       peer: () => undefined
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler: typeof ingress) {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -2076,6 +2089,7 @@ test('remote Entry Spot actor join derives the well-known node route fence', asy
     mailbox: {
       tryEnqueue: () => true
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: () => {},
     async requestService(target: string, parts: readonly Buffer[]) {
       const header = decodeStatefulHeader(parts[0]!);
@@ -2131,6 +2145,7 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
         return true;
       }
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler: typeof ingress) {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -2288,6 +2303,7 @@ test('Spot Message Follow does not impose a record-count or stored-byte admissio
     ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
       .RawServiceIngressRecord) => unknown) | undefined;
   const raw = {
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler: typeof ingress) {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -2331,6 +2347,7 @@ test('Instance activation encoding distinguishes absent metadata from explicit e
     topology: {
       peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: () => {},
     isPeerRouteReady: () => true,
     sendService: async (target: string, parts: readonly Buffer[]) => {
@@ -2380,6 +2397,7 @@ test('retained peer routes may submit while endpoint convergence reports not rea
         ? { descriptor: { lifecycleGeneration: 7n } }
         : undefined
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: () => {},
     isPeerRouteReady: () => false,
     sendService: async (target: string, parts: readonly Buffer[]) => {
@@ -2485,6 +2503,7 @@ test('target-owned Instance activation reserves before factory, commits before o
         return true;
       }
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -2596,6 +2615,7 @@ test('durable missing Instance authority discards a materialized orphan before r
         return true;
       }
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -2717,6 +2737,7 @@ test('Instance activation joins a Creating authority when local materialization 
         return true;
       }
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -2829,6 +2850,7 @@ test('Instance activation joins a Creating authority after local materialization
         return true;
       }
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -2939,6 +2961,7 @@ test('Ready Instance route waits for a closing materialized application before a
         return true;
       }
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3016,6 +3039,7 @@ test('Instance activation CAS loser does not invoke the local factory', async ()
       peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
     },
     mailbox: { tryEnqueue: () => true },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3091,6 +3115,7 @@ test('Promise authority redirects the retained activation envelope to the Ready 
       redirected = { targetNodeRid, parts };
       return true;
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3183,6 +3208,7 @@ test('Missing Instance activation joins a new reservation while the prior local 
       redirected = { targetNodeRid, parts };
       return true;
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3275,6 +3301,7 @@ test('draining Instance owner rejects stale Missing activation before materializ
     },
     mailbox: { tryEnqueue: () => assert.fail('A draining owner must not admit the stale message') },
     sendService: () => true,
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3347,6 +3374,7 @@ test('stale local Instance projection redirects to a newer remote Ready authorit
       redirected = { targetNodeRid, parts };
       return true;
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3458,6 +3486,7 @@ test('stale local Instance projection reconciles a newer same-node Ready authori
       sent.push(targetNodeRid);
       return true;
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3559,6 +3588,7 @@ test('Promise authority resumes the retained activation envelope after Store com
         return true;
       }
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -4163,6 +4193,7 @@ test('bound-session replacement is one-way, does not retry admission, and fences
           return true;
         }
       },
+      observePeerConnectionIntentRemoved() { return () => {}; },
       setServiceIngress(handler: (record: RawServiceIngressRecord) => unknown) {
         state.ingress = (record) => handler!(withIngressOwner(record));
       },
@@ -4368,6 +4399,7 @@ test('mailbox saturation reports dropped actor binding control records', async (
       peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
     },
     mailbox: { tryEnqueue: () => false },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler: typeof ingress) { ingress = (record) => handler!(withIngressOwner(record)); },
     replyService(_record: RawServiceIngressRecord, parts: readonly Buffer[]) {
       replies.push([...parts]);
@@ -4419,6 +4451,7 @@ test('active session bind replies only after the Actor binding control turn', as
         return true;
       }
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler: typeof ingress) {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -4557,6 +4590,7 @@ test('concurrent remote bind completions publish the newest Session-owner genera
       peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
     },
     mailbox: { tryEnqueue: () => true },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     requestService(_targetNodeRid: string, parts: readonly Buffer[]) {
       const header = decodeStatefulHeader(parts[0]!);
@@ -4618,6 +4652,7 @@ test('remote Session bind publishes its exact Location fence for the first Actor
       peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
     },
     mailbox: { tryEnqueue: () => true },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     requestService(_targetNodeRid: string, parts: readonly Buffer[]) {
       const header = decodeStatefulHeader(parts[0]!);
@@ -4772,6 +4807,7 @@ test('authority reconciliation exact-reads complete scans and publishes only Rea
 test('live Instance route fences reject an older reconcile snapshot', async () => {
   const raw = {
     topology: { peer: () => undefined },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     sendService: () => true
   } as unknown as RawServiceMeshRuntime;
@@ -6638,6 +6674,7 @@ function readyInstanceIngressHarness(
         return true;
       }
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress: (handler: typeof ingressHandler) => {
       ingressHandler = (record) => handler!(withIngressOwner(record));
     },

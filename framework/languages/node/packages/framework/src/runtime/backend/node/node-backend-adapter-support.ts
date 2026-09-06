@@ -236,7 +236,7 @@ function toNativeMessageLike(message: unknown): unknown {
   return message;
 }
 
-function translateBindingResultError(error: unknown): unknown {
+export function translateBindingResultError(error: unknown): unknown {
   if (error instanceof zlink.SubmitError) {
     return new ZLinkBackendResultError('submit', error.result, error.nativeErrno, { cause: error });
   }

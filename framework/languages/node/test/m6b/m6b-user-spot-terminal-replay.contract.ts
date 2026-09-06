@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { RequestError, RequestResult } from '@zlink-systems/zlink';
+import {
+  RequestResult, SubmitResult, ZLinkBackendResultError
+} from '../../packages/framework/src/runtime/backend/runtime-values';
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
@@ -20,8 +22,10 @@ import {
 test('command 48 replays a lost reply with the same operation ID inside the original deadline', async () => {
   const requests: Buffer[] = [];
   const attemptTimeouts: number[] = [];
-  const deadlineMs = Date.now() + 500;
+  const deadlineMs = performance.now() + 500;
+  const deadlineUnixMs = BigInt(Date.now() + 500);
   const raw = {
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     async requestService(
       _targetNodeRid: string,
@@ -33,7 +37,7 @@ test('command 48 replays a lost reply with the same operation ID inside the orig
       attemptTimeouts.push(timeoutMs);
       if (requests.length === 1) {
         await new Promise(resolve => setTimeout(resolve, 40));
-        throw new Error('simulated reply-route disconnect');
+        throw new ZLinkBackendResultError('request', RequestResult.NotConnected);
       }
       const decoded = decodeStatefulHeader(head);
       assert.equal(decoded.kind, 'userSpotClose');
@@ -62,7 +66,7 @@ test('command 48 replays a lost reply with the same operation ID inside the orig
         authorityOwnerGeneration: 29n,
         expectedStoreVersion: 'version-31'
       },
-      deadlineUnixMs: BigInt(deadlineMs)
+      deadlineUnixMs
     },
     500
   );
@@ -78,7 +82,7 @@ test('command 48 replays a lost reply with the same operation ID inside the orig
   assert.deepEqual(second.operation, first.operation);
   assert(attemptTimeouts[0]! > 400);
   assert(attemptTimeouts[1]! > 0 && attemptTimeouts[1]! < attemptTimeouts[0]!);
-  assert(Date.now() < deadlineMs);
+  assert(performance.now() < deadlineMs);
   runtime.close();
 });
 
@@ -88,6 +92,7 @@ test('command 48 gives a healthy first attempt the whole remaining deadline', as
   const healthyDurationMs = 180;
   const operationTimeoutMs = 300;
   const raw = {
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     async requestService(
       _targetNodeRid: string,
@@ -148,10 +153,11 @@ test('command 48 gives a healthy first attempt the whole remaining deadline', as
 test('command 48 exhaustion is Unavailable when no attempt was admitted', async () => {
   let attempts = 0;
   const raw = {
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     async requestService(): Promise<readonly Buffer[]> {
       attempts += 1;
-      throw new RequestError(RequestResult.NotConnected);
+      throw new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'source-node', 17n);
@@ -187,6 +193,7 @@ test('command 48 exhaustion is Unavailable when no attempt was admitted', async 
 test('command 48 exhaustion is DeadlineExceeded after an admitted reply is withheld', async () => {
   let attempts = 0;
   const raw = {
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     async requestService(
       _targetNodeRid: string,
@@ -195,7 +202,7 @@ test('command 48 exhaustion is DeadlineExceeded after an admitted reply is withh
     ): Promise<readonly Buffer[]> {
       attempts += 1;
       await new Promise(resolve => setTimeout(resolve, timeoutMs));
-      throw new RequestError(RequestResult.TimedOut);
+      throw new ZLinkBackendResultError('request', RequestResult.TimedOut);
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'source-node', 17n);
@@ -237,6 +244,7 @@ for (const wallJumpMs of [60_000, -60_000]) {
     const requests: Buffer[] = [];
     const budgets: number[] = [];
     const raw = {
+      observePeerConnectionIntentRemoved() { return () => {}; },
       setServiceIngress() {},
       async requestService(_target: string, parts: readonly Uint8Array[], timeoutMs: number) {
         requests.push(Buffer.from(parts[0]!));
@@ -244,7 +252,7 @@ for (const wallJumpMs of [60_000, -60_000]) {
         if (requests.length === 1) {
           elapsedMs += 40;
           t.mock.method(Date, 'now', () => wallNow + wallJumpMs);
-          throw new Error('lost reply');
+          throw new ZLinkBackendResultError('request', RequestResult.NotConnected);
         }
         const record = decodeStatefulHeader(requests[1]!);
         assert.equal(record.kind, 'userSpotClose');

@@ -159,6 +159,7 @@ export class RawServiceMeshRuntime {
     readonly lifecycleGeneration?: bigint;
   }>();
   private readonly endpointOnlyPeers = new Set<string>();
+  private readonly peerConnectionIntentRemoved = new Set<(nodeRoutingId: string) => void>();
   private readonly connectionCandidates = new Map<
     string,
     Map<string, PhysicalConnectionCandidate>
@@ -345,6 +346,7 @@ export class RawServiceMeshRuntime {
       ) {
         this.expectedPeers.delete(nodeRoutingId);
       }
+      this.notifyPeerConnectionIntentRemoved(nodeRoutingId);
     }
   }
 
@@ -355,12 +357,33 @@ export class RawServiceMeshRuntime {
       if (!isAlreadyDisconnectedError(error)) throw error;
     } finally {
       this.endpointOnlyPeers.delete(endpoint);
+      const removed = new Set<string>();
+      for (const [nodeRoutingId, expected] of this.expectedPeers) {
+        if (expected.endpoint === endpoint) {
+          this.expectedPeers.delete(nodeRoutingId);
+          removed.add(nodeRoutingId);
+        }
+      }
       for (const peer of this.topology.peers()) {
         if (peer.descriptor.advertisedEndpoint === endpoint) {
           this.removePeer(peer);
+          removed.add(peer.descriptor.nodeRoutingId);
         }
       }
+      for (const nodeRoutingId of removed) this.notifyPeerConnectionIntentRemoved(nodeRoutingId);
     }
+  }
+
+  observePeerConnectionIntentRemoved(listener: (nodeRoutingId: string) => void): () => void {
+    this.peerConnectionIntentRemoved.add(listener);
+    return () => { this.peerConnectionIntentRemoved.delete(listener); };
+  }
+
+  private notifyPeerConnectionIntentRemoved(nodeRoutingId: string): void {
+    // Only the logical owner's removal publishes lifecycle termination.
+    // A physical disconnect alone retains the connection expectation.
+    if (this.expectedPeers.has(nodeRoutingId) || this.topology.peer(nodeRoutingId) !== undefined) return;
+    for (const listener of this.peerConnectionIntentRemoved) listener(nodeRoutingId);
   }
 
   async announcePeer(nodeRoutingId: string): Promise<boolean> {
@@ -1536,6 +1559,7 @@ export class RawServiceMeshRuntime {
       this.onPeerNotRequired?.(nodeRoutingId, endpoint);
     }
     this.expectedPeers.delete(nodeRoutingId);
+    this.notifyPeerConnectionIntentRemoved(nodeRoutingId);
   }
 
   private selectBilateralConnection(descriptor: ServiceNodeDescriptor): void {

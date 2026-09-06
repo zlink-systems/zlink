@@ -2108,6 +2108,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         return true;
       }
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress(handler: typeof canonicalIngress) { canonicalIngress = handler; },
     replyService(_record: unknown, parts: readonly Buffer[]) {
       canonicalReply?.(parts.map(part => Buffer.from(part)));
@@ -2130,6 +2131,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
           }
         : undefined
     },
+    observePeerConnectionIntentRemoved() { return () => {}; },
     setServiceIngress() {},
     async requestService(_rid: string, parts: readonly Buffer[]) {
       const reply = new Promise<readonly Buffer[]>(resolve => { canonicalReply = resolve; });
