@@ -64,6 +64,31 @@
   크기를 모두 싣기 때문에 크기별 판정은 추가 비용이 없고 정보를 감추지 않는다.
 - **적용**: job `fwb-01` 후속 지시, Phase 6 보고서 주 표.
 
+## FB-006 — .NET with-grpc bench는 커밋된 상태로 빌드되지 않았다 (기존 결함)
+
+- **관찰** (job `fwb-02`, 감독관 검증 완료): `ZLinkRawServer/Program.cs`가
+  `received.RequestSeq`를 사용하는데 `bindings/dotnet`의 `Received`에는 그 멤버가 없다.
+  현재 계약은 `Received.ReplyToken`이다(`bindings/dotnet/src/Zlink/Contracts/Messaging/Received.cs:58`).
+  `RequestSeq`는 커밋 `bf2da527dc`에서 사라졌다.
+- **영향**: `run_local.sh:19`가 이 프로젝트를 빌드하고 스크립트는 `set -euo pipefail`이므로
+  **runner 전체가 빌드 단계에서 실패한다.** 즉 .NET with-grpc bench는 커밋된 상태로 한 번도
+  실행되지 않았다. `log/` 디렉터리가 비어 있던 것과 일치한다.
+- **처리**: `received.ReplyToken is not null`로 수정했다. binding 계약 변경에 bench가 따라오지
+  않은 경우이며 계약 쪽 문제가 아니다.
+- **후속**: bench가 어떤 정기 gate에도 걸려 있지 않아 이 파손이 드러나지 않았다. 5언어 확장
+  뒤 bench를 어떤 주기로 돌릴지는 0.18.0 후보로 올린다.
+
+## FB-007 — C 기준 bench의 server CPU·memory 값은 구조적으로 0이었다 (기존 결함)
+
+- **관찰** (job `fwb-02`, 감독관 검증 완료): `bindings/c/bench/with_grpc/run_local.sh`가
+  `setsid "${server}" & ; pid=$!`로 서버를 띄웠다. `setsid`는 호출자가 프로세스 그룹 리더가
+  아니면 fork하므로 `$!`는 곧 사라지는 wrapper의 PID다.
+- **영향**: client가 `SERVER_PID`로 서버 CPU·RSS를 표본화하는데 그 PID가 서버가 아니었다.
+  따라서 C bench가 낸 server CPU·memory 열은 전부 무의미한 값이었다. cleanup이 그 그룹을
+  죽여도 서버에 닿지 않는 문제도 함께 있었다.
+- **처리**: 각 서버가 자기 PID를 pidfile에 기록하고 runner가 그 값을 읽도록 바꿨다.
+- **주의**: 과거 C bench 결과의 server CPU·memory 수치를 이 캠페인의 비교에 인용하지 않는다.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
@@ -76,4 +101,5 @@
 
 | job | Phase | 모델 | 상태 | 결과 |
 |---|---|---|---|---|
-| `fwb-01` | 1(문서) | opus | 리뷰 통과, 후속 지시 진행 중 | 규격 5언어 중립화(ko 338행·en 359행), FB-001~003 반영. 고정값·RPC 미변경 확인. FB-004·FB-005 추가 지시 |
+| `fwb-02` | 0 | opus | 코드 변경 완료, 측정 진행 중 | raw ROUTER↔ROUTER 전환(.NET·C), 기존 결함 2건(FB-006·FB-007) 수정 |
+| `fwb-01` | 1(문서) | opus | 완료·커밋 `146db4da4c` | 규격 5언어 중립화(ko 338행·en 359행), FB-001~003 반영. 고정값·RPC 미변경 확인. FB-004·FB-005 추가 지시 |
