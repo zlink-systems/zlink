@@ -10,7 +10,6 @@ package native
 import "C"
 
 import (
-	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -134,24 +133,6 @@ func (s *socketCore) getUint64Option(option C.zlink_option_t) (uint64, error) {
 	size := C.size_t(unsafe.Sizeof(value))
 	err := configErrorFromResult(C.zlink_get_option(s.raw(), option, unsafe.Pointer(&value), &size))
 	return uint64(value), err
-}
-
-func (s *socketCore) setHwmOption(option C.zlink_option_t, value int) error {
-	if value < 0 {
-		return &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EINVAL)}
-	}
-	return s.setUint64Option(option, uint64(value))
-}
-
-func (s *socketCore) getHwmOption(option C.zlink_option_t) (int, error) {
-	value, err := s.getUint64Option(option)
-	if err != nil {
-		return 0, err
-	}
-	if value > uint64(math.MaxInt) {
-		return 0, &ConfigError{Result: ConfigInvalidArgument, nativeErrno: int(C.EOVERFLOW)}
-	}
-	return int(value), nil
 }
 
 func (s *socketCore) setInt64Option(option C.zlink_option_t, value int64) error {

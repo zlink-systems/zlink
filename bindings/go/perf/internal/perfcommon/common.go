@@ -363,8 +363,8 @@ func resolveIntEnv(name string, fallback int) int {
 }
 
 type hwmSocket interface {
-	SetSendHighWaterMark(int) error
-	SetReceiveHighWaterMark(int) error
+	SetSendHighWaterMark(uint64) error
+	SetReceiveHighWaterMark(uint64) error
 }
 
 type benchmarkSocket interface {
@@ -384,10 +384,10 @@ func ApplySingleHWM(socket hwmSocket) {
 		return
 	}
 	if sndhwm := resolveManualSocketHWM("PERF_SINGLE_HWM", "PERF_SINGLE_SNDHWM", "PERF_SINGLE_RCVHWM", true); sndhwm > 0 {
-		Must(socket.SetSendHighWaterMark(sndhwm))
+		Must(socket.SetSendHighWaterMark(uint64(sndhwm)))
 	}
 	if rcvhwm := resolveManualSocketHWM("PERF_SINGLE_HWM", "PERF_SINGLE_SNDHWM", "PERF_SINGLE_RCVHWM", false); rcvhwm > 0 {
-		Must(socket.SetReceiveHighWaterMark(rcvhwm))
+		Must(socket.SetReceiveHighWaterMark(uint64(rcvhwm)))
 	}
 }
 
@@ -401,10 +401,10 @@ func ApplyMultiHWM(socket hwmSocket, pattern string) {
 		return
 	}
 	if sndhwm := resolveManualSocketHWM("PERF_MULTI_HWM", "PERF_MULTI_SNDHWM", "PERF_MULTI_RCVHWM", true); sndhwm > 0 {
-		Must(socket.SetSendHighWaterMark(sndhwm))
+		Must(socket.SetSendHighWaterMark(uint64(sndhwm)))
 	}
 	if rcvhwm := resolveManualSocketHWM("PERF_MULTI_HWM", "PERF_MULTI_SNDHWM", "PERF_MULTI_RCVHWM", false); rcvhwm > 0 {
-		Must(socket.SetReceiveHighWaterMark(rcvhwm))
+		Must(socket.SetReceiveHighWaterMark(uint64(rcvhwm)))
 	}
 }
 

@@ -94,20 +94,24 @@ func (o *CommonSocketOptions) Linger() (time.Duration, error) {
 	return o.socket.getDurationOption(C.ZLINK_OPT_LINGER)
 }
 
-func (o *CommonSocketOptions) SetSendHighWaterMark(value int) error {
-	return o.socket.setHwmOption(C.ZLINK_OPT_SNDHWM, value)
+// SetSendHighWaterMark sets the send byte HWM over the full uint64 range.
+func (o *CommonSocketOptions) SetSendHighWaterMark(value uint64) error {
+	return o.socket.setUint64Option(C.ZLINK_OPT_SNDHWM, value)
 }
 
-func (o *CommonSocketOptions) SendHighWaterMark() (int, error) {
-	return o.socket.getHwmOption(C.ZLINK_OPT_SNDHWM)
+// SendHighWaterMark returns the send byte HWM without narrowing the Core value.
+func (o *CommonSocketOptions) SendHighWaterMark() (uint64, error) {
+	return o.socket.getUint64Option(C.ZLINK_OPT_SNDHWM)
 }
 
-func (o *CommonSocketOptions) SetReceiveHighWaterMark(value int) error {
-	return o.socket.setHwmOption(C.ZLINK_OPT_RCVHWM, value)
+// SetReceiveHighWaterMark sets the receive byte HWM over the full uint64 range.
+func (o *CommonSocketOptions) SetReceiveHighWaterMark(value uint64) error {
+	return o.socket.setUint64Option(C.ZLINK_OPT_RCVHWM, value)
 }
 
-func (o *CommonSocketOptions) ReceiveHighWaterMark() (int, error) {
-	return o.socket.getHwmOption(C.ZLINK_OPT_RCVHWM)
+// ReceiveHighWaterMark returns the receive byte HWM without narrowing the Core value.
+func (o *CommonSocketOptions) ReceiveHighWaterMark() (uint64, error) {
+	return o.socket.getUint64Option(C.ZLINK_OPT_RCVHWM)
 }
 
 func (o *CommonSocketOptions) SetSendTimeout(value time.Duration) error {

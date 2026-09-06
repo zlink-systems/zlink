@@ -18,20 +18,24 @@ type connectionSocket struct {
 	*socketCore
 }
 
-func (s *connectionSocket) SetSendHighWaterMark(value int) error {
-	return s.setHwmOption(C.ZLINK_OPT_SNDHWM, value)
+// SetSendHighWaterMark sets the send byte HWM over the full uint64 range.
+func (s *connectionSocket) SetSendHighWaterMark(value uint64) error {
+	return s.setUint64Option(C.ZLINK_OPT_SNDHWM, value)
 }
 
-func (s *connectionSocket) SendHighWaterMark() (int, error) {
-	return s.getHwmOption(C.ZLINK_OPT_SNDHWM)
+// SendHighWaterMark returns the send byte HWM without narrowing the Core value.
+func (s *connectionSocket) SendHighWaterMark() (uint64, error) {
+	return s.getUint64Option(C.ZLINK_OPT_SNDHWM)
 }
 
-func (s *connectionSocket) SetReceiveHighWaterMark(value int) error {
-	return s.setHwmOption(C.ZLINK_OPT_RCVHWM, value)
+// SetReceiveHighWaterMark sets the receive byte HWM over the full uint64 range.
+func (s *connectionSocket) SetReceiveHighWaterMark(value uint64) error {
+	return s.setUint64Option(C.ZLINK_OPT_RCVHWM, value)
 }
 
-func (s *connectionSocket) ReceiveHighWaterMark() (int, error) {
-	return s.getHwmOption(C.ZLINK_OPT_RCVHWM)
+// ReceiveHighWaterMark returns the receive byte HWM without narrowing the Core value.
+func (s *connectionSocket) ReceiveHighWaterMark() (uint64, error) {
+	return s.getUint64Option(C.ZLINK_OPT_RCVHWM)
 }
 
 func (s *connectionSocket) SetLinger(value time.Duration) error {

@@ -14,6 +14,7 @@ type (
 	// ReceiveFlowState is the DEALER/ROUTER receive-flow state.
 	ReceiveFlowState = impl.ReceiveFlowState
 	// CommonSocketOptions is the typed facade over the socket options shared by every socket type.
+	// Send and receive HWM setters/getters use uint64 byte counts over the full Core range.
 	CommonSocketOptions = impl.CommonSocketOptions
 	// PubSocketOptions is the typed facade over PUB/XPUB-specific socket options.
 	PubSocketOptions = impl.PubSocketOptions

@@ -70,7 +70,7 @@ func TestSocketCloseAndOptionAccessHaveNoGoStateRace(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < 64; i++ {
-			_ = socket.SetSendHighWaterMark(i + 1)
+			_ = socket.SetSendHighWaterMark(uint64(i + 1))
 			runtime.Gosched()
 		}
 	}()

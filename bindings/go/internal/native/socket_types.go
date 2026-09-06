@@ -437,19 +437,23 @@ func (s *StreamSocket) Close() error {
 	return s.core.Close()
 }
 
-func (s *StreamSocket) SetSendHighWaterMark(value int) error {
+// SetSendHighWaterMark sets the send byte HWM over the full uint64 range.
+func (s *StreamSocket) SetSendHighWaterMark(value uint64) error {
 	return s.core.SetSendHighWaterMark(value)
 }
 
-func (s *StreamSocket) SendHighWaterMark() (int, error) {
+// SendHighWaterMark returns the send byte HWM without narrowing the Core value.
+func (s *StreamSocket) SendHighWaterMark() (uint64, error) {
 	return s.core.SendHighWaterMark()
 }
 
-func (s *StreamSocket) SetReceiveHighWaterMark(value int) error {
+// SetReceiveHighWaterMark sets the receive byte HWM over the full uint64 range.
+func (s *StreamSocket) SetReceiveHighWaterMark(value uint64) error {
 	return s.core.SetReceiveHighWaterMark(value)
 }
 
-func (s *StreamSocket) ReceiveHighWaterMark() (int, error) {
+// ReceiveHighWaterMark returns the receive byte HWM without narrowing the Core value.
+func (s *StreamSocket) ReceiveHighWaterMark() (uint64, error) {
 	return s.core.ReceiveHighWaterMark()
 }
 
