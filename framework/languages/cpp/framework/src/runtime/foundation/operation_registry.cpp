@@ -221,7 +221,8 @@ void notify (
 
 bool operation_registry_t::register_operation (call_id_t id,
                                                clock_t::time_point deadline,
-                                               callback_t callback)
+                                               callback_t callback,
+                                               std::vector<std::uint8_t> target_routing_id)
 {
     if (!callback) {
         throw std::invalid_argument ("operation callback is required");
@@ -235,7 +236,7 @@ bool operation_registry_t::register_operation (call_id_t id,
         return false;
     }
     const auto inserted = _pending.emplace (
-      id, pending_t{deadline, {}});
+      id, pending_t{deadline, {}, std::move (target_routing_id)});
     if (!inserted.second)
         return false;
     try {
@@ -306,6 +307,35 @@ bool operation_registry_t::fail (
     notify (_completion_dispatcher, std::move (completion), terminal,
             std::move (payload));
     return true;
+}
+
+bool operation_registry_t::contains (const call_id_t &id) const
+{
+    std::lock_guard lock (_mutex);
+    return _pending.contains (id);
+}
+
+std::size_t operation_registry_t::fail_target (
+  const std::vector<std::uint8_t> &target_routing_id,
+  operation_terminal_t terminal)
+{
+    if (target_routing_id.empty () || terminal == operation_terminal_t::completed)
+        throw std::invalid_argument ("target failure requires a target and failure terminal");
+    operation_completion_chain_t completions;
+    {
+        std::lock_guard lock (_mutex);
+        for (auto entry = _pending.begin (); entry != _pending.end ();) {
+            if (entry->second.target_routing_id != target_routing_id) {
+                ++entry;
+                continue;
+            }
+            completions.append (std::move (entry->second.completion), terminal);
+            entry = _pending.erase (entry);
+        }
+    }
+    const auto failed = completions.size;
+    _completion_dispatcher->post_chain (std::move (completions));
+    return failed;
 }
 
 std::size_t operation_registry_t::expire (clock_t::time_point now)

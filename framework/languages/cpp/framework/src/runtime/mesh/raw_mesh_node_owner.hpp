@@ -502,6 +502,8 @@ class raw_mesh_node_owner_t
       const std::vector<std::uint8_t> &node_routing_id);
     void discard_pending_admissions_locked (
       const std::vector<std::uint8_t> &node_routing_id);
+    void end_peer_operations_if_disconnected_locked (
+      const std::vector<std::uint8_t> &node_routing_id);
     bool reply_infrastructure (
       const service_mailbox_record_t &request,
       std::vector<std::uint8_t> header);

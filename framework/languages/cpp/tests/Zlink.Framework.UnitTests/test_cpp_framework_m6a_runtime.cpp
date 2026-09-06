@@ -368,6 +368,76 @@ void verify_actor_create_retries_until_route_is_admitted ()
     target.close ();
 }
 
+void verify_actor_create_intent_removal_ends_operation ()
+{
+    // Exercise both logical removal orders, including a request already
+    // admitted by the binding. Neither transport loss nor forgetting an
+    // expectation while an admitted peer remains is lifecycle termination.
+    for (const int removal_order : {0, 1, 2}) {
+        mesh::raw_mesh_node_owner_t source ({descriptor ("intent-source")});
+        mesh::raw_mesh_node_owner_t target ({descriptor ("intent-target")});
+        source.start ();
+        target.start ();
+        const auto local = source.topology ().local_descriptor ();
+        const auto remote = target.topology ().local_descriptor ();
+        source.expect_peer (remote);
+        const auto pump = [&] {
+            const auto now = std::chrono::steady_clock::now ();
+            (void) source.drain_monitor_events (now);
+            (void) target.drain_monitor_events (now);
+            assert (await_task (source.pump_one (now))
+                    != mesh::raw_mesh_pump_result_t::protocol_error);
+            assert (await_task (target.pump_one (now))
+                    != mesh::raw_mesh_pump_result_t::protocol_error);
+        };
+        if (removal_order != 0) {
+            assert (source.connect_peer (target.endpoint (), remote));
+            const auto deadline = std::chrono::steady_clock::now () + 2s;
+            while (!source.topology ().peer (remote.node_routing_id)
+                   && std::chrono::steady_clock::now () < deadline)
+                pump ();
+            assert (source.topology ().peer (remote.node_routing_id));
+        }
+        std::promise<foundation::operation_terminal_t> promise;
+        auto completion = promise.get_future ();
+        std::atomic<unsigned> completions{0};
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        assert (await_task (source.request_actor_create (
+          remote.node_routing_id, actor_create_request (local, remote, "intent-actor"),
+          2s, [&] (auto terminal, auto) {
+              assert (completions.fetch_add (1) == 0);
+              promise.set_value (terminal);
+          })));
+        if (removal_order != 0) {
+            std::optional<mesh::service_mailbox_claim_t> claim;
+            while (!claim && std::chrono::steady_clock::now () < deadline) {
+                pump ();
+                claim = target.mailbox ().try_claim (
+                  mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+            }
+            assert (claim && claim->records.front ().reply_token);
+            assert (target.mailbox ().release (*claim));
+        }
+        if (removal_order == 1) {
+            source.forget_peer (remote.node_routing_id, target.endpoint ());
+            assert (completion.wait_for (0ms) == std::future_status::timeout);
+            (void) source.disconnect_peer (remote.node_routing_id, target.endpoint ());
+        } else {
+            if (removal_order == 2) {
+                (void) source.disconnect_peer (remote.node_routing_id, target.endpoint ());
+                assert (completion.wait_for (100ms) == std::future_status::timeout);
+            }
+            source.forget_peer (remote.node_routing_id, target.endpoint ());
+        }
+        assert (completion.wait_for (250ms) == std::future_status::ready);
+        assert (std::chrono::steady_clock::now () < deadline);
+        assert (completion.get () == foundation::operation_terminal_t::route_unavailable);
+        source.close ();
+        target.close ();
+        assert (completions.load () == 1);
+    }
+}
+
 void verify_actor_create_retry_timeout_is_unavailable ()
 {
     using completion_t =
@@ -2935,8 +3005,12 @@ void verify_relocation_prepare_failed_reply_with_mismatched_identity_is_fenced (
 
 } // namespace
 
-int main ()
+int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--r6-create-lifecycle") {
+        verify_actor_create_intent_removal_ends_operation ();
+        return 0;
+    }
     using zlink::framework::detail::backend::raw_request_failure_phase_t;
     using zlink::framework::detail::backend::transient_route_failure;
     assert (transient_route_failure (
@@ -2959,6 +3033,7 @@ int main ()
     verify_bound_session_bind_permanent_absence_is_bounded ();
     verify_bound_session_bind_reply_completes_registered_operation ();
     verify_actor_create_retries_until_route_is_admitted ();
+    verify_actor_create_intent_removal_ends_operation ();
     verify_actor_create_retry_timeout_is_unavailable ();
     verify_actor_create_from_dispatch_thread_does_not_block ();
     verify_topology_snapshot_and_connection_fence ();

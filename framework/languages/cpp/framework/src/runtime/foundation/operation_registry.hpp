@@ -42,7 +42,11 @@ class operation_registry_t
 
     bool register_operation (call_id_t id,
                              clock_t::time_point deadline,
-                             callback_t callback);
+                             callback_t callback,
+                             std::vector<std::uint8_t> target_routing_id = {});
+    bool contains (const call_id_t &id) const;
+    std::size_t fail_target (const std::vector<std::uint8_t> &target_routing_id,
+                            operation_terminal_t terminal);
     bool complete (const call_id_t &id, std::vector<std::uint8_t> payload);
     bool cancel (const call_id_t &id);
     bool fail (const call_id_t &id,
@@ -59,6 +63,7 @@ class operation_registry_t
     {
         clock_t::time_point deadline;
         std::unique_ptr<operation_completion_item_t> completion;
+        std::vector<std::uint8_t> target_routing_id;
     };
 
     bool take (

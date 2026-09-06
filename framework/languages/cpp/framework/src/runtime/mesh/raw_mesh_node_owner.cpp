@@ -192,6 +192,8 @@ class infrastructure_request_retry_state_t final :
   private:
     void submit ()
     {
+        if (!_operations->contains (_operation))
+            return;
         const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
           _deadline - clock_t::now ());
         if (remaining <= std::chrono::milliseconds::zero ()) {
@@ -214,6 +216,8 @@ class infrastructure_request_retry_state_t final :
     void settle (
       const result_t<detail::backend::raw_request_completion_t> &settled)
     {
+        if (!_operations->contains (_operation))
+            return;
         if (!settled) {
             fail (foundation::operation_terminal_t::transport_failed);
             return;
@@ -267,6 +271,8 @@ class infrastructure_request_retry_state_t final :
 
     void schedule_retry ()
     {
+        if (!_operations->contains (_operation))
+            return;
         const auto now = clock_t::now ();
         if (now >= _deadline) {
             fail (foundation::operation_terminal_t::route_unavailable);
@@ -831,7 +837,15 @@ bool raw_mesh_node_owner_t::connect_peer (
         _router->connect (endpoint);
         _outbound_endpoints.insert (endpoint);
         if (endpoint_retargeted) {
-            std::erase_if (_expected_peers, is_stale_same_endpoint);
+            for (auto peer = _expected_peers.begin (); peer != _expected_peers.end ();) {
+                if (!is_stale_same_endpoint (*peer)) {
+                    ++peer;
+                    continue;
+                }
+                const auto retired_rid = peer->first;
+                peer = _expected_peers.erase (peer);
+                end_peer_operations_if_disconnected_locked (retired_rid);
+            }
         }
         _expected_peers.insert_or_assign (
           expected_descriptor.node_routing_id, expected_descriptor);
@@ -889,6 +903,8 @@ bool raw_mesh_node_owner_t::disconnect_peer (
                                          admitted->connection_id);
             discard_pending_admissions_locked (
               admitted->descriptor.node_routing_id);
+            end_peer_operations_if_disconnected_locked (
+              admitted->descriptor.node_routing_id);
         }
         else if (expected_routing_id.empty ()) {
             const auto candidates = _connections.disconnect_by_endpoint (endpoint);
@@ -898,6 +914,7 @@ bool raw_mesh_node_owner_t::disconnect_peer (
                 (void) _topology.disconnect (node_routing_id, connection_id);
                 (void) _liveness.disconnect (node_routing_id, connection_id);
                 discard_pending_admissions_locked (node_routing_id);
+                end_peer_operations_if_disconnected_locked (node_routing_id);
             }
         }
         if (!expected_routing_id.empty ()) {
@@ -910,6 +927,7 @@ bool raw_mesh_node_owner_t::disconnect_peer (
                   expected_routing_id, connection_id);
             }
             discard_pending_admissions_locked (expected_routing_id);
+            end_peer_operations_if_disconnected_locked (expected_routing_id);
         }
         bool endpoint_in_use_by_other = false;
         if (!expected_routing_id.empty ()) {
@@ -988,9 +1006,22 @@ void raw_mesh_node_owner_t::forget_peer (
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
         const auto found = _expected_peers.find (node_routing_id);
         if (found != _expected_peers.end ()
-            && found->second.advertised_endpoint == endpoint)
-            _expected_peers.erase (found);
+            && found->second.advertised_endpoint != endpoint)
+            return;
+        _expected_peers.erase (node_routing_id);
+        end_peer_operations_if_disconnected_locked (node_routing_id);
     }).get ();
+}
+
+void raw_mesh_node_owner_t::end_peer_operations_if_disconnected_locked (
+  const std::vector<std::uint8_t> &node_routing_id)
+{
+    // Only logical intent removal consumes this fact. Transport loss alone
+    // leaves the expectation intact and must not end durable operations.
+    if (!_expected_peers.contains (node_routing_id)
+        && !_topology.peer (node_routing_id))
+        (void) _operations->fail_target (
+          node_routing_id, foundation::operation_terminal_t::route_unavailable);
 }
 
 peer_admission_result_t raw_mesh_node_owner_t::admit_peer (
@@ -1916,7 +1947,7 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
             id = operation_id (local.lifecycle_generation, correlation);
             registered = operations->register_operation (
               id, deadline + infrastructure_not_connected_retry_interval,
-              std::move (callback));
+              std::move (callback), actor_owner_routing_id);
         }
     }
     if (!port) {
@@ -2043,7 +2074,7 @@ task_t<bool> raw_mesh_node_owner_t::request_actor_create (
             id = operation_id (local.lifecycle_generation, correlation);
             registered = operations->register_operation (
               id, deadline + infrastructure_not_connected_retry_interval,
-              std::move (callback));
+              std::move (callback), target_routing_id);
         }
     }
     if (!port) {
