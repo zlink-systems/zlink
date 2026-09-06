@@ -1681,3 +1681,8 @@ G-0c(load 0.09, runs 3): multi DD 905.1 / DR_SENDSEND 273.9 / RR_SENDSEND 242.5 
 
 ## D-B160 (2026-09-07 07:25, 머신 B) WSL 크래시·리부팅 — 동시 빌드 4개 + callgrind(11 GB 초과); 재개 순서
 05:16경 R1-AB·R2·R3·R4-AB dev 빌드(JOBS=6 ×4)와 G-A callgrind가 동시 실행 → WSL 종료(사용자 리부팅 07:23). 손실: /tmp(scratchpad: PERF_LOCK·G0_DONE 마커, S-A callgrind 스크립트), G-A 진행분(보고서 없음). 보존: 4개 worktree diff(r1 4파일, r2 8파일, r3 15파일, r4 9파일), main 깨끗(`c3870804bf`). 규칙 추가(공통 규칙·메모리): JOBS=4, 동시 빌드 ≤ 2, 빌드 중 valgrind 금지. 재개: R1·R2 먼저(빌드·테스트·callgrind) → R3·R4 → G-A 재투입 → 게이트는 묶음별 순차. 감독관 실수 기록: 동시 job 4개 규칙(계획 §2)은 지켰으나 "빌드 단계 동시성"을 따로 제한하지 않았다.
+
+## D-B161 (2026-09-07 08:05, 머신 B) R1-AB·R2 완료 — 게이트 대기; R3·R4 재개
+- R1-AB(sonnet, `core-rf-R1-AB-summary.md`): stream_dispatch_lifecycle.cpp 병합·삭제, 미사용 include, dead 기본 인자, `packet_record_t` 수동 move 삭제(deque가 호출 안 함 확인), route-shard 조회 8곳 → `find_route_locked` 1개. −132행. ctest 33/33 ×5. 축소셀 Ir/msg 9,554(+0.8 %, 셀 잡음 범위) → hotpath 게이트로 판정.
+- R2(opus, `core-rf-R2-summary.md`): −421/+147, 9파일. `prepare_gather_output` STREAM 분기 4갈래·중복 가드·`asio_error_handler.hpp`·`c_single_allocator` 삭제; `restart_input_internal` 279행 → 48행 + 헬퍼 3, pending-buffer 큐/풀을 `asio_rx_chunk_t` 하나로 통합(규칙 3개 감소). 부수 결함 수정(B): 비-STREAM drain이 마지막 메시지 EAGAIN에서 소비 바이트를 안 잘라 다음 restart 때 중복 디코딩. ctest 35/35 ×5, 축소셀 Ir/msg 9,445(−0.3 %), recv 2.000/msg 유지. D-f 등록(gather env knob 3개 무효 → 스펙 문장).
+- R3·R4 재개(동시 빌드 2개 규칙). 게이트는 r1+r2 묶음 → r3+r4 묶음 순, 그 뒤 G-A 재투입.
