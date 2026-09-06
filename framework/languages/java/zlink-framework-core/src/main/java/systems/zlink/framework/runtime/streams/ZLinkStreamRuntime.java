@@ -685,42 +685,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             || !state.closeScheduled().compareAndSet(false, true)) {
             return;
         }
-        try {
-            // Publish SERVER_DRAIN at the timer boundary. The connector closes
-            // itself after consuming this control record; a short fallback
-            // disconnect covers a failed admission without occupying the lane.
-            try {
-                sendSessionClosing(state.stream(), state.routingId());
-            } catch (RuntimeException sendFailure) {
-                LOGGER.log(Level.FINE,
-                    "bound Session replacement close notice failed: "
-                        + state.routingId(),
-                    sendFailure);
-            }
-            try {
-                replyRetryExecutor.schedule(() ->
-                    disconnectReplacedSessionIfExact(state, identity),
-                    25,
-                    TimeUnit.MILLISECONDS);
-            } catch (RuntimeException rejected) {
-                disconnectReplacedSessionIfExact(state, identity);
-            }
-        } catch (RuntimeException failure) {
-            LOGGER.log(Level.FINE,
-                "bound Session replacement close failed: "
-                    + state.routingId(),
-                failure);
-        }
-    }
-
-    private void disconnectReplacedSessionIfExact(
-        SessionState state,
-        ReplacementIdentity identity) {
-        if (!isCurrentSessionState(state)
-            || !state.matchesReplacement(identity)
-            || !state.closeScheduled().get()) {
-            return;
-        }
+        sendSessionClosing(state.stream(), state.routingId());
         try {
             state.stream().disconnectPeer(state.routingId());
         } catch (RuntimeException failure) {
