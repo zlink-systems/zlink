@@ -91,8 +91,8 @@ void runtime.start()
   });
 
 async function waitForMeshReady() {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + 10_000;
+  while (performance.now() < deadline) {
     if (runtime.routeMeshRuntime.isReady('mesh')) return;
     await new Promise(resolve => setImmediate(resolve));
   }
@@ -100,30 +100,13 @@ async function waitForMeshReady() {
 }
 
 async function runClient(mode) {
+  // The peer signalled 'ready' only after its RouteMesh became Ready (public contract), so each
+  // call is submitted exactly once; a failure here is a readiness defect, not something to retry.
   if (mode === 'direct') {
-    await retryReachable(() =>
-      client.requestToNode('mesh', 'node-a', new RoutePing('ready')).timeout(1000).submit()
-    );
+    await client.requestToNode('mesh', 'node-a', new RoutePing('ready')).timeout(1000).submit();
     await client.sendToNode('mesh', 'node-a', new RouteNotice('one-way')).submit();
-    return retryReachable(() =>
-      client.requestToNode('mesh', 'node-a', new RoutePing('ping')).timeout(1000).submit()
-    );
+    return client.requestToNode('mesh', 'node-a', new RoutePing('ping')).timeout(1000).submit();
   }
-  return retryReachable(() =>
-    client.requestToChannel('mesh', new RoutePing('ping')).timeout(1000).submit()
-  );
+  return client.requestToChannel('mesh', new RoutePing('ping')).timeout(1000).submit();
 }
 
-async function retryReachable(submit) {
-  const deadline = Date.now() + 5000;
-  let lastError;
-  while (Date.now() < deadline) {
-    try {
-      return await submit();
-    } catch (error) {
-      lastError = error;
-      await new Promise(resolve => setImmediate(resolve));
-    }
-  }
-  throw lastError;
-}
