@@ -68,8 +68,7 @@ pub(crate) fn submit_routed_request_sync(
 ) -> Result<Vec<Message>, ZlinkError> {
     validate_request(&operation)?;
     let owner = Arc::clone(&operation.completion_owner);
-    let target = operation.peer_rid;
-    let (entry, user_context) = owner.register_request(target)?;
+    let (entry, user_context) = owner.register_request()?;
     let submission = owner.with_submit(|| {
         let completion_id = submit_request_parts(&mut operation, 0, user_context)?;
         if completion_id == 0 {
@@ -88,8 +87,8 @@ pub(crate) fn submit_routed_request_sync(
 /// Managed DONTWAIT REQUEST.
 ///
 /// The builder-owned packet stays intact while each admission attempt uses
-/// stack-local Core shared message descriptors. A refusal arms exactly one
-/// WRITABLE token; only that token permits the next attempt. Once admitted,
+/// stack-local Core shared message descriptors. A refusal with a nonzero token
+/// arms a WRITABLE wait; only that token permits the next attempt. Once admitted,
 /// the same entry changes phase and waits for the REQUEST reply or terminal.
 struct RequestFuture {
     operation: Option<RequestOpStorage>,
@@ -115,8 +114,7 @@ impl Future for RequestFuture {
                 return self.finish(Err(error.into()));
             }
             let owner = Arc::clone(&operation.completion_owner);
-            let target = operation.peer_rid;
-            let (entry, user_context) = match owner.register_request(target) {
+            let (entry, user_context) = match owner.register_request() {
                 Ok(registered) => registered,
                 Err(error) => return self.finish(Err(error.into())),
             };
@@ -306,7 +304,7 @@ fn submit_request_attempt(
                     live_token: true,
                 }));
             }
-            if rc == SubmitResult::Ok as i32 || rc == SubmitResult::Backpressured as i32 {
+            if rc == SubmitResult::Ok as i32 {
                 return Ok(Err(RequestAttemptError::without_token(SubmitError::new(
                     SubmitResult::InternalError,
                     libc::EPROTO,

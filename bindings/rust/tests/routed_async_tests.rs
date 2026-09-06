@@ -180,6 +180,60 @@ fn public_poller_drains_writable_and_retries_the_same_packet() {
 }
 
 #[test]
+fn request_completion_reservation_exhaustion_preserves_tokenless_backpressure() {
+    const COMPLETION_SLOTS: usize = 65_536;
+    let ctx = Context::new().unwrap();
+    let mut dealer = ctx.dealer_socket().unwrap();
+    dealer
+        .connect("inproc://rust-request-completion-reservation-exhaustion")
+        .unwrap();
+    let poller = Poller::new().unwrap();
+    poller.add_socket(&dealer, POLLCOMPLETION, 1).unwrap();
+
+    // An unbound peer cannot become writable. Each first poll reserves one
+    // Core wait token, so the next request must fail with EAGAIN and ID zero.
+    let request = || {
+        Box::pin(
+            dealer
+                .request()
+                .message(Message::try_from(b"request").unwrap())
+                .submit(),
+        )
+    };
+    let mut pending = Vec::with_capacity(COMPLETION_SLOTS);
+    for slot in 0..COMPLETION_SLOTS {
+        let mut future = request();
+        assert!(
+            test_support::poll_once(&mut future).is_pending(),
+            "request slot {slot} must reserve a WRITABLE token"
+        );
+        pending.push(future);
+    }
+
+    let mut overflow = request();
+    let error = match test_support::poll_once(&mut overflow) {
+        Poll::Ready(Err(ZlinkError::Submit(error))) => error,
+        Poll::Ready(Err(error)) => panic!("expected a submit error, got {error}"),
+        Poll::Ready(Ok(_)) => panic!("request admitted after reservation exhaustion"),
+        Poll::Pending => panic!("request waited after reservation exhaustion"),
+    };
+    assert_eq!(error.code(), SubmitResult::Backpressured);
+    assert_eq!(error.native_errno(), libc::EAGAIN);
+    let mut events = [PollEvent::default()];
+    assert_eq!(poller.wait(&mut events, 0).unwrap(), 0);
+
+    dealer.close().unwrap();
+    for mut future in pending {
+        assert!(matches!(
+            test_support::poll_once(&mut future),
+            Poll::Ready(Err(ZlinkError::Submit(error)))
+                if error.code() == SubmitResult::Terminated
+                    && error.native_errno() == libc::ESHUTDOWN
+        ));
+    }
+}
+
+#[test]
 fn request_backpressure_retries_after_its_writable_then_receives_reply() {
     let ctx = Context::new().unwrap();
     ctx.options().set_auto_hwm_enabled(false).unwrap();
