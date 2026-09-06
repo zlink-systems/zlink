@@ -1,0 +1,67 @@
+# Job: framework perf spec fitness review (read-only diagnosis, report only)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 3 h.
+Read `AGENTS.md` (root) §2/§3/§5 first.
+
+## Context
+`framework/doc/framework/common/perf/README.ko.md` (1,418 lines, last edited 2026-08-25) is the common
+framework performance test specification: 13 scenarios in §10 (`cs-local-session-actor-echo` …
+`pubsub-fanout-echo`), a baseline scenario (§11), message contract (§12), common CLI (§5), project
+structure (§6-§9), metrics (§14), result files (§15), server metrics endpoint (§16), per-language
+standard locations (§17), implementation order (§18), completion criteria (§22), and a Core HWM /
+job-queue tuning procedure (§23). **It was written before any runner existed, and none exists today**
+(inventory: `doc/plan/c016-worklog/framework-perf-runner-inventory.md`). The user's decision: review
+whether this spec fits the *current* system; if it fits (after amendments), runners will be implemented
+per language starting with .NET (canonical). Per-language plan documents
+`framework/doc/framework/perf/bindings/{cpp,dotnet,java,node}-framework-performance.ko.md` (2026-08-05)
+use an older scenario vocabulary and may be stale.
+
+## Hard rules
+- READ-ONLY. Write only `doc/plan/c016-worklog/perf-spec-fitness-review-summary.md`. Never modify
+  `core/**`, `bindings/**`, `framework/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`. No
+  builds, tests, benchmarks, or state-changing git commands. Do not commit.
+- Evidence: cite `file:line` for every claim — the perf spec line, the current public API surface
+  (language interface docs under `framework/doc/framework/common/spec/server/languages/*/interfaces/`,
+  and the real public types in `framework/languages/{dotnet,cpp,java,kotlin,node}/`), and the
+  owning common spec clause.
+- Do not redesign the perf spec. Report what fits, what is stale, what is missing, and the minimal
+  amendment for each — the supervisor edits the spec.
+
+## Questions to answer (each gets its own section)
+1. **Scenario → current public API mapping.** For each of the 13 §10 scenarios plus §11 baseline:
+   which current public calls realise the client, server(s) and message flow (per language: dotnet,
+   cpp, java, kotlin, node), with `file:line` of the public API. Mark each cell `fits` / `fits with
+   rename` (API name changed) / `no public API` (would require internals — forbidden by §21/§8.5) /
+   `semantics changed` (the current contract behaves differently from what the scenario assumes, cite
+   the owning spec clause). Use the sample apps (`framework/doc/framework/common/sample/**`, and
+   `framework/languages/*/samples/**`) and e2e configs (`framework/doc/framework/common/e2e/config-*.ko.md`)
+   as evidence of what the public API can express today.
+2. **Assumptions that the 0.17.0 contract invalidated.** Check the spec's execution model (§4),
+   fairness (§13), metrics (§14) and HWM procedure (§23) against the current rules: DONTWAIT wait-token
+   submit model, application job queue backpressure (`01-execution/04-application-job-queue-and-backpressure`),
+   durable operation replay/deadline (actor-model §9, §8.1), transport liveness fixed values (5 s / 15 s),
+   ClientServer readiness cap, D-090…D-101 in `doc/plan/c016-worklog/decisions.ko.md`. List each stale
+   assumption with the current clause.
+3. **Coverage gaps.** Public interaction models that exist today but have no scenario: e.g.
+   ClientServer channel request/reply (02-channel-transport/03), Instance Spot (`config-14`), spot
+   address messaging, relocation-under-load, stream session bind/relay, HTTP handler (dotnet/cpp) —
+   decide for each whether a perf scenario is warranted (hot path exercised by samples) or out of
+   scope; do not pad the list.
+4. **CLI / result schema / endpoint feasibility** (§5, §15, §16): anything unimplementable with public
+   API only, any parameter with no consumer, any metric that no language can measure without
+   internals, port/process model conflicts with the sample runner isolation rules
+   (`scripts/verify-framework-runner-isolation.py`, `framework/doc/framework/common/sample/runner-templates/**`),
+   and the Docker/Redis requirement (Location Store) per scenario.
+5. **Vocabulary conflicts** between §10 names and the per-language plan docs; which set to keep (the
+   common spec owns names) and the list of renames.
+6. **Simplification.** Scenarios that measure the same hot path with no distinct question (§1 lists the
+   questions each scenario must answer) — propose merges with the question each merged scenario keeps.
+   Count: 13 → N.
+7. **Recommended amendment list** (numbered, minimal, each with spec `file:line`, the replacement
+   sentence draft, and whether it changes what a runner must do) and a **go/no-go** for starting the
+   .NET canonical implementation after those amendments, with the ordered scenario list for .NET.
+
+## Deliverable
+`doc/plan/c016-worklog/perf-spec-fitness-review-summary.md`, Korean prose (identifiers verbatim):
+summary table (scenario × language fit matrix), the seven sections above, `## 읽은 범위`, `## BLOCKERS`.
+Finish by writing the report; do not print it to stdout.
