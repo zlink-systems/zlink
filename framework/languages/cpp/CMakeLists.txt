@@ -1569,6 +1569,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     # The bounded-batch aggregate stress case commits 2050 participants through
     # the in-memory fixture store and legitimately runs for tens of seconds.
     TIMEOUT 120)
+  add_test(NAME test_cpp_framework_r6_creation_terminal
+    COMMAND test_cpp_framework_opaque_store_providers --gtest_filter=*CreationTerminal*)
+  set_tests_properties(test_cpp_framework_r6_creation_terminal PROPERTIES
+    LABELS "framework-unit;framework-r6-parity" TIMEOUT 30)
+
   add_executable(test_cpp_framework_location_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_location_runtime.cpp)
   target_compile_features(test_cpp_framework_location_runtime PRIVATE cxx_std_20)

@@ -686,9 +686,6 @@ class provider_location_repository_t final : public location_repository_t
             || sha256 (publication.terminal_envelope) != publication.sha256)
             throw std::invalid_argument ("creation terminal envelope or SHA-256 is invalid");
         const auto expires_at = publication.operation_deadline + std::chrono::minutes (5);
-        const auto now = std::chrono::system_clock::now ();
-        if (expires_at <= now)
-            throw std::invalid_argument ("creation terminal expiry is not in the future");
         const auto terminal_key = key_creation_terminal (publication.operation);
         auto existing = read (terminal_key);
         if (const auto *found = std::get_if<store_found_t> (&existing))
@@ -696,6 +693,13 @@ class provider_location_repository_t final : public location_repository_t
               object_complete_creation_result_t{object_creation_already_completed_result_t{
                 decode_terminal (parse_json (found->value.bytes))}});
 
+        const auto store_now = std::get<store_missing_t> (existing).store_now;
+        if (expires_at <= store_now)
+            throw std::invalid_argument ("creation terminal expiry is not in the future");
+        // Convert the provider timestamp once. Preparing the authority/capacity
+        // write consumes this same monotonic retention deadline.
+        const auto terminal_deadline = std::chrono::steady_clock::now ()
+          + (expires_at - store_now);
         creation_terminal_record_t terminal{
           publication.operation,
           request.key,
@@ -708,54 +712,55 @@ class provider_location_repository_t final : public location_repository_t
           publication.terminal_envelope,
           publication.sha256,
           expires_at};
-        std::optional<authority_snapshot_t> ready;
+        object_complete_creation_result_t result{object_creation_completion_stale_t{}};
         if (const auto *created = std::get_if<object_creation_completed_t> (&request.completion)) {
-            auto committed =
-              commit ({request.key, request.fence, created->ready_payload}, cancellation)
-                .result ()
-                .value ();
+            const auto committed = commit (
+              {request.key, request.fence, created->ready_payload}, cancellation,
+              &terminal, terminal_deadline).result ().value ();
             if (const auto *value = std::get_if<object_committed_t> (&committed))
-                ready = value->ready;
-            else if (const auto *value = std::get_if<object_already_committed_t> (&committed))
-                ready = value->ready;
-            else if (std::holds_alternative<object_commit_stale_t> (committed))
-                return completed (
-                  object_complete_creation_result_t{object_creation_completion_stale_t{}});
-            else if (const auto *conflict = std::get_if<object_commit_conflict_t> (&committed))
                 return completed (object_complete_creation_result_t{
-                  object_creation_completion_conflict_t{conflict->current}});
-            else
-                return completed (
-                  object_complete_creation_result_t{authority_generation_exhausted_t{}});
+                  object_creation_completed_result_t{std::move (terminal), value->ready}});
+            if (const auto *conflict = std::get_if<object_commit_conflict_t> (&committed))
+                result = object_creation_completion_conflict_t{conflict->current};
+            else if (std::holds_alternative<authority_generation_exhausted_t> (committed))
+                result = authority_generation_exhausted_t{};
         } else {
-            auto aborted = abort ({request.key, request.fence}, cancellation).result ().value ();
-            if (std::holds_alternative<object_abort_stale_t> (aborted))
-                return completed (
-                  object_complete_creation_result_t{object_creation_completion_stale_t{}});
-            if (const auto *conflict = std::get_if<object_abort_conflict_t> (&aborted))
+            const auto aborted = abort (
+              {request.key, request.fence}, cancellation, &terminal, terminal_deadline)
+                .result ().value ();
+            if (std::holds_alternative<object_aborted_t> (aborted))
                 return completed (object_complete_creation_result_t{
-                  object_creation_completion_conflict_t{conflict->current}});
+                  object_creation_completed_result_t{std::move (terminal), std::nullopt}});
+            if (const auto *conflict = std::get_if<object_abort_conflict_t> (&aborted))
+                result = object_creation_completion_conflict_t{conflict->current};
         }
-        const auto retention = std::chrono::duration_cast<std::chrono::milliseconds> (
-          expires_at - std::chrono::system_clock::now ());
-        auto stored = write (
-          {{missing_condition (terminal_key)},
-           {store_put_t{terminal_key, to_bytes (encode_terminal (terminal).dump ()), retention}}});
-        if (!std::holds_alternative<store_write_applied_t> (stored)) {
-            auto concurrent = read (terminal_key);
-            if (const auto *found = std::get_if<store_found_t> (&concurrent))
-                return completed (
-                  object_complete_creation_result_t{object_creation_already_completed_result_t{
-                    decode_terminal (parse_json (found->value.bytes))}});
-            return completed (
-              object_complete_creation_result_t{object_creation_completion_stale_t{}});
-        }
-        return completed (object_complete_creation_result_t{
-          object_creation_completed_result_t{std::move (terminal), std::move (ready)}});
+        // A competing completion may have won the same conditional write.
+        // Only its stored terminal can resolve replay; Ready alone cannot.
+        auto concurrent = read (terminal_key);
+        if (const auto *found = std::get_if<store_found_t> (&concurrent))
+            return completed (object_complete_creation_result_t{
+              object_creation_already_completed_result_t{
+                decode_terminal (parse_json (found->value.bytes))}});
+        return completed (std::move (result));
     }
 
     task_t<object_commit_result_t> commit (object_commit_request_t request,
                                            std::stop_token cancellation = {}) override
+    {
+        return commit (std::move (request), cancellation, nullptr, {});
+    }
+
+    task_t<object_abort_result_t> abort (object_abort_request_t request,
+                                         std::stop_token cancellation = {}) override
+    {
+        return abort (std::move (request), cancellation, nullptr, {});
+    }
+
+  private:
+    task_t<object_commit_result_t> commit (
+      object_commit_request_t request, std::stop_token cancellation,
+      const creation_terminal_record_t *terminal,
+      std::chrono::steady_clock::time_point terminal_deadline)
     {
         if (cancellation.stop_requested ())
             return cancelled<object_commit_result_t> ();
@@ -829,7 +834,7 @@ class provider_location_repository_t final : public location_repository_t
                   {store_put_t{authority_key, encode_authority (snapshot), std::nullopt},
                    store_put_t{reservation_key, to_bytes (record.dump ()), std::nullopt},
                    store_put_t{capacity.key, encode_capacity_record (capacity.record),
-                               std::nullopt}}});
+                               std::nullopt}}}, terminal, terminal_deadline);
         const auto *applied = std::get_if<store_write_applied_t> (&written);
         if (!applied)
             return completed (object_commit_result_t{
@@ -839,8 +844,10 @@ class provider_location_repository_t final : public location_repository_t
         return completed (object_commit_result_t{object_committed_t{std::move (snapshot)}});
     }
 
-    task_t<object_abort_result_t> abort (object_abort_request_t request,
-                                         std::stop_token cancellation = {}) override
+    task_t<object_abort_result_t> abort (
+      object_abort_request_t request, std::stop_token cancellation,
+      const creation_terminal_record_t *terminal,
+      std::chrono::steady_clock::time_point terminal_deadline)
     {
         if (cancellation.stop_requested ())
             return cancelled<object_abort_result_t> ();
@@ -886,13 +893,14 @@ class provider_location_repository_t final : public location_repository_t
                   {store_delete_t{authority_key},
                    store_put_t{reservation_key, to_bytes (record.dump ()), std::nullopt},
                    store_put_t{capacity.key, encode_capacity_record (capacity.record),
-                               std::nullopt}}});
+                               std::nullopt}}}, terminal, terminal_deadline);
         if (!std::holds_alternative<store_write_applied_t> (written))
             return completed (object_abort_result_t{
               object_abort_conflict_t{read_authority_value (object_key (request.key))}});
         return completed (object_abort_result_t{object_aborted_t{}});
     }
 
+  public:
     task_t<aggregate_prepare_result_t>
     prepare_aggregate (aggregate_prepare_request_t request,
                        std::stop_token cancellation = {}) override
@@ -1992,8 +2000,21 @@ class provider_location_repository_t final : public location_repository_t
         return true;
     }
 
-    store_write_result_t write (store_write_request_t request)
+    store_write_result_t write (
+      store_write_request_t request,
+      const creation_terminal_record_t *terminal = nullptr,
+      std::chrono::steady_clock::time_point terminal_deadline = {})
     {
+        if (terminal) {
+            const auto retention = std::chrono::ceil<std::chrono::milliseconds> (
+              terminal_deadline - std::chrono::steady_clock::now ());
+            if (retention <= std::chrono::milliseconds::zero ())
+                throw std::invalid_argument ("creation terminal retention elapsed before publication");
+            const auto terminal_key = key_creation_terminal (terminal->operation);
+            request.conditions.push_back (missing_condition (terminal_key));
+            request.mutations.push_back (store_put_t{
+              terminal_key, to_bytes (encode_terminal (*terminal).dump ()), retention});
+        }
         auto first = _store->write (request).result ();
         if (first)
             return first.value ();

@@ -55,6 +55,206 @@ nlohmann::json capacity_record (location_store_t &provider,
                  : nlohmann::json{};
 }
 
+class creation_terminal_failure_store_t final : public location_store_t
+{
+  public:
+    enum class fault_t { none, before_commit, after_commit, between_writes };
+
+    task_t<store_read_result_t> read (store_key_t key) override
+    {
+        return inner.read (std::move (key));
+    }
+    task_t<store_scan_result_t> scan (store_scan_request_t request) override
+    {
+        return inner.scan (std::move (request));
+    }
+    task_t<store_write_result_t> write (store_write_request_t request) override
+    {
+        if (fault == fault_t::none)
+            return inner.write (std::move (request));
+        ++writes;
+        attempted = request;
+        if (fault == fault_t::before_commit)
+            return task_t<store_write_result_t> (result_t<store_write_result_t>::success (
+              store_write_conflict_t{std::chrono::system_clock::now ()}));
+        if (fault == fault_t::between_writes && writes > 1)
+            return task_t<store_write_result_t> (result_t<store_write_result_t>::failure (
+              framework_error_kind_t::internal_failure, "provider failed between writes"));
+        auto applied = inner.write (std::move (request));
+        if (fault == fault_t::after_commit) {
+            applied.result ().value ();
+            return task_t<store_write_result_t> (result_t<store_write_result_t>::failure (
+              framework_error_kind_t::internal_failure, "provider lost the atomic write reply"));
+        }
+        return applied;
+    }
+
+    in_memory_location_store_t inner;
+    fault_t fault = fault_t::none;
+    unsigned writes = 0;
+    std::optional<store_write_request_t> attempted;
+};
+
+class CreationTerminalTest : public ::testing::TestWithParam<creation_terminal_state_t>
+{
+  protected:
+    void SetUp () override
+    {
+        const auto lease = repository.claim_owner_lease ("terminal-owner", 30s).result ().value ();
+        const auto *owner = std::get_if<owner_lease_claimed_t> (&lease);
+        ASSERT_NE (owner, nullptr);
+        descriptor.mesh_name = "terminal-mesh";
+        descriptor.rid = zlink::routing_id_t::from (std::string{"terminal-target"});
+        descriptor.lifecycle_generation = 1;
+        descriptor.descriptor_revision = 1;
+        descriptor.endpoint = "tcp://127.0.0.1:7001";
+        descriptor.owner_id = owner->token.owner_id;
+        descriptor.lease_generation = owner->token.lease_generation;
+        descriptor.object_role = object_role_t::server;
+        descriptor.state = framework_runtime_state_t::serving;
+        descriptor.object_capabilities.push_back (
+          {placement_object_kind_t::actor, "player", maintenance_policy_kind_t::recreate, false, 0});
+        descriptor.capacity.actors.limit = 1;
+        ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                     .result ().value ().status, location_write_status_t::stored);
+        reserve_request.key = {placement_object_kind_t::actor, "terminal-actor"};
+        reserve_request.intent.stable_type = "player";
+        reserve_request.target = {"terminal-mesh", node_rid_t::from_string ("terminal-target"),
+                                  1, owner->token};
+        reserve_request.creating_payload = bytes ("creating");
+        reserve_request.capacity_bundle.actor_slots = 1;
+        const auto reserved = repository.reserve (reserve_request).result ().value ();
+        const auto *reservation = std::get_if<object_reserved_t> (&reserved);
+        ASSERT_NE (reservation, nullptr);
+        fence = reservation->fence;
+        publication.operation = {node_rid_t::from_string ("terminal-source"),
+                                 0x8000000000000001ULL, {17, 19}};
+        publication.terminal_envelope = bytes ("original terminal with application reply");
+        publication.sha256 = sha256 (publication.terminal_envelope);
+        publication.operation_deadline = std::chrono::system_clock::now () + 2s;
+    }
+
+    object_complete_creation_request_t request () const
+    {
+        object_creation_completion_t completion;
+        switch (GetParam ()) {
+            case creation_terminal_state_t::created:
+                completion = object_creation_completed_t{bytes ("ready"), publication};
+                break;
+            case creation_terminal_state_t::rejected:
+                completion = object_creation_rejected_t{publication};
+                break;
+            case creation_terminal_state_t::failed:
+                completion = object_creation_failed_t{publication};
+                break;
+        }
+        return {reserve_request.key, fence, std::move (completion)};
+    }
+
+    void expect_published_terminal_and_replay ()
+    {
+        ASSERT_EQ (provider.writes, 1u);
+        ASSERT_TRUE (provider.attempted);
+        bool authority = false, capacity = false, terminal = false, terminal_condition = false;
+        for (const auto &mutation : provider.attempted->mutations) {
+            const auto &key = std::visit ([] (const auto &value) -> const store_key_t & {
+                return value.key;
+            }, mutation).value;
+            authority |= key.starts_with (std::string ("authority") + '\0');
+            capacity |= key.starts_with ("zlink:v11:capacity:");
+            terminal |= key.starts_with ("zlink:v11:creation-terminal:");
+        }
+        for (const auto &condition : provider.attempted->conditions)
+            if (const auto *missing = std::get_if<store_missing_condition_t> (&condition))
+                terminal_condition |= missing->key.value.starts_with ("zlink:v11:creation-terminal:");
+        EXPECT_TRUE (authority && capacity && terminal && terminal_condition);
+        provider_location_repository_t reopened (provider);
+        const auto stored = reopened.read_creation_terminal (publication.operation).result ().value ();
+        ASSERT_TRUE (stored);
+        EXPECT_EQ (stored->state, GetParam ());
+        EXPECT_EQ (stored->terminal_envelope, publication.terminal_envelope);
+        EXPECT_EQ (stored->sha256, publication.sha256);
+        EXPECT_EQ (stored->expires_at, std::chrono::time_point_cast<std::chrono::milliseconds> (
+          publication.operation_deadline + 5min));
+        const auto authority_result = reopened.read_authority (
+          actor_authority_key (reserve_request.key.global_id)).result ().value ();
+        const auto counts = capacity_record (provider, descriptor);
+        EXPECT_EQ (counts.at ("actorsPending"), 0);
+        if (GetParam () == creation_terminal_state_t::created) {
+            const auto *ready = std::get_if<authority_snapshot_t> (&authority_result);
+            ASSERT_NE (ready, nullptr);
+            EXPECT_EQ (ready->allocation.state, placement_allocation_state_t::active);
+            EXPECT_EQ (ready->payload, bytes ("ready"));
+            EXPECT_FALSE (ready->pending_creation);
+            EXPECT_EQ (counts.at ("actorsActive"), 1);
+        } else {
+            EXPECT_TRUE (std::holds_alternative<authority_missing_t> (authority_result));
+            EXPECT_EQ (counts.at ("actorsActive"), 0);
+        }
+        // Replays cannot refresh retention or borrow another source's terminal.
+        publication.operation_deadline += 1min;
+        const auto replay = reopened.complete_creation (request ()).result ().value ();
+        const auto *retained = std::get_if<object_creation_already_completed_result_t> (&replay);
+        ASSERT_NE (retained, nullptr);
+        EXPECT_EQ (retained->terminal.state, stored->state);
+        EXPECT_EQ (retained->terminal.terminal_envelope, stored->terminal_envelope);
+        EXPECT_EQ (retained->terminal.expires_at, stored->expires_at);
+        EXPECT_EQ (provider.writes, 1u);
+        for (const int changed : {0, 1, 2}) {
+            auto other = publication.operation;
+            if (changed == 0) other.source_node_rid = node_rid_t::from_string ("another-source");
+            if (changed == 1) ++other.source_node_generation;
+            if (changed == 2) ++other.operation_id.low;
+            EXPECT_FALSE (reopened.read_creation_terminal (other).result ().value ());
+        }
+    }
+
+    creation_terminal_failure_store_t provider;
+    provider_location_repository_t repository{provider};
+    mesh_node_descriptor_t descriptor;
+    object_reserve_request_t reserve_request;
+    object_reservation_fence_t fence;
+    creation_terminal_publication_t publication;
+};
+
+TEST_P (CreationTerminalTest, FailureBetweenFormerWritesCannotSplitPublication)
+{
+    provider.fault = creation_terminal_failure_store_t::fault_t::between_writes;
+    const auto result = repository.complete_creation (request ()).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<object_creation_completed_result_t> (result));
+    expect_published_terminal_and_replay ();
+}
+
+TEST_P (CreationTerminalTest, LostAtomicWriteReplyReplaysStoredTerminal)
+{
+    provider.fault = creation_terminal_failure_store_t::fault_t::after_commit;
+    const auto result = repository.complete_creation (request ()).result ().value ();
+    ASSERT_TRUE (std::holds_alternative<object_creation_completed_result_t> (result));
+    expect_published_terminal_and_replay ();
+}
+
+TEST_P (CreationTerminalTest, ConditionalConflictLeavesReservationAndCapacityUnchanged)
+{
+    provider.fault = creation_terminal_failure_store_t::fault_t::before_commit;
+    const auto result = repository.complete_creation (request ()).result ().value ();
+    EXPECT_TRUE (std::holds_alternative<object_creation_completion_conflict_t> (result));
+    EXPECT_EQ (provider.writes, 1u);
+    EXPECT_FALSE (repository.read_creation_terminal (publication.operation).result ().value ());
+    const auto authority = repository.read_authority (
+      actor_authority_key (reserve_request.key.global_id)).result ().value ();
+    const auto *creating = std::get_if<authority_snapshot_t> (&authority);
+    ASSERT_NE (creating, nullptr);
+    EXPECT_EQ (creating->allocation.state, placement_allocation_state_t::reserved);
+    EXPECT_EQ (creating->payload, bytes ("creating"));
+    EXPECT_EQ (creating->store_version, fence.expected_store_version);
+    EXPECT_EQ (capacity_record (provider, descriptor).at ("actorsPending"), 1);
+    EXPECT_EQ (capacity_record (provider, descriptor).at ("actorsActive"), 0);
+}
+
+INSTANTIATE_TEST_SUITE_P (CreationTerminalStates, CreationTerminalTest,
+  ::testing::Values (creation_terminal_state_t::created, creation_terminal_state_t::rejected,
+                    creation_terminal_state_t::failed));
+
 class post_commit_failure_location_store_t final :
     public location_store_t
 {
