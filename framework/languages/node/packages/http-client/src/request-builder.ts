@@ -217,7 +217,7 @@ export class ZLinkHttpRequestBuilder {
     const raw = await this.submitRaw();
     if (raw.status >= 400) {
       throw new ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind.Unavailable,
+        ZLinkFrameworkErrorKind.InternalFailure,
         `HTTP request failed with status ${raw.status}`,
       );
     }

@@ -419,17 +419,51 @@ test('streaming download delivers chunks to sink', async () => {
   }
 });
 
-test('status >= 400 throws requestFailed', async () => {
+test('typed HTTP status >= 400 is InternalFailure and raw status is preserved', async () => {
+  let requests = 0;
   const server = await startServer((req, res) => {
-    res.statusCode = 404;
-    res.end(JSON.stringify({ error: 'missing' }));
+    requests += 1;
+    res.statusCode = Number(req.url.slice(1));
+    res.end(JSON.stringify({ error: 'status failure' }));
   });
+  const client = ZLinkHttpClient.create(server.baseUrl).retry(3).build();
+  try {
+    for (const status of [400, 404, 500, 599]) {
+      await assert.rejects(
+        () => client.get(`/${status}`).async(),
+        (e) => e instanceof ZLinkFrameworkException
+          && e.kind === ZLinkFrameworkErrorKind.InternalFailure
+          && e.message.includes(String(status)),
+      );
+      const raw = await client.get(`/${status}`).submitRaw();
+      assert.equal(raw.status, status);
+      assert.deepEqual(JSON.parse(raw.body), { error: 'status failure' });
+    }
+    assert.equal(requests, 8);
+    const belowBoundary = await client.get('/399').async();
+    assert.equal(belowBoundary.status, 399);
+    assert.deepEqual(belowBoundary.body, { error: 'status failure' });
+    assert.equal(requests, 9);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('typed HTTP transport connection failure stays Unavailable', async () => {
+  let connections = 0;
+  const listener = net.createServer((socket) => {
+    connections += 1;
+    socket.destroy();
+  });
+  const server = await listen(listener);
   const client = ZLinkHttpClient.create(server.baseUrl).build();
   try {
     await assert.rejects(
-      () => client.get('/players/0').async(),
+      () => client.get('/connection-failure').async(),
       (e) => e instanceof ZLinkFrameworkException && e.kind === ZLinkFrameworkErrorKind.Unavailable,
     );
+    assert.equal(connections, 1);
   } finally {
     await client.close();
     await server.close();
