@@ -189,9 +189,9 @@ spec gap = 코드 동작이 `core/doc/spec`·공개 헤더 주석·공개 계약
 
 | 셀 | Phase 0 | S-1 뒤 | R1 뒤 | … |
 |---|---|---|---|---|
-| ROUTER_ROUTER single | 1.00 | | | |
-| ROUTER_ROUTER_SENDSEND multi | 1.00 | | | |
-| ROUTER_ROUTER_REQREP multi | 1.00 | | | |
+| ROUTER_ROUTER single | 1.00 (744.4 Kmsg/s) | | | |
+| ROUTER_ROUTER_SENDSEND multi | 1.00 (111.5 Kops/s) | | | |
+| ROUTER_ROUTER_REQREP multi | 1.00 (73.0 Kops/s) | | | |
 
 ### 7.3 hotpath_gate
 
@@ -205,10 +205,24 @@ spec gap = 코드 동작이 `core/doc/spec`·공개 헤더 주석·공개 계약
 
 ### 7.4 perf/c 스크린 셀 (1024 B tcp, Phase 0 기준 대비 비율; Phase 2G 시작·Phase 4 종료 시 전 size로 확장)
 
-| 셀 | Phase 0 | 2S 뒤 | 2G 뒤 | Phase 4 |
-|---|---|---|---|---|
-| single PAIR / DD / DR / RR / PUBSUB / DR_REQREP / RR_REQREP | 1.00 | | | |
-| multi DD / DR_SENDSEND / RR_SENDSEND / DR_REQREP / RR_REQREP / PUBSUB / STREAM | 1.00 | | | |
+Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_20260906_220210_phase0-screen.txt` / `perf_c_multi_linux_20260906_220258_phase0-screen.txt`):
+
+| 셀 | 처리량 | mean latency | 2S 뒤 | 2G 뒤 | Phase 4 |
+|---|---|---|---|---|---|
+| single PAIR | 890.7 Kmsg/s | 0.027 ms | | | |
+| single PUBSUB | 646.0 | 0.047 | | | |
+| single DEALER_DEALER | 787.4 | 0.048 | | | |
+| single DEALER_ROUTER | 767.6 | 0.049 | | | |
+| single ROUTER_ROUTER | 744.4 | 0.048 | | | |
+| single DR_REQREP | 418.7 Kops/s | 5.44 | | | |
+| single RR_REQREP | 396.8 | 17.62 | | | |
+| multi DEALER_DEALER | 561.4 Kmsg/s | 54.6 | | | |
+| multi DR_SENDSEND | 166.6 Kops/s | 1.18 | | | |
+| multi RR_SENDSEND | 111.5 | 1.30 | | | |
+| multi DR_REQREP | 95.2 | 1.68 | | | |
+| multi RR_REQREP | 73.0 | 1.32 | | | |
+| multi PUBSUB | 541.5 Kmsg/s | 1459 | | | |
+| multi STREAM (CCU 100) | 124.2 Kops/s | 0.40 | | | |
 
 ### 7.5 D(spec gap) 후보 — 사용자 결정 대기
 
