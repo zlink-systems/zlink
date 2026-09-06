@@ -1653,3 +1653,6 @@ S-5(opus, `core-rf-S-5-summary.md`, diff 0): wait guard/컨텍스트는 스택 �
 
 ## D-B151 (2026-09-07 03:20, 머신 B) perf/c multi 2.2× 의문 종결 — 부하 중 측정 불가, Phase 2G 경계에서 조용한 재기준
 A/B job(old `6f64e76b51` vs new `00261169a1`, flock, pair 3회, load 3.6~10.3): pair별 new/old SENDSEND 0.61 / 1.26 / 0.46, REQREP 0.69 / 1.29 / 0.96 — 편차가 신호보다 큼. 순서 효과 아님(D-B144 재측정 job). 결론: perf/c multi(CCU 100, 프로세스 2개)는 부하 민감도가 with_stream보다 훨씬 커서 job이 도는 동안은 판정에 쓰지 않는다. 규칙: (1) Phase 2S 동안 채택 판정은 **hotpath 5셀(결정적) + with_stream 같은 run의 zlink/asio 비율**로 하고 perf/c 3셀은 기록만; (2) Phase 2S 종료 후 job이 하나도 없을 때(load < 1) perf/c 스크린 14셀을 runs 3으로 **재기준**하고 §7.4의 Phase 0 값을 그것으로 대체(Phase 0 multi 값은 S-B 분석 job과 동시 측정이라 신뢰 낮음); (3) 이후 Phase 2G·3·4의 perf/c 판정은 항상 load < 1에서만. 타임스탬프 정정: D-B148~D-B150의 시각은 실제 02:50~03:10.
+
+## D-B152 (2026-09-07 03:35, 머신 B) S-3 기각 — handler op inline 블록 1→2는 측정 효과 0
+게이트 s3(`gate-s3-summary.md`): 테스트 전부 green(간헐 test 20/20 전후 동일), **hotpath stream_tcp 1.000**(다른 4셀 0.98~0.99는 잡음). S-3가 지목한 `operator new` 1.026/msg가 사라졌다면 ≈ −130 Ir/msg(−1 %)가 보여야 하는데 변화 0 → 블록 2개로는 arm-inside-handler 겹침이 해소되지 않거나 malloc이 이미 tcache hit으로 싼 것. 연결당 +1 KiB 메모리를 근거 없이 늘리지 않는다. main 작업 트리에서 patch 제거. 후속: Phase 3 R2(engine) 인벤토리에서 `start_async_read`의 op 재사용 구조를 본다(측정 먼저). S-A §4#5 행은 D-B148대로 오귀속으로 정정.
