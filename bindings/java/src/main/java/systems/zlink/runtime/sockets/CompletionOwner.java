@@ -145,14 +145,10 @@ final class CompletionOwner implements AutoCloseable {
     }
 
     void submitSendBlocking(RoutingId target, List<Message> parts) {
-        withSendSequenceLock(() -> {
-            SubmitAttempt attempt = submitPartsAttempt(target, parts,
-                SendFlags.NONE.value(), 0, MemorySegment.NULL, false, false,
-                0L);
-            requireSuccess(attempt);
-            closeParts(parts);
-            return null;
-        });
+        SubmitAttempt attempt = submitPartsAttempt(target, parts,
+            SendFlags.NONE.value(), 0, MemorySegment.NULL, false, false, 0L);
+        requireSuccess(attempt);
+        closeParts(parts);
     }
 
     CompletionStage<List<Message>> submitRequest(RoutingId target,
@@ -246,26 +242,24 @@ final class CompletionOwner implements AutoCloseable {
     }
 
     void submitReply(RoutingId target, long token, List<Message> parts) {
-        withSendSequenceLock(() -> {
-            SubmitAttempt attempt = submitPartsAttempt(target, parts,
-                SendFlags.NONE.value(), 0, MemorySegment.NULL, false, false,
-                token);
-            requireSuccess(attempt);
-            closeParts(parts);
-            return null;
-        });
+        SubmitAttempt attempt = submitPartsAttempt(target, parts,
+            SendFlags.NONE.value(), 0, MemorySegment.NULL, false, false, token);
+        requireSuccess(attempt);
+        closeParts(parts);
     }
 
-    <T> T withSendSequenceLock(NativeSendAction<T> action) {
+    <T> T withNativeCall(NativeSendAction<T> action) {
         Objects.requireNonNull(action, "action");
-        drainLock.lock();
+        // Shared lifetime protection permits concurrent submits and drains.
+        ReentrantReadWriteLock.ReadLock read = nativeCallGate.readLock();
+        read.lock();
         try {
             if (closed) {
                 throw new IllegalStateException("socket is closed");
             }
             return action.run();
         } finally {
-            drainLock.unlock();
+            read.unlock();
         }
     }
 
@@ -321,17 +315,8 @@ final class CompletionOwner implements AutoCloseable {
             RoutingId target, List<Message> originals, int flags,
             int timeoutMs, MemorySegment userContext, boolean completion,
             boolean request, long replyToken) {
-        ReentrantReadWriteLock.ReadLock read = nativeCallGate.readLock();
-        read.lock();
-        try {
-            if (closed) {
-                throw new IllegalStateException("socket is closed");
-            }
-            return submitPartsAttemptLocked(target, originals, flags,
-                timeoutMs, userContext, completion, request, replyToken);
-        } finally {
-            read.unlock();
-        }
+        return withNativeCall(() -> submitPartsAttemptLocked(target, originals,
+            flags, timeoutMs, userContext, completion, request, replyToken));
     }
 
     private SubmitAttempt submitPartsAttemptLocked(

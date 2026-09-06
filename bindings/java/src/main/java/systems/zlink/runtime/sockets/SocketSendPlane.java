@@ -42,7 +42,7 @@ final class SocketSendPlane {
             requirePartSuccess(submitTrackedNoWaitPart(routingId, submitter,
                 message, Native.PART_FINAL));
         } else {
-            socket.completionOwner().withSendSequenceLock(() -> {
+            socket.completionOwner().withNativeCall(() -> {
                 submitBlockingPart(submitter, message, Native.PART_FINAL);
                 return null;
             });
@@ -81,7 +81,7 @@ final class SocketSendPlane {
         PartAttempt attempt = isDontWait(flags)
             ? submitTrackedNoWaitPart(target, submitter, part,
                 Native.PART_FINAL)
-            : socket.completionOwner().withSendSequenceLock(() ->
+            : socket.completionOwner().withNativeCall(() ->
                 submitPartAttempt(submitter, part, Native.PART_FINAL));
         requirePartSuccess(attempt);
     }
@@ -125,7 +125,7 @@ final class SocketSendPlane {
                     tracked.errno()));
             } else {
                 PartAttempt attempt = socket.completionOwner()
-                    .withSendSequenceLock(() -> {
+                    .withNativeCall(() -> {
                         int result = Native.sendPartRid(socket.handle(),
                             nativeTarget, nativeMsg, flag.getValue(),
                             Native.PART_FINAL);
@@ -178,7 +178,7 @@ final class SocketSendPlane {
             requirePartSuccess(submitTrackedNoWaitPart(null, submitter,
                 message, Native.PART_FINAL));
         } else {
-            socket.completionOwner().withSendSequenceLock(() -> {
+            socket.completionOwner().withNativeCall(() -> {
                 submitBlockingPart(submitter, message, Native.PART_FINAL);
                 return null;
             });
@@ -215,7 +215,7 @@ final class SocketSendPlane {
             requirePartSuccess(submitNoWaitPartsAttempt(routingId, submitter,
                 parts));
         } else {
-            socket.completionOwner().withSendSequenceLock(() -> {
+            socket.completionOwner().withNativeCall(() -> {
                 submitBlockingParts(submitter, parts);
                 return null;
             });
@@ -344,7 +344,7 @@ final class SocketSendPlane {
             (flags.getValue() & SendFlag.DONTWAIT.getValue()) != 0;
         PartAttempt attempt = explicitNonBlocking
             ? submitTrackedNoWaitPart(target, submitter, part, partFlag)
-            : socket.completionOwner().withSendSequenceLock(() ->
+            : socket.completionOwner().withNativeCall(() ->
                 submitPartAttempt(submitter, part, partFlag));
         if (attempt.result() == SubmitResult.OK.value()) {
             return true;
