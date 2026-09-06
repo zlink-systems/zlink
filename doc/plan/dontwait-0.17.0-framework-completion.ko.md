@@ -1,0 +1,8 @@
+
+### I. 스펙 심층 리뷰 반영·간헐 실패 근본 수정·최종 gate (2026-09-06 11:00~22:40, 감독자 A 단독; 사용자 지시 "간헐까지 이번에 다 수정", "인터페이스 기반 테스트")
+- [x] 스펙 리뷰 R1~R8 redline 전부 적용(D-101~D-127, `spec-changes-2026-09-06.ko.md` §1~§9). 옛 perf 정책 트리 삭제(D-128). Core 테스트 인터페이스 기반 재편 — Release+LTO 빌드 250 s → 71 s(D-133).
+- [x] 리뷰가 드러낸 spec-impl drift 수정: bindings 6언어 R3(cpp/java/node/dotnet/python/rust/go), framework java R8·R5, node R5·R8, dotnet R7, ClientServer server-only readiness 4언어(dotnet/node/cpp/java).
+- [x] Core 결함 5건: D-118(READY 뒤 첫 DATA WRITABLE), D-134(OPT_TYPE 공개 enum), D-137(PEER_WEIGHT_CHANGED 누락), D-138×2(queued bind를 지나친 disconnect, STREAM 조기 READY), HWM blocked_ratio 이중 계수. 사용자 Core 커밋 `973ebe30d5`(STREAM 단일 part) 통합, hotpath `pair_inproc` 재기준(D-135).
+- [x] 간헐 실패 근본 수정 12건: java ReadyWait 시계 주입, node M6A 39·spot timer 86·RouteMesh peer fixture retry·ZoneWorld preview 누수(D-112), cpp executor owner·종료 술어(D-131)·ZoneWorld G4 deadline, dotnet MeshNode admit(D-132)·session shutdown blocking send(D-130), java M6A fixture·relocation PREPARE replay, Core flow_state_paired·disconnect-progress, java DEALER completion 소유권(D-141), node E2E probe 이탈.
+- [x] gate 스크립트 저장소 편입 `scripts/gate/`(rebuild-dev, bindings-gate, framework-gate, cross-language-e2e). 유지보수성 항목은 `0.18.0-candidates.ko.md` "유지보수성".
+- [x] **§I 마감(2026-09-06 22:4x)**: HEAD `3beab147a6`, Core `602861c38b0012a5…`(rebuild15). Core unit 57/integration 128/regression 26 + hotpath 4/4; bindings 8종 green; framework cpp 7·java 7+kotlin 7·node 7+npm test·dotnet 7+ZoneWorld×2+SampleRegression+unit 전부 green; cross-language E2E cpp all-stage 32/32·node smoke·java-cross green. 잔여 red 없음. 후속은 0.18.0 후보 표(perf phase 2, ZLinkJavaRawServicePort, 언어 한정 표면, 유지보수성) 참조.

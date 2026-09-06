@@ -85,3 +85,10 @@
 - **HTTP client 의존 방향(F-R8-5)**: HTTP 12는 "HTTP client → framework 계약", 실행 문서 05는 "framework → HTTP client"로 역방향이었다. HTTP scope §1.3이 소유. ".NET Contracts assembly 분리"를 모든 언어의 binary 경계로 일반화하지 않음(cpp target·java core project·node package는 Framework를 참조).
 - **선언 정정**: NestJS `configureInboundDispatch(): ZLinkInboundDispatchOptions` 누락 복원(F-R8-6), Kotlin generated `onCreateActor` 반환형 `CompletionStage<ZLinkActorCreateResponse>`(F-R8-7).
 - **미적용(0.18.0, D-114)**: HTTP Yield 제거, cpp HTTP blocking fetch·deadline, HTTP one-way 완료 경계, fixed RID, cpp raw timer event, cpp Session bind 반환형·local create 문서 누락, node HTTP `InternalFailure`.
+
+## 9. 오후 Core/binding 계약 정정 (D-129, D-134, D-135, D-139)
+- **STREAM 단일 part(D-129, 사용자 커밋)**: STREAM 송신은 `FINAL` 하나, `MORE`는 `NOT_SUPPORTED`+`ENOTSUP`; RAW 수신 record는 단일 part. socket README·08-stream·02-raw·02-message 개정. binding/framework에 MORE 사용 없음(gate로 확인).
+- **`ZLINK_OPT_TYPE`(D-134)**: 반환값은 공개 `zlink_socket_type_t`(0x1001…)다. 내부 enum 노출은 결함. 옵션 표 주석 명시 + 공개 C 회귀 9/9.
+- **hotpath reference(D-135)**: `pair_inproc` 2681.96 → 2505.36 (STREAM 정리 커밋의 −6.6% 개선 반영).
+- **명시적 제거의 완료표 적용(D-139)**: `zlink_disconnect_rid` 뒤 accepted REQUEST는 `ZLINK_REQUEST_NOT_FOUND`로 즉시 완료(완료표 그대로). 옛 Core는 D-138 이전에 늦게 전달했고 C 테스트가 그 위에 "다른 completion 없음"을 단언하고 있었음 — 테스트 정정.
+- **테스트 경계 규칙(D-133)**: `core/tests/README.md` "Interface Boundary" + CONTRIBUTING(ko/en) §5 — integration/contract/e2e = 공개 C API + shared `libzlink`, 내부 검사 = unittest(non-LTO `test-core`).
