@@ -1,0 +1,17 @@
+# Job (fix, model astra): node contract `test/contract/stream-actor-bind-replay.test.js:109` "STREAM actor bind: route absent for the whole deadline is Unavailable with no ingress" fails intermittently at `:95` `every attempt uses the whole remaining original deadline` (`Math.abs(attempt.at + attempt.timeoutMs - deadline) <= 1`) — 1/2 alone, 1/1 in full `npm test` on gate13, passed on gate10–12. Root-cause: is each replay attempt's timeout computed from the original deadline at submit time (spec: whole remaining deadline per attempt), or does the runtime recompute/round somewhere so the attempt's `at + timeoutMs` drifts from the deadline by more than 1 ms (monotonic conversion `Math.ceil` at the binding boundary from D-095 `9981c9fd6e`? an intermediate await between deadline computation and submit?), or is the assertion's 1 ms tolerance itself not what the contract says?
+
+You are a codex sub-agent under a Claude supervisor. Read `AGENTS.md` §3/§4, `framework/AGENTS.md`, `decisions.ko.md` D-095/D-093 and the sender replay clause
+`03-spot-actor/04-actor-model.ko.md` §5 (~:662-679: same OperationId, whole remaining deadline per attempt, exhaustion kind by cause), and the node durable/replay owner
+(`packages/framework/src/runtime/foundation/service-stateful-runtime.ts` STREAM bind replay, the D-095 changes in `fix-node-monotonic-durations-3-summary.md`). Never modify
+`core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages; do not commit. Env: `framework/languages/node`, `TMPDIR=/dev/shm/zlink-tmp-node`,
+`unset ZLINK_LIBRARY_PATH`, `flock -w7200 /tmp/zlink-node-gate.lock`. Installed Core 083588b4… (rebuild13).
+
+## What to do
+1. Reproduce the file ×20 (and ×10 with a parallel CPU busy-loop); record for each failure the attempt's `at`, `timeoutMs`, `deadline` and the drift.
+2. Root-cause at the owner: the replay owner must compute each attempt's timeout as `deadline − now` at the moment of submit (one deadline owner, monotonic) with the binding's
+   integer-ms conversion applied once; if `Math.ceil`/an await inserts ≥1 ms of drift by design, decide whether the runtime is wrong (fix) or the test asserts a property the
+   contract does not promise (then adjust the assertion to the contract — e.g. `attempt.at + attempt.timeoutMs >= deadline` and `< deadline + ceil-granularity` — and explain).
+3. Verify: file ×20 clean (with and without load), `npm test` once (0 fail).
+
+## Deliverable
+`doc/plan/c016-worklog/fix-node-stream-actor-bind-replay-deadline-summary.md` (drift table, cause file:line, fix, four lines, rule count, results, BLOCKERS).
