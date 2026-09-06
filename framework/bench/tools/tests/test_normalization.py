@@ -218,8 +218,53 @@ class ExclusionTest(unittest.TestCase):
         judgement = self._judgement(saturated, baseline)
         self.assertEqual(judgement.status, "unsupported")
         self.assertIn("client-saturated", judgement.reason)
-        self.assertIn("0.98 of 1 declared core", judgement.reason)
+        self.assertIn("0.98 of 1 declared client_cores", judgement.reason)
         self.assertIn("spec 5.1", judgement.reason)
+
+    def test_a_declared_metric_other_than_cores_decides_saturation(self):
+        """FB-023: the harness names its instrument; the aggregator does not assume.
+
+        The Node shape. Process cores read 1.35 because the binding's native I/O
+        threads are counted, but those threads run no user code, so cores against
+        a ceiling of 1 would mark this cell no matter what the JS thread was
+        doing. The declared instrument is event loop utilization, and here it is
+        0.42 -- well below the ceiling -- so the cell is NOT saturated and stays
+        eligible to decide a ratio.
+        """
+        node = [
+            cell(
+                "zlink-node", "request-window", 1024, f"r{i}", 100.0,
+                client_cpu_percent=6.8, client_cores=1.35,
+                client_parallelism_ceiling=1.0,
+                client_saturation_metric="event_loop_utilization",
+                event_loop_utilization=0.42,
+            )
+            for i in range(3)
+        ]
+        baseline = [cell("zlink-c", "request-window", 1024, f"c{i}", 110.0) for i in range(3)]
+        rows = build_rows(run_set_of(*node, *baseline))
+        row = rows[CellKey("zlink-node", "request-window", 1024)]
+        self.assertEqual(row.saturation_metric, "event_loop_utilization")
+        self.assertFalse(row.client_saturated)
+        self.assertEqual(row.saturation_text(), "no")
+        judgement = self._judgement(node, baseline)
+        self.assertEqual(judgement.status, "published")
+
+    def test_a_saturated_event_loop_blocks_a_ratio(self):
+        """FB-023: the same instrument at 0.97 does exclude the cell."""
+        node = [
+            cell(
+                "zlink-node", "request-window", 1024, f"r{i}", 100.0,
+                client_cores=1.35, client_parallelism_ceiling=1.0,
+                client_saturation_metric="event_loop_utilization",
+                event_loop_utilization=0.97,
+            )
+            for i in range(3)
+        ]
+        baseline = [cell("zlink-c", "request-window", 1024, f"c{i}", 110.0) for i in range(3)]
+        judgement = self._judgement(node, baseline)
+        self.assertEqual(judgement.status, "unsupported")
+        self.assertIn("0.97 of 1 declared event_loop_utilization", judgement.reason)
 
     def test_a_multi_core_client_below_its_ceiling_is_not_saturated(self):
         """The gated2 shape: 7.38 cores against a declared ceiling of 20."""

@@ -34,6 +34,7 @@ _MEDIAN_FIELDS = (
     "server_cpu_percent",
     "server_memory_mb",
     "client_cores",
+    "event_loop_utilization",
     "drain_ms",
 )
 
@@ -58,6 +59,9 @@ class Row:
     #: spec 5.1: the ceiling the client harness declared. Constant within a run,
     #: so it is carried rather than averaged.
     client_parallelism_ceiling: float | None = None
+    #: FB-023: the instrument the harness declared for this row. Rows that name
+    #: none are read as ``client_cores``.
+    client_saturation_metric: str | None = None
 
     peak_in_flight: int | None = None
     peak_in_flight_min: int | None = None
@@ -86,15 +90,30 @@ class Row:
         return throughput * latency / 1000.0
 
     @property
+    def saturation_metric(self) -> str:
+        """FB-023: the declared instrument, defaulting to cores for old results."""
+        return self.client_saturation_metric or "client_cores"
+
+    @property
+    def saturation_value(self) -> float | None:
+        return self.values.get(self.saturation_metric)
+
+    @property
     def saturation_evaluated(self) -> bool:
-        return self.values.get("client_cores") is not None and bool(self.client_parallelism_ceiling)
+        return self.saturation_value is not None and bool(self.client_parallelism_ceiling)
 
     @property
     def client_saturated(self) -> bool:
-        """spec 5.1 on the row medians, against the declared ceiling."""
+        """spec 5.1 on the row medians, against the declared ceiling.
+
+        FB-023: which number this compares is chosen by the harness, not assumed
+        here. Comparing process cores against Node's ceiling would mark every
+        Node cell, because the binding's I/O threads are counted but run no user
+        code.
+        """
         if not self.saturation_evaluated:
             return False
-        return self.values["client_cores"] >= CLIENT_SATURATION_FRACTION * self.client_parallelism_ceiling
+        return self.saturation_value >= CLIENT_SATURATION_FRACTION * self.client_parallelism_ceiling
 
     def saturation_text(self) -> str:
         if not self.saturation_evaluated:
@@ -154,6 +173,13 @@ def build_row(run_set: RunSet, key: CellKey, min_runs_for_g5: int = 3) -> Row | 
     row.abandoned = max(abandoned) if abandoned else None
     ceilings = [c.client_parallelism_ceiling for c in cells if c.client_parallelism_ceiling]
     row.client_parallelism_ceiling = max(ceilings) if ceilings else None
+    metrics = {c.client_saturation_metric for c in cells if c.client_saturation_metric}
+    if len(metrics) > 1:
+        # Runs of one cell that declare different instruments cannot be compared
+        # against one ceiling, so the row declares none and reads as not judged.
+        row.client_saturation_metric = None
+    elif metrics:
+        row.client_saturation_metric = metrics.pop()
     row.drain_bound_hit = any(c.drain_bound_hit for c in cells)
     counted = [c.send_throughput_server_counted for c in cells]
     counted = [c for c in counted if c is not None]
@@ -210,8 +236,9 @@ def _block_reason(role: str, row: Row | None, key: CellKey) -> str | None:
         )
     if row.client_saturated:
         return (
-            f"{role} {key} is client-saturated at {row.values['client_cores']:.2f} of "
-            f"{row.client_parallelism_ceiling:g} declared core(s) (spec 5.1, G6)"
+            f"{role} {key} is client-saturated at {row.saturation_value:.2f} of "
+            f"{row.client_parallelism_ceiling:g} declared {row.saturation_metric} "
+            f"(spec 5.1, G6)"
         )
     if row.send_server_counted is False:
         return f"{role} {key} throughput is client-counted, not server-counted (G3, FB-014)"

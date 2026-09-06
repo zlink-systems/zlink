@@ -451,6 +451,7 @@ async function collectMetadata(options, contaminated) {
     zlinkBindingVersion: readZlinkBindingVersion(),
     grpcServerConfiguration: grpcInfo.serverConfiguration || '@grpc/grpc-js Server, default options',
     logical_cores: core.LOGICAL_CORES,
+    client_saturation_metric: core.CLIENT_SATURATION_METRIC,
     client_parallelism_ceiling: core.CLIENT_PARALLELISM_CEILING,
     cpu: os.cpus()[0] ? os.cpus()[0].model : 'unknown',
     kernel: os.release(),

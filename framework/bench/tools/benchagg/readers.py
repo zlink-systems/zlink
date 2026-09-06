@@ -354,6 +354,8 @@ def cells_from_cell_json(payload: dict[str, Any], run: str, source: str = "") ->
             "server_memory_mb",
             "client_cores",
             "client_parallelism_ceiling",
+            "client_saturation_metric",
+            "event_loop_utilization",
             "peak_in_flight",
             "request_window",
             "abandoned",
@@ -384,6 +386,8 @@ _RESULTS_JSON_FIELDS = {
     "contaminationReason": "contamination_reason",
     "clientCores": "client_cores",
     "clientParallelismCeiling": "client_parallelism_ceiling",
+    "clientSaturationMetric": "client_saturation_metric",
+    "eventLoopUtilization": "event_loop_utilization",
 }
 
 

@@ -130,8 +130,13 @@ one-way send. Under this condition the difference was N times.
 - The default payload size is `1024,4096` bytes.
 - The default `request_window` is `100`.
 - The default send concurrency is `8`.
-- gRPC and ZLink framework use the same protobuf DTO. The ZLink raw binding sends the same bytes
-  payload without a protobuf envelope.
+- gRPC and ZLink framework use the same protobuf DTO. The ZLink raw binding skips the framework but
+  puts the same shape on the wire: two parts, an envelope header part and a protobuf-encoded
+  `BenchPayload` part, with the 29-byte measurement header inside that protobuf `bytes body`. This
+  shape is not a choice; it is a precondition of the judgement. §7.2 formula 1 divides
+  `zlink-<lang>` by `zlink-c`, so two rows with different wire shapes would divide two different
+  experiments (FB-024). The reference implementation is `bindings/c/bench/with_grpc`,
+  `bench_zlink_client.cpp:14-16` and `:130-140`.
 - ZLink uses a manual endpoint connection with no location store.
 - Both ZLink rows use the ROUTER↔ROUTER configuration in §1.3.
 - The ZLink raw binding's request echo endpoint and command receive endpoint are separated. In the
@@ -230,16 +235,31 @@ taken against all of the machine's logical cores. On a machine with 20 logical c
 single-threaded client that fully occupies one core still reads 5%, and no fixed percentage
 threshold can catch that saturation.
 
-Saturation is judged against **the client parallelism ceiling that each language's harness
-declares**. A cell whose cores used reach 0.95 of the declared ceiling is marked as a saturated cell
-and is excluded from throughput ranking. In that cell the limit was set by the client runtime, not
-by the transport. A saturated cell's throughput is recorded only as "the value observed with this
-client configuration."
+Saturation is judged against **the instrument and the ceiling that each language's harness
+declares**. A cell whose declared instrument reaches 0.95 of the declared ceiling is marked as a
+saturated cell and is excluded from throughput ranking. In that cell the limit was set by the client
+runtime, not by the transport. A saturated cell's throughput is recorded only as "the value observed
+with this client configuration."
 
-The declared ceiling differs per language, so it is recorded in the cell record and in the report.
-The Node client runs on a single thread, so it declares a ceiling of `1`. A result that declares no
-ceiling cannot have its saturation judged, and the fact that it could not be judged is recorded in
-the result.
+**A harness declares what it measures, not only the ceiling** (FB-023), because the right instrument
+differs per language. The purpose of the rule is to catch "the client runtime, not the transport, set
+this limit", so the instrument has to measure **the execution resource on which user code runs**.
+
+| Language | Declared instrument | Ceiling |
+|----------|---------------------|---------|
+| `node` | `performance.eventLoopUtilization()` from `perf_hooks` | `1.0` |
+| `dotnet`, `java`, `kotlin`, `cpp` | process cores used | the parallelism the harness declares |
+
+Measurement shows why process cores are the wrong instrument for Node. The ZLink binding runs native
+I/O threads, so process CPU divided by elapsed time reads **1.3-1.4 cores** on that client, and those
+threads run no user code. Against a ceiling of 1 every cell would be marked saturated even with an
+idle JS thread, and the mark would carry no information. What actually limits this client is the one
+JS thread on which user code runs, and event loop utilization measures exactly that.
+
+The declared instrument and ceiling differ per language, so **both** are recorded in the cell record
+and in the report. A result that declares no instrument or no ceiling cannot have its saturation
+judged, and the fact that it could not be judged is recorded in the result. An older result that
+declares no instrument is read as having declared process cores used.
 
 ## 6. The Measurement Payload Header
 

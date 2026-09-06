@@ -98,6 +98,19 @@ class Cell:
     client_cores: float | None = None
     client_parallelism_ceiling: float | None = None
 
+    #: FB-023: the saturation instrument this harness DECLARES, and its reading.
+    #: Process cores are the right instrument only where user code runs on the
+    #: threads being counted. In Node it does not: the binding's native I/O
+    #: threads push process CPU to 1.3-1.4 cores while the JS thread -- the thing
+    #: that actually limits the client -- may be far from its limit, so counting
+    #: cores against a ceiling of 1 marks every cell and the mark stops carrying
+    #: information. Node therefore declares ``event_loop_utilization`` (ceiling
+    #: 1.0); the core-counting languages declare ``client_cores``. A cell that
+    #: names no metric is read as ``client_cores``, which is what every result
+    #: predating this decision meant.
+    client_saturation_metric: str | None = None
+    event_loop_utilization: float | None = None
+
     # Diagnostics. FB-017 (depth), FB-008 (drain), spec 5 / G3 (server-counted
     # send throughput). ``None`` means the runner did not report the value, which
     # is not the same as zero and is never rendered as one.
@@ -131,9 +144,19 @@ class Cell:
         return self.throughput_per_second * self.latency_mean_ms / 1000.0
 
     @property
+    def saturation_metric(self) -> str:
+        """FB-023: the declared instrument, defaulting to cores for old results."""
+        return self.client_saturation_metric or "client_cores"
+
+    @property
+    def saturation_value(self) -> float | None:
+        """The reading of the declared instrument, or ``None`` if absent."""
+        return getattr(self, self.saturation_metric, None)
+
+    @property
     def saturation_evaluated(self) -> bool:
         """Whether spec 5.1 could be applied at all to this cell."""
-        return self.client_cores is not None and bool(self.client_parallelism_ceiling)
+        return self.saturation_value is not None and bool(self.client_parallelism_ceiling)
 
     @property
     def client_saturated(self) -> bool:
@@ -147,7 +170,7 @@ class Cell:
         """
         if not self.saturation_evaluated:
             return False
-        return self.client_cores >= CLIENT_SATURATION_FRACTION * self.client_parallelism_ceiling
+        return self.saturation_value >= CLIENT_SATURATION_FRACTION * self.client_parallelism_ceiling
 
     @property
     def send_throughput_server_counted(self) -> bool | None:

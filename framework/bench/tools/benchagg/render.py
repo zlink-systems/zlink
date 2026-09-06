@@ -130,7 +130,7 @@ def render_median_table(rows: dict[CellKey, Row], payload_sizes, implementations
         "| Lat.P99(ms) | Client CPU% | Client cores | Client MB | Server CPU% | Server MB "
         "| drain ms |"
     )
-    lines = [header, "|" + "---|" * 13]
+    lines = [header, "|" + "---|" * 15]
     for key in ordered_keys(rows, payload_sizes, implementations):
         row = rows[key]
         value = row.values
@@ -160,10 +160,10 @@ def render_diagnostics_table(rows: dict[CellKey, Row], payload_sizes, implementa
     """
     header = (
         "| Pattern | Size | Implementation | peak_in_flight | window | abandoned "
-        "| depth (thr x lat) | drain ms | drain bound hit | client cores | declared ceiling "
-        "| saturated | send counted by |"
+        "| depth (thr x lat) | drain ms | drain bound hit | client cores "
+        "| saturation metric | reading | declared ceiling | saturated | send counted by |"
     )
-    lines = [header, "|" + "---|" * 13]
+    lines = [header, "|" + "---|" * 15]
     for key in ordered_keys(rows, payload_sizes, implementations):
         row = rows[key]
         depth = row.in_flight_depth
@@ -182,6 +182,8 @@ def render_diagnostics_table(rows: dict[CellKey, Row], payload_sizes, implementa
             f"| {'—' if drain is None else f'{drain:.0f}'} "
             f"| {'yes' if row.drain_bound_hit else 'no'} "
             f"| {_num(row.values.get('client_cores'), 2)} "
+            f"| {row.saturation_metric} "
+            f"| {_num(row.saturation_value, 3)} "
             f"| {'—' if ceiling is None else f'{ceiling:g}'} "
             f"| {row.saturation_text()} | {counted} |"
         )

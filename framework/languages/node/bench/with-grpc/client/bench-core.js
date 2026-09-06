@@ -7,29 +7,46 @@
 // aggregator reads (FB-021). Nothing here decides a verdict: medians, G5 and the
 // section 7.2 ratios belong to framework/bench/tools, never to a language harness.
 
+const { performance } = require('node:perf_hooks');
 const header = require('../shared/bench-metric-header');
 
 const LOGICAL_CORES = require('node:os').cpus().length;
 
 /**
- * spec section 5.1 / FB-019: saturation is judged against the parallelism ceiling the
- * harness DECLARES, not against a share of every logical core. The node client
- * is one JS thread and never starts a worker, so the ceiling is 1. A cell that
- * reaches 0.95 of it measured the client runtime rather than the transport, and
- * the aggregator drops it from throughput comparisons -- that is the correct
- * outcome for this client, not a defect to engineer around by adding threads,
- * which would measure a different client.
+ * spec section 5.1 / FB-023: a harness declares WHAT IT MEASURES as well as the
+ * ceiling, because the right instrument differs by language.
+ *
+ * Counting process cores is wrong for node. The ZLink binding runs native I/O
+ * threads, so process CPU divided by elapsed time reads 1.3-1.4 "cores" on this
+ * client -- above a ceiling of 1 -- while those threads run no user code at all.
+ * Against that ceiling every cell would be marked saturated and the mark would
+ * carry no information (FB-019 declared the ceiling correctly and the instrument
+ * incorrectly).
+ *
+ * What actually limits this client is the one JS thread where user code runs, and
+ * `performance.eventLoopUtilization()` measures exactly that: the fraction of
+ * wall time the loop spent in callbacks rather than idle. Its ceiling is 1.0 and
+ * a cell at or above 0.95 measured the client runtime, not the transport, so the
+ * aggregator drops it from throughput comparisons. That is the correct outcome
+ * for a single-threaded client -- not a defect to engineer around by adding
+ * worker threads, which would measure a different client.
+ *
+ * `client_cores` is still reported beside it as an observation. It is not the
+ * declared instrument and does not decide saturation.
  */
-const CLIENT_PARALLELISM_CEILING = 1;
+const CLIENT_SATURATION_METRIC = 'event_loop_utilization';
+const CLIENT_PARALLELISM_CEILING = 1.0;
 
 class ResourceSample {
   constructor() {
     this.cpuStart = process.cpuUsage();
+    this.eluStart = performance.eventLoopUtilization();
     this.startNs = header.nowNs();
   }
 
   finish() {
     const cpu = process.cpuUsage(this.cpuStart);
+    const elu = performance.eventLoopUtilization(this.eluStart);
     const elapsedNs = header.nowNs() - this.startNs;
     const elapsedSeconds = Number(elapsedNs) / 1e9;
     const cpuSeconds = (cpu.user + cpu.system) / 1e6;
@@ -39,6 +56,8 @@ class ResourceSample {
       elapsedSeconds,
       cores,
       cpuPercent: (cores / LOGICAL_CORES) * 100,
+      // FB-023: the declared saturation instrument for this language.
+      eventLoopUtilization: elu.utilization,
       memoryMb: process.memoryUsage().rss / 1024 / 1024
     };
   }
@@ -266,6 +285,8 @@ function finishRequestCell({
     server_cpu_percent: (server.cpuSeconds / usage.elapsedSeconds / LOGICAL_CORES) * 100,
     server_memory_mb: server.workingSetMb,
     client_cores: usage.cores,
+    client_saturation_metric: CLIENT_SATURATION_METRIC,
+    event_loop_utilization: usage.eventLoopUtilization,
     client_parallelism_ceiling: CLIENT_PARALLELISM_CEILING,
     peak_in_flight: peakInFlight,
     request_window: options.requestWindow,
@@ -343,6 +364,8 @@ async function runSendSaturation({ payloadSize, options, statsUrl, operation }) 
     server_cpu_percent: (boundary.cpuSeconds / usage.elapsedSeconds / LOGICAL_CORES) * 100,
     server_memory_mb: boundary.workingSetMb,
     client_cores: usage.cores,
+    client_saturation_metric: CLIENT_SATURATION_METRIC,
+    event_loop_utilization: usage.eventLoopUtilization,
     client_parallelism_ceiling: CLIENT_PARALLELISM_CEILING,
     peak_in_flight: peakInFlight,
     request_window: options.sendConcurrency,
@@ -361,6 +384,7 @@ async function runSendSaturation({ payloadSize, options, statsUrl, operation }) 
 
 module.exports = {
   LOGICAL_CORES,
+  CLIENT_SATURATION_METRIC,
   CLIENT_PARALLELISM_CEILING,
   ResourceSample,
   Latencies,
