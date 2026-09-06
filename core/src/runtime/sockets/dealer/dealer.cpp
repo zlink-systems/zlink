@@ -84,13 +84,9 @@ void zlink::dealer_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
     }
 
     _fq.attach (pipe_);
-    {
-        scoped_fast_lock_t generation_lock (pipe_->transport_sync ());
-        uint32_t initial_weight = 100;
-        (void) recorded_peer_weight_ready_locked (pipe_, &initial_weight);
-        _lb.attach (pipe_, initial_weight);
-        remember_request_route (pipe_, initial_weight);
-    }
+    _lb.attach (pipe_);
+    remember_request_route (pipe_, _lb.weight (pipe_));
+    apply_recorded_peer_weight (pipe_);
     // Paired pipes remain held here and publish from the one pair-ready resync;
     // unpaired network/inproc pipes publish at their normal attach boundary.
     if (local_peer_weight () != 100)
@@ -496,14 +492,6 @@ int zlink::dealer_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)
     notify_send_writable (pipe_);
     emit_peer_weight_changed (pipe_, weight_);
     return 1;
-}
-
-void zlink::dealer_t::initialize_peer_weight (pipe_t *pipe_, uint32_t weight_)
-{
-    if (pipe_ && _lb.contains (pipe_)) {
-        _lb.set_weight (pipe_, weight_);
-        update_request_route_weight (pipe_, weight_);
-    }
 }
 
 void zlink::dealer_t::update_request_route_weight (pipe_t *pipe_,

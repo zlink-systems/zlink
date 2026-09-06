@@ -547,12 +547,10 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             }
         }
     }
-    // Install a cached pre-ready absolute policy while the Application pipe
-    // is still held. This is initial scheduler state, so it is monitor-silent;
-    // later owner commands publish only real dynamic transitions. The helper
-    // takes transport-generation before any derived route lock.
+    // Admission and later WEIGHT commands use the same scheduler transition,
+    // including its monitor event, before the Application write hold is released.
     if (ready_application) {
-        initialize_recorded_peer_weight (ready_application);
+        apply_recorded_peer_weight (ready_application);
         transport_write_released =
           ready_application->release_writes_for_transport_pair ();
     }

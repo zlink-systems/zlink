@@ -249,8 +249,7 @@ bool router_t::emit_transport_pair_ready (pipe_t *pipe_)
 }
 
 bool router_t::identify_peer (pipe_t *pipe_, bool locally_initiated_,
-                              route_adoption_actions_t *actions_,
-                              uint32_t initial_weight_)
+                              route_adoption_actions_t *actions_)
 {
     msg_t msg;
     blob_t routing_id;
@@ -283,8 +282,7 @@ bool router_t::identify_peer (pipe_t *pipe_, bool locally_initiated_,
     }
 
     return adopt_peer_routing_id (pipe_, ZLINK_MOVE (routing_id),
-                                  locally_initiated_, actions_,
-                                  initial_weight_);
+                                  locally_initiated_, actions_);
 }
 
 bool router_t::duplicate_pipe_should_replace (const out_pipe_t &existing_outpipe_,
@@ -324,8 +322,7 @@ bool router_t::duplicate_pipe_should_replace (const out_pipe_t &existing_outpipe
 
 bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
                                       bool locally_initiated_,
-                                      route_adoption_actions_t *actions_,
-                                      uint32_t initial_weight_)
+                                      route_adoption_actions_t *actions_)
 {
     const out_pipe_t *const existing_outpipe = lookup_out_pipe (routing_id_);
     if (existing_outpipe) {
@@ -355,7 +352,7 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
               standby_routing_id);
             add_out_pipe (
               ZLINK_MOVE (standby_routing_id), pipe_,
-              locally_initiated_, initial_weight_);
+              locally_initiated_);
             _standby_pipes.ZLINK_MAP_INSERT_OR_EMPLACE (
               pipe_, ZLINK_MOVE (original_routing_id));
             return true;
@@ -406,8 +403,7 @@ bool router_t::adopt_peer_routing_id (pipe_t *pipe_, blob_t routing_id_,
 
     pipe_->invalidate_router_route_binding ();
     pipe_->set_router_socket_routing_id (routing_id_);
-    add_out_pipe (ZLINK_MOVE (routing_id_), pipe_, locally_initiated_,
-                  initial_weight_);
+    add_out_pipe (ZLINK_MOVE (routing_id_), pipe_, locally_initiated_);
     pipe_->publish_router_route_binding ();
     if (actions_)
         actions_->cache_completion = true;
@@ -481,17 +477,6 @@ int router_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)
     // I/O/owner route-lifecycle fence is held.
     emit_peer_weight_changed (pipe_, weight_, &public_routing_id);
     return 1;
-}
-
-void router_t::initialize_peer_weight (pipe_t *pipe_, uint32_t weight_)
-{
-    if (!pipe_)
-        return;
-    std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
-    const blob_t &routing_id = pipe_->get_routing_id ();
-    out_pipe_t *const out_pipe = lookup_out_pipe (routing_id);
-    if (out_pipe && out_pipe->pipe == pipe_ && out_pipe->weight != weight_)
-        update_out_pipe_weight (out_pipe, weight_);
 }
 
 #ifdef ZLINK_BUILD_TESTS

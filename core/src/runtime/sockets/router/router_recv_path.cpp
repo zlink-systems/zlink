@@ -105,11 +105,9 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
     route_adoption_actions_t adoption_actions;
     {
         scoped_fast_lock_t generation_lock (pipe_->transport_sync ());
-        uint32_t initial_weight = 100;
-        (void) recorded_peer_weight_ready_locked (pipe_, &initial_weight);
         std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
         const bool routing_id_ok = identify_peer (
-          pipe_, locally_initiated_, &adoption_actions, initial_weight);
+          pipe_, locally_initiated_, &adoption_actions);
         if (router_debug::enabled ()) {
             fprintf (stderr, "router xattach_pipe: pipe=%p local=%d routing_id_ok=%d lane=%d pair=%llu/%llu\n",
                      static_cast<void *> (pipe_), locally_initiated_ ? 1 : 0,
@@ -136,6 +134,8 @@ void zlink::router_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
             }
         }
     }
+    if (scheduler_registered)
+        apply_recorded_peer_weight (pipe_);
     finish_route_adoption (pipe_, &adoption_actions);
     if (scheduler_registered) {
         if (local_peer_weight () != 100)
@@ -162,8 +162,6 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
     route_adoption_actions_t adoption_actions;
     {
         scoped_fast_lock_t generation_lock (pipe_->transport_sync ());
-        uint32_t initial_weight = 100;
-        (void) recorded_peer_weight_ready_locked (pipe_, &initial_weight);
         std::lock_guard<std::mutex> route_lifecycle_lock (_out_pipes_sync);
         const std::map<pipe_t *, bool>::iterator it =
           _anonymous_pipes.find (pipe_);
@@ -182,7 +180,7 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
             _fq.activated (pipe_);
         } else {
             const bool routing_id_ok = identify_peer (
-              pipe_, it->second, &adoption_actions, initial_weight);
+              pipe_, it->second, &adoption_actions);
             if (router_debug::enabled ()) {
                 fprintf (stderr, "router xread_activated identify_peer: pipe=%p ok=%d\n",
                          static_cast<void *> (pipe_), routing_id_ok ? 1 : 0);
@@ -195,6 +193,8 @@ void zlink::router_t::xread_activated (pipe_t *pipe_)
             }
         }
     }
+    if (route_adopted)
+        apply_recorded_peer_weight (pipe_);
     finish_route_adoption (pipe_, &adoption_actions);
     if (route_adopted) {
         if (local_peer_weight () != 100)

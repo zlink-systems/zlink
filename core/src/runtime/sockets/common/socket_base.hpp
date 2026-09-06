@@ -943,14 +943,7 @@ class socket_base_t : public own_t,
     virtual int xpeer_command (zlink::msg_t *msg_, zlink::pipe_t *pipe_);
     virtual void xlocal_peer_weight_changed ();
     virtual int apply_peer_weight (zlink::pipe_t *pipe_, uint32_t weight_);
-    virtual void initialize_peer_weight (zlink::pipe_t *pipe_,
-                                         uint32_t weight_);
-    void initialize_recorded_peer_weight (zlink::pipe_t *pipe_);
-    // Caller holds pipe_->transport_sync() until the scheduler publishes the
-    // returned value. This keeps reconnect generation changes ordered before
-    // route/LB visibility without taking route locks in the inverse order.
-    bool recorded_peer_weight_ready_locked (zlink::pipe_t *pipe_,
-                                            uint32_t *weight_out_) const;
+    void apply_recorded_peer_weight (zlink::pipe_t *pipe_);
     virtual uint32_t monitor_ready_count () const;
 
     //  Reclassifies the next queued record on a ready count-1 Application

@@ -110,8 +110,6 @@ class dealer_t : public socket_base_t
       pipe_t **pipe_out_, pipe_message_admission_t *admission_out_,
       pipe_write_observer_fn observer_, void *observer_userdata_);
     int apply_peer_weight (pipe_t *pipe_, uint32_t weight_) ZLINK_OVERRIDE;
-    void initialize_peer_weight (pipe_t *pipe_,
-                                 uint32_t weight_) ZLINK_OVERRIDE;
     void update_request_route_weight (pipe_t *pipe_, uint32_t weight_);
     void remember_request_route (pipe_t *pipe_, uint32_t weight_);
 

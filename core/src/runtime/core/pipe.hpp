@@ -233,9 +233,6 @@ class pipe_t ZLINK_FINAL : public object_t,
     uint64_t get_msgs_read () const;
     uint64_t get_bytes_written () const;
     uint64_t get_bytes_read () const;
-    void record_peer_weight (uint64_t connection_id_, uint32_t weight_);
-    bool record_peer_weight_if_current (uint64_t connection_id_,
-                                        uint32_t weight_);
     bool peer_weight (uint32_t *weight_out_) const;
     uint64_t get_snd_pending_msgs () const;
     uint64_t get_rcv_pending_msgs_approx () const;
