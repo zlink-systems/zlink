@@ -654,6 +654,29 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     }
 
     [Fact]
+    public async Task Force_stop_cancels_the_seal_deadline_before_runtime_teardown()
+    {
+        var probe = new DrainExecutionProbe();
+        var executor = new ZLinkFrameworkDrainExecutor(
+            probe.Operations,
+            new ZLinkLocationOptions
+            {
+                PollingInterval = TimeSpan.FromMilliseconds(1)
+            });
+
+        executor.RequestShutdown(TimeSpan.FromMinutes(1));
+        Assert.True(probe.LastSealCancellationToken.CanBeCanceled);
+        Assert.False(probe.LastSealCancellationToken.IsCancellationRequested);
+
+        await executor.ForceStopAsync(
+            ZLinkDrainForceReason.TeardownFailed,
+            CancellationToken.None);
+
+        Assert.True(probe.LastSealCancellationToken.IsCancellationRequested);
+        Assert.True(probe.ForceRuntimeObservedSealCancellation);
+    }
+
+    [Fact]
     public async Task Relocate_Detaches_Workload_Without_Shutting_Down_Infrastructure()
     {
         var probe = new DrainExecutionProbe();
@@ -1467,6 +1490,95 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         await host.StopAsync();
     }
 
+    [Theory]
+    [InlineData(64)]
+    [InlineData(256)]
+    public async Task Shutdown_seal_rejects_late_stream_sessions_without_serializing_the_shared_lane(
+        int sessionCount)
+    {
+        var port = FindFreeTcpPort();
+        var probe = new ShutdownSealSessionProbe(sessionCount);
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddSingleton(probe);
+        builder.Services.AddZLinkFramework(options =>
+        {
+            options.AddStreamNode("shutdown-seal-stream")
+                .Bind($"tcp://127.0.0.1:{port}")
+                .AddSession<ShutdownSealSession>();
+        });
+        using var host = builder.Build();
+        await host.StartAsync();
+
+        var connectors = Enumerable.Range(0, sessionCount)
+            .Select(_ => CreateDrainConnector(port))
+            .ToArray();
+        var lateConnectors = Enumerable.Range(0, sessionCount)
+            .Select(_ => CreateDrainConnector(port))
+            .ToArray();
+        var release = false;
+        var lateDisposed = false;
+        try
+        {
+            const int connectionBatchSize = 32;
+            for (var offset = 0; offset < connectors.Length; offset += connectionBatchSize)
+            {
+                var batch = connectors
+                    .Skip(offset)
+                    .Take(Math.Min(connectionBatchSize, connectors.Length - offset));
+                await Task.WhenAll(batch.Select(
+                    async connector => await connector.Connect.Async()));
+                for (var index = 0;
+                     index < Math.Min(connectionBatchSize, connectors.Length - offset);
+                     index++)
+                    Assert.True(await probe.Connected.WaitAsync(TimeSpan.FromSeconds(10)));
+            }
+
+            var orderlyDeadline = TimeSpan.FromSeconds(10);
+            var framework = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
+            var started = Stopwatch.GetTimestamp();
+            var shutdown = framework.ShutdownAsync(orderlyDeadline).AsTask();
+            Assert.Equal(ZLinkFrameworkRuntimeState.Draining, framework.Status.State);
+            Assert.False(framework.Status.AcceptingWork);
+
+            await Task.WhenAll(lateConnectors.Select(async connector =>
+            {
+                try
+                {
+                    await connector.Connect.Async();
+                }
+                catch (ZlinkStreamException)
+                {
+                }
+            }));
+            await Task.WhenAll(lateConnectors.Select(
+                connector => connector.DisposeAsync().AsTask()));
+            lateDisposed = true;
+
+            release = true;
+            probe.Release.TrySetResult();
+            var result = await shutdown.WaitAsync(orderlyDeadline);
+            var elapsed = Stopwatch.GetElapsedTime(started);
+
+            Assert.Equal(ZLinkFrameworkTerminationOutcome.Stopped, result.Outcome);
+            Assert.Equal(ZLinkFrameworkTerminationReason.None, result.Reason);
+            Assert.Equal(sessionCount, probe.ConnectedCount);
+            Assert.True(
+                elapsed < orderlyDeadline / 2,
+                $"Shutdown took {elapsed} after the admission seal; "
+                + $"the orderly deadline was {orderlyDeadline}.");
+        }
+        finally
+        {
+            if (!release) probe.Release.TrySetResult();
+            if (!lateDisposed)
+                await Task.WhenAll(lateConnectors.Select(
+                    connector => connector.DisposeAsync().AsTask()));
+            await Task.WhenAll(connectors.Select(
+                connector => connector.DisposeAsync().AsTask()));
+            await host.StopAsync();
+        }
+    }
+
     [Fact]
     public async Task New_Stream_Session_After_Drain_Is_Rejected_With_ServerDrain()
     {
@@ -1615,7 +1727,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
 
         public bool LastSpotDrainWasRelocation { get; private set; }
 
-    public bool LastSpotDrainWasHostShutdown { get; private set; }
+        public bool LastSpotDrainWasHostShutdown { get; private set; }
+
+        public CancellationToken LastSealCancellationToken { get; private set; }
+
+        public bool ForceRuntimeObservedSealCancellation { get; private set; }
 
         public ZLinkDrainExecutionOperations Operations => new(
             HasAutoConnect: true,
@@ -1633,7 +1749,11 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
                 return ValueTask.FromResult(!MarkerAlwaysFails);
             },
             RestoreServing: _ => ValueTask.FromResult(true),
-            SealApplicationAdmissions: () => Events.Add("seal-admission"),
+            SealApplicationAdmissions: cancellationToken =>
+            {
+                LastSealCancellationToken = cancellationToken;
+                Events.Add("seal-admission");
+            },
             PublishDrainingToPeers: () => Events.Add("publish-draining"),
             WaitForAcceptedOperations: () =>
             {
@@ -1690,6 +1810,8 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
             },
             ForceStopRuntime: _ =>
             {
+                ForceRuntimeObservedSealCancellation =
+                    LastSealCancellationToken.IsCancellationRequested;
                 Events.Add("stop-runtime");
                 return ValueTask.CompletedTask;
             },
@@ -1773,6 +1895,58 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
     }
 
     private sealed record DrainProbeMessage(string Value);
+
+    private static Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector
+        CreateDrainConnector(int port) =>
+        ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{port}"),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+                Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false }
+            });
+
+    private sealed class ShutdownSealSessionProbe(int expectedConnections)
+    {
+        private int _blockingConnectionClaimed;
+        private int _connected;
+
+        public SemaphoreSlim Connected { get; } = new(0, expectedConnections);
+
+        public int ConnectedCount => Volatile.Read(ref _connected);
+
+        public TaskCompletionSource Release { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask MarkConnectedAsync(CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _connected);
+            Connected.Release();
+            if (Interlocked.CompareExchange(ref _blockingConnectionClaimed, 1, 0) == 0)
+                await Release.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    private sealed class ShutdownSealSession(
+        IZLinkSessionContext context,
+        ShutdownSealSessionProbe probe) : IZLinkSession
+    {
+        public IZLinkSessionContext Context { get; } = context;
+
+        public async ValueTask OnConnectedAsync(CancellationToken cancellationToken)
+        {
+            await probe.MarkConnectedAsync(cancellationToken);
+        }
+
+        public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnErrorAsync(
+            ZLinkStreamError error,
+            CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+    }
 
     private sealed class DrainSession(
         IZLinkSessionContext context,

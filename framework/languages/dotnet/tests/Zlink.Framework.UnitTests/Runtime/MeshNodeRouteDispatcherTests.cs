@@ -204,7 +204,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 runtime,
                 taskRunner));
         if (sealAdmission)
-            runtime.SealApplicationAdmissionsForDrain();
+            runtime.SealApplicationAdmissionsForDrain(CancellationToken.None);
 
         var header = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Request,

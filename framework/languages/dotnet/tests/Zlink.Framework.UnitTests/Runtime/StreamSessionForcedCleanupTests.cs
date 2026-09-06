@@ -1236,7 +1236,7 @@ public sealed class StreamSessionForcedCleanupTests
         runtime = CreateRuntime(provider, registration);
         var socket = new TestStreamSocket
         {
-            BlockSend = true,
+            BlockSendAsync = true,
             DisconnectFailure = new InvalidOperationException(
                 "peer already disconnected")
         };
@@ -1260,15 +1260,143 @@ public sealed class StreamSessionForcedCleanupTests
             session.EnqueueDisconnected(new ZLinkStreamError(
                 ZLinkStreamSessionError.TransportError,
                 "peer closed after server drain"));
-            socket.AllowSend.TrySetResult();
+            socket.AllowSendAsync.TrySetResult();
 
             Assert.True(await drain.WaitAsync(TimeSpan.FromSeconds(2)));
             Assert.Equal(0, socket.DisconnectCount);
         }
         finally
         {
-            socket.AllowSend.TrySetResult();
+            socket.AllowSendAsync.TrySetResult();
             await session.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Server_drain_NotConnected_closing_send_is_completed_teardown()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(_ => runtime);
+
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket
+        {
+            SendAsyncFailure = new ZlinkSubmitException(
+                ZlinkSubmitException.ErrorCode.NotConnected),
+            DisconnectFailure = new InvalidOperationException(
+                "disconnect must not run after NotConnected")
+        };
+        var session = await ZLinkStreamSessionRuntime.CreateAsync(
+            provider,
+            socket,
+            RoutingId.From("server-drain-closed-peer"),
+            typeof(DrainRaceSession),
+            static _ => { },
+            "test",
+            TimeProvider.System);
+
+        try
+        {
+            Assert.True(await session.CloseForDrainAsync(CancellationToken.None));
+            Assert.Null(session.TerminalFailure);
+            Assert.Equal(0, socket.DisconnectCount);
+        }
+        finally
+        {
+            await session.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Session_table_preserves_closing_failure_as_teardown_cause()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(_ => runtime);
+
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var failure = new InvalidOperationException("closing submit failed");
+        var socket = new TestStreamSocket { SendAsyncFailure = failure };
+        var table = new ZLinkStreamSessionTable(
+            provider,
+            socket,
+            typeof(DrainRaceSession),
+            runtime.DrainAdmission,
+            "test",
+            TimeProvider.System,
+            actorDispatchEnabled: false);
+        var session = Assert.IsType<ZLinkStreamSessionRuntime>(
+            await table.GetOrCreateAsync(
+                RoutingId.From("server-drain-submit-failure"),
+                CancellationToken.None));
+
+        try
+        {
+            var teardown = await Assert.ThrowsAsync<ZLinkDrainForceException>(
+                () => table.DrainSessionsAsync(CancellationToken.None).AsTask());
+
+            Assert.Equal(ZLinkDrainForceReason.TeardownFailed, teardown.Reason);
+            Assert.Same(failure, teardown.InnerException);
+            Assert.Same(failure, session.TerminalFailure);
+        }
+        finally
+        {
+            await session.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Rejected_session_uses_async_submit_and_observes_seal_cancellation()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(_ => runtime);
+
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket
+        {
+            BlockSend = true,
+            BlockSendAsync = true
+        };
+        var table = new ZLinkStreamSessionTable(
+            provider,
+            socket,
+            typeof(DrainRaceSession),
+            runtime.DrainAdmission,
+            "test",
+            TimeProvider.System,
+            actorDispatchEnabled: false);
+        using var shutdown = new CancellationTokenSource();
+        await table.SealAdmissionAsync(shutdown.Token);
+
+        try
+        {
+            var rejection = table.GetOrCreateAsync(
+                    RoutingId.From("shutdown-seal-rejection"),
+                    CancellationToken.None)
+                .AsTask();
+            await socket.SendAsyncStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(rejection.IsCompleted);
+
+            await shutdown.CancelAsync();
+
+            Assert.Null(await rejection.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.Equal(1, socket.DisconnectCount);
+        }
+        finally
+        {
+            socket.AllowSend.TrySetResult();
+            socket.AllowSendAsync.TrySetResult();
         }
     }
 
@@ -2158,6 +2286,8 @@ public sealed class StreamSessionForcedCleanupTests
 
         public bool BlockSendAsync { get; init; }
 
+        public Exception? SendAsyncFailure { get; init; }
+
         public Exception? DisconnectFailure { get; init; }
 
         public TaskCompletionSource SendAsyncStarted { get; } =
@@ -2259,6 +2389,10 @@ public sealed class StreamSessionForcedCleanupTests
                     await AllowSendAsync.Task
                         .WaitAsync(cancellationToken)
                         .ConfigureAwait(false);
+                if (SendAsyncFailure is not null)
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                        .Capture(SendAsyncFailure)
+                        .Throw();
             }
             finally
             {

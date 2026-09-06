@@ -104,8 +104,11 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     internal ValueTask<bool> DrainSessionsAsync(CancellationToken cancellationToken) =>
         _sessions.DrainSessionsAsync(cancellationToken);
 
-    internal void ForceStopSessions() =>
-        AwaitStateLane(_sessions.ForceStopSessionsAsync());
+    internal ValueTask SealSessionAdmissionAsync(CancellationToken cancellationToken) =>
+        _sessions.SealAdmissionAsync(cancellationToken);
+
+    internal ValueTask ForceStopSessionsAsync(CancellationToken cancellationToken) =>
+        _sessions.ForceStopSessionsAsync(cancellationToken);
 
     public ValueTask DisposeAsync()
     {
@@ -524,7 +527,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     var ownershipTransferred = false;
                     try
                     {
-                        var session = await _sessions.GetOrCreateAsync(routingId)
+                        var session = await _sessions.GetOrCreateAsync(
+                                routingId,
+                                cancellationToken)
                             .ConfigureAwait(false);
                         if (session is not null)
                             ownershipTransferred = session.TryEnqueuePacket(
@@ -573,7 +578,9 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
             var ownershipTransferred = false;
             try
             {
-                var session = await _sessions.GetOrCreateAsync(routingId)
+                var session = await _sessions.GetOrCreateAsync(
+                        routingId,
+                        cancellationToken)
                     .ConfigureAwait(false);
                 if (session is not null)
                     ownershipTransferred = session.TryEnqueueControlPacket(
@@ -623,7 +630,10 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     ClearDisconnectedRoutingId(readyRoutingId);
                     var connectedAdmission = _controlIngress.ExecuteControl(async cancellationToken =>
                     {
-                        var session = await _sessions.GetOrCreateAsync(readyRoutingId).ConfigureAwait(false);
+                        var session = await _sessions.GetOrCreateAsync(
+                                readyRoutingId,
+                                cancellationToken)
+                            .ConfigureAwait(false);
                         if (session is not null)
                         {
                             var sessionAdmission = session.EnqueueConnected(

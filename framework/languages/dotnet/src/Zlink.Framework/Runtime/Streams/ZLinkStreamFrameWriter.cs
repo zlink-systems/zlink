@@ -2,6 +2,33 @@ namespace Zlink.Framework.Runtime.Streams;
 
 internal static class ZLinkStreamFrameWriter
 {
+    public static async ValueTask WriteAsync(
+        Func<Message, CancellationToken, ValueTask> submit,
+        ZlinkStreamHeader header,
+        ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken)
+    {
+        var frame = ZLinkStreamFrameCodec.Encode(
+            ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
+            payload.Span);
+        var payloadMessage = Message.From(frame);
+        await submit(payloadMessage, cancellationToken).ConfigureAwait(false);
+    }
+
+    public static ValueTask WriteAsync(
+        IZLinkStream stream,
+        ZlinkStreamHeader header,
+        ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken)
+    {
+        return WriteAsync(
+            (message, token) =>
+                ZLinkSessionStreamTransport.SubmitAsync(stream, message, token),
+            header,
+            payload,
+            cancellationToken);
+    }
+
     public static void Write(
         Func<Message, bool> write,
         ZlinkStreamHeader header,
@@ -46,4 +73,5 @@ internal static class ZLinkStreamFrameWriter
 
         return stream.Write(ZLinkMessage.From(message.ToArray()), SendFlags.DontWait);
     }
+
 }

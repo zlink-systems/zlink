@@ -441,18 +441,23 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             spotNode.Node.PublishDraining();
     }
 
-    internal void SealApplicationAdmissionsForDrain()
+    internal void SealApplicationAdmissionsForDrain(
+        CancellationToken cancellationToken)
     {
         //  Shutdown claims the admission owner before taking the runtime lock.
         //  Relocation fence and shutdown therefore use the same drain-gate ->
         //  operation-gate order without allowing rollback to reopen shutdown.
         _drainAdmission.ClaimShutdown();
-        AwaitStateLane(_stateLane.RunAsync(() =>
+        var streamNodes = AwaitStateLane(_stateLane.RunAsync(() =>
         {
             _drainAdmission.Seal();
             _acceptingOperations = false;
             _admissionOwner = ZLinkDrainOwner.Shutdown;
+            return _state?.StreamNodes.Values.ToArray()
+                   ?? Array.Empty<ZLinkStreamNodeRuntime>();
         }));
+        foreach (var streamNode in streamNodes)
+            AwaitStateLane(streamNode.SealSessionAdmissionAsync(cancellationToken));
     }
 
     internal bool TryReopenRetireAdmissionsAfterRollback()
@@ -1024,7 +1029,12 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 AwaitStateLane(_stateLane.RunAsync(() => _acceptingOperations = false));
                 stateToDispose?.FenceOperations();
                 stateToDispose?.CancelActiveSpotOperations();
-                stateToDispose?.ForceStopStreamSessions();
+                if (stateToDispose is not null)
+                {
+                    await stateToDispose
+                        .ForceStopStreamSessionsAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                }
                 // ForceStop must remain forceful even when the caller does not
                 // supply an external cancellation deadline. The linked token
                 // selects the component state's non-graceful disposal path.

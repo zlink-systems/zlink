@@ -51,10 +51,10 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             throw new ArgumentOutOfRangeException(nameof(deadline));
         if (Interlocked.Exchange(ref _shutdownRequested, 1) != 0)
             return;
+        _shutdownDeadline.CancelAfter(deadline);
         Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             "admission_sealed site=request_shutdown");
-        _operations.SealApplicationAdmissions();
-        _shutdownDeadline.CancelAfter(deadline);
+        _operations.SealApplicationAdmissions(_shutdownDeadline.Token);
     }
 
     public ValueTask<ZLinkDrainForceReason?> ExecuteAsync(
@@ -97,6 +97,13 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         Action? relocationDetached,
         CancellationToken deadlineToken)
     {
+        var sealCancellationToken = deadlineToken;
+        if (intent == ZLinkFrameworkLifecycleIntent.Shutdown)
+        {
+            if (Interlocked.CompareExchange(ref _shutdownRequested, 1, 0) == 0)
+                _shutdownDeadline.CancelAfter(deadline);
+            sealCancellationToken = _shutdownDeadline.Token;
+        }
         var absoluteDeadline = DateTimeOffset.UtcNow + deadline;
         ulong committedUnitCount = 0;
         var relocationFence = intent == ZLinkFrameworkLifecycleIntent.Relocate
@@ -114,7 +121,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                 ShutdownStep("seal_admissions");
                 Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog
                     .SpotDiscovery("admission_sealed site=shutdown_intent");
-                _operations.SealApplicationAdmissions();
+                _operations.SealApplicationAdmissions(sealCancellationToken);
             }
 
             if (intent == ZLinkFrameworkLifecycleIntent.Shutdown)
@@ -204,7 +211,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
 
                 Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog
                     .SpotDiscovery("admission_sealed site=relocate_completed");
-                _operations.SealApplicationAdmissions();
+                _operations.SealApplicationAdmissions(deadlineToken);
                 relocationDetached?.Invoke();
                 return Result(null);
             }
@@ -453,6 +460,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         ZLinkDrainForceReason reason,
         CancellationToken cancellationToken)
     {
+        _shutdownDeadline.Cancel();
         // The runtime force-stop owner sends the ServerDrain notification and
         // cancels session work before disposing the component state. Waiting
         // for the same sessions here would consume the entire force budget
@@ -588,7 +596,7 @@ internal sealed record ZLinkDrainExecutionOperations(
     Func<CancellationToken, ValueTask<bool>> QuiesceServingChannels,
     Func<CancellationToken, ValueTask<bool>> MarkDraining,
     Func<CancellationToken, ValueTask<bool>> RestoreServing,
-    Action SealApplicationAdmissions,
+    Action<CancellationToken> SealApplicationAdmissions,
     Action PublishDrainingToPeers,
     Func<Task> WaitForAcceptedOperations,
     Func<CancellationToken, Task> WaitForAcceptedActorHandoffs,

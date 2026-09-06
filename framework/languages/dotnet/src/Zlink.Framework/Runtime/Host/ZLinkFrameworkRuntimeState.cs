@@ -150,11 +150,14 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         foreach (var node in nodes) node.CancelActiveOperations();
     }
 
-    public void ForceStopStreamSessions()
+    public async ValueTask ForceStopStreamSessionsAsync(
+        CancellationToken cancellationToken)
     {
         var streams = RunStateAsync(() => StreamNodes.Values.ToArray())
             .GetAwaiter().GetResult();
-        foreach (var stream in streams) stream.ForceStopSessions();
+        await Task.WhenAll(streams.Select(stream =>
+                stream.ForceStopSessionsAsync(cancellationToken).AsTask()))
+            .ConfigureAwait(false);
     }
 
     public ValueTask DisposeAsync()

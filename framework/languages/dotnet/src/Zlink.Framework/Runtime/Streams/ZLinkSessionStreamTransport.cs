@@ -15,6 +15,12 @@ internal sealed class ZLinkSessionStreamTransport(
     public ValueTask SubmitAsync(
         Message payload,
         CancellationToken cancellationToken)
+        => SubmitAsync(stream, payload, cancellationToken);
+
+    internal static ValueTask SubmitAsync(
+        IZLinkStream stream,
+        Message payload,
+        CancellationToken cancellationToken)
     {
         if (stream is ZLinkManagedStream managedStream)
             return managedStream.SubmitRawAsync(payload, cancellationToken);
