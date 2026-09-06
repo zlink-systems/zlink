@@ -1,0 +1,7 @@
+job S-3: raw decoder 수신 버퍼 재사용 확대. 공통 규칙 _common-rules.md 적용. worktree ~/project/zlink-work/s3.
+
+근거: S-B 보고서 F6·3(a)#3·3b#3·4 S-3. `decoder_allocators.cpp:249-287, 126-163`: `raw_decoder`가 `max_messages_=1` shared allocator를 쓰고, 메시지가 버퍼를 가져가면 spare 1칸 CAS 재사용, 실패 시 malloc. 에코처럼 앱이 버퍼를 곧 반납하는 부하에서도 read drain 중 연속 read면 매번 malloc/free.
+목표: 메시지당 malloc/free 쌍을 없앤다. 두 설계 비교: (A) spare 1칸 → I/O 스레드 로컬 free-list(N칸, 반납·획득이 같은 I/O 스레드면 원자 연산도 제거; 앱 스레드 반납이면 원자 push), (B) `raw_decoder`의 `max_messages_`를 read target 기준으로 늘려 한 버퍼에서 여러 메시지를 zero-copy로 잘라 쓰기(버퍼 refcount로 마지막 메시지가 해제). 각각 보유 바이트 상한(05-connection-memory)에 주는 영향을 수치로 적고, 계약 문장(보유 바이트·auto-hwm 회계)이 달라지지 않는 쪽만 채택. ZMP decoder도 같은 allocator를 쓰면 이득이 전 패턴에 가는지 확인하고, 그렇다면 공통으로 적용하되 ZMP 테스트로 검증.
+소유 계층·spec: systems/05-connection-memory(보유 바이트 산식·상한), 06-auto-hwm(frame 회계 소유), protocol/02-raw. 계약 변경 없음. 회계 값이 바뀌면 멈추고 D로 보고.
+범위 파일: core/src/runtime/protocol/decoder_allocators.{hpp,cpp}, raw_decoder.{hpp,cpp}, (필요 시) zmp_decoder.cpp의 allocator 생성 인자, engine/asio/asio_raw_engine.cpp:88-89, asio_zmp_engine.cpp의 대응 위치.
+검증: `ctest -R 'decoder|raw|stream|zmp|memory|hwm'` 5회, ASan 트리(`core/build-asan` 구성 재사용 가능하면) 1회. 성능: with_stream zlink,asio size all runs 1 (64 B에서 가장 커야 함).

@@ -1,0 +1,7 @@
+job S-5: blocking submit(FLAGS_NONE) 진입 비용 슬림화. 공통 규칙 _common-rules.md 적용. worktree ~/project/zlink-work/s5.
+
+근거: S-B 보고서 F2·3(a)#5·3b#5·4 S-5. `socket_send_submit.cpp:351-511` `send_completion_submit_blocking`이 루프 진입 전에 wait context/guard를 무조건 만들고, `enter_public_send`(`socket_lifecycle_runtime.cpp:94-155, 416-444`) CAS + API sync 재귀 mutex + 진행 epoch 관찰을 메시지마다 한다. 즉시 admission 성공이 지배적.
+목표: 성공 경로에서 wait guard/컨텍스트 생성을 첫 admission 실패 이후로 지연하고, `enter_public_send`의 CAS와 sync 획득을 단일 상태 전이로 합칠 수 있는지(`take_sync_in_admission` 경로가 이미 있으면 그것이 항상 타게) 검토·적용. 실패 시 WRITABLE token 생성 시점·조건(08-stream §4 122-135행, README "Part send")은 불변. ROUTER/PAIR/DEALER도 같은 경로를 타므로 전 패턴 이득 — 다른 패턴 계약 테스트도 검증에 포함.
+소유 계층·spec: socket/README "Part send"·pending admission, 08-stream §4, 03-errors, systems/10-hot-path. 계약 변경 없음.
+범위 파일: core/src/runtime/sockets/common/socket_send_submit.cpp, socket_send_complete.cpp, socket_lifecycle_runtime.cpp, socket_runtime.hpp(선언).
+검증: `ctest -R 'send|submit|dontwait|writable|backpressure|stream|router|dealer|pair'` 5회 + TSan 1회. 성능: with_stream zlink,asio size all runs 1 + perf/c 1024 B tcp single ROUTER_ROUTER·multi RR_SENDSEND·RR_REQREP runs 1(경량 3셀, 기준은 감독관이 계획 §7.2에 기록한 값).

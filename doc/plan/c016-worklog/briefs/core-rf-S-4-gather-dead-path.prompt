@@ -1,0 +1,7 @@
+job S-4: STREAM raw 엔진의 gather 죽은 경로 제거. 공통 규칙 _common-rules.md 적용. worktree ~/project/zlink-work/s4.
+
+근거: doc/plan/c016-worklog/core-rf-S-B-stream-path-cost.md F4·3(a)#4·3b#4·4 S-4. `asio_raw_engine.cpp:114-124`의 `build_gather_header()`는 항상 false인데 `asio_engine.cpp:757-802` `prepare_gather_output()`이 write turn마다 encode 탐침 → `_next_msg` pull → 크기 판정 → 가상 호출 → `load_msg` → false 를 전부 실행한다(호출부 :689, :1350).
+목표: gather 지원 여부를 엔진 종류로 한 번 확정해, 지원하지 않는 엔진에서는 `prepare_gather_output`이 호출조차 되지 않게 한다. 관측 가능한 write 동작은 동일(현재도 항상 encoder 경로). 두 설계 비교: (1) `i_asio_transport`/엔진 가상 인터페이스에서 "gather 가능" 능력을 생성 시 상수로 가져와 `asio_engine_t` 멤버로 캐시, (2) `asio_stream_fastpath_policy.hpp`의 정책 객체에 능력을 넣어 raw 엔진은 처음부터 off. 더 적은 규칙·더 깊은 모듈 쪽을 고른다. 이 기회에 `prepare_gather_output` 주변에서 ZMP 엔진에만 의미 있는 분기가 공통 엔진에 남아 있으면 목록으로 보고(수정은 범위 밖, R2 인벤토리로).
+소유 계층·spec: core/doc/spec/core/systems/03-io-thread(§4), socket/08-stream(런타임 기본값·write 서술), protocol/02-raw. 계약 변경 없음.
+범위 파일: core/src/runtime/engine/asio/asio_engine.{cpp,hpp}, asio_raw_engine.{cpp,hpp}, asio_zmp_engine.{cpp,hpp}(능력 선언만), asio_stream_fastpath_policy.hpp, i_asio_transport.hpp.
+검증: `ctest -R 'stream|engine|asio|raw'` 5회, ZMP 경로가 gather를 계속 쓰는지 확인하는 기존 테스트(있으면 이름 보고) 통과. 성능: with_stream zlink,asio size all runs 1.

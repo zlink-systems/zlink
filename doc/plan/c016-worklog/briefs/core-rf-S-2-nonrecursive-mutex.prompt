@@ -1,0 +1,7 @@
+job S-2: 핫 경로 잠금의 비재귀화. 공통 규칙 _common-rules.md 적용. worktree ~/project/zlink-work/s2.
+
+근거: S-B 보고서 F5·3(a)#2·3b#2·4 S-2. `utils/fast_mutex.hpp:41-46`와 `utils/mutex.hpp:89-94`가 둘 다 `PTHREAD_MUTEX_RECURSIVE`. 메시지당 재귀 mutex 7–10쌍.
+목표: 재진입이 실제로 없는 잠금을 `PTHREAD_MUTEX_DEFAULT`(또는 adaptive)로. 절차: (1) `fast_mutex_t`·`mutex_t`·`scoped_optional_fast_lock_t`·`scoped_optional_lock_t`의 모든 사용처를 전수 조사해 표로 만든다(잠금 객체 | 소유 클래스 | 같은 스레드에서 중첩 획득이 가능한 경로가 있는가 | 근거 file:line). (2) 재진입이 증명되지 않는 것은 그대로 두고, 증명된 비재진입 잠금만 비재귀 타입으로 바꾼다. 재진입이 있는 잠금은 이름을 `recursive_mutex_t`처럼 뜻이 맞게 바꾸는 것을 제안(적용은 규모에 따라). "fast"라는 이름과 실제가 다르다는 것 자체가 POSDDD 위반이므로 이름을 실제와 맞춘다. (3) 디버그 빌드에서는 `PTHREAD_MUTEX_ERRORCHECK`로 재진입을 즉시 잡게 하면 회귀 방지가 되는지 검토·적용. 두 설계 비교: 타입 두 개(recursive/plain) vs 하나에 템플릿 인자.
+소유 계층·spec: systems/04-thread-safety(잠금 순서 서술 — 변경 없음 확인), 02-threading-model. 계약 변경 없음.
+범위 파일: core/src/runtime/utils/fast_mutex.hpp, mutex.hpp, 그리고 타입 이름 변경이 닿는 선언부(사용처 파일의 멤버 선언만). 잠금 획득 위치·순서는 바꾸지 않는다(그건 S-1·S-5 job의 범위).
+검증: dev ctest에서 `ctest -R 'stream|pipe|mailbox|poller|wake|socket'` 5회 + **TSan 트리에서 같은 suite 1회 필수** + `test_wake_invariants` 계열. 성능: with_stream zlink,asio size all runs 1, 추가로 `hotpath_gate`가 있으면 `core/build-gate`를 worktree에서 구성해 4셀 비교(선택).

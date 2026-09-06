@@ -1,0 +1,7 @@
+job S-1: I/O↔앱 핸드오프의 activate_read 왕복 축소. 공통 규칙 _common-rules.md 적용. worktree ~/project/zlink-work/s1. **가장 위험한 job** — "언제 깨어나는가"의 계약 조건에 인접. 규칙 추가 금지, 기존 규칙 통합만.
+
+근거: S-B 보고서 3(a)#1·3b#1·3c wake 절·4 S-1. `pipe.cpp:4066-4112` flush/`send_activate_read`, `pipe.cpp:2738-2766` `process_activate_read`(`_out_sync`), `socket_base_dispatch.cpp:1603-1678` `read_activated`(`receive.sync`, `_transport_pair_id!=0` 재분류 검사 3개), `mailbox.cpp:56-82`. 에코 부하에서는 앱이 매번 pipe를 비우므로 다음 도착이 반드시 잠든 pipe를 깨워 command 왕복이 메시지마다 난다.
+목표(둘 중 하나 이상, 계약 불변): (a) 같은 pipe에 대해 아직 소비되지 않은 activate_read command가 mailbox에 있으면 재전송을 생략(pipe에 "activate_read pending" 상태 하나 — 단, 새 상태를 두는 대신 ypipe의 기존 sleep/awake 표시로 같은 정보를 얻을 수 있는지 먼저 검토), (b) `process_activate_read`의 `_out_sync` 획득을 알림 여부만 결정하는 원자 교환으로 대체(잠금이 보호하는 불변식을 먼저 문서화하고, 원자로 같은 불변식이 유지됨을 증명), (c) `read_activated`의 STREAM raw 상수 분기 3개를 pipe 생성 시 캐시된 불리언 1개로. 깨어나는 시점·순서(같은 batch 안에서 한 번, POLLIN level은 `xhas_in`이 결정)와 D-099의 drain 경계(`7738b8fd41`)를 유지한다.
+소유 계층·spec: socket/README recv 절, systems/05-polling(POLLIN level 조건), 04-thread-safety, 08-stream §5. 채택 전 감독관이 문장 단위 대조하므로 보고서에 해당 문장을 인용하고 각 문장에 "동일" 근거를 적는다.
+범위 파일: core/src/runtime/core/pipe.{cpp,hpp}, core/mailbox.{cpp,hpp}, sockets/common/socket_base_dispatch.cpp, sockets/internal/fq.cpp(활성화 경로만).
+검증: `ctest -R 'wake|poll|stream|pipe|mailbox|drain|progress'` 5회 + TSan 1회 + `test_wake_invariants`·`test_stream_packet_progress`·lost-wake 계열 10회(간헐 검출). 성능: with_stream zlink,asio size all runs 1.
