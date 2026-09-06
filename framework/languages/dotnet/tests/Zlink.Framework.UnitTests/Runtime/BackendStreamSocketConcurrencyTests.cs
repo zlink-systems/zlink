@@ -1,11 +1,70 @@
 using System.Reflection;
 using Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
+using Zlink.Framework.Runtime.Codecs;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class BackendStreamSocketConcurrencyTests
 {
     private static readonly RoutingId NodeRid = RoutingId.From("stream-node");
+
+    [Fact]
+    public async Task CloseAbsentPhysicalSession_AbsorbsOnlyConnectNotFound()
+    {
+        var socket = DispatchProxy.Create<IStreamSocket, NoopStreamSocketProxy>();
+        var proxy = (NoopStreamSocketProxy)(object)socket;
+        proxy.DisconnectFailure = new ZlinkConnectException(ZlinkConnectException.ErrorCode.NotFound);
+        await using var backend = new ZLinkBackendStreamSocketWrapper(
+            socket, null!, new ZLinkMeshCompletionTable(), ownsNode: false);
+        var stream = new ZLinkManagedStream(
+            backend, RoutingId.From("absent-session"), new ZLinkCodecRegistryBuilder(), "test");
+
+        await stream.CloseAsync();
+        await stream.CloseAsync();
+
+        Assert.Equal(2, proxy.DisconnectCount);
+    }
+
+    [Theory]
+    [InlineData(ZlinkConnectException.ErrorCode.InvalidHandle)]
+    [InlineData(ZlinkConnectException.ErrorCode.InvalidArgument)]
+    [InlineData(ZlinkConnectException.ErrorCode.InternalError)]
+    public async Task ClosePhysicalSession_PropagatesOtherConnectErrors(ZlinkConnectException.ErrorCode error)
+    {
+        var socket = DispatchProxy.Create<IStreamSocket, NoopStreamSocketProxy>();
+        var failure = new ZlinkConnectException(error);
+        ((NoopStreamSocketProxy)(object)socket).DisconnectFailure = failure;
+        await using var backend = new ZLinkBackendStreamSocketWrapper(
+            socket, null!, new ZLinkMeshCompletionTable(), ownsNode: false);
+        var stream = new ZLinkManagedStream(
+            backend, RoutingId.From("session"), new ZLinkCodecRegistryBuilder(), "test");
+
+        var actual = await Assert.ThrowsAsync<ZlinkConnectException>(
+            async () => await stream.CloseAsync());
+
+        Assert.Same(failure, actual);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ClosePhysicalSession_PropagatesNotFoundFromOtherOperationTypes(bool configurationError)
+    {
+        var socket = DispatchProxy.Create<IStreamSocket, NoopStreamSocketProxy>();
+        Exception failure = configurationError
+            ? new ZlinkConfigException(ZlinkConfigException.ErrorCode.NotFound)
+            : new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotFound);
+        ((NoopStreamSocketProxy)(object)socket).DisconnectFailure = failure;
+        await using var backend = new ZLinkBackendStreamSocketWrapper(
+            socket, null!, new ZLinkMeshCompletionTable(), ownsNode: false);
+        var stream = new ZLinkManagedStream(
+            backend, RoutingId.From("session"), new ZLinkCodecRegistryBuilder(), "test");
+
+        var actual = await Assert.ThrowsAsync(
+            failure.GetType(), async () => await stream.CloseAsync());
+
+        Assert.Same(failure, actual);
+    }
 
     [Fact]
     public async Task ConcurrentBoundActorMessages_AreSubmittedSerially()
@@ -76,9 +135,19 @@ public sealed class BackendStreamSocketConcurrencyTests
 
     private class NoopStreamSocketProxy : DispatchProxy
     {
+        public Exception? DisconnectFailure { get; set; }
+        public int DisconnectCount { get; private set; }
+
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             ArgumentNullException.ThrowIfNull(targetMethod);
+            if (targetMethod.Name == "DisconnectRid")
+            {
+                DisconnectCount++;
+                if (DisconnectFailure is not null)
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(DisconnectFailure).Throw();
+                return null;
+            }
             return targetMethod.Name switch
             {
                 "DisposeAsync" => ValueTask.CompletedTask,

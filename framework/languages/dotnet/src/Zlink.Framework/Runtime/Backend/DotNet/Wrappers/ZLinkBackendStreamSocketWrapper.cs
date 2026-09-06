@@ -168,7 +168,16 @@ internal sealed class ZLinkBackendStreamSocketWrapper : IZLinkBackendStreamSocke
 
     public void DisconnectPeer(RoutingId routingId)
     {
-        _socket.DisconnectRid(routingId);
+        try
+        {
+            _socket.DisconnectRid(routingId);
+        }
+        catch (ZlinkConnectException exception)
+            when (exception.Result == ZlinkConnectException.ErrorCode.NotFound)
+        {
+            // The physical close is already complete. The session lifecycle
+            // still owns local cleanup and binding removal.
+        }
     }
 
     public async ValueTask BindActorAsync(

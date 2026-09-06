@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Contracts;
@@ -10,6 +11,76 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class StreamSessionForcedCleanupTests
 {
+    [Fact]
+    public async Task CloseAfterPhysicalPeerDisconnect_CompletesAndCleansBindingOnce()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        var lifetime = new RejectedTerminalLifetime();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(lifetime)
+            .AddScoped<RejectedTerminalDependency>()
+            .AddSingleton(_ => runtime);
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        await using var nativeContext = Systems.Zlink.Zlink.CreateContext();
+        var nativeSocket = nativeContext.CreateStreamSocket();
+        await using var backend = new ZLinkBackendStreamSocketWrapper(
+            nativeSocket, null!, new ZLinkMeshCompletionTable(), ownsNode: false);
+        using var monitor = nativeSocket.MonitorOpen();
+        backend.Bind("tcp://127.0.0.1:0");
+        var endpoint = new Uri(backend.GetLastEndpoint());
+        using var peer = new TcpClient();
+        await peer.ConnectAsync(endpoint.Host, endpoint.Port);
+        var connected = await ReceiveStreamMonitorEventAsync(monitor, MonitorEventType.ConnectionReady);
+        var routingId = Assert.IsType<RoutingId>(connected.RoutingId);
+        await using var session = await ZLinkStreamSessionRuntime.CreateAsync(
+            provider,
+            backend,
+            routingId,
+            typeof(RejectedTerminalSession),
+            _ => lifetime.RemoveCount++,
+            "tcp",
+            TimeProvider.System);
+        runtime.BindActorSession(
+            "absent-peer-actor", null, routingId,
+            ZLinkActorBoundSessionBindingToken.Native(routingId),
+            objectGeneration: 1, authorityOwnerGeneration: 1,
+            meshName: "actors", ownerLeaseGeneration: 1);
+        Assert.True(runtime.TryGetActorBoundSession("absent-peer-actor", out _));
+
+        peer.Dispose();
+        var disconnected = await ReceiveStreamMonitorEventAsync(monitor, MonitorEventType.Disconnected);
+        Assert.Equal(routingId, disconnected.RoutingId);
+        var nativeFailure = Assert.Throws<ZlinkConnectException>(() => nativeSocket.DisconnectRid(routingId));
+        Assert.Equal(ZlinkConnectException.ErrorCode.NotFound, nativeFailure.Result);
+
+        await session.CloseAsync();
+        await session.CloseAsync();
+        await lifetime.CleanupCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await session.DisposeAsync();
+        await session.DisposeAsync();
+
+        Assert.False(runtime.TryGetActorBoundSession("absent-peer-actor", out _));
+        Assert.Equal(1, lifetime.DisconnectedCount);
+        Assert.Equal(1, lifetime.DependencyDisposeCount);
+        Assert.Equal(1, lifetime.RemoveCount);
+    }
+
+    private static async Task<MonitorEvent> ReceiveStreamMonitorEventAsync(
+        ISocketMonitor monitor, MonitorEventType expected)
+    {
+        var started = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(5))
+        {
+            if (monitor.Recv(RecvFlags.DontWait) is { } value && value.Event == expected)
+                return value;
+            await Task.Delay(5);
+        }
+        throw new TimeoutException($"Expected STREAM monitor event {expected} was not received.");
+    }
+
     [Fact]
     public async Task Stream_Node_Concurrent_Dispose_Callers_Share_Socket_Cleanup()
     {
