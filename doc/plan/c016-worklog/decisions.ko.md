@@ -1593,3 +1593,11 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 ## D-139 (2026-09-06 20:4x, 머신 A) rebuild15 bindings gate — C `test_c_request_writable_contract`의 옛 기대 정정: 명시적 제거 뒤 accepted REQUEST는 `ZLINK_REQUEST_NOT_FOUND`로 즉시 완료된다
 
 - 새 Core(602861c3…)에서 `zlink_disconnect_rid` 뒤 completion queue에 terminal WRITABLE(ENOENT) 1건 + accepted REQUEST 4건(`request_result=102=ZLINK_REQUEST_NOT_FOUND`)이 나온다. socket README 완료표 "endpoint/logical RID 명시적 제거 → WRITABLE TERMINAL+ENOENT / REQUEST NOT_FOUND"와 정확히 일치. 옛 Core는 D-138 이전에 public disconnect가 queued command를 지나쳐 이 completion들이 늦게(테스트 종료 뒤) 나왔고, 테스트는 그 결함 위에서 "다른 completion 없음"을 단언하고 있었다. 테스트를 계약대로(terminal 1 + NOT_FOUND `accepted`건, 순서 무관) 정정. 5/5.
+
+## D-140 (2026-09-06 21:4x, 머신 A) rebuild15 최종 gate 결과 — 잔여 red 2건(java SupportChat, cross-language node→dotnet user-spot-join)
+
+- Core(602861c3… = main `2776ebb863`): lane unit 57/integration 128/regression 26 전부 green, hotpath 4/4(D-135 reference).
+- bindings gate(8종): c(D-139 정정 뒤 10/10)·cpp·dotnet·go·java·node·python·rust green. go `internal/native` ok → D-118 검증.
+- framework gate: cpp 7/7, node 7/7 + `npm test` 0 fail, dotnet 7/7 + ZoneWorld×2 + SampleRegression 157 + unit main/join 0 fail, java core/contract test 0 fail. **java 샘플 SupportChat 1건 red** — session→api ClientServer 응답(api 35 ms 응답)이 5 s timeout 시점에야 framework에 전달(진단 job `diag-java-supportchat-reply-delay`, astra).
+- cross-language E2E: node smoke·java-cross green, cpp all-stage에서 **`user-spot-join-node-dotnet` 1 stage red**(Node source → .NET target, canonical actorJoin(28) 미관찰; 역방향 dotnet→node는 green; 단독 재실행 2/2 재현 = 결정적). 진단은 Claude opus agent(코덱스 한도 보존). 의심 1순위 dotnet D-132 admission candidate 규칙의 cross-language Hello/READY 순서.
+- 마감 조건: 두 건 근본 수정 → java 샘플 14/14 + cpp all-stage 32/32 재실행 green.
