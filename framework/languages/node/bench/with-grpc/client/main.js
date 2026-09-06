@@ -6,6 +6,7 @@
 // plus RESULT lines; every table, ratio and verdict is produced by
 // framework/bench/tools, not here (plan section 4.1, FB-020).
 
+require('reflect-metadata');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -14,7 +15,16 @@ const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
 const zlink = require('@zlink-systems/zlink');
 
+const { Module } = require('@nestjs/common');
+const { NestFactory } = require('@nestjs/core');
+const { ZLinkModule, zlinkFramework, ZLINK_ROUTE_CLIENT } = require('@zlink-systems/nestjs');
+const {
+  createProtobufMessageSerializer,
+  ZLINK_PROTOBUF_CONTENT_TYPE
+} = require('@zlink-systems/framework-codec-protobuf/framework');
+
 const { argValue, argInt } = require('../shared/args');
+const contract = require('../shared/framework-bench-contract');
 const header = require('../shared/bench-metric-header');
 const rawWire = require('../shared/raw-wire');
 const core = require('./bench-core');
@@ -188,6 +198,101 @@ function rawSend(socket, options) {
   };
 }
 
+// --- ZLink framework, RouteMesh channel client ----------------------------
+
+/**
+ * spec section 8.1: the framework row uses `packages/framework` through its public host,
+ * `@zlink-systems/nestjs`, with the protobuf codec from
+ * `packages/framework-codec-protobuf`. `src/internal.ts` is not exported by the
+ * package and is not touched (G4).
+ */
+async function createFrameworkClient(options) {
+  class BenchClientModule {}
+  Module({
+    imports: [
+      ZLinkModule.forRootFactory({
+        inject: [],
+        useFactory: () => {
+          const builder = zlinkFramework();
+          builder.codecs().use({
+            register: (codecs) => {
+              codecs.addSerializer(ZLINK_PROTOBUF_CONTENT_TYPE, createProtobufMessageSerializer());
+            }
+          });
+          const mesh = builder.addRouteMesh(contract.MESH_NAME)
+            .listen('tcp://127.0.0.1:0')
+            .routingId(contract.CLIENT_ROUTING_ID);
+          mesh.channel(contract.CHANNEL_NAME).client();
+          mesh.peerConnections().connect(options.zlinkEndpoint);
+          return builder.build();
+        }
+      })
+    ]
+  })(BenchClientModule);
+
+  // Declaration gap check, before anything is measured.
+  //
+  // spec section 2 fixes the payload as the size of the protobuf `bytes body`. The node
+  // framework codec (`packages/framework-codec-protobuf`) is a dynamic value wire
+  // with no bytes type: `boolean`, `number`, `string` and `object` only. A Buffer
+  // is an `object`, so each byte becomes its own keyed entry -- a 1024-byte body
+  // encodes to 20,412 bytes (19.9x) and decodes back as a plain object, not
+  // bytes. The framework row therefore cannot carry this bench's payload through
+  // its public codec, and no amount of harness code fixes that from outside.
+  // Reaching into `packages/framework`'s `src/internal.ts` for a different codec
+  // path would breach G4, so the six cells are reported unsupported with this
+  // reason instead of measured against a different payload.
+  const probe = Buffer.from([1, 2, 3]);
+  const serializer = createProtobufMessageSerializer();
+  let roundTripped = null;
+  try {
+    const encoded = serializer.serialize({ body: probe });
+    roundTripped = serializer.deserialize(encoded, Object);
+  } catch (error) {
+    roundTripped = null;
+  }
+  if (roundTripped === null || !Buffer.isBuffer(roundTripped.body)) {
+    throw new Error(
+      'framework-codec-protobuf has no bytes type: a protobuf `bytes body` cannot be '
+      + 'expressed through the public codec (a 1024-byte body encodes to 20,412 bytes '
+      + 'and decodes as an object). spec section 2 fixes the payload as that field, so this row '
+      + 'cannot carry the spec payload'
+    );
+  }
+
+  const app = await NestFactory.createApplicationContext(BenchClientModule, {
+    logger: false,
+    abortOnError: false
+  });
+  return { app, routeClient: app.get(ZLINK_ROUTE_CLIENT, { strict: false }) };
+}
+
+function frameworkRequest(routeClient, options) {
+  return async (payloadSize, phase, sequence) => {
+    const body = header.createPayloadBytes(payloadSize, options.runId, phase, sequence);
+    const reply = await routeClient
+      .requestToChannel(contract.CHANNEL_NAME, new contract.BenchPayload(body))
+      .timeout(options.requestTimeoutMs)
+      .submit();
+    const replyBody = reply && reply.body;
+    const decoded = header.decode(
+      Buffer.isBuffer(replyBody) ? replyBody : replyBody ? Buffer.from(replyBody) : null
+    );
+    if (!header.isExpected(decoded, options.runId, phase, payloadSize, sequence)) {
+      throw new Error('framework reply header mismatch');
+    }
+  };
+}
+
+function frameworkSend(routeClient, options) {
+  return async (payloadSize, phase, sequence) => {
+    const body = header.createPayloadBytes(payloadSize, options.runId, phase, sequence);
+    await routeClient
+      .sendToChannel(contract.CHANNEL_NAME, new contract.BenchPayload(body))
+      .submit();
+  };
+}
+
 // --- cell driving ---------------------------------------------------------
 
 function implementationOf(cellName) {
@@ -230,6 +335,20 @@ async function main() {
 
   const grpcClient = createGrpcClient(options);
   const ctx = zlink.createContext();
+
+  // The framework host is built once, outside every measured window. A failure
+  // to stand it up marks the six framework cells unsupported with the reason
+  // rather than taking the run down.
+  let framework = null;
+  let frameworkError = null;
+  if (shouldRun(options, 'zlink-framework-node')) {
+    try {
+      framework = await createFrameworkClient(options);
+    } catch (error) {
+      frameworkError = error && error.message;
+      process.stderr.write(`[bench] framework client unavailable: ${frameworkError}\n`);
+    }
+  }
   const cells = [];
   const failures = [];
   const contaminated = [];
@@ -297,6 +416,23 @@ async function main() {
           }
         });
       }
+
+      if (shouldRun(options, 'zlink-framework-node')) {
+        await addCell('zlink-framework-node', 'request-serial', payloadSize, async () => {
+          if (framework === null) {
+            throw new Error(
+              `framework host unavailable via @zlink-systems/nestjs: ${frameworkError}`
+            );
+          }
+          const operation = frameworkRequest(framework.routeClient, options);
+          await core.waitForRouteReady(
+            () => operation(payloadSize, header.PHASE_WARMUP, 0), options.routeReadyMs
+          );
+          return core.runRequestSerial({
+            payloadSize, options, statsUrl: options.zlinkStatsUrl, operation
+          });
+        });
+      }
     }
 
     // --- request-window ---
@@ -323,6 +459,23 @@ async function main() {
           } finally {
             socket.close();
           }
+        });
+      }
+
+      if (shouldRun(options, 'zlink-framework-node')) {
+        await addCell('zlink-framework-node', 'request-window', payloadSize, async () => {
+          if (framework === null) {
+            throw new Error(
+              `framework host unavailable via @zlink-systems/nestjs: ${frameworkError}`
+            );
+          }
+          const operation = frameworkRequest(framework.routeClient, options);
+          await core.waitForRouteReady(
+            () => operation(payloadSize, header.PHASE_WARMUP, 0), options.routeReadyMs
+          );
+          return core.runRequestWindow({
+            payloadSize, options, statsUrl: options.zlinkStatsUrl, operation
+          });
         });
       }
     }
@@ -353,6 +506,23 @@ async function main() {
           }
         });
       }
+
+      if (shouldRun(options, 'zlink-framework-node')) {
+        await addCell('zlink-framework-node', 'send-saturation', payloadSize, async () => {
+          if (framework === null) {
+            throw new Error(
+              `framework host unavailable via @zlink-systems/nestjs: ${frameworkError}`
+            );
+          }
+          const operation = frameworkSend(framework.routeClient, options);
+          await core.waitForRouteReady(
+            () => operation(payloadSize, header.PHASE_WARMUP, 0), options.routeReadyMs
+          );
+          return core.runSendSaturation({
+            payloadSize, options, statsUrl: options.zlinkStatsUrl, operation
+          });
+        });
+      }
     }
   }
 
@@ -362,6 +532,7 @@ async function main() {
   );
   ctx.close();
   grpc.closeClient(grpcClient);
+  if (framework !== null) await framework.app.close();
 }
 
 async function writeOutputs(options, cells, failures, contaminated, drain) {
