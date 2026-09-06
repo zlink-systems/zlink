@@ -1,0 +1,41 @@
+# Job: .NET canonical framework perf runner — phase 1 (harness + baselines)
+
+You are a codex sub-agent under a Claude supervisor. Model gpt-6-astra, reasoning xhigh. Cap 4 h. Read `AGENTS.md` (root)
+§2/§3/§4.1/§5, `framework/AGENTS.md`, `framework/languages/dotnet/AGENTS.md`, then the spec you implement:
+`framework/doc/framework/common/perf/README.ko.md` (revised today, D-117; en twin identical) — all of §1–§9, §11, §12–§16,
+§17.1, §18–§22. Also `framework/doc/framework/common/sample/README.ko.md` (runner isolation, Docker Redis, port and lock
+rules) and `framework/doc/framework/common/sample/runner-templates/**`.
+
+## Hard rules
+- Public framework API only (`Zlink.Framework*` packages via ProjectReference as `framework/languages/dotnet/bench/with-grpc` does);
+  no reflection into internals, no private members, no new framework API. Never modify `framework/languages/dotnet/src/**`,
+  `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/**`, `doc/site/**`. If a public API needed by the spec is
+  missing or differs, stop that cell and report it under BLOCKERS with the exact interface doc line — do not work around.
+- No mitigations in the harness: no sleeps for propagation, no retries of measured operations, no timeout inflation; readiness
+  is confirmed through public status/evidence (§16.1).
+- Do not commit. Do not run other languages' gates. Take `/tmp/zlink-samples-gate.lock` (flock) while a run uses Docker Redis
+  or ports; use `/tmp/zlink-dotnet-gate.lock` for `dotnet test`. Never `--artifacts-path`, never `ulimit -v`.
+  dotnet env: `export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH=/home/hep7/project/zlink/core/build-dev/lib UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1; pkg_hash=$(sha256sum .artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${pkg_hash:0:16}`.
+
+## Scope of phase 1 (spec §18 items 1–2 and §11)
+1. Project layout per §17.1 under `framework/languages/dotnet/perf/` (client, server roles, support, scripts `run_perf.sh`,
+   `run_single.sh`, `collect_env.sh` per §9), registered in the dotnet solution the way the bench/sample projects are.
+2. Common harness: typed JSON DTOs of §12 and §15.2 (schema v2, 64-bit as decimal strings, Base64 payload, ns ticks,
+   monotonic timing via `Stopwatch`/`TimeProvider`), §14 metric keys with the §14.1 null+reason rule, §15.3 histogram +
+   nearest-rank percentile + overflow, §15.1 per-cell directory + identity (SHA-256 variant), §15.4 aggregation owners,
+   §16 admin HTTP endpoints (`/perf/ready`, `/perf/reset`, `/perf/stats`) as application endpoints + application trigger
+   endpoint (§4.2), §5 CLI with the consumer table (reject unsupported combinations at preflight), §5.1 role config + endpoint
+   manifest, §4 phases (warmup → drain → resetSeq barrier → measured → settle → report), §20 isolation (port 0 / verified
+   reservation, owned PID + container cleanup, run-scoped Docker Redis helper reused from the sample templates).
+3. Cells: §11.1 `session-echo-only` (both payloads) and §11.2 `channel-echo-only` (RouteMesh and ClientServer cells, both
+   payloads). Success criteria §19/§22.
+4. Run each implemented cell once on this machine (short duration is fine for the smoke, plus one full 30 s run per cell) and
+   store results under `perf-results/<run-id>/…` in the scratch location `/dev/shm/zlink-perf-dotnet/`; copy the `summary.json`
+   files and `collect_env.sh` output into the summary report. Register the new runner in
+   `scripts/verify-framework-runner-isolation.py` inventory only if the script requires it for the ports/locks you use (report
+   otherwise).
+
+## Deliverable
+`doc/plan/c016-worklog/perf-dotnet-runner-phase1-summary.md`: what was built (files), how to run (exact commands), the cells'
+results (table: cell × payload → KOPS, p50/p95/p99, errors, settle), spec clauses implemented, deviations (none expected),
+BLOCKERS (missing public API or spec ambiguity with file:line). Do not print the report to stdout.
