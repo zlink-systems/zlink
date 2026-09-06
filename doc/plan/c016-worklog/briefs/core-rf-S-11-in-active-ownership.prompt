@@ -1,0 +1,7 @@
+job S-11: `pipe_t::_in_active` 소유권 통일(기존 결함 B). 공통 규칙 _common-rules.md 적용. worktree ~/project/zlink-work/s11.
+
+근거: S-1 보고서(core-rf-S-1-summary.md §9-10). `_in_active`가 command-owner 스레드(`process_activate_read`)와 receive 스레드(`read_internal`, `check_read`, `pipe.cpp:1196`)에서 읽기·RMW되는데 한쪽만 `_out_sync`를 잡았고, S-1 이후에는 양쪽 다 잠금 없음. TSan이 S-2 base에서도 같은 race를 보고하므로 캠페인 이전부터 있던 결함이다.
+목표: `_in_active`(및 같은 성질의 `_state_active` 미러가 있으면 함께)의 소유자를 하나로 정한다. 설계 비교: (A) receive lease(수신 스레드) 단독 소유 — command-owner는 "활성화 요청"만 원자 플래그로 남기고 실제 전이는 수신 쪽이 다음 진입 시 적용, (B) `std::atomic`으로 승격해 양쪽이 acquire/release로 접근(가장 작은 변경, 규칙은 그대로). S-1이 미룬 "`_state`를 atomic으로 승격하고 `_state_active` 미러 삭제(−1 중복 상태, 63 호출 지점)"가 (B)와 같은 축이면 함께 검토하되 상한 안에서만. 깨어남 조건·POLLIN level(05-polling, README recv)은 불변.
+소유 계층·spec: systems/04-thread-safety, 02-threading-model, 05-polling. 계약 변경 없음.
+범위 파일: core/src/runtime/core/pipe.{cpp,hpp}, sockets/internal/fq.cpp(활성 목록만).
+검증: `ctest -R 'wake|poll|stream|pipe|mailbox|fq|dealer'` 5회 + lost-wake 세트 `--repeat until-fail:10` + **TSan(`setarch $(uname -m) -R`)에서 해당 race 경고가 사라졌는지**가 완료 조건. 성능: callgrind 축소셀 Ir/msg(악화 없음) + with_stream runs 1.
