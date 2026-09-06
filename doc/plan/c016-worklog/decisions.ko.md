@@ -1638,3 +1638,6 @@ P0 job(sonnet). (1) `stream_tcp` 셀: STREAM tcp bind + raw BSD TCP 클라이언
 
 ## D-B146 (2026-09-07 02:05, 머신 B) 정정 — S-2(비재귀 mutex)·S-9(read drain)가 `e1db6f1f72`에 들어감
 `e1db6f1f72`("docs(plan): D-B145")는 문서 3파일 외에 게이트 job이 index에 올려 둔 S-2·S-9 patch(core 27파일)를 포함한다. 감독관이 index 상태를 확인하지 않고 커밋했고 push까지 됐으므로 이력은 그대로 둔다. **main의 S-2+S-9 상태 = 게이트 s2-s9 통과본**(D-B145). 진단 job이 S-2 유발 결함을 찾으면 그 커밋을 revert한다. 절차 변경: 게이트 patch가 적용된 트리에서는 `git diff --cached --stat`을 먼저 보고, 문서 커밋은 `git commit -- <경로>`로 경로를 명시한다.
+
+## D-B147 (2026-09-07 02:40, 머신 B) 간헐 `test_close_completion_poller_release` = 기존 결함(B, lost wake) — S-2·S-9 채택 유지, S-12 투입
+진단(opus, `diag-close-completion-poller-release.md`): "Expected 1 Was 0"은 `zlink_poller_wait(1000 ms)`가 0 이벤트 — close 뒤 약속된 one-shot POLLERR 미도착. 재현 main(S-2+S-9) 2/50, pre-campaign `6f64e76b51` **4/50** → S-2 무관. 원인: close edge를 poller가 아닌 command-owner drain이 소비하고 re-arm하지 않음(다른 drain에는 있는 `rearm_primary_signaler()` 대응 부재). 기존 규칙 확장으로 수정 가능(새 플래그 없음). S-12 job 투입. S-1 완료(Ir −6.6 %, lock −2/msg; `_in_active` race 기존 결함 → S-11 브리프), S-5 투입, S-3·A/B 진행 중.
