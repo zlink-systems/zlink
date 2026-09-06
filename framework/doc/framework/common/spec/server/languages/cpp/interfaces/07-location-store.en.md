@@ -277,7 +277,8 @@ reconcile the storage result after a timeout or connection error by
 doing a direct read of the same reference. `retention` must be
 positive.
 
-One blob is at most 64 MiB. The state/queue/timer handoff payload of
+One data chunk is at most 64 MiB of application bytes; the encoded blob limit the provider
+receives is owned by [Relocation Store Redis §3](../../../05-location-relocation/03-relocation-store-redis.en.md#3-reference-and-storage-size). The state/queue/timer handoff payload of
 Actor and Spot relocation doesn't pass through this Store — the
 Framework splits the payload in source memory into chunks and sends
 them directly over the source–target ordered mesh connection. The

@@ -216,7 +216,8 @@ bytes를 다시 put하면 `alreadyStored`, 다른 bytes를 put하면 `conflict`�
 timeout이나 연결 오류 뒤에 같은 reference를 직접 read하여 저장 결과를 재조정할 수 있다.
 `retentionMs`는 양의 safe integer여야 한다.
 
-Blob 하나는 최대 64 MiB다. Actor·Spot relocation의 state·queue·timer handoff payload는 이 Store를
+Data chunk 하나는 application bytes 기준 최대 64 MiB이고, provider가 받는 encoded blob 상한은
+[Relocation Store Redis §3](../../../05-location-relocation/03-relocation-store-redis.ko.md#3-reference와-저장-크기)이 소유한다. Actor·Spot relocation의 state·queue·timer handoff payload는 이 Store를
 지나지 않는다 — Framework는 source memory의 payload를 chunk로 나눠 source–target ordered mesh
 연결로 직접 전송한다. Store에 남는 정상 실행 책임은 Instance Spot cold activation의 최초
 message·생성 정보 기록과, relocation 뒤 완료되는 pending request의 reply payload·terminal 결과
