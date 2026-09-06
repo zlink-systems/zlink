@@ -257,9 +257,8 @@ final class ZLinkChannelSocketRegistry {
     }
 
     /**
-     * Waits for a ClientServer target at the call boundary. The public
-     * contract requires the bounded selection window here, before the call
-     * object is returned. Admission callbacks update this registry on the
+     * Waits for a ClientServer target within the caller's remaining budget.
+     * Admission callbacks update this registry on the
      * monitor lane, so the wait never holds this registry's monitor.
      */
     ZLinkBackendDealerSocket awaitClientForOutbound(

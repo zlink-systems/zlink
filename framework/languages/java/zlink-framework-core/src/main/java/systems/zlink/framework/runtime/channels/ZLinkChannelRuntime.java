@@ -1006,7 +1006,7 @@ public final class ZLinkChannelRuntime
             try {
                 return new SendCall(
                     callRuntime,
-                    awaitClientServerTarget(channelName),
+                    awaitClientServerTarget(channelName, defaultRequestTimeout(channelName)),
                     encoded.payload(),
                     Optional.of(encoded.packetName()),
                     encoded.contentType());
@@ -1044,11 +1044,10 @@ public final class ZLinkChannelRuntime
         rejectAfterRelocationReady("Channel request");
         ZLinkPayloadEncoding.EncodedPayload encoded =
             encodePayload(message);
-        ZLinkBackendDealerSocket client = sockets.clientForOutbound(channelName);
-        if (client != null) {
+        if (sockets.hasClientRegistration(channelName)) {
             return new RequestCall(
                 callRuntime,
-                client,
+                remaining -> awaitClientServerTarget(channelName, remaining),
                 encoded.payload(),
                 Optional.of(encoded.packetName()),
                 defaultRequestTimeout(channelName),
@@ -1067,21 +1066,6 @@ public final class ZLinkChannelRuntime
                 encoded.contentType(),
                 ZLinkApplicationMetadata.empty());
         }
-        if (sockets.hasClientRegistration(channelName)) {
-            try {
-                return new RequestCall(
-                    callRuntime,
-                    awaitClientServerTarget(channelName),
-                    encoded.payload(),
-                    Optional.of(encoded.packetName()),
-                    defaultRequestTimeout(channelName),
-                    ZLinkRequestMetricTags.forChannel(channelName),
-                    encoded.contentType());
-            } catch (RuntimeException failure) {
-                encoded.payload().close();
-                throw failure;
-            }
-        }
         encoded.payload().close();
         if (sockets.hasServerRegistration(channelName)) {
             // A registered ClientServer Server without the Client role is a
@@ -1096,18 +1080,13 @@ public final class ZLinkChannelRuntime
             "channel has no request route: " + channelName);
     }
 
-    /**
-     * Resolves the ClientServer send target for a Channel whose ready candidate set is still empty,
-     * per {@code framework/doc/framework/common/spec/server/02-channel-transport/02-channel-messaging.ko.md} 짠3.2: the call
-     * waits a bounded period and then fails with no-target. The bound is the shorter of this
-     * Channel's request timeout and five seconds, mirroring the .NET reference
-     * {@code ZLinkClientServerClientRuntime.WaitForReadyAsync}. Framework startup never waits for
-     * admission, and this wait does not trigger one.
-     */
-    private ZLinkBackendDealerSocket awaitClientServerTarget(String channelName) {
-        Duration channelTimeout = defaultRequestTimeout(channelName);
-        Duration bound = channelTimeout.compareTo(CLIENT_SERVER_READY_WAIT_CAP) < 0
-            ? channelTimeout
+    // Channel messaging §3.2 bounds readiness by this operation's remaining
+    // time and the fixed five-second cap; admission progresses independently.
+    private ZLinkBackendDealerSocket awaitClientServerTarget(
+        String channelName,
+        Duration remaining) {
+        Duration bound = remaining.compareTo(CLIENT_SERVER_READY_WAIT_CAP) < 0
+            ? remaining
             : CLIENT_SERVER_READY_WAIT_CAP;
         ZLinkBackendDealerSocket ready = sockets.awaitClientForOutbound(channelName, bound);
         if (ready != null) {

@@ -173,14 +173,23 @@ final class ZLinkChannelSubmissionContractTest {
         options.addClientServerChannel("profile").client().connect("inproc://profile");
 
         try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(options, backend)) {
-            var pending = runtime.client()
-                .requestToChannel("profile", "hello")
-                .submit(String.class)
+            var call = runtime.client().requestToChannel("profile", "hello");
+            long started = System.nanoTime();
+            var pending = call.submit(String.class)
                 .toCompletableFuture();
 
-            assertEquals(Duration.ofSeconds(2), backend.timeout);
-            runtime.close();
-            pending.cancel(true);
+            assertTrue(backend.timeout.isPositive());
+            assertTrue(backend.timeout.compareTo(Duration.ofSeconds(2)) <= 0);
+            assertTrue(backend.timeout.plusNanos(System.nanoTime() - started)
+                    .compareTo(Duration.ofSeconds(2)) >= 0,
+                "only elapsed operation time may be removed from the global default");
+            CompletionException failure = assertThrows(CompletionException.class, pending::join);
+            assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+            Duration elapsed = Duration.ofNanos(System.nanoTime() - started);
+            assertTrue(elapsed.compareTo(Duration.ofMillis(1_950)) >= 0
+                    && elapsed.compareTo(Duration.ofMillis(2_100)) < 0,
+                "the global default bounds the whole operation: " + elapsed);
         }
     }
 

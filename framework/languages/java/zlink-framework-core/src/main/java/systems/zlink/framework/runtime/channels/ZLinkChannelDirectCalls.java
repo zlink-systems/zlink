@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Supplier;
+import java.util.function.Function;
 import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkCloseException;
@@ -248,7 +249,7 @@ final class SendCall implements ZLinkSendCall {
 final class RequestCall implements ZLinkRequestCall {
     private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
-    private final ZLinkBackendDealerSocket client;
+    private final Function<Duration, ZLinkBackendDealerSocket> resolveClient;
     private final Message payload;
     private final Optional<String> packetName;
     private final Duration timeout;
@@ -261,30 +262,19 @@ final class RequestCall implements ZLinkRequestCall {
 
     RequestCall(
         ZLinkChannelCallRuntime runtime,
-        ZLinkBackendDealerSocket client,
-        Message payload,
-        Optional<String> packetName,
-        Duration timeout,
-        ZLinkRequestMetricTags metricTags) {
-        this(runtime, client, payload, packetName, timeout, metricTags,
-            ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE);
-    }
-
-    RequestCall(
-        ZLinkChannelCallRuntime runtime,
-        ZLinkBackendDealerSocket client,
+        Function<Duration, ZLinkBackendDealerSocket> resolveClient,
         Message payload,
         Optional<String> packetName,
         Duration timeout,
         ZLinkRequestMetricTags metricTags,
         String contentType) {
-        this(runtime, client, payload, packetName, timeout, metricTags,
+        this(runtime, resolveClient, payload, packetName, timeout, metricTags,
             contentType, new AtomicBoolean());
     }
 
     private RequestCall(
         ZLinkChannelCallRuntime runtime,
-        ZLinkBackendDealerSocket client,
+        Function<Duration, ZLinkBackendDealerSocket> resolveClient,
         Message payload,
         Optional<String> packetName,
         Duration timeout,
@@ -294,7 +284,7 @@ final class RequestCall implements ZLinkRequestCall {
         this.submitGate = submitGate;
         this.metricTags = metricTags;
         this.runtime = runtime;
-        this.client = client;
+        this.resolveClient = resolveClient;
         this.payload = payload;
         this.packetName = packetName;
         this.timeout = timeout;
@@ -303,14 +293,14 @@ final class RequestCall implements ZLinkRequestCall {
 
     public ZLinkRequestCall packetName(String packetName) {
         return new RequestCall(
-            runtime, client, payload, Optional.of(packetName), timeout, metricTags, contentType,
+            runtime, resolveClient, payload, Optional.of(packetName), timeout, metricTags, contentType,
             submitGate);
     }
 
     @Override
     public ZLinkRequestCall timeout(Duration timeout) {
         return new RequestCall(
-            runtime, client, payload, packetName, timeout, metricTags, contentType, submitGate);
+            runtime, resolveClient, payload, packetName, timeout, metricTags, contentType, submitGate);
     }
 
     @Override
@@ -320,73 +310,89 @@ final class RequestCall implements ZLinkRequestCall {
         if (duplicate != null) {
             return duplicate;
         }
+        long started = System.nanoTime();
         try (var flowScope = runtime.enterApplicationFlow()) {
-        CompletableFuture<TReply> result = new CompletableFuture<>();
-        String reqPacket = packetName.orElse(null);
-        result.whenComplete((ignored, error) -> {
-            ZLinkMessageFlowTracer.TerminalTracePoint terminal =
-                runtime.flow().beginRequestTerminal(error, result);
-            if (terminal != null) {
-                terminal.trace(new ZLinkMessageFlowEvent(
-                    ZLinkMessageFlowOutcome.REPLY_RECEIVED,
-                    ZLinkDispatchErrorSurface.CHANNEL,
-                    ZLinkDispatchMessageKind.REQUEST,
-                    reqPacket, null, null, null, null, null, null, null));
-            }
-        });
-        //  Nothing on this path allocates while metrics are off: no label map is
-        //  built and no completion callback is registered.
-        if (ZLinkRuntimeMetrics.enabled()) {
-            final long started = System.nanoTime();
-            ZLinkRuntimeMetrics.add(
-                "zlink.mesh_node.requests.inflight", 1, metricTags.request);
+            CompletableFuture<TReply> result = new CompletableFuture<>();
+            String reqPacket = packetName.orElse(null);
             result.whenComplete((ignored, error) -> {
+                ZLinkMessageFlowTracer.TerminalTracePoint terminal =
+                    runtime.flow().beginRequestTerminal(error, result);
+                if (terminal != null) {
+                    terminal.trace(new ZLinkMessageFlowEvent(
+                        ZLinkMessageFlowOutcome.REPLY_RECEIVED,
+                        ZLinkDispatchErrorSurface.CHANNEL,
+                        ZLinkDispatchMessageKind.REQUEST,
+                        reqPacket, null, null, null, null, null, null, null));
+                }
+            });
+            //  Nothing on this path allocates while metrics are off: no label map is
+            //  built and no completion callback is registered.
+            if (ZLinkRuntimeMetrics.enabled()) {
                 ZLinkRuntimeMetrics.add(
-                    "zlink.mesh_node.requests.inflight", -1, metricTags.request);
-                boolean timedOut = error instanceof TimeoutException
-                    || (error != null && error.getCause() instanceof TimeoutException);
-                ZLinkRuntimeMetrics.record("zlink.mesh_node.request.duration",
-                    Duration.ofNanos(System.nanoTime() - started),
-                    metricTags.duration(timedOut, error != null));
-                if (timedOut) {
-                    ZLinkRuntimeMetrics.increment(
-                        "zlink.mesh_node.request.timeouts", metricTags.request);
+                    "zlink.mesh_node.requests.inflight", 1, metricTags.request);
+                result.whenComplete((ignored, error) -> {
+                    ZLinkRuntimeMetrics.add(
+                        "zlink.mesh_node.requests.inflight", -1, metricTags.request);
+                    boolean timedOut = error instanceof TimeoutException
+                        || (error != null && error.getCause() instanceof TimeoutException);
+                    ZLinkRuntimeMetrics.record("zlink.mesh_node.request.duration",
+                        Duration.ofNanos(System.nanoTime() - started),
+                        metricTags.duration(timedOut, error != null));
+                    if (timedOut) {
+                        ZLinkRuntimeMetrics.increment(
+                            "zlink.mesh_node.request.timeouts", metricTags.request);
+                    }
+                });
+            }
+            List<Message> requestParts = ZLinkChannelCallRuntime.parts(
+                packetName, payload, contentType);
+            result.whenComplete((ignored, error) -> requestParts.forEach(Message::close));
+            try {
+                ZLinkBackendDealerSocket target = resolveClient.apply(
+                    timeout.minusNanos(System.nanoTime() - started));
+                Duration remaining = timeout.minusNanos(System.nanoTime() - started);
+                if (remaining.isZero() || remaining.isNegative()) {
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                        "channel request deadline expired during ready wait",
+                        new TimeoutException("channel request deadline expired"));
                 }
-            });
-        }
-        runtime.track(result, timeout);
-        List<Message> requestParts = ZLinkChannelCallRuntime.parts(
-            packetName, payload, contentType);
-        result.whenComplete((ignored, error) -> requestParts.forEach(Message::close));
-        ZLinkMessageFlowTracer.TracePoint sent =
-            runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
-        if (sent != null) {
-            sent.trace(new ZLinkMessageFlowEvent(
-                ZLinkMessageFlowOutcome.SENT,
-                ZLinkDispatchErrorSurface.CHANNEL,
-                ZLinkDispatchMessageKind.REQUEST,
-                reqPacket, null, null, null, null, null, null, null));
-        }
-        runtime.requestClient(client, requestParts, timeout)
-            .whenComplete((reply, failure) -> {
-                if (failure != null) {
-                    result.completeExceptionally(
-                        ZLinkChannelCallRuntime.unwrap(failure));
-                    return;
-                }
+                runtime.track(result, remaining);
                 if (result.isDone()) {
-                    reply.close();
-                    return;
+                    return ZLinkSerialExecutionQueue.manageCurrent(result);
                 }
-                try {
-                    runtime.completeReply(reply, replyType, result);
-                } catch (RuntimeException ex) {
-                    result.completeExceptionally(ex);
-                } finally {
-                    reply.close();
+                ZLinkMessageFlowTracer.TracePoint sent =
+                    runtime.flow().begin(ZLinkMessageFlowOutcome.SENT);
+                if (sent != null) {
+                    sent.trace(new ZLinkMessageFlowEvent(
+                        ZLinkMessageFlowOutcome.SENT,
+                        ZLinkDispatchErrorSurface.CHANNEL,
+                        ZLinkDispatchMessageKind.REQUEST,
+                        reqPacket, null, null, null, null, null, null, null));
                 }
-            });
-        return ZLinkSerialExecutionQueue.manageCurrent(result);
+                runtime.requestClient(target, requestParts, remaining)
+                    .whenComplete((reply, failure) -> {
+                        if (failure != null) {
+                            result.completeExceptionally(
+                                ZLinkChannelCallRuntime.unwrap(failure));
+                            return;
+                        }
+                        if (result.isDone()) {
+                            reply.close();
+                            return;
+                        }
+                        try {
+                            runtime.completeReply(reply, replyType, result);
+                        } catch (RuntimeException ex) {
+                            result.completeExceptionally(ex);
+                        } finally {
+                            reply.close();
+                        }
+                    });
+            } catch (RuntimeException failure) {
+                result.completeExceptionally(failure);
+            }
+            return ZLinkSerialExecutionQueue.manageCurrent(result);
         }
     }
 

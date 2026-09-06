@@ -1556,16 +1556,16 @@ final class ZLinkChannelRuntimeTest {
             assertTrue(canSelect(runtime, "orders"));
 
             local.enqueueUpdate(local.descriptorWith(
-                2, 0, ZLinkFrameworkRuntimeState.SERVING));
-            awaitSelection(runtime, "orders", false);
+                2, 0, ZLinkFrameworkRuntimeState.SERVING)).get(1, TimeUnit.SECONDS);
+            assertFalse(canSelect(runtime, "orders"));
 
             local.enqueueUpdate(local.descriptorWith(
-                3, 100, ZLinkFrameworkRuntimeState.SERVING));
-            awaitSelection(runtime, "orders", true);
+                3, 100, ZLinkFrameworkRuntimeState.SERVING)).get(1, TimeUnit.SECONDS);
+            assertTrue(canSelect(runtime, "orders"));
 
             local.enqueueUpdate(local.descriptorWith(
-                4, 100, ZLinkFrameworkRuntimeState.DRAINING));
-            awaitSelection(runtime, "orders", false);
+                4, 100, ZLinkFrameworkRuntimeState.DRAINING)).get(1, TimeUnit.SECONDS);
+            assertFalse(canSelect(runtime, "orders"));
         }
     }
 
@@ -1573,34 +1573,17 @@ final class ZLinkChannelRuntimeTest {
         ZLinkChannelRuntime runtime,
         String channelName) {
         try {
-            runtime.requestToChannel(channelName, "probe");
+            assertEquals("probe", runtime.requestToChannel(channelName, "probe")
+                .timeout(Duration.ofMillis(100))
+                .submit(String.class).toCompletableFuture().join());
             return true;
-        } catch (ZLinkFrameworkException failure) {
-            // 05-framework-api.ko.md 짠13: an empty selectable-target snapshot on a registered
-            // send route is RequestTargetNotFound, not RouteNotConnected.
-            assertEquals(
-                ZLinkFrameworkErrorKind.NOT_FOUND, failure.kind());
+        } catch (CompletionException failure) {
+            // Channel messaging §3.2: selection occurs at terminal submit;
+            // a ready connection with no eligible server ends as NotFound.
+            assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND,
+                assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
             return false;
         }
-    }
-
-    private static void awaitSelection(
-        ZLinkChannelRuntime runtime,
-        String channelName,
-        boolean expected) {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-        do {
-            if (canSelect(runtime, channelName) == expected) {
-                return;
-            }
-            try {
-                Thread.sleep(10);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                throw new AssertionError(interrupted);
-            }
-        } while (System.nanoTime() < deadline);
-        assertEquals(expected, canSelect(runtime, channelName));
     }
 
     @Test
@@ -1810,8 +1793,8 @@ final class ZLinkChannelRuntimeTest {
 
     private static final class ManagedAdmissionDealer
         implements ZLinkBackendDealerSocket {
-        private final ArrayDeque<ZLinkBackendReceived> inbound =
-            new ArrayDeque<>();
+        private final java.util.Queue<ZLinkBackendReceived> inbound =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
         private final String endpoint;
         private final RoutingId serverRid = RoutingId.from("local-server");
         private final int initialWeight;
@@ -1852,6 +1835,11 @@ final class ZLinkChannelRuntimeTest {
         public CompletionStage<ZLinkBackendReceived> request(
             List<Message> parts,
             Duration timeout) {
+            if (!ZLinkClientServerServiceWire.isControlFrame(parts.get(0).toByteArray())) {
+                return CompletableFuture.completedFuture(new ZLinkBackendReceived(
+                    Optional.empty(), Optional.empty(), Optional.empty(),
+                    List.of(Message.from(parts.get(1)))));
+            }
             admissionRequests++;
             Message response = Message.from(
                 ZLinkClientServerServiceWire.encodeAdmit(
@@ -1868,7 +1856,7 @@ final class ZLinkChannelRuntimeTest {
 
         @Override
         public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
-            return inbound.pollFirst();
+            return inbound.poll();
         }
 
         @Override
@@ -1894,15 +1882,20 @@ final class ZLinkChannelRuntimeTest {
                 Instant.EPOCH);
         }
 
-        private void enqueueUpdate(
+        private CompletableFuture<Void> enqueueUpdate(
             ZLinkClientServerServerDescriptor descriptor) {
-            inbound.addLast(new ZLinkBackendReceived(
+            CompletableFuture<Void> consumed = new CompletableFuture<>();
+            inbound.add(new ZLinkBackendReceived(
+                ZLinkBackendRequestResult.OK,
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
                 List.of(Message.from(
                     ZLinkClientServerServiceWire.encodeUpdate(
-                        descriptor, Integer.MAX_VALUE)))));
+                        descriptor, Integer.MAX_VALUE))),
+                null,
+                () -> consumed.complete(null)));
+            return consumed;
         }
 
         @Override
@@ -1913,7 +1906,7 @@ final class ZLinkChannelRuntimeTest {
         @Override
         public void close() {
             while (!inbound.isEmpty()) {
-                inbound.removeFirst().close();
+                inbound.remove().close();
             }
         }
     }
