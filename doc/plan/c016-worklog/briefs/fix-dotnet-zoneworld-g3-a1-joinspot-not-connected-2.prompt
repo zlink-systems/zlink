@@ -1,0 +1,19 @@
+# Job (implement, model astra): D-100 approved (B) — implement your proposal from `fix-dotnet-zoneworld-g3-a1-joinspot-not-connected-summary.md`: removing a logical outbound intent removes that endpoint's native connection registration (public disconnect), decided in one place (`DisconnectTransport`, real outbound replacement only); drop the duplicate same-endpoint judgment in `RemovePeerConnectionIfNotAdmitted` (an inbound peer never owns the outbound registration)
+
+You are a codex sub-agent under a Claude supervisor. Read `decisions.ko.md` D-100 and your diagnosis (whole file, incl. the passing-path/cross-language section). Rules as before
+(never `core/**`, `bindings/**`, any `doc/spec/**`, `framework/doc/framework/**`, other languages, shared_sample; no waits/retries; do not commit; dotnet env block +
+`/tmp/zlink-dotnet-gate.lock`; samples under `/tmp/zlink-samples-gate.lock`). Package: rebuild13 Core 083588b4… (do not rebuild).
+
+## Implement
+`ZLinkManagedMeshNode.cs`: (1) `RemovePeerConnectionIfNotAdmitted` no longer decides endpoint ownership by "another peer on the same endpoint"; (2) `DisconnectTransport` is the
+single owner: when the removed intent is a real outbound intent whose endpoint has no *other outbound* replacement, call the binding's endpoint disconnect (Core removes the
+registration and reconnect intent — README zlink_disconnect § 869-875); an inbound peer on the same endpoint keeps its own admission untouched; (3) keep inbound replacement
+admission and the D-093/D-097 seal rules intact. Rule count 2 → 1.
+Tests (unit): outbound → inbound handover leaves no native endpoint registration for the removed outbound intent; a later outbound replacement (new RID, same endpoint)
+reaches Hello/Admit; inbound replacement admission unchanged; existing mesh admission tests stay green.
+## Verify
+ZoneWorld ×3 (G3 → A1 passes each run; all verdicts), `bash samples/run_samples.sh` once, unit half `--filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests'` once,
+MeshNodeShutdownSealTests + ZLinkMeshPeerAdmissionTests focused.
+## Deliverable
+`doc/plan/c016-worklog/fix-dotnet-zoneworld-g3-a1-joinspot-not-connected-2-summary.md` (diff file:line, four lines, rule count, results, BLOCKERS; state what java/node do at the
+same transition for parity).
