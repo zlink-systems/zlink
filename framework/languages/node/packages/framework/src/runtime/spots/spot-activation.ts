@@ -65,7 +65,8 @@ import {
 } from './spot-handler-registry';
 import {
   addSpotTimerRegistrations,
-  ZLinkSpotTimerRegistry
+  ZLinkSpotTimerRegistry,
+  type ZLinkTimerClock
 } from './spot-timer';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
@@ -84,6 +85,7 @@ import type { ZLinkLocalSpotCreateResult } from './spot-manager-internal-contrac
 import { invokeSpotClosing } from './spot-closing';
 
 export interface ZLinkSpotActivationLifecycleOptions {
+  readonly timerClock?: ZLinkTimerClock;
   readonly spotTimerHandlers?: readonly ZLinkSpotTimerHandlerRegistration[];
   readonly spotPacketHandlers?: readonly ZLinkSpotPacketHandlerRegistration[];
   readonly spotSubscriptionHandlers?: readonly ZLinkSpotSubscriptionHandlerRegistration[];
@@ -217,7 +219,8 @@ export class ZLinkSpotActivationLifecycle {
       undefined,
       this.options.statefulExecutionAllowed,
       (name, operation) => serialExecutor.executeTimer(name, operation),
-      (name) => serialExecutor.isTimerExecuting(name)
+      (name) => serialExecutor.isTimerExecuting(name),
+      this.options.timerClock
     );
     const outbound = new DefaultZLinkSpotOutbound({
       serial,
@@ -358,7 +361,8 @@ export class ZLinkSpotActivationLifecycle {
       undefined,
       this.options.statefulExecutionAllowed,
       (name, operation) => serialExecutor.executeTimer(name, operation),
-      (name) => serialExecutor.isTimerExecuting(name)
+      (name) => serialExecutor.isTimerExecuting(name),
+      this.options.timerClock
     );
     const outbound = new DefaultZLinkSpotOutbound({
       serial,
@@ -508,7 +512,8 @@ export class ZLinkSpotActivationLifecycle {
       undefined,
       this.options.statefulExecutionAllowed,
       (name, operation) => serialExecutor.executeTimer(name, operation),
-      (name) => serialExecutor.isTimerExecuting(name)
+      (name) => serialExecutor.isTimerExecuting(name),
+      this.options.timerClock
     );
     let nativeSpot: ZLinkBackendSpot | undefined;
     const outbound = new DefaultZLinkSpotOutbound({

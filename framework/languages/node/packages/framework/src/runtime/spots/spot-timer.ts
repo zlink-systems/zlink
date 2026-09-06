@@ -24,8 +24,21 @@ import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import type { ZLinkExecutionBarrier } from '../execution';
 import { ZLinkStateLane } from '../execution/state-lane';
 import { AsyncResource } from 'node:async_hooks';
+import type { OperationClock } from '../foundation/operation-registry';
 
 const detachedTimerStateLaneResource = new AsyncResource('zlink:spot-timer');
+
+export interface ZLinkTimerClock extends OperationClock {
+  now(): number;
+  utcNow(): number;
+}
+
+const systemTimerClock: ZLinkTimerClock = {
+  now: () => performance.now(),
+  utcNow: () => Date.now(),
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimeout: handle => clearTimeout(handle as NodeJS.Timeout)
+};
 
 type ZLinkTimerOwnerSpot = ZLinkSpot | ZLinkEntrySpot;
 type ZLinkTimerFailureReporter = (
@@ -77,7 +90,8 @@ export class ZLinkSpotTimerRegistry {
       name: string,
       operation: () => Promise<T> | T
     ) => Promise<T>,
-    private readonly isTimerExecuting?: (name: string) => boolean
+    private readonly isTimerExecuting?: (name: string) => boolean,
+    private readonly clock?: ZLinkTimerClock
   ) {}
 
   setExecutionBarrier(barrier: ZLinkExecutionBarrier): void {
@@ -134,7 +148,8 @@ export class ZLinkSpotTimerRegistry {
       reportFailure,
       () => this.executeTimer === undefined
         ? !executionSerial!.isExecuting
-        : this.isTimerExecuting?.(name) !== true
+        : this.isTimerExecuting?.(name) !== true,
+      this.clock
     ));
     const registered = await this.lane.run(() => this.completeAddCore(
       name,
@@ -257,11 +272,11 @@ export class ZLinkManagedTimer implements ZLinkTimer {
   private readonly lane = new ZLinkStateLane();
   private disposed = false;
   private pausedForRelocation = false;
-  private startedAtMs = performance.now();
-  private startedAtUnixMs = Date.now();
+  private startedAtMs: number;
+  private startedAtUnixMs: number;
   private deliveryIndex = 0n;
   private lastScheduledIndex = 0n;
-  private timeout: NodeJS.Timeout | undefined;
+  private timeout: unknown;
   private running: Promise<void> = Promise.resolve();
 
   constructor(
@@ -270,8 +285,11 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     private readonly options: Required<ZLinkTimerOptions>,
     private readonly onTick: (tick: ZLinkTimerTick) => Promise<void>,
     private readonly onFailure?: ZLinkTimerFailureReporter,
-    private readonly shouldWaitForRunningOnCancel: () => boolean = () => true
+    private readonly shouldWaitForRunningOnCancel: () => boolean = () => true,
+    private readonly clock: ZLinkTimerClock = systemTimerClock
   ) {
+    this.startedAtMs = clock.now();
+    this.startedAtUnixMs = clock.utcNow();
     this.scheduleNext();
   }
 
@@ -325,10 +343,10 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     ) {
       throw new Error(`Timer '${this.name}' relocation contract does not match its registration.`);
     }
-    if (this.timeout !== undefined) clearTimeout(this.timeout);
+    if (this.timeout !== undefined) this.clock.clearTimeout(this.timeout);
     this.timeout = undefined;
     this.startedAtUnixMs = state.startedAtUnixMs;
-    this.startedAtMs = performance.now() - Math.max(0, Date.now() - state.startedAtUnixMs);
+    this.startedAtMs = this.clock.now() - Math.max(0, this.clock.utcNow() - state.startedAtUnixMs);
     this.deliveryIndex = state.deliveryIndex;
     this.lastScheduledIndex = state.lastScheduledIndex;
     this.pausedForRelocation = false;
@@ -343,7 +361,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     const delayMs = this.options.overrunPolicy === ZLinkTimerOverrunPolicy.DelayNextTick
       ? this.periodMs
       : Math.max(0, Number(this.lastScheduledIndex + 1n) * this.periodMs - this.elapsedMs());
-    this.timeout = setTimeout(() => {
+    this.timeout = this.clock.setTimeout(() => {
       this.timeout = undefined;
       this.running = startOutsideStateLane(() => this.fire()).catch(() => undefined);
     }, delayMs);
@@ -374,7 +392,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     if (this.disposed) return { running: Promise.resolve() };
     this.disposed = true;
     if (this.timeout !== undefined) {
-      clearTimeout(this.timeout);
+      this.clock.clearTimeout(this.timeout);
       this.timeout = undefined;
     }
     return { running: this.shouldWaitForRunningOnCancel() ? this.running : Promise.resolve() };
@@ -384,7 +402,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     if (this.disposed) throw new Error(`Timer '${this.name}' is disposed.`);
     this.pausedForRelocation = true;
     if (this.timeout !== undefined) {
-      clearTimeout(this.timeout);
+      this.clock.clearTimeout(this.timeout);
       this.timeout = undefined;
     }
     return { running: this.shouldWaitForRunningOnCancel() ? this.running : Promise.resolve() };
@@ -405,7 +423,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
         scheduledIndex,
         periodMs: this.periodMs,
         scheduledAt: new Date(this.startedAtUnixMs + scheduledElapsedMs),
-        startedAt: new Date(),
+        startedAt: new Date(this.clock.utcNow()),
         scheduledElapsedMs,
         startedElapsedMs,
         delayMs: startedElapsedMs - scheduledElapsedMs,
@@ -448,7 +466,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
   }
 
   private elapsedMs(): number {
-    return performance.now() - this.startedAtMs;
+    return this.clock.now() - this.startedAtMs;
   }
 }
 

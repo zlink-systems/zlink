@@ -350,7 +350,10 @@ export class DefaultZLinkSpotManager {
   private idleSweepTimer?: ReturnType<typeof setTimeout>;
   private idleSweepRunning = false;
 
-  constructor(private readonly options: ZLinkSpotManagerOptions) {
+  constructor(
+    private readonly options: ZLinkSpotManagerOptions,
+    timerClock?: import('./spot-timer').ZLinkTimerClock
+  ) {
     this.activations = new ZLinkSpotActivationRegistry(options.metrics);
     this.factories = new Set(options.spotFactories);
     this.workerRuntime = options.workerRuntime ?? new ZLinkWorkerRuntime();
@@ -385,6 +388,7 @@ export class DefaultZLinkSpotManager {
       actorTransferRuntime: options.actorTransferRuntime
     });
     this.activationLifecycle = new ZLinkSpotActivationLifecycle({
+      timerClock,
       spotTimerHandlers: options.spotTimerHandlers,
       spotPacketHandlers: options.spotPacketHandlers,
       spotSubscriptionHandlers: options.spotSubscriptionHandlers,

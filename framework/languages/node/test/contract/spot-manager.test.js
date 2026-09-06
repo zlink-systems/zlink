@@ -1080,7 +1080,7 @@ test('ZLinkSpotManager restores Ready authority when idle eviction loses local o
     actorCountProvider: () => actorCount,
     instanceSpotApplicationQuiescenceProvider: async () => {
       quiescenceCalls++;
-      actorCount = 1;
+      actorCount = quiescenceCalls === 1 ? 1 : 0;
     },
     async beginInstanceIdleClosingAuthority() {
       authorityCalls++;
@@ -1095,7 +1095,8 @@ test('ZLinkSpotManager restores Ready authority when idle eviction loses local o
   assert.equal(quiescenceCalls, 1);
   assert.notEqual(await manager.find('test.mesh', spotId), null);
   actorCount = 0;
-  await manager.close('test.mesh', spotId);
+  assert.equal(await manager.close('test.mesh', spotId), true);
+  assert.equal(await manager.find('test.mesh', spotId), null);
 });
 
 test('ZLinkSpotManager rejects a public same-Spot operation instead of running it re-entrantly', async () => {
@@ -3937,7 +3938,7 @@ test('Spot timer callbacks advance nominal ticks when platform delays truncate f
         await this.context.addTimer('bot-tick', 500, BotTickHandler);
       }
     }
-    const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [BotSpot] });
+    const manager = new framework.DefaultZLinkSpotManager({ spotFactories: [BotSpot] }, clock);
     const created = await manager.create('test.mesh', BotSpot);
     try {
       await clock.runNext();
@@ -3953,22 +3954,23 @@ test('Spot timer callbacks advance nominal ticks when platform delays truncate f
   }, delay => Math.max(1, Math.trunc(delay)));
 });
 
-test('spot managed timer keeps elapsed scheduling monotonic and relocation cursors in Unix milliseconds', async (t) => {
+test('spot managed timer keeps elapsed scheduling monotonic and relocation cursors in Unix milliseconds', async () => {
   await withFakeTimerClock(async (clock) => {
     const wallStart = 1_800_000_000_000;
-    let wallNow = wallStart;
-    t.mock.method(Date, 'now', () => wallNow);
+    clock.setUtcNow(wallStart);
     const ticks = [];
     const options = {
       overrunPolicy: framework.ZLinkTimerOverrunPolicy.SkipLateTicks,
       maxCatchUpTicks: 1,
       stopOnUnhandledException: false
     };
-    const timer = new framework.ZLinkManagedTimer('monotonic', 10, options, async (tick) => ticks.push(tick));
+    const timer = new framework.ZLinkManagedTimer(
+      'monotonic', 10, options, async (tick) => ticks.push(tick), undefined, undefined, clock
+    );
     try {
-      wallNow += 10_000;
+      clock.setUtcNow(wallStart + 10_000);
       await clock.runNext();
-      wallNow -= 20_000;
+      clock.setUtcNow(wallStart - 10_000);
       await clock.runNext();
       assert.deepEqual(ticks.map((tick) => tick.scheduledIndex), [1n, 2n]);
       assert.deepEqual(ticks.map((tick) => tick.startedElapsedMs), [10, 20]);
@@ -3976,7 +3978,7 @@ test('spot managed timer keeps elapsed scheduling monotonic and relocation curso
       const state = await timer.captureRelocation();
       assert.equal(state.startedAtUnixMs, wallStart);
       assert.equal(state.nextDueAtUnixMs, wallStart + 30);
-      wallNow = wallStart + 20;
+      clock.setUtcNow(wallStart + 20);
       timer.restoreRelocation(state);
       await clock.runNext(10);
       assert.equal(ticks.at(-1).scheduledIndex, 3n);
@@ -3984,6 +3986,48 @@ test('spot managed timer keeps elapsed scheduling monotonic and relocation curso
     } finally {
       await timer.cancel();
     }
+  });
+});
+
+test('spot timer clock observes only its registry while an Instance Spot schedules idle sweeps', async () => {
+  const originalNow = performance.now;
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  class IdleInstanceSpot {}
+  const spotId = zlink.RoutingId.from('timer-clock-isolation');
+  const manager = new framework.DefaultZLinkSpotManager({
+    spotFactories: [],
+    instanceSpotFactories: new Map([['test.mesh', new Map([['idle', IdleInstanceSpot]])]]),
+    instanceSpotIdleTimeoutMs: new Map([['test.mesh', 5]]),
+    beginInstanceIdleClosingAuthority: async () => undefined
+  });
+  await withFakeTimerClock(async (clock) => {
+    let ticks = 0;
+    class TickHandler {
+      async handle() { ticks++; }
+    }
+    const serial = new framework.ZLinkSpotSerialTurnExecutor(true, 'timer-clock-owner');
+    const registry = new framework.ZLinkSpotTimerRegistry(
+      undefined, undefined, undefined, undefined, undefined, undefined, clock
+    );
+    try {
+      await registry.add('isolated', 10, {
+        overrunPolicy: framework.ZLinkTimerOverrunPolicy.DelayNextTick
+      }, TickHandler, serial, {});
+      await manager.materializeInstance('test.mesh', 'idle', spotId, 1n);
+      await clock.runNext();
+
+      assert.equal(ticks, 1);
+      assert.deepEqual(clock.pendingDelays(), [10]);
+      assert.equal(performance.now, originalNow);
+      assert.equal(global.setTimeout, originalSetTimeout);
+      assert.equal(global.clearTimeout, originalClearTimeout);
+    } finally {
+      await registry.dispose();
+      assert.equal(await manager.close('test.mesh', spotId), true);
+    }
+    assert.equal(await manager.find('test.mesh', spotId), null);
+    assert.deepEqual(clock.pendingDelays(), []);
   });
 });
 
@@ -4003,7 +4047,10 @@ test('spot managed timer overrun policies follow dotnet skip catch-up and fixed-
         if (skipLateTicks.length === 1) {
           clock.advanceBy(35);
         }
-      }
+      },
+      undefined,
+      undefined,
+      clock
     );
 
     await clock.runNext();
@@ -4029,7 +4076,10 @@ test('spot managed timer overrun policies follow dotnet skip catch-up and fixed-
         if (catchUpTicks.length === 1) {
           clock.advanceBy(35);
         }
-      }
+      },
+      undefined,
+      undefined,
+      clock
     );
 
     await clock.runNext();
@@ -4057,7 +4107,10 @@ test('spot managed timer overrun policies follow dotnet skip catch-up and fixed-
         if (delayNextTicks.length === 1) {
           clock.advanceBy(35);
         }
-      }
+      },
+      undefined,
+      undefined,
+      clock
     );
 
     await clock.runNext();
@@ -4084,7 +4137,10 @@ test('spot managed timer stopOnUnhandledException stops after handler failure', 
       async () => {
         attempts += 1;
         throw new Error('timer failed');
-      }
+      },
+      undefined,
+      undefined,
+      clock
     );
 
     await clock.runNext();
@@ -4115,7 +4171,9 @@ test('spot timer registry replaces the same key and suppresses the queued old ge
         ticks.push('second');
       }
     }
-    const registry = new framework.ZLinkSpotTimerRegistry();
+    const registry = new framework.ZLinkSpotTimerRegistry(
+      undefined, undefined, undefined, undefined, undefined, undefined, clock
+    );
     const first = await registry.add('heartbeat', 10, undefined, FirstHandler, serial, {});
     await clock.runNext(10);
     assert.equal(queued.length, 1);
@@ -4183,37 +4241,30 @@ test('spot timer handlers retain one instance for the Spot activation', async ()
 });
 
 async function withFakeTimerClock(run, platformDelay = delay => delay) {
-  const originalNow = Object.getOwnPropertyDescriptor(performance, 'now');
-  const originalSetTimeout = global.setTimeout;
-  const originalClearTimeout = global.clearTimeout;
   let now = 0;
+  let utcNow = Date.now();
   let nextId = 1;
   const timers = [];
 
-  Object.defineProperty(performance, 'now', { configurable: true, value: () => now });
-  global.setTimeout = (callback, delay) => {
-    const timer = {
-      id: nextId++,
-      callback,
-      delay: platformDelay(Number(delay) || 0),
-      cleared: false,
-      unref() {}
-    };
-    timers.push(timer);
-    return timer;
-  };
-  global.clearTimeout = (timer) => {
-    if (timer && typeof timer === 'object') {
-      timer.cleared = true;
-      return;
-    }
-    const found = timers.find((entry) => entry.id === timer);
-    if (found !== undefined) {
-      found.cleared = true;
-    }
-  };
-
   const clock = {
+    now: () => now,
+    utcNow: () => utcNow,
+    setUtcNow(value) {
+      utcNow = value;
+    },
+    setTimeout(callback, delay) {
+      const timer = {
+        id: nextId++,
+        callback,
+        delay: platformDelay(Number(delay) || 0),
+        cleared: false
+      };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimeout(timer) {
+      timer.cleared = true;
+    },
     advanceBy(ms) {
       now += ms;
     },
@@ -4237,14 +4288,7 @@ async function withFakeTimerClock(run, platformDelay = delay => delay) {
     }
   };
 
-  try {
-    await run(clock);
-  } finally {
-    if (originalNow === undefined) delete performance.now;
-    else Object.defineProperty(performance, 'now', originalNow);
-    global.setTimeout = originalSetTimeout;
-    global.clearTimeout = originalClearTimeout;
-  }
+  await run(clock);
 }
 
 function createDeferred() {
