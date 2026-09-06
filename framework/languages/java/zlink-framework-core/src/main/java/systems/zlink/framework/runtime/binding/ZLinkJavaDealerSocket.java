@@ -19,7 +19,13 @@ final class ZLinkJavaDealerSocket
 
     ZLinkJavaDealerSocket(DealerSocket socket) {
         this.socket = socket;
-        this.receivePoller = new ZLinkJavaSocketReceivePoller(socket);
+        // The DEALER has no blocking receive owner: the framework only asks
+        // it for readiness with a zero timeout from the ClientServer control
+        // tick. Claiming the completion queue for this poller would make the
+        // binding deliver request replies and WRITABLE retries at that tick's
+        // cadence — and not at all while the tick is blocked — so completion
+        // ownership stays with the binding's context completion pump.
+        this.receivePoller = new ZLinkJavaSocketReceivePoller(socket, false);
     }
 
     @Override public Socket nativeSocket() { return socket; }

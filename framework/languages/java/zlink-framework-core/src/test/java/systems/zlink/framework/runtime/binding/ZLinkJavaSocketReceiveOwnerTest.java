@@ -1,10 +1,13 @@
 package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -19,6 +22,7 @@ import systems.zlink.contracts.sockets.DealerSocket;
 import systems.zlink.contracts.sockets.ReceiveFlowState;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RouterSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 
 final class ZLinkJavaSocketReceiveOwnerTest {
@@ -31,6 +35,43 @@ final class ZLinkJavaSocketReceiveOwnerTest {
                  context.createSubSocket())) {
             assertDoesNotThrow(() ->
                 subscriber.waitForReadable(Duration.ZERO));
+        }
+    }
+
+    @Test
+    void dealerRequestReplyArrivesWithoutAnotherReadinessPoll() throws Exception {
+        String endpoint = "inproc://receive-owner-dealer-request-" + System.nanoTime();
+        try (var context = Zlink.createContext();
+             DealerSocket nativeDealer = context.createDealerSocket();
+             RouterSocket nativeRouter = context.createRouterSocket();
+             Received request = new Received()) {
+            nativeRouter.options().recvTimeout(OPERATION_TIMEOUT);
+            nativeRouter.bind(endpoint);
+            nativeDealer.connect(endpoint);
+            ZLinkJavaDealerSocket dealer = new ZLinkJavaDealerSocket(nativeDealer);
+            try {
+                //  The ClientServer control tick asks this socket for readiness
+                //  with a zero timeout before the first business request. That
+                //  probe must not take the completion queue away from the
+                //  binding: nothing polls the socket again until the next tick,
+                //  so a poller-owned completion queue would hold the reply.
+                dealer.waitForReadable(Duration.ZERO);
+
+                List<Message> parts = List.of(Message.from("ping"));
+                CompletionStage<ZLinkBackendReceived> reply =
+                    dealer.request(parts, OPERATION_TIMEOUT);
+                assertTrue(nativeRouter.recv(request, RecvFlags.NONE));
+                request.reply().message(Message.from("pong")).submit();
+
+                try (ZLinkBackendReceived received = reply.toCompletableFuture()
+                        .get(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                    assertEquals("pong", received.parts().get(0).toUtf8String());
+                } finally {
+                    parts.forEach(Message::close);
+                }
+            } finally {
+                dealer.close();
+            }
         }
     }
 
