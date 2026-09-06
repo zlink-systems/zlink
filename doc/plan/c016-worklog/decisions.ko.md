@@ -1548,3 +1548,9 @@ gate-drift 처리: **F-R8-3** `scripts/verify-framework-submit-api.sh`의 cpp �
 - A: quiet 5회 + 인공 부하 3회 + 실부하 1회 모두 오류 0. 원인 미확정. D-118 Core(rebuild15) 뒤 같은 조건으로 재측정한다. 원래 16건을 해소로 표시하지 않는다.
 - B: `ZLinkStreamSessionTable.RejectNewSession`이 seal 뒤 closing control을 `SendFlags.None`(blocking 1000 ms)으로 공유 lane 안에서 보내고 host cancellation과 무관 → 64 connections 5.8 s, 512에서 75 s 미종료(SIGKILL). node/java는 async submit. 수정 job(`fix-dotnet-session-reject-blocking-send`) 예약 — control 제출 경로 하나(비차단), host deadline 관찰, NotConnected-to-closed-peer는 정상 teardown, 원인 예외 보존. dotnet MeshNode admit 간헐 job과 파일이 겹치지 않도록 범위 지정.
 - 하네스는 결함 없음(SIGTERM → StopAsync 대기). runner의 5 s SIGKILL 유예는 유지.
+
+## D-131 (2026-09-06, 머신 A) cpp 간헐 2건의 원인은 runtime 결함(B) — 구현 승인
+
+- Fanout scope 4/3: `app.cpp:2645`가 configure 시점에 shared coroutine-executor owner를 잡고 `run()`(`:2722/2750`)에서만 놓는다. configure만 하고 `run()`하지 않은 app(앞선 fixture)은 owner를 영원히 보유 → 마지막 app 종료 때 `coroutine_executor.cpp:147-151`이 drain 없이 반환 → Fanout의 비동기 completion callback(`fanout_location_runtime.cpp:763`)이 scope를 쥔 채 `run()`이 반환. 결정적 재현 `repro_executor_owner.cpp`. 승인: owner 획득을 `run()` 실행 수명에 묶고 정상/오류 release와 짝 (규칙 2 → 1). framework-api §10(dispatch당 scope 1, exactly-once cleanup).
+- ZoneWorld G4: `raw_mesh_node_owner.cpp:996-1004`가 D-093 종료 술어(discovery expectation 없음 ∧ admitted peer 없음 → route_unavailable)를 소유하지만 monitor disconnect(`:3880-3887`)와 liveness expiry(`:3975-3980`)가 admitted peer를 제거할 때 그 술어를 평가하지 않는다 → intent가 먼저 제거되고 peer가 나중에 사라지면 durable ActorJoin이 terminal 없이 deadline(kind=7 DeadlineExceeded)까지 남는다. 결정적 재현 `repro_join_owner_loss.cpp`(두 순서). 승인: peer 제거 뒤에도 같은 술어 하나를 호출(순서 의존 2 → 술어 1). Actor 모델 §8.1, 장애 정책 §2/§4, D-093. java `ZLinkJavaRawMeshNode.java:7054`가 참조 구현.
+- 원래 실패 interleaving의 직접 포착은 없으나 두 결함 모두 공개 인터페이스 재현이 red이므로 수정 뒤 회귀 편입으로 닫는다.
