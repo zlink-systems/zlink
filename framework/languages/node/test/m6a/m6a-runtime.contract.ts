@@ -1892,6 +1892,27 @@ test('one-sided endpoint-only client upgrades the provisional route before Ready
 });
 
 test('bilateral endpoint-only manual connections learn peer RIDs and converge', async () => {
+  await verifyBilateralEndpointRequests();
+});
+
+test('bilateral endpoint requests keep liveness progressing after re-admission', async () => {
+  await verifyBilateralEndpointRequests((left, right) => {
+    const rid = left.topology.localDescriptor().nodeRoutingId;
+    const peer = right.topology.peer(rid)!;
+    // Replay the liveness state captured when a late Hello upgrades the
+    // provisional connection after the first request. The next probe/ACK
+    // needs both ordinary receive pumps before the reverse request can start.
+    assert.equal(right.liveness.disconnect(rid, peer.connectionId), true);
+    const now = performance.now();
+    right.liveness.admit(rid, peer.connectionId, now);
+    assert.equal(right.liveness.requestProbe(rid, peer.connectionId, now), true);
+    assert.equal(right.isPeerRouteReady(rid), false);
+  });
+});
+
+async function verifyBilateralEndpointRequests(
+  afterFirstReply?: (left: RawServiceMeshRuntime, right: RawServiceMeshRuntime) => void
+): Promise<void> {
   const endpointNonce = `${process.pid}-${Date.now()}`;
   const leftDescriptor = descriptor(
     'm6a-endpoint-left',
@@ -1903,59 +1924,56 @@ test('bilateral endpoint-only manual connections learn peer RIDs and converge', 
   );
   const left = rawServiceRuntime({ descriptor: leftDescriptor });
   const right = rawServiceRuntime({ descriptor: rightDescriptor });
+  const progress = async (): Promise<void> => {
+    for (const runtime of [right, left]) await runtime.announceExpectedPeers();
+    for (const runtime of [right, left]) await runtime.drainMonitorEvents();
+    for (const runtime of [right, left]) await runtime.pumpOne();
+    for (const runtime of [left, right]) await runtime.tickLiveness();
+  };
   right.start();
   try {
     right.connectPeerEndpoint(leftDescriptor.advertisedEndpoint);
     await new Promise(resolve => setTimeout(resolve, 20));
     left.start();
     left.connectPeerEndpoint(rightDescriptor.advertisedEndpoint);
-    await pollUntil(async () => {
-      await right.announceExpectedPeers();
-      await left.announceExpectedPeers();
-      await right.drainMonitorEvents();
-      await left.drainMonitorEvents();
-      await right.pumpOne();
-      await left.pumpOne();
-      await right.pumpOne();
-      await left.tickLiveness();
-      await right.tickLiveness();
-      return left.topology.peer(rightDescriptor.nodeRoutingId) !== undefined
-        && right.topology.peer(leftDescriptor.nodeRoutingId) !== undefined
-        && left.isPeerRouteReady(rightDescriptor.nodeRoutingId)
-        && right.isPeerRouteReady(leftDescriptor.nodeRoutingId)
-        && left.topology.peer(rightDescriptor.nodeRoutingId)?.connectionDiscriminator
-          === `initiator:${leftDescriptor.nodeRoutingId}`
-        && right.topology.peer(leftDescriptor.nodeRoutingId)?.connectionDiscriminator
-          === `initiator:${leftDescriptor.nodeRoutingId}`;
-    });
-
-    assert.equal(
-      left.topology.peer(rightDescriptor.nodeRoutingId)?.descriptor.nodeRoutingId,
-      rightDescriptor.nodeRoutingId
-    );
-    assert.equal(
-      right.topology.peer(leftDescriptor.nodeRoutingId)?.descriptor.nodeRoutingId,
-      leftDescriptor.nodeRoutingId
-    );
-    assert.equal(
-      left.topology.peer(rightDescriptor.nodeRoutingId)?.connectionDiscriminator,
-      `initiator:${leftDescriptor.nodeRoutingId}`
-    );
-    assert.equal(
-      right.topology.peer(leftDescriptor.nodeRoutingId)?.connectionDiscriminator,
-      `initiator:${leftDescriptor.nodeRoutingId}`
-    );
-
     for (const [source, target, targetRid] of [
       [left, right, rightDescriptor.nodeRoutingId],
       [right, left, leftDescriptor.nodeRoutingId]
     ] as const) {
+      await pollUntil(async () => {
+        await progress();
+        return left.isPeerRouteReady(rightDescriptor.nodeRoutingId)
+          && right.isPeerRouteReady(leftDescriptor.nodeRoutingId)
+          && left.topology.peer(rightDescriptor.nodeRoutingId)?.connectionDiscriminator
+            === `initiator:${leftDescriptor.nodeRoutingId}`
+          && right.topology.peer(leftDescriptor.nodeRoutingId)?.connectionDiscriminator
+            === `initiator:${leftDescriptor.nodeRoutingId}`;
+      });
+      assert.equal(
+        left.topology.peer(rightDescriptor.nodeRoutingId)?.descriptor.nodeRoutingId,
+        rightDescriptor.nodeRoutingId
+      );
+      assert.equal(
+        right.topology.peer(leftDescriptor.nodeRoutingId)?.descriptor.nodeRoutingId,
+        leftDescriptor.nodeRoutingId
+      );
+      assert.equal(
+        left.topology.peer(rightDescriptor.nodeRoutingId)?.connectionDiscriminator,
+        `initiator:${leftDescriptor.nodeRoutingId}`
+      );
+      assert.equal(
+        right.topology.peer(leftDescriptor.nodeRoutingId)?.connectionDiscriminator,
+        `initiator:${leftDescriptor.nodeRoutingId}`
+      );
       const pending = source.requestToNode(targetRid, {
         packetName: 'BilateralQuestion',
         contentType: 'application/json',
         payload: Buffer.from('request')
       }, 2_000);
-      await pollUntil(async () => await target.pumpOne() === 'application');
+      await pollUntil(async () => {
+        await progress();
+        return target.mailbox.pendingMessages('application') > 0;
+      });
       const request = target.mailbox.tryClaim('application', 1, 4_096)!;
       target.reply(request.records[0]!, {
         packetName: 'BilateralAnswer',
@@ -1969,6 +1987,7 @@ test('bilateral endpoint-only manual connections learn peer RIDs and converge', 
         `Timed out waiting for '${targetRid}' bilateral reply.`
       );
       assert.equal(result.terminalResult, 0);
+      if (source === left) afterFirstReply?.(left, right);
     }
 
     left.disconnectPeerEndpoint(rightDescriptor.advertisedEndpoint);
@@ -1977,7 +1996,7 @@ test('bilateral endpoint-only manual connections learn peer RIDs and converge', 
     left.close();
     right.close();
   }
-});
+}
 
 test('local channel requests preserve successful and failed terminal results', async () => {
   const local = rawServiceRuntime({
@@ -2058,8 +2077,8 @@ test('completion send admission applies only to operations with a reply route', 
 async function pollUntil(
   condition: () => boolean | Promise<boolean>
 ): Promise<void> {
-  const deadline = Date.now() + 2_000;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + 2_000;
+  while (performance.now() < deadline) {
     if (await condition()) return;
     await new Promise(resolve => setTimeout(resolve, 1));
   }
