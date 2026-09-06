@@ -410,39 +410,84 @@ job `fwb-04b`가 Node pass에서 `zlink-c` 기준선을 다시 재지 않았고 
 정했으므로 게재되는 어떤 값도 바뀌지 않는다는 것이다. **타당하므로 수용한다.** 지시에서
 벗어난 것을 묻히지 않고 먼저 보고한 처리가 옳다.
 
-## FB-029 — Java framework의 channel send가 handler에 닿지 않고 조용히 사라진다
+## FB-029 (정정됨) — handler 생성 실패가 삼켜진다. 메시지는 수락되고 버려지며 sender는 성공을 받는다
 
-- **관찰** (job `fwb-05`): `zlink-framework-java`의 send-saturation이 0을 낸다. 이는 harness
-  회계 문제가 아니고 Node의 FB-028 같은 codec 표현력 문제도 아니다. Java의 protobuf codec은
-  `bytes`를 정상 처리하고, **같은 channel·같은 `BenchPayload` 타입의 request 경로는 동작한다.**
-- **증거**: message-flow tracing을 켠 server에서 1024건 send 셀이
-  `phase=received` 1024회, `phase=admitted` 1024회, `phase=dispatched` 1024회를 내고
-  (`surface=channel kind=send channel_route=route_mesh packet=BenchPayload`)
-  **`phase=completed`는 0회**다. handler 본문 첫 줄의 무조건 카운터 증가가 실행되지 않는다.
-- **조용히 사라진다는 것이 핵심이다.** client의 `sendToChannel(...).submit()`은 성공으로
-  완료되고(21,688건 제출, 오류 0), `systems.zlink`의 DEBUG 로그에 아무것도 남지 않으며,
-  `ZLinkUnhandledDispatchAction.LOG_AND_DROP`도 아무것도 내지 않는다.
-  `ZLinkMeshApplicationDispatcher.dispatchSend`가 **성공 경로에서만 trace를 남기므로**
-  handler 호출 실패가 삼켜진다.
-- **범위 확인**: 세 가지 등록 형태(`ZLinkSendHandler` + `addSendHandler`,
-  `ZLinkRouteSendHandler` + `addRouteSendHandler`, mesh 수준 `addRouteSendHandler`)가 모두
-  같은 동작을 보인다. content-type 비대칭은 배제됐다. `sendToChannel`과 `requestToChannel`
-  모두 `encoded.contentType()`을 넘긴다. 남은 후보는
-  `invokeRouteSendHandlerCore`/`withDispatchHandlers`의 handler 해석·생성이다.
-- **성격**: 성능 특성이 아니라 **무성 손실 경로**다. 받았다고 기록하고, 수락했다고 기록하고,
-  dispatch했다고 기록한 메시지가 handler에 닿지 않는데 sender는 성공을 받고 로그는 비어 있다.
-- **처리**: 이 캠페인은 고치지 않는다. **0.18.0 후보 우선순위 0.** FB-026 Node wedge와 같은
-  등급이다. 둘 다 성능이 아니라 정확성 결함이다.
-- **부수 관찰**: 실패 경로에 관측이 전혀 없는 것 자체가 별도 항목이다. dispatcher가 성공에서만
-  trace를 남기면 이런 결함은 측정 도구 없이는 발견되지 않는다.
+- **최초 기록은 틀렸다.** 2026-09-07 감독관이 "framework channel send가 무성 손실된다"로
+  우선순위 0에 올렸으나, job `fwb-05`가 20분 상한 계측으로 스스로 반증했다. framework는
+  send를 잃지 않는다. 배선을 고친 뒤 같은 셀이 **3,236 msg/s**를 낸다.
+- **실제 원인**: harness가 `BenchServerMetrics`를 `beanFactory.registerSingleton(...)`으로
+  등록했다. 인스턴스는 생기지만 **bean definition이 없다.**
+  `ZLinkSpringHandlerFactory`는 생성자 의존성마다 `isPrototype()`을 묻는데 definition만
+  그 질문에 답할 수 있어 handler를 생성하지 못했다. request handler는 의존성이 없어 살아남았고,
+  그래서 request는 되고 send만 안 되는 모양이 나왔다.
 
-## 감독관 결정 — Java는 send 행을 `unsupported`로 두고 측정을 진행한다
+  ```
+  IllegalStateException: failed to construct Framework-owned handler: BenchCommandHandler
+  Caused by: NoSuchBeanDefinitionException: No bean named 'benchMetrics' available
+    at ZLinkSpringHandlerFactory$SpringActivation.create(...:163)
+  ```
 
-job `fwb-05`가 올린 두 선택지 중 (1)을 채택한다. 판정 패턴은 `request-window`이고 그 경로는
-정상 동작하므로, send 행 없이도 두 판정식의 완전한 판정이 나온다. Node가 codec gap을 다룬
-방식과 같은 처리다. 다만 FB-029의 실패 지점을 좁히는 계측은 **20분 상한**으로 함께 수행한다.
-"handler 해석이 실패한다"까지 좁히면 0.18.0 항목이 실행 가능해지고, 이는 고치는 것이 아니라
-기록하는 일이다.
+- **그러나 제품 쪽 결함은 남고, 더 정확해진다.** handler 생성이 실패했을 때 framework의 반응이
+  문제다. 메시지를 **수락하고**, `received`·`admitted`·`dispatched`까지 **trace로 기록하고**,
+  **버리고**, sender에게는 **성공을 돌려준다.** DEBUG 로그에도 `LOG_AND_DROP`에도 아무것도
+  남지 않는다. 원인이 harness 배선이었다는 사실은 이 반응을 바꾸지 않는다. **사용자 코드의
+  handler 생성이 운영에서 실패하면 같은 일이 일어난다.**
+- **`dispatchSend`가 `whenComplete`를 성공 경로에서만 trace한다**는 것이 전부의 원인이다.
+  이 결함을 찾는 데 그것만 잡으려고 작성한 `ZLinkHandlerFilter`가 필요했다.
+- **처리**: 이 캠페인은 고치지 않는다. **0.18.0 후보 우선순위 0을 유지하되 제목을 바꾼다.**
+  "send 무성 손실"이 아니라 "handler 생성 실패의 무성 수락·폐기"다.
+- **교훈**: 감독관이 job의 최초 진단을 그대로 우선순위 0에 올렸다. job이 20분 계측으로
+  뒤집었다. **진단은 계측 전까지 가설이다.**
+
+## FB-030 — Java raw의 reply가 depth 16 이상에서 유실된다
+
+- **관찰** (job `fwb-05`, binding만 쓰고 bench 코드를 import하지 않는 최소 재현):
+
+  | outstanding | in-process echo server | bench raw server 대상 |
+  |---|---|---|
+  | 4 | 4/4 | 4/4 |
+  | 16 | 16/16 | 0/16, 5/16, 10/16 (run마다) |
+  | 100 | **43/100 (server는 101건 전부 echo)** | 0/100, 5/100 |
+
+- **결정적 수치는 in-process 100건이다. server가 101건 reply를 모두 보냈고 client는 43건을
+  완료했다.** reply가 생성되고 server의 submit과 client의 완료 사이에서 사라진다.
+  reply 분기 자체는 정상이다(`hasToken=true parts=2`). 간헐적이며 고정 상한이 아니다.
+- **Node FB-026보다 증거가 강하다.** Node는 멈춘 socket만 보여줬고, Java는 **reply가 나가고
+  버려지는 것**을 보여준다.
+- **처리**: 고치지 않는다. `request-window`를 Node와 같이 관측된 그대로 보고한다.
+  0.18.0 후보. 재현 코드를 저장소에 남긴다.
+
+## FB-031 — 언어를 가로지르는 완료 전달 패턴
+
+세 언어의 raw 행을 나란히 놓으면 하나의 모양이 보인다.
+
+| 언어 | 관측 |
+|---|---|
+| C | depth 90.7 유지, 오류 0 |
+| `.NET` | depth 8에 묶임. 제출 비용 때문이며 유실은 없다(FB-016) |
+| Node | depth 8까지 정상, 16 이상에서 socket 정지(FB-026) |
+| Java | depth 4까지 정상, 16 이상에서 reply 유실(FB-030) |
+
+C가 depth 90에서 멀쩡하므로 **Core 공통 경로만의 문제로 단정할 수 없고**, 세 binding이 각자
+다른 방식으로 깊이에서 무너지는 것이 공통점이다. 이 관찰 자체를 보고서에 싣는다. 원인 규명은
+이 캠페인의 범위가 아니다.
+
+## FB-032 — Java의 포화 계측기는 `jvm_thread_cores`로 한다
+
+- **관찰** (job `fwb-05`): `client_cores`(상한 20)는 발동하지 않을 뿐 아니라 **서로 다른 것을
+  비교한다.**
+
+  | 셀 | 프로세스 코어 | JVM 스레드 코어 | 비 JVM |
+  |---|---|---|---|
+  | `grpc-java` request-window | 3.08 | 3.00 | 0.09 |
+  | `zlink-java` send-saturation | 2.17 | **0.15** | **2.03** |
+  | `zlink-framework-java` send-saturation | 2.81 | 2.17 | 0.65 |
+
+  `zlink-java`는 프로세스 CPU의 94%가 Core의 native I/O thread이고 user 코드를 실행하지 않는다.
+  `grpc-java`는 3%다. 이 둘을 나누면 다른 종류의 양을 나누는 것이다.
+- **결정** (2026-09-07, 감독관): **`jvm_thread_cores`(`ThreadMXBean`, 공개 API)를 harness가
+  선언한 제출 병렬도 기준으로 쓴다.** 집계기가 계측기 이름으로 해석하므로 세 번째 계측기를
+  받도록 집계기를 고친다. **Node의 FB-023과 같은 모양의 오류이며 같은 방식으로 고친다.**
 
 ## 범위 밖으로 확인하고 미룬 항목
 
