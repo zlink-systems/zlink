@@ -231,7 +231,7 @@ public sealed class ZLinkObservationQueueTests
         new(
             "client-server-channel",
             Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole.Client,
-            Selectable: servers.Any(static server => server.Ready),
+            IsReady: servers.Any(static server => server.Ready),
             ReadyServerCount: servers.Count(static server => server.Ready),
             ConnectionIntentCount: servers.Count,
             PendingRequestCount: 0,

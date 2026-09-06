@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Identifiers;
@@ -625,6 +626,69 @@ public sealed class ClientServerChannelRuntimeTests
         }
     }
 
+    [Theory]
+    [InlineData(100, true)]
+    [InlineData(0, false)]
+    public async Task ServerOnlyTopologyReadinessUsesLocalReadyServer(
+        int weight,
+        bool expectedReady)
+    {
+        await using var provider = CreateServer(0, weight: weight);
+        var hosted = provider.GetServices<IHostedService>().Single(
+            static service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal(ZLinkFrameworkRuntimeState.Serving,
+                provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>().State);
+            var status = provider.GetRequiredService<IZLinkClientServerRuntime>()
+                .GetStatus("work");
+
+            Assert.Equal(
+                Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole.Server,
+                status.LocalRole);
+            Assert.Equal(expectedReady ? ZLinkTopologyState.Ready : ZLinkTopologyState.Degraded,
+                status.State);
+            Assert.Equal(expectedReady, status.IsReady);
+            Assert.Equal(expectedReady ? 1 : 0, status.ReadyTargetCount);
+            var target = Assert.Single(status.Targets);
+            Assert.Equal(weight, target.Weight);
+            Assert.Equal(ZLinkPeerState.Ready, target.State);
+        }
+        finally
+        {
+            await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task ClientOnlyTopologyWithoutReadyTargetIsDegraded()
+    {
+        await using var provider = CreateClient(ReservePort());
+        var hosted = provider.GetServices<IHostedService>().Single(
+            static service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal(ZLinkFrameworkRuntimeState.Serving,
+                provider.GetRequiredService<ZLinkFrameworkHostLifecycleState>().State);
+            var status = provider.GetRequiredService<IZLinkClientServerRuntime>()
+                .GetStatus("work");
+
+            Assert.Equal(
+                Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole.Client,
+                status.LocalRole);
+            Assert.Equal(ZLinkTopologyState.Degraded, status.State);
+            Assert.False(status.IsReady);
+            Assert.Equal(0, status.ReadyTargetCount);
+            Assert.Empty(status.Targets);
+        }
+        finally
+        {
+            await hosted.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Fact]
     public async Task ExactRuntimeProjectsLiveLocalServerAndPublishesDrainingEvent()
     {
@@ -650,6 +714,8 @@ public sealed class ClientServerChannelRuntimeTests
                     .ZLinkClientServerRole.ClientAndServer,
                 ready.LocalRole);
             Assert.True(ready.IsReady);
+            Assert.Equal(ZLinkTopologyState.Ready, ready.State);
+            Assert.Equal(1, ready.ReadyTargetCount);
             var readyServer = Assert.Single(ready.Targets);
             Assert.Equal(
                 ZLinkPeerState.Ready,
@@ -2054,7 +2120,8 @@ public sealed class ClientServerChannelRuntimeTests
 
     private static ServiceProvider CreateServer(
         int port,
-        long maximumMessageBytes = 16L * 1024L * 1024L)
+        long maximumMessageBytes = 16L * 1024L * 1024L,
+        int weight = 100)
     {
         var services = new ServiceCollection();
         services.AddSingleton<EchoProbe>();
@@ -2064,6 +2131,7 @@ public sealed class ClientServerChannelRuntimeTests
             options.AddClientServerChannel("work")
                 .Server()
                 .Listen(port)
+                .SetWeight(weight)
                 .AddSendHandler<EchoSendHandler, EchoSend>()
                 .AddRequestHandler<EchoHandler, EchoRequest, EchoReply>();
         });

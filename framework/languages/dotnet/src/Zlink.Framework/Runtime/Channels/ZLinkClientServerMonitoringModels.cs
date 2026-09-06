@@ -27,7 +27,7 @@ internal sealed record ZLinkClientServerServerSnapshot(
 internal sealed record ZLinkClientServerChannelSnapshot(
     string ChannelName,
     ZLinkClientServerRole LocalRole,
-    bool Selectable,
+    bool IsReady,
     int ReadyServerCount,
     int ConnectionIntentCount,
     int PendingRequestCount,

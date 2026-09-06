@@ -95,9 +95,9 @@ internal sealed class ZLinkClientServerRuntimeService(
         return new ZLinkClientServerChannelSnapshot(
             channelName,
             role,
-            Selectable: state.HasClient
-                        && _runtime.IsStarted
-                        && readyCount > 0,
+            IsReady: fingerprint.HostState == ZLinkFrameworkRuntimeState.Serving
+                     && _runtime.IsStarted
+                     && readyCount > 0,
             readyCount,
             fingerprint.ConnectionIntentCount,
             fingerprint.PendingRequestCount,
@@ -128,20 +128,15 @@ internal sealed class ZLinkClientServerRuntimeService(
                 MapPeerState(server.State),
                 MapUnavailableReason(server.State)))
             .ToArray();
-        var isReady = hostState == ZLinkFrameworkRuntimeState.Serving
-                      && runtimeStarted
-                      && snapshot.Selectable;
-        var topologyState = isReady
+        var topologyState = snapshot.IsReady
             ? ZLinkTopologyState.Ready
             : HostTopologyState(hostState, runtimeStarted);
         return new ZLinkClientServerStatus(
             snapshot.ChannelName,
             snapshot.LocalRole,
             topologyState,
-            isReady,
-            targets.Count(static target =>
-                target.Weight > 0
-                && target.State == ZLinkPeerState.Ready),
+            snapshot.IsReady,
+            snapshot.ReadyServerCount,
             targets,
             snapshot.Sequence,
             snapshot.ObservedAt);
@@ -391,7 +386,7 @@ internal sealed class ZLinkClientServerRuntimeService(
                 LifecycleGeneration: null,
                 DescriptorRevision: null,
                 Weight: null,
-                Ready: current.Selectable,
+                Ready: current.IsReady,
                 State: null,
                 Reason: null);
     }
