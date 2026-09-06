@@ -110,7 +110,13 @@ def read_instruction_total(path: Path) -> int:
                 match = number.search(line.partition(":")[2])
                 if match:
                     totals = int(match.group(0).replace(",", ""))
-    result = summary if summary is not None else totals
+    # "totals:" is the run's grand total (the sum of every dump/part); prefer
+    # it. "summary:" is only that one part's own tally, and with
+    # --instr-atstart=no + CALLGRIND_START/STOP_INSTRUMENTATION the final
+    # dump happens with instrumentation already back off, so its own
+    # "summary:" legitimately reads 0 even though "totals:" carries the real,
+    # correct count. Fall back to "summary:" only if "totals:" is missing.
+    result = totals if totals is not None and totals > 0 else summary
     if result is None or result <= 0:
         raise RuntimeError(f"no positive summary/totals instruction count in {path}")
     return result

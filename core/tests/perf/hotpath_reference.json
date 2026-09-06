@@ -1,7 +1,7 @@
 {
-  "dealer_dealer_inproc": 3455.381,
-  "dealer_router_reqrep_inproc": 12054.8948,
-  "pair_inproc": 2505.36,
-  "router_router_tcp": 2972.8817,
-  "stream_tcp": 8419.2254
+  "dealer_dealer_inproc": 3423.5328,
+  "dealer_router_reqrep_inproc": 19682.1958,
+  "pair_inproc": 2527.8337,
+  "router_router_tcp": 2972.5318,
+  "stream_tcp": 15540.385350
 }
