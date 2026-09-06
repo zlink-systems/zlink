@@ -196,14 +196,15 @@ count가 다른 경우, count `1`에 lane `1`이 온 경우, count `2`에서 lan
 `Routing-Id`와 count가 모두 같아야 한다. 구버전 READY에는 `Zlink-Lane-Count`가 없으므로
 연결을 거부하며, 기존 두-lane DEALER-ROUTER로 되돌리는 fallback이나 mixed-version shim은
 제공하지 않는다. DEALER·ROUTER가 아닌 socket pattern은 physical connection 하나를 사용하며
-`Zlink-Lane-Count`와 `Zlink-Lane`을 보내지 않는다.
+`Zlink-Lane-Count`와 `Zlink-Lane`을 보내지 않고, 둘 중 하나라도 받으면 handshake protocol failure다.
 
 물리 connection ID와 generation은 wire property나 public target이 아니다. 따라서 같은
 `Routing-Id`로 동시에 진행되는 두 count `2` attempt(예: 같은 socket의 서로 다른 connect
 intent)는 wire에서 구분되지 않는다. Binder는 `Routing-Id`로만 미완성 pair를 결합하므로 두
-attempt의 lane이 섞이면 위의 lane 중복 규칙에 따라 그 lane set을 READY protocol error로 닫고,
-connect intent의 재시도로 수렴한다. 동시 attempt를 구분하는 wire 식별자나 binder 측 admission
-직렬화는 두지 않는다. `Zlink-Lane`은
+attempt의 lane이 섞이면 위의 lane 중복 규칙에 따라 그 lane set을 READY protocol error로 닫고 각
+intent가 다시 시도한다. 같은 RID로 동시에 진행되는 intent가 하나가 되면 수렴하며, 두 intent가 계속
+동시에 시도하면 계속 충돌할 수 있다 — 이를 피하는 것은 peer당 intent 하나를 두는 상위 계층의 몫이다.
+동시 attempt를 구분하는 wire 식별자나 binder 측 admission 직렬화는 두지 않는다. `Zlink-Lane`은
 physical connection을 분류하는 내부 protocol property다. READY의 `Routing-Id`는 count `2`의
 두 connection이 같은 peer에 속하는지 검증하는 metadata다. Runtime은 ROUTER가 peer를 선택하는
 synthetic routing-id preamble을 Application lane에만 제공한다. Completion lane은 이 preamble과
@@ -470,9 +471,9 @@ Inbound request의 reply target은 public receive 역할에 따라 다르게 보
 
 Core는 outbound request를 wire에 공개하기 전에 socket당 65,536개인 SEND·REQUEST 공유
 completion slot과 nonzero completion ID를 예약한다. Slot은 public completion receive가 record를
-queue에서 제거할 때까지 유지한다. DONTWAIT request가 admission 전에 payload를 보관하면
-`ZLINK_OPT_PENDING_MAX_MSGS/BYTES`의 SEND·REQUEST 공유 pool도 사용한다. Admission 뒤에는 request
-payload를 replay용으로 보관하지 않으며 reply timeout과 correlation만 유지한다.
+queue에서 제거할 때까지 유지한다. Admission 전에 request payload를 보관하는 상태는 없다
+(`ZLINK_OPT_PENDING_MAX_MSGS/BYTES`는 ABI 보존 전용 — [socket README](../socket/README.ko.md#5-옵션)).
+Admission 뒤에는 request payload를 replay용으로 보관하지 않으며 reply timeout과 correlation만 유지한다.
 
 ### WebSocket 구현
 
@@ -503,16 +504,18 @@ test 하나로 이어진다.
 - DEALER·ROUTER가 아닌 active 쪽은 HELLO frame 뒤에 READY frame을 보내며 그 사이에 application frame을 넣지 않는다. 같은 byte 열을 WS·WSS binary message 하나에 넣거나 여러 binary message로 나눠도 peer가 같은 HELLO와 READY를 순서대로 처리한다.
 - DEALER·ROUTER 양쪽은 HELLO만 먼저 보내고 peer socket type으로 lane count를 정한 뒤 READY를 보낸다. READY write와 count별 lane attach가 끝나기 전에는 local readiness를 공개하지 않으며 write가 실패하면 readiness 없이 handshake가 실패한다.
 - READY control type `0x04` 뒤의 각 metadata property는 `[name length:u8][name bytes][value length:u32 BE][value bytes]` 배치를 따른다.
-- `ZLINK_OPT_ZMP_METADATA`가 기본값(비활성)이면 metadata property가 없고, 활성화하면 `Socket-Type`과 8 byte big-endian `Zlink-Max-Message-Size`가 추가된다. `Routing-Id`는 DEALER·ROUTER READY에만 추가된다.
-- DEALER·ROUTER transport의 READY에는 이 option과 관계없이 `Socket-Type`·`Routing-Id`, 1 byte
-  `Zlink-Lane-Count`와 1 byte `Zlink-Lane` metadata가 항상 있다.
+- READY의 metadata는 조건 하나로 정해진다: DEALER·ROUTER이거나 `ZLINK_OPT_ZMP_METADATA`가 켜져 있으면
+  `Socket-Type`과 8 byte big-endian `Zlink-Max-Message-Size`가 있고, DEALER·ROUTER이면 여기에
+  `Routing-Id`, 1 byte `Zlink-Lane-Count`, 1 byte `Zlink-Lane`이 항상 더해지며, 그 밖의 경우(option
+  기본값의 비 DEALER·ROUTER)에만 metadata property가 없다.
 - ERROR control type은 `0x05`이며 body는 `[type][error code:u8][reason length:u8][reason bytes]` 배치를 따른다.
 
 **Request-reply lane**
 - DEALER-DEALER와 DEALER-ROUTER의 READY는 count `1`, lane `0`이고 ROUTER-ROUTER의 READY는
   count `2`, lane `0`·`1`을 각각 한 번 사용한다. Bind·connect 방향을 바꾸어도 count가 같다.
-- PAIR, STREAM과 PUB-SUB family는 physical connection 하나를 사용하고 `Zlink-Lane-Count`와
-  `Zlink-Lane`을 보내지 않는다. 이 pattern에서 두 property를 받으면 handshake protocol failure다.
+- ZMP를 쓰는 비 DEALER·ROUTER pattern(PAIR, PUB-SUB family)은 physical connection 하나를 사용하고
+  `Zlink-Lane-Count`와 `Zlink-Lane`을 보내지 않으며, 둘 중 하나라도 받으면 handshake protocol
+  failure다. STREAM은 ZMP가 아니라 RAW를 사용하므로 이 항목의 대상이 아니다.
 - Lane-Count 누락, 길이 0·2, 값 0·3, 계산값 불일치, count `1`의 lane `1`, count `2`의
   duplicate·missing lane은 payload 전달 전에 handshake protocol failure와 disconnect를 만든다.
 - 구버전 two-lane DEALER-ROUTER READY에 Lane-Count가 없으면 logical ready가 되지 않고 DATA도

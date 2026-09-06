@@ -93,9 +93,12 @@ retry wait) does the code fall back to the general path. The fallback keeps thes
   `ENOTCONN`, `EHOSTUNREACH`, `ECONNREFUSED`) commits that selection to the configured endpoint
   and enters the wait loop. Any other failure returns immediately with the errno the general path
   would have produced.
-- `ZLINK_SEND_FLAGS_DONTWAIT` does not enter the wait loop. On a retryable refusal it registers a
-  payload-free wait token and returns `ZLINK_SUBMIT_BACKPRESSURED` immediately. The endpoint
-  commit rule applies only to blocking `ZLINK_SEND_FLAGS_NONE` send and to REQUEST.
+- `ZLINK_SEND_FLAGS_DONTWAIT` does not enter the wait loop. Whether a token is issued is decided
+  by the target and admission judgment of the common socket submit contract (only backpressure
+  and an unready target issue a token; a RID with no route returns `NOT_CONNECTED` without one);
+  what this document owns is only the cost boundary: token registration exists only on the refusal
+  path, never on the successful submit path. The endpoint commit rule applies only to blocking
+  `ZLINK_SEND_FLAGS_NONE` send and to REQUEST.
 - Wait-token registration and the WRITABLE record publish lie outside the per-message success
   path. Both run only on a refusal and on a credit or attach wake, so they fall within the
   allowance of §3 (the fallback path), and the §3 prohibitions on the success path still hold.
@@ -104,8 +107,10 @@ retry wait) does the code fall back to the general path. The fallback keeps thes
 
 ## 5. Performance gates
 
-Every change to the hot path passes both of the following gates. Both are separate from the
-contract tests; a change for which either gate did not run is unverified.
+Both gates are separate from the contract tests. §5.1 must pass for every change to the hot
+path; a change for which it did not run is unverified. §5.2 is the gate run during release
+preparation and is not a precondition of an individual change — the per-change judgment is owned
+by §5.1 alone. This section owns that execution obligation and `CONTRIBUTING` cites it.
 
 ### 5.1 Instruction-count gate (`hotpath_gate`)
 

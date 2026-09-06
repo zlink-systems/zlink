@@ -129,17 +129,13 @@ Application water-filling의 방향 수를 추가하거나 줄이지 않는다.
 endpoint의 값을 더하지 않고 다음 규칙으로 최종 cap 하나를 계산한다. 이 cap은 registry에서
 한 번만 예약하고 적용한다.
 
-| 송신 endpoint | 수신 endpoint | Physical ypipe 최종 cap |
-|---|---|---|
-| Auto | Auto | Water-filling 결과 |
-| Finite manual | Auto | Finite manual cap |
-| Auto | Finite manual | Finite manual cap |
-| Finite manual A | Finite manual B | `min(A, B)` |
-| Unlimited manual | Finite manual | Finite manual cap |
-| Finite manual | Unlimited manual | Finite manual cap |
-| Unlimited manual | Auto | Auto plan |
-| Auto | Unlimited manual | Auto plan |
-| Unlimited manual | Unlimited manual | Admission은 unlimited, 역할별 상한을 계산용 reservation으로 사용 |
+판정은 endpoint의 송수신 위치와 무관하게 두 endpoint 값의 집합으로 한다.
+
+| 두 endpoint 값의 집합 | Physical ypipe 최종 cap |
+|---|---|
+| 유한 manual 값이 하나라도 있다 | 유한 manual 값의 최솟값 |
+| 유한 manual 값은 없고 auto가 하나라도 있다 | Water-filling 결과(auto plan) |
+| 둘 다 unlimited manual이다 | Admission은 unlimited, 역할별 상한을 계산용 reservation으로 한 번 사용 |
 
 수동 예약을 뺀 budget이 모든 자동 방향의 하한 합계보다 작으면 하한을 낮추지 않고
 budget 부족 flag를 설정한다. 충분하면 아직 상한에 도달하지 않은 고유 physical queue
@@ -478,9 +474,10 @@ Queue를 detach하거나 다시 연결하면 새 generation을 만든다. HWM �
 
 ### HWM 변경
 
-HWM을 늘리면 현재 queue generation에 새 값을 적용한다. HWM을 줄였을 때 미반환 charge가
-새 목표보다 크면 이미 받아들인 frame을 제거하지 않는다. 새 frame을 받지 않고 charge가
-목표 이하가 될 때까지 기다린 뒤 새 HWM을 적용한다.
+HWM을 늘리면 현재 queue generation에 새 값을 적용한다. HWM을 줄이면 writer의 admission 한도는
+즉시 새 목표가 된다 — 미반환 charge에 candidate를 더한 값이 새 목표를 넘는 frame은 받지 않는다.
+이미 받아들인 frame은 제거하지 않으며, snapshot이 보고하는 applied 값은 보관량이 새 목표 이하가
+되는 순간 새 목표로 바뀐다(deferred shrink).
 
 ROUTER-ROUTER가 terminal reply와 error reply를 진행시키고 receive-flow-state frame을
 동기화하는 Completion queue에는 application HWM을 적용하지 않는다. DEALER-ROUTER reply와
@@ -514,9 +511,9 @@ Work budget 또는 count 한도가 부족한 request는 send flags와 `SNDTIMEO`
 호출하지 않는다. 한 pair의 한도 부족은 다른 pair나 같은 pipe의 ordinary send를 막지 않는다.
 Reply, timeout, disconnect와 close는 work·count reservation을 함께 반환한다. Terminal reply나
 timeout으로 reservation이 반환되면 그 reservation을 갖고 있던 바로 그 pipe owner에서 request submit
-recovery를 다시 깨운다. `DONTWAIT FINAL`로 거절된 경우의 대기 토큰은 이 reservation 반환을 wake 조건으로
-하며, physical write credit 회복만으로는 `ZLINK_COMPLETION_WRITABLE`을 발행하지 않는다(socket README
-REQUEST DONTWAIT 절).
+recovery를 다시 깨운다. 거절된 `DONTWAIT FINAL` request의 대기 토큰이 언제 `ZLINK_COMPLETION_WRITABLE`을
+발행하는지는 [socket README의 REQUEST DONTWAIT 절](../socket/README.ko.md#request와-reply)이 소유한다 —
+거절 자원의 회복만 wake 조건이므로 이 reservation 반환이 그 조건이다.
 
 ### Message 처리 경로의 비용 제한
 
@@ -584,7 +581,7 @@ admission 결과, errno)만으로 관찰할 수 있는 동작이며, 각 항목�
 - Socket detach·reconnect 후 이전 generation의 accounting이 새 generation의 charge를 줄이거나 writer credit을 늘리지 않는다(snapshot).
 
 **HWM 변경**
-- HWM을 낮추면 이미 받은 frame은 유지되고, queue 보관량이 새 목표 아래로 drain된 뒤에 새 HWM이 admission에 적용된다.
+- HWM을 낮추면 이미 받은 frame은 유지되고, 새 frame의 admission은 즉시 새 목표를 기준으로 거절되며, snapshot의 applied 값은 보관량이 새 목표 이하가 된 뒤에 새 목표를 보고한다.
 
 **Topology별 reply 회계**
 - Controlled DEALER-ROUTER reply를 queue에 남기면 그 byte delta가

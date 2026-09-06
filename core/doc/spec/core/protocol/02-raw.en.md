@@ -65,8 +65,11 @@ owns PACKET mode selection, output ownership, and malformed-framing handling.
 
 Connection readiness and disconnection are surfaced through socket monitor events
 (`ZLINK_EVENT_CONNECTION_READY`, `ZLINK_EVENT_DISCONNECTED`), not as in-band
-application frames. A zero-byte payload on the raw/packet path is treated as a control
-event and is not delivered as application data.
+application frames. A zero-byte input read from the transport (a connection notification) is
+treated as a control event and is not delivered as application data. In PACKET mode a
+`header 0 + body 0` packet with its 6-byte prefix is application data carrying length fields,
+delivered as two zero-length messages per the
+[STREAM packet receive contract](../socket/08-stream.en.md).
 
 ## 5. Internals
 
@@ -110,8 +113,9 @@ connections from external clients, and monitor events). Each item maps to one te
 - Connection readiness and disconnection are observed through monitor events
   (`ZLINK_EVENT_CONNECTION_READY`, `ZLINK_EVENT_DISCONNECTED`), not as in-band
   application frames.
-- A zero-byte payload on the raw/packet path is not delivered as application data (it
-  is treated as a control event).
+- A zero-byte input read from the transport is not delivered as application data (it is
+  treated as a control event). Delivery of a PACKET-mode `0 + 0` packet is verified by the STREAM
+  contract.
 
 **PACKET mode**
 - When `ZLINK_STREAM_RECV_MODE_PACKET` is selected before the first successful bind or

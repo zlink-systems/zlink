@@ -102,7 +102,8 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   is found. Without it, the report says "gate not run" and it does not count as green. Only
   a supervisor updates `core/tests/perf/hotpath_reference.json` (`--update-reference`), and an
   intended cost increase is recorded in the decision log with its reason.
-- A change that touches performance also runs the release comparison of §6.
+- The release comparison of §6 runs during release preparation (the per-change obligation is
+  `hotpath_gate` alone — [`10-hot-path.en.md` §5](core/doc/spec/core/systems/10-hot-path.en.md)).
 
 ## 6. Performance judgement
 

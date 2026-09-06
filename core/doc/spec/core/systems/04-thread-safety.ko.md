@@ -55,7 +55,6 @@ Connection에서 protocol 처리를 담당하는 engine의 state는 그 connecti
 
 **Public API guard와 close.** 공개 API 진입을 지키는 guard는 handle pin — API 호출이 진행
 중인 동안 핸들을 유효하게 고정하는 표시 — 과 close state만 관리한다. Service kind나
-application lifecycle을 분기하지 않는다. Close가 진행 중이면 새 operation을 정식 terminal
-result로 거부하고, active callback이나 API가 있으면 bounded close 계약에 따라 기다리거나
-`BUSY`를 반환한다. Caller가 이때 관찰하는 결과는
+application lifecycle을 분기하지 않는다. Guard는 기다리지 않는다: close가 accepted된 뒤의 새 진입과
+진행 중인 API가 있을 때의 close는 모두 즉시 거부되며, caller가 관찰하는 결과(`ESHUTDOWN`, `EBUSY`)는
 [Socket 공통 §2 스레드 안전성](../socket/README.ko.md#2-스레드-안전성)이 정의한다.

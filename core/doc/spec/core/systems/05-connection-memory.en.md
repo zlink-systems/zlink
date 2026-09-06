@@ -52,17 +52,12 @@ transport as follows.
 ### 3.1 Frame byte charge
 
 A physical queue that stores messages for one application direction is called a
-[directional queue](../glossary.en.md#directional-queue). For each frame, a directional pipe
-calculates the payload plus `sizeof(zlink_msg_t)` as the byte charge. This charge is reserved and
-returned in the following order.
-
-1. Immediately after checking the frame length, the decoder that interprets received wire bytes as
-   a frame first acquires provisional credit from the origin queue. Only then does it allocate the
-   payload buffer.
-2. For the final frame of a multipart message, it converts the same provisional total into a
-   committed message without incrementing the counter again.
-3. Write failure, rollback, close, and detach return exactly once the charge of each provisional or
-   committed frame actually removed.
+[directional queue](../glossary.en.md#directional-queue). The variable memory of one connection
+is the byte charge of the frames this queue currently holds. The charge formula (payload plus
+`sizeof(zlink_msg_t)`), the provisional-to-committed transition, and the return points are owned by
+[Auto HWM's physical queue accounting](06-auto-hwm.en.md#message-processing-sequence); this document
+only cites the result: a charge is part of the connection's memory cost only while the frame is in
+the queue, and a binding or application holding the payload after dequeue does not add to it.
 
 ### 3.2 Empty-pipe oversize exception
 
@@ -133,16 +128,9 @@ own the detailed verification items for byte accounting, admission, dequeue cred
 oversize exception. From the connection-memory perspective, verify the following items. Each item
 maps to one test.
 
-**Byte charge**
+**Byte charge and HWM**
 
-- Accepting one frame increases the pipe's accounted bytes by the payload plus `sizeof(zlink_msg_t)`.
-- The final frame of a multipart message only converts the provisional total into a committed message; it does not increment the counter again.
-- After write failure, rollback, close, or detach, the provisional and committed charges of the frames actually removed are returned exactly once.
-
-**HWM and dequeue credit**
-
-- The application directional HWM applies only to physical-frame bytes currently held by the Core queue.
-- When the Core queue dequeues a complete message to the binding, that message's queue charge ends and writer credit is returned. A binding or application continuing to hold the payload does not add it back to Core HWM accounting.
+- The observable items for frame-charge increase, transition and return, and for HWM admission, are owned by [Auto HWM §5](06-auto-hwm.en.md#5-implementation-and-contract-test-verification-requirements). This document does not repeat them.
 
 **Oversize and completion**
 

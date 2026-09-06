@@ -146,10 +146,12 @@ When a socket creates a new connection, it selects an I/O thread according to th
 criteria:
 
 1. **Affinity mask** — Restricts the candidate set when configured.
-2. **Load distribution** — General connections select the thread with the fewest registered
-   handles (least load) among the candidates, while STREAM connections select candidates in
-   round-robin order by default. If the `ZLINK_ASIO_STREAM_SESSION_SCHED=minload` environment
-   variable is set, STREAM connections also select the least-loaded thread.
+2. **Load distribution** — Objects placed once per socket, such as a listener or the socket's
+   asynchronous command owner, select the candidate thread with the fewest registered handles
+   (least load). Transport connections (connected and accepted sessions) select candidates in
+   round-robin order. STREAM sessions are round-robin by default as well; if the
+   `ZLINK_ASIO_STREAM_SESSION_SCHED=minload` environment variable is set, STREAM sessions alone
+   select the least-loaded thread.
 
 This distributes network connections across I/O threads. The assignment unit is a **connection**,
 not a socket: when one socket has multiple connections, those connections may span multiple I/O
@@ -179,21 +181,17 @@ before increasing the value beyond 4.
 
 ## 6. Implementation and contract-test verification requirements
 
-This section lists the items that an implementer must verify. These behaviors are observable only
-through the public surface (`zlink_ctx_new`, `zlink_ctx_set`, and `zlink_socket`) and the process
-thread list and names exposed by the OS. Each item maps to one test.
+This document is implementation narrative, so it carries no contract-test items of the public
+contract. The contract verified through the public surface is the set/get and error behavior of the
+`ZLINK_IO_THREADS` option, owned by
+[Context](../01-context.en.md#6-implementation-and-contract-test-verification).
 
-**Creation and lifetime**
+Whether the narrative in §2 and §3 still matches the code is checked with the following internal
+check conditions (observed through the process thread list and internal placement, not the public
+API).
 
-- No I/O thread runs when only `zlink_ctx_new()` has been called. The first socket must be created
-  before the threads run.
-- If `ZLINK_IO_THREADS` is set to N before the first socket is created and then a socket is created,
-  the thread names follow the pattern `IO/0`, `IO/1`, ... `IO/N-1`.
-
-**Thread assignment**
-
-- When one socket has multiple connections, those connections may span multiple I/O threads. The
-  assignment unit is a connection, not a socket.
-
-[Context](../01-context.en.md#6-implementation-and-contract-test-verification) owns verification of
-the set/get and error contracts for the `ZLINK_IO_THREADS` option itself.
+- With only `zlink_ctx_new()` called there is no I/O thread; creating the first socket starts them.
+- If `ZLINK_IO_THREADS` is set to N before the first socket is created, the thread names are
+  `IO/0` … `IO/N-1`.
+- The assignment unit is a connection — several connections of one socket may span several I/O
+  threads.

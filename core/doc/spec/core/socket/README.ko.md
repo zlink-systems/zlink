@@ -152,9 +152,10 @@ typedef enum zlink_rid_duplicate_policy_t
 } zlink_rid_duplicate_policy_t;
 ```
 
-`ZLINK_OPT_RID_DUPLICATE_POLICY`는 같은 local socket에 동일한 peer
-routing id가 들어왔을 때의 정책을 정한다. 값은 `int`로 설정하며,
-기본값은 `ZLINK_RID_DUPLICATE_REJECT`다.
+`ZLINK_OPT_RID_DUPLICATE_POLICY`는 같은 local socket에 **같은 방향**(둘 다 이쪽이 connect했거나
+둘 다 상대가 connect한)의 동일한 peer routing id가 들어왔을 때의 정책을 정한다. 값은 `int`로
+설정하며, 기본값은 `ZLINK_RID_DUPLICATE_REJECT`다. 서로 반대 방향의 pipe가 같은 routing id로
+충돌하는 경우(양쪽이 서로 connect)는 정책과 무관하게 아래의 방향 선택 규칙 하나를 따른다.
 
 `ZLINK_RID_DUPLICATE_REJECT`는 기존 pipe를 유지하고 새 중복 pipe를 등록하지
 않으며, 등록하지 않은 중복 pipe는 즉시 닫는다. 따라서 connector는 그 pipe의 종료를
@@ -164,8 +165,11 @@ admission된다. wire에 거부 사유는 없으며 connector는 자기 pair의 
 불문)에 따라 `ZLINK_REQUEST_NOT_CONNECTED`(errno `EHOSTUNREACH`)로 정확히 한 번 종결되고 caller가 다시
 보낸다. 재연결이 잦은 흐름은 `ZLINK_RID_DUPLICATE_HANDOVER`를 권장한다. Connector가 관찰하는 READY event는 transport 연결
 성립을 뜻하며 peer ROUTER의 routing id admission을 뜻하지 않는다. `ZLINK_RID_DUPLICATE_HANDOVER`에서는 같은 방향에서 다시 연결한 pipe가
-기존 pipe를 인수한다. 서로 반대 방향의 pipe가 충돌하면 두 peer의 routing id를
-비교해 양쪽이 같은 방향 하나를 선택한다. 그 선택으로 물러나는 방향에서 이미 admit된
+기존 pipe를 인수한다.
+
+서로 반대 방향의 pipe가 충돌하면(정책과 무관하게) 두 peer의 routing id를
+비교해 양쪽이 같은 방향 하나를 선택하고, 물러나는 방향의 pipe는 닫지 않고 standby로 둔다
+([ROUTER §5](07-router.ko.md)). 그 선택으로 물러나는 방향에서 이미 admit된
 request는 선택된 방향으로 이어지지 않는다. 그 request의 reply는 submit 시점에 사용한 바로 그
 transport pair로만 전달되도록 제한되어 있어 request를 완료하지 못한다. Core는 그 pair가
 handover로 물러나는 즉시 해당 request를 `ZLINK_REQUEST_NOT_CONNECTED`(errno `EHOSTUNREACH`)로

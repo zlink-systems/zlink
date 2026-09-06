@@ -85,9 +85,11 @@ Message 경로가 필요로 하는 socket 단위 상태는 상태가 바뀌는 �
 - 첫 시도는 선택된 pipe로 직접 admit한다. 재시도 가능한 거절(`EAGAIN`, `ENOTCONN`,
   `EHOSTUNREACH`, `ECONNREFUSED`)일 때만 그 선택을 configured endpoint로 commit해 대기 루프로
   넘긴다. 다른 실패는 일반 경로가 냈을 errno로 즉시 반환한다.
-- `ZLINK_SEND_FLAGS_DONTWAIT`는 대기 루프에 들어가지 않는다. 재시도 가능한 거절이면 payload가
-  없는 wait token을 등록하고 `ZLINK_SUBMIT_BACKPRESSURED`로 즉시 반환한다. Endpoint commit
-  규칙은 blocking `ZLINK_SEND_FLAGS_NONE` send와 REQUEST에만 적용된다.
+- `ZLINK_SEND_FLAGS_DONTWAIT`는 대기 루프에 들어가지 않는다. Token 발급 여부는 Socket 공통 submit
+  계약의 target·admission 판정이 정하며(backpressure·target 미준비만 token, route 없는 RID는 token 없이
+  `NOT_CONNECTED`), 이 문서가 소유하는 것은 비용 경계뿐이다: token 등록은 거절 경로에만 있고 성공
+  제출 경로에는 없다. Endpoint commit 규칙은 blocking `ZLINK_SEND_FLAGS_NONE` send와 REQUEST에만
+  적용된다.
 - Wait token 등록과 WRITABLE record 게시는 message마다 실행되는 성공 경로 밖에 있다. 두 작업은
   거절이 일어났을 때와 credit·attach wake가 일어났을 때만 실행되므로 §3의 허용 범위(후퇴 경로)에
   속하며, 성공 경로에 대한 §3의 금지는 그대로 유효하다.
@@ -96,8 +98,10 @@ Message 경로가 필요로 하는 socket 단위 상태는 상태가 바뀌는 �
 
 ## 5. 성능 gate
 
-Hot path를 고치는 모든 변경은 다음 두 gate를 통과해야 한다. 둘 다 contract test와 별개이며,
-어느 하나라도 실행되지 않았으면 그 변경은 검증되지 않은 것이다.
+두 gate는 contract test와 별개다. §5.1은 hot path를 고치는 모든 변경이 통과해야 하며, 실행되지
+않았으면 그 변경은 검증되지 않은 것이다. §5.2는 release 준비 단계에서 실행하는 gate이며 개별 변경의
+필수 조건이 아니다 — 변경 단위의 판정은 §5.1 하나가 소유한다. 이 실행 의무의 소유자는 이 절이며
+`CONTRIBUTING`은 이를 인용한다.
 
 ### 5.1 명령어 수 gate (`hotpath_gate`)
 

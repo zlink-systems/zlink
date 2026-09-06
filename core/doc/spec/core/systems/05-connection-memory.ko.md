@@ -51,16 +51,12 @@ connection 하나를 만들 때 traffic 양과 무관하게 할당하는 구성 
 ### 3.1 Frame byte charge
 
 한 application 방향의 message를 담는 물리 queue를
-[directional queue](../glossary.ko.md#directional-queue)라 한다. Directional pipe는 frame마다
-payload와 `sizeof(zlink_msg_t)`를 byte charge로 계산한다. 이 charge는 다음 순서로 예약되고
-반환된다.
-
-1. 수신한 wire byte를 frame으로 해석하는 decoder는 frame length를 확인한 직후 origin queue의
-   provisional credit을 먼저 얻고, 그 뒤에만 payload buffer를 할당한다.
-2. Multipart 마지막 frame에서는 같은 provisional 합계를 committed message로 전환하며 counter를
-   다시 증가시키지 않는다.
-3. Write 실패, rollback, close와 detach는 실제로 제거한 provisional·committed frame charge를
-   정확히 한 번 반환한다.
+[directional queue](../glossary.ko.md#directional-queue)라 한다. Connection 하나의 가변 memory는
+이 queue가 보관 중인 frame의 byte charge다. Charge의 산식(payload + `sizeof(zlink_msg_t)`),
+provisional→committed 전환과 반환 시점은 [Auto HWM의 physical queue accounting](06-auto-hwm.ko.md#message-처리-순서)이
+소유하며, 이 문서는 그 결과만 인용한다: charge는 frame이 queue에 있는 동안만 connection의
+memory 비용이고, binding이나 application이 dequeue 뒤 payload를 계속 보유하는 수명은 여기에
+더해지지 않는다.
 
 ### 3.2 빈 pipe oversize 예외
 
@@ -127,14 +123,8 @@ byte 회계, admission, dequeue credit과 oversize 예외의 상세 검증 항�
 [Auto HWM의 검증 요구](06-auto-hwm.ko.md#5-구현-및-contract-test-검증-요구)가 소유한다.
 connection memory 관점에서 확인할 항목은 다음과 같다. 각 항목은 test 하나로 이어진다.
 
-**byte charge**
-- frame 하나를 수락하면 그 pipe의 accounted byte가 payload에 `sizeof(zlink_msg_t)`를 더한 만큼 증가한다.
-- multipart 마지막 frame은 provisional 합계를 committed message로 전환할 뿐 counter를 다시 증가시키지 않는다.
-- write 실패, rollback, close와 detach 뒤 실제 제거된 frame의 provisional·committed charge는 정확히 한 번 반환된다.
-
-**HWM과 dequeue credit**
-- application directional HWM은 Core queue가 현재 보관하는 physical frame byte에만 적용된다.
-- Core queue가 complete message를 dequeue해 binding에 넘기면 그 message의 queue charge가 끝나고 writer credit을 반환한다. Binding이나 application이 payload를 계속 보유하는 수명은 Core HWM에 다시 계상하지 않는다.
+**byte charge와 HWM**
+- frame charge의 증가·전환·반환과 HWM admission의 관찰 항목은 [Auto HWM §5](06-auto-hwm.ko.md#5-구현-및-contract-test-검증-요구)가 소유한다. 이 문서는 항목을 반복하지 않는다.
 
 **oversize와 completion**
 - 빈 application pipe에 socket 최대 message 크기 이내이며 HWM보다 큰 complete message를 보내면 한 건 수락되고, 그 뒤의 write는 중단된다.

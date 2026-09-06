@@ -201,14 +201,17 @@ count `2` within `HANDSHAKE_IVL` is a READY protocol error. Core closes the enti
 and does not publish logical readiness. The two count `2` connections must have the same socket
 type, `Routing-Id`, and count. An old READY lacks `Zlink-Lane-Count` and is rejected; there is no
 fallback to the old two-lane DEALER-ROUTER form or mixed-version shim. Socket patterns other than
-DEALER and ROUTER use one physical connection and send neither `Zlink-Lane-Count` nor `Zlink-Lane`.
+DEALER and ROUTER use one physical connection, send neither `Zlink-Lane-Count` nor `Zlink-Lane`, and
+treat the receipt of either as a handshake protocol failure.
 
 Physical connection IDs and generations are neither wire properties nor public targets.
 Consequently two count `2` attempts in flight at the same time with the same `Routing-Id`
 (for example, different connect intents of one socket) are indistinguishable on the wire.
 The binder joins incomplete pairs by `Routing-Id` alone, so when lanes of the two attempts
-interleave, the duplicate-lane rule above closes that lane set with a READY protocol error
-and the connect intent's retry converges. No wire identifier that distinguishes concurrent
+interleave, the duplicate-lane rule above closes that lane set with a READY protocol error and
+each intent retries. It converges once only one intent is in flight for that `Routing-Id`; two
+intents that keep retrying at the same time can keep colliding — avoiding that is the upper
+layer's job, which keeps one intent per peer. No wire identifier that distinguishes concurrent
 attempts and no binder-side admission serialization is introduced.
 `Zlink-Lane` is an internal protocol property that classifies the physical connection. The
 `Routing-Id` in READY is metadata used to verify that the two count `2` connections belong to the
@@ -500,10 +503,10 @@ replies, and delivery of error replies.
 
 Before publishing an outbound request on the wire, Core reserves one of the 65,536 shared
 SEND and REQUEST completion slots per socket and a nonzero completion ID. The slot remains
-reserved until public completion receive removes the record from the queue. If a DONTWAIT
-request retains its payload before admission, it also uses the SEND and REQUEST shared
-`ZLINK_OPT_PENDING_MAX_MSGS/BYTES` pool. After admission, Core does not retain the request
-payload for replay; it retains only reply correlation and the timeout.
+reserved until public completion receive removes the record from the queue. There is no state
+in which a request payload is retained before admission (`ZLINK_OPT_PENDING_MAX_MSGS/BYTES` are
+ABI-preservation only — [socket README](../socket/README.en.md#5-options)). After admission, Core
+does not retain the request payload for replay; it retains only reply correlation and the timeout.
 
 ### WebSocket implementation
 
@@ -550,11 +553,11 @@ and request-reply completion is verified through public `zlink_router_recv_part`
   publishing readiness.
 - Each metadata property after READY control type `0x04` follows the layout
   `[name length:u8][name bytes][value length:u32 BE][value bytes]`.
-- When `ZLINK_OPT_ZMP_METADATA` has its default value (disabled), there are no metadata
-  properties. Enabling it adds `Socket-Type` and the 8-byte big-endian
-  `Zlink-Max-Message-Size`. `Routing-Id` is added only to DEALER·ROUTER READY frames.
-- A DEALER or ROUTER transport's READY always contains `Socket-Type`, `Routing-Id`, one-byte
-  `Zlink-Lane-Count`, and one-byte `Zlink-Lane` metadata, regardless of this option.
+- READY metadata is decided by one condition: if the socket is DEALER or ROUTER, or
+  `ZLINK_OPT_ZMP_METADATA` is enabled, READY carries `Socket-Type` and the 8-byte big-endian
+  `Zlink-Max-Message-Size`; if the socket is DEALER or ROUTER it always also carries `Routing-Id`,
+  one-byte `Zlink-Lane-Count`, and one-byte `Zlink-Lane`; only otherwise (a non-DEALER/ROUTER
+  socket with the option at its default) has no metadata property.
 - The ERROR control type is `0x05`, and its body follows the layout
   `[type][error code:u8][reason length:u8][reason bytes]`.
 
@@ -563,8 +566,9 @@ and request-reply completion is verified through public `zlink_router_recv_part`
 - DEALER-DEALER and DEALER-ROUTER READY use count `1`, lane `0`; ROUTER-ROUTER READY uses count
   `2`, with lanes `0` and `1` exactly once each. Reversing the bind and connect direction does not
   change the count.
-- PAIR, STREAM, and the PUB-SUB family use one physical connection and send neither
-  `Zlink-Lane-Count` nor `Zlink-Lane`.
+- Non-DEALER/ROUTER patterns that use ZMP (PAIR, the PUB-SUB family) use one physical connection,
+  send neither `Zlink-Lane-Count` nor `Zlink-Lane`, and treat the receipt of either as a handshake
+  protocol failure. STREAM uses RAW, not ZMP, so this item doesn't apply to it.
 - A missing Lane-Count, length `0` or `2`, value `0` or `3`, mismatch with the calculated count,
   lane `1` for count `1`, or a duplicate or missing count `2` lane causes handshake protocol
   failure and disconnect before payload delivery.

@@ -58,7 +58,7 @@ at the same time.
 
 **Public API guard and close.** The guard at the public API boundary manages only the handle pin—a
 marker that keeps the handle valid while an API call is in progress—and the close state. It does not
-branch on service kind or application lifecycle. If close is in progress, the guard rejects new
-operations with the formal terminal result. If callbacks or API calls are active, close waits according
-to the bounded close contract or returns `BUSY`. The result the caller observes in this situation is
-defined by [Socket Common §2 Thread safety](../socket/README.en.md#2-thread-safety).
+branch on service kind or application lifecycle. The guard never waits: a new entry after close is
+accepted, and a close while an API call is in flight, are both rejected immediately, and the result the
+caller observes (`ESHUTDOWN`, `EBUSY`) is defined by
+[Socket Common §2 Thread safety](../socket/README.en.md#2-thread-safety).

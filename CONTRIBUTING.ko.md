@@ -97,7 +97,8 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - `hotpath_gate`(callgrind, 명령어 수/msg ±5%)는 valgrind가 있을 때만 등록된다. 없으면 "gate
   미실행"을 보고에 남기고 green으로 세지 않는다. 기준값 `core/tests/perf/hotpath_reference.json`은
   감독자만 `--update-reference`로 갱신하며, 의도한 비용 증가는 근거와 함께 판정 기록에 남긴다.
-- 성능을 건드린 변경은 §6의 release 비교까지 실행한다.
+- §6의 release 비교는 release 준비 단계에서 실행한다(변경 단위 의무는 `hotpath_gate` 하나 —
+  [`10-hot-path.ko.md` §5](core/doc/spec/core/systems/10-hot-path.ko.md)).
 
 ## 6. 성능 판정
 

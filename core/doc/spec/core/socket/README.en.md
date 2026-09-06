@@ -158,8 +158,11 @@ typedef enum zlink_rid_duplicate_policy_t
 ```
 
 `ZLINK_OPT_RID_DUPLICATE_POLICY` controls what happens when a local socket
-observes another peer with the same routing id. The option value is an
-`int`; the default is `ZLINK_RID_DUPLICATE_REJECT`.
+observes the same peer routing id arriving in the **same direction** (both
+connected by this side, or both connected by the peer). The option value is an
+`int`; the default is `ZLINK_RID_DUPLICATE_REJECT`. When pipes in opposite
+directions collide with the same routing id (both sides connect to each other),
+the single direction-selection rule below applies regardless of the policy.
 
 `ZLINK_RID_DUPLICATE_REJECT` keeps the existing pipe and does not register the
 new duplicate pipe; the unregistered duplicate pipe is closed immediately. The
@@ -174,9 +177,12 @@ cause), and the caller resubmits. Flows that reconnect often should use
 `ZLINK_RID_DUPLICATE_HANDOVER`. The
 READY event a connector observes means the transport connection was established,
 not that the peer ROUTER admitted the routing id. Under `ZLINK_RID_DUPLICATE_HANDOVER`, a reconnecting pipe
-in the same direction takes over the existing pipe. If pipes in opposite
-directions collide, both peers compare their routing IDs and choose the same
-single direction. A request already admitted on the direction that loses that
+in the same direction takes over the existing pipe.
+
+If pipes in opposite directions collide (regardless of the policy), both peers
+compare their routing IDs and choose the same single direction, and the pipe of
+the losing direction is kept as standby rather than closed
+([ROUTER §5](07-router.en.md)). A request already admitted on the direction that loses that
 choice does not carry over to the chosen direction: its reply stays scoped to
 the transport pair that was active at submit time, so it cannot complete
 through the new direction. Core completes that request exactly once with

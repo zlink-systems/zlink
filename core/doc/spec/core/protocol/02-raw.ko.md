@@ -64,8 +64,10 @@ caller에게 반환한다. PACKET mode 선택, 수신 함수의 output·ownershi
 
 연결 준비와 연결 해제는 in-band application frame이 아니라 socket monitor
 이벤트(`ZLINK_EVENT_CONNECTION_READY`, `ZLINK_EVENT_DISCONNECTED`)로 표면화된다.
-raw/packet 경로의 0 byte payload는 제어 이벤트로 취급되어 application 데이터로
-전달되지 않는다.
+Transport에서 읽은 0 byte 입력(연결 알림)은 제어 이벤트로 취급되어 application 데이터로
+전달되지 않는다. PACKET 모드에서 6 byte prefix가 있는 `header 0 + body 0` packet은 길이 필드를
+가진 application 데이터이며, [STREAM packet receive 계약](../socket/08-stream.ko.md)대로 길이 0인
+message 두 개로 전달된다.
 
 ## 5. 내부 구조
 
@@ -106,8 +108,8 @@ Frame 2: [Payload (N bytes)]
 **연결 이벤트**
 - 연결 준비와 해제는 in-band application frame이 아니라 monitor
   이벤트(`ZLINK_EVENT_CONNECTION_READY`, `ZLINK_EVENT_DISCONNECTED`)로 관찰된다.
-- raw/packet 경로의 0 byte payload는 application 데이터로 전달되지 않는다(제어
-  이벤트로 취급).
+- Transport에서 읽은 0 byte 입력은 application 데이터로 전달되지 않는다(제어 이벤트로 취급).
+  PACKET 모드의 `0 + 0` packet 전달은 STREAM 계약이 검증한다.
 
 **PACKET mode**
 - 첫 successful bind 또는 connect 전에 `ZLINK_STREAM_RECV_MODE_PACKET`을 선택하면 투명

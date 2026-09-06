@@ -99,17 +99,13 @@ separate Completion pipe neither adds nor removes a direction from Application w
 
 Among automatic directions, Core distributes the remaining budget by repeatedly and evenly raising queues that have not yet reached their maximum. This distribution method is called [water-filling](../glossary.en.md#water-filling). An inproc physical ypipe does not add the values from both endpoints. It calculates one final cap using the following rules, then reserves and applies that cap once in the registry.
 
-| Send endpoint | Receive endpoint | Final physical ypipe cap |
-|---|---|---|
-| Auto | Auto | Water-filling result |
-| Finite manual | Auto | Finite manual cap |
-| Auto | Finite manual | Finite manual cap |
-| Finite manual A | Finite manual B | `min(A, B)` |
-| Unlimited manual | Finite manual | Finite manual cap |
-| Finite manual | Unlimited manual | Finite manual cap |
-| Unlimited manual | Auto | Auto plan |
-| Auto | Unlimited manual | Auto plan |
-| Unlimited manual | Unlimited manual | Admission is unlimited; use the role-specific maximum as the calculation reservation |
+The judgment uses the set of the two endpoint values, regardless of which endpoint sends or receives.
+
+| Set of the two endpoint values | Final physical ypipe cap |
+|---|---|
+| At least one finite manual value | The minimum of the finite manual values |
+| No finite manual value and at least one auto | Water-filling result (auto plan) |
+| Both unlimited manual | Admission is unlimited; the role-specific maximum is reserved once for calculation |
 
 If the budget remaining after subtracting manual reservations is less than the sum of the minimums for all automatic directions, Core does not reduce the minimums and sets the insufficient-budget flag. When the budget is sufficient, Core divides the remainder by the number of unique physical queues that have not reached their maximum and repeatedly increases each queue up to its maximum. It assigns division remainders one byte at a time in stable queue ID order. The same registry snapshot and inputs therefore always produce the same result.
 
@@ -369,7 +365,7 @@ Detaching or reconnecting a queue creates a new generation. HWM replanning and a
 
 ### HWM Changes
 
-Increasing the HWM applies the new value to the current queue generation. When the HWM is decreased and the unreturned charge is greater than the new target, Core does not remove frames already admitted. It stops accepting new frames, waits until the charge reaches or falls below the target, and then applies the new HWM.
+Increasing the HWM applies the new value to the current queue generation. Decreasing the HWM makes the writer's admission limit the new target immediately — a frame whose candidate charge added to the unreturned charge exceeds the new target is not admitted. Frames already admitted are not removed, and the applied value reported by snapshots changes to the new target the moment the retained amount falls to or below it (deferred shrink).
 
 Application HWM does not apply to the ROUTER-ROUTER Completion queue that advances terminal replies
 and error replies and synchronizes receive-flow-state frames. DEALER-ROUTER replies and error
@@ -403,9 +399,10 @@ publishes no part on the wire and does not invoke its handler. Capacity exhausti
 not block another pair or ordinary sends on the same pipe. Reply, timeout, disconnect, and close
 return the work and count reservations together. When a terminal reply or timeout returns the
 reservations, it wakes request-submit recovery on the pipe owner that held that reservation.
-A wait token returned by a refused `DONTWAIT FINAL` request uses that reservation return as its wake
-condition; recovery of physical write credit alone does not emit `ZLINK_COMPLETION_WRITABLE` (socket
-README, REQUEST DONTWAIT).
+When the wait token of a refused `DONTWAIT FINAL` request emits `ZLINK_COMPLETION_WRITABLE` is owned
+by the [socket README's REQUEST DONTWAIT section](../socket/README.en.md#request-and-reply) — the
+recovery of the refusing resource is the only wake condition, so this reservation return is that
+condition.
 
 ### Message-Path Cost Limits
 
@@ -463,7 +460,7 @@ This section collects the items that workers must verify. These behaviors are ob
 - After socket detach or reconnect, accounting from the previous generation does not reduce the new generation's charge or increase its writer credit (snapshot).
 
 **HWM changes**
-- Lowering the HWM preserves frames already admitted, and the new HWM applies to admission after the queued amount drains below the new target.
+- Lowering the HWM preserves frames already admitted, admission of new frames is refused against the new target immediately, and the snapshot's applied value reports the new target only after the retained amount has fallen to or below it.
 
 **Reply accounting by topology**
 - When a controlled DEALER-ROUTER reply remains queued, its byte delta appears in

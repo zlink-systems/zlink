@@ -143,10 +143,10 @@ ASIO handler가 post되어 blocking 대기 중인 이벤트 루프가 깨어나 
 socket이 새 connection을 생성할 때 다음 기준으로 I/O thread를 선택한다.
 
 1. **affinity mask** — 설정된 경우 후보 집합을 제한한다.
-2. **부하 분산** — 일반 connection은 후보 중 등록된 핸들 수가 가장 적은
-   thread(least-load)를 고르고, STREAM connection은 기본적으로 후보를 round-robin으로
-   고른다. 환경 변수 `ZLINK_ASIO_STREAM_SESSION_SCHED=minload`를 설정하면 STREAM
-   connection도 least-load로 고른다.
+2. **부하 분산** — listener와 socket의 비동기 command owner처럼 socket당 한 번 놓는 객체는
+   후보 중 등록된 핸들 수가 가장 적은 thread(least-load)를 고른다. Transport connection(연결·수락된
+   session)은 후보를 round-robin으로 고른다. STREAM session도 기본은 round-robin이며, 환경 변수
+   `ZLINK_ASIO_STREAM_SESSION_SCHED=minload`를 설정하면 STREAM session만 least-load로 고른다.
 
 이렇게 네트워크 connection이 I/O thread에 분산된다. 할당 단위는 socket이 아닌
 **connection**이다 — 하나의 socket이 여러 connection을 가지면 여러 I/O thread에 걸칠 수
@@ -176,19 +176,13 @@ I/O thread를 CPU 코어 수 이상으로 설정해도 이점이 없고 context-
 
 ## 6. 구현 및 contract test 검증 요구
 
-이 절은 작업자가 확인할 항목을 모은다. 공개 표면(`zlink_ctx_new`·`zlink_ctx_set`·
-`zlink_socket`)과 OS가 노출하는 process의 thread 목록·이름만으로 관찰할 수 있는 동작이며,
-각 항목은 test 하나로 이어진다.
-
-**생성과 수명**
-- `zlink_ctx_new()`만 호출한 상태에서는 I/O thread가 실행되지 않는다 — 첫 번째 socket을
-  생성해야 thread가 실행된다.
-- 첫 socket 생성 전에 `ZLINK_IO_THREADS`를 N으로 설정하고 socket을 만들면, thread 이름이
-  `IO/0`, `IO/1`, ... `IO/N-1` 패턴을 따른다.
-
-**thread 할당**
-- 하나의 socket이 여러 connection을 가지면 그 connection들은 여러 I/O thread에 걸칠 수
-  있다 — 할당 단위는 socket이 아니라 connection이다.
-
-`ZLINK_IO_THREADS` 옵션 자체의 설정·조회와 오류 계약 검증은
+이 문서는 구현 서술이므로 공개 계약의 contract test 항목을 두지 않는다. 공개 표면으로 검증하는
+계약은 `ZLINK_IO_THREADS` 옵션의 설정·조회·오류이며
 [Context](../01-context.ko.md#6-구현-및-contract-test-검증-요구)가 소유한다.
+
+§2·§3의 구현 서술이 코드와 맞는지는 다음 내부 확인 조건으로 점검한다(공개 API가 아니라 process의
+thread 목록과 내부 배치로 확인한다).
+
+- `zlink_ctx_new()`만 호출한 상태에서는 I/O thread가 없고, 첫 socket 생성이 thread를 시작한다.
+- 첫 socket 생성 전에 `ZLINK_IO_THREADS`를 N으로 설정하면 thread 이름이 `IO/0` … `IO/N-1`이다.
+- 할당 단위는 connection이다 — 한 socket의 여러 connection이 여러 I/O thread에 걸칠 수 있다.
