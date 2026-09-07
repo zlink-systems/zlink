@@ -2314,3 +2314,8 @@ C의 같은 항목 `Core poller wait·reply 진행`은 **4,593.91 Ir(C 잔여의
 
 **리뷰**(`review-st2.md`, astra): 1차 B-1(command 전이)은 해소. 신규 차단: **B-ST2-1** async→available 전환(`release_receive_sync_from_async_owner()`, 설치 실패·idle/종료/quiesce detach)이 release store만 해서, `async`를 보고 mutex 방식으로 들어온 `has_in()` 등이 실행 중인데 public lease가 lock-free로 시작 가능(기존 결함이나 프로토콜 완결에 포함). **B-ST2-2** `progress_epoch` 비원자 read/write(lock-free lease 분기 vs notify·새 broadcast) — "최악은 대기 1회"라는 상한은 data race 프로그램에서 증명 불가, atomic 전환 + 전체 receive progress 접근 정리 필요. **B-ST2-3** 새 테스트의 Asio socket이 thread 지역 io_context보다 오래 살아 Windows IOCP backend에서 파괴된 service 접근. **B-ST2-4** 다른 thread에서 blocking read 중인 Asio socket close(Asio는 close를 thread-safe로 보장하지 않음). W-ST2-1 `has_in()`의 poller 경로 비용(CAS+RMW 추가, 5셀은 POLLIN poller 미사용이라 관측 밖 — perf/c multi로 확인 필요), W-ST2-3 command CV가 `recursive_mutex_t` 위(스펙 §5/§6 위반), 주석 부정확, notify 로직 중복.
 **결정**: ST-3(Claude opus, 2 h): 위 4건 + W-ST2-3 수정, TSan suppression 없이 잔여 경고 분류. 이후 게이트(perf/c multi 1024 B 3셀 포함해 `has_in` 비용 관측) → 커밋. 0.17.3 예상 12:00 → **13:30 전후**.
+
+## D-B224 (2026-09-08 07:55, 머신 B) D-BP28 ws 왕복 크기 비례 붕괴 — WS-1 분석 착수(ST-3와 병행)
+
+**보고**(`doc/bug/perf/2026-09-08-core-ws-roundtrip-size-penalty.ko.md`): ws/tcp 처리량 비가 단방향은 전 크기 0.93~1.05인데 왕복은 64 B 0.93 → 65536 B 0.36(C·C++ 독립 러너 동일 곡선 → Core/transport). REQREP 65536 B에서 C 러너 25.8k ops/s·0.086 ms(파이프라인 미충전). 요청: 비용 위치 특정, 회귀 테스트(단방향/왕복 비가 transport에 따라 크게 달라지지 않음), 그때까지 ws/wss 왕복 셀 보류.
+**결정**: WS-1(codex sol/high, 2 h, 분석 전용, callgrind Ir 기반·ninja 0일 때만) — 왕복 ws 경로에서 payload 비례 비용(masking 재수행, frame 헤더/조각화, 메시지당 flush·write, 버퍼 재할당)을 함수:행으로 특정하고 수정 방향을 제안. 수정 규모가 작으면 0.17.3, 아니면 0.17.4. A는 ws/wss 왕복 셀을 보류 유지.
