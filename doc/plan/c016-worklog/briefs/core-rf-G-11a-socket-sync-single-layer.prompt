@@ -1,0 +1,6 @@
+job G-11a (opus): 소켓 공개 API 직렬화를 3겹(`public_api_sync` + `command_owner_sync` + command당 `receive.sync`)에서 **1겹**으로. 공통 규칙 적용(JOBS=4, ninja ≤2 `-x`, stash 금지, 포그라운드, 1.5 h). worktree ~/project/zlink-work/g11a (G-1 착지 뒤 main에서).
+근거: `core-rf-G-11-lock-provenance.md` 설계 B ①(−1.7 lock/msg), 감독관 분석(D-B178: turn = `public_api_sync_bit` 보유; 세부 잠금은 lease/조건부 bit/세부 잠금 3겹의 틈에서 생김), framework 06 §4 C2·§5, 07 §6.3.
+목표: 공개 연산 하나 = 진입점 잠금 하나. `process_commands`의 command-owner 소유권과 command당 `receive.sync`가 지키던 불변식을 그 하나로 흡수한다. **명령 적용은 잠금 밖 유지**(G-11 권고 — 비동기 실행자가 turn을 오래 쥐지 않도록) — 대신 "적용 중"을 나타내는 기존 상태(command_owner 비트)를 진입점 잠금의 일부로 정의한다. 새 상태·플래그 추가 금지; 줄이는 방향만. 두 설계 비교(어느 것을 남기고 어느 것을 흡수할지)와 잠금 순서(inproc peer 잠금 역전 없음) 증명.
+계약(문장 인용·불변): 04-thread-safety §4.1(어떤 스레드든 사용 가능), 05-polling POLLIN/POLLOUT level·WRITABLE wake 전이당 1회, README recv wake 조건, 08-stream §5, D-079·D-099·S-12(close BUSY) 규칙. 블로킹 send/recv 대기가 잠금을 쥐고 자지 않음을 코드로 확인(G-11 (c) 항목).
+검증: `ctest -R 'wake|poll|stream|pipe|mailbox|send|recv|router|dealer|pair|close|release'` 5회, lost-wake 세트 until-fail:20, `test_close_completion_poller_release` stress ×50(S-12 방식), TSan(`setarch -R`) 신규 경고 0, hotpath 5셀(주 판정), 축소셀 lock/msg·Ir/msg before→after(목표 −1.7 lock/msg), with_stream runs 1(flock).
+보고서 core-rf-G-11a-summary.md.
