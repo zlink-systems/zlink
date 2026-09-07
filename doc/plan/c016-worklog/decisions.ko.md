@@ -2132,7 +2132,8 @@ C++ `tls` 4096 B SENDSEND에서 client가 exit 1로 죽는 것을 진단한 결�
 | .NET | `received.Send().Messages(parts).Async()` → `List<Task> replies`에 무제한 누적(`PerfMultiRoutedRelayServer.cs:130-158`) | **있음** |
 | Rust | `replies.push(async move {...})`(`perf_multi_dealer_router_server.rs:129`) | **있음** |
 | Python | `asyncio.create_task` per 메시지, 주석에 "neither caps pending replies nor gates Core"(`perf_multi_dealer_router_server.py:86-98`) | **있음** |
-| Node·Go | 미확인 | 확인 필요 |
+| Node | `pendingTasks = new Set()`에 수신마다 task 추가, 끝에 `Promise.all`(`perf_multi_routed_sendsend.ts:307~`) | **있음**(2026-09-08 08:58 확인) |
+| Go | 확인 중 — server echo 경로 `perf_multi_router_router.go:254` `startMultiRouterRouterEchoServer` | 확인 필요 |
 
 tcp에서만 재서 지금까지 드러나지 않았을 뿐, 각 언어의 `tls`·`ws`·`wss` 차례에 같은 형태로 터진다.
 
