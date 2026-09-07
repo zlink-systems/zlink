@@ -4,8 +4,40 @@
 >
 > 작업 기준: `main` (별도 브랜치 없음; 검증된 단위마다 커밋·푸시)
 >
-> 현재 상태: inventory gate와 재현 환경 기록 완료, paired 측정 대기. Core REQUEST 계약
-> 통일(D-B85), 8개 binding의 REQUEST 경로 포팅, C perf REQREP runner 반영을 확인했다.
+> 현재 상태(2026-09-07 갱신): 러너 정합 작업 중. 호스트가 바뀌었고(16 논리 CPU / 11.7 GiB /
+> 홈 `/home/hep7hep7` → 20 논리 CPU / 94 GiB / 홈 `/home/hep7`) `core/build`(Release+LTO)를
+> 새로 빌드해 artifact를 고정했으며 새 환경 manifest(`log/2026-09-07-environment.ko.md`)를
+> 작성했다. **2026-09-05/06의 paired 판정과 개선 pass는 그대로 유지한다** — 같은 호스트·같은
+> 시점에 C와 짝지어 잰 결과이므로 그 자체로 유효하다. §6이 금지하는 것은 "이전 C 결과와 새
+> binding 결과를 짝짓는 것"이지 완결된 판정의 폐기가 아니다. 새로 손대는 대상만 새 artifact에서
+> 다시 짝지어 재고, 이미 닫힌 판정은 대표 셀 spot-check로 확인한다. 측정 재개 전에 러너의 정책
+> 정합을 먼저 끝낸다(D-BP1·D-BP2·D-BP3).
+>
+> 사용자 지시(2026-09-07): 모든 언어의 perf 러너는 `bindings/c/perf` canonical 러너와
+> **완전히 동일한 측정 의미**를 가져야 하고 `doc/perf`의 정책 문서(`PERF_POLICY.md`,
+> `PERF_SINGLE_TEST_POLICY.md`, `PERF_MULTI_TEST_POLICY.md`,
+> `BINDINGS_OPTIMIZATION_GUIDE.ko.md`)를 준수해야 한다. REQREP뿐 아니라 one-way·SENDSEND·
+> STREAM을 포함한 모든 pattern에서 C↔binding 측정 의미 차이를 제거한 뒤 측정한다.
+>
+> 다만 **C perf는 동기 모델이고 나머지 binding perf는 비동기로 동작하는 차이는 어쩔 수 없으며,
+> 그렇게 동작하도록 테스트한다(특히 multi)**. 정합의 범위는 둘로 나눈다. (가) 반드시 같아야
+> 하는 것 = 측정 의미: metric 산출식과 runs median, `ready -> active(duration)` 구간과 같은
+> 구간 latency 집계, **backpressure 경계까지 포화 제출이라는 부하 수준**, latency sample
+> cap·reservoir·percentile 보간, 수신 readiness/drain 의미, 종료 protocol, client·I/O
+> thread·HWM·timeout·size·duration. (나) 같게 강제하지 않는 것 = 언어 실행 모델: completion
+> queue·callback·future·event loop·goroutine 등 binding 공개 계약의 비동기 경로 자체.
+> 동기처럼 보이게 하려고 요청마다 blocking wait을 넣거나 공개 계약을 우회하는 러너 설계는
+> 채택하지 않는다. 목표는 "같은 코드 모양"이 아니라 "같은 부하와 같은 집계"다. socket당
+> in-flight 1로 묶는 현재 REQREP 러너 구조는 비동기/동기 차이가 아니라 부하 수준 차이이므로
+> (가)에 속하는 수정 대상이다(D-BP1).
+>
+> D-B127 사용자 결정(D-BP1): (B1) binding 러너의 "backpressure까지 포화 제출" 경계는
+> 공개 poller의 raw socket `ZLINK_POLLOUT` level로 정의하고 새 공개 API를 추가하지 않는다.
+> (B2) canonical C single 러너의 별도 1초 latency 단계를 제거해 정책대로 throughput과
+> latency를 같은 active 구간에서 집계한다.
+>
+> 이전 상태(2026-09-05 기록): inventory gate와 재현 환경 기록 완료, paired 측정 대기. Core
+> REQUEST 계약 통일(D-B85), 8개 binding의 REQUEST 경로 포팅, C perf REQREP runner 반영 확인.
 
 이 문서는 Core 0.17.0을 기준으로 bindings 라이브러리 성능 개선을 처음부터 진행하기
 위한 실행 문서다. 이전 계획 문서(0.15.0)의 측정값과 완료 판정은 가져오지 않는다. 새 C
@@ -75,6 +107,14 @@ core 0.17.0의 통과 비율이나 완료 근거로 사용하지 않는다.
 | 5 | Go | `bindings/go/perf` |
 | 6 | Rust | `bindings/rust/perf` |
 | 7 | Python | `bindings/python/perf` |
+
+> **비교 범위 (2026-09-07, D-BP2)**: `PERF_POLICY.md` line 144~148은 "bindings ↔ C 성능
+> 비교는 multi suite로 한정한다 ... single 결과는 각 binding의 synchronous path와 lifecycle을
+> 검증하는 데 사용하고 cross-binding ratio에는 사용하지 않는다"고 규정한다. 따라서 이 문서의
+> **통과/보류/미달 판정과 완료 기준은 Multi suite에만 적용한다.** Single suite는 정책 준수와
+> lifecycle 검증을 위해 계속 측정·기록하되 C 대비 비율에 gate를 걸지 않는다. §2.1·§2.2의 목표
+> 수치, §7.4·§7.5의 완료 gate, §9.x.1 Single 상세 표의 상태 값, §12의 완료 기준을 모두 이
+> 범위로 읽는다.
 
 비교 기준은 같은 core 0.17.0 runtime으로 실행한 `bindings/c/perf` 결과다. 같은 suite,
 pattern, transport, message size, duration, client 수, metric을 맞춘 뒤 다음 식으로
@@ -682,6 +722,18 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 ## 9. 언어별 성능 확인 표
 
+> **Single suite의 pattern (D-BP3)**: Single은 one-way 5 pattern(`PAIR`, `PUBSUB`,
+> `DEALER_DEALER`, `DEALER_ROUTER`, `ROUTER_ROUTER`)만 측정한다. `DEALER_ROUTER_REQREP`·
+> `ROUTER_ROUTER_REQREP`는 Single에서 **제외**하고 Multi suite에서만 측정·판정한다. 정책이
+> Single request/reply에 요구한 "synchronous callback terminal"이 binding 공개 계약에 없어
+> (`bindings/doc/spec/async-coroutine-policy.ko.md:117`) 정책 조항 자체가 구현 불가능했고,
+> 제외로 그 모순이 소멸한다. 각 언어의 `x.1 Single suite` 표에서 REQREP 행은 `해당 없음`이다.
+>
+> **Single 상세 표의 상태 값 (D-BP2)**: `x.1 Single suite` 표의 셀은 **기록**이며 성능
+> 판정이 아니다. 기존에 기록된 `통과`·`미달` 값과 비율은 그대로 보존한다(측정은 실제로
+> 이루어졌고 값도 유효하다). 다만 `PERF_POLICY.md:144-149`에 따라 이 값들을 cross-binding
+> 성능 gate로 사용하지 않는다. 성능 판정은 `x.2 Multi suite` 표에서만 한다.
+
 모든 언어는 같은 열과 같은 상태 규칙을 사용한다. 상세 표의 상태가 진행 상태 요약보다
 우선한다. 상세 표에 `미측정` 또는 `미달`이 하나라도 남아 있으면
 해당 언어는 완료가 아니다.
@@ -701,44 +753,44 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `PUBSUB` | 통과(95.9%) | 통과(92.5%) | 통과(105.7%) | 통과(99.5%) | 통과(137.3%) | 통과(146.7%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 112.9%(목표 95%), latency 4.60x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 840.7/876.8, 777.9/840.8, 656.9/621.6, 12.7/12.8, 8.2/6.0, 3.7/2.5 Kmsg/s; latency ms C++·C 0.081/0.051, 0.232/0.054, 0.656/0.051, 0.251/0.069, 0.252/0.082, 0.253/0.115; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_074600_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_075055_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `tcp` | `DEALER_DEALER` | 통과(80.8%) | 통과(85.7%) | 통과(105.8%) | 통과(92.3%) | 통과(93.5%) | 통과(97.7%) | after(완화 목표 90% 적용; runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 92.6%(목표 95%), latency 72.95x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 894.1/1106.9, 880.4/1027.4, 833.6/787.8, 37.7/40.9, 24.1/25.8, 14.9/15.3 Kmsg/s; latency ms C++·C 17.388/0.046, 1.497/0.049, 0.976/0.050, 0.359/0.069, 0.287/0.085, 0.251/0.121; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_075521_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_075941_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `tcp` | `DEALER_ROUTER` | 통과(88.3%) | 통과(91.0%) | 통과(98.9%) | 통과(97.6%) | 통과(95.9%) | 통과(99.2%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 95.2%(목표 85%), latency 6.99x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 909.1/1029.2, 861.6/946.7, 732.0/740.1, 37.6/38.6, 24.4/25.4, 15.1/15.2 Kmsg/s; latency ms C++·C 0.256/0.052, 0.391/0.052, 1.034/0.055, 0.359/0.070, 0.284/0.084, 0.246/0.121; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_080331_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_080750_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미달(2.2%) | 미달(2.1%) | 미달(2.1%) | 미달(83.1%) | 미달(77.8%) | 미달(90.7%) | 참고값 — 러너 모델 차이(D-B125/D-B127: C++ 러너는 요청 1건씩 대기, C는 포화 제출; library 왕복 비용은 수 µs, 판정 보류); aggregate throughput 43.0%(목표 85%), latency 0.31x; 처리량 C++·C 8.5/391.3, 8.3/395.0, 8.2/398.1, 6.4/7.7, 5.2/6.6, 4.2/4.7 Kmsg/s; latency ms C++·C 0.118/11.544, 0.120/10.567, 0.121/7.444, 0.156/0.233, 0.193/0.321, 0.235/0.414; `p1cpp-single`; C `perf_c_single_linux_20260905_064250_p1cpp-single.txt`, C++ `perf_cpp_single_linux_20260905_064712_p1cpp-single.txt`; [log](log/2026-09-05-cpp-single-before.ko.md) |
+| `tcp` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tcp` | `ROUTER_ROUTER` | 통과(92.4%) | 통과(93.3%) | 통과(90.9%) | 통과(99.1%) | 통과(95.5%) | 통과(98.5%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 94.9%(목표 85%), latency 54.25x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 893.5/967.4, 823.5/882.8, 665.0/731.5, 38.5/38.9, 23.3/24.4, 14.5/14.8 Kmsg/s; latency ms C++·C 0.097/0.051, 2.961/0.050, 12.984/0.051, 0.351/0.071, 0.295/0.087, 0.257/0.118; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_081141_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_081600_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미달(1.8%) | 미달(1.8%) | 미달(2.1%) | 미달(82.6%) | 미달(87.1%) | 미달(83.8%) | 참고값 — 러너 모델 차이(D-B125/D-B127: C++ 러너는 요청 1건씩 대기, C는 포화 제출; library 왕복 비용은 수 µs, 판정 보류); aggregate throughput 43.2%(목표 85%), latency 0.38x; 처리량 C++·C 8.1/443.0, 8.2/445.1, 8.0/382.4, 6.4/7.8, 5.5/6.3, 4.2/5.0 Kmsg/s; latency ms C++·C 0.122/1.679, 0.121/0.453, 0.125/9.761, 0.155/0.226, 0.181/0.293, 0.238/0.379; `p1cpp-single`; C `perf_c_single_linux_20260905_070313_p1cpp-single.txt`, C++ `perf_cpp_single_linux_20260905_070735_p1cpp-single.txt`; [log](log/2026-09-05-cpp-single-before.ko.md) |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `PAIR` | 미달(83.9%) | 미달(94.3%) | 미달(91.6%) | 미달(97.2%) | 미달(98.1%) | 미달(99.4%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 94.1%(목표 95%), latency 984.25x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 968.2/1153.3, 900.2/954.8, 618.7/675.1, 32.2/33.2, 19.7/20.1, 10.4/10.5 Kmsg/s; latency ms C++·C 92.888/0.025, 41.032/0.024, 12.372/0.033, 4.837/0.072, 0.333/0.097, 0.342/0.142; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_073750_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_074210_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `ws` | `PUBSUB` | 통과(90.0%) | 통과(94.0%) | 통과(94.4%) | 통과(98.7%) | 통과(98.1%) | 통과(131.0%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 101.0%(목표 95%), latency 431.50x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 789.4/877.1, 755.1/803.3, 585.5/620.4, 12.7/12.9, 5.9/6.0, 3.3/2.5 Kmsg/s; latency ms C++·C 78.642/0.049, 37.566/0.055, 16.148/0.053, 0.394/0.081, 0.295/0.099, 0.290/0.136; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_074600_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_075055_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `ws` | `DEALER_DEALER` | 통과(91.3%) | 통과(89.0%) | 통과(102.2%) | 통과(98.1%) | 통과(96.1%) | 통과(98.2%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 95.8%(목표 95%), latency 554.06x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 903.9/989.6, 835.3/938.1, 586.9/574.1, 23.7/24.1, 15.7/16.3, 9.5/9.7 Kmsg/s; latency ms C++·C 116.574/0.055, 43.906/0.049, 12.663/0.053, 5.183/0.090, 0.430/0.113, 0.388/0.170; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_075521_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_075941_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `ws` | `DEALER_ROUTER` | 통과(91.6%) | 통과(92.1%) | 통과(94.1%) | 통과(98.7%) | 통과(98.0%) | 통과(99.3%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 95.6%(목표 85%), latency 529.42x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 903.6/986.6, 820.2/890.6, 543.7/578.1, 24.1/24.4, 15.9/16.2, 9.5/9.6 Kmsg/s; latency ms C++·C 99.650/0.052, 44.597/0.051, 18.166/0.055, 5.144/0.088, 0.424/0.113, 0.393/0.164; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_080331_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_080750_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
-| `ws` | `DEALER_ROUTER_REQREP` | 미달(2.2%) | 미달(4.1%) | 미달(2.8%) | 미달(80.6%) | 미달(84.5%) | 미달(90.9%) | 참고값 — 러너 모델 차이(D-B125/D-B127: C++ 러너는 요청 1건씩 대기, C는 포화 제출; library 왕복 비용은 수 µs, 판정 보류); aggregate throughput 44.2%(목표 85%), latency 0.30x; 처리량 C++·C 8.2/372.8, 8.0/198.4, 7.8/283.8, 5.1/6.4, 4.4/5.2, 3.3/3.6 Kmsg/s; latency ms C++·C 0.122/22.802, 0.124/66.713, 0.127/47.137, 0.194/0.302, 0.228/0.400, 0.306/0.552; `p1cpp-single`; C `perf_c_single_linux_20260905_064250_p1cpp-single.txt`, C++ `perf_cpp_single_linux_20260905_064712_p1cpp-single.txt`; [log](log/2026-09-05-cpp-single-before.ko.md) |
+| `ws` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `ROUTER_ROUTER` | 통과(93.3%) | 통과(95.3%) | 통과(93.7%) | 통과(98.3%) | 통과(95.9%) | 통과(98.6%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 95.9%(목표 85%), latency 536.27x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 867.1/929.0, 805.9/845.4, 529.5/565.2, 23.6/24.0, 15.5/16.1, 9.5/9.6 Kmsg/s; latency ms C++·C 102.844/0.050, 40.275/0.051, 16.083/0.054, 5.205/0.086, 0.436/0.111, 0.388/0.178; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_081141_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_081600_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
-| `ws` | `ROUTER_ROUTER_REQREP` | 미달(2.0%) | 미달(3.6%) | 미달(4.2%) | 미달(82.3%) | 미달(84.1%) | 미달(95.7%) | 참고값 — 러너 모델 차이(D-B125/D-B127: C++ 러너는 요청 1건씩 대기, C는 포화 제출; library 왕복 비용은 수 µs, 판정 보류); aggregate throughput 45.3%(목표 85%), latency 0.29x; 처리량 C++·C 7.5/376.0, 7.8/213.2, 7.9/186.9, 5.5/6.7, 4.4/5.3, 3.4/3.6 Kmsg/s; latency ms C++·C 0.133/14.380, 0.128/56.952, 0.126/79.778, 0.180/0.296, 0.224/0.374, 0.292/0.542; `p1cpp-single`; C `perf_c_single_linux_20260905_070313_p1cpp-single.txt`, C++ `perf_cpp_single_linux_20260905_070735_p1cpp-single.txt`; [log](log/2026-09-05-cpp-single-before.ko.md) |
+| `ws` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `PAIR` | 미달(84.7%) | 미달(91.5%) | 미달(95.3%) | 미달(95.3%) | 미달(96.9%) | 미달(99.7%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 93.9%(목표 95%), latency 942.96x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 1056.6/1247.5, 781.6/854.2, 402.9/422.8, 11.1/11.7, 5.9/6.1, 3.2/3.2 Kmsg/s; latency ms C++·C 64.814/0.022, 41.127/0.025, 24.164/0.025, 12.710/0.145, 10.874/0.234, 10.535/0.416; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_073750_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_074210_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `wss` | `PUBSUB` | 미달(89.6%) | 미달(97.8%) | 미달(101.6%) | 미달(103.0%) | 미달(95.2%) | 미달(81.4%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 94.8%(목표 95%), latency 482.39x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 816.7/911.5, 682.8/698.1, 304.5/299.6, 10.6/10.3, 5.7/6.0, 2.1/2.6 Kmsg/s; latency ms C++·C 76.895/0.055, 50.034/0.059, 31.231/0.060, 10.544/0.172, 12.163/0.231, 0.839/0.400; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_074600_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_075055_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `wss` | `DEALER_DEALER` | 통과(85.7%) | 통과(88.6%) | 통과(100.0%) | 통과(97.1%) | 통과(98.4%) | 통과(96.6%) | after(완화 목표 90% 적용; runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 94.4%(목표 95%), latency 507.93x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 890.0/1038.1, 704.9/795.8, 312.9/313.0, 9.7/10.0, 5.6/5.7, 3.1/3.2 Kmsg/s; latency ms C++·C 96.495/0.055, 38.176/0.058, 31.116/0.062, 13.493/0.173, 10.609/0.256, 9.096/0.434; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_075521_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_075941_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `wss` | `DEALER_ROUTER` | 통과(85.8%) | 통과(95.7%) | 통과(97.4%) | 통과(99.7%) | 통과(99.4%) | 통과(98.7%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 96.1%(목표 85%), latency 533.81x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 928.3/1082.1, 733.2/765.9, 305.5/313.8, 9.8/9.8, 5.6/5.7, 3.1/3.1 Kmsg/s; latency ms C++·C 102.669/0.058, 46.312/0.058, 31.865/0.065, 14.243/0.171, 9.861/0.262, 8.863/0.445; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_080331_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_080750_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
-| `wss` | `DEALER_ROUTER_REQREP` | 미달(1.8%) | 미달(4.7%) | 미달(3.8%) | 미달(87.2%) | 미달(84.3%) | 미달(80.0%) | 참고값 — 러너 모델 차이(D-B125/D-B127: C++ 러너는 요청 1건씩 대기, C는 포화 제출; library 왕복 비용은 수 µs, 판정 보류); aggregate throughput 43.6%(목표 85%), latency 0.30x; 처리량 C++·C 7.2/404.9, 7.0/149.2, 7.0/183.2, 2.7/3.1, 1.7/2.0, 1.0/1.3 Kmsg/s; latency ms C++·C 0.139/14.817, 0.142/94.824, 0.142/90.674, 0.364/0.644, 0.566/0.947, 0.957/1.555; `p1cpp-single`; C `perf_c_single_linux_20260905_064250_p1cpp-single.txt`, C++ `perf_cpp_single_linux_20260905_064712_p1cpp-single.txt`; [log](log/2026-09-05-cpp-single-before.ko.md) |
+| `wss` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `ROUTER_ROUTER` | 통과(95.6%) | 통과(98.1%) | 통과(98.5%) | 통과(98.8%) | 통과(98.2%) | 통과(100.2%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 98.2%(목표 85%), latency 457.66x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 928.3/971.0, 706.9/720.6, 298.2/302.6, 9.7/9.8, 5.5/5.6, 3.1/3.1 Kmsg/s; latency ms C++·C 73.836/0.061, 50.858/0.059, 31.229/0.060, 14.405/0.170, 12.197/0.255, 11.220/0.454; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_081141_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_081600_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미달(1.5%) | 미달(4.9%) | 미달(6.4%) | 미달(91.3%) | 미달(88.3%) | 미달(86.3%) | 참고값 — 러너 모델 차이(D-B125/D-B127: C++ 러너는 요청 1건씩 대기, C는 포화 제출; library 왕복 비용은 수 µs, 판정 보류); aggregate throughput 46.4%(목표 85%), latency 0.29x; 처리량 C++·C 6.8/447.1, 7.0/142.4, 7.3/113.7, 2.7/2.9, 1.7/1.9, 1.0/1.2 Kmsg/s; latency ms C++·C 0.147/5.880, 0.142/97.095, 0.137/138.055, 0.364/0.690, 0.577/1.047, 0.961/1.579; `p1cpp-single`; C `perf_c_single_linux_20260905_070313_p1cpp-single.txt`, C++ `perf_cpp_single_linux_20260905_070735_p1cpp-single.txt`; [log](log/2026-09-05-cpp-single-before.ko.md) |
+| `wss` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `PAIR` | 통과(85.6%) | 통과(92.0%) | 통과(100.2%) | 통과(98.5%) | 통과(97.9%) | 통과(98.2%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 95.4%(목표 95%), latency 26.51x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 1100.5/1284.9, 898.3/976.2, 489.8/489.1, 14.5/14.8, 7.5/7.7, 3.9/3.9 Kmsg/s; latency ms C++·C 0.403/0.020, 2.425/0.031, 1.578/0.035, 0.844/0.117, 0.844/0.184, 0.877/0.315; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_073750_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_074210_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `tls` | `PUBSUB` | 통과(91.1%) | 통과(101.9%) | 통과(104.9%) | 통과(100.1%) | 통과(92.9%) | 통과(85.5%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 96.1%(목표 95%), latency 15.20x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 883.9/970.2, 742.6/728.5, 329.5/314.1, 12.1/12.1, 5.6/6.1, 2.2/2.5 Kmsg/s; latency ms C++·C 0.142/0.053, 2.227/0.054, 2.052/0.056, 0.720/0.149, 0.667/0.193, 0.700/0.347; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_074600_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_075055_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `tls` | `DEALER_DEALER` | 통과(88.6%) | 통과(96.0%) | 통과(97.9%) | 통과(97.8%) | 통과(96.5%) | 통과(100.9%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 96.3%(목표 95%), latency 290.99x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 939.3/1060.7, 845.5/881.0, 371.6/379.7, 12.0/12.3, 7.0/7.3, 4.0/4.0 Kmsg/s; latency ms C++·C 87.769/0.053, 2.689/0.055, 2.051/0.058, 1.050/0.140, 0.935/0.197, 0.896/0.327; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_075521_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_075941_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `tls` | `DEALER_ROUTER` | 통과(84.7%) | 통과(96.5%) | 통과(103.2%) | 통과(101.3%) | 통과(98.0%) | 통과(100.0%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 97.3%(목표 85%), latency 296.04x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 930.3/1098.4, 851.7/883.0, 365.2/354.0, 12.3/12.1, 7.1/7.3, 4.0/4.0 Kmsg/s; latency ms C++·C 93.437/0.056, 2.711/0.056, 2.085/0.056, 1.027/0.140, 0.909/0.209, 0.897/0.350; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_080331_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_080750_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
-| `tls` | `DEALER_ROUTER_REQREP` | 미달(1.8%) | 미달(1.8%) | 미달(3.4%) | 미달(81.7%) | 미달(83.6%) | 미달(80.4%) | 참고값 — 러너 모델 차이(D-B125/D-B127: C++ 러너는 요청 1건씩 대기, C는 포화 제출; library 왕복 비용은 수 µs, 판정 보류); aggregate throughput 42.1%(목표 85%), latency 0.32x; 처리량 C++·C 7.2/407.3, 7.4/403.2, 7.4/220.4, 3.1/3.8, 2.0/2.4, 1.1/1.4 Kmsg/s; latency ms C++·C 0.138/12.690, 0.135/11.546, 0.134/39.228, 0.316/0.504, 0.489/0.790, 0.847/1.362; `p1cpp-single`; C `perf_c_single_linux_20260905_064250_p1cpp-single.txt`, C++ `perf_cpp_single_linux_20260905_064712_p1cpp-single.txt`; [log](log/2026-09-05-cpp-single-before.ko.md) |
+| `tls` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `ROUTER_ROUTER` | 통과(91.9%) | 통과(93.7%) | 통과(97.2%) | 통과(99.5%) | 통과(100.2%) | 통과(100.0%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 97.1%(목표 85%), latency 223.37x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 920.1/1000.9, 762.9/814.3, 442.2/454.9, 12.3/12.3, 7.2/7.1, 3.9/3.9 Kmsg/s; latency ms C++·C 0.359/0.057, 48.479/0.055, 18.576/0.056, 10.268/0.146, 8.570/0.218, 7.899/0.368; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_081141_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_081600_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미달(1.6%) | 미달(1.7%) | 미달(4.0%) | 미달(83.9%) | 미달(82.7%) | 미달(78.0%) | 참고값 — 러너 모델 차이(D-B125/D-B127: C++ 러너는 요청 1건씩 대기, C는 포화 제출; library 왕복 비용은 수 µs, 판정 보류); aggregate throughput 42.0%(목표 85%), latency 0.34x; 처리량 C++·C 7.3/468.3, 7.5/446.6, 7.3/182.9, 3.1/3.7, 2.0/2.4, 1.1/1.4 Kmsg/s; latency ms C++·C 0.137/1.310, 0.134/1.417, 0.136/81.555, 0.318/0.529, 0.492/0.826, 0.860/1.343; `p1cpp-single`; C `perf_c_single_linux_20260905_070313_p1cpp-single.txt`, C++ `perf_cpp_single_linux_20260905_070735_p1cpp-single.txt`; [log](log/2026-09-05-cpp-single-before.ko.md) |
+| `tls` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `PAIR` | 미달(87.2%) | 미달(84.9%) | 미달(85.2%) | 미달(83.4%) | 미달(82.5%) | 미달(94.6%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 86.3%(목표 95%), latency 466.30x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 1269.5/1456.4, 1043.7/1229.4, 1056.9/1241.1, 290.1/347.9, 191.4/232.0, 128.5/135.8 Kmsg/s; latency ms C++·C 3.330/0.002, 2.077/0.002, 0.478/0.002, 0.005/0.004, 0.007/0.005, 0.010/0.008; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_073750_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_074210_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `inproc` | `PUBSUB` | 미달(95.0%) | 미달(96.8%) | 미달(96.1%) | 미달(47.3%) | 미달(100.1%) | 미달(111.6%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 91.1%(목표 95%), latency 2.17x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 856.1/900.7, 722.9/747.0, 707.4/736.3, 78.9/166.9, 60.5/60.5, 18.8/16.8 Kmsg/s; latency ms C++·C 0.020/0.008, 0.027/0.007, 0.030/0.007, 0.024/0.022, 0.012/0.024, 0.022/0.027; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_074600_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_075055_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `inproc` | `DEALER_DEALER` | 미달(93.3%) | 미달(103.3%) | 미달(95.0%) | 미달(30.6%) | 미달(27.0%) | 미달(29.4%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 63.1%(목표 95%), latency 154.78x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 1003.5/1075.6, 958.4/927.5, 860.4/905.6, 110.7/362.2, 57.9/213.9, 23.0/78.2 Kmsg/s; latency ms C++·C 4.411/0.008, 2.262/0.008, 0.808/0.007, 0.024/0.024, 0.032/0.028, 0.062/0.034; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_075521_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_075941_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `inproc` | `DEALER_ROUTER` | 통과(89.0%) | 통과(88.0%) | 통과(92.2%) | 통과(83.8%) | 통과(92.5%) | 통과(98.1%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 90.6%(목표 85%), latency 160.00x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 1051.8/1182.1, 908.9/1032.8, 879.2/953.9, 321.6/383.8, 203.0/219.6, 76.6/78.0 Kmsg/s; latency ms C++·C 4.154/0.008, 2.390/0.008, 0.800/0.007, 0.029/0.024, 0.014/0.028, 0.025/0.034; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_080331_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_080750_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
-| `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `ROUTER_ROUTER` | 미달(89.5%) | 미달(90.8%) | 미달(92.4%) | 미달(49.4%) | 미달(42.2%) | 미달(78.4%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 73.8%(목표 85%), latency 146.85x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 1053.3/1177.2, 919.7/1012.6, 896.7/970.9, 174.6/353.7, 82.2/195.0, 62.4/79.5 Kmsg/s; latency ms C++·C 0.285/0.007, 4.884/0.008, 1.683/0.008, 0.021/0.025, 0.022/0.029, 0.026/0.034; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_081141_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_081600_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `PAIR` | 통과(86.4%) | 통과(90.7%) | 통과(96.4%) | 통과(99.5%) | 통과(101.6%) | 통과(100.7%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 95.9%(목표 95%), latency 9.82x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 1036.4/1199.0, 948.5/1045.3, 846.4/878.3, 64.4/64.7, 35.4/34.8, 18.2/18.1 Kmsg/s; latency ms C++·C 0.168/0.028, 0.339/0.027, 0.869/0.028, 0.206/0.048, 0.192/0.061, 0.185/0.089; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_073750_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_074210_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `ipc` | `PUBSUB` | 통과(92.5%) | 통과(92.3%) | 통과(105.0%) | 통과(98.8%) | 통과(143.3%) | 통과(147.1%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 113.2%(목표 95%), latency 4.24x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 857.2/926.6, 783.8/849.1, 753.8/717.9, 12.8/12.9, 8.6/6.0, 3.7/2.5 Kmsg/s; latency ms C++·C 0.057/0.046, 0.151/0.048, 0.540/0.046, 0.234/0.063, 0.248/0.076, 0.250/0.109; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_074600_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_075055_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `ipc` | `DEALER_DEALER` | 통과(89.4%) | 통과(87.2%) | 통과(99.4%) | 통과(94.8%) | 통과(93.4%) | 통과(99.6%) | after(완화 목표 90% 적용; runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 94.0%(목표 95%), latency 7.95x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 967.2/1082.2, 846.5/970.4, 824.0/829.3, 40.4/42.6, 25.0/26.8, 16.1/16.2 Kmsg/s; latency ms C++·C 0.474/0.047, 0.403/0.046, 0.884/0.048, 0.336/0.069, 0.277/0.079, 0.230/0.115; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_075521_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_075941_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
 | `ipc` | `DEALER_ROUTER` | 통과(85.3%) | 통과(85.6%) | 통과(105.4%) | 통과(96.9%) | 통과(97.3%) | 통과(99.8%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 95.0%(목표 85%), latency 5.92x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 945.6/1108.4, 846.7/989.4, 871.3/826.9, 39.3/40.6, 25.8/26.5, 16.1/16.1 Kmsg/s; latency ms C++·C 0.221/0.048, 0.242/0.047, 0.712/0.046, 0.346/0.070, 0.269/0.080, 0.231/0.117; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_080331_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_080750_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미달(2.4%) | 미달(2.2%) | 미달(2.1%) | 미달(74.1%) | 미달(78.0%) | 미달(85.1%) | 참고값 — 러너 모델 차이(D-B125/D-B127: C++ 러너는 요청 1건씩 대기, C는 포화 제출; library 왕복 비용은 수 µs, 판정 보류); aggregate throughput 40.6%(목표 85%), latency 0.34x; 처리량 C++·C 9.0/383.4, 8.6/387.6, 8.6/407.5, 6.5/8.8, 5.7/7.3, 4.4/5.1 Kmsg/s; latency ms C++·C 0.110/18.921, 0.116/14.504, 0.116/8.097, 0.153/0.209, 0.176/0.255, 0.229/0.389; `p1cpp-single`; C `perf_c_single_linux_20260905_064250_p1cpp-single.txt`, C++ `perf_cpp_single_linux_20260905_064712_p1cpp-single.txt`; [log](log/2026-09-05-cpp-single-before.ko.md) |
+| `ipc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `ROUTER_ROUTER` | 통과(91.3%) | 통과(90.0%) | 통과(98.7%) | 통과(97.3%) | 통과(98.4%) | 통과(99.4%) | after(runner PERF_PART_COUNT 수정 `9cb8a3a11b` 뒤 C·C++ 재짝지음; library 변경 없음); aggregate throughput 95.8%(목표 85%), latency 7.04x(one-way latency는 큐 깊이 — 판정 제외, 처리량으로 판정); 처리량 C++·C 897.0/982.7, 796.2/884.4, 791.4/802.0, 39.7/40.8, 25.8/26.2, 15.8/15.9 Kmsg/s; latency ms C++·C 0.123/0.050, 0.245/0.048, 1.155/0.047, 0.341/0.068, 0.267/0.082, 0.236/0.118; `p1cpp-single-fix`; C `perf_c_single_linux_20260905_081141_p1cpp-single-fix.txt`, C++ `perf_cpp_single_linux_20260905_081600_p1cpp-single-fix.txt`; [log](log/2026-09-05-cpp-single-recv-pass1.ko.md) |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미달(1.9%) | 미달(1.9%) | 미달(2.0%) | 미달(79.5%) | 미달(77.1%) | 미달(85.5%) | 참고값 — 러너 모델 차이(D-B125/D-B127: C++ 러너는 요청 1건씩 대기, C는 포화 제출; library 왕복 비용은 수 µs, 판정 보류); aggregate throughput 41.3%(목표 85%), latency 0.39x; 처리량 C++·C 8.3/438.0, 8.4/435.7, 8.6/442.5, 6.8/8.5, 5.7/7.4, 4.4/5.2 Kmsg/s; latency ms C++·C 0.120/3.744, 0.118/0.332, 0.115/0.912, 0.147/0.234, 0.175/0.273, 0.224/0.383; `p1cpp-single`; C `perf_c_single_linux_20260905_070313_p1cpp-single.txt`, C++ `perf_cpp_single_linux_20260905_070735_p1cpp-single.txt`; [log](log/2026-09-05-cpp-single-before.ko.md) |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 
 #### 9.1.2 Multi suite
 
@@ -788,44 +840,44 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 
 #### 9.2.2 Multi suite
 
@@ -875,44 +927,44 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 
 #### 9.3.2 Multi suite
 
@@ -962,44 +1014,44 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 
 #### 9.4.2 Multi suite
 
@@ -1049,44 +1101,44 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 
 #### 9.5.2 Multi suite
 
@@ -1136,44 +1188,44 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 
 #### 9.6.2 Multi suite
 
@@ -1223,44 +1275,44 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `wss` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tls` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `DEALER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 | `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | 해당 없음 | Single 제외(D-BP3): request/reply는 Multi suite에서만 측정한다 |
 
 #### 9.7.2 Multi suite
 
@@ -1305,35 +1357,63 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | Core REQUEST 계약 통일 | 완료 | `7d8205a028` |
 | binding REQUEST 포팅 | 완료 | C, C++, .NET, Java, Node, Go, Rust, Python 8개 완료 |
 | C perf REQREP runner | 완료 | `e5770ec569` 병합, 후속 계약 정렬 `0f9c329764` |
-| 버전 3곳 일치 | 미확인 | 측정 시작 전 확인 |
-| 실제 runtime 버전 | 미확인 | local artifact 경로·Build ID는 manifest에 기록; public version API는 측정 시작 전 확인 |
-| runner inventory | 완료 | 7개 언어의 source registry·CLI parser·README와 single/multi `--help` 대조 |
+| 버전 3곳 일치 | 완료 | `VERSION`·`core/CMakeLists.txt:11`·`core/include/zlink.h:8-10` 모두 0.17.0 (2026-09-07 확인) |
+| 실제 runtime 버전 | 완료 | `core/build/lib/libzlink.so.0.17.0`, Build ID `af759a1c5532fb7100c6baede89144814200d798`, SHA-256 `0af61ad3…`, commit `c39f50f6dc`, Release+LTO. C·C++ smoke report `META,core_version,0.17.0`·`core_dirty,0`, C++ `zlink::version()` 0.17.0 확인. **`--core-version 0.17.0` 금지** — `~/.cache/zlink/core/0.17.0/...`는 `core/build-dev` 유래 RelWithDebInfo/LTO OFF의 다른 artifact다 |
+| runner inventory | **불일치 5건** | pattern 집합·transport·size·clients·io thread는 일치. 불일치: (1) C++ server DEALER effective HWM `4096000` vs C `1048576`, (2) monitor HWM 이름·단위·기본값(`monitor_hwm_bytes` bytes 4096000 ↔ `monitor_hwm` 1000), (3) `default_stream_clients` 100 ↔ 10000, (4) Effective Options key 이름(`routed_echo_per_socket_payload` ↔ `routed_echo_borrow_payload` 등), (5) `select_transports()`의 `CONTROL_PLANE_PATTERNS` 처리·순서 규칙. §4에 따라 정리 전에는 paired 측정을 시작하지 않는다 |
 | Multi size 정책 | 완료 | C 기본 64, 256, 1024, 4096, 65536, 131072; STREAM 64, 256, 1024, 65536으로 §3과 일치 |
 | 무시되는 runner option | 미확인 |  |
 | memory guard | 미확인 |  |
-| 재현 환경 manifest | 완료 | `log/2026-09-05-environment.ko.md` |
+| 재현 환경 manifest | 완료 | `log/2026-09-07-environment.ko.md` (현재 호스트 20 논리 CPU / 94 GiB 실측; 2026-09-05 manifest는 이전 호스트 기록) |
+| Core artifact 고정 | 완료 | `scripts/build-core.sh release`(Release+LTO, `ZLINK_BUILD_TESTS=OFF`), runner는 `ZLINK_CORE_SOURCE=local`에서 `core/build`를 직접 사용 |
+| smoke (C·C++ multi) | 완료 | `perf_c_multi_linux_20260907_080912.txt`·`perf_cpp_multi_linux_20260907_081121.txt` 모두 `status: complete`, 조건 완화 없음 |
+| 러너 측정 의미 정합 | 진행 중 | 설계 `log/2026-09-07-runner-parity-design.ko.md`. C canonical 러너와 7개 binding 러너의 모든 pattern 측정 의미를 일치시킨 뒤 측정 시작(D-BP1) |
 
-### 10.2 Pattern별 paired 기준 측정
+### 10.2 러너 정합 (측정 전 선결)
 
-| 구분 | 상태 | 결과 파일 / 메모 |
-|------|------|------------------|
-| 현재 언어 | C++ | 순서 1 |
-| 현재 pattern | 미달 | Multi `tcp` `MULTI_DEALER_DEALER` 75.0%→90.8%→90.8% `통과`(완화 목표 90%), `MULTI_DEALER_ROUTER_REQREP` 51.8%→55.8%→57.4% `보류`, `MULTI_ROUTER_ROUTER_REQREP` 60.7%→68.4%→68.4% `보류`(pass 2 after, 판정 확정), `MULTI_PUBSUB` 93.3%(1-run)→81.5%(pass 1 no-go 뒤 3-run 재짝지음) `미달`(기본 목표 95%, 판정 확정); latency aggregate 0.62x / 0.72x / 0.68x / 1.08x로 모두 2.0x 이내(pass 1의 `DEALER_DEALER` 1024B outlier 재현 안 됨); `131072` 미측정. Multi `tls`·`ws`·`wss` before(pass 2 코드, 판정 미확정): `DEALER_DEALER` 77.6% / 84.9% / 93.9% `미달`(latency 6.23x / 0.63x / 1.91x, `tls` 상한 초과), `DEALER_ROUTER_REQREP` `tls` 54.5% `미달`(0.43x), `ROUTER_ROUTER_REQREP` `tls` 60.5%·`ws` 58.0% `미달`(0.38x / 0.59x), `PUBSUB` 100.2% / 104.1% / 104.8% `통과 후보`(0.97x / 1.09x / 0.92x, §7.4 14단계 전); `DEALER_ROUTER_REQREP` `ws`·`wss`와 `ROUTER_ROUTER_REQREP` `wss`는 C 4096B 기준 이상으로 aggregate 미확정(4 size 참고 55.1% / 57.6% / 55.4%) |
-| paired C | 완료 | `p1cpp`, 2026-09-05 03:49~03:54 KST, pattern마다 C 직후 C++ 순차 실행; [log](log/2026-09-05-cpp-multi-tcp-before.ko.md). `p1cpp-tls`·`p1cpp-ws`·`p1cpp-wss`, 04:41~04:55 KST, transport마다 4 pattern을 C 직후 C++ 순차 실행, 24 report 모두 complete; C runner `ws`·`wss` `DEALER_ROUTER_REQREP` 4096B(7,867 / 3,413 ops/s)와 `wss` `ROUTER_ROUTER_REQREP` 4096B(16,837 ops/s) 처리량 붕괴는 C 러너 제출 턴 문제로 확정해 runner 수정(`21746768ca`, D-B89) 뒤 05:27~05:33 KST 재짝지음(`p1cpp-ws-fix`·`p1cpp-wss-fix`); [log](log/2026-09-05-cpp-multi-tls-ws-wss-before.ko.md), [재측정](log/2026-09-05-cpp-multi-ws-wss-reqrep-remeasure.ko.md). `MULTI_PUBSUB` `tcp` 3-run `p1cpp-pubsub-r3` 05:53~05:57 KST |
-| 개선 반복 | 완료(3 pattern) | 자체 hot-path pass 1(04:13 KST, `perf_cpp_multi_linux_20260905_041338.txt`)과 Sol read-only 리뷰 기반 pass 2(04:35 KST, `perf_cpp_multi_linux_20260905_043517.txt`, 후보 9개 중 3개 채택·6개 no-go) 각 after 1회 측정; `MULTI_PUBSUB` `tcp`는 자체 pass 1 no-go(05:40~05:52 KST, 코드 변경 없음, [log](log/2026-09-05-cpp-multi-tcp-pubsub-pass1.ko.md)); [pass 1](log/2026-09-05-cpp-multi-tcp-pass1.ko.md), [pass 2](log/2026-09-05-cpp-multi-tcp-pass2.ko.md) |
-| 커밋과 푸시 | 완료(tcp) | pass 1 `86b897abf7`, pass 2 `e6dd88fbc6` 커밋·푸시; PUBSUB pass 1은 변경 없음 |
+2026-09-07 러너 정합 설계(`log/2026-09-07-runner-parity-design.ko.md`)가 C와 7개 binding
+러너의 정책 위반 37건과 정책 자체의 결함 6건을 정리했다. 정책 만족이 러너의 유일한 합격
+기준이므로(D-BP2) 아래 단계를 끝낸 뒤 측정을 시작한다.
+
+| 단계 | 내용 | 상태 |
+|------|------|------|
+| 0 | 감독자 결정 확보 — Single REQREP 제외(D-BP3), Single gate 제외(D-BP2), Go D-B123 대체(D-BP3) | 완료 |
+| 1 | 측정 조건 통일 — server auto-HWM, monitor HWM 이름·단위, `default_stream_clients`, Effective Options key, `select_transports()`, C++ stale 검사 | 진행 중 |
+| 2 | 정책 문서 개정 — Single에서 REQREP 제외, P3~P6 모호·미규정 조항 확정(monotonic clock 포함) | 진행 중 |
+| 3 | C 러너를 정책에 맞춤 — 별도 latency 단계 제거, one-way 하드코딩 `max_in_flight=1` 제거 | 대기 |
+| 4 | Multi 종료 protocol 정합 — `CLIENT_DONE`/`STOP` 대기 없이 socket을 닫는 6개 binding | 대기 |
+| 5 | Multi 부하 수준 정합 — socket당 in-flight 1인 러너를 비동기 포화 제출로(Go·Java 등) | 대기 |
+| 6 | Single 러너 정책 정합 — 전용 OS thread + synchronous API, 언어별 금지 조항, REQREP 제외 반영 | 대기 |
+| 7 | 재측정 — C++부터 pattern·transport 단위 paired | 대기 |
 
 ### 10.3 언어 진행 상태
 
-| 순서 | 언어 | Single 상태 | Multi 상태 | 다음 작업 |
-|------|------|-------------|------------|-----------|
-| 1 | C++ | 미측정 | 미달 | Multi `tcp` 3 pattern 판정 확정(`DEALER_DEALER` 통과 90.8% 완화 목표, REQREP 2개 보류 57.4/68.4%); pass 2 변경을 커밋·푸시하고 `MULTI_PUBSUB` `tcp`(93.3%, 목표 95%)의 자체 pass 1과 Sol 리뷰 pass 2를 진행한다. `tls`·`ws`·`wss` before 측정 완료(`DEALER_DEALER` 77.6/84.9/93.9% 미달, REQREP `tls`·`ws` 54.5~60.5% 미달, `PUBSUB` 100.2~104.8% 통과 후보): 이 세 transport의 개선 pass와 §7.4 14단계 검토를 진행하고, C 기준 이상 3셀(`ws`·`wss` `DEALER_ROUTER_REQREP` 4096B, `wss` `ROUTER_ROUTER_REQREP` 4096B)은 C runner 제출 턴 수정(D-B89) 뒤 C·C++를 재측정해 `미달`로 확정했다(ws REQREP 53.1/72.3%, wss 43.7/44.7%). |
-| 2 | .NET | 미측정 | 미측정 | paired 기준 측정을 시작한다. |
-| 3 | Java | 미측정 | 미측정 | paired 기준 측정을 시작한다. |
-| 4 | Node | 미측정 | 미측정 | paired 기준 측정을 시작한다. |
-| 5 | Go | 미측정 | 미측정 | paired 기준 측정을 시작한다. |
-| 6 | Rust | 미측정 | 미측정 | paired 기준 측정을 시작한다. |
-| 7 | Python | 미측정 | 미측정 | paired 기준 측정을 시작한다. |
+**측정은 새로 한다.** 호스트와 Core artifact가 바뀌었으므로 모든 성능 수치는 현재 artifact
+(`core/build/lib/libzlink.so.0.17.0`, Build ID `af759a1c…`)에서 C와 새로 짝지어 다시 잰다.
+2026-09-05/06의 수치는 아래 표에 **참고**로만 남긴다.
+
+유지하는 것은 수치가 아니라 **작업 자산**이다. 7개 언어에 적용·푸시된 개선 pass 15건의 코드,
+callgrind·프로파일 분석, 후보 no-go 목록과 그 근거(D-B121~D-B130), 러너 결함 수정은 그대로
+유효하며 되돌리지 않는다. 새 측정은 그 코드 위에서 시작한다.
+
+| 순서 | 언어 | 현재 artifact Single | 현재 artifact Multi | 이전 호스트 Multi `tcp` 참고값 (DD / DR REQREP / RR REQREP / PUBSUB) | 적용된 개선 pass |
+|------|------|------|------|------|------|
+| 1 | C++ | 미측정 | 미측정 | 90.8 / 57.4 / 68.4 / 93.2% | 2건 push |
+| 2 | .NET | 미측정 | 미측정 | 59.6 / 58.3 / 67.0 / 61.3% | 3건 push |
+| 3 | Java | 미측정 | 미측정 | 80.9 / 59.4 / 58.7 / 80.9% | 3건 push |
+| 4 | Node | 미측정 | 미측정 | 35.9 / 24.3 / 24.8 / 30.2% | 4건 push |
+| 5 | Go | 미측정 | 미측정 | 53.2 / 19.0 / 21.8 / 54.6% | 2건 push |
+| 6 | Rust | 미측정 | 미측정 | 59.3 / 67.3 / 69.8 / 87.7% | 2건 push |
+| 7 | Python | 미측정 | 미측정 | 15.4 / 15.5 / 19.6 / 31.9% | 2건 push |
+
+참고값은 2026-09-06 00:22, 이전 호스트(16 논리 CPU / 11.7 GiB), Core `a40cb46335` 기준이다
+(`doc/plan/c016-worklog/morning-summary-2026-09-05-B.ko.md`, D-B121~D-B130). 새 측정의 목표
+달성 여부는 이 값이 아니라 새 paired 결과로 판정한다. 참고값과 새 값이 크게 다르면 Core
+변경(223 파일)이나 호스트 차이의 영향이므로 원인을 log에 기록한다.
+
+Single 상세 표(§9.x.1)의 기존 값도 같은 성격의 참고값이다. `PERF_POLICY.md:144-149`에 따라
+Single은 cross-binding 성능 gate로 쓰지 않으며, 정책 준수와 lifecycle 검증을 위해 새로 측정한다.
+
+작업 순서는 러너 정합(§10.2) 완료 후 §7.4대로 C++ Multi `tcp`부터 시작한다.
 
 ## 11. 측정 기록과 결과
 
@@ -1358,7 +1438,15 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 - runner, 정책, 상세 표의 pattern, transport, size inventory가 일치한다.
 - 각 pattern의 최종 판정에 사용한 core 0.17.0 C와 binding paired report가 모두
   `status: complete`다.
-- 모든 binding 상세 표에 `미측정` 또는 `미달`이 없다.
+- 모든 binding의 **Multi** 상세 표에 `미측정` 또는 `미달`이 없다(D-BP2: Single은 성능
+  판정 대상이 아니다).
+- 모든 binding의 **Single** 러너가 `PERF_SINGLE_TEST_POLICY.md` §1.1의 실행 모델(전용 OS
+  thread + synchronous API, 측정 구간 coroutine/async task/Promise·Future executor/event-loop
+  yield 금지, REQREP은 public request API가 허용하는 만큼 연속 제출 + reply completion drain)을
+  만족하고, Single paired report가 `status: complete`로 기록되어 있다.
+- C와 7개 binding의 러너가 `doc/perf`의 정책 문서(`PERF_POLICY.md`,
+  `PERF_SINGLE_TEST_POLICY.md`, `PERF_MULTI_TEST_POLICY.md`)를 만족한다(D-BP2: 러너의 유일한
+  합격 기준). 정책 요구사항 추적표에 위반 칸이 없다.
 - 모든 통과 셀에 paired C와 binding report, manifest, 반복값, 비율, 옵션 일치 근거가
   기록되어 있다.
 - throughput, 평균 latency, client 수, auto-HWM, 대상 외 대표 셀 회귀 gate를 측정값으로

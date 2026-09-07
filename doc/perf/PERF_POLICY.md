@@ -1,9 +1,19 @@
 # zlink Performance Test Policy (통합)
 
 > **적용 범위**: zlink 전체 (core + bindings)
-> **Policy Version**: 2.1
-> **Date**: 2026-08-28
+> **Policy Version**: 2.2
+> **Date**: 2026-09-07
 > **Scope**: zlink 성능 테스트 통합 정책 — 공통 구조, 통합 실행, 비교 스크립트
+>
+> **개정 적용 시점**: 정책 개정 조항은 **개정 이후에 수행하는 측정**에 적용한다.
+> 개정 전에 같은 호스트에서 C와 짝지어 완결한 paired 판정을 소급 무효화하지
+> 않는다 (D-BP4). 러너를 개정에 맞춘 뒤의 값과 그 이전 값을 한 표에서 비교할
+> 때는 어느 쪽인지 표기한다.
+>
+> 2026-09-07 개정 요약: request/reply 모델을 single suite에서 제외(D-BP3),
+> one-way active 유효 메시지 시각 기준·wire 길이 검증 확정, latency 통계 경계
+> 규칙(보간식·표본 0개) 확정, 시간원을 monotonic으로 고정, RESULT 출력 정밀도와
+> transient 재시도 절차 확정, binding별 `UNSUPPORTED` 처리 절차 확정.
 >
 > 본 정책은 `bindings/c/perf`의 C benchmark runner와 in-repo perf 자산이 존재하는 바인딩
 > (`bindings/cpp`, `bindings/dotnet`, `bindings/java`, `bindings/rust`,
@@ -26,7 +36,7 @@
 | 문서 | 설명 |
 |------|------|
 | **PERF_POLICY.md** (본 문서) | 공통 원칙, 디렉터리 구조, RESULT 형식, 결과 저장, 출력 형식, 실패 처리, 환경 변수(공통), 리팩토링 원칙 |
-| [PERF_SINGLE_TEST_POLICY.md](PERF_SINGLE_TEST_POLICY.md) | single suite 전용: recv/request-reply 모델, phase, 패턴/transport, single 전용 환경 변수 |
+| [PERF_SINGLE_TEST_POLICY.md](PERF_SINGLE_TEST_POLICY.md) | single suite 전용: recv 모델(one-way 5 pattern), phase, 패턴/transport, single 전용 환경 변수 |
 | [PERF_MULTI_TEST_POLICY.md](PERF_MULTI_TEST_POLICY.md) | multi suite 전용: 프로세스 모델, backpressure, throughput/latency 측정, 패턴/transport, multi 전용 환경 변수 |
 | [BINDINGS_OPTIMIZATION_GUIDE.ko.md](BINDINGS_OPTIMIZATION_GUIDE.ko.md) | binding library hot path 최적화 가이드: 효과가 확인된 기법의 단계별 체크리스트, 언어별 적용 현황, 기각 목록, 적용 절차 |
 
@@ -95,10 +105,40 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
 - p95/p99 계산용 sample 저장 상한은 메시지 queue나 요청 동시성을 제한하지 않는
   계측 메모리 보호다. 전체 완료 수와 지연 시간 합계는 계속 기록하며, 이 상한을
   전송률 제한이나 송신 간격으로 사용하면 안 된다.
+- **percentile 보간식을 고정한다.** 오름차순 정렬한 `n`개 sample `s[0..n-1]`과
+  `q`(0.95 / 0.99)에 대해 `pos = (n - 1) * q`, `lo = floor(pos)`,
+  `hi = min(lo + 1, n - 1)`, `frac = pos - lo` 로 두고
+  `value = s[lo] + (s[hi] - s[lo]) * frac` 로 계산한다. `n == 1`이면 그 sample 값이다.
+- 여러 프로세스의 reservoir를 병합해 계산하는 경로도 **같은 보간식**을 사용한다.
+  각 sample의 weight는 `그 프로세스의 유효 관측 수 / 그 프로세스가 보관한 sample 수`
+  이며, 값 기준 오름차순 정렬 후 누적 weight `c_i = Σ_{j<=i} w_j`, 전체 weight
+  `W = Σ w_j`, `pos = (W - 1) * q` 로 두고 누적 weight 축에서 위와 같은 선형 보간을
+  수행한다(위치 `p`의 sample은 `c_i - 1 >= p` 를 만족하는 가장 작은 `i`). 모든
+  weight가 `1`이면 이 식은 앞 항목의 식과 정확히 같다. 같은 이름의 metric을 경로마다
+  다른 추정식으로 계산하면 안 된다.
+- percentile sample을 하나도 보관하지 않은 경우(sample cap `0`, 또는 유효 sample
+  0개)의 `latency_p95`·`latency_p99`는 **평균 latency와 같은 값**으로 보고한다.
+  `0`으로 보고하지 않는다. 전체 count와 sum은 sample 보관 여부와 무관하게 계속
+  누적한다.
 - public API 동작에 문제가 있으면 perf 코드에서 우회하지 않고 버그로
   레포팅한다. 버그레포팅 문서는 doc/bug/perf 아래에 md 파일 형식으로 작성한다.
   버그는 회귀테스트를 작성해서 재현을 확인하고 수정한다. 버그를 우선 수정하고
   이어서 perf 작업을 계속한다.
+- **시간원은 monotonic clock 하나로 고정한다.** 모든 러너의 경과 시간, active
+  deadline, timeout, drain 한도, 그리고 metric header의 `sent_ts_ns`와 수신 판정
+  시각은 monotonic 시간원에서 읽는다. wall clock은 결과 파일과 report의 timestamp
+  표기에만 사용한다.
+  - 요구 조건: 같은 호스트에서 함께 실행되는 perf 프로세스들이 **같은 기준점을
+    공유하는** monotonic 시간원이어야 한다. multi one-way latency는 client가 stamp한
+    `sent_ts_ns`를 server 프로세스가 자기 시각과 비교하기 때문이다.
+  - C 기준 구현은 `std::chrono::steady_clock`을 사용하며
+    (`bindings/c/perf/single/common/perf_single_metric_header.hpp`), 이 조건을 이미
+    만족한다. 각 binding은 그 언어 표준 라이브러리의 monotonic 시간원을 사용하고
+    wall clock API를 측정에 사용하지 않는다.
+  - 이 조건을 만족하는 공개 시간원이 없는 언어가 확인되면 러너에서 wall clock으로
+    우회하지 말고 정책 예외로 기록해 결정을 받는다.
+  - 근거: framework liveness 정책과 같은 규칙이다(D-095 — 이 호스트의 WSL2에서
+    wall clock이 ±5 초 점프한 사례).
 - 측정 의미는 유지한다.
   - `ready / active`
   - `RESULT` 포맷
@@ -116,14 +156,9 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
 - bindings perf는 측정 anchor와 결과 의미를 C perf 기준과 동일하게 유지한다.
   실행 모델은 suite별로 고정하며 언어별 편의에 따라 바꾸지 않는다.
   - single: sender와 receiver/progress 역할을 전용 OS thread에서 실행하고 측정
-    구간에는 synchronous public API만 사용한다. raw send는 blocking terminal을,
-    request/reply는 synchronous callback terminal과 completion poller를 사용한다.
-    request submit과 completion progress는 같은 전용 requester thread에서 교대로
-    구동하거나 별도 OS thread로 나눌 수 있지만 async runtime에는 맡기지 않는다.
-    synchronous callback terminal이 ownership 이전의 backpressure를 즉시 알리는
-    경우에는 requester thread가 completion progress를 구동한 뒤 같은 logical
-    request를 다시 제출할 수 있다. 이는 thread 안의 flow-control 진행이며 async
-    terminal이나 benchmark case 재시도가 아니다.
+    구간에는 synchronous public API만 사용한다. raw send는 blocking terminal을
+    사용한다. single suite는 one-way 패턴만 측정하므로 측정 구간에 request/reply
+    경로가 없다([PERF_SINGLE_TEST_POLICY.md § 1](PERF_SINGLE_TEST_POLICY.md), D-BP3).
   - multi: C reference는 nonblocking API와 poller로 진행한다. 다른 binding의
     HWM-managed send/request는 coroutine/async runtime 또는 그 언어의 동등한
     비동기 실행 모델로 진행한다. 다만 public 계약이 synchronous로 분류한
@@ -192,9 +227,7 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
       binding multi는 async terminal을 사용한다.
   - send (single): **전용 thread + synchronous terminal**. raw send는 blocking
     terminal을 사용하며 HWM 도달 시 Core가 sender thread를 대기시킨다.
-    request/reply는 synchronous callback terminal로 admission하고 전용 requester/
-    progress thread가 completion poller를 구동한다. submit과 progress를 별도 OS
-    thread로 나눠도 된다. 측정 구간에는 coroutine, async task,
+    single suite에는 request/reply 패턴이 없다. 측정 구간에는 coroutine, async task,
     Promise/Future executor 또는 event-loop yield를 사용하지 않는다. Go는 역할별
     goroutine을 active 구간 전체에서 하나의 OS thread에 고정하여 runtime이 다른
     goroutine과 multiplex하지 못하게 한다. Node는 `worker_threads`, Python은
@@ -241,8 +274,8 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
       raw STREAM reply는 이 예외에 포함하지 않는다. 모든 STREAM server는 public
       async terminal을 사용해야 하며, 해당 terminal이 없으면 perf에서 우회하지
       말고 binding public contract를 보완한다.
-  - poller는 recv readiness 감지에 사용한다. request-reply completion은 C에서는
-    public completion poller로 진행하고, 다른 binding은 public async request
+  - poller는 recv readiness 감지에 사용한다. multi의 request-reply completion은
+    C에서는 public completion poller로 진행하고, 다른 binding은 public async request
     terminal을 사용한다. 다만 event-loop binding은 아래 completion-context alignment
     예외에 따라 public completion poller로 같은 reply callback의 dispatch 위치만
     해당 event-loop thread로 옮길 수 있다. send backpressure는 suite별로 위 방식을
@@ -264,13 +297,7 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   submit 뒤에도 같은 requester socket의 reply 수신/progress 경로를 계속 돌려야
   한다. completion은 requester socket을 수신하지 않아도 되는 별도 channel이
   아니다.
-  - single reqrep은 같은 process 안에서 requester와 replier를 동시에 실행한다.
-    requester는 하나의 전용 OS thread에서 submit과 completion progress를 교대로
-    구동하거나 두 역할을 별도 OS thread로 나눌 수 있다. completion progress는
-    blocking recv/wait 또는 그와 같은 의미의 public completion progress 경로로
-    reply completion을 drain한다. 언어의 기본 실행 모델과 관계없이 single 측정
-    경로는 synchronous callback terminal과 전용 OS thread만 사용한다. submit
-    flow는 계약이 허용하는 만큼 연속 제출하고 progress가 완료를 drain한다.
+  - request/reply 패턴은 multi suite에만 있다(D-BP3).
   - C multi reqrep은 client process의 active poller loop가 N개 requester socket을
     multiplex한다. socket request/reply 경로는 requester socket을 이 public
     poller에 `POLLCOMPLETION` 단독으로 등록한다. C 이외의 binding은 public async
@@ -316,12 +343,15 @@ offset  size  type       field         설명
  8       1    uint8      phase         0=warmup, 1=active, 2=cooldown
  9       4    uint32_le  msg_size      메시지 크기 (bytes)
 13       8    uint64_le  seq           메시지 시퀀스 번호
-21       8    int64_le   sent_ts_ns    송신 시점 (nanoseconds, epoch)
+21       8    int64_le   sent_ts_ns    송신 시점 (nanoseconds, monotonic)
 ─────────────────────────────────────────────────────────
 total: 29 bytes (고정)
 ```
 
 - 모든 필드는 **little-endian**이다.
+- `sent_ts_ns`는 § 1.1이 고정한 monotonic 시간원에서 읽은 값이다. 같은 case의
+  sender와 receiver는 같은 호스트에서 같은 기준점을 공유하는 monotonic 시간원을
+  사용해야 하며, wall clock 값을 넣지 않는다.
 - payload가 29바이트 미만이면 metric header를 포함할 수 없으므로 perf 최소
   메시지 크기는 29바이트 이상이어야 한다. 실제 정책 기본값은 64바이트부터 시작.
 - header 이후 나머지 바이트는 패딩(0 또는 임의값)이며 측정에 사용하지 않는다.
@@ -372,11 +402,16 @@ total: 29 bytes (고정)
   - 문자열 생성
   - 로그 출력
   - 불필요 복사
-- flow-control 예외: single synchronous request callback 또는 binding multi의
-  public async terminal이 ownership 이전의 backpressure를 즉시 알린 경우, 같은
-  logical operation을 유지한 채 completion progress를 구동하거나 cooperative
-  thread/task yield 또는 public readiness를 기다린 뒤 재제출할 수 있다. 고정
-  retry budget, sleep timer, 별도 `POLLOUT` 우회 경로를 추가해서는 안 된다.
+- flow-control 예외: binding multi의 public async terminal이 ownership 이전의
+  backpressure를 즉시 알린 경우, 같은 logical operation을 유지한 채 completion
+  progress를 구동하거나 cooperative thread/task yield 또는 public readiness를
+  기다린 뒤 재제출할 수 있다. 고정 retry budget, sleep timer, 별도 `POLLOUT` 우회
+  경로를 추가해서는 안 된다.
+- transient 오류 예외: single one-way 송신이 `EAGAIN`/`EINTR`/`ETIMEDOUT`으로
+  되돌아온 경우의 **1 ms 대기 + 새 `sent_ts_ns` 재stamp 후 재제출**은
+  [PERF_SINGLE_TEST_POLICY.md § 1.1](PERF_SINGLE_TEST_POLICY.md)이 고정한 절차이며
+  위 sleep 금지의 명시적 예외다. 이 경로 밖에서 sleep을 쓰거나, 1 ms를 넘는
+  backoff 또는 sleep 없는 busy retry를 쓰면 정책 위반이다.
 - 예외: `bindings/c/perf` 기준 코드가 같은 위치에서
   `perf_socket_poll(NULL, 0, N)`을 사용하는 경우에는, binding perf도 같은 의미의
   bounded idle wait를 둘 수 있다. 우선 public empty-poll API를 사용하고, 해당
@@ -462,6 +497,12 @@ total: 29 bytes (고정)
 - `UNSUPPORTED`는 정책상 지원하지 않는 pattern/transport 조합이나, 아직 공식
   supported/default matrix에 올리지 않은 새 조합을 도입하기 전의 상태를 표현할 때만
   쓴다. C 기준과 불일치하는 기존 구현을 숨기는 용도로 쓰면 안 된다.
+- 언어 runtime의 실행 모델 제약으로 특정 transport나 조합을 측정할 수 없는 경우에도
+  runner가 그 조합을 임의로 `UNSUPPORTED`로 내리지 않는다. 먼저 binding public API
+  보강 가능 여부를 판정하고, 보강이 불가능하면 suite 정책 문서의
+  pattern/transport 표에 **binding별 제외와 그 사유**를 명시한 뒤에만
+  `UNSUPPORTED`로 처리한다. 표에 없는 조합을 runner가 `UNSUPPORTED`로 처리하면
+  회귀 은폐로 본다.
 - suite별 정책 문서는 pattern별 low-cost ready gate event를 명시해야 한다.
   perf는 그 표에 없는 추가 precondition(`FILTER_APPLIED`, delivery-ready exact count,
   quorum 완화, 보정용 handshake 단계)을 두지 않는다.
@@ -510,10 +551,12 @@ sequenceDiagram
       전체에 동일하게 적용해야 하며, 다른 ad-hoc drain/settle 단계로 확장하면
       안 된다.
   - `completion drain`
-    - 예외: `single` request-reply 패턴은 active 종료 후 bounded completion drain을
-      반드시 수행한다. 이 절차는 deadline 이전에 제출된 request의 reply completion만
-      정리하는 운영 절차이며, active deadline 이후 새 request를 제출하거나 완료 수를
-      늘리는 별도 phase가 아니다.
+    - 예외: `multi`의 send/request 경로는 active 종료 후 bounded drain을 수행할 수
+      있다. 이 절차는 deadline 이전에 제출된 operation의 admission/completion만
+      정리하는 운영 절차이며, active deadline 이후 새 제출을 하거나 완료 수를 늘리는
+      별도 phase가 아니다. 한도는
+      [PERF_MULTI_TEST_POLICY.md § 12.3](PERF_MULTI_TEST_POLICY.md)의
+      `PERF_MULTI_SEND_DRAIN_TIMEOUT_MS`다. single suite에는 이 예외가 없다(D-BP3).
 - 위 단계가 이미 존재하지만 실제로는 “ready 이벤트 하나 기다리기” 또는
   “phase 종료 후 남은 메시지 정리”를 우회적으로 표현한 것뿐이라면, 새 단계로
   유지하지 말고 삭제하거나 기존 `ready -> active` 흐름에 흡수한다.
@@ -604,10 +647,10 @@ perf 구조는 다음 두 책임으로 분리한다. 이 분리는 `bindings/c/p
 - echo
   - 왕복 완료 의미를 유지한다.
   - `*_SENDSEND` 패턴은 public send/recv API로 echo를 만든다.
-  - `*_REQREP` 패턴은 public request/reply API와 suite별 completion 경로로 왕복을
-    만든다. C는 completion poller, C 이외의 binding multi는 public async request
-    completion(허용된 event-loop completion-context alignment 포함), binding single은
-    synchronous callback terminal과 completion progress를 사용한다.
+  - `*_REQREP` 패턴은 multi suite 전용이며, public request/reply API와 completion
+    경로로 왕복을 만든다. C는 completion poller, C 이외의 binding은 public async
+    request completion(허용된 event-loop completion-context alignment 포함)을
+    사용한다.
   - send 역할과 recv 역할 정책을 둘 다 적용한다.
 - one-way send
   - recv 정책은 없다.
@@ -638,8 +681,8 @@ perf 구조는 다음 두 책임으로 분리한다. 이 분리는 `bindings/c/p
   - 양쪽 모두 routing identity가 있는 socket을 사용하되, 왕복 의미는
     `MULTI_DEALER_ROUTER_REQREP` 와 같다.
 - binding single의 공식 `--pattern ALL`은 `PAIR`, `PUBSUB`, `DEALER_DEALER`,
-  `DEALER_ROUTER`, `ROUTER_ROUTER`, `DEALER_ROUTER_REQREP`,
-  `ROUTER_ROUTER_REQREP`의 7개 패턴이다.
+  `DEALER_ROUTER`, `ROUTER_ROUTER`의 5개 패턴이다. request/reply 패턴은 single에서
+  제외한다(D-BP3).
 - binding multi의 공식 `--pattern ALL`은 `MULTI_DEALER_DEALER`,
   `MULTI_DEALER_ROUTER_SENDSEND`, `MULTI_ROUTER_ROUTER_SENDSEND`,
   `MULTI_DEALER_ROUTER_REQREP`, `MULTI_ROUTER_ROUTER_REQREP`, `MULTI_PUBSUB`,
@@ -1043,12 +1086,18 @@ RESULT,<lib>,<pattern>,<transport>,<size>,<metric>,<value>
 | metric | 설명 | 필수 |
 |--------|------|------|
 | `throughput` | echo 패턴: 왕복 완료 수 (`ops/s`, 1 op = send + recv response 1회 완료), one-way 패턴: 단방향 수신 수 (`msg/s`) | MUST |
-| `bandwidth` | 네트워크 전송량 (MB/s) — echo 패턴(single request-reply + multi echo): `throughput × size × 2 / 1,000,000`, one-way 패턴(single one-way + multi one-way): `throughput × size / 1,000,000` | MUST |
+| `bandwidth` | 네트워크 전송량 (MB/s) — echo 패턴(multi echo): `throughput × size × 2 / 1,000,000`, one-way 패턴(single 전 패턴 + multi one-way): `throughput × size / 1,000,000` | MUST |
 | `latency` | 레이턴시 (internal ns, external ms) | MUST |
 | `latency_p95` | 레이턴시 95th percentile (internal ns, external ms) | MUST |
 | `latency_p99` | 레이턴시 99th percentile (internal ns, external ms) | MUST |
 - throughput 단위는 패턴의 메시지 흐름 방향에 따라 결정된다. echo(왕복) 패턴은 `ops/s`, one-way(단방향) 패턴은 `msg/s`다. 상세 분류는 [single § 6.1](PERF_SINGLE_TEST_POLICY.md)과 [multi § 4.1](PERF_MULTI_TEST_POLICY.md)을 참조한다.
 - bandwidth는 throughput 단위가 다른 패턴 간에도 실제 데이터 처리량으로 직접 비교할 수 있는 공통 지표다. 상세 계산은 [single § 6.1](PERF_SINGLE_TEST_POLICY.md)과 [multi § 4.3](PERF_MULTI_TEST_POLICY.md)을 참조한다.
+- **RESULT line 출력 정밀도를 고정한다.** `throughput`과 `bandwidth`는 소수점 이하
+  **3자리 고정 소수점**, `latency`·`latency_p95`·`latency_p99`는 소수점 이하
+  **6자리 고정 소수점**으로 출력한다. 유효숫자 기반 표기나 문화권 의존 기본 포맷은
+  사용하지 않는다. inproc처럼 latency가 µs 이하인 셀에서 ms 소수 3자리는 유효숫자를
+  잃는다. C 기준 구현이 이미 이 자릿수를 사용한다
+  (`bindings/c/perf/single/common/perf_single_monitor.hpp`).
 - 기본 perf surface와 RESULT 계약에는 cpu/mem 계열 메트릭을 포함하지 않는다.
 - 상세 META 키 및 패턴별 측정 방식은 개별 정책 문서를 참조한다.
 
@@ -1220,7 +1269,7 @@ Saved result file: ... (status=partial)
 | 항목 | 규칙 |
 |------|------|
 | 스크립트 레벨 재시도 | 금지 — 실패한 pattern/transport/size 조합을 자동으로 다시 실행하지 않는다 |
-| 바이너리 내부 재시도 | 금지 — send/recv의 실제 실패나 benchmark case를 자동 재시도하지 않는다. C multi의 `EAGAIN`은 pending 상태로 기록하고 `PollOut` readiness에서 재개한다. suite가 허용한 synchronous request callback 또는 binding async terminal의 ownership 이전 backpressure는 같은 logical operation의 flow-control continuation으로 처리한다. 고정 횟수 retry와 무조건 즉시 반복은 금지한다 |
+| 바이너리 내부 재시도 | 금지 — send/recv의 실제 실패나 benchmark case를 자동 재시도하지 않는다. C multi의 `EAGAIN`은 pending 상태로 기록하고 `PollOut` readiness에서 재개한다. suite가 허용한 binding async terminal의 ownership 이전 backpressure는 같은 logical operation의 flow-control continuation으로 처리한다. single one-way 송신의 transient 오류 재시도는 § 1.1.2가 고정한 1 ms 절차만 허용한다. 고정 횟수 retry와 무조건 즉시 반복은 금지한다 |
 | 환경 변수 | `PERF_MULTI_ATTEMPTS`, `PERF_MULTI_STREAM_ATTEMPTS` 및 레거시 `PERF_MULTI_ATTEMPTS`, `PERF_MULTI_STREAM_ATTEMPTS`는 **삭제 대상**이다. 구현에 존재하면 제거해야 한다 |
 
 - **이유**: 재시도는 실패 원인을 숨긴다. 벤치마크 실패는 라이브러리 또는 환경의 실제 문제를 반영하며, 재시도로 통과시키면 회귀가 감지되지 않는다.

@@ -1,8 +1,8 @@
 # zlink Multi Performance Test Policy
 
 > **적용 범위**: zlink 전체 (core + bindings) — multi-client 벤치마크
-> **Policy Version**: 2.1
-> **Date**: 2026-08-28
+> **Policy Version**: 2.2
+> **Date**: 2026-09-07
 > **Scope**: zlink multi-client 성능 테스트 정책
 >
 > 본 정책은 `bindings/c/perf`의 multi C benchmark runner와 in-repo multi perf 자산이 존재하는
@@ -687,6 +687,10 @@ latency는 패턴 유형에 따라 측정 방식을 분리한다.
 - mean은 active 유효 record 전체의 count와 합으로 정확히 계산한다.
 - p95/p99는 메모리가 처리량에 비례해 증가하지 않도록 bounded reservoir sample로
   계산한다. sample 상한은 메시지 queue, HWM, 송신률 또는 완료 수를 제한하지 않는다.
+- percentile 보간식, 여러 프로세스 reservoir를 병합할 때의 weight 규칙,
+  sample을 하나도 보관하지 않은 경우(`PERF_MULTI_LATENCY_SAMPLE_CAP=0` 포함)의
+  p95/p99 보고 값은 [PERF_POLICY.md § 1.1](PERF_POLICY.md)의 공통 규칙을 따른다.
+  matched-client 가중 병합 경로도 같은 보간식을 사용한다.
 - RTT 샘플(echo): `sample_ns = (recv_ts_ns - sent_ts_ns) / 2`
 - 단방향 샘플(one-way): 수신 메시지에 포함된 송신 타임스탬프 기준 `now_ns - sent_ts_ns`
 - active 구간 밖의 데이터는 계산에서 제외한다.
@@ -1258,6 +1262,7 @@ bindings/c/perf/run_benchmarks_multi.sh --pattern MULTI_STREAM --transports tcp 
 |------|------|--------|
 | `PERF_MULTI_SNDTIMEO_MS` | 송신 타임아웃(ms) | 200 |
 | `PERF_MULTI_RCVTIMEO_MS` | 수신 타임아웃(ms) | 200 |
+| `PERF_MULTI_SEND_DRAIN_TIMEOUT_MS` | active 종료 후 미완료 admission을 비우는 bounded drain 한도(ms). 이 drain은 새 제출을 하지 않으며 RESULT 집계를 늘리지 않는다 | 5000 |
 | `PERF_MULTI_SNDBUF` | debug 전용 송신 OS buffer override. allow flag가 켜진 경우에만 사용 | 비활성 |
 | `PERF_MULTI_RCVBUF` | debug 전용 수신 OS buffer override. allow flag가 켜진 경우에만 사용 | 비활성 |
 | `PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES` | 수동 HWM/SNDBUF/RCVBUF override 허용 플래그 | 0 |
