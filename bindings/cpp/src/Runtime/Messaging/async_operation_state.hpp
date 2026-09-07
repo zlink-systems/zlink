@@ -65,6 +65,37 @@ inline void resume_async_slot (std::shared_ptr<async_resume_slot_t> slot_,
     }
 }
 
+// An immediately admitted DONTWAIT send owns no wait token, no Core callback
+// identity and no continuation, so the only state a public consumer can still
+// observe on it is single consumption. Keeping just that flag here is what lets
+// the admitted-send path skip the completion entry, its mutex and condition
+// variable, and the waiter map node (BINDINGS_OPTIMIZATION_GUIDE 2.1).
+class immediate_send_result_t final : public async_result_state_t<void>
+{
+  public:
+    bool ready () const noexcept override { return true; }
+
+    bool suspend (std::coroutine_handle<>,
+                  async_continuation_scheduler_t) override
+    {
+        // Already terminal: the awaiter must resume without suspending.
+        return false;
+    }
+
+    void take () override
+    {
+        if (_consumed)
+            throw std::logic_error ("async result was already consumed");
+        _consumed = true;
+    }
+
+    void detach () noexcept override {}
+    void abandon (std::coroutine_handle<>) noexcept override {}
+
+  private:
+    bool _consumed = false;
+};
+
 template <typename T>
 class async_operation_state_t final : public async_result_state_t<T>
 {

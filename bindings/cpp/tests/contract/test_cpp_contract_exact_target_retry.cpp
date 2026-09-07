@@ -448,6 +448,102 @@ int test_routed_send_without_credit_reports_backpressure ()
     return 0;
 }
 
+// An awaitable send that Core admits at once builds no completion entry, so it
+// reserves no wait-token identity either. The identity a rejected send does
+// reserve is the operation state the entry keeps alive, and admitted sends
+// recycle that pooled state. This checks the two facts together: admitted
+// results are terminal on the spot, and a rejection that follows a run of
+// admitted sends still resolves through its own WRITABLE token exactly once.
+int test_admitted_async_send_leaves_no_waiter_identity ()
+{
+    zlink::context_t ctx;
+    zlink::dealer_socket_t dealer (ctx);
+    zlink::router_socket_t router (ctx);
+    dealer.set_routing_id (zlink::routing_id_t::from ("admitted-source"));
+    router.set_routing_id (zlink::routing_id_t::from ("admitted-sink"));
+
+    const uint64_t hwm = UINT64_C (65536) + sizeof (zlink_msg_t);
+    dealer.options ().send_hwm (zlink::byte_count_t::bytes (hwm));
+    router.options ().recv_hwm (zlink::byte_count_t::bytes (hwm));
+    dealer.options ().send_timeout (std::chrono::milliseconds (0));
+
+    const std::string endpoint =
+      zlink_cpp_contract::unique_inproc ("admitted-async-send");
+    router.bind (endpoint);
+    dealer.connect (endpoint);
+    std::this_thread::sleep_for (std::chrono::milliseconds (200));
+
+    // Every one of these is admitted, so each returns an already-terminal
+    // result and hands the same pooled operation state to the next send.
+    for (int i = 0; i < 8; ++i) {
+        zlink::message_t payload =
+          zlink_cpp_contract::make_message ("admitted-" + std::to_string (i));
+        auto result = dealer.send ().message (payload).async ();
+        if (payload.valid ()) {
+            std::fprintf (stderr, "an admitted send must consume the part\n");
+            return 1;
+        }
+        auto awaiter = std::move (result).operator co_await ();
+        if (!awaiter.await_ready ()) {
+            std::fprintf (stderr, "an admitted send must complete inline\n");
+            return 2;
+        }
+        awaiter.await_resume ();
+    }
+
+    const std::string filler (65536, 'f');
+    if (!fill_until_backpressured (dealer, filler)) {
+        std::fprintf (stderr, "could not reach the send HWM\n");
+        return 3;
+    }
+
+    zlink::message_t rejected =
+      zlink_cpp_contract::make_message ("resumed-after-admitted");
+    auto pending = dealer.send ().message (rejected).async ();
+    auto pending_awaiter = std::move (pending).operator co_await ();
+    if (pending_awaiter.await_ready ()) {
+        std::fprintf (stderr, "a send without credit must not be terminal\n");
+        return 4;
+    }
+
+    // Only Core's WRITABLE for this operation's own token can release it. The
+    // runtime completion owner drains it; nothing here retries by hand.
+    size_t resumed_payload_seen = 0;
+    const auto deadline =
+      std::chrono::steady_clock::now () + std::chrono::seconds (10);
+    while (std::chrono::steady_clock::now () < deadline) {
+        zlink::received_t received;
+        if (router.recv (received, zlink::recv_flags_t::dontwait) != 0) {
+            if (pending_awaiter.await_ready () && resumed_payload_seen > 0)
+                break;
+            std::this_thread::sleep_for (std::chrono::milliseconds (2));
+            continue;
+        }
+        if (received.first_part ().to_string () == "resumed-after-admitted")
+            ++resumed_payload_seen;
+        received.close ();
+    }
+
+    if (!pending_awaiter.await_ready ()) {
+        std::fprintf (stderr, "the refused send never reached its terminal\n");
+        return 5;
+    }
+    try {
+        pending_awaiter.await_resume ();
+    }
+    catch (const zlink::submit_error_t &error) {
+        std::fprintf (stderr, "refused send failed result=%d errno=%d\n",
+                      static_cast<int> (error.result ()), error.internal_errno ());
+        return 6;
+    }
+    if (resumed_payload_seen != 1) {
+        std::fprintf (stderr, "resumed payload delivered %zu times\n",
+                      resumed_payload_seen);
+        return 7;
+    }
+    return 0;
+}
+
 } // namespace
 
 int main ()
@@ -457,5 +553,7 @@ int main ()
         return rc;
     if (const int rc = test_routed_send_without_credit_reports_backpressure ())
         return 10 + rc;
+    if (const int rc = test_admitted_async_send_leaves_no_waiter_identity ())
+        return 20 + rc;
     return 0;
 }

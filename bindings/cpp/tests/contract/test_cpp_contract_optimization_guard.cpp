@@ -144,14 +144,26 @@ int main ()
             && request_snapshot != std::string::npos
             && request_refused < request_snapshot);
 
+    // An immediately admitted awaitable SEND allocates no completion bundle
+    // and takes no waiter-map node: the single DONTWAIT attempt runs before
+    // the bundle exists, and only a rejected record builds and registers one.
     const std::string send_operations = read_file (
       cpp_root / "src" / "Runtime" / "Messaging" / "send_operations.cpp");
-    const std::size_t send_start = send_operations.find ("start_send (true)");
+    const std::size_t send_submit = send_operations.find (
+      "detail::submit_raw_send_state (*state_, submit_context,");
+    const std::size_t send_bundle = send_operations.find (
+      "std::make_shared<send_completion_bundle_t> (", send_submit);
     const std::size_t send_registration = send_operations.find (
-      "register_send_entry (entry)", send_start);
-    assert (send_start != std::string::npos
+      "register_send_entry (entry)", send_bundle);
+    const std::size_t send_admitted_result = send_operations.find (
+      "std::make_shared<detail::immediate_send_result_t> ()");
+    assert (send_submit != std::string::npos
+            && send_bundle != std::string::npos
             && send_registration != std::string::npos
-            && send_start < send_registration);
+            && send_admitted_result != std::string::npos
+            && send_submit < send_admitted_result
+            && send_admitted_result < send_bundle
+            && send_bundle < send_registration);
 
     assert_public_contract_includes_only (cpp_root / "samples");
     return 0;

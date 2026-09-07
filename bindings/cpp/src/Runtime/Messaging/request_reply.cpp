@@ -91,7 +91,7 @@ std::vector<message_t> request_submit_operation_t::submit () &&
     }
     catch (...) {
         entry->fail_submit ();
-        runtime->completion->unregister_entry (entry.get ());
+        runtime->completion->unregister_entry (entry->context ());
         throw;
     }
     return entry->wait_request ();
@@ -130,7 +130,7 @@ async_result_t<std::vector<message_t>> request_submit_operation_t::async () &&
     }
     catch (...) {
         entry->fail_submit ();
-        runtime->completion->unregister_entry (entry.get ());
+        runtime->completion->unregister_entry (entry->context ());
         throw;
     }
     detail::async_result_state_t<std::vector<message_t>> *const result =

@@ -15,9 +15,11 @@ namespace
 
 struct send_completion_bundle_t
 {
-    explicit send_completion_bundle_t (
-      std::unique_ptr<detail::operation_state_t> operation_) :
-        result (), entry (&result, std::move (operation_))
+    send_completion_bundle_t (
+      std::unique_ptr<detail::operation_state_t> operation_,
+      void *submit_context_, uint64_t wait_token_) :
+        result (),
+        entry (&result, std::move (operation_), submit_context_, wait_token_)
     {
     }
 
@@ -43,16 +45,58 @@ async_result_t<void> submit_send_awaitable (
         throw submit_error_t (submit_result_t::invalid_state, ESHUTDOWN);
     }
 
+    // Most DONTWAIT sends are admitted immediately. Make that one attempt here,
+    // before any completion entry, async operation state or waiter-map node
+    // exists, so the admitted path costs one native submit and nothing else
+    // (BINDINGS_OPTIMIZATION_GUIDE 2.1). Core records a wait token only when it
+    // rejects the record; the context it records is this operation state, whose
+    // address stays reserved for the rejected operation until that operation
+    // reaches its terminal.
+    detail::own_async_send_parts (*state_);
+    void *const submit_context = state_.get ();
+    zlink_completion_id_t wait_token = 0;
+    bool admitted = false;
+    int submit_errno = 0;
+    try {
+        admitted = detail::submit_raw_send_state (*state_, submit_context,
+                                                  &wait_token, false);
+        submit_errno = zlink_errno ();
+    }
+    catch (...) {
+        detail::restore_async_send_sources (*state_);
+        detail::release_state (std::move (state_));
+        throw;
+    }
+
+    if (admitted != (wait_token == 0) || (!admitted && submit_errno != EAGAIN)) {
+        detail::restore_async_send_sources (*state_);
+        detail::release_state (std::move (state_));
+        throw submit_error_t (submit_result_t::internal_error, EPROTO);
+    }
+
+    if (admitted) {
+        // async() owns every source object once the packet is admitted.
+        detail::detach_async_send_sources (*state_);
+        detail::release_state (std::move (state_));
+        return detail::async_result_access_t::make<void> (
+          std::make_shared<detail::immediate_send_result_t> ());
+    }
+
+    // Rejected. Only now does the operation need a completion identity, an
+    // async result and a place in the socket's waiter registry.
     std::shared_ptr<send_completion_bundle_t> bundle;
     std::shared_ptr<detail::completion_entry_t> entry;
     try {
         bundle = std::make_shared<send_completion_bundle_t> (
-          std::move (state_));
+          std::move (state_), submit_context, wait_token);
         bundle->result.bind_lifetime (bundle);
         entry = std::shared_ptr<detail::completion_entry_t> (
           bundle, &bundle->entry);
     }
     catch (...) {
+        // The wait token is live but no entry will ever claim it. Release a
+        // drain already parked on this context before handing ownership back.
+        runtime->completion->unregister_entry (submit_context);
         if (state_) {
             detail::restore_async_send_sources (*state_);
             detail::release_state (std::move (state_));
@@ -61,16 +105,10 @@ async_result_t<void> submit_send_awaitable (
     }
 
     try {
-        // Most DONTWAIT sends are admitted immediately. Submit first so that
-        // path takes neither the completion-owner lock nor a waiter-map node.
-        // A concurrent drain retains an early WRITABLE record by this entry's
-        // unique context until registration joins the owning drain.
-        if (!entry->start_send (true)) {
-            runtime->completion->register_send_entry (entry);
-        }
+        runtime->completion->register_send_entry (entry);
     }
     catch (...) {
-        runtime->completion->unregister_entry (entry.get ());
+        runtime->completion->unregister_entry (submit_context);
         throw;
     }
     detail::async_result_state_t<void> *const result = &bundle->result;

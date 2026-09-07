@@ -65,15 +65,18 @@ bool is_lifecycle_errno (int err_) noexcept
 
 completion_entry_t::completion_entry_t (
   async_operation_state_t<void> *send_result_,
-  std::unique_ptr<operation_state_t> send_operation_) :
-    _kind (kind_t::send_retry), _send_result (send_result_),
-    _send_operation (std::move (send_operation_))
+  std::unique_ptr<operation_state_t> send_operation_,
+  void *submit_context_, uint64_t wait_token_) :
+    _kind (kind_t::send_retry), _context (submit_context_),
+    _send_result (send_result_),
+    _send_operation (std::move (send_operation_)),
+    _completion_id (wait_token_), _published (true)
 {
 }
 
 completion_entry_t::completion_entry_t (
   async_operation_state_t<std::vector<message_t>> *request_result_) :
-    _kind (kind_t::request), _request_result (request_result_)
+    _kind (kind_t::request), _context (this), _request_result (request_result_)
 {
 }
 
@@ -87,7 +90,7 @@ completion_entry_t::completion_entry_t (
 completion_entry_t::completion_entry_t (
   async_operation_state_t<std::vector<message_t>> *request_result_,
   std::unique_ptr<operation_state_t> request_operation_) :
-    _kind (kind_t::request), _request_result (request_result_),
+    _kind (kind_t::request), _context (this), _request_result (request_result_),
     _request_operation (std::move (request_operation_))
 {
 }
@@ -137,8 +140,10 @@ void completion_entry_t::fail_request (std::exception_ptr failure_) noexcept
         result->fail (std::move (failure));
 }
 
-bool completion_entry_t::submit_send_attempt (bool initial_,
-                                              bool defer_source_detach_)
+// Retry path only. The first DONTWAIT attempt is made by the awaitable
+// terminal before any entry exists, so this runs solely for the exact WRITABLE
+// token Core handed back with the rejection.
+bool completion_entry_t::resubmit_send_attempt () noexcept
 {
     {
         std::lock_guard<std::mutex> lock (_mutex);
@@ -153,7 +158,7 @@ bool completion_entry_t::submit_send_attempt (bool initial_,
     int submit_errno = 0;
     std::exception_ptr failure;
     try {
-        admitted = submit_raw_send_state (*_send_operation, this,
+        admitted = submit_raw_send_state (*_send_operation, _context,
                                           &completion_id, false);
         submit_errno = zlink_errno ();
     }
@@ -161,28 +166,19 @@ bool completion_entry_t::submit_send_attempt (bool initial_,
         failure = std::current_exception ();
     }
 
-    if (!failure && admitted && completion_id != 0) {
+    if (!failure && admitted != (completion_id == 0)) {
         failure = std::make_exception_ptr (
           submit_error_t (submit_result_t::internal_error, EPROTO));
-    } else if (!failure && !admitted
-               && (submit_errno != EAGAIN || completion_id == 0)) {
+    } else if (!failure && !admitted && submit_errno != EAGAIN) {
         failure = std::make_exception_ptr (
           submit_error_t (submit_result_t::internal_error, EPROTO));
     }
 
     if (failure) {
-        if (initial_)
-            restore_async_send_sources (*_send_operation);
         fail_send (failure);
-        if (initial_)
-            std::rethrow_exception (failure);
         return true;
     }
 
-    // async() owns every source object after it has either admitted the packet
-    // or returned a live retry result. No retry entry retains caller pointers.
-    if (admitted || !defer_source_detach_)
-        detach_async_send_sources (*_send_operation);
     if (!admitted) {
         std::lock_guard<std::mutex> lock (_mutex);
         if (_settled)
@@ -207,14 +203,6 @@ bool completion_entry_t::submit_send_attempt (bool initial_,
     return true;
 }
 
-bool completion_entry_t::start_send (bool defer_source_detach_)
-{
-    if (_kind != kind_t::send_retry || !_send_operation)
-        throw submit_error_t (submit_result_t::invalid_argument, EINVAL);
-    own_async_send_parts (*_send_operation);
-    return submit_send_attempt (true, defer_source_detach_);
-}
-
 void completion_entry_t::detach_send_sources () noexcept
 {
     if (_send_operation)
@@ -235,7 +223,7 @@ bool completion_entry_t::submit_request_attempt (bool initial_)
     bool admitted = false;
     std::exception_ptr failure;
     try {
-        admitted = submit_raw_request_state (*_request_operation, this,
+        admitted = submit_raw_request_state (*_request_operation, _context,
                                              &completion_id, false);
     }
     catch (...) {
@@ -323,7 +311,7 @@ completion_entry_t::capture (zlink_completion_t &completion_) noexcept
             _changed.wait (lock, [this] { return _published || _settled; });
             if (_settled)
                 return capture_result_t::terminal;
-            if (completion_id != _completion_id || user_context != this)
+            if (completion_id != _completion_id || user_context != _context)
                 return capture_result_t::pending;
             _published = false;
             _completion_id = 0;
@@ -420,7 +408,7 @@ completion_entry_t::capture (zlink_completion_t &completion_) noexcept
 bool completion_entry_t::retry () noexcept
 {
     try {
-        return _kind == kind_t::send_retry ? submit_send_attempt (false)
+        return _kind == kind_t::send_retry ? resubmit_send_attempt ()
                                           : submit_request_attempt (false);
     }
     catch (...) {
@@ -521,7 +509,7 @@ void completion_owner_t::register_entry (const std::shared_ptr<completion_entry_
         _inline_entry = entry_;
         inline_inserted = true;
     } else {
-        const auto result = _entries.emplace (entry_.get (), entry_);
+        const auto result = _entries.emplace (entry_->context (), entry_);
         if (!result.second)
             throw submit_error_t (submit_result_t::invalid_state, EBUSY);
         inserted = result.first;
@@ -553,7 +541,7 @@ void completion_owner_t::register_send_entry (
     if (!_inline_entry)
         _inline_entry = entry_;
     else {
-        const auto inserted = _entries.emplace (entry_.get (), entry_);
+        const auto inserted = _entries.emplace (entry_->context (), entry_);
         if (!inserted.second)
             throw submit_error_t (submit_result_t::invalid_state, EBUSY);
     }
@@ -564,20 +552,20 @@ void completion_owner_t::register_send_entry (
     entry_->detach_send_sources ();
     // An early WRITABLE stays with the drain that received it. Registration
     // only joins that drain; it never resubmits from the submitting thread.
-    _early_send_completions.erase (entry_.get ());
+    _early_send_completions.erase (entry_->context ());
     _send_registered.notify_all ();
 }
 
-void completion_owner_t::unregister_entry (completion_entry_t *entry_) noexcept
+void completion_owner_t::unregister_entry (void *submit_context_) noexcept
 {
     std::lock_guard<std::mutex> lock (_mutex);
     // Failed registration releases a drain waiting for this provisional SEND.
-    _early_send_completions.erase (entry_);
+    _early_send_completions.erase (submit_context_);
     _send_registered.notify_all ();
-    if (_inline_entry.get () == entry_) {
+    if (_inline_entry && _inline_entry->context () == submit_context_) {
         _inline_entry.reset ();
     } else {
-        _entries.erase (entry_);
+        _entries.erase (submit_context_);
     }
 }
 
@@ -614,7 +602,7 @@ size_t completion_owner_t::drain (bool wait_for_publish_,
                         return processed;
                 }
                 if (entry->retry ())
-                    unregister_entry (entry.get ());
+                    unregister_entry (entry->context ());
             }
             break;
         }
@@ -622,7 +610,7 @@ size_t completion_owner_t::drain (bool wait_for_publish_,
             const int error = zlink_errno ();
             for (const auto &entry : retries) {
                 entry->terminate (error);
-                unregister_entry (entry.get ());
+                unregister_entry (entry->context ());
             }
             throw recv_error_t (static_cast<recv_result_t> (rc), error);
         }
@@ -630,7 +618,7 @@ size_t completion_owner_t::drain (bool wait_for_publish_,
         std::shared_ptr<completion_entry_t> entry;
         {
             std::unique_lock<std::mutex> lock (_mutex);
-            if (_inline_entry.get () == completion.user_context)
+            if (_inline_entry && _inline_entry->context () == completion.user_context)
                 entry = _inline_entry;
             else {
                 const auto found = _entries.find (completion.user_context);
@@ -651,7 +639,8 @@ size_t completion_owner_t::drain (bool wait_for_publish_,
                                == _early_send_completions.end ();
                     });
                     _early_send_completions.erase (completion.user_context);
-                    if (_inline_entry.get () == completion.user_context)
+                    if (_inline_entry
+                        && _inline_entry->context () == completion.user_context)
                         entry = _inline_entry;
                     else {
                         const auto found = _entries.find (completion.user_context);
@@ -664,7 +653,7 @@ size_t completion_owner_t::drain (bool wait_for_publish_,
         if (entry) {
             const auto result = entry->capture (completion);
             if (result == completion_entry_t::capture_result_t::terminal) {
-                unregister_entry (entry.get ());
+                unregister_entry (entry->context ());
             } else if (result == completion_entry_t::capture_result_t::retry) {
                 retries.push_back (std::move (entry));
             }
