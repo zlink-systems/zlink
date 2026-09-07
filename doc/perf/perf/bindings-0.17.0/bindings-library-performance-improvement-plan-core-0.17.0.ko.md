@@ -1468,6 +1468,30 @@ Single은 cross-binding 성능 gate로 쓰지 않으며, 정책 준수와 lifecy
 
 작업 순서는 러너 정합(§10.2) 완료 후 §7.4대로 C++ Multi `tcp`부터 시작한다.
 
+#### 10.3.1 남은 범위와 진행 순서 (2026-09-08 기준)
+
+판정 단위는 pattern×transport다. 7 언어 × 4 transport × 7 pattern = **196 cell**이며, D-BP19에 따라
+2026-09-05/06 값은 전부 참고값이므로 실질적으로 **약 190 cell이 미측정**이다. 지금까지 닫은 것은
+C++ `tcp` 4개(`MULTI_DEALER_DEALER` 통과 94.73%, `MULTI_PUBSUB` 통과 95.16%,
+REQREP 2종 보류 72.87%·76.39%)다.
+
+측정 비용은 실측으로 paired 5-run이 cell당 약 5분, 탐색 1-run이 약 1분이다. 여기에 목표에서 먼
+cell마다 개선 pass가 30~60분씩 붙는다. **§12를 문자 그대로 완료하는 것은 한 세션이 아니라 며칠
+단위 작업이다.** 이 사실을 숨기지 않고 아래 순서로 가치가 높은 것부터 닫는다.
+
+1. **C++를 끝까지 닫는다.** 남은 것은 `tcp` SENDSEND 2종(개선 pass 1 진행 중), `MULTI_STREAM`
+   (C++·.NET만 smoke가 client-ready 경계로 실패해 조사 선행), `tls`·`ws`·`wss` 21 cell.
+   **REQREP 4 cell(`tls`·`ws`·`wss` × 2)은 개선 pass를 새로 열지 않는다** — D-BP20이 확정한
+   구조적 결론(Core 계약이 정한 drain-then-resubmit pacing과 그 위의 요청당 고정 비용)은
+   transport를 모르므로, 측정 뒤 그 근거로 `보류`를 기록한다. §7.5가 2026-09-05에 같은 판단을
+   내렸던 것과 같은 형태다.
+2. **D-BP8 우선순위대로 .NET → Java → Node.** 각 언어는 `tcp` 7 pattern부터 닫고 transport를 넓힌다.
+3. **Go는 0.17.2 대기**(D-BP12·D-BP14·D-BP16; 머신 B가 D-B211에서 차단 6건으로 MP-8 진행 중),
+   **Rust·Python은 마지막**.
+
+각 cell의 판정과 근거는 §9.x.2 표와 §11 기록, `decisions.ko.md`에 남긴다. 세션이 바뀌어도 그
+기록만으로 다음 cell부터 이어받을 수 있어야 한다.
+
 ## 11. 측정 기록과 결과
 
 paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 한 행으로 추가한다. 실행 과정,
