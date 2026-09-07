@@ -2149,3 +2149,24 @@ tcp에서만 재서 지금까지 드러나지 않았을 뿐, 각 언어의 `tls`
 
 **리뷰**(`review-mp2-3.md`, astra): B201~B206 해소, 1차 B02·B05·B06 잔여 닫힘. **B301**: MP-8이 poller 없는 `NONE` completion pull에도 `get_events()` direct drain을 적용하면서, pending이 없는 늦은 reply(요청자 timeout 뒤 허용된 REPLY)나 payload export OOM을 폐기할 때 registry mutex·physical sync를 잡은 채 `zlink_multipart_close()`가 마지막 zero-copy ref의 free callback을 호출 → callback이 같은 socket option을 설정하면 무한 대기. 기존 poller 경로에도 있던 잠금 전제가 무등록 경로로 확대된 기존 결함 노출(B). W301 lost-wake 테스트 판별력 부족, W303 B02 회귀 테스트가 FINAL 경계를 안 봄, S301 DONTWAIT SEND의 staging admission+complete scope 중첩(+2 RMW), S302 도달 불가 분기. **reqrep −2,196 Ir/msg**: 함수 단위로는 `prepare_completion_pull()`의 무등록 async/queue wait 위임 제거로 특정되고 정상 왕복의 consume·token commit·correlation·회계 생략은 없음; 그러나 함수별 profile이 없어 전량 귀속은 미확정 → gate FAIL 유지, reference 갱신 보류(W302).
 **결정**: MP-9(sol/high, 2 h) — B301 수정(폐기 payload를 두 lock 밖에서 해제, poller·무등록 경로 공용), W301/W303/S301/S302, reqrep 셀 callgrind 함수별 before/after 귀속. 이후 감독자가 B301 수정과 귀속 표를 직접 확인하고 게이트(terra)로 간다(4차 전체 리뷰는 하지 않음). 0.17.2 완료 예상 **9/8 오전 10시 전후**.
+
+## D-BP25 (2026-09-08 02:15, 머신 A) **C 기준 러너가 `tls` SENDSEND에서 메모리 손상으로 죽는다** — 7개 언어 전체의 해당 셀 판정이 막힌다
+C++ `tls` SENDSEND의 러너 결함 두 개(D-BP24의 relay 무한 async reply `e0862e1e5c`, client 조기 종료 `33f63ae89d`)를 고쳐 C++ report가 `status: complete`가 됐다. 그런데 같은 재측정에서 **C 기준선이 무너졌다.**
+
+| 시도 | 조건 | 결과 |
+|---|---|---|
+| `pDtls5` DR | tls, 전 크기, runs 5 | **SIGABRT(-6)** `malloc_consolidate(): unaligned fastbin chunk detected`, 4096 B |
+| `pDtls5` RR | 같음 | **SIGABRT(-6)** 같은 메시지, 256 B |
+| `crepro5_1` DR | 같음 | **SIGSEGV(-11)**, 1024 B — `RESULT,...,1024,latency_p99` 출력 **직후** |
+| `crepro5_2` DR | 같음 | complete |
+| `crepro1`·`crepro2` DR | tls, 전 크기, **runs 2** | 둘 다 complete |
+
+**신호도 크기도 매번 다르므로 메모리 손상이다.** `--runs 5`에서 5회 중 3회, `--runs 2`에서 0회 — 반복·누적 의존이다. SIGSEGV가 RESULT 출력 직후에 났다는 점에서 **크기 케이스 종료·정리 경로**가 유력하다.
+
+**영향 범위가 이 셀에 그치지 않는다.** C는 7개 binding 전부의 paired 비교 기준이다. C가 `tls` SENDSEND에서 비결정적으로 죽으면 **어떤 언어의 그 셀도 판정할 수 없다.** 그래서 이번 캠페인에서 최우선으로 처리한다.
+
+**주의**: 이 크래시로 나온 C report는 `status: partial`이며 그 위에서 계산한 aggregate(DR 95.25%, RR 93.04%)는 **무효다**. 감독자의 집계기가 양쪽 공통 크기만 교집합해 계산하므로 partial C report와 짝지으면 기준선이 불완전한 채로 비율이 나온다. 판정에 쓰지 않았다.
+
+**조치**: 진단 job(astra/xhigh) 개설. ASan/UBSan 별도 빌드로 위치를 잡고, `perf_multi_relay_server.hpp`의 `pending_reply_t` 수동 move/소멸자와 `release_parts()`·`close_received_reply_parts` 이중 호출을 우선 후보로 지목했다. 비결정적이므로 검증은 **연속 5회 `complete`** 를 요구한다. **원인이 Core면 고치지 말고 ASan 스택과 최소 재현을 남기도록 했다** — 그 경우 머신 B로 넘긴다. 기록은 `log/2026-09-08-c-tls-sendsend-corruption.ko.md`.
+
+**교훈(검증 조건)**: D-BP24의 relay 수정은 검증을 `--runs 1`로 해서 통과했는데 판정 조건인 `--runs 5`에서 실패했다. **러너 수정의 검증은 판정과 같은 run 수로 한다.** 비결정적 결함은 여기에 더해 반복 횟수를 명시한다(이번 job은 연속 5회).
