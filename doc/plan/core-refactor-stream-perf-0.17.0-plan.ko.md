@@ -243,6 +243,15 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 | D-f | R2 | 08-stream "런타임 기본값": `ZLINK_ASIO_STREAM_GATHER_THRESHOLD`·`..._TINY_GATHER_THRESHOLD`·`..._DISABLE_GATHER` env가 S-4·R2 이후 어떤 동작에도 영향 없음(STREAM raw 엔진은 gather 불가). 접근자·문서 삭제는 스펙 문장 변경 | 구조(죽은 knob 3개 제거) | 대기 |
 | 관찰 | S-A | 64 KiB에서 zlink 서버 앱 스레드 1개가 93 % 포화(I/O 스레드 45 % idle). 벤치 서버 구조(앱 스레드 1개) 문제이며 Core 계약과 무관 — asio 스택은 io 워커 8개에서 read→write 직결 | — | 기록 |
 
+## 7.6 머신 A(bindings 성능 작업)와의 조율
+
+사용자가 다른 머신에서 bindings 라이브러리 성능 작업을 시작한다(2026-09-07). 그쪽은 측정 내내 **같은 Core 라이브러리**를 써야 하므로 main을 따라오지 않고 **한 커밋에 고정**한다.
+
+- 고정 방법: `git worktree add --detach ~/project/zlink-core-base <SHA>` → `JOBS=4 scripts/build-core.sh release --lib-only` → 러너에 `ZLINK_CORE_SOURCE=local` + 그 트리의 `core/build` 경로. with_stream 러너는 기본이 release 다운로드(404)이므로 local 명시 필수.
+- 고정 시점: **errno 정정(잘못된 send flags: ENOTSUP → EINVAL, 03-errors §2)이 포함된 커밋 이후**. 관측 가능한 변화라 측정 중간에 바인딩을 고치는 일을 피한다. 감독관이 그 게이트 통과 직후 태그를 만들고 SHA를 알린다.
+- 이 캠페인은 `core/` 와 `bindings/c/{perf,bench}` 만 건드리므로 다른 바인딩 디렉터리와 파일이 겹치지 않는다.
+- 캠페인 시작(`285f37792d`) 이후 `core/include` · `core/src/libzlink.vers` diff는 계속 비어 있다(ABI 불변, 버전 0.17.0 유지). 동작 변화는 결함 수정 3건뿐: close의 `CLOSE_BUSY` 경합, 비-STREAM drain 중복 디코딩, send flags errno.
+
 ## 8. 체크리스트
 
 - [x] Phase 0: Release 빌드, with_stream 기준 표(§7.1), 경량 3셀 기준, hotpath `stream_tcp` 셀 커밋(`6f64e76b51`, D-B142 — harness가 I/O 스레드를 안 세던 결함도 수정)
