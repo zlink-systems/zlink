@@ -2233,3 +2233,24 @@ C의 같은 항목 `Core poller wait·reply 진행`은 **4,593.91 Ir(C 잔여의
 **포함**: G-11b(`5304885197`), 동시 multipart 지원 + completion pull 결함 2건 수정(`29f4d8b45c`, D-BP12·D-BP15 대응), hotpath reference 갱신(`aef7015e0f`), C++ contract 테스트 계약 갱신(동시 multipart 성공). 공개 ABI 불변(`core/include` diff는 버전 매크로뿐), framework 참조는 머신 A 설정(84e528cc54) 유지. bump 검증(`bump-0.17.2-summary.md`): dev 빌드·버전/contract-surface 테스트, `libzlink.so.0.17.2`, C contract 10/10·sample 6/6, C++ contract 19/19·sample 7/7. Python은 pytest 미설치, Go는 고정 native lib(0.17.1)라 링크 실패 — 재고정 후 A가 확인.
 **머신 A에 요청**: D-BP14·D-BP7·D-BP9 절차대로 고정 prefix를 0.17.2로 재고정하고 Go REQREP·C++ multi tcp REQREP(D-BP15 시나리오)을 재측정. 기존 0.17.1 측정과 짝짓지 않는다. 바인딩 쪽에 옛 계약(동시 multipart EINVAL)을 단언하는 테스트가 더 있으면 같은 방식으로 갱신 필요(C++ 1건은 B가 갱신).
 **캠페인 상태**: 0.17.2 범위 완료(계획 §8). idle 재측정(perf/c 전 size·with_stream 3회)은 별도 job으로 이어서 기록. 0.17.3 이월 항목은 §8 참조.
+
+## D-BP27 (2026-09-08 04:10, 머신 A) relay 직렬화가 latency를 망쳤다는 가설은 **A/B 대조로 기각** — `tls` RR 1024 B는 transport 고유 현상이다
+러너 수정 3건(relay 직렬화 `e0862e1e5c`, client echo drain `33f63ae89d`, C `ctx_term` `1aa2751b1b`) 뒤 `tls` SENDSEND가 처음으로 C·C++ 양쪽 `complete`가 됐다. 그런데 **RR `tls` 1024 B의 C++ latency가 C 대비 180~322배**로 나왔다(C++ 69.2~114.3 ms, C 0.35~0.38 ms). 5-run 두 차례 모두 재현됐고 처리량은 84~86%로 정상 범위다.
+
+깊이로 환산하면 성격이 분명하다 — 1024 B에서 356k msg/s × 69 ms ≈ **24,600건**이 파이프라인에 있고 이웃 크기는 수백 건이다. 점진적 증가가 아니라 그 크기에서만 일어나는 질적 전환이다(64 B 1.30x, 256 B 1.41x, **1024 B 180x**, 4096 B 0.97x, 65536 B 0.95x).
+
+**감독자 가설**: `e0862e1e5c`가 relay를 "한 건씩 admission 대기"로 바꿨는데 C는 `flush_pending_replies`로 "socket이 받아주는 만큼 연속 제출"한다. 매 건 suspend가 poll 왕복을 유발하면 sender가 뒤처져 큐가 깊어진다.
+
+**A/B 대조로 기각했다.** `tcp` RR SENDSEND는 수정 **전** 기준선이 있다(`p8ss5r`, 5-run).
+
+| | 수정 전 `p8ss5r` | 수정 후 `pGtcp5` |
+|---|---:|---:|
+| 1024 B latency/C | 1.09x | **1.09x** |
+| aggregate throughput | 92.45% | **94.40%** |
+| aggregate latency | 1.291x | 1.251x |
+
+1024 B latency가 정확히 같고 처리량은 오히려 올랐다. **relay 직렬화는 latency 문제를 만들지 않는다.** 따라서 `tls` RR 1024 B는 transport 고유 현상이며 별도 조사 대상이다.
+
+**부수 결론 — `tcp` SENDSEND 판정이 낡았다.** 러너가 바뀌었으므로 D-BP19와 같은 논리로 수정 전 측정은 참고값이다. RR은 92.45→**94.40%**로 재측정했고 DR도 다시 잰다. `MULTI_DEALER_DEALER`·`MULTI_PUBSUB`·REQREP 2종은 routed relay(`perf_multi_routed_relay.hpp`)와 echo client 변경 경로를 쓰지 않으므로 영향이 없고 기존 판정을 유지한다.
+
+**교훈**: 러너를 고친 뒤에는 **그 러너를 쓰는 모든 셀의 기존 판정을 낡은 것으로 보고 재측정 대상에 올린다.** 어느 셀이 영향받는지는 수정한 파일을 쓰는 pattern으로 판별한다.
