@@ -2228,7 +2228,7 @@ C의 같은 항목 `Core poller wait·reply 진행`은 **4,593.91 Ir(C 잔여의
 **후속 후보(감독자 판단).** 지도가 가리키는 유일한 큰 덩어리는 **Core I/O 연산 유발 수**(`start_async_write` 2.2배, `start_async_read` 2.9배)다. 이는 binding 내부 할당이 아니라 **C++가 Core를 부르는 패턴**의 문제이므로, 계약 위반 없이 줄일 여지가 있는지는 별도 조사 대상이다. 나머지 10개 항목은 각각 5% 미만이라 단독 후보로서 가치가 없다.
 
 **65536 B 지도는 미확보다.** C++는 실패하고 C는 재시도가 발생해 재시도 0 조건을 못 만들었다. 기록의 65536 B 열은 참고용이며 판정에 쓰지 않는다.
-## D-B216 (2026-09-08 03:55, 머신 B) **0.17.2 릴리스** — bump `c895dfb08f`, tag `core/v0.17.2`; 머신 A 재고정 요청
+## D-B216 (2026-09-08 03:55, 머신 B) **0.17.2 릴리스** — bump `dca377aa5e`, tag `core/v0.17.2`(2026-09-08 03:58 push); 머신 A 재고정 요청
 
 **포함**: G-11b(`5304885197`), 동시 multipart 지원 + completion pull 결함 2건 수정(`29f4d8b45c`, D-BP12·D-BP15 대응), hotpath reference 갱신(`aef7015e0f`), C++ contract 테스트 계약 갱신(동시 multipart 성공). 공개 ABI 불변(`core/include` diff는 버전 매크로뿐), framework 참조는 머신 A 설정(84e528cc54) 유지. bump 검증(`bump-0.17.2-summary.md`): dev 빌드·버전/contract-surface 테스트, `libzlink.so.0.17.2`, C contract 10/10·sample 6/6, C++ contract 19/19·sample 7/7. Python은 pytest 미설치, Go는 고정 native lib(0.17.1)라 링크 실패 — 재고정 후 A가 확인.
 **머신 A에 요청**: D-BP14·D-BP7·D-BP9 절차대로 고정 prefix를 0.17.2로 재고정하고 Go REQREP·C++ multi tcp REQREP(D-BP15 시나리오)을 재측정. 기존 0.17.1 측정과 짝짓지 않는다. 바인딩 쪽에 옛 계약(동시 multipart EINVAL)을 단언하는 테스트가 더 있으면 같은 방식으로 갱신 필요(C++ 1건은 B가 갱신).

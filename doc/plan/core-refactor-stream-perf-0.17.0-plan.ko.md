@@ -263,7 +263,7 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 - 고정 방법: `git worktree add --detach ~/project/zlink-core-base <SHA>` → `JOBS=4 scripts/build-core.sh release --lib-only` → 러너에 `ZLINK_CORE_SOURCE=local` + 그 트리의 `core/build` 경로. with_stream 러너는 기본이 release 다운로드(404)이므로 local 명시 필수.
 - 고정 시점: **errno 정정(잘못된 send flags: ENOTSUP → EINVAL, 03-errors §2)이 포함된 커밋 이후**. 관측 가능한 변화라 측정 중간에 바인딩을 고치는 일을 피한다. 감독관이 그 게이트 통과 직후 태그를 만들고 SHA를 알린다.
 - 이 캠페인은 `core/` 와 `bindings/c/{perf,bench}` 만 건드리므로 다른 바인딩 디렉터리와 파일이 겹치지 않는다.
-- 캠페인 시작(`285f37792d`) 이후 `core/include` · `core/src/libzlink.vers` diff는 계속 비어 있다(ABI 불변, 버전 0.17.0 유지). 동작 변화는 결함 수정 3건뿐: close의 `CLOSE_BUSY` 경합, 비-STREAM drain 중복 디코딩, send flags errno.
+- 캠페인 시작(`285f37792d`) 이후 `core/include` · `core/src/libzlink.vers` diff는 버전 매크로 외에 비어 있다(ABI 불변). 버전은 0.17.1(A 고정용, `4cd03b9173`) → **0.17.2**(`dca377aa5e`, tag `core/v0.17.2`, 2026-09-08). A는 D-BP14 절차로 0.17.2에 재고정한다. 동작 변화는 결함 수정 3건뿐: close의 `CLOSE_BUSY` 경합, 비-STREAM drain 중복 디코딩, send flags errno.
 
 ### 7.7 동기화 모델 인벤토리와 목표
 
@@ -292,5 +292,5 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 - [ ] Phase 2G: 스크린 셀 재측정 표, G-1 … (각 채택/기각, 커밋 해시, 패턴별 전 size 비율)
 - [x] Phase 3 apply(2026-09-07 12:30): R1+R2(`cb9139d16d`), R3+R4(`72100c7be3`), R5·R6R8·R9·R7R11(`2753a2d799`) 착지 = **−2,664/+1,001행**; R10-B apply 완료(게이트 대기). 인벤토리 오류 3건을 apply job이 걸러냄(R4 #3a, R6 #2, R7 #6). 보류(설계 job·D): pipe.cpp 개념별 분할(익명 helper 공유 헤더 선행), ws/wss 쌍둥이 병합, lb::sendpipe, route-binding cache(D), `oversize_admission_out_`(D 확인), registry `recursive_mutex_t` 필요성
 - [x] 동시 multipart 제출 지원(D-BP12 → D-B197~D-B214, 2026-09-08 03:40 착지): MP-1 설계(A안) → MP-2 구현 → 독립 리뷰 3회(차단 6+6+1건 전부 수정, MP-3/8/9) → MP-4/5 single fast path 복원 → MP-6 D-BP15 테스트 → MP-7 completion drain 결함 수정. 게이트 `gate-mp-summary.md`: ctest 209/209, suite 97×3, mirror 12/12, hotpath reqrep 0.882·stream 0.955(reference 갱신 `aef7015e0f`), with_stream idle ±1 %. 스펙 8 파일 동반 커밋(D-MP1~5, completion pull 명료화, TLS destructor·인계 규칙).
-- [x] Phase 4(2026-09-08): hotpath 5셀 PASS(reference 갱신), ctest 전체 209/209, 스펙 문구 정합(`6ef6cfaaf3` + MP 스펙), 버전 **0.17.2** bump(D-B215). idle 재측정(perf/c 전 size·with_stream 3회)은 bump 뒤 별도 기록(사용자 결정 D-B214: 일정 단축).
+- [x] Phase 4(2026-09-08): hotpath 5셀 PASS(reference 갱신), ctest 전체 209/209, 스펙 문구 정합(`6ef6cfaaf3` + MP 스펙), 버전 **0.17.2** bump `dca377aa5e`, tag `core/v0.17.2`(2026-09-08 03:58, D-B216; 머신 A 재고정 요청). idle 재측정(perf/c 전 size·with_stream 3회)은 bump 뒤 별도 기록(사용자 결정 D-B214: 일정 단축).
 - [ ] 0.17.3 이월: G-11 2a/2b/2d(socket 쪽 `_out_sync`·receive partition·route shard, 목표 lock/msg 8.3), backlog(`_slot_sync`, mailbox 예외 경로, `receive_once_guarded`(D-e), pipe.cpp 분할, ws/wss 병합, lb::sendpipe, R7 #4/#7, R11-B), TSan 기존 debt 5건(monitor/ctx lock-order, lb peer-weight).
