@@ -1814,3 +1814,18 @@ G-11 부록: (정정) `public_api_sync_bit`은 CAS 스핀락(mutex 카운트 밖
 
 ## D-B184 (2026-09-07 13:00, 사용자 지시) sub-agent 운영을 AGENTS.md §2.1로 전환 — 다음 job부터 codex 우선
 AGENTS.md §2.1(`7eafe3fa63`·`be4608bd79`·`568f3afd18`): codex 우선(`codex exec -m gpt-6-<model> -c model_reasoning_effort=<level>`), Claude sub-agent는 codex 이슈 시만(사유 기록). 모델 = 모호성·중대성(astra 가설 없는 진단만 / sol 모호·중대 / terra 일상 / luna 잘 정의), 레벨 = 난이도(high 기본, medium 일상, xhigh 측정된 실패·동시성·최종 리뷰, low 금지). 동시 codex ≤ 3, LTO 빌드 중 perf·gate 금지, sub-agent는 스펙 미수정, 발견은 감독자 재검증 후 채택. 진행 중인 Claude job 3개(G-11a opus, S-14 opus, R10-B-redo sonnet)는 규칙("실행 중인 agent는 모델 변경을 위해 재투입하지 않는다")대로 완주. 다음부터: G-11b~e·G-10·G-7 → codex sol/high(동시성·계약 인접), 게이트 job → codex terra/medium(정해진 절차), 인벤토리·측정 → luna/medium. 런처 `scratchpad/tools/codex-job.sh`(systemd scope `cx-<name>`, 로그 `c016-worklog/codex-logs/`). 브리프 앞부분(공통 규칙·필독 목록)을 동일하게 유지해 prefix 캐시를 살린다.
+
+## D-BP8 (2026-09-07 12:40, 머신 A) 우선 개선 대상은 **C++·.NET·JVM·Node** 4개 — Go·Rust·Python은 후순위
+사용자 지정. 계획서 §2의 언어 순서(C++ → .NET → Java → Node → Go → Rust → Python) 중 앞 4개가 우선 대상이다. 남은 작업의 배분을 이 우선순위로 조정한다.
+**우선 처리**: (1) 4개 언어의 Multi paired 측정과 개선 pass — pattern·transport 단위로 순차. (2) 4개 언어에 남은 러너 정합 — multi metric header 시간원(C++ `system_clock`, .NET Stopwatch를 `DateTime.UtcNow` epoch에 고정 → 둘 다 monotonic으로. `PERF_POLICY.md` §1.1 위반이며 이 호스트 WSL2에서 wall clock이 ±5초 점프한다, D-095), .NET·Node의 `PERF_MULTI_REQREP_MAX_OUTSTANDING` 상한 적용, .NET SENDSEND server의 stdin STOP 미수신(현재 SIGTERM 종료), 4개 언어 single 러너의 정책 정합.
+**후순위**: Go REQREP 러너 재구성(D-BP6이 요구하나 Go는 후순위), Go send drain, Go·Rust·Python의 multi `AUTO_HWM_DETAIL` 미출력, Python 시간원, Python venv 준비, Rust·Python 상한 적용. 이 항목들은 앞 4개 언어가 끝난 뒤 착수한다. 다만 **Go·Rust·Python 러너가 정책을 위반한 상태라는 기록은 유지**하며, 해당 언어를 측정할 때 위반을 먼저 고친 뒤 잰다.
+근거 기록: perf 실행은 직렬이므로 측정은 한 번에 한 언어씩이고, 코드 수준 러너 정합은 병렬로 진행할 수 있다.
+
+## D-BP9 (2026-09-07 12:20, 머신 A) Core 0.17.1을 **저장소 밖 고정 prefix**로 분리한다 — 머신 B의 Core 변경과 무관하게 측정
+D-BP7이 정한 Core 0.17.1 고정이 `core/build`로는 유지되지 않았다. 머신 B의 Core 리팩토링 캠페인이 같은 `main`에 계속 커밋하므로, rebase할 때마다 `core/src`가 artifact보다 새로워져 러너의 staleness 검사(`prepare_core_runtime`의 `find core/src core/include -newer <runtime>`)가 측정을 막고 자동 재빌드를 시도한다. 실제로 .NET 검증 실행이 "core runtime is older than core source"로 중단됐다.
+조치: 태그 `core/v0.17.1`(커밋 `4cd03b917304ea69d2744fcc4bf29fd528dc7b1f`)에서 별도 worktree(`/home/hep7/project/zlink-core-0171`)를 만들어 `scripts/build-core.sh release`로 빌드하고, 산출물을 **저장소 밖 고정 prefix** `/home/hep7/.cache/zlink/core-pinned/0.17.1`에 설치했다(`lib/`, `include/`, `share/zlink/core-package-provenance.json`).
+- Build ID `101bdb2411495d6b33aa1a295142d1c780571375`, SHA-256 `a3e00fd269b2a1c8d66371ac7ae7efd3f6dd25e6ab842484b847352258ea39a2`, 6,507,544 bytes, Release+LTO.
+- 모든 러너는 **`ZLINK_CORE_SOURCE=release` + `ZLINK_CORE_PACKAGE_PREFIX=/home/hep7/.cache/zlink/core-pinned/0.17.1`** 로 실행한다. `bindings/tools/local_core_runtime.sh`가 이 조합에서 release mode로 전환해 provenance manifest를 검증하고 staleness 검사를 건너뛴다.
+- 검증: C multi smoke가 `META,core_runtime` = 고정 prefix, `META,core_revision,4cd03b9173…`, `META,core_dirty,0`, `status: complete`.
+이전에 쓰던 `ZLINK_CORE_SOURCE=local`(= `core/build`)은 **더 이상 쓰지 않는다** — 그 트리는 main을 따라 움직인다. `--core-version 0.17.1` 금지도 유지한다(`~/.cache/zlink/core/`에는 build-dev 유래의 다른 artifact가 있다).
+영향: 2026-09-07 오전에 `core/build` artifact(Build ID `f7e2a539…`)로 측정한 C++ Multi `tcp` `MULTI_DEALER_DEALER`(before 76.75% → pass 1 후 93.74%)는 C와 짝지어 잰 값이므로 **비율 자체는 유효**하나, 이후 모든 측정은 고정 prefix에서 수행하므로 그 셀은 판정을 닫기 전에 고정 prefix로 다시 짝지어 잰다.

@@ -427,28 +427,17 @@ internal static class PerfReqRep
             fatal = true;
         }
 
-        // PERF_SINGLE_TEST_POLICY.md 1.1.2/1.1.5: one dedicated OS thread
-        // alternates continuous submission with completion progress, exactly
-        // like the C reference run_request_phase
-        // (bindings/c/perf/single/common/perf_single_reqrep.hpp).
-        //
-        // The un-settled `Task`s are NEVER awaited and carry no continuation.
-        // `await` on a worker thread has no SynchronizationContext, so its
-        // continuation would be queued to the shared .NET thread pool - the
-        // exact hand-off PERF_SINGLE_TEST_POLICY.md 1.1.5 forbids, and measured
-        // as the cause of the 3.5 kops/s result (every completion settled on a
-        // pool thread, requester pinned at the cap spinning on Thread.Yield).
-        // Instead this thread polls IsCompleted and settles each finished task
-        // itself with GetAwaiter().GetResult(), which never blocks or schedules
-        // on an already-completed task.
-        var pending = new List<Task<IReadOnlyList<Message>>>();
-
+        // PERF_SINGLE_TEST_POLICY.md 1.1.2/1.1.3/1.1.5: this thread owns
+        // submission, completion progress, and settlement. Retain Tasks without
+        // continuations; Poller.Wait completes them and IsCompleted makes
+        // GetResult below nonblocking.
         var requesterThread = new Thread(() =>
         {
             try
             {
                 ulong seq = 1;
                 int maxOutstanding = ResolveReqRepMaxOutstanding();
+                var pending = new List<Task<IReadOnlyList<Message>>>(maxOutstanding);
                 long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
 
                 void SettleCompleted()
@@ -624,17 +613,8 @@ internal static class PerfReqRep
         }
     }
 
-    /// <summary>
-    ///     Memory bound on un-settled request awaitables for the single
-    ///     requester socket. The public async request terminal makes one
-    ///     DONTWAIT admission attempt and resumes only from its own WRITABLE
-    ///     token (Contracts/Messaging/OperationContracts.cs:165-178), so Core
-    ///     paces admission exactly as the C reference does and the runner must
-    ///     not observe or gate on admission.
-    ///     PERF_SINGLE_TEST_POLICY.md 1.1.3 requires exactly one such bound and
-    ///     forbids using it as a round-trip gate, so it stays far above the
-    ///     steady-state depth. Same default as the multi suite.
-    /// </summary>
+    // The shared awaitable bound required by PERF_SINGLE_TEST_POLICY.md 1.1.3.
+    // Admission and WRITABLE retries remain owned by the binding.
     private static int ResolveReqRepMaxOutstanding()
     {
         return Math.Max(2, PerfEnv.ReadPositive(
