@@ -672,7 +672,7 @@ void test_blocking_process_commands_returns_on_signal_only_edge ()
     test_context_socket_close_zero_linger (router);
 }
 
-void test_pair_commands_only_fence_pipe_lifetime_transitions ()
+void test_pair_commands_fence_every_command_drain ()
 {
     void *pair = test_context_socket (ZLINK_SOCKET_PAIR);
     TEST_ASSERT_NOT_NULL (pair);
@@ -717,9 +717,9 @@ void test_pair_commands_only_fence_pipe_lifetime_transitions ()
         handle.socket));
     TEST_ASSERT_TRUE_MESSAGE (
       activation_probe.observed, "PAIR activation command was not processed");
-    TEST_ASSERT_FALSE_MESSAGE (
+    TEST_ASSERT_TRUE_MESSAGE (
       activation_probe.public_api_sync_owned,
-      "PAIR activation command unnecessarily acquired the multipart fence");
+      "PAIR activation command did not take the socket turn");
 
     zlink::pipe_t *replacement[2] = {NULL, NULL};
     zlink::pipepair_options_t pipe_options_2;
@@ -1111,7 +1111,7 @@ int main ()
     RUN_TEST (test_blocking_command_wait_ignores_stale_shared_poller_signal);
     RUN_TEST (test_command_wait_preserves_signal_only_edges);
     RUN_TEST (test_blocking_process_commands_returns_on_signal_only_edge);
-    RUN_TEST (test_pair_commands_only_fence_pipe_lifetime_transitions);
+    RUN_TEST (test_pair_commands_fence_every_command_drain);
     RUN_TEST (test_close_commands_wait_for_parked_multipart_cleanup_sync);
     RUN_TEST (test_router_capacity_reservation_is_atomic_and_non_consuming);
     RUN_TEST (test_empty_router_receive_rolls_back_capacity_attempt);

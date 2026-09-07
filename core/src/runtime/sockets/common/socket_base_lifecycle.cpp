@@ -225,12 +225,6 @@ class submit_progress_wait_scope_t
 namespace
 {
 
-bool is_pair_pipe_lifetime_command (const zlink::command_t &cmd_)
-{
-    return cmd_.type == zlink::command_t::bind
-           || cmd_.type == zlink::command_t::pipe_term_ack;
-}
-
 class command_drain_active_guard_t
 {
   public:
@@ -367,7 +361,6 @@ int zlink::socket_base_t::process_commands (
     const bool owns_control_scope =
       async_executor || lifecycle.public_api_sync_owned_by_current_thread ();
     const wait_timeout_budget_t wait_budget (_clock, timeout_);
-    bool pair_pipe_lifetime_sync_required = false;
     bool woke_since_last_claim = false;
     command_drain_active_guard_t command_drain_active (
       receive.command_drain_active);
@@ -387,35 +380,18 @@ int zlink::socket_base_t::process_commands (
         }
 
         bool processed_command = false;
-        bool retry_pair_pipe_lifetime_with_sync = false;
         bool submit_progress_tracked = false;
         uint64_t submit_progress_epoch_before = 0;
         {
-            // Socket commands can mutate non-PAIR distribution state used by
-            // concurrent sends. The exact calling thread, rather than the
+            // Every command drain takes the socket turn. Commands mutate the
+            // same send/receive state a concurrent public call reads, so one
+            // rule - "a command batch runs under public API synchronization" -
+            // replaces the per-socket-type and per-command exceptions that
+            // used to decide it. The exact calling thread, rather than the
             // process-wide held bit, decides whether this scope must acquire
-            // public API synchronization. PAIR activation commands remain
-            // lock-free; a front bind/termination transition is probed under
-            // command ownership and retried in API -> command-owner order.
-            const bool pair_sync_for_this_claim =
-              pair_pipe_lifetime_sync_required;
-            pair_pipe_lifetime_sync_required = false;
-            // Once start_reaping() installs the reaper poller, public close
-            // cleanup and async quiescence are complete and no send can resume.
-            // A parked marker may still leave a stale raw bit, so the reaper
-            // must not wait on it. Before that ownership boundary, including
-            // async close handoff, command mutation still fences close-time
-            // multipart rollback with the ordinary lifecycle sync.
-            const bool reaper_owns_closed_socket =
-              lifecycle.public_close_requested ()
-              && lifecycle.reaper_poller () != NULL;
-            const bool command_path_needs_public_api_sync =
-              !reaper_owns_closed_socket
-              && ((options.type != ZLINK_CORE_SOCKET_PAIR)
-                  || pair_sync_for_this_claim);
+            // it: a public call that already owns the turn drains in place.
             const bool acquire_public_api_sync =
-              command_path_needs_public_api_sync
-              && !lifecycle.public_api_sync_owned_by_current_thread ();
+              !lifecycle.public_api_sync_owned_by_current_thread ();
             socket_public_api_lock_scope_t api_owner (
               lifecycle, acquire_public_api_sync);
             scoped_lock_t command_owner (receive.command_owner_sync);
@@ -432,8 +408,7 @@ int zlink::socket_base_t::process_commands (
             }
 
             bool took_command_pending_hint = false;
-            if (!pair_sync_for_this_claim && timeout_ == 0 && throttle_
-                && force_if_command_pending_) {
+            if (timeout_ == 0 && throttle_ && force_if_command_pending_) {
                 // Direct request-reply commit points need a command drain only
                 // when a sender woke an inactive mailbox.
                 if (!mailbox->has_command_pending_hint ())
@@ -448,7 +423,7 @@ int zlink::socket_base_t::process_commands (
                 if (!took_command_pending_hint)
                     return 0;
             }
-            if (!pair_sync_for_this_claim && timeout_ == 0 && throttle_) {
+            if (timeout_ == 0 && throttle_) {
                 const uint64_t tsc = zlink::clock_t::rdtsc ();
                 const bool should_skip =
                   tsc
@@ -481,25 +456,7 @@ int zlink::socket_base_t::process_commands (
             }
 
             command_t cmd;
-            const bool probe_pair_lifetime_command =
-              options.type == ZLINK_CORE_SOCKET_PAIR
-              && !reaper_owns_closed_socket
-              && !lifecycle.public_api_sync_owned_by_current_thread ();
             const auto recv_next_command = [&] (command_t *cmd_out_) {
-                if (probe_pair_lifetime_command) {
-                    const mailbox_t::command_probe_result_t probe =
-                      mailbox->probe_command (&is_pair_pipe_lifetime_command,
-                                              consume_primary_signaler_);
-                    if (probe == mailbox_t::command_probe_empty) {
-                        errno = EAGAIN;
-                        return -1;
-                    }
-                    if (probe == mailbox_t::command_probe_match) {
-                        retry_pair_pipe_lifetime_with_sync = true;
-                        errno = EAGAIN;
-                        return -1;
-                    }
-                }
                 return mailbox->recv (cmd_out_, 0,
                                       consume_primary_signaler_);
             };
@@ -568,17 +525,9 @@ int zlink::socket_base_t::process_commands (
                 errno = ETERM;
                 return -1;
             }
-            if (!retry_pair_pipe_lifetime_with_sync
-                && (processed_command || woke_since_last_claim
-                    || timeout_ == 0))
+            if (processed_command || woke_since_last_claim || timeout_ == 0)
                 return 0;
-            if (!retry_pair_pipe_lifetime_with_sync)
-                command_drain_active.release ();
-        }
-
-        if (retry_pair_pipe_lifetime_with_sync) {
-            pair_pipe_lifetime_sync_required = true;
-            continue;
+            command_drain_active.release ();
         }
 
         // Blocking recv must not retain public API synchronization while it
