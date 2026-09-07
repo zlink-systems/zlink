@@ -4,3 +4,4 @@
 
 검증: `JOBS=4 scripts/build-core.sh dev` 후 버전 관련 테스트(`ctest --test-dir core/build-dev -R 'version|contract_surface|header'`) 통과; `JOBS=4 scripts/build-core.sh release --lib-only` 로 `core/build/lib/libzlink.so.0.17.2` 생성 확인; bindings c·cpp `run_tests.sh` 스모크(각 README/CONTRIBUTING의 실행 방법대로, `ZLINK_CORE_SOURCE=local`), 시간이 남으면 python·go의 버전 확인 테스트만. `git diff --stat`을 보고서에 전부 싣는다.
 보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/bump-0.17.2-summary.md (바꾼 파일·검증 결과·남은 0.17.1 참조와 판단). 진행 파일 progress-bump-0.17.2.md. 커밋하지 않는다.
+재실행 지시(2회차): 작업 트리는 이제 깨끗하다(감독관이 문서를 모두 커밋함). `doc/plan/**` 아래의 **모든** 미추적 파일(progress·summary·brief·log)은 허용 범위이며 무시한다. `git status --short -- core bindings scripts` 가 비어 있으면 바로 작업을 시작한다.

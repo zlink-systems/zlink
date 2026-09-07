@@ -1,0 +1,3 @@
+너는 job verify-cpp-contract다. /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽고 따른다(JOBS=4, 포그라운드, 커밋·stash·소스 수정 금지). 상한 25분. 메인 저장소 main에서 작업한다.
+
+감독관이 `bindings/cpp/tests/contract/test_cpp_contract_socket.cpp:773` 부근의 동시 multipart 기대값을 Core 0.17.2 계약(다른 thread의 독립 multipart 성공, lvalue message 소비, 경쟁자 record가 held record보다 먼저 수신)에 맞게 고쳤다. 확인: `ZLINK_CORE_SOURCE=local ZLINK_BUILD_JOBS=4 bindings/cpp/tests/run_tests.sh` 로 C++ contract 전체를 실행해 19/19 통과인지 확인하고, `test_cpp_contract_socket`만 3회 반복. 실패하면 assertion 위치·출력·원인 추정(테스트 기대 vs Core 동작)을 보고서에 적고 소스는 고치지 않는다. 보고서: doc/plan/c016-worklog/verify-cpp-contract-summary.md (10줄 이내). 끝나면 5줄 요약을 표준 출력으로.
