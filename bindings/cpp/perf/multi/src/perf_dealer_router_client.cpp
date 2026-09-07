@@ -160,6 +160,7 @@ class dealer_router_client_bench_t
 
     perf::async_task_t<bool> run_sender (perf::application_ready_queue_t &ready_queue,
                                          socket_state_t &state,
+                                         perf::multi::echo_reply_drain_t &replies,
                                          perf_metric::phase_t phase,
                                          std::chrono::steady_clock::time_point deadline)
     {
@@ -179,6 +180,7 @@ class dealer_router_client_bench_t
               std::as_bytes (std::span<const char> (request_buffer.data (), state.payload_size)));
             if (!request.valid ())
                 co_return false;
+            replies.submitted ();
             try {
                 if (perf::multi::measurement_part_count () == 2) {
                     zlink::message_t tail = perf::multi::measurement_empty_part ();
@@ -190,6 +192,8 @@ class dealer_router_client_bench_t
                 }
             }
             catch (const zlink::submit_error_t &err) {
+                if (!replies.finished ())
+                    co_return false;
                 // Connect-monitor readiness can precede the first route
                 // snapshot used by Core async admission. Keep retrying that
                 // transient condition within the active application deadline.
@@ -250,6 +254,7 @@ class dealer_router_client_bench_t
         try {
             perf::multi::bench_latency_sampler_t latency;
             unsigned long long count = 0;
+            perf::multi::echo_reply_drain_t replies;
             // PERF_MULTI_TEST_POLICY § 1.3.1: the application deadline bounds an
             // otherwise signal-driven wait. POLLIN and public async send
             // progress share this poller, so no periodic wakeup fallback is
@@ -265,10 +270,11 @@ class dealer_router_client_bench_t
             senders.reserve (_socket_states.size ());
             for (size_t i = 0; i < _socket_states.size (); ++i)
                 senders.emplace_back (
-                  run_sender (coordinator.ready_queue (), _socket_states[i], phase, deadline));
+                  run_sender (coordinator.ready_queue (), _socket_states[i], replies, phase,
+                              deadline));
 
             const auto dispatch_ready =
-              [this, phase, deadline, lat_out, &latency, &count] (
+              [this, phase, deadline, lat_out, &latency, &count, &replies] (
                 const zlink::poll_event_t *events_, size_t ready_count) {
                 for (size_t i = 0; i < ready_count; ++i) {
                     const size_t slot_index = events_[i].slot;
@@ -296,12 +302,15 @@ class dealer_router_client_bench_t
                             if (recv_rc > 0) {
                                 continue;
                             }
-                            if (std::chrono::steady_clock::now () >= deadline)
-                                break;
                             if (!perf_metric::is_expected (header, _run_id, phase,
                                                           _msg_size)) {
                                 continue;
                             }
+
+                            if (!replies.finished ())
+                                return false;
+                            if (std::chrono::steady_clock::now () >= deadline)
+                                continue;
 
                             ++count;
                             if (lat_out && phase == perf_metric::phase_active) {
@@ -329,6 +338,12 @@ class dealer_router_client_bench_t
                 if (!co_await std::move (senders[i]))
                     co_return false;
             }
+
+            // Match the C echo client: receive admitted echoes before closing,
+            // without extending the deadline or counting teardown traffic.
+            if (!replies.drain (_poller, _socket_states.size (), drain_deadline,
+                                dispatch_ready))
+                co_return false;
 
             if (count == 0
                 || (lat_out && phase == perf_metric::phase_active && latency.count () == 0))
