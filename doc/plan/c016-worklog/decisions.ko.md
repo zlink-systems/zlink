@@ -1900,3 +1900,11 @@ Go REQREP 러너 정합 중 드러났고, **감독자가 최소 재현 프로그
 **부차 항목**: Go binding이 이 `BACKPRESSURED`를 terminal 오류로 caller에게 노출한다. 계약상(`bindings/go/contracts/sockets.go:43-45`) 대기 토큰의 WRITABLE에서 내부 재개해야 한다. Core가 해결되면 대부분 사라지므로 후속으로 둔다.
 **버그 리포트**: `doc/bug/perf/2026-09-07-core-concurrent-multipart-submit.ko.md`에 재현 프로그램 전문과 함께 작성했다(`PERF_POLICY.md:125`가 규정한 위치). Core 캠페인이 git으로 받는다.
 **현재 조치**: Go REQREP은 스펙 결정 전까지 측정 대상에서 보류한다. Go는 후순위 언어(D-BP8)라 캠페인 전체는 막히지 않는다. 재현 프로그램은 `/tmp/zl-repro`에 있고 저장소에 남기지 않았다.
+
+## D-BP13 (2026-09-07 15:45, 머신 A) 러너 정합 잔여 항목 판정 — 감독자 결정 4건
+사용자 지시로 paired 측정은 대기하고 남은 정합 작업을 먼저 진행한다. `log/2026-09-07-priority-runner-parity.ko.md` §9가 올린 결정 요청을 다음과 같이 판정한다.
+**(1) Node의 event-loop 턴과 C++ `co_await`** — 이미 해소됐다. `PERF_SINGLE_TEST_POLICY.md`에 신설한 §1.1.5가 "금지 대상은 awaitable 타입이 아니라 진행을 언어 런타임 스케줄러에 위임하는 것"으로 규정하고, Node `Promise`를 "`worker_threads`의 전용 worker 안에서 그 worker 자신의 loop만 진행시킬 때" 허용하며 "worker의 loop를 한 턴 넘기는 것은 그 thread가 자기 completion을 진행시키는 유일한 수단이므로 '다른 thread의 event loop'가 아니다"라고 명시한다. C++ `co_await`도 러너 자신의 ready queue가 재개하면 허용이다. 러너가 (a)로 구현해 둔 것이 정책과 일치하므로 그대로 채택한다. `UNSUPPORTED` 처리(c)와 worker N개(b)는 불채택.
+**(2) `reqrep_max_outstanding`의 Effective Options 노출** — **8개 러너 전부에 노출한다.** `PERF_SINGLE_TEST_POLICY.md` §1.1.3이 노출을 요구하고, key 집합이 어긋나면 §8의 "Effective Options 일치" 근거가 깨진다. C는 상한이 없고 admission backpressure가 경계이므로 그 사실을 값으로 적는다(예: `backpressure`). 이러면 key 집합이 같아지면서 모델 차이가 값으로 드러난다. 노출하지 않아 4개 언어만 C와 1행 다른 현재 상태가 더 나쁘다.
+**(3) .NET의 `completed` 증가 위치** — **C와 1:1로 맞춘다.** `PERF_POLICY.md` line 105~115가 "throughput count 증가 위치"를 측정 anchor 6종 중 하나로 못박는다. monotonic 시간원에서 관측 차이가 없더라도 anchor는 위치로 판정하는 항목이고 한 줄 이동으로 끝난다.
+**(4) Java `System.nanoTime()`의 규격 보장** — 현 상태 유지. javadoc이 프로세스 간 비교를 규격으로 보장하지 않지만 이 호스트(HotSpot/Linux)에서 `CLOCK_MONOTONIC`과 같은 축임을 실측했다. **Windows 측정으로 넘어갈 때 같은 실측을 다시 한다**는 조건을 환경 manifest에 남긴다.
+남은 실행 항목: one-way 잔여(active deadline 필터, wire 길이 검증, transient 재시도 busy-spin, RESULT 정밀도, latency 표본 0개 fallback)를 7개 binding에 이식 — C는 `522df6d57e`에서 이미 적용됐다. Java `:perf-single:test`·`:perf-multi:test`는 감독자가 고정 prefix로 실행한다.
