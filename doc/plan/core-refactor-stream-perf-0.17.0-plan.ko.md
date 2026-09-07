@@ -219,8 +219,8 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 | single DEALER_DEALER | 787.4 | 0.048 | | | |
 | single DEALER_ROUTER | 767.6 | 0.049 | | | |
 | single ROUTER_ROUTER | 744.4 | 0.048 | | | |
-| single DR_REQREP | 418.7 Kops/s | 5.44 | | | |
-| single RR_REQREP | 396.8 | 17.62 | | | |
+| ~~single DR_REQREP~~ | ~~418.7 Kops/s~~ | | 정책 제외 | | |
+| ~~single RR_REQREP~~ | ~~396.8~~ | | 정책 제외 | | |
 | multi DEALER_DEALER | 561.4 Kmsg/s | 54.6 | | | |
 | multi DR_SENDSEND | 166.6 Kops/s | 1.18 | | | |
 | multi RR_SENDSEND | 111.5 | 1.30 | | | |
@@ -229,7 +229,7 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 | multi PUBSUB | 541.5 Kmsg/s | 1459 | | | |
 | multi STREAM (CCU 100) | 124.2 Kops/s | 0.40 | | | |
 
-**Phase 2G 기준(idle runs 3, D-B158·D-B159, HEAD `2529709db6`)** — Phase 0 multi 값은 부하 오염이라 폐기하고 이 값을 이후 판정 기준으로 쓴다: single PAIR 883.8 / PUBSUB 626.5 / DD 769.8 / DR 760.7 / RR 732.2 / DR_REQREP 419.4 / RR_REQREP 371.6; multi DD 905.1 / DR_SENDSEND 273.9 / RR_SENDSEND 242.5 / DR_REQREP 208.5 / RR_REQREP 170.1 / PUBSUB 1009.0 / STREAM 227.1. 전 size 절대 기준 파일: `perf_c_multi_linux_20260907_044847_phase2g-fullsize.txt`, `perf_c_single_linux_20260907_045258_phase2g-fullsize.txt`(이 둘은 인벤토리 job과 동시 측정이라 −5 % 판정 시 idle 재측정으로 확정).
+**Phase 2G 기준(idle runs 3, D-B158·D-B159, HEAD `2529709db6`)** — Phase 0 multi 값은 부하 오염이라 폐기하고 이 값을 이후 판정 기준으로 쓴다: single PAIR 883.8 / PUBSUB 626.5 / DD 769.8 / DR 760.7 / RR 732.2 (DR_REQREP·RR_REQREP는 2026-09-07 정책 개정으로 single suite 제외 — `PERF_SINGLE_TEST_POLICY.md` §1); multi DD 905.1 / DR_SENDSEND 273.9 / RR_SENDSEND 242.5 / DR_REQREP 208.5 / RR_REQREP 170.1 / PUBSUB 1009.0 / STREAM 227.1. 전 size 절대 기준 파일: `perf_c_multi_linux_20260907_044847_phase2g-fullsize.txt`, `perf_c_single_linux_20260907_045258_phase2g-fullsize.txt`(이 둘은 인벤토리 job과 동시 측정이라 −5 % 판정 시 idle 재측정으로 확정).
 
 ### 7.5 D(spec gap) 후보 — 사용자 결정 대기
 
