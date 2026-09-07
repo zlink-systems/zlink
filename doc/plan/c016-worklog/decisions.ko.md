@@ -1802,3 +1802,6 @@ G-11 부록: (정정) `public_api_sync_bit`은 CAS 스핀락(mutex 카운트 밖
 
 ## D-B180 (2026-09-07 11:45, 머신 B) G-2 채택 커밋 `749145fded`(pair_inproc reference 2527.83 → 2348.46); 게이트 g1-g3·G-11a 투입
 게이트 g2(`gate-g2-summary.md`): 충돌 0, 인터페이스 diff 0, ctest 206/208(간헐 + dev hotpath_gate), 5회 65/65, lost-wake until-fail:10 40/40, mirror 12/12, **hotpath dealer_dealer 0.963 / reqrep 0.982 / pair 0.929 / router_router_tcp 0.986 / stream_tcp 0.983**(전 셀 개선), with_stream Phase 0 대비 +16.8/+21.0/+7.1 %(부하 중 단일 run). 투입: 게이트 g1-g3(G-3 먼저, G-1), G-11a(main `08da256f1e`, 명령 드레인 항상 turn — 잠금 제거 없이 측정). 보류: G-10(G-11a와 socket_base_lifecycle 겹침 가능 → 착지 뒤), G-7.
+
+## D-B181 (2026-09-07 12:00, 머신 B) 게이트 g1-g3 — 결정적 실패 1건으로 채택 보류, 진단 투입
+`gate-g1-g3-summary.md`: 충돌 0, 인터페이스 diff 0, mirror 12/12, hotpath 5셀 0.956~0.992 PASS, with_stream 기준 대비 +0.1/−2.6/−2.8 %(부하 중). **그러나** `unittest_single_lane_accounting` / `test_sl_flow_snapshot_accounts_dr_reply_as_application`이 solo 재실행에서 100 % 실패 — 이전 게이트들의 "간헐"과 다른 결정적 실패. 후보: G-1의 `refresh_application_hwm_if_drained` 조기 반환 hoist("store가 유일한 효과"라는 주장이 틀렸을 가능성), G-3의 `publish_session_outbound_accounting` 냉·열 분리. main 작업 트리는 patch 적용 상태로 두고(커밋 금지) 진단 job(opus)이 G-1 단독·G-3 단독·pristine 세 트리로 이분·원인·수정. G-11a는 별도 worktree에서 계속.
