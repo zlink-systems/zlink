@@ -2342,3 +2342,7 @@ C의 같은 항목 `Core poller wait·reply 진행`은 **4,593.91 Ir(C 잔여의
 첫 paired 판정: `tcp` `MULTI_DEALER_ROUTER_REQREP` **67.72%**(5-run), latency 6.427x. 0.17.1 참고값 19.0%는 깨진 러너의 값이었으므로 비교 대상이 아니다. **작은 크기에서 latency가 3.03~3.05x로 일정한 것이 Go 고유 서명**이다(C++는 1.0x 안팎). throughput 격차와 별개로 Go binding의 REQREP 경로에 고정 지연이 있다는 뜻이며, 비용 지도 대상이다.
 
 Go relay는 D-BP24 대상이 아니다 — DR·RR 모두 공유 echo server가 recv loop 안에서 동기 제출한다(Java와 같음). 표를 갱신했다.
+## D-B226 (2026-09-08 08:40, 머신 B) ST-3 결과 — 차단 4건 해소; 트랙 1 게이트 `gate-st` 착수
+
+**ST-3**(`core-rf-ST-3-report.md`, Claude): B-ST2-1 `release_receive_sync_from_async_owner()`가 `receive.sync` 아래에서 store(전환 자체가 프로토콜 안; 불변식 "이전 배타 형식으로 들어온 실행이 모두 나가기 전에는 새 형식으로 시작하지 않는다"). B-ST2-2 `progress_epoch`·`waiters` atomic(acquire/release) → TSan suppression 없이 receive 소유권 경고 0, 잔여 11건 전부 `mailbox_t`(기존 debt). B-ST2-3/4 테스트: thread별 io_context가 socket보다 먼저 선언, 공유 목록·타 thread close 삭제, async_read/write + 같은 thread cancel. W-ST2-3 command 대기 CV를 비재진입 `lease_handoff_sync` 위로, `publish_receive_progress_locked()` 하나로 notify 단일화, 주석 정정. 재작성 테스트로 수정 전 3/3 FAIL(`fq.cpp:39` assertion) 재증명. 검증: 전체 210/210, 관련 98×3, 새 테스트 20/20, wake-invariant 20회, ASan/UBSan 0, 공개 API diff 없음. 잔여 경계: control attach(W-1), lease handoff FIFO 없음, mailbox TSan 11건 — 트랙 2 범위.
+**결정**: 트랙 1 게이트 `gate-st`(terra, 경량 + perf/c multi 3셀로 `has_in` 비용 관측) → 통과 시 커밋. codex 동시 3개 제한으로 별도 리뷰 생략(ST-2 리뷰의 재현 순서가 ST-3에서 코드로 차단됨을 보고서에서 확인).
