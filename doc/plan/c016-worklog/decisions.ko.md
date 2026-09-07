@@ -2346,3 +2346,8 @@ Go relay는 D-BP24 대상이 아니다 — DR·RR 모두 공유 echo server가 r
 
 **ST-3**(`core-rf-ST-3-report.md`, Claude): B-ST2-1 `release_receive_sync_from_async_owner()`가 `receive.sync` 아래에서 store(전환 자체가 프로토콜 안; 불변식 "이전 배타 형식으로 들어온 실행이 모두 나가기 전에는 새 형식으로 시작하지 않는다"). B-ST2-2 `progress_epoch`·`waiters` atomic(acquire/release) → TSan suppression 없이 receive 소유권 경고 0, 잔여 11건 전부 `mailbox_t`(기존 debt). B-ST2-3/4 테스트: thread별 io_context가 socket보다 먼저 선언, 공유 목록·타 thread close 삭제, async_read/write + 같은 thread cancel. W-ST2-3 command 대기 CV를 비재진입 `lease_handoff_sync` 위로, `publish_receive_progress_locked()` 하나로 notify 단일화, 주석 정정. 재작성 테스트로 수정 전 3/3 FAIL(`fq.cpp:39` assertion) 재증명. 검증: 전체 210/210, 관련 98×3, 새 테스트 20/20, wake-invariant 20회, ASan/UBSan 0, 공개 API diff 없음. 잔여 경계: control attach(W-1), lease handoff FIFO 없음, mailbox TSan 11건 — 트랙 2 범위.
 **결정**: 트랙 1 게이트 `gate-st`(terra, 경량 + perf/c multi 3셀로 `has_in` 비용 관측) → 통과 시 커밋. codex 동시 3개 제한으로 별도 리뷰 생략(ST-2 리뷰의 재현 순서가 ST-3에서 코드로 차단됨을 보고서에서 확인).
+
+## D-B227 (2026-09-08 08:50, 머신 B) D-BP29(tls/ws/wss 왕복 latency 간헐 폭증, C 재현) — D-BP28과 같은 계열로 WS-1/ALL-1 B 항목에 합침
+
+**보고**: tls·ws·wss SENDSEND/RR 셀에서 5-run 중 2~3회 latency가 25~225 ms로 튐(C도 동일), 체류 위치는 서버의 OS TCP 송신 queue(정상 232 KB vs 이상 766.5 MB), application pending ≤1, tcp에서는 안 남. D-BP28(ws 왕복 처리량 크기 비례 붕괴)과 같은 축(왕복·프레이밍/암호화 transport·server→client 방향).
+**해석(감독자, 가설)**: 왕복에서 server→client 방향 write가 OS 송신 buffer에 무제한 쌓인다는 것은 Core의 송신 backpressure(credit/HWM)가 OS queue 깊이를 보지 못하는 상태에서 프레이밍 transport의 write 단위가 커지거나 flush 경계가 달라 write가 계속 accept되는 형태로 보인다 — tcp는 같은 경로인데 안 나므로 ws/tls engine의 write 완료·재시도 처리(부분 write, EAGAIN 뒤 재개, out buffer 재할당) 차이가 후보. WS-1이 callgrind로 크기 비례 비용을 특정하면 이 latency 스파이크와 같은 함수인지 대조한다. ALL-1 B 항목 범위에 포함(brief는 D-BP28 문서를 가리키며 그 §9에 D-BP29가 합쳐짐).
