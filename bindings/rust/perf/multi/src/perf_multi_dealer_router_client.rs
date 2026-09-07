@@ -72,6 +72,7 @@ fn main() {
     for mon in &mut monitors {
         common::wait_monitor_ready(mon, ready_timeout, "multi dealer-router client");
     }
+    ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
     // Receive and Future-based admission run concurrently. Echo receipt never
     // gates the next send; each socket starts its next send after admission.
@@ -141,6 +142,16 @@ fn main() {
         }
     }
     assert!(!tasks.any_pending(), "send admission drain timed out");
+
+    if let Some(socket) = sockets.first() {
+        common::print_multi_auto_hwm_detail(
+            socket,
+            "endpoint",
+            &args.transport,
+            args.msg_size,
+            "dealer",
+        );
+    }
 
     common::print_result(
         "MULTI_DEALER_ROUTER_SENDSEND",

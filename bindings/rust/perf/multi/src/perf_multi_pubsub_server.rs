@@ -51,10 +51,12 @@ fn main() {
     if !start_seen {
         return;
     }
+    ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
     let deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
     let payload_size = args.msg_size.max(common::HEADER_SIZE);
     let mut seq: u64 = 1;
+    let mut auto_hwm_printed = false;
 
     while Instant::now() < deadline {
         let mut msg = Message::with_size(payload_size).expect("msg");
@@ -75,11 +77,22 @@ fn main() {
         } {
             Ok(()) => {
                 seq += 1;
+                if !auto_hwm_printed {
+                    // Snapshot only after the first application message was
+                    // accepted on an attached subscriber pipe.
+                    common::print_multi_auto_hwm_detail(
+                        &pub_sock,
+                        "endpoint",
+                        &args.transport,
+                        args.msg_size,
+                        "pub",
+                    );
+                    auto_hwm_printed = true;
+                }
             }
             Err(err) => panic!("publish failed: {err}"),
         }
     }
-
     // PERF_MULTI_TEST_POLICY § 1.3.1: signal phase end via wire-level stop
     // token. Match the C runner by retrying until the token is actually
     // accepted; otherwise subscribers can wait forever after large messages.

@@ -13,6 +13,7 @@ from perf_multi_common import (
     new_payload,
     parse_client_args,
     perf_client_context,
+    print_multi_auto_hwm_detail,
     resolve_multi_monitor_hwm_bytes,
     resolve_multi_connect_ready_timeout_ms,
     send_routed,
@@ -73,6 +74,10 @@ async def main(argv=None):
                 await asyncio.gather(*(
                     send_loop(index, sock) for index, sock in enumerate(sockets)
                 ))
+                if sockets:
+                    print_multi_auto_hwm_detail(
+                        sockets[0], "endpoint", args.transport, args.msg_size, "dealer"
+                    )
                 # C run_single_size_case: send a wire stop token per socket
                 # so the server receive window terminates.
                 print(f"CLIENT_DONE,{args.msg_size}", flush=True)

@@ -138,7 +138,12 @@ def _configure_core_runtime(env):
 def _transports_for_pattern(pattern, transports):
     if transports is None:
         return list(POLICY_TRANSPORTS[pattern])
-    return list(transports)
+    base = POLICY_TRANSPORTS[pattern]
+    selected = []
+    for transport in transports:
+        if transport in base and transport not in selected:
+            selected.append(transport)
+    return selected
 
 
 def _grouped_option_text(patterns, value_for_pattern):
@@ -288,7 +293,7 @@ def _build_options(args, patterns, transports, msg_sizes):
     rcvhwm = args.recv_hwm or args.hwm or "auto-hwm"
     sndbuf = args.sndbuf or args.buf or "-1"
     rcvbuf = args.rcvbuf or args.buf or "-1"
-    return {
+    options = {
         "lang": "python",
         "suite": "single",
         "runs": args.runs,
@@ -309,8 +314,16 @@ def _build_options(args, patterns, transports, msg_sizes):
         "patterns": ",".join(patterns),
         "transports": _grouped_option_text(patterns, lambda pattern: _transports_for_pattern(pattern, transports)),
         "msg_sizes": ",".join(msg_sizes),
-        "smoke": "1" if args.smoke else "0",
     }
+    if any(pattern.endswith("_REQREP") for pattern in patterns):
+        try:
+            bound = int(os.environ.get("PERF_SINGLE_REQREP_MAX_OUTSTANDING", "64"))
+        except ValueError:
+            bound = 64
+        if bound <= 0:
+            bound = 64
+        options["reqrep_max_outstanding"] = max(2, bound)
+    return options
 
 
 def main(argv=None):
@@ -354,7 +367,6 @@ def main(argv=None):
 
     options = _build_options(args, patterns, transports, msg_sizes)
     fail_fast = os.environ.get("PERF_FAIL_FAST", "0") == "1"
-    options["fail_fast"] = "1" if fail_fast else "0"
     sections = []
     emitted_chunks = []
     status_lines = []

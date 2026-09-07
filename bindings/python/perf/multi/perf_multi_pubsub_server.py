@@ -15,6 +15,7 @@ from perf_multi_common import (
     new_payload,
     parse_server_args,
     perf_server_context,
+    print_multi_auto_hwm_detail,
     publish_sync,
     stamp_payload,
 )
@@ -54,13 +55,22 @@ def main(argv=None):
             start_event.wait()
             if stop_event.is_set():
                 return
+            ctx.recalculate_auto_hwm()
             active_deadline = time.perf_counter() + active_duration_s
+            auto_hwm_printed = False
             while time.perf_counter() < active_deadline and not stop_event.is_set():
                 publish_sync(
                     publisher,
                     TOPIC,
                     stamp_payload(payload, phase=1, run_id=run_id),
                 )
+                if not auto_hwm_printed:
+                    # The first accepted application publish is the earliest
+                    # valid point for an attached-pipe snapshot.
+                    print_multi_auto_hwm_detail(
+                        publisher, "endpoint", args.transport, args.msg_size, "pub"
+                    )
+                    auto_hwm_printed = True
             # PERF_MULTI_TEST_POLICY § 1.3.1: signal phase end on the wire.
             for _ in range(64):
                 publisher.publish(TOPIC).message(STOP_TOKEN).submit()

@@ -147,7 +147,7 @@ def single_auto_hwm_detail_lines(patterns, msg_sizes, rows=None):
             )
 
 
-def multi_auto_hwm_lines(pattern, msg_sizes):
+def multi_auto_hwm_lines(pattern, msg_sizes, rows=None):
     yield "    Auto-HWM detail:"
     yield (
         "      | Size(B) | Component   | Type | UnitBudget(KB) | MsgUnit(B) | "
@@ -157,11 +157,29 @@ def multi_auto_hwm_lines(pattern, msg_sizes):
         "      |---------|-------------|------|----------------|------------|--------|"
         "--------|------------|------------|"
     )
+    rows = rows or []
     for msg_size in msg_sizes:
-        yield (
-            f"      | {msg_size:<7} | unavailable | n/a  | n/a            | "
-            f"{msg_size:<10} | n/a    | n/a    | n/a        | n/a        |"
-        )
+        matching = [
+            row
+            for row in rows
+            if row.get("pattern", "").removeprefix("MULTI_")
+            == pattern.removeprefix("MULTI_")
+            and row.get("msg_size") == str(msg_size)
+        ]
+        if not matching:
+            yield (
+                f"      | {msg_size:<7} | unavailable | n/a  | n/a            | "
+                f"{msg_size:<10} | n/a    | n/a    | n/a        | n/a        |"
+            )
+            continue
+        for row in matching:
+            yield (
+                f"      | {msg_size:<7} | {row.get('component', '?'):<11} | "
+                f"{row.get('socket_type', '?'):<4} | n/a            | {msg_size:<10} | "
+                f"{row.get('sndhwm', '?'):<6} | {row.get('rcvhwm', '?'):<6} | "
+                f"{auto_hwm_bytes_to_kb_display(row.get('effective_sndbuf')):<10} | "
+                f"{auto_hwm_bytes_to_kb_display(row.get('effective_rcvbuf')):<10} |"
+            )
 
 
 def sort_result_data_lines(lines):
@@ -315,7 +333,6 @@ def _single_effective_options(args, section):
         f"- runs: {args.runs}",
         f"- duration_seconds: {args.duration}",
         "- timeout_seconds: 30",
-        f"- fail_fast: {args.fail_fast}",
         f"- io_threads: {args.io_threads or '1'}",
         f"- hwm: {args.hwm or 'auto-hwm'}",
         f"- sndhwm: {args.send_hwm or args.hwm or 'auto-hwm'}",
@@ -330,6 +347,14 @@ def _single_effective_options(args, section):
         f"- transports: {args.transports}",
         f"- msg_sizes: {args.msg_sizes}",
     ]
+    if any(pattern.strip().endswith("_REQREP") for pattern in args.patterns.split(",")):
+        try:
+            bound = int(os.environ.get("PERF_SINGLE_REQREP_MAX_OUTSTANDING", "64"))
+        except ValueError:
+            bound = 64
+        if bound <= 0:
+            bound = 64
+        lines.append(f"- reqrep_max_outstanding: {max(2, bound)}")
     if section == "result":
         lines.append("")
     return lines
@@ -544,6 +569,14 @@ def _multi_effective_options(args, section):
         "- disable_resource_metrics: 0",
         "- timeout_seconds: auto",
     ]
+    if any(pattern.endswith("_REQREP") for pattern in selected_patterns):
+        try:
+            bound = int(os.environ.get("PERF_MULTI_REQREP_MAX_OUTSTANDING", "64"))
+        except ValueError:
+            bound = 64
+        if bound <= 0:
+            bound = 64
+        lines.append(f"- reqrep_max_outstanding: {max(2, bound)}")
     if section == "result":
         lines.append("")
     return lines
@@ -560,6 +593,7 @@ def render_multi_report(args):
     result_lines = []
     failures = []
     skips = []
+    auto_hwm_rows = load_auto_hwm_detail_rows(args.auto_hwm_raw)
 
     try:
         load_avg = " ".join(f"{value:.2f}" for value in os.getloadavg())
@@ -650,7 +684,7 @@ def render_multi_report(args):
                         f"{pattern} current {transport} {size}B: {reason or 'missing_result_lines'}"
                     )
             lines.append(f"    Testing {transport}: Done")
-            lines.extend(multi_auto_hwm_lines(pattern, pattern_sizes[pattern]))
+            lines.extend(multi_auto_hwm_lines(pattern, pattern_sizes[pattern], auto_hwm_rows))
         lines.append("")
 
     lines.extend(_multi_effective_options(args, "result"))
@@ -765,6 +799,7 @@ def status_row(args):
 
 def render_log_tables(args):
     rows = _read_result_rows_from_logs(args.tmp_dir)
+    auto_hwm_rows = load_auto_hwm_detail_rows(args.auto_hwm_raw)
     by_pattern = defaultdict(list)
     for key, metric_values in rows.items():
         values = {}
@@ -802,7 +837,7 @@ def render_log_tables(args):
                 sizes.append(size)
             lines.append(f"    Testing {transport}: Done")
             if args.suite == "multi":
-                lines.extend(multi_auto_hwm_lines(pattern, sizes))
+                lines.extend(multi_auto_hwm_lines(pattern, sizes, auto_hwm_rows))
         lines.append("")
 
     sys.stdout.write("\n".join(lines))
@@ -867,6 +902,7 @@ def main(argv=None):
     log_tables = subparsers.add_parser("render-log-tables")
     log_tables.add_argument("--suite", choices=("single", "multi"), required=True)
     log_tables.add_argument("--tmp-dir", required=True)
+    log_tables.add_argument("--auto-hwm-raw", default="")
 
     render_single = subparsers.add_parser("render-single")
     add_common_report_args(render_single)
@@ -874,6 +910,7 @@ def main(argv=None):
 
     render_multi = subparsers.add_parser("render-multi")
     add_common_report_args(render_multi)
+    render_multi.add_argument("--auto-hwm-raw", default="")
     render_multi.add_argument("--clients", required=True)
     render_multi.add_argument("--common-io-threads", default="")
     render_multi.add_argument("--server-io-threads", default="")

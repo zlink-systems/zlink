@@ -77,10 +77,16 @@ source "$HOME/.cargo/env" 2>/dev/null || true
 export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-Awarnings"
 
 PATTERN="ALL"
+CONTROL_PLANE_PATTERNS=()
 DURATION="${PERF_MULTI_DURATION_SECONDS:-5}"
 PART_COUNT="${PERF_PART_COUNT:-2}"
 MSG_SIZES="${PERF_MSG_SIZES:-64,256,1024,4096,65536,131072}"
-TRANSPORTS="${PERF_TRANSPORTS:-tcp,tls,ws,wss}"
+if [[ "$(uname -s)" == Linux* || "$(uname -s)" == Darwin* ]]; then
+    DEFAULT_TRANSPORTS="tcp,tls,ws,wss,ipc"
+else
+    DEFAULT_TRANSPORTS="tcp,tls,ws,wss"
+fi
+TRANSPORTS="${PERF_TRANSPORTS:-${DEFAULT_TRANSPORTS}}"
 RUNS="1"
 EFFECTIVE_DEFAULT_CLIENTS="${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
 EFFECTIVE_DEFAULT_STREAM_CLIENTS="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
@@ -129,6 +135,14 @@ EXPLICIT_CLIENTS=0
 is_uint() {
     local value="${1:-}"
     [[ "${value}" =~ ^[0-9]+$ ]]
+}
+
+is_control_plane_pattern() {
+    local pattern="$1" candidate
+    for candidate in "${CONTROL_PLANE_PATTERNS[@]}"; do
+        [[ "${pattern}" == "${candidate}" ]] && return 0
+    done
+    return 1
 }
 
 print_help() {
@@ -613,9 +627,10 @@ SERVER_SHUTDOWN_TIMEOUT_SECONDS=$(( (SERVER_SHUTDOWN_TIMEOUT_MS + 999) / 1000 ))
 
 TMP_METRICS="$(mktemp)"
 TMP_CASES="$(mktemp)"
+TMP_AUTO_HWM="$(mktemp)"
 cleanup() {
     local status=$?
-    rm -f "${TMP_METRICS}" "${TMP_CASES}"
+    rm -f "${TMP_METRICS}" "${TMP_CASES}" "${TMP_AUTO_HWM}"
     print_total_time "${status}"
 }
 trap cleanup EXIT
@@ -800,11 +815,28 @@ for run in $(seq 1 "${RUNS}"); do
                 continue ;;
         esac
 
+        declare -A SEEN_PATTERN_TRANSPORTS=()
+        export PERF_MULTI_PATTERN="${pat}"
         for transport_index in "${!TRANSPORT_LIST[@]}"; do
             if [[ "${stop_early}" -eq 1 ]]; then
                 break
             fi
             transport="${TRANSPORT_LIST[transport_index]}"
+            export PERF_MULTI_TRANSPORT="${transport}"
+            if [[ -n "${SEEN_PATTERN_TRANSPORTS[${transport}]:-}" ]]; then
+                continue
+            fi
+            case "${transport}" in
+                tcp|tls|ws|wss) ;;
+                ipc)
+                    if [[ "${pat}" == "MULTI_STREAM" ]] || is_control_plane_pattern "${pat}" \
+                        || [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -s)" == CYGWIN* ]]; then
+                        continue
+                    fi
+                    ;;
+                *) continue ;;
+            esac
+            SEEN_PATTERN_TRANSPORTS["${transport}"]=1
             for size in "${SIZE_LIST[@]}"; do
                 if [[ "${stop_early}" -eq 1 ]]; then
                     break
@@ -861,7 +893,7 @@ for run in $(seq 1 "${RUNS}"); do
                 SRV_OUT=$(mktemp)
                 SERVER_FIFO="$(mktemp -u)"
                 mkfifo "${SERVER_FIFO}"
-                "${RUN_PREFIX[@]}" "${SERVER_BIN}" "${transport}" "${size}" < "${SERVER_FIFO}" > "${SRV_OUT}" 2>&1 &
+                env PERF_MULTI_COMPONENT=server "${RUN_PREFIX[@]}" "${SERVER_BIN}" "${transport}" "${size}" < "${SERVER_FIFO}" > "${SRV_OUT}" 2>&1 &
                 SERVER_PID=$!
                 exec {SERVER_CONTROL_FD}> "${SERVER_FIFO}"
                 rm -f "${SERVER_FIFO}"
@@ -902,7 +934,7 @@ for run in $(seq 1 "${RUNS}"); do
                     CLIENT_ERR="$(mktemp)"
                     CLIENT_FIFO="$(mktemp -u)"
                     mkfifo "${CLIENT_FIFO}"
-                    "${RUN_PREFIX[@]}" "${CLIENT_BIN}" "${transport}" "${size}" "${ENDPOINT}" < "${CLIENT_FIFO}" > "${CLIENT_OUT}" 2> "${CLIENT_ERR}" &
+                    env PERF_MULTI_COMPONENT=client "${RUN_PREFIX[@]}" "${CLIENT_BIN}" "${transport}" "${size}" "${ENDPOINT}" < "${CLIENT_FIFO}" > "${CLIENT_OUT}" 2> "${CLIENT_ERR}" &
                     CLIENT_PID=$!
                     exec {CLIENT_CONTROL_FD}> "${CLIENT_FIFO}"
                     rm -f "${CLIENT_FIFO}"
@@ -951,7 +983,7 @@ for run in $(seq 1 "${RUNS}"); do
                     CLIENT_ERR="$(mktemp)"
                     CLIENT_FIFO="$(mktemp -u)"
                     mkfifo "${CLIENT_FIFO}"
-                    timeout "${CLIENT_TIMEOUT_SECONDS}s" "${RUN_PREFIX[@]}" "${STREAM_CLIENT}" \
+                    timeout "${CLIENT_TIMEOUT_SECONDS}s" env PERF_MULTI_COMPONENT=client "${RUN_PREFIX[@]}" "${STREAM_CLIENT}" \
                         --transport "${transport}" \
                         --pattern STREAM \
                         --sizes "${size}" \
@@ -1023,7 +1055,7 @@ for run in $(seq 1 "${RUNS}"); do
                     CLIENT_ERR="$(mktemp)"
                     CLIENT_FIFO="$(mktemp -u)"
                     mkfifo "${CLIENT_FIFO}"
-                    "${RUN_PREFIX[@]}" "${CLIENT_BIN}" "${transport}" "${size}" "${ENDPOINT}" \
+                    env PERF_MULTI_COMPONENT=client "${RUN_PREFIX[@]}" "${CLIENT_BIN}" "${transport}" "${size}" "${ENDPOINT}" \
                         < "${CLIENT_FIFO}" > "${CLIENT_OUT}" 2> "${CLIENT_ERR}" &
                     CLIENT_PID=$!
                     exec {CLIENT_CONTROL_FD}> "${CLIENT_FIFO}"
@@ -1061,7 +1093,7 @@ for run in $(seq 1 "${RUNS}"); do
                     fi
                     rm -f "${CLIENT_OUT}" "${CLIENT_ERR}"
                 else
-                    if ! CLIENT_OUTPUT="$(timeout "${CLIENT_TIMEOUT_SECONDS}s" "${RUN_PREFIX[@]}" "${CLIENT_BIN}" "${transport}" "${size}" "${ENDPOINT}" 2>&1)"; then
+                    if ! CLIENT_OUTPUT="$(timeout "${CLIENT_TIMEOUT_SECONDS}s" env PERF_MULTI_COMPONENT=client "${RUN_PREFIX[@]}" "${CLIENT_BIN}" "${transport}" "${size}" "${ENDPOINT}" 2>&1)"; then
                         case_status="fail"
                         case_reason="binary_exit_or_timeout"
                     fi
@@ -1101,6 +1133,7 @@ for run in $(seq 1 "${RUNS}"); do
                     fi
                 fi
                 case_reason="${case_reason//,/;}"
+                printf '%s\n' "${OUTPUT}" | awk '/^AUTO_HWM_DETAIL,/ { print }' >> "${TMP_AUTO_HWM}"
                 while IFS= read -r line; do
                     [[ "${line}" == RESULT,* ]] || continue
                     IFS=',' read -r tag lib result_pattern result_transport result_size metric value <<< "${line}"
@@ -1186,6 +1219,7 @@ fi
 python3 "${PERF_REPORT_PY}" render-multi \
   --metrics "${TMP_METRICS}" \
   --cases "${TMP_CASES}" \
+  --auto-hwm-raw "${TMP_AUTO_HWM}" \
   --report "${RESULTS_FILE}" \
   --patterns "${PATTERN}" \
   --transports "${TRANSPORTS}" \

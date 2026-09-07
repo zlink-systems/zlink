@@ -12,6 +12,7 @@ from perf_multi_common import (
     configure_multi_tls_server,
     LatencySampler,
     print_result_lines,
+    print_multi_auto_hwm_detail,
     parse_server_args,
     perf_server_context,
     resolve_multi_monitor_hwm_bytes,
@@ -70,6 +71,7 @@ def main(argv=None):
                     active_deadline = time.perf_counter() + active_duration_s
                     latency_sampler = LatencySampler()
                     count = 0
+                    auto_hwm_printed = False
                     stop_token_seen = False
                     recv_storage = zlink.create_received()
                     recv_into = dealer.recv_into
@@ -79,7 +81,7 @@ def main(argv=None):
                         # C receive_one_message + drain_non_blocking_messages:
                         # every matched header counts; latency excludes
                         # clock-skew (latency_ns_from_message returns None).
-                        nonlocal count, stop_token_seen
+                        nonlocal auto_hwm_printed, count, stop_token_seen
                         while True:
                             if not recv_into(recv_storage, flags=recv_flags):
                                 return
@@ -104,6 +106,17 @@ def main(argv=None):
                                 if time.perf_counter() >= active_deadline:
                                     continue
                                 count += 1
+                                if not auto_hwm_printed:
+                                    # Snapshot only after a valid application
+                                    # message proves that the pipe is attached.
+                                    print_multi_auto_hwm_detail(
+                                        dealer,
+                                        "endpoint",
+                                        args.transport,
+                                        args.msg_size,
+                                        "dealer",
+                                    )
+                                    auto_hwm_printed = True
                                 if latency is not None:
                                     latency_sampler.add(latency)
 

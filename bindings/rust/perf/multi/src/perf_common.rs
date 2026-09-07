@@ -9,12 +9,12 @@ use std::path::Path;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{
-    Arc, Mutex,
+    Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 use std::task::{Context as TaskContext, Poll, Wake, Waker};
 use std::thread::{self, Thread};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use zlink::{
     AutoHwmProfile, Context, DealerSocket, Message, Monitorable, PairSocket, PollEvent, Poller,
     PubSocket, RecvFlags, RouterSocket, SocketMonitor, SocketMonitorEventMask,
@@ -324,11 +324,7 @@ pub fn decode_sent_ts_ns(data: &[u8]) -> i64 {
 }
 
 pub fn message_payload<'a>(parts: &'a [Message]) -> &'a [u8] {
-    let expected = if std::env::var("PERF_PART_COUNT").ok().as_deref() == Some("1") {
-        1
-    } else {
-        2
-    };
+    let expected = measurement_part_count();
     if parts.len() != expected || (expected == 2 && !parts[1].as_bytes().is_empty()) {
         return &[];
     }
@@ -336,11 +332,15 @@ pub fn message_payload<'a>(parts: &'a [Message]) -> &'a [u8] {
 }
 
 pub fn measurement_part_count() -> usize {
-    if std::env::var("PERF_PART_COUNT").ok().as_deref() == Some("1") {
-        1
-    } else {
-        2
-    }
+    // Read once because this helper is on every measured-message path.
+    static PART_COUNT: OnceLock<usize> = OnceLock::new();
+    *PART_COUNT.get_or_init(|| {
+        if std::env::var("PERF_PART_COUNT").ok().as_deref() == Some("1") {
+            1
+        } else {
+            2
+        }
+    })
 }
 
 #[macro_export]
@@ -363,10 +363,14 @@ macro_rules! perf_submit_measurement_async {
 }
 
 pub fn now_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64
+    let mut value = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // CLOCK_MONOTONIC is one host-wide axis shared by the benchmark processes.
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut value) };
+    assert_eq!(result, 0, "clock_gettime(CLOCK_MONOTONIC) failed");
+    (value.tv_sec as u64) * 1_000_000_000 + value.tv_nsec as u64
 }
 
 pub struct TlsPaths {
@@ -811,6 +815,121 @@ pub fn open_connection_ready_monitor(socket: &dyn Monitorable) -> SocketMonitor 
     .expect("connection-ready monitor")
 }
 
+pub fn print_multi_auto_hwm_detail(
+    socket: &dyn Monitorable,
+    label: &str,
+    transport: &str,
+    msg_size: usize,
+    socket_type: &str,
+) {
+    let enabled = std::env::var("PERF_MULTI_PRINT_AUTO_HWM_DETAIL")
+        .ok()
+        .or_else(|| std::env::var("PERF_PRINT_AUTO_HWM_DETAIL").ok());
+    if enabled.as_deref() == Some("0") {
+        return;
+    }
+    let monitor = match SocketMonitor::open_with_options(
+        socket,
+        SocketMonitorOpenOptions {
+            events: SocketMonitorEventMask::CONNECTION_READY,
+            monitor_hwm_bytes: resolve_multi_monitor_hwm_bytes(),
+        },
+    ) {
+        Ok(monitor) => monitor,
+        Err(_) => return,
+    };
+    print_multi_auto_hwm_detail_from_monitor(&monitor, label, transport, msg_size, socket_type);
+}
+
+pub fn print_multi_auto_hwm_detail_from_monitor(
+    monitor: &SocketMonitor,
+    label: &str,
+    transport: &str,
+    msg_size: usize,
+    socket_type: &str,
+) {
+    let snapshot = match monitor.status() {
+        Ok(snapshot) => snapshot,
+        Err(_) => return,
+    };
+    let role = match snapshot.auto_hwm_role {
+        1 => "control",
+        2 => "routed",
+        3 => "fanout",
+        4 => "recv_ingress",
+        6 => "peer_queue",
+        7 => "stream",
+        _ => "none",
+    };
+    let profile = match snapshot.auto_hwm_profile {
+        0 => "compact",
+        1 => "low_latency",
+        2 => "balanced",
+        3 => "throughput",
+        _ => "unknown",
+    };
+    let policy_class = match snapshot.auto_hwm_policy_class {
+        1 => "fanout",
+        3 => "recv_ingress",
+        4 => "routed",
+        5 => "peer_queue",
+        6 => "stream",
+        7 => "control",
+        _ => "none",
+    };
+    let recalc_reason = match snapshot.auto_hwm_last_recalc_reason {
+        zlink::AutoHwmRecalcReason::Initial => "initial",
+        zlink::AutoHwmRecalcReason::RoleChange => "role_change",
+        zlink::AutoHwmRecalcReason::PolicyToggle => "policy_toggle",
+        zlink::AutoHwmRecalcReason::Refresh => "refresh",
+        zlink::AutoHwmRecalcReason::DeferredShrink => "deferred_shrink",
+        zlink::AutoHwmRecalcReason::None => "none",
+    };
+    let send_visible =
+        !matches!(socket_type, "sub" | "xsub") || !matches!(role, "recv_ingress" | "control");
+    let recv_visible = !matches!(socket_type, "pub" | "xpub") || role != "control";
+    let pattern = std::env::var("PERF_MULTI_PATTERN")
+        .ok()
+        .or_else(|| std::env::var("PERF_PATTERN").ok())
+        .unwrap_or_else(|| "unknown".to_string());
+    let component = std::env::var("PERF_MULTI_COMPONENT").unwrap_or_else(|_| "process".to_string());
+    println!(
+        "AUTO_HWM_DETAIL,pattern={pattern},transport={transport},component={component},label={label},socket_type={socket_type},msg_size={msg_size},source=monitor_snapshot,enabled={},role={role},role_id={},profile={profile},profile_id={},policy_class={policy_class},policy_class_id={},sndhwm={},rcvhwm={},snd_pending_bytes={},rcv_pending_bytes={},effective_sndbuf={},effective_rcvbuf={},last_recalc_ms={},last_recalc_reason={recalc_reason},send_blocked_ratio_ppm={},deferred_sndhwm={},deferred_rcvhwm={},deferred_sndhwm_valid={},deferred_rcvhwm_valid={}",
+        u8::from(snapshot.auto_hwm_enabled),
+        snapshot.auto_hwm_role,
+        snapshot.auto_hwm_profile,
+        snapshot.auto_hwm_policy_class,
+        if send_visible {
+            snapshot.auto_hwm_applied_sndhwm_bytes.to_string()
+        } else {
+            "-".to_string()
+        },
+        if recv_visible {
+            snapshot.auto_hwm_applied_rcvhwm_bytes.to_string()
+        } else {
+            "-".to_string()
+        },
+        snapshot.snd_pending_bytes,
+        snapshot.rcv_pending_bytes,
+        if send_visible {
+            snapshot.auto_hwm_effective_sndbuf
+        } else {
+            0
+        },
+        if recv_visible {
+            snapshot.auto_hwm_effective_rcvbuf
+        } else {
+            0
+        },
+        snapshot.auto_hwm_last_recalc_ms,
+        snapshot.auto_hwm_send_blocked_ratio_ppm,
+        snapshot.auto_hwm_deferred_sndhwm_bytes,
+        snapshot.auto_hwm_deferred_rcvhwm_bytes,
+        u8::from(snapshot.auto_hwm_deferred_sndhwm_valid),
+        u8::from(snapshot.auto_hwm_deferred_rcvhwm_valid),
+    );
+}
+
 pub fn wait_monitor_ready(mon: &mut SocketMonitor, timeout: Duration, name: &str) {
     // The perf clients open the monitor before connect and wait after all
     // sockets have been connected. Consume the monitor queue directly and
@@ -1095,6 +1214,15 @@ pub fn resolve_multi_monitor_hwm_bytes() -> u64 {
 
 pub fn resolve_multi_reqrep_timeout() -> Duration {
     Duration::from_millis(env_or("PERF_MULTI_REQREP_TIMEOUT_MS", 200).max(1) as u64)
+}
+
+pub fn resolve_multi_reqrep_max_outstanding() -> usize {
+    let configured = env_or("PERF_MULTI_REQREP_MAX_OUTSTANDING", 64);
+    if configured == 0 {
+        64
+    } else {
+        configured.max(2)
+    }
 }
 
 pub fn resolve_multi_reqrep_drain_timeout(request_timeout: Duration) -> Duration {

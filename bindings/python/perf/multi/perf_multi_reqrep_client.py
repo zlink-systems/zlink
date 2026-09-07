@@ -17,8 +17,10 @@ from perf_multi_common import (
     perf_client_context,
     resolve_multi_monitor_hwm_bytes,
     print_result_lines,
+    print_multi_auto_hwm_detail,
     resolve_multi_connect_ready_timeout_ms,
     resolve_multi_reqrep_drain_timeout_ms,
+    resolve_multi_reqrep_max_outstanding,
     resolve_multi_reqrep_timeout_ms,
     result_metrics,
     scoped_relay_eager_task_factory,
@@ -63,11 +65,13 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
     latency_sampler = LatencySampler()
     completed = 0
     pending = set()
+    outstanding = [0 for _ in range(args.clients)]
     failures = []
     timeout_s = max(0.001, resolve_multi_reqrep_timeout_ms() / 1000.0)
     drain_timeout_s = max(
         0.001, resolve_multi_reqrep_drain_timeout_ms() / 1000.0
     )
+    max_outstanding = resolve_multi_reqrep_max_outstanding()
 
     with perf_client_context() as ctx:
         factory = zlink.create_router_socket if routed_request else zlink.create_dealer_socket
@@ -145,6 +149,7 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
                     return index, None
                 finally:
                     _close_reply_parts(reply_parts)
+                    outstanding[index] -= 1
 
             def observe_done(task):
                 pending.discard(task)
@@ -184,6 +189,8 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
                             for index in range(len(sockets)):
                                 if perf_counter() >= active_deadline:
                                     break
+                                if outstanding[index] >= max_outstanding:
+                                    continue
                                 stamped = stamp_payload(
                                     payloads[index],
                                     phase=1,
@@ -197,9 +204,14 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
                                     if expected_part_count == 1
                                     else (stamped, b"")
                                 )
-                                task = asyncio.create_task(
-                                    request_once(index, stamped_parts)
-                                )
+                                outstanding[index] += 1
+                                try:
+                                    task = asyncio.create_task(
+                                        request_once(index, stamped_parts)
+                                    )
+                                except BaseException:
+                                    outstanding[index] -= 1
+                                    raise
                                 if task.done():
                                     observe_done(task)
                                 else:
@@ -258,6 +270,14 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
                 latency_sampler=latency_sampler,
                 bandwidth_multiplier=2.0,
             )
+            if sockets:
+                print_multi_auto_hwm_detail(
+                    sockets[0],
+                    "endpoint",
+                    args.transport,
+                    args.msg_size,
+                    "router" if routed_request else "dealer",
+                )
             print_result_lines(pattern, args.transport, args.msg_size, metrics)
             # PERF_MULTI_TEST_POLICY.md:379,386-388 / PERF_POLICY.md:483-486 -
             # emit CLIENT_DONE, keep the request completion target sockets

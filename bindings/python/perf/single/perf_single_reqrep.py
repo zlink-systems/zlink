@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 
@@ -19,6 +20,7 @@ from perf_common import (
     resolve_single_endpoint,
     resolve_single_latency_sample_cap,
     resolve_single_reqrep_drain_timeout_ms,
+    resolve_single_reqrep_max_outstanding,
     resolve_single_reqrep_timeout_ms,
     result_metrics,
     stamp_payload,
@@ -107,28 +109,44 @@ def _routing_probe(requester, routing_id, timeout_s):
     return False
 
 
-def _run_requester(requester, routing_id, payload, *, run_id, msg_size, duration_s):
+async def _request_operation(requester, routing_id, parts, timeout_s):
+    operation = requester.request() if routing_id is None else requester.request(routing_id)
+    return await operation.messages(*parts).timeout(timeout_s).submit()
+
+
+async def _run_requester_async(
+    requester, routing_id, payload, *, run_id, msg_size, duration_s
+):
     timeout_s = max(0.001, resolve_single_reqrep_timeout_ms() / 1000.0)
+    drain_timeout_s = max(
+        0.001, resolve_single_reqrep_drain_timeout_ms() / 1000.0
+    )
+    max_outstanding = resolve_single_reqrep_max_outstanding()
     latency = LatencySampler(resolve_single_latency_sample_cap())
     active_end = time.perf_counter() + duration_s
     seq = 1
     completed = 0
-    while time.perf_counter() < active_end:
-        stamped = stamp_payload(payload, phase=1, run_id=run_id, seq=seq)
+    pending = set()
+    failures = []
+    expected_part_count = len(measurement_parts(b""))
+
+    async def request_once(stamped_parts):
+        nonlocal completed
+        parts = None
         try:
-            parts = _request_operation_sync(
-                requester, routing_id, measurement_parts(stamped), timeout_s
-            )
-        except zlink.RequestError as exc:
-            if exc.result == zlink.RequestResult.TIMED_OUT:
-                continue
-            raise
-        try:
+            try:
+                parts = await _request_operation(
+                    requester, routing_id, stamped_parts, timeout_s
+                )
+            except zlink.RequestError as exc:
+                if exc.result == zlink.RequestResult.TIMED_OUT:
+                    return
+                raise
             completed_at = time.perf_counter()
             reply_bytes = tuple(part.to_bytes() for part in parts)
             data = measurement_payload(reply_bytes)
             header = None if data is None else decode_header(data)
-            now_ns = time.time_ns()
+            now_ns = time.monotonic_ns()
             if (
                 data is not None
                 and len(data) == msg_size
@@ -142,10 +160,63 @@ def _run_requester(requester, routing_id, payload, *, run_id, msg_size, duration
                 and completed_at < active_end
             ):
                 completed += 1
-                latency.add(float(now_ns - header["sent_ts_ns"]))
+                latency.add(float(now_ns - header["sent_ts_ns"]) / 2.0)
         finally:
-            _close_messages(parts)
-        seq += 1
+            if parts is not None:
+                _close_messages(parts)
+
+    def observe_done(task):
+        pending.discard(task)
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except BaseException as exc:
+            failures.append(exc)
+
+    with zlink.create_poller() as completion_poller:
+        completion_events = zlink.create_poll_events(1)
+        completion_poller.add_socket(
+            requester,
+            zlink.PollEventFlag.POLLOUT | zlink.PollEventFlag.POLLCOMPLETION,
+            0,
+        )
+        try:
+            while time.perf_counter() < active_end and not failures:
+                while (
+                    len(pending) < max_outstanding
+                    and time.perf_counter() < active_end
+                ):
+                    stamped = bytes(
+                        stamp_payload(payload, phase=1, run_id=run_id, seq=seq)
+                    )
+                    seq += 1
+                    stamped_parts = (
+                        (stamped,)
+                        if expected_part_count == 1
+                        else (stamped, b"")
+                    )
+                    task = asyncio.create_task(request_once(stamped_parts))
+                    pending.add(task)
+                    task.add_done_callback(observe_done)
+                completion_poller.wait(completion_events, 0)
+                await asyncio.sleep(0)
+
+            drain_deadline = time.perf_counter() + drain_timeout_s
+            while pending and time.perf_counter() < drain_deadline and not failures:
+                completion_poller.wait(completion_events, 0)
+                await asyncio.sleep(0)
+            if pending:
+                still_pending = tuple(pending)
+                for task in still_pending:
+                    task.cancel()
+                await asyncio.gather(*still_pending, return_exceptions=True)
+                raise RuntimeError("request completion drain timed out")
+        finally:
+            completion_poller.remove_socket(requester)
+
+    if failures:
+        raise failures[0]
 
     if completed == 0 or latency.count == 0:
         raise RuntimeError("request-reply benchmark completed no active round trips")
@@ -156,6 +227,24 @@ def _run_requester(requester, routing_id, payload, *, run_id, msg_size, duration
         latency_sampler=latency,
         bandwidth_multiplier=2.0,
     )
+
+
+def _run_requester_thread(requester, routing_id, payload, options, state):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    eager_factory = getattr(asyncio, "eager_task_factory", None)
+    if eager_factory is not None:
+        loop.set_task_factory(eager_factory)
+    try:
+        state["metrics"] = loop.run_until_complete(
+            _run_requester_async(requester, routing_id, payload, **options)
+        )
+    except BaseException as exc:
+        state["error"] = exc
+    finally:
+        loop.set_task_factory(None)
+        asyncio.set_event_loop(None)
+        loop.close()
 
 
 def _send_stop(requester, routing_id):
@@ -219,14 +308,30 @@ def run_reqrep_pattern(argv, *, pattern, routed_request):
                 try:
                     if not _routing_probe(requester, routing_id, request_timeout_s):
                         raise RuntimeError("request-reply routing probe failed")
-                    metrics = _run_requester(
-                        requester,
-                        routing_id,
-                        payload,
-                        run_id=run_id,
-                        msg_size=args.msg_size,
-                        duration_s=args.duration,
+                    requester_state = {"metrics": None, "error": None}
+                    requester_thread = threading.Thread(
+                        target=_run_requester_thread,
+                        args=(
+                            requester,
+                            routing_id,
+                            payload,
+                            {
+                                "run_id": run_id,
+                                "msg_size": args.msg_size,
+                                "duration_s": args.duration,
+                            },
+                            requester_state,
+                        ),
                     )
+                    requester_thread.start()
+                    requester_thread.join(
+                        timeout=args.duration + drain_timeout_s + 5.0
+                    )
+                    if requester_thread.is_alive():
+                        raise RuntimeError("requester thread did not finish")
+                    if requester_state["error"] is not None:
+                        raise requester_state["error"]
+                    metrics = requester_state["metrics"]
                 except BaseException as exc:
                     run_error = exc
 

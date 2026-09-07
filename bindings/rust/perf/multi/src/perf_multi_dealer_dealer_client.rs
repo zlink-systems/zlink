@@ -57,6 +57,7 @@ fn main() {
     if !start_seen {
         return;
     }
+    ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
     let deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
     let drain_deadline = deadline + common::resolve_multi_send_drain_timeout();
@@ -96,6 +97,15 @@ fn main() {
         }
     }
     assert!(!tasks.any_pending(), "send admission drain timed out");
+    if let Some(socket) = sockets.first() {
+        common::print_multi_auto_hwm_detail(
+            socket,
+            "endpoint",
+            &args.transport,
+            args.msg_size,
+            "dealer",
+        );
+    }
     let stop_futures = sockets
         .iter()
         .map(|socket| {

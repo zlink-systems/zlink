@@ -72,6 +72,7 @@ fn main() {
     for mon in &mut monitors {
         common::wait_monitor_ready(mon, ready_timeout, "multi router-router client");
     }
+    ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
     // Match dealer-router: Future admission and receive draining run
     // concurrently, without echo-gated inflight-1 ping-pong.
@@ -144,6 +145,16 @@ fn main() {
         }
     }
     assert!(!tasks.any_pending(), "send admission drain timed out");
+
+    if let Some(socket) = sockets.first() {
+        common::print_multi_auto_hwm_detail(
+            socket,
+            "endpoint",
+            &args.transport,
+            args.msg_size,
+            "router",
+        );
+    }
 
     common::print_result(
         "MULTI_ROUTER_ROUTER_SENDSEND",

@@ -50,10 +50,15 @@ enum RequestClientSocket {
     },
 }
 
-type RequestTask = Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>;
+type RequestTask = Pin<Box<dyn Future<Output = (usize, Result<Vec<Message>, ZlinkError>)> + Send>>;
 
 impl RequestClientSocket {
-    fn request_task(&self, payload: Message, timeout: Duration) -> RequestTask {
+    fn request_task(
+        &self,
+        socket_index: usize,
+        payload: Message,
+        timeout: Duration,
+    ) -> RequestTask {
         let operation = match self {
             Self::Dealer(socket) => socket.request(),
             Self::Router { socket, target } => socket.request(target),
@@ -68,7 +73,7 @@ impl RequestClientSocket {
             operation.timeout(timeout).submit()
         };
 
-        Box::pin(future)
+        Box::pin(async move { (socket_index, future.await) })
     }
 }
 
@@ -237,7 +242,6 @@ pub fn run_client(config: ReqRepConfig) {
     for monitor in &mut monitors {
         common::wait_monitor_ready(monitor, ready_timeout, "multi request client");
     }
-    drop(monitors);
     ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
     let completion_poller = Poller::new().expect("request completion poller");
@@ -254,20 +258,23 @@ pub fn run_client(config: ReqRepConfig) {
     let mut completion_events = vec![PollEvent::default(); sockets.len().max(1)];
 
     let request_timeout = common::resolve_multi_reqrep_timeout();
+    let max_outstanding = common::resolve_multi_reqrep_max_outstanding();
     let payload_size = args.msg_size.max(common::HEADER_SIZE);
     let active_deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
     let mut sequences = vec![1u64; sockets.len()];
+    let mut outstanding = vec![0usize; sockets.len()];
     let mut requests = common::ConcurrentTasks::<RequestTask>::new(0);
     let mut latency = common::LatencyStats::new();
 
-    // There is deliberately no per-socket or global application window. Each
-    // request Future owns any refused payload and waits for its own WRITABLE
-    // token before resubmitting; admitted requests remain in flight until the
-    // Core REQUEST completion arrives.
+    // Each socket stays filled to the policy cap; completion order, not an RTT
+    // loop, decides when that socket receives its next request.
     while Instant::now() < active_deadline {
         for (socket_index, socket) in sockets.iter().enumerate() {
             if Instant::now() >= active_deadline {
                 break;
+            }
+            if outstanding[socket_index] >= max_outstanding {
+                continue;
             }
             let sequence = sequences[socket_index];
             sequences[socket_index] = sequence.wrapping_add(1);
@@ -278,12 +285,14 @@ pub fn run_client(config: ReqRepConfig) {
                 args.msg_size as u32,
                 sequence,
             );
-            requests.push(socket.request_task(payload, request_timeout));
+            requests.push(socket.request_task(socket_index, payload, request_timeout));
+            outstanding[socket_index] += 1;
         }
 
         let ready = requests.poll_ready();
         let progressed = !ready.is_empty();
-        for (_, completion) in ready {
+        for (_, (socket_index, completion)) in ready {
+            outstanding[socket_index] -= 1;
             process_completion(completion, args.msg_size, active_deadline, &mut latency);
         }
         if Instant::now() < active_deadline {
@@ -306,7 +315,8 @@ pub fn run_client(config: ReqRepConfig) {
     while requests.any_pending() && Instant::now() < drain_deadline {
         let ready = requests.poll_ready();
         let progressed = !ready.is_empty();
-        for (_, completion) in ready {
+        for (_, (socket_index, completion)) in ready {
+            outstanding[socket_index] -= 1;
             process_completion(completion, args.msg_size, active_deadline, &mut latency);
         }
         if requests.any_pending() {
@@ -320,13 +330,33 @@ pub fn run_client(config: ReqRepConfig) {
                 .expect("request completion drain wait");
         }
     }
-    for (_, completion) in requests.poll_ready() {
+    for (_, (socket_index, completion)) in requests.poll_ready() {
+        outstanding[socket_index] -= 1;
         process_completion(completion, args.msg_size, active_deadline, &mut latency);
     }
     assert!(
         !requests.any_pending(),
         "request completion drain timed out"
     );
+
+    if let Some(socket) = sockets.first() {
+        match socket {
+            RequestClientSocket::Dealer(socket) => common::print_multi_auto_hwm_detail(
+                socket,
+                "endpoint",
+                &args.transport,
+                args.msg_size,
+                "dealer",
+            ),
+            RequestClientSocket::Router { socket, .. } => common::print_multi_auto_hwm_detail(
+                socket,
+                "endpoint",
+                &args.transport,
+                args.msg_size,
+                "router",
+            ),
+        }
+    }
 
     common::print_result(
         config.pattern,

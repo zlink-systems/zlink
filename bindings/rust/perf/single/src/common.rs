@@ -4,14 +4,14 @@ use std::fs;
 use std::future::Future;
 use std::io;
 use std::path::Path;
-use std::pin::pin;
-use std::sync::{Arc, Mutex};
+use std::pin::{Pin, pin};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context as TaskContext, Poll, Waker};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use zlink::{
     Context, DealerSocket, Message, PairSocket, PubSocket, RequestResult, RouterSocket,
-    SocketMonitor, SubSocket, SubmitError, SubmitResult, ZlinkError,
+    SocketMonitor, SubSocket, SubmitError, ZlinkError,
 };
 
 // -- Metric header (29 bytes) ------------------------------------------------
@@ -21,7 +21,7 @@ use zlink::{
 //   [8]      phase      u8      (0=warmup, 1=active, 2=cooldown)
 //   [9..13]  msg_size   u32 LE
 //   [13..21] seq        u64 LE
-//   [21..29] sent_ts_ns i64 LE  (nanoseconds since epoch)
+//   [21..29] sent_ts_ns i64 LE  (host monotonic nanoseconds)
 
 // Wire-level stop token used by sender threads to signal phase end to a
 // receiver waiting on a poller. PERF_SINGLE_TEST_POLICY § 1.4 mandates this
@@ -98,11 +98,7 @@ pub fn message_payload<'a>(parts: &'a [Message]) -> &'a [u8] {
     if parts.len() == 1 && is_stop_token(parts[0].as_bytes()) {
         return parts[0].as_bytes();
     }
-    let expected = if std::env::var("PERF_PART_COUNT").ok().as_deref() == Some("1") {
-        1
-    } else {
-        2
-    };
+    let expected = measurement_part_count();
     if parts.len() != expected || (expected == 2 && !parts[1].as_bytes().is_empty()) {
         return &[];
     }
@@ -110,11 +106,15 @@ pub fn message_payload<'a>(parts: &'a [Message]) -> &'a [u8] {
 }
 
 pub fn measurement_part_count() -> usize {
-    if std::env::var("PERF_PART_COUNT").ok().as_deref() == Some("1") {
-        1
-    } else {
-        2
-    }
+    // Read once because this helper is on every measured-message path.
+    static PART_COUNT: OnceLock<usize> = OnceLock::new();
+    *PART_COUNT.get_or_init(|| {
+        if std::env::var("PERF_PART_COUNT").ok().as_deref() == Some("1") {
+            1
+        } else {
+            2
+        }
+    })
 }
 
 #[macro_export]
@@ -202,10 +202,14 @@ where
 }
 
 pub fn now_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64
+    let mut value = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // CLOCK_MONOTONIC is one host-wide axis shared by the benchmark processes.
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut value) };
+    assert_eq!(result, 0, "clock_gettime(CLOCK_MONOTONIC) failed");
+    (value.tv_sec as u64) * 1_000_000_000 + value.tv_nsec as u64
 }
 
 pub struct TlsPaths {
@@ -700,7 +704,10 @@ where
         encode_header(msg.data_mut(), phase, msg_size as u32, seq);
         if send_fn(msg) {
             seq += 1;
-            if std::env::var("PERF_SMOKE").ok().as_deref() == Some("1") {
+            // Read once because this branch is on every admitted-message path.
+            static PERF_SMOKE: OnceLock<bool> = OnceLock::new();
+            if *PERF_SMOKE.get_or_init(|| std::env::var("PERF_SMOKE").ok().as_deref() == Some("1"))
+            {
                 poll_idle(Duration::from_millis(1));
             }
         } else {
@@ -733,33 +740,113 @@ fn record_reqrep_completion(
         let latency_ns = (now_ns() as i64)
             .saturating_sub(decode_sent_ts_ns(payload))
             .max(0) as u64;
-        stats.record_ns(latency_ns);
+        stats.record_ns(latency_ns / 2);
     }
     Ok(())
 }
 
-/// Run sequential requests through the public synchronous request terminal.
-pub fn run_reqrep<S>(config: &PerfConfig, mut submit: S) -> Result<StatsResult, String>
+pub type RequestTask = Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>;
+
+/// Keep request admission and reply completion moving on this application thread.
+pub fn run_reqrep<S>(
+    config: &PerfConfig,
+    socket: &dyn zlink::Pollable,
+    mut submit: S,
+) -> Result<StatsResult, String>
 where
-    S: FnMut(Message, Duration) -> Result<Vec<Message>, ZlinkError>,
+    S: FnMut(Message, Duration) -> RequestTask,
 {
     let request_timeout = Duration::from_millis(env_or_u64("PERF_SINGLE_REQREP_TIMEOUT_MS", 200));
+    let configured_max = env_or_u64("PERF_SINGLE_REQREP_MAX_OUTSTANDING", 64);
+    let max_outstanding = (if configured_max == 0 {
+        64
+    } else {
+        configured_max.max(2)
+    }) as usize;
+    let drain_timeout = Duration::from_millis(env_or_u64(
+        "PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS",
+        (request_timeout.as_millis().saturating_mul(4).max(1_000)) as u64,
+    ));
     let payload_size = config.size.max(HEADER_SIZE);
     let active_deadline = Instant::now() + Duration::from_secs(config.duration_seconds.max(1));
     let mut stats = LatencyStats::new();
     let mut sequence = 1u64;
+    let mut requests: Vec<RequestTask> = Vec::with_capacity(max_outstanding);
+    let poller = zlink::Poller::new().map_err(|error| error.to_string())?;
+    poller
+        .add_socket(socket, zlink::POLLOUT | zlink::POLLCOMPLETION, 0)
+        .map_err(|error| error.to_string())?;
+    let mut events = [zlink::PollEvent::default()];
+    let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+    let mut task_context = TaskContext::from_waker(&waker);
 
     while Instant::now() < active_deadline {
-        let mut payload = Message::with_size(payload_size).map_err(|error| error.to_string())?;
-        encode_header(
-            payload.data_mut(),
-            PHASE_ACTIVE,
-            config.size as u32,
-            sequence,
-        );
-        let outcome = submit(payload, request_timeout);
-        record_reqrep_completion(outcome, config.size, &mut stats, true)?;
-        sequence = sequence.wrapping_add(1);
+        while requests.len() < max_outstanding && Instant::now() < active_deadline {
+            let mut payload =
+                Message::with_size(payload_size).map_err(|error| error.to_string())?;
+            encode_header(
+                payload.data_mut(),
+                PHASE_ACTIVE,
+                config.size as u32,
+                sequence,
+            );
+            requests.push(submit(payload, request_timeout));
+            sequence = sequence.wrapping_add(1);
+        }
+
+        let mut index = 0;
+        let mut progressed = false;
+        while index < requests.len() {
+            match requests[index].as_mut().poll(&mut task_context) {
+                Poll::Ready(outcome) => {
+                    record_reqrep_completion(outcome, config.size, &mut stats, true)?;
+                    drop(requests.swap_remove(index));
+                    progressed = true;
+                }
+                Poll::Pending => index += 1,
+            }
+        }
+        if !requests.is_empty() && Instant::now() < active_deadline {
+            let remaining = active_deadline.saturating_duration_since(Instant::now());
+            let wait_ms = if progressed {
+                0
+            } else {
+                remaining.as_millis().max(1).min(i64::MAX as u128) as i64
+            };
+            poller
+                .wait(&mut events, wait_ms)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
+    let drain_deadline = Instant::now() + drain_timeout;
+    while !requests.is_empty() && Instant::now() < drain_deadline {
+        let mut index = 0;
+        let mut progressed = false;
+        while index < requests.len() {
+            match requests[index].as_mut().poll(&mut task_context) {
+                Poll::Ready(outcome) => {
+                    record_reqrep_completion(outcome, config.size, &mut stats, false)?;
+                    drop(requests.swap_remove(index));
+                    progressed = true;
+                }
+                Poll::Pending => index += 1,
+            }
+        }
+        if !requests.is_empty() {
+            let remaining = drain_deadline.saturating_duration_since(Instant::now());
+            let wait_ms = if progressed {
+                0
+            } else {
+                remaining.as_millis().max(1).min(i64::MAX as u128) as i64
+            };
+            poller
+                .wait(&mut events, wait_ms)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    if !requests.is_empty() {
+        return Err("request completion drain timed out".to_string());
     }
 
     let result = stats.finish();

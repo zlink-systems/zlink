@@ -51,11 +51,85 @@ from perf_metrics import (
     _require_zlink,
 )
 
+# Read once because this value is used on every measured-message path.
+_MEASUREMENT_PART_COUNT = 1 if os.environ.get("PERF_PART_COUNT") == "1" else 2
+
 
 TOPIC = b"bench"
-PYTHON_MULTI_DEFAULT_IO_THREADS = 1
+PYTHON_MULTI_DEFAULT_IO_THREADS = 4
 PERF_MULTI_AUX_POLL_WAIT_MS = 100
 RELAY_SCHEDULER_QUANTUM = 32
+_AUTO_HWM_DETAIL_SEEN = set()
+
+
+def print_multi_auto_hwm_detail(sock, label, transport, msg_size, socket_type):
+    """Emit the C-canonical snapshot after the first effective message."""
+    enabled = os.environ.get(
+        "PERF_MULTI_PRINT_AUTO_HWM_DETAIL",
+        os.environ.get("PERF_PRINT_AUTO_HWM_DETAIL", "1"),
+    )
+    if enabled == "0":
+        return
+    zlink_mod = _require_zlink()
+    role_names = {
+        1: "control", 2: "routed", 3: "fanout", 4: "recv_ingress",
+        6: "peer_queue", 7: "stream",
+    }
+    profile_names = {0: "compact", 1: "low_latency", 2: "balanced", 3: "throughput"}
+    policy_names = {
+        1: "fanout", 3: "recv_ingress", 4: "routed", 5: "peer_queue",
+        6: "stream", 7: "control",
+    }
+    reason_names = {
+        1: "initial", 2: "role_change", 3: "policy_toggle",
+        4: "refresh", 5: "deferred_shrink",
+    }
+    with sock.monitor_open(
+        zlink_mod.MonitorEventMask.CONNECTION_READY,
+        resolve_multi_monitor_hwm_bytes(),
+    ) as monitor:
+        snapshot = monitor.status()
+    role_id = int(snapshot.auto_hwm_role)
+    profile_id = int(snapshot.auto_hwm_profile)
+    policy_id = int(snapshot.auto_hwm_policy_class)
+    reason_id = int(snapshot.auto_hwm_last_recalc_reason)
+    pattern = os.environ.get("PERF_MULTI_PATTERN") or os.environ.get("PERF_PATTERN") or "unknown"
+    component = os.environ.get("PERF_MULTI_COMPONENT", "process")
+    key = (
+        pattern, transport, component, label, msg_size, role_id,
+        snapshot.auto_hwm_applied_sndhwm_bytes,
+        snapshot.auto_hwm_applied_rcvhwm_bytes, profile_id, policy_id,
+        snapshot.snd_pending_bytes, snapshot.rcv_pending_bytes,
+    )
+    if key in _AUTO_HWM_DETAIL_SEEN:
+        return
+    _AUTO_HWM_DETAIL_SEEN.add(key)
+    role = role_names.get(role_id, "none")
+    send_visible = not (socket_type in {"sub", "xsub"} and role in {"recv_ingress", "control"})
+    recv_visible = not (socket_type in {"pub", "xpub"} and role == "control")
+    fields = (
+        "AUTO_HWM_DETAIL",
+        f"pattern={pattern}", f"transport={transport}", f"component={component}",
+        f"label={label or 'socket'}", f"socket_type={socket_type}", f"msg_size={msg_size}",
+        "source=monitor_snapshot", f"enabled={1 if snapshot.auto_hwm_enabled else 0}",
+        f"role={role}", f"role_id={role_id}",
+        f"profile={profile_names.get(profile_id, 'unknown')}", f"profile_id={profile_id}",
+        f"policy_class={policy_names.get(policy_id, 'none')}", f"policy_class_id={policy_id}",
+        f"sndhwm={snapshot.auto_hwm_applied_sndhwm_bytes if send_visible else '-'}",
+        f"rcvhwm={snapshot.auto_hwm_applied_rcvhwm_bytes if recv_visible else '-'}",
+        f"snd_pending_bytes={snapshot.snd_pending_bytes}",
+        f"rcv_pending_bytes={snapshot.rcv_pending_bytes}",
+        f"effective_sndbuf={snapshot.auto_hwm_effective_sndbuf if send_visible else 0}",
+        f"effective_rcvbuf={snapshot.auto_hwm_effective_rcvbuf if recv_visible else 0}",
+        f"last_recalc_ms={snapshot.auto_hwm_last_recalc_ms}",
+        f"last_recalc_reason={reason_names.get(reason_id, 'none')}",
+        f"send_blocked_ratio_ppm={snapshot.auto_hwm_send_blocked_ratio_ppm}",
+        f"deferred_sndhwm={snapshot.auto_hwm_deferred_sndhwm_bytes}",
+        f"deferred_rcvhwm={snapshot.auto_hwm_deferred_rcvhwm_bytes}",
+        f"deferred_sndhwm_valid={1 if snapshot.auto_hwm_deferred_sndhwm_valid else 0}",
+        f"deferred_rcvhwm_valid={1 if snapshot.auto_hwm_deferred_rcvhwm_valid else 0}",
+    )
+    print(",".join(fields), flush=True)
 
 
 class RelaySchedulerQuantum:
@@ -265,6 +339,11 @@ def resolve_multi_reqrep_timeout_ms():
     return _env_int("PERF_MULTI_REQREP_TIMEOUT_MS", 200)
 
 
+def resolve_multi_reqrep_max_outstanding():
+    configured = _env_int("PERF_MULTI_REQREP_MAX_OUTSTANDING", 64)
+    return max(2, configured) if configured > 0 else 64
+
+
 def resolve_multi_reqrep_drain_timeout_ms():
     request_timeout_ms = resolve_multi_reqrep_timeout_ms()
     return _env_int(
@@ -362,7 +441,7 @@ def recv_nonblocking(sock, *, method="recv", storage=None):
 
 
 def measurement_part_count():
-    return 1 if os.environ.get("PERF_PART_COUNT") == "1" else 2
+    return _MEASUREMENT_PART_COUNT
 
 
 def measurement_parts(payload):

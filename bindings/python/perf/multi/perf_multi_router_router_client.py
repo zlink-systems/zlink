@@ -16,6 +16,7 @@ from perf_multi_common import (
     perf_client_context,
     resolve_multi_monitor_hwm_bytes,
     print_result_lines,
+    print_multi_auto_hwm_detail,
     recv_nonblocking,
     received_metric_payload,
     resolve_multi_connect_ready_timeout_ms,
@@ -163,6 +164,10 @@ async def main(argv=None):
                     latency_sampler=latency_sampler,
                     bandwidth_multiplier=2.0,
                 )
+                if sockets:
+                    print_multi_auto_hwm_detail(
+                        sockets[0], "endpoint", args.transport, args.msg_size, "router"
+                    )
                 print_result_lines(
                     "MULTI_ROUTER_ROUTER_SENDSEND",
                     args.transport,

@@ -72,8 +72,14 @@ fn main() {
         "multi stream server",
     );
     ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
-    ready_monitor.status().expect("connected monitor snapshot");
-    drop(ready_monitor);
+    // STREAM's ready-count barrier proves all application pipes are attached.
+    common::print_multi_auto_hwm_detail(
+        &stream,
+        "endpoint",
+        &args.transport,
+        args.msg_size,
+        "stream",
+    );
     common::print_server_start_ready(args.msg_size);
     let stopping = Arc::new(AtomicBool::new(false));
     let control_stopping = Arc::clone(&stopping);

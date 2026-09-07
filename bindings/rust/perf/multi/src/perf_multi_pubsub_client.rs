@@ -95,6 +95,7 @@ fn main() {
     if !start_seen {
         return;
     }
+    ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
     // C perf_multi_pubsub_client.cpp run_recv_duration(): zlink_poller_wait(-1)
     // signal-driven; the phase ends on the wire stop token (not a wall clock).
@@ -151,6 +152,15 @@ fn main() {
         count: active_count,
         ..stats
     };
+    if let Some(socket) = sockets.first() {
+        common::print_multi_auto_hwm_detail(
+            socket,
+            "endpoint",
+            &args.transport,
+            args.msg_size,
+            "sub",
+        );
+    }
     common::print_result(
         "MULTI_PUBSUB",
         &args.transport,

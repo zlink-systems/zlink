@@ -90,6 +90,7 @@ fn main() {
         .expect("poller add");
     let mut events = vec![PollEvent::default(); 1];
     let mut received = zlink::Received::empty();
+    let mut auto_hwm_printed = false;
     let mut replies = common::ConcurrentTasks::new(0);
     while !stop.load(Ordering::Acquire) {
         // Bound the idle wait so the control thread's STOP/QUIT request can
@@ -111,6 +112,17 @@ fn main() {
                 loop {
                     match router.recv(&mut received, RecvFlags::DONT_WAIT) {
                         Ok(true) => {
+                            if !auto_hwm_printed {
+                                ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
+                                common::print_multi_auto_hwm_detail(
+                                    &router,
+                                    "endpoint",
+                                    &args.transport,
+                                    args.msg_size,
+                                    "router",
+                                );
+                                auto_hwm_printed = true;
+                            }
                             let Some(rid) = received.routing_id().cloned() else {
                                 continue;
                             };

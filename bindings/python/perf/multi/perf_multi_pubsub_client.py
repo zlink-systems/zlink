@@ -17,6 +17,7 @@ from perf_multi_common import (
     perf_client_context,
     resolve_multi_monitor_hwm_bytes,
     print_result_lines,
+    print_multi_auto_hwm_detail,
     recv_nonblocking,
     resolve_multi_connect_ready_timeout_ms,
     result_metrics,
@@ -140,6 +141,10 @@ def main(argv=None):
                 elapsed_s=args.duration,
                 latency_sampler=latency_sampler,
             )
+            if sockets:
+                print_multi_auto_hwm_detail(
+                    sockets[0], "endpoint", args.transport, args.msg_size, "sub"
+                )
             print_result_lines("MULTI_PUBSUB", args.transport, args.msg_size, metrics)
             # PERF_POLICY.md:469-471 / D-2 - the C PUBSUB client emits
             # CLIENT_DONE (bindings/c/perf/multi/src/perf_multi_pubsub_client.cpp:367).

@@ -93,15 +93,17 @@ fn main() {
 
     let target = replier_rid;
     let replier_thread = std::thread::spawn(move || common::run_router_replier(replier));
-    let stats = common::run_reqrep(&config, |payload, timeout| {
+    let stats = common::run_reqrep(&config, &requester, |payload, timeout| {
         let request = requester.request(&target).message(payload);
         if common::measurement_part_count() == 2 {
-            request
-                .message(Message::new().expect("empty request tail"))
-                .timeout(timeout)
-                .submit_sync()
+            Box::pin(
+                request
+                    .message(Message::new().expect("empty request tail"))
+                    .timeout(timeout)
+                    .submit(),
+            )
         } else {
-            request.timeout(timeout).submit_sync()
+            Box::pin(request.timeout(timeout).submit())
         }
     })
     .expect("requester loop");

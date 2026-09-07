@@ -342,22 +342,21 @@ for pat in "${PATTERNS[@]}"; do
     esac
     current_transports="${TRANSPORTS:-$(default_transports_for_pattern "${pat}")}"
     IFS=',' read -ra TRANSPORT_LIST <<< "${current_transports}"
+    declare -A SEEN_PATTERN_TRANSPORTS=()
     for transport in "${TRANSPORT_LIST[@]}"; do
         if [[ "${stop_early}" -eq 1 ]]; then
             break
         fi
+        if [[ -n "${SEEN_PATTERN_TRANSPORTS[${transport}]:-}" ]] || ! is_supported_transport_for_pattern "${pat}" "${transport}"; then
+            continue
+        fi
+        SEEN_PATTERN_TRANSPORTS["${transport}"]=1
         for size in "${SIZE_LIST[@]}"; do
             if [[ "${stop_early}" -eq 1 ]]; then
                 break
             fi
             case_status="success"
             case_reason=""
-            if ! is_supported_transport_for_pattern "${pat}" "${transport}"; then
-                case_status="unsupported"
-                case_reason="UNSUPPORTED;rust;${pat};${transport};unsupported_transport"
-                printf '%s,%s,%s,%s,%s\n' "${pat}" "${transport}" "${size}" "${case_status}" "${case_reason}" >> "${TMP_CASES}"
-                continue
-            fi
             for run in $(seq 1 "${RUNS}"); do
                 if ! OUTPUT="$(timeout "${BIN_TIMEOUT_SECONDS}s" "${RUN_PREFIX[@]}" "${BIN}" \
                     --pattern "${pat}" \

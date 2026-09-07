@@ -71,7 +71,7 @@ def latency_ns_from_message(data):
     header = decode_header(data)
     if header is None or header["magic"] != HEADER_MAGIC:
         raise RuntimeError("invalid perf message header")
-    now_ns = time.time_ns()
+    now_ns = time.monotonic_ns()
     if header["sent_ts_ns"] <= 0 or now_ns < header["sent_ts_ns"]:
         return None
     return float(now_ns - header["sent_ts_ns"])
@@ -124,7 +124,7 @@ def active_message_latency_ns(data, *, expected_msg_size=None, run_id=None):
         return False, None
     if run_id is not None and header_run_id != run_id:
         return False, None
-    now_ns = time.time_ns()
+    now_ns = time.monotonic_ns()
     if sent_ts_ns <= 0 or now_ns < sent_ts_ns:
         return True, None
     return True, float(now_ns - sent_ts_ns)
@@ -149,7 +149,7 @@ def stamp_payload(payload, phase=0, *, run_id=None, seq=None):
         int(phase),
         len(payload),
         int(header_seq),
-        int(time.time_ns()),
+        int(time.monotonic_ns()),
     )
     return payload
 

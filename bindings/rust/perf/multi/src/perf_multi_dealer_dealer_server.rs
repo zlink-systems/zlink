@@ -23,7 +23,6 @@ fn main() {
         let tls = common::resolve_perf_tls_paths().expect("TLS certs not found");
         common::setup_raw_tls_server(&server, &tls).expect("server tls");
     }
-
     let Some(bind_endpoint) =
         common::resolve_server_bind_endpoint("MULTI_DEALER_DEALER", &args.transport)
     else {
@@ -54,6 +53,7 @@ fn main() {
     if !start_seen {
         return;
     }
+    ctx.recalculate_auto_hwm().expect("recalculate auto hwm");
 
     // C perf_multi_dealer_dealer_server.cpp run_receive_window(): poller POLLIN,
     // perf_socket_poll(...,-1) signal-driven, drain non-blocking, count until
@@ -62,6 +62,7 @@ fn main() {
     let deadline = Instant::now() + Duration::from_secs(settings.duration_seconds.max(1));
     let mut latency_stats = common::LatencyStats::new();
     let mut active_count: u64 = 0;
+    let mut auto_hwm_printed = false;
     let mut received = Received::empty();
 
     let poller = Poller::new().expect("poller");
@@ -74,6 +75,18 @@ fn main() {
         // window via the deadline; it is never counted.
         if Instant::now() < deadline && common::is_valid_active_message(data, args.msg_size) {
             active_count += 1;
+            if !auto_hwm_printed {
+                // A post-message snapshot observes the attached application
+                // pipe instead of the raw socket-option default.
+                common::print_multi_auto_hwm_detail(
+                    &server,
+                    "endpoint",
+                    &args.transport,
+                    args.msg_size,
+                    "dealer",
+                );
+                auto_hwm_printed = true;
+            }
             if let Some(elapsed_ns) = common::elapsed_since_sent_ns(data) {
                 latency_stats.record_latency_sample_ns(elapsed_ns);
             }

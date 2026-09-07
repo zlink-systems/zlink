@@ -52,6 +52,9 @@ from perf_metrics import (
     _require_zlink,
 )
 
+# Read once because this value is used on every measured-message path.
+_MEASUREMENT_PART_COUNT = 1 if os.environ.get("PERF_PART_COUNT") == "1" else 2
+
 
 def parse_single_args(argv, *, pattern):
     parser = argparse.ArgumentParser(prog=f"perf_{pattern.lower()}.py")
@@ -79,7 +82,7 @@ def _env_int(name, default):
 
 def measurement_part_count():
     """Measured non-STREAM messages default to payload plus an empty tail."""
-    return 1 if os.environ.get("PERF_PART_COUNT") == "1" else 2
+    return _MEASUREMENT_PART_COUNT
 
 
 def measurement_parts(payload):
@@ -156,6 +159,11 @@ def resolve_single_recv_timeout_ms():
 
 def resolve_single_reqrep_timeout_ms():
     return _env_int("PERF_SINGLE_REQREP_TIMEOUT_MS", 200)
+
+
+def resolve_single_reqrep_max_outstanding():
+    configured = _env_int("PERF_SINGLE_REQREP_MAX_OUTSTANDING", 64)
+    return max(2, configured) if configured > 0 else 64
 
 
 def resolve_single_reqrep_drain_timeout_ms():
@@ -300,7 +308,7 @@ def run_one_way_receiver(sock, *, method, msg_size, run_id, active_end,
     storage = _recv_storage(method)
     poller, poll_events = new_socket_poller(sock, zlink_mod.PollEventFlag.POLLIN)
     perf_counter = time.perf_counter
-    time_ns = time.time_ns
+    time_ns = time.monotonic_ns
     count = received
     stop_view = memoryview(STOP_TOKEN)
     stop_wait_end = active_end + (_env_int("PERF_SINGLE_STOP_WAIT_MS", 2000) / 1000.0)

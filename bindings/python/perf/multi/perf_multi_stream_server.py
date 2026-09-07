@@ -11,6 +11,7 @@ from perf_multi_common import (
     benchmark_endpoint,
     configure_multi_tls_server,
     parse_server_args,
+    print_multi_auto_hwm_detail,
     perf_server_context,
     resolve_multi_monitor_hwm_bytes,
     resolve_multi_connect_ready_timeout_ms,
@@ -134,9 +135,13 @@ async def main(argv=None):
                     resolve_multi_connect_ready_timeout_ms(),
                 )
                 ctx.recalculate_auto_hwm()
-                monitor.status()
             finally:
                 monitor.close()
+            # The ready-count barrier proves the target application pipes are
+            # attached before this connected snapshot is collected.
+            print_multi_auto_hwm_detail(
+                server, "endpoint", args.transport, args.msg_size, "stream"
+            )
             print(f"SERVER_START_READY,{args.msg_size}", flush=True)
 
             packet = zlink.StreamPacket()

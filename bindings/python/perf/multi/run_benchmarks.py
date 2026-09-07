@@ -24,7 +24,11 @@ from perf_multi_common import (
     table_header_lines,
     throughput_unit,
 )
-from perf_report import multi_auto_hwm_lines, sort_result_data_lines
+from perf_report import (
+    multi_auto_hwm_lines,
+    parse_auto_hwm_detail_line,
+    sort_result_data_lines,
+)
 from perf_runtime import configure_runtime
 
 
@@ -163,16 +167,21 @@ DEFAULT_PATTERNS = (
 )
 DEFAULT_MSG_SIZES = ("64", "256", "1024", "4096", "65536", "131072")
 DEFAULT_STREAM_MSG_SIZES = ("64", "256", "1024", "65536")
-RAW_TRANSPORTS = ("tcp", "tls", "ws", "wss")
-ROUTER_ROUTER_TRANSPORTS = (*RAW_TRANSPORTS, "ipc")
+# C parity: no multi pattern currently uses the control-plane transport set.
+CONTROL_PLANE_PATTERNS = ()
+RAW_TRANSPORTS = (
+    ("tcp", "tls", "ws", "wss")
+    if sys.platform.startswith("win")
+    else ("tcp", "tls", "ws", "wss", "ipc")
+)
+STREAM_TRANSPORTS = ("tcp", "tls", "ws", "wss")
 POLICY_TRANSPORTS = {
-    "DEALER_DEALER": RAW_TRANSPORTS,
-    "DEALER_ROUTER": RAW_TRANSPORTS,
-    "ROUTER_ROUTER": ROUTER_ROUTER_TRANSPORTS,
-    "DEALER_ROUTER_REQREP": RAW_TRANSPORTS,
-    "ROUTER_ROUTER_REQREP": ROUTER_ROUTER_TRANSPORTS,
-    "PUBSUB": RAW_TRANSPORTS,
-    "STREAM": ("tcp", "tls", "ws", "wss"),
+    pattern: (
+        STREAM_TRANSPORTS
+        if pattern == "STREAM" or pattern in CONTROL_PLANE_PATTERNS
+        else RAW_TRANSPORTS
+    )
+    for pattern in DEFAULT_PATTERNS
 }
 RUNNABLE_TRANSPORTS = POLICY_TRANSPORTS
 
@@ -380,7 +389,12 @@ def _configure_core_runtime(env):
 def _transports_for_pattern(pattern, transports):
     if transports is None:
         return list(POLICY_TRANSPORTS[pattern])
-    return list(transports)
+    base = POLICY_TRANSPORTS[pattern]
+    selected = []
+    for transport in transports:
+        if transport in base and transport not in selected:
+            selected.append(transport)
+    return selected
 
 
 def _grouped_option_text(patterns, value_for_pattern, *, prefix="MULTI_"):
@@ -865,6 +879,11 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
     if not server_path.exists() or not client_path.exists():
         raise SystemExit(f"unsupported pattern: {pattern}")
 
+    server_env = dict(env)
+    server_env["PERF_MULTI_COMPONENT"] = "server"
+    client_env = dict(env)
+    client_env["PERF_MULTI_COMPONENT"] = "client"
+
     server = subprocess.Popen(
         [
             sys.executable,
@@ -879,7 +898,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
             msg_size,
         ],
         cwd=str(ROOT.parent.parent),
-        env=env,
+        env=server_env,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -976,7 +995,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
             client = subprocess.Popen(
                 client_cmd,
                 cwd=str(REPO_ROOT),
-                env=env,
+                env=client_env,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -1033,7 +1052,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
                     clients,
                 ],
                 cwd=str(ROOT.parent.parent),
-                env=env,
+                env=client_env,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -1100,7 +1119,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
                     clients,
                 ],
                 cwd=str(ROOT.parent.parent),
-                env=env,
+                env=client_env,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -1160,7 +1179,7 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
                     clients,
                 ],
                 cwd=str(ROOT.parent.parent),
-                env=env,
+                env=client_env,
                 capture_output=True,
                 text=True,
                 timeout=client_timeout_s,
@@ -1235,7 +1254,7 @@ def _build_options(args, patterns, transports, requested_msg_sizes, clients, env
     pattern_transition_ms = args.pattern_transition_ms or _env_pair_value(
         "PERF_MULTI_PATTERN_TRANSITION_MS", "PERF_PATTERN_TRANSITION_MS", "3000", env
     )
-    return {
+    options = {
         "lang": "python",
         "suite": "multi",
         "runs": args.runs,
@@ -1296,6 +1315,15 @@ def _build_options(args, patterns, transports, requested_msg_sizes, clients, env
         "timeout_seconds": os.environ.get("PERF_MULTI_TIMEOUT_SECONDS")
         or os.environ.get("PERF_TIMEOUT_SECONDS", "auto"),
     }
+    if any(pattern.endswith("_REQREP") for pattern in patterns):
+        try:
+            bound = int(os.environ.get("PERF_MULTI_REQREP_MAX_OUTSTANDING", "64"))
+        except ValueError:
+            bound = 64
+        if bound <= 0:
+            bound = 64
+        options["reqrep_max_outstanding"] = max(2, bound)
+    return options
 
 
 def _meta_lines(args, clients, runtime_info):
@@ -1422,6 +1450,7 @@ def main(argv=None):
     fail_fast = os.environ.get("PERF_FAIL_FAST", "0") == "1"
     sections = []
     emitted_chunks = []
+    auto_hwm_rows = []
     status_lines = []
     failures = []
     fail_count = 0
@@ -1479,6 +1508,8 @@ def main(argv=None):
                     # PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES, so do NOT
                     # force it here.
                     case_env["PERF_MULTI_MSG_UNIT_BYTES"] = str(msg_size)
+                    case_env["PERF_MULTI_PATTERN"] = _result_pattern(pattern)
+                    case_env["PERF_MULTI_TRANSPORT"] = transport
                     case_ordinal += 1
                     output, case_failed = _run_pattern_captured(
                         args, case_env, pattern, transport, msg_size, transport_clients
@@ -1492,6 +1523,11 @@ def main(argv=None):
                     if output and not case_failed:
                         emitted_chunks.append(output)
                         status_lines.extend(_parse_status_lines(output))
+                        auto_hwm_rows.extend(
+                            parsed
+                            for line in output.splitlines()
+                            if (parsed := parse_auto_hwm_detail_line(line)) is not None
+                        )
                         run_outputs[msg_size].append(output)
                     metrics = (
                         {}
@@ -1625,7 +1661,7 @@ def main(argv=None):
             else:
                 suffix = "Done"
             _append_line(sections, f"    Testing {transport}: {suffix}")
-            for line in multi_auto_hwm_lines(pattern, pattern_msg_sizes):
+            for line in multi_auto_hwm_lines(pattern, pattern_msg_sizes, auto_hwm_rows):
                 _append_line(sections, line)
             if transport_index + 1 < len(pattern_transports):
                 if stop_early:
