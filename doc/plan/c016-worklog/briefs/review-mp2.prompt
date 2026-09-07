@@ -1,0 +1,14 @@
+너는 job review-MP-2(동시 multipart 제출 구현의 독립 리뷰)다. 먼저 /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽는다. 이 job은 **읽기·리뷰 전용**이다: 소스·스펙·테스트 수정 금지, 빌드·실행 금지(다른 job이 측정 중이라 CPU를 쓰면 안 된다), 커밋 금지. 상한 45분.
+
+대상: worktree `/home/hep7hep7/project/zlink-work/mp2`의 미커밋 diff(`git -C ~/project/zlink-work/mp2 diff HEAD`, 24 파일 +1512/−509). 설계 근거는 doc/plan/c016-worklog/core-rf-MP-1-design.md(A안, §4.1~4.3 lock 순서·수명, §7 성능 주의), 결정 decisions.ko.md D-B197·D-B198, 구현 보고서 doc/plan/c016-worklog/core-rf-MP-2-report.md. 확정된 계약 문장은 main 작업 트리의 미커밋 스펙 수정(`git -C /home/hep7hep7/project/zlink diff -- core/doc/spec`)이다.
+
+리뷰 관점(각각 근거 파일:행과 함께 판정):
+1. 정확성 — caller identity(`weak_ptr` thread-lifetime)의 비교·만료·회수 경로: TLS control block 생성/파괴와 socket map의 경쟁, thread 종료 중 FINAL, 만료 slot 회수가 helper mutex 밖에서 payload를 닫는 순서, close(`cleanup_socket`)와 진행 중 MORE/FINAL의 경쟁, ctx term.
+2. lock 순서 — MP-1 §4.3(lifecycle admission → helper mutex → 분리 → unlock → physical; DONTWAIT FINAL은 physical sync → helper mutex)이 모든 경로에서 지켜지는지, 역방향이 남았는지, deadlock 가능성. `_out_sync`·`public_api_sync`·helper mutex·registry lock 사이의 순서.
+3. 원자성 — FINAL의 complete admission이 다른 caller의 record와 끼어들지 않는지(pipe 물리 prefix rollback 포함), REQUEST ID 예약/commit과 REPLY token checkout·restore·중복 거절의 정확성, 실패 경로에서 registry 상태 복원.
+4. 계약 — 스펙 문장(README §2/:944/:440-446, ROUTER :54/:419, ZMP control 경계·pending, Message :108)과 구현·테스트가 일치하는지. 특히 D3(control이 public staging 중 진행)와 PUB/XPUB의 기존 marker 경로가 P/D/R 변경에 영향받지 않는지.
+5. 성능 — MORE/FINAL의 RMW·mutex 횟수가 MP-1 §7 표대로인지(scope 중첩 +2 RMW 없음), single hotpath에 slot 생성·조회가 없는지, TLS 접근 비용.
+6. 테스트 — 신규 테스트가 계약을 실제로 관찰하는지(sleep 기반 동기화, 약한 assertion, 우연 통과 가능성), 바뀐 expectation 6건이 정당한지, 빠진 케이스(예: 3 이상 part, MORE 중 socket close 동시, 같은 thread의 다른 socket 두 개 sequence 동시, ROUTER RID 변경 후 새 sequence).
+7. 코드 품질 — 중복, 죽은 코드(marker/suspend/resume 중 P/D/R에서 더 이상 안 쓰이는 것이 남았는지), 이름·주석이 새 소유 구조를 반영하는지.
+
+보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/review-mp2.md (한국어). 항목마다 ID(B01.. 차단, W01.. 비차단, S01.. 제안), 근거 파일:행, 재현 시나리오, 수정 방향. 마지막에 "차단 항목 수 / 채택 가능 여부" 한 줄. 진행 파일: doc/plan/c016-worklog/progress-review-mp2.md (3분마다).

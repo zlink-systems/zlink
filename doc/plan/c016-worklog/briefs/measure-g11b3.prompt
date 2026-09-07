@@ -1,0 +1,12 @@
+너는 job measure-g11b3(G-11b-3의 with_stream idle 비교 측정)다. 먼저 /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 와 core-rf-GATE.prompt 의 절차 6~8(release lib, PERF_LOCK, 측정 방식)을 읽는다. 소스·스펙 수정 금지, 커밋 금지, stash 금지, 모든 명령 포그라운드. 상한 1시간.
+
+상태: 메인 저장소 /home/hep7hep7/project/zlink 에 G-11b-3 patch(core/src/runtime/core/pipe.{cpp,hpp}, sockets/common/socket_base_monitor.cpp)가 **staged** 상태로 있고, `core/doc/spec/**`에 감독관의 미커밋 스펙 수정이 있다. 둘 다 손대지 않는다. `git status`·`git diff --cached --stat`로 이 상태를 확인하고 보고서에 적는다. 다른 codex job(리뷰 전용, CPU 사용 없음)이 병행 중이다.
+
+절차:
+1. `pgrep -x ninja`가 비어 있고 1분 load < 1.0 확인(아니면 2분 대기 반복, 최대 15분).
+2. `JOBS=4 scripts/build-core.sh release --lib-only` (core/build; 이미 최신이면 빠르게 끝난다).
+3. 빌드 뒤 load가 1.0 아래로 2분 유지된 다음, `flock <PERF_LOCK>` 아래 with_stream: `bindings/c/bench/with_stream` 러너로 `--stack zlink,asio,zmq --size all --ccu 1000 --runs 3 --reuse-build`, `ZLINK_CORE_SOURCE=local`(core/build의 lib 사용, 러너 README 확인). 시작·종료 load average와 결과 디렉터리 기록.
+4. 비교: pristine 값은 `bindings/c/bench/with_stream/results/G-11b3-pristine-dfe6ec-runs3/`(zlink, asio; 3회 중앙값). 표: size별 zlink/asio/zmq kops, zlink/asio 비율과 zlink/zmq 비율, pristine zlink/asio 비율, 비율 변화 %. 또한 계획 §7.1의 최근 idle 값(zlink 289.7/267.8/32.6 kops, zlink/zmq 0.91/0.98/1.27)도 참고 행으로.
+5. 시간이 남으면 perf/c 1024 B tcp 경량 3셀(GATE 절차 8과 같은 셀)을 1회 돌려 값을 기록(비교 기준 없음, 기록만).
+
+보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/measure-g11b3-summary.md (한국어, 표 위주, 명령줄·결과 경로·load 포함). 판정 문장: "pristine 대비 zlink/asio 비율 변화가 세 size 모두 −5 % 이내인가"에 예/아니오로 답한다. 진행 파일 progress-measure-g11b3.md(3분마다).

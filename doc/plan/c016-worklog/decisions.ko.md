@@ -1943,3 +1943,8 @@ Go REQREP 러너 정합 중 드러났고, **감독자가 최소 재현 프로그
 
 **게이트**(`gate-g11b3-summary.md`): 충돌 없이 적용(3 파일, staged), 공개 인터페이스 diff 없음·mirror 12개 일치, release·dev 빌드 성공, 전체 ctest 207/208(유일한 실패는 hotpath_gate가 reference보다 6~27 % 빨라 guard가 FAIL 표기한 것), 105개 suite ×5 전부 통과, lost-wake 20회 ×2 세트 통과, close-release 50/50, TSan signature 전후 차이 0, release hotpath 5셀 PASS. with_stream 3회·perf/c 3셀은 게이트 시간 안에 못 돌렸다.
 **결정**: G-11b-3 patch는 main에 staged 상태로 유지하고 커밋은 with_stream idle 비교 뒤에 한다(D-B199 기준: pristine 대비 −5 % 이내). MP-2가 TSan 빌드·테스트 중이라 지금 측정하면 오염되므로, MP-2 종료 뒤 측정 job(with_stream zlink/asio/zmq ×3, pristine 디렉터리와 비교; hotpath reference 갱신 여부 판단)을 돌린다. 1회차 게이트는 감독자 rebase 처리와 겹쳐 `git pull --rebase`가 untracked 충돌로 멈춘 것이었고 2회차에서 정상 수행했다(교훈: 게이트 실행 중 감독자는 main에서 rebase하지 않는다).
+
+## D-B201 (2026-09-07 18:05, 머신 B) MP-2 결과 — A안 구현 완료, 독립 리뷰(astra)와 G-11b-3 idle 측정 병행
+
+**MP-2**(`core-rf-MP-2-report.md`, sol/high 16:02–17:56): 24 파일 +1512/−509, 공개 인터페이스 diff 없음. caller identity = TLS의 thread-lifetime `shared_ptr` control block, socket map은 weak ownership 비교(ID 재사용 방지). P/D/R의 SEND·REQUEST·REPLY가 caller slot을 쓰고 socket-wide REPLY owner 필드 제거(registry가 단일 기준). 규칙 6→3. 신규 공개 계약 테스트 11개(4 thread × 2-part × 100 전수 확인 P/D/R, REQUEST+REPLY 동시, 다른 caller single/family 독립, close·thread identity, 불일치 EINVAL, control 진행). 기존 expectation 변경 6건은 D-B198 계약에 맞춘 것. 검증: 관련 80 target ×5 = 400 통과, lost-wake 80/80, ASan+LSan leak 0(valgrind는 호스트 ld 문제로 불가), TSan 신규 8/8(남은 5건은 기존 monitor/ctx lock-order·timing debt), hotpath 5셀 PASS(stream_tcp 0.973, router_router_tcp 0.984).
+**절차**: 채택 전 독립 리뷰 `review-mp2`(astra/high, 읽기 전용) → 차단 항목 수정 → 게이트. 머신 idle을 이용해 `measure-g11b3`(terra, with_stream 3 stack ×3 vs pristine)를 동시에 돌린다(리뷰는 CPU를 쓰지 않음).
