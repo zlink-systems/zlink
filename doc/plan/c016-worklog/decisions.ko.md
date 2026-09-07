@@ -1808,3 +1808,6 @@ G-11 부록: (정정) `public_api_sync_bit`은 CAS 스핀락(mutex 카운트 밖
 
 ## D-B182 (2026-09-07 12:30, 머신 B) 진단 — 단일 lane 회계 실패는 기존 간헐(lane 분류 경합); G-1+G-3 채택 커밋
 진단(opus, `diag-g1-g3-accounting.md`): pristine main도 같은 테스트(`test_dealer_router_single_lane_contract.cpp:2842`, 5 s 안에 `core_queue_accounted_bytes > baseline`)가 계측 시 20~30 %, 무계측 3/35 실패 → 게이트의 "100 %"는 소표본 오독. 이분: base 12/60·4/30, +G-1 1/10, +G-3 0/10, 둘 다 0/10. 증상은 이봉(bimodal): 성공은 첫 폴에서 2176 B, 실패는 200폴 내내 0인데 reply는 정상 전달 — 즉 2176 B가 어떤 application 물리 큐에도 청구되지 않음. 유력 원인(미증명): `accounting_lane()`(`ctx_physical_queue_registry.cpp:184`)가 가변 원자 `lane`을 읽는데, 연결별 단일 lane 분류가 확정되는 시점과 경합하면 `current_accounted_bytes`가 registry 원장으로 fallback해 0. 분류 B(기존 결함, 노출된 타이밍). 조치: G-1+G-3 채택 커밋(아래), 이 테스트를 알려진 간헐로 등록, **S-14 job**(lane 분류 타이밍 결함) 예약 — G-11a 뒤. 진단용 worktree diag-base/g1/g3는 정리 대상.
+
+## D-B183 (2026-09-07 12:40, 머신 B) 감독관 실수 — worktree 정리 중 미게이트 R10-B 삭제, 재작업 투입
+착지 완료된 worktree 25개를 `git worktree remove --force`로 정리하다가 **아직 게이트 전인 R10-B(`~/project/zlink-work/r10`)** 까지 삭제. 보고서(`core-rf-R10-B-summary.md`)로 내용이 남아 있어 같은 범위로 재작업(R10-B-redo, sonnet) 투입. 규칙 추가: worktree 삭제 전 `git -C <wt> diff HEAD --stat`이 비어 있는지 확인하고, 비어 있지 않으면 해당 job의 착지 커밋 해시를 decisions에서 확인한 뒤에만 삭제.
