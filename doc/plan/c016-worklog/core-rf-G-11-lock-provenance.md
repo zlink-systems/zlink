@@ -145,3 +145,114 @@ D 후보는 §5의 06-auto-hwm 관측 시점 한 건뿐이고 현재까지 그�
 - 재측정하지 않았다(§0 이유). G-11a~e 각 job은 자기 before/after를 같은 축소 셀로 1회씩 떠야 한다.
 - 예상 −쌍/msg는 호출 횟수 산술이며, 잠금 제거가 만드는 캐시라인 트래픽 감소는 넣지 않았다(보수적).
 - worktree `~/project/zlink-work/g11`은 만들었으나 빌드에 쓰지 않았다(소스 변경 없음). 정리해도 된다.
+
+---
+
+# 부록 A — 감독관 turn 모형 검증 (file:line 근거, 읽기 전용)
+
+> 감독관 관찰 (1)(2)(3)을 코드로 검증했다. **한 곳을 정정**하고, 나머지는 확인됐으며 그 결과 turn 모형의
+> 위험도가 §4-B에서 예상한 것보다 **낮다**(step 3이 이미 부분 구현돼 있다).
+
+## A.0 정정 — "turn"은 pthread mutex가 아니다
+
+`public_api_sync_bit`은 원자어 안의 CAS 스핀락이다(`socket_lifecycle_runtime.cpp:391-411` `lock_public_api_sync`,
+`:23` 비트 정의, `:137-148` admission CAS에 비트를 함께 싣는 경로, `:364-373` thread_local 소유자 체인).
+따라서 **§1의 15.12 `pthread_mutex_lock`/msg에 이 비트는 들어 있지 않다.** "항상 turn을 잡게 한다"는
+잠금 카운트를 늘리지 않는다 — 늘어나는 것은 CAS 1회와 경합 시 백오프뿐이다.
+
+또한 **공개 send는 이미 항상 비트를 잡는다**: `begin_public_send_scope`/`begin_complete_send_scope`
+(`socket_base_msg.cpp:260-294`)가 둘 다 `needs_sync_=true`로 scope를 연다. `needs_sync_=false`
+경로는 `socket_public_api_scope_t`(admission만)뿐이고 flow-state 조회·close 계열에서만 쓴다
+(`socket_base_flow_state.cpp:37`, `socket_base_lifecycle.cpp:999,1051,1275`).
+즉 감독관 관찰 (2)의 전반부는 **성립하지 않고**, 후반부(명령별 조건부)는 성립한다.
+
+## A.1 (a) `_out_sync`가 지키는 필드 중 turn 보유자 외가 쓰는 것
+
+| 필드 (pipe.hpp) | 이미 원자? | 쓰는 주체 | 판정 |
+|---|---|---|---|
+| `_peers_msgs_read` (`:818`), `_peers_bytes_read` (`:819`) | 아니오 | **오직** `pipe.cpp:967-970` (`process_activate_write` 안, 단조 max 갱신). 읽기는 `:824,846,1251,1268-1292,1413` 등 다수 | **C3 후보** — 단조 증가 2개. release/acquire 원자로 바꾸면 잠금 없이 같은 값 |
+| `_out_active` (`:729`) | 아니오 | `process_activate_write`(`pipe.cpp:2812-2818`, false→true)와 송신 경로(true→false) | **CAS 1회로 전이 단독 승자 확정** — `write_activated` 발신이 전이당 1회로 유지되어야 한다 |
+| `_state` (`:836`) | **예** (`std::atomic<lifecycle_state_t>`) | — | 이미 단일 원자 |
+| `_in_active`, `_head_reclassify_wake`(`:746` 계열), `_transport_lane_count`, `_peer_weight`, `_transport_pair_application_ready` | **예** | — | S-11이 이미 원자화 |
+| `_out_pipe`(`:717`), `_msgs_written`(`:791`), `_bytes_written`(`:793`), `_out_generation`(`:806`), `_out_incomplete_*`, `_pending_*`(`:920-927`), `_transport_pair_write_held`(`:751`) | 아니오 | **송신자 한 쪽만** 쓴다 | 단일 writer — turn(또는 I/O 스레드)이 배타를 준다 |
+
+**핫패스 3회의 소속이 결정적이다.** `pipe_t::write`(1.000)와 `pipe_t::flush`(1.001)는 **session 쪽 endpoint**에서
+불린다(`session_base_pipe_io.cpp:129` `_pipe->write`, `:141-142` `session_base_t::flush`, 호출자는
+`asio_engine.cpp:1212,1500,1647,1782`) — 그 endpoint의 writer는 **asio I/O 스레드 하나뿐**이고,
+그 endpoint로 오는 `activate_write` 명령도 같은 I/O 스레드가 처리한다. **두 번째 writer가 핫패스에 없다.**
+`write_single_message_and_flush_no_recursive_hwm_check`(1.000)는 socket 쪽 endpoint이고
+`stream_t::xsend_routed`(`stream.cpp:911`)에서 turn 안에서 불린다.
+
+**핫패스 밖의 진짜 교차 접근**(이것 때문에 잠금이 남아 있었다): `pipe.cpp:431` `detach_peer_link`가 peer의
+`_out_sync`를, `stream.cpp:1260` `identify_peer`→`peer->set_router_socket_routing_id`가 peer의 `_out_sync`를 잡는다.
+둘 다 teardown/identity 경로다 — 명령으로 옮기거나, 그 두 지점 전용의 좁은 잠금으로 남긴다(핫패스 0회).
+
+## A.2 (b) 비트 없이 도는 명령과 그것이 바꾸는 상태
+
+`socket_base_lifecycle.cpp:404-420`:
+```
+reaper_owns_closed_socket = public_close_requested() && reaper_poller() != NULL
+command_path_needs_public_api_sync = !reaper_owns_closed_socket
+                                     && ((options.type != ZLINK_CORE_SOCKET_PAIR) || pair_sync_for_this_claim)
+```
+- **PAIR 소켓의 모든 명령**이 비트 없이 돈다. 예외는 `is_pair_pipe_lifetime_command`로 probe돼
+  (`:487-497`) 재시도되는 pipe 생성/종료 명령뿐. 즉 PAIR의 `activate_write`(credit·`_out_active`),
+  `activate_read`(수신 파티션), `flow_state`, `peer_weight`가 앱 send와 **동시에** 같은 상태를 만진다 →
+  `_out_sync`·`receive.sync`가 그 동시성을 받아내고 있다.
+- **reaper가 소유한 close 이후**의 모든 명령. 핫패스 아님.
+- 비-PAIR(STREAM/ROUTER/DEALER/PUB/SUB)는 **이미 명령 드레인도 비트를 잡는다.** 따라서 이 소켓들에서
+  socket 쪽 endpoint의 `_out_sync`와 `receive.sync`는 **이미 turn과 중복**이며, 남은 근거는 A.1의
+  cross-endpoint 접근 2곳과 PAIR뿐이다.
+
+## A.3 (c) 블로킹 대기가 turn/잠금을 쥐고 자는가 — **핵심 위험이 이미 해소돼 있다**
+
+- **블로킹 send**: `wait_for_submit_progress`(`socket_base_lifecycle.cpp:784-791`)가 대기 전후로
+  `send_scope_.release_sync_for_retry()` / `reacquire_sync_after_retry()`를 **이미 부른다**.
+  즉 "turn을 놓고 잔다"는 프로토콜이 이미 존재한다. 실제 수면은 `progress.cv.wait(&progress.sync, …)`
+  (`:766`)로, CV가 `progress.sync`를 놓는다.
+- **블로킹 recv**: `socket_base_msg.cpp:735-760`의 루프는 api-sync scope를 **아예 열지 않는다**.
+  수면은 `wait_receive_progress`(`socket_base_lifecycle.cpp:1548-1570`)의
+  `receive.progress_cv.wait(&receive.sync, timeout)` — CV가 `receive.sync`를 놓는다.
+  async 실행기가 없으면 대신 `process_commands(timeout)`으로 mailbox에서 잔다.
+- **mailbox 대기**: `mailbox.cpp:276` `_command_wait_cv.wait(&_sync, …)` — 역시 CV가 `_sync`를 놓는다.
+
+⇒ turn 모형에서 새로 만들어야 할 "대기 중 turn 반납"은 **recv 쪽뿐**이고, send 쪽 구현
+(`release_sync_for_retry`/`reacquire_sync_after_retry`)을 그대로 재사용한다.
+
+## A.4 (d) turn 모형에서 사라지는 잠금과 남는 잠금
+
+| 사라짐 (근거) | /msg |
+|---|---:|
+| `process_commands`의 `command_owner_sync` + 명령당 `receive.sync` — turn이 배타를 준다 | 1.467 |
+| `read_activated`의 `receive.sync` (`socket_base_api.cpp:1615,1680`) | 0.999 |
+| `has_in`의 `receive.sync` | 0.278 |
+| `pipe_t::write` `_out_sync` — session endpoint 단일 writer (A.1) | 1.000 |
+| `pipe_t::flush` `_out_sync` — 같음 | 1.001 |
+| `write_single_message_and_flush_…` `_out_sync` — turn 안 (A.1) | 1.000 |
+| `route_shard_t::sync` — C1, 스냅샷 원자 교체 | 1.000 |
+| **합계** | **−6.745** |
+
+| 남음 | /msg | 이유 |
+|---|---:|---|
+| `mailbox_t::send` `_sync` | 2.003 | 07 §6.3 삽입점. 진짜 MPSC. zmq도 동일 |
+| `mailbox_t::recv`/`reschedule_if_needed`/`signal_pollers` `_sync` | 0.693 | 같은 객체. 횟수 축소는 G-7 소관 |
+| 공개 poller `std::mutex` | 0.560 | C1. 별도 job(G-11e) |
+| boost.asio 내부 | 4.033 | Core 밖 |
+| **turn 자체** | **0 (pthread 기준)** | 원자어 CAS. send 경로는 이미 지불 중 |
+| **합계** | **7.29** | |
+
+**15.12 → 8.29/msg** (Core 10.09 → **3.26**, zmq 1.73과 같은 자릿수).
+쌍당 ≈65 Ir(G-A: lock 648/17.34 + unlock 490/17.34) → **−438 Ir/msg = STREAM 9,808의 −4.5 %**,
+zlink−zmq 격차 2,823 Ir의 **−15.5 %**. 캐시라인 왕복 감소는 포함하지 않은 보수적 값이다.
+
+## A.5 3단계 job 분할
+
+| step | 내용 | 측정/게이트 | 그대로 유지돼야 하는 스펙 문장 |
+|---|---|---|---|
+| **1. 명령 드레인이 항상 turn을 잡는다** | `command_path_needs_public_api_sync`(`socket_base_lifecycle.cpp:404-420`)의 PAIR 예외와 reaper 예외를 없애 모든 명령이 비트를 잡게 한다. **잠금을 제거하지 않는다** — 순서와 비용만 확정한다 | 비트 경합률(백오프 진입 횟수)과 PAIR 처리량을 before/after 1회씩. `ctest -R pair\|wake\|poll`, PAIR lost-wake `until-fail:10`. 스핀락을 쥔 채 명령을 적용하므로 **PAIR 활성화 지연이 늘지 않는지**가 유일한 판정 기준 | 04-thread-safety §4.1(공개 연산 직렬화), 05-polling의 POLLIN level 유지, README의 recv wake 조건 |
+| **2. 안쪽 잠금을 하나씩 제거** (S-1식 증명 첨부) | 2a `receive.sync`(read_activated·has_in·명령당) → turn. 2b socket endpoint `_out_sync` → turn(+ `detach_peer_link`·`identify_peer` 2곳은 명령화 또는 좁은 teardown 잠금). 2c session endpoint `_out_sync` → 제거하고 `_peers_msgs_read/_peers_bytes_read`를 C3 원자, `_out_active` 전이를 CAS. 2d route shard 스냅샷 | 각 항목마다 "이 잠금이 답하던 질문을 누가 답하는가"를 file:line으로 적고 TSan 1회 + lost-wake `until-fail:10` + `ctest -R pipe\|stream\|router\|dealer\|pair` 5회 | 05-polling: WRITABLE wake가 `_out_active` 전이당 **정확히 1회**. 06-auto-hwm: charge는 frame write에서 시작해 dequeue에서 끝난다(`06-auto-hwm.ko.md:434-435,467`) — 값은 불변, 관측 시점만 앞당겨진다. 시점을 명령 경계에 못박은 문장이 발견되면 그 순간 **D** |
+| **3. 블로킹 대기가 turn을 반납** | recv 대기(`socket_base_msg.cpp:735-760` → `wait_receive_progress`)에 send 쪽과 같은 `release_sync_for_retry`/`reacquire_sync_after_retry` 패턴을 적용. step 2에서 recv가 turn 안으로 들어간 뒤에만 필요 | rcvtimeo·DONTWAIT 계약 테스트, 다중 스레드 recv 경합 테스트, lost-wake `until-fail:10` | 04-thread-safety §4.1, 05-polling의 level 규칙, recv wake 조건(README) |
+
+**순서 근거**: step 1은 잠금을 하나도 건드리지 않으므로 되돌리기 쉽고, step 2의 모든 증명이
+"turn이 배타를 준다"에 의존하므로 반드시 먼저 확정돼야 한다. step 3은 step 2c 이후에만 의미가 있다
+(그 전까지 recv는 turn 밖이다). 세 step 모두 공개 헤더·`libzlink.vers`·계약 테스트 기대값을 건드리지 않는다.
