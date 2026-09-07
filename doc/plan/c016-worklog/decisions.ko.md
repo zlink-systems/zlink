@@ -2014,3 +2014,23 @@ early completion의 `capture()`는 `_changed.wait()`에서 `_published`를 기�
 재현: 원본 `completion_owner.cpp/.hpp`를 임시 object로 컴파일하고 `condition_variable::wait` 진입을 linker wrap한 결정적 진단에서 `FAIL: publication did not wake the early completion`이 재현됐다.
 perf의 async 경로는 `submit_request_attempt()`가 직접 notify하므로 이 결함을 밟지 않는다. 따라서 REQREP 성능 격차의 원인으로 합산하지 않으며, pass 1은 관련 수정과 test를 남기지 않았다.
 조치: **별도 correctness 수정 항목으로 분리한다.** 성능 캠페인의 판정과 섞지 않는다. 수정 시 회귀 테스트(조기 drain이 먼저 wait에 들어간 상태에서 publish가 깨우는지)를 함께 넣는다.
+
+## D-BP18 (2026-09-07 23:30, 머신 A) C++ Multi tcp REQREP 격차는 **C++ client 안에 있고 원인이 둘이다** — server 병목·Core 결함 귀속은 모두 기각
+`p5cmodel` 재측정 before: `MULTI_DEALER_ROUTER_REQREP` **72.87%**(latency 2.69x), `MULTI_ROUTER_ROUTER_REQREP` **76.39%**(2.15x). 목표는 throughput ≥85%, latency ≤2.0x.
+
+**(1) 교차 pairing으로 위치를 확정했다.** clients 100, 2 s, 2-part, 전부 complete:
+
+| Pattern | Size | C server + C client | C++ server + C client | C server + C++ client | C++ server + C++ client |
+|---|---:|---:|---:|---:|---:|
+| DR | 64 | 386,350 / 0.235 ms | 389,425 / 0.246 | 296,748 / 0.227 | 282,082 / 0.266 |
+| DR | 65536 | 62,060 / 0.724 | 61,789 / 0.798 | 46,760 / 6.099 | 40,423 / 9.461 |
+| RR | 64 | 353,710 / 0.220 | 345,236 / 0.226 | 281,613 / 0.224 | 272,414 / 0.239 |
+| RR | 65536 | 55,343 / 0.858 | 58,012 / 0.731 | 48,274 / 4.040 | 47,507 / 3.887 |
+
+C client를 유지하면 C++ server는 C server의 DR 100.8%/RR 97.6%이고 64 KiB latency도 0.73~0.80 ms로 정상이다. **server recv/reply 병목 가설은 기각한다.**
+
+**(2) 크기별 비율이 70~80%로 평평한 것은 단일 비례 비용이 아니라 원인이 둘이기 때문이다.** 64 B는 native submit 비용이 C와 거의 같은데 **coroutine·completion 변환을 포함한 application 명령 수**가 늘었다. 64 KiB는 **admission 전 대기와 반복된 WRITABLE 재제출**이 지연의 대부분이다. 이 둘은 별개 후보를 요구한다.
+
+**(3) D-B209(Core REQUEST completion이 다른 thread의 열린 sequence 동안 도착하지 않음)를 이 격차의 원인으로 귀속하지 않는다.** 증상(64 KiB 지연)이 닮아 확인했으나 성립하지 않는다. C++ multi REQREP 러너의 client는 **단일 application thread**이고(`bindings/cpp/perf/multi/common/perf_multi_reqrep.hpp:331` "completion on the same active application thread"), completion-owner 이관 뒤 `_public_owner`가 잡혀 runtime owner thread가 멈추므로(`completion_owner.cpp:759-765`) 재제출(`drain()`→`retry()`→`resubmit_send_attempt()`)도 같은 thread에서 일어난다. D-B209가 요구하는 "thread A의 sequence가 열린 동안 thread B가 재제출"이 성립하지 않는다. 증상이 닮았다는 이유로 다른 캠페인의 결함에 귀속하지 말 것.
+
+**(4) pass 1(astra/xhigh) 결과: 후보 전부 기각·원복.** 구현한 후보(REQUEST completion의 중복 합류 상태 제거)는 DR 72.87→71.58%, RR 76.39→76.01%로 오히려 내려갔다. 기각 목록은 `log/2026-09-07-cpp-multi-reqrep-pass1.ko.md`. pass 2는 (2)의 두 원인 위에서 계약 유지 후보를 찾고, 없으면 §7.4 16단계로 `보류` 확정한다.
