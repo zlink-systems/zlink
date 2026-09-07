@@ -32,3 +32,4 @@ together with its internal implementation.
 | [08. Core POSD Module Structure](08-posd-module-structure.en.md) | Responsibility separation across layers |
 | [09. Core Design Decisions](09-design-decisions.en.md) | Key design decisions |
 | [10. Core Hot Path](10-hot-path.en.md) | Scope of the per-message path, forbidden operations, state caches, performance gates |
+| [11. Synchronization Model](11-synchronization-model.en.md) | Ownership units (socket turn, pipe ends, mailbox), when a lock is allowed and forbidden forms, lock inventory |

@@ -5,7 +5,7 @@ title: "Core hot path"
 [한국어](https://zlink-systems.github.io/zlink/ko/spec/core/systems/10-hot-path/) | English
 
 <!-- zlink-nav:start -->
-[Systems Index](README.en.md) | [Previous: Core Design Decisions](09-design-decisions.en.md)
+[Systems Index](README.en.md) | [Previous: Core Design Decisions](09-design-decisions.en.md) | [Next: Synchronization Model](11-synchronization-model.en.md)
 <!-- zlink-nav:end -->
 
 # Core hot path
