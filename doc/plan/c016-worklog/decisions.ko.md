@@ -2077,3 +2077,23 @@ D-BP18은 C++ Multi tcp REQREP의 원인을 둘로 적었다: 64 B의 coroutine�
 
 **리뷰**(`review-mp2-2.md`, astra): B201 반복 logical RID revoke가 revoked tombstone을 다시 차감(assert/타 checkout capacity 오차감), B202 DONTWAIT FINAL의 staging 실패 경로가 lifecycle admission 없이 raw sequence를 mutex 밖에서 접근해 close와 경합(use-after-free), B203 publish invalid-flags abort 경로의 pin 공백(1차 B06 미수정 경로), B204 MP-7 대기가 command epoch를 관찰하지 않아 lost wake(다른 owner가 reply command를 먼저 소비하면 RCVTIMEO 전체 지연/영구 대기) + registration 전환 시 deadline 미승계, B205 REPLY 실패·blocking REQUEST 성공 경로에서 마지막 user payload ref가 physical sync/pipe lock 안에서 해제(기존 physical 경로 잔여, B02 전 경로 해소 주장 막음), B206 checked_out을 RID 일치보다 먼저 검사해 다른 RID+checked-out token을 EBUSY(계약 ENOENT). 비차단 W201~W206, S201/S202. MP-4/5 counter·TLS·borrow 판정은 통과. MP-7 방향(drain gate 공유)은 채택 가능하되 B204 때문에 현재 구현은 불가; 원인은 multipart가 아닌 completion 계층 기존 결함(열린 MORE 없이 single REQUEST도 동일 조건)이므로 D-B209의 인과 서술을 그렇게 좁힌다. 감독자 재검증: B201·B204·B206 코드 확인 — 정확.
 **결정**: MP-8(sol/high, 2.5 h) 차단 6건+비차단 전부 → 3차 리뷰(차단 검증만) → 게이트. 리뷰가 제안한 completion pull 명료화 문장(consumer 하나, poller 등록이 blocking recv를 제한하지 않음, 직렬화된 drain 경로 하나, DONTWAIT은 새 drain 없음)은 감독자가 README ko/en에 반영. 0.17.2 완료 예상 **9/8 오후**.
+
+## D-BP22 (2026-09-08 00:20, 머신 A) C++ Multi tcp SENDSEND 2종 `통과`(완화 목표 90%) — routed 고유 비용에는 격차가 없다
+`MULTI_DEALER_ROUTER_SENDSEND` **92.37%**, `MULTI_ROUTER_ROUTER_SENDSEND` **92.45%**(§7.2 5-run, latency 1.134x·1.291x 통과, 개별 최소 85% 미달 없음). 기본 목표 95% 미달, **§2.1 완화 목표 90%를 선택해 `통과`로 닫는다**.
+
+**완화의 근거는 "pass를 한 번 했으니"가 아니라 pass가 밝힌 사실이다.** pass 1(astra/high)이 DD 대비 routed send의 추가 비용을 callgrind로 분리한 결과:
+- native routed send inclusive는 C 5,278 / C++ 5,278 Ir로 같다. RR client의 native routed send는 C 5,627 / C++ 5,362 Ir로 **C++가 오히려 낮다**.
+- C++ builder 추가분은 132 Ir/건(DD 89 → RR 221)뿐이다.
+- 64 B에서 C++와 C의 application 구간 차이는 약 1,732 Ir이다.
+
+즉 **routed send 고유 경로에는 격차가 없고**, 남은 격차는 DD와 같은 메시지당 고정 비용이다. 그 후보 공간은 DD가 3회 pass·후보 10개 중 9개 기각으로 이미 소진했다(D-B121~D-B130, DD pass 1).
+
+**감독자가 pass의 기각 논리를 재검증했다.** pass는 축소 가능 항목 3개(RID ring 복사, `commit_receive_metadata` self 103 Ir, 성공 경로 errno 약 14 Ir)를 **개별로** "혼자서는 부족하다"며 기각했는데, 개별 기각은 항목이 가산적일 때 잘못된 기준이다. 그래서 합을 직접 계산했다 — 약 250 Ir로 application 구간 차이 1,732 Ir의 **14%**이고, 전부 구현해도 92.37% → 약 93.5%로 95%에 닿지 않는다. 따라서 결론은 유지되고 **pass 2를 열지 않았다**(30~60분 절약, 판정 불변).
+
+기각 근거 중 계약에 걸린 것: RID snapshot을 빌린 pointer로 대체(builder와 거절된 async operation이 caller RID 객체보다 오래 살 수 있어 exact-target 재제출 보존이 깨진다), native route lookup·pipe cache(route 교체·credit·admission의 소유자는 Core이며 공개 API 밖 pipe를 binding이 보관할 수 없다).
+
+pass는 library를 수정하지 않았다. 공개 헤더 diff 0줄, 기능 27/27, 회귀 gate 5-run 통과(처리량 최대 −2.30%, latency 최대 +5.08%).
+
+**5-run 재현성이 정량적으로 확인됐다.** pass가 **source 변경 0줄**로 같은 셀을 다시 재 DR 92.37→92.25%(−0.13%p), RR 92.45→92.25%(−0.21%p)를 얻었다. 1-run의 ±5%p(D-BP21)와 대비된다. 또 회귀 gate의 DD 64 B latency가 1-run에서 +10.31%였다가 5-run에서 −2.45%로 돌아왔다. **§7.2의 5-run 판정 규칙은 이번 캠페인에서 세 번(RR 4096 B C 붕괴, DD 64 B latency, DD/PUBSUB 경계) 오탐을 걸러냈다.**
+
+**이로써 C++ `tcp` 6 pattern 판정이 닫혔다**: DD 통과(94.73%), PUBSUB 통과(95.16%), DR SENDSEND 통과(92.37%), RR SENDSEND 통과(92.45%), DR REQREP 보류(72.87%), RR REQREP 보류(76.39%). 남은 것은 `MULTI_STREAM`(smoke 조사 선행)과 `tls`·`ws`·`wss`다.
