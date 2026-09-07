@@ -2260,3 +2260,9 @@ C의 같은 항목 `Core poller wait·reply 진행`은 **4,593.91 Ir(C 잔여의
 **perf/c**(1024 B tcp, runs 3): single PAIR 85.3 %(Phase 2G 대비), 나머지 single 100~107 %; multi DD 100 %, 그 외 75~92 %. 전 size raw(Phase 2G runs 1) 대비는 single PAIR 0.91/0.68/0.78/0.92 외에는 대부분 ≥1.0.
 **유보 이유**: §7.4 Phase 2G 기준은 머신 A의 러너 정합(측정 모델 변경) 이전 값. 러너가 달라졌으므로 절대값 비교는 판정 근거가 못 된다(perf/c multi는 부하·모델 민감, D-B158). single PAIR 65536 B 0.68은 raw 비교에서도 낮아 회귀 후보로 남긴다.
 **조치**: attrib-0172(terra, 1.5 h) — 같은 러너 binary로 lib만 `5304885197`(MP 직전, G-11b 포함) ↔ 0.17.2를 교대 2회(single PAIR·DD 1024/65536 B, multi DR_REQREP·RR_SENDSEND 1024 B). 두 교대 모두 −5 % 이하면 MP 계열 회귀 후보로 0.17.3 최우선 항목, 아니면 기준 불일치로 §7.4 기준을 0.17.2 idle 값으로 갱신. 0.17.2 태그는 유지(게이트 hotpath·with_stream·ctest 기준은 충족).
+
+## D-B218 (2026-09-08 05:05, 머신 B) STREAM packet pump 정체(머신 A 보고, 0.17.2에도 재현) — ST-1 조사·수정 착수, 0.17.3 최우선
+
+**보고**(`doc/bug/perf/2026-09-08-core-stream-packet-pump-stall.ko.md` §1~8): STREAM tcp 100 client 64 B에서 pull thread와 별도 send thread가 같은 socket을 쓰면 마지막 35 frame이 TCP로 도착(커널 Recv-Q 0)했는데 packet API가 반환하지 않음; `stop=false`, DONTWAIT probe도 빈 결과. C 러너(같은 thread)는 통과. 0.17.2 재고정 후 §8에서 동일 재현 확인. **감독자 누락**: 보고서(00:xx 제출)의 §7-2 "0.17.2에 포함" 요청을 태그 전에 읽지 못했다. 0.17.2는 그대로 두고 0.17.3 최우선으로 처리한다.
+**가설**: engine이 읽어 들인 frame이 pipe로 못 넘어가는 형태이므로, pipe HWM/credit 도달로 engine 입력이 멈춘 뒤 read-resume wake가 송신 thread의 command drain에 소비되어 유실(B204 계열). ST-1(sol/high, 3 h, worktree st1)이 Core 통합 테스트로 먼저 재현 → 덤프로 확정 → 소유 모듈 수정 → 회귀 테스트(`test_stream_concurrent_pull_send`) 등록. attrib-0172 측정과 겹치지 않도록 성능 측정은 금지.
+**머신 A에**: C++·.NET MULTI_STREAM은 0.17.3까지 보류 유지. 0.17.3 = ST-1 + (attrib 결과에 따른) perf/c PAIR 회귀 처리 + G-11 2a/2b/2d(이월).
