@@ -1419,8 +1419,11 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 ### 10.3 언어 진행 상태
 
-**측정은 새로 한다.** 호스트와 Core artifact가 바뀌었으므로 모든 성능 수치는 현재 artifact
-(`core/build/lib/libzlink.so.0.17.0`, Build ID `af759a1c…`)에서 C와 새로 짝지어 다시 잰다.
+**측정은 새로 한다.** 호스트와 Core artifact가 바뀌었으므로 모든 성능 수치는 **고정 Core
+prefix** `~/.cache/zlink/core-pinned/0.17.1/lib/libzlink.so.0.17.1`(Build ID `101bdb24…`,
+SHA-256 `a3e00fd2…`, 태그 `core/v0.17.1` 커밋 `4cd03b9173`)에서 C와 새로 짝지어 다시 잰다.
+`ZLINK_CORE_SOURCE=release`와 `ZLINK_CORE_PACKAGE_PREFIX`로 이 prefix를 가리킨다 — 머신 B가
+`core/`에 계속 커밋하므로 작업 트리 build를 기준으로 삼으면 staleness 검사가 깨진다.
 2026-09-05/06의 수치는 아래 표에 **참고**로만 남긴다.
 
 유지하는 것은 수치가 아니라 **작업 자산**이다. 7개 언어에 적용·푸시된 개선 pass 15건의 코드,
@@ -1429,7 +1432,7 @@ callgrind·프로파일 분석, 후보 no-go 목록과 그 근거(D-B121~D-B130)
 
 | 순서 | 언어 | 현재 artifact Single | 현재 artifact Multi | 이전 호스트 Multi `tcp` 참고값 (DD / DR REQREP / RR REQREP / PUBSUB) | 적용된 개선 pass |
 |------|------|------|------|------|------|
-| 1 | C++ | REQREP 연속 제출 정합 완료(63.6%) | `tcp` DD **통과(95.59%)** | 90.8 / 57.4 / 68.4 / 93.2% | 3건 push |
+| 1 | C++ | REQREP 연속 제출 정합 완료(63.6%) | `tcp` DD **통과(95.42%)**, PUBSUB **통과(95.52%)**, DR REQREP **미달(72.87%)**, RR REQREP **미달(76.39%)** — SENDSEND 2종·STREAM 미측정, `tls`·`ws`·`wss` 미측정 | 90.8 / 57.4 / 68.4 / 93.2% | 3건 push + 러너 C 모델 정합 `31c5e4f7f0` |
 | 2 | .NET | 미측정 | 미측정 | 59.6 / 58.3 / 67.0 / 61.3% | 3건 push |
 | 3 | Java | 미측정 | 미측정 | 80.9 / 59.4 / 58.7 / 80.9% | 3건 push |
 | 4 | Node | 미측정 | 미측정 | 35.9 / 24.3 / 24.8 / 30.2% | 4건 push |
@@ -1476,8 +1479,8 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 다음 조건을 모두 만족해야 작업을 완료한다.
 
 - runner, 정책, 상세 표의 pattern, transport, size inventory가 일치한다.
-- 각 pattern의 최종 판정에 사용한 core 0.17.0 C와 binding paired report가 모두
-  `status: complete`다.
+- 각 pattern의 최종 판정에 사용한 고정 Core 0.17.1 prefix 기준 C와 binding paired report가
+  모두 `status: complete`다.
 - 모든 binding의 **Multi** 상세 표에 `미측정` 또는 `미달`이 없다(D-BP2: Single은 성능
   판정 대상이 아니다).
 - 모든 binding의 **Single** 러너가 `PERF_SINGLE_TEST_POLICY.md` §1.1의 실행 모델(전용 OS
