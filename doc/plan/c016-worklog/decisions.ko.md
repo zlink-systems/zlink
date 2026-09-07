@@ -1868,3 +1868,8 @@ G-7(codex sol/high, `core-rf-G-7-summary.md`): executor mailbox가 public FD 사
 
 ## D-B194 (2026-09-07 16:00, 머신 B) G-7 채택 커밋; G-11b-2 진행 중
 게이트 g7(codex terra/medium, `gate-g7-summary.md`): ctest 208/208, 56 suite ×5, lost-wake until-fail:20 + two_poller_wake/wake_invariants ×20, close ×50, `stream|pipe` 23/23, mirror 12/12, hotpath 5셀 PASS, **with_stream(runs 1, 다른 job 빌드 중) zlink 315.8 / 293.2 / 38.4 kops** = Phase 0 대비 +17 / +21 / +26 % — idle runs 3 재기준 때 확정. 남은 2S/2G 항목: G-11b-2(진행) → 2a·2b·2d → idle 재기준 → Phase 4.
+
+## D-BP11 (2026-09-07 12:45, 머신 A) 러너 정책 정합은 **7개 binding 전부**에 적용한다 — D-BP8의 후순위는 측정·개선에만 해당
+사용자 지시: "러너 수정은 모든 bindings perf에 다 적용해." D-BP8이 Go·Rust·Python을 후순위로 둔 것은 **측정과 성능 개선 pass**의 순서였고, 러너의 정책 위반 수정은 언어를 가리지 않는다. 러너가 정책을 어긴 상태로 남아 있으면 나중에 그 언어를 측정할 때 다시 처음부터 진단해야 하고, C 대비 비교 자체가 성립하지 않는다.
+Go·Rust·Python에 남은 항목: (1) 시간원 monotonic — Python `time.time_ns()`, Go·Rust 확인 필요. multi metric header의 `sent_ts_ns`는 다른 프로세스가 자기 시각과 비교하므로 cross-process 공유 monotonic이어야 한다. (2) 메시지당 `getenv`/환경 변수 조회 캐시. (3) `PERF_MULTI_REQREP_MAX_OUTSTANDING`·`PERF_SINGLE_REQREP_MAX_OUTSTANDING` 상한(64, 하한 2). (4) **Go multi REQREP 재구성** — socket당 goroutine 1개(= in-flight 1)는 `PERF_POLICY.md` line 127~131의 비동기 모델 위반(D-BP6이 D-B123을 대체). (5) Go send drain timeout 부재. (6) Go·Rust·Python의 multi `AUTO_HWM_DETAIL` 미출력. (7) single REQREP 연속 제출 전환 — 세 언어 모두 RTT 루프. (8) `select_transports()`의 `CONTROL_PLANE_PATTERNS` 처리와 순서 규칙(C++만 이식됨).
+기준 구현은 이미 정합된 C(`bindings/c/perf`)와 C++·.NET·Java·Node다. 특히 single REQREP은 `PERF_SINGLE_TEST_POLICY.md` §1.1.2 의사코드와 §1.1.5(진행 소유 규칙)를 따르며, .NET 사례처럼 제출·poll·집계를 서로 다른 실행 주체로 나누면 poll이 수십 ms씩 멈춘다.
