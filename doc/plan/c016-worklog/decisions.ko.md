@@ -2097,3 +2097,18 @@ pass는 library를 수정하지 않았다. 공개 헤더 diff 0줄, 기능 27/27
 **5-run 재현성이 정량적으로 확인됐다.** pass가 **source 변경 0줄**로 같은 셀을 다시 재 DR 92.37→92.25%(−0.13%p), RR 92.45→92.25%(−0.21%p)를 얻었다. 1-run의 ±5%p(D-BP21)와 대비된다. 또 회귀 gate의 DD 64 B latency가 1-run에서 +10.31%였다가 5-run에서 −2.45%로 돌아왔다. **§7.2의 5-run 판정 규칙은 이번 캠페인에서 세 번(RR 4096 B C 붕괴, DD 64 B latency, DD/PUBSUB 경계) 오탐을 걸러냈다.**
 
 **이로써 C++ `tcp` 6 pattern 판정이 닫혔다**: DD 통과(94.73%), PUBSUB 통과(95.16%), DR SENDSEND 통과(92.37%), RR SENDSEND 통과(92.45%), DR REQREP 보류(72.87%), RR REQREP 보류(76.39%). 남은 것은 `MULTI_STREAM`(smoke 조사 선행)과 `tls`·`ws`·`wss`다.
+
+## D-BP23 (2026-09-08 01:00, 머신 A) C++ `MULTI_STREAM`은 **Core 수신 경로 결함으로 측정 불가** — 러너로 보상하지 않고 0.17.2에서 재개한다
+C++·.NET의 `MULTI_STREAM` smoke 실패를 진단했다(astra/high, `log/2026-09-08-cpp-stream-drain.ko.md`). **러너 수정은 제출하지 않았고 그 판단이 옳다.**
+
+**결정적 증거.** 정체 중인 연결 100개의 `ss -tinp`를 합산했다. 모든 연결 ESTAB, 양쪽 kernel Recv-Q·Send-Q 합 0. server TCP 수신 35,347,185 B는 81 B frame 기준 **436,385 frame**인데 packet API 반환·echo 송신은 **436,350 frame**이다. 차이 2,835 B = **정확히 35 frame**이 TCP로 도착해 커널에서 빠져나갔는데 packet API가 끝내 반환하지 않았다. 5초 tail 대기 동안 계수가 변하지 않고, public `recv_packet(DONTWAIT)` probe로도 추가 packet이 없으며, `stop=false`라 종료 경합도 아니다.
+
+**binding 결함이 아니다.** C++ 송수신·poller wrapper를 native C API로 전부 대체한 진단에서도 같은 실패가 재현됐다. 서버가 반환받아 송신한 echo는 전부 client TCP에 도착했다(bytes_acked 일치), stale route 0, 미완료 송신 0.
+
+**트리거는 구성 차이로 보인다.** C는 수신한 packet을 같은 event-loop thread에서 제출하고(`perf_multi_stream_session.hpp:363,371`), C++은 queue에 넣어 별도 dispatcher thread가 제출한다(`perf_stream_server.cpp:243,252,280,312`). 같은 STREAM socket에 recv와 send가 다른 thread에서 동시에 진행되는 구성이며, 공개 계약이 이를 금지하지 않는다(`socket/README.ko.md:49` — "`send`는 여러 thread에서 동시 호출을 허용하는 hot path"). Java·Rust·Go는 같은 공유 raw client 바이너리로 통과하므로 client 문제도 아니다.
+
+**서명이 D-BP12(동시 multipart 제출)·D-B209/D-B210(completion drain owner 공백 — "queue로 옮길 주체가 없다")과 같은 계열이다.** 0.17.2의 MP-7 수정이 이미 덮었을 수 있다.
+
+**조치**: `doc/bug/perf/2026-09-08-core-stream-packet-pump-stall.ko.md`로 머신 B에 보고했다. 요청은 세 가지 — (1) MP-7으로 사라지는지 먼저 확인, (2) 아니면 pump 경계(`stream.cpp:595,685,691,717,731`)에서 원인 특정해 0.17.2에 포함, (3) **Core 통합 테스트에 회귀 테스트 추가**(한 thread가 pull하는 동안 다른 thread가 echo send, 마지막 frame까지 packet API로 반환되는지 — D-BP15와 같은 형태).
+
+**캠페인 처리**: C++ `MULTI_STREAM` 4 transport를 `보류(Core 결함, 0.17.2 대기)`로 기록하고 `tls`로 넘어간다. 하위 계층 결함을 러너에서 보상하지 않는다(§5). .NET도 같은 증상이므로 그 차례에 같은 판정을 적용한다.
