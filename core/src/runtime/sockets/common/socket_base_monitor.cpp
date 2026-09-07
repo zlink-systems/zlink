@@ -64,14 +64,21 @@ int zlink::socket_base_t::monitor_snapshot (zlink_monitor_status_t *out_)
             if (!pipe || pipe->uses_registry_accounting ())
                 continue;
             application_pipe_seen = true;
+            uint64_t snd_pending_msgs;
+            uint64_t rcv_pending_msgs;
+            uint64_t snd_pending_bytes;
+            uint64_t rcv_pending_bytes;
+            pipe->get_pending_snapshot (
+              &snd_pending_msgs, &rcv_pending_msgs, &snd_pending_bytes,
+              &rcv_pending_bytes);
             if (!add_snapshot_counter (
-                  &out_->snd_pending_msgs, pipe->get_snd_pending_msgs ())
+                  &out_->snd_pending_msgs, snd_pending_msgs)
                 || !add_snapshot_counter (
-                  &out_->rcv_pending_msgs, pipe->get_rcv_pending_msgs_approx ())
+                  &out_->rcv_pending_msgs, rcv_pending_msgs)
                 || !add_snapshot_counter (
-                  &out_->snd_bytes_in_flight, pipe->get_snd_pending_bytes ())
+                  &out_->snd_bytes_in_flight, snd_pending_bytes)
                 || !add_snapshot_counter (
-                  &out_->rcv_bytes_in_flight, pipe->get_rcv_pending_bytes_approx ())
+                  &out_->rcv_bytes_in_flight, rcv_pending_bytes)
                 || !add_snapshot_counter (
                   &out_->oversize_message_admission_count,
                   pipe->get_oversize_message_admission_count ())) {

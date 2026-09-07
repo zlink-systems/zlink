@@ -247,6 +247,10 @@ class pipe_t ZLINK_FINAL : public object_t,
     uint64_t get_msgs_read () const;
     uint64_t get_bytes_written () const;
     uint64_t get_bytes_read () const;
+    void get_pending_snapshot (uint64_t *snd_msgs_,
+                               uint64_t *rcv_msgs_,
+                               uint64_t *snd_bytes_,
+                               uint64_t *rcv_bytes_) const;
     bool peer_weight (uint32_t *weight_out_) const;
     uint64_t get_snd_pending_msgs () const;
     uint64_t get_rcv_pending_msgs_approx () const;
@@ -618,10 +622,10 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Handler for delimiter read from the pipe.
     void process_delimiter ();
 
-    //  These helpers require `_out_sync` to be held already. They define the
-    //  coupled outbound invariants that future `_out_sync` refactors must
-    //  preserve: `_out_pipe` lifetime, `_state`, `_out_active`, and
-    //  `_peers_msgs_read` move together across write/flush/terminate paths.
+    //  These helpers require outbound-owner exclusion. Ordinary endpoints and
+    //  topology changes use `_out_sync`; a session I/O writer is the sole
+    //  owner of its write/flush hot path. Cross-owner state used there is
+    //  published through the atomic fields below.
     //  enforce_incremental_hwm_ rejects a multipart as soon as the frames
     //  accumulated so far exceed the HWM, instead of waiting for the final
     //  frame. Only writers that check the HWM per call may ask for it: the
@@ -682,6 +686,18 @@ class pipe_t ZLINK_FINAL : public object_t,
       bool provisional_changed_);
     void publish_session_outbound_accounting_unlocked (
       bool provisional_changed_);
+    static void publish_ledger_unlocked (
+      std::atomic<uint64_t> *sequence_, std::atomic<uint64_t> *msgs_,
+      std::atomic<uint64_t> *bytes_, uint64_t msgs_value_,
+      uint64_t bytes_value_);
+    void publish_outbound_ledger_unlocked (uint64_t msgs_written_,
+                                           uint64_t bytes_written_);
+    static void snapshot_ledger (const std::atomic<uint64_t> &sequence_,
+                                 const std::atomic<uint64_t> &msgs_,
+                                 const std::atomic<uint64_t> &bytes_,
+                                 uint64_t *msgs_value_,
+                                 uint64_t *bytes_value_);
+    void record_oversize_message_admission (uint64_t message_bytes_);
     template <bool WithAdmission>
     bool read_internal (msg_t *msg_, read_admission_fn *admission_,
                         void *userdata_, bool *admission_failed_out_,
@@ -717,8 +733,9 @@ class pipe_t ZLINK_FINAL : public object_t,
     ~pipe_t () ZLINK_OVERRIDE;
 
     //  Underlying pipes for both directions.
-    //  `_out_pipe`, `_state`, `_out_active`, and `_peers_msgs_read` are a
-    //  single outbound state cluster guarded by `_out_sync`.
+    //  `_out_pipe`, `_state`, `_out_active`, and peer credit are a single
+    //  outbound state cluster. The session I/O writer owns its hot path;
+    //  other endpoints and cold topology changes remain under `_out_sync`.
     upipe_t *_in_pipe;
     upipe_t *_out_pipe;
 
@@ -732,7 +749,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  cross through the inbound ypipe's own release/acquire -- so a stale
     //  read only costs the reader one extra `_in_pipe->check_read()`.
     std::atomic<bool> _in_active;
-    bool _out_active;
+    std::atomic<bool> _out_active;
     //  Mirrors membership in the socket's active public receive partition.
     //  The socket owner publishes transitions here so count-1 head
     //  reclassification can avoid scheduler and route-table work when the
@@ -794,9 +811,15 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     //  Number of messages read and written so far.
     uint64_t _msgs_read;
-    uint64_t _msgs_written;
+    std::atomic<uint64_t> _msgs_written;
     uint64_t _bytes_read;
-    uint64_t _bytes_written;
+    std::atomic<uint64_t> _bytes_written;
+    //  Monitor status requires message and byte totals from one coherent
+    //  publication in each direction. Even values are stable; odd values
+    //  delimit the sole writer's two release stores without narrowing either
+    //  64-bit counter.
+    std::atomic<uint64_t> _outbound_ledger_sequence;
+    std::atomic<uint64_t> _inbound_ledger_sequence;
     std::atomic<uint64_t> _published_msgs_read;
     std::atomic<uint64_t> _published_bytes_read;
     // Only multipart reads need this extra publication. Single-part traffic
@@ -817,12 +840,12 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool _decoder_multipart_started_empty;
     //  Public payload bound for one complete message, or 0 when unlimited.
     uint64_t _max_message_bytes;
-    uint64_t _oversize_message_admission_count;
-    uint64_t _oversize_message_admission_max_bytes;
+    std::atomic<uint64_t> _oversize_message_admission_count;
+    std::atomic<uint64_t> _oversize_message_admission_max_bytes;
     //  Last received peer's msgs_read. The actual number in the peer
     //  can be higher at the moment.
-    uint64_t _peers_msgs_read;
-    uint64_t _peers_bytes_read;
+    std::atomic<uint64_t> _peers_msgs_read;
+    std::atomic<uint64_t> _peers_bytes_read;
 
     //  The pipe object on the other side of the pipepair. Each non-null link
     //  owns one lifetime reference on the pointed-to endpoint. Termination
@@ -971,7 +994,7 @@ inline pipe_message_admission_t pipe_t::write_state_admission_unlocked () const
         _waiting_for_flow_resume.store (true, std::memory_order_release);
         return pipe_message_admission_transport_wait;
     }
-    if (!_out_active)
+    if (!_out_active.load (std::memory_order_acquire))
         return pipe_message_admission_hwm_full;
     return pipe_message_admission_ready;
 }
@@ -988,8 +1011,12 @@ pipe_t::write_state_ready_unlocked (pipe_message_admission_t *admission_out_) co
 
 inline bool pipe_t::check_hwm_unlocked () const
 {
+    const uint64_t bytes_written =
+      _bytes_written.load (std::memory_order_acquire);
+    const uint64_t peers_bytes_read =
+      _peers_bytes_read.load (std::memory_order_acquire);
     const uint64_t in_flight =
-      _bytes_written > _peers_bytes_read ? _bytes_written - _peers_bytes_read : 0;
+      bytes_written > peers_bytes_read ? bytes_written - peers_bytes_read : 0;
     const bool full = _hwm > 0 && in_flight >= _hwm;
     return !full;
 }
@@ -1064,8 +1091,12 @@ pipe_t::can_commit_bytes_unlocked (uint64_t message_bytes_,
     if (_hwm == 0)
         return true;
 
+    const uint64_t bytes_written =
+      _bytes_written.load (std::memory_order_acquire);
+    const uint64_t peers_bytes_read =
+      _peers_bytes_read.load (std::memory_order_acquire);
     const uint64_t in_flight =
-      _bytes_written > _peers_bytes_read ? _bytes_written - _peers_bytes_read : 0;
+      bytes_written > peers_bytes_read ? bytes_written - peers_bytes_read : 0;
     if (allow_empty_pipe_exception_ && in_flight == 0) {
         //  An empty pipe admits one message larger than the HWM so that a
         //  complete message is not rejected for a small HWM alone. An

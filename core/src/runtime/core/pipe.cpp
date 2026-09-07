@@ -311,6 +311,8 @@ zlink::pipe_t::pipe_t (object_t *parent_,
     _msgs_written (0),
     _bytes_read (0),
     _bytes_written (0),
+    _outbound_ledger_sequence (0),
+    _inbound_ledger_sequence (0),
     _published_msgs_read (0),
     _published_bytes_read (0),
     _published_incomplete_bytes_read (0),
@@ -776,24 +778,120 @@ const zlink::blob_t &zlink::pipe_t::get_transport_peer_identity () const
 
 uint64_t zlink::pipe_t::get_msgs_written () const
 {
-    scoped_optional_lock_t lock (const_cast<mutex_t *> (&_out_sync));
-    return _msgs_written;
+    return _msgs_written.load (std::memory_order_acquire);
 }
 
 uint64_t zlink::pipe_t::get_msgs_read () const
 {
-    return _published_msgs_read.load (std::memory_order_relaxed);
+    return _published_msgs_read.load (std::memory_order_acquire);
 }
 
 uint64_t zlink::pipe_t::get_bytes_written () const
 {
-    scoped_optional_lock_t lock (const_cast<mutex_t *> (&_out_sync));
-    return _bytes_written;
+    return _bytes_written.load (std::memory_order_acquire);
 }
 
 uint64_t zlink::pipe_t::get_bytes_read () const
 {
-    return _published_bytes_read.load (std::memory_order_relaxed);
+    return _published_bytes_read.load (std::memory_order_acquire);
+}
+
+void zlink::pipe_t::snapshot_ledger (
+  const std::atomic<uint64_t> &sequence_,
+  const std::atomic<uint64_t> &msgs_,
+  const std::atomic<uint64_t> &bytes_,
+  uint64_t *msgs_value_, uint64_t *bytes_value_)
+{
+    zlink_assert (msgs_value_);
+    zlink_assert (bytes_value_);
+
+    for (;;) {
+        const uint64_t sequence_before =
+          sequence_.load (std::memory_order_acquire);
+        if (sequence_before & 1u)
+            continue;
+        const uint64_t msgs_value = msgs_.load (std::memory_order_acquire);
+        const uint64_t bytes_value = bytes_.load (std::memory_order_acquire);
+        const uint64_t sequence_after =
+          sequence_.load (std::memory_order_acquire);
+        if (sequence_before == sequence_after) {
+            *msgs_value_ = msgs_value;
+            *bytes_value_ = bytes_value;
+            return;
+        }
+    }
+}
+
+void zlink::pipe_t::publish_ledger_unlocked (
+  std::atomic<uint64_t> *sequence_, std::atomic<uint64_t> *msgs_,
+  std::atomic<uint64_t> *bytes_, uint64_t msgs_value_,
+  uint64_t bytes_value_)
+{
+    const uint64_t sequence =
+      sequence_->load (std::memory_order_relaxed);
+    zlink_assert ((sequence & 1u) == 0);
+    const uint64_t prior =
+      sequence_->exchange (sequence + 1, std::memory_order_acq_rel);
+    zlink_assert (prior == sequence);
+    msgs_->store (msgs_value_, std::memory_order_release);
+    bytes_->store (bytes_value_, std::memory_order_release);
+    sequence_->store (sequence + 2, std::memory_order_release);
+}
+
+void zlink::pipe_t::publish_outbound_ledger_unlocked (
+  uint64_t msgs_written_, uint64_t bytes_written_)
+{
+    publish_ledger_unlocked (&_outbound_ledger_sequence, &_msgs_written,
+                             &_bytes_written, msgs_written_, bytes_written_);
+}
+
+void zlink::pipe_t::get_pending_snapshot (
+  uint64_t *snd_msgs_, uint64_t *rcv_msgs_, uint64_t *snd_bytes_,
+  uint64_t *rcv_bytes_) const
+{
+    zlink_assert (snd_msgs_);
+    zlink_assert (rcv_msgs_);
+    zlink_assert (snd_bytes_);
+    zlink_assert (rcv_bytes_);
+
+    scoped_optional_lock_t lock (const_cast<mutex_t *> (&_out_sync));
+    uint64_t msgs_written;
+    uint64_t bytes_written;
+    snapshot_ledger (_outbound_ledger_sequence, _msgs_written,
+                     _bytes_written, &msgs_written, &bytes_written);
+    const uint64_t peers_msgs_read =
+      _peers_msgs_read.load (std::memory_order_acquire);
+    const uint64_t peers_bytes_read =
+      _peers_bytes_read.load (std::memory_order_acquire);
+    *snd_msgs_ = msgs_written > peers_msgs_read
+                   ? msgs_written - peers_msgs_read
+                   : 0;
+    *snd_bytes_ = bytes_written > peers_bytes_read
+                    ? bytes_written - peers_bytes_read
+                    : 0;
+
+    *rcv_msgs_ = 0;
+    *rcv_bytes_ = 0;
+    pipe_t *const peer = retain_peer_snapshot_unlocked ();
+    if (!peer)
+        return;
+
+    uint64_t peer_msgs_written;
+    uint64_t peer_bytes_written;
+    snapshot_ledger (peer->_outbound_ledger_sequence, peer->_msgs_written,
+                     peer->_bytes_written, &peer_msgs_written,
+                     &peer_bytes_written);
+    peer->release_lifetime_ref ();
+    uint64_t msgs_read;
+    uint64_t bytes_read;
+    snapshot_ledger (_inbound_ledger_sequence, _published_msgs_read,
+                     _published_bytes_read, &msgs_read, &bytes_read);
+    *rcv_msgs_ = peer_msgs_written > msgs_read
+                   ? peer_msgs_written - msgs_read
+                   : 0;
+    *rcv_bytes_ = peer_bytes_written > bytes_read
+                    ? peer_bytes_written - bytes_read
+                    : 0;
 }
 
 bool zlink::pipe_t::peer_weight (uint32_t *weight_out_) const
@@ -814,9 +912,13 @@ bool zlink::pipe_t::peer_weight (uint32_t *weight_out_) const
 uint64_t zlink::pipe_t::get_snd_pending_msgs () const
 {
     scoped_optional_lock_t lock (const_cast<mutex_t *> (&_out_sync));
-    if (_msgs_written <= _peers_msgs_read)
+    const uint64_t msgs_written =
+      _msgs_written.load (std::memory_order_acquire);
+    const uint64_t peers_msgs_read =
+      _peers_msgs_read.load (std::memory_order_acquire);
+    if (msgs_written <= peers_msgs_read)
         return 0;
-    return _msgs_written - _peers_msgs_read;
+    return msgs_written - peers_msgs_read;
 }
 
 uint64_t zlink::pipe_t::get_rcv_pending_msgs_approx () const
@@ -836,7 +938,8 @@ uint64_t zlink::pipe_t::get_rcv_pending_msgs_approx () const
 uint64_t zlink::pipe_t::get_snd_pending_bytes () const
 {
     scoped_optional_lock_t lock (const_cast<mutex_t *> (&_out_sync));
-    uint64_t peer_bytes_read = _peers_bytes_read;
+    uint64_t peer_bytes_read =
+      _peers_bytes_read.load (std::memory_order_acquire);
     pipe_t *const peer = retain_peer_snapshot_unlocked ();
     if (peer) {
         const uint64_t published =
@@ -845,9 +948,11 @@ uint64_t zlink::pipe_t::get_snd_pending_bytes () const
             peer_bytes_read = published;
         peer->release_lifetime_ref ();
     }
-    if (_bytes_written <= peer_bytes_read)
+    const uint64_t bytes_written =
+      _bytes_written.load (std::memory_order_acquire);
+    if (bytes_written <= peer_bytes_read)
         return 0;
-    return _bytes_written - peer_bytes_read;
+    return bytes_written - peer_bytes_read;
 }
 
 uint64_t zlink::pipe_t::get_rcv_pending_bytes_approx () const
@@ -936,35 +1041,54 @@ void zlink::pipe_t::apply_physical_queue_hwm_plan ()
 
 uint64_t zlink::pipe_t::get_oversize_message_admission_count () const
 {
-    scoped_optional_lock_t lock (const_cast<mutex_t *> (&_out_sync));
-    return _oversize_message_admission_count;
+    return _oversize_message_admission_count.load (std::memory_order_acquire);
 }
 
 uint64_t zlink::pipe_t::get_oversize_message_admission_max_bytes () const
 {
-    scoped_optional_lock_t lock (const_cast<mutex_t *> (&_out_sync));
-    return _oversize_message_admission_max_bytes;
+    return _oversize_message_admission_max_bytes.load (
+      std::memory_order_acquire);
 }
 
 void zlink::pipe_t::reset_oversize_message_admission_metrics ()
 {
     scoped_lock_t lock (_out_sync);
-    _oversize_message_admission_count = 0;
-    _oversize_message_admission_max_bytes = 0;
+    _oversize_message_admission_count.store (0, std::memory_order_release);
+    _oversize_message_admission_max_bytes.store (0,
+                                                  std::memory_order_release);
+}
+
+void zlink::pipe_t::record_oversize_message_admission (
+  uint64_t message_bytes_)
+{
+    _oversize_message_admission_count.fetch_add (1,
+                                                  std::memory_order_acq_rel);
+    uint64_t current = _oversize_message_admission_max_bytes.load (
+      std::memory_order_acquire);
+    while (current < message_bytes_
+           && !_oversize_message_admission_max_bytes.compare_exchange_weak (
+             current, message_bytes_, std::memory_order_acq_rel,
+             std::memory_order_acquire)) {
+    }
 }
 
 void zlink::pipe_t::refresh_write_credit (uint64_t peer_msgs_read_, uint64_t peer_bytes_read_)
 {
     scoped_lock_t lock (_out_sync);
 
-    if (peer_msgs_read_ > _peers_msgs_read)
-        _peers_msgs_read = peer_msgs_read_;
-    if (peer_bytes_read_ > _peers_bytes_read)
-        _peers_bytes_read = peer_bytes_read_;
+    if (peer_msgs_read_
+        > _peers_msgs_read.load (std::memory_order_acquire))
+        _peers_msgs_read.store (peer_msgs_read_, std::memory_order_release);
+    if (peer_bytes_read_
+        > _peers_bytes_read.load (std::memory_order_acquire))
+        _peers_bytes_read.store (peer_bytes_read_, std::memory_order_release);
 
-    if (!_transport_pair_write_held && !_out_active && _state == active
-        && check_hwm_unlocked ()) {
-        _out_active = true;
+    bool expected = false;
+    if (!_transport_pair_write_held && _state == active
+        && check_hwm_unlocked ()
+        && _out_active.compare_exchange_strong (
+          expected, true, std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
         _waiting_for_byte_credit.store (false, std::memory_order_release);
     }
 }
@@ -1238,10 +1362,14 @@ int zlink::pipe_t::reserve_inbound_decoder_frame (
         return -1;
     }
 
+    uint64_t bytes_written =
+      _bytes_written.load (std::memory_order_acquire);
+    uint64_t peers_bytes_read =
+      _peers_bytes_read.load (std::memory_order_acquire);
     bool multipart_started_empty = track_multipart_
       && (_decoder_multipart_started_empty
           || (_out_incomplete_bytes == 0
-              && _bytes_written <= _peers_bytes_read));
+              && bytes_written <= peers_bytes_read));
 
     const uint64_t frame_bytes =
       payload_bytes_ > UINT64_MAX - static_cast<uint64_t> (sizeof (msg_t))
@@ -1258,31 +1386,38 @@ int zlink::pipe_t::reserve_inbound_decoder_frame (
     const bool byte_credit_ready =
       _hwm == 0 || allow_empty_exception
       || (candidate_bytes != UINT64_MAX
-          && (_bytes_written <= _peers_bytes_read
+          && (bytes_written <= peers_bytes_read
                 ? candidate_bytes <= _hwm
-                : _bytes_written - _peers_bytes_read <= _hwm
+                : bytes_written - peers_bytes_read <= _hwm
                     && candidate_bytes
-                         <= _hwm - (_bytes_written - _peers_bytes_read)));
+                         <= _hwm - (bytes_written - peers_bytes_read)));
     if (!byte_credit_ready) {
         refresh_peer_credit_snapshot_unlocked ();
+        bytes_written = _bytes_written.load (std::memory_order_acquire);
+        peers_bytes_read =
+          _peers_bytes_read.load (std::memory_order_acquire);
         if (track_multipart_ && !multipart_started_empty
             && _out_incomplete_bytes == 0
-            && _bytes_written <= _peers_bytes_read) {
+            && bytes_written <= peers_bytes_read) {
             multipart_started_empty = true;
             allow_empty_exception = !more;
         }
         const uint64_t in_flight =
-          _bytes_written > _peers_bytes_read
-            ? _bytes_written - _peers_bytes_read
+          bytes_written > peers_bytes_read
+            ? bytes_written - peers_bytes_read
             : 0;
         if (_hwm > 0 && !allow_empty_exception
             && (candidate_bytes == UINT64_MAX || in_flight > _hwm
                 || candidate_bytes > _hwm - in_flight)) {
             arm_hwm_credit_wait_unlocked ();
             refresh_peer_credit_snapshot_unlocked ();
+            bytes_written =
+              _bytes_written.load (std::memory_order_acquire);
+            peers_bytes_read =
+              _peers_bytes_read.load (std::memory_order_acquire);
             const uint64_t refreshed_in_flight =
-              _bytes_written > _peers_bytes_read
-                ? _bytes_written - _peers_bytes_read
+              bytes_written > peers_bytes_read
+                ? bytes_written - peers_bytes_read
                 : 0;
             const bool refreshed_ready =
               candidate_bytes != UINT64_MAX
@@ -1329,8 +1464,10 @@ int zlink::pipe_t::reserve_inbound_decoder_frame (
         //  waiter transition only when credit recovery actually changes the
         //  writer state; rewriting the shared marker for every decoded frame
         //  creates avoidable reader-side cache traffic.
-        if (!_out_active) {
-            _out_active = true;
+        bool expected = false;
+        if (_out_active.compare_exchange_strong (
+              expected, true, std::memory_order_acq_rel,
+              std::memory_order_acquire)) {
             _waiting_for_byte_credit.store (false,
                                              std::memory_order_release);
         }
@@ -1402,9 +1539,13 @@ int zlink::pipe_t::write_reserved_decoder_frame (
 
         const bool more = (reserved->msg_flags & msg_t::more) != 0;
         const bool complete_frame = !more && !msg_->is_delimiter ();
+        const uint64_t bytes_written =
+          _bytes_written.load (std::memory_order_acquire);
+        const uint64_t peers_bytes_read =
+          _peers_bytes_read.load (std::memory_order_acquire);
         const uint64_t in_flight =
-          _bytes_written > _peers_bytes_read
-            ? _bytes_written - _peers_bytes_read
+          bytes_written > peers_bytes_read
+            ? bytes_written - peers_bytes_read
             : 0;
         const bool oversize =
           complete_frame && _hwm > 0 && in_flight == 0
@@ -1413,18 +1554,20 @@ int zlink::pipe_t::write_reserved_decoder_frame (
         _out_pipe->write (*msg_, more);
         if (complete_frame) {
             const uint64_t message_bytes = _out_incomplete_bytes;
-            _bytes_written = UINT64_MAX - _bytes_written < message_bytes
-                               ? UINT64_MAX
-                               : _bytes_written + message_bytes;
+            const uint64_t msgs_written =
+              _msgs_written.load (std::memory_order_acquire);
+            const uint64_t new_bytes_written =
+              UINT64_MAX - bytes_written < message_bytes
+                ? UINT64_MAX
+                : bytes_written + message_bytes;
+            uint64_t new_msgs_written = msgs_written;
             if (!msg_->is_routing_id () && !msg_->is_credential ())
-                ++_msgs_written;
+                ++new_msgs_written;
+            publish_outbound_ledger_unlocked (new_msgs_written,
+                                              new_bytes_written);
             _out_complete_record_pending = true;
-            if (oversize) {
-                ++_oversize_message_admission_count;
-                _oversize_message_admission_max_bytes =
-                  std::max (_oversize_message_admission_max_bytes,
-                            message_bytes);
-            }
+            if (oversize)
+                record_oversize_message_admission (message_bytes);
             _out_incomplete_bytes = 0;
             _out_incomplete_payload_bytes = 0;
             _out_multipart_started_empty = false;
@@ -1458,9 +1601,13 @@ int zlink::pipe_t::write_reserved_decoder_frame (
 
     const bool more = (msg_->flags () & msg_t::more) != 0;
     const bool complete_frame = !more && !msg_->is_delimiter ();
+    const uint64_t bytes_written =
+      _bytes_written.load (std::memory_order_acquire);
+    const uint64_t peers_bytes_read =
+      _peers_bytes_read.load (std::memory_order_acquire);
     const uint64_t in_flight =
-      _bytes_written > _peers_bytes_read
-        ? _bytes_written - _peers_bytes_read
+      bytes_written > peers_bytes_read
+        ? bytes_written - peers_bytes_read
         : 0;
     bool oversize = complete_frame && _hwm > 0 && in_flight == 0
                     && _out_incomplete_bytes > _hwm;
@@ -1480,18 +1627,20 @@ int zlink::pipe_t::write_reserved_decoder_frame (
     publish_outbound_frame_unlocked (*msg_, more);
     if (complete_frame) {
         const uint64_t message_bytes = _out_incomplete_bytes;
-        _bytes_written = UINT64_MAX - _bytes_written < message_bytes
-                           ? UINT64_MAX
-                           : _bytes_written + message_bytes;
+        const uint64_t msgs_written =
+          _msgs_written.load (std::memory_order_acquire);
+        const uint64_t new_bytes_written =
+          UINT64_MAX - bytes_written < message_bytes
+            ? UINT64_MAX
+            : bytes_written + message_bytes;
+        uint64_t new_msgs_written = msgs_written;
         if (!msg_->is_routing_id () && !msg_->is_credential ())
-            ++_msgs_written;
+            ++new_msgs_written;
+        publish_outbound_ledger_unlocked (new_msgs_written,
+                                          new_bytes_written);
         _out_complete_record_pending = true;
-        if (oversize) {
-            ++_oversize_message_admission_count;
-            _oversize_message_admission_max_bytes =
-              std::max (_oversize_message_admission_max_bytes,
-                        message_bytes);
-        }
+        if (oversize)
+            record_oversize_message_admission (message_bytes);
         _out_incomplete_bytes = 0;
         _out_incomplete_payload_bytes = 0;
         _out_multipart_started_empty = false;
@@ -1602,8 +1751,10 @@ void zlink::pipe_t::release_request_correlation (uint64_t accounted_bytes_)
             _request_correlation_waiting = false;
             _request_correlation_activation_pending = true;
             generation = _out_generation;
-            msgs_read = _peers_msgs_read;
-            bytes_read = _peers_bytes_read;
+            msgs_read =
+              _peers_msgs_read.load (std::memory_order_acquire);
+            bytes_read =
+              _peers_bytes_read.load (std::memory_order_acquire);
             schedule_activation = true;
         }
     }
@@ -1711,7 +1862,7 @@ bool zlink::pipe_t::remote_flow_blocks_next_message () const
 
 void zlink::pipe_t::arm_hwm_credit_wait_unlocked ()
 {
-    _out_active = false;
+    _out_active.store (false, std::memory_order_release);
     _waiting_for_byte_credit.store (true, std::memory_order_release);
     // Pair the waiter publication with the following peer-credit sample. A
     // racing reader either observes the waiter and emits activate_write, or
@@ -1721,7 +1872,7 @@ void zlink::pipe_t::arm_hwm_credit_wait_unlocked ()
 
 void zlink::pipe_t::clear_hwm_credit_wait_unlocked ()
 {
-    _out_active = true;
+    _out_active.store (true, std::memory_order_release);
     _waiting_for_byte_credit.store (false, std::memory_order_release);
 }
 
@@ -1765,7 +1916,7 @@ bool zlink::pipe_t::take_hwm_credit_recovery ()
     // If another sender filled the pipe in that interval, _out_active is false
     // and this marker belongs to the new wait, not the activation being
     // delivered. Preserve it so the next peer drain still emits a wake.
-    if (recovery && _out_active)
+    if (recovery && _out_active.load (std::memory_order_acquire))
         _waiting_for_byte_credit.store (false, std::memory_order_release);
     return recovery;
 }
@@ -1780,7 +1931,7 @@ void zlink::pipe_t::hold_writes_until_transport_pair_ready ()
 {
     scoped_lock_t lock (_out_sync);
     _transport_pair_write_held = true;
-    _out_active = false;
+    _out_active.store (false, std::memory_order_release);
 }
 
 bool zlink::pipe_t::release_writes_for_transport_pair ()
@@ -1794,7 +1945,7 @@ bool zlink::pipe_t::release_writes_for_transport_pair ()
     // the writer when the empty pipe can admit its first complete message.
     if (_state != active || !hwm_credit_ready_unlocked (NULL))
         return false;
-    _out_active = true;
+    _out_active.store (true, std::memory_order_release);
     //  This transition removes only the transport-wait cause. A remote PAUSE
     //  that is still in effect keeps the pipe unwritable.
     return !remote_flow_blocked_unlocked ();
@@ -1821,7 +1972,7 @@ void zlink::pipe_t::test_flow_probe (bool *out_active_,
 {
     scoped_lock_t lock (_out_sync);
     if (out_active_)
-        *out_active_ = _out_active;
+        *out_active_ = _out_active.load (std::memory_order_acquire);
     //  Deliberately the cached peer credit, without refreshing it: a test has
     //  to be able to see that the writer still believes it is full.
     if (hwm_full_)
@@ -1831,10 +1982,15 @@ void zlink::pipe_t::test_flow_probe (bool *out_active_,
     if (byte_credit_waiter_)
         *byte_credit_waiter_ =
           _waiting_for_byte_credit.load (std::memory_order_acquire);
-    if (in_flight_bytes_)
-        *in_flight_bytes_ = _bytes_written > _peers_bytes_read
-                              ? _bytes_written - _peers_bytes_read
+    if (in_flight_bytes_) {
+        const uint64_t bytes_written =
+          _bytes_written.load (std::memory_order_acquire);
+        const uint64_t peers_bytes_read =
+          _peers_bytes_read.load (std::memory_order_acquire);
+        *in_flight_bytes_ = bytes_written > peers_bytes_read
+                              ? bytes_written - peers_bytes_read
                               : 0;
+    }
 }
 
 #endif
@@ -1966,7 +2122,7 @@ bool zlink::pipe_t::apply_remote_flow_state (
         //  transport-pair hold keep their own state, so the send-ready edge is
         //  published only when every cause is clear.
         if (!paused && _state == active && !_transport_pair_write_held
-            && _out_active) {
+            && _out_active.load (std::memory_order_acquire)) {
             //  A send refused by the remote cause never evaluated the HWM, so
             //  no cause currently owns the pending wake. Hand it to the
             //  byte-credit cause using the classic lost-wakeup discipline:
@@ -1990,11 +2146,11 @@ bool zlink::pipe_t::apply_remote_flow_state (
             //  wake. A remote resume must not replace that decision with the
             //  coarser current-in-flight check: no peer credit was returned,
             //  and the part that reached HWM can still be rejected.
-            _out_active = false;
+            _out_active.store (false, std::memory_order_release);
             _waiting_for_byte_credit.store (true, std::memory_order_release);
             std::atomic_thread_fence (std::memory_order_seq_cst);
             if (check_hwm_with_peer_snapshot_unlocked ()) {
-                _out_active = true;
+                _out_active.store (true, std::memory_order_release);
                 notify = true;
             }
         }
@@ -2020,7 +2176,7 @@ bool zlink::pipe_t::write (
     // Hot path: PAIR/DEALER steady-state send reaches this path for every
     // message. Keep changes here tightly justified against thread-safe pipe
     // state transitions.
-    scoped_lock_t lock (_out_sync);
+    scoped_optional_lock_t lock (_session_io_writer ? NULL : &_out_sync);
     if (unlikely (!admit_write_unlocked (admission_out_)))
         return false;
 
@@ -2198,13 +2354,19 @@ bool zlink::pipe_t::append_pending_peer_controls_unlocked ()
         } else {
             _out_pipe->write (command, false);
         }
-        _bytes_written =
+        const uint64_t bytes_written =
+          _bytes_written.load (std::memory_order_acquire);
+        const uint64_t msgs_written =
+          _msgs_written.load (std::memory_order_acquire);
+        const uint64_t new_bytes_written =
           control_bytes == UINT64_MAX
-              || UINT64_MAX - _bytes_written < control_bytes
+              || UINT64_MAX - bytes_written < control_bytes
             ? UINT64_MAX
-            : _bytes_written + control_bytes;
-        if (_msgs_written != UINT64_MAX)
-            ++_msgs_written;
+            : bytes_written + control_bytes;
+        const uint64_t new_msgs_written =
+          msgs_written == UINT64_MAX ? UINT64_MAX : msgs_written + 1;
+        publish_outbound_ledger_unlocked (new_msgs_written,
+                                          new_bytes_written);
         _out_complete_record_pending = true;
         const int reset_rc = command.init ();
         errno_assert (reset_rc == 0);
@@ -2514,7 +2676,8 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
         if (unlikely (!can_commit_bytes_with_peer_snapshot_unlocked (
                         frame_bytes, payload_bytes, true))) {
             bool credit_ready = false;
-            if (_bytes_written > _peers_bytes_read) {
+            if (_bytes_written.load (std::memory_order_acquire)
+                > _peers_bytes_read.load (std::memory_order_acquire)) {
                 arm_hwm_credit_wait_unlocked ();
                 credit_ready = can_commit_bytes_with_peer_snapshot_unlocked (
                   frame_bytes, payload_bytes, true);
@@ -2530,20 +2693,28 @@ bool zlink::pipe_t::write_single_message_and_flush_no_recursive_hwm_check (
         }
 
         _out_pipe->write (*msg_, false);
+        const uint64_t bytes_written =
+          _bytes_written.load (std::memory_order_acquire);
+        const uint64_t peers_bytes_read =
+          _peers_bytes_read.load (std::memory_order_acquire);
         const uint64_t in_flight =
-          _bytes_written > _peers_bytes_read
-            ? _bytes_written - _peers_bytes_read
+          bytes_written > peers_bytes_read
+            ? bytes_written - peers_bytes_read
             : 0;
         if (_hwm > 0 && in_flight == 0 && frame_bytes > _hwm) {
-            ++_oversize_message_admission_count;
-            _oversize_message_admission_max_bytes = std::max (
-              _oversize_message_admission_max_bytes, frame_bytes);
+            record_oversize_message_admission (frame_bytes);
         }
-        _bytes_written = UINT64_MAX - _bytes_written < frame_bytes
-                           ? UINT64_MAX
-                           : _bytes_written + frame_bytes;
+        const uint64_t msgs_written =
+          _msgs_written.load (std::memory_order_acquire);
+        const uint64_t new_bytes_written =
+          UINT64_MAX - bytes_written < frame_bytes
+            ? UINT64_MAX
+            : bytes_written + frame_bytes;
+        uint64_t new_msgs_written = msgs_written;
         if (!msg_->is_routing_id () && !msg_->is_credential ())
-            ++_msgs_written;
+            ++new_msgs_written;
+        publish_outbound_ledger_unlocked (new_msgs_written,
+                                          new_bytes_written);
         _out_complete_record_pending = true;
         if (admission_out_)
             *admission_out_ = pipe_message_admission_ready;
@@ -2646,7 +2817,7 @@ bool zlink::pipe_t::rollback_incomplete ()
 void zlink::pipe_t::flush ()
 {
     // Hot path: single-part send flushes on every completed message.
-    scoped_lock_t lock (_out_sync);
+    scoped_optional_lock_t lock (_session_io_writer ? NULL : &_out_sync);
     flush_unlocked ();
 }
 
@@ -2715,7 +2886,8 @@ void zlink::pipe_t::process_activate_write (uint64_t generation_,
             // request was rejected, but that must not consume this wake.
             _request_correlation_recovery.store (true,
                                                   std::memory_order_release);
-            notify = _state == active && _out_active
+            notify = _state == active
+                     && _out_active.load (std::memory_order_acquire)
                      && !_transport_pair_write_held
                      && !remote_flow_blocked_unlocked ()
                      && check_hwm_unlocked ();
@@ -2723,12 +2895,15 @@ void zlink::pipe_t::process_activate_write (uint64_t generation_,
 
         if (generation_ == _out_generation) {
             //  Remember the peer's message sequence number.
-            _peers_msgs_read = msgs_read_;
-            _peers_bytes_read = bytes_read_;
+            _peers_msgs_read.store (msgs_read_, std::memory_order_release);
+            _peers_bytes_read.store (bytes_read_, std::memory_order_release);
 
-            if (!_transport_pair_write_held && !_out_active && _state == active
-                && check_hwm_unlocked ()) {
-                _out_active = true;
+            bool expected = false;
+            if (!_transport_pair_write_held && _state == active
+                && check_hwm_unlocked ()
+                && _out_active.compare_exchange_strong (
+                  expected, true, std::memory_order_acq_rel,
+                  std::memory_order_acquire)) {
                 //  Byte credit removes only the HWM cause. While the peer keeps
                 //  this pipe PAUSED the send-ready edge stays suppressed; the
                 //  resume transition publishes it once every cause is clear.
@@ -2754,26 +2929,12 @@ void zlink::pipe_t::process_hiccup (void *pipe_, uint64_t generation_)
         zlink_assert (_out_pipe);
         _out_pipe->flush ();
         msg_t msg;
-        uint64_t drained_message_bytes = 0;
         while (_out_pipe->read (&msg)) {
             const uint64_t frame_bytes = frame_accounted_bytes (&msg);
             if (!msg.is_delimiter () && _registry_accounting)
                 get_ctx ()->_physical_queue_registry.release_committed_frame (
                   _out_physical_queue, frame_bytes,
                   counted_pending_message_ref (msg));
-            drained_message_bytes =
-              UINT64_MAX - drained_message_bytes < frame_bytes
-                ? UINT64_MAX
-                : drained_message_bytes + frame_bytes;
-            if (!(msg.flags () & msg_t::more) && !msg.is_routing_id ()
-                && !msg.is_credential () && !msg.is_delimiter ()) {
-                _msgs_written--;
-                _bytes_written =
-                  _bytes_written > drained_message_bytes
-                    ? _bytes_written - drained_message_bytes
-                    : 0;
-                drained_message_bytes = 0;
-            }
             const int rc = msg.close ();
             errno_assert (rc == 0);
         }
@@ -2800,13 +2961,13 @@ void zlink::pipe_t::process_hiccup (void *pipe_, uint64_t generation_)
         //  Plug in the new outpipe.
         zlink_assert (pipe_);
         _out_pipe = static_cast<upipe_t *> (pipe_);
-        _out_active = !_transport_pair_write_held;
+        _out_active.store (!_transport_pair_write_held,
+                           std::memory_order_release);
         _out_generation = generation_;
-        _msgs_written = 0;
         _out_complete_record_pending = false;
-        _bytes_written = 0;
-        _peers_msgs_read = 0;
-        _peers_bytes_read = 0;
+        publish_outbound_ledger_unlocked (0, 0);
+        _peers_msgs_read.store (0, std::memory_order_release);
+        _peers_bytes_read.store (0, std::memory_order_release);
         _waiting_for_byte_credit.store (false, std::memory_order_release);
         publish_session_outbound_accounting_unlocked (true);
 
@@ -3050,7 +3211,7 @@ void zlink::pipe_t::terminate (bool delay_)
     }
 
     //  Stop outbound flow of messages.
-    _out_active = false;
+    _out_active.store (false, std::memory_order_release);
 
     if (_out_pipe) {
         //  Drop any unfinished outbound messages.
@@ -3148,8 +3309,9 @@ void zlink::pipe_t::hiccup ()
     _msgs_read = 0;
     _bytes_read = 0;
     _published_incomplete_bytes_read.store (0, std::memory_order_release);
-    _published_msgs_read.store (0, std::memory_order_release);
-    _published_bytes_read.store (0, std::memory_order_release);
+    publish_ledger_unlocked (&_inbound_ledger_sequence,
+                             &_published_msgs_read, &_published_bytes_read, 0,
+                             0);
     _last_credit_bytes_read = 0;
     _in_incomplete_bytes = 0;
 
@@ -3211,7 +3373,8 @@ void zlink::pipe_t::set_lwm_hint (uint64_t lwm_hint_)
 bool zlink::pipe_t::check_hwm () const
 {
     scoped_optional_lock_t lock (const_cast<mutex_t *> (&_out_sync));
-    return _out_active && _state == active && check_hwm_unlocked ();
+    return _out_active.load (std::memory_order_acquire) && _state == active
+           && check_hwm_unlocked ();
 }
 
 zlink::pipe_message_admission_t
@@ -3225,7 +3388,7 @@ zlink::pipe_t::check_hwm_for_message (const msg_t *msg_)
         return pipe_message_admission_inactive;
     if (_transport_pair_write_held)
         return pipe_message_admission_transport_wait;
-    if (!_out_active) {
+    if (!_out_active.load (std::memory_order_acquire)) {
         // dist_t keeps a pipe in its matching set when message preflight is
         // rejected, so it can safely consume credit published by the peer
         // before the owner processes the matching activate_write command.
@@ -3263,7 +3426,8 @@ zlink::pipe_t::check_hwm_for_message (const msg_t *msg_)
             && (_out_incomplete_bytes == 0
                 || _out_multipart_started_empty))) {
         bool credit_ready = false;
-        if (_bytes_written > _peers_bytes_read) {
+        if (_bytes_written.load (std::memory_order_acquire)
+            > _peers_bytes_read.load (std::memory_order_acquire)) {
             arm_hwm_credit_wait_unlocked ();
             credit_ready = can_commit_bytes_with_peer_snapshot_unlocked (
               _out_incomplete_bytes + frame_bytes, prospective_payload,
@@ -3289,10 +3453,12 @@ void zlink::pipe_t::refresh_peer_credit_snapshot_unlocked ()
       peer->_published_msgs_read.load (std::memory_order_acquire);
     const uint64_t peer_bytes_read =
       peer->_published_bytes_read.load (std::memory_order_acquire);
-    if (peer_msgs_read > _peers_msgs_read)
-        _peers_msgs_read = peer_msgs_read;
-    if (peer_bytes_read > _peers_bytes_read)
-        _peers_bytes_read = peer_bytes_read;
+    if (peer_msgs_read
+        > _peers_msgs_read.load (std::memory_order_acquire))
+        _peers_msgs_read.store (peer_msgs_read, std::memory_order_release);
+    if (peer_bytes_read
+        > _peers_bytes_read.load (std::memory_order_acquire))
+        _peers_bytes_read.store (peer_bytes_read, std::memory_order_release);
 }
 
 void zlink::pipe_t::send_hwms_to_peer (uint64_t inhwm_, uint64_t outhwm_)
@@ -3589,7 +3755,8 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
     if (more && incomplete_before == 0) {
         refresh_peer_credit_snapshot_unlocked ();
         _out_multipart_started_empty =
-          _bytes_written <= _peers_bytes_read;
+          _bytes_written.load (std::memory_order_acquire)
+          <= _peers_bytes_read.load (std::memory_order_acquire);
     }
     bool commit_credit_ready =
       !(commits_bytes || enforce_incremental_hwm_) || !enforce_hwm_
@@ -3602,7 +3769,8 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
           _max_message_bytes != 0
           && _out_incomplete_payload_bytes > _max_message_bytes;
         if (!exceeds_max_message_size
-            && _bytes_written > _peers_bytes_read) {
+            && _bytes_written.load (std::memory_order_acquire)
+                 > _peers_bytes_read.load (std::memory_order_acquire)) {
             arm_hwm_credit_wait_unlocked ();
             commit_credit_ready =
               can_commit_bytes_with_peer_snapshot_unlocked (
@@ -3626,6 +3794,10 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
         }
     }
 
+    const uint64_t bytes_written =
+      _bytes_written.load (std::memory_order_acquire);
+    const uint64_t peers_bytes_read =
+      _peers_bytes_read.load (std::memory_order_acquire);
     if (_registry_accounting) {
         const uint64_t frame_bytes = frame_accounted_bytes (msg_);
         if (_conflate && !msg_->is_delimiter ()) {
@@ -3640,8 +3812,8 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
               _out_physical_queue, frame_bytes);
         } else if (!msg_->is_delimiter ()) {
             const uint64_t in_flight =
-              _bytes_written > _peers_bytes_read
-                ? _bytes_written - _peers_bytes_read
+              bytes_written > peers_bytes_read
+                ? bytes_written - peers_bytes_read
                 : 0;
             const bool oversize_admission =
               enforce_hwm_ && _hwm > 0 && in_flight == 0
@@ -3663,30 +3835,36 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
     if (commits_bytes) {
         const uint64_t message_bytes = _out_incomplete_bytes;
         const uint64_t in_flight =
-          _bytes_written > _peers_bytes_read ? _bytes_written - _peers_bytes_read : 0;
+          bytes_written > peers_bytes_read
+            ? bytes_written - peers_bytes_read
+            : 0;
         if (enforce_hwm_ && _hwm > 0 && in_flight == 0
             && (message_bytes > _hwm
                 || (UINT64_MAX - in_flight < message_bytes
                     || in_flight + message_bytes > _hwm))) {
-            ++_oversize_message_admission_count;
-            _oversize_message_admission_max_bytes =
-              std::max (_oversize_message_admission_max_bytes, message_bytes);
+            record_oversize_message_admission (message_bytes);
         }
+        uint64_t new_msgs_written =
+          _msgs_written.load (std::memory_order_acquire);
+        uint64_t new_bytes_written;
         if (_conflate) {
-            _bytes_written =
-              UINT64_MAX - _peers_bytes_read < message_bytes
+            new_bytes_written =
+              UINT64_MAX - peers_bytes_read < message_bytes
                 ? UINT64_MAX
-                : _peers_bytes_read + message_bytes;
+                : peers_bytes_read + message_bytes;
             if (!msg_->is_routing_id () && !msg_->is_credential ())
-                _msgs_written = _peers_msgs_read + 1;
+                new_msgs_written =
+                  _peers_msgs_read.load (std::memory_order_acquire) + 1;
         } else {
-            _bytes_written =
-              UINT64_MAX - _bytes_written < message_bytes
+            new_bytes_written =
+              UINT64_MAX - bytes_written < message_bytes
                 ? UINT64_MAX
-                : _bytes_written + message_bytes;
+                : bytes_written + message_bytes;
             if (!msg_->is_routing_id () && !msg_->is_credential ())
-                ++_msgs_written;
+                ++new_msgs_written;
         }
+        publish_outbound_ledger_unlocked (new_msgs_written,
+                                          new_bytes_written);
         _out_complete_record_pending = true;
         _out_incomplete_bytes = 0;
         _out_incomplete_payload_bytes = 0;
@@ -3736,18 +3914,9 @@ void zlink::pipe_t::account_inbound_frame (
     // latter cannot combine it with an old multipart prefix.
     if (completes_multipart)
         _published_incomplete_bytes_read.store (0, std::memory_order_release);
-    // Completed counters are monotonic credit snapshots, not publication of
-    // data owned by this reader. Single-frame traffic therefore needs no
-    // synchronizes-with edge. A multipart completion does need to stay after
-    // the visible prefix reset, so retain release ordering for that rarer
-    // transition.
-    if (completes_multipart) {
-        _published_msgs_read.store (_msgs_read, std::memory_order_release);
-        _published_bytes_read.store (_bytes_read, std::memory_order_release);
-    } else {
-        _published_msgs_read.store (_msgs_read, std::memory_order_relaxed);
-        _published_bytes_read.store (_bytes_read, std::memory_order_relaxed);
-    }
+    publish_ledger_unlocked (&_inbound_ledger_sequence,
+                             &_published_msgs_read, &_published_bytes_read,
+                             _msgs_read, _bytes_read);
 
     const uint64_t credit_delta = _bytes_read - _last_credit_bytes_read;
     const uint64_t lwm = _lwm.load (std::memory_order_relaxed);
@@ -3856,7 +4025,8 @@ void zlink::pipe_t::snapshot_outbound_queue_accounting (
         // be copied exactly without adding publication work to socket sends.
         scoped_optional_lock_t lock (
           const_cast<mutex_t *> (&_out_sync));
-        const uint64_t written = _bytes_written;
+        const uint64_t written =
+          _bytes_written.load (std::memory_order_acquire);
         provisional = _out_incomplete_bytes;
         available = written > consumed ? written - consumed : 0;
         available = UINT64_MAX - available < provisional
@@ -3958,10 +4128,12 @@ void zlink::pipe_t::flush_unlocked ()
 void zlink::pipe_t::publish_session_outbound_accounting_slow_unlocked (
   bool provisional_changed_)
 {
+    const uint64_t bytes_written =
+      _bytes_written.load (std::memory_order_acquire);
     const uint64_t total =
-      UINT64_MAX - _bytes_written < _out_incomplete_bytes
+      UINT64_MAX - bytes_written < _out_incomplete_bytes
         ? UINT64_MAX
-        : _bytes_written + _out_incomplete_bytes;
+        : bytes_written + _out_incomplete_bytes;
     // Publish the authoritative total first. A concurrent snapshot can retain
     // an older provisional classification, but clamps it inside this total, so
     // Auto-HWM never double-counts or reads the decoder-owned local fields.
