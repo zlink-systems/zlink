@@ -769,15 +769,23 @@ void test_concurrent_pair_multipart_exposes_core_rejection_and_returns_lvalues (
     });
     deterministic_contender.join ();
 
+    // Core 0.17.2: another thread's independent multipart record does not
+    // collide with this thread's open sequence (socket README §2, part send).
+    // The contender's record is admitted as a whole and its lvalue messages
+    // are consumed; the held sequence stays open for this thread's FINAL.
     assert (!deterministic_unexpected_exception);
-    assert (deterministic_result == zlink::submit_result_t::invalid_argument);
-    assert (deterministic_errno == EINVAL);
-    assert (rejected_first.valid ());
-    assert (rejected_first.to_string () == rejected_first_text);
-    assert (rejected_second.valid ());
-    assert (rejected_second.to_string () == rejected_second_text);
-    assert (rejected_third.valid ());
-    assert (rejected_third.to_string () == rejected_third_text);
+    assert (deterministic_result == zlink::submit_result_t::ok);
+    assert (deterministic_errno == 0);
+    assert (!rejected_first.valid ());
+    assert (!rejected_second.valid ());
+    assert (!rejected_third.valid ());
+
+    zlink::received_t contender_inbound;
+    assert (receiver.recv (contender_inbound) == 0);
+    assert (contender_inbound.parts ().size () == 3);
+    assert (contender_inbound.parts ()[0].to_string () == rejected_first_text);
+    assert (contender_inbound.parts ()[1].to_string () == rejected_second_text);
+    assert (contender_inbound.parts ()[2].to_string () == rejected_third_text);
 
     zlink_msg_t held_final;
     const std::string held_final_text = "held:1";
