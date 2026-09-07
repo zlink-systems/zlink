@@ -1737,6 +1737,25 @@ else:
     connect_concurrency_display = str(connect_concurrency)
 
 
+# C canonical `routed_echo_per_socket_payload`
+# (bindings/c/perf/run_comparison.py:3908-3918): `tcp` when a SENDSEND pattern
+# runs over tcp, `none` otherwise. Report key names are not fixed by doc/perf
+# policy, so the C runner is the reference [정책 미규정 -> C 구현 준용].
+_sendsend_patterns = (
+    "MULTI_DEALER_ROUTER",
+    "MULTI_DEALER_ROUTER_SENDSEND",
+    "MULTI_ROUTER_ROUTER",
+    "MULTI_ROUTER_ROUTER_SENDSEND",
+    "DEALER_ROUTER_SENDSEND",
+    "ROUTER_ROUTER_SENDSEND",
+)
+routed_echo_per_socket_payload = (
+    "tcp"
+    if any(p in _sendsend_patterns for p, _, _ in plan) and "tcp" in all_tr
+    else "none"
+)
+
+
 def emit_options(label):
     emit(f"## Effective Options ({label})")
     emit("- lang: java")
@@ -1745,8 +1764,8 @@ def emit_options(label):
     emit(f"- patterns: {','.join(p for p, _, _ in plan)}")
     emit(f"- transports: {','.join(all_tr) if all_tr else 'none'}")
     emit(f"- msg_sizes: {','.join(str(s) for s in all_sz) if all_sz else 'none'}")
+    emit(f"- routed_echo_per_socket_payload: {routed_echo_per_socket_payload}")
     emit(f"- duration_seconds: {duration}")
-    emit(f"- fail_fast: {fail_fast}")
     emit(f"- clients: {clients}")
     emit(f"- default_clients: {default_clients}")
     emit(f"- default_stream_clients: {default_stream_clients}")
@@ -1764,7 +1783,7 @@ def emit_options(label):
     emit(f"- rcvtimeo_ms: {rcvtimeo_ms}")
     emit(f"- connect_concurrency: {connect_concurrency_display}")
     emit(f"- connect_ready_timeout_ms: {connect_ready_timeout_ms}")
-    emit(f"- monitor_hwm: {monitor_hwm}")
+    emit(f"- monitor_hwm_bytes: {monitor_hwm}")
     emit(f"- server_ready_timeout_ms: {server_ready_timeout_ms}")
     emit(f"- server_shutdown_timeout_ms: {server_shutdown_timeout_ms}")
     emit(f"- server_bind_port: {server_bind_port}")

@@ -19,7 +19,7 @@ namespace perf
 namespace multi
 {
 
-inline constexpr int default_send_drain_timeout_ms = 1000;
+inline constexpr int default_send_drain_timeout_ms = 5000;
 
 struct multi_bench_settings_t
 {

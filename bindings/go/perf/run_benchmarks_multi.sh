@@ -848,7 +848,23 @@ elif [[ -n "${PERF_MULTI_CLIENTS:-}" ]]; then
 elif [[ -n "${PERF_CLIENTS:-}" ]]; then
   CLIENTS_DISPLAY="${PERF_CLIENTS}"
 else
-  CLIENTS_DISPLAY="auto (default=${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}, stream=${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}})"
+  # C parity: bindings/c/perf/run_comparison.py resolve_clients_meta
+  # (3830-3844) reports the numeric client count that will actually run --
+  # the STREAM default when every selected pattern is STREAM, otherwise the
+  # general default. "auto (default=..., stream=...)" hid the effective value.
+  _all_stream=1
+  for _p in "${PATTERNS[@]}"; do
+    case "${_p}" in
+      MULTI_STREAM|STREAM) ;;
+      *) _all_stream=0 ;;
+    esac
+  done
+  if [[ "${_all_stream}" -eq 1 && "${#PATTERNS[@]}" -gt 0 ]]; then
+    CLIENTS_DISPLAY="${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
+  else
+    CLIENTS_DISPLAY="${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
+  fi
+  unset _all_stream _p
 fi
 
 effective_or_auto() {
@@ -913,6 +929,21 @@ emit_meta_lines() {
   echo "META,clients,${CLIENTS_DISPLAY}"
 }
 
+# C canonical `routed_echo_per_socket_payload`
+# (bindings/c/perf/run_comparison.py:3908-3918): `tcp` when a SENDSEND pattern
+# runs over tcp, `none` otherwise. Report key names are not fixed by doc/perf
+# policy, so the C runner is the reference [정책 미규정 -> C 구현 준용].
+effective_routed_echo_per_socket_payload() {
+  case ",${EFFECTIVE_PATTERNS_CSV}," in
+    *,MULTI_DEALER_ROUTER_SENDSEND,*|*,MULTI_ROUTER_ROUTER_SENDSEND,*)
+      case ",${EFFECTIVE_TRANSPORTS_CSV}," in
+        *,tcp,*) echo "tcp"; return ;;
+      esac
+      ;;
+  esac
+  echo "none"
+}
+
 emit_effective_options_multi() {
   local section="$1"
   echo "## Effective Options (${section})"
@@ -922,11 +953,12 @@ emit_effective_options_multi() {
   echo "- patterns: ${EFFECTIVE_PATTERNS_CSV}"
   echo "- transports: ${EFFECTIVE_TRANSPORTS_CSV}"
   echo "- msg_sizes: ${EFFECTIVE_MSG_SIZES_CSV}"
+  echo "- routed_echo_per_socket_payload: $(effective_routed_echo_per_socket_payload)"
   echo "- duration_seconds: ${DURATION}"
-  echo "- fail_fast: ${PERF_FAIL_FAST:-0}"
   echo "- clients: ${CLIENTS_DISPLAY}"
   echo "- default_clients: ${PERF_MULTI_DEFAULT_CLIENTS:-${PERF_DEFAULT_CLIENTS:-100}}"
   echo "- default_stream_clients: ${PERF_MULTI_DEFAULT_STREAM_CLIENTS:-${PERF_STREAM_DEFAULT_CLIENTS:-100}}"
+  echo "- service_clients: ${PERF_SERVICE_CLIENTS:-auto}"
   echo "- server_io_threads: $(effective_multi_server_io_threads)"
   echo "- client_io_threads: $(effective_multi_client_io_threads)"
   echo "- go_gomaxprocs: ${GOMAXPROCS:-unset}"

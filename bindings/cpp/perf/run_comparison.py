@@ -37,6 +37,9 @@ REQUIRED_RESULT_METRICS = (
 REQUIRED_RESULT_METRIC_COUNT = len(REQUIRED_RESULT_METRICS)
 PATTERN_SEPARATOR = "==============================================================================="
 STREAM_VARIANT_PATTERNS = ("STREAM",)
+# C parity: bindings/c/perf/run_comparison.py:39. No multi pattern uses a
+# control plane today; the empty tuple keeps select_transports() identical.
+CONTROL_PLANE_PATTERNS = ()
 PATTERN_ALIASES = {
     "STREAM": ("STREAM",),
     "STREAMS": STREAM_VARIANT_PATTERNS,
@@ -638,7 +641,15 @@ def is_pattern(pattern_name):
 
 
 def select_transports(pattern_name):
-    if pattern_name in STREAM_VARIANT_PATTERNS:
+    # C parity: bindings/c/perf/run_comparison.py select_transports (667-685).
+    # A user-supplied --transports/PERF_TRANSPORTS list keeps ITS order (case
+    # order drives transport_transition_ms cooldown and TIME_WAIT state,
+    # PERF_MULTI_TEST_POLICY.md § 8.1); the base list only filters it.
+    service_or_stream = (
+        pattern_name in STREAM_VARIANT_PATTERNS
+        or pattern_name in CONTROL_PLANE_PATTERNS
+    )
+    if service_or_stream:
         base = STREAM_TRANSPORTS
     elif is_pattern(pattern_name):
         base = NON_SERVICE_TRANSPORTS
@@ -646,7 +657,12 @@ def select_transports(pattern_name):
         base = TRANSPORTS
     if not _env_transports:
         return list(base)
-    return [t for t in base if t in _env_transports]
+
+    selected = []
+    for transport in _env_transports:
+        if transport in base and transport not in selected:
+            selected.append(transport)
+    return selected
 
 
 _env_sizes = parse_env_list("PERF_MSG_SIZES", int)
@@ -3862,16 +3878,10 @@ def build_effective_option_items(args, selected_patterns):
         ("transports", ",".join(unique_transports) if unique_transports else "none"),
         ("msg_sizes", ",".join(str(sz) for sz in unique_sizes) if unique_sizes else "none"),
         (
-            "routed_echo_borrow_payload",
+            "routed_echo_per_socket_payload",
             "tcp"
             if any(
-                pattern
-                in (
-                    "DEALER_ROUTER",
-                    "DEALER_ROUTER_SENDSEND",
-                    "ROUTER_ROUTER",
-                    "ROUTER_ROUTER_SENDSEND",
-                )
+                pattern in ("DEALER_ROUTER_SENDSEND", "ROUTER_ROUTER_SENDSEND")
                 for pattern in selected_patterns
             )
             and "tcp" in unique_transports
@@ -3918,7 +3928,7 @@ def build_effective_option_items(args, selected_patterns):
         timeout_override = parse_env_int("PERF_TIMEOUT_SECONDS", 0)
         service_clients = parse_env_int("PERF_SERVICE_CLIENTS", 0)
         default_clients = 100
-        default_stream_clients = 10000
+        default_stream_clients = 100
         explicit_server_io = _read_env_value("PERF_SERVER_IO_THREADS") or ""
         explicit_client_io = _read_env_value("PERF_CLIENT_IO_THREADS") or ""
         explicit_stream_server_io = (
@@ -4035,7 +4045,10 @@ def build_effective_option_items(args, selected_patterns):
                     "connect_ready_timeout_ms",
                     str(parse_env_int("PERF_CONNECT_READY_TIMEOUT_MS", 5000)),
                 ),
-                ("monitor_hwm", str(parse_env_int("PERF_MONITOR_HWM", 1000))),
+                (
+                    "monitor_hwm_bytes",
+                    str(parse_env_int("PERF_MONITOR_HWM", 4096000)),
+                ),
                 ("server_ready_timeout_ms", str(args["server_ready_timeout_ms"])),
                 (
                     "server_shutdown_timeout_ms",

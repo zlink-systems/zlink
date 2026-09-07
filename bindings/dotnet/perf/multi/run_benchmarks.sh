@@ -1643,11 +1643,14 @@ else
 fi
 print_meta_block "${META_CLIENTS}"
 
-ROUTED_ECHO_BORROW_PAYLOAD="none"
+# C canonical `routed_echo_per_socket_payload`
+# (bindings/c/perf/run_comparison.py:3908-3918): only the two SENDSEND patterns
+# borrow a per-socket payload, and only over tcp. REQREP is NOT one of them.
+ROUTED_ECHO_PER_SOCKET_PAYLOAD="none"
 case ",${PATTERN}," in
-  *,MULTI_DEALER_ROUTER,*|*,MULTI_DEALER_ROUTER_REQREP,*|*,MULTI_ROUTER_ROUTER,*|*,MULTI_ROUTER_ROUTER_REQREP,*)
+  *,MULTI_DEALER_ROUTER,*|*,MULTI_DEALER_ROUTER_SENDSEND,*|*,MULTI_ROUTER_ROUTER,*|*,MULTI_ROUTER_ROUTER_SENDSEND,*)
     case ",${TRANSPORTS}," in
-      *,tcp,*) ROUTED_ECHO_BORROW_PAYLOAD="tcp" ;;
+      *,tcp,*) ROUTED_ECHO_PER_SOCKET_PAYLOAD="tcp" ;;
     esac
     ;;
 esac
@@ -1665,9 +1668,8 @@ print_effective_options() {
   print_line "- patterns: ${PATTERN}"
   print_line "- transports: ${TRANSPORTS}"
   print_line "- msg_sizes: ${EFFECTIVE_MSG_SIZES_DISPLAY}"
-  print_line "- routed_echo_borrow_payload: ${ROUTED_ECHO_BORROW_PAYLOAD}"
+  print_line "- routed_echo_per_socket_payload: ${ROUTED_ECHO_PER_SOCKET_PAYLOAD}"
   print_line "- duration_seconds: ${DURATION}"
-  print_line "- fail_fast: ${PERF_FAIL_FAST:-0}"
   print_line "- clients: ${EFFECTIVE_CLIENTS_DISPLAY}"
   print_line "- default_clients: ${EFFECTIVE_DEFAULT_CLIENTS}"
   print_line "- default_stream_clients: ${EFFECTIVE_DEFAULT_STREAM_CLIENTS}"
@@ -1685,7 +1687,7 @@ print_effective_options() {
   print_line "- rcvtimeo_ms: ${RCVTIMEO_MS}"
   print_line "- connect_concurrency: ${display_connect_concurrency}"
   print_line "- connect_ready_timeout_ms: ${READY_TIMEOUT_MS}"
-  print_line "- monitor_hwm: ${MONITOR_HWM}"
+  print_line "- monitor_hwm_bytes: ${MONITOR_HWM}"
   print_line "- server_ready_timeout_ms: ${SERVER_READY_TIMEOUT_MS}"
   print_line "- server_shutdown_timeout_ms: ${SERVER_SHUTDOWN_TIMEOUT_MS}"
   print_line "- server_bind_port: ${SERVER_BIND_PORT}"

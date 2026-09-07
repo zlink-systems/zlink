@@ -23,6 +23,15 @@ const {
 } = require('./perf_c_format');
 
 const STREAM_VARIANT_PATTERNS = new Set(['MULTI_STREAM']);
+// The two patterns whose SENDSEND client borrows a per-socket payload over tcp
+// (bindings/c/perf/multi/src/perf_multi_dealer_router_client.cpp:53,
+//  bindings/c/perf/multi/src/perf_multi_router_router_client.cpp:53).
+const SENDSEND_PATTERNS = new Set([
+  'MULTI_DEALER_ROUTER',
+  'MULTI_DEALER_ROUTER_SENDSEND',
+  'MULTI_ROUTER_ROUTER',
+  'MULTI_ROUTER_ROUTER_SENDSEND'
+]);
 type AutoHwmDetailRow = Record<string, string> & { _dedup_key?: string };
 
 function envGet(name) {
@@ -368,8 +377,16 @@ function buildMultiOptionItems(opts) {
     ['patterns', opts.patterns.join(',')],
     ['transports', transports.length > 0 ? transports.join(',') : 'none'],
     ['msg_sizes', sizes.length > 0 ? sizes.join(',') : 'none'],
+    // C canonical `routed_echo_per_socket_payload`
+    // (bindings/c/perf/run_comparison.py:3908-3918): `tcp` when a SENDSEND
+    // pattern runs over tcp, `none` otherwise. Report key names are not fixed
+    // by doc/perf policy, so the C runner is the reference
+    // [정책 미규정 -> C 구현 준용].
+    ['routed_echo_per_socket_payload',
+      opts.patterns.some((pattern) => SENDSEND_PATTERNS.has(pattern)) && transports.includes('tcp')
+        ? 'tcp'
+        : 'none'],
     ['duration_seconds', String(opts.duration)],
-    ['fail_fast', envGet('PERF_FAIL_FAST') === '1' ? '1' : '0'],
     ['clients', clientsMeta],
     ['default_clients', envGet('PERF_MULTI_DEFAULT_CLIENTS') || envGet('PERF_DEFAULT_CLIENTS') || '100'],
     ['default_stream_clients', envGet('PERF_MULTI_DEFAULT_STREAM_CLIENTS') || envGet('PERF_STREAM_DEFAULT_CLIENTS') || '100'],
@@ -387,7 +404,7 @@ function buildMultiOptionItems(opts) {
     ['rcvtimeo_ms', optionValue(opts.recvTimeoutMs, 'PERF_MULTI_RCVTIMEO_MS', 200)],
     ['connect_concurrency', connectDisplay],
     ['connect_ready_timeout_ms', optionValue(opts.connectReadyTimeoutMs, 'PERF_MULTI_CONNECT_READY_TIMEOUT_MS', parseEnvInt('PERF_CONNECT_READY_TIMEOUT_MS', 10000))],
-    ['monitor_hwm', optionValue(opts.monitorHwm, 'PERF_MULTI_MONITOR_HWM', 4096000)],
+    ['monitor_hwm_bytes', optionValue(opts.monitorHwm, 'PERF_MULTI_MONITOR_HWM', 4096000)],
     ['server_ready_timeout_ms', optionValue(opts.serverReadyTimeoutMs, 'PERF_MULTI_SERVER_READY_TIMEOUT_MS', parseEnvInt('PERF_SERVER_READY_TIMEOUT_MS', 10000))],
     ['server_shutdown_timeout_ms', optionValue(opts.serverShutdownTimeoutMs, 'PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS', parseEnvInt('PERF_SERVER_SHUTDOWN_TIMEOUT_MS', 5000))],
     ['server_bind_port', optionValue(opts.serverBindPort, 'PERF_MULTI_SERVER_BIND_PORT', 0)],

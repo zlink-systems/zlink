@@ -163,7 +163,6 @@ DEFAULT_PATTERNS = (
 )
 DEFAULT_MSG_SIZES = ("64", "256", "1024", "4096", "65536", "131072")
 DEFAULT_STREAM_MSG_SIZES = ("64", "256", "1024", "65536")
-DEALER_DEALER_SERVER_SHUTDOWN_TIMEOUT_MS = "30000"
 RAW_TRANSPORTS = ("tcp", "tls", "ws", "wss")
 ROUTER_ROUTER_TRANSPORTS = (*RAW_TRANSPORTS, "ipc")
 POLICY_TRANSPORTS = {
@@ -403,22 +402,6 @@ def _grouped_option_text(patterns, value_for_pattern, *, prefix="MULTI_"):
         )
     return "; ".join(rendered)
 
-
-def _needs_dealer_dealer_shutdown_timeout_default(configs):
-    return any(pattern == "DEALER_DEALER" for pattern, _transport, _msg_size in configs)
-
-
-def _apply_dealer_dealer_shutdown_timeout_default(args, env, configs):
-    if not _needs_dealer_dealer_shutdown_timeout_default(configs):
-        return
-    if (
-        not args.server_shutdown_timeout_ms
-        and "PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS" not in env
-        and "PERF_SERVER_SHUTDOWN_TIMEOUT_MS" not in env
-    ):
-        env["PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS"] = (
-            DEALER_DEALER_SERVER_SHUTDOWN_TIMEOUT_MS
-        )
 
 
 def _effective_role_io_threads(args, role):
@@ -1161,6 +1144,19 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
     return "\n".join(chunk for chunk in stdout_chunks if chunk)
 
 
+def _routed_echo_per_socket_payload(patterns, transports, requested_msg_sizes):
+    """C canonical `routed_echo_per_socket_payload` value.
+
+    C (bindings/c/perf/run_comparison.py:3908-3918) reports `tcp` when a
+    SENDSEND pattern runs over tcp and `none` otherwise.
+    """
+    del requested_msg_sizes
+    sendsend = {"DEALER_ROUTER", "ROUTER_ROUTER"}
+    if any(pattern in sendsend for pattern in patterns) and "tcp" in transports:
+        return "tcp"
+    return "none"
+
+
 def _build_options(args, patterns, transports, requested_msg_sizes, clients, env):
     hwm = args.hwm or "auto-hwm"
     sndhwm = args.send_hwm or args.hwm or "auto-hwm"
@@ -1186,13 +1182,19 @@ def _build_options(args, patterns, transports, requested_msg_sizes, clients, env
             patterns,
             lambda pattern: _msg_sizes_for_pattern(pattern, requested_msg_sizes),
         ),
-        "smoke": "1" if args.smoke else "0",
+        # C canonical key set (bindings/c/perf/run_comparison.py:3908-3918,
+        # :4046-4102). Report keys are not fixed by doc/perf policy, so the
+        # C runner is the reference [정책 미규정 -> C 구현 준용].
+        "routed_echo_per_socket_payload": _routed_echo_per_socket_payload(
+            patterns, transports, requested_msg_sizes
+        ),
         "duration_seconds": args.duration,
         "clients": clients,
         "default_clients": os.environ.get("PERF_MULTI_DEFAULT_CLIENTS")
         or os.environ.get("PERF_DEFAULT_CLIENTS", "100"),
         "default_stream_clients": os.environ.get("PERF_MULTI_DEFAULT_STREAM_CLIENTS")
         or os.environ.get("PERF_STREAM_DEFAULT_CLIENTS", "100"),
+        "service_clients": os.environ.get("PERF_SERVICE_CLIENTS") or "auto",
         "server_io_threads": _effective_role_io_threads(args, "server"),
         "client_io_threads": _effective_role_io_threads(args, "client"),
         "hwm": hwm,
@@ -1211,7 +1213,7 @@ def _build_options(args, patterns, transports, requested_msg_sizes, clients, env
         or env.get("PERF_MULTI_CONNECT_READY_TIMEOUT_MS")
         or env.get("PERF_CONNECT_READY_TIMEOUT_MS")
         or "10000",
-        "monitor_hwm": env["PERF_MULTI_MONITOR_HWM"],
+        "monitor_hwm_bytes": env["PERF_MULTI_MONITOR_HWM"],
         "server_ready_timeout_ms": args.server_ready_timeout_ms
         or env.get("PERF_MULTI_SERVER_READY_TIMEOUT_MS")
         or env.get("PERF_SERVER_READY_TIMEOUT_MS")
@@ -1336,7 +1338,6 @@ def main(argv=None):
         env["PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS"] = args.server_shutdown_timeout_ms
     if args.server_bind_port:
         env["PERF_MULTI_SERVER_BIND_PORT"] = args.server_bind_port
-    _apply_dealer_dealer_shutdown_timeout_default(args, env, configs)
     runtime_info = _configure_core_runtime(env)
 
     run_cooldown_ms = _env_int("PERF_MULTI_RUN_COOLDOWN_MS", _env_int("PERF_RUN_COOLDOWN_MS", 3000))
@@ -1353,7 +1354,6 @@ def main(argv=None):
 
     options = _build_options(args, patterns, transports, requested_msg_sizes, clients, env)
     fail_fast = os.environ.get("PERF_FAIL_FAST", "0") == "1"
-    options["fail_fast"] = "1" if fail_fast else "0"
     sections = []
     emitted_chunks = []
     status_lines = []

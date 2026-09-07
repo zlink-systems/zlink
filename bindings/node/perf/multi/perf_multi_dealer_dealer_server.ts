@@ -59,7 +59,6 @@ async function main() {
     configureTlsServer(server, options.transport);
     server.bind(options.endpoint);
     ctx.recalculateAutoHwm();
-    emitMultiSocketHwmDetail(server, 'endpoint', options.transport, options.msgSize);
     poller.add(server, pollEvents(POLLIN), 0);
     pollBuffer = zlink.createPollEvents(1);
     const readyBarrier = waitForConnectionReadyCount(server, options.clients);
@@ -95,6 +94,7 @@ async function main() {
       // wait; the duration deadline bounds the phase (C line 299 ignores
       // the stop count).
       const received = new zlink.Received();
+      let autoHwmDetailEmitted = false;
       while (currentEpochNs() < activeStopNs) {
         const ready = waitPollerOne(poller, pollBuffer, process.platform === 'win32' ? 50 : -1);
         if (!ready || !pollEventHas(ready, POLLIN)) {
@@ -117,6 +117,16 @@ async function main() {
           }
           if (receivedBytes === payloadSize) {
             collector.recordPayload(data, currentEpochNs());
+            // PERF_MULTI_TEST_POLICY § 1.6: the Core monitor snapshot falls
+            // back to the raw ZLINK_OPT_SNDHWM/RCVHWM default (4,096,000)
+            // while the socket still has no attached application pipe
+            // (core/src/runtime/sockets/common/socket_base_monitor.cpp:116-123).
+            // Take it on the first valid active message like the C reference
+            // (bindings/c/perf/multi/src/perf_multi_dealer_dealer_server.cpp:136-142).
+            if (!autoHwmDetailEmitted) {
+              emitMultiSocketHwmDetail(server, 'endpoint', options.transport, options.msgSize);
+              autoHwmDetailEmitted = true;
+            }
           }
         }
       }

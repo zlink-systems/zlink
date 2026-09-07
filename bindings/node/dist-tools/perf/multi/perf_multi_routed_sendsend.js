@@ -201,7 +201,7 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
                 }
             }
         };
-        const sendDrainMs = Math.max(1, Number(process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS ?? 1000));
+        const sendDrainMs = Math.max(1, Number(process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS ?? 5000));
         const sendDrainStopNs = activeStopNs + BigInt(Math.floor(sendDrainMs * 1_000_000));
         await runRoutedSendSendRounds({
             sockets,

@@ -1109,7 +1109,7 @@ pub fn resolve_multi_reqrep_drain_timeout(request_timeout: Duration) -> Duration
 }
 
 pub fn resolve_multi_send_drain_timeout() -> Duration {
-    Duration::from_millis(env_or_u64("PERF_MULTI_SEND_DRAIN_TIMEOUT_MS", 1_000).max(1))
+    Duration::from_millis(env_or_u64("PERF_MULTI_SEND_DRAIN_TIMEOUT_MS", 5_000).max(1))
 }
 
 pub fn poll_timeout_until(deadline: Instant) -> i64 {

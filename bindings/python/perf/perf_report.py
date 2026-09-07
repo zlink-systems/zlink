@@ -472,7 +472,32 @@ def _multi_effective_options(args, section):
         "PERF_DEFAULT_CLIENTS", "100"
     )
     default_stream_clients = os.environ.get("PERF_MULTI_DEFAULT_STREAM_CLIENTS") or os.environ.get(
-        "PERF_STREAM_DEFAULT_CLIENTS", "10000"
+        "PERF_STREAM_DEFAULT_CLIENTS", "100"
+    )
+    service_clients = os.environ.get("PERF_SERVICE_CLIENTS") or "auto"
+    monitor_hwm_bytes = (
+        os.environ.get("PERF_MULTI_MONITOR_HWM_BYTES")
+        or os.environ.get("PERF_MULTI_MONITOR_HWM")
+        or os.environ.get("PERF_MONITOR_HWM_BYTES")
+        or os.environ.get("PERF_MONITOR_HWM")
+        or "4096000"
+    )
+    selected_patterns = [
+        item.strip().removeprefix("MULTI_")
+        for item in (args.patterns or "").split(",")
+        if item.strip()
+    ]
+    selected_transports = [
+        item.strip() for item in (args.transports or "").split(",") if item.strip()
+    ]
+    routed_echo_per_socket_payload = (
+        "tcp"
+        if any(
+            pattern in ("DEALER_ROUTER_SENDSEND", "ROUTER_ROUTER_SENDSEND")
+            for pattern in selected_patterns
+        )
+        and "tcp" in selected_transports
+        else "none"
     )
     default_io_threads_value = os.environ.get("PERF_MULTI_DEFAULT_IO_THREADS") or os.environ.get(
         "PERF_DEFAULT_IO_THREADS"
@@ -489,11 +514,12 @@ def _multi_effective_options(args, section):
         f"- patterns: {args.patterns}",
         f"- transports: {args.transports}",
         f"- msg_sizes: {args.msg_sizes}",
+        f"- routed_echo_per_socket_payload: {routed_echo_per_socket_payload}",
         f"- duration_seconds: {args.duration}",
-        f"- fail_fast: {args.fail_fast}",
         f"- clients: {args.clients}",
         f"- default_clients: {default_clients}",
         f"- default_stream_clients: {default_stream_clients}",
+        f"- service_clients: {service_clients}",
         f"- server_io_threads: {args.server_io_threads or args.common_io_threads or default_io_threads}",
         f"- client_io_threads: {args.client_io_threads or args.common_io_threads or default_io_threads}",
         f"- hwm: {args.hwm or 'auto-hwm'}",
@@ -507,7 +533,7 @@ def _multi_effective_options(args, section):
         f"- rcvtimeo_ms: {args.rcvtimeo_ms}",
         f"- connect_concurrency: {args.connect_concurrency}",
         "- connect_ready_timeout_ms: 10000",
-        "- monitor_hwm: 4096000",
+        f"- monitor_hwm_bytes: {monitor_hwm_bytes}",
         "- server_ready_timeout_ms: 10000",
         "- server_shutdown_timeout_ms: 5000",
         "- server_bind_port: 0",

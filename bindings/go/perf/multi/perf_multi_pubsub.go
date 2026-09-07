@@ -25,6 +25,10 @@ func runMultiPubSubServer(cfg multiConfig) {
 	if !waitForStartToken(cfg.msgSize) {
 		return
 	}
+	// PERF_MULTI_TEST_POLICY § 1.6: recalculate the context auto-HWM once the
+	// subscribers are connected, like the C reference
+	// (bindings/c/perf/multi/src/perf_multi_pubsub_server.cpp:316).
+	perfcommon.Must(ctx.RecalculateAutoHwm())
 
 	window := activeDeadline(cfg.duration)
 	payload := perfcommon.PreparePayload(cfg.msgSize)
@@ -100,6 +104,8 @@ func runMultiPubSubClient(cfg multiConfig, endpoint string) perfcommon.Result {
 		perfcommon.WaitConnectedWithTimeout(perfcommon.MultiReadyTimeout(), monitor)
 		_ = monitor.Close()
 	}
+	// PERF_MULTI_TEST_POLICY § 1.6: recalculate after target connections ready.
+	perfcommon.Must(ctx.RecalculateAutoHwm())
 	defer func() {
 		for _, sub := range subs {
 			_ = sub.Close()

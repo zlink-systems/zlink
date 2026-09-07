@@ -27,6 +27,9 @@ func runMultiDealerRouterServer(cfg multiConfig) {
 	perfcommon.ApplyMultiHWM(router, cfg.pattern)
 	perfcommon.ApplyMultiBenchmarkSocketOptions(router, cfg.transport)
 	endpoint := perfcommon.BindAndResolveEndpoint(router, cfg.transport, "perf-multi-dealer-router")
+	// PERF_MULTI_TEST_POLICY § 1.6: same recalculation point as the C relay
+	// server (bindings/c/perf/multi/common/perf_multi_relay_server.hpp:658).
+	perfcommon.Must(serverCtx.RecalculateAutoHwm())
 	flushControlLine("READY,%s", endpoint)
 
 	serverDone := make(chan struct{})
@@ -65,6 +68,8 @@ func runMultiDealerRouterClient(cfg multiConfig, endpoint string) perfcommon.Res
 	for _, dealer := range dealers {
 		perfcommon.WaitConnectedWithTimeout(perfcommon.MultiReadyTimeout(), dealer.monitor)
 	}
+	// PERF_MULTI_TEST_POLICY § 1.6: recalculate after target connections ready.
+	perfcommon.Must(clientCtx.RecalculateAutoHwm())
 	defer func() {
 		for _, dealer := range dealers {
 			_ = dealer.monitor.Close()

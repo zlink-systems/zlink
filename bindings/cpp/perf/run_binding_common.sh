@@ -39,7 +39,14 @@ resolve_configured_core_build_dir() {
     printf '%s\n' "${ZLINK_CORE_PACKAGE_PREFIX}"
     return
   fi
-  if [[ -f "${cache_path}" ]]; then
+  # Report the tree this run will actually link. Every non-reuse build mode
+  # reconfigures with -DZLINK_CPP_CORE_BUILD_DIR="${DEFAULT_CORE_BUILD_DIR}"
+  # (run_binding_multi.sh:1021,1044; run_binding_single.sh:567,576), and this
+  # helper runs BEFORE that configure, so an existing CMakeCache.txt still
+  # holds the PREVIOUS run's path. Honour the cache only when the build is
+  # reused as-is; otherwise the stale check and the printed runtime pointed at
+  # a build tree that is about to be replaced.
+  if [[ "${BUILD_MODE:-}" == "reuse" && -f "${cache_path}" ]]; then
     configured_dir="$(
       sed -n 's/^ZLINK_CPP_CORE_BUILD_DIR:PATH=//p' "${cache_path}" | tail -n 1
     )"

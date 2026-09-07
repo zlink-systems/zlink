@@ -53,6 +53,10 @@ function measurementPayload(parts) {
 function integerEnvPair(primary, fallbackName, fallback) {
     return integerEnv(primary, integerEnv(fallbackName, fallback));
 }
+function hasEnvValue(name) {
+    const value = process.env[name];
+    return typeof value === 'string' && value.trim() !== '';
+}
 function pollEvents(mask) {
     const events = [];
     if ((mask & POLLIN) !== 0) {
@@ -103,11 +107,29 @@ function applySocketPolicy(socket, options = {}) {
     const recvTimeout = integerEnv('PERF_MULTI_RCVTIMEO_MS', 200);
     if (socket.options) {
         if (manualSocketOverridesEnabled('multi')) {
-            const hwm = integerEnv('PERF_MULTI_HWM', 1000);
-            const sendHwm = integerEnv('PERF_MULTI_SNDHWM', hwm);
-            const recvHwm = integerEnv('PERF_MULTI_RCVHWM', hwm);
-            socket.options.sendHwm = BigInt(sendHwm);
-            socket.options.recvHwm = BigInt(recvHwm);
+            // C parity: bindings/c/perf/multi/common/perf_multi_runtime.hpp
+            // apply_benchmark_hwm (562-585). The default multi HWM is 0 (= leave
+            // the context auto-HWM alone, PERF_MULTI_TEST_POLICY.md § 1.6); a
+            // numeric HWM is applied only when the pattern default is nonzero or
+            // PERF_MULTI_SNDHWM/PERF_MULTI_RCVHWM is explicitly set. The previous
+            // fallback of 1000 silently replaced auto-HWM on every debug run.
+            const hwm = integerEnv('PERF_MULTI_HWM', 0);
+            const explicitSendHwm = hasEnvValue('PERF_MULTI_SNDHWM');
+            const explicitRecvHwm = hasEnvValue('PERF_MULTI_RCVHWM');
+            if (hwm !== 0 || explicitSendHwm || explicitRecvHwm) {
+                if (hwm !== 0 || explicitSendHwm) {
+                    const sendHwm = integerEnv('PERF_MULTI_SNDHWM', hwm);
+                    if (sendHwm > 0) {
+                        socket.options.sendHwm = BigInt(sendHwm);
+                    }
+                }
+                if (hwm !== 0 || explicitRecvHwm) {
+                    const recvHwm = integerEnv('PERF_MULTI_RCVHWM', hwm);
+                    if (recvHwm > 0) {
+                        socket.options.recvHwm = BigInt(recvHwm);
+                    }
+                }
+            }
         }
         if (!isInproc) {
             socket.options.sendTimeout = sendTimeout;

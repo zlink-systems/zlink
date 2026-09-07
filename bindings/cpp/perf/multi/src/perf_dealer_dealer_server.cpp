@@ -144,14 +144,13 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
             return false;
         if (!perf::multi::recalculate_auto_hwm (ctx))
             return false;
-        perf::multi::emit_auto_hwm_detail (server, "server", "server", transport, msg_size,
-                                           "dealer");
 
         const int active_seconds = settings.duration_seconds > 0 ? settings.duration_seconds : 1;
         const auto deadline =
           std::chrono::steady_clock::now () + std::chrono::seconds (active_seconds);
 
         bool failed = false;
+        bool auto_hwm_detail_emitted = false;
         unsigned long long active_count = 0;
         perf::multi::bench_latency_sampler_t latency (static_cast<size_t> (active_seconds)
                                                       * 5000000U);
@@ -218,6 +217,19 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
                 }
 
                 ++active_count;
+                // PERF_MULTI_TEST_POLICY § 1.6: report the effective per-pipe
+                // auto-HWM, not the raw socket option default. The Core monitor
+                // snapshot falls back to ZLINK_OPT_SNDHWM/RCVHWM (4,096,000)
+                // while the socket still has no attached application pipe
+                // (core/src/runtime/sockets/common/socket_base_monitor.cpp:116-123),
+                // so take it on the first valid active message exactly like the
+                // C reference
+                // (bindings/c/perf/multi/src/perf_multi_dealer_dealer_server.cpp:136-142).
+                if (!auto_hwm_detail_emitted) {
+                    perf::multi::emit_auto_hwm_detail (server, "server", "server", transport,
+                                                       msg_size, "dealer");
+                    auto_hwm_detail_emitted = true;
+                }
                 latency.add (
                   perf_metric::elapsed_latency_ns (perf_metric::now_ns (), header.sent_ts_ns));
             }

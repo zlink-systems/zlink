@@ -30,6 +30,9 @@ func runMultiRouterRouterServer(cfg multiConfig) {
 	perfcommon.ApplyMultiBenchmarkSocketOptions(server, cfg.transport)
 	perfcommon.Must(server.SetRoutingID(serverID))
 	endpoint := perfcommon.BindAndResolveEndpoint(server, cfg.transport, "perf-multi-router-router")
+	// PERF_MULTI_TEST_POLICY § 1.6: same recalculation point as the C relay
+	// server (bindings/c/perf/multi/common/perf_multi_relay_server.hpp:658).
+	perfcommon.Must(serverCtx.RecalculateAutoHwm())
 	flushControlLine("READY,%s", endpoint)
 
 	serverDone := make(chan struct{})
@@ -68,6 +71,8 @@ func runMultiRouterRouterClientRole(cfg multiConfig, endpoint string) perfcommon
 	for _, client := range clients {
 		perfcommon.WaitConnectedWithTimeout(perfcommon.MultiReadyTimeout(), client.monitor)
 	}
+	// PERF_MULTI_TEST_POLICY § 1.6: recalculate after target connections ready.
+	perfcommon.Must(clientCtx.RecalculateAutoHwm())
 	defer func() {
 		for _, client := range clients {
 			_ = client.monitor.Close()

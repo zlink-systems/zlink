@@ -118,7 +118,7 @@ func runMultiDealerRouterReqRepClient(cfg multiConfig, endpoint string) {
 		perfcommon.Must(socket.Connect(endpoint))
 		clients = append(clients, multiReqRepClient{target: socket, monitor: monitor, request: socket.Request})
 	}
-	runMultiReqRepClients(cfg, clients)
+	runMultiReqRepClients(cfg, ctx, clients)
 }
 
 func runMultiRouterRouterReqRepClient(cfg multiConfig, endpoint string) {
@@ -143,12 +143,12 @@ func runMultiRouterRouterReqRepClient(cfg multiConfig, endpoint string) {
 			request: func() zlink.RequestOp { return clientSocket.Request(serverID) },
 		})
 	}
-	runMultiReqRepClients(cfg, clients)
+	runMultiReqRepClients(cfg, ctx, clients)
 }
 
 // Each socket has one goroutine owning its blocking request terminal. The Go
 // runtime suspends that goroutine while the other sockets continue submitting.
-func runMultiReqRepClients(cfg multiConfig, clients []multiReqRepClient) {
+func runMultiReqRepClients(cfg multiConfig, clientCtx *zlink.Context, clients []multiReqRepClient) {
 	defer func() {
 		for i := range clients {
 			_ = clients[i].monitor.Close()
@@ -163,6 +163,8 @@ func runMultiReqRepClients(cfg multiConfig, clients []multiReqRepClient) {
 	for i := range clients {
 		perfcommon.WaitConnectedWithTimeout(perfcommon.MultiReadyTimeout(), clients[i].monitor)
 	}
+	// PERF_MULTI_TEST_POLICY § 1.6: recalculate after target connections ready.
+	perfcommon.Must(clientCtx.RecalculateAutoHwm())
 	timeout := 200 * time.Millisecond
 	if value, err := strconv.Atoi(os.Getenv("PERF_MULTI_REQREP_TIMEOUT_MS")); err == nil && value > 0 {
 		timeout = time.Duration(value) * time.Millisecond

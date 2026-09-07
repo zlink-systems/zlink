@@ -93,6 +93,12 @@ def main(argv: List[str]) -> int:
         cmd.extend(["--results-tag", args.results_tag])
     if args.duration > 0:
         cmd.extend(["--duration", str(args.duration)])
+    # PERF_POLICY.md § "runs median": --runs must reach the suite runner, or a
+    # runs>1 request silently degrades to a single run.
+    if args.runs > 0:
+        cmd.extend(["--runs", str(args.runs)])
+    if args.pin_cpu:
+        cmd.append("--pin-cpu")
 
     cmd.extend(unknown)
     rc = subprocess.call(cmd)

@@ -33,6 +33,10 @@ func runMultiDealerDealerServer(cfg multiConfig) {
 	if !waitForStartToken(cfg.msgSize) {
 		return
 	}
+	// PERF_MULTI_TEST_POLICY § 1.6: recalculate the context auto-HWM once the
+	// target connections are ready, like the C reference
+	// (bindings/c/perf/multi/src/perf_multi_dealer_dealer_server.cpp:492).
+	perfcommon.Must(serverCtx.RecalculateAutoHwm())
 
 	stats := perfcommon.NewMultiStats()
 	window := activeDeadline(cfg.duration)
@@ -167,6 +171,14 @@ func runMultiDealerDealerClient(cfg multiConfig, endpoint string) {
 	}
 	for _, client := range clients {
 		perfcommon.WaitConnectedWithTimeout(perfcommon.MultiReadyTimeout(), client.mon)
+	}
+	// PERF_MULTI_TEST_POLICY § 1.6: connection count feeds the plan, so
+	// recalculate once every target connection is ready.
+	for _, client := range clients {
+		perfcommon.Must(client.ctx.RecalculateAutoHwm())
+		if sharedCtx != nil {
+			break
+		}
 	}
 	defer func() {
 		for _, client := range clients {
