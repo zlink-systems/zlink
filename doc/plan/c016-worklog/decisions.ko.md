@@ -1811,3 +1811,6 @@ G-11 부록: (정정) `public_api_sync_bit`은 CAS 스핀락(mutex 카운트 밖
 
 ## D-B183 (2026-09-07 12:40, 머신 B) 감독관 실수 — worktree 정리 중 미게이트 R10-B 삭제, 재작업 투입
 착지 완료된 worktree 25개를 `git worktree remove --force`로 정리하다가 **아직 게이트 전인 R10-B(`~/project/zlink-work/r10`)** 까지 삭제. 보고서(`core-rf-R10-B-summary.md`)로 내용이 남아 있어 같은 범위로 재작업(R10-B-redo, sonnet) 투입. 규칙 추가: worktree 삭제 전 `git -C <wt> diff HEAD --stat`이 비어 있는지 확인하고, 비어 있지 않으면 해당 job의 착지 커밋 해시를 decisions에서 확인한 뒤에만 삭제.
+
+## D-B184 (2026-09-07 13:00, 사용자 지시) sub-agent 운영을 AGENTS.md §2.1로 전환 — 다음 job부터 codex 우선
+AGENTS.md §2.1(`7eafe3fa63`·`be4608bd79`·`568f3afd18`): codex 우선(`codex exec -m gpt-6-<model> -c model_reasoning_effort=<level>`), Claude sub-agent는 codex 이슈 시만(사유 기록). 모델 = 모호성·중대성(astra 가설 없는 진단만 / sol 모호·중대 / terra 일상 / luna 잘 정의), 레벨 = 난이도(high 기본, medium 일상, xhigh 측정된 실패·동시성·최종 리뷰, low 금지). 동시 codex ≤ 3, LTO 빌드 중 perf·gate 금지, sub-agent는 스펙 미수정, 발견은 감독자 재검증 후 채택. 진행 중인 Claude job 3개(G-11a opus, S-14 opus, R10-B-redo sonnet)는 규칙("실행 중인 agent는 모델 변경을 위해 재투입하지 않는다")대로 완주. 다음부터: G-11b~e·G-10·G-7 → codex sol/high(동시성·계약 인접), 게이트 job → codex terra/medium(정해진 절차), 인벤토리·측정 → luna/medium. 런처 `scratchpad/tools/codex-job.sh`(systemd scope `cx-<name>`, 로그 `c016-worklog/codex-logs/`). 브리프 앞부분(공통 규칙·필독 목록)을 동일하게 유지해 prefix 캐시를 살린다.
