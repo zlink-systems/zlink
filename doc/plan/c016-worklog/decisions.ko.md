@@ -2058,3 +2058,18 @@ D-BP18은 C++ Multi tcp REQREP의 원인을 둘로 적었다: 64 B의 coroutine�
 **정정된 원인 기술**: 격차는 **요청당 고정 비용 하나**다. 64 B에서는 그 비용이 처리량 비율로 직접 나타나고, 64 KiB에서는 계약이 정한 drain-then-resubmit pacing이 그 비용을 turn 길이로 바꿔 latency로 증폭한다. C도 같은 규칙을 지키므로 남는 차이는 turn 길이뿐이다. **요청당 비용이 내려가지 않으면 64 KiB latency도 내려가지 않는다.**
 
 **판정에 미치는 영향**: 계약 유지 후보가 요청당 비용을 유의미하게 줄이지 못하면 두 pattern은 `보류`이며, 그 근거는 "후보를 못 찾았다"가 아니라 **"남은 격차가 Core 계약이 정한 재제출 pacing과 그 위의 요청당 비용이고, binding이 계약을 지키는 한 구조적으로 줄일 수 없다"**로 적는다. 이 구분은 0.17.2 이후 재개 판단에도 쓰인다.
+
+## D-BP21 (2026-09-08 00:45, 머신 A) C++ Multi tcp REQREP 두 pattern `보류` 확정 — 그리고 **1-run 판정은 §7.2 위반이다**
+**(1) 판정.** `MULTI_DEALER_ROUTER_REQREP` `보류(72.87%)`, `MULTI_ROUTER_ROUTER_REQREP` `보류(76.39%)`(목표 85%). pass 1·pass 2(둘 다 astra/xhigh)를 마쳤고 계약 보존 후보가 남지 않았다(§7.4 16단계). pass 2 후보(64 B continuation 중복 참조 제거)는 기능 검증 27/27을 통과했으나 DR을 72.87→69.35%로 떨어뜨렸고 RR은 이득이 없었으며(76.39→76.39%) 대표 회귀 gate도 넘겨(PUBSUB 64 B −5.33%) 원복했다. 최종 `bindings/cpp/{src,include,tests}` diff 0줄, 공개 헤더 0줄.
+
+감독자가 후보 patch를 직접 검토했다. `async_operation_state.hpp`에서 `_continuation_weak` fallback과 lifetime 없는 경로의 슬롯 할당을 제거하고 `abandon()`이 `_inline_continuation`을 직접 CAS하는 형태였다. lock 밖 `abandon()`은 안전하다(`async_resume_slot_t`는 `std::atomic<void*>` 하나이고 abandon은 CAS, resume은 exchange). 다만 새로 넣은 `throw std::logic_error("async operation has no lifetime owner")`는 도달 불가 경로를 throw로 바꾸는 내부 계약 축소였다(`bind_lifetime` 호출부는 `send_operations.cpp:92`·`request_reply.cpp:116` 둘뿐이고 둘 다 bundle 생성 직후 자기 `shared_ptr`을 묶는다). 성능 이득이 없는 이상 이 위험을 질 이유가 없어 기각에 동의한다.
+
+**보류 근거는 D-BP20이다** — "후보를 못 찾았다"가 아니라 "남은 격차가 Core 계약이 정한 재제출 pacing과 그 위의 요청당 비용이고, binding이 계약을 지키는 한 구조적으로 줄일 수 없다".
+
+**(2) 1-run 판정 문제 — 이번 캠페인 전체에 적용된다.** pass 2가 **library source diff 0줄**로 같은 셀을 다시 잰 결과 `MULTI_DEALER_DEALER` 1024 B 처리량 **−5.52%**, latency **+25.00%**, 64 B latency **+15.58%**가 나왔다. 코드가 같으므로 이건 회귀가 아니라 **1-run 측정의 변동폭**이다.
+
+그런데 `p5cmodel`을 포함한 이번 캠페인의 측정은 전부 `runs 1`이다. §7.2 표는 `runs 1`을 **'탐색 — 병목 후보 선별'** 용도로만 두고, **'후보 판정' 3회, '최종·경계 판정' 5회**를 요구한다. 따라서:
+- REQREP 두 pattern의 `보류`는 유지한다. 72.87·76.39%와 목표 85%의 간격이 관측된 변동폭(±5%p)보다 훨씬 크다.
+- **`MULTI_DEALER_DEALER` `통과(95.42%)`와 `MULTI_PUBSUB` `통과(95.52%)`는 확정이 아니다.** 기본 목표 95% 바로 위이고 여유가 변동폭보다 작다. §7.2의 '최종·경계 판정 5회'로 다시 재기 전까지 `통과`로 닫지 않는다.
+
+**조치**: 다음 측정은 새 pattern이 아니라 `tcp` `MULTI_DEALER_DEALER`·`MULTI_PUBSUB`의 **5-run paired 재측정**이다. 이후의 경계 셀(목표 대비 여유가 5%p 이내)도 같은 규칙으로 5-run으로 판정한다. 목표에서 멀리 떨어진 셀은 1-run 탐색값으로 `보류`를 기록해도 된다.
