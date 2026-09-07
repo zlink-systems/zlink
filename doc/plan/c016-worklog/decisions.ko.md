@@ -2001,3 +2001,8 @@ Go REQREP 러너 정합 중 드러났고, **감독자가 최소 재현 프로그
 
 **MP-6**(`core-rf-MP-6-report.md`, 테스트만, core/src delta 0): `test_writable_resubmit_from_other_thread_while_sequence_open`(REQUEST)·`_send`(SEND), inproc·tcp, sleep 없이 barrier·monitor·poller/token으로 동기화. SEND 변형 10/10 green. **REQUEST 변형 RED**: B의 재제출·wire 원자성·router 수신·reply까지 성공하지만 A의 sequence가 열린 동안 B의 REQUEST completion이 dealer에 `NO_DATA/EAGAIN`으로 도착하지 않는다. 머신 A가 C++ 65536 B에서 본 발현이 EINVAL 너머에 두 번째 결함을 숨기고 있었다 — D-BP15의 요청("1번만 통과하고 2번이 증상만 옮겨가면 안 된다")이 정확히 맞았다.
 **결정**: MP-7(sol/high, 2 h) — 열린 public staging을 socket-wide로 보는 잔존 분기(`socket_send_complete.cpp:444` deferred, dispatch :529/546, flow_state :73, request/reply의 request_seq/pending cookie 검사, completion publish gating) 중 원인을 확정해 소유 모듈에서 수정. 이후 재리뷰(astra) → 게이트. 0.17.2 완료 예상 **9/8 오전~정오**.
+
+
+## D-BP16 (2026-09-07 21:00, 머신 A) Go REQREP의 미완료 상한은 0.17.2 재개 시점에 함께 제거한다
+D-BP15의 러너 C 모델 복원에서 `PERF_MULTI_REQREP_MAX_OUTSTANDING`·`PERF_SINGLE_REQREP_MAX_OUTSTANDING`을 8개 러너에서 제거했으나, **Go의 두 파일에는 남는다** — `bindings/go/perf/single/perf_reqrep.go`, `bindings/go/perf/multi/perf_multi_socket_reqrep.go`. Go REQREP 경로가 Core 동시 multipart 결함으로 0.17.2까지 보류(D-BP12·D-BP14)여서 이번 작업 범위에서 제외했기 때문이다.
+Go REQREP은 지금 측정 자체가 불가능하므로 당장 해는 없다. 다만 **0.17.2로 Go REQREP을 재개할 때 이 상한을 함께 제거해야 한다.** 남겨 두면 `PERF_POLICY.md:271-274`의 "app 고정 window를 두지 않는다"를 Go만 어긴 상태로 측정하게 된다. 재개 절차에 이 항목을 포함한다.
