@@ -24,7 +24,7 @@ if [[ "${ZLINK_CORE_SOURCE}" == "local" \
 fi
 zlink_export_local_core_runtime
 if [[ "${ZLINK_CORE_SOURCE}" == "release" && "${ZLINK_CORE_PACKAGE_PREFIX:-}" != /* ]]; then
-  echo "ZLINK_CORE_PACKAGE_PREFIX must name the approved Core 0.17.0 install prefix" >&2
+  echo "ZLINK_CORE_PACKAGE_PREFIX must name the approved Core 0.17.1 install prefix" >&2
   exit 2
 fi
 TASKS=(
