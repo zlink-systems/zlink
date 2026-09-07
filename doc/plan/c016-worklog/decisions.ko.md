@@ -1781,3 +1781,6 @@ G-2(opus, `core-rf-G-2-summary.md`, 52분): **hotpath 5셀 전부 개선** — p
 
 ## D-B174 (2026-09-07 11:20, 머신 B) 머신 A가 perf/c single 러너 변경(`074d2a5964`·`d634417a37`·`522df6d57e`) — perf/c 재기준은 새 러너로
 A: single request/reply 러너 복원(D-B169의 "제외"를 되돌림)·단일 active phase, one-way 러너 −218행, multi 러너 종료·부하 모델 조정, weighted latency. **Core diff 0**, G-5(`perf_zlink_part_helpers.hpp`)와 충돌 없음. 결과: perf/c single·multi 값은 이 커밋 전후로 비교 불가(G-5와 겹쳐 어차피 재기준 대상). 조치: Phase 2G 재기준(D-B170 (2))은 **A의 새 러너 + G-5 캐시** 상태에서 idle runs 3로 잡는다 — G-2·G-1·G-3 착지 뒤, 다른 job이 없을 때. 그전까지 G-job 판정은 **hotpath 5셀(결정적) + 축소 callgrind 셀**로만. single request/reply 셀은 정책이 되돌아왔으므로 다시 스크린에 포함(D-B169 정정). 머신 A와의 역할: A가 러너 정합(policy parity)을, B가 Core를 맡는다 — `bindings/c/perf` 러너 본체는 이제 A 소유로 보고 B는 측정만 한다(G-5 같은 하네스 비용 수정은 A에 알리고 조율).
+
+## D-B175 (2026-09-07 11:40, 사용자 결정) thread-safe 소켓은 설계 철학 — 잠금 완화 제안(D-g1·D-g2) 철회
+사용자: "이건 설계 철학이야. zlink는 thread safe한 소켓이야. 그걸 바꾸라고 하면 안되지." 반영: §7.5에서 D-g1(단일 스레드 감지로 앱 간 잠금 생략)·D-g2(I/O 스레드의 소켓 상태 직접 쓰기 제거)를 철회. zmq 대비 남은 격차(비경합 잠금 ~15쌍, 1쌍 ≈ 처리량 1.5~2 %)는 thread-safe 계약의 대가로 받아들인다. 캠페인이 계속 줄이는 것은 계약 안의 항목뿐 — 지키는 불변식이 없는 잠금(S-1·G-1), 중복 syscall(S-9·G-4), wake 단가(G-7), 하네스 오염(G-5), msg/pipe 인라인(G-2·G-3). 목표 문장(§1.1)도 같은 취지로 고침.

@@ -39,7 +39,7 @@
 - 64 KiB에서는 zlink 서버 CPU가 228%로 asio(327%)보다 낮다. 여기서는 I/O 스레드가 놀고 있다는 뜻이므로 wake·flow control(credit)·write batching 쪽이 병목이다. `zlink_packet`이 zlink보다 15% 높은 것도 앱 쪽 프레임 재조립이 비용임을 보여 준다.
 - 벤치 서버(`stacks/zlink/test_scenario_stream_zlink.cpp`)는 poller → `zlink_recv_part` → 프레임 판정 → `zlink_send_part_rid` 에코 구조이며 앱 스레드가 별도다. asio 스택은 io_context 워커 안에서 read→write를 바로 잇는다. zlink는 구조상 I/O 스레드 ↔ 앱 스레드 핸드오프(ypipe + mailbox wake)가 한 번씩 더 있으므로 그 핸드오프를 **메시지마다가 아니라 묶음마다** 치르게 하는 것이 격차를 메우는 핵심 방향이다.
 
-목표(2026-09-07 개정): **구조가 같은 pull 모델인 zmq 대비 세 크기 모두 ≥ 1.0**이 1차 목표(idle G-0b 기준 0.91 / 0.98 / 1.27). asio(push, 핸드오프 없음) 대비는 참고 지표로만 기록한다. 남은 격차는 핸드오프의 유무가 아니라 단가(메시지당 mailbox command 2회, eventfd write 0.5회, 컨텍스트 스위치 2×)다.
+목표(2026-09-07 개정): **구조가 같은 pull 모델인 zmq 대비 세 크기 모두 ≥ 1.0**이 1차 목표(idle G-0b 기준 0.91 / 0.98 / 1.27). asio(push, 핸드오프 없음) 대비는 참고 지표로만 기록한다. 남은 격차의 대부분은 thread-safe 소켓 계약이 요구하는 비경합 잠금 ~15쌍(1쌍 ≈ 처리량 1.5~2 %)이며, **이 계약은 설계 철학이므로 바꾸지 않는다**(사용자, 2026-09-07). 캠페인은 계약 안에서 지키는 것이 없는 잠금·중복 syscall·wake 단가만 줄인다.
 
 ### 1.2 STREAM 데이터 경로와 파일
 
@@ -241,8 +241,7 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 | D-d | S-B | 06-auto-hwm 스냅샷 정의: credit published store를 경계에서만 | 소 | 대기 |
 | D-e | S-11 | 04-thread-safety 소유권: 공개 receive lease가 command owner를 배타하도록 할지(`receive_once_guarded`·fq active partition의 TSan race). 계약 문장 변경이 아니라 소유 규칙 결정 + 성능 예산 | 정확성(잠재 race 제거), 성능은 −일 수 있음 | 대기 |
 | D-f | R2 | 08-stream "런타임 기본값": `ZLINK_ASIO_STREAM_GATHER_THRESHOLD`·`..._TINY_GATHER_THRESHOLD`·`..._DISABLE_GATHER` env가 S-4·R2 이후 어떤 동작에도 영향 없음(STREAM raw 엔진은 gather 불가). 접근자·문서 삭제는 스펙 문장 변경 | 구조(죽은 knob 3개 제거) | 대기 |
-| **D-g1** | G-1·G-A | 단일 앱 스레드 전용 소켓 감지 — 첫 공개 호출의 tid 기록 + 외부 스레드 첫 접근 시 잠금 획득·`shared` 플래그·in-flight admission 0 대기(S-12 장치) 뒤 영구 잠금 경로(단방향 전이, biased-locking 모델). 호출자 계약 불변(다중 스레드 사용 유지). 생략 가능한 것은 **앱 스레드 간** 잠금 3~4개(API sync, receive lease, command-owner 소유권)뿐 | +3~5 % | 감독관 권고: **하지 않음**(감지 장치 대비 이득 작음; 사용자 지적 2026-09-07) |
-| **D-g2** | G-1 | 02-threading-model·04-thread-safety·06-auto-hwm: 남은 잠금 대부분은 **앱 ↔ I/O 스레드**(`_out_sync` credit/HWM 회계, route shard vs pipe 종료, receive partition activation). zmq처럼 "I/O 스레드는 소켓 상태를 직접 쓰지 않고 command로만 전달"하는 규칙으로 바꿔야 제거됨 — auto-HWM 회계 소유자 이동을 포함하는 설계 작업, 캠페인 범위 밖. asio·zmq 동률은 여기서만 나온다 | +10 % 이상 | 감독관 권고: 다음 캠페인 후보(설계 job). 근거: 비경합 잠금 1쌍 ≈ Ir 2~3 %·처리량 1.5~2 %(S-1·G-1 실측), 캐시 라인 왕복은 Ir에 미포함 |
+| ~~D-g1·D-g2~~ | G-1 | **철회(2026-09-07, 사용자)**: thread-safe 소켓은 zlink의 설계 철학이다. 앱 간·앱↔I/O 잠금을 계약 완화로 없애는 제안은 올리지 않는다. 남은 잠금 ~15쌍(≈ zmq 대비 격차의 대부분)은 그 철학의 대가로 받아들이고, 계약 안에서 "아무것도 지키지 않는 잠금"만 계속 찾아 없앤다(S-1·G-1 방식) | — | 철회 |
 | 관찰 | S-A | 64 KiB에서 zlink 서버 앱 스레드 1개가 93 % 포화(I/O 스레드 45 % idle). 벤치 서버 구조(앱 스레드 1개) 문제이며 Core 계약과 무관 — asio 스택은 io 워커 8개에서 read→write 직결 | — | 기록 |
 
 ## 7.6 머신 A(bindings 성능 작업)와의 조율
