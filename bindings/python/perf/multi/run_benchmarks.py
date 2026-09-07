@@ -1315,13 +1315,6 @@ def _build_options(args, patterns, transports, requested_msg_sizes, clients, env
         "timeout_seconds": os.environ.get("PERF_MULTI_TIMEOUT_SECONDS")
         or os.environ.get("PERF_TIMEOUT_SECONDS", "auto"),
     }
-    try:
-        bound = int(os.environ.get("PERF_MULTI_REQREP_MAX_OUTSTANDING", "64"))
-    except ValueError:
-        bound = 64
-    if bound <= 0:
-        bound = 64
-    options["reqrep_max_outstanding"] = max(2, bound)
     return options
 
 

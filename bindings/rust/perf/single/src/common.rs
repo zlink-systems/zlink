@@ -159,7 +159,7 @@ thread_local! {
 pub fn drive_sends_with_poller(socket: &dyn zlink::Pollable) {
     let poller = zlink::Poller::new().expect("sender poller");
     poller
-        .add_socket(socket, zlink::POLLOUT | zlink::POLLCOMPLETION, 0)
+        .add_socket(socket, zlink::POLLCOMPLETION, 0)
         .expect("sender poller registration");
     SENDER_POLLER.with(|slot| *slot.borrow_mut() = Some(poller));
 }
@@ -759,12 +759,6 @@ where
     S: FnMut(Message, Duration) -> RequestTask,
 {
     let request_timeout = Duration::from_millis(env_or_u64("PERF_SINGLE_REQREP_TIMEOUT_MS", 200));
-    let configured_max = env_or_u64("PERF_SINGLE_REQREP_MAX_OUTSTANDING", 64);
-    let max_outstanding = (if configured_max == 0 {
-        64
-    } else {
-        configured_max.max(2)
-    }) as usize;
     let drain_timeout = Duration::from_millis(env_or_u64(
         "PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS",
         (request_timeout.as_millis().saturating_mul(4).max(1_000)) as u64,
@@ -773,28 +767,25 @@ where
     let active_deadline = Instant::now() + Duration::from_secs(config.duration_seconds.max(1));
     let mut stats = LatencyStats::new();
     let mut sequence = 1u64;
-    let mut requests: Vec<RequestTask> = Vec::with_capacity(max_outstanding);
+    let mut requests: Vec<RequestTask> = Vec::new();
     let poller = zlink::Poller::new().map_err(|error| error.to_string())?;
     poller
-        .add_socket(socket, zlink::POLLOUT | zlink::POLLCOMPLETION, 0)
+        .add_socket(socket, zlink::POLLCOMPLETION, 0)
         .map_err(|error| error.to_string())?;
     let mut events = [zlink::PollEvent::default()];
     let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
     let mut task_context = TaskContext::from_waker(&waker);
 
     while Instant::now() < active_deadline {
-        while requests.len() < max_outstanding && Instant::now() < active_deadline {
-            let mut payload =
-                Message::with_size(payload_size).map_err(|error| error.to_string())?;
-            encode_header(
-                payload.data_mut(),
-                PHASE_ACTIVE,
-                config.size as u32,
-                sequence,
-            );
-            requests.push(submit(payload, request_timeout));
-            sequence = sequence.wrapping_add(1);
-        }
+        let mut payload = Message::with_size(payload_size).map_err(|error| error.to_string())?;
+        encode_header(
+            payload.data_mut(),
+            PHASE_ACTIVE,
+            config.size as u32,
+            sequence,
+        );
+        requests.push(submit(payload, request_timeout));
+        sequence = sequence.wrapping_add(1);
 
         let mut index = 0;
         let mut progressed = false;

@@ -3,10 +3,10 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const readline = require('node:readline');
 const zlink = require('@zlink-systems/zlink');
-const { createPayload, createRunId, stampPayload } = require('../common/perf_metrics');
+const { createPayload, createRunId, sleepImmediate, stampPayload } = require('../common/perf_metrics');
 const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLOUT, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, measurementParts, pollEvents, trySocketPublish } = require('./perf_multi_runtime');
+const { applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, measurementParts, trySocketPublish } = require('./perf_multi_runtime');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 const TOPIC = 'bench';
 async function main() {
@@ -16,8 +16,6 @@ async function main() {
     const pub = zlink.createPubSocket(ctx);
     const payload = createPayload(options.msgSize);
     const measurementRecord = measurementParts(payload);
-    const poller = zlink.createPoller();
-    const pollBuffer = zlink.createPollEvents(1);
     let rl = null;
     try {
         applySocketPolicy(pub, {
@@ -27,7 +25,6 @@ async function main() {
         pub.bind(options.endpoint);
         ctx.recalculateAutoHwm();
         emitMultiSocketHwmDetail(pub, 'endpoint', options.transport, options.msgSize);
-        poller.add(pub, pollEvents(POLLOUT), 0);
         console.log(`READY,${options.endpoint}`);
         let activeDone = false;
         rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -44,10 +41,7 @@ async function main() {
             while (process.hrtime.bigint() < activeStopNs) {
                 stampPayload(payload, { phase: 1, runId, msgSize: options.msgSize, seq });
                 while (!trySocketPublish(pub, TOPIC, measurementRecord)) {
-                    // C recreates the consumed outbound message after a POLLOUT wakeup
-                    // and retries the same stamped payload. The public Node publish
-                    // builder already creates a fresh native message for each call.
-                    poller.wait(pollBuffer, process.platform === 'win32' ? 50 : 100);
+                    await sleepImmediate();
                 }
                 seq += 1n;
             }
@@ -61,7 +55,7 @@ async function main() {
             // subscriber's `-1` poller wait. Mirrors the already-fixed cpp
             // perf_pubsub_server.cpp publish_stop_token.
             while (!trySocketPublish(pub, TOPIC, [STOP_TOKEN_BYTES])) {
-                poller.wait(pollBuffer, process.platform === 'win32' ? 50 : 100);
+                await sleepImmediate();
             }
             // Keep the PUB socket open until the runner sends STOP (after the
             // measuring client has exited). Closing here with linger=0 would
@@ -73,8 +67,6 @@ async function main() {
     }
     finally {
         rl?.close();
-        pollBuffer.close();
-        poller.close();
         pub.close();
         ctx.close();
     }

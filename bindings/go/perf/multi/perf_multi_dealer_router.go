@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -109,7 +110,8 @@ func runMultiDealerRouterEchoWindow(
 	// turns SENDSEND into reply-gated ping-pong.
 	var senders sync.WaitGroup
 	sendErrors := make(chan error, len(dealers))
-	measurementDone := make(chan struct{})
+	sendContext, cancelSends := context.WithDeadline(context.Background(), window.StopAt)
+	defer cancelSends()
 	for _, dealer := range dealers {
 		socket := dealer.socket
 		senders.Add(1)
@@ -117,14 +119,9 @@ func runMultiDealerRouterEchoWindow(
 			defer senders.Done()
 			payload := perfcommon.PreparePayload(msgSize)
 			for time.Now().Before(window.StopAt) {
-				if sendErr := sendMultiDealerRouterRequest(socket, payload, msgSize, window); sendErr != nil {
-					select {
-					case <-measurementDone:
+				if sendErr := sendMultiDealerRouterRequest(sendContext, socket, payload, msgSize, window); sendErr != nil {
+					if sendContext.Err() != nil {
 						return
-					default:
-					}
-					if perfcommon.IsTransient(sendErr) {
-						continue
 					}
 					select {
 					case sendErrors <- fmt.Errorf("multi dealer/router client send: %w", sendErr):
@@ -162,14 +159,7 @@ func runMultiDealerRouterEchoWindow(
 			}
 		}
 	}
-	// A managed send can legitimately still be waiting on its final WRITABLE
-	// token when the measurement window closes. Closing the client sockets is
-	// the lifecycle wakeup for those submissions; otherwise senders.Wait can
-	// hang forever after the receive loop has stopped draining echoed traffic.
-	close(measurementDone)
-	for _, dealer := range dealers {
-		_ = dealer.socket.Close()
-	}
+	cancelSends()
 	if !waitForMultiSendDrain(&senders) {
 		perfcommon.Must(fmt.Errorf("multi dealer/router send drain timed out"))
 	}
@@ -181,6 +171,7 @@ func runMultiDealerRouterEchoWindow(
 }
 
 func sendMultiDealerRouterRequest(
+	ctx context.Context,
 	socket *zlink.DealerSocket,
 	payload []byte,
 	msgSize int,
@@ -188,7 +179,7 @@ func sendMultiDealerRouterRequest(
 ) error {
 	perfcommon.StampWindowPayload(payload, window.ActiveAt)
 	message := perfcommon.NewMessage(payload)
-	return perfcommon.SubmitMeasurementSend(socket.Send(), message)
+	return perfcommon.SubmitMeasurementSendContext(ctx, socket.Send(), message)
 }
 
 func drainMultiDealerRouterReplies(

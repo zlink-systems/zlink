@@ -700,15 +700,6 @@ def bytes_to_kb(value):
     return f"{parsed / 1024.0:.1f}"
 
 
-try:
-    reqrep_max_outstanding = int(os.environ.get("PERF_SINGLE_REQREP_MAX_OUTSTANDING", "64"))
-except ValueError:
-    reqrep_max_outstanding = 64
-if reqrep_max_outstanding <= 0:
-    reqrep_max_outstanding = 64
-reqrep_max_outstanding = max(2, reqrep_max_outstanding)
-
-
 def emit_options(label):
     emit(f"## Effective Options ({label})")
     emit("- lang: java")
@@ -731,7 +722,6 @@ def emit_options(label):
     emit(f"- patterns: {','.join(p for p, _ in plan)}")
     emit(f"- transports: {','.join(all_tr) if all_tr else 'none'}")
     emit(f"- msg_sizes: {','.join(str(s) for s in plan_sizes) if plan_sizes else 'none'}")
-    emit(f"- reqrep_max_outstanding: {reqrep_max_outstanding}")
 
 
 def emit_auto_hwm(pattern):

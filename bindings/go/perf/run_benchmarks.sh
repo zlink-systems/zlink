@@ -579,13 +579,6 @@ emit_effective_options_single() {
   echo "- patterns: ${EFFECTIVE_PATTERNS_CSV}"
   echo "- transports: ${EFFECTIVE_TRANSPORTS_CSV}"
   echo "- msg_sizes: ${MSG_SIZES}"
-  local reqrep_max="${PERF_SINGLE_REQREP_MAX_OUTSTANDING:-64}"
-  if ! [[ "${reqrep_max}" =~ ^[0-9]+$ ]] || (( reqrep_max == 0 )); then
-    reqrep_max=64
-  elif (( reqrep_max < 2 )); then
-    reqrep_max=2
-  fi
-  echo "- reqrep_max_outstanding: ${reqrep_max}"
 }
 
 append_case_output() {

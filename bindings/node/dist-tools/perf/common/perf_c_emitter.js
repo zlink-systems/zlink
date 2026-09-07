@@ -39,10 +39,6 @@ function parseEnvInt(name, fallback) {
 function parseEnvPairInt(primary, fallbackName, fallback) {
     return parseEnvInt(primary, parseEnvInt(fallbackName, fallback));
 }
-function parseReqRepMax(name) {
-    const parsed = Number(envGet(name) || 64);
-    return Math.max(2, Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 64);
-}
 // --- single table format (C single/run_comparison.py) -------------------
 function singleTableHeaderLine() {
     return ('| Size     |       Throughput |    Bandwidth |  Lat.Mean(ms) |'
@@ -264,7 +260,6 @@ function isoWithOffset(date) {
 // --- effective options --------------------------------------------------
 function buildSingleOptionItems(opts) {
     const ioThreads = Math.max(1, parseEnvInt('PERF_IO_THREADS', 1));
-    const reqrepMax = parseReqRepMax('PERF_SINGLE_REQREP_MAX_OUTSTANDING');
     return [
         ['runs', String(opts.runs)],
         ['duration_seconds', String(parseEnvInt('PERF_SINGLE_DURATION_SECONDS', opts.duration))],
@@ -282,8 +277,7 @@ function buildSingleOptionItems(opts) {
         ['ctx_auto_hwm_profile', envGet('PERF_CTX_AUTO_HWM_PROFILE') || 'balanced'],
         ['patterns', opts.patterns.join(',')],
         ['transports', opts.transports.length > 0 ? [...new Set(opts.transports)].sort().join(',') : 'none'],
-        ['msg_sizes', opts.msgSizes.length > 0 ? [...new Set(opts.msgSizes)].sort((a, b) => a - b).join(',') : 'none'],
-        ['reqrep_max_outstanding', String(reqrepMax)]
+        ['msg_sizes', opts.msgSizes.length > 0 ? [...new Set(opts.msgSizes)].sort((a, b) => a - b).join(',') : 'none']
     ];
 }
 function buildMultiOptionItems(opts) {
@@ -299,7 +293,6 @@ function buildMultiOptionItems(opts) {
         : `${clientsForConnect >= 10000 ? 1024 : 128} (default)`;
     const serviceClients = parseEnvInt('PERF_MULTI_SERVICE_CLIENTS', 0);
     const timeoutOverride = parseEnvPairInt('PERF_MULTI_TIMEOUT_SECONDS', 'PERF_TIMEOUT_SECONDS', 0);
-    const reqrepMax = parseReqRepMax('PERF_MULTI_REQREP_MAX_OUTSTANDING');
     const roleIoDisplay = (role) => {
         const explicit = role === 'server' ? opts.serverIoThreads : opts.clientIoThreads;
         if (Number.isFinite(explicit)) {
@@ -371,8 +364,7 @@ function buildMultiOptionItems(opts) {
         ['lat_timeout_ms', String(parseEnvInt('PERF_MULTI_LAT_TIMEOUT_MS', 5000))],
         ['stream_non_tcp_clients_max', String(parseEnvPairInt('PERF_STREAM_NON_TCP_CLIENTS_MAX', 'PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX', 10000))],
         ['disable_resource_metrics', String(Math.max(0, parseEnvInt('PERF_DISABLE_RESOURCE_METRICS', 0)))],
-        ['timeout_seconds', timeoutOverride > 0 ? String(timeoutOverride) : 'auto'],
-        ['reqrep_max_outstanding', String(reqrepMax)]
+        ['timeout_seconds', timeoutOverride > 0 ? String(timeoutOverride) : 'auto']
     ];
 }
 function effectiveOptionLines(lang, suite, label, items) {

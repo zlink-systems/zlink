@@ -1046,7 +1046,6 @@ def build_single_option_items(
         ("patterns", ",".join(patterns)),
         ("transports", ",".join(unique_transports) if unique_transports else "none"),
         ("msg_sizes", ",".join(str(sz) for sz in unique_sizes) if unique_sizes else "none"),
-        ("reqrep_max_outstanding", "backpressure"),
     ]
     return items
 

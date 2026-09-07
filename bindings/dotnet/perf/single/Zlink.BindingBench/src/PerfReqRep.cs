@@ -230,9 +230,15 @@ internal static class PerfReqRep
         }
         finally
         {
-            if (!SendStopTokenBlocking(client, "[single-dealer-router-reqrep]"))
-                requestError ??= new TimeoutException(
-                    "dealer-router reqrep stop token was not sent");
+            try
+            {
+                using Message stop = Message.From(StopToken.Bytes);
+                client.Send().Message(stop).Async().GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                requestError ??= ex;
+            }
             serverThread.Join();
         }
         if (requestError != null)
@@ -259,18 +265,10 @@ internal static class PerfReqRep
         while (clientActualRoutingId == null
                && Stopwatch.GetTimestamp() < deadlineTicks)
         {
-            try
-            {
-                using Message pingMessage = Message.From(ping);
-                client.Send(RouterReqRepServerRid)
-                    .Message(pingMessage)
-                    .Submit();
-            }
-            catch (ZlinkException ex)
-                when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
-                      || PerfShared.IsTransientNetworkError(ex.NativeErrno))
-            {
-            }
+            using Message pingMessage = Message.From(ping);
+            client.Send(RouterReqRepServerRid)
+                .Message(pingMessage)
+                .Async().GetAwaiter().GetResult();
 
             int waitMs = Math.Max(1,
                 (int)Math.Ceiling((deadlineTicks - Stopwatch.GetTimestamp())
@@ -295,18 +293,11 @@ internal static class PerfReqRep
         if (clientActualRoutingId == null)
             return null;
 
-        try
+        using (Message pongMessage = Message.From(pong))
         {
-            using Message pongMessage = Message.From(pong);
             server.Send(clientActualRoutingId.Value)
                 .Message(pongMessage)
-                .Submit();
-        }
-        catch (ZlinkException ex)
-            when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
-                  || PerfShared.IsTransientNetworkError(ex.NativeErrno))
-        {
-            return null;
+                .Async().GetAwaiter().GetResult();
         }
 
         using var clientPoller = Zlink.CreatePoller();
@@ -436,8 +427,7 @@ internal static class PerfReqRep
             try
             {
                 ulong seq = 1;
-                int maxOutstanding = ResolveReqRepMaxOutstanding();
-                var pending = new List<Task<IReadOnlyList<Message>>>(maxOutstanding);
+                var pending = new List<Task<IReadOnlyList<Message>>>();
                 long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
 
                 void SettleCompleted()
@@ -507,16 +497,11 @@ internal static class PerfReqRep
 
                 while (Stopwatch.GetTimestamp() < deadlineTicks && !fatal)
                 {
-                    bool submittedAny = false;
-                    int submittedSinceProgress = 0;
-                    // 1) Submit continuously. Nothing here waits for a reply;
-                    //    the only bound is the un-settled awaitable count
-                    //    (PERF_SINGLE_TEST_POLICY.md 1.1.3) - a memory bound,
-                    //    never a round-trip gate.
-                    while (Stopwatch.GetTimestamp() < deadlineTicks && !fatal
-                           && pending.Count < maxOutstanding)
+                    // One requester turn submits one operation. The binding
+                    // retains a refused input until its WRITABLE token resumes
+                    // that same operation.
+                    using (Message message = Message.Allocate(payloadSize))
                     {
-                        using Message message = Message.Allocate(payloadSize);
                         long sentTicks = Stopwatch.GetTimestamp();
                         StampMetricHeader(message.AsSpan(), RunId, ActivePhase,
                             msgSize, seq, EpochNsFromTimestamp(sentTicks));
@@ -524,28 +509,17 @@ internal static class PerfReqRep
                         {
                             pending.Add(submit(message));
                             seq++;
-                            submittedAny = true;
-                        }
-                        catch (ZlinkException ex)
-                            when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
-                                  || PerfShared.IsTransientNetworkError(ex.NativeErrno))
-                        {
-                            break;
                         }
                         catch (Exception ex)
                         {
                             RecordError(ex);
-                            break;
                         }
-                        // Give completions a turn on the same cadence as the C
-                        // reference submit cursor (64 submissions per round).
-                        if (++submittedSinceProgress >= 64)
-                            break;
                     }
                     if (fatal)
                         break;
-                    // 2) Progress completions on this same thread.
-                    ProgressOnce(submittedAny ? 0 : 50);
+                    // Progress completions on this same thread. A bounded wait
+                    // prevents an all-backpressured interval from spinning.
+                    ProgressOnce(50);
                 }
 
                 // Bounded completion drain of requests submitted before the
@@ -611,14 +585,6 @@ internal static class PerfReqRep
             }
             Interlocked.Increment(ref serverReplied);
         }
-    }
-
-    // The shared awaitable bound required by PERF_SINGLE_TEST_POLICY.md 1.1.3.
-    // Admission and WRITABLE retries remain owned by the binding.
-    private static int ResolveReqRepMaxOutstanding()
-    {
-        return Math.Max(2, PerfEnv.ReadPositive(
-            "PERF_SINGLE_REQREP_MAX_OUTSTANDING", 64));
     }
 
     // Read once per process: the runner fixes this launch-time knob before

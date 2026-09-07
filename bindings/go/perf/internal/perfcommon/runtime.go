@@ -10,8 +10,7 @@ import (
 )
 
 const (
-	ZLinkPollIn  zlink.PollEventFlag = 1
-	ZLinkPollOut zlink.PollEventFlag = 2
+	ZLinkPollIn zlink.PollEventFlag = 1
 )
 
 type BenchmarkWindow struct {

@@ -46,13 +46,17 @@ func SubmitMeasurement(op zlink.PublishOp, message *zlink.Message, flags zlink.S
 }
 
 func SubmitMeasurementSend(op zlink.SendOp, message *zlink.Message) error {
+	return SubmitMeasurementSendContext(context.Background(), op, message)
+}
+
+func SubmitMeasurementSendContext(ctx context.Context, op zlink.SendOp, message *zlink.Message) error {
 	submit := op.MoveMessage(message)
 	if MeasurementPartCount() == 2 {
 		tail := NewMessageWithSize(0)
 		defer tail.Close()
 		submit = submit.Message(tail)
 	}
-	return submit.Submit(context.Background())
+	return submit.Submit(ctx)
 }
 
 func MeasurementPayload(parts []*zlink.Message) (*zlink.Message, error) {

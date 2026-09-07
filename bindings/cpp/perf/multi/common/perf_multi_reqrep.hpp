@@ -30,12 +30,6 @@ struct config_t
     bool server_has_routing_id;
 };
 
-inline bool transient (int err_)
-{
-    return err_ == EAGAIN || err_ == EWOULDBLOCK || err_ == EINTR || err_ == ETIMEDOUT
-           || err_ == EHOSTUNREACH || err_ == ENOTCONN;
-}
-
 // PERF_MULTI_TEST_POLICY.md:386-388 / PERF_POLICY.md:483-486: the
 // request/reply client prints CLIENT_DONE, keeps its request completion
 // target sockets open, and closes them only after the runner has stopped the
@@ -52,21 +46,6 @@ inline int request_timeout_ms ()
     // instrumentation inside the measured path.
     static const int value =
       std::max (1, parse_positive_env ("PERF_MULTI_REQREP_TIMEOUT_MS", 200));
-    return value;
-}
-
-// Shared binding-wide outstanding bound. The public request terminal makes one
-// DONTWAIT admission attempt and resumes only from its own WRITABLE token
-// (zlink/Contracts/Messaging/operation_contracts.hpp:320-324), so Core already
-// paces admission exactly as the C reference does. This cap is only the memory
-// bound on un-settled awaitables: without it a runner that never awaits would
-// accumulate operation objects while the wire is held by HWM.
-// PERF_MULTI_TEST_POLICY.md:164-168 forbids using it as a round-trip gate, so
-// it must stay far above the steady-state depth (see the pass log).
-inline int max_outstanding_per_socket ()
-{
-    static const int value =
-      std::max (2, parse_positive_env ("PERF_MULTI_REQREP_MAX_OUTSTANDING", 64));
     return value;
 }
 
@@ -113,7 +92,6 @@ enum class logical_launch_t
 {
     launching,
     owned_by_operation,
-    retry,
     fatal
 };
 
@@ -150,16 +128,12 @@ template <typename SocketT> struct client_slot_t
     client_slot_t () :
         socket (),
         logical (),
-        outstanding (0),
-        retry_payload_stamped (false),
         next_seq (1)
     {
     }
 
     std::unique_ptr<SocketT> socket;
     logical_request_t logical;
-    std::atomic<unsigned> outstanding;
-    bool retry_payload_stamped;
     uint64_t next_seq;
 };
 
@@ -233,8 +207,9 @@ template <typename SocketT> class client_bench_t
         _slots (),
         _monitors (),
         _ready_queue (),
-        _completion (std::make_shared<client_completion_state_t> (msg_size_)),
-        _max_outstanding (max_outstanding_per_socket ())
+        _completion_poller (),
+        _completion_events (),
+        _completion (std::make_shared<client_completion_state_t> (msg_size_))
     {
     }
 
@@ -254,27 +229,17 @@ template <typename SocketT> class client_bench_t
 
         while (std::chrono::steady_clock::now () < deadline
                && !_completion->fatal.load (std::memory_order_acquire)) {
-            bool launched = false;
             for (size_t i = 0; i < _slots.size (); ++i) {
-                bool slot_launched = false;
-                if (!launch_request (*_slots[i], slot_launched)) {
+                if (!launch_request (*_slots[i])) {
                     _completion->fatal.store (true, std::memory_order_release);
                     signal_change (_completion);
                     break;
                 }
-                launched = launched || slot_launched;
             }
             if (_completion->fatal.load (std::memory_order_acquire))
                 break;
-            if (launched) {
-                (void) _ready_queue.run_ready_round ();
-            } else if (std::chrono::steady_clock::now () < deadline) {
-                const auto wake_deadline = std::min (
-                  deadline, std::chrono::steady_clock::now ()
-                              + std::chrono::milliseconds (50));
-                (void) _ready_queue.wait_and_run_ready_round_until (
-                  wake_deadline);
-            }
+            if (!progress_once (deadline))
+                break;
         }
 
         const auto drain_deadline =
@@ -282,8 +247,8 @@ template <typename SocketT> class client_bench_t
                                                 std::max (1000, _settings.rcvtimeo_ms * 4));
         while (_completion->outstanding.load (std::memory_order_acquire) != 0
                && std::chrono::steady_clock::now () < drain_deadline) {
-            (void) _ready_queue.wait_and_run_ready_round_until (
-              drain_deadline);
+            if (!progress_once (drain_deadline))
+                break;
         }
 
         if (_completion->outstanding.load (std::memory_order_acquire) != 0) {
@@ -344,6 +309,12 @@ template <typename SocketT> class client_bench_t
                 close_connect_monitor (_monitors[i]);
             if (!ready || !recalculate_auto_hwm (_ctx))
                 return false;
+            _completion_events.resize (_slots.size ());
+            for (size_t i = 0; i < _slots.size (); ++i) {
+                _completion_poller.add (
+                  *_slots[i]->socket,
+                  zlink::poll_event_flag_t::pollcompletion, i);
+            }
             return !_slots.empty ();
         }
         catch (const zlink::binding_error_t &) {
@@ -351,43 +322,59 @@ template <typename SocketT> class client_bench_t
         }
     }
 
-    bool launch_request (client_slot_t<SocketT> &slot_, bool &launched_)
+    bool progress_once (const std::chrono::steady_clock::time_point &deadline_)
     {
-        launched_ = false;
+        try {
+            // One completion-only wait paces every submit/progress turn.
+            // Registering every requester on this one public poller keeps
+            // initial submission, binding-owned WRITABLE resumption, and reply
+            // completion on the same active application thread.
+            const auto now = std::chrono::steady_clock::now ();
+            const auto wait = now < deadline_
+                                ? std::min (std::chrono::milliseconds (50),
+                                            std::chrono::duration_cast<std::chrono::milliseconds> (
+                                              deadline_ - now))
+                                : std::chrono::milliseconds::zero ();
+            (void) _completion_poller.wait (
+              _completion_events.data (), _completion_events.size (),
+              wait);
+        }
+        catch (const zlink::binding_error_t &) {
+            _completion->fatal.store (true, std::memory_order_release);
+            signal_change (_completion);
+            return false;
+        }
+        (void) _ready_queue.run_ready_round ();
+        return true;
+    }
+
+    bool launch_request (client_slot_t<SocketT> &slot_)
+    {
         // PERF_MULTI_TEST_POLICY.md:164-168 — do not fix the inflight request
         // count and do not serialize the round trip 1:1.  Each turn submits
         // one new logical request per socket and never waits for the previous
         // reply, matching the C reference submit cursor
         // (bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:577-590).
         // REQUEST async owns the pre-admission WRITABLE wait and the
-        // post-admission reply wait, so the runner keeps no pending queue.
-        if (slot_.outstanding.load (std::memory_order_acquire)
-            >= static_cast<unsigned> (_max_outstanding))
-            return true;
-        if (!slot_.retry_payload_stamped) {
-            const uint64_t sent_ns = perf_metric::now_ns ();
-            if (!perf_metric::stamp_payload (
-                  slot_.logical.payload.data (), slot_.logical.payload.size (),
-                  _completion->run_id, perf_metric::phase_active, _msg_size,
-                  slot_.next_seq, sent_ns))
-                return false;
-            slot_.retry_payload_stamped = true;
-        }
+        // post-admission reply wait. The runner submits once for this socket's
+        // turn and never retries or gates on an application-side depth.
+        const uint64_t sent_ns = perf_metric::now_ns ();
+        if (!perf_metric::stamp_payload (
+              slot_.logical.payload.data (), slot_.logical.payload.size (),
+              _completion->run_id, perf_metric::phase_active, _msg_size,
+              slot_.next_seq, sent_ns))
+            return false;
 
         slot_.logical.launch.store (logical_launch_t::launching,
                                     std::memory_order_release);
         submit_async_request (_ready_queue, *slot_.socket, _target_rid,
-                              &slot_.logical, &slot_.outstanding,
+                              &slot_.logical,
                               std::chrono::milliseconds (
                                 std::max (1, request_timeout_ms ())),
                               _completion);
         switch (slot_.logical.launch.load (std::memory_order_acquire)) {
             case logical_launch_t::owned_by_operation:
                 ++slot_.next_seq;
-                slot_.retry_payload_stamped = false;
-                launched_ = true;
-                return true;
-            case logical_launch_t::retry:
                 return true;
             case logical_launch_t::fatal:
                 return false;
@@ -466,7 +453,6 @@ template <typename SocketT> class client_bench_t
       perf::application_ready_queue_t &ready_queue_, SocketT &socket_,
       const zlink::routing_id_t &target_rid_,
       logical_request_t *logical_,
-      std::atomic<unsigned> *slot_outstanding_,
       std::chrono::milliseconds timeout_,
       std::shared_ptr<client_completion_state_t> completion_)
     {
@@ -486,7 +472,6 @@ template <typename SocketT> class client_bench_t
             operation.emplace (
               begin_request (socket_, target_rid_, std::move (request), timeout_));
             completion_->outstanding.fetch_add (1, std::memory_order_release);
-            slot_outstanding_->fetch_add (1, std::memory_order_release);
             logical_->launch.store (logical_launch_t::owned_by_operation,
                                      std::memory_order_release);
             signal_change (completion_);
@@ -504,41 +489,9 @@ template <typename SocketT> class client_bench_t
             catch (...) {
                 completion_->fatal.store (true, std::memory_order_release);
             }
-            slot_outstanding_->fetch_sub (1, std::memory_order_release);
             completion_->outstanding.fetch_sub (1, std::memory_order_release);
             signal_change (completion_);
             co_return;
-        }
-        catch (const zlink::request_error_t &err) {
-            if (err.result () == zlink::request_result_t::timed_out) {
-                logical_->launch.store (logical_launch_t::retry,
-                                         std::memory_order_release);
-            } else {
-                logical_->launch.store (logical_launch_t::fatal,
-                                         std::memory_order_release);
-                completion_->fatal.store (true, std::memory_order_release);
-            }
-        }
-        catch (const zlink::submit_error_t &err) {
-            if (err.result () == zlink::submit_result_t::backpressured
-                || transient (err.internal_errno ())) {
-                logical_->launch.store (logical_launch_t::retry,
-                                         std::memory_order_release);
-            } else {
-                logical_->launch.store (logical_launch_t::fatal,
-                                         std::memory_order_release);
-                completion_->fatal.store (true, std::memory_order_release);
-            }
-        }
-        catch (const zlink::binding_error_t &err) {
-            if (transient (err.internal_errno ())) {
-                logical_->launch.store (logical_launch_t::retry,
-                                         std::memory_order_release);
-            } else {
-                logical_->launch.store (logical_launch_t::fatal,
-                                         std::memory_order_release);
-                completion_->fatal.store (true, std::memory_order_release);
-            }
         }
         catch (...) {
             logical_->launch.store (logical_launch_t::fatal,
@@ -559,8 +512,9 @@ template <typename SocketT> class client_bench_t
     std::vector<std::unique_ptr<client_slot_t<SocketT>>> _slots;
     std::vector<connect_monitor_t> _monitors;
     perf::application_ready_queue_t _ready_queue;
+    zlink::poller_t _completion_poller;
+    std::vector<zlink::poll_event_t> _completion_events;
     std::shared_ptr<client_completion_state_t> _completion;
-    const int _max_outstanding;
 };
 
 inline std::atomic<bool> &server_stop_flag ()

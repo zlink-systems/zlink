@@ -339,11 +339,6 @@ def resolve_multi_reqrep_timeout_ms():
     return _env_int("PERF_MULTI_REQREP_TIMEOUT_MS", 200)
 
 
-def resolve_multi_reqrep_max_outstanding():
-    configured = _env_int("PERF_MULTI_REQREP_MAX_OUTSTANDING", 64)
-    return max(2, configured) if configured > 0 else 64
-
-
 def resolve_multi_reqrep_drain_timeout_ms():
     request_timeout_ms = resolve_multi_reqrep_timeout_ms()
     return _env_int(

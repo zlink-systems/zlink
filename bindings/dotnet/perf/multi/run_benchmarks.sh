@@ -1694,12 +1694,6 @@ esac
 # Emit byte-identically for both labels.
 print_effective_options() {
   local label="$1"
-  local reqrep_max="${PERF_MULTI_REQREP_MAX_OUTSTANDING:-64}"
-  if ! [[ "${reqrep_max}" =~ ^[0-9]+$ ]] || (( reqrep_max == 0 )); then
-    reqrep_max=64
-  elif (( reqrep_max < 2 )); then
-    reqrep_max=2
-  fi
   print_line "## Effective Options (${label})"
   print_line "- lang: dotnet"
   print_line "- suite: multi"
@@ -1709,7 +1703,6 @@ print_effective_options() {
   print_line "- msg_sizes: ${EFFECTIVE_MSG_SIZES_DISPLAY}"
   print_line "- routed_echo_per_socket_payload: ${ROUTED_ECHO_PER_SOCKET_PAYLOAD}"
   print_line "- duration_seconds: ${DURATION}"
-  print_line "- reqrep_max_outstanding: ${reqrep_max}"
   print_line "- clients: ${EFFECTIVE_CLIENTS_DISPLAY}"
   print_line "- default_clients: ${EFFECTIVE_DEFAULT_CLIENTS}"
   print_line "- default_stream_clients: ${EFFECTIVE_DEFAULT_STREAM_CLIENTS}"

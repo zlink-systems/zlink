@@ -20,7 +20,6 @@ from perf_common import (
     resolve_single_endpoint,
     resolve_single_latency_sample_cap,
     resolve_single_reqrep_drain_timeout_ms,
-    resolve_single_reqrep_max_outstanding,
     resolve_single_reqrep_timeout_ms,
     result_metrics,
     stamp_payload,
@@ -32,32 +31,16 @@ from perf_metrics import HEADER_MAGIC, LatencySampler, decode_header
 _PROBE_TOKEN = b"__zlink_perf_reqrep_probe__"
 
 
-def _transient_submit_result(result):
-    return result in (
-        zlink.SubmitResult.BACKPRESSURED,
-        zlink.SubmitResult.NOT_CONNECTED,
-        zlink.SubmitResult.NOT_FOUND,
-    )
-
-
 def _close_messages(parts):
     for part in parts:
         part.close()
 
 
-def _reply_parts(received, parts, drain_timeout_s):
-    deadline = time.perf_counter() + drain_timeout_s
-    while time.perf_counter() < deadline:
-        try:
-            received.reply().messages(*parts).submit()
-            return True
-        except zlink.SubmitError as exc:
-            if not _transient_submit_result(exc.result):
-                raise
-    return False
+def _reply_parts(received, parts):
+    received.reply().messages(*parts).submit()
 
 
-def _run_replier(replier, state, drain_timeout_s):
+def _run_replier(replier, state):
     received = zlink.create_received()
     try:
         with zlink.create_poller() as poller:
@@ -76,8 +59,7 @@ def _run_replier(replier, state, drain_timeout_s):
                                 raise RuntimeError("request is missing routing correlation metadata")
                             if measurement_payload(parts) is None:
                                 raise RuntimeError("request has an invalid measurement part layout")
-                            if not _reply_parts(received, parts, drain_timeout_s):
-                                raise RuntimeError("reply remained backpressured during bounded drain")
+                            _reply_parts(received, parts)
                             state["replied"] += 1
                         finally:
                             received.close()
@@ -93,20 +75,12 @@ def _request_operation_sync(requester, routing_id, parts, timeout_s):
 
 
 def _routing_probe(requester, routing_id, timeout_s):
-    deadline = time.perf_counter() + timeout_s
     expected = measurement_parts(_PROBE_TOKEN)
-    while time.perf_counter() < deadline:
-        try:
-            reply = _request_operation_sync(requester, routing_id, expected, timeout_s)
-        except zlink.SubmitError as exc:
-            if _transient_submit_result(exc.result):
-                continue
-            raise
-        try:
-            return tuple(part.to_bytes() for part in reply) == expected
-        finally:
-            _close_messages(reply)
-    return False
+    reply = _request_operation_sync(requester, routing_id, expected, timeout_s)
+    try:
+        return tuple(part.to_bytes() for part in reply) == expected
+    finally:
+        _close_messages(reply)
 
 
 async def _request_operation(requester, routing_id, parts, timeout_s):
@@ -121,7 +95,6 @@ async def _run_requester_async(
     drain_timeout_s = max(
         0.001, resolve_single_reqrep_drain_timeout_ms() / 1000.0
     )
-    max_outstanding = resolve_single_reqrep_max_outstanding()
     latency = LatencySampler(resolve_single_latency_sample_cap())
     active_end = time.perf_counter() + duration_s
     seq = 1
@@ -129,8 +102,6 @@ async def _run_requester_async(
     pending = set()
     failures = []
     expected_part_count = len(measurement_parts(b""))
-    loop = asyncio.get_running_loop()
-
     async def request_once(stamped_parts):
         nonlocal completed
         parts = None
@@ -184,36 +155,25 @@ async def _run_requester_async(
         )
         try:
             while time.perf_counter() < active_end and not failures:
-                while (
-                    len(pending) < max_outstanding
-                    and time.perf_counter() < active_end
-                ):
-                    stamped = bytes(
-                        stamp_payload(payload, phase=1, run_id=run_id, seq=seq)
-                    )
-                    seq += 1
-                    stamped_parts = (
-                        (stamped,)
-                        if expected_part_count == 1
-                        else (stamped, b"")
-                    )
-                    task = asyncio.create_task(request_once(stamped_parts))
-                    pending.add(task)
-                    task.add_done_callback(observe_done)
-                # This private loop belongs to the requester thread. Run its
-                # queued continuations before blocking for more native work;
-                # POLLOUT and timeout-zero polling otherwise spin while the
-                # replier competes for the same interpreter's GIL.
-                if not loop._ready:
-                    remaining_ms = max(1, int((active_end - time.perf_counter()) * 1000))
-                    completion_poller.wait(completion_events, remaining_ms)
+                stamped = bytes(
+                    stamp_payload(payload, phase=1, run_id=run_id, seq=seq)
+                )
+                seq += 1
+                stamped_parts = (
+                    (stamped,) if expected_part_count == 1 else (stamped, b"")
+                )
+                task = asyncio.create_task(request_once(stamped_parts))
+                pending.add(task)
+                task.add_done_callback(observe_done)
+                # One non-blocking completion drain followed by one event-loop
+                # yield forms the requester turn. Reply completion never gates
+                # the next submit, and no POLLOUT level event can spin it.
+                completion_poller.wait(completion_events, 0)
                 await asyncio.sleep(0)
 
             drain_deadline = time.perf_counter() + drain_timeout_s
             while pending and time.perf_counter() < drain_deadline and not failures:
-                if not loop._ready:
-                    remaining_ms = max(1, int((drain_deadline - time.perf_counter()) * 1000))
-                    completion_poller.wait(completion_events, remaining_ms)
+                completion_poller.wait(completion_events, 0)
                 await asyncio.sleep(0)
             if pending:
                 still_pending = tuple(pending)
@@ -257,15 +217,8 @@ def _run_requester_thread(requester, routing_id, payload, options, state):
 
 
 def _send_stop(requester, routing_id):
-    for _ in range(100):
-        try:
-            operation = requester.send() if routing_id is None else requester.send(routing_id)
-            operation.message(STOP_TOKEN).submit_sync()
-            return
-        except zlink.SubmitError as exc:
-            if not _transient_submit_result(exc.result):
-                raise
-    raise RuntimeError("failed to submit request-reply stop token")
+    operation = requester.send() if routing_id is None else requester.send(routing_id)
+    operation.message(STOP_TOKEN).submit_sync()
 
 
 def run_reqrep_pattern(argv, *, pattern, routed_request):
@@ -308,7 +261,7 @@ def run_reqrep_pattern(argv, *, pattern, routed_request):
                 state = {"replied": 0, "error": None, "stop": False}
                 replier_thread = threading.Thread(
                     target=_run_replier,
-                    args=(replier, state, drain_timeout_s),
+                    args=(replier, state),
                     daemon=True,
                 )
                 replier_thread.start()

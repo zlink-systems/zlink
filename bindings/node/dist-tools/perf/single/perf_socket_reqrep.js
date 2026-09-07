@@ -61,6 +61,8 @@ async function runSocketReqRep(msgSize, options, routedClient) {
         : zlink.createDealerSocket(ctx);
     const clientMonitor = client.monitorOpen([zlink.MonitorEventType.ConnectionReady]);
     let worker = null;
+    let completionPoller = null;
+    let completionEvents = null;
     try {
         applySocketPolicy(client, options);
         if (routedClient) {
@@ -89,6 +91,9 @@ async function runSocketReqRep(msgSize, options, routedClient) {
         if (!routingProbe(client, routedClient, requestTimeoutMs)) {
             throw new Error('request-reply routing probe failed');
         }
+        completionPoller = zlink.createPoller();
+        completionEvents = zlink.createPollEvents(1);
+        completionPoller.add(client, [zlink.PollEventFlag.PollCompletion], 0);
         const runId = createRunId(options.runId ?? 1);
         const activeStartNs = currentEpochNs();
         const activeStopNs = activeStartNs
@@ -101,16 +106,8 @@ async function runSocketReqRep(msgSize, options, routedClient) {
             roundTrip: false,
         });
         const payloadTemplate = createPayload(msgSize);
-        // PERF_SINGLE_TEST_POLICY.md 1.1.3: `submit()` is the awaitable request
-        // terminal that merges admission and reply. Do not await it before
-        // submitting the next request - keep the un-settled promises in a pending
-        // set, drain the ones that settle, and bound only the pending count. This
-        // replaces the RTT-only `submit_sync()` loop that PERF_SINGLE_TEST_POLICY.md
-        // 1.1.0 forbids because it pinned in-flight to 1.
-        const maxOutstanding = Math.max(2, (() => {
-            const parsed = Number(process.env.PERF_SINGLE_REQREP_MAX_OUTSTANDING ?? 64);
-            return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 64;
-        })());
+        // `submit()` transfers the request to the binding-owned admission and
+        // completion path. Keep its Promise only for settlement and draining.
         const pending = new Set();
         let requestFailure = null;
         let seq = 1n;
@@ -133,16 +130,14 @@ async function runSocketReqRep(msgSize, options, routedClient) {
             }
         };
         while (currentEpochNs() < activeStopNs && !requestFailure) {
-            while (pending.size < maxOutstanding && currentEpochNs() < activeStopNs) {
-                // Concurrent logical requests cannot share the stamped first part.
-                const payload = Buffer.from(payloadTemplate);
-                stampPayload(payload, { phase: 1, runId, msgSize, seq });
-                seq += 1n;
-                const task = submitRequest(payload);
-                pending.add(task);
-                task.catch((error) => { requestFailure = error; })
-                    .finally(() => pending.delete(task));
-            }
+            const payload = Buffer.from(payloadTemplate);
+            stampPayload(payload, { phase: 1, runId, msgSize, seq });
+            seq += 1n;
+            const task = submitRequest(payload);
+            pending.add(task);
+            task.catch((error) => { requestFailure = error; })
+                .finally(() => pending.delete(task));
+            completionPoller.wait(completionEvents, 0);
             await sleepImmediate();
         }
         if (requestFailure)
@@ -150,16 +145,46 @@ async function runSocketReqRep(msgSize, options, routedClient) {
         // Bounded completion drain of requests submitted before the deadline; the
         // per-request `timeout(requestTimeoutMs)` bounds every one of them and no
         // new request is submitted here.
-        await Promise.all(Array.from(pending));
+        const drainStopNs = currentEpochNs()
+            + BigInt(Math.max(1_000, requestTimeoutMs * 4)) * 1000000n;
+        while (pending.size > 0 && currentEpochNs() < drainStopNs && !requestFailure) {
+            completionPoller.wait(completionEvents, 0);
+            await sleepImmediate();
+        }
+        if (pending.size > 0) {
+            throw new Error('request completion drain timed out');
+        }
         if (requestFailure)
             throw requestFailure;
         const stopOperation = routedClient ? client.send(SERVER_RID) : client.send();
-        stopOperation.message(STOP_TOKEN_BYTES).submit_sync();
+        let stopSettled = false;
+        let stopFailure = null;
+        stopOperation.message(STOP_TOKEN_BYTES).submit()
+            .catch((error) => { stopFailure = error; })
+            .finally(() => { stopSettled = true; });
+        while (!stopSettled) {
+            completionPoller.wait(completionEvents, 0);
+            await sleepImmediate();
+        }
+        if (stopFailure)
+            throw stopFailure;
         waitForWorkerStatus(worker, 4, 10_000);
         return collector.finish();
     }
     finally {
         await closeSenderWorker(worker);
+        try {
+            completionPoller?.remove?.(client);
+        }
+        catch (_) { /* preserve the benchmark failure */ }
+        try {
+            completionEvents?.close?.();
+        }
+        catch (_) { /* preserve the benchmark failure */ }
+        try {
+            completionPoller?.close?.();
+        }
+        catch (_) { /* preserve the benchmark failure */ }
         for (const resource of [clientMonitor, client, ctx]) {
             try {
                 resource?.close?.();

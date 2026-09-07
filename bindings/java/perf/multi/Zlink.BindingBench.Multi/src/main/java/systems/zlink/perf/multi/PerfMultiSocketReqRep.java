@@ -14,10 +14,8 @@ import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.Socket;
-import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.errors.ZlinkRequestException;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfUtil;
@@ -29,7 +27,6 @@ import java.util.List;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -178,9 +175,6 @@ final class PerfMultiSocketReqRep {
             + config.durationSeconds() * 1_000_000_000L;
         int requestTimeoutMs = resolveRequestTimeoutMs();
         Duration timeout = Duration.ofMillis(requestTimeoutMs);
-        int maxOutstanding = resolveMaxOutstandingPerSocket();
-        AtomicIntegerArray outstandingPerSocket =
-            new AtomicIntegerArray(clients.size());
         java.util.function.BiConsumer<List<Message>, Throwable> completion =
             (parts, error) -> {
             try {
@@ -220,32 +214,22 @@ final class PerfMultiSocketReqRep {
              PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
                  clients, PollEventFlags.POLLCOMPLETION)) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
-                boolean progress = false;
                 for (int i = 0; i < clients.size(); i++) {
                     if (System.nanoTime() >= activeEnd) {
                         break;
                     }
-                    if (outstandingPerSocket.get(i) >= maxOutstanding) {
-                        continue;
-                    }
                     payloadTemplates.prepare(i, (byte) PerfUtil.PHASE_ACTIVE,
                         System.nanoTime());
-                    if (submit(clients.get(i), routedClients,
-                            payloadTemplates.copyForSubmit(i), timeout,
-                            outstanding, outstandingPerSocket, i,
-                            completion)) {
-                        progress = true;
-                    }
+                    submit(clients.get(i), routedClients,
+                        payloadTemplates.copyForSubmit(i), timeout,
+                        outstanding, completion);
                 }
 
                 // Completion callbacks are dispatched only by this poller.
-                // Drain it non-blocking after every submission round, and
-                // wait briefly only when every socket was backpressured.
-                completionPoller.poll(0);
-                if (!progress && System.nanoTime() < activeEnd) {
-                    completionPoller.poll(Math.min(50,
-                        remainingTimeoutMs(activeEnd)));
-                }
+                // One bounded wait paces every submit/progress turn, including
+                // intervals where every submit is suspended by backpressure.
+                completionPoller.poll(Math.min(50,
+                    remainingTimeoutMs(activeEnd)));
             }
             long drainEnd = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
                 Math.max(1_000, requestTimeoutMs * 4));
@@ -262,38 +246,11 @@ final class PerfMultiSocketReqRep {
         // the runner stdin STOP alone.
     }
 
-    /**
-     * Memory bound on un-settled request awaitables, per requester socket.
-     *
-     * <p>The public async request terminal makes one DONTWAIT admission attempt
-     * and resumes only from its own WRITABLE token
-     * ({@code RequestSubmitOperation}), so Core paces admission exactly as the C
-     * reference does and the runner must not observe or gate on admission.
-     * PERF_MULTI_TEST_POLICY.md:164-168 forbids using this bound as a round-trip
-     * gate, so it stays far above the steady-state depth.</p>
-     */
-    private static int resolveMaxOutstandingPerSocket() {
-        String configured = System.getenv("PERF_MULTI_REQREP_MAX_OUTSTANDING");
-        if (configured != null && !configured.isBlank()) {
-            try {
-                int parsed = Integer.parseInt(configured.trim());
-                if (parsed > 1) {
-                    return parsed;
-                }
-            } catch (NumberFormatException ignored) {
-                // Fall through to the shared default.
-            }
-        }
-        return 64;
-    }
-
-    private static boolean submit(Socket client, boolean routedClients,
-                                  Message payload, Duration timeout,
-                                  AtomicLong outstanding,
-                                  AtomicIntegerArray outstandingPerSocket,
-                                  int clientIndex,
-                                  java.util.function.BiConsumer<List<Message>,
-                                      Throwable> completion) {
+    private static void submit(Socket client, boolean routedClients,
+                               Message payload, Duration timeout,
+                               AtomicLong outstanding,
+                               java.util.function.BiConsumer<List<Message>,
+                                   Throwable> completion) {
         CompletionStage<List<Message>> stage;
         try (payload;
              Message tail = PerfUtil.measurementPartCount() == 2
@@ -314,42 +271,10 @@ final class PerfMultiSocketReqRep {
                 stage = ((DealerSocket) client).request().message(payload)
                     .timeout(timeout).submit();
             }
-        } catch (RuntimeException | Error error) {
-            Throwable cause = PerfMultiAsyncSendLoop.completionCause(error);
-            if (isTransientAdmission(cause)) {
-                return false;
-            }
-            throw error;
         }
 
-        var future = stage.toCompletableFuture();
-        if (future.isCompletedExceptionally()) {
-            try {
-                future.join();
-            } catch (java.util.concurrent.CompletionException error) {
-                Throwable cause = PerfMultiAsyncSendLoop.completionCause(error);
-                if (isTransientAdmission(cause)) {
-                    return false;
-                }
-                if (cause instanceof RuntimeException runtime) {
-                    throw runtime;
-                }
-                if (cause instanceof Error fatal) {
-                    throw fatal;
-                }
-                throw error;
-            }
-        }
         outstanding.incrementAndGet();
-        outstandingPerSocket.incrementAndGet(clientIndex);
-        stage.whenComplete((parts, error) -> {
-            try {
-                completion.accept(parts, error);
-            } finally {
-                outstandingPerSocket.decrementAndGet(clientIndex);
-            }
-        });
-        return true;
+        stage.whenComplete(completion);
     }
 
     /** One native template per requester supplies independently owned submits. */
@@ -383,13 +308,6 @@ final class PerfMultiSocketReqRep {
     private static boolean isExpectedRequestFailure(Throwable error) {
         return error instanceof ZlinkRequestException request
             && request.getResult() == RequestResult.TIMED_OUT;
-    }
-
-    private static boolean isTransientAdmission(Throwable error) {
-        return error instanceof ZlinkSubmitException submit
-            && (submit.getResult() == SubmitResult.BACKPRESSURED
-                || submit.getResult() == SubmitResult.NOT_CONNECTED
-                || submit.getResult() == SubmitResult.NOT_ADMITTED);
     }
 
     private static int remainingTimeoutMs(long deadline) {

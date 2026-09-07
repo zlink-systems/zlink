@@ -20,24 +20,10 @@ struct reqrep_config_t
     bool routed_request;
 };
 
-// PERF_SINGLE_TEST_POLICY.md 1.1.3: the only runner-side bound is the number
-// of un-settled request awaitables. The public request terminal makes one
-// DONTWAIT admission attempt and resumes only from its exact WRITABLE token
-// (zlink/Contracts/Messaging/operation_contracts.hpp:320-324), so Core paces
-// admission exactly as the C reference does. This bound is a memory bound on
-// the un-settled operation objects, never a round-trip gate, so it stays far
-// above the steady-state depth. Same knob shape and default as the multi
-// suite (PERF_MULTI_REQREP_MAX_OUTSTANDING).
-inline int reqrep_max_outstanding ()
-{
-    return std::max (2, parse_positive_env ("PERF_SINGLE_REQREP_MAX_OUTSTANDING", 64));
-}
-
 enum class reqrep_launch_t
 {
     launching,
     owned_by_operation,
-    retry,
     fatal
 };
 
@@ -124,12 +110,6 @@ inline void observe_request_completion (zlink::request_result_t result_,
     state_->in_flight.fetch_sub (1, std::memory_order_release);
 }
 
-inline bool reqrep_transient_errno (int err_)
-{
-    return err_ == EAGAIN || err_ == EWOULDBLOCK || err_ == EINTR || err_ == ETIMEDOUT
-           || err_ == EHOSTUNREACH || err_ == ENOTCONN;
-}
-
 inline void emit_reqrep_result (const std::string &lib_name_,
                                 const char *pattern_,
                                 const std::string &transport_,
@@ -172,17 +152,16 @@ inline bool complete_reqrep_router_handshake (zlink::router_socket_t &server_,
     const auto deadline = std::chrono::steady_clock::now ()
                           + std::chrono::milliseconds (parse_positive_env (
                             "PERF_ROUTER_HANDSHAKE_TIMEOUT_MS", 3000));
+    try {
+        zlink::message_t ping = zlink::message_t::from ("PING");
+        std::move (client_.send (server_rid_)).message (ping).submit ();
+    }
+    catch (const zlink::binding_error_t &) {
+        return false;
+    }
+
     std::optional<zlink::routing_id_t> client_rid;
     while (!client_rid.has_value () && std::chrono::steady_clock::now () < deadline) {
-        try {
-            zlink::message_t ping = zlink::message_t::from ("PING");
-            std::move (client_.send (server_rid_)).message (ping).submit ();
-        }
-        catch (const zlink::binding_error_t &err) {
-            if (!is_transient_routed_send_errno (err.internal_errno ()))
-                return false;
-        }
-
         zlink::received_t inbound;
         while (receive_router (server_, inbound, zlink::recv_flags_t::dontwait)) {
             if (inbound.routing_id ().has_value () && inbound.parts ().size () == 1
@@ -293,29 +272,6 @@ inline perf::detached_async_task_t submit_async_request (
             state_->in_flight.fetch_sub (1, std::memory_order_release);
         }
         co_return;
-    }
-    catch (const zlink::request_error_t &err) {
-        state_->launch.store (err.result () == zlink::request_result_t::timed_out
-                                ? reqrep_launch_t::retry
-                                : reqrep_launch_t::fatal,
-                              std::memory_order_release);
-        if (err.result () != zlink::request_result_t::timed_out)
-            state_->fatal.store (true, std::memory_order_release);
-    }
-    catch (const zlink::submit_error_t &err) {
-        const bool retry = err.result () == zlink::submit_result_t::backpressured
-                           || reqrep_transient_errno (err.internal_errno ());
-        state_->launch.store (retry ? reqrep_launch_t::retry : reqrep_launch_t::fatal,
-                              std::memory_order_release);
-        if (!retry)
-            state_->fatal.store (true, std::memory_order_release);
-    }
-    catch (const zlink::binding_error_t &err) {
-        const bool retry = reqrep_transient_errno (err.internal_errno ());
-        state_->launch.store (retry ? reqrep_launch_t::retry : reqrep_launch_t::fatal,
-                              std::memory_order_release);
-        if (!retry)
-            state_->fatal.store (true, std::memory_order_release);
     }
     catch (...) {
         state_->launch.store (reqrep_launch_t::fatal, std::memory_order_release);
@@ -434,9 +390,7 @@ inline bool run_reqrep_pattern_impl (const reqrep_config_t &config_,
                     std::move (received.reply ().message (part)).submit ();
                 }
             }
-            catch (const zlink::binding_error_t &err) {
-                if (reqrep_transient_errno (err.internal_errno ()))
-                    continue;
+            catch (const zlink::binding_error_t &) {
                 server_ok.store (false, std::memory_order_release);
                 return;
             }
@@ -458,7 +412,6 @@ inline bool run_reqrep_pattern_impl (const reqrep_config_t &config_,
         request_state.fatal.store (true, std::memory_order_release);
     }
 
-    const int max_outstanding = reqrep_max_outstanding ();
     const auto progress_once = [&] (std::chrono::milliseconds wait_) {
         try {
             zlink::poll_event_t event;
@@ -481,56 +434,38 @@ inline bool run_reqrep_pattern_impl (const reqrep_config_t &config_,
           std::memory_order_release);
         while (std::chrono::steady_clock::now () < deadline
                && !request_state.fatal.load (std::memory_order_acquire)) {
-            bool launched = false;
-            unsigned submitted_since_progress = 0;
-            // 1) Submit continuously. Nothing here waits for a reply; the only
-            //    bound is the un-settled awaitable count.
-            while (std::chrono::steady_clock::now () < deadline
-                   && !request_state.fatal.load (std::memory_order_acquire)
-                   && request_state.in_flight.load (std::memory_order_acquire)
-                        < static_cast<unsigned long long> (max_outstanding)) {
-                if (!perf_single_metric::stamp_payload (
-                      payload.data (), payload.size (), run_id,
-                      perf_single_metric::phase_active, msg_size_, seq,
-                      perf_single_metric::now_ns ())) {
-                    request_state.fatal.store (true, std::memory_order_release);
-                    break;
-                }
-                zlink::message_t request =
-                  message_from_payload (payload.data (), payload.size ());
-                if (!request.valid ()) {
-                    request_state.fatal.store (true, std::memory_order_release);
-                    break;
-                }
-                request_state.launch.store (reqrep_launch_t::launching,
-                                            std::memory_order_release);
-                submit_async_request (ready_queue, client, server_rid,
-                                      std::move (request),
-                                      std::chrono::milliseconds (request_timeout_ms),
-                                      &request_state);
-                const reqrep_launch_t launch =
-                  request_state.launch.load (std::memory_order_acquire);
-                if (launch == reqrep_launch_t::owned_by_operation) {
-                    ++seq;
-                    launched = true;
-                    // Give completions a turn on the same cadence as the C
-                    // reference submit cursor
-                    // (bindings/c/perf/single/common/perf_single_reqrep.hpp
-                    // run_request_phase, 64 submissions per progress round).
-                    if (++submitted_since_progress >= 64)
-                        break;
-                    continue;
-                }
-                if (launch == reqrep_launch_t::retry)
-                    break;
+            // One requester turn submits one operation. The binding retains a
+            // refused input and resumes it from the matching WRITABLE token.
+            if (!perf_single_metric::stamp_payload (
+                  payload.data (), payload.size (), run_id,
+                  perf_single_metric::phase_active, msg_size_, seq,
+                  perf_single_metric::now_ns ())) {
                 request_state.fatal.store (true, std::memory_order_release);
                 break;
             }
+            zlink::message_t request =
+              message_from_payload (payload.data (), payload.size ());
+            if (!request.valid ()) {
+                request_state.fatal.store (true, std::memory_order_release);
+                break;
+            }
+            request_state.launch.store (reqrep_launch_t::launching,
+                                        std::memory_order_release);
+            submit_async_request (ready_queue, client, server_rid,
+                                  std::move (request),
+                                  std::chrono::milliseconds (request_timeout_ms),
+                                  &request_state);
+            if (request_state.launch.load (std::memory_order_acquire)
+                != reqrep_launch_t::owned_by_operation) {
+                request_state.fatal.store (true, std::memory_order_release);
+                break;
+            }
+            ++seq;
             if (request_state.fatal.load (std::memory_order_acquire))
                 break;
-            // 2) Progress completions on this same thread.
-            progress_once (launched ? std::chrono::milliseconds (0)
-                                    : std::chrono::milliseconds (50));
+            // Progress on this thread and block when there is no completion,
+            // so a fully backpressured interval cannot spin.
+            progress_once (std::chrono::milliseconds (50));
         }
 
         // Bounded completion drain of requests submitted before the deadline;

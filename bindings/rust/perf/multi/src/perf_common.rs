@@ -1216,15 +1216,6 @@ pub fn resolve_multi_reqrep_timeout() -> Duration {
     Duration::from_millis(env_or("PERF_MULTI_REQREP_TIMEOUT_MS", 200).max(1) as u64)
 }
 
-pub fn resolve_multi_reqrep_max_outstanding() -> usize {
-    let configured = env_or("PERF_MULTI_REQREP_MAX_OUTSTANDING", 64);
-    if configured == 0 {
-        64
-    } else {
-        configured.max(2)
-    }
-}
-
 pub fn resolve_multi_reqrep_drain_timeout(request_timeout: Duration) -> Duration {
     let fallback_ms = request_timeout.as_millis().saturating_mul(4).max(1_000);
     Duration::from_millis(

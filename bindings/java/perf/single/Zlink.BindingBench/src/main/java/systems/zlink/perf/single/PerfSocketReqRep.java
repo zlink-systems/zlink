@@ -12,12 +12,10 @@ import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.Socket;
-import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.errors.ZlinkRequestException;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.perf.PerfSocketPollSet;
 import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfErrno;
@@ -104,7 +102,7 @@ final class PerfSocketReqRep {
             int completionDrainTimeoutMs = Math.max(1, PerfUtil.intEnv(
                 "PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS", 10_000));
             Thread serverThread = new Thread(() -> runServer(server, serverStopped,
-                failure, completionDrainTimeoutMs),
+                failure),
                 "single-socket-reqrep-server");
             serverThread.start();
 
@@ -151,7 +149,6 @@ final class PerfSocketReqRep {
                                         long activeEnd, Duration requestTimeout,
                                         int completionDrainTimeoutMs) {
         AtomicLong outstanding = new AtomicLong();
-        int maxOutstanding = resolveMaxOutstanding();
         java.util.function.BiConsumer<List<Message>, Throwable> completion =
             (parts, error) -> {
             try {
@@ -185,23 +182,12 @@ final class PerfSocketReqRep {
         try (PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
                  List.of(client), PollEventFlags.POLLCOMPLETION)) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
-                boolean progress = false;
-                while (System.nanoTime() < activeEnd
-                       && outstanding.get() < maxOutstanding
-                       && failure.get() == null) {
-                    if (!submitRequest(client, routedClient, config,
-                            requestTimeout, outstanding, completion)) {
-                        break;
-                    }
-                    progress = true;
-                }
+                submitRequest(client, routedClient, config,
+                    requestTimeout, outstanding, completion);
 
                 // Completion callbacks are dispatched only by this poller.
-                completionPoller.poll(0);
-                if (!progress && System.nanoTime() < activeEnd) {
-                    completionPoller.poll(Math.min(50,
-                        remainingTimeoutMs(activeEnd)));
-                }
+                completionPoller.poll(Math.min(50,
+                    remainingTimeoutMs(activeEnd)));
             }
 
             // Bounded completion drain of requests submitted before the
@@ -219,12 +205,12 @@ final class PerfSocketReqRep {
         }
     }
 
-    private static boolean submitRequest(Socket client, boolean routedClient,
-                                         PerfUtil.Config config,
-                                         Duration timeout,
-                                         AtomicLong outstanding,
-                                         java.util.function.BiConsumer<
-                                             List<Message>, Throwable> completion) {
+    private static void submitRequest(Socket client, boolean routedClient,
+                                      PerfUtil.Config config,
+                                      Duration timeout,
+                                      AtomicLong outstanding,
+                                      java.util.function.BiConsumer<
+                                          List<Message>, Throwable> completion) {
         CompletionStage<List<Message>> stage;
         try (Message request = PerfUtil.payload(config.size(),
                  (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
@@ -245,49 +231,10 @@ final class PerfSocketReqRep {
                 }
                 stage = operation.timeout(timeout).submit();
             }
-        } catch (ZlinkSubmitException error) {
-            if (isTransientAdmission(error)) {
-                return false;
-            }
-            throw error;
         }
 
-        var future = stage.toCompletableFuture();
-        if (future.isCompletedExceptionally()) {
-            try {
-                future.join();
-            } catch (java.util.concurrent.CompletionException error) {
-                Throwable cause = completionCause(error);
-                if (isTransientAdmission(cause)) {
-                    return false;
-                }
-                if (cause instanceof RuntimeException runtime) {
-                    throw runtime;
-                }
-                if (cause instanceof Error fatal) {
-                    throw fatal;
-                }
-                throw error;
-            }
-        }
         outstanding.incrementAndGet();
         stage.whenComplete(completion);
-        return true;
-    }
-
-    /**
-     * Memory bound on un-settled request awaitables for the single requester
-     * socket. The public async request terminal makes one DONTWAIT admission
-     * attempt and resumes only from its own WRITABLE token
-     * ({@code RequestSubmitOperation#submit}), so Core paces admission exactly
-     * as the C reference does and the runner must not observe or gate on
-     * admission. PERF_SINGLE_TEST_POLICY.md 1.1.3 requires exactly one such
-     * bound and forbids using it as a round-trip gate, so it stays far above
-     * the steady-state depth. Same default as the multi suite.
-     */
-    private static int resolveMaxOutstanding() {
-        return Math.max(2, PerfUtil.intEnv(
-            "PERF_SINGLE_REQREP_MAX_OUTSTANDING", 64));
     }
 
     private static Throwable completionCause(Throwable error) {
@@ -305,13 +252,6 @@ final class PerfSocketReqRep {
             && request.getResult() == RequestResult.TIMED_OUT;
     }
 
-    private static boolean isTransientAdmission(Throwable error) {
-        return error instanceof ZlinkSubmitException submit
-            && (submit.getResult() == SubmitResult.BACKPRESSURED
-                || submit.getResult() == SubmitResult.NOT_CONNECTED
-                || submit.getResult() == SubmitResult.NOT_ADMITTED);
-    }
-
     private static int remainingTimeoutMs(long deadline) {
         long remainingNs = deadline - System.nanoTime();
         if (remainingNs <= 0) {
@@ -323,8 +263,7 @@ final class PerfSocketReqRep {
 
     private static void runServer(RouterSocket server,
                                   AtomicBoolean stopped,
-                                  AtomicReference<Throwable> failure,
-                                  int completionDrainTimeoutMs) {
+                                  AtomicReference<Throwable> failure) {
         try (Received received = new Received()) {
             while (true) {
                 try {
@@ -354,8 +293,15 @@ final class PerfSocketReqRep {
                     received.close();
                     continue;
                 }
-                Message reply = Message.from(payload);
-                submitReplyWithRetry(received, reply, completionDrainTimeoutMs);
+                try (Message reply = Message.from(payload);
+                     Message tail = PerfUtil.measurementPartCount() == 2
+                         ? PerfUtil.measurementTail() : null) {
+                    if (tail != null) {
+                        received.reply().message(reply).message(tail).submit();
+                    } else {
+                        received.reply().message(reply).submit();
+                    }
+                }
                 received.close();
             }
         } catch (Throwable ex) {
@@ -363,56 +309,15 @@ final class PerfSocketReqRep {
         }
     }
 
-    private static void submitReplyWithRetry(Received received, Message reply,
-                                             int timeoutMs) {
-        long retryEnd = System.nanoTime()
-            + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
-        while (true) {
-            try {
-                if (PerfUtil.measurementPartCount() == 2) {
-                    received.reply().message(reply).message(PerfUtil.measurementTail()).submit();
-                } else {
-                    received.reply().message(reply).submit();
-                }
-                return;
-            } catch (ZlinkSubmitException ex) {
-                if (ex.getResult() != SubmitResult.BACKPRESSURED
-                    || System.nanoTime() >= retryEnd) {
-                    reply.close();
-                    throw ex;
-                }
-                Thread.yield();
-            }
-        }
-    }
-
     private static void sendStop(Socket client, boolean routedClient) {
-        PerfStopToken.sendWithRetry(
-            () -> trySendStop(client, routedClient),
-            "socket reqrep");
-    }
-
-    private static boolean trySendStop(Socket client, boolean routedClient) {
         try (Message stop = PerfStopToken.newMessage()) {
             if (routedClient) {
                 ((RouterSocket) client).send(SERVER_RID).message(stop)
-                    .submit_sync();
-                return true;
+                    .submit().toCompletableFuture().join();
+            } else {
+                ((DealerSocket) client).send().message(stop)
+                    .submit().toCompletableFuture().join();
             }
-            ((DealerSocket) client).send().message(stop)
-                .submit_sync();
-            return true;
-        } catch (ZlinkSubmitException ex) {
-            if (ex.getResult() == SubmitResult.BACKPRESSURED
-                || ex.getResult() == SubmitResult.NOT_CONNECTED) {
-                return false;
-            }
-            throw ex;
-        } catch (ZlinkException ex) {
-            if (PerfErrno.isRetryableSend(ex.getNativeErrno())) {
-                return false;
-            }
-            throw ex;
         }
     }
 }

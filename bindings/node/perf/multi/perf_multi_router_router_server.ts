@@ -14,7 +14,7 @@ const {
   emitMultiSocketHwmDetail,
   pollEvents,
   measurementPayload,
-  submitReplyOrDropBackpressured,
+  submitReply,
   waitPollerOne
 } = require('./perf_multi_runtime');
 const {
@@ -49,7 +49,7 @@ function receiveAndReply(router, received) {
       }
       // A successful public reply consumes this received native Message.
       // Forward it directly rather than materializing a Buffer copy first.
-      submitReplyOrDropBackpressured(received, payload);
+      submitReply(received, payload);
     } finally {
       received.close();
     }

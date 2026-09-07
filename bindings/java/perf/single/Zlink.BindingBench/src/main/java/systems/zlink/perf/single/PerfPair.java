@@ -126,19 +126,12 @@ final class PerfPair {
                     } finally {
                         active.close();
                     }
-                    // PERF_SINGLE_TEST_POLICY § 1.4: signal phase end with a
-                    // wire-level stop token. The bounded retry helper handles
-                    // transient backpressure without losing the terminator.
-                    try (PerfSocketPollSet writable = PerfSocketPollSet.fromSockets(
-                        List.of(sender), PollEventFlags.POLLOUT)) {
-                        writable.setEvents(0);
-                        PerfStopToken.sendWithRetry(
-                            () -> trySendStop(sender),
-                            () -> {
-                                writable.setEvents(0, PollEventFlags.POLLOUT);
-                                writable.poll(-1);
-                            },
-                            "pair");
+                    // The managed async send owns any WRITABLE suspension;
+                    // the application does not register level-triggered
+                    // POLLOUT or resubmit the stop token.
+                    try (Message stop = PerfStopToken.newMessage()) {
+                        sender.send().message(stop).submit()
+                            .toCompletableFuture().join();
                     }
                 } catch (Throwable ex) {
                     failure.compareAndSet(null, ex);
@@ -186,20 +179,4 @@ final class PerfPair {
         }
     }
 
-    private static boolean trySendStop(PairSocket sender) {
-        try (Message stop = PerfStopToken.newMessage()) {
-            sender.send().message(stop).submit_sync();
-            return true;
-        } catch (ZlinkSubmitException ex) {
-            if (ex.getResult() == SubmitResult.BACKPRESSURED) {
-                return false;
-            }
-            throw ex;
-        } catch (ZlinkException ex) {
-            if (PerfErrno.isRetryableSend(ex.getNativeErrno())) {
-                return false;
-            }
-            throw ex;
-        }
-    }
 }

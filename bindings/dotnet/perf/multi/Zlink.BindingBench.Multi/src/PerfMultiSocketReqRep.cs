@@ -232,7 +232,13 @@ internal static class PerfMultiSocketReqRep
         uint rng = 0xA341316Cu;
         long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
         TimeSpan requestTimeout = ResolveReqRepTimeout();
-        int maxOutstanding = ResolveReqRepMaxOutstanding();
+        using var completionPoller = Zlink.CreatePoller();
+        var completionEvents = new PollEvent[Math.Max(1, slots.Count)];
+        for (int i = 0; i < slots.Count; ++i)
+        {
+            completionPoller.Add(slots[i].Socket,
+                PollEventFlags.PollCompletion, (nuint)i);
+        }
         bool HasCompletionError() => Volatile.Read(ref hasCompletionError) != 0;
 
         void RecordCompletionError(Exception ex)
@@ -277,8 +283,7 @@ internal static class PerfMultiSocketReqRep
             return requestTask;
         }
 
-        async Task ObserveRequestAsync(
-            ClientSlot slot, Task<IReadOnlyList<Message>> requestTask)
+        async Task ObserveRequestAsync(Task<IReadOnlyList<Message>> requestTask)
         {
             IReadOnlyList<Message>? parts = null;
             try
@@ -330,7 +335,6 @@ internal static class PerfMultiSocketReqRep
             {
                 if (parts != null)
                     Zlink.MultipartClose(parts);
-                Interlocked.Decrement(ref slot.Outstanding);
             }
         }
 
@@ -344,36 +348,29 @@ internal static class PerfMultiSocketReqRep
                 requests.RemoveAt(i);
             }
 
-            bool submittedAny = false;
             for (int i = 0; i < slots.Count; i++)
             {
                 ClientSlot slot = slots[i];
-                // Memory bound only: never a round-trip gate
-                // (PERF_MULTI_TEST_POLICY.md:164-168). Skip this socket for
-                // this turn once its un-settled awaitables reach the cap and
-                // let the drain above settle them first.
-                if (Volatile.Read(ref slot.Outstanding) >= maxOutstanding)
-                    continue;
                 try
                 {
                     Task<IReadOnlyList<Message>> requestTask =
                         SubmitAsync(slot);
-                    Interlocked.Increment(ref slot.Outstanding);
-                    requests.Add(ObserveRequestAsync(slot, requestTask));
-                    submittedAny = true;
-                }
-                catch (ZlinkException ex)
-                    when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
-                          || PerfShared.IsTransientNetworkError(ex.NativeErrno))
-                {
+                    requests.Add(ObserveRequestAsync(requestTask));
                 }
                 catch (Exception ex)
                 {
                     RecordCompletionError(ex);
                 }
             }
-            if (!submittedAny)
-                await Task.Yield();
+            // A single completion-only wait owns WRITABLE/request progress for
+            // every requester and paces an all-backpressured turn without a
+            // POLLOUT level-triggered spin.
+            long remainingTicks = Math.Max(0,
+                deadlineTicks - Stopwatch.GetTimestamp());
+            int waitMs = Math.Min(50, Math.Max(1, (int)Math.Ceiling(
+                remainingTicks * 1000.0 / Stopwatch.Frequency)));
+            _ = completionPoller.Wait(completionEvents,
+                TimeSpan.FromMilliseconds(waitMs));
         }
 
         long drainDeadline = Stopwatch.GetTimestamp()
@@ -390,7 +387,14 @@ internal static class PerfMultiSocketReqRep
                 requests.RemoveAt(i);
             }
             if (requests.Count > 0)
-                await Task.Delay(1).ConfigureAwait(false);
+            {
+                long remainingTicks = Math.Max(0,
+                    drainDeadline - Stopwatch.GetTimestamp());
+                int waitMs = Math.Min(50, Math.Max(1, (int)Math.Ceiling(
+                    remainingTicks * 1000.0 / Stopwatch.Frequency)));
+                _ = completionPoller.Wait(completionEvents,
+                    TimeSpan.FromMilliseconds(waitMs));
+            }
         }
         if (requests.Count != 0)
             throw new TimeoutException(
@@ -538,23 +542,6 @@ internal static class PerfMultiSocketReqRep
         return TimeSpan.FromMilliseconds(ms);
     }
 
-    /// <summary>
-    ///     Memory bound on un-settled request awaitables, per requester socket.
-    ///     The public async request terminal makes one DONTWAIT admission
-    ///     attempt and resumes only from its own WRITABLE token
-    ///     (Contracts/Messaging/OperationContracts.cs:165-178), so Core paces
-    ///     admission exactly as the C reference does and the runner must not
-    ///     observe or gate on admission. PERF_MULTI_TEST_POLICY.md:164-168
-    ///     forbids using this bound as a round-trip gate, so it stays far above
-    ///     the steady-state depth. Shared knob and default with C++/Java.
-    /// </summary>
-    private static int ResolveReqRepMaxOutstanding()
-    {
-        int configured =
-            PerfEnv.ReadPositive("PERF_MULTI_REQREP_MAX_OUTSTANDING", 64);
-        return Math.Max(2, configured);
-    }
-
     private static TimeSpan ResolveReqRepDrainTimeout()
     {
         int ms = PerfEnv.ReadPositive("PERF_MULTI_REQREP_DRAIN_TIMEOUT_MS", 5000);
@@ -571,12 +558,6 @@ internal static class PerfMultiSocketReqRep
         internal IZlinkSocket Socket { get; }
         internal ulong NextSeq { get; set; } = 1;
 
-        /// <summary>
-        ///     Un-settled request awaitables owned by this requester socket.
-        ///     Written from completion continuations, so it is only touched
-        ///     through <see cref="Interlocked"/>/<see cref="Volatile"/>.
-        /// </summary>
-        internal int Outstanding;
     }
 
     private static void DebugLogLimited(ref int counter, string message)

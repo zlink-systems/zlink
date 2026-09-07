@@ -6,7 +6,6 @@ const readline = require('node:readline');
 const { MonitorEventType, RecvFlags, RecvResult } = zlink;
 const { applyAutoHwmProfile, integerEnv, manualSocketOverridesEnabled, monotonicMs, sleepImmediate } = require('../common/perf_metrics');
 const POLLIN = 1;
-const POLLOUT = 2;
 const { emitMultiSocketHwmDetail } = require('./perf_multi_auto_hwm');
 const { resolveMultiMonitorHwm } = require('./perf_multi_common');
 // Buffer inputs are copied into a zlink_msg_t during the public native call.
@@ -35,20 +34,8 @@ function appendMeasurement(op, payload) {
     }
     return op;
 }
-function submitReplyOrDropBackpressured(received, payload) {
-    try {
-        appendMeasurement(received.reply(), payload).submit();
-        return true;
-    }
-    catch (error) {
-        if (!(error instanceof zlink.SubmitError)
-            || error.result !== zlink.SubmitResult.Backpressured)
-            throw error;
-        // The requester uses the same timeout as this blocking reply admission.
-        // Once SNDTIMEO expires, let that request finish through its timeout
-        // completion instead of treating a stale perf reply as a server failure.
-        return false;
-    }
+function submitReply(received, payload) {
+    return appendMeasurement(received.reply(), payload).submit();
 }
 function measurementPayload(parts) {
     if (!Array.isArray(parts) || parts.length !== measurementPartCount())
@@ -68,9 +55,6 @@ function pollEvents(mask) {
     const events = [];
     if ((mask & POLLIN) !== 0) {
         events.push(zlink.PollEventFlag.PollIn);
-    }
-    if ((mask & POLLOUT) !== 0) {
-        events.push(zlink.PollEventFlag.PollOut);
     }
     return events;
 }
@@ -343,7 +327,6 @@ function createSocketEventWaiter(socket, events) {
 }
 module.exports = {
     POLLIN,
-    POLLOUT,
     applyContextPolicy,
     applySocketPolicy,
     createSocketEventWaiter,
@@ -356,7 +339,7 @@ module.exports = {
     resolveMultiMonitorHwm,
     sendStopTokenOnce,
     sendRouted,
-    submitReplyOrDropBackpressured,
+    submitReply,
     trySocketPublish,
     appendMeasurement,
     measurementParts,

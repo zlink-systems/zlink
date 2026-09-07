@@ -108,13 +108,11 @@ fn main() {
     })
     .expect("requester loop");
 
-    common::send_stop_token(|message| {
-        requester
-            .send(&target)
-            .message(message)
-            .submit_sync()
-            .map(|()| true)
-    });
+    requester
+        .send(&target)
+        .message(Message::try_from(common::STOP_TOKEN).expect("stop token"))
+        .submit_sync()
+        .expect("send stop token");
     replier_thread
         .join()
         .expect("replier thread")

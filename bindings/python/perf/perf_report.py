@@ -348,13 +348,6 @@ def _single_effective_options(args, section):
         f"- transports: {args.transports}",
         f"- msg_sizes: {args.msg_sizes}",
     ]
-    try:
-        bound = int(os.environ.get("PERF_SINGLE_REQREP_MAX_OUTSTANDING", "64"))
-    except ValueError:
-        bound = 64
-    if bound <= 0:
-        bound = 64
-    lines.append(f"- reqrep_max_outstanding: {max(2, bound)}")
     if section == "result":
         lines.append("")
     return lines
@@ -569,13 +562,6 @@ def _multi_effective_options(args, section):
         "- disable_resource_metrics: 0",
         "- timeout_seconds: auto",
     ]
-    try:
-        bound = int(os.environ.get("PERF_MULTI_REQREP_MAX_OUTSTANDING", "64"))
-    except ValueError:
-        bound = 64
-    if bound <= 0:
-        bound = 64
-    lines.append(f"- reqrep_max_outstanding: {max(2, bound)}")
     if section == "result":
         lines.append("")
     return lines

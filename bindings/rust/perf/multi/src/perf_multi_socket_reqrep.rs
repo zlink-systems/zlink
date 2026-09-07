@@ -258,23 +258,17 @@ pub fn run_client(config: ReqRepConfig) {
     let mut completion_events = vec![PollEvent::default(); sockets.len().max(1)];
 
     let request_timeout = common::resolve_multi_reqrep_timeout();
-    let max_outstanding = common::resolve_multi_reqrep_max_outstanding();
     let payload_size = args.msg_size.max(common::HEADER_SIZE);
     let active_deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
     let mut sequences = vec![1u64; sockets.len()];
-    let mut outstanding = vec![0usize; sockets.len()];
     let mut requests = common::ConcurrentTasks::<RequestTask>::new(0);
     let mut latency = common::LatencyStats::new();
 
-    // Each socket stays filled to the policy cap; completion order, not an RTT
-    // loop, decides when that socket receives its next request.
+    // Each turn submits once per socket, then drains completion progress.
     while Instant::now() < active_deadline {
         for (socket_index, socket) in sockets.iter().enumerate() {
             if Instant::now() >= active_deadline {
                 break;
-            }
-            if outstanding[socket_index] >= max_outstanding {
-                continue;
             }
             let sequence = sequences[socket_index];
             sequences[socket_index] = sequence.wrapping_add(1);
@@ -286,13 +280,11 @@ pub fn run_client(config: ReqRepConfig) {
                 sequence,
             );
             requests.push(socket.request_task(socket_index, payload, request_timeout));
-            outstanding[socket_index] += 1;
         }
 
         let ready = requests.poll_ready();
         let progressed = !ready.is_empty();
-        for (_, (socket_index, completion)) in ready {
-            outstanding[socket_index] -= 1;
+        for (_, (_, completion)) in ready {
             process_completion(completion, args.msg_size, active_deadline, &mut latency);
         }
         if Instant::now() < active_deadline {
@@ -315,8 +307,7 @@ pub fn run_client(config: ReqRepConfig) {
     while requests.any_pending() && Instant::now() < drain_deadline {
         let ready = requests.poll_ready();
         let progressed = !ready.is_empty();
-        for (_, (socket_index, completion)) in ready {
-            outstanding[socket_index] -= 1;
+        for (_, (_, completion)) in ready {
             process_completion(completion, args.msg_size, active_deadline, &mut latency);
         }
         if requests.any_pending() {
@@ -330,8 +321,7 @@ pub fn run_client(config: ReqRepConfig) {
                 .expect("request completion drain wait");
         }
     }
-    for (_, (socket_index, completion)) in requests.poll_ready() {
-        outstanding[socket_index] -= 1;
+    for (_, (_, completion)) in requests.poll_ready() {
         process_completion(completion, args.msg_size, active_deadline, &mut latency);
     }
     assert!(

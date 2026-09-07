@@ -4,14 +4,14 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
-const { measurementParts, submitReplyOrDropBackpressured, waitForConnectionReady } = require('../perf/multi/perf_multi_runtime');
+const { measurementParts, submitReply, waitForConnectionReady } = require('../perf/multi/perf_multi_runtime');
 const { runRoutedSendSendRounds, trackPendingReplyTask } = require('../perf/multi/perf_multi_routed_sendsend');
 const { benchmarkEndpoint } = require('../perf/common/perf_endpoint');
 const { configureTlsClient, configureTlsServer } = require('../perf/common/perf_tls');
 function nextTurn() {
     return new Promise((resolve) => setImmediate(resolve));
 }
-test('REQREP perf server treats an expired blocking reply admission as a dropped sample', () => {
+test('REQREP perf server submits once and surfaces reply admission failures', () => {
     let submits = 0;
     const operation = {
         message() { return this; },
@@ -20,7 +20,9 @@ test('REQREP perf server treats an expired blocking reply admission as a dropped
             throw new zlink.SubmitError(zlink.SubmitResult.Backpressured, 11);
         }
     };
-    assert.equal(submitReplyOrDropBackpressured({ reply: () => operation }, Buffer.alloc(1)), false);
+    assert.throws(() => submitReply({ reply: () => operation }, Buffer.alloc(1)), (error) => error instanceof zlink.SubmitError
+        && error.result
+            === zlink.SubmitResult.Backpressured);
     assert.equal(submits, 1, 'the perf server must not create an application retry loop');
 });
 function within(promise, timeoutMs = 5_000) {

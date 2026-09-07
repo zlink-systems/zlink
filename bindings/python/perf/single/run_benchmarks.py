@@ -315,13 +315,6 @@ def _build_options(args, patterns, transports, msg_sizes):
         "transports": _grouped_option_text(patterns, lambda pattern: _transports_for_pattern(pattern, transports)),
         "msg_sizes": ",".join(msg_sizes),
     }
-    try:
-        bound = int(os.environ.get("PERF_SINGLE_REQREP_MAX_OUTSTANDING", "64"))
-    except ValueError:
-        bound = 64
-    if bound <= 0:
-        bound = 64
-    options["reqrep_max_outstanding"] = max(2, bound)
     return options
 
 

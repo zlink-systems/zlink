@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const zlink = require('@zlink-systems/zlink');
 const {
   measurementParts,
-  submitReplyOrDropBackpressured,
+  submitReply,
   waitForConnectionReady
 } = require('../perf/multi/perf_multi_runtime');
 const {
@@ -24,7 +24,7 @@ function nextTurn(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-test('REQREP perf server treats an expired blocking reply admission as a dropped sample', () => {
+test('REQREP perf server submits once and surfaces reply admission failures', () => {
   let submits = 0;
   const operation = {
     message() { return this; },
@@ -33,7 +33,11 @@ test('REQREP perf server treats an expired blocking reply admission as a dropped
       throw new zlink.SubmitError(zlink.SubmitResult.Backpressured, 11);
     }
   };
-  assert.equal(submitReplyOrDropBackpressured({ reply: () => operation }, Buffer.alloc(1)), false);
+  assert.throws(
+    () => submitReply({ reply: () => operation }, Buffer.alloc(1)),
+    (error: unknown) => error instanceof zlink.SubmitError
+      && (error as { result: number }).result
+        === zlink.SubmitResult.Backpressured);
   assert.equal(submits, 1, 'the perf server must not create an application retry loop');
 });
 
