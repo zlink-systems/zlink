@@ -434,14 +434,17 @@ class ctx_guard_t
         if (_ctx)
             apply_ctx_options (_ctx);
     }
+    // zlink_ctx_shutdown() only interrupts blocking calls; zlink_ctx_term() is
+    // what joins the Core I/O threads (zlink/core/api.h: "zlink_ctx_term() must
+    // still be called for final cleanup"). Skipping it lets main() return while
+    // those threads are still destroying sockets and TLS engines, so exit()
+    // runs OPENSSL_cleanup() concurrently with their OpenSSL frees and corrupts
+    // the heap. Terminate here, exactly like the single runner's ctx_guard_t.
     ~ctx_guard_t ()
     {
         if (_ctx) {
             zlink_ctx_shutdown (_ctx);
-
-            const char *term_env = std::getenv ("PERF_CTX_TERM");
-            if (term_env && std::strcmp (term_env, "0") != 0)
-                zlink_ctx_term (_ctx);
+            zlink_ctx_term (_ctx);
         }
     }
 
