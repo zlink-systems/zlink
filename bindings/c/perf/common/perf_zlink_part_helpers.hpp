@@ -12,8 +12,15 @@ inline zlink_submit_result_t perf_zlink_send_parts (void *socket,
 
 inline size_t perf_measurement_part_count ()
 {
-    const char *const value = std::getenv ("PERF_PART_COUNT");
-    return value && value[0] == '1' && value[1] == '\0' ? 1u : 2u;
+    // Read once per process: PERF_PART_COUNT is a launch-time configuration
+    // knob (bindings/c/perf/run_benchmarks*.sh), never mutated after the
+    // measurement harness starts, so a per-call getenv only adds hot-path
+    // noise to every send/recv (see G-A/G-5 profiling).
+    static const size_t value = [] () -> size_t {
+        const char *const raw = std::getenv ("PERF_PART_COUNT");
+        return raw && raw[0] == '1' && raw[1] == '\0' ? 1u : 2u;
+    } ();
+    return value;
 }
 
 inline zlink_submit_result_t perf_zlink_send_measurement_parts (
