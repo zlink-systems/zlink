@@ -1,0 +1,15 @@
+너는 job review-ST-1(STREAM/fq race 수정의 독립 리뷰)다. 먼저 /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽는다. **읽기·리뷰 전용**: 소스·스펙·테스트 수정 금지, 빌드·실행 금지, 커밋 금지. 상한 40분.
+
+대상: worktree `/home/hep7hep7/project/zlink-work/st1`의 미커밋 diff(`git -C ~/project/zlink-work/st1 diff HEAD` + untracked `core/tests/integration/test_stream_concurrent_pull_send.cpp`). 보고서 /home/hep7hep7/project/zlink/doc/plan/c016-worklog/core-rf-ST-1-report.md, 결함 보고 doc/bug/perf/2026-09-08-core-stream-packet-pump-stall.ko.md, 스펙 core/doc/spec/core/systems/11-synchronization-model.ko.md §3(owner: turn / pipe ends / mailbox+wake / wait & re-take), §4, §5, 계획 §7.5 D-e 항목(`receive_once_guarded`·fq active partition의 TSan race).
+
+원인 요약(보고서): public receive 빠른 경로 `receive_once_guarded()`는 lock-free lease만 쥐고 `_fq.recvpipe()`를 실행하는데, 다른 thread의 `process_commands()`가 `public_api_sync`+`command_owner_sync`+`receive.sync` 아래 `activate_read`→`_fq.activated()`를 실행해 `array_t` 위치↔`_array_index` 불변식이 깨지고 `_active`가 0이 되어 영구 wake 유실. 수정: command 1건 적용 구간이 `socket_command_receive_turn_t`로 receive owner lease를 잡고(기존 `receive_owner` 상태어의 CAS), public 시도가 lease를 쥐고 있으면 `sync`를 놓고 yield 재시도.
+
+리뷰 항목(각각 근거 파일:행과 판정):
+1. **교착·기아**: public receive가 lease를 쥔 채 대기(blocking recv, poller wait, whole-record receive scope, multipart recv owner)하는 경로가 있는가? 있다면 그 대기가 풀리려면 command(activate_read) 적용이 필요하므로 서로 기다린다. 스펙 §3.4 "wait & re-take"(lease를 놓고 기다린 뒤 다시 잡는다)가 모든 receive 경로에서 지켜지는지 확인. yield 재시도 루프의 상한·공정성(command owner가 무한 spin하는가, close/ctx term 중 종료 보장).
+2. **정확성**: 이 lease 취득이 `activate_read` 외의 command(activate_write, pipe term, hiccup, bind/attach, reaper)에도 필요한가/과한가; command 적용 중 lease를 잡음으로써 생기는 새 lock 순서(`public_api_sync` → `command_owner_sync` → `receive.sync` → receive lease)와 public 경로(lease → ?)의 역전 가능성; 잡은 lease의 해제가 예외·조기 return 경로에서 보장되는지.
+3. **범위**: 같은 race가 `fq_t`를 쓰는 PAIR/DEALER/ROUTER/SUB에서도 동일 수정으로 닫히는지; `lb_t`(송신 partition)에 대칭 결함이 있는지(public send fast path vs command owner의 `activated()` on lb) — 있으면 보고만.
+4. **성능**: hot path(public recv/send 성공 경로)에 원자 연산·lock 추가 0이라는 주장 확인; command 적용 경로의 추가 비용(CAS 2 + 재시도)이 stream_tcp·reqrep 셀에 미칠 영향 추정(callgrind 없이 코드로).
+5. **스펙**: 이 수정으로 §7.5 D-e(`receive_once_guarded` race)가 계약 문장 변경 없이 닫히는지, 11-synchronization-model에 반영할 문장이 필요한지(초안).
+6. **테스트**: `test_stream_concurrent_pull_send`가 결정적으로 race를 관찰하는지(수정 전 4/4 FAIL 근거), 다른 socket type용 변형이 필요한지.
+
+보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/review-st1.md (한국어; B/W/S ID, 근거 파일:행, 마지막 줄 "차단 항목 수 / 채택 가능 여부"). 진행 파일 progress-review-st1.md.
