@@ -1468,6 +1468,8 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 
 | 2026-09-07 | 7개 binding | Single `DEALER_ROUTER_REQREP` `tcp` 64B — 러너 정책 정합 후 자릿수 확인 | 정합 확인용 | 64B, 1초, 1회, 고정 Core 0.17.1 prefix(태그 `core/v0.17.1`), 각 러너를 직렬 실행, `PERF_FAIL_FAST=1` | C 841,588 ops/s 대비 — C++ 534,982(63.6%), Rust 357,655(42.5%), .NET 313,245(37.2%), Java 259,238(30.8%), Node 149,844(17.8%), Python 17,917(2.1%), **Go 측정 불가**(하위 계약 결함). 정합 전 전 언어가 in-flight 1로 수천 ops/s대였다(.NET 3,542 = C의 0.46%). Python은 Node 대비 8.4배 낮아 별도 진단 대상, Go는 같은 socket에 동시 multipart request가 `EINVAL`/`EAGAIN`으로 실패해 별도 조사 대상. 이 값들은 정합 여부를 가리는 자릿수 확인이며 판정용 paired 측정이 아니다 | [러너 정합 log](log/2026-09-07-priority-runner-parity.ko.md), [Go·Rust·Python](log/2026-09-07-go-rust-python-runner-parity.ko.md), [.NET 진단](log/2026-09-07-dotnet-single-reqrep-diagnosis.ko.md) |
 
+| 2026-09-07 | C++ | Multi `tcp` 4 pattern before — 러너 C 모델 정합 후 | `p5cmodel` | 5 sizes(64~65536), 5초, 1회, 100 clients, I/O 4/4, auto-HWM balanced, 고정 Core 0.17.1 prefix(태그 `core/v0.17.1` `4cd03b9173`, `core_dirty=0`), 러너는 상한 제거·turn당 socket 1건·requester `POLLCOMPLETION` 단독 정합 후(`31c5e4f7f0`), C 직후 C++ 순차, 22:08~22:2x KST, load 0.15에서 시작 | `MULTI_DEALER_DEALER` **통과(95.42%)** — 81.3/87.5/100.8/98.8/108.6%, latency 0.83x; `MULTI_PUBSUB` **통과(95.52%)** — 89.8/89.6/94.9/97.9/105.4%, latency 1.01x; `MULTI_DEALER_ROUTER_REQREP` **미달(72.87%)** — 75.1/70.2/72.3/73.9/73.0%, latency 2.69x(65536B 9.68x); `MULTI_ROUTER_ROUTER_REQREP` **미달(76.39%)** — 75.9/74.8/74.9/76.5/79.8%, latency 2.15x(65536B 6.36x). REQREP은 크기와 무관하게 70~80%로 평평해 메시지당 고정 비용이 아니라 요청 경로 전반의 오버헤드다. 65536B에서만 latency가 6~10배로 튀어 aggregate latency 상한 2.0x를 넘겼다 | C: `bindings/c/perf/results/multi/report/*_p5cmodel.txt`; C++: `bindings/cpp/perf/results/multi/report/*_p5cmodel.txt` |
+
 
 ## 12. 완료 기준
 
