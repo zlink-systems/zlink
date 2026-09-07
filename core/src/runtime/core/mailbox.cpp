@@ -71,8 +71,15 @@ void zlink::mailbox_t::send (const command_t &cmd_)
         //  receiver is active are consumed by that drain and need no hint.
         _command_pending_hint.store (true, std::memory_order_release);
         signal_registered_pollers_unlocked ();
-        if (_signalers.empty ()
-            || _primary_signaler_required.load (std::memory_order_acquire))
+        //  An installed executor is already woken by the asio post below. Its
+        //  private primary eventfd has no waiter, so writing it only makes the
+        //  same owner read the redundant wake while draining this command.
+        //  Descriptor-based pollers still receive the primary edge exactly as
+        //  before, and mailboxes without an executor retain their blocking
+        //  receiver signal.
+        const bool async_delivery = _io_context && _handler;
+        if (_primary_signaler_required.load (std::memory_order_acquire)
+            || (_signalers.empty () && !async_delivery))
             _signaler.send ();
         //  Scheduling shares the command publication lock so a handler cannot
         //  race the transition from an empty queue to pending work.
@@ -207,8 +214,13 @@ bool zlink::mailbox_t::activate_if_command_pending (
 {
     if (!_active && _cpipe.check_read ()) {
         //  The command pipe is authoritative when a public poller consumed
-        //  the shared descriptor edge before the command owner arrived.
-        if (consume_primary_signaler_)
+        //  the shared descriptor edge before the command owner arrived. A
+        //  scheduled executor with no descriptor consumer was woken by its
+        //  asio post, so there is no redundant primary signal to consume.
+        if (consume_primary_signaler_
+            && !(_scheduled.load (std::memory_order_acquire)
+                 && !_primary_signaler_required.load (
+                   std::memory_order_acquire)))
             (void) _signaler.recv_failable ();
         _active = true;
     }
