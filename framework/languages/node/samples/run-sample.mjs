@@ -368,14 +368,14 @@ async function startRedis() {
 function removeRedisAttempt(containerId, name) {
   let exactId = containerId;
   if (!/^[0-9a-f]{12,64}$/.test(exactId ?? '')) {
-    const inspected = spawnSync(platformExecutable('docker'), [
+    const inspected = spawnSync('docker', [
       'inspect', '--type', 'container', '-f', '{{.Id}}', name
-    ], { encoding: 'utf8', timeout: dockerCommandTimeoutMs });
+    ], { encoding: 'utf8', timeout: dockerCommandTimeoutMs, windowsHide: true });
     if (inspected.status === 0) exactId = inspected.stdout.trim();
   }
   if (!/^[0-9a-f]{12,64}$/.test(exactId ?? '')) return;
-  spawnSync(platformExecutable('docker'), ['rm', '-fv', exactId], {
-    stdio: 'ignore', timeout: dockerCommandTimeoutMs
+  spawnSync('docker', ['rm', '-fv', exactId], {
+    stdio: 'ignore', timeout: dockerCommandTimeoutMs, windowsHide: true
   });
 }
 
@@ -416,12 +416,14 @@ function startCommand(name, command, args, options = {}) {
   assertRunning();
   const logPath = path.join(logDir, `${name}.log`);
   const output = fs.openSync(logPath, 'a');
+  const invocation = platformCommand(command, args);
   let child;
   try {
-    child = spawn(platformExecutable(command), args, {
+    child = spawn(invocation.executable, invocation.args, {
       cwd: options.cwd ?? sampleRoot,
       env: options.env ?? process.env,
       detached: process.platform !== 'win32',
+      windowsHide: true,
       // Descendants inherit these pipes. 'close' waits for their output handles too.
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -533,9 +535,11 @@ function run(executable, args, options = {}) {
 }
 
 function command(executable, args) {
-  const result = spawnSync(platformExecutable(executable), args, {
+  const invocation = platformCommand(executable, args);
+  const result = spawnSync(invocation.executable, invocation.args, {
     encoding: 'utf8',
-    timeout: executable === 'docker' ? dockerCommandTimeoutMs : undefined
+    timeout: executable === 'docker' ? dockerCommandTimeoutMs : undefined,
+    windowsHide: true
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
@@ -544,8 +548,13 @@ function command(executable, args) {
   return result.stdout;
 }
 
-function platformExecutable(executable) {
-  return process.platform === 'win32' && executable === 'npm' ? 'npm.cmd' : executable;
+function platformCommand(executable, args) {
+  if (process.platform !== 'win32' || executable !== 'npm') {
+    return { executable, args };
+  }
+  const npmCli = process.env.npm_execpath
+    ?? path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  return { executable: process.execPath, args: [npmCli, ...args] };
 }
 
 async function cleanup() {

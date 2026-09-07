@@ -126,28 +126,28 @@ try {
     $ApiConfig = Join-Path $RunDir "api.properties"
     $SessionConfig = Join-Path $RunDir "session.properties"
     $SupportConfig = Join-Path $RunDir "support.properties"
-    @(
+    Set-ZlinkSampleUtf8File -Path $ApiConfig -Value @(
         "sample.redisEndpoint=$RedisEndpoint",
         "sample.redisKeyPrefix=$RedisKeyPrefix",
         "sample.logDirectory=$SampleLogDir",
         "sample.apiChannelEndpoint=$ApiChannelEndpoint",
         "sample.apiSpotRouterEndpoint=$ApiRouterEndpoint",
         "sample.apiHttpEndpoint=$ApiHttpEndpoint"
-    ) | Set-Content -Path $ApiConfig -Encoding UTF8
-    @(
+    )
+    Set-ZlinkSampleUtf8File -Path $SessionConfig -Value @(
         "sample.redisEndpoint=$RedisEndpoint",
         "sample.redisKeyPrefix=$RedisKeyPrefix",
         "sample.logDirectory=$SampleLogDir",
         "sample.sessionRouterEndpoint=$SessionRouterEndpoint",
         "sample.streamEndpoint=$StreamEndpoint"
-    ) | Set-Content -Path $SessionConfig -Encoding UTF8
-    @(
+    )
+    Set-ZlinkSampleUtf8File -Path $SupportConfig -Value @(
         "sample.redisEndpoint=$RedisEndpoint",
         "sample.redisKeyPrefix=$RedisKeyPrefix",
         "sample.logDirectory=$SampleLogDir",
         "sample.supportChannelEndpoint=$SupportChannelEndpoint",
         "sample.supportSpotRouterEndpoint=$SupportRouterEndpoint"
-    ) | Set-Content -Path $SupportConfig -Encoding UTF8
+    )
 
     Invoke-ZlinkSampleGradleBuild -GradleExecutable $Gradle -Arguments @(
         "--settings-file",

@@ -32,7 +32,11 @@ std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
     const auto seconds = std::chrono::time_point_cast<std::chrono::seconds> (deadline);
     const std::time_t time = std::chrono::system_clock::to_time_t (seconds);
     std::tm tm{};
+#if defined(_WIN32)
+    gmtime_s (&tm, &time);
+#else
     gmtime_r (&time, &tm);
+#endif
     std::ostringstream output;
     output << std::put_time (&tm, "%Y-%m-%dT%H:%M:%SZ");
     return output.str ();

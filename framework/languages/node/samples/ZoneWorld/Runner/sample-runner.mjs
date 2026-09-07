@@ -486,9 +486,9 @@ function startSessionRouteProxy(ctx, name, port, armFile) {
   const logPath = path.join(ctx.logDir, `session-route-proxy-${name}.log`);
   const processState = ctx.startCommand(
     `session-route-proxy-${name}`,
-    'python3',
+    process.execPath,
     [
-      path.join(ctx.sampleRoot, 'Support/session_route_block_proxy.py'),
+      path.join(ctx.sampleRoot, 'Support/session-route-block-proxy.mjs'),
       '--listen-host', '127.0.0.1', '--listen-port', String(port),
       '--target-host', '127.0.0.2', '--target-port', String(port),
       '--arm-file', armFile
@@ -680,11 +680,20 @@ async function waitForCrossOwnerBot(ctx, nodes) {
 
 async function startSharedBrowser(ctx, gateway, ops, lifecycleNodeId) {
   const browserRoot = path.resolve(ctx.nodeRoot, '../shared_sample/zoneworld/client');
+  const browserEnv = {
+    ...process.env,
+    PLAYWRIGHT_BROWSERS_PATH: path.join(browserRoot, '.cache', 'ms-playwright')
+  };
+  const viteCli = path.join(browserRoot, 'node_modules', 'vite', 'bin', 'vite.js');
+  const playwrightCli = path.join(browserRoot, 'node_modules', 'playwright', 'cli.js');
   const outputDirectory = path.join(ctx.workDir, 'zoneworld-browser-dist');
   const previewPort = await ctx.port();
   const markerPath = path.join(ctx.runDir, 'browser-lifecycle-armed');
   const playwrightConfig = path.join(ctx.runDir, 'zoneworld-playwright.live.mjs');
-  await ctx.runCommand('npm', ['exec', 'vite', 'build', '--', '--outDir', outputDirectory], { cwd: browserRoot });
+  await ctx.runCommand(process.execPath, [viteCli, 'build', '--outDir', outputDirectory], {
+    cwd: browserRoot,
+    env: browserEnv
+  });
   fs.writeFileSync(
     path.join(outputDirectory, 'config.json'),
     `${JSON.stringify({ gateway: gateway.streamEndpoint, ops: ops.streamEndpoint })}\n`,
@@ -699,16 +708,16 @@ async function startSharedBrowser(ctx, gateway, ops, lifecycleNodeId) {
   })}\n`, { mode: 0o600 });
   ctx.startCommand(
     'shared-browser-preview',
-    'npm',
-    ['exec', 'vite', 'preview', '--', '--host', '127.0.0.1', '--port', String(previewPort), '--outDir', outputDirectory],
-    { cwd: browserRoot }
+    process.execPath,
+    [viteCli, 'preview', '--host', '127.0.0.1', '--port', String(previewPort), '--outDir', outputDirectory],
+    { cwd: browserRoot, env: browserEnv }
   );
   await ctx.waitTcp(`tcp://127.0.0.1:${previewPort}`);
   const playwright = ctx.startCommand(
     'shared-browser-playwright',
-    'npm',
-    ['exec', 'playwright', 'test', '--', '--config', playwrightConfig],
-    { cwd: browserRoot, expectedStop: true }
+    process.execPath,
+    [playwrightCli, 'test', '--config', playwrightConfig],
+    { cwd: browserRoot, env: browserEnv, expectedStop: true }
   );
   return {
     markerPath,

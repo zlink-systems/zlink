@@ -199,7 +199,7 @@ sample.matchmakingRouterEndpoint=tcp://$($matchmakingRouter.Host):$($matchmaking
         } else {
             "tcp://$($apiAMatchmaking.Host):$($apiAMatchmaking.Port)"
         }
-        Set-Content -Path $path -Value "$commonProperties`nsample.apiMatchmakingRouterEndpoint=$matchmakingEndpoint`nsample.$RoleName=$RoleValue" -Encoding utf8NoBOM
+        Set-ZlinkSampleUtf8File -Path $path -Value "$commonProperties`nsample.apiMatchmakingRouterEndpoint=$matchmakingEndpoint`nsample.$RoleName=$RoleValue"
         Protect-ConfigFile $path
         return $path
     }
@@ -211,10 +211,10 @@ sample.matchmakingRouterEndpoint=tcp://$($matchmakingRouter.Host):$($matchmaking
     $playBConfig = Write-SampleConfig "play-b" "playNode" "b"
     $matchmakingConfig = Write-SampleConfig "matchmaking" "matchmakingNode" "matchmaking"
     $clientConfig = Join-Path $ConfigDir "client.properties"
-    Set-Content -Path $clientConfig -Value @(
+    Set-ZlinkSampleUtf8File -Path $clientConfig -Value @(
         "sessionAStreamEndpoint=tcp://$($sessionAStream.Host):$($sessionAStream.Port)",
         "sessionBStreamEndpoint=tcp://$($sessionBStream.Host):$($sessionBStream.Port)"
-    ) -Encoding utf8NoBOM
+    )
     Protect-ConfigFile $clientConfig
 
     Push-Location "../../.."

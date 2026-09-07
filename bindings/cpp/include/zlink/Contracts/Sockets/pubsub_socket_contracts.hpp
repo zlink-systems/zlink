@@ -110,10 +110,6 @@ class sub_socket_t : public subscriber_socket_t
 
     sub_socket_options_t options () { return sub_socket_options_t (*this); }
 
-  private:
-    using subscriber_socket_t::set_subscription;
-    using subscriber_socket_t::subscription_at;
-    using subscriber_socket_t::unset_subscription;
 };
 
 } // namespace zlink
@@ -177,10 +173,6 @@ class xsub_socket_t : public subscriber_socket_t
 
     sub_socket_options_t options () { return sub_socket_options_t (*this); }
 
-  private:
-    using subscriber_socket_t::set_subscription;
-    using subscriber_socket_t::subscription_at;
-    using subscriber_socket_t::unset_subscription;
 };
 
 } // namespace zlink

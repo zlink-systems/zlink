@@ -17,8 +17,8 @@ function Print-Logs {
     param([int]$Status)
     if ($Status -eq 0) { return }
     Get-ChildItem -Path $LogDir -Filter "*.log" -ErrorAction SilentlyContinue | ForEach-Object {
-        Write-Error "===== $($_.FullName) ====="
-        Get-Content -Path $_.FullName -Tail 240 -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+        [Console]::Error.WriteLine("===== $($_.FullName) =====")
+        Get-Content -Path $_.FullName -Tail 240 -ErrorAction SilentlyContinue | ForEach-Object { [Console]::Error.WriteLine($_) }
     }
 }
 
@@ -135,7 +135,7 @@ try {
     $playAConfig = Join-Path $RunDir "play-a.properties"
     $playBConfig = Join-Path $RunDir "play-b.properties"
 
-    @(
+    Set-ZlinkSampleUtf8File -Path $apiAConfig -Value @(
         "sample.nodeId=api-a",
         "sample.apiBindUrl=http://127.0.0.1:$ApiAHttpPort",
         "sample.apiPublicUrl=http://127.0.0.1:$ApiAHttpPort",
@@ -155,19 +155,19 @@ try {
         "sample.peerSpotEndpoint=tcp://127.0.0.1:$PlayBSpotPort",
         "sample.peerSpotPubSubEndpoint=tcp://127.0.0.1:$PlayBPubPort",
         "sample.logDirectory=$LogDir"
-    ) | Set-Content -Path $apiAConfig -Encoding UTF8
+    )
 
     Copy-Item $apiAConfig $apiBConfig
-    (Get-Content $apiBConfig) `
+    $apiBContent = (Get-Content $apiBConfig) `
         -replace 'sample\.nodeId=.*', "sample.nodeId=api-b" `
         -replace 'sample\.apiBindUrl=.*', "sample.apiBindUrl=http://127.0.0.1:$ApiBHttpPort" `
         -replace 'sample\.apiPublicUrl=.*', "sample.apiPublicUrl=http://127.0.0.1:$ApiBHttpPort" `
-        -replace 'sample\.apiChannelEndpoint=.*', "sample.apiChannelEndpoint=tcp://127.0.0.1:$ApiBChannelPort" |
-        Set-Content -Path $apiBConfig -Encoding UTF8
+        -replace 'sample\.apiChannelEndpoint=.*', "sample.apiChannelEndpoint=tcp://127.0.0.1:$ApiBChannelPort"
+    Set-ZlinkSampleUtf8File -Path $apiBConfig -Value $apiBContent
 
     Copy-Item $apiAConfig $playAConfig
     Copy-Item $apiAConfig $playBConfig
-    (Get-Content $playBConfig) `
+    $playBContent = (Get-Content $playBConfig) `
         -replace 'sample\.nodeId=.*', "sample.nodeId=play-b" `
         -replace 'sample\.playChannelEndpoint=.*', "sample.playChannelEndpoint=tcp://127.0.0.1:$PlayBChannelPort" `
         -replace 'sample\.playEndpoint=.*', "sample.playEndpoint=tcp://127.0.0.1:$PlayBStreamPort" `
@@ -175,11 +175,11 @@ try {
         -replace 'sample\.routeEndpoint=.*', "sample.routeEndpoint=tcp://127.0.0.1:$PlayBSpotPort" `
         -replace 'sample\.spotPubSubEndpoint=.*', "sample.spotPubSubEndpoint=tcp://127.0.0.1:$PlayBPubPort" `
         -replace 'sample\.peerSpotEndpoint=.*', "sample.peerSpotEndpoint=tcp://127.0.0.1:$PlayASpotPort" `
-        -replace 'sample\.peerSpotPubSubEndpoint=.*', "sample.peerSpotPubSubEndpoint=tcp://127.0.0.1:$PlayAPubPort" |
-        Set-Content -Path $playBConfig -Encoding UTF8
-    (Get-Content $playAConfig) `
-        -replace 'sample\.nodeId=.*', "sample.nodeId=play-a" |
-        Set-Content -Path $playAConfig -Encoding UTF8
+        -replace 'sample\.peerSpotPubSubEndpoint=.*', "sample.peerSpotPubSubEndpoint=tcp://127.0.0.1:$PlayAPubPort"
+    Set-ZlinkSampleUtf8File -Path $playBConfig -Value $playBContent
+    $playAContent = (Get-Content $playAConfig) `
+        -replace 'sample\.nodeId=.*', "sample.nodeId=play-a"
+    Set-ZlinkSampleUtf8File -Path $playAConfig -Value $playAContent
 
     Invoke-Gradle @("--settings-file", "standalone.settings.gradle.kts", "--no-daemon", ":Server:installDist", ":Client:installDist", "--quiet")
 

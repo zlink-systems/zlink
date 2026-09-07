@@ -1,5 +1,53 @@
 Set-StrictMode -Version Latest
 
+if (-not (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
+    $IsWindows = $env:OS -eq "Windows_NT"
+}
+
+function Set-ZlinkSampleUtf8File {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Value
+    )
+
+    [System.IO.File]::WriteAllText(
+        $Path,
+        ($Value -join [System.Environment]::NewLine),
+        [System.Text.UTF8Encoding]::new($false))
+}
+
+function ConvertTo-ZlinkSampleProcessArgument {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
+
+    if ($Value -notmatch '[\s"]') {
+        return $Value
+    }
+    return '"' + [regex]::Replace($Value, '(\\*)"', '$1$1\"') + '"'
+}
+
+function Optimize-ZlinkSampleWindowsLaunchers {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    if (-not $IsWindows) {
+        return
+    }
+    Get-ChildItem -Path $Root -Filter "*.bat" -Recurse -File |
+        Where-Object { $_.FullName -match '[\\/]build[\\/]install[\\/][^\\/]+[\\/]bin[\\/]' } |
+        ForEach-Object {
+            $content = [System.IO.File]::ReadAllText($_.FullName)
+            $optimized = [regex]::Replace(
+                $content,
+                '(?m)^set CLASSPATH=.*$',
+                'set CLASSPATH=%APP_HOME%\lib\*')
+            if ($optimized -ne $content) {
+                [System.IO.File]::WriteAllText(
+                    $_.FullName,
+                    $optimized,
+                    [System.Text.UTF8Encoding]::new($false))
+            }
+        }
+}
+
 function Get-ZlinkSamplePortPool {
     param(
         [Parameter(Mandatory = $true)]
@@ -130,6 +178,9 @@ function Invoke-ZlinkSampleGradleBuild {
         if ($LASTEXITCODE -ne 0) {
             throw "Gradle build failed: $($Arguments -join ' ')"
         }
+        if ($Arguments -match ':installDist$') {
+            Optimize-ZlinkSampleWindowsLaunchers -Root (Get-Location).Path
+        }
     } finally {
         $lockStream.Dispose()
     }
@@ -145,11 +196,12 @@ function Invoke-ZlinkDockerCommand {
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = "docker"
     $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    foreach ($argument in $Arguments) {
-        $startInfo.ArgumentList.Add($argument)
-    }
+    $startInfo.Arguments = (($Arguments | ForEach-Object {
+        ConvertTo-ZlinkSampleProcessArgument $_
+    }) -join " ")
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
@@ -158,7 +210,7 @@ function Invoke-ZlinkDockerCommand {
     }
     try {
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            $process.Kill($true)
+            $process.Kill()
             throw "Docker command timed out after ${TimeoutSeconds}s: docker $($Arguments -join ' ')"
         }
         $stdout = $process.StandardOutput.ReadToEnd().Trim()

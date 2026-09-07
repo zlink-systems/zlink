@@ -124,7 +124,7 @@ class message_t
         message_t wrapped;
         auto raw_payload = std::make_shared<raw_payload_state_t> ();
         raw_payload->message = std::move (message);
-        raw_payload->encoded = encoded_payload_t::from_raw (
+        raw_payload->encoded = detail::encoded_payload_from_raw (
           raw_payload->message);
         wrapped._raw_payload = std::move (raw_payload);
         wrapped._decode = std::make_shared<decode_state_t> ();
@@ -230,14 +230,18 @@ class message_t
         const auto &serializers = require_serializers ();
         return with_encoded_payload (
           serializers,
-          [] (const encoded_payload_t &payload) { return payload.to_raw (); });
+          [] (const encoded_payload_t &payload) {
+              return detail::encoded_payload_to_raw (payload);
+          });
     }
 
     zlink::message_t to_raw (const serializer_registry_t &serializers) const
     {
         return with_encoded_payload (
           serializers,
-          [] (const encoded_payload_t &payload) { return payload.to_raw (); });
+          [] (const encoded_payload_t &payload) {
+              return detail::encoded_payload_to_raw (payload);
+          });
     }
 
     std::shared_ptr<raw_payload_state_t> _raw_payload;

@@ -85,28 +85,28 @@ try {
     $supportHttpEndpoint = "http://127.0.0.1:$($ports[7])"
     $redis = Start-ZlinkSampleRedis "zlink-redis-java-sample-supportchat" -Language Java
     $RedisContainer = $redis.ContainerId
-    $redisPrefix = "zlink:supportchat:sample:$PID:$([Guid]::NewGuid().ToString('N'))"
+    $redisPrefix = "zlink:supportchat:sample:${PID}:$([Guid]::NewGuid().ToString('N'))"
 
     $apiConfig = Join-Path $RunDir "api.properties"
-    @(
+    Set-ZlinkSampleUtf8File -Path $apiConfig -Value @(
         "sample.redisEndpoint=$($redis.Endpoint)",
         "sample.redisKeyPrefix=$redisPrefix",
         "sample.logDirectory=$LogDir",
         "sample.apiChannelEndpoint=$apiChannelEndpoint",
         "sample.apiSpotRouterEndpoint=$apiRouterEndpoint",
         "sample.apiHttpEndpoint=$apiHttpEndpoint"
-    ) | Set-Content -Path $apiConfig -Encoding utf8NoBOM
+    )
     $sessionConfig = Join-Path $RunDir "session.properties"
-    @(
+    Set-ZlinkSampleUtf8File -Path $sessionConfig -Value @(
         "sample.redisEndpoint=$($redis.Endpoint)",
         "sample.redisKeyPrefix=$redisPrefix",
         "sample.logDirectory=$LogDir",
         "sample.sessionStreamEndpoint=$sessionStreamEndpoint",
         "sample.sessionSpotRouterEndpoint=$sessionRouterEndpoint",
         "sample.supportSpotRouterEndpoint=$supportRouterEndpoint"
-    ) | Set-Content -Path $sessionConfig -Encoding utf8NoBOM
+    )
     $supportConfig = Join-Path $RunDir "support.properties"
-    @(
+    Set-ZlinkSampleUtf8File -Path $supportConfig -Value @(
         "sample.redisEndpoint=$($redis.Endpoint)",
         "sample.redisKeyPrefix=$redisPrefix",
         "sample.logDirectory=$LogDir",
@@ -114,7 +114,7 @@ try {
         "sample.supportSpotRouterEndpoint=$supportRouterEndpoint",
         "sample.sessionSpotRouterEndpoint=$sessionRouterEndpoint",
         "sample.supportHttpEndpoint=$supportHttpEndpoint"
-    ) | Set-Content -Path $supportConfig -Encoding utf8NoBOM
+    )
     Protect-ConfigFile $apiConfig; Protect-ConfigFile $sessionConfig; Protect-ConfigFile $supportConfig
 
     $gradle = if ($IsWindows) { Join-Path $SampleDir "../../gradlew.bat" } else { Join-Path $SampleDir "../../gradlew" }

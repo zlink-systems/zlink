@@ -6,6 +6,7 @@ Set-StrictMode -Version Latest
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $CppRoot = Resolve-Path (Join-Path $ScriptDir "../..")
 $BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
+$BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
 $WaitAttempts = 300
 $WaitMilliseconds = 100
 $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
@@ -20,6 +21,8 @@ function Find-Binary([string]$Name) {
     foreach ($candidate in @(
         (Join-Path $BuildDir $Name),
         (Join-Path $BuildDir "$Name.exe"),
+        (Join-Path $BuildDir "$BuildConfiguration/$Name"),
+        (Join-Path $BuildDir "$BuildConfiguration/$Name.exe"),
         (Join-Path $BuildDir "linux-ninja-debug/$Name"),
         (Join-Path $BuildDir "linux-ninja-debug/$Name.exe")
     )) {
@@ -97,7 +100,7 @@ function Wait-LogPrefixCount([string]$Name, [string[]]$Paths, [string]$Prefix, [
 }
 
 function Start-Role([string]$Name, [string]$Binary, [string[]]$Arguments) {
-    $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -PassThru `
+    $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -NoNewWindow -PassThru `
         -RedirectStandardOutput (Join-Path $LogDir "$Name.stdout.log") `
         -RedirectStandardError (Join-Path $LogDir "$Name.stderr.log")
     $Processes.Add($process)
@@ -151,7 +154,7 @@ function Cleanup([int]$Status) {
 
 $Status = 1
 try {
-    & cmake --build $BuildDir --parallel 2 --target `
+    & cmake --build $BuildDir --config $BuildConfiguration --parallel 2 --target `
         sample_cpp_framework_deliverydispatch_dispatch `
         sample_cpp_framework_deliverydispatch_courier_actor_node `
         sample_cpp_framework_deliverydispatch_customer_gateway `
@@ -184,7 +187,7 @@ try {
     $redis = Start-ZlinkSampleRedis "zlink-redis-cpp-sample-deliverydispatch"
     $RedisContainer = $redis.ContainerId
     $RedisEndpoint = "tcp://$($redis.Endpoint)"
-    $RedisKeyPrefix = "deliverydispatch:$PID:$([Guid]::NewGuid().ToString('N')):"
+    $RedisKeyPrefix = "deliverydispatch:${PID}:$([Guid]::NewGuid().ToString('N')):"
     Wait-Endpoint "redis" $RedisEndpoint
 
     Write-RoleConfig "tracking" ""

@@ -27,6 +27,7 @@ await build({
     name: 'sample-client-runtime-boundary',
     setup(context) {
       context.onResolve({ filter: /^(?:[^./]|#)/ }, (args) => {
+        if (args.kind === 'entry-point') return undefined;
         if (args.path === '@zlink-systems/stream-connector') return undefined;
         return { path: args.path, external: true };
       });

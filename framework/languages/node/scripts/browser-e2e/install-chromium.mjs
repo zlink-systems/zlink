@@ -4,8 +4,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const workspaceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const executable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-const args = ['playwright', 'install'];
+const executable = process.execPath;
+const args = [path.join(workspaceRoot, 'node_modules', 'playwright', 'cli.js'), 'install'];
 if (process.argv.includes('--with-deps')) args.push('--with-deps');
 args.push('chromium');
 const result = spawnSync(executable, args, {

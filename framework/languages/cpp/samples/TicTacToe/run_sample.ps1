@@ -8,8 +8,11 @@ New-Item -ItemType Directory -Force -Path $env:TICTACTOE_LOG_DIR | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:TICTACTOE_LOG_DIR "*.log")
 
 $BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
+$BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
 $BinDir = $BuildDir
-if (-not (Test-Path (Join-Path $BinDir "sample_cpp_framework_tictactoe_play.exe")) -and
+if (Test-Path (Join-Path $BuildDir "$BuildConfiguration/sample_cpp_framework_tictactoe_play.exe")) {
+    $BinDir = Join-Path $BuildDir $BuildConfiguration
+} elseif (-not (Test-Path (Join-Path $BinDir "sample_cpp_framework_tictactoe_play.exe")) -and
     (Test-Path (Join-Path $BinDir "linux-ninja-debug/sample_cpp_framework_tictactoe_play.exe"))) {
     $BinDir = Join-Path $BinDir "linux-ninja-debug"
 }
@@ -96,7 +99,7 @@ function Wait-RouteReady([string]$BaseUrl, [string]$TargetRid, [int]$TimeoutSeco
 function Start-Server([string]$Name, [string]$Binary, [string[]]$Arguments) {
     $stdout = Join-Path $LogDir "$Name.log"
     $stderr = Join-Path $LogDir "$Name.err.log"
-    $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+    $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -NoNewWindow -PassThru
     $script:Processes.Add($process)
 }
 
@@ -147,6 +150,7 @@ function Cleanup([int]$Status) {
 }
 
 & $CTestBin --test-dir $BuildDir `
+    -C $BuildConfiguration `
     -R "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway|sample_smoke_sample_cpp_framework_tictactoe_(play|api)" `
     --output-on-failure
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -131,10 +131,10 @@ try {
         param([string]$Name, [string]$Role, [string]$CourierNode = "node1")
         $path = Join-Path $ConfigDir "$Name.properties"
         if ($Role -eq "client") {
-            Set-Content -Path $path -Value @(
+            Set-ZlinkSampleUtf8File -Path $path -Value @(
                 "customerStreamEndpoint=tcp://$($customerStream.Host):$($customerStream.Port)",
                 "courierStreamEndpoint=tcp://$($courierStream.Host):$($courierStream.Port)",
-                "dispatchHttpEndpoint=http://$($dispatchHttp.Host):$($dispatchHttp.Port)") -Encoding utf8NoBOM
+                "dispatchHttpEndpoint=http://$($dispatchHttp.Host):$($dispatchHttp.Port)")
             Protect-ConfigFile $path
             return $path
         }
@@ -143,13 +143,13 @@ try {
         $lines.Add("sample.redisKeyPrefix=$redisKeyPrefix")
         $lines.Add("sample.logDirectory=$($FlowLogDir.Replace('\', '/'))")
         switch ($Role) {
-            "tracking" { $lines.AddRange(@("sample.trackingChannelEndpoint=tcp://$($tracking.Host):$($tracking.Port)", "sample.trackingSpotEndpoint=tcp://$($trackingSpotRouter.Host):$($trackingSpotRouter.Port)", "sample.trackingSpotPubEndpoint=tcp://$($trackingSpotPub.Host):$($trackingSpotPub.Port)")) }
-            "customer-gateway" { $lines.AddRange(@("sample.customerStreamEndpoint=tcp://$($customerStream.Host):$($customerStream.Port)", "sample.customerSpotEndpoint=tcp://$($customerSpot.Host):$($customerSpot.Port)", "sample.customerSpotRouterEndpoint=tcp://$($customerRouter.Host):$($customerRouter.Port)")) }
-            "courier-session" { $lines.AddRange(@("sample.courierStreamEndpoint=tcp://$($courierStream.Host):$($courierStream.Port)", "sample.courierSessionSpotEndpoint=tcp://$($courierSessionSpot.Host):$($courierSessionSpot.Port)")) }
+            "tracking" { $lines.AddRange([string[]]@("sample.trackingChannelEndpoint=tcp://$($tracking.Host):$($tracking.Port)", "sample.trackingSpotEndpoint=tcp://$($trackingSpotRouter.Host):$($trackingSpotRouter.Port)", "sample.trackingSpotPubEndpoint=tcp://$($trackingSpotPub.Host):$($trackingSpotPub.Port)")) }
+            "customer-gateway" { $lines.AddRange([string[]]@("sample.customerStreamEndpoint=tcp://$($customerStream.Host):$($customerStream.Port)", "sample.customerSpotEndpoint=tcp://$($customerSpot.Host):$($customerSpot.Port)", "sample.customerSpotRouterEndpoint=tcp://$($customerRouter.Host):$($customerRouter.Port)")) }
+            "courier-session" { $lines.AddRange([string[]]@("sample.courierStreamEndpoint=tcp://$($courierStream.Host):$($courierStream.Port)", "sample.courierSessionSpotEndpoint=tcp://$($courierSessionSpot.Host):$($courierSessionSpot.Port)")) }
             "courier-node" { $lines.Add("sample.courierNode=$CourierNode"); if ($CourierNode -eq "node2") { $lines.Add("sample.courierActorNode2SpotEndpoint=tcp://$($courierNode2Spot.Host):$($courierNode2Spot.Port)") } else { $lines.Add("sample.courierActorNode1SpotEndpoint=tcp://$($courierNode1Spot.Host):$($courierNode1Spot.Port)") } }
-            "dispatch" { $lines.AddRange(@("sample.dispatchHttpEndpoint=http://$($dispatchHttp.Host):$($dispatchHttp.Port)", "sample.dispatchSpotEndpoint=tcp://$($dispatchSpot.Host):$($dispatchSpot.Port)", "sample.dispatchChannelEndpoint=tcp://$($dispatchChannel.Host):$($dispatchChannel.Port)")) }
+            "dispatch" { $lines.AddRange([string[]]@("sample.dispatchHttpEndpoint=http://$($dispatchHttp.Host):$($dispatchHttp.Port)", "sample.dispatchSpotEndpoint=tcp://$($dispatchSpot.Host):$($dispatchSpot.Port)", "sample.dispatchChannelEndpoint=tcp://$($dispatchChannel.Host):$($dispatchChannel.Port)")) }
         }
-        Set-Content -Path $path -Value $lines -Encoding utf8NoBOM
+        Set-ZlinkSampleUtf8File -Path $path -Value $lines
         Protect-ConfigFile $path
         return $path
     }

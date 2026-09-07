@@ -1,6 +1,10 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+if (-not (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
+    $IsWindows = $env:OS -eq "Windows_NT"
+}
+
 $script:SampleProcesses = @()
 $script:SampleProcessNames = @{}
 
@@ -14,10 +18,17 @@ function Invoke-SampleDockerCommand {
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = "docker"
     $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    foreach ($argument in $Arguments) {
-        $startInfo.ArgumentList.Add($argument)
+    if ($startInfo.PSObject.Properties.Name -contains "ArgumentList") {
+        foreach ($argument in $Arguments) {
+            $startInfo.ArgumentList.Add($argument)
+        }
+    } else {
+        $startInfo.Arguments = (($Arguments | ForEach-Object {
+            '"' + $_.Replace('"', '\"') + '"'
+        }) -join ' ')
     }
 
     $process = [System.Diagnostics.Process]::new()
@@ -29,7 +40,11 @@ function Invoke-SampleDockerCommand {
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            $process.Kill($true)
+            if ($IsWindows) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            } else {
+                $process.Kill($true)
+            }
             throw "Docker command timed out after $TimeoutSeconds seconds: docker $($Arguments -join ' ')"
         }
         $result = [pscustomobject]@{
@@ -374,6 +389,7 @@ function Start-SampleDotnetAssembly {
         -ArgumentList $argumentList `
         -RedirectStandardOutput (Join-Path $LogDirectory "$Name.out.log") `
         -RedirectStandardError (Join-Path $LogDirectory "$Name.err.log") `
+        -NoNewWindow `
         -PassThru
     $script:SampleProcesses += $process
     $script:SampleProcessNames[$process.Id] = $Name
@@ -420,9 +436,15 @@ function Stop-SampleProcesses {
             if (-not $process.HasExited) {
                 $name = $script:SampleProcessNames[$process.Id]
                 if ([string]::IsNullOrWhiteSpace($name)) { $name = "pid-$($process.Id)" }
-                $teardownFailures += "Sample role $name (pid $($process.Id)) exited during cleanup with status -9 (SIGKILL)."
+                if (-not $IsWindows) {
+                    $teardownFailures += "Sample role $name (pid $($process.Id)) exited during cleanup with status -9 (SIGKILL)."
+                }
                 $forcedProcessIds[$process.Id] = $true
-                $process.Kill($true)
+                if ($IsWindows) {
+                    Stop-Process -Id $process.Id -Force -ErrorAction Stop
+                } else {
+                    $process.Kill($true)
+                }
             }
             $process.WaitForExit()
             if (-not $forcedProcessIds.ContainsKey($process.Id) -and

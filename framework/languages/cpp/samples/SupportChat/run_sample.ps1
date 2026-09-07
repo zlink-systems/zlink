@@ -6,6 +6,7 @@ Set-StrictMode -Version Latest
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $CppRoot = Resolve-Path (Join-Path $ScriptDir "../..")
 $BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
+$BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
 $WaitAttempts = 300
 $WaitMilliseconds = 100
 $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
@@ -19,6 +20,7 @@ New-Item -ItemType Directory -Force -Path $LogDir, $FlowLogDir, $ConfigDir | Out
 function Find-Binary([string]$Name) {
     foreach ($candidate in @(
         (Join-Path $BuildDir $Name), (Join-Path $BuildDir "$Name.exe"),
+        (Join-Path $BuildDir "$BuildConfiguration/$Name"), (Join-Path $BuildDir "$BuildConfiguration/$Name.exe"),
         (Join-Path $BuildDir "linux-ninja-debug/$Name"), (Join-Path $BuildDir "linux-ninja-debug/$Name.exe")
     )) { if (Test-Path $candidate) { return $candidate } }
     throw "Missing executable: $Name"
@@ -69,7 +71,7 @@ function Wait-Endpoint([string]$Name, [string]$Endpoint) {
     throw "Timed out waiting for $Name at $Endpoint"
 }
 function Start-Role([string]$Name, [string]$Binary, [string[]]$Arguments) {
-    $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -PassThru `
+    $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -NoNewWindow -PassThru `
         -RedirectStandardOutput (Join-Path $LogDir "$Name.stdout.log") `
         -RedirectStandardError (Join-Path $LogDir "$Name.stderr.log")
     $Processes.Add($process)
@@ -95,7 +97,7 @@ function Cleanup {
 
 $Succeeded = $false
 try {
-    & cmake --build $BuildDir --parallel 2 --target sample_cpp_framework_supportchat_api sample_cpp_framework_supportchat_session sample_cpp_framework_supportchat_support sample_cpp_framework_supportchat_client
+    & cmake --build $BuildDir --config $BuildConfiguration --parallel 2 --target sample_cpp_framework_supportchat_api sample_cpp_framework_supportchat_session sample_cpp_framework_supportchat_support sample_cpp_framework_supportchat_client
     if ($LASTEXITCODE -ne 0) { throw "SupportChat sample build failed." }
     $ports = @(Get-ZlinkSamplePorts -Count 12)
     $ApiRoute = "tcp://127.0.0.1:$($ports[1])"; $SupportRoute = "tcp://127.0.0.1:$($ports[2])"; $SupportSpotRouter = "tcp://127.0.0.1:$($ports[3])"

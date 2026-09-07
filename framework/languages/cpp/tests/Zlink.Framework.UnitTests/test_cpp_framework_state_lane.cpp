@@ -11,6 +11,8 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace
@@ -19,12 +21,58 @@ namespace
 using zlink::framework::runtime::offload_executor_t;
 using zlink::framework::runtime::state_lane_t;
 
+struct move_constructible_snapshot_t
+{
+    explicit move_constructible_snapshot_t (int value_) : value (value_) {}
+    move_constructible_snapshot_t (move_constructible_snapshot_t &&) noexcept = default;
+    move_constructible_snapshot_t &operator= (move_constructible_snapshot_t &&) = delete;
+    move_constructible_snapshot_t (const move_constructible_snapshot_t &) = delete;
+    move_constructible_snapshot_t &operator= (const move_constructible_snapshot_t &) = delete;
+
+    int value;
+};
+
+struct int_work_t
+{
+    int operator() ();
+};
+
+struct void_work_t
+{
+    void operator() ();
+};
+
+struct reference_work_t
+{
+    int &operator() ();
+};
+
+static_assert (std::is_same_v<
+               decltype (std::declval<state_lane_t &> ().run (int_work_t{})),
+               std::future<int>>);
+static_assert (std::is_same_v<
+               decltype (std::declval<state_lane_t &> ().run (void_work_t{})),
+               std::future<void>>);
+static_assert (std::is_same_v<
+               decltype (std::declval<state_lane_t &> ().run (reference_work_t{})),
+               std::future<int &>>);
+
 TEST (ZLinkStateLane, RunReturnsTheResultOfTheWork)
 {
     offload_executor_t executor (2);
     state_lane_t lane (executor);
 
     EXPECT_EQ (42, lane.run ([] { return 42; }).get ());
+}
+
+TEST (ZLinkStateLane, RunTransfersAMoveConstructibleNonAssignableSnapshot)
+{
+    offload_executor_t executor (2);
+    state_lane_t lane (executor);
+
+    auto snapshot = lane.run ([] { return move_constructible_snapshot_t (17); }).get ();
+
+    EXPECT_EQ (17, snapshot.value);
 }
 
 TEST (ZLinkStateLane, RunSurfacesAFailureToItsOwnCaller)

@@ -4,6 +4,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $CppRoot = Resolve-Path (Join-Path $ScriptDir "../..")
 $BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
+$BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
 $CTestBin = if ($env:CTEST_BIN) { $env:CTEST_BIN } else { "ctest" }
 $LogDir = Join-Path $ScriptDir "build/sample-logs"
 
@@ -14,6 +15,8 @@ function Find-Binary([string]$Name) {
     $candidates = @(
         (Join-Path $BuildDir $Name),
         (Join-Path $BuildDir "$Name.exe"),
+        (Join-Path $BuildDir "$BuildConfiguration/$Name"),
+        (Join-Path $BuildDir "$BuildConfiguration/$Name.exe"),
         (Join-Path $BuildDir "linux-ninja-debug/$Name"),
         (Join-Path $BuildDir "linux-ninja-debug/$Name.exe")
     )
@@ -151,7 +154,7 @@ function Wait-LogCount([string]$Name, [string[]]$Paths, [string]$ExpectedLine, [
 function Start-Server([string]$Name, [string]$Binary, [string[]]$Arguments) {
     $logPath = Join-Path $LogDir "$Name.log"
     $errorLogPath = Join-Path $LogDir "$Name.err.log"
-    $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -PassThru
+    $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -RedirectStandardOutput $logPath -RedirectStandardError $errorLogPath -NoNewWindow -PassThru
     $Processes.Add($process)
 }
 
@@ -166,6 +169,7 @@ $Status = 1
 try {
     Invoke-Checked $CTestBin @(
         "--test-dir", $BuildDir,
+        "-C", $BuildConfiguration,
         "-R", "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway",
         "--output-on-failure"
     )

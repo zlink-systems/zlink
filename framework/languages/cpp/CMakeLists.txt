@@ -1524,12 +1524,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_compile_definitions(test_cpp_framework_execution PRIVATE
     ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/serial-execution-v1.json"
     ZLINK_RUNTIME_OBSERVATION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/runtime-observation-v1.json")
-  add_zlink_framework_test(
-    test_cpp_framework_state_lane
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_state_lane.cpp
-    "framework-unit;framework-regression;execution")
+  add_executable(test_cpp_framework_state_lane
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_state_lane.cpp)
   target_link_libraries(test_cpp_framework_state_lane PRIVATE
+    zlink::framework
+    GTest::gtest
     GTest::gtest_main)
+  target_include_directories(test_cpp_framework_state_lane PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  zlink_enable_coverage(test_cpp_framework_state_lane)
+  add_test(NAME test_cpp_framework_state_lane
+    COMMAND test_cpp_framework_state_lane)
+  set_tests_properties(test_cpp_framework_state_lane PROPERTIES
+    LABELS "framework-unit;framework-regression;execution"
+    TIMEOUT 30)
   add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp

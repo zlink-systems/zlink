@@ -1,0 +1,74 @@
+import groovy.json.JsonSlurper
+import org.gradle.api.attributes.Attribute
+
+rootProject {
+    afterEvaluate {
+        if (!tasks.names.contains('prepareZlinkNativeResources')) {
+            return
+        }
+
+        def prefixValue = System.getenv('ZLINK_CORE_PACKAGE_PREFIX')
+        def summaryValue = System.getenv('ZLINK_CORE_PACKAGE_SUMMARY')
+        if (prefixValue == null || prefixValue.trim().isEmpty()
+            || summaryValue == null || summaryValue.trim().isEmpty()) {
+            throw new GradleException(
+                'Windows Java packaging requires ZLINK_CORE_PACKAGE_PREFIX and ZLINK_CORE_PACKAGE_SUMMARY')
+        }
+
+        def prefix = file(prefixValue).canonicalFile
+        def runtime = new File(prefix, 'bin/zlink.dll')
+        def manifest = new File(prefix, 'share/zlink/core-package-provenance.json')
+        def metadata = new JsonSlurper().parse(manifest)
+        def approved = new JsonSlurper().parseText(summaryValue)
+        def sha256 = { File input ->
+            java.security.MessageDigest.getInstance('SHA-256')
+                .digest(input.bytes).encodeHex().toString()
+        }
+        if (!runtime.isFile() || !manifest.isFile()
+            || metadata.version != project.version.toString()
+            || approved.version != project.version.toString()
+            || approved.prefix != prefix.canonicalPath
+            || approved.provenanceSha256 != sha256(manifest)
+            || approved.runtime.sha256 != sha256(runtime)
+            || approved.runtime.soname != 'zlink.dll'
+            || metadata.abiMajor != 0) {
+            throw new GradleException(
+                'Windows Core package does not match the approved exact provenance')
+        }
+
+        def generatedRoot = layout.buildDirectory
+            .dir('generated/zlink-native-resources/main').get().asFile
+        def output = new File(generatedRoot, 'native/windows-x86_64/zlink.dll')
+        tasks.named('prepareZlinkNativeResources').configure {
+            setActions([])
+            outputs.file(output)
+            doLast {
+                project.delete(new File(generatedRoot, 'native'))
+                output.parentFile.mkdirs()
+                project.copy {
+                    from runtime
+                    into output.parentFile
+                    rename { 'zlink.dll' }
+                }
+                project.copy {
+                    from manifest
+                    into new File(generatedRoot, 'META-INF/zlink')
+                }
+            }
+        }
+
+        ['apiElements', 'runtimeElements'].each { configurationName ->
+            configurations.named(configurationName) {
+                attributes {
+                    attribute(Attribute.of('systems.zlink.core.soname', String), 'zlink.dll')
+                    attribute(Attribute.of('systems.zlink.core.provenance-sha256', String),
+                        approved.provenanceSha256)
+                }
+            }
+        }
+        publishing.publications.named('mavenJava') {
+            pom.properties.put('zlink.core.soname', 'zlink.dll')
+            pom.properties.put('zlink.core.provenance-sha256', approved.provenanceSha256)
+        }
+    }
+}

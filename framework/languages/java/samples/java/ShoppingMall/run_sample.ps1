@@ -22,8 +22,8 @@ function Print-Logs {
     param([int]$Status)
     if ($Status -eq 0) { return }
     Get-ChildItem -Path $LogDir -Filter "*.log" -ErrorAction SilentlyContinue | ForEach-Object {
-        Write-Error "===== $($_.FullName) ====="
-        Get-Content -Path $_.FullName -Tail 200 -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+        [Console]::Error.WriteLine("===== $($_.FullName) =====")
+        Get-Content -Path $_.FullName -Tail 200 -ErrorAction SilentlyContinue | ForEach-Object { [Console]::Error.WriteLine($_) }
     }
 }
 
@@ -114,7 +114,7 @@ function Protect-ConfigFile {
 function Write-ConfigFile {
     param([string]$Name, [string[]]$Lines)
     $path = Join-Path $RunDir "$Name.properties"
-    Set-Content -Path $path -Value $Lines -Encoding utf8NoBOM
+    Set-ZlinkSampleUtf8File -Path $path -Value $Lines
     Protect-ConfigFile $path
     return $path
 }

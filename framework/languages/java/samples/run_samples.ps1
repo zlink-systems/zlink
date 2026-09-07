@@ -1,3 +1,9 @@
+[CmdletBinding()]
+param(
+    [string]$LocalPackageRoot = "",
+    [string]$Sample = ""
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -5,6 +11,17 @@ $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$RootDir/redis-common.ps1"
 $JavaRoot = Split-Path -Parent $RootDir
 $ManifestPath = Join-Path $RootDir "sample-manifest.env"
+
+if ($LocalPackageRoot) {
+    $resolvedPackageRoot = [System.IO.Path]::GetFullPath($LocalPackageRoot)
+    if (-not (Test-Path -LiteralPath (Join-Path $resolvedPackageRoot "maven") -PathType Container)) {
+        throw "Local Maven package repository was not found: $resolvedPackageRoot/maven"
+    }
+    $env:ZLINK_LOCAL_PACKAGE_ROOT = $resolvedPackageRoot
+}
+if ($Sample) {
+    $env:ZLINK_SAMPLE_FILTER = $Sample
+}
 
 Set-Location $RootDir
 
@@ -33,6 +50,11 @@ function Read-SampleManifest {
 
 $Manifest = Read-SampleManifest $ManifestPath
 $SampleFilter = if ($env:ZLINK_SAMPLE_FILTER) { $env:ZLINK_SAMPLE_FILTER } else { "" }
+$PowerShell = Get-Command pwsh.exe, powershell.exe -ErrorAction SilentlyContinue |
+    Select-Object -First 1 -ExpandProperty Source
+if (-not $PowerShell) {
+    throw "PowerShell executable was not found."
+}
 
 function Invoke-SampleWithRetry {
     param([string]$ScriptPath)
@@ -42,7 +64,7 @@ function Invoke-SampleWithRetry {
             if ($ScriptPath.EndsWith(".sh")) {
                 & bash $ScriptPath *> $output
             } else {
-                & pwsh -NoProfile -ExecutionPolicy Bypass -File $ScriptPath *> $output
+                & $PowerShell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath *> $output
             }
             if ($LASTEXITCODE -eq 0) {
                 Get-Content $output
@@ -50,14 +72,15 @@ function Invoke-SampleWithRetry {
             }
             $text = Get-Content $output -Raw
             if ($text -notmatch "ZlinkBindException|Timed out waiting") {
-                Write-Error $text
+                [Console]::Error.WriteLine($text)
                 throw "Sample failed: $ScriptPath"
             }
             if ($attempt -eq 3) {
-                Write-Error $text
+                [Console]::Error.WriteLine($text)
                 throw "Sample failed after retries: $ScriptPath"
             }
-            Write-Error "sample transient port bind failure; retrying $ScriptPath ($attempt/3)"
+            [Console]::Error.WriteLine(
+                "sample transient port bind failure; retrying $ScriptPath ($attempt/3)")
         }
     } finally {
         Remove-Item -Force -ErrorAction SilentlyContinue $output
@@ -108,7 +131,7 @@ $sources = Get-ChildItem -Path $RootDir -Recurse -Include *.java,*.kt -File |
     Where-Object { $_.FullName -notmatch "[/\\](build|bin)[/\\]" }
 $offenders = $sources | Select-String -Pattern $Manifest["FORBIDDEN_SAMPLE_PATTERN"]
 if ($offenders) {
-    $offenders | ForEach-Object { Write-Error $_.ToString() }
+    $offenders | ForEach-Object { [Console]::Error.WriteLine($_.ToString()) }
     throw "sample gate failed: forbidden sample pattern found"
 }
 

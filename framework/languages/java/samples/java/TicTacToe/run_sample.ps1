@@ -18,8 +18,8 @@ function Print-Logs {
     param([int]$Status)
     if ($Status -eq 0) { return }
     Get-ChildItem -Path $LogDir -Filter "*.log" -ErrorAction SilentlyContinue | ForEach-Object {
-        Write-Error "===== $($_.FullName) ====="
-        Get-Content -Path $_.FullName -Tail 200 -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+        [Console]::Error.WriteLine("===== $($_.FullName) =====")
+        Get-Content -Path $_.FullName -Tail 200 -ErrorAction SilentlyContinue | ForEach-Object { [Console]::Error.WriteLine($_) }
     }
 }
 
@@ -130,14 +130,14 @@ try {
     function Write-ApiConfig {
         param([string]$Name, [int]$HttpPort, [int]$ChannelPort)
         $path = Join-Path $RunDir "$Name.properties"
-        @(
+        Set-ZlinkSampleUtf8File -Path $path -Value @(
             "sample.nodeId=$Name",
             "sample.apiBindUrl=http://127.0.0.1:$HttpPort",
             "sample.apiChannelEndpoint=tcp://127.0.0.1:$ChannelPort",
             "sample.playChannelEndpoint=tcp://127.0.0.1:$PlayAChannelPort",
             "sample.playChannelEndpoints=$PlayChannels",
             "sample.logDirectory=$LogDir"
-        ) | Set-Content -Path $path -Encoding utf8NoBOM
+        )
         Protect-ConfigFile $path
         return $path
     }
@@ -151,7 +151,7 @@ try {
             [int]$PeerSpotPort,
             [int]$PeerPubPort)
         $path = Join-Path $RunDir "$Name.properties"
-        @(
+        Set-ZlinkSampleUtf8File -Path $path -Value @(
         "sample.nodeId=$Name",
         "sample.apiChannelEndpoints=$ApiChannels",
         "sample.playChannelEndpoint=tcp://127.0.0.1:$ChannelPort",
@@ -164,7 +164,7 @@ try {
         "sample.peerSpotEndpoint=tcp://127.0.0.1:$PeerSpotPort",
         "sample.peerSpotPubSubEndpoint=tcp://127.0.0.1:$PeerPubPort",
         "sample.logDirectory=$LogDir"
-        ) | Set-Content -Path $path -Encoding utf8NoBOM
+        )
         Protect-ConfigFile $path
         return $path
     }

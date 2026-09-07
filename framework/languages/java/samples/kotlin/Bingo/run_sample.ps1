@@ -175,7 +175,7 @@ sample.session-node=a
         } else {
             "tcp://$($apiAMatchmaking.Host):$($apiAMatchmaking.Port)"
         }
-        Set-Content -Path $path -Value "$commonProperties`nsample.api-matchmaking-router-endpoint=$matchmakingEndpoint`nsample.$RoleName=$RoleValue" -Encoding utf8NoBOM
+        Set-ZlinkSampleUtf8File -Path $path -Value "$commonProperties`nsample.api-matchmaking-router-endpoint=$matchmakingEndpoint`nsample.$RoleName=$RoleValue"
         Protect-ConfigFile $path
         return $path
     }

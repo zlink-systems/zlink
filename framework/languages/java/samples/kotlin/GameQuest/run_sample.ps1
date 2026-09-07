@@ -19,8 +19,8 @@ function Print-Logs {
     param([int]$Status)
     if ($Status -eq 0) { return }
     Get-ChildItem -Path $LogDir -Filter "*.log" -ErrorAction SilentlyContinue | ForEach-Object {
-        Write-Error "===== $($_.FullName) ====="
-        Get-Content -Path $_.FullName -Tail 200 -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+        [Console]::Error.WriteLine("===== $($_.FullName) =====")
+        Get-Content -Path $_.FullName -Tail 200 -ErrorAction SilentlyContinue | ForEach-Object { [Console]::Error.WriteLine($_) }
     }
 }
 
@@ -99,8 +99,8 @@ function Start-Role {
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $startInfo.UseShellExecute = $false
-    $startInfo.ArgumentList.Add("--config")
-    $startInfo.ArgumentList.Add($ConfigPath)
+    $startInfo.CreateNoWindow = $true
+    $startInfo.Arguments = "--config " + (ConvertTo-ZlinkSampleProcessArgument $ConfigPath)
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     $process.Start() | Out-Null
@@ -230,11 +230,11 @@ try {
     $clientConfig = Join-Path $RunDir "client.properties"
     $controlDir = Join-Path $RunDir "control"
     New-Item -ItemType Directory -Force -Path $controlDir | Out-Null
-    @("sample.instanceName=mission-a", "sample.logDirectory=$LogDir", "sample.channelEndpoint=$missionAChannelEndpoint", "sample.httpEndpoint=$missionAHttpEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix") | Set-Content $missionAConfig -Encoding UTF8
-    @("sample.instanceName=mission-b", "sample.logDirectory=$LogDir", "sample.channelEndpoint=$missionBChannelEndpoint", "sample.httpEndpoint=$missionBHttpEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix") | Set-Content $missionBConfig -Encoding UTF8
-    @("sample.instanceName=api-a", "sample.logDirectory=$LogDir", "sample.streamEndpoint=$apiAStreamEndpoint", "sample.httpEndpoint=$apiAHttpEndpoint", "sample.missionAChannelEndpoint=$missionAChannelEndpoint", "sample.missionBChannelEndpoint=$missionBChannelEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix") | Set-Content $apiAConfig -Encoding UTF8
-    @("sample.instanceName=api-b", "sample.logDirectory=$LogDir", "sample.streamEndpoint=$apiBStreamEndpoint", "sample.httpEndpoint=$apiBHttpEndpoint", "sample.missionAChannelEndpoint=$missionAChannelEndpoint", "sample.missionBChannelEndpoint=$missionBChannelEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix") | Set-Content $apiBConfig -Encoding UTF8
-    @("sample.apiAStreamEndpoint=$apiAStreamEndpoint", "sample.apiBStreamEndpoint=$apiBStreamEndpoint", "sample.apiAHttpEndpoint=$apiAHttpEndpoint", "sample.apiBHttpEndpoint=$apiBHttpEndpoint", "sample.missionAHttpEndpoint=$missionAHttpEndpoint", "sample.missionBHttpEndpoint=$missionBHttpEndpoint", "sample.controlDirectory=$controlDir") | Set-Content $clientConfig -Encoding UTF8
+    Set-ZlinkSampleUtf8File -Path $missionAConfig -Value @("sample.instanceName=mission-a", "sample.logDirectory=$LogDir", "sample.channelEndpoint=$missionAChannelEndpoint", "sample.httpEndpoint=$missionAHttpEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix")
+    Set-ZlinkSampleUtf8File -Path $missionBConfig -Value @("sample.instanceName=mission-b", "sample.logDirectory=$LogDir", "sample.channelEndpoint=$missionBChannelEndpoint", "sample.httpEndpoint=$missionBHttpEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix")
+    Set-ZlinkSampleUtf8File -Path $apiAConfig -Value @("sample.instanceName=api-a", "sample.logDirectory=$LogDir", "sample.streamEndpoint=$apiAStreamEndpoint", "sample.httpEndpoint=$apiAHttpEndpoint", "sample.missionAChannelEndpoint=$missionAChannelEndpoint", "sample.missionBChannelEndpoint=$missionBChannelEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix")
+    Set-ZlinkSampleUtf8File -Path $apiBConfig -Value @("sample.instanceName=api-b", "sample.logDirectory=$LogDir", "sample.streamEndpoint=$apiBStreamEndpoint", "sample.httpEndpoint=$apiBHttpEndpoint", "sample.missionAChannelEndpoint=$missionAChannelEndpoint", "sample.missionBChannelEndpoint=$missionBChannelEndpoint", "sample.redisEndpoint=$redisEndpoint", "sample.redisKeyPrefix=$redisKeyPrefix")
+    Set-ZlinkSampleUtf8File -Path $clientConfig -Value @("sample.apiAStreamEndpoint=$apiAStreamEndpoint", "sample.apiBStreamEndpoint=$apiBStreamEndpoint", "sample.apiAHttpEndpoint=$apiAHttpEndpoint", "sample.apiBHttpEndpoint=$apiBHttpEndpoint", "sample.missionAHttpEndpoint=$missionAHttpEndpoint", "sample.missionBHttpEndpoint=$missionBHttpEndpoint", "sample.controlDirectory=$controlDir")
     @($missionAConfig, $missionBConfig, $apiAConfig, $apiBConfig, $clientConfig) | ForEach-Object { Protect-ConfigFile $_ }
 
     Push-Location "../../.."

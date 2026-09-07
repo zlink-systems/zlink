@@ -22,7 +22,10 @@ function Wait-LogCount {
     )
 
     for ($i = 0; $i -lt $Attempts; $i++) {
-        $actual = @(Select-String -Path $Path -Pattern $Pattern -SimpleMatch -ErrorAction SilentlyContinue).Count
+        $existingPaths = @($Path | Where-Object { Test-Path $_ })
+        $actual = if ($existingPaths.Count -eq 0) { 0 } else {
+            @(Select-String -Path $existingPaths -Pattern $Pattern -SimpleMatch).Count
+        }
         if ($actual -eq $Expected) {
             return
         }
@@ -78,7 +81,7 @@ try {
                 PlayEndpoints = @($playAEndpoint, $playBEndpoint)
                 RedisEndpoint = $redisEndpoint
                 RedisKeyPrefix = $TICTACTOE_REDIS_KEY_PREFIX
-                LogDirectory = $SampleLogDir
+                LogDirectory = (Join-Path $SampleLogDir $InstanceName)
             }
         }
     }
@@ -101,7 +104,7 @@ try {
                 PlayEndpoints = @($playAEndpoint, $playBEndpoint)
                 RedisEndpoint = $redisEndpoint
                 RedisKeyPrefix = $TICTACTOE_REDIS_KEY_PREFIX
-                LogDirectory = $SampleLogDir
+                LogDirectory = (Join-Path $SampleLogDir $InstanceName)
             }
         }
     }
@@ -133,21 +136,21 @@ try {
     Wait-SampleTcpEndpoint "api-b-mesh" $apiBMeshEndpoint
     Wait-SampleTcpEndpoint "api-b-channel" $apiBChannelEndpoint
 
-    Wait-LogCount (Join-Path $LogDir "play-a.log") "tictactoe-ready kind=peer-route node=play-a peer=play-b" 1
-    Wait-LogCount (Join-Path $LogDir "play-b.log") "tictactoe-ready kind=peer-route node=play-b peer=play-a" 1
-    Wait-LogCount (Join-Path $LogDir "api-a.log") "tictactoe-ready kind=http node=api-a" 1
-    Wait-LogCount (Join-Path $LogDir "api-b.log") "tictactoe-ready kind=http node=api-b" 1
-    Wait-LogCount (Join-Path $LogDir "api-a.log") "tictactoe-ready kind=spot-route node=api-a mesh=tictactoe" 1
-    Wait-LogCount (Join-Path $LogDir "api-b.log") "tictactoe-ready kind=spot-route node=api-b mesh=tictactoe" 1
+    Wait-LogCount (Join-Path $SampleLogDir "play-a/play.log") "tictactoe-ready kind=peer-route node=play-a peer=play-b" 1
+    Wait-LogCount (Join-Path $SampleLogDir "play-b/play.log") "tictactoe-ready kind=peer-route node=play-b peer=play-a" 1
+    Wait-LogCount (Join-Path $SampleLogDir "api-a/api.log") "tictactoe-ready kind=http node=api-a" 1
+    Wait-LogCount (Join-Path $SampleLogDir "api-b/api.log") "tictactoe-ready kind=http node=api-b" 1
+    Wait-LogCount (Join-Path $SampleLogDir "api-a/api.log") "tictactoe-ready kind=spot-route node=api-a mesh=tictactoe" 1
+    Wait-LogCount (Join-Path $SampleLogDir "api-b/api.log") "tictactoe-ready kind=spot-route node=api-b mesh=tictactoe" 1
 
-    $clientLog = Join-Path $LogDir "client.log"
+    $clientLog = Join-Path $LogDir "client.console.log"
     Invoke-SampleDotnetRun -Project (Join-Path $ScriptDir "Client/TicTacToe.Client.csproj") -Arguments @("--config", $clientConfigFile) *> $clientLog
     Wait-LogCount $clientLog "observer-connected endpoint=$playBEndpoint" 1
     Wait-LogCount $clientLog "observer-subscription=verified subscribed=true" 1
     Wait-LogCount $clientLog "observer-win-milestone=verified actor=player-x wins=100" 1
     Wait-LogCount $clientLog "reconnected-game-state=verified actor=player-x room=" 1
     Wait-LogCount $clientLog "tictactoe=completed" 1
-    $playLogs = Join-Path $LogDir "play-*.log"
+    $playLogs = @((Join-Path $SampleLogDir "play-a/play.log"), (Join-Path $SampleLogDir "play-b/play.log"))
     Wait-LogCount $playLogs "tictactoe-lifecycle actor-bound actor=player-x" 1
     Wait-LogCount $playLogs "tictactoe-lifecycle leave-completed actor=player-x" 1
     Wait-LogCount $playLogs "tictactoe-lifecycle leave-completed actor=player-o" 1

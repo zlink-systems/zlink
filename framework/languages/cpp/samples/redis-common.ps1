@@ -82,10 +82,17 @@ function Invoke-ZlinkSampleDockerCommand {
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = "docker"
     $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    foreach ($argument in $Arguments) {
-        $startInfo.ArgumentList.Add($argument)
+    if ($startInfo.PSObject.Properties.Name -contains 'ArgumentList') {
+        foreach ($argument in $Arguments) {
+            $startInfo.ArgumentList.Add($argument)
+        }
+    } else {
+        $startInfo.Arguments = (($Arguments | ForEach-Object {
+            '"' + $_.Replace('"', '\"') + '"'
+        }) -join ' ')
     }
 
     $process = [System.Diagnostics.Process]::new()
@@ -94,12 +101,18 @@ function Invoke-ZlinkSampleDockerCommand {
         throw "Failed to start Docker: docker $($Arguments -join ' ')"
     }
     try {
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-            $process.Kill($true)
+            if ($env:OS -eq 'Windows_NT') {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            } else {
+                $process.Kill($true)
+            }
             throw "Docker command timed out after ${TimeoutSeconds}s: docker $($Arguments -join ' ')"
         }
-        $stdout = $process.StandardOutput.ReadToEnd().Trim()
-        $stderr = $process.StandardError.ReadToEnd().Trim()
+        $stdout = $stdoutTask.GetAwaiter().GetResult().Trim()
+        $stderr = $stderrTask.GetAwaiter().GetResult().Trim()
         if ($process.ExitCode -ne 0 -and -not $AllowFailure) {
             throw "Docker command failed (exit=$($process.ExitCode)): docker $($Arguments -join ' ')`n$stderr"
         }

@@ -1,6 +1,8 @@
 param(
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
-    [string[]]$Samples
+    [string[]]$Samples,
+    [string]$LocalPackageRoot = "",
+    [switch]$SkipFrameworkBuild
 )
 
 Set-StrictMode -Version Latest
@@ -16,7 +18,16 @@ $defaultSamples = @(
     "ShoppingMall.Ts",
     "ZoneWorld"
 )
-$selectedSamples = if ($Samples.Count -eq 0) { $defaultSamples } else { $Samples }
+$selectedSamples = if ($null -eq $Samples -or $Samples.Count -eq 0) { $defaultSamples } else { $Samples }
+
+if (-not $SkipFrameworkBuild) {
+    $buildArguments = @{ SkipSamples = $true }
+    if (-not [string]::IsNullOrWhiteSpace($LocalPackageRoot)) {
+        $buildArguments.LocalPackageRoot = $LocalPackageRoot
+    }
+    & (Join-Path $scriptDir "../build-windows.ps1") @buildArguments
+    if (-not $?) { throw "Node Framework Windows build failed." }
+}
 
 foreach ($sample in $selectedSamples) {
     $runner = Join-Path $scriptDir "$sample/run_sample.ps1"

@@ -85,13 +85,13 @@ function Invoke-ShoppingMallPlannedRelocation {
                     }
                     Start-Sleep -Milliseconds 100
                 }
-                throw "Planned relocation did not complete for $OrderId: target did not become owner"
+                throw "Planned relocation did not complete for ${OrderId}: target did not become owner"
             }
             $lastResult = "owner=true outcome=$($result.Outcome) reason=$($result.Reason)"
         }
         Start-Sleep -Milliseconds 100
     }
-    throw "Planned relocation did not complete for $OrderId: $lastResult"
+    throw "Planned relocation did not complete for ${OrderId}: $lastResult"
 }
 
 function Invoke-ShoppingMallRelocatedOrderContinue {

@@ -133,7 +133,7 @@ try {
 
     function Write-RoleConfig([string]$Name, [string]$Instance, [string]$EndpointKey, [string]$Endpoint, [string]$HttpEndpoint, [string]$Router) {
         $path = Join-Path $RunDir "$Name.properties"
-        @(
+        $content = @(
             "sample.instanceName=$Instance",
             "sample.logDirectory=$LogDir",
             "sample.$EndpointKey=$Endpoint",
@@ -141,20 +141,21 @@ try {
             "sample.redisEndpoint=$($redis.Endpoint)",
             "sample.redisKeyPrefix=$redisPrefix",
             "sample.spotRouterEndpoint=$Router"
-        ) | Set-Content -Path $path -Encoding utf8NoBOM
+        )
+        Set-ZlinkSampleUtf8File -Path $path -Value $content
         Protect-ConfigFile $path
         return $path
     }
     function Write-ClientConfig([string]$Name, [string]$Scenario, [string]$ReleaseFile = "") {
         $path = Join-Path $RunDir "$Name.properties"
-        @(
+        $content = @(
             "sample.apiAStreamEndpoint=$apiAStream",
             "sample.apiBStreamEndpoint=$apiBStream",
             "sample.apiAHttpEndpoint=$apiAHttp",
             "sample.apiBHttpEndpoint=$apiBHttp",
             "sample.scenario=$Scenario"
-        ) + $(if ($ReleaseFile) { "sample.ownerUnavailableReleaseFile=$ReleaseFile" }) |
-            Set-Content -Path $path -Encoding utf8NoBOM
+        ) + $(if ($ReleaseFile) { "sample.ownerUnavailableReleaseFile=$ReleaseFile" })
+        Set-ZlinkSampleUtf8File -Path $path -Value $content
         Protect-ConfigFile $path
         return $path
     }

@@ -52,7 +52,9 @@ function Wait-LogCount {
 try {
     $BINGO_REDIS_KEY_PREFIX = "bingo:dotnet:${RunId}:"
 
-    $basePort = if ($BINGO_BASE_PORT) { [int]$BINGO_BASE_PORT } else { 0 }
+    $basePort = if (Get-Variable -Name BINGO_BASE_PORT -ErrorAction SilentlyContinue) {
+        [int]$BINGO_BASE_PORT
+    } else { 0 }
     $ports = New-SamplePorts -Count 11 -BasePort $basePort
 
     Set-DefaultValue "BINGO_API_A_MESH_ENDPOINT" "tcp://127.0.0.1:$($ports[0])"

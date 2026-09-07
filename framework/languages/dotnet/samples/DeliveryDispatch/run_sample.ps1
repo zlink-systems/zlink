@@ -38,7 +38,9 @@ function Wait-DeliveryDispatchTcpEndpoint {
 }
 
 try {
-    $basePort = if ($DELIVERYDISPATCH_BASE_PORT) { [int]$DELIVERYDISPATCH_BASE_PORT } else { 0 }
+    $basePort = if (Get-Variable -Name DELIVERYDISPATCH_BASE_PORT -ErrorAction SilentlyContinue) {
+        [int]$DELIVERYDISPATCH_BASE_PORT
+    } else { 0 }
     $ports = New-SamplePorts -Count 9 -BasePort $basePort
 
     $RedisKeyPrefix = "deliverydispatch:dotnet:${PID}:$([Guid]::NewGuid().ToString('N')):"
@@ -73,18 +75,29 @@ try {
             "client" { "unused" }
         }
 
-        python3 (Join-Path $ScriptDir "write_role_config.py") `
-            --output (Join-Path $ConfigDir "$Role.json") `
-            --role $Role `
-            --log-dir $SampleLogDir `
-            --work-dir $WorkDir `
-            --redis-endpoint $RedisEndpoint `
-            --redis-key-prefix $RedisKeyPrefix `
-            --dispatch-http $DispatchHttp `
-            --mesh-endpoint $meshEndpoint `
-            --customer-stream $CustomerStream `
-            --courier-stream $CourierStream
-        if ($LASTEXITCODE -ne 0) { throw "Could not write the $Role configuration file." }
+        if ($Role -eq "client") {
+            $document = @{ client = @{
+                logDirectory = $SampleLogDir; dispatchHttpUrl = $DispatchHttp
+                customerStreamEndpoint = $CustomerStream; courierStreamEndpoint = $CourierStream
+                workDirectory = $WorkDir
+            } }
+        } else {
+            $topology = @{
+                redisEndpoint = $RedisEndpoint; redisKeyPrefix = $RedisKeyPrefix
+                meshEndpoint = $meshEndpoint
+            }
+            switch ($Role) {
+                "dispatch" { $topology.dispatchHttpUrl = $DispatchHttp }
+                "customer-gateway" { $topology.customerStreamEndpoint = $CustomerStream }
+                "courier-session" { $topology.courierStreamEndpoint = $CourierStream }
+            }
+            $document = @{ sample = @{
+                role = @{ name = $Role; logDir = $SampleLogDir; workDir = $WorkDir }
+                topology = $topology
+            } }
+        }
+        [IO.File]::WriteAllText((Join-Path $ConfigDir "$Role.json"),
+            ($document | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
     }
 
     Write-RoleConfig "tracking"
@@ -119,29 +132,29 @@ try {
         throw "Timed out waiting for ${Description}: expected $Expected occurrence(s) of '$Line' in $Path."
     }
 
-    Wait-DeliveryDispatchLogCount "tracking route readiness" (Join-Path $LogDir "tracking.log") "deliverydispatch-ready kind=route node=tracking" 1
-    Wait-DeliveryDispatchLogCount "customer gateway route readiness" (Join-Path $LogDir "customer-gateway.log") "deliverydispatch-ready kind=route node=customer-gateway" 1
-    Wait-DeliveryDispatchLogCount "courier session route readiness" (Join-Path $LogDir "courier-session.log") "deliverydispatch-ready kind=route node=courier-session" 1
-    Wait-DeliveryDispatchLogCount "courier node 1 route readiness" (Join-Path $LogDir "courier-node-1.log") "deliverydispatch-ready kind=route node=courier-node-1" 1
-    Wait-DeliveryDispatchLogCount "courier node 2 route readiness" (Join-Path $LogDir "courier-node-2.log") "deliverydispatch-ready kind=route node=courier-node-2" 1
-    Wait-DeliveryDispatchLogCount "dispatch route readiness" (Join-Path $LogDir "dispatch.log") "deliverydispatch-ready kind=route node=dispatch" 1
-    Wait-DeliveryDispatchLogCount "dispatch courier node 1 readiness" (Join-Path $LogDir "dispatch.log") "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-1" 1
-    Wait-DeliveryDispatchLogCount "dispatch courier node 2 readiness" (Join-Path $LogDir "dispatch.log") "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-2" 1
+    Wait-DeliveryDispatchLogCount "tracking route readiness" (Join-Path $LogDir "tracking.out.log") "deliverydispatch-ready kind=route node=tracking" 1
+    Wait-DeliveryDispatchLogCount "customer gateway route readiness" (Join-Path $LogDir "customer-gateway.out.log") "deliverydispatch-ready kind=route node=customer-gateway" 1
+    Wait-DeliveryDispatchLogCount "courier session route readiness" (Join-Path $LogDir "courier-session.out.log") "deliverydispatch-ready kind=route node=courier-session" 1
+    Wait-DeliveryDispatchLogCount "courier node 1 route readiness" (Join-Path $LogDir "courier-node-1.out.log") "deliverydispatch-ready kind=route node=courier-node-1" 1
+    Wait-DeliveryDispatchLogCount "courier node 2 route readiness" (Join-Path $LogDir "courier-node-2.out.log") "deliverydispatch-ready kind=route node=courier-node-2" 1
+    Wait-DeliveryDispatchLogCount "dispatch route readiness" (Join-Path $LogDir "dispatch.out.log") "deliverydispatch-ready kind=route node=dispatch" 1
+    Wait-DeliveryDispatchLogCount "dispatch courier node 1 readiness" (Join-Path $LogDir "dispatch.out.log") "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-1" 1
+    Wait-DeliveryDispatchLogCount "dispatch courier node 2 readiness" (Join-Path $LogDir "dispatch.out.log") "deliverydispatch-ready kind=actor-route node=dispatch target=courier-node-2" 1
 
     $clientLog = Join-Path $LogDir "client.log"
     Invoke-SampleDotnetRun -Project (Join-Path $ScriptDir "Client/DeliveryDispatch.Client.csproj") -Arguments @("--config", (Join-Path $ConfigDir "client.json")) *> $clientLog
     Wait-DeliveryDispatchLogCount "client completion" $clientLog "deliverydispatch=completed" 1
     Wait-DeliveryDispatchLogCount "client reassignment completion" $clientLog "deliverydispatch-reassignment=completed" 1
     Wait-DeliveryDispatchLogCount "client server-evidence completion" $clientLog "deliverydispatch-server-evidence=completed" 1
-    Wait-DeliveryDispatchLogCount "courier a bound" (Join-Path $LogDir "courier-session.log") "deliverydispatch-courier bound courier=courier-a" 1
-    Wait-DeliveryDispatchLogCount "courier b bound" (Join-Path $LogDir "courier-session.log") "deliverydispatch-courier bound courier=courier-b" 1
-    Wait-DeliveryDispatchLogCount "courier a bind relayed" (Join-Path $LogDir "courier-session.log") "deliverydispatch-courier bind-relayed courier=courier-a" 1
-    Wait-DeliveryDispatchLogCount "courier b bind relayed" (Join-Path $LogDir "courier-session.log") "deliverydispatch-courier bind-relayed courier=courier-b" 1
-    Wait-DeliveryDispatchLogCount "customer bound" (Join-Path $LogDir "customer-gateway.log") "deliverydispatch-customer bound customer=customer-1" 1
-    Wait-DeliveryDispatchLogCount "customer delivered pushes" (Join-Path $LogDir "customer-gateway.log") "deliverydispatch-customer pushed status=Delivered" 2
-    Wait-DeliveryDispatchLogCount "tracking delivered statuses" (Join-Path $LogDir "tracking.log") "deliverydispatch-tracking status=Delivered" 2
-    Wait-DeliveryDispatchLogCount "stale courier decision" (Join-Path $LogDir "dispatch.log") "deliverydispatch-dispatch stale-decision-ignored delivery=delivery-reassign courier=courier-a attempt=1" 1
-    Wait-DeliveryDispatchLogCount "candidates exhausted" (Join-Path $LogDir "dispatch.log") "deliverydispatch-dispatch failed delivery=delivery-exhausted reason=candidates-exhausted" 1
+    Wait-DeliveryDispatchLogCount "courier a bound" (Join-Path $LogDir "courier-session.out.log") "deliverydispatch-courier bound courier=courier-a" 1
+    Wait-DeliveryDispatchLogCount "courier b bound" (Join-Path $LogDir "courier-session.out.log") "deliverydispatch-courier bound courier=courier-b" 1
+    Wait-DeliveryDispatchLogCount "courier a bind relayed" (Join-Path $LogDir "courier-session.out.log") "deliverydispatch-courier bind-relayed courier=courier-a" 1
+    Wait-DeliveryDispatchLogCount "courier b bind relayed" (Join-Path $LogDir "courier-session.out.log") "deliverydispatch-courier bind-relayed courier=courier-b" 1
+    Wait-DeliveryDispatchLogCount "customer bound" (Join-Path $LogDir "customer-gateway.out.log") "deliverydispatch-customer bound customer=customer-1" 1
+    Wait-DeliveryDispatchLogCount "customer delivered pushes" (Join-Path $LogDir "customer-gateway.out.log") "deliverydispatch-customer pushed status=Delivered" 2
+    Wait-DeliveryDispatchLogCount "tracking delivered statuses" (Join-Path $LogDir "tracking.out.log") "deliverydispatch-tracking status=Delivered" 2
+    Wait-DeliveryDispatchLogCount "stale courier decision" (Join-Path $LogDir "dispatch.out.log") "deliverydispatch-dispatch stale-decision-ignored delivery=delivery-reassign courier=courier-a attempt=1" 1
+    Wait-DeliveryDispatchLogCount "candidates exhausted" (Join-Path $LogDir "dispatch.out.log") "deliverydispatch-dispatch failed delivery=delivery-exhausted reason=candidates-exhausted" 1
     Write-Host "deliverydispatch-placement=completed"
     $RunSucceeded = $true
 }

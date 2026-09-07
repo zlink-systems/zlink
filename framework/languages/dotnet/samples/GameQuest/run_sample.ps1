@@ -149,7 +149,7 @@ try {
     $clientAssembly = Join-Path (Split-Path -Parent $clientProject) "bin/Debug/net8.0/GameQuest.Client.dll"
     $clientLog = Join-Path $LogDir "client.out.log"
     $clientErrorLog = Join-Path $LogDir "client.err.log"
-    $clientProcess = Start-Process -FilePath "dotnet" -ArgumentList @($clientAssembly, "--config", $configFiles["client"]) -RedirectStandardOutput $clientLog -RedirectStandardError $clientErrorLog -PassThru
+    $clientProcess = Start-Process -FilePath "dotnet" -ArgumentList @($clientAssembly, "--config", $configFiles["client"]) -RedirectStandardOutput $clientLog -RedirectStandardError $clientErrorLog -PassThru -NoNewWindow
     $script:SampleProcesses += $clientProcess
     Wait-GameQuestLogContains $clientLog "gamequest-client close-replay-armed player=player-alice"
     $closedMission = $null
@@ -182,7 +182,8 @@ try {
     }
     if ($null -eq $ownerMission) { throw "Timed out waiting for the player-alice owner-ready marker" }
     $ownerProcess = if ($ownerMission -eq "mission-a") { $missionAProcess } else { $missionBProcess }
-    $ownerProcess.Kill($true)
+    if ($IsWindows) { Stop-Process -Id $ownerProcess.Id -Force }
+    else { $ownerProcess.Kill($true) }
     $ownerProcess.WaitForExit()
     New-Item -ItemType File -Path $GAMEQUEST_OWNER_LOSS_RELEASE_FILE | Out-Null
     $clientProcess.WaitForExit()

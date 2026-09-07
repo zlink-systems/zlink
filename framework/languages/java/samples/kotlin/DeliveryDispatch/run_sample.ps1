@@ -21,8 +21,8 @@ function Print-Logs {
     param([int]$Status)
     if ($Status -eq 0) { return }
     Get-ChildItem -Path $LogDir -Filter "*.log" -ErrorAction SilentlyContinue | ForEach-Object {
-        Write-Error "===== $($_.FullName) ====="
-        Get-Content -Path $_.FullName -Tail 200 -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+        [Console]::Error.WriteLine("===== $($_.FullName) =====")
+        Get-Content -Path $_.FullName -Tail 200 -ErrorAction SilentlyContinue | ForEach-Object { [Console]::Error.WriteLine($_) }
     }
 }
 
@@ -79,7 +79,7 @@ function Wait-LogCount {
 
 function Write-Config {
     param([string]$Path, [string]$CourierNode)
-    @(
+    Set-ZlinkSampleUtf8File -Path $Path -Value @(
         "trackingChannelEndpoint=tcp://127.0.0.1:$TrackingChannelPort",
         "trackingSpotEndpoint=tcp://127.0.0.1:$TrackingSpotPort",
         "customerStreamEndpoint=tcp://127.0.0.1:$CustomerStreamPort",
@@ -97,7 +97,7 @@ function Write-Config {
         "courierNode=$CourierNode",
         "logDirectory=$LogDir",
         "stateDirectory=$StateDir"
-    ) | Set-Content -Path $Path -Encoding UTF8
+    )
 }
 
 function Start-Role {
