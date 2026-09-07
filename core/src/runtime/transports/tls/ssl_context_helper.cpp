@@ -7,7 +7,6 @@
 
 #include "engine/asio/asio_debug.hpp"
 
-#include <boost/asio/buffer.hpp>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
@@ -65,52 +64,6 @@ ssl_context_helper_t::create_server_context (const std::string &cert_chain_file,
     }
 }
 
-std::unique_ptr<boost::asio::ssl::context>
-ssl_context_helper_t::create_server_context_from_pem (const std::string &cert_chain_pem,
-                                                      const std::string &private_key_pem,
-                                                      const std::string &password)
-{
-    std::unique_ptr<boost::asio::ssl::context> ctx;
-    try {
-        ctx = std::unique_ptr<boost::asio::ssl::context> (
-          new boost::asio::ssl::context (boost::asio::ssl::context::tlsv12_server));
-    }
-    catch (const std::bad_alloc &) {
-        return nullptr;
-    }
-
-    try {
-        //  Set up password callback if needed (thread-safe lambda capture)
-        if (!password.empty ()) {
-            ctx->set_password_callback (
-              [password] (std::size_t max_length, boost::asio::ssl::context::password_purpose) {
-                  return password.substr (0, max_length);
-              });
-        }
-
-        //  Use strong cipher suites only
-        SSL_CTX_set_cipher_list (
-          ctx->native_handle (),
-          "ECDHE+AESGCM:DHE+AESGCM:ECDHE+CHACHA20:DHE+CHACHA20:!aNULL:!MD5:!DSS");
-
-        //  Load certificate chain from PEM buffer
-        ctx->use_certificate_chain (
-          boost::asio::buffer (cert_chain_pem.data (), cert_chain_pem.size ()));
-
-        //  Load private key from PEM buffer
-        ctx->use_private_key (
-          boost::asio::buffer (private_key_pem.data (), private_key_pem.size ()),
-          boost::asio::ssl::context::pem);
-
-        return ctx;
-    }
-    catch (const boost::system::system_error &e) {
-        ASIO_GLOBAL_ERROR ("SSL server context creation from PEM failed: %s", e.what ());
-        (void) e; // Suppress unused variable warning when debug is disabled
-        return nullptr;
-    }
-}
-
 std::unique_ptr<boost::asio::ssl::context> ssl_context_helper_t::create_client_context (
   const std::string &ca_cert_file, bool trust_system, verification_mode mode)
 {
@@ -148,47 +101,6 @@ std::unique_ptr<boost::asio::ssl::context> ssl_context_helper_t::create_client_c
     }
     catch (const boost::system::system_error &e) {
         ASIO_GLOBAL_ERROR ("SSL client context creation failed: %s", e.what ());
-        (void) e; // Suppress unused variable warning when debug is disabled
-        return nullptr;
-    }
-}
-
-std::unique_ptr<boost::asio::ssl::context> ssl_context_helper_t::create_client_context_from_pem (
-  const std::string &ca_cert_pem, bool trust_system, verification_mode mode)
-{
-    std::unique_ptr<boost::asio::ssl::context> ctx;
-    try {
-        ctx = std::unique_ptr<boost::asio::ssl::context> (
-          new boost::asio::ssl::context (boost::asio::ssl::context::tlsv12_client));
-    }
-    catch (const std::bad_alloc &) {
-        return nullptr;
-    }
-
-    try {
-        //  Use strong cipher suites only
-        SSL_CTX_set_cipher_list (
-          ctx->native_handle (),
-          "ECDHE+AESGCM:DHE+AESGCM:ECDHE+CHACHA20:DHE+CHACHA20:!aNULL:!MD5:!DSS");
-
-        //  Load CA certificate from PEM or system store
-        if (!ca_cert_pem.empty ()) {
-            if (!load_ca_certificate_from_pem (*ctx, ca_cert_pem)) {
-                return nullptr;
-            }
-        } else if (trust_system) {
-            ctx->set_default_verify_paths ();
-        }
-
-        //  Configure verification
-        if (!configure_verification (*ctx, mode)) {
-            return nullptr;
-        }
-
-        return ctx;
-    }
-    catch (const boost::system::system_error &e) {
-        ASIO_GLOBAL_ERROR ("SSL client context creation from PEM failed: %s", e.what ());
         (void) e; // Suppress unused variable warning when debug is disabled
         return nullptr;
     }
@@ -249,68 +161,6 @@ ssl_context_helper_t::create_client_context_with_cert (const std::string &ca_cer
     }
     catch (const boost::system::system_error &e) {
         ASIO_GLOBAL_ERROR ("SSL client context with cert creation failed: %s", e.what ());
-        (void) e; // Suppress unused variable warning when debug is disabled
-        return nullptr;
-    }
-}
-
-std::unique_ptr<boost::asio::ssl::context>
-ssl_context_helper_t::create_client_context_with_cert_from_pem (const std::string &ca_cert_pem,
-                                                                const std::string &client_cert_pem,
-                                                                const std::string &client_key_pem,
-                                                                const std::string &password,
-                                                                bool trust_system,
-                                                                verification_mode mode)
-{
-    std::unique_ptr<boost::asio::ssl::context> ctx;
-    try {
-        ctx = std::unique_ptr<boost::asio::ssl::context> (
-          new boost::asio::ssl::context (boost::asio::ssl::context::tlsv12_client));
-    }
-    catch (const std::bad_alloc &) {
-        return nullptr;
-    }
-
-    try {
-        //  Set up password callback if needed (thread-safe lambda capture)
-        if (!password.empty ()) {
-            ctx->set_password_callback (
-              [password] (std::size_t max_length, boost::asio::ssl::context::password_purpose) {
-                  return password.substr (0, max_length);
-              });
-        }
-
-        //  Use strong cipher suites only
-        SSL_CTX_set_cipher_list (
-          ctx->native_handle (),
-          "ECDHE+AESGCM:DHE+AESGCM:ECDHE+CHACHA20:DHE+CHACHA20:!aNULL:!MD5:!DSS");
-
-        //  Load CA certificate from PEM or system store
-        if (!ca_cert_pem.empty ()) {
-            if (!load_ca_certificate_from_pem (*ctx, ca_cert_pem)) {
-                return nullptr;
-            }
-        } else if (trust_system) {
-            ctx->set_default_verify_paths ();
-        }
-
-        //  Load client certificate from PEM buffer
-        ctx->use_certificate_chain (
-          boost::asio::buffer (client_cert_pem.data (), client_cert_pem.size ()));
-
-        //  Load client private key from PEM buffer
-        ctx->use_private_key (boost::asio::buffer (client_key_pem.data (), client_key_pem.size ()),
-                              boost::asio::ssl::context::pem);
-
-        //  Configure verification
-        if (!configure_verification (*ctx, mode)) {
-            return nullptr;
-        }
-
-        return ctx;
-    }
-    catch (const boost::system::system_error &e) {
-        ASIO_GLOBAL_ERROR ("SSL client context with cert from PEM creation failed: %s", e.what ());
         (void) e; // Suppress unused variable warning when debug is disabled
         return nullptr;
     }
@@ -432,21 +282,6 @@ bool ssl_context_helper_t::load_ca_certificate (boost::asio::ssl::context &ctx,
     }
     catch (const boost::system::system_error &e) {
         ASIO_GLOBAL_ERROR ("Failed to load CA certificate from file: %s", e.what ());
-        (void) e; // Suppress unused variable warning when debug is disabled
-        return false;
-    }
-}
-
-bool ssl_context_helper_t::load_ca_certificate_from_pem (boost::asio::ssl::context &ctx,
-                                                         const std::string &ca_cert_pem)
-{
-    try {
-        ctx.add_certificate_authority (
-          boost::asio::buffer (ca_cert_pem.data (), ca_cert_pem.size ()));
-        return true;
-    }
-    catch (const boost::system::system_error &e) {
-        ASIO_GLOBAL_ERROR ("Failed to load CA certificate from PEM: %s", e.what ());
         (void) e; // Suppress unused variable warning when debug is disabled
         return false;
     }

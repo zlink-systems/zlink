@@ -11,6 +11,73 @@
 
 #include <cstdio>
 
+namespace
+{
+void trace_xsend_routed_enter (const zlink_routing_id_t *target_rid_,
+                                uint64_t pair_id_,
+                                uint64_t pair_generation_, size_t msg_size_,
+                                bool more_)
+{
+    if (!zlink::router_debug::enabled ())
+        return;
+    fprintf (stderr,
+             "router xsend_routed enter: rid_size=%u pair=%llu/%llu size=%zu more=%d\\n",
+             static_cast<unsigned> (target_rid_ ? target_rid_->size : 0),
+             static_cast<unsigned long long> (pair_id_),
+             static_cast<unsigned long long> (pair_generation_), msg_size_,
+             more_ ? 1 : 0);
+}
+
+void trace_xsend_routed_draining (unsigned rid_size_)
+{
+    if (!zlink::router_debug::enabled ())
+        return;
+    fprintf (stderr, "router xsend_routed: draining rid_size=%u\n", rid_size_);
+}
+
+void trace_xsend_routed_pipe_not_writable (unsigned rid_size_, int errno_)
+{
+    if (!zlink::router_debug::enabled ())
+        return;
+    fprintf (stderr,
+             "router xsend_routed: pipe not writable rid_size=%u errno=%d\n",
+             rid_size_, errno_);
+}
+
+void trace_xsend_routed_no_out_pipe (const zlink_routing_id_t *target_rid_)
+{
+    if (!zlink::router_debug::enabled ())
+        return;
+    char rid_text[160];
+    zlink::router_debug::format_routing_id (target_rid_, rid_text,
+                                            sizeof (rid_text));
+    fprintf (stderr, "router xsend_routed: no out pipe rid_size=%u rid=%s\n",
+             static_cast<unsigned> (target_rid_->size), rid_text);
+}
+
+void trace_xsend_routed_selected (zlink::pipe_t *write_pipe_)
+{
+    if (!zlink::router_debug::enabled ())
+        return;
+    fprintf (stderr,
+             "router xsend_routed selected: pipe=%p lane=%d pair=%llu/%llu\\n",
+             static_cast<void *> (write_pipe_),
+             static_cast<int> (write_pipe_->get_transport_lane ()),
+             static_cast<unsigned long long> (
+               write_pipe_->get_transport_pair_id ()),
+             static_cast<unsigned long long> (
+               write_pipe_->get_transport_pair_generation ()));
+}
+
+void trace_xsend_routed_write_failed (unsigned rid_size_)
+{
+    if (!zlink::router_debug::enabled ())
+        return;
+    fprintf (stderr, "router xsend_routed: write failed rid_size=%u\n",
+             rid_size_);
+}
+}
+
 int zlink::router_t::xsend (
   msg_t *msg_, pipe_message_admission_t *admission_out_)
 {
@@ -261,14 +328,9 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
 
     _more_out = (msg_->flags () & msg_t::more) != 0;
 
-    if (router_debug::enabled ()) {
-        fprintf (stderr,
-                 "router xsend_routed enter: rid_size=%u pair=%llu/%llu size=%zu more=%d\\n",
-                 static_cast<unsigned> (target_rid_ ? target_rid_->size : 0),
-                 static_cast<unsigned long long> (expected_transport_pair_id_),
-                 static_cast<unsigned long long> (expected_transport_pair_generation_),
-                 msg_ ? msg_->size () : 0, _more_out ? 1 : 0);
-    }
+    trace_xsend_routed_enter (target_rid_, expected_transport_pair_id_,
+                              expected_transport_pair_generation_,
+                              msg_ ? msg_->size () : 0, _more_out);
 
     out_pipe_t *out_pipe = NULL;
     pipe_t *scoped_pipe = NULL;
@@ -344,10 +406,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         if (out_pipe->weight == 0) {
             _more_out = false;
             errno = ECONNREFUSED;
-            if (router_debug::enabled ()) {
-                fprintf (stderr, "router xsend_routed: draining rid_size=%u\n",
-                         static_cast<unsigned> (target_rid_->size));
-            }
+            trace_xsend_routed_draining (
+              static_cast<unsigned> (target_rid_->size));
             return -1;
         }
         if (request_only_) {
@@ -411,11 +471,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
                 _more_out = false;
                 errno = pipe_full || transport_wait ? EAGAIN
                                                      : EHOSTUNREACH;
-                if (router_debug::enabled ()) {
-                    fprintf (stderr,
-                             "router xsend_routed: pipe not writable rid_size=%u errno=%d\n",
-                             static_cast<unsigned> (target_rid_->size), errno);
-                }
+                trace_xsend_routed_pipe_not_writable (
+                  static_cast<unsigned> (target_rid_->size), errno);
                 return -1;
             }
         }
@@ -427,13 +484,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
         //  and every single-part exact ROUTER submit failed with EHOSTUNREACH.
         _more_out = false;
         errno = EHOSTUNREACH;
-        if (router_debug::enabled ()) {
-            char rid_text[160];
-            router_debug::format_routing_id (target_rid_, rid_text,
-                                             sizeof (rid_text));
-            fprintf (stderr, "router xsend_routed: no out pipe rid_size=%u rid=%s\n",
-                     static_cast<unsigned> (target_rid_->size), rid_text);
-        }
+        trace_xsend_routed_no_out_pipe (target_rid_);
         return -1;
     }
 
@@ -482,13 +533,7 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             errno = EHOSTUNREACH;
             return -1;
         }
-        if (router_debug::enabled ()) {
-            fprintf (stderr, "router xsend_routed selected: pipe=%p lane=%d pair=%llu/%llu\\n",
-                     static_cast<void *> (write_pipe),
-                     static_cast<int> (write_pipe->get_transport_lane ()),
-                     static_cast<unsigned long long> (write_pipe->get_transport_pair_id ()),
-                     static_cast<unsigned long long> (write_pipe->get_transport_pair_generation ()));
-        }
+        trace_xsend_routed_selected (write_pipe);
         msg_->set_transport_connection_id (
           _current_out_connection_id);
         pipe_message_admission_t write_admission =
@@ -542,10 +587,8 @@ int zlink::router_t::xsend_routed (const zlink_routing_id_t *target_rid_,
             if (write_admission != pipe_message_admission_request_full
                 && current_out_pipe && current_out_pipe->pipe == write_pipe)
                 mark_out_pipe_inactive (current_out_pipe);
-            if (router_debug::enabled ()) {
-                fprintf (stderr, "router xsend_routed: write failed rid_size=%u\n",
-                         static_cast<unsigned> (target_rid_->size));
-            }
+            trace_xsend_routed_write_failed (
+              static_cast<unsigned> (target_rid_->size));
             if (_current_out == write_pipe)
                 clear_current_out_pipe ();
             if (connection_id_out_)

@@ -82,7 +82,6 @@
 #cmakedefine ZLINK_MAKE_VALGRIND_HAPPY
 
 #cmakedefine ZLINK_USE_GNUTLS
-#cmakedefine ZLINK_USE_RADIX_TREE
 #cmakedefine HAVE_IF_NAMETOINDEX
 
 #ifdef _AIX

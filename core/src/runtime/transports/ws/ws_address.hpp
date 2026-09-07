@@ -55,6 +55,11 @@ class ws_address_t
     //  Parse URL into host, port, and path components
     int parse_url (const char *name_);
 
+    //  Shared formatting used by to_string() overrides (ws:// vs wss://):
+    //  scheme_ + host (bracketed for IPv6) + ':' + port + path.
+    //  Returns 0 on success, -1 if the family is neither AF_INET nor AF_INET6.
+    int format_url (const char *scheme_, std::string &addr_) const;
+
   private:
     //  Underlying TCP address for the resolved host:port
     tcp_address_t _tcp_address;

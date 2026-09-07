@@ -27,6 +27,54 @@ inline void drain_asio_listener_pending_accepts (boost::asio::io_context &io_con
         io_context_.poll_one ();
 }
 
+//  Same-behaviour, same-ordering termination sequence shared by the asio
+//  listeners (tcp/ipc/tls/ws): store linger, release the endpoint, drain any
+//  async_accept queued before release (so its callback still fires while the
+//  listener is alive, as a no-op via _terminating), then hand off to
+//  own_t::process_term. Mirrors prepare_asio_connecter_termination in
+//  asio_timer_flag.hpp for the connecter side.
+template <typename release_endpoint_fn_t, typename own_process_term_fn_t>
+inline void prepare_asio_listener_termination (int linger_,
+                                               int *stored_linger_,
+                                               boost::asio::io_context &io_context_,
+                                               const size_t *accepting_count_,
+                                               release_endpoint_fn_t release_endpoint_fn_,
+                                               own_process_term_fn_t own_process_term_fn_)
+{
+    if (stored_linger_)
+        *stored_linger_ = linger_;
+
+    release_endpoint_fn_ ();
+
+    //  Process any pending handlers (including the cancelled async_accept)
+    //  to ensure the callback fires while the object is still alive.
+    //  The _terminating flag ensures the callback is a no-op.
+    drain_asio_listener_pending_accepts (io_context_, accepting_count_);
+
+    //  Now it's safe to call own_t::process_term to terminate child sessions
+    own_process_term_fn_ (linger_);
+}
+
+//  Shared "ignore this accept, we're terminating" check used by the asio
+//  listeners' on_accept callbacks: an async_accept queued before endpoint
+//  release must never create a session, but any socket it did manage to
+//  accept still needs to be closed. Returns true if the caller should bail
+//  out of on_accept without proceeding.
+template <typename socket_ptr_t>
+inline bool cancel_asio_listener_accept_if_terminating (bool terminating_,
+                                                        const socket_ptr_t &accept_socket_,
+                                                        const boost::system::error_code &ec_)
+{
+    if (!terminating_)
+        return false;
+
+    if (!ec_ && accept_socket_ && accept_socket_->is_open ()) {
+        boost::system::error_code close_ec;
+        accept_socket_->close (close_ec);
+    }
+    return true;
+}
+
 template <typename socket_t, typename acceptor_t, typename trace_fn_t, typename accept_fn_t>
 inline void start_asio_listener_accepts (boost::asio::io_context &io_context_,
                                          acceptor_t &acceptor_,

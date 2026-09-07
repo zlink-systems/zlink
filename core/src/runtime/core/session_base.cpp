@@ -396,8 +396,6 @@ void zlink::session_base_t::pipe_terminated (pipe_t *pipe_)
         // Remove the pipe from the detached pipes set
         _terminating_pipes.erase (pipe_);
 
-    // raw_socket has been removed
-
     //  If we are waiting for pending messages to be sent, at this point
     //  we are sure that there will be no more messages and we can proceed
     //  with termination safely.

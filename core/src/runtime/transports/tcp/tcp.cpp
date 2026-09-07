@@ -5,7 +5,6 @@
 #include "utils/ip.hpp"
 #include "transports/tcp/tcp.hpp"
 #include "utils/err.hpp"
-#include "core/options.hpp"
 
 #if !defined ZLINK_HAVE_WINDOWS
 #include <fcntl.h>
@@ -167,107 +166,6 @@ int zlink::tune_tcp_maxrt (fd_t sockfd_, int timeout_)
 #endif
 }
 
-int zlink::tcp_write (fd_t s_, const void *data_, size_t size_)
-{
-#ifdef ZLINK_HAVE_WINDOWS
-
-    const int nbytes = send (s_, (char *) data_, static_cast<int> (size_), 0);
-
-    //  If not a single byte can be written to the socket in non-blocking mode
-    //  we'll get an error (this may happen during the speculative write).
-    const int last_error = WSAGetLastError ();
-    if (nbytes == SOCKET_ERROR && last_error == WSAEWOULDBLOCK)
-        return 0;
-
-    //  Signalise peer failure.
-    if (nbytes == SOCKET_ERROR
-        && (last_error == WSAENETDOWN || last_error == WSAENETRESET || last_error == WSAEHOSTUNREACH
-            || last_error == WSAECONNABORTED || last_error == WSAETIMEDOUT
-            || last_error == WSAECONNRESET))
-        return -1;
-
-    //  Circumvent a Windows bug:
-    //  See https://support.microsoft.com/en-us/kb/201213
-    //  See https://zlink.jira.com/browse/LIBZLINK-195
-    if (nbytes == SOCKET_ERROR && last_error == WSAENOBUFS)
-        return 0;
-
-    wsa_assert (nbytes != SOCKET_ERROR);
-    return nbytes;
-
-#else
-    ssize_t nbytes = send (s_, static_cast<const char *> (data_), size_, 0);
-
-    //  Several errors are OK. When speculative write is being done we may not
-    //  be able to write a single byte from the socket. Also, SIGSTOP issued
-    //  by a debugging tool can result in EINTR error.
-    if (nbytes == -1 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
-        return 0;
-
-    //  Signalise peer failure.
-    if (nbytes == -1) {
-#if !defined(TARGET_OS_IPHONE) || !TARGET_OS_IPHONE
-        errno_assert (errno != EACCES && errno != EBADF && errno != EDESTADDRREQ && errno != EFAULT
-                      && errno != EISCONN && errno != EMSGSIZE && errno != ENOMEM
-                      && errno != ENOTSOCK && errno != EOPNOTSUPP);
-#else
-        errno_assert (errno != EACCES && errno != EDESTADDRREQ && errno != EFAULT
-                      && errno != EISCONN && errno != EMSGSIZE && errno != ENOMEM
-                      && errno != ENOTSOCK && errno != EOPNOTSUPP);
-#endif
-        return -1;
-    }
-
-    return static_cast<int> (nbytes);
-
-#endif
-}
-
-int zlink::tcp_read (fd_t s_, void *data_, size_t size_)
-{
-#ifdef ZLINK_HAVE_WINDOWS
-
-    const int rc = recv (s_, static_cast<char *> (data_), static_cast<int> (size_), 0);
-
-    //  If not a single byte can be read from the socket in non-blocking mode
-    //  we'll get an error (this may happen during the speculative read).
-    if (rc == SOCKET_ERROR) {
-        const int last_error = WSAGetLastError ();
-        if (last_error == WSAEWOULDBLOCK) {
-            errno = EAGAIN;
-        } else {
-            wsa_assert (last_error == WSAENETDOWN || last_error == WSAENETRESET
-                        || last_error == WSAECONNABORTED || last_error == WSAETIMEDOUT
-                        || last_error == WSAECONNRESET || last_error == WSAECONNREFUSED
-                        || last_error == WSAENOTCONN || last_error == WSAENOBUFS);
-            errno = wsa_error_to_errno (last_error);
-        }
-    }
-
-    return rc == SOCKET_ERROR ? -1 : rc;
-
-#else
-
-    const ssize_t rc = recv (s_, static_cast<char *> (data_), size_, 0);
-
-    //  Several errors are OK. When speculative read is being done we may not
-    //  be able to read a single byte from the socket. Also, SIGSTOP issued
-    //  by a debugging tool can result in EINTR error.
-    if (rc == -1) {
-#if !defined(TARGET_OS_IPHONE) || !TARGET_OS_IPHONE
-        errno_assert (errno != EBADF && errno != EFAULT && errno != ENOMEM && errno != ENOTSOCK);
-#else
-        errno_assert (errno != EFAULT && errno != ENOMEM && errno != ENOTSOCK);
-#endif
-        if (errno == EWOULDBLOCK || errno == EINTR)
-            errno = EAGAIN;
-    }
-
-    return static_cast<int> (rc);
-
-#endif
-}
-
 void zlink::tcp_tune_loopback_fast_path (const fd_t socket_)
 {
 #if defined ZLINK_HAVE_WINDOWS && defined SIO_LOOPBACK_FAST_PATH
@@ -304,72 +202,4 @@ void zlink::tune_tcp_busy_poll (fd_t socket_, int busy_poll_)
     LIBZLINK_UNUSED (socket_);
     LIBZLINK_UNUSED (busy_poll_);
 #endif
-}
-
-zlink::fd_t zlink::tcp_open_socket (const char *address_,
-                                    const zlink::options_t &options_,
-                                    bool local_,
-                                    bool fallback_to_ipv4_,
-                                    zlink::tcp_address_t *out_tcp_addr_)
-{
-    //  Convert the textual address into address structure.
-    int rc = out_tcp_addr_->resolve (address_, local_, options_.ipv6);
-    if (rc != 0)
-        return retired_fd;
-
-    //  Create the socket.
-    fd_t s = open_socket (out_tcp_addr_->family (), SOCK_STREAM, IPPROTO_TCP);
-
-    //  IPv6 address family not supported, try automatic downgrade to IPv4.
-    if (s == retired_fd && fallback_to_ipv4_ && out_tcp_addr_->family () == AF_INET6
-        && errno == EAFNOSUPPORT && options_.ipv6) {
-        rc = out_tcp_addr_->resolve (address_, local_, false);
-        if (rc != 0) {
-            return retired_fd;
-        }
-        s = open_socket (AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    }
-
-    if (s == retired_fd) {
-        return retired_fd;
-    }
-
-    //  On some systems, IPv4 mapping in IPv6 sockets is disabled by default.
-    //  Switch it on in such cases.
-    if (out_tcp_addr_->family () == AF_INET6)
-        enable_ipv4_mapping (s);
-
-    // Set the IP Type-Of-Service priority for this socket
-    if (options_.tos != 0)
-        set_ip_type_of_service (s, options_.tos);
-
-    // Set the protocol-defined priority for this socket
-    if (options_.priority != 0)
-        set_socket_priority (s, options_.priority);
-
-    // Bind the socket to a device if applicable
-    if (!options_.bound_device.empty ())
-        if (bind_to_device (s, options_.bound_device) == -1)
-            goto setsockopt_error;
-
-    //  Set the socket buffer limits for the underlying socket.
-    if (options_.sndbuf >= 0)
-        set_tcp_send_buffer (s, options_.sndbuf);
-    if (options_.rcvbuf >= 0)
-        set_tcp_receive_buffer (s, options_.rcvbuf);
-
-    //  This option removes several delays caused by scheduling, interrupts and context switching.
-    if (options_.busy_poll)
-        tune_tcp_busy_poll (s, options_.busy_poll);
-    return s;
-
-setsockopt_error:
-#ifdef ZLINK_HAVE_WINDOWS
-    rc = closesocket (s);
-    wsa_assert (rc != SOCKET_ERROR);
-#else
-    rc = ::close (s);
-    errno_assert (rc == 0);
-#endif
-    return retired_fd;
 }

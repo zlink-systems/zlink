@@ -46,13 +46,6 @@ class ssl_context_helper_t
                            const std::string &private_key_file,
                            const std::string &password = std::string ());
 
-    //  Create a server SSL context with PEM certificate and key strings.
-    //  Returns nullptr on failure.
-    static std::unique_ptr<boost::asio::ssl::context>
-    create_server_context_from_pem (const std::string &cert_chain_pem,
-                                    const std::string &private_key_pem,
-                                    const std::string &password = std::string ());
-
     //  Create a client SSL context.
     //  If ca_cert_file is empty, uses system CA store.
     //  Returns nullptr on failure.
@@ -60,13 +53,6 @@ class ssl_context_helper_t
     create_client_context (const std::string &ca_cert_file = std::string (),
                            bool trust_system = true,
                            verification_mode mode = verify_peer);
-
-    //  Create a client SSL context with PEM CA certificate string.
-    //  Returns nullptr on failure.
-    static std::unique_ptr<boost::asio::ssl::context>
-    create_client_context_from_pem (const std::string &ca_cert_pem,
-                                    bool trust_system = true,
-                                    verification_mode mode = verify_peer);
 
     //  Create a client SSL context with client certificate for mutual TLS.
     //  Returns nullptr on failure.
@@ -77,16 +63,6 @@ class ssl_context_helper_t
                                      const std::string &password = std::string (),
                                      bool trust_system = true,
                                      verification_mode mode = verify_peer);
-
-    //  Create a client SSL context with client certificate from PEM strings.
-    //  Returns nullptr on failure.
-    static std::unique_ptr<boost::asio::ssl::context>
-    create_client_context_with_cert_from_pem (const std::string &ca_cert_pem,
-                                              const std::string &client_cert_pem,
-                                              const std::string &client_key_pem,
-                                              const std::string &password = std::string (),
-                                              bool trust_system = true,
-                                              verification_mode mode = verify_peer);
 
     //  Create a client SSL context from socket TLS options.
     //  Returns nullptr on failure.
@@ -104,10 +80,6 @@ class ssl_context_helper_t
     //  Load CA certificate from file into context
     static bool load_ca_certificate (boost::asio::ssl::context &ctx,
                                      const std::string &ca_cert_file);
-
-    //  Load CA certificate from PEM string into context
-    static bool load_ca_certificate_from_pem (boost::asio::ssl::context &ctx,
-                                              const std::string &ca_cert_pem);
 
     //  Set hostname verification callback for RFC2818 verification
     //  This enables hostname verification against the server's certificate

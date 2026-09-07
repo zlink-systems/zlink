@@ -1009,8 +1009,7 @@ set(utils-sources
     src/runtime/utils/polling_util.cpp
     src/runtime/utils/precompiled.cpp
     src/runtime/utils/random.cpp
-    src/runtime/utils/trie.cpp
-    src/runtime/utils/radix_tree.cpp)
+    src/runtime/utils/trie.cpp)
 
 set(sources
     ${api-sources}

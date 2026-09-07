@@ -60,15 +60,6 @@ bool try_extract_router_target_rid (const zlink_msg_t *part_, zlink_routing_id_t
     return true;
 }
 
-int validate_send_flags (int flags_)
-{
-    if (flags_ != 0 && flags_ != ZLINK_DONTWAIT) {
-        errno = ENOTSUP;
-        return -1;
-    }
-    return 0;
-}
-
 bool parse_stream_routing_id (const zlink_routing_id_t *rid_, uint32_t *routing_id_out_)
 {
     if (!rid_ || !routing_id_out_ || rid_->size == 0 || rid_->size > sizeof (rid_->data)
@@ -139,7 +130,7 @@ int validate_socket_send_request (const socket_handle_t &handle_,
         errno = EFAULT;
         return -1;
     }
-    if (validate_send_flags (flags_) != 0)
+    if (zlink::part_helper_internal::validate_send_flags (flags_) != 0)
         return -1;
     return validate_send_parts (parts_, part_count_);
 }

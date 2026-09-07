@@ -105,6 +105,28 @@ static void *create_socket_handle (void *ctx_, zlink_socket_type_t type_)
 
 extern "C" void zlink_socket_request_reply_cleanup (void *socket_);
 
+namespace
+{
+//  Shared tail of zlink_close: drain and clean up any request-reply state,
+//  complete the close handoff unless it was deferred, and translate the
+//  drain result into the public close result.
+zlink_close_result_t finish_close_after_drain (const socket_handle_t &handle_,
+                                               bool deferred_close_)
+{
+    const int drain_rc =
+      zlink::socket_reqrep_internal::drain_close_request_reply_socket (handle_);
+    const int drain_errno = errno;
+    zlink::socket_reqrep_internal::cleanup_request_reply_socket (handle_);
+    if (!deferred_close_)
+        handle_.socket->complete_close_handoff ();
+    if (drain_rc < 0) {
+        errno = drain_errno;
+        return zlink::close_result_internal::from_rc (-1);
+    }
+    return ZLINK_CLOSE_OK;
+}
+}
+
 void *zlink_socket (void *ctx_, zlink_socket_type_t type_)
 {
     return create_socket_handle (ctx_, type_);
@@ -154,30 +176,10 @@ zlink_close_result_t zlink_close (void *s_)
             // same mutex, so release it before waiting for async quiescence.
             stream_api_lock_t api_lock (handle);
         }
-        const int drain_rc =
-          zlink::socket_reqrep_internal::drain_close_request_reply_socket (handle);
-        const int drain_errno = errno;
-        zlink::socket_reqrep_internal::cleanup_request_reply_socket (handle);
-        if (!deferred_close)
-            handle.socket->complete_close_handoff ();
-        if (drain_rc < 0) {
-            errno = drain_errno;
-            return zlink::close_result_internal::from_rc (-1);
-        }
-        return ZLINK_CLOSE_OK;
+        return finish_close_after_drain (handle, deferred_close);
     }
 
-    const int drain_rc =
-      zlink::socket_reqrep_internal::drain_close_request_reply_socket (handle);
-    const int drain_errno = errno;
-    zlink::socket_reqrep_internal::cleanup_request_reply_socket (handle);
-    if (!deferred_close)
-        handle.socket->complete_close_handoff ();
-    if (drain_rc < 0) {
-        errno = drain_errno;
-        return zlink::close_result_internal::from_rc (-1);
-    }
-    return ZLINK_CLOSE_OK;
+    return finish_close_after_drain (handle, deferred_close);
 }
 
 zlink_config_result_t

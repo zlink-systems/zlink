@@ -428,6 +428,17 @@ void zlink::ctx_physical_queue_registry_t::classify_pipepair_queues (
     }
 }
 
+zlink::physical_queue_record_t *
+zlink::ctx_physical_queue_registry_t::find_locked (
+  const physical_queue_handle_t &direction_) const
+{
+    const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
+      _directions.find (direction_->queue_id);
+    if (known == _directions.end () || known->second.get () != direction_.get ())
+        return NULL;
+    return direction_.get ();
+}
+
 void zlink::ctx_physical_queue_registry_t::bind_application_pipe_queue (
   const physical_queue_handle_t &direction_, pipe_t *writer_, pipe_t *reader_)
 {
@@ -435,10 +446,7 @@ void zlink::ctx_physical_queue_registry_t::bind_application_pipe_queue (
         return;
 
     scoped_lock_t lock (_sync);
-    const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
-      _directions.find (direction_->queue_id);
-    if (known == _directions.end ()
-        || known->second.get () != direction_.get ()
+    if (!find_locked (direction_)
         || accounting_lane (*direction_) != physical_queue_lane_application)
         return;
     zlink_assert (!direction_->application_writer);
@@ -454,10 +462,7 @@ void zlink::ctx_physical_queue_registry_t::unbind_application_pipe_endpoint (
         return;
 
     scoped_lock_t lock (_sync);
-    const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
-      _directions.find (direction_->queue_id);
-    if (known == _directions.end ()
-        || known->second.get () != direction_.get ())
+    if (!find_locked (direction_))
         return;
     pipe_t *&endpoint = writer_ ? direction_->application_writer
                                 : direction_->application_reader;
@@ -480,11 +485,7 @@ bool zlink::ctx_physical_queue_registry_t::sample_application_pipe_queue (
     pipe_t *reader = NULL;
     {
         scoped_lock_t lock (_sync);
-        const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
-          _directions.find (direction_->queue_id);
-        if (known == _directions.end ()
-            || known->second.get () != direction_.get ()
-            || direction_->endpoint_refs == 0
+        if (!find_locked (direction_) || direction_->endpoint_refs == 0
             || accounting_lane (*direction_)
                  != physical_queue_lane_application)
             return false;
@@ -777,10 +778,7 @@ void zlink::ctx_physical_queue_registry_t::plan_application_queues (
             const physical_queue_endpoint_policy_t &policy = policies_[i];
             if (!policy.queue)
                 continue;
-            std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
-              _directions.find (policy.queue->queue_id);
-            if (known == _directions.end ()
-                || known->second.get () != policy.queue.get ()
+            if (!find_locked (policy.queue)
                 || policy.queue->endpoint_refs == 0
                 || policy.queue->lane.load (std::memory_order_acquire)
                      != physical_queue_lane_application)
@@ -909,10 +907,7 @@ void zlink::ctx_physical_queue_registry_t::record_endpoint_policy (
     if (!policy_.queue)
         return;
     scoped_lock_t lock (_sync);
-    std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
-      _directions.find (policy_.queue->queue_id);
-    if (known == _directions.end ()
-        || known->second.get () != policy_.queue.get ())
+    if (!find_locked (policy_.queue))
         return;
     stored_endpoint_policy_t &stored =
       policy_.writer ? policy_.queue->writer_policy
@@ -961,10 +956,7 @@ void zlink::ctx_physical_queue_registry_t::refresh_application_hwm_if_drained (
     uint64_t applied = 0;
     {
         scoped_lock_t lock (_sync);
-        const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
-          _directions.find (direction_->queue_id);
-        if (known == _directions.end ()
-            || known->second.get () != direction_.get ()
+        if (!find_locked (direction_)
             || accounting_lane (*direction_)
                  != physical_queue_lane_application)
             return;
@@ -1003,10 +995,7 @@ uint64_t zlink::ctx_physical_queue_registry_t::current_accounted_bytes (
     uint64_t fallback = 0;
     {
         scoped_lock_t lock (_sync);
-        const std::map<uint64_t, physical_queue_handle_t>::const_iterator known =
-          _directions.find (direction_->queue_id);
-        if (known == _directions.end ()
-            || known->second.get () != direction_.get ())
+        if (!find_locked (direction_))
             return 0;
         application_direction =
           accounting_lane (*direction_) == physical_queue_lane_application;

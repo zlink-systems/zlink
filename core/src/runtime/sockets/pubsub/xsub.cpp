@@ -75,11 +75,7 @@ bool zlink::xsub_t::compute_delivery_ready_state () const
 uint32_t zlink::xsub_t::compute_delivery_ready_count () const
 {
     std::lock_guard<std::mutex> subscriptions_lock (_subscriptions_mu);
-#ifdef ZLINK_USE_RADIX_TREE
-    const bool has_filters = _subscriptions.size () > 0;
-#else
     const bool has_filters = _subscriptions.num_prefixes () > 0;
-#endif
     if (!has_filters)
         return 0;
     return has_attached_pipes () ? 1u : 0u;
@@ -183,11 +179,7 @@ int zlink::xsub_t::xgetsockopt (int option_, void *optval_, size_t *optvallen_)
         // make sure to use a multi-thread safe function to avoid race conditions with I/O threads
         // where subscriptions are processed:
         std::lock_guard<std::mutex> subscriptions_lock (_subscriptions_mu);
-#ifdef ZLINK_USE_RADIX_TREE
-        uint64_t num_subscriptions = _subscriptions.size ();
-#else
         uint64_t num_subscriptions = _subscriptions.num_prefixes ();
-#endif
 
         return do_getsockopt<int> (optval_, optvallen_, (int) num_subscriptions);
     }

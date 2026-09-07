@@ -131,14 +131,10 @@ void zlink::asio_tls_listener_t::process_term (int linger_)
 {
     TLS_LISTENER_DBG ("process_term called, linger=%d, accepting=%zu", linger_, _accepting_count);
 
-    _linger = linger_;
-
-    process_release_endpoint ();
-
-    //  Process pending handlers while object is still alive
-    drain_asio_listener_pending_accepts (_io_context, &_accepting_count);
-
-    own_t::process_term (linger_);
+    prepare_asio_listener_termination (
+      linger_, &_linger, _io_context, &_accepting_count,
+      [this] () { process_release_endpoint (); },
+      [this] (int linger_inner_) { own_t::process_term (linger_inner_); });
 }
 
 void zlink::asio_tls_listener_t::start_accept ()
@@ -162,12 +158,8 @@ void zlink::asio_tls_listener_t::on_tcp_accept (
     TLS_LISTENER_DBG ("on_tcp_accept: ec=%s, terminating=%d, pending=%zu", ec.message ().c_str (),
                       _terminating, _accepting_count);
 
-    if (_terminating) {
+    if (cancel_asio_listener_accept_if_terminating (_terminating, accept_socket_, ec)) {
         TLS_LISTENER_DBG ("on_tcp_accept: terminating, ignoring callback");
-        if (!ec && accept_socket_ && accept_socket_->is_open ()) {
-            boost::system::error_code close_ec;
-            accept_socket_->close (close_ec);
-        }
         return;
     }
 

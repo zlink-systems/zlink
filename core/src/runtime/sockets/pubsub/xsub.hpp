@@ -12,11 +12,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
-#ifdef ZLINK_USE_RADIX_TREE
-#include "utils/radix_tree.hpp"
-#else
 #include "utils/trie.hpp"
-#endif
 
 namespace zlink
 {
@@ -78,11 +74,7 @@ class xsub_t : public socket_base_t
     dist_t _dist;
 
     //  The repository of subscriptions.
-#ifdef ZLINK_USE_RADIX_TREE
-    radix_tree_t _subscriptions;
-#else
     trie_with_size_t _subscriptions;
-#endif
     mutable std::mutex _subscriptions_mu;
 
     // If true, send all unsubscription messages upstream, not just

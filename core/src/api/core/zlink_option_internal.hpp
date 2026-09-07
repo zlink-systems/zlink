@@ -14,7 +14,6 @@ struct option_descriptor_t
 {
     int public_option;
     int internal_option;
-    bool unsupported_on_socket;
 };
 
 namespace zlink

@@ -145,16 +145,21 @@ sa_family_t zlink::ws_address_t::family () const
 
 int zlink::ws_address_t::to_string (std::string &addr_) const
 {
+    return format_url ("ws://", addr_);
+}
+
+int zlink::ws_address_t::format_url (const char *scheme_, std::string &addr_) const
+{
     if (_tcp_address.family () != AF_INET && _tcp_address.family () != AF_INET6) {
         addr_.clear ();
         return -1;
     }
 
-    //  Format: ws://host:port/path
+    //  Format: <scheme>host:port/path
     if (_tcp_address.family () == AF_INET6) {
-        addr_ = "ws://[" + _host + "]:" + std::to_string (_port) + _path;
+        addr_ = scheme_ + std::string ("[") + _host + "]:" + std::to_string (_port) + _path;
     } else {
-        addr_ = "ws://" + _host + ":" + std::to_string (_port) + _path;
+        addr_ = scheme_ + _host + ":" + std::to_string (_port) + _path;
     }
 
     return 0;

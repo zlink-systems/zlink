@@ -22,19 +22,7 @@ zlink::wss_address_t::~wss_address_t ()
 
 int zlink::wss_address_t::to_string (std::string &addr_) const
 {
-    if (family () != AF_INET && family () != AF_INET6) {
-        addr_.clear ();
-        return -1;
-    }
-
-    //  Format: wss://host:port/path
-    if (family () == AF_INET6) {
-        addr_ = "wss://[" + host () + "]:" + std::to_string (port ()) + path ();
-    } else {
-        addr_ = "wss://" + host () + ":" + std::to_string (port ()) + path ();
-    }
-
-    return 0;
+    return format_url ("wss://", addr_);
 }
 
 #endif // ZLINK_HAVE_WSS

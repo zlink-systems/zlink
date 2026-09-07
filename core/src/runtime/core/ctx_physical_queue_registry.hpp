@@ -170,6 +170,10 @@ class ctx_physical_queue_registry_t
 
     void erase_direction_if_retired_and_drained_unlocked (
       const physical_queue_handle_t &direction_);
+    // Requires _sync already held. Returns direction_.get () if it is still
+    // the registry's own record for its queue_id, else NULL.
+    physical_queue_record_t *find_locked (
+      const physical_queue_handle_t &direction_) const;
     bool sample_application_pipe_queue (
       const physical_queue_handle_t &direction_, uint64_t *provisional_out_,
       uint64_t *committed_out_) const;
