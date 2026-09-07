@@ -1849,3 +1849,7 @@ stash 복원 시 파일들이 인덱스에 staged 상태로 남아 있었고, `g
 
 ## D-B188 (2026-09-07 13:55, 머신 B) 게이트 s14-r10b — R10-B 채택 커밋, S-14는 새 간헐(line 2972)로 반려; G-10 게이트 투입
 게이트(codex terra/medium, `gate-s14-r10b-summary.md`): 74 suite ×5, `stream|pipe` ×10, ctest 207/208, mirror 12/12, hotpath 5셀 PASS(0.956~0.999). **S-14 solo 반복에서 1 PASS 뒤 1 FAIL(line 2972 — S-14가 고친 2842와 다른 assertion)**, 이후 3/3 → 같은 테스트의 두 번째 간헐. R10-B(registry wait_until·주석)는 독립이라 채택 커밋; S-14 테스트 patch는 main에서 제거하고 job에 반려(2972행의 전제도 같은 completion-drain 문제인지 확인, solo 30/30 + 부하 10/10을 증거로). 관찰 2건: perf/c 러너 자동 재빌드가 브리프의 `JOBS=4` 지시에도 내부 jobs=16으로 도는 문제 → 게이트 브리프에 "러너 전 release lib 선최신화" 추가; dev 트리 hotpath_gate는 계속 예상 실패. G-10 게이트(codex terra/medium) 투입.
+
+## D-B189 (2026-09-07 14:30, 머신 B) G-10 채택 커밋(dealer_dealer reference 3423.53 → 3230.92); 동기화 스펙 재작성 → astra 리뷰
+게이트 g10(codex terra/medium, `gate-g10-summary.md`): ctest 208/208, 58 suite ×5, completion-poller release ×20, mirror 12/12, hotpath dealer_dealer **0.944** / reqrep 0.996 / pair 0.974 / router_router_tcp 0.967 / stream_tcp 0.967. perf/c single RR 0.590(Phase 0 대비)은 머신 A의 새 single 러너(D-B174)라 비교 불가 — 기록만. 게이트 브리프의 "러너 전 release lib 선최신화"로 JOBS=16 자동 재빌드가 사라짐.
+스펙: 사용자 리뷰 2건 반영 — (1) 배경·측정 수치 삭제, 목적 한 문장; (2) 진행 정보(인벤토리·목표·제거 사례)를 plan §7.7로 분리하고 스펙은 원칙 + Core의 실제 규칙·방법(turn 획득/반납, 블로킹 대기 중 반납, pipe SPSC·credit counter·cold 경로, mailbox 삽입 lock·깨어남 전이당 1회·signaler 단일 소비자, lock 종류·순서·memory ordering)으로 재작성(`e5218cb919`, ko/en). 사용자 지시로 codex astra/high 리뷰 1회(코드 정합·타 스펙 정합·작성 원칙) 뒤 반영 → 사용자 재리뷰 요청 예정.
