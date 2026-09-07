@@ -1948,3 +1948,8 @@ Go REQREP 러너 정합 중 드러났고, **감독자가 최소 재현 프로그
 
 **MP-2**(`core-rf-MP-2-report.md`, sol/high 16:02–17:56): 24 파일 +1512/−509, 공개 인터페이스 diff 없음. caller identity = TLS의 thread-lifetime `shared_ptr` control block, socket map은 weak ownership 비교(ID 재사용 방지). P/D/R의 SEND·REQUEST·REPLY가 caller slot을 쓰고 socket-wide REPLY owner 필드 제거(registry가 단일 기준). 규칙 6→3. 신규 공개 계약 테스트 11개(4 thread × 2-part × 100 전수 확인 P/D/R, REQUEST+REPLY 동시, 다른 caller single/family 독립, close·thread identity, 불일치 EINVAL, control 진행). 기존 expectation 변경 6건은 D-B198 계약에 맞춘 것. 검증: 관련 80 target ×5 = 400 통과, lost-wake 80/80, ASan+LSan leak 0(valgrind는 호스트 ld 문제로 불가), TSan 신규 8/8(남은 5건은 기존 monitor/ctx lock-order·timing debt), hotpath 5셀 PASS(stream_tcp 0.973, router_router_tcp 0.984).
 **절차**: 채택 전 독립 리뷰 `review-mp2`(astra/high, 읽기 전용) → 차단 항목 수정 → 게이트. 머신 idle을 이용해 `measure-g11b3`(terra, with_stream 3 stack ×3 vs pristine)를 동시에 돌린다(리뷰는 CPU를 쓰지 않음).
+
+## D-B202 (2026-09-07 18:20, 머신 B) G-11b-3 채택·커밋 `5304885197` — idle with_stream 비율 변화 +0.2/+0.5/+0.04 %
+
+**측정**(`measure-g11b3-summary.md`, load 0.08 시작): zlink/asio 0.814/0.817/0.820 vs pristine 0.812/0.813/0.820; zlink 298.5/277.5/33.9 kops(Phase 2S idle 289.7/267.8/32.6 대비 +3 %); zlink/zmq 0.90/0.90/1.22. 3차 요약의 −13/−17 %는 부하 오염이었음이 확정. perf/c 경량 3셀 기록: single R-R 868.0 Kmsg/s, multi SENDSEND 270.2 / REQREP 196.6 Kops/s(비교 기준 없음).
+**결정**: D-B199 기준 충족 → 채택, 커밋·푸시. §7.7 session 쪽 `_out_sync` 행 완료(2.0→0), §7.1에 idle 행 추가. G-11 2a/2b/2d는 0.17.3.

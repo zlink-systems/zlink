@@ -189,6 +189,7 @@ spec gap = 코드 동작이 `core/doc/spec`·공개 헤더 주석·공개 계약
 | +S-2+S-9 (`e1db6f1f72`) | 게이트 s2-s9 | 기준 이상(6셀) | | | — | — |
 | +S-1 (`baaa68d67b`) | 게이트 s1 | 286.7 / 350.4 = **0.818** | 262.4 / 327.2 = **0.802** | 33.5 / 40.6 = **0.824** | — | — |
 | **Phase 2S 종료, idle runs 3** (`2529709db6`, G-0b, D-B158) | results/20260907_0459xx~0503xx | 289.7 / 352.8 = **0.821** | 267.8 / 325.2 = **0.823** | 32.6 / 41.4 = **0.787** | — | 0.3~0.9 |
+| **G-11b 채택, idle runs 3** (`5304885197`, measure-g11b3, D-B202; zmq 330.0 / 307.8 / 27.7 → zlink/zmq 0.90 / 0.90 / 1.22) | results/G-11b3-after-measure-20260907_180800 | 298.5 / 366.7 = **0.814** | 277.5 / 339.5 = **0.817** | 33.9 / 41.4 = **0.820** | — | 0.08 시작 |
 
 ### 7.2 perf/c 1024 B 경량 3셀 (tcp, Phase 0 기준 대비 비율)
 
@@ -267,7 +268,7 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 | mailbox 삽입점 `_sync` | §3.3 여러 producer | 여러 thread | 2.7 | 2.7 (구조) | — |
 | socket 직렬화: `public_api_sync` + command owner + command마다 `receive.sync` | C2 → turn 하나 | application thread와 command owner | 1.47 | turn의 CAS만 | G-11 2a |
 | `read_activated` / `has_in`의 receive partition | C2 | 위와 같은 클러스터 | 1.28 | 0 | G-11 2a |
-| session 쪽 `pipe_t::write`/`flush`의 `_out_sync` | §3.2 SPSC + C3 | I/O thread 하나뿐 | 2.0 | 0 (peer 소비 byte atomic, `_out_active` CAS) | G-11b(2c, 진행) |
+| session 쪽 `pipe_t::write`/`flush`의 `_out_sync` | §3.2 SPSC + C3 | I/O thread 하나뿐 | ~~2.0~~ → 0 (`5304885197`, seqlock C3 ledger; stream_tcp 셀 mutex 24.05→21.78/msg) | 0 | G-11b(2c) **완료** |
 | socket 쪽 `_out_sync` | C2 → turn | application thread | 1.0 | 0 (cold 경로는 유지) | G-11 2b |
 | route shard `sync` | C1 | 조회만 hot | 1.0 | 0 (스냅샷 조회) | G-11 2d |
 | public poller handle 표 | C1 | 조회만 hot | 0.56 | 0 | G-11 2e |
