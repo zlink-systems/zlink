@@ -2174,3 +2174,9 @@ C++ `tls` SENDSEND의 러너 결함 두 개(D-BP24의 relay 무한 async reply `
 
 **MP-9**(`core-rf-MP-9-report.md`, 누적 30 파일 +3903/−719, 공개 API diff 없음): B301 — pending lookup의 mutex 범위에는 registry 전이만 남기고 폐기는 `completion_message_discard_deferred`로 반환해 무등록 NONE·poller·공통 pipe owner 모두 physical sync와 owner gate 밖에서 `release_completion_discard()`; 늦은 zero-copy REPLY callback이 같은 DEALER에 `zlink_set_option`을 호출하는 테스트 3변형. S301 helper lock 아래 detach 직후 `staging_scope.reset()`으로 complete scope에 인계(중첩 RMW 제거, B202 보호 유지). W301/W303/S302 반영. 검증: dev 209/209, 관련 291/291, 직접 12×10=120/120, single-lane 29×10=290/290, lost-wake 40/40, ASan 12/12, TSan 12/12. **W302 귀속**: reqrep 셀 MP-7 18,443→16,353 Ir/msg(−11.3 %); async mailbox handler 호출 4,996→70, completion 처리·완료 각각 정확히 5,000회 유지 → 정당한 대기 왕복 제거. 게이트 후 reference 갱신.
 **일정 결정(사용자)**: 게이트를 경량으로(전체 ctest 1회, 변경 suite 3회, mirror, hotpath, with_stream 1회; perf/c·5회 반복 생략 — MP-9가 반복을 이미 수행), idle 재측정은 bump 뒤로, 0.17.3 항목은 진행하지 않음. 0.17.2 태그 목표 05:00~05:30.
+
+## D-B215 (2026-09-08 03:45, 머신 B) MP 게이트 통과·착지, hotpath reference 갱신, 0.17.2 bump 착수
+
+**게이트**(`gate-mp-summary.md`, 경량): dev 전체 ctest 209/209(hotpath_gate만 reference 밖), 변경 suite 97 ×3 전부 PASS, 공개 인터페이스 diff 없음·mirror 12/12, hotpath dealer_dealer 1.018 / reqrep **0.882**(MP-9 귀속 개선) / pair 1.008 / router_router 0.998 / stream **0.955**, with_stream runs 1: 301.8/275.2/33.8 kops(idle 행 대비 +1.1/−0.8/−0.3 %), mismatch 0. 1회차는 MP-6 테스트 파일이 worktree에서 untracked라 diff에서 빠져 configure가 멈춘 것 → 감독자가 파일을 복사·staged 후 2회차 통과(교훈: 게이트 patch는 `git add -N` 또는 untracked 목록 포함).
+**착지**: MP 코드+테스트+스펙 39 파일 한 커밋(`feat(core): concurrent multipart submit …`), hotpath reference 갱신 `aef7015e0f`(reqrep 16455.38, stream_tcp 13969.81 — >5 % 개선 규칙).
+**0.17.2**: bump job(terra)이 0.17.1 커밋(4cd03b9173)을 본으로 framework 제외 40 파일을 올리고 c·cpp 스모크 후 보고 → 감독자 커밋·태그 `core/v0.17.2` → 머신 A 통보(D-BP14 재고정 절차).

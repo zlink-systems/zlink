@@ -195,6 +195,7 @@ spec gap = 코드 동작이 `core/doc/spec`·공개 헤더 주석·공개 계약
 | +S-1 (`baaa68d67b`) | 게이트 s1 | 286.7 / 350.4 = **0.818** | 262.4 / 327.2 = **0.802** | 33.5 / 40.6 = **0.824** | — | — |
 | **Phase 2S 종료, idle runs 3** (`2529709db6`, G-0b, D-B158) | results/20260907_0459xx~0503xx | 289.7 / 352.8 = **0.821** | 267.8 / 325.2 = **0.823** | 32.6 / 41.4 = **0.787** | — | 0.3~0.9 |
 | **G-11b 채택, idle runs 3** (`5304885197`, measure-g11b3, D-B202; zmq 330.0 / 307.8 / 27.7 → zlink/zmq 0.90 / 0.90 / 1.22) | results/G-11b3-after-measure-20260907_180800 | 298.5 / 366.7 = **0.814** | 277.5 / 339.5 = **0.817** | 33.9 / 41.4 = **0.820** | — | 0.08 시작 |
+| **MP 게이트, runs 1** (`ceb…` MP 커밋 직전 staged, gate-mp; zmq 342.8 / 308.0 / 28.9 → zlink/zmq 0.88 / 0.89 / 1.17) | results/20260908_032921 | 301.8 / 386.8 = 0.780 | 275.2 / 340.2 = 0.809 | 33.8 / 40.5 = 0.834 | — | 0.51 시작 |
 
 ### 7.2 perf/c 1024 B 경량 3셀 (tcp, Phase 0 기준 대비 비율)
 
@@ -206,13 +207,13 @@ spec gap = 코드 동작이 `core/doc/spec`·공개 헤더 주석·공개 계약
 
 ### 7.3 hotpath_gate
 
-| 셀 | reference | 최신 |
+| 셀 | reference(Phase 0 → 갱신) | 최종(MP 게이트 `gate-mp-summary.md`, `aef7015e0f` 기준) |
 |---|---|---|
-| stream_tcp (신설, D-B142) | 15540.39 → 14623.47 (S-1, D-B150) | |
-| router_router_tcp | 2972.88 | |
-| dealer_dealer_inproc | 3455.38 | |
-| dealer_router_reqrep_inproc | 12054.89 | |
-| pair_inproc | 2505.36 | |
+| stream_tcp (신설, D-B142) | 15540.39 → 14623.47 (S-1, D-B150) → **13969.81** (`aef7015e0f`) | 13969.81 (Phase 0 대비 −10.1 %) |
+| router_router_tcp | 2972.88 → 2972.53 | 2966.84 (0.998) |
+| dealer_dealer_inproc | 3455.38 → 3230.92 (G-2) | 3287.92 (1.018) |
+| dealer_router_reqrep_inproc | 12054.89 → 18663.51 (G-2 셀 재정의) → **16455.38** (`aef7015e0f`) | 16455.38 (MP-9: async mailbox 왕복 4,996→70/5,000) |
+| pair_inproc | 2505.36 → 2348.46 (G-2) | 2367.78 (1.008) |
 
 ### 7.4 perf/c 스크린 셀 (1024 B tcp, Phase 0 기준 대비 비율; Phase 2G 시작·Phase 4 종료 시 전 size로 확장)
 
@@ -290,4 +291,6 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 - [ ] Phase 2G: G-0 idle 재기준(D-B158·159), G-A(D-B166), G-5(`7549a128b1`), **G-2(`749145fded`, 5셀 −1.5~−7.1 %)**, **G-1+G-3(`99f0294377`, 5셀 0.956~0.992)** 착지. **G-11 잠금 출처 분석 채택(D-B178·179)** → G-11a 착지(`1a15660a18`, 명령 드레인 항상 turn; hotpath reqrep −5.2 %, stream −3.0 %) → 진행 G-11b(2c, session 쪽 `_out_sync`) → 2a·2b·2d → step 3, 각 게이트. 스펙: `systems/11-synchronization-model`(ko/en) 신설(`389078a68f`), 착지마다 §7 표 갱신. 진행 S-14(단일 lane 회계 분류 경합, 기존 결함 D-B182). 대기 G-10(clock_gettime)·G-7(eventfd)·R10-B 게이트. 폐기 G-6·G-R1(정책). 재기준: G-11 시리즈 착지 후 idle runs 3(A의 새 러너 + G-5)
 - [ ] Phase 2G: 스크린 셀 재측정 표, G-1 … (각 채택/기각, 커밋 해시, 패턴별 전 size 비율)
 - [x] Phase 3 apply(2026-09-07 12:30): R1+R2(`cb9139d16d`), R3+R4(`72100c7be3`), R5·R6R8·R9·R7R11(`2753a2d799`) 착지 = **−2,664/+1,001행**; R10-B apply 완료(게이트 대기). 인벤토리 오류 3건을 apply job이 걸러냄(R4 #3a, R6 #2, R7 #6). 보류(설계 job·D): pipe.cpp 개념별 분할(익명 helper 공유 헤더 선행), ws/wss 쌍둥이 병합, lb::sendpipe, route-binding cache(D), `oversize_admission_out_`(D 확인), registry `recursive_mutex_t` 필요성
-- [ ] Phase 4: 최종 표, hotpath 5셀 PASS, ctest 전체, 스펙 문구 정합, 종결 D-B1xx
+- [x] 동시 multipart 제출 지원(D-BP12 → D-B197~D-B214, 2026-09-08 03:40 착지): MP-1 설계(A안) → MP-2 구현 → 독립 리뷰 3회(차단 6+6+1건 전부 수정, MP-3/8/9) → MP-4/5 single fast path 복원 → MP-6 D-BP15 테스트 → MP-7 completion drain 결함 수정. 게이트 `gate-mp-summary.md`: ctest 209/209, suite 97×3, mirror 12/12, hotpath reqrep 0.882·stream 0.955(reference 갱신 `aef7015e0f`), with_stream idle ±1 %. 스펙 8 파일 동반 커밋(D-MP1~5, completion pull 명료화, TLS destructor·인계 규칙).
+- [x] Phase 4(2026-09-08): hotpath 5셀 PASS(reference 갱신), ctest 전체 209/209, 스펙 문구 정합(`6ef6cfaaf3` + MP 스펙), 버전 **0.17.2** bump(D-B215). idle 재측정(perf/c 전 size·with_stream 3회)은 bump 뒤 별도 기록(사용자 결정 D-B214: 일정 단축).
+- [ ] 0.17.3 이월: G-11 2a/2b/2d(socket 쪽 `_out_sync`·receive partition·route shard, 목표 lock/msg 8.3), backlog(`_slot_sync`, mailbox 예외 경로, `receive_once_guarded`(D-e), pipe.cpp 분할, ws/wss 병합, lb::sendpipe, R7 #4/#7, R11-B), TSan 기존 debt 5건(monitor/ctx lock-order, lb peer-weight).
