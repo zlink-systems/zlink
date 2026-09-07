@@ -1898,4 +1898,5 @@ Go REQREP 러너 정합 중 드러났고, **감독자가 최소 재현 프로그
 **영향**: perf 공식 wire shape가 2-part로 고정돼 있고(`PERF_POLICY.md:339-341`, `PERF_PART_COUNT=1`은 진단 전용이며 2-part baseline과 섞어 비교 금지) in-flight 1 직렬화는 정책 위반이므로, **Go는 REQREP에서 유효한 공식 측정을 낼 수 없다.**
 **Core에 요청할 것**: "원자성을 지켜라"가 아니라 **동시 조립을 지원하거나, 미지원임을 계약으로 명시하고 그 경우 binding의 대응을 정의하라**. 지원한다면 조립 슬롯을 제출자 단위로 분리하거나 `MORE`~`FINAL` 구간만 내부 직렬화한다. 미지원으로 확정한다면 `bindings/doc/spec/README.ko.md:1345`의 송신 경로 lock 금지를 함께 완화해야 binding이 직렬화할 수 있다.
 **부차 항목**: Go binding이 이 `BACKPRESSURED`를 terminal 오류로 caller에게 노출한다. 계약상(`bindings/go/contracts/sockets.go:43-45`) 대기 토큰의 WRITABLE에서 내부 재개해야 한다. Core가 해결되면 대부분 사라지므로 후속으로 둔다.
+**버그 리포트**: `doc/bug/perf/2026-09-07-core-concurrent-multipart-submit.ko.md`에 재현 프로그램 전문과 함께 작성했다(`PERF_POLICY.md:125`가 규정한 위치). Core 캠페인이 git으로 받는다.
 **현재 조치**: Go REQREP은 스펙 결정 전까지 측정 대상에서 보류한다. Go는 후순위 언어(D-BP8)라 캠페인 전체는 막히지 않는다. 재현 프로그램은 `/tmp/zl-repro`에 있고 저장소에 남기지 않았다.
