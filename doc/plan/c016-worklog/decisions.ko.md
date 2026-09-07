@@ -1975,3 +1975,12 @@ Go REQREP 러너 정합 중 드러났고, **감독자가 최소 재현 프로그
 **MP-4**(`core-rf-MP-4-report.md`): map 크기를 C3 atomic counter로 발행, 0이면 helper mutex·TLS 조회 없이 single 경로; identity는 TLS 소유 shared_ptr 참조(복사 없음). 2-part SEND helper mutex 2회, single FINAL 0회. single-after-multipart 22.49→23.57 ms(+4.81 %, MP-3 +23.7 %), 4-thread 780,483 record/s(MP-3 대비 +7.7 %). 검증 240/240, ASan 6/6, TSan 8/8, hotpath 5/5 PASS.
 **문제**: hotpath Ir/msg가 MP-3 대비 dealer_dealer +110, pair +110, router_router_tcp +187(각 +4.4~4.7 %). Ir는 부하 무관이므로 MP-4가 helper 미생성 socket의 single 경로에 명령을 추가한 것. 게이트 ±5 %는 통과하지만 캠페인 취지상 제거.
 **결정**: MP-5(sol/high, 1.5 h) — callgrind 함수별 Ir 차이로 원인 확정 후 helper 미생성 socket의 fast path를 MP-3과 동일하게 복원(counter 설계는 유지). 이후 재리뷰(astra: B01~B06 검증 + MP-4/5) → 게이트. 0.17.2 완료 예상 **9/8 오전**.
+
+## D-BP15 (2026-09-07 20:10, 머신 A) **머신 B에 요청 — 동시 multipart 회귀 테스트를 Core 통합 테스트에 추가할 것**
+사용자 지시로 Core 캠페인(머신 B)에 다음을 요청한다. 근거와 재현은 `doc/bug/perf/2026-09-07-core-concurrent-multipart-submit.ko.md`에 있다.
+**요청 내용**: D-BP12의 동시 multipart 결함에 대한 회귀 테스트를 **Core 통합 테스트**에 추가해 달라. 0.17.2의 thread별 슬롯 수정과 함께 들어가야 한다.
+**왜 Core가 소유해야 하는가**: (1) perf는 못 잡는다 — C++ 러너가 requester를 단일 공개 poller에 `POLLCOMPLETION`으로 등록해 completion owner를 `wait()` 호출 thread로 옮기면 `same_thread=0` 조건이 발생하지 않는다. 이 등록은 `PERF_MULTI_TEST_POLICY.md`의 requester 규칙이므로 되돌릴 수 없고, 따라서 앞으로 perf는 이 경로를 밟지 않으며 수정이 잘못돼도 초록으로 나온다. (2) framework는 이 계약의 사용자이지 검증자가 아니다. (3) 이건 Core 공개 계약의 문제이므로 Core가 자기 계약을 검증해야 한다.
+**덮어야 할 두 경우** (둘 다 공개 API만 사용):
+1. 서로 다른 application thread가 **각자의 독립된 multipart 메시지**를 **같은 socket**에 동시 제출. Go 관례(블로킹 `Submit` + goroutine)를 따르면 반드시 이 형태가 된다. 재현: 버그 문서의 프로그램으로 `-parts 2 -callers 4` 실패, `-parts 1 -callers 4`와 `-parts 2 -callers 1` 성공.
+2. application thread가 multipart sequence를 **연 상태에서** binding 내부 runtime completion owner가 같은 socket의 retained request를 **다른 thread에서** 재제출. 사용자가 단일 thread로 써도 발생하며 C++ multi REQREP 65536 B가 이 경우다. completion owner를 application thread로 가져오지 않는 것이 일반 사용법이므로 사용자는 그대로 노출된다.
+**판정 기준**: thread별 슬롯 수정 뒤 두 경우가 모두 **성공**해야 한다. 1번만 통과하고 2번이 "열린 sequence가 닫히지 않는" 상태로 바뀌면 증상만 옮겨간 것이다 — 열린 sequence의 소유와 인계 규칙을 함께 정의해야 하는 이유다.
