@@ -2310,3 +2310,7 @@ C의 같은 항목 `Core poller wait·reply 진행`은 **4,593.91 Ir(C 잔여의
 **조치**: `doc/bug/perf/2026-09-08-core-ws-roundtrip-size-penalty.ko.md`로 머신 B에 보고(`2a1614baa1`). 요청은 (1) 왕복 경로에서 크기 비례 비용의 위치 특정, (2) 단방향/왕복 처리량 비가 transport에 따라 크게 달라지지 않는지 확인하는 회귀 테스트, (3) 그때까지 `ws`·`wss` 왕복 셀은 `보류(C 기준 이상)`.
 
 **교훈**: 기준선 러너가 이상하면 러너를 먼저 의심하기 쉬운데, **독립 구현 둘이 같은 곡선을 그리면 그 아래 계층이다.** 단방향/왕복 분리와 C·C++ 교차 대조가 30분 만에 이를 갈랐다 — 앞으로 "C 기준 이상" 셀은 이 두 축으로 먼저 판별한다.
+## D-B223 (2026-09-08 07:45, 머신 B) ST-2 리뷰 — 차단 4건 → ST-3; 0.17.3 예상 13:30 전후
+
+**리뷰**(`review-st2.md`, astra): 1차 B-1(command 전이)은 해소. 신규 차단: **B-ST2-1** async→available 전환(`release_receive_sync_from_async_owner()`, 설치 실패·idle/종료/quiesce detach)이 release store만 해서, `async`를 보고 mutex 방식으로 들어온 `has_in()` 등이 실행 중인데 public lease가 lock-free로 시작 가능(기존 결함이나 프로토콜 완결에 포함). **B-ST2-2** `progress_epoch` 비원자 read/write(lock-free lease 분기 vs notify·새 broadcast) — "최악은 대기 1회"라는 상한은 data race 프로그램에서 증명 불가, atomic 전환 + 전체 receive progress 접근 정리 필요. **B-ST2-3** 새 테스트의 Asio socket이 thread 지역 io_context보다 오래 살아 Windows IOCP backend에서 파괴된 service 접근. **B-ST2-4** 다른 thread에서 blocking read 중인 Asio socket close(Asio는 close를 thread-safe로 보장하지 않음). W-ST2-1 `has_in()`의 poller 경로 비용(CAS+RMW 추가, 5셀은 POLLIN poller 미사용이라 관측 밖 — perf/c multi로 확인 필요), W-ST2-3 command CV가 `recursive_mutex_t` 위(스펙 §5/§6 위반), 주석 부정확, notify 로직 중복.
+**결정**: ST-3(Claude opus, 2 h): 위 4건 + W-ST2-3 수정, TSan suppression 없이 잔여 경고 분류. 이후 게이트(perf/c multi 1024 B 3셀 포함해 `has_in` 비용 관측) → 커밋. 0.17.3 예상 12:00 → **13:30 전후**.
