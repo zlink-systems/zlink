@@ -268,3 +268,43 @@ func main() {
 	}
 }
 ```
+
+---
+
+## 후속 (2026-09-07, 머신 A)
+
+Core 캠페인이 **0.17.2에 포함**하기로 했고, 수정 방향은 **socket이 소유하는 thread별 슬롯**이다.
+그 결정에 대해 확인한 사실과 설계 주의점을 남긴다.
+
+### Go는 이미 전제 조건을 만족한다
+
+`bindings/go/internal/native/socket_multipart.go:191-193`이 멀티파트 제출 전체를 감싼다.
+
+```go
+func submitMultipartFromBuilderParts(parts []sendBuilderPart, submit ...) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+```
+
+goroutine은 기본적으로 OS thread 사이를 옮겨 다니므로 `MORE`와 `FINAL`이 서로 다른 thread에서
+실행될 수 있는데, binding이 이미 그 구간을 고정한다. 따라서 **thread별 슬롯 방식은 Go에서
+그대로 동작한다.** 다른 binding도 제출이 한 thread 안에서 끝나므로 같다.
+
+이 사실이 현재 실패 원인도 정확히 설명한다 — 두 goroutine이 각자 **다른 OS thread**에 고정된
+채 **socket당 하나뿐인 슬롯**에 함께 staging하고 있었다.
+
+### 설계 주의점: 슬롯 수명
+
+thread별 슬롯이면 socket이 "제출한 적 있는 thread 수"만큼 슬롯을 보유하게 된다. 이 캠페인의
+multi 러너는 socket 100개 × 미완료 상한 64 = **최대 6,400 goroutine**이 각자
+`LockOSThread`를 잡으므로, 최악의 경우 socket 하나가 수천 개 슬롯을 보게 된다(Go 기본 thread
+상한은 10,000이다).
+
+한 번 제출하고 다시 오지 않는 thread의 슬롯이 회수되지 않으면 누수가 된다. **슬롯의 생성·회수
+조건을 계약에 정의**해 두기를 요청한다. 예를 들어 `FINAL` 성공 또는 sequence 폐기 시점에 슬롯을
+반납하고, thread 종료를 기다리지 않는 형태가 안전하다.
+
+### 이 캠페인의 조치
+
+Go REQREP은 0.17.2가 나올 때까지 측정 대상에서 보류한다. 0.17.2 릴리스 통보를 받으면
+D-BP7·D-BP9 절차대로 고정 prefix를 0.17.2로 재고정하고 Go REQREP을 다시 정합·측정한다.
