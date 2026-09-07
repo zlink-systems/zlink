@@ -128,7 +128,7 @@ Phase 2S 종료 뒤 perf/c **스크린 셀(1024 B tcp, single 7 + multi 7)** 을
 - with_stream 4스택 runs=3 최종 표, perf/c **전 패턴 × 전 transport × 전 size** single·multi runs=1(−5% 셀만 runs=3)로 Phase 0 대비 최종 표(§7.4). 어느 셀도 기준 아래 −5%를 넘지 않고, 손댄 패턴은 개선이 확인돼야 한다.
 - hotpath_gate 5셀 PASS, `ctest -j2` 전체, 변경 suite 5회, mirror cmp(8 헤더 × 4), `git diff --check`, release lib 재링크, c·cpp `run_tests.sh` 스모크(ABI 불변이므로 다른 binding은 생략).
 - 스펙은 **문구 정합만**(내부 구조·파일 배치 서술). 계약 문장은 손대지 않는다. 알려진 정합 대상: 08-stream "STREAM gather-write는 유지됨"(실제로 raw 엔진은 gather한 적 없음, S-4), with_stream README의 `ZLINK_CORE_SOURCE` 기본값(러너는 release 기본 = 404, local 명시 필요, G-0), `scripts/build-core.sh` 머리 주석·CONTRIBUTING §9의 "테스트 링크 구조 재작업 전" 잔재(`ddf9ff7e95`로 완료됨).
-- **버전 범프 0.17.0 → 0.17.1**(사용자 승인 2026-09-07): 공개 인터페이스 불변이므로 patch. CONTRIBUTING 체크리스트 한 커밋 — `VERSION`, `core/CMakeLists.txt`, `core/include/zlink/common.h`, `core/include/zlink.h`(버전 매크로만, 표면 불변), 계약 테스트 `bindings/cpp/tests/contract/test_cpp_contract_common_header_version.cpp`, 바인딩 매니페스트 + `scripts/local-package/build-wsl.sh --sync-versions`, `BINDINGS_VERSION`.
+- **버전 범프 → 0.17.2**(사용자 승인 2026-09-07): 캠페인 중간에 머신 A 고정용으로 **0.17.1**을 먼저 발행했으므로(D-B171, 태그 `core/v0.17.1`), Phase 4 종료 커밋은 0.17.2다. 공개 인터페이스 불변이므로 patch. CONTRIBUTING 체크리스트 한 커밋 — `VERSION`, `core/CMakeLists.txt`, `core/include/zlink/common.h`, `core/include/zlink.h`(버전 매크로만, 표면 불변), 계약 테스트 `bindings/cpp/tests/contract/test_cpp_contract_common_header_version.cpp`, 바인딩 매니페스트 + `scripts/local-package/build-wsl.sh --sync-versions`, `BINDINGS_VERSION`.
 - 소요: 조용한 머신 기준 2.5~3 h(측정 직렬). Phase 4 시작 전에 모든 job을 종료한다.
 - decisions 종결 항목, §8 체크리스트 완료.
 

@@ -1746,3 +1746,8 @@ D-B127에서 아침 결정으로 남긴 Single REQREP 정책 gap 2건을 사용�
 ## D-B170 (2026-09-07 10:30, 머신 B) G-5 완료 — 하네스 `getenv` 캐시, perf/c 기준값 전면 재측정 필요
 G-5(sonnet, `core-rf-G-5-summary.md`): `bindings/c/perf/common/perf_zlink_part_helpers.hpp`의 `perf_measurement_part_count()`가 send/recv마다 `getenv("PERF_PART_COUNT")`를 호출 → 함수 스코프 `static const` 캐시(기존 `bench_debug_enabled()`와 같은 패턴). getenv 1.996~2.03 → 0.00014회/msg, RR single 축소셀 Ir/msg 15,806 → 14,324(**−9.4 %**, G-A 추정치와 일치). Core 변경 0, with_zmq는 이 helper를 공유하지 않아 대칭 변경 불필요.
 **결과**: perf/c로 잰 모든 값(계획 §7.4 Phase 2G 기준 포함)은 이 커밋 전후로 비교 불가 — 하네스가 메시지당 syscall 2개를 덜 한다. 조치: (1) 이 patch는 진행 중인 묶음 게이트가 끝난 뒤 커밋(게이트가 perf/c 셀을 측정 중이라 트리를 건드리면 오염), (2) 커밋 직후 **idle 재기준**(single 5패턴 + multi 7패턴, runs 3, load < 1)을 새 Phase 2G 기준으로 §7.4에 기록, (3) 이후 G-job 판정은 그 값 기준. G-5가 보고한 14셀 값은 load 7.5~8.2에서 측정돼 기준으로 쓰지 않는다.
+
+## D-B171 (2026-09-07 11:00, 머신 B) Phase 3 4묶음 채택 `2753a2d799`(−1833/+561), G-5 `7549a128b1`; 0.17.1 범프 진행
+게이트 r5-r6r8-r9-r7r11(`gate-r5-r6r8-r9-r7r11-summary.md`): 충돌 0, 인터페이스 diff 0, mirror 32/32, ctest 207/208(dev hotpath_gate만), 5회 85/85, `test_endpoint_release` 10/10, hotpath 5셀 0.99~1.01, **bindings 스모크 C 10/10 contract + 6/6 samples, C++ 19/19 + 7/7**(errno 변경 무영향 실증). with_stream 64 B 0.689은 단일 run·부하 중이라 판정 불가(결정적 hotpath는 flat) → idle 재측정 대상. Phase 3 누적 코드: `cb9139d16d`(R1+R2) + `72100c7be3`(R3+R4) + `2753a2d799` = **−2,664/+1,001행**(순 −1,663).
+G-5는 `7549a128b1`로 별도 커밋(하네스 변경이므로 Core 커밋과 분리). **이 커밋 이후 perf/c 값은 이전 값과 비교 불가**(§7.4 기준 재측정 예정).
+사용자 결정(2026-09-07): 머신 A의 bindings 캠페인이 고정할 지점을 **버전으로** 만든다 — 태그만으로는 "어느 시점의 0.17.0"인지 계속 따져야 하므로. 지금 **0.17.1 범프**(patch, 공개 인터페이스·ABI 불변) 후 `core/v0.17.1` 태그, 머신 A는 그 태그에 고정. 이 캠페인은 계속 진행하고 종료 시 **0.17.2**로 한 번 더 올린다(Phase 4 §의 0.17.1 계획을 대체).
