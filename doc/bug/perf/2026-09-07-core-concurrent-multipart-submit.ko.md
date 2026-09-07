@@ -308,3 +308,77 @@ multi 러너는 socket 100개 × 미완료 상한 64 = **최대 6,400 goroutine*
 
 Go REQREP은 0.17.2가 나올 때까지 측정 대상에서 보류한다. 0.17.2 릴리스 통보를 받으면
 D-BP7·D-BP9 절차대로 고정 prefix를 0.17.2로 재고정하고 Go REQREP을 다시 정합·측정한다.
+
+---
+
+## 추가 발현 (2026-09-07 19:45, 머신 A) — **thread별 슬롯으로 해결되지 않을 수 있다**
+
+같은 결함이 **C++에서도** 나왔다. Go처럼 사용자가 goroutine을 여러 개 띄운 경우가 아니라,
+**application thread와 binding 내부 runtime completion owner가 부딪히는** 형태다. 사용자가
+단일 thread로 써도 발생한다.
+
+### 현상
+
+C++ multi `MULTI_DEALER_ROUTER_REQREP`·`MULTI_ROUTER_ROUTER_REQREP`가 **65536 B에서만**
+exit 1로 실패했다(64/256/1024/4096 B는 정상, C 기준 러너는 5 크기 전부 정상).
+
+Core 진단(`ZLINK_ROUTED_PART_DEBUG=1`) 출력:
+
+```text
+[routed-part-debug] prepare_send_step busy family=5 active_family=5 same_thread=0
+terminate called after throwing an instance of 'zlink::submit_error_t'
+  what():  No such device or address (errno=22)
+```
+
+typed result는 `submit_result_t::invalid_argument`(code 6), errno 22(`EINVAL`)다. `ENOMEM`·
+`ENOBUFS`·HWM memory guard가 아니다. `--part-count 1`로 실행하면 통과한다. 즉 크기 자체가
+아니라 **큰 2-part request가 backpressure를 만나 재제출될 때 실행 주체가 갈리는** 조건이다.
+
+### 경로
+
+1. C++ binding의 `submit_raw_request_state()`가 2-part request를 part별로 제출한다
+   (`bindings/cpp/src/Runtime/Messaging/operation_submit.hpp:181-213`).
+2. 첫 application thread의 multipart sequence가 **열려 있는 동안**, runtime completion owner가
+   WRITABLE token을 받아 같은 socket의 retained request를 **다른 thread에서** 재제출한다.
+3. Core가 owner thread 불일치를 검출해 전체 attempt를 `EINVAL`로 거부한다
+   (`core/src/api/socket/part_helper_api.cpp:169-186`).
+
+```cpp
+const std::thread::id current_thread = std::this_thread::get_id ();
+if (state_->send.active && state_->send.owner_thread != current_thread) {
+    ...
+    errno = EINVAL;
+    return -1;
+}
+```
+
+### 0.17.2 설계에 대한 함의
+
+Core는 **이미 staging sequence에 `owner_thread`를 기억하고 있고** 다른 thread의 진입을 막는다.
+즉 현재도 사실상 "열린 sequence는 한 thread 소유"다. 여기에 **thread별 슬롯**을 추가하면 이
+사례가 어떻게 되는지 확인이 필요하다.
+
+우려는 이렇다. application thread A가 `MORE`를 자기 슬롯에 staging한 상태에서, runtime
+completion owner thread B가 같은 socket의 **다른** retained request를 재제출하면 B는 자기
+슬롯을 쓰게 된다. 두 sequence가 서로 침범하지 않으므로 `EINVAL`은 사라지지만, **A의 열린
+sequence는 A가 다시 `FINAL`을 제출해야만 닫힌다.** binding 내부 owner가 A가 아니라면 그
+sequence는 닫히지 않고 남는다.
+
+따라서 다음 두 가지를 설계에서 함께 정의해 주기를 요청한다.
+
+1. **열린 sequence의 소유와 인계** — 한 thread가 연 sequence를 다른 thread가 이어받을 수
+   있는가, 없다면 그 sequence의 수명과 폐기 조건은 무엇인가. binding의 retry가 원래 제출
+   thread가 아닌 곳에서 일어나는 것이 정상 경로이므로(위 경로 2), 이 정의 없이는 thread별
+   슬롯이 `EINVAL`을 "닫히지 않는 sequence"로 바꿀 뿐이다.
+2. **앞서 요청한 슬롯 회수 조건** — `FINAL` 성공 또는 sequence 폐기 시점 반납.
+
+### 이 캠페인의 조치
+
+C++ 러너 쪽은 우회했다. requester 전부를 단일 public poller에 `POLLCOMPLETION`으로 등록해
+completion owner를 `wait()` 호출 thread로 이전시키면(`async-execution-model.ko.md:67-70`의
+completion-owner 이전 계약), 최초 submit과 WRITABLE 재제출이 같은 application thread에서
+일어나 조건이 사라진다. C와 Rust는 이미 이 형태였고 C++ multi 러너만 아니었다. binding에
+lock을 넣는 안은 `bindings/doc/spec/cpp/README.ko.md:455-461`에 어긋나 폐기했다.
+
+이 우회는 **perf 러너에서만 성립한다.** 일반 사용자는 completion owner를 자기 thread로
+가져오지 않을 수 있으므로 위 설계 정의가 여전히 필요하다.
