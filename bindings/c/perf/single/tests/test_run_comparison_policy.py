@@ -342,6 +342,30 @@ class RunComparisonPolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             RC.parse_pattern_arg("STREAM")
 
+    def test_reqrep_patterns_removed_from_single_runner(self):
+        # PERF_SINGLE_TEST_POLICY.md § 1 / § 6.1 (D-BP3): the single suite
+        # measures the five one-way patterns only.
+        self.assertEqual(
+            RC.parse_pattern_arg("ALL"),
+            [
+                "PAIR",
+                "PUBSUB",
+                "DEALER_DEALER",
+                "DEALER_ROUTER",
+                "ROUTER_ROUTER",
+            ],
+        )
+        for pattern in ("DEALER_ROUTER_REQREP", "ROUTER_ROUTER_REQREP"):
+            with self.assertRaises(ValueError):
+                RC.parse_pattern_arg(pattern)
+            self.assertNotIn(pattern, RC.PATTERN_TO_BINARY)
+
+    def test_single_throughput_unit_has_no_round_trip_variant(self):
+        # PERF_SINGLE_TEST_POLICY.md § 6.1: single has no ops/s pattern.
+        for pattern in ("PAIR", "DEALER_ROUTER", "ROUTER_ROUTER"):
+            self.assertEqual(RC.pattern_direction_label(pattern), "one-way")
+            self.assertTrue(RC.format_throughput(pattern, 1234.0).endswith("Kmsg/s"))
+
     def test_single_result_dir_uses_report_path(self):
         root = os.path.join(os.sep, "tmp", "perf-root")
         self.assertEqual(

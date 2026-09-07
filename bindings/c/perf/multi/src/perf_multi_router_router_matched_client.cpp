@@ -149,6 +149,7 @@ bool configure_client_socket (void *ctx,
 bool run_reqrep_case (
   perf_multi_socket_reqrep::client_state_t *state,
   const multi_bench_settings_t &settings,
+  bool websocket_transport,
   const child_command_t &command,
   child_result_t *result)
 {
@@ -162,7 +163,7 @@ bool run_reqrep_case (
     config.server_has_routing_id = true;
     config.server_routing_id = k_server_routing_id;
     if (!perf_multi_socket_reqrep::run_active_window (
-          config, state, settings, command.run_id,
+          config, state, settings, websocket_transport, command.run_id,
           static_cast<size_t> (command.msg_size), &received, &latency)) {
         return false;
     }
@@ -290,7 +291,8 @@ int child_main (int index,
           recalculated
           && (is_reqrep ()
                 ? run_reqrep_case (
-                    &reqrep_state, settings, command, &result)
+                    &reqrep_state, settings,
+                    transport == "ws" || transport == "wss", command, &result)
                 : run_sendsend_case (
                     socket, transport, settings, command, &result));
         result.status = ran ? 0 : 1;

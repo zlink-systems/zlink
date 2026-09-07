@@ -2,9 +2,11 @@
 #define PERF_SINGLE_LATENCY_HPP
 
 #include <algorithm>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <vector>
 
 struct latency_stats_t
@@ -97,16 +99,22 @@ class latency_stats_builder_t
         return _rng;
     }
 
+    // PERF_SINGLE_TEST_POLICY § 7: the sample cap is an unsigned count.
+    // A negative or otherwise unparsable value falls back to the default
+    // instead of wrapping through strtoull into a huge cap.
     static size_t default_sample_cap ()
     {
+        const size_t fallback = 1000000;
         const char *value = std::getenv ("PERF_SINGLE_LATENCY_SAMPLE_CAP");
-        if (!value || !*value)
-            return 1000000;
+        if (!value || !*value || *value == '-')
+            return fallback;
 
         char *end = NULL;
+        errno = 0;
         const unsigned long long parsed = std::strtoull (value, &end, 10);
-        if (!end || *end != '\0')
-            return 1000000;
+        if (errno != 0 || end == value || !end || *end != '\0'
+            || parsed > static_cast<unsigned long long> (std::numeric_limits<size_t>::max ()))
+            return fallback;
         return static_cast<size_t> (parsed);
     }
 };

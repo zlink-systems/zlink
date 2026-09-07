@@ -27,6 +27,29 @@ CPP_SPEC.loader.exec_module(CPP_RC)
 RUNNER_MODULES = (("c", RC), ("cpp", CPP_RC))
 
 
+@contextlib.contextmanager
+def split_binaries_present():
+    """Pretend the split server/client binaries are built.
+
+    run_sizes_test refuses to delegate when the paired binaries are missing
+    from BUILD_DIR, so a runner unit test that stubs run_sizes_test_split
+    would otherwise depend on the state of bindings/c/build/perf.
+    """
+    real_exists = os.path.exists
+
+    def fake_exists(path):
+        if os.path.dirname(str(path)) == RC.BUILD_DIR:
+            return True
+        return real_exists(path)
+
+    os.path.exists = fake_exists
+    try:
+        yield
+    finally:
+        os.path.exists = real_exists
+
+
+
 def multi_args():
     return {
         "num_runs": 1,
@@ -474,13 +497,14 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
                 }
 
             RC.run_sizes_test_split = fake_split
-            outcome = RC.run_sizes_test(
-                "ignored",
-                "current",
-                "tcp",
-                [64, 256, 1024],
-                "PUBSUB",
-            )
+            with split_binaries_present():
+                outcome = RC.run_sizes_test(
+                    "ignored",
+                    "current",
+                    "tcp",
+                    [64, 256, 1024],
+                    "PUBSUB",
+                )
 
             self.assertEqual(outcome["status"], "success")
             self.assertEqual(
@@ -581,13 +605,14 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
             RC.run_sizes_test_split = fake_split
             RC.time.sleep = fake_sleep
 
-            outcome = RC.run_sizes_test(
-                "ignored",
-                "current",
-                "tcp",
-                [64, 256, 1024],
-                "PUBSUB",
-            )
+            with split_binaries_present():
+                outcome = RC.run_sizes_test(
+                    "ignored",
+                    "current",
+                    "tcp",
+                    [64, 256, 1024],
+                    "PUBSUB",
+                )
 
             self.assertEqual(outcome["status"], "success")
             self.assertEqual(calls, [[64], [256], [1024]])
@@ -631,13 +656,14 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
 
             RC.run_sizes_test_split = fake_split
 
-            outcome = RC.run_sizes_test(
-                "ignored",
-                "current",
-                "tcp",
-                [65536],
-                "PUBSUB",
-            )
+            with split_binaries_present():
+                outcome = RC.run_sizes_test(
+                    "ignored",
+                    "current",
+                    "tcp",
+                    [65536],
+                    "PUBSUB",
+                )
 
             self.assertEqual(outcome["status"], "fail")
             self.assertEqual(outcome["reason"], "client_ready_size_65536")
@@ -685,21 +711,22 @@ class MultiRunComparisonPolicyTests(unittest.TestCase):
                 }
 
             RC.run_sizes_test_split = fake_split
-            outcome = RC.run_sizes_test(
-                "ignored",
-                "current",
-                "tcp",
-                [65536, 131072],
-                "DEALER_ROUTER_REQREP",
-                result_line_callback=lambda tr, size, metric, value: (
-                    result_callbacks.append((tr, size, metric, value)),
-                    callback_events.append(("metric", size, metric)),
-                ),
-                size_result_callback=lambda tr, size, item: (
-                    size_callbacks.append((tr, size, item["status"])),
-                    callback_events.append(("terminal", size, item["status"])),
-                ),
-            )
+            with split_binaries_present():
+                outcome = RC.run_sizes_test(
+                    "ignored",
+                    "current",
+                    "tcp",
+                    [65536, 131072],
+                    "DEALER_ROUTER_REQREP",
+                    result_line_callback=lambda tr, size, metric, value: (
+                        result_callbacks.append((tr, size, metric, value)),
+                        callback_events.append(("metric", size, metric)),
+                    ),
+                    size_result_callback=lambda tr, size, item: (
+                        size_callbacks.append((tr, size, item["status"])),
+                        callback_events.append(("terminal", size, item["status"])),
+                    ),
+                )
 
             self.assertEqual(calls, [65536, 131072])
             self.assertEqual(outcome["status"], "fail")

@@ -147,6 +147,9 @@ int recv_router_header_flags (void *router_,
         zlink_msg_close (&part);
         return -1;
     }
+    // PERF_SINGLE_TEST_POLICY § 2.1: a wire frame whose byte length differs
+    // from the expected payload size is excluded from the aggregation. It is
+    // not a failure and must not abort the runner.
     const bool size_ok = actual_size == payload_size_;
     bool header_ok = false;
     if (size_ok && header_out_) {
@@ -154,12 +157,9 @@ int recv_router_header_flags (void *router_,
                                                                header_out_);
     }
     zlink_msg_close (&part);
-    if (!size_ok) {
-        if (bench_debug_enabled ()) {
-            std::cerr << "[perf-dealer-router] unexpected payload size=" << actual_size
-                      << " expected=" << payload_size_ << std::endl;
-        }
-        return -1;
+    if (!size_ok && bench_debug_enabled ()) {
+        std::cerr << "[perf-dealer-router] excluded payload size=" << actual_size
+                  << " expected=" << payload_size_ << std::endl;
     }
 
     if (header_ok_out_)

@@ -241,6 +241,28 @@ void test_weighted_child_aggregation ()
     assert (close_to (stats.p99_ns, 2.0));
 }
 
+// PERF_POLICY.md § 1.1: the weighted percentile must use the same linear
+// interpolation as the single-process path. With every weight equal to 1 the
+// cumulative-weight axis collapses to the sample index, so both formulas must
+// return exactly the same value.
+void test_weighted_percentile_matches_unit_weight_interpolation ()
+{
+    std::vector<perf_multi_latency::weighted_sample_t> samples;
+    for (int i = 1; i <= 10; ++i)
+        samples.push_back ({static_cast<double> (i), 1.0});
+
+    // pos = (10 - 1) * 0.95 = 8.55 -> 9 + (10 - 9) * 0.55 = 9.55
+    assert (close_to (perf_multi_latency::weighted_percentile (samples, 0.95), 9.55));
+    // pos = (10 - 1) * 0.99 = 8.91 -> 9 + (10 - 9) * 0.91 = 9.91
+    assert (close_to (perf_multi_latency::weighted_percentile (samples, 0.99), 9.91));
+
+    const bench_latency_stats_t stats =
+      perf_multi_latency::aggregate (10, 55.0, &samples);
+    assert (close_to (stats.mean_ns, 5.5));
+    assert (close_to (stats.p95_ns, 9.55));
+    assert (close_to (stats.p99_ns, 9.91));
+}
+
 void test_weighted_sample_population_uses_latency_count ()
 {
     const double child_values[] = {10.0, 20.0};
@@ -457,6 +479,7 @@ int main ()
     test_reqrep_submit_progress_quantum_is_byte_bounded ();
     test_weighted_child_aggregation ();
     test_weighted_sample_population_uses_latency_count ();
+    test_weighted_percentile_matches_unit_weight_interpolation ();
     test_count_duration_and_bandwidth ();
     test_echo_latency_uses_one_way_estimate ();
     test_stream_active_completion_cutoff_and_echo_latency ();

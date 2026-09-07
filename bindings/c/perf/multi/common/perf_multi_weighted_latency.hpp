@@ -4,6 +4,7 @@
 #include "perf_multi_metrics.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace perf_multi_latency
@@ -41,24 +42,57 @@ inline bool append_weighted_samples (
     return true;
 }
 
+// PERF_POLICY.md § 1.1: the sample that occupies position `p` on the
+// cumulative-weight axis is the first sample whose `c_i - 1 >= p`, where
+// `c_i` is the running weight sum over the value-sorted samples.
+inline double weighted_sample_at (
+  const std::vector<weighted_sample_t> &samples,
+  double position)
+{
+    double cumulative = 0.0;
+    for (size_t i = 0; i < samples.size (); ++i) {
+        cumulative += samples[i].weight;
+        if (cumulative - 1.0 >= position)
+            return samples[i].value;
+    }
+    return samples.back ().value;
+}
+
+// PERF_POLICY.md § 1.1: percentiles use one interpolation formula on every
+// path. The merged reservoir path performs the same linear interpolation as
+// the single-process path, but on the cumulative-weight axis: with `W` the
+// total weight, `pos = (W - 1) * q`, `lo = floor(pos)`, `hi = min(lo + 1,
+// W - 1)`, `value = s(lo) + (s(hi) - s(lo)) * (pos - lo)`. When every weight
+// is 1 this is identical to `pos = (n - 1) * q` over the sorted samples.
 inline double weighted_percentile (
   const std::vector<weighted_sample_t> &samples,
   double quantile)
 {
+    if (samples.empty ())
+        return 0.0;
+
     double total_weight = 0.0;
     for (size_t i = 0; i < samples.size (); ++i)
         total_weight += samples[i].weight;
     if (total_weight <= 0.0)
         return 0.0;
 
-    const double target = total_weight * quantile;
-    double cumulative = 0.0;
-    for (size_t i = 0; i < samples.size (); ++i) {
-        cumulative += samples[i].weight;
-        if (cumulative >= target)
-            return samples[i].value;
-    }
-    return samples.back ().value;
+    const double max_position = total_weight - 1.0;
+    if (max_position <= 0.0)
+        return samples.front ().value;
+    if (quantile <= 0.0)
+        return samples.front ().value;
+    if (quantile >= 1.0)
+        return samples.back ().value;
+
+    const double pos = max_position * quantile;
+    const double lo_position = std::floor (pos);
+    const double hi_position =
+      lo_position + 1.0 < max_position ? lo_position + 1.0 : max_position;
+    const double lo_value = weighted_sample_at (samples, lo_position);
+    const double hi_value = weighted_sample_at (samples, hi_position);
+    const double frac = pos - lo_position;
+    return lo_value + (hi_value - lo_value) * frac;
 }
 
 inline bench_latency_stats_t aggregate (

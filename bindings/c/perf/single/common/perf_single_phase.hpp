@@ -9,13 +9,19 @@
 #include <iostream>
 #include <string>
 
-inline double single_latency_ns (const perf_single_metric::header_t &header_, double factor_ = 1.0)
+// PERF_POLICY.md § 1.1: sent_ts_ns and the receive instant are read from the
+// same monotonic time source, so the difference is a valid one-way latency.
+// The receive instant is passed in explicitly because PERF_SINGLE_TEST_POLICY
+// § 2.1 uses that very instant to decide active-window membership; latency and
+// throughput must therefore be derived from one timestamp per message.
+inline double single_latency_ns_at (const perf_single_metric::header_t &header_,
+                                    uint64_t recv_ts_ns_,
+                                    double factor_ = 1.0)
 {
-    const uint64_t now_ns = perf_single_metric::now_ns ();
-    if (header_.sent_ts_ns <= 0 || now_ns < static_cast<uint64_t> (header_.sent_ts_ns)) {
+    if (header_.sent_ts_ns <= 0 || recv_ts_ns_ < static_cast<uint64_t> (header_.sent_ts_ns)) {
         return 0.0;
     }
-    return static_cast<double> (now_ns - static_cast<uint64_t> (header_.sent_ts_ns)) * factor_;
+    return static_cast<double> (recv_ts_ns_ - static_cast<uint64_t> (header_.sent_ts_ns)) * factor_;
 }
 
 template <typename StateT>
@@ -24,19 +30,6 @@ inline bool single_header_matches_run (const StateT &state_,
 {
     return perf_single_metric::is_expected (header_, state_.run_id,
                                             perf_single_metric::phase_active, state_.msg_size);
-}
-
-template <typename StateT>
-inline bool single_record_active_header (StateT *state_,
-                                         const perf_single_metric::header_t &header_,
-                                         double latency_factor_ = 1.0)
-{
-    if (!state_ || !single_header_matches_run (*state_, header_))
-        return false;
-
-    state_->active_received.fetch_add (1, std::memory_order_relaxed);
-    state_->latency.add (single_latency_ns (header_, latency_factor_));
-    return true;
 }
 
 inline bool single_perf_validate_recv_mode_for_pattern (const char *pattern)

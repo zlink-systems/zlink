@@ -119,6 +119,9 @@ inline int recv_single_part_header_flags (void *socket_,
         zlink_msg_close (&part);
         return recv_result_error;
     }
+    // PERF_SINGLE_TEST_POLICY § 2.1: a wire frame whose byte length differs
+    // from the expected payload size is excluded from the aggregation. It is
+    // not a failure and must not abort the runner.
     const bool size_ok = actual_size == expected_size_;
     bool header_ok = false;
     if (size_ok && header_out_) {
@@ -126,13 +129,10 @@ inline int recv_single_part_header_flags (void *socket_,
                                                                header_out_);
     }
     zlink_msg_close (&part);
-    if (!size_ok) {
-        if (bench_debug_enabled ()) {
-            std::cerr << "[" << (trace_label_ ? trace_label_ : "perf-single")
-                      << "] unexpected payload size=" << actual_size
-                      << " expected=" << expected_size_ << std::endl;
-        }
-        return recv_result_error;
+    if (!size_ok && bench_debug_enabled ()) {
+        std::cerr << "[" << (trace_label_ ? trace_label_ : "perf-single")
+                  << "] excluded payload size=" << actual_size
+                  << " expected=" << expected_size_ << std::endl;
     }
 
     if (header_ok_out_)
@@ -182,57 +182,38 @@ send_socket_active_message (void *sender_, zlink_msg_t *part_, int flags_, bool 
     return send_step_fatal;
 }
 
+// PERF_SINGLE_TEST_POLICY § 1.1 / PERF_POLICY.md § 7.2: the one-way sender
+// submits continuously and uses only the backpressure the blocking send
+// terminal returns. No in-flight counter, window or artificial flow control.
 template <typename StateT, typename SendStepFn>
 inline bool send_active_samples (void *sender_,
                                  std::vector<char> *payload_,
                                  const StateT &state_,
-                                 int duration_s_,
+                                 uint64_t active_deadline_ns_,
                                  std::atomic<unsigned long long> *sent_count_,
-                                 const std::atomic<unsigned long long> *received_count_,
-                                 unsigned long long max_in_flight_,
                                  SendStepFn send_step_fn_)
 {
-    if (!sender_ || !payload_ || !sent_count_ || !received_count_)
+    if (!sender_ || !payload_ || !sent_count_)
         return false;
 
-    const auto deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (std::max (1, duration_s_));
     uint64_t seq = 1;
-    while (std::chrono::steady_clock::now () < deadline) {
-        while (max_in_flight_ > 0) {
-            const unsigned long long sent = sent_count_->load (std::memory_order_acquire);
-            const unsigned long long received =
-              received_count_->load (std::memory_order_acquire);
-            if (sent <= received || sent - received < max_in_flight_)
-                break;
-            if (std::chrono::steady_clock::now () >= deadline)
-                return true;
-            std::this_thread::yield ();
-        }
-
+    while (perf_single_metric::now_ns () < active_deadline_ns_) {
         const send_step_t send_step = send_step_fn_ (sender_, payload_, state_, seq);
         if (send_step == send_step_fatal)
             return false;
         if (send_step == send_step_retry) {
+            // PERF_SINGLE_TEST_POLICY § 1.1: a transient error waits 1 ms and
+            // re-submits the same sequence with a fresh sent_ts_ns (the send
+            // step re-stamps the payload on every call).
             std::this_thread::sleep_for (std::chrono::milliseconds (1));
             continue;
         }
 
-        sent_count_->fetch_add (1, std::memory_order_release);
+        sent_count_->fetch_add (1, std::memory_order_relaxed);
         ++seq;
     }
 
     return true;
-}
-
-inline int latency_phase_duration_seconds ()
-{
-    return 1;
-}
-
-inline unsigned long long latency_phase_max_in_flight ()
-{
-    return 1;
 }
 
 // Send the wire-level stop token using a caller-supplied SendStopFn that
@@ -276,21 +257,23 @@ inline int send_stop_token_socket (void *sender_)
     return -1;
 }
 
+// PERF_SINGLE_TEST_POLICY § 1 / § 2.1: one ready -> active(duration) window
+// produces throughput and latency from the same set of valid messages. There
+// is no separate latency stage and no artificial in-flight cap
+// (PERF_POLICY.md § 7.2, BINDINGS_OPTIMIZATION_GUIDE.ko.md § 4).
 template <typename StateT, typename SendStepFn, typename RecvHeaderFn, typename SendStopFn>
-inline bool run_measurement_phase (void *sender_,
-                                   void *receiver_,
-                                   std::vector<char> *payload_,
-                                   StateT *state_,
-                                   int duration_s_,
-                                   int recv_timeout_ms_,
-                                   const char *trace_label_,
-                                   unsigned long long max_in_flight_,
-                                   bool capture_latency_,
-                                   SendStepFn send_step_fn_,
-                                   RecvHeaderFn recv_header_fn_,
-                                   SendStopFn send_stop_fn_,
-                                   unsigned long long *received_out_,
-                                   latency_stats_t *latency_out_)
+inline bool run_active_phase (void *sender_,
+                              void *receiver_,
+                              std::vector<char> *payload_,
+                              StateT *state_,
+                              int duration_s_,
+                              int recv_timeout_ms_,
+                              const char *trace_label_,
+                              SendStepFn send_step_fn_,
+                              RecvHeaderFn recv_header_fn_,
+                              SendStopFn send_stop_fn_,
+                              unsigned long long *received_out_,
+                              latency_stats_t *latency_out_)
 {
     if (!sender_ || !receiver_ || !payload_ || !state_ || !received_out_ || !latency_out_) {
         return false;
@@ -312,9 +295,13 @@ inline bool run_measurement_phase (void *sender_,
 
     poller_guard_t recv_poller;
     if (!recv_poller.valid () || !recv_poller.add (receiver_, receiver_, ZLINK_POLLIN)) {
-        sender_ok.store (false, std::memory_order_release);
         return false;
     }
+
+    // PERF_POLICY.md § 1.1: every deadline is read from the monotonic clock.
+    const uint64_t active_deadline_ns =
+      perf_single_metric::now_ns ()
+      + static_cast<uint64_t> (std::max (1, duration_s_)) * 1000000000ULL;
 
     std::thread receiver_thread ([&] () {
         while (true) {
@@ -330,82 +317,40 @@ inline bool run_measurement_phase (void *sender_,
             if (poll_rc == 0)
                 continue;
 
-            perf_single_metric::header_t header;
-            bool header_ok = false;
-            const int recv_rc =
-              recv_header_fn_ (receiver_, state_->payload_size, ZLINK_DONTWAIT, &header,
-                               &header_ok);
-            if (recv_rc == recv_result_payload) {
-                unsigned long long drained_latency_samples = 0;
-                if (header_ok && single_header_matches_run (*state_, header)) {
-                    if (capture_latency_) {
-                        state_->latency.add (single_latency_ns (header));
-                        ++drained_latency_samples;
-                    } else {
-                        state_->active_received.fetch_add (
-                          1, std::memory_order_release);
+            for (;;) {
+                perf_single_metric::header_t header;
+                bool header_ok = false;
+                const int recv_rc = recv_header_fn_ (receiver_, state_->payload_size,
+                                                     ZLINK_DONTWAIT, &header, &header_ok);
+                if (recv_rc == recv_result_payload) {
+                    // PERF_SINGLE_TEST_POLICY § 2.1: the monotonic instant at
+                    // which the recv loop processed the message decides active
+                    // membership. Messages received after the active deadline
+                    // are consumed as shutdown cleanup only, whether or not the
+                    // stop token has arrived yet.
+                    const uint64_t recv_ts_ns = perf_single_metric::now_ns ();
+                    if (recv_ts_ns < active_deadline_ns && header_ok
+                        && single_header_matches_run (*state_, header)) {
+                        state_->active_received.fetch_add (1, std::memory_order_relaxed);
+                        state_->latency.add (single_latency_ns_at (header, recv_ts_ns));
                     }
+                    continue;
                 }
-
-                for (;;) {
-                    perf_single_metric::header_t burst_header;
-                    bool burst_header_ok = false;
-                    const int burst_rc =
-                      recv_header_fn_ (receiver_, state_->payload_size, ZLINK_DONTWAIT,
-                                       &burst_header, &burst_header_ok);
-                    if (burst_rc == recv_result_payload) {
-                        if (burst_header_ok
-                            && single_header_matches_run (*state_, burst_header)) {
-                            if (capture_latency_) {
-                                state_->latency.add (single_latency_ns (burst_header));
-                                ++drained_latency_samples;
-                            } else {
-                                state_->active_received.fetch_add (
-                                  1, std::memory_order_release);
-                            }
-                        }
-                        continue;
-                    }
-                    if (burst_rc == recv_result_again) {
-                        // In-flight-1 latency samples must all traverse the
-                        // same receive cycle. Publish the acknowledgement only
-                        // after DONTWAIT has drained the socket to EAGAIN, so
-                        // the next send cannot join the current warm drain and
-                        // bypass the public poller wake being measured.
-                        if (capture_latency_ && drained_latency_samples != 0)
-                            state_->active_received.fetch_add (
-                              drained_latency_samples,
-                              std::memory_order_release);
-                        break;
-                    }
-                    if (burst_rc == recv_result_stop) {
-                        if (capture_latency_ && drained_latency_samples != 0)
-                            state_->active_received.fetch_add (
-                              drained_latency_samples,
-                              std::memory_order_release);
-                        return;
-                    }
-                    sender_ok.store (false, std::memory_order_release);
+                if (recv_rc == recv_result_again)
+                    break;
+                if (recv_rc == recv_result_stop)
                     return;
-                }
-                continue;
-            }
 
-            if (recv_rc == recv_result_again) {
-                continue;
-            }
-            if (recv_rc == recv_result_stop)
+                sender_ok.store (false, std::memory_order_release);
                 return;
-
-            sender_ok.store (false, std::memory_order_release);
-            return;
+            }
         }
     });
 
     std::thread sender_thread ([&] () {
-        const bool active_ok = send_active_samples (
-          sender_, payload_, *state_, duration_s_, &sent_count, &state_->active_received,
-          max_in_flight_, send_step_fn_);
+        const bool active_ok = send_active_samples (sender_, payload_, *state_,
+                                                    active_deadline_ns, &sent_count,
+                                                    send_step_fn_);
         // PERF_SINGLE_TEST_POLICY § 1.4: send wire-level stop token to
         // wake the receiver out of recv. Bounded retry through transient
         // backpressure so the terminator always reaches the peer.
@@ -430,43 +375,8 @@ inline bool run_measurement_phase (void *sender_,
     *received_out_ = state_->active_received.load (std::memory_order_relaxed);
     if (*received_out_ == 0)
         return false;
-    if (capture_latency_) {
-        *latency_out_ = state_->latency.snapshot ();
-        return state_->latency.count () > 0;
-    }
-    *latency_out_ = latency_stats_t ();
+    *latency_out_ = state_->latency.snapshot ();
     return true;
-}
-
-template <typename StateT, typename SendStepFn, typename RecvHeaderFn, typename SendStopFn>
-inline bool run_active_phase (void *sender_,
-                              void *receiver_,
-                              std::vector<char> *payload_,
-                              StateT *state_,
-                              int duration_s_,
-                              int recv_timeout_ms_,
-                              const char *trace_label_,
-                              SendStepFn send_step_fn_,
-                              RecvHeaderFn recv_header_fn_,
-                              SendStopFn send_stop_fn_,
-                              unsigned long long *received_out_,
-                              latency_stats_t *latency_out_)
-{
-    latency_stats_t ignored_latency;
-    if (!run_measurement_phase (sender_, receiver_, payload_, state_, duration_s_, recv_timeout_ms_,
-                                trace_label_, 0, false, send_step_fn_, recv_header_fn_,
-                                send_stop_fn_, received_out_, &ignored_latency)) {
-        return false;
-    }
-
-    // Measure one-way latency after the saturated throughput interval. With a
-    // single message in flight, the receiver must confirm each delivery before
-    // the sender timestamps the next sample, so HWM queue depth is excluded.
-    unsigned long long latency_received = 0;
-    return run_measurement_phase (
-      sender_, receiver_, payload_, state_, latency_phase_duration_seconds (), recv_timeout_ms_,
-      trace_label_, latency_phase_max_in_flight (), true, send_step_fn_, recv_header_fn_,
-      send_stop_fn_, &latency_received, latency_out_);
 }
 
 } // namespace perf_single_one_way
