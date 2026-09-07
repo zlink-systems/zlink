@@ -196,6 +196,7 @@ spec gap = 코드 동작이 `core/doc/spec`·공개 헤더 주석·공개 계약
 | **Phase 2S 종료, idle runs 3** (`2529709db6`, G-0b, D-B158) | results/20260907_0459xx~0503xx | 289.7 / 352.8 = **0.821** | 267.8 / 325.2 = **0.823** | 32.6 / 41.4 = **0.787** | — | 0.3~0.9 |
 | **G-11b 채택, idle runs 3** (`5304885197`, measure-g11b3, D-B202; zmq 330.0 / 307.8 / 27.7 → zlink/zmq 0.90 / 0.90 / 1.22) | results/G-11b3-after-measure-20260907_180800 | 298.5 / 366.7 = **0.814** | 277.5 / 339.5 = **0.817** | 33.9 / 41.4 = **0.820** | — | 0.08 시작 |
 | **MP 게이트, runs 1** (`29f4d8b45c` 직전 staged, gate-mp; zmq 342.8 / 308.0 / 28.9 → zlink/zmq 0.88 / 0.89 / 1.17) | results/20260908_032921 | 301.8 / 386.8 = 0.780 | 275.2 / 340.2 = 0.809 | 33.8 / 40.5 = 0.834 | — | 0.51 시작 |
+| **0.17.2 idle runs 3** (`dca377aa5e`, measure-0172, D-B217; zmq 339.3 / 300.9 / 28.4 → zlink/zmq 0.86 / 0.91 / 1.22) | results/20260908_035802 | 290.7 / 370.2 = **0.785** | 272.9 / 334.7 = **0.815** | 34.7 / 41.5 = **0.836** | — | 1.94 시작(빌드 직후) |
 
 ### 7.2 perf/c 1024 B 경량 3셀 (tcp, Phase 0 기준 대비 비율)
 
@@ -237,6 +238,8 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 | multi STREAM (CCU 100) | 124.2 Kops/s | 0.40 | | | |
 
 **Phase 2G 기준(idle runs 3, D-B158·D-B159, HEAD `2529709db6`)** — Phase 0 multi 값은 부하 오염이라 폐기하고 이 값을 이후 판정 기준으로 쓴다: single PAIR 883.8 / PUBSUB 626.5 / DD 769.8 / DR 760.7 / RR 732.2 (DR_REQREP·RR_REQREP는 2026-09-07 정책 개정으로 single suite 제외 — `PERF_SINGLE_TEST_POLICY.md` §1); multi DD 905.1 / DR_SENDSEND 273.9 / RR_SENDSEND 242.5 / DR_REQREP 208.5 / RR_REQREP 170.1 / PUBSUB 1009.0 / STREAM 227.1. 전 size 절대 기준 파일: `perf_c_multi_linux_20260907_044847_phase2g-fullsize.txt`, `perf_c_single_linux_20260907_045258_phase2g-fullsize.txt`(이 둘은 인벤토리 job과 동시 측정이라 −5 % 판정 시 idle 재측정으로 확정).
+
+**0.17.2 idle 재측정(2026-09-08 04:06~04:50, `measure-0.17.2-idle-summary.md`, D-B217)** — 1024 B tcp, runs 3: single PAIR 753.8 / PUBSUB 670.9 / DD 772.9 / DR 775.1 / RR 733.1 (Phase 2G 대비 85.3 / 107.1 / 100.4 / 101.9 / 100.1 %); multi DD 908.7 / DR_SENDSEND 221.6 / RR_SENDSEND 181.2 / DR_REQREP 170.8 / RR_REQREP 137.5 / PUBSUB 848.8 / STREAM 210.2 (Phase 2G 대비 100.4 / 80.9 / 74.7 / 81.9 / 80.9 / 84.1 / 92.5 %). **판정 유보**: Phase 2G 기준(09-07 04:xx)은 머신 A의 러너 정합(측정 모델 변경, `87153dd4f3`·`d634417a37`·`d51c16b285` 등) 이전 값이라 같은 조건이 아니다. 같은 보고서의 전 size raw 대비는 single PAIR(0.91/0.68/0.78/0.92)를 제외하면 대부분 1.0 이상. 귀속은 attrib-0172(같은 러너, lib만 `5304885197`↔0.17.2 교대)로 확정한다.
 
 ### 7.5 D(spec gap) 후보 — 사용자 결정 대기
 

@@ -2254,3 +2254,9 @@ C의 같은 항목 `Core poller wait·reply 진행`은 **4,593.91 Ir(C 잔여의
 **부수 결론 — `tcp` SENDSEND 판정이 낡았다.** 러너가 바뀌었으므로 D-BP19와 같은 논리로 수정 전 측정은 참고값이다. RR은 92.45→**94.40%**로 재측정했고 DR도 다시 잰다. `MULTI_DEALER_DEALER`·`MULTI_PUBSUB`·REQREP 2종은 routed relay(`perf_multi_routed_relay.hpp`)와 echo client 변경 경로를 쓰지 않으므로 영향이 없고 기존 판정을 유지한다.
 
 **교훈**: 러너를 고친 뒤에는 **그 러너를 쓰는 모든 셀의 기존 판정을 낡은 것으로 보고 재측정 대상에 올린다.** 어느 셀이 영향받는지는 수정한 파일을 쓰는 pattern으로 판별한다.
+## D-B217 (2026-09-08 05:00, 머신 B) 0.17.2 idle 재측정 — with_stream 정상, perf/c single PAIR·multi 1024 B 하락 관찰 → 기준 불일치 vs 회귀 귀속 job
+
+**with_stream**(runs 3, 27/27 PASS): zlink 290.7/272.9/34.7 kops, zlink/asio 0.785/0.815/0.836, zlink/zmq 0.86/0.91/1.22 — G-11b idle 행 대비 −2.6/−1.7/+2.3 %(64 B는 빌드 직후 load 1.94 시작). Phase 0 대비 zlink 절대값 +8/+12/+14 %.
+**perf/c**(1024 B tcp, runs 3): single PAIR 85.3 %(Phase 2G 대비), 나머지 single 100~107 %; multi DD 100 %, 그 외 75~92 %. 전 size raw(Phase 2G runs 1) 대비는 single PAIR 0.91/0.68/0.78/0.92 외에는 대부분 ≥1.0.
+**유보 이유**: §7.4 Phase 2G 기준은 머신 A의 러너 정합(측정 모델 변경) 이전 값. 러너가 달라졌으므로 절대값 비교는 판정 근거가 못 된다(perf/c multi는 부하·모델 민감, D-B158). single PAIR 65536 B 0.68은 raw 비교에서도 낮아 회귀 후보로 남긴다.
+**조치**: attrib-0172(terra, 1.5 h) — 같은 러너 binary로 lib만 `5304885197`(MP 직전, G-11b 포함) ↔ 0.17.2를 교대 2회(single PAIR·DD 1024/65536 B, multi DR_REQREP·RR_SENDSEND 1024 B). 두 교대 모두 −5 % 이하면 MP 계열 회귀 후보로 0.17.3 최우선 항목, 아니면 기준 불일치로 §7.4 기준을 0.17.2 idle 값으로 갱신. 0.17.2 태그는 유지(게이트 hotpath·with_stream·ctest 기준은 충족).
