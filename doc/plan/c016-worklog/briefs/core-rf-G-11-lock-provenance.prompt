@@ -1,0 +1,7 @@
+job G-11 (opus, 분석·측정 전용, 소스 수정 금지, 커밋 금지, 상한 1.5 h, 포그라운드, 빌드는 worktree dev JOBS=4·ninja ≤2 `-x`, valgrind는 빌드 없을 때 flock): "메시지당 비경합 잠금 ~15쌍이 정말 느림의 원인인가, 그리고 thread-safe 계약을 지키면서 몇 개까지 줄일 수 있는가"에 답한다.
+배경: G-A(zlink 17.3 vs zmq 1.73 lock/msg), G-1 보고서(잠금별 표·zmq 1.73의 구조), S-2 §2(잠금 35개 표), D-B176(사용자 지적: 예전 thread-safe 버전도 빨랐다 → 잠금은 계약이 아니라 구현의 결과). **과거 버전 성능 측정은 하지 않는다.** 출처 확인은 `git log -S`/`git blame`로 코드 도입 시점만 본다.
+산출물(core-rf-G-11-lock-provenance.md):
+1. 표: 잠금(획득 지점) | 호출/msg(G-1 dev 측정 재사용 또는 재측정) | 지키는 불변식 | 도입 커밋·버전·서브시스템(credit/HWM, flow-state, lane, auto-HWM, completion, route shard, API 직렬화, monitor…) | 이 잠금이 **thread-safe 계약(04-thread-safety §4.1: 어떤 스레드든 소켓 사용 가능)** 때문인가, 아니면 서브시스템 상태 공유(앱↔I/O) 때문인가.
+2. libzmq thread-safe 소켓(client/server: `zmq::socket_base_t::send/recv`의 `sync` mutex 1개 + ypipe lock-free)이 어떻게 연산당 1쌍으로 thread-safe를 달성하는지 — 소스 bindings/c/bench/with_zmq/libzmq에서 인용.
+3. 설계 2안(계약 불변, 새 옵션 없음): (A) 공개 연산당 잠금 하나로 통합(API sync·command-owner·receive를 하나로; route shard·`_out_sync`를 그 아래로 흡수) — 어떤 불변식이 깨지는지, 잠금 순서·데드락 위험, I/O 스레드 쪽 접근을 어떻게 command 또는 원자로 바꾸는지. (B) 잠금은 두되 I/O 스레드 쪽 공유 상태(credit 회계·flow-state 발행·activation)를 원자 카운터/flush 경계 회계로 바꿔 앱↔I/O 잠금만 제거. 각 안의 예상 lock/msg·Ir/msg, 변경 반경(파일·행), 위험, 재확인할 스펙 절(04-thread-safety, 05-polling, 06-auto-hwm 회계 정의 — 회계 값·시점이 바뀌면 D).
+4. 결론 한 문단: "잠금 때문에 느리다"가 맞는지(수치), 계약 안에서 몇 쌍까지 줄일 수 있는지, 권장안과 job 분할.

@@ -39,7 +39,7 @@
 - 64 KiB에서는 zlink 서버 CPU가 228%로 asio(327%)보다 낮다. 여기서는 I/O 스레드가 놀고 있다는 뜻이므로 wake·flow control(credit)·write batching 쪽이 병목이다. `zlink_packet`이 zlink보다 15% 높은 것도 앱 쪽 프레임 재조립이 비용임을 보여 준다.
 - 벤치 서버(`stacks/zlink/test_scenario_stream_zlink.cpp`)는 poller → `zlink_recv_part` → 프레임 판정 → `zlink_send_part_rid` 에코 구조이며 앱 스레드가 별도다. asio 스택은 io_context 워커 안에서 read→write를 바로 잇는다. zlink는 구조상 I/O 스레드 ↔ 앱 스레드 핸드오프(ypipe + mailbox wake)가 한 번씩 더 있으므로 그 핸드오프를 **메시지마다가 아니라 묶음마다** 치르게 하는 것이 격차를 메우는 핵심 방향이다.
 
-목표(2026-09-07 개정): **구조가 같은 pull 모델인 zmq 대비 세 크기 모두 ≥ 1.0**이 1차 목표(idle G-0b 기준 0.91 / 0.98 / 1.27). asio(push, 핸드오프 없음) 대비는 참고 지표로만 기록한다. 남은 격차의 대부분은 thread-safe 소켓 계약이 요구하는 비경합 잠금 ~15쌍(1쌍 ≈ 처리량 1.5~2 %)이며, **이 계약은 설계 철학이므로 바꾸지 않는다**(사용자, 2026-09-07). 캠페인은 계약 안에서 지키는 것이 없는 잠금·중복 syscall·wake 단가만 줄인다.
+목표(2026-09-07 개정): **구조가 같은 pull 모델인 zmq 대비 세 크기 모두 ≥ 1.0**이 1차 목표(idle G-0b 기준 0.91 / 0.98 / 1.27). asio(push, 핸드오프 없음) 대비는 참고 지표로만 기록한다. 남은 격차의 대부분은 비경합 잠금 ~15쌍(1쌍 ≈ 처리량 1.5~2 %)이다. thread-safe 소켓 계약은 설계 철학이므로 바꾸지 않는다(사용자, 2026-09-07). 단 **그 계약이 요구하는 잠금은 연산당 1~2쌍**(libzmq thread-safe 소켓이 증거)이고 나머지는 credit·flow-state·route shard·3겹 API 직렬화가 각자 잠금을 든 구현 방식의 결과다(D-B176) — 계약 안에서 통합·무잠금화 대상(G-11).
 
 ### 1.2 STREAM 데이터 경로와 파일
 
