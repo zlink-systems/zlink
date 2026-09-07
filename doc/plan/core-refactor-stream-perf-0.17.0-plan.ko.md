@@ -246,7 +246,7 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 - [x] Phase 0: Release 빌드, with_stream 기준 표(§7.1), 경량 3셀 기준, hotpath `stream_tcp` 셀 커밋(`6f64e76b51`, D-B142 — harness가 I/O 스레드를 안 세던 결함도 수정)
 - [x] Phase 1: S-A 프로파일 표, S-B 경로 비용 표 → 원인별 job 목록(D-B140·D-B141). G-A(공통 경로 프로파일)는 Phase 2G 시작 시 수행
 - [x] Phase 2S(종료 2026-09-07 05:15, D-B158): 채택 S-4·S-10(`597f134d68`), S-2·S-9(`e1db6f1f72`), S-1(`baaa68d67b`), S-12(`73e6c54c60`), S-11(`2529709db6`); 기각 S-3·S-5(측정으로 반박). 축소셀 Ir/msg 11,096 → 9,474(−14.6 %), hotpath stream_tcp 15540 → 14623(−5.9 %), idle with_stream zlink 절대 +7.7/+10.2/+7.2 %, zlink/asio 0.835/0.768/0.775 → 0.821/0.823/0.787(목표 0.95 미달 — 남은 격차는 §7.5 D-c 핸드오프 구조와 앱 스레드 1개 관찰)
-- [ ] Phase 2G: G-0 idle 재기준 완료(D-B158·159), G-A 진행 중, G-후보 G-R1(single RR_REQREP −6 %), G-P1(multi PUBSUB latency)
+- [ ] Phase 2G: G-0 idle 재기준 완료(D-B158·159), G-A 완료(D-B166: zmq 대비 1.40×, mutex 17.3 vs 1.7/msg, clock_gettime 2/msg, 하네스 getenv 7 % 오염). 진행 G-5(하네스)·G-1(mutex 트래픽); 대기 G-2·G-10·G-3·G-4·G-6·G-7·G-8·G-9
 - [ ] Phase 2G: 스크린 셀 재측정 표, G-1 … (각 채택/기각, 커밋 해시, 패턴별 전 size 비율)
-- [ ] Phase 3: R1 stream · R2 raw/engine · R3 pipe · R4 socket_base · R5 request_reply · R6 session/registry · R7 api/core · R8 sockets 나머지 · R9 transports · R10 core 나머지 · R11 utils (인벤토리 → 적용, 커밋 해시)
+- [ ] Phase 3: 인벤토리 11/11 완료(D-B165). 적용 착지: R1+R2(`cb9139d16d`, −520/+198). 게이트 중: R3+R4. apply 완료·게이트 대기: R5-A, R6R8-A. apply 진행: R9-ABC, R7R11. 대기: R10-AB(R3 뒤). 보류(설계 job·D): pipe.cpp 개념별 분할(익명 helper 공유 헤더 선행), ws/wss 쌍둥이 병합, lb::sendpipe, route-binding cache(D), `oversize_admission_out_`(D 확인), registry `recursive_mutex_t` 필요성
 - [ ] Phase 4: 최종 표, hotpath 5셀 PASS, ctest 전체, 스펙 문구 정합, 종결 D-B1xx
