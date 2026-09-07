@@ -1,0 +1,13 @@
+너는 job review-ST-2(receive 소유권 프로토콜 수정의 차단 검증 리뷰)다. /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽는다. **읽기·리뷰 전용**(소스·스펙·테스트 수정, 빌드·실행, 커밋 금지). 상한 40분.
+
+대상: worktree `/home/hep7hep7/project/zlink-work/st1`의 미커밋 diff(+ untracked `core/tests/integration/test_stream_concurrent_pull_send.cpp`). 입력: 1차 리뷰 review-st1.md(B-1, B-2, W-1~W-4, S-1~S-4), 수정 보고서 core-rf-ST-2-report.md, ST-1 보고서, 스펙 11-synchronization-model.ko.md §3.1/§3.3/§3.4/§4/§5, 05-polling owner 절.
+
+검증 항목(근거 파일:행, 판정 해소/부분/미해소):
+1. **B-1 프로토콜**: `receive_owner` 값 집합(available/public/public_waiting/async/command)의 전이 표를 코드에서 재구성하고, "어느 순간에도 {public lease 보유자, sync 아래 async executor, command turn} 중 하나만 fq/pipe receive 상태를 만진다"는 불변식이 모든 진입자(`socket_base_msg.cpp` public recv, count-1 completion drain `socket_base_api.cpp:~1695`, `has_in()` `:~1039`, async executor 설치 `require_receive_sync_for_async_owner`, command turn)에서 성립하는지. 1차 리뷰의 5단계 순서(C async→P fallback 지연→C 해제→R lease→P mutex 진입)가 `enter_receive_exclusion()`의 mutex 획득 후 재검증으로 정말 차단되는지. "sync를 쥔 채 word==command면 내 thread"라는 추론이 중첩 count-1 drain 외의 경로에서 잘못 성립할 수 있는지(다른 thread가 sync를 잡은 뒤 word를 보는 순간과 command turn의 clear 순서).
+2. **W-2 대기**: `public → public_waiting` 표시와 `progress_cv` 대기가 lease 해제와 같은 `sync` 아래에서 짝을 이루는지(lost wake 없음), ctx term/close 중 종료 보장, public lease 보유자가 blocking wait(RCVTIMEO)로 들어갈 때 lease를 놓는지(§3.4 wait & re-take) — 놓지 않으면 command turn이 RCVTIMEO 동안 지연. 두 command owner 후보(다른 thread의 process_commands)가 동시에 `public_waiting`을 기다릴 때의 wake 공정성.
+3. **hot path**: uncontended public recv = CAS 1 + release RMW 1, 추가 분기만; `has_in()`이 lease+sync를 잡게 된 비용이 poller 경로(POLLIN 검사)에 미치는 영향 — 5셀 중 stream_tcp·router_router_tcp가 poller를 쓰면 회귀 후보인지 코드로 추정.
+4. **잔여 TSan 1건**(lock-free 분기의 `progress_epoch` 비원자 read): 실제로 lost wake가 불가능한지, 아니면 atomic 전환이 이번 patch에 포함돼야 하는지.
+5. **B-2 테스트**: Boost.Asio 이식 후에도 race를 결정적으로 관측하는지(수정 전 3/3 FAIL 근거), Windows 빌드 가능한 include·API만 쓰는지.
+6. 새로 생긴 문제(RAII 누락, lock 순서 역전, 예외 경계, 주석 불일치), 스펙 §3.1/§3.4 명료화 초안의 타당성.
+
+보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/review-st2.md (한국어; 항목별 판정 표, 신규 B/W/S, 마지막 줄 "차단 항목 수 / 채택 가능 여부"). 진행 파일 progress-review-st2.md.
