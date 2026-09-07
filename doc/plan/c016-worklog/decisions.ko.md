@@ -2323,3 +2323,14 @@ C의 같은 항목 `Core poller wait·reply 진행`은 **4,593.91 Ir(C 잔여의
 ## D-B225 (2026-09-08 08:05, 머신 B) 사용자 결정 — 투 트랙: 트랙 1(ST-3→게이트→0.17.3) 유지, 트랙 2 ALL-1(astra, worktree `all`)이 남은 수정 전부를 한 번에
 
 사용자: "너무 오래 걸려서 투 트랙으로 … 별도 워크트리에서 모든 수정사항 다 주고 한번에 다 수정하고 반영 … astra에게". 트랙 2 = receive 소유권 프로토콜 완결(A) + ws 왕복 비용(B) + G-11 2a/2b/2d(C) + backlog(D) + TSan debt 5(E), 상한 8 h, 검증 전부 포함, patch 미커밋. 트랙 1이 먼저 착지하면 트랙 2 patch를 rebase하는 후속 job. 빌드 ≤2 규칙으로 병행; WS-1 callgrind는 ninja 0 틈에만.
+
+## D-BP29 (2026-09-08 08:20, 머신 A) SENDSEND latency 간헐 폭증은 **C에서도 재현** — C++ 귀속을 정정하고 Core 보고서에 합친다
+`tls`·`ws`·`wss` SENDSEND 5개 셀의 latency 폭증을 C++ 경로로 귀속했었다(근거: 같은 셀에서 C 5-run 중앙값이 0.35~0.56 ms로 정상). **틀렸다.** 조사 job(astra/high, `log/2026-09-08-cpp-sendsend-latency.ko.md`)이 개별 run을 보니 C도 5회 중 2~3회 튄다 — `tls` RR 1024 B에서 C 0.392/77.774/0.306/**224.933**/25.689 ms. 중앙값이 스파이크를 가렸고, C++는 중앙값이 스파이크에 걸린 횟수가 많았을 뿐이다.
+
+**체류 위치**: server의 OS TCP 송신 queue. 정상 232 KB vs 이상 766.5 MB. C++ relay의 application pending 최대 1건, coroutine suspend 0회 — 브리프의 유력 후보(sender 매 건 suspend)는 기각됐다. Core socket 아래 OS/transport 경계 문제이며 `tcp`에서는 안 난다.
+
+**정정**: 5개 셀을 `보류(latency 간헐 이상)`에서 **`보류(C 기준 이상)`** 로 바꾼다. D-BP28의 `ws` 왕복 처리량 붕괴와 같은 계열(왕복·암호화/프레이밍 transport·server→client 방향)이므로 같은 Core 보고서 §9에 합쳤다. 기준선이 간헐적으로 튀는 동안 latency 비율은 판정 입력으로 쓸 수 없다 — D-B91이 bimodal 큐 깊이에 적용한 것과 같은 처리다.
+
+**교훈 두 가지.** (1) **중앙값으로 "정상"을 판단하지 말 것** — 간헐 현상은 개별 run을 봐야 보인다. 앞으로 "C 기준 이상" 판별은 개별 run 분포로 한다. (2) 조사 job이 `diag2` 실행이 외부 측정과 1초 차이로 겹친 것을 PID 시각으로 스스로 잡아 판정에서 뺐다 — idle 가드 lock(`63ec6187d9`)이 그 뒤에 들어갔다.
+
+**러너 수정 없음.** C++ 계측은 전부 제거·원복됐고(`bindings/cpp` diff 0), 요청한 검증 4항목은 "고칠 결함이 없다"로 미완료가 맞다.

@@ -70,3 +70,26 @@ bash bindings/c/perf/run_benchmarks_multi.sh --pattern MULTI_DEALER_ROUTER_SENDS
 ## 8. `wss`도 같다 (머신 A, 2026-09-08 07:45)
 
 `wss` REQREP 65536 B에서 C 기준선이 **23,988 ops/s**(tcp 63,265의 38%)로 `ws`(25,849)와 같은 수준이다. 왕복 latency 비율은 4096 B 30~258x, 65536 B 240~332x로 `ws`보다 더 크다. §1의 표에 `wss` 열을 추가하면 같은 곡선이다. **요청 범위는 `ws`·`wss` 둘 다**이며, TLS 유무와 무관하게 WebSocket 프레이밍 경로가 공통 원인일 가능성이 크다.
+
+---
+
+## 9. 같은 계열 — `tls`·`ws`·`wss` 왕복의 **간헐 latency 폭증도 C에서 재현된다** (머신 A, 2026-09-08 08:20)
+
+§1의 처리량 붕괴와 별도로, 같은 transport의 SENDSEND에서 mean latency가 run마다 100배 이상 튀는 현상이 있다. 처음엔 C 5-run **중앙값**이 정상(0.35~0.56 ms)이라 C++ 러너 문제로 봤으나, 개별 run을 보니 **C도 같은 빈도로 튄다.**
+
+`tls` `MULTI_ROUTER_ROUTER_SENDSEND` 1024 B, 5-run 안의 개별 mean latency(ms):
+
+| 실행 | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 |
+|---|---:|---:|---:|---:|---:|
+| C++ 원본 | 18.489 | **378.895** | 1.803 | 21.550 | 2.213 |
+| **C 원본** | 0.392 | **77.774** | 0.306 | **224.933** | 25.689 |
+
+**체류 위치는 server의 OS TCP 송신 queue다.** 같은 5-run에서 정상 실행의 최대 합계는 232,371 bytes, 이상 실행은 **766,533,530 bytes**다. C++ relay의 application pending은 최대 1건, coroutine suspend 0회로 러너 쪽 적체는 없다. server가 admission한 echo가 OS 송신 경로에서 빠져나가지 못하는 형태이며, Core socket 계층 아래 OS/transport 경계다.
+
+`tcp`에서는 5-run 측정 5회 모두 정상이다. `tls`·`ws`·`wss`에서만 나고, 발생 크기가 transport마다 다르다(`tls` 1024 B, `ws` 64/1024 B, `wss` 256 B).
+
+**요청 추가**: §7의 조사에 이 간헐 stall을 포함해 달라. 처리량 붕괴(§1)와 원인이 같은지가 핵심 질문이다 — 둘 다 왕복·암호화/프레이밍 transport·server→client 방향에서만 난다.
+
+머신 A는 이 5개 셀(`tls` RR, `ws` DR/RR, `wss` DR/RR SENDSEND)의 latency 판정을 `보류(C 기준 이상)`로 바꾼다. 기준선이 간헐적으로 튀는 동안 latency 비율은 판정 입력으로 쓸 수 없다.
+
+진단 기록: `doc/perf/perf/bindings-0.17.0/log/2026-09-08-cpp-sendsend-latency.ko.md`.
