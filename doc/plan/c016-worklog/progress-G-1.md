@@ -14,3 +14,6 @@
 - 01:02 변경 2건 적용: (1) deferred termination 큐 head를 atomic으로 두고 빈 큐 프로브를 잠금 밖으로,
   (2) refresh_application_hwm_if_drained의 planned==applied 조기반환을 ctx 전역 _sync 밖으로. 빌드 시작.
 - 01:40 after 측정 15.122 lock/msg(직접 귀속 −1.503), ctest 8회(7회 clean, 1회 미규명 실패), 보고서 작성 완료. 상한 도달로 TSan·with_stream 미실행.
+- 02:50 검증 4항목 완료: TSan delta 0(before/after 각 12건, 동일), lost-wake until-fail:10 pass,
+  57-suite until-fail:10 pass(10회 연속 clean, 1차 실패 재현 안 됨), with_stream 64/1024/64K = 284.15/272.33/25.80 (asio 357.56/323.38/31.81), mismatch 0.
+- stash 사고 1건: G-2 stash를 잘못 pop → 5e56ede765를 git stash store로 복구, 내 워크트리 원복. 이후 stash 미사용.
