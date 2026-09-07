@@ -1865,3 +1865,6 @@ astra 리뷰(`review-sync-spec-astra.md`, 코드 정합 63건·타 스펙 14건�
 
 ## D-B193 (2026-09-07 15:35, 머신 B) G-7 완료(부분) — eventfd 왕복 반감, ctxsw 불변; 게이트 g7 투입
 G-7(codex sol/high, `core-rf-G-7-summary.md`): executor mailbox가 public FD 사용자가 없을 때 asio post만 쓰도록 → eventfd write/read native 0.713/0.864 → **0.330/0.501**/msg(callgrind 0.460/0.795 → 0.214/0.546), wake channel 규칙 2→1, 새 상태·API 없음. voluntary ctxsw 0.607 → 0.640(불변 — 남은 것은 실제 asio I/O→app 핸드오프, G-11b 소유 경계는 미수정). hotpath 5셀 PASS(stream_tcp 14378 → 14185 −1.3 %, dealer_router_reqrep +0.5 %, 나머지 flat). lost-wake 6종 until-fail:20(120회), 관련 38개 ×5, TSan delta 0(GCC 계측). 05-polling level 문장·README wake 조건·D-079·D-099·S-12 재확인. 게이트 g7(codex terra/medium) 투입. G-11b-2 진행 중.
+
+## D-B194 (2026-09-07 16:00, 머신 B) G-7 채택 커밋; G-11b-2 진행 중
+게이트 g7(codex terra/medium, `gate-g7-summary.md`): ctest 208/208, 56 suite ×5, lost-wake until-fail:20 + two_poller_wake/wake_invariants ×20, close ×50, `stream|pipe` 23/23, mirror 12/12, hotpath 5셀 PASS, **with_stream(runs 1, 다른 job 빌드 중) zlink 315.8 / 293.2 / 38.4 kops** = Phase 0 대비 +17 / +21 / +26 % — idle runs 3 재기준 때 확정. 남은 2S/2G 항목: G-11b-2(진행) → 2a·2b·2d → idle 재기준 → Phase 4.
