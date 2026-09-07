@@ -2288,3 +2288,25 @@ C의 같은 항목 `Core poller wait·reply 진행`은 **4,593.91 Ir(C 잔여의
 
 **ST-2**(`core-rf-ST-2-report.md`, Claude): `receive_owner` 단어가 모든 receive 상태 접근의 단일 게이트 — `command` 전용 값, `async`는 다시 "설치된 executor, 모두 sync" 하나의 뜻. lock-free CAS 실패 진입자는 `sync`를 잡은 뒤 `enter_receive_exclusion()`에서 단어 재검증(`async`/`command`일 때만 mutex-only, 아니면 sync 놓고 lease 재취득) → 1차 리뷰의 5단계 순서 차단. command turn은 sync 먼저 → word clear → sync 해제 순서라 "sync 보유 중 word==command"는 자기 thread(중첩 count-1 drain 무교착). 대기: yield spin 제거, `public → public_waiting` 표시 후 `progress_cv` 대기, lease 해제가 깨움(같은 sync 아래), `_ctx_terminated` 관찰. `has_in()`도 lease+sync. 테스트 Boost.Asio 이식(수정 전 3/3 hang, 후 20/20). hot path: take CAS 1, release RMW 1 + 미실행 분기. 검증: 전체 ctest 210/210, 관련 95×3, wake-invariant 20회, TSan suppression 없이 신규 0(잔여: mailbox 기존 8 + lock-free 분기 `progress_epoch` 비원자 read 1 — 별도 항목), ASan 통과, 공개 API diff 없음. ST-2가 W-1 첫 시도의 회귀(lease만으로 pump 진행 시 notify가 sync 밖)를 TSan으로 잡아 고침.
 **결정**: 프로토콜 변경이라 `review-st2`(astra, 40 min, 차단 검증 + 전이 표·hot path·has_in poller 비용·잔여 TSan 판정) → 게이트(전체 ctest, ASan, TSan suppression 없이, hotpath 5셀, with_stream 1회) → 커밋. `progress_epoch` atomic 전환은 리뷰 판정에 따라 포함/이월.
+
+## D-BP28 (2026-09-08 07:50, 머신 A) **`ws` 왕복 패턴의 크기 비례 붕괴는 Core/transport 문제** — 러너 무관 확인, 머신 B에 보고
+사용자가 "C 러너 이상이면 Core 이슈일 수도 있다"고 지적해 확인했다. 결론: **맞다.**
+
+**판별 방법**: 같은 Core·호스트에서 `ws`/`tcp` 처리량 비율을 단방향(`MULTI_DEALER_DEALER`)과 왕복(`MULTI_DEALER_ROUTER_SENDSEND`)으로 나누고, **서로 독립적으로 구현된 C와 C++ 러너**에서 각각 계산했다.
+
+| ws/tcp | 64 B | 1024 B | 4096 B | 65536 B |
+|---|---:|---:|---:|---:|
+| 단방향 C | 1.009 | 1.045 | 0.970 | **1.045** |
+| 단방향 C++ | 1.018 | 1.048 | 0.934 | **0.936** |
+| 왕복 C | 0.927 | 0.781 | 0.652 | **0.362** |
+| 왕복 C++ | 0.909 | 0.590 | 0.612 | **0.401** |
+
+단방향은 전 크기·두 언어에서 페널티가 없다. 왕복만 크기에 비례해 무너지고, **두 러너가 같은 곡선을 그린다.** 러너 원인이면 독립 구현 둘이 일치할 이유가 없다. `ws`가 대형 payload를 못 다루는 것도 아니다 — 65536 B 단방향은 tcp보다 빠르다.
+
+**부수 증상**: `ws` REQREP 65536 B에서 C 기준선이 처리량 25,849 ops/s·latency 0.086 ms라는 비정상 동작점에 갇힌다(tcp 63,265·0.808 ms). 같은 셀 C++는 34,999·14.5 ms로 처리량이 더 높다. 그래서 C++가 135%로 보이고 aggregate가 99.50%로 부풀었다 — 판정에 쓰지 않았다(`398096d0f8`).
+
+**전례**: 2026-09-05 D-B89가 같은 성격을 4096 B에서 C 러너 제출 턴 수정으로 완화했다. 그때는 러너로 보상한 셈이고, 65536 B에 남은 것이 이번에 transport 계층 문제로 드러났다.
+
+**조치**: `doc/bug/perf/2026-09-08-core-ws-roundtrip-size-penalty.ko.md`로 머신 B에 보고(`2a1614baa1`). 요청은 (1) 왕복 경로에서 크기 비례 비용의 위치 특정, (2) 단방향/왕복 처리량 비가 transport에 따라 크게 달라지지 않는지 확인하는 회귀 테스트, (3) 그때까지 `ws`·`wss` 왕복 셀은 `보류(C 기준 이상)`.
+
+**교훈**: 기준선 러너가 이상하면 러너를 먼저 의심하기 쉬운데, **독립 구현 둘이 같은 곡선을 그리면 그 아래 계층이다.** 단방향/왕복 분리와 C·C++ 교차 대조가 30분 만에 이를 갈랐다 — 앞으로 "C 기준 이상" 셀은 이 두 축으로 먼저 판별한다.
