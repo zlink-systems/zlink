@@ -1,0 +1,12 @@
+너는 job MP-4(동시 multipart — single-after-multipart 비용 제거)다. 먼저 /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽고 따른다(JOBS=4, `pgrep -c -x ninja` ≤1, PERF_LOCK, 포그라운드, stash·커밋·스펙 수정 금지). 상한 1.5시간. worktree `~/project/zlink-work/mp2`(MP-3 patch 미커밋)를 그대로 쓴다. 시작 전 `git -C ~/project/zlink-work/mp2 diff HEAD > /tmp/claude-1000/-home-hep7hep7-project-zlink/a5b31a9a-1a3b-4bcb-a080-53988ed569cb/scratchpad/mp3-before-mp4.patch`.
+
+문제: core-rf-MP-3-report.md §성능 — "같은 PAIR socket에서 2-part 100회 후 single 100,000회" dev 셀이 main 22.49 ms → MP-3 27.82 ms(+23.7 %, send당 약 +53 ns). MP-3 §남은 위험은 helper state가 있는 socket의 single SEND가 active caller 판정을 위해 helper mutex를 매번 얻는다고 적었고, W06 수정은 API 실행 동안 local strong identity(shared_ptr 복사 = atomic RMW 2회/호출)를 보유한다.
+
+수정 방향(둘 다 적용, 감독자 결정 — 스펙 11-synchronization-model §2 C3 발행 규칙 적용):
+1. **helper의 활성 sequence 수를 atomic counter로 C3 발행**한다. 쓰기(slot 생성/제거/close 회수)는 helper mutex 아래에서만, 읽기는 lock-free. single FINAL(열린 sequence가 없는 호출)의 fast path: 자기 thread가 연 sequence는 자기 자신이 mutex 아래에서 counter를 올렸으므로, 같은 thread가 relaxed load로 0을 보면 자기 sequence가 없음이 확정된다(다른 thread의 sequence는 내 single FINAL과 무관; 만료 회수는 죽은 thread의 sequence만 다룬다). counter가 0이면 helper mutex·TLS identity 조회 없이 기존 single 경로로 간다. 이것은 두 번째 active map이 아니라 map 크기의 C3 발행이며, 단일 사실 소유자는 여전히 helper mutex 아래의 map이다. 근거를 주석에 한 문장으로.
+2. **local strong identity 복사 제거**: 살아 있는 thread의 TLS가 이미 shared_ptr을 소유하므로 API 호출 동안은 TLS 소유 객체를 참조로 쓴다(복사 없음). W06의 "실행 중 API를 만료 scan이 회수하지 않는다" 보장은 TLS 소유권으로 충분한지 확인하고, TLS destructor 이후 호출은 MP-3 §W06 제안대로 지원 범위 밖으로 둔다(회수 scan은 `weak_ptr::expired`만 본다). 불가능하면 이유를 보고서에 쓰고 1만 적용.
+3. 첫 MORE의 slot 생성 경로와 FINAL의 slot 제거 경로에서 helper mutex는 각 1회(SEND 2-part 총 2회)인지 재확인.
+
+검증: dev build; 관련 정규식(`part|multipart|send|request|reply|router|dealer|pair|flow|hwm|close|wake`) until-fail:3; MP-3의 ASan 6 target과 TSan 신규 8 target 재실행(기존 빌드 트리 재사용); release lib 후 hotpath 5셀 1회; MP-3과 같은 방법·같은 runner binary로 dev 셀 2개(single-after-multipart, 4 thread × 2-part) 를 main / MP-3 patch(`mp3-before-mp4.patch`, 별도 빌드 불필요하면 MP-3 보고서 값 인용) / MP-4 로 표에. 목표: single-after-multipart가 main 대비 ±5 % 이내. `git diff --stat -- core/include core/src/libzlink.vers` 비어 있음.
+
+보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/core-rf-MP-4-report.md (한국어, 표). 진행 파일 progress-MP-4.md(3분마다). patch는 미커밋으로.
