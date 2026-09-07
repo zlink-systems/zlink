@@ -1391,13 +1391,13 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 0 | 감독자 결정 확보 — Single REQREP 제외(D-BP3), Single gate 제외(D-BP2), Go D-B123 대체(D-BP3) | 완료 |
 | 1 | 측정 조건 통일 — server auto-HWM 보고 시점, monitor HWM report key, `default_stream_clients`, Effective Options key, `select_transports()`, C++ stale 검사, Go auto-HWM recalc 누락, .NET `--runs`·`--pin-cpu` 전달 누락 | 완료 `87153dd4f3` — C↔C++ Effective Options 완전 일치 검증 |
 | 2 | 정책 문서 개정 — Single에서 REQREP 제외, 시간원 monotonic 고정(`sent_ts_ns` 표기 정정), active 유효 메시지 규칙, 가중 분위수 보간, 1ms 재시도 예외 | 완료 `506086e7cd` |
-| 3 | C 러너를 정책에 맞춤 — 별도 latency 단계 제거, one-way 하드코딩 `max_in_flight=1` 제거, active deadline 필터, wire 길이 집계 제외, Single REQREP 제거, 가중 분위수 보간, matched client 빌드 파손 수정 | 완료 `5470e9314f`(푸시 대기) |
+| 3 | C 러너를 정책에 맞춤 — 별도 latency 단계 제거, one-way 하드코딩 `max_in_flight=1` 제거, active deadline 필터, wire 길이 집계 제외, 가중 분위수 보간, matched client 빌드 파손 수정. REQREP은 D-BP6으로 복원·정합 | 완료 `522df6d57e`·`074d2a5964` |
 | 4 | Multi 종료 protocol 정합 — `CLIENT_DONE`/`STOP` 대기 없이 socket을 닫는 6개 binding, Java의 wire stop token, Node의 비표준 barrier, Rust·Python PUBSUB의 `CLIENT_DONE` 누락 | 완료 `d634417a37` (7개 binding) |
 | 5 | Multi 부하 수준 정합 — socket당 in-flight 1인 러너를 비동기 연속 제출로 | 부분 완료 `d634417a37` — C++·Java REQREP과 Python SENDSEND 전환, 미완료 상한 `PERF_MULTI_REQREP_MAX_OUTSTANDING`=64. 잔여: Go REQREP 재구성, .NET·Node·Rust·Python 상한 적용 |
-| 6 | Single 러너 정책 정합 — 전용 OS thread + synchronous API, 언어별 금지 조항, REQREP 연속 제출 | C 완료 `074d2a5964`(REQREP 복원 + 단일 phase, 774.9k·849.1k ops/s). 7개 binding 대기 |
-| 6b | multi metric header 시간원 — **C만 monotonic**. C++ `system_clock`, Python `time.time_ns()`, .NET Stopwatch를 `DateTime.UtcNow`에 고정. 이 호스트 wall clock ±5초 점프(D-095)로 latency 오염 | 대기 (우선) |
-| 7 | Core 0.17.1 artifact 재고정 + 환경 manifest 재작성 | 진행 중 — 버전 3곳 0.17.1 일치 확인, Release+LTO 빌드 중 |
-| 8 | 측정 — C++부터 pattern·transport 단위 paired | 대기 |
+| 6 | Single 러너 정책 정합 — 전용 OS thread + synchronous API, 언어별 금지 조항, REQREP 연속 제출 | C·C++·.NET·Java·Node 완료. Go·Rust·Python 진행 중(D-BP11) |
+| 6b | 시간원 monotonic + 메시지당 `getenv` 캐시 + 미완료 상한 + 종료 protocol | C·C++·.NET·Java·Node 완료. Go·Rust·Python 진행 중(D-BP11) |
+| 7 | Core 0.17.1 artifact 고정 + 환경 manifest | 완료 — **저장소 밖 고정 prefix** `~/.cache/zlink/core-pinned/0.17.1`(태그 `core/v0.17.1` 커밋 `4cd03b9173`, Build ID `101bdb24…`). 모든 러너는 `ZLINK_CORE_SOURCE=release` + `ZLINK_CORE_PACKAGE_PREFIX`로 실행한다. 머신 B의 Core 변경과 분리(D-BP9) |
+| 8 | 측정 — C++부터 pattern·transport 단위 paired | 진행 중 — `tcp` `MULTI_DEALER_DEALER` **통과(95.59%)** |
 
 ### 10.3 언어 진행 상태
 
