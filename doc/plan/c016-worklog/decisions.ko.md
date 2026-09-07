@@ -1938,3 +1938,8 @@ Go REQREP 러너 정합 중 드러났고, **감독자가 최소 재현 프로그
 **결과**(`core-rf-G-11b3-summary.md`): 리뷰 수정 3건 반영(seqlock reader 표준 순서로 UB 제거, `_inbound_ledger_sequence`로 local read pair를 같은 coherent snapshot에 포함, `_out_active` CAS/store 범위 서술 정정). suite 105개 ×5 = 525/525, lost-wake 100/100, TSan signature delta 0, hotpath 5/5 PASS(stream_tcp 0.976, router_router_tcp 0.980), stream_tcp 셀 mutex 24.05→21.78/msg, Ir −0.74 %.
 **with_stream 3회**: 1024 B/64 KiB에서 zlink/asio 비율이 pristine 대비 −12.9 %/−16.6 %. 그러나 최종 측정의 asio 절대값이 366→195 kops로 절반, system CPU 37→52~61 %로 MP-1/MP-2 job과 겹친 부하 오염이 명백하다(pristine 측정은 MP job 시작 전). 이 수치로는 patch 귀속을 판정하지 않는다.
 **결정**: 정확성은 채택 기준 충족. 게이트 `gate-g11b3`(terra/high)를 띄우되 hotpath·성능은 ninja 없음 + load<1.5 조건에서만 실행하고 with_stream은 runs 3·3 stack으로 pristine 값과 나란히 비교한다. 게이트의 idle 비율이 pristine 대비 −5 % 이내면 채택, 아니면 원인 분석(locked RMW cycle) 후속.
+
+## D-B200 (2026-09-07 17:40, 머신 B) G-11b-3 게이트 — 정확성 통과, with_stream idle 비교는 MP-2 종료 뒤 측정 job으로
+
+**게이트**(`gate-g11b3-summary.md`): 충돌 없이 적용(3 파일, staged), 공개 인터페이스 diff 없음·mirror 12개 일치, release·dev 빌드 성공, 전체 ctest 207/208(유일한 실패는 hotpath_gate가 reference보다 6~27 % 빨라 guard가 FAIL 표기한 것), 105개 suite ×5 전부 통과, lost-wake 20회 ×2 세트 통과, close-release 50/50, TSan signature 전후 차이 0, release hotpath 5셀 PASS. with_stream 3회·perf/c 3셀은 게이트 시간 안에 못 돌렸다.
+**결정**: G-11b-3 patch는 main에 staged 상태로 유지하고 커밋은 with_stream idle 비교 뒤에 한다(D-B199 기준: pristine 대비 −5 % 이내). MP-2가 TSan 빌드·테스트 중이라 지금 측정하면 오염되므로, MP-2 종료 뒤 측정 job(with_stream zlink/asio/zmq ×3, pristine 디렉터리와 비교; hotpath reference 갱신 여부 판단)을 돌린다. 1회차 게이트는 감독자 rebase 처리와 겹쳐 `git pull --rebase`가 untracked 충돌로 멈춘 것이었고 2회차에서 정상 수행했다(교훈: 게이트 실행 중 감독자는 main에서 rebase하지 않는다).
