@@ -241,7 +241,8 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 | D-d | S-B | 06-auto-hwm 스냅샷 정의: credit published store를 경계에서만 | 소 | 대기 |
 | D-e | S-11 | 04-thread-safety 소유권: 공개 receive lease가 command owner를 배타하도록 할지(`receive_once_guarded`·fq active partition의 TSan race). 계약 문장 변경이 아니라 소유 규칙 결정 + 성능 예산 | 정확성(잠재 race 제거), 성능은 −일 수 있음 | 대기 |
 | D-f | R2 | 08-stream "런타임 기본값": `ZLINK_ASIO_STREAM_GATHER_THRESHOLD`·`..._TINY_GATHER_THRESHOLD`·`..._DISABLE_GATHER` env가 S-4·R2 이후 어떤 동작에도 영향 없음(STREAM raw 엔진은 gather 불가). 접근자·문서 삭제는 스펙 문장 변경 | 구조(죽은 knob 3개 제거) | 대기 |
-| **D-g** | G-1·G-A | 04-thread-safety §4.1(다중 스레드 소켓 계약): zlink 메시지당 잠금 15~17개 vs zmq 1.7의 차이는 계약의 결과. "소켓을 한 스레드가 전용으로 쓰는 경우"에 소켓 레벨 잠금(`_out_sync`·receive/command-owner/API sync·route shard)을 생략하는 규칙을 스펙에 둘지 — 새 옵션 없이 가능한지(예: 첫 호출 스레드 고정 후 다른 스레드 접근 시 EBUSY/NOT_SUPPORTED 같은 기존 결과값으로) 포함해 결정 필요. 이것이 asio·zmq 동률로 가는 유일한 남은 경로 | STREAM 잠금 ~1,000 Ir/msg + 핸드오프 단가, 예상 +10~15 % | 대기 |
+| **D-g1** | G-1·G-A | 단일 앱 스레드 전용 소켓 감지 — 첫 공개 호출의 tid 기록 + 외부 스레드 첫 접근 시 잠금 획득·`shared` 플래그·in-flight admission 0 대기(S-12 장치) 뒤 영구 잠금 경로(단방향 전이, biased-locking 모델). 호출자 계약 불변(다중 스레드 사용 유지). 생략 가능한 것은 **앱 스레드 간** 잠금 3~4개(API sync, receive lease, command-owner 소유권)뿐 | +3~5 % | 대기 |
+| **D-g2** | G-1 | 02-threading-model·04-thread-safety·06-auto-hwm: 남은 잠금 대부분은 **앱 ↔ I/O 스레드**(`_out_sync` credit/HWM 회계, route shard vs pipe 종료, receive partition activation). zmq처럼 "I/O 스레드는 소켓 상태를 직접 쓰지 않고 command로만 전달"하는 규칙으로 바꿔야 제거됨 — auto-HWM 회계 소유자 이동을 포함하는 설계 작업, 캠페인 범위 밖. asio·zmq 동률은 여기서만 나온다 | +10 % 이상 | 대기 |
 | 관찰 | S-A | 64 KiB에서 zlink 서버 앱 스레드 1개가 93 % 포화(I/O 스레드 45 % idle). 벤치 서버 구조(앱 스레드 1개) 문제이며 Core 계약과 무관 — asio 스택은 io 워커 8개에서 read→write 직결 | — | 기록 |
 
 ## 7.6 머신 A(bindings 성능 작업)와의 조율
