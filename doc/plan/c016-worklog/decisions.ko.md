@@ -2319,3 +2319,7 @@ C의 같은 항목 `Core poller wait·reply 진행`은 **4,593.91 Ir(C 잔여의
 
 **보고**(`doc/bug/perf/2026-09-08-core-ws-roundtrip-size-penalty.ko.md`): ws/tcp 처리량 비가 단방향은 전 크기 0.93~1.05인데 왕복은 64 B 0.93 → 65536 B 0.36(C·C++ 독립 러너 동일 곡선 → Core/transport). REQREP 65536 B에서 C 러너 25.8k ops/s·0.086 ms(파이프라인 미충전). 요청: 비용 위치 특정, 회귀 테스트(단방향/왕복 비가 transport에 따라 크게 달라지지 않음), 그때까지 ws/wss 왕복 셀 보류.
 **결정**: WS-1(codex sol/high, 2 h, 분석 전용, callgrind Ir 기반·ninja 0일 때만) — 왕복 ws 경로에서 payload 비례 비용(masking 재수행, frame 헤더/조각화, 메시지당 flush·write, 버퍼 재할당)을 함수:행으로 특정하고 수정 방향을 제안. 수정 규모가 작으면 0.17.3, 아니면 0.17.4. A는 ws/wss 왕복 셀을 보류 유지.
+
+## D-B225 (2026-09-08 08:05, 머신 B) 사용자 결정 — 투 트랙: 트랙 1(ST-3→게이트→0.17.3) 유지, 트랙 2 ALL-1(astra, worktree `all`)이 남은 수정 전부를 한 번에
+
+사용자: "너무 오래 걸려서 투 트랙으로 … 별도 워크트리에서 모든 수정사항 다 주고 한번에 다 수정하고 반영 … astra에게". 트랙 2 = receive 소유권 프로토콜 완결(A) + ws 왕복 비용(B) + G-11 2a/2b/2d(C) + backlog(D) + TSan debt 5(E), 상한 8 h, 검증 전부 포함, patch 미커밋. 트랙 1이 먼저 착지하면 트랙 2 patch를 rebase하는 후속 job. 빌드 ≤2 규칙으로 병행; WS-1 callgrind는 ninja 0 틈에만.
