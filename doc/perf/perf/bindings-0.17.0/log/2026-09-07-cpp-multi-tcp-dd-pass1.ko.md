@@ -371,3 +371,50 @@ REQUEST context가 종전대로 entry 자신이라 동작이 같다는 코드 �
    `bindings/cpp/tests/contract/**` 2개 파일이다. 같은 작업 tree에 다른 작업의 미커밋 변경
    (`bindings/cpp/perf/**`, `bindings/dotnet/**`, `bindings/java/**`, `bindings/node/**`,
    `doc/plan/**`, `framework/**`)이 섞여 있으므로 커밋 시 경로를 골라야 한다.
+
+---
+
+## 7. §7.4 14단계 검토 (통과 확정 뒤, 감독자)
+
+계획서 §7.4 14단계는 "aggregate 평균이 이미 목표를 만족한 대상도 성능 hot path와 POSDDD
+리팩토링 요소를 한 번 검토하고, 후보가 없으면 no-go 근거를 기록한다. 이 검토는 기준 통과를
+이유로 생략하지 않는다"고 요구한다. `tcp` `MULTI_DEALER_DEALER`가 고정 artifact에서
+aggregate 95.59%로 통과한 뒤 수행한 검토다.
+
+### 7.1 §3의 후보 목록 재확인
+
+§3이 10개 후보를 계약 검토와 함께 판정했고, 그 전에 `BINDINGS_OPTIMIZATION_GUIDE.ko.md` §4와
+D-B121~D-B130, 2026-09-05 pass 1·2의 no-go 목록을 먼저 대조해 중복 제안을 배제했다. 채택 1건
+외 9건의 기각 사유는 공개 ABI, ownership·수명 계약, ABA, 측정 의미, 그리고 §5 금지 항목으로
+모두 계약에 근거한다. **새로 추가할 계약 보존 후보는 없다.**
+
+### 7.2 후보 9(러너 `getenv`)의 결과 — 측정으로 확인됨
+
+§3의 후보 9는 "러너 변경이라 이 pass의 범위 밖"으로 미뤄졌다. 이후 러너 정합 작업에서
+`measurement_part_count()`를 C 기준(`perf_zlink_part_helpers.hpp:13-24`)과 같은 함수 지역
+static 캐시로 바꿨고, 두 측정이 그 전후를 가른다.
+
+| 64B | 시점 | C 대비 |
+|-----|------|--------|
+| `p2cpp` after (getenv 캐시 전) | 11:21 | 78.3% |
+| `p3pin` (getenv 캐시 후, 고정 artifact) | 12:26 | **83.4%** |
+
+**+5.1 %p**로, §3.1이 계산한 "64B에서 C++ 명령의 10.6%, 메시지당 1,253 Ir" 감소와 방향과 크기가
+맞는다. 즉 64B가 개별 최소 85%에 못 미치던 잔여분의 상당 부분은 라이브러리가 아니라 하네스
+비용이었고 이미 제거됐다. 남은 것은 메시지당 고정 비용이며, §3의 후보 검토에서 계약을 유지한
+채 더 줄일 수 있는 항목은 나오지 않았다.
+
+### 7.3 POSDDD 재확인
+
+채택한 변경은 hot path에서 특수 경우를 **줄인다** — 이전에는 backpressure가 0.03%뿐인데도 모든
+send가 completion bundle 할당·waiter map 등록 경로를 지났고, 지금은 거절된 send만 그 경로에
+들어간다. 공개 헤더 diff 0줄이고 새 helper나 pass-through 클래스를 만들지 않았으며, Core가
+기록하는 completion context를 entry 주소에서 entry가 소유한 operation state 주소로 옮겨 등록과
+제출의 선후 의존(chicken-and-egg)을 없앴다. 호출자가 알아야 할 설정이나 실행 순서는 늘지 않았다.
+새 위험 신호는 확인되지 않았다.
+
+### 7.4 판정
+
+`tcp` `MULTI_DEALER_DEALER` — **통과(95.59%)**. 추가 채택 후보 없음. 개별 최소 85% 미달은
+64B(83.4%) 하나이며 outlier로 기록한다. 65536B 이봉 거동(§2.5)은 after에서 179~182k로 안정됐고
+원인은 미규명 상태로 남긴다.
