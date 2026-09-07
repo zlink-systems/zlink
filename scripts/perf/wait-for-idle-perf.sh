@@ -14,11 +14,15 @@ max_wait="${1:-1800}"
 interval=10
 waited=0
 
-# perf 바이너리와 공식 러너 스크립트. 자기 자신(이 스크립트)은 제외한다.
-pattern='(perf_multi|perf_single|run_benchmarks(_multi)?\.(sh|ps1)|Zlink\.BindingBench)'
+# 실제 perf 프로세스만 센다. `pgrep -f`는 명령줄 전체를 보므로, 이 패턴을 인자로 들고 있는
+# 셸(감시 스크립트, 이 스크립트 자신, 에디터의 grep 등)까지 잡힌다. 그래서 (1) 실행 파일
+# 경로나 러너가 실제로 붙이는 인자로 좁히고, (2) 셸 프로세스를 명시적으로 걸러낸다.
+pattern='(/perf/build/.*(perf_multi|perf_single)|(perf_multi|perf_single)[^|]* --role |run_benchmarks(_multi)?\.sh .*--pattern|Zlink\.BindingBench[A-Za-z.]*\.dll)'
 
 while :; do
-  running="$(pgrep -af "${pattern}" 2>/dev/null | grep -v "wait-for-idle-perf" || true)"
+  running="$(pgrep -af "${pattern}" 2>/dev/null \
+    | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' \
+    | grep -v 'wait-for-idle-perf' || true)"
   [ -z "${running}" ] && break
   if [ "${waited}" -ge "${max_wait}" ]; then
     echo "perf가 ${max_wait}초 동안 idle이 되지 않았다:" >&2
