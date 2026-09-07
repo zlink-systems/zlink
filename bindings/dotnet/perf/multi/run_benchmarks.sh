@@ -575,7 +575,9 @@ effective_clients_for_transport() {
 pattern_uses_control_pipe() {
   local pattern="${1:-}"
   case "${pattern}" in
-    MULTI_DEALER_DEALER|MULTI_PUBSUB|MULTI_STREAM)
+    # PERF_MULTI_TEST_POLICY.md:380,383 - the request/reply server shuts down
+    # on the runner stdin STOP, so it needs a control pipe like the C server.
+    MULTI_DEALER_DEALER|MULTI_PUBSUB|MULTI_STREAM|MULTI_DEALER_ROUTER_REQREP|MULTI_ROUTER_ROUTER_REQREP)
       return 0
       ;;
     *)
@@ -628,6 +630,31 @@ while time.time() < deadline:
     time.sleep(0.05)
 raise SystemExit(1)
 PY
+}
+
+wait_for_client_done_line() {
+  local log_path="$1"
+  local expected_size="$2"
+  local timeout_ms="${3:-${RESULT_TIMEOUT_SECONDS}000}"
+  python3 - "${log_path}" "${expected_size}" "${timeout_ms}" <<'PYDONE'
+import pathlib
+import sys
+import time
+
+path = pathlib.Path(sys.argv[1])
+expected = "CLIENT_DONE,{}".format(sys.argv[2].strip())
+deadline = time.time() + max(0, int(sys.argv[3])) / 1000.0
+while time.time() < deadline:
+    if path.exists():
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for raw in text.splitlines():
+            if raw.strip() == expected:
+                raise SystemExit(0)
+        if "multi_client_error:" in text:
+            raise SystemExit(1)
+    time.sleep(0.05)
+raise SystemExit(1)
+PYDONE
 }
 
 wait_for_exact_control_token() {
@@ -1935,6 +1962,72 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
             continue
           fi
           exec {server_control_fd}>&-
+        elif [[ "${pattern}" == "MULTI_DEALER_ROUTER_REQREP" \
+             || "${pattern}" == "MULTI_ROUTER_ROUTER_REQREP" ]]; then
+          # PERF_MULTI_TEST_POLICY.md:379-381 / PERF_POLICY.md:483-486:
+          # CLIENT_DONE ends measurement, the runner stops the server and
+          # confirms its exit, and only then sends STOP to the client so the
+          # queued replies never lose their completion target.
+          # C reference: bindings/c/perf/run_comparison.py:2653-2658.
+          # No CLIENT_READY/START barrier: the C request/reply client does not
+          # use one (PERF_POLICY.md:434-436).
+          mkfifo "${client_control_fifo}"
+          run_multi_process "client" "${client_log}" "${server_endpoint}" "${client_control_fifo}" 1
+          client_pid=$!
+          exec {client_control_fd}>"${client_control_fifo}"
+          if [[ "$(normalize_platform)" != "windows" ]]; then
+            rm -f "${client_control_fifo}"
+          fi
+
+          reqrep_failure_reason=''
+          if ! wait_for_client_done_line "${client_log}" "${size}" \
+              "$(( RESULT_TIMEOUT_SECONDS * 1000 ))"; then
+            reqrep_failure_reason='client_done_timeout'
+          fi
+
+          process_shutdown_ok=1
+          write_control_line "${server_control_fd}" 'STOP\n'
+          if ! wait_for_pid_exit_zero "${server_pid}" "$(shutdown_timeout_seconds)" \
+              "${pattern} server"; then
+            process_shutdown_ok=0
+          fi
+          try_write_control_line "${client_control_fd}" 'STOP\n' || true
+          if ! wait_for_pid_exit_zero "${client_pid}" "$(shutdown_timeout_seconds)" \
+              "${pattern} client"; then
+            process_shutdown_ok=0
+          fi
+          exec {server_control_fd}>&-
+          exec {client_control_fd}>&-
+
+          if unsupported_line="$(extract_unsupported_line "${pattern}" "${transport}" "${client_log}" "${server_log}" 2>/dev/null)"; then
+            print_line "${unsupported_line}"
+            unsupported_count=$((unsupported_count + 1))
+            expected_result_lines=$((expected_result_lines - 5))
+            continue
+          fi
+          if [[ -n "${reqrep_failure_reason}" ]]; then
+            cat "${server_log}" >&2 || true
+            cat "${client_log}" >&2 || true
+            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" \
+              "${reqrep_failure_reason}"
+            status=1
+            continue
+          fi
+          if [[ "${process_shutdown_ok}" -ne 1 ]]; then
+            cat "${server_log}" >&2 || true
+            cat "${client_log}" >&2 || true
+            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" \
+              "process_exit_nonzero"
+            status=1
+            continue
+          fi
+          if ! extracted="$(extract_results_from_logs "${client_log}" "${server_log}" \
+              "${pattern}" "${transport}" "${size}")"; then
+            record_failure "${pattern}" "${transport}" "${size}" "${run_index}" \
+              "invalid_or_missing_result_lines"
+            status=1
+            continue
+          fi
         elif [[ "${pattern}" == "MULTI_DEALER_DEALER" || "${pattern}" == "MULTI_PUBSUB" ]]; then
           if [[ "${native_control_mode}" -eq 1 ]]; then
             run_multi_process "client" "${client_log}" "${server_endpoint}" "" 1

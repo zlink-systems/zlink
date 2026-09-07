@@ -53,12 +53,9 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
     for (const socket of sockets) {
       emitMultiSocketHwmDetail(socket, 'endpoint', options.transport, options.msgSize);
     }
-    console.log(`CLIENT_READY,${options.msgSize}`);
-    rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-    for await (const line of rl) {
-      if (line === `START,${options.msgSize}`) break;
-      if (line === 'STOP' || line === 'QUIT') return;
-    }
+    // PERF_POLICY.md:469-471 - the C request/reply client uses no runner
+    // CLIENT_READY/START barrier; its own CONNECTION_READY gate above is the
+    // whole ready condition. A binding runner must not add one.
 
     const runId = createRunId(1);
     const activeStartNs = currentEpochNs();
@@ -122,6 +119,18 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
       console.log(line);
     }
     console.log(`CLIENT_DONE,${options.msgSize}`);
+    // PERF_MULTI_TEST_POLICY.md:386-388 / PERF_POLICY.md:483-486 - keep the
+    // request completion target sockets open until the runner has stopped the
+    // server and sent STOP. C reference:
+    // bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:722-731.
+    rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+    let stopped = false;
+    for await (const line of rl) {
+      if (line === 'STOP' || line === 'QUIT') { stopped = true; break; }
+    }
+    if (!stopped) {
+      throw new Error('runner closed stdin before STOP after CLIENT_DONE');
+    }
   } finally {
     rl?.close();
     for (const socket of sockets) socket.close();

@@ -36,6 +36,18 @@ async def submit_managed_request(
     return await operation.messages(*payload_parts).timeout(timeout_s).submit()
 
 
+def _wait_for_runner_stop_after_done():
+    """Block until the runner sends STOP/QUIT after CLIENT_DONE.
+
+    Mirrors bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:722-731.
+    """
+
+    for line in sys.stdin:
+        if line.strip().upper() in {"STOP", "QUIT"}:
+            return True
+    return False
+
+
 def _close_reply_parts(parts):
     if parts is None:
         return
@@ -247,6 +259,16 @@ async def run_reqrep_client(argv, *, pattern, routed_request):
                 bandwidth_multiplier=2.0,
             )
             print_result_lines(pattern, args.transport, args.msg_size, metrics)
+            # PERF_MULTI_TEST_POLICY.md:379,386-388 / PERF_POLICY.md:483-486 -
+            # emit CLIENT_DONE, keep the request completion target sockets
+            # open, and close them only after the runner has stopped the
+            # server and sent STOP. C reference:
+            # bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:792,:722-731.
+            print(f"CLIENT_DONE,{args.msg_size}", flush=True)
+            if not _wait_for_runner_stop_after_done():
+                raise RuntimeError(
+                    "runner closed stdin before STOP after CLIENT_DONE"
+                )
         finally:
             for sock in sockets:
                 try:

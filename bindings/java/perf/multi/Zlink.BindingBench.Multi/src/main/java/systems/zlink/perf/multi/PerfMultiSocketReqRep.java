@@ -20,7 +20,6 @@ import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.perf.PerfControl;
 import systems.zlink.perf.PerfSocketPollSet;
-import systems.zlink.perf.PerfStopToken;
 import systems.zlink.perf.PerfUtil;
 
 import java.nio.charset.StandardCharsets;
@@ -29,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -36,6 +36,8 @@ import java.util.concurrent.atomic.AtomicReference;
 final class PerfMultiSocketReqRep {
     private static final RoutingId SERVER_RID = RoutingId.from(
         "SERVER".getBytes(StandardCharsets.UTF_8));
+    /** C reference perf_aux_poll_wait_ms() (perf_multi_poll.hpp:39). */
+    private static final int AUX_POLL_WAIT_MS = 100;
 
     private PerfMultiSocketReqRep() {
     }
@@ -48,15 +50,22 @@ final class PerfMultiSocketReqRep {
             PerfUtil.applySocketOptions(server, config);
             PerfUtil.configureServerTls(server, config.transport());
             server.bind(config.endpoint());
+            // PERF_POLICY.md:481, PERF_MULTI_TEST_POLICY.md:380,383 — the
+            // request/reply server shuts down on the runner stdin STOP/QUIT
+            // exactly like the C reference
+            // (bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:1041-1053),
+            // not on a wire stop token. The 100 ms wait is the same auxiliary
+            // teardown wait C uses (perf_aux_poll_wait_ms(), :970).
+            AtomicBoolean stopRequested =
+                PerfControl.watchStopSignal("socket reqrep server");
             PerfControl.emitReady(config.endpoint());
             PerfUtil.recalculateAutoHwm(ctx);
 
-            int stops = 0;
             try (PerfSocketPollSet poller = PerfSocketPollSet.fromSockets(
                      List.of(server), PollEventFlags.POLLIN);
                  Received received = new Received()) {
-                while (stops < config.clients()) {
-                    int readyCount = poller.poll(-1);
+                while (!stopRequested.get()) {
+                    int readyCount = poller.poll(AUX_POLL_WAIT_MS);
                     if (readyCount <= 0
                         || !poller.readyHasEventAt(0,
                             PollEventFlags.POLLIN)) {
@@ -66,12 +75,6 @@ final class PerfMultiSocketReqRep {
                     // not add an unconditional native DONT_WAIT recv after a
                     // poll wake that belongs to another event class.
                     while (server.recv(received, RecvFlags.DONT_WAIT)) {
-                        if (received.parts().size() == 1
-                            && PerfStopToken.isStopTokenMessage(received.firstPart())) {
-                            stops++;
-                            received.close();
-                            continue;
-                        }
                         if (received.replyToken().isEmpty()) {
                             received.close();
                             continue;
@@ -135,7 +138,19 @@ final class PerfMultiSocketReqRep {
             monitors.clear();
             PerfUtil.recalculateAutoHwm(ctx);
             runClients(clients, config, routedClients, metrics);
-            return metrics.finishMulti(config);
+            PerfUtil.Result result = metrics.finishMulti(config);
+            String resultLine = result.toLine("current");
+            if (!resultLine.isEmpty()) {
+                System.out.println(resultLine);
+            }
+            // PERF_MULTI_TEST_POLICY.md:379,386-388 / PERF_POLICY.md:483-486 —
+            // emit CLIENT_DONE, keep the request completion target sockets
+            // open, and close them only after the runner has stopped the
+            // server and sent STOP. C reference:
+            // bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:792,:722-731.
+            PerfControl.emitClientDone(config.size());
+            PerfControl.awaitStop("multi socket reqrep client");
+            return PerfUtil.Result.silent(config);
         } finally {
             for (SocketMonitor monitor : monitors) {
                 try {
@@ -163,7 +178,9 @@ final class PerfMultiSocketReqRep {
             + config.durationSeconds() * 1_000_000_000L;
         int requestTimeoutMs = resolveRequestTimeoutMs();
         Duration timeout = Duration.ofMillis(requestTimeoutMs);
-        AtomicIntegerArray inFlight = new AtomicIntegerArray(clients.size());
+        int maxOutstanding = resolveMaxOutstandingPerSocket();
+        AtomicIntegerArray outstandingPerSocket =
+            new AtomicIntegerArray(clients.size());
         java.util.function.BiConsumer<List<Message>, Throwable> completion =
             (parts, error) -> {
             try {
@@ -191,9 +208,13 @@ final class PerfMultiSocketReqRep {
             }
         };
 
-        // The binding owns any WRITABLE admission retry. Keep one logical
-        // request per client in flight and submit its successor only after the
-        // ordinary REQUEST completion releases that client.
+        // PERF_MULTI_TEST_POLICY.md:164-168 — do not fix the inflight request
+        // count and do not serialize the round trip 1:1. Each turn submits one
+        // new logical request per client socket and never waits for the
+        // previous reply; the binding owns any WRITABLE admission retry and
+        // the completion poller progresses replies concurrently. Same submit
+        // cadence as the C reference submit cursor
+        // (bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:577-590).
         try (RequestPayloadTemplates payloadTemplates =
                  new RequestPayloadTemplates(config.size(), clients.size());
              PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
@@ -204,13 +225,15 @@ final class PerfMultiSocketReqRep {
                     if (System.nanoTime() >= activeEnd) {
                         break;
                     }
-                    if (inFlight.get(i) != 0)
+                    if (outstandingPerSocket.get(i) >= maxOutstanding) {
                         continue;
+                    }
                     payloadTemplates.prepare(i, (byte) PerfUtil.PHASE_ACTIVE,
                         System.nanoTime());
                     if (submit(clients.get(i), routedClients,
                             payloadTemplates.copyForSubmit(i), timeout,
-                            outstanding, inFlight, i, completion)) {
+                            outstanding, outstandingPerSocket, i,
+                            completion)) {
                         progress = true;
                     }
                 }
@@ -234,27 +257,40 @@ final class PerfMultiSocketReqRep {
                     failure.get());
             }
         }
+        // No wire stop token here: PERF_POLICY.md:481 keeps STOP a runner
+        // orchestration command, and the C request/reply server terminates on
+        // the runner stdin STOP alone.
+    }
 
-        for (Socket client : clients) {
-            PerfStopToken.sendWithRetry(() -> {
-                try (Message stop = PerfStopToken.newMessage()) {
-                    if (routedClients) {
-                        ((RouterSocket) client).send(SERVER_RID).message(stop)
-                            .submit_sync();
-                        return true;
-                    }
-                    ((DealerSocket) client).send().message(stop)
-                        .submit_sync();
-                    return true;
+    /**
+     * Memory bound on un-settled request awaitables, per requester socket.
+     *
+     * <p>The public async request terminal makes one DONTWAIT admission attempt
+     * and resumes only from its own WRITABLE token
+     * ({@code RequestSubmitOperation}), so Core paces admission exactly as the C
+     * reference does and the runner must not observe or gate on admission.
+     * PERF_MULTI_TEST_POLICY.md:164-168 forbids using this bound as a round-trip
+     * gate, so it stays far above the steady-state depth.</p>
+     */
+    private static int resolveMaxOutstandingPerSocket() {
+        String configured = System.getenv("PERF_MULTI_REQREP_MAX_OUTSTANDING");
+        if (configured != null && !configured.isBlank()) {
+            try {
+                int parsed = Integer.parseInt(configured.trim());
+                if (parsed > 1) {
+                    return parsed;
                 }
-            }, "multi socket reqrep");
+            } catch (NumberFormatException ignored) {
+                // Fall through to the shared default.
+            }
         }
+        return 64;
     }
 
     private static boolean submit(Socket client, boolean routedClients,
                                   Message payload, Duration timeout,
                                   AtomicLong outstanding,
-                                  AtomicIntegerArray inFlight,
+                                  AtomicIntegerArray outstandingPerSocket,
                                   int clientIndex,
                                   java.util.function.BiConsumer<List<Message>,
                                       Throwable> completion) {
@@ -305,12 +341,12 @@ final class PerfMultiSocketReqRep {
             }
         }
         outstanding.incrementAndGet();
-        inFlight.set(clientIndex, 1);
+        outstandingPerSocket.incrementAndGet(clientIndex);
         stage.whenComplete((parts, error) -> {
             try {
                 completion.accept(parts, error);
             } finally {
-                inFlight.set(clientIndex, 0);
+                outstandingPerSocket.decrementAndGet(clientIndex);
             }
         });
         return true;

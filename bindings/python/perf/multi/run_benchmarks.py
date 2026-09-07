@@ -460,8 +460,9 @@ def _options_clients_display(patterns, cli_value):
     )
     if patterns and all(pattern == "STREAM" for pattern in patterns):
         return default_stream_clients
-    if any(pattern == "STREAM" for pattern in patterns):
-        return f"{default_clients} (stream={default_stream_clients})"
+    # C resolve_clients_meta (bindings/c/perf/run_comparison.py:3830-3844)
+    # reports the plain general default when the selection is not entirely
+    # STREAM; it never annotates the row with a stream sub-value.
     return default_clients
 
 
@@ -1077,6 +1078,71 @@ def _run_pattern(args, env, pattern, transport, msg_size, clients):
                 _drain_stdout_queue(server, stdout_chunks)
                 raise
             _drain_stdout_queue(server, stdout_chunks)
+        elif pattern in {"DEALER_ROUTER_REQREP", "ROUTER_ROUTER_REQREP"}:
+            # PERF_MULTI_TEST_POLICY.md:379-381 / PERF_POLICY.md:483-486:
+            # CLIENT_DONE ends measurement, the runner stops the server and
+            # confirms its exit, and only then sends STOP to the client so
+            # queued replies keep their completion target.
+            # C reference: bindings/c/perf/run_comparison.py:2653-2658.
+            client = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(client_path),
+                    "--endpoint",
+                    endpoint,
+                    "--transport",
+                    transport,
+                    "--duration",
+                    args.duration,
+                    "--msg-size",
+                    msg_size,
+                    "--clients",
+                    clients,
+                ],
+                cwd=str(ROOT.parent.parent),
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                **_server_popen_kwargs(),
+            )
+            client_done = _wait_for_control_line(
+                client,
+                ("CLIENT_DONE,", "UNSUPPORTED,", "SKIP,"),
+                timeout_s=client_timeout_s,
+                stdout_chunks=stdout_chunks,
+            )
+            if client_done.startswith(("UNSUPPORTED,", "SKIP,")):
+                return "\n".join(chunk for chunk in stdout_chunks if chunk)
+            if client_done != f"CLIENT_DONE,{msg_size}":
+                raise SystemExit(f"client did not report done: {client_done}")
+            if server.poll() is None:
+                _write_control_line(server, "STOP")
+            try:
+                server.wait(timeout=shutdown_grace_s)
+            except subprocess.TimeoutExpired:
+                _drain_stdout_queue(server, stdout_chunks)
+                raise
+            _drain_stdout_queue(server, stdout_chunks)
+            if client.poll() is None:
+                _write_control_line(client, "STOP")
+            try:
+                client.wait(timeout=shutdown_grace_s)
+            except subprocess.TimeoutExpired as exc:
+                _drain_stdout_queue(client, stdout_chunks)
+                raise exc
+            _drain_stdout_queue(client, stdout_chunks)
+            client_stderr = client.stderr.read() if client.stderr else ""
+            if client_stderr:
+                stderr_chunks.append(client_stderr.strip())
+            if client.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    client.returncode,
+                    client.args,
+                    output="\n".join(stdout_chunks),
+                    stderr=client_stderr,
+                )
         else:
             client_run = subprocess.run(
                 [

@@ -131,7 +131,7 @@ final class PerfMultiDealerRouter {
                 index -> sendPayload(clients.get(index), msgSize, activeEnd),
                 index -> drainReplies(clients.get(index), msgSize, metrics,
                     replyBuffer, activeEnd),
-                Duration.ofSeconds(config.durationSeconds() + 5L),
+                PerfMultiTargetCoordinator.sendDrainTimeout(),
                 "multi dealer/router async sends");
             replyBuffer.close();
             // C routed echo ends the relay through the runner control path.

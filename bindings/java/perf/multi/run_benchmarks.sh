@@ -1165,20 +1165,42 @@ run_socket_case() {
 
   local client_exit=0
   local server_exit=0
-  wait_for_pid_or_kill "${client_pid}" "$(( (DURATION + 20) * 1000 ))" "client" || client_exit=$?
-  # C's comparison runner sends STOP to a routed relay after the client
-  # reports completion. Raw one-way and request/reply servers end on their
-  # own wire-level stop tokens, so this control transition applies only to
-  # the relay patterns.
-  if [[ "${bare_pattern}" == "DEALER_ROUTER" \
-     || "${bare_pattern}" == "DEALER_ROUTER_SENDSEND" \
-     || "${bare_pattern}" == "ROUTER_ROUTER" \
-     || "${bare_pattern}" == "ROUTER_ROUTER_SENDSEND" ]]; then
+  if [[ "${bare_pattern}" == "DEALER_ROUTER_REQREP" \
+     || "${bare_pattern}" == "ROUTER_ROUTER_REQREP" ]]; then
+    # PERF_MULTI_TEST_POLICY.md:379-381 / PERF_POLICY.md:483-486 — the
+    # request/reply client holds its completion target sockets after
+    # CLIENT_DONE. Stop the server first, confirm its exit, and only then
+    # send STOP to the client (C: run_comparison.py:2653-2658).
+    if ! wait_for_log_token "${client_log}" "CLIENT_DONE,${size}" \
+        "$(( (DURATION + 20) * 1000 ))" >/dev/null; then
+      client_exit=1
+    fi
     printf 'STOP\n' >&${server_fd}
+    wait_for_pid_or_kill "${server_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "server" || server_exit=$?
+    exec {server_fd}>&-
+    printf 'STOP\n' >&${client_fd} 2>/dev/null || true
+    exec {client_fd}>&-
+    if [[ "${client_exit}" -eq 0 ]]; then
+      wait_for_pid_or_kill "${client_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "client" || client_exit=$?
+    else
+      wait_for_pid_or_kill "${client_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "client" || true
+    fi
+  else
+    wait_for_pid_or_kill "${client_pid}" "$(( (DURATION + 20) * 1000 ))" "client" || client_exit=$?
+    # C's comparison runner sends STOP to a routed relay after the client
+    # reports completion. Raw one-way servers end on their own wire-level
+    # stop tokens, so this control transition applies only to the relay
+    # patterns.
+    if [[ "${bare_pattern}" == "DEALER_ROUTER" \
+       || "${bare_pattern}" == "DEALER_ROUTER_SENDSEND" \
+       || "${bare_pattern}" == "ROUTER_ROUTER" \
+       || "${bare_pattern}" == "ROUTER_ROUTER_SENDSEND" ]]; then
+      printf 'STOP\n' >&${server_fd}
+    fi
+    exec {client_fd}>&-
+    wait_for_pid_or_kill "${server_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "server" || server_exit=$?
+    exec {server_fd}>&-
   fi
-  exec {client_fd}>&-
-  wait_for_pid_or_kill "${server_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "server" || server_exit=$?
-  exec {server_fd}>&-
   rm -f "${server_fifo}" "${client_fifo}"
   append_auto_hwm_details "${server_log}"
   append_auto_hwm_details "${client_log}"

@@ -1012,6 +1012,54 @@ for run in $(seq 1 "${RUNS}"); do
                         CLIENT_OUTPUT+="$(cat "${CLIENT_ERR}")"
                     fi
                     rm -f "${CLIENT_OUT}" "${CLIENT_ERR}"
+                elif [[ "${pat}" == "MULTI_DEALER_ROUTER_REQREP" \
+                     || "${pat}" == "MULTI_ROUTER_ROUTER_REQREP" ]]; then
+                    # PERF_MULTI_TEST_POLICY.md:379-381 / PERF_POLICY.md:483-486:
+                    # CLIENT_DONE ends measurement, the runner stops the server
+                    # and confirms its exit, and only then sends STOP to the
+                    # client so queued replies keep their completion target.
+                    # C reference: bindings/c/perf/run_comparison.py:2653-2658.
+                    CLIENT_OUT="$(mktemp)"
+                    CLIENT_ERR="$(mktemp)"
+                    CLIENT_FIFO="$(mktemp -u)"
+                    mkfifo "${CLIENT_FIFO}"
+                    "${RUN_PREFIX[@]}" "${CLIENT_BIN}" "${transport}" "${size}" "${ENDPOINT}" \
+                        < "${CLIENT_FIFO}" > "${CLIENT_OUT}" 2> "${CLIENT_ERR}" &
+                    CLIENT_PID=$!
+                    exec {CLIENT_CONTROL_FD}> "${CLIENT_FIFO}"
+                    rm -f "${CLIENT_FIFO}"
+
+                    CLIENT_DONE_LINE="$(wait_for_file_prefix \
+                        "${CLIENT_OUT}" "CLIENT_DONE," "${CLIENT_TIMEOUT_SECONDS}" || true)"
+                    if [[ "${CLIENT_DONE_LINE}" != "CLIENT_DONE,${size}" ]]; then
+                        case_status="fail"
+                        case_reason="client_done_timeout_or_invalid"
+                    fi
+                    shutdown_server "${SERVER_PID}" "${SERVER_CONTROL_FD}"
+                    REQREP_SERVER_STOPPED=1
+                    printf 'STOP\n' >&"${CLIENT_CONTROL_FD}" 2>/dev/null || true
+                    exec {CLIENT_CONTROL_FD}>&- || true
+                    if ! wait_for_pid "${CLIENT_PID}" "${SERVER_SHUTDOWN_TIMEOUT_SECONDS}"; then
+                        case_status="fail"
+                        case_reason="binary_exit_or_timeout"
+                        kill "${CLIENT_PID}" 2>/dev/null || true
+                        wait "${CLIENT_PID}" 2>/dev/null || true
+                    elif ! wait "${CLIENT_PID}"; then
+                        if [[ "${case_status}" == "success" ]]; then
+                            case_status="fail"
+                            case_reason="binary_exit_or_timeout"
+                        fi
+                    fi
+                    if [[ -f "${CLIENT_OUT}" ]]; then
+                        CLIENT_OUTPUT="$(cat "${CLIENT_OUT}")"
+                    fi
+                    if [[ -s "${CLIENT_ERR}" ]]; then
+                        if [[ -n "${CLIENT_OUTPUT}" ]]; then
+                            CLIENT_OUTPUT+=$'\n'
+                        fi
+                        CLIENT_OUTPUT+="$(cat "${CLIENT_ERR}")"
+                    fi
+                    rm -f "${CLIENT_OUT}" "${CLIENT_ERR}"
                 else
                     if ! CLIENT_OUTPUT="$(timeout "${CLIENT_TIMEOUT_SECONDS}s" "${RUN_PREFIX[@]}" "${CLIENT_BIN}" "${transport}" "${size}" "${ENDPOINT}" 2>&1)"; then
                         case_status="fail"
@@ -1019,7 +1067,10 @@ for run in $(seq 1 "${RUNS}"); do
                     fi
                 fi
 
-                shutdown_server "${SERVER_PID}" "${SERVER_CONTROL_FD}"
+                if [[ "${REQREP_SERVER_STOPPED:-0}" != "1" ]]; then
+                    shutdown_server "${SERVER_PID}" "${SERVER_CONTROL_FD}"
+                fi
+                REQREP_SERVER_STOPPED=0
                 SERVER_OUTPUT=""
                 if [[ -f "${SRV_OUT}" ]]; then
                     SERVER_OUTPUT="$(cat "${SRV_OUT}")"

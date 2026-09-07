@@ -158,6 +158,9 @@ fn main() {
         settings.duration_seconds,
         &final_stats,
     );
+    // PERF_POLICY.md:469-471 / D-2 - the C PUBSUB client emits CLIENT_DONE
+    // (bindings/c/perf/multi/src/perf_multi_pubsub_client.cpp:367).
+    println!("CLIENT_DONE,{}", args.msg_size);
     // C returns normally from main; print_result already flushed stdout. Avoid
     // std::process::exit so the flush is not raced.
 }

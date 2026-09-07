@@ -276,6 +276,16 @@ def resolve_multi_reqrep_drain_timeout_ms():
 
 
 
+def resolve_multi_send_drain_timeout_ms():
+    """Bounded send-admission drain after the active deadline.
+
+    PERF_MULTI_TEST_POLICY.md § 12.3 fixes the default at 5000 ms; the drain
+    starts no new submissions and adds nothing to the RESULT aggregate.
+    """
+
+    return _env_int("PERF_MULTI_SEND_DRAIN_TIMEOUT_MS", 5000)
+
+
 def resolve_multi_server_ready_timeout_ms():
     return _env_int("PERF_MULTI_SERVER_READY_TIMEOUT_MS", _env_int("PERF_SERVER_READY_TIMEOUT_MS", 10000))
 
@@ -367,10 +377,15 @@ async def send_routed(
     measurement=True,
     method="send",
     _yield_after_submit=True,
-    _sync=False,
-    _deadline=None,
 ):
-    del _deadline  # The managed operation owns WRITABLE retry until terminal.
+    """Submit one HWM-managed send through the public async terminal.
+
+    PERF_MULTI_TEST_POLICY.md:61-71 and :92-93 forbid driving an HWM-managed
+    send through the synchronous terminal: the awaited terminal completes at
+    the Core admission result (bindings/doc/spec/async-coroutine-policy.ko.md
+    § 1), so the caller resumes at admission and never waits for the echo.
+    """
+
     send_method = getattr(sock, method)
     op = send_method() if routing_id is None else send_method(routing_id)
     if measurement and not isinstance(payload, (list, tuple)):
@@ -379,10 +394,7 @@ async def send_routed(
         op.messages(*payload)
     else:
         op.message(payload)
-    if _sync:
-        op.submit_sync()
-    else:
-        await op.submit()
+    await op.submit()
 
     # Immediate admission does not suspend the coroutine. Yield one scheduler
     # turn for continuous send loops without a sleep or timer.

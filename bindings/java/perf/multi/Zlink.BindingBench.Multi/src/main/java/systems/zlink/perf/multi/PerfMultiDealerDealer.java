@@ -185,7 +185,7 @@ final class PerfMultiDealerDealer {
                 activeEnd,
                 index -> sendOneActive(clients.get(index), config.size(),
                     activeEnd),
-                Duration.ofSeconds(config.durationSeconds() + 5L),
+                PerfMultiTargetCoordinator.sendDrainTimeout(),
                 "multi dealer/dealer async sends");
             // C parity: send one wire-level stop token on every client socket
             // so the server's signal-driven receive loop is guaranteed to wake.

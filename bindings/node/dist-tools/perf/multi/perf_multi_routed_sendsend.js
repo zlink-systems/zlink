@@ -152,16 +152,10 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
         for (const socket of sockets) {
             emitMultiSocketHwmDetail(socket, 'endpoint', options.transport, options.msgSize);
         }
-        console.log(`CLIENT_READY,${options.msgSize}`);
-        rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-        for await (const line of rl) {
-            if (line === `START,${options.msgSize}`) {
-                break;
-            }
-            if (line === 'STOP' || line === 'QUIT') {
-                return;
-            }
-        }
+        // PERF_POLICY.md:469-471 - the C send/send echo client uses no runner
+        // CLIENT_READY/START barrier (bindings/c/perf/multi/src/
+        // perf_multi_dealer_router_client.cpp emits neither token). Its own
+        // CONNECTION_READY gate above is the whole ready condition.
         const runId = createRunId(1);
         const activeStartNs = currentEpochNs();
         const activeStopNs = activeStartNs
@@ -219,7 +213,8 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
         for (const metricLine of summarizeMetrics(pattern, options.transport, options.msgSize, result.latenciesNs, options.duration, 'current', result.accepted, result.latencyMeanNs)) {
             console.log(metricLine);
         }
-        console.log(`CLIENT_DONE,${options.msgSize}`);
+        // No CLIENT_DONE here: the C send/send echo client emits none
+        // (PERF_POLICY.md:469-471, D-2). The runner observes client exit.
     }
     finally {
         rl?.close();
@@ -258,22 +253,16 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
         pollBuffer = zlink.createPollEvents(1);
         const readyBarrier = waitForConnectionReadyCount(router, options.clients);
         console.log(`READY,${options.endpoint}`);
+        // PERF_POLICY.md:469-471 - the C send/send echo relay server has only a
+        // stdin STOP/QUIT watcher and no runner START gate
+        // (bindings/c/perf/multi/common/perf_multi_relay_server.hpp:667-677).
         rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
         let stopRequested = false;
-        const started = await new Promise((resolve) => {
-            rl.on('line', (line) => {
-                if (line === 'STOP' || line === 'QUIT') {
-                    stopRequested = true;
-                    resolve(false);
-                }
-                else if (line === `START,${options.msgSize}`) {
-                    resolve(true);
-                }
-            });
+        rl.on('line', (line) => {
+            if (line === 'STOP' || line === 'QUIT') {
+                stopRequested = true;
+            }
         });
-        if (!started) {
-            return;
-        }
         await readyBarrier;
         while (!stopRequested) {
             // Pending public send Promises and stdin both run on this event loop.

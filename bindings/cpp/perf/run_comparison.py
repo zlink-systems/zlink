@@ -68,6 +68,14 @@ ECHO_PATTERNS = {
     "ROUTER_ROUTER_REQREP",
     "STREAM",
 }
+# PERF_POLICY.md:483-486 / PERF_MULTI_TEST_POLICY.md:379-381,386-388: the
+# request/reply client keeps its completion target sockets open after
+# CLIENT_DONE. The runner stops the server first and only then sends STOP to
+# the client (bindings/c/perf/run_comparison.py:66-69, :2653-2658).
+SOCKET_REQREP_PATTERNS = {
+    "DEALER_ROUTER_REQREP",
+    "ROUTER_ROUTER_REQREP",
+}
 
 
 def report_callback_error(context, exc):
@@ -2368,6 +2376,20 @@ def run_sizes_test_split(
                     server_result_metrics.add((line_size, metric))
                     maybe_release_dealer_dealer_client()
 
+    def stop_client():
+        # PERF_MULTI_TEST_POLICY.md:381 — request/reply client teardown STOP,
+        # sent only after the server exit is confirmed.
+        proc = client_proc[0]
+        if not proc or proc.poll() is not None or not proc.stdin:
+            return
+        try:
+            proc.stdin.write("STOP\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+        except Exception as exc:
+            report_runner_warning("client-stop-write", exc)
+
     def stop_server():
         nonlocal server_proc
         if not server_proc:
@@ -2673,6 +2695,15 @@ def run_sizes_test_split(
                 return
             done_size = parse_client_done_size(line)
             if done_size is not None:
+                if normalize_multi_pattern_name(pattern_name) in SOCKET_REQREP_PATTERNS:
+                    if (
+                        done_size == final_size
+                        and done_size not in stop_requested_sizes
+                    ):
+                        stop_requested_sizes.add(done_size)
+                        stop_server()
+                        stop_client()
+                    return
                 if (
                     normalize_multi_pattern_name(pattern_name) != "DEALER_DEALER"
                     and done_size == final_size

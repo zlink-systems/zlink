@@ -10,7 +10,8 @@
 > 않는다 (D-BP4). 러너를 개정에 맞춘 뒤의 값과 그 이전 값을 한 표에서 비교할
 > 때는 어느 쪽인지 표기한다.
 >
-> 2026-09-07 개정 요약: request/reply 모델을 single suite에서 제외(D-BP3),
+> 2026-09-07 개정 요약: single 실행 모델을 명확화(D-BP6 — 동기 모델은 in-flight 1을
+> 뜻하지 않으며 admission과 reply는 별개 사건이다),
 > one-way active 유효 메시지 시각 기준·wire 길이 검증 확정, latency 통계 경계
 > 규칙(보간식·표본 0개) 확정, 시간원을 monotonic으로 고정, RESULT 출력 정밀도와
 > transient 재시도 절차 확정, binding별 `UNSUPPORTED` 처리 절차 확정.
@@ -36,7 +37,7 @@
 | 문서 | 설명 |
 |------|------|
 | **PERF_POLICY.md** (본 문서) | 공통 원칙, 디렉터리 구조, RESULT 형식, 결과 저장, 출력 형식, 실패 처리, 환경 변수(공통), 리팩토링 원칙 |
-| [PERF_SINGLE_TEST_POLICY.md](PERF_SINGLE_TEST_POLICY.md) | single suite 전용: recv 모델(one-way 5 pattern), phase, 패턴/transport, single 전용 환경 변수 |
+| [PERF_SINGLE_TEST_POLICY.md](PERF_SINGLE_TEST_POLICY.md) | single suite 전용: recv/request-reply 모델, phase, 패턴/transport, single 전용 환경 변수 |
 | [PERF_MULTI_TEST_POLICY.md](PERF_MULTI_TEST_POLICY.md) | multi suite 전용: 프로세스 모델, backpressure, throughput/latency 측정, 패턴/transport, multi 전용 환경 변수 |
 | [BINDINGS_OPTIMIZATION_GUIDE.ko.md](BINDINGS_OPTIMIZATION_GUIDE.ko.md) | binding library hot path 최적화 가이드: 효과가 확인된 기법의 단계별 체크리스트, 언어별 적용 현황, 기각 목록, 적용 절차 |
 
@@ -156,9 +157,17 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
 - bindings perf는 측정 anchor와 결과 의미를 C perf 기준과 동일하게 유지한다.
   실행 모델은 suite별로 고정하며 언어별 편의에 따라 바꾸지 않는다.
   - single: sender와 receiver/progress 역할을 전용 OS thread에서 실행하고 측정
-    구간에는 synchronous public API만 사용한다. raw send는 blocking terminal을
-    사용한다. single suite는 one-way 패턴만 측정하므로 측정 구간에 request/reply
-    경로가 없다([PERF_SINGLE_TEST_POLICY.md § 1](PERF_SINGLE_TEST_POLICY.md), D-BP3).
+    구간에는 synchronous public API만 사용한다. raw send는 blocking terminal을,
+    request/reply는 public request terminal과 completion poller를 사용한다.
+    request submit과 completion progress는 같은 전용 requester thread가 교대로
+    구동하거나 별도 OS thread로 나눌 수 있지만 async runtime에는 맡기지 않는다.
+    **동기 실행 모델은 in-flight를 1로 묶는다는 뜻이 아니다.** admission과 reply는
+    별개의 사건이므로 requester는 backpressure 경계까지 연속 제출하고 completion을
+    drain한다. 제출이 ownership 이전의 backpressure를 돌려주면 같은 thread가
+    completion progress를 구동한 뒤 같은 logical request를 다시 제출한다. 이는
+    thread 안의 flow-control 진행이며 async terminal이나 benchmark case 재시도가
+    아니다. 실행 형태는 [PERF_SINGLE_TEST_POLICY.md § 1.1](PERF_SINGLE_TEST_POLICY.md)이
+    소유한다.
   - multi: C reference는 nonblocking API와 poller로 진행한다. 다른 binding의
     HWM-managed send/request는 coroutine/async runtime 또는 그 언어의 동등한
     비동기 실행 모델로 진행한다. 다만 public 계약이 synchronous로 분류한
@@ -297,7 +306,6 @@ suite별 정책 문서에 반영한 다음 다른 바인딩으로 옮긴다.
   submit 뒤에도 같은 requester socket의 reply 수신/progress 경로를 계속 돌려야
   한다. completion은 requester socket을 수신하지 않아도 되는 별도 channel이
   아니다.
-  - request/reply 패턴은 multi suite에만 있다(D-BP3).
   - C multi reqrep은 client process의 active poller loop가 N개 requester socket을
     multiplex한다. socket request/reply 경로는 requester socket을 이 public
     poller에 `POLLCOMPLETION` 단독으로 등록한다. C 이외의 binding은 public async
@@ -556,7 +564,11 @@ sequenceDiagram
       정리하는 운영 절차이며, active deadline 이후 새 제출을 하거나 완료 수를 늘리는
       별도 phase가 아니다. 한도는
       [PERF_MULTI_TEST_POLICY.md § 12.3](PERF_MULTI_TEST_POLICY.md)의
-      `PERF_MULTI_SEND_DRAIN_TIMEOUT_MS`다. single suite에는 이 예외가 없다(D-BP3).
+      `PERF_MULTI_SEND_DRAIN_TIMEOUT_MS`다.
+    - 예외: `single` request-reply 패턴은 active 종료 후 bounded completion drain을
+      반드시 수행한다. 이 절차는 deadline 이전에 제출된 request의 reply completion만
+      정리하는 운영 절차이며, active deadline 이후 새 request를 제출하거나 완료 수를
+      늘리는 별도 phase가 아니다.
 - 위 단계가 이미 존재하지만 실제로는 “ready 이벤트 하나 기다리기” 또는
   “phase 종료 후 남은 메시지 정리”를 우회적으로 표현한 것뿐이라면, 새 단계로
   유지하지 말고 삭제하거나 기존 `ready -> active` 흐름에 흡수한다.
@@ -681,8 +693,8 @@ perf 구조는 다음 두 책임으로 분리한다. 이 분리는 `bindings/c/p
   - 양쪽 모두 routing identity가 있는 socket을 사용하되, 왕복 의미는
     `MULTI_DEALER_ROUTER_REQREP` 와 같다.
 - binding single의 공식 `--pattern ALL`은 `PAIR`, `PUBSUB`, `DEALER_DEALER`,
-  `DEALER_ROUTER`, `ROUTER_ROUTER`의 5개 패턴이다. request/reply 패턴은 single에서
-  제외한다(D-BP3).
+  `DEALER_ROUTER`, `ROUTER_ROUTER`, `DEALER_ROUTER_REQREP`,
+  `ROUTER_ROUTER_REQREP`의 7개 패턴이다.
 - binding multi의 공식 `--pattern ALL`은 `MULTI_DEALER_DEALER`,
   `MULTI_DEALER_ROUTER_SENDSEND`, `MULTI_ROUTER_ROUTER_SENDSEND`,
   `MULTI_DEALER_ROUTER_REQREP`, `MULTI_ROUTER_ROUTER_REQREP`, `MULTI_PUBSUB`,

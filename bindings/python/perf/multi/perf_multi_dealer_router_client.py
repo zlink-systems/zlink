@@ -19,6 +19,7 @@ from perf_multi_common import (
     recv_nonblocking,
     received_metric_payload,
     resolve_multi_connect_ready_timeout_ms,
+    resolve_multi_send_drain_timeout_ms,
     result_metrics,
     safe_poll,
     send_routed,
@@ -71,17 +72,8 @@ async def main(argv=None):
                             index,
                         )
 
-                    while time.perf_counter() < active_deadline:
-                        for index, current_sock in enumerate(sockets):
-                            seq += 1
-                            await send_routed(
-                                current_sock,
-                                stamp_payload(
-                                    payloads[index], phase=1, run_id=run_id, seq=seq
-                                ),
-                                _sync=True,
-                                _deadline=active_deadline,
-                            )
+                    def drain_replies():
+                        nonlocal received
                         ready_count = safe_poll(poller, poll_events, 0)
                         for offset in range(ready_count):
                             index = poll_events.slot(offset)
@@ -117,7 +109,45 @@ async def main(argv=None):
                                         received += 1
                                         if latency is not None:
                                             latency_sampler.add(latency / 2.0)
-                        await asyncio.sleep(0)
+
+                    # PERF_MULTI_TEST_POLICY.md:137-148 - each socket keeps one
+                    # un-settled public async send terminal and submits the next
+                    # as soon as its admission completes. Echo receipt never
+                    # gates a send, and no socket waits on another socket's
+                    # admission. Same stop/resume boundary as the C reference
+                    # retained message + POLLOUT resume
+                    # (bindings/c/perf/multi/src/perf_multi_dealer_dealer_client.cpp:424-450).
+                    async def send_loop(index, current_sock):
+                        nonlocal seq
+                        while time.perf_counter() < active_deadline:
+                            seq += 1
+                            await send_routed(
+                                current_sock,
+                                stamp_payload(
+                                    payloads[index], phase=1, run_id=run_id, seq=seq
+                                ),
+                            )
+
+                    senders = asyncio.gather(*(
+                        send_loop(index, sock)
+                        for index, sock in enumerate(sockets)
+                    ))
+
+                    async def recv_loop():
+                        while not senders.done() or time.perf_counter() < active_deadline:
+                            drain_replies()
+                            await asyncio.sleep(0)
+
+                    # PERF_MULTI_TEST_POLICY.md § 12.3
+                    # PERF_MULTI_SEND_DRAIN_TIMEOUT_MS bounds the post-deadline
+                    # admission drain; it starts no new send and adds nothing to
+                    # the RESULT aggregate.
+                    await asyncio.wait_for(
+                        asyncio.gather(senders, recv_loop()),
+                        timeout=args.duration
+                        + resolve_multi_send_drain_timeout_ms() / 1000.0,
+                    )
+                    drain_replies()
                 if received == 0:
                     raise RuntimeError(
                         "multi dealer-router benchmark did not receive any active reply"

@@ -20,6 +20,29 @@ final class PerfMultiTargetCoordinator {
     private PerfMultiTargetCoordinator() {
     }
 
+    /**
+     * Bounded post-deadline send-admission drain.
+     *
+     * <p>PERF_MULTI_TEST_POLICY.md &sect; 12.3 fixes the knob name
+     * {@code PERF_MULTI_SEND_DRAIN_TIMEOUT_MS} and its 5000 ms default. The
+     * drain starts no new submission and adds nothing to the RESULT
+     * aggregate.</p>
+     */
+    static Duration sendDrainTimeout() {
+        String raw = System.getenv("PERF_MULTI_SEND_DRAIN_TIMEOUT_MS");
+        if (raw != null && !raw.isBlank()) {
+            try {
+                long parsed = Long.parseLong(raw.trim());
+                if (parsed > 0) {
+                    return Duration.ofMillis(parsed);
+                }
+            } catch (NumberFormatException ignored) {
+                // Fall through to the policy default.
+            }
+        }
+        return Duration.ofMillis(5000L);
+    }
+
     static void run(int socketCount,
                     long activeEnd,
                     PerfSocketPollSet pollSet,

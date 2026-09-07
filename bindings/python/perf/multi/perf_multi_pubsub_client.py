@@ -141,6 +141,9 @@ def main(argv=None):
                 latency_sampler=latency_sampler,
             )
             print_result_lines("MULTI_PUBSUB", args.transport, args.msg_size, metrics)
+            # PERF_POLICY.md:469-471 / D-2 - the C PUBSUB client emits
+            # CLIENT_DONE (bindings/c/perf/multi/src/perf_multi_pubsub_client.cpp:367).
+            print(f"CLIENT_DONE,{args.msg_size}", flush=True)
         finally:
             for sock in sockets:
                 try:

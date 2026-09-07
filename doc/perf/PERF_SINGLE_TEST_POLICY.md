@@ -28,23 +28,15 @@
 | 항목 | 기준 |
 |------|------|
 | 측정 모델 | ready + active(duration) |
-| throughput | `active 수신 건수 / active 시간(초)` (msg/s) |
-| latency | active 구간 수신 payload header timestamp 기반 (internal ns / external ms) |
+| throughput | one-way는 `active 수신 건수 / active 시간(초)` (msg/s), request-reply는 `active 왕복 완료 수 / active 시간(초)` (ops/s) |
+| latency | one-way는 active 구간 수신 payload header timestamp 기반, request-reply는 request 제출부터 reply completion까지의 왕복 시간 기반 (internal ns / external ms) |
 | 대표값 | runs > 1일 때 metric별 median |
 | 저장 경로 | `perf/results/single/report/` 단일 |
 
 - 목적: 단일 소켓 경로에서 throughput, bandwidth, latency를 측정한다.
-- **Single suite는 one-way 5 pattern(`PAIR`, `PUBSUB`, `DEALER_DEALER`,
-  `DEALER_ROUTER`, `ROUTER_ROUTER`)만 측정한다. request/reply 모델은 single suite에서
-  제외하고 [PERF_MULTI_TEST_POLICY.md](PERF_MULTI_TEST_POLICY.md)의 multi suite에서만
-  측정·판정한다.** 근거: single 실행 모델은 전용 OS thread + synchronous API이고
-  측정 구간의 async terminal을 금지하는데, 각 binding이 공개한 request terminal은
-  reply까지 블로킹하는 동기형과 비동기형 둘뿐이고
-  [async-coroutine-policy](../../bindings/doc/spec/async-coroutine-policy.ko.md)가
-  request callback terminal을 제공하지 않는다고 못박고 있어, "동기 실행 모델을
-  유지한 채 backpressure 경계까지 연속 제출"을 만족하는 구현이 공개 계약에
-  존재하지 않는다. request/reply 부하 모델은 multi 정책이 규정한 비동기 연속
-  제출로만 측정한다. (결정: D-BP3)
+- Single suite는 `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`, `ROUTER_ROUTER`,
+  `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_REQREP` 7개 pattern을 측정한다. request/reply를
+  포함한다(D-BP6이 D-BP3을 되돌림).
 - 같은 active 구간에서 동일 메시지 집합으로 latency도 함께 집계한다.
 - cpu/mem은 single 기본 perf surface와 RESULT 계약에 포함하지 않는다.
 - `single`의 공식 lifecycle은 `ready -> active`다.
@@ -53,24 +45,103 @@
   만들지 않는다.
 - 한 줄 요약: `single = ready + active`
 
-### 1.1 I/O 모델
+### 1.1 실행 모델
+
+이 절은 러너가 반드시 지켜야 할 실행 모델을 정의한다. 여기서 잘못 읽으면 측정값 자체가
+무의미해지므로, 오해하기 쉬운 지점을 먼저 못박는다.
+
+#### 1.1.0 동기·비동기가 뜻하는 것과 뜻하지 않는 것
+
+`single`은 **동기 실행 모델**, `multi`는 **비동기 실행 모델**이다. 이 구분이 뜻하는 것은
+**진행을 누가 구동하는가** 하나뿐이다.
+
+| | single | multi |
+|---|---|---|
+| 진행을 구동하는 주체 | 러너가 만든 **전용 OS thread**가 직접 구동한다 | 그 언어의 **비동기 실행 모델**(coroutine, async runtime, event loop, goroutine)이 구동한다 |
+| 측정 구간에서 금지 | coroutine, async task, Promise/Future executor, event-loop yield | 없음 (단, PUB/XPUB publish와 raw reply는 multi에서도 synchronous terminal) |
+
+> **오해 금지 — 동기 실행 모델은 "한 건 보내고 응답을 기다린다"는 뜻이 아니다.**
+>
+> 동기는 *진행을 전용 thread가 직접 구동한다*는 뜻이지, *in-flight를 1로 묶는다*는 뜻이
+> 전혀 아니다. 두 suite 모두에서 **응답을 기다린 뒤 다음을 보내는 RTT 전용 루프는
+> 금지**다. RTT 루프는 부하 수준을 인위적으로 1로 낮춰 처리량 측정을 무의미하게 만든다.
+
+#### 1.1.1 admission과 reply는 별개의 사건이다
+
+request/reply 러너를 잘못 짜는 원인은 거의 항상 이 하나다. Core 공개 API에서
+**제출(admission)이 끝나는 시점과 응답(reply)이 오는 시점은 서로 다른 사건**이다.
+`zlink_request_part`를 `DONTWAIT` + `FINAL`로 부르면
+(`core/include/zlink/socket/api.h` 의 `zlink_request_part` 주석):
+
+| 반환 | 뜻 | 러너가 할 일 |
+|---|---|---|
+| `ZLINK_SUBMIT_OK` + nonzero REQUEST completion ID | **제출됐다.** reply timeout이 이 시점에 시작한다 | outstanding을 하나 늘리고 **곧바로 다음 request를 제출한다.** 여기서 reply를 기다리지 않는다 |
+| `ZLINK_SUBMIT_BACKPRESSURED` + `EAGAIN` + nonzero WRITABLE 대기 토큰 | 지금은 더 못 받는다. 이것이 **포화 경계**다 | 제출을 멈추고 completion을 진행한다. 그 토큰의 `ZLINK_COMPLETION_WRITABLE`이 오면 **같은 요청을 다시 제출**한다 |
+| `ZLINK_SUBMIT_NOT_CONNECTED` | mandatory ROUTER route 없음. 토큰 없음 | 실패로 기록한다 |
+
+reply는 나중에 **completion queue**로 도착한다. 즉 "응답을 받는다"는 것은 함수가 반환하기를
+기다리는 일이 아니라 completion을 drain하는 일이다.
+
+#### 1.1.2 requester thread의 실행 형태
+
+전용 requester thread 하나가 **제출과 completion 진행을 교대로** 구동한다. 이것이
+"synchronous callback terminal + completion poller"가 뜻하는 실행 형태다.
+
+```text
+while now < active_deadline:
+    # 1) 포화 경계까지 연속 제출
+    while true:
+        r = request_submit(DONTWAIT, FINAL)
+        if r == SUBMIT_OK:            outstanding += 1; continue
+        if r == SUBMIT_BACKPRESSURED: 대기 토큰 기록; break      # 포화 경계
+        else:                         실패 기록; break
+
+    # 2) completion 진행 — reply와 WRITABLE을 NO_DATA까지 drain
+    for record in completion_drain():
+        if record is REPLY:    outstanding -= 1; 집계(record)
+        if record is WRITABLE: 그 토큰의 요청을 다시 제출
+```
+
+같은 requester thread가 두 단계를 교대로 돈다. 별도 OS thread로 나눠도 된다. 어느 쪽이든
+coroutine·executor·event loop를 쓰지 않는다.
+
+동기 모델에서 동시 진행을 늘리는 또 다른 방법은 **전용 requester thread를 여러 개 두는
+것**이다. 이 정책은 그것을 허용한다. thread 수를 늘려 부하를 만드는 것과 한 thread에서
+연속 제출하는 것 중 무엇을 쓰든, 금지되는 것은 in-flight를 1로 묶는 RTT 루프뿐이다.
+
+#### 1.1.3 고수준 binding의 공개 API가 다른 모양일 때
+
+binding의 공개 request terminal이 admission 결과를 직접 돌려주지 않고 **admission과 reply를
+하나의 awaitable로 합쳐** 제공하는 경우가 있다(`async()` 계열). 이때도 결론은 같다.
+
+- **그 awaitable을 기다리지 말고 계속 제출한다.** 반환된 awaitable은 미완료 집합에 넣고,
+  완료되는 것부터 drain해 집계한다.
+- backpressure는 binding이 내부에서 처리한다. binding의 awaitable terminal은 `DONTWAIT`로
+  admission을 **한 번** 시도하고, 거절되면 요청을 붙들고 **정확히 그 대기 토큰의
+  `WRITABLE`에서만** 재개한다. binding은 retry timer도 worker thread도 두지 않는다.
+  즉 §1.1.1의 경계가 binding 안에서 그대로 지켜진다. 러너가 그 경계를 따로 관측할 필요가
+  없고, 관측하려고 `ZLINK_POLLOUT` 같은 aggregate hint를 쓰면 오히려 부정확해진다.
+- 러너는 **미완료 개수 상한** 하나만 둔다. 상한이 없으면 wire는 HWM에서 막혀 있는데
+  미완료 객체만 메모리에 쌓인다. 상한은 wire를 포화시키기 충분한 값이면 되고, 모든
+  binding이 같은 값을 쓰며 report의 Effective Options에 노출한다.
+- single에서는 이 awaitable을 executor나 event loop에 맡기지 않는다. 전용 requester
+  thread가 직접 completion을 진행시켜 완료시킨다.
+
+#### 1.1.4 수신 경로와 언어별 고정 조건
 
 - 측정 집계가 걸리는 수신 경로는 **recv 모델**(poller `POLLIN` readiness 감지 +
-  nonblocking `recv` drain) 을 기본으로 한다. callback으로 측정 data delivery를
-  직접 집계하는 경로는 single 에서 사용하지 않는다.
-- **single 실행 모델은 전용 OS thread + synchronous API다.** 동시에 진행하는
-  sender/receiver 역할은 전용 OS thread에서 구동한다. raw send는 blocking
-  terminal을 사용하므로 HWM 도달 시 Core가 sender thread를 대기시킨다.
-  측정 구간에는 coroutine, async task, Promise/Future executor, event-loop yield를
-  사용하지 않는다.
+  nonblocking `recv` drain)을 기본으로 한다. callback으로 측정 data delivery를 직접
+  집계하는 경로는 single에서 사용하지 않는다.
+- raw send는 blocking terminal을 사용하므로 HWM 도달 시 Core가 sender thread를 대기시킨다.
 - Go는 역할별 goroutine을 active 구간 전체에서 `runtime.LockOSThread()`로 고정한다.
-  이 goroutine은 다른 작업과 OS thread를 공유하지 않는다. Node는
-  `worker_threads`, Python은 `threading.Thread`에서 synchronous terminal과 recv
-  loop를 실행한다. C++은 `co_await`, .NET은 `Task`, Rust는 Future executor를
-  single 측정 경로에서 사용하지 않는다.
-- `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`,
-  `ROUTER_ROUTER` 는 이 recv 모델로 active payload를 집계한다. single suite의
-  공식 패턴은 이 5개뿐이며, request-reply completion 모델을 쓰는 패턴은 없다(§1).
+  이 goroutine은 다른 작업과 OS thread를 공유하지 않는다. Node는 `worker_threads`,
+  Python은 `threading.Thread`에서 synchronous terminal과 recv loop를 실행한다. C++은
+  `co_await`, .NET은 `Task`, Rust는 Future executor를 single 측정 경로에서 사용하지 않는다.
+- `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`, `ROUTER_ROUTER`는 recv 모델로
+  active payload를 집계한다. `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_REQREP`는 §1.1.1~§1.1.3의
+  request-reply completion 모델로 active 왕복 완료를 집계하며, requester submit flow,
+  requester reply completion flow, replier recv/reply flow를 같은 process 안에서 동시에
+  구동한다.
 
 #### 프로세스/스레드 모델
 
@@ -80,8 +151,8 @@ sender thread + main recv loop 또는 sender thread + receiver thread 처럼 나
 benchmark process의 setup과 ready 확인도 같은 thread들이 synchronous API로
 수행한다. 실행 스크립트가 process를 시작하고 stdout을 읽는 orchestration 방식은
 이 규칙의 대상이 아니다.
-single 의 모든 패턴은 one-way 측정 surface를 사용한다. request-reply 비용은
-single에서 측정하지 않고 multi suite의 `MULTI_*_REQREP` 패턴으로 측정한다(§1).
+single 의 기본 패턴은 one-way 측정 surface를 사용한다. request-reply 비용은
+기존 one-way 패턴의 mode를 바꾸지 않고 별도 `*_REQREP` 패턴으로 측정한다.
 
 **raw one-way 패턴** (PAIR, PUBSUB, DEALER_DEALER, DEALER_ROUTER, ROUTER_ROUTER):
 ```text
@@ -99,12 +170,50 @@ single에서 측정하지 않고 multi suite의 `MULTI_*_REQREP` 패턴으로 �
   recv loop 구조와 active 집계 anchor는 모든 raw one-way 패턴과 바인딩에서
   동일 의미로 유지해야 한다.
 
+**raw request-reply 패턴** (DEALER_ROUTER_REQREP, ROUTER_ROUTER_REQREP):
+```text
++------------------------------------------------+
+| process                                        |
+| requester thread: request submit <-> progress  |
+|                   metric collect               |
+| replier thread: recv request -> reply          |
++------------------------------------------------+
+```
+- request submit flow는 ready gate 통과 후 requester socket으로 request를 가능한
+  만큼 연속 제출한다. submit 이 backpressure 를 만나면 새 request 제출을 멈추고
+  completion progress 쪽이 reply를 drain할 수 있게 한다.
+- requester progress flow는 같은 requester socket에서 requester progress loop를
+  수행한다. 이 loop는 blocking recv/wait 또는 그와 같은 의미의 public completion
+  progress 경로로 reply completion을 drain한다. 진행 주체는 반드시 그 역할의 전용
+  OS thread이며, coroutine, async task 또는 Future executor로 completion을 진행하지
+  않는다(§ 1.1.2). binding의 공개 terminal이 admission과 reply를 하나의 awaitable로
+  합쳐 제공하면 § 1.1.3의 규칙을 따른다 — awaitable을 기다리지 말고 계속 제출하고,
+  완료되는 것부터 drain한다. 같은 handle 동시 사용은 public handle concurrency 계약을
+  따른다.
+- replier thread는 request를 받은 뒤 source routing id와 request sequence로 reply를
+  되돌려 보낸다.
+- throughput은 active 구간에서 reply까지 완료된 왕복 수로 계산한다.
+- latency는 request 제출 시각부터 해당 reply completion까지의 시간으로 계산한다.
+
 **공통**:
 - raw one-way single에는 `EAGAIN` 기반 pending 관리, send-ready handler 등
   multi에서 사용하는 backpressure 메커니즘을 적용하지 않는다. one-way sender는
   blocking send terminal이 돌려주는 backpressure만 사용하며, in-flight 메시지 수를
   코드로 관리하거나 상한으로 고정하지 않는다
   ([PERF_POLICY.md § 7.2](PERF_POLICY.md)).
+- single reqrep은 request API의 public backpressure 결과를 사용해 submit flow를
+  멈추고, completion progress가 pending reply를 drain한 뒤 다시 submit한다.
+  inflight request 수를 코드로 관리하거나 상한으로 고정하지 않는다. request는
+  backpressure(`EAGAIN`/`BACKPRESSURED`)를 만날 때까지 연속 제출하며, HWM은 send
+  admission queue를 제한한다. reply를 기다리는 request 수는 실제 admission과
+  completion 속도로 정해지며, **응답을 받아야 다음 request를 보내는 1:1 ping-pong으로
+  직렬화하지 않는다.**
+- single reqrep **유효 집계**: throughput과 latency는 active 측정 구간 안에서
+  reply까지 완료된 왕복만 계산한다. 측정 종료(deadline) 시점에 응답이 오지 않은
+  outstanding request는 완료 왕복이 아니므로 집계에서 제외한다. deadline 이후의
+  bounded drain은 완료 카운트를 늘리지 않는 정리 동작이다. 각 (pattern, transport,
+  size) 케이스는 별도 프로세스로 실행되므로, 남은 outstanding은 프로세스 종료로
+  자연 정리된다. 별도 cancel/close 로직을 요구하지 않는다.
 - one-way 송신이 transient 오류(`EAGAIN`/`EINTR`/`ETIMEDOUT`)를 만나면 **1 ms 대기한
   뒤 같은 sequence를 새 `sent_ts_ns`로 다시 stamp해 재제출한다.** sleep 없는 즉시
   반복(busy retry)과 1 ms를 넘는 backoff는 모두 금지한다. 이 1 ms 대기는
@@ -118,6 +227,9 @@ single에서 측정하지 않고 multi suite의 `MULTI_*_REQREP` 패턴으로 �
   active 결과 집계는 본 문서가 정의한 active 유효 메시지 조건을 계속 따른다.
 - idle drain은 single recv one-way 공통 계약이다. 특정 one-way 패턴이나 특정
   binding만 더 길거나 다른 의미의 종료 drain을 두면 안 된다.
+- request-reply 패턴의 종료 drain은 active deadline 이전에 제출된 request의
+  bounded completion drain만 허용한다. active deadline 이후 새 request를 제출해서
+  완료 수를 늘리면 안 된다.
 
 ### 1.2 실행 계약 불변식
 
@@ -187,6 +299,7 @@ PUBSUB            = [ready] -> [post_ready_settle] -> [active(duration)] -> [idl
 | post-ready settle | bounded stabilization | PUBSUB만 수행 | `PERF_SINGLE_PUBSUB_READY_SETTLE_MS` |
 | active | time-based | 5s | `PERF_SINGLE_DURATION_SECONDS` |
 | idle drain | bounded recv drain | recv one-way 전체 수행 | `PERF_SINGLE_RCVTIMEO_MS` 계열 timeout bound |
+| completion drain | bounded completion drain | request-reply 전체 수행 | `PERF_SINGLE_RCVTIMEO_MS` 계열 timeout bound |
 
 ### 2.0.1 Single 패턴별 handshake 고정
 
@@ -200,6 +313,8 @@ active 시작 조건, 종료 신호를 사용해야 한다.
 | `DEALER_DEALER` | 단일 process 안 sender thread + recv/progress flow | raw socket `CONNECTION_READY` | ready gate 통과 직후 `phase=active` | sender가 wire stop token 송신, recv/progress flow는 idle drain 후 종료 |
 | `DEALER_ROUTER` | 단일 process 안 sender thread + recv/progress flow | raw socket `CONNECTION_READY`, routing self-check는 단발성 1회만 허용 | ready gate와 self-check 통과 직후 `phase=active` | sender가 wire stop token 송신, recv/progress flow는 idle drain 후 종료 |
 | `ROUTER_ROUTER` | 단일 process 안 sender thread + recv/progress flow | raw socket `CONNECTION_READY`, routing self-check는 단발성 1회만 허용 | ready gate와 self-check 통과 직후 `phase=active` | sender가 wire stop token 송신, recv/progress flow는 idle drain 후 종료 |
+| `DEALER_ROUTER_REQREP` | 단일 process 안 requester thread + replier thread. requester submit/progress는 같은 thread에서 교대하거나 별도 OS thread로 분리 가능 | raw socket `CONNECTION_READY`, routing self-check는 단발성 1회만 허용 | ready gate와 self-check 통과 직후 `phase=active` | requester는 새 request 제출을 멈추고 bounded completion drain 후 종료 |
+| `ROUTER_ROUTER_REQREP` | 단일 process 안 requester thread + replier thread. requester submit/progress는 같은 thread에서 교대하거나 별도 OS thread로 분리 가능 | raw socket `CONNECTION_READY`, routing self-check는 단발성 1회만 허용 | ready gate와 self-check 통과 직후 `phase=active` | requester는 새 request 제출을 멈추고 bounded completion drain 후 종료 |
 | `PUBSUB` | 단일 process 안 publisher thread + subscriber drain | raw socket `CONNECTION_READY` 후 bounded post-ready settle | post-ready settle 완료 직후 `phase=active` | publisher가 wire stop token 송신, subscriber는 idle drain 후 종료 |
 
 - single suite에는 runner stdin/stdout `READY` / `CLIENT_READY` / `START`
@@ -257,8 +372,13 @@ active 구간 집계는 payload에 기록된 metric header를 기준으로만 �
   아니다. active deadline 이후에 recv한 메시지는 stop token 도착 여부와 무관하게
   집계에서 제외하고 종료 정리로만 소비한다. 이 규칙은 모든 one-way 패턴과 모든
   binding에 같은 의미로 적용한다.
+- single request-reply active 유효 완료 규칙은 "`phase == active` 인 request가
+  active window 안에서 제출되고, **reply completion도 active deadline 전에 끝난**
+  왕복"으로 고정한다. 판정에 쓰는 시각은 completion을 처리한 monotonic 시각이며,
+  같은 시각으로 왕복 latency를 산출한다. deadline 뒤 bounded completion drain은
+  outstanding 정리만 수행하며 throughput과 latency를 늘리지 않는다.
 
-즉, throughput과 latency는 동일한 유효 메시지 집합을 사용한다.
+즉, throughput과 latency는 동일한 유효 메시지(또는 유효 완료) 집합을 사용한다.
 
 ---
 
@@ -375,18 +495,17 @@ status                = (expected_result_lines == actual_result_lines) ? "comple
 
 ### 6.1 지원 패턴
 
-공식 `--pattern ALL`은 아래 5개 패턴을 정확히 선택한다.
+공식 `--pattern ALL`은 아래 7개 패턴을 정확히 선택한다.
 
 - PAIR
 - PUBSUB
 - DEALER_DEALER
 - DEALER_ROUTER
 - ROUTER_ROUTER
+- DEALER_ROUTER_REQREP
+- ROUTER_ROUTER_REQREP
 
 > STREAM 계열(STREAM)은 single suite에서 테스트하지 않는다.
-> request/reply 계열(`DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_REQREP`)도 single suite에서
-> 테스트하지 않는다. multi suite의 `MULTI_DEALER_ROUTER_REQREP`,
-> `MULTI_ROUTER_ROUTER_REQREP`에서만 측정한다(§1, D-BP3).
 
 #### recv mode 지원 범위
 
@@ -397,12 +516,14 @@ status                = (expected_result_lines == actual_result_lines) ? "comple
 | DEALER_DEALER | `recv` |
 | DEALER_ROUTER | `recv` |
 | ROUTER_ROUTER | `recv` |
+| DEALER_ROUTER_REQREP | `request-reply` |
+| ROUTER_ROUTER_REQREP | `request-reply` |
 
 정책:
 
 - single 전 패턴의 테스트 mode는 recv이다.
 - 기존 `DEALER_ROUTER`, `ROUTER_ROUTER`의 mode를 바꾸거나 옵션으로 request-reply를
-  섞으면 안 된다. single에 request-reply 패턴을 다시 추가하지 않는다.
+  섞으면 안 된다. request-reply는 별도 `*_REQREP` 패턴으로만 측정한다.
 
 #### ready gate 기준
 
@@ -417,6 +538,8 @@ perf는 추가 precondition(`FILTER_APPLIED`, quorum 완화)을 두지 않는다
 | DEALER_DEALER | `CONNECTION_READY` | `CONNECTION_READY` |
 | DEALER_ROUTER | `CONNECTION_READY` | `CONNECTION_READY` |
 | ROUTER_ROUTER | `CONNECTION_READY` | `CONNECTION_READY` |
+| DEALER_ROUTER_REQREP | `CONNECTION_READY` | `CONNECTION_READY` |
+| ROUTER_ROUTER_REQREP | `CONNECTION_READY` | `CONNECTION_READY` |
 
 - single policy 는 `event.value` 와 `snapshot.ready_count` gate 를 금지한다.
 - single policy 는 delivery-ready event gate 도 사용하지 않는다.
@@ -492,8 +615,10 @@ single perf의 기본 `PERF_IO_THREADS`는 모든 언어와 모든 패턴에서 
 ## 8. 변경 이력
 
 - **v2.3 (2026-09-07)**
-  - request/reply 모델(`DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_REQREP`)을 single suite에서
-    제외하고 공식 패턴을 one-way 5개로 고정했다 (D-BP3).
+  - request/reply 모델을 single suite에서 제외했던 개정(D-BP3)을 **철회**하고
+    `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_REQREP`를 공식 패턴으로 되돌렸다 (D-BP6).
+    §1.1을 실행 모델 중심으로 다시 써서 동기 실행 모델이 in-flight 1을 뜻하지
+    않는다는 점과 admission·reply가 별개 사건이라는 점을 명시했다.
   - one-way active 유효 메시지 규칙의 기준 시각을 "수신 monotonic 시각 < active
     deadline"으로 확정하고, wire 프레임 길이 불일치를 집계 제외 사유로 명문화했다.
   - one-way 송신의 transient 재시도를 "1 ms 대기 + `sent_ts_ns` 재stamp"로 고정했다.

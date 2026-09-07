@@ -2,7 +2,7 @@
 
 use crate::common;
 use std::future::Future;
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Write};
 use std::pin::Pin;
 use std::sync::{
     Arc,
@@ -335,6 +335,29 @@ pub fn run_client(config: ReqRepConfig) {
         settings.duration_seconds,
         &latency.finish(),
     );
+    // PERF_MULTI_TEST_POLICY.md:379,386-388 / PERF_POLICY.md:483-486 - emit
+    // CLIENT_DONE, keep the request completion target sockets open, and close
+    // them only after the runner has stopped the server and sent STOP.
+    // C reference: bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:792,:722-731.
+    println!("CLIENT_DONE,{}", args.msg_size);
+    io::stdout().flush().ok();
+    if !wait_for_runner_stop_after_done() {
+        panic!("runner closed stdin before STOP after CLIENT_DONE");
+    }
+}
+
+/// Blocks until the runner sends STOP/QUIT after CLIENT_DONE.
+/// Mirrors bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:722-731.
+fn wait_for_runner_stop_after_done() -> bool {
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        match line {
+            Ok(line) if matches!(line.trim(), "STOP" | "QUIT") => return true,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
+    false
 }
 
 fn configure_client_options<S>(socket: &S, settings: &common::MultiSettings)

@@ -196,6 +196,14 @@ internal static class PerfMultiSocketReqRep
             double throughput = result.completed / (double)Math.Max(1, durationSeconds);
             PrintResult(options.Pattern, options.Transport, size, throughput,
                 latency.mean, latency.p95, latency.p99);
+            // PERF_MULTI_TEST_POLICY.md:379,386-388 / PERF_POLICY.md:483-486 —
+            // emit CLIENT_DONE, keep the request completion target sockets
+            // open, and close them only after the runner has stopped the
+            // server and sent STOP. C reference:
+            // bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:792,:722-731.
+            WriteStdoutLine($"CLIENT_DONE,{size}");
+            if (!WaitForRunnerStopAfterDone())
+                return 2;
             return 0;
         }
         finally
@@ -384,6 +392,21 @@ internal static class PerfMultiSocketReqRep
                 throw completionError;
         }
         return (Volatile.Read(ref completed), samples, sampleSeen, sampleSum);
+    }
+
+    /// <summary>
+    ///     Blocks until the runner sends STOP/QUIT after CLIENT_DONE. Mirrors
+    ///     bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:722-731.
+    /// </summary>
+    private static bool WaitForRunnerStopAfterDone()
+    {
+        string? line;
+        while ((line = Console.In.ReadLine()) != null)
+        {
+            if (line == "STOP" || line == "QUIT")
+                return true;
+        }
+        return false;
     }
 
     private static bool ReplyReceived(Received received)

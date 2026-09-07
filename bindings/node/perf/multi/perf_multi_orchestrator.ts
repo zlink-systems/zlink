@@ -453,28 +453,27 @@ function serverStartReadyLine(msgSize) {
   return `SERVER_START_READY,${msgSize}`;
 }
 
+// PERF_POLICY.md:469-471: only the patterns where the C reference uses a
+// runner barrier may use CLIENT_READY/START. The C request/reply and
+// send/send echo clients emit no CLIENT_READY
+// (bindings/c/perf/multi/src/perf_multi_dealer_dealer_client.cpp,
+//  perf_multi_pubsub_client.cpp and the shared stream client are the only
+//  C multi clients that do).
 function needsClientReady(pattern) {
   return pattern === 'MULTI_DEALER_DEALER'
-    || pattern === 'MULTI_DEALER_ROUTER'
-    || pattern === 'MULTI_DEALER_ROUTER_SENDSEND'
-    || pattern === 'MULTI_DEALER_ROUTER_REQREP'
-    || pattern === 'MULTI_ROUTER_ROUTER'
-    || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
-    || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
     || pattern === 'MULTI_PUBSUB'
     || pattern === 'MULTI_STREAM';
 }
 
 function needsRunnerStart(pattern) {
   return pattern === 'MULTI_DEALER_DEALER'
-    || pattern === 'MULTI_DEALER_ROUTER'
-    || pattern === 'MULTI_DEALER_ROUTER_SENDSEND'
-    || pattern === 'MULTI_DEALER_ROUTER_REQREP'
-    || pattern === 'MULTI_ROUTER_ROUTER'
-    || pattern === 'MULTI_ROUTER_ROUTER_SENDSEND'
-    || pattern === 'MULTI_ROUTER_ROUTER_REQREP'
     || pattern === 'MULTI_PUBSUB'
     || pattern === 'MULTI_STREAM';
+}
+
+function isSocketReqRepPattern(pattern) {
+  return pattern === 'MULTI_DEALER_ROUTER_REQREP'
+    || pattern === 'MULTI_ROUTER_ROUTER_REQREP';
 }
 
 function childEnv(args, component) {
@@ -744,10 +743,76 @@ async function spawnMultiPair(serverScript, clientScript, args) {
   }
 
   const clientTimeoutMs = resolveMultiTimeoutSeconds(args) * 1000;
+  const shutdownTimeoutMs = Number.isFinite(args.serverShutdownTimeoutMs)
+    ? args.serverShutdownTimeoutMs : 5000;
   const rssGuard = startRssGuard(
     [['server', server], ['client', client]],
     `${args.pattern} ${args.transport} ${args.msgSize}B`
   );
+
+  if (isSocketReqRepPattern(args.pattern)) {
+    // PERF_MULTI_TEST_POLICY.md:379-381 / PERF_POLICY.md:483-486: the client
+    // reports CLIENT_DONE and keeps its request completion target sockets
+    // open. Stop the server, confirm its exit, and only then send STOP to the
+    // client (C: bindings/c/perf/run_comparison.py:2653-2658).
+    try {
+      await Promise.race([
+        waitForLine(
+          client,
+          `CLIENT_DONE,${args.msgSize}`,
+          clientScript || 'client',
+          clientTimeoutMs
+        ),
+        rssGuard.promise
+      ]);
+    } catch (error) {
+      rssGuard.stop();
+      await Promise.allSettled([
+        terminateProcessTree(server, 1000),
+        terminateProcessTree(client, 1000)
+      ]);
+      const stderr = [stderrText(server), stderrText(client)].filter(Boolean).join('\n');
+      if (stderr) {
+        error.message = `${error.message}\n${stderr}`;
+      }
+      throw error;
+    }
+    await flushProcessOutput();
+    try {
+      await stopServer(server, serverScript, shutdownTimeoutMs);
+      writeChildLine(client, 'STOP\n', { end: true });
+      const reqRepClientExit = await Promise.race([
+        waitForExit(client),
+        new Promise((_, reject) => {
+          setTimeout(
+            () => reject(new Error(`client timeout after ${shutdownTimeoutMs}ms`)),
+            shutdownTimeoutMs
+          );
+        })
+      ]);
+      if (reqRepClientExit !== 0) {
+        const stderr = stderrText(client);
+        const error = new Error(`client failed (${clientScript}): ${reqRepClientExit}`);
+        if (stderr) {
+          error.message = `${error.message}\n${stderr}`;
+        }
+        throw error;
+      }
+      await flushProcessOutput();
+      const hasResultLines = resultLines.some((line) => line.startsWith('RESULT,'));
+      if (!hasResultLines && (hasProtocolUnsupported(client) || hasProtocolUnsupported(server))) {
+        resultLines.push(`UNSUPPORTED,current,${args.pattern},${args.transport}`);
+      }
+      return resultLines;
+    } finally {
+      rssGuard.stop();
+      await Promise.allSettled([
+        terminateProcessTree(server, 1000),
+        terminateProcessTree(client, 1000)
+      ]);
+    }
+  }
+
   let clientExitCode;
   try {
     clientExitCode = await Promise.race([
@@ -804,11 +869,7 @@ async function spawnMultiPair(serverScript, clientScript, args) {
   }
 
   try {
-    await stopServer(
-      server,
-      serverScript,
-      Number.isFinite(args.serverShutdownTimeoutMs) ? args.serverShutdownTimeoutMs : 5000
-    );
+    await stopServer(server, serverScript, shutdownTimeoutMs);
     await flushProcessOutput();
     const hasResultLines = resultLines.some((line) => line.startsWith('RESULT,'));
     if (!hasResultLines && (hasProtocolUnsupported(client) || hasProtocolUnsupported(server))) {

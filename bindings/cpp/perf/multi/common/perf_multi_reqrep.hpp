@@ -36,6 +36,45 @@ inline bool transient (int err_)
            || err_ == EHOSTUNREACH || err_ == ENOTCONN;
 }
 
+// PERF_MULTI_TEST_POLICY.md:386-388 / PERF_POLICY.md:483-486: the
+// request/reply client prints CLIENT_DONE, keeps its request completion
+// target sockets open, and closes them only after the runner has stopped the
+// server and sent STOP.  Mirrors the C reference
+// (bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:722-731).
+// PERF_POLICY.md:169-172 - the request timeout knob name and meaning are the
+// C ones: PERF_MULTI_REQREP_TIMEOUT_MS (default 200), not the socket
+// PERF_MULTI_RCVTIMEO_MS. C reference:
+// bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:573-574.
+inline int request_timeout_ms ()
+{
+    return std::max (1, parse_positive_env ("PERF_MULTI_REQREP_TIMEOUT_MS", 200));
+}
+
+// Shared binding-wide outstanding bound. The public request terminal makes one
+// DONTWAIT admission attempt and resumes only from its own WRITABLE token
+// (zlink/Contracts/Messaging/operation_contracts.hpp:320-324), so Core already
+// paces admission exactly as the C reference does. This cap is only the memory
+// bound on un-settled awaitables: without it a runner that never awaits would
+// accumulate operation objects while the wire is held by HWM.
+// PERF_MULTI_TEST_POLICY.md:164-168 forbids using it as a round-trip gate, so
+// it must stay far above the steady-state depth (see the pass log).
+inline int max_outstanding_per_socket ()
+{
+    return std::max (2, parse_positive_env ("PERF_MULTI_REQREP_MAX_OUTSTANDING", 64));
+}
+
+inline bool wait_for_runner_stop_after_done ()
+{
+    std::string line;
+    while (std::getline (std::cin, line)) {
+        if (!line.empty () && line[line.size () - 1] == '\r')
+            line.erase (line.size () - 1);
+        if (line == "STOP" || line == "QUIT")
+            return true;
+    }
+    return false;
+}
+
 struct client_completion_state_t
 {
     explicit client_completion_state_t (size_t msg_size_) :
@@ -104,7 +143,7 @@ template <typename SocketT> struct client_slot_t
     client_slot_t () :
         socket (),
         logical (),
-        operation_active (false),
+        outstanding (0),
         retry_payload_stamped (false),
         next_seq (1)
     {
@@ -112,7 +151,7 @@ template <typename SocketT> struct client_slot_t
 
     std::unique_ptr<SocketT> socket;
     logical_request_t logical;
-    std::atomic<bool> operation_active;
+    std::atomic<unsigned> outstanding;
     bool retry_payload_stamped;
     uint64_t next_seq;
 };
@@ -187,7 +226,8 @@ template <typename SocketT> class client_bench_t
         _slots (),
         _monitors (),
         _ready_queue (),
-        _completion (std::make_shared<client_completion_state_t> (msg_size_))
+        _completion (std::make_shared<client_completion_state_t> (msg_size_)),
+        _max_outstanding (max_outstanding_per_socket ())
     {
     }
 
@@ -256,7 +296,11 @@ template <typename SocketT> class client_bench_t
         const bench_latency_stats_t latency = _completion->latency.snapshot ();
         print_client_result_lines (_lib_name, _config.result_pattern, _transport, _msg_size,
                                    completed, duration_s, 2.0, latency);
-        return true;
+        std::cout << "CLIENT_DONE," << _msg_size << std::endl;
+        // Keep the request completion target sockets alive until the runner
+        // has stopped the server and sent STOP
+        // (PERF_MULTI_TEST_POLICY.md:386-388, PERF_POLICY.md:483-486).
+        return wait_for_runner_stop_after_done ();
     }
 
   private:
@@ -303,11 +347,15 @@ template <typename SocketT> class client_bench_t
     bool launch_request (client_slot_t<SocketT> &slot_, bool &launched_)
     {
         launched_ = false;
-        // REQUEST async now owns both the pre-admission WRITABLE wait and the
-        // post-admission reply wait. Keep each benchmark client slot as one
-        // closed request/reply lifecycle instead of interpreting async()
-        // return as admission and building an unbounded retained-payload queue.
-        if (slot_.operation_active.load (std::memory_order_acquire))
+        // PERF_MULTI_TEST_POLICY.md:164-168 — do not fix the inflight request
+        // count and do not serialize the round trip 1:1.  Each turn submits
+        // one new logical request per socket and never waits for the previous
+        // reply, matching the C reference submit cursor
+        // (bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:577-590).
+        // REQUEST async owns the pre-admission WRITABLE wait and the
+        // post-admission reply wait, so the runner keeps no pending queue.
+        if (slot_.outstanding.load (std::memory_order_acquire)
+            >= static_cast<unsigned> (_max_outstanding))
             return true;
         if (!slot_.retry_payload_stamped) {
             const uint64_t sent_ns = perf_metric::now_ns ();
@@ -322,9 +370,9 @@ template <typename SocketT> class client_bench_t
         slot_.logical.launch.store (logical_launch_t::launching,
                                     std::memory_order_release);
         submit_async_request (_ready_queue, *slot_.socket, _target_rid,
-                              &slot_.logical, &slot_.operation_active,
+                              &slot_.logical, &slot_.outstanding,
                               std::chrono::milliseconds (
-                                std::max (1, _settings.rcvtimeo_ms)),
+                                std::max (1, request_timeout_ms ())),
                               _completion);
         switch (slot_.logical.launch.load (std::memory_order_acquire)) {
             case logical_launch_t::owned_by_operation:
@@ -411,7 +459,7 @@ template <typename SocketT> class client_bench_t
       perf::application_ready_queue_t &ready_queue_, SocketT &socket_,
       const zlink::routing_id_t &target_rid_,
       logical_request_t *logical_,
-      std::atomic<bool> *operation_active_,
+      std::atomic<unsigned> *slot_outstanding_,
       std::chrono::milliseconds timeout_,
       std::shared_ptr<client_completion_state_t> completion_)
     {
@@ -431,7 +479,7 @@ template <typename SocketT> class client_bench_t
             operation.emplace (
               begin_request (socket_, target_rid_, std::move (request), timeout_));
             completion_->outstanding.fetch_add (1, std::memory_order_release);
-            operation_active_->store (true, std::memory_order_release);
+            slot_outstanding_->fetch_add (1, std::memory_order_release);
             logical_->launch.store (logical_launch_t::owned_by_operation,
                                      std::memory_order_release);
             signal_change (completion_);
@@ -449,7 +497,7 @@ template <typename SocketT> class client_bench_t
             catch (...) {
                 completion_->fatal.store (true, std::memory_order_release);
             }
-            operation_active_->store (false, std::memory_order_release);
+            slot_outstanding_->fetch_sub (1, std::memory_order_release);
             completion_->outstanding.fetch_sub (1, std::memory_order_release);
             signal_change (completion_);
             co_return;
@@ -505,6 +553,7 @@ template <typename SocketT> class client_bench_t
     std::vector<connect_monitor_t> _monitors;
     perf::application_ready_queue_t _ready_queue;
     std::shared_ptr<client_completion_state_t> _completion;
+    const int _max_outstanding;
 };
 
 inline std::atomic<bool> &server_stop_flag ()
