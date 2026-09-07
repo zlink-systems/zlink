@@ -2,7 +2,7 @@
 
 > 2026-09-07. worktree `~/project/zlink-work/g1` (detached `2d56078977`). **커밋하지 않음.**
 > 원본 데이터: `<scratchpad>/G1/` (`cg_before.out`, `cg_after.out`, `callers.py`, `lines.py`, `stream.sh`, `build2.log`).
-> 상한 1.5 h에 걸려 TSan·with_stream·lost-wake until-fail:10은 실행하지 못했다(§8).
+> 검증 4항목(TSan delta, lost-wake until-fail:10, 57-suite 10회, with_stream)은 §7에 있다.
 
 ## 0. 측정 방법 — G-A 방법 + 라인 분해
 
@@ -104,22 +104,75 @@ STREAM은 위 소켓 타입 목록에 없어 이 큐가 **항상 비어 있는�
   READY/DISCONNECTED·completion 순서 경로에 접근하지 않았다.
 - auto-HWM: `applied_hwm`은 여전히 `planned != applied`이고 `current <= planned`일 때만 갱신된다.
 
-## 7. 실행한 테스트와 남은 실패
+## 7. 검증 (감독관 요청 4항목 포함)
 
-- `ctest -R 'wake|poll|stream|pipe|mailbox|send|recv|router|dealer|pair'` (57 tests) — **8회 실행, 7회 100 % pass,
-  1회 1건 실패**. 실패한 케이스 이름을 캡처하지 못했고(요약 줄만 grep), 이후 4회 연속 재현되지 않았다.
-  이 머신 load avg가 6~10(다른 job 빌드 동시 진행)이었던 것이 유력한 원인이지만 **확정하지 못했다** — §8.
+### (1) TSan — **신규 경고 0 (delta 0)**
+
+`~/project/zlink-work/s2/core/build-tsan`과 같은 구성으로 별도 트리를 만들었다
+(`ENABLE_TSAN=OFF` + 수동 `-fsanitize=thread -fno-omit-frame-pointer`, `ENABLE_LTO=OFF`,
+`RelWithDebInfo`, `BUILD_TESTS=ON`). 실행: `setarch $(uname -m) -R ctest --test-dir build-tsan -R wake`.
+**before(패치 제외한 clean `2d56078977`)와 after(패치 적용)를 각각 빌드해 같은 5개 테스트를 돌렸다.**
+
+| | before | after |
+|---|---:|---:|
+| `WARNING: ThreadSanitizer` 총 건수 | **12** | **12** |
+| `ypipe.hpp:104` | 10 | 10 |
+| `mailbox.cpp:120` / `:208` | 10 / 10 | 10 / 10 |
+| `socket_base_msg.cpp:68` / `:997` | 2 / 2 | 2 / 2 |
+| `socket_request_reply_runtime_io.cpp:1054` | 2 | 2 |
+| `socket_base_dispatch.cpp` / `ctx_physical_queue_registry.cpp` / `deferred_socket_msg_*` 언급 | **0** | **0** |
+
+**delta 0**. 경고 집합·건수·위치가 완전히 동일하며, 이번 변경이 만든 원자 접근
+(`deferred_socket_msg_termination_head`)은 어느 판에서도 보고되지 않았다.
+남은 12건은 mailbox/ypipe/명령 경로의 **기존** 경고로 이 job의 범위가 아니다.
+로그: `<scratchpad>/G1/tsan-before.log`, `tsan-after.log`, `tsan-delta.txt`.
+
+### (2) lost-wake 세트 `--repeat until-fail:10` — **통과**
+
+`ctest -R 'wake' --repeat until-fail:10` (5 tests × 10회) → exit 0, 실패 0. 총 323.8 s.
+
+### (3) 미규명 실패 — **10회 연속 clean, 재현 안 됨**
+
+`ctest -R 'wake|poll|stream|pipe|mailbox|send|recv|router|dealer|pair' --repeat until-fail:10`
+(57 tests × 10회, `--output-on-failure`를 파일로 저장) → **exit 0, 10회 전부 100 % pass**.
+1차 보고에서 8회 중 1회 나온 실패는 재현되지 않았고 이름을 잡지 못했다.
+그때 load avg가 6~10(다른 job 빌드 동시 진행)이었고 이번 10회는 load avg 2~3에서 돌았다.
+**타이밍 flake로 판단하되 케이스 이름은 미확인으로 남긴다.**
+
+### (4) with_stream (Release+LTO lib, CCU 1000, runs 1, flock, 측정 시작 load avg 0.53)
+
+`--stack zlink,asio --size all --ccu 1000 --runs 1`, 결과
+`bindings/c/bench/with_stream/results/20260907_110844`.
+
+| size | zlink kops | asio kops | 비(zlink/asio) | Phase 0 기준 zlink | S-11 판 비 |
+|---|---:|---:|---:|---|---:|
+| 64 B | **284.15** | 357.56 | 0.795 | 268.9 대비 **+5.7 %** | 0.799 |
+| 1024 B | **272.33** | 323.38 | **0.842** | 243.0 대비 **+12.1 %** | 0.820 |
+| 65536 B | **25.80** | 31.81 | 0.811 | 30.4 대비 −15.1 % | 0.821 |
+
+mismatch 전 셀 0. 64 KiB 절대값이 기준보다 낮지만 **같은 판의 asio도 39.2 → 31.81로 함께
+−19 % 내려갔다** — 셀 전체가 눌린 것이고 zlink/asio 비 0.811은 S-11의 0.821과 같은 수준이다.
+회귀로 읽지 않는다. 1024 B의 비 0.842는 이 캠페인에서 기록된 값 중 가장 좋다.
+
+### 그 밖에
+
 - 빌드 경고 1건(`__atomic_store_8 … region of size 0`)은 추적 결과
   `core/tests/unittest/contract_zmp_engine_fixture.hpp:55`의 테스트 픽스처에서 나오는 **기존 경고**로,
-  이번 변경과 무관하다(`build2.log`).
+  이번 변경과 무관하다(`<scratchpad>/G1/build2.log`).
 
-## 8. 멈춘 지점 (상한 1.5 h)
+## 8. 사고 보고 — 공유 stash 오염 (복구 완료)
 
-- **TSan 미실행**. 변경 (1)은 포인터를 원자로 바꾸고 프로브를 잠금 밖으로 옮겼으므로 TSan 확인이 필요하다.
-  TSan 트리를 새로 구성해야 해서(빌드 ~9 분 + 테스트) 상한 안에 들어가지 않았다. **게이트 전 필수.**
-- **with_stream(runs 1) 미실행**, lost-wake until-fail:10 미실행, ctest 실패 1건 미규명.
-- 남은 후보(측정치 있음, 미착수): `mailbox_t::send` 2.00/msg, `process_commands` 1.47/msg,
-  `pipe_t` `_out_sync` 3.00/msg, boost.asio 내부 4.03/msg. 이들이 zmq 대비 격차의 잔여분이다.
+TSan before 판을 만들 때 `git stash push`로 패치를 잠시 내렸는데, **stash 스택은 저장소 전체가
+공유**한다. 그 사이 G-2가 자기 stash를 올렸고, 내 `git stash pop`이 **G-2의 stash
+(`msg.cpp`/`msg.hpp`/`pipe.cpp`/`unittest_pipe_byte_charge.cpp`)를 내 워크트리에 꺼내고 스택에서 지웠다.**
+즉시 복구했다:
+
+1. 떨어진 stash 커밋 `5e56ede765`를 `git stash store`로 되돌려 스택에 재등록(내용 동일, 메시지에 경위 주석).
+2. 내 워크트리의 G-2 파일을 `git checkout -- core/src core/tests`로 되돌림.
+3. 내 patch는 `git stash apply c8f0bd51da` 후 그 stash만 삭제.
+
+현재 `git diff HEAD --stat`은 §3의 3개 파일뿐이고, `git stash list`의 `stash@{0}`이 G-2의 것이다.
+**이후 `git stash`는 사용하지 않았다.**
 
 ## 9. 왜 zmq는 1.7회/msg로 되는가
 
