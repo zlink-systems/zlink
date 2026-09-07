@@ -896,7 +896,6 @@ set(protocol-sources
     src/runtime/protocol/decoder_allocators.cpp)
 
 set(socket-common-sources
-    src/runtime/sockets/common/socket_close_ops.cpp
     src/runtime/sockets/common/socket_base.cpp
     src/runtime/sockets/common/socket_base_api.cpp
     src/runtime/sockets/common/socket_base_request_reply_bridge.cpp

@@ -107,17 +107,27 @@ struct transport_lifetime_t
 //  If session_pipe is true the ypipes use the smaller
 //  session_pipe_granularity chunk (per-connection pipes); otherwise the
 //  default message_pipe_granularity is used.
+//  Everything about the pair beyond the two ypipes themselves. Defaults
+//  describe an application-lane inproc pair; each field is named at the call
+//  site so the caller never has to remember a positional boolean.
+struct pipepair_options_t
+{
+    //  True for per-connection (session<->socket) pipes.
+    bool session_pipe = false;
+    transport_lane_t lane = transport_lane_application;
+    auto_hwm_role_t role = auto_hwm_role_none;
+    bool planning_enabled = false;
+    physical_queue_class_t queue_class = physical_queue_class_application;
+    //  Index (0/1) of the pipe owned by the session, or -1 when none.
+    //  Only meaningful together with session_pipe.
+    int session_owner_index = -1;
+};
+
 int pipepair (zlink::object_t *parents_[2],
               zlink::pipe_t *pipes_[2],
               const uint64_t hwms_[2],
               const bool conflate_[2],
-              bool session_pipe_ = false,
-              transport_lane_t lane_ = transport_lane_application,
-              auto_hwm_role_t role_ = auto_hwm_role_none,
-              bool planning_enabled_ = false,
-              physical_queue_class_t queue_class_ =
-                physical_queue_class_application,
-              int session_owner_index_ = -1);
+              const pipepair_options_t &options_ = pipepair_options_t ());
 
 struct i_pipe_events
 {
@@ -189,12 +199,7 @@ class pipe_t ZLINK_FINAL : public object_t,
                          zlink::pipe_t *pipes_[2],
                          const uint64_t hwms_[2],
                          const bool conflate_[2],
-                         bool session_pipe_,
-                         transport_lane_t lane_,
-                         auto_hwm_role_t role_,
-                         bool planning_enabled_,
-                         physical_queue_class_t queue_class_,
-                         int session_owner_index_);
+                         const pipepair_options_t &options_);
 
   public:
     typedef pipe_stream_packet_state_t stream_packet_state_t;

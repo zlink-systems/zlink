@@ -1006,9 +1006,9 @@ void test_flow_frame_before_registration_is_promoted_after_validation ()
     zlink::pipe_t *pipes[2] = {NULL, NULL};
     const uint64_t hwms[2] = {4096, 4096};
     const bool conflates[2] = {false, false};
-    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (
-      parents, pipes, hwms, conflates, false,
-      zlink::transport_lane_application));
+    zlink::pipepair_options_t pipe_options;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
 
     const uint64_t pair_id = 91;
     const uint64_t generation = 7;

@@ -367,10 +367,14 @@ void test_router_record_fences_mailbox_read_activation ()
     zlink::pipe_t *activated_pipe[2] = {NULL, NULL};
     const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
     const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, activated_pipe, hwms, conflates, true));
+      zlink::pipepair (parents, activated_pipe, hwms, conflates, pipe_options));
+    zlink::pipepair_options_t pipe_options_2;
+    pipe_options_2.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, first_pipe, hwms, conflates, true));
+      zlink::pipepair (parents, first_pipe, hwms, conflates, pipe_options_2));
 
     passive_pipe_sink_t activated_peer_sink;
     passive_pipe_sink_t first_peer_sink;
@@ -492,8 +496,10 @@ void test_count1_router_adopts_anonymous_pipe_on_first_activation ()
     zlink::pipe_t *pipes[2] = {NULL, NULL};
     const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
     const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipes, hwms, conflates, true));
+      zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
 
     passive_pipe_sink_t peer_sink;
     pipes[1]->set_event_sink (&peer_sink);
@@ -676,8 +682,10 @@ void test_pair_commands_only_fence_pipe_lifetime_transitions ()
     zlink::pipe_t *pipes[2] = {NULL, NULL};
     const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
     const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipes, hwms, conflates, true));
+      zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
     passive_pipe_sink_t peer_sink;
     pipes[1]->set_event_sink (&peer_sink);
 
@@ -714,8 +722,10 @@ void test_pair_commands_only_fence_pipe_lifetime_transitions ()
       "PAIR activation command unnecessarily acquired the multipart fence");
 
     zlink::pipe_t *replacement[2] = {NULL, NULL};
+    zlink::pipepair_options_t pipe_options_2;
+    pipe_options_2.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, replacement, hwms, conflates, true));
+      zlink::pipepair (parents, replacement, hwms, conflates, pipe_options_2));
     passive_pipe_sink_t replacement_peer_sink;
     replacement[1]->set_event_sink (&replacement_peer_sink);
 
@@ -907,8 +917,10 @@ void test_close_commands_wait_for_parked_multipart_cleanup_sync ()
     zlink::pipe_t *pipes[2] = {NULL, NULL};
     const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
     const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipes, hwms, conflates, true));
+      zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
     passive_pipe_sink_t peer_sink;
     pipes[1]->set_event_sink (&peer_sink);
 

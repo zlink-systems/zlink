@@ -21,6 +21,5 @@ struct routed_submit_target_t
 // Keep the existing runtime spelling local to the implementation while the
 // socket classes are migrated independently of the removed C surface.
 typedef zlink::routed_submit_target_t zlink_routed_submit_target_t;
-typedef uint64_t zlink_send_op_id_t;
 
 #endif

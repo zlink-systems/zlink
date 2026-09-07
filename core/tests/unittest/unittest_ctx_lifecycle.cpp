@@ -431,8 +431,10 @@ void test_engine_less_session_releases_socket_term_ack_with_pending_message ()
     zlink::pipe_t *pipes[2] = {NULL, NULL};
     const uint64_t hwms[2] = {16, 16};
     const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipes, hwms, conflates, true));
+      zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
     session->attach_pipe (pipes[0]);
     zlink::session_termination_test_access_t::attach_socket_pipe (
       socket, pipes[1]);
@@ -497,12 +499,15 @@ void test_terminating_lane_cannot_complete_delayed_pair_admission ()
     zlink::pipe_t *completion[2] = {NULL, NULL};
     const uint64_t hwms[2] = {1, 1};
     const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, application, hwms, conflates, true,
-                       zlink::transport_lane_application));
+      zlink::pipepair (parents, application, hwms, conflates, pipe_options));
+    zlink::pipepair_options_t pipe_options_2;
+    pipe_options_2.session_pipe = true;
+    pipe_options_2.lane = zlink::transport_lane_completion;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, completion, hwms, conflates, true,
-                       zlink::transport_lane_completion));
+      zlink::pipepair (parents, completion, hwms, conflates, pipe_options_2));
 
     const uint64_t pair_id = 1;
     const uint64_t generation = 1;
@@ -565,8 +570,10 @@ void test_reciprocal_pipe_ack_is_queued_before_local_completion ()
     zlink::pipe_t *pipes[2] = {NULL, NULL};
     const uint64_t hwms[2] = {1, 1};
     const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipes, hwms, conflates, true));
+      zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
 
     pipe_completion_order_sink_t completion_sink (pipes[1]);
     passive_pipe_sink_t passive_sink;
@@ -603,8 +610,10 @@ void test_concurrent_pipe_acks_detach_pair_once ()
         zlink::pipe_t *pipes[2] = {NULL, NULL};
         const uint64_t hwms[2] = {1, 1};
         const bool conflates[2] = {false, false};
+        zlink::pipepair_options_t pipe_options;
+        pipe_options.session_pipe = true;
         TEST_ASSERT_SUCCESS_ERRNO (
-          zlink::pipepair (parents, pipes, hwms, conflates, true));
+          zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
 
         concurrent_pipe_sink_t sinks[2];
         pipes[0]->set_event_sink (&sinks[0]);
@@ -652,8 +661,10 @@ void test_retained_peer_snapshot_outlives_concurrent_pipe_acks ()
     zlink::pipe_t *pipes[2] = {NULL, NULL};
     const uint64_t hwms[2] = {1, 1};
     const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipes, hwms, conflates, true));
+      zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
 
     concurrent_pipe_sink_t sinks[2];
     pipes[0]->set_event_sink (&sinks[0]);
@@ -709,8 +720,10 @@ void test_routing_id_snapshot_is_consistent_during_publication ()
     zlink::pipe_t *pipes[2] = {NULL, NULL};
     const uint64_t hwms[2] = {1, 1};
     const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipes, hwms, conflates, true));
+      zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
 
     concurrent_pipe_sink_t sinks[2];
     pipes[0]->set_event_sink (&sinks[0]);
@@ -796,10 +809,11 @@ void test_session_decoder_queue_accounting_publication ()
     zlink::pipe_t *pipes[2] = {NULL, NULL};
     const uint64_t hwms[2] = {0, 0};
     const bool conflates[2] = {false, false};
-    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (
-      parents, pipes, hwms, conflates, true,
-      zlink::transport_lane_application, zlink::auto_hwm_role_none, false,
-      zlink::physical_queue_class_application, 0));
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
+    pipe_options.session_owner_index = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
 
     concurrent_pipe_sink_t sinks[2];
     pipes[0]->set_event_sink (&sinks[0]);

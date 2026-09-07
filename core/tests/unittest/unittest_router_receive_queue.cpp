@@ -238,8 +238,10 @@ void run_router_recv_serializes_fq_with_pipe_termination (bool routed_recv_)
       + (sizeof ("payload") - 1);
     const uint64_t hwms[2] = {queued_frame_bytes, queued_frame_bytes};
     const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipes, hwms, conflates, true));
+      zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
 
     passive_pipe_sink_t peer_sink;
     pipes[1]->set_event_sink (&peer_sink);
@@ -386,10 +388,14 @@ void run_router_multipart_pipe_termination_does_not_join_next_peer_record (
     zlink::pipe_t *pipe_b[2] = {NULL, NULL};
     const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
     const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipe_a, hwms, conflates, true));
+      zlink::pipepair (parents, pipe_a, hwms, conflates, pipe_options));
+    zlink::pipepair_options_t pipe_options_2;
+    pipe_options_2.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipe_b, hwms, conflates, true));
+      zlink::pipepair (parents, pipe_b, hwms, conflates, pipe_options_2));
 
     passive_pipe_sink_t peer_a_sink;
     passive_pipe_sink_t peer_b_sink;
@@ -532,8 +538,10 @@ void run_router_prefetched_reject_consume_discards_record (bool multipart_)
     zlink::pipe_t *pipes[2] = {NULL, NULL};
     const uint64_t hwms[2] = {1024 * 1024, 1024 * 1024};
     const bool conflates[2] = {false, false};
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipes, hwms, conflates, true));
+      zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
 
     passive_pipe_sink_t peer_sink;
     pipes[1]->set_event_sink (&peer_sink);

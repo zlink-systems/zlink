@@ -391,60 +391,63 @@ void zlink::socket_base_t::event_connected (
            transport_lane_, transport_pair_id_, transport_pair_generation_);
 }
 
+//  Shared emitter for the single-scalar monitor events. Each named wrapper
+//  below differs only in its event constant and the scalar it reports; the
+//  payload built here (one value, no routing id, default lane/pair fields) is
+//  identical to what the wrappers built individually.
+void zlink::socket_base_t::event_scalar (
+  const endpoint_uri_pair_t &endpoint_uri_pair_, uint64_t type_, uint64_t value_)
+{
+    uint64_t values[1] = {value_};
+    event (endpoint_uri_pair_, NULL, 0, values, 1, type_);
+}
+
 void zlink::socket_base_t::event_connect_delayed (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                                   int err_)
 {
-    uint64_t values[1] = {static_cast<uint64_t> (err_)};
-    event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_CONNECT_DELAYED);
+    event_scalar (endpoint_uri_pair_, ZLINK_EVENT_CONNECT_DELAYED, static_cast<uint64_t> (err_));
 }
 
 void zlink::socket_base_t::event_connect_retried (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                                   int interval_)
 {
-    uint64_t values[1] = {static_cast<uint64_t> (interval_)};
-    event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_CONNECT_RETRIED);
+    event_scalar (endpoint_uri_pair_, ZLINK_EVENT_CONNECT_RETRIED, static_cast<uint64_t> (interval_));
 }
 
 void zlink::socket_base_t::event_listening (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                             zlink::fd_t fd_)
 {
-    uint64_t values[1] = {static_cast<uint64_t> (fd_)};
-    event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_LISTENING);
+    event_scalar (endpoint_uri_pair_, ZLINK_EVENT_LISTENING, static_cast<uint64_t> (fd_));
 }
 
 void zlink::socket_base_t::event_bind_failed (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                               int err_)
 {
-    uint64_t values[1] = {static_cast<uint64_t> (err_)};
-    event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_BIND_FAILED);
+    event_scalar (endpoint_uri_pair_, ZLINK_EVENT_BIND_FAILED, static_cast<uint64_t> (err_));
 }
 
 void zlink::socket_base_t::event_accepted (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                            zlink::fd_t fd_)
 {
-    uint64_t values[1] = {static_cast<uint64_t> (fd_)};
-    event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_ACCEPTED);
+    event_scalar (endpoint_uri_pair_, ZLINK_EVENT_ACCEPTED, static_cast<uint64_t> (fd_));
 }
 
 void zlink::socket_base_t::event_accept_failed (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                                 int err_)
 {
-    uint64_t values[1] = {static_cast<uint64_t> (err_)};
-    event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_ACCEPT_FAILED);
+    event_scalar (endpoint_uri_pair_, ZLINK_EVENT_ACCEPT_FAILED, static_cast<uint64_t> (err_));
 }
 
 void zlink::socket_base_t::event_closed (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                          zlink::fd_t fd_)
 {
-    uint64_t values[1] = {static_cast<uint64_t> (fd_)};
-    event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_CLOSED);
+    event_scalar (endpoint_uri_pair_, ZLINK_EVENT_CLOSED, static_cast<uint64_t> (fd_));
 }
 
 void zlink::socket_base_t::event_close_failed (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                                int err_)
 {
-    uint64_t values[1] = {static_cast<uint64_t> (err_)};
-    event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_CLOSE_FAILED);
+    event_scalar (endpoint_uri_pair_, ZLINK_EVENT_CLOSE_FAILED, static_cast<uint64_t> (err_));
 }
 
 void zlink::socket_base_t::event_disconnected (const endpoint_uri_pair_t &endpoint_uri_pair_,
@@ -517,15 +520,13 @@ void zlink::socket_base_t::event_disconnected (const endpoint_uri_pair_t &endpoi
 void zlink::socket_base_t::event_handshake_failed_no_detail (
   const endpoint_uri_pair_t &endpoint_uri_pair_, int err_)
 {
-    uint64_t values[1] = {static_cast<uint64_t> (err_)};
-    event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_HANDSHAKE_FAILED_NO_DETAIL);
+    event_scalar (endpoint_uri_pair_, ZLINK_EVENT_HANDSHAKE_FAILED_NO_DETAIL, static_cast<uint64_t> (err_));
 }
 
 void zlink::socket_base_t::event_handshake_failed_protocol (
   const endpoint_uri_pair_t &endpoint_uri_pair_, int err_)
 {
-    uint64_t values[1] = {static_cast<uint64_t> (err_)};
-    event (endpoint_uri_pair_, NULL, 0, values, 1, ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL);
+    event_scalar (endpoint_uri_pair_, ZLINK_EVENT_HANDSHAKE_FAILED_PROTOCOL, static_cast<uint64_t> (err_));
 }
 
 void zlink::socket_base_t::event_connection_ready_changed (

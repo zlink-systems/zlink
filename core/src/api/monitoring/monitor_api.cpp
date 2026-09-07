@@ -10,7 +10,6 @@
 
 #include "api/core/close_result_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
-#include "sockets/common/socket_close_ops.hpp"
 
 namespace
 {
@@ -197,8 +196,10 @@ zlink_close_result_t zlink_monitor_close (void **monitor_p_)
     socket->stop ();
     handle = socket_handle_t ();
     const zlink_close_result_t rc = zlink_close (monitor);
-    if (raw_source_monitor_socket)
-        (void) zlink::socket_close_ops_t::request_close (raw_source_monitor_socket, 0);
+    if (raw_source_monitor_socket) {
+        raw_source_monitor_socket->stop ();
+        raw_source_monitor_socket->close (0);
+    }
     if (rc == ZLINK_CLOSE_OK)
         *monitor_p_ = NULL;
     return rc;

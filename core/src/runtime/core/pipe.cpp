@@ -101,12 +101,7 @@ int zlink::pipepair (object_t *parents_[2],
                      pipe_t *pipes_[2],
                      const uint64_t hwms_[2],
                      const bool conflate_[2],
-                     bool session_pipe_,
-                     transport_lane_t lane_,
-                     auto_hwm_role_t role_,
-                     bool planning_enabled_,
-                     physical_queue_class_t queue_class_,
-                     int session_owner_index_)
+                     const pipepair_options_t &options_)
 {
     //   Creates two pipe objects. These objects are connected by two ypipes,
     //   each to pass messages in one direction.
@@ -121,24 +116,27 @@ int zlink::pipepair (object_t *parents_[2],
 
     pipes_[0] = NULL;
     pipes_[1] = NULL;
-    zlink_assert (session_owner_index_ >= -1 && session_owner_index_ <= 1);
-    zlink_assert (session_pipe_ || session_owner_index_ == -1);
+    zlink_assert (options_.session_owner_index >= -1
+                  && options_.session_owner_index <= 1);
+    zlink_assert (options_.session_pipe || options_.session_owner_index == -1);
 
     ctx_t *const ctx = parents_[0]->get_ctx ();
     zlink_assert (ctx == parents_[1]->get_ctx ());
     const physical_queue_class_t resolved_queue_class =
-      lane_ == transport_lane_completion ? physical_queue_class_completion
-                                         : queue_class_;
+      options_.lane == transport_lane_completion
+        ? physical_queue_class_completion
+        : options_.queue_class;
     physical_queue_handle_t physical_queues[2];
     if (ctx->create_pipepair_queues (
-          hwms_[1], hwms_[0], resolved_queue_class, role_, planning_enabled_,
+          hwms_[1], hwms_[0], resolved_queue_class, options_.role,
+          options_.planning_enabled,
           &physical_queues[0], &physical_queues[1]) != 0)
         return -1;
 
     pipe_t::upipe_t *upipe1;
     if (conflate_[0])
         upipe1 = new (std::nothrow) upipe_conflate_t ();
-    else if (session_pipe_)
+    else if (options_.session_pipe)
         upipe1 = new (std::nothrow) upipe_session_t ();
     else
         upipe1 = new (std::nothrow) upipe_normal_t ();
@@ -147,7 +145,7 @@ int zlink::pipepair (object_t *parents_[2],
     pipe_t::upipe_t *upipe2;
     if (conflate_[1])
         upipe2 = new (std::nothrow) upipe_conflate_t ();
-    else if (session_pipe_)
+    else if (options_.session_pipe)
         upipe2 = new (std::nothrow) upipe_session_t ();
     else
         upipe2 = new (std::nothrow) upipe_normal_t ();
@@ -158,7 +156,7 @@ int zlink::pipepair (object_t *parents_[2],
     //  ready. Messages queued before that first binding keep id 0 and belong
     //  to the first transport; later nonzero ids still isolate reconnects.
     const uint64_t initial_connection_id =
-      session_pipe_ ? 0 : allocate_connection_id ();
+      options_.session_pipe ? 0 : allocate_connection_id ();
     const uint64_t route_incarnation_id =
       initial_connection_id != 0 ? initial_connection_id
                                  : allocate_connection_id ();
@@ -169,19 +167,19 @@ int zlink::pipepair (object_t *parents_[2],
 
     pipes_[0] = new (std::nothrow)
       pipe_t (parents_[0], upipe1, upipe2, hwms_[1], hwms_[0], conflate_[0],
-              session_pipe_, transport_lifetime, physical_queues[0],
+              options_.session_pipe, transport_lifetime, physical_queues[0],
               physical_queues[1],
               resolved_queue_class != physical_queue_class_application,
               resolved_queue_class == physical_queue_class_application
-                && session_owner_index_ == 0);
+                && options_.session_owner_index == 0);
     alloc_assert (pipes_[0]);
     pipes_[1] = new (std::nothrow)
       pipe_t (parents_[1], upipe2, upipe1, hwms_[0], hwms_[1], conflate_[1],
-              session_pipe_, transport_lifetime, physical_queues[1],
+              options_.session_pipe, transport_lifetime, physical_queues[1],
               physical_queues[0],
               resolved_queue_class != physical_queue_class_application,
               resolved_queue_class == physical_queue_class_application
-                && session_owner_index_ == 1);
+                && options_.session_owner_index == 1);
     alloc_assert (pipes_[1]);
 
     pipes_[0]->set_peer (pipes_[1]);

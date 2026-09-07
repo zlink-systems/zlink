@@ -213,8 +213,10 @@ void test_dequeue_notifies_only_a_writer_waiting_for_credit ()
     const uint64_t charge = sizeof (zlink::msg_t) + 64;
     const uint64_t hwms[] = {2 * charge, 2 * charge};
     const bool conflates[] = {false, false};
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipes, hwms, conflates, true));
+      zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
     credit_pipe_sink_t sink;
     pipes[0]->set_event_sink (&sink);
     pipes[1]->set_event_sink (&sink);

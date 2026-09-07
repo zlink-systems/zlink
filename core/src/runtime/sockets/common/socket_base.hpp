@@ -304,21 +304,12 @@ class socket_base_t : public own_t,
                                      zlink::msg_t *msg_,
                                      int flags_,
                                      bool manage_public_send_recovery_ = true);
+    // Rule owned by this frame: a routed public entry must carry a routing id.
+    // Everything else is the shared direct-send policy below.
     int send_routed_scoped (const zlink_routing_id_t *target_rid_,
                             zlink::msg_t *msg_,
                             int flags_,
                             socket_public_send_scope_t &scope_,
-                            uint64_t *connection_id_out_ = NULL,
-                            uint64_t expected_connection_id_ = 0,
-                            zlink::pipe_t **pipe_out_ = NULL,
-                            uint64_t expected_transport_pair_id_ = 0,
-                            uint64_t expected_transport_pair_generation_ = 0,
-                            bool report_multipart_abort_ = false,
-                            pipe_write_observer_fn observer_ = NULL,
-                            void *observer_userdata_ = NULL,
-                            routed_send_attempt_identity_t
-                              *attempt_identity_out_ = NULL,
-                            uint64_t expected_route_incarnation_id_ = 0,
                             bool manage_public_send_recovery_ = true);
     int select_routed_submit_target (
       const zlink_routing_id_t *router_rid_or_null_,
@@ -1061,16 +1052,20 @@ class socket_base_t : public own_t,
     int acquire_transport_pair_owner_progress_with_timeout (
       int timeout_ms_, int timeout_errno_);
 
-    // Direct public send currently shares one scope between single-part and
-    // logical multipart wrappers. Keep the admission/sync decision and the
-    // blocking retry runner behind one internal boundary so future structural
-    // candidates can change them independently.
+    // Rule ownership of the direct-send family (one rule per frame):
+    //   send()/send_routed()                  build the normal public send scope
+    //   send_complete_record()/
+    //     send_routed_complete_record()       build the complete-record scope
+    //   send_scoped()                         non-routed entry (no target rid)
+    //   send_routed_scoped()                  routed entry requires a target rid
+    //   send_direct_with_retry()              one physical admission attempt plus
+    //                                         the submit-retry / blocking policy
+    // No admission rule is duplicated across those frames; the wrappers now
+    // forward only the parameters they actually decide on.
     int send_direct_with_retry (const zlink_routing_id_t *target_rid_,
                                 zlink::msg_t *msg_,
                                 int flags_,
                                 socket_public_send_scope_t &scope_,
-                                uint64_t *connection_id_out_ = NULL,
-                                uint64_t expected_connection_id_ = 0,
                                 bool report_multipart_abort_ = false,
                                 zlink::pipe_t **pipe_out_ = NULL,
                                 uint64_t expected_transport_pair_id_ = 0,
@@ -1079,8 +1074,6 @@ class socket_base_t : public own_t,
                                 bool commands_already_processed_ = false,
                                 pipe_write_observer_fn observer_ = NULL,
                                 void *observer_userdata_ = NULL,
-                                routed_send_attempt_identity_t
-                                  *attempt_identity_out_ = NULL,
                                 uint64_t expected_route_incarnation_id_ = 0,
                                 bool manage_public_send_recovery_ = true,
                                 bool request_only_ = false);
@@ -1130,6 +1123,10 @@ class socket_base_t : public own_t,
     }
 
     // test if event should be sent and then dispatch it
+    //  Single-scalar monitor event emitter shared by the named wrappers above.
+    void event_scalar (const endpoint_uri_pair_t &endpoint_uri_pair_,
+                       uint64_t type_,
+                       uint64_t value_);
     void event (const endpoint_uri_pair_t &endpoint_uri_pair_,
                 const unsigned char *routing_id_,
                 size_t routing_id_size_,
@@ -1280,6 +1277,8 @@ class socket_base_t : public own_t,
       bool manage_public_send_recovery_ = true,
       const zlink_routing_id_t *transient_target_rid_ = NULL,
       zlink::pipe_t *transient_selected_pipe_ = NULL,
+      //  false on a wake retry: the registered blocking wait already counted
+      //  this submission's first auto-HWM admission attempt.
       bool record_context_admission_ = true);
     struct submit_timeout_budget_t;
     struct completion_submit_wait_context_t;

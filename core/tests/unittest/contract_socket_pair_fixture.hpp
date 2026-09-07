@@ -110,8 +110,10 @@ struct contract_socket_pair_t
         zlink::object_t *parents[] = {cores[0], cores[1]};
         const uint64_t hwms[] = {hwm_, hwm_};
         const bool conflates[] = {false, false};
+        zlink::pipepair_options_t pipe_options;
+        pipe_options.lane = lane_;
         TEST_ASSERT_SUCCESS_ERRNO (
-          zlink::pipepair (parents, pipes_, hwms, conflates, false, lane_));
+          zlink::pipepair (parents, pipes_, hwms, conflates, pipe_options));
         char endpoint[96];
         snprintf (endpoint, sizeof (endpoint), "inproc://unit-pair-%llu-%llu",
                   static_cast<unsigned long long> (pair_id),

@@ -376,22 +376,22 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
                              observe_commit ? observer_userdata_ : NULL)
                        : routed_start
                          ? send_direct_with_retry (
-                             &rid, msg, flags, scope, NULL, 0, false,
+                             &rid, msg, flags, scope, false,
                              attempted_pipe_out_, target_.transport_pair_id,
                              target_.transport_pair_generation,
                              record_context_admission_,
                              frame_commands_already_processed,
                              observe_commit ? observer_ : NULL,
-                             observe_commit ? observer_userdata_ : NULL, NULL,
+                             observe_commit ? observer_userdata_ : NULL,
                              target_.route_incarnation_id,
                              manage_public_send_recovery_, request_admission_)
                          : send_direct_with_retry (
-                             NULL, msg, flags, scope, NULL, 0, false, NULL, 0,
-                             0, record_context_admission_,
+                             NULL, msg, flags, scope, false, NULL, 0, 0,
+                             record_context_admission_,
                              frame_commands_already_processed,
                              observe_commit ? observer_ : NULL,
-                             observe_commit ? observer_userdata_ : NULL, NULL,
-                             0, manage_public_send_recovery_);
+                             observe_commit ? observer_userdata_ : NULL, 0,
+                             manage_public_send_recovery_);
         if (rc == 0)
             continue;
 

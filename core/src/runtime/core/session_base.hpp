@@ -37,7 +37,6 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
     void attach_pipe (zlink::pipe_t *pipe_);
 
     //  Following functions are the interface exposed towards the engine.
-    virtual void reset ();
     void flush ();
     void rollback ();
     void engine_error (bool handshaked_, zlink::i_engine::error_reason_t reason_);

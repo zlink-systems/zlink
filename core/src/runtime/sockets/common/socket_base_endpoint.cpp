@@ -319,8 +319,12 @@ int zlink::socket_base_t::connect_internal (const char *endpoint_uri_,
               local_attach_policy.role != auto_hwm_role_none
                 ? local_attach_policy.role
                 : peer_attach_policy.role;
-            rc = pipepair (parents, new_pipes, hwms, conflates, false, lane,
-                           reservation_role, planning_enabled, queue_class);
+            pipepair_options_t pipe_options;
+            pipe_options.lane = lane;
+            pipe_options.role = reservation_role;
+            pipe_options.planning_enabled = planning_enabled;
+            pipe_options.queue_class = queue_class;
+            rc = pipepair (parents, new_pipes, hwms, conflates, pipe_options);
             if (rc != 0) {
                 if (peer_seqnum_reserved)
                     send_inproc_connected (peer.socket);
@@ -535,10 +539,9 @@ int zlink::socket_base_t::materialize_inproc_completion_lane (
     pipe_t *new_pipes[2] = {NULL, NULL};
     const uint64_t hwms[2] = {0, 0};
     const bool conflates[2] = {false, false};
-    if (pipepair (parents, new_pipes, hwms, conflates, false,
-                  transport_lane_completion, auto_hwm_role_none, false,
-                  physical_queue_class_application)
-        != 0)
+    pipepair_options_t pipe_options;
+    pipe_options.lane = transport_lane_completion;
+    if (pipepair (parents, new_pipes, hwms, conflates, pipe_options) != 0)
         return -1;
 
     new_pipes[0]->set_transport_pair (
@@ -655,10 +658,14 @@ int zlink::socket_base_t::create_resolved_connect_session (
         const physical_queue_endpoint_policy_t attach_policy =
           make_auto_hwm_queue_policy (
             std::shared_ptr<physical_queue_record_t> (), true);
-        const int rc = pipepair (
-          parents, new_pipes, hwms, conflates, true,
-          lane_options_.transport_lane, attach_policy.role,
-          attach_policy.planning_enabled, physical_queue_class_application, 1);
+        pipepair_options_t pipe_options;
+        pipe_options.session_pipe = true;
+        pipe_options.lane = lane_options_.transport_lane;
+        pipe_options.role = attach_policy.role;
+        pipe_options.planning_enabled = attach_policy.planning_enabled;
+        pipe_options.session_owner_index = 1;
+        const int rc =
+          pipepair (parents, new_pipes, hwms, conflates, pipe_options);
         if (rc != 0) {
             const int pipepair_errno = errno;
             std::string failed_endpoint;

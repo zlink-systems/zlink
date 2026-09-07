@@ -503,10 +503,14 @@ void zlink::session_base_t::engine_ready ()
         const physical_queue_endpoint_policy_t attach_policy =
           _socket->make_auto_hwm_queue_policy (
             std::shared_ptr<physical_queue_record_t> (), true);
-        const int rc = pipepair (
-          parents, pipes, hwms, conflates, true, _transport_lane,
-          attach_policy.role, attach_policy.planning_enabled,
-          physical_queue_class_application, 0);
+        pipepair_options_t pipe_options;
+        pipe_options.session_pipe = true;
+        pipe_options.lane = _transport_lane;
+        pipe_options.role = attach_policy.role;
+        pipe_options.planning_enabled = attach_policy.planning_enabled;
+        pipe_options.session_owner_index = 0;
+        const int rc =
+          pipepair (parents, pipes, hwms, conflates, pipe_options);
         if (rc != 0) {
             const int pipepair_errno = errno;
             const endpoint_uri_pair_t endpoint = _engine->get_endpoint ();
@@ -768,7 +772,6 @@ void zlink::session_base_t::reconnect ()
         }
     }
 
-    reset ();
 
     //  Reconnect.
     if (options.reconnect_ivl > 0)
@@ -808,7 +811,6 @@ void zlink::session_base_t::start_transport_pair_reconnect (bool force_)
         _pipe = NULL;
     }
 
-    reset ();
     if (options.reconnect_ivl > 0)
         start_connecting (true);
     else

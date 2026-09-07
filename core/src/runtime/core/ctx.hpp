@@ -146,12 +146,7 @@ class ctx_t ZLINK_FINAL
                          pipe_t *pipes_[2],
                          const uint64_t hwms_[2],
                          const bool conflate_[2],
-                         bool session_pipe_,
-                         transport_lane_t lane_,
-                         auto_hwm_role_t role_,
-                         bool planning_enabled_,
-                         physical_queue_class_t queue_class_,
-                         int session_owner_index_);
+                         const struct pipepair_options_t &options_);
 
     bool start ();
     bool start_runtime_locked ();

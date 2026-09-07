@@ -92,10 +92,11 @@ void test_peer_control_does_not_complete_open_application_multipart ()
     const uint64_t hwms[] = {4096, 4096};
     const bool conflate[] = {false, false};
     zlink::pipe_t *pipes[2];
-    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (
-      parents, pipes, hwms, conflate, true,
-      zlink::transport_lane_application, zlink::auto_hwm_role_none, false,
-      zlink::physical_queue_class_application, 0));
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
+    pipe_options.session_owner_index = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflate, pipe_options));
     pipes[0]->set_transport_pair (zlink::transport_lane_application, 17, 1);
     pipes[1]->set_transport_pair (zlink::transport_lane_application, 17, 1);
     pipes[0]->set_transport_lane_count (1);
@@ -337,11 +338,11 @@ void test_peer_control_slots_reject_non_dealer_router_pipe ()
             const uint64_t hwms[] = {4096, 4096};
             const bool conflates[] = {false, false};
             zlink::pipe_t *pipes[2];
-            TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (
-              parents, pipes, hwms, conflates, session_pipe,
-              zlink::transport_lane_application, zlink::auto_hwm_role_none,
-              false, zlink::physical_queue_class_application,
-              session_pipe ? 0 : -1));
+            zlink::pipepair_options_t pipe_options;
+            pipe_options.session_pipe = session_pipe;
+            pipe_options.session_owner_index = session_pipe ? 0 : -1;
+            TEST_ASSERT_SUCCESS_ERRNO (
+              zlink::pipepair (parents, pipes, hwms, conflates, pipe_options));
 
             pipe_cleanup_sink_t cleanup_sink;
             pipes[0]->set_event_sink (&cleanup_sink);
@@ -862,7 +863,8 @@ void test_empty_pipe_oversize_exception_applies_only_to_complete_message ()
     const uint64_t hwms[] = {frame_bytes * 2, frame_bytes * 2};
     const bool conflate[] = {false, false};
     zlink::pipe_t *pipes[2];
-    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (parents, pipes, hwms, conflate));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflate));
     pipes[0]->set_max_message_bytes (5);
 
     pipe_cleanup_sink_t cleanup_sink;
@@ -914,7 +916,8 @@ void test_drained_pipe_oversize_multipart_uses_fresh_peer_credit ()
     const uint64_t hwms[] = {hwm, hwm};
     const bool conflate[] = {false, false};
     zlink::pipe_t *pipes[2];
-    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (parents, pipes, hwms, conflate));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflate));
 
     pipe_cleanup_sink_t cleanup_sink;
     pipes[0]->set_event_sink (&cleanup_sink);
@@ -1251,9 +1254,10 @@ void test_completion_pipe_does_not_apply_hwm_admission ()
     const uint64_t hwms[] = {configured_hwm, configured_hwm};
     const bool conflate[] = {false, false};
     zlink::pipe_t *pipes[2];
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.lane = zlink::transport_lane_completion;
     TEST_ASSERT_SUCCESS_ERRNO (
-      zlink::pipepair (parents, pipes, hwms, conflate, false,
-                       zlink::transport_lane_completion));
+      zlink::pipepair (parents, pipes, hwms, conflate, pipe_options));
     pipes[0]->set_transport_pair (zlink::transport_lane_completion, 1, 1);
     pipes[1]->set_transport_pair (zlink::transport_lane_completion, 1, 1);
     pipes[0]->set_hwms (configured_hwm, configured_hwm);
@@ -1300,10 +1304,13 @@ void test_session_completion_control_balances_registry_charge ()
     const uint64_t hwms[] = {0, 0};
     const bool conflate[] = {false, false};
     zlink::pipe_t *pipes[2];
-    TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (
-      parents, pipes, hwms, conflate, true,
-      zlink::transport_lane_completion, zlink::auto_hwm_role_none, false,
-      zlink::physical_queue_class_completion, 0));
+    zlink::pipepair_options_t pipe_options;
+    pipe_options.session_pipe = true;
+    pipe_options.lane = zlink::transport_lane_completion;
+    pipe_options.queue_class = zlink::physical_queue_class_completion;
+    pipe_options.session_owner_index = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink::pipepair (parents, pipes, hwms, conflate, pipe_options));
     pipes[0]->set_transport_pair (zlink::transport_lane_completion, 1, 1);
     pipes[1]->set_transport_pair (zlink::transport_lane_completion, 1, 1);
     pipes[0]->set_transport_lane_count (2);
@@ -1435,7 +1442,8 @@ class weighted_selection_harness_t
         const uint64_t hwms[] = {hwm_, hwm_};
         const bool conflate[] = {false, false};
         zlink::pipe_t *pair[2];
-        TEST_ASSERT_SUCCESS_ERRNO (zlink::pipepair (parents, pair, hwms, conflate));
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink::pipepair (parents, pair, hwms, conflate));
         pair[0]->set_event_sink (&_sink);
         pair[1]->set_event_sink (&_sink);
         _endpoints.push_back (pair[0]);

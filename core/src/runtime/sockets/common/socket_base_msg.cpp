@@ -187,11 +187,10 @@ int zlink::socket_base_t::send_scoped (msg_t *msg_,
                                        void *observer_userdata_,
                                        bool manage_public_send_recovery_)
 {
-    return send_direct_with_retry (NULL, msg_, flags_, send_scope, NULL, 0,
+    return send_direct_with_retry (NULL, msg_, flags_, send_scope,
                                    report_multipart_abort_, pipe_out_, 0, 0,
-                                   true, false, observer_,
-                                   observer_userdata_, NULL, 0,
-                                   manage_public_send_recovery_);
+                                   true, false, observer_, observer_userdata_,
+                                   0, manage_public_send_recovery_);
 }
 
 int zlink::socket_base_t::send_routed (const zlink_routing_id_t *target_rid_,
@@ -214,8 +213,7 @@ int zlink::socket_base_t::send_routed_complete_record (
     if (!send_scope.acquired ())
         return -1;
 
-    return send_routed_scoped (target_rid_, msg_, flags_, send_scope, NULL, 0,
-                               NULL, 0, 0, false, NULL, NULL, NULL, 0,
+    return send_routed_scoped (target_rid_, msg_, flags_, send_scope,
                                manage_public_send_recovery_);
 }
 
@@ -246,31 +244,17 @@ int zlink::socket_base_t::send_routed_scoped (const zlink_routing_id_t *target_r
                                               msg_t *msg_,
                                               int flags_,
                                               socket_public_send_scope_t &send_scope,
-                                              uint64_t *connection_id_out_,
-                                              uint64_t expected_connection_id_,
-                                              zlink::pipe_t **pipe_out_,
-                                              uint64_t expected_transport_pair_id_,
-                                              uint64_t expected_transport_pair_generation_,
-                                              bool report_multipart_abort_,
-                                              pipe_write_observer_fn observer_,
-                                              void *observer_userdata_,
-                                              routed_send_attempt_identity_t
-                                                *attempt_identity_out_,
-                                              uint64_t
-                                                expected_route_incarnation_id_,
                                               bool manage_public_send_recovery_)
 {
+    //  The one rule this frame owns.
     if (unlikely (!target_rid_)) {
         errno = EFAULT;
         return -1;
     }
 
-    return send_direct_with_retry (
-      target_rid_, msg_, flags_, send_scope, connection_id_out_,
-      expected_connection_id_, report_multipart_abort_, pipe_out_, expected_transport_pair_id_,
-      expected_transport_pair_generation_, true, false, observer_,
-      observer_userdata_, attempt_identity_out_,
-      expected_route_incarnation_id_, manage_public_send_recovery_);
+    return send_direct_with_retry (target_rid_, msg_, flags_, send_scope, false,
+                                   NULL, 0, 0, true, false, NULL, NULL, 0,
+                                   manage_public_send_recovery_);
 }
 
 bool zlink::socket_base_t::begin_public_send_scope (
@@ -321,8 +305,6 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                                   msg_t *msg_,
                                                   int flags_,
                                                   socket_public_send_scope_t &send_scope,
-                                                  uint64_t *connection_id_out_,
-                                                  uint64_t expected_connection_id_,
                                                   bool report_multipart_abort_,
                                                   pipe_t **pipe_out_,
                                                   uint64_t expected_transport_pair_id_,
@@ -331,8 +313,6 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                                   bool commands_already_processed_,
                                                   pipe_write_observer_fn observer_,
                                                   void *observer_userdata_,
-                                                  routed_send_attempt_identity_t
-                                                    *attempt_identity_out_,
                                                   uint64_t
                                                     expected_route_incarnation_id_,
                                                   bool
@@ -340,12 +320,8 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
                                                   bool request_only_)
 {
     zlink_assert (send_scope.acquired ());
-    if (connection_id_out_)
-        *connection_id_out_ = 0;
     if (pipe_out_)
         *pipe_out_ = NULL;
-    if (attempt_identity_out_)
-        attempt_identity_out_->reset ();
 
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
@@ -409,13 +385,11 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
     } else
 #endif
         rc = target_rid_
-               ? xsend_routed (target_rid_, msg_, connection_id_out_,
-                               expected_connection_id_, pipe_out_,
+               ? xsend_routed (target_rid_, msg_, NULL, 0, pipe_out_,
                                expected_transport_pair_id_,
                                expected_transport_pair_generation_,
                                &first_admission, observer_, observer_userdata_,
-                               attempt_identity_out_,
-                               expected_route_incarnation_id_,
+                               NULL, expected_route_incarnation_id_,
                                request_only_)
                : xsend_pipe (msg_, pipe_out_, &first_admission, observer_,
                              observer_userdata_);
@@ -542,12 +516,10 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
             } else
 #endif
                 rc = target_rid_
-                       ? xsend_routed (target_rid_, msg_, connection_id_out_,
-                                       expected_connection_id_, pipe_out_,
+                       ? xsend_routed (target_rid_, msg_, NULL, 0, pipe_out_,
                                        expected_transport_pair_id_,
                                        expected_transport_pair_generation_, NULL,
-                                       observer_, observer_userdata_,
-                                       attempt_identity_out_,
+                                       observer_, observer_userdata_, NULL,
                                        expected_route_incarnation_id_,
                                        request_only_)
                        : xsend_pipe (msg_, pipe_out_, NULL, observer_,
@@ -629,12 +601,10 @@ int zlink::socket_base_t::send_direct_with_retry (const zlink_routing_id_t *targ
         if (!hold_sync_during_retry)
             send_scope.reacquire_sync_after_retry ();
         rc = target_rid_
-               ? xsend_routed (target_rid_, msg_, connection_id_out_,
-                               expected_connection_id_, pipe_out_,
+               ? xsend_routed (target_rid_, msg_, NULL, 0, pipe_out_,
                                expected_transport_pair_id_,
                                expected_transport_pair_generation_, NULL,
-                               observer_, observer_userdata_,
-                               attempt_identity_out_,
+                               observer_, observer_userdata_, NULL,
                                expected_route_incarnation_id_,
                                request_only_)
                : xsend_pipe (msg_, pipe_out_, NULL, observer_,
