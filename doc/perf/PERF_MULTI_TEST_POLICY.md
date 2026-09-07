@@ -230,21 +230,63 @@ active loop에 일반화하지 않는다.
 | 짧은 timer tick 기반 fallback (1–25 ms) | 금지. 과거 wakeup 누락 우회용으로 사용됐으나 core fix 이후 사용 금지. 단, C 기준 코드가 같은 위치에서 `perf_socket_poll(NULL, 0, N)`을 쓰는 idle wait는 `PERF_POLICY.md`의 empty-poll 예외를 따른다 |
 | 종료 / cooldown 용 별도 deadline 검사 | 별도 application clock 으로 처리하고 poller timeout 으로 대체하지 않음 |
 
-C의 socket request/reply 워크로드는 같은 active poller에 requester socket을
-**`ZLINK_POLLCOMPLETION` 단독**으로 등록한다. `ZLINK_POLLCOMPLETION`은
-`POLLIN`/`POLLOUT` readiness와 섞어 등록하지 않는다. app thread의 submit loop는
-reply completion을 gate로 삼지 않고 각 socket이 admission backpressure를 만날
-때까지 request를 연속 제출한다. poller wait는 completion queue와 callback을
-동시에 drain한다.
+#### Poller에 무엇을 등록하나 — 역할별 규칙
 
-C 이외의 binding은 public async request terminal로 여러 request를 동시에 진행한다.
-Python처럼 event-loop thread에서 async terminal을 진행하는 binding은 모든 requester
-socket을 같은 active execution context의 public poller 하나에 `POLLCOMPLETION`
-단독으로 등록할 수 있다. submit/progress turn마다 nonblocking `wait(..., 0)`을 최대
-한 번 호출한 뒤 zero-delay cooperative yield로 awaitable continuation을 진행한다.
-이 방식은 같은 Core reply callback의 dispatch owner만 wait caller로 옮기며 async
-terminal, Core-owned timeout/admission과 outstanding 깊이를 application 상한으로
-고정하지 않는 규칙을 바꾸지 않는다.
+소켓에는 알림이 오는 곳이 두 군데다.
+
+| 이벤트 | 뜻 | 꺼내는 함수 |
+|---|---|---|
+| `ZLINK_POLLIN` | 받을 **데이터**가 왔다 | `recv` |
+| `ZLINK_POLLCOMPLETION` | 내가 맡긴 **작업의 결과**가 나왔다 | `completion_recv` |
+
+`ZLINK_POLLOUT`은 우편함이 아니라 "지금 보낼 수 있을 것 같다"는 힌트다.
+
+역할이 무엇을 기다리는지에 따라 등록할 것이 정해진다.
+
+| 역할 | 등록 | 이유 |
+|---|---|---|
+| request/reply **requester** | `POLLCOMPLETION` **단독** | reply는 데이터가 아니라 맡긴 요청의 결과로 온다. `ZLINK_POLLIN`에 나타나지 않는다([Socket — DEALER](../../core/doc/spec/core/socket/06-dealer.ko.md#5-result와-readiness)) |
+| request/reply **replier** | `POLLIN` | 상대의 요청을 데이터로 받아 `recv`로 꺼낸다 |
+| one-way **receiver** | `POLLIN` | DATA를 `recv`로 꺼낸다 |
+| 모든 역할 | `POLLOUT`을 **걸지 않는다** | 아래 참조 |
+
+**`POLLOUT`을 걸지 않는 이유.** "보낼 수 있다"는 상태는 거의 항상 참이다. 등록해 두면
+`poller wait`가 기다리지 않고 매번 즉시 돌아오고, 기다리려고 부른 함수가 기다리지 않으므로
+루프가 CPU 속도로 헛돈다. 그리고 빼도 잃는 것이 없다 — 막혔던 제출이 재개 가능해지면 그
+신호(`ZLINK_COMPLETION_WRITABLE`)가 `POLLCOMPLETION`으로 오기 때문이다. C 기준 러너도 첫
+`NO_DATA` pull 뒤 `POLLOUT`을 관심 집합에서 뺀다
+(`bindings/c/perf/multi/src/perf_multi_dealer_dealer_client.cpp`의 `pollout_suppressed`).
+
+#### submit loop는 reply를 기다리지 않는다
+
+app thread의 submit loop는 reply completion을 gate로 삼지 않는다. 각 socket이 admission
+backpressure를 만날 때까지 request를 연속 제출하고, poller wait가 completion queue와 callback을
+함께 drain한다.
+
+C 이외의 binding은 public async request terminal로 여러 request를 동시에 진행한다. Python처럼
+event-loop thread에서 async terminal을 진행하는 binding은 모든 requester socket을 같은 active
+execution context의 public poller 하나에 `POLLCOMPLETION` 단독으로 등록할 수 있다.
+
+#### turn당 nonblocking wait은 한 번
+
+submit/progress turn마다 `wait(..., 0)`을 **최대 한 번** 호출한 뒤 zero-delay cooperative
+yield로 awaitable continuation을 진행한다.
+
+**왜 한 번인가.** 한 turn에서 `wait(0)`을 여러 번 부르면 그 turn에 completion을 더 많이
+걷어온다. 그러면 수치가 올라가는데 라이브러리가 빨라서가 아니라 러너가 CPU를 더 써서다.
+하네스 비용은 언어마다 다르므로 이 차이는 상쇄되지 않고 비율을 직접 움직인다.
+
+이 방식이 **바꾸는 것**은 하나다.
+
+- 같은 Core reply callback의 dispatch owner가 `wait`을 호출한 thread로 옮겨진다.
+
+이 방식이 **바꾸지 않는 것**은 다음과 같다.
+
+- async terminal의 의미
+- Core가 소유한 timeout과 admission
+- **outstanding 깊이를 application 상한으로 고정하지 않는다는 규칙**
+  ([PERF_POLICY.md](PERF_POLICY.md)의 "app 고정 window를 두지 않으며 ... reply를 기다리는
+  request 수는 실제 admission과 completion 속도로 정해진다")
 
 위에서 허용한 turn-coupled wait와 yield 외에 socket별 recv/progress OS thread, timer,
 pipe/eventfd wake, `setInterval`, 양수 sleep fallback을 추가하면 측정이 무효다. 한
