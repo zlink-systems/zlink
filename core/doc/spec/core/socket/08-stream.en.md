@@ -328,7 +328,10 @@ WS/WSS has the following performance characteristics.
 - **Write path** — The `msg_t` payload is passed directly to the Beast write
   buffer (no intermediate copy).
 - **Beast write buffer** — The default is 64KB. A WS write sends one supplied
-  buffer or two gathered buffers as a single binary frame (one `async_write`).
+  buffer as a single binary frame (one `async_write`). STREAM is a raw protocol
+  with no header to gather, so it does not use gather writes — whether a
+  connection may gather is decided once, when the connection is created, by the
+  fast-path policy from the protocol's and the transport's capabilities.
 - **Frame fragmentation** — `auto_fragment(false)`. One logical message maps
   to one WebSocket frame.
 
@@ -348,8 +351,10 @@ the WSS cost.
 The design trade-offs are as follows.
 
 - Speculative write is not supported because WebSocket is frame-based.
-- Gather write is supported for WS/WSS. `supports_gather_write()` returns
-  `true`, and `async_writev()` combines two buffers into one `async_write`.
+- Gather write: the WS/WSS transports advertise the capability through
+  `supports_gather_write()`, but STREAM's raw protocol has no header to gather,
+  so STREAM connections do not gather. Gathering is enabled only for sockets on
+  the ZMP protocol, together with the transport capability.
 - TLS/WSS has encryption overhead.
 
 ### Packet assembly implementation
@@ -425,10 +430,10 @@ STREAM retains the following runtime environment variables.
 - `ZLINK_ASIO_STREAM_ENABLE_NON_TCP_SPEC_READ`: disabled by default
 - `ZLINK_ASIO_STREAM_ASYNC_WRITE`: disabled by default; enabling it disables
   STREAM/TCP speculative writes and uses the pure asynchronous write path
-- `ZLINK_ASIO_STREAM_DISABLE_GATHER`: disabled by default, so STREAM gather
-  writes remain enabled
-- `ZLINK_ASIO_STREAM_GATHER_THRESHOLD`: default `1024`
-- `ZLINK_ASIO_STREAM_TINY_GATHER_THRESHOLD`: default `0`
+- `ZLINK_ASIO_STREAM_DISABLE_GATHER`, `ZLINK_ASIO_STREAM_GATHER_THRESHOLD`,
+  `ZLINK_ASIO_STREAM_TINY_GATHER_THRESHOLD`: STREAM raw connections do not use
+  gather writes, so these three variables have no effect (they are read only for
+  compatibility)
 - `ZLINK_ASIO_STREAM_INITIAL_TARGET_CAP`: default `4096`
 - `ZLINK_ASIO_STREAM_BATCH_SIZE`: default `4096`
 - `ZLINK_ASIO_STREAM_BATCH_HEADROOM`: default `64`

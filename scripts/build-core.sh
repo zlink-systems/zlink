@@ -10,11 +10,11 @@
 # work is just a rebuild — no per-run setting changes. Correctness ctest should
 # use the dev tree (LTO link is the slow part and is unnecessary for tests);
 # reserve the release tree for the shipped library and perf measurement. Test
-# executables link the static archive, so with LTO on every test relinks the
-# whole library: the release tree therefore builds without tests, and the
+# executables link the shared libzlink (unit tests: one non-LTO test-core
+# archive), so tests never relink the library; the release tree still builds
+# without tests because the LTO library link itself is the slow step, and the
 # release-gate mode (same tree, tests ON) is for the callgrind hotpath_gate and
-# a final LTO ctest right before a release. Until the test link structure is
-# reworked (CONTRIBUTING.ko.md §9), that is the fast path.
+# a final LTO ctest right before a release.
 set -euo pipefail
 
 mode="dev"

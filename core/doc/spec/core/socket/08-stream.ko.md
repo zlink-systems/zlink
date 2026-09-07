@@ -311,8 +311,10 @@ WS/WSS 성능 특성은 다음과 같다.
   복사된다 (delivery 시 단일 copy).
 - **Write path** — `msg_t` payload를 Beast write buffer로 직접 전달한다 (중간 copy
   없음).
-- **Beast write buffer** — 기본값은 64KB다. WS write는 전달받은 buffer 하나 또는
-  gather된 두 buffer를 단일 binary frame(`async_write` 한 번)으로 보낸다.
+- **Beast write buffer** — 기본값은 64KB다. WS write는 전달받은 buffer 하나를 단일
+  binary frame(`async_write` 한 번)으로 보낸다. STREAM은 raw protocol이라 gather할
+  header가 없으므로 gather write를 쓰지 않는다 — gather 여부는 연결을 만들 때 fast-path
+  policy가 protocol 능력과 transport 능력으로 한 번 정한다.
 - **Frame 분할** — `auto_fragment(false)`. 논리 message 하나가 하나의 WebSocket
   frame에 대응한다.
 
@@ -330,8 +332,9 @@ WS가 TCP 라인 레이트에 근접하고, WSS 비용은 TLS 암호화 오버�
 설계 트레이드오프는 다음과 같다.
 
 - Speculative write 미지원 (WebSocket frame 기반)
-- Gather write는 WS/WSS에서 지원한다. `supports_gather_write()`는 `true`이고,
-  `async_writev()`가 두 buffer를 하나의 `async_write`로 묶는다.
+- Gather write: WS/WSS transport는 `supports_gather_write()`로 능력을 알리지만, STREAM의
+  raw protocol에는 gather할 header가 없으므로 STREAM 연결은 gather write를 쓰지 않는다.
+  gather는 ZMP protocol을 쓰는 socket에서만 transport 능력과 함께 켜진다.
 - TLS/WSS는 암호화 오버헤드 존재
 
 ### Packet 조립 구현
@@ -399,9 +402,9 @@ socket/listener 기본값은 다음과 같다.
 - `ZLINK_ASIO_STREAM_ENABLE_NON_TCP_SPEC_READ`: 기본 비활성
 - `ZLINK_ASIO_STREAM_ASYNC_WRITE`: 기본 비활성. 활성화하면 STREAM/TCP speculative
   write를 끄고 순수 async write 경로를 사용
-- `ZLINK_ASIO_STREAM_DISABLE_GATHER`: 기본 비활성이라 STREAM gather-write는 유지됨
-- `ZLINK_ASIO_STREAM_GATHER_THRESHOLD`: 기본 `1024`
-- `ZLINK_ASIO_STREAM_TINY_GATHER_THRESHOLD`: 기본 `0`
+- `ZLINK_ASIO_STREAM_DISABLE_GATHER`, `ZLINK_ASIO_STREAM_GATHER_THRESHOLD`,
+  `ZLINK_ASIO_STREAM_TINY_GATHER_THRESHOLD`: STREAM raw 연결은 gather write를 쓰지 않으므로
+  이 세 변수는 동작에 영향이 없다(호환을 위해 읽기만 한다)
 - `ZLINK_ASIO_STREAM_INITIAL_TARGET_CAP`: 기본 `4096`
 - `ZLINK_ASIO_STREAM_BATCH_SIZE`: 기본 `4096`
 - `ZLINK_ASIO_STREAM_BATCH_HEADROOM`: 기본 `64`

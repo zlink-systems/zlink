@@ -104,7 +104,9 @@ cat /proc/sys/net/ipv4/ip_local_port_range
 ```text
 --stack <asio|cppserver|dotnet|netzlink|jvmzlink|zlink|zmq|netty|all|csv>
 --size <64|1024|65536|all|csv>
---build-dir PATH            기본값: core/build
+--build-dir PATH            기본값: bindings/c/build (Core 런타임은 ZLINK_CORE_SOURCE가
+                            정한다. 기본 `release`는 발행된 라이브러리를 내려받고,
+                            `local`이면 core/build를 쓴다)
 --reuse-build               기존 빌드 디렉토리 재사용(configure/build 생략)
 --clean-build               빌드 디렉토리 삭제 후 클린 빌드
 --ccu <N>                    기본값: 1000

@@ -28,9 +28,10 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   평소 개발·ctest; `release`(`core/build`, LTO, 테스트 OFF) — 출하 라이브러리·perf 측정(라이브러리
   LTO 링크 1회, 2분대); `release-gate`(`core/build`, LTO, 테스트 ON) — 릴리스 직전 `hotpath_gate`와
   LTO 전체 ctest 전용. `<mode> --lib-only`는 그 트리의 `libzlink` 런타임만 다시 빌드하며, perf
-  runner가 stale한 `core/build`를 재빌드할 때 이 옵션으로 호출한다(테스트 재링크 없음). Core 테스트
-  실행파일은 정적 아카이브에 링크하므로 LTO 트리에서 테스트를 켜면 Core 소스 하나를 고쳐도
-  테스트마다 전체 최적화를 다시 한다(그래서 `release`는 테스트 OFF).
+  runner가 stale한 `core/build`를 재빌드할 때 이 옵션으로 호출한다(테스트 재링크 없음). 통합·계약·C
+  테스트 실행파일은 공유 `libzlink`에, 단위 테스트는 non-LTO `test-core` 아카이브 하나에 링크하므로
+  Core 소스를 고쳐도 테스트마다 라이브러리를 다시 링크하지 않는다. `release`가 테스트 OFF인
+  이유는 LTO 라이브러리 링크 자체가 느리기 때문이다.
 - Python 바인딩 테스트는 시스템 Python에 pytest가 없으면
   `PYTHON_EXECUTABLE=<venv>/bin/python`을 절대 경로로 준다.
 
@@ -71,9 +72,9 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   poller의 `ZLINK_CONFIG_BUSY`, flow state처럼 공개 API로 관측 가능한 동기화로 결정적으로
   재현한다(`core/tests/integration/test_wake_invariants.cpp`가 기준 예). 공개 API로 재현할 수
   없는 경쟁은 테스트를 억지로 맞추지 말고 스펙 gap으로 보고한다.
-- 단위 테스트는 검사 대상 컴포넌트의 소스를 직접 컴파일한다(라이브러리 링크 없음). 라이브러리
-  동작을 보는 테스트는 통합 테스트다. (현재는 두 부류 모두 `libzlink-static`에 링크한다.
-  전환 계획은 §9.)
+- 단위 테스트는 non-LTO `test-core` 아카이브 하나에 링크하며 Core 내부 상태를 검사할 수 있다.
+  라이브러리 동작을 보는 테스트는 통합 테스트이며 공개 C API만으로 공유 `libzlink`를 상대한다
+  (`core/tests/README.md`의 "Interface Boundary").
 - `sleep`으로 타이밍을 추정하는 테스트를 추가하지 않는다. 새 테스트는 5회 반복 green을 확인한다.
 - 알려진 load flake: `test_single_lane_flow_snapshot_accounting`(병렬 suite에서 드물게 즉시 실패 →
   단독 재실행 1회로 판정), C++ 바인딩 테스트의 exit 86/134(재링크 직후 → 1회 재실행).
@@ -149,10 +150,10 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 
 ## 9. 알려진 부채와 예정 작업
 
-- 테스트 링크 구조: 통합 테스트를 릴리스 `libzlink.so`에 동적 링크(공개 API 강제), 단위 테스트는
-  소스 직접 컴파일로 전환. 내부 훅을 쓰는 통합 테스트 17개는 공개 API로 재작성, 라이브러리
-  동작을 보는 단위 테스트 12개는 통합 테스트로 이동. 완료 전까지는 §1의 `scripts/build-core.sh dev`
-  트리로 개발 빌드를 한다.
+- 테스트 링크 구조: 완료(`ddf9ff7e95`, 2026-09-06) — 통합·계약·C 테스트는 공유 `libzlink`에, 단위
+  테스트는 non-LTO `test-core` 아카이브에 링크하며 규칙은 `core/tests/README.md`("Interface
+  Boundary")에 있다. 일상 개발은 release 트리의 LTO 링크가 느리므로 여전히 §1의
+  `scripts/build-core.sh dev` 트리를 쓴다.
 - 0.16.0 캠페인의 이월 항목(전체 70 cell 4-size sweep, POSDDD 리팩토링 BLOCKERS)은
   [`doc/plan/c016-worklog/decisions.ko.md`](doc/plan/c016-worklog/decisions.ko.md)의 마지막
   판정을 본다.

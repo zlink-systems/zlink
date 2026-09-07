@@ -103,7 +103,9 @@ Run one stack with multi-size sequence (reconnect per size):
 ```text
 --stack <asio|cppserver|dotnet|netzlink|jvmzlink|zlink|zmq|netty|all|csv>
 --size <64|1024|65536|all|csv>
---build-dir PATH            default: core/build
+--build-dir PATH            default: bindings/c/build (the Core runtime comes from
+                            ZLINK_CORE_SOURCE: default `release` downloads the
+                            published library; set `local` to use core/build)
 --reuse-build               reuse existing build directory (skip configure/build)
 --clean-build               remove build directory and do a clean build
 --ccu <N>                    default: 1000

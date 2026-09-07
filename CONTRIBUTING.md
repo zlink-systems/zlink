@@ -28,9 +28,10 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   for daily work and ctest; `release` (`core/build`, LTO, tests OFF) for the shipped library and
   perf measurement (one LTO link, about two minutes); `release-gate` (`core/build`, LTO, tests
   ON) only right before a release for `hotpath_gate` and a final LTO ctest. `<mode> --lib-only` rebuilds only the `libzlink`
-  runtime of that tree; the perf runners call it when `core/build` is stale (no test relinks). Core test
-  executables link the static archive, so enabling tests on the LTO tree re-optimises the whole
-  library once per test executable after every Core change (hence tests OFF in `release`).
+  runtime of that tree; the perf runners call it when `core/build` is stale (no test relinks). Integration,
+  contract and C test executables link the shared `libzlink` and unit tests link one non-LTO `test-core`
+  archive, so a Core change no longer relinks the library per test; `release` still builds without tests
+  because the LTO library link itself is the slow part.
 - If the system Python has no pytest, pass `PYTHON_EXECUTABLE=<venv>/bin/python` as an
   absolute path to the Python binding tests.
 
@@ -73,9 +74,9 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   synchronisation: monitor events, the poller's `ZLINK_CONFIG_BUSY`, flow state
   (`core/tests/integration/test_wake_invariants.cpp` is the reference). A race that cannot be
   reproduced through the public API is reported as a spec gap, not forced by a test.
-- Unit tests compile the sources of the component under test directly (no library link).
-  A test that observes library behaviour is an integration test. (Today both kinds still link
-  `libzlink-static`; the transition is in §9.)
+- Unit tests link the single non-LTO `test-core` archive and may assert on private Core state;
+  a test that observes library behaviour is an integration test and uses only the public C API
+  against the shared `libzlink` (`core/tests/README.md`, "Interface Boundary").
 - No test estimates timing with `sleep`. A new test is repeated five times before it counts
   as green.
 - Known load flakes: `test_single_lane_flow_snapshot_accounting` (rare immediate failure in
@@ -160,11 +161,10 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 
 ## 9. Known debt and planned work
 
-- Test link structure: integration tests will link the release `libzlink.so` dynamically
-  (enforcing the public API), unit tests will compile their sources directly. Seventeen
-  integration tests that use internal hooks are to be rewritten against the public API, and
-  twelve unit tests that observe library behaviour move to integration. Until then, develop on the
-  `scripts/build-core.sh dev` tree (§1).
+- Test link structure: done (`ddf9ff7e95`, 2026-09-06) — integration, contract and C tests link the
+  shared `libzlink` and unit tests link the non-LTO `test-core` archive; the rule lives in
+  `core/tests/README.md` ("Interface Boundary"). Day-to-day development still uses the
+  `scripts/build-core.sh dev` tree (§1) because the release tree's LTO library link is slow.
 - Carry-overs of the 0.16.0 campaign (the full 70-cell four-size sweep, POSDDD refactor
   BLOCKERS) are in the last entries of
   [`doc/plan/c016-worklog/decisions.ko.md`](doc/plan/c016-worklog/decisions.ko.md).
