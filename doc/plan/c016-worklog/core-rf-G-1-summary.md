@@ -1,0 +1,143 @@
+# G-1 — 공개 send/recv 경로의 mutex 트래픽 축소
+
+> 2026-09-07. worktree `~/project/zlink-work/g1` (detached `2d56078977`). **커밋하지 않음.**
+> 원본 데이터: `<scratchpad>/G1/` (`cg_before.out`, `cg_after.out`, `callers.py`, `lines.py`, `stream.sh`, `build2.log`).
+> 상한 1.5 h에 걸려 TSan·with_stream·lost-wake until-fail:10은 실행하지 못했다(§8).
+
+## 0. 측정 방법 — G-A 방법 + 라인 분해
+
+G-A의 release(LTO) 덤프는 디버그 정보가 없어 `pthread_mutex_lock` 호출자가
+`process_commands` 한 덩어리(2.009/msg)로만 보이고 그 안의 어느 잠금인지 구분되지 않았다.
+그래서 같은 축소 셀(STREAM zlink, CCU 20 / 1024 B / 10 s, `--io-threads 4`, `--cache-sim=no`)을
+**dev 트리(RelWithDebInfo, LTO OFF, `-g`) lib**로 다시 떴다. 벤치 바이너리는 G-A 워크트리의
+`with_stream` 실행파일을 `LD_LIBRARY_PATH`만 바꿔 재사용했다(ABI 동일). 잠금 **횟수**는 인라이닝에
+영향받지 않으므로 dev 덤프가 release 덤프보다 정확한 계측기다 — 실제로 dev before가 **17.396/msg**,
+G-A release가 **17.335/msg**로 일치한다.
+
+## 1. 결과 (수치)
+
+| | before(`2d56078977`) | after | 변화 |
+|---|---:|---:|---|
+| `pthread_mutex_lock` 호출/msg | **17.396** | **15.122** | **−2.27** |
+| 그중 이번 변경에 직접 귀속되는 감소 | — | — | **−1.503** |
+| Ir/msg (idle 4.1 M 가정 보정) | ≈11,488 | ≈11,041 | ≈−3.9 % |
+| 셀 메시지 수 | 16,886 | 53,311 | (부하 차이 — §7) |
+
+**−1.503**은 아래 표의 두 행이 after 덤프에서 **완전히 사라진 값**이다(1.004 + 0.499).
+나머지 −0.77은 before 판이 load avg 10.2, after 판이 6.5에서 돌아 셀당 고정비가
+메시지 수에 다르게 분모화된 결과이므로 **이번 변경의 이득으로 주장하지 않는다**.
+zmq는 같은 셀에서 1.73/msg다.
+
+## 2. 메시지당 잠금 표 (dev 축소 셀, caller × 소스파일 분해)
+
+| 잠금(획득 지점) | before /msg | after /msg | 지키는 불변식 | 조치 |
+|---|---:|---:|---|---|
+| `mailbox_t::send` — mailbox `_sync` | 2.013 | 2.003 | 명령 큐(cpipe)와 signaler 상태 | 유지 — 메시지당 2회 핸드오프는 구조적(S-1 §2(a)에서 이득 0으로 증명됨) |
+| `socket_base_t::process_commands` — `public_api_sync`+`command_owner_sync`+명령당 `receive.sync` | 1.558 | 1.467 | 명령 배치의 단독 소유권, 명령 적용과 공개 API의 배타 | 유지 — §5 대안 (a) 기각 |
+| `asio_poller_t::loop` — boost.asio scheduler mutex | 1.155 | 1.217 | asio 내부 | Core 밖 |
+| **`process_deferred_socket_msg_pipe_terminations` — `deferred_socket_msg_termination_sync`** | **1.004** | **0** | 지연 종료 intrusive 큐의 head/tail/next 링크 | **제거**: head를 `std::atomic<pipe_t*>`로 두고 "빈 큐인가"만 잠금 밖 원자 로드로 답한다. 큐 변형은 전부 그대로 잠금 아래 |
+| `pipe_t::flush` — `_out_sync` | 1.002 | 1.001 | 송신측 상태 클러스터(`_out_pipe`,`_state`,`_out_active`,`_peers_msgs_read`) | 유지 — §5 대안 (b) 기각 |
+| `pipe_t::write` — `_out_sync` | 1.000 | 1.000 | 위와 같음 | 유지 |
+| `pipe_t::write_single_message_and_flush_...` — `_out_sync` | 1.000 | 1.000 | 위와 같음 | 유지 |
+| `stream_t::xsend_routed` — `route_shard_t::sync` | 1.000 | 1.000 | 라우트 샤드의 RID→pipe 표 | 유지 |
+| `socket_base_t::read_activated` — 수신 파티션 잠금 | 0.999 | 0.999 | fq/route 활성 파티션 (POLLIN level의 근거) | 유지 — 계약 직결 |
+| **`ctx_physical_queue_registry_t::refresh_application_hwm_if_drained` — ctx 전역 `_sync`** | **0.499** | **0** | 등록 표(`_directions`)의 존재·동일성·lane | **제거**: 이 함수의 **유일한 효과**는 `planned_hwm`을 `applied_hwm`에 싣는 것이므로, 둘이 같으면 등록 답이 무엇이든 할 일이 없다. 그 동치를 호출자가 이미 소유한 handle의 원자 둘로 잠금 **전에** 판정 |
+| `socket_base_t::has_in` | 0.340 | 0.278 | 수신 파티션 | 유지 |
+| `mailbox_t::recv` | 0.340 | 0.278 | mailbox `_sync` | 유지 (이미 lock-free 빠른 경로 있음) |
+| `mailbox_t::reschedule_if_needed` / `signal_pollers` | 0.240 / 0.215 | 0.227 / 0.188 | mailbox `_sync` | 유지 |
+| boost.asio `start_op`/`perform_io`/`task_cleanup`/`poll`/`post_immediate_completion` | 3.229 | 2.816 | asio 내부 | Core 밖 |
+| `zlink_poller_wait` / `poller_acquire` — 공개 poller `std::mutex` | 0.513 / 0.171 | 0.420 / 0.140 | poller 핸들 표 | 유지 |
+| 벤치 바이너리 자체 | 1.000 | 1.000 | — | 하네스 |
+
+## 3. 변경 파일
+
+| 파일 | 내용 |
+|---|---|
+| `core/src/runtime/sockets/common/socket_runtime.hpp` | `deferred_socket_msg_termination_head`를 `std::atomic<pipe_t *>`로. 새 멤버·플래그 없음(타입만 바뀜, S-11의 `_in_active`·`_state`와 같은 방식) |
+| `core/src/runtime/sockets/common/socket_base_dispatch.cpp` | enqueue는 release store, drain은 루프 진입 전 acquire 로드로 빈 큐를 판정하고 그때만 반환. 큐 pop은 그대로 잠금 아래 |
+| `core/src/runtime/core/ctx_physical_queue_registry.cpp` | `refresh_application_hwm_if_drained`의 `planned == applied` 조기 반환을 `_sync` 밖으로 |
+
+공개 헤더·`libzlink.vers`·계약 테스트 기대값 변경 **0**(`git diff --stat`이 위 3파일뿐).
+브리프가 피하라고 한 영역(R3의 `pipepair` 옵션 구간, R4의 `socket_base.hpp`/monitor/msg)은 건드리지 않았다.
+
+## 4. 두 변경의 안전성 논증
+
+**(1) 지연 종료 큐.** 생산자와 소비자가 **같은 스레드**다: enqueue는
+`socket_base_api.cpp:1763`의 `pipe_terminated` 명령 처리 안에서만 일어나고
+(PAIR/DEALER/ROUTER/SUB/XSUB, `completion`이 아닐 때), 그 명령을 적용한 바로 그 명령 소유자가
+같은 배치 끝에서 `process_deferred_...`를 부른다. 따라서 자기 store를 자기 load가 반드시 본다.
+다른 스레드의 enqueue는 **잠금 아래 읽었어도 마찬가지로 놓쳤을** 시점의 것이다(잠금은 큐의 원자성을
+지킬 뿐 "그 순간까지의 모든 enqueue"를 약속하지 않는다) — 즉 드레인 경계는 그대로다.
+누락된 항목은 다음 드레인이 집는다: `process_deferred_...`는 명령 배치마다,
+그리고 async 실행기 종료 경로(`socket_base_lifecycle.cpp:1506`)에서도 호출된다.
+STREAM은 위 소켓 타입 목록에 없어 이 큐가 **항상 비어 있는데도** 명령마다 ctx 잠금 하나를 물었다.
+
+**(2) auto-HWM refresh.** 함수의 관측 가능한 효과는 `applied_hwm.store(planned)` 하나뿐이다.
+`planned == applied`이면 잠금을 잡고 등록을 확인해도 그 store에 도달할 수 없다(잠금 안에서 다시
+같은 두 값을 읽어 `planned == applied`면 return). 따라서 조기 반환은 **같은 함수의 기존 분기를
+앞으로 옮긴 것**이며, 두 값은 이미 원자이고 handle 수명은 호출자의 shared_ptr가 보장한다.
+등록 표가 이 사이에 바뀌어도 결과는 같다: 새 plan은 `planned_hwm`을 올리므로 다음 호출이 집는다.
+
+## 5. 설계 비교와 선택 이유
+
+- **(a) `process_commands`의 `receive.sync`를 명령 루프 밖으로 올리기 — 기각.**
+  잠금은 명령당 1회이고 이 셀의 소켓 드레인은 배치당 명령 ~1개(`process_commands` 0.555회/msg,
+  `receive.sync` ~1.0회/msg)라 이득이 **최대 −0.45/msg**로 작다. 반면 (i) 배치 사이에 일부러
+  잠금 밖으로 뺀 `process_deferred_socket_msg_pipe_terminations`(주석에 이유가 명시돼 있다)를
+  다시 잠금 안으로 끌어들이게 되고, (ii) `ZLINK_BUILD_TESTS` 아래의
+  `receive.sync.try_lock()` 경합 프로브가 항상 "경합"으로 뒤집힌다. 이득 대비 계약·테스트
+  위험이 커서 채택하지 않았다.
+- **(b) `pipe_t::write` + `session->flush()`를 하나의 `_out_sync`로 접기 — 기각.**
+  엔진은 `process_input()`에서 여러 프레임을 write한 뒤 배치 끝에 한 번 flush한다.
+  둘을 접으면 프레임마다 flush가 되어 ypipe의 sleep/awake 전이 횟수, 즉 **activate_read 발신
+  조건이 바뀐다**. 05-polling의 wake 진리표를 건드리는 변경이므로 하지 않았다.
+- **채택한 두 건의 공통 형태**: "새 상태를 추가"하지 않고 **이미 있는 질문을 이미 있는 원자로 먼저
+  답한다". POSDDD의 "규칙 수 줄이기"에 맞고, 두 경우 모두 잠금이 지키던 불변식은 그대로 잠금 아래 남는다.
+
+## 6. 재확인한 스펙 절 — 어느 문장도 다른 동작이 되지 않았다
+
+- 05-polling: "`ZLINK_POLLIN` level은 소켓이 프레임을 가지고 있는 동안 유지된다" — `read_activated`·
+  `has_in`·`xhas_in` 경로와 그 잠금은 손대지 않았다.
+- 04-socket §4.1(공개 API 직렬화): `public_api_sync`/`command_owner_sync`/`receive.sync`의
+  획득 순서와 범위는 한 글자도 바뀌지 않았다.
+- 08-stream §5: STREAM은 지연 종료 큐를 쓰지 않는 소켓 타입이며(위 목록에 없음),
+  READY/DISCONNECTED·completion 순서 경로에 접근하지 않았다.
+- auto-HWM: `applied_hwm`은 여전히 `planned != applied`이고 `current <= planned`일 때만 갱신된다.
+
+## 7. 실행한 테스트와 남은 실패
+
+- `ctest -R 'wake|poll|stream|pipe|mailbox|send|recv|router|dealer|pair'` (57 tests) — **8회 실행, 7회 100 % pass,
+  1회 1건 실패**. 실패한 케이스 이름을 캡처하지 못했고(요약 줄만 grep), 이후 4회 연속 재현되지 않았다.
+  이 머신 load avg가 6~10(다른 job 빌드 동시 진행)이었던 것이 유력한 원인이지만 **확정하지 못했다** — §8.
+- 빌드 경고 1건(`__atomic_store_8 … region of size 0`)은 추적 결과
+  `core/tests/unittest/contract_zmp_engine_fixture.hpp:55`의 테스트 픽스처에서 나오는 **기존 경고**로,
+  이번 변경과 무관하다(`build2.log`).
+
+## 8. 멈춘 지점 (상한 1.5 h)
+
+- **TSan 미실행**. 변경 (1)은 포인터를 원자로 바꾸고 프로브를 잠금 밖으로 옮겼으므로 TSan 확인이 필요하다.
+  TSan 트리를 새로 구성해야 해서(빌드 ~9 분 + 테스트) 상한 안에 들어가지 않았다. **게이트 전 필수.**
+- **with_stream(runs 1) 미실행**, lost-wake until-fail:10 미실행, ctest 실패 1건 미규명.
+- 남은 후보(측정치 있음, 미착수): `mailbox_t::send` 2.00/msg, `process_commands` 1.47/msg,
+  `pipe_t` `_out_sync` 3.00/msg, boost.asio 내부 4.03/msg. 이들이 zmq 대비 격차의 잔여분이다.
+
+## 9. 왜 zmq는 1.7회/msg로 되는가
+
+zmq의 메시지당 잠금 1.73회는 사실상 **mailbox `send` 하나**다. libzmq는 파이프의 양 끝을 각각
+**정확히 한 스레드에 고정**한다: `zmq::pipe_t`의 송신측은 그 소켓을 쓰는 스레드가, 수신측은 I/O
+스레드가 단독 소유하고, 둘 사이의 자료구조는 lock-free `ypipe_t`(CAS 하나)와 원자 카운터뿐이라
+`write`/`flush`/`read`에 뮤텍스가 없다. 소켓 상태도 "명령을 받은 스레드만 바꾼다"는 규칙 하나로
+배타를 얻으므로 `receive`/`command_owner`/`public_api` 같은 소켓 레벨 잠금이 아예 없고,
+reactor(`zmq::poller`)는 자체 구현이라 연산마다 뮤텍스를 잡지 않는다. 남는 유일한 공유 지점이
+스레드 간 명령 전달용 `mailbox_t::_sync`이고 그게 1.7회다. zlink는 반대로 **같은 소켓을 여러 앱
+스레드가 동시에 쓸 수 있다는 공개 계약**을 갖고(04-socket §4.1), 그 계약을 pipe의 `_out_sync`,
+소켓의 3중 API/명령/수신 잠금, 라우트 샤드 잠금으로 지불한다. 여기에 reactor를 boost.asio로
+쓰면서 asio scheduler·reactor 뮤텍스가 연산마다 4회 더 붙고, 공개 poller의 `std::mutex`가 0.7회
+더 붙는다. 즉 17.3 대 1.7의 10배는 "같은 일을 비싸게 한다"가 아니라 **다른 계약(멀티스레드 소켓)과
+다른 reactor(외부 라이브러리)를 골랐기 때문**이며, 계약을 유지한 채 줄일 수 있는 것은 이번 두 건처럼
+**불변식을 지키지 않던 잠금**과, 남은 후보 중 asio reactor 사용 방식뿐이다.
+
+## 10. 변경 분류
+
+**B(기존 결함)** — 두 잠금 모두 "그 잠금이 답할 필요가 없는 질문"에 대해 획득되고 있었다.
+계약 적응(A)도, 우회(C)도, spec gap(D)도 아니다.
