@@ -2139,3 +2139,8 @@ tcp에서만 재서 지금까지 드러나지 않았을 뿐, 각 언어의 `tls`
 **조치**: D-BP11("러너 정합은 7개 binding 전부")에 따라 .NET·Node·Go·Rust·Python에 같은 정합을 적용한다. **적용 형태는 "pending 수를 상한으로 막는 것"이 아니라 "다음 reply를 제출하기 전에 앞 reply의 admission을 기다리는 것"이다** — 전자는 §5 위반이고 후자가 C 기준이다. Java는 이미 C와 같아 대상이 아니다.
 
 **미해결**: C++ RR 전 크기 실행에서 종료 시 `async send failed errno=110`(ETIMEDOUT)이 한 번 관측됐고 추가 2회에서 재현되지 않았다. 해결로 판정하지 않고 기록만 남긴다. 코드상 후보는 `perf_multi_routed_relay.hpp:125-132`의 종료 drain deadline이다.
+## D-B212 (2026-09-08 01:20, 머신 B) MP-8 결과 — 2차 차단 6건·비차단 전부 수정, 검증 green; reqrep Ir −11.9 % 원인 확인을 3차 리뷰에 포함
+
+**MP-8**(`core-rf-MP-8-report.md`, 누적 27 파일 +3313/−611, 공개 API diff 없음): B201 revoked tombstone은 revoke 순회에서 건너뜀, B202 DONTWAIT FINAL도 helper 조작·실패 분리까지 lifecycle admission 유지, B203 `release_detached_send_ownership()` 하나로 통일하고 공용 abort helper의 pin을 context reset까지 유지, B204 epoch 관찰 → drain → 같은 epoch 대기 + 단일 budget 승계, B205 REPLY는 shallow copy만 pipe에 넘기고 원본은 scope 밖까지·REQUEST 성공도 physical sync 놓은 뒤 소비, B206 RID capability 검사를 checked-out보다 먼저. W201~W206·S201/S202 반영(W202 20 ms 창 제거 → PAUSED flow monitor + 즉시 token 관찰). 검증: dev 209/209, 관련 97×3=291/291, 신규·변경 60/60, lost-wake 40/40, ASan 6/6, TSan 10/10.
+**성능**: 5셀 중 4셀 MP-7 ±1 %; `dealer_router_reqrep_inproc` 18,437→16,241 Ir/msg(−11.9 %, reference 대비 0.870)로 개선 방향 FAIL 표기. 원인이 정당한 제거인지(B205의 원본 소비 위치 변경·중복 lookup 제거 등) 작업 누락인지 3차 리뷰에서 확정한 뒤, 정당하면 reference 갱신.
+**다음**: 3차 리뷰 `review-mp2-3`(astra, 40 min) → 차단 없으면 게이트(terra) → MP 코드+스펙 커밋.

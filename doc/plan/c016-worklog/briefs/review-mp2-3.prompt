@@ -1,0 +1,12 @@
+너는 job review-MP-2-3(동시 multipart 구현의 3차 독립 리뷰 — 차단 항목 해소 검증)이다. 먼저 /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽는다. **읽기·리뷰 전용**: 소스·스펙·테스트 수정 금지, 빌드·실행 금지, 커밋 금지. 상한 40분.
+
+대상: worktree `/home/hep7hep7/project/zlink-work/mp2`의 미커밋 diff(MP-3~8 누적, 27 파일). 입력: 2차 리뷰 review-mp2-2.md(B201~B206, W201~W206, S201/S202), 수정 보고서 core-rf-MP-8-report.md, 1차 리뷰 review-mp2.md, decisions.ko.md D-B211. 확정 계약 = main 작업 트리의 미커밋 `core/doc/spec`(completion pull 절 명료화 포함) + README REPLY token 절·05-polling owner 절.
+
+검증 항목(각각 근거 파일:행과 "해소/부분/미해소"):
+1. B201~B206 각각의 2차 재현 시나리오를 현재 코드로 다시 따라간다. 특히 B202(모든 DONTWAIT FINAL 실패 경로에서 lifecycle admission이 유지되는지, admission 해제와 payload 해제의 순서), B204(epoch 관찰 시작 → drain → 같은 epoch 대기의 연결이 모든 분기에 있는지, registration 전환 시 budget 승계, W206 monitor 경로), B205(REPLY shallow copy·REQUEST 원본 소비가 physical scope 밖인지, rollback 원자성 유지).
+2. 1차 B02·B05·B06의 "부분" 잔여가 이제 전부 닫혔는지.
+3. **`dealer_router_reqrep_inproc` Ir/msg 18,437 → 16,241(−11.9 %)의 원인**: MP-8 diff 중 어떤 변경이 이 감소를 만들었는지 함수 단위로 특정하고, 그것이 정당한 작업 제거(예: 중복 lookup·불필요한 copy·scope 제거)인지 아니면 필요한 작업 누락(consume 생략, 검사 생략, 회계 누락)인지 판정. 근거 없이 "개선"으로 받아들이지 않는다.
+4. MP-8이 새로 만든 문제(중복 상태, lock 순서 역전, 예외 경계, 죽은 코드, 주석 불일치).
+5. 스펙(미커밋)과 구현·테스트의 최종 일치 — README part send 절, REPLY token 절, completion pull 절 명료화 문장, ROUTER :54/:419, ZMP control 경계, Message :108.
+
+보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/review-mp2-3.md (한국어). 항목별 판정 표, 신규 항목(B3xx/W3xx/S3xx), reqrep 감소 원인 절, 마지막 줄 "차단 항목 수 / 채택 가능 여부". 진행 파일 progress-review-mp2-3.md.
