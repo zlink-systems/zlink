@@ -2034,3 +2034,12 @@ C client를 유지하면 C++ server는 C server의 DR 100.8%/RR 97.6%이고 64 K
 **(3) D-B209(Core REQUEST completion이 다른 thread의 열린 sequence 동안 도착하지 않음)를 이 격차의 원인으로 귀속하지 않는다.** 증상(64 KiB 지연)이 닮아 확인했으나 성립하지 않는다. C++ multi REQREP 러너의 client는 **단일 application thread**이고(`bindings/cpp/perf/multi/common/perf_multi_reqrep.hpp:331` "completion on the same active application thread"), completion-owner 이관 뒤 `_public_owner`가 잡혀 runtime owner thread가 멈추므로(`completion_owner.cpp:759-765`) 재제출(`drain()`→`retry()`→`resubmit_send_attempt()`)도 같은 thread에서 일어난다. D-B209가 요구하는 "thread A의 sequence가 열린 동안 thread B가 재제출"이 성립하지 않는다. 증상이 닮았다는 이유로 다른 캠페인의 결함에 귀속하지 말 것.
 
 **(4) pass 1(astra/xhigh) 결과: 후보 전부 기각·원복.** 구현한 후보(REQUEST completion의 중복 합류 상태 제거)는 DR 72.87→71.58%, RR 76.39→76.01%로 오히려 내려갔다. 기각 목록은 `log/2026-09-07-cpp-multi-reqrep-pass1.ko.md`. pass 2는 (2)의 두 원인 위에서 계약 유지 후보를 찾고, 없으면 §7.4 16단계로 `보류` 확정한다.
+
+## D-BP19 (2026-09-07 23:50, 머신 A) 러너 정합 이전 Multi 판정은 **현재 판정이 아니다** — 재측정 tag가 붙은 셀만 판정으로 쓴다
+2026-09-05/06에 기록된 7개 언어의 Multi 판정은 전부 러너가 바뀌기 전 값이다. 그 뒤 C와 7개 binding의 러너가 정책 기준으로 정합됐다 — `87153dd4f3`(8개 러너 측정 조건 일치), `d634417a37`(multi 종료·부하 모델), `522df6d57e`·`074d2a5964`(single REQREP 복원), `7549a128b1`(part-count `getenv` 제거), `d51c16b285`(정합 잔여), `31c5e4f7f0`(상한 제거·C turn 구조 복원).
+
+효과는 작지 않다. 같은 셀에서 C++ `tcp` `MULTI_DEALER_ROUTER_REQREP` 57.4%→**72.87%**, `MULTI_DEALER_DEALER` 90.8%→**95.42%**로 달라졌다. 옛 값을 현재 판정으로 쓰면 이미 목표를 넘긴 셀을 `보류`로 닫거나, 반대로 개선 pass의 효과를 잘못 귀속하게 된다.
+
+**규칙**: 정합 이후 tag(C++ `p3pin`·`p5cmodel`)로 다시 잰 셀만 판정으로 쓴다. 나머지 옛 값은 `미측정`과 같게 취급하고 §7.4대로 다시 잰다. 옛 수치는 지우지 않고 참고값으로 남긴다 — §10.3대로 유지하는 것은 수치가 아니라 개선 pass 코드·프로파일·no-go 목록 같은 **작업 자산**이다(D-BP5의 "기존 작업을 부인하지 않는다"와 같은 취지다: 자산은 남기고 수치만 다시 잰다).
+
+계획서 반영: §9 머리말에 전 언어 공통 규칙, §9.1.2에 C++ 표 전용 주석, §9.1 상태 줄을 `p5cmodel` 기준으로 갱신했다.

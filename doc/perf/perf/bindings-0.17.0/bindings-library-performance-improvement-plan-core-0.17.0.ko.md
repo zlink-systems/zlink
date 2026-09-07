@@ -766,12 +766,21 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 우선한다. 상세 표에 `미측정` 또는 `미달`이 하나라도 남아 있으면
 해당 언어는 완료가 아니다.
 
+> **러너 정합 이전 값은 현재 판정이 아니다 (D-BP19).** 2026-09-05/06에 기록된 Multi 판정은
+> 모두 러너가 바뀌기 전 값이다. 그 뒤 C와 7개 binding의 러너가 정책 기준으로 정합됐고
+> (`87153dd4f3`, `d634417a37`, `522df6d57e`, `074d2a5964`, `7549a128b1`, `d51c16b285`,
+> `31c5e4f7f0`) 같은 셀의 값이 크게 달라졌다 — C++ `tcp` `MULTI_DEALER_ROUTER_REQREP`
+> 57.4%→72.87%, `MULTI_DEALER_DEALER` 90.8%→95.42%. 따라서 **정합 이후 tag(C++ `p3pin`·
+> `p5cmodel`)로 다시 잰 셀만 판정으로 쓰고, 나머지 옛 값은 `미측정`과 같게 취급해 §7.4대로
+> 다시 잰다.** 옛 수치는 지우지 않고 참고값으로 남긴다 — §10.3대로 유지하는 것은 수치가
+> 아니라 개선 pass 코드·프로파일·no-go 목록 같은 작업 자산이다.
+
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
 - Single 상태: `미달`(REQREP만) — before 07:16 KST(7 pattern × 6 transport, [log](log/2026-09-05-cpp-single-before.ko.md)) → 수신 경로 자체 pass 1(library no-go, C++ 러너 `PERF_PART_COUNT` getenv/메시지 버그 수정 `9cb8a3a11b`, [log](log/2026-09-05-cpp-single-recv-pass1.ko.md)) → one-way 5 pattern 재짝지음 08:20 KST: PAIR 86.3~95.9%(tls·ipc `통과`), PUBSUB 91.1~113.2%(inproc·wss 외 `통과`), DD 63.1~96.3%(inproc 외 `통과`, 완화 90%), DR 90.6~97.3% 전부 `통과`, RR 73.8~98.2%(inproc 외 `통과`). one-way 평균 latency는 C 대비 수 배~수백 배이나 두 러너 정의가 같고 C++ 수신이 송신보다 느려 큐가 HWM까지 차는 큐 깊이 값이라 판정에서 제외(처리량으로 판정, D-B91). REQREP 40.6~46.4% `미달`(REQUEST async 경로, pass 예정).
-- Multi 상태: `보류/미달` — `tcp` 3 pattern은 자체 pass 1과 Sol 리뷰 pass 2를 마치고 판정을 닫았다: `MULTI_DEALER_DEALER` `통과(90.8%)`(완화 목표 90% 선택), `MULTI_DEALER_ROUTER_REQREP` `보류(57.4%)`, `MULTI_ROUTER_ROUTER_REQREP` `보류(68.4%)`. `MULTI_PUBSUB`은 자체 pass 1·Sol pass 2 모두 no-go(코드 변경 없음), 러너 parity 수정 뒤 3-run 93.2%로 `보류` 확정(목표 95%). `tls`·`ws`·`wss` 4 pattern은 pass 2 코드로 before만 측정했다(04:41~04:55 KST, 판정 미확정): `MULTI_DEALER_DEALER` 77.6% / 84.9% / 93.9% `미달`(`tls` latency 6.23x로 상한 초과), `MULTI_DEALER_ROUTER_REQREP` `tls` 54.5% `미달`, `MULTI_ROUTER_ROUTER_REQREP` `tls` 60.5%·`ws` 58.0% `미달`, `MULTI_PUBSUB` 100.2% / 104.1% / 104.8% `통과 후보`(§7.4 14단계 검토 전). C runner의 `ws`·`wss` REQREP 4096B 붕괴(C 기준 이상 3셀)는 C runner 제출 턴 문제로 확정해 runner만 수정(D-B89)하고 05:27~05:33 KST에 C·C++를 재짝지어 쟀다: `MULTI_DEALER_ROUTER_REQREP` `ws` 53.1% / `wss` 43.7%, `MULTI_ROUTER_ROUTER_REQREP` `ws` 72.3% / `wss` 44.7% 모두 `미달`(`ws` 두 pattern은 latency 평균 2.43x/2.54x도 상한 초과 — C runner 턴 구조로 C latency가 0.3 ms까지 낮아진 결과), [재측정 log](log/2026-09-05-cpp-multi-ws-wss-reqrep-remeasure.ko.md).
-- 다음 작업: `tls`·`ws`·`wss`는 `DEALER_DEALER`·REQREP 개선 pass와 `PUBSUB` §7.4 14단계 검토(C 기준 이상 3셀은 D-B89 뒤 재측정 완료). `131072`와 SENDSEND·STREAM pattern은 미측정.
+- Multi 상태: `진행 중` — **러너 정합 이후 재측정한 `tcp` 4 pattern이 현재 판정이다**(`p5cmodel`): `MULTI_DEALER_DEALER` `통과(95.42%)`, `MULTI_PUBSUB` `통과(95.52%)`, `MULTI_DEALER_ROUTER_REQREP` `미달(72.87%)`, `MULTI_ROUTER_ROUTER_REQREP` `미달(76.39%)`. REQREP 두 pattern은 pass 1 후보 전부 기각·원복, pass 2 진행 중(D-BP18: 격차는 전부 C++ client이고 원인은 64B의 coroutine·completion 변환 명령 수와 64KiB의 admission 대기·WRITABLE 재제출 둘로 분리된다). `tcp` `MULTI_DEALER_ROUTER_SENDSEND`·`MULTI_ROUTER_ROUTER_SENDSEND`·`MULTI_STREAM`과 `tls`·`ws`·`wss` 전 pattern은 미측정이다 — 2026-09-05의 `tls`·`ws`·`wss` 판정(DD 79.3/85.3/91.1%, REQREP 43.7~72.3%, PUBSUB 100.2~104.8%)은 러너 정합 이전 값이라 위 D-BP19에 따라 참고값으로만 남긴다. `MULTI_STREAM`은 C++·.NET에서만 smoke가 client-ready 경계로 실패해 별도 조사가 선행한다.
+- 다음 작업: `tcp` REQREP pass 2 판정 → `tcp` SENDSEND 2종 → `MULTI_STREAM` smoke 조사 후 측정 → `tls`·`ws`·`wss` 7 pattern 재측정. `131072`는 §3.2대로 측정 범위 밖이다.
 
 #### 9.1.1 Single suite
 
@@ -821,6 +830,15 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | Core 0.17.1 artifact로 재측정 대상 |
 
 #### 9.1.2 Multi suite
+
+> **이 표의 `tls`·`ws`·`wss` 행과 2026-09-05 tag(`p1cpp*`)를 단 모든 행은 러너 정합 이전 값이라
+> 현재 판정이 아니다.** 2026-09-05 이후 C와 7개 binding의 러너가 정책 기준으로 바뀌었다 —
+> `87153dd4f3`(8개 러너 측정 조건 일치), `d634417a37`(multi 종료·부하 모델), `522df6d57e`·`074d2a5964`
+> (single REQREP 복원), `7549a128b1`(part-count `getenv` 제거), `d51c16b285`, `31c5e4f7f0`(상한 제거·C
+> turn 구조 복원). 같은 `tcp` `MULTI_DEALER_ROUTER_REQREP`이 57.4%→72.87%로, `MULTI_DEALER_DEALER`가
+> 90.8%→95.42%로 달라진 것이 그 차이다. **현재 판정으로 쓸 수 있는 행은 `p5cmodel`·`p3pin` tag를 단
+> `tcp` 4개 pattern뿐이며, 나머지는 `미측정`과 같게 취급하고 §7.4대로 다시 잰다.** 아래 행의 옛 수치는
+> 참고값으로만 남긴다(§10.3의 "유지하는 것은 수치가 아니라 작업 자산이다"와 같은 성격).
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
