@@ -1908,3 +1908,9 @@ Go REQREP 러너 정합 중 드러났고, **감독자가 최소 재현 프로그
 **(3) .NET의 `completed` 증가 위치** — **C와 1:1로 맞춘다.** `PERF_POLICY.md` line 105~115가 "throughput count 증가 위치"를 측정 anchor 6종 중 하나로 못박는다. monotonic 시간원에서 관측 차이가 없더라도 anchor는 위치로 판정하는 항목이고 한 줄 이동으로 끝난다.
 **(4) Java `System.nanoTime()`의 규격 보장** — 현 상태 유지. javadoc이 프로세스 간 비교를 규격으로 보장하지 않지만 이 호스트(HotSpot/Linux)에서 `CLOCK_MONOTONIC`과 같은 축임을 실측했다. **Windows 측정으로 넘어갈 때 같은 실측을 다시 한다**는 조건을 환경 manifest에 남긴다.
 남은 실행 항목: one-way 잔여(active deadline 필터, wire 길이 검증, transient 재시도 busy-spin, RESULT 정밀도, latency 표본 0개 fallback)를 7개 binding에 이식 — C는 `522df6d57e`에서 이미 적용됐다. Java `:perf-single:test`·`:perf-multi:test`는 감독자가 고정 prefix로 실행한다.
+## D-B197 (2026-09-07 17:05, 머신 B) D-BP12 대응 — Core가 동시 multipart 제출을 지원한다; 0.17.2에 포함
+
+**결정**: 사용자 지시("core에서 지원해야 할것 같은데", "0.17.2에 빠르게 포함"). 같은 socket에 서로 다른 caller가 각자 독립된 multipart record를 동시에 제출해도 서로를 실패시키지 않고, 각 record는 원자적으로 admission된다. 공개 인터페이스는 바꾸지 않는다. 0.17.2는 아직 안 나갔으므로 Phase 4 bump 전에 이 수정을 포함한다.
+**현재 원인(감독자 확인)**: part API의 `MORE`는 pipe에 미flush로 바로 쓰이고(“socket-local staging” = pipe), 원자성은 `public_api_state`의 multipart bit 하나(socket당 1개)가 강제한다(`socket_lifecycle_runtime.cpp` `enter_public_send`). 두 번째 시퀀스는 admission에서 거절된다. completion-aware part API는 이미 caller-local staging → complete-record submit 경로를 쓴다.
+**절차**: MP-1(astra/high, 설계 메모 45분) — (A) caller-local staging 통일 vs (B) marker 직렬화(대기) 비교, 계약 관찰 차이(특히 HWM 판정 시점 README :440-446) 정리 → 감독자가 안을 고르고 스펙(README :49/:944/:440-446) 문장을 직접 반영 → MP-2 구현 job → 게이트 → 커밋. 스펙 변경이 계약 완화/강화를 동반하면 §7.5 D 표에 올려 사용자 확인.
+**사용자 확인(17:25)**: 방향 동의 — caller 단위 조립 슬롯(socket이 소유하는 thread별 슬롯, 순수 thread_local 아님) + FINAL에서 record 하나로 admission; "한 record의 MORE…FINAL은 같은 thread가 제출하고, 실패로 sequence가 폐기된 뒤의 재제출은 어느 thread든 가능"을 스펙에 명시. 비동기 binding은 한 submit 안에서 part를 연달아 제출하므로 양립. HWM 판정 시점 변화는 MP-1 메모 후 §7.5 D 표로 확인.
