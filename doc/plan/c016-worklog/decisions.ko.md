@@ -1985,3 +1985,8 @@ Go REQREP 러너 정합 중 드러났고, **감독자가 최소 재현 프로그
 2. application thread가 multipart sequence를 **연 상태에서** binding 내부 runtime completion owner가 같은 socket의 retained request를 **다른 thread에서** 재제출. 사용자가 단일 thread로 써도 발생하며 C++ multi REQREP 65536 B가 이 경우다. completion owner를 application thread로 가져오지 않는 것이 일반 사용법이므로 사용자는 그대로 노출된다.
 **판정 기준**: thread별 슬롯 수정 뒤 두 경우가 모두 **성공**해야 한다. 1번만 통과하고 2번이 "열린 sequence가 닫히지 않는" 상태로 바뀌면 증상만 옮겨간 것이다 — 열린 sequence의 소유와 인계 규칙을 함께 정의해야 하는 이유다.
 **사용자 정정(20:40)**: "단순 명령어 개수는 늘어나도 성능 개선이 되었으면 괜찮은 것 아니냐" — 맞다. Ir는 절대 기준이 아니라 부하 무관 회귀 검출용 대리 지표다. MP-5의 목적은 Ir 감소가 아니라 "helper 없는 socket이 왜 새 코드를 타는지 찾아 원래 fast path로 되돌리기"이며, 불가피하면 받아들인다. 계획 §4 게이트 표 아래에 규칙으로 명문화했다.
+
+## D-B207 (2026-09-07 20:50, 머신 B) D-BP15 답 — 회귀 테스트는 Core 통합 테스트가 소유, 0.17.2에 포함
+
+**1번(서로 다른 thread의 독립 multipart 동시 제출)**: MP-2/3에 이미 있다 — `test_dealer/pair/router_four_callers_stage_two_parts_independently`(4 thread × 2-part × 100, caller·sequence 전수 대조), `test_request_and_reply_four_callers_complete_independently`(REQUEST/REPLY 4 caller × 20). 모두 `core/tests/integration/{test_public_inproc_multipart_send,test_phase3_request_reply_contract}.cpp`, 공개 API만 사용.
+**2번(application thread가 sequence를 연 상태에서 completion owner thread가 같은 socket의 retained request를 WRITABLE 뒤 재제출)**: 부분적으로 `test_other_caller_final_consumes_input_and_keeps_staged_sequence`·`test_other_caller_different_family_is_independent`가 덮지만, D-BP15의 정확한 형태(DONTWAIT REQUEST FINAL이 backpressure → WRITABLE token → **다른 thread**에서 전체 재제출, 그동안 첫 thread의 다른 sequence는 열린 채 → 둘 다 성공하고 첫 sequence는 그 thread의 FINAL로 닫힘)를 공개 API 테스트 `test_writable_resubmit_from_other_thread_while_sequence_open`(가칭)로 추가한다. MP-5 완료 뒤 재리뷰와 함께 MP-6(테스트 추가 + 리뷰 잔여)에서 넣는다. 판정 기준은 D-BP15대로 "둘 다 성공, 열린 sequence는 연 thread가 닫는다".
