@@ -253,6 +253,24 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 - 이 캠페인은 `core/` 와 `bindings/c/{perf,bench}` 만 건드리므로 다른 바인딩 디렉터리와 파일이 겹치지 않는다.
 - 캠페인 시작(`285f37792d`) 이후 `core/include` · `core/src/libzlink.vers` diff는 계속 비어 있다(ABI 불변, 버전 0.17.0 유지). 동작 변화는 결함 수정 3건뿐: close의 `CLOSE_BUSY` 경합, 비-STREAM drain 중복 디코딩, send flags errno.
 
+### 7.7 동기화 모델 인벤토리와 목표
+
+스펙 [`systems/11-synchronization-model`](../../core/doc/spec/core/systems/11-synchronization-model.ko.md)의 규칙과 현재 코드의 차이. STREAM tcp 1024 B 셀(CCU 20, callgrind)에서 message당 mutex 획득 횟수. 착지할 때마다 갱신한다.
+
+| lock | 스펙 분류 | 두 번째 thread | 2026-09-07 (G-11a 뒤) | 목표 | job |
+|---|---|---|---|---|---|
+| mailbox 삽입점 `_sync` | §3.3 여러 producer | 여러 thread | 2.7 | 2.7 (구조) | — |
+| socket 직렬화: `public_api_sync` + command owner + command마다 `receive.sync` | C2 → turn 하나 | application thread와 command owner | 1.47 | turn의 CAS만 | G-11 2a |
+| `read_activated` / `has_in`의 receive partition | C2 | 위와 같은 클러스터 | 1.28 | 0 | G-11 2a |
+| session 쪽 `pipe_t::write`/`flush`의 `_out_sync` | §3.2 SPSC + C3 | I/O thread 하나뿐 | 2.0 | 0 (peer 소비 byte atomic, `_out_active` CAS) | G-11b(2c, 진행) |
+| socket 쪽 `_out_sync` | C2 → turn | application thread | 1.0 | 0 (cold 경로는 유지) | G-11 2b |
+| route shard `sync` | C1 | 조회만 hot | 1.0 | 0 (스냅샷 조회) | G-11 2d |
+| public poller handle 표 | C1 | 조회만 hot | 0.56 | 0 | G-11 2e |
+| boost.asio 내부 | Core 밖 | — | 4.0 | — | — |
+| **합계** | | | **15.1** | **≈ 8.3 (Core 소유 10.1 → 3.3)** | |
+
+제거된 "지키는 조건이 없던 lock"의 기록: `activate_read` 처리의 `_out_sync`(S-1), 항상 비어 있던 지연 종료 큐의 context lock과 planned=applied일 때의 registry lock(G-1), PAIR command의 turn 예외(G-11a), `fast_mutex_t` 재귀 mutex → `mutex_t`/`recursive_mutex_t` 분리(S-2). libzmq 비교(socket lock 하나 안에서 command 처리, pipe mutex 0, mailbox 1.7)와 출처 분석은 `c016-worklog/core-rf-G-11-lock-provenance.md`.
+
 ## 8. 체크리스트
 
 - [x] Phase 0: Release 빌드, with_stream 기준 표(§7.1), 경량 3셀 기준, hotpath `stream_tcp` 셀 커밋(`6f64e76b51`, D-B142 — harness가 I/O 스레드를 안 세던 결함도 수정)
