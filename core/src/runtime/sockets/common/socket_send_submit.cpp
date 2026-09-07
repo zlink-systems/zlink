@@ -121,11 +121,7 @@ bool retryable_logical_send_errno (int err_)
 struct zlink::socket_base_t::submit_timeout_budget_t
 {
     submit_timeout_budget_t (clock_t *clock_, int timeout_ms_) :
-        clock (clock_), timeout_ms (timeout_ms_),
-        deadline_ms (timeout_ms_ < 0
-                       ? 0
-                       : clock_->now_ms ()
-                           + static_cast<uint64_t> (timeout_ms_))
+        clock (clock_), timeout_ms (timeout_ms_), deadline_ms (0)
     {
     }
 
@@ -134,6 +130,12 @@ struct zlink::socket_base_t::submit_timeout_budget_t
         if (timeout_ms <= 0)
             return timeout_ms;
         const uint64_t now = clock->now_ms ();
+        // The configured value is snapshotted by the constructor, but an
+        // immediately admitted submit never waits and needs no deadline.
+        if (deadline_ms == 0) {
+            deadline_ms = now + static_cast<uint64_t> (timeout_ms);
+            return timeout_ms;
+        }
         if (now >= deadline_ms) {
             timeout_ms = 0;
             return timeout_ms;
