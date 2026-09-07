@@ -456,10 +456,26 @@ client 수, I/O thread 수, 해당 작업에서 고정한 Core runtime으로 측
 다른 조합을 확인할 필요가 생기면 기존 측정을 확장하지 않고 새 paired 대상으로 별도로
 선택해 같은 절차를 반복한다.
 
-perf 실행은 항상 직렬화한다. C runner, binding runner, 후보 after 측정 중 어느 것도
+perf **측정**은 항상 직렬화한다. C runner, binding runner, 후보 after 측정 중 어느 것도
 동시에 실행하지 않으며, 한 runner process의 report가 종료되고 `status: complete`인지
 확인한 뒤 다음 하나의 측정을 시작한다. 백그라운드에서 다른 perf process를 함께 실행해
 host CPU·memory·I/O 부하를 섞지 않는다.
+
+직렬화가 걸리는 범위는 **수치를 판정에 쓰는 실행**이다. 구분은 다음과 같다.
+
+| 실행 | 병렬 | 근거 |
+|------|------|------|
+| 빌드, 컴파일, 단위·contract 테스트, 정적 검사 | 가능 | 수치를 만들지 않는다 |
+| **status-only smoke** — 실행 경로와 종료 상태(`status: complete`)만 확인 | 가능 | 판정에 수치를 쓰지 않는다 |
+| paired 기준 측정, before/after, 회귀 gate 셀 | **직렬** | 판정 입력이다 |
+| **처리량의 자릿수를 판단 근거로 쓰는 smoke** | **직렬** | 아래 참조 |
+
+마지막 항목이 흔한 함정이다. smoke를 "in-flight 1인가 파이프라이닝인가"처럼 크기를 읽는
+용도로 쓰는 순간, 그 값은 판정 입력이 된다. 병렬로 돌면 두 프로세스가 서로를 눌러 느린
+원인이 코드인지 경합인지 구분할 수 없다. 크기를 읽을 때는 직렬로 다시 잰다.
+
+측정 직전에 `scripts/perf/wait-for-idle-perf.sh`로 다른 perf process가 없는지 확인한다.
+있으면 끝날 때까지 기다렸다 시작한다.
 
 ### 7.0.1 `PERF_SINGLE_TEST_POLICY` parity gate
 
