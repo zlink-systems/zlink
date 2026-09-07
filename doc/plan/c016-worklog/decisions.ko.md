@@ -2047,3 +2047,14 @@ C client를 유지하면 C++ server는 C server의 DR 100.8%/RR 97.6%이고 64 K
 
 **MP-7**(`core-rf-MP-7-report.md`, 3 파일 +57/−10): 원인은 열린 staging 검사가 아니라, completion poller ref가 있으면 async owner를 만들지 않는데 blocking `zlink_completion_recv(NONE)`가 queue CV만 기다려 transport reply를 queue로 옮길 주체가 없던 것(`socket_base_dispatch.cpp:130-162`, `socket_message_handler_api.cpp:137-151`). 수정: `prepare_completion_pull()` — poller 등록 시 blocking pull이 기존 `get_events(POLLCOMPLETION)` owner gate로 같은 drain turn을 수행하고 `wait_timeout_budget_t` 안에서 `process_commands()` 대기; DONTWAIT은 queue-only 유지(owner fairness 계약). 규칙 2→1, 새 owner·timer 없음. 분류 B(multipart와 무관한 기존 결함; A의 C++ 발현은 poller wait 경로라 이 결함은 안 보였음). 검증: 신규 2 테스트 10/10, 관련 81×3=243/243, lost-wake 40/40, ASan 8/8, TSan 10/10, hotpath 5셀 MP-5 ±1 %(stream_tcp −1.3 %).
 **다음**: 2차 리뷰 `review-mp2-2`(astra, 읽기 전용) — B01~B06 해소 확인, MP-4/5/6/7 검토, 특히 MP-7의 단일 completion owner 규칙 정합. 차단 없으면 게이트.
+
+## D-BP20 (2026-09-08 00:20, 머신 A) D-BP18 정정 — 64 KiB는 별개 원인이 아니라 **계약이 정한 재제출 pacing 위에서 증폭된 요청당 비용**이다
+D-BP18은 C++ Multi tcp REQREP의 원인을 둘로 적었다: 64 B의 coroutine·completion 변환 명령 수와 "64 KiB의 admission 전 대기와 **반복된 WRITABLE 재제출**". 뒤쪽 기술이 부정확했다. pass 2의 계측과 스펙 확인으로 두 가지가 확정됐다.
+
+**(1) 재제출 경로 자체는 C보다 느리지 않다.** pass 2가 모든 retry에서 앞선 token·context와 해당 WRITABLE의 일치, 보존된 stamp·sequence의 동일성을 확인했고 추가 poll을 거치는 현상도 관측하지 않았다. "신호를 받은 뒤 C++ 재제출이 오래 걸린다"는 가설은 지지되지 않는다. 실제로 관측된 것은 **admission 전 반복 거절**이다 — RR 첫 socket 표본은 최대 대기 깊이가 1이어도 거의 모든 새 요청이 한 번 거절돼 다음 progress turn까지 기다렸고, DR은 여러 요청이 반복 거절됐다. 자료구조 비용도 아니다: `drain()`의 retry vector `new`/`delete`는 client 전체 Ir의 **0.65%**뿐이고, `drain → entry->retry()`가 **69.37%**로 비용은 반복되는 native REQUEST 시도 자체에 있다.
+
+**(2) `NO_DATA`까지 비운 뒤 재제출하는 것은 Core 계약이다.** 감독자가 스펙에서 직접 확인했다 — `core/doc/spec/core/socket/README.ko.md:1080-1081`: "caller는 queue를 `NO_DATA`까지 비운 뒤 같은 request를 `DONTWAIT`로 다시 제출한다. 재제출도 admission을 한 번만 시도하며 다시 거절되면 새 토큰을 받는다." 따라서 `completion_owner_t::drain()`이 retry를 모아 `NO_DATA` 뒤에 실행하는 구조는 구현 선택이 아니라 **계약 준수**다. "WRITABLE capture 즉시 재제출"은 계약 위반이며 후보가 될 수 없다. 감독자가 이 구조를 구현 선택으로 의심했으나 스펙 확인으로 기각했다(D-BP4: 가설보다 스펙 먼저).
+
+**정정된 원인 기술**: 격차는 **요청당 고정 비용 하나**다. 64 B에서는 그 비용이 처리량 비율로 직접 나타나고, 64 KiB에서는 계약이 정한 drain-then-resubmit pacing이 그 비용을 turn 길이로 바꿔 latency로 증폭한다. C도 같은 규칙을 지키므로 남는 차이는 turn 길이뿐이다. **요청당 비용이 내려가지 않으면 64 KiB latency도 내려가지 않는다.**
+
+**판정에 미치는 영향**: 계약 유지 후보가 요청당 비용을 유의미하게 줄이지 못하면 두 pattern은 `보류`이며, 그 근거는 "후보를 못 찾았다"가 아니라 **"남은 격차가 Core 계약이 정한 재제출 pacing과 그 위의 요청당 비용이고, binding이 계약을 지키는 한 구조적으로 줄일 수 없다"**로 적는다. 이 구분은 0.17.2 이후 재개 판단에도 쓰인다.
