@@ -161,8 +161,9 @@ func runMultiRouterRouterReqRepClient(cfg multiConfig, endpoint string) {
 	runMultiReqRepClients(cfg, ctx, clients)
 }
 
-// Go's public request terminal blocks through reply completion. Capped
-// goroutines therefore represent the socket's outstanding request window.
+// Go's public request terminal blocks through reply completion, so each
+// logical request runs in its own goroutine while this loop owns completion
+// progress for every requester socket.
 func runMultiReqRepClients(cfg multiConfig, clientCtx *zlink.Context, clients []multiReqRepClient) {
 	defer func() {
 		for i := range clients {
@@ -207,15 +208,6 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 	stats := perfcommon.NewMultiStats()
 	type counts struct{ attempts, failures, timeouts uint64 }
 	countsByClient := make([]counts, len(clients))
-	maxOutstanding := 64
-	if raw := os.Getenv("PERF_MULTI_REQREP_MAX_OUTSTANDING"); raw != "" {
-		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
-			maxOutstanding = value
-		}
-	}
-	if maxOutstanding < 2 {
-		maxOutstanding = 2
-	}
 	type completion struct {
 		client      int
 		parts       []*zlink.Message
@@ -223,13 +215,25 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 		completedAt time.Time
 		completedNs int64
 	}
-	completed := make(chan completion, len(clients)*maxOutstanding)
-	outstanding := make([]int, len(clients))
+	// One turn submits at most one request per client. The channel buffers that
+	// turn only; Core admission and completion pace the number still in flight.
+	completed := make(chan completion, len(clients))
 	totalOutstanding := 0
+
+	var completionPoller *zlink.Poller
+	completionEvents := make([]zlink.PollEvent, max(1, len(clients)))
+	if len(clients) > 0 && clients[0].target != nil {
+		var pollerErr error
+		completionPoller, pollerErr = zlink.NewPoller()
+		perfcommon.Must(pollerErr)
+		defer completionPoller.Close()
+		for index := range clients {
+			perfcommon.Must(completionPoller.AddSocket(clients[index].target, zlink.PollCompletion, uintptr(index)))
+		}
+	}
 
 	submitOne := func(index int) {
 		countsByClient[index].attempts++
-		outstanding[index]++
 		totalOutstanding++
 		go func() {
 			payload := perfcommon.PreparePayload(cfg.msgSize)
@@ -249,29 +253,19 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 	}
 
 	processCompletion := func(done completion) {
-		outstanding[done.client]--
 		totalOutstanding--
 		count := &countsByClient[done.client]
 		if done.err != nil {
 			count.failures++
 			var requestErr *zlink.RequestError
-			var submitErr *zlink.SubmitError
 			zlink.MultipartClose(done.parts)
-			// Backpressure is an admission outcome, not a reply. It releases
-			// this runner slot and the continuous-fill loop tries again while
-			// other admitted requests keep completion progress moving.
-			if errors.As(done.err, &submitErr) && submitErr.Result == zlink.SubmitBackpressured {
+			if errors.As(done.err, &requestErr) && requestErr.Result == zlink.RequestTimedOut {
+				count.timeouts++
 				return
 			}
-			// Request-domain outcomes are terminal completions and free one
-			// slot; every other admission error is fatal.
-			if !errors.As(done.err, &requestErr) {
-				perfcommon.Must(done.err)
-			}
-			if requestErr.Result == zlink.RequestTimedOut {
-				count.timeouts++
-			}
-			return
+			// BACKPRESSURED with a WRITABLE token is retained and resumed by
+			// the binding terminal. Any error returned to the runner is fatal.
+			perfcommon.Must(done.err)
 		}
 		reply, payloadErr := perfcommon.MeasurementPayload(done.parts)
 		if payloadErr == nil && done.completedAt.Before(window.StopAt) {
@@ -283,20 +277,36 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 		zlink.MultipartClose(done.parts)
 	}
 
-	// Keep every socket filled to the policy cap and refill whichever request
-	// completes first; no socket falls back to a one-request RTT loop.
-	for time.Now().Before(window.StopAt) {
-		for index := range clients {
-			for outstanding[index] < maxOutstanding && time.Now().Before(window.StopAt) {
-				submitOne(index)
+	drainReady := func() bool {
+		progressed := false
+		for {
+			select {
+			case done := <-completed:
+				processCompletion(done)
+				progressed = true
+			default:
+				return progressed
 			}
 		}
-		if totalOutstanding == 0 {
-			continue
-		}
-		remaining := time.Until(window.StopAt)
+	}
+
+	waitForProgress := func(deadline time.Time, progressed bool) {
+		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			break
+			return
+		}
+		if completionPoller != nil {
+			if progressed {
+				remaining = 0
+			} else if remaining > 50*time.Millisecond {
+				remaining = 50 * time.Millisecond
+			}
+			_, pollErr := completionPoller.Wait(completionEvents, remaining)
+			perfcommon.Must(pollErr)
+			return
+		}
+		if progressed {
+			return
 		}
 		select {
 		case done := <-completed:
@@ -305,22 +315,34 @@ func runMultiReqRepWindow(cfg multiConfig, clients []multiReqRepClient, window p
 		}
 	}
 
+	// Each turn submits once per socket, drains ready completions, then lets the
+	// completion-only poller pace request and WRITABLE progress. A reply is
+	// never an application admission gate for the next turn.
+	for time.Now().Before(window.StopAt) {
+		for index := range clients {
+			if !time.Now().Before(window.StopAt) {
+				break
+			}
+			submitOne(index)
+		}
+		progressed := drainReady()
+		waitForProgress(window.StopAt, progressed)
+	}
+
 	drainTimeout := max(1000*time.Millisecond, timeout*4)
 	if value, err := strconv.Atoi(os.Getenv("PERF_MULTI_REQREP_DRAIN_TIMEOUT_MS")); err == nil && value > 0 {
 		drainTimeout = time.Duration(value) * time.Millisecond
 	}
 	drainDeadline := time.Now().Add(drainTimeout)
 	for totalOutstanding > 0 {
-		remaining := time.Until(drainDeadline)
-		if remaining <= 0 {
+		progressed := drainReady()
+		if totalOutstanding == 0 {
+			break
+		}
+		if !time.Now().Before(drainDeadline) {
 			perfcommon.Must(fmt.Errorf("multi reqrep completion drain timed out with %d outstanding", totalOutstanding))
 		}
-		select {
-		case done := <-completed:
-			processCompletion(done)
-		case <-time.After(remaining):
-			perfcommon.Must(fmt.Errorf("multi reqrep completion drain timed out with %d outstanding", totalOutstanding))
-		}
+		waitForProgress(drainDeadline, progressed)
 	}
 	var total counts
 	for _, count := range countsByClient {
