@@ -268,8 +268,72 @@ async function runRequestWindow({ payloadSize, options, statsUrl, operation }) {
   });
 }
 
+/**
+ * `request-backpressure` (spec 2): no application ceiling on outstanding
+ * requests.
+ *
+ * This is the COOPERATIVE-YIELD variant. Node's public async request terminal
+ * absorbs admission backpressure -- it waits for the WRITABLE token inside the
+ * terminal and resubmits -- so nothing here can submit "until refused". What it
+ * does instead is submit continuously and hand the turn to the completion pump
+ * after every submission. Depth then settles where the submission and
+ * completion rates balance, and that settled depth is the result (spec 5.2),
+ * not a number this harness chose.
+ *
+ * The yield is not optional: without it this loop would never let a reply be
+ * counted and would report enormous depth instead of a working point.
+ */
+async function runRequestBackpressure({ payloadSize, options, statsUrl, operation }) {
+  for (let i = 0; i < options.warmup; i++) {
+    await operation(payloadSize, header.PHASE_WARMUP, i);
+  }
+  await resetServer(statsUrl);
+
+  const latencies = new Latencies(options.latencySampleLimit);
+  let inFlight = 0;
+  let peakInFlight = 0;
+  let completed = 0;
+  let errors = 0;
+  let sequence = 0;
+
+  const resources = new ResourceSample();
+  const startNs = header.nowNs();
+  const activeUntilNs = startNs + BigInt(Math.round(options.durationSeconds * 1e9));
+
+  const release = () => { inFlight -= 1; };
+
+  while (header.nowNs() < activeUntilNs) {
+    inFlight += 1;
+    if (inFlight > peakInFlight) peakInFlight = inFlight;
+    const index = sequence++;
+    const t0 = header.nowNs();
+    operation(payloadSize, header.PHASE_ACTIVE, index).then(
+      () => { completed += 1; latencies.add(elapsedMicros(t0)); },
+      () => { errors += 1; latencies.add(elapsedMicros(t0)); }
+    ).then(release, release);
+    // The cooperative yield. One macrotask turn lets every ready completion be
+    // counted before the next submission.
+    await new Promise((resolve) => { setImmediate(resolve); });
+  }
+
+  const settleDeadline = Date.now() + options.windowSettleMs;
+  while (inFlight > 0 && Date.now() < settleDeadline) {
+    await delay(1);
+  }
+  const abandoned = inFlight;
+  if (abandoned > 0) errors += abandoned;
+
+  const usage = resources.finish();
+  const server = await serverStats(statsUrl);
+  return finishRequestCell({
+    payloadSize, options, usage, server, latencies, completed, errors,
+    peakInFlight, abandoned, requestWindow: 0
+  });
+}
+
 function finishRequestCell({
-  payloadSize, options, usage, server, latencies, completed, errors, peakInFlight, abandoned
+  payloadSize, options, usage, server, latencies, completed, errors, peakInFlight, abandoned,
+  requestWindow
 }) {
   const seconds = Math.max(1e-9, options.durationSeconds);
   const throughput = completed / seconds;
@@ -289,7 +353,8 @@ function finishRequestCell({
     event_loop_utilization: usage.eventLoopUtilization,
     client_parallelism_ceiling: CLIENT_PARALLELISM_CEILING,
     peak_in_flight: peakInFlight,
-    request_window: options.requestWindow,
+    // 0 means no imposed ceiling (spec 2 request-backpressure).
+    request_window: requestWindow === undefined ? options.requestWindow : requestWindow,
     abandoned,
     errors,
     completed
@@ -395,5 +460,6 @@ module.exports = {
   waitForRouteReady,
   runRequestSerial,
   runRequestWindow,
+  runRequestBackpressure,
   runSendSaturation
 };

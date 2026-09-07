@@ -577,7 +577,13 @@ pattern_uses_control_pipe() {
   case "${pattern}" in
     # PERF_MULTI_TEST_POLICY.md:380,383 - the request/reply server shuts down
     # on the runner stdin STOP, so it needs a control pipe like the C server.
-    MULTI_DEALER_DEALER|MULTI_PUBSUB|MULTI_STREAM|MULTI_DEALER_ROUTER_REQREP|MULTI_ROUTER_ROUTER_REQREP)
+    # PERF_POLICY.md:138-143 - the handshake contract is the C one, and the C
+    # runner gives every multi server a stdin pipe it closes with STOP
+    # (bindings/c/perf/run_comparison.py stop_server). The routed one-way
+    # (relay) server is the same C relay server that shuts down from its stdin
+    # watcher (perf_multi_relay_server.hpp:667-677), so it needs the pipe too;
+    # without it the .NET relay server was killed by SIGTERM.
+    MULTI_DEALER_DEALER|MULTI_PUBSUB|MULTI_STREAM|MULTI_DEALER_ROUTER_REQREP|MULTI_ROUTER_ROUTER_REQREP|MULTI_DEALER_ROUTER|MULTI_DEALER_ROUTER_SENDSEND|MULTI_ROUTER_ROUTER|MULTI_ROUTER_ROUTER_SENDSEND)
       return 0
       ;;
     *)
@@ -2135,11 +2141,15 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
           exec {client_control_fd}>&-
         else
           if run_multi_process "client" "${client_log}" "${server_endpoint}" "" 0; then
+            # PERF_POLICY.md:138-143 - stop the relay server with the C stdin
+            # STOP token and require a clean exit, instead of SIGTERM.
             server_shutdown_ok=1
-            if ! terminate_running_pid_or_fail_if_exited \
+            write_control_line "${server_control_fd}" 'STOP\n'
+            if ! wait_for_pid_exit_zero \
                 "${server_pid}" "$(shutdown_timeout_seconds)" "${pattern} server"; then
               server_shutdown_ok=0
             fi
+            exec {server_control_fd}>&-
             if unsupported_line="$(extract_unsupported_line "${pattern}" "${transport}" "${client_log}" "${server_log}" 2>/dev/null)"; then
            print_line "${unsupported_line}"
             unsupported_count=$((unsupported_count + 1))
@@ -2159,16 +2169,19 @@ for (( run_index=1; run_index<=RUNS; run_index++ )); do
               continue
             fi
           else
+            write_control_line "${server_control_fd}" 'STOP\n'
             if unsupported_line="$(extract_unsupported_line "${pattern}" "${transport}" "${client_log}" "${server_log}" 2>/dev/null)"; then
           print_line "${unsupported_line}"
           unsupported_count=$((unsupported_count + 1))
           expected_result_lines=$((expected_result_lines - 5))
               terminate_pid "${server_pid}"
+              exec {server_control_fd}>&-
               continue
             fi
             cat "${server_log}" >&2 || true
             cat "${client_log}" >&2 || true
             terminate_pid "${server_pid}"
+            exec {server_control_fd}>&-
             record_failure "${pattern}" "${transport}" "${size}" "${run_index}" "process_exit_nonzero"
             status=1
             continue

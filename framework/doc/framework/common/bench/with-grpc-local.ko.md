@@ -96,22 +96,10 @@ reply 하나가 도착하면 해당 slot에서 다음 request를 바로 보낸�
 **이 패턴에서 미완료 깊이는 설정값이 아니라 측정값이다.** 스택이 도달한 깊이는 그 스택의
 설계가 정하는 결과이므로 결과의 일부로 기록한다(§5.2).
 
-**이 패턴은 언어에 따라 두 변종으로 실행되며, 결과에 어느 변종인지 반드시 표시한다.**
-
-| 변종 | 대상 | 제출을 멈추는 것 |
-|---|---|---|
-| admission backpressure 변종 | C | 제출 terminal이 `DONTWAIT` admission을 거절한다 |
-| cooperative yield 변종 | `.NET`·Node·Java·Kotlin | 거절이 없다. 제출과 completion pump 사이의 협력적 yield가 제출 속도를 정한다 |
-
-이 구분은 표기상의 것이 아니다. C의 public request terminal은 `DONTWAIT` admission이 거절되면
-`ZLINK_SUBMIT_BACKPRESSURED`를 caller에게 돌려준다. `.NET`·Node·Java의 public async request
-terminal은 backpressure를 caller에게 돌려주지 않고 terminal 안에서 WRITABLE token을 기다렸다가
-같은 packet을 다시 제출한다. 곧 **관리형 binding 네 행에서는 제출을 거절하는 신호가 존재하지
-않으므로, 그 행은 "admission backpressure를 만날 때까지 제출한 것이 아니다."** 그 행에서 깊이를
-정하는 것은 제출 속도와 완료 속도가 균형을 이루는 지점이다.
-
-관리형 네 행의 결과를 admission backpressure 변종과 같은 것으로 읽으면 안 된다. 두 변종은 같은
-패턴 이름을 쓰지만 제출을 멈추는 기전이 다르다.
+이 loop 모양은 새로 만든 것이 아니라 저장소에 이미 있는 구현을 옮긴 것이다. 기준 구현은
+`bindings/node/perf/multi/perf_multi_socket_reqrep.ts`이며, reply를 기다리지 않고 async request를
+연속 제출한 뒤 completion pump에 turn을 넘긴다. 여섯 행이 모두 같은 모양을 사용하고, gRPC 쪽도
+같게 unary 호출을 하나씩 기다리지 않고 연속 제출한다.
 
 두 request 패턴은 서로 다른 질문에 답하며 한쪽이 다른 쪽을 대체하지 않는다.
 
@@ -405,11 +393,6 @@ zlink-framework-<lang> / zlink-<lang>      >= 0.80   framework 추가 비용 통
 - `request-backpressure`는 각 스택이 자기 설계가 허용하는 깊이에 도달한 상태에서 비율을
   계산하므로, 정상적으로 제출하는 호출자가 실제로 얻는 값을 비교한다. 이것이 "binding 계층의
   기본 성능"이 뜻해야 하는 것이다.
-
-**판정의 근거가 언어에 따라 종류가 다르다는 것을 함께 적는다.** 다섯 언어 가운데 C만
-admission backpressure 변종으로 측정되고 나머지 넷은 cooperative yield 변종으로 측정된다(§2).
-곧 formula 1의 분모와 분자는 제출을 멈추는 기전이 서로 다른 두 실행이다. 이 사실을 표시하지
-않은 비율은 게재하지 않는다.
 
 **이 선택이 해결하지 않는 것을 함께 적는다.** `request-backpressure`는 깊이 고정을 없앨 뿐
 깊이 차이를 없애지 않는다. 자기 backpressure로 낮은 깊이에 머무는 스택은 이 패턴에서도 낮은

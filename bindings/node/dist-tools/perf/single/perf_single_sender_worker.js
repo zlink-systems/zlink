@@ -8,9 +8,21 @@ const { applyContextPolicy, applySocketPolicy, configureTlsClient, configureTlsS
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 const { isStopTokenParts } = require('../perf_stop_token');
 const DEFAULT_TOPIC = 'perf.topic';
+// Read once per process: the runner fixes PERF_PART_COUNT before launching
+// this process, and this is on the per-message path. A per-message
+// `process.env` lookup puts harness instrumentation inside the measured
+// path and charges it only to the binding runner. C reference:
+// bindings/c/perf/common/perf_zlink_part_helpers.hpp
+// perf_measurement_part_count.
+const MEASUREMENT_PART_COUNT = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+// Read once per process: PERF_NODE_TRACE is a launch-time knob and this
+// guard is on the per-message path.
+const NODE_TRACE_ENABLED = process.env.PERF_NODE_TRACE === '1';
+// Read once per process: launch-time knob on the per-message submit path.
+const MESSAGE_PAYLOAD_ENABLED = process.env.PERF_NODE_MESSAGE_PAYLOAD === '1';
 function appendMeasurement(op, payload) {
     op = op.message(payload);
-    if (process.env.PERF_PART_COUNT !== '1') {
+    if (MEASUREMENT_PART_COUNT !== 1) {
         op = op.message(Buffer.alloc(0));
     }
     return op;
@@ -22,7 +34,7 @@ function ensureParentPort() {
     return parentPort;
 }
 function trace(message) {
-    if (process.env.PERF_NODE_TRACE === '1') {
+    if (NODE_TRACE_ENABLED) {
         console.error(`[sender-worker] ${message}`);
     }
 }
@@ -110,7 +122,7 @@ function isTransientSubmit(error) {
         || /Resource temporarily unavailable|temporarily unavailable|would block|timed out|Host unreachable|not connected/i.test(text);
 }
 function submitOnce(kind, socket, body, receiverRoutingId, topic) {
-    const message = process.env.PERF_NODE_MESSAGE_PAYLOAD === '1'
+    const message = MESSAGE_PAYLOAD_ENABLED
         ? zlink.Message.from(body)
         : body;
     if (kind === 'pubsub') {
@@ -221,7 +233,7 @@ function runReqRepReplier(router) {
             if (received.replyToken === null) {
                 throw new Error('request is missing its reply token');
             }
-            const count = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+            const count = MEASUREMENT_PART_COUNT;
             if (received.parts.length !== count
                 || (count === 2 && received.parts[1].data().length !== 0)) {
                 throw new Error('request has an invalid measurement part layout');

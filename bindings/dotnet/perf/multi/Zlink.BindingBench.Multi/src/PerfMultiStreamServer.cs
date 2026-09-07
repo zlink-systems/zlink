@@ -298,9 +298,15 @@ internal static class PerfMultiStreamServer
         }
     }
 
+    // Read once per process: PERF_DEBUG is a launch-time knob and this guard is
+    // reached from the packet path, so a per-call lookup would mix harness
+    // instrumentation into the measurement.
+    private static readonly bool DebugEnabled =
+        Environment.GetEnvironmentVariable("PERF_DEBUG") != null;
+
     private static void DebugFailure(string operation, Exception error)
     {
-        if (Environment.GetEnvironmentVariable("PERF_DEBUG") == null)
+        if (!DebugEnabled)
             return;
         if (error is ZlinkException zlinkError)
             Console.Error.WriteLine($"{Pattern} {operation} failed "

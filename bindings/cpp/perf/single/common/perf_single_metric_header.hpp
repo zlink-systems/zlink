@@ -63,8 +63,14 @@ inline void store_u64_le (unsigned char *dst, uint64_t value)
 
 inline int64_t now_ns ()
 {
+    // PERF_POLICY.md 1.1: every runner reads elapsed time, deadlines, timeouts
+    // and the metric header `sent_ts_ns` from a monotonic clock. On this host
+    // `steady_clock` is `CLOCK_MONOTONIC`, whose epoch is boot time and is
+    // therefore shared by every perf process on the host, so a client stamp can
+    // be compared against a server clock. This mirrors the C reference
+    // (`bindings/c/perf/multi/common/perf_multi_metric_header.hpp` now_ns).
     return static_cast<int64_t> (std::chrono::duration_cast<std::chrono::nanoseconds> (
-                                   std::chrono::system_clock::now ().time_since_epoch ())
+                                   std::chrono::steady_clock::now ().time_since_epoch ())
                                    .count ());
 }
 

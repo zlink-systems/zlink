@@ -29,7 +29,7 @@ const header = require('../shared/bench-metric-header');
 const rawWire = require('../shared/raw-wire');
 const core = require('./bench-core');
 
-const PATTERNS = ['request-serial', 'request-window', 'send-saturation'];
+const PATTERNS = ['request-serial', 'request-window', 'request-backpressure', 'send-saturation'];
 const IMPLEMENTATIONS = ['grpc-node', 'zlink-node', 'zlink-framework-node'];
 
 function parseOptions(argv) {
@@ -474,6 +474,55 @@ async function main() {
             () => operation(payloadSize, header.PHASE_WARMUP, 0), options.routeReadyMs
           );
           return core.runRequestWindow({
+            payloadSize, options, statsUrl: options.zlinkStatsUrl, operation
+          });
+        });
+      }
+    }
+
+    // --- request-backpressure ---
+    // Same three implementations and the same route-ready wait as
+    // request-window; the only difference is that no ceiling is imposed on
+    // outstanding requests (spec 2). Depth is reported, not set.
+    if (shouldRunPattern(options, 'request-backpressure')) {
+      if (shouldRun(options, 'grpc-node')) {
+        await addCell('grpc-node', 'request-backpressure', payloadSize,
+          () => core.runRequestBackpressure({
+            payloadSize, options, statsUrl: options.grpcStatsUrl,
+            operation: grpcEcho(grpcClient, options)
+          }));
+      }
+      if (shouldRun(options, 'zlink-node')) {
+        await addCell('zlink-node', 'request-backpressure', payloadSize, async () => {
+          const socket = RawBenchSocket.create(
+            ctx, options.rawSocket, `bench-bp-${process.pid}-s${payloadSize}`,
+            rawWire.ROUTING_IDS.rawRequestServer, options.zlinkRawEndpoint
+          );
+          const operation = rawRequest(socket, options);
+          try {
+            await core.waitForRouteReady(
+              () => operation(payloadSize, header.PHASE_WARMUP, 0), options.routeReadyMs
+            );
+            return await core.runRequestBackpressure({
+              payloadSize, options, statsUrl: options.zlinkRawStatsUrl, operation
+            });
+          } finally {
+            socket.close();
+          }
+        });
+      }
+      if (shouldRun(options, 'zlink-framework-node')) {
+        await addCell('zlink-framework-node', 'request-backpressure', payloadSize, async () => {
+          if (framework === null) {
+            throw new Error(
+              `framework host unavailable via @zlink-systems/nestjs: ${frameworkError}`
+            );
+          }
+          const operation = frameworkRequest(framework.routeClient, options);
+          await core.waitForRouteReady(
+            () => operation(payloadSize, header.PHASE_WARMUP, 0), options.routeReadyMs
+          );
+          return core.runRequestBackpressure({
             payloadSize, options, statsUrl: options.zlinkStatsUrl, operation
           });
         });

@@ -58,7 +58,7 @@
 | | single | multi |
 |---|---|---|
 | 진행을 구동하는 주체 | 러너가 만든 **전용 OS thread**가 직접 구동한다 | 그 언어의 **비동기 실행 모델**(coroutine, async runtime, event loop, goroutine)이 구동한다 |
-| 측정 구간에서 금지 | coroutine, async task, Promise/Future executor, event-loop yield | 없음 (단, PUB/XPUB publish와 raw reply는 multi에서도 synchronous terminal) |
+| 측정 구간에서 금지 | **진행을 언어 런타임의 스케줄러에 위임하는 것** — 공유 thread pool, 런타임이 소유한 executor, 다른 thread의 event loop. §1.1.5 참조 | 없음 (단, PUB/XPUB publish와 raw reply는 multi에서도 synchronous terminal) |
 
 > **오해 금지 — 동기 실행 모델은 "한 건 보내고 응답을 기다린다"는 뜻이 아니다.**
 >
@@ -135,13 +135,36 @@ binding의 공개 request terminal이 admission 결과를 직접 돌려주지 �
 - raw send는 blocking terminal을 사용하므로 HWM 도달 시 Core가 sender thread를 대기시킨다.
 - Go는 역할별 goroutine을 active 구간 전체에서 `runtime.LockOSThread()`로 고정한다.
   이 goroutine은 다른 작업과 OS thread를 공유하지 않는다. Node는 `worker_threads`,
-  Python은 `threading.Thread`에서 synchronous terminal과 recv loop를 실행한다. C++은
-  `co_await`, .NET은 `Task`, Rust는 Future executor를 single 측정 경로에서 사용하지 않는다.
+  Python은 `threading.Thread`에서 러너 loop를 실행한다. 언어별 금지 항목은 §1.1.5가
+  정의한다.
 - `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`, `ROUTER_ROUTER`는 recv 모델로
   active payload를 집계한다. `DEALER_ROUTER_REQREP`, `ROUTER_ROUTER_REQREP`는 §1.1.1~§1.1.3의
   request-reply completion 모델로 active 왕복 완료를 집계하며, requester submit flow,
   requester reply completion flow, replier recv/reply flow를 같은 process 안에서 동시에
   구동한다.
+
+#### 1.1.5 "async 금지"가 정확히 무엇을 금지하는가
+
+금지의 대상은 **진행을 누가 구동하는가**이지 awaitable 타입 자체가 아니다. binding의
+공개 계약이 awaitable terminal만 제공하는 경우가 있으므로(§ 1.1.3), 타입을 금지하면
+그 언어는 정책을 만족할 방법이 없다.
+
+**금지**: 측정 구간의 진행을 그 역할의 전용 thread가 아닌 주체에 넘기는 것.
+- 공유 thread pool 또는 런타임이 소유한 executor에 continuation을 올리는 것
+  (`Task.Run`, thread-pool continuation, 공유 `asyncio` 루프, 별도 executor thread)
+- 다른 thread의 event loop가 completion을 진행시키는 것
+- 러너가 만들지 않은 스케줄러가 역할 thread를 다른 작업과 함께 스케줄링하는 것
+
+**허용**: 전용 thread가 스스로 진행을 구동하는 한, 그 언어의 awaitable 타입을 쓰는 것.
+- C++ `async_result_t`의 `co_await` — 러너 자신의 ready queue가 continuation을 재개할 때
+- .NET `Task` — completion poller를 소유한 그 thread가 완료시킬 때
+- Node `Promise` — `worker_threads`의 전용 worker 안에서, 그 worker 자신의 loop만
+  진행시킬 때. worker의 loop를 한 턴 넘기는 것은 그 thread가 자기 completion을
+  진행시키는 유일한 수단이므로 여기서 말하는 "다른 thread의 event loop"가 아니다.
+- Rust `Future` — 러너가 직접 poll하거나 러너가 소유한 단일 thread executor일 때
+
+판정 기준은 하나다. **측정 구간에서 그 역할의 진행을 실제로 밀고 있는 것이 러너가 만든
+전용 OS thread인가.** 그렇다면 통과하고, 런타임이 관리하는 다른 주체라면 위반이다.
 
 #### 프로세스/스레드 모델
 
@@ -185,8 +208,7 @@ single 의 기본 패턴은 one-way 측정 surface를 사용한다. request-repl
 - requester progress flow는 같은 requester socket에서 requester progress loop를
   수행한다. 이 loop는 blocking recv/wait 또는 그와 같은 의미의 public completion
   progress 경로로 reply completion을 drain한다. 진행 주체는 반드시 그 역할의 전용
-  OS thread이며, coroutine, async task 또는 Future executor로 completion을 진행하지
-  않는다(§ 1.1.2). binding의 공개 terminal이 admission과 reply를 하나의 awaitable로
+  OS thread이며, 진행을 언어 런타임의 스케줄러에 위임하지 않는다(§ 1.1.2, § 1.1.5). binding의 공개 terminal이 admission과 reply를 하나의 awaitable로
   합쳐 제공하면 § 1.1.3의 규칙을 따른다 — awaitable을 기다리지 말고 계속 제출하고,
   완료되는 것부터 drain한다. 같은 handle 동시 사용은 public handle concurrency 계약을
   따른다.

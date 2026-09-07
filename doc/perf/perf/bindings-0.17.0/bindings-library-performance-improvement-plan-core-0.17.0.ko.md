@@ -104,15 +104,19 @@ core 0.17.0의 통과 비율이나 완료 근거로 사용하지 않는다.
 
 개선 대상은 perf 코드가 아니라 다음 bindings 라이브러리다.
 
-| 순서 | 언어 | perf 경로 |
-|------|------|-----------|
-| 1 | C++ | `bindings/cpp/perf` |
-| 2 | .NET | `bindings/dotnet/perf` |
-| 3 | Java | `bindings/java/perf` |
-| 4 | Node | `bindings/node/perf` |
-| 5 | Go | `bindings/go/perf` |
-| 6 | Rust | `bindings/rust/perf` |
-| 7 | Python | `bindings/python/perf` |
+| 순서 | 언어 | perf 경로 | 우선순위 |
+|------|------|-----------|----------|
+| 1 | C++ | `bindings/cpp/perf` | **우선** |
+| 2 | .NET | `bindings/dotnet/perf` | **우선** |
+| 3 | Java | `bindings/java/perf` | **우선** |
+| 4 | Node | `bindings/node/perf` | **우선** |
+| 5 | Go | `bindings/go/perf` | 후순위 |
+| 6 | Rust | `bindings/rust/perf` | 후순위 |
+| 7 | Python | `bindings/python/perf` | 후순위 |
+
+우선 개선 대상은 C++·.NET·JVM·Node 4개다(D-BP8). Go·Rust·Python은 앞 4개가 끝난 뒤
+착수한다. 후순위 언어의 러너 정책 위반 기록은 유지하며, 그 언어를 측정할 때 위반을
+먼저 고친 뒤 잰다.
 
 > **비교 범위 (2026-09-07, D-BP2)**: `PERF_POLICY.md` line 144~148은 "bindings ↔ C 성능
 > 비교는 multi suite로 한정한다 ... single 결과는 각 binding의 synchronous path와 lifecycle을
@@ -1388,10 +1392,11 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 1 | 측정 조건 통일 — server auto-HWM 보고 시점, monitor HWM report key, `default_stream_clients`, Effective Options key, `select_transports()`, C++ stale 검사, Go auto-HWM recalc 누락, .NET `--runs`·`--pin-cpu` 전달 누락 | 완료 `87153dd4f3` — C↔C++ Effective Options 완전 일치 검증 |
 | 2 | 정책 문서 개정 — Single에서 REQREP 제외, 시간원 monotonic 고정(`sent_ts_ns` 표기 정정), active 유효 메시지 규칙, 가중 분위수 보간, 1ms 재시도 예외 | 완료 `506086e7cd` |
 | 3 | C 러너를 정책에 맞춤 — 별도 latency 단계 제거, one-way 하드코딩 `max_in_flight=1` 제거, active deadline 필터, wire 길이 집계 제외, Single REQREP 제거, 가중 분위수 보간, matched client 빌드 파손 수정 | 완료 `5470e9314f`(푸시 대기) |
-| 4 | Multi 종료 protocol 정합 — `CLIENT_DONE`/`STOP` 대기 없이 socket을 닫는 6개 binding | 진행 중 |
-| 5 | Multi 부하 수준 정합 — socket당 in-flight 1인 러너를 비동기 포화 제출로(Go·Java 등) | 진행 중 |
-| 6 | Single 러너 정책 정합 — 전용 OS thread + synchronous API, 언어별 금지 조항, REQREP 제외 반영 | 대기 |
-| 7 | Core 0.17.1 artifact 재고정 + 환경 manifest 재작성 | 대기(릴리스 통보 후) |
+| 4 | Multi 종료 protocol 정합 — `CLIENT_DONE`/`STOP` 대기 없이 socket을 닫는 6개 binding, Java의 wire stop token, Node의 비표준 barrier, Rust·Python PUBSUB의 `CLIENT_DONE` 누락 | 완료 `d634417a37` (7개 binding) |
+| 5 | Multi 부하 수준 정합 — socket당 in-flight 1인 러너를 비동기 연속 제출로 | 부분 완료 `d634417a37` — C++·Java REQREP과 Python SENDSEND 전환, 미완료 상한 `PERF_MULTI_REQREP_MAX_OUTSTANDING`=64. 잔여: Go REQREP 재구성, .NET·Node·Rust·Python 상한 적용 |
+| 6 | Single 러너 정책 정합 — 전용 OS thread + synchronous API, 언어별 금지 조항, REQREP 연속 제출 | C 완료 `074d2a5964`(REQREP 복원 + 단일 phase, 774.9k·849.1k ops/s). 7개 binding 대기 |
+| 6b | multi metric header 시간원 — **C만 monotonic**. C++ `system_clock`, Python `time.time_ns()`, .NET Stopwatch를 `DateTime.UtcNow`에 고정. 이 호스트 wall clock ±5초 점프(D-095)로 latency 오염 | 대기 (우선) |
+| 7 | Core 0.17.1 artifact 재고정 + 환경 manifest 재작성 | 진행 중 — 버전 3곳 0.17.1 일치 확인, Release+LTO 빌드 중 |
 | 8 | 측정 — C++부터 pattern·transport 단위 paired | 대기 |
 
 ### 10.3 언어 진행 상태
@@ -1406,7 +1411,7 @@ callgrind·프로파일 분석, 후보 no-go 목록과 그 근거(D-B121~D-B130)
 
 | 순서 | 언어 | 현재 artifact Single | 현재 artifact Multi | 이전 호스트 Multi `tcp` 참고값 (DD / DR REQREP / RR REQREP / PUBSUB) | 적용된 개선 pass |
 |------|------|------|------|------|------|
-| 1 | C++ | 미측정 | 미측정 | 90.8 / 57.4 / 68.4 / 93.2% | 2건 push |
+| 1 | C++ | 미측정 | `tcp` DD **미달(76.8%)** | 90.8 / 57.4 / 68.4 / 93.2% | 2건 push |
 | 2 | .NET | 미측정 | 미측정 | 59.6 / 58.3 / 67.0 / 61.3% | 3건 push |
 | 3 | Java | 미측정 | 미측정 | 80.9 / 59.4 / 58.7 / 80.9% | 3건 push |
 | 4 | Node | 미측정 | 미측정 | 35.9 / 24.3 / 24.8 / 30.2% | 4건 push |
@@ -1439,6 +1444,8 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 | 2026-09-05 | C++ | Multi `tls`·`ws`·`wss` `MULTI_DEALER_DEALER`, `MULTI_DEALER_ROUTER_REQREP`, `MULTI_ROUTER_ROUTER_REQREP`, `MULTI_PUBSUB` before | `p1cpp-tls`, `p1cpp-ws`, `p1cpp-wss` | 5 sizes(64~65536, `131072` 제외), 5초, 1회, 100 clients, I/O 4/4, auto-HWM balanced, Core 0.17.0 local Release+LTO `libzlink.so.0.17.0`(`tcp`와 같은 artifact, `core_dirty=0`; `META,core_revision` `tls`·`ws` `6e8d798bac`, `wss` `296c5c04e5`는 문서 2개만 차이), C++는 `tcp` pass 2 코드(`e6dd88fbc6` 포함), transport마다 4 pattern을 C 직후 C++ 순차 실행, 04:41~04:55 KST, load average 0.7~8.5는 24회 연속 실행 자체 부하 | before(판정 미확정): `DEALER_DEALER` 처리량 평균 77.6% / 84.9% / 93.9% 미달(목표 95%), latency 6.23x(`tls`, 상한 초과; 1024B 25.96x·4096B 3.97x outlier) / 0.63x / 1.91x(1024B 5.60x·4096B 2.19x outlier); `DEALER_ROUTER_REQREP` `tls` 54.5% 미달(0.43x); `ROUTER_ROUTER_REQREP` `tls` 60.5%·`ws` 58.0% 미달(0.38x / 0.59x); `PUBSUB` 100.2% / 104.1% / 104.8% 통과 후보(0.97x / 1.09x / 0.92x; 64B 80.9~85.7%), §7.4 14단계 검토 전; C 기준 이상: C runner `ws` `DEALER_ROUTER_REQREP` 4096B 7,867.2 ops/s / 58.6 ms(1024B 127,386.8 / 1.98 ms), `wss` `DEALER_ROUTER_REQREP` 4096B 3,413.4 / 22.4 ms, `wss` `ROUTER_ROUTER_REQREP` 4096B 16,836.6 / 20.4 ms — C++ 같은 셀 51,107.0 / 32,961.4 / 35,799.0 ops/s 정상 — 해당 셀 `보류(C 기준 이상)`, 세 transport aggregate 미확정(4 size 참고 55.1% / 57.6% / 55.4%), Core/runner 조사 job 개설(brief `core-c-ws-reqrep-4k`), Core 재빌드·수정 없음(§5); `MsgUnit(B)`는 양쪽 `?`, memory guard cap 없음, 실제 clients 100 | C: `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260905_{044211,044417,044513,044610}_p1cpp-tls.txt`, `{044714,044810,044906,045001}_p1cpp-ws.txt`, `{045104,045202,045258,045355}_p1cpp-wss.txt`; C++: `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260905_{044349,044446,044542,044638}_p1cpp-tls.txt`, `{044743,044839,044934,045029}_p1cpp-ws.txt`, `{045133,045231,045327,045424}_p1cpp-wss.txt`; [log](log/2026-09-05-cpp-multi-tls-ws-wss-before.ko.md) |
 | 2026-09-05 | C++ | Multi `ws`·`wss` `MULTI_DEALER_ROUTER_REQREP`, `MULTI_ROUTER_ROUTER_REQREP` before 재측정(C runner 수정 D-B89 뒤) | `p1cpp-ws-fix`, `p1cpp-wss-fix` | 5 sizes, 5초, C 5회 평균·C++ 1회, 100 clients, Core 0.17.0 local(`core/build`), C runner WS/WSS byte-quantum 턴, C++ pass 2 코드, 05:27~05:33 KST, load 0.3~1.4에서 시작 | before(판정 미확정): `DEALER_ROUTER_REQREP` `ws` 53.1%·latency 2.43x, `wss` 43.7%·1.02x; `ROUTER_ROUTER_REQREP` `ws` 72.3%·2.54x, `wss` 44.7%·0.75x — 모두 `미달`; `보류(C 기준 이상)` 3셀 해소; C++ `ws` 64~1024B가 before보다 45% 높아 run-to-run 편차 주의 | [log](log/2026-09-05-cpp-multi-ws-wss-reqrep-remeasure.ko.md) |
 | 2026-09-05 | C++ | Multi `tcp` `MULTI_PUBSUB` 자체 hot-path pass 1 + 3-run 재짝지음 | `p1cpp-pubsub-r3` | 5 sizes, 5초, C·C++ 각 3회 평균, 100 clients, Core 0.17.0 local(`3480ee5d78`), C++ pass 2 코드(변경 없음), 05:53~05:57 KST, load 0.18에서 시작 | pass 1 no-go(subscriber wrapper 약 5%, 계약 유지 후보 없음); 3-run aggregate 81.5%·latency 1.08x `미달`(목표 95%) | [log](log/2026-09-05-cpp-multi-tcp-pubsub-pass1.ko.md) |
+| 2026-09-07 | C++ | Multi `tcp` `MULTI_DEALER_DEALER` before | `p2cpp` | 5 sizes(64~65536), 5초, 1회, 100 clients, I/O 4/4, auto-HWM balanced, **Core 0.17.1** local Release+LTO `libzlink.so.0.17.1`(Build ID `f7e2a539…`, SHA-256 `79cc4358…`, source `074d2a5964`), C 직후 C++ 순차 실행, 10:42~10:43 KST, load average 0.96 | before: 처리량 68.5 / 70.5 / 93.3 / 96.6 / **54.9**% → aggregate **76.8%** `미달`(목표 95%, 완화 90%); latency 1.03 / 0.14 / 0.28 / 1.12 / 2.06x → aggregate 0.93x `통과`(상한 2.0x); C ops/s 1,682,102 / 1,533,516 / 1,224,382 / 640,748 / 161,487, C++ 1,151,636 / 1,080,648 / 1,142,451 / 618,912 / 88,712; 병목 두 갈래 — 작은 크기(64·256) 68~70%는 메시지당 고정 비용, 65536B 54.9%는 대형 payload 경로; 중간 크기(1024·4096) 93~97%는 거의 정합. 개선 pass 전 | C: `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260907_104232_p2cpp.txt`; C++: `bindings/cpp/perf/results/multi/report/perf_cpp_multi_linux_20260907_104306_p2cpp.txt`; 환경 [manifest](log/2026-09-07-environment-0.17.1.ko.md) |
+
 
 ## 12. 완료 기준
 

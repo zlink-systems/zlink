@@ -22,31 +22,44 @@ public static class PerfShared
     public const uint PerfMetricMagic = 0x5A4C_4E4Bu;
     public const int PerfMetricHeaderSize = 29;
     private static int _nextPort = InitializePortSeed();
-    private static readonly long EpochBaseTimestamp = Stopwatch.GetTimestamp();
-    private static readonly ulong EpochBaseNs = (ulong)(DateTime.UtcNow.Ticks * 100L);
-    private static readonly double StopwatchTickNs =
-        1_000_000_000.0 / Stopwatch.Frequency;
+    private static readonly long StopwatchFrequency = Stopwatch.Frequency;
 
     public static long TimestampNs()
     {
-        long ts = Stopwatch.GetTimestamp();
-        return (long)(ts * (1_000_000_000.0 / Stopwatch.Frequency));
+        return MonotonicNsFromTimestamp(Stopwatch.GetTimestamp());
     }
 
+    // PERF_POLICY.md 1.1: elapsed time, deadlines, timeouts and the metric
+    // header `sent_ts_ns` all come from one monotonic clock. `Stopwatch` is
+    // the .NET monotonic time source; on Unix it reads CLOCK_MONOTONIC
+    // (Frequency == 1e9), whose epoch is boot time, so the value is shared by
+    // every perf process on the host and a client stamp stays comparable
+    // against a server clock. No wall-clock (`DateTime.UtcNow`) anchor is
+    // applied. This mirrors the C reference
+    // (`bindings/c/perf/multi/common/perf_multi_metric_header.hpp` now_ns,
+    // std::chrono::steady_clock).
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong EpochNs()
     {
-        // Keep the wall-clock epoch meaning used by the C harness while
-        // avoiding a DateTime.UtcNow call on every hot-path message.
         return EpochNsFromTimestamp(Stopwatch.GetTimestamp());
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong EpochNsFromTimestamp(long timestamp)
     {
-        long deltaTicks = timestamp - EpochBaseTimestamp;
-        ulong deltaNs = (ulong)(deltaTicks * StopwatchTickNs);
-        return EpochBaseNs + deltaNs;
+        return (ulong)MonotonicNsFromTimestamp(timestamp);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long MonotonicNsFromTimestamp(long timestamp)
+    {
+        long frequency = StopwatchFrequency;
+        if (frequency == 1_000_000_000L)
+            return timestamp;
+        long whole = timestamp / frequency;
+        long remainder = timestamp - (whole * frequency);
+        return (whole * 1_000_000_000L)
+            + ((remainder * 1_000_000_000L) / frequency);
     }
 
     public static long DeadlineTicksFromMilliseconds(int milliseconds)

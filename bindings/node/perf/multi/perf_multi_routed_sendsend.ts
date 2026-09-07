@@ -32,6 +32,11 @@ const {
   waitPollerOne
 } = require('./perf_multi_runtime');
 
+// Read once per process: the runner fixes PERF_PART_COUNT before launching
+// this process, and this is on the per-message recv path. A per-message
+// `process.env` lookup puts harness instrumentation inside the measured path.
+const MEASUREMENT_PART_COUNT = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+
 const SERVER_ROUTING_ID = zlink.RoutingId.from(Buffer.from('SERVER', 'ascii'));
 const ASYNC_PROGRESS_BATCH = 64;
 
@@ -347,7 +352,7 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
           if (!received.routingId) {
             throw new Error('routed echo received without routing id');
           }
-          const expectedParts = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+          const expectedParts = MEASUREMENT_PART_COUNT;
           if (received.parts.length !== expectedParts
               || (expectedParts === 2 && received.parts[1].data().length !== 0)) {
             const partSizes = received.parts.map((part) => part.data().length).join(',');

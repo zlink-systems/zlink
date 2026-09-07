@@ -22,7 +22,12 @@ namespace detail
 
 inline bool debug_enabled ()
 {
-    return std::getenv ("PERF_DEBUG") != NULL;
+    // Read once per process: PERF_DEBUG is a launch-time knob and this guard
+    // is evaluated on the per-message path, so a per-call getenv would put
+    // harness instrumentation inside the measured path. Same shape as the C
+    // reference bench_debug_enabled().
+    static const bool enabled = std::getenv ("PERF_DEBUG") != NULL;
+    return enabled;
 }
 
 inline void debug_relay_error (const char *label, const char *operation, int err = errno)

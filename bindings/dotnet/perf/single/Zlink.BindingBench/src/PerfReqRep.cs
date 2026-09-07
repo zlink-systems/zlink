@@ -410,109 +410,59 @@ internal static class PerfReqRep
         int payloadSize = Math.Max(msgSize, PerfMetricHeaderSize);
         using var completionPoller = Zlink.CreatePoller();
         var completionEvents = new PollEvent[1];
+        // POLLCOMPLETION reserves this poller as the socket's sole
+        // completion-queue drain owner, so the thread that calls Wait() is the
+        // thread that progresses every request (IPoller.Add remarks).
         completionPoller.Add(requester, PollEventFlags.PollCompletion, 0);
         var samples = new List<double>(Math.Max(0, latencyCap));
-        object gate = new();
         Exception? completionError = null;
         long completed = 0;
-        long inFlight = 0;
         long sampleSeen = 0;
         uint rng = 0xA341316Cu;
-        int submitDone = 0;
-        int fatal = 0;
+        bool fatal = false;
 
         void RecordError(Exception ex)
         {
-            lock (gate)
-            {
-                completionError ??= ex;
-                Volatile.Write(ref fatal, 1);
-            }
+            completionError ??= ex;
+            fatal = true;
         }
 
-        var progressThread = new Thread(() =>
-        {
-            try
-            {
-                while (Volatile.Read(ref submitDone) == 0
-                       && Volatile.Read(ref fatal) == 0)
-                {
-                    _ = completionPoller.Wait(completionEvents,
-                        TimeSpan.FromMilliseconds(50));
-                }
-
-                long drainDeadline = DeadlineTicksFromMilliseconds(
-                    ResolveReqRepDrainTimeoutMs());
-                while (Volatile.Read(ref inFlight) > 0
-                       && Stopwatch.GetTimestamp() < drainDeadline)
-                {
-                    _ = completionPoller.Wait(completionEvents,
-                        TimeSpan.FromMilliseconds(50));
-                }
-                if (Volatile.Read(ref inFlight) != 0)
-                    RecordError(new TimeoutException(
-                        "request/reply operations did not drain"));
-            }
-            catch (Exception ex)
-            {
-                RecordError(ex);
-            }
-        })
-        {
-            IsBackground = true,
-            Name = "single reqrep completion progress"
-        };
+        // PERF_SINGLE_TEST_POLICY.md 1.1.2/1.1.5: one dedicated OS thread
+        // alternates continuous submission with completion progress, exactly
+        // like the C reference run_request_phase
+        // (bindings/c/perf/single/common/perf_single_reqrep.hpp).
+        //
+        // The un-settled `Task`s are NEVER awaited and carry no continuation.
+        // `await` on a worker thread has no SynchronizationContext, so its
+        // continuation would be queued to the shared .NET thread pool - the
+        // exact hand-off PERF_SINGLE_TEST_POLICY.md 1.1.5 forbids, and measured
+        // as the cause of the 3.5 kops/s result (every completion settled on a
+        // pool thread, requester pinned at the cap spinning on Thread.Yield).
+        // Instead this thread polls IsCompleted and settles each finished task
+        // itself with GetAwaiter().GetResult(), which never blocks or schedules
+        // on an already-completed task.
+        var pending = new List<Task<IReadOnlyList<Message>>>();
 
         var requesterThread = new Thread(() =>
         {
             try
             {
                 ulong seq = 1;
+                int maxOutstanding = ResolveReqRepMaxOutstanding();
                 long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
-                while (Stopwatch.GetTimestamp() < deadlineTicks
-                       && Volatile.Read(ref fatal) == 0)
+
+                void SettleCompleted()
                 {
-                    using Message message = Message.Allocate(payloadSize);
-                    long sentTicks = Stopwatch.GetTimestamp();
-                    StampMetricHeader(message.AsSpan(), RunId, ActivePhase, msgSize,
-                        seq, EpochNsFromTimestamp(sentTicks));
-
-                    Interlocked.Increment(ref inFlight);
-                    int counted = 1;
-                    bool submitted = false;
-                    try
+                    for (int i = pending.Count - 1; i >= 0; --i)
                     {
-                        Task<IReadOnlyList<Message>> request = submit(message);
-                        submitted = true;
-                        seq++;
-                        _ = CompleteRequest(request);
-                    }
-                    catch (ZlinkException ex)
-                        when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
-                              || PerfShared.IsTransientNetworkError(ex.NativeErrno))
-                    {
-                        Thread.Yield();
-                    }
-                    catch (Exception ex)
-                    {
-                        RecordError(ex);
-                    }
-                    finally
-                    {
-                        if (!submitted
-                            && Interlocked.Exchange(ref counted, 0) == 1)
-                        {
-                            Interlocked.Decrement(ref inFlight);
-                        }
-                    }
-
-                    async Task CompleteRequest(
-                        Task<IReadOnlyList<Message>> request)
-                    {
+                        Task<IReadOnlyList<Message>> request = pending[i];
+                        if (!request.IsCompleted)
+                            continue;
+                        pending.RemoveAt(i);
                         IReadOnlyList<Message>? parts = null;
                         try
                         {
-                            parts = await request.ConfigureAwait(false);
+                            parts = request.GetAwaiter().GetResult();
                             if (!PerfSocketIo.TryMeasurementPayload(parts,
                                     out Message replyPayload))
                             {
@@ -523,22 +473,17 @@ internal static class PerfReqRep
                                     replyPayload.AsReadOnlySpan(), msgSize,
                                     ActivePhase, out var header, RunId))
                             {
-                                return;
+                                continue;
                             }
-
                             long completionTicks = Stopwatch.GetTimestamp();
                             if (completionTicks >= deadlineTicks)
-                                return;
+                                continue;
                             ulong nowNs = EpochNsFromTimestamp(completionTicks);
-                            lock (gate)
-                            {
-                                if (nowNs >= header.SentTsNs)
-                                {
-                                    ReservoirSample(samples, nowNs - header.SentTsNs,
-                                        ref sampleSeen, latencyCap, ref rng);
-                                }
-                            }
-                            Interlocked.Increment(ref completed);
+                            if (nowNs < header.SentTsNs)
+                                continue;
+                            ReservoirSample(samples!, nowNs - header.SentTsNs,
+                                ref sampleSeen, latencyCap, ref rng);
+                            completed++;
                         }
                         catch (ZlinkRequestException ex)
                             when (ex.Result == ZlinkRequestException.ErrorCode.TimedOut)
@@ -552,19 +497,86 @@ internal static class PerfReqRep
                         {
                             if (parts != null)
                                 Zlink.MultipartClose(parts);
-                            if (Interlocked.Exchange(ref counted, 0) == 1)
-                                Interlocked.Decrement(ref inFlight);
                         }
                     }
+                }
+
+                void ProgressOnce(int waitMs)
+                {
+                    try
+                    {
+                        _ = completionPoller.Wait(completionEvents,
+                            TimeSpan.FromMilliseconds(waitMs));
+                    }
+                    catch (Exception ex)
+                    {
+                        RecordError(ex);
+                        return;
+                    }
+                    SettleCompleted();
+                }
+
+                while (Stopwatch.GetTimestamp() < deadlineTicks && !fatal)
+                {
+                    bool submittedAny = false;
+                    int submittedSinceProgress = 0;
+                    // 1) Submit continuously. Nothing here waits for a reply;
+                    //    the only bound is the un-settled awaitable count
+                    //    (PERF_SINGLE_TEST_POLICY.md 1.1.3) - a memory bound,
+                    //    never a round-trip gate.
+                    while (Stopwatch.GetTimestamp() < deadlineTicks && !fatal
+                           && pending.Count < maxOutstanding)
+                    {
+                        using Message message = Message.Allocate(payloadSize);
+                        long sentTicks = Stopwatch.GetTimestamp();
+                        StampMetricHeader(message.AsSpan(), RunId, ActivePhase,
+                            msgSize, seq, EpochNsFromTimestamp(sentTicks));
+                        try
+                        {
+                            pending.Add(submit(message));
+                            seq++;
+                            submittedAny = true;
+                        }
+                        catch (ZlinkException ex)
+                            when (PerfShared.IsTransientBackpressure(ex.NativeErrno)
+                                  || PerfShared.IsTransientNetworkError(ex.NativeErrno))
+                        {
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            RecordError(ex);
+                            break;
+                        }
+                        // Give completions a turn on the same cadence as the C
+                        // reference submit cursor (64 submissions per round).
+                        if (++submittedSinceProgress >= 64)
+                            break;
+                    }
+                    if (fatal)
+                        break;
+                    // 2) Progress completions on this same thread.
+                    ProgressOnce(submittedAny ? 0 : 50);
+                }
+
+                // Bounded completion drain of requests submitted before the
+                // deadline; no new request is submitted here.
+                long drainDeadline = DeadlineTicksFromMilliseconds(
+                    ResolveReqRepDrainTimeoutMs());
+                while (pending.Count > 0 && !fatal
+                       && Stopwatch.GetTimestamp() < drainDeadline)
+                {
+                    ProgressOnce(50);
+                }
+                if (pending.Count != 0 && completionError == null)
+                {
+                    RecordError(new TimeoutException(
+                        "request/reply operations did not drain"));
                 }
             }
             catch (Exception ex)
             {
                 RecordError(ex);
-            }
-            finally
-            {
-                Volatile.Write(ref submitDone, 1);
             }
         })
         {
@@ -572,17 +584,12 @@ internal static class PerfReqRep
             Name = "single reqrep requester"
         };
 
-        progressThread.Start();
         requesterThread.Start();
         requesterThread.Join();
-        progressThread.Join();
 
-        lock (gate)
-        {
-            if (completionError != null)
-                throw completionError;
-        }
-        return (Volatile.Read(ref completed), samples);
+        if (completionError != null)
+            throw completionError;
+        return (completed, samples);
     }
 
     private static void RunReplyLoop(IRouterSocket server,
@@ -617,10 +624,36 @@ internal static class PerfReqRep
         }
     }
 
+    /// <summary>
+    ///     Memory bound on un-settled request awaitables for the single
+    ///     requester socket. The public async request terminal makes one
+    ///     DONTWAIT admission attempt and resumes only from its own WRITABLE
+    ///     token (Contracts/Messaging/OperationContracts.cs:165-178), so Core
+    ///     paces admission exactly as the C reference does and the runner must
+    ///     not observe or gate on admission.
+    ///     PERF_SINGLE_TEST_POLICY.md 1.1.3 requires exactly one such bound and
+    ///     forbids using it as a round-trip gate, so it stays far above the
+    ///     steady-state depth. Same default as the multi suite.
+    /// </summary>
+    private static int ResolveReqRepMaxOutstanding()
+    {
+        return Math.Max(2, PerfEnv.ReadPositive(
+            "PERF_SINGLE_REQREP_MAX_OUTSTANDING", 64));
+    }
+
+    // Read once per process: the runner fixes this launch-time knob before
+    // starting the benchmark, and the request submit lambda calls this for every
+    // submitted request. A per-call GetEnvironmentVariable would put harness
+    // instrumentation inside the measured path and charge it only to the
+    // binding runner. C reference:
+    // bindings/c/perf/common/perf_zlink_part_helpers.hpp
+    // perf_measurement_part_count.
+    private static readonly TimeSpan ReqRepTimeout = TimeSpan.FromMilliseconds(
+        PerfEnv.ReadPositive("PERF_SINGLE_REQREP_TIMEOUT_MS", 200));
+
     private static TimeSpan ResolveReqRepTimeout()
     {
-        int ms = PerfEnv.ReadPositive("PERF_SINGLE_REQREP_TIMEOUT_MS", 200);
-        return TimeSpan.FromMilliseconds(ms);
+        return ReqRepTimeout;
     }
 
     private static int ResolveReqRepDrainTimeoutMs()

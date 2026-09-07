@@ -47,7 +47,12 @@ inline bool transient (int err_)
 // bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:573-574.
 inline int request_timeout_ms ()
 {
-    return std::max (1, parse_positive_env ("PERF_MULTI_REQREP_TIMEOUT_MS", 200));
+    // Read once per process: launch-time knob, and launch_request() calls this
+    // for every submitted request, so a per-call getenv would put harness
+    // instrumentation inside the measured path.
+    static const int value =
+      std::max (1, parse_positive_env ("PERF_MULTI_REQREP_TIMEOUT_MS", 200));
+    return value;
 }
 
 // Shared binding-wide outstanding bound. The public request terminal makes one
@@ -60,7 +65,9 @@ inline int request_timeout_ms ()
 // it must stay far above the steady-state depth (see the pass log).
 inline int max_outstanding_per_socket ()
 {
-    return std::max (2, parse_positive_env ("PERF_MULTI_REQREP_MAX_OUTSTANDING", 64));
+    static const int value =
+      std::max (2, parse_positive_env ("PERF_MULTI_REQREP_MAX_OUTSTANDING", 64));
+    return value;
 }
 
 inline bool wait_for_runner_stop_after_done ()

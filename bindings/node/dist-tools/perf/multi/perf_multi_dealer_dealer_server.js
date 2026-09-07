@@ -8,6 +8,10 @@ const { configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
 const { POLLIN, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, pollEvents, pollEventHas, waitPollerOne, waitForConnectionReadyCount } = require('./perf_multi_runtime');
 const { isStopToken } = require('../perf_stop_token');
+// Read once per process: the runner fixes PERF_PART_COUNT before launching
+// this process, and this is on the per-message recv path. A per-message
+// `process.env` lookup puts harness instrumentation inside the measured path.
+const MEASUREMENT_PART_COUNT = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
 // MULTI_DEALER_DEALER server == RECEIVER / MEASURER.
 //
 // C parity: bindings/c/perf/multi/src/perf_multi_dealer_dealer_server.cpp
@@ -83,7 +87,7 @@ async function main() {
                         break;
                     }
                     const parts = received.parts;
-                    const expectedParts = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+                    const expectedParts = MEASUREMENT_PART_COUNT;
                     if (parts.length !== expectedParts || (expectedParts === 2 && parts[1].data().length !== 0)) {
                         received.close();
                         continue;

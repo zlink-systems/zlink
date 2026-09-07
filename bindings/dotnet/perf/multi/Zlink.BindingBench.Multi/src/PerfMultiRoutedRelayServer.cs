@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Systems.Zlink;
 using static PerfRunner;
@@ -16,13 +17,39 @@ internal static class PerfMultiRoutedRelayServer
         var replies = new List<Task>();
         using var receivedBuffer = Received.Create();
 
+        // PERF_POLICY.md:138-143 - the handshake contract is the C one: the
+        // runner stops every multi server with a stdin STOP/QUIT line, and the
+        // C relay server shuts down gracefully from a stdin watcher
+        // (bindings/c/perf/multi/common/perf_multi_relay_server.hpp:667-677).
+        // Without this watcher the routed one-way (SENDSEND) server had no
+        // stop path and was killed by SIGTERM instead.
+        int stopRequested = 0;
+        Thread stdinThread = new(() =>
+        {
+            string? line;
+            while ((line = Console.In.ReadLine()) != null)
+            {
+                if (line == "STOP" || line == "QUIT")
+                    break;
+            }
+            Volatile.Write(ref stopRequested, 1);
+        })
+        {
+            IsBackground = true,
+            Name = "multi routed relay server control"
+        };
+        stdinThread.Start();
+
         bool stop = false;
         bool success = true;
         int relayedSinceReap = 0;
+        // The stdin watcher cannot wake a socket poll that waits forever, so
+        // the poll stays bounded and STOP is observed on the next turn. Same
+        // reason as the C relay server's auxiliary poll wait.
         int failureObservationPollMs = pollTimeoutMs < 0
             ? 200
             : pollTimeoutMs;
-        while (!stop && success)
+        while (!stop && success && Volatile.Read(ref stopRequested) == 0)
         {
             if (!RemoveCompletedReplies(replies))
             {
@@ -185,9 +212,15 @@ internal static class PerfMultiRoutedRelayServer
             || error.Result == ZlinkSubmitException.ErrorCode.NotFound;
     }
 
+    // Read once per process: PERF_DEBUG is a launch-time knob and this guard is
+    // reached from the relay path, so a per-call lookup would mix harness
+    // instrumentation into the measurement.
+    private static readonly bool DebugEnabled =
+        Environment.GetEnvironmentVariable("PERF_DEBUG") != null;
+
     private static void DebugFailure(string operation, Exception? error)
     {
-        if (Environment.GetEnvironmentVariable("PERF_DEBUG") == null)
+        if (!DebugEnabled)
             return;
         if (error is ZlinkException zlinkError)
             Console.Error.WriteLine($"MULTI_ROUTED_RELAY {operation} failed "

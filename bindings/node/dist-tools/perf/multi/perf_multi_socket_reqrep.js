@@ -6,8 +6,15 @@ const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createPayload, createRunId, currentEpochNs, sleepImmediate, stampPayload, summarizeMetrics } = require('../common/perf_metrics');
 const { configureTlsClient } = require('../common/perf_tls');
 const { appendMeasurement, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, waitForConnectionReady } = require('./perf_multi_runtime');
+// Read once per process: the runner fixes PERF_PART_COUNT before launching
+// this process, and this is on the per-message path. A per-message
+// `process.env` lookup puts harness instrumentation inside the measured
+// path and charges it only to the binding runner. C reference:
+// bindings/c/perf/common/perf_zlink_part_helpers.hpp
+// perf_measurement_part_count.
+const MEASUREMENT_PART_COUNT = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
 function measurementPayload(parts) {
-    const count = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+    const count = MEASUREMENT_PART_COUNT;
     if (!Array.isArray(parts) || parts.length !== count)
         return null;
     if (count === 2 && parts[1].data().length !== 0)
@@ -50,11 +57,24 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
             activeStartNs, activeStopNs, roundTrip: true
         });
         const requestTimeoutMs = Math.max(1, Number(process.env.PERF_MULTI_REQREP_TIMEOUT_MS ?? 200));
+        // Memory bound on un-settled request awaitables, per requester socket.
+        // The public async request terminal makes one DONTWAIT admission attempt
+        // and resumes only from its own WRITABLE token
+        // (src/zlink/contracts/messaging/operations.ts:25,:48-53), so Core paces
+        // admission exactly as the C reference does and the runner must not
+        // observe or gate on admission. PERF_MULTI_TEST_POLICY.md:164-168 forbids
+        // using this bound as a round-trip gate, so it stays far above the
+        // steady-state depth. Shared knob and default with C++/.NET/Java.
+        const maxOutstanding = Math.max(2, (() => {
+            const parsed = Number(process.env.PERF_MULTI_REQREP_MAX_OUTSTANDING ?? 64);
+            return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 64;
+        })());
         let seq = 1n;
         const payloadTemplates = sockets.map(() => createPayload(options.msgSize));
+        const outstandingPerSocket = new Array(sockets.length).fill(0);
         const pending = new Set();
         let requestFailure = null;
-        const submitRequest = async (socket, payload) => {
+        const submitRequest = async (socket, payload, index) => {
             let parts = null;
             try {
                 const operation = routerClient ? socket.request(serverRoutingId) : socket.request();
@@ -70,11 +90,17 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
                 throw error;
             }
             finally {
+                outstandingPerSocket[index] -= 1;
                 closeParts(parts);
             }
         };
         while (currentEpochNs() < activeStopNs) {
             for (let index = 0; index < sockets.length; index += 1) {
+                // Memory bound only, never a round-trip gate
+                // (PERF_MULTI_TEST_POLICY.md:164-168): skip this socket for this turn
+                // once its un-settled awaitables reach the cap and let them drain.
+                if (outstandingPerSocket[index] >= maxOutstanding)
+                    continue;
                 const payload = Buffer.from(payloadTemplates[index]);
                 const currentSeq = seq;
                 seq += 1n;
@@ -84,7 +110,8 @@ async function runSocketReqRepClient({ options, pattern, routerClient, serverRou
                 stampPayload(payload, {
                     phase: 1, runId, msgSize: options.msgSize, seq: currentSeq
                 });
-                const task = submitRequest(sockets[index], payload);
+                outstandingPerSocket[index] += 1;
+                const task = submitRequest(sockets[index], payload, index);
                 pending.add(task);
                 task.catch((error) => { requestFailure = error; })
                     .finally(() => pending.delete(task));

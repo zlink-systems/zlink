@@ -102,24 +102,11 @@ submits until its own flow control stops it. Neither side gets an application ce
 **In this pattern the incomplete depth is a measurement, not a setting.** The depth a stack reaches
 is an outcome its design decides, so it is recorded as part of the result (§5.2).
 
-**This pattern runs as two variants depending on the language, and the result must state which
-variant it is.**
-
-| Variant | Applies to | What stops submission |
-|---|---|---|
-| Admission-backpressure variant | C | The submit terminal refuses `DONTWAIT` admission |
-| Cooperative-yield variant | `.NET`, Node, Java, Kotlin | Nothing refuses. The cooperative yield between submission and the completion pump sets the submission rate |
-
-This distinction is not notational. C's public request terminal returns
-`ZLINK_SUBMIT_BACKPRESSURED` to the caller when `DONTWAIT` admission is refused. The public async
-request terminal in `.NET`, Node, and Java does not return backpressure to the caller; inside the
-terminal it waits for the WRITABLE token and resubmits the same packet. That is, **in the four
-managed binding rows no signal refusing a submission exists, so those rows did not "submit until
-admission backpressure."** What sets depth in those rows is the point where submission rate and
-completion rate balance.
-
-The four managed rows must not be read as the same thing as the admission-backpressure variant.
-The two variants share a pattern name but differ in the mechanism that stops submission.
+This loop shape is not new; it is ported from an implementation already in the repository. The
+reference implementation is `bindings/node/perf/multi/perf_multi_socket_reqrep.ts`, which submits
+async requests continuously without waiting for a reply and then hands the turn to the completion
+pump. All six rows use the same shape, and the gRPC side is treated the same way: unary calls are
+submitted continuously rather than awaited one at a time.
 
 The two request patterns answer different questions, and neither replaces the other.
 
@@ -436,12 +423,6 @@ The grounds for choosing the reference pattern this way are below.
 - `request-backpressure` computes the ratio with each stack at the depth its own design allows, so
   it compares what a caller submitting normally actually gets. That is what "the binding layer's
   baseline performance" has to mean.
-
-**That the basis of judgement differs in kind between languages is recorded with it.** Of the five
-languages only C is measured with the admission-backpressure variant; the other four are measured
-with the cooperative-yield variant (§2). That is, the denominator and the numerator of formula 1
-are two runs whose mechanism for stopping submission differs. A ratio that does not state this is
-not published.
 
 **What this choice does not solve is recorded with it.** `request-backpressure` removes the fixing
 of depth, not the difference in depth. A stack that stays at a low depth through its own

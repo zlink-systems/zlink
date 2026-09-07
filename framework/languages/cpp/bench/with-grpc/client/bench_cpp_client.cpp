@@ -344,33 +344,30 @@ class grpc_driver_t : public driver_t
         long long open = 0;
         std::vector<unsigned char> encoded;
 
-        while (clock_t_::now () < deadline || open > 0) {
-            while (open < _window && clock_t_::now () < deadline) {
-                const size_t body_offset =
-                  encode_bench_payload (encoded, payload_size, _run_id, phase, seq++);
-                zlink_cpp_bench_grpc::BenchPayload request;
-                request.set_body (encoded.data () + body_offset, encoded.size () - body_offset);
+        // spec 2 request-backpressure: _window <= 0 means no application
+        // ceiling. gRPC returns no admission refusal to the caller, so this is
+        // the cooperative-yield variant -- submit, then hand control to the
+        // completion pump, and let depth settle where the submission and
+        // completion rates balance rather than at a number the harness chose.
+        const bool uncapped = _window <= 0;
 
-                auto *call = new grpc_call_t<TReply> ();
-                call->sent_ns = now_ns ();
-                call->reader = prepare<TReply> (&call->context, request, &cq);
-                call->reader->StartCall ();
-                call->reader->Finish (&call->reply, &call->status, static_cast<void *> (call));
-                counters.enter ();
-                counters.submitted.fetch_add (1, std::memory_order_relaxed);
-                ++open;
-            }
+        auto submit_one = [&] {
+            const size_t body_offset =
+              encode_bench_payload (encoded, payload_size, _run_id, phase, seq++);
+            zlink_cpp_bench_grpc::BenchPayload request;
+            request.set_body (encoded.data () + body_offset, encoded.size () - body_offset);
 
-            void *tag = nullptr;
-            bool ok = false;
-            const auto next_deadline =
-              std::chrono::system_clock::now () + std::chrono::milliseconds (5);
-            const auto status = cq.AsyncNext (&tag, &ok, next_deadline);
-            if (status == grpc::CompletionQueue::SHUTDOWN)
-                break;
-            if (status == grpc::CompletionQueue::TIMEOUT)
-                continue;
+            auto *call = new grpc_call_t<TReply> ();
+            call->sent_ns = now_ns ();
+            call->reader = prepare<TReply> (&call->context, request, &cq);
+            call->reader->StartCall ();
+            call->reader->Finish (&call->reply, &call->status, static_cast<void *> (call));
+            counters.enter ();
+            counters.submitted.fetch_add (1, std::memory_order_relaxed);
+            ++open;
+        };
 
+        auto handle_completion = [&] (void *tag, bool ok) {
             auto *call = static_cast<grpc_call_t<TReply> *> (tag);
             --open;
             counters.leave ();
@@ -390,6 +387,50 @@ class grpc_driver_t : public driver_t
                 counters.errors.fetch_add (1, std::memory_order_relaxed);
             }
             delete call;
+        };
+
+        // Drains every completion that is ALREADY ready without blocking. This
+        // is the cooperative yield: submission never waits on a timeout, but it
+        // never runs without letting finished replies be counted either.
+        auto drain_ready = [&] {
+            for (;;) {
+                void *tag = nullptr;
+                bool ok = false;
+                // The epoch is unambiguously in the past, so this returns
+                // TIMEOUT at once when nothing is ready. Computing "now" here
+                // instead let the call wait for a round trip, which held the
+                // row at depth 1 and made it a serial cell by accident.
+                const auto status = cq.AsyncNext (
+                  &tag, &ok, std::chrono::system_clock::time_point {});
+                if (status != grpc::CompletionQueue::GOT_EVENT)
+                    return status != grpc::CompletionQueue::SHUTDOWN;
+                handle_completion (tag, ok);
+            }
+        };
+
+        bool live = true;
+        while (live && (clock_t_::now () < deadline || open > 0)) {
+            if (uncapped) {
+                if (clock_t_::now () < deadline)
+                    submit_one ();
+                live = drain_ready ();
+                if (clock_t_::now () < deadline)
+                    continue;
+            } else {
+                while (open < _window && clock_t_::now () < deadline)
+                    submit_one ();
+            }
+
+            void *tag = nullptr;
+            bool ok = false;
+            const auto next_deadline =
+              std::chrono::system_clock::now () + std::chrono::milliseconds (5);
+            const auto status = cq.AsyncNext (&tag, &ok, next_deadline);
+            if (status == grpc::CompletionQueue::SHUTDOWN)
+                break;
+            if (status == grpc::CompletionQueue::TIMEOUT)
+                continue;
+            handle_completion (tag, ok);
         }
         cq.Shutdown ();
         void *tag = nullptr;
@@ -529,7 +570,63 @@ template <typename TSocket> class zlink_raw_driver_impl_t : public driver_t
               counters_t &counters,
               latency_sampler_t *latency) override
     {
-        run_slots (deadline, payload_size, phase, counters, latency, _window);
+        // spec 2 request-backpressure: _window <= 0 means no application
+        // ceiling, so depth cannot be a slot count.
+        if (_window <= 0)
+            run_unbounded (deadline, payload_size, phase, counters, latency);
+        else
+            run_slots (deadline, payload_size, phase, counters, latency, _window);
+    }
+
+    // The cooperative-yield variant of request-backpressure. The public async
+    // request terminal absorbs admission backpressure instead of returning it,
+    // so nothing here can submit "until refused". What it does instead is
+    // submit continuously and hand control to the completion pump after every
+    // submission, so depth settles where the submission and completion rates
+    // balance rather than at a number this harness chose.
+    void run_unbounded (clock_t_::time_point deadline,
+                        size_t payload_size,
+                        phase_t phase,
+                        counters_t &counters,
+                        latency_sampler_t *latency)
+    {
+        _submit_threads = {current_tid ()};
+        _deadline = deadline;
+        _phase = phase;
+        _payload_size = payload_size;
+        _counters = &counters;
+        _latency = latency;
+
+        std::vector<task_t> live;
+        const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
+        std::vector<zlink::poll_event_t> events (4);
+        for (;;) {
+            const auto now = clock_t_::now ();
+            if (now < deadline)
+                live.push_back (request_once (_seq++));
+
+            // Run every continuation that is ready, then drop the finished
+            // tasks so an uncapped run does not grow this vector without bound.
+            const size_t resumed = _ready.run_ready_round ();
+            live.erase (std::remove_if (live.begin (), live.end (),
+                                        [] (const task_t &t) { return t.done (); }),
+                        live.end ());
+
+            if (now >= deadline && live.empty ())
+                break;
+            if (now >= hard_stop)
+                break;
+
+            // Never block while submission is still possible; that would cap
+            // the submission rate at one per timeout and impose a ceiling by
+            // the back door.
+            const std::chrono::milliseconds wait =
+              (now < deadline || resumed != 0) ? std::chrono::milliseconds (0)
+                                               : std::chrono::milliseconds (1);
+            _poller.wait (events.data (), events.size (), wait);
+        }
+
+        _abandoned = counters.outstanding.load (std::memory_order_acquire);
     }
 
     long long abandoned () const { return _abandoned; }
@@ -635,6 +732,30 @@ template <typename TSocket> class zlink_raw_driver_impl_t : public driver_t
                 _counters->leave ();
                 _counters->errors.fetch_add (1, std::memory_order_relaxed);
             }
+        }
+    }
+
+    // One request, then the coroutine finishes. request_slot loops forever and
+    // so is a fixed slot; this is what an uncapped submitter spawns.
+    task_t request_once (uint64_t seq)
+    {
+        co_await _ready.schedule ();
+        auto parts = make_parts (_payload_size, _phase, seq);
+        _counters->enter ();
+        _counters->submitted.fetch_add (1, std::memory_order_relaxed);
+        try {
+            std::vector<zlink::message_t> reply =
+              co_await std::move (request_operation ())
+                .message (parts.first)
+                .message (parts.second)
+                .timeout (std::chrono::milliseconds (_options.request_timeout_ms))
+                .async ();
+            _counters->leave ();
+            record_reply (reply);
+        }
+        catch (const std::exception &) {
+            _counters->leave ();
+            _counters->errors.fetch_add (1, std::memory_order_relaxed);
         }
     }
 
@@ -951,9 +1072,13 @@ int main (int argc, char **argv)
     auto run_cell = [&] (const std::string &implementation, const std::string &pattern,
                          size_t payload_size) {
         const bool command_path = pattern == "send-saturation";
-        const int window = pattern == "request-serial"  ? 1
-                           : pattern == "request-window" ? options.request_window
-                                                         : options.send_concurrency;
+        // window 0 is the sentinel for "no application ceiling" (spec 2
+        // request-backpressure). It is not a depth; the drivers read it as an
+        // instruction to let depth settle instead of imposing one.
+        const int window = pattern == "request-serial"          ? 1
+                           : pattern == "request-window"        ? options.request_window
+                           : pattern == "request-backpressure"  ? 0
+                                                                : options.send_concurrency;
         cell_request_t request;
         request.implementation = implementation;
         request.pattern = pattern;

@@ -30,8 +30,12 @@ const {
 } = require('./perf_single_common');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 
+// Read once per process: PERF_NODE_TRACE is a launch-time knob and this
+// guard is on the per-message path.
+const NODE_TRACE_ENABLED = process.env.PERF_NODE_TRACE === '1';
+
 function trace(message) {
-  if (process.env.PERF_NODE_TRACE === '1') {
+  if (NODE_TRACE_ENABLED) {
     console.error(`[pubsub] ${message}`);
   }
 }

@@ -101,8 +101,18 @@ inline zlink::message_t message_from_external_buffer (std::vector<char> &buffer,
 // empty final frame.  Keep the one-part form available for comparison runs.
 inline int measurement_part_count ()
 {
-    const char *value = std::getenv ("PERF_PART_COUNT");
-    return value && std::strcmp (value, "1") == 0 ? 1 : 2;
+    // The runner fixes PERF_PART_COUNT before launching this process. Reading
+    // it for every sent and received message put getenv()/strcmp() inside the
+    // measured hot path and charged that instrumentation cost only to the
+    // binding runner (callgrind: 1,253 Ir/msg, 10.6% of all instructions at
+    // 64B). The C reference caches it the same way
+    // (bindings/c/perf/common/perf_zlink_part_helpers.hpp
+    // perf_measurement_part_count).
+    static const int part_count = [] () {
+        const char *value = std::getenv ("PERF_PART_COUNT");
+        return value && std::strcmp (value, "1") == 0 ? 1 : 2;
+    } ();
+    return part_count;
 }
 
 inline zlink::message_t measurement_empty_part ()

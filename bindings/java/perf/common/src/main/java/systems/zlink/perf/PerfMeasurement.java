@@ -114,6 +114,14 @@ final class PerfMeasurement {
             || "MULTI_ROUTER_ROUTER_REQREP".equals(pattern);
     }
 
+    // PERF_POLICY.md 1.1: elapsed time, active deadlines, timeouts, drain
+    // limits and the metric header `sent_ts_ns` all read one monotonic clock.
+    // `System.nanoTime()` is the JDK monotonic time source; HotSpot on Linux
+    // implements it with `clock_gettime(CLOCK_MONOTONIC)`, whose epoch is boot
+    // time and is therefore shared by every perf process on the host, so a
+    // client stamp stays comparable against a server clock. This mirrors the C
+    // reference (bindings/c/perf/multi/common/perf_multi_metric_header.hpp
+    // now_ns, std::chrono::steady_clock).
     static long nowNs() {
         return System.nanoTime();
     }

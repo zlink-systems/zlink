@@ -9,8 +9,11 @@ const RECEIVER_ID = Buffer.from('ROUTER1', 'ascii');
 const SENDER_ID = Buffer.from('ROUTER2', 'ascii');
 const RECEIVER_ROUTING_ID = zlink.RoutingId.from(RECEIVER_ID);
 const handshakeSleepState = new Int32Array(new SharedArrayBuffer(4));
+// Read once per process: PERF_NODE_TRACE is a launch-time knob and this
+// guard is on the per-message path.
+const NODE_TRACE_ENABLED = process.env.PERF_NODE_TRACE === '1';
 function trace(message) {
-    if (process.env.PERF_NODE_TRACE === '1') {
+    if (NODE_TRACE_ENABLED) {
         console.error(`[router-router] ${message}`);
     }
 }

@@ -14,7 +14,12 @@ namespace
 
 bool perf_debug_enabled ()
 {
-    return std::getenv ("PERF_DEBUG") != NULL;
+    // Read once per process: PERF_DEBUG is a launch-time knob and this guard
+    // is evaluated on the per-message path, so a per-call getenv would put
+    // harness instrumentation inside the measured path. Same shape as the C
+    // reference bench_debug_enabled().
+    static const bool enabled = std::getenv ("PERF_DEBUG") != NULL;
+    return enabled;
 }
 
 int recv_pair_payload (zlink::pair_socket_t &socket_,

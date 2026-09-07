@@ -9,6 +9,7 @@ const {
   applyAutoHwmProfile,
   integerEnv,
   manualSocketOverridesEnabled,
+  monotonicMs,
   sleepImmediate
 } = require('../common/perf_metrics');
 const POLLIN = 1;
@@ -20,8 +21,16 @@ const { resolveMultiMonitorHwm } = require('./perf_multi_common');
 // and can be shared by every prebuilt measurement record in this process.
 const EMPTY_MEASUREMENT_PART = Buffer.alloc(0);
 
+// Read once per process: the runner fixes PERF_PART_COUNT before launching
+// this process, and this is on the per-message path. A per-message
+// `process.env` lookup puts harness instrumentation inside the measured
+// path and charges it only to the binding runner. C reference:
+// bindings/c/perf/common/perf_zlink_part_helpers.hpp
+// perf_measurement_part_count.
+const MEASUREMENT_PART_COUNT = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+
 function measurementPartCount() {
-  return process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+  return MEASUREMENT_PART_COUNT;
 }
 
 function measurementParts(payload) {
@@ -238,8 +247,8 @@ async function waitForConnectionReadyCount(
     }
     const targetCount = Math.max(1, Math.trunc(expectedCount || 1));
     let readyCount = 0;
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
+    const deadline = monotonicMs() + timeoutMs;
+    while (monotonicMs() < deadline) {
       let drained = false;
       try {
         while (true) {

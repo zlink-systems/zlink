@@ -4,16 +4,28 @@
 
 const METRIC_MAGIC = 0x5a4c4e4b;
 const HEADER_SIZE = 29;
-const BASE_EPOCH_NS = BigInt(Date.now()) * 1_000_000n;
-const BASE_HR_NS = process.hrtime.bigint();
 const PRIMARY_METRICS = ['throughput', 'bandwidth', 'latency', 'latency_p95', 'latency_p99'];
 
 function warnResultLine(message) {
   console.error(`warning: ${message}`);
 }
 
+// PERF_POLICY.md 1.1: every runner reads elapsed time, active deadlines,
+// timeouts, drain limits and the metric header `sent_ts_ns` from one monotonic
+// clock; wall clock is only for report timestamps. `process.hrtime.bigint()` is
+// libuv `uv_hrtime()`, which is `clock_gettime(CLOCK_MONOTONIC)` on Linux, so
+// the epoch is boot time and is shared by every perf process on the host — a
+// client stamp stays comparable against a server clock. No `Date.now()` anchor
+// is applied. This mirrors the C reference
+// (bindings/c/perf/multi/common/perf_multi_metric_header.hpp now_ns,
+// std::chrono::steady_clock).
 function currentEpochNs() {
-  return BASE_EPOCH_NS + (process.hrtime.bigint() - BASE_HR_NS);
+  return process.hrtime.bigint();
+}
+
+// Monotonic milliseconds, for deadline/timeout bookkeeping that needs a Number.
+function monotonicMs() {
+  return Number(process.hrtime.bigint() / 1_000_000n);
 }
 
 function createPayload(size) {
@@ -409,6 +421,7 @@ module.exports = {
   decodeMetricHeaderFromParts,
   currentEpochNs,
   latencyNsFromPayload,
+  monotonicMs,
   medianMetrics,
   metricLines,
   hasPrimaryMetricsFromResultLines,

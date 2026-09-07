@@ -13,6 +13,7 @@ const {
   resolveMultiMonitorHwm,
   resolveMultiStreamClientCount
 } = require('./perf_multi_common');
+const { monotonicMs } = require('../common/perf_metrics');
 
 type ManagedProcess = ChildProcessWithoutNullStreams;
 type LineWaiter = (line: string) => boolean;
@@ -857,9 +858,9 @@ async function spawnMultiPair(serverScript, clientScript, args) {
       && server.exitCode === null && server.signalCode === null) {
     // Poll resultLines; a waiter would consume RESULT before capture stores it.
     // intercept the RESULT line before attachProcessCapture pushes it).
-    const resultDeadline = Date.now() + clientTimeoutMs;
+    const resultDeadline = monotonicMs() + clientTimeoutMs;
     while (
-      Date.now() < resultDeadline
+      monotonicMs() < resultDeadline
       && !resultLines.some((line) => line.startsWith('RESULT,'))
       && server.exitCode === null && server.signalCode === null
     ) {

@@ -17,7 +17,12 @@ const char *const k_sender_id = "ROUTER2";
 
 bool perf_debug_enabled ()
 {
-    return std::getenv ("PERF_DEBUG") != NULL;
+    // Read once per process: PERF_DEBUG is a launch-time knob and this guard
+    // is evaluated on the per-message path, so a per-call getenv would put
+    // harness instrumentation inside the measured path. Same shape as the C
+    // reference bench_debug_enabled().
+    static const bool enabled = std::getenv ("PERF_DEBUG") != NULL;
+    return enabled;
 }
 
 struct router_router_recv_state_t

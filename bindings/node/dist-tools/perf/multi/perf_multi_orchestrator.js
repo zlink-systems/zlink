@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { benchmarkEndpoint, resolveMultiMonitorHwm, resolveMultiStreamClientCount } = require('./perf_multi_common');
+const { monotonicMs } = require('../common/perf_metrics');
 const processCaptureStates = new WeakMap();
 function processCaptureState(processRef) {
     const state = processCaptureStates.get(processRef);
@@ -762,8 +763,8 @@ async function spawnMultiPair(serverScript, clientScript, args) {
         && server.exitCode === null && server.signalCode === null) {
         // Poll resultLines; a waiter would consume RESULT before capture stores it.
         // intercept the RESULT line before attachProcessCapture pushes it).
-        const resultDeadline = Date.now() + clientTimeoutMs;
-        while (Date.now() < resultDeadline
+        const resultDeadline = monotonicMs() + clientTimeoutMs;
+        while (monotonicMs() < resultDeadline
             && !resultLines.some((line) => line.startsWith('RESULT,'))
             && server.exitCode === null && server.signalCode === null) {
             await new Promise((resolve) => setTimeout(resolve, 100));

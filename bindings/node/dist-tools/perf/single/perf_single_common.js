@@ -24,7 +24,7 @@ const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const zlink = require('@zlink-systems/zlink');
 const { MonitorEventType, RecvFlags, RecvResult } = zlink;
-const { createMetricCollector, createPayload, createRunId, currentEpochNs, HEADER_SIZE, MIN_MSG_SIZE, applyAutoHwmProfile, integerEnv, manualSocketOverridesEnabled, stampPayload } = require('../common/perf_metrics');
+const { createMetricCollector, createPayload, createRunId, currentEpochNs, HEADER_SIZE, MIN_MSG_SIZE, applyAutoHwmProfile, integerEnv, manualSocketOverridesEnabled, monotonicMs, stampPayload } = require('../common/perf_metrics');
 const { configureTlsClient, configureTlsServer, } = require('../common/perf_tls');
 exports.configureTlsClient = configureTlsClient;
 exports.configureTlsServer = configureTlsServer;
@@ -32,8 +32,18 @@ const { isStopTokenParts } = require('../perf_stop_token');
 const { STOP_TOKEN_BYTES } = require('../perf_stop_token');
 const { benchmarkEndpoint: commonBenchmarkEndpoint } = require('../common/perf_endpoint');
 const POLLIN = 1;
+// Read once per process: the runner fixes PERF_PART_COUNT before launching
+// this process, and this is on the per-message path. A per-message
+// `process.env` lookup puts harness instrumentation inside the measured
+// path and charges it only to the binding runner. C reference:
+// bindings/c/perf/common/perf_zlink_part_helpers.hpp
+// perf_measurement_part_count.
+const MEASUREMENT_PART_COUNT = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+// Read once per process: PERF_NODE_TRACE is a launch-time knob and this
+// guard is on the per-message path.
+const NODE_TRACE_ENABLED = process.env.PERF_NODE_TRACE === '1';
 function measurementPartCount() {
-    return process.env.PERF_PART_COUNT === '1' ? 1 : 2;
+    return MEASUREMENT_PART_COUNT;
 }
 function appendMeasurement(op, payload) {
     op = op.message(payload);
@@ -239,8 +249,8 @@ function waitForConnectionReady(socket, connectFn = null, timeoutMs = integerEnv
         if (typeof connectFn === 'function') {
             connectFn();
         }
-        const deadline = Date.now() + timeoutMs;
-        while (Date.now() < deadline) {
+        const deadline = monotonicMs() + timeoutMs;
+        while (monotonicMs() < deadline) {
             try {
                 const event = monitor.recv(RecvFlags.DontWait);
                 if (event && event.event === MonitorEventType.ConnectionReady) {
@@ -261,8 +271,8 @@ function waitForConnectionReady(socket, connectFn = null, timeoutMs = integerEnv
     }
 }
 function waitForMonitorConnectionReady(monitor, timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000)) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
+    const deadline = monotonicMs() + timeoutMs;
+    while (monotonicMs() < deadline) {
         try {
             const event = monitor.recv(RecvFlags.DontWait);
             if (event && event.event === MonitorEventType.ConnectionReady) {
@@ -315,12 +325,12 @@ function drainRecvSocket(socket, onMessage, options = {}) {
     const reusableReceived = useSubscribe
         ? new zlink.TopicMessage()
         : new zlink.Received();
-    if (process.env.PERF_NODE_TRACE === '1') {
+    if (NODE_TRACE_ENABLED) {
         console.error(`[drainRecvSocket] entry`);
     }
     while (!stopReceived) {
         iterCount += 1;
-        if (process.env.PERF_NODE_TRACE === '1' && (iterCount === 1 || iterCount % 100 === 0)) {
+        if (NODE_TRACE_ENABLED && (iterCount === 1 || iterCount % 100 === 0)) {
             console.error(`[drainRecvSocket] iter=${iterCount} totalReceived=${totalReceived}`);
         }
         let first = true;
@@ -334,13 +344,13 @@ function drainRecvSocket(socket, onMessage, options = {}) {
             first = false;
             if (isStopTokenParts(received.parts)) {
                 stopReceived = true;
-                if (process.env.PERF_NODE_TRACE === '1') {
+                if (NODE_TRACE_ENABLED) {
                     console.error(`[drainRecvSocket] stop totalReceived=${totalReceived}`);
                 }
                 break;
             }
             totalReceived += 1;
-            if (process.env.PERF_NODE_TRACE === '1' && (totalReceived % 100000) === 0) {
+            if (NODE_TRACE_ENABLED && (totalReceived % 100000) === 0) {
                 console.error(`[drainRecvSocket] received=${totalReceived}`);
             }
             if (recordUntilNs !== null && recordingActive) {
@@ -366,12 +376,12 @@ function drainRouterRecvInto(router, msgSize, onHeader, options = {}) {
     let totalReceived = 0;
     let recordingActive = true;
     const received = new zlink.Received();
-    if (process.env.PERF_NODE_TRACE === '1') {
+    if (NODE_TRACE_ENABLED) {
         console.error(`[drainRouterRecvInto] entry`);
     }
     while (!stopReceived) {
         iterCount += 1;
-        if (process.env.PERF_NODE_TRACE === '1' && (iterCount === 1 || iterCount % 100 === 0)) {
+        if (NODE_TRACE_ENABLED && (iterCount === 1 || iterCount % 100 === 0)) {
             console.error(`[drainRouterRecvInto] iter=${iterCount} totalReceived=${totalReceived}`);
         }
         let first = true;
@@ -382,7 +392,7 @@ function drainRouterRecvInto(router, msgSize, onHeader, options = {}) {
             first = false;
             if (isStopTokenParts(received.parts)) {
                 stopReceived = true;
-                if (process.env.PERF_NODE_TRACE === '1') {
+                if (NODE_TRACE_ENABLED) {
                     console.error(`[drainRouterRecvInto] stop totalReceived=${totalReceived}`);
                 }
                 break;
@@ -401,7 +411,7 @@ function drainRouterRecvInto(router, msgSize, onHeader, options = {}) {
             const data = payload.data();
             const receivedSize = data.length;
             totalReceived += 1;
-            if (process.env.PERF_NODE_TRACE === '1' && (totalReceived % 100000) === 0) {
+            if (NODE_TRACE_ENABLED && (totalReceived % 100000) === 0) {
                 console.error(`[drainRouterRecvInto] received=${totalReceived}`);
             }
             if (recordUntilNs !== null && recordingActive) {
@@ -525,7 +535,7 @@ function spawnSenderWorker(workerData) {
 }
 function waitForWorkerStatus(worker, expectedStatus, timeoutMs = integerEnv('PERF_CONNECT_READY_TIMEOUT_MS', 1000)) {
     const status = senderWorkerState(worker).status;
-    const deadline = Date.now() + Math.max(1, timeoutMs | 0);
+    const deadline = monotonicMs() + Math.max(1, timeoutMs | 0);
     for (;;) {
         const current = Atomics.load(status, 0);
         if (current < 0) {
@@ -534,7 +544,7 @@ function waitForWorkerStatus(worker, expectedStatus, timeoutMs = integerEnv('PER
         if (current >= expectedStatus) {
             return;
         }
-        const remaining = deadline - Date.now();
+        const remaining = deadline - monotonicMs();
         if (remaining <= 0) {
             throw new Error(`worker status timeout waiting for ${expectedStatus}`);
         }
