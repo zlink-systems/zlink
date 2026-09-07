@@ -48,9 +48,9 @@ void test_normal_frame_charges_payload_plus_metadata ()
     }
 }
 
-//  Delimiter, join and leave add no payload: metadata only, whatever the
-//  frame would otherwise have carried.
-void test_delimiter_join_and_leave_charge_metadata_only ()
+//  Delimiters add no payload: metadata only, whatever the frame would
+//  otherwise have carried.
+void test_delimiter_charges_metadata_only ()
 {
     zlink::msg_t delimiter;
     TEST_ASSERT_EQUAL_INT (0, delimiter.init_delimiter ());
@@ -58,20 +58,6 @@ void test_delimiter_join_and_leave_charge_metadata_only ()
     TEST_ASSERT_EQUAL_UINT64 (
       k_metadata_bytes, zlink::pipe_t::test_frame_accounted_bytes (&delimiter));
     TEST_ASSERT_EQUAL_INT (0, delimiter.close ());
-
-    zlink::msg_t join;
-    TEST_ASSERT_EQUAL_INT (0, join.init_join ());
-    TEST_ASSERT_TRUE (join.is_join ());
-    TEST_ASSERT_EQUAL_UINT64 (
-      k_metadata_bytes, zlink::pipe_t::test_frame_accounted_bytes (&join));
-    TEST_ASSERT_EQUAL_INT (0, join.close ());
-
-    zlink::msg_t leave;
-    TEST_ASSERT_EQUAL_INT (0, leave.init_leave ());
-    TEST_ASSERT_TRUE (leave.is_leave ());
-    TEST_ASSERT_EQUAL_UINT64 (
-      k_metadata_bytes, zlink::pipe_t::test_frame_accounted_bytes (&leave));
-    TEST_ASSERT_EQUAL_INT (0, leave.close ());
 }
 
 //  Routing ID and credential frames are ordinary charged frames: §3.1 keeps
@@ -275,7 +261,7 @@ int main ()
 {
     UNITY_BEGIN ();
     RUN_TEST (test_normal_frame_charges_payload_plus_metadata);
-    RUN_TEST (test_delimiter_join_and_leave_charge_metadata_only);
+    RUN_TEST (test_delimiter_charges_metadata_only);
     RUN_TEST (test_routing_id_and_credential_frames_charge_their_payload);
     RUN_TEST (test_default_lwm_is_ceil_half_of_hwm);
     RUN_TEST (test_positive_hint_below_default_is_used);

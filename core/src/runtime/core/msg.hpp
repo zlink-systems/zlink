@@ -12,6 +12,7 @@
 
 #include "utils/config.hpp"
 #include "utils/err.hpp"
+#include "utils/likely.hpp"
 #include "utils/fd.hpp"
 #include "utils/atomic_counter.hpp"
 //  Group functionality (originally from draft API)
@@ -19,6 +20,17 @@
 
 //  bits 2-5
 #define CMD_TYPE_MASK 0x1c
+
+//  msg_t::size ()/data () are executed ~21 and ~7 times per application
+//  message on the router fast path. Left to its own judgement the compiler
+//  keeps emitting out-of-line copies (17 Ir per call, of which call/ret and
+//  the register shuffle are the majority), so the attribute is applied where
+//  the profile says it pays.
+#if defined __GNUC__ || defined __clang__
+#define ZLINK_MSG_INLINE inline __attribute__ ((always_inline))
+#else
+#define ZLINK_MSG_INLINE inline
+#endif
 
 //  Signature for free function to deallocate the message content.
 //  Note that it has to be declared as "C" so that it is the same as
@@ -71,13 +83,31 @@ class msg_t
         shared = 128
     };
 
-    bool check () const
+    ZLINK_MSG_INLINE bool check () const
     {
         return std::memcmp (_u.base.validity_signature, _validity_signature,
                             validity_signature_size) == 0
                && _u.base.type >= type_min && _u.base.type <= type_max;
     }
-    int init ();
+
+    //  Empty message. Kept inline: it is the single most frequently executed
+    //  msg_t entry point (~33 calls per application message on the router
+    //  fast path) and its body is a handful of stores. No invalidate() first:
+    //  every field the signature guards is overwritten before mark_valid ()
+    //  publishes it again, so zeroing the signature only to rewrite it is
+    //  pure work.
+    int init ()
+    {
+        _u.vsm.flags = 0;
+        _u.vsm.size = 0;
+        _u.vsm.routing_id = 0;
+        _u.vsm.transport_connection_id = 0;
+        _u.base.auxiliary.bytes[0] = auxiliary_none;
+        std::memcpy (_u.base.validity_signature, _validity_signature,
+                     validity_signature_size);
+        _u.base.type = static_cast<unsigned char> (type_vsm);
+        return 0;
+    }
 
     int
     init (void *data_, size_t size_, msg_free_fn *ffn_, void *hint_, content_t *content_ = NULL);
@@ -92,17 +122,20 @@ class msg_t
     int init_external_storage (
       content_t *content_, void *data_, size_t size_, msg_free_fn *ffn_, void *hint_);
     int init_delimiter ();
-    int init_join ();
-    int init_leave ();
     int init_subscribe (const size_t size_, const unsigned char *topic);
     int init_cancel (const size_t size_, const unsigned char *topic);
     int close ();
     int move (msg_t &src_);
     int copy (msg_t &src_);
 
-    void *data ()
+    //  data () and size () are on every send/recv path (7-21 calls per
+    //  application message). The abort reporting lives out of line in
+    //  report_invalid () so that the hot body stays small enough to inline;
+    //  the check itself, and the abort it triggers, are unchanged.
+    ZLINK_MSG_INLINE void *data ()
     {
-        zlink_assert (check ());
+        if (unlikely (!check ()))
+            report_invalid ("msg_t::data: check ()");
         switch (_u.base.type) {
             case type_vsm:
                 return _u.vsm.data;
@@ -113,14 +146,14 @@ class msg_t
             case type_zclmsg:
                 return _u.zclmsg.content->data;
             default:
-                zlink_assert (false);
-                return NULL;
+                report_invalid ("msg_t::data: type");
         }
     }
 
-    size_t size () const
+    ZLINK_MSG_INLINE size_t size () const
     {
-        zlink_assert (check ());
+        if (unlikely (!check ()))
+            report_invalid ("msg_t::size: check ()");
         switch (_u.base.type) {
             case type_vsm:
                 return _u.vsm.size;
@@ -131,8 +164,7 @@ class msg_t
             case type_cmsg:
                 return _u.cmsg.size;
             default:
-                zlink_assert (false);
-                return 0;
+                report_invalid ("msg_t::size: type");
         }
     }
 
@@ -143,8 +175,6 @@ class msg_t
     bool is_routing_id () const;
     bool is_credential () const;
     bool is_delimiter () const;
-    bool is_join () const;
-    bool is_leave () const;
     bool is_ping () const;
     bool is_pong () const;
     bool is_close_cmd () const;
@@ -209,6 +239,8 @@ class msg_t
     static constexpr unsigned char _validity_signature[validity_signature_size] = {
       0x5a, 0x4c, 0x4d, 0x47};
 
+    [[noreturn]] static void report_invalid (const char *what_);
+
     static void call_dec_ref_on_slice (void *data_, void *hint_);
     zlink::atomic_counter_t *refcnt ();
 
@@ -228,13 +260,7 @@ class msg_t
         // zero-copy LMSG message for v2_decoder
         type_zclmsg = 105,
 
-        //  Join message for radio_dish
-        type_join = 106,
-
-        //  Leave message for radio_dish
-        type_leave = 107,
-
-        type_max = 107
+        type_max = 105
     };
 
     void mark_valid (type_t type_);

@@ -89,6 +89,14 @@ zlink::msg_t::content_t *decode_slice_hint (void *hint_, bool *lmsg_owner_out_)
 constexpr unsigned char
   zlink::msg_t::_validity_signature[zlink::msg_t::validity_signature_size];
 
+void zlink::msg_t::report_invalid (const char *what_)
+{
+    fprintf (stderr, "Assertion failed: %s (%s)\n", what_, "core/msg.hpp");
+    fflush (stderr);
+    zlink::zlink_abort (what_);
+    abort ();
+}
+
 void zlink::msg_t::mark_valid (type_t type_)
 {
     std::memcpy (_u.base.validity_signature, _validity_signature,
@@ -139,21 +147,8 @@ int zlink::msg_t::init (
     return init_data (data_, size_, ffn_, hint_);
 }
 
-int zlink::msg_t::init ()
-{
-    invalidate ();
-    _u.vsm.flags = 0;
-    _u.vsm.size = 0;
-    initialize_auxiliary ();
-    _u.vsm.routing_id = 0;
-    _u.vsm.transport_connection_id = 0;
-    mark_valid (type_vsm);
-    return 0;
-}
-
 int zlink::msg_t::init_size (size_t size_)
 {
-    invalidate ();
     if (size_ <= max_vsm_size) {
         _u.vsm.flags = 0;
         _u.vsm.size = static_cast<unsigned char> (size_);
@@ -170,6 +165,8 @@ int zlink::msg_t::init_size (size_t size_)
         if (sizeof (content_t) + size_ > size_)
             _u.lmsg.content = static_cast<content_t *> (malloc (sizeof (content_t) + size_));
         if (unlikely (!_u.lmsg.content)) {
+            //  Allocation failed: the message must not stay valid.
+            invalidate ();
             errno = ENOMEM;
             return -1;
         }
@@ -320,7 +317,6 @@ int zlink::msg_t::init_external_storage (
     zlink_assert (NULL != data_);
     zlink_assert (NULL != content_);
 
-    invalidate ();
     _u.zclmsg.flags = 0;
     initialize_auxiliary ();
     _u.zclmsg.routing_id = 0;
@@ -343,8 +339,6 @@ int zlink::msg_t::init_data (void *data_, size_t size_, msg_free_fn *ffn_, void 
     //  would occur once the data is accessed
     zlink_assert (data_ != NULL || size_ == 0);
 
-    invalidate ();
-
     //  Initialize constant message if there's no need to deallocate
     if (ffn_ == NULL) {
         _u.cmsg.flags = 0;
@@ -361,6 +355,8 @@ int zlink::msg_t::init_data (void *data_, size_t size_, msg_free_fn *ffn_, void 
         _u.lmsg.transport_connection_id = 0;
         _u.lmsg.content = static_cast<content_t *> (malloc (sizeof (content_t)));
         if (!_u.lmsg.content) {
+            //  Allocation failed: the message must not stay valid.
+            invalidate ();
             errno = ENOMEM;
             return -1;
         }
@@ -377,34 +373,11 @@ int zlink::msg_t::init_data (void *data_, size_t size_, msg_free_fn *ffn_, void 
 
 int zlink::msg_t::init_delimiter ()
 {
-    invalidate ();
     _u.delimiter.flags = 0;
     initialize_auxiliary ();
     _u.delimiter.routing_id = 0;
     _u.delimiter.transport_connection_id = 0;
     mark_valid (type_delimiter);
-    return 0;
-}
-
-int zlink::msg_t::init_join ()
-{
-    invalidate ();
-    _u.base.flags = 0;
-    initialize_auxiliary ();
-    _u.base.routing_id = 0;
-    _u.base.transport_connection_id = 0;
-    mark_valid (type_join);
-    return 0;
-}
-
-int zlink::msg_t::init_leave ()
-{
-    invalidate ();
-    _u.base.flags = 0;
-    initialize_auxiliary ();
-    _u.base.routing_id = 0;
-    _u.base.transport_connection_id = 0;
-    mark_valid (type_leave);
     return 0;
 }
 
@@ -613,16 +586,6 @@ bool zlink::msg_t::is_lmsg () const
 bool zlink::msg_t::is_zcmsg () const
 {
     return _u.base.type == type_zclmsg;
-}
-
-bool zlink::msg_t::is_join () const
-{
-    return _u.base.type == type_join;
-}
-
-bool zlink::msg_t::is_leave () const
-{
-    return _u.base.type == type_leave;
 }
 
 bool zlink::msg_t::is_ping () const

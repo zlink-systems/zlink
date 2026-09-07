@@ -2521,7 +2521,7 @@ bool zlink::pipe_t::try_write_complete_record_and_flush (
         const bool expected_more = i + 1 < part_count_;
         if (!part.check ()
             || ((part.flags () & msg_t::more) != 0) != expected_more
-            || part.is_delimiter () || part.is_join () || part.is_leave ()
+            || part.is_delimiter ()
             || part.is_routing_id () || part.is_credential ())
             return false;
 
@@ -3588,7 +3588,7 @@ void zlink::pipe_t::send_hiccup_msg (const std::vector<unsigned char> &hiccup_)
 uint64_t zlink::pipe_t::frame_accounted_bytes (const msg_t *msg_)
 {
     const uint64_t metadata_bytes = static_cast<uint64_t> (sizeof (msg_t));
-    if (msg_->is_delimiter () || msg_->is_join () || msg_->is_leave ())
+    if (msg_->is_delimiter ())
         return metadata_bytes;
     const uint64_t payload_bytes = static_cast<uint64_t> (msg_->size ());
     return UINT64_MAX - payload_bytes < metadata_bytes
@@ -3605,8 +3605,7 @@ uint64_t zlink::pipe_t::committed_frame_accounted_bytes_ref (
 bool zlink::pipe_t::counted_pending_message_ref (const msg_t &msg_)
 {
     return (msg_.flags () & msg_t::more) == 0 && !msg_.is_routing_id ()
-           && !msg_.is_credential () && !msg_.is_delimiter ()
-           && !msg_.is_join () && !msg_.is_leave ();
+           && !msg_.is_credential () && !msg_.is_delimiter ();
 }
 
 void zlink::pipe_t::publish_outbound_frame_unlocked (const msg_t &msg_,
