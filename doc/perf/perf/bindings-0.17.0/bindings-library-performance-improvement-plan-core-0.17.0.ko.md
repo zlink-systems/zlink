@@ -1438,8 +1438,23 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 10.3 언어 진행 상태
 
 **측정은 새로 한다.** 호스트와 Core artifact가 바뀌었으므로 모든 성능 수치는 **고정 Core
-prefix** `~/.cache/zlink/core-pinned/0.17.1/lib/libzlink.so.0.17.1`(Build ID `101bdb24…`,
-SHA-256 `a3e00fd2…`, 태그 `core/v0.17.1` 커밋 `4cd03b9173`)에서 C와 새로 짝지어 다시 잰다.
+prefix** `~/.cache/zlink/core-pinned/0.17.2/lib/libzlink.so.0.17.2`(Build ID
+`c5dec25e86de575e8efa79c5327b1e3d0d424f3c`, SHA-256 `72d508f73a5d261f…`, 태그 `core/v0.17.2`
+커밋 `dca377aa5e`)에서 C와 새로 짝지어 다시 잰다.
+
+> **2026-09-08 04:50 재고정 (D-B216 요청).** 0.17.2 릴리스로 bindings 버전이 올라가
+> `Core release prefix version 0.17.1 does not match 0.17.2`로 측정이 거부되므로 재고정은
+> 선택이 아니라 전제다. **0.17.1로 얻은 모든 판정은 참고값으로 강등하고 0.17.2에서 다시
+> 잰다**(D-BP19와 같은 규칙). 0.17.1에서 만든 **작업 자산은 유효하다** — 러너 정합 수정 4건
+> (러너 C 모델 복원 `31c5e4f7f0`, relay 직렬화 `e0862e1e5c`, client echo drain `33f63ae89d`,
+> C `ctx_term` `1aa2751b1b`), REQREP 비용 지도(D-BP26), 결함 진단과 보고서.
+>
+> **재고정 절차**(다음에 또 필요하다): (1) 태그에서 worktree를 만들어
+> `scripts/build-core.sh release`; (2) 산출물을 저장소 밖 prefix에 설치하고
+> `share/zlink/core-package-provenance.json`을 남긴다; (3) **각 언어마다 `--reuse-build` 없이
+> 전 pattern을 한 번 빌드한다** — 러너가 `bindings/<lang>/build-release-<version>/`을 쓰므로
+> pattern 하나만 지정해 빌드하면 나머지가 없어 이후 실행이
+> `benchmark runtime check target is missing`으로 실패한다.
 `ZLINK_CORE_SOURCE=release`와 `ZLINK_CORE_PACKAGE_PREFIX`로 이 prefix를 가리킨다 — 머신 B가
 `core/`에 계속 커밋하므로 작업 트리 build를 기준으로 삼으면 staleness 검사가 깨진다.
 2026-09-05/06의 수치는 아래 표에 **참고**로만 남긴다.
@@ -1527,8 +1542,8 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 다음 조건을 모두 만족해야 작업을 완료한다.
 
 - runner, 정책, 상세 표의 pattern, transport, size inventory가 일치한다.
-- 각 pattern의 최종 판정에 사용한 고정 Core 0.17.1 prefix 기준 C와 binding paired report가
-  모두 `status: complete`다.
+- 각 pattern의 최종 판정에 사용한 고정 Core **0.17.2** prefix 기준 C와 binding paired report가
+  모두 `status: complete`다. 0.17.1 기준 값과 짝짓지 않는다(D-B216).
 - 모든 binding의 **Multi** 상세 표에 `미측정` 또는 `미달`이 없다(D-BP2: Single은 성능
   판정 대상이 아니다).
 - 모든 binding의 **Single** 러너가 `PERF_SINGLE_TEST_POLICY.md` §1.1의 실행 모델(전용 OS
