@@ -1832,3 +1832,9 @@ D-BP7이 정한 Core 0.17.1 고정이 `core/build`로는 유지되지 않았다.
 ## D-B185 (2026-09-07 13:30, 머신 B) G-11a 완료 — PAIR 예외는 성능 가정이었음(거짓 확인), 제거; 첫 codex job(게이트 g11a) 가동; AGENTS.md 모델 id 정정
 G-11a(opus, `core-rf-G-11a-summary.md`): PAIR 예외의 출처 `d548675abe`(08-27) — "빈번한 PAIR activation은 lock-free로 둔다"는 성능 전제. 실측: PAIR inproc 200k msg에 turn 획득 43 → 176회(+0.0007 CAS/msg), 경합 0, backoff 0 → 전제 거짓. reaper-close 예외도 bit 누출 경로 없음 확인 후 제거. `process_commands`의 sync 결정이 한 줄(`!public_api_sync_owned_by_current_thread()`), helper 4개·probe/retry 루프 삭제(−58행, 규칙 2→1). 잠금 제거 0(설계대로), hotpath stream_tcp −1.59 %, 나머지 ±0.5 %; 63/63 ×5, lost-wake until-fail:20, stress ×50, TSan delta 0. unittest 1건 기대값 변경(예외를 코드화했던 것). 후속: `mailbox_t::probe_command`/`ypipe_t::probe` 미사용 → G-11b~ 뒤 정리.
 운영: codex 계정이 받는 id는 `gpt-6-astra`·`gpt-5.6-sol`·`gpt-5.6-terra`·`gpt-5.6-luna`(`gpt-6-sol` 등은 400) → AGENTS.md §2.1 표에 id 열 추가(`bed0973d36`, 사용자 지시로 push). 게이트 g11a를 codex terra/medium으로 가동(scope `cx-gate-g11a`). G-10(clock_gettime)을 codex sol/high로 투입. G-11b 브리프 작성(게이트 g11a 착지 뒤 sol/high).
+
+
+## D-BP10 (2026-09-07 12:35, 머신 A) 기록 — `be4608bd79`에 51개 파일이 의도치 않게 포함됐다
+stash 복원 시 파일들이 인덱스에 staged 상태로 남아 있었고, `git add AGENTS.md && git commit`이 그것들을 함께 담았다. 커밋 메시지("codex 모델에 luna를 추가한다")가 내용을 설명하지 못한다. 포함된 것: (1) 4개 언어 러너 정합 — 시간원 monotonic 전환, 메시지당 `getenv` 캐시, `PERF_MULTI_REQREP_MAX_OUTSTANDING` 상한, single REQREP 연속 제출 전환, .NET SENDSEND stdin STOP. (2) `PERF_SINGLE_TEST_POLICY.md` §1.1.5 신설. (3) 계획서 갱신. (4) **중단된 with-grpc 캠페인의 미완성 bench 변경 5개 파일**(`framework/**`) — 이 캠페인과 무관하며 그동안 의도적으로 커밋에서 제외해 오던 것이다.
+판정: 되돌리지 않는다. 내용 손실이 아니라 보존이고, with-grpc 캠페인은 "Phase 7 중단"으로 기록돼 있어 재개 시 출발점이 된다. 되돌리면 커밋이 하나 더 생기고 해당 파일을 다시 미커밋 상태로 만들어야 해 번거로움만 늘어난다. 이 항목은 나중에 `be4608bd79`의 내용을 찾을 때를 위한 추적 기록이다.
+재발 방지: 경로를 골라 커밋할 때는 `git add <paths>` 전에 `git status --short`로 **인덱스에 이미 올라온 것이 없는지** 확인한다. stash pop 뒤에는 특히 그렇다.
