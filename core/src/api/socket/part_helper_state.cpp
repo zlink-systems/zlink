@@ -56,6 +56,7 @@ void zlink::part_helper_internal::cleanup_socket (socket_base_t *socket_)
     socket_->clear_part_helper_state ();
 
     zlink::socket_base_t *held_receive_socket = NULL;
+    send_sequence_store_t send_sequences;
     {
         std::lock_guard<std::mutex> lock (state->mutex);
         if (state->send.active)
@@ -63,8 +64,14 @@ void zlink::part_helper_internal::cleanup_socket (socket_base_t *socket_)
         if (state->send.sink_socket)
             state->send.sink_socket->clear_incremental_send_control_boundary ();
         reset_send_sequence (&state->send, false);
+        send_sequences.swap (state->send_sequences);
+        state->send_sequence_count.store (0, std::memory_order_release);
         held_receive_socket = reset_recv_sequence (&state->recv);
     }
+    for (send_sequence_store_t::iterator it = send_sequences.begin ();
+         it != send_sequences.end (); ++it)
+        reset_send_sequence (it->second.get (), false);
+    send_sequences.clear ();
     if (held_receive_socket)
         held_receive_socket->end_public_part_receive_delivery_hold ();
     errno = saved_errno;

@@ -1648,6 +1648,26 @@ void test_router_reply_checkout_second_sequence_and_mismatch_preserve_owner ()
                         &first_more, ZLINK_PART_MORE));
     assert_part_consumed (&first_more);
 
+    zlink_msg_t wrong_rid_final;
+    init_part (&wrong_rid_final, "wrong-rid-checked-out-token");
+    zlink_submit_result_t wrong_rid_result = ZLINK_SUBMIT_OK;
+    int wrong_rid_errno = 0;
+    size_t wrong_rid_size = UINT64_MAX;
+    std::thread wrong_rid_caller ([&] () {
+        errno = 0;
+        wrong_rid_result = zlink_reply_part (
+          router, &second.source_rid, first.reply_token, &wrong_rid_final,
+          ZLINK_PART_FINAL);
+        wrong_rid_errno = zlink_errno ();
+        wrong_rid_size = zlink_msg_size (&wrong_rid_final);
+    });
+    wrong_rid_caller.join ();
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_NOT_FOUND, wrong_rid_result);
+    TEST_ASSERT_EQUAL_INT (ENOENT, wrong_rid_errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, wrong_rid_size);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_msg_close (&wrong_rid_final));
+
     zlink_msg_t concurrent_final;
     init_part (&concurrent_final, "concurrent-second-sequence");
     zlink_submit_result_t concurrent_result = ZLINK_SUBMIT_OK;
@@ -1668,8 +1688,8 @@ void test_router_reply_checkout_second_sequence_and_mismatch_preserve_owner ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                            zlink_msg_close (&concurrent_final));
 
-    // The rejected second owner must not disturb the original staging or
-    // checkout; its FINAL still consumes exactly the first token.
+    // The token registry rejects a duplicate checkout without disturbing the
+    // original caller-owned sequence.
     zlink_msg_t first_final;
     init_part (&first_final, "first-final");
     TEST_ASSERT_EQUAL_INT (
@@ -1709,6 +1729,320 @@ void test_router_reply_checkout_second_sequence_and_mismatch_preserve_owner ()
 
     test_context_socket_close_zero_linger (second_dealer);
     test_context_socket_close_zero_linger (first_dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
+struct concurrent_reqrep_payload_t
+{
+    uint32_t caller;
+    uint32_t sequence;
+    uint32_t part;
+};
+
+class reqrep_barrier_t
+{
+  public:
+    explicit reqrep_barrier_t (int participants_) :
+        _participants (participants_), _arrived (0), _generation (0)
+    {
+    }
+
+    void wait ()
+    {
+        std::unique_lock<std::mutex> lock (_mutex);
+        const int generation = _generation;
+        if (++_arrived == _participants) {
+            _arrived = 0;
+            ++_generation;
+            _cv.notify_all ();
+            return;
+        }
+        _cv.wait (lock, [&] { return _generation != generation; });
+    }
+
+  private:
+    const int _participants;
+    int _arrived;
+    int _generation;
+    std::mutex _mutex;
+    std::condition_variable _cv;
+};
+
+struct concurrent_reply_target_t
+{
+    zlink_routing_id_t rid;
+    zlink_reply_token_t token;
+};
+
+void test_router_reply_distinct_tokens_submit_concurrently ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    set_routing_id_text (dealer, "distinct-token-requester");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_BIND_OK,
+      zlink_bind (router, "inproc://phase3-distinct-reply-tokens"));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONNECT_OK,
+      zlink_connect (dealer, "inproc://phase3-distinct-reply-tokens"));
+    msleep (SETTLE_TIME);
+
+    (void) send_public_request (dealer, "distinct-token-a");
+    (void) send_public_request (dealer, "distinct-token-b");
+    concurrent_reply_target_t targets[2];
+    for (int i = 0; i != 2; ++i) {
+        const router_part_t request = receive_router_part_eventually (router);
+        targets[i].rid = request.source_rid;
+        targets[i].token = request.reply_token;
+        TEST_ASSERT_NOT_EQUAL (0, targets[i].token);
+    }
+    TEST_ASSERT_NOT_EQUAL (targets[0].token, targets[1].token);
+
+    reqrep_barrier_t more_barrier (2);
+    std::atomic<int> failures (0);
+    std::thread workers[2];
+    for (int i = 0; i != 2; ++i) {
+        workers[i] = std::thread ([&, i] {
+            zlink_msg_t more;
+            init_part (&more, i == 0 ? "distinct-a-more" : "distinct-b-more");
+            if (zlink_reply_part (router, &targets[i].rid, targets[i].token,
+                                  &more, ZLINK_PART_MORE)
+                != ZLINK_SUBMIT_OK)
+                failures.fetch_add (1, std::memory_order_relaxed);
+            zlink_msg_close (&more);
+            more_barrier.wait ();
+
+            zlink_msg_t final_part;
+            init_part (&final_part,
+                       i == 0 ? "distinct-a-final" : "distinct-b-final");
+            if (zlink_reply_part (router, &targets[i].rid, targets[i].token,
+                                  &final_part, ZLINK_PART_FINAL)
+                != ZLINK_SUBMIT_OK)
+                failures.fetch_add (1, std::memory_order_relaxed);
+            zlink_msg_close (&final_part);
+        });
+    }
+    workers[0].join ();
+    workers[1].join ();
+    TEST_ASSERT_EQUAL_INT (0, failures.load (std::memory_order_relaxed));
+
+    for (int i = 0; i != 2; ++i) {
+        zlink_completion_t completion = receive_completion_eventually (dealer);
+        TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
+        TEST_ASSERT_EQUAL_UINT64 (2, completion.reply_part_count);
+        zlink_completion_close (&completion);
+    }
+    test_context_socket_close_zero_linger (dealer);
+    test_context_socket_close_zero_linger (router);
+}
+
+void test_request_and_reply_four_callers_complete_independently ()
+{
+    const int caller_count = 4;
+    const int rounds = 20;
+    const int total = caller_count * rounds;
+    zlink_completion_id_t request_ids[caller_count][rounds] = {};
+    uintptr_t request_contexts[caller_count][rounds] = {};
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    set_routing_id_text (dealer, "concurrent-requester");
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_BIND_OK,
+      zlink_bind (router, "inproc://phase3-concurrent-request-reply"));
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONNECT_OK,
+      zlink_connect (dealer, "inproc://phase3-concurrent-request-reply"));
+    msleep (SETTLE_TIME);
+
+    reqrep_barrier_t request_more_barrier (caller_count);
+    reqrep_barrier_t request_final_barrier (caller_count);
+    std::atomic<int> request_failures (0);
+    std::vector<std::thread> requesters;
+    for (int caller = 0; caller < caller_count; ++caller) {
+        requesters.emplace_back ([&, caller] {
+            for (int sequence = 0; sequence < rounds; ++sequence) {
+                concurrent_reqrep_payload_t payload = {
+                  static_cast<uint32_t> (caller),
+                  static_cast<uint32_t> (sequence), 0};
+                zlink_msg_t more;
+                if (zlink_msg_init_size (&more, sizeof (payload)) != 0) {
+                    request_failures.fetch_add (1, std::memory_order_relaxed);
+                    request_more_barrier.wait ();
+                    request_final_barrier.wait ();
+                    continue;
+                }
+                memcpy (zlink_msg_data (&more), &payload, sizeof (payload));
+                if (zlink_request_part (
+                      dealer, NULL, &more, ZLINK_SEND_FLAGS_NONE,
+                      ZLINK_PART_MORE, 0, NULL, NULL)
+                    != ZLINK_SUBMIT_OK)
+                    request_failures.fetch_add (1, std::memory_order_relaxed);
+                zlink_msg_close (&more);
+                request_more_barrier.wait ();
+
+                payload.part = 1;
+                zlink_msg_t final_part;
+                if (zlink_msg_init_size (&final_part, sizeof (payload)) != 0) {
+                    request_failures.fetch_add (1, std::memory_order_relaxed);
+                    request_final_barrier.wait ();
+                    continue;
+                }
+                memcpy (zlink_msg_data (&final_part), &payload,
+                        sizeof (payload));
+                zlink_completion_id_t completion_id = 0;
+                request_contexts[caller][sequence] =
+                  static_cast<uintptr_t> (caller * rounds + sequence + 1);
+                if (zlink_request_part (
+                      dealer, NULL, &final_part, ZLINK_SEND_FLAGS_NONE,
+                      ZLINK_PART_FINAL, 120000,
+                      &request_contexts[caller][sequence], &completion_id)
+                      != ZLINK_SUBMIT_OK
+                    || completion_id == 0)
+                    request_failures.fetch_add (1, std::memory_order_relaxed);
+                request_ids[caller][sequence] = completion_id;
+                zlink_msg_close (&final_part);
+                request_final_barrier.wait ();
+            }
+        });
+    }
+
+    std::vector<concurrent_reply_target_t> targets (total);
+    bool seen[caller_count][rounds] = {};
+    for (int record = 0; record < total; ++record) {
+        const zlink_routing_id_t *source_rid = NULL;
+        zlink_reply_token_t token = 0;
+        zlink_msg_t *parts = NULL;
+        size_t part_count = 0;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_RECV_OK,
+          zlink_router_recv (router, &source_rid, &token, &parts, &part_count,
+                             ZLINK_RECV_FLAGS_NONE));
+        TEST_ASSERT_NOT_NULL (source_rid);
+        TEST_ASSERT_NOT_EQUAL (0, token);
+        TEST_ASSERT_EQUAL_UINT64 (2, part_count);
+        concurrent_reqrep_payload_t first = {};
+        concurrent_reqrep_payload_t second = {};
+        TEST_ASSERT_EQUAL_UINT64 (sizeof (first), zlink_msg_size (&parts[0]));
+        TEST_ASSERT_EQUAL_UINT64 (sizeof (second), zlink_msg_size (&parts[1]));
+        memcpy (&first, zlink_msg_data (&parts[0]), sizeof (first));
+        memcpy (&second, zlink_msg_data (&parts[1]), sizeof (second));
+        TEST_ASSERT_EQUAL_UINT32 (first.caller, second.caller);
+        TEST_ASSERT_EQUAL_UINT32 (first.sequence, second.sequence);
+        TEST_ASSERT_EQUAL_UINT32 (0, first.part);
+        TEST_ASSERT_EQUAL_UINT32 (1, second.part);
+        TEST_ASSERT_TRUE (first.caller < static_cast<uint32_t> (caller_count));
+        TEST_ASSERT_TRUE (first.sequence < static_cast<uint32_t> (rounds));
+        const int index = static_cast<int> (first.caller) * rounds
+                          + static_cast<int> (first.sequence);
+        TEST_ASSERT_FALSE (seen[first.caller][first.sequence]);
+        seen[first.caller][first.sequence] = true;
+        targets[index].rid = *source_rid;
+        targets[index].token = token;
+        zlink_multipart_close (parts, part_count);
+    }
+    for (std::vector<std::thread>::iterator it = requesters.begin ();
+         it != requesters.end (); ++it)
+        it->join ();
+    TEST_ASSERT_EQUAL_INT (0,
+                           request_failures.load (std::memory_order_relaxed));
+    for (int caller = 0; caller != caller_count; ++caller)
+        for (int sequence = 0; sequence != rounds; ++sequence) {
+            TEST_ASSERT_TRUE (seen[caller][sequence]);
+            TEST_ASSERT_NOT_EQUAL (0, request_ids[caller][sequence]);
+        }
+
+    reqrep_barrier_t reply_more_barrier (caller_count);
+    reqrep_barrier_t reply_final_barrier (caller_count);
+    std::atomic<int> reply_failures (0);
+    std::vector<std::thread> repliers;
+    for (int caller = 0; caller < caller_count; ++caller) {
+        repliers.emplace_back ([&, caller] {
+            for (int sequence = 0; sequence < rounds; ++sequence) {
+                const concurrent_reply_target_t &target =
+                  targets[caller * rounds + sequence];
+                concurrent_reqrep_payload_t payload = {
+                  static_cast<uint32_t> (caller),
+                  static_cast<uint32_t> (sequence), 0};
+                zlink_msg_t more;
+                if (zlink_msg_init_size (&more, sizeof (payload)) != 0) {
+                    reply_failures.fetch_add (1, std::memory_order_relaxed);
+                    reply_more_barrier.wait ();
+                    reply_final_barrier.wait ();
+                    continue;
+                }
+                memcpy (zlink_msg_data (&more), &payload, sizeof (payload));
+                if (zlink_reply_part (
+                      router, &target.rid, target.token, &more,
+                      ZLINK_PART_MORE)
+                    != ZLINK_SUBMIT_OK)
+                    reply_failures.fetch_add (1, std::memory_order_relaxed);
+                zlink_msg_close (&more);
+                reply_more_barrier.wait ();
+
+                payload.part = 1;
+                zlink_msg_t final_part;
+                if (zlink_msg_init_size (&final_part, sizeof (payload)) != 0) {
+                    reply_failures.fetch_add (1, std::memory_order_relaxed);
+                    reply_final_barrier.wait ();
+                    continue;
+                }
+                memcpy (zlink_msg_data (&final_part), &payload,
+                        sizeof (payload));
+                if (zlink_reply_part (
+                      router, &target.rid, target.token, &final_part,
+                      ZLINK_PART_FINAL)
+                    != ZLINK_SUBMIT_OK)
+                    reply_failures.fetch_add (1, std::memory_order_relaxed);
+                zlink_msg_close (&final_part);
+                reply_final_barrier.wait ();
+            }
+        });
+    }
+
+    bool completed[caller_count][rounds] = {};
+    for (int i = 0; i < total; ++i) {
+        zlink_completion_t completion = receive_completion_eventually (dealer);
+        TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
+        TEST_ASSERT_EQUAL_INT (ZLINK_REQUEST_OK, completion.request_result);
+        TEST_ASSERT_EQUAL_UINT64 (2, completion.reply_part_count);
+        concurrent_reqrep_payload_t first = {};
+        concurrent_reqrep_payload_t second = {};
+        TEST_ASSERT_EQUAL_UINT64 (
+          sizeof (first), zlink_msg_size (&completion.reply_parts[0]));
+        TEST_ASSERT_EQUAL_UINT64 (
+          sizeof (second), zlink_msg_size (&completion.reply_parts[1]));
+        memcpy (&first, zlink_msg_data (&completion.reply_parts[0]),
+                sizeof (first));
+        memcpy (&second, zlink_msg_data (&completion.reply_parts[1]),
+                sizeof (second));
+        TEST_ASSERT_EQUAL_UINT32 (first.caller, second.caller);
+        TEST_ASSERT_EQUAL_UINT32 (first.sequence, second.sequence);
+        TEST_ASSERT_EQUAL_UINT32 (0, first.part);
+        TEST_ASSERT_EQUAL_UINT32 (1, second.part);
+        TEST_ASSERT_TRUE (first.caller
+                          < static_cast<uint32_t> (caller_count));
+        TEST_ASSERT_TRUE (first.sequence
+                          < static_cast<uint32_t> (rounds));
+        TEST_ASSERT_EQUAL_UINT64 (
+          request_ids[first.caller][first.sequence], completion.completion_id);
+        TEST_ASSERT_EQUAL_PTR (
+          &request_contexts[first.caller][first.sequence],
+          completion.user_context);
+        TEST_ASSERT_FALSE (completed[first.caller][first.sequence]);
+        completed[first.caller][first.sequence] = true;
+        zlink_completion_close (&completion);
+    }
+    for (std::vector<std::thread>::iterator it = repliers.begin ();
+         it != repliers.end (); ++it)
+        it->join ();
+    TEST_ASSERT_EQUAL_INT (0,
+                           reply_failures.load (std::memory_order_relaxed));
+    for (int caller = 0; caller != caller_count; ++caller)
+        for (int sequence = 0; sequence != rounds; ++sequence)
+            TEST_ASSERT_TRUE (completed[caller][sequence]);
+
+    test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
 }
 
@@ -1760,6 +2094,10 @@ int main ()
       test_router_reply_final_waits_for_same_rid_reconnect);
     RUN_PHASE3_REQUEST_TEST (
       test_router_reply_checkout_second_sequence_and_mismatch_preserve_owner);
+    RUN_PHASE3_REQUEST_TEST (
+      test_router_reply_distinct_tokens_submit_concurrently);
+    RUN_PHASE3_REQUEST_TEST (
+      test_request_and_reply_four_callers_complete_independently);
 
 #undef RUN_PHASE3_REQUEST_TEST
 

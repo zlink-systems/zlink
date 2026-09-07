@@ -107,8 +107,10 @@ is described in [§7 Internals](#7-internals).
 Use [`zlink_multipart_close`](#zlink_multipart_close) to close all parts of a multipart message
 stored as a contiguous array of `zlink_msg_t` structures at once.
 
-Multipart messages have the following relationship with threads. Multiple threads may each send
-independent messages, but a single multipart message must not be split across threads. Receive
+Multipart messages have the following relationship with threads. On PAIR, DEALER, and ROUTER,
+multiple threads may each send independent multipart messages to the same socket concurrently,
+but a single multipart message
+must not be split across threads. Receive
 follows a single-consumer contract.
 
 ## 5. Types and constants

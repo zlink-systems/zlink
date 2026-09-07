@@ -61,11 +61,19 @@ typedef void (*async_owner_transition_test_hook_fn) (
   async_owner_transition_test_point_t point_, void *userdata_);
 void test_set_async_owner_transition_hook (
   async_owner_transition_test_hook_fn hook_, void *userdata_);
+typedef void (*completion_pull_before_wait_test_hook_fn) (void *userdata_);
+void test_set_completion_pull_before_wait_hook (
+  completion_pull_before_wait_test_hook_fn hook_, void *userdata_);
+typedef void (*request_multipart_before_source_consume_test_hook_fn) (
+  void *userdata_);
+void test_set_request_multipart_before_source_consume_hook (
+  request_multipart_before_source_consume_test_hook_fn hook_, void *userdata_);
 #endif
 
 namespace socket_reqrep_internal
 {
 struct socket_request_reply_state_t;
+struct completion_discard_t;
 }
 
 namespace part_helper_internal
@@ -229,7 +237,9 @@ struct accepted_transport_pair_identity_t
 class completion_drain_scope_t
 {
   public:
-    explicit completion_drain_scope_t (const socket_base_t *socket_);
+    completion_drain_scope_t (
+      const socket_base_t *socket_,
+      socket_reqrep_internal::completion_discard_t *discard_);
     ~completion_drain_scope_t ();
 
   private:
@@ -237,6 +247,7 @@ class completion_drain_scope_t
     completion_drain_scope_t &operator= (const completion_drain_scope_t &);
 
     const socket_base_t *_previous;
+    socket_reqrep_internal::completion_discard_t *_previous_discard;
 };
 
 class socket_base_t : public own_t,
@@ -395,6 +406,7 @@ class socket_base_t : public own_t,
       uint64_t transport_pair_id_,
       uint64_t transport_pair_generation_) const;
     int test_process_commands_only ();
+    uint32_t test_command_waiter_count ();
     //  Reads the pipe's send-blocker causes without evaluating - and therefore
     //  without mutating - any of them.
     bool test_application_pipe_flow_probe (
@@ -431,6 +443,8 @@ class socket_base_t : public own_t,
     bool retain_received_source_pipe_ref (pipe_t *pipe_) const;
     bool begin_public_send_scope (
       std::optional<socket_public_send_scope_t> *scope_out_);
+    bool begin_public_api_scope (
+      std::optional<socket_public_api_scope_t> *scope_out_);
     bool begin_complete_send_scope (
       std::optional<socket_public_send_scope_t> *scope_out_);
     void notify_incremental_send_released ();
@@ -533,6 +547,12 @@ class socket_base_t : public own_t,
       const zlink_routing_id_t *target_rid_or_null_,
       pipe_write_observer_fn admission_observer_,
       void *admission_observer_userdata_);
+    int request_admission_submit_scoped (
+      zlink_msg_t *parts_, size_t part_count_,
+      const zlink_routing_id_t *target_rid_or_null_,
+      pipe_write_observer_fn admission_observer_,
+      void *admission_observer_userdata_,
+      socket_public_send_scope_t &send_scope_);
     int request_admission_submit_blocking (
       zlink_msg_t *parts_, size_t part_count_,
       const zlink_routing_id_t *target_rid_or_null_,
@@ -563,6 +583,10 @@ class socket_base_t : public own_t,
                                   uint64_t transport_pair_generation_) const;
     int ensure_async_command_processing (bool retain_ = false);
     int ensure_completion_processing ();
+    // Returns 1 with a ready public record, or -1 on timeout/lifecycle error.
+    // The blocking consumer drives the existing serialized drain regardless
+    // of completion-poller registration; DONTWAIT does not call this path.
+    int prepare_completion_pull (int timeout_ms_);
     // A monitor can borrow the temporary executor installed for a deferred
     // transport-pair owner decision.  These helpers linearize that handoff
     // with the final owner-progress lease so neither side stops an executor
@@ -590,7 +614,7 @@ class socket_base_t : public own_t,
     //  Delivers replies from every ready Completion pipe. Called from the
     //  owned drain points, because a pipe that was made readable while no
     //  owner was draining does not report readiness again.
-    void process_ready_completion_pipes ();
+    bool process_ready_completion_pipes ();
     //  Count-1 private heads use a pipe-owned intrusive MPSC queue. Publication
     //  retains both the pipe object and its inbound ypipe, so physical detach
     //  may invalidate readiness without making a queued pointer unsafe.
@@ -609,7 +633,7 @@ class socket_base_t : public own_t,
     bool requeue_completion_pipe_after_budget (
       uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
       zlink::pipe_t *completion_pipe_, bool receive_sync_held_);
-    void drain_claimed_completion_pipe (uint64_t transport_pair_id_,
+    bool drain_claimed_completion_pipe (uint64_t transport_pair_id_,
                                         uint64_t transport_pair_generation_,
                                         zlink::pipe_t *completion_pipe_);
     void resume_completion_processing_if_needed ();
@@ -1313,7 +1337,9 @@ class socket_base_t : public own_t,
       const zlink_routing_id_t *target_rid_or_null_,
       pipe_write_observer_fn admission_observer_,
       void *admission_observer_userdata_,
-      request_submit_selection_t *selection_out_);
+      request_submit_selection_t *selection_out_,
+      socket_public_send_scope_t *send_scope_ = NULL,
+      bool consume_multipart_on_success_ = true);
     int prepare_request_submit_target (
       const zlink_routing_id_t *target_rid_or_null_,
       request_admission_fast_result_t fast_result_,

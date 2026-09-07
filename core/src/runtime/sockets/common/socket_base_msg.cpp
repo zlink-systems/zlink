@@ -276,6 +276,21 @@ bool zlink::socket_base_t::begin_public_send_scope (
     return true;
 }
 
+bool zlink::socket_base_t::begin_public_api_scope (
+  std::optional<socket_public_api_scope_t> *scope_out_)
+{
+    if (!scope_out_) {
+        errno = EFAULT;
+        return false;
+    }
+    scope_out_->emplace (lifecycle_coordinator ());
+    if (!(*scope_out_)->acquired ()) {
+        scope_out_->reset ();
+        return false;
+    }
+    return true;
+}
+
 bool zlink::socket_base_t::begin_complete_send_scope (
   std::optional<socket_public_send_scope_t> *scope_out_)
 {

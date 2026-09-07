@@ -3,7 +3,9 @@
 #ifndef __ZLINK_API_PART_HELPER_INTERNAL_HPP_INCLUDED__
 #define __ZLINK_API_PART_HELPER_INTERNAL_HPP_INCLUDED__
 
+#include <atomic>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -65,6 +67,7 @@ typedef zlink::socket_internal::inline_msg_buffer_t<inline_send_part_capacity>
 struct send_sequence_state_t
 {
     send_sequence_state_t ();
+    ~send_sequence_state_t ();
 
     bool active;
     send_sequence_spec_t spec;
@@ -73,7 +76,17 @@ struct send_sequence_state_t
     std::optional<zlink::socket_public_send_scope_t> send_scope;
     send_part_buffer_t buffered_parts;
     std::thread::id owner_thread;
+    std::shared_ptr<void> family_context;
 };
+
+struct send_caller_identity_t
+{
+};
+
+typedef std::weak_ptr<const send_caller_identity_t> send_caller_key_t;
+typedef std::map<send_caller_key_t,
+                 std::unique_ptr<send_sequence_state_t>,
+                 std::owner_less<void> > send_sequence_store_t;
 
 // Perf's normal multipart receive is two application parts. Keep those parts
 // with the socket-owned receive sequence; larger records spill to bounded
@@ -105,7 +118,13 @@ struct recv_sequence_state_t
 struct handle_state_t
 {
     std::mutex mutex;
+    // PUB/XPUB keep their physical incremental sequence here. PAIR, DEALER,
+    // and ROUTER use the caller-keyed logical staging slots below.
     send_sequence_state_t send;
+    send_sequence_store_t send_sequences;
+    // C3 publication of send_sequences.size(); the mutex-protected map remains
+    // the sole owner of caller-slot membership.
+    std::atomic<size_t> send_sequence_count{0};
     recv_sequence_state_t recv;
 };
 
@@ -159,6 +178,7 @@ zlink::socket_base_t *reset_recv_sequence (recv_sequence_state_t *state_);
 int prepare_send_step (const send_sequence_spec_t &spec_,
                        zlink::socket_base_t *sink_socket_,
                        std::shared_ptr<handle_state_t> *state_out_,
+                       send_sequence_state_t **sequence_out_,
                        bool *first_part_out_);
 // Returns 1 without creating a sequence when start_if_inactive_ is false and
 // no sequence is active. On success, lock_out_ keeps the state mutex held so a
@@ -166,6 +186,7 @@ int prepare_send_step (const send_sequence_spec_t &spec_,
 int prepare_send_step_locked (const send_sequence_spec_t &spec_,
                               zlink::socket_base_t *sink_socket_,
                               handle_state_t **state_out_,
+                              send_sequence_state_t **sequence_out_,
                               std::unique_lock<std::mutex> *lock_out_,
                               bool *first_part_out_,
                               bool start_if_inactive_);
@@ -175,24 +196,38 @@ int prepare_recv_step (recv_family_t family_,
                        bool *first_part_out_,
                        zlink::socket_base_t **active_source_socket_out_);
 void complete_send_step (const std::shared_ptr<handle_state_t> &state_,
+                         send_sequence_state_t *sequence_,
                          zlink_part_flag_t part_flag_);
 void complete_send_step (handle_state_t *state_,
+                         send_sequence_state_t *sequence_,
                          zlink_part_flag_t part_flag_);
-// The caller must hold state_->mutex. These variants let a public part entry
-// prepare, stage, and suspend/reset one helper step without dropping and
-// reacquiring the same state lock.
+// The caller must hold state_->mutex. This completes one logical caller-slot
+// step without reacquiring the lock; only PUB/XPUB suspend a physical
+// incremental send scope here.
 void complete_send_step_locked (handle_state_t *state_,
+                                send_sequence_state_t *sequence_,
                                 zlink_part_flag_t part_flag_);
 // The caller must hold state_->mutex.
 int take_buffered_send_record_locked (handle_state_t *state_,
+                                      send_sequence_state_t *sequence_,
                                       send_part_buffer_t *parts_out_);
+send_sequence_state_t *find_current_send_sequence_locked (
+  handle_state_t *state_);
+// Returns the borrowed helper state only when some non-publish caller slot is
+// present. The socket/public-handle pin must outlive the returned pointer.
+handle_state_t *borrow_send_sequence_state (zlink::socket_base_t *socket_);
+bool current_send_sequence_active (zlink::socket_base_t *socket_);
 void complete_recv_step (const std::shared_ptr<handle_state_t> &state_,
                          zlink_part_flag_t has_more_);
-void abort_send_step (handle_state_t *state_);
-void abort_send_step (const std::shared_ptr<handle_state_t> &state_);
+void abort_send_step (handle_state_t *state_, send_sequence_state_t *sequence_);
+void abort_send_step (const std::shared_ptr<handle_state_t> &state_,
+                      send_sequence_state_t *sequence_);
 void abort_current_non_publish_send_sequence (void *handle_);
 void abort_recv_step (const std::shared_ptr<handle_state_t> &state_);
 void cleanup_socket (zlink::socket_base_t *socket_);
+#ifdef ZLINK_BUILD_TESTS
+void test_fail_next_send_caller_identity_allocation ();
+#endif
 }
 }
 

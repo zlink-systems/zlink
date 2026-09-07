@@ -55,8 +55,9 @@ it to an owned RID immediately after receive.
 ## 3. Part sequences and ownership
 
 `*_part` send calls form one multipart sequence from `ZLINK_PART_MORE` through
-`ZLINK_PART_FINAL`. While a sequence is open, another send helper family or a different routing ID
-cannot be interleaved on the same handle.
+`ZLINK_PART_FINAL`. While a thread has an open sequence, that thread cannot interleave another
+send helper family or a different routing ID. Sequences of other threads are independent and may
+use different families and routing IDs.
 
 When a valid initialized `part_` is passed to a send API, the function consumes its message content
 on both success and failure and leaves it as an initialized zero-length message. The caller
@@ -441,8 +442,10 @@ and status snapshots. Each item maps to one test.
   `connection_id` identify the connection to which the value was applied.
 - Setting or synchronizing weight adds no application record to public receive or the Completion
   lane, and setting the same value again produces no duplicate monitor event.
-- Changing weight more than once while an Application multipart is open preserves the peer-visible
-  multipart as one atomic record, and only the latest value is reflected after FINAL or rollback.
+- Changing weight more than once while an Application multipart is open on the pipe (after its
+  first frame is written and before FINAL commit or rollback) preserves the peer-visible multipart
+  as one atomic record, and only the latest value is reflected after FINAL or rollback. A public
+  `MORE` assembly buffer alone is not an open multipart.
 - If a pipe's remote weight becomes `0` after the first part of an Application multipart is
   accepted, the same pipe carries every remaining part through FINAL and is excluded starting with
   the next message selection.

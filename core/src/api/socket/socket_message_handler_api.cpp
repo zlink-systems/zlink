@@ -134,20 +134,24 @@ zlink_recv_result_t zlink_completion_recv (
         return zlink::recv_result_internal::from_errno (errno);
     }
 
-    // Wire replies need a command owner even when the application uses
-    // blocking pull without a poller.
-    if (flags_ != ZLINK_RECV_FLAGS_DONTWAIT
-        && handle.socket->receive_timeout_ms () != 0
-        && !zlink::socket_completion::has_ready (
-          &handle.socket->completion_runtime ())) {
-        const int progress_rc = handle.socket->ensure_completion_processing ();
-        if (progress_rc != 0 && errno != EAGAIN)
+    const int receive_timeout_ms = handle.socket->receive_timeout_ms ();
+    int progress_rc = 0;
+    if (flags_ != ZLINK_RECV_FLAGS_DONTWAIT && receive_timeout_ms != 0) {
+        progress_rc = handle.socket->prepare_completion_pull (
+          receive_timeout_ms);
+        if (progress_rc < 0)
             return zlink::recv_result_internal::from_errno (errno);
     }
 
+    // Blocking progress above owns the entry timeout and returns only with a
+    // ready head. DONTWAIT and RCVTIMEO=0 remain queue-only.
+    const zlink_recv_flags_t queue_flags =
+      progress_rc > 0 ? ZLINK_RECV_FLAGS_DONTWAIT : flags_;
+    const int queue_timeout_ms = progress_rc > 0 ? 0 : receive_timeout_ms;
+
     if (zlink::socket_completion::recv (
-          &handle.socket->completion_runtime (), completion_out_, flags_,
-          handle.socket->receive_timeout_ms ()) != 0)
+          &handle.socket->completion_runtime (), completion_out_, queue_flags,
+          queue_timeout_ms) != 0)
         return zlink::recv_result_internal::from_errno (errno);
 
     // A direct pull can consume the command associated with the queue's first

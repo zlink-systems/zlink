@@ -83,9 +83,8 @@ void test_pair_close_aborts_suspended_multipart_without_exposing_prefix ()
         close_completed_after_cleanup = close_probe.changed.wait_for (
           lock, std::chrono::seconds (3), [&] { return close_probe.done; });
     }
-    // FINAL above releases the only sequence state that can delay this close.
-    // Joining is therefore safe even on the regression path, and no worker is
-    // left behind when the assertion below reports the bounded-wait failure.
+    // Close owns staged-sequence cleanup. Joining is safe after the bounded
+    // fallback above, and no worker remains when an assertion reports failure.
     closer.join ();
 
     if (close_probe.result != ZLINK_CLOSE_OK && !cleanup_final_sent) {
@@ -135,6 +134,60 @@ void test_pair_close_aborts_suspended_multipart_without_exposing_prefix ()
     }
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, cleanup_close_result);
 
+    test_context_socket_close_zero_linger (receiver);
+}
+
+void test_thread_lifetime_identity_does_not_continue_abandoned_sequence ()
+{
+    void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
+    const int zero = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (sender, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (receiver, "inproc://helper-thread-lifetime-identity"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (sender, "inproc://helper-thread-lifetime-identity"));
+
+    zlink_submit_result_t more_result = ZLINK_SUBMIT_INTERNAL_ERROR;
+    std::thread abandoned ([&] {
+        zlink_msg_t more;
+        init_part (&more, "abandoned-prefix");
+        more_result = zlink_send_part (
+          sender, &more, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL);
+        zlink_msg_close (&more);
+    });
+    abandoned.join ();
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, more_result);
+
+    zlink_submit_result_t final_result = ZLINK_SUBMIT_INTERNAL_ERROR;
+    std::thread replacement ([&] {
+        zlink_msg_t final_part;
+        init_part (&final_part, "replacement-final");
+        final_result = zlink_send_part (
+          sender, &final_part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL,
+          NULL);
+        zlink_msg_close (&final_part);
+    });
+    replacement.join ();
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, final_result);
+
+    zlink_msg_t *parts = NULL;
+    size_t part_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_recv (receiver, NULL, &parts, &part_count,
+                  ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_UINT64 (1, part_count);
+    TEST_ASSERT_EQUAL_MEMORY ("replacement-final", zlink_msg_data (&parts[0]),
+                              strlen ("replacement-final"));
+    zlink_multipart_close (parts, part_count);
+    TEST_ASSERT_TRUE (pair_has_no_record_for (receiver, 25));
+
+    errno = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (sender));
+    TEST_ASSERT_EQUAL_INT (0, errno);
+    test_context_socket_mark_closed (sender);
     test_context_socket_close_zero_linger (receiver);
 }
 
@@ -498,6 +551,8 @@ int main (void)
 
     UNITY_BEGIN ();
     RUN_TEST (test_pair_close_aborts_suspended_multipart_without_exposing_prefix);
+    RUN_TEST (
+      test_thread_lifetime_identity_does_not_continue_abandoned_sequence);
     RUN_TEST (
       test_pair_peer_termination_races_local_multipart_cleanup);
     RUN_TEST (test_publish_validation_failure_releases_sync_for_query_before_final);

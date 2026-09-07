@@ -779,22 +779,37 @@ int zlink::socket_base_t::get_events (int events_, uint32_t *out_)
         errno_assert (rc == 0);
     }
 
-    {
-        socket_public_api_lock_scope_t guard (lifecycle);
-        //  Only a caller that asks for ZLINK_POLLCOMPLETION owns the
-        //  completion drain, so only that caller runs reply handlers.
-        int drained_completions = 0;
-        if (events_ & ZLINK_POLLCOMPLETION) {
-            scoped_lock_t owner_lock (_completion_owner_sync);
-            const completion_drain_scope_t drain_scope (this);
-            (void) _request_completion_pending.exchange (
-              false, std::memory_order_acq_rel);
-            process_ready_completion_pipes ();
-            drained_completions = drain_request_completions ();
+    // Only a caller that asks for ZLINK_POLLCOMPLETION owns the completion
+    // drain. A rejected transport record is detached during one owner turn,
+    // then released after both the owner gate and physical API sync are gone.
+    if (events_ & ZLINK_POLLCOMPLETION) {
+        while (true) {
+            socket_reqrep_internal::completion_discard_t discard;
+            int drained_completions = 0;
+            {
+                socket_public_api_lock_scope_t guard (lifecycle);
+                scoped_lock_t owner_lock (_completion_owner_sync);
+                const completion_drain_scope_t drain_scope (this, &discard);
+                (void) _request_completion_pending.exchange (
+                  false, std::memory_order_acq_rel);
+                const bool yielded_for_discard =
+                  process_ready_completion_pipes ();
+                if (!yielded_for_discard)
+                    drained_completions = drain_request_completions ();
+            }
+            const bool yielded_for_discard =
+              socket_reqrep_internal::completion_discard_has_payload (
+                &discard);
+            socket_reqrep_internal::release_completion_discard (&discard);
             if (drained_completions < 0)
                 return -1;
+            if (!yielded_for_discard)
+                break;
         }
+    }
 
+    {
+        socket_public_api_lock_scope_t guard (lifecycle);
         uint32_t events = 0;
         if ((events_ & ZLINK_POLLCOMPLETION)
             && socket_completion::has_ready (&completion_runtime ()))
@@ -840,15 +855,17 @@ int zlink::socket_base_t::get_events_internal (
             zlink_assert (
               _completion_poller_refs.load (std::memory_order_acquire) != 0);
             int drained_completions = 0;
+            socket_reqrep_internal::completion_discard_t discard;
             {
                 scoped_lock_t owner_lock (_completion_owner_sync);
-                const completion_drain_scope_t drain_scope (this);
+                const completion_drain_scope_t drain_scope (this, &discard);
                 _request_completion_pending.exchange (
                   false, std::memory_order_acq_rel);
                 drained_completions = drain_request_completions ();
                 if (drained_completions < 0)
                     return -1;
             }
+            socket_reqrep_internal::release_completion_discard (&discard);
             if (drained_completions > 0) {
                 *out_ = ZLINK_POLLCOMPLETION;
                 return 0;
@@ -864,14 +881,27 @@ int zlink::socket_base_t::get_events_internal (
     if (events_ & ZLINK_POLLCOMPLETION) {
         zlink_assert (_completion_poller_refs.load (std::memory_order_acquire)
                       != 0);
-        scoped_lock_t owner_lock (_completion_owner_sync);
-        const completion_drain_scope_t drain_scope (this);
-        (void) _request_completion_pending.exchange (
-          false, std::memory_order_acq_rel);
-        process_ready_completion_pipes ();
-        drained_completions = drain_request_completions ();
-        if (drained_completions < 0)
-            return -1;
+        while (true) {
+            socket_reqrep_internal::completion_discard_t discard;
+            {
+                scoped_lock_t owner_lock (_completion_owner_sync);
+                const completion_drain_scope_t drain_scope (this, &discard);
+                (void) _request_completion_pending.exchange (
+                  false, std::memory_order_acq_rel);
+                const bool yielded_for_discard =
+                  process_ready_completion_pipes ();
+                if (!yielded_for_discard)
+                    drained_completions = drain_request_completions ();
+            }
+            const bool yielded_for_discard =
+              socket_reqrep_internal::completion_discard_has_payload (
+                &discard);
+            socket_reqrep_internal::release_completion_discard (&discard);
+            if (drained_completions < 0)
+                return -1;
+            if (!yielded_for_discard)
+                break;
+        }
     }
 
     uint32_t events = 0;
@@ -1026,16 +1056,23 @@ namespace
 //  handler runs only while its own socket owns the thread, so user code never
 //  runs re-entrantly inside an unrelated send, recv or option call.
 thread_local const zlink::socket_base_t *tls_completion_drain_owner = NULL;
+thread_local zlink::socket_reqrep_internal::completion_discard_t *
+  tls_completion_discard = NULL;
 }
 
-zlink::completion_drain_scope_t::completion_drain_scope_t (const socket_base_t *socket_) :
-    _previous (tls_completion_drain_owner)
+zlink::completion_drain_scope_t::completion_drain_scope_t (
+  const socket_base_t *socket_,
+  socket_reqrep_internal::completion_discard_t *discard_) :
+    _previous (tls_completion_drain_owner),
+    _previous_discard (tls_completion_discard)
 {
     tls_completion_drain_owner = socket_;
+    tls_completion_discard = discard_;
 }
 
 zlink::completion_drain_scope_t::~completion_drain_scope_t ()
 {
+    tls_completion_discard = _previous_discard;
     tls_completion_drain_owner = _previous;
 }
 
@@ -1316,10 +1353,20 @@ int zlink::socket_base_t::test_process_commands_only ()
 {
     return process_commands (0, false, true);
 }
+
+uint32_t zlink::socket_base_t::test_command_waiter_count ()
+{
+    return static_cast<mailbox_t *> (_mailbox)->test_command_waiter_count ();
+}
 #endif
 
-void zlink::socket_base_t::process_ready_completion_pipes ()
+bool zlink::socket_base_t::process_ready_completion_pipes ()
 {
+    socket_reqrep_internal::completion_discard_t *const discard =
+      tls_completion_discard;
+    zlink_assert (discard);
+    zlink_assert (!socket_reqrep_internal::completion_discard_has_payload (
+      discard));
     //  Producers publish count-1 private heads without the transport-pair table
     //  mutex. Detach one finite MPSC batch and reverse its Treiber order so the
     //  oldest publication drains first. A budget requeue is published only
@@ -1357,9 +1404,34 @@ void zlink::socket_base_t::process_ready_completion_pipes ()
             && completion->get_transport_pair_id () != 0
             && completion->get_transport_lane () == transport_lane_application
             && completion->get_transport_lane_count () == 1u) {
-            drain_claimed_completion_pipe (
+            const bool yielded_for_discard = drain_claimed_completion_pipe (
               completion->get_transport_pair_id (),
               completion->get_transport_pair_generation (), completion);
+            if (yielded_for_discard) {
+                // The detached intrusive batch still owns its pipe references.
+                // Put every unvisited node back without taking another ref so
+                // the next owner turn can continue after payload release.
+                while (count1_ready) {
+                    pipe_t *const remaining = count1_ready;
+                    count1_ready =
+                      remaining->_count1_completion_ready_next.load (
+                        std::memory_order_relaxed);
+                    pipe_t *head = _ready_count1_completion_pipes.load (
+                      std::memory_order_acquire);
+                    do {
+                        remaining->_count1_completion_ready_next.store (
+                          head, std::memory_order_relaxed);
+                    } while (!_ready_count1_completion_pipes
+                                .compare_exchange_weak (
+                                  head, remaining,
+                                  std::memory_order_release,
+                                  std::memory_order_acquire));
+                }
+                completion->release_inbound_read_ref ();
+                completion->release_lifetime_ref ();
+                notify_request_completion ();
+                return true;
+            }
         } else {
             const bool released = release_count1_completion_drain (completion);
             zlink_assert (released);
@@ -1412,11 +1484,17 @@ void zlink::socket_base_t::process_ready_completion_pipes ()
             }
         }
         if (!completion)
-            return;
-        drain_claimed_completion_pipe (key.first, key.second, completion);
+            return false;
+        const bool yielded_for_discard =
+          drain_claimed_completion_pipe (key.first, key.second, completion);
         completion->release_inbound_read_ref ();
         completion->release_lifetime_ref ();
+        if (yielded_for_discard) {
+            notify_request_completion ();
+            return true;
+        }
     }
+    return false;
 }
 
 bool zlink::socket_base_t::finish_completion_pipe_drain (
@@ -1529,7 +1607,7 @@ bool zlink::socket_base_t::requeue_completion_pipe_after_budget (
     return queued;
 }
 
-void zlink::socket_base_t::drain_claimed_completion_pipe (
+bool zlink::socket_base_t::drain_claimed_completion_pipe (
   uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
   pipe_t *completion_pipe_)
 {
@@ -1542,7 +1620,7 @@ void zlink::socket_base_t::drain_claimed_completion_pipe (
         while (true) {
             const socket_reqrep_internal::completion_pipe_drain_result_t result =
               socket_reqrep_internal::process_completion_pipe (
-                this, completion_pipe_);
+                this, completion_pipe_, tls_completion_discard);
             if (result
                 == socket_reqrep_internal::completion_pipe_public_head) {
                 if (count1_application) {
@@ -1565,39 +1643,47 @@ void zlink::socket_base_t::drain_claimed_completion_pipe (
                     notify_receive_progress_locked ();
                 else
                     notify_receive_progress ();
-                return;
+                return false;
             }
             if (result
                 == socket_reqrep_internal::completion_pipe_terminated) {
                 if (count1_application)
                     (void) release_count1_completion_drain (completion_pipe_);
-                return;
+                return false;
             }
             if (result
                 == socket_reqrep_internal::completion_pipe_budget_exhausted) {
                 (void) requeue_completion_pipe_after_budget (
                   transport_pair_id_, transport_pair_generation_,
                   completion_pipe_, receive_sync_held_);
-                return;
+                return false;
+            }
+            if (result
+                == socket_reqrep_internal::completion_pipe_discard_deferred) {
+                (void) requeue_completion_pipe_after_budget (
+                  transport_pair_id_, transport_pair_generation_,
+                  completion_pipe_, receive_sync_held_);
+                return true;
             }
             if (!finish_completion_pipe_drain (
                   transport_pair_id_, transport_pair_generation_,
                   completion_pipe_))
-                return;
+                return false;
         }
     };
 
     if (!count1_application) {
-        drain (false);
-        return;
+        return drain (false);
     }
     if (receive.try_acquire_public_receive_lease ()) {
-        drain (false);
+        bool yielded_for_discard = drain (false);
+        if (!yielded_for_discard)
+            yielded_for_discard = drain (false);
         receive.release_public_receive_lease ();
-        return;
+        return yielded_for_discard;
     }
     scoped_lock_t receive_lock (receive.sync);
-    drain (true);
+    return drain (true);
 }
 
 void zlink::socket_base_t::read_activated (pipe_t *pipe_)

@@ -50,7 +50,11 @@ The following documents own the related contracts.
 Public socket handle APIs are thread-safe by default. Not every API has the
 same cost model, though.
 
-- `send` is a hot-path API and can be called concurrently from multiple threads.
+- `send` is a hot-path API and can be called concurrently from multiple threads. On PAIR,
+  DEALER, and ROUTER each thread may submit its own independent multipart record to the same
+  socket concurrently. One record is called from the same thread from its first `MORE` through
+  `FINAL`. Another thread's incomplete record does not block a new record, and Core admits each
+  record atomically so that no other record's part interleaves with it.
 - `bind/connect/disconnect`, subscribe/unsubscribe, option/query, and monitor
   operations are valid runtime control-path calls. Correctness is preserved,
   but execution order may follow internal serialization.
@@ -467,10 +471,13 @@ still satisfy `ZLINK_OPT_MAXMSGSIZE`. This exception admits at most one such
 message before further writes wait. Even when `ZLINK_OPT_MAXMSGSIZE` is
 unlimited, the exception applies only to one complete message whose total
 accounted size is known at admission: a single-part or total-known message. An
-incremental multipart whose final total is unknown follows the ordinary byte
-HWM from its first `MORE` frame, so frames cannot accumulate without a bound.
-Core adds neither known-total metadata nor a whole-transaction reservation for
-this exception.
+incremental multipart written to the pipe follows the ordinary byte HWM from
+its first `MORE` frame, so frames cannot accumulate without a bound. The public
+`MORE` assembly buffer of PAIR, DEALER, and ROUTER is outside the pipe HWM; the
+record's pipe admission and HWM decision happen at `FINAL`, one frame at a
+time. Knowing the whole size of the assembly buffer does not extend this
+exception to `MORE` frames. Core adds neither known-total metadata nor a
+whole-transaction reservation for this exception.
 
 Admission charges one frame at a time. An ordinary frame is charged its
 payload byte count plus `sizeof(zlink_msg_t)`, so an empty frame is not free
@@ -1005,11 +1012,25 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
 Both functions consume `part_` on every result and leave it in an empty,
 initialized state. STREAM supports only a single `FINAL` part; `MORE` rejection follows
 the [STREAM send contract](08-stream.en.md#4-routed-part-send).
-On PAIR, DEALER, and ROUTER, `MORE` stages a part in a socket-local sequence; a successful
-`FINAL` admits the sequence as one record. Every call in a sequence uses the
-same function family, target, and flags. An intermediate failure discards both
-the staged prefix and the failing part. A caller that may retry retains a
-separate copy of the complete record before submitting its first part.
+On PAIR, DEALER, and ROUTER, `MORE` retains a part in a per-thread sequence of the calling
+thread; a successful `FINAL` admits the sequence as one record. A successful `MORE` is not a
+pipe admission and its completion ID is `0`. `FINAL` submits the prefix retained by that thread
+together with the current part as one record; a `FINAL` from a thread with no open sequence
+submits a single-part record. Every call in a sequence uses the same function family, target,
+and flags. Sequences of different threads may use different families and targets. An
+intermediate failure discards both the prefix retained by that thread and the failing part and
+does not change any other thread's sequence. A caller that may retry retains a separate copy of
+the complete record before submitting its first part. One thread cannot interleave parts of
+several records on one socket.
+
+A per-thread sequence is created by the first successful `MORE` and removed by a successful
+`FINAL`, by sequence discard, or by socket close. An open sequence cannot be taken over by another
+thread. After a discard, the resubmission may start a new sequence from any thread. When the thread
+that opened a sequence exits, its incomplete sequence becomes discardable and Core reclaims it; it
+does not block submissions from other threads. Socket close discards the incomplete sequences of every thread.
+Retaining parts between calls does not count as an executing API. A part API call made from an
+application TLS destructor during thread exit must complete before Core destroys that thread's
+caller identity; the behavior of later calls is undefined.
 
 `flags_` accepts only `NONE` or `DONTWAIT`. The defined `part_flag_` values are `MORE`
 and `FINAL`; STREAM accepts only `FINAL`. An out-of-range value or unknown bit discards the entire sequence
@@ -1312,7 +1333,12 @@ WRITABLE, is closed.
 nonempty. An unread WRITABLE record also holds `ZLINK_POLLOUT` level-true.
 Poller wait does not consume a record. The caller repeats DONTWAIT
 receive through `NO_DATA`. One socket queue has one drain owner; concurrent
-drain by two threads is unsupported. REQUEST and WRITABLE results are returned in
+drain by two threads is unsupported. Registering a completion poller does not restrict that
+consumer from calling `zlink_completion_recv(NONE)` directly: a blocking receive performs
+completion progress and waiting within `RCVTIMEO` without depending on a separate
+`zlink_poller_wait()` call. A poller wait consumes no public record, and transport completion
+progress for one socket uses a single serialized drain path. A `DONTWAIT` receive consumes the
+already published public completion queue and starts no new transport drain turn. REQUEST and WRITABLE results are returned in
 the linearization order in which resolvers append them to the socket-local
 ready queue. This is neither submit order nor per-target wire order, so callers
 distinguish results by ID or context.
@@ -1471,8 +1497,9 @@ connection, options, send/receive/completion functions, return values, and
 - An empty pipe accepts one complete message whose total accounted size is
   known at admission even when it exceeds the HWM. That message must still
   pass `ZLINK_OPT_MAXMSGSIZE`, and writes after the one accepted message wait.
-- An incremental multipart whose final size is unknown follows the ordinary
-  byte HWM starting with its first `MORE` frame.
+- An incremental multipart written to the pipe follows the ordinary byte HWM
+  starting with its first `MORE` frame. The public `MORE` assembly buffer is
+  outside the pipe HWM and is decided frame by frame at `FINAL`.
 - An empty frame still has a nonzero charge (payload plus
   `sizeof(zlink_msg_t)`), so repeatedly sending empty frames reaches the HWM;
   the same charge is returned when a frame leaves the pipe.

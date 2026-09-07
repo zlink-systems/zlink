@@ -255,7 +255,10 @@ that a queue applies to admission — and remote PAUSE. It does not bypass the
 logical-ready hold or the atomic boundary of an Application multipart. While an Application multipart
 is open, the sender retains only the latest weight as fixed `uint32` state. After FINAL commits the
 multipart, or after rollback removes it, the sender appends and publishes that latest command only
-as the next record at the resulting message boundary.
+as the next record at the resulting message boundary. An open Application multipart is a record
+whose first frame has been written to the pipe and that has not yet been committed by FINAL or
+removed by rollback. A public `MORE` assembly buffer alone is not an open multipart and does not
+hold back control delivery.
 
 FLOWSTATE also uses a separate pending slot that retains one latest absolute state. The FLOWSTATE
 and WEIGHT slots receive a new sequence from a shared monotonic enqueue counter on every update.
@@ -504,7 +507,8 @@ replies, and delivery of error replies.
 Before publishing an outbound request on the wire, Core reserves one of the 65,536 shared
 SEND and REQUEST completion slots per socket and a nonzero completion ID. The slot remains
 reserved until public completion receive removes the record from the queue. There is no state
-in which a request payload is retained before admission (`ZLINK_OPT_PENDING_MAX_MSGS/BYTES` are
+in which a rejected request payload is retained; the per-thread assembly buffer between `MORE`
+and `FINAL` is not subject to this rule (`ZLINK_OPT_PENDING_MAX_MSGS/BYTES` are
 ABI-preservation only — [socket README](../socket/README.en.md#5-options)). After admission, Core
 does not retain the request payload for replay; it retains only reply correlation and the timeout.
 

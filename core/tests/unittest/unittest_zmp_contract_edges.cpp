@@ -784,27 +784,28 @@ void test_suspended_request_multipart_preserves_pending_cookie ()
     staged.family = send_family_dealer_request;
     staged.request_like = true;
     std::shared_ptr<handle_state_t> helper_state;
+    send_sequence_state_t *sequence = NULL;
     bool first_part = false;
     TEST_ASSERT_SUCCESS_ERRNO (prepare_send_step (
-      staged, handle.socket, &helper_state, &first_part));
+      staged, handle.socket, &helper_state, &sequence, &first_part));
     TEST_ASSERT_TRUE (first_part);
-    complete_send_step (helper_state, ZLINK_PART_MORE);
+    complete_send_step (helper_state, sequence, ZLINK_PART_MORE);
 
     send_sequence_spec_t resumed = staged;
     resumed.timeout_ms = 1000;
     resumed.request_seq = 77;
     resumed.pending_cookie = 991;
     TEST_ASSERT_SUCCESS_ERRNO (prepare_send_step (
-      resumed, handle.socket, &helper_state, &first_part));
+      resumed, handle.socket, &helper_state, &sequence, &first_part));
     TEST_ASSERT_FALSE (first_part);
     {
         std::lock_guard<std::mutex> lock (helper_state->mutex);
         TEST_ASSERT_EQUAL_UINT64 (resumed.request_seq,
-                                  helper_state->send.spec.request_seq);
+                                  sequence->spec.request_seq);
         TEST_ASSERT_EQUAL_UINT64 (resumed.pending_cookie,
-                                  helper_state->send.spec.pending_cookie);
+                                  sequence->spec.pending_cookie);
     }
-    abort_send_step (helper_state);
+    abort_send_step (helper_state, sequence);
 
     handle = socket_handle_t ();
     helper_state.reset ();

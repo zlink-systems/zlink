@@ -19,7 +19,8 @@ set(SPLIT_ONLY_TEST_TARGETS
     test_backpressure_matrix
     test_backpressure_oneway_matrix
     test_disconnect_progress
-    test_dealer_router_single_lane_contract)
+    test_dealer_router_single_lane_contract
+    test_writable_resubmit_from_other_thread_while_sequence_open)
 set(INTEGRATION_TEST_ROOT "integration")
 set(E2E_TEST_ROOT "e2e")
 
@@ -133,6 +134,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_phase3_completion_contract
   ${INTEGRATION_TEST_ROOT}/test_phase3_request_reply_contract
   ${INTEGRATION_TEST_ROOT}/test_request_writable_contract
+  ${INTEGRATION_TEST_ROOT}/test_writable_resubmit_from_other_thread_while_sequence_open
   ${INTEGRATION_TEST_ROOT}/test_dealer_router_single_lane_contract
   ${INTEGRATION_TEST_ROOT}/test_zmp_request_reply
   ${INTEGRATION_TEST_ROOT}/test_router_handover
@@ -769,6 +771,10 @@ set(REQUEST_REPLY_RECOVERY_TEST_SPECS
 set(TLS_ADMISSION_RECOVERY_TEST_SPECS
     test_tls_admission_during_handshake=test_writable_token_retries_over_tls_during_handshake)
 
+set(WRITABLE_RESUBMIT_SEQUENCE_OPEN_TEST_SPECS
+    test_writable_resubmit_from_other_thread_while_sequence_open=test_writable_resubmit_from_other_thread_while_sequence_open
+    test_writable_resubmit_from_other_thread_while_sequence_open_send=test_writable_resubmit_from_other_thread_while_sequence_open_send)
+
 set(BACKPRESSURE_MATRIX_INTEGRATION_TEST_SPECS
     test_backpressure_matrix_single_socket=test_single_socket_backpressure_matrix)
 
@@ -810,7 +816,7 @@ set(DEALER_ROUTER_SINGLE_LANE_CONTRACT_TEST_SPECS
     test_single_lane_flow_dr_application_path=test_sl_flow_dr_application_control_is_not_public_data
     test_single_lane_flow_rr_completion_path=test_sl_flow_rr_completion_control_progresses_under_pause
     test_single_lane_flow_normal_kind_gate=test_sl_flow_dr_normal_kinds_share_pause_and_hwm_gate
-    test_single_lane_flow_control_boundary=test_sl_flow_control_boundary_coalesces_latest_state
+    test_single_lane_flow_control_boundary=test_sl_controls_progress_during_public_staging
     test_single_lane_flow_stale_generation=test_sl_flow_stale_generation_is_fenced
     test_single_lane_flow_reconnect_resync=test_sl_flow_reconnect_resynchronizes_absolute_state
     test_single_lane_flow_snapshot_accounting=test_sl_flow_snapshot_accounts_dr_reply_as_application
@@ -858,6 +864,15 @@ if(TARGET test_send_async_tls_admit)
   set_zlink_network_case_properties(
     TLS_ADMISSION_RECOVERY_TEST_NAMES
     90)
+endif()
+if(TARGET test_writable_resubmit_from_other_thread_while_sequence_open)
+  add_env_case_suite(
+    test_writable_resubmit_from_other_thread_while_sequence_open
+    WRITABLE_RESUBMIT_SEQUENCE_OPEN_TEST_SPECS
+    WRITABLE_RESUBMIT_SEQUENCE_OPEN_TEST_NAMES)
+  set_zlink_network_case_properties(
+    WRITABLE_RESUBMIT_SEQUENCE_OPEN_TEST_NAMES
+    60)
 endif()
 if(TARGET test_backpressure_matrix)
   add_env_case_suite(
@@ -984,6 +999,7 @@ list(APPEND INTEGRATION_SERIAL_TESTS
      ${BACKPRESSURE_MATRIX_INTEGRATION_TEST_NAMES}
      ${BACKPRESSURE_ONEWAY_INTEGRATION_TEST_NAMES}
      ${H3_FLOW_CONTRACT_TEST_NAMES}
+     ${WRITABLE_RESUBMIT_SEQUENCE_OPEN_TEST_NAMES}
      ${DEALER_ROUTER_SINGLE_LANE_CONTRACT_TEST_NAMES})
 list(REMOVE_ITEM INTEGRATION_SERIAL_TESTS ${E2E_SERIAL_TESTS} ${REGRESSION_SERIAL_TESTS})
 list(REMOVE_DUPLICATES INTEGRATION_SERIAL_TESTS)

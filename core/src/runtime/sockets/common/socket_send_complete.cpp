@@ -358,8 +358,9 @@ int zlink::socket_base_t::try_admit_send_parts_scoped (
         // One complete PAIR record owns a single public send scope. The first
         // frame is its command-observation point; polling the same mailbox
         // again before FINAL only repeats throttle bookkeeping while the
-        // multipart marker and send sync still exclude another physical
-        // sender.
+        // complete-record send sync still excludes another physical sender.
+        // The multipart marker belongs only to PUB/XPUB's incremental path;
+        // PAIR reaches this loop after its public record is fully assembled.
         const bool frame_commands_already_processed =
           submit_commands_processed
           || (options.type == ZLINK_CORE_SOCKET_PAIR && i != 0);

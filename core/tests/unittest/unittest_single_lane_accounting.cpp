@@ -151,8 +151,12 @@ zlink_completion_t receive_completion (void *socket_)
 {
     zlink::socket_base_t *core = as_socket_handle (socket_).socket;
     contract_socket_pair_t::pump_owner (core);
-    zlink::completion_drain_scope_t owner (core);
-    core->process_ready_completion_pipes ();
+    zlink::socket_reqrep_internal::completion_discard_t discard;
+    {
+        zlink::completion_drain_scope_t owner (core, &discard);
+        core->process_ready_completion_pipes ();
+    }
+    zlink::socket_reqrep_internal::release_completion_discard (&discard);
     zlink_completion_t completion;
     memset (&completion, 0, sizeof (completion));
     completion.struct_size = sizeof (completion);
@@ -549,8 +553,13 @@ void test_backpressured_final_releases_the_helper_sequence ()
       helper_state = zlink::part_helper_internal::find_socket_state (pair.cores[1]);
     if (helper_state) {
         std::lock_guard<std::mutex> lock (helper_state->mutex);
-        routed_send_sequence_still_active = helper_state->send.active;
-        routed_send_sequence_family = static_cast<int> (helper_state->send.spec.family);
+        zlink::part_helper_internal::send_sequence_state_t *const sequence =
+          zlink::part_helper_internal::find_current_send_sequence_locked (
+            helper_state.get ());
+        routed_send_sequence_still_active = sequence && sequence->active;
+        if (sequence)
+            routed_send_sequence_family =
+              static_cast<int> (sequence->spec.family);
     }
     char diagnostic[96];
     snprintf (diagnostic, sizeof (diagnostic),

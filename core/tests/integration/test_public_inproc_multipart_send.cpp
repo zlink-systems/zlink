@@ -831,6 +831,7 @@ void test_nonblocking_send_close_race_is_lifetime_safe ()
                     gate.cv.wait (lock, [&] () { return gate.go; });
                 }
 
+                uint64_t part_index = 0;
                 while (!stop.load (std::memory_order_acquire)) {
                     zlink_msg_t part;
                     if (zlink_msg_init_size (&part, 64) != ZLINK_CONFIG_OK) {
@@ -846,9 +847,12 @@ void test_nonblocking_send_close_race_is_lifetime_safe ()
                         return;
                     }
                     memset (zlink_msg_data (&part), 0x5a, 64);
+                    const zlink_part_flag_t part_flag =
+                      (part_index++ & 1) == 0 ? ZLINK_PART_MORE
+                                              : ZLINK_PART_FINAL;
                     const zlink_submit_result_t rc = zlink_send_part (
                       socket, &part, ZLINK_SEND_FLAGS_DONTWAIT,
-                      ZLINK_PART_FINAL, NULL, NULL);
+                      part_flag, NULL, NULL);
                     const int err = zlink_errno ();
                     const size_t remaining_size = zlink_msg_size (&part);
                     if (remaining_size != 0) {
@@ -926,6 +930,285 @@ void test_nonblocking_send_close_race_is_lifetime_safe ()
     }
 }
 
+struct multipart_identity_payload_t
+{
+    uint32_t caller;
+    uint32_t sequence;
+    uint32_t part;
+};
+
+class cyclic_test_barrier_t
+{
+  public:
+    explicit cyclic_test_barrier_t (int participants_) :
+        _participants (participants_), _arrived (0), _generation (0)
+    {
+    }
+
+    void wait ()
+    {
+        std::unique_lock<std::mutex> lock (_mutex);
+        const int generation = _generation;
+        if (++_arrived == _participants) {
+            _arrived = 0;
+            ++_generation;
+            _cv.notify_all ();
+            return;
+        }
+        _cv.wait (lock, [&] { return _generation != generation; });
+    }
+
+  private:
+    const int _participants;
+    int _arrived;
+    int _generation;
+    std::mutex _mutex;
+    std::condition_variable _cv;
+};
+
+void run_four_caller_two_part_submit (
+  void *sender_, void *receiver_, const zlink_routing_id_t *target_rid_,
+  bool router_receive_)
+{
+    const int caller_count = 4;
+    const int rounds = 100;
+    cyclic_test_barrier_t more_barrier (caller_count);
+    cyclic_test_barrier_t final_barrier (caller_count);
+    std::atomic<int> failures (0);
+    std::vector<std::thread> callers;
+    callers.reserve (caller_count);
+    for (int caller = 0; caller < caller_count; ++caller) {
+        callers.emplace_back ([&, caller] {
+            for (int sequence = 0; sequence < rounds; ++sequence) {
+                multipart_identity_payload_t payload = {
+                  static_cast<uint32_t> (caller),
+                  static_cast<uint32_t> (sequence), 0};
+                zlink_msg_t more;
+                if (zlink_msg_init_size (&more, sizeof (payload)) != 0) {
+                    failures.fetch_add (1, std::memory_order_relaxed);
+                    more_barrier.wait ();
+                    final_barrier.wait ();
+                    continue;
+                }
+                memcpy (zlink_msg_data (&more), &payload, sizeof (payload));
+                const zlink_submit_result_t more_result = target_rid_
+                  ? zlink_send_part_rid (
+                      sender_, target_rid_, &more, ZLINK_SEND_FLAGS_NONE,
+                      ZLINK_PART_MORE, NULL, NULL)
+                  : zlink_send_part (
+                      sender_, &more, ZLINK_SEND_FLAGS_NONE,
+                      ZLINK_PART_MORE, NULL, NULL);
+                if (more_result != ZLINK_SUBMIT_OK)
+                    failures.fetch_add (1, std::memory_order_relaxed);
+                zlink_msg_close (&more);
+                more_barrier.wait ();
+
+                payload.part = 1;
+                zlink_msg_t final_part;
+                if (zlink_msg_init_size (&final_part, sizeof (payload)) != 0) {
+                    failures.fetch_add (1, std::memory_order_relaxed);
+                    final_barrier.wait ();
+                    continue;
+                }
+                memcpy (zlink_msg_data (&final_part), &payload,
+                        sizeof (payload));
+                const zlink_submit_result_t final_result = target_rid_
+                  ? zlink_send_part_rid (
+                      sender_, target_rid_, &final_part,
+                      ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL)
+                  : zlink_send_part (
+                      sender_, &final_part, ZLINK_SEND_FLAGS_NONE,
+                      ZLINK_PART_FINAL, NULL, NULL);
+                if (final_result != ZLINK_SUBMIT_OK)
+                    failures.fetch_add (1, std::memory_order_relaxed);
+                zlink_msg_close (&final_part);
+                final_barrier.wait ();
+            }
+        });
+    }
+
+    bool seen[caller_count][rounds] = {};
+    for (int record = 0; record < caller_count * rounds; ++record) {
+        zlink_msg_t *parts = NULL;
+        size_t part_count = 0;
+        if (router_receive_) {
+            const zlink_routing_id_t *source_rid = NULL;
+            uint64_t request_seq = 0;
+            recv_router_until_message (receiver_, &source_rid, &request_seq,
+                                       &parts, &part_count);
+        } else {
+            TEST_ASSERT_EQUAL_INT (
+              ZLINK_RECV_OK,
+              zlink_recv (receiver_, NULL, &parts, &part_count,
+                          ZLINK_RECV_FLAGS_NONE));
+        }
+        TEST_ASSERT_EQUAL_UINT64 (2, part_count);
+        multipart_identity_payload_t first = {};
+        multipart_identity_payload_t second = {};
+        TEST_ASSERT_EQUAL_UINT64 (sizeof (first), zlink_msg_size (&parts[0]));
+        TEST_ASSERT_EQUAL_UINT64 (sizeof (second), zlink_msg_size (&parts[1]));
+        if (part_count == 2) {
+            memcpy (&first, zlink_msg_data (&parts[0]), sizeof (first));
+            memcpy (&second, zlink_msg_data (&parts[1]), sizeof (second));
+            TEST_ASSERT_EQUAL_UINT32 (first.caller, second.caller);
+            TEST_ASSERT_EQUAL_UINT32 (first.sequence, second.sequence);
+            TEST_ASSERT_EQUAL_UINT32 (0, first.part);
+            TEST_ASSERT_EQUAL_UINT32 (1, second.part);
+            TEST_ASSERT_TRUE (first.caller < static_cast<uint32_t> (caller_count));
+            TEST_ASSERT_TRUE (first.sequence < static_cast<uint32_t> (rounds));
+            if (first.caller < static_cast<uint32_t> (caller_count)
+                && first.sequence < static_cast<uint32_t> (rounds)) {
+                TEST_ASSERT_FALSE (seen[first.caller][first.sequence]);
+                seen[first.caller][first.sequence] = true;
+            }
+        }
+        zlink_multipart_close (parts, part_count);
+    }
+    for (int caller = 0; caller != caller_count; ++caller)
+        for (int sequence = 0; sequence != rounds; ++sequence)
+            TEST_ASSERT_TRUE (seen[caller][sequence]);
+    for (std::vector<std::thread>::iterator it = callers.begin ();
+         it != callers.end (); ++it)
+        it->join ();
+    TEST_ASSERT_EQUAL_INT (0, failures.load (std::memory_order_relaxed));
+}
+
+void test_pair_four_callers_stage_two_parts_independently ()
+{
+    void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
+    void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (receiver, "inproc://pair-four-caller-multipart"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (sender, "inproc://pair-four-caller-multipart"));
+    run_four_caller_two_part_submit (sender, receiver, NULL, false);
+}
+
+void test_dealer_four_callers_stage_two_parts_independently ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://dealer-four-caller-multipart"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://dealer-four-caller-multipart"));
+    prime_router_recv_plane (router);
+    run_four_caller_two_part_submit (dealer, router, NULL, true);
+}
+
+void test_router_four_callers_stage_two_parts_independently ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    const char rid_text[] = "router-four-caller-peer";
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_routing_id (dealer, rid_text, sizeof (rid_text) - 1));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://router-four-caller-multipart"));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_connect (dealer, "inproc://router-four-caller-multipart"));
+    prime_router_recv_plane (router);
+    zlink_msg_t probe;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&probe, 1));
+    *static_cast<char *> (zlink_msg_data (&probe)) = 'p';
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_send (dealer, &probe, 1, 0));
+    const zlink_routing_id_t *source_rid = NULL;
+    uint64_t request_seq = 0;
+    zlink_msg_t *parts = NULL;
+    size_t part_count = 0;
+    recv_router_until_message (router, &source_rid, &request_seq, &parts,
+                               &part_count);
+    zlink_routing_id_t target = *source_rid;
+    zlink_multipart_close (parts, part_count);
+    run_four_caller_two_part_submit (router, dealer, &target, false);
+}
+
+void test_router_two_callers_use_different_rids_concurrently ()
+{
+    void *router = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *dealers[2] = {test_context_socket (ZLINK_SOCKET_DEALER),
+                        test_context_socket (ZLINK_SOCKET_DEALER)};
+    const char *const rid_text[2] = {"router-rid-a", "router-rid-b"};
+    for (int i = 0; i != 2; ++i)
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_set_routing_id (dealers[i], rid_text[i], strlen (rid_text[i])));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_bind (router, "inproc://router-two-different-rids"));
+    for (int i = 0; i != 2; ++i)
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink_connect (dealers[i], "inproc://router-two-different-rids"));
+    prime_router_recv_plane (router);
+
+    zlink_routing_id_t targets[2];
+    for (int i = 0; i != 2; ++i) {
+        zlink_msg_t probe;
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&probe, 1));
+        *static_cast<unsigned char *> (zlink_msg_data (&probe)) =
+          static_cast<unsigned char> ('0' + i);
+        TEST_ASSERT_SUCCESS_ERRNO (zlink_send (dealers[i], &probe, 1, 0));
+        const zlink_routing_id_t *source_rid = NULL;
+        uint64_t request_seq = 0;
+        zlink_msg_t *parts = NULL;
+        size_t part_count = 0;
+        recv_router_until_message (router, &source_rid, &request_seq, &parts,
+                                   &part_count);
+        TEST_ASSERT_NOT_NULL (source_rid);
+        TEST_ASSERT_EQUAL_UINT64 (1, part_count);
+        TEST_ASSERT_EQUAL_INT ('0' + i,
+                               *static_cast<unsigned char *> (
+                                 zlink_msg_data (&parts[0])));
+        targets[i] = *source_rid;
+        zlink_multipart_close (parts, part_count);
+    }
+
+    cyclic_test_barrier_t more_barrier (2);
+    std::atomic<int> failures (0);
+    std::thread callers[2];
+    for (int caller = 0; caller != 2; ++caller) {
+        callers[caller] = std::thread ([&, caller] {
+            for (int part_index = 0; part_index != 2; ++part_index) {
+                zlink_msg_t part;
+                if (zlink_msg_init_size (&part, 1) != ZLINK_CONFIG_OK) {
+                    failures.fetch_add (1, std::memory_order_relaxed);
+                    if (part_index == 0)
+                        more_barrier.wait ();
+                    return;
+                }
+                *static_cast<unsigned char *> (zlink_msg_data (&part)) =
+                  static_cast<unsigned char> ('A' + caller * 2 + part_index);
+                if (zlink_send_part_rid (
+                      router, &targets[caller], &part, ZLINK_SEND_FLAGS_NONE,
+                      part_index == 0 ? ZLINK_PART_MORE : ZLINK_PART_FINAL,
+                      NULL, NULL)
+                    != ZLINK_SUBMIT_OK)
+                    failures.fetch_add (1, std::memory_order_relaxed);
+                zlink_msg_close (&part);
+                if (part_index == 0)
+                    more_barrier.wait ();
+            }
+        });
+    }
+    for (int caller = 0; caller != 2; ++caller) {
+        zlink_msg_t *parts = NULL;
+        size_t part_count = 0;
+        TEST_ASSERT_EQUAL_INT (
+          ZLINK_RECV_OK,
+          zlink_recv (dealers[caller], NULL, &parts, &part_count,
+                      ZLINK_RECV_FLAGS_NONE));
+        TEST_ASSERT_EQUAL_UINT64 (2, part_count);
+        TEST_ASSERT_EQUAL_INT (
+          'A' + caller * 2,
+          *static_cast<unsigned char *> (zlink_msg_data (&parts[0])));
+        TEST_ASSERT_EQUAL_INT (
+          'A' + caller * 2 + 1,
+          *static_cast<unsigned char *> (zlink_msg_data (&parts[1])));
+        zlink_multipart_close (parts, part_count);
+    }
+    callers[0].join ();
+    callers[1].join ();
+    TEST_ASSERT_EQUAL_INT (0, failures.load (std::memory_order_relaxed));
+}
+
 int main (void)
 {
     setup_test_environment ();
@@ -943,6 +1226,10 @@ int main (void)
     RUN_TEST (test_public_inproc_pair_send_is_safe_from_multiple_threads);
     RUN_TEST (test_public_inproc_dealer_send_is_safe_from_multiple_threads);
     RUN_TEST (test_nonblocking_send_close_race_is_lifetime_safe);
+    RUN_TEST (test_pair_four_callers_stage_two_parts_independently);
+    RUN_TEST (test_dealer_four_callers_stage_two_parts_independently);
+    RUN_TEST (test_router_four_callers_stage_two_parts_independently);
+    RUN_TEST (test_router_two_callers_use_different_rids_concurrently);
     RUN_TEST (test_public_inproc_router_send_rid_blocking);
     RUN_TEST (test_public_inproc_router_send_rid_multipart_blocking);
     RUN_TEST (test_public_inproc_router_recv_multipart_with_source_rid_blocking);

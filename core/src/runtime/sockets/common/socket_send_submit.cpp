@@ -7,6 +7,7 @@
 #include "core/c_api_copy_internal.hpp"
 
 #include "core/pipe.hpp"
+#include "api/socket/socket_request_reply_internal.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "utils/err.hpp"
 #include "utils/routing_id.hpp"
@@ -16,6 +17,23 @@
 namespace
 {
 const zlink::routed_send_target_key_t empty_routed_send_target;
+
+#ifdef ZLINK_BUILD_TESTS
+std::atomic<zlink::request_multipart_before_source_consume_test_hook_fn>
+  request_multipart_before_source_consume_test_hook (NULL);
+std::atomic<void *>
+  request_multipart_before_source_consume_test_hook_userdata (NULL);
+
+void invoke_request_multipart_before_source_consume_test_hook ()
+{
+    const zlink::request_multipart_before_source_consume_test_hook_fn hook =
+      request_multipart_before_source_consume_test_hook.load (
+        std::memory_order_acquire);
+    if (hook)
+        hook (request_multipart_before_source_consume_test_hook_userdata.load (
+          std::memory_order_acquire));
+}
+#endif
 
 void consume_caller_parts (zlink_msg_t *parts_, size_t part_count_)
 {
@@ -117,6 +135,24 @@ bool retryable_logical_send_errno (int err_)
 }
 
 }
+
+#ifdef ZLINK_BUILD_TESTS
+void zlink::test_set_request_multipart_before_source_consume_hook (
+  request_multipart_before_source_consume_test_hook_fn hook_, void *userdata_)
+{
+    if (!hook_) {
+        request_multipart_before_source_consume_test_hook.store (
+          NULL, std::memory_order_release);
+        request_multipart_before_source_consume_test_hook_userdata.store (
+          NULL, std::memory_order_release);
+        return;
+    }
+    request_multipart_before_source_consume_test_hook_userdata.store (
+      userdata_, std::memory_order_release);
+    request_multipart_before_source_consume_test_hook.store (
+      hook_, std::memory_order_release);
+}
+#endif
 
 struct zlink::socket_base_t::submit_timeout_budget_t
 {
@@ -540,37 +576,76 @@ int zlink::socket_base_t::request_admission_submit (
     return -1;
 }
 
+int zlink::socket_base_t::request_admission_submit_scoped (
+  zlink_msg_t *parts_, size_t part_count_,
+  const zlink_routing_id_t *target_rid_or_null_,
+  pipe_write_observer_fn admission_observer_,
+  void *admission_observer_userdata_,
+  socket_public_send_scope_t &send_scope_)
+{
+    if (!parts_ || part_count_ == 0 || !send_scope_.acquired ()) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    request_submit_selection_t selection;
+    const request_admission_fast_result_t result =
+      try_request_admission_submit_fast (
+        parts_, part_count_, target_rid_or_null_, admission_observer_,
+        admission_observer_userdata_, &selection, &send_scope_, false);
+    if (result == request_admission_fast_admitted)
+        return 0;
+    if (result == request_admission_fast_failed)
+        return -1;
+    errno = EAGAIN;
+    return -1;
+}
+
 zlink::socket_base_t::request_admission_fast_result_t
 zlink::socket_base_t::try_request_admission_submit_fast (
   zlink_msg_t *parts_, size_t part_count_,
   const zlink_routing_id_t *target_rid_or_null_,
   pipe_write_observer_fn admission_observer_,
   void *admission_observer_userdata_,
-  request_submit_selection_t *selection_out_)
+  request_submit_selection_t *selection_out_,
+  socket_public_send_scope_t *send_scope_,
+  bool consume_multipart_on_success_)
 {
     if (options.type == ZLINK_CORE_SOCKET_DEALER
         && !target_rid_or_null_) {
-        socket_public_send_scope_t fast_scope (
-          lifecycle_coordinator (), true, socket_send_admission_complete);
-        if (!fast_scope.acquired ())
+        std::optional<socket_public_send_scope_t> local_scope;
+        if (!send_scope_)
+            local_scope.emplace (lifecycle_coordinator (), true,
+                                 socket_send_admission_complete);
+        socket_public_send_scope_t *const fast_scope =
+          send_scope_ ? send_scope_ : &*local_scope;
+        if (!fast_scope->acquired ())
             return request_admission_fast_failed;
         if (process_submit_commands () != 0)
             return request_admission_fast_failed;
 
         pipe_t *selected = NULL;
         if (xselect_routed_submit_pipe (&selected, true) != 0 || !selected) {
-            fast_scope.unlock_sync ();
+            fast_scope->unlock_sync ();
             return request_admission_fast_select_required;
         }
         const int rc = try_admit_send_parts_scoped (
-          parts_, part_count_, empty_routed_send_target, false, fast_scope,
+          parts_, part_count_, empty_routed_send_target, false, *fast_scope,
           NULL, true, admission_observer_, admission_observer_userdata_,
           true, true, NULL, selected);
         if (rc == 0) {
             // Multipart attempts use shallow retry copies; the single-part
             // attempt already moved its caller-owned input directly.
-            if (part_count_ > 1)
+            if (part_count_ > 1 && consume_multipart_on_success_) {
+                // The originals keep every user payload alive while the pipe
+                // owns its shallow attempt. Drop physical admission before a
+                // last-reference callback can re-enter this socket.
+#ifdef ZLINK_BUILD_TESTS
+                invoke_request_multipart_before_source_consume_test_hook ();
+#endif
+                local_scope.reset ();
                 consume_caller_parts (parts_, part_count_);
+            }
             errno = 0;
             return request_admission_fast_admitted;
         }
@@ -596,26 +671,35 @@ zlink::socket_base_t::try_request_admission_submit_fast (
         const bool target_selected =
           selection_out_->logical_endpoint
           && !selection_out_->logical_endpoint->empty ();
-        fast_scope.unlock_sync ();
+        fast_scope->unlock_sync ();
         return target_selected ? request_admission_fast_target_selected
                                : request_admission_fast_select_required;
     }
 
     if (options.type == ZLINK_CORE_SOCKET_ROUTER
         && target_rid_or_null_) {
-        socket_public_send_scope_t fast_scope (
-          lifecycle_coordinator (), true, socket_send_admission_complete);
-        if (!fast_scope.acquired ())
+        std::optional<socket_public_send_scope_t> local_scope;
+        if (!send_scope_)
+            local_scope.emplace (lifecycle_coordinator (), true,
+                                 socket_send_admission_complete);
+        socket_public_send_scope_t *const fast_scope =
+          send_scope_ ? send_scope_ : &*local_scope;
+        if (!fast_scope->acquired ())
             return request_admission_fast_failed;
         if (process_submit_commands () != 0)
             return request_admission_fast_failed;
         const int rc = try_admit_send_parts_scoped (
-          parts_, part_count_, empty_routed_send_target, true, fast_scope,
+          parts_, part_count_, empty_routed_send_target, true, *fast_scope,
           NULL, true, admission_observer_, admission_observer_userdata_, true,
           true, target_rid_or_null_);
         if (rc == 0) {
-            if (part_count_ > 1)
+            if (part_count_ > 1 && consume_multipart_on_success_) {
+#ifdef ZLINK_BUILD_TESTS
+                invoke_request_multipart_before_source_consume_test_hook ();
+#endif
+                local_scope.reset ();
                 consume_caller_parts (parts_, part_count_);
+            }
             errno = 0;
             return request_admission_fast_admitted;
         }
@@ -626,7 +710,7 @@ zlink::socket_base_t::try_request_admission_submit_fast (
             return request_admission_fast_failed;
         }
         selection_out_->resolved.peer_rid = *target_rid_or_null_;
-        fast_scope.unlock_sync ();
+        fast_scope->unlock_sync ();
         return request_admission_fast_target_selected;
     }
 
@@ -743,13 +827,21 @@ int zlink::socket_base_t::wait_for_request_submit_admission (
         // A registered completion poller is the sole drain owner. Borrow it
         // after backpressure so a full reply lane cannot block request credit.
         if (_completion_poller_refs.load (std::memory_order_acquire) != 0) {
-            scoped_lock_t owner_lock (_completion_owner_sync);
-            if (_completion_poller_refs.load (std::memory_order_acquire) != 0) {
-                const completion_drain_scope_t drain_scope (this);
-                acknowledge_request_completion_notification ();
-                process_ready_completion_pipes ();
-                (void) drain_request_completions ();
+            socket_reqrep_internal::completion_discard_t discard;
+            {
+                scoped_lock_t owner_lock (_completion_owner_sync);
+                if (_completion_poller_refs.load (std::memory_order_acquire)
+                    != 0) {
+                    const completion_drain_scope_t drain_scope (this,
+                                                                 &discard);
+                    acknowledge_request_completion_notification ();
+                    const bool yielded_for_discard =
+                      process_ready_completion_pipes ();
+                    if (!yielded_for_discard)
+                        (void) drain_request_completions ();
+                }
             }
+            socket_reqrep_internal::release_completion_discard (&discard);
         }
 
         if (timeout_.refresh_timeout () == 0) {

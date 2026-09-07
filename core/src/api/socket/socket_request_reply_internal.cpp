@@ -417,9 +417,6 @@ socket_request_reply_state_t::socket_request_reply_state_t (zlink::socket_base_t
     reply_target_reservations (0),
     reply_target_checkouts (0),
     router_next_reply_token (1),
-    public_router_reply_checkout_token (0),
-    public_router_reply_active (false),
-    public_router_reply_token (0),
     closing (false)
 {
     memset (router_reply_alias_buckets, 0,

@@ -5,6 +5,7 @@
 #include "core/msg.hpp"
 #include "protocol/zmp_protocol.hpp"
 #include "contract_zmp_engine_fixture.hpp"
+#include "api/socket/socket_request_reply_internal.hpp"
 
 SETUP_TEARDOWN_TESTCONTEXT
 
@@ -40,8 +41,13 @@ struct message_engine_pair_t
             work = pair->client.transfer_to (pair->server);
             work = pair->server.transfer_to (pair->client) || work;
         } while (work);
-        zlink::completion_drain_scope_t owner (pair->client.core);
-        pair->client.core->process_ready_completion_pipes ();
+        zlink::socket_reqrep_internal::completion_discard_t discard;
+        {
+            zlink::completion_drain_scope_t owner (pair->client.core,
+                                                    &discard);
+            pair->client.core->process_ready_completion_pipes ();
+        }
+        zlink::socket_reqrep_internal::release_completion_discard (&discard);
     }
     contract_zmp_engine_t client, server;
 };

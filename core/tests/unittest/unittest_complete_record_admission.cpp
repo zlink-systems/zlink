@@ -45,7 +45,7 @@ class complete_record_admission_guard_t
 };
 }
 
-void test_complete_record_admission_rejects_new_multipart_sequence ()
+void test_complete_record_admission_allows_independent_staging ()
 {
     void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
     void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
@@ -57,39 +57,86 @@ void test_complete_record_admission_rejects_new_multipart_sequence ()
     TEST_ASSERT_TRUE (complete_record.acquired ());
     TEST_ASSERT_FALSE (complete_record.multipart_active ());
 
-    zlink_submit_result_t rejected_rc = ZLINK_SUBMIT_OK;
-    int rejected_errno = 0;
-    size_t rejected_remaining_size = 0;
-    int rejected_close_rc = ZLINK_CONFIG_OK;
+    zlink_submit_result_t more_rc = ZLINK_SUBMIT_INTERNAL_ERROR;
+    zlink_submit_result_t final_rc = ZLINK_SUBMIT_INTERNAL_ERROR;
+    int contender_errno = 0;
+    size_t remaining_size = UINT64_MAX;
+    int more_close_rc = ZLINK_CONFIG_INTERNAL_ERROR;
+    int close_rc = ZLINK_CONFIG_OK;
     bool contender_init_failed = false;
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool more_done = false;
+    bool release_contender = false;
     std::thread contender ([&] {
         zlink_msg_t part;
         if (zlink_msg_init_size (&part, 12) != ZLINK_CONFIG_OK) {
-            contender_init_failed = true;
+            {
+                std::lock_guard<std::mutex> lock (mutex);
+                contender_init_failed = true;
+                more_done = true;
+            }
+            cv.notify_all ();
             return;
         }
         memcpy (zlink_msg_data (&part), "blocked-more", 12);
         errno = 0;
-        rejected_rc = zlink_send_part (sender, &part,
-                                       static_cast<zlink_send_flags_t> (0),
-                                       ZLINK_PART_MORE, NULL, NULL);
-        rejected_errno = zlink_errno ();
-        rejected_remaining_size = zlink_msg_size (&part);
-        rejected_close_rc = zlink_msg_close (&part);
+        more_rc = zlink_send_part (sender, &part,
+                                   static_cast<zlink_send_flags_t> (0),
+                                   ZLINK_PART_MORE, NULL, NULL);
+        more_close_rc = zlink_msg_close (&part);
+        {
+            std::lock_guard<std::mutex> lock (mutex);
+            more_done = true;
+        }
+        cv.notify_all ();
+        {
+            std::unique_lock<std::mutex> lock (mutex);
+            cv.wait (lock, [&] { return release_contender; });
+        }
+        zlink_msg_t final_part;
+        init_part (&final_part, "blocked-final");
+        final_rc = zlink_send_part (sender, &final_part,
+                                    static_cast<zlink_send_flags_t> (0),
+                                    ZLINK_PART_FINAL, NULL, NULL);
+        contender_errno = zlink_errno ();
+        remaining_size = zlink_msg_size (&final_part);
+        close_rc = zlink_msg_close (&final_part);
     });
-    contender.join ();
 
-    // Release the simulated complete-record public-boundary scope before any
-    // assertion can return early, then prove the rejected attempt did not
-    // poison the next multipart sequence.
+    {
+        std::unique_lock<std::mutex> lock (mutex);
+        cv.wait (lock, [&] { return more_done; });
+    }
+
+    // Logical staging is independent of another record's physical admission.
     complete_record.release ();
     sender_handle = socket_handle_t ();
+    {
+        std::lock_guard<std::mutex> lock (mutex);
+        release_contender = true;
+    }
+    cv.notify_all ();
+    contender.join ();
 
     TEST_ASSERT_FALSE (contender_init_failed);
-    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_INVALID_ARGUMENT, rejected_rc);
-    TEST_ASSERT_EQUAL_INT (EINVAL, rejected_errno);
-    TEST_ASSERT_EQUAL_UINT64 (0, rejected_remaining_size);
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, rejected_close_rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, more_rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, more_close_rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, final_rc);
+    TEST_ASSERT_EQUAL_INT (0, contender_errno);
+    TEST_ASSERT_EQUAL_UINT64 (0, remaining_size);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, close_rc);
+
+    zlink_msg_t *parts = NULL;
+    size_t part_count = 0;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_RECV_OK,
+      zlink_recv (receiver, NULL, &parts, &part_count,
+                  static_cast<zlink_recv_flags_t> (0)));
+    TEST_ASSERT_EQUAL_UINT64 (2, part_count);
+    TEST_ASSERT_EQUAL_MEMORY ("blocked-more", zlink_msg_data (&parts[0]), 12);
+    TEST_ASSERT_EQUAL_MEMORY ("blocked-final", zlink_msg_data (&parts[1]), 13);
+    zlink_multipart_close (parts, part_count);
 
     zlink_msg_t accepted_more;
     init_part (&accepted_more, "accepted-more");
@@ -104,8 +151,6 @@ void test_complete_record_admission_rejects_new_multipart_sequence ()
       zlink_send_part (sender, &accepted_final, static_cast<zlink_send_flags_t> (0),
                        ZLINK_PART_FINAL, NULL, NULL));
 
-    zlink_msg_t *parts = NULL;
-    size_t part_count = 0;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_OK,
       zlink_recv (receiver, NULL, &parts, &part_count,
@@ -530,7 +575,7 @@ void test_pair_whole_multipart_does_not_interleave_concurrent_final_records ()
     test_context_socket_close_zero_linger (receiver);
 }
 
-void test_open_send_part_sequence_rejects_concurrent_single_records ()
+void test_open_send_part_sequence_allows_concurrent_single_records ()
 {
     const int rounds = 1000;
     const int contender_count = 3;
@@ -550,6 +595,8 @@ void test_open_send_part_sequence_rejects_concurrent_single_records ()
     std::atomic<int> ownership_errors (0);
     std::atomic<int> bad_records (0);
     std::atomic<int> thread_errors (0);
+    std::atomic<int> received_single (0);
+    std::atomic<int> received_multipart (0);
 
     std::vector<std::thread> contenders;
     contenders.reserve (contender_count);
@@ -602,7 +649,8 @@ void test_open_send_part_sequence_rejects_concurrent_single_records ()
     }
 
     std::thread receiver_thread ([&] {
-        for (int round = 0; round < rounds; ++round) {
+        for (int record = 0; record < rounds * (contender_count + 1);
+             ++record) {
             zlink_msg_t *parts = NULL;
             size_t part_count = 0;
             if (zlink_recv (receiver, NULL, &parts, &part_count,
@@ -612,20 +660,33 @@ void test_open_send_part_sequence_rejects_concurrent_single_records ()
                 continue;
             }
 
-            bool valid = part_count == 2;
+            bool valid = part_count == 1 || part_count == 2;
+            int first_round = -1;
             for (size_t i = 0; valid && i < part_count; ++i) {
-                valid = zlink_msg_size (&parts[i]) == 1 + sizeof (round);
-                if (!valid)
-                    break;
+                valid = zlink_msg_size (&parts[i]) == 1 + sizeof (first_round);
+                if (!valid) break;
                 const unsigned char *data =
                   static_cast<const unsigned char *> (zlink_msg_data (&parts[i]));
                 int received_round = -1;
                 memcpy (&received_round, data + 1, sizeof (received_round));
-                valid = received_round == round
-                        && data[0] == static_cast<unsigned char> (i == 0 ? 'M' : 'F');
+                if (i == 0)
+                    first_round = received_round;
+                valid = received_round == first_round
+                        && received_round >= 0 && received_round < rounds;
+                if (part_count == 1)
+                    valid = valid && data[0] >= '0'
+                            && data[0] < '0' + contender_count;
+                else
+                    valid = valid
+                            && data[0]
+                                 == static_cast<unsigned char> (i == 0 ? 'M' : 'F');
             }
             if (!valid)
                 bad_records.fetch_add (1, std::memory_order_relaxed);
+            else if (part_count == 1)
+                received_single.fetch_add (1, std::memory_order_relaxed);
+            else
+                received_multipart.fetch_add (1, std::memory_order_relaxed);
             zlink_multipart_close (parts, part_count);
         }
     });
@@ -673,13 +734,17 @@ void test_open_send_part_sequence_rejects_concurrent_single_records ()
                  ownership_errors.load (std::memory_order_relaxed),
                  bad_records.load (std::memory_order_relaxed),
                  thread_errors.load (std::memory_order_relaxed));
-    TEST_ASSERT_EQUAL_INT (0, accepted.load (std::memory_order_relaxed));
     TEST_ASSERT_EQUAL_INT (rounds * contender_count,
-                           rejected.load (std::memory_order_relaxed));
+                           accepted.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (0, rejected.load (std::memory_order_relaxed));
     TEST_ASSERT_EQUAL_INT (0, wrong_rejection.load (std::memory_order_relaxed));
     TEST_ASSERT_EQUAL_INT (0, ownership_errors.load (std::memory_order_relaxed));
     TEST_ASSERT_EQUAL_INT (0, bad_records.load (std::memory_order_relaxed));
     TEST_ASSERT_EQUAL_INT (0, thread_errors.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (rounds * contender_count,
+                           received_single.load (std::memory_order_relaxed));
+    TEST_ASSERT_EQUAL_INT (rounds,
+                           received_multipart.load (std::memory_order_relaxed));
 
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (receiver);
@@ -689,9 +754,9 @@ int main ()
 {
     setup_test_environment ();
     UNITY_BEGIN ();
-    RUN_TEST (test_complete_record_admission_rejects_new_multipart_sequence);
+    RUN_TEST (test_complete_record_admission_allows_independent_staging);
     RUN_TEST (test_pair_one_call_multipart_backpressure_aborts_before_concurrent_final);
     RUN_TEST (test_pair_whole_multipart_does_not_interleave_concurrent_final_records);
-    RUN_TEST (test_open_send_part_sequence_rejects_concurrent_single_records);
+    RUN_TEST (test_open_send_part_sequence_allows_concurrent_single_records);
     return UNITY_END ();
 }

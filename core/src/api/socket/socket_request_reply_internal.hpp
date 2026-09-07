@@ -17,6 +17,7 @@
 #include <utility>
 
 #include "api/socket/request_reply_runtime_core.hpp"
+#include "api/socket/request_reply_frame_buffer_internal.hpp"
 #include "api/socket/request_timeout_scheduler_internal.hpp"
 #include "api/socket/socket_api_internal.hpp"
 #include "api/socket/socket_completion_queue_internal.hpp"
@@ -40,11 +41,21 @@ enum completion_pipe_drain_result_t
     completion_pipe_drained,
     completion_pipe_public_head,
     completion_pipe_budget_exhausted,
+    completion_pipe_discard_deferred,
     completion_pipe_terminated
 };
 
+struct completion_discard_t
+{
+    request_reply_frame_buffer_t parts;
+};
+
+bool completion_discard_has_payload (const completion_discard_t *discard_);
+void release_completion_discard (completion_discard_t *discard_);
+
 completion_pipe_drain_result_t process_completion_pipe (
-  zlink::socket_base_t *socket_, zlink::pipe_t *pipe_);
+  zlink::socket_base_t *socket_, zlink::pipe_t *pipe_,
+  completion_discard_t *discard_);
 
 // Public routing ids are bounded by zlink_routing_id_t. Keep reply-token keys
 // inline so a normal 16-byte RID never allocates a std::string on receive,
@@ -522,11 +533,6 @@ struct socket_request_reply_state_t : public zlink::request_reply_runtime::seque
     size_t reply_target_reservations;
     size_t reply_target_checkouts;
     uint64_t router_next_reply_token;
-    std::atomic<uint64_t> public_router_reply_checkout_token;
-    bool public_router_reply_active;
-    std::thread::id public_router_reply_owner;
-    uint64_t public_router_reply_token;
-    router_reply_target_t public_router_reply_target;
     bool closing;
 };
 
@@ -551,11 +557,24 @@ int recv_dealer_message_direct (const socket_handle_t &handle_,
 void forget_dealer_reply_targets_for_pipe (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   zlink::pipe_t *application_pipe_);
-bool take_router_reply_target_locked (
+enum router_reply_target_take_result_t
+{
+    router_reply_target_take_ok = 0,
+    router_reply_target_take_busy,
+    router_reply_target_take_missing,
+    router_reply_target_take_consumed,
+    router_reply_target_take_revoked,
+    router_reply_target_take_invalid
+};
+
+router_reply_target_take_result_t take_router_reply_target_locked (
   socket_request_reply_state_t *state_, uint64_t request_token_,
   const zlink_routing_id_t *peer_rid_,
   router_reply_target_t *target_out_);
 void restore_router_reply_target (
+  const std::shared_ptr<socket_request_reply_state_t> &state_,
+  uint64_t request_token_);
+void commit_router_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   uint64_t request_token_);
 void revoke_router_reply_target (const socket_handle_t &handle_,
@@ -568,12 +587,6 @@ void revoke_router_reply_targets_for_rid (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   const zlink_routing_id_t *peer_rid_);
 void clear_router_reply_targets_locked (socket_request_reply_state_t *state_);
-void abandon_public_router_reply_sequence (
-  const std::shared_ptr<socket_request_reply_state_t> &state_,
-  uint64_t expected_token_);
-void commit_public_router_reply_sequence (
-  const std::shared_ptr<socket_request_reply_state_t> &state_,
-  uint64_t expected_token_);
 int send_completion_staged_frames (zlink::socket_base_t *socket_,
                                    zlink::pipe_t *application_pipe_,
                                    const zlink_routing_id_t *peer_rid_,

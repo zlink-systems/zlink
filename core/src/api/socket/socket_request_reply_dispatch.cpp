@@ -24,6 +24,7 @@ std::atomic<void *> completion_pipe_budget_exhausted_test_hook_userdata (NULL);
 enum completion_message_result_t
 {
     completion_message_accepted,
+    completion_message_discard_deferred,
     completion_message_protocol_error
 };
 
@@ -80,7 +81,7 @@ int move_completion_payload (zlink_msg_t *parts_, size_t start_,
     return 0;
 }
 
-int publish_pull_reply_completion (
+bool publish_pull_reply_completion (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
   pending_request_t *pending_, uint8_t message_type_, zlink_msg_t *parts_,
   size_t part_count_)
@@ -111,6 +112,7 @@ int publish_pull_reply_completion (
     }
 
     zlink_msg_t *owned_payload = NULL;
+    bool payload_exported = true;
     if (payload_count != 0
         && move_completion_payload (parts_, payload_start, payload_count,
                                     &owned_payload)
@@ -118,10 +120,12 @@ int publish_pull_reply_completion (
         result = ZLINK_REQUEST_INTERNAL_ERROR;
         payload_count = 0;
         owned_payload = NULL;
+        payload_exported = false;
     }
 
-    return publish_pending_request_completion (
+    (void) publish_pending_request_completion (
       state_, pending_, result, owned_payload, payload_count);
+    return payload_exported;
 }
 
 completion_message_result_t complete_reply_from_transport (
@@ -143,26 +147,25 @@ completion_message_result_t complete_reply_from_transport (
     // The sequence is now owned by the pending lookup. Callback-visible
     // payload must not retain transport metadata.
     zlink::request_reply::clear_request_reply_metadata (&parts_[0]);
-    if (!state_) {
-        zlink_multipart_close (parts_, part_count_);
-        return completion_message_accepted;
-    }
+    if (!state_)
+        return completion_message_discard_deferred;
 
     pending_request_t pending;
+    bool found_pending = false;
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
-        if (!take_pending_reply_from_transport_locked (
-              state_.get (), request_seq_, transport_pair_id_,
-              transport_pair_generation_, source_pipe_,
-              source_connection_id_, &pending)) {
-            zlink_multipart_close (parts_, part_count_);
-            return completion_message_accepted;
-        }
+        found_pending = take_pending_reply_from_transport_locked (
+          state_.get (), request_seq_, transport_pair_id_,
+          transport_pair_generation_, source_pipe_, source_connection_id_,
+          &pending);
     }
+    if (!found_pending)
+        return completion_message_discard_deferred;
     pending.correlation.release ();
 
-    (void) publish_pull_reply_completion (
-      state_, &pending, message_type_, parts_, part_count_);
+    if (!publish_pull_reply_completion (
+          state_, &pending, message_type_, parts_, part_count_))
+        return completion_message_discard_deferred;
     zlink::request_reply::consume_send_frames_from (parts_, 0, part_count_);
     return completion_message_accepted;
 }
@@ -186,10 +189,26 @@ void discard_completion_message_tail (zlink::pipe_t *pipe_, bool more_)
 
 }
 
-completion_pipe_drain_result_t process_completion_pipe (
-  zlink::socket_base_t *socket_, zlink::pipe_t *pipe_)
+bool completion_discard_has_payload (const completion_discard_t *discard_)
 {
-    if (!socket_ || !pipe_)
+    return discard_ && !discard_->parts.empty ();
+}
+
+void release_completion_discard (completion_discard_t *discard_)
+{
+    if (!discard_)
+        return;
+    const int saved_errno = errno;
+    close_request_reply_frame_buffer (&discard_->parts);
+    errno = saved_errno;
+}
+
+completion_pipe_drain_result_t process_completion_pipe (
+  zlink::socket_base_t *socket_, zlink::pipe_t *pipe_,
+  completion_discard_t *discard_)
+{
+    if (!socket_ || !pipe_ || !discard_
+        || completion_discard_has_payload (discard_))
         return completion_pipe_drained;
 
     std::shared_ptr<socket_request_reply_state_t> state = socket_->request_reply_state ();
@@ -283,15 +302,26 @@ completion_pipe_drain_result_t process_completion_pipe (
                 }
 
                 if (!more) {
-                    if (complete_reply_from_transport (
+                    const completion_message_result_t result =
+                      complete_reply_from_transport (
                           state, pipe_->get_transport_pair_id (),
                           pipe_->get_transport_pair_generation (), pipe_,
                           source_connection_id,
                           message_type, request_sequence,
-                          reinterpret_cast<zlink_msg_t *> (&frame), 1)
-                        == completion_message_protocol_error) {
+                          reinterpret_cast<zlink_msg_t *> (&frame), 1);
+                    if (result == completion_message_protocol_error) {
                         pipe_->terminate (false);
                         return completion_pipe_terminated;
+                    }
+                    if (result == completion_message_discard_deferred) {
+                        discard_->parts.append_uninitialized ();
+                        zlink_msg_init (&discard_->parts.back ());
+                        zlink::msg_t *const deferred =
+                          reinterpret_cast<zlink::msg_t *> (
+                            &discard_->parts.back ());
+                        const int move_rc = deferred->move (frame);
+                        errno_assert (move_rc == 0);
+                        return completion_pipe_discard_deferred;
                     }
                     completion_delivered_directly = true;
                     complete = true;
@@ -341,15 +371,20 @@ completion_pipe_drain_result_t process_completion_pipe (
         if (allocation_failed) {
             close_request_reply_frame_buffer (&parts);
         } else if (!flow_state_consumed && !completion_delivered_directly) {
-            if (complete_reply_from_transport (
+            const completion_message_result_t result =
+              complete_reply_from_transport (
                   state, pipe_->get_transport_pair_id (),
                   pipe_->get_transport_pair_generation (), pipe_,
                   source_connection_id, message_type,
                   request_sequence, &parts[0],
-                  parts.size ())
-                == completion_message_protocol_error) {
+                  parts.size ());
+            if (result == completion_message_protocol_error) {
                 pipe_->terminate (false);
                 return completion_pipe_terminated;
+            }
+            if (result == completion_message_discard_deferred) {
+                discard_->parts.take_from (&parts);
+                return completion_pipe_discard_deferred;
             }
         }
 
@@ -473,13 +508,9 @@ static void discard_request_reply_state_for_close (
 {
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
-        state_->public_router_reply_checkout_token.store (
-          0, std::memory_order_release);
         state_->closing = true;
     }
     cancel_socket_pending_timeouts (state_);
-    abandon_public_router_reply_sequence (state_, 0);
-
     while (true) {
         pending_request_t pending;
         bool found = false;

@@ -105,8 +105,8 @@ thread 규칙은 핸들 단위다. 하나의 `zlink_msg_t` instance를 여러 th
 `zlink_msg_t` 구조체의 연속 배열로 저장한 multipart message는
 [`zlink_multipart_close`](#zlink_multipart_close)로 모든 part를 한 번에 닫는다.
 
-multipart와 thread의 관계는 다음과 같다. 여러 thread가 각자 독립된 message를 보낼 수
-있지만, 하나의 multipart message를 thread 사이에 나누면 안 된다. receive는 single-consumer
+multipart와 thread의 관계는 다음과 같다. PAIR·DEALER·ROUTER에서는 여러 thread가 같은 socket에 각자
+독립된 multipart message를 동시에 보낼 수 있지만, 하나의 multipart message를 thread 사이에 나누면 안 된다. receive는 single-consumer
 계약을 따른다.
 
 ## 5. 타입과 상수

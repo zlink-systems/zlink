@@ -6,6 +6,7 @@
 
 #include "core/io_thread.hpp"
 #include "core/mailbox.hpp"
+#include "api/socket/socket_request_reply_internal.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/common/socket_public_handle.hpp"
 
@@ -263,6 +264,9 @@ class command_drain_active_guard_t
 std::atomic<zlink::async_owner_transition_test_hook_fn>
   async_owner_transition_test_hook (NULL);
 std::atomic<void *> async_owner_transition_test_hook_userdata (NULL);
+std::atomic<zlink::completion_pull_before_wait_test_hook_fn>
+  completion_pull_before_wait_test_hook (NULL);
+std::atomic<void *> completion_pull_before_wait_test_hook_userdata (NULL);
 
 void invoke_async_owner_transition_test_hook (
   zlink::async_owner_transition_test_point_t point_)
@@ -272,6 +276,15 @@ void invoke_async_owner_transition_test_hook (
     if (hook)
         hook (point_, async_owner_transition_test_hook_userdata.load (
                         std::memory_order_acquire));
+}
+
+void invoke_completion_pull_before_wait_test_hook ()
+{
+    const zlink::completion_pull_before_wait_test_hook_fn hook =
+      completion_pull_before_wait_test_hook.load (std::memory_order_acquire);
+    if (hook)
+        hook (completion_pull_before_wait_test_hook_userdata.load (
+          std::memory_order_acquire));
 }
 #endif
 }
@@ -290,6 +303,22 @@ void zlink::test_set_async_owner_transition_hook (
     async_owner_transition_test_hook_userdata.store (
       userdata_, std::memory_order_release);
     async_owner_transition_test_hook.store (hook_, std::memory_order_release);
+}
+
+void zlink::test_set_completion_pull_before_wait_hook (
+  completion_pull_before_wait_test_hook_fn hook_, void *userdata_)
+{
+    if (!hook_) {
+        completion_pull_before_wait_test_hook.store (
+          NULL, std::memory_order_release);
+        completion_pull_before_wait_test_hook_userdata.store (
+          NULL, std::memory_order_release);
+        return;
+    }
+    completion_pull_before_wait_test_hook_userdata.store (
+      userdata_, std::memory_order_release);
+    completion_pull_before_wait_test_hook.store (hook_,
+                                                  std::memory_order_release);
 }
 #endif
 
@@ -573,6 +602,62 @@ int zlink::socket_base_t::process_submit_commands ()
         return -1;
     }
     return rc;
+}
+
+int zlink::socket_base_t::prepare_completion_pull (int timeout_ms_)
+{
+    const wait_timeout_budget_t wait_budget (_clock, timeout_ms_);
+    mailbox_t *const mailbox = static_cast<mailbox_t *> (_mailbox);
+    while (true) {
+        if (socket_completion::has_ready (&completion_runtime ()))
+            return 1;
+
+        // Begin observing before the drain. A reply command consumed by a
+        // different command owner after this point advances the same mailbox
+        // epoch that the wait below uses, so the ready recheck cannot be
+        // separated from its wake edge.
+        const uint64_t observed_command_epoch =
+          mailbox->begin_command_wait_observation ();
+        uint32_t events = 0;
+        if (get_events (ZLINK_POLLCOMPLETION, &events) != 0) {
+            const int saved_errno = errno;
+            mailbox->end_command_wait_observation ();
+            errno = saved_errno;
+            return -1;
+        }
+        if (socket_completion::has_ready (&completion_runtime ())) {
+            mailbox->end_command_wait_observation ();
+            return 1;
+        }
+
+#ifdef ZLINK_BUILD_TESTS
+        invoke_completion_pull_before_wait_test_hook ();
+#endif
+
+        int remaining_ms = 0;
+        if (!wait_budget.remaining (&remaining_ms)) {
+            mailbox->end_command_wait_observation ();
+            errno = EAGAIN;
+            return -1;
+        }
+
+        // A monitor may retain the async command owner while a completion
+        // poller is registered. Wait on the observed mailbox edge directly in
+        // that case; process_commands() intentionally defers to that owner and
+        // would otherwise turn this loop into a timeout-long spin.
+        const int wait_rc = async_mailbox_owns_commands ()
+                              ? mailbox->wait_for_command_signal (
+                                  remaining_ms, &observed_command_epoch)
+                              : process_commands (
+                                  remaining_ms, false, false,
+                                  &observed_command_epoch);
+        const int wait_errno = errno;
+        mailbox->end_command_wait_observation ();
+        if (wait_rc != 0 && wait_errno != EAGAIN) {
+            errno = wait_errno;
+            return -1;
+        }
+    }
 }
 
 uint64_t zlink::socket_base_t::observe_submit_progress () const
@@ -1416,18 +1501,22 @@ void zlink::socket_base_t::process_async_mailbox ()
     lifecycle_coordinator ().mark_async_processing_started ();
     do {
         process_commands (0, false);
+        socket_reqrep_internal::completion_discard_t discard;
         {
             // A public POLLCOMPLETION registration is the sole completion
             // owner while it exists. The gate also fences a 0 -> 1 owner
             // transfer against a drain that was already in flight.
             scoped_lock_t owner_lock (_completion_owner_sync);
             if (_completion_poller_refs.load (std::memory_order_acquire) == 0) {
-                const completion_drain_scope_t drain_scope (this);
+                const completion_drain_scope_t drain_scope (this, &discard);
                 acknowledge_request_completion_notification ();
-                process_ready_completion_pipes ();
-                (void) drain_request_completions ();
+                const bool yielded_for_discard =
+                  process_ready_completion_pipes ();
+                if (!yielded_for_discard)
+                    (void) drain_request_completions ();
             }
         }
+        socket_reqrep_internal::release_completion_discard (&discard);
         if (lifecycle_coordinator ().is_destroyed ()) {
             if (!lifecycle_coordinator ().is_async_mailbox_active ()) {
                 mailbox_t *mailbox = static_cast<mailbox_t *> (_mailbox);

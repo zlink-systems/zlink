@@ -2330,7 +2330,7 @@ void test_sl_flow_dr_normal_kinds_share_pause_and_hwm_gate ()
     fixture.close ();
 }
 
-void test_sl_flow_control_boundary_coalesces_latest_state ()
+void test_sl_controls_progress_during_public_staging ()
 {
     char endpoint[MAX_SOCKET_STRING];
     fd_t listener =
@@ -2367,6 +2367,17 @@ void test_sl_flow_control_boundary_coalesces_latest_state ()
       ZLINK_CONFIG_OK,
       zlink_socket_set_receive_flow_state (dealer,
                                            ZLINK_RECEIVE_FLOW_PAUSED));
+    bool saw_paused = false;
+    for (int attempt = 0; attempt != 16 && !saw_paused; ++attempt) {
+        wire_frame_t frame;
+        TEST_ASSERT_TRUE (read_wire_frame (application, &frame));
+        unsigned char state = 0xff;
+        uint64_t epoch = 0;
+        if (decode_flow_control (frame, &state, &epoch)
+            && state == test_zmp_wire::flow_state::receive_flow_paused)
+            saw_paused = true;
+    }
+    TEST_ASSERT_TRUE (saw_paused);
     const int weight = 37;
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_OK,
@@ -2376,37 +2387,15 @@ void test_sl_flow_control_boundary_coalesces_latest_state ()
       ZLINK_CONFIG_OK,
       zlink_socket_set_receive_flow_state (dealer,
                                            ZLINK_RECEIVE_FLOW_RUNNING));
-    send_data (dealer, NULL, "multipart-final", ZLINK_PART_FINAL);
-
-    bool saw_prefix = false;
-    bool saw_final = false;
     bool saw_weight = false;
     bool saw_running = false;
-    bool saw_paused = false;
     int weight_order = -1;
     int running_order = -1;
     for (int order = 0; order != 16 && !saw_running; ++order) {
         wire_frame_t frame;
         TEST_ASSERT_TRUE (read_wire_frame (application, &frame));
-        if ((frame.flags & test_zmp_wire::zmp_flag_control) == 0) {
-            if (!saw_prefix) {
-                saw_prefix = true;
-                TEST_ASSERT_TRUE ((frame.flags & test_zmp_wire::zmp_flag_more) != 0);
-                TEST_ASSERT_EQUAL_UINT64 (strlen ("multipart-prefix"),
-                                          frame.body.size ());
-                TEST_ASSERT_EQUAL_MEMORY ("multipart-prefix", &frame.body[0],
-                                          frame.body.size ());
-            } else if (!saw_final) {
-                saw_final = true;
-                TEST_ASSERT_EQUAL_INT (0,
-                                       frame.flags & test_zmp_wire::zmp_flag_more);
-                TEST_ASSERT_EQUAL_UINT64 (strlen ("multipart-final"),
-                                          frame.body.size ());
-                TEST_ASSERT_EQUAL_MEMORY ("multipart-final", &frame.body[0],
-                                          frame.body.size ());
-            }
-            continue;
-        }
+        TEST_ASSERT_NOT_EQUAL (0,
+                               frame.flags & test_zmp_wire::zmp_flag_control);
         uint32_t observed_weight = 0;
         if (is_weight_control (frame, &observed_weight)) {
             if (observed_weight == static_cast<uint32_t> (weight)) {
@@ -2427,16 +2416,42 @@ void test_sl_flow_control_boundary_coalesces_latest_state ()
             }
         }
     }
+    TEST_ASSERT_TRUE (saw_weight);
+    TEST_ASSERT_TRUE (saw_running);
+    TEST_ASSERT_TRUE (saw_paused);
+    TEST_ASSERT_TRUE (weight_order >= 0 && running_order > weight_order);
+
+    send_data (dealer, NULL, "multipart-final", ZLINK_PART_FINAL);
+    bool saw_prefix = false;
+    bool saw_final = false;
+    for (int order = 0; order != 16 && !saw_final; ++order) {
+        wire_frame_t frame;
+        TEST_ASSERT_TRUE (read_wire_frame (application, &frame));
+        if ((frame.flags & test_zmp_wire::zmp_flag_control) != 0)
+            continue;
+        if (!saw_prefix) {
+            saw_prefix = true;
+            TEST_ASSERT_TRUE ((frame.flags & test_zmp_wire::zmp_flag_more) != 0);
+            TEST_ASSERT_EQUAL_UINT64 (strlen ("multipart-prefix"),
+                                      frame.body.size ());
+            TEST_ASSERT_EQUAL_MEMORY ("multipart-prefix", &frame.body[0],
+                                      frame.body.size ());
+        } else {
+            saw_final = true;
+            TEST_ASSERT_EQUAL_INT (0,
+                                   frame.flags & test_zmp_wire::zmp_flag_more);
+            TEST_ASSERT_EQUAL_UINT64 (strlen ("multipart-final"),
+                                      frame.body.size ());
+            TEST_ASSERT_EQUAL_MEMORY ("multipart-final", &frame.body[0],
+                                      frame.body.size ());
+        }
+    }
     close (application);
     close (listener);
     test_context_socket_close_zero_linger (dealer);
 
     TEST_ASSERT_TRUE (saw_prefix);
     TEST_ASSERT_TRUE (saw_final);
-    TEST_ASSERT_TRUE (saw_weight);
-    TEST_ASSERT_TRUE (saw_running);
-    TEST_ASSERT_FALSE (saw_paused);
-    TEST_ASSERT_TRUE (weight_order >= 0 && running_order > weight_order);
 
     // A transport that has exchanged HELLO but has not admitted peer READY is
     // still initial/inactive. FLOWSTATE and WEIGHT remain held until READY
@@ -3550,7 +3565,7 @@ int main ()
     RUN_SINGLE_LANE_CONTRACT_TEST (test_sl_flow_dr_application_control_is_not_public_data);
     RUN_SINGLE_LANE_CONTRACT_TEST (test_sl_flow_rr_completion_control_progresses_under_pause);
     RUN_SINGLE_LANE_CONTRACT_TEST (test_sl_flow_dr_normal_kinds_share_pause_and_hwm_gate);
-    RUN_SINGLE_LANE_CONTRACT_TEST (test_sl_flow_control_boundary_coalesces_latest_state);
+    RUN_SINGLE_LANE_CONTRACT_TEST (test_sl_controls_progress_during_public_staging);
     RUN_SINGLE_LANE_CONTRACT_TEST (test_sl_flow_stale_generation_is_fenced);
     RUN_SINGLE_LANE_CONTRACT_TEST (test_sl_flow_reconnect_resynchronizes_absolute_state);
     RUN_SINGLE_LANE_CONTRACT_TEST (test_sl_flow_snapshot_accounts_dr_reply_as_application);

@@ -23,9 +23,9 @@ int reqrep::validate_socket_type (const socket_handle_t &handle_, int expected_t
 }
 
 int reqrep::stage_request_payload_part (
-  zlink::part_helper_internal::handle_state_t *helper_state_, zlink_msg_t *part_)
+  zlink::part_helper_internal::send_sequence_state_t *sequence_, zlink_msg_t *part_)
 {
-    if (!helper_state_ || !part_) {
+    if (!sequence_ || !part_) {
         errno = EFAULT;
         return -1;
     }
@@ -36,7 +36,7 @@ int reqrep::stage_request_payload_part (
         reqrep::test_throw_request_reply_allocation_failpoint (
           reqrep::request_reply_allocation_stage_payload);
 #endif
-        slot = &helper_state_->send.buffered_parts.append_uninitialized ();
+        slot = &sequence_->buffered_parts.append_uninitialized ();
     } catch (...) {
         errno = ENOMEM;
         return -1;
@@ -44,7 +44,7 @@ int reqrep::stage_request_payload_part (
     zlink_msg_init (slot);
     if (zlink_msg_move (slot, part_) != 0) {
         zlink_msg_close (slot);
-        helper_state_->send.buffered_parts.pop_back ();
+        sequence_->buffered_parts.pop_back ();
         errno = EFAULT;
         return -1;
     }

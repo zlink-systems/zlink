@@ -2,6 +2,7 @@
 
 #include "utils/precompiled.hpp"
 
+#include "api/socket/part_helper_internal.hpp"
 #include "api/socket/request_reply_protocol_internal.hpp"
 #include "api/socket/request_reply_frame_buffer_internal.hpp"
 #include "api/socket/socket_request_reply_internal.hpp"
@@ -327,9 +328,15 @@ void clear_router_reply_targets_locked (socket_request_reply_state_t *state_)
 {
     if (!state_)
         return;
-    state_->router_reply_targets.clear ();
-    memset (state_->router_reply_alias_buckets, 0,
-            sizeof (state_->router_reply_alias_buckets));
+    for (router_reply_target_store_t::iterator it =
+           state_->router_reply_targets.begin ();
+         it != state_->router_reply_targets.end ();) {
+        if (it->second.checked_out) {
+            ++it;
+            continue;
+        }
+        it = erase_router_reply_target_locked (state_, it);
+    }
 }
 
 class router_reply_target_publish_guard_t
@@ -668,25 +675,31 @@ void forget_dealer_reply_targets_for_pipe (
     state_->reply_target_slots -= erased;
 }
 
-bool take_router_reply_target_locked (
+router_reply_target_take_result_t take_router_reply_target_locked (
   socket_request_reply_state_t *state_, uint64_t request_token_,
   const zlink_routing_id_t *peer_rid_,
   router_reply_target_t *target_out_)
 {
     if (!state_ || request_token_ == 0 || !target_out_
         || !zlink::valid_routing_id (peer_rid_))
-        return false;
+        return router_reply_target_take_invalid;
 
     router_reply_target_store_t::iterator it =
       state_->router_reply_targets.find (request_token_);
-    if (it == state_->router_reply_targets.end () || it->second.checked_out
-        || it->second.revoked
-        || !router_reply_target_matches_rid (it->second, peer_rid_)
+    if (it == state_->router_reply_targets.end ())
+        return request_token_ < state_->router_next_reply_token
+                 ? router_reply_target_take_consumed
+                 : router_reply_target_take_missing;
+    if (it->second.revoked)
+        return router_reply_target_take_revoked;
+    if (!router_reply_target_matches_rid (it->second, peer_rid_)
         || it->second.wire_request_seq == 0
         || (it->second.source_peer_socket_type != ZLINK_CORE_SOCKET_DEALER
             && it->second.source_peer_socket_type
                  != ZLINK_CORE_SOCKET_ROUTER))
-        return false;
+        return router_reply_target_take_missing;
+    if (it->second.checked_out)
+        return router_reply_target_take_busy;
     if (it->second.pipe
         && (it->second.pipe->get_transport_lane ()
               != transport_lane_application
@@ -702,17 +715,22 @@ bool take_router_reply_target_locked (
     it->second.checked_out = true;
     zlink_assert (state_->reply_target_slots > 0);
     ++state_->reply_target_checkouts;
-    return true;
+    return router_reply_target_take_ok;
 }
 
 static bool restore_router_reply_target_locked (
   socket_request_reply_state_t *state_, uint64_t request_token_)
 {
     zlink_assert (state_);
-    zlink_assert (state_->reply_target_checkouts > 0);
-    --state_->reply_target_checkouts;
     router_reply_target_store_t::iterator it =
       state_->router_reply_targets.find (request_token_);
+    if (it != state_->router_reply_targets.end () && it->second.revoked) {
+        zlink_assert (it->second.checked_out);
+        erase_router_reply_target_locked (state_, it);
+        return false;
+    }
+    zlink_assert (state_->reply_target_checkouts > 0);
+    --state_->reply_target_checkouts;
     if (state_->closing || it == state_->router_reply_targets.end ()
         || it->second.revoked) {
         zlink_assert (state_->closing
@@ -744,49 +762,19 @@ void restore_router_reply_target (
         notify_reply_target_slots_released (state_, 1);
 }
 
-void abandon_public_router_reply_sequence (
-  const std::shared_ptr<socket_request_reply_state_t> &state_,
-  uint64_t expected_token_)
-{
-    if (!state_)
-        return;
-
-    bool active = false;
-    bool released = false;
-    pipe_t *target_pipe = NULL;
-    {
-        std::lock_guard<std::mutex> lock (state_->mutex);
-        if (state_->public_router_reply_active
-            && (expected_token_ == 0
-                || state_->public_router_reply_token == expected_token_)) {
-            state_->public_router_reply_checkout_token.store (
-              0, std::memory_order_release);
-            active = true;
-            target_pipe = state_->public_router_reply_target.pipe;
-            released = restore_router_reply_target_locked (
-              state_.get (), state_->public_router_reply_token);
-            state_->public_router_reply_active = false;
-            state_->public_router_reply_owner = std::thread::id ();
-            state_->public_router_reply_token = 0;
-            state_->public_router_reply_target = router_reply_target_t ();
-        }
-    }
-    if (!active)
-        return;
-    if (target_pipe)
-        target_pipe->release_lifetime_ref ();
-    if (released)
-        notify_reply_target_slots_released (state_, 1);
-}
-
-static void commit_router_reply_target_locked (
+static bool commit_router_reply_target_locked (
   socket_request_reply_state_t *state_, uint64_t request_token_)
 {
     zlink_assert (state_);
-    zlink_assert (state_->reply_target_checkouts > 0);
-    zlink_assert (state_->reply_target_slots > 0);
     router_reply_target_store_t::iterator it =
       state_->router_reply_targets.find (request_token_);
+    if (it != state_->router_reply_targets.end () && it->second.revoked) {
+        zlink_assert (it->second.checked_out);
+        erase_router_reply_target_locked (state_, it);
+        return false;
+    }
+    zlink_assert (state_->reply_target_checkouts > 0);
+    zlink_assert (state_->reply_target_slots > 0);
     if (it != state_->router_reply_targets.end ()) {
         zlink_assert (it->second.checked_out);
         erase_router_reply_target_locked (state_, it);
@@ -794,37 +782,23 @@ static void commit_router_reply_target_locked (
         zlink_assert (state_->closing);
     --state_->reply_target_checkouts;
     --state_->reply_target_slots;
+    return true;
 }
 
-void commit_public_router_reply_sequence (
+void commit_router_reply_target (
   const std::shared_ptr<socket_request_reply_state_t> &state_,
-  uint64_t expected_token_)
+  uint64_t request_token_)
 {
-    if (!state_)
+    if (!state_ || request_token_ == 0)
         return;
-    bool active = false;
-    pipe_t *target_pipe = NULL;
+    bool released = false;
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
-        if (state_->public_router_reply_active
-            && state_->public_router_reply_token == expected_token_) {
-            state_->public_router_reply_checkout_token.store (
-              0, std::memory_order_release);
-            active = true;
-            target_pipe = state_->public_router_reply_target.pipe;
-            commit_router_reply_target_locked (
-              state_.get (), state_->public_router_reply_token);
-            state_->public_router_reply_active = false;
-            state_->public_router_reply_owner = std::thread::id ();
-            state_->public_router_reply_token = 0;
-            state_->public_router_reply_target = router_reply_target_t ();
-        }
+        released = commit_router_reply_target_locked (state_.get (),
+                                                       request_token_);
     }
-    if (!active)
-        return;
-    if (target_pipe)
-        target_pipe->release_lifetime_ref ();
-    notify_reply_target_slots_released (state_, 1);
+    if (released)
+        notify_reply_target_slots_released (state_, 1);
 }
 
 void revoke_router_reply_target (const socket_handle_t &handle_,
@@ -866,35 +840,9 @@ void revoke_router_reply_targets_for_rid (
     if (!state_ || !zlink::valid_routing_id (peer_rid_))
         return;
 
-    pipe_t *active_pipe_pin = NULL;
     size_t released = 0;
     {
         std::lock_guard<std::mutex> lock (state_->mutex);
-        if (state_->public_router_reply_active
-            && router_reply_target_matches_rid (
-              state_->public_router_reply_target, peer_rid_)) {
-            state_->public_router_reply_checkout_token.store (
-              0, std::memory_order_release);
-            const uint64_t active_token = state_->public_router_reply_token;
-            active_pipe_pin = state_->public_router_reply_target.pipe;
-            state_->public_router_reply_active = false;
-            state_->public_router_reply_owner = std::thread::id ();
-            state_->public_router_reply_token = 0;
-            state_->public_router_reply_target = router_reply_target_t ();
-
-            router_reply_target_store_t::iterator active =
-              state_->router_reply_targets.find (active_token);
-            if (active != state_->router_reply_targets.end ()) {
-                zlink_assert (active->second.checked_out);
-                erase_router_reply_target_locked (state_.get (), active);
-                zlink_assert (state_->reply_target_checkouts > 0);
-                zlink_assert (state_->reply_target_slots > 0);
-                --state_->reply_target_checkouts;
-                --state_->reply_target_slots;
-                ++released;
-            }
-        }
-
         for (router_reply_target_store_t::iterator it =
                state_->router_reply_targets.begin ();
              it != state_->router_reply_targets.end ();) {
@@ -903,11 +851,21 @@ void revoke_router_reply_targets_for_rid (
                 continue;
             }
             if (it->second.checked_out) {
-                // A concurrent submit owns its lifetime pin. Mark the entry
-                // invalid so its restore path releases the checkout and slot;
-                // never expose it for another sequence after logical removal.
+                if (it->second.revoked) {
+                    ++it;
+                    continue;
+                }
+                // Logical RID removal returns public registry capacity now;
+                // the detached submit context retains only its pipe lifetime
+                // pin and later erases this revoked tombstone without touching
+                // the already-returned counters.
                 it->second.pipe = NULL;
                 it->second.revoked = true;
+                zlink_assert (state_->reply_target_checkouts > 0);
+                zlink_assert (state_->reply_target_slots > 0);
+                --state_->reply_target_checkouts;
+                --state_->reply_target_slots;
+                ++released;
                 ++it;
                 continue;
             }
@@ -918,8 +876,6 @@ void revoke_router_reply_targets_for_rid (
         }
     }
 
-    if (active_pipe_pin)
-        active_pipe_pin->release_lifetime_ref ();
     notify_reply_target_slots_released (state_, released);
 }
 
@@ -1441,9 +1397,6 @@ int send_completion_staged_frames_on_pipe (
       staged_part_count_ == 0 || staged_parts_ != NULL;
     if (!completion_ || !valid_staged_range || !final_part_
         || !reinterpret_cast<zlink::msg_t *> (final_part_)->check ()) {
-        zlink::request_reply::consume_send_frames_from (
-          staged_parts_, 0, staged_part_count_);
-        zlink::request_reply::consume_send_frame (final_part_);
         if (completion_)
             completion_->release_lifetime_ref ();
         errno = EFAULT;
@@ -1452,6 +1405,32 @@ int send_completion_staged_frames_on_pipe (
 
     int rc = 0;
     const size_t total_part_count = staged_part_count_ + 1;
+    zlink::part_helper_internal::send_part_buffer_t attempt_parts;
+    try {
+        attempt_parts.reserve (total_part_count);
+        for (size_t i = 0; i < total_part_count; ++i) {
+            zlink_msg_t &attempt = attempt_parts.append_uninitialized ();
+            zlink::msg_t *const attempt_msg =
+              reinterpret_cast<zlink::msg_t *> (&attempt);
+            if (attempt_msg->init () != 0) {
+                attempt_parts.pop_back ();
+                throw std::bad_alloc ();
+            }
+            zlink_msg_t *const source =
+              i < staged_part_count_ ? &staged_parts_[i] : final_part_;
+            if (attempt_msg->copy (
+                  *reinterpret_cast<zlink::msg_t *> (source))
+                != 0)
+                throw std::bad_alloc ();
+        }
+    } catch (...) {
+        zlink::request_reply::consume_send_frames_from (
+          attempt_parts.data (), 0, attempt_parts.size ());
+        attempt_parts.clear ();
+        completion_->release_lifetime_ref ();
+        errno = ENOMEM;
+        return -1;
+    }
     {
         // Multipart rollback spans several pipe lock acquisitions and keeps
         // the generation gate. A complete single-part reply validates its
@@ -1465,11 +1444,6 @@ int send_completion_staged_frames_on_pipe (
             if (first_admission_out_)
                 *first_admission_out_ =
                   zlink::pipe_message_admission_inactive;
-            if (!preserve_initial_failure_) {
-                zlink::request_reply::consume_send_frames_from (
-                  staged_parts_, 0, staged_part_count_);
-                zlink::request_reply::consume_send_frame (final_part_);
-            }
             errno = EAGAIN;
             rc = -1;
         }
@@ -1478,8 +1452,7 @@ int send_completion_staged_frames_on_pipe (
         // connection. This helper also accepts a DEALER-facing Application
         // pipe; its ordinary write admission supplies HWM and PAUSED behavior.
         for (size_t i = 0; rc == 0 && i < total_part_count; ++i) {
-            zlink_msg_t *part =
-              i < staged_part_count_ ? &staged_parts_[i] : final_part_;
+            zlink_msg_t *part = &attempt_parts[i];
             zlink::msg_t *msg = reinterpret_cast<zlink::msg_t *> (part);
             if (i + 1 < total_part_count)
                 msg->set_flags (zlink::msg_t::more);
@@ -1508,20 +1481,12 @@ int send_completion_staged_frames_on_pipe (
             if (!written) {
                 const int write_errno = errno;
                 completion_->rollback ();
-                if (!(preserve_initial_failure_ && i == 0)) {
-                    if (i < staged_part_count_) {
-                        zlink::request_reply::consume_send_frames_from (
-                          staged_parts_, i, staged_part_count_);
-                        zlink::request_reply::consume_send_frame (final_part_);
-                    } else
-                        zlink::request_reply::consume_send_frame (final_part_);
-                }
                 // Before the first frame moves, a disappearing completion
                 // route is retryable within the caller's SNDTIMEO budget.
-                // Once a prefix moved, rollback prevents wire admission but
-                // its ownership is no longer reconstructable here; surface
-                // the exact runtime failure and let the application retry its
-                // retained complete reply.
+                // Once a prefix moved, rollback prevents wire admission.
+                // Surface the exact runtime failure while the caller's
+                // complete original reply remains retained outside this
+                // physical attempt.
                 if (preserve_initial_failure_ && i == 0) {
                     switch (admission) {
                         case zlink::pipe_message_admission_hwm_full:
@@ -1549,6 +1514,9 @@ int send_completion_staged_frames_on_pipe (
             errno_assert (init_rc == 0);
         }
     }
+    zlink::request_reply::consume_send_frames_from (
+      attempt_parts.data (), 0, attempt_parts.size ());
+    attempt_parts.clear ();
     if (rc == 0)
         errno = 0;
     //  Dropping the pin can run the pipe destructor, so preserve the errno
@@ -1576,8 +1544,14 @@ int send_completion_staged_frames (zlink::socket_base_t *socket_,
         errno = saved_errno;
         return -1;
     }
-    return send_completion_staged_frames_on_pipe (
+    const int rc = send_completion_staged_frames_on_pipe (
       completion, staged_parts_, staged_part_count_, final_part_, false);
+    const int saved_errno = errno;
+    zlink::request_reply::consume_send_frames_from (
+      staged_parts_, 0, staged_part_count_);
+    zlink::request_reply::consume_send_frame (final_part_);
+    errno = saved_errno;
+    return rc;
 }
 
 }

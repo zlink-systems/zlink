@@ -46,7 +46,11 @@ type별 명세(type 전용 옵션, data plane API, 동작 세부사항)는 별�
 공개 socket 핸들 API는 기본적으로 thread-safe하다. 다만 모든 API가 같은
 비용 모델을 갖는 것은 아니다.
 
-- `send`는 여러 thread에서 동시 호출을 허용하는 hot path다.
+- `send`는 여러 thread에서 동시 호출을 허용하는 hot path다. PAIR·DEALER·ROUTER에서는
+  각 thread가 같은 socket에 독립된 multipart record를 동시에 제출할 수 있다. 한 record의
+  첫 `MORE`부터 `FINAL`까지는 같은 thread가 호출한다. 다른 thread의 미완성 record는 새
+  record의 조립을 막지 않으며, Core는 각 record를 다른 record의 part가 끼어들지 않도록
+  원자적으로 admission한다.
 - `bind/connect/disconnect`, subscribe/unsubscribe, option/query, monitor는
   runtime에 호출 가능한 control path다. correctness는 보장되지만 실행
   순서는 내부 직렬화에 따라 결정될 수 있다.
@@ -441,9 +445,11 @@ message를 HWM이 작다는 이유만으로 모두 거절하지 않는다. 이 m
 `ZLINK_OPT_MAXMSGSIZE`를 만족해야 하며, 한 건을 허용한 뒤에는 이후 write가 대기한다.
 `ZLINK_OPT_MAXMSGSIZE`가 무제한인 방향에서도 admission 시점에 전체 accounted 크기를 아는
 complete message 한 건, 즉 single-part 또는 total-known message에만 이 예외를 적용한다.
-최종 전체 크기를 모르는 incremental multipart에는 첫 `MORE` frame부터 일반 byte HWM을 적용하므로
-frame이 제한 없이 누적되지 않는다. 이 예외를 위해 known-total metadata나 transaction 전체
-reservation을 추가하지 않는다.
+Pipe에 incremental multipart를 쓰는 경우에는 첫 `MORE` frame부터 일반 byte HWM을 적용하므로
+frame이 제한 없이 누적되지 않는다. PAIR·DEALER·ROUTER의 public `MORE` 조립 buffer에는 pipe HWM을
+적용하지 않으며, 그 record의 pipe admission과 HWM 판정은 `FINAL`에서 frame 단위로 수행한다.
+조립 buffer의 전체 크기를 안다는 이유로 `MORE` frame에 이 예외를 적용하지 않는다. 이 예외를 위해
+known-total metadata나 transaction 전체 reservation을 추가하지 않는다.
 
 admission은 frame 단위로 charge한다. 일반 frame의 charge는 payload byte 수에
 `sizeof(zlink_msg_t)`를 더한 값이므로 빈 frame도 비용이 0이 아니고, 작은 frame을 많이
@@ -941,10 +947,23 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
 두 함수는 결과와 관계없이 `part_`를 소비해 빈 initialized 상태로 둔다. STREAM은
 `FINAL` 단일 part만 지원한다. `MORE` 거절은
 [STREAM 송신 계약](08-stream.ko.md#4-routed-part-send)을 따른다. PAIR·DEALER·ROUTER에서
-`MORE`는 socket-local sequence에 part를 staging하고 `FINAL`이 성공해야 record 하나로 admission한다.
-같은 sequence의 함수 family, target과 flags는 같아야 한다. 중간 실패는 staging한 prefix와
-실패한 part를 모두 폐기한다. 재시도할 caller는 첫 part를 제출하기 전에 전체 record를 따로
-보관해야 한다.
+`MORE`는 호출한 thread별 sequence에 part를 보관하고 `FINAL`이 성공해야 record 하나로 admission한다.
+`MORE` 성공은 pipe admission이 아니며 completion ID는 `0`이다. `FINAL`은 그 thread가 보관한
+prefix와 현재 part를 하나의 record로 제출하며, 열린 sequence가 없는 thread의 `FINAL`은
+single-part record를 제출한다. 같은 sequence의 함수 family, target과 flags는 같아야 한다. 서로
+다른 thread의 sequence는 서로 다른 family와 target을 사용할 수 있다. 중간 실패는 해당 thread가
+보관한 prefix와 실패한 part를 모두 폐기하며 다른 thread의 sequence는 바꾸지 않는다. 재시도할
+caller는 첫 part를 제출하기 전에 전체 record를 따로 보관해야 한다. 한 thread는 하나의 socket에서
+여러 record의 part를 번갈아 제출할 수 없다.
+
+Thread별 sequence는 첫 `MORE` 성공에서 생기고 `FINAL` 성공, sequence 폐기, socket close에서
+없어진다. 열린 sequence를 다른 thread가 이어받을 수 없다. 실패로 폐기된 뒤의 재제출은 어느
+thread에서든 새 sequence로 시작할 수 있다. Sequence를 연 thread가 종료하면 그 미완성 sequence는
+폐기 대상이 되어 Core가 회수하며 다른 thread의 제출을 막지 않는다. Socket
+close는 모든 thread의 미완성 sequence를 폐기한다. 호출 사이에 part를 보관한 상태는 실행 중인
+API로 세지 않는다. Thread 종료 시 application TLS destructor가 part API를 호출하려면 그 호출은
+Core가 그 thread의 caller identity를 파괴하기 전에 완료되어야 한다. 이후 호출의 동작은 정의하지
+않는다.
 
 `flags_`는 `NONE` 또는 `DONTWAIT`만 허용한다. `part_flag_`의 정의된 값은 `MORE`와 `FINAL`이며,
 STREAM에서는 `FINAL`만 허용한다. 범위 밖
@@ -1069,7 +1088,7 @@ Admission 전 실패는 reservation을 반납하고 [part send](#part-send와-pe
 result·errno, ID `0`, completion 없음으로 끝난다.
 
 `DONTWAIT FINAL`은 admission을 한 번만 시도하며 admission 전에 Core가 request record를 소유하는
-상태는 없다. 즉시 admission되면 `ZLINK_SUBMIT_OK`와 nonzero REQUEST ID를 반환한다. HWM·byte
+상태는 없다. `MORE`와 `FINAL` 사이의 thread별 조립 buffer는 이 규칙의 대상이 아니다. 즉시 admission되면 `ZLINK_SUBMIT_OK`와 nonzero REQUEST ID를 반환한다. HWM·byte
 credit·flow pause에 의한 backpressure이거나 target이 존재하지만 아직 준비되지 않은 경우(transport
 pair 미준비, peer weight 0, connect 직후 peer가 0개인 DEALER)에는 REQUEST ID 대신
 `ZLINK_SUBMIT_BACKPRESSURED`, `errno == EAGAIN`과 함께 nonzero 대기 토큰을 `completion_id_out_`에
@@ -1183,6 +1202,11 @@ Completion queue가 비어 있지 않으면 `ZLINK_POLLCOMPLETION`이 level-trig
 record는 `ZLINK_POLLOUT`도 level로 유지한다. Poller wait는
 record를 소비하지 않는다. Caller는 DONTWAIT receive를 `NO_DATA`까지 반복한다. 한 socket queue의
 drain owner는 하나이며 같은 queue를 두 thread에서 동시에 drain하는 것은 지원하지 않는다.
+Completion poller의 등록은 이 consumer가 `zlink_completion_recv(NONE)`를 직접 호출하는 것을
+제한하지 않으며, blocking receive는 별도의 `zlink_poller_wait()` 호출에 의존하지 않고 `RCVTIMEO`
+안에서 completion 진행과 대기를 수행한다. Poller wait는 public record를 소비하지 않으며, 같은
+socket의 transport completion 진행은 하나의 직렬화된 drain 경로를 사용한다. `DONTWAIT` receive는
+이미 게시된 public completion queue를 소비하며 새 transport drain turn을 시작하지 않는다.
 REQUEST와 WRITABLE 결과는 resolver가 socket-local ready queue에 append한 linearization 순서로
 반환한다. 이는 submit 순서나 target별 wire 순서가 아니므로 caller는 ID나 context로 구분한다.
 
@@ -1309,7 +1333,7 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
 - DEALER-ROUTER의 REPLY·error reply는 DATA·REQUEST와 같은 Application physical HWM 및 peer
   PAUSED 상태를 적용한다. ROUTER-ROUTER Completion lane의 REPLY·error reply만 이 HWM에서 제외한다.
 - 비어 있는 pipe는 admission 시점에 전체 accounted 크기를 아는 complete message 한 건을 HWM보다 크더라도 수락하고, 그 message도 `ZLINK_OPT_MAXMSGSIZE` 검사를 통과해야 하며, 한 건 수락 뒤의 write는 대기한다.
-- 최종 크기를 모르는 incremental multipart는 첫 `MORE` frame부터 일반 byte HWM이 적용된다.
+- Pipe에 쓰는 incremental multipart는 첫 `MORE` frame부터 일반 byte HWM이 적용된다. public `MORE` 조립 buffer는 pipe HWM 밖이며 `FINAL`에서 frame 단위로 판정한다.
 - 빈 frame도 charge가 0이 아니므로(payload + `sizeof(zlink_msg_t)`) 빈 frame만 반복 송신해도 HWM에 도달하고, frame이 pipe에서 빠지면 같은 charge가 돌아온다.
 - low water mark 기본값은 `ceil(hwm_bytes / 2)`이고, hint는 항상 `1 .. hwm_bytes - 1` 범위로 clamp되며, HWM에 도달한 sender는 receiver가 현재 보이는 입력을 모두 읽으면 LWM 전에도 깨어날 수 있다.
 

@@ -65,8 +65,12 @@ void assert_no_payload (void *socket_)
 zlink_completion_t completion_now (void *socket_)
 {
     zlink::socket_base_t *core = as_socket_handle (socket_).socket;
-    zlink::completion_drain_scope_t owner (core);
-    core->process_ready_completion_pipes ();
+    zlink::socket_reqrep_internal::completion_discard_t discard;
+    {
+        zlink::completion_drain_scope_t owner (core, &discard);
+        core->process_ready_completion_pipes ();
+    }
+    zlink::socket_reqrep_internal::release_completion_discard (&discard);
     zlink_completion_t completion = {};
     completion.struct_size = sizeof (completion);
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK,
@@ -78,8 +82,12 @@ zlink_completion_t completion_now (void *socket_)
 void assert_no_completion (void *socket_)
 {
     zlink::socket_base_t *core = as_socket_handle (socket_).socket;
-    zlink::completion_drain_scope_t owner (core);
-    core->process_ready_completion_pipes ();
+    zlink::socket_reqrep_internal::completion_discard_t discard;
+    {
+        zlink::completion_drain_scope_t owner (core, &discard);
+        core->process_ready_completion_pipes ();
+    }
+    zlink::socket_reqrep_internal::release_completion_discard (&discard);
     zlink_completion_t completion = {};
     completion.struct_size = sizeof (completion);
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_NO_DATA,

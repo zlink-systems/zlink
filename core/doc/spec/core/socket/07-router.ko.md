@@ -52,8 +52,8 @@ close할 때까지 유효하다. Poller wait, completion recv, monitor recv와 �
 ## 3. Part sequence와 소유권
 
 `*_part` send 호출은 `ZLINK_PART_MORE`부터 `ZLINK_PART_FINAL`까지 하나의 multipart sequence를
-구성한다. 열린 sequence가 있는 동안 같은 handle에서 다른 send helper family나 다른 routing ID를
-섞을 수 없다.
+구성한다. 한 thread에 열린 sequence가 있는 동안 그 thread는 다른 send helper family나 다른 routing
+ID를 섞을 수 없다. 다른 thread의 sequence는 독립이며 서로 다른 family와 routing ID를 쓸 수 있다.
 
 초기화된 유효한 `part_`를 send API에 넘기면 함수는 성공과 실패 모두에서 그 message 내용을
 소비하고 길이 0인 초기화 상태로 둔다. 따라서 호출 결과와 관계없이 호출자가 전송 전 payload를
@@ -417,8 +417,10 @@ test 하나로 이어진다.
   값을 적용한 connection을 식별한다.
 - Weight를 설정하거나 동기화해도 public receive와 Completion lane에는 application record가
   추가되지 않으며, 같은 값을 다시 설정해도 monitor event가 중복 발생하지 않는다.
-- Application multipart가 열린 동안 weight를 여러 번 바꿔도 peer에는 multipart가 atomic record
-  하나로 보이며, FINAL 또는 rollback 뒤에는 가장 최근 값만 반영된다.
+- Application multipart가 pipe에 열린 동안(첫 frame이 pipe에 쓰인 뒤 FINAL commit 또는 rollback
+  전) weight를 여러 번 바꿔도 peer에는 multipart가 atomic record 하나로 보이며, FINAL 또는
+  rollback 뒤에는 가장 최근 값만 반영된다. public `MORE` 조립 buffer만 있는 동안은 열린
+  multipart가 아니다.
 - Application multipart의 첫 part를 받은 뒤 pipe의 remote weight가 `0`이 되어도 같은 pipe가
   FINAL까지 남은 part를 전달하고, 다음 message 선택부터 제외된다.
 - Remote weight 변경은 같은 logical RID에 wait token이 있는 DONTWAIT SEND와 REQUEST를 다시
