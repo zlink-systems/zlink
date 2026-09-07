@@ -1933,3 +1933,8 @@ Go REQREP 러너 정합 중 드러났고, **감독자가 최소 재현 프로그
 이는 Single suite의 구조 때문이다 — `PERF_SINGLE_TEST_POLICY.md`가 "single은 **단일 프로세스** 안에서 sender와 receiver를 동시에 구동한다"고 규정하는데 Python은 그 두 thread가 같은 GIL을 두고 경쟁한다. Node는 `worker_threads`가 각자 독립된 V8 isolate와 event loop를 가져 이 비용이 없으므로, **Single에서 Python과 Node를 비교하는 것은 구조적으로 불공평하다.**
 근거 두 가지가 이 판단을 뒷받침한다. (i) Single은 판정 대상이 아니다(`PERF_POLICY.md:144-149`, D-BP2) — Python single 수치는 아무것도 gate하지 않는다. (ii) Multi에는 이 제약이 없다 — `PERF_MULTI_TEST_POLICY.md:594`가 "각 size 케이스는 반드시 독립된 server/client 프로세스 쌍으로 실행한다"고 요구하므로 server와 client가 별도 프로세스, 즉 별도 GIL이다. 실제로 Python multi REQREP smoke가 29,664 ops/s로 single 25,419보다 높다.
 따라서 Single의 GIL 인계는 계획서 §2.1이 말한 "GC·JIT·callback·event loop 같은 언어 runtime 비용"으로 분류해 기록하고, **Python 개선 pass는 Multi에서 수행한다.**
+## D-B199 (2026-09-07 16:30, 머신 B) G-11b-3 결과 — 정확성 통과, with_stream 판정은 게이트에서 idle 재측정
+
+**결과**(`core-rf-G-11b3-summary.md`): 리뷰 수정 3건 반영(seqlock reader 표준 순서로 UB 제거, `_inbound_ledger_sequence`로 local read pair를 같은 coherent snapshot에 포함, `_out_active` CAS/store 범위 서술 정정). suite 105개 ×5 = 525/525, lost-wake 100/100, TSan signature delta 0, hotpath 5/5 PASS(stream_tcp 0.976, router_router_tcp 0.980), stream_tcp 셀 mutex 24.05→21.78/msg, Ir −0.74 %.
+**with_stream 3회**: 1024 B/64 KiB에서 zlink/asio 비율이 pristine 대비 −12.9 %/−16.6 %. 그러나 최종 측정의 asio 절대값이 366→195 kops로 절반, system CPU 37→52~61 %로 MP-1/MP-2 job과 겹친 부하 오염이 명백하다(pristine 측정은 MP job 시작 전). 이 수치로는 patch 귀속을 판정하지 않는다.
+**결정**: 정확성은 채택 기준 충족. 게이트 `gate-g11b3`(terra/high)를 띄우되 hotpath·성능은 ninja 없음 + load<1.5 조건에서만 실행하고 with_stream은 runs 3·3 stack으로 pristine 값과 나란히 비교한다. 게이트의 idle 비율이 pristine 대비 −5 % 이내면 채택, 아니면 원인 분석(locked RMW cycle) 후속.
