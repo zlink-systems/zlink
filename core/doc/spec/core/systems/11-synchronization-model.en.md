@@ -36,20 +36,11 @@ more is added**.
 | The I/O thread serving a connection | Owns the session end of the pipe and the engine state alone, and speaks to the socket side only through commands and atomic values |
 | A Core maintainer | The question that must be answered, and the measurements that must be submitted, when adding or removing a lock on the hot path |
 
-This chapter applies the same model as the framework's
-[state lane](../../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.en.md)
-to Core. The vocabulary follows that document; Core has no separate executor that runs a lane,
-so the socket turn plays that role.
-
-### Background
-
-A 2026-09 profile showed one STREAM message taking 15–17 uncontended mutex pairs; libzmq, on the
-same pull model, takes 1.7. Tracing their origin, the thread-safe socket contract required two of
-them; the rest arrived with later subsystems — byte credit, flow-state publishing, transport
-lanes, completion, route shards — each bringing its own lock onto the hot path. Even without
-contention a lock pair costs 2–3 % of the per-message instruction count and one cache-line
-transfer. Without a rule the same thing recurs, so this chapter writes the rule down. The
-measurements and provenance are in `doc/plan/c016-worklog/core-rf-G-11-lock-provenance.md`.
+This chapter writes down the rules for a consistent and effective synchronization
+implementation. The model is the framework's
+[state lane](../../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.en.md);
+the vocabulary follows that document, and since Core has no separate executor that runs a lane,
+the socket turn plays that role.
 
 ## 2. State classification
 
@@ -145,9 +136,9 @@ question and the measurements in [§6](#6-verification-requirements).
 
 | Form | Why it is forbidden | A real example, now removed |
 |---|---|---|
-| A lock that guards no condition | Even uncontended it costs 2–3 % of per-message instructions plus a cache-line transfer | `_out_sync` around `activate_read` handling; the context lock around an always-empty deferred-termination queue; the registry lock taken even when planned equalled applied |
+| A lock that guards no condition | Even uncontended, every lock pair costs instructions and a cache-line transfer | `_out_sync` around `activate_read` handling; the context lock around an always-empty deferred-termination queue; the registry lock taken even when planned equalled applied |
 | Splitting one condition across several locks | The condition breaks at the split (the C2 rule) | Socket serialization as three layers — `public_api_sync`, the command owner, and `receive.sync` per command |
-| A turn exception by socket type or command kind | "It runs often" is something to measure, not a basis for a rule | PAIR commands applied without the turn (measured: 43→176 turn acquisitions per 200,000 messages, zero contention) |
+| A turn exception by socket type or command kind | "It runs often" is something to measure, not a basis for a rule | PAIR commands applied without the turn |
 | Reading a value written by the other pipe end under a lock | It wraps a single-producer structure in a lock again | The peer-consumed byte counts read under the session-side `_out_sync` |
 | A device whose name and nature differ | A recursive mutex combined with `pthread_cond_wait` is undefined behaviour | `fast_mutex_t` was in fact a recursive mutex — split into plain `mutex_t` and `recursive_mutex_t`; debug builds catch re-entry immediately |
 | The hot path carrying a lock for a cold path's sake | A path that runs zero times per message forces a per-message lock | `_out_sync` taken by the hot-path write for the benefit of pipe detach and peer identification |

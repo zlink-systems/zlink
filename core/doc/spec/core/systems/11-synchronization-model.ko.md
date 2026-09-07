@@ -34,18 +34,10 @@ Caller가 의존하는 계약은 바뀌지 않는다. socket 하나를 여러 ap
 | connection을 처리하는 I/O thread | pipe의 session 쪽 끝과 engine 상태를 혼자 소유하고, socket 쪽에는 command와 atomic 값으로만 말한다 |
 | Core 유지보수자 | hot path에 lock을 더하거나 뺄 때 답해야 하는 질문과 제출해야 하는 측정 |
 
-이 장은 [framework의 state lane](../../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md)과
-같은 모델을 Core에 적용한다. 용어는 그 문서를 따르되, Core에는 lane을 실행하는 별도
-executor가 없고 socket turn이 그 역할을 한다.
-
-### 배경
-
-2026-09 프로파일에서 STREAM message 하나가 경합 없는 mutex를 15~17쌍 잡았다. 같은 pull 모델인
-libzmq는 1.7쌍이다. 출처를 추적하면 thread-safe socket 계약이 요구한 lock은 둘뿐이고, 나머지는
-이후에 들어온 서브시스템 — byte credit, flow-state 발행, transport lane, completion, route
-shard — 이 각자 lock을 들고 hot path에 올라온 것이었다. 경합이 없어도 lock 한 쌍은 message당
-명령 수의 2~3 %와 cache line 왕복 한 번이다. 규칙이 없으면 같은 일이 되풀이되므로 이 장이 그
-규칙을 적는다. 측정과 출처는 `doc/plan/c016-worklog/core-rf-G-11-lock-provenance.md`에 있다.
+이 장은 일관되고 효과적인 동기화 구현을 위한 규칙을 적는다. 모델은
+[framework의 state lane](../../../../framework/doc/framework/common/spec/server/01-execution/06-state-ownership-and-lanes.ko.md)과
+같고, 용어는 그 문서를 따르되 Core에는 lane을 실행하는 별도 executor가 없고 socket turn이
+그 역할을 한다.
 
 ## 2. 상태 분류
 
@@ -135,9 +127,9 @@ hot path에 새 lock을 들이는 변경은 이 질문의 답과 [§6](#6-검증
 
 | 형태 | 왜 안 되는가 | 실제로 있었고 제거된 예 |
 |---|---|---|
-| 지키는 조건이 없는 lock | 경합이 없어도 message당 명령 수 2~3 %와 cache line 왕복을 낸다 | `activate_read` 처리의 `_out_sync`, 항상 비어 있던 지연 종료 큐의 context lock, planned와 applied가 같을 때도 잡던 registry lock |
+| 지키는 조건이 없는 lock | 경합이 없어도 lock 한 쌍마다 명령 수와 cache line 왕복이 든다 | `activate_read` 처리의 `_out_sync`, 항상 비어 있던 지연 종료 큐의 context lock, planned와 applied가 같을 때도 잡던 registry lock |
 | 함께 지켜야 할 조건을 여러 lock으로 나눔 | 나눈 경계에서 조건이 깨진다(C2 규칙) | socket 직렬화가 `public_api_sync`·command owner·command마다 `receive.sync`의 3겹이던 구조 |
-| socket type이나 command 종류별 turn 예외 | "자주 실행된다"는 가정은 측정 대상이지 규칙의 근거가 아니다 | PAIR command를 turn 없이 적용하던 예외(측정: 200,000 message에 turn 획득 43→176회, 경합 0) |
+| socket type이나 command 종류별 turn 예외 | "자주 실행된다"는 가정은 측정 대상이지 규칙의 근거가 아니다 | PAIR command를 turn 없이 적용하던 예외 |
 | 반대쪽 pipe 끝이 쓰는 값을 lock으로 읽음 | single-producer 구조를 lock으로 다시 감싼다 | session 쪽 `_out_sync` 아래에서 읽던 peer 소비 byte 수 |
 | 이름과 성질이 다른 장치 | 재귀 mutex를 `pthread_cond_wait`와 함께 쓰면 정의되지 않은 동작이다 | `fast_mutex_t`가 실제로는 재귀 mutex였던 것 — plain `mutex_t`와 `recursive_mutex_t`로 분리, 디버그 빌드는 재진입을 즉시 잡는다 |
 | cold 경로 때문에 hot path가 lock을 짊어짐 | message당 0회인 경로가 message당 lock을 강제한다 | pipe 분리·peer 식별을 위해 hot path의 write가 잡던 `_out_sync` |
