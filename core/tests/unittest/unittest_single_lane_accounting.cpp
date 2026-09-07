@@ -14,6 +14,7 @@ SETUP_TEARDOWN_TESTCONTEXT
 namespace
 {
 const int contract_wait_ms = 5000;
+
 struct reply_prefix_accounting_gate_t
 {
     reply_prefix_accounting_gate_t () : entered (false), released (false) {}
@@ -99,6 +100,18 @@ zlink_auto_hwm_budget_snapshot_t read_budget_snapshot ()
       ZLINK_CONFIG_OK,
       zlink_ctx_get_auto_hwm_budget_snapshot (get_test_context (), &snapshot));
     return snapshot;
+}
+bool wait_for_retired_application_directions ()
+{
+    const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::milliseconds (contract_wait_ms);
+    while (std::chrono::steady_clock::now () < deadline) {
+        if (read_budget_snapshot ().active_directional_queue_count == 0)
+            return true;
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+    return read_budget_snapshot ().active_directional_queue_count == 0;
 }
 int read_budget_snapshot_unchecked (
   zlink_auto_hwm_budget_snapshot_t *snapshot_)
@@ -297,6 +310,10 @@ void test_sl_flow_snapshot_accounts_dr_reply_as_application ()
     dr.cores[0]->release_completion_poller (&dr);
     test_context_socket_close_zero_linger (dealer);
     test_context_socket_close_zero_linger (router);
+    // Closing a socket retires its directional queues on the reaper thread.
+    // The R/R baseline below compares direction counts, so wait for that
+    // retirement instead of racing it.
+    TEST_ASSERT_TRUE (wait_for_retired_application_directions ());
 
     // The same public reply transaction on R/R is accounted exclusively by
     // the physical Completion class: no Application/current/provisional field

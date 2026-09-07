@@ -2783,6 +2783,18 @@ void test_sl_flow_snapshot_accounts_dr_reply_as_application ()
 {
     dr_fixture_t fixture ("inproc://sl-flow-snapshot-accounting");
     fixture.connect_and_prime ();
+    // A queued reply is observable only while it is still in the physical
+    // queue. Without a completion owner the DEALER's async executor pulls the
+    // reply into its completion store as soon as it becomes readable, which
+    // ends the queue charge before this thread can sample it. A public
+    // POLLCOMPLETION registration is that owner, so the reply stays queued
+    // until this test asks for it.
+    void *poller = zlink_poller_new ();
+    TEST_ASSERT_NOT_NULL (poller);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_poller_add (poller, fixture.dealer, fixture.dealer,
+                        ZLINK_POLLCOMPLETION));
     const zlink_completion_id_t request_id =
       send_request (fixture.dealer, NULL, "snapshot-request", 3000);
     const received_router_part_t request = receive_router_part (fixture.router);
@@ -2875,6 +2887,9 @@ void test_sl_flow_snapshot_accounts_dr_reply_as_application ()
       queued.active_completion_directional_queue_count);
     TEST_ASSERT_EQUAL_UINT64 (0, queued.application_accounted_bytes);
 
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_poller_remove (poller, fixture.dealer));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
     zlink_completion_t completion = receive_completion (fixture.dealer);
     TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, completion.kind);
     TEST_ASSERT_EQUAL_UINT64 (request_id, completion.completion_id);
@@ -2886,12 +2901,27 @@ void test_sl_flow_snapshot_accounts_dr_reply_as_application ()
                               zlink_msg_size (&completion.reply_parts[1]));
     zlink_completion_close (&completion);
     fixture.close ();
+    // Closing a socket retires its directional queues on the reaper thread.
+    // The R/R baseline below compares direction counts, so wait for that
+    // retirement instead of racing it.
+    TEST_ASSERT_TRUE (zlink_test_wait_until (contract_wait_ms, [] {
+        return read_budget_snapshot ().active_directional_queue_count == 0;
+    }));
 
     // The same public reply transaction on R/R is accounted exclusively by
     // the physical Completion class: no Application/current/provisional field
     // moves, while Completion current/peak/pending and total messaging do.
     rr_fixture_t rr ("inproc://sl-flow-snapshot-accounting-rr");
     rr.connect_and_prime ();
+    // Same ownership rule on the requester side of R/R: without a completion
+    // owner the async executor drains the Completion lane as soon as it is
+    // readable, so the queued reply can disappear between the wait predicate
+    // and the snapshot that re-reads it.
+    void *rr_poller = zlink_poller_new ();
+    TEST_ASSERT_NOT_NULL (rr_poller);
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_poller_add (rr_poller, rr.first, rr.first, ZLINK_POLLCOMPLETION));
     const zlink_completion_id_t rr_request_id = send_request (
       rr.first, &rr.second_rid, "snapshot-rr-request", 3000);
     const received_router_part_t rr_request = receive_router_part (rr.second);
@@ -2972,6 +3002,9 @@ void test_sl_flow_snapshot_accounts_dr_reply_as_application ()
       rr_queued.active_completion_directional_queue_count);
     TEST_ASSERT_EQUAL_UINT64 (0, rr_queued.application_accounted_bytes);
 
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_poller_remove (rr_poller, rr.first));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&rr_poller));
     zlink_completion_t rr_completion = receive_completion (rr.first);
     TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_REQUEST, rr_completion.kind);
     TEST_ASSERT_EQUAL_UINT64 (rr_request_id, rr_completion.completion_id);
