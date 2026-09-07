@@ -1878,3 +1878,24 @@ G-11b-2(codex sol/high, `core-rf-G-11b2-summary.md`, pipe.{cpp,hpp} + socket_bas
 
 ## D-B196 (2026-09-07 16:20, 머신 B) G-11b-2 독립 리뷰 — 수정 3건 후 진행; 게이트 중단, G-11b-3 투입
 리뷰(codex sol/high, `review-g11b2.md`): 방향(ledger를 full-width atomic + single-writer sequence로)은 §3.2 정합, writer 발행 순서·64-bit 원자성·session/inproc 소유권·lock 순서 정적 타당. **RISK 3건**: (1) seqlock reader가 sequence 홀수일 때 첫 재시도에서 미초기화 값을 읽는 UB; (2) peer written pair만 묶고 local read pair는 안 묶어 Monitoring §6.3 pipe 합계 군 일관성 미완; (3) 보고서의 "credit recovery 전부 CAS"는 코드(경쟁 async 전이만 CAS)보다 넓음. 관찰: Ir −0.45 %는 locked RMW의 cycle 비용을 배제 못 함 → 3차에서 with_stream runs 3 전후 비율 비교. 조치: 게이트 g11b2 중단(main 트리 원복), G-11b-3(codex sol/high, 같은 worktree)에 수정 3건 + 비율 비교. 통과 시 리뷰 재확인 없이 게이트(수정이 지정된 범위라).
+
+
+## D-BP12 (2026-09-07 15:30, 머신 A) **Core 계약 공백 — 같은 socket에 동시 multipart 제출이 정의되지 않았고 실제로 깨진다** (감독자 직접 재현)
+Go REQREP 러너 정합 중 드러났고, **감독자가 최소 재현 프로그램으로 직접 확인했다**(codex 발견을 그대로 채택한 것이 아니다). 고정 Core 0.17.1 prefix, DEALER requester 1개, 조건만 바꿔 3회:
+
+| parts | 동시 호출자 | 결과 |
+|---|---|---|
+| 1 | 4 | 성공 4, 실패 0 |
+| **2** | **4** | 성공 3, **실패 1** (`errno=11` EAGAIN) |
+| 2 | 1 | 성공 1, 실패 0 |
+
+**멀티파트 + 동시 호출**에서만 실패한다. 요청 4건뿐인 새 socket이라 HWM backpressure일 수 없고, 이 EAGAIN은 충돌의 결과다 — `core/doc/spec/core/socket/README.ko.md:944`의 "중간 실패는 staging한 prefix와 실패한 part를 모두 폐기한다"가 그대로 나타난다.
+**원인**: 단일 part는 `FINAL` 한 번으로 즉시 admission되어 소켓에 중간 상태가 없다. 멀티파트는 `MORE`와 `FINAL` 사이에 socket-local sequence를 들고 있고(`:944` "`MORE`는 socket-local sequence에 part를 staging하고 `FINAL`이 성공해야 record 하나로 admission한다. 같은 sequence의 함수 family, target과 flags는 같아야 한다"), 그 조립 슬롯이 **소켓당 하나**라 두 번째 동시 호출자가 침범한다.
+**스펙 모순**: `:49`는 "`send`는 여러 thread에서 동시 호출을 허용하는 hot path다"라고 하고 `:944`는 조립 슬롯이 socket-local이라고 한다. 멀티파트에서 둘은 동시에 참일 수 없다. 스펙은 "한 메시지의 part를 여러 thread가 나눠 보내는 것"만 금지하고, **"서로 다른 thread가 각자의 독립된 멀티파트 메시지를 같은 socket에 동시에 보내는 경우"를 정의하지 않았다.**
+**Core는 원자성을 어기지는 않는다.** A와 B의 조각이 섞여 잘못된 record 하나로 나가지 않고, 감지해서 한쪽을 실패시킨다. 문제는 원자성이 아니라 **동시 조립 미지원**이다.
+**Go만 필연적으로 걸리는 이유**: 다른 6개 언어는 awaitable terminal이 즉시 반환해 한 thread가 제출을 연달아 하고 대기만 겹치므로 조립이 자연히 직렬화된다. Go의 공개 terminal은 `Submit(context.Context)` 하나뿐이고 reply까지 블로킹하므로(`async-coroutine-policy.ko.md` §6), 동시성을 얻으려면 goroutine을 여러 개 띄울 수밖에 없고 그 순간 제출이 동시가 된다. 이는 Go의 관례(블로킹 함수 + goroutine + channel, 취소는 `context.Context`)를 따른 결과이므로 **Go binding에 awaitable을 추가하는 것은 잘못된 처방**이다(감독자 초기 제안 철회). 다른 언어도 사용자가 여러 thread에서 멀티파트를 보내면 같은 문제를 겪으며, 러너가 한 thread에서 제출해 잠복해 있을 뿐이다.
+**binding에서 막을 수 없다**: `bindings/doc/spec/README.ko.md:1345` "Part 단위 Core API를 사용하는 binding은 송신 경로에 자체 lock이나 gate를 두지 않는다. Multipart 원자성·part 소비·동시 제출 결과는 Core part send가 소유한다."
+**영향**: perf 공식 wire shape가 2-part로 고정돼 있고(`PERF_POLICY.md:339-341`, `PERF_PART_COUNT=1`은 진단 전용이며 2-part baseline과 섞어 비교 금지) in-flight 1 직렬화는 정책 위반이므로, **Go는 REQREP에서 유효한 공식 측정을 낼 수 없다.**
+**Core에 요청할 것**: "원자성을 지켜라"가 아니라 **동시 조립을 지원하거나, 미지원임을 계약으로 명시하고 그 경우 binding의 대응을 정의하라**. 지원한다면 조립 슬롯을 제출자 단위로 분리하거나 `MORE`~`FINAL` 구간만 내부 직렬화한다. 미지원으로 확정한다면 `bindings/doc/spec/README.ko.md:1345`의 송신 경로 lock 금지를 함께 완화해야 binding이 직렬화할 수 있다.
+**부차 항목**: Go binding이 이 `BACKPRESSURED`를 terminal 오류로 caller에게 노출한다. 계약상(`bindings/go/contracts/sockets.go:43-45`) 대기 토큰의 WRITABLE에서 내부 재개해야 한다. Core가 해결되면 대부분 사라지므로 후속으로 둔다.
+**현재 조치**: Go REQREP은 스펙 결정 전까지 측정 대상에서 보류한다. Go는 후순위 언어(D-BP8)라 캠페인 전체는 막히지 않는다. 재현 프로그램은 `/tmp/zl-repro`에 있고 저장소에 남기지 않았다.
