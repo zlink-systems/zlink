@@ -252,11 +252,13 @@ static PyObject *py_submit_storage (PyObject *self, PyObject *args)
 {
     unsigned long long handle, context;
     PyObject *target, *parts, *timeout;
+    unsigned long long reply_token = 0;
     int flags;
     (void) self;
-    if (!PyArg_ParseTuple (args, "KOOiKO", &handle, &target, &parts, &flags,
-                          &context, &timeout))
+    if (!PyArg_ParseTuple (args, "KOOiKO|K", &handle, &target, &parts, &flags,
+                          &context, &timeout, &reply_token))
         return NULL;
+    const int is_reply = PyTuple_GET_SIZE (args) == 7;
     if (!PyList_Check (parts)) {
         PyErr_SetString (PyExc_TypeError, "native parts must be a list");
         return NULL;
@@ -306,7 +308,10 @@ static PyObject *py_submit_storage (PyObject *self, PyObject *args)
             uint64_t *out = final && context ? &completion_id : NULL;
             zlink_msg_t *msg = (zlink_msg_t *) views[i].buf;
             Py_BEGIN_ALLOW_THREADS
-            if (timeout != Py_None)
+            if (is_reply)
+                rc = zlink_reply_part ((void *) (uintptr_t) handle, rid_ptr,
+                       reply_token, msg, part_flag (i, count));
+            else if (timeout != Py_None)
                 rc = zlink_request_part ((void *) (uintptr_t) handle, rid_ptr, msg,
                        flags, part_flag (i, count), final ? timeout_ms : 0, ctx, out);
             else if (rid_ptr)

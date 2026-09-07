@@ -459,6 +459,19 @@ class RouterSocket(
 
     def _reply_payload(self, routing_id, token, payload):
         native_parts = _clone_payload(payload)
+        if _native_extension is not None:
+            try:
+                target = _validated_routing_id_bytes(routing_id)
+            except BaseException:
+                _close_native_parts(native_parts)
+                raise
+            rc, native_errno, _ = _native_extension.submit_storage(
+                self._handle, target, native_parts, 0, 0, None,
+                _reply_token_value(token),
+            )
+            if rc != int(SubmitResult.OK):
+                _raise_result_error(SubmitError, SubmitResult, rc, native_errno)
+            return
         native_rid = _copy_routing_id(routing_id)
         rc, native_errno = _submit_parts(
             native_parts,

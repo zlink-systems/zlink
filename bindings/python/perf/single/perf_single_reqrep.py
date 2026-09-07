@@ -60,29 +60,29 @@ def _reply_parts(received, parts, drain_timeout_s):
 def _run_replier(replier, state, drain_timeout_s):
     received = zlink.create_received()
     try:
-        while not state["stop"]:
+        with zlink.create_poller() as poller:
+            events = zlink.create_poll_events(1)
+            poller.add_socket(replier, zlink.PollEventFlag.POLLIN, 0)
             try:
-                if not replier.recv_into(received):
-                    continue
-            except zlink.RecvError as exc:
-                if exc.result == zlink.RecvResult.NO_DATA:
-                    continue
-                raise
-
-            try:
-                parts = received.to_bytes_list()
-                if len(parts) == 1 and parts[0] == STOP_TOKEN:
-                    return
-                if received.routing_id is None or received.reply_token is None:
-                    raise RuntimeError("request is missing routing correlation metadata")
-                payload = measurement_payload(parts)
-                if payload is None:
-                    raise RuntimeError("request has an invalid measurement part layout")
-                if not _reply_parts(received, parts, drain_timeout_s):
-                    raise RuntimeError("reply remained backpressured during bounded drain")
-                state["replied"] += 1
+                while not state["stop"]:
+                    if not poller.wait(events, resolve_single_reqrep_timeout_ms()):
+                        continue
+                    while replier.recv_into(received, flags=zlink.RecvFlags.DONT_WAIT):
+                        try:
+                            parts = tuple(received)
+                            if len(parts) == 1 and parts[0].to_bytes() == STOP_TOKEN:
+                                return
+                            if received.routing_id is None or received.reply_token is None:
+                                raise RuntimeError("request is missing routing correlation metadata")
+                            if measurement_payload(parts) is None:
+                                raise RuntimeError("request has an invalid measurement part layout")
+                            if not _reply_parts(received, parts, drain_timeout_s):
+                                raise RuntimeError("reply remained backpressured during bounded drain")
+                            state["replied"] += 1
+                        finally:
+                            received.close()
             finally:
-                received.close()
+                poller.remove_socket(replier)
     except BaseException as exc:
         state["error"] = exc
 
@@ -129,6 +129,7 @@ async def _run_requester_async(
     pending = set()
     failures = []
     expected_part_count = len(measurement_parts(b""))
+    loop = asyncio.get_running_loop()
 
     async def request_once(stamped_parts):
         nonlocal completed
@@ -178,7 +179,7 @@ async def _run_requester_async(
         completion_events = zlink.create_poll_events(1)
         completion_poller.add_socket(
             requester,
-            zlink.PollEventFlag.POLLOUT | zlink.PollEventFlag.POLLCOMPLETION,
+            zlink.PollEventFlag.POLLCOMPLETION,
             0,
         )
         try:
@@ -199,12 +200,20 @@ async def _run_requester_async(
                     task = asyncio.create_task(request_once(stamped_parts))
                     pending.add(task)
                     task.add_done_callback(observe_done)
-                completion_poller.wait(completion_events, 0)
+                # This private loop belongs to the requester thread. Run its
+                # queued continuations before blocking for more native work;
+                # POLLOUT and timeout-zero polling otherwise spin while the
+                # replier competes for the same interpreter's GIL.
+                if not loop._ready:
+                    remaining_ms = max(1, int((active_end - time.perf_counter()) * 1000))
+                    completion_poller.wait(completion_events, remaining_ms)
                 await asyncio.sleep(0)
 
             drain_deadline = time.perf_counter() + drain_timeout_s
             while pending and time.perf_counter() < drain_deadline and not failures:
-                completion_poller.wait(completion_events, 0)
+                if not loop._ready:
+                    remaining_ms = max(1, int((drain_deadline - time.perf_counter()) * 1000))
+                    completion_poller.wait(completion_events, remaining_ms)
                 await asyncio.sleep(0)
             if pending:
                 still_pending = tuple(pending)
