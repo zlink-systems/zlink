@@ -111,9 +111,18 @@ def is_active_message(data, *, expected_msg_size=None, run_id=None):
     return True
 
 
-def active_message_latency_ns(data, *, expected_msg_size=None, run_id=None):
+def active_message_latency_ns(
+    data, *, expected_msg_size=None, run_id=None, active_deadline_ns=None
+):
     """Validate one active metric header and compute its one-way latency once."""
-    if len(data) < HEADER_SIZE:
+    expected_wire_size = (
+        max(expected_msg_size, HEADER_SIZE)
+        if expected_msg_size is not None
+        else None
+    )
+    if (
+        expected_wire_size is not None and len(data) != expected_wire_size
+    ) or len(data) < HEADER_SIZE:
         return False, None
     magic, header_run_id, phase, msg_size, _seq, sent_ts_ns = struct.unpack_from(
         HEADER_FORMAT, data, 0
@@ -125,6 +134,8 @@ def active_message_latency_ns(data, *, expected_msg_size=None, run_id=None):
     if run_id is not None and header_run_id != run_id:
         return False, None
     now_ns = time.monotonic_ns()
+    if active_deadline_ns is not None and now_ns >= active_deadline_ns:
+        return False, None
     if sent_ts_ns <= 0 or now_ns < sent_ts_ns:
         return True, None
     return True, float(now_ns - sent_ts_ns)
@@ -263,7 +274,8 @@ def result_metrics(
 
 def print_result_lines(pattern, transport, msg_size, metrics):
     for name in ("throughput", "bandwidth", "latency", "latency_p95", "latency_p99"):
-        value = f"{metrics[name]:.3f}"
+        precision = 6 if name.startswith("latency") else 3
+        value = f"{metrics[name]:.{precision}f}"
         print(f"RESULT,current,{pattern},{transport},{msg_size},{name},{value}", flush=True)
 
 

@@ -142,6 +142,16 @@ function isTransientSubmit(error) {
     || /Resource temporarily unavailable|temporarily unavailable|would block|timed out|Host unreachable|not connected/i.test(text);
 }
 
+function isTransientActiveSubmit(error) {
+  const text = String(error && error.message ? error.message : error);
+  return (error instanceof zlink.SubmitError
+      && error.result === zlink.SubmitResult.Backpressured)
+    || (error && ['EAGAIN', 'EINTR', 'ETIMEDOUT'].includes(error.code))
+    || text.includes('Resource temporarily unavailable')
+    || text.includes('Interrupted system call')
+    || text.includes('Connection timed out');
+}
+
 function submitOnce(kind, socket, body, receiverRoutingId, topic) {
   const message = MESSAGE_PAYLOAD_ENABLED
     ? zlink.Message.from(body)
@@ -222,9 +232,10 @@ function sendLoop(kind, socket, payload, duration, runId, msgSize, seqStart, rec
       // SNDTIMEO can return transient backpressure before the active deadline,
       // notably while WSS PUB/NODROP flow control catches up. Retry that same
       // logical sample; never advance seq or substitute a DONTWAIT/POLLOUT path.
-      if (!isTransientSubmit(error)) {
+      if (!isTransientActiveSubmit(error)) {
         throw error;
       }
+      sleepMillis(1);
       continue;
     }
     seq += 1n;

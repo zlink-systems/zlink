@@ -73,6 +73,8 @@ pubsub_recv_result_t recv_one_pubsub_message (zlink::sub_socket_t &sock,
             return pubsub_recv_error;
         return pubsub_recv_stop;
     }
+    if (recv_size != std::max<size_t> (expected_msg_size, perf_metric::header_size ()))
+        return pubsub_recv_payload;
 
     if (perf::multi::measurement_part_count () == 1) {
         if (has_more)

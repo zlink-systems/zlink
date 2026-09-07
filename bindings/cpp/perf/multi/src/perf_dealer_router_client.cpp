@@ -222,6 +222,8 @@ class dealer_router_client_bench_t
         }
 
         const zlink::message_t &payload = reply.parts ().front ();
+        if (payload.size () != state.payload_size)
+            return 1;
         const bool decoded =
           perf_metric::decode_payload_header (payload.data (), payload.size (), header_out);
         if (!decoded)

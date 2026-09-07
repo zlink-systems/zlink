@@ -58,10 +58,13 @@ def main(argv=None):
 
     def send_loop(dealer, active_end):
         # Preserve C's fresh timestamp per synchronous admission attempt.
+        seq = 1
         while time.perf_counter() < active_end:
-            send_routed_sync(
-                dealer, stamp_payload(payload, phase=1, run_id=run_id)
+            sent = send_routed_sync(
+                dealer, stamp_payload(payload, phase=1, run_id=run_id, seq=seq)
             )
+            if sent:
+                seq += 1
         # PERF_SINGLE_TEST_POLICY § 1.4: signal phase end on the wire.
         _send_stop_token(dealer)
 

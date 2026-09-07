@@ -127,8 +127,10 @@ final class PerfMetricsCollector {
         double mean = totalSampleCount == 0
             ? 0.0d
             : (totalSum / (double) totalSampleCount) / latencyDivisor;
-        double p95 = percentile(merged, 0.95d) / latencyDivisor;
-        double p99 = percentile(merged, 0.99d) / latencyDivisor;
+        double p95 = merged.length == 0
+            ? mean : percentile(merged, 0.95d) / latencyDivisor;
+        double p99 = merged.length == 0
+            ? mean : percentile(merged, 0.99d) / latencyDivisor;
         return new PerfUtil.Result("ok", "-", config.pattern(), config.transport(),
             config.size(), throughput, bandwidth, mean, p95, p99);
     }

@@ -556,6 +556,7 @@ python3 - "${ROOT_DIR}/report_common.py" "${tmp_metrics}" "${tmp_failures}" "${t
   "${CORE_RUNTIME}" <<'PY' || python_status=$?
 import csv
 import math
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -699,6 +700,15 @@ def bytes_to_kb(value):
     return f"{parsed / 1024.0:.1f}"
 
 
+try:
+    reqrep_max_outstanding = int(os.environ.get("PERF_SINGLE_REQREP_MAX_OUTSTANDING", "64"))
+except ValueError:
+    reqrep_max_outstanding = 64
+if reqrep_max_outstanding <= 0:
+    reqrep_max_outstanding = 64
+reqrep_max_outstanding = max(2, reqrep_max_outstanding)
+
+
 def emit_options(label):
     emit(f"## Effective Options ({label})")
     emit("- lang: java")
@@ -721,6 +731,7 @@ def emit_options(label):
     emit(f"- patterns: {','.join(p for p, _ in plan)}")
     emit(f"- transports: {','.join(all_tr) if all_tr else 'none'}")
     emit(f"- msg_sizes: {','.join(str(s) for s in plan_sizes) if plan_sizes else 'none'}")
+    emit(f"- reqrep_max_outstanding: {reqrep_max_outstanding}")
 
 
 def emit_auto_hwm(pattern):
@@ -852,7 +863,8 @@ if has_results:
         p, tr, sz = key
         mv = combo[key]
         for metric in all_metrics:
-            emit(f"RESULT,current,{p},{tr},{sz},{metric},{mv[metric]:.3f}")
+            precision = 6 if metric.startswith("latency") else 3
+            emit(f"RESULT,current,{p},{tr},{sz},{metric},{mv[metric]:.{precision}f}")
 
 status = "complete" if expected_result_lines == actual_result_lines else "partial"
 planned_cells = sum(len(transports) for _, transports in plan) * len(plan_sizes) * runs

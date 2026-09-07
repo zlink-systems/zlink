@@ -213,7 +213,7 @@ function summarizeMetrics(
     }
   }
   return Object.entries(metrics).map(([metric, value]) => {
-    const formatted = value.toFixed(3);
+    const formatted = value.toFixed(metric.startsWith('latency') ? 6 : 3);
     return `RESULT,${libName},${pattern},${transport},${msgSize},${metric},${formatted}`;
   });
 }
@@ -224,7 +224,8 @@ function metricLines(pattern, transport, msgSize, metrics, libName = 'current') 
     if (typeof value !== 'number') {
       throw new Error(`missing metric ${metric} for ${pattern} ${transport} ${msgSize}B`);
     }
-    return `RESULT,${libName},${pattern},${transport},${msgSize},${metric},${value.toFixed(3)}`;
+    const precision = metric.startsWith('latency') ? 6 : 3;
+    return `RESULT,${libName},${pattern},${transport},${msgSize},${metric},${value.toFixed(precision)}`;
   });
 }
 
@@ -336,12 +337,13 @@ function createMetricCollector(config) {
     if (acceptDrainCompletions) {
       return sentTsNs >= activeStartNs && sentTsNs <= activeStopNs;
     }
-    return recvTsNs >= activeStartNs && recvTsNs <= activeStopNs;
+    return recvTsNs >= activeStartNs && recvTsNs < activeStopNs;
   }
 
   return {
     recordPayload(buffer, receivedAtNs) {
-      if (closed || !Buffer.isBuffer(buffer) || buffer.length < HEADER_SIZE) {
+      if (closed || !Buffer.isBuffer(buffer)
+          || buffer.length !== Math.max(msgSize, HEADER_SIZE)) {
         return;
       }
       if (buffer.readUInt32LE(0) !== METRIC_MAGIC) {

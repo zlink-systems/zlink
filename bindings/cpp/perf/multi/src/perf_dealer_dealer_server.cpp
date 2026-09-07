@@ -209,6 +209,9 @@ bool perf_dealer_dealer_server (const std::string &lib_name,
                     continue;
                 }
                 const zlink::message_t &payload = parts.front ();
+                if (payload.size ()
+                    != std::max<size_t> (msg_size, perf_metric::header_size ()))
+                    continue;
                 perf_metric::header_t header;
                 if (!perf_metric::decode_payload_header (payload.data (), payload.size (), &header))
                     continue;

@@ -54,10 +54,13 @@ def main(argv=None):
     def send_loop(dealer, active_end):
         # Core owns blocking HWM admission on this dedicated sender thread.
         stamp = stamp_payload
+        seq = 1
         while time.perf_counter() < active_end:
-            send_routed_sync(
-                dealer, stamp(payload, phase=1, run_id=run_id)
+            sent = send_routed_sync(
+                dealer, stamp(payload, phase=1, run_id=run_id, seq=seq)
             )
+            if sent:
+                seq += 1
         _send_stop_token(dealer)
 
     with perf_context() as ctx:

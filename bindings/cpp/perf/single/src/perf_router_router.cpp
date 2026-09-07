@@ -27,11 +27,12 @@ bool perf_debug_enabled ()
 
 struct router_router_recv_state_t
 {
-    router_router_recv_state_t () : run_id (0), msg_size (0), payload_size (0), latency () {}
+    router_router_recv_state_t () : run_id (0), msg_size (0), payload_size (0), active_deadline (0), latency () {}
 
     uint32_t run_id;
     size_t msg_size;
     size_t payload_size;
+    int64_t active_deadline;
     std::optional<zlink::routing_id_t> target_rid;
     perf::single::latency_stats_builder_t latency;
 };
@@ -39,6 +40,7 @@ struct router_router_recv_state_t
 bool record_router_router_sample (uint32_t run_id_,
                                   size_t msg_size_,
                                   size_t payload_size_,
+                                  int64_t active_deadline_,
                                   const zlink::message_t &part_,
                                   perf::single::latency_stats_builder_t *latency_,
                                   unsigned long long *received_)
@@ -59,9 +61,12 @@ bool record_router_router_sample (uint32_t run_id_,
         return true;
     }
 
+    const int64_t recv_ts_ns = perf_single_metric::now_ns ();
+    if (recv_ts_ns >= active_deadline_)
+        return true;
     ++(*received_);
-    const uint64_t now = perf_single_metric::now_ns ();
-    const double latency_ns = perf_single_metric::elapsed_latency_ns (now, header.sent_ts_ns);
+    const double latency_ns =
+      perf_single_metric::elapsed_latency_ns (recv_ts_ns, header.sent_ts_ns);
     latency_->add (latency_ns);
     return true;
 }
@@ -75,10 +80,9 @@ bool send_router_samples (::perf::socket_t *sender_,
     if (!sender_ || !payload_ || !state_ || !sent_count_)
         return false;
 
-    const auto deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (std::max (1, duration_s_));
+    (void) duration_s_;
     uint64_t seq = 1;
-    while (std::chrono::steady_clock::now () < deadline) {
+    while (perf_single_metric::now_ns () < state_->active_deadline) {
         if (!perf_single_metric::stamp_payload (payload_->data (), payload_->size (),
                                                 state_->run_id, perf_single_metric::phase_active,
                                                 state_->msg_size, seq,
@@ -110,7 +114,8 @@ bool send_router_samples (::perf::socket_t *sender_,
         if (send_rc <= 0) {
             const int err = errno;
             if (perf::single::is_transient_routed_send_errno (err)
-                && std::chrono::steady_clock::now () < deadline) {
+                && perf_single_metric::now_ns () < state_->active_deadline) {
+                std::this_thread::sleep_for (std::chrono::milliseconds (1));
                 continue;
             }
             if (perf::single::is_transient_routed_send_errno (err))
@@ -194,6 +199,8 @@ bool run_pattern_router_router (const std::string &transport,
     state.run_id = run_id;
     state.msg_size = msg_size;
     state.payload_size = payload_size;
+    state.active_deadline = perf_single_metric::now_ns ()
+                            + static_cast<int64_t> (duration_s) * 1000000000LL;
     std::thread sender_thread ([&] () {
         sender_ok.store (send_router_samples (&sender.sock (), &payload, &state, duration_s,
                                               &sent_count),
@@ -226,7 +233,8 @@ bool run_pattern_router_router (const std::string &transport,
             const zlink::message_t *part = perf::single::measurement_payload_part (parts);
             if (!part)
                 continue;
-            if (!record_router_router_sample (run_id, msg_size, payload_size, *part, &state.latency,
+            if (!record_router_router_sample (run_id, msg_size, payload_size,
+                                              state.active_deadline, *part, &state.latency,
                                               &received)) {
                 sender_ok.store (false, std::memory_order_release);
                 break;

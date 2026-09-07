@@ -133,9 +133,10 @@ def emit_result_lines(combo_results: Dict[Tuple[str, str, int], ComboRecord]) ->
         ]
 
         for metric_name, value in metrics:
+            precision = 6 if metric_name.startswith("latency") else 3
             print(
                 f"RESULT,current,{pattern},{transport},{size},"
-                f"{metric_name},{value:.3f}"
+                f"{metric_name},{value:.{precision}f}"
             )
 
 
@@ -989,6 +990,7 @@ def build_single_option_items(
     sndtimeo_ms = parse_env_int("PERF_SINGLE_SNDTIMEO_MS", 200)
     rcvtimeo_ms = parse_env_int("PERF_SINGLE_RCVTIMEO_MS", 200)
     io_threads = max(1, parse_env_int("PERF_IO_THREADS", 1))
+    reqrep_max = max(2, parse_env_int("PERF_SINGLE_REQREP_MAX_OUTSTANDING", 64))
     sndbuf = env_get("PERF_SINGLE_SNDBUF") if manual_socket_overrides else ""
     rcvbuf = env_get("PERF_SINGLE_RCVBUF") if manual_socket_overrides else ""
     items: List[Tuple[str, str]] = [
@@ -1008,6 +1010,7 @@ def build_single_option_items(
         ("patterns", ",".join(patterns)),
         ("transports", ",".join(unique_transports) if unique_transports else "none"),
         ("msg_sizes", ",".join(str(sz) for sz in unique_sizes) if unique_sizes else "none"),
+        ("reqrep_max_outstanding", str(reqrep_max)),
     ]
     return items
 

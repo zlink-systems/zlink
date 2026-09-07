@@ -34,10 +34,13 @@ final class PerfReport {
     }
 
     private static String metricLine(String key, String metric, double value) {
-        return String.format(Locale.ROOT, "%s,%s,%s", key, metric, metric(value));
+        return String.format(Locale.ROOT, "%s,%s,%s", key, metric, metric(metric, value));
     }
 
-    private static String metric(double value) {
-        return Double.isNaN(value) ? "N/A" : String.format(Locale.ROOT, "%.3f", value);
+    private static String metric(String name, double value) {
+        if (Double.isNaN(value)) {
+            return "N/A";
+        }
+        return String.format(Locale.ROOT, name.startsWith("latency") ? "%.6f" : "%.3f", value);
     }
 }

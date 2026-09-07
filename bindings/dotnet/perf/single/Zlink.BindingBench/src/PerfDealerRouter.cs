@@ -144,6 +144,7 @@ internal static class PerfDealerRouter
         uint rng = 0xA341316Cu;
         ulong seq = 1;
         bool stopReceived = false;
+        long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
 
         // PERF_SINGLE_TEST_POLICY § 1.4 / C parity: active phase ends only
         // when the receiver observes the wire-level stop token. Active sends
@@ -153,11 +154,13 @@ internal static class PerfDealerRouter
         // (TryGetPayloadPart). Latency stays recv_now_ns - sent_ts_ns.
         bool ProcessBody(ReadOnlySpan<byte> body)
         {
+            long recvTicks = Stopwatch.GetTimestamp();
             if (TryDecodeExpectedSingleHeader(body, msgSize, ActivePhase,
-                    out var header, RunId))
+                    out var header, RunId)
+                && recvTicks < deadlineTicks)
             {
                 received++;
-                ulong nowNs = EpochNs();
+                ulong nowNs = EpochNsFromTimestamp(recvTicks);
                 if (nowNs >= header.SentTsNs)
                 {
                     double latencyNs = nowNs - header.SentTsNs;
@@ -180,7 +183,6 @@ internal static class PerfDealerRouter
                 // C starts its active deadline inside the sender thread. Keep
                 // setup time outside the measured interval and start only
                 // after the receiver's poll registration is ready.
-                long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
                 while (true)
                 {
                     long nowTicks = Stopwatch.GetTimestamp();
@@ -193,16 +195,20 @@ internal static class PerfDealerRouter
                     // I/O thread.
                     StampMetricHeader(payload.AsSpan(), RunId, ActivePhase, msgSize,
                         seq, EpochNsFromTimestamp(nowTicks));
-                    seq++;
                     try
                     {
                         if (PerfSocketIo.SendMeasurement(sender, payload,
                                 SendFlags.None) <= 0)
+                        {
+                            Thread.Sleep(1);
                             continue;
+                        }
+                        seq++;
                     }
                     catch (ZlinkException ex)
                         when (PerfShared.IsTransientBackpressure(ex.NativeErrno))
                     {
+                        Thread.Sleep(1);
                         continue;
                     }
                 }

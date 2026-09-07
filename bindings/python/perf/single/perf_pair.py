@@ -55,10 +55,13 @@ def main(argv=None):
 
     def send_loop(client, active_end):
         # Core owns blocking HWM admission on this dedicated sender thread.
+        seq = 1
         while time.perf_counter() < active_end:
-            send_routed_sync(
-                client, stamp_payload(payload, phase=1, run_id=run_id)
+            sent = send_routed_sync(
+                client, stamp_payload(payload, phase=1, run_id=run_id, seq=seq)
             )
+            if sent:
+                seq += 1
         # PERF_SINGLE_TEST_POLICY § 1.4: wire stop token instead of
         # threading.Event coordination.
         _send_stop_token(client)

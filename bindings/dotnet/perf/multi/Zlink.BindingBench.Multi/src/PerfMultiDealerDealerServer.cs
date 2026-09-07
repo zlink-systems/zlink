@@ -296,7 +296,8 @@ internal static class PerfMultiDealerDealerServer
         out ulong sentTsNs)
     {
         sentTsNs = 0;
-        if (payload.Length < PerfMetricHeaderSize)
+        if (payload.Length != Math.Max(expectedMsgSize,
+                PerfMetricHeaderSize))
             return false;
 
         ref byte head = ref MemoryMarshal.GetReference(payload);

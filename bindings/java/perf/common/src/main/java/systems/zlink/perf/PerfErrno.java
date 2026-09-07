@@ -16,6 +16,7 @@ public final class PerfErrno {
     public static boolean isRetryableSend(int errno) {
         return errno == EAGAIN
             || errno == EINTR
+            || errno == ETIMEDOUT
             || errno == EWOULDBLOCK_WIN;
     }
 

@@ -189,7 +189,7 @@ func recvMultiRouterRouterReply(
 	msgSize int,
 	window perfcommon.BenchmarkWindow,
 ) {
-	drained, err := drainRouterReplies(socket, stats, msgSize, window.ActiveAt, window.StopAt)
+	drained, err := drainRouterReplies(socket, stats, msgSize, window.ActiveAtNs, window.StopAtNs)
 	if err != nil {
 		perfcommon.Must(fmt.Errorf("multi router/router recv: %w", err))
 	}
@@ -226,7 +226,7 @@ func validateMultiRouterRoutes(serverID zlink.RoutingID, clients []multiRouterCl
 			if event == nil || event.Revents&perfcommon.ZLinkPollIn == 0 {
 				continue
 			}
-			drained, err := drainRouterReplies(client.socket, nil, msgSize, time.Time{}, time.Time{})
+			drained, err := drainRouterReplies(client.socket, nil, msgSize, 0, 0)
 			if err != nil {
 				perfcommon.Must(fmt.Errorf("multi router/router route probe[%d] recv: %w", index, err))
 			}
@@ -373,8 +373,8 @@ func drainRouterReplies(
 	socket *zlink.RouterSocket,
 	stats *perfcommon.Stats,
 	msgSize int,
-	activeAt time.Time,
-	stopAt time.Time,
+	activeAtNs int64,
+	stopAtNs int64,
 ) (bool, error) {
 	drained := false
 	var reply zlink.Received
@@ -391,7 +391,7 @@ func drainRouterReplies(
 		}
 		part, partErr := perfcommon.MeasurementPayload(reply.Parts())
 		if partErr == nil && stats != nil {
-			perfcommon.RecordMessageRTTLatency(stats, activeAt, stopAt, msgSize, part)
+			perfcommon.RecordMessageRTTLatency(stats, activeAtNs, stopAtNs, msgSize, part)
 		}
 		drained = true
 		_ = reply.Close()

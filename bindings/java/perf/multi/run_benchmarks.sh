@@ -1777,6 +1777,13 @@ routed_echo_per_socket_payload = (
     else "none"
 )
 
+try:
+    reqrep_max_outstanding = int(os.environ.get("PERF_MULTI_REQREP_MAX_OUTSTANDING", "64"))
+except ValueError:
+    reqrep_max_outstanding = 64
+if reqrep_max_outstanding <= 1:
+    reqrep_max_outstanding = 64
+
 
 def emit_options(label):
     emit(f"## Effective Options ({label})")
@@ -1788,6 +1795,7 @@ def emit_options(label):
     emit(f"- msg_sizes: {','.join(str(s) for s in all_sz) if all_sz else 'none'}")
     emit(f"- routed_echo_per_socket_payload: {routed_echo_per_socket_payload}")
     emit(f"- duration_seconds: {duration}")
+    emit(f"- reqrep_max_outstanding: {reqrep_max_outstanding}")
     emit(f"- clients: {clients}")
     emit(f"- default_clients: {default_clients}")
     emit(f"- default_stream_clients: {default_stream_clients}")
@@ -1876,7 +1884,8 @@ if combo:
             result_map[(p, tr, sz, metric)] = mv[metric]
     for key in sorted(result_map.keys()):
         p, tr, sz, metric = key
-        emit(f"RESULT,current,{p},{tr},{sz},{metric},{result_map[key]:.3f}")
+        precision = 6 if metric.startswith("latency") else 3
+        emit(f"RESULT,current,{p},{tr},{sz},{metric},{result_map[key]:.{precision}f}")
 
 success = len(combo)
 fail = len({(fp, ft, fs) for fp, ft, fs, _ in all_failures})

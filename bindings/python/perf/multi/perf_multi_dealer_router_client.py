@@ -101,12 +101,13 @@ async def main(argv=None):
                                         active, latency = active_message_latency_ns(
                                             data, expected_msg_size=args.msg_size,
                                             run_id=run_id,
+                                            active_deadline_ns=int(active_deadline * 1_000_000_000),
                                         )
                                     # C: every matched header counts (++local_recv,
                                     # -> recv_count); latency only added when not
                                     # clock-skewed (sent_ts_ns>0 && now>=sent_ts),
                                     # halved for the round trip.
-                                    if active and time.perf_counter() < active_deadline:
+                                    if active:
                                         received += 1
                                         if latency is not None:
                                             latency_sampler.add(latency / 2.0)

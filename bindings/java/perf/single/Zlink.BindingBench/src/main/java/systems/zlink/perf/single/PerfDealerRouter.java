@@ -52,6 +52,9 @@ final class PerfDealerRouter {
                 readyTimeout, "dealer/router sender ready");
             PerfUtil.recalculateAutoHwm(ctx);
 
+            long activeEnd = System.nanoTime()
+                + config.durationSeconds() * 1_000_000_000L;
+
             // PERF_SINGLE_TEST_POLICY § 1.4: receiver waits with -1 and exits
             // on wire-level stop token.
             Thread receiverThread = new Thread(() -> {
@@ -82,7 +85,8 @@ final class PerfDealerRouter {
                                 if (header == null) {
                                     continue;
                                 }
-                                if (header.phase() == PerfUtil.PHASE_ACTIVE) {
+                                if (header.phase() == PerfUtil.PHASE_ACTIVE
+                                    && receivedNanoTime < activeEnd) {
                                     metrics.recordNanos(header.latencyNanos());
                                 }
                             } finally {
@@ -103,15 +107,16 @@ final class PerfDealerRouter {
 
             Thread traffic = new Thread(() -> {
                 try {
-                    long activeEnd = System.nanoTime()
-                        + config.durationSeconds() * 1_000_000_000L;
                     Message active = PerfUtil.payloadTemplate(config.size());
+                    long sequence = PerfUtil.nextSequence();
                     try {
                         while (System.nanoTime() < activeEnd) {
                             active = PerfUtil.resetAndWritePayload(active, config.size(),
-                                (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
+                                (byte) PerfUtil.PHASE_ACTIVE, sequence, System.nanoTime());
                             if (!trySendBlocking(sender, active)) {
                                 PerfUtil.pauseOneWaySendRetry("dealer/router");
+                            } else {
+                                sequence = PerfUtil.nextSequence();
                             }
                         }
                     } finally {

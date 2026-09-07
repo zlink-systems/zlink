@@ -80,18 +80,18 @@ async function runPairBenchmark(msgSize, options) {
     // exactly like C perf_single_one_way.hpp run_active_phase.
     drainRecvSocket(
       server,
-      (received) => {
+      (received, receivedAtNs) => {
         const payload = measurementPayload(received.parts);
         if (!payload) {
-          collector.recordPayload(null, currentEpochNs());
+          collector.recordPayload(null, receivedAtNs);
           return;
         }
         const data = payload.data();
         if (data.length !== Math.max(msgSize, HEADER_SIZE)) {
-          collector.recordPayload(null, currentEpochNs());
+          collector.recordPayload(null, receivedAtNs);
           return;
         }
-        collector.recordPayload(data, currentEpochNs());
+        collector.recordPayload(data, receivedAtNs);
       },
       { recordUntilNs: activeStopNs }
     );

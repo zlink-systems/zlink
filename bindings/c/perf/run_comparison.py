@@ -4045,6 +4045,7 @@ def build_effective_option_items(args, selected_patterns):
         items.extend(
             [
                 ("duration_seconds", str(parse_env_int("PERF_DURATION_SECONDS", 5))),
+                ("reqrep_max_outstanding", "backpressure"),
                 ("clients", clients_meta),
                 ("default_clients", str(default_clients)),
                 ("default_stream_clients", str(default_stream_clients)),

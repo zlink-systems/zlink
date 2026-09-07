@@ -151,10 +151,10 @@ internal static class PerfDealerDealer
             long recvTicks = Stopwatch.GetTimestamp();
             if (TryDecodeExpectedSingleHeader(body, msgSize, ActivePhase,
                     out var header, RunId)
-                && recvTicks <= deadlineTicks)
+                        && recvTicks < deadlineTicks)
             {
                 received++;
-                ulong nowNs = EpochNs();
+                ulong nowNs = EpochNsFromTimestamp(recvTicks);
                 if (nowNs >= header.SentTsNs)
                 {
                     double latencyNs = nowNs - header.SentTsNs;
@@ -169,15 +169,25 @@ internal static class PerfDealerDealer
         {
             try
             {
-                long senderDeadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
                 ulong seq = 1;
-                while (Stopwatch.GetTimestamp() < senderDeadlineTicks)
+                while (Stopwatch.GetTimestamp() < deadlineTicks)
                 {
                     StampMetricHeader(payload.AsSpan(), RunId, ActivePhase,
                         msgSize, seq, EpochNs());
-                    seq++;
-                    if (SendBlocking(sender, payload) <= 0)
-                        continue;
+                    try
+                    {
+                        if (SendBlocking(sender, payload) <= 0)
+                        {
+                            Thread.Sleep(1);
+                            continue;
+                        }
+                        seq++;
+                    }
+                    catch (ZlinkException ex)
+                        when (PerfShared.IsTransientBackpressure(ex.NativeErrno))
+                    {
+                        Thread.Sleep(1);
+                    }
                 }
             }
             catch (Exception ex)

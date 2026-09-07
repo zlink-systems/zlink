@@ -21,6 +21,7 @@ from perf_common import (
     resolve_single_pubsub_ready_settle_s,
     resolve_single_pubsub_recv_timeout_ms,
     new_single_latency_sampler,
+    is_transient_submit_error,
     result_metrics,
     run_one_way_subscriber_public_subscribe,
     stamp_payload,
@@ -62,10 +63,17 @@ def main(argv=None):
         topic = TOPIC
         stamp = stamp_payload
         perf_counter = time.perf_counter
+        seq = 1
         while perf_counter() < active_end:
-            publish(topic).messages(
-                *measurement_parts(stamp(payload, phase=1, run_id=run_id))
-            ).flags(flag).submit()
+            try:
+                publish(topic).messages(
+                    *measurement_parts(stamp(payload, phase=1, run_id=run_id, seq=seq))
+                ).flags(flag).submit()
+                seq += 1
+            except zlink.SubmitError as exc:
+                if not is_transient_submit_error(exc):
+                    raise
+                poll_idle_ms(1)
         _publish_stop_token(publisher)
     with perf_context() as ctx:
         with zlink.create_pub_socket(ctx) as publisher:

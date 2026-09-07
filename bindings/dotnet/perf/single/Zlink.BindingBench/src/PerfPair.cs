@@ -103,9 +103,8 @@ internal static class PerfPair
         {
             try
             {
-                long senderDeadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
                 ulong seq = 1;
-                while (Stopwatch.GetTimestamp() < senderDeadlineTicks)
+                while (Stopwatch.GetTimestamp() < deadlineTicks)
                 {
                     StampMetricHeader(payload.AsSpan(), RunId, ActivePhase,
                         msgSize, seq, EpochNs());
@@ -163,10 +162,10 @@ internal static class PerfPair
                     long recvTicks = Stopwatch.GetTimestamp();
                     if (TryDecodeExpectedSingleHeader(body, msgSize,
                             ActivePhase, out var header, RunId)
-                        && recvTicks <= deadlineTicks)
+                        && recvTicks < deadlineTicks)
                     {
                         received++;
-                        ulong nowNs = EpochNs();
+                        ulong nowNs = EpochNsFromTimestamp(recvTicks);
                         if (nowNs >= header.SentTsNs)
                         {
                             double latencyNs = nowNs - header.SentTsNs;

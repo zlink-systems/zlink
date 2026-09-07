@@ -108,16 +108,18 @@ internal static class PerfPubSub
         {
             try
             {
-                long senderDeadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
                 ulong seq = 1;
-                while (Stopwatch.GetTimestamp() < senderDeadlineTicks)
+                while (Stopwatch.GetTimestamp() < deadlineTicks)
                 {
                     StampMetricHeader(payload.AsSpan(), RunId, ActivePhase,
                         msgSize, seq, EpochNs());
-                    seq++;
                     if (!PublishActiveMessageBlocking(sender, Topic, payload,
                             "[single-pubsub]"))
+                    {
+                        Thread.Sleep(1);
                         continue;
+                    }
+                    seq++;
                 }
             }
             catch (Exception ex)
@@ -157,10 +159,10 @@ internal static class PerfPubSub
                         long recvTicks = Stopwatch.GetTimestamp();
                         if (TryDecodeExpectedSingleHeader(payloadSpan,
                                 msgSize, ActivePhase, out var header, RunId)
-                            && recvTicks <= deadlineTicks)
+                        && recvTicks < deadlineTicks)
                         {
                             received++;
-                            ulong nowNs = EpochNs();
+                            ulong nowNs = EpochNsFromTimestamp(recvTicks);
                             if (nowNs >= header.SentTsNs)
                             {
                                 double latencyNs = nowNs - header.SentTsNs;

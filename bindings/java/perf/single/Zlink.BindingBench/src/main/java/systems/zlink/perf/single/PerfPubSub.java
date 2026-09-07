@@ -133,12 +133,15 @@ final class PerfPubSub {
             }, "single-pubsub-recv");
             recvThread.start();
             Message active = PerfUtil.payloadTemplate(config.size());
+            long sequence = PerfUtil.nextSequence();
             try {
                 while (System.nanoTime() < activeEnd) {
                     active = PerfUtil.resetAndWritePayload(active, config.size(),
-                        (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
+                        (byte) PerfUtil.PHASE_ACTIVE, sequence, System.nanoTime());
                     if (!tryPublishBlocking(pub, active)) {
                         PerfUtil.pauseOneWaySendRetry("pubsub");
+                    } else {
+                        sequence = PerfUtil.nextSequence();
                     }
                 }
             } finally {

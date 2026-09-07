@@ -52,18 +52,18 @@ async function runPairBenchmark(msgSize, options) {
         // sync (mirrors C spawning sender/receiver threads after
         // setup_connected_*); the receiver drains until the wire stop token,
         // exactly like C perf_single_one_way.hpp run_active_phase.
-        drainRecvSocket(server, (received) => {
+        drainRecvSocket(server, (received, receivedAtNs) => {
             const payload = measurementPayload(received.parts);
             if (!payload) {
-                collector.recordPayload(null, currentEpochNs());
+                collector.recordPayload(null, receivedAtNs);
                 return;
             }
             const data = payload.data();
             if (data.length !== Math.max(msgSize, HEADER_SIZE)) {
-                collector.recordPayload(null, currentEpochNs());
+                collector.recordPayload(null, receivedAtNs);
                 return;
             }
-            collector.recordPayload(data, currentEpochNs());
+            collector.recordPayload(data, receivedAtNs);
         }, { recordUntilNs: activeStopNs });
         waitForWorkerStatus(worker, 4);
         const result = collector.finish();

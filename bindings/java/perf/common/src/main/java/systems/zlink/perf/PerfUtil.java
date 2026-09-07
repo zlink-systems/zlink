@@ -179,6 +179,17 @@ public final class PerfUtil {
             sentNanoTime);
     }
 
+    public static long nextSequence() {
+        return PerfMeasurement.nextSequence();
+    }
+
+    public static Message resetAndWritePayload(Message payload, int size,
+                                               byte phase, long sequence,
+                                               long sentNanoTime) {
+        return PerfMeasurement.resetAndWritePayload(payload, size, phase,
+            sequence, sentNanoTime);
+    }
+
     public static void writePayloadHeader(Message payload, int size,
                                           byte phase, long sentNanoTime) {
         PerfMeasurement.writePayload(payload, size, phase, sentNanoTime);

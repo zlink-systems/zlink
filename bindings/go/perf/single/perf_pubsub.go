@@ -54,7 +54,7 @@ func runPubSub(cfg benchmarkConfig) perfcommon.Result {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		for {
-			stop, drainErr := recvSinglePubSubUntilStop(subscriber, &received, stats, cfg.msgSize, window.ActiveAt, window.StopAt)
+			stop, drainErr := recvSinglePubSubUntilStop(subscriber, &received, stats, cfg.msgSize, window.ActiveAtNs, window.StopAtNs)
 			if drainErr != nil {
 				receiverDone <- drainErr
 				return
@@ -66,15 +66,22 @@ func runPubSub(cfg benchmarkConfig) perfcommon.Result {
 		}
 	}()
 
+	sequence := perfcommon.NextMetricSequence()
 	for time.Now().Before(window.StopAt) {
-		_, err := perfcommon.SubmitMeasurement(publisher.Publish(singlePubSubTopic),
-			perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt), zlink.SendFlagsNone)
+		sent, err := perfcommon.SubmitMeasurement(publisher.Publish(singlePubSubTopic),
+			perfcommon.NewActiveMessageWithSequence(cfg.msgSize, sequence), zlink.SendFlagsNone)
 		if err != nil {
 			if perfcommon.IsTransient(err) {
+				perfcommon.PollIdle(time.Millisecond)
 				continue
 			}
 			perfcommon.Must(err)
 		}
+		if !sent {
+			perfcommon.PollIdle(time.Millisecond)
+			continue
+		}
+		sequence = perfcommon.NextMetricSequence()
 	}
 	// PERF_SINGLE_TEST_POLICY § 1.4: signal phase end via wire-level
 	// stop token published on the same topic so the subscriber sees
@@ -97,14 +104,14 @@ func recvSinglePubSubUntilStop(
 	received *zlink.TopicMessage,
 	stats *perfcommon.Stats,
 	msgSize int,
-	activeAt time.Time,
-	stopAt time.Time,
+	activeAtNs int64,
+	stopAtNs int64,
 ) (bool, error) {
-	stop, _, err := recvSinglePubSubOnce(subscriber, received, stats, msgSize, activeAt, stopAt, zlink.RecvFlagsNone)
+	stop, _, err := recvSinglePubSubOnce(subscriber, received, stats, msgSize, activeAtNs, stopAtNs, zlink.RecvFlagsNone)
 	if err != nil || stop {
 		return stop, err
 	}
-	return drainSinglePubSubUntilStop(subscriber, received, stats, msgSize, activeAt, stopAt)
+	return drainSinglePubSubUntilStop(subscriber, received, stats, msgSize, activeAtNs, stopAtNs)
 }
 
 // drainSinglePubSubUntilStop drains the subscriber until either a
@@ -115,11 +122,11 @@ func drainSinglePubSubUntilStop(
 	received *zlink.TopicMessage,
 	stats *perfcommon.Stats,
 	msgSize int,
-	activeAt time.Time,
-	stopAt time.Time,
+	activeAtNs int64,
+	stopAtNs int64,
 ) (bool, error) {
 	for {
-		stop, processed, err := recvSinglePubSubOnce(subscriber, received, stats, msgSize, activeAt, stopAt, zlink.RecvFlagsDontWait)
+		stop, processed, err := recvSinglePubSubOnce(subscriber, received, stats, msgSize, activeAtNs, stopAtNs, zlink.RecvFlagsDontWait)
 		if err != nil || stop {
 			return stop, err
 		}
@@ -134,8 +141,8 @@ func recvSinglePubSubOnce(
 	received *zlink.TopicMessage,
 	stats *perfcommon.Stats,
 	msgSize int,
-	activeAt time.Time,
-	stopAt time.Time,
+	activeAtNs int64,
+	stopAtNs int64,
 	flags zlink.RecvFlags,
 ) (bool, bool, error) {
 	ok, err := subscriber.Subscribe(received, flags)
@@ -159,7 +166,7 @@ func recvSinglePubSubOnce(
 	if partErr != nil {
 		return false, true, partErr
 	}
-	perfcommon.RecordMessageLatency(stats, activeAt, stopAt, msgSize, part)
+	perfcommon.RecordMessageLatency(stats, activeAtNs, stopAtNs, msgSize, part)
 	return false, true, nil
 }
 

@@ -19,11 +19,11 @@ func TestPercentileUsesLinearInterpolation(t *testing.T) {
 func TestRecordBytesRTTLatencySeparatesCountFromClockSample(t *testing.T) {
 	stats := newStats(8)
 	payload := make([]byte, MetricHeaderSize)
-	now := time.Now()
+	nowNs := MonotonicNowNs()
 	StampPayloadPhaseAt(payload, PhaseActive, MonotonicNowNs()+int64(time.Hour))
 
 	RecordBytesRTTLatency(
-		stats, now.Add(-time.Second), now.Add(2*time.Hour), len(payload), payload)
+		stats, nowNs-int64(time.Second), nowNs+int64(2*time.Hour), len(payload), payload)
 
 	if got := stats.count; got != 1 {
 		t.Fatalf("throughput count = %d, want 1", got)
@@ -39,11 +39,11 @@ func TestRecordBytesRTTLatencySeparatesCountFromClockSample(t *testing.T) {
 func TestRecordBytesRTTLatencyExcludesPostDeadlineMessage(t *testing.T) {
 	stats := newStats(8)
 	payload := make([]byte, MetricHeaderSize)
-	now := time.Now()
+	nowNs := MonotonicNowNs()
 	StampPayloadPhaseAt(payload, PhaseActive, MonotonicNowNs()-int64(time.Second))
 
 	RecordBytesRTTLatency(
-		stats, now.Add(-2*time.Second), now.Add(-time.Second), len(payload), payload)
+		stats, nowNs-int64(2*time.Second), nowNs-int64(time.Second), len(payload), payload)
 
 	if got := stats.count; got != 0 {
 		t.Fatalf("post-deadline throughput count = %d, want 0", got)

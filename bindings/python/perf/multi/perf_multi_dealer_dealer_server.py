@@ -100,10 +100,9 @@ def main(argv=None):
                                     data,
                                     expected_msg_size=args.msg_size,
                                     run_id=run_id,
+                                    active_deadline_ns=int(active_deadline * 1_000_000_000),
                                 )
                                 if not active:
-                                    continue
-                                if time.perf_counter() >= active_deadline:
                                     continue
                                 count += 1
                                 if not auto_hwm_printed:

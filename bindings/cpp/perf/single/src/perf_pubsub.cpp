@@ -29,6 +29,7 @@ bool record_subscribed_payload (const zlink::topic_message_t &message,
                                 uint32_t run_id,
                                 size_t msg_size,
                                 size_t payload_size,
+                                int64_t recv_ts_ns,
                                 std::atomic<unsigned long long> &received_count,
                                 perf::single::latency_stats_builder_t &latency_builder)
 {
@@ -47,8 +48,8 @@ bool record_subscribed_payload (const zlink::topic_message_t &message,
     }
 
     received_count.fetch_add (1, std::memory_order_relaxed);
-    const uint64_t now = perf_single_metric::now_ns ();
-    latency_builder.add (perf_single_metric::elapsed_latency_ns (now, header.sent_ts_ns));
+    latency_builder.add (
+      perf_single_metric::elapsed_latency_ns (recv_ts_ns, header.sent_ts_ns));
     return true;
 }
 
@@ -108,8 +109,8 @@ bool run_pattern_pubsub (const std::string &transport, size_t msg_size, const st
     std::atomic<bool> sender_ok (true);
     perf::single::latency_stats_builder_t latency_builder (
       perf::single::resolve_single_latency_sample_cap ());
-    const auto active_deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (duration_s);
+    const int64_t active_deadline = perf_single_metric::now_ns ()
+                                    + static_cast<int64_t> (duration_s) * 1000000000LL;
 
     // PERF_SINGLE_TEST_POLICY § 1.4: match the C reference runner by
     // waiting for subscriber readiness through the public poller and
@@ -127,7 +128,7 @@ bool run_pattern_pubsub (const std::string &transport, size_t msg_size, const st
 
     std::thread sender_thread ([&] () {
         uint64_t seq = 1;
-        while (std::chrono::steady_clock::now () < active_deadline) {
+        while (perf_single_metric::now_ns () < active_deadline) {
             if (!perf_single_metric::stamp_payload (payload.data (), payload.size (), run_id,
                                                     perf_single_metric::phase_active, msg_size,
                                                     seq, perf_single_metric::now_ns ())) {
@@ -153,10 +154,11 @@ bool run_pattern_pubsub (const std::string &transport, size_t msg_size, const st
     });
 
     auto record_if_active = [&] (const zlink::topic_message_t &message_) {
-        if (std::chrono::steady_clock::now () >= active_deadline)
+        const int64_t recv_ts_ns = perf_single_metric::now_ns ();
+        if (recv_ts_ns >= active_deadline)
             return true;
-        return record_subscribed_payload (message_, run_id, msg_size, payload_size, received_count,
-                                          latency_builder);
+        return record_subscribed_payload (message_, run_id, msg_size, payload_size, recv_ts_ns,
+                                          received_count, latency_builder);
     };
 
     auto is_stop_message = [] (const zlink::topic_message_t &message_) {

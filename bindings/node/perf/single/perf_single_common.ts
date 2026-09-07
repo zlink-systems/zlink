@@ -402,13 +402,14 @@ function drainRecvSocket(socket, onMessage, options: RecordUntilOptions = {}) {
       if (NODE_TRACE_ENABLED && (totalReceived % 100000) === 0) {
         console.error(`[drainRecvSocket] received=${totalReceived}`);
       }
+      const receivedAtNs = currentEpochNs();
       if (recordUntilNs !== null && recordingActive) {
-        recordingActive = currentEpochNs() <= recordUntilNs;
+        recordingActive = receivedAtNs < recordUntilNs;
       }
       if (recordUntilNs !== null && !recordingActive) {
         continue;
       }
-      onMessage(received);
+      onMessage(received, receivedAtNs);
     }
   }
 }
@@ -464,7 +465,7 @@ function drainRouterRecvInto(router, msgSize, onHeader, options: RecordUntilOpti
         console.error(`[drainRouterRecvInto] received=${totalReceived}`);
       }
       if (recordUntilNs !== null && recordingActive) {
-        recordingActive = receivedAtNs <= recordUntilNs;
+        recordingActive = receivedAtNs < recordUntilNs;
       }
       if (recordUntilNs !== null && !recordingActive) {
         continue;

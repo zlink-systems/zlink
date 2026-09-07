@@ -270,8 +270,9 @@ def _fmt_latency_ms(value):
     return "N/A" if math.isnan(value) else f"{value:.3f} ms"
 
 
-def _fmt_metric(value):
-    return "N/A" if math.isnan(value) else f"{value:.3f}"
+def _fmt_metric(metric, value):
+    precision = 6 if metric.startswith("latency") else 3
+    return "N/A" if math.isnan(value) else f"{value:.{precision}f}"
 
 
 def _write_report(lines, report_path, output_path):
@@ -347,14 +348,13 @@ def _single_effective_options(args, section):
         f"- transports: {args.transports}",
         f"- msg_sizes: {args.msg_sizes}",
     ]
-    if any(pattern.strip().endswith("_REQREP") for pattern in args.patterns.split(",")):
-        try:
-            bound = int(os.environ.get("PERF_SINGLE_REQREP_MAX_OUTSTANDING", "64"))
-        except ValueError:
-            bound = 64
-        if bound <= 0:
-            bound = 64
-        lines.append(f"- reqrep_max_outstanding: {max(2, bound)}")
+    try:
+        bound = int(os.environ.get("PERF_SINGLE_REQREP_MAX_OUTSTANDING", "64"))
+    except ValueError:
+        bound = 64
+    if bound <= 0:
+        bound = 64
+    lines.append(f"- reqrep_max_outstanding: {max(2, bound)}")
     if section == "result":
         lines.append("")
     return lines
@@ -440,7 +440,7 @@ def render_single_report(args):
                     lines.append(_single_case_row(pattern, size, metric_values))
                     for metric in REQUIRED_METRICS:
                         result_lines.append(
-                            f"RESULT,current,{pattern},{transport},{size},{metric},{_fmt_metric(metric_values[metric])}"
+                            f"RESULT,current,{pattern},{transport},{size},{metric},{_fmt_metric(metric, metric_values[metric])}"
                         )
                 else:
                     lines.append(f"      | {size}B | FAIL | FAIL | FAIL | FAIL | FAIL |")
@@ -569,14 +569,13 @@ def _multi_effective_options(args, section):
         "- disable_resource_metrics: 0",
         "- timeout_seconds: auto",
     ]
-    if any(pattern.endswith("_REQREP") for pattern in selected_patterns):
-        try:
-            bound = int(os.environ.get("PERF_MULTI_REQREP_MAX_OUTSTANDING", "64"))
-        except ValueError:
-            bound = 64
-        if bound <= 0:
-            bound = 64
-        lines.append(f"- reqrep_max_outstanding: {max(2, bound)}")
+    try:
+        bound = int(os.environ.get("PERF_MULTI_REQREP_MAX_OUTSTANDING", "64"))
+    except ValueError:
+        bound = 64
+    if bound <= 0:
+        bound = 64
+    lines.append(f"- reqrep_max_outstanding: {max(2, bound)}")
     if section == "result":
         lines.append("")
     return lines
@@ -676,7 +675,7 @@ def render_multi_report(args):
                     lines.append(_multi_case_row(pattern, size, metric_values))
                     for metric in RESULT_METRICS:
                         result_lines.append(
-                            f"RESULT,current,{pattern},{transport},{size},{metric},{_fmt_metric(metric_values[metric])}"
+                            f"RESULT,current,{pattern},{transport},{size},{metric},{_fmt_metric(metric, metric_values[metric])}"
                         )
                 else:
                     lines.append(f"      | {size}B | FAIL | FAIL | FAIL | FAIL | FAIL |")

@@ -140,12 +140,14 @@ internal static class PerfMultiPubSubClient
                     ReadOnlySpan<byte> body = payloadPart.AsReadOnlySpan();
 
                     long recvTicks = Stopwatch.GetTimestamp();
-                    if (recvTicks > benchDeadlineTicks)
+                    if (recvTicks >= benchDeadlineTicks)
                         continue;
 
                     bool headerOk = PerfRunner.TryDecodeMetricHeader(body,
                         out PerfMetricHeader header);
                     if (!headerOk
+                        || body.Length != Math.Max(msgSize,
+                            PerfMetricHeaderSize)
                         || header.RunId != expectedRunId
                         || header.MsgSize != (uint)msgSize)
                     {
@@ -159,7 +161,8 @@ internal static class PerfMultiPubSubClient
                         {
                             AddLatencySample(activeLatSamples,
                                 ref activeSampleSeen, ref activeSampleSum,
-                                latencySampleCap, ref rng, header);
+                                latencySampleCap, ref rng, header,
+                                EpochNsFromTimestamp(recvTicks));
                         }
                     }
                     else if (header.Phase == (uint)PerfPhase.Cooldown)
@@ -195,14 +198,13 @@ internal static class PerfMultiPubSubClient
 
     private static void AddLatencySample(List<double> samples,
         ref long sampleSeen, ref double sampleSum, int latencySampleCap,
-        ref uint rng, PerfMetricHeader header)
+        ref uint rng, PerfMetricHeader header, ulong recvNs)
     {
         if (header.SentTsNs == 0)
             return;
-        ulong nowNs = EpochNs();
-        if (nowNs < header.SentTsNs)
+        if (recvNs < header.SentTsNs)
             return;
-        ReservoirSampleMulti(samples, nowNs - header.SentTsNs,
+        ReservoirSampleMulti(samples, recvNs - header.SentTsNs,
             ref sampleSeen, ref sampleSum, latencySampleCap, ref rng);
     }
 

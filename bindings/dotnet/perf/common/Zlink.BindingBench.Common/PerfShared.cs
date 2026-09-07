@@ -88,10 +88,17 @@ public static class PerfShared
     public static void ReservoirSample(List<double> samples, double value,
         ref long seenCount, int cap, ref uint rngState)
     {
-        // C perf keeps every valid active latency sample and computes exact
-        // percentiles over that set. The cap/rng parameters are kept for call
-        // site compatibility but do not limit the official perf surface.
-        _ = cap;
+        if (cap == 0)
+        {
+            seenCount++;
+            if (samples.Count == 0)
+                samples.Add(value);
+            else
+                samples[0] += (value - samples[0]) / seenCount;
+            return;
+        }
+        // The cap-zero boundary retains only the exact running mean, so its
+        // p95/p99 naturally equal mean like the C reservoir.
         _ = rngState;
         samples.Add(value);
         seenCount++;
@@ -164,9 +171,10 @@ public static class PerfShared
 
         void WriteMetric(string metric, double value)
         {
-            string formatted = fixedFormat
-                ? value.ToString("F3", CultureInfo.InvariantCulture)
-                : value.ToString(CultureInfo.InvariantCulture);
+            _ = fixedFormat;
+            string formatted = value.ToString(
+                metric.StartsWith("latency", StringComparison.Ordinal) ? "F6" : "F3",
+                CultureInfo.InvariantCulture);
             WriteStdoutLine(
                 $"RESULT,dotnet,{pattern},{transport},{size},{metric},{formatted}");
         }

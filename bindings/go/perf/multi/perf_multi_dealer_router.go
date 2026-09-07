@@ -211,7 +211,7 @@ func drainMultiDealerRouterReplies(
 		}
 		part, partErr := perfcommon.MeasurementPayload(reply.Parts())
 		if partErr == nil {
-			perfcommon.RecordMessageRTTLatency(stats, window.ActiveAt, window.StopAt, msgSize, part)
+			perfcommon.RecordMessageRTTLatency(stats, window.ActiveAtNs, window.StopAtNs, msgSize, part)
 		}
 		_ = reply.Close()
 	}

@@ -161,9 +161,9 @@ func PrintFail(pattern, transport string, msgSize int) {
 func PrintResult(pattern, transport string, msgSize int, result Result) {
 	fmt.Printf("RESULT,current,%s,%s,%d,throughput,%.3f\n", pattern, transport, msgSize, result.Throughput)
 	fmt.Printf("RESULT,current,%s,%s,%d,bandwidth,%.3f\n", pattern, transport, msgSize, result.Bandwidth)
-	fmt.Printf("RESULT,current,%s,%s,%d,latency,%.3f\n", pattern, transport, msgSize, result.LatencyNs/1_000_000.0)
-	fmt.Printf("RESULT,current,%s,%s,%d,latency_p95,%.3f\n", pattern, transport, msgSize, result.LatencyP95Ns/1_000_000.0)
-	fmt.Printf("RESULT,current,%s,%s,%d,latency_p99,%.3f\n", pattern, transport, msgSize, result.LatencyP99Ns/1_000_000.0)
+	fmt.Printf("RESULT,current,%s,%s,%d,latency,%.6f\n", pattern, transport, msgSize, result.LatencyNs/1_000_000.0)
+	fmt.Printf("RESULT,current,%s,%s,%d,latency_p95,%.6f\n", pattern, transport, msgSize, result.LatencyP95Ns/1_000_000.0)
+	fmt.Printf("RESULT,current,%s,%s,%d,latency_p99,%.6f\n", pattern, transport, msgSize, result.LatencyP99Ns/1_000_000.0)
 }
 
 func PrintSingleAutoHWMDetail(
@@ -681,6 +681,12 @@ func NewWindowMessage(size int, activeAt time.Time) *zlink.Message {
 	return msg
 }
 
+func NewActiveMessageWithSequence(size int, sequence uint64) *zlink.Message {
+	msg := NewMessageWithSize(size)
+	StampPayloadPhaseAtSequence(msg.Data(), PhaseActive, MonotonicNowNs(), sequence)
+	return msg
+}
+
 func SubmitMessage(
 	message *zlink.Message,
 	submit func(*zlink.Message) (bool, error),
@@ -794,7 +800,7 @@ func IsTransient(err error) bool {
 	}
 	switch zerr.InternalErrno() {
 	// EWOULDBLOCK == EAGAIN on Linux; listing EAGAIN covers both.
-	case int(syscall.EAGAIN), int(syscall.EINTR):
+	case int(syscall.EAGAIN), int(syscall.EINTR), int(syscall.ETIMEDOUT):
 		return true
 	default:
 		return false

@@ -1,4 +1,5 @@
 import argparse
+import errno
 import os
 import struct
 import sys
@@ -309,6 +310,7 @@ def run_one_way_receiver(sock, *, method, msg_size, run_id, active_end,
     poller, poll_events = new_socket_poller(sock, zlink_mod.PollEventFlag.POLLIN)
     perf_counter = time.perf_counter
     time_ns = time.monotonic_ns
+    active_end_ns = int(active_end * 1_000_000_000)
     count = received
     stop_view = memoryview(STOP_TOKEN)
     stop_wait_end = active_end + (_env_int("PERF_SINGLE_STOP_WAIT_MS", 2000) / 1000.0)
@@ -342,7 +344,7 @@ def run_one_way_receiver(sock, *, method, msg_size, run_id, active_end,
                     stop_received = True
                     break
                 flags = dont_wait
-                if data is None or len(data) != msg_size or len(data) < HEADER_SIZE:
+                if data is None or len(data) != max(msg_size, HEADER_SIZE):
                     continue
                 magic, hdr_run_id, phase, hdr_msg_size, _seq, sent_ts_ns = (
                     struct.unpack_from(HEADER_FORMAT, data, 0)
@@ -354,12 +356,12 @@ def run_one_way_receiver(sock, *, method, msg_size, run_id, active_end,
                     or hdr_run_id != run_id
                 ):
                     continue
-                if perf_counter() >= active_end:
+                recv_ts_ns = time_ns()
+                if recv_ts_ns >= active_end_ns:
                     continue
                 count += 1
-                now_ns = time_ns()
-                if sent_ts_ns > 0 and now_ns >= sent_ts_ns:
-                    latency_sampler.add(now_ns - sent_ts_ns)
+                if sent_ts_ns > 0 and recv_ts_ns >= sent_ts_ns:
+                    latency_sampler.add(recv_ts_ns - sent_ts_ns)
                 else:
                     latency_sampler.add(0.0)
     finally:
@@ -421,6 +423,16 @@ def _submit_backpressured_result():
     return _SUBMIT_BACKPRESSURED
 
 
+def is_transient_submit_error(exc):
+    return exc.result == _submit_backpressured_result() or exc.native_errno in {
+        errno.EAGAIN,
+        errno.EINTR,
+        errno.ETIMEDOUT,
+        10035,  # WSAEWOULDBLOCK
+        10060,  # WSAETIMEDOUT
+    }
+
+
 def send_nonblocking(sock, payload, *, routing_id=None, measurement=True):
     try:
         if routing_id is None:
@@ -434,7 +446,7 @@ def send_nonblocking(sock, payload, *, routing_id=None, measurement=True):
         op.submit_sync()
         return True
     except _submit_error_type() as exc:
-        if exc.result == _submit_backpressured_result():
+        if is_transient_submit_error(exc):
             return False
         raise
 
@@ -451,8 +463,14 @@ def send_routed_sync(sock, payload, *, routing_id=None, measurement=True):
         op.messages(*measurement_parts(payload))
     else:
         op.message(payload)
-    op.submit_sync()
-    return True
+    try:
+        op.submit_sync()
+        return True
+    except _submit_error_type() as exc:
+        if is_transient_submit_error(exc):
+            poll_idle_ms(1)
+            return False
+        raise
 
 
 def publish_nonblocking(sock, topic, payload, *, measurement=True):
@@ -466,7 +484,7 @@ def publish_nonblocking(sock, topic, payload, *, measurement=True):
         op.flags(flag).submit()
         return True
     except _submit_error_type() as exc:
-        if exc.result == _submit_backpressured_result():
+        if is_transient_submit_error(exc):
             return False
         raise
 

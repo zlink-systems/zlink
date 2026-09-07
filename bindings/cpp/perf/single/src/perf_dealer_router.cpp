@@ -147,8 +147,8 @@ bool run_pattern_dealer_router (const std::string &transport,
     std::atomic<bool> sender_ok (true);
     perf::single::latency_stats_builder_t latency_builder (
       perf::single::resolve_single_latency_sample_cap ());
-    const auto active_deadline =
-      std::chrono::steady_clock::now () + std::chrono::seconds (duration_s);
+    const int64_t active_deadline = perf_single_metric::now_ns ()
+                                    + static_cast<int64_t> (duration_s) * 1000000000LL;
 
     // PERF_SINGLE_TEST_POLICY § 1.1 and § 1.4: use the public poller with an
     // infinite wait, receive routed parts with DONTWAIT, and drain all ready
@@ -166,7 +166,7 @@ bool run_pattern_dealer_router (const std::string &transport,
     // C reference runner. Measurement anchors are unchanged.
     auto sender_work = [&] () -> void {
         uint64_t seq = 1;
-        while (std::chrono::steady_clock::now () < active_deadline) {
+        while (perf_single_metric::now_ns () < active_deadline) {
             // Keep this measured send hot path aligned with the C reference:
             // stamp reusable caller storage, then copy the full payload into
             // the message submitted by the binding.
@@ -181,7 +181,7 @@ bool run_pattern_dealer_router (const std::string &transport,
             if (send_rc <= 0) {
                 const int err = errno;
                 if (perf::single::is_transient_send_errno (err)
-                    && std::chrono::steady_clock::now () < active_deadline) {
+                    && perf_single_metric::now_ns () < active_deadline) {
                     std::this_thread::sleep_for (std::chrono::milliseconds (1));
                     continue;
                 }
@@ -222,9 +222,12 @@ bool run_pattern_dealer_router (const std::string &transport,
             if (!perf_single_metric::is_expected (header, run_id, perf_single_metric::phase_active,
                                                   msg_size))
                 return true;
+            const int64_t recv_ts_ns = perf_single_metric::now_ns ();
+            if (recv_ts_ns >= active_deadline)
+                return true;
             ++received_count;
-            const uint64_t now = perf_single_metric::now_ns ();
-            latency_builder.add (perf_single_metric::elapsed_latency_ns (now, header.sent_ts_ns));
+            latency_builder.add (
+              perf_single_metric::elapsed_latency_ns (recv_ts_ns, header.sent_ts_ns));
             return true;
         };
 

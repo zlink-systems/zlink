@@ -87,7 +87,7 @@ func runMultiDealerDealerServer(cfg multiConfig) {
 			part, partErr := perfcommon.MeasurementPayload(parts)
 			if partErr == nil {
 				perfcommon.RecordMessageLatency(
-					stats, window.ActiveAt, window.StopAt, cfg.msgSize, part)
+					stats, window.ActiveAtNs, window.StopAtNs, cfg.msgSize, part)
 				if !autoHWMPrinted {
 					// Open the status snapshot only after an application pipe delivered
 					// a valid message; an earlier snapshot exposes the raw socket default.

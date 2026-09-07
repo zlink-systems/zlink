@@ -293,7 +293,8 @@ internal static class PerfMultiDealerRouterClient
             if (!dealerSock.Recv(receivedMessage, RecvFlags.DontWait))
                 break;
 
-            if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
+            long recvTicks = Stopwatch.GetTimestamp();
+            if (recvTicks >= activeDeadlineTicks)
                 break;
 
             if (phase == PerfPhase.Active)
@@ -302,6 +303,8 @@ internal static class PerfMultiDealerRouterClient
                 // post-window replies out of both throughput and latency.
                 if (PerfSocketIo.TryMeasurementPayload(receivedMessage.Parts,
                         out Message payloadPart)
+                    && payloadPart.AsReadOnlySpan().Length
+                        == Math.Max(msgSize, PerfMetricHeaderSize)
                     && PerfRunner.TryDecodeMetricHeader(
                         payloadPart.AsReadOnlySpan(),
                         out PerfMetricHeader header)
@@ -312,7 +315,7 @@ internal static class PerfMultiDealerRouterClient
                     metrics.MeasureCount++;
                     if (metrics.LatencySamples != null && header.SentTsNs > 0)
                     {
-                        ulong nowNs = EpochNs();
+                        ulong nowNs = EpochNsFromTimestamp(recvTicks);
                         if (nowNs >= header.SentTsNs)
                         {
                             double sampleLatencyNs = (nowNs - header.SentTsNs)

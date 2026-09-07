@@ -110,15 +110,18 @@ final class PerfDealerDealer {
             Thread traffic = new Thread(() -> {
                 try {
                     Message active = PerfUtil.payloadTemplate(config.size());
+                    long sequence = PerfUtil.nextSequence();
                     try {
                         // C parity: raw one-way uses blocking FLAGS_NONE. A
                         // transient failure waits 1ms, then the next loop
                         // writes a fresh timestamp before retrying the sample.
                         while (System.nanoTime() < activeEnd) {
                             active = PerfUtil.resetAndWritePayload(active, config.size(),
-                                (byte) PerfUtil.PHASE_ACTIVE, System.nanoTime());
+                                (byte) PerfUtil.PHASE_ACTIVE, sequence, System.nanoTime());
                             if (!trySendBlocking(sender, active)) {
                                 PerfUtil.pauseOneWaySendRetry("dealer/dealer");
+                            } else {
+                                sequence = PerfUtil.nextSequence();
                             }
                         }
                     } finally {

@@ -53,7 +53,7 @@ func runSingleOneWayWithTransient(
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		for {
-			stop, drainErr := recvSingleOneWayUntilStop(receiver, &received, stats, cfg.msgSize, window.ActiveAt, window.StopAt)
+			stop, drainErr := recvSingleOneWayUntilStop(receiver, &received, stats, cfg.msgSize, window.ActiveAtNs, window.StopAtNs)
 			if drainErr != nil {
 				receiverDone <- drainErr
 				return
@@ -65,12 +65,14 @@ func runSingleOneWayWithTransient(
 		}
 	}()
 
+	sequence := perfcommon.NextMetricSequence()
 	for time.Now().Before(window.StopAt) {
-		message := perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt)
+		message := perfcommon.NewActiveMessageWithSequence(cfg.msgSize, sequence)
 		sent, err := sendActive(message)
 		if err != nil {
 			_ = message.Close()
 			if isTransient(err) {
+				perfcommon.PollIdle(time.Millisecond)
 				continue
 			}
 			if perfDebugEnabled {
@@ -80,8 +82,10 @@ func runSingleOneWayWithTransient(
 		}
 		if !sent {
 			_ = message.Close()
+			perfcommon.PollIdle(time.Millisecond)
 			continue
 		}
+		sequence = perfcommon.NextMetricSequence()
 	}
 	// PERF_SINGLE_TEST_POLICY § 1.4: signal phase end via wire-level
 	// stop token. Managed send handles WRITABLE retry internally; the outer
@@ -101,14 +105,14 @@ func recvSingleOneWayUntilStop(
 	received *zlink.Received,
 	stats *perfcommon.Stats,
 	msgSize int,
-	activeAt time.Time,
-	stopAt time.Time,
+	activeAtNs int64,
+	stopAtNs int64,
 ) (bool, error) {
-	stop, _, err := recvSingleOneWayOnce(receiver, received, stats, msgSize, activeAt, stopAt, zlink.RecvFlagsNone)
+	stop, _, err := recvSingleOneWayOnce(receiver, received, stats, msgSize, activeAtNs, stopAtNs, zlink.RecvFlagsNone)
 	if err != nil || stop {
 		return stop, err
 	}
-	return drainSingleOneWayUntilStop(receiver, received, stats, msgSize, activeAt, stopAt)
+	return drainSingleOneWayUntilStop(receiver, received, stats, msgSize, activeAtNs, stopAtNs)
 }
 
 // drainSingleOneWayUntilStop drains the receiver until either a transient
@@ -119,11 +123,11 @@ func drainSingleOneWayUntilStop(
 	received *zlink.Received,
 	stats *perfcommon.Stats,
 	msgSize int,
-	activeAt time.Time,
-	stopAt time.Time,
+	activeAtNs int64,
+	stopAtNs int64,
 ) (bool, error) {
 	for {
-		stop, processed, err := recvSingleOneWayOnce(receiver, received, stats, msgSize, activeAt, stopAt, zlink.RecvFlagsDontWait)
+		stop, processed, err := recvSingleOneWayOnce(receiver, received, stats, msgSize, activeAtNs, stopAtNs, zlink.RecvFlagsDontWait)
 		if err != nil || stop {
 			return stop, err
 		}
@@ -138,8 +142,8 @@ func recvSingleOneWayOnce(
 	received *zlink.Received,
 	stats *perfcommon.Stats,
 	msgSize int,
-	activeAt time.Time,
-	stopAt time.Time,
+	activeAtNs int64,
+	stopAtNs int64,
 	flags zlink.RecvFlags,
 ) (bool, bool, error) {
 	ok, err := receiver.Recv(received, flags)
@@ -161,7 +165,7 @@ func recvSingleOneWayOnce(
 		return false, true, fmt.Errorf("unexpected multipart receive: %w", partErr)
 	}
 	if stats != nil {
-		perfcommon.RecordMessageLatency(stats, activeAt, stopAt, msgSize, part)
+		perfcommon.RecordMessageLatency(stats, activeAtNs, stopAtNs, msgSize, part)
 	}
 	return false, true, nil
 }

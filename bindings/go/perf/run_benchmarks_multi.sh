@@ -997,15 +997,13 @@ emit_effective_options_multi() {
   echo "- stream_non_tcp_clients_max: ${PERF_STREAM_NON_TCP_CLIENTS_MAX:-${PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX:-10000}}"
   echo "- disable_resource_metrics: ${PERF_DISABLE_RESOURCE_METRICS:-0}"
   echo "- timeout_seconds: ${PERF_MULTI_TIMEOUT_SECONDS:-${PERF_TIMEOUT_SECONDS:-auto}}"
-  if [[ ",${EFFECTIVE_PATTERNS_CSV}," == *,MULTI_DEALER_ROUTER_REQREP,* || ",${EFFECTIVE_PATTERNS_CSV}," == *,MULTI_ROUTER_ROUTER_REQREP,* ]]; then
-    local reqrep_max="${PERF_MULTI_REQREP_MAX_OUTSTANDING:-64}"
-    if ! [[ "${reqrep_max}" =~ ^[0-9]+$ ]] || (( reqrep_max == 0 )); then
-      reqrep_max=64
-    elif (( reqrep_max < 2 )); then
-      reqrep_max=2
-    fi
-    echo "- reqrep_max_outstanding: ${reqrep_max}"
+  local reqrep_max="${PERF_MULTI_REQREP_MAX_OUTSTANDING:-64}"
+  if ! [[ "${reqrep_max}" =~ ^[0-9]+$ ]] || (( reqrep_max == 0 )); then
+    reqrep_max=64
+  elif (( reqrep_max < 2 )); then
+    reqrep_max=2
   fi
+  echo "- reqrep_max_outstanding: ${reqrep_max}"
 }
 
 is_unsupported_output() {

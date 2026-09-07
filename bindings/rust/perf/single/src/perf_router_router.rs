@@ -100,7 +100,7 @@ fn main() {
     let stats = collector.shared();
 
     let active = Duration::from_secs(config.duration_seconds);
-    let active_deadline = std::time::Instant::now() + active;
+    let active_deadline = common::now_ns() + active.as_nanos() as u64;
     let send_target = target.clone();
     let send_thread = std::thread::spawn(move || {
         common::drive_sends_with_poller(&sender);
@@ -121,12 +121,12 @@ fn main() {
     });
 
     let mut received = Received::empty();
-    let stop_wait_deadline = active_deadline + common::resolve_single_stop_wait();
+    let stop_wait_deadline = active_deadline + common::resolve_single_stop_wait().as_nanos() as u64;
     'recv: loop {
-        if std::time::Instant::now() >= stop_wait_deadline {
+        if common::now_ns() >= stop_wait_deadline {
             break;
         }
-        let flags = if std::time::Instant::now() < active_deadline {
+        let flags = if common::now_ns() < active_deadline {
             zlink::RecvFlags::NONE
         } else {
             zlink::RecvFlags::DONT_WAIT

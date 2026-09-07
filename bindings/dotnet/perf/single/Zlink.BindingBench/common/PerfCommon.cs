@@ -115,7 +115,8 @@ internal static partial class PerfRunner
         int msgSize, uint phase, out PerfMetricHeader header, uint runId = 1)
     {
         header = default;
-        if (!TryDecodeMetricHeader(payload, out header))
+        if (payload.Length != Math.Max(msgSize, PerfShared.PerfMetricHeaderSize)
+            || !TryDecodeMetricHeader(payload, out header))
             return false;
         return IsExpectedSingleHeader(header, msgSize, phase, runId);
     }
@@ -193,6 +194,11 @@ internal static partial class PerfRunner
             // backpressure. DontWait would repeatedly allocate and discard
             // payloads while full, changing both the workload and throughput.
             return PerfSocketIo.PublishMeasurement(socket, topic, buffer) > 0;
+        }
+        catch (ZlinkException ex)
+            when (PerfShared.IsTransientBackpressure(ex.NativeErrno))
+        {
+            return false;
         }
         catch (Exception ex)
         {

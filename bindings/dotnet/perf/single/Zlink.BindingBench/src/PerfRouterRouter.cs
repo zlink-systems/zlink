@@ -232,6 +232,7 @@ internal static class PerfRouterRouter
         long sampleSeen = 0;
         uint rng = 0xA341316Cu;
         bool stopReceived = false;
+        long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
 
         bool ProcessReceived(Received receivedMessage)
         {
@@ -244,18 +245,16 @@ internal static class PerfRouterRouter
                 return false;
             ReadOnlySpan<byte> body = payloadMessage.AsReadOnlySpan();
 
+            long recvTicks = Stopwatch.GetTimestamp();
             if (!TryDecodeExpectedSingleHeader(body, msgSize, ActivePhase,
-                    out var header, RunId))
+                    out var header, RunId)
+                || recvTicks >= deadlineTicks)
             {
                 return false;
             }
 
-            // The sender stamps and submits only until its active deadline.
-            // Count every matching record before the wire-level stop token,
-            // including records already queued when that deadline elapsed.
-            // This is the C/C++ PERF_SINGLE_TEST_POLICY § 1.4 boundary.
             received++;
-            ulong nowNs = EpochNs();
+            ulong nowNs = EpochNsFromTimestamp(recvTicks);
             if (nowNs >= header.SentTsNs)
             {
                 double latencyNs = nowNs - header.SentTsNs;
@@ -276,7 +275,6 @@ internal static class PerfRouterRouter
             try
             {
                 ulong seq = 1;
-                long deadlineTicks = DeadlineTicksFromSeconds(durationSeconds);
                 while (true)
                 {
                     long nowTicks = Stopwatch.GetTimestamp();
@@ -287,18 +285,22 @@ internal static class PerfRouterRouter
                     // work on the same sender path for binding comparison.
                     StampMetricHeader(payload.AsSpan(), RunId, ActivePhase,
                         msgSize, seq, EpochNsFromTimestamp(nowTicks));
-                    seq++;
                     try
                     {
                         if (PerfSocketIo.SendMeasurement(sender,
                                 targetRoutingId, payload, SendFlags.None) == 0)
+                        {
+                            Thread.Sleep(1);
                             continue;
+                        }
+                        seq++;
                     }
                     catch (ZlinkException ex)
                         when (PerfShared.IsTransientBackpressure(
                                   ex.NativeErrno)
                               || IsTransientNetworkError(ex.NativeErrno))
                     {
+                        Thread.Sleep(1);
                         continue;
                     }
                 }

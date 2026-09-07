@@ -466,9 +466,10 @@ def emit_result_lines(combo_results: Dict[Tuple[str, str, int], ComboRecord]) ->
         ]
 
         for metric_name, value in metrics:
+            precision = 6 if metric_name.startswith("latency") else 3
             print(
                 f"RESULT,{RESULT_DATA_TAG},{pattern},{transport},{size},"
-                f"{metric_name},{value:.3f}"
+                f"{metric_name},{value:.{precision}f}"
             )
 
 
@@ -850,14 +851,13 @@ def build_single_option_items(
         ("transports", ",".join(unique_transports) if unique_transports else "none"),
         ("msg_sizes", ",".join(str(sz) for sz in unique_sizes) if unique_sizes else "none"),
     ]
-    if any(pattern.endswith("_REQREP") for pattern in patterns):
-        # Match PerfEnv.ReadPositive and ResolveReqRepMaxOutstanding.
-        raw_bound = env_get("PERF_SINGLE_REQREP_MAX_OUTSTANDING").strip()
-        bound = (parse_env_int("PERF_SINGLE_REQREP_MAX_OUTSTANDING", 64)
-                 if re.fullmatch(r"[+-]?[0-9]+", raw_bound) else 64)
-        if not 0 < bound <= 2147483647:
-            bound = 64
-        items.append(("reqrep_max_outstanding", str(max(2, bound))))
+    # Match PerfEnv.ReadPositive and ResolveReqRepMaxOutstanding.
+    raw_bound = env_get("PERF_SINGLE_REQREP_MAX_OUTSTANDING").strip()
+    bound = (parse_env_int("PERF_SINGLE_REQREP_MAX_OUTSTANDING", 64)
+             if re.fullmatch(r"[+-]?[0-9]+", raw_bound) else 64)
+    if not 0 < bound <= 2147483647:
+        bound = 64
+    items.append(("reqrep_max_outstanding", str(max(2, bound))))
     return items
 
 

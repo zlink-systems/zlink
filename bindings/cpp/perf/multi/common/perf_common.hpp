@@ -836,11 +836,11 @@ inline void print_result (const std::string &lib,
     std::cout << "RESULT," << lib << "," << pattern << "," << transport << "," << size
               << ",bandwidth," << std::fixed << std::setprecision (3) << bandwidth << std::endl;
     std::cout << "RESULT," << lib << "," << pattern << "," << transport << "," << size
-              << ",latency," << std::fixed << std::setprecision (3) << latency_ms << std::endl;
+              << ",latency," << std::fixed << std::setprecision (6) << latency_ms << std::endl;
     std::cout << "RESULT," << lib << "," << pattern << "," << transport << "," << size
-              << ",latency_p95," << std::fixed << std::setprecision (3) << p95_ms << std::endl;
+              << ",latency_p95," << std::fixed << std::setprecision (6) << p95_ms << std::endl;
     std::cout << "RESULT," << lib << "," << pattern << "," << transport << "," << size
-              << ",latency_p99," << std::fixed << std::setprecision (3) << p99_ms << std::endl;
+              << ",latency_p99," << std::fixed << std::setprecision (6) << p99_ms << std::endl;
 }
 
 inline void print_client_result_lines (const std::string &lib,

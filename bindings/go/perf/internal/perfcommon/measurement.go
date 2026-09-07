@@ -82,6 +82,14 @@ func StampPayloadPhase(payload []byte, phase uint8) {
 }
 
 func StampPayloadPhaseAt(payload []byte, phase uint8, nowNs int64) {
+	StampPayloadPhaseAtSequence(payload, phase, nowNs, NextMetricSequence())
+}
+
+func NextMetricSequence() uint64 {
+	return atomic.AddUint64(&metricSequence, 1)
+}
+
+func StampPayloadPhaseAtSequence(payload []byte, phase uint8, nowNs int64, sequence uint64) {
 	if len(payload) < MetricHeaderSize {
 		Must(&invalidMetricPayloadError{Size: len(payload)})
 	}
@@ -89,7 +97,7 @@ func StampPayloadPhaseAt(payload []byte, phase uint8, nowNs int64) {
 	binary.LittleEndian.PutUint32(payload[4:8], MetricRunID)
 	payload[8] = phase
 	binary.LittleEndian.PutUint32(payload[9:13], uint32(len(payload)))
-	binary.LittleEndian.PutUint64(payload[13:21], atomic.AddUint64(&metricSequence, 1))
+	binary.LittleEndian.PutUint64(payload[13:21], sequence)
 	binary.LittleEndian.PutUint64(payload[21:29], uint64(nowNs))
 }
 
@@ -124,6 +132,9 @@ func validHeaderPhase(header MetricHeader, expectedMsgSize int, phase uint8) boo
 }
 
 func SentTimestampNsFromBytesPhase(data []byte, expectedMsgSize int, phase uint8) (int64, bool) {
+	if len(data) != max(expectedMsgSize, MetricHeaderSize) {
+		return 0, false
+	}
 	header, ok := DecodeMetricHeader(data)
 	if !ok || !validHeaderPhase(header, expectedMsgSize, phase) {
 		return 0, false

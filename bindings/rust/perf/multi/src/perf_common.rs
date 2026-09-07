@@ -552,7 +552,7 @@ pub fn is_stop_token(data: &[u8]) -> bool {
 }
 
 pub fn is_valid_message(data: &[u8], expected_size: usize) -> bool {
-    data.len() >= HEADER_SIZE
+    data.len() == expected_size.max(HEADER_SIZE)
         && decode_magic(data) == MAGIC
         && decode_run_id(data) == BENCHMARK_RUN_ID
         && decode_msg_size(data) as usize == expected_size
@@ -763,13 +763,13 @@ pub fn build_phase_result(
 pub fn print_phase_result(key: &str, phase: &PhaseResult) {
     println!("{key},throughput,{:.3}", phase.throughput);
     println!("{key},bandwidth,{:.3}", phase.bandwidth);
-    println!("{key},latency,{:.3}", phase.latency_mean_ns / 1_000_000.0);
+    println!("{key},latency,{:.6}", phase.latency_mean_ns / 1_000_000.0);
     println!(
-        "{key},latency_p95,{:.3}",
+        "{key},latency_p95,{:.6}",
         phase.latency_p95_ns / 1_000_000.0
     );
     println!(
-        "{key},latency_p99,{:.3}",
+        "{key},latency_p99,{:.6}",
         phase.latency_p99_ns / 1_000_000.0
     );
     use std::io::Write;

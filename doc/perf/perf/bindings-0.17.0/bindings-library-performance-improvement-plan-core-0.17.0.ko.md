@@ -1411,7 +1411,8 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | 4 | Multi 종료 protocol 정합 — `CLIENT_DONE`/`STOP` 대기 없이 socket을 닫는 6개 binding, Java의 wire stop token, Node의 비표준 barrier, Rust·Python PUBSUB의 `CLIENT_DONE` 누락 | 완료 `d634417a37` (7개 binding) |
 | 5 | Multi 부하 수준 정합 — socket당 in-flight 1인 러너를 비동기 연속 제출로 | 부분 완료 `d634417a37` — C++·Java REQREP과 Python SENDSEND 전환, 미완료 상한 `PERF_MULTI_REQREP_MAX_OUTSTANDING`=64. 잔여: Go REQREP 재구성, .NET·Node·Rust·Python 상한 적용 |
 | 6 | Single 러너 정책 정합 — 전용 OS thread + synchronous API, 언어별 금지 조항, REQREP 연속 제출 | C·C++·.NET·Java·Node 완료. Go·Rust·Python 진행 중(D-BP11) |
-| 6b | 시간원 monotonic + 메시지당 `getenv` 캐시 + 미완료 상한 + 종료 protocol | C·C++·.NET·Java·Node 완료. Go·Rust·Python 진행 중(D-BP11) |
+| 6b | 시간원 monotonic + 메시지당 `getenv` 캐시 + 미완료 상한 + 종료 protocol | **완료** — 7개 binding 전부(`b93b176061` Rust·Python, `fdfd4dda0b` Go). Go REQREP만 Core 결함으로 보류(D-BP12) |
+| 6c | 잔여 정합 — `reqrep_max_outstanding` 8개 러너 노출, .NET `completed` anchor 위치, one-way 5건(active deadline 필터·wire 길이 검증·1 ms transient 재시도·RESULT 정밀도·latency 표본 0개) 7개 binding 이식, anchor 6종 대조표 | 진행 중(D-BP13) |
 | 7 | Core 0.17.1 artifact 고정 + 환경 manifest | 완료 — **저장소 밖 고정 prefix** `~/.cache/zlink/core-pinned/0.17.1`(태그 `core/v0.17.1` 커밋 `4cd03b9173`, Build ID `101bdb24…`). 모든 러너는 `ZLINK_CORE_SOURCE=release` + `ZLINK_CORE_PACKAGE_PREFIX`로 실행한다. 머신 B의 Core 변경과 분리(D-BP9) |
 | 8 | 측정 — C++부터 pattern·transport 단위 paired | 진행 중 — `tcp` `MULTI_DEALER_DEALER` **통과(95.59%)** |
 

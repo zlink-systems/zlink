@@ -69,11 +69,21 @@ final class PerfMeasurement {
 
     static Message resetAndWritePayload(Message payload, int size, byte phase,
                                         long sentNanoTime) {
+        return resetAndWritePayload(payload, size, phase,
+            SEQ.getAndIncrement(), sentNanoTime);
+    }
+
+    static long nextSequence() {
+        return SEQ.getAndIncrement();
+    }
+
+    static Message resetAndWritePayload(Message payload, int size, byte phase,
+                                        long sequence, long sentNanoTime) {
         if (payload != null) {
             payload.close();
         }
         payload = payloadTemplate(size);
-        writePayload(payload, size, phase, sentNanoTime);
+        writePayloadHeader(payload, size, phase, sequence, sentNanoTime);
         return payload;
     }
 

@@ -41,12 +41,14 @@ func runSingleRoutedOneWayWithTransient(
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
+		sequence := perfcommon.NextMetricSequence()
 		for time.Now().Before(window.StopAt) {
-			message := perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt)
+			message := perfcommon.NewActiveMessageWithSequence(cfg.msgSize, sequence)
 			sent, err := sendActive(message)
 			if err != nil {
 				_ = message.Close()
 				if isTransient(err) {
+					perfcommon.PollIdle(time.Millisecond)
 					continue
 				}
 				if perfDebugEnabled {
@@ -57,8 +59,10 @@ func runSingleRoutedOneWayWithTransient(
 			}
 			if !sent {
 				_ = message.Close()
+				perfcommon.PollIdle(time.Millisecond)
 				continue
 			}
+			sequence = perfcommon.NextMetricSequence()
 		}
 		if !sendStopTokenSingle(sendStop, isTransient) {
 			senderDone <- fmt.Errorf("single routed stop token send failed")
@@ -72,7 +76,7 @@ func runSingleRoutedOneWayWithTransient(
 
 	recvErr := error(nil)
 	for {
-		stop, err := recvSingleRoutedOneWayOnce(receiver, &received, stats, cfg.msgSize)
+		stop, err := recvSingleRoutedOneWayOnce(receiver, &received, stats, cfg.msgSize, window.ActiveAtNs, window.StopAtNs)
 		if err != nil {
 			recvErr = err
 			break
@@ -96,6 +100,8 @@ func recvSingleRoutedOneWayOnce(
 	received *zlink.Received,
 	stats *perfcommon.Stats,
 	msgSize int,
+	activeAtNs int64,
+	stopAtNs int64,
 ) (bool, error) {
 	ok, err := receiver.Recv(received, zlink.RecvFlagsNone)
 	if err != nil {
@@ -121,13 +127,12 @@ func recvSingleRoutedOneWayOnce(
 	if partErr != nil {
 		return false, partErr
 	}
-	sentTsNs, valid := perfcommon.SentTimestampNsFromMessagePhase(
-		part, msgSize, perfcommon.PhaseActive)
-	if valid {
+	recvTsNs := perfcommon.MonotonicNowNs()
+	latencyNs, valid := perfcommon.LatencyNsFromMessageAt(
+		part, msgSize, perfcommon.PhaseActive, recvTsNs)
+	if valid && recvTsNs >= activeAtNs && recvTsNs < stopAtNs {
 		stats.AddCount()
-		if nowNs := perfcommon.MonotonicNowNs(); nowNs >= sentTsNs {
-			stats.AddLatencySampleNs(float64(nowNs - sentTsNs))
-		}
+		stats.AddLatencySampleNs(latencyNs)
 	}
 	return false, nil
 }

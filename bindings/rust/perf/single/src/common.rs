@@ -88,7 +88,7 @@ pub fn is_valid_active_message(data: &[u8], expected_size: usize) -> bool {
 }
 
 pub fn is_valid_message(data: &[u8], expected_size: usize) -> bool {
-    data.len() >= HEADER_SIZE
+    data.len() == expected_size.max(HEADER_SIZE)
         && decode_magic(data) == MAGIC
         && decode_msg_size(data) as usize == expected_size
         && decode_run_id(data) == BENCHMARK_RUN_ID
@@ -585,13 +585,13 @@ fn bandwidth_multiplier(_pattern: &str) -> f64 {
 pub fn print_phase_result(key: &str, phase: &PhaseResult) {
     println!("{key},throughput,{:.3}", phase.throughput);
     println!("{key},bandwidth,{:.3}", phase.bandwidth);
-    println!("{key},latency,{:.3}", phase.latency_mean_ns / 1_000_000.0);
+    println!("{key},latency,{:.6}", phase.latency_mean_ns / 1_000_000.0);
     println!(
-        "{key},latency_p95,{:.3}",
+        "{key},latency_p95,{:.6}",
         phase.latency_p95_ns / 1_000_000.0
     );
     println!(
-        "{key},latency_p99,{:.3}",
+        "{key},latency_p99,{:.6}",
         phase.latency_p99_ns / 1_000_000.0
     );
     use std::io::Write;
@@ -649,11 +649,12 @@ pub fn handle_recv(
     data: &[u8],
     expected_size: usize,
     stats: &std::sync::Mutex<LatencyStats>,
-    active_deadline: Instant,
+    active_deadline_ns: u64,
 ) {
-    if Instant::now() < active_deadline && is_valid_active_message(data, expected_size) {
+    let recv_ts_ns = now_ns();
+    if recv_ts_ns < active_deadline_ns && is_valid_active_message(data, expected_size) {
         let sent_ts_ns = decode_sent_ts_ns(data);
-        let latency_ns = (now_ns() as i64).saturating_sub(sent_ts_ns).max(0) as u64;
+        let latency_ns = (recv_ts_ns as i64).saturating_sub(sent_ts_ns).max(0) as u64;
         stats.lock().unwrap().record_ns(latency_ns);
     }
 }
@@ -692,14 +693,14 @@ where
 
 /// One-way send loop: active only.
 /// `send_fn` returns false when nonblocking send cannot accept a message yet.
-pub fn send_loop<S>(active_deadline: Instant, msg_size: usize, phase: u8, mut send_fn: S)
+pub fn send_loop<S>(active_deadline_ns: u64, msg_size: usize, phase: u8, mut send_fn: S)
 where
     S: FnMut(Message) -> bool,
 {
     let mut seq: u64 = 0;
     let payload_size = msg_size.max(HEADER_SIZE);
 
-    while Instant::now() < active_deadline {
+    while now_ns() < active_deadline_ns {
         let mut msg = Message::with_size(payload_size).expect("msg");
         encode_header(msg.data_mut(), phase, msg_size as u32, seq);
         if send_fn(msg) {
@@ -711,6 +712,7 @@ where
                 poll_idle(Duration::from_millis(1));
             }
         } else {
+            poll_idle(Duration::from_millis(1));
             continue;
         }
     }

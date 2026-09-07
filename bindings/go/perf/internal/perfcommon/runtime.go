@@ -15,15 +15,20 @@ const (
 )
 
 type BenchmarkWindow struct {
-	StopAt   time.Time
-	ActiveAt time.Time
+	StopAt     time.Time
+	ActiveAt   time.Time
+	StopAtNs   int64
+	ActiveAtNs int64
 }
 
 func NewBenchmarkWindow(duration time.Duration) BenchmarkWindow {
 	now := time.Now()
+	nowNs := MonotonicNowNs()
 	return BenchmarkWindow{
-		StopAt:   now.Add(duration),
-		ActiveAt: now,
+		StopAt:     now.Add(duration),
+		ActiveAt:   now,
+		StopAtNs:   nowNs + duration.Nanoseconds(),
+		ActiveAtNs: nowNs,
 	}
 }
 
@@ -35,9 +40,9 @@ func StampWindowPayload(payload []byte, activeAt time.Time) {
 	StampPayload(payload)
 }
 
-func RecordMessageLatency(stats *Stats, activeAt time.Time, stopAt time.Time, msgSize int, part *zlink.Message) {
-	now := time.Now()
-	if now.Before(activeAt) || !now.Before(stopAt) {
+func RecordMessageLatency(stats *Stats, activeAtNs int64, stopAtNs int64, msgSize int, part *zlink.Message) {
+	nowNs := MonotonicNowNs()
+	if nowNs < activeAtNs || nowNs >= stopAtNs {
 		return
 	}
 	sentTsNs, ok := SentTimestampNsFromMessagePhase(part, msgSize, PhaseActive)
@@ -45,14 +50,14 @@ func RecordMessageLatency(stats *Stats, activeAt time.Time, stopAt time.Time, ms
 		return
 	}
 	stats.AddCount()
-	if nowNs := MonotonicNowNs(); nowNs >= sentTsNs {
+	if nowNs >= sentTsNs {
 		stats.AddLatencySampleNs(float64(nowNs - sentTsNs))
 	}
 }
 
-func RecordMessageRTTLatency(stats *Stats, activeAt time.Time, stopAt time.Time, msgSize int, part *zlink.Message) {
-	now := time.Now()
-	if now.Before(activeAt) || !now.Before(stopAt) {
+func RecordMessageRTTLatency(stats *Stats, activeAtNs int64, stopAtNs int64, msgSize int, part *zlink.Message) {
+	nowNs := MonotonicNowNs()
+	if nowNs < activeAtNs || nowNs >= stopAtNs {
 		return
 	}
 	sentTsNs, ok := SentTimestampNsFromMessagePhase(part, msgSize, PhaseActive)
@@ -60,14 +65,14 @@ func RecordMessageRTTLatency(stats *Stats, activeAt time.Time, stopAt time.Time,
 		return
 	}
 	stats.AddCount()
-	if nowNs := MonotonicNowNs(); nowNs >= sentTsNs {
+	if nowNs >= sentTsNs {
 		stats.AddLatencySampleNs(float64(nowNs-sentTsNs) / 2.0)
 	}
 }
 
-func RecordBytesLatency(stats *Stats, activeAt time.Time, stopAt time.Time, msgSize int, payload []byte) {
-	now := time.Now()
-	if now.Before(activeAt) || !now.Before(stopAt) {
+func RecordBytesLatency(stats *Stats, activeAtNs int64, stopAtNs int64, msgSize int, payload []byte) {
+	nowNs := MonotonicNowNs()
+	if nowNs < activeAtNs || nowNs >= stopAtNs {
 		return
 	}
 	sentTsNs, ok := SentTimestampNsFromBytesPhase(payload, msgSize, PhaseActive)
@@ -75,14 +80,14 @@ func RecordBytesLatency(stats *Stats, activeAt time.Time, stopAt time.Time, msgS
 		return
 	}
 	stats.AddCount()
-	if nowNs := MonotonicNowNs(); nowNs >= sentTsNs {
+	if nowNs >= sentTsNs {
 		stats.AddLatencySampleNs(float64(nowNs - sentTsNs))
 	}
 }
 
-func RecordBytesRTTLatency(stats *Stats, activeAt time.Time, stopAt time.Time, msgSize int, payload []byte) {
-	now := time.Now()
-	if now.Before(activeAt) || !now.Before(stopAt) {
+func RecordBytesRTTLatency(stats *Stats, activeAtNs int64, stopAtNs int64, msgSize int, payload []byte) {
+	nowNs := MonotonicNowNs()
+	if nowNs < activeAtNs || nowNs >= stopAtNs {
 		return
 	}
 	sentTsNs, ok := SentTimestampNsFromBytesPhase(payload, msgSize, PhaseActive)
@@ -90,7 +95,7 @@ func RecordBytesRTTLatency(stats *Stats, activeAt time.Time, stopAt time.Time, m
 		return
 	}
 	stats.AddCount()
-	if nowNs := MonotonicNowNs(); nowNs >= sentTsNs {
+	if nowNs >= sentTsNs {
 		stats.AddLatencySampleNs(float64(nowNs-sentTsNs) / 2.0)
 	}
 }

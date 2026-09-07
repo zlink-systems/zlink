@@ -4047,6 +4047,10 @@ def build_effective_option_items(args, selected_patterns):
         items.extend(
             [
                 ("duration_seconds", str(parse_env_int("PERF_DURATION_SECONDS", 5))),
+                (
+                    "reqrep_max_outstanding",
+                    str(max(2, parse_env_int("PERF_MULTI_REQREP_MAX_OUTSTANDING", 64))),
+                ),
                 ("clients", clients_meta),
                 ("default_clients", str(default_clients)),
                 ("default_stream_clients", str(default_stream_clients)),
@@ -4264,9 +4268,10 @@ def emit_result_lines(result_map):
     for key in sorted(result_map.keys()):
         pattern, transport, size, metric = key
         value = result_map[key]
+        precision = 6 if metric.startswith("latency") else 3
         print(
             f"RESULT,current,{display_pattern_name(pattern)},"
-            f"{transport},{size},{metric},{value:.3f}"
+            f"{transport},{size},{metric},{value:.{precision}f}"
         )
 
 

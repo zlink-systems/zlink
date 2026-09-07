@@ -86,7 +86,8 @@ final class PerfMetricHeader {
         // These primitive reads avoid allocating a ByteBuffer view for every
         // received frame while retaining the public range checks and wire
         // header validation.
-        if (message == null || message.size() < HEADER_SIZE
+        if (message == null
+            || message.size() != Math.max(expectedSize, HEADER_SIZE)
             || message.readIntLe(0) != GENERIC_MAGIC
             || message.readIntLe(RUN_ID_OFFSET) != PerfMeasurement.runId()
             || message.readIntLe(MESSAGE_SIZE_OFFSET) != expectedSize) {

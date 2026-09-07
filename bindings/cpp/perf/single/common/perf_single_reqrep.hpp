@@ -142,13 +142,16 @@ inline void emit_reqrep_result (const std::string &lib_name_,
               << msg_size_ << ",throughput," << std::fixed << std::setprecision (3)
               << throughput_ << std::endl;
     std::cout << "RESULT," << lib_name_ << "," << pattern_ << "," << transport_ << ","
-              << msg_size_ << ",bandwidth," << bandwidth << std::endl;
+              << msg_size_ << ",bandwidth," << std::setprecision (3) << bandwidth << std::endl;
     std::cout << "RESULT," << lib_name_ << "," << pattern_ << "," << transport_ << ","
-              << msg_size_ << ",latency," << latency_.mean_ns / 1000000.0 << std::endl;
+              << msg_size_ << ",latency," << std::setprecision (6)
+              << latency_.mean_ns / 1000000.0 << std::endl;
     std::cout << "RESULT," << lib_name_ << "," << pattern_ << "," << transport_ << ","
-              << msg_size_ << ",latency_p95," << latency_.p95_ns / 1000000.0 << std::endl;
+              << msg_size_ << ",latency_p95," << std::setprecision (6)
+              << latency_.p95_ns / 1000000.0 << std::endl;
     std::cout << "RESULT," << lib_name_ << "," << pattern_ << "," << transport_ << ","
-              << msg_size_ << ",latency_p99," << latency_.p99_ns / 1000000.0 << std::endl;
+              << msg_size_ << ",latency_p99," << std::setprecision (6)
+              << latency_.p99_ns / 1000000.0 << std::endl;
 }
 
 inline bool receive_router (zlink::router_socket_t &socket_,
