@@ -12,3 +12,4 @@
 - **`git stash` 금지**(2026-09-07 사고): stash 스택은 worktree 전체가 공유한다 — 다른 job이 pop해 가져간다. 변경분을 잠시 치워야 하면 `git diff HEAD > <scratch>/<job>.patch; git checkout -- .` 후 `git apply`로 되돌린다.
 - 상한 1.5 h. 넘으면 증명한 것·남은 후보만 보고하고 멈춘다. 게이트·측정 루프 금지(측정은 before 없이 after 1회, 필요하면 2회).
 - 보고서: doc/plan/c016-worklog/core-rf-<id>-summary.md (한국어). 항목: 결과(수치), 변경 파일, 설계 비교와 선택 이유, 실행한 테스트와 남은 실패, 성능 표, 재확인한 스펙 절과 "어느 문장도 다른 동작이 되지 않았다" 확인, 변경 분류 한 줄(A 계약 적응 / B 기존 결함 / C 우회 / D spec gap), 멈춘 지점(있으면). 진행 파일 doc/plan/c016-worklog/progress-<id>.md 를 3분마다 갱신(worktree 밖, 메인 저장소 경로에 직접 씀).
+- **메모리 규칙 보강(2026-09-08 08:40, 게이트 OOM 뒤)**: 트랙이 3개 병행될 때는 빌드·valgrind·측정 시작 전마다 `pgrep -c -x ninja`가 0이고 `free -m` available ≥ 6000일 때만 시작한다(60 s 대기 반복). 빌드 2개 동시 허용 규칙은 트랙 2개까지만 적용한다.
