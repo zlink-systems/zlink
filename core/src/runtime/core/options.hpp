@@ -234,6 +234,11 @@ struct options_t
     //  Bound on Core-owned asynchronous send reservations. Unbounded pending
     //  would be a high-water mark bypass, so 0 is not accepted as
     //  "unlimited" on the message axis.
+    //  Since D-B85 (contract B unification for REQUEST), the Core REQUEST
+    //  pending pool was removed and these two options are a behavioural
+    //  no-op: get/setsockopt still store and round-trip the values for ABI
+    //  compatibility, but nothing in Core enforces them anymore. See
+    //  doc/plan/archive/core-0.17.0-dontwait-contract-and-perf-plan-b.ko.md:25.
     uint64_t send_pending_max_msgs;
     uint64_t send_pending_max_bytes;
 

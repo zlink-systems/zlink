@@ -43,6 +43,15 @@ class ctx_socket_registry_t
   private:
     bool contains_socket (const socket_base_t *socket_) const;
 
+    //  Shared polling loop for wait_for_socket_removal /
+    //  wait_for_socket_count_at_most: blocks on _socket_state_cv under
+    //  sync_ until predicate_ () is true or timeout_ms_ elapses.
+    //  Returns 0 on success, -1/ETIMEDOUT on timeout. sync_ is passed
+    //  straight through to condition_variable_t::wait, so the same
+    //  lock-depth contract as ctx_t::_slot_sync applies here.
+    template <typename Predicate>
+    int wait_until (mutex_t *sync_, int timeout_ms_, Predicate predicate_);
+
     typedef std::vector<uint32_t> empty_slots_t;
     typedef std::vector<i_mailbox *> slots_t;
 
