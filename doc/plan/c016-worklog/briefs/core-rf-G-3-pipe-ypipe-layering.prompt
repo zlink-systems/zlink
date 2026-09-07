@@ -1,0 +1,5 @@
+job G-3 (opus): pipe/ypipe layering 비용(패턴 무관 695–864 Ir/msg) 축소. 공통 규칙 적용(JOBS=4, ninja ≤2 `-x`, stash 금지, 포그라운드, 1.5 h). worktree ~/project/zlink-work/g3.
+근거: G-A common-cost 표 — 5셀 공통 249 심볼 중 pipe_t/ypipe_t 계열이 패턴과 무관하게 695–864 Ir/msg. S-5·S-B의 layering 관찰(pass-through 프레임). 관련: `pipe_t::read/write/flush/check_read`, `ypipe_t::read/write/flush/check_read`, `yqueue_t`, `pipe_t::account_inbound_frame`(1.69 %), `publish_session_outbound_accounting_unlocked`.
+절차: (1) 축소셀(RR single + STREAM, G-A 방법; 스크립트 scratchpad GA/)에서 pipe/ypipe 계열 호출 횟수/msg·self-Ir 표. (2) 각 함수가 소유하는 규칙 하나를 적고, 두 프레임이 같은 규칙을 반복하거나 한쪽이 pass-through면 병합 후보. `account_inbound_frame`의 published store 빈도는 06-auto-hwm 스냅샷 정의(§7.5 D-d)에 걸리면 손대지 않는다. (3) ypipe sleep/awake 진리표(activate_read 발행 조건)는 불변 — S-1 보고서 §의 진리표를 인용해 전후 동일 증명. (4) LTO 인라인 여부를 확인(G-2가 찾은 것처럼 인라인 예산을 넘기는 cold path가 있으면 out-of-line로 분리하는 것이 먼저).
+검증: `ctest -R 'pipe|wake|poll|stream|hwm|flow|router|dealer|pair'` 5회, lost-wake until-fail:10, TSan(`setarch -R`) 신규 경고 0, hotpath 5셀(worktree build-gate, 결정적 — 주 판정), 축소셀 Ir/msg.
+보고서 core-rf-G-3-summary.md.
