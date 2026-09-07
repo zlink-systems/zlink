@@ -2006,3 +2006,11 @@ Go REQREP 러너 정합 중 드러났고, **감독자가 최소 재현 프로그
 ## D-BP16 (2026-09-07 21:00, 머신 A) Go REQREP의 미완료 상한은 0.17.2 재개 시점에 함께 제거한다
 D-BP15의 러너 C 모델 복원에서 `PERF_MULTI_REQREP_MAX_OUTSTANDING`·`PERF_SINGLE_REQREP_MAX_OUTSTANDING`을 8개 러너에서 제거했으나, **Go의 두 파일에는 남는다** — `bindings/go/perf/single/perf_reqrep.go`, `bindings/go/perf/multi/perf_multi_socket_reqrep.go`. Go REQREP 경로가 Core 동시 multipart 결함으로 0.17.2까지 보류(D-BP12·D-BP14)여서 이번 작업 범위에서 제외했기 때문이다.
 Go REQREP은 지금 측정 자체가 불가능하므로 당장 해는 없다. 다만 **0.17.2로 Go REQREP을 재개할 때 이 상한을 함께 제거해야 한다.** 남겨 두면 `PERF_POLICY.md:271-274`의 "app 고정 window를 두지 않는다"를 Go만 어긴 상태로 측정하게 된다. 재개 절차에 이 항목을 포함한다.
+
+## D-BP17 (2026-09-07 22:50, 머신 A) C++ binding의 blocking REQUEST publication wake 누락 — 성능과 무관한 정확성 결함
+C++ Multi REQREP 개선 pass 1(astra) 중 발견됐고 감독자가 코드로 확인했다. **성능 문제가 아니라 correctness 문제이며 이번 성능 격차와 무관하다.**
+`bindings/cpp/src/Runtime/Messaging/completion_owner.cpp:280-286`의 `publish()`는 `_completion_id`를 넣고 `_published = true`로 표시한 뒤 `settle_if_joined(lock)`만 부른다. `_changed`에 notify하지 않는다. 같은 파일의 `fail_submit()`이 `_published`와 `_captured`를 함께 설정하는 것과 대비된다.
+early completion의 `capture()`는 `_changed.wait()`에서 `_published`를 기다리므로 `_captured`를 아직 설정하지 못한 상태다. 그 상태에서 `publish()`가 오면 `settle_if_joined()`는 joined 조건을 만족하지 못해 그냥 반환하고 notification이 없다. **blocking submit과 조기 drain이 이 순서로 겹치면 대기에 걸린다.**
+재현: 원본 `completion_owner.cpp/.hpp`를 임시 object로 컴파일하고 `condition_variable::wait` 진입을 linker wrap한 결정적 진단에서 `FAIL: publication did not wake the early completion`이 재현됐다.
+perf의 async 경로는 `submit_request_attempt()`가 직접 notify하므로 이 결함을 밟지 않는다. 따라서 REQREP 성능 격차의 원인으로 합산하지 않으며, pass 1은 관련 수정과 test를 남기지 않았다.
+조치: **별도 correctness 수정 항목으로 분리한다.** 성능 캠페인의 판정과 섞지 않는다. 수정 시 회귀 테스트(조기 drain이 먼저 wait에 들어간 상태에서 publish가 깨우는지)를 함께 넣는다.
