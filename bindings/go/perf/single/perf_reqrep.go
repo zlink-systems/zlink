@@ -2,18 +2,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
 	zlink "zlink.systems/zlink"
 	"zlink.systems/zlink/perf/internal/perfcommon"
 )
 
-// Request Submit owns any pre-admission WRITABLE retry and then waits for the
-// normal reply completion, so the benchmark loop needs no pending-request FIFO.
+// Go exposes a blocking request terminal, so each capped requester thread owns
+// both its admission and reply completion instead of serializing the role at 1 RTT.
 func runSingleReqRep(
 	cfg benchmarkConfig,
 	requester zlink.SocketTarget,
@@ -34,32 +36,57 @@ func runSingleReqRep(
 	activeAt := time.Now()
 	stopAt := activeAt.Add(cfg.duration)
 	timeout := reqRepDurationFromEnv("PERF_SINGLE_REQREP_TIMEOUT_MS", 200*time.Millisecond)
-	for time.Now().Before(stopAt) {
-		payload := perfcommon.NewWindowMessage(cfg.msgSize, activeAt)
-		submit := request().Message(payload)
-		var tail *zlink.Message
-		if perfcommon.MeasurementPartCount() == 2 {
-			tail = perfcommon.NewMessageWithSize(0)
-			submit = submit.Message(tail)
+	maxOutstanding := 64
+	if raw := os.Getenv("PERF_SINGLE_REQREP_MAX_OUTSTANDING"); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
+			maxOutstanding = value
 		}
-		parts, err := submit.Timeout(timeout).Submit(context.Background())
-		_ = payload.Close()
-		if tail != nil {
-			_ = tail.Close()
-		}
-		if err != nil {
-			continue
-		}
-		reply, payloadErr := perfcommon.MeasurementPayload(parts)
-		if payloadErr == nil {
-			now := time.Now()
-			if sent, valid := perfcommon.SentTimestampNsFromMessagePhase(reply, cfg.msgSize, perfcommon.PhaseActive); valid {
-				stats.AddCount()
-				stats.AddLatencySampleNs(float64(now.UnixNano() - sent))
-			}
-		}
-		zlink.MultipartClose(parts)
 	}
+	if maxOutstanding < 2 {
+		maxOutstanding = 2
+	}
+	var requesters sync.WaitGroup
+	requesters.Add(maxOutstanding)
+	for range maxOutstanding {
+		go func() {
+			defer requesters.Done()
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
+			for time.Now().Before(stopAt) {
+				payload := perfcommon.NewWindowMessage(cfg.msgSize, activeAt)
+				submit := request().Message(payload)
+				var tail *zlink.Message
+				if perfcommon.MeasurementPartCount() == 2 {
+					tail = perfcommon.NewMessageWithSize(0)
+					submit = submit.Message(tail)
+				}
+				parts, err := submit.Timeout(timeout).Submit(context.Background())
+				completedAt := time.Now()
+				completedNs := perfcommon.MonotonicNowNs()
+				_ = payload.Close()
+				if tail != nil {
+					_ = tail.Close()
+				}
+				if err != nil {
+					zlink.MultipartClose(parts)
+					var requestErr *zlink.RequestError
+					if errors.As(err, &requestErr) && requestErr.Result == zlink.RequestTimedOut {
+						continue
+					}
+					perfcommon.Must(err)
+				}
+				reply, payloadErr := perfcommon.MeasurementPayload(parts)
+				if payloadErr == nil && completedAt.Before(stopAt) {
+					if sent, valid := perfcommon.SentTimestampNsFromMessagePhase(reply, cfg.msgSize, perfcommon.PhaseActive); valid && completedNs >= sent {
+						stats.AddCount()
+						stats.AddLatencySampleNs(float64(completedNs-sent) / 2.0)
+					}
+				}
+				zlink.MultipartClose(parts)
+			}
+		}()
+	}
+	requesters.Wait()
 
 	if !sendReqRepStop(sendStop) {
 		close(localStop)

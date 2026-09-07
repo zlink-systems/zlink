@@ -32,6 +32,7 @@ func runMultiPubSubServer(cfg multiConfig) {
 
 	window := activeDeadline(cfg.duration)
 	payload := perfcommon.PreparePayload(cfg.msgSize)
+	autoHWMPrinted := false
 	for time.Now().Before(window.StopAt) {
 		if useMultiPubSubWindowMessage(cfg.transport, cfg.msgSize) {
 			_, err := perfcommon.SubmitMeasurement(publisher.Publish("bench"),
@@ -42,6 +43,14 @@ func runMultiPubSubServer(cfg multiConfig) {
 				}
 				perfcommon.Must(fmt.Errorf("multi pubsub publish size=%d clients=%d transport=%s: %w",
 					cfg.msgSize, cfg.clients, cfg.transport, err))
+			}
+			if !autoHWMPrinted {
+				// Snapshot after the first admitted application message so the
+				// attached pipe's applied byte HWM is visible.
+				perfcommon.PrintMultiSocketAutoHWMDetail(
+					publisher, nil, cfg.pattern, cfg.transport, "server", "endpoint", zlink.SocketTypePub, cfg.msgSize,
+				)
+				autoHWMPrinted = true
 			}
 			continue
 		}
@@ -54,6 +63,14 @@ func runMultiPubSubServer(cfg multiConfig) {
 			}
 			perfcommon.Must(fmt.Errorf("multi pubsub publish size=%d clients=%d transport=%s: %w",
 				cfg.msgSize, cfg.clients, cfg.transport, err))
+		}
+		if !autoHWMPrinted {
+			// Snapshot after the first admitted application message so the
+			// attached pipe's applied byte HWM is visible.
+			perfcommon.PrintMultiSocketAutoHWMDetail(
+				publisher, nil, cfg.pattern, cfg.transport, "server", "endpoint", zlink.SocketTypePub, cfg.msgSize,
+			)
+			autoHWMPrinted = true
 		}
 	}
 	sendMultiPubSubStopToken(publisher)
@@ -102,11 +119,13 @@ func runMultiPubSubClient(cfg multiConfig, endpoint string) perfcommon.Result {
 	}
 	for _, monitor := range monitors {
 		perfcommon.WaitConnectedWithTimeout(perfcommon.MultiReadyTimeout(), monitor)
-		_ = monitor.Close()
 	}
 	// PERF_MULTI_TEST_POLICY § 1.6: recalculate after target connections ready.
 	perfcommon.Must(ctx.RecalculateAutoHwm())
 	defer func() {
+		for _, monitor := range monitors {
+			_ = monitor.Close()
+		}
 		for _, sub := range subs {
 			_ = sub.Close()
 		}
@@ -158,6 +177,11 @@ func runMultiPubSubClient(cfg multiConfig, endpoint string) perfcommon.Result {
 			continue
 		}
 		drainMultiPubSubReady(subs, received, events[:n], stats, cfg.msgSize, window.StopAt, &phaseDone, &activeObserved)
+	}
+	if activeObserved && len(subs) > 0 {
+		perfcommon.PrintMultiSocketAutoHWMDetail(
+			subs[0], monitors[0], cfg.pattern, cfg.transport, "client", "endpoint", zlink.SocketTypeSub, cfg.msgSize,
+		)
 	}
 	flushControlLine("CLIENT_DONE,%d", cfg.msgSize)
 	return stats.Snapshot(cfg.duration, cfg.msgSize)
@@ -234,7 +258,7 @@ func drainMultiPubSubSocket(
 	stats.AddCount()
 	*activeObserved = true
 	if latencyNs, ok := perfcommon.LatencyNsFromMessageAt(
-		part, msgSize, perfcommon.PhaseActive, now); ok {
+		part, msgSize, perfcommon.PhaseActive, perfcommon.MonotonicNowNs()); ok {
 		stats.AddLatencySampleNs(latencyNs)
 	}
 }

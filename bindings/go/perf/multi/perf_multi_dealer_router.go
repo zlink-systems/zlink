@@ -79,6 +79,11 @@ func runMultiDealerRouterClient(cfg multiConfig, endpoint string) perfcommon.Res
 
 	window := activeDeadline(cfg.duration)
 	runMultiDealerRouterEchoWindow(dealers, stats, cfg.msgSize, window)
+	if len(dealers) > 0 {
+		perfcommon.PrintMultiSocketAutoHWMDetail(
+			dealers[0].socket, dealers[0].monitor, cfg.pattern, cfg.transport, "client", "endpoint", zlink.SocketTypeDealer, cfg.msgSize,
+		)
+	}
 	return stats.Snapshot(cfg.duration, cfg.msgSize)
 }
 
@@ -165,7 +170,9 @@ func runMultiDealerRouterEchoWindow(
 	for _, dealer := range dealers {
 		_ = dealer.socket.Close()
 	}
-	senders.Wait()
+	if !waitForMultiSendDrain(&senders) {
+		perfcommon.Must(fmt.Errorf("multi dealer/router send drain timed out"))
+	}
 	select {
 	case sendErr := <-sendErrors:
 		perfcommon.Must(sendErr)

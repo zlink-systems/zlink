@@ -49,7 +49,7 @@ func runSingleRoutedOneWayWithTransient(
 				if isTransient(err) {
 					continue
 				}
-				if os.Getenv("PERF_DEBUG") != "" {
+				if perfDebugEnabled {
 					fmt.Fprintf(os.Stderr, "single routed active send error: %v\n", err)
 				}
 				senderDone <- err
@@ -121,12 +121,11 @@ func recvSingleRoutedOneWayOnce(
 	if partErr != nil {
 		return false, partErr
 	}
-	now := time.Now()
 	sentTsNs, valid := perfcommon.SentTimestampNsFromMessagePhase(
 		part, msgSize, perfcommon.PhaseActive)
 	if valid {
 		stats.AddCount()
-		if nowNs := now.UnixNano(); nowNs >= sentTsNs {
+		if nowNs := perfcommon.MonotonicNowNs(); nowNs >= sentTsNs {
 			stats.AddLatencySampleNs(float64(nowNs - sentTsNs))
 		}
 	}

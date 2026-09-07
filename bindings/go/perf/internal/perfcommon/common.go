@@ -177,6 +177,117 @@ func PrintSingleAutoHWMDetail(
 	PrintSocketAutoHWMDetail(monitor, pattern, transport, component, socketType, msgSize)
 }
 
+func PrintMultiSocketAutoHWMDetail(
+	socket zlink.SocketTarget,
+	monitor *zlink.SocketMonitor,
+	pattern string,
+	transport string,
+	component string,
+	label string,
+	socketType zlink.SocketType,
+	msgSize int,
+) {
+	if socket == nil || !EnvEnabled("PERF_MULTI_PRINT_AUTO_HWM_DETAIL", EnvEnabled("PERF_PRINT_AUTO_HWM_DETAIL", true)) {
+		return
+	}
+	ownedMonitor := monitor == nil
+	if ownedMonitor {
+		monitor = OpenMonitor(socket)
+		defer monitor.Close()
+	}
+	snapshot, err := monitor.Status()
+	if err != nil || snapshot == nil {
+		return
+	}
+	role := autoHWMRoleName(snapshot.AutoHwmRole)
+	socketName := strings.ToLower(socketTypeName(socketType))
+	sendVisible := !((socketName == "sub" || socketName == "xsub") && (role == "recv_ingress" || role == "control"))
+	recvVisible := !((socketName == "pub" || socketName == "xpub") && role == "control")
+	sndHWM := fmt.Sprint(snapshot.AutoHwmAppliedSndHwmBytes)
+	rcvHWM := fmt.Sprint(snapshot.AutoHwmAppliedRcvHwmBytes)
+	sndBuf := snapshot.AutoHwmEffectiveSndBuf
+	rcvBuf := snapshot.AutoHwmEffectiveRcvBuf
+	if !sendVisible {
+		sndHWM = "-"
+		sndBuf = 0
+	}
+	if !recvVisible {
+		rcvHWM = "-"
+		rcvBuf = 0
+	}
+	fmt.Printf(
+		"AUTO_HWM_DETAIL,pattern=%s,transport=%s,component=%s,label=%s,socket_type=%s,msg_size=%d,source=monitor_snapshot,enabled=%d,role=%s,role_id=%d,profile=%s,profile_id=%d,policy_class=%s,policy_class_id=%d,sndhwm=%s,rcvhwm=%s,snd_pending_bytes=%d,rcv_pending_bytes=%d,effective_sndbuf=%d,effective_rcvbuf=%d,last_recalc_ms=%d,last_recalc_reason=%s,send_blocked_ratio_ppm=%d,deferred_sndhwm=%d,deferred_rcvhwm=%d,deferred_sndhwm_valid=%d,deferred_rcvhwm_valid=%d\n",
+		pattern, transport, component, label, socketName, msgSize,
+		boolInt(snapshot.AutoHwmEnabled), role, snapshot.AutoHwmRole,
+		autoHWMProfileName(snapshot.AutoHwmProfile), snapshot.AutoHwmProfile,
+		autoHWMPolicyClassName(snapshot.AutoHwmPolicyClass), snapshot.AutoHwmPolicyClass,
+		sndHWM, rcvHWM, snapshot.SndPendingBytes, snapshot.RcvPendingBytes,
+		sndBuf, rcvBuf, snapshot.AutoHwmLastRecalcMs,
+		autoHWMRecalcReasonName(snapshot.AutoHwmLastRecalcReason),
+		snapshot.AutoHwmSendBlockedRatioPPM, snapshot.AutoHwmDeferredSndHwmBytes,
+		snapshot.AutoHwmDeferredRcvHwmBytes, boolInt(snapshot.AutoHwmDeferredSndHwmValid),
+		boolInt(snapshot.AutoHwmDeferredRcvHwmValid),
+	)
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func autoHWMProfileName(profile uint32) string {
+	switch profile {
+	case 0:
+		return "compact"
+	case 1:
+		return "low_latency"
+	case 2:
+		return "balanced"
+	case 3:
+		return "throughput"
+	default:
+		return "unknown"
+	}
+}
+
+func autoHWMPolicyClassName(policy uint32) string {
+	switch policy {
+	case 1:
+		return "fanout"
+	case 3:
+		return "recv_ingress"
+	case 4:
+		return "routed"
+	case 5:
+		return "peer_queue"
+	case 6:
+		return "stream"
+	case 7:
+		return "control"
+	default:
+		return "none"
+	}
+}
+
+func autoHWMRecalcReasonName(reason zlink.AutoHwmRecalcReason) string {
+	switch reason {
+	case zlink.AutoHwmRecalcReasonInitial:
+		return "initial"
+	case zlink.AutoHwmRecalcReasonRoleChange:
+		return "role_change"
+	case zlink.AutoHwmRecalcReasonPolicyToggle:
+		return "policy_toggle"
+	case zlink.AutoHwmRecalcReasonRefresh:
+		return "refresh"
+	case zlink.AutoHwmRecalcReasonDeferredShrink:
+		return "deferred_shrink"
+	default:
+		return "none"
+	}
+}
+
 func PrintSocketAutoHWMDetail(
 	monitor *zlink.SocketMonitor,
 	pattern string,

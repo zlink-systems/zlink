@@ -20,7 +20,7 @@ func TestRecordBytesRTTLatencySeparatesCountFromClockSample(t *testing.T) {
 	stats := newStats(8)
 	payload := make([]byte, MetricHeaderSize)
 	now := time.Now()
-	StampPayloadPhaseAt(payload, PhaseActive, now.Add(time.Hour))
+	StampPayloadPhaseAt(payload, PhaseActive, MonotonicNowNs()+int64(time.Hour))
 
 	RecordBytesRTTLatency(
 		stats, now.Add(-time.Second), now.Add(2*time.Hour), len(payload), payload)
@@ -40,7 +40,7 @@ func TestRecordBytesRTTLatencyExcludesPostDeadlineMessage(t *testing.T) {
 	stats := newStats(8)
 	payload := make([]byte, MetricHeaderSize)
 	now := time.Now()
-	StampPayloadPhaseAt(payload, PhaseActive, now.Add(-time.Second))
+	StampPayloadPhaseAt(payload, PhaseActive, MonotonicNowNs()-int64(time.Second))
 
 	RecordBytesRTTLatency(
 		stats, now.Add(-2*time.Second), now.Add(-time.Second), len(payload), payload)

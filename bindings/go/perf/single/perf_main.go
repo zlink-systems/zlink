@@ -21,6 +21,8 @@ var (
 	transport = flag.String("transport", "tcp", "")
 	msgSize   = flag.Int("msg-size", 64, "")
 	duration  = flag.Int("duration", 5, "")
+	// Read once because debug checks sit on measured-message paths.
+	perfDebugEnabled = os.Getenv("PERF_DEBUG") != ""
 )
 
 func main() {

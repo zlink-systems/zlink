@@ -474,15 +474,27 @@ else
 fi
 
 pattern_transports() {
-  case "$1" in
-    *)
-      if [[ "${PLATFORM}" == "windows" ]]; then
-        echo "tcp tls ws wss inproc"
-      else
-        echo "tcp tls ws wss inproc ipc"
-      fi
-      ;;
-  esac
+  local base=(tcp tls ws wss inproc)
+  if [[ "${PLATFORM}" != "windows" ]]; then
+    base+=(ipc)
+  fi
+  if [[ "${#XPORTS_FILTER[@]}" -eq 0 ]]; then
+    echo "${base[*]}"
+    return
+  fi
+  local selected=() candidate supported seen=" "
+  for candidate in "${XPORTS_FILTER[@]}"; do
+    supported=0
+    local allowed
+    for allowed in "${base[@]}"; do
+      [[ "${candidate}" == "${allowed}" ]] && supported=1 && break
+    done
+    if (( supported == 1 )) && [[ "${seen}" != *" ${candidate} "* ]]; then
+      selected+=("${candidate}")
+      seen+="${candidate} "
+    fi
+  done
+  echo "${selected[*]}"
 }
 
 transport_enabled() {
@@ -554,11 +566,7 @@ emit_effective_options_single() {
   echo "- runs: ${RUNS}"
   echo "- duration_seconds: ${DURATION}"
   echo "- timeout_seconds: ${PERF_SINGLE_TIMEOUT_SECONDS:-30}"
-  echo "- fail_fast: ${PERF_FAIL_FAST:-0}"
   echo "- io_threads: ${IO_THREADS:-${PERF_IO_THREADS:-1}}"
-  echo "- go_gomaxprocs: ${GOMAXPROCS:-unset}"
-  echo "- go_gomaxprocs_source: ${GO_GOMAXPROCS_SOURCE}"
-  echo "- go_gomaxprocs_case_overrides: none"
   echo "- hwm: $(effective_or_auto "${HWM}")"
   echo "- sndhwm: $(effective_or_auto "${SEND_HWM:-${HWM}}")"
   echo "- rcvhwm: $(effective_or_auto "${RECV_HWM:-${HWM}}")"
@@ -568,10 +576,18 @@ emit_effective_options_single() {
   echo "- rcvtimeo_ms: ${RCVTIMEO_MS:-${PERF_SINGLE_RCVTIMEO_MS:-200}}"
   echo "- ctx_auto_hwm_enable: ${PERF_CTX_AUTO_HWM_ENABLE:-core-default}"
   echo "- ctx_auto_hwm_profile: ${AUTO_HWM_PROFILE:-${PERF_SINGLE_CTX_AUTO_HWM_PROFILE:-${PERF_CTX_AUTO_HWM_PROFILE:-balanced}}}"
-  echo "- monitor_hwm_bytes: ${MONITOR_HWM_BYTES:-${PERF_MONITOR_HWM_BYTES:-4096000}}"
   echo "- patterns: ${EFFECTIVE_PATTERNS_CSV}"
   echo "- transports: ${EFFECTIVE_TRANSPORTS_CSV}"
   echo "- msg_sizes: ${MSG_SIZES}"
+  if [[ ",${EFFECTIVE_PATTERNS_CSV}," == *,DEALER_ROUTER_REQREP,* || ",${EFFECTIVE_PATTERNS_CSV}," == *,ROUTER_ROUTER_REQREP,* ]]; then
+    local reqrep_max="${PERF_SINGLE_REQREP_MAX_OUTSTANDING:-64}"
+    if ! [[ "${reqrep_max}" =~ ^[0-9]+$ ]] || (( reqrep_max == 0 )); then
+      reqrep_max=64
+    elif (( reqrep_max < 2 )); then
+      reqrep_max=2
+    fi
+    echo "- reqrep_max_outstanding: ${reqrep_max}"
+  fi
 }
 
 append_case_output() {

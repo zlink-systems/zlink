@@ -45,6 +45,7 @@ func runMultiDealerDealerServer(cfg multiConfig) {
 	events := make([]zlink.PollEvent, 1)
 
 	stopRequested := false
+	autoHWMPrinted := false
 	for !stopRequested {
 		wait := time.Until(window.StopAt)
 		if wait <= 0 {
@@ -87,6 +88,14 @@ func runMultiDealerDealerServer(cfg multiConfig) {
 			if partErr == nil {
 				perfcommon.RecordMessageLatency(
 					stats, window.ActiveAt, window.StopAt, cfg.msgSize, part)
+				if !autoHWMPrinted {
+					// Open the status snapshot only after an application pipe delivered
+					// a valid message; an earlier snapshot exposes the raw socket default.
+					perfcommon.PrintMultiSocketAutoHWMDetail(
+						server, nil, cfg.pattern, cfg.transport, "server", "endpoint", zlink.SocketTypeDealer, cfg.msgSize,
+					)
+					autoHWMPrinted = true
+				}
 			}
 			_ = received.Close()
 		}
@@ -200,6 +209,11 @@ func runMultiDealerDealerClient(cfg multiConfig, endpoint string) {
 	window := activeDeadline(cfg.duration)
 	runMultiDealerDealerSendWindow(clients, cfg, window)
 	if len(clients) > 0 {
+		perfcommon.PrintMultiSocketAutoHWMDetail(
+			clients[0].socket, clients[0].mon, cfg.pattern, cfg.transport, "client", "endpoint", zlink.SocketTypeDealer, cfg.msgSize,
+		)
+	}
+	if len(clients) > 0 {
 		sendMultiDealerStopToken(clients[0].socket)
 	}
 	flushControlLine("CLIENT_DONE,%d", cfg.msgSize)
@@ -247,7 +261,9 @@ func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfi
 			}
 		}()
 	}
-	workers.Wait()
+	if !waitForMultiSendDrain(&workers) {
+		perfcommon.Must(fmt.Errorf("multi dealer/dealer send drain timed out"))
+	}
 	select {
 	case err := <-errors:
 		perfcommon.Must(err)

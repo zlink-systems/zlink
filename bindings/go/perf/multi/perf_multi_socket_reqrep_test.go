@@ -25,7 +25,10 @@ func (r *barrierRequest) Bytes(data []byte) zlink.RequestSubmitOp {
 }
 func (r *barrierRequest) Timeout(time.Duration) zlink.RequestSubmitOp { return r }
 func (r *barrierRequest) Submit(context.Context) ([]*zlink.Message, error) {
-	r.arrived <- struct{}{}
+	select {
+	case r.arrived <- struct{}{}:
+	default:
+	}
 	<-r.release
 	body, err := zlink.NewMessage(r.payload)
 	if err != nil {

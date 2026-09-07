@@ -84,6 +84,11 @@ func runMultiRouterRouterClientRole(cfg multiConfig, endpoint string) perfcommon
 	window := activeDeadline(cfg.duration)
 	runMultiRouterRouterEchoWindow(clients, serverID, cfg, window, stats)
 	if len(clients) > 0 {
+		perfcommon.PrintMultiSocketAutoHWMDetail(
+			clients[0].socket, clients[0].monitor, cfg.pattern, cfg.transport, "client", "endpoint", zlink.SocketTypeRouter, cfg.msgSize,
+		)
+	}
+	if len(clients) > 0 {
 		sendMultiRouterStopToken(clients[0].socket, serverID)
 	}
 	return stats.Snapshot(cfg.duration, cfg.msgSize)
@@ -156,7 +161,9 @@ func runMultiRouterRouterEchoWindow(
 			}
 		}
 	}
-	senders.Wait()
+	if !waitForMultiSendDrain(&senders) {
+		perfcommon.Must(fmt.Errorf("multi router/router send drain timed out"))
+	}
 	select {
 	case sendErr := <-sendErrors:
 		perfcommon.Must(sendErr)

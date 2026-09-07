@@ -128,6 +128,7 @@ print_total_time() {
   echo "Total benchmark time: ${elapsed}s (${elapsed}s, exit=${status})"
 }
 PATTERN="ALL"
+CONTROL_PLANE_PATTERNS=()
 DURATION="5"
 PART_COUNT="${PERF_PART_COUNT:-2}"
 MSG_SIZES=""
@@ -751,24 +752,38 @@ else
   XPORTS_FILTER=()
 fi
 
+is_control_plane_pattern() {
+  local pattern="$1" candidate
+  for candidate in "${CONTROL_PLANE_PATTERNS[@]}"; do
+    [[ "${pattern}" == "${candidate}" ]] && return 0
+  done
+  return 1
+}
+
 pattern_transports() {
-  case "$1" in
-    MULTI_ROUTER_ROUTER_SENDSEND)
-      # IPC is diagnostics-only: keep it available when explicitly requested,
-      # but never add it to the policy default matrix.
-      if [[ "${PLATFORM}" != "windows" ]] && transport_enabled "ipc"; then
-        echo "tcp tls ws wss ipc"
-      else
-        echo "tcp tls ws wss"
-      fi
-      ;;
-	MULTI_STREAM|MULTI_PUBSUB|MULTI_DEALER_DEALER|MULTI_DEALER_ROUTER_SENDSEND)
-      echo "tcp tls ws wss"
-      ;;
-    *)
-      echo "tcp tls ws wss"
-      ;;
-  esac
+  local pattern="$1"
+  local base=(tcp tls ws wss)
+  if [[ "${pattern}" != "MULTI_STREAM" ]] && ! is_control_plane_pattern "${pattern}" \
+      && [[ "${PLATFORM}" != "windows" ]]; then
+    base+=(ipc)
+  fi
+  if [[ "${#XPORTS_FILTER[@]}" -eq 0 ]]; then
+    echo "${base[*]}"
+    return
+  fi
+  local selected=() candidate supported seen=" "
+  for candidate in "${XPORTS_FILTER[@]}"; do
+    supported=0
+    local allowed
+    for allowed in "${base[@]}"; do
+      [[ "${candidate}" == "${allowed}" ]] && supported=1 && break
+    done
+    if (( supported == 1 )) && [[ "${seen}" != *" ${candidate} "* ]]; then
+      selected+=("${candidate}")
+      seen+="${candidate} "
+    fi
+  done
+  echo "${selected[*]}"
 }
 
 transport_enabled() {
@@ -961,13 +976,6 @@ emit_effective_options_multi() {
   echo "- service_clients: ${PERF_SERVICE_CLIENTS:-auto}"
   echo "- server_io_threads: $(effective_multi_server_io_threads)"
   echo "- client_io_threads: $(effective_multi_client_io_threads)"
-  echo "- go_gomaxprocs: ${GOMAXPROCS:-unset}"
-  echo "- go_gomaxprocs_source: ${GO_GOMAXPROCS_SOURCE}"
-  if [[ "${GO_GOMAXPROCS_SOURCE}" == "default" ]]; then
-    echo "- go_gomaxprocs_case_overrides: MULTI_DEALER_DEALER/tcp/262144=8,MULTI_ROUTER_ROUTER_SENDSEND/tcp/64=8,MULTI_ROUTER_ROUTER_SENDSEND/tls/64=8,MULTI_ROUTER_ROUTER_SENDSEND/tls/256=8,MULTI_ROUTER_ROUTER_SENDSEND/tls/1024=8"
-  else
-    echo "- go_gomaxprocs_case_overrides: none"
-  fi
   echo "- hwm: $(effective_or_auto "${HWM}")"
   echo "- sndhwm: $(effective_or_auto "${SEND_HWM:-${HWM}}")"
   echo "- rcvhwm: $(effective_or_auto "${RECV_HWM:-${HWM}}")"
@@ -989,6 +997,15 @@ emit_effective_options_multi() {
   echo "- stream_non_tcp_clients_max: ${PERF_STREAM_NON_TCP_CLIENTS_MAX:-${PERF_MULTI_STREAM_NON_TCP_CLIENTS_MAX:-10000}}"
   echo "- disable_resource_metrics: ${PERF_DISABLE_RESOURCE_METRICS:-0}"
   echo "- timeout_seconds: ${PERF_MULTI_TIMEOUT_SECONDS:-${PERF_TIMEOUT_SECONDS:-auto}}"
+  if [[ ",${EFFECTIVE_PATTERNS_CSV}," == *,MULTI_DEALER_ROUTER_REQREP,* || ",${EFFECTIVE_PATTERNS_CSV}," == *,MULTI_ROUTER_ROUTER_REQREP,* ]]; then
+    local reqrep_max="${PERF_MULTI_REQREP_MAX_OUTSTANDING:-64}"
+    if ! [[ "${reqrep_max}" =~ ^[0-9]+$ ]] || (( reqrep_max == 0 )); then
+      reqrep_max=64
+    elif (( reqrep_max < 2 )); then
+      reqrep_max=2
+    fi
+    echo "- reqrep_max_outstanding: ${reqrep_max}"
+  fi
 }
 
 is_unsupported_output() {
@@ -1413,7 +1430,8 @@ run_multi_process_case() {
 }
 
 render_tables() {
-  python3 "${PERF_REPORT_PY}" render-log-tables --suite multi --tmp-dir "$TMP_DIR"
+  python3 "${PERF_REPORT_PY}" render-log-tables --suite multi --tmp-dir "$TMP_DIR" \
+    --auto-hwm-raw "${RAW_RESULTS_FILE}"
 }
 
 {

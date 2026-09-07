@@ -73,7 +73,7 @@ func runSingleOneWayWithTransient(
 			if isTransient(err) {
 				continue
 			}
-			if os.Getenv("PERF_DEBUG") != "" {
+			if perfDebugEnabled {
 				fmt.Fprintf(os.Stderr, "single active send error: %v\n", err)
 			}
 			perfcommon.Must(err)
@@ -206,14 +206,14 @@ func sendStopTokenSingle(send func(*zlink.Message) error, isTransient func(error
 		}
 		_ = message.Close()
 		if !isTransient(err) {
-			if os.Getenv("PERF_DEBUG") != "" {
+			if perfDebugEnabled {
 				fmt.Fprintf(os.Stderr, "single stop token send error: %v\n", err)
 			}
 			return false
 		}
 		perfcommon.PollIdle(perfcommon.StopTokenSendBackoff)
 	}
-	if os.Getenv("PERF_DEBUG") != "" {
+	if perfDebugEnabled {
 		fmt.Fprintln(os.Stderr, "single stop token send: attempts exhausted")
 	}
 	return false
@@ -225,20 +225,20 @@ func waitSingleRouteReady(
 	receiver recvSocket,
 ) {
 	payload := perfcommon.PreparePayload(64)
-	if os.Getenv("PERF_DEBUG") != "" {
+	if perfDebugEnabled {
 		fmt.Fprintf(os.Stderr, "%s ready probe poller create\n", name)
 	}
 	poller := perfcommon.NewSocketPoller(receiver, perfcommon.ZLinkPollIn)
 	defer poller.Close()
 	events := make([]zlink.PollEvent, 1)
 	perfcommon.StampProbePayload(payload)
-	if os.Getenv("PERF_DEBUG") != "" {
+	if perfDebugEnabled {
 		fmt.Fprintf(os.Stderr, "%s ready probe send\n", name)
 	}
 	if err := send(payload); err != nil {
 		perfcommon.Must(fmt.Errorf("%s ready probe send: %w", name, err))
 	}
-	if os.Getenv("PERF_DEBUG") != "" {
+	if perfDebugEnabled {
 		fmt.Fprintf(os.Stderr, "%s ready probe sent\n", name)
 	}
 	deadline := time.Now().Add(perfcommon.SingleReadyTimeout())
@@ -249,22 +249,22 @@ func waitSingleRouteReady(
 		}
 		event, err := perfcommon.WaitPollerOne(poller, events, timeout)
 		if err != nil {
-			if os.Getenv("PERF_DEBUG") != "" {
+			if perfDebugEnabled {
 				fmt.Fprintf(os.Stderr, "%s ready probe poller wait error: %v\n", name, err)
 			}
 			perfcommon.Must(err)
 		}
 		if event == nil || event.Revents&perfcommon.ZLinkPollIn == 0 {
-			if os.Getenv("PERF_DEBUG") != "" {
+			if perfDebugEnabled {
 				fmt.Fprintf(os.Stderr, "%s ready probe poller wait timeout\n", name)
 			}
 			continue
 		}
-		if os.Getenv("PERF_DEBUG") != "" {
+		if perfDebugEnabled {
 			fmt.Fprintf(os.Stderr, "%s ready probe poller readable\n", name)
 		}
 		if drainSingleOneWayProbe(receiver) {
-			if os.Getenv("PERF_DEBUG") != "" {
+			if perfDebugEnabled {
 				fmt.Fprintf(os.Stderr, "%s ready probe drained\n", name)
 			}
 			return

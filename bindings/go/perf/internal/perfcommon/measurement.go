@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"sync/atomic"
-	"time"
 
 	zlink "zlink.systems/zlink"
 )
@@ -22,13 +21,18 @@ const (
 
 var metricSequence uint64
 
-// MeasurementPartCount controls the benchmark wire shape.  STREAM owns its
-// own packet framing and does not call these helpers.
-func MeasurementPartCount() int {
+// Read once because this helper is on every measured-message path.
+var measurementParts = func() int {
 	if os.Getenv("PERF_PART_COUNT") == "1" {
 		return 1
 	}
 	return 2
+}()
+
+// MeasurementPartCount controls the benchmark wire shape.  STREAM owns its
+// own packet framing and does not call these helpers.
+func MeasurementPartCount() int {
+	return measurementParts
 }
 
 func SubmitMeasurement(op zlink.PublishOp, message *zlink.Message, flags zlink.SendFlags) (bool, error) {
@@ -74,10 +78,10 @@ func StampCooldownPayload(payload []byte) {
 }
 
 func StampPayloadPhase(payload []byte, phase uint8) {
-	StampPayloadPhaseAt(payload, phase, time.Now())
+	StampPayloadPhaseAt(payload, phase, MonotonicNowNs())
 }
 
-func StampPayloadPhaseAt(payload []byte, phase uint8, now time.Time) {
+func StampPayloadPhaseAt(payload []byte, phase uint8, nowNs int64) {
 	if len(payload) < MetricHeaderSize {
 		Must(&invalidMetricPayloadError{Size: len(payload)})
 	}
@@ -86,7 +90,7 @@ func StampPayloadPhaseAt(payload []byte, phase uint8, now time.Time) {
 	payload[8] = phase
 	binary.LittleEndian.PutUint32(payload[9:13], uint32(len(payload)))
 	binary.LittleEndian.PutUint64(payload[13:21], atomic.AddUint64(&metricSequence, 1))
-	binary.LittleEndian.PutUint64(payload[21:29], uint64(now.UnixNano()))
+	binary.LittleEndian.PutUint64(payload[21:29], uint64(nowNs))
 }
 
 type MetricHeader struct {
@@ -119,30 +123,6 @@ func validHeaderPhase(header MetricHeader, expectedMsgSize int, phase uint8) boo
 		int(header.MsgSize) == expectedMsgSize
 }
 
-func SentAtFromBytes(data []byte, expectedMsgSize int) (time.Time, bool) {
-	return SentAtFromBytesPhase(data, expectedMsgSize, PhaseActive)
-}
-
-func SentAtFromBytesPhase(data []byte, expectedMsgSize int, phase uint8) (time.Time, bool) {
-	header, ok := DecodeMetricHeader(data)
-	if !ok || !validHeaderPhase(header, expectedMsgSize, phase) {
-		return time.Time{}, false
-	}
-	return time.Unix(0, header.SentTsNs), true
-}
-
-func SentAtFromMessage(part *zlink.Message, expectedMsgSize int) (time.Time, bool) {
-	return SentAtFromMessagePhase(part, expectedMsgSize, PhaseActive)
-}
-
-func SentAtFromMessagePhase(part *zlink.Message, expectedMsgSize int, phase uint8) (time.Time, bool) {
-	if part == nil {
-		return time.Time{}, false
-	}
-	data := part.Data()
-	return SentAtFromBytesPhase(data, expectedMsgSize, phase)
-}
-
 func SentTimestampNsFromBytesPhase(data []byte, expectedMsgSize int, phase uint8) (int64, bool) {
 	header, ok := DecodeMetricHeader(data)
 	if !ok || !validHeaderPhase(header, expectedMsgSize, phase) {
@@ -163,24 +143,22 @@ func SentTimestampNsFromMessagePhase(part *zlink.Message, expectedMsgSize int, p
 	return SentTimestampNsFromBytesPhase(part.Data(), expectedMsgSize, phase)
 }
 
-func LatencyNsFromMessageAt(part *zlink.Message, expectedMsgSize int, phase uint8, now time.Time) (float64, bool) {
+func LatencyNsFromMessageAt(part *zlink.Message, expectedMsgSize int, phase uint8, nowNs int64) (float64, bool) {
 	sentTsNs, ok := SentTimestampNsFromMessagePhase(part, expectedMsgSize, phase)
 	if !ok {
 		return 0, false
 	}
-	nowNs := now.UnixNano()
 	if nowNs < sentTsNs {
 		return 0, false
 	}
 	return float64(nowNs - sentTsNs), true
 }
 
-func LatencyNsFromBytesAt(payload []byte, expectedMsgSize int, phase uint8, now time.Time) (float64, bool) {
+func LatencyNsFromBytesAt(payload []byte, expectedMsgSize int, phase uint8, nowNs int64) (float64, bool) {
 	sentTsNs, ok := SentTimestampNsFromBytesPhase(payload, expectedMsgSize, phase)
 	if !ok {
 		return 0, false
 	}
-	nowNs := now.UnixNano()
 	if nowNs < sentTsNs {
 		return 0, false
 	}

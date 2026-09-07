@@ -33,6 +33,7 @@ func runMultiStreamServer(cfg multiConfig) {
 	perfcommon.ApplyMultiHWM(server, cfg.pattern)
 	perfcommon.ApplyMultiBenchmarkSocketOptions(server, cfg.transport)
 	monitor := perfcommon.OpenMonitor(server)
+	defer monitor.Close()
 	endpoint := perfcommon.BindAndResolveEndpoint(server, cfg.transport, "perf-multi-stream")
 	stopSender, senderErrors := startMultiStreamEchoServer(server)
 	control := newMultiStreamControl(os.Stdin, cfg.msgSize)
@@ -45,21 +46,15 @@ func runMultiStreamServer(cfg multiConfig) {
 		Name:      "multi stream server connections",
 	}))
 	perfcommon.Must(ctx.RecalculateAutoHwm())
-	perfcommon.PrintSocketAutoHWMDetail(
-		monitor,
-		cfg.pattern,
-		cfg.transport,
-		"server",
-		zlink.SocketTypeStream,
-		cfg.msgSize,
-	)
-	perfcommon.Must(monitor.Close())
 	flushControlLine("SERVER_START_READY,%d", cfg.msgSize)
 	var activeErr error
 	select {
 	case <-control.stop:
 	case activeErr = <-senderErrors:
 	}
+	perfcommon.PrintMultiSocketAutoHWMDetail(
+		server, monitor, cfg.pattern, cfg.transport, "server", "endpoint", zlink.SocketTypeStream, cfg.msgSize,
+	)
 	stopErr := stopSender()
 	if activeErr != nil {
 		perfcommon.Must(activeErr)

@@ -45,7 +45,7 @@ func RecordMessageLatency(stats *Stats, activeAt time.Time, stopAt time.Time, ms
 		return
 	}
 	stats.AddCount()
-	if nowNs := now.UnixNano(); nowNs >= sentTsNs {
+	if nowNs := MonotonicNowNs(); nowNs >= sentTsNs {
 		stats.AddLatencySampleNs(float64(nowNs - sentTsNs))
 	}
 }
@@ -60,7 +60,7 @@ func RecordMessageRTTLatency(stats *Stats, activeAt time.Time, stopAt time.Time,
 		return
 	}
 	stats.AddCount()
-	if nowNs := now.UnixNano(); nowNs >= sentTsNs {
+	if nowNs := MonotonicNowNs(); nowNs >= sentTsNs {
 		stats.AddLatencySampleNs(float64(nowNs-sentTsNs) / 2.0)
 	}
 }
@@ -75,7 +75,7 @@ func RecordBytesLatency(stats *Stats, activeAt time.Time, stopAt time.Time, msgS
 		return
 	}
 	stats.AddCount()
-	if nowNs := now.UnixNano(); nowNs >= sentTsNs {
+	if nowNs := MonotonicNowNs(); nowNs >= sentTsNs {
 		stats.AddLatencySampleNs(float64(nowNs - sentTsNs))
 	}
 }
@@ -90,7 +90,7 @@ func RecordBytesRTTLatency(stats *Stats, activeAt time.Time, stopAt time.Time, m
 		return
 	}
 	stats.AddCount()
-	if nowNs := now.UnixNano(); nowNs >= sentTsNs {
+	if nowNs := MonotonicNowNs(); nowNs >= sentTsNs {
 		stats.AddLatencySampleNs(float64(nowNs-sentTsNs) / 2.0)
 	}
 }

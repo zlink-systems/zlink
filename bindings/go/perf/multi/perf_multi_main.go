@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
+	"sync"
 	"time"
 
 	"zlink.systems/zlink/perf/internal/perfcommon"
@@ -15,6 +17,28 @@ type multiConfig struct {
 	msgSize   int
 	duration  time.Duration
 	clients   int
+}
+
+func multiSendDrainTimeout() time.Duration {
+	value := 5000
+	if parsed, err := strconv.Atoi(os.Getenv("PERF_MULTI_SEND_DRAIN_TIMEOUT_MS")); err == nil && parsed > 0 {
+		value = parsed
+	}
+	return time.Duration(value) * time.Millisecond
+}
+
+func waitForMultiSendDrain(workers *sync.WaitGroup) bool {
+	done := make(chan struct{})
+	go func() {
+		workers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(multiSendDrainTimeout()):
+		return false
+	}
 }
 
 var (
