@@ -1742,3 +1742,7 @@ D-B127에서 아침 결정으로 남긴 Single REQREP 정책 gap 2건을 사용�
 
 ## D-B169 (2026-09-07 10:00, 머신 B) 머신 A의 perf 정책 개정 반영 — single suite에서 request/reply 제외
 머신 A가 47커밋 push(`ed65c460c0`까지). 확인: **`core/`와 `bindings/c/perf`는 손대지 않음** → 이 캠페인의 Core 커밋·perf/c 기준값은 그대로 유효. 영향 1건: `506086e7cd`가 `PERF_SINGLE_TEST_POLICY.md` §1을 개정해 **single suite는 one-way 5패턴(PAIR·PUBSUB·DD·DR·RR)만** 측정하고 request/reply는 multi에서만 판정한다(근거: single은 전용 thread + 동기 API라 async terminal 금지인데 binding들이 request callback terminal을 제공하지 않음). 반영: 계획 §7.4 스크린 셀에서 single DR_REQREP·RR_REQREP 삭제, **G-A가 남긴 G-6(single RR_REQREP 측정 가능화)과 G-R1(single RR_REQREP −6 %) 항목 폐기** — 정책상 측정 대상이 아님. REQREP 성능은 multi 셀(DR_REQREP 208.5 / RR_REQREP 170.1 Kops/s)로만 본다. 머신 A의 다른 커밋은 framework bench(with_grpc)와 5개 언어 바인딩 러너라 겹치지 않는다.
+
+## D-B170 (2026-09-07 10:30, 머신 B) G-5 완료 — 하네스 `getenv` 캐시, perf/c 기준값 전면 재측정 필요
+G-5(sonnet, `core-rf-G-5-summary.md`): `bindings/c/perf/common/perf_zlink_part_helpers.hpp`의 `perf_measurement_part_count()`가 send/recv마다 `getenv("PERF_PART_COUNT")`를 호출 → 함수 스코프 `static const` 캐시(기존 `bench_debug_enabled()`와 같은 패턴). getenv 1.996~2.03 → 0.00014회/msg, RR single 축소셀 Ir/msg 15,806 → 14,324(**−9.4 %**, G-A 추정치와 일치). Core 변경 0, with_zmq는 이 helper를 공유하지 않아 대칭 변경 불필요.
+**결과**: perf/c로 잰 모든 값(계획 §7.4 Phase 2G 기준 포함)은 이 커밋 전후로 비교 불가 — 하네스가 메시지당 syscall 2개를 덜 한다. 조치: (1) 이 patch는 진행 중인 묶음 게이트가 끝난 뒤 커밋(게이트가 perf/c 셀을 측정 중이라 트리를 건드리면 오염), (2) 커밋 직후 **idle 재기준**(single 5패턴 + multi 7패턴, runs 3, load < 1)을 새 Phase 2G 기준으로 §7.4에 기록, (3) 이후 G-job 판정은 그 값 기준. G-5가 보고한 14셀 값은 load 7.5~8.2에서 측정돼 기준으로 쓰지 않는다.
