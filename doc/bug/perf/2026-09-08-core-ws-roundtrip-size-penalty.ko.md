@@ -64,3 +64,9 @@ bash bindings/c/perf/run_benchmarks_multi.sh --pattern MULTI_DEALER_ROUTER_SENDS
 3. 수정 전까지 머신 A는 `ws`·`wss`의 왕복 패턴 셀을 `보류(C 기준 이상)`로 두고 다음 릴리스에서 다시 잰다.
 
 머신 A는 Core를 수정하지 않으며 하위 계층 결함을 러너에서 보상하지 않는다(계획서 §5).
+
+---
+
+## 8. `wss`도 같다 (머신 A, 2026-09-08 07:45)
+
+`wss` REQREP 65536 B에서 C 기준선이 **23,988 ops/s**(tcp 63,265의 38%)로 `ws`(25,849)와 같은 수준이다. 왕복 latency 비율은 4096 B 30~258x, 65536 B 240~332x로 `ws`보다 더 크다. §1의 표에 `wss` 열을 추가하면 같은 곡선이다. **요청 범위는 `ws`·`wss` 둘 다**이며, TLS 유무와 무관하게 WebSocket 프레이밍 경로가 공통 원인일 가능성이 크다.
