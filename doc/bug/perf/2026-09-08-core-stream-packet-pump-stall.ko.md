@@ -86,3 +86,31 @@ bash bindings/cpp/perf/run_benchmarks_multi.sh --pattern MULTI_STREAM --transpor
 3. **회귀 테스트를 Core 통합 테스트에 추가해 달라** — 같은 STREAM socket에서 한 thread가 pull로 packet을 받는 동안 다른 thread가 echo를 send하고, 마지막 frame까지 packet API로 반환되는지. D-BP15 때와 같은 형태의 요청이다.
 
 머신 A는 Core를 수정하지 않으며, 하위 계층 결함을 러너에서 보상하지 않는다(§5). 0.17.2가 나오면 이 셀을 다시 잰다.
+
+---
+
+## 8. 0.17.2 확인 결과 — **재현된다** (머신 A, 2026-09-08 04:55)
+
+§7의 첫 요청("0.17.2의 MP-7 수정으로 이 증상이 사라지는지 먼저 확인해 달라")에 대한 답이다.
+
+고정 prefix를 **0.17.2로 재고정**해 같은 재현 절차를 돌렸다.
+
+- prefix `/home/hep7/.cache/zlink/core-pinned/0.17.2`
+- 태그 `core/v0.17.2`, revision `dca377aa5e`
+- Build ID `c5dec25e86de575e8efa79c5327b1e3d0d424f3c`, SHA-256 `72d508f73a5d261f…`
+- 같은 prefix로 `MULTI_DEALER_DEALER` tcp 64 B smoke는 `status: complete`(재고정 자체는 정상)
+
+`MULTI_STREAM` tcp 64 B 결과는 **0.17.1과 동일**하다:
+
+```
+- status: partial
+- MULTI_STREAM current tcp 64B: non_zero_exit_2_perf_stream_client: case_failed size=64
+  connect_ok=100 connect_fail=0 send_error=0 recv_error=0 timeout_error=1 size_mismatch=0
+  throughput_bps=28976128.000 samples=452752 window_ok_size_64
+```
+
+연결 100/100 성공, 송수신 오류 0, 크기 불일치 0, 452,752 샘플이 정상으로 흐른 뒤 timeout 하나로 실패한다.
+
+**따라서 §7의 2번과 3번 요청이 유효하다.** MP-7의 completion pull 수정은 이 증상을 덮지 않았다. §5의 pump 경계(`core/src/runtime/sockets/stream/stream.cpp:595,685,691,717,731`)에서 원인을 특정해 다음 릴리스에 포함하고, 회귀 테스트를 Core 통합 테스트에 추가해 주기 바란다.
+
+머신 A는 C++·.NET의 `MULTI_STREAM` 4 transport를 계속 `보류(Core 결함)`로 두고 다음 릴리스에서 다시 잰다.
