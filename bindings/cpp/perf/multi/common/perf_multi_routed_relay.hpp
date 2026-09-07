@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
+#include <deque>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -38,7 +39,9 @@ inline void debug_relay_error (const char *label, const char *operation, int err
 
 struct routed_reply_state_t
 {
-    std::atomic<size_t> in_flight{0};
+    // Public POLLCOMPLETION keeps this queue and its sender on the poll thread.
+    std::deque<zlink::received_t> pending;
+    bool sending = false;
     std::atomic<bool> failed{false};
     std::atomic<int> error{0};
 };
@@ -49,41 +52,46 @@ inline bool is_stale_route (const zlink::submit_error_t &error)
            || error.result () == zlink::submit_result_t::not_found;
 }
 
-inline perf::detached_async_task_t submit_routed_reply_async (
+inline perf::detached_async_task_t send_routed_replies_async (
   zlink::router_socket_t &server,
-  zlink::routing_id_t routing_id,
-  std::vector<zlink::message_t> parts,
   routed_reply_state_t &state)
 {
-    try {
-        if (parts.size () == 2) {
-            co_await std::move (server.send (routing_id).message (parts[0]))
-              .message (parts[1])
-              .async ();
-        } else if (parts.size () == 1) {
-            co_await std::move (server.send (routing_id))
-              .message (parts[0])
-              .async ();
-        } else {
-            state.error.store (EPROTO, std::memory_order_release);
-            state.failed.store (true, std::memory_order_release);
+    state.sending = true;
+    while (!state.pending.empty ()
+           && !state.failed.load (std::memory_order_acquire)) {
+        zlink::received_t &received = state.pending.front ();
+        std::vector<zlink::message_t> &parts = received.parts ();
+        try {
+            if (parts.size () == 2) {
+                co_await std::move (server.send (*received.routing_id ()).message (parts[0]))
+                  .message (parts[1])
+                  .async ();
+            } else if (parts.size () == 1) {
+                co_await std::move (server.send (*received.routing_id ()))
+                  .message (parts[0])
+                  .async ();
+            } else {
+                state.error.store (EPROTO, std::memory_order_release);
+                state.failed.store (true, std::memory_order_release);
+            }
         }
-    }
-    catch (const zlink::submit_error_t &error) {
-        if (!is_stale_route (error)) {
+        catch (const zlink::submit_error_t &error) {
+            if (!is_stale_route (error)) {
+                state.error.store (error.internal_errno (), std::memory_order_release);
+                state.failed.store (true, std::memory_order_release);
+            }
+        }
+        catch (const zlink::binding_error_t &error) {
             state.error.store (error.internal_errno (), std::memory_order_release);
             state.failed.store (true, std::memory_order_release);
         }
+        catch (...) {
+            state.error.store (EIO, std::memory_order_release);
+            state.failed.store (true, std::memory_order_release);
+        }
+        state.pending.pop_front ();
     }
-    catch (const zlink::binding_error_t &error) {
-        state.error.store (error.internal_errno (), std::memory_order_release);
-        state.failed.store (true, std::memory_order_release);
-    }
-    catch (...) {
-        state.error.store (EIO, std::memory_order_release);
-        state.failed.store (true, std::memory_order_release);
-    }
-    state.in_flight.fetch_sub (1, std::memory_order_acq_rel);
+    state.sending = false;
 }
 
 } // namespace detail
@@ -112,7 +120,7 @@ inline bool run_routed_echo_relay (zlink::router_socket_t &server,
                 draining = true;
                 drain_deadline = std::chrono::steady_clock::now () + drain_timeout;
             }
-            if (replies.in_flight.load (std::memory_order_acquire) == 0)
+            if (!replies.sending)
                 break;
             if (std::chrono::steady_clock::now () >= drain_deadline) {
                 try {
@@ -181,9 +189,12 @@ inline bool run_routed_echo_relay (zlink::router_socket_t &server,
                 break;
             }
 
-            replies.in_flight.fetch_add (1, std::memory_order_acq_rel);
-            detail::submit_routed_reply_async (
-              server, *received.routing_id (), std::move (received.parts ()), replies);
+            // Match the C relay FIFO: keep receiving under backpressure, but
+            // await admission before submitting the next reply on this socket.
+            // The binding owns the single suspended send and its WRITABLE retry.
+            replies.pending.emplace_back (std::move (received));
+            if (!replies.sending)
+                detail::send_routed_replies_async (server, replies);
         }
     }
 
