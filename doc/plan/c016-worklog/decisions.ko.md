@@ -2112,3 +2112,30 @@ C++·.NET의 `MULTI_STREAM` smoke 실패를 진단했다(astra/high, `log/2026-0
 **조치**: `doc/bug/perf/2026-09-08-core-stream-packet-pump-stall.ko.md`로 머신 B에 보고했다. 요청은 세 가지 — (1) MP-7으로 사라지는지 먼저 확인, (2) 아니면 pump 경계(`stream.cpp:595,685,691,717,731`)에서 원인 특정해 0.17.2에 포함, (3) **Core 통합 테스트에 회귀 테스트 추가**(한 thread가 pull하는 동안 다른 thread가 echo send, 마지막 frame까지 packet API로 반환되는지 — D-BP15와 같은 형태).
 
 **캠페인 처리**: C++ `MULTI_STREAM` 4 transport를 `보류(Core 결함, 0.17.2 대기)`로 기록하고 `tls`로 넘어간다. 하위 계층 결함을 러너에서 보상하지 않는다(§5). .NET도 같은 증상이므로 그 차례에 같은 판정을 적용한다.
+
+## D-BP24 (2026-09-08 01:10, 머신 A) **relay server의 reply 제출이 C 기준과 다르다 — 6개 binding의 러너 정합 결함**
+C++ `tls` 4096 B SENDSEND에서 client가 exit 1로 죽는 것을 진단한 결과(astra/high, `log/2026-09-08-cpp-tls-4096-sendsend.ko.md`), 원인은 relay server가 **수신마다 async reply를 던지고 결합이 없어 미완료 제출이 socket당 completion reservation 한계 65,536을 넘긴 것**이다. 65,537번째가 `submit_result_t::out_of_memory(10)`·`ENOMEM(12)`으로 실패하고, server 실패 뒤 client의 send drain이 끝나지 않아 exit 1로 이어진다.
+
+**트리거는 duration이다.** 4096 B 단독에서 duration 2는 성공, 5는 실패한다. 선행 크기와 무관하다. **`tls`와 routed의 조합에서만** 드러난다 — `tls`+`MULTI_DEALER_DEALER` 통과(102.98%), `tcp`+SENDSEND 통과(90.39%). tcp는 송신이 수신을 따라잡아 누적되지 않는다.
+
+**C 기준 구조**(`bindings/c/perf/multi/common/perf_multi_relay_server.hpp:369-430`): 수신 turn 안에서 `pending`에 스냅샷을 넣고 **즉시 `flush_pending_replies`로 한 건씩 admission을 끝낸다**. backpressure된 건은 immutable retry snapshot으로 남아 exact WRITABLE token으로 재시도한다. 상한 숫자는 없지만 매 수신마다 flush가 돌아 무한히 자라지 않는다.
+
+**C++ 수정**(`e0862e1e5c`): pending FIFO와 단일 sender가 다음 reply를 제출하기 전에 admission을 기다리도록 C를 미러링했다. **상한 숫자를 넣지 않았으므로 D-BP15가 금지한 app 고정 window가 아니다** — 오히려 C와 같은 측정 의미를 갖추는 정합 수정이다. `received_t`가 parts·routing_id를 값으로 소유하므로 deque move가 안전하다(C가 `capture_pending_reply`로 스냅샷을 뜨는 것은 C API가 내부 저장소 포인터를 돌려주기 때문이다). 검증 8건 모두 `complete`/`fail=0`.
+
+**같은 결함이 다른 binding에도 있다.** 감독자가 7개를 전수 확인했다:
+
+| binding | relay reply 제출 | 무한 누적 |
+|---|---|---|
+| C (기준) | 수신 turn 안에서 `flush_pending_replies` 동기 제출 | 없음 |
+| Java | `submit_sync()`(`PerfMultiRoutedRelay.java:91,94`) | 없음 |
+| C++ | 수정 완료(`e0862e1e5c`) | 해소 |
+| .NET | `received.Send().Messages(parts).Async()` → `List<Task> replies`에 무제한 누적(`PerfMultiRoutedRelayServer.cs:130-158`) | **있음** |
+| Rust | `replies.push(async move {...})`(`perf_multi_dealer_router_server.rs:129`) | **있음** |
+| Python | `asyncio.create_task` per 메시지, 주석에 "neither caps pending replies nor gates Core"(`perf_multi_dealer_router_server.py:86-98`) | **있음** |
+| Node·Go | 미확인 | 확인 필요 |
+
+tcp에서만 재서 지금까지 드러나지 않았을 뿐, 각 언어의 `tls`·`ws`·`wss` 차례에 같은 형태로 터진다.
+
+**조치**: D-BP11("러너 정합은 7개 binding 전부")에 따라 .NET·Node·Go·Rust·Python에 같은 정합을 적용한다. **적용 형태는 "pending 수를 상한으로 막는 것"이 아니라 "다음 reply를 제출하기 전에 앞 reply의 admission을 기다리는 것"이다** — 전자는 §5 위반이고 후자가 C 기준이다. Java는 이미 C와 같아 대상이 아니다.
+
+**미해결**: C++ RR 전 크기 실행에서 종료 시 `async send failed errno=110`(ETIMEDOUT)이 한 번 관측됐고 추가 2회에서 재현되지 않았다. 해결로 판정하지 않고 기록만 남긴다. 코드상 후보는 `perf_multi_routed_relay.hpp:125-132`의 종료 drain deadline이다.
