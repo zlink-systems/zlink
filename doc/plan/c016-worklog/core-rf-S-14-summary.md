@@ -135,3 +135,62 @@ DEALER가 reply를 completion store로 옮긴 뒤 `zlink_completion_recv` 전까
 payload 바이트는 **어떤 스냅샷 필드에도 나타나지 않는다**(`05-connection-memory.en.md:72-75`가
 work charge는 payload 바이트가 아니라고 명시). 스펙상 의도된 공백이지만, “Core가 보유 중인 메모리”
 관측 관점에서는 사각지대다. 필요하면 별도 spec 논의로.
+
+---
+
+# 2차 (게이트 반려 대응)
+
+## 2-1. 반려 사유
+
+1차 패치 적용 상태에서 `--repeat until-fail`로 `test_dealer_router_single_lane_contract.cpp:2972`
+(R/R 절반)이 1회 실패. 2842와 **다른 단정**이지만 **같은 전제 결함**이었다.
+
+## 2-2. 2972 진단 — 같은 전제 결함(완료 드레인)
+
+```
+2957  wait_until(completion_pending > baseline && completion_current > baseline)   ← 여기서 참
+2965  rr_queued = read_budget_snapshot()                                            ← 다시 읽음
+2972  ASSERT rr_queued.completion_current_accounted_bytes > rr_baseline...          ← 여기서 실패
+```
+wait 술어가 참이 된 폴과 2965의 재독 사이에, requester(`rr.first`)의 async executor가
+Completion lane을 드레인해 버리면 값이 baseline으로 되돌아간다. R/R Completion lane은
+`_registry_accounting=true`라 레지스트리 원장에 실려 있고, 읽히는 순간 해제된다.
+1차와 동일하게 `process_ready_completion_pipes()`(IO 스레드)가 주체이며,
+`socket_base_dispatch.cpp:254-257`의 소유권 규칙("a public POLLCOMPLETION registration is the sole
+completion owner … the async executor already skips that drain while a public poller owns it")이
+그대로 적용된다. 따라서 **같은 스펙 근거의 같은 패턴**으로 고쳤다.
+
+## 2-3. 추가로 드러난 별개 결함 — 방향 큐 은퇴 경주
+
+2차 검증 중 같은 이름의 unittest(`core/tests/unittest/unittest_single_lane_accounting.cpp:420`,
+`Expected 4 Was 2`)가 solo 120회 중 6회(5%) 실패했다. 이건 드레인과 **무관한 다른 전제 결함**이다.
+DR 쌍을 닫은 뒤(`test_context_socket_close_zero_linger`) 그 application 방향 큐 2개는 reaper
+스레드에서 **비동기로 은퇴**한다. 곧바로 읽은 `rr_baseline`이 아직 4를 세고, 뒤의 `rr_queued`가
+2를 세면 `active_directional_queue_count` 동등 단정이 깨진다. 통합 테스트도 같은 순서
+(`fixture.close()` → `rr_baseline`)라 같은 잠복 경주를 갖고 있었다.
+
+## 2-4. 2차 수정 (여전히 Core 무변경, 기대값 무변경)
+
+| 파일 | 추가 | 내용 |
+|---|---|---|
+| `core/tests/integration/test_dealer_router_single_lane_contract.cpp` | +18 | R/R requester(`rr.first`)에 `zlink_poller_add(..., ZLINK_POLLCOMPLETION)` 등록 → `rr_queued` 검증 후 `remove`/`destroy`; `fixture.close()` 뒤 `active_directional_queue_count == 0` 정착 대기 |
+| `core/tests/unittest/unittest_single_lane_accounting.cpp` | +17 | DR 쌍 close 뒤 같은 정착 대기(`wait_for_retired_application_directions()`) |
+
+- unittest는 이미 `acquire_completion_poller`를 쓰고 있었다(`:156`, `:307`) — 1차/2차 수정이
+  이 파일의 기존 패턴과 정확히 같음을 역으로 확인해 준다.
+- 새 옵션·플래그·상태 없음, `core/include/**`·`libzlink.vers`·Core 소스 무변경, 단정 기대값 무변경.
+
+## 2-5. 2차 검증
+
+| 항목 | 결과 |
+|---|---|
+| integration solo 30회 | **30 / 0** |
+| integration solo 100회(캡처) + 60회(직접 실행) | **160 / 0** |
+| integration + `ctest -j4 -R 'stream|pipe'` 동시 10회 | **10 / 0** |
+| integration + 부하, `--repeat until-fail:5` × 15회 | **15 / 0** |
+| integration `--repeat until-fail:20` | **rc=0** |
+| unittest solo 150회 | **150 / 0** (before 120회 중 6 FAIL) |
+| unittest `--repeat until-fail:50` | **rc=0** |
+| `ctest -R 'lane|hwm|flow|snapshot|accounting|dealer|router'` (60 tests) 3회 | **3회 모두 100% pass** |
+
+남은 실패: 없음. 분류는 1차와 동일 **B(기존 결함, 계약 테스트 전제 설정)**.
