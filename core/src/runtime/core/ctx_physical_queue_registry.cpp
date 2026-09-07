@@ -952,6 +952,16 @@ void zlink::ctx_physical_queue_registry_t::refresh_application_hwm_if_drained (
     if (!direction_)
         return;
 
+    // The only effect of this call is publishing `planned` into `applied_hwm`.
+    // When the two already agree there is nothing to publish, and no
+    // registration answer can change that — so the equality is settled on the
+    // handle the caller already owns, before the context-wide registry mutex.
+    // Every message that drains a pipe reaches this point, and on that path
+    // the two are equal.
+    if (direction_->planned_hwm.load (std::memory_order_acquire)
+        == direction_->applied_hwm.load (std::memory_order_acquire))
+        return;
+
     uint64_t planned = 0;
     uint64_t applied = 0;
     {

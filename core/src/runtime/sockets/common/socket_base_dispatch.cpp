@@ -34,24 +34,35 @@ void zlink::socket_base_t::defer_socket_msg_pipe_termination (pipe_t *pipe_)
         dispatch.deferred_socket_msg_termination_tail
           ->_deferred_socket_msg_termination_next = pipe_;
     else
-        dispatch.deferred_socket_msg_termination_head = pipe_;
+        dispatch.deferred_socket_msg_termination_head.store (
+          pipe_, std::memory_order_release);
     dispatch.deferred_socket_msg_termination_tail = pipe_;
 }
 
 void zlink::socket_base_t::process_deferred_socket_msg_pipe_terminations ()
 {
+    dispatch_bridge_t &dispatch = dispatch_runtime ();
     for (;;) {
         pipe_t *pipe = NULL;
-        dispatch_bridge_t &dispatch = dispatch_runtime ();
+        // Every command drain ends here, and on the message path the queue is
+        // empty. The head answers that with one atomic load; only a non-empty
+        // queue pays for the mutex. An enqueue that lands after this load is
+        // the same enqueue the locked read would have missed, so the drain
+        // boundary is unchanged: the producer is this same command owner.
+        if (!dispatch.deferred_socket_msg_termination_head.load (
+              std::memory_order_acquire))
+            return;
         {
             scoped_lock_t queue_lock (
               dispatch.deferred_socket_msg_termination_sync);
-            pipe = dispatch.deferred_socket_msg_termination_head;
+            pipe = dispatch.deferred_socket_msg_termination_head.load (
+              std::memory_order_relaxed);
             if (!pipe)
                 break;
-            dispatch.deferred_socket_msg_termination_head =
-              pipe->_deferred_socket_msg_termination_next;
-            if (!dispatch.deferred_socket_msg_termination_head)
+            dispatch.deferred_socket_msg_termination_head.store (
+              pipe->_deferred_socket_msg_termination_next,
+              std::memory_order_release);
+            if (!pipe->_deferred_socket_msg_termination_next)
                 dispatch.deferred_socket_msg_termination_tail = NULL;
             pipe->_deferred_socket_msg_termination_next = NULL;
         }

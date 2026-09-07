@@ -19,8 +19,6 @@
 
 namespace
 {
-const uint32_t pending_peer_weight_unset = UINT32_MAX;
-
 #ifdef ZLINK_BUILD_TESTS
 std::atomic<int> g_stream_packet_allocation_failpoint (
   zlink::stream_packet_allocation_none);
@@ -722,11 +720,6 @@ uint64_t zlink::pipe_t::router_route_binding_token () const
 const zlink::blob_t &zlink::pipe_t::get_routing_id () const
 {
     return _router_socket_routing_id;
-}
-
-zlink::pipe_t *zlink::pipe_t::get_peer () const
-{
-    return _peer.load (std::memory_order_acquire);
 }
 
 zlink::pipe_t *zlink::pipe_t::retain_peer_snapshot () const
@@ -1524,22 +1517,6 @@ bool zlink::pipe_t::check_write ()
     return check_write_admission () == pipe_message_admission_ready;
 }
 
-zlink::pipe_message_admission_t
-zlink::pipe_t::write_state_admission_unlocked () const
-{
-    if (_state != active)
-        return pipe_message_admission_inactive;
-    if (_transport_pair_write_held)
-        return pipe_message_admission_transport_wait;
-    if (remote_flow_blocked_unlocked ()) {
-        _waiting_for_flow_resume.store (true, std::memory_order_release);
-        return pipe_message_admission_transport_wait;
-    }
-    if (!_out_active)
-        return pipe_message_admission_hwm_full;
-    return pipe_message_admission_ready;
-}
-
 bool zlink::pipe_t::try_reserve_request_correlation (
   uint64_t accounted_bytes_, uint64_t *release_epoch_out_)
 {
@@ -1634,17 +1611,6 @@ void zlink::pipe_t::release_request_correlation (uint64_t accounted_bytes_)
         // Completion may run on the timeout scheduler. Always cross the pipe
         // mailbox so scheduler state is mutated only by the socket owner.
         send_activate_write_deferred (this, generation, msgs_read, bytes_read);
-}
-
-bool zlink::pipe_t::remote_flow_blocked_unlocked () const
-{
-    //  A started message keeps its existing atomicity: the remote PAUSE only
-    //  blocks from the next message boundary. A message counts as started once
-    //  bytes reached the pipe, and also once the pipe's owner accepted a part
-    //  it has not written yet - the classic ROUTER routing-ID part.
-    return _remote_flow_paused && _out_incomplete_bytes == 0
-           && !_out_multipart_started_empty
-           && !_out_owner_message_started;
 }
 
 zlink::pipe_message_admission_t zlink::pipe_t::admit_owner_message_start ()
@@ -1743,16 +1709,6 @@ bool zlink::pipe_t::remote_flow_blocks_next_message () const
     return remote_flow_blocked_unlocked ();
 }
 
-bool zlink::pipe_t::write_state_ready_unlocked (
-  pipe_message_admission_t *admission_out_) const
-{
-    const pipe_message_admission_t admission =
-      write_state_admission_unlocked ();
-    if (admission_out_)
-        *admission_out_ = admission;
-    return admission == pipe_message_admission_ready;
-}
-
 void zlink::pipe_t::arm_hwm_credit_wait_unlocked ()
 {
     _out_active = false;
@@ -1767,28 +1723,6 @@ void zlink::pipe_t::clear_hwm_credit_wait_unlocked ()
 {
     _out_active = true;
     _waiting_for_byte_credit.store (false, std::memory_order_release);
-}
-
-bool zlink::pipe_t::hwm_credit_ready_unlocked (
-  pipe_message_admission_t *admission_out_)
-{
-    if (check_hwm_with_peer_snapshot_unlocked ())
-        return true;
-    arm_hwm_credit_wait_unlocked ();
-    if (check_hwm_with_peer_snapshot_unlocked ()) {
-        clear_hwm_credit_wait_unlocked ();
-        return true;
-    }
-    if (admission_out_)
-        *admission_out_ = pipe_message_admission_hwm_full;
-    return false;
-}
-
-bool zlink::pipe_t::admit_write_unlocked (
-  pipe_message_admission_t *admission_out_)
-{
-    return write_state_ready_unlocked (admission_out_)
-           && hwm_credit_ready_unlocked (admission_out_);
 }
 
 bool zlink::pipe_t::admit_owner_started_write_unlocked (
@@ -2129,17 +2063,6 @@ bool zlink::pipe_t::write_transport_probe_and_flush (const msg_t *msg_)
     return true;
 }
 
-bool zlink::pipe_t::pending_peer_controls_unlocked () const
-{
-    // The aggregate sequence is a monotonic allocator, not a slot-presence
-    // marker: it is reset only after a drain finishes.  During that drain the
-    // final slot is cleared before the reset, so using the aggregate here
-    // would manufacture another control forever.  Presence is owned by the
-    // two slots themselves.
-    return _pending_peer_weight != pending_peer_weight_unset
-           || _pending_flow_state_valid;
-}
-
 bool zlink::pipe_t::peer_control_slots_enabled_unlocked () const
 {
     const unsigned char lane_count =
@@ -2154,14 +2077,6 @@ bool zlink::pipe_t::peer_control_slots_enabled_unlocked () const
         return _transport_lane == transport_lane_application
                || _transport_lane == transport_lane_completion;
     return false;
-}
-
-bool zlink::pipe_t::peer_uses_routed_protocol_unlocked () const
-{
-    const int peer_type =
-      _peer_socket_type.load (std::memory_order_acquire);
-    return peer_type == ZLINK_CORE_SOCKET_DEALER
-           || peer_type == ZLINK_CORE_SOCKET_ROUTER;
 }
 
 void zlink::pipe_t::discard_pending_peer_controls_unlocked ()
@@ -3364,14 +3279,6 @@ zlink::pipe_t::check_hwm_for_message (const msg_t *msg_)
     return pipe_message_admission_ready;
 }
 
-bool zlink::pipe_t::check_hwm_unlocked () const
-{
-    const uint64_t in_flight =
-      _bytes_written > _peers_bytes_read ? _bytes_written - _peers_bytes_read : 0;
-    const bool full = _hwm > 0 && in_flight >= _hwm;
-    return !full;
-}
-
 void zlink::pipe_t::refresh_peer_credit_snapshot_unlocked ()
 {
     pipe_t *const peer = get_peer ();
@@ -3386,14 +3293,6 @@ void zlink::pipe_t::refresh_peer_credit_snapshot_unlocked ()
         _peers_msgs_read = peer_msgs_read;
     if (peer_bytes_read > _peers_bytes_read)
         _peers_bytes_read = peer_bytes_read;
-}
-
-bool zlink::pipe_t::check_hwm_with_peer_snapshot_unlocked ()
-{
-    if (check_hwm_unlocked ())
-        return true;
-    refresh_peer_credit_snapshot_unlocked ();
-    return check_hwm_unlocked ();
 }
 
 void zlink::pipe_t::send_hwms_to_peer (uint64_t inhwm_, uint64_t outhwm_)
@@ -3637,55 +3536,6 @@ void zlink::pipe_t::release_discarded_pipe_accounting (
     if (discarded.bytes > 0 && _registry_accounting)
         get_ctx ()->_physical_queue_registry.release_committed_frame (
           queue_, discarded.bytes, discarded.complete_messages);
-}
-
-bool zlink::pipe_t::append_outbound_frame_bytes_unlocked (const msg_t *msg_)
-{
-    const uint64_t frame_bytes = frame_accounted_bytes (msg_);
-    if (frame_bytes == UINT64_MAX
-        || UINT64_MAX - _out_incomplete_bytes < frame_bytes) {
-        errno = EMSGSIZE;
-        return false;
-    }
-    _out_incomplete_bytes += frame_bytes;
-    return true;
-}
-
-bool zlink::pipe_t::can_commit_bytes_unlocked (
-  uint64_t message_bytes_,
-  uint64_t payload_bytes_,
-  bool allow_empty_pipe_exception_) const
-{
-    if (_max_message_bytes != 0 && payload_bytes_ > _max_message_bytes)
-        return false;
-    if (_hwm == 0)
-        return true;
-
-    const uint64_t in_flight =
-      _bytes_written > _peers_bytes_read ? _bytes_written - _peers_bytes_read : 0;
-    if (allow_empty_pipe_exception_ && in_flight == 0) {
-        //  An empty pipe admits one message larger than the HWM so that a
-        //  complete message is not rejected for a small HWM alone. An
-        //  incomplete multipart may use this exception only when a finite
-        //  reader maximum bounds its retained bytes.
-        return true;
-    }
-    if (UINT64_MAX - in_flight < message_bytes_)
-        return false;
-    return in_flight + message_bytes_ <= _hwm;
-}
-
-bool zlink::pipe_t::can_commit_bytes_with_peer_snapshot_unlocked (
-  uint64_t message_bytes_,
-  uint64_t payload_bytes_,
-  bool allow_empty_pipe_exception_)
-{
-    if (can_commit_bytes_unlocked (
-          message_bytes_, payload_bytes_, allow_empty_pipe_exception_))
-        return true;
-    refresh_peer_credit_snapshot_unlocked ();
-    return can_commit_bytes_unlocked (
-      message_bytes_, payload_bytes_, allow_empty_pipe_exception_);
 }
 
 void zlink::pipe_t::set_max_message_bytes (uint64_t max_message_bytes_)
@@ -4020,25 +3870,6 @@ void zlink::pipe_t::snapshot_outbound_queue_accounting (
         *committed_out_ = available - provisional;
 }
 
-void zlink::pipe_t::publish_session_outbound_accounting_unlocked (
-  bool provisional_changed_)
-{
-    if (likely (!_session_io_writer))
-        return;
-
-    const uint64_t total =
-      UINT64_MAX - _bytes_written < _out_incomplete_bytes
-        ? UINT64_MAX
-        : _bytes_written + _out_incomplete_bytes;
-    // Publish the authoritative total first. A concurrent snapshot can retain
-    // an older provisional classification, but clamps it inside this total, so
-    // Auto-HWM never double-counts or reads the decoder-owned local fields.
-    _published_outbound_total_bytes.store (total, std::memory_order_release);
-    if (provisional_changed_)
-        _published_outbound_provisional_bytes.store (
-          _out_incomplete_bytes, std::memory_order_release);
-}
-
 void zlink::pipe_t::rollback_unlocked (bool publish_peer_control_)
 {
     //  Remove incomplete message from the outbound pipe.
@@ -4122,4 +3953,20 @@ void zlink::pipe_t::flush_unlocked ()
         send_activate_read (peer);
     if (publish_pending_controls && !_session_pipe)
         (void) dispatch_pending_inproc_controls_unlocked ();
+}
+
+void zlink::pipe_t::publish_session_outbound_accounting_slow_unlocked (
+  bool provisional_changed_)
+{
+    const uint64_t total =
+      UINT64_MAX - _bytes_written < _out_incomplete_bytes
+        ? UINT64_MAX
+        : _bytes_written + _out_incomplete_bytes;
+    // Publish the authoritative total first. A concurrent snapshot can retain
+    // an older provisional classification, but clamps it inside this total, so
+    // Auto-HWM never double-counts or reads the decoder-owned local fields.
+    _published_outbound_total_bytes.store (total, std::memory_order_release);
+    if (provisional_changed_)
+        _published_outbound_provisional_bytes.store (
+          _out_incomplete_bytes, std::memory_order_release);
 }

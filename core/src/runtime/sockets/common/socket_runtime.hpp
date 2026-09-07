@@ -703,8 +703,12 @@ struct socket_dispatch_bridge_t
     // receive mutex. Routing cleanup must wait until that outer scope
     // is gone, so keep a lifetime-pinned intrusive queue with no allocation
     // failure in the terminal path.
+    // The head doubles as the queue's emptiness answer. It is atomic so the
+    // command drain can ask that question — the only question it asks on the
+    // hot path, where the queue is empty — without taking the mutex; every
+    // mutation of the queue itself still runs under the mutex.
     recursive_mutex_t deferred_socket_msg_termination_sync;
-    pipe_t *deferred_socket_msg_termination_head;
+    std::atomic<pipe_t *> deferred_socket_msg_termination_head;
     pipe_t *deferred_socket_msg_termination_tail;
 };
 

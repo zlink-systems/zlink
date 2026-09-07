@@ -32,6 +32,10 @@ enum pipe_write_observer_phase_t
 typedef bool (*pipe_write_observer_fn) (
   pipe_t *pipe_, void *userdata_, pipe_write_observer_phase_t phase_);
 
+//  Sentinel for the deferred absolute peer-weight slot. It lives here so the
+//  hot slot-presence predicate can be evaluated inline at its call sites.
+const uint32_t pending_peer_weight_unset = UINT32_MAX;
+
 enum pipe_message_admission_t : int
 {
     pipe_message_admission_ready = 0,
@@ -674,6 +678,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     void snapshot_outbound_queue_accounting (const pipe_t *reader_,
                                              uint64_t *provisional_out_,
                                              uint64_t *committed_out_) const;
+    void publish_session_outbound_accounting_slow_unlocked (
+      bool provisional_changed_);
     void publish_session_outbound_accounting_unlocked (
       bool provisional_changed_);
     template <bool WithAdmission>
@@ -929,6 +935,171 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (pipe_t)
 };
+
+//  Inline hot-path definitions.
+//
+//  These are the one-rule predicates and ledger steps that every public send
+//  and receive evaluates exactly once per message. Each stayed out of line in
+//  pipe.cpp only because its callers (write_message_unlocked, flush_unlocked,
+//  read_internal) are far past the inliner's growth budget, so a three-line
+//  predicate cost a call frame. Moving the bodies here changes no rule and no
+//  order of evaluation; it only lets the caller keep them.
+
+inline pipe_t *pipe_t::get_peer () const
+{
+    return _peer.load (std::memory_order_acquire);
+}
+
+inline bool pipe_t::remote_flow_blocked_unlocked () const
+{
+    //  A started message keeps its existing atomicity: the remote PAUSE only
+    //  blocks from the next message boundary. A message counts as started once
+    //  bytes reached the pipe, and also once the pipe's owner accepted a part
+    //  it has not written yet - the classic ROUTER routing-ID part.
+    return _remote_flow_paused && _out_incomplete_bytes == 0
+           && !_out_multipart_started_empty
+           && !_out_owner_message_started;
+}
+
+inline pipe_message_admission_t pipe_t::write_state_admission_unlocked () const
+{
+    if (_state != active)
+        return pipe_message_admission_inactive;
+    if (_transport_pair_write_held)
+        return pipe_message_admission_transport_wait;
+    if (remote_flow_blocked_unlocked ()) {
+        _waiting_for_flow_resume.store (true, std::memory_order_release);
+        return pipe_message_admission_transport_wait;
+    }
+    if (!_out_active)
+        return pipe_message_admission_hwm_full;
+    return pipe_message_admission_ready;
+}
+
+inline bool
+pipe_t::write_state_ready_unlocked (pipe_message_admission_t *admission_out_) const
+{
+    const pipe_message_admission_t admission =
+      write_state_admission_unlocked ();
+    if (admission_out_)
+        *admission_out_ = admission;
+    return admission == pipe_message_admission_ready;
+}
+
+inline bool pipe_t::check_hwm_unlocked () const
+{
+    const uint64_t in_flight =
+      _bytes_written > _peers_bytes_read ? _bytes_written - _peers_bytes_read : 0;
+    const bool full = _hwm > 0 && in_flight >= _hwm;
+    return !full;
+}
+
+inline bool pipe_t::check_hwm_with_peer_snapshot_unlocked ()
+{
+    if (check_hwm_unlocked ())
+        return true;
+    refresh_peer_credit_snapshot_unlocked ();
+    return check_hwm_unlocked ();
+}
+
+inline bool
+pipe_t::hwm_credit_ready_unlocked (pipe_message_admission_t *admission_out_)
+{
+    if (check_hwm_with_peer_snapshot_unlocked ())
+        return true;
+    arm_hwm_credit_wait_unlocked ();
+    if (check_hwm_with_peer_snapshot_unlocked ()) {
+        clear_hwm_credit_wait_unlocked ();
+        return true;
+    }
+    if (admission_out_)
+        *admission_out_ = pipe_message_admission_hwm_full;
+    return false;
+}
+
+inline bool pipe_t::admit_write_unlocked (pipe_message_admission_t *admission_out_)
+{
+    return write_state_ready_unlocked (admission_out_)
+           && hwm_credit_ready_unlocked (admission_out_);
+}
+
+inline bool pipe_t::pending_peer_controls_unlocked () const
+{
+    // The aggregate sequence is a monotonic allocator, not a slot-presence
+    // marker: it is reset only after a drain finishes.  During that drain the
+    // final slot is cleared before the reset, so using the aggregate here
+    // would manufacture another control forever.  Presence is owned by the
+    // two slots themselves.
+    return _pending_peer_weight != pending_peer_weight_unset
+           || _pending_flow_state_valid;
+}
+
+inline bool pipe_t::peer_uses_routed_protocol_unlocked () const
+{
+    const int peer_type =
+      _peer_socket_type.load (std::memory_order_acquire);
+    return peer_type == ZLINK_CORE_SOCKET_DEALER
+           || peer_type == ZLINK_CORE_SOCKET_ROUTER;
+}
+
+inline bool pipe_t::append_outbound_frame_bytes_unlocked (const msg_t *msg_)
+{
+    const uint64_t frame_bytes = frame_accounted_bytes (msg_);
+    if (frame_bytes == UINT64_MAX
+        || UINT64_MAX - _out_incomplete_bytes < frame_bytes) {
+        errno = EMSGSIZE;
+        return false;
+    }
+    _out_incomplete_bytes += frame_bytes;
+    return true;
+}
+
+inline bool
+pipe_t::can_commit_bytes_unlocked (uint64_t message_bytes_,
+                                   uint64_t payload_bytes_,
+                                   bool allow_empty_pipe_exception_) const
+{
+    if (_max_message_bytes != 0 && payload_bytes_ > _max_message_bytes)
+        return false;
+    if (_hwm == 0)
+        return true;
+
+    const uint64_t in_flight =
+      _bytes_written > _peers_bytes_read ? _bytes_written - _peers_bytes_read : 0;
+    if (allow_empty_pipe_exception_ && in_flight == 0) {
+        //  An empty pipe admits one message larger than the HWM so that a
+        //  complete message is not rejected for a small HWM alone. An
+        //  incomplete multipart may use this exception only when a finite
+        //  reader maximum bounds its retained bytes.
+        return true;
+    }
+    if (UINT64_MAX - in_flight < message_bytes_)
+        return false;
+    return in_flight + message_bytes_ <= _hwm;
+}
+
+inline bool pipe_t::can_commit_bytes_with_peer_snapshot_unlocked (
+  uint64_t message_bytes_,
+  uint64_t payload_bytes_,
+  bool allow_empty_pipe_exception_)
+{
+    if (can_commit_bytes_unlocked (
+          message_bytes_, payload_bytes_, allow_empty_pipe_exception_))
+        return true;
+    refresh_peer_credit_snapshot_unlocked ();
+    return can_commit_bytes_unlocked (
+      message_bytes_, payload_bytes_, allow_empty_pipe_exception_);
+}
+
+//  Only a session I/O writer publishes this snapshot. Every other pipe pays
+//  one predictable load, so the publishing half stays out of line.
+inline void
+pipe_t::publish_session_outbound_accounting_unlocked (bool provisional_changed_)
+{
+    if (likely (!_session_io_writer))
+        return;
+    publish_session_outbound_accounting_slow_unlocked (provisional_changed_);
+}
 
 void send_routing_id (pipe_t *pipe_, const options_t &options_);
 }
