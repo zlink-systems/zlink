@@ -1,0 +1,4 @@
+job G-2 (opus): `msg_t` 생명주기 비용(메시지당 432–1,561 Ir) 축소. 공통 규칙 적용. worktree ~/project/zlink-work/g2. 파일: core/src/runtime/core/msg.{cpp,hpp}, api/message/*, 호출자는 읽기만.
+근거: G-A common-cost 표. 절차: 축소셀에서 `msg_t::init*/close/copy/move/size/data` 호출 횟수/msg와 self-Ir를 표로, 각 호출이 필요한지(같은 msg를 두 번 init/close, 빈 msg 초기화 후 즉시 덮어쓰기, `size()`가 1.68 %인 이유 — 인라인 안 되는 이유) 확인. R10 인벤토리의 `join/leave` 타입 잔재 삭제와 결합(pipe.cpp의 `is_join/is_leave` 검사도 항상 false → 제거; R3 착지 뒤 rebase). 공개 헤더 `zlink_msg_t` 레이아웃·ABI 불변(§4.1-4).
+검증: `ctest -R 'msg|message|part|stream|router|dealer|pubsub'` 5회, 축소셀 Ir/msg before→after, hotpath 5셀.
+보고서 core-rf-G-2-summary.md.

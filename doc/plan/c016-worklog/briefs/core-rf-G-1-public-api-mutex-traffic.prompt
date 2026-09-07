@@ -1,0 +1,5 @@
+job G-1 (opus): 공개 send/recv 경로의 mutex 트래픽 축소 — 메시지당 lock 17.3회(zmq 1.7회). 공통 규칙 적용. worktree ~/project/zlink-work/g1. **가장 큰 남은 항목**, 상한 1.5 h, 원인 하나씩.
+근거: G-A 보고서(zlink vs zmq STREAM 표, common-cost mutex 1,078–1,874 Ir/msg), S-B §1·§2 잠금 목록, S-2 보고서 §2(잠금 35개 표), review-S-2.md. S-1·S-11 이후 남은 잠금 획득 지점을 메시지 경로별로 다시 센다(recv 경로·send 경로·I/O 스레드 경로).
+절차: (1) callgrind 축소셀(STREAM zlink, G-A 방법)에서 `pthread_mutex_lock` 호출자를 caller별로 분해해 "메시지당 호출 횟수 × 잠금" 표를 만든다. (2) 각 잠금에 대해: 보호하는 불변식이 무엇인지, 같은 불변식을 이미 다른 원자/lease가 보장하는지(S-1·S-11 방식), 잠금 범위를 줄이거나 두 잠금을 하나로 합칠 수 있는지. 새 상태·플래그 추가 금지, 계약(깨어남 조건·순서·POLLIN/POLLOUT level·completion 순서) 불변 — 문장 인용. (3) 이득 큰 것부터 하나씩 적용, 각 단계마다 축소셀 lock/msg·Ir/msg 기록. zmq의 같은 경로(with_stream stacks/zmq 서버가 쓰는 libzmq 소스는 bindings/c/bench/with_zmq/libzmq 아래)를 참고해 "왜 zmq는 1.7회로 되는가"를 한 문단으로.
+검증: `ctest -R 'wake|poll|stream|pipe|mailbox|send|recv|router|dealer|pair'` 5회, lost-wake 세트 until-fail:10, TSan(`setarch -R`) 신규 경고 0, 축소셀 lock/msg·Ir/msg before→after, with_stream runs 1(flock).
+보고서 core-rf-G-1-summary.md.

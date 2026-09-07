@@ -1,0 +1,5 @@
+job G-5 (sonnet): perf/c 벤치 하네스의 메시지당 `getenv` 2.03회 제거. 공통 규칙 적용(빌드 JOBS=4, ninja ≤2, 포그라운드). worktree ~/project/zlink-work/g5.
+근거: G-A 보고서 — `getenv`가 single RR self-Ir의 6.96 %(1,135 Ir/msg), PUBSUB 9.2 %, DR_REQREP 7.7 %. 호출자는 전부 bindings/c/perf 하네스(`perf/single/common`, `perf/multi/common`), libzlink 안에는 없음.
+목표: 환경 변수 읽기를 프로세스 시작 시 1회로(정적/구조체 캐시). 측정 의미(옵션 값·기본값)는 동일. Core 소스 수정 금지. with_zmq 벤치의 대칭 규칙(bindings/c/bench/with_zmq/README.md)에 따라 perf 공통 helper가 with_zmq에도 쓰이면 두 쪽 같이.
+검증: perf 빌드, single·multi 스모크(`ci_multi_smoke.sh`, single 7패턴 1024 B runs 1), 그리고 callgrind 축소셀(G-A §의 RR single 방법, scratchpad GA/ 스크립트 재사용)에서 `getenv` 호출/msg가 0에 가까운지. 결과: single 7·multi 7 스크린(1024 B tcp runs 1)을 잰다 — 이 값이 이후 Phase 2G 기준을 다시 잡는 근거가 된다(감독관이 idle runs 3로 재기준).
+보고서 core-rf-G-5-summary.md.

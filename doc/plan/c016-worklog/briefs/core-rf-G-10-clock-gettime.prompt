@@ -1,0 +1,4 @@
+job G-10 (sonnet): 메시지당 `clock_gettime` 2.03회(zmq 0.07) 원인 제거. 공통 규칙 적용. worktree ~/project/zlink-work/g10.
+근거: G-A zlink vs zmq 표. 절차: 축소셀에서 `clock_gettime`/`clock_t::now_*` 호출자 분해(SNDTIMEO 스냅샷? auto-HWM 회계? process_commands throttle? monitor timestamp?). 각 호출이 계약상 필요한지(예: `NONE FINAL`의 SNDTIMEO 스냅샷은 README part send가 요구 — 단, 즉시 성공 경로에서 시계가 필요한가?). 필요 없는 호출은 지연 평가(첫 실패 시)로, 필요한 것은 rdtsc 기반 `clock_t` 캐시(이미 있으면 재사용)로. 계약 문장 인용. 새 옵션 금지.
+검증: `ctest -R 'timeout|sndtimeo|rcvtimeo|hwm|monitor|send|recv'` 5회, 축소셀 clock_gettime/msg·Ir/msg before→after.
+보고서 core-rf-G-10-summary.md.
