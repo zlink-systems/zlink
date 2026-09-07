@@ -382,3 +382,30 @@ lock을 넣는 안은 `bindings/doc/spec/cpp/README.ko.md:455-461`에 어긋나 
 
 이 우회는 **perf 러너에서만 성립한다.** 일반 사용자는 completion owner를 자기 thread로
 가져오지 않을 수 있으므로 위 설계 정의가 여전히 필요하다.
+
+---
+
+## 검증 소유 (2026-09-07, 머신 A)
+
+**이 결함의 회귀 검증은 Core 통합 테스트가 소유해야 한다.** perf도 framework도 대신할 수 없다.
+
+perf는 못 잡는다. C++ 러너가 requester를 단일 공개 poller에 `POLLCOMPLETION`으로 등록해
+completion owner를 `wait()` 호출 thread로 옮기면 `same_thread=0` 조건이 발생하지 않는다. 이
+등록은 `PERF_MULTI_TEST_POLICY.md`의 requester 규칙이기도 하므로 되돌릴 대상이 아니다. 즉
+**앞으로 perf는 이 경로를 밟지 않으며, 0.17.2 수정이 잘못돼도 초록으로 나온다.**
+
+framework도 대신할 수 없다. framework는 이 계약의 사용자이지 계약의 검증자가 아니다.
+
+Core 통합 테스트가 덮어야 할 두 경우는 다음과 같다. 둘 다 공개 API만 사용한다.
+
+1. **서로 다른 application thread가 각자의 multipart 메시지를 같은 socket에 동시에 제출한다.**
+   Go 관례(블로킹 `Submit` + goroutine)를 따르면 반드시 이 형태가 된다. 재현 프로그램은 위
+   §재현 프로그램에 있다 — `-parts 2 -callers 4`가 실패하고 `-parts 1 -callers 4`와
+   `-parts 2 -callers 1`은 통과한다.
+2. **application thread가 multipart sequence를 연 상태에서 binding 내부 runtime completion
+   owner가 같은 socket의 retained request를 다른 thread에서 재제출한다.** 사용자가 단일
+   thread로 써도 발생하며, C++ multi REQREP 65536 B가 이 경우다. completion owner를 application
+   thread로 가져오지 않는 것이 일반 사용법이므로 사용자는 그대로 노출된다.
+
+thread별 슬롯 수정 뒤에도 두 경우가 **성공**해야 한다. 1번만 통과하고 2번이 "열린 sequence가
+닫히지 않는" 상태로 바뀌면 증상만 옮겨간 것이다(위 §0.17.2 설계에 대한 함의 참조).
