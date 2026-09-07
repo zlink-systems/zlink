@@ -1,0 +1,13 @@
+너는 job review-MP-2-2(동시 multipart 구현의 2차 독립 리뷰)다. 먼저 /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽는다. **읽기·리뷰 전용**: 소스·스펙·테스트 수정 금지, 빌드·실행 금지, 커밋 금지. 상한 45분.
+
+대상: worktree `/home/hep7hep7/project/zlink-work/mp2`의 미커밋 diff(`git -C ~/project/zlink-work/mp2 diff HEAD`, MP-3+4+5+6+7 누적, 약 28 파일). 1차 리뷰 /home/hep7hep7/project/zlink/doc/plan/c016-worklog/review-mp2.md(B01~B06, W01~W08, S01/S02)와 그 뒤 보고서 core-rf-MP-3/4/5/6/7-report.md, 결정 decisions.ko.md D-B203~D-B209. 확정 계약 = main 작업 트리의 미커밋 스펙(`git -C /home/hep7hep7/project/zlink diff -- core/doc/spec`) + main의 socket README REPLY token 절(:1129-1142)·completion pull 절·05-polling의 completion owner 규칙.
+
+리뷰 항목(각각 근거 파일:행과 판정):
+1. **1차 차단 B01~B06이 실제로 해소됐는가** — 각 항목의 재현 시나리오를 현재 코드로 다시 따라가 "해소/부분/미해소" 판정. 특히 B02(모든 해제 경로가 helper mutex와 physical sync 밖인지), B05(revoke tombstone과 늦은 restore/commit의 counter 정합), B06(pin 범위).
+2. **MP-4/5** — `send_sequence_count` C3 발행의 모든 write가 helper mutex 아래인지, relaxed zero fast path의 논리(같은 thread가 올린 counter)가 REPLY·REQUEST에도 성립하는지, `borrow_send_sequence_state()`의 반환 pointer 수명(pin) 주장, TLS 참조(강복사 없음)와 만료 scan의 경쟁.
+3. **MP-7** — completion poller가 등록된 socket의 blocking `zlink_completion_recv(NONE)`가 poller의 drain gate를 재사용하는 것이 05-polling·completion pull 스펙의 "단일 completion owner" 규칙과 일치하는지(owner가 둘이 되는 순간이 있는지), poller_wait와 blocking pull이 동시에 호출될 때의 경쟁·lost-wake·timeout budget, DONTWAIT를 queue-only로 둔 fairness 계약과의 정합, 이 수정이 multipart와 무관한 기존 결함이라면 스펙 문장 변경이 필요한지(필요하면 문장 초안).
+4. **MP-6 테스트** — D-BP15 2번 시나리오를 실제로 관찰하는지, sleep 없음, 실패 시 worker 탈출, tcp 변형의 결정성.
+5. 1차 W01~W07·S01/S02 반영 여부와 잔여.
+6. 새로 생긴 문제(중복 상태, 죽은 코드, 주석 불일치, lock 순서 역전, 예외 경계).
+
+보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/review-mp2-2.md (한국어). 1차 항목별 판정 표 + 신규 항목(B/W/S ID는 2차 접두 B2xx…), 마지막 줄 "차단 항목 수 / 채택 가능 여부". 진행 파일 progress-review-mp2-2.md.

@@ -2043,3 +2043,7 @@ C client를 유지하면 C++ server는 C server의 DR 100.8%/RR 97.6%이고 64 K
 **규칙**: 정합 이후 tag(C++ `p3pin`·`p5cmodel`)로 다시 잰 셀만 판정으로 쓴다. 나머지 옛 값은 `미측정`과 같게 취급하고 §7.4대로 다시 잰다. 옛 수치는 지우지 않고 참고값으로 남긴다 — §10.3대로 유지하는 것은 수치가 아니라 개선 pass 코드·프로파일·no-go 목록 같은 **작업 자산**이다(D-BP5의 "기존 작업을 부인하지 않는다"와 같은 취지다: 자산은 남기고 수치만 다시 잰다).
 
 계획서 반영: §9 머리말에 전 언어 공통 규칙, §9.1.2에 C++ 표 전용 주석, §9.1 상태 줄을 `p5cmodel` 기준으로 갱신했다.
+## D-B210 (2026-09-07 23:15, 머신 B) MP-7 결과 — 원인은 completion drain owner 공백(기존 결함); 2차 리뷰 착수
+
+**MP-7**(`core-rf-MP-7-report.md`, 3 파일 +57/−10): 원인은 열린 staging 검사가 아니라, completion poller ref가 있으면 async owner를 만들지 않는데 blocking `zlink_completion_recv(NONE)`가 queue CV만 기다려 transport reply를 queue로 옮길 주체가 없던 것(`socket_base_dispatch.cpp:130-162`, `socket_message_handler_api.cpp:137-151`). 수정: `prepare_completion_pull()` — poller 등록 시 blocking pull이 기존 `get_events(POLLCOMPLETION)` owner gate로 같은 drain turn을 수행하고 `wait_timeout_budget_t` 안에서 `process_commands()` 대기; DONTWAIT은 queue-only 유지(owner fairness 계약). 규칙 2→1, 새 owner·timer 없음. 분류 B(multipart와 무관한 기존 결함; A의 C++ 발현은 poller wait 경로라 이 결함은 안 보였음). 검증: 신규 2 테스트 10/10, 관련 81×3=243/243, lost-wake 40/40, ASan 8/8, TSan 10/10, hotpath 5셀 MP-5 ±1 %(stream_tcp −1.3 %).
+**다음**: 2차 리뷰 `review-mp2-2`(astra, 읽기 전용) — B01~B06 해소 확인, MP-4/5/6/7 검토, 특히 MP-7의 단일 completion owner 규칙 정합. 차단 없으면 게이트.
