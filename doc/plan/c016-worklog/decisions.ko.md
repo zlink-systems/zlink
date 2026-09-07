@@ -2180,3 +2180,51 @@ C++ `tls` SENDSEND의 러너 결함 두 개(D-BP24의 relay 무한 async reply `
 **게이트**(`gate-mp-summary.md`, 경량): dev 전체 ctest 209/209(hotpath_gate만 reference 밖), 변경 suite 97 ×3 전부 PASS, 공개 인터페이스 diff 없음·mirror 12/12, hotpath dealer_dealer 1.018 / reqrep **0.882**(MP-9 귀속 개선) / pair 1.008 / router_router 0.998 / stream **0.955**, with_stream runs 1: 301.8/275.2/33.8 kops(idle 행 대비 +1.1/−0.8/−0.3 %), mismatch 0. 1회차는 MP-6 테스트 파일이 worktree에서 untracked라 diff에서 빠져 configure가 멈춘 것 → 감독자가 파일을 복사·staged 후 2회차 통과(교훈: 게이트 patch는 `git add -N` 또는 untracked 목록 포함).
 **착지**: MP 코드+테스트+스펙 39 파일 한 커밋(`feat(core): concurrent multipart submit …`), hotpath reference 갱신 `aef7015e0f`(reqrep 16455.38, stream_tcp 13969.81 — >5 % 개선 규칙).
 **0.17.2**: bump job(terra)이 0.17.1 커밋(4cd03b9173)을 본으로 framework 제외 40 파일을 올리고 c·cpp 스모크 후 보고 → 감독자 커밋·태그 `core/v0.17.2` → 머신 A 통보(D-BP14 재고정 절차).
+
+## D-BP26 (2026-09-08 03:50, 머신 A) REQREP 격차의 **비용 지도** — 지배적 항목이 없다; D-BP20·D-BP22의 근거를 정정한다
+사용자가 "원인이 코루틴 생성 비용이냐"고 물어 확인한 결과, **그 귀속은 측정된 적이 없었다.** pass 1 기록(`log/2026-09-07-cpp-multi-reqrep-pass1.ko.md:95`)은 13.6k Ir 안에 "coroutine 생성·재개, result/entry, public reply vector, scheduler closure, binding completion drain을 **포함한다**"고 **나열**만 했고, 함수별 수치는 `capture` 1,809.8 Ir 하나(13%)뿐이었다. 나머지 87%는 미측정이었다. 그래서 측정 전용 job(astra/high, 코드 수정 금지)을 열어 지도를 만들었다(`log/2026-09-08-cpp-reqrep-cost-map.ko.md`).
+
+**DR 64 B, native REQUEST 시도당 잔여 Ir**(window Ir − native REQUEST Ir): C **6,447**, C++ **13,637**. C++ self Ir 상위:
+
+| 항목 | C++ self Ir/시도 | 비중 |
+|---|---:|---:|
+| Core poller wait·reply 진행 | 5,516.24 | 40.52% |
+| scheduler closure·ready queue | 825.56 | 6.06% |
+| request builder·operation 준비 | 753.93 | 5.54% |
+| submit_raw_request_state·part snapshot | 714.01 | 5.24% |
+| capture·settle 합류 | 675.00 | 4.96% |
+| Core completion_recv | 626.84 | 4.60% |
+| completion entry 등록·해제 | 614.35 | 4.51% |
+| REQUEST bundle 생성·소멸 | 528.78 | 3.88% |
+| async await·result 소비 | 527.00 | 3.87% |
+| **coroutine actor·frame 수명** | **516.06** | **3.79%** |
+| reply vector의 분리된 호출 | 452.55 | 3.32% |
+| binding completion drain | 381.52 | 2.80% |
+
+C의 같은 항목 `Core poller wait·reply 진행`은 **4,593.91 Ir(C 잔여의 70.68%)**다.
+
+**결론 1 — 코루틴 생성이 원인이 아니다.** coroutine actor·frame 수명은 **516 Ir, 전체의 3.79%**이며 약 7.2k Ir 격차의 **7%**다. REQUEST bundle도 529 Ir(3.88%)다.
+
+**결론 2 — 지배적 항목이 없다.** C의 잔여 6,447 중 4,594(70.68%)가 Core poller wait이므로 **C 자체 application 비용은 약 1,900 Ir**이고, C++는 13,637 − 5,516 = 약 **8,100 Ir**이다. 그 차이 약 6,200 Ir이 **380~830 Ir짜리 항목 10개에 고르게 퍼져 있다.** 어느 하나도 격차의 12%를 넘지 않는다.
+
+**결론 3 — Core poller 자체도 C++가 더 쓴다.** 5,516 vs 4,594로 **922 Ir(격차의 13%)** 더 든다. binding 코드가 아니라 Core 호출 패턴의 차이다(아래 할당 수 참조).
+
+**결론 4 — C에 없는 요청당 할당이 정확히 5개다.**
+
+| C++에만 있는 할당 (요청당) | 호출/시도 | 할당 경계 Ir/시도 |
+|---|---:|---:|
+| coroutine frame·snapshot (`run`) | 1.000092 | 95.04 |
+| reply vector (`capture`) | 1.000000 | 81.82 |
+| REQUEST bundle (`async`) | 1.000000 | 83.39 |
+| scheduler 등록 closure (`await_suspend`) | 1.000000 | 71.98 |
+| 재개 closure (`resume_async_slot`) | 1.000000 | 75.70 |
+
+합계 5.0회·약 408 Ir이다. 또 Core `start_async_write` 0.711 vs C 0.328, `start_async_read` 0.503 vs C 0.176으로 **C++가 Core I/O 연산을 2배 이상 유발한다** — 결론 3의 922 Ir을 설명한다. 프로세스 전체 `new`는 C++ 6.408 vs C 0.626회/시도다.
+
+**정정.** D-BP20·D-BP22에 쓴 "binding이 계약을 지키는 한 구조적으로 줄일 수 없다"는 **근거보다 강한 표현이었다.** 정확히는 **"비용이 async 파이프라인 전체에 얇게 퍼져 있어 계약을 지키는 단일 변경으로는 aggregate가 유의미하게 움직이지 않는다"**이다. 계약이 막는 것은 그중 일부(REQUEST bundle은 request terminal 계약상 유지, pool은 ABA, scheduler 함수 포인터화는 공개 ABI)이고, 나머지는 계약이 아니라 **크기가 작아서** 개별로는 효과가 없다. pass 2의 후보(`_continuation_weak` 제거)가 오히려 나빠진 것도 이 구조로 설명된다 — 작은 항목을 건드렸다.
+
+**판정 영향 없음.** DR 72.87%·RR 76.39%가 목표 85%에 못 미치는 것은 측정 사실이며 `보류` 유지. 근거 문구만 정확해졌다.
+
+**후속 후보(감독자 판단).** 지도가 가리키는 유일한 큰 덩어리는 **Core I/O 연산 유발 수**(`start_async_write` 2.2배, `start_async_read` 2.9배)다. 이는 binding 내부 할당이 아니라 **C++가 Core를 부르는 패턴**의 문제이므로, 계약 위반 없이 줄일 여지가 있는지는 별도 조사 대상이다. 나머지 10개 항목은 각각 5% 미만이라 단독 후보로서 가치가 없다.
+
+**65536 B 지도는 미확보다.** C++는 실패하고 C는 재시도가 발생해 재시도 0 조건을 못 만들었다. 기록의 65536 B 열은 참고용이며 판정에 쓰지 않는다.
