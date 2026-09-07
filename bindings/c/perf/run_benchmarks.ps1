@@ -133,7 +133,9 @@ $SinglePatterns = @(
     "PUBSUB",
     "DEALER_DEALER",
     "DEALER_ROUTER",
-    "ROUTER_ROUTER"
+    "DEALER_ROUTER_REQREP",
+    "ROUTER_ROUTER",
+    "ROUTER_ROUTER_REQREP"
 )
 $SinglePatternSet = @{}
 foreach ($name in $SinglePatterns) { $SinglePatternSet[$name] = $true }
@@ -465,7 +467,9 @@ function Resolve-SingleBuildTargets {
         "PUBSUB" = @("perf_pubsub")
         "DEALER_DEALER" = @("perf_dealer_dealer")
         "DEALER_ROUTER" = @("perf_dealer_router")
+        "DEALER_ROUTER_REQREP" = @("perf_dealer_router_reqrep")
         "ROUTER_ROUTER" = @("perf_router_router")
+        "ROUTER_ROUTER_REQREP" = @("perf_router_router_reqrep")
     }
     $Targets = New-Object 'System.Collections.Generic.List[string]'
     foreach ($PatternName in $Patterns) {

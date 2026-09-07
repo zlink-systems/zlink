@@ -181,7 +181,7 @@ resolve_openssl_root() {
 
 BUILD_DIR="${OFFICIAL_BUILD_DIR}"
 
-STANDARD_PATTERNS="PAIR,PUBSUB,DEALER_DEALER,DEALER_ROUTER,ROUTER_ROUTER"
+STANDARD_PATTERNS="PAIR,PUBSUB,DEALER_DEALER,DEALER_ROUTER,DEALER_ROUTER_REQREP,ROUTER_ROUTER,ROUTER_ROUTER_REQREP"
 PATTERN="ALL"
 OUTPUT_FILE=""
 RESULTS_DIR=""
@@ -624,8 +624,14 @@ resolve_single_build_targets() {
       DEALER_ROUTER)
         targets+=("perf_dealer_router")
         ;;
+      DEALER_ROUTER_REQREP)
+        targets+=("perf_dealer_router_reqrep")
+        ;;
       ROUTER_ROUTER)
         targets+=("perf_router_router")
+        ;;
+      ROUTER_ROUTER_REQREP)
+        targets+=("perf_router_router_reqrep")
         ;;
     esac
   done

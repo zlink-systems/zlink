@@ -97,7 +97,9 @@ endfunction()
     add_current_bench_single(perf_pubsub single/src/perf_pubsub.cpp)
     add_current_bench_single(perf_dealer_dealer single/src/perf_dealer_dealer.cpp)
     add_current_bench_single(perf_dealer_router single/src/perf_dealer_router.cpp)
+    add_current_bench_single(perf_dealer_router_reqrep single/src/perf_dealer_router_reqrep.cpp)
     add_current_bench_single(perf_router_router single/src/perf_router_router.cpp)
+    add_current_bench_single(perf_router_router_reqrep single/src/perf_router_router_reqrep.cpp)
 
     add_executable(
         perf_stream_client

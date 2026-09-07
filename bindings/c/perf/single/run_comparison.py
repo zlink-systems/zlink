@@ -24,14 +24,14 @@ PERF_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 ROOT_DIR = os.path.abspath(os.path.join(PERF_DIR, "..", "..", ".."))
 BUILD_CONFIG_DIRS = ("Release", "Debug", "RelWithDebInfo", "MinSizeRel")
 
-# PERF_SINGLE_TEST_POLICY.md § 1 / § 6.1 (D-BP3): the single suite measures the
-# five one-way patterns only. request/reply is measured in the multi suite.
 DEFAULT_PATTERNS = [
     "PAIR",
     "PUBSUB",
     "DEALER_DEALER",
     "DEALER_ROUTER",
+    "DEALER_ROUTER_REQREP",
     "ROUTER_ROUTER",
+    "ROUTER_ROUTER_REQREP",
 ]
 
 PATTERN_TO_BINARY = {
@@ -39,7 +39,9 @@ PATTERN_TO_BINARY = {
     "PUBSUB": "perf_pubsub",
     "DEALER_DEALER": "perf_dealer_dealer",
     "DEALER_ROUTER": "perf_dealer_router",
+    "DEALER_ROUTER_REQREP": "perf_dealer_router_reqrep",
     "ROUTER_ROUTER": "perf_router_router",
+    "ROUTER_ROUTER_REQREP": "perf_router_router_reqrep",
 }
 
 SINGLE_RECV_MODE = "recv"
@@ -938,16 +940,14 @@ def collect_missing_build_targets(
 
 
 def pattern_direction_label(pattern: str) -> str:
-    # PERF_SINGLE_TEST_POLICY.md § 6.1: every single pattern is one-way.
-    del pattern
+    if pattern.endswith("_REQREP"):
+        return "request/reply"
     return "one-way"
 
 
 def format_throughput(pattern: str, throughput_per_sec: float) -> str:
-    # PERF_SINGLE_TEST_POLICY.md § 6.1: single has no round-trip (ops/s)
-    # pattern, so the runner always reports Kmsg/s.
-    del pattern
-    return f"{throughput_per_sec/1e3:6.2f} Kmsg/s"
+    unit = "Kops/s" if pattern.endswith("_REQREP") else "Kmsg/s"
+    return f"{throughput_per_sec/1e3:6.2f} {unit}"
 
 
 def format_bandwidth(bandwidth_mb_s: float) -> str:

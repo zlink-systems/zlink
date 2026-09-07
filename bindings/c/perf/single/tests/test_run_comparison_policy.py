@@ -352,19 +352,24 @@ class RunComparisonPolicyTests(unittest.TestCase):
                 "PUBSUB",
                 "DEALER_DEALER",
                 "DEALER_ROUTER",
+                "DEALER_ROUTER_REQREP",
                 "ROUTER_ROUTER",
+                "ROUTER_ROUTER_REQREP",
             ],
         )
         for pattern in ("DEALER_ROUTER_REQREP", "ROUTER_ROUTER_REQREP"):
-            with self.assertRaises(ValueError):
-                RC.parse_pattern_arg(pattern)
-            self.assertNotIn(pattern, RC.PATTERN_TO_BINARY)
+            self.assertEqual(RC.parse_pattern_arg(pattern), [pattern])
+            self.assertIn(pattern, RC.PATTERN_TO_BINARY)
 
-    def test_single_throughput_unit_has_no_round_trip_variant(self):
-        # PERF_SINGLE_TEST_POLICY.md § 6.1: single has no ops/s pattern.
+    def test_single_throughput_unit_matches_pattern_direction(self):
+        # PERF_SINGLE_TEST_POLICY.md § 6.1: one-way patterns report Kmsg/s and
+        # request/reply patterns report Kops/s.
         for pattern in ("PAIR", "DEALER_ROUTER", "ROUTER_ROUTER"):
             self.assertEqual(RC.pattern_direction_label(pattern), "one-way")
             self.assertTrue(RC.format_throughput(pattern, 1234.0).endswith("Kmsg/s"))
+        for pattern in ("DEALER_ROUTER_REQREP", "ROUTER_ROUTER_REQREP"):
+            self.assertEqual(RC.pattern_direction_label(pattern), "request/reply")
+            self.assertTrue(RC.format_throughput(pattern, 1234.0).endswith("Kops/s"))
 
     def test_single_result_dir_uses_report_path(self):
         root = os.path.join(os.sep, "tmp", "perf-root")

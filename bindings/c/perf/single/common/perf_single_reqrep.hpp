@@ -40,7 +40,6 @@ struct request_state_t
         routed_request (false),
         target_rid (),
         fatal (false),
-        capture_latency (false),
         latency ()
     {
     }
@@ -58,7 +57,6 @@ struct request_state_t
     bool routed_request;
     zlink_routing_id_t target_rid;
     std::atomic<bool> fatal;
-    bool capture_latency;
     std::mutex latency_mutex;
     latency_stats_builder_t latency;
 };
@@ -193,7 +191,7 @@ inline void record_request_completion (request_state_t *state_,
             && completed_at < state_->active_deadline) {
             const uint64_t now_ns = perf_single_metric::now_ns ();
             if (now_ns >= static_cast<uint64_t> (header.sent_ts_ns)) {
-                if (state_->capture_latency) {
+                {
                     std::lock_guard<std::mutex> guard (state_->latency_mutex);
                     state_->latency.add (
                       static_cast<double> (now_ns - static_cast<uint64_t> (header.sent_ts_ns)));
@@ -389,7 +387,6 @@ inline bool run_request_phase (void *requester_,
                                request_state_t *state_,
                                std::vector<char> *payload_,
                                int duration_s_,
-                               bool capture_latency_,
                                SubmitFn submit_fn_,
                                void *poller_,
                                unsigned long long *completed_out_,
@@ -405,7 +402,6 @@ inline bool run_request_phase (void *requester_,
     state_->in_flight.store (0, std::memory_order_release);
     state_->next_seq.store (1, std::memory_order_release);
     state_->fatal.store (false, std::memory_order_release);
-    state_->capture_latency = capture_latency_;
     {
         std::lock_guard<std::mutex> guard (state_->latency_mutex);
         state_->latency = latency_stats_builder_t (state_->latency_sample_cap);
@@ -490,20 +486,13 @@ inline bool run_request_phase (void *requester_,
             std::cerr << "[perf-single-reqrep] no completed request" << std::endl;
         return false;
     }
-    if (capture_latency_) {
+    {
         std::lock_guard<std::mutex> guard (state_->latency_mutex);
         if (state_->latency.count () == 0)
             return false;
         *latency_out_ = state_->latency.snapshot ();
-    } else {
-        *latency_out_ = latency_stats_t ();
     }
     return true;
-}
-
-inline int latency_phase_duration_seconds ()
-{
-    return 1;
 }
 
 template <typename SubmitFn>
@@ -534,18 +523,11 @@ inline bool run_requester (void *requester_,
     // still publish replies can stall the measured shutdown path.
     *completion_poller_out_ = poller;
 
-    latency_stats_t ignored_latency;
-    if (!run_request_phase (requester_, state_, payload_, duration_s_, false, submit_fn_,
-                            poller, completed_out_, &ignored_latency)) {
-        return false;
-    }
-
-    // Phase 1 has drained every saturated request completion. Phase 2 uses the
-    // same admission-backpressure depth while capturing latency samples.
-    unsigned long long latency_completed = 0;
-    return run_request_phase (
-      requester_, state_, payload_, latency_phase_duration_seconds (),
-      true, submit_fn_, poller, &latency_completed, latency_out_);
+    // PERF_SINGLE_TEST_POLICY.md §1, §2.1: throughput and latency come from the
+    // same active window and the same set of valid completions, so this is one
+    // phase. A separate latency phase would aggregate a different set.
+    return run_request_phase (requester_, state_, payload_, duration_s_, submit_fn_,
+                              poller, completed_out_, latency_out_);
 }
 
 inline int recv_router_request (void *router_,
