@@ -1953,3 +1953,8 @@ Go REQREP 러너 정합 중 드러났고, **감독자가 최소 재현 프로그
 
 **측정**(`measure-g11b3-summary.md`, load 0.08 시작): zlink/asio 0.814/0.817/0.820 vs pristine 0.812/0.813/0.820; zlink 298.5/277.5/33.9 kops(Phase 2S idle 289.7/267.8/32.6 대비 +3 %); zlink/zmq 0.90/0.90/1.22. 3차 요약의 −13/−17 %는 부하 오염이었음이 확정. perf/c 경량 3셀 기록: single R-R 868.0 Kmsg/s, multi SENDSEND 270.2 / REQREP 196.6 Kops/s(비교 기준 없음).
 **결정**: D-B199 기준 충족 → 채택, 커밋·푸시. §7.7 session 쪽 `_out_sync` 행 완료(2.0→0), §7.1에 idle 행 추가. G-11 2a/2b/2d는 0.17.3.
+
+## D-B203 (2026-09-07 18:35, 머신 B) MP-2 독립 리뷰 — 차단 6건, 채택 불가; MP-3 수정 job
+
+**리뷰**(`review-mp2.md`, astra): B01 같은 REPLY token의 두 번째 sequence를 EBUSY→ENOENT로 바꾸고 테스트 기대값까지 수정(README :1131 위반), B02 만료 payload 해제가 DONTWAIT FINAL의 complete scope(physical sync) 안에서 실행(zero-copy free callback 재진입 시 deadlock), B03 TLS identity 최초 할당 실패가 C API 밖으로 예외 전파, B04 close cleanup이 seal 뒤 lock 아래 `reserve` 할당, B05 logical RID 제거 시 checked-out token의 registry capacity 미반환(65,536 한도 회복 안 됨), B06 초기 validation abort가 pin을 놓은 뒤 REPLY context restore가 socket에 접근. 비차단 W01~W08(테스트 assertion 약함, helper mutex 3~4회·전체 map 스캔·임시 weak_ptr refcount RMW, MORE의 ctx term 검사 누락, TLS destructor 경계, 미검증 경로, Message 문장 적용 범위), 제안 S01/S02. 감독자 재검증: B01·B02·B04를 worktree 코드와 스펙에서 직접 확인 — 리뷰 정확.
+**결정**: 채택 불가. MP-3(sol/high, 같은 worktree, 2.5 h)로 B01~B06 전부와 W01~W07·S01/S02를 수정하고 single-after-multipart·4-thread 처리량을 MP-2 전과 비교 측정. W08은 감독자가 스펙(Message :108 ko/en)에 P/D/R 범위를 명시해 반영. 이후 재리뷰(차단 항목 검증만) → 게이트. 0.17.2 완료 예상은 MP-3 2.5 h + 재리뷰 0.5 h + 게이트 2 h로 밀려 **9/8 새벽~오전**.
