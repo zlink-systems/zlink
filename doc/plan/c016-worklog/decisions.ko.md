@@ -2267,3 +2267,8 @@ C의 같은 항목 `Core poller wait·reply 진행`은 **4,593.91 Ir(C 잔여의
 **가설**: engine이 읽어 들인 frame이 pipe로 못 넘어가는 형태이므로, pipe HWM/credit 도달로 engine 입력이 멈춘 뒤 read-resume wake가 송신 thread의 command drain에 소비되어 유실(B204 계열). ST-1(sol/high, 3 h, worktree st1)이 Core 통합 테스트로 먼저 재현 → 덤프로 확정 → 소유 모듈 수정 → 회귀 테스트(`test_stream_concurrent_pull_send`) 등록. attrib-0172 측정과 겹치지 않도록 성능 측정은 금지.
 **머신 A에**: C++·.NET MULTI_STREAM은 0.17.3까지 보류 유지. 0.17.3 = ST-1 + (attrib 결과에 따른) perf/c PAIR 회귀 처리 + G-11 2a/2b/2d(이월).
 **ST-1 중단(05:17)**: codex job이 public C API 재현(100 client × 100 frame, 64 B, HWM 4096 → 10,000 중 일부 미반환)에 성공한 직후 ChatGPT 측 콘텐츠 필터("possible cybersecurity risk")로 종료. AGENTS.md §2.1(코덱스 문제 시 Claude 서브에이전트)에 따라 같은 worktree·같은 brief로 Claude(opus) 에이전트 ST-1b가 이어간다. 재현기 `/tmp/st1_stream_repro.cpp` 인계.
+
+## D-B219 (2026-09-08 05:30, 머신 B) perf/c 하락 귀속 — 기준 불일치로 판정; single tcp 1024 B −4~5 %는 관찰 항목으로 0.17.3 재확인
+
+**교차 측정**(`attrib-0.17.2-summary.md`, 같은 러너·`LD_PRELOAD` 고정, loader trace로 lib 확인, base `5304885197`↔0.17.2 교대 2회): 두 교대 모두 ≤95 %인 셀 없음. 65536 B(PAIR 99.7 %, DD 100.9 %)와 multi(DR_REQREP 79.7→98.4 %, RR_SENDSEND 94.7/97.2 %)는 회귀 근거 없음. §7.4의 Phase 2G 기준 대비 하락(PAIR 85 %, multi 75~92 %)은 러너 정합 이전 값과의 조건 차이. 단 single 1024 B PAIR 93.7/96.4 %, DD 94.0/97.3 %는 두 교대 모두 current가 낮았으나 current가 항상 base 직후(잔류 load) 실행된 순서 편향이 있다.
+**결정**: 0.17.2 유지. §7.4 기준을 0.17.2 idle 값으로 갱신. 0.17.3에서 순서 반전(current→base) idle 교대로 single 1024 B를 재확인하고, 재현되면 MP-5의 single fast path(`borrow_send_sequence_state`)와 G-11b session write 경로를 후보로 조사. base worktree `~/project/zlink-work/base-5304885197`는 그 재확인까지 유지.
