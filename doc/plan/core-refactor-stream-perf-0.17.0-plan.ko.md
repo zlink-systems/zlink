@@ -242,6 +242,11 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 | D-e | S-11 | 04-thread-safety 소유권: 공개 receive lease가 command owner를 배타하도록 할지(`receive_once_guarded`·fq active partition의 TSan race). 계약 문장 변경이 아니라 소유 규칙 결정 + 성능 예산 | 정확성(잠재 race 제거), 성능은 −일 수 있음 | 대기 |
 | D-f | R2 | 08-stream "런타임 기본값": `ZLINK_ASIO_STREAM_GATHER_THRESHOLD`·`..._TINY_GATHER_THRESHOLD`·`..._DISABLE_GATHER` env가 S-4·R2 이후 어떤 동작에도 영향 없음(STREAM raw 엔진은 gather 불가). 접근자·문서 삭제는 스펙 문장 변경 | 구조(죽은 knob 3개 제거) | 대기 |
 | ~~D-g1·D-g2~~ | G-1 | **철회(2026-09-07, 사용자)**: thread-safe 소켓은 zlink의 설계 철학이다. 앱 간·앱↔I/O 잠금을 계약 완화로 없애는 제안은 올리지 않는다. 남은 잠금 ~15쌍(≈ zmq 대비 격차의 대부분)은 그 철학의 대가로 받아들이고, 계약 안에서 "아무것도 지키지 않는 잠금"만 계속 찾아 없앤다(S-1·G-1 방식) | — | 철회 |
+| D-MP1 | MP-1 (D-BP12) | socket README §2·part send(:944)·Message :108: thread별 독립 multipart sequence 동시 보관, 같은 record는 같은 thread, FINAL 원자 admission, close 시 전부 폐기, slot 수명은 sequence | 동시 multipart 제출 지원(A 버그), marker·suspend/resume·control lease 제거(규칙 6→3) | **확정(2026-09-07, 사용자 방향 동의·D-B198)** — 스펙 반영, MP-2 구현 |
+| D-MP2 | MP-1 | README :440-446·:1312: public `MORE` 조립 buffer는 pipe HWM 밖, 판정은 FINAL의 frame 단위(현행 코드·테스트와 일치, 문장 명료화), total-known 예외 확대 없음 | 계약 모순 제거 | 확정(D-B198) |
+| D-MP3 | MP-1 | ZMP :241-265·:543, ROUTER :419: control(FLOW/WEIGHT) 보류를 실제 pipe multipart write 구간으로 한정 — public 조립 buffer만 있는 동안 control 진행(**관찰 동작 변화**: MORE 후 FINAL을 미루는 caller가 control을 막지 않음) | 전역 boundary 상태 제거 | 확정(D-B198) — 사용자 재확인 요망 |
+| D-MP4 | MP-1 | README :1071, ZMP :472 "admission 전 payload 미보관": 호출 사이 조립 buffer와 거절된 record 미보관을 구분 | 문장 정합 | 확정(D-B198) |
+| D-MP5 | MP-1 | ROUTER :54 family/RID 혼합 금지를 같은 thread의 sequence로 한정 | 문장 정합 | 확정(D-B198) |
 | 관찰 | S-A | 64 KiB에서 zlink 서버 앱 스레드 1개가 93 % 포화(I/O 스레드 45 % idle). 벤치 서버 구조(앱 스레드 1개) 문제이며 Core 계약과 무관 — asio 스택은 io 워커 8개에서 read→write 직결 | — | 기록 |
 
 ## 7.6 머신 A(bindings 성능 작업)와의 조율
