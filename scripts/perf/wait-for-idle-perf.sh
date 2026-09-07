@@ -14,6 +14,19 @@ max_wait="${1:-1800}"
 interval=10
 waited=0
 
+# 대기자 여럿이 같은 순간 "idle"을 보고 함께 출발하는 경합을 막는다. idle 확인 전에
+# lock을 잡고, 확인이 끝나면 lock을 백그라운드 보유자에게 넘긴다. 보유자는 호출자의
+# 측정 프로세스가 나타나기를 최대 grace초 기다린 뒤 그 프로세스가 끝날 때까지 lock을
+# 쥔다. flock은 open file description 단위라 이 스크립트가 종료해도 자식이 이어받는다.
+# (2026-09-08: C++ latency 조사와 wss DD 재현이 1초 차이로 동시에 돌아 3회분이 오염됐다.)
+lock_file="${ZLINK_PERF_LOCK:-/tmp/zlink-perf.lock}"
+grace="${ZLINK_PERF_LOCK_GRACE:-20}"
+exec 9>>"${lock_file}"
+if ! flock -w "${max_wait}" 9; then
+  echo "perf lock을 ${max_wait}초 동안 얻지 못했다: ${lock_file}" >&2
+  exit 1
+fi
+
 # 실제 perf 프로세스만 센다. `pgrep -f`는 명령줄 전체를 보므로, 이 패턴을 인자로 들고 있는
 # 셸(감시 스크립트, 이 스크립트 자신, 에디터의 grep 등)까지 잡힌다. 그래서 (1) 실행 파일
 # 경로나 러너가 실제로 붙이는 인자로 좁히고, (2) 셸 프로세스를 명시적으로 걸러낸다.
@@ -39,3 +52,18 @@ done
 
 load="$(cut -d' ' -f1 /proc/loadavg)"
 echo "perf idle 확인 (대기 ${waited}초, load ${load})"
+
+# lock 보유자. 호출자의 측정이 시작될 때까지 grace초 기다렸다가 끝날 때까지 쥔다.
+(
+  for _ in $(seq 1 "${grace}"); do
+    r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v 'wait-for-idle-perf' || true)"
+    [ -n "${r}" ] && break
+    sleep 1
+  done
+  while :; do
+    r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v 'wait-for-idle-perf' || true)"
+    [ -z "${r}" ] && break
+    sleep 5
+  done
+) >/dev/null 2>&1 &
+disown
