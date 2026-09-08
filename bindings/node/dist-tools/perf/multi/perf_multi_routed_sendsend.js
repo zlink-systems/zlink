@@ -6,7 +6,7 @@ const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createPayload, createRunId, decodeMetricHeader, HEADER_SIZE, currentEpochNs, sleepImmediate, stampPayload, summarizeMetrics } = require('../common/perf_metrics');
 const { configureTlsClient, configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLIN, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, measurementParts, measurementPayload, pollEvents, pollEventHas, recvNoWaitInto, sendRouted, waitForConnectionReady, waitForConnectionReadyCount, waitPollerOne } = require('./perf_multi_runtime');
+const { POLLIN, POLLCOMPLETION, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, measurementParts, measurementPayload, pollEvents, pollEventHas, recvNoWaitInto, sendRouted, waitForConnectionReady, waitForConnectionReadyCount, waitPollerOne } = require('./perf_multi_runtime');
 // Read once per process: the runner fixes PERF_PART_COUNT before launching
 // this process, and this is on the per-message recv path. A per-message
 // `process.env` lookup puts harness instrumentation inside the measured path.
@@ -164,6 +164,13 @@ class RoutedReplySender {
         }
     }
 }
+async function waitForReplyAdmissionOrStop({ replies, stopSignal, progress = () => { }, yieldTurn = sleepImmediate }) {
+    while (replies.pendingCount > 0 && !stopSignal.aborted) {
+        progress();
+        await yieldTurn();
+        replies.raiseIfFailed();
+    }
+}
 async function runRoutedSendSendRounds({ sockets, payloads, measurementRecords, routerClient, msgSize, runId, activeStopNs, sendDrainStopNs, replyDrain = null, submit = sendPayload, drainReplies = async (_timeoutMs = 0) => { }, yieldTurn = sleepImmediate, nowNs = currentEpochNs }) {
     let seq = 1n;
     let nextSocket = 0;
@@ -288,7 +295,7 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
         }
         for (let i = 0; i < sockets.length; i += 1) {
             await waitForConnectionReady(sockets[i], () => sockets[i].connect(options.endpoint));
-            poller.add(sockets[i], pollEvents(POLLIN), i);
+            poller.add(sockets[i], pollEvents(POLLIN | POLLCOMPLETION), i);
         }
         ctx.recalculateAutoHwm();
         for (const socket of sockets) {
@@ -405,7 +412,7 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
         router.bind(options.endpoint);
         ctx.recalculateAutoHwm();
         emitMultiSocketHwmDetail(router, 'endpoint', options.transport, options.msgSize);
-        poller.add(router, pollEvents(POLLIN), 0);
+        poller.add(router, pollEvents(POLLIN | POLLCOMPLETION), 0);
         pollBuffer = zlink.createPollEvents(1);
         const readyBarrier = waitForConnectionReadyCount(router, options.clients);
         console.log(`READY,${options.endpoint}`);
@@ -413,14 +420,14 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
         // stdin STOP/QUIT watcher and no runner START gate
         // (bindings/c/perf/multi/common/perf_multi_relay_server.hpp:667-677).
         rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-        let stopRequested = false;
+        const stopController = new AbortController();
         rl.on('line', (line) => {
             if (line === 'STOP' || line === 'QUIT') {
-                stopRequested = true;
+                stopController.abort();
             }
         });
         await readyBarrier;
-        while (!stopRequested) {
+        while (!stopController.signal.aborted) {
             // Pending public send Promises and stdin both run on this event loop.
             // A zero-time readiness probe followed by setImmediate keeps those
             // signal-driven continuations runnable without a timer pump.
@@ -436,9 +443,20 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
                         const partSizes = received.parts.map((part) => part.data().length).join(',');
                         throw new Error(`invalid multipart echo request: expected=${expectedParts}, sizes=${partSizes}`);
                     }
-                    // Keep receiving immutable snapshots, but let the single sender
-                    // await the preceding reply admission before submitting the next.
+                    // Capture one immutable snapshot for the single sender.
                     replies.enqueue(received);
+                    // Preserve Core receive backpressure like the C relay: do not move
+                    // another request into the application FIFO until this reply is
+                    // admitted. STOP remains able to interrupt this wait so the existing
+                    // bounded shutdown drain owns the final pending admission.
+                    await waitForReplyAdmissionOrStop({
+                        replies,
+                        stopSignal: stopController.signal,
+                        progress: () => { waitPollerOne(poller, pollBuffer, 0); }
+                    });
+                    replies.raiseIfFailed();
+                    if (stopController.signal.aborted)
+                        break;
                     replyBatchCount += 1;
                     if (replyBatchCount === ASYNC_PROGRESS_BATCH) {
                         replyBatchCount = 0;
@@ -482,5 +500,6 @@ module.exports = {
     runRoutedSendSendServer,
     RoutedReplySender,
     relayShutdownDrainMs,
-    trackPendingReplyTask
+    trackPendingReplyTask,
+    waitForReplyAdmissionOrStop
 };

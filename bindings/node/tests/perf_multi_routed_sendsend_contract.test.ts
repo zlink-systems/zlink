@@ -14,7 +14,8 @@ const {
   RoutedReplySender,
   relayShutdownDrainMs,
   runRoutedSendSendRounds,
-  trackPendingReplyTask
+  trackPendingReplyTask,
+  waitForReplyAdmissionOrStop
 } = require('../perf/multi/perf_multi_routed_sendsend');
 const { benchmarkEndpoint } = require('../perf/common/perf_endpoint');
 const {
@@ -360,6 +361,62 @@ test('routed relay bounds a pending reply admission after STOP', async () => {
 
   releaseAdmission(true);
   await replies.drain();
+  assert.equal(replies.pendingCount, 0);
+});
+
+test('routed relay STOP interrupts receive coupling without dropping the pending reply', async () => {
+  let releaseAdmission;
+  const admission = new Promise<boolean>((resolve) => { releaseAdmission = resolve; });
+  const replies = new RoutedReplySender({}, async () => admission);
+  const stopController = new AbortController();
+  const routingId = zlink.RoutingId.from(Buffer.from('CLIENT'));
+  replies.enqueue({
+    routingId,
+    parts: [{ data: () => Buffer.alloc(64) }, { data: () => Buffer.alloc(0) }]
+  });
+
+  let waitCompleted = false;
+  const wait = waitForReplyAdmissionOrStop({
+    replies,
+    stopSignal: stopController.signal
+  })
+    .then(() => { waitCompleted = true; });
+  await nextTurn();
+  assert.equal(waitCompleted, false);
+  assert.equal(replies.pendingCount, 1);
+
+  stopController.abort();
+  await wait;
+  assert.equal(waitCompleted, true);
+  assert.equal(replies.pendingCount, 1);
+
+  releaseAdmission(true);
+  await replies.drain();
+  assert.equal(replies.pendingCount, 0);
+});
+
+test('routed relay drives completion progress while receive is coupled', async () => {
+  let releaseAdmission;
+  const admission = new Promise<boolean>((resolve) => { releaseAdmission = resolve; });
+  const replies = new RoutedReplySender({}, async () => admission);
+  const stopController = new AbortController();
+  const routingId = zlink.RoutingId.from(Buffer.from('CLIENT'));
+  replies.enqueue({
+    routingId,
+    parts: [{ data: () => Buffer.alloc(64) }, { data: () => Buffer.alloc(0) }]
+  });
+
+  let progressCalls = 0;
+  await waitForReplyAdmissionOrStop({
+    replies,
+    stopSignal: stopController.signal,
+    progress: () => {
+      progressCalls += 1;
+      if (progressCalls === 2) releaseAdmission(true);
+    }
+  });
+
+  assert.equal(progressCalls, 2);
   assert.equal(replies.pendingCount, 0);
 });
 

@@ -6,6 +6,7 @@ const readline = require('node:readline');
 const { MonitorEventType, RecvFlags, RecvResult } = zlink;
 const { applyAutoHwmProfile, integerEnv, manualSocketOverridesEnabled, monotonicMs, sleepImmediate } = require('../common/perf_metrics');
 const POLLIN = 1;
+const POLLCOMPLETION = zlink.PollEventFlag.PollCompletion;
 const { emitMultiSocketHwmDetail } = require('./perf_multi_auto_hwm');
 const { resolveMultiMonitorHwm } = require('./perf_multi_common');
 // Buffer inputs are copied into a zlink_msg_t during the public native call.
@@ -55,6 +56,9 @@ function pollEvents(mask) {
     const events = [];
     if ((mask & POLLIN) !== 0) {
         events.push(zlink.PollEventFlag.PollIn);
+    }
+    if ((mask & POLLCOMPLETION) !== 0) {
+        events.push(zlink.PollEventFlag.PollCompletion);
     }
     return events;
 }
@@ -327,6 +331,7 @@ function createSocketEventWaiter(socket, events) {
 }
 module.exports = {
     POLLIN,
+    POLLCOMPLETION,
     applyContextPolicy,
     applySocketPolicy,
     createSocketEventWaiter,
