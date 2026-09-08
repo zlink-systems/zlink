@@ -500,12 +500,8 @@ static void run_auto_hwm_public_blocking_send (bool multipart_)
     const std::future_status resumed =
       blocked_send.wait_for (std::chrono::seconds (1));
     TEST_ASSERT_EQUAL_INT (std::future_status::ready, resumed);
-    const int blocked_rc = blocked_send.get ();
-    if (blocked_rc != static_cast<int> (sizeof (payload)))
-        printf ("DIAG-MAC1 ctx_options blocked send rc=%d errno=%d (%s)\n",
-                blocked_rc, blocked_errno.load (),
-                zlink_strerror (blocked_errno.load ()));
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (sizeof (payload)), blocked_rc);
+    TEST_ASSERT_EQUAL_INT (static_cast<int> (sizeof (payload)),
+                           blocked_send.get ());
 
     const zlink_auto_hwm_budget_snapshot_t after =
       read_auto_hwm_budget_snapshot (ctx);
