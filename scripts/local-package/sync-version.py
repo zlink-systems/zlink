@@ -138,8 +138,11 @@ def update_framework_node_lock(source: str, version: str) -> str:
         block,
         count=1,
     )
+    # The lockfile entry is either the local-package pin
+    # (file:...zlink-systems-zlink-<ver>.tgz) or, after the binding is published,
+    # the registry tarball (https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-<ver>.tgz).
     block, resolved_count = re.subn(
-        rf'("resolved"\s*:\s*"file:[^"]*zlink-systems-zlink-){SEMVER}(\.tgz")',
+        rf'("resolved"\s*:\s*"(?:file:[^"]*zlink-systems-zlink-|https://registry\.npmjs\.org/@zlink-systems/zlink/-/zlink-)){SEMVER}(\.tgz")',
         rf"\g<1>{version}\2",
         block,
         count=1,
@@ -449,7 +452,7 @@ def synchronize(write: bool) -> tuple[str, str, list[Path]]:
     )
     for relative in (
         "framework/languages/dotnet/contract/packages/Zlink.Framework.package.txt",
-        "framework/languages/dotnet/contract/packages/Zlink.Framework.AspNetCore.package.txt",
+        "framework/languages/dotnet/contract/packages/Systems.Zlink.Framework.AspNetCore.package.txt",
     ):
         sync.regex(
             relative,
