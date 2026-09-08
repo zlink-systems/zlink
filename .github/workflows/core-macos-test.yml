@@ -12,7 +12,7 @@ on:
 env:
   CTEST_REGEX: '^test_stream_packet_progress$'
   CTEST_EXCLUDE: '^(test_multi_dealer_dealer_benchmark_process|test_multi_pubsub_benchmark_process|test_multi_spot_benchmark_process|test_multi_stream_benchmark_process|test_single_pair_benchmark_process|test_single_spot_benchmark_process|test_reconnect_options|test_zmp_request_reply|test_stream_send_blocking_wakeup|test_stream_socket_recv_multiclient_ready_regression|test_stream_threadsafe_callback_queue_load|test_stream_threadsafe_recv_queue_load|test_stream_threadsafe_recv_queue_timed_window)$'
-  CTEST_REPEAT: 'until-fail:5'
+  CTEST_REPEAT: 'until-fail:20'
 
 jobs:
   macos-ctest:
