@@ -4736,6 +4736,17 @@ Core PR을 내지 않는다. (2) 0.17.4 도착 뒤 같은 절차(1,000→5,000�
 재빌드 비용을 두 번 내지 않도록 큐 기본 prefix(`core-prefix.env`)는 0.17.4가 올 때 공식 0.17.4 artifact로 한 번에 바꾼다.
 그때까지 새 측정이 필요하면 pinned 0.17.3을 유지한다.
 
+### D-BP49 (2026-09-09 01:55) Core release artifact의 glibc 요구(≥2.38) — 릴리스 워크플로우 runner를 ubuntu-24.04로, 배포용 Core는 오래된 glibc에서 빌드해야(0.17.4 항목, B 전달)
+
+**사실:** `core/v0.17.3`의 `libzlink-linux-x64.tar.gz`는 build.yml의 ubuntu-24.04(glibc 2.39)에서 빌드돼 `__isoc23_strto*` 심볼을
+참조한다. 릴리스 워크플로우(ubuntu-22.04, glibc 2.35)의 fetch-release 검증 링크가 `undefined reference to __isoc23_s*`로 실패해
+`dotnet/v0.17.3`·`java/v0.17.3` 첫 run이 publish 전에 중단됐다(C++ job은 링크 검증이 없어 성공).
+
+**결정:** (1) 릴리스 워크플로우 3개의 runner를 ubuntu-24.04로(`eeca508582`), 태그 재지정. (2) 같은 이유로 npm/NuGet/Maven에 실리는
+Linux x64 prebuilt는 glibc 2.38 미만(Ubuntu 22.04, Debian 12 등)에서 로드되지 않는다 — 0.17.3은 그대로 배포하되 README/릴리스
+노트에 요구 조건을 적는다. (3) **B 전달(0.17.4)**: 배포용 Core Linux artifact는 지원 최소 glibc에서 빌드(ubuntu-22.04 runner 또는
+manylinux 컨테이너, `-static-libstdc++` 여부 포함)하고 provenance에 glibc 버전을 기록한다.
+
 ## D-B251 (2026-09-08 15:25, 머신 B) 사용자 지시 — macOS 실패를 병렬로 미리 수정해 0.17.4가 바로 빌드되게: MAC-1(Claude) 착수
 
 **절차**: macOS 머신 없음 → 진단 workflow `core-macos-test.yml`(workflow_dispatch, macos-15, ctest 정규식 입력, serial -j1)을 브랜치 `wip/mac-1`(베이스 `wip/0.17.3-all2` + Intel 제거·build.sh gating 커밋 cherry-pick)에 추가하고 Actions로 재현·검증 loop. 진단 run 34190928956(main, 새 gating)의 macOS ARM64 실패 목록을 확정 입력으로. 알려진 실제 실패: auto-HWM applied limit −1(`test_ctx_options:657`), xpub NODROP blocking publish timeout(`test_xpub_nodrop:243`), `test_stream_packet_progress`; timeout군은 병렬 실행 제거 뒤 재판정. 수정은 `__APPLE__` 분기 최소, Linux 동작 불변. patch `all-artifacts/MAC-1.patch` → 0.17.4 병합.
