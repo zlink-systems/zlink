@@ -22,7 +22,9 @@ Primary goals:
 Supported stacks:
 
 - `asio`
+- `asio_pull` (asio server with zlink's pull-model thread structure: io thread queues the chunk, a worker thread echoes and posts the write back)
 - `cppserver`
+- `cppserver_pull` (CppServer server with the same pull-model thread structure)
 - `dotnet`
 - `netzlink`
 - `jvmzlink`
@@ -101,7 +103,7 @@ Run one stack with multi-size sequence (reconnect per size):
 ## Runner Options
 
 ```text
---stack <asio|cppserver|dotnet|netzlink|jvmzlink|zlink|zmq|netty|all|csv>
+--stack <asio|asio_pull|cppserver|cppserver_pull|dotnet|netzlink|jvmzlink|zlink|zmq|netty|all|csv>
 --size <64|1024|65536|all|csv>
 --build-dir PATH            default: bindings/c/build (the Core runtime comes from
                             ZLINK_CORE_SOURCE: default `release` downloads the

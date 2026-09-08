@@ -69,6 +69,15 @@ endif()
 target_compile_options(test_scenario_stream_asio PRIVATE ${STREAMCOMPARE_CXX_FLAGS})
 target_compile_features(test_scenario_stream_asio PRIVATE cxx_std_17)
 
+if(NOT TARGET test_scenario_stream_asio_pull)
+    add_executable(
+        test_scenario_stream_asio_pull
+        ${STREAM_SCENARIO_ROOT}/asio_pull/test_scenario_stream_asio_pull.cpp)
+    target_link_libraries(test_scenario_stream_asio_pull Threads::Threads)
+endif()
+target_compile_options(test_scenario_stream_asio_pull PRIVATE ${STREAMCOMPARE_CXX_FLAGS})
+target_compile_features(test_scenario_stream_asio_pull PRIVATE cxx_std_17)
+
 if(EXISTS "${STREAM_SCENARIO_ZMQ_INCLUDE_DIR}/zmq.h"
    AND EXISTS "${STREAM_SCENARIO_ZMQ_LIBRARY_FILE}")
     if(NOT TARGET test_scenario_stream_zmq)

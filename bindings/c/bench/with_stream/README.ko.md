@@ -22,7 +22,9 @@ echo 성능을 비교하기 위한 벤치마크입니다.
 지원 스택:
 
 - `asio`
+- `asio_pull` (asio 서버에 zlink와 같은 pull 모델 스레드 구조 적용: io 스레드는 청크를 큐에 넣고, 워커 스레드가 에코를 만들어 쓰기를 io 스레드로 post)
 - `cppserver`
+- `cppserver_pull` (CppServer 서버에 같은 pull 모델 스레드 구조 적용)
 - `dotnet`
 - `netzlink`
 - `jvmzlink`
@@ -102,7 +104,7 @@ cat /proc/sys/net/ipv4/ip_local_port_range
 ## 실행 옵션
 
 ```text
---stack <asio|cppserver|dotnet|netzlink|jvmzlink|zlink|zmq|netty|all|csv>
+--stack <asio|asio_pull|cppserver|cppserver_pull|dotnet|netzlink|jvmzlink|zlink|zmq|netty|all|csv>
 --size <64|1024|65536|all|csv>
 --build-dir PATH            기본값: bindings/c/build (Core 런타임은 ZLINK_CORE_SOURCE가
                             정한다. 기본 `release`는 발행된 라이브러리를 내려받고,

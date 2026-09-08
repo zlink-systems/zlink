@@ -28,7 +28,7 @@ Usage:
   run_benchmarks.sh [options]
 
 Options:
-  --stack <asio|cppserver|dotnet|netzlink|jvmzlink|jvmzlink-recv|jvmzmq|netty|zlink|zlink_packet|zmq|all|comma-list>
+  --stack <asio|asio_pull|cppserver|cppserver_pull|dotnet|netzlink|jvmzlink|jvmzlink-recv|jvmzmq|netty|zlink|zlink_packet|zmq|all|comma-list>
   --size <64|1024|65536|all|comma-list>
   --build-dir PATH            Build directory (default: bindings/c/build).
   --reuse-build               Reuse existing build directory as-is (skip configure/build).
@@ -52,7 +52,7 @@ Examples:
 USAGE
 }
 
-STACKS_ALL=(zlink zlink_packet netzlink jvmzlink jvmzlink-recv jvmzmq asio cppserver dotnet zmq netty)
+STACKS_ALL=(zlink zlink_packet netzlink jvmzlink jvmzlink-recv jvmzmq asio asio_pull cppserver cppserver_pull dotnet zmq netty)
 SIZES_ALL=(64 1024 65536)
 
 TARGET_STACK="all"
@@ -206,7 +206,7 @@ fi
 
 for s in "${RUN_STACKS[@]}"; do
     case "${s}" in
-        asio|cppserver|dotnet|netzlink|jvmzlink|jvmzlink-recv|jvmzmq|netty|zlink|zlink_packet|zmq)
+        asio|asio_pull|cppserver|cppserver_pull|dotnet|netzlink|jvmzlink|jvmzlink-recv|jvmzmq|netty|zlink|zlink_packet|zmq)
             ;;
         *)
             echo "invalid stack: ${s}" >&2
@@ -237,6 +237,7 @@ SKIP_CSV="${RESULT_DIR}/skipped_stacks.csv"
 STREAMCOMPARE_BIN_DIR="${BUILD_DIR}/bench/with_stream"
 CLIENT_BIN="${STREAMCOMPARE_BIN_DIR}/bench_streamcompare_client"
 ASIO_BIN="${STREAMCOMPARE_BIN_DIR}/test_scenario_stream_asio"
+ASIO_PULL_BIN="${STREAMCOMPARE_BIN_DIR}/test_scenario_stream_asio_pull"
 ZLINK_BIN="${STREAMCOMPARE_BIN_DIR}/test_scenario_stream_zlink"
 ZMQ_BIN="${STREAMCOMPARE_BIN_DIR}/test_scenario_stream_zmq"
 ZLINK_PACKET_BIN="${STREAMCOMPARE_BIN_DIR}/test_scenario_stream_zlink_packet"
@@ -253,6 +254,8 @@ CPPSERVER_SRC_DIR="${STACKS_ROOT_DIR}/cppserver/upstream"
 CPPSERVER_BUILD_DIR="${CPPSERVER_SRC_DIR}/build-stream"
 CPPSERVER_BIN="${CPPSERVER_BUILD_DIR}/cppserver-performance-stream_fixed_server"
 CPPSERVER_UPSTREAM_ENTRY="${CPPSERVER_SRC_DIR}/performance/stream_fixed_server.cpp"
+CPPSERVER_PULL_BIN="${CPPSERVER_BUILD_DIR}/cppserver-performance-stream_pull_server"
+CPPSERVER_PULL_UPSTREAM_ENTRY="${CPPSERVER_SRC_DIR}/performance/stream_pull_server.cpp"
 
 DOTNET_PROJECT="${STACKS_ROOT_DIR}/dotnet/StreamServer.csproj"
 DOTNET_OUT_DIR="${STACKS_ROOT_DIR}/dotnet/bin/Release/stream-bench"
@@ -986,6 +989,13 @@ try_build_stack()
                 build_core_tests_stream_target "test_scenario_stream_asio"
             fi
             ;;
+        asio_pull)
+            if [[ "${BUILD_MODE}" == "reuse" ]]; then
+                [[ -f "${ASIO_PULL_BIN}" ]]
+            else
+                build_core_tests_stream_target "test_scenario_stream_asio_pull"
+            fi
+            ;;
         zlink)
             if [[ "${BUILD_MODE}" == "reuse" ]]; then
                 [[ -f "${ZLINK_BIN}" ]]
@@ -1018,6 +1028,18 @@ CPP
             ensure_cppserver_build_dir
             cmake -S "${CPPSERVER_SRC_DIR}" -B "${CPPSERVER_BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release >/dev/null
             cmake --build "${CPPSERVER_BUILD_DIR}" --target cppserver-performance-stream_fixed_server -j"$(nproc)" >/dev/null
+            ;;
+        cppserver_pull)
+            if [[ "${BUILD_MODE}" == "reuse" ]]; then
+                [[ -f "${CPPSERVER_PULL_BIN}" ]]
+                return 0
+            fi
+            cat >"${CPPSERVER_PULL_UPSTREAM_ENTRY}" <<'CPP'
+#include "../../../cppserver_pull/test_scenario_stream_cppserver_pull.cpp"
+CPP
+            ensure_cppserver_build_dir
+            cmake -S "${CPPSERVER_SRC_DIR}" -B "${CPPSERVER_BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release >/dev/null
+            cmake --build "${CPPSERVER_BUILD_DIR}" --target cppserver-performance-stream_pull_server -j"$(nproc)" >/dev/null
             ;;
         dotnet)
             if [[ "${BUILD_MODE}" == "reuse" ]]; then
@@ -1156,6 +1178,9 @@ start_server()
         asio)
             cmd=("${ASIO_BIN}")
             ;;
+        asio_pull)
+            cmd=("${ASIO_PULL_BIN}")
+            ;;
         zlink)
             cmd=("${ZLINK_BIN}")
             ;;
@@ -1167,6 +1192,9 @@ start_server()
             ;;
         cppserver)
             cmd=("${CPPSERVER_BIN}")
+            ;;
+        cppserver_pull)
+            cmd=("${CPPSERVER_PULL_BIN}")
             ;;
         dotnet)
             cmd=(dotnet "${DOTNET_DLL}")
