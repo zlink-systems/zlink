@@ -4690,3 +4690,7 @@ prefix를 명시한다.
 
 **절차**: macOS 머신 없음 → 진단 workflow `core-macos-test.yml`(workflow_dispatch, macos-15, ctest 정규식 입력, serial -j1)을 브랜치 `wip/mac-1`(베이스 `wip/0.17.3-all2` + Intel 제거·build.sh gating 커밋 cherry-pick)에 추가하고 Actions로 재현·검증 loop. 진단 run 34190928956(main, 새 gating)의 macOS ARM64 실패 목록을 확정 입력으로. 알려진 실제 실패: auto-HWM applied limit −1(`test_ctx_options:657`), xpub NODROP blocking publish timeout(`test_xpub_nodrop:243`), `test_stream_packet_progress`; timeout군은 병렬 실행 제거 뒤 재판정. 수정은 `__APPLE__` 분기 최소, Linux 동작 불변. patch `all-artifacts/MAC-1.patch` → 0.17.4 병합.
 **진단 run 34190928956(main, 새 gating) 결과(15:50)**: macOS ARM64 serial 그룹 149개 중 8 실패 — `test_ctx_options`(Failed), `test_stream_packet_progress`(Failed), Timeout: `test_endpoint_release`, `test_router_multiple_dealers`, `test_transport_matrix`(120 s), `test_single_lane_wire_mandatory_count`, `test_single_lane_wire_old_peer_rejected`, `test_wake_invariants`. `test_xpub_nodrop`은 이번엔 통과(간헐). 병렬 그룹은 serial 실패로 미실행. 다른 4 플랫폼은 성공. 이 목록을 MAC-1의 확정 입력으로 전달.
+
+## D-B252 (2026-09-08 15:05, 머신 B) 사용자 지적 — STREAM은 다른 socket과 얽히지 않는 recv/send 경로인데 asio 대비 격차가 남는 이유; S-C(astra, 분석) 착수
+
+**질문**: 잠금 15.1→8.4/msg 뒤에도 with_stream zlink/asio 0.80~0.84. 남은 13.9k Ir/msg의 위치를 경로 단계별(TCP read→decode→pipe→command→wake→recv_packet→send_packet→pipe→command→engine write→TCP write)로 분해하고 asio·zmq 서버와 나란히 비교해, 설계 비용(pull 핸드오프·thread-safe turn)과 제거 가능 비용(packet당 msg_t 할당, 이중 버퍼링, envelope, 프레이밍 파서, wake syscall, send command 왕복, refcount RMW)을 분리. 결과는 0.17.4 마감 뒤 이어질 "메시지당 명령 수" 작업의 job 목록이 된다(각 ≤3 h).
