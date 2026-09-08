@@ -116,6 +116,9 @@ binding의 공개 request terminal이 admission 결과를 직접 돌려주지 �
 
 - **그 awaitable을 기다리지 말고 계속 제출한다.** 반환된 awaitable은 미완료 집합에 넣고,
   완료되는 것부터 drain해 집계한다.
+  미완료 집합의 크기는 **Core가 그 소켓에 적용한 SNDHWM bytes ÷ 메시지 wire size**(auto-HWM snapshot의
+  applied 값)로 묶는다 — C 러너가 `BACKPRESSURED`를 받는 바로 그 admission 창이며, 고정 숫자 상한이 아니다.
+  이 경계에 닿으면 completion을 진행하고 빈 자리만큼 다시 제출한다(2026-09-08, D-BP40).
 - backpressure는 binding이 내부에서 처리한다. binding의 awaitable terminal은 `DONTWAIT`로
   admission을 **한 번** 시도하고, 거절되면 요청을 붙들고 **정확히 그 대기 토큰의
   `WRITABLE`에서만** 재개한다. binding은 retry timer도 worker thread도 두지 않는다.

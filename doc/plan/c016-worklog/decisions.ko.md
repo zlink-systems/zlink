@@ -4572,3 +4572,20 @@ Multi에만 있다). Rust·Python 지도 브리프에 반영; Java·Node·Go 지
 ## D-B242 (2026-09-08 13:50, 머신 B) 정정 — 0.17.3 릴리스 진행(alpha + LIN-1), 0.17.4는 별도 worktree에서 astra 병렬(D-B241 철회)
 
 **사용자**: "0.17.3 릴리즈는 진행하고 별도 워크트리에서 0.17.4 병렬로 진행하라고 astra로 한번에". D-B241의 "0.17.3 생략"은 감독자의 오독 — 철회. 확정: (1) **0.17.3** = `core/v0.17.3-alpha` 내용 + LIN-1(Linux CI `unittest_flow_state_monitor`) 수정 → release worktree `rel`에서 커밋·bump 0.17.3·태그·Actions 릴리스, LIN-1 patch가 나오는 즉시. (2) **0.17.4** = ALL-2(wip/0.17.3-all2) + ALL-3(worktree all3, astra 진행 중) + LIN-1 → review-all2·gate-all 결과 반영 → ALL-3 완료 후 최종 게이트(Linux+Windows) → 착지 → bump 0.17.4 → 릴리스. 두 트랙은 독립 worktree에서 병렬.
+
+### D-BP40 (2026-09-08 13:50) Single REQREP — awaitable terminal 러너의 미완료 수는 Core admission 창(적용 SNDHWM bytes ÷ wire size)으로 묶는다
+
+**발견(Claude sub-agent, `log/2026-09-08-single-reqrep-parity-cpp-java.ko.md`):** C++·Java Single REQREP은 turn당 1건 제출 뒤
+completion 하나를 블로킹 대기해 실효 미완료 깊이가 1.00/0.90이다(throughput×latency로 확인). C는 `DONTWAIT` 제출을
+`BACKPRESSURED`까지 이어가 깊이 2~2,100. 원인은 러너의 "첫 completion에서 중단" 구조이고, 공개 awaitable terminal
+(C++ `async()`, Java `submit()`)이 admission 결과를 돌려주지 않아 러너가 C처럼 포화 경계를 볼 수 없다. 상한 없이
+무조건 연속 제출하면 binding이 retain하는 요청이 완료율만큼 쌓여(262144 B에서 5 s에 수십 GB) 성립하지 않는다.
+.NET·Rust도 같은 turn 구조. Java PAIR 64 B latency는 큐 포화의 양안정 상태로 모든 binding(C 포함)에서 보이는
+현상이라 러너 결함이 아니다.
+
+**결정:** 정책 §1.1.3의 "awaitable을 기다리지 말고 계속 제출"을 구현하되, 미완료 수를 **Core가 그 소켓에 적용한
+SNDHWM bytes ÷ 메시지 wire size**(auto-HWM snapshot의 applied 값 — C가 `BACKPRESSURED`를 받는 바로 그 경계)로
+묶는다. 이것은 고정 숫자 상한(31c5e4f7f0이 걷어낸 `MAX_OUTSTANDING=64`)이 아니라 Core의 admission 창을 러너가
+읽어 쓰는 것이며, C와 같은 깊이 경계를 준다. C++·Java·.NET·Rust Single REQREP 러너에 적용하고 C와 짝지어 재측정.
+정책 §1.1.3에 한 문장으로 명문화(감독자 편집).
+
