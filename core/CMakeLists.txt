@@ -525,7 +525,11 @@ if(NOT MSVC)
 
   check_cxx_symbol_exists(fork unistd.h HAVE_FORK)
   check_cxx_symbol_exists(gethrtime sys/time.h HAVE_GETHRTIME)
-  check_cxx_symbol_exists(mkdtemp stdlib.h HAVE_MKDTEMP)
+  # mkdtemp is declared in <stdlib.h> by glibc but in <unistd.h> on Darwin and
+  # the BSDs, so probe both headers. Without this the macOS build silently
+  # falls back to the mkstemp path, which leaves a regular file where the IPC
+  # listener expects a socket and makes every "ipc://*" bind fail EADDRINUSE.
+  check_cxx_symbol_exists(mkdtemp "stdlib.h;unistd.h" HAVE_MKDTEMP)
   check_cxx_symbol_exists(accept4 sys/socket.h HAVE_ACCEPT4)
   check_cxx_symbol_exists(strnlen string.h HAVE_STRNLEN)
 else()

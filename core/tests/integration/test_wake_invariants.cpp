@@ -378,7 +378,11 @@ bool wait_until_poller_wait_is_active (void *poller_)
             return true;
         if (size < 0)
             return false;
-        std::this_thread::yield ();
+        //  Yielding here spins one core per probe while 100 waiter threads
+        //  are trying to reach their blocking wait. On a small host that
+        //  starves the very thread this probe is waiting for, so give the
+        //  scheduler a real gap instead.
+        msleep (1);
     }
     return false;
 }
@@ -936,8 +940,44 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
         if (fill_error != 0)
             break;
         if (backpressured_clients == multi_dealer_count) {
-            saturated = true;
-            break;
+            // A first EAGAIN only proves that this sender's own queue is at
+            // its byte limit. The transport below it may still have room, and
+            // draining into that room returns credit without any reader
+            // credit, which publishes the wait token as WRITABLE before the
+            // drain under test even starts. Only a client that stays
+            // backpressured owns the token this test waits on, so consume any
+            // early WRITABLE and keep filling that client until the whole
+            // chain - queue, transport and peer queue - is saturated.
+            size_t recredited = 0;
+            for (size_t i = 0; i < multi_dealer_count; ++i) {
+                zlink_completion_t early;
+                memset (&early, 0, sizeof (early));
+                early.struct_size = sizeof (early);
+                if (zlink_completion_recv (clients[i], &early,
+                                           ZLINK_RECV_FLAGS_DONTWAIT)
+                    != ZLINK_RECV_OK)
+                    continue;
+                const bool is_writable_token =
+                  early.kind == ZLINK_COMPLETION_WRITABLE
+                  && early.completion_id == writable_tokens[i];
+                zlink_completion_close (&early);
+                if (!is_writable_token) {
+                    fill_error = EPROTO;
+                    break;
+                }
+                backpressured[i] = 0;
+                writable_tokens[i] = 0;
+                --backpressure_attempts[i];
+                --backpressured_clients;
+                ++recredited;
+            }
+            if (fill_error != 0)
+                break;
+            if (recredited == 0) {
+                saturated = true;
+                break;
+            }
+            continue;
         }
 
         for (size_t i = 0; i < fill_items.size (); ++i)
@@ -979,8 +1019,24 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
       && min_accepted >= lwm_drain_records;
 
     if (fill_ready) {
-        for (size_t i = 0; i < multi_dealer_count; ++i)
-            assert_no_ready_completion (clients[i]);
+        size_t extra_completion_clients = 0;
+        size_t first_extra_client = multi_dealer_count;
+        for (size_t i = 0; i < multi_dealer_count; ++i) {
+            int probe_error = 0;
+            if (!completion_queue_is_empty (clients[i], &probe_error)) {
+                if (first_extra_client == multi_dealer_count)
+                    first_extra_client = i;
+                ++extra_completion_clients;
+            }
+        }
+        std::ostringstream extra_details;
+        extra_details << "socket published an unexpected extra completion: "
+                      << "clients=" << extra_completion_clients
+                      << " first=" << first_extra_client
+                      << " accepted_min=" << min_accepted
+                      << " accepted_max=" << max_accepted;
+        TEST_ASSERT_TRUE_MESSAGE (extra_completion_clients == 0,
+                                  extra_details.str ().c_str ());
     }
 
     multi_pollout_wait_state_t wait_state;

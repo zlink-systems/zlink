@@ -1257,3 +1257,6 @@ if(TARGET test_request_reply_part_count_boundary)
     test_request_reply_part_count_boundary
     PROPERTIES TIMEOUT 300)
 endif()
+
+# Applied last so that every deadline set above is scaled.
+include("${CMAKE_CURRENT_LIST_DIR}/scale_test_timeouts.cmake")
