@@ -1465,13 +1465,13 @@ callgrind·프로파일 분석, 후보 no-go 목록과 그 근거(D-B121~D-B130)
 
 | 순서 | 언어 | 현재 artifact Single | 현재 artifact Multi | 이전 호스트 Multi `tcp` 참고값 (DD / DR REQREP / RR REQREP / PUBSUB) | 적용된 개선 pass |
 |------|------|------|------|------|------|
-| 1 | C++ | REQREP 연속 제출 정합 완료(63.6%) | `tcp` DD **통과(95.42%)**, PUBSUB **통과(95.52%)**, DR REQREP **미달(72.87%)**, RR REQREP **미달(76.39%)** — SENDSEND 2종·STREAM 미측정, `tls`·`ws`·`wss` 미측정 | 90.8 / 57.4 / 68.4 / 93.2% | 3건 push + 러너 C 모델 정합 `31c5e4f7f0` |
-| 2 | .NET | 미측정 | 미측정 | 59.6 / 58.3 / 67.0 / 61.3% | 3건 push |
-| 3 | Java | 미측정 | 미측정 | 80.9 / 59.4 / 58.7 / 80.9% | 3건 push |
-| 4 | Node | 미측정 | 미측정 | 35.9 / 24.3 / 24.8 / 30.2% | 4건 push |
-| 5 | Go | 미측정 | 미측정 | 53.2 / 19.0 / 21.8 / 54.6% | 2건 push |
-| 6 | Rust | 미측정 | 미측정 | 59.3 / 67.3 / 69.8 / 87.7% | 2건 push |
-| 7 | Python | 미측정 | 미측정 | 15.4 / 15.5 / 19.6 / 31.9% | 2건 push |
+| 1 | C++ | REQREP 연속 제출 정합 완료(63.6%) | **0.17.2 `tcp`·`tls`·`ws`·`wss` 24 cell 기록 완료** — 통과 10, 보류 14(REQREP 4 구조적, Core/transport 귀속 10), 차단 1(wss DD). 열린 조사 없음 | 90.8 / 57.4 / 68.4 / 93.2% | 3건 push + 러너 정합 4건(`31c5e4f7f0` `e0862e1e5c` `33f63ae89d` `1aa2751b1b`) |
+| 2 | .NET | 미측정 | **0.17.2 `tcp` 4 cell 전부 `미달`** — DD 62.51, PUBSUB 61.01, DR REQREP 60.45, RR REQREP 63.10%(pattern 무관 ~60% 띠); SENDSEND 2종은 relay 정합(D-BP24) 뒤; DD 비용 지도 job 진행 중 | 59.6 / 58.3 / 67.0 / 61.3% | 3건 push |
+| 3 | Java | 미측정 | 0.17.2 빌드 완료, `tcp` 6 pattern 측정 중(relay는 이미 C 모델) | 80.9 / 59.4 / 58.7 / 80.9% | 3건 push |
+| 4 | Node | 미측정 | 0.17.2 빌드 완료, `tcp` 4 pattern 측정 중; SENDSEND는 relay 정합 필요(D-BP24 '있음' 확정) | 35.9 / 24.3 / 24.8 / 30.2% | 4건 push |
+| 5 | Go | 미측정 | **REQREP 재개**(0.17.2 동시 multipart 지원, 상한 제거 `add837942b`, D-BP16 완료); `tcp` REQREP 2 + DD·PUBSUB·SENDSEND 2 측정 중(relay는 C 모델 — 공유 echo server 동기 제출) | 53.2 / 19.0 / 21.8 / 54.6% | 2건 push |
+| 6 | Rust | 미측정 | 0.17.2 빌드 완료(relay job); relay 정합 적용 중(D-BP24); 측정은 우선순위 큐 뒤 | 59.3 / 67.3 / 69.8 / 87.7% | 2건 push |
+| 7 | Python | 미측정 | 0.17.2 빌드 완료(relay job); relay 정합 적용 중(D-BP24); 측정은 우선순위 큐 뒤 | 15.4 / 15.5 / 19.6 / 31.9% | 2건 push |
 
 참고값은 2026-09-06 00:22, 이전 호스트(16 논리 CPU / 11.7 GiB), Core `a40cb46335` 기준이다
 (`doc/plan/c016-worklog/morning-summary-2026-09-05-B.ko.md`, D-B121~D-B130). 새 측정의 목표
