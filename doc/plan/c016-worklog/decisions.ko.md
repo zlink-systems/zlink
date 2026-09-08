@@ -4837,3 +4837,6 @@ Windows Actions green으로 WIN-2의 host 한정 판정 확정(`test_wake_invari
 ## D-B287 (2026-09-08 23:00, 머신 B) MAC-4 결과 — **Core 결함**: ctx 종료 게시가 monitor teardown 뒤로 밀리고(macOS 13 ms 창, Linux 0.4 ms) 블로킹 receive 루프 3곳이 종료를 진입 시에만 확인(send는 매 턴) → 종료 선게시 + receive 매 턴 ETERM(send와 대칭); macOS 20/20·serial 150/150·parallel 57/57; `wip/0.17.4` 적용(MERGE-2a)
 
 `core-rf-MAC-4-report.md`, `MAC-4.patch`(5파일 +49/−1). ALL-3 fence·MAC-3 msleep은 원인 아님. 계약: `zlink_ctx_shutdown()` 이후 blocking receive ETERM은 진입부가 이미 하던 동작을 루프 안에도 적용한 것(새 동작 없음, 새 상태·상수 0). 테스트 1줄(측정 시점을 join 전으로). Linux `^test_stream` until-fail:5 통과; dev 트리 hotpath_gate 실패는 LTO OFF 빌드 기존 성질(변경 없는 트리와 동일 수치). 후속: `core/builds/macos/build.sh`에 `--output-on-failure`(MERGE-2a에 포함). CHANGELOG [0.17.4] Fixed 항목.
+## D-B288 (2026-09-08 23:10, 머신 B) CCU-5 완료 — 수렴 의무 = deadline(`arm_debounce` 첫 무장만 wake, `clear_debounce`는 full pass 완료 한 곳, `recalc_due` = 경과만; `record_applied_plan`은 deadline 미접촉), deferred shrink 반복 없음·burst N회에 full pass 1회를 공개 지표 테스트로 고정; unittest 10/10·until-fail 32×5·ctest 211/211·TSan 0건·CCU 4000 209.1 kops; review-CCU-5(25분)
+
+`core-rf-CCU-5-report.md`, `CCU-5.patch`(13파일). `recalc_due()` 조건 3→1, 새 상태 0. 부수 효과: 후속 무장이 마감을 밀지 않아 긴 burst에서는 debounce 주기마다 수렴이 전진(보장이 더 강함). CCU 추이 202.8→203.2→209.1 kops.

@@ -1,0 +1,11 @@
+너는 job review-CCU-5(review-CCU-4 차단 2건 해소 최종 재검증)다. /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽는다. **읽기·리뷰 전용**(수정·빌드·실행·커밋 금지). 상한 25분.
+
+대상: worktree `/home/hep7hep7/project/zlink-work/ccu2` 미커밋 diff(= `~/project/zlink-work/all-artifacts/CCU-5.patch`, core/** 13파일 + `unittest_auto_hwm_incremental_plan.cpp`). 입력: `review-ccu4.md`(B-CCU4-1/2, W 잔여), `core-rf-CCU-5-report.md`, 스펙 `06-auto-hwm.ko.md` §2(D-H1 행)·§4:475-480.
+
+검증 항목(근거 파일:행, 판정):
+1. **B-CCU4-1**: `recalc_due()`가 deadline 경과만 보는지(`ctx_auto_hwm_state.cpp:331-341`), full pass 완료 지점 한 곳만 `clear_debounce()`(`ctx_auto_hwm_recalc.cpp:305-310`)하는지, deferred shrink에서 full pass 후 재실행이 없는지, "진행 중 요청이 있으면 그 wait 보존"(`:265-272`)이 option/socket 생성/detach 요청의 기존 debounce 의미를 바꾸지 않는지(요청 장부와 deadline의 소유 분리가 규칙을 늘리지 않았는지).
+2. **B-CCU4-2**: 증분 성공 경로가 `arm_debounce()`만 호출하고 `record_applied_plan()`이 deadline을 건드리지 않는지, N회 연속 attach에 timer wake가 1회인지(테스트 `test_extension_converges_on_the_debounce_without_further_calls`의 등식이 실제로 N회 무장을 배제하는지), 두 attach가 arm을 교차할 때 상태 mutex로 직렬화되는지, 후속 무장이 마감을 밀지 않아 긴 burst에서 debounce 주기마다 full pass가 도는 부수 효과가 스펙 §2 D-H1 문구("debounce 재계산 경로가 기록")와 모순되지 않는지.
+3. W 잔여: attach마다 `applied > planned` 판정, fallback 케이스 완전 동일, barrier 동시 출발, `test_deferred_shrink_does_not_keep_replanning`의 debounce 6배 대기·`budget_generation` 불변 검사가 flaky하지 않은지(타이밍 의존).
+4. 새 상태·옵션·타이머 0, public 헤더·`libzlink.vers` 무변경, 주석 정합, Windows/macOS API.
+
+보고서 /home/hep7hep7/project/zlink/doc/plan/c016-worklog/review-ccu5.md (항목별 판정 표, 신규 B/W/S, 마지막 줄 "차단 항목 수 / 채택 가능 여부"). 진행 파일 progress-review-ccu5.md.
