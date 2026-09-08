@@ -548,14 +548,6 @@ bool completion_queue_is_empty (void *socket_, int *error_)
     const zlink_recv_result_t result = zlink_completion_recv (
       socket_, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
     if (result == ZLINK_RECV_OK) {
-        printf ("DIAG-MAC1 extra completion: kind=%d id=%llu send_result=%d "
-                "terminal_errno=%d peer_rid_size=%u reply_parts=%u\n",
-                (int) completion.kind,
-                (unsigned long long) completion.completion_id,
-                (int) completion.send_result,
-                (int) completion.send_terminal_errno,
-                (unsigned) completion.peer_rid.size,
-                (unsigned) completion.reply_part_count);
         zlink_completion_close (&completion);
         if (error_)
             *error_ = EEXIST;
@@ -944,8 +936,44 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
         if (fill_error != 0)
             break;
         if (backpressured_clients == multi_dealer_count) {
-            saturated = true;
-            break;
+            // A first EAGAIN only proves that this sender's own queue is at
+            // its byte limit. The transport below it may still have room, and
+            // draining into that room returns credit without any reader
+            // credit, which publishes the wait token as WRITABLE before the
+            // drain under test even starts. Only a client that stays
+            // backpressured owns the token this test waits on, so consume any
+            // early WRITABLE and keep filling that client until the whole
+            // chain - queue, transport and peer queue - is saturated.
+            size_t recredited = 0;
+            for (size_t i = 0; i < multi_dealer_count; ++i) {
+                zlink_completion_t early;
+                memset (&early, 0, sizeof (early));
+                early.struct_size = sizeof (early);
+                if (zlink_completion_recv (clients[i], &early,
+                                           ZLINK_RECV_FLAGS_DONTWAIT)
+                    != ZLINK_RECV_OK)
+                    continue;
+                const bool is_writable_token =
+                  early.kind == ZLINK_COMPLETION_WRITABLE
+                  && early.completion_id == writable_tokens[i];
+                zlink_completion_close (&early);
+                if (!is_writable_token) {
+                    fill_error = EPROTO;
+                    break;
+                }
+                backpressured[i] = 0;
+                writable_tokens[i] = 0;
+                --backpressure_attempts[i];
+                --backpressured_clients;
+                ++recredited;
+            }
+            if (fill_error != 0)
+                break;
+            if (recredited == 0) {
+                saturated = true;
+                break;
+            }
+            continue;
         }
 
         for (size_t i = 0; i < fill_items.size (); ++i)

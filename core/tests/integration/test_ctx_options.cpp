@@ -667,13 +667,13 @@ void test_auto_hwm_applied_limit_blocks_and_resumes_after_drain ()
         std::chrono::steady_clock::now () - drain_started)
         .count ();
     if (resumed != std::future_status::ready)
-        printf ("DIAG-MAC2 ctx_options blocked send not ready: queued=%d "
+        printf ("auto-hwm blocked send not ready: queued=%d "
                 "drained=%d drain_ms=%lld\n",
                 queued, drained, (long long) drain_elapsed_ms);
     TEST_ASSERT_EQUAL_INT (std::future_status::ready, resumed);
     const int blocked_rc = blocked_send.get ();
     if (blocked_rc != static_cast<int> (sizeof (payload)))
-        printf ("DIAG-MAC2 ctx_options blocked send rc=%d errno=%d (%s) "
+        printf ("auto-hwm blocked send rc=%d errno=%d (%s) "
                 "queued=%d drained=%d drain_ms=%lld\n",
                 blocked_rc, blocked_errno.load (),
                 zlink_strerror (blocked_errno.load ()), queued, drained,

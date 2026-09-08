@@ -359,7 +359,7 @@ bool wait_for_raw_close (fd_t fd_, int timeout_ms_ = 3000)
         }
         msleep (10);
     }
-    printf ("DIAG-MAC1 wait_for_raw_close timed out: last_rc=%d errno=%d (%s) "
+    printf ("wait_for_raw_close timed out: last_rc=%d errno=%d (%s) "
             "bytes_drained=%d hex=",
             last_rc, last_errno, strerror (last_errno), bytes_drained);
     for (int i = 0; i != bytes_drained && i != 128; ++i)
