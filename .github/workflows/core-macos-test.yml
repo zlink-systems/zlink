@@ -1,20 +1,18 @@
 name: Core macOS ctest (diagnostic)
 
+# Dispatchable workflows must live on the default branch, so this one is
+# driven by pushes to the diagnostic branch instead. Edit CTEST_REGEX /
+# CTEST_REPEAT below and push to change what runs.
 on:
+  push:
+    branches:
+      - wip/mac-1
   workflow_dispatch:
-    inputs:
-      ctest_regex:
-        description: 'ctest -R regex (default: all tests)'
-        required: false
-        default: '.'
-      ctest_exclude:
-        description: 'ctest -E regex (default: the release job exclusions)'
-        required: false
-        default: '^(test_multi_dealer_dealer_benchmark_process|test_multi_pubsub_benchmark_process|test_multi_spot_benchmark_process|test_multi_stream_benchmark_process|test_single_pair_benchmark_process|test_single_spot_benchmark_process|test_reconnect_options|test_zmp_request_reply|test_stream_send_blocking_wakeup|test_stream_socket_recv_multiclient_ready_regression|test_stream_threadsafe_callback_queue_load|test_stream_threadsafe_recv_queue_load|test_stream_threadsafe_recv_queue_timed_window)$'
-      repeat:
-        description: 'ctest --repeat mode, e.g. until-fail:3 (empty = single run)'
-        required: false
-        default: ''
+
+env:
+  CTEST_REGEX: '.'
+  CTEST_EXCLUDE: '^(test_multi_dealer_dealer_benchmark_process|test_multi_pubsub_benchmark_process|test_multi_spot_benchmark_process|test_multi_stream_benchmark_process|test_single_pair_benchmark_process|test_single_spot_benchmark_process|test_reconnect_options|test_zmp_request_reply|test_stream_send_blocking_wakeup|test_stream_socket_recv_multiclient_ready_regression|test_stream_threadsafe_callback_queue_load|test_stream_threadsafe_recv_queue_load|test_stream_threadsafe_recv_queue_timed_window)$'
+  CTEST_REPEAT: ''
 
 jobs:
   macos-ctest:
@@ -57,10 +55,10 @@ jobs:
         run: |
           set -o pipefail
           REPEAT=""
-          [ -n "${{ inputs.repeat }}" ] && REPEAT="--repeat ${{ inputs.repeat }}"
+          if [ -n "$CTEST_REPEAT" ]; then REPEAT="--repeat $CTEST_REPEAT"; fi
           ctest --test-dir core/build-macos --output-on-failure \
             -L serial -j1 $REPEAT \
-            -R '${{ inputs.ctest_regex }}' -E '${{ inputs.ctest_exclude }}' \
+            -R "$CTEST_REGEX" -E "$CTEST_EXCLUDE" \
             2>&1 | tee ctest-serial.log
 
       - name: ctest (non-serial, -j3)
@@ -69,10 +67,10 @@ jobs:
         run: |
           set -o pipefail
           REPEAT=""
-          [ -n "${{ inputs.repeat }}" ] && REPEAT="--repeat ${{ inputs.repeat }}"
+          if [ -n "$CTEST_REPEAT" ]; then REPEAT="--repeat $CTEST_REPEAT"; fi
           ctest --test-dir core/build-macos --output-on-failure \
             -LE serial -j3 $REPEAT \
-            -R '${{ inputs.ctest_regex }}' -E '${{ inputs.ctest_exclude }}' \
+            -R "$CTEST_REGEX" -E "$CTEST_EXCLUDE" \
             2>&1 | tee ctest-parallel.log
 
       - name: Summary
