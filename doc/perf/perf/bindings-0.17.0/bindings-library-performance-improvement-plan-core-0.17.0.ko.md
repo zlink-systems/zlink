@@ -1572,6 +1572,11 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 
 | 2026-09-08 | 7개 binding | Multi `tcp` 6 pattern 전 언어 판정(오늘 마무리 범위 §10.3.2) | 언어별 태그 `r1net`~`r13java3`, `nodedrain`, `gorr`, codex/agent 검증 태그 | 5 sizes(64~65536), 5초, **1회 기본**·경계만 3-run(D-BP32), 100 clients, 고정 Core **0.17.2**. 판정 통과: C++ 10 cell, Java PUBSUB·DR SS·RR SS(throughput). 미달: .NET 6, Node 6, Rust 6, Python 6, Go 5, Java 3. 차단: Go RR SS 65536 B(server shutdown), Java RR SS 4096 B 간헐. 러너 정합 커밋 9건(Node/.NET/Go/Java client·relay drain, 집계 median, teardown 창 D-BP34, Go FAIL 사유). 측정 인프라: 티켓 큐(D-BP33). 상세는 §9.x.2 각 행 |
 
+**사용자 결정(2026-09-08 12:35): Core 수정 뒤 재개.** 이 캠페인은 여기서 멈추고, 머신 B의
+STREAM·tls·ws·wss 수정(D-BP23·D-BP28·D-BP29 보고서)이 끝나면 `보류(Core 대기)` 132 cell 재측정부터
+재개한다. 공개 API 형태 변경(.NET·C++ 미달)은 열지 않는다. 재개 시 절차: (1) Core 새 버전을 §10.3의
+재핀 절차로 고정, (2) C 기준을 먼저 전 transport 1-run으로 다시 잡고, (3) §10.3.2 이월 목록 순서대로.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

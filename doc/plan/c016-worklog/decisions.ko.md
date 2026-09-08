@@ -4483,3 +4483,13 @@ median 변경과 무관(ws는 §10.3.2 Core 대기 항목, 0.18.0 이월).
 
 **관찰**: run 34183182643(main, dispatch): Linux x64/ARM64·Windows ARM64 성공, Windows x64는 "Verify Windows test configuration"에서 `test_paired_incomplete_lane_fence_timeout_and_fresh_pair` "Expected TRUE Was FALSE"(09-04 run과 동일). verify·release job이 이 job에 의존하므로 태그 run도 실패한다. Windows ARM64 job은 테스트를 돌리지 않아 통과.
 **결정**: WIN-1(Claude opus, 2.5 h) — `D:\project\zlink`를 origin/main으로 동기화해 CI와 같은 구성(VS 2022, x64, Release, TLS)으로 재현 → 원인(timer 해상도·socket 정리·IOCP 순서·dual-stack 등 Windows 차이 vs 실제 순서 결함) 확정 → Core 결함이면 소유 모듈 수정, 테스트 전제면 관측 가능한 이벤트 대기로 결정화(timeout 확대 금지) → Windows 10회·Linux 반복 검증. 0.17.3 게이트에 이 patch를 포함한다. 이후 Windows 작업은 D-B233대로 Windows 세션으로.
+
+### D-BP36 (2026-09-08) 0.17.0 bindings 성능 캠페인은 Core 수정 뒤 재개한다 — 사용자 결정
+
+**결정:** 계획서 §12 완료 기준(Multi 표에 미달·미측정 없음)은 현재 결정 범위에서 채울 수 없어 사용자에게
+네 갈래(종결 / 공개 API 변경 / Core 수정 뒤 재개 / 개선 pass 계속)를 물었고, **"Core 수정 뒤 재개"**를
+택했다. 공개 API 형태 변경은 열지 않는다. 재개 조건은 머신 B의 STREAM·tls·ws·wss 수정
+(D-BP23·D-BP28·D-BP29)이며, 재개 절차와 이월 목록은 계획서 §10.3.2·§12.1.
+
+**근거:** 남은 미달은 공개 API 계약(D-BP26·D-BP31)과 언어 runtime 고정 비용에 묶여 있고, 132 cell은 C
+러너에서 재현되는 Core 결함이라 binding 쪽 작업으로는 움직이지 않는다. 목표·측정 조건 완화는 금지(§5, D-BP15).
