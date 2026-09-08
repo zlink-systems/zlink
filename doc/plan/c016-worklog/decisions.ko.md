@@ -4796,3 +4796,6 @@ prefix를 명시한다.
 ## D-B274 (2026-09-08 19:35, 사용자) STREAM 성능 판정은 **pull 모델 스택만 비교** — asio_pull·cppserver_pull·zmq; callback 본체(asio·cppserver)는 참고값
 
 사용자: "현실적으로 pull 방식으로 많이 사용하니까 pull 방식으로만 비교해도 된다고 봐". 근거: zlink STREAM은 pull 계약(수신 part ownership이 caller)이고 실제 사용도 pull이며, callback 본체 대비 격차는 hop(6 %)이 아니라 zlink 고유 층이므로 동일 조건 비교가 cppserver_pull이다. **판정 기준**: zlink/cppserver_pull(현재 0.84/0.81/0.78)과 zlink/asio_pull(1.005/0.94/1.91), zlink/zmq(0.88/0.85/1.26). 목표 = cppserver_pull 동률(SC-1~4·SD-1). asio·cppserver 본체 행은 §7.1 표에 참고로만 유지. 계획 §4·§7.1 주석 갱신, SD-1 측정 스택을 zlink·asio_pull·cppserver_pull·zmq로 지정(진행 중 job에 note 전달).
+## D-B275 (2026-09-08 19:40, 사용자) 비교표에서 callback 본체 행을 빼고 pull 변형을 `asio`·`cppserver`로 표기 — 비교 집합 = zlink · asio(pull) · cppserver(pull) · zmq
+
+사용자: "뒤에 _pull도 빼고 그냥 pull만 남기고 비교해줘". §7.1·보고서 표는 4 스택만 싣고 이름은 asio·cppserver(둘 다 pull 모델)로 쓴다. 벤치 디렉터리(`stacks/asio_pull`·`cppserver_pull`) 이름 변경은 SD-1 측정이 끝난 뒤 별도 커밋(측정 중 경로 변경 금지); callback 본체 스택은 저장소에 남기되 기본 실행 목록에서 제외.
