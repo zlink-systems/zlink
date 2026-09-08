@@ -378,7 +378,11 @@ bool wait_until_poller_wait_is_active (void *poller_)
             return true;
         if (size < 0)
             return false;
-        std::this_thread::yield ();
+        //  Yielding here spins one core per probe while 100 waiter threads
+        //  are trying to reach their blocking wait. On a small host that
+        //  starves the very thread this probe is waiting for, so give the
+        //  scheduler a real gap instead.
+        msleep (1);
     }
     return false;
 }
