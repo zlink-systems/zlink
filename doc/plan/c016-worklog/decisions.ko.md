@@ -4781,3 +4781,6 @@ prefix를 명시한다.
 ## D-B270 (2026-09-08 18:45, 사용자) §7.5 STREAM 결정 항목(D-S1·D-a·D-b·D-f)은 **측정으로 확정** — 0.17.5에서 각각 worktree A/B 구현·측정 뒤 결과를 보고 채택/기각
 
 사용자: "테스트 하면서 성능 개선 확인하고 확정하면 어때?" → 채택. 절차: 항목별 job 1개(계약 변경이 있는 D-a·D-b는 main에 착지하지 않는 실험 patch), 기준 = 현재 main, with_stream 6 스택(64 B/1 KiB/64 KiB, CCU 1000, idle 3-run 중앙값) + hotpath 5셀 + connection당 RSS(D-S1·B2). 판정은 실측 처리량/latency/메모리이며 Ir는 참고(§4). 결과 표를 §7.5 해당 행에 적고 사용자가 확정. 순서: B1·B2(계약 내, 먼저) → D-f(죽은 knob 제거, 측정은 무변화 확인) → D-S1(B2 뒤 max 상향 A/B, RSS 함께) → D-a·D-b(실험 patch; 이득이 작으면 기각). 착수는 0.17.4 릴리즈 뒤(현재 3 트랙 메모리 상한).
+## D-B271 (2026-09-08 18:55, 사용자) STREAM 개선(B1·B2·계측 app 수정·D-f)을 **지금 별도 worktree에서 진행해 0.17.4에 포함** — job core-rf-SD-1(sol) 착수; D-S1은 같은 job에서 실험 측정만, D-a·D-b는 0.17.5
+
+사용자: "이거 지금 다른 워크스페이스에서 진행하고 0.17.4에 포함하는 건 어때?", "충분히 가능할 것 같은데". worktree `~/project/zlink-work/sd1`(branch `wip/sd-1`, base `wip/0.17.4` HEAD `84d25131a6`), brief `briefs/core-rf-SD-1.prompt`, 상한 4 h. 포함 판정 = ctest·TSan 0·hotpath ±5 %·with_stream A/B(base=`wip/0.17.4`) 실측. **ETA 변경**: 0.17.4 릴리즈 23:45~24:30 → **09-09 03:00~04:00**(SD-1 4 h + 리뷰/게이트 1.5 h + 착지·Actions 1 h). SD-1이 상한을 넘기거나 게이트에 실패하면 SD-1 없이 릴리즈하고 0.17.5로 이월. 동시 트랙: MERGE-1(Windows ctest·TSan), MAC-3(Actions 대기), review-CCU-2(hotpath 대기), SD-1 — 메모리 available 9.2 GB, 빌드는 ninja 0일 때만 순차.
