@@ -4960,3 +4960,8 @@ bump 범위: `0761c1d4d0` + `4cdafee9b7`과 같은 파일(VERSION, BINDINGS_VERS
 ## D-B300 (2026-09-09 04:10, 머신 B) **Core 0.17.4 릴리즈 완료** — Actions run 34265135721 전 job 성공(Linux x64/ARM64, Windows x64/ARM64, macOS ARM64, Verify, Create Release); GitHub Release `core/v0.17.4` 자산 13개(5 플랫폼 tar.gz/zip, checksums, provenance, source), 본문 = CHANGELOG [0.17.4]
 
 사용자 지시(D-B277 "이월 없음") 이행: 열린 이슈 전부 0.17.4에 포함 — 동기화 통합(ALL), D-BP43(RR-1), macOS 4건(MAC-1~4, 제외 없음), attach O(N²)(CCU-2~5), STREAM 큰 payload(SD B2)·WS 64 KiB(SD-5), D-f. 기각 1건(B1, 실측 열세). 머신 A: 0.17.4 재고정(D-BP14 절차) 및 Rust cargo 확인 요청. 다음 캠페인 0.17.5 목록은 계획 §8(SC-1~4, D-S1·D-a·D-b A/B, 테스트 보강 W-SD5-3·W-CCU5-1, perf 러너 `--io-threads` alias 문서 불일치).
+## D-B301 (2026-09-09 08:20, 머신 B) **열린 이슈 1건: D-BP49(3) 미이행** — 0.17.4 Linux artifact도 **GLIBC_2.38 요구**(`__isoc23_strtoul/strtol/strtoull` 3개, ubuntu-24.04 runner) → Ubuntu 22.04·Debian 12에서 로드 불가
+
+확인: 릴리즈 `core/v0.17.4`의 `libzlink-linux-x64.tar.gz` `libzlink.so`를 내려받아 `objdump -T` — 요구 최고 버전 GLIBC_2.38, `__isoc23_*` 참조 3건. provenance에 glibc 기록 없음. A의 D-BP49(2026-09-09 01:55) 항목 (3)이 0.17.4 릴리즈(04:06) 전에 도착했으나 반영하지 못했다(감독관 누락; 그 시각 SD-5/MERGE-3 처리 중이었고 A 로그를 다시 읽지 않았다).
+**원인**: glibc 2.38이 `strtol`류를 C23 시맨틱 심볼로 재바인딩한다. Core 소스는 `std::strtol/strtoul/strtoull`을 `utils/env.hpp`(5곳)·`ctx_auto_hwm_state.cpp`·`ip_resolver.cpp`에서 쓰며, 코드 문제가 아니라 **빌드 호스트 glibc** 문제다.
+**선택지**: (a) build.yml의 Linux x64/ARM64 job runner를 ubuntu-22.04(glibc 2.35)로 내리고 0.17.4 자산만 재빌드·교체(태그·소스 불변, 재릴리즈 아님) — 가장 작음, 지원 하한 2.35; (b) manylinux_2_28 컨테이너로 빌드(하한 2.28, CI 변경 큼); (c) 0.17.4는 그대로 두고 README/릴리즈 노트에 glibc ≥ 2.38 요구를 명시(A의 0.17.3 처리와 동일), 0.17.5에서 (a)/(b). **감독관 권고 (a)** — 자산 교체는 outward-facing이라 사용자 승인 후 진행. 그 외 열린 Core 이슈는 없음(D-BP47 CCU 10k는 A가 0.17.4로 재확인 큐 투입, 결과 대기).
