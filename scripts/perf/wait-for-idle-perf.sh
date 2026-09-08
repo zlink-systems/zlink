@@ -54,7 +54,13 @@ load="$(cut -d' ' -f1 /proc/loadavg)"
 echo "perf idle 확인 (대기 ${waited}초, load ${load})"
 
 # lock 보유자. 호출자의 측정이 시작될 때까지 grace초 기다렸다가 끝날 때까지 쥔다.
+# 어떤 경우에도 max_hold초를 넘기면 놓는다 — 2026-09-08 09:40 고아가 된 holder 하나가
+# perf 없이 lock을 쥔 채 남아 큐 전체(16개 대기)가 10분 넘게 멈췄다.
+max_hold="${ZLINK_PERF_LOCK_MAX_HOLD:-1800}"
+case "${grace}" in ''|*[!0-9]*) grace=20;; esac
 (
+  set +e
+  hold_start=$(date +%s)
   for _ in $(seq 1 "${grace}"); do
     r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v 'wait-for-idle-perf' || true)"
     [ -n "${r}" ] && break
@@ -63,6 +69,7 @@ echo "perf idle 확인 (대기 ${waited}초, load ${load})"
   while :; do
     r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v 'wait-for-idle-perf' || true)"
     [ -z "${r}" ] && break
+    [ $(( $(date +%s) - hold_start )) -ge "${max_hold}" ] && break
     sleep 5
   done
 ) >/dev/null 2>&1 &
