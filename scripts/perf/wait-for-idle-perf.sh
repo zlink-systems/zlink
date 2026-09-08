@@ -76,9 +76,12 @@ caller_pid=$PPID
     sleep 2
     r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v 'wait-for-idle-perf' || true)"
   done
+  # perf가 보이는 동안 잡되, 호출자가 죽으면 놓는다 — 호출자 없는 holder는 남의 perf를 보고
+  # max_hold까지 lock을 쥔다(2026-09-08 10:50 codex 호출 wrapper가 죽은 뒤 12개 대기가 멈췄다).
   while :; do
     r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v 'wait-for-idle-perf' || true)"
     [ -z "${r}" ] && break
+    kill -0 "${caller_pid}" 2>/dev/null || break
     [ $(( $(date +%s) - hold_start )) -ge "${max_hold}" ] && break
     sleep 5
   done
