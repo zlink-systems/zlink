@@ -4698,3 +4698,7 @@ prefix를 명시한다.
 ## D-B253 (2026-09-08 15:10, 머신 B) 사용자 지적 — cppserver(asio 기반 라이브러리 계층)를 STREAM 비교 스택에 추가; 4 스택 측정 착수
 
 **근거**: `bindings/c/bench/with_stream/stacks/cppserver`(upstream CppServer, asio 기반)가 순수 asio보다도 빨랐다는 사용자 관측. zlink와 같은 "asio 위 라이브러리 계층"이므로 zlink/cppserver 비율이 zlink 계층 자체의 비용을 가장 직접 보여준다. §7.1 비교 스택을 zlink/asio/cppserver/zmq 4개로. 측정 job `measure-cppserver`(Claude, idle 조건, runs 3)를 띄움 — 결과는 §7.1 행과 S-C 분석의 대조 입력.
+
+## D-B254 (2026-09-08 15:25, 머신 B) 사용자 지시 — asio·cppserver 서버에 zlink와 같은 pull 구조 변형(`asio_pull`, `cppserver_pull`)을 만들어 핸드오프 비용을 분리 측정
+
+**설계**: read 콜백 → queue 적재 + wake → 별도 worker thread가 pull·echo → 소유 io_context/strand에 `post`로 write 위임(asio socket 비-thread-safe → zlink의 command hop과 동일). wire·프레이밍·io thread 수·러너 옵션은 기존 스택과 동일. 6 스택(zlink, asio, asio_pull, cppserver, cppserver_pull, zmq) runs 3 idle 측정. 판독: asio vs asio_pull = 핸드오프 설계 비용(하한), zlink vs asio_pull/cppserver_pull = zlink 계층 고유 비용(0이어야 할 부분), zlink/zmq는 같은 모델 대조. 벤치 코드만 변경(bindings/c/bench/with_stream), Core 불변. 결과는 §7.1과 S-C 분석의 입력.
