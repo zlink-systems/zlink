@@ -54,12 +54,8 @@ while :; do
   board
   # 이전 방식 측정과 겹치지 않게 같은 lock을 쥐고, load가 내려갈 때까지 기다린다.
   exec 9>>"${lock_file}"
-  lw=0
-  until flock -n 9 8>&-; do
-    sig="$(ls "${root}"/pending 2>/dev/null | md5sum)"; [ "${sig}" != "${last_sig:-}" ] && { board; last_sig="${sig}"; }
-    [ "${lw}" -ge 3600 ] && { echo "# warn: perf lock 3600s 초과, 그대로 진행" >> "${t}"; break; }
-    sleep 3; lw=$((lw+3))
-  done
+  # 블로킹 flock — 폴링(flock -n + sleep)은 블로킹 대기자들에게 항상 져서 runner가 굶는다.
+  flock -w 3600 9 8>&- || echo "# warn: perf lock 3600s 초과, 그대로 진행" >> "${t}"
   waited=0
   while awk -v m="${load_max}" '{exit !($1>m)}' /proc/loadavg && [ "${waited}" -lt 600 ]; do sleep 5; waited=$((waited+5)); done
   echo "# started: $(date '+%H:%M:%S') (lock·load 대기 ${waited}s, load $(cut -d' ' -f1 /proc/loadavg))" >> "${t}"
