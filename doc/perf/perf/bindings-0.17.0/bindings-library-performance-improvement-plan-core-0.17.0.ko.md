@@ -1367,7 +1367,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 보류(1.6%) | 보류(1.7%) | 보류(2.2%) | 보류(4.8%) | 보류(22.6%) | 미측정 | 판정 `보류`(pass 1·2 뒤 3-run 값은 log) — before; aggregate 6.6%(목표 60%), 15k msg/s 고정(메시지당 ~65 µs Python 고정 비용); 처리량 Py/C 15.2/922.3, 15.4/889.2, 15.3/688.4, 15.2/319.2, 13.4/59.2 Kmsg/s; `p1python`; [log](log/2026-09-05-python-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_DEALER_DEALER` | 미달(7.7%) | 미달(9.7%) | 미달(11.1%) | 미달(21.7%) | 미달(29.1%) | 미측정 | **`미달(15.89%)`** — 1-run(D-BP32), 고정 Core **0.17.2**(`r8py`, C `complete`·python `complete`); latency 0.15x. relay 정합(fb3f37191d) 전 3-run 1.6~22.6% → 7.7~29.1%로 올랐으나 목표 60%에 멀다. latency 비율이 C보다 낮게(0.15x) 나와 Python DD latency 측정 자체가 의심 — 러너 이슈로 이월(0.18.0). 처리량 python·C 133.9/1,736.5, 132.8/1,367.0, 130.6/1,172.0, 129.1/593.8, 42.4/145.5 Kops/s; C `perf_c_multi_linux_20260908_105754_r8py.txt`, python `perf_python_multi_linux_20260908_105852_r8py.txt` |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 보류(7.8%) | 보류(7.6%) | 보류(8.2%) | 보류(9.6%) | 보류(37.9%) | 미측정 | 판정 `보류`(pass 1·2 뒤 3-run 값은 log) — before; aggregate 14.2%(목표 60%), latency 5.99x; 처리량 Py/C 13.2/169.4, 13.0/170.3, 12.9/157.8, 12.5/130.6, 9.4/24.8 Kops/s; [log](log/2026-09-05-python-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
