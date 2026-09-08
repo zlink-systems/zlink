@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { hostEnvironment } from '../../host-environment.mjs';
+import { hostEnvironment } from '../../../scripts/host-environment.mjs';
 
 export const sampleName = 'ZoneWorld';
 
