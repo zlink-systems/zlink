@@ -889,13 +889,13 @@ cell은 `보류(사유)`로 표시하고 수치는 그대로 남긴다. 러너 �
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | Core 0.17.1 artifact로 재측정 대상 |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | Core 0.17.1 artifact로 재측정 대상 |
+| `tcp` | `PAIR` | 56.1% | 58.3% | 74.4% | 92.1% | 83.7% | 86.7% | **참고 75.2%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·dotnet `complete`); latency 7.12x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 dotnet·C 997.9/1,777.8, 837.0/1,435.0, 788.2/1,059.8, 99.1/107.6, 53.7/64.2, 28.2/32.5 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, dotnet `perf_dotnet_single_linux_20260908_132034_sg1.txt` |
+| `tcp` | `PUBSUB` | 61.7% | 65.6% | 91.0% | 324.7% | 300.1% | 209.7% | **참고 175.5%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·dotnet `complete`); latency 5.87x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 dotnet·C 896.1/1,452.0, 767.6/1,169.6, 715.6/786.3, 44.3/13.6, 19.0/6.3, 5.7/2.7 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, dotnet `perf_dotnet_single_linux_20260908_132034_sg1.txt` |
+| `tcp` | `DEALER_DEALER` | 49.8% | 56.1% | 70.4% | 91.1% | 90.4% | 80.0% | **참고 73.0%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·dotnet `complete`); latency 0.92x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 dotnet·C 903.1/1,813.6, 778.7/1,388.5, 741.2/1,052.2, 100.7/110.5, 57.9/64.1, 27.3/34.1 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, dotnet `perf_dotnet_single_linux_20260908_132034_sg1.txt` |
+| `tcp` | `DEALER_ROUTER` | 52.3% | 54.1% | 70.4% | 97.2% | 85.4% | 86.1% | **참고 74.3%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·dotnet `complete`); latency 3.67x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 dotnet·C 945.7/1,806.9, 779.9/1,440.7, 740.6/1,051.9, 106.2/109.2, 54.9/64.3, 29.1/33.8 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, dotnet `perf_dotnet_single_linux_20260908_132034_sg1.txt` |
+| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 1.1% | 1.1% | 54.0% | 58.2% | 54.5% | **참고 33.8%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·dotnet `complete`); latency 0.60x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 dotnet·C 8.9/834.1, 8.5/740.4, 6.2/11.4, 5.4/9.2, 4.0/7.3 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, dotnet `perf_dotnet_single_linux_20260908_132034_sg1.txt` |
+| `tcp` | `ROUTER_ROUTER` | 52.5% | 63.6% | 73.2% | 97.8% | 88.6% | 86.7% | **참고 77.0%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·dotnet `complete`); latency 7.28x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 dotnet·C 871.0/1,659.6, 776.0/1,221.0, 720.5/984.7, 104.9/107.2, 52.6/59.4, 28.7/33.1 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, dotnet `perf_dotnet_single_linux_20260908_132034_sg1.txt` |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 1.1% | 1.1% | 1.3% | 65.5% | 60.5% | 53.9% | **참고 30.6%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·dotnet `complete`); latency 0.64x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 dotnet·C 9.7/881.8, 9.1/837.2, 9.2/724.5, 7.4/11.3, 5.5/9.2, 3.8/7.0 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, dotnet `perf_dotnet_single_linux_20260908_132034_sg1.txt` |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
