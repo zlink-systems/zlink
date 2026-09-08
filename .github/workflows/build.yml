@@ -20,7 +20,7 @@ jobs:
       libzlink_lib_suffix: ${{ steps.versions.outputs.libzlink_lib_suffix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Read versions from VERSION file
         id: versions
@@ -82,7 +82,7 @@ jobs:
     needs: read-versions
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -205,7 +205,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: libzlink-windows-x64
           path: core/dist/windows-x64/
@@ -217,7 +217,7 @@ jobs:
     needs: read-versions
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install OpenSSL (ARM64) via vcpkg
         shell: pwsh
@@ -260,7 +260,7 @@ jobs:
           Copy-Item "..\core\include\*.h" "..\$distDir\include\" -Force
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: libzlink-windows-arm64
           path: core/dist/windows-arm64/
@@ -272,7 +272,7 @@ jobs:
     needs: read-versions
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: |
@@ -341,7 +341,7 @@ jobs:
         run: test -f core/dist/linux-x64/libzlink.so
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: libzlink-linux-x64
           path: core/dist/linux-x64/
@@ -353,7 +353,7 @@ jobs:
     needs: read-versions
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: |
@@ -374,7 +374,7 @@ jobs:
         run: test -f core/dist/linux-arm64/libzlink.so
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: libzlink-linux-arm64
           path: core/dist/linux-arm64/
@@ -386,7 +386,7 @@ jobs:
     needs: read-versions
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install OpenSSL via vcpkg
         run: |
@@ -411,7 +411,7 @@ jobs:
           ls -la core/dist/macos-x86_64/
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: libzlink-macos-x64
           path: core/dist/macos-x86_64/
@@ -423,7 +423,7 @@ jobs:
     needs: read-versions
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: |
@@ -448,7 +448,7 @@ jobs:
             "ON"
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: libzlink-macos-arm64
           path: core/dist/macos-arm64/
@@ -467,7 +467,7 @@ jobs:
       - build-macos-arm64
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: artifacts/
 
@@ -521,7 +521,7 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Upload checksums
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: checksums
           path: artifacts/checksums.txt
@@ -538,13 +538,13 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Fetch tags
         run: git fetch --tags --force
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: artifacts/
 
@@ -672,7 +672,7 @@ jobs:
           cat release-notes.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           prerelease: ${{ steps.channel.outputs.prerelease }}
           name: libzlink ${{ needs.read-versions.outputs.libzlink_version }}
