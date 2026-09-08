@@ -3,6 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"runtime"
+	"strconv"
+	"sync/atomic"
 	"time"
 
 	zlink "zlink.systems/zlink"
@@ -17,11 +21,25 @@ type multiRouterClient struct {
 func runMultiRouterRouterServer(cfg multiConfig) {
 	serverCtx, err := perfcommon.NewMultiServerContext()
 	perfcommon.Must(err)
-	defer serverCtx.Close()
 
 	server, err := serverCtx.RouterSocket()
 	perfcommon.Must(err)
-	defer server.Close()
+
+	teardownDone := make(chan struct{})
+	teardown := func() {
+		select {
+		case <-teardownDone:
+			return
+		default:
+		}
+		setRelayStage(relayStageCloseSocket)
+		_ = server.Close()
+		setRelayStage(relayStageCloseContext)
+		_ = serverCtx.Close()
+		setRelayStage(relayStageDone)
+		close(teardownDone)
+	}
+	defer teardown()
 
 	serverID := zlink.NewRoutingID([]byte("SERVER"))
 	perfcommon.Must(perfcommon.ConfigureTLSServer(server, cfg.transport))
@@ -36,6 +54,7 @@ func runMultiRouterRouterServer(cfg multiConfig) {
 
 	serverDone := make(chan struct{})
 	stopSignal := waitForStopAsync()
+	watchRelayShutdown(stopSignal, teardownDone)
 	go startMultiRouterRouterEchoServer(server, stopSignal, serverDone)
 	select {
 	case <-serverDone:
@@ -44,6 +63,110 @@ func runMultiRouterRouterServer(cfg multiConfig) {
 		// before the deferred socket/context close runs.
 		<-serverDone
 	}
+}
+
+// Relay teardown stages. The runner kills a server that outlives
+// PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS with SIGTERM and then SIGKILL, so the
+// stalled stage has to reach stderr while the budget is still running; there
+// is no post-mortem output from a killed process.
+const (
+	relayStageEchoLoop int32 = iota
+	relayStageCloseSocket
+	relayStageCloseContext
+	relayStageDone
+)
+
+var relayStageNames = [...]string{"echo_loop", "close_socket", "close_context", "done"}
+
+var (
+	relayStage            atomic.Int32
+	relayReplySubmitStart atomic.Int64
+	relayReplySubmitEnd   atomic.Int64
+)
+
+func setRelayStage(stage int32) {
+	relayStage.Store(stage)
+}
+
+func relayStageLabel() string {
+	stage := relayStage.Load()
+	if stage < 0 || int(stage) >= len(relayStageNames) {
+		return "unknown"
+	}
+	return relayStageNames[stage]
+}
+
+// watchRelayShutdown names the teardown stage on stderr once the control STOP
+// arrives, so a server that misses the runner shutdown budget reports which
+// step held it and for how long instead of dying silently.
+func watchRelayShutdown(stop <-chan struct{}, done <-chan struct{}) {
+	go func() {
+		select {
+		case <-done:
+			return
+		case <-stop:
+		}
+		startedNs := perfcommon.MonotonicNowNs()
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		dumped := false
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+			}
+			elapsedMs := (perfcommon.MonotonicNowNs() - startedNs) / int64(time.Millisecond)
+			started := relayReplySubmitStart.Load()
+			finished := relayReplySubmitEnd.Load()
+			fmt.Fprintf(
+				os.Stderr,
+				"[perf-multi-relay] shutdown stalled stage=%s elapsed_ms=%d reply_submit_started=%d reply_submit_finished=%d reply_submit_inflight=%d\n",
+				relayStageLabel(), elapsedMs, started, finished, started-finished)
+			if !dumped && os.Getenv("PERF_GO_SHUTDOWN_STACK_DUMP") == "1" {
+				dumped = true
+				buf := make([]byte, 1<<20)
+				n := runtime.Stack(buf, true)
+				_, _ = os.Stderr.Write(buf[:n])
+			}
+		}
+	}()
+}
+
+// relayServerShutdownBudget mirrors the runner contract: STOP on stdin starts
+// PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS (run_benchmarks_multi.sh shutdown_server,
+// default 5000 ms) after which the server is killed and the case is reported as
+// server_shutdown_failed.
+func relayServerShutdownBudget() time.Duration {
+	for _, name := range []string{
+		"PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS",
+		"PERF_SERVER_SHUTDOWN_TIMEOUT_MS",
+	} {
+		if parsed, err := strconv.Atoi(os.Getenv(name)); err == nil && parsed > 0 {
+			return time.Duration(parsed) * time.Millisecond
+		}
+	}
+	return 5000 * time.Millisecond
+}
+
+// relayShutdownTeardownReserve is the part of the shutdown budget kept for the
+// socket and context close that follows the drain.
+const relayShutdownTeardownReserve = 2 * time.Second
+
+// relayShutdownDrainWindow bounds the post-STOP reply drain exactly like the C
+// relay bounds its own wait token
+// (bindings/c/perf/multi/common/perf_multi_relay_server.hpp:524-600): an
+// already-admitted reply gets one more chance to complete, but the relay must
+// still reach teardown inside the runner shutdown budget.
+func relayShutdownDrainWindow() time.Duration {
+	window := multiSendDrainTimeout()
+	if budget := relayServerShutdownBudget() - relayShutdownTeardownReserve; budget < window {
+		window = budget
+	}
+	if window < 250*time.Millisecond {
+		window = 250 * time.Millisecond
+	}
+	return window
 }
 
 func runMultiRouterRouterClientRole(cfg multiConfig, endpoint string) perfcommon.Result {
@@ -245,6 +368,38 @@ func startMultiRouterRouterEchoServer(
 ) {
 	defer close(done)
 
+	// Reply admission stays unbounded for the whole measurement window: the
+	// blocking Submit terminal is the backpressure signal (D-BP15), never a
+	// deadline. Only the control STOP arms a bound, and only for a reply that
+	// is already waiting on a WRITABLE token. Without it a reply admitted for a
+	// client that has since exited parks in waitSend forever, the main
+	// goroutine never leaves `<-serverDone`, and the socket close that would
+	// release the token never runs.
+	sendCtx, cancelSend := context.WithCancel(context.Background())
+	defer cancelSend()
+	loopDone := make(chan struct{})
+	defer close(loopDone)
+	go func() {
+		select {
+		case <-loopDone:
+			return
+		case <-stop:
+		}
+		window := relayShutdownDrainWindow()
+		timer := time.NewTimer(window)
+		defer timer.Stop()
+		select {
+		case <-loopDone:
+		case <-timer.C:
+			inflight := relayReplySubmitStart.Load() - relayReplySubmitEnd.Load()
+			fmt.Fprintf(
+				os.Stderr,
+				"[perf-multi-relay] shutdown drain expired window_ms=%d reply_submit_inflight=%d\n",
+				window.Milliseconds(), inflight)
+			cancelSend()
+		}
+	}()
+
 	poller := perfcommon.NewSocketPoller(server, perfcommon.ZLinkPollIn)
 	defer poller.Close()
 	waitEvents := make([]zlink.PollEvent, 1)
@@ -298,7 +453,21 @@ func startMultiRouterRouterEchoServer(
 			if partErr == nil {
 				routingID := received.RoutingID()
 				payload := append([]byte(nil), part.Data()...)
-				perfcommon.Must(submitMultiRouterReply(server, routingID, payload))
+				relayReplySubmitStart.Add(1)
+				replyErr := submitMultiRouterReply(sendCtx, server, routingID, payload)
+				relayReplySubmitEnd.Add(1)
+				if replyErr != nil && sendCtx.Err() != nil {
+					// The bounded post-STOP drain expired. Name the abandoned
+					// reply and leave the loop so teardown releases the token
+					// inside the runner shutdown budget.
+					fmt.Fprintf(
+						os.Stderr,
+						"[perf-multi-relay] reply abandoned after shutdown drain: %v\n", replyErr)
+					stopRequested = true
+					_ = received.Close()
+					break
+				}
+				perfcommon.Must(replyErr)
 			}
 			_ = received.Close()
 		}
@@ -306,12 +475,13 @@ func startMultiRouterRouterEchoServer(
 }
 
 func submitMultiRouterReply(
+	ctx context.Context,
 	server *zlink.RouterSocket,
 	target zlink.RoutingID,
 	payload []byte,
 ) error {
 	message := perfcommon.NewMessage(payload)
-	err := perfcommon.SubmitMeasurementSend(server.SendTo(target), message)
+	err := perfcommon.SubmitMeasurementSendContext(ctx, server.SendTo(target), message)
 	if err == nil || perfcommon.IsStaleRoute(err) {
 		return nil
 	}
