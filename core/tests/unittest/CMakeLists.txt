@@ -120,3 +120,6 @@ zlink_warn_unregistered_tests(
   "${CMAKE_CURRENT_LIST_DIR}"
   "unittest_*.cpp"
   LIST_FILE "${CMAKE_CURRENT_LIST_FILE}")
+
+# Applied last so that every deadline set above is scaled.
+include("${CMAKE_CURRENT_LIST_DIR}/../scale_test_timeouts.cmake")
