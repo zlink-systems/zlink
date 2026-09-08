@@ -57,14 +57,24 @@ echo "perf idle 확인 (대기 ${waited}초, load ${load})"
 # 어떤 경우에도 max_hold초를 넘기면 놓는다 — 2026-09-08 09:40 고아가 된 holder 하나가
 # perf 없이 lock을 쥔 채 남아 큐 전체(16개 대기)가 10분 넘게 멈췄다.
 max_hold="${ZLINK_PERF_LOCK_MAX_HOLD:-1800}"
-case "${grace}" in ''|*[!0-9]*) grace=20;; esac
+case "${grace}" in ''|*[!0-9]*) grace=60;; esac
+caller_pid=$PPID
 (
   set +e
   hold_start=$(date +%s)
+  # 호출자 shell이 살아 있는 동안은 perf가 아직 안 보여도 잡는다(.NET 기동은 20초를 넘긴다 —
+  # 2026-09-08 10:03 그 창에서 Go 측정이 겹쳐 출발했다). grace는 호출자가 이미 죽었을 때의 상한.
   for _ in $(seq 1 "${grace}"); do
     r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v 'wait-for-idle-perf' || true)"
     [ -n "${r}" ] && break
+    kill -0 "${caller_pid}" 2>/dev/null || break
     sleep 1
+  done
+  # 호출자가 아직 살아 있고 perf가 아직 없으면 계속 기다린다(최대 max_hold).
+  while [ -z "${r}" ] && kill -0 "${caller_pid}" 2>/dev/null; do
+    [ $(( $(date +%s) - hold_start )) -ge "${max_hold}" ] && break
+    sleep 2
+    r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v 'wait-for-idle-perf' || true)"
   done
   while :; do
     r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v 'wait-for-idle-perf' || true)"
