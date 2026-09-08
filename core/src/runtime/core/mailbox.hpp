@@ -42,7 +42,7 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
     ~mailbox_t () ZLINK_OVERRIDE;
 
     fd_t get_fd () const;
-    void send (const command_t &cmd_) ZLINK_OVERRIDE;
+    void send (const command_t &cmd_) noexcept ZLINK_OVERRIDE;
     void signal ();
     int recv (command_t *cmd_, int timeout_) ZLINK_OVERRIDE;
     int recv (command_t *cmd_, int timeout_, bool consume_primary_signaler_);
@@ -78,7 +78,7 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
                          mailbox_handler_t handler_,
                          void *handler_arg_,
                          mailbox_pre_post_t pre_post_ = NULL);
-    void schedule_if_needed ();
+    void schedule_if_needed () noexcept;
     bool reschedule_if_needed ();
     bool detach_io_context_if_idle ();
 
@@ -100,6 +100,7 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
 
 #ifdef ZLINK_BUILD_TESTS
     uint32_t test_command_waiter_count ();
+    static void test_fail_next_asio_post ();
 #endif
 
 #ifdef HAVE_FORK
@@ -111,7 +112,7 @@ class mailbox_t ZLINK_FINAL : public i_mailbox
 
   private:
     bool activate_if_command_pending (bool consume_primary_signaler_);
-    void schedule_if_needed_unlocked ();
+    void schedule_if_needed_unlocked () noexcept;
     void signal_registered_pollers_unlocked ();
 
     //  The pipe to store actual commands.

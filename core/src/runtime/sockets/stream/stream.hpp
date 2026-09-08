@@ -6,6 +6,7 @@
 #include <atomic>
 #include <deque>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -88,13 +89,24 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
         route_shard_count = 64
     };
 
+    // One shared route reference owns one pipe lifetime reference. Immutable
+    // shard snapshots share these references while a writer replaces a map.
+    struct route_pipe_release_t
+    {
+        void operator() (zlink::pipe_t *pipe_) const;
+    };
+
     struct route_shard_t
     {
-        typedef std::map<uint32_t, zlink::pipe_t *> routes_t;
+        typedef std::shared_ptr<zlink::pipe_t> route_ref_t;
+        typedef std::map<uint32_t, route_ref_t> routes_t;
 
-        mutex_t sync;
-        routes_t routes;
+        route_shard_t () : snapshot (new routes_t) {}
+
+        std::shared_ptr<const routes_t> snapshot;
     };
+
+    typedef std::shared_ptr<const route_shard_t::routes_t> route_snapshot_t;
 
     struct packet_record_t
     {
@@ -114,13 +126,14 @@ class stream_t ZLINK_FINAL : public routing_socket_base_t
     };
 
     route_shard_t &route_shard_for (uint32_t routing_id_);
-    // Precondition: caller already holds shard_.sync (matches every call
-    // site's existing scoped_lock_t). Returns the routed pipe, or NULL if no
-    // route is published for routing_id_.
-    static zlink::pipe_t *find_route_locked (route_shard_t &shard_,
-                                             uint32_t routing_id_);
+    // The caller owns the lifecycle public turn, which serializes snapshot
+    // acquisition and publication without a hot-path shard mutex.
+    static zlink::pipe_t *find_route (const route_shard_t &shard_,
+                                      uint32_t routing_id_);
     bool publish_route_locked (uint32_t routing_id_,
                                zlink::pipe_t *pipe_);
+    void unpublish_routes_for_pipe_locked (
+      zlink::pipe_t *pipe_, std::vector<route_snapshot_t> *retired_snapshots_);
     bool identify_peer (pipe_t *pipe_, bool locally_initiated_);
     void maybe_emit_connect_event (pipe_t *pipe_);
     void queue_stream_notify (uint32_t routing_id_);

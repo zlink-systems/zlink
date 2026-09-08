@@ -60,6 +60,38 @@ struct completion_budget_barrier_t
     bool released;
 };
 
+struct lifecycle_turn_contention_t
+{
+    lifecycle_turn_contention_t () : contended (false) {}
+
+    bool wait_until_contended (int timeout_ms_)
+    {
+        std::unique_lock<std::mutex> lock (mutex);
+        return changed.wait_for (
+          lock, std::chrono::milliseconds (timeout_ms_),
+          [this] { return contended; });
+    }
+
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool contended;
+};
+
+struct command_sync_probe_t
+{
+    explicit command_sync_probe_t (int expected_command_type_) :
+        observed (false),
+        all_commands_owned (true),
+        expected_command_type (expected_command_type_)
+    {
+    }
+
+    std::mutex mutex;
+    bool observed;
+    bool all_commands_owned;
+    int expected_command_type;
+};
+
 struct one_shot_barrier_t
 {
     one_shot_barrier_t () : entered (false), released (false), calls (0) {}
@@ -221,6 +253,35 @@ void completion_budget_barrier_hook (zlink::socket_base_t *socket_,
     barrier->entered = true;
     barrier->changed.notify_all ();
     barrier->changed.wait (lock, [barrier] { return barrier->released; });
+}
+
+void observe_lifecycle_turn_contention (void *userdata_)
+{
+    lifecycle_turn_contention_t *const contention =
+      static_cast<lifecycle_turn_contention_t *> (userdata_);
+    if (!contention)
+        return;
+
+    {
+        std::lock_guard<std::mutex> lock (contention->mutex);
+        contention->contended = true;
+    }
+    contention->changed.notify_all ();
+}
+
+void observe_command_sync_probe (void *userdata_, int command_type_,
+                                 bool,
+                                 bool public_api_sync_owned_)
+{
+    command_sync_probe_t *const probe =
+      static_cast<command_sync_probe_t *> (userdata_);
+    if (!probe || command_type_ != probe->expected_command_type)
+        return;
+
+    std::lock_guard<std::mutex> lock (probe->mutex);
+    probe->observed = true;
+    probe->all_commands_owned =
+      probe->all_commands_owned && public_api_sync_owned_;
 }
 
 bool should_run_phase3_request_test (const char *name_)
@@ -949,9 +1010,28 @@ void test_logical_rid_revoke_returns_checked_out_reply_capacity_once ()
         TEST_ASSERT_TRUE (it->second.revoked);
         TEST_ASSERT_TRUE (it->second.checked_out);
     }
+    bool route_removed = false;
+    const std::chrono::steady_clock::time_point route_remove_deadline =
+      std::chrono::steady_clock::now ()
+      + std::chrono::milliseconds (kWaitMilliseconds);
+    do {
+        pair.pump ();
+        errno = 0;
+        if (as_socket (router)->get_peer_state (
+              request.source_rid.data, request.source_rid.size)
+              == -1
+            && zlink_errno () == EHOSTUNREACH) {
+            route_removed = true;
+            break;
+        }
+        std::this_thread::yield ();
+    } while (std::chrono::steady_clock::now () < route_remove_deadline);
+    TEST_ASSERT_TRUE (route_removed);
+    errno = 0;
     TEST_ASSERT_EQUAL_INT (
-      ZLINK_CONNECT_OK,
+      ZLINK_CONNECT_NOT_FOUND,
       zlink_disconnect_rid (router, &request.source_rid));
+    TEST_ASSERT_EQUAL_INT (ENOENT, zlink_errno ());
     {
         std::lock_guard<std::mutex> lock (state->mutex);
         TEST_ASSERT_EQUAL_UINT64 (0, state->reply_target_slots);
@@ -2195,8 +2275,9 @@ void test_completion_pipe_budget_is_fair_and_stale_requeue_is_fenced ()
       pair_a_id, pair_a_generation));
 
     //  Pause the next A owner turn after its 64th whole record but before the
-    //  budget result can requeue the source. Detaching in that exact window
-    //  makes the stale generation fence deterministic.
+    //  budget result can requeue the source. A pipe termination command must
+    //  wait for this same lifecycle turn, then retire the old generation after
+    //  the bounded owner work completes.
     completion_budget_barrier_t barrier;
     barrier.socket = as_socket (requester);
     barrier.pair_id = pair_a_id;
@@ -2223,13 +2304,47 @@ void test_completion_pipe_budget_is_fair_and_stale_requeue_is_fenced ()
         TEST_FAIL_MESSAGE ("completion owner did not reach the budget barrier");
     }
 
+    lifecycle_turn_contention_t command_contention;
+    command_sync_probe_t term_probe (
+      static_cast<int> (zlink::command_t::pipe_term));
+    barrier.socket->test_set_receive_record_hooks (
+      NULL, observe_lifecycle_turn_contention, &command_contention);
+    barrier.socket->test_set_receive_command_sync_probe_hook (
+      observe_command_sync_probe, &term_probe);
+
     pair_a.application[1]->terminate (false);
     pair_a.completion[1]->terminate (false);
+    int command_process_result = -1;
+    std::thread command_turn ([&] {
+        command_process_result = barrier.socket->test_process_commands_only ();
+    });
+    const bool command_contended =
+      command_contention.wait_until_contended (kWaitMilliseconds);
+    bool command_unapplied_while_barrier = false;
+    {
+        std::lock_guard<std::mutex> lock (term_probe.mutex);
+        command_unapplied_while_barrier = !term_probe.observed;
+    }
+    barrier.release ();
+    owner_turn.join ();
+    command_turn.join ();
+    barrier.socket->test_set_receive_record_hooks (NULL, NULL, NULL);
+    barrier.socket->test_set_receive_command_sync_probe_hook (NULL, NULL);
     pair_a.pump ();
     const bool old_completion_detached = completion_lane_detached (
       requester, pair_a_id, pair_a_generation);
-    barrier.release ();
-    owner_turn.join ();
+
+    TEST_ASSERT_TRUE_MESSAGE (
+      command_contended,
+      "pipe termination command did not contend for the completion owner turn");
+    TEST_ASSERT_TRUE_MESSAGE (
+      command_unapplied_while_barrier,
+      "pipe termination applied before the completion owner released its turn");
+    TEST_ASSERT_EQUAL_INT (0, command_process_result);
+    TEST_ASSERT_TRUE (term_probe.observed);
+    // The draining owner may reuse its turn after releasing the barrier;
+    // either owner must apply every command under that same exclusion.
+    TEST_ASSERT_TRUE (term_probe.all_commands_owned);
     TEST_ASSERT_TRUE (old_completion_detached);
     TEST_ASSERT_EQUAL_INT (1, owner_poll_result);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, owner_poll_error);

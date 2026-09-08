@@ -298,7 +298,7 @@ void test_connection_guarded_write_rejects_stale_generation ()
     TEST_ASSERT_TRUE (pipes[1]->read (&received));
     TEST_ASSERT_SUCCESS_ERRNO (received.close ());
 
-    pipes[1]->clear_transport_connection_id_before_peer_writes ();
+    pipes[1]->set_transport_connection_id (0);
     admission = zlink::pipe_message_admission_invalid;
     TEST_ASSERT_FALSE (pipes[0]->write_and_flush_if_transport_connection (
       &payload, 42, &admission));
@@ -449,7 +449,7 @@ void test_weighted_lb_reactivation_keeps_configured_weight ()
     TEST_ASSERT_SUCCESS_ERRNO (message.init_size (1));
     bool backpressured = false;
     for (int i = 0; i < 16; ++i) {
-        if (lb.send (&message) != 0) {
+        if (lb.sendpipe (&message, NULL) != 0) {
             backpressured = true;
             break;
         }
@@ -464,7 +464,7 @@ void test_weighted_lb_reactivation_keeps_configured_weight ()
     second_pair[0]->refresh_write_credit (1, second_pair[0]->get_bytes_written ());
     lb.activated (first_pair[0]);
     lb.activated (second_pair[0]);
-    TEST_ASSERT_SUCCESS_ERRNO (lb.send (&message));
+    TEST_ASSERT_SUCCESS_ERRNO (lb.sendpipe (&message, NULL));
 
     TEST_ASSERT_SUCCESS_ERRNO (message.close ());
     lb.pipe_terminated (first_pair[0]);
@@ -601,18 +601,18 @@ void test_single_pipe_lb_rolls_back_byte_hwm_rejected_multipart ()
     zlink::msg_t filler;
     TEST_ASSERT_SUCCESS_ERRNO (filler.init_size (1));
     *static_cast<unsigned char *> (filler.data ()) = 0x11;
-    TEST_ASSERT_SUCCESS_ERRNO (lb.send (&filler));
+    TEST_ASSERT_SUCCESS_ERRNO (lb.sendpipe (&filler, NULL));
 
     zlink::msg_t first_part;
     TEST_ASSERT_SUCCESS_ERRNO (first_part.init_size (1));
     *static_cast<unsigned char *> (first_part.data ()) = 0x22;
     first_part.set_flags (zlink::msg_t::more);
-    TEST_ASSERT_SUCCESS_ERRNO (lb.send (&first_part));
+    TEST_ASSERT_SUCCESS_ERRNO (lb.sendpipe (&first_part, NULL));
 
     zlink::msg_t rejected_final;
     TEST_ASSERT_SUCCESS_ERRNO (rejected_final.init_size (1));
     *static_cast<unsigned char *> (rejected_final.data ()) = 0x33;
-    TEST_ASSERT_EQUAL_INT (-2, lb.send (&rejected_final));
+    TEST_ASSERT_EQUAL_INT (-2, lb.sendpipe (&rejected_final, NULL));
     TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
     lb.rollback ();
 
@@ -631,7 +631,7 @@ void test_single_pipe_lb_rolls_back_byte_hwm_rejected_multipart ()
     zlink::msg_t after_failure;
     TEST_ASSERT_SUCCESS_ERRNO (after_failure.init_size (1));
     *static_cast<unsigned char *> (after_failure.data ()) = 0x44;
-    TEST_ASSERT_SUCCESS_ERRNO (lb.send (&after_failure));
+    TEST_ASSERT_SUCCESS_ERRNO (lb.sendpipe (&after_failure, NULL));
 
     TEST_ASSERT_SUCCESS_ERRNO (received.init ());
     TEST_ASSERT_TRUE (pipes[1]->read (&received));
@@ -1848,14 +1848,14 @@ void test_passive_hwm_probe_does_not_consume_write_activation ()
 
     zlink::msg_t first;
     TEST_ASSERT_SUCCESS_ERRNO (first.init_size (1));
-    TEST_ASSERT_SUCCESS_ERRNO (lb.send (&first));
+    TEST_ASSERT_SUCCESS_ERRNO (lb.sendpipe (&first, NULL));
     TEST_ASSERT_SUCCESS_ERRNO (first.close ());
 
     zlink::msg_t blocked;
     TEST_ASSERT_SUCCESS_ERRNO (blocked.init_size (1));
     zlink::pipe_message_admission_t admission =
       zlink::pipe_message_admission_invalid;
-    TEST_ASSERT_EQUAL_INT (-1, lb.send (&blocked, &admission));
+    TEST_ASSERT_EQUAL_INT (-1, lb.sendpipe (&blocked, NULL, &admission));
     TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
     TEST_ASSERT_EQUAL_INT (zlink::pipe_message_admission_hwm_full, admission);
     TEST_ASSERT_SUCCESS_ERRNO (blocked.close ());
@@ -1871,7 +1871,7 @@ void test_passive_hwm_probe_does_not_consume_write_activation ()
     zlink::msg_t probe;
     TEST_ASSERT_SUCCESS_ERRNO (probe.init_size (1));
     admission = zlink::pipe_message_admission_invalid;
-    const int probe_rc = lb.send (&probe, &admission);
+    const int probe_rc = lb.sendpipe (&probe, NULL, &admission);
     const int probe_errno = errno;
     const zlink::pipe_message_admission_t probe_admission = admission;
     TEST_ASSERT_SUCCESS_ERRNO (probe.close ());
@@ -1882,7 +1882,7 @@ void test_passive_hwm_probe_does_not_consume_write_activation ()
 
     zlink::msg_t recovered;
     TEST_ASSERT_SUCCESS_ERRNO (recovered.init_size (1));
-    const int recovered_rc = lb.send (&recovered);
+    const int recovered_rc = lb.sendpipe (&recovered, NULL);
     TEST_ASSERT_SUCCESS_ERRNO (recovered.close ());
 
     lb.pipe_terminated (pipes[0]);

@@ -360,8 +360,8 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
             // Publish the worker-visible socket before adding the task. The
             // control-runtime mutex then carries that initialization to the
             // first callback without requiring the callback to take
-            // monitor.sync (detach waits for an active callback while holding
-            // that lock).
+            // monitor.sync. Detach keeps this socket published until
+            // remove_task() has waited for an active callback to return.
             const uint64_t task_id = runtime->add_periodic_task (
               &socket_base_t::monitor_task_main, this, 10, true);
             if (task_id != 0) {
@@ -839,7 +839,10 @@ zlink::socket_base_t *
 zlink::socket_base_t::detach_monitor_socket (bool send_monitor_stopped_event_)
 {
     monitor_runtime_t &monitor = monitor_runtime ();
+    scoped_lock_t operation_lock (monitor.operation_sync);
     socket_base_t *monitor_socket = NULL;
+    uint64_t task_id = 0;
+    uint64_t events = 0;
     bool release_async_owner = false;
     {
         scoped_lock_t lock (monitor.sync);
@@ -848,26 +851,39 @@ zlink::socket_base_t::detach_monitor_socket (bool send_monitor_stopped_event_)
 
         monitor.events_atomic.store (0, std::memory_order_release);
         monitor_socket = static_cast<socket_base_t *> (monitor.socket);
-        bool can_emit_monitor_stopped = false;
-        if ((monitor.events & ZLINK_EVENT_MONITOR_STOPPED) && send_monitor_stopped_event_) {
-            monitor_socket->process_commands (0, false);
-            can_emit_monitor_stopped = monitor_socket->endpoint_runtime ().has_attached_pipes ();
-        }
+        task_id = monitor.task_id;
+        events = monitor.events;
+    }
 
-        if (monitor.task_id != 0) {
-            control_runtime_t *runtime = get_ctx ()->control_runtime_if_started ();
-            if (runtime)
-                (void) runtime->remove_task (monitor.task_id);
-        }
+    // Do not retain monitor.sync while processing the foreign PAIR or waiting
+    // for its control task. The operation lock prevents a replacement from
+    // publishing a different monitor until this retiring worker is gone.
+    bool can_emit_monitor_stopped = false;
+    if ((events & ZLINK_EVENT_MONITOR_STOPPED) && send_monitor_stopped_event_) {
+        monitor_socket->process_commands (0, false);
+        scoped_lock_t pipes_lock (monitor_socket->monitor_runtime ().sync);
+        can_emit_monitor_stopped = monitor_socket->endpoint_runtime ().has_attached_pipes ();
+    }
+
+    if (task_id != 0) {
+        control_runtime_t *runtime = get_ctx ()->control_runtime_if_started ();
+        if (runtime)
+            (void) runtime->remove_task (task_id);
+    }
+
+    if (can_emit_monitor_stopped) {
+        uint64_t values[1] = {0};
+        monitor_event_record_t record;
+        if (build_monitor_event_record (&record, ZLINK_EVENT_MONITOR_STOPPED, values, 1, NULL, 0,
+                                        endpoint_uri_pair_t ()))
+            dispatch_monitor_event (monitor_socket, record);
+    }
+
+    {
+        scoped_lock_t lock (monitor.sync);
+        // pump_monitor_events() reads monitor.socket without monitor.sync.
+        // remove_task() above is the worker boundary, so clear it only now.
         monitor.stop_task ();
-
-        if (can_emit_monitor_stopped) {
-            uint64_t values[1] = {0};
-            monitor_event_record_t record;
-            if (build_monitor_event_record (&record, ZLINK_EVENT_MONITOR_STOPPED, values, 1, NULL,
-                                            0, endpoint_uri_pair_t ()))
-                dispatch_monitor_event (monitor.socket, record);
-        }
         monitor.socket = NULL;
         monitor.events = 0;
         monitor.lossy = true;

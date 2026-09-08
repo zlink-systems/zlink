@@ -134,7 +134,8 @@ zlink_recv_result_t zlink_completion_recv (
         return zlink::recv_result_internal::from_errno (errno);
     }
 
-    const int receive_timeout_ms = handle.socket->receive_timeout_ms ();
+    const int receive_timeout_ms = flags_ == ZLINK_RECV_FLAGS_DONTWAIT
+                                     ? 0 : handle.socket->receive_timeout_ms ();
     int progress_rc = 0;
     if (flags_ != ZLINK_RECV_FLAGS_DONTWAIT && receive_timeout_ms != 0) {
         progress_rc = handle.socket->prepare_completion_pull (

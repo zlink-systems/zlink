@@ -57,74 +57,6 @@ class wait_timeout_budget_t
     const uint64_t _deadline_ms;
 };
 
-//  Socket turn for one command application.  Commands mutate the same
-//  receive-side socket state (fair-queue membership, pipe activation and
-//  termination) that a public receive reads and writes without taking
-//  `receive.sync`, so holding that mutex alone leaves the two owners
-//  concurrent.  This scope therefore takes the receive-state ownership word
-//  as well, with the command turn's own value - see the protocol comment on
-//  socket_receive_runtime_t.  It adds nothing to the lock-free public
-//  receive fast path.
-//
-//  Order: `sync` first, then the word, and the reverse on release.  That is
-//  what lets any other entrant conclude, after it has acquired `sync`, that a
-//  word still reading `command` can only be its own thread's turn.  A public
-//  receive attempt that already holds the word never asks for `sync` without
-//  holding the word first, so this order carries no cycle.
-class socket_command_receive_turn_t
-{
-  public:
-    socket_command_receive_turn_t (zlink::socket_receive_runtime_t &runtime_,
-                                   const std::atomic<bool> &ctx_terminated_) :
-        _runtime (runtime_), _owns_receive_owner (false)
-    {
-        for (;;) {
-            _runtime.sync.lock ();
-            const zlink::socket_receive_runtime_t::receive_owner_claim_t claim =
-              _runtime.try_acquire_receive_owner_for_commands ();
-            if (claim != zlink::socket_receive_runtime_t::
-                  receive_owner_claim_busy) {
-                _owns_receive_owner =
-                  claim
-                  == zlink::socket_receive_runtime_t::receive_owner_claim_acquired;
-                return;
-            }
-            //  A lock-free public receive attempt owns receive state. Mark
-            //  its lease and park on the receive-progress channel: its
-            //  release hands the wake over directly, so this waits instead of
-            //  spinning and needs neither a timeout nor a retry count.
-            if (!_runtime.mark_public_lease_waiter ()) {
-                //  The lease went away between the claim and the mark; retry
-                //  the claim rather than waiting for a wake nobody will send.
-                _runtime.sync.unlock ();
-                continue;
-            }
-            //  Shutdown: the lease holder is inside a receive attempt that
-            //  started before termination was published, and a receiver that
-            //  finds nothing parks on the receive-progress channel (outside
-            //  any lease).  Publish a progress edge through the single
-            //  notifier so such a receiver wakes, observes ETERM and stops
-            //  starting new attempts, letting the in-flight lease drain.
-            if (ctx_terminated_.load (std::memory_order_acquire))
-                _runtime.publish_receive_progress_locked ();
-            //  Returns with `sync` released; the loop retakes it.
-            _runtime.wait_for_receive_owner_release ();
-        }
-    }
-
-    ~socket_command_receive_turn_t ()
-    {
-        if (_owns_receive_owner)
-            _runtime.release_receive_owner_for_commands ();
-        _runtime.sync.unlock ();
-    }
-
-  private:
-    zlink::socket_receive_runtime_t &_runtime;
-    bool _owns_receive_owner;
-
-    ZLINK_NON_COPYABLE_NOR_MOVABLE (socket_command_receive_turn_t)
-};
 
 }
 
@@ -305,7 +237,8 @@ class command_drain_active_guard_t
 
     ~command_drain_active_guard_t ()
     {
-        release ();
+        if (_published)
+            _active.store (false, std::memory_order_release);
     }
 
     void publish ()
@@ -314,14 +247,6 @@ class command_drain_active_guard_t
             return;
         _active.store (true, std::memory_order_release);
         _published = true;
-    }
-
-    void release ()
-    {
-        if (!_published)
-            return;
-        _active.store (false, std::memory_order_release);
-        _published = false;
     }
 
   private:
@@ -460,13 +385,11 @@ int zlink::socket_base_t::process_commands (
       async_executor || lifecycle.public_api_sync_owned_by_current_thread ();
     const wait_timeout_budget_t wait_budget (_clock, timeout_);
     bool woke_since_last_claim = false;
-    command_drain_active_guard_t command_drain_active (
-      receive.command_drain_active);
 
     while (true) {
         // A serialized control call must apply earlier commands before it
-        // changes endpoint state. The API -> command_owner_sync lock order
-        // makes that drain exclusive with async command dispatch.
+        // changes endpoint state. The single lifecycle turn makes that drain
+        // exclusive with async command dispatch.
         // Unlocked progress probes still defer to the async executor: waiting
         // for it there can deadlock with a callback that re-enters the socket.
         if (async_mailbox_owns_commands () && !owns_control_scope) {
@@ -490,9 +413,17 @@ int zlink::socket_base_t::process_commands (
             // it: a public call that already owns the turn drains in place.
             const bool acquire_public_api_sync =
               !lifecycle.public_api_sync_owned_by_current_thread ();
+#ifdef ZLINK_BUILD_TESTS
+            const bool receive_turn_was_busy = acquire_public_api_sync
+              && lifecycle.public_api_sync_held ();
+            receive.report_turn_contention ();
+#endif
             socket_public_api_lock_scope_t api_owner (
               lifecycle, acquire_public_api_sync);
-            scoped_lock_t command_owner (receive.command_owner_sync);
+            // Clear the published claim before releasing this turn; a later
+            // command owner must not have its claim cleared by this scope.
+            command_drain_active_guard_t command_drain_active (
+              receive.command_drain_active);
 
             // Close the handoff race between the lock-free owner check above
             // and acquiring the command scope. The pending bit remains set
@@ -579,21 +510,14 @@ int zlink::socket_base_t::process_commands (
                       receive.command_sync_probe_hook.load (
                         std::memory_order_acquire);
                     if (sync_probe) {
-                        const bool acquired = receive.sync.try_lock ();
-                        if (acquired)
-                            receive.sync.unlock ();
                         sync_probe (
                           receive.command_sync_probe_userdata.load (
                             std::memory_order_acquire),
-                          static_cast<int> (cmd.type), !acquired,
+                          static_cast<int> (cmd.type), receive_turn_was_busy,
                           lifecycle.public_api_sync_owned_by_current_thread ());
                     }
 #endif
-                    {
-                        socket_command_receive_turn_t receive_owner (receive,
-                                                     _ctx_terminated);
-                        cmd.destination->process_command (cmd);
-                    }
+                    cmd.destination->process_command (cmd);
                     // Pipe termination notifications defer routing
                     // cleanup until the command's receive scope is gone.
                     process_deferred_socket_msg_pipe_terminations ();
@@ -626,12 +550,11 @@ int zlink::socket_base_t::process_commands (
             }
             if (processed_command || woke_since_last_claim || timeout_ == 0)
                 return 0;
-            command_drain_active.release ();
         }
 
         // Blocking recv must not retain public API synchronization while it
         // sleeps. A notification is only a hint; the next loop claims the
-        // command under API -> command-owner -> receive lock order.
+        // command under the same lifecycle turn.
         int wait_timeout = 0;
         if (!wait_budget.remaining (&wait_timeout))
             return 0;
@@ -930,7 +853,6 @@ void zlink::socket_base_t::test_receive_owner_snapshot (
   uint64_t *async_mailbox_drains_out_)
 {
     receive_runtime_t &receive = receive_runtime ();
-    scoped_lock_t receive_lock (receive.sync);
     if (progress_epoch_out_)
         *progress_epoch_out_ =
           receive.progress_epoch.load (std::memory_order_acquire);
@@ -946,7 +868,7 @@ void zlink::socket_base_t::test_set_receive_wait_hook (
   receive_runtime_t::wait_hook_fn hook_, void *userdata_)
 {
     receive_runtime_t &receive = receive_runtime ();
-    scoped_lock_t receive_lock (receive.sync);
+    scoped_lock_t receive_lock (receive.progress_sync);
     receive.wait_hook = hook_;
     receive.wait_hook_userdata = userdata_;
 }
@@ -956,7 +878,6 @@ void zlink::socket_base_t::test_set_receive_record_hooks (
   receive_runtime_t::record_hook_fn contention_hook_, void *userdata_)
 {
     receive_runtime_t &receive = receive_runtime ();
-    scoped_lock_t receive_lock (receive.sync);
     receive.record_hook_userdata.store (userdata_, std::memory_order_release);
     receive.record_acquired_hook.store (acquired_hook_,
                                         std::memory_order_release);
@@ -983,10 +904,8 @@ int zlink::socket_base_t::start_async_mailbox_processing (io_thread_t *io_thread
 {
     receive_runtime_t &receive = receive_runtime ();
     mailbox_t *mailbox = static_cast<mailbox_t *> (_mailbox);
-    // Block new lock-free receive attempts before installing the async owner.
-    // A receive that already passed its second check must complete before the
-    // executor can enter command delivery under receive.sync.
-    receive.require_receive_sync_for_async_owner ();
+    // Route waiting receivers to the progress channel before installing the
+    // async owner. In-flight receive and command work share the socket turn.
     receive.async_command_handoff_pending.store (true, std::memory_order_release);
     // Wake the former public owner before waiting for its command scope.  The
     // pending bit prevents a second public waiter from taking ownership while
@@ -995,7 +914,9 @@ int zlink::socket_base_t::start_async_mailbox_processing (io_thread_t *io_thread
 
     int rc = 0;
     {
-        scoped_lock_t command_owner (receive.command_owner_sync);
+        socket_public_api_lock_scope_t command_owner (
+          lifecycle_coordinator (),
+          !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
         rc = lifecycle_coordinator ().start_async_mailbox_processing (
           mailbox, io_thread_, &socket_base_t::async_mailbox_handler, this,
           &socket_base_t::async_mailbox_pre_post);
@@ -1006,7 +927,6 @@ int zlink::socket_base_t::start_async_mailbox_processing (io_thread_t *io_thread
         // waiting on the separate receive-progress channel.
         notify_receive_progress ();
     } else {
-        receive.release_receive_sync_from_async_owner ();
         // A public waiter may have observed the pending handoff and switched
         // to the progress channel. Return it to the primary mailbox owner.
         notify_receive_progress ();
@@ -1019,6 +939,9 @@ bool zlink::socket_base_t::stop_async_mailbox_processing (
   bool require_unowned_)
 {
     receive_runtime_t &receive = receive_runtime ();
+    socket_public_api_lock_scope_t api_owner (
+      lifecycle_coordinator (),
+      !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
     {
         // External completion-owner handoff is the one stop path that does
         // not already own the progress gate. Serialize its lifecycle change
@@ -1043,7 +966,9 @@ bool zlink::socket_base_t::stop_async_mailbox_processing (
                 || lifecycle_coordinator ().is_async_quiesce_pending ()))
             return false;
         _async_command_processing_stop_requested = false;
-        scoped_lock_t command_owner (receive.command_owner_sync);
+        socket_public_api_lock_scope_t command_owner (
+          lifecycle_coordinator (),
+          !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
         if (_completion_poller_refs.load (std::memory_order_acquire) == 0)
             invalidate_completion_processing_owner ();
         lifecycle_coordinator ().stop_async_mailbox_processing (
@@ -1157,11 +1082,11 @@ int zlink::socket_base_t::acquire_monitor_async_command_processing ()
             if (!admission.acquired ())
                 return -1;
 
-            socket_public_api_lock_scope_t guard (lifecycle);
 #ifdef ZLINK_BUILD_TESTS
             invoke_async_owner_transition_test_hook (
               async_owner_test_monitor_acquire_before_gate);
 #endif
+            socket_public_api_lock_scope_t guard (lifecycle);
             scoped_lock_t progress_lock (
               _transport_pair_owner_progress_sync);
             if (lifecycle.is_async_quiesce_pending ()) {
@@ -1268,6 +1193,8 @@ void zlink::socket_base_t::request_unowned_async_command_processing_stop (
 bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
 {
     socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+    socket_public_api_lock_scope_t command_owner (
+      lifecycle, !lifecycle.public_api_sync_owned_by_current_thread ());
     bool stopped = false;
     {
         scoped_lock_t progress_lock (_transport_pair_owner_progress_sync);
@@ -1332,9 +1259,7 @@ bool zlink::socket_base_t::stop_unowned_async_command_processing_at_idle ()
         lifecycle.stop_async_mailbox_processing (NULL);
         _async_command_processing_stop_requested = false;
         // A new executor also takes the owner gate before installing itself, so
-        // release the old receive lease before making the detached state
-        // observable to that acquire.
-        receive_runtime ().release_receive_sync_from_async_owner ();
+        // publish the detached state before letting that acquire proceed.
         lifecycle.mark_async_processing_stopped (NULL);
         //  This executor consumed the primary notification descriptor while
         //  it drained the commands that led here (for example the
@@ -1459,9 +1384,6 @@ void zlink::socket_base_t::process_stop ()
     notify_receive_progress ();
     socket_completion::close (&completion_runtime (), ETERM);
     fail_all_blocking_send_waits (ETERM);
-
-    scoped_lock_t lock (monitor_runtime ().sync);
-    stop_monitor ();
 }
 
 void zlink::socket_base_t::process_bind (pipe_t *pipe_)
@@ -1577,7 +1499,9 @@ void zlink::socket_base_t::process_async_mailbox ()
             // A public POLLCOMPLETION registration is the sole completion
             // owner while it exists. The gate also fences a 0 -> 1 owner
             // transfer against a drain that was already in flight.
-            scoped_lock_t owner_lock (_completion_owner_sync);
+            socket_public_api_lock_scope_t command_owner (
+              lifecycle_coordinator (),
+              !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
             if (_completion_poller_refs.load (std::memory_order_acquire) == 0) {
                 const completion_drain_scope_t drain_scope (this, &discard);
                 acknowledge_request_completion_notification ();
@@ -1595,13 +1519,15 @@ void zlink::socket_base_t::process_async_mailbox ()
                 invoke_async_owner_transition_test_hook (
                   async_owner_test_explicit_stop_before_detach);
 #endif
+                socket_public_api_lock_scope_t command_owner (
+                  lifecycle_coordinator (),
+                  !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
                 if (!mailbox->detach_io_context_if_idle ())
                     continue;
                 if (_completion_poller_refs.load (
                       std::memory_order_acquire)
                     == 0)
                     invalidate_completion_processing_owner ();
-                receive_runtime ().release_receive_sync_from_async_owner ();
                 lifecycle_coordinator ().mark_async_processing_stopped (mailbox);
                 mailbox->rearm_primary_signaler ();
                 notify_receive_progress ();
@@ -1625,53 +1551,58 @@ void zlink::socket_base_t::process_async_mailbox ()
             invoke_async_owner_transition_test_hook (
               async_owner_test_explicit_stop_before_detach);
 #endif
+            socket_public_api_lock_scope_t command_owner (
+              lifecycle_coordinator (),
+              !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
             if (!mailbox->detach_io_context_if_idle ())
                 continue;
             if (_completion_poller_refs.load (std::memory_order_acquire) == 0)
                 invalidate_completion_processing_owner ();
             //  Signal quiesce completion to waiting close()/start_reaping().
-            receive_runtime ().release_receive_sync_from_async_owner ();
             lifecycle_coordinator ().mark_async_processing_stopped (mailbox);
             mailbox->rearm_primary_signaler ();
             notify_receive_progress ();
             return;
         }
-    } while (static_cast<mailbox_t *> (_mailbox)->reschedule_if_needed ());
+    } while ([&] {
+        socket_public_api_lock_scope_t command_owner (
+          lifecycle_coordinator (),
+          !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
+        return static_cast<mailbox_t *> (_mailbox)->reschedule_if_needed ();
+    } ());
 }
 
 void zlink::socket_base_t::notify_receive_progress ()
 {
-    receive_runtime_t &receive = receive_runtime ();
-    scoped_lock_t lock (receive.sync);
-    notify_receive_progress_locked ();
-}
-
-void zlink::socket_base_t::notify_receive_progress_locked ()
-{
-    //  One notifier: the runtime owns the epoch/waiter/broadcast rule and
-    //  every publisher, including a command turn's shutdown edge, uses it.
-    receive_runtime ().publish_receive_progress_locked ();
+    receive_runtime ().publish_receive_progress ();
 }
 
 int zlink::socket_base_t::wait_receive_progress (uint64_t observed_epoch_,
                                                  int timeout_ms_)
 {
     receive_runtime_t &receive = receive_runtime ();
-    scoped_lock_t lock (receive.sync);
-    if (receive.progress_epoch.load (std::memory_order_acquire)
+    {
+        // Register under the socket turn, then release it before the CV wait
+        // so the command owner can publish the progress that wakes us.
+        const socket_receive_entry_scope_t turn (receive);
+        receive.waiters.fetch_add (1, std::memory_order_seq_cst);
+    }
+    scoped_lock_t lock (receive.progress_sync);
+    if (receive.progress_epoch.load (std::memory_order_seq_cst)
         == observed_epoch_) {
-        receive.waiters.fetch_add (1, std::memory_order_release);
 #ifdef ZLINK_BUILD_TESTS
         if (receive.wait_hook)
             receive.wait_hook (receive.wait_hook_userdata);
 #endif
-        const int wait_rc = receive.progress_cv.wait (&receive.sync, timeout_ms_);
+        const int wait_rc = receive.progress_cv.wait (&receive.progress_sync, timeout_ms_);
         zlink_assert (receive.waiters.load (std::memory_order_relaxed) > 0);
-        receive.waiters.fetch_sub (1, std::memory_order_release);
-        if (wait_rc != 0 && errno != EAGAIN)
+        if (wait_rc != 0 && errno != EAGAIN) {
+            receive.waiters.fetch_sub (1, std::memory_order_release);
             return -1;
+        }
     }
 
+    receive.waiters.fetch_sub (1, std::memory_order_release);
     if (_ctx_terminated) {
         errno = ETERM;
         return -1;

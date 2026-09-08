@@ -9,12 +9,12 @@
 #include <boost/asio.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
-#include <array>
 #include <memory>
 #include <string>
 #include <utility>
 
 #include "engine/asio/i_asio_transport.hpp"
+#include "transports/ws/ws_transport_common_internal.hpp"
 
 namespace zlink
 {
@@ -69,8 +69,7 @@ class ws_transport_t : public i_asio_transport
     bool has_message_boundaries () const ZLINK_OVERRIDE { return true; }
     bool read_message_binary () const ZLINK_OVERRIDE
     {
-        return !_connection
-               || _connection->read_message_state.is_binary ();
+        return ws_transport_common_internal::read_message_binary (_connection);
     }
 
     void async_write_some (const unsigned char *buffer,
@@ -102,12 +101,13 @@ class ws_transport_t : public i_asio_transport
 
   private:
     //  WebSocket stream type (over TCP socket, no compression for simplicity)
-    typedef boost::beast::websocket::stream<boost::asio::ip::tcp::socket> ws_stream_t;
+    typedef boost::beast::websocket::stream<
+      ws_transport_common_internal::socket_t> ws_stream_t;
 
     struct connection_generation_t
     {
         explicit connection_generation_t (
-          boost::asio::ip::tcp::socket &&socket_) :
+          ws_transport_common_internal::socket_t &&socket_) :
             stream (std::move (socket_)), handshake_complete (false)
         {
         }

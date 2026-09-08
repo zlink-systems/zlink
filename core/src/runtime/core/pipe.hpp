@@ -346,8 +346,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  clearing it only removes its own cause. A PAUSE that arrives while a
     //  multipart message is already started applies from the next message, so
     //  the started message keeps its existing atomicity.
-    //  Admits the beginning of an owner-held message and records it as started
-    //  while the outbound-state lock is held. A classic ROUTER consumes the
+    //  Admits the beginning of an owner-held message and records it in the
+    //  endpoint owner's C2 turn. A classic ROUTER consumes the
     //  routing-ID part without writing it, so the outbound byte counters alone
     //  cannot tell that a message is in progress. The record clears itself when
     //  the message commits, is rolled back or is discarded by a hiccup.
@@ -360,8 +360,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Request correlation must be visible after this exact candidate has
     //  accepted the message but before the first application frame is made
     //  observable. The prepare phase owns the request-state lock before the
-    //  pipe lock is acquired; commit and the optional final flush then happen
-    //  under that same pipe lock so termination cannot pass between them.
+    //  endpoint owner's C2 turn records and flushes the frame, so termination
+    //  cannot pass between them.
     bool write_owner_started_message_observed (
       const msg_t *msg_, pipe_write_observer_fn observer_,
       void *observer_userdata_,
@@ -441,15 +441,13 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool flush_pending_peer_controls ();
     bool has_pending_peer_controls ();
 
-    //  Writes a message and flushes it downstream under the same pipe lock.
-    //  Use this for final single-part send hot paths to avoid paying for
-    //  separate write/flush lock acquisitions.
+    //  Writes a message and flushes it downstream in the endpoint owner's C2
+    //  turn. Use this for final single-part send hot paths.
     bool write_and_flush (const msg_t *msg_,
                           pipe_message_admission_t *admission_out_ = NULL);
-    //  Writes and flushes only while this exact physical connection is still
-    //  current. The generation check shares the ordinary pipe write lock so a
-    //  concurrent transport teardown either follows the complete record or
-    //  prevents the record from entering the pipe.
+    //  Rejects a connection already retired at admission. The endpoint turn
+    //  owns the write; stamped records accepted before concurrent retirement
+    //  are discarded by session pull if they outlive their connection.
     bool write_and_flush_if_transport_connection (
       const msg_t *msg_, uint64_t connection_id_,
       pipe_message_admission_t *admission_out_ = NULL);
@@ -461,8 +459,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool try_write_complete_record_and_flush (const msg_t *parts_,
                                               size_t part_count_);
 
-    //  Writes a message with the HWM check performed under the already-held
-    //  pipe lock without re-entering check_hwm().
+    //  Writes a message with the HWM check performed in the already-held
+    //  endpoint owner turn without re-entering check_hwm().
     bool write_no_recursive_hwm_check (
       const msg_t *msg_, pipe_message_admission_t *admission_out_ = NULL);
 
@@ -525,10 +523,6 @@ class pipe_t ZLINK_FINAL : public object_t,
     void set_endpoint_pair (endpoint_uri_pair_t endpoint_pair_);
     const endpoint_uri_pair_t &get_endpoint_pair () const;
     void set_transport_connection_id (uint64_t connection_id_);
-    //  Session teardown invalidates the shared connection id while holding
-    //  the peer writer's pipe lock. This orders single-record reply writes
-    //  without imposing the transport generation lock on their hot path.
-    void clear_transport_connection_id_before_peer_writes ();
     uint64_t get_transport_connection_id () const;
     // Claims the one physical DISCONNECTED monitor edge owned by this socket
     // endpoint. The transport error path and explicit local termination can
@@ -622,10 +616,9 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  Handler for delimiter read from the pipe.
     void process_delimiter ();
 
-    //  These helpers require outbound-owner exclusion. Ordinary endpoints and
-    //  topology changes use `_out_sync`; a session I/O writer is the sole
-    //  owner of its write/flush hot path. Cross-owner state used there is
-    //  published through the atomic fields below.
+    //  These helpers require endpoint-owner exclusion: the socket lifecycle
+    //  turn for socket endpoints and the I/O thread for session endpoints.
+    //  Cross-owner policy state is published through the atomic fields below.
     //  enforce_incremental_hwm_ rejects a multipart as soon as the frames
     //  accumulated so far exceed the HWM, instead of waiting for the final
     //  frame. Only writers that check the HWM per call may ask for it: the
@@ -682,9 +675,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     void snapshot_outbound_queue_accounting (const pipe_t *reader_,
                                              uint64_t *provisional_out_,
                                              uint64_t *committed_out_) const;
-    void publish_session_outbound_accounting_slow_unlocked (
-      bool provisional_changed_);
-    void publish_session_outbound_accounting_unlocked (
+    void publish_outbound_accounting_unlocked (
       bool provisional_changed_);
     static void publish_ledger_unlocked (
       std::atomic<uint64_t> *sequence_, std::atomic<uint64_t> *msgs_,
@@ -734,8 +725,9 @@ class pipe_t ZLINK_FINAL : public object_t,
 
     //  Underlying pipes for both directions.
     //  `_out_pipe`, `_state`, `_out_active`, and peer credit are a single
-    //  outbound state cluster. The session I/O writer owns its hot path;
-    //  other endpoints and cold topology changes remain under `_out_sync`.
+    //  outbound state cluster. The endpoint owner is its sole C2 writer:
+    //  socket lifecycle turn for socket endpoints and I/O thread for session
+    //  endpoints.
     upipe_t *_in_pipe;
     upipe_t *_out_pipe;
 
@@ -768,12 +760,11 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  it at the ready-queue tail.
     std::atomic<unsigned char> _count1_completion_ready_state;
     std::atomic<pipe_t *> _count1_completion_ready_next;
-    //  Guarded by _out_sync. True after at least one complete record was
-    //  appended and before the flush that publishes it.
+    //  Owned by the endpoint C2 writer. True after at least one complete
+    //  record was appended and before the flush that publishes it.
     bool _out_complete_record_pending;
     bool _transport_pair_write_held;
-    //  Remote receive-flow state applied on this pipe's own thread. Guarded by
-    //  _out_sync, exactly like _transport_pair_write_held.
+    //  Remote receive-flow state applied by this endpoint's C2 owner.
     bool _remote_flow_paused;
     // A request-only admission miss does not remove this pipe from ordinary
     // send scheduling. It still needs one owner-thread wake when terminal
@@ -781,8 +772,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     std::atomic<uint64_t> _request_correlation_release_epoch;
     bool _request_correlation_waiting;
     bool _request_correlation_activation_pending;
-    //  Set while the pipe's owner holds an accepted message that has not been
-    //  written yet. Guarded by _out_sync with the rest of the outbound state.
+    //  Set while the endpoint owner holds an accepted message that has not
+    //  been written yet.
     bool _out_owner_message_started;
     //  The first owner message part can reuse the readiness check performed
     //  when the owner consumed its routing identifier.
@@ -799,7 +790,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     mutable std::atomic<bool> _waiting_for_flow_resume;
 
     //  High watermark for the outbound pipe.
-    uint64_t _hwm;
+    std::atomic<uint64_t> _hwm;
     uint64_t _request_correlation_bytes;
     uint64_t _request_correlation_work;
     uint64_t _request_correlation_count;
@@ -825,8 +816,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     // Only multipart reads need this extra publication. Single-part traffic
     // remains on the existing complete-message credit publication path.
     std::atomic<uint64_t> _published_incomplete_bytes_read;
-    //  A session decoder owns this endpoint without taking _out_sync. Its
-    //  queue total is the synchronization source for cold Auto-HWM snapshots;
+    //  The endpoint owner publishes its queue total for cold Auto-HWM snapshots;
     //  the provisional value only classifies that total for diagnostics.
     std::atomic<uint64_t> _published_outbound_total_bytes;
     std::atomic<uint64_t> _published_outbound_provisional_bytes;
@@ -839,7 +829,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool _out_multipart_started_empty;
     bool _decoder_multipart_started_empty;
     //  Public payload bound for one complete message, or 0 when unlimited.
-    uint64_t _max_message_bytes;
+    std::atomic<uint64_t> _max_message_bytes;
     std::atomic<uint64_t> _oversize_message_admission_count;
     std::atomic<uint64_t> _oversize_message_admission_max_bytes;
     //  Last received peer's msgs_read. The actual number in the peer
@@ -921,7 +911,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  the matching (smaller) chunk granularity.
     const bool _session_pipe;
     //  True only for the endpoint owned by session_base_t's I/O thread. The
-    //  peer endpoint remains on the ordinary _out_sync socket-send path.
+    //  peer endpoint is owned by the socket lifecycle turn.
     const bool _session_io_writer;
 
     // The endpoints of this pipe.
@@ -1011,13 +1001,14 @@ pipe_t::write_state_ready_unlocked (pipe_message_admission_t *admission_out_) co
 
 inline bool pipe_t::check_hwm_unlocked () const
 {
+    const uint64_t hwm = _hwm.load (std::memory_order_acquire);
     const uint64_t bytes_written =
       _bytes_written.load (std::memory_order_acquire);
     const uint64_t peers_bytes_read =
       _peers_bytes_read.load (std::memory_order_acquire);
     const uint64_t in_flight =
       bytes_written > peers_bytes_read ? bytes_written - peers_bytes_read : 0;
-    const bool full = _hwm > 0 && in_flight >= _hwm;
+    const bool full = hwm > 0 && in_flight >= hwm;
     return !full;
 }
 
@@ -1086,9 +1077,12 @@ pipe_t::can_commit_bytes_unlocked (uint64_t message_bytes_,
                                    uint64_t payload_bytes_,
                                    bool allow_empty_pipe_exception_) const
 {
-    if (_max_message_bytes != 0 && payload_bytes_ > _max_message_bytes)
+    const uint64_t max_message_bytes =
+      _max_message_bytes.load (std::memory_order_acquire);
+    if (max_message_bytes != 0 && payload_bytes_ > max_message_bytes)
         return false;
-    if (_hwm == 0)
+    const uint64_t hwm = _hwm.load (std::memory_order_acquire);
+    if (hwm == 0)
         return true;
 
     const uint64_t bytes_written =
@@ -1106,7 +1100,7 @@ pipe_t::can_commit_bytes_unlocked (uint64_t message_bytes_,
     }
     if (UINT64_MAX - in_flight < message_bytes_)
         return false;
-    return in_flight + message_bytes_ <= _hwm;
+    return in_flight + message_bytes_ <= hwm;
 }
 
 inline bool pipe_t::can_commit_bytes_with_peer_snapshot_unlocked (
@@ -1120,16 +1114,6 @@ inline bool pipe_t::can_commit_bytes_with_peer_snapshot_unlocked (
     refresh_peer_credit_snapshot_unlocked ();
     return can_commit_bytes_unlocked (
       message_bytes_, payload_bytes_, allow_empty_pipe_exception_);
-}
-
-//  Only a session I/O writer publishes this snapshot. Every other pipe pays
-//  one predictable load, so the publishing half stays out of line.
-inline void
-pipe_t::publish_session_outbound_accounting_unlocked (bool provisional_changed_)
-{
-    if (likely (!_session_io_writer))
-        return;
-    publish_session_outbound_accounting_slow_unlocked (provisional_changed_);
 }
 
 void send_routing_id (pipe_t *pipe_, const options_t &options_);

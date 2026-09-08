@@ -567,8 +567,8 @@ class socket_base_t : public own_t,
     {
         return _runtime.completion_runtime;
     }
-    int receive_timeout_ms () const { return options.rcvtimeo; }
-    int send_timeout_ms () const { return options.sndtimeo; }
+    int receive_timeout_ms () const;
+    int send_timeout_ms () const;
     int adopt_accepted_transport_pair (
       const unsigned char *peer_routing_id_, size_t peer_routing_id_size_,
       unsigned char lane_count_, uint64_t *pair_id_out_,
@@ -632,7 +632,7 @@ class socket_base_t : public own_t,
     //  different ready pair gets an owner turn first.
     bool requeue_completion_pipe_after_budget (
       uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
-      zlink::pipe_t *completion_pipe_, bool receive_sync_held_);
+      zlink::pipe_t *completion_pipe_);
     bool drain_claimed_completion_pipe (uint64_t transport_pair_id_,
                                         uint64_t transport_pair_generation_,
                                         zlink::pipe_t *completion_pipe_);
@@ -801,8 +801,7 @@ class socket_base_t : public own_t,
     //  private until that buffered public record reaches its FINAL part.
     int begin_public_part_receive_delivery_hold ();
     void bind_public_part_receive_delivery_hold (pipe_t *source_pipe_);
-    void end_public_part_receive_delivery_hold (
-      bool receive_sync_held_ = false);
+    void end_public_part_receive_delivery_hold ();
 
     bool is_ctx_terminated () const;
 
@@ -825,6 +824,7 @@ class socket_base_t : public own_t,
     }
 
   protected:
+    void notify_receive_progress ();
     socket_base_t (zlink::ctx_t *parent_, uint32_t tid_, int sid_);
     ~socket_base_t () ZLINK_OVERRIDE;
 
@@ -1023,7 +1023,6 @@ class socket_base_t : public own_t,
 
   protected:
     // The caller owns receive state (receive sync or the public receive lease).
-    void notify_receive_progress_locked ();
     // Transfer a monitor-started command executor lease to a longer-lived
     // async socket consumer before registering that consumer.
     void retain_async_command_processing ();
@@ -1140,11 +1139,14 @@ class socket_base_t : public own_t,
     {
         return _runtime.blocking_send_runtime;
     }
+  protected:
     lifecycle_coordinator_t &lifecycle_coordinator () { return _runtime.lifecycle_coordinator; }
     lifecycle_coordinator_t &lifecycle_coordinator () const
     {
         return _runtime.lifecycle_coordinator;
     }
+
+  private:
 
     // test if event should be sent and then dispatch it
     //  Single-scalar monitor event emitter shared by the named wrappers above.
@@ -1260,7 +1262,6 @@ class socket_base_t : public own_t,
     void finish_close_reap ();
     void materialize_pending_inprocs_before_reap ();
     void process_async_mailbox ();
-    void notify_receive_progress ();
     int wait_receive_progress (uint64_t observed_epoch_, int timeout_ms_);
     //  Stage 1 (plan 7.1): poll readiness consults this once per socket per
     //  zlink_poll(), so keep it inlineable instead of a cross-TU call.
@@ -1395,13 +1396,11 @@ class socket_base_t : public own_t,
     bool _auto_hwm_policy_enabled;
     bool _manual_sndhwm;
     bool _manual_rcvhwm;
-    //  Serializes completion drains and the async-worker/public-poller owner
-    //  transition.
-    mutable recursive_mutex_t _completion_owner_sync;
+    // The socket turn serializes completion drains and owner transitions.
     // Even generations denote no stable completion owner (or an ownership
     // handoff); odd generations denote an installed public-poller or retained
     // async owner. A request can validate the same odd generation twice and
-    // avoid both owner locks in the steady state.
+    // avoid the cold owner recheck in the steady state.
     std::atomic<uint32_t> _completion_processing_owner_generation;
     std::atomic<uint32_t> _completion_poller_refs;
     std::atomic<void *> _completion_poller_owner;

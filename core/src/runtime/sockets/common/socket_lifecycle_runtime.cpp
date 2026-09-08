@@ -55,6 +55,30 @@ thread_local zlink::socket_lifecycle_coordinator_t *
   zlink::socket_lifecycle_coordinator_t::_current_thread_public_api_sync_owner =
     NULL;
 
+bool zlink::socket_receive_runtime_t::acquire_turn ()
+{
+    if (coordinator.public_api_sync_owned_by_current_thread ())
+        return false;
+    report_turn_contention ();
+    coordinator.lock_public_api_sync ();
+    return true;
+}
+
+void zlink::socket_receive_runtime_t::release_turn ()
+{
+    coordinator.unlock_public_api_sync ();
+}
+
+void zlink::socket_receive_runtime_t::report_turn_contention ()
+{
+#ifdef ZLINK_BUILD_TESTS
+    record_hook_fn hook = record_contention_hook.load (std::memory_order_acquire);
+    if (hook && coordinator.public_api_sync_held ()
+        && !coordinator.public_api_sync_owned_by_current_thread ())
+        hook (record_hook_userdata.load (std::memory_order_acquire));
+#endif
+}
+
 bool zlink::socket_lifecycle_coordinator_t::enter_public_api ()
 {
     const uint64_t old = public_api_state.fetch_add (1, std::memory_order_acq_rel);
