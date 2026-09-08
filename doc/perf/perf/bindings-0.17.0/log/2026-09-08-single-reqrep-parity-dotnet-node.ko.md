@@ -9,16 +9,18 @@
   (`lib/libzlink.so.0.17.3`, SHA-256 `4779e33380356d469ec3b0c30b12bb6c828c8710a4cdd71b44d0669cafa1a1af`)
   — VERSION 0.17.3 bump 뒤 alpha prefix(manifest 0.17.2)가 버전 검사로 모든 러너를
   즉시 실패시켜, 감독자가 VERSION과 일치하는 `core/v0.17.3` prefix를 빌드해 재고정했다
-  (D-BP42, § 6).
+  (D-BP42, § 7).
 - 변경 파일: `bindings/dotnet/perf/single/Zlink.BindingBench/src/PerfReqRep.cs`,
   `bindings/node/perf/single/perf_socket_reqrep.ts` (그 외 없음)
 - 기준 측정(before): `sg1` 태그 1-run
   - C `bindings/c/perf/results/single/report/perf_c_single_linux_20260908_130119_sg1.txt`
   - .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260908_132034_sg1.txt`
   - Node `bindings/node/perf/results/single/report/perf_node_single_linux_20260908_133711_sg1.txt`
-- 검증(after): **보류**. 감독자 지시로 측정 중단 — VERSION이 0.17.3으로 올라가
-  `~/.cache/zlink/core-pinned/0.17.3-alpha`(manifest 0.17.2)를 쓰는 모든 러너가
-  즉시 실패한다(§ 6).
+- 검증(after): tcp, 5 s, 1 run, C 짝지음(태그 동일), 모두 `status: complete` / `fail: 0`
+  - `sgfix-dotnet` C `bindings/c/perf/results/single/report/perf_c_single_linux_20260908_160754_sgfix-dotnet.txt`
+    / .NET `bindings/dotnet/perf/results/single/report/perf_dotnet_single_linux_20260908_160856_sgfix-dotnet.txt`
+  - `sgfix-node` C `bindings/c/perf/results/single/report/perf_c_single_linux_20260908_162849_sgfix-node.txt`
+    / Node `bindings/node/perf/results/single/report/perf_node_single_linux_20260908_163103_sgfix-node.txt`
 
 ## 1. 무엇이 잘못돼 있었나
 
@@ -150,14 +152,78 @@ C 기준(`bindings/c/perf/single/common/perf_single_reqrep.hpp` `run_request_pha
 65536 B 이상에서는 창(16/8/4)이 C 깊이(1.9)보다 조금 크다. 검증 때 확인할 지표는
 **깊이 = throughput × latency가 C와 같은 자릿수인가**이다.
 
-## 4. 빌드
+## 4. before / after (tcp, 5 s, 1 run, 깊이 = throughput × latency)
+
+`%C`는 같은 티켓에서 짝지은 C 리포트 대비 값이다(before는 `sg1`, after는 `sgfix-*`).
+
+### 4.1 .NET
+
+| pattern | size | before tp (깊이) | %C | after tp (깊이) | %C | 배수 |
+|---|---|---|---|---|---|---|
+| DR_REQREP | 64 | 9,348 (1.0) | — | 423,353 (124.6) | 487%¹ | 45.3x |
+| DR_REQREP | 256 | 8,867 (1.0) | 1% | 412,242 (111.4) | 50% | 46.5x |
+| DR_REQREP | 1024 | 8,487 (1.0) | 1% | 389,494 (94.6) | 54% | 45.9x |
+| DR_REQREP | 65536 | 6,166 (1.0) | 54% | 7,732 (16.0) | 68% | 1.3x |
+| DR_REQREP | 131072 | 5,378 (1.0) | 58% | 5,803 (8.0) | 61% | 1.1x |
+| DR_REQREP | 262144 | 3,955 (1.0) | 55% | 4,707 (4.0) | 62% | 1.2x |
+| RR_REQREP | 64 | 9,668 (1.0) | 1% | 385,053 (96.1) | 44% | 39.8x |
+| RR_REQREP | 256 | 9,128 (1.0) | 1% | 383,794 (93.6) | 46% | 42.0x |
+| RR_REQREP | 1024 | 9,228 (1.0) | 1% | 354,451 (95.9) | 49% | 38.4x |
+| RR_REQREP | 65536 | 7,373 (1.0) | 65% | 7,293 (16.0) | 62% | 1.0x |
+| RR_REQREP | 131072 | 5,537 (1.0) | 60% | 5,788 (8.0) | 60% | 1.0x |
+| RR_REQREP | 262144 | 3,796 (1.0) | 54% | 4,415 (4.0) | 58% | 1.2x |
+
+¹ 짝 C run의 DR 64 B 셀이 86,990 ops/s·latency 11.0 ms로 흔들렸다(다른 run은 ~880k). C
+측 outlier이므로 이 셀의 `%C`는 쓰지 않는다(§ 6.2).
+
+### 4.2 Node
+
+| pattern | size | before tp (깊이) | %C | after tp (깊이) | %C | 배수 |
+|---|---|---|---|---|---|---|
+| DR_REQREP | 64 | 126,044 (18.6) | — | 177,768 (122.0) | 22%² | 1.4x |
+| DR_REQREP | 256 | 121,774 (20.6) | 15% | 162,677 (153.4) | 20% | 1.3x |
+| DR_REQREP | 1024 | 108,505 (22.8) | 15% | 142,756 (178.6) | 20% | 1.3x |
+| DR_REQREP | 65536 | 1,120 (178.1) | 10% | 4,939 (15.9) | 44% | 4.4x |
+| DR_REQREP | 131072 | 978 (121.2) | 11% | 4,027 (7.9) | 44% | 4.1x |
+| DR_REQREP | 262144 | 863 (68.2) | 12% | 2,798 (3.9) | 40% | 3.2x |
+| RR_REQREP | 64 | 114,700 (17.0) | 13% | 167,593 (105.8) | 19% | 1.5x |
+| RR_REQREP | 256 | 108,583 (17.9) | 13% | 152,923 (126.3) | 19% | 1.4x |
+| RR_REQREP | 1024 | 98,233 (17.6) | 14% | 131,508 (146.2) | 19% | 1.3x |
+| RR_REQREP | 65536 | 942 (184.9) | 8% | 4,253 (15.9) | 36% | 4.5x |
+| RR_REQREP | 131072 | 906 (120.5) | 10% | 3,441 (8.0) | 37% | 3.8x |
+| RR_REQREP | 262144 | 742 (77.6) | 11% | 2,691 (3.9) | 35% | 3.6x |
+
+² 짝 C run의 DR 64 B가 791,221 ops/s·9.4 ms(깊이 7459)로 흔들렸다.
+
+### 4.3 깊이 판정
+
+| size | admission window | C 깊이(대표) | .NET 깊이 | Node 깊이 |
+|---|---|---|---|---|
+| 64 | 16384 | 125~157 | 96~125 | 106~122 |
+| 256 | 4096 | 166~484 | 94~111 | 126~153 |
+| 1024 | 1024 | 1020~1026 | 95~96 | 146~179 |
+| 65536 | 16 | 1.9 | 16.0 | 15.9 |
+| 131072 | 8 | 1.9 | 8.0 | 7.9 |
+| 262144 | 4 | 1.9 | 4.0 | 3.9 |
+
+- 작은 크기(64~1024 B): 깊이가 1.0(.NET)·17~23(Node)에서 **94~179**로 올라와 C(125~1026)와
+  같은 자릿수가 됐다. 창(16384/4096/1024)에 닿지 않고 제출·완료 속도 균형이 깊이를 정한
+  구간이며, 이것이 C와 같은 동작이다.
+- 큰 크기(≥65536 B): 두 언어 모두 깊이가 창 값(16/8/4)에 **정확히** 고정됐다. 창이
+  Core의 실제 admission 경계(C 깊이 1.9)보다 한 자릿수 깊다는 뜻이며, 그 대가로 latency가
+  C의 0.17 ms 대비 .NET 2.07 ms / Node 3.23 ms로 늘고 처리량은 오히려 올랐다
+  (.NET 54%→68%, Node 10%→44%). 이 구간의 창은 "byte HWM ÷ wire size"가 Core 내부의
+  실제 경계(프레이밍·peer 큐 단위)보다 크게 나오는 경우다. 더 좁히려면 러너가 아니라
+  binding request terminal이 admission 결과를 노출해야 한다.
+
+## 5. 빌드
 
 - .NET: `dotnet build perf/single/Zlink.BindingBench/Zlink.BindingBench.csproj -c Release`
   → 0 warning, 0 error.
 - Node: `npm run build:incremental` 성공, `npm run typecheck` 성공.
   `dist-tools/perf/single/perf_socket_reqrep.js`에 변경이 반영됐다.
 
-## 5. .NET PUBSUB 175% — 수신 count 방식은 C와 동일하다
+## 6. .NET PUBSUB 175% — 수신 count 방식은 C와 동일하다
 
 `PerfPubSub.cs:86-192` ↔ `bindings/c/perf/single/src/perf_pubsub.cpp` 대조.
 
@@ -192,7 +258,7 @@ sleep**을 하는 것이다. 이 구간의 처리량은 전송 속도가 아니�
 다음 단계 제안(이번 과제 범위 밖): publisher 거절 횟수를 debug 카운터로 남겨 C와 .NET을
 같은 조건에서 비교하면 이 가설을 바로 확정할 수 있다.
 
-## 6. 검증 보류 — VERSION 0.17.3 bump
+## 7. 검증 이력 — VERSION 0.17.3 bump와 재실행
 
 14:00 `0761c1d4d0 chore(version): bump libzlink and bindings to 0.17.3` 이후,
 `bindings/tools/local_core_runtime.sh:38-42`가 고정 prefix의 provenance manifest
@@ -214,7 +280,27 @@ Core release prefix version 0.17.2 does not match 0.17.3
 | `sgfix-node paired C then node DR RR REQREP tcp 6 sizes 1-run` | rc=1 (version mismatch) |
 | `smoke2 ... (manifest에서 core version 유도)` | 감독자 중단 지시로 회수 |
 
-새 `core/v0.17.3` prefix가 준비되면 같은 명령을 그 prefix로 다시 낸다.
+### 7.1 재실행 (D-BP42, `core-pinned/0.17.3`)
+
+| 티켓 | 결과 |
+|---|---|
+| `sgfix-dotnet paired ...` (1차) | rc=1 — C `--reuse-build`에 REQREP 바이너리 없음(0.17.3 Single 재빌드가 `DEALER_DEALER`만 빌드) |
+| `sgfix-node paired ...` (1차) | rc=1 — 같은 사유 |
+| `sgfix-dotnet retry ...` | **rc=0** — C·.NET 모두 `status: complete`, fail 0 |
+| `sgfix-node retry ...` | rc=1 — **C 러너 결함**: DR 256 B·1024 B가 `replier_fatal=1 ... received=541495 replied=0 completed=0`으로 FAIL(§ 7.2). `&&` 때문에 Node leg 미실행 |
+| `sgfix-node retry2 ...` (두 leg 모두 실행) | **rc=0** — `leg_rc c=0 node=0`, 양쪽 `status: complete`, fail 0 |
+
+### 7.2 관찰된 C 러너 흔들림 (러너 정합과 무관, 보고용)
+
+- `sgfix-node` 1차 C run: `DEALER_ROUTER_REQREP` 256 B·1024 B가
+  `[perf-single-reqrep] shutdown failed requester=0 requester_fatal=0 in_flight=0 retained=1
+  wait_token=... retry_ready=0 stop=0 poller=1 replier_fatal=1 received=... replied=0 completed=0`
+  으로 FAIL. replier가 request를 다 받고도 reply를 한 건도 제출하지 못한 상태다.
+- `sgfix-dotnet` C run: DR 64 B가 86,990 ops/s·latency 11.0 ms(깊이 957),
+  `sgfix-node` C run: DR 64 B가 791,221 ops/s·9.4 ms(깊이 7459) — 같은 셀이 run마다
+  수백~수천 깊이로 흔들린다. 작은 크기 `%C` 비교 시 이 양안정성을 감안해야 한다.
+
+새 prefix로 다시 낼 때 쓴 명령은 아래와 같다.
 
 ```
 bash scripts/perf/perf-ticket.sh submit -p 2 -o claude-single-netnode \
@@ -223,7 +309,7 @@ bash scripts/perf/perf-ticket.sh submit -p 2 -o claude-single-netnode \
 ```
 (Node는 같은 형태로 `bindings/node/perf/run_benchmarks.sh`, 태그 `sgfix-node`.)
 
-## 7. 이번에 고치지 않은 잔여 차이
+## 8. 이번에 고치지 않은 잔여 차이
 
 - Node request timeout이 `PERF_SINGLE_RCVTIMEO_MS`를 쓴다(`perf_socket_reqrep.ts:110-113`).
   C는 `PERF_SINGLE_REQREP_TIMEOUT_MS`다. 기본값이 둘 다 200 ms라 지금 측정은 같지만
@@ -234,9 +320,9 @@ bash scripts/perf/perf-ticket.sh submit -p 2 -o claude-single-netnode \
   (`bindings/go/perf/single/perf_reqrep.go:88`). C는 왕복 전체가 latency다. Go 담당자
   확인 필요.
 
-## 8. 검증 결과 (감독자 기록, `core-pinned/0.17.3`, 1-run, C 짝지음)
+## 9. 검증 결과 (감독자 기록, `core-pinned/0.17.3`, 1-run, C 짝지음)
 
-§6의 보류는 `core/v0.17.3` prefix 재고정(D-BP42) 뒤 같은 명령을 다시 내 해소했다. 두 언어 모두
+§7의 보류는 `core/v0.17.3` prefix 재고정(D-BP42) 뒤 같은 명령을 다시 내 해소했다. 두 언어 모두
 `status: complete`, fail 0.
 
 **.NET** (`sgfix-dotnet`, C `perf_c_single_linux_20260908_160754_sgfix-dotnet.txt`)
@@ -266,4 +352,4 @@ Node `perf_node_single_linux_20260908_163103_sgfix-node.txt`)
   바뀜) 때문이고, 큰 크기 5~23x는 창 16/8/4 vs C 실제 깊이 1.9의 창 모델 한계(C++·.NET·Go와 같다).
 - 작은 크기 19~22%는 창이 아니라 Node 요청 경로의 per-message 비용이다
   (`2026-09-08-node-cost-map.ko.md`: recv materialization·Promise 정산). 러너 정합으로는 더 못 올린다.
-- §7의 Go latency `/2.0`은 `2026-09-08-single-reqrep-parity-rust-go.ko.md`에서 Rust와 함께 고쳤다(`98a8717872`).
+- §8의 Go latency `/2.0`은 `2026-09-08-single-reqrep-parity-rust-go.ko.md`에서 Rust와 함께 고쳤다(`98a8717872`).
