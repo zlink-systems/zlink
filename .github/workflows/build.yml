@@ -603,51 +603,80 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Compose release notes from core/CHANGELOG.md
+        env:
+          LIBZLINK_VERSION: ${{ needs.read-versions.outputs.libzlink_version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Changes in ${LIBZLINK_VERSION}"
+            echo
+            if [ -f core/CHANGELOG.md ]; then
+              # Body of the "## [X.Y.Z]" section, up to the next "## " heading.
+              awk -v ver="${LIBZLINK_VERSION}" '
+                /^## / { in_section = (index($0, "## [" ver "]") == 1); next }
+                in_section { print }
+              ' core/CHANGELOG.md > changelog-section.txt
+              if grep -q "[^[:space:]]" changelog-section.txt; then
+                cat changelog-section.txt
+              else
+                echo "_No core/CHANGELOG.md section for ${LIBZLINK_VERSION}._"
+              fi
+              echo
+              echo "Full history: [core/CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/core/CHANGELOG.md)"
+              echo
+            fi
+            cat <<'STATIC'
+          ## libzlink Native Libraries (zlink)
+
+          **Version**: ${{ needs.read-versions.outputs.libzlink_version }}
+
+          ### Features
+          - **I/O Backend**: ASIO (Boost.Asio) for high-performance async I/O
+          - **TLS Support**: Native TLS transport (`tls://`) and WebSocket TLS (`wss://`)
+          - **WebSocket**: Full WebSocket support (`ws://`, `wss://`)
+          - **Optimizations**: Link-Time Optimization (LTO) enabled for production builds
+          - **Protocols**: tcp, ipc, inproc, ws, wss, tls
+          - **Socket Types**: PAIR, PUB/SUB, XPUB/XSUB, DEALER/ROUTER
+
+          ### Removed Features
+          - CURVE encryption (use TLS instead)
+          - REQ/REP, PUSH/PULL socket types
+          - TIPC, VMCI, PGM, NORM, UDP protocols
+          - Draft API socket types
+
+          ### Downloads
+          | Platform | File |
+          |----------|------|
+          | Windows x64 | `libzlink-windows-x64.zip` |
+          | Windows ARM64 | `libzlink-windows-arm64.zip` |
+          | Linux x64 | `libzlink-linux-x64.zip` |
+          | Linux ARM64 | `libzlink-linux-arm64.zip` |
+          | macOS x64 (Intel) | `libzlink-macos-x64.zip` |
+          | macOS ARM64 (Apple Silicon) | `libzlink-macos-arm64.zip` |
+
+          ### Package Contents
+          Each archive contains:
+          - Native library (`.dll`/`.so`/`.dylib`)
+          - Public headers (`include/zlink.h`, `include/zlink_enum.h`, `include/zlink_errno.h`)
+          - OpenSSL dependency required for TLS features
+
+          ### Verification
+          All builds have been tested with:
+          - Core automated unit and integration test suite
+          - Transport matrix tests (all socket patterns × all transports)
+          - TLS/WebSocket functionality
+          STATIC
+          } > release-notes.md
+          echo "--- release-notes.md ---"
+          cat release-notes.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           prerelease: ${{ steps.channel.outputs.prerelease }}
           name: libzlink ${{ needs.read-versions.outputs.libzlink_version }}
-          body: |
-            ## libzlink Native Libraries (zlink)
-
-            **Version**: ${{ needs.read-versions.outputs.libzlink_version }}
-
-            ### Features
-            - **I/O Backend**: ASIO (Boost.Asio) for high-performance async I/O
-            - **TLS Support**: Native TLS transport (`tls://`) and WebSocket TLS (`wss://`)
-            - **WebSocket**: Full WebSocket support (`ws://`, `wss://`)
-            - **Optimizations**: Link-Time Optimization (LTO) enabled for production builds
-            - **Protocols**: tcp, ipc, inproc, ws, wss, tls
-            - **Socket Types**: PAIR, PUB/SUB, XPUB/XSUB, DEALER/ROUTER
-
-            ### Removed Features
-            - CURVE encryption (use TLS instead)
-            - REQ/REP, PUSH/PULL socket types
-            - TIPC, VMCI, PGM, NORM, UDP protocols
-            - Draft API socket types
-
-            ### Downloads
-            | Platform | File |
-            |----------|------|
-            | Windows x64 | `libzlink-windows-x64.zip` |
-            | Windows ARM64 | `libzlink-windows-arm64.zip` |
-            | Linux x64 | `libzlink-linux-x64.zip` |
-            | Linux ARM64 | `libzlink-linux-arm64.zip` |
-            | macOS x64 (Intel) | `libzlink-macos-x64.zip` |
-            | macOS ARM64 (Apple Silicon) | `libzlink-macos-arm64.zip` |
-
-            ### Package Contents
-            Each archive contains:
-            - Native library (`.dll`/`.so`/`.dylib`)
-            - Public headers (`include/zlink.h`, `include/zlink_enum.h`, `include/zlink_errno.h`)
-            - OpenSSL dependency required for TLS features
-
-            ### Verification
-            All builds have been tested with:
-            - Core automated unit and integration test suite
-            - Transport matrix tests (all socket patterns × all transports)
-            - TLS/WebSocket functionality
+          body_path: release-notes.md
           files: |
             artifacts/libzlink-windows-x64.zip
             artifacts/libzlink-windows-arm64.zip

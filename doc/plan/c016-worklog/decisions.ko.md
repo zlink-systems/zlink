@@ -4468,3 +4468,8 @@ run 표 median = RESULT, 최종 5줄. `bash -n`·`compileall`·합성 median 검
 test의 ws wallclock 회귀 테스트가 Auto-HWM `MsgUnit(B)=?` assertion으로 실패 — 측정은 complete이고
 median 변경과 무관(ws는 §10.3.2 Core 대기 항목, 0.18.0 이월).
 
+## D-B232 (2026-09-08 13:00, 머신 B) 사용자 규칙 — Core 버전은 GitHub Actions 릴리스까지(0.17.3부터), 버전별 changelog
+
+**규칙**(사용자 12:40~12:50): "앞으로는 core 버전 release까지 진행", "기존 버전은 release 불필요, 0.17.3부터", "changelog도 버전별로". 완료 조건 = tag push → `gh workflow run build.yml --ref core/vX.Y.Z`(Windows x64/ARM64·Linux x64/ARM64·macOS 2종 빌드 → verify → GitHub Release) green + `gh release view core/vX.Y.Z` 존재.
+**현황**: 마지막 Actions 릴리스는 0.15.1; 0.16.x~0.17.2는 태그만 있음(재릴리스 안 함). 09-04 main run의 유일한 실패는 Windows x64 "Verify Windows test configuration" 단계에서 `test_zmp_metadata::test_paired_incomplete_lane_fence_timeout_and_fresh_pair` FAIL(결정 문서의 "Windows에서만 미관측 ROUTER alias pair 재admission" 항목) — 빌드 실패 아님. 현재 main(`de730d4ac5` 포함)으로 build.yml을 dispatch(run 34183182643, tag ref가 아니라 release job은 실행 안 됨)해 Windows 결과를 먼저 본다. 실패가 재현되면 0.17.3 태그 전 Windows 전용 조사 항목.
+**changelog**: `core/CHANGELOG.md` 신설(Keep a Changelog, 0.17.0/0.17.1/0.17.2/0.17.3-unreleased). build.yml release job에 "Compose release notes" step 추가 — 태그 버전의 `## [X.Y.Z]` 절을 release 본문 앞에 삽입(`body_path`), 기존 정적 본문 유지. YAML 파싱·awk 추출 로컬 확인; 실제 동작은 0.17.3 릴리스 run에서 검증.
