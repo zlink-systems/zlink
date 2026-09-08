@@ -1,9 +1,7 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	zlink "zlink.systems/zlink"
@@ -102,51 +100,29 @@ func runMultiDealerRouterEchoWindow(
 	defer poller.Close()
 	events := make([]zlink.PollEvent, len(dealers))
 	for i, dealer := range dealers {
-		perfcommon.Must(poller.AddSocket(dealer.socket, perfcommon.ZLinkPollIn, uintptr(i)))
+		perfcommon.Must(poller.AddSocket(
+			dealer.socket, perfcommon.ZLinkPollIn|zlink.PollCompletion, uintptr(i)))
 	}
 
-	// A sender goroutine owns each socket's blocking submit path. Receiver
-	// progress remains independent on POLLIN, so waiting for admission never
-	// turns SENDSEND into reply-gated ping-pong.
-	var senders sync.WaitGroup
-	sendErrors := make(chan error, len(dealers))
-	sendContext, cancelSends := context.WithDeadline(context.Background(), window.StopAt)
-	defer cancelSends()
-	for _, dealer := range dealers {
-		socket := dealer.socket
-		senders.Add(1)
-		go func() {
-			defer senders.Done()
-			payload := perfcommon.PreparePayload(msgSize)
-			for time.Now().Before(window.StopAt) {
-				if sendErr := sendMultiDealerRouterRequest(sendContext, socket, payload, msgSize, window); sendErr != nil {
-					if sendContext.Err() != nil {
-						return
-					}
-					select {
-					case sendErrors <- fmt.Errorf("multi dealer/router client send: %w", sendErr):
-					default:
-					}
-					return
-				}
-			}
-		}()
+	payloads := make([][]byte, len(dealers))
+	for index := range payloads {
+		payloads[index] = perfcommon.PreparePayload(msgSize)
 	}
-
-	for time.Now().Before(window.StopAt) {
-		wait := time.Until(window.StopAt)
-		if wait <= 0 {
-			break
+	submit := func(index int) error {
+		if sendErr := sendMultiDealerRouterRequest(
+			dealers[index].socket, payloads[index], window); sendErr != nil {
+			return fmt.Errorf("multi dealer/router client send: %w", sendErr)
 		}
-		if wait > 50*time.Millisecond {
-			wait = 50 * time.Millisecond
-		}
+		return nil
+	}
+	pendingReplies := 0
+	progress := func(wait time.Duration) error {
 		n, waitErr := poller.Wait(events, wait)
 		if waitErr != nil {
 			if perfcommon.IsTransient(waitErr) {
-				continue
+				return nil
 			}
-			perfcommon.Must(fmt.Errorf("multi dealer/router client poll: %w", waitErr))
+			return fmt.Errorf("multi dealer/router client poll: %w", waitErr)
 		}
 		for i := 0; i < n; i++ {
 			idx := int(events[i].Slot)
@@ -155,31 +131,29 @@ func runMultiDealerRouterEchoWindow(
 			}
 			socket := dealers[idx].socket
 			if events[i].Revents&perfcommon.ZLinkPollIn != 0 {
-				drainMultiDealerRouterReplies(socket, stats, msgSize, window)
+				drained := drainMultiDealerRouterReplies(socket, stats, msgSize, window)
+				if drained > pendingReplies {
+					return fmt.Errorf("multi dealer/router received %d replies with %d pending", drained, pendingReplies)
+				}
+				pendingReplies -= drained
 			}
 		}
+		return nil
 	}
-	cancelSends()
-	if !waitForMultiSendDrain(&senders) {
-		perfcommon.Must(fmt.Errorf("multi dealer/router send drain timed out"))
-	}
-	select {
-	case sendErr := <-sendErrors:
-		perfcommon.Must(sendErr)
-	default:
-	}
+	perfcommon.Must(runMultiSendTurns(
+		len(dealers), window, "multi dealer/router", submit, progress,
+		func(submitted int) { pendingReplies += submitted },
+		func() bool { return pendingReplies > 0 }))
 }
 
 func sendMultiDealerRouterRequest(
-	ctx context.Context,
 	socket *zlink.DealerSocket,
 	payload []byte,
-	msgSize int,
 	window perfcommon.BenchmarkWindow,
 ) error {
 	perfcommon.StampWindowPayload(payload, window.ActiveAt)
 	message := perfcommon.NewMessage(payload)
-	return perfcommon.SubmitMeasurementSendContext(ctx, socket.Send(), message)
+	return perfcommon.SubmitMeasurementSend(socket.Send(), message)
 }
 
 func drainMultiDealerRouterReplies(
@@ -187,21 +161,23 @@ func drainMultiDealerRouterReplies(
 	stats *perfcommon.Stats,
 	msgSize int,
 	window perfcommon.BenchmarkWindow,
-) {
+) int {
+	drained := 0
 	var reply zlink.Received
 	for {
 		ok, err := socket.Recv(&reply, zlink.RecvFlagsDontWait)
 		if err != nil {
 			if perfcommon.IsTransient(err) {
-				return
+				return drained
 			}
 			perfcommon.Must(fmt.Errorf("multi dealer/router client recv: %w", err))
 		}
 		if !ok {
-			return
+			return drained
 		}
 		part, partErr := perfcommon.MeasurementPayload(reply.Parts())
 		if partErr == nil {
+			drained++
 			perfcommon.RecordMessageRTTLatency(stats, window.ActiveAtNs, window.StopAtNs, msgSize, part)
 		}
 		_ = reply.Close()

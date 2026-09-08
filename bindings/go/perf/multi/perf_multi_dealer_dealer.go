@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	zlink "zlink.systems/zlink"
@@ -227,48 +226,46 @@ func runMultiDealerDealerSendWindow(clients []dealerDealerClient, cfg multiConfi
 	if len(clients) == 0 {
 		return
 	}
-	// Go has one context-aware Send terminal. Each long-lived goroutine owns one
-	// socket's Submit call; after backpressure the binding's scheduler pump
-	// correlates WRITABLE and retries that goroutine's retained packet.
-	var workers sync.WaitGroup
-	errors := make(chan error, len(clients))
-	for _, client := range clients {
-		client := client
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for time.Now().Before(window.StopAt) {
-				var sendErr error
-				if perfcommon.MeasurementPartCount() == 2 {
-					message := perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt)
-					sendErr = perfcommon.SubmitMeasurementSend(client.socket.Send(), message)
-				} else {
-					_, sendErr = perfcommon.SubmitRoutedWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) error {
-						if !useMultiDealerDealerMoveMessage(cfg.transport, cfg.msgSize) {
-							return client.socket.Send().Message(message).Submit(context.Background())
-						}
-						return client.socket.Send().MoveMessage(message).Submit(context.Background())
-					})
-				}
-				if sendErr == nil || perfcommon.IsTransient(sendErr) {
-					continue
-				}
-				select {
-				case errors <- fmt.Errorf("multi dealer/dealer client send: %w", sendErr):
-				default:
-				}
-				return
-			}
-		}()
+
+	// Match the C round: submit at most once per available socket, then service
+	// WRITABLE before the next round. The binding retains and resubmits the exact
+	// packet while a socket's public terminal remains pending.
+	poller, err := zlink.NewPoller()
+	perfcommon.Must(err)
+	defer poller.Close()
+	events := make([]zlink.PollEvent, len(clients))
+	for index := range clients {
+		perfcommon.Must(poller.AddSocket(clients[index].socket, zlink.PollCompletion, uintptr(index)))
 	}
-	if !waitForMultiSendDrain(&workers) {
-		perfcommon.Must(fmt.Errorf("multi dealer/dealer send drain timed out"))
+
+	submit := func(index int) error {
+		client := clients[index]
+		var sendErr error
+		if perfcommon.MeasurementPartCount() == 2 {
+			message := perfcommon.NewWindowMessage(cfg.msgSize, window.ActiveAt)
+			sendErr = perfcommon.SubmitMeasurementSend(client.socket.Send(), message)
+		} else {
+			_, sendErr = perfcommon.SubmitRoutedWindowPayload(cfg.msgSize, window.ActiveAt, func(message *zlink.Message) error {
+				if !useMultiDealerDealerMoveMessage(cfg.transport, cfg.msgSize) {
+					return client.socket.Send().Message(message).Submit(context.Background())
+				}
+				return client.socket.Send().MoveMessage(message).Submit(context.Background())
+			})
+		}
+		if sendErr != nil {
+			return fmt.Errorf("multi dealer/dealer client send: %w", sendErr)
+		}
+		return nil
 	}
-	select {
-	case err := <-errors:
-		perfcommon.Must(err)
-	default:
+	progress := func(wait time.Duration) error {
+		_, waitErr := poller.Wait(events, wait)
+		if waitErr != nil && !perfcommon.IsTransient(waitErr) {
+			return fmt.Errorf("multi dealer/dealer client poll: %w", waitErr)
+		}
+		return nil
 	}
+	perfcommon.Must(runMultiSendTurns(
+		len(clients), window, "multi dealer/dealer", submit, progress, nil, nil))
 }
 
 func useMultiDealerDealerMoveMessage(transport string, msgSize int) bool {

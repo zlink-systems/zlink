@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"sync"
 	"time"
 
 	"zlink.systems/zlink/perf/internal/perfcommon"
@@ -27,18 +26,146 @@ func multiSendDrainTimeout() time.Duration {
 	return time.Duration(value) * time.Millisecond
 }
 
-func waitForMultiSendDrain(workers *sync.WaitGroup) bool {
-	done := make(chan struct{})
-	go func() {
-		workers.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return true
-	case <-time.After(multiSendDrainTimeout()):
-		return false
+type multiSendTurnResult struct {
+	index int
+	err   error
+}
+
+// multiSendTurnCoordinator keeps one admission owner per socket. An
+// immediately admitted send makes that socket available for the next round;
+// a backpressured send remains unavailable until its exact WRITABLE retry
+// completes inside the binding.
+type multiSendTurnCoordinator struct {
+	available []bool
+	completed chan multiSendTurnResult
+	pending   int
+	next      int
+}
+
+func newMultiSendTurnCoordinator(socketCount int) *multiSendTurnCoordinator {
+	available := make([]bool, socketCount)
+	for index := range available {
+		available[index] = true
 	}
+	return &multiSendTurnCoordinator{
+		available: available,
+		completed: make(chan multiSendTurnResult, socketCount),
+	}
+}
+
+func (c *multiSendTurnCoordinator) submitRound(
+	stopAt time.Time,
+	submit func(int) error,
+) int {
+	if len(c.available) == 0 {
+		return 0
+	}
+	start := c.next
+	c.next = (c.next + 1) % len(c.available)
+	submitted := 0
+	for attempt := 0; attempt < len(c.available); attempt++ {
+		if !time.Now().Before(stopAt) {
+			break
+		}
+		index := (start + attempt) % len(c.available)
+		if !c.available[index] {
+			continue
+		}
+		c.available[index] = false
+		c.pending++
+		submitted++
+		go func() {
+			c.completed <- multiSendTurnResult{index: index, err: submit(index)}
+		}()
+	}
+	return submitted
+}
+
+func (c *multiSendTurnCoordinator) drainReady() (bool, error) {
+	progressed := false
+	for {
+		select {
+		case result := <-c.completed:
+			progressed = true
+			c.available[result.index] = true
+			c.pending--
+			if result.err != nil {
+				return progressed, result.err
+			}
+		default:
+			return progressed, nil
+		}
+	}
+}
+
+func runMultiSendTurns(
+	socketCount int,
+	window perfcommon.BenchmarkWindow,
+	label string,
+	submit func(int) error,
+	progress func(time.Duration) error,
+	onSubmitted func(int),
+	hasDrainWork func() bool,
+) error {
+	coordinator := newMultiSendTurnCoordinator(socketCount)
+	for time.Now().Before(window.StopAt) {
+		submitted := coordinator.submitRound(window.StopAt, submit)
+		if onSubmitted != nil {
+			onSubmitted(submitted)
+		}
+		progressed := submitted > 0
+		drained, err := coordinator.drainReady()
+		if err != nil {
+			return err
+		}
+		progressed = progressed || drained
+		if err := progress(multiSendTurnWait(window.StopAt, progressed)); err != nil {
+			return err
+		}
+	}
+
+	drainWindow := multiSendDrainTimeout()
+	if hasDrainWork != nil {
+		// C echo client (perf_multi_client_helpers.hpp): the teardown window is
+		// max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS, 3 s per active second) because
+		// small messages can fill every per-client Core queue.
+		if active := window.StopAt.Sub(window.ActiveAt); active > 0 {
+			if scaled := 3 * active; scaled > drainWindow {
+				drainWindow = scaled
+			}
+		}
+	}
+	drainDeadline := time.Now().Add(drainWindow)
+	for coordinator.pending > 0 || (hasDrainWork != nil && hasDrainWork()) {
+		progressed, err := coordinator.drainReady()
+		if err != nil {
+			return err
+		}
+		if coordinator.pending == 0 {
+			break
+		}
+		if !time.Now().Before(drainDeadline) {
+			return fmt.Errorf("%s send drain timed out", label)
+		}
+		if err := progress(multiSendTurnWait(drainDeadline, progressed)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func multiSendTurnWait(deadline time.Time, progressed bool) time.Duration {
+	if progressed {
+		return 0
+	}
+	wait := time.Until(deadline)
+	if wait > 50*time.Millisecond {
+		return 50 * time.Millisecond
+	}
+	if wait < 0 {
+		return 0
+	}
+	return wait
 }
 
 var (
