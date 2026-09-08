@@ -4432,3 +4432,9 @@ workload 상한으로 취급하지 않기 위해" 창을 duration에 비례시�
 Node의 초 단위 latency(D-BP29 계열 교차 현상)는 이 backlog 깊이와 일치한다 → Node의 auto-HWM 적용값(byte 단위
 여부)과 admission 경로를 다음 조사 대상으로 잡는다.
 
+**재검증 결과(12:01, `netdrain2`):** 15 s 창에서도 .NET tls RR SS 65536 B 5-run은 1/5 `complete`, 4/5 실패 —
+echo 684건(client당 ~7) 미수신, admission은 전부 완료. 즉 admitted 메시지가 relay를 거쳐 15 s 안에 돌아오지
+않는 **echo 경로 정지**이며 drain 논리 문제가 아니다(tcp RR SS 3-run·DR SS complete). tls 64 KB는 §10.3.2의
+Core 대기 항목(D-BP28/29 계열)에 귀속하되, C는 같은 셀을 1-run만 `complete`로 확인했고 5-run은 미측정이므로
+0.18.0 재개 시 **C tls RR SS 65536 B 5-run을 먼저** 돌려 Core/relay 귀속을 확정한다. 수정 전 .NET이 45/50
+"통과"한 것은 echo를 기다리지 않고 닫았기 때문이므로, 채택한 drain이 결함을 드러낸 것이지 만든 것이 아니다.
