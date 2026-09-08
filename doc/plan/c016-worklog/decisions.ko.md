@@ -4423,8 +4423,8 @@ workload 상한으로 취급하지 않기 위해" 창을 duration에 비례시�
 `resolve_multi_send_drain_timeout_ms`, Node `PERF_MULTI_SEND_DRAIN_TIMEOUT_MS ?? 5000`, Java
 `sendDrainTimeout()`, Go `multiSendDrainTimeout()`, .NET `ResolveMultiSendDrainTimeoutMs`).
 
-**적용:** C++·Rust·Python·.NET은 이 커밋에서 정합(각각 tcp SS 65536 B smoke `complete`). Node·Java·Go는
-진행 중인 sub-agent 작업이 같은 파일을 쥐고 있어 그 결과를 받은 뒤 같은 규칙을 적용한다. .NET tls RR SS
+**적용(7/7 완료):** C++·Rust·Python·.NET `537c6eec93`(각각 tcp SS 65536 B smoke `complete`), Go `e05d6d2636`,
+Node `93bcf7156a`(codex 검증에서 5 s 창으로 실패하던 DR SS 4096 B가 15 s 창으로 complete), Java `ad89fb599a`. .NET tls RR SS
 65536 B 5-run 재검증(`netdrain2`)은 큐에 있다 — tls는 §10.3.2로 Core 대기 항목이므로 결과는 기록만 한다.
 
 **교차 발견:** Node client drain 검증(codex)에서 DR SS 4096 B가 echo **106,850건** 미수신으로 실패 — client당
