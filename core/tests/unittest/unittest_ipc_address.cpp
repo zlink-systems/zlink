@@ -7,12 +7,6 @@
 
 #include <unity.h>
 
-#if defined ZLINK_HAVE_IPC
-
-#include <cstddef>
-#include <cstring>
-#include <string>
-
 void setUp ()
 {
 }
@@ -20,6 +14,12 @@ void setUp ()
 void tearDown ()
 {
 }
+
+#if defined ZLINK_HAVE_IPC
+
+#include <cstddef>
+#include <cstring>
+#include <string>
 
 void test_default_ipc_address_has_no_string ()
 {

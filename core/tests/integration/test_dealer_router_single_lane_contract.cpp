@@ -1578,25 +1578,25 @@ void test_sl_wire_transport_matrix_counts ()
     run_public_transport_pair ("ipc", false);
     run_public_transport_pair ("ipc", true);
 #else
-    TEST_MESSAGE ("IPC matrix cells skipped: ZLINK_HAVE_IPC is not defined");
+    UnityPrint ("IPC matrix cells skipped: ZLINK_HAVE_IPC is not defined");
 #endif
 #if defined ZLINK_HAVE_TLS
     run_public_transport_pair ("tls", false);
     run_public_transport_pair ("tls", true);
 #else
-    TEST_MESSAGE ("TLS matrix cells skipped: ZLINK_HAVE_TLS is not defined");
+    UnityPrint ("TLS matrix cells skipped: ZLINK_HAVE_TLS is not defined");
 #endif
 #if defined ZLINK_HAVE_WS
     run_public_transport_pair ("ws", false);
     run_public_transport_pair ("ws", true);
 #else
-    TEST_MESSAGE ("WS matrix cells skipped: ZLINK_HAVE_WS is not defined");
+    UnityPrint ("WS matrix cells skipped: ZLINK_HAVE_WS is not defined");
 #endif
 #if defined ZLINK_HAVE_WSS
     run_public_transport_pair ("wss", false);
     run_public_transport_pair ("wss", true);
 #else
-    TEST_MESSAGE ("WSS matrix cells skipped: ZLINK_HAVE_WSS is not defined");
+    UnityPrint ("WSS matrix cells skipped: ZLINK_HAVE_WSS is not defined");
 #endif
 }
 

@@ -241,37 +241,82 @@ static bool parse_tcp_endpoint (const char *endpoint_, char host_[64], int *port
     return true;
 }
 
+static uint32_t load_u32_be (const unsigned char *src_)
+{
+    return (static_cast<uint32_t> (src_[0]) << 24)
+           | (static_cast<uint32_t> (src_[1]) << 16)
+           | (static_cast<uint32_t> (src_[2]) << 8)
+           | static_cast<uint32_t> (src_[3]);
+}
+
+static void store_u32_be (unsigned char *dst_, uint32_t value_)
+{
+    dst_[0] = static_cast<unsigned char> ((value_ >> 24) & 0xFF);
+    dst_[1] = static_cast<unsigned char> ((value_ >> 16) & 0xFF);
+    dst_[2] = static_cast<unsigned char> ((value_ >> 8) & 0xFF);
+    dst_[3] = static_cast<unsigned char> (value_ & 0xFF);
+}
+
+static void store_u16_be (unsigned char *dst_, uint16_t value_)
+{
+    dst_[0] = static_cast<unsigned char> ((value_ >> 8) & 0xFF);
+    dst_[1] = static_cast<unsigned char> (value_ & 0xFF);
+}
+
 #if defined(ZLINK_HAVE_WINDOWS)
-static int connect_raw_tcp (const char *endpoint_)
+static fd_t connect_raw_tcp (const char *endpoint_)
 {
-    LIBZLINK_UNUSED (endpoint_);
-    errno = EOPNOTSUPP;
-    return -1;
+    return connect_socket (endpoint_, AF_INET, IPPROTO_TCP);
 }
 
-static int send_stream_packet (int fd_, const void *data_, size_t size_)
+static int send_all (fd_t fd_, const unsigned char *buf_, size_t size_)
 {
-    LIBZLINK_UNUSED (fd_);
-    LIBZLINK_UNUSED (data_);
-    LIBZLINK_UNUSED (size_);
-    return EOPNOTSUPP;
+    size_t off = 0;
+    while (off < size_) {
+        const int n = send (fd_, reinterpret_cast<const char *> (buf_ + off),
+                            static_cast<int> (size_ - off), 0);
+        if (n > 0) {
+            off += static_cast<size_t> (n);
+            continue;
+        }
+        if (n == SOCKET_ERROR && WSAGetLastError () == WSAEINTR)
+            continue;
+        return -1;
+    }
+    return 0;
 }
 
-static int recv_stream_packet (int fd_, void *buf_, size_t cap_)
+static int send_stream_packet (fd_t fd_, const void *data_, size_t size_)
 {
-    LIBZLINK_UNUSED (fd_);
-    LIBZLINK_UNUSED (buf_);
-    LIBZLINK_UNUSED (cap_);
-    return -1;
+    return send_all (fd_, static_cast<const unsigned char *> (data_), size_);
 }
 
-static void close_raw_fd (int fd_)
+static int recv_stream_packet (fd_t fd_, void *buf_, size_t cap_)
 {
-    LIBZLINK_UNUSED (fd_);
+    const int n = recv (fd_, static_cast<char *> (buf_), static_cast<int> (cap_), 0);
+    return n > 0 ? n : -1;
+}
+
+static void close_raw_fd (fd_t fd_)
+{
+    if (fd_ != retired_fd)
+        close (fd_);
+}
+
+static int set_raw_fd_timeout (fd_t fd_, int timeout_ms_)
+{
+    const DWORD timeout = static_cast<DWORD> (timeout_ms_);
+    if (setsockopt (fd_, SOL_SOCKET, SO_RCVTIMEO,
+                    as_setsockopt_opt_t (&timeout), sizeof (timeout)) != 0)
+        return -1;
+    if (setsockopt (fd_, SOL_SOCKET, SO_SNDTIMEO,
+                    as_setsockopt_opt_t (&timeout), sizeof (timeout)) != 0)
+        return -1;
+    return 0;
 }
 
 #else
-static int connect_raw_tcp (const char *endpoint_)
+static fd_t connect_raw_tcp (const char *endpoint_)
 {
     char host[64];
     int port = 0;
@@ -304,7 +349,7 @@ static int connect_raw_tcp (const char *endpoint_)
     return fd;
 }
 
-static int send_all (int fd_, const unsigned char *buf_, size_t size_)
+static int send_all (fd_t fd_, const unsigned char *buf_, size_t size_)
 {
     size_t off = 0;
     while (off < size_) {
@@ -320,12 +365,12 @@ static int send_all (int fd_, const unsigned char *buf_, size_t size_)
     return 0;
 }
 
-static int send_stream_packet (int fd_, const void *data_, size_t size_)
+static int send_stream_packet (fd_t fd_, const void *data_, size_t size_)
 {
     return send_all (fd_, static_cast<const unsigned char *> (data_), size_);
 }
 
-static int recv_stream_packet (int fd_, void *buf_, size_t cap_)
+static int recv_stream_packet (fd_t fd_, void *buf_, size_t cap_)
 {
     const ssize_t n = recv (fd_, static_cast<unsigned char *> (buf_), cap_, 0);
     if (n <= 0)
@@ -333,7 +378,7 @@ static int recv_stream_packet (int fd_, void *buf_, size_t cap_)
     return static_cast<int> (n);
 }
 
-static bool wait_raw_fd_closed (int fd_)
+static bool wait_raw_fd_closed (fd_t fd_)
 {
     unsigned char probe[1];
     const ssize_t n = recv (fd_, probe, sizeof (probe), 0);
@@ -344,13 +389,13 @@ static bool wait_raw_fd_closed (int fd_)
     return false;
 }
 
-static void close_raw_fd (int fd_)
+static void close_raw_fd (fd_t fd_)
 {
     if (fd_ >= 0)
         close (fd_);
 }
 
-static int set_raw_fd_timeout (int fd_, int timeout_ms_)
+static int set_raw_fd_timeout (fd_t fd_, int timeout_ms_)
 {
     struct timeval tv;
     tv.tv_sec = timeout_ms_ / 1000;
@@ -362,7 +407,7 @@ static int set_raw_fd_timeout (int fd_, int timeout_ms_)
     return 0;
 }
 
-static int recv_exact (int fd_, void *buf_, size_t size_)
+static int recv_exact (fd_t fd_, void *buf_, size_t size_)
 {
     unsigned char *dst = static_cast<unsigned char *> (buf_);
     size_t off = 0;
@@ -377,26 +422,6 @@ static int recv_exact (int fd_, void *buf_, size_t size_)
         return -1;
     }
     return 0;
-}
-
-static uint32_t load_u32_be (const unsigned char *src_)
-{
-    return (static_cast<uint32_t> (src_[0]) << 24) | (static_cast<uint32_t> (src_[1]) << 16)
-           | (static_cast<uint32_t> (src_[2]) << 8) | static_cast<uint32_t> (src_[3]);
-}
-
-static void store_u32_be (unsigned char *dst_, uint32_t value_)
-{
-    dst_[0] = static_cast<unsigned char> ((value_ >> 24) & 0xFF);
-    dst_[1] = static_cast<unsigned char> ((value_ >> 16) & 0xFF);
-    dst_[2] = static_cast<unsigned char> ((value_ >> 8) & 0xFF);
-    dst_[3] = static_cast<unsigned char> (value_ & 0xFF);
-}
-
-static void store_u16_be (unsigned char *dst_, uint16_t value_)
-{
-    dst_[0] = static_cast<unsigned char> ((value_ >> 8) & 0xFF);
-    dst_[1] = static_cast<unsigned char> (value_ & 0xFF);
 }
 
 #endif
@@ -1195,8 +1220,8 @@ void test_stream_recv_ready_precedes_first_payload_contract ()
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (monitor, ZLINK_OPT_LINGER, &monitor_linger, sizeof (monitor_linger)));
 
-    const int client_fd = connect_raw_tcp (endpoint);
-    TEST_ASSERT_TRUE (client_fd >= 0);
+    const fd_t client_fd = connect_raw_tcp (endpoint);
+    TEST_ASSERT_TRUE (client_fd != retired_fd);
     TEST_ASSERT_EQUAL_INT (0, set_raw_fd_timeout (client_fd, 3000));
 
     const unsigned char payload[] = "stream-recv-ready-contract";
@@ -1237,6 +1262,7 @@ void test_stream_recv_ready_precedes_first_payload_contract ()
     test_context_socket_close_zero_linger (server);
 }
 
+#if !defined(ZLINK_HAVE_WINDOWS)
 static void run_stream_raw_client_load (const char *endpoint_,
                                         uint32_t client_id_,
                                         int phases_,
@@ -1367,6 +1393,7 @@ void test_stream_recv_multiclient_strict_ready_gating_regression ()
     TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&monitor));
     test_context_socket_close_zero_linger (server);
 }
+#endif
 
 void test_stream_phase3_mode_freeze_contract ()
 {

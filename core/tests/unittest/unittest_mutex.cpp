@@ -8,6 +8,14 @@
 #include <chrono>
 #include <thread>
 
+void setUp ()
+{
+}
+
+void tearDown ()
+{
+}
+
 namespace
 {
 //  mutex_t is the plain (non-recursive) default. Only the recursive variant

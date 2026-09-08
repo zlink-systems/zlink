@@ -40,7 +40,7 @@ void tearDown ()
 
 int main ()
 {
-    TEST_IGNORE_MESSAGE ("POSIX raw tcp regression test");
+    std::puts ("POSIX raw tcp regression test");
     return 77;
 }
 

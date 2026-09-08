@@ -1085,13 +1085,17 @@ zlink_warn_unregistered_tests(
 # match the formal 10.0.0 spec exactly (see core/tests/contract/).
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
+  if(MSVC)
+    set(public_surface_export_tool "${CMAKE_LINKER}")
+  endif()
   add_test(
     NAME contract_public_surface
     COMMAND
       ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/contract/check_public_surface.py
       ${CMAKE_CURRENT_SOURCE_DIR}/../..
-      $<TARGET_FILE:libzlink>)
+      $<TARGET_FILE:libzlink>
+      ${public_surface_export_tool})
   set_tests_properties(contract_public_surface PROPERTIES
     TIMEOUT 60
     LABELS "unittest")
@@ -1106,37 +1110,41 @@ if(Python3_Interpreter_FOUND)
     LABELS "unittest")
 endif()
 
-# Deterministic public-API instruction-count gate for the Core hot paths.
-add_executable(hotpath_bench perf/hotpath_bench.cpp)
-target_link_libraries(
-  hotpath_bench
-  libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
-find_path(
-  VALGRIND_INCLUDE_DIR
-  valgrind/callgrind.h
-  HINTS "$ENV{HOME}/.local/include")
-if(VALGRIND_INCLUDE_DIR)
-  target_include_directories(hotpath_bench PRIVATE "${VALGRIND_INCLUDE_DIR}")
-endif()
+# Callgrind and its raw-socket driver require a POSIX host.
+if(UNIX)
+  # Deterministic public-API instruction-count gate for the Core hot paths.
+  add_executable(hotpath_bench perf/hotpath_bench.cpp)
+  target_link_libraries(
+    hotpath_bench
+    libzlink-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
+  find_path(
+    VALGRIND_INCLUDE_DIR
+    valgrind/callgrind.h
+    HINTS "$ENV{HOME}/.local/include")
+  if(VALGRIND_INCLUDE_DIR)
+    target_include_directories(hotpath_bench PRIVATE "${VALGRIND_INCLUDE_DIR}")
+  endif()
 
-find_program(
-  VALGRIND_EXECUTABLE
-  valgrind
-  HINTS "$ENV{HOME}/.local/bin")
-if(VALGRIND_EXECUTABLE AND Python3_Interpreter_FOUND)
-  add_test(
-    NAME hotpath_gate
-    COMMAND
-      ${Python3_EXECUTABLE}
-      ${CMAKE_CURRENT_SOURCE_DIR}/perf/hotpath_gate.py
-      --bench $<TARGET_FILE:hotpath_bench>
-      --reference ${CMAKE_CURRENT_SOURCE_DIR}/perf/hotpath_reference.json
-      --valgrind ${VALGRIND_EXECUTABLE})
-  set_tests_properties(
-    hotpath_gate
-    PROPERTIES
-      LABELS "hotpath"
-      TIMEOUT 600)
+  find_program(
+    VALGRIND_EXECUTABLE
+    valgrind
+    HINTS "$ENV{HOME}/.local/bin")
+  if(VALGRIND_EXECUTABLE AND Python3_Interpreter_FOUND)
+    add_test(
+      NAME hotpath_gate
+      COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/perf/hotpath_gate.py
+        --bench $<TARGET_FILE:hotpath_bench>
+        --reference ${CMAKE_CURRENT_SOURCE_DIR}/perf/hotpath_reference.json
+        --valgrind ${VALGRIND_EXECUTABLE})
+    set_tests_properties(
+      hotpath_gate
+      PROPERTIES
+        LABELS "hotpath"
+        TIMEOUT 600)
+  endif()
+
 endif()
 
 # Level-triggered wake/lost-wake contract suite. Keep the two exact internal

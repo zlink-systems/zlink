@@ -5,6 +5,7 @@
 
 #include <boost/asio.hpp>
 #include <boost/beast/websocket.hpp>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -135,6 +136,42 @@ struct client_t
         for (size_t i = 0; i < bytes_.size (); ++i)
             socket.write (net::buffer (bytes_.data () + i, 1));
     }
+    void await_peer_input_fence ()
+    {
+        const char marker[] = "stream-input-fence";
+        bool pong_seen = false;
+        bool read_finished = false;
+        std::array<unsigned char, 1> unused;
+        socket.control_callback (
+          [&] (ws::frame_type kind_, boost::beast::string_view payload_) {
+              if (kind_ != ws::frame_type::pong
+                  || payload_.size () != sizeof (marker) - 1
+                  || std::memcmp (payload_.data (), marker,
+                                  sizeof (marker) - 1)
+                       != 0)
+                  return;
+              pong_seen = true;
+              // The pong is the event being awaited. Cancel only the dummy
+              // application read that drives Beast's control-frame handling.
+              net::post (io, [this] {
+                  boost::system::error_code ignored;
+                  socket.next_layer ().cancel (ignored);
+              });
+          });
+        socket.async_read_some (
+          net::buffer (unused),
+          [&] (const boost::system::error_code &, std::size_t) {
+              read_finished = true;
+          });
+        boost::system::error_code ping_error;
+        socket.ping (ws::ping_data (marker), ping_error);
+        TEST_ASSERT_FALSE_MESSAGE (static_cast<bool> (ping_error),
+                                   "failed to send input fence");
+        io.run ();
+        TEST_ASSERT_TRUE_MESSAGE (
+          pong_seen, "peer did not acknowledge the input fence");
+        TEST_ASSERT_TRUE (read_finished);
+    }
     net::io_context io;
     ws::stream<tcp::socket> socket;
 };
@@ -244,7 +281,12 @@ void test_shutdown_during_drain ()
     client_t client (f.port);
     const std::string bytes = packet ("stop", std::string (262144, 'p'));
     client.fragment (bytes.substr (0, bytes.size () - 1));
-    f.await_input (bytes.size () - 1);
+    // A pong can only be produced after the peer's WebSocket reader has
+    // consumed every preceding data message on this connection. It therefore
+    // fences the complete 1-byte-fragment input without imposing a 3-second
+    // ingestion rate on instrumented builds.
+    client.await_peer_input_fence ();
+    TEST_ASSERT_EQUAL_UINT64 (bytes.size () - 1, f.pending ());
     std::atomic<bool> observing (false);
     int shutdown_rc = -1;
     int monitor_rc = ZLINK_CONFIG_OK;
@@ -279,6 +321,7 @@ void test_shutdown_during_drain ()
                  static_cast<unsigned long long> (remaining));
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, shutdown_rc);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, monitor_rc);
+    TEST_ASSERT_TRUE (at_shutdown > 0);
     TEST_ASSERT_TRUE (at_shutdown < bytes.size () - 1);
     TEST_ASSERT_EQUAL_INT (ZLINK_RECV_TERMINATED, rc);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&header));

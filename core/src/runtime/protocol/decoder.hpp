@@ -40,8 +40,6 @@ template <typename T, typename A> class decoder_base_t : public i_decoder
     //  Returns a buffer to be filled with binary data.
     void get_buffer (unsigned char **data_, std::size_t *size_) ZLINK_FINAL
     {
-        _buf = _allocator.allocate ();
-
         //  If we are expected to read large message, we'll opt for zero-
         //  copy, i.e. we'll ask caller to fill the data directly to the
         //  message. Note that subsequent read(s) are non-blocking, thus
@@ -56,6 +54,7 @@ template <typename T, typename A> class decoder_base_t : public i_decoder
             return;
         }
 
+        _buf = _allocator.allocate ();
         *data_ = _buf;
         *size_ = _allocator.size ();
     }
