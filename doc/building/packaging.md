@@ -95,7 +95,13 @@ vcpkg install zlink --overlay-ports=./vcpkg/ports
 3. Publish Node only with `node/v1.3.0` tag
 4. Publish Python separately with `python/v0.10.2` when ready
 
-## 7. Checklist
+## 7. Public Release Order: Bindings (Four Languages) → Framework
+
+Publish the C++, Node.js, Java, and .NET bindings against Core 0.17.3 first. Confirm that each
+binding can be installed from its public channel, then publish Framework 0.10.0. Do not reverse
+the order by publishing a Framework package that references an unavailable binding.
+
+## 8. Checklist
 
 - [ ] Update Core `VERSION`
 - [ ] Release Core tag (`core/vX.Y.Z`)
@@ -103,3 +109,5 @@ vcpkg install zlink --overlay-ports=./vcpkg/ports
 - [ ] Update vcpkg overlay version
 - [ ] Update version files for each binding
 - [ ] Release each binding individually with its own tag
+- [ ] Verify public installation of the C++, Node.js, Java, and .NET bindings
+- [ ] Release Framework after the bindings

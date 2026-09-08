@@ -104,7 +104,13 @@ vcpkg install zlink --overlay-ports=./vcpkg/ports
 3. `node/v1.3.0` 태그로 Node만 배포
 4. Python은 준비 후 `python/v0.10.2`로 별도 배포
 
-## 7. 체크리스트
+## 7. 공개 배포 순서: bindings(4언어) → framework
+
+공개 배포는 Core `0.17.3`을 기준으로 C++·Node.js·Java·.NET binding 네 언어를 먼저
+게시하고, 각 공개 채널에서 설치 가능함을 확인한 뒤 Framework `0.10.0`을 게시한다.
+Framework package가 아직 공개되지 않은 binding을 참조하는 순서 역전은 허용하지 않는다.
+
+## 8. 체크리스트
 
 - [ ] Core `VERSION` 갱신
 - [ ] Core 태그(`core/vX.Y.Z`) 릴리즈
@@ -112,8 +118,10 @@ vcpkg install zlink --overlay-ports=./vcpkg/ports
 - [ ] vcpkg overlay 버전 갱신
 - [ ] 바인딩별 버전 파일 갱신
 - [ ] 바인딩별 태그로 개별 릴리즈
+- [ ] C++·Node.js·Java·.NET binding의 공개 채널 설치 확인
+- [ ] Framework를 binding 뒤에 릴리즈
 
-## 8. 관련 문서
+## 9. 관련 문서
 
 - [Framework와 Bindings 의존 경계 정리](./framework-bindings-dependency-boundary.ko.md)
 - [Local Package 스크립트](../../scripts/local-package/README.ko.md)
