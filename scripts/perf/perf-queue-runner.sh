@@ -25,6 +25,8 @@ trap 'rm -f "${root}/runner.pid"' EXIT
 
 log() { echo "$(date '+%H:%M:%S') $*" >> "${root}/runner.log"; }
 board() {
+  # 주의: 호출자의 루프 변수와 이름이 겹치면 안 된다 — t·st·sig를 local로.
+  local t st
   {
     echo "# perf queue — $(date '+%Y-%m-%d %H:%M:%S') runner pid $$ load $(cut -d' ' -f1-3 /proc/loadavg)"
     echo; echo "## 실행 중"
@@ -45,9 +47,10 @@ echo "perf queue runner 시작 pid $$ root ${root}"
 board
 while :; do
   t="$(ls "${root}"/pending/*.ticket 2>/dev/null | sort | head -1)"
-  if [ -z "${t}" ]; then sleep 3; continue; fi
-  # 대기 목록이 바뀌면 상태판을 갱신한다(제출만 되고 실행이 안 넘어갈 때도 보이게).
-  sig="$(ls "${root}"/pending 2>/dev/null | md5sum)"; [ "${sig}" != "${last_sig:-}" ] && { board; last_sig="${sig}"; }
+  if [ -z "${t}" ]; then
+    sig="$(ls "${root}"/pending "${root}"/running 2>/dev/null | md5sum)"; [ "${sig}" != "${last_sig:-}" ] && { board; last_sig="${sig}"; }
+    sleep 3; continue
+  fi
   name="$(basename "${t}")"
   log "pick ${name}"
   mv "${t}" "${root}/running/${name}" || { log "mv-to-running 실패 ${name}"; continue; }
