@@ -7,6 +7,14 @@
 #include "core/control_runtime.hpp"
 #include "sockets/common/socket_base.hpp"
 
+void setUp ()
+{
+}
+
+void tearDown ()
+{
+}
+
 namespace
 {
 void set_zero_linger (zlink::socket_base_t *socket_)

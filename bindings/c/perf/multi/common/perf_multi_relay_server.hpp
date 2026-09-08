@@ -427,6 +427,10 @@ inline bool drain_recv_and_relay (void *server,
         }
         if (!flush_pending_replies (server, pending, wait_state))
             return false;
+        // A refused reply is the relay's sole retained input. Return to the
+        // poller to consume its WRITABLE record before accepting another one.
+        if (!pending->empty ())
+            return true;
     }
 }
 
@@ -453,8 +457,9 @@ inline bool run_server_loop (void *server)
 
     bool loop_ok = true;
     while (!perf_stop_requested ().load (std::memory_order_acquire)) {
-        short desired_events = static_cast<short> (ZLINK_POLLIN
-                                                    | ZLINK_POLLCOMPLETION);
+        short desired_events = ZLINK_POLLCOMPLETION;
+        if (pending.empty ())
+            desired_events = static_cast<short> (desired_events | ZLINK_POLLIN);
         // ROUTER POLLOUT is socket-wide. Try it once for a new exact-target
         // token, then suppress it after a NO_DATA pull so another writable RID
         // cannot spin this loop; target WRITABLE still wakes POLLCOMPLETION.

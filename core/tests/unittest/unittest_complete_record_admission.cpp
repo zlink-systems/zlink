@@ -539,7 +539,10 @@ void test_pair_whole_multipart_does_not_interleave_concurrent_final_records ()
 {
     const int multipart_rounds = 1000;
     const int single_rounds = 4000;
-    const size_t multipart_part_count = 8;
+    enum
+    {
+        multipart_part_count = 8
+    };
     const size_t tagged_size = 1 + sizeof (int);
 
     void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);

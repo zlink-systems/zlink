@@ -9,6 +9,14 @@
 
 #include <unity.h>
 
+void setUp ()
+{
+}
+
+void tearDown ()
+{
+}
+
 namespace
 {
 void test_single_fd_registration_reports_input ()

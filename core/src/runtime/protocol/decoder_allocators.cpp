@@ -11,15 +11,13 @@
 
 struct zlink::shared_message_memory_allocator_state_t
 {
-    explicit shared_message_memory_allocator_state_t (
-      std::size_t max_spare_size_) :
-        references (1), max_spare_size (max_spare_size_), closed_marker (0)
+    shared_message_memory_allocator_state_t () :
+        references (1), closed_marker (0)
     {
     }
 
     atomic_counter_t references;
     atomic_ptr_t<unsigned char> spare;
-    const std::size_t max_spare_size;
     unsigned char closed_marker;
 };
 
@@ -29,14 +27,14 @@ struct shared_message_memory_buffer_header_t
 {
     shared_message_memory_buffer_header_t (
       zlink::shared_message_memory_allocator_state_t *owner_,
-      std::size_t allocated_size_) :
-        references (1), owner (owner_), allocated_size (allocated_size_)
+      std::size_t allocation_size_) :
+        references (1), owner (owner_), allocation_size (allocation_size_)
     {
     }
 
     zlink::atomic_counter_t references;
     zlink::shared_message_memory_allocator_state_t *owner;
-    std::size_t allocated_size;
+    std::size_t allocation_size;
 };
 
 std::size_t clamp_allocation_size (std::size_t requested_, std::size_t max_)
@@ -86,12 +84,11 @@ bool compute_allocation_size (std::size_t target_size_,
     return checked_add (with_refcount, counter_bytes, out_);
 }
 
-zlink::shared_message_memory_allocator_state_t *create_recycle_state (
-  std::size_t max_spare_size_)
+zlink::shared_message_memory_allocator_state_t *create_recycle_state ()
 {
     zlink::shared_message_memory_allocator_state_t *state =
       new (std::nothrow)
-        zlink::shared_message_memory_allocator_state_t (max_spare_size_);
+        zlink::shared_message_memory_allocator_state_t ();
     alloc_assert (state);
     return state;
 }
@@ -128,21 +125,20 @@ void recycle_or_destroy_buffer (unsigned char *buffer_)
     shared_message_memory_buffer_header_t *const header = buffer_header (buffer_);
     zlink::shared_message_memory_allocator_state_t *const state = header->owner;
 
-    // Publish at most one normal read-size block. The compare/exchange release
+    // Publish at most one block. The compare/exchange release
     // makes the initialized header visible to the decoder-side consumer. An
     // occupied slot or the terminal CLOSED sentinel rejects the returned block.
-    if (header->allocated_size <= state->max_spare_size
-        && state->spare.cas (NULL, buffer_) == NULL)
+    if (state->spare.cas (NULL, buffer_) == NULL)
         return;
 
-    // Additional or dynamically grown returns are freed immediately so
-    // backlog draining cannot grow either the pool or its retained bytes.
+    // Additional returns are freed immediately. A size change discards the
+    // spare on its next use, rather than keeping a size-indexed payload pool.
     destroy_buffer (buffer_);
 }
 
 unsigned char *take_exact_spare (
   zlink::shared_message_memory_allocator_state_t *state_,
-  std::size_t target_size_)
+  std::size_t allocation_size_)
 {
     // Only the live decoder consumes the slot. Allocator methods do not race
     // its destructor, so CLOSED cannot be observed on this path.
@@ -151,9 +147,9 @@ unsigned char *take_exact_spare (
     if (!spare)
         return NULL;
 
-    // A different capacity is never reused: the payload/content layout is
-    // derived from the exact allocation target.
-    if (buffer_header (spare)->allocated_size != target_size_) {
+    // Compare the complete allocation: a payload owns one content record,
+    // while a read buffer reserves records for every message in its batch.
+    if (buffer_header (spare)->allocation_size != allocation_size_) {
         destroy_buffer (spare);
         return NULL;
     }
@@ -169,15 +165,22 @@ unsigned char *allocate_buffer (
     std::size_t allocation_size = 0;
     if (!compute_allocation_size (target_size_, max_counters_, &allocation_size)) {
         errno = ENOMEM;
-        alloc_assert (false);
+        return NULL;
     }
+
+    unsigned char *const spare = take_exact_spare (state_, allocation_size);
+    if (spare)
+        return spare;
 
     unsigned char *const buffer =
       static_cast<unsigned char *> (std::malloc (allocation_size));
-    alloc_assert (buffer);
+    if (!buffer) {
+        errno = ENOMEM;
+        return NULL;
+    }
 
     state_->references.add (1);
-    new (buffer) shared_message_memory_buffer_header_t (state_, target_size_);
+    new (buffer) shared_message_memory_buffer_header_t (state_, allocation_size);
     return buffer;
 }
 
@@ -201,7 +204,7 @@ zlink::shared_message_memory_allocator::shared_message_memory_allocator (std::si
     _allocated_size (0),
     _msg_content (NULL),
     _max_counters (max_counter_count_for_size (_max_size)),
-    _recycle_state (create_recycle_state (_allocation_size))
+    _recycle_state (create_recycle_state ())
 {
 }
 
@@ -214,7 +217,7 @@ zlink::shared_message_memory_allocator::shared_message_memory_allocator (
     _allocated_size (0),
     _msg_content (NULL),
     _max_counters (max_messages_),
-    _recycle_state (create_recycle_state (_allocation_size))
+    _recycle_state (create_recycle_state ())
 {
 }
 
@@ -229,7 +232,7 @@ zlink::shared_message_memory_allocator::shared_message_memory_allocator (std::si
     _allocated_size (0),
     _msg_content (NULL),
     _max_counters (max_messages_),
-    _recycle_state (create_recycle_state (_allocation_size))
+    _recycle_state (create_recycle_state ())
 {
 }
 
@@ -262,7 +265,7 @@ unsigned char *zlink::shared_message_memory_allocator::allocate ()
             // buffer is still in use as message data. "Release" it and create a new one
             // release pointer because we are going to create a new buffer
             release ();
-        } else if (header->allocated_size != target_size) {
+        } else if (_allocated_size != target_size) {
             destroy_buffer (_buf);
             clear ();
         }
@@ -270,20 +273,50 @@ unsigned char *zlink::shared_message_memory_allocator::allocate ()
 
     // if buf != NULL it is not used by any message so we can re-use it for the next run
     if (!_buf) {
-        _buf = take_exact_spare (_recycle_state, target_size);
-        if (!_buf)
-            _buf = allocate_buffer (_recycle_state, target_size,
-                                    _max_counters);
+        _buf = allocate_buffer (_recycle_state, target_size, _max_counters);
+        alloc_assert (_buf);
     } else {
         buffer_header (_buf)->references.set (1);
     }
 
-    _allocated_size = buffer_header (_buf)->allocated_size;
+    _allocated_size = target_size;
     _buf_size = target_size;
     _msg_content = reinterpret_cast<zlink::msg_t::content_t *> (
       _buf + sizeof (shared_message_memory_buffer_header_t)
       + _allocated_size);
     return _buf + sizeof (shared_message_memory_buffer_header_t);
+}
+
+int zlink::shared_message_memory_allocator::allocate_message (msg_t *msg_,
+                                                              std::size_t size_)
+{
+    if (size_ <= msg_t::max_vsm_size)
+        return msg_->init_size (size_);
+
+    // content_t follows the payload and must retain its native alignment even
+    // for odd-sized wire frames. A single payload needs one content record.
+    const std::size_t alignment = alignof (msg_t::content_t);
+    std::size_t capacity = 0;
+    if (!checked_add (size_, alignment - 1, &capacity)) {
+        errno = ENOMEM;
+        return -1;
+    }
+    capacity -= capacity % alignment;
+    unsigned char *const buffer =
+      allocate_buffer (_recycle_state, capacity, 1);
+    if (!buffer)
+        return -1;
+
+    unsigned char *const data =
+      buffer + sizeof (shared_message_memory_buffer_header_t);
+    // Transfer the block's initial reference directly to this message. The
+    // decoder's read buffer and any pending admission input remain untouched.
+    const int rc = msg_->init (
+      data, size_, call_dec_ref, buffer,
+      reinterpret_cast<msg_t::content_t *> (data + capacity));
+    if (rc != 0)
+        call_dec_ref (NULL, buffer);
+    return rc;
 }
 
 void zlink::shared_message_memory_allocator::deallocate ()

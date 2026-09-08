@@ -33,11 +33,11 @@ void test_stream () { expect_public_type (ZLINK_SOCKET_STREAM); }
 void test_short_buffer_is_invalid_argument ()
 {
     void *socket = test_context_socket (ZLINK_SOCKET_ROUTER);
-    char small = 0;
-    size_t size = sizeof (small);
+    char short_buffer = 0;
+    size_t size = sizeof (short_buffer);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_CONFIG_INVALID_ARGUMENT,
-      zlink_get_option (socket, ZLINK_OPT_TYPE, &small, &size));
+      zlink_get_option (socket, ZLINK_OPT_TYPE, &short_buffer, &size));
     test_context_socket_close_zero_linger (socket);
 }
 

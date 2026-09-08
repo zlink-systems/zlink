@@ -15,7 +15,7 @@ Checks:
      (no headerless internal exports).
   5. Debian, RPM and NuGet metadata match the CMake version and SONAME.
 
-Usage: check_public_surface.py <repo_root> <libzlink_path>
+Usage: check_public_surface.py <repo_root> <libzlink_path> [msvc_linker]
 Exit code 0 on success, 1 on contract violation.
 """
 
@@ -97,7 +97,7 @@ def header_closure(root, entry="zlink.h"):
             continue
         visited.add(path)
         seen.append(path)
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         for rel in re.findall(r'#\s*include\s+["<]([^">]+)[">]', text):
             candidate = include_root / rel
             if candidate.exists():
@@ -106,13 +106,13 @@ def header_closure(root, entry="zlink.h"):
 
 
 def c_blocks(path):
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     fence = chr(96) * 3
     return "\n".join(re.findall(rf"^{fence}c\s*\n(.*?)^{fence}\s*$", text, re.M | re.S))
 
 
 def check_packaging_metadata(root, failures):
-    cmake = (root / "core" / "CMakeLists.txt").read_text()
+    cmake = (root / "core" / "CMakeLists.txt").read_text(encoding="utf-8")
     version_match = re.search(r"project\s*\(\s*zlink\s+VERSION\s+([0-9.]+)", cmake)
     soname_match = re.search(r'\bSOVERSION\s+"([0-9]+)"', cmake)
     if not version_match or not soname_match:
@@ -153,7 +153,7 @@ def check_packaging_metadata(root, failures):
         if not path.exists():
             failures.append(f"packaging metadata missing: {relative}")
             continue
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         for needle in needles:
             if needle not in text:
                 failures.append(f"packaging metadata mismatch: {relative} lacks {needle!r}")
@@ -175,7 +175,7 @@ def check_packaging_metadata(root, failures):
 
 
 def main():
-    if len(sys.argv) != 3:
+    if len(sys.argv) not in (3, 4):
         print(__doc__)
         return 1
     root = pathlib.Path(sys.argv[1])
@@ -199,7 +199,7 @@ def main():
     root_headers = {kind: set() for kind in KINDS}
     root_closure = header_closure(root)
     for path in root_closure:
-        parsed = parse_c_surface(path.read_text())
+        parsed = parse_c_surface(path.read_text(encoding="utf-8"))
         for kind in KINDS:
             root_headers[kind].update(parsed[kind])
 
@@ -226,9 +226,13 @@ def main():
     check_packaging_metadata(root, failures)
 
     if lib.exists():
-        nm_args = (["nm", "-g", "-U", str(lib)]
-                   if sys.platform == "darwin"
-                   else ["nm", "-D", "--defined-only", str(lib)])
+        if sys.platform == "win32":
+            linker = sys.argv[3] if len(sys.argv) == 4 else "link.exe"
+            nm_args = [linker, "/dump", "/exports", str(lib)]
+        else:
+            nm_args = (["nm", "-g", "-U", str(lib)]
+                       if sys.platform == "darwin"
+                       else ["nm", "-D", "--defined-only", str(lib)])
         nm = subprocess.run(
             nm_args,
             capture_output=True, text=True, check=True,

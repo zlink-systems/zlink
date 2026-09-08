@@ -843,25 +843,166 @@ void test_shared_message_allocator_rejects_mismatched_spare_capacity ()
     zlink::shared_message_memory_allocator allocator (64, 2, 128);
 
     unsigned char *const small_data = allocator.allocate ();
-    zlink::msg_t small;
-    init_allocator_backed_message (allocator, small_data, &small);
+    zlink::msg_t initial_message;
+    init_allocator_backed_message (allocator, small_data, &initial_message);
 
     allocator.set_allocation_size (128);
     unsigned char *const large_data = allocator.allocate ();
     zlink::msg_t large;
     init_allocator_backed_message (allocator, large_data, &large);
 
-    TEST_ASSERT_EQUAL_INT (0, small.close ());
+    TEST_ASSERT_EQUAL_INT (0, initial_message.close ());
     TEST_ASSERT_EQUAL_UINT64 (1, allocator.cached_buffer_count_for_test ());
 
-    TEST_ASSERT_NOT_NULL (allocator.allocate ());
+    unsigned char *const current_data = allocator.allocate ();
+    TEST_ASSERT_NOT_NULL (current_data);
+    zlink::msg_t current;
+    init_allocator_backed_message (allocator, current_data, &current);
     TEST_ASSERT_EQUAL_UINT64 (128, allocator.allocation_size ());
     TEST_ASSERT_EQUAL_UINT64 (0, allocator.cached_buffer_count_for_test ());
 
     TEST_ASSERT_EQUAL_INT (0, large.close ());
-    // Dynamic growth above the allocator's initial read target is never
-    // retained per connection.
+    // Read and payload storage now share one exact-capacity spare, including
+    // grown blocks. Reuse must still consume the only slot.
+    TEST_ASSERT_EQUAL_UINT64 (1, allocator.cached_buffer_count_for_test ());
+    TEST_ASSERT_EQUAL_PTR (large_data, allocator.allocate ());
     TEST_ASSERT_EQUAL_UINT64 (0, allocator.cached_buffer_count_for_test ());
+    TEST_ASSERT_EQUAL_INT (0, current.close ());
+}
+
+void test_large_payload_spare_preserves_live_input_and_cross_thread_close ()
+{
+    zlink::shared_message_memory_allocator allocator (128, 4);
+    unsigned char *const input = allocator.allocate ();
+    memset (input, 0x5a, 128);
+
+    zlink::msg_t first;
+    TEST_ASSERT_EQUAL_INT (0, allocator.allocate_message (&first, 65537));
+    TEST_ASSERT_TRUE (first.is_zcmsg ());
+    void *const payload = first.data ();
+    memset (payload, 0x37, first.size ());
+    TEST_ASSERT_EQUAL_PTR (input, allocator.data ());
+    for (size_t i = 0; i != 128; ++i)
+        TEST_ASSERT_EQUAL_UINT8 (0x5a, input[i]);
+
+    int close_rc = -1;
+    std::thread closer ([&] { close_rc = first.close (); });
+    closer.join ();
+    TEST_ASSERT_EQUAL_INT (0, close_rc);
+    TEST_ASSERT_EQUAL_UINT64 (1, allocator.cached_buffer_count_for_test ());
+    zlink::msg_t second;
+    TEST_ASSERT_EQUAL_INT (0, allocator.allocate_message (&second, 65537));
+    TEST_ASSERT_EQUAL_PTR (payload, second.data ());
+    TEST_ASSERT_EQUAL_UINT64 (0, allocator.cached_buffer_count_for_test ());
+    TEST_ASSERT_EQUAL_INT (0, second.close ());
+}
+
+void test_large_payload_outlives_decoder_allocator ()
+{
+    zlink::msg_t survivor;
+    {
+        zlink::shared_message_memory_allocator allocator (128, 4);
+        allocator.allocate ();
+        TEST_ASSERT_EQUAL_INT (0, allocator.allocate_message (&survivor, 65536));
+        memset (survivor.data (), 0x42, survivor.size ());
+    }
+    const unsigned char *data =
+      static_cast<const unsigned char *> (survivor.data ());
+    for (size_t i = 0; i != survivor.size (); ++i)
+        TEST_ASSERT_EQUAL_UINT8 (0x42, data[i]);
+    TEST_ASSERT_EQUAL_INT (0, survivor.close ());
+}
+
+void test_large_payload_admission_retry_preserves_transport_chunk ()
+{
+    zlink::zmp_decoder_t decoder (128, -1);
+    fake_frame_admission_t admission;
+    decoder.set_frame_admission_handler (&fake_frame_admission_t::reserve,
+                                         NULL, &admission);
+    unsigned char *input = NULL;
+    size_t capacity = 0;
+    decoder.get_buffer (&input, &capacity);
+    build_header (input, 0, 65537);
+    memset (input + zlink::zmp_header_size, 0x63,
+            capacity - zlink::zmp_header_size);
+    size_t processed = 0;
+    TEST_ASSERT_EQUAL_INT (-1, decoder.decode (input, capacity, processed));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+    TEST_ASSERT_EQUAL_UINT64 (zlink::zmp_header_size, processed);
+    admission.allow = true;
+    TEST_ASSERT_EQUAL_INT (0, decoder.retry_frame_admission ());
+    const size_t prefix = capacity - processed;
+    TEST_ASSERT_EQUAL_INT (0, decoder.decode (input + processed, prefix, processed));
+    TEST_ASSERT_EQUAL_UINT64 (prefix, processed);
+    decoder.get_buffer (&input, &capacity);
+    TEST_ASSERT_EQUAL_UINT64 (65537 - prefix, capacity);
+    memset (input, 0x63, capacity);
+    TEST_ASSERT_EQUAL_INT (1, decoder.decode (input, capacity, processed));
+    TEST_ASSERT_EQUAL_UINT64 (capacity, processed);
+    const unsigned char *data =
+      static_cast<const unsigned char *> (decoder.msg ()->data ());
+    for (size_t i = 0; i != 65537; ++i)
+        TEST_ASSERT_EQUAL_UINT8 (0x63, data[i]);
+    *decoder.frame_reservation_slot () = NULL;
+
+    decoder.get_buffer (&input, &capacity);
+    build_header (input, 0, 4);
+    memcpy (input + zlink::zmp_header_size, "next", 4);
+    TEST_ASSERT_EQUAL_INT (
+      1, decoder.decode (input, zlink::zmp_header_size + 4, processed));
+    TEST_ASSERT_EQUAL_MEMORY ("next", decoder.msg ()->data (), 4);
+    *decoder.frame_reservation_slot () = NULL;
+}
+
+void test_large_payload_close_races_allocator_shutdown ()
+{
+    for (int iteration = 0; iteration != 32; ++iteration) {
+        zlink::shared_message_memory_allocator *allocator =
+          new zlink::shared_message_memory_allocator (128, 4);
+        zlink::msg_t survivor;
+        TEST_ASSERT_EQUAL_INT (0, allocator->allocate_message (&survivor, 65537));
+        std::atomic<bool> start (false);
+        int close_rc = -1;
+        std::thread closer ([&] {
+            while (!start.load (std::memory_order_acquire))
+                std::this_thread::yield ();
+            close_rc = survivor.close ();
+        });
+        start.store (true, std::memory_order_release);
+        delete allocator;
+        closer.join ();
+        TEST_ASSERT_EQUAL_INT (0, close_rc);
+    }
+}
+
+void test_payload_spare_does_not_shorten_read_content_storage ()
+{
+    zlink::shared_message_memory_allocator allocator (65536, 2);
+    allocator.allocate ();
+    allocator.deallocate ();
+
+    zlink::msg_t payload;
+    TEST_ASSERT_EQUAL_INT (0, allocator.allocate_message (&payload, 65536));
+    TEST_ASSERT_EQUAL_INT (0, payload.close ());
+
+    // The payload's one-record spare must not back a two-record read batch,
+    // even though both have exactly the same payload capacity.
+    unsigned char *const input = allocator.allocate ();
+    zlink::msg_t first;
+    zlink::msg_t second;
+    init_allocator_backed_message (allocator, input, &first);
+    init_allocator_backed_message (allocator, input + 64, &second);
+    TEST_ASSERT_EQUAL_INT (0, first.close ());
+    TEST_ASSERT_EQUAL_INT (0, second.close ());
+}
+
+void test_large_payload_allocation_overflow_returns_enomem ()
+{
+    const size_t maximum = std::numeric_limits<size_t>::max ();
+    zlink::shared_message_memory_allocator allocator (128, 4);
+    zlink::msg_t message;
+    TEST_ASSERT_EQUAL_INT (-1, allocator.allocate_message (&message, maximum));
+    TEST_ASSERT_EQUAL_INT (ENOMEM, errno);
 }
 
 void test_shared_message_allocator_cross_thread_recycle_is_synchronized ()
@@ -971,6 +1112,12 @@ int main (void)
     RUN_TEST (test_shared_message_allocator_size_checks_overflow);
     RUN_TEST (test_shared_message_allocator_reuses_one_lifecycle_owned_spare);
     RUN_TEST (test_shared_message_allocator_rejects_mismatched_spare_capacity);
+    RUN_TEST (test_large_payload_spare_preserves_live_input_and_cross_thread_close);
+    RUN_TEST (test_large_payload_outlives_decoder_allocator);
+    RUN_TEST (test_large_payload_admission_retry_preserves_transport_chunk);
+    RUN_TEST (test_large_payload_close_races_allocator_shutdown);
+    RUN_TEST (test_large_payload_allocation_overflow_returns_enomem);
+    RUN_TEST (test_payload_spare_does_not_shorten_read_content_storage);
     RUN_TEST (test_shared_message_allocator_cross_thread_recycle_is_synchronized);
     RUN_TEST (test_shared_message_allocator_state_outlives_decoder_owner);
     RUN_TEST (test_shared_message_allocator_shutdown_races_final_close);

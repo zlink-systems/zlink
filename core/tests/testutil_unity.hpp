@@ -587,12 +587,13 @@ void bind_loopback_ipv6 (void *socket_, char *my_endpoint_, size_t len_);
 // If you need to do this, use make_random_ipc_endpoint instead.
 void bind_loopback_ipc (void *socket_, char *my_endpoint_, size_t len_);
 
+// Read a versioned public context budget snapshot and assert API success.
+zlink_auto_hwm_budget_snapshot_t read_auto_hwm_budget_snapshot (void *ctx_);
+
 #if defined(ZLINK_HAVE_IPC)
 // utility function to create a random IPC endpoint, similar to what a ipc://*
 // wildcard binding does, but in a way it can be reused for multiple binds
 void make_random_ipc_endpoint (char *out_endpoint_, size_t len_);
 void make_random_ipc_endpoint (char *out_endpoint_);
-// Read a versioned public context budget snapshot and assert API success.
-zlink_auto_hwm_budget_snapshot_t read_auto_hwm_budget_snapshot (void *ctx_);
 
 #endif

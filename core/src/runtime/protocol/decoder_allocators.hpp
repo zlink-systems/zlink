@@ -21,7 +21,7 @@ struct shared_message_memory_allocator_state_t;
 // The buffer is allocated with a reference count of 1 to make sure that it is alive while
 // decoding messages. Otherwise, it is possible that e.g. the first message increases the count
 // from zero to one, gets passed to the user application, processed in the user thread and deleted
-// which would then deallocate the buffer. One normal read-size block may remain as an
+// which would then deallocate the buffer. One block may remain as an
 // allocator-owned spare so a cross-thread final close can return storage to the decoder.
 class shared_message_memory_allocator
 {
@@ -43,6 +43,10 @@ class shared_message_memory_allocator
     // This releases the current buffer to be bound to the lifetime of the messages
     // created on this buffer.
     unsigned char *allocate ();
+
+    // Allocate message storage without replacing the current transport input.
+    // Both kinds of storage share the same single spare and lifetime callback.
+    int allocate_message (msg_t *msg_, std::size_t size_);
 
     // Release the current buffer. Storage may remain in the allocator-owned
     // spare until it is reused or the allocator is destroyed.

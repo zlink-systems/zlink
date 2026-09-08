@@ -251,18 +251,18 @@ void test_xpub_recv_socket_owned_rid_and_retryable_buffer_contract ()
     const char *long_topic = "topic-too-long";
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                            zlink_set_subscription (xsub_a, long_topic));
-    char small[2] = {'q', 'q'};
+    char short_topic[2] = {'q', 'q'};
     size_t needed = 0;
     int subscribed = -1;
     const zlink_routing_id_t *failed_rid =
       reinterpret_cast<const zlink_routing_id_t *> (0x1);
     TEST_ASSERT_EQUAL_INT (
       ZLINK_RECV_BUFFER_TOO_SMALL,
-      recv_xpub_event_eventually (xpub_a, &failed_rid, &subscribed, small,
-                                  sizeof (small), &needed));
+      recv_xpub_event_eventually (xpub_a, &failed_rid, &subscribed, short_topic,
+                                  sizeof (short_topic), &needed));
     TEST_ASSERT_EQUAL_INT (ENOBUFS, zlink_errno ());
     TEST_ASSERT_EQUAL_UINT64 (strlen (long_topic), needed);
-    TEST_ASSERT_EQUAL_MEMORY ("qq", small, sizeof (small));
+    TEST_ASSERT_EQUAL_MEMORY ("qq", short_topic, sizeof (short_topic));
     TEST_ASSERT_EQUAL_INT (-1, subscribed);
     TEST_ASSERT_EQUAL_PTR (
       reinterpret_cast<const zlink_routing_id_t *> (0x1), failed_rid);

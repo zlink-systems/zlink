@@ -283,7 +283,8 @@ int zlink::zmp_decoder_t::size_ready (uint32_t msg_size_, unsigned char const *r
       in_allocator ? static_cast<size_t> (allocator_data + allocator_size - read_from_) : 0;
 
     if (unlikely (!in_allocator || msg_size_ > available)) {
-        rc = _in_progress.init_size (static_cast<size_t> (msg_size_));
+        rc = allocator.allocate_message (&_in_progress,
+                                          static_cast<size_t> (msg_size_));
     } else {
         rc = _in_progress.init (const_cast<unsigned char *> (read_from_),
                                 static_cast<size_t> (msg_size_),
