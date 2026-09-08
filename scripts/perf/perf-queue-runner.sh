@@ -15,6 +15,7 @@ repo="$(cd "$(dirname "$0")/../.." && pwd)"
 root="${ZLINK_PERF_QUEUE:-${repo}/.artifacts/perf-queue}"
 lock_file="${ZLINK_PERF_LOCK:-/tmp/zlink-perf.lock}"
 load_max="${ZLINK_PERF_LOAD_MAX:-5}"
+pattern='(/perf/build/.*(perf_multi|perf_single)|(perf_multi|perf_single)[^|]* --role |run_benchmarks(_multi)?\.sh .*--pattern|Zlink\.BindingBench[A-Za-z.]*\.dll)'
 mkdir -p "${root}/pending" "${root}/running" "${root}/done" "${root}/log"
 
 # runner 단일 인스턴스
@@ -61,9 +62,19 @@ while :; do
   exec 9>>"${lock_file}"
   # 블로킹 flock — 폴링(flock -n + sleep)은 블로킹 대기자들에게 항상 져서 runner가 굶는다.
   flock -w 3600 9 8>&- || echo "# warn: perf lock 3600s 초과, 그대로 진행" >> "${t}"
+  # 조용한 머신 판정: loadavg는 끝난 벤치의 잔상이 1~2분 남아 큐를 굶기므로, 실제 CPU 사용률(2초 창)과
+  # perf 프로세스 부재로 판단하고 loadavg는 상한(load_max×2)으로만 쓴다.
   waited=0
-  while awk -v m="${load_max}" '{exit !($1>m)}' /proc/loadavg && [ "${waited}" -lt 600 ]; do sleep 5; waited=$((waited+5)); done
-  echo "# started: $(date '+%H:%M:%S') (lock·load 대기 ${waited}s, load $(cut -d' ' -f1 /proc/loadavg))" >> "${t}"
+  while [ "${waited}" -lt 600 ]; do
+    busy="$(awk 'NR==1{print $2+$3+$4+$5+$6+$7+$8, $5}' /proc/stat)"; sleep 2
+    busy2="$(awk 'NR==1{print $2+$3+$4+$5+$6+$7+$8, $5}' /proc/stat)"
+    pct="$(awk -v a="${busy}" -v b="${busy2}" 'BEGIN{split(a,x," ");split(b,y," ");t=y[1]-x[1];i=y[2]-x[2]; if(t<=0){print 0}else{printf "%d",(t-i)*100/t}}')"
+    running="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v -e 'with-perf-lock' -e 'wait-for-idle-perf' -e 'perf-ticket' -e 'perf-queue-runner' || true)"
+    load1="$(cut -d' ' -f1 /proc/loadavg)"
+    if [ -z "${running}" ] && [ "${pct}" -le 15 ] && awk -v l="${load1}" -v m="${load_max}" 'BEGIN{exit !(l<=m*2)}'; then break; fi
+    waited=$((waited+2))
+  done
+  echo "# started: $(date '+%H:%M:%S') (lock·quiet 대기 ${waited}s, load $(cut -d' ' -f1 /proc/loadavg), cpu ${pct:-?}%)" >> "${t}"
   log "start ${name} (대기 ${waited}s)"
   board
   # 자식에게 runner lock(8)·perf lock(9)을 물려주지 않는다 — 자식이 남으면 lock도 남는다.
