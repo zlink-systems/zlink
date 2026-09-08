@@ -317,8 +317,14 @@ class router_router_client_bench_t
             // required.
             const auto deadline =
               std::chrono::steady_clock::now () + std::chrono::seconds (seconds);
+            // C echo client (perf_multi_client_helpers.hpp): the teardown window
+            // is max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS, 3 s per active second)
+            // because small messages can fill every per-client Core queue.
             const auto drain_deadline =
-              deadline + std::chrono::milliseconds (_settings.send_drain_timeout_ms);
+              deadline
+              + std::chrono::milliseconds (std::max (
+                _settings.send_drain_timeout_ms,
+                std::max (1, _settings.duration_seconds) * 3000));
 
             perf::application_poller_coordinator_t coordinator (
               _poller, _socket_states.size ());

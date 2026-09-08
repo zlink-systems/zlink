@@ -1304,7 +1304,7 @@ bindings/c/perf/run_benchmarks_multi.sh --pattern MULTI_STREAM --transports tcp 
 |------|------|--------|
 | `PERF_MULTI_SNDTIMEO_MS` | 송신 타임아웃(ms) | 200 |
 | `PERF_MULTI_RCVTIMEO_MS` | 수신 타임아웃(ms) | 200 |
-| `PERF_MULTI_SEND_DRAIN_TIMEOUT_MS` | active 종료 후 미완료 admission을 비우는 bounded drain 한도(ms). 이 drain은 새 제출을 하지 않으며 RESULT 집계를 늘리지 않는다 | 5000 |
+| `PERF_MULTI_SEND_DRAIN_TIMEOUT_MS` | active 종료 후 미완료 admission을 비우는 bounded drain 한도(ms). 이 drain은 새 제출을 하지 않으며 RESULT 집계를 늘리지 않는다. echo client(SENDSEND)의 teardown 창은 C 러너(`perf_multi_client_helpers.hpp`)와 같이 `max(이 값, active duration × 3000)`이다 — 작은 메시지가 per-client Core 큐를 모두 채울 수 있어 backlog를 workload 상한으로 취급하지 않기 위한 규칙이며, 7개 binding echo client가 같은 창을 쓴다(2026-09-08, D-BP34) | 5000 |
 | `PERF_MULTI_SNDBUF` | debug 전용 송신 OS buffer override. allow flag가 켜진 경우에만 사용 | 비활성 |
 | `PERF_MULTI_RCVBUF` | debug 전용 수신 OS buffer override. allow flag가 켜진 경우에만 사용 | 비활성 |
 | `PERF_MULTI_ALLOW_MANUAL_SOCKET_OVERRIDES` | 수동 HWM/SNDBUF/RCVBUF override 허용 플래그 | 0 |

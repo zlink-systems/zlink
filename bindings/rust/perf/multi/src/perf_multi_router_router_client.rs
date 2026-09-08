@@ -86,7 +86,12 @@ fn main() {
 
     let mut latency = common::LatencyStats::new();
     let deadline = Instant::now() + Duration::from_secs(settings.duration_seconds);
-    let drain_deadline = deadline + common::resolve_multi_send_drain_timeout();
+    // C echo client (perf_multi_client_helpers.hpp): teardown window is
+    // max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS, 3 s per active second) because
+    // small messages can fill every per-client Core queue.
+    let drain_deadline = deadline
+        + common::resolve_multi_send_drain_timeout()
+            .max(Duration::from_secs(settings.duration_seconds.max(1) * 3));
     let mut tasks = common::ConcurrentTasks::new(sockets.len());
     let mut seqs = vec![1u64; sockets.len()];
     while Instant::now() < deadline || (tasks.any_pending() && Instant::now() < drain_deadline) {

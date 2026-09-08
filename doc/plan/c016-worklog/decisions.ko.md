@@ -4407,3 +4407,28 @@ flock 경쟁자 여럿이 프로세스 패턴으로 "남의 perf"를 판별하�
 없다. 이전 스크립트는 호환용이고 runner가 같은 flock을 쥐어 겹침만 막는다. codex go-oneway-drain
 job은 브리프 지시 없이도 스크립트를 읽고 티켓 4장을 냈다.
 
+### D-BP34 (2026-09-08) echo client teardown 창은 C와 같이 `max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS, duration×3 s)`
+
+**결정:** SENDSEND echo client의 teardown drain 창을 7개 binding 모두 C 러너
+(`perf_multi_client_helpers.hpp:1366-1372`)와 같게 `max(env 5000 ms, active duration × 3000 ms)`로 맞춘다.
+policy §12.3의 env 행에 이 규칙을 명문화했다. 측정 조건 완화(D-BP15)가 아니라 **C 기준과의 정합**이다 —
+active 구간·throughput 집계는 그대로이고 teardown에서 admitted echo를 받는 시간만 C와 같아진다.
+
+**근거:** .NET client echo drain(codex, 감독자 검토 채택: `PerfMultiEchoReplyDrain` — active gate 없음,
+deadline 안에서만 대기, deadline 후 echo는 집계 제외, 오류 삼킴 없음)을 tls RR SS 65536 B 5-run으로 회귀
+검증하자 5/5 실패(echo 2,046건 미수신, admissions pending). 원인은 drain 논리가 아니라 창 길이: C는 duration
+5 s에서 15 s, binding은 5 s. C 주석대로 "작은 메시지가 per-client Core 큐를 모두 채울 수 있어 backlog를
+workload 상한으로 취급하지 않기 위해" 창을 duration에 비례시킨다. 7개 binding 전부 flat 5 s였다
+(C++ `_settings.send_drain_timeout_ms`, Rust `resolve_multi_send_drain_timeout`, Python
+`resolve_multi_send_drain_timeout_ms`, Node `PERF_MULTI_SEND_DRAIN_TIMEOUT_MS ?? 5000`, Java
+`sendDrainTimeout()`, Go `multiSendDrainTimeout()`, .NET `ResolveMultiSendDrainTimeoutMs`).
+
+**적용:** C++·Rust·Python·.NET은 이 커밋에서 정합(각각 tcp SS 65536 B smoke `complete`). Node·Java·Go는
+진행 중인 sub-agent 작업이 같은 파일을 쥐고 있어 그 결과를 받은 뒤 같은 규칙을 적용한다. .NET tls RR SS
+65536 B 5-run 재검증(`netdrain2`)은 큐에 있다 — tls는 §10.3.2로 Core 대기 항목이므로 결과는 기록만 한다.
+
+**교차 발견:** Node client drain 검증(codex)에서 DR SS 4096 B가 echo **106,850건** 미수신으로 실패 — client당
+~1,070건이 admitted 상태로 쌓인다. C는 같은 조건에서 HWM(1 MiB/4096 B = 256건)에서 backpressure를 받는다.
+Node의 초 단위 latency(D-BP29 계열 교차 현상)는 이 backlog 깊이와 일치한다 → Node의 auto-HWM 적용값(byte 단위
+여부)과 admission 경로를 다음 조사 대상으로 잡는다.
+

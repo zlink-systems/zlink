@@ -139,8 +139,16 @@ internal static class PerfMultiRouterRouterClient
         long benchStartTicks = Stopwatch.GetTimestamp();
         long benchDeadlineTicks = benchStartTicks
             + (long)Math.Max(1, durationSeconds) * Stopwatch.Frequency;
+        // C model (perf_multi_client_helpers.hpp drain_timeout_ms): the
+        // teardown window is max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS, 3 s per
+        // active second) because small-message runs can fill every per-client
+        // Core queue; the backlog is not a workload cap.
+        long drainDeadlineTicks = PerfMultiEchoReplyDrain.DeadlineAfter(
+            benchDeadlineTicks,
+            Math.Max(sendDrainTimeoutMs, Math.Max(1, durationSeconds) * 3000));
         int roundStart = 0;
         var admissionSignal = new PerfMultiAdmissionSignal();
+        var replies = new PerfMultiEchoReplyDrain();
 
         while (Stopwatch.GetTimestamp() < benchDeadlineTicks)
         {
@@ -163,7 +171,7 @@ internal static class PerfMultiRouterRouterClient
                 ulong currentSeq = unchecked((ulong)++seq);
                 StampMetricHeader(slot.Payload.AsSpan(), runId,
                     PerfPhase.Active, msgSize, currentSeq, EpochNs());
-                StartAdmission(slot, admissionSignal);
+                StartAdmission(slot, admissionSignal, replies);
                 submittedAny = true;
             }
             if (slots.Length > 0)
@@ -189,10 +197,25 @@ internal static class PerfMultiRouterRouterClient
                     ReadySocketIndexAt(pollManager, i),
                     ReadySocketMaskAt(pollManager, i), msgSize,
                     runId, PerfPhase.Active, metrics,
-                    activeDeadlineTicks: benchDeadlineTicks);
+                    activeDeadlineTicks: benchDeadlineTicks, replies);
         }
-        await DrainPendingAdmissions(slots, sendDrainTimeoutMs)
-            .ConfigureAwait(false);
+
+        // Keep receiving every admitted echo inside the configured drain
+        // deadline while the binding runtime completes async admissions.
+        await replies.WaitAsync(drainDeadlineTicks, admissionSignal,
+            () => CompletePendingAdmissions(slots),
+            () => HasPendingAdmissions(slots),
+            timeoutMs => PollSocketEvents(pollManager, sockets, eventMasks,
+                timeoutMs),
+            readyCount =>
+            {
+                for (int i = 0; i < readyCount; i++)
+                    HandleClientEvent(pollManager, slots,
+                        ReadySocketIndexAt(pollManager, i),
+                        ReadySocketMaskAt(pollManager, i), msgSize,
+                        runId, PerfPhase.Active, metrics,
+                        benchDeadlineTicks, replies);
+            }).ConfigureAwait(false);
 
         long benchEndTicks = Stopwatch.GetTimestamp();
         double elapsedSeconds = (benchEndTicks - benchStartTicks)
@@ -213,10 +236,12 @@ internal static class PerfMultiRouterRouterClient
     }
 
     private static void StartAdmission(RouterRouterClientSlot slot,
-        PerfMultiAdmissionSignal admissionSignal)
+        PerfMultiAdmissionSignal admissionSignal,
+        PerfMultiEchoReplyDrain replies)
     {
         Message message = Message.Allocate(slot.Payload.Length);
         slot.Payload.AsSpan().CopyTo(message.AsSpan());
+        replies.Submitted();
         try
         {
             Task admission = PerfSocketIo.SendMeasurementAsync(slot.Socket,
@@ -228,7 +253,7 @@ internal static class PerfMultiRouterRouterClient
             }
 
             Task tracked = AwaitRouterAdmissionAndDisposeAsync(admission,
-                message);
+                message, replies);
             if (!tracked.IsCompletedSuccessfully)
             {
                 slot.PendingAdmission = tracked;
@@ -237,10 +262,12 @@ internal static class PerfMultiRouterRouterClient
         }
         catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))
         {
+            replies.AdmissionRejected();
             message.Dispose();
         }
         catch
         {
+            replies.AdmissionRejected();
             message.Dispose();
             throw;
         }
@@ -268,26 +295,21 @@ internal static class PerfMultiRouterRouterClient
         return false;
     }
 
-    private static async Task DrainPendingAdmissions(
-        RouterRouterClientSlot[] slots, int timeoutMs)
+    private static void CompletePendingAdmissions(
+        RouterRouterClientSlot[] slots)
     {
-        var pending = new List<Task>(slots.Length);
         for (int i = 0; i < slots.Length; i++)
         {
             Task? admission = slots[i].PendingAdmission;
-            if (admission != null)
-                pending.Add(admission);
-        }
-
-        await PerfMultiAdmissionDrain.WaitAsync(pending, timeoutMs)
-            .ConfigureAwait(false);
-
-        for (int i = 0; i < slots.Length; i++)
+            if (admission == null || !admission.IsCompleted)
+                continue;
             slots[i].PendingAdmission = null;
+            admission.GetAwaiter().GetResult();
+        }
     }
 
     private static async Task AwaitRouterAdmissionAndDisposeAsync(
-        Task admission, Message message)
+        Task admission, Message message, PerfMultiEchoReplyDrain replies)
     {
         try
         {
@@ -295,6 +317,12 @@ internal static class PerfMultiRouterRouterClient
         }
         catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))
         {
+            replies.AdmissionRejected();
+        }
+        catch
+        {
+            replies.AdmissionRejected();
+            throw;
         }
         finally
         {
@@ -312,12 +340,11 @@ internal static class PerfMultiRouterRouterClient
         PollManager pollManager,
         RouterRouterClientSlot[] slots,
         int slotIndex, PollEventFlags readyMask, int msgSize, uint runId,
-        PerfPhase phase, RouterRouterMetrics metrics, long activeDeadlineTicks)
+        PerfPhase phase, RouterRouterMetrics metrics, long activeDeadlineTicks,
+        PerfMultiEchoReplyDrain replies)
     {
         _ = pollManager;
         RouterRouterClientSlot slot = slots[slotIndex];
-        if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
-            return;
 
         if ((readyMask & PollEventFlags.PollIn) == 0)
             return;
@@ -326,18 +353,13 @@ internal static class PerfMultiRouterRouterClient
         Received received = slot.ReusableReceived;
         while (true)
         {
-            if (Stopwatch.GetTimestamp() >= activeDeadlineTicks)
-                break;
             if (!routerSock.Recv(received, RecvFlags.DontWait))
                 break;
 
             long recvTicks = Stopwatch.GetTimestamp();
-            if (recvTicks >= activeDeadlineTicks)
-                break;
-
             if (phase == PerfPhase.Active)
             {
-                // The active deadline checks immediately around Recv keep
+                // Every valid echo retires teardown work, while recvTicks keeps
                 // post-window replies out of both throughput and latency.
                 if (PerfSocketIo.TryMeasurementPayload(received.Parts,
                         out Message payloadPart)
@@ -350,6 +372,9 @@ internal static class PerfMultiRouterRouterClient
                     && header.MsgSize == (uint)msgSize
                     && header.Phase == (uint)phase)
                 {
+                    replies.Received();
+                    if (recvTicks >= activeDeadlineTicks)
+                        continue;
                     metrics.MeasureCount++;
                     if (metrics.LatencySamples != null && header.SentTsNs > 0)
                     {

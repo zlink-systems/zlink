@@ -144,10 +144,18 @@ async def main(argv=None):
                     # PERF_MULTI_SEND_DRAIN_TIMEOUT_MS bounds the post-deadline
                     # admission drain; it starts no new send and adds nothing to
                     # the RESULT aggregate.
+                    # C echo client (perf_multi_client_helpers.hpp): the
+                    # teardown window is max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS,
+                    # 3 s per active second) because small messages can fill
+                    # every per-client Core queue.
                     await asyncio.wait_for(
                         asyncio.gather(senders, recv_loop()),
                         timeout=args.duration
-                        + resolve_multi_send_drain_timeout_ms() / 1000.0,
+                        + max(
+                            resolve_multi_send_drain_timeout_ms(),
+                            max(1, int(args.duration)) * 3000,
+                        )
+                        / 1000.0,
                     )
                     drain_replies()
                 if received == 0:

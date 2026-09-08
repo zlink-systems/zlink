@@ -62,6 +62,16 @@ internal sealed class PerfMultiAdmissionSignal
         return true;
     }
 
+    internal static int RemainingTimeoutMilliseconds(long deadlineTicks)
+    {
+        long remainingTicks = deadlineTicks - Stopwatch.GetTimestamp();
+        if (remainingTicks <= 0)
+            return 0;
+        long remainingMs = (long)Math.Ceiling(
+            remainingTicks * 1000.0 / Stopwatch.Frequency);
+        return remainingMs > int.MaxValue ? int.MaxValue : (int)remainingMs;
+    }
+
     private void Signal()
     {
         TaskCompletionSource availability;
@@ -74,6 +84,97 @@ internal sealed class PerfMultiAdmissionSignal
     {
         return new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+}
+
+/// <summary>
+///     Tracks submitted echo records until their matching replies are received.
+///     The count is observed only while draining after the active window; it
+///     never controls whether the active loop may submit another record.
+/// </summary>
+internal sealed class PerfMultiEchoReplyDrain
+{
+    private long _pending;
+
+    internal long Pending => Volatile.Read(ref _pending);
+
+    // Count before starting admission because receive dispatch can precede the
+    // scheduled continuation which observes a successful async admission.
+    internal void Submitted()
+    {
+        Interlocked.Increment(ref _pending);
+    }
+
+    internal void AdmissionRejected()
+    {
+        FinishOne("echo admission rejection without a matching submission");
+    }
+
+    internal void Received()
+    {
+        FinishOne("echo reply without a matching submission");
+    }
+
+    internal async Task WaitAsync(long deadlineTicks,
+        PerfMultiAdmissionSignal admissionSignal,
+        Action completeAdmissions, Func<bool> hasPendingAdmissions,
+        Func<int, int> poll, Action<int> dispatch)
+    {
+        while (true)
+        {
+            completeAdmissions();
+            bool admissionsPending = hasPendingAdmissions();
+            if (!admissionsPending && Pending == 0)
+                return;
+
+            int timeoutMs =
+                PerfMultiAdmissionSignal.RemainingTimeoutMilliseconds(
+                    deadlineTicks);
+            if (timeoutMs <= 0)
+                throw DrainTimeout(admissionsPending);
+
+            // If every echo has already arrived, only an admission continuation
+            // remains. Otherwise keep receiving replies while each socket's
+            // binding runtime continues its async admission independently.
+            if (Pending == 0)
+            {
+                if (!await admissionSignal.WaitAsync(deadlineTicks)
+                        .ConfigureAwait(false))
+                    throw DrainTimeout(hasPendingAdmissions());
+                continue;
+            }
+
+            int readyCount = poll(timeoutMs);
+            if (readyCount > 0)
+                dispatch(readyCount);
+        }
+    }
+
+    internal static long DeadlineAfter(long activeDeadlineTicks, int timeoutMs)
+    {
+        long milliseconds = Math.Max(1, timeoutMs);
+        long deltaTicks = (milliseconds * Stopwatch.Frequency + 999) / 1000;
+        return activeDeadlineTicks + Math.Max(1, deltaTicks);
+    }
+
+    private void FinishOne(string errorMessage)
+    {
+        while (true)
+        {
+            long pending = Volatile.Read(ref _pending);
+            if (pending == 0)
+                throw new InvalidOperationException(errorMessage);
+            if (Interlocked.CompareExchange(ref _pending, pending - 1,
+                    pending) == pending)
+                return;
+        }
+    }
+
+    private TimeoutException DrainTimeout(bool admissionsPending)
+    {
+        return new TimeoutException(
+            $"pending send admissions or admitted echoes did not drain "
+            + $"(echoes={Pending}, admissions={admissionsPending})");
     }
 }
 
