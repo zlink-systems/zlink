@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 #include "testutil_unity.hpp"
 
+#include <chrono>
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -243,7 +245,13 @@ static void internal_manage_test_sockets (void *socket_, bool add_)
 
 void setup_test_context ()
 {
+    const std::chrono::steady_clock::time_point t0 =
+      std::chrono::steady_clock::now ();
     internal_manage_test_context (true, false);
+    printf ("DIAG-MAC1 setup_test_context %lld ms\n",
+            (long long) std::chrono::duration_cast<std::chrono::milliseconds> (
+              std::chrono::steady_clock::now () - t0)
+              .count ());
 }
 
 void *get_test_context ()
@@ -254,8 +262,17 @@ void *get_test_context ()
 void teardown_test_context ()
 {
     if (get_test_context ()) {
+        const std::chrono::steady_clock::time_point t0 =
+          std::chrono::steady_clock::now ();
         internal_manage_test_sockets (NULL, false);
+        const std::chrono::steady_clock::time_point t1 =
+          std::chrono::steady_clock::now ();
         internal_manage_test_context (false, true);
+        const std::chrono::steady_clock::time_point t2 =
+          std::chrono::steady_clock::now ();
+        printf ("DIAG-MAC1 teardown_test_context sockets=%lld ms ctx_term=%lld ms\n",
+                (long long) std::chrono::duration_cast<std::chrono::milliseconds> (t1 - t0).count (),
+                (long long) std::chrono::duration_cast<std::chrono::milliseconds> (t2 - t1).count ());
     }
 }
 

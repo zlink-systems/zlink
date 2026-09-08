@@ -324,6 +324,8 @@ bool wait_for_raw_close (fd_t fd_, int timeout_ms_ = 3000)
     int last_rc = -2;
     int last_errno = 0;
     int bytes_drained = 0;
+    unsigned char drained[128];
+    memset (drained, 0, sizeof (drained));
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now ()
       + std::chrono::milliseconds (timeout_ms_);
@@ -343,14 +345,20 @@ bool wait_for_raw_close (fd_t fd_, int timeout_ms_ = 3000)
             return true;
         last_rc = static_cast<int> (rc);
         last_errno = errno;
-        if (rc > 0)
+        if (rc > 0) {
+            if (bytes_drained < 128)
+                drained[bytes_drained] = byte;
             ++bytes_drained;
+        }
 #endif
         msleep (10);
     }
     printf ("DIAG-MAC1 wait_for_raw_close timed out: last_rc=%d errno=%d (%s) "
-            "bytes_drained=%d\n",
+            "bytes_drained=%d hex=",
             last_rc, last_errno, strerror (last_errno), bytes_drained);
+    for (int i = 0; i != bytes_drained && i != 128; ++i)
+        printf ("%02x", drained[i]);
+    printf ("\n");
     return false;
 }
 
