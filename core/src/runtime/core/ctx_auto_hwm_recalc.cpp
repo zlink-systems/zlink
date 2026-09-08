@@ -116,6 +116,125 @@ void zlink::ctx_t::schedule_auto_hwm_recalculate ()
         (void) auto_hwm_recalculate_now ();
 }
 
+void zlink::ctx_t::schedule_auto_hwm_convergence ()
+{
+    const uint64_t now_ms = zlink::clock_t ().now_ms ();
+    int debounce_ms = 0;
+    {
+        scoped_lock_t locker (_opt_sync);
+        debounce_ms = _auto_hwm.recalc_debounce_ms ();
+    }
+
+    bool wake_needed = false;
+    {
+        scoped_lock_t state_lock (_auto_hwm_state_sync);
+        if (_auto_hwm_recalc_stopped)
+            return;
+        wake_needed = _auto_hwm.arm_debounce (now_ms, debounce_ms);
+    }
+
+    //  A context that asked for no debounce gets the convergence at once.
+    if (debounce_ms <= 0) {
+        (void) auto_hwm_recalculate_now ();
+        return;
+    }
+
+    //  Only the arm that starts a new wait touches the runtime timer. A later
+    //  attach in the same burst joins the wait that is already running and
+    //  leaves its deadline alone, so the single pass that wakes on that first
+    //  deadline serves every joiner. Without this an accept burst would
+    //  reschedule the timer once per connection.
+    if (!wake_needed)
+        return;
+
+    ensure_auto_hwm_recalc_task_started ();
+    scoped_lock_t state_lock (_auto_hwm_state_sync);
+    if (!_auto_hwm_recalc_stopped && _auto_hwm.recalc_task_id () != 0) {
+        control_runtime_t *runtime = _runtime_resources.control_runtime ();
+        if (runtime)
+            (void) runtime->schedule_task_after (
+              _auto_hwm.recalc_task_id (),
+              static_cast<uint32_t> (debounce_ms));
+    }
+}
+
+bool zlink::ctx_t::auto_hwm_extend_plan_for_attach (
+  const physical_queue_endpoint_policy_t *policies_, size_t policy_count_,
+  socket_base_t *socket_, pipe_t *pipe_)
+{
+    if (!policies_ || policy_count_ == 0 || !socket_ || !pipe_)
+        return false;
+
+    //  Held across the extension, the pipe publication and the record, so a
+    //  concurrent attach cannot interleave its own publication between this
+    //  one and its budget generation. This is the same mutex and the same
+    //  order the full pass uses.
+    scoped_lock_t recalc_lock (_auto_hwm_recalc_sync);
+
+    auto_hwm_context_plan_t plan;
+    uint64_t recalc_generation = 0;
+    {
+        scoped_lock_t state_lock (_auto_hwm_state_sync);
+        if (_auto_hwm_recalc_stopped)
+            return false;
+        recalc_generation = _auto_hwm.pending_generation ();
+        //  Any input or topology change schedules a generation of its own.
+        //  While one is owed, only the full pass may record a plan — that is
+        //  also what keeps a detached direction out of this path, because a
+        //  terminating pipe schedules before it retires its registry
+        //  endpoints.
+        if (recalc_generation != _auto_hwm.last_applied_generation ())
+            return false;
+        plan = _auto_hwm.applied_plan ();
+    }
+
+    auto_hwm_budget_input_t input;
+    {
+        scoped_lock_t locker (_opt_sync);
+        input = _auto_hwm.budget_input ();
+    }
+    auto_hwm_context_plan_t fresh;
+    auto_hwm_context_plan_make (input, &fresh);
+    //  The recorded plan must have been built from exactly the current input;
+    //  otherwise its queue shares are no longer the ones to extend.
+    if (!fresh.enabled || !plan.enabled || fresh.profile != plan.profile
+        || fresh.resolved_memory_limit_bytes
+             != plan.resolved_memory_limit_bytes
+        || fresh.configured_core_budget_bytes
+             != plan.configured_core_budget_bytes
+        || fresh.configured_memory_limit_bytes
+             != plan.configured_memory_limit_bytes
+        || fresh.runtime_memory_limit_bytes != plan.runtime_memory_limit_bytes)
+        return false;
+
+    //  The extension itself allocates nothing — the caller passes a fixed
+    //  array and the registry works in place. The guard is a backstop for a
+    //  throwing callee: the caller then runs the full pass, which rebuilds
+    //  every aggregate from the registry and so absorbs a partial extension.
+    bool extended = false;
+    try {
+        extended = _physical_queue_registry.extend_application_plan (
+          &plan, policies_, policy_count_);
+    } catch (const std::bad_alloc &) {
+        errno = ENOMEM;
+        return false;
+    } catch (...) {
+        errno = EFAULT;
+        return false;
+    }
+    if (!extended)
+        return false;
+
+    //  Publish the admission target to the attaching pipe before the plan and
+    //  its budget generation become observable, so no snapshot can report a
+    //  generation whose targets are not in force yet.
+    socket_->apply_extended_auto_hwm_plan (plan, pipe_);
+
+    scoped_lock_t state_lock (_auto_hwm_state_sync);
+    _auto_hwm.record_applied_plan (plan, recalc_generation);
+    return true;
+}
+
 int zlink::ctx_t::auto_hwm_recalculate_now ()
 {
     scoped_lock_t recalc_lock (_auto_hwm_recalc_sync);
@@ -185,6 +304,10 @@ int zlink::ctx_t::auto_hwm_recalculate_now ()
             scoped_lock_t state_lock (_auto_hwm_state_sync);
             _auto_hwm.record_applied_plan (context_plan,
                                            recalc_generation);
+            //  This pass is what every armed deadline was waiting for, so it
+            //  is the one place that releases the wait. An extension records
+            //  a plan without doing that work and leaves the wait running.
+            _auto_hwm.clear_debounce ();
         }
     } catch (const std::bad_alloc &) {
         errno = ENOMEM;
@@ -204,15 +327,36 @@ int zlink::ctx_t::auto_hwm_recalculate_now ()
 void zlink::ctx_t::auto_hwm_recalc_task ()
 {
     bool should_run = false;
+    uint64_t remaining_ms = 0;
+    uint64_t task_id = 0;
     {
         scoped_lock_t state_lock (_auto_hwm_state_sync);
-        if (!_auto_hwm_recalc_stopped
-            && _auto_hwm.recalc_due (zlink::clock_t ().now_ms ()))
-            should_run = true;
+        if (!_auto_hwm_recalc_stopped) {
+            const uint64_t now_ms = zlink::clock_t ().now_ms ();
+            if (_auto_hwm.recalc_due (now_ms))
+                should_run = true;
+            else {
+                //  The deadline moved out while this wake-up was in flight,
+                //  which is what a debounce does. Wait for the new one.
+                remaining_ms = _auto_hwm.debounce_remaining_ms (now_ms);
+                task_id = _auto_hwm.recalc_task_id ();
+            }
+        }
     }
 
-    if (should_run)
+    if (should_run) {
         (void) auto_hwm_recalculate_now ();
+        return;
+    }
+
+    if (remaining_ms == 0 || task_id == 0)
+        return;
+    control_runtime_t *runtime = _runtime_resources.control_runtime ();
+    if (runtime)
+        (void) runtime->schedule_task_after (
+          task_id, remaining_ms > UINT_MAX
+                     ? UINT_MAX
+                     : static_cast<uint32_t> (remaining_ms));
 }
 
 zlink::auto_hwm_budget_input_t zlink::ctx_t::auto_hwm_budget_input () const

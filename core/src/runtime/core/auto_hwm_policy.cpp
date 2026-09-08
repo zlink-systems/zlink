@@ -168,6 +168,9 @@ zlink::auto_hwm_context_plan_t::auto_hwm_context_plan_t () :
     active_send_queue_count (0),
     active_receive_queue_count (0),
     unlimited_manual_queue_count (0),
+    application_auto_role (auto_hwm_role_none),
+    application_auto_direction_count (0),
+    max_planned_queue_id (0),
     budget_insufficient (false),
     aggregate_hwm_valid (true),
     aggregate_overflow (false)
@@ -354,6 +357,9 @@ void zlink::auto_hwm_context_finalize (auto_hwm_context_plan_t *context_,
     context_->active_send_queue_count = 0;
     context_->active_receive_queue_count = 0;
     context_->unlimited_manual_queue_count = 0;
+    context_->application_auto_role = auto_hwm_role_none;
+    context_->application_auto_direction_count = 0;
+    context_->max_planned_queue_id = 0;
     context_->budget_insufficient = false;
     context_->aggregate_hwm_valid = true;
     context_->aggregate_overflow = false;

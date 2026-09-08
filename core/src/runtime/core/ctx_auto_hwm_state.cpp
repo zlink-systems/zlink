@@ -249,9 +249,50 @@ void zlink::ctx_auto_hwm_state_t::schedule (uint64_t now_ms_, int debounce_ms_)
     }
 }
 
+bool zlink::ctx_auto_hwm_state_t::arm_debounce (uint64_t now_ms_,
+                                                int debounce_ms_)
+{
+    //  A wait that is already running owns the deadline and will run the pass
+    //  every joiner needs, so joining it costs nothing and wakes no timer.
+    if (_recalc_deadline_ms != 0)
+        return false;
+    _recalc_deadline_ms =
+      debounce_ms_ <= 0 ? now_ms_
+                        : now_ms_ + static_cast<uint64_t> (debounce_ms_);
+    return true;
+}
+
+void zlink::ctx_auto_hwm_state_t::clear_debounce ()
+{
+    //  A request made while the pass was running has not been served yet and
+    //  keeps the wait it scheduled for itself.
+    if (_recalc_pending)
+        return;
+    _recalc_deadline_ms = 0;
+}
+
+uint64_t zlink::ctx_auto_hwm_state_t::debounce_remaining_ms (
+  uint64_t now_ms_) const
+{
+    if (_recalc_deadline_ms == 0 || now_ms_ >= _recalc_deadline_ms)
+        return 0;
+    return _recalc_deadline_ms - now_ms_;
+}
+
 uint64_t zlink::ctx_auto_hwm_state_t::pending_generation () const
 {
     return _pending_generation;
+}
+
+uint64_t zlink::ctx_auto_hwm_state_t::last_applied_generation () const
+{
+    return _last_applied_generation;
+}
+
+const zlink::auto_hwm_context_plan_t &
+zlink::ctx_auto_hwm_state_t::applied_plan () const
+{
+    return _applied_plan;
 }
 
 void zlink::ctx_auto_hwm_state_t::record_applied_plan (
@@ -277,10 +318,11 @@ void zlink::ctx_auto_hwm_state_t::record_applied_plan (
     // being built outside the context Auto-HWM state lock. Publishing the
     // completed snapshot is still useful, but it must not consume that newer
     // request.
-    if (applied_generation_ == _pending_generation) {
+    //  Only the request bookkeeping belongs here. Releasing the debounce is
+    //  the full pass's own step (clear_debounce), because an extension
+    //  records a plan without doing the work the deadline waits for.
+    if (applied_generation_ == _pending_generation)
         _recalc_pending = false;
-        _recalc_deadline_ms = 0;
-    }
     if (applied_generation_ > _last_applied_generation)
         _last_applied_generation = applied_generation_;
     ++_budget_generation;
@@ -288,8 +330,13 @@ void zlink::ctx_auto_hwm_state_t::record_applied_plan (
 
 bool zlink::ctx_auto_hwm_state_t::recalc_due (uint64_t now_ms_) const
 {
-    return _recalc_pending && now_ms_ >= _recalc_deadline_ms
-           && _pending_generation != _last_applied_generation;
+    //  An armed deadline is the whole obligation: an option change, a
+    //  topology change and an attach extension all express "a full pass is
+    //  owed" by arming it, and the pass releases it exactly once. Nothing is
+    //  inferred from the plan's own numbers, which cannot tell a target this
+    //  planner has not published yet from one a draining queue has not
+    //  reached (06-auto-hwm.ko.md §4, deferred shrink).
+    return _recalc_deadline_ms != 0 && now_ms_ >= _recalc_deadline_ms;
 }
 
 void zlink::ctx_auto_hwm_state_t::copy_budget_snapshot (

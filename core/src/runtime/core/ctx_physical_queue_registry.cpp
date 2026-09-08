@@ -224,6 +224,81 @@ uint64_t add_snapshot_value (uint64_t current_, uint64_t amount_,
     }
     return current_ + amount_;
 }
+
+//  A pipe contributes at most its two directions; a caller may not hand the
+//  extension more than one pipe at a time.
+const size_t extension_capacity = 2;
+
+uint64_t multiply_snapshot_value (uint64_t left_, uint64_t right_,
+                                  bool *overflow_)
+{
+    if (left_ != 0 && right_ > UINT64_MAX / left_) {
+        *overflow_ = true;
+        return UINT64_MAX;
+    }
+    return left_ * right_;
+}
+
+//  One direction's planning input, merged from the reader and writer endpoint
+//  policies the registry stores for it. Both the full replan and the attach
+//  fast path resolve a direction through this single rule.
+struct resolved_direction_t
+{
+    resolved_direction_t () :
+        role (auto_hwm_role_none), planning_enabled (false),
+        writer_seen (false), reader_seen (false), auto_seen (false),
+        finite_manual_seen (false), finite_manual_hwm (UINT64_MAX)
+    {
+    }
+    auto_hwm_role_t role;
+    bool planning_enabled;
+    bool writer_seen;
+    bool reader_seen;
+    bool auto_seen;
+    bool finite_manual_seen;
+    uint64_t finite_manual_hwm;
+};
+
+void resolve_direction (zlink_auto_hwm_profile_t profile_,
+                        const physical_queue_record_t &record_,
+                        resolved_direction_t *out_)
+{
+    const stored_endpoint_policy_t endpoint_policies[2] = {
+      record_.writer_policy, record_.reader_policy};
+    for (size_t endpoint_index = 0; endpoint_index != 2; ++endpoint_index) {
+        const stored_endpoint_policy_t &policy =
+          endpoint_policies[endpoint_index];
+        if (!policy.present)
+            continue;
+        out_->planning_enabled =
+          out_->planning_enabled || policy.planning_enabled;
+        out_->writer_seen = out_->writer_seen || endpoint_index == 0;
+        out_->reader_seen = out_->reader_seen || endpoint_index == 1;
+
+        if (out_->role == auto_hwm_role_none) {
+            out_->role = policy.role;
+        } else if (policy.role != auto_hwm_role_none) {
+            const uint64_t current_max =
+              auto_hwm_profile_maximum_bytes (profile_, out_->role);
+            const uint64_t candidate_max =
+              auto_hwm_profile_maximum_bytes (profile_, policy.role);
+            if (candidate_max < current_max
+                || (candidate_max == current_max
+                    && policy.role < out_->role))
+                out_->role = policy.role;
+        }
+
+        const bool effective_manual =
+          policy.manual || !policy.planning_enabled;
+        if (!effective_manual) {
+            out_->auto_seen = true;
+        } else if (policy.hwm > 0) {
+            out_->finite_manual_seen = true;
+            out_->finite_manual_hwm =
+              std::min (out_->finite_manual_hwm, policy.hwm);
+        }
+    }
+}
 }
 
 zlink::decoder_frame_reservation_request_t::decoder_frame_reservation_request_t () :
@@ -755,20 +830,9 @@ void zlink::ctx_physical_queue_registry_t::plan_application_queues (
 
     struct resolved_input_t
     {
-        resolved_input_t () :
-            queue (), role (auto_hwm_role_none), planning_enabled (false),
-            writer_seen (false), reader_seen (false), auto_seen (false),
-            finite_manual_seen (false), finite_manual_hwm (UINT64_MAX)
-        {
-        }
+        resolved_input_t () : queue (), resolved () {}
         physical_queue_handle_t queue;
-        auto_hwm_role_t role;
-        bool planning_enabled;
-        bool writer_seen;
-        bool reader_seen;
-        bool auto_seen;
-        bool finite_manual_seen;
-        uint64_t finite_manual_hwm;
+        resolved_direction_t resolved;
     };
 
     std::map<uint64_t, resolved_input_t> inputs;
@@ -802,44 +866,9 @@ void zlink::ctx_physical_queue_registry_t::plan_application_queues (
                 || queue->lane.load (std::memory_order_acquire)
                      != physical_queue_lane_application)
                 continue;
-            const stored_endpoint_policy_t endpoint_policies[2] = {
-              queue->writer_policy, queue->reader_policy};
             resolved_input_t &input = inputs[it->first];
             input.queue = queue;
-            for (size_t endpoint_index = 0; endpoint_index != 2;
-                 ++endpoint_index) {
-                const stored_endpoint_policy_t &policy =
-                  endpoint_policies[endpoint_index];
-                if (!policy.present)
-                    continue;
-                input.planning_enabled =
-                  input.planning_enabled || policy.planning_enabled;
-                input.writer_seen = input.writer_seen || endpoint_index == 0;
-                input.reader_seen = input.reader_seen || endpoint_index == 1;
-
-                if (input.role == auto_hwm_role_none) {
-                    input.role = policy.role;
-                } else if (policy.role != auto_hwm_role_none) {
-                const uint64_t current_max = auto_hwm_profile_maximum_bytes (
-                  context_->profile, input.role);
-                const uint64_t candidate_max = auto_hwm_profile_maximum_bytes (
-                  context_->profile, policy.role);
-                if (candidate_max < current_max
-                    || (candidate_max == current_max
-                        && policy.role < input.role))
-                    input.role = policy.role;
-                }
-
-                const bool effective_manual =
-                  policy.manual || !policy.planning_enabled;
-                if (!effective_manual) {
-                    input.auto_seen = true;
-                } else if (policy.hwm > 0) {
-                    input.finite_manual_seen = true;
-                    input.finite_manual_hwm =
-                      std::min (input.finite_manual_hwm, policy.hwm);
-                }
-            }
+            resolve_direction (context_->profile, *queue, &input.resolved);
         }
     }
 
@@ -855,20 +884,22 @@ void zlink::ctx_physical_queue_registry_t::plan_application_queues (
     for (std::map<uint64_t, resolved_input_t>::iterator it = inputs.begin ();
          it != inputs.end (); ++it) {
         resolved_input_t &input = it->second;
-        if (!input.planning_enabled || input.role == auto_hwm_role_none)
+        const resolved_direction_t &resolved = input.resolved;
+        if (!resolved.planning_enabled || resolved.role == auto_hwm_role_none)
             continue;
-        const bool manual = input.finite_manual_seen || !input.auto_seen;
-        const uint64_t manual_hwm = input.finite_manual_seen
-                                      ? input.finite_manual_hwm
+        const bool manual =
+          resolved.finite_manual_seen || !resolved.auto_seen;
+        const uint64_t manual_hwm = resolved.finite_manual_seen
+                                      ? resolved.finite_manual_hwm
                                       : 0;
         auto_hwm_socket_plan_t plan;
-        auto_hwm_socket_plan_prepare (input.role, 1, 0, manual, manual_hwm,
+        auto_hwm_socket_plan_prepare (resolved.role, 1, 0, manual, manual_hwm,
                                       false, 0, true, &plan);
         planned_inputs.push_back (&input);
         queue_plans.push_back (plan);
-        if (input.writer_seen)
+        if (resolved.writer_seen)
             ++send_count;
-        if (input.reader_seen)
+        if (resolved.reader_seen)
             ++receive_count;
     }
 
@@ -882,23 +913,214 @@ void zlink::ctx_physical_queue_registry_t::plan_application_queues (
     context_->active_directional_queue_count = queue_plans.size ();
 
     uint64_t total_applied = 0;
-    for (size_t i = 0; i != queue_plans.size (); ++i) {
-        physical_queue_record_t *direction = planned_inputs[i]->queue.get ();
-        const uint64_t target = queue_plans[i].sndhwm;
-        update_hwm_target (planned_inputs[i]->queue, target);
+    uint64_t auto_direction_count = 0;
+    uint64_t max_queue_id = 0;
+    auto_hwm_role_t auto_role = auto_hwm_role_none;
+    bool auto_role_uniform = true;
+    {
+        scoped_lock_t lock (_sync);
+        for (size_t i = 0; i != queue_plans.size (); ++i) {
+            physical_queue_record_t *direction = planned_inputs[i]->queue.get ();
+            const uint64_t target = queue_plans[i].sndhwm;
+            update_hwm_target (planned_inputs[i]->queue, target);
+            if (direction->queue_id > max_queue_id)
+                max_queue_id = direction->queue_id;
+            if (!queue_plans[i].manual_sndhwm) {
+                ++auto_direction_count;
+                if (auto_direction_count == 1)
+                    auto_role = queue_plans[i].role;
+                else if (auto_role != queue_plans[i].role)
+                    auto_role_uniform = false;
+            }
 
-        uint64_t applied = direction->applied_hwm.load (
-          std::memory_order_acquire);
-        if (applied == 0) {
-            applied = queue_plans[i].maximum_hwm_bytes;
-            context_->aggregate_hwm_valid = false;
+            uint64_t applied = direction->applied_hwm.load (
+              std::memory_order_acquire);
+            if (applied == 0) {
+                applied = queue_plans[i].maximum_hwm_bytes;
+                context_->aggregate_hwm_valid = false;
+            }
+            total_applied = add_snapshot_value (
+              total_applied, applied, &context_->aggregate_overflow);
         }
-        total_applied = add_snapshot_value (
-          total_applied, applied, &context_->aggregate_overflow);
     }
     context_->total_applied_hwm_bytes = total_applied;
     if (context_->aggregate_overflow)
         context_->budget_insufficient = true;
+    //  Everything the attach extension needs is published into the plan
+    //  record itself. A mixed role leaves the role at `none`, which is what
+    //  makes the extension refuse the plan.
+    context_->application_auto_direction_count = auto_direction_count;
+    context_->application_auto_role =
+      auto_role_uniform ? auto_role : auto_hwm_role_none;
+    context_->max_planned_queue_id = max_queue_id;
+}
+
+bool zlink::ctx_physical_queue_registry_t::extend_application_plan (
+  auto_hwm_context_plan_t *context_,
+  const physical_queue_endpoint_policy_t *policies_, size_t policy_count_)
+{
+    //  `*context_` is the plan record itself and the only description of the
+    //  last planning pass this function reads or writes. No copy of it lives
+    //  in the registry, so there is nothing to keep in step and no
+    //  invalidation rule: everything below is derived here and published
+    //  back into the same record.
+    if (!context_ || !policies_ || policy_count_ == 0
+        || policy_count_ > extension_capacity)
+        return false;
+    //  The plan must describe automatic directions that share one role, be
+    //  free of unlimited manual reservations, and carry no overflow or
+    //  shortfall. Anything else has no single water level to extend.
+    if (!context_->enabled || context_->aggregate_overflow
+        || context_->budget_insufficient || !context_->aggregate_hwm_valid
+        || context_->unlimited_manual_queue_count != 0
+        || context_->application_auto_role == auto_hwm_role_none
+        || context_->application_auto_direction_count == 0)
+        return false;
+
+    physical_queue_handle_t extensions[extension_capacity];
+    size_t extension_count = 0;
+    uint64_t added_send = 0;
+    uint64_t added_receive = 0;
+    bool overflow = false;
+
+    scoped_lock_t lock (_sync);
+    for (size_t i = 0; i != policy_count_; ++i) {
+        const physical_queue_endpoint_policy_t &policy = policies_[i];
+        //  Anything the extension cannot resolve exactly — a manual endpoint,
+        //  a disabled or role-less policy, a queue that is not a live
+        //  application direction, a role other than the plan's — falls back
+        //  to the full replan.
+        if (!policy.queue || !policy.planning_enabled || policy.manual
+            || policy.role != context_->application_auto_role
+            || !find_locked (policy.queue)
+            || policy.queue->endpoint_refs == 0
+            || policy.queue->lane.load (std::memory_order_acquire)
+                 != physical_queue_lane_application)
+            return false;
+        //  Water-filling hands its division remainder out in stable queue-ID
+        //  order. A direction whose ID is above every direction the plan
+        //  covers is outside that prefix and is new to the plan; at or below
+        //  it, only the full replan can tell the two apart.
+        if (policy.queue->queue_id <= context_->max_planned_queue_id)
+            return false;
+
+        physical_queue_record_t *const record = policy.queue.get ();
+        stored_endpoint_policy_t &stored =
+          policy.writer ? record->writer_policy : record->reader_policy;
+        stored.present = true;
+        stored.role = policy.role;
+        stored.manual = policy.manual;
+        stored.planning_enabled = policy.planning_enabled;
+        stored.hwm = policy.hwm;
+
+        //  Resolve the direction through the same rule the full replan uses.
+        resolved_direction_t resolved;
+        resolve_direction (context_->profile, *record, &resolved);
+        if (!resolved.planning_enabled || !resolved.auto_seen
+            || resolved.finite_manual_seen
+            || resolved.role != context_->application_auto_role)
+            return false;
+
+        extensions[extension_count++] = policy.queue;
+        if (resolved.writer_seen)
+            ++added_send;
+        if (resolved.reader_seen)
+            ++added_receive;
+    }
+
+    const uint64_t added_count = extension_count;
+    const uint64_t new_direction_count = add_snapshot_value (
+      context_->active_directional_queue_count, added_count, &overflow);
+    const uint64_t new_auto_count = add_snapshot_value (
+      context_->application_auto_direction_count, added_count, &overflow);
+    if (overflow)
+        return false;
+
+    //  An explicit core budget always wins; otherwise the effective cap is
+    //  re-resolved with the new count exactly as the full replan does.
+    const uint64_t new_budget =
+      context_->configured_core_budget_bytes > 0
+        ? context_->configured_core_budget_bytes
+        : auto_hwm_effective_budget_bytes (
+            context_->profile, context_->resolved_memory_limit_bytes,
+            new_direction_count);
+    if (context_->manual_reserved_hwm_bytes > new_budget)
+        return false;
+
+    //  Water-filling over one role: every automatic direction starts at the
+    //  role minimum and rises by the same share of what is left, capped at
+    //  the role maximum. The division remainder is then handed out one byte
+    //  at a time in queue-ID order, so the first `remainder` directions sit
+    //  at `level + 1` — a prefix the directions attaching now are above.
+    const uint64_t minimum = auto_hwm_profile_minimum_bytes (
+      context_->profile, context_->application_auto_role);
+    const uint64_t maximum = auto_hwm_profile_maximum_bytes (
+      context_->profile, context_->application_auto_role);
+    const uint64_t data_budget =
+      new_budget - context_->manual_reserved_hwm_bytes;
+    const uint64_t minimum_total =
+      multiply_snapshot_value (minimum, new_auto_count, &overflow);
+    if (overflow || minimum_total > data_budget)
+        return false;
+    const uint64_t remaining = data_budget - minimum_total;
+    const uint64_t share = remaining / new_auto_count;
+    const uint64_t headroom = maximum - minimum;
+    const bool saturated = share >= headroom;
+    const uint64_t level = saturated ? maximum : minimum + share;
+    const uint64_t remainder =
+      saturated ? 0 : remaining - share * new_auto_count;
+    const uint64_t auto_total = add_snapshot_value (
+      multiply_snapshot_value (level, new_auto_count, &overflow), remainder,
+      &overflow);
+    const uint64_t new_total_planned = add_snapshot_value (
+      auto_total, context_->manual_reserved_hwm_bytes, &overflow);
+    if (overflow)
+        return false;
+
+    //  Only the attaching directions are written, and each takes exactly
+    //  `level`: their IDs are above the remainder prefix. When the level fell,
+    //  the directions already in the plan keep their published target, which
+    //  is why this plan records an applied total above its planned total —
+    //  the state that tells the debounced replan there is work to finish
+    //  (ctx_auto_hwm_state_t::recalc_due). That is the deferral
+    //  06-auto-hwm.ko.md §2 grants this path for an O(log n) attach.
+    uint64_t total_applied = context_->total_applied_hwm_bytes;
+    uint64_t max_queue_id = context_->max_planned_queue_id;
+    bool aggregate_hwm_valid = context_->aggregate_hwm_valid;
+    for (size_t i = 0; i != extension_count; ++i) {
+        update_hwm_target (extensions[i], level);
+        if (extensions[i]->queue_id > max_queue_id)
+            max_queue_id = extensions[i]->queue_id;
+        uint64_t applied =
+          extensions[i]->applied_hwm.load (std::memory_order_acquire);
+        if (applied == 0) {
+            applied = maximum;
+            aggregate_hwm_valid = false;
+        }
+        total_applied = add_snapshot_value (total_applied, applied, &overflow);
+    }
+    const uint64_t new_send_count = add_snapshot_value (
+      context_->active_send_queue_count, added_send, &overflow);
+    const uint64_t new_receive_count = add_snapshot_value (
+      context_->active_receive_queue_count, added_receive, &overflow);
+    if (overflow) {
+        //  The attaching directions already carry the new level, and the
+        //  full replan the caller falls back to recomputes every aggregate
+        //  from the registry, so leaving the plan record untouched here is
+        //  safe.
+        return false;
+    }
+
+    context_->effective_core_budget_bytes = new_budget;
+    context_->active_directional_queue_count = new_direction_count;
+    context_->active_send_queue_count = new_send_count;
+    context_->active_receive_queue_count = new_receive_count;
+    context_->application_auto_direction_count = new_auto_count;
+    context_->max_planned_queue_id = max_queue_id;
+    context_->total_planned_hwm_bytes = new_total_planned;
+    context_->total_applied_hwm_bytes = total_applied;
+    context_->aggregate_hwm_valid = aggregate_hwm_valid;
+    return true;
 }
 
 void zlink::ctx_physical_queue_registry_t::record_endpoint_policy (

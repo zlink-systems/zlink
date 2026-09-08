@@ -319,9 +319,10 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                     scoped_lock_t lock (_auto_hwm_sync);
                     auto_hwm_policy_enabled = _auto_hwm_policy_enabled;
                 }
-                if (auto_hwm_policy_enabled)
-                    (void) get_ctx ()->auto_hwm_recalculate_now ();
-                else
+                if (auto_hwm_policy_enabled) {
+                    if (!auto_hwm_extend_plan_for_attached_pipe (pipe_))
+                        (void) get_ctx ()->auto_hwm_recalculate_now ();
+                } else
                     get_ctx ()->schedule_auto_hwm_recalculate ();
             }
             return;
@@ -641,9 +642,10 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
             scoped_lock_t lock (_auto_hwm_sync);
             auto_hwm_policy_enabled = _auto_hwm_policy_enabled;
         }
-        if (recalculate_application_attach && auto_hwm_policy_enabled)
-            (void) get_ctx ()->auto_hwm_recalculate_now ();
-        else
+        if (recalculate_application_attach && auto_hwm_policy_enabled) {
+            if (!auto_hwm_extend_plan_for_attached_pipe (pipe_))
+                (void) get_ctx ()->auto_hwm_recalculate_now ();
+        } else
             get_ctx ()->schedule_auto_hwm_recalculate ();
     }
 }
@@ -701,6 +703,15 @@ int zlink::socket_base_t::setsockopt (int option_, const void *optval_, size_t o
         }
         update_pipe_options (option_);
     }
+    //  A manual HWM changes what the planner reserves for this socket's
+    //  directions. Publish it on the same debounced path every other Auto-HWM
+    //  input change uses, so a later attach never extends a plan that no
+    //  longer matches its inputs.
+    if (rc == 0
+        && (option_ == ZLINK_INTERNAL_OPT_SNDHWM
+            || option_ == ZLINK_INTERNAL_OPT_RCVHWM)
+        && get_ctx ())
+        get_ctx ()->schedule_auto_hwm_recalculate ();
     return rc;
 }
 

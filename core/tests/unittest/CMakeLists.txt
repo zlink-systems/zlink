@@ -14,6 +14,7 @@ endif()
 
 set(unittests
     unittest_auto_hwm_physical_attempt
+    unittest_auto_hwm_incremental_plan
     unittest_zmp_engine_controls
     unittest_pubsub_raw_hwm
     unittest_ws_transport_config

@@ -123,7 +123,23 @@ class ctx_t ZLINK_FINAL
     start_thread (thread_t &thread_, thread_fn *tfn_, void *arg_, const char *name_ = NULL) const;
     const thread_ctx_t &thread_context () const;
     void schedule_auto_hwm_recalculate ();
+    //  Arms the same debounce without making a new request. An attach
+    //  extension calls it after recording its plan: that plan answers every
+    //  request already made, and the replan it still owes — lowering the
+    //  targets of the directions it did not visit — is stated by the plan
+    //  itself, so it must not block the next extension behind a pending
+    //  request.
+    void schedule_auto_hwm_convergence ();
     int auto_hwm_recalculate_now ();
+    //  Attach-path replacement for auto_hwm_recalculate_now(). Records a new
+    //  plan that differs from the last one only in the attaching pipe's
+    //  directions, in O(log n). Like the full pass it publishes the plan to
+    //  the pipe before recording the new budget generation, and holds the
+    //  recalculation mutex across both. Returns false when the plan cannot be
+    //  extended that way and the caller must run the full recalculation.
+    bool auto_hwm_extend_plan_for_attach (
+      const physical_queue_endpoint_policy_t *policies_, size_t policy_count_,
+      socket_base_t *socket_, pipe_t *pipe_);
     auto_hwm_budget_input_t auto_hwm_budget_input () const;
     int create_pipepair_queues (
       uint64_t first_direction_hwm_,

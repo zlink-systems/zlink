@@ -769,6 +769,16 @@ class socket_base_t : public own_t,
       bool writer_) const;
     void apply_physical_auto_hwm_plan (const auto_hwm_context_plan_t &context_,
                                        uint32_t recalc_reason_);
+    //  Attach-path plan publication. Extends the recorded context plan with
+    //  this pipe's two directions and applies it to that pipe alone, so
+    //  accepting a connection costs O(log n) instead of a context-wide
+    //  replan. Returns false when the plan cannot be extended and the caller
+    //  must fall back to auto_hwm_recalculate_now().
+    bool auto_hwm_extend_plan_for_attached_pipe (pipe_t *pipe_);
+    //  Publishes an extended plan to one pipe. Called by the context while it
+    //  holds the recalculation mutex, before the plan is recorded.
+    void apply_extended_auto_hwm_plan (const auto_hwm_context_plan_t &context_,
+                                       pipe_t *pipe_);
     void refresh_auto_hwm_policy (bool force_apply_ = false);
     void set_auto_hwm_policy_enabled (bool enabled_);
     int configure_internal_monitor_queue (uint64_t hwm_bytes_);

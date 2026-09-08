@@ -310,6 +310,70 @@ void zlink::socket_base_t::apply_physical_auto_hwm_plan (
         : recalc_reason_;
 }
 
+bool zlink::socket_base_t::auto_hwm_extend_plan_for_attached_pipe (
+  pipe_t *pipe_)
+{
+    ctx_t *ctx = get_ctx ();
+    if (!ctx || !pipe_)
+        return false;
+
+    //  A pipe owns exactly two directions, so the policies live in a fixed
+    //  array: the attach path allocates nothing and can throw nothing.
+    physical_queue_endpoint_policy_t policies[2];
+    {
+        scoped_lock_t auto_hwm_lock (_auto_hwm_sync);
+        if (!_auto_hwm_policy_enabled)
+            return false;
+        policies[0] = make_auto_hwm_queue_policy_locked (
+          pipe_->out_physical_queue (), true);
+        policies[1] = make_auto_hwm_queue_policy_locked (
+          pipe_->in_physical_queue (), false);
+    }
+
+    if (!ctx->auto_hwm_extend_plan_for_attach (policies, 2, this, pipe_))
+        return false;
+
+    //  The extension published the new level to this pipe only. Arm the
+    //  debounce so the directions it did not visit converge on that level;
+    //  the plan itself states that the work is owed, so this does not make a
+    //  request that would push the next attach onto the full pass.
+    ctx->schedule_auto_hwm_convergence ();
+    return true;
+}
+
+void zlink::socket_base_t::apply_extended_auto_hwm_plan (
+  const auto_hwm_context_plan_t &context_, pipe_t *pipe_)
+{
+    if (!pipe_)
+        return;
+    //  Only the attaching pipe can have a new target: the extension leaves
+    //  every other direction's published target untouched.
+    pipe_->apply_physical_queue_hwm_plan ();
+
+    scoped_lock_t auto_hwm_lock (_auto_hwm_sync);
+    _auto_hwm_context_plan = context_;
+    const auto_hwm_role_t role =
+      auto_hwm_default_role_for_socket_type (options.type);
+    _auto_hwm_socket_plan.role = role;
+    _auto_hwm_socket_plan.policy_class =
+      auto_hwm_policy_class_for_role (role, 0);
+    _auto_hwm_socket_plan.planning_enabled = true;
+    _auto_hwm_socket_plan.minimum_hwm_bytes =
+      auto_hwm_profile_minimum_bytes (context_.profile, role);
+    _auto_hwm_socket_plan.maximum_hwm_bytes =
+      auto_hwm_profile_maximum_bytes (context_.profile, role);
+    _auto_hwm_socket_plan.manual_sndhwm = _manual_sndhwm;
+    _auto_hwm_socket_plan.manual_rcvhwm = _manual_rcvhwm;
+    ++_auto_hwm_socket_plan.send_queue_count;
+    ++_auto_hwm_socket_plan.receive_queue_count;
+    _auto_hwm_socket_plan.sndhwm =
+      std::max (_auto_hwm_socket_plan.sndhwm, pipe_->planned_out_hwm ());
+    _auto_hwm_socket_plan.rcvhwm =
+      std::max (_auto_hwm_socket_plan.rcvhwm, pipe_->planned_in_hwm ());
+    _auto_hwm_last_recalc_ms = _clock.now_ms ();
+    _auto_hwm_last_recalc_reason = ZLINK_AUTO_HWM_RECALC_REASON_REFRESH;
+}
+
 void zlink::socket_base_t::refresh_auto_hwm_policy (bool force_apply_)
 {
     LIBZLINK_UNUSED (force_apply_);

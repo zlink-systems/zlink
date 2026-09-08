@@ -134,6 +134,25 @@ class ctx_physical_queue_registry_t
     void plan_application_queues (
       auto_hwm_context_plan_t *context_,
       const std::vector<physical_queue_endpoint_policy_t> &policies_);
+    //  Attach-path fast path for plan_application_queues(). Extends the last
+    //  recorded plan, which it reads from `context_`, with the directions of
+    //  exactly one attaching pipe in O(log n) instead of replanning every
+    //  direction in the context. The whole extension is derived from that
+    //  plan record; the registry keeps no second copy of it.
+    //  Succeeds while every automatic direction of the plan shares one role.
+    //  Water-filling then resolves them from one division: each gets `level`,
+    //  and the stable-ID prefix that takes the division remainder gets
+    //  `level + 1`. A direction above every planned ID is outside that prefix,
+    //  so an attaching direction always gets exactly `level` — a closed form
+    //  of the new direction count. The directions already in the plan keep
+    //  the target they were given; the caller arms the debounce
+    //  (ctx_t::schedule_auto_hwm_convergence) and that replan lowers them
+    //  (06-auto-hwm.ko.md §2, connection-growth row).
+    //  Returns false when the plan cannot be extended; the caller then runs
+    //  the full recalculation.
+    bool extend_application_plan (auto_hwm_context_plan_t *context_,
+                                  const physical_queue_endpoint_policy_t *policies_,
+                                  size_t policy_count_);
     void record_endpoint_policy (
       const physical_queue_endpoint_policy_t &policy_);
     void record_admission_attempt (bool blocked_by_target_hwm_);

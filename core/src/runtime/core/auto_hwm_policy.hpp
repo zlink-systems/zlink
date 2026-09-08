@@ -65,6 +65,17 @@ struct auto_hwm_context_plan_t
     uint64_t active_send_queue_count;
     uint64_t active_receive_queue_count;
     uint64_t unlimited_manual_queue_count;
+    //  What the attach extension needs and the aggregates above cannot
+    //  express. They live here so this plan record stays the single owner of
+    //  everything the last planning pass decided.
+    //  `application_auto_role` is auto_hwm_role_none when the automatic
+    //  directions do not share one role — the extension is then impossible.
+    auto_hwm_role_t application_auto_role;
+    uint64_t application_auto_direction_count;
+    //  Highest queue ID this plan covers. Water-filling hands its division
+    //  remainder out in queue-ID order, so a direction above this ID can
+    //  never fall inside that prefix.
+    uint64_t max_planned_queue_id;
     bool budget_insufficient;
     bool aggregate_hwm_valid;
     bool aggregate_overflow;
