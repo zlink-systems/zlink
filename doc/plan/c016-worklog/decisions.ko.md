@@ -4821,3 +4821,6 @@ prefix를 명시한다.
 ## D-B282 (2026-09-08 21:25, 머신 B) review-CCU-3 — B-1/B-2/B-3 해소 확인, 신규 차단 1건: 증분 성공 뒤 debounce 재계산 예약이 없어 기존 방향 인하가 무기한 지연(D-H1의 "debounce까지"가 아님) → CCU-4(1.5 h)
 
 `review-ccu3.md`(sol): 단일 소유 3필드·복제 상태 0·고정 배열·mutex 전체·apply→record 순서 확인. **B-CCU3-1**: 성공 경로에 `schedule_auto_hwm_recalculate()` 호출이 없어 다음 socket 생성/option/detach까지 기존 방향 목표가 수렴하지 않음. 경고: W-1 테스트 7개 대부분이 socket 생성의 pending generation 때문에 full fallback을 비교(증분 경로 미진입), W-2 비교 field 누락·`total_applied ≥` 완화가 fallback 케이스에도 적용, W-3 동시 attach barrier 없음·generation `≥+8`. **CCU-4**: 증분 성공 시 debounce 예약(예약이 다음 attach의 fast path를 막지 않는 단순 규칙 필요), 테스트가 사전 `zlink_ctx_auto_hwm_recalculate`로 pending 소진 후 증분 진입·attach당 generation +1 assert, field 전부 비교, barrier, 주석 정정, CCU 4000 재확인. 이후 review-CCU-4(짧게).
+## D-B283 (2026-09-08 21:35, 머신 B) `wip/0.17.4` Actions 사전 run 34219639442 — Linux x64/ARM64·Windows x64/ARM64 **성공**(host SAC 실패 3건은 host 한정 확인), macOS ARM64 실패 1건 `test_stream_packet_progress`(serial, 7.13 s) → MAC-4(2 h)
+
+Windows Actions green으로 WIN-2의 host 한정 판정 확정(`test_wake_invariants`·`unittest_flow_state_socket`·`unittest_mutex`는 Actions에서 통과). macOS: MAC-3에서 `wip/mac-1`(main 기반) 2회 통과했던 테스트가 ALL-3의 WS shutdown fixture(ping/pong fence) + MAC-3 `await_input` 변경이 합쳐진 상태에서 실패 → MAC-3 에이전트 연장, 브랜치 `wip/mac-4`(0.17.4 기준) 진단 workflow로 문구 확보 후 수정, 제외 금지. 산출물 `MAC-4.patch`.
