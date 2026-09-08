@@ -1470,8 +1470,8 @@ callgrind·프로파일 분석, 후보 no-go 목록과 그 근거(D-B121~D-B130)
 | 3 | Java | 미측정 | 0.17.2 빌드 완료, `tcp` 6 pattern 측정 중(relay는 이미 C 모델) | 80.9 / 59.4 / 58.7 / 80.9% | 3건 push |
 | 4 | Node | 미측정 | 0.17.2 빌드 완료, `tcp` 4 pattern 측정 중; SENDSEND는 relay 정합 필요(D-BP24 '있음' 확정) | 35.9 / 24.3 / 24.8 / 30.2% | 4건 push |
 | 5 | Go | 미측정 | **REQREP 재개**(0.17.2 동시 multipart 지원, 상한 제거 `add837942b`, D-BP16 완료); `tcp` REQREP 2 + DD·PUBSUB·SENDSEND 2 측정 중(relay는 C 모델 — 공유 echo server 동기 제출) | 53.2 / 19.0 / 21.8 / 54.6% | 2건 push |
-| 6 | Rust | 미측정 | 0.17.2 빌드 완료(relay job); relay 정합 적용 중(D-BP24); 측정은 우선순위 큐 뒤 | 59.3 / 67.3 / 69.8 / 87.7% | 2건 push |
-| 7 | Python | 미측정 | 0.17.2 빌드 완료(relay job); relay 정합 적용 중(D-BP24); 측정은 우선순위 큐 뒤 | 15.4 / 15.5 / 19.6 / 31.9% | 2건 push |
+| 6 | Rust | 미측정 | `tcp` 6 pattern 1-run 측정 중(relay 정합 `fb3f37191d` 적용) | 59.3 / 67.3 / 69.8 / 87.7% | 2건 push |
+| 7 | Python | 미측정 | `tcp` 6 pattern 1-run 측정 중(relay 정합 `fb3f37191d` 적용) | 15.4 / 15.5 / 19.6 / 31.9% | 2건 push |
 
 참고값은 2026-09-06 00:22, 이전 호스트(16 논리 CPU / 11.7 GiB), Core `a40cb46335` 기준이다
 (`doc/plan/c016-worklog/morning-summary-2026-09-05-B.ko.md`, D-B121~D-B130). 새 측정의 목표
@@ -1506,6 +1506,36 @@ cell마다 개선 pass가 30~60분씩 붙는다. **§12를 문자 그대로 완�
 
 각 cell의 판정과 근거는 §9.x.2 표와 §11 기록, `decisions.ko.md`에 남긴다. 세션이 바뀌어도 그
 기록만으로 다음 cell부터 이어받을 수 있어야 한다.
+
+#### 10.3.2 2026-09-08 마무리 범위 (사용자 결정: "오늘중으로 마무리")
+
+11시간 경과 시점에 사용자가 오늘 안 종료를 요청했다. §12를 문자 그대로(미달 0) 닫는 것은
+불가능하다 — C++·.NET의 미달은 각각 D-BP26·D-BP32로 **현재 공개 API 형태에 내재**한다고
+결론 났고, 그것은 API 변경 없이는 움직이지 않는다. 오늘의 마무리를 다음으로 정의한다.
+
+**오늘 닫는 것**
+1. **7개 언어 전부 `tcp` 7 pattern 판정**(1-run 기본, D-BP32). STREAM은 Core 결함(D-BP23)으로
+   전 언어 `보류`.
+2. 진행 중인 러너 정합 3건(Node relay, .NET client echo-drain, Go 단방향 drain)의 결과 반영.
+   11:25까지 안 끝나면 해당 cell을 `차단`으로 기록하고 넘어간다.
+3. 이 문서·`decisions.ko.md`·Core 보고서 2건이 다음 세션의 유일한 출발점이 되도록 정리.
+
+**오늘 열지 않는 것 → 0.18.0 이월**
+- **binding client 수신·drain cadence 이상** — Node DD(1,267 ms vs C 0.082), Java SENDSEND(4096 B
+  516 ms vs 0.29). `tcp`이고 C 정상이라 러너/binding 쪽. 조사 미개설.
+- **REQREP async terminal 왕복 고정 비용** — Go·Node 작은 크기 latency ~3x 공통. 비용 지도 미작성.
+- **5-run 집계 median 정합** — .NET은 마지막 반복값 기록 확인(D-BP32), Java·Go 미확인. 브리프
+  준비됨(`.artifacts/codex/dotnet-runs-median/brief.md`). 1-run 기본으로 가면 경계 cell에만 영향.
+- **`tls`·`ws`·`wss` 6개 언어** — C++에서 이미 Core 문제로 귀속(D-BP28·D-BP29, 보고서
+  `doc/bug/perf/2026-09-08-core-ws-roundtrip-size-penalty.ko.md`). Core 수정 뒤 전 언어 재측정.
+- **Core 보고서 2건 후속** — STREAM 수신 정체(0.17.2에서도 재현), ws/wss 왕복 크기 비례 붕괴 +
+  tls/ws/wss latency 간헐 폭증. 머신 B 답변 대기.
+- **wss DD C 러너 간헐 실패** — 깨끗한 재현 1승 1패, 오염 3회 무효.
+- **.NET·C++ 미달 cell의 다음 단계** — 공개 API 형태 논의(메시지당 operation 객체, message wrapper
+  P/Invoke 왕복; C++ 요청당 5개 할당). 캠페인 범위 밖.
+
+**측정 규칙 확정**: 기본 1-run, 경계(목표 ±5%p)·outlier cell만 5-run(D-BP32). 측정은
+`scripts/perf/wait-for-idle-perf.sh`의 flock으로 직렬화(D-BP25 이후 3차 수정).
 
 ## 11. 측정 기록과 결과
 
