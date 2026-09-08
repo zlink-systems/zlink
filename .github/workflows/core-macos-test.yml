@@ -78,8 +78,9 @@ jobs:
           echo "=== serial outcome: ${{ steps.serial.outcome }}"
           echo "=== parallel outcome: ${{ steps.parallel.outcome }}"
           for f in core/build-macos/Testing/Temporary/LastTestsFailed*.log; do
-            [ -f "$f" ] && { echo "--- $f"; cat "$f"; }
+            if [ -f "$f" ]; then echo "--- $f"; cat "$f"; fi
           done
+          exit 0
 
       - name: Upload logs
         if: always()
