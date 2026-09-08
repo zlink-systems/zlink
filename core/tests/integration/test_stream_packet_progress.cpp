@@ -79,8 +79,12 @@ struct fixture_t
     {
         const auto end = std::chrono::steady_clock::now ()
                          + std::chrono::milliseconds (timeout_ms);
+        //  Each probe takes the monitor's status lock, so spinning here
+        //  contends with the very io thread that has to ingest the fragments
+        //  and, on a small host, starves it out of the deadline. Give the
+        //  scheduler a real gap between probes instead.
         while (pending () < chunks_ && std::chrono::steady_clock::now () < end)
-            std::this_thread::yield ();
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
         TEST_ASSERT_TRUE_MESSAGE (pending () >= chunks_, "transport did not queue all fragments");
     }
 
