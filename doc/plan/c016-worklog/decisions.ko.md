@@ -4537,3 +4537,15 @@ pass 1 구현, 아니면 지도만 보고")을 12:55에 띄웠고, Rust·Python�
 
 **0.17.3-alpha STREAM 결과(D-BP37):** C++ 96.7·.NET 95.8·Java 103.4% 통과 — D-BP23 packet pump 정체 해소 확인.
 
+### D-BP39 (2026-09-08 13:05) Single suite도 비교 대상으로 올린다 — 메시지당 고정 비용 지도의 출발점
+
+**결정(사용자):** Single tcp 전 pattern을 7개 언어 모두 C와 짝지어 측정해 §9.x.1에 올린다(태그 `sg1`, alpha
+prefix, 1-run). 우선은 **참고값**(D-BP2 유지)이고, 해당 언어의 Single 러너가 `PERF_SINGLE_TEST_POLICY.md` §1.1
+실행 모델을 만족한다고 확인되면 §2 목표로 판정한다(Go·Rust·Python은 §10.2 6번 정합이 부분 완료).
+
+**근거:** Multi 미달 언어의 격차는 크기·pattern 무관 평탄 = 메시지당 고정 비용이며, Single은 스레드 하나·동기
+API·client 1이라 그 비용이 backpressure·100 client 큐 효과와 섞이지 않고 드러난다. 비용 지도는 Single 셀에서
+먼저 만들고 Multi로 확인한다(Single 통과가 Multi 통과를 보장하지는 않는다 — async terminal·relay·backpressure는
+Multi에만 있다). Rust·Python 지도 브리프에 반영; Java·Node·Go 지도 job은 Multi 브리프로 이미 실행 중이라 다음
+반복에서 Single을 쓴다.
+
