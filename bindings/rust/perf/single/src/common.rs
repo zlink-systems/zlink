@@ -4,7 +4,7 @@ use std::fs;
 use std::future::Future;
 use std::io;
 use std::path::Path;
-use std::pin::{Pin, pin};
+use std::pin::{pin, Pin};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context as TaskContext, Poll, Waker};
 use std::time::{Duration, Instant};
@@ -739,20 +739,78 @@ fn record_reqrep_completion(
     }
     let payload = parts[0].as_bytes();
     if count_active && is_valid_active_message(payload, expected_size) {
+        // PERF_SINGLE_TEST_POLICY.md 1.1.4: request-reply latency is the whole
+        // round trip, from the request submission stamp to this reply
+        // completion. The C reference records the same interval undivided
+        // (bindings/c/perf/single/common/perf_single_reqrep.hpp
+        // request_completion_callback).
         let latency_ns = (now_ns() as i64)
             .saturating_sub(decode_sent_ts_ns(payload))
             .max(0) as u64;
-        stats.record_ns(latency_ns / 2);
+        stats.record_ns(latency_ns);
     }
     Ok(())
 }
 
 pub type RequestTask = Pin<Box<dyn Future<Output = Result<Vec<Message>, ZlinkError>> + Send>>;
 
+// PERF_SINGLE_TEST_POLICY.md 1.1.3 (D-BP40): the awaitable request terminal
+// never reports admission, so the runner reproduces the C reference boundary
+// from the admission window Core actually applied to this socket - the applied
+// SNDHWM bytes divided by one request's wire size. That is the same window
+// whose exhaustion makes the C runner see ZLINK_SUBMIT_BACKPRESSURED; it is not
+// a fixed number. A manual PERF_SINGLE_SNDHWM override does not reach the
+// auto-HWM snapshot, so it is read back from the socket option instead.
+pub fn reqrep_admission_window(
+    applied_sndhwm_bytes: u64,
+    option_sndhwm_bytes: u64,
+    wire_size: usize,
+) -> Result<usize, String> {
+    let hwm_bytes = if applied_sndhwm_bytes > 0 {
+        applied_sndhwm_bytes
+    } else {
+        option_sndhwm_bytes
+    };
+    if hwm_bytes == 0 {
+        return Err(
+            "requester socket reports no send high-water mark, so the admission window is unknown"
+                .to_string(),
+        );
+    }
+    let window = hwm_bytes / wire_size.max(1) as u64;
+    // One in-flight request is always allowed so a window narrower than a
+    // single message still makes progress.
+    Ok(window.max(1).min(usize::MAX as u64) as usize)
+}
+
+/// Poll every un-settled request once and aggregate the ones that finished.
+fn drain_reqrep_completions(
+    requests: &mut Vec<RequestTask>,
+    task_context: &mut TaskContext<'_>,
+    stats: &mut LatencyStats,
+    expected_size: usize,
+    count_active: bool,
+) -> Result<bool, String> {
+    let mut progressed = false;
+    let mut index = 0;
+    while index < requests.len() {
+        match requests[index].as_mut().poll(task_context) {
+            Poll::Ready(outcome) => {
+                record_reqrep_completion(outcome, expected_size, stats, count_active)?;
+                drop(requests.swap_remove(index));
+                progressed = true;
+            }
+            Poll::Pending => index += 1,
+        }
+    }
+    Ok(progressed)
+}
+
 /// Keep request admission and reply completion moving on this application thread.
 pub fn run_reqrep<S>(
     config: &PerfConfig,
     socket: &dyn zlink::Pollable,
+    admission_window: usize,
     mut submit: S,
 ) -> Result<StatsResult, String>
 where
@@ -776,56 +834,69 @@ where
     let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
     let mut task_context = TaskContext::from_waker(&waker);
 
+    // C parity (perf_single_reqrep.hpp run_request_phase): one turn submits
+    // continuously without awaiting any reply until the applied admission
+    // window is full, drains completions without waiting every 64 submissions,
+    // and blocks bounded only once the window is saturated.
     while Instant::now() < active_deadline {
-        let mut payload = Message::with_size(payload_size).map_err(|error| error.to_string())?;
-        encode_header(
-            payload.data_mut(),
-            PHASE_ACTIVE,
-            config.size as u32,
-            sequence,
-        );
-        requests.push(submit(payload, request_timeout));
-        sequence = sequence.wrapping_add(1);
-
-        let mut index = 0;
-        let mut progressed = false;
-        while index < requests.len() {
-            match requests[index].as_mut().poll(&mut task_context) {
+        let mut submitted_since_progress = 0u32;
+        while Instant::now() < active_deadline && requests.len() < admission_window {
+            let mut payload =
+                Message::with_size(payload_size).map_err(|error| error.to_string())?;
+            encode_header(
+                payload.data_mut(),
+                PHASE_ACTIVE,
+                config.size as u32,
+                sequence,
+            );
+            sequence = sequence.wrapping_add(1);
+            // `RequestOp::submit` is lazy: admission happens on the first poll,
+            // which is where the C runner calls zlink_request_part(DONTWAIT).
+            let mut task = submit(payload, request_timeout);
+            match task.as_mut().poll(&mut task_context) {
                 Poll::Ready(outcome) => {
-                    record_reqrep_completion(outcome, config.size, &mut stats, true)?;
-                    drop(requests.swap_remove(index));
-                    progressed = true;
+                    record_reqrep_completion(outcome, config.size, &mut stats, true)?
                 }
-                Poll::Pending => index += 1,
+                Poll::Pending => requests.push(task),
+            }
+            submitted_since_progress += 1;
+            if submitted_since_progress >= 64 {
+                submitted_since_progress = 0;
+                poller
+                    .wait(&mut events, 0)
+                    .map_err(|error| error.to_string())?;
+                drain_reqrep_completions(
+                    &mut requests,
+                    &mut task_context,
+                    &mut stats,
+                    config.size,
+                    true,
+                )?;
             }
         }
-        if !requests.is_empty() && Instant::now() < active_deadline {
-            let remaining = active_deadline.saturating_duration_since(Instant::now());
-            let wait_ms = if progressed {
-                0
-            } else {
-                remaining.as_millis().max(1).min(i64::MAX as u128) as i64
-            };
-            poller
-                .wait(&mut events, wait_ms)
-                .map_err(|error| error.to_string())?;
-        }
+        // The window is full (or the deadline passed): progress on this thread
+        // and block bounded so a saturated interval cannot spin.
+        poller
+            .wait(&mut events, 50)
+            .map_err(|error| error.to_string())?;
+        drain_reqrep_completions(
+            &mut requests,
+            &mut task_context,
+            &mut stats,
+            config.size,
+            true,
+        )?;
     }
 
     let drain_deadline = Instant::now() + drain_timeout;
     while !requests.is_empty() && Instant::now() < drain_deadline {
-        let mut index = 0;
-        let mut progressed = false;
-        while index < requests.len() {
-            match requests[index].as_mut().poll(&mut task_context) {
-                Poll::Ready(outcome) => {
-                    record_reqrep_completion(outcome, config.size, &mut stats, false)?;
-                    drop(requests.swap_remove(index));
-                    progressed = true;
-                }
-                Poll::Pending => index += 1,
-            }
-        }
+        let progressed = drain_reqrep_completions(
+            &mut requests,
+            &mut task_context,
+            &mut stats,
+            config.size,
+            false,
+        )?;
         if !requests.is_empty() {
             let remaining = drain_deadline.saturating_duration_since(Instant::now());
             let wait_ms = if progressed {

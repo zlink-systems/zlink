@@ -137,7 +137,11 @@ binding의 공개 request terminal이 admission 결과를 직접 돌려주지 �
   집계하는 경로는 single에서 사용하지 않는다.
 - raw send는 blocking terminal을 사용하므로 HWM 도달 시 Core가 sender thread를 대기시킨다.
 - Go는 역할별 goroutine을 active 구간 전체에서 `runtime.LockOSThread()`로 고정한다.
-  이 goroutine은 다른 작업과 OS thread를 공유하지 않는다. Node는 `worker_threads`,
+  이 goroutine은 다른 작업과 OS thread를 공유하지 않는다. 고정 대상은 **역할**
+  goroutine(request 제출과 completion 진행을 소유한 requester goroutine, replier goroutine,
+  sender·receiver goroutine)이다. blocking terminal 때문에 request 1건마다 띄우는 goroutine은
+  역할이 아니므로 고정하지 않는다 — §1.1.3의 admission 창은 작은 크기에서 수천~수만 건이라
+  1건당 OS thread 1개를 묶으면 Go 런타임 thread 한도를 넘는다(D-BP40). Node는 `worker_threads`,
   Python은 `threading.Thread`에서 러너 loop를 실행한다. 언어별 금지 항목은 §1.1.5가
   정의한다.
 - `PAIR`, `PUBSUB`, `DEALER_DEALER`, `DEALER_ROUTER`, `ROUTER_ROUTER`는 recv 모델로

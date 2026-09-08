@@ -45,6 +45,7 @@ func runRouterRouterReqRep(cfg benchmarkConfig) perfcommon.Result {
 	result := runSingleReqRep(
 		cfg,
 		requester,
+		requesterMon,
 		replier,
 		func() zlink.RequestOp { return requester.Request(targetID) },
 		func(message *zlink.Message) (bool, error) {

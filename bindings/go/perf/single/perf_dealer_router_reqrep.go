@@ -38,6 +38,7 @@ func runDealerRouterReqRep(cfg benchmarkConfig) perfcommon.Result {
 	result := runSingleReqRep(
 		cfg,
 		requester,
+		requesterMon,
 		replier,
 		func() zlink.RequestOp { return requester.Request() },
 		func(message *zlink.Message) (bool, error) {

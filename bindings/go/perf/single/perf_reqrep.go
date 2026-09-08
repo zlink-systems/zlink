@@ -14,11 +14,55 @@ import (
 	"zlink.systems/zlink/perf/internal/perfcommon"
 )
 
+// PERF_SINGLE_TEST_POLICY.md 1.1.3 (D-BP40): the blocking request terminal
+// never reports admission, so the runner reproduces the C reference boundary
+// from the admission window Core actually applied to this socket - the applied
+// SNDHWM bytes divided by one request's wire size. That is the same window
+// whose exhaustion makes the C runner see ZLINK_SUBMIT_BACKPRESSURED; it is not
+// a fixed number. A manual PERF_SINGLE_SNDHWM override does not reach the
+// auto-HWM snapshot, so it is read back from the socket option instead.
+func reqRepAdmissionWindow(
+	requester zlink.SocketTarget,
+	monitor *zlink.SocketMonitor,
+	wireSize int,
+) int {
+	var hwmBytes uint64
+	if monitor != nil {
+		if snapshot, err := monitor.Status(); err == nil && snapshot != nil {
+			hwmBytes = snapshot.AutoHwmAppliedSndHwmBytes
+		}
+	}
+	if hwmBytes == 0 {
+		if getter, ok := requester.(interface {
+			SendHighWaterMark() (uint64, error)
+		}); ok {
+			if value, err := getter.SendHighWaterMark(); err == nil {
+				hwmBytes = value
+			}
+		}
+	}
+	if hwmBytes == 0 {
+		perfcommon.Must(fmt.Errorf(
+			"requester socket reports no send high-water mark, so the admission window is unknown"))
+	}
+	if wireSize < 1 {
+		wireSize = 1
+	}
+	window := int(hwmBytes / uint64(wireSize))
+	// One in-flight request is always allowed so a window narrower than a
+	// single message still makes progress.
+	if window < 1 {
+		window = 1
+	}
+	return window
+}
+
 // Go exposes a blocking request terminal, so each logical request runs in its
 // own goroutine while the requester thread owns completion progress.
 func runSingleReqRep(
 	cfg benchmarkConfig,
 	requester zlink.SocketTarget,
+	requesterMon *zlink.SocketMonitor,
 	replier *zlink.RouterSocket,
 	request func() zlink.RequestOp,
 	sendStop func(*zlink.Message) (bool, error),
@@ -31,6 +75,8 @@ func runSingleReqRep(
 		replierDone <- runReqRepReplier(replier, localStop)
 	}()
 
+	admissionWindow := reqRepAdmissionWindow(requester, requesterMon, cfg.msgSize)
+
 	stats := perfcommon.NewStats()
 	activeAt := time.Now()
 	stopAt := activeAt.Add(cfg.duration)
@@ -41,8 +87,10 @@ func runSingleReqRep(
 		completedAt time.Time
 		completedNs int64
 	}
-	// A single-socket turn submits one request, so only that turn is buffered.
-	completed := make(chan completion, 1)
+	// Every un-settled request can report at most once, so the admission window
+	// also sizes this hand-off. A submitting goroutine never blocks on it and
+	// therefore never holds a slot the requester thread believes is free.
+	completed := make(chan completion, admissionWindow)
 	outstanding := 0
 	completionPoller := perfcommon.NewSocketPoller(requester, zlink.PollCompletion)
 	defer completionPoller.Close()
@@ -54,8 +102,14 @@ func runSingleReqRep(
 		requesters.Add(1)
 		go func() {
 			defer requesters.Done()
-			runtime.LockOSThread()
-			defer runtime.UnlockOSThread()
+			// No runtime.LockOSThread here. These are not the role goroutines
+			// of PERF_SINGLE_TEST_POLICY.md 1.1.4 - the requester role is the
+			// locked benchmark goroutine that owns the completion poller, and
+			// the replier role is the locked goroutine above. A per-request
+			// goroutine only performs one DONTWAIT admission and then parks on
+			// the binding's completion channel; locking it would wire one OS
+			// thread per un-settled request and the admission window is
+			// thousands of requests wide at small message sizes.
 			payload := perfcommon.NewWindowMessage(cfg.msgSize, activeAt)
 			submit := request().Message(payload)
 			var tail *zlink.Message
@@ -88,7 +142,12 @@ func runSingleReqRep(
 		if payloadErr == nil && done.completedAt.Before(stopAt) {
 			if sent, valid := perfcommon.SentTimestampNsFromMessagePhase(reply, cfg.msgSize, perfcommon.PhaseActive); valid && done.completedNs >= sent {
 				stats.AddCount()
-				stats.AddLatencySampleNs(float64(done.completedNs-sent) / 2.0)
+				// PERF_SINGLE_TEST_POLICY.md 1.1.4: request-reply latency is the
+				// whole round trip, from the request submission stamp to this
+				// reply completion. The C reference records the same interval
+				// undivided (bindings/c/perf/single/common/perf_single_reqrep.hpp
+				// request_completion_callback).
+				stats.AddLatencySampleNs(float64(done.completedNs - sent))
 			}
 		}
 		zlink.MultipartClose(done.parts)
@@ -107,34 +166,63 @@ func runSingleReqRep(
 		}
 	}
 
-	waitForProgress := func(deadline time.Time, progressed bool) {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return
+	// The requester thread owns the only completion drain for this socket, so
+	// POLLCOMPLETION progress has to run here. A zero timeout is C's poll(0)
+	// after a submission burst; the bounded one is C's poll(50) once the
+	// admission window is saturated.
+	progressOnce := func(wait time.Duration) {
+		if wait < 0 {
+			wait = 0
 		}
-		if progressed {
-			remaining = 0
-		} else if remaining > 50*time.Millisecond {
-			remaining = 50 * time.Millisecond
-		}
-		_, pollErr := completionPoller.Wait(completionEvents, remaining)
+		_, pollErr := completionPoller.Wait(completionEvents, wait)
 		perfcommon.Must(pollErr)
 	}
 
-	// A turn starts one request, drains every completion already available,
-	// then lets POLLCOMPLETION pace reply and WRITABLE progress. Outstanding
-	// replies never gate submission of the next turn.
-	for time.Now().Before(stopAt) {
-		submitOne()
-		progressed := drainReady()
-		waitForProgress(stopAt, progressed)
-	}
-	for outstanding > 0 {
-		progressed := drainReady()
-		if outstanding == 0 {
-			break
+	// The requester thread owns the completion drain, so a settled request is
+	// only visible here after its goroutine has run. Yielding once turns a
+	// scheduling gap into a drained completion instead of a blocking poll.
+	// This is a scheduler yield, not a wait: it never sleeps.
+	drainSettled := func() bool {
+		if drainReady() {
+			return true
 		}
-		waitForProgress(time.Now().Add(timeout), progressed)
+		if outstanding == 0 {
+			return false
+		}
+		runtime.Gosched()
+		return drainReady()
+	}
+
+	// C parity (perf_single_reqrep.hpp run_request_phase): one turn submits
+	// continuously without awaiting any reply until the applied admission
+	// window is full, drains completions without waiting every 64 submissions,
+	// and blocks bounded only once the window is saturated.
+	for time.Now().Before(stopAt) {
+		submittedSinceProgress := 0
+		for time.Now().Before(stopAt) && outstanding < admissionWindow {
+			submitOne()
+			submittedSinceProgress++
+			if submittedSinceProgress >= 64 {
+				submittedSinceProgress = 0
+				progressOnce(0)
+				drainSettled()
+			}
+		}
+		// The window is full (or the deadline passed): progress on this thread
+		// and block bounded so a saturated interval cannot spin.
+		if !drainSettled() {
+			progressOnce(50 * time.Millisecond)
+			drainSettled()
+		}
+	}
+	// Completion drain of the requests submitted before the deadline. Every one
+	// of them is bounded by its own Timeout(timeout), so this terminates; none
+	// of them is counted (processCompletion drops completions past stopAt).
+	for outstanding > 0 {
+		if !drainSettled() {
+			progressOnce(50 * time.Millisecond)
+			drainSettled()
+		}
 	}
 	requesters.Wait()
 

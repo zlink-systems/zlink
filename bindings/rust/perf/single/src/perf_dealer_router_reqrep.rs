@@ -74,8 +74,24 @@ fn main() {
         .expect("handshake reply receive");
     assert_eq!(handshake_reply.parts()[0].as_bytes(), b"PONG");
 
+    // PERF_SINGLE_TEST_POLICY.md 1.1.3 (D-BP40): the outstanding set is bounded
+    // by the admission window Core applied to the requester socket, read from
+    // the same auto-HWM snapshot the runner would report in "Auto-HWM Detail".
+    let admission_window = common::reqrep_admission_window(
+        requester_monitor
+            .status()
+            .map(|status| status.auto_hwm_applied_sndhwm_bytes)
+            .unwrap_or(0),
+        requester
+            .common_options()
+            .send_high_water_mark()
+            .unwrap_or(0),
+        config.size.max(common::HEADER_SIZE),
+    )
+    .expect("requester admission window");
+
     let replier_thread = std::thread::spawn(move || common::run_router_replier(replier));
-    let stats = common::run_reqrep(&config, &requester, |payload, timeout| {
+    let stats = common::run_reqrep(&config, &requester, admission_window, |payload, timeout| {
         let request = requester.request().message(payload);
         if common::measurement_part_count() == 2 {
             Box::pin(
