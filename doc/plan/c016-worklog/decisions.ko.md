@@ -4568,3 +4568,7 @@ Multi에만 있다). Rust·Python 지도 브리프에 반영; Java·Node·Go 지
 ## D-B241 (2026-09-08 13:45, 머신 B) 사용자 결정 — 0.17.3 정식 릴리스 생략, 0.17.4로 한 번에(ALL-2 + ALL-3 + LIN-1)
 
 **결정**: "0.17.4 버전 작업 먼저 진행해 아까 말한대로". 0.17.3은 `core/v0.17.3-alpha`(머신 A 선행용)로 두고 정식 태그·릴리스는 하지 않는다. 다음 정식 = **0.17.4** = ALL-2 누적 patch(통합 turn·C-2a/2b/2d·ws masking/batch·D·E) + ALL-3(큰 payload·latency·RSS·perf 재확인·fixture) + LIN-1(Linux CI 수정). 진행 중인 review-all2·gate-all은 ALL-2 근거로, ALL-3 완료 후 최종 게이트(Linux+Windows) 한 번 → main 착지 → changelog 0.17.4 절(0.17.3 절 병합) → bump 0.17.4 → 태그 → Actions 릴리스. bump 준비 agent를 0.17.4로 전환.
+
+## D-B242 (2026-09-08 13:50, 머신 B) 정정 — 0.17.3 릴리스 진행(alpha + LIN-1), 0.17.4는 별도 worktree에서 astra 병렬(D-B241 철회)
+
+**사용자**: "0.17.3 릴리즈는 진행하고 별도 워크트리에서 0.17.4 병렬로 진행하라고 astra로 한번에". D-B241의 "0.17.3 생략"은 감독자의 오독 — 철회. 확정: (1) **0.17.3** = `core/v0.17.3-alpha` 내용 + LIN-1(Linux CI `unittest_flow_state_monitor`) 수정 → release worktree `rel`에서 커밋·bump 0.17.3·태그·Actions 릴리스, LIN-1 patch가 나오는 즉시. (2) **0.17.4** = ALL-2(wip/0.17.3-all2) + ALL-3(worktree all3, astra 진행 중) + LIN-1 → review-all2·gate-all 결과 반영 → ALL-3 완료 후 최종 게이트(Linux+Windows) → 착지 → bump 0.17.4 → 릴리스. 두 트랙은 독립 worktree에서 병렬.
