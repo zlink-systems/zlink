@@ -22,7 +22,7 @@ env:
 jobs:
   resolve:
     name: Resolve framework version
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
       publish_registry: ${{ steps.version.outputs.publish_registry }}
@@ -62,7 +62,7 @@ jobs:
 
   release-node:
     name: Build and publish Node framework packages
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: resolve
     permissions:
       contents: read
@@ -128,7 +128,7 @@ jobs:
 
   release-java:
     name: Build and stage Java framework packages
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: resolve
     steps:
       - uses: actions/checkout@v4
@@ -172,7 +172,7 @@ jobs:
 
   release-cpp:
     name: Package C++ framework sources
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: resolve
     permissions:
       contents: write

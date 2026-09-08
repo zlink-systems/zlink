@@ -45,7 +45,7 @@ env:
 jobs:
   resolve:
     name: Resolve Target/Version
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     outputs:
       target: ${{ steps.resolve.outputs.target }}
       version: ${{ steps.resolve.outputs.version }}
@@ -153,7 +153,7 @@ jobs:
 
   release-node:
     name: Release Node Binding
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: resolve
     if: needs.resolve.outputs.target == 'node' || needs.resolve.outputs.target == 'all'
     permissions:
@@ -249,7 +249,7 @@ jobs:
 
   release-go:
     name: Release Go Binding
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: resolve
     if: needs.resolve.outputs.target == 'go' || needs.resolve.outputs.target == 'all'
     steps:
@@ -308,7 +308,7 @@ jobs:
 
   release-python:
     name: Release Python Binding
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: resolve
     if: needs.resolve.outputs.target == 'python' || needs.resolve.outputs.target == 'all'
     steps:
@@ -396,7 +396,7 @@ jobs:
 
   release-java:
     name: Release Java Binding
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: resolve
     if: needs.resolve.outputs.target == 'java' || needs.resolve.outputs.target == 'all'
     steps:
@@ -497,7 +497,7 @@ jobs:
 
   release-cpp:
     name: Release C++ Binding
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: resolve
     if: needs.resolve.outputs.target == 'cpp' || needs.resolve.outputs.target == 'all'
     steps:
@@ -556,7 +556,7 @@ jobs:
 
   release-rust:
     name: Release Rust Binding
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: resolve
     if: needs.resolve.outputs.target == 'rust' || needs.resolve.outputs.target == 'all'
     steps:
