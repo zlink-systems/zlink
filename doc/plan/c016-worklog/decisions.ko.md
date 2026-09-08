@@ -4559,3 +4559,8 @@ Multi에만 있다). Rust·Python 지도 브리프에 반영; Java·Node·Go 지
 
 **관찰**: WIN-1 커밋 `f5d7cccde2` 뒤 dispatch한 run에서 Windows x64 "Verify Windows test configuration" 통과(이전 2회 실패 해소). Linux x64 "Build and test libzlink"에서 `unittest_flow_state_monitor` ***Timeout 10 s, 내부 `test_pause_applied_by_pair_admission_is_booked:707 Expected 0 Was 1`, Forced closure 2 sockets. 직전 run(34183182643, WIN-1 전)은 Linux x64 통과. 의심: `generate_random()`이 `rand()` 조합 대신 `generate_random_bytes()`(getrandom) 경로로 바뀜(값 분포·호출 비용 변화), `wait_for_reaper_done()` EAGAIN 재대기의 종료 타이밍, 또는 2-core runner 간헐.
 **조치**: LIN-1(Claude opus, 2 h, worktree lin1 @ `f5d7cccde2`): 30회 반복 + `taskset -c 0,1 --timeout 10`, random.cpp/ctx_termination.cpp 부분 되돌리기로 귀속, 부모 커밋 대조, 원인·수정, patch `all-artifacts/LIN-1.patch`. 0.17.3 릴리스 전에 포함(전 플랫폼 green 필요).
+
+## D-B240 (2026-09-08 13:45, 머신 B) 사용자 결정 — 0.17.3 범위 축소: alpha 내용 + LIN-1(Linux CI 수정)만; ALL-2·ALL-3는 0.17.4
+
+**결정**: "리눅스 빌드 실패만 수정하면 되는 것 아니냐" — 맞다. 0.17.3 = `core/v0.17.3-alpha`(0.17.2 + receive 소유권 `de730d4ac5` + Windows 엔트로피·ctx 종료 `f5d7cccde2`) + LIN-1 patch. Actions는 Windows x64 포함 5 플랫폼 green, Linux x64만 `unittest_flow_state_monitor`. changelog 0.17.3 절은 이미 이 범위. ALL-2(트랙 2 누적: 통합 turn·C-2a/2b/2d·ws·D·E)와 ALL-3(큰 payload·latency 등)는 **0.17.4**로. review-all2·gate-all은 계속 돌려 0.17.4 착지 근거로 쓴다.
+**절차**: LIN-1 완료 → release worktree(`rel`, origin/main)에서 patch 커밋 → bump 0.17.3 → 태그 `core/v0.17.3` → `gh workflow run build.yml --ref core/v0.17.3` → Release 확인 → A 통보. main 작업 트리는 gate-all이 사용 중이라 건드리지 않는다. 예상 17:00 전후.
