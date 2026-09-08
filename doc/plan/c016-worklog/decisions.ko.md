@@ -4639,3 +4639,8 @@ worktree에서 빌드해 `~/.cache/zlink/core-pinned/0.17.3` 설치 → 7개 언
 
 **결과**(`gate-all-summary.md`): 적용 68 파일 충돌 0, 공개 인터페이스 0·mirror 12/12, 전체 ctest 210/211(hotpath_gate만 dev 측정), 변경 suite 121×3 전부 통과, TSan(suppression 없이) runtime report 0·209/211(`test_shutdown_during_drain` 기존 fixture 전제, hotpath 계측 오버헤드). Windows 단계는 `D:\project\zlink`의 WIN-1 잔여 변경(이미 `f5d7cccde2`로 착지, 내용 동일 확인) 때문에 detach checkout 거부 → 측정·ASan·Windows 미실행.
 **조치**: 감독자가 `D:\project\zlink` 두 파일을 원복하고 origin/main detach로 정리, main 작업 트리도 origin/main으로 복구(staged ALL-2 patch는 `wip/0.17.3-all2`·`all-artifacts`에 보존). gate-all은 재실행하지 않고, ALL-2b + ALL-3 병합 뒤 **0.17.4 최종 게이트**(Linux 전체·TSan·ASan·hotpath·with_stream·perf/c·ws 비율·Windows 전체)로 한 번에 검증한다.
+
+## D-B247 (2026-09-08 14:30, 머신 B) A 확인 — 0.17.3-alpha에서 ws/wss/tls MULTI_STREAM 첫 complete(93~96 %); bump 예고 규칙
+
+**확인**(D-BP42 표): .NET·C MULTI_STREAM ws 93.24 %, wss 96.19 %, tls 93.07 %, latency 1.04~1.07× — receive 소유권 수정(`de730d4ac5`) 전에는 C++·.NET이 이 셀에서 partial이었다. A는 `core/v0.17.3` prefix로 재고정 완료.
+**규칙(감독자, D-BP42 교훈 반영)**: 머신 B는 VERSION bump 커밋을 push하기 **전에** decisions에 D 항목으로 예고하고(버전·포함 커밋·예상 push 시각), A의 러너가 재고정할 수 있게 한다. 0.17.4 bump도 같은 절차.
