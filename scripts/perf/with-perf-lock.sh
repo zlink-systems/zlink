@@ -25,7 +25,7 @@ fi
 pattern='(/perf/build/.*(perf_multi|perf_single)|(perf_multi|perf_single)[^|]* --role |run_benchmarks(_multi)?\.sh .*--pattern|Zlink\.BindingBench[A-Za-z.]*\.dll)'
 waited=0
 while :; do
-  running="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v -e 'with-perf-lock' -e 'wait-for-idle-perf' || true)"
+  running="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v -e 'with-perf-lock' -e 'wait-for-idle-perf' -e 'perf-ticket' || true)"
   load="$(cut -d' ' -f1 /proc/loadavg)"
   if [ -z "${running}" ] && awk -v l="${load}" -v m="${load_max}" 'BEGIN{exit !(l<=m)}'; then break; fi
   if [ "${waited}" -ge "${max_wait}" ]; then

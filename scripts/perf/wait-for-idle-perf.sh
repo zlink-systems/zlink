@@ -38,7 +38,7 @@ pattern='(/perf/build/.*(perf_multi|perf_single)|(perf_multi|perf_single)[^|]* -
 while :; do
   running="$(pgrep -af "${pattern}" 2>/dev/null \
     | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' \
-    | grep -v -e 'wait-for-idle-perf' -e 'with-perf-lock' || true)"
+    | grep -v -e 'wait-for-idle-perf' -e 'with-perf-lock' -e 'perf-ticket' || true)"
   [ -z "${running}" ] && break
   if [ "${waited}" -ge "${max_wait}" ]; then
     echo "perf가 ${max_wait}초 동안 idle이 되지 않았다:" >&2
@@ -68,7 +68,7 @@ caller_pid=$PPID
   # 호출자 shell이 살아 있는 동안은 perf가 아직 안 보여도 잡는다(.NET 기동은 20초를 넘긴다 —
   # 2026-09-08 10:03 그 창에서 Go 측정이 겹쳐 출발했다). grace는 호출자가 이미 죽었을 때의 상한.
   for _ in $(seq 1 "${grace}"); do
-    r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v -e 'wait-for-idle-perf' -e 'with-perf-lock' || true)"
+    r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v -e 'wait-for-idle-perf' -e 'with-perf-lock' -e 'perf-ticket' || true)"
     [ -n "${r}" ] && break
     kill -0 "${caller_pid}" 2>/dev/null || break
     sleep 1
@@ -77,12 +77,12 @@ caller_pid=$PPID
   while [ -z "${r}" ] && kill -0 "${caller_pid}" 2>/dev/null; do
     [ $(( $(date +%s) - hold_start )) -ge "${max_hold}" ] && break
     sleep 2
-    r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v -e 'wait-for-idle-perf' -e 'with-perf-lock' || true)"
+    r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v -e 'wait-for-idle-perf' -e 'with-perf-lock' -e 'perf-ticket' || true)"
   done
   # perf가 보이는 동안 잡되, 호출자가 죽으면 놓는다 — 호출자 없는 holder는 남의 perf를 보고
   # max_hold까지 lock을 쥔다(2026-09-08 10:50 codex 호출 wrapper가 죽은 뒤 12개 대기가 멈췄다).
   while :; do
-    r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v -e 'wait-for-idle-perf' -e 'with-perf-lock' || true)"
+    r="$(pgrep -af "${pattern}" 2>/dev/null | grep -vE '^[0-9]+ +(/bin/)?(ba)?sh -[lc]' | grep -v -e 'wait-for-idle-perf' -e 'with-perf-lock' -e 'perf-ticket' || true)"
     [ -z "${r}" ] && break
     kill -0 "${caller_pid}" 2>/dev/null || break
     [ $(( $(date +%s) - hold_start )) -ge "${max_hold}" ] && break
