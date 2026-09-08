@@ -8,12 +8,11 @@ on:
       - 'node/v*'
       - 'python/v*'
       - 'java/v*'
-      - 'dotnet/v*'
       - 'cpp/v*'
   workflow_dispatch:
     inputs:
       target:
-        description: 'Target binding: go|rust|node|python|java|dotnet|cpp|all'
+        description: 'Target binding: go|rust|node|python|java|cpp|all'
         required: true
         default: 'node'
         type: string
@@ -74,7 +73,7 @@ jobs:
           fi
 
           case "${TARGET}" in
-            go|rust|node|python|java|dotnet|cpp|all) ;;
+            go|rust|node|python|java|cpp|all) ;;
             *)
               echo "Unsupported target: ${TARGET}" >&2
               exit 1
@@ -157,36 +156,47 @@ jobs:
     runs-on: ubuntu-22.04
     needs: resolve
     if: needs.resolve.outputs.target == 'node' || needs.resolve.outputs.target == 'all'
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install npm with Trusted Publishing support
+        run: npm install -g npm@latest
 
       - name: Install native build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake pkg-config libssl-dev
 
-      - name: Build Linux x64 core runtime
+      - name: Prepare verified Linux x64 Core release
+        id: node-core
+        shell: bash
+        env:
+          ZLINK_CORE_RELEASE_VERSION: ${{ needs.resolve.outputs.core_version }}
+          ZLINK_CORE_CACHE_DIR: ${{ runner.temp }}/zlink-core
         run: |
-          cmake -S core -B core/build_bindings_release \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED=ON \
-            -DBUILD_STATIC=OFF \
-            -DBUILD_TESTS=OFF \
-            -DENABLE_LTO=OFF \
-            -DZLINK_CXX_STANDARD=17
-          cmake --build core/build_bindings_release --parallel 2
+          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
+            --version "${ZLINK_CORE_RELEASE_VERSION}" \
+            --platform linux-x64 \
+            --cache-dir "${ZLINK_CORE_CACHE_DIR}")
           mkdir -p bindings/node/prebuilds/linux-x64
           install -m755 \
-            core/build_bindings_release/lib/libzlink.so.${{ needs.resolve.outputs.core_version }} \
+            "${core_prefix}/lib/libzlink.so.${ZLINK_CORE_RELEASE_VERSION}" \
             bindings/node/prebuilds/linux-x64/libzlink.so.${{ needs.resolve.outputs.core_version }}
           major="${{ needs.resolve.outputs.core_version }}"
           major="${major%%.*}"
           ln -sfn libzlink.so.${{ needs.resolve.outputs.core_version }} "bindings/node/prebuilds/linux-x64/libzlink.so.${major}"
           ln -sfn "libzlink.so.${major}" bindings/node/prebuilds/linux-x64/libzlink.so
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
+          cp "${core_prefix}/share/zlink/core-package-provenance.json" \
+            bindings/node/provenance/core-package-provenance.json
+          echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
 
       - name: Validate version
         shell: bash
@@ -199,7 +209,7 @@ jobs:
 
       - name: Build and test
         env:
-          ZLINK_LIB_PATH: ${{ github.workspace }}/bindings/node/prebuilds/linux-x64/libzlink.so
+          ZLINK_CORE_PACKAGE_PREFIX: ${{ steps.node-core.outputs.prefix }}
           ZLINK_CORE_VERSION: ${{ needs.resolve.outputs.core_version }}
         run: |
           cd bindings/node
@@ -220,16 +230,9 @@ jobs:
 
       - name: Publish to npm
         if: needs.resolve.outputs.publish_registry == 'true'
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -z "${NPM_TOKEN}" ]; then
-            echo "Skipping npm publish because NPM_TOKEN is not configured."
-            exit 0
-          fi
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
           cd bindings/node
-          npm publish --access public
+          npm publish --provenance --access public
 
       - uses: actions/upload-artifact@v4
         with:
@@ -399,32 +402,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install native build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libssl-dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-      - name: Build Linux x64 core runtime
+      - name: Prepare verified Linux x64 Core release
+        id: java-core
+        shell: bash
+        env:
+          ZLINK_CORE_RELEASE_VERSION: ${{ needs.resolve.outputs.core_version }}
+          ZLINK_CORE_CACHE_DIR: ${{ runner.temp }}/zlink-core
         run: |
-          cmake -S core -B core/build_bindings_release \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED=ON \
-            -DBUILD_STATIC=OFF \
-            -DBUILD_TESTS=OFF \
-            -DENABLE_LTO=OFF \
-            -DZLINK_CXX_STANDARD=17
-          cmake --build core/build_bindings_release --parallel 2
-          mkdir -p \
-            bindings/java/src/main/resources/native/linux-x86_64 \
-            bindings/java/native/linux-x86_64
-          install -m755 \
-            core/build_bindings_release/lib/libzlink.so.${{ needs.resolve.outputs.core_version }} \
-            bindings/java/src/main/resources/native/linux-x86_64/libzlink.so.${{ needs.resolve.outputs.core_version }}
-          ln -sfn libzlink.so.${{ needs.resolve.outputs.core_version }} bindings/java/src/main/resources/native/linux-x86_64/libzlink.so
-          install -m755 \
-            core/build_bindings_release/lib/libzlink.so.${{ needs.resolve.outputs.core_version }} \
-            bindings/java/native/linux-x86_64/libzlink.so.${{ needs.resolve.outputs.core_version }}
-          ln -sfn libzlink.so.${{ needs.resolve.outputs.core_version }} bindings/java/native/linux-x86_64/libzlink.so
+          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
+            --version "${ZLINK_CORE_RELEASE_VERSION}" \
+            --platform linux-x64 \
+            --cache-dir "${ZLINK_CORE_CACHE_DIR}")
+          manifest="${core_prefix}/share/zlink/core-package-provenance.json"
+          manifest_sha=$(sha256sum "${manifest}" | awk '{print $1}')
+          runtime_sha=$(sha256sum \
+            "${core_prefix}/lib/libzlink.so.${ZLINK_CORE_RELEASE_VERSION}" \
+            | awk '{print $1}')
+          summary=$(jq -cn \
+            --arg version "${ZLINK_CORE_RELEASE_VERSION}" \
+            --arg prefix "${core_prefix}" \
+            --arg provenanceSha256 "${manifest_sha}" \
+            --arg runtimeSha256 "${runtime_sha}" \
+            '{version: $version, prefix: $prefix,
+              provenanceSha256: $provenanceSha256,
+              runtime: {sha256: $runtimeSha256, soname: "libzlink.so.0"}}')
+          echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
+          echo "summary=${summary}" >> "${GITHUB_OUTPUT}"
 
       - uses: actions/setup-java@v4
         with:
@@ -442,7 +449,8 @@ jobs:
 
       - name: Build and test
         env:
-          ZLINK_CORE_BUILD_DIR: core/build_bindings_release
+          ZLINK_CORE_PACKAGE_PREFIX: ${{ steps.java-core.outputs.prefix }}
+          ZLINK_CORE_PACKAGE_SUMMARY: ${{ steps.java-core.outputs.summary }}
         run: |
           cd bindings/java
           chmod +x gradlew
@@ -452,10 +460,27 @@ jobs:
         if: needs.resolve.outputs.publish_registry == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          ZLINK_CORE_BUILD_DIR: core/build_bindings_release
+          ZLINK_CORE_PACKAGE_PREFIX: ${{ steps.java-core.outputs.prefix }}
+          ZLINK_CORE_PACKAGE_SUMMARY: ${{ steps.java-core.outputs.summary }}
         run: |
           cd bindings/java
           ./gradlew publish
+
+      - name: Upload to Maven Central Portal
+        if: needs.resolve.outputs.publish_registry == 'true'
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_PASSPHRASE: ${{ secrets.SIGNING_PASSPHRASE }}
+          MAVEN_CENTRAL_BUNDLE_DIR: ${{ runner.temp }}/zlink-java-central-staging
+          MAVEN_CENTRAL_BUNDLE_PATH: ${{ runner.temp }}/zlink-java-central-bundle.zip
+          ZLINK_CORE_PACKAGE_PREFIX: ${{ steps.java-core.outputs.prefix }}
+          ZLINK_CORE_PACKAGE_SUMMARY: ${{ steps.java-core.outputs.summary }}
+        run: |
+          cd bindings/java
+          ./gradlew publishAllPublicationsToCentralStagingRepository
+          bash scripts/upload-central-bundle.sh
 
       - uses: actions/upload-artifact@v4
         with:
@@ -469,86 +494,6 @@ jobs:
           tag_name: java/v${{ needs.resolve.outputs.version }}
           name: java binding v${{ needs.resolve.outputs.version }}
           files: bindings/java/build/libs/*.jar
-
-  release-dotnet:
-    name: Release .NET Binding
-    runs-on: ubuntu-22.04
-    needs: resolve
-    if: needs.resolve.outputs.target == 'dotnet' || needs.resolve.outputs.target == 'all'
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Prepare verified Linux x64 Core release
-        id: dotnet-core
-        shell: bash
-        env:
-          ZLINK_CORE_RELEASE_VERSION: ${{ needs.resolve.outputs.core_version }}
-          ZLINK_CORE_CACHE_DIR: ${{ runner.temp }}/zlink-core
-        run: |
-          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
-            --version "${ZLINK_CORE_RELEASE_VERSION}" \
-            --platform linux-x64 \
-            --cache-dir "${ZLINK_CORE_CACHE_DIR}")
-          echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Validate version
-        shell: bash
-        run: |
-          file_version=$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' bindings/dotnet/src/Zlink/Zlink.csproj | head -n1)
-          if [ "${file_version}" != "${{ needs.resolve.outputs.version }}" ]; then
-            echo "Version mismatch: Zlink.csproj=${file_version}, requested=${{ needs.resolve.outputs.version }}" >&2
-            exit 1
-          fi
-
-      - name: Build, test, and pack
-        env:
-          ZLINK_LIBRARY_PATH: ${{ steps.dotnet-core.outputs.prefix }}/lib/libzlink.so.${{ needs.resolve.outputs.core_version }}
-          LD_LIBRARY_PATH: ${{ steps.dotnet-core.outputs.prefix }}/lib
-        run: |
-          dotnet build bindings/dotnet/src/Zlink/Zlink.csproj -c Release
-          dotnet test bindings/dotnet/tests/Zlink.Tests/Zlink.Tests.csproj -c Release
-          mkdir -p dist/dotnet
-          dotnet pack bindings/dotnet/src/Zlink/Zlink.csproj -c Release \
-            -p:PackageOutputPath="${{ github.workspace }}/dist/dotnet" \
-            -p:ZLinkLinuxX64NativeRoot="${{ steps.dotnet-core.outputs.prefix }}/lib" \
-            -p:ZLinkCoreVersion="${{ needs.resolve.outputs.core_version }}" \
-            -p:ZLinkCoreProvenancePath="${{ steps.dotnet-core.outputs.prefix }}/share/zlink/core-package-provenance.json"
-
-      - name: Publish to NuGet
-        if: needs.resolve.outputs.publish_registry == 'true'
-        env:
-          NUGET_SOURCE_URL: ${{ secrets.NUGET_SOURCE_URL }}
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
-        run: |
-          if [ -z "${NUGET_SOURCE_URL}" ] || [ -z "${NUGET_API_KEY}" ]; then
-            echo "Skipping NuGet publish because credentials are not configured."
-            exit 0
-          fi
-          dotnet nuget push dist/dotnet/*.nupkg \
-            --source "${NUGET_SOURCE_URL}" \
-            --api-key "${NUGET_API_KEY}" \
-            --skip-duplicate
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: binding-dotnet-${{ needs.resolve.outputs.version }}
-          path: dist/dotnet/*.nupkg
-
-      - name: Create GitHub Release
-        if: needs.resolve.outputs.create_release == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: dotnet/v${{ needs.resolve.outputs.version }}
-          name: dotnet binding v${{ needs.resolve.outputs.version }}
-          files: dist/dotnet/*.nupkg
 
   release-cpp:
     name: Release C++ Binding
