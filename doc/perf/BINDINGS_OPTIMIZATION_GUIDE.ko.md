@@ -98,6 +98,30 @@ credit 회복 시 `ZLINK_COMPLETION_WRITABLE`, callback 없음, pull 방식 comp
 | Go | `zlink_msg_copy` clone submit | 즉시 성공 send의 poller/goroutine 생성 제거, drain spin → bounded blocking poll, terminal 원인 보존 | 81.5k → 190k |
 | Rust | `try_clone` reply | 실행기 spin → reactor 스레드 + public Poller 구동, lazy 등록(보류 재생), 전송당 poller/복사/할당 제거, submit gate RwLock, REQUEST spin 제거 | 172k(포팅 전) → 259k |
 
+### 3.1 0.17.2 캠페인 적용 현황 (2026-09-07~08, `doc/perf/perf/bindings-0.17.0/`)
+
+측정은 고정 Core 0.17.2, `tcp`, clients 100, 5 sizes(64~65536), duration 5, C와 paired. 판정 수치는
+계획서 §9.x.2와 `decisions.ko.md` D-BP1~D-BP32. **"러너 정합"은 라이브러리 개선이 아니라 측정
+의미를 C와 맞춘 것이며 library 효과와 합산하지 않는다.** 이 표는 "무엇을 이미 했고 무엇이
+안 됐는지"를 언어 간에 교차 적용하기 위한 것이다.
+
+| 언어 | binding 라이브러리 채택 | 러너 정합 적용 | 비용 지도 결론 | `tcp` 판정(6 pattern) |
+|---|---|---|---|---|
+| C++ | 즉시 admission SEND의 completion bundle·waiter map 생략(D-BP 러너 pass 1, `p3pin`); completion-owner 이관(requester를 public poller `POLLCOMPLETION`에) | RTT loop 제거(전 binding), 상한 제거·C turn 구조(`31c5e4f7f0`), relay 수신-송신 결합(`e0862e1e5c`), client echo drain(`33f63ae89d`) | **지배 항목 없음** — 요청당 잔여 Ir C 6.4k vs C++ 13.6k, 차이가 380~830 Ir짜리 10개에 퍼짐; coroutine frame은 516 Ir(격차의 7%); C에 없는 요청당 할당 5개(≈408 Ir); Core I/O 연산 2.2~2.9배 유발(922 Ir)(D-BP26) | 통과 4(DD 97.6·PUBSUB 95.3·SS 91.9/91.7), 보류 2(REQREP 72.6/75.8) |
+| .NET | (pass 2, 0.17.1) reply submit closure→struct −352 B/op, pump closure 지연 | relay 결합(`fb3f37191d`), client echo drain(진행 중) | **지배 항목 둘** — send builder 177.7 ns·80.5 B/msg(격차 35%), message helper P/Invoke 전환 137.5 ns(27%); GC 0.3%로 무관(D-BP31). 둘 다 **공개 API 계약**: builder는 공개 operation 객체, close는 terminal 시점. 전환 10→9 후보는 효과 없음(D-BP32) | 미달 4(DD 62.5·PUBSUB 61.0·REQREP 60.5/63.1), SS 2 측정 중 |
+| Java | — | relay는 이미 `submit_sync()`(C 모델) | 미작성. DD 65536 B만 53.7%로 무너지는 **크기 의존형**(PUBSUB 65536 B는 138%) → DD 송신 경로 고유 | PUBSUB 통과 93.2; DD 72.0·DR SS 78.7 미달; 나머지 측정 중 |
+| Node | — | relay 결합(`d744799803`) | 미작성. 전 pattern 20~43%. DD client latency 1,267 ms(C 0.082) — **수신 cadence 이상**(조사 중) | DD 43.1·PUBSUB 29.6·DR REQREP 32.5 미달 |
+| Go | — | REQREP 상한 제거·C turn 구조(`add837942b`, 0.17.2 동시 multipart로 재개); relay는 이미 동기 제출; 단방향 `send drain timed out`(수정 중) | 미작성. REQREP 작은 크기 latency ~3x(Node도 동일) → **async terminal 왕복 고정 비용** 후보 | PUBSUB 39.8·REQREP 67.7/67.1 미달; DD·SS 차단 |
+| Rust | — | relay 결합(`fb3f37191d`) | 미작성 | 측정 중 |
+| Python | — | relay 결합(`fb3f37191d`) | 미작성 | 측정 중 |
+
+**교차 적용 후보 (효과가 확인된 것을 다른 언어에)**
+- C++의 "즉시 admission SEND는 completion bundle을 만들지 않는다"(§2.1)는 Java·Node에 이미 있다(§3). .NET·Go·Rust·Python에 같은 경로가 있는지 비용 지도로 확인할 것.
+- .NET의 reply closure→struct(−352 B/op)는 closure를 쓰는 Node·Python reply 경로에 후보.
+- 러너: relay 수신-송신 결합과 client echo drain은 **7개 전부**에 필요했다(D-BP24). Java·Go만 처음부터 C 모델이었다.
+
+**언어별 격차의 성격이 다르다** — C++는 퍼진 비용(개별 후보 무의미), .NET은 두 항목이 지배하나 공개 API에 묶임, Node·Go는 latency 이상이 throughput과 별개로 있음. 비용 지도 없이 후보를 고르면 pass 2가 오히려 나빠진 C++ 사례(D-BP21)를 반복한다. **pass 전에 지도부터.**
+
 ## 4. 기각한 후보 (다시 시도하지 않을 것)
 
 - public wrapper, Future/Task/CompletionStage, callback userdata의 pool 재사용. `GCHandle` 재사용은
@@ -109,6 +133,9 @@ credit 회복 시 `ZLINK_COMPLETION_WRITABLE`, callback 없음, pull 방식 comp
   조합(drain 안정성 저하), GIL을 유지하는 `PyDLL` 호출(교착).
 - 실행기 turn마다 timeout-0 poll로 진행을 흉내 내는 방식 전부(spin). 측정값이 좋아 보여도 CPU
   100%이며 다른 스레드의 진행을 빼앗는다.
+- **(0.17.2 캠페인 추가)** C++: `_continuation_weak` fallback 제거·lifetime 없는 슬롯 할당 제거(pass 2 — DR 72.87→69.35%로 악화, 도달 불가 경로를 throw로 바꾸는 내부 계약 축소), REQUEST completion 중복 합류 상태 제거(pass 1 — 악화), REQUEST에 SEND의 ID 0 즉시 완료 적용(request terminal 계약 위반), entry/result 통합(caller detach 수명), RID snapshot을 빌린 pointer로(exact-target 재제출 보존), route lookup·pipe cache(Core 소유), WRITABLE capture 즉시 재제출(Core 계약: `NO_DATA`까지 비운 뒤 재제출, `socket/README.ko.md:1080`).
+- **(0.17.2 캠페인 추가)** .NET: send builder 80.5 B/msg 제거(공개 operation 객체 자체), close를 다음 init에 합침(ownership release가 terminal 계약), GC 감소를 가설로 쓰는 것(GC pause 0.3%). 유일 계약 유지 후보 전환 10→9는 효과 0(D-BP32).
+- **(0.17.2 캠페인 추가)** 러너: pending 수 상한으로 relay 누적 막기(§5 위반 — 답은 "앞 admission을 기다린 뒤 다음 제출"), `send_drain_timeout`·deadline 늘리기, 중앙값이 정상이라고 개별 run 이상을 무시하기(D-BP29 — C도 튄다는 걸 중앙값이 가렸다).
 - 인위적인 in-flight 상한이나 2단계 측정으로 backpressure를 우회하는 러너 변경
   ([PERF_MULTI_TEST_POLICY.md](PERF_MULTI_TEST_POLICY.md) §1.2, §5.1 위반).
 
