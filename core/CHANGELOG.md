@@ -16,6 +16,17 @@ Design decisions are in `doc/plan/c016-worklog/decisions.ko.md` (D-B…).
 
 ### Fixed
 
+- Windows: the random-byte generator had no entropy source (the `getrandom`
+  and `/dev/urandom` paths were compiled out on Windows) and fell back to the
+  15-bit, thread-local `rand()`, so unseeded I/O threads produced identical
+  sequences and two transport pairs could receive the same 64-bit pair id; a
+  stale lane fence then hit the fresh pair and READY never fired
+  (`test_zmp_metadata` on the Windows CI runner). Windows now uses
+  `RtlGenRandom` (`SystemFunction036`, resolved dynamically) and the `rand()`
+  fallback is isolated.
+- Context termination no longer aborts on a spurious mailbox wake
+  (`wait_for_reaper_done` treated `EAGAIN` from a blocking receive as fatal).
+
 - STREAM sockets no longer stall with received frames left in the inbound
   pipes when one thread pulls packets while another thread sends on the same
   socket. The receive thread's lock-free public receive lease and the command

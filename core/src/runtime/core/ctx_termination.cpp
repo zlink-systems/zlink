@@ -103,10 +103,19 @@ bool zlink::ctx_t::begin_shutdown_locked (bool allow_fork_cleanup_)
 int zlink::ctx_t::wait_for_reaper_done ()
 {
     command_t cmd;
-    const int rc = _term_mailbox.recv (&cmd, -1);
-    if (rc == -1 && errno == EINTR)
-        return -1;
-    errno_assert (rc == 0);
+    //  A blocking mailbox receive still reports EAGAIN for a wake that
+    //  carried no command: the signaler and the command pipe are separate
+    //  objects, so a stale or coalesced edge can outlive its command. That is
+    //  a spurious wake, not a termination result - keep waiting for the one
+    //  reaper acknowledgement this mailbox exists to deliver.
+    while (true) {
+        const int rc = _term_mailbox.recv (&cmd, -1);
+        if (rc == 0)
+            break;
+        if (errno == EINTR)
+            return -1;
+        errno_assert (errno == EAGAIN);
+    }
     zlink_assert (cmd.type == command_t::done);
     return 0;
 }
