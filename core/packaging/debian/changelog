@@ -1,3 +1,9 @@
+zlink (0.17.4-0.1) UNRELEASED; urgency=low
+
+  * Package the zlink 0.17.4 public ABI.
+
+ -- zlink Developers <ulalax@kairoscode.dev>  Tue, 09 Sep 2026 00:00:00 +0900
+
 zlink (0.17.3-0.1) UNRELEASED; urgency=low
 
   * Package the zlink 0.17.3 public ABI.

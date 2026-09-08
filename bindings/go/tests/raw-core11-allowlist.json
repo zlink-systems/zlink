@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "coreVersion": "0.17.3",
+  "coreVersion": "0.17.4",
   "headers": [
     {
       "path": "include/zlink.h",
