@@ -4436,7 +4436,7 @@ Node의 초 단위 latency(D-BP29 계열 교차 현상)는 이 backlog 깊이와
 echo 684건(client당 ~7) 미수신, admission은 전부 완료. 즉 admitted 메시지가 relay를 거쳐 15 s 안에 돌아오지
 않는 **echo 경로 정지**이며 drain 논리 문제가 아니다(tcp RR SS 3-run·DR SS complete). tls 64 KB는 §10.3.2의
 Core 대기 항목(D-BP28/29 계열)에 귀속하되, C는 같은 셀을 1-run만 `complete`로 확인했고 5-run은 미측정이므로
-0.18.0 재개 시 **C tls RR SS 65536 B 5-run을 먼저** 돌려 Core/relay 귀속을 확정한다. 수정 전 .NET이 45/50
+다음 캠페인 재개 시 **C tls RR SS 65536 B 5-run을 먼저** 돌려 Core/relay 귀속을 확정한다. 수정 전 .NET이 45/50
 "통과"한 것은 echo를 기다리지 않고 닫았기 때문이므로, 채택한 drain이 결함을 드러낸 것이지 만든 것이 아니다.
 
 ## D-B230 (2026-09-08 12:20, 머신 B) Windows 관련 Core 항목 정리(사용자 요청 확인) — CRT 링크 결정은 D 표, 0.17.3 태그 전 Windows Core 빌드 요청
@@ -4466,7 +4466,7 @@ RESULT를 만들지 않는다(complete만 대표값).
 **검증:** .NET tcp DD 64 B 5-run — 원시 5개 median = RESULT(예: throughput 891,724.5); Go DD 5-run —
 run 표 median = RESULT, 최종 5줄. `bash -n`·`compileall`·합성 median 검사 통과. 남은 실패: .NET perf
 test의 ws wallclock 회귀 테스트가 Auto-HWM `MsgUnit(B)=?` assertion으로 실패 — 측정은 complete이고
-median 변경과 무관(ws는 §10.3.2 Core 대기 항목, 0.18.0 이월).
+median 변경과 무관(ws는 §10.3.2 Core 대기 항목, 다음 캠페인 이월).
 
 ## D-B232 (2026-09-08 13:00, 머신 B) 사용자 규칙 — Core 버전은 GitHub Actions 릴리스까지(0.17.3부터), 버전별 changelog
 

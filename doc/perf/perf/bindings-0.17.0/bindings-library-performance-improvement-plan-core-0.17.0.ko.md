@@ -1535,14 +1535,14 @@ cell마다 개선 pass가 30~60분씩 붙는다. **§12를 문자 그대로 완�
    11:25까지 안 끝나면 해당 cell을 `차단`으로 기록하고 넘어간다.
 3. 이 문서·`decisions.ko.md`·Core 보고서 2건이 다음 세션의 유일한 출발점이 되도록 정리.
 
-**오늘 열지 않는 것 → 0.18.0 이월** (12:30 갱신 — 오늘 닫힌 항목은 지움)
+**오늘 열지 않는 것 → 다음 캠페인(Core 0.17.4 뒤) 이월** — "0.18.0"은 `doc/plan/c016-worklog/0.18.0-candidates.ko.md`(0.17.0 릴리스 전 스펙 리뷰의 후보 목록) 이름이지 Core 버전 계획이 아니다; Core는 0.17.4가 마지막 예정(D-B233) (12:30 갱신 — 오늘 닫힌 항목은 지움)
 - **초 단위 latency 교차 현상** — Node DD·SS 전 크기, Rust SS 4096 B, Java SS 4096 B, Go DR SS: 처리량은 정상인데 한 크기(또는 전 크기)의 latency가 C 대비 500~2,500x. C·C++·.NET에는 없다. cadence 조사(`log/2026-09-08-client-recv-cadence.ko.md`)는 server drain 제한·timestamp 재사용을 배제했고 Java의 "admission 대기 중 수신 중단" 결합을 찾았으나 후보는 처리량 -10%로 기각. Node·Rust·Go에서 같은 결합인지 확인이 첫 단계.
 - **Java REQREP 65536 B 왕복 비용** — 소켓당 미완료 ≤2인데 turn 17.5 ms(4096 B 0.61 ms); `snd_pending_bytes` 65,664(1 MiB 창의 6%)에서 POLLOUT 99% → 실효 admission 창을 byte HWM이 정하지 않음. Java request terminal(retained+WRITABLE 회복)과 Core admission 상호작용(`log/2026-09-08-java-reqrep-64k-analysis.ko.md`, `-gate.ko.md`). binding 라이브러리 소관 가능.
 - **Java RR SS 4096 B teardown 간헐 실패** — client `async_sends_timed_out` + relay `sending=true`(1/3). client가 admission 대기 중 echo 수신을 멈추면 relay reply admission이 막혀 상호 대기. cadence 결함의 teardown 발현.
 - **Go RR SS 65536 B `server_shutdown_failed`** — client는 RESULT까지 정상, relay server가 STOP 뒤 5 s 안에 못 끝남(2~3/5). DR SS는 같은 echo server 함수로 통과 → ROUTER client teardown 차이.
 - **Go DD 64 B 14%·latency 7x** — C turn 모델 도입 뒤 첫 complete 값. 제출당 goroutine+channel 왕복이 후보.
 - **REQREP async terminal 왕복 고정 비용** — Go·Node 작은 크기 latency ~3x 공통. 비용 지도 미작성.
-- **.NET tls RR SS 65536 B echo 경로 정지** — 15 s 창에서도 4/5 실패(echo 684건 미수신, admission 완료). C는 1-run만 확인 → 0.18.0 재개 시 C 5-run 먼저(D-BP34).
+- **.NET tls RR SS 65536 B echo 경로 정지** — 15 s 창에서도 4/5 실패(echo 684건 미수신, admission 완료). C는 1-run만 확인 → 다음 캠페인 재개 시 C 5-run 먼저(D-BP34).
 - **`tls`·`ws`·`wss`·STREAM 6개 언어(132 cell)** — `보류(Core 대기)`(D-BP23·D-BP28·D-BP29). Core 수정 뒤 전 언어 재측정.
 - **wss DD C 러너 간헐 실패** — 깨끗한 재현 1승 1패, 오염 3회 무효.
 - **.NET·C++ 미달 cell** — 지도 완료(D-BP26·D-BP31), 현재 수준 유지. 공개 API 변경은 제안하지 않는다(D-BP38). **Node·Go·Rust·Python·Java REQREP은 지도부터**(D-BP38, 진행 중).
