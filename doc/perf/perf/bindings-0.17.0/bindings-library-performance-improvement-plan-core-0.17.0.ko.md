@@ -474,9 +474,11 @@ host CPU·memory·I/O 부하를 섞지 않는다.
 용도로 쓰는 순간, 그 값은 판정 입력이 된다. 병렬로 돌면 두 프로세스가 서로를 눌러 느린
 원인이 코드인지 경합인지 구분할 수 없다. 크기를 읽을 때는 직렬로 다시 잰다.
 
-측정 명령은 `scripts/perf/with-perf-lock.sh -- <command>`로 실행한다 — flock을 얻고 load가
-내려간 뒤 명령을 실행하며 lock 수명이 명령 수명과 같다(D-BP33). 이전의
-`wait-for-idle-perf.sh`(lock을 백그라운드 holder에게 넘기는 방식)는 호환용으로만 남긴다.
+측정 명령은 티켓으로 낸다: `scripts/perf/perf-ticket.sh submit -p <1|2|3> -o <owner> -d "설명" -- <command>`.
+감독자가 띄운 단일 runner(`scripts/perf/perf-queue-runner.sh`)가 `.artifacts/perf-queue/pending/`의
+티켓을 이름순(우선순위-제출시각)으로 하나씩 실행하고, `QUEUE.md`가 대기·실행·완료 상태판이다
+(D-BP33). 직렬성은 runner가 하나라는 사실에서 나온다. `with-perf-lock.sh`·`wait-for-idle-perf.sh`는
+호환용이며 runner는 티켓 실행 동안 같은 flock을 쥐어 이들과 겹치지 않는다.
 
 ### 7.0.1 `PERF_SINGLE_TEST_POLICY` parity gate
 

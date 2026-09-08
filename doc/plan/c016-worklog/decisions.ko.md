@@ -2414,3 +2414,12 @@ lock 자체가 아니라 "lock을 넘기는" 구조를 버린다.
 **적용:** 감독자 측정 스크립트(measure.sh·measure-lang.sh)는 전환 완료. 이미 대기 중인 호출자
 10개(codex 3건 포함)는 이전 스크립트로 끝까지 가고, 이후 codex 브리프는 새 스크립트를 지시한다.
 
+**후속(같은 날 11:10, 사용자 제안 "에이전트들이 공통 파일에 티켓 식으로 진행"):** with-perf-lock도
+flock 경쟁자 여럿이 프로세스 패턴으로 "남의 perf"를 판별하는 구조라 같은 계열의 정지가 두 번 더
+났다(대기자 자신의 명령줄이 패턴에 걸림; 실행 중인 bash 스크립트를 편집하면 이미 버퍼에 읽힌 옛
+코드로 돈다). 최종 구조는 **티켓 큐 + 단일 runner**(`perf-ticket.sh submit` / `perf-queue-runner.sh`,
+`4887844e61`): 티켓 = pending/ 파일 하나(원자적 생성, 동시 제출 충돌 없음), runner 하나가 이름순으로
+실행, QUEUE.md 상태판. 직렬성은 lock이 아니라 runner 단일성에서 나오므로 패턴·holder·grace가 모두
+없다. 이전 스크립트는 호환용이고 runner가 같은 flock을 쥐어 겹침만 막는다. codex go-oneway-drain
+job은 브리프 지시 없이도 스크립트를 읽고 티켓 4장을 냈다.
+
