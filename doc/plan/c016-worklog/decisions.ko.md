@@ -4493,3 +4493,8 @@ median 변경과 무관(ws는 §10.3.2 Core 대기 항목, 0.18.0 이월).
 
 **근거:** 남은 미달은 공개 API 계약(D-BP26·D-BP31)과 언어 runtime 고정 비용에 묶여 있고, 132 cell은 C
 러너에서 재현되는 Core 결함이라 binding 쪽 작업으로는 움직이지 않는다. 목표·측정 조건 완화는 금지(§5, D-BP15).
+
+## D-B235 (2026-09-08 13:10, 머신 B) 사용자 요청 — 태그 `core/v0.17.3-alpha` (머신 A 선행 작업용)
+
+**내용**: 현재 main `6f9a163121`(0.17.2 + 트랙 1 receive 소유권 수정 `de730d4ac5` + changelog/workflow)에 pre-release 태그를 단다. VERSION·소스 버전은 아직 0.17.2다(soname libzlink.so.0.17.2). ALL-2·WIN-1은 미포함이며 정식 0.17.3은 그 둘의 게이트 뒤 bump·태그·Actions 릴리스로 낸다. Actions build.yml의 태그 패턴은 `-rc.N`만 인식하므로 이 alpha 태그로는 릴리스 workflow를 돌리지 않는다.
+**머신 A**: STREAM 정체 수정이 포함됐으므로 C++·.NET MULTI_STREAM 재측정을 이 태그로 시작할 수 있다. 고정 prefix는 태그 이름으로 구분한다(버전 문자열은 0.17.2).
