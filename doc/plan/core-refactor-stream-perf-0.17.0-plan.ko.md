@@ -1,5 +1,7 @@
 # Core 리팩토링 캠페인 (0.17.0 후반) — 전반 성능 개선 · POSDDD · 불필요 코드 정리 (STREAM 우선)
 
+> **상태(2026-09-09)**: 캠페인 종료. 결과는 §9, 릴리즈 0.17.1(`4cd03b9173`)·0.17.2(`dca377aa5e`)·0.17.3(`0761c1d4d0`)·**0.17.4(`5d2d215367`, GitHub Release `core/v0.17.4`)**. 후속(0.17.5) 항목은 §8 끝의 두 목록.
+
 > 작성일: 2026-09-06 21:10, 개정 21:40 · 22:00 (머신 B, main `285f37792d`)
 > 선행 계획: [`core-0.17.0-dontwait-contract-and-perf-plan-b.ko.md`](archive/core-0.17.0-dontwait-contract-and-perf-plan-b.ko.md)
 > 결정 기록: [`c016-worklog/decisions.ko.md`](c016-worklog/decisions.ko.md) (이 캠페인은 D-B140부터 이어 쓴다)
@@ -212,13 +214,13 @@ spec gap = 코드 동작이 `core/doc/spec`·공개 헤더 주석·공개 계약
 
 ### 7.3 hotpath_gate
 
-| 셀 | reference(Phase 0 → 갱신) | 최종(MP 게이트 `gate-mp-summary.md`, `aef7015e0f` 기준) |
-|---|---|---|
-| stream_tcp (신설, D-B142) | 15540.39 → 14623.47 (S-1, D-B150) → **13969.81** (`aef7015e0f`) | 13969.81 (Phase 0 대비 −10.1 %) |
-| router_router_tcp | 2972.88 → 2972.53 | 2966.84 (0.998) |
-| dealer_dealer_inproc | 3455.38 → 3230.92 (G-2) | 3287.92 (1.018) |
-| dealer_router_reqrep_inproc | 12054.89 → 18663.51 (G-2 셀 재정의) → **16455.38** (`aef7015e0f`) | 16455.38 (MP-9: async mailbox 왕복 4,996→70/5,000) |
-| pair_inproc | 2505.36 → 2348.46 (G-2) | 2367.78 (1.008) |
+| 셀 | reference(Phase 0 → 갱신) | 0.17.2(MP 게이트, `aef7015e0f`) | **0.17.4 최종(MERGE-3, `eb6abfb995`, idle)** |
+|---|---|---|---|
+| stream_tcp (신설, D-B142) | 15540.39 → 14623.47 (S-1, D-B150) → **13969.81** (`aef7015e0f`) | 13969.81 (Phase 0 대비 −10.1 %) | 13884.93 (0.994; Phase 0 대비 −10.7 %) |
+| router_router_tcp | 2972.88 → 2972.53 | 2966.84 (0.998) | 3035.80 (1.021) |
+| dealer_dealer_inproc | 3455.38 → 3230.92 (G-2) | 3287.92 (1.018) | 3107.12 (0.962) |
+| dealer_router_reqrep_inproc | 12054.89 → 18663.51 (G-2 셀 재정의) → **16455.38** (`aef7015e0f`) | 16455.38 (MP-9: async mailbox 왕복 4,996→70/5,000) | reference **15609.79**(ALL-3 개선, D-B281) → 15624.77 (1.001) |
+| pair_inproc | 2505.36 → 2348.46 (G-2) | 2367.78 (1.008) | 2459.73 (1.047) |
 
 ### 7.4 perf/c 스크린 셀 (1024 B tcp, Phase 0 기준 대비 비율; Phase 2G 시작·Phase 4 종료 시 전 size로 확장)
 
@@ -284,17 +286,17 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 
 스펙 [`systems/11-synchronization-model`](../../core/doc/spec/core/systems/11-synchronization-model.ko.md)의 규칙과 현재 코드의 차이. STREAM tcp 1024 B 셀(CCU 20, callgrind)에서 message당 mutex 획득 횟수. 착지할 때마다 갱신한다.
 
-| lock | 스펙 분류 | 두 번째 thread | 2026-09-07 (G-11a 뒤) | 목표 | job |
-|---|---|---|---|---|---|
-| mailbox 삽입점 `_sync` | §3.3 여러 producer | 여러 thread | 2.7 | 2.7 (구조) | — |
-| socket 직렬화: `public_api_sync` + command owner + command마다 `receive.sync` | C2 → turn 하나 | application thread와 command owner | 1.47 | turn의 CAS만 | G-11 2a |
-| `read_activated` / `has_in`의 receive partition | C2 | 위와 같은 클러스터 | 1.28 | 0 | G-11 2a |
-| session 쪽 `pipe_t::write`/`flush`의 `_out_sync` | §3.2 SPSC + C3 | I/O thread 하나뿐 | ~~2.0~~ → 0 (`5304885197`, seqlock C3 ledger; stream_tcp 셀 mutex 24.05→21.78/msg) | 0 | G-11b(2c) **완료** |
-| socket 쪽 `_out_sync` | C2 → turn | application thread | 1.0 | 0 (cold 경로는 유지) | G-11 2b |
-| route shard `sync` | C1 | 조회만 hot | 1.0 | 0 (스냅샷 조회) | G-11 2d |
-| public poller handle 표 | C1 | 조회만 hot | 0.56 | 0 | G-11 2e |
-| boost.asio 내부 | Core 밖 | — | 4.0 | — | — |
-| **합계** | | | **15.1** | **≈ 8.3 (Core 소유 10.1 → 3.3)** | |
+| lock | 스펙 분류 | 두 번째 thread | 2026-09-07 (G-11a 뒤) | **0.17.4 (ALL-1/2 뒤)** | 목표 | job |
+|---|---|---|---|---|---|---|
+| mailbox 삽입점 `_sync` | §3.3 여러 producer | 여러 thread | 2.7 | 2.7 | 2.7 (구조) | — |
+| socket 직렬화: `public_api_sync` + command owner + command마다 `receive.sync` | C2 → turn 하나 | application thread와 command owner | 1.47 | CAS 1 (turn) | turn의 CAS만 | G-11 2a → **ALL-1 완료** |
+| `read_activated` / `has_in`의 receive partition | C2 | 위와 같은 클러스터 | 1.28 | 0 | 0 | G-11 2a → **ALL-1 완료**(receive lease가 turn에 통합) |
+| session 쪽 `pipe_t::write`/`flush`의 `_out_sync` | §3.2 SPSC + C3 | I/O thread 하나뿐 | ~~2.0~~ → 0 (`5304885197`, seqlock C3 ledger; stream_tcp 셀 mutex 24.05→21.78/msg) | 0 | 0 | G-11b(2c) **완료** |
+| socket 쪽 `_out_sync` | C2 → turn | application thread | 1.0 | 0 | 0 (cold 경로는 유지) | G-11 2b → **ALL-2 완료** |
+| route shard `sync` | C1 | 조회만 hot | 1.0 | 0 | 0 (스냅샷 조회) | G-11 2d → **ALL-2 완료** |
+| public poller handle 표 | C1 | 조회만 hot | 0.56 | 0.56 | 0 | G-11 2e(0.17.5) |
+| boost.asio 내부 | Core 밖 | — | 4.0 | 4.0 | — | — |
+| **합계** | | | **15.1** | **8.39**(ALL-1 측정, D-B263) | ≈ 8.3 (Core 소유 10.1 → 3.3) | 잔여 = 2e 0.56 + mailbox 2.7(구조) + asio 4.0 |
 
 제거된 "지키는 조건이 없던 lock"의 기록: `activate_read` 처리의 `_out_sync`(S-1), 항상 비어 있던 지연 종료 큐의 context lock과 planned=applied일 때의 registry lock(G-1), PAIR command의 turn 예외(G-11a), `fast_mutex_t` 재귀 mutex → `mutex_t`/`recursive_mutex_t` 분리(S-2). libzmq 비교(socket lock 하나 안에서 command 처리, pipe mutex 0, mailbox 1.7)와 출처 분석은 `c016-worklog/core-rf-G-11-lock-provenance.md`.
 
@@ -303,8 +305,8 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 - [x] Phase 0: Release 빌드, with_stream 기준 표(§7.1), 경량 3셀 기준, hotpath `stream_tcp` 셀 커밋(`6f64e76b51`, D-B142 — harness가 I/O 스레드를 안 세던 결함도 수정)
 - [x] Phase 1: S-A 프로파일 표, S-B 경로 비용 표 → 원인별 job 목록(D-B140·D-B141). G-A(공통 경로 프로파일)는 Phase 2G 시작 시 수행
 - [x] Phase 2S(종료 2026-09-07 05:15, D-B158): 채택 S-4·S-10(`597f134d68`), S-2·S-9(`e1db6f1f72`), S-1(`baaa68d67b`), S-12(`73e6c54c60`), S-11(`2529709db6`); 기각 S-3·S-5(측정으로 반박). 축소셀 Ir/msg 11,096 → 9,474(−14.6 %), hotpath stream_tcp 15540 → 14623(−5.9 %), idle with_stream zlink 절대 +7.7/+10.2/+7.2 %, zlink/asio 0.835/0.768/0.775 → 0.821/0.823/0.787(목표 0.95 미달 — 남은 격차는 §7.5 D-c 핸드오프 구조와 앱 스레드 1개 관찰)
-- [ ] Phase 2G: G-0 idle 재기준(D-B158·159), G-A(D-B166), G-5(`7549a128b1`), **G-2(`749145fded`, 5셀 −1.5~−7.1 %)**, **G-1+G-3(`99f0294377`, 5셀 0.956~0.992)** 착지. **G-11 잠금 출처 분석 채택(D-B178·179)** → G-11a 착지(`1a15660a18`, 명령 드레인 항상 turn; hotpath reqrep −5.2 %, stream −3.0 %) → 진행 G-11b(2c, session 쪽 `_out_sync`) → 2a·2b·2d → step 3, 각 게이트. 스펙: `systems/11-synchronization-model`(ko/en) 신설(`389078a68f`), 착지마다 §7 표 갱신. 진행 S-14(단일 lane 회계 분류 경합, 기존 결함 D-B182). 대기 G-10(clock_gettime)·G-7(eventfd)·R10-B 게이트. 폐기 G-6·G-R1(정책). 재기준: G-11 시리즈 착지 후 idle runs 3(A의 새 러너 + G-5)
-- [ ] Phase 2G: 스크린 셀 재측정 표, G-1 … (각 채택/기각, 커밋 해시, 패턴별 전 size 비율)
+- [x] Phase 2G(종료 2026-09-09, G-11 2a/2b/2d는 0.17.4 ALL-1/2로 착지 — §7.7): G-0 idle 재기준(D-B158·159), G-A(D-B166), G-5(`7549a128b1`), **G-2(`749145fded`, 5셀 −1.5~−7.1 %)**, **G-1+G-3(`99f0294377`, 5셀 0.956~0.992)** 착지. **G-11 잠금 출처 분석 채택(D-B178·179)** → G-11a 착지(`1a15660a18`, 명령 드레인 항상 turn; hotpath reqrep −5.2 %, stream −3.0 %) → 진행 G-11b(2c, session 쪽 `_out_sync`) → 2a·2b·2d → step 3, 각 게이트. 스펙: `systems/11-synchronization-model`(ko/en) 신설(`389078a68f`), 착지마다 §7 표 갱신. 진행 S-14(단일 lane 회계 분류 경합, 기존 결함 D-B182). 대기 G-10(clock_gettime)·G-7(eventfd)·R10-B 게이트. 폐기 G-6·G-R1(정책). 재기준: G-11 시리즈 착지 후 idle runs 3(A의 새 러너 + G-5)
+- [x] Phase 2G: 스크린 셀 표는 §7.4(0.17.2 idle 값·귀속)로 대체; 셀별 채택/기각·커밋은 위 항목과 decisions D-B158~D-B195
 - [x] Phase 3 apply(2026-09-07 12:30): R1+R2(`cb9139d16d`), R3+R4(`72100c7be3`), R5·R6R8·R9·R7R11(`2753a2d799`) 착지 = **−2,664/+1,001행**; R10-B apply 완료(게이트 대기). 인벤토리 오류 3건을 apply job이 걸러냄(R4 #3a, R6 #2, R7 #6). 보류(설계 job·D): pipe.cpp 개념별 분할(익명 helper 공유 헤더 선행), ws/wss 쌍둥이 병합, lb::sendpipe, route-binding cache(D), `oversize_admission_out_`(D 확인), registry `recursive_mutex_t` 필요성
 - [x] 동시 multipart 제출 지원(D-BP12 → D-B197~D-B214, 2026-09-08 03:40 착지): MP-1 설계(A안) → MP-2 구현 → 독립 리뷰 3회(차단 6+6+1건 전부 수정, MP-3/8/9) → MP-4/5 single fast path 복원 → MP-6 D-BP15 테스트 → MP-7 completion drain 결함 수정. 게이트 `gate-mp-summary.md`: ctest 209/209, suite 97×3, mirror 12/12, hotpath reqrep 0.882·stream 0.955(reference 갱신 `aef7015e0f`), with_stream idle ±1 %. 스펙 8 파일 동반 커밋(D-MP1~5, completion pull 명료화, TLS destructor·인계 규칙).
 - [x] Phase 4(2026-09-08): hotpath 5셀 PASS(reference 갱신), ctest 전체 209/209, 스펙 문구 정합(`6ef6cfaaf3` + MP 스펙), 버전 **0.17.2** bump `dca377aa5e`, tag `core/v0.17.2`(2026-09-08 03:58, D-B216; 머신 A 재고정 요청). idle 재측정(perf/c 전 size·with_stream 3회)은 bump 뒤 별도 기록(사용자 결정 D-B214: 일정 단축).
@@ -312,4 +314,22 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 - [ ] **0.17.5 테스트 보강**: WS 3-buffer gather pending 중 cancel/disconnect 테스트(W-SD5-3), Auto-HWM timer wake 횟수 직접 관측(W-CCU5-1), B1(readiness rearm) 재평가 자료 `SD-2.patch`·§5 표.
 - [ ] **다음 캠페인(0.17.5, 메시지당 명령 수 — D-B260 S-C)**: SC-1 단일-part receive 인계 통합, SC-2 send admission 전달 계층 통합, SC-3 Asio completion 표현·allocator 진단, SC-4 output drain 판정 통합(각 3 h; 목표 CCU20 9,041→8,040~8,440 Ir/msg, zlink/zmq 0.94~1.0). 비교 스택 zlink/asio/asio_pull/cppserver/cppserver_pull/zmq(D-B253·254), S-D 결과(D-B267): **B1** `restart_input()` speculative read를 full-read evidence gate와 통합(실패 recvfrom 1/msg 제거), **B2** decoder read target 성장 규칙 단순화(full hit 1회 → 2×, max clamp; 64 KiB frame 2-read 분할·fragment copy 197.8k Ir/msg 해소) 각 2~3 h, SC-1~4보다 앞순위; 계측 app suffix 결함 선수정; D-S1(`rcvbuf=-1` decoder max 정책) 사용자 결정.
 - [x] **0.17.4(2026-09-09 착지 `eb6abfb995`, D-B263~298)**: ALL-1/2/2b/3(단일 lifecycle turn, socket 쪽 `_out_sync` 제거, route shard, ws mask/batch, decoder recycle block, lock/msg 15.1 → 8.4), RR-1(D-BP43), MAC-1~3(macOS ipc·테스트 결정화·build.sh 게이트), **MAC-4**(ctx 종료 선게시·blocking receive 매 턴 ETERM), **CCU-2~5**(attach 증분 Auto-HWM, 수렴 = debounce deadline, CCU 4000 0 → 209 kops, D-H1 채택), **SD-1~5**(B2 read target 1-hit 2×: 64 KiB +25 %; WS 3-buffer bounded gather: ws gate 0.53 → 0.85~1.30 PASS; D-f; B1 기각), hotpath reqrep reference 15609.8. 최종 게이트 ctest 212/212·TSan 전체 0·hotpath 5/5·ws gate 3/3·with_stream 4 stack. Windows 판정은 Actions(host SAC). 릴리즈: bump → tag `core/v0.17.4` → Actions → Release.
-- [ ] 0.17.3 이월: ~~ST-1 STREAM packet pump 정체 수정~~ **착지 `de730d4ac5`(D-B229; receive 소유권 프로토콜, D-e 종결)**, single tcp 1024 B PAIR/DD −4~5 % 관찰 재확인(D-B219), G-11 2a/2b/2d(socket 쪽 `_out_sync`·receive partition·route shard, 목표 lock/msg 8.3), backlog(`_slot_sync`, mailbox 예외 경로, `receive_once_guarded`(D-e), pipe.cpp 분할, ws/wss 병합, lb::sendpipe, R7 #4/#7, R11-B), TSan 기존 debt 5건(monitor/ctx lock-order, lb peer-weight).
+- [x] 0.17.3 이월(종결 2026-09-09): ST-1은 0.17.3(`de730d4ac5`), G-11 2a/2b/2d는 0.17.4 ALL-1/2, `receive_once_guarded`(D-e)는 ST-1로 종결, ws/wss 병합은 ALL-2b, TSan 기존 debt는 ALL 게이트에서 억제 없이 0건. 남은 backlog(`_slot_sync`, mailbox 예외 경로, pipe.cpp 분할, lb::sendpipe, R7 #4/#7, R11-B, G-11 2e)는 0.17.5 목록으로 이동. 원문: ~~ST-1 STREAM packet pump 정체 수정~~ **착지 `de730d4ac5`(D-B229; receive 소유권 프로토콜, D-e 종결)**, single tcp 1024 B PAIR/DD −4~5 % 관찰 재확인(D-B219), G-11 2a/2b/2d(socket 쪽 `_out_sync`·receive partition·route shard, 목표 lock/msg 8.3), backlog(`_slot_sync`, mailbox 예외 경로, `receive_once_guarded`(D-e), pipe.cpp 분할, ws/wss 병합, lb::sendpipe, R7 #4/#7, R11-B), TSan 기존 debt 5건(monitor/ctx lock-order, lb peer-weight).
+
+## 9. 결과 요약 (캠페인 종료 2026-09-09, 0.17.4 릴리즈)
+
+| 축 | 시작(0.17.0, 2026-09-06) | 종료(0.17.4) | 근거 |
+|---|---|---|---|
+| STREAM tcp 64 KiB 처리량(CCU 1000) | 32.3 kops (asio 38.6) | **40.3 kops**(같은 idle 창 3-run, +25 %); MERGE-3 1 run 42.7 = cppserver(pull) 42.5 동률 | D-B291·298 |
+| STREAM tcp 64 KiB p50 / p99 | 15.4 / 22.8 ms | 12.4 / 17.4 ms | D-B291 |
+| STREAM tcp 64 B / 1 KiB | zlink/asio 0.81 / 0.77 (callback 본체 기준) | zlink/cppserver(pull) 0.84 / 1.07, zlink/asio(pull) 0.93 / 1.30 | D-B275·298 |
+| ws round-trip Q64/Q1 게이트 | 0.53 FAIL | 0.85 / 1.11 / 1.30 PASS(3 run), DR ws 64 KiB 5.5 → ~30 kops | D-B295·298 |
+| ws 64 KiB 서버 RSS | 1418 MiB | 431 MiB (−70 %) | D-B263 |
+| STREAM tcp lock 획득/msg | 15.1 | 8.39 | §7.7 |
+| hotpath Ir/msg 5셀 | stream 15540, reqrep 12055(구 셀) | stream 13885, reqrep 15610(재정의 셀; MP 기능 추가 후 −5 %) | §7.3 |
+| 연결 스케일 | CCU 4000(64 B) 실패 | 209 kops (attach O(N²) 제거) | D-B280·288 |
+| 정확성 | TSan 억제 5건 | TSan 전체 212/212 억제 없이 0건; macOS ARM64 150/150·57/57; Windows Actions green | D-B298·300 |
+| 코드 | — | Phase 3 −2,664/+1,001행, 죽은 knob·상태 제거(D-f, CCU 새 상태 0, receive owner word 제거) | §8 |
+
+기각·보류: B1(readiness rearm, 실측 열세), D-a·D-b(계약 변경 실험은 0.17.5 A/B), D-S1(decoder max 정책, RSS 자료 확보), D-W1(Windows CRT). 사용자 규칙으로 고정된 것: public 인터페이스 불변, thread-safe socket 유지, Ir는 참고(§4), pull 스택만 비교(D-B274·275), 이슈 이월 없음(D-B277), 결정 항목은 측정으로 확정(D-B270).
+
