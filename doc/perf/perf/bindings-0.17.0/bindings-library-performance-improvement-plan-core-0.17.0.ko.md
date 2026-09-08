@@ -1063,13 +1063,13 @@ cell은 `보류(사유)`로 표시하고 수치는 그대로 남긴다. 러너 �
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | Core 0.17.1 artifact로 재측정 대상 |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | Core 0.17.1 artifact로 재측정 대상 |
+| `tcp` | `PAIR` | 33.5% | 34.8% | 38.0% | 92.7% | 80.9% | 69.3% | **참고 58.2%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·node `complete`); latency 1179.23x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 node·C 596.3/1,777.8, 499.4/1,435.0, 402.8/1,059.8, 99.7/107.6, 51.9/64.2, 22.5/32.5 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, node `perf_node_single_linux_20260908_133711_sg1.txt` |
+| `tcp` | `PUBSUB` | 32.7% | 34.3% | 44.0% | 101.7% | 127.9% | 188.1% | **참고 88.1%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·node `complete`); latency 1965.87x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 node·C 474.4/1,452.0, 400.9/1,169.6, 345.8/786.3, 13.9/13.6, 8.1/6.3, 5.1/2.7 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, node `perf_node_single_linux_20260908_133711_sg1.txt` |
+| `tcp` | `DEALER_DEALER` | 29.1% | 34.0% | 36.2% | 90.0% | 83.5% | 78.2% | **참고 58.5%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·node `complete`); latency 38.74x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 node·C 528.3/1,813.6, 472.2/1,388.5, 380.8/1,052.2, 99.5/110.5, 53.5/64.1, 26.7/34.1 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, node `perf_node_single_linux_20260908_133711_sg1.txt` |
+| `tcp` | `DEALER_ROUTER` | 21.2% | 24.6% | 28.6% | 86.8% | 82.9% | 80.0% | **참고 54.0%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·node `complete`); latency 2103.98x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 node·C 382.9/1,806.9, 355.0/1,440.7, 300.5/1,051.9, 94.8/109.2, 53.3/64.3, 27.1/33.8 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, node `perf_node_single_linux_20260908_133711_sg1.txt` |
+| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 14.6% | 14.7% | 9.8% | 10.6% | 11.9% | **참고 12.3%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·node `complete`); latency 364.89x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 node·C 121.8/834.1, 108.5/740.4, 1.1/11.4, 1.0/9.2, 0.9/7.3 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, node `perf_node_single_linux_20260908_133711_sg1.txt` |
+| `tcp` | `ROUTER_ROUTER` | 22.9% | 28.5% | 30.5% | 87.8% | 87.4% | 80.1% | **참고 56.2%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·node `complete`); latency 3267.99x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 node·C 379.7/1,659.6, 348.1/1,221.0, 300.5/984.7, 94.1/107.2, 51.9/59.4, 26.5/33.1 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, node `perf_node_single_linux_20260908_133711_sg1.txt` |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 13.0% | 13.0% | 13.6% | 8.4% | 9.9% | 10.5% | **참고 11.4%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·node `complete`); latency 358.41x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 node·C 114.7/881.8, 108.6/837.2, 98.2/724.5, 0.9/11.3, 0.9/9.2, 0.7/7.0 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, node `perf_node_single_linux_20260908_133711_sg1.txt` |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
