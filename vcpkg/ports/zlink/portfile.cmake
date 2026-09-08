@@ -23,6 +23,7 @@ vcpkg_cmake_configure(
         -DZLINK_BUILD_TESTS=OFF
         -DBUILD_BENCHMARKS=OFF
         -DZLINK_BUILD_CPP_BINDINGS=OFF
+        -DZLINK_CMAKECONFIG_INSTALL_DIR=lib/cmake/zlink
         -DWITH_DOC=OFF
         -DENABLE_CPACK=OFF
         -DWITH_TLS=ON
@@ -30,6 +31,9 @@ vcpkg_cmake_configure(
 
 vcpkg_cmake_install()
 vcpkg_copy_pdbs()
+if(VCPKG_LIBRARY_LINKAGE STREQUAL "static")
+    file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/bin" "${CURRENT_PACKAGES_DIR}/bin")
+endif()
 vcpkg_cmake_config_fixup(PACKAGE_NAME zlink CONFIG_PATH lib/cmake/zlink)
 vcpkg_fixup_pkgconfig()
 
