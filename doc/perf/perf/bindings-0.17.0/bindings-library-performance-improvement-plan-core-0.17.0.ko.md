@@ -1021,7 +1021,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미달(37.0%) | 미달(38.5%) | 미달(44.8%) | 미달(44.4%) | 미달(108.8%) | 미측정 | pass 1+1b 뒤 3-run: **54.7%**(목표 70%; before 15.1), latency 0.64x; 처리량 Java/C 71.2/192.3, 64.1/166.6, 75.2/168.0, 57.1/128.5, 24.5/22.5 Kops/s; 리뷰 pass 2 전; [log](log/2026-09-05-java-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미달(39.8%) | 미달(31.3%) | 미달(58.2%) | 미달(68.3%) | 미달(95.0%) | 미측정 | pass 1+1b 뒤 3-run: **58.5%**(목표 70%; before 24.0), latency 0.73x; 처리량 Java/C 70.7/177.5, 40.3/128.6, 72.8/125.1, 71.3/104.4, 19.7/20.8 Kops/s; 리뷰 pass 2 전; [log](log/2026-09-05-java-multi-tcp-before.ko.md) |
-| `tcp` | `MULTI_PUBSUB` | 통과(102.5%) | 통과(101.3%) | 통과(97.4%) | 통과(83.9%) | 통과(129.2%) | 미측정 | pass 1+1b 뒤 3-run: **102.9%** `통과`(목표 90%; before 81.0), latency 0.99x; 처리량 Java/C 583.5/569.2, 668.0/659.4, 709.5/728.5, 485.4/578.8, 74.9/58.0 Kmsg/s; [log](log/2026-09-05-java-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_PUBSUB` | 통과(75.2%) | 통과(77.5%) | 통과(77.6%) | 통과(97.2%) | 통과(138.5%) | 미측정 | **`통과(93.21%)`** — §7.2 5-run, 고정 Core **0.17.2**(`r3java`, C·Java 모두 `status: complete`); latency 1.031x. 0.17.1 참고값 80.9%. 처리량 Java·C 1,765.9/2,349.0, 1,826.3/2,355.2, 1,931.7/2,488.4, 1,648.9/1,696.6, 178.1/128.6 Kmsg/s; C `perf_c_multi_linux_20260908_093125_r3java.txt`, Java `perf_java_multi_linux_20260908_094213_r3java.txt` |
 | `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
 | `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
