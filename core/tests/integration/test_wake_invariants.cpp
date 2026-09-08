@@ -723,6 +723,22 @@ const int multi_dealer_arm_timeout_ms = 10000;
 //  called saturated. Long enough for the slowest io thread to finish
 //  pushing whatever room is left in the transport and the peer queue.
 const int multi_dealer_settle_quiet_ms = 1000;
+//  The reader end is deliberately shallow. Everything the server buffers
+//  ahead of the drain is a reservoir that the drain serves from memory,
+//  which decouples the drain from the credit it is supposed to cause: the
+//  reader finishes in milliseconds while the senders still wait for the
+//  same bytes to cross the transport. Keeping the inbound queue at a couple
+//  of records makes the drain pull over the wire, so the wake follows the
+//  drain that caused it on every platform.
+const uint64_t server_recv_hwm_bytes = 2 * large_payload_size;
+
+void configure_shallow_receive (void *socket_)
+{
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (socket_, ZLINK_OPT_RCVHWM, &server_recv_hwm_bytes,
+                        sizeof (server_recv_hwm_bytes)));
+}
 
 void configure_large_hwm (void *socket_)
 {
@@ -822,6 +838,7 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
     TEST_ASSERT_NOT_NULL (server);
     configure_socket (server);
     configure_large_hwm (server);
+    configure_shallow_receive (server);
 
     char endpoint[MAX_SOCKET_STRING];
     test_bind (server, "tcp://127.0.0.1:*", endpoint, sizeof (endpoint));
@@ -867,6 +884,7 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
     // Match the benchmark's per-size refresh and apply byte limits to every
     // already-established pipe before filling it.
     configure_large_hwm (server);
+    configure_shallow_receive (server);
     for (size_t i = 0; i < multi_dealer_count; ++i)
         configure_large_hwm (clients[i]);
 
@@ -1356,6 +1374,7 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
             << " no_extra_delivery=" << no_extra_delivery
             << " extra_poll_errno=" << extra_poll_error
             << " pollers_closed=" << pollers_closed;
+    fprintf (stderr, "DIAG-MAC3 %s\n", details.str ().c_str ());
     TEST_ASSERT_TRUE_MESSAGE (fill_ready, details.str ().c_str ());
     TEST_ASSERT_TRUE_MESSAGE (waiter_armed && waiters_blocked,
                               details.str ().c_str ());
