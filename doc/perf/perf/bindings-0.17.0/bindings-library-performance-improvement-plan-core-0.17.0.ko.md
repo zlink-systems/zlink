@@ -1328,9 +1328,9 @@ cell은 `보류(사유)`로 표시하고 수치는 그대로 남긴다. 러너 �
 | `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | Core 0.17.1 artifact로 재측정 대상 |
+| `tcp` | `DEALER_ROUTER_REQREP` | 3.4% | 미측정 | 3.0% | 33.0% | 43.3% | 47.2% | **참고 26.0%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sgfix-python2`, C `partial`·python `complete`); latency 8.71x. Single 러너를 전용 thread·동기 진행(§1.1.5)과 D-BP40 창으로 정합한 뒤 값(agent 보고 대기). 작은 크기 ~22 K ops/s 평탄 = 요청당 ~45 µs Python 고정 비용. C DR REQREP 256 B 셀은 C 러너 간헐 결함으로 미측정. 처리량 python·C 22.3/663.8, 21.0/702.5, 3.3/9.9, 3.4/8.0, 3.0/6.4 Kops/s; C `perf_c_single_linux_20260908_161418_sgfix-python2.txt`, python `perf_python_single_linux_20260908_161651_sgfix-python2.txt` |
 | `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | Core 0.17.1 artifact로 재측정 대상 |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 2.6% | 2.8% | 3.3% | 33.1% | 41.6% | 49.3% | **참고 22.1%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sgfix-python2`, C `partial`·python `complete`); latency 16.90x. Single 러너를 전용 thread·동기 진행(§1.1.5)과 D-BP40 창으로 정합한 뒤 값(agent 보고 대기). 작은 크기 ~22 K ops/s 평탄 = 요청당 ~45 µs Python 고정 비용. C DR REQREP 256 B 셀은 C 러너 간헐 결함으로 미측정. 처리량 python·C 22.0/840.3, 22.4/790.3, 21.8/652.9, 3.4/10.2, 3.5/8.5, 3.3/6.6 Kops/s; C `perf_c_single_linux_20260908_161418_sgfix-python2.txt`, python `perf_python_single_linux_20260908_161651_sgfix-python2.txt` |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
