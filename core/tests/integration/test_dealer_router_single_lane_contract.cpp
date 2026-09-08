@@ -330,27 +330,33 @@ bool wait_for_raw_close (fd_t fd_, int timeout_ms_ = 3000)
       std::chrono::steady_clock::now ()
       + std::chrono::milliseconds (timeout_ms_);
     while (std::chrono::steady_clock::now () < deadline) {
-        unsigned char byte = 0;
+        //  Drain everything the peer already sent before sleeping again. A
+        //  one-byte-per-sleep loop caps this observer at 100 B/s, so the
+        //  router's HELLO + READY + ERROR frames alone can outlast the
+        //  deadline on a slow runner and hide the close that follows them.
+        unsigned char chunk[256];
 #if defined ZLINK_HAVE_WINDOWS
-        const int rc = recv (fd_, reinterpret_cast<char *> (&byte), 1, 0);
+        const int rc =
+          recv (fd_, reinterpret_cast<char *> (chunk), sizeof (chunk), 0);
         if (rc == 0 || (rc < 0 && WSAGetLastError () == WSAECONNRESET))
             return true;
         last_rc = static_cast<int> (rc);
         last_errno = WSAGetLastError ();
-        if (rc > 0)
-            ++bytes_drained;
 #else
-        const ssize_t rc = recv (fd_, &byte, 1, MSG_DONTWAIT);
+        const ssize_t rc = recv (fd_, chunk, sizeof (chunk), MSG_DONTWAIT);
         if (rc == 0 || (rc < 0 && errno == ECONNRESET))
             return true;
         last_rc = static_cast<int> (rc);
         last_errno = errno;
-        if (rc > 0) {
-            if (bytes_drained < 128)
-                drained[bytes_drained] = byte;
-            ++bytes_drained;
-        }
 #endif
+        if (rc > 0) {
+            for (int i = 0; i != static_cast<int> (rc); ++i) {
+                if (bytes_drained + i < 128)
+                    drained[bytes_drained + i] = chunk[i];
+            }
+            bytes_drained += static_cast<int> (rc);
+            continue;
+        }
         msleep (10);
     }
     printf ("DIAG-MAC1 wait_for_raw_close timed out: last_rc=%d errno=%d (%s) "

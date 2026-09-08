@@ -987,8 +987,24 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
       && min_accepted >= lwm_drain_records;
 
     if (fill_ready) {
-        for (size_t i = 0; i < multi_dealer_count; ++i)
-            assert_no_ready_completion (clients[i]);
+        size_t extra_completion_clients = 0;
+        size_t first_extra_client = multi_dealer_count;
+        for (size_t i = 0; i < multi_dealer_count; ++i) {
+            int probe_error = 0;
+            if (!completion_queue_is_empty (clients[i], &probe_error)) {
+                if (first_extra_client == multi_dealer_count)
+                    first_extra_client = i;
+                ++extra_completion_clients;
+            }
+        }
+        std::ostringstream extra_details;
+        extra_details << "socket published an unexpected extra completion: "
+                      << "clients=" << extra_completion_clients
+                      << " first=" << first_extra_client
+                      << " accepted_min=" << min_accepted
+                      << " accepted_max=" << max_accepted;
+        TEST_ASSERT_TRUE_MESSAGE (extra_completion_clients == 0,
+                                  extra_details.str ().c_str ());
     }
 
     multi_pollout_wait_state_t wait_state;
