@@ -4707,6 +4707,24 @@ BACKPRESSURED/EAGAIN`을 종료 국면에 fatal로 분류한 것과, 2-part repl
 대신 local stop, stop 뒤 backpressure는 정상 종료, 카운터 수정(`54c1651c91`). 측정 조건 무변경. 64 B·256 B 5-run 2회 20/20.
 이전에 이 결함으로 무효 처리한 셀(dotnet DR 64 B, rust DR 256 B 등)은 `sg2` 이후 값으로 대체됐다.
 
+### D-BP47 (2026-09-08 21:45) C perf STREAM 10k 접속(CCU 10k, 머신 A 확인) — 0.17.3에서는 ready barrier 미도달; Core PR 없이 0.17.4(CCU-2/3) 뒤 재확인
+
+**사실**(codex, log `doc/perf/perf/bindings-0.17.0/log/2026-09-08-c-stream-10k-connections.ko.md`, 고정 `core-pinned/0.17.3`,
+MULTI_STREAM tcp 64 B 5 s): TCP 연결은 1,000/5,000/10,000 모두 0.4/0.6/1.0 s에 전부 ESTABLISHED, raw client connect
+callback 10,000/10,000 성공, nofile(필요 34,096)·포트·메모리 guard(61,214) 모두 여유. 그러나 서버가 관찰한 `CONNECTION_READY`는
+1,000/1,000(447 kops/s), 5,000 중 3,807, 10,000 중 997~1,024로 10 s 계약 창 안에 barrier 미도달. codex 분류는 B(러너: 서버가
+START 전까지 bounded/lossy monitor를 소비하지 않아 event 폐기, Core spec의 overflow 계약과 일치) — START 전 drain·value 집계
+실험도 5,000에서 3,872로 실패해 소스 변경은 모두 되돌림(측정 조건 변경 금지).
+
+**교차 근거**: 머신 B의 CCU-1(D-B266)은 같은 현상(CCU 4000 STREAM 정지)의 원인을 attach마다 컨텍스트 전체 Auto-HWM 동기
+재계산 O(N²)로 확정했고 CCU-2(D-B268, 0.17.4)로 attach O(log n) 수정해 CCU 4000 PASS. 0.17.3 pinned에는 그 수정이 없으므로
+ready 생성 자체가 느린 것이 1차 원인이고, monitor 폐기는 그 뒤 따라오는 증상일 가능성이 크다.
+
+**결정:** (1) 사용자 지시(별도 PR로 B에 전달)는 Core 결함이 확정될 때만 — 이번은 B가 이미 0.17.4에서 고치는 중이라 머신 A에서
+Core PR을 내지 않는다. (2) 0.17.4 도착 뒤 같은 절차(1,000→5,000→10,000, 태그 `s10k-*`)로 재확인하고, 그래도 5,000+에서 barrier
+미도달이면 러너 monitor drain(START 전 소비)을 계약 안에서 고친다. (3) 10,000이 되면 `s10k-full` 6 크기를 재서 계획서 STREAM
+행에 clients=10,000 값을 별도 표기한다. 기존 STREAM 행(clients 100)은 그대로 유효.
+
 ## D-B251 (2026-09-08 15:25, 머신 B) 사용자 지시 — macOS 실패를 병렬로 미리 수정해 0.17.4가 바로 빌드되게: MAC-1(Claude) 착수
 
 **절차**: macOS 머신 없음 → 진단 workflow `core-macos-test.yml`(workflow_dispatch, macos-15, ctest 정규식 입력, serial -j1)을 브랜치 `wip/mac-1`(베이스 `wip/0.17.3-all2` + Intel 제거·build.sh gating 커밋 cherry-pick)에 추가하고 Actions로 재현·검증 loop. 진단 run 34190928956(main, 새 gating)의 macOS ARM64 실패 목록을 확정 입력으로. 알려진 실제 실패: auto-HWM applied limit −1(`test_ctx_options:657`), xpub NODROP blocking publish timeout(`test_xpub_nodrop:243`), `test_stream_packet_progress`; timeout군은 병렬 실행 제거 뒤 재판정. 수정은 `__APPLE__` 분기 최소, Linux 동작 불변. patch `all-artifacts/MAC-1.patch` → 0.17.4 병합.
