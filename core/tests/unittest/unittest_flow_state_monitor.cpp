@@ -641,9 +641,24 @@ void test_shared_monitor_preserves_explicit_commit_order_across_connections ()
 //  way, or the pause raises no event, moves no gauge and starts no duration -
 //  and the RESUMED that follows looks unmatched.
 //
-//  The record is loaded without draining the socket, so the queued frame
-//  command has not run yet; admission is then invoked directly through the
-//  inproc validation entry, which is a real caller of the same attach path.
+//  The record is loaded without draining the socket, and admission is then
+//  invoked directly through the inproc validation entry, which is a real
+//  caller of the same attach path.
+//
+//  An open monitor is a second command drainer: zlink_socket_monitor_open()
+//  installs an async command owner on an I/O thread
+//  (socket_base_monitor.cpp -> acquire_monitor_async_command_processing()),
+//  and process_commands() then defers every in-thread pump to that owner. The
+//  queued frame command can therefore run on the I/O thread at any point after
+//  the injection, so "the pipe has not applied it yet" is not an observable
+//  this thread may assert. What both interleavings must agree on is asserted
+//  instead: the flip is booked exactly once, whichever path performs it.
+//
+//  For the same reason the counters are read only after the matching monitor
+//  event. flow_state_applied() moves the gauge and the totals first and emits
+//  the event last, so the event is the one edge that proves the booking is
+//  complete; sampling the counters right after the pipe flag flips would read
+//  them mid-booking.
 void test_pause_applied_by_pair_admission_is_booked ()
 {
     paired_fixture_t fixture;
@@ -658,14 +673,16 @@ void test_pause_applied_by_pair_admission_is_booked ()
                                                      false);
     TEST_ASSERT_NOT_NULL (application);
 
-    //  Accepted into the record, not yet applied to the pipe.
-    TEST_ASSERT_TRUE (fixture.inject_frame (
-      zlink::flow_state::receive_flow_paused, 11, false));
+    //  Nothing is booked before the frame arrives.
     TEST_ASSERT_FALSE (as_socket (fixture.dealer)
                          ->application_pipe_remote_flow_paused (
                            fixture.pair_id, fixture.pair_generation));
     TEST_ASSERT_EQUAL_UINT64 (
       0, read_flow_metrics (fixture.dealer).pause_applied);
+
+    //  Accepted into the record, not drained here.
+    TEST_ASSERT_TRUE (fixture.inject_frame (
+      zlink::flow_state::receive_flow_paused, 11, false));
 
     //  Admission applies it.
     as_socket (fixture.dealer)->validate_inproc_connection (application);
@@ -673,13 +690,14 @@ void test_pause_applied_by_pair_admission_is_booked ()
                         ->application_pipe_remote_flow_paused (
                           fixture.pair_id, fixture.pair_generation));
 
+    TEST_ASSERT_TRUE (flow_unit_monitor_has_count (&probe, 1, 2000));
+    TEST_ASSERT_TRUE (flow_unit_monitor_has_no_additional (&probe, 1, 200));
+
     const flow_metrics_t metrics = read_flow_metrics (fixture.dealer);
     TEST_ASSERT_EQUAL_UINT64 (1, metrics.paused_connections);
     TEST_ASSERT_EQUAL_UINT64 (1, metrics.pause_applied);
     TEST_ASSERT_EQUAL_UINT64 (0, metrics.resume_applied);
 
-    TEST_ASSERT_TRUE (flow_unit_monitor_has_count (&probe, 1, 2000));
-    TEST_ASSERT_TRUE (flow_unit_monitor_has_no_additional (&probe, 1, 200));
     TEST_ASSERT_EQUAL_UINT64 (
       static_cast<uint64_t> (ZLINK_EVENT_SEND_FLOW_PAUSED),
       flow_unit_monitor_event_at (&probe, 0));
@@ -703,6 +721,7 @@ void test_pause_applied_by_pair_admission_is_booked ()
     //  And the RESUMED that follows is matched, not orphaned.
     TEST_ASSERT_TRUE (fixture.inject (zlink::flow_state::receive_flow_running, 12));
     TEST_ASSERT_TRUE (fixture.wait_for_applied_pause (false));
+    TEST_ASSERT_TRUE (flow_unit_monitor_has_count (&probe, 2, 2000));
     const flow_metrics_t resumed_metrics = read_flow_metrics (fixture.dealer);
     TEST_ASSERT_EQUAL_UINT64 (0, resumed_metrics.paused_connections);
     TEST_ASSERT_EQUAL_UINT64 (1, resumed_metrics.resume_applied);
