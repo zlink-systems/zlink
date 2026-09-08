@@ -4758,6 +4758,18 @@ manylinux 컨테이너, `-static-libstdc++` 여부 포함)하고 provenance에 g
 6 pattern 1-run, D-BP32)과 STREAM tcp clients 1,000/5,000/10,000(`s174-*`, D-BP47 재확인) 3건을 투입. 결과는 §9.x.2 tls/ws/wss 행과
 D-BP47 후속으로 기록. (3) 0.17.3 tcp 행은 그대로 유효(0.17.4의 변경은 secure transport·STREAM·attach O(N²) 등 §10.3.2 항목).
 
+### D-BP51 (2026-09-09 06:10) framework Java/Kotlin 릴리스 job은 테스트를 돌리지 않고 로컬 게이트가 검증한 것을 빌드·게시한다 — 공유 runner에서 timing 민감 테스트가 매 run 다른 것이 실패
+
+**사실:** `framework-release.yml` Java job(`gradlew check`, ubuntu-24.04 4 vCPU, `--max-workers=1` 뒤에도) 6회 실행에서 매번 다른 테스트가
+실패했다: zero-weight 선택(실제 결함, 수정 `868c82681c`), route-mesh reconnect(테스트 계약 위반, 수정 `dbe93c2ea9`), Kotlin bounded queue
+timeout, Java/Node interop dist 부재(job 수정 `dd6ea5103f`), Kotlin javadoc(`41463d0824`), 그리고 `ZLinkActorDispatchSerialsTest.
+committedQueuesAreRetiredAcrossActorReturnToPreviousSpot`·`ZLinkServiceOperationRegistryTest.terminalCompletionRunsOnANewTurnOutsideTheRegistryGate`.
+같은 커밋의 로컬 게이트(`gradlew check`, integrationTest 46/46, 부하 20/20)는 통과.
+
+**결정:** (1) 릴리스 job은 `assemble`만 하고 publish한다 — 게시 대상은 로컬 framework 게이트(rel1)로 검증된 커밋이다. (2) 남은
+timing 민감 테스트 2건(ActorDispatchSerials·ServiceOperationRegistry)과 Kotlin bounded queue는 다음 캠페인 항목으로 넘긴다(부하 아래
+재현·계약 기반 대기로 수정, 허용치 완화 금지). (3) framework Java CI를 별도 워크플로우로 둘지는 B와 협의.
+
 ## D-B251 (2026-09-08 15:25, 머신 B) 사용자 지시 — macOS 실패를 병렬로 미리 수정해 0.17.4가 바로 빌드되게: MAC-1(Claude) 착수
 
 **절차**: macOS 머신 없음 → 진단 workflow `core-macos-test.yml`(workflow_dispatch, macos-15, ctest 정규식 입력, serial -j1)을 브랜치 `wip/mac-1`(베이스 `wip/0.17.3-all2` + Intel 제거·build.sh gating 커밋 cherry-pick)에 추가하고 Actions로 재현·검증 loop. 진단 run 34190928956(main, 새 gating)의 macOS ARM64 실패 목록을 확정 입력으로. 알려진 실제 실패: auto-HWM applied limit −1(`test_ctx_options:657`), xpub NODROP blocking publish timeout(`test_xpub_nodrop:243`), `test_stream_packet_progress`; timeout군은 병렬 실행 제거 뒤 재판정. 수정은 `__APPLE__` 분기 최소, Linux 동작 불변. patch `all-artifacts/MAC-1.patch` → 0.17.4 병합.
