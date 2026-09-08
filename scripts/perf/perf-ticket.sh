@@ -52,6 +52,13 @@ case "${cmd}" in
       echo "# desc: ${desc:-$*}"
       echo "# owner: ${owner}"
       echo "# submitted: $(date '+%Y-%m-%d %H:%M:%S') pid $$ cwd $(pwd)"
+      # 제출자 환경에 Core prefix가 없으면 큐의 기본값(core-prefix.env)을 넣는다 — 없으면 러너가
+      # core/build를 자동 재빌드해 측정 중 Core가 바뀌고 고정 prefix가 아닌 dev 빌드를 잰다.
+      if [ -z "${ZLINK_CORE_PACKAGE_PREFIX:-}" ] && [ -r "${root}/core-prefix.env" ]; then
+        while IFS='=' read -r k val; do
+          case "$k" in ZLINK_CORE_SOURCE|ZLINK_CORE_PACKAGE_PREFIX) printf 'export %s=%q\n' "$k" "$val";; esac
+        done < "${root}/core-prefix.env"
+      fi
       for v in ZLINK_CORE_SOURCE ZLINK_CORE_PACKAGE_PREFIX; do
         [ -n "${!v:-}" ] && printf 'export %s=%q\n' "$v" "${!v}"
       done
