@@ -1522,25 +1522,23 @@ cell마다 개선 pass가 30~60분씩 붙는다. **§12를 문자 그대로 완�
    11:25까지 안 끝나면 해당 cell을 `차단`으로 기록하고 넘어간다.
 3. 이 문서·`decisions.ko.md`·Core 보고서 2건이 다음 세션의 유일한 출발점이 되도록 정리.
 
-**오늘 열지 않는 것 → 0.18.0 이월**
-- **binding client 수신·drain cadence 이상** — Node DD(1,267 ms vs C 0.082), Java SENDSEND(4096 B
-  516 ms vs 0.29). `tcp`이고 C 정상이라 러너/binding 쪽. 조사 미개설.
+**오늘 열지 않는 것 → 0.18.0 이월** (12:30 갱신 — 오늘 닫힌 항목은 지움)
+- **초 단위 latency 교차 현상** — Node DD·SS 전 크기, Rust SS 4096 B, Java SS 4096 B, Go DR SS: 처리량은 정상인데 한 크기(또는 전 크기)의 latency가 C 대비 500~2,500x. C·C++·.NET에는 없다. cadence 조사(`log/2026-09-08-client-recv-cadence.ko.md`)는 server drain 제한·timestamp 재사용을 배제했고 Java의 "admission 대기 중 수신 중단" 결합을 찾았으나 후보는 처리량 -10%로 기각. Node·Rust·Go에서 같은 결합인지 확인이 첫 단계.
+- **Java REQREP 65536 B 왕복 비용** — 소켓당 미완료 ≤2인데 turn 17.5 ms(4096 B 0.61 ms); `snd_pending_bytes` 65,664(1 MiB 창의 6%)에서 POLLOUT 99% → 실효 admission 창을 byte HWM이 정하지 않음. Java request terminal(retained+WRITABLE 회복)과 Core admission 상호작용(`log/2026-09-08-java-reqrep-64k-analysis.ko.md`, `-gate.ko.md`). binding 라이브러리 소관 가능.
+- **Java RR SS 4096 B teardown 간헐 실패** — client `async_sends_timed_out` + relay `sending=true`(1/3). client가 admission 대기 중 echo 수신을 멈추면 relay reply admission이 막혀 상호 대기. cadence 결함의 teardown 발현.
+- **Go RR SS 65536 B `server_shutdown_failed`** — client는 RESULT까지 정상, relay server가 STOP 뒤 5 s 안에 못 끝남(2~3/5). DR SS는 같은 echo server 함수로 통과 → ROUTER client teardown 차이.
+- **Go DD 64 B 14%·latency 7x** — C turn 모델 도입 뒤 첫 complete 값. 제출당 goroutine+channel 왕복이 후보.
 - **REQREP async terminal 왕복 고정 비용** — Go·Node 작은 크기 latency ~3x 공통. 비용 지도 미작성.
-- **5-run 집계 median 정합** — .NET은 마지막 반복값 기록 확인(D-BP32), Java·Go 미확인. 브리프
-  준비됨(`.artifacts/codex/dotnet-runs-median/brief.md`). 1-run 기본으로 가면 경계 cell에만 영향.
-- **`tls`·`ws`·`wss` 6개 언어** — C++에서 이미 Core 문제로 귀속(D-BP28·D-BP29, 보고서
-  `doc/bug/perf/2026-09-08-core-ws-roundtrip-size-penalty.ko.md`). Core 수정 뒤 전 언어 재측정.
-- **Core 보고서 2건 후속** — STREAM 수신 정체(0.17.2에서도 재현), ws/wss 왕복 크기 비례 붕괴 +
-  tls/ws/wss latency 간헐 폭증. 머신 B 답변 대기.
-- **Node client echo-drain** — relay 정합(`d744799803`) 뒤 tls RR 65536 B runs 5가 partial(2/5). .NET·C++와 같은 "admission만 보고 닫는" client 결함. .NET client job의 수정 형태(C++ `echo_reply_drain_t` 미러)를 Node에 적용해야 한다. `tcp`에서는 안 드러나 오늘 판정에는 영향 없음.
+- **.NET tls RR SS 65536 B echo 경로 정지** — 15 s 창에서도 4/5 실패(echo 684건 미수신, admission 완료). C는 1-run만 확인 → 0.18.0 재개 시 C 5-run 먼저(D-BP34).
+- **`tls`·`ws`·`wss`·STREAM 6개 언어(132 cell)** — `보류(Core 대기)`(D-BP23·D-BP28·D-BP29). Core 수정 뒤 전 언어 재측정.
 - **wss DD C 러너 간헐 실패** — 깨끗한 재현 1승 1패, 오염 3회 무효.
-- **.NET·C++ 미달 cell의 다음 단계** — 공개 API 형태 논의(메시지당 operation 객체, message wrapper
-  P/Invoke 왕복; C++ 요청당 5개 할당). 캠페인 범위 밖.
+- **.NET·C++ 미달 cell의 다음 단계** — 공개 API 형태 논의(메시지당 operation 객체, message wrapper P/Invoke 왕복; C++ 요청당 5개 할당). Python은 pattern·크기 무관 14~34%로 인터프리터 고정 비용(함수 호출 수 지도 필요). 캠페인 범위 밖.
+- **Node `npm test` native stress assertion**(`rejected_einval > 0n`) — 범위 밖, 단독 재현.
 
 **범위 확정(사용자, 10:50)**: Core에서 해결돼야 하는 것은 제외한다 — STREAM 전 언어, `tls`·`ws`·`wss` 전 언어는 `보류(Core 대기)`로 일괄 기록하고 측정하지 않는다. **오늘 판정 대상은 7개 언어 × `tcp` 7 pattern(STREAM 제외 6)뿐이다.**
 
-**측정 규칙 확정**: 기본 1-run, 경계(목표 ±5%p)·outlier cell만 5-run(D-BP32). 측정은
-`scripts/perf/with-perf-lock.sh`의 flock으로 직렬화(명령 수명 = lock 수명, D-BP33; 그 전 `wait-for-idle-perf.sh` holder 방식은 하루 4차 수정 끝에 대체).
+**측정 규칙 확정**: 기본 1-run, 경계(목표 ±5%p)·outlier cell만 3-run(D-BP32, 5→3 보정). 측정은
+티켓 큐 + 단일 runner(`scripts/perf/perf-ticket.sh` / `perf-queue-runner.sh`, D-BP33)로 직렬화한다.
 
 ## 11. 측정 기록과 결과
 
