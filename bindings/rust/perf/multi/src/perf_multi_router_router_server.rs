@@ -1,34 +1,13 @@
 #[path = "perf_common.rs"]
 mod common;
 
-use std::future::Future;
 use std::io::{self, BufRead};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
-use zlink::{
-    Message, POLLCOMPLETION, POLLIN, PollEvent, Poller, RecvFlags, RecvResult, RoutingId,
-    SubmitError, SubmitResult,
-};
-
-fn finish_ready_replies<F>(tasks: &mut common::ConcurrentTasks<F>)
-where
-    F: Future<Output = Result<(), SubmitError>>,
-{
-    for (_, result) in tasks.poll_ready() {
-        match result {
-            Ok(()) => {}
-            Err(err)
-                if matches!(
-                    err.code(),
-                    SubmitResult::NotConnected | SubmitResult::NotFound
-                ) => {}
-            Err(err) => panic!("routed reply failed: {err}"),
-        }
-    }
-}
+use zlink::{POLLCOMPLETION, POLLIN, PollEvent, Poller, RecvFlags, RecvResult, RoutingId};
 
 fn main() {
     let args = common::MultiArgs::parse();
@@ -81,9 +60,9 @@ fn main() {
             }
         }
     });
-    // Keep routed send Futures alive across receive bursts. POLLCOMPLETION
-    // dispatches their Core completions on the same signal-driven wait that
-    // drains POLLIN, so a backpressured reply never stops receive progress.
+    // POLLCOMPLETION drives the single active admission Future. Received
+    // snapshots remain in the FIFO while that head is backpressured, so receive
+    // progress continues without submitting the next reply early.
     let poller = Poller::new().expect("poller");
     poller
         .add_socket(&router, POLLIN | POLLCOMPLETION, 0)
@@ -91,7 +70,7 @@ fn main() {
     let mut events = vec![PollEvent::default(); 1];
     let mut received = zlink::Received::empty();
     let mut auto_hwm_printed = false;
-    let mut replies = common::ConcurrentTasks::new(0);
+    let mut replies = common::RoutedReplySender::new(&router);
     while !stop.load(Ordering::Acquire) {
         // Bound the idle wait so the control thread's STOP/QUIT request can
         // terminate the server even when no request is queued.
@@ -127,16 +106,7 @@ fn main() {
                                 continue;
                             };
                             let reply_bytes = common::message_payload(received.parts()).to_vec();
-                            let router_ref = &router;
-                            replies.push(async move {
-                                let msg = Message::try_from(reply_bytes.as_slice()).expect("reply");
-                                perf_submit_measurement_async!(router_ref.send(&rid), msg).await
-                            });
-                            // Enter Core before draining the next request. A
-                            // continuously readable socket must not leave the
-                            // queued Rust Futures inert until recv reaches
-                            // NoData.
-                            finish_ready_replies(&mut replies);
+                            replies.enqueue(rid, reply_bytes);
                         }
                         Ok(false) => break,
                         Err(err) if err.code() == RecvResult::NoData => break,
@@ -145,7 +115,7 @@ fn main() {
                 }
             }
         }
-        finish_ready_replies(&mut replies);
+        replies.advance();
     }
 
     // STOP is runner teardown, not part of the measured data path. Let already
@@ -153,7 +123,7 @@ fn main() {
     // the configured send timeout; dropping a remaining Future cancels it.
     let drain_deadline = Instant::now() + Duration::from_millis(settings.send_timeout_ms.max(1));
     while replies.any_pending() && Instant::now() < drain_deadline {
-        finish_ready_replies(&mut replies);
+        replies.advance();
         if !replies.any_pending() {
             break;
         }
@@ -166,5 +136,5 @@ fn main() {
             Err(err) => panic!("reply drain poll failed: {err}"),
         }
     }
-    finish_ready_replies(&mut replies);
+    replies.advance();
 }

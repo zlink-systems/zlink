@@ -3,6 +3,7 @@ import asyncio
 import os
 import sys
 import time
+from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -478,6 +479,56 @@ async def send_routed(
         loop.call_soon(resumed.set_result, None)
         await resumed
     return True
+
+
+class RoutedReplySender:
+    """Submit routed reply snapshots in FIFO admission order."""
+
+    __slots__ = ("_ignored_results", "_pending", "_sock", "_task")
+
+    def __init__(self, sock):
+        zlink_mod = _require_zlink()
+        self._ignored_results = {
+            zlink_mod.SubmitResult.NOT_CONNECTED,
+            zlink_mod.SubmitResult.NOT_FOUND,
+        }
+        self._pending = deque()
+        self._sock = sock
+        self._task = None
+
+    def enqueue(self, payload, routing_id):
+        self.raise_if_failed()
+        self._pending.append((payload, routing_id))
+        if self._task is None:
+            self._task = asyncio.create_task(self._send_pending())
+
+    def raise_if_failed(self):
+        if self._task is None or not self._task.done():
+            return
+        task = self._task
+        self._task = None
+        task.result()
+
+    async def drain(self):
+        if self._task is not None:
+            await self._task
+            self._task = None
+
+    async def _send_pending(self):
+        zlink_mod = _require_zlink()
+        while self._pending:
+            payload, routing_id = self._pending[0]
+            try:
+                await send_routed(
+                    self._sock,
+                    payload,
+                    routing_id=routing_id,
+                    _yield_after_submit=False,
+                )
+            except zlink_mod.SubmitError as exc:
+                if exc.result not in self._ignored_results:
+                    raise
+            self._pending.popleft()
 
 
 

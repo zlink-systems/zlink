@@ -17,8 +17,8 @@ use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 use zlink::{
     AutoHwmProfile, Context, DealerSocket, Message, Monitorable, PairSocket, PollEvent, Poller,
-    PubSocket, RecvFlags, RouterSocket, SocketMonitor, SocketMonitorEventMask,
-    SocketMonitorOpenOptions, StreamSocket, SubSocket, ZlinkError,
+    PubSocket, RecvFlags, RouterSocket, RoutingId, SocketMonitor, SocketMonitorEventMask,
+    SocketMonitorOpenOptions, StreamSocket, SubSocket, SubmitError, SubmitResult, ZlinkError,
 };
 
 pub const STOP_TOKEN: &[u8] = b"__zlink_perf_stop__";
@@ -360,6 +360,63 @@ macro_rules! perf_submit_measurement_async {
             }
         }
     }};
+}
+
+type RoutedReplyFuture<'a> = Pin<Box<dyn Future<Output = Result<(), SubmitError>> + 'a>>;
+
+/// C-parity routed relay queue: receive snapshots may accumulate, but only the
+/// FIFO head is submitted until its Core admission Future completes.
+pub struct RoutedReplySender<'a> {
+    router: &'a RouterSocket,
+    pending: VecDeque<(RoutingId, Vec<u8>)>,
+    active: ConcurrentTasks<RoutedReplyFuture<'a>>,
+}
+
+impl<'a> RoutedReplySender<'a> {
+    pub fn new(router: &'a RouterSocket) -> Self {
+        Self {
+            router,
+            pending: VecDeque::new(),
+            active: ConcurrentTasks::new(0),
+        }
+    }
+
+    pub fn enqueue(&mut self, rid: RoutingId, payload: Vec<u8>) {
+        self.pending.push_back((rid, payload));
+        self.advance();
+    }
+
+    pub fn advance(&mut self) {
+        loop {
+            for (_, result) in self.active.poll_ready() {
+                match result {
+                    Ok(()) => {}
+                    Err(err)
+                        if matches!(
+                            err.code(),
+                            SubmitResult::NotConnected | SubmitResult::NotFound
+                        ) => {}
+                    Err(err) => panic!("routed reply failed: {err}"),
+                }
+            }
+
+            if self.active.any_pending() {
+                return;
+            }
+            let Some((rid, payload)) = self.pending.pop_front() else {
+                return;
+            };
+            let router = self.router;
+            self.active.push(Box::pin(async move {
+                let msg = Message::try_from(payload.as_slice()).expect("reply");
+                perf_submit_measurement_async!(router.send(&rid), msg).await
+            }));
+        }
+    }
+
+    pub fn any_pending(&self) -> bool {
+        self.active.any_pending() || !self.pending.is_empty()
+    }
 }
 
 pub fn now_ns() -> u64 {

@@ -7,15 +7,13 @@ using static PerfRunner;
 
 internal static class PerfMultiRoutedRelayServer
 {
-    private const int ReplyReapInterval = 64;
-
     internal static async Task<int> RunAsync(IRouterSocket server,
         PollManager pollManager, int pollTimeoutMs, int drainTimeoutMs)
     {
         var sockets = new[] { (ISocket)server };
         var eventMasks = new[] { SocketPollIn };
-        var replies = new List<Task>();
-        using var receivedBuffer = Received.Create();
+        var replySender = new PendingReplySender();
+        Received receivedBuffer = Received.Create();
 
         // PERF_POLICY.md:138-143 - the handshake contract is the C one: the
         // runner stops every multi server with a stdin STOP/QUIT line, and the
@@ -42,144 +40,220 @@ internal static class PerfMultiRoutedRelayServer
 
         bool stop = false;
         bool success = true;
-        int relayedSinceReap = 0;
         // The stdin watcher cannot wake a socket poll that waits forever, so
         // the poll stays bounded and STOP is observed on the next turn. Same
         // reason as the C relay server's auxiliary poll wait.
         int failureObservationPollMs = pollTimeoutMs < 0
             ? 200
             : pollTimeoutMs;
-        while (!stop && success && Volatile.Read(ref stopRequested) == 0)
-        {
-            if (!RemoveCompletedReplies(replies))
-            {
-                success = false;
-                break;
-            }
-
-            int readyCount = PollSocketEvents(pollManager, sockets,
-                eventMasks, failureObservationPollMs);
-            if (readyCount <= 0)
-                continue;
-
-            PollEventFlags readyMask = PollEventFlags.None;
-            for (int i = 0; i < readyCount; i++)
-            {
-                if (ReadySocketIndexAt(pollManager, i) == 0)
-                    readyMask |= ReadySocketMaskAt(pollManager, i);
-            }
-            if ((readyMask & PollEventFlags.PollIn) == 0)
-                continue;
-
-            while (success && TryRecvNoWait(server, receivedBuffer))
-            {
-                IReadOnlyList<Message> parts = receivedBuffer.Parts;
-                if (parts.Count == 1
-                    && IsStopTokenPayload(receivedBuffer.FirstPart()
-                        .AsReadOnlySpan()))
-                {
-                    stop = true;
-                    break;
-                }
-                if (!PerfSocketIo.TryMeasurementPayload(parts, out _))
-                {
-                    continue;
-                }
-
-                if (!TrySubmitReply(receivedBuffer, parts, replies))
-                {
-                    success = false;
-                    break;
-                }
-
-                relayedSinceReap++;
-                if (relayedSinceReap < ReplyReapInterval)
-                    continue;
-
-                relayedSinceReap = 0;
-                if (!RemoveCompletedReplies(replies))
-                    success = false;
-            }
-        }
-
-        if (replies.Count > 0)
-        {
-            Task drain = Task.WhenAll(replies);
-            Task completed = await Task.WhenAny(drain,
-                Task.Delay(Math.Max(1, drainTimeoutMs))).ConfigureAwait(false);
-            if (!ReferenceEquals(completed, drain))
-            {
-                DebugFailure("async reply drain timed out", null);
-                return 2;
-            }
-
-            try
-            {
-                await drain.ConfigureAwait(false);
-            }
-            catch
-            {
-                // Observe each terminal below so stale routes remain non-fatal
-                // while every other completion failure is reported precisely.
-            }
-            success &= RemoveCompletedReplies(replies);
-        }
-        return success ? 0 : 2;
-    }
-
-    private static bool TrySubmitReply(Received received,
-        IReadOnlyList<Message> parts, List<Task> replies)
-    {
-        Task reply;
         try
         {
-            // Transfer the original routed envelope parts to Core. Async()
-            // consumes the parts before returning on a successful submit, so
-            // the same Received can immediately be reused by the next Recv.
-            reply = received.Send().Messages(parts).Async();
-        }
-        catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))
-        {
-            // The source disconnected after its request was received.
-            return true;
-        }
-        catch (Exception ex)
-        {
-            DebugFailure("async reply send", ex);
-            return false;
-        }
-
-        if (reply.IsCompletedSuccessfully)
-            return true;
-        if (reply.IsCompleted)
-            return ObserveCompletedReply(reply);
-
-        replies.Add(reply);
-        return true;
-    }
-
-    private static bool RemoveCompletedReplies(List<Task> replies)
-    {
-        bool result = true;
-        int retained = 0;
-        int count = replies.Count;
-        for (int i = 0; i < count; i++)
-        {
-            Task reply = replies[i];
-            if (reply.IsCompleted)
+            while (!stop && success && Volatile.Read(ref stopRequested) == 0)
             {
-                result &= ObserveCompletedReply(reply);
-                continue;
+                if (replySender.Completion.IsCompleted)
+                {
+                    success = await replySender.Completion.ConfigureAwait(false);
+                    break;
+                }
+
+                int readyCount = PollSocketEvents(pollManager, sockets,
+                    eventMasks, failureObservationPollMs);
+                if (readyCount <= 0)
+                    continue;
+
+                PollEventFlags readyMask = PollEventFlags.None;
+                for (int i = 0; i < readyCount; i++)
+                {
+                    if (ReadySocketIndexAt(pollManager, i) == 0)
+                        readyMask |= ReadySocketMaskAt(pollManager, i);
+                }
+                if ((readyMask & PollEventFlags.PollIn) == 0)
+                    continue;
+
+                while (success && TryRecvNoWait(server, receivedBuffer))
+                {
+                    IReadOnlyList<Message> parts = receivedBuffer.Parts;
+                    if (parts.Count == 1
+                        && IsStopTokenPayload(receivedBuffer.FirstPart()
+                            .AsReadOnlySpan()))
+                    {
+                        stop = true;
+                        break;
+                    }
+                    if (!PerfSocketIo.TryMeasurementPayload(parts, out _))
+                        continue;
+
+                    // Move the whole routed envelope into the application FIFO.
+                    // Its sender waits for the preceding admission before it
+                    // submits this reply, while receive continues with fresh
+                    // storage. This is the C relay's immutable pending snapshot.
+                    if (!replySender.Enqueue(receivedBuffer))
+                    {
+                        success = false;
+                        break;
+                    }
+                    receivedBuffer = Received.Create();
+                }
             }
 
-            if (retained != i)
-                replies[retained] = reply;
-            retained++;
+            replySender.Complete();
+            if (success)
+            {
+                Task completed = await Task.WhenAny(replySender.Completion,
+                    Task.Delay(Math.Max(1, drainTimeoutMs)))
+                    .ConfigureAwait(false);
+                if (!ReferenceEquals(completed, replySender.Completion))
+                {
+                    DebugFailure("async reply drain timed out", null);
+                    return 2;
+                }
+                success = await replySender.Completion.ConfigureAwait(false);
+            }
+            return success ? 0 : 2;
+        }
+        finally
+        {
+            replySender.Abort();
+            receivedBuffer.Dispose();
+        }
+    }
+
+    private sealed class PendingReplySender
+    {
+        private readonly TaskCompletionSource<bool> _completion = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Queue<Received> _pending = new();
+        private readonly object _sync = new();
+        private bool _accepting = true;
+        private bool _pumping;
+
+        internal Task<bool> Completion => _completion.Task;
+
+        internal bool Enqueue(Received received)
+        {
+            bool startPump = false;
+            lock (_sync)
+            {
+                if (!_accepting)
+                    return false;
+                _pending.Enqueue(received);
+                if (!_pumping)
+                {
+                    _pumping = true;
+                    startPump = true;
+                }
+            }
+            if (startPump)
+                Pump();
+            return true;
         }
 
-        if (retained < count)
-            replies.RemoveRange(retained, count - retained);
-        return result;
+        internal void Complete()
+        {
+            bool finished;
+            lock (_sync)
+            {
+                _accepting = false;
+                finished = !_pumping && _pending.Count == 0;
+            }
+            if (finished)
+                _completion.TrySetResult(true);
+        }
+
+        internal void Abort()
+        {
+            if (!_completion.Task.IsCompleted)
+                FailAndDisposePending();
+        }
+
+        private void Pump()
+        {
+            while (true)
+            {
+                Received? received;
+                bool finished;
+                lock (_sync)
+                {
+                    if (_pending.Count == 0)
+                    {
+                        _pumping = false;
+                        finished = !_accepting;
+                        received = null;
+                    }
+                    else
+                    {
+                        finished = false;
+                        received = _pending.Dequeue();
+                    }
+                }
+
+                if (received == null)
+                {
+                    if (finished)
+                        _completion.TrySetResult(true);
+                    return;
+                }
+
+                Task reply;
+                try
+                {
+                    reply = received.Send().Messages(received.Parts).Async();
+                }
+                catch (ZlinkSubmitException ex) when (IsStaleRoute(ex))
+                {
+                    received.Dispose();
+                    continue;
+                }
+                catch (Exception ex)
+                {
+                    received.Dispose();
+                    DebugFailure("async reply send", ex);
+                    FailAndDisposePending();
+                    return;
+                }
+
+                if (reply.IsCompleted)
+                {
+                    bool succeeded = ObserveCompletedReply(reply);
+                    received.Dispose();
+                    if (succeeded)
+                        continue;
+                    FailAndDisposePending();
+                    return;
+                }
+
+                reply.ConfigureAwait(false).GetAwaiter().UnsafeOnCompleted(
+                    () => ResumeAfterAdmission(reply, received));
+                return;
+            }
+        }
+
+        private void ResumeAfterAdmission(Task reply, Received received)
+        {
+            bool succeeded = ObserveCompletedReply(reply);
+            received.Dispose();
+            if (!succeeded)
+            {
+                FailAndDisposePending();
+                return;
+            }
+            Pump();
+        }
+
+        private void FailAndDisposePending()
+        {
+            Received[] discarded;
+            lock (_sync)
+            {
+                _accepting = false;
+                _pumping = false;
+                discarded = _pending.ToArray();
+                _pending.Clear();
+            }
+            foreach (Received received in discarded)
+                received.Dispose();
+            _completion.TrySetResult(false);
+        }
     }
 
     private static bool ObserveCompletedReply(Task reply)

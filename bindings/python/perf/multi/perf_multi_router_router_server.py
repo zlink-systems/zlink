@@ -8,16 +8,14 @@ from perf_multi_common import (
     apply_multi_socket_options,
     benchmark_endpoint,
     configure_multi_tls_server,
-    make_relay_send_done_callback,
     measurement_part_count,
     parse_server_args,
     perf_server_context,
     recv_nonblocking,
     RelaySchedulerQuantum,
+    RoutedReplySender,
     safe_poll,
     scoped_relay_eager_task_factory,
-    send_routed,
-    track_relay_send_task,
 )
 
 
@@ -25,14 +23,6 @@ async def main(argv=None):
     args = parse_server_args(argv or sys.argv[1:])
     endpoint = benchmark_endpoint(args.transport, "multi-router-router")
     stop = threading.Event()
-    # ROUTER routed send is HWM-managed: `submit()` owns the DONTWAIT retry
-    # state. After backpressure it retains the packet and target, blocks on
-    # POLLCOMPLETION, drains through NO_DATA, and retries only for the
-    # matching WRITABLE token/context/RID. The benchmark only tracks the
-    # returned task; it does not add a second retry queue.
-    pending_tasks = set()
-    send_errors = []
-    on_send_done = make_relay_send_done_callback(pending_tasks, send_errors)
     scheduler_quantum = RelaySchedulerQuantum()
 
     def wait_stop():
@@ -56,16 +46,16 @@ async def main(argv=None):
                 poller.add_socket(router, zlink.PollEventFlag.POLLIN, 0)
                 poll_events = zlink.create_poll_events(1)
                 recv_storage = zlink.create_received()
+                replies = RoutedReplySender(router)
                 # Python 3.12 starts each reply task through its public
                 # coroutine immediately. Older runtimes retain create_task
                 # scheduling and receive a bounded turn every quantum.
                 with scoped_relay_eager_task_factory():
                     while not stop.is_set():
-                        if send_errors:
-                            raise send_errors[0]
-                        # Pending public send awaitables and stdin share this
-                        # event loop. The completion owner drives retries from
-                        # WRITABLE; cooperative turns preserve scheduler fairness.
+                        replies.raise_if_failed()
+                        # The application FIFO may keep receiving snapshots,
+                        # but its single sender awaits the preceding Core
+                        # admission before submitting the next reply.
                         ready_count = safe_poll(poller, poll_events, 0)
                         for offset in range(ready_count):
                             if poll_events.slot(offset) != 0 or not (
@@ -84,17 +74,7 @@ async def main(argv=None):
                                         raise RuntimeError("invalid measured multipart trailing frame")
                                     payload = bytes(received.parts[0].data)
                                     routing_id = bytes(received.routing_id)
-                                task = asyncio.create_task(
-                                    send_routed(
-                                        router,
-                                        payload,
-                                        routing_id=routing_id,
-                                        _yield_after_submit=False,
-                                    )
-                                )
-                                track_relay_send_task(
-                                    task, pending_tasks, on_send_done
-                                )
+                                replies.enqueue(payload, routing_id)
                                 # This is a scheduler fairness budget only. It
                                 # neither caps pending replies nor gates Core
                                 # admission on their count.
@@ -102,12 +82,7 @@ async def main(argv=None):
                                     await asyncio.sleep(0)
                         scheduler_quantum.reset()
                         await asyncio.sleep(0)
-                if send_errors:
-                    raise send_errors[0]
-                if pending_tasks:
-                    await asyncio.gather(*pending_tasks, return_exceptions=True)
-                if send_errors:
-                    raise send_errors[0]
+                await replies.drain()
 
 
 if __name__ == "__main__":
