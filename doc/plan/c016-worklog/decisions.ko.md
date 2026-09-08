@@ -4655,3 +4655,8 @@ perf 측정에는 영향 없음(러너는 2-part). 러너 검증에서 이 테�
 경계 5.0회. Python Single DR REQREP 러너가 측정 구간에 `asyncio.sleep(0)`+event loop를 쓰는 §1.1 위반 발견 → Single 러너
 정합 항목으로 추가(Claude sub-agent). ns 귀속은 0.17.3 bump로 중단, 재개 시 이어간다.
 
+
+## D-B248 (2026-09-08 14:40, 머신 B) D-BP43(1,025-part reply completion drain assertion) → RR-1(sol, 0.17.4); 0.17.3 bump의 Rust 헤더 누락(A가 `4cdafee9b7`로 수정)
+
+**D-BP43**: DEALER request future가 1,025-part reply에서 `release_count1_completion_drain` false → `zlink_assert(released)` SIGABRT(1,024까지 정상). RR-1(sol/high, 2 h, worktree rr1 @ wip/0.17.3-all2): 공개 C API 테스트로 1,023/1,024/1,025/2,048 재현 → count-1 completion drain claim/release 계약과 1,024 상한 계약 대조 → 소유 모듈 수정 + 경계 회귀 테스트. ALL-2b·ALL-3와 함께 0.17.4 병합.
+**bump 누락**: `0761c1d4d0`이 `bindings/rust/include/zlink.h`의 `ZLINK_VERSION_PATCH`를 안 올려 Rust `build.rs`가 0.17.2 lib를 찾음 → A가 수정. Core 릴리스 산출물(`build.yml`)은 bindings/rust를 쓰지 않아 태그 재생성 불필요. 0.17.4 bump 체크리스트에 "bindings/{c,cpp,go,rust}/include/zlink.h + zlink/common.h 4언어 전부"를 명시.
