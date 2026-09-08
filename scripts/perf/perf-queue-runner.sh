@@ -45,6 +45,8 @@ board
 while :; do
   t="$(ls "${root}"/pending/*.ticket 2>/dev/null | sort | head -1)"
   if [ -z "${t}" ]; then sleep 3; continue; fi
+  # 대기 목록이 바뀌면 상태판을 갱신한다(제출만 되고 실행이 안 넘어갈 때도 보이게).
+  sig="$(ls "${root}"/pending 2>/dev/null | md5sum)"; [ "${sig}" != "${last_sig:-}" ] && { board; last_sig="${sig}"; }
   name="$(basename "${t}")"
   mv "${t}" "${root}/running/${name}" || continue
   t="${root}/running/${name}"
@@ -52,7 +54,12 @@ while :; do
   board
   # 이전 방식 측정과 겹치지 않게 같은 lock을 쥐고, load가 내려갈 때까지 기다린다.
   exec 9>>"${lock_file}"
-  flock -w 3600 9 8>&- || echo "# warn: perf lock 3600s 초과, 그대로 진행" >> "${t}"
+  lw=0
+  until flock -n 9 8>&-; do
+    sig="$(ls "${root}"/pending 2>/dev/null | md5sum)"; [ "${sig}" != "${last_sig:-}" ] && { board; last_sig="${sig}"; }
+    [ "${lw}" -ge 3600 ] && { echo "# warn: perf lock 3600s 초과, 그대로 진행" >> "${t}"; break; }
+    sleep 3; lw=$((lw+3))
+  done
   waited=0
   while awk -v m="${load_max}" '{exit !($1>m)}' /proc/loadavg && [ "${waited}" -lt 600 ]; do sleep 5; waited=$((waited+5)); done
   echo "# started: $(date '+%H:%M:%S') (lock·load 대기 ${waited}s, load $(cut -d' ' -f1 /proc/loadavg))" >> "${t}"
