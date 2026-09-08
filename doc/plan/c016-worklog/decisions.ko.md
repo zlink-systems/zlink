@@ -4589,3 +4589,8 @@ SNDHWM bytes ÷ 메시지 wire size**(auto-HWM snapshot의 applied 값 — C가 
 읽어 쓰는 것이며, C와 같은 깊이 경계를 준다. C++·Java·.NET·Rust Single REQREP 러너에 적용하고 C와 짝지어 재측정.
 정책 §1.1.3에 한 문장으로 명문화(감독자 편집).
 
+
+## D-B243 (2026-09-08 13:55, 머신 B) 머신 A 전달 — Framework Node/.NET workflow가 push마다 실패(로컬 tgz 참조), Core 릴리스와 무관
+
+**관찰**: `framework-node.yml`(예: run 34188140986, A의 `87d8f426d0` push)이 "Install framework dependencies"에서 `.artifacts/wsl/npm/zlink-systems-zlink-0.17.0.tgz` ENOENT로 전 플랫폼 실패. 9/7 이후 매 push 동일. Framework .NET workflow도 같은 패턴. 원인은 framework `package.json`/props의 bindings 참조가 로컬 패키지 경로(A가 `84e528cc54`에서 0.17.0으로 되돌림)를 가리키는데 CI runner에 그 산출물이 없는 것. Core `build.yml`과는 별개라 0.17.3 릴리스에 영향 없음.
+**요청(A)**: CI에서는 registry 버전 참조로 두거나 workflow 안에서 로컬 tgz/nupkg를 먼저 만드는 단계를 넣어 framework workflow를 green으로. 머신 B는 손대지 않는다(framework는 A 소유).
