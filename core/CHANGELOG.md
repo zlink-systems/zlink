@@ -12,6 +12,71 @@ Design decisions are in `doc/plan/c016-worklog/decisions.ko.md` (D-B…).
 
 ## [Unreleased]
 
+## [0.17.4] - 2026-09-09
+
+### Fixed
+
+- Attaching a pipe no longer runs a synchronous, context-wide Auto-HWM
+  replan (O(N) per attach, O(N²) per connection ramp): the attaching
+  directions extend the last applied plan in O(log n) and the lowered targets
+  of already-attached directions are recorded by the same debounced
+  recalculation that option changes use. The convergence obligation is the
+  debounce deadline itself (armed once per burst, cleared by the full pass),
+  so a deferred shrink never re-triggers replanning. A STREAM echo server with
+  4,000 connections on one I/O thread went from failing to accept in time to
+  ~205 kops (spec 06-auto-hwm §2 row updated, D-H1; CCU-1…5).
+- Context termination is published to every socket before monitor teardown,
+  and blocking receive loops observe it on every turn (blocking send already
+  did), so `zlink_ctx_shutdown()` interrupts a receive that is draining a large
+  backlog instead of waiting for the drain (macOS exposed a ~13 ms window;
+  MAC-4).
+- REQUEST/REPLY: a reply of exactly 1,025 parts (one over the part-count
+  boundary) no longer asserts (RR-1, machine A report D-BP43).
+- macOS: `ipc://` bind works again (the `mkdtemp` probe was broken); wake,
+  writev-lifetime and stream-packet-progress tests were made deterministic on
+  the 3-core runner; the macOS build script gates on ctest (serial tests one at
+  a time, then the parallel set) instead of tolerating failures (MAC-1…3).
+- Bench (with_stream): the zlink STREAM echo scenario treated a normal TCP
+  suffix after a complete frame as malformed; frames are now assembled per RID
+  like the other stacks.
+
+### Performance
+
+- Unified socket lifecycle turn: command drain, receive lease and the async
+  executor share one turn (receive-owner word, fallback mutex and
+  `command_owner_sync` removed); socket-side `_out_sync` removed; route shard
+  snapshot for ROUTER sends. STREAM TCP lock acquisitions per message
+  15.1 → 8.4 (ALL-1/2).
+- Large-payload receive path: the decoder/encoder read target grows on the
+  first full read (2×, clamped to the existing maximum) instead of after two
+  consecutive full reads, so a 64 KiB frame arrives in one read instead of two
+  and the RAW echo fast path is kept. with_stream 64 KiB, 1,000 connections:
+  32.3 → 40.3 kops (+25 %), p99 −24 %; peak server RSS +141 MiB at that cell
+  (B2, D-B291).
+- WS/WSS: a large ZMP body that crosses the encoder batch target is written in
+  the same bounded-batch operation as the batch that holds its header instead
+  of a separate WebSocket message; ws round-trip Q64/Q1 gate 0.55 → ≥ 1.3
+  (DR ws 64 KiB 5.5 → ~30 kops) (SD-4).
+- WS: 8-byte masking, batch/scratch sizing 16/64 KiB with growth to 128 KiB;
+  large received payloads are built from the decoder's own recycle block
+  instead of a copy; server RSS at 64 KiB ws −70 % (ALL-2b/3).
+- Hot-path reference `dealer_router_reqrep_inproc` 16455 → 15610 Ir/msg.
+
+### Removed
+
+- Three STREAM gather environment variables that had no effect since the RAW
+  engine stopped using gather writes (`ZLINK_ASIO_STREAM_DISABLE_GATHER`,
+  `ZLINK_ASIO_STREAM_GATHER_THRESHOLD`, `ZLINK_ASIO_STREAM_TINY_GATHER_THRESHOLD`;
+  spec 08-stream runtime defaults updated, D-f).
+
+### Changed
+
+- Windows random-byte entropy and context-termination `EAGAIN` fixes shipped
+  in 0.17.3 are unchanged; Windows release gating is done by GitHub Actions
+  (host Smart App Control blocks freshly built test binaries).
+- Release workflow: Node 24 action majors; macOS Intel dropped (macOS ARM64,
+  Linux x64/ARM64, Windows x64/ARM64 remain).
+
 ## [0.17.3] - 2026-09-08
 
 ### Fixed

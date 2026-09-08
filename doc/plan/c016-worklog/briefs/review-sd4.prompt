@@ -1,0 +1,11 @@
+너는 job review-SD-4(B-SD2-1 해소 재검증: WS/WSS bounded batch 안에서 [batch, 큰 body] 한 writev)다. /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽는다. **읽기·리뷰 전용**(수정·빌드·실행·커밋 금지). 상한 30분.
+
+대상: `~/project/zlink-work/all-artifacts/SD-4.patch`(base `84d25131a6`; 채택 구성 = 계측 app 수정 + B2 + D-f + WS batch 수정; B1·hotpath reference 없음). 입력: `review-sd2.md`(B-SD2-1 반례 2건, W-SD2-1/2/3), `core-rf-SD-4-report.md`, 스펙 `01-zmp.ko.md` §9(:481-492), `ws_batch_policy.hpp`, `asio_engine.cpp` `prepare_output_buffer()`·제출 helper, `ws_transport_common_internal.hpp` `async_writev`.
+
+검증 항목(근거 파일:행, 판정):
+1. **B-SD2-1**: SD-2의 단일-message gather 기본화 hunk가 완전히 되돌려졌는지(`use_gather_write_for()` 조건 원복, TCP ZMP env opt-in 의미 불변). 새 규칙 "target 경계를 넘는 pointer 전달 body를 같은 bounded batch의 두 번째 buffer로 제출"이 (a) 128 KiB target 안에 들어가는 64 KiB+small은 기존 copy batch(한 write), (b) target 초과·128 KiB max 이내 body는 [batch, body] 한 writev, (c) max 초과는 기존 분리 — 셋을 코드로 확인하고, 반례 테스트 2건이 정확히 (a)(c)를 고정하는지.
+2. **수명·소유**: 두 번째 buffer(body pointer)가 Beast composed write 완료까지 유효한지(기존 pipeline 수명 상태 재사용 주장 확인), 부분 write·취소·disconnect 중 completion 경로에서 body 반환 순서, TSan 27-suite 0건 로그 확인.
+3. **불변 경로**: RAW STREAM·TCP ZMP 바이트 동일성(diff가 WS/WSS message-boundary 경로에만 닿는지), bounded batch "준비된 byte만, 대기 없음" 유지, 새 상태·옵션·env 0(리뷰 W-SD2-2의 "1 MiB cap" 표현 정정 여부는 보고서만).
+4. B2·D-f·계측 app 부분이 review-sd2 통과 판정 그대로인지(SD-3 이후 변경 없음), hotpath 5셀·ws gate 3-run 결과, public 헤더·`libzlink.vers` 무변경.
+
+보고서 /home/hep7hep7/project/zlink/doc/plan/c016-worklog/review-sd4.md (항목별 판정 표, 신규 B/W/S, 마지막 줄 "차단 항목 수 / 채택 가능 여부"). 진행 파일 progress-review-sd4.md.
