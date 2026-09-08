@@ -1540,7 +1540,7 @@ cell마다 개선 pass가 30~60분씩 붙는다. **§12를 문자 그대로 완�
 - **.NET tls RR SS 65536 B echo 경로 정지** — 15 s 창에서도 4/5 실패(echo 684건 미수신, admission 완료). C는 1-run만 확인 → 0.18.0 재개 시 C 5-run 먼저(D-BP34).
 - **`tls`·`ws`·`wss`·STREAM 6개 언어(132 cell)** — `보류(Core 대기)`(D-BP23·D-BP28·D-BP29). Core 수정 뒤 전 언어 재측정.
 - **wss DD C 러너 간헐 실패** — 깨끗한 재현 1승 1패, 오염 3회 무효.
-- **.NET·C++ 미달 cell의 다음 단계** — 공개 API 형태 논의(메시지당 operation 객체, message wrapper P/Invoke 왕복; C++ 요청당 5개 할당). Python은 pattern·크기 무관 14~34%로 인터프리터 고정 비용(함수 호출 수 지도 필요). 캠페인 범위 밖.
+- **.NET·C++ 미달 cell** — 지도 완료(D-BP26·D-BP31), 현재 수준 유지. 공개 API 변경은 제안하지 않는다(D-BP38). **Node·Go·Rust·Python·Java REQREP은 지도부터**(D-BP38, 진행 중).
 - **Node `npm test` native stress assertion**(`rejected_einval > 0n`) — 범위 밖, 단독 재현.
 
 **범위 확정(사용자, 10:50)**: Core에서 해결돼야 하는 것은 제외한다 — STREAM 전 언어, `tls`·`ws`·`wss` 전 언어는 `보류(Core 대기)`로 일괄 기록하고 측정하지 않는다. **오늘 판정 대상은 7개 언어 × `tcp` 7 pattern(STREAM 제외 6)뿐이다.**
@@ -1580,7 +1580,7 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 
 | 2026-09-08 | 7개 binding | Multi `tcp` 6 pattern 전 언어 판정(오늘 마무리 범위 §10.3.2) | 언어별 태그 `r1net`~`r13java3`, `nodedrain`, `gorr`, codex/agent 검증 태그 | 5 sizes(64~65536), 5초, **1회 기본**·경계만 3-run(D-BP32), 100 clients, 고정 Core **0.17.2**. 판정 통과: C++ 10 cell, Java PUBSUB·DR SS·RR SS(throughput). 미달: .NET 6, Node 6, Rust 6, Python 6, Go 5, Java 3. 차단: Go RR SS 65536 B(server shutdown), Java RR SS 4096 B 간헐. 러너 정합 커밋 9건(Node/.NET/Go/Java client·relay drain, 집계 median, teardown 창 D-BP34, Go FAIL 사유). 측정 인프라: 티켓 큐(D-BP33). 상세는 §9.x.2 각 행 |
 
-**사용자 결정(2026-09-08 12:35): Core 수정 뒤 재개.** 이 캠페인은 여기서 멈추고, 머신 B의
+**사용자 결정(2026-09-08 12:35): Core 수정 뒤 재개.** → 12:45 `core/v0.17.3-alpha`로 재개(D-BP37), 12:55 D-BP38로 범위 정정(비용 지도 없는 5개 언어는 계속). 이 캠페인은 여기서 멈추고, 머신 B의
 STREAM·tls·ws·wss 수정(D-BP23·D-BP28·D-BP29 보고서)이 끝나면 `보류(Core 대기)` 132 cell 재측정부터
 재개한다. 공개 API 형태 변경(.NET·C++ 미달)은 열지 않는다. 재개 시 절차: (1) Core 새 버전을 §10.3의
 재핀 절차로 고정, (2) C 기준을 먼저 전 transport 1-run으로 다시 잡고, (3) §10.3.2 이월 목록 순서대로.
