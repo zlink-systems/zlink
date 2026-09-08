@@ -719,6 +719,10 @@ const size_t lwm_drain_records = 8;
 const int multi_dealer_fill_timeout_ms = 30000;
 const int multi_dealer_wait_safety_timeout_ms = 60000;
 const int multi_dealer_arm_timeout_ms = 10000;
+//  How long every client must stay without credit before the fill is
+//  called saturated. Long enough for the slowest io thread to finish
+//  pushing whatever room is left in the transport and the peer queue.
+const int multi_dealer_settle_quiet_ms = 1000;
 
 void configure_large_hwm (void *socket_)
 {
@@ -948,8 +952,34 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
             // backpressured owns the token this test waits on, so consume any
             // early WRITABLE and keep filling that client until the whole
             // chain - queue, transport and peer queue - is saturated.
+            //
+            // Sampling every completion queue once cannot decide that: the io
+            // threads are still moving bytes downstream, so a client probed a
+            // millisecond too early looks quiet and regains credit right
+            // afterwards. Wait on the event instead. A POLLOUT poll over every
+            // client returns as soon as one of them regains credit, and only
+            // returns 0 when nobody did for the whole quiet window - which is
+            // what "the chain has stopped moving" means.
+            for (size_t i = 0; i < fill_items.size (); ++i)
+                fill_items[i].revents = 0;
+            zlink_config_result_t settle_error = ZLINK_CONFIG_OK;
+            const int settle_rc = zlink_poll (
+              &fill_items[0], static_cast<int> (fill_items.size ()),
+              multi_dealer_settle_quiet_ms, &settle_error);
+            if (settle_rc < 0) {
+                fill_error = settle_error == ZLINK_CONFIG_OK
+                               ? zlink_errno ()
+                               : settle_error;
+                break;
+            }
+            if (settle_rc == 0) {
+                saturated = true;
+                break;
+            }
             size_t recredited = 0;
             for (size_t i = 0; i < multi_dealer_count; ++i) {
+                if ((fill_items[i].revents & ZLINK_POLLOUT) == 0)
+                    continue;
                 zlink_completion_t early;
                 memset (&early, 0, sizeof (early));
                 early.struct_size = sizeof (early);
@@ -973,10 +1003,10 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
             }
             if (fill_error != 0)
                 break;
-            if (recredited == 0) {
-                saturated = true;
-                break;
-            }
+            //  POLLOUT was reported but the matching completion has not been
+            //  published yet. Do not spin on it.
+            if (recredited == 0)
+                msleep (1);
             continue;
         }
 
