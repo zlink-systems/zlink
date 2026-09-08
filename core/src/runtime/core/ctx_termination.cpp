@@ -92,6 +92,15 @@ bool zlink::ctx_t::begin_shutdown_locked (bool allow_fork_cleanup_)
     }
     _slot_sync.unlock ();
     try {
+        //  Publish termination on every socket before any teardown work.
+        //  stop_monitor() may wait for a monitor worker or process a peer's
+        //  mailbox, and until this store lands a blocking send or receive
+        //  keeps running as if the context were still alive - a receive
+        //  draining buffered input can consume all of it in that window.
+        for (size_t i = 0; i < sockets.size (); ++i) {
+            if (sockets[i])
+                sockets[i]->publish_ctx_terminated ();
+        }
         for (size_t i = 0; i < sockets.size (); ++i) {
             if (sockets[i])
                 sockets[i]->stop_monitor (false);

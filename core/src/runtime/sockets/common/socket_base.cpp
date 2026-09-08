@@ -342,6 +342,11 @@ zlink::i_mailbox *zlink::socket_base_t::get_mailbox () const
     return _mailbox;
 }
 
+void zlink::socket_base_t::publish_ctx_terminated ()
+{
+    _ctx_terminated.store (true, std::memory_order_release);
+}
+
 void zlink::socket_base_t::stop ()
 {
     //  Publish termination before queueing the administrative command. A

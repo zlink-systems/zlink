@@ -335,8 +335,12 @@ void test_shutdown_during_drain ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&body));
     const zlink_recv_result_t rc = zlink_stream_recv_packet (
       f.socket, NULL, &header, &body, ZLINK_RECV_FLAGS_NONE);
-    control.join ();
+    //  Shutdown is published before any teardown work, so the receive must
+    //  return while input is still queued. Read the counter before joining:
+    //  after the control thread returns, asynchronous teardown may already
+    //  have discarded the socket's inbound queue.
     const uint64_t remaining = f.pending ();
+    control.join ();
     std::printf ("shutdown: %llu chunks at request, %llu at receive return\n",
                  static_cast<unsigned long long> (at_shutdown),
                  static_cast<unsigned long long> (remaining));
