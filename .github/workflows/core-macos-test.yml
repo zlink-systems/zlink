@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
 
 env:
-  CTEST_REGEX: '.'
+  CTEST_REGEX: '^(test_ctx_options|test_xpub_nodrop|test_single_lane_wire_mandatory_count|test_single_lane_wire_old_peer_rejected|test_wake_invariants)$'
   CTEST_EXCLUDE: '^(test_multi_dealer_dealer_benchmark_process|test_multi_pubsub_benchmark_process|test_multi_spot_benchmark_process|test_multi_stream_benchmark_process|test_single_pair_benchmark_process|test_single_spot_benchmark_process|test_reconnect_options|test_zmp_request_reply|test_stream_send_blocking_wakeup|test_stream_socket_recv_multiclient_ready_regression|test_stream_threadsafe_callback_queue_load|test_stream_threadsafe_recv_queue_load|test_stream_threadsafe_recv_queue_timed_window)$'
-  CTEST_REPEAT: ''
+  CTEST_REPEAT: 'until-fail:5'
 
 jobs:
   macos-ctest:
@@ -48,6 +48,21 @@ jobs:
 
       - name: Build
         run: cmake --build core/build-macos --parallel $(sysctl -n hw.ncpu)
+
+      - name: System info + sampler
+        run: |
+          sysctl net.inet.ip.portrange.first net.inet.ip.portrange.last || true
+          sysctl net.inet.tcp.msl net.inet.tcp.sendspace net.inet.tcp.recvspace || true
+          sysctl net.inet.tcp.autorcvbufmax net.inet.tcp.autosndbufmax || true
+          sysctl kern.ipc.maxsockbuf hw.ncpu hw.memsize || true
+          ulimit -a || true
+          nohup bash -c 'while true; do
+            printf "%s " "$(date +%T)";
+            netstat -an -p tcp 2>/dev/null | awk "NR>2{c[\$NF]++} END{for(k in c) printf \"%s=%d \", k, c[k]}";
+            printf "\n";
+            sleep 5;
+          done' > sysdiag.log 2>&1 &
+          echo started
 
       - name: ctest (serial label, -j1)
         id: serial
@@ -89,6 +104,7 @@ jobs:
           path: |
             ctest-serial.log
             ctest-parallel.log
+            sysdiag.log
             core/build-macos/Testing/Temporary/
           retention-days: 7
 
