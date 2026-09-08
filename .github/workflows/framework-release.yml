@@ -117,6 +117,15 @@ jobs:
             framework-locations-redis \
             http-client \
             nestjs; do
+            name=$(node -p "require('./packages/${package_dir}/package.json').name")
+            version=$(node -p "require('./packages/${package_dir}/package.json').version")
+            # The first release of each package is published manually (npm Trusted
+            # Publishing needs an existing package); re-running the tag must not fail
+            # on versions that are already on the registry.
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "${name}@${version} is already published; skipping"
+              continue
+            fi
             npm publish "./packages/${package_dir}" --provenance --access public
           done
 
