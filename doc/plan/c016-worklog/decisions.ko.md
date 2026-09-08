@@ -4673,3 +4673,16 @@ perf 측정에는 영향 없음(러너는 2-part). 러너 검증에서 이 테�
 **관찰(run 34189038691)**: macOS Intel 210개 중 11 실패(`test_ctx_options` Failed, reconnect_options·endpoint_release·router_multiple_dealers·stream_packet_progress·transport_matrix Timeout 등), macOS ARM64 206개 중 11 실패(`test_ctx_options:657 test_auto_hwm_applied_limit_blocks_and_resumes_after_drain Expected 4096 Was -1`, `test_xpub_nodrop:243 blocking publish timeout sent=7193 recv=7193`, stream_packet_progress Failed, endpoint_release·router_multiple_dealers·transport_matrix·single_lane_wire_*·wake_invariants·flow_state_socket·request_timeout_scheduler Timeout). 그런데 두 job 모두 성공으로 끝남 — `core/builds/macos/build.sh`의 ctest 결과가 job 실패로 전파되지 않는다. 즉 **0.17.3의 macOS 산출물은 테스트 통과가 검증되지 않은 채 릴리스됐다**(Linux·Windows는 gating).
 **결정**: (1) macOS Intel job 제거(`build.yml`, 사용자 "제거해도 될 것 같다"): 가장 느린 runner·Intel Mac 지원 종료·소비자 osx-arm64. (2) macOS ARM64는 유지하되 ctest gating은 MAC-1 수정 전까지 켜지 않음(켜면 릴리스 차단). (3) **MAC-1(0.17.4)**: macOS 실제 실패 2건(auto-HWM applied limit −1 = getsockopt/SO_SNDBUF 계열 차이 추정, xpub NODROP blocking publish timeout)과 timeout군을 CI runner에서 진단·수정 후 ARM64 ctest를 gating으로 전환. macOS 머신이 없으므로 진단은 workflow_dispatch 진단 job으로.
 **보강(15:15)**: gap의 원인 = `core/builds/macos/build.sh`가 ctest를 `-j$(ncpu)`로 돌려 serial 라벨 테스트가 병렬로 섞이고(timeout 다수), 실패 ≤20이면 "Acceptable"로 통과. 수정: `-L serial -j1` → `-LE serial -jN`, 실패 시 exit 1(Linux·Windows와 동일). main에 non-tag build.yml run을 dispatch해 macOS ARM64의 진짜 실패 목록을 확보(MAC-1 입력). 이 수정으로 다음 태그 run은 macOS 실패가 있으면 릴리스가 막힌다 — 0.17.4 전에 MAC-1을 닫아야 한다.
+
+### D-BP44 (2026-09-08 14:32) `core/v0.17.3` GitHub 릴리스 도착 — 공식 artifact로 재고정하되 현재 큐가 빈 뒤에 전환
+
+**사실:** 릴리스 `core/v0.17.3`(published 05:26Z) 자산을 `scripts/local-package/core/fetch-release.sh --version 0.17.3
+--platform linux-x64`로 받아 `~/.cache/zlink/core/0.17.3/linux-x64`에 설치·검증했다(revision `0761c1d4d0` = 로컬
+빌드와 동일, Build ID `850e69f142768e334a2f44163a00364aaab3ef92`, SHA-256 `dc518b5fde5b6fba…`; 로컬 빌드 Build ID
+`1dd6f2e1…`와 다름 — CI 툴체인).
+
+**결정:** 정책은 공식 release runtime을 우선하므로 이후 판정은 공식 artifact prefix로 한다. 다만 지금 큐에 Single
+REQREP 정합 검증(4 agent)과 경계 3-run이 로컬 0.17.3 prefix로 짝지어 돌고 있어, prefix를 지금 바꾸면 빌드 뒤집힘으로
+전부 실패한다(D-BP42 재발). **큐가 비면** (1) 7개 언어 Multi·Single을 공식 prefix로 재빌드, (2) C tcp DD·RR REQREP
+64 B 1-run을 로컬 prefix 값과 대조해 ±5% 안이면 로컬 0.17.3 값을 그대로 인정, (3) 이후 새 측정은 공식 prefix. 행에는
+prefix를 명시한다.
