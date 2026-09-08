@@ -4806,3 +4806,6 @@ prefix를 명시한다.
 ## D-B277 (2026-09-08 19:45, 사용자) **이월 없음 — 열린 이슈(CCU-2·SD-1·WIN-2·ws 게이트)는 전부 0.17.4에서 마무리**
 
 사용자: "이월하지 말고 이슈는 0.17.4에서 모두 마무리해". D-B271·D-B276의 "실패 시 0.17.5 이월" 조항 취소. CCU-3: applied plan 단일 소유로 B-3이 안 풀리면 S-CCU2-1 설계(registry 소유 immutable plan descriptor + generation-aware admission, D-H1 편차 소멸)까지 구현, 상한 6 h, 2 h 시점 중간 보고. SD-1: 게이트 실패 시 제외가 아니라 수정. ws Q64/Q1 < 0.80이면 SD-1 안에서 원인 수정. **ETA 변경**: 0.17.4 릴리즈 09-09 03:00~04:00 → **09-09 08:00~10:00**(CCU-3 최대 6 h + 재리뷰 1 h가 임계 경로; SD-1 4 h는 병렬).
+## D-B278 (2026-09-08 19:55, 사용자) CCU 10k 확인은 머신 A에서 — 머신 B(노트북, WSL 11.9 GB)는 CCU 1000 판정 + 4000 회귀 확인 1회만
+
+사용자: "ccu 10k는 A머신에서 시간될 때 확인해볼게". 머신 B 근거: CCU 4000 실패는 메모리가 아니라 attach O(N²) CPU(CCU-1: OOM 없음, RSS 134 MB; CCU-2 후 162 MiB), 그러나 클라이언트 4000도 같은 박스라 10k는 부적합. 머신 A 확인 시 조건: 0.17.4(CCU-2 포함) Core, `bindings/c/bench/with_stream` zlink·asio·cppserver·zmq(pull 4 스택, D-B275), size 64, CCU 1000/4000/10000, 서버 RSS·accept 완료 시간 기록. 결과는 §7.1에 "A 10k" 행으로.
