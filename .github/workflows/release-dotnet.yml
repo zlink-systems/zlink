@@ -210,9 +210,26 @@ jobs:
       # Zlink.Framework.Contracts, so a partial push would leave consumers
       # unable to restore. The binding Systems.Zlink is restored from nuget.org,
       # which is why the binding release precedes the framework release.
+      # nuget.config maps the binding (Zlink) and Zlink.HttpClient to the local
+      # package source %ZLINK_LOCAL_PACKAGE_ROOT%/nuget, so the runner materializes
+      # that source: the published binding from nuget.org plus the in-repo
+      # http-client/connector/contracts packs (scripts/local-package/http-client).
+      - name: Materialize the local package source
+        shell: bash
+        env:
+          ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/.artifacts/wsl
+        run: |
+          mkdir -p "${ZLINK_LOCAL_PACKAGE_ROOT}/nuget"
+          binding_version=$(sed -n 's/.*<ZLinkBindingsPackageVersion[^>]*>\(.*\)<\/ZLinkBindingsPackageVersion>.*/\1/p' framework/languages/dotnet/Directory.Packages.props | head -n1)
+          curl -sSfL -o "${ZLINK_LOCAL_PACKAGE_ROOT}/nuget/Zlink.${binding_version}.nupkg" \
+            "https://api.nuget.org/v3-flatcontainer/zlink/${binding_version}/zlink.${binding_version}.nupkg"
+          bash scripts/local-package/http-client/build-wsl.sh dotnet
+          ls "${ZLINK_LOCAL_PACKAGE_ROOT}/nuget"
+
       - name: Build and pack framework packages
         env:
           CI: true
+          ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/.artifacts/wsl
         shell: bash
         run: |
           mkdir -p dist/framework-dotnet
