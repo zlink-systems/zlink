@@ -157,7 +157,7 @@ stable queue ID 순서로 1 byte씩 배정한다. 따라서 같은 registry snap
 
 | 변화 | Core 동작 |
 |---|---|
-| 연결 증가로 queue별 목표가 감소 | 새 목표를 즉시 기록하고, 현재 보관량이 새 목표 아래로 drain될 때까지 추가 admission을 막음 |
+| 연결 증가로 queue별 목표가 감소 | attach하는 방향은 새 목표를 즉시 기록한다. 이미 붙어 있는 방향의 목표 인하는 option 변경과 같은 debounce 재계산 경로가 기록한다(attach는 전체 재계산을 동기로 돌리지 않는다). 새 목표가 기록되면 현재 보관량이 새 목표 아래로 drain될 때까지 추가 admission을 막음 |
 | 연결 감소로 목표가 증가 | cooldown 뒤 같은 generation의 live queue에만 적용 |
 | Detach된 queue | endpoint가 모두 해제되면 남은 provisional·committed charge를 한 번 정리하고 registry entry를 제거 |
 

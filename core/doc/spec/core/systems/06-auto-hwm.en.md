@@ -123,7 +123,7 @@ When the number of connections changes a per-queue target, Core applies the chan
 
 | Change | Core behavior |
 |---|---|
-| A connection increase lowers the per-queue target | Records the new target immediately and blocks further admission until current retained bytes drain below the new target |
+| A connection increase lowers the per-queue target | The attaching directions record their new target immediately. The lowered target of directions already attached is recorded by the same debounced recalculation path that option changes use (an attach does not run a synchronous full recalculation). Once a new target is recorded, further admission is blocked until current retained bytes drain below it |
 | A connection decrease raises the target | Applies it after the cooldown only to a live queue with the same generation |
 | Detached queue | When all endpoints are released, clears any remaining provisional and committed charge once and removes the registry entry |
 
