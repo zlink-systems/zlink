@@ -1,3 +1,5 @@
+import java.util.Base64
+
 plugins {
     id 'java-library'
     id 'maven-publish'
@@ -10,6 +12,71 @@ description = 'zlink Java bindings — high-performance async messaging library'
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(22)
+    }
+    withSourcesJar()
+    withJavadocJar()
+}
+
+def signingKey = System.getenv('SIGNING_KEY')
+def signingPassphrase = System.getenv('SIGNING_PASSPHRASE')
+def centralBundleDir = System.getenv('MAVEN_CENTRAL_BUNDLE_DIR')
+
+allprojects { publishedProject ->
+    publishedProject.pluginManager.withPlugin('java') {
+        publishedProject.tasks.withType(Javadoc).configureEach {
+            // Keep useful reference and syntax diagnostics, but do not fail on
+            // missing per-member documentation warnings.
+            options.addStringOption('Xdoclint:-missing', '-quiet')
+        }
+    }
+    publishedProject.pluginManager.withPlugin('maven-publish') {
+        publishedProject.pluginManager.apply('signing')
+        publishedProject.publishing {
+            publications.withType(MavenPublication).configureEach {
+                pom {
+                    url = 'https://github.com/zlink-systems/zlink'
+                    licenses {
+                        license {
+                            name = 'MPL-2.0'
+                            url = 'https://www.mozilla.org/en-US/MPL/2.0/'
+                        }
+                    }
+                    developers {
+                        developer {
+                            id = 'zlink-systems'
+                            name = 'zlink'
+                            email = 'zlink@zlink.systems'
+                        }
+                    }
+                    scm {
+                        connection = 'scm:git:https://github.com/zlink-systems/zlink.git'
+                        developerConnection = 'scm:git:ssh://git@github.com/zlink-systems/zlink.git'
+                        url = 'https://github.com/zlink-systems/zlink'
+                    }
+                }
+            }
+            if (centralBundleDir != null && !centralBundleDir.trim().isEmpty()) {
+                repositories {
+                    maven {
+                        name = 'centralStaging'
+                        url = uri(centralBundleDir)
+                    }
+                }
+            }
+        }
+        publishedProject.afterEvaluate {
+            publishedProject.signing {
+                required = false
+                if (signingKey != null && !signingKey.trim().isEmpty()
+                    && signingPassphrase != null
+                    && !signingPassphrase.trim().isEmpty()) {
+                    useInMemoryPgpKeys(
+                        new String(Base64.decoder.decode(signingKey)),
+                        signingPassphrase)
+                    sign publishedProject.publishing.publications
+                }
+            }
+        }
     }
 }
 
@@ -199,6 +266,12 @@ processResources {
     }
 }
 
+tasks.named('sourcesJar') {
+    dependsOn tasks.named('prepareZlinkNativeResources')
+    exclude 'native/**'
+    exclude 'META-INF/zlink/core-package-provenance.json'
+}
+
 test {
     useJUnitPlatform()
     jvmArgs '--enable-native-access=ALL-UNNAMED'
@@ -244,10 +317,6 @@ javadoc {
     options.memberLevel = JavadocMemberLevel.PUBLIC
     options.addStringOption('sourcepath',
         sourceSets.main.java.srcDirs*.absolutePath.join(File.pathSeparator))
-    // Suppress missing-@param / missing-@return / no-comment warnings: most public
-    // APIs have meaningful class-level Javadoc; per-method param boilerplate adds
-    // noise without value. Broken-reference and syntax warnings remain active.
-    options.addStringOption('Xdoclint:-missing', '-quiet')
 }
 
 publishing {
@@ -260,13 +329,6 @@ publishing {
             pom {
                 name = 'zlink'
                 description = project.description
-                url = 'https://github.com/zlink-systems/zlink'
-                licenses {
-                    license {
-                        name = 'MPL-2.0'
-                        url = 'https://github.com/zlink-systems/zlink/blob/main/LICENSE'
-                    }
-                }
                 properties = [
                     'zlink.core.version': '0.17.3',
                     'zlink.core.soname': 'libzlink.so.0',
