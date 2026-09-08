@@ -4516,6 +4516,12 @@ STREAM 뒤 시간이 남으면 **C 기준 tcp 6 pattern 1-run**을 이 prefix로
 **이 prefix의 한계:** ws/wss/tls 64 KiB 왕복(D-BP28/29/34)은 0.17.4 항목(D-B233)이라 이 태그에 없다 →
 그 cell들은 계속 `보류(Core 대기)`.
 
+**보정(13:05):** 각 언어의 전 pattern 빌드가 alpha prefix로 이뤄져(버전 문자열이 같아 `build-release-0.17.2`가
+덮였다) 0.17.2 prefix로 `--reuse-build` 실행이 "benchmark resolved a different Core runtime"으로 거부된다.
+prefix를 오가면 빌드가 뒤집히므로 **13:00 이후 새 측정(비용 지도 before/after, Single 참고값, 경계 재측정)은
+전부 alpha prefix**로 하고 C 기준을 같은 prefix로 같은 시각에 짝지어 새로 잰다. 계획서의 0.17.2 tcp 판정은
+그대로 두고, alpha로 얻은 pass 결과는 행에 prefix를 명시한다. 이미 0.17.2 지시로 띄운 codex 3건은 중단·재실행.
+
 ### D-BP38 (2026-09-08 12:55) 캠페인 계속 — "더 할 것이 없다"는 C++·.NET에만 해당, 공개 API 변경은 제안하지 않는다
 
 **결정(사용자 지적 "수치가 너무 낮은 것들이 많은데?" 뒤 정정):** D-BP36의 전제("남은 미달은 공개 API·runtime에
