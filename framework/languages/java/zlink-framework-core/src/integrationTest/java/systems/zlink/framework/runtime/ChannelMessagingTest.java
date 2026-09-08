@@ -171,15 +171,19 @@ final class ChannelMessagingTest {
 
         try (ZLinkFrameworkRuntime runtime =
                  RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
-            ZLinkFrameworkException failure = assertThrows(
-                ZLinkFrameworkException.class,
+            CompletionException failure = assertThrows(
+                CompletionException.class,
                 () -> runtime.client()
-                    .requestToChannel("profile", new EchoRequest("hello")));
+                    .requestToChannel("profile", new EchoRequest("hello"))
+                    .submit(String.class)
+                    .toCompletableFuture()
+                    .join());
 
+            assertTrue(failure.getCause() instanceof ZLinkFrameworkException);
             assertEquals(
                 ZLinkFrameworkErrorKind
                     .NOT_FOUND,
-                failure.kind());
+                ((ZLinkFrameworkException) failure.getCause()).kind());
         }
     }
 

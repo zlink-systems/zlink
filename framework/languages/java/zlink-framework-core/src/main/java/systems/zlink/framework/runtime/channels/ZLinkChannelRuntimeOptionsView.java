@@ -50,12 +50,12 @@ final class DefaultChannelSocketRuntimeOptions implements ZLinkSocketRuntimeOpti
 
     @Override
     public int weight() {
-        return host.serverSocket(channelName).peerWeight();
+        return host.clientServerServerWeight(channelName);
     }
 
     @Override
     public void weight(int value) {
         ZLinkChannelRuntime.validatePeerWeight(value);
-        host.serverSocket(channelName).setPeerWeight(value);
+        host.setClientServerServerWeight(channelName, value);
     }
 }

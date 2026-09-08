@@ -247,6 +247,16 @@ public final class ZLinkChannelRuntime
         return socket;
     }
 
+    int clientServerServerWeight(String channelName) {
+        return sockets.clientServerServerWeight(
+            channelName, serverSocket(channelName).peerWeight());
+    }
+
+    void setClientServerServerWeight(String channelName, int value) {
+        serverSocket(channelName);
+        sockets.setClientServerServerWeight(channelName, value);
+    }
+
     static void validatePeerWeight(int value) {
         if (value < 0 || value > 10_000) {
             throw new ZLinkConfigurationException(

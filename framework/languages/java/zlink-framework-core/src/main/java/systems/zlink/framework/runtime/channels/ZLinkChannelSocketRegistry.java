@@ -606,7 +606,7 @@ final class ZLinkChannelSocketRegistry {
                 clientServerLogicalIdentity(local),
                 new ClientServerTargetSnapshot(
                     local,
-                    servers.get(channelName).peerWeight(),
+                    local.weight(),
                     true));
         }
         return List.copyOf(targets.values());
@@ -654,9 +654,50 @@ final class ZLinkChannelSocketRegistry {
     int clientServerServerWeight(
         String channelName,
         int fallback) {
-        ZLinkBackendRouterSocket server =
-            inStateLane(() -> servers.get(channelName));
-        return server == null ? fallback : server.peerWeight();
+        return inStateLane(() -> {
+            ChannelRegistration registration = registrations.get(channelName);
+            return registration == null
+                || !registration.clientServerServerEnabled()
+                ? fallback
+                : registration.serverSocketOptions().weight();
+        });
+    }
+
+    void setClientServerServerWeight(
+        String channelName,
+        int weight) {
+        ZLinkClientServerServerDescriptor changed = inStateLane(() -> {
+            ChannelRegistration registration = registrations.get(channelName);
+            if (registration == null
+                || !registration.clientServerServerEnabled()) {
+                throw new ZLinkConfigurationException(
+                    "client/server channel has no server: " + channelName);
+            }
+            registration.serverSocketOptions().weight(weight);
+            ZLinkClientServerServerDescriptor current =
+                clientServerServerDescriptors.get(channelName);
+            if (current == null || current.weight() == weight) {
+                return null;
+            }
+            ZLinkClientServerServerDescriptor updated =
+                new ZLinkClientServerServerDescriptor(
+                    current.channelName(),
+                    current.serverRid(),
+                    current.lifecycleGeneration(),
+                    current.descriptorRevision() + 1,
+                    current.endpoint(),
+                    weight,
+                    current.state(),
+                    current.securityIdentity(),
+                    current.ownerId(),
+                    current.leaseGeneration(),
+                    Instant.now());
+            clientServerServerDescriptors.put(channelName, updated);
+            return updated;
+        });
+        if (changed != null) {
+            pushClientServerDescriptorUpdate(channelName, changed);
+        }
     }
 
     void initializeClientServerServerDescriptors(String ownerId) {
@@ -687,7 +728,7 @@ final class ZLinkChannelSocketRegistry {
                         .nextLong(1, Long.MAX_VALUE),
                     1,
                     endpoint,
-                    input.router().peerWeight(),
+                    registration.serverSocketOptions().weight(),
                     systems.zlink.framework.runtime.host
                         .ZLinkFrameworkRuntimeState.SERVING,
                     "default",

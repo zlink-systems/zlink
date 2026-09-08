@@ -1497,11 +1497,12 @@ final class ZLinkChannelRuntimeTest {
     }
 
     @Test
-    void clientServerRuntimeOptionsReadAndWriteServerWeight() {
+    void clientServerRuntimeOptionsKeepPublicWeightOutOfCoreAvailability() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        options.addClientServerChannel("api")
+        var server = options.addClientServerChannel("api")
             .server()
             .listen();
+        server.setWeight(0);
         FakeChannelBackendAdapter backend = new FakeChannelBackendAdapter();
         try (ZLinkChannelRuntime runtime = new ZLinkChannelRuntime(
             backend,
@@ -1509,11 +1510,11 @@ final class ZLinkChannelRuntimeTest {
             new ZLinkJsonMessageSerializer(), handlers())) {
             var socket = runtime.clientServerChannel("api").configureServerSocket();
 
-            assertEquals(100, socket.weight());
-            socket.weight(0);
             assertEquals(0, socket.weight());
+            assertEquals(100, backend.router.peerWeight());
             socket.weight(10_000);
             assertEquals(10_000, socket.weight());
+            assertEquals(100, backend.router.peerWeight());
         }
     }
 

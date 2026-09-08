@@ -143,6 +143,8 @@ final class ZLinkChannelRuntimeConfigurator {
         if (options.maxMessageSize() > 0) {
             router.setMaxMessageSize(options.maxMessageSize());
         }
-        router.setPeerWeight(options.weight());
+        // Framework descriptors own ClientServer target weight. Core peer
+        // weight remains an availability signal so a weight-zero member can
+        // still complete admission and liveness without becoming selectable.
     }
 }
