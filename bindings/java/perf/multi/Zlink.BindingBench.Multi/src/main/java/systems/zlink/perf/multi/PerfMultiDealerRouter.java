@@ -131,6 +131,8 @@ final class PerfMultiDealerRouter {
                 index -> sendPayload(clients.get(index), msgSize, activeEnd),
                 index -> drainReplies(clients.get(index), msgSize, metrics,
                     replyBuffer, activeEnd),
+                index -> drainRepliesForTeardown(clients.get(index),
+                    replyBuffer),
                 // C echo client: teardown window max(env, 3 s per active second).
                 PerfMultiTargetCoordinator.sendDrainTimeout().compareTo(
                     java.time.Duration.ofSeconds(
@@ -162,15 +164,17 @@ final class PerfMultiDealerRouter {
         }
     }
 
-    private static void drainReplies(DealerSocket client,
-                                     int msgSize,
-                                     PerfUtil.Metrics metrics,
-                                     systems.zlink.contracts.messaging.Received replyBuffer,
-                                     long activeEnd) {
+    private static int drainReplies(DealerSocket client,
+                                    int msgSize,
+                                    PerfUtil.Metrics metrics,
+                                    systems.zlink.contracts.messaging.Received replyBuffer,
+                                    long activeEnd) {
+        int drained = 0;
         while (true) {
             if (!client.recv(replyBuffer, systems.zlink.contracts.sockets.RecvFlags.DONT_WAIT)) {
                 break;
             }
+            drained++;
             long receivedNanoTime = System.nanoTime();
             if (receivedNanoTime >= activeEnd) break;
             Message payload = PerfUtil.measurementPayload(replyBuffer.parts());
@@ -179,6 +183,21 @@ final class PerfMultiDealerRouter {
                     receivedNanoTime);
             }
         }
+        return drained;
+    }
+
+    // Teardown-only drain: replies after the active window are consumed and
+    // discarded so a full client receive queue cannot stall the relay's reply
+    // admission while this client waits for its own send terminals (C model).
+    private static int drainRepliesForTeardown(
+            DealerSocket client,
+            systems.zlink.contracts.messaging.Received replyBuffer) {
+        int drained = 0;
+        while (client.recv(replyBuffer,
+                systems.zlink.contracts.sockets.RecvFlags.DONT_WAIT)) {
+            drained++;
+        }
+        return drained;
     }
 
 }

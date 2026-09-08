@@ -98,6 +98,78 @@ class PerfMultiTargetCoordinatorTest {
     }
 
     @Test
+    void teardownKeepsReceivingWhileASendTerminalIsOutstanding() {
+        // The echo relay holds one reply under Core admission and stops
+        // pulling requests until it is admitted, so a client that blocks on
+        // its own send terminals without receiving deadlocks the pair. The
+        // teardown wait must keep taking receive turns (C echo client drain,
+        // .NET PerfMultiEchoReplyDrain.WaitAsync).
+        CompletableFuture<Void> stage = new CompletableFuture<>();
+        var admissions = new PerfMultiTargetCoordinator.AdmissionRoundRobin(
+            1, Long.MAX_VALUE, index -> stage, true, false);
+        assertTrue(admissions.submitRound());
+
+        int[] turns = {0};
+        long drained = admissions.awaitLatestWhileReceiving(
+            Duration.ofSeconds(5), "test teardown drain", 0L, waitMillis -> {
+                if (++turns[0] == 3) {
+                    stage.complete(null);
+                }
+                return 2;
+            });
+
+        assertEquals(3, turns[0],
+            "the wait must take receive turns until the terminal arrives");
+        assertEquals(6L, drained, "every consumed reply is reported");
+        assertEquals(0, admissions.pendingCount());
+    }
+
+    @Test
+    void teardownKeepsReceivingUntilTheOwedEchoesArrive() {
+        // Every admitted request owes one echo. Leaving those echoes in the
+        // client receive queue strands the relay's last reply under admission,
+        // so the window must not end at the send terminal. C drains on
+        // `tracker_has_retained_sends || tracker_has_pending_replies`.
+        var admissions = new PerfMultiTargetCoordinator.AdmissionRoundRobin(
+            1, Long.MAX_VALUE,
+            index -> CompletableFuture.completedFuture(null), true, false);
+        assertTrue(admissions.submitRound());
+        assertEquals(1L, admissions.admittedCount());
+
+        int[] turns = {0};
+        long drained = admissions.awaitLatestWhileReceiving(
+            Duration.ofSeconds(5), "test teardown drain", 0L,
+            waitMillis -> ++turns[0] < 3 ? 0 : 1);
+
+        assertEquals(3, turns[0],
+            "the terminal alone must not end the window while an echo is owed");
+        assertEquals(1L, drained);
+    }
+
+    @Test
+    void teardownReceivesUntilTheBoundedWindowExpiresThenReportsTheTimeout() {
+        var admissions = new PerfMultiTargetCoordinator.AdmissionRoundRobin(
+            1, Long.MAX_VALUE, index -> new CompletableFuture<Void>(),
+            true, false);
+        assertTrue(admissions.submitRound());
+
+        int[] turns = {0};
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+            () -> admissions.awaitLatestWhileReceiving(
+                Duration.ofMillis(200), "test teardown drain", 0L,
+                waitMillis -> {
+                    turns[0]++;
+                    return 0;
+                }));
+
+        assertTrue(failure.getMessage().endsWith(" timed out"),
+            "the bounded window still reports the policy timeout: "
+                + failure.getMessage());
+        assertTrue(turns[0] > 0,
+            "the window must be spent receiving, never blocking blind");
+    }
+
+    @Test
     void admissionOnlyRunWakesForCompletionAndSubmitsOnCallerThread()
         throws Exception {
         Thread callerThread = Thread.currentThread();

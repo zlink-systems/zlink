@@ -136,6 +136,8 @@ final class PerfMultiRouterRouter {
                 index -> sendPayload(clients.get(index), msgSize, activeEnd),
                 index -> drainReplies(clients.get(index), msgSize, metrics,
                     replyBuffer, activeEnd),
+                index -> drainRepliesForTeardown(clients.get(index),
+                    replyBuffer),
                 // C echo client: teardown window max(env, 3 s per active second).
                 PerfMultiTargetCoordinator.sendDrainTimeout().compareTo(
                     java.time.Duration.ofSeconds(
@@ -150,10 +152,11 @@ final class PerfMultiRouterRouter {
         }
     }
 
-    private static void drainReplies(RouterSocket client,
-                                     int msgSize, PerfUtil.Metrics metrics,
-                                     systems.zlink.contracts.messaging.Received replyBuffer,
-                                     long activeEnd) {
+    private static int drainReplies(RouterSocket client,
+                                    int msgSize, PerfUtil.Metrics metrics,
+                                    systems.zlink.contracts.messaging.Received replyBuffer,
+                                    long activeEnd) {
+        int drained = 0;
         while (true) {
             boolean ok;
             try {
@@ -166,6 +169,7 @@ final class PerfMultiRouterRouter {
                 throw ex;
             }
             if (!ok) break;
+            drained++;
             long receivedNanoTime = System.nanoTime();
             if (receivedNanoTime >= activeEnd) break;
             Message payload = PerfUtil.measurementPayload(replyBuffer.parts());
@@ -174,6 +178,32 @@ final class PerfMultiRouterRouter {
                     receivedNanoTime);
             }
         }
+        return drained;
+    }
+
+    // Teardown-only drain: the active window is over, so replies are consumed
+    // and discarded without touching the RESULT aggregate. This mirrors the C
+    // echo client, whose post-deadline drain loop keeps servicing POLLIN so a
+    // full client receive queue can never stall the relay's reply admission.
+    private static int drainRepliesForTeardown(
+            RouterSocket client,
+            systems.zlink.contracts.messaging.Received replyBuffer) {
+        int drained = 0;
+        while (true) {
+            boolean ok;
+            try {
+                ok = client.recv(replyBuffer, RecvFlags.DONT_WAIT);
+            } catch (ZlinkRecvException ex) {
+                if (ex.getResult() == RecvResult.NO_DATA
+                    || ex.getResult() == RecvResult.BUSY) {
+                    break;
+                }
+                throw ex;
+            }
+            if (!ok) break;
+            drained++;
+        }
+        return drained;
     }
 
     private static CompletionStage<Void> sendPayload(RouterSocket client,
