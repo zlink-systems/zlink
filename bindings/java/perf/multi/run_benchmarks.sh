@@ -1175,7 +1175,9 @@ run_socket_case() {
         "$(( (DURATION + 20) * 1000 ))" >/dev/null; then
       client_exit=1
     fi
-    printf 'STOP\n' >&${server_fd}
+    # The server may already have exited on its own failure; a closed fifo must
+    # not abort the runner (set -e) before the FAIL line is collected.
+    printf 'STOP\n' >&${server_fd} 2>/dev/null || true
     wait_for_pid_or_kill "${server_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "server" || server_exit=$?
     exec {server_fd}>&-
     printf 'STOP\n' >&${client_fd} 2>/dev/null || true
@@ -1195,7 +1197,7 @@ run_socket_case() {
        || "${bare_pattern}" == "DEALER_ROUTER_SENDSEND" \
        || "${bare_pattern}" == "ROUTER_ROUTER" \
        || "${bare_pattern}" == "ROUTER_ROUTER_SENDSEND" ]]; then
-      printf 'STOP\n' >&${server_fd}
+      printf 'STOP\n' >&${server_fd} 2>/dev/null || true
     fi
     exec {client_fd}>&-
     wait_for_pid_or_kill "${server_pid}" "${SERVER_SHUTDOWN_TIMEOUT_MS}" "server" || server_exit=$?
