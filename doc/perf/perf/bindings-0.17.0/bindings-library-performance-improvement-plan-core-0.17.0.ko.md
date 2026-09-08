@@ -1530,6 +1530,7 @@ cell마다 개선 pass가 30~60분씩 붙는다. **§12를 문자 그대로 완�
   `doc/bug/perf/2026-09-08-core-ws-roundtrip-size-penalty.ko.md`). Core 수정 뒤 전 언어 재측정.
 - **Core 보고서 2건 후속** — STREAM 수신 정체(0.17.2에서도 재현), ws/wss 왕복 크기 비례 붕괴 +
   tls/ws/wss latency 간헐 폭증. 머신 B 답변 대기.
+- **Node client echo-drain** — relay 정합(`d744799803`) 뒤 tls RR 65536 B runs 5가 partial(2/5). .NET·C++와 같은 "admission만 보고 닫는" client 결함. .NET client job의 수정 형태(C++ `echo_reply_drain_t` 미러)를 Node에 적용해야 한다. `tcp`에서는 안 드러나 오늘 판정에는 영향 없음.
 - **wss DD C 러너 간헐 실패** — 깨끗한 재현 1승 1패, 오염 3회 무효.
 - **.NET·C++ 미달 cell의 다음 단계** — 공개 API 형태 논의(메시지당 operation 객체, message wrapper
   P/Invoke 왕복; C++ 요청당 5개 할당). 캠페인 범위 밖.
