@@ -500,8 +500,12 @@ static void run_auto_hwm_public_blocking_send (bool multipart_)
     const std::future_status resumed =
       blocked_send.wait_for (std::chrono::seconds (1));
     TEST_ASSERT_EQUAL_INT (std::future_status::ready, resumed);
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (sizeof (payload)),
-                           blocked_send.get ());
+    const int blocked_rc = blocked_send.get ();
+    if (blocked_rc != static_cast<int> (sizeof (payload)))
+        printf ("DIAG-MAC1 ctx_options blocked send rc=%d errno=%d (%s)\n",
+                blocked_rc, blocked_errno.load (),
+                zlink_strerror (blocked_errno.load ()));
+    TEST_ASSERT_EQUAL_INT (static_cast<int> (sizeof (payload)), blocked_rc);
 
     const zlink_auto_hwm_budget_snapshot_t after =
       read_auto_hwm_budget_snapshot (ctx);
@@ -634,9 +638,13 @@ void test_auto_hwm_applied_limit_blocks_and_resumes_after_drain ()
     TEST_ASSERT_LESS_THAN_INT (1024, queued);
     TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
 
+    std::atomic<int> blocked_errno (0);
     std::future<int> blocked_send =
       std::async (std::launch::async, [&] () {
-          return zlink_send (sender, payload, sizeof (payload), 0);
+          const int rc = zlink_send (sender, payload, sizeof (payload), 0);
+          if (rc < 0)
+              blocked_errno.store (zlink_errno ());
+          return rc;
       });
 
     char received[message_size];
@@ -653,8 +661,12 @@ void test_auto_hwm_applied_limit_blocks_and_resumes_after_drain ()
     TEST_ASSERT_EQUAL_INT (
       std::future_status::ready,
       blocked_send.wait_for (std::chrono::seconds (1)));
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (sizeof (payload)),
-                           blocked_send.get ());
+    const int blocked_rc = blocked_send.get ();
+    if (blocked_rc != static_cast<int> (sizeof (payload)))
+        printf ("DIAG-MAC1 ctx_options blocked send rc=%d errno=%d (%s)\n",
+                blocked_rc, blocked_errno.load (),
+                zlink_strerror (blocked_errno.load ()));
+    TEST_ASSERT_EQUAL_INT (static_cast<int> (sizeof (payload)), blocked_rc);
 
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (receiver);

@@ -321,6 +321,9 @@ fd_t connect_raw_peer (const char *endpoint_, int peer_socket_type_,
 bool wait_for_raw_close (fd_t fd_, int timeout_ms_ = 3000)
 {
     set_raw_recv_timeout (fd_, 100);
+    int last_rc = -2;
+    int last_errno = 0;
+    int bytes_drained = 0;
     const std::chrono::steady_clock::time_point deadline =
       std::chrono::steady_clock::now ()
       + std::chrono::milliseconds (timeout_ms_);
@@ -330,13 +333,24 @@ bool wait_for_raw_close (fd_t fd_, int timeout_ms_ = 3000)
         const int rc = recv (fd_, reinterpret_cast<char *> (&byte), 1, 0);
         if (rc == 0 || (rc < 0 && WSAGetLastError () == WSAECONNRESET))
             return true;
+        last_rc = static_cast<int> (rc);
+        last_errno = WSAGetLastError ();
+        if (rc > 0)
+            ++bytes_drained;
 #else
         const ssize_t rc = recv (fd_, &byte, 1, MSG_DONTWAIT);
         if (rc == 0 || (rc < 0 && errno == ECONNRESET))
             return true;
+        last_rc = static_cast<int> (rc);
+        last_errno = errno;
+        if (rc > 0)
+            ++bytes_drained;
 #endif
         msleep (10);
     }
+    printf ("DIAG-MAC1 wait_for_raw_close timed out: last_rc=%d errno=%d (%s) "
+            "bytes_drained=%d\n",
+            last_rc, last_errno, strerror (last_errno), bytes_drained);
     return false;
 }
 
