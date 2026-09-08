@@ -4549,3 +4549,8 @@ API·client 1이라 그 비용이 backpressure·100 client 큐 효과와 섞이�
 Multi에만 있다). Rust·Python 지도 브리프에 반영; Java·Node·Go 지도 job은 Multi 브리프로 이미 실행 중이라 다음
 반복에서 Single을 쓴다.
 
+
+## D-B237 (2026-09-08 13:45, 머신 B) WIN-1 결과 착지 `f5d7cccde2` — Windows 엔트로피 결함·ctx 종료 EAGAIN abort 수정; 0.17.4는 이 세션에서 계속(D-B233 정정)
+
+**WIN-1**(`core-rf-WIN-1-report.md`, Claude, WSL에서 호스트 MSVC 구동): `D:\project\zlink` 새 clone, CI 구성 그대로 빌드해 1회차 재현. 원인 = `random.cpp:47` `generate_random_bytes()`의 `getrandom`/`/dev/urandom` 경로가 `!ZLINK_HAVE_WINDOWS`로 배제 → Windows는 15-bit thread-local `rand()`만 → 시드 없는 I/O thread들이 같은 수열 → 두 transport pair가 같은 64-bit pair id(27206470336553) 발급 → fence로 정리된 lane의 attach/release 명령이 새 pair에 적중, lane 0 점유 충돌로 reject, READY 미발생. routing id·socket 식별자 생성도 같은 약점. 부수: `ctx_termination.cpp:109` `wait_for_reaper_done()`이 spurious wake의 EAGAIN을 `errno_assert` → 순정 main에서도 Windows 10회 중 4회 abort. 수정: advapi32 `SystemFunction036`(RtlGenRandom) 동적 해석, `rand()` 폴백 격리, EAGAIN 재대기. 검증 Windows 2 target ×10 100 %, Linux 23/23. 공개 API 불변. 게이트 없이 커밋한 이유: Windows 릴리스 차단 + 변경 2 파일 소규모 + 양쪽 검증; ALL-2 게이트의 전체 ctest가 그 위에서 다시 돈다. Actions build.yml 재dispatch(run 34185949926).
+**D-B233 정정(사용자)**: Windows 작업자를 WSL에서 할당·제어할 수 있음이 WIN-1로 입증됐으므로 0.17.4도 이 세션에서 진행한다. ALL-3(astra) 브리프에 Windows 빌드·변경 suite ctest 단계를 포함하고, Windows 전용 조사는 Claude 에이전트에 맡긴다.
