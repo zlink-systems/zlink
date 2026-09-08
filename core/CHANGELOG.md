@@ -12,7 +12,7 @@ Design decisions are in `doc/plan/c016-worklog/decisions.ko.md` (D-B…).
 
 ## [Unreleased]
 
-## [0.17.3] - unreleased
+## [0.17.3] - 2026-09-08
 
 ### Fixed
 
