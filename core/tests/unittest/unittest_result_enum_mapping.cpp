@@ -132,10 +132,15 @@ void test_connect_bind_close_unknown_errno_map_to_internal_error ()
                            zlink::bind_result_internal::from_errno (EPROTONOSUPPORT));
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_INVALID_HANDLE,
                            zlink::close_result_internal::from_errno (ESTALE));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_BUSY,
+                           zlink::close_result_internal::from_errno (EDEADLK));
 }
 
 void test_connect_result_maps_peer_disconnect_errnos ()
 {
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONNECT_NOT_SUPPORTED,
+      zlink::connect_result_internal::from_errno (EPROTONOSUPPORT));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_NOT_FOUND,
                            zlink::connect_result_internal::from_errno (ENOENT));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_CONFLICT,

@@ -866,6 +866,9 @@ set(core-sources
     src/runtime/core/ctx_thread.cpp
     src/runtime/core/auto_hwm_policy.cpp
     src/runtime/core/pipe.cpp
+    src/runtime/core/pipe_receive.cpp
+    src/runtime/core/pipe_write.cpp
+    src/runtime/core/pipe_transport.cpp
     src/runtime/core/mailbox.cpp
     src/runtime/core/object.cpp
     src/runtime/core/own.cpp

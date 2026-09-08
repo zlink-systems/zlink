@@ -232,7 +232,7 @@ struct public_part_delivery_hold_admission_t
         public_part_delivery_hold_admission_t *self =
           static_cast<public_part_delivery_hold_admission_t *> (userdata_);
         if (self && self->socket) {
-            self->socket->end_public_part_receive_delivery_hold (true);
+            self->socket->end_public_part_receive_delivery_hold ();
             if (self->failure_guard)
                 self->failure_guard->release ();
         }
@@ -1432,11 +1432,9 @@ int send_completion_staged_frames_on_pipe (
         return -1;
     }
     {
-        // Multipart rollback spans several pipe lock acquisitions and keeps
-        // the generation gate. A complete single-part reply validates its
-        // connection under the pipe's existing terminal write/flush lock.
-        zlink::scoped_optional_lock_t transport_generation_lock (
-          total_part_count > 1 ? &completion_->transport_sync () : NULL);
+        // The socket turn owns the whole producer transaction and rollback.
+        // Every part keeps one observed connection identity; session pull
+        // discards the whole stamped record if that transport is retired.
         const uint64_t transport_connection_id =
           completion_->get_transport_connection_id ();
         if (transport_connection_id == 0
@@ -1534,8 +1532,13 @@ int send_completion_staged_frames (zlink::socket_base_t *socket_,
                                    size_t staged_part_count_,
                                    zlink_msg_t *final_part_)
 {
-    zlink::pipe_t *const completion = retain_reply_completion_pipe (
-      socket_, application_pipe_, peer_rid_);
+    std::optional<zlink::socket_public_send_scope_t> send_scope;
+    if (!socket_)
+        errno = EFAULT;
+    zlink::pipe_t *const completion =
+      socket_ && socket_->begin_complete_send_scope (&send_scope)
+        ? retain_reply_completion_pipe (socket_, application_pipe_, peer_rid_)
+        : NULL;
     if (!completion) {
         const int saved_errno = errno;
         zlink::request_reply::consume_send_frames_from (
@@ -1579,11 +1582,11 @@ void zlink::socket_base_t::reply_target_slots_released (
 
     const int saved_errno = errno;
     receive_runtime_t &receive = receive_runtime ();
-    scoped_lock_t lock (receive.sync);
+    socket_receive_entry_scope_t lock (receive);
     const size_t redriven =
       xredrive_reply_token_waiters (released_slots_);
     if (redriven != 0)
-        notify_receive_progress_locked ();
+        notify_receive_progress ();
     errno = saved_errno;
 }
 

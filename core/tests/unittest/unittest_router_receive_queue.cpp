@@ -36,11 +36,8 @@ class session_termination_test_access_t
 
     static bool receive_mutex_is_held_by_another_thread (socket_base_t *socket_)
     {
-        mutex_t &sync = socket_->receive_runtime ().sync;
-        if (!sync.try_lock ())
-            return true;
-        sync.unlock ();
-        return false;
+        return socket_->lifecycle_coordinator ().public_api_sync_held ()
+          && !socket_->lifecycle_coordinator ().public_api_sync_owned_by_current_thread ();
     }
 
     static int recv_router_with_receive_lock (
@@ -49,7 +46,7 @@ class session_termination_test_access_t
     {
         // Async receive dispatch and its public receive fallback enter the
         // concrete ROUTER reader through this base-owned lock domain.
-        scoped_lock_t receive_lock (router_->receive_runtime ().sync);
+        socket_receive_entry_scope_t receive_lock (router_->receive_runtime ());
         return routed_recv_
                  ? router_->xrecv_routed (msg_, source_rid_out_, NULL)
                  : router_->xrecv (msg_);
@@ -61,7 +58,7 @@ class session_termination_test_access_t
         // Mirror socket_base_t::pipe_terminated's receive-side phase without
         // pretending that this synthetic pipe has completed its full physical
         // termination lifecycle.
-        scoped_lock_t receive_lock (socket_->receive_runtime ().sync);
+        socket_receive_entry_scope_t receive_lock (socket_->receive_runtime ());
         socket_->xpipe_terminated (pipe_);
     }
 

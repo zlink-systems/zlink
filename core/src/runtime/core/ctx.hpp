@@ -172,20 +172,10 @@ class ctx_t ZLINK_FINAL
     //  If true, zlink_ctx_term was already called.
     bool _terminating;
 
-    //  Synchronisation of accesses to global slot-related data:
-    //  sockets, empty_slots, terminating. It also synchronises
-    //  access to zombie sockets as such (as opposed to slots) and provides
-    //  a memory barrier to ensure that all CPU cores see the same data.
-    //  Lock-depth contract: its address is passed as a raw mutex_t*
-    //  into ctx_socket_registry_t::wait_for_socket_removal /
-    //  wait_for_socket_count_at_most, which hand it straight to
-    //  condition_variable_t::wait. That call unlocks/relocks exactly one
-    //  level, so both call sites must hold _slot_sync at reentrancy depth 1
-    //  (not nested) when waiting. Preserving recursive-mutex reentrancy
-    //  depth across a condvar wait is a glibc implementation detail, not
-    //  something POSIX guarantees, so this is a real constraint on callers,
-    //  not just an optimisation.
-    recursive_mutex_t _slot_sync;
+    // Socket registry C2 state and its CV share a non-recursive mutex.
+    // Foreign socket operations run after pinning the snapshot and dropping
+    // this lock (synchronization model 11 sections 3.5/6).
+    mutex_t _slot_sync;
     ctx_socket_registry_t _socket_registry;
     std::vector<socket_public_handle_t *> _public_socket_handles;
 

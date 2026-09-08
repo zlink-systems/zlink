@@ -109,7 +109,6 @@ zlink::stream_t::stream_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
 {
     options.type = ZLINK_CORE_SOCKET_STREAM;
     options.backlog = 65536;
-    refresh_auto_hwm_policy ();
 
     const int stream_batch_size = stream_batch_size_min;
     const int stream_read_batch_size = zlink::stream_batch_policy::apply_read_headroom (
@@ -123,27 +122,19 @@ zlink::stream_t::stream_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
 
 zlink::stream_t::~stream_t ()
 {
-    // Route entries retain their pipe endpoints so raw steady-state lookups
-    // cannot race final pipe deletion. Normally xpipe_terminated drains every
-    // entry; release any residual route during socket teardown.
-    std::vector<pipe_t *> retained_routes;
+    // Route snapshot entries own their pipe lifetime references. Drop any
+    // residual snapshots before the socket starts destroying its members.
+    std::vector<route_snapshot_t> retired_snapshots;
     {
         std::lock_guard<std::mutex> publication_lock (
           _route_publication_mutex);
         for (size_t i = 0; i < route_shard_count; ++i) {
             route_shard_t &shard = _route_shards[i];
-            scoped_lock_t shard_lock (shard.sync);
-            for (route_shard_t::routes_t::const_iterator route =
-                   shard.routes.begin ();
-                 route != shard.routes.end (); ++route) {
-                if (route->second)
-                    retained_routes.push_back (route->second);
-            }
-            shard.routes.clear ();
+            retired_snapshots.push_back (shard.snapshot);
+            shard.snapshot.reset ();
         }
     }
-    for (size_t i = 0; i < retained_routes.size (); ++i)
-        retained_routes[i]->release_lifetime_ref ();
+    retired_snapshots.clear ();
 
     clear_packet_receive_queue ();
     if (_packet_pending_input.check ())
@@ -154,14 +145,23 @@ zlink::stream_t::~stream_t ()
 
 zlink::stream_t::route_shard_t &zlink::stream_t::route_shard_for (uint32_t routing_id_)
 {
+    zlink_assert (
+      lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
     return _route_shards[routing_id_ % route_shard_count];
 }
 
-zlink::pipe_t *zlink::stream_t::find_route_locked (route_shard_t &shard_,
-                                                   uint32_t routing_id_)
+void zlink::stream_t::route_pipe_release_t::operator() (pipe_t *pipe_) const
 {
-    const route_shard_t::routes_t::iterator it = shard_.routes.find (routing_id_);
-    return it == shard_.routes.end () ? NULL : it->second;
+    zlink_assert (pipe_);
+    pipe_->release_lifetime_ref ();
+}
+
+zlink::pipe_t *zlink::stream_t::find_route (const route_shard_t &shard_,
+                                            uint32_t routing_id_)
+{
+    const route_shard_t::routes_t::const_iterator it =
+      shard_.snapshot->find (routing_id_);
+    return it == shard_.snapshot->end () ? NULL : it->second.get ();
 }
 
 bool zlink::stream_t::publish_route_locked (uint32_t routing_id_,
@@ -173,20 +173,64 @@ bool zlink::stream_t::publish_route_locked (uint32_t routing_id_,
         return false;
 
     route_shard_t &shard = route_shard_for (routing_id_);
-    scoped_lock_t shard_lock (shard.sync);
-    route_shard_t::routes_t::iterator route = shard.routes.find (routing_id_);
-    if (route != shard.routes.end ())
-        return route->second == pipe_;
+    const route_snapshot_t current_snapshot = shard.snapshot;
+    const route_shard_t::routes_t::const_iterator route =
+      current_snapshot->find (routing_id_);
+    if (route != current_snapshot->end ())
+        return route->second.get () == pipe_;
     if (!pipe_->retain_lifetime_ref ())
         return false;
-    shard.routes.insert (std::make_pair (routing_id_, pipe_));
+
+    const route_shard_t::route_ref_t route_ref (
+      pipe_, route_pipe_release_t ());
+    std::shared_ptr<route_shard_t::routes_t> next_snapshot (
+      new route_shard_t::routes_t (*current_snapshot));
+    next_snapshot->insert (std::make_pair (routing_id_, route_ref));
+    shard.snapshot = next_snapshot;
     return true;
+}
+
+void zlink::stream_t::unpublish_routes_for_pipe_locked (
+  pipe_t *pipe_, std::vector<route_snapshot_t> *retired_snapshots_)
+{
+    zlink_assert (pipe_);
+    zlink_assert (retired_snapshots_);
+    for (size_t shard_index = 0; shard_index < route_shard_count;
+         ++shard_index) {
+        route_shard_t &shard = _route_shards[shard_index];
+        const route_snapshot_t current_snapshot = shard.snapshot;
+        bool found = false;
+        for (route_shard_t::routes_t::const_iterator route =
+               current_snapshot->begin ();
+             route != current_snapshot->end (); ++route) {
+            if (route->second.get () == pipe_) {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            continue;
+
+        std::shared_ptr<route_shard_t::routes_t> next_snapshot (
+          new route_shard_t::routes_t (*current_snapshot));
+        for (route_shard_t::routes_t::iterator route = next_snapshot->begin ();
+             route != next_snapshot->end ();) {
+            if (route->second.get () == pipe_)
+                route = next_snapshot->erase (route);
+            else
+                ++route;
+        }
+        retired_snapshots_->push_back (current_snapshot);
+        shard.snapshot = next_snapshot;
+    }
 }
 
 void zlink::stream_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool locally_initiated_)
 {
     LIBZLINK_UNUSED (subscribe_to_all_);
     zlink_assert (pipe_);
+    zlink_assert (
+      lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
 
     if (!identify_peer (pipe_, locally_initiated_))
         return;
@@ -199,11 +243,13 @@ void zlink::stream_t::xattach_pipe (pipe_t *pipe_, bool subscribe_to_all_, bool 
 void zlink::stream_t::xpipe_terminated (pipe_t *pipe_)
 {
     zlink_assert (pipe_);
+    zlink_assert (
+      lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
     const uint32_t server_routing_id = pipe_->get_server_socket_routing_id ();
 
     pipe_->close_stream_route ();
 
-    std::vector<pipe_t *> retired_routes;
+    std::vector<route_snapshot_t> retired_snapshots;
     {
         std::lock_guard<std::recursive_mutex> api_lock (_api_mutex);
         if (options.stream_notify)
@@ -220,30 +266,13 @@ void zlink::stream_t::xpipe_terminated (pipe_t *pipe_)
         {
             std::lock_guard<std::mutex> publication_lock (
               _route_publication_mutex);
-            for (size_t shard_index = 0; shard_index < route_shard_count;
-                 ++shard_index) {
-                route_shard_t &shard = _route_shards[shard_index];
-                scoped_lock_t shard_lock (shard.sync);
-                route_shard_t::routes_t::iterator route = shard.routes.begin ();
-                while (route != shard.routes.end ()) {
-                    if (route->second != pipe_) {
-                        ++route;
-                        continue;
-                    }
-
-                    retired_routes.push_back (route->second);
-                    route = shard.routes.erase (route);
-                }
-            }
+            unpublish_routes_for_pipe_locked (pipe_, &retired_snapshots);
         }
 
         erase_out_pipe (pipe_);
         _fq.pipe_terminated (pipe_);
     }
 
-    for (size_t i = 0; i < retired_routes.size (); ++i) {
-        retired_routes[i]->release_lifetime_ref ();
-    }
 }
 
 int zlink::stream_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
@@ -258,8 +287,7 @@ int zlink::stream_t::xterm_peer_rid (const zlink_routing_id_t *peer_rid_)
     route_shard_t &shard = route_shard_for (routing_id);
     bool terminated = false;
     {
-        scoped_lock_t shard_lock (shard.sync);
-        pipe_t *const route_pipe = find_route_locked (shard, routing_id);
+        pipe_t *const route_pipe = find_route (shard, routing_id);
         if (route_pipe) {
             // STREAM close must preserve frames that were accepted before
             // the disconnect request. The peer receives the pipe delimiter
@@ -601,7 +629,7 @@ int zlink::stream_t::pump_packet_receive_queue ()
     size_t raw_chunks = 0;
     while (_packet_receive_queue.empty ()) {
         if (raw_chunks == max_raw_chunks_per_pump) {
-            notify_receive_progress_locked ();
+            notify_receive_progress ();
             static_cast<mailbox_t *> (get_mailbox ())->signal ();
             return 0;
         }
@@ -728,7 +756,9 @@ int zlink::stream_t::recv_packet (zlink_routing_id_t *source_rid_out_,
         return -1;
     }
 
-    const int recv_rc = socket_base_t::recv (header_out_, flags_);
+    socket_receive_record_scope_t record_scope;
+    const int recv_rc = socket_base_t::recv_pipe (
+      header_out_, NULL, flags_, false, &record_scope);
     if (recv_rc != 0)
         return -1;
     if (!_packet_recv_body_ready) {
@@ -759,9 +789,8 @@ int zlink::stream_t::xsend (
     if (!_more_out && !(msg_->flags () & msg_t::more) && msg_->get_routing_id () != 0) {
         const uint32_t routing_id = msg_->get_routing_id ();
         route_shard_t &shard = route_shard_for (routing_id);
-        scoped_lock_t shard_lock (shard.sync);
 
-        pipe_t *const out = find_route_locked (shard, routing_id);
+        pipe_t *const out = find_route (shard, routing_id);
         if (!out) {
             errno = EHOSTUNREACH;
             return -1;
@@ -803,8 +832,7 @@ int zlink::stream_t::xsend (
 
             const uint32_t routing_id = get_uint32 (static_cast<unsigned char *> (msg_->data ()));
             route_shard_t &shard = route_shard_for (routing_id);
-            scoped_lock_t shard_lock (shard.sync);
-            pipe_t *const route_pipe = find_route_locked (shard, routing_id);
+            pipe_t *const route_pipe = find_route (shard, routing_id);
             if (!route_pipe) {
                 errno = EHOSTUNREACH;
                 return -1;
@@ -908,8 +936,7 @@ int zlink::stream_t::xsend_routed (
 
     const uint32_t routing_id = get_uint32 (target_rid_->data);
     route_shard_t &shard = route_shard_for (routing_id);
-    scoped_lock_t shard_lock (shard.sync);
-    pipe_t *const out = find_route_locked (shard, routing_id);
+    pipe_t *const out = find_route (shard, routing_id);
     if (!out) {
         errno = EHOSTUNREACH;
         return -1;
@@ -966,8 +993,7 @@ int zlink::stream_t::xselect_routed_submit_target (
     }
     const uint32_t routing_id = get_uint32 (router_rid_or_null_->data);
     route_shard_t &shard = route_shard_for (routing_id);
-    scoped_lock_t shard_lock (shard.sync);
-    pipe_t *const route_pipe = find_route_locked (shard, routing_id);
+    pipe_t *const route_pipe = find_route (shard, routing_id);
     if (!route_pipe) {
         errno = EHOSTUNREACH;
         return -1;
@@ -1068,8 +1094,7 @@ bool zlink::stream_t::xsend_writable_target_ready (
     routing_id = get_uint32 (target_rid_or_null_->data);
 
     route_shard_t &shard = route_shard_for (routing_id);
-    scoped_lock_t shard_lock (shard.sync);
-    pipe_t *const route_pipe = find_route_locked (shard, routing_id);
+    pipe_t *const route_pipe = find_route (shard, routing_id);
     if (!route_pipe || !route_pipe->is_lifecycle_active ())
         return false;
     uint64_t pair_id = 0;
@@ -1089,8 +1114,7 @@ bool zlink::stream_t::xsend_writable_target_known (
     const uint32_t routing_id = get_uint32 (target_rid_or_null_->data);
 
     route_shard_t &shard = route_shard_for (routing_id);
-    scoped_lock_t shard_lock (shard.sync);
-    pipe_t *const route_pipe = find_route_locked (shard, routing_id);
+    pipe_t *const route_pipe = find_route (shard, routing_id);
     return route_pipe && route_pipe->is_lifecycle_active ();
 }
 
@@ -1104,8 +1128,7 @@ bool zlink::stream_t::xsend_writable_target_for_pipe (
         return false;
 
     route_shard_t &shard = route_shard_for (routing_id);
-    scoped_lock_t shard_lock (shard.sync);
-    if (find_route_locked (shard, routing_id) != pipe_)
+    if (find_route (shard, routing_id) != pipe_)
         return false;
 
     memset (target_rid_out_, 0, sizeof (*target_rid_out_));
@@ -1182,6 +1205,8 @@ std::recursive_mutex *zlink::stream_t::api_sync_mutex ()
 
 bool zlink::stream_t::identify_peer (pipe_t *pipe_, bool locally_initiated_)
 {
+    zlink_assert (
+      lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
     blob_t routing_id;
     pipe_t *peer = NULL;
     uint32_t routing_id_value = 0;

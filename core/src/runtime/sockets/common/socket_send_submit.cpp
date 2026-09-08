@@ -192,7 +192,7 @@ struct zlink::socket_base_t::completion_submit_wait_context_t
 {
     explicit completion_submit_wait_context_t (socket_base_t *socket_) :
         socket (socket_),
-        timeout (&socket_->_clock, socket_->options.sndtimeo),
+        timeout (&socket_->_clock, socket_->send_timeout_ms ()),
         progress_owner (socket_)
     {
     }
@@ -829,7 +829,7 @@ int zlink::socket_base_t::wait_for_request_submit_admission (
         if (_completion_poller_refs.load (std::memory_order_acquire) != 0) {
             socket_reqrep_internal::completion_discard_t discard;
             {
-                scoped_lock_t owner_lock (_completion_owner_sync);
+                const socket_receive_entry_scope_t turn (receive_runtime ());
                 if (_completion_poller_refs.load (std::memory_order_acquire)
                     != 0) {
                     const completion_drain_scope_t drain_scope (this,
@@ -869,7 +869,7 @@ int zlink::socket_base_t::request_admission_submit_blocking (
         return -1;
     }
 
-    submit_timeout_budget_t timeout (&_clock, options.sndtimeo);
+    submit_timeout_budget_t timeout (&_clock, send_timeout_ms ());
     request_submit_selection_t selection;
     const request_admission_fast_result_t fast_result =
       try_request_admission_submit_fast (

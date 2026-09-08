@@ -56,81 +56,25 @@ int receive_once_guarded (zlink::socket_receive_runtime_t &runtime_,
                           zlink::socket_receive_record_scope_t *record_scope_ = NULL,
                           bool defer_record_scope_ = false)
 {
-    // The normal public-recv path does not share its socket with an async
-    // mailbox owner.  The runtime owns the handoff when that changes: this
-    // either takes the lock-free lease or leaves `sync` held under a
-    // re-validated mutex-only mode, never both and never neither.
-    if (runtime_.enter_receive_exclusion ()
-        == zlink::socket_receive_runtime_t::receive_entry_lease) {
-        // A whole-record receive also fences mailbox commands, whose
-        // receive-side mutations already run under this sync. Ordinary
-        // single-frame receive keeps the lock-free public fast path.
-        if (record_scope_ && !defer_record_scope_)
-            runtime_.sync.lock ();
-        if (observed_epoch_out_)
-            *observed_epoch_out_ =
-              runtime_.progress_epoch.load (std::memory_order_acquire);
-        if (record_scope_ && !defer_record_scope_
-            && record_scope_->prepare_receive_attempt () != 0) {
-            runtime_.sync.unlock ();
-            runtime_.release_public_receive_lease ();
-            return -1;
-        }
-        bool sync_held = !defer_record_scope_ && record_scope_;
-        if (record_scope_ && defer_record_scope_)
-            record_scope_->begin_deferred_attempt (&runtime_, &sync_held);
-        const int rc = receive_ ();
-        if (record_scope_ && defer_record_scope_)
-            record_scope_->end_deferred_attempt ();
-        if (record_scope_ && defer_record_scope_ && record_scope_->owns (&runtime_)) {
-            if (rc != 0) {
-                record_scope_->rollback_receive_attempt ();
-                record_scope_->release ();
-            }
-            return rc;
-        }
-        if (rc == 0 && record_scope_ && !defer_record_scope_)
-            record_scope_->adopt_public_owner (&runtime_);
-        else {
-            if (record_scope_ && !defer_record_scope_)
-                record_scope_->rollback_receive_attempt ();
-            if (record_scope_ && sync_held)
-                runtime_.sync.unlock ();
-            runtime_.release_public_receive_lease ();
-        }
-        return rc;
-    }
-
-    //  `sync` is already held by enter_receive_exclusion(), under a mode it
-    //  re-validated after acquiring it.
+    zlink::socket_receive_entry_scope_t entry (runtime_);
     if (observed_epoch_out_)
-        *observed_epoch_out_ =
-          runtime_.progress_epoch.load (std::memory_order_acquire);
+        *observed_epoch_out_ = runtime_.progress_epoch.load (std::memory_order_acquire);
     if (record_scope_ && !defer_record_scope_
-        && record_scope_->prepare_receive_attempt () != 0) {
-        runtime_.sync.unlock ();
+        && record_scope_->prepare_receive_attempt () != 0)
         return -1;
-    }
-    bool sync_held = true;
     if (record_scope_ && defer_record_scope_)
-        record_scope_->begin_deferred_attempt (&runtime_, &sync_held);
+        record_scope_->begin_deferred_attempt (&runtime_);
     const int rc = receive_ ();
     if (record_scope_ && defer_record_scope_)
         record_scope_->end_deferred_attempt ();
-    if (record_scope_ && defer_record_scope_ && record_scope_->owns (&runtime_)) {
-        if (rc != 0) {
+    if (record_scope_
+        && (!defer_record_scope_ || record_scope_->owns (&runtime_))) {
+        if (rc == 0)
+            record_scope_->adopt (&runtime_, entry.release ());
+        else {
             record_scope_->rollback_receive_attempt ();
             record_scope_->release ();
         }
-        return rc;
-    }
-    if (rc == 0 && record_scope_ && !defer_record_scope_)
-        record_scope_->adopt_async_sync (&runtime_);
-    else {
-        if (record_scope_ && !defer_record_scope_)
-            record_scope_->rollback_receive_attempt ();
-        if (sync_held)
-            runtime_.sync.unlock ();
     }
     return rc;
 }
@@ -736,7 +680,8 @@ int zlink::socket_base_t::recv (msg_t *msg_, int flags_,
         return 0;
     }
 
-    if ((flags_ & ZLINK_DONTWAIT) || options.rcvtimeo == 0) {
+    int timeout = (flags_ & ZLINK_DONTWAIT) ? 0 : receive_timeout_ms ();
+    if (timeout == 0) {
         if (unlikely (process_commands (0, false) != 0))
             return -1;
         command_runtime ().reset_recv_ticks ();
@@ -751,7 +696,6 @@ int zlink::socket_base_t::recv (msg_t *msg_, int flags_,
         return 0;
     }
 
-    int timeout = options.rcvtimeo;
     const uint64_t end = timeout < 0 ? 0 : (_clock.now_ms () + timeout);
     bool block = command_runtime ().should_block_on_recv ();
     while (true) {
@@ -856,7 +800,8 @@ int zlink::socket_base_t::recv_common (
         return 0;
     }
 
-    if ((flags_ & ZLINK_DONTWAIT) || options.rcvtimeo == 0) {
+    int timeout = (flags_ & ZLINK_DONTWAIT) ? 0 : receive_timeout_ms ();
+    if (timeout == 0) {
         if (unlikely (process_commands (0, false) != 0))
             return -1;
         command_runtime ().reset_recv_ticks ();
@@ -872,7 +817,6 @@ int zlink::socket_base_t::recv_common (
         return 0;
     }
 
-    int timeout = options.rcvtimeo;
     const uint64_t end = timeout < 0 ? 0 : (_clock.now_ms () + timeout);
     bool block = command_runtime ().should_block_on_recv ();
     while (true) {
@@ -998,7 +942,8 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
         return 0;
     }
 
-    if ((flags_ & ZLINK_DONTWAIT) || options.rcvtimeo == 0) {
+    int timeout = (flags_ & ZLINK_DONTWAIT) ? 0 : receive_timeout_ms ();
+    if (timeout == 0) {
         if (unlikely (process_commands (0, false) != 0))
             return -1;
         command_runtime ().reset_recv_ticks ();
@@ -1014,7 +959,6 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
         return 0;
     }
 
-    int timeout = options.rcvtimeo;
     const uint64_t end = timeout < 0 ? 0 : (_clock.now_ms () + timeout);
     bool block = command_runtime ().should_block_on_recv ();
     while (true) {

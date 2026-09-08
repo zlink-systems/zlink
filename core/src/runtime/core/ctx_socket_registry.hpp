@@ -47,8 +47,8 @@ class ctx_socket_registry_t
     //  wait_for_socket_count_at_most: blocks on _socket_state_cv under
     //  sync_ until predicate_ () is true or timeout_ms_ elapses.
     //  Returns 0 on success, -1/ETIMEDOUT on timeout. sync_ is passed
-    //  straight through to condition_variable_t::wait, so the same
-    //  lock-depth contract as ctx_t::_slot_sync applies here.
+    //  straight through to condition_variable_t::wait and must be a
+    //  non-recursive mutex held exactly once by the caller.
     template <typename Predicate>
     int wait_until (mutex_t *sync_, int timeout_ms_, Predicate predicate_);
 

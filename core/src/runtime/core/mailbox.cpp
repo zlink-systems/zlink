@@ -15,6 +15,15 @@ namespace
 const uint32_t poller_notification_primary = UINT32_C (1) << 31;
 const uint32_t poller_notification_count =
   poller_notification_primary - UINT32_C (1);
+
+#ifdef ZLINK_BUILD_TESTS
+std::atomic<bool> fail_next_mailbox_asio_post (false);
+
+void throw_mailbox_asio_post_failure ()
+{
+    throw std::bad_alloc ();
+}
+#endif
 }
 
 zlink::mailbox_t::mailbox_t ()
@@ -53,9 +62,9 @@ zlink::fd_t zlink::mailbox_t::get_fd () const
     return _signaler.get_fd ();
 }
 
-void zlink::mailbox_t::send (const command_t &cmd_)
+void zlink::mailbox_t::send (const command_t &cmd_) noexcept
 {
-    _sync.lock ();
+    scoped_lock_t lock (_sync);
     _cpipe.write (cmd_, false);
     const bool ok = _cpipe.flush ();
     //  A command can join an already-active receiver without producing a
@@ -85,7 +94,6 @@ void zlink::mailbox_t::send (const command_t &cmd_)
         //  race the transition from an empty queue to pending work.
         schedule_if_needed_unlocked ();
     }
-    _sync.unlock ();
 }
 
 bool zlink::mailbox_t::take_command_pending_hint ()
@@ -305,6 +313,11 @@ uint32_t zlink::mailbox_t::test_command_waiter_count ()
     _sync.unlock ();
     return waiters;
 }
+
+void zlink::mailbox_t::test_fail_next_asio_post ()
+{
+    fail_next_mailbox_asio_post.store (true, std::memory_order_release);
+}
 #endif
 
 void zlink::mailbox_t::drain_primary_signaler ()
@@ -332,14 +345,13 @@ void zlink::mailbox_t::set_io_context (boost::asio::io_context *io_context_,
     _sync.unlock ();
 }
 
-void zlink::mailbox_t::schedule_if_needed ()
+void zlink::mailbox_t::schedule_if_needed () noexcept
 {
-    _sync.lock ();
+    scoped_lock_t lock (_sync);
     schedule_if_needed_unlocked ();
-    _sync.unlock ();
 }
 
-void zlink::mailbox_t::schedule_if_needed_unlocked ()
+void zlink::mailbox_t::schedule_if_needed_unlocked () noexcept
 {
     if (!_io_context || !_handler)
         return;
@@ -351,6 +363,16 @@ void zlink::mailbox_t::schedule_if_needed_unlocked ()
         const mailbox_pre_post_t pre_post = _pre_post;
         if (pre_post)
             pre_post (handler_arg);
+        // A scheduled callback owns the pre-post lifetime pin. The queue
+        // allocation path is already fail-stop (alloc_assert), and send() has
+        // no failure return. Keep the same rule for ASIO handler allocation:
+        // noexcept invokes std::terminate if post throws, so callers never
+        // resume with a scheduled reservation or pin lacking a callback owner.
+#ifdef ZLINK_BUILD_TESTS
+        if (fail_next_mailbox_asio_post.exchange (false,
+                                                  std::memory_order_acq_rel))
+            throw_mailbox_asio_post_failure ();
+#endif
         boost::asio::post (*io_context, [handler, handler_arg] () { handler (handler_arg); });
     }
 }

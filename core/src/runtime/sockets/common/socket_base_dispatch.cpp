@@ -67,7 +67,12 @@ void zlink::socket_base_t::process_deferred_socket_msg_pipe_terminations ()
             pipe->_deferred_socket_msg_termination_next = NULL;
         }
 
-        xsocket_msg_pipe_terminated (pipe);
+        {
+            // Route retirement also rolls back the socket's writer endpoint.
+            // Re-enter its C2 owner after detaching the deferred queue item.
+            const socket_receive_entry_scope_t turn (receive_runtime ());
+            xsocket_msg_pipe_terminated (pipe);
+        }
         pipe->release_lifetime_ref ();
     }
 }
@@ -103,8 +108,8 @@ bool zlink::socket_base_t::has_stable_completion_processing_owner () const
 }
 
 // Stable publications follow a canonical owner-field recheck while holding
-// _completion_owner_sync. Invalidation is allowed to be conservative: the
-// next request falls back to both owner locks and republishes the live owner.
+// the socket turn. Invalidation is allowed to be conservative: the next
+// request rechecks the owner under that turn and republishes the live owner.
 void zlink::socket_base_t::invalidate_completion_processing_owner ()
 {
     uint32_t generation =
@@ -144,7 +149,7 @@ int zlink::socket_base_t::ensure_completion_processing ()
         bool wait_for_quiescence = false;
         bool started_here = false;
         {
-            scoped_lock_t owner_lock (_completion_owner_sync);
+            const socket_receive_entry_scope_t turn (receive_runtime ());
             scoped_lock_t progress_lock (
               _transport_pair_owner_progress_sync);
 
@@ -229,7 +234,7 @@ bool zlink::socket_base_t::acquire_completion_poller (void *owner_)
     {
         //  The owner gate fences an in-flight completion drain before the
         //  first public poller registration returns.
-        scoped_lock_t owner_lock (_completion_owner_sync);
+        const socket_receive_entry_scope_t turn (receive_runtime ());
         void *expected = NULL;
         if (!_completion_poller_owner.compare_exchange_strong (
               expected, owner_, std::memory_order_acq_rel,
@@ -261,7 +266,7 @@ bool zlink::socket_base_t::acquire_completion_poller (void *owner_)
         // The wait runs outside the drain fence. Recheck the exact owner and
         // completed detach under that fence before making it visible to the
         // request fast path.
-        scoped_lock_t owner_lock (_completion_owner_sync);
+        const socket_receive_entry_scope_t turn (receive_runtime ());
         if (_completion_poller_owner.load (std::memory_order_acquire) == owner_
             && _completion_poller_refs.load (std::memory_order_acquire) != 0
             && !lifecycle_coordinator ().is_async_quiesce_pending ())
@@ -275,7 +280,7 @@ void zlink::socket_base_t::release_completion_poller (void *owner_)
 {
     bool resume = false;
     {
-        scoped_lock_t owner_lock (_completion_owner_sync);
+        const socket_receive_entry_scope_t turn (receive_runtime ());
         void *expected = owner_;
         if (_completion_poller_owner.load (std::memory_order_acquire)
             != expected)

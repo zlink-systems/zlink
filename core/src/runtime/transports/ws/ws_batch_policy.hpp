@@ -7,12 +7,12 @@ namespace zlink
 {
 namespace ws_batch_policy
 {
-// One encoder batch becomes one Beast binary write. Keep enough small ZMP
-// records in that transport-owned write without changing other transports'
-// engine batching policy.
+// One encoder batch becomes one Beast binary write. Use the same bounded
+// capacity for that batch and the client masking scratch, so a prepared
+// batch does not acquire a second transport-owned split point.
 inline int zmp_send_batch_size ()
 {
-    return 16 * 1024;
+    return 128 * 1024;
 }
 }
 }

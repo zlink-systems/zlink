@@ -191,6 +191,12 @@ int zlink::socket_base_t::register_send_writable_wait_after_failure (
         errno = routed ? EINVAL : ENOTSUP;
         return -1;
     }
+    // Route existence, wait publication and the readiness recheck belong to
+    // one socket turn. The original readiness scope also owns admission.
+    socket_public_send_scope_t readiness_scope (
+      lifecycle_coordinator (), true);
+    if (!readiness_scope.acquired ())
+        return -1;
     if (routed && !xsend_writable_target_known (target_rid_or_null_)) {
         errno = EHOSTUNREACH;
         return -1;
@@ -216,13 +222,9 @@ int zlink::socket_base_t::register_send_writable_wait_after_failure (
     bool ready = false;
     if (correlation_wait)
         publish_send_writable_target (NULL, true);
-    else {
-        socket_public_send_scope_t readiness_scope (
-          lifecycle_coordinator (), true);
-        if (readiness_scope.acquired ())
-            ready = xsend_writable_target_ready (
-              routed ? target_rid_or_null_ : NULL);
-    }
+    else
+        ready = xsend_writable_target_ready (
+          routed ? target_rid_or_null_ : NULL);
     if (ready)
         publish_send_writable_target (
           routed ? target_rid_or_null_ : NULL);

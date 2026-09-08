@@ -52,6 +52,11 @@ class ParsedReport:
     skip_count: int = 0
     fail_count: int = 0
     completion_status: str = ""
+    unsupported_count: int | None = None
+    error_count: int | None = None
+    expected_result_lines: int | None = None
+    actual_result_lines: int | None = None
+    result_line_count: int = 0
 
 
 @dataclass
@@ -89,6 +94,7 @@ def parse_report(path: pathlib.Path) -> ParsedReport:
     for line_number, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
         if line.startswith("RESULT,"):
+            result.result_line_count += 1
             parts = line.split(",")
             if len(parts) != 7:
                 result.errors.append(f"line {line_number}: malformed RESULT line")
@@ -126,6 +132,22 @@ def parse_report(path: pathlib.Path) -> ParsedReport:
             result.skip_count = _parse_count(line, "skip", result, line_number)
         elif line.startswith("- fail:"):
             result.fail_count = _parse_count(line, "fail", result, line_number)
+        elif line.startswith("- unsupported:"):
+            result.unsupported_count = _parse_count(
+                line, "unsupported", result, line_number
+            )
+        elif line.startswith("- error:"):
+            result.error_count = _parse_count(
+                line, "error", result, line_number
+            )
+        elif line.startswith("- expected_result_lines:"):
+            result.expected_result_lines = _parse_count(
+                line, "expected_result_lines", result, line_number
+            )
+        elif line.startswith("- actual_result_lines:"):
+            result.actual_result_lines = _parse_count(
+                line, "actual_result_lines", result, line_number
+            )
         elif line.startswith("- status:"):
             result.completion_status = line.partition(":")[2].strip().lower()
         elif line in ("## Skips", "## Failures"):
@@ -155,6 +177,7 @@ def _parse_count(line: str, name: str, report: ParsedReport, line_number: int) -
         report.errors.append(f"line {line_number}: negative {name} count")
         return 0
     return parsed
+
 
 
 def metric_rule(metric: str) -> str:

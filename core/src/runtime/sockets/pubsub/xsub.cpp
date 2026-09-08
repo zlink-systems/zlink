@@ -57,7 +57,6 @@ zlink::xsub_t::xsub_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
 {
     options.type = ZLINK_CORE_SOCKET_XSUB;
     options.in_batch_size = xsub_transport_read_batch_size;
-    refresh_auto_hwm_policy ();
 
     //  When socket is being closed down we don't want to wait till pending
     //  subscription commands are sent to the wire.

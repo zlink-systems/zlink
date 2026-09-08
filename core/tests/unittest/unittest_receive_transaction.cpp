@@ -16,6 +16,7 @@
 #include "sockets/common/socket_base.hpp"
 #include "sockets/pair/pair.hpp"
 
+#include <boost/asio/io_context.hpp>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -25,6 +26,12 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#if defined HAVE_FORK
+#include <sys/wait.h>
+#include <signal.h>
+#include <unistd.h>
+#endif
 
 SETUP_TEARDOWN_TESTCONTEXT
 
@@ -52,6 +59,31 @@ class session_termination_test_access_t
 
 namespace
 {
+void mailbox_post_noop (void *) {}
+
+#if defined HAVE_FORK
+void test_mailbox_post_failure_is_fail_stop ()
+{
+    const pid_t child = fork ();
+    TEST_ASSERT_TRUE (child >= 0);
+    if (child == 0) {
+        zlink::mailbox_t mailbox;
+        boost::asio::io_context io_context;
+        mailbox.set_io_context (&io_context, &mailbox_post_noop, NULL);
+        mailbox.test_fail_next_asio_post ();
+        zlink::command_t command;
+        memset (&command, 0, sizeof (command));
+        mailbox.send (command);
+        _exit (0);
+    }
+
+    int status = 0;
+    TEST_ASSERT_TRUE (waitpid (child, &status, 0) == child);
+    TEST_ASSERT_TRUE (WIFSIGNALED (status));
+    TEST_ASSERT_EQUAL_INT (SIGABRT, WTERMSIG (status));
+}
+#endif
+
 struct receive_record_gate_t
 {
     receive_record_gate_t () : acquired (false), contended (false), release (false) {}
@@ -398,7 +430,7 @@ void test_router_record_fences_mailbox_read_activation ()
 
     receive_record_gate_t record_gate;
     handle.socket->test_set_receive_record_hooks (
-      &pause_after_first_record_frame, NULL, &record_gate);
+      &pause_after_first_record_frame, &observe_record_contention, &record_gate);
     receive_result_t first;
     std::thread first_reader (
       [&] { receive_router_record (handle, &first); });
@@ -423,10 +455,15 @@ void test_router_record_fences_mailbox_read_activation ()
         });
     }
 
-    const bool command_probed =
-      acquired && wait_for_command_sync_probe (&command_probe);
+    const bool command_waited =
+      acquired && wait_for_gate_flag (&record_gate, true);
     const bool command_completed_while_record_open =
       command_done.load (std::memory_order_acquire);
+    release_gate (&record_gate);
+    first_reader.join ();
+    if (command_thread.joinable ())
+        command_thread.join ();
+    const bool command_probed = command_waited && command_probe.observed;
     bool command_sync_was_busy = false;
     bool command_public_api_sync_owned = false;
     if (command_probed) {
@@ -436,10 +473,6 @@ void test_router_record_fences_mailbox_read_activation ()
           command_probe.public_api_sync_owned;
     }
 
-    release_gate (&record_gate);
-    first_reader.join ();
-    if (command_thread.joinable ())
-        command_thread.join ();
     handle.socket->test_set_receive_command_sync_probe_hook (NULL, NULL);
     handle.socket->test_set_receive_record_hooks (NULL, NULL, NULL);
 
@@ -1110,6 +1143,9 @@ int main ()
     RUN_TEST (test_count1_router_adopts_anonymous_pipe_on_first_activation);
     RUN_TEST (test_blocking_command_wait_ignores_stale_shared_poller_signal);
     RUN_TEST (test_command_wait_preserves_signal_only_edges);
+#if defined HAVE_FORK
+    RUN_TEST (test_mailbox_post_failure_is_fail_stop);
+#endif
     RUN_TEST (test_blocking_process_commands_returns_on_signal_only_edge);
     RUN_TEST (test_pair_commands_fence_every_command_drain);
     RUN_TEST (test_close_commands_wait_for_parked_multipart_cleanup_sync);

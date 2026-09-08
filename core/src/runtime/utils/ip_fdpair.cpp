@@ -25,16 +25,6 @@
 #define unlink _unlink
 #endif
 
-#if defined ZLINK_HAVE_OPENVMS || defined ZLINK_HAVE_VXWORKS
-#include <ioctl.h>
-#endif
-
-#if defined ZLINK_HAVE_VXWORKS
-#include <unistd.h>
-#include <sockLib.h>
-#include <ioLib.h>
-#endif
-
 #if defined ZLINK_HAVE_EVENTFD
 #include <sys/eventfd.h>
 #endif
@@ -433,99 +423,6 @@ try_tcpip:
 #endif
 
     return make_fdpair_tcpip (r_, w_);
-#elif defined ZLINK_HAVE_OPENVMS
-
-    //  Whilst OpenVMS supports socketpair - it maps to AF_INET only.  Further,
-    //  it does not set the socket options TCP_NODELAY and TCP_NODELACK which
-    //  can lead to performance problems.
-    //
-    //  The bug will be fixed in V5.6 ECO4 and beyond.  In the meantime, we'll
-    //  create the socket pair manually.
-    struct sockaddr_in lcladdr;
-    memset (&lcladdr, 0, sizeof lcladdr);
-    lcladdr.sin_family = AF_INET;
-    lcladdr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-    lcladdr.sin_port = 0;
-
-    int listener = open_socket (AF_INET, SOCK_STREAM, 0);
-    errno_assert (listener != -1);
-
-    int on = 1;
-    int rc = setsockopt (listener, IPPROTO_TCP, TCP_NODELAY, &on, sizeof on);
-    errno_assert (rc != -1);
-
-    rc = setsockopt (listener, IPPROTO_TCP, TCP_NODELACK, &on, sizeof on);
-    errno_assert (rc != -1);
-
-    rc = bind (listener, (struct sockaddr *) &lcladdr, sizeof lcladdr);
-    errno_assert (rc != -1);
-
-    socklen_t lcladdr_len = sizeof lcladdr;
-
-    rc = getsockname (listener, (struct sockaddr *) &lcladdr, &lcladdr_len);
-    errno_assert (rc != -1);
-
-    rc = listen (listener, 1);
-    errno_assert (rc != -1);
-
-    *w_ = open_socket (AF_INET, SOCK_STREAM, 0);
-    errno_assert (*w_ != -1);
-
-    rc = setsockopt (*w_, IPPROTO_TCP, TCP_NODELAY, &on, sizeof on);
-    errno_assert (rc != -1);
-
-    rc = setsockopt (*w_, IPPROTO_TCP, TCP_NODELACK, &on, sizeof on);
-    errno_assert (rc != -1);
-
-    rc = connect (*w_, (struct sockaddr *) &lcladdr, sizeof lcladdr);
-    errno_assert (rc != -1);
-
-    *r_ = accept (listener, NULL, NULL);
-    errno_assert (*r_ != -1);
-
-    close (listener);
-
-    return 0;
-#elif defined ZLINK_HAVE_VXWORKS
-    struct sockaddr_in lcladdr;
-    memset (&lcladdr, 0, sizeof lcladdr);
-    lcladdr.sin_family = AF_INET;
-    lcladdr.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
-    lcladdr.sin_port = 0;
-
-    int listener = open_socket (AF_INET, SOCK_STREAM, 0);
-    errno_assert (listener != -1);
-
-    int on = 1;
-    int rc = setsockopt (listener, IPPROTO_TCP, TCP_NODELAY, (char *) &on, sizeof on);
-    errno_assert (rc != -1);
-
-    rc = bind (listener, (struct sockaddr *) &lcladdr, sizeof lcladdr);
-    errno_assert (rc != -1);
-
-    socklen_t lcladdr_len = sizeof lcladdr;
-
-    rc = getsockname (listener, (struct sockaddr *) &lcladdr, (int *) &lcladdr_len);
-    errno_assert (rc != -1);
-
-    rc = listen (listener, 1);
-    errno_assert (rc != -1);
-
-    *w_ = open_socket (AF_INET, SOCK_STREAM, 0);
-    errno_assert (*w_ != -1);
-
-    rc = setsockopt (*w_, IPPROTO_TCP, TCP_NODELAY, (char *) &on, sizeof on);
-    errno_assert (rc != -1);
-
-    rc = connect (*w_, (struct sockaddr *) &lcladdr, sizeof lcladdr);
-    errno_assert (rc != -1);
-
-    *r_ = accept (listener, NULL, NULL);
-    errno_assert (*r_ != -1);
-
-    close (listener);
-
-    return 0;
 #else
     // All other implementations support socketpair()
     int sv[2];

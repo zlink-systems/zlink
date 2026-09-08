@@ -82,19 +82,38 @@ bool zlink::ctx_t::begin_shutdown_locked (bool allow_fork_cleanup_)
     debug_dump_sockets_locked ("terminate-before-stop");
     std::vector<socket_base_t *> sockets;
     _socket_registry.collect_sockets (&sockets);
-    // A raw monitor peer is a context-owned socket, but its delivery task is
-    // owned by the source socket. Detach every source monitor before sending
-    // stop commands to the socket set so the control runtime cannot pump a
-    // monitor runtime after its peer has begun teardown. monitor() finishes
-    // all context operations before publishing the runtime, so taking the
-    // socket-local monitor lock while _slot_sync is held cannot invert the
-    // context lock order.
-    for (std::vector<socket_base_t *>::size_type i = 0, size = sockets.size ();
-         i != size; ++i)
-        sockets[i]->stop_monitor (false);
-    for (std::vector<socket_base_t *>::size_type i = 0, size = sockets.size (); i != size; ++i)
-        sockets[i]->stop ();
-    if (sockets.empty ())
+    // As in auto-HWM collection, retain socket lifetimes while the registry
+    // proves membership, then drop the registry lock before entering any
+    // socket. Monitor teardown may wait for its worker or process a peer's
+    // mailbox, both of which may need this context registry.
+    for (size_t i = 0; i < sockets.size (); ++i) {
+        if (sockets[i] && !sockets[i]->try_inc_mailbox_ref ())
+            sockets[i] = NULL;
+    }
+    _slot_sync.unlock ();
+    try {
+        for (size_t i = 0; i < sockets.size (); ++i) {
+            if (sockets[i])
+                sockets[i]->stop_monitor (false);
+        }
+        for (size_t i = 0; i < sockets.size (); ++i) {
+            if (sockets[i])
+                sockets[i]->stop ();
+        }
+    } catch (...) {
+        for (size_t i = 0; i < sockets.size (); ++i) {
+            if (sockets[i])
+                sockets[i]->dec_mailbox_ref ();
+        }
+        _slot_sync.lock ();
+        throw;
+    }
+    for (size_t i = 0; i < sockets.size (); ++i) {
+        if (sockets[i])
+            sockets[i]->dec_mailbox_ref ();
+    }
+    _slot_sync.lock ();
+    if (_socket_registry.empty ())
         _runtime_resources.stop_reaper ();
 
     return true;

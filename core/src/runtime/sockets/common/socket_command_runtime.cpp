@@ -20,15 +20,16 @@ bool zlink::socket_command_runtime_t::should_skip_throttled_command_poll (uint64
 
 bool zlink::socket_command_runtime_t::should_poll_commands_after_recv (int inbound_poll_rate_)
 {
-    return ++recv_ticks == inbound_poll_rate_;
+    return recv_ticks.fetch_add (1, std::memory_order_acq_rel)
+           == inbound_poll_rate_ - 1;
 }
 
 void zlink::socket_command_runtime_t::reset_recv_ticks ()
 {
-    recv_ticks = 0;
+    recv_ticks.store (0, std::memory_order_release);
 }
 
 bool zlink::socket_command_runtime_t::should_block_on_recv () const
 {
-    return recv_ticks != 0;
+    return recv_ticks.load (std::memory_order_acquire) != 0;
 }

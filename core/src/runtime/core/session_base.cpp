@@ -630,7 +630,7 @@ void zlink::session_base_t::engine_error (bool handshaked_, zlink::i_engine::err
     }
     release_transport_pair_owner_progress_if_held ();
     if (_pipe)
-        _pipe->clear_transport_connection_id_before_peer_writes ();
+        _pipe->set_transport_connection_id (0);
     //  Engine is dead. Let's forget about it.
     _engine = NULL;
 
