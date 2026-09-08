@@ -4,10 +4,19 @@ on:
   push:
     tags:
       - 'dotnet/v*'
+      - 'framework/v*'
   workflow_dispatch:
     inputs:
+      target:
+        description: 'binding: Systems.Zlink from dotnet/v*; framework: the framework .NET packages from framework/v*'
+        required: true
+        default: 'binding'
+        type: choice
+        options:
+          - binding
+          - framework
       version:
-        description: 'Binding version to release (for example, 0.17.3)'
+        description: 'Version to release (binding 0.17.3 or framework 0.10.0)'
         required: true
         type: string
 
@@ -20,6 +29,10 @@ env:
 
 jobs:
   release-dotnet:
+    # nuget.org's zlink-dotnet-release Trusted Publishing policy is bound to this
+    # workflow file name, so both the binding and the framework .NET packages
+    # are pushed from here (one job each).
+    if: startsWith(github.ref_name, 'dotnet/v') || (github.event_name == 'workflow_dispatch' && inputs.target == 'binding')
     name: Build and publish .NET binding
     runs-on: ubuntu-22.04
     steps:
@@ -144,6 +157,85 @@ jobs:
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
           dotnet nuget push dist/dotnet/*.snupkg \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+  release-framework-dotnet:
+    if: startsWith(github.ref_name, 'framework/v') || (github.event_name == 'workflow_dispatch' && inputs.target == 'framework')
+    name: Build and publish .NET framework packages
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve and validate framework version
+        id: versions
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            version="${GITHUB_REF_NAME#framework/v}"
+          else
+            version="${REQUESTED_VERSION}"
+          fi
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid framework version: ${version:-<missing>}" >&2
+            exit 1
+          fi
+          declared=$(sed -n 's/.*<Version Condition="[^"]*">\(.*\)<\/Version>.*/\1/p' framework/languages/dotnet/Directory.Build.props | head -n1)
+          if [ "${version}" != "${declared}" ]; then
+            echo "Framework version mismatch: requested=${version}, Directory.Build.props=${declared}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # Every packable framework project is published together: the public
+      # packages (Systems.Zlink.HttpClient, Systems.Zlink.Framework.AspNetCore,
+      # Systems.Zlink.Stream.Connector) depend on Zlink.Framework and
+      # Zlink.Framework.Contracts, so a partial push would leave consumers
+      # unable to restore. The binding Systems.Zlink is restored from nuget.org,
+      # which is why the binding release precedes the framework release.
+      - name: Build and pack framework packages
+        env:
+          CI: true
+        shell: bash
+        run: |
+          mkdir -p dist/framework-dotnet
+          for project in framework/languages/dotnet/src/*/*.csproj; do
+            if grep -q '<IsPackable>true</IsPackable>' "${project}"; then
+              dotnet pack "${project}" -c Release \
+                -p:PackageOutputPath="${GITHUB_WORKSPACE}/dist/framework-dotnet"
+            fi
+          done
+          ls dist/framework-dotnet
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: framework-dotnet-${{ steps.versions.outputs.version }}
+          path: |
+            dist/framework-dotnet/*.nupkg
+            dist/framework-dotnet/*.snupkg
+          if-no-files-found: error
+
+      - name: Log in to NuGet with trusted publishing
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: zlink
+
+      - name: Publish framework packages to nuget.org
+        shell: bash
+        run: |
+          dotnet nuget push 'dist/framework-dotnet/*.nupkg' \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+          dotnet nuget push 'dist/framework-dotnet/*.snupkg' \
             --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
