@@ -4607,3 +4607,9 @@ C 대비 55.06→49.77%로 **하락** → 원복. (2) operation 상태 객체 �
 표기한다. 비율이 낮다는 사실은 그대로이며(60~70%, 격차 ≈510 ns/msg 고정), 새 후보(예: message wrapper 생성·소멸
 76 ns, native allocation 경로)가 측정 근거와 함께 나오면 다시 `미달`로 연다. 사용자가 다른 판단을 하면 그에 따른다.
 
+
+## D-B244 (2026-09-08 14:05, 머신 B) **0.17.3 태그 `core/v0.17.3`(`0761c1d4d0`) push, Actions 릴리스 run 34189038691 실행 중**
+
+**LIN-1**(`core-rf-LIN-1-report.md`, Claude): CI 실패는 WIN-1과 무관한 선행 타이밍 결함 — RESUMED 커맨드를 I/O thread가 처리할 때 `pipe_t::apply_remote_flow_state()`가 `_out_sync` 안에서 pipe 플래그를 먼저 뒤집고 flow metrics는 뒤에 갱신 → 2-core에서 `wait_for_applied_pause(false)`가 먼저 풀리면 `paused_connections==1` 관측 후 10 s timeout. 두 파일 개별 되돌림으로 무관 확인. 수정: 테스트가 두 번째 applied 이벤트를 기다린 뒤 metrics 읽기(runtime 불변). 검증 30×·`taskset -c 0,1 --timeout 10` 30×·`taskset -c 0` 5/5. 착지 `550f0e3f6e`.
+**0.17.3 내용**: 0.17.2 + `de730d4ac5`(receive 소유권, STREAM 정체) + `f5d7cccde2`(Windows 엔트로피·ctx 종료 EAGAIN) + `550f0e3f6e`(테스트 결정화) + bump `0761c1d4d0`(41 파일, framework 제외). changelog `core/CHANGELOG.md [0.17.3] - 2026-09-08`. 완료 조건(D-B232): run green + `gh release view core/v0.17.3`.
+**머신 A**: run green 확인 후 0.17.3으로 재고정(alpha 대체) — 내용은 alpha + 테스트 수정뿐이라 측정값은 동일 취급 가능.
