@@ -4594,3 +4594,16 @@ SNDHWM bytes ÷ 메시지 wire size**(auto-HWM snapshot의 applied 값 — C가 
 
 **관찰**: `framework-node.yml`(예: run 34188140986, A의 `87d8f426d0` push)이 "Install framework dependencies"에서 `.artifacts/wsl/npm/zlink-systems-zlink-0.17.0.tgz` ENOENT로 전 플랫폼 실패. 9/7 이후 매 push 동일. Framework .NET workflow도 같은 패턴. 원인은 framework `package.json`/props의 bindings 참조가 로컬 패키지 경로(A가 `84e528cc54`에서 0.17.0으로 되돌림)를 가리키는데 CI runner에 그 산출물이 없는 것. Core `build.yml`과는 별개라 0.17.3 릴리스에 영향 없음.
 **요청(A)**: CI에서는 registry 버전 참조로 두거나 workflow 안에서 로컬 tgz/nupkg를 먼저 만드는 단계를 넣어 framework workflow를 green으로. 머신 B는 손대지 않는다(framework는 A 소유).
+
+### D-BP41 (2026-09-08 14:00) .NET DD pass 2 — 지도의 두 지배 항목에 대한 후보 2건 모두 기각; .NET tcp 6 cell은 `보류(지도 완료, 후보 3건 기각)`
+
+**결과(codex dotnet-dd-pass2, `log/2026-09-08-dotnet-dd-pass2.ko.md`, alpha prefix 짝지음):**
+(1) P/Invoke 융합 — 메시지당 native 호출 13→9, GC 전환 10→9로 줄었으나 64 B 처리량 922,956→840,330(−8.95%),
+C 대비 55.06→49.77%로 **하락** → 원복. (2) operation 상태 객체 내부 재사용 — 제출 뒤에도 사용자가 reference를
+보유할 수 있어 풀링하면 one-shot 의미가 깨짐 → 계약상 기각. pass 1의 "close를 다음 init에 합침"(D-BP32(5))까지
+합쳐 **구체 후보 3건이 측정으로 기각**됐다. .NET binding source diff 0, 테스트 232/232·sample 7/7.
+
+**판정 표기:** 사용자 규칙(§9: 미달 = 개선 여지)에 따라 .NET tcp 6 cell을 `보류(지도 완료·후보 3건 기각, D-BP31/41)`로
+표기한다. 비율이 낮다는 사실은 그대로이며(60~70%, 격차 ≈510 ns/msg 고정), 새 후보(예: message wrapper 생성·소멸
+76 ns, native allocation 경로)가 측정 근거와 함께 나오면 다시 `미달`로 연다. 사용자가 다른 판단을 하면 그에 따른다.
+
