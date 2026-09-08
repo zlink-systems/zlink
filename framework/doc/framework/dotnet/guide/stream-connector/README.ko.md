@@ -1,6 +1,6 @@
 # .NET Stream Connector
 
-`.NET` STREAM client connector(`Systems.Zlink.Stream.Connector`)의 문서 진입점이다.
+`.NET` STREAM client connector(`Zlink.Stream.Connector`)의 문서 진입점이다.
 데스크톱·서버 애플리케이션과 **네이티브 빌드 게임 엔진**(Unity, Godot C#)이 대상이다.
 
 | 문서 | 내용 |

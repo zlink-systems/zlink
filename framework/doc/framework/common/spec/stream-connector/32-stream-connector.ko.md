@@ -578,7 +578,7 @@ connector는 **테스트에서 push를 관측하는 대기 표면**을 공개 AP
 | Unreal | `zlink-unreal-stream-connector` | source plugin |
 | Godot(C++) | `zlink-godot-stream-connector` | source GDExtension |
 | Cocos/Axmol | `zlink-axmol-connector` | source package |
-| `.NET`(데스크톱·서버) | `Systems.Zlink.Stream.Connector` | NuGet |
+| `.NET`(데스크톱·서버) | `Zlink.Stream.Connector` | NuGet |
 | **Unity(네이티브)** | 위 `.NET` 패키지를 **그대로 사용**(전용 패키지 없음) | NuGet |
 | **Godot C#** | 위 `.NET` 패키지를 **그대로 사용** | NuGet |
 | Java | `systems.zlink:zlink-stream-connector` | Maven |

@@ -102,13 +102,13 @@ In particular, the following items apply uniformly across this whole directory.
     shapes like `IZLinkSession`, `IZLinkActorContext`, `IZLinkBoundSession`. In other
     words, every interface, record, enum, and exception the framework exposes to the user
     uses `ZLink`.
-  - Package ids and namespace words (`Systems.Zlink.*`) follow the native binding
-    convention. The casing intent for type names and the casing intent for namespace
-    names are separate concerns.
-- Packages and namespaces based on the `zlink.systems` domain follow the reverse-domain
-  convention[^reverse-dns]. `.NET`'s NuGet[^nuget] package id and namespace use
-  `Systems.Zlink.*`. For example, the framework becomes `Systems.Zlink.Framework`, and
-  Stream Connector becomes `Systems.Zlink.Stream.Connector`.
+  - NuGet package ids use `Zlink` or `Zlink.*`. Namespace and assembly names remain
+    independent from package ids. The casing intent for type names and namespace names
+    is also a separate concern.
+- Existing namespaces and assembly names retain their established names, including
+  `Systems.Zlink` for the native binding and `Systems.Zlink.Stream.Connector` for the
+  Stream Connector. The corresponding NuGet package ids are `Zlink` and
+  `Zlink.Stream.Connector`.
 - Manual connections are described through per-feature public surfaces, like a MeshNode's
   `PeerConnections` and a fanout subscriber connection. On the same MeshNode,
   location-store-based auto-connect and manual peer connections aren't mixed.
@@ -269,7 +269,6 @@ reflect all three of these.
 [^release-gate]: A release gate is the bundle of verification steps (tests, build, checks) that must pass before a new version is deployed.
 [^raw-transport]: Raw transport refers to send/receive at the low-level socket layer, without going through the framework's abstraction.
 [^wire-transport]: The wire/transport level refers to the layer where bytes actually flow over the network, on top of which the framework's abstraction is built.
-[^reverse-dns]: The reverse-DNS convention is the practice of flipping a domain name backward to avoid namespace collisions. For the `zlink.systems` domain, that becomes `Systems.Zlink.*`.
 [^nuget]: NuGet is `.NET`'s standard package manager, distributing and installing libraries as package ids.
 [^capability]: A **role** refers to a unit of functionality (e.g., server, subscriber, publisher) that a node (channel, spot, etc.) exposes externally.
 [^backpressure]: Backpressure is a mechanism that regulates flow so the sending side can't push messages in faster than the receiving side can process them.

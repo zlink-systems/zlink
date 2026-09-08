@@ -1,7 +1,7 @@
 # .NET Stream Connector
 
 This is the documentation entry point for the `.NET` STREAM client connector
-(`Systems.Zlink.Stream.Connector`). It targets desktop/server applications and
+(`Zlink.Stream.Connector`). It targets desktop/server applications and
 **natively-built game engines** (Unity, Godot C#).
 
 | Document | Content |

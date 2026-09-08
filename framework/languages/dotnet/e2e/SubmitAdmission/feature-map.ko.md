@@ -52,7 +52,7 @@ ZLINK_SUBMIT_ADMISSION_CORE_RUNTIME="$PWD/core/build/lib/libzlink.so" \
 Runner의 `all`은 기본 process matrix와 `SA-REG-01~02`를 실행한다. `ReceiverGate`를 사용하는
 `SA-E2E-02`, `SA-E2E-03`과 `SA-REG-04`는 개별 selector로 실행한다.
 미구현 selector를 직접 지정하면 성공으로 건너뛰지 않고 실패한다.
-Candidate mode에서는 `Systems.Zlink`를 지정한 NuGet 디렉터리에서만 resolve한다. Runner는 package와
+Candidate mode에서는 `Zlink`를 지정한 NuGet 디렉터리에서만 resolve한다. Runner는 package와
 NuGet cache의 hash가 같은지 확인하고, package에서 복원한 native library, server output과 지정한 Core
 runtime의 SHA-256·Build ID를 `candidate-package.evidence.log`에 기록한다.
 이 mode는 같은 process scenario를 package consumer로 다시 실행할 뿐, 아직 없는 counter나 barrier를

@@ -30,9 +30,9 @@ mkdir -p "$LOG_DIR"
 if [[ -n "$CANDIDATE_ROOT" ]]; then
   CANDIDATE_ROOT="$(realpath "$CANDIDATE_ROOT")"
   mapfile -t candidate_packages < <(find "$CANDIDATE_ROOT/nuget" -maxdepth 1 -type f \
-    -name 'Systems.Zlink.*.nupkg' -print | sort)
+    -name 'Zlink.*.nupkg' -print | sort)
   if [[ "${#candidate_packages[@]}" != 1 ]]; then
-    echo "Candidate mode requires exactly one Systems.Zlink package under $CANDIDATE_ROOT/nuget." >&2
+    echo "Candidate mode requires exactly one Zlink package under $CANDIDATE_ROOT/nuget." >&2
     exit 2
   fi
   CANDIDATE_PACKAGE="${candidate_packages[0]}"
@@ -56,7 +56,7 @@ output.write_text(
     "  </packageSources>\n"
     "  <packageSourceMapping>\n"
     "    <packageSource key=\"candidate\">\n"
-    "      <package pattern=\"Systems.Zlink\" />\n"
+    "      <package pattern=\"Zlink\" />\n"
     "    </packageSource>\n"
     "    <packageSource key=\"nuget.org\">\n"
     "      <package pattern=\"*\" />\n"
@@ -87,11 +87,11 @@ build_project() {
 record_candidate_evidence() {
   [[ -n "$CANDIDATE_ROOT" ]] || return 0
   local package_version package_cache metadata resolved_package native_entry native_name package_native output_native
-  package_version="$(unzip -p "$CANDIDATE_PACKAGE" 'Systems.Zlink.nuspec' \
+  package_version="$(unzip -p "$CANDIDATE_PACKAGE" 'Zlink.nuspec' \
     | sed -n 's:.*<version>\([^<]*\)</version>.*:\1:p')"
-  package_cache="$NUGET_PACKAGES/systems.zlink/$package_version"
+  package_cache="$NUGET_PACKAGES/zlink/$package_version"
   metadata="$package_cache/.nupkg.metadata"
-  resolved_package="$package_cache/systems.zlink.$package_version.nupkg"
+  resolved_package="$package_cache/zlink.$package_version.nupkg"
   native_entry="$(unzip -Z1 "$CANDIDATE_PACKAGE" \
     | grep -E '^runtimes/linux-x64/native/libzlink\.so\.[0-9]+\.[0-9]+\.[0-9]+$')"
   if [[ "$(printf '%s\n' "$native_entry" | grep -c .)" != 1 ]]; then
@@ -112,7 +112,7 @@ metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected = pathlib.Path(sys.argv[2]).resolve()
 actual = pathlib.Path(metadata["source"]).resolve()
 if actual != expected:
-    raise SystemExit(f"Systems.Zlink resolved from {actual}, expected {expected}")
+    raise SystemExit(f"Zlink resolved from {actual}, expected {expected}")
 PY
   [[ "$(sha256sum "$CANDIDATE_PACKAGE" | awk '{print $1}')" \
       == "$(sha256sum "$resolved_package" | awk '{print $1}')" ]]

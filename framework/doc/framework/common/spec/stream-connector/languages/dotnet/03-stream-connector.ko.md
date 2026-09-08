@@ -15,19 +15,19 @@
 
 ## 1. Package와 경계
 
-공개 package는 `Systems.Zlink.Stream.Connector`다. **ASP.NET Core host, Spot, actor, location
+공개 package는 `Zlink.Stream.Connector`다. **ASP.NET Core host, Spot, actor, location
 runtime에 의존하지 않는다.**
 
 정확한 member 목록과 배포 archive는 고정 snapshot이 소유한다.
 
 - [API snapshot](../../../../../../../languages/dotnet/contract/api/Systems.Zlink.Stream.Connector.api.txt)
-- [package snapshot](../../../../../../../languages/dotnet/contract/packages/Systems.Zlink.Stream.Connector.package.txt)
+- [package snapshot](../../../../../../../languages/dotnet/contract/packages/Zlink.Stream.Connector.package.txt)
 
 이 문서는 [snapshot](../../../server/00-foundation/02-glossary.ko.md#snapshot)의 member를 반복해 나열하지 않고 **표면의 구조와 `.NET` 고유 의미**를 고정한다.
 검증 절차는 [이 문서 §15](#15-회귀-테스트)가 소유한다.
 
 **담당 대상은 네이티브 빌드다**(데스크톱·서버, Unity, Godot C#). Unity 네이티브 빌드는 별도
-package 없이 같은 `Systems.Zlink.Stream.Connector` NuGet package를 사용한다. **웹(브라우저·WASM)
+package 없이 같은 `Zlink.Stream.Connector` NuGet package를 사용한다. **웹(브라우저·WASM)
 빌드는 담당하지 않는다**([공통 스펙 §2](../../32-stream-connector.ko.md)).
 
 ## 2. 진입점

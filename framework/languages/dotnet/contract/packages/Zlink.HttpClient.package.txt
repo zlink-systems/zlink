@@ -1,6 +1,6 @@
-package Systems.Zlink.HttpClient
+package Zlink.HttpClient
 entry README.md
-entry Systems.Zlink.HttpClient.nuspec
+entry Zlink.HttpClient.nuspec
 entry [Content_Types].xml
 entry _rels/.rels
 entry lib/net8.0/Systems.Zlink.HttpClient.dll
@@ -9,9 +9,9 @@ entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
 content-sha256 lib/net8.0/Systems.Zlink.HttpClient.xml=6093f040c8c54734dc1773a921d6386a6a824ccb237e1254dfcffc84aca9b856
 metadata authors=zlink
 metadata description=ZLink-style fluent HTTP client wrapping System.Net.Http for the ZLink framework.
-metadata id=Systems.Zlink.HttpClient
-metadata license=MPL-2.0 type=expression
-metadata licenseUrl=https://licenses.nuget.org/MPL-2.0
+metadata id=Zlink.HttpClient
+metadata license=Apache-2.0 type=expression
+metadata licenseUrl=https://licenses.nuget.org/Apache-2.0
 metadata projectUrl=https://github.com/zlink-systems/zlink
 metadata readme=README.md
 metadata version={VERSION}

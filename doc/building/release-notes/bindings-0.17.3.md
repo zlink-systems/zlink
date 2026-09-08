@@ -35,10 +35,10 @@ The Maven Central group is `systems.zlink`.
 ### .NET
 
 ```bash
-dotnet add package Systems.Zlink --version 0.17.3
+dotnet add package Zlink --version 0.17.3
 ```
 
-Install `Systems.Zlink` from nuget.org.
+Install `Zlink` from nuget.org.
 
 ### Node.js
 

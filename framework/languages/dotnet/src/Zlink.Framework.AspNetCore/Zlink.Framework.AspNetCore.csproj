@@ -3,7 +3,7 @@
         <IsPackable>true</IsPackable>
         <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
         <AssemblyName>Systems.Zlink.Framework.AspNetCore</AssemblyName>
-        <PackageId>Systems.Zlink.Framework.AspNetCore</PackageId>
+        <PackageId>Zlink.Framework.AspNetCore</PackageId>
         <RootNamespace>Zlink.Framework.AspNetCore</RootNamespace>
         <Description>ASP.NET Core integration layer for ZLink framework.</Description>
         <NoWarn>$(NoWarn);ZLINK1100</NoWarn>
@@ -23,7 +23,7 @@
         <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks"/>
         <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions"/>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions"/>
-        <PackageReference Include="Systems.Zlink.HttpClient">
+        <PackageReference Include="Zlink.HttpClient">
             <VersionOverride Condition="'$(ZLinkHttpClientDependencyVersion)' != ''">$(ZLinkHttpClientDependencyVersion)</VersionOverride>
         </PackageReference>
         <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />

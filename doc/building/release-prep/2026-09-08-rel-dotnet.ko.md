@@ -9,7 +9,7 @@
 
 ## 핵심 변경
 
-- 패키지 ID `Systems.Zlink`와 버전 `0.17.3`은 유지했다.
+- 패키지 버전 `0.17.3`은 유지하고, 후속 예약 접두어 대응에서 패키지 ID를 `Zlink`로 확정했다.
 - NuGet 작성자와 assembly 회사명을 `zlink`로 설정했다.
 - MPL-2.0 license expression, 프로젝트·저장소 URL, git 저장소 형식, 패키지 README를 설정했다.
 - `Microsoft.SourceLink.GitHub` 8.0.0을 build 전용 dependency로 추가하고 저장소 URL 공개 및 untracked source embedding을 설정했다.

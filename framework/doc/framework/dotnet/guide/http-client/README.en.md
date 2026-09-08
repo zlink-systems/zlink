@@ -1,6 +1,6 @@
 # ZLink HTTP Client For .NET — User Guide
 
-`Systems.Zlink.HttpClient` is a general-purpose HTTP client package for sending HTTP requests from .NET. It is used
+`Zlink.HttpClient` is a general-purpose HTTP client package for sending HTTP requests from .NET. It is used
 with a zlink-style fluent builder, and the public surface does not expose `System.Net.Http` handler
 types.
 

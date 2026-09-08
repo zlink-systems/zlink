@@ -666,7 +666,7 @@ Because the deployment form reflects that environment's constraint.
 | Unreal | `zlink-unreal-stream-connector` | source plugin |
 | Godot (C++) | `zlink-godot-stream-connector` | source GDExtension |
 | Cocos/Axmol | `zlink-axmol-connector` | source package |
-| `.NET` (desktop/server) | `Systems.Zlink.Stream.Connector` | NuGet |
+| `.NET` (desktop/server) | `Zlink.Stream.Connector` | NuGet |
 | **Unity (native)** | **Uses the `.NET` package above as is** (no dedicated package) | NuGet |
 | **Godot C#** | **Uses the `.NET` package above as is** | NuGet |
 | Java | `systems.zlink:zlink-stream-connector` | Maven |

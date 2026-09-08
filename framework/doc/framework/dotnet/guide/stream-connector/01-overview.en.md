@@ -28,7 +28,7 @@ build, see the [Node/TypeScript Connector Guide](../../../node/guide/stream-conn
 
 | Artifact | Distribution Format | Main Users |
 |--------|-----------|-------------|
-| `Systems.Zlink.Stream.Connector` | NuGet | Desktop/server applications, Unity (native), Godot C# |
+| `Zlink.Stream.Connector` | NuGet | Desktop/server applications, Unity (native), Godot C# |
 
 **Unity and Godot C# don't have a dedicated package.** They use the NuGet package above as-is. What
 engine integration needs isn't a separate API — it's just **where to pump dispatch.**

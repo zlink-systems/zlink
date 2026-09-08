@@ -27,7 +27,7 @@
 
 | 산출물 | 배포 형식 | 주요 사용자 |
 |--------|-----------|-------------|
-| `Systems.Zlink.Stream.Connector` | NuGet | 데스크톱·서버 애플리케이션, Unity(네이티브), Godot C# |
+| `Zlink.Stream.Connector` | NuGet | 데스크톱·서버 애플리케이션, Unity(네이티브), Godot C# |
 
 **Unity와 Godot C#은 전용 package를 두지 않는다.** 위 NuGet package를 그대로 사용한다.
 엔진 통합에 필요한 것은 별도 API가 아니라 **dispatch 펌프 위치**뿐이다.

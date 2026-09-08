@@ -39,9 +39,9 @@
     NuGet에서 받는다. 서버 하나를 만들 때 필요한 최소 조합은 다음 셋이다.
 
     ```bash
-    dotnet add package Systems.Zlink                 # core 메시징 엔진(.NET binding)
+    dotnet add package Zlink                         # core 메시징 엔진(.NET binding)
     dotnet add package Zlink.Framework                # 계약과 runtime
-    dotnet add package Systems.Zlink.Framework.AspNetCore # DI·hosted service 등록(AddZLinkFramework)
+    dotnet add package Zlink.Framework.AspNetCore # DI·hosted service 등록(AddZLinkFramework)
     ```
 
     필요할 때 더하는 패키지는 다음과 같다.
@@ -50,11 +50,11 @@
     | --- | --- |
     | `Zlink.Framework.Locations.Redis` | Redis location store로 자동 연결을 쓸 때([10-location](10-location.ko.md)) |
     | `Zlink.Framework.Codecs.Protobuf` · `.MessagePack` | 기본 JSON codec 대신 쓸 때([05-channel-messaging §7](05-channel-messaging.ko.md#7-직렬화-codec)) |
-    | `Systems.Zlink.Stream.Connector` | 외부 client(게임 client·모바일)를 만들 때([09-stream](09-stream.ko.md)) |
-    | `Systems.Zlink.HttpClient` | 서버에서 HTTP를 호출할 때([HTTP Client 가이드](../http-client/README.ko.md)) |
+    | `Zlink.Stream.Connector` | 외부 client(게임 client·모바일)를 만들 때([09-stream](09-stream.ko.md)) |
+    | `Zlink.HttpClient` | 서버에서 HTTP를 호출할 때([HTTP Client 가이드](../http-client/README.ko.md)) |
 
-    Framework 패키지는 **0.9**부터 배포한다. `Systems.Zlink`(core binding)와
-    `Systems.Zlink.HttpClient`는 각자의 버전 계열을 따르므로 세 패키지의 버전 번호가 서로 다르다.
+    Framework 패키지는 **0.9**부터 배포한다. `Zlink`(core binding package)와
+    `Zlink.HttpClient`는 각자의 버전 계열을 따르므로 세 패키지의 버전 번호가 서로 다르다.
     `net8.0` 이상이 필요하다.
 
     core·binding과 framework 패키지는 MPL-2.0으로 배포된다. 서비스를 만들어 파는 데 드는 비용은 없다

@@ -11,6 +11,6 @@
         <PackageReference Include="Google.Protobuf"/>
         <PackageReference Include="Grpc.Tools" PrivateAssets="all"/>
         <Protobuf Include="Contracts\bingo_messages.proto" GrpcServices="None"/>
-        <PackageReference Include="Systems.Zlink"/>
+        <PackageReference Include="Zlink"/>
     </ItemGroup>
 </Project>

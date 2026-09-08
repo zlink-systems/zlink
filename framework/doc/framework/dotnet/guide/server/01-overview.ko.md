@@ -615,13 +615,13 @@ location store 모델로 공개 기능을 사용한다. 정식 public API 계약
   attribute, exception, DI 확장 메서드)은 `ZLink` prefix(대문자 `L`)를 쓴다. 예:
   `IZLinkRouteClient`, `IZLinkMessageContext`, `[ZLinkRequest]`, `AddZLinkFramework`,
   `ZLinkFrameworkException`.
-- **단, client 측 Stream Connector 패키지**(`Systems.Zlink.Stream.Connector`)의
+- **단, client 측 Stream Connector 패키지**(`Zlink.Stream.Connector`)의
   타입은 `Zlink` prefix(소문자 `l`)를 쓴다. 예: `IZlinkStreamConnector`,
   `ZlinkStreamConnectorOptions`, `ZlinkStreamMessage`. 이는 connector가 서버
   framework 패키지에 의존하지 않는 독립 client 라이브러리이기 때문이다.
 - **하부 zlink core C API**는 `zlink_*` snake_case다.
-- NuGet package id와 namespace 단어는 역순 도메인 규칙을 따라
-  `Systems.Zlink.*`다(예: `Systems.Zlink.Framework`).
+- NuGet package id는 `Zlink` 또는 `Zlink.*`를 사용한다. namespace와 assembly
+  이름은 기존 값을 유지하며 package id와 별개다.
 
 > 정리하면: **서버 framework = `ZLink`, client connector = `Zlink`.** 한 코드에
 > 두 표기가 같이 보이면 오타가 아니라 위 규칙 때문이다.

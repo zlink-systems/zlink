@@ -32,7 +32,7 @@ zlink를 쓰는 방법**(설치, 관용 예제, 타입 매핑, 언어 고유 규
 
 | 언어 | 사용 가이드 | 생성 API 레퍼런스 | 패키지 |
 |------|------------|------------------|--------|
-| .NET | [dotnet/](dotnet/index.ko.md) | docfx | `Systems.Zlink` |
+| .NET | [dotnet/](dotnet/index.ko.md) | docfx | `Zlink` |
 | C++ | [cpp/](cpp/index.ko.md) | doxygen | `zlink::cpp` (CMake) |
 | Java | [java/](java/index.ko.md) | javadoc | `systems.zlink:zlink` |
 | Node | [node/](node/index.ko.md) | typedoc | `@zlink-systems/zlink` |

@@ -15,7 +15,7 @@
         <ProjectReference Include="../../../../src/Zlink.Framework/Zlink.Framework.csproj"/>
         <ProjectReference Include="../../../../src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj"/>
         <ProjectReference Include="../../../../src/Zlink.Framework.Locations.Redis/Zlink.Framework.Locations.Redis.csproj"/>
-        <PackageReference Include="Systems.Zlink.HttpClient"/>
-        <PackageReference Include="Systems.Zlink"/>
+        <PackageReference Include="Zlink.HttpClient"/>
+        <PackageReference Include="Zlink"/>
     </ItemGroup>
 </Project>

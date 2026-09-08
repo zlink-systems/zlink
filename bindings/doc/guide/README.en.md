@@ -34,7 +34,7 @@ release package, follow [building bindings against a local Core](local-core-runt
 
 | Language | Usage guide | Generated API reference | Package |
 |------|------------|------------------|--------|
-| .NET | [dotnet/](dotnet/index.en.md) | docfx | `Systems.Zlink` |
+| .NET | [dotnet/](dotnet/index.en.md) | docfx | `Zlink` |
 | C++ | [cpp/](cpp/index.en.md) | doxygen | `zlink::cpp` (CMake) |
 | Java | [java/](java/index.en.md) | javadoc | `systems.zlink:zlink` |
 | Node | [node/](node/index.en.md) | typedoc | `@zlink-systems/zlink` |

@@ -18,7 +18,7 @@ per-feature documents in the
 |---|---|
 | `Zlink.Framework` | Server application contract including handler, context, call, and [RouteMesh](../../../00-foundation/02-glossary.en.md#routemesh), Spot, Actor, STREAM session, location runtime |
 | `Zlink.Framework.Contracts` | Codec/error contract Server and HTTP client share |
-| `Systems.Zlink.Framework.AspNetCore` | `IServiceCollection` registration and host lifecycle wiring |
+| `Zlink.Framework.AspNetCore` | `IServiceCollection` registration and host lifecycle wiring |
 | `Zlink.Framework.Codecs.Protobuf` | Optional Protobuf codec extension |
 | `Zlink.Framework.Codecs.MessagePack` | Optional MessagePack codec extension |
 | `Zlink.Framework.Locations.Redis` | Redis location store extension |

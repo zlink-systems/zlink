@@ -59,7 +59,7 @@ verify with a unit test, so they don't belong in E2E.
 
 The two libraries used for verification don't overlap in role.
 
-| | `Systems.Zlink.HttpClient` | `Systems.Zlink.Stream.Connector` |
+| | `Zlink.HttpClient` | `Zlink.Stream.Connector` |
 | --- | --- | --- |
 | What it verifies | The management/gateway HTTP API | A STREAM server node |
 | When to use it | Things that **finish with a single request-response exchange**, like creating a room, querying, or admin commands | Things that require a live connection, including confirmation of **server-initiated pushes** |

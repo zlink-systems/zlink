@@ -18,14 +18,14 @@
 
 ## 1. Package And Boundary
 
-The public package is `Systems.Zlink.Stream.Connector`. **It doesn't
+The public package is `Zlink.Stream.Connector`. **It doesn't
 depend on the ASP.NET Core host, Spot, actor, or location runtime.**
 
 The exact member list and deployment archive is owned by the fixed
 snapshot.
 
 - [API snapshot](../../../../../../../languages/dotnet/contract/api/Systems.Zlink.Stream.Connector.api.txt)
-- [package snapshot](../../../../../../../languages/dotnet/contract/packages/Systems.Zlink.Stream.Connector.package.txt)
+- [package snapshot](../../../../../../../languages/dotnet/contract/packages/Zlink.Stream.Connector.package.txt)
 
 This document doesn't repeat listing the
 [snapshot](../../../server/00-foundation/02-glossary.en.md#snapshot)'s member — it fixes the
@@ -34,7 +34,7 @@ procedure is owned by [this document §15](#15-regression-test).
 
 **The target it's responsible for is a native build** (desktop/server,
 Unity, Godot C#). Unity's native build uses the same
-`Systems.Zlink.Stream.Connector` NuGet package with no separate
+`Zlink.Stream.Connector` NuGet package with no separate
 package. **It isn't responsible for a web (browser/WASM) build**
 ([Common Spec §2](../../32-stream-connector.en.md)).
 

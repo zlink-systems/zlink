@@ -98,13 +98,12 @@ Sample과 E2E의 설정 파일, 환경 변수 금지와 Options binding 기준�
     `IZLinkSession`, `IZLinkActorContext`, `IZLinkBoundSession` 같은 형태다.
     즉 framework가 사용자에게 노출하는 모든
     interface, record, enum, exception 은 `ZLink`를 쓴다.
-  - 패키지 id 와 namespace 단어(`Systems.Zlink.*`)는 native binding 규칙을
-    따른다. 타입 이름의 casing 의도와 namespace 이름의 casing 의도는 서로
-    별개다.
-- `zlink.systems` 도메인을 기반으로 한 package 와 namespace는 역순 도메인
-  규칙[^reverse-dns]을 따른다. `.NET`의 NuGet[^nuget] package id 와 namespace는
-  `Systems.Zlink.*`를 사용한다. 예를 들어 framework는
-  `Systems.Zlink.Framework`, Stream Connector는 `Systems.Zlink.Stream.Connector`가 된다.
+  - NuGet package id는 `Zlink` 또는 `Zlink.*`를 사용한다. namespace와 assembly
+    이름은 package id와 별개로 유지한다. 타입 이름과 namespace 이름의 casing
+    의도도 서로 별개다.
+- 기존 namespace와 assembly 이름은 유지한다. native binding의 `Systems.Zlink`와
+  Stream Connector의 `Systems.Zlink.Stream.Connector`도 이에 해당한다. 대응하는
+  NuGet package id는 각각 `Zlink`와 `Zlink.Stream.Connector`다.
 - 수동 연결은 MeshNode의 `PeerConnections`와 fanout subscriber 연결처럼 기능별
   public 표면으로 설명한다. 같은 MeshNode에서는 location store 기반 자동 연결과
   manual peer 연결을 섞지 않는다.
@@ -255,7 +254,6 @@ guide가 맡고, sample 문서는 공통 정본 시나리오의 실제 등록·�
 [^release-gate]: release gate 는 새 버전을 배포하기 전에 반드시 통과해야 하는 검증 단계(테스트, 빌드, 점검)의 묶음을 가리킨다.
 [^raw-transport]: raw transport 는 framework 추상화를 거치지 않은 저수준 소켓 계층의 송수신을 뜻한다.
 [^wire-transport]: wire / transport 레벨은 실제 네트워크 위에서 바이트가 흘러가는 계층을 가리키며, 그 위에 framework 의 추상화가 쌓인다.
-[^reverse-dns]: 역순 도메인 규칙(reverse-DNS) 은 도메인 이름을 거꾸로 뒤집어 namespace 충돌을 피하는 관례다. `zlink.systems` 도메인이면 `Systems.Zlink.*` 가 된다.
 [^nuget]: NuGet 은 `.NET` 의 표준 패키지 매니저로, 라이브러리를 package id 단위로 배포·설치한다.
 [^capability]: **역할**은 어떤 노드(channel, spot 등)가 외부에 노출하는 기능 단위(예: server, subscriber, publisher)를 가리킨다.
 [^backpressure]: backpressure 는 송신 측이 수신 측의 처리 속도를 넘어 메시지를 밀어 넣지 못하도록 흐름을 조절하는 메커니즘이다.

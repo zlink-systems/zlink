@@ -1,7 +1,7 @@
 # .NET Stream Connector Guide
 
 This is the official user guide for the `.NET` STREAM client connector
-(`Systems.Zlink.Stream.Connector`). It targets desktop/server applications and **natively-built
+(`Zlink.Stream.Connector`). It targets desktop/server applications and **natively-built
 game engines** (Unity, Godot C#).
 
 ## Table Of Contents

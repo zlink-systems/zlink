@@ -9,8 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageVersion Include="Systems.Zlink" Version="$(ZLinkBindingsPackageVersion)" />
-    <PackageVersion Include="Systems.Zlink.HttpClient" Version="$(ZLinkHttpClientPackageVersion)" />
+    <PackageVersion Include="Zlink" Version="$(ZLinkBindingsPackageVersion)" />
+    <PackageVersion Include="Zlink.HttpClient" Version="$(ZLinkHttpClientPackageVersion)" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="8.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="8.0.1" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />

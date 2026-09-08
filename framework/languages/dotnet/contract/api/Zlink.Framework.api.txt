@@ -298,6 +298,7 @@ assembly Zlink.Framework
     property System.TimeSpan DefaultRequestTimeout { get; set; } [nullability=read:not-null,write:not-null]
     property System.TimeSpan DefaultSocketSendTimeout { get; set; } [nullability=read:not-null,write:not-null]
     property System.String? MaintenanceWave { get; set; } [nullability=read:nullable,write:nullable]
+    property System.TimeSpan SessionReplacementCallbackTimeout { get; set; } [nullability=read:not-null,write:not-null]
     property Zlink.Framework.Contracts.Workers.IZLinkWorkerOptions Worker { get; } [nullability=read:not-null,write:unknown]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkClientServerChannelRoleBuilder AddClientServerChannel(System.String channelName [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkFanoutChannelBuilder AddFanoutChannel(System.String channelName [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
@@ -707,18 +708,19 @@ assembly Zlink.Framework
     field const Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRuntimeState Serving = 1 [nullability=read:not-null,write:not-null]
     field const Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRuntimeState Stopped = 5 [nullability=read:not-null,write:not-null]
   type sealed-class Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRuntimeStatus : System.IEquatable<Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRuntimeStatus>
-    ctor ZLinkFrameworkRuntimeStatus(Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRuntimeState State [nullability=read:not-null,write:not-null], System.Boolean IsReady [nullability=read:not-null,write:not-null], System.Boolean AcceptingWork [nullability=read:not-null,write:not-null], System.Nullable<System.DateTimeOffset> Deadline [nullability=read:nullable,write:nullable], System.Nullable<Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRelocationResult> RelocationResult [nullability=read:nullable,write:nullable], System.Nullable<Zlink.Framework.Contracts.Configuration.ZLinkFrameworkTerminationResult> TerminationResult [nullability=read:nullable,write:nullable], System.UInt64 Sequence [nullability=read:not-null,write:not-null], System.DateTimeOffset ObservedAt [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Configuration.ZLinkHostCapacityStatus Capacity = default [nullability=read:not-null,write:not-null])
+    ctor ZLinkFrameworkRuntimeStatus(Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRuntimeState State [nullability=read:not-null,write:not-null], System.Boolean IsReady [nullability=read:not-null,write:not-null], System.Boolean AcceptingWork [nullability=read:not-null,write:not-null], System.Nullable<System.DateTimeOffset> Deadline [nullability=read:nullable,write:nullable], System.Nullable<Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRelocationResult> RelocationResult [nullability=read:nullable,write:nullable], System.Nullable<Zlink.Framework.Contracts.Configuration.ZLinkFrameworkTerminationResult> TerminationResult [nullability=read:nullable,write:nullable], System.UInt64 Sequence [nullability=read:not-null,write:not-null], System.DateTimeOffset ObservedAt [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Configuration.ZLinkHostCapacityStatus Capacity = default [nullability=read:not-null,write:not-null], System.Boolean SafeToShutdown = true [nullability=read:not-null,write:not-null])
     property System.Boolean AcceptingWork { get; init; } [nullability=read:not-null,write:not-null]
     property Zlink.Framework.Contracts.Configuration.ZLinkHostCapacityStatus Capacity { get; init; } [nullability=read:not-null,write:not-null]
     property System.Nullable<System.DateTimeOffset> Deadline { get; init; } [nullability=read:nullable,write:nullable]
     property System.Boolean IsReady { get; init; } [nullability=read:not-null,write:not-null]
     property System.DateTimeOffset ObservedAt { get; init; } [nullability=read:not-null,write:not-null]
     property System.Nullable<Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRelocationResult> RelocationResult { get; init; } [nullability=read:nullable,write:nullable]
+    property System.Boolean SafeToShutdown { get; init; } [nullability=read:not-null,write:not-null]
     property System.UInt64 Sequence { get; init; } [nullability=read:not-null,write:not-null]
     property Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRuntimeState State { get; init; } [nullability=read:not-null,write:not-null]
     property System.Nullable<Zlink.Framework.Contracts.Configuration.ZLinkFrameworkTerminationResult> TerminationResult { get; init; } [nullability=read:nullable,write:nullable]
     method Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRuntimeStatus <Clone>$() [return=read:not-null,write:not-null]
-    method System.Void Deconstruct(out Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRuntimeState State [nullability=read:not-null,write:not-null], out System.Boolean IsReady [nullability=read:not-null,write:not-null], out System.Boolean AcceptingWork [nullability=read:not-null,write:not-null], out System.Nullable<System.DateTimeOffset> Deadline [nullability=read:nullable,write:nullable], out System.Nullable<Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRelocationResult> RelocationResult [nullability=read:nullable,write:nullable], out System.Nullable<Zlink.Framework.Contracts.Configuration.ZLinkFrameworkTerminationResult> TerminationResult [nullability=read:nullable,write:nullable], out System.UInt64 Sequence [nullability=read:not-null,write:not-null], out System.DateTimeOffset ObservedAt [nullability=read:not-null,write:not-null], out Zlink.Framework.Contracts.Configuration.ZLinkHostCapacityStatus Capacity [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method System.Void Deconstruct(out Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRuntimeState State [nullability=read:not-null,write:not-null], out System.Boolean IsReady [nullability=read:not-null,write:not-null], out System.Boolean AcceptingWork [nullability=read:not-null,write:not-null], out System.Nullable<System.DateTimeOffset> Deadline [nullability=read:nullable,write:nullable], out System.Nullable<Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRelocationResult> RelocationResult [nullability=read:nullable,write:nullable], out System.Nullable<Zlink.Framework.Contracts.Configuration.ZLinkFrameworkTerminationResult> TerminationResult [nullability=read:nullable,write:nullable], out System.UInt64 Sequence [nullability=read:not-null,write:not-null], out System.DateTimeOffset ObservedAt [nullability=read:not-null,write:not-null], out Zlink.Framework.Contracts.Configuration.ZLinkHostCapacityStatus Capacity [nullability=read:not-null,write:not-null], out System.Boolean SafeToShutdown [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method override System.Boolean Equals(System.Object? obj [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
     method virtual System.Boolean Equals(Zlink.Framework.Contracts.Configuration.ZLinkFrameworkRuntimeStatus? other [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
     method override System.Int32 GetHashCode() [return=read:not-null,write:not-null]
@@ -843,8 +845,8 @@ assembly Zlink.Framework
     method static System.Boolean op_Equality(Zlink.Framework.Contracts.Configuration.ZLinkRouteMeshStatus? left [nullability=read:nullable,write:nullable], Zlink.Framework.Contracts.Configuration.ZLinkRouteMeshStatus? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
     method static System.Boolean op_Inequality(Zlink.Framework.Contracts.Configuration.ZLinkRouteMeshStatus? left [nullability=read:nullable,write:nullable], Zlink.Framework.Contracts.Configuration.ZLinkRouteMeshStatus? right [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
   type enum Zlink.Framework.Contracts.Configuration.ZLinkSpotRelocationCoordinationMode : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-    field const Zlink.Framework.Contracts.Configuration.ZLinkSpotRelocationCoordinationMode FrameworkManaged = 0 [nullability=read:not-null,write:not-null]
     field const Zlink.Framework.Contracts.Configuration.ZLinkSpotRelocationCoordinationMode ApplicationSignaled = 1 [nullability=read:not-null,write:not-null]
+    field const Zlink.Framework.Contracts.Configuration.ZLinkSpotRelocationCoordinationMode FrameworkManaged = 0 [nullability=read:not-null,write:not-null]
   type enum Zlink.Framework.Contracts.Configuration.ZLinkTopologyReason : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
     field const Zlink.Framework.Contracts.Configuration.ZLinkTopologyReason CapacityExceeded = 4 [nullability=read:not-null,write:not-null]
     field const Zlink.Framework.Contracts.Configuration.ZLinkTopologyReason Draining = 5 [nullability=read:not-null,write:not-null]
@@ -869,6 +871,7 @@ assembly Zlink.Framework
     method abstract Zlink.Framework.Contracts.Dispatch.IZLinkDiagnosticsOptions SetSampleRate(System.Double rate [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Dispatch.IZLinkDiagnosticsRuntime
     property Zlink.Framework.Contracts.Dispatch.ZLinkDiagnosticsLevel Level { get; set; } [nullability=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.Task SetLevelAsync(Zlink.Framework.Contracts.Dispatch.ZLinkDiagnosticsLevel level [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Dispatch.IZLinkDispatchOptions
     property Zlink.Framework.Contracts.Dispatch.IZLinkDiagnosticsOptions Diagnostics { get; } [nullability=read:not-null,write:unknown]
     property Zlink.Framework.Contracts.Dispatch.IZLinkUnhandledDispatchOptions Unhandled { get; } [nullability=read:not-null,write:unknown]
@@ -1039,6 +1042,10 @@ assembly Zlink.Framework
     property System.TimeSpan OwnerLeaseRenewTimeout { get; set; } [nullability=read:not-null,write:not-null]
     property System.TimeSpan OwnerLeaseTtl { get; set; } [nullability=read:not-null,write:not-null]
     property System.TimeSpan PollingInterval { get; set; } [nullability=read:not-null,write:not-null]
+    property System.TimeSpan RelocationCutoverWaitTimeout { get; set; } [nullability=read:not-null,write:not-null]
+    property System.Int64 RelocationInFlightPayloadBudget { get; set; } [nullability=read:not-null,write:not-null]
+    property System.Int64 RelocationNodeInFlightPayloadBudget { get; set; } [nullability=read:not-null,write:not-null]
+    property System.Int64 RelocationPayloadChunkLimit { get; set; } [nullability=read:not-null,write:not-null]
     property System.TimeSpan RouteCacheMaxAge { get; set; } [nullability=read:not-null,write:not-null]
     property System.TimeSpan SessionRelocationSealTimeout { get; set; } [nullability=read:not-null,write:not-null]
     property System.TimeSpan StoreFailureGrace { get; set; } [nullability=read:not-null,write:not-null]

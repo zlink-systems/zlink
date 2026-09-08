@@ -14,6 +14,6 @@
         <PackageReference Include="Microsoft.Extensions.Configuration.Binder"/>
         <ProjectReference Include="..\..\Shared\DeliveryDispatch.Shared.csproj"/>
         <ProjectReference Include="..\..\..\..\src\Zlink.Framework\Zlink.Framework.csproj"/>
-        <PackageReference Include="Systems.Zlink"/>
+        <PackageReference Include="Zlink"/>
     </ItemGroup>
 </Project>

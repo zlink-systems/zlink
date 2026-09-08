@@ -102,7 +102,7 @@ Awaitable을 쓰지 않는 호출자를 위한 callback
   `raw_http_response_t`, `coroutine_execute_scheduler_t`,
   `coroutine_resume_scheduler_t`, `framework_resume_scheduler_t`.
   (`body_stream_provider_t`는 `request_builder_t` 안의 중첩 typedef이며 최상위 심볼이 아니다)
-- **dotnet** `Systems.Zlink.HttpClient`: `ZLinkHttpClient`, `ZLinkHttpClientBuilder`,
+- **dotnet** `Zlink.HttpClient`: `ZLinkHttpClient`, `ZLinkHttpClientBuilder`,
   `ZLinkHttpRequestBuilder`, `ZLinkHttpMethod`, `RawHttpResponse`,
   `HttpResponse<T>`.
 - **java** `systems.zlink.httpclient`: `ZLinkHttpClient`,

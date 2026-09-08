@@ -6,21 +6,21 @@ title: ".NET 바인딩 가이드"
 [가이드 목록](../README.ko.md) | [이전: 개요](../README.ko.md) | [다음: C++](../cpp/index.ko.md)
 <!-- bindings-nav:end -->
 
-# .NET 바인딩 가이드 (`Systems.Zlink`)
+# .NET 바인딩 가이드(`Zlink` package)
 
 > **이 장의 계약 소유 문서** — [.NET bindings 스펙](../../spec/dotnet/README.ko.md)이
 > 다룬다. 이 장은 그 계약을 실제 샘플 코드로 보여준다.
 
-**.NET(`Systems.Zlink`)에서 zlink를 사용하는 방법**을 설치·핵심 타입·소유권·에러 처리·배포까지 한 챕터로 정리합니다. 메시징 개념(소켓 패턴, 서비스, 운영)의 깊은 설명은 [더 보기](#더-보기)의 코어 가이드를 참고하세요.
+**.NET에서 `Zlink` package를 사용하는 방법**을 설치·핵심 타입·소유권·에러 처리·배포까지 한 챕터로 정리합니다. 메시징 개념(소켓 패턴, 서비스, 운영)의 깊은 설명은 [더 보기](#더-보기)의 코어 가이드를 참고하세요.
 
 ---
 
 ## 설치
 
-단일 NuGet 패키지 **`Systems.Zlink`** 로 제공되며 네이티브 코어가 함께 번들됩니다.
+단일 NuGet package **`Zlink`**로 제공되며 native Core가 함께 포함됩니다.
 
 ```bash
-dotnet add package Systems.Zlink
+dotnet add package Zlink
 ```
 
 - **.NET 8.0** 이상 (`net8.0`).
@@ -273,7 +273,7 @@ C 코어(`zlink.h`)에서 넘어오거나 다른 언어 바인딩과 비교할 �
 
 ## 네이티브 라이브러리 / 배포
 
-`Systems.Zlink`는 네이티브 코어를 `runtimes/<rid>/native` 아래 번들하므로 일반
+`Zlink`는 native Core를 `runtimes/<rid>/native` 아래 포함하므로 일반
 빌드에서는 추가 설정이 필요 없습니다. 환경변수 `ZLINK_LIBRARY_PATH`로 로드 경로를
 지정할 수 있습니다. **self-contained**/single-file/**Native AOT** 게시 시에는 대상
 RID 자산이 출력에 포함되는지 확인하세요 (`dotnet publish -r <rid>`).

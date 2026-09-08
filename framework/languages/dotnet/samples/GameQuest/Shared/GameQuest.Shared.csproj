@@ -8,6 +8,6 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Systems.Zlink"/>
+        <PackageReference Include="Zlink"/>
     </ItemGroup>
 </Project>

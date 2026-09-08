@@ -11,7 +11,7 @@
     <ItemGroup>
         <ProjectReference Include="../Shared/GameQuest.Shared.csproj"/>
         <ProjectReference Include="../../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>
-        <PackageReference Include="Systems.Zlink.HttpClient"/>
+        <PackageReference Include="Zlink.HttpClient"/>
         <ProjectReference Include="../../../src/Zlink.Framework/Zlink.Framework.csproj"/>
         <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
         <PackageReference Include="Microsoft.Extensions.Configuration.Json" />

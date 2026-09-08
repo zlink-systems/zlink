@@ -88,7 +88,7 @@ foreach ($item in $Language) {
         "-p:ZLinkCoreVersion=$coreVersion",
         "-p:ZLinkCoreProvenancePath=$manifest"
       )
-      $package = Join-Path $out "Systems.Zlink.$bindingVersion.nupkg"
+      $package = Join-Path $out "Zlink.$bindingVersion.nupkg"
       if (-not (Test-Path -LiteralPath $package)) { throw "NuGet package is missing: $package" }
     }
     "java" {

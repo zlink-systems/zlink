@@ -2418,7 +2418,7 @@
           "documentPattern": "/02-configuration-host\\.ko\\.md$",
           "packages": [
             "Zlink.Framework",
-            "Systems.Zlink.Framework.AspNetCore"
+            "Zlink.Framework.AspNetCore"
           ]
         }
       ],

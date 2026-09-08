@@ -13,7 +13,7 @@
 
 ## 1. Purpose
 
-`Systems.Zlink.HttpClient` is a separate client-side deliverable for sending an
+`Zlink.HttpClient` is a separate client-side deliverable for sending an
 HTTP request in .NET. It's not a JSON-only client — it's a
 general-purpose HTTP client that absorbs `System.Net.Http`'s low-level
 configuration in zlink fluent builder style. The typed path
@@ -50,7 +50,7 @@ the compression package.
 | Shared error/codec contract | `src/Zlink.Framework.Contracts/Codecs`, `Errors` | public dependency |
 | Runtime implementation | `src/Zlink.HttpClient/Runtime/*` | internal |
 | Regression test | `tests/Zlink.HttpClient.UnitTests/*` | private |
-| Project | `Systems.Zlink.HttpClient` | public package |
+| Project | `Zlink.HttpClient` | public package |
 
 The public surface doesn't expose `System.Net.Http` types such as
 `SocketsHttpHandler`, `HttpClientHandler`, `HttpRequestMessage`,

@@ -15,7 +15,7 @@ ChannelName membership, manual peer와 runtime option의 정확한 시그니처�
 |---|---|
 | `Zlink.Framework` | handler, context, call을 포함한 Server application contract와 [RouteMesh](../../../00-foundation/02-glossary.ko.md#routemesh), Spot, Actor, STREAM session, location runtime |
 | `Zlink.Framework.Contracts` | Server와 HTTP client가 함께 사용하는 codec·오류 contract |
-| `Systems.Zlink.Framework.AspNetCore` | `IServiceCollection` 등록과 host lifecycle 연결 |
+| `Zlink.Framework.AspNetCore` | `IServiceCollection` 등록과 host lifecycle 연결 |
 | `Zlink.Framework.Codecs.Protobuf` | 선택 Protobuf codec extension |
 | `Zlink.Framework.Codecs.MessagePack` | 선택 MessagePack codec extension |
 | `Zlink.Framework.Locations.Redis` | Redis location store extension |

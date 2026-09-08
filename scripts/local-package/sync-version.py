@@ -405,7 +405,7 @@ def synchronize(write: bool) -> tuple[str, str, list[Path]]:
 
     sync.regex(
         "scripts/local-package/dotnet/fixtures/public-consumer/PublicConsumer.csproj",
-        rf'(<PackageReference Include="Systems\.Zlink" Version="){SEMVER}(" />)',
+        rf'(<PackageReference Include="Zlink" Version="){SEMVER}(" />)',
         rf"\g<1>{binding_version}\2",
         1,
     )
@@ -454,11 +454,11 @@ def synchronize(write: bool) -> tuple[str, str, list[Path]]:
     )
     for relative in (
         "framework/languages/dotnet/contract/packages/Zlink.Framework.package.txt",
-        "framework/languages/dotnet/contract/packages/Systems.Zlink.Framework.AspNetCore.package.txt",
+        "framework/languages/dotnet/contract/packages/Zlink.Framework.AspNetCore.package.txt",
     ):
         sync.regex(
             relative,
-            rf"(id=Systems\.Zlink version=){SEMVER}",
+            rf"(id=Zlink version=){SEMVER}",
             rf"\g<1>{binding_version}",
             1,
         )

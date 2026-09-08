@@ -1,6 +1,6 @@
-# Systems.Zlink
+# Zlink
 
-Systems.Zlink is the .NET binding package for zlink.
+Zlink is the .NET binding package for zlink.
 
 The package exposes the public API under the `Systems.Zlink` namespace and
 ships the native zlink runtime files needed by supported platforms.

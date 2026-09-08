@@ -85,7 +85,7 @@ handler 단위 테스트를 아무리 촘촘히 작성해도 확인되지 않는
 
 검증에 쓰는 라이브러리는 역할이 겹치지 않는다.
 
-| | `Systems.Zlink.HttpClient` | `Systems.Zlink.Stream.Connector` |
+| | `Zlink.HttpClient` | `Zlink.Stream.Connector` |
 | --- | --- | --- |
 | 검증 대상 | 관리·관문 HTTP API | STREAM server node |
 | 사용하는 경우 | 방 생성, 조회, 관리 명령처럼 **요청 한 번에 결과가 끝나는** 것 | 연결을 유지한 채 **server가 먼저 보내는 push**까지 확인해야 하는 것 |

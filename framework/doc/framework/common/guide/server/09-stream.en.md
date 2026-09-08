@@ -9,7 +9,7 @@
 
 STREAM is a connection-oriented, bidirectional message channel between an external client and
 the Framework server. The server implements session lifecycle and packet dispatch. The
-client uses the independent package `Systems.Zlink.Stream.Connector`.
+client uses the independent package `Zlink.Stream.Connector`.
 
 ## 1. Registering a Server Node
 

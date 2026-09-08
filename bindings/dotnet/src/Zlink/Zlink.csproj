@@ -6,7 +6,7 @@
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <Version>0.17.3</Version>
         <AssemblyName>Systems.Zlink</AssemblyName>
-        <PackageId>Systems.Zlink</PackageId>
+        <PackageId>Zlink</PackageId>
         <RootNamespace>Systems.Zlink</RootNamespace>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <Description>zlink .NET bindings - high-performance async messaging library</Description>

@@ -99,7 +99,7 @@ release line에 맞춰 `libzlink.so.0`으로 생성한다. 외부 dependency의 
 
 - C: `.artifacts/wsl/c/zlink-c-<BINDINGS_VERSION>.tar.gz`
 - C++: `.artifacts/wsl/install/zlink-cpp/<BINDINGS_VERSION>/`
-- .NET: `.artifacts/wsl/nuget/Systems.Zlink.<BINDINGS_VERSION>.nupkg`
+- .NET: `.artifacts/wsl/nuget/Zlink.<BINDINGS_VERSION>.nupkg`
 - Go: `.artifacts/wsl/go/zlink-go-<BINDINGS_VERSION>.tar.gz`
 - Java: `.artifacts/wsl/maven/systems/zlink/zlink/<BINDINGS_VERSION>/`
 - Node.js: `.artifacts/wsl/npm/zlink-systems-zlink-<BINDINGS_VERSION>.tgz`

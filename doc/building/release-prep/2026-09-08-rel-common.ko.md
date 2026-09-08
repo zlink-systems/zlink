@@ -49,9 +49,9 @@ C++ vcpkg manifest 3개에는 binding package 의존 선언이 없고 framework 
 - contract rename:
   - `contract/api/Zlink.HttpClient.api.txt` → `contract/api/Systems.Zlink.HttpClient.api.txt`
   - `contract/api/Zlink.Framework.AspNetCore.api.txt` → `contract/api/Systems.Zlink.Framework.AspNetCore.api.txt`
-  - `contract/packages/Zlink.HttpClient.package.txt` → `contract/packages/Systems.Zlink.HttpClient.package.txt`
-  - `contract/packages/Zlink.Framework.AspNetCore.package.txt` → `contract/packages/Systems.Zlink.Framework.AspNetCore.package.txt`
-  - `contract/packages/Systems.Zlink.Stream.Connector.package.txt`,
+  - `contract/packages/Zlink.HttpClient.package.txt`
+  - `contract/packages/Zlink.Framework.AspNetCore.package.txt`
+  - `contract/packages/Zlink.Stream.Connector.package.txt`,
     `Zlink.Framework.package.txt`, `Zlink.Framework.Contracts.package.txt` 갱신
 - package 이름 문서: `framework/doc/framework/**`의 getting-started, HTTP client,
   .NET interface, E2E package 표 한·영 문서와 `framework/doc/contract-inventory/` JSON 2개
@@ -62,10 +62,11 @@ C++ vcpkg manifest 3개에는 binding package 의존 선언이 없고 framework 
   binding/Core pin을 0.17.3으로 맞췄다. 생성된 bench log는 건드리지 않았다.
 - Node workspace의 `@zlink-systems/zlink`는 local tgz 대신 registry exact version `0.17.3`을
   사용한다. package verifier도 exact registry version을 pack할 수 있게 했다.
-- NuGet ID/assembly를 `Systems.Zlink.HttpClient`, `Systems.Zlink.Framework.AspNetCore`로 바꿨다.
+- assembly는 `Systems.Zlink.HttpClient`, `Systems.Zlink.Framework.AspNetCore`로 유지하고,
+  NuGet ID는 후속 예약 접두어 대응에서 각각 `Zlink.HttpClient`, `Zlink.Framework.AspNetCore`로 확정했다.
   `RootNamespace`와 C# namespace, project 경로는 유지했다. 변경된 AssemblyName에 맞춰
   `InternalsVisibleTo`만 함께 고쳤다.
-- 위 두 package와 `Systems.Zlink.Stream.Connector`에 Authors `zlink`, MPL-2.0,
+- 위 두 package와 `Zlink.Stream.Connector`에 Authors `zlink`, MPL-2.0,
   RepositoryUrl/ProjectUrl, README, SourceLink, nupkg+snupkg metadata를 넣었다.
 - Java framework publication에 sources/javadoc, MPL-2.0 POM, in-memory GPG signing과 Central
   staging bundle upload를 추가했다. 공개 secret은 확정된 네 이름만 참조한다.
@@ -200,8 +201,8 @@ diff --git a/.github/workflows/release-dotnet.yml b/.github/workflows/release-do
   local `resolved: file:...tgz` 형태를 아직 요구한다. rel-common 담당 범위 밖이라 수정하지
   않았으며, 감독자가 새 snapshot 이름과 registry URL 형태를 반영해야 `--verify-versions`가
   다시 통과한다.
-- 요청된 .NET 3개 package 가운데 `Systems.Zlink.HttpClient`는 `Zlink.Framework.Contracts`에,
-  `Systems.Zlink.Framework.AspNetCore`는 `Zlink.Framework`에 의존한다. 현재 3개만 게시하면 이
+- 요청된 .NET 3개 package 가운데 `Zlink.HttpClient`는 `Zlink.Framework.Contracts`에,
+  `Zlink.Framework.AspNetCore`는 `Zlink.Framework`에 의존한다. 현재 3개만 게시하면 이
   transitive package가 nuget.org에 없을 수 있으므로, 기존 packable dependency package도 함께
   공개할지 아니면 세 package에 병합할지 감독자 결정이 필요하다.
 - Node `@zlink-systems/nestjs`는 repository에서 `private`인

@@ -6,12 +6,12 @@ title: ".NET Binding Guide"
 [Guide list](../README.en.md) | [Previous: Overview](../README.en.md) | [Next: C++](../cpp/index.en.md)
 <!-- bindings-nav:end -->
 
-# .NET Binding Guide (`Systems.Zlink`)
+# .NET Binding Guide (`Zlink` package)
 
 > **Contract-owning document for this chapter** — the [.NET bindings spec](../../spec/dotnet/README.en.md)
 > covers it. This chapter shows that contract as working sample code.
 
-Covers **how to use zlink in .NET (`Systems.Zlink`)** in one chapter — installation,
+Covers **how to use the `Zlink` package in .NET** in one chapter — installation,
 core types, ownership, error handling, and deployment. For a deep dive into
 messaging concepts (socket patterns, services, operations), see the core guide
 links under [See Also](#see-also).
@@ -20,10 +20,10 @@ links under [See Also](#see-also).
 
 ## Installation
 
-Ships as a single NuGet package, **`Systems.Zlink`**, with the native core bundled.
+Ships as a single NuGet package, **`Zlink`**, with the native core bundled.
 
 ```bash
-dotnet add package Systems.Zlink
+dotnet add package Zlink
 ```
 
 - **.NET 8.0** or later (`net8.0`).
@@ -284,7 +284,7 @@ for the full list of C functions.
 
 ## Native Library / Deployment
 
-`Systems.Zlink` bundles the native core under `runtimes/<rid>/native`, so no
+`Zlink` bundles the native core under `runtimes/<rid>/native`, so no
 extra setup is needed for a normal build. The `ZLINK_LIBRARY_PATH` environment
 variable can override the load path. For **self-contained**/single-file/**Native
 AOT** publishing, make sure the target RID's assets are included in the output

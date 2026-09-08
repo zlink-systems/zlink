@@ -15,18 +15,18 @@ version remains 0.10.0.
   `framework/v0.10.0` GitHub Release
 - Java/Kotlin: Framework modules under the Maven Central `systems.zlink` namespace
 - Node.js: Framework workspace packages under the npm `@zlink-systems` scope
-- .NET: `Systems.Zlink.Framework.AspNetCore`, `Systems.Zlink.HttpClient`, and
-  `Systems.Zlink.Stream.Connector` on nuget.org
+- .NET: `Zlink.Framework.AspNetCore`, `Zlink.HttpClient`, and
+  `Zlink.Stream.Connector` on nuget.org
 
 The former .NET package IDs `Zlink.Framework.AspNetCore` and `Zlink.HttpClient` become
-`Systems.Zlink.Framework.AspNetCore` and `Systems.Zlink.HttpClient`, respectively. Source namespaces
+`Zlink.Framework.AspNetCore` and `Zlink.HttpClient`, respectively. Source namespaces
 remain under `Zlink.*` for compatibility.
 
 ## Installation Examples
 
 ```bash
 npm install @zlink-systems/framework@0.10.0
-dotnet add package Systems.Zlink.Framework.AspNetCore --version 0.10.0
+dotnet add package Zlink.Framework.AspNetCore --version 0.10.0
 ```
 
 ```kotlin

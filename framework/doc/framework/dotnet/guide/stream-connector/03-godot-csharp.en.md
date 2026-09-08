@@ -4,7 +4,7 @@
 
 ---
 
-This document explains how to use `Systems.Zlink.Stream.Connector` from a Godot 4 C# project
+This document explains how to use `Zlink.Stream.Connector` from a Godot 4 C# project
 (Mono/.NET build). There's no dedicated Godot connector package. It uses the general `.NET`
 connector as-is, calling `Dispatch.Async()` on the Godot main thread to run the user callbacks.
 

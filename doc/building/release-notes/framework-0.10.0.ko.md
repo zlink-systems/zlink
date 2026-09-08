@@ -15,18 +15,18 @@ Framework 자체 버전은 0.10.0으로 유지한다.
   `zlink-framework-cpp-0.10.0.tar.gz`와 SHA-256 파일
 - Java/Kotlin: Maven Central `systems.zlink` namespace의 framework module
 - Node.js: npm `@zlink-systems` scope의 framework workspace package
-- .NET: nuget.org의 `Systems.Zlink.Framework.AspNetCore`, `Systems.Zlink.HttpClient`,
-  `Systems.Zlink.Stream.Connector`
+- .NET: nuget.org의 `Zlink.Framework.AspNetCore`, `Zlink.HttpClient`,
+  `Zlink.Stream.Connector`
 
 .NET의 기존 package ID `Zlink.Framework.AspNetCore`와 `Zlink.HttpClient`는 각각
-`Systems.Zlink.Framework.AspNetCore`와 `Systems.Zlink.HttpClient`로 바뀐다. 소스 namespace는
+`Zlink.Framework.AspNetCore`와 `Zlink.HttpClient`로 바뀐다. 소스 namespace는
 호환성을 위해 기존 `Zlink.*` 이름을 유지한다.
 
 ## 설치 예
 
 ```bash
 npm install @zlink-systems/framework@0.10.0
-dotnet add package Systems.Zlink.Framework.AspNetCore --version 0.10.0
+dotnet add package Zlink.Framework.AspNetCore --version 0.10.0
 ```
 
 ```kotlin

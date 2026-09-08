@@ -7,7 +7,7 @@
 The writing rules follow the
 [Reference-writing guide](../../../../doc/principal/documentation/reference-writing-guide.ko.md)
 (Korean-only). This is the bindings layer (the Core C ABI's language projection) — not the
-framework layer (`Systems.Zlink.Framework`), which already has its own reference tree under
+framework layer (`Zlink.Framework`), which already has its own reference tree under
 `framework/doc/framework/dotnet/reference/`.
 
 Categories follow the "Contract folder layout" the
@@ -31,7 +31,7 @@ categories, including `Contracts/Service/` (SPOT node, Spot, Actor). That catego
 target the spec describes as required for the binding to be "aligned" — it is not something this
 reference tree can casually drop from the target shape. But `bindings/dotnet/src/Zlink/Contracts/`
 has no `Service/` folder today; SPOT/Actor exists only at the framework layer
-(`Systems.Zlink.Framework`), under different type names. Since a reference tier documents the
+(`Zlink.Framework`), under different type names. Since a reference tier documents the
 surface a caller can actually reach — the same rule this tree already applied when core's
 reference was built from `zlink.h` rather than from aspirational spec text — **this tree has five
 categories, not six, until `Contracts/Service/` exists in source.** Whether that gap is an

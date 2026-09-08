@@ -43,6 +43,17 @@ PACKAGE_IDS=(
   Zlink.Framework.Contracts
   Zlink.Framework.Provider.Abstractions
   Zlink.Framework
+  Zlink.Framework.AspNetCore
+  Zlink.Framework.Codecs.MessagePack
+  Zlink.Framework.Codecs.Protobuf
+  Zlink.Framework.Locations.Redis
+  Zlink.HttpClient
+  Zlink.Stream.Connector
+)
+ASSEMBLY_NAMES=(
+  Zlink.Framework.Contracts
+  Zlink.Framework.Provider.Abstractions
+  Zlink.Framework
   Systems.Zlink.Framework.AspNetCore
   Zlink.Framework.Codecs.MessagePack
   Zlink.Framework.Codecs.Protobuf
@@ -106,11 +117,13 @@ if [[ "${#packages[@]}" -ne "${#PACKAGE_IDS[@]}" ]]; then
   printf 'Expected %d packages, found %d:\n%s\n' "${#PACKAGE_IDS[@]}" "${#packages[@]}" "${packages[*]}" >&2
   exit 1
 fi
-for package_id in "${PACKAGE_IDS[@]}"; do
+for index in "${!PACKAGE_IDS[@]}"; do
+  package_id="${PACKAGE_IDS[$index]}"
+  assembly_name="${ASSEMBLY_NAMES[$index]}"
   package="$PACKAGE_DIR/$package_id.$VERSION.nupkg"
   [[ -f "$package" ]] || { echo "Missing package: $package" >&2; exit 1; }
   mapfile -t package_assemblies < <(unzip -Z1 "$package" | grep -E '^lib/net8\.0/[^/]+\.dll$' | sort)
-  expected_assembly="lib/net8.0/$package_id.dll"
+  expected_assembly="lib/net8.0/$assembly_name.dll"
   if [[ "${#package_assemblies[@]}" -ne 1 || "${package_assemblies[0]:-}" != "$expected_assembly" ]]; then
     printf 'Package assembly manifest differs for %s. Expected %s, found: %s\n' \
       "$package_id" "$expected_assembly" "${package_assemblies[*]:-<none>}" >&2
@@ -163,8 +176,8 @@ dotnet run --project "$INSPECTOR_DIR/PackageInspector.csproj" \
 framework_snapshot="$WORK_DIR/package-snapshots/Zlink.Framework.package.txt"
 contracts_snapshot="$WORK_DIR/package-snapshots/Zlink.Framework.Contracts.package.txt"
 redis_snapshot="$WORK_DIR/package-snapshots/Zlink.Framework.Locations.Redis.package.txt"
-http_client_snapshot="$WORK_DIR/package-snapshots/Systems.Zlink.HttpClient.package.txt"
-exact_connector_dependency="dependency targetFramework=net8.0 exclude=Build,Analyzers id=Systems.Zlink.Stream.Connector version=[{VERSION}]"
+http_client_snapshot="$WORK_DIR/package-snapshots/Zlink.HttpClient.package.txt"
+exact_connector_dependency="dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Stream.Connector version=[{VERSION}]"
 exact_framework_contracts_dependency="dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework.Contracts version=[{VERSION}]"
 exact_framework_provider_dependency="dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework.Provider.Abstractions version=[{VERSION}]"
 exact_redis_provider_dependency="dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework.Provider.Abstractions version=[{VERSION}]"
@@ -190,24 +203,24 @@ if grep -Fq "id=Zlink.Framework version=" "$redis_snapshot"; then
   exit 1
 fi
 grep -Fxq "$exact_http_contracts_dependency" "$http_client_snapshot" || {
-  echo "Systems.Zlink.HttpClient must declare its Zlink.Framework.Contracts package dependency." >&2
+  echo "Zlink.HttpClient must declare its Zlink.Framework.Contracts package dependency." >&2
   exit 1
 }
 for forbidden_dependency in \
-  "Systems.Zlink.Stream.Connector" \
-  "Systems.Zlink" \
+  "Zlink.Stream.Connector" \
+  "Zlink" \
   "K4os.Compression.LZ4"; do
   if grep -Fq "id=$forbidden_dependency version=" "$contracts_snapshot"; then
     echo "Zlink.Framework.Contracts must not depend on $forbidden_dependency." >&2
     exit 1
   fi
   if grep -Fq "id=$forbidden_dependency version=" "$http_client_snapshot"; then
-    echo "Systems.Zlink.HttpClient must not depend on $forbidden_dependency." >&2
+    echo "Zlink.HttpClient must not depend on $forbidden_dependency." >&2
     exit 1
   fi
 done
 if grep -Fq "id=Zlink.Framework version=" "$http_client_snapshot"; then
-  echo "Systems.Zlink.HttpClient must not depend on the Framework runtime package." >&2
+  echo "Zlink.HttpClient must not depend on the Framework runtime package." >&2
   exit 1
 fi
 
@@ -240,15 +253,15 @@ cat >"$CONSUMER_DIR/NuGet.Config" <<EOF
       <package pattern="Zlink.Framework" />
       <package pattern="Zlink.Framework.Contracts" />
       <package pattern="Zlink.Framework.Provider.Abstractions" />
-      <package pattern="Systems.Zlink.Framework.AspNetCore" />
+      <package pattern="Zlink.Framework.AspNetCore" />
       <package pattern="Zlink.Framework.Codecs.MessagePack" />
       <package pattern="Zlink.Framework.Codecs.Protobuf" />
       <package pattern="Zlink.Framework.Locations.Redis" />
-      <package pattern="Systems.Zlink.HttpClient" />
-      <package pattern="Systems.Zlink.Stream.Connector" />
+      <package pattern="Zlink.HttpClient" />
+      <package pattern="Zlink.Stream.Connector" />
     </packageSource>
     <packageSource key="bindings">
-      <package pattern="Systems.Zlink" />
+      <package pattern="Zlink" />
     </packageSource>
     <packageSource key="nuget.org">
       <package pattern="Google.*" />
@@ -329,12 +342,12 @@ cat >"$CONSUMER_DIR/Consumer.csproj" <<EOF
     <PackageReference Include="Zlink.Framework" Version="$VERSION" />
     <PackageReference Include="Zlink.Framework.Contracts" Version="$VERSION" />
     <PackageReference Include="Zlink.Framework.Provider.Abstractions" Version="$VERSION" />
-    <PackageReference Include="Systems.Zlink.Framework.AspNetCore" Version="$VERSION" />
+    <PackageReference Include="Zlink.Framework.AspNetCore" Version="$VERSION" />
     <PackageReference Include="Zlink.Framework.Codecs.MessagePack" Version="$VERSION" />
     <PackageReference Include="Zlink.Framework.Codecs.Protobuf" Version="$VERSION" />
     <PackageReference Include="Zlink.Framework.Locations.Redis" Version="$VERSION" />
-    <PackageReference Include="Systems.Zlink.HttpClient" Version="$VERSION" />
-    <PackageReference Include="Systems.Zlink.Stream.Connector" Version="$VERSION" />
+    <PackageReference Include="Zlink.HttpClient" Version="$VERSION" />
+    <PackageReference Include="Zlink.Stream.Connector" Version="$VERSION" />
   </ItemGroup>
 </Project>
 EOF
@@ -349,7 +362,7 @@ cat >"$HTTP_CONSUMER_DIR/HttpConsumer.csproj" <<EOF
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Systems.Zlink.HttpClient" Version="$VERSION" />
+    <PackageReference Include="Zlink.HttpClient" Version="$VERSION" />
   </ItemGroup>
 </Project>
 EOF
@@ -448,9 +461,9 @@ fi
 if [[ -z "$SNAPSHOT_OUTPUT" ]]; then
   expected_api="$WORK_DIR/spec-api.txt"
   : >"$expected_api"
-  mapfile -t sorted_package_ids < <(printf '%s\n' "${PACKAGE_IDS[@]}" | sort)
-  for package_id in "${sorted_package_ids[@]}"; do
-    snapshot="$SPEC_API_DIR/$package_id.api.txt"
+  mapfile -t sorted_assembly_names < <(printf '%s\n' "${ASSEMBLY_NAMES[@]}" | sort)
+  for assembly_name in "${sorted_assembly_names[@]}"; do
+    snapshot="$SPEC_API_DIR/$assembly_name.api.txt"
     [[ -f "$snapshot" ]] || {
       echo "Missing spec public API snapshot: $snapshot" >&2
       exit 1

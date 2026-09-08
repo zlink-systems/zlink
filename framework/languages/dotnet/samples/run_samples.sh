@@ -13,12 +13,12 @@ if [[ -z "${NUGET_PACKAGES:-}" ]]; then
   REPOSITORY_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
   PACKAGE_VERSION="$(awk -F= '/^LIBZLINK_VERSION=/{ print $2; exit }' "${REPOSITORY_ROOT}/VERSION")"
   if [[ -z "${PACKAGE_VERSION}" ]]; then
-    echo "Unable to resolve the local Systems.Zlink package version." >&2
+    echo "Unable to resolve the local Zlink package version." >&2
     exit 1
   fi
-  BINDING_PACKAGE="${REPOSITORY_ROOT}/.artifacts/wsl/nuget/Systems.Zlink.${PACKAGE_VERSION}.nupkg"
+  BINDING_PACKAGE="${REPOSITORY_ROOT}/.artifacts/wsl/nuget/Zlink.${PACKAGE_VERSION}.nupkg"
   if [[ ! -f "${BINDING_PACKAGE}" ]]; then
-    echo "Missing local Systems.Zlink package: ${BINDING_PACKAGE}" >&2
+    echo "Missing local Zlink package: ${BINDING_PACKAGE}" >&2
     exit 1
   fi
   PACKAGE_HASH="$(sha256sum "${BINDING_PACKAGE}" | cut -d ' ' -f 1)"

@@ -21,5 +21,5 @@ run() { # name dir cmd... — serialized behind the samples lock, log per step
 }
 dotnet_env() {
   export TMPDIR=/dev/shm/zlink-tmp-dotnet ZLINK_LIBRARY_PATH="$CORE_LIB" ZLINK_LOCAL_PACKAGE_ROOT="$Z/.artifacts/wsl" UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
-  local h; h=$(sha256sum "$Z/.artifacts/wsl/nuget/Systems.Zlink.$BINDING_VER.nupkg" | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${h:0:16}; mkdir -p "$TMPDIR"
+  local h; h=$(sha256sum "$Z/.artifacts/wsl/nuget/Zlink.$BINDING_VER.nupkg" | awk '{print $1}'); export NUGET_PACKAGES=/dev/shm/zlink-tmp-dotnet/nuget-${h:0:16}; mkdir -p "$TMPDIR"
 }

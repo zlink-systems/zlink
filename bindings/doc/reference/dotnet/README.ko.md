@@ -5,7 +5,7 @@
 # .NET bindings 레퍼런스
 
 작성 규칙은 [레퍼런스 문서 작성 가이드](../../../../doc/principal/documentation/reference-writing-guide.ko.md)를
-따른다. 이는 bindings 계층(Core C ABI의 언어별 투영)이다 — framework 계층(`Systems.Zlink.Framework`)이
+따른다. 이는 bindings 계층(Core C ABI의 언어별 투영)이다 — framework 계층(`Zlink.Framework`)이
 아니다. Framework는 `framework/doc/framework/dotnet/reference/`에 이미 자신의 레퍼런스 트리가
 있다.
 
@@ -28,7 +28,7 @@ interface-catalog 관례와 반대). 이 레퍼런스 트리도 같은 방향을
 Actor)를 포함한 6개 category를 정의한다. 그 category는 스펙이 binding이 "정렬됐다"고
 간주하기 위한 필수 목표 형태로 기술하고 있어, 이 레퍼런스 트리가 임의로 목표 형태에서
 빼버릴 수 있는 게 아니다. 하지만 현재 `bindings/dotnet/src/Zlink/Contracts/`에는
-`Service/` 폴더가 없다 — SPOT/Actor는 framework 계층(`Systems.Zlink.Framework`)에만
+`Service/` 폴더가 없다 — SPOT/Actor는 framework 계층(`Zlink.Framework`)에만
 다른 타입 이름으로 존재한다. 레퍼런스 tier는 caller가 실제로 호출할 수 있는 표면을
 문서화한다는 원칙(core 레퍼런스를 열망적 스펙 문구가 아니라 `zlink.h` 기준으로 작성했던
 것과 같은 원칙)에 따라, **`Contracts/Service/`가 소스에 존재하기 전까지 이 트리는

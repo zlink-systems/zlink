@@ -4,7 +4,7 @@
 
 ---
 
-이 문서는 Godot 4의 C# 프로젝트(Mono/.NET 빌드)에서 `Systems.Zlink.Stream.Connector`를
+이 문서는 Godot 4의 C# 프로젝트(Mono/.NET 빌드)에서 `Zlink.Stream.Connector`를
 사용하는 방법을 설명한다. Godot 전용 connector package는 따로 두지 않는다. 일반 `.NET`
 connector를 그대로 쓰고, Godot main thread에서 `Dispatch.Async()`를 호출해 사용자 callback을
 실행한다.

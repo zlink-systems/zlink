@@ -24,7 +24,7 @@ title: "9. STREAM · C#/.NET"
 
 STREAM은 외부 client와 Framework server 사이의 연결 지향 양방향 메시지 채널이다.
 Server는 session lifecycle과 packet dispatch를 구현한다. Client는 독립 package인
-`Systems.Zlink.Stream.Connector`를 사용한다.
+`Zlink.Stream.Connector`를 사용한다.
 
 ## 1. Server node 등록
 

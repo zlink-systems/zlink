@@ -32,7 +32,7 @@ def collect() -> dict:
                 if line.startswith("model name")), platform.processor())
     artifacts = []
     runtime_settings = {}
-    paths = [ROOT / ".artifacts/wsl/nuget/Systems.Zlink.0.17.3.nupkg"]
+    paths = [ROOT / ".artifacts/wsl/nuget/Zlink.0.17.3.nupkg"]
     paths.append(PERF / "ZLink.Framework.Perf.Shared/histogram-bounds.json")
     paths.extend((ROOT / "core/build-dev/lib").glob("libzlink.so*"))
     for role in ("Client", "SessionServer", "ChannelServer"):

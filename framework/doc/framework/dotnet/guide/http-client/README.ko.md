@@ -1,6 +1,6 @@
 # ZLink HTTP Client For .NET — 사용자 가이드
 
-`Systems.Zlink.HttpClient`는 .NET에서 HTTP request를 보내기 위한 범용 HTTP client package다.
+`Zlink.HttpClient`는 .NET에서 HTTP request를 보내기 위한 범용 HTTP client package다.
 zlink 스타일 fluent builder로 사용하며 공개 표면은 `System.Net.Http` 핸들러 타입을
 노출하지 않는다.
 

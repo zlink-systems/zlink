@@ -1,6 +1,7 @@
-package Systems.Zlink.Framework.AspNetCore
+package Zlink.Framework.AspNetCore
+entry LICENSE
 entry README.md
-entry Systems.Zlink.Framework.AspNetCore.nuspec
+entry Zlink.Framework.AspNetCore.nuspec
 entry [Content_Types].xml
 entry _rels/.rels
 entry lib/net8.0/Systems.Zlink.Framework.AspNetCore.dll
@@ -9,9 +10,9 @@ entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
 content-sha256 lib/net8.0/Systems.Zlink.Framework.AspNetCore.xml=16ed41d865cf7d38b0287edace85c4b3673a93f1b6b944ed51ee8e094cdfd8dc
 metadata authors=zlink
 metadata description=ASP.NET Core integration layer for ZLink framework.
-metadata id=Systems.Zlink.Framework.AspNetCore
-metadata license=MPL-2.0 type=expression
-metadata licenseUrl=https://licenses.nuget.org/MPL-2.0
+metadata id=Zlink.Framework.AspNetCore
+metadata license=LICENSE type=file
+metadata licenseUrl=https://aka.ms/deprecateLicenseUrl
 metadata projectUrl=https://github.com/zlink-systems/zlink
 metadata readme=README.md
 metadata version={VERSION}
@@ -22,6 +23,6 @@ dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extension
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extensions.Diagnostics.HealthChecks version=8.0.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extensions.Hosting.Abstractions version=8.0.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extensions.Logging.Abstractions version=8.0.0
-dependency targetFramework=net8.0 exclude=Build,Analyzers id=Systems.Zlink version=0.17.3
-dependency targetFramework=net8.0 exclude=Build,Analyzers id=Systems.Zlink.HttpClient version={VERSION}
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink version=0.17.3
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework version={VERSION}
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.HttpClient version={VERSION}

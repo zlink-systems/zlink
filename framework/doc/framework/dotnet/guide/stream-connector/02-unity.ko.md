@@ -4,7 +4,7 @@
 
 ---
 
-이 문서는 Unity client에서 `Systems.Zlink.Stream.Connector`를 사용하는 방법을 설명한다.
+이 문서는 Unity client에서 `Zlink.Stream.Connector`를 사용하는 방법을 설명한다.
 Unity 전용 connector package는 따로 두지 않는다. Unity도 일반 `.NET` connector를 그대로
 쓰고, Unity main thread에서 `Dispatch.Async()`를 호출해 사용자 callback을 실행한다.
 

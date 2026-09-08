@@ -31,9 +31,9 @@ Get it from NuGet. The minimal combination needed to build one server consists o
 three packages.
 
 ```bash
-dotnet add package Systems.Zlink                 # The core messaging engine (.NET binding)
+dotnet add package Zlink                         # The core messaging engine (.NET binding)
 dotnet add package Zlink.Framework                # The contract and runtime
-dotnet add package Systems.Zlink.Framework.AspNetCore # DI/hosted service registration (AddZLinkFramework)
+dotnet add package Zlink.Framework.AspNetCore # DI/hosted service registration (AddZLinkFramework)
 ```
 
 Packages to add when you need them:
@@ -42,11 +42,11 @@ Packages to add when you need them:
 | --- | --- |
 | `Zlink.Framework.Locations.Redis` | When using the Redis location store for auto-connect ([10-location](10-location.en.md)) |
 | `Zlink.Framework.Codecs.Protobuf` · `.MessagePack` | To use instead of the default JSON codec ([05-channel-messaging §7](05-channel-messaging.en.md#7-serialization-codec)) |
-| `Systems.Zlink.Stream.Connector` | When building an external client (a game client, mobile) ([09-stream](09-stream.en.md)) |
-| `Systems.Zlink.HttpClient` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.en.md)) |
+| `Zlink.Stream.Connector` | When building an external client (a game client, mobile) ([09-stream](09-stream.en.md)) |
+| `Zlink.HttpClient` | When the server calls out over HTTP ([HTTP Client guide](../http-client/README.en.md)) |
 
-Framework packages ship starting at **0.9**. `Systems.Zlink` (the core binding) and
-`Systems.Zlink.HttpClient` follow their own version tracks, so the three packages' version
+Framework packages ship starting at **0.9**. `Zlink` (the core binding package) and
+`Zlink.HttpClient` follow their own version tracks, so the three packages' version
 numbers differ. `net8.0` or later is required.
 
 Core, bindings, and framework packages are distributed under MPL-2.0. There's no cost to building and selling a service

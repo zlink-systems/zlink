@@ -3,7 +3,7 @@
         <IsPackable>true</IsPackable>
         <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
         <AssemblyName>Systems.Zlink.Stream.Connector</AssemblyName>
-        <PackageId>Systems.Zlink.Stream.Connector</PackageId>
+        <PackageId>Zlink.Stream.Connector</PackageId>
         <RootNamespace>Systems.Zlink.Stream.Connector</RootNamespace>
         <Description>ZLink STREAM client connector for .NET.</Description>
         <Authors>zlink</Authors>

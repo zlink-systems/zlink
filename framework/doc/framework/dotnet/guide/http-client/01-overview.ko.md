@@ -4,7 +4,7 @@
 
 ## 무엇인가
 
-`Systems.Zlink.HttpClient`는 .NET 애플리케이션이 HTTP API를 호출할 때 쓰는 client package다.
+`Zlink.HttpClient`는 .NET 애플리케이션이 HTTP API를 호출할 때 쓰는 client package다.
 Client 설정과 request 설정을 fluent builder로 구성하며, redirect·cookie·압축·재시도
 정책을 호출부마다 다시 작성하지 않아도 된다.
 

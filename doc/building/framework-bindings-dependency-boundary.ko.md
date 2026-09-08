@@ -91,7 +91,7 @@ CI에는 적어도 하나의 경로가 필요하다.
 
 권장 구조:
 
-- 기본값: `PackageReference Include="Systems.Zlink"`
+- 기본값: `PackageReference Include="Zlink"`
 - 로컬 검증: `dotnet pack`으로 만든 `.nupkg`를 repo-local NuGet feed에 둔다.
 - 예외 경로: `ZLinkUseBindingsSource=true`일 때만 bindings project를 직접 참조한다.
 

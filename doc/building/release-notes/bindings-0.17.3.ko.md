@@ -33,10 +33,10 @@ Maven Central의 group은 `systems.zlink`다.
 ### .NET
 
 ```bash
-dotnet add package Systems.Zlink --version 0.17.3
+dotnet add package Zlink --version 0.17.3
 ```
 
-nuget.org에서 `Systems.Zlink`를 설치한다.
+nuget.org에서 `Zlink`를 설치한다.
 
 ### Node.js
 

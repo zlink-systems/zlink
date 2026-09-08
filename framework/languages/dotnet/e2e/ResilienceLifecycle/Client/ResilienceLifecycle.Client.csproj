@@ -9,7 +9,7 @@
     <ItemGroup>
         <ProjectReference Include="../Shared/ResilienceLifecycle.Shared.csproj"/>
         <PackageReference Include="Microsoft.Extensions.Hosting"/>
-        <PackageReference Include="Systems.Zlink.HttpClient"/>
+        <PackageReference Include="Zlink.HttpClient"/>
         <ProjectReference Include="../../../src/Zlink.Framework/Zlink.Framework.csproj"/>
         <ProjectReference Include="../../../src/Zlink.Framework.Provider.Abstractions/Zlink.Framework.Provider.Abstractions.csproj"/>
         <ProjectReference Include="../../../src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj"/>

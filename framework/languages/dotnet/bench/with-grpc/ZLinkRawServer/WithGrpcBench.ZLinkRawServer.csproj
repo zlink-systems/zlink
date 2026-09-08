@@ -9,6 +9,6 @@
 
     <ItemGroup>
         <ProjectReference Include="..\Shared\WithGrpcBench.Shared.csproj"/>
-        <PackageReference Include="Systems.Zlink"/>
+        <PackageReference Include="Zlink"/>
     </ItemGroup>
 </Project>

@@ -36,6 +36,7 @@ assembly Systems.Zlink.Stream.Connector
   type interface Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamConnector : System.IAsyncDisposable
     property Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamLifecycleCall Close { get; } [nullability=read:not-null,write:unknown]
     property Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamLifecycleCall Connect { get; } [nullability=read:not-null,write:unknown]
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; } [nullability=read:not-null,write:unknown]
     property Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamLifecycleCall Dispatch { get; } [nullability=read:not-null,write:unknown]
     property System.Boolean IsConnected { get; } [nullability=read:not-null,write:unknown]
     property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamConnectorOptions Options { get; } [nullability=read:not-null,write:unknown]
@@ -50,6 +51,8 @@ assembly Systems.Zlink.Stream.Connector
     method abstract System.Int32 ReceivedCount(System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamRequestCall Request(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload payload [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamSendCall Send(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamEncodedPayload payload [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.Task SetDiagnosticsLevelAsync(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDiagnosticsLevel level [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Void SetDiagnosticsLevel(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDiagnosticsLevel level [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamSequenceCall WaitForSequence(System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method abstract Systems.Zlink.Stream.Connector.Contracts.Calls.IZlinkStreamWaitCall WaitFor(System.String name [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamPacketNameResolver
@@ -105,6 +108,7 @@ assembly Systems.Zlink.Stream.Connector
     property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCompression Compression { get; init; } [nullability=read:not-null,write:not-null]
     property Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamCompressionCodec? CompressionCodec { get; init; } [nullability=read:nullable,write:nullable]
     property System.TimeSpan ConnectTimeout { get; init; } [nullability=read:not-null,write:not-null]
+    property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDiagnosticsLevel DiagnosticsLevel { get; init; } [nullability=read:not-null,write:not-null]
     property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDispatchMode DispatchMode { get; init; } [nullability=read:not-null,write:not-null]
     property required System.Uri Endpoint { get; init; } [nullability=read:not-null,write:not-null]
     property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamHeartbeatOptions Heartbeat { get; init; } [nullability=read:not-null,write:not-null]
@@ -121,6 +125,11 @@ assembly Systems.Zlink.Stream.Connector
     property System.Boolean SkipServerCertificateValidation { get; init; } [nullability=read:not-null,write:not-null]
     property System.Nullable<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamTransport> Transport { get; init; } [nullability=read:nullable,write:nullable]
     property System.TimeSpan WaitTimeout { get; init; } [nullability=read:not-null,write:not-null]
+  type enum Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDiagnosticsLevel : System.Enum, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDiagnosticsLevel Detailed = 3 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDiagnosticsLevel Errors = 1 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDiagnosticsLevel Normal = 2 [nullability=read:not-null,write:not-null]
+    field const Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDiagnosticsLevel Off = 0 [nullability=read:not-null,write:not-null]
   type sealed-class Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDisconnected : System.IEquatable<Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamDisconnected>
     ctor ZlinkStreamDisconnected(Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCloseReason CloseReason [nullability=read:not-null,write:not-null])
     property Systems.Zlink.Stream.Connector.Contracts.ZlinkStreamCloseReason CloseReason { get; init; } [nullability=read:not-null,write:not-null]

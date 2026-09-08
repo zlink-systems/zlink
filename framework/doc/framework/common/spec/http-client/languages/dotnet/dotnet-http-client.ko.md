@@ -8,7 +8,7 @@
 
 ## 1. 목적
 
-`Systems.Zlink.HttpClient`는 .NET에서 HTTP request를 보내기 위한 별도 client-side 산출물이다.
+`Zlink.HttpClient`는 .NET에서 HTTP request를 보내기 위한 별도 client-side 산출물이다.
 JSON 전용 client가 아니라 일반 HTTP client이며 zlink fluent builder 스타일로
 `System.Net.Http`의 낮은 수준 설정을 흡수한다. typed 경로
 (`Body(dto)`/`Async<T>()`/`Fetch<T>()`)는 그 위에 얹은 편의 계층이다.
@@ -37,7 +37,7 @@ HTTP client package는 Stream Connector runtime이나 compression package에 의
 | 공유 오류·codec contract | `src/Zlink.Framework.Contracts/Codecs`, `Errors` | public dependency |
 | runtime 구현 | `src/Zlink.HttpClient/Runtime/*` | internal |
 | 회귀 테스트 | `tests/Zlink.HttpClient.UnitTests/*` | private |
-| 프로젝트 | `Systems.Zlink.HttpClient` | public package |
+| 프로젝트 | `Zlink.HttpClient` | public package |
 
 공개 표면에는 `SocketsHttpHandler`, `HttpClientHandler`, `HttpRequestMessage`,
 `HttpResponseMessage` 같은 `System.Net.Http` 타입을 노출하지 않는다.

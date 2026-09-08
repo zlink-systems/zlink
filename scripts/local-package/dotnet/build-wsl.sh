@@ -12,7 +12,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Creates Systems.Zlink.<BINDINGS_VERSION>.nupkg with the exact Core VERSION
+Creates Zlink.<BINDINGS_VERSION>.nupkg with the exact Core VERSION
 Linux runtime.
 EOF
 }
@@ -39,7 +39,7 @@ dotnet pack "$repo_root/bindings/dotnet/src/Zlink/Zlink.csproj" \
   -p:ZLinkCoreVersion="$core_version" \
   -p:ZLinkCoreProvenancePath="$manifest"
 
-package="$out_dir/Systems.Zlink.$binding_version.nupkg"
+package="$out_dir/Zlink.$binding_version.nupkg"
 [[ -f "$package" ]] || { echo "NuGet package is missing: $package" >&2; exit 1; }
 verify_package_entry() {
   local entry="$1"

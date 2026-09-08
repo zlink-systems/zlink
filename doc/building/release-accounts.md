@@ -25,7 +25,7 @@ The nuget.org Trusted Publishing policy is fixed to these values:
 | Repository | `zlink` |
 | Workflow filename | `release-dotnet.yml` |
 | Environment | none |
-| Package glob | `Zlink.*`, `Systems.Zlink*` |
+| Package glob | `Zlink*` |
 
 Both binding and Framework .NET packages must therefore be pushed from
 `.github/workflows/release-dotnet.yml`. An OIDC token obtained by another workflow does not match

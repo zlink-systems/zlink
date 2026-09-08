@@ -7,7 +7,7 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Hosting"/>
         <PackageReference Include="StackExchange.Redis"/>
-        <PackageReference Include="Systems.Zlink"/>
+        <PackageReference Include="Zlink"/>
         <ProjectReference Include="..\Configuration\ZoneWorld.Server.Configuration.csproj"/>
         <ProjectReference Include="..\..\Shared\ZoneWorld.Shared.csproj"/>
         <ProjectReference Include="..\..\..\..\..\dotnet\src\Zlink.Framework\Zlink.Framework.csproj"/>

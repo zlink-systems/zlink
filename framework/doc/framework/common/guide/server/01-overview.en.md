@@ -1401,13 +1401,13 @@ transport implementation to the application
       `IZLinkRouteClient`, `IZLinkMessageContext`, `[ZLinkRequest]`, `AddZLinkFramework`,
       `ZLinkFrameworkException`.
     - **Except**, types in the **client-side Stream Connector package**
-      (`Systems.Zlink.Stream.Connector`) use the `Zlink` prefix (lowercase `l`). e.g.
+      (`Zlink.Stream.Connector`) use the `Zlink` prefix (lowercase `l`). e.g.
       `IZlinkStreamConnector`, `ZlinkStreamConnectorOptions`, `ZlinkStreamMessage`. This is
       because the connector is an independent client library with no dependency on the
       server framework package.
     - **The underlying zlink core C API** is `zlink_*` snake_case.
-    - The NuGet package id and namespace words follow the reverse-domain convention,
-      `Systems.Zlink.*` (e.g. `Systems.Zlink.Framework`).
+    - NuGet package ids use `Zlink` or `Zlink.*`. Namespace and assembly names retain
+      their established values and are independent from the package id.
 
     > In short: **server framework = `ZLink`, client connector = `Zlink`.** If you see both
     > notations in the same code, it's not a typo — it's this rule.
