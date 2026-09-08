@@ -495,7 +495,6 @@ static void run_auto_hwm_public_blocking_send (bool multipart_)
           static_cast<int> (sizeof (received)),
           zlink_recv (receiver, received, sizeof (received), 0));
         ++drained;
-        (void) blocked_send.wait_for (std::chrono::milliseconds (20));
     }
     const std::future_status resumed =
       blocked_send.wait_for (std::chrono::seconds (1));
@@ -634,12 +633,23 @@ void test_auto_hwm_applied_limit_blocks_and_resumes_after_drain ()
     TEST_ASSERT_LESS_THAN_INT (1024, queued);
     TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
 
+    std::atomic<int> blocked_errno (0);
     std::future<int> blocked_send =
       std::async (std::launch::async, [&] () {
-          return zlink_send (sender, payload, sizeof (payload), 0);
+          const int rc = zlink_send (sender, payload, sizeof (payload), 0);
+          if (rc < 0)
+              blocked_errno.store (zlink_errno ());
+          return rc;
       });
 
     char received[message_size];
+    //  Drain at reader speed. Pausing 20 ms per drained record spends
+    //  queued * 20 ms before the low-watermark credit edge can even be
+    //  reached, which on a slow host exceeds the sender's default 1000 ms
+    //  SNDTIMEO and turns a healthy wake into EAGAIN.
+    const std::chrono::steady_clock::time_point drain_started =
+      std::chrono::steady_clock::now ();
+    int drained = 0;
     for (int i = 0;
          i < queued
          && blocked_send.wait_for (std::chrono::milliseconds (0))
@@ -648,13 +658,27 @@ void test_auto_hwm_applied_limit_blocks_and_resumes_after_drain ()
         TEST_ASSERT_EQUAL_INT (
           static_cast<int> (sizeof (received)),
           zlink_recv (receiver, received, sizeof (received), 0));
-        (void) blocked_send.wait_for (std::chrono::milliseconds (20));
+        ++drained;
     }
-    TEST_ASSERT_EQUAL_INT (
-      std::future_status::ready,
-      blocked_send.wait_for (std::chrono::seconds (1)));
-    TEST_ASSERT_EQUAL_INT (static_cast<int> (sizeof (payload)),
-                           blocked_send.get ());
+    const std::future_status resumed =
+      blocked_send.wait_for (std::chrono::seconds (1));
+    const int64_t drain_elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds> (
+        std::chrono::steady_clock::now () - drain_started)
+        .count ();
+    if (resumed != std::future_status::ready)
+        printf ("auto-hwm blocked send not ready: queued=%d "
+                "drained=%d drain_ms=%lld\n",
+                queued, drained, (long long) drain_elapsed_ms);
+    TEST_ASSERT_EQUAL_INT (std::future_status::ready, resumed);
+    const int blocked_rc = blocked_send.get ();
+    if (blocked_rc != static_cast<int> (sizeof (payload)))
+        printf ("auto-hwm blocked send rc=%d errno=%d (%s) "
+                "queued=%d drained=%d drain_ms=%lld\n",
+                blocked_rc, blocked_errno.load (),
+                zlink_strerror (blocked_errno.load ()), queued, drained,
+                (long long) drain_elapsed_ms);
+    TEST_ASSERT_EQUAL_INT (static_cast<int> (sizeof (payload)), blocked_rc);
 
     test_context_socket_close_zero_linger (sender);
     test_context_socket_close_zero_linger (receiver);

@@ -163,6 +163,13 @@ void test_pub_blocking_publish_succeeds_while_subscriber_drains_tcp ()
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (pub, ZLINK_OPT_SNDTIMEO, &kPubSendTimeoutMs, sizeof (kPubSendTimeoutMs)));
     TEST_ASSERT_SUCCESS_ERRNO (zlink_set_subscription (sub, ""));
+    //  NODROP publishing advances only as fast as this reader returns credit,
+    //  and the publisher's SNDTIMEO is 200 ms. Sleeping between empty polls
+    //  adds reader latency that has nothing to do with the wake being tested,
+    //  so wait on the socket instead of on a timer.
+    const int kSubRecvTimeoutMs = 50;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      sub, ZLINK_OPT_RCVTIMEO, &kSubRecvTimeoutMs, sizeof (kSubRecvTimeoutMs)));
     pubsub_callback_counter_t callback_state;
     const int target_messages = 10000;
 
@@ -172,7 +179,7 @@ void test_pub_blocking_publish_succeeds_while_subscriber_drains_tcp ()
             size_t part_count = 0;
             char topic[64] = {0};
             size_t topic_len = sizeof (topic);
-            if (zlink_subscribe (sub, NULL, &parts, &part_count, topic, &topic_len, ZLINK_DONTWAIT)
+            if (zlink_subscribe (sub, NULL, &parts, &part_count, topic, &topic_len, 0)
                 == 0) {
                 const bool ok = part_count == 1 && topic_len == std::strlen (kPubsubTopic)
                                 && memcmp (topic, kPubsubTopic, topic_len) == 0
@@ -191,7 +198,6 @@ void test_pub_blocking_publish_succeeds_while_subscriber_drains_tcp ()
                 callback_state.error.store (err, std::memory_order_release);
                 return -1;
             }
-            msleep (1);
         }
 
         return callback_state.received.load (std::memory_order_acquire);
@@ -232,10 +238,16 @@ void test_pub_blocking_publish_succeeds_while_subscriber_drains_tcp ()
     const std::future_status recv_status = recv_future.wait_until (deadline);
 
     if (send_status != std::future_status::ready || recv_status != std::future_status::ready) {
-        char detail[160];
-        snprintf (detail, sizeof (detail), "blocking publish timeout: sent=%d recv=%d",
+        char detail[200];
+        snprintf (detail, sizeof (detail),
+                  "blocking publish timeout: sent=%d recv=%d send_ready=%d "
+                  "recv_ready=%d send_result=%d",
                   sent_progress.load (std::memory_order_acquire),
-                  callback_state.received.load (std::memory_order_acquire));
+                  callback_state.received.load (std::memory_order_acquire),
+                  send_status == std::future_status::ready ? 1 : 0,
+                  recv_status == std::future_status::ready ? 1 : 0,
+                  send_status == std::future_status::ready ? send_future.get ()
+                                                           : 0);
         close_delivery_ready_monitor (&sub_monitor);
         close_delivery_ready_monitor (&pub_monitor);
         test_context_socket_close_zero_linger (sub);
