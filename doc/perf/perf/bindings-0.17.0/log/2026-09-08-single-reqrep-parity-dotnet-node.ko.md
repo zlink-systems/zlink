@@ -233,3 +233,37 @@ bash scripts/perf/perf-ticket.sh submit -p 2 -o claude-single-netnode \
 - Go single REQREP은 latency를 `/2.0`으로 나눠 담는다
   (`bindings/go/perf/single/perf_reqrep.go:88`). C는 왕복 전체가 latency다. Go 담당자
   확인 필요.
+
+## 8. 검증 결과 (감독자 기록, `core-pinned/0.17.3`, 1-run, C 짝지음)
+
+§6의 보류는 `core/v0.17.3` prefix 재고정(D-BP42) 뒤 같은 명령을 다시 내 해소했다. 두 언어 모두
+`status: complete`, fail 0.
+
+**.NET** (`sgfix-dotnet`, C `perf_c_single_linux_20260908_160754_sgfix-dotnet.txt`)
+
+| pattern | size | before tp (깊이) | after tp (깊이) | %C before→after |
+|---|---|---|---|---|
+| DR_REQREP | 256 | 8,867 (1.0) | 412,242 (111) | 1% → 50% |
+| DR_REQREP | 1024 | 8,487 (1.0) | 389,494 (95) | 1% → 54% |
+| DR_REQREP | 65536 | 6,166 (1.0) | 7,732 (16.0) | 54% → 68% |
+| RR_REQREP | 64 | 9,668 (1.0) | 385,053 (96) | 1% → 44% |
+| RR_REQREP | 1024 | 9,228 (1.0) | 354,451 (96) | 1% → 49% |
+| RR_REQREP | 262144 | 3,796 (1.0) | 4,415 (4.0) | 54% → 58% |
+
+집계: DR 33.8% → 58.8%(64 B는 C 러너 결함으로 무효, 5개 평균), RR 30.6% → 52.9%.
+
+**Node** (`sgfix-node`, C `perf_c_single_linux_20260908_162849_sgfix-node.txt`,
+Node `perf_node_single_linux_20260908_163103_sgfix-node.txt`)
+
+| pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 집계 before → after |
+|---|---|---|---|---|---|---|---|
+| DR_REQREP %C | 22.5 | 19.5 | 19.6 | 43.7 | 44.3 | 39.8 | 12.3% → 31.6% |
+| DR_REQREP latency ×C | 0.07 | 1.62 | 0.89 | 18.8 | 9.2 | 5.1 | |
+| RR_REQREP %C | 19.1 | 18.6 | 19.0 | 36.0 | 37.0 | 35.3 | 11.4% → 27.5% |
+| RR_REQREP latency ×C | 4.2 | 2.6 | 0.13 | 22.8 | 11.1 | 5.8 | |
+
+- 작은 크기의 latency 배율이 0.07~4.2로 흩어지는 것은 C 셀의 양안정(깊이가 run마다 수백~수천으로
+  바뀜) 때문이고, 큰 크기 5~23x는 창 16/8/4 vs C 실제 깊이 1.9의 창 모델 한계(C++·.NET·Go와 같다).
+- 작은 크기 19~22%는 창이 아니라 Node 요청 경로의 per-message 비용이다
+  (`2026-09-08-node-cost-map.ko.md`: recv materialization·Promise 정산). 러너 정합으로는 더 못 올린다.
+- §7의 Go latency `/2.0`은 `2026-09-08-single-reqrep-parity-rust-go.ko.md`에서 Rust와 함께 고쳤다(`98a8717872`).

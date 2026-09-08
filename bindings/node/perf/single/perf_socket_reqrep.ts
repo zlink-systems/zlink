@@ -51,6 +51,31 @@ function measurementPayload(parts) {
   return parts[0];
 }
 
+// PERF_SINGLE_TEST_POLICY.md 1.1.3 (D-BP40): the un-settled request set is
+// bounded by the socket's own admission window - the SNDHWM bytes Core applied
+// to this socket divided by one request's wire size - and never by a fixed
+// number. That window is the boundary the C runner observes as
+// ZLINK_SUBMIT_BACKPRESSURED (perf_single_reqrep.hpp run_request_phase), so the
+// runner keeps no window of its own. A manual PERF_SINGLE_SNDHWM override does
+// not appear in the auto-HWM snapshot and is read back from the socket option.
+function resolveAdmissionWindow(client, monitor, wireSize) {
+  let hwmBytes = 0n;
+  try {
+    hwmBytes = BigInt(monitor.status().autoHwmAppliedSndHwmBytes ?? 0n);
+  } catch (error) {
+    hwmBytes = 0n;
+  }
+  if (hwmBytes <= 0n) hwmBytes = BigInt(client.options.sendHwm ?? 0n);
+  if (hwmBytes <= 0n) {
+    throw new Error(
+      'requester socket reports no send high-water mark, so the admission '
+      + 'window is unknown'
+    );
+  }
+  const window = hwmBytes / BigInt(Math.max(1, wireSize));
+  return window > 0n ? Number(window) : 1;
+}
+
 function requestOperation(client, routedClient, payload, timeoutMs) {
   const operation = routedClient ? client.request(SERVER_RID) : client.request();
   return appendMeasurement(operation, payload).timeout(timeoutMs);
@@ -155,7 +180,10 @@ async function runSocketReqRep(msgSize, options, routedClient) {
       }
     };
 
-    while (currentEpochNs() < activeStopNs && !requestFailure) {
+    const admissionWindow = resolveAdmissionWindow(
+      client, clientMonitor, payloadTemplate.length
+    );
+    const submitOne = () => {
       const payload = Buffer.from(payloadTemplate);
       stampPayload(payload, { phase: 1, runId, msgSize, seq });
       seq += 1n;
@@ -163,7 +191,32 @@ async function runSocketReqRep(msgSize, options, routedClient) {
       pending.add(task);
       task.catch((error) => { requestFailure = error; })
         .finally(() => pending.delete(task));
-      completionPoller.wait(completionEvents, 0);
+    };
+
+    // A turn submits until the un-settled set fills the admission window, then
+    // progresses completions on this same thread. Nothing here waits for a
+    // reply before submitting the next request, and the window - not a runner
+    // constant - is what stops the submit loop.
+    while (currentEpochNs() < activeStopNs && !requestFailure) {
+      let submittedSinceProgress = 0;
+      let submittedAny = false;
+      while (currentEpochNs() < activeStopNs && !requestFailure
+             && pending.size < admissionWindow) {
+        submitOne();
+        submittedAny = true;
+        // Same progress cadence as the C submit cursor (64 submissions per
+        // round). Settling a Promise needs one loop turn on this thread.
+        if (++submittedSinceProgress >= 64) {
+          submittedSinceProgress = 0;
+          completionPoller.wait(completionEvents, 0);
+          await sleepImmediate();
+        }
+      }
+      // A bounded wait is reached only when the admission window is full,
+      // matching C's blocking poll after backpressure. This thread owns the
+      // completion drain, so waiting here is this runner progressing its own
+      // requests, not a yield to another scheduler.
+      completionPoller.wait(completionEvents, submittedAny ? 0 : 50);
       await sleepImmediate();
     }
     if (requestFailure) throw requestFailure;
