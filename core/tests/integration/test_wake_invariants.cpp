@@ -719,6 +719,26 @@ const size_t lwm_drain_records = 8;
 const int multi_dealer_fill_timeout_ms = 30000;
 const int multi_dealer_wait_safety_timeout_ms = 60000;
 const int multi_dealer_arm_timeout_ms = 10000;
+//  How long every client must stay without credit before the fill is
+//  called saturated. Long enough for the slowest io thread to finish
+//  pushing whatever room is left in the transport and the peer queue.
+const int multi_dealer_settle_quiet_ms = 1000;
+//  The reader end is deliberately shallow. Everything the server buffers
+//  ahead of the drain is a reservoir that the drain serves from memory,
+//  which decouples the drain from the credit it is supposed to cause: the
+//  reader finishes in milliseconds while the senders still wait for the
+//  same bytes to cross the transport. Keeping the inbound queue at a couple
+//  of records makes the drain pull over the wire, so the wake follows the
+//  drain that caused it on every platform.
+const uint64_t server_recv_hwm_bytes = 2 * large_payload_size;
+
+void configure_shallow_receive (void *socket_)
+{
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_option (socket_, ZLINK_OPT_RCVHWM, &server_recv_hwm_bytes,
+                        sizeof (server_recv_hwm_bytes)));
+}
 
 void configure_large_hwm (void *socket_)
 {
@@ -818,6 +838,7 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
     TEST_ASSERT_NOT_NULL (server);
     configure_socket (server);
     configure_large_hwm (server);
+    configure_shallow_receive (server);
 
     char endpoint[MAX_SOCKET_STRING];
     test_bind (server, "tcp://127.0.0.1:*", endpoint, sizeof (endpoint));
@@ -863,6 +884,7 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
     // Match the benchmark's per-size refresh and apply byte limits to every
     // already-established pipe before filling it.
     configure_large_hwm (server);
+    configure_shallow_receive (server);
     for (size_t i = 0; i < multi_dealer_count; ++i)
         configure_large_hwm (clients[i]);
 
@@ -948,8 +970,34 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
             // backpressured owns the token this test waits on, so consume any
             // early WRITABLE and keep filling that client until the whole
             // chain - queue, transport and peer queue - is saturated.
+            //
+            // Sampling every completion queue once cannot decide that: the io
+            // threads are still moving bytes downstream, so a client probed a
+            // millisecond too early looks quiet and regains credit right
+            // afterwards. Wait on the event instead. A POLLOUT poll over every
+            // client returns as soon as one of them regains credit, and only
+            // returns 0 when nobody did for the whole quiet window - which is
+            // what "the chain has stopped moving" means.
+            for (size_t i = 0; i < fill_items.size (); ++i)
+                fill_items[i].revents = 0;
+            zlink_config_result_t settle_error = ZLINK_CONFIG_OK;
+            const int settle_rc = zlink_poll (
+              &fill_items[0], static_cast<int> (fill_items.size ()),
+              multi_dealer_settle_quiet_ms, &settle_error);
+            if (settle_rc < 0) {
+                fill_error = settle_error == ZLINK_CONFIG_OK
+                               ? zlink_errno ()
+                               : settle_error;
+                break;
+            }
+            if (settle_rc == 0) {
+                saturated = true;
+                break;
+            }
             size_t recredited = 0;
             for (size_t i = 0; i < multi_dealer_count; ++i) {
+                if ((fill_items[i].revents & ZLINK_POLLOUT) == 0)
+                    continue;
                 zlink_completion_t early;
                 memset (&early, 0, sizeof (early));
                 early.struct_size = sizeof (early);
@@ -973,10 +1021,10 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
             }
             if (fill_error != 0)
                 break;
-            if (recredited == 0) {
-                saturated = true;
-                break;
-            }
+            //  POLLOUT was reported but the matching completion has not been
+            //  published yet. Do not spin on it.
+            if (recredited == 0)
+                msleep (1);
             continue;
         }
 
