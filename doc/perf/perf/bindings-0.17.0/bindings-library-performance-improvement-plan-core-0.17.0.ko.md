@@ -1472,6 +1472,13 @@ prefix** `~/.cache/zlink/core-pinned/0.17.2/lib/libzlink.so.0.17.2`(Build ID
 > `c4f4da4bb06573837d5945ccc489d6e940610a5e371885c154fd17409112fb39`)에 설치했다. 이 prefix는
 > **MULTI_STREAM cell 재측정에만** 쓰고(태그 `s173`), tcp 6 pattern의 0.17.2 판정은 유지한다. 각 언어는
 > 전 pattern을 `--reuse-build` 없이 한 번 빌드했다(태그 `a173smoke`, C 7/7 complete).
+
+> **2026-09-08 14:11 재고정 (D-BP42, 머신 B의 0.17.3 bump).** 태그 `core/v0.17.3`(커밋 `0761c1d4d0` = alpha + LIN-1
+> 테스트 수정 + bump; Core 코드는 alpha와 같음)을 `~/.cache/zlink/worktrees/0.17.3`(디스크 — /tmp worktree는
+> tmpfs를 채워 LTO가 실패했다)에서 빌드해 **`~/.cache/zlink/core-pinned/0.17.3`**(`lib/libzlink.so.0.17.3` Build ID
+> `1dd6f2e129017140d9ef1e045fbd73f88b974b45`, SHA-256 `4779e33380356d469ec3b0c30b12bb6c828c8710a4cdd71b44d0669cafa1a1af`)에
+> 설치했다. 14:11 이후 모든 측정은 이 prefix(태그 `a173smoke3`로 전 언어 Multi·Single 재빌드). alpha 값은
+> Core 코드가 같으므로 유효하며 행에 "0.17.3-alpha"로 남긴다.
 2026-09-05/06의 수치는 아래 표에 **참고**로만 남긴다.
 
 유지하는 것은 수치가 아니라 **작업 자산**이다. 7개 언어에 적용·푸시된 개선 pass 15건의 코드,
