@@ -4,11 +4,11 @@
   "headers": [
     {
       "path": "include/zlink.h",
-      "sha256": "a80543d325c8c2a80e62128a5e27ca4bcded75301a159decf38d552ffc85777d"
+      "sha256": "2f01c667960154f79c0e2c5c10a7bba72b129d025230b0c3efb951456cd420ea"
     },
     {
       "path": "include/zlink/common.h",
-      "sha256": "690d743432c9e938b62ac3964fe81cc32508d7537e348779603d59c1c53c90f7"
+      "sha256": "8adb46869a3fb570e7a46a9c415f2dedb15fee1e2b3cfb640959f38876444ef4"
     },
     {
       "path": "include/zlink/core/api.h",

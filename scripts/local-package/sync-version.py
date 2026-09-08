@@ -165,16 +165,18 @@ def synchronize(write: bool) -> tuple[str, str, list[Path]]:
         f"project(zlink VERSION {core_version} LANGUAGES C CXX)",
         1,
     )
+    # The Debian changelog keeps one stanza per release; only the newest
+    # (first) stanza is managed, older stanzas stay as history.
     sync.regex(
         "core/packaging/debian/changelog",
-        rf"(?m)^zlink \({SEMVER}-0\.1\)",
+        rf"\Azlink \({SEMVER}-0\.1\)",
         f"zlink ({core_version}-0.1)",
         1,
     )
     sync.regex(
         "core/packaging/debian/changelog",
-        rf"Package the zlink {SEMVER} public ABI\.",
-        f"Package the zlink {core_version} public ABI.",
+        rf"\A(zlink \([^)]*\)[^\n]*\n\n  \* Package the zlink ){SEMVER}( public ABI\.)",
+        rf"\g<1>{core_version}\2",
         1,
     )
     sync.regex(
