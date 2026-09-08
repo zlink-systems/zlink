@@ -163,6 +163,27 @@ void test_admitted_turn_carries_a_positive_byte_budget ()
     TEST_ASSERT_TRUE (policy::spec_write_budget_bytes () > 0);
 }
 
+void test_message_boundary_encoder_target_grows_and_reclaims ()
+{
+    size_t full_hits = 0;
+    const size_t initial = 16 * 1024;
+    const size_t maximum = 128 * 1024;
+    const void *const encoder = reinterpret_cast<const void *> (1);
+
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, policy::next_encoder_write_target (
+           ZLINK_CORE_SOCKET_PAIR, encoder, true, initial, initial, maximum,
+           initial, &full_hits, 2));
+    const size_t grown = policy::next_encoder_write_target (
+      ZLINK_CORE_SOCKET_PAIR, encoder, true, initial, initial, maximum,
+      initial, &full_hits, 2);
+    TEST_ASSERT_EQUAL_UINT64 (2 * initial, grown);
+    TEST_ASSERT_EQUAL_UINT64 (
+      initial, policy::next_encoder_write_target (
+                 ZLINK_CORE_SOCKET_PAIR, encoder, true, initial, grown,
+                 maximum, 1024, &full_hits, 2));
+}
+
 //  Both escape hatches are diagnostics and must be off unless asked for, so
 //  the shipped default is the Proactor path for general sockets and the
 //  spec'd speculative write for STREAM.
@@ -316,6 +337,7 @@ int main ()
     RUN_TEST (test_no_general_socket_is_admitted);
     RUN_TEST (test_transport_without_speculative_support_is_not_admitted);
     RUN_TEST (test_admitted_turn_carries_a_positive_byte_budget);
+    RUN_TEST (test_message_boundary_encoder_target_grows_and_reclaims);
     RUN_TEST (test_diagnostic_opt_ins_default_off);
     RUN_TEST (test_legacy_sync_write_is_snapshotted_per_connection);
     RUN_TEST (test_stream_async_write_is_snapshotted_per_connection);

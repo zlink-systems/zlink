@@ -19,6 +19,29 @@
 #include "core/ypipe.hpp"
 #include "core/ypipe_conflate.hpp"
 
+#ifdef ZLINK_BUILD_TESTS
+namespace
+{
+std::atomic<zlink::pipe_write_commit_test_hook_fn> pipe_write_commit_test_hook (
+  NULL);
+std::atomic<void *> pipe_write_commit_test_hook_userdata (NULL);
+}
+
+void zlink::test_set_pipe_write_commit_hook (
+  pipe_write_commit_test_hook_fn hook_, void *userdata_)
+{
+    if (!hook_) {
+        pipe_write_commit_test_hook.store (NULL, std::memory_order_release);
+        pipe_write_commit_test_hook_userdata.store (NULL,
+                                                    std::memory_order_release);
+        return;
+    }
+    pipe_write_commit_test_hook_userdata.store (userdata_,
+                                                std::memory_order_release);
+    pipe_write_commit_test_hook.store (hook_, std::memory_order_release);
+}
+#endif
+
 using zlink::pipe_detail::consume_if_delimiter;
 using zlink::pipe_detail::head_reclassify_armed;
 using zlink::pipe_detail::head_reclassify_idle;
@@ -865,12 +888,13 @@ bool zlink::pipe_t::try_write_complete_record_and_flush (
     // retry/rollback whenever the whole record is not already admissible.
     if ((max_message_bytes != 0 && payload_bytes > max_message_bytes)
         || !can_commit_bytes_with_peer_snapshot_unlocked (
-          record_bytes, payload_bytes, false))
+          record_bytes, payload_bytes, false, &max_message_bytes))
         return false;
 
     for (size_t i = 0; i != part_count_; ++i) {
         const bool written =
-          write_message_unlocked (&parts_[i], false, false, NULL);
+          write_message_unlocked (&parts_[i], false, false, NULL,
+                                  &max_message_bytes);
         zlink_assert (written);
         LIBZLINK_UNUSED (written);
     }
@@ -1102,20 +1126,24 @@ void zlink::pipe_t::release_discarded_pipe_accounting (
 void zlink::pipe_t::set_max_message_bytes (uint64_t max_message_bytes_)
 {
     // A completed transport handshake can update the socket-owned endpoint
-    // after it is writable. Admission observes this C3 policy scalar with an
-    // acquire load; it does not need the C2 outbound owner lock.
+    // after it is writable. A new record observes this publication with an
+    // acquire load; an already-admitted complete record keeps its admission
+    // snapshot through commit.
     _max_message_bytes.store (max_message_bytes_, std::memory_order_release);
 }
 
 bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
                                             bool enforce_hwm_,
                                             bool enforce_incremental_hwm_,
-                                            pipe_message_admission_t *admission_out_)
+                                            pipe_message_admission_t *admission_out_,
+                                            const uint64_t *max_message_bytes_snapshot_)
 {
     if (admission_out_)
         *admission_out_ = pipe_message_admission_invalid;
-    const uint64_t max_message_bytes =
-      _max_message_bytes.load (std::memory_order_acquire);
+    const uint64_t max_message_bytes = max_message_bytes_snapshot_
+                                         ? *max_message_bytes_snapshot_
+                                         : _max_message_bytes.load (
+                                             std::memory_order_acquire);
     const uint64_t hwm = _hwm.load (std::memory_order_acquire);
     const uint64_t incomplete_before = _out_incomplete_bytes;
     const uint64_t payload_before = _out_incomplete_payload_bytes;
@@ -1160,7 +1188,8 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
       || can_commit_bytes_with_peer_snapshot_unlocked (
         _out_incomplete_bytes, _out_incomplete_payload_bytes,
         !more
-          && (incomplete_before == 0 || _out_multipart_started_empty));
+          && (incomplete_before == 0 || _out_multipart_started_empty),
+        &max_message_bytes);
     if (!commit_credit_ready) {
         const bool exceeds_max_message_size =
           max_message_bytes != 0
@@ -1174,7 +1203,8 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
                 _out_incomplete_bytes, _out_incomplete_payload_bytes,
                 !more
                   && (incomplete_before == 0
-                      || _out_multipart_started_empty));
+                      || _out_multipart_started_empty),
+                &max_message_bytes);
             if (commit_credit_ready)
                 clear_hwm_credit_wait_unlocked ();
         }
@@ -1275,6 +1305,14 @@ bool zlink::pipe_t::write_message_unlocked (const msg_t *msg_,
         *admission_out_ = pipe_message_admission_ready;
     publish_outbound_accounting_unlocked (
       more || incomplete_before != 0);
+#ifdef ZLINK_BUILD_TESTS
+    const pipe_write_commit_test_hook_fn commit_hook =
+      pipe_write_commit_test_hook.load (std::memory_order_acquire);
+    if (commit_hook)
+        commit_hook (
+          this, more,
+          pipe_write_commit_test_hook_userdata.load (std::memory_order_acquire));
+#endif
     return true;
 }
 

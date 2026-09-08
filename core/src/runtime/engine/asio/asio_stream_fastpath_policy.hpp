@@ -412,18 +412,25 @@ inline size_t next_decoder_read_target (int socket_type_,
 
 inline size_t next_encoder_write_target (int socket_type_,
                                          const void *encoder_,
+                                         bool message_boundary_transport_,
+                                         size_t initial_,
                                          size_t current_,
                                          size_t max_,
                                          size_t filled_out_batch_,
                                          size_t *full_hits_,
                                          size_t required_hits_)
 {
-    if (!can_grow_stream_target (socket_type_, encoder_, current_, max_))
+    const bool stream = socket_type_ == ZLINK_CORE_SOCKET_STREAM;
+    if ((!stream && !message_boundary_transport_) || encoder_ == NULL
+        || max_ <= initial_)
         return 0;
 
     if (filled_out_batch_ < current_) {
         if (full_hits_)
             *full_hits_ = 0;
+        if (message_boundary_transport_ && current_ > initial_
+            && filled_out_batch_ < current_ / 2)
+            return initial_;
         return 0;
     }
 
@@ -433,11 +440,11 @@ inline size_t next_encoder_write_target (int socket_type_,
 template <typename Engine>
 inline size_t output_target_batch (const Engine &engine_, const zlink::options_t &options_)
 {
-    if (options_.type == ZLINK_CORE_SOCKET_STREAM) {
-        const size_t stream_target = engine_.stream_encoder_write_target_size ();
-        return stream_target > 0 ? stream_target : static_cast<size_t> (options_.out_batch_size);
+    if (engine_.adaptive_encoder_write_target ()) {
+        const size_t target = engine_.stream_encoder_write_target_size ();
+        if (target > 0)
+            return target;
     }
-
     return static_cast<size_t> (options_.out_batch_size);
 }
 }

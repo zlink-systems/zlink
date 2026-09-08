@@ -4,6 +4,8 @@
 #include <boost/beast/websocket/detail/mask.hpp>
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO && defined ZLINK_HAVE_ASIO_WS && defined ZLINK_HAVE_WS
 #include "transports/ws/ws_transport.hpp"
+#include "transports/ws/ws_batch_policy.hpp"
+#include "transports/ws/ws_transport_common_internal.hpp"
 #if defined ZLINK_HAVE_WSS
 #include "transports/tls/wss_transport.hpp"
 #endif
@@ -198,6 +200,25 @@ void test_ws_transport_config_initialization_is_thread_safe ()
     }
 }
 
+void test_ws_buffers_keep_small_initial_sizes_and_grow_for_large_payload ()
+{
+    TEST_ASSERT_EQUAL_UINT64 (
+      16 * 1024, zlink::ws_batch_policy::zmp_send_batch_size ());
+    TEST_ASSERT_EQUAL_UINT64 (
+      128 * 1024, zlink::ws_batch_policy::zmp_send_batch_max_size ());
+    TEST_ASSERT_EQUAL_UINT64 (
+      64 * 1024,
+      zlink::ws_transport_common_internal::write_buffer_bytes ());
+    TEST_ASSERT_EQUAL_UINT64 (
+      64 * 1024,
+      zlink::ws_transport_common_internal::write_buffer_bytes_for_payload (
+        64 * 1024));
+    TEST_ASSERT_EQUAL_UINT64 (
+      128 * 1024,
+      zlink::ws_transport_common_internal::write_buffer_bytes_for_payload (
+        64 * 1024 + 1));
+}
+
 #endif
 int main ()
 {
@@ -206,6 +227,7 @@ int main ()
     RUN_TEST (test_ws_mask_inplace_matches_byte_reference);
 #if defined ZLINK_IOTHREAD_POLLER_USE_ASIO && defined ZLINK_HAVE_ASIO_WS && defined ZLINK_HAVE_WS
     RUN_TEST (test_ws_transport_config_initialization_is_thread_safe);
+    RUN_TEST (test_ws_buffers_keep_small_initial_sizes_and_grow_for_large_payload);
 #endif
     return UNITY_END ();
 }

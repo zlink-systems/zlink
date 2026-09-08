@@ -95,7 +95,7 @@ int zlink::pair_t::xsend (
         // A continuation failure must discard the prefix before the blocking
         // retry path can release the socket lifecycle lock. Otherwise an
         // independent complete send can be appended to that unfinished
-        // record. Query-and-rollback under the pipe lock avoids adding a
+        // record. Query-and-rollback under the socket's owner turn avoids adding a
         // multipart flag write to PAIR's successful single-message hot path.
         const bool multipart_aborted =
           _pipe && _pipe->rollback_incomplete ();

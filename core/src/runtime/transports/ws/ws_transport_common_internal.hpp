@@ -42,8 +42,18 @@ inline size_t write_buffer_bytes ()
 {
     static const size_t value =
       env::positive_size ("ZLINK_WS_WRITE_BUFFER_BYTES",
-                          ws_batch_policy::zmp_send_batch_size ());
-    return value;
+                          ws_batch_policy::zmp_send_batch_max_size ());
+    return std::min (value, ws_batch_policy::write_buffer_initial_size ());
+}
+
+inline size_t write_buffer_bytes_for_payload (size_t payload_bytes_)
+{
+    static const size_t maximum =
+      env::positive_size ("ZLINK_WS_WRITE_BUFFER_BYTES",
+                          ws_batch_policy::zmp_send_batch_max_size ());
+    const size_t initial =
+      std::min (maximum, ws_batch_policy::write_buffer_initial_size ());
+    return payload_bytes_ > initial ? maximum : initial;
 }
 
 inline size_t read_message_max ()
@@ -210,6 +220,8 @@ void async_write_some (std::shared_ptr<connection_t> connection_,
         return;
     }
 
+    connection_->stream.write_buffer_bytes (
+      write_buffer_bytes_for_payload (buffer_size_));
     connection_->stream.async_write (
       boost::asio::buffer (buffer_, buffer_size_),
       [connection = std::move (connection_), handler = std::move (handler_),
@@ -240,6 +252,8 @@ void async_writev (std::shared_ptr<connection_t> connection_,
     const std::array<boost::asio::const_buffer, 2> buffers = {
       boost::asio::buffer (header_, header_size_),
       boost::asio::buffer (body_, body_size_)};
+    connection_->stream.write_buffer_bytes (
+      write_buffer_bytes_for_payload (header_size_ + body_size_));
     connection_->stream.async_write (
       buffers,
       [connection = std::move (connection_), handler = std::move (handler_),
@@ -271,6 +285,8 @@ std::size_t write_some (connection_t *connection_,
         return 0;
     }
 
+    connection_->stream.write_buffer_bytes (
+      write_buffer_bytes_for_payload (len_));
     boost::system::error_code ec;
     const std::size_t bytes_written =
       connection_->stream.write (boost::asio::buffer (data_, len_), ec);

@@ -43,6 +43,144 @@ class complete_record_admission_guard_t
   private:
     std::optional<zlink::socket_public_send_scope_t> _scope;
 };
+
+struct pipe_write_commit_gate_t
+{
+    explicit pipe_write_commit_gate_t (zlink::pipe_t *target_) :
+        target (target_), reached (false), release (false)
+    {
+    }
+
+    zlink::pipe_t *target;
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool reached;
+    bool release;
+};
+
+void wait_after_first_committed_part (zlink::pipe_t *pipe_, bool more_,
+                                      void *userdata_)
+{
+    pipe_write_commit_gate_t *const gate =
+      static_cast<pipe_write_commit_gate_t *> (userdata_);
+    if (!gate || pipe_ != gate->target || !more_)
+        return;
+
+    std::unique_lock<std::mutex> lock (gate->mutex);
+    if (gate->reached)
+        return;
+    gate->reached = true;
+    gate->changed.notify_all ();
+    gate->changed.wait (lock, [&] { return gate->release; });
+}
+}
+
+void run_peer_max_publication_during_complete_record (int sender_type_,
+                                                      int receiver_type_,
+                                                      bool expect_commit_)
+{
+    void *sender = test_context_socket (sender_type_);
+    void *receiver = test_context_socket (receiver_type_);
+    const int send_timeout_ms = 0;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      sender, ZLINK_OPT_SNDTIMEO, &send_timeout_ms, sizeof (send_timeout_ms)));
+    contract_socket_pair_t pair (sender, receiver, sender_type_ == ZLINK_SOCKET_PAIR ? 0 : 1);
+
+    zlink_msg_t parts[2];
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&parts[0], 64));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_msg_init_size (&parts[1], 64));
+    memset (zlink_msg_data (&parts[0]), 'A', 64);
+    memset (zlink_msg_data (&parts[1]), 'B', 64);
+
+    pipe_write_commit_gate_t gate (pair.application[0]);
+    zlink::test_set_pipe_write_commit_hook (&wait_after_first_committed_part,
+                                           &gate);
+    zlink_submit_result_t send_rc = ZLINK_SUBMIT_INTERNAL_ERROR;
+    int send_errno = 0;
+    std::thread sender_thread ([&] {
+        errno = 0;
+        send_rc = zlink_send (sender, parts, 2, ZLINK_DONTWAIT);
+        send_errno = errno;
+    });
+
+    bool reached = false;
+    {
+        std::unique_lock<std::mutex> lock (gate.mutex);
+        reached = gate.changed.wait_for (
+          lock, std::chrono::seconds (2), [&] { return gate.reached; });
+    }
+    if (reached)
+        pair.application[0]->set_max_message_bytes (96);
+    {
+        std::lock_guard<std::mutex> lock (gate.mutex);
+        gate.release = true;
+    }
+    gate.changed.notify_all ();
+    sender_thread.join ();
+    zlink::test_set_pipe_write_commit_hook (NULL, NULL);
+
+    const size_t source_size_0 = zlink_msg_size (&parts[0]);
+    const size_t source_size_1 = zlink_msg_size (&parts[1]);
+    bool first_read = false;
+    bool second_read = false;
+    bool no_third_part = false;
+    char first_byte = 0;
+    char second_byte = 0;
+    zlink::msg_t received;
+    if (expect_commit_) {
+        first_read = pair.application[1]->read (&received);
+        if (first_read) {
+            first_byte = *static_cast<const char *> (received.data ());
+            received.close ();
+        }
+        second_read = pair.application[1]->read (&received);
+        if (second_read) {
+            second_byte = *static_cast<const char *> (received.data ());
+            received.close ();
+        }
+        no_third_part = !pair.application[1]->read (&received);
+    } else {
+        no_third_part = !pair.application[1]->check_read ();
+    }
+
+    zlink_msg_close (&parts[0]);
+    zlink_msg_close (&parts[1]);
+    test_context_socket_close_zero_linger (sender);
+    test_context_socket_close_zero_linger (receiver);
+
+    TEST_ASSERT_TRUE_MESSAGE (reached,
+                              "send did not reach the first committed part");
+    if (expect_commit_) {
+        if (send_rc != 0)
+            printf ("complete-record race: rc=%d errno=%d source=%zu/%zu reads=%d/%d/%d\n",
+                    send_rc, send_errno, source_size_0, source_size_1,
+                    first_read, second_read, no_third_part);
+        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK, send_rc);
+        TEST_ASSERT_EQUAL_UINT64 (0, source_size_0);
+        TEST_ASSERT_EQUAL_UINT64 (0, source_size_1);
+        TEST_ASSERT_TRUE (first_read);
+        TEST_ASSERT_TRUE (second_read);
+        TEST_ASSERT_TRUE (no_third_part);
+        TEST_ASSERT_EQUAL_INT ('A', first_byte);
+        TEST_ASSERT_EQUAL_INT ('B', second_byte);
+    } else {
+        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_INVALID_ARGUMENT, send_rc);
+        TEST_ASSERT_EQUAL_INT (EMSGSIZE, send_errno);
+        TEST_ASSERT_TRUE_MESSAGE (no_third_part,
+                                  "rejected DEALER record left a visible prefix");
+    }
+}
+
+void test_pair_complete_record_keeps_peer_max_admission_snapshot ()
+{
+    run_peer_max_publication_during_complete_record (
+      ZLINK_SOCKET_PAIR, ZLINK_SOCKET_PAIR, true);
+}
+
+void test_dealer_complete_record_rejects_peer_max_change_without_prefix ()
+{
+    run_peer_max_publication_during_complete_record (
+      ZLINK_SOCKET_DEALER, ZLINK_SOCKET_ROUTER, false);
 }
 
 void test_complete_record_admission_allows_independent_staging ()
@@ -755,6 +893,8 @@ int main ()
     setup_test_environment ();
     UNITY_BEGIN ();
     RUN_TEST (test_complete_record_admission_allows_independent_staging);
+    RUN_TEST (test_pair_complete_record_keeps_peer_max_admission_snapshot);
+    RUN_TEST (test_dealer_complete_record_rejects_peer_max_change_without_prefix);
     RUN_TEST (test_pair_one_call_multipart_backpressure_aborts_before_concurrent_final);
     RUN_TEST (test_pair_whole_multipart_does_not_interleave_concurrent_final_records);
     RUN_TEST (test_open_send_part_sequence_allows_concurrent_single_records);

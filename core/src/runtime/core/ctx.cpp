@@ -216,8 +216,9 @@ int zlink::ctx_t::terminate ()
 
 int zlink::ctx_t::shutdown ()
 {
-    //  See terminate(): monitor teardown removes control-runtime tasks while
-    //  holding _slot_sync.  An auto-HWM task must therefore be quiesced first.
+    //  See terminate(): snapshot socket ownership before stopping monitors.
+    //  Quiesce auto-HWM before taking the registry snapshot so its task cannot
+    //  race shutdown registration.
     stop_auto_hwm_recalc_task ();
     scoped_lock_t locker (_slot_sync);
     (void) begin_shutdown_locked (false);
