@@ -4694,3 +4694,7 @@ prefix를 명시한다.
 ## D-B252 (2026-09-08 15:05, 머신 B) 사용자 지적 — STREAM은 다른 socket과 얽히지 않는 recv/send 경로인데 asio 대비 격차가 남는 이유; S-C(astra, 분석) 착수
 
 **질문**: 잠금 15.1→8.4/msg 뒤에도 with_stream zlink/asio 0.80~0.84. 남은 13.9k Ir/msg의 위치를 경로 단계별(TCP read→decode→pipe→command→wake→recv_packet→send_packet→pipe→command→engine write→TCP write)로 분해하고 asio·zmq 서버와 나란히 비교해, 설계 비용(pull 핸드오프·thread-safe turn)과 제거 가능 비용(packet당 msg_t 할당, 이중 버퍼링, envelope, 프레이밍 파서, wake syscall, send command 왕복, refcount RMW)을 분리. 결과는 0.17.4 마감 뒤 이어질 "메시지당 명령 수" 작업의 job 목록이 된다(각 ≤3 h).
+
+## D-B253 (2026-09-08 15:10, 머신 B) 사용자 지적 — cppserver(asio 기반 라이브러리 계층)를 STREAM 비교 스택에 추가; 4 스택 측정 착수
+
+**근거**: `bindings/c/bench/with_stream/stacks/cppserver`(upstream CppServer, asio 기반)가 순수 asio보다도 빨랐다는 사용자 관측. zlink와 같은 "asio 위 라이브러리 계층"이므로 zlink/cppserver 비율이 zlink 계층 자체의 비용을 가장 직접 보여준다. §7.1 비교 스택을 zlink/asio/cppserver/zmq 4개로. 측정 job `measure-cppserver`(Claude, idle 조건, runs 3)를 띄움 — 결과는 §7.1 행과 S-C 분석의 대조 입력.

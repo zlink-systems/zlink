@@ -186,6 +186,8 @@ spec gap = 코드 동작이 `core/doc/spec`·공개 헤더 주석·공개 계약
 
 ### 7.1 with_stream (CCU 1000, 4 io threads, runs 3 median, kops/s)
 
+**비교 스택(2026-09-08 15:10, 사용자)**: `zlink`, `asio`(순수 asio 서버, 참고), `zmq`(같은 pull 모델, 목표 1.0 근접), **`cppserver`**(asio 위 라이브러리 계층 — zlink와 같은 층위의 기준; zlink보다 높으면 그 차이는 asio가 아니라 zlink 계층 비용). 0.17.4부터 4 스택으로 측정한다(측정 job `measure-cppserver`, D-B253).
+
 | 시점 | commit | 64 B zlink/asio | 1024 B zlink/asio | 65536 B zlink/asio | zlink 서버 CPU% (64/1024/64K) | load avg |
 |---|---|---|---|---|---|---|
 | 참고(A, 09-06 오전) | `core_after_a_release` | 271.3 / 349.0 = 0.78 | 246.5 / 316.1 = 0.78 | 29.1 / 37.2 = 0.78 | 353 / 358 / 228 | — |
