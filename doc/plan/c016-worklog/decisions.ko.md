@@ -4747,6 +4747,17 @@ Linux x64 prebuilt는 glibc 2.38 미만(Ubuntu 22.04, Debian 12 등)에서 로�
 노트에 요구 조건을 적는다. (3) **B 전달(0.17.4)**: 배포용 Core Linux artifact는 지원 최소 glibc에서 빌드(ubuntu-22.04 runner 또는
 manylinux 컨테이너, `-static-libstdc++` 여부 포함)하고 provenance에 glibc 버전을 기록한다.
 
+### D-BP50 (2026-09-09 04:50) `core/v0.17.4` 도착 — 공식 artifact로 prefix 전환, 7언어+C Multi·Single 재빌드 smoke 전부 통과, tls/ws/wss 108 cell·STREAM 10k 재확인 큐 투입
+
+**사실:** 릴리스 `core/v0.17.4`(published 2026-09-08 19:05Z, main `5d2d215367`) linux-x64 artifact를 `fetch-release.sh`로
+`~/.cache/zlink/core/0.17.4/linux-x64`(runtime sha256 `e54804bf…`)에 설치·검증. `VERSION`/`BINDINGS_VERSION` 0.17.4(main).
+큐 기본 prefix(`core-prefix.env`)를 0.17.4로 전환하고 C·cpp·dotnet·java·node·go·rust·python의 Multi(6 pattern 1 s)·Single(ALL 1 s)
+재빌드 smoke 16건 모두 rc=0(태그 `a174smoke`, `a174smokeall`).
+
+**결정:** (1) 0.17.4 측정은 전부 이 공식 prefix로 하며 행에 `0.17.4`를 명시. (2) `queue-secure-transports.sh` 8건(`sec174`, tls·ws·wss
+6 pattern 1-run, D-BP32)과 STREAM tcp clients 1,000/5,000/10,000(`s174-*`, D-BP47 재확인) 3건을 투입. 결과는 §9.x.2 tls/ws/wss 행과
+D-BP47 후속으로 기록. (3) 0.17.3 tcp 행은 그대로 유효(0.17.4의 변경은 secure transport·STREAM·attach O(N²) 등 §10.3.2 항목).
+
 ## D-B251 (2026-09-08 15:25, 머신 B) 사용자 지시 — macOS 실패를 병렬로 미리 수정해 0.17.4가 바로 빌드되게: MAC-1(Claude) 착수
 
 **절차**: macOS 머신 없음 → 진단 workflow `core-macos-test.yml`(workflow_dispatch, macos-15, ctest 정규식 입력, serial -j1)을 브랜치 `wip/mac-1`(베이스 `wip/0.17.3-all2` + Intel 제거·build.sh gating 커밋 cherry-pick)에 추가하고 Actions로 재현·검증 loop. 진단 run 34190928956(main, 새 gating)의 macOS ARM64 실패 목록을 확정 입력으로. 알려진 실제 실패: auto-HWM applied limit −1(`test_ctx_options:657`), xpub NODROP blocking publish timeout(`test_xpub_nodrop:243`), `test_stream_packet_progress`; timeout군은 병렬 실행 제거 뒤 재판정. 수정은 `__APPLE__` 분기 최소, Linux 동작 불변. patch `all-artifacts/MAC-1.patch` → 0.17.4 병합.
