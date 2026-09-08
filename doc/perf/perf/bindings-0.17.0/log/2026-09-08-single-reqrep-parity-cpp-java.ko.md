@@ -271,3 +271,34 @@ Java `submit()` javadoc 동일; POLLOUT은 정책 §1.1.3이 금지) 후자는 �
 이유로 rc=1). 감독자가 `core/v0.17.3` prefix를 빌드해 7개 언어를 재빌드한 뒤 같은 검증
 티켓을 `ZLINK_CORE_PACKAGE_PREFIX=/home/hep7/.cache/zlink/core-pinned/0.17.3`으로 다시
 낸다. 그때까지 Java 짝지음과 PAIR 회귀는 미측정이다.
+
+**prefix 변경(D-BP42)**: §9의 VERSION 0.17.3 대조 실패 때문에 감독자가 `core/v0.17.3`
+prefix(`~/.cache/zlink/core-pinned/0.17.3`, provenance version 0.17.3, revision
+`0761c1d4d0`)를 빌드하고 7개 언어를 재빌드했다. §7의 `sgfix-cpp`는 그 전의 alpha
+prefix(`0.17.3-alpha`, provenance 0.17.2)에서 잰 값이며 before(`sg1`)와 같은 prefix라
+짝지음이 유효하다. 아래 §10의 `sgfix-java`·PAIR 회귀는 새 `0.17.3` prefix에서 잰다.
+
+## 10. PAIR 64 B 회귀 (태그 `sgfix-pair`, prefix `0.17.3`)
+
+| lang | before (`sg1`, alpha) | after (`sgfix-pair`, 0.17.3) | 판정 |
+|---|---|---|---|
+| C++ | 1,553,949 msg/s / 0.0467 ms | **1,546,332 msg/s / 0.0705 ms** | 회귀 없음 |
+| Java | 1,654,260 msg/s / 11.605 ms | **1,688,018 msg/s / 52.998 ms** | 처리량 회귀 없음 |
+
+- 파일: `perf_cpp_single_linux_20260908_145615_sgfix-pair.txt`,
+  `perf_java_single_linux_20260908_145625_sgfix-pair.txt`
+- 이번 변경은 REQREP 러너 파일만 건드렸고 `PerfPair.java`·C++ one-way 경로는 그대로이므로
+  PAIR 회귀는 원래 성립할 수 없다. 측정도 그것을 확인한다.
+- Java PAIR 64 B latency가 11.6 → 53.0 ms로 더 커진 것은 §4에서 규명한 **큐 포화
+  양안정 상태**가 같은 방향으로 안착한 결과다(코드 변경 없음). C 짝지음 기준값은
+  §11의 이유로 아직 없다.
+
+## 11. 미완료 — 큐 runner 정지
+
+`sgfix-java`(C 짝지음 REQREP + C PAIR 64 B 기준) 티켓
+`2-1788847029-67029-claude-single-cppjava-sgfix-java_retry3_...`은 제출된 채
+pending에 남아 있다. 15:40 경 `perf-ticket.sh wait`가
+"runner가 떠 있지 않다 — 감독자가 scripts/perf/perf-queue-runner.sh를 띄워야 한다"를
+돌려줬다. 앞선 rc=1 두 번은 (a) VERSION 0.17.3 대조 실패(§9), (b) 0.17.3 Single 재빌드
+티켓이 `DEALER_DEALER`만 빌드해 REQREP 바이너리가 없었던 것 — 둘 다 코드 문제가 아니다.
+runner 재기동 후 같은 티켓을 그대로 돌리면 된다.

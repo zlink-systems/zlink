@@ -101,6 +101,13 @@ final class PerfSocketReqRep {
 
             int completionDrainTimeoutMs = Math.max(1, PerfUtil.intEnv(
                 "PERF_SINGLE_REQREP_DRAIN_TIMEOUT_MS", 10_000));
+            // PERF_SINGLE_TEST_POLICY.md 1.1.3 (D-BP40): the outstanding set is
+            // bounded by the admission window Core applied to the requester
+            // socket, taken from the same auto-HWM snapshot the runner reports
+            // in "## Auto-HWM Detail".
+            long admissionWindow = admissionWindowRequests(
+                clientMonitor.status().autoHwmAppliedSendHwmBytes(),
+                Math.max(config.size(), PerfUtil.HEADER_SIZE));
             Thread serverThread = new Thread(() -> runServer(server, serverStopped,
                 failure),
                 "single-socket-reqrep-server");
@@ -112,7 +119,8 @@ final class PerfSocketReqRep {
                 PerfUtil.intEnv("PERF_SINGLE_REQREP_TIMEOUT_MS", 200));
             Duration requestTimeout = Duration.ofMillis(requestTimeoutMs);
             runRequestPhase(client, routedClient, config, metrics, failure,
-                activeEnd, requestTimeout, completionDrainTimeoutMs);
+                activeEnd, requestTimeout, completionDrainTimeoutMs,
+                admissionWindow);
             sendStop(client, routedClient);
             PerfUtil.join(serverThread, "socket reqrep server",
                 Duration.ofSeconds(10));
@@ -142,12 +150,24 @@ final class PerfSocketReqRep {
      * lands before the active deadline, and the latency sample is
      * {@code completion nanoTime - header sent_ts_ns}.</p>
      */
+    /**
+     * Requests that fit in the applied admission window. One in-flight request
+     * is always allowed so a window smaller than one message still progresses.
+     */
+    private static long admissionWindowRequests(long windowBytes, int wireSize) {
+        if (windowBytes <= 0 || wireSize <= 0) {
+            return 1L;
+        }
+        return Math.max(1L, windowBytes / wireSize);
+    }
+
     private static void runRequestPhase(Socket client, boolean routedClient,
                                         PerfUtil.Config config,
                                         PerfUtil.Metrics metrics,
                                         AtomicReference<Throwable> failure,
                                         long activeEnd, Duration requestTimeout,
-                                        int completionDrainTimeoutMs) {
+                                        int completionDrainTimeoutMs,
+                                        long admissionWindow) {
         AtomicLong outstanding = new AtomicLong();
         java.util.function.BiConsumer<List<Message>, Throwable> completion =
             (parts, error) -> {
@@ -182,10 +202,25 @@ final class PerfSocketReqRep {
         try (PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
                  List.of(client), PollEventFlags.POLLCOMPLETION)) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
-                submitRequest(client, routedClient, config,
-                    requestTimeout, outstanding, completion);
+                // Submit continuously without awaiting any reply, up to the
+                // applied admission window. The binding retains a refused
+                // input and resubmits it from its WRITABLE token.
+                int submittedSinceProgress = 0;
+                while (System.nanoTime() < activeEnd && failure.get() == null
+                       && outstanding.get() < admissionWindow) {
+                    submitRequest(client, routedClient, config,
+                        requestTimeout, outstanding, completion);
+                    // C parity (perf_single_reqrep.hpp run_request_phase):
+                    // drain without waiting every 64 submissions so a long
+                    // burst still settles replies as it goes.
+                    if (++submittedSinceProgress >= 64) {
+                        submittedSinceProgress = 0;
+                        completionPoller.poll(0);
+                    }
+                }
 
-                // Completion callbacks are dispatched only by this poller.
+                // The window is full (or the deadline passed): completion
+                // callbacks are dispatched only by this poller.
                 completionPoller.poll(Math.min(50,
                     remainingTimeoutMs(activeEnd)));
             }
