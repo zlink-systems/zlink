@@ -152,14 +152,24 @@ jobs:
       - name: Publish packages to nuget.org
         shell: bash
         run: |
+          # Push the package without its adjacent symbols first; nuget.org accepts
+          # the .snupkg only after the package has passed validation, which takes
+          # minutes, so symbols are retried and never fail the release.
           dotnet nuget push dist/dotnet/*.nupkg \
             --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
-            --skip-duplicate
-          dotnet nuget push dist/dotnet/*.snupkg \
-            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
-            --source https://api.nuget.org/v3/index.json \
-            --skip-duplicate
+            --skip-duplicate --no-symbols
+          for attempt in $(seq 1 15); do
+            if dotnet nuget push dist/dotnet/*.snupkg \
+                 --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+                 --source https://api.nuget.org/v3/index.json \
+                 --skip-duplicate; then
+              exit 0
+            fi
+            echo "symbols push attempt ${attempt} failed (package validation pending?); retrying in 60s"
+            sleep 60
+          done
+          echo "::warning::symbol package (.snupkg) was not accepted after 15 attempts; the package itself is published"
 
   release-framework-dotnet:
     if: startsWith(github.ref_name, 'framework/v') || (github.event_name == 'workflow_dispatch' && inputs.target == 'framework')
@@ -231,11 +241,21 @@ jobs:
       - name: Publish framework packages to nuget.org
         shell: bash
         run: |
+          # Push the package without its adjacent symbols first; nuget.org accepts
+          # the .snupkg only after the package has passed validation, which takes
+          # minutes, so symbols are retried and never fail the release.
           dotnet nuget push 'dist/framework-dotnet/*.nupkg' \
             --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
-            --skip-duplicate
-          dotnet nuget push 'dist/framework-dotnet/*.snupkg' \
-            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
-            --source https://api.nuget.org/v3/index.json \
-            --skip-duplicate
+            --skip-duplicate --no-symbols
+          for attempt in $(seq 1 15); do
+            if dotnet nuget push 'dist/framework-dotnet/*.snupkg' \
+                 --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+                 --source https://api.nuget.org/v3/index.json \
+                 --skip-duplicate; then
+              exit 0
+            fi
+            echo "symbols push attempt ${attempt} failed (package validation pending?); retrying in 60s"
+            sleep 60
+          done
+          echo "::warning::symbol package (.snupkg) was not accepted after 15 attempts; the package itself is published"
