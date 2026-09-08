@@ -25,6 +25,7 @@
 #include <unistd.h>
 #endif
 
+#include <array>
 #include <cstring>
 #include <sstream>
 
@@ -89,6 +90,20 @@ namespace
 const bool asio_single_write_on = zlink::asio_stream_fastpath_policy::single_write_enabled ();
 
 const size_t asio_gather_threshold = zlink::asio_stream_fastpath_policy::gather_threshold ();
+
+const size_t bounded_gather_pending_body =
+  static_cast<size_t> (1) << (sizeof (size_t) * 8 - 1);
+const size_t bounded_gather_offset_mask = ~bounded_gather_pending_body;
+const size_t bounded_gather_no_prefix = bounded_gather_offset_mask;
+
+void close_gather_body (zlink::msg_t *message_)
+{
+    if (message_->check ()) {
+        const int rc = message_->close ();
+        errno_assert (rc == 0);
+    }
+    delete message_;
+}
 
 const bool asio_trace_on = zlink::asio_stream_fastpath_policy::trace_enabled ();
 
@@ -443,8 +458,8 @@ void zlink::asio_engine_t::start_async_read ()
 
     _pipeline.read_pending = true;
     _pipeline.read_from_pending_pool = false;
+    _pipeline.last_read_bytes = 0;
     _pipeline.last_read_request_size = 0;
-    _pipeline.last_read_had_partial_prefix = false;
 
     //  Get buffer from decoder if available
     size_t read_size;
@@ -467,7 +482,6 @@ void zlink::asio_engine_t::start_async_read ()
         _pipeline.read_buffer_ptr = _pipeline.pending_read_buffer.data ();
         _pipeline.read_from_pending_pool = true;
     } else if (_decoder) {
-        const bool had_partial_prefix = _insize > 0;
         prime_stream_decoder_read_target ();
         _decoder->get_buffer (&_pipeline.read_buffer_ptr, &read_size);
 
@@ -484,7 +498,6 @@ void zlink::asio_engine_t::start_async_read ()
             _pipeline.read_buffer_ptr += _insize;
             read_size -= _insize;
         }
-        _pipeline.last_read_had_partial_prefix = had_partial_prefix;
     } else {
         read_size = select_handshake_read_buffer ();
     }
@@ -525,15 +538,13 @@ bool zlink::asio_engine_t::speculative_read ()
         || !_connection_fastpath_policy.speculative_read_enabled ())
         return false;
 
-    _pipeline.last_speculative_read_bytes = 0;
+    _pipeline.last_read_bytes = 0;
     _pipeline.last_read_request_size = 0;
-    _pipeline.last_read_had_partial_prefix = false;
 
     //  Prepare read buffer the same way as start_async_read().
     size_t read_size;
 
     if (_decoder) {
-        const bool had_partial_prefix = _insize > 0;
         prime_stream_decoder_read_target ();
         _decoder->get_buffer (&_pipeline.read_buffer_ptr, &read_size);
 
@@ -548,7 +559,6 @@ bool zlink::asio_engine_t::speculative_read ()
             _pipeline.read_buffer_ptr += _insize;
             read_size -= _insize;
         }
-        _pipeline.last_read_had_partial_prefix = had_partial_prefix;
     } else {
         read_size = select_handshake_read_buffer ();
     }
@@ -583,7 +593,7 @@ bool zlink::asio_engine_t::speculative_read ()
         return true;
     }
 
-    _pipeline.last_speculative_read_bytes = bytes;
+    _pipeline.last_read_bytes = bytes;
 
     //  Mirror async path behavior for backpressure buffering.
     if (_input_stop_reason != input_running) {
@@ -658,8 +668,16 @@ void zlink::asio_engine_t::start_async_write ()
         process_output ();
     }
 
+    if (_pipeline.write_pending)
+        return;
+
     if (_outsize == 0 || _outpos == NULL) {
         _output_stopped = true;
+        return;
+    }
+
+    if (_pipeline.async_gather) {
+        start_async_gather_write ();
         return;
     }
 
@@ -761,25 +779,62 @@ bool zlink::asio_engine_t::prepare_gather_output ()
         return false;
     }
 
+    _outpos = _pipeline.gather_header;
+    _outsize = header_size;
     _pipeline.gather_header_size = header_size;
     _pipeline.gather_body = static_cast<const unsigned char *> (_pipeline.tx_msg.data ());
     _pipeline.gather_body_size = body_size;
     _pipeline.async_gather = true;
+    _output_stopped = false;
+
+    start_async_gather_write ();
+    return true;
+}
+
+void zlink::asio_engine_t::start_async_gather_write (
+  const std::shared_ptr<msg_t> &body_owner_)
+{
+    zlink_assert (_pipeline.async_gather);
+    zlink_assert (!_pipeline.write_pending);
+    const size_t split_offset =
+      _pipeline.gather_split_offset & bounded_gather_offset_mask;
+    zlink_assert (_outpos != NULL || split_offset == bounded_gather_no_prefix);
+
     _pipeline.write_pending = true;
     _pipeline.async_zero_copy = false;
-    _output_stopped = false;
 
     const std::weak_ptr<connection_facade_t::callback_guard_t> callback_guard =
       _connection_facade.callback_guard;
+    std::array<boost::asio::const_buffer, 3> buffers;
+    size_t buffer_count = 0;
+    if (split_offset == bounded_gather_no_prefix) {
+        buffers[buffer_count++] = boost::asio::buffer (
+          _pipeline.gather_header, _pipeline.gather_header_size);
+        buffers[buffer_count++] = boost::asio::buffer (
+          _pipeline.gather_body, _pipeline.gather_body_size);
+        if (_outsize != 0)
+            buffers[buffer_count++] = boost::asio::buffer (_outpos, _outsize);
+    } else if (split_offset != 0) {
+        buffers[buffer_count++] = boost::asio::buffer (
+          _outpos, split_offset);
+        buffers[buffer_count++] = boost::asio::buffer (
+          _pipeline.gather_body, _pipeline.gather_body_size);
+        if (_outsize != split_offset)
+            buffers[buffer_count++] = boost::asio::buffer (
+              _outpos + split_offset, _outsize - split_offset);
+    } else {
+        buffers[buffer_count++] = boost::asio::buffer (_outpos, _outsize);
+        buffers[buffer_count++] = boost::asio::buffer (
+          _pipeline.gather_body, _pipeline.gather_body_size);
+    }
     _transport_adapter.transport->async_writev (
-      _pipeline.gather_header, _pipeline.gather_header_size, _pipeline.gather_body,
-      _pipeline.gather_body_size,
-      [this, callback_guard] (const boost::system::error_code &ec, std::size_t bytes) {
+      buffers.data (), buffer_count,
+      [this, callback_guard, body_owner_] (const boost::system::error_code &ec,
+                                           std::size_t bytes) {
           if (callback_guard.expired ())
               return;
           on_write_complete (ec, bytes);
       });
-    return true;
 }
 
 void zlink::asio_engine_t::finish_gather_output ()
@@ -787,15 +842,25 @@ void zlink::asio_engine_t::finish_gather_output ()
     if (!_pipeline.async_gather)
         return;
 
+    const bool pending_body =
+      (_pipeline.gather_split_offset & bounded_gather_pending_body) != 0;
+    const bool bounded_batch =
+      (_pipeline.gather_split_offset & bounded_gather_offset_mask) != 0;
     _pipeline.async_gather = false;
     _pipeline.gather_header_size = 0;
+    _pipeline.gather_split_offset =
+      pending_body ? bounded_gather_pending_body : 0;
     _pipeline.gather_body = NULL;
     _pipeline.gather_body_size = 0;
+    _outpos = NULL;
+    _outsize = 0;
 
-    const int rc = _pipeline.tx_msg.close ();
-    errno_assert (rc == 0);
-    const int rc_init = _pipeline.tx_msg.init ();
-    errno_assert (rc_init == 0);
+    if (!bounded_batch) {
+        const int rc = _pipeline.tx_msg.close ();
+        errno_assert (rc == 0);
+        const int rc_init = _pipeline.tx_msg.init ();
+        errno_assert (rc_init == 0);
+    }
 }
 
 void zlink::asio_engine_t::prime_stream_decoder_read_target ()
@@ -811,8 +876,7 @@ void zlink::asio_engine_t::maybe_grow_stream_decoder_read_target (size_t bytes_t
     const size_t grown = zlink::asio_stream_fastpath_policy::next_decoder_read_target (
       _options.type, _decoder,
       _pipeline.stream_decoder_read_target_size, _pipeline.stream_decoder_read_target_max,
-      _pipeline.last_read_had_partial_prefix, _pipeline.last_read_request_size, bytes_transferred_,
-      &_pipeline.stream_decoder_read_target_full_hits, 2);
+      _pipeline.last_read_request_size, bytes_transferred_);
     if (grown == 0)
         return;
 
@@ -844,7 +908,7 @@ void zlink::asio_engine_t::maybe_schedule_stream_encoder_growth (size_t filled_o
       zmp_transport_has_message_boundaries (),
       static_cast<size_t> (_options.out_batch_size),
       _pipeline.stream_encoder_write_target_size, _pipeline.stream_encoder_write_target_max,
-      filled_out_batch_, &_pipeline.stream_encoder_write_target_full_hits, 2);
+      filled_out_batch_);
     if (grown == 0)
         return;
 
@@ -900,6 +964,8 @@ void zlink::asio_engine_t::on_read_complete (const boost::system::error_code &ec
         error (connection_error);
         return;
     }
+
+    _pipeline.last_read_bytes = bytes_transferred;
 
     //  During backpressure, STREAM keeps proactor-style buffering, while
     //  non-stream keeps bytes in decoder buffer and waits for restart_input().
@@ -983,10 +1049,10 @@ void zlink::asio_engine_t::on_read_complete (const boost::system::error_code &ec
     if (_pipeline.in_read_drain)
         return;
 
-    maybe_drain_stream_reads (bytes_transferred);
+    maybe_drain_stream_reads ();
 }
 
-void zlink::asio_engine_t::maybe_drain_stream_reads (size_t last_read_bytes_)
+void zlink::asio_engine_t::maybe_drain_stream_reads ()
 {
     if (_connection_facade.terminating || _pipeline.io_error)
         return;
@@ -1008,13 +1074,10 @@ void zlink::asio_engine_t::maybe_drain_stream_reads (size_t last_read_bytes_)
     //  data: only a read that filled its whole request can have left some
     //  behind. A shorter one emptied the receive queue, so draining again would
     //  buy nothing but an EAGAIN recv syscall per message.
-    size_t last_bytes = last_read_bytes_;
-    size_t last_request = _pipeline.last_read_request_size;
-
     while (!_connection_facade.terminating && !_pipeline.io_error && !_pipeline.read_pending
            && _input_stop_reason == input_running
-           && zlink::asio_stream_fastpath_policy::stream_read_filled_request (last_request,
-                                                                             last_bytes)
+           && zlink::asio_stream_fastpath_policy::stream_read_filled_request (
+             _pipeline.last_read_request_size, _pipeline.last_read_bytes)
            && drained_loops < asio_stream_read_drain_max_loops
            && drained_bytes < asio_stream_read_drain_max_bytes) {
         const bool progressed = speculative_read ();
@@ -1022,11 +1085,9 @@ void zlink::asio_engine_t::maybe_drain_stream_reads (size_t last_read_bytes_)
             break;
 
         ++drained_loops;
-        if (_pipeline.last_speculative_read_bytes == 0)
+        if (_pipeline.last_read_bytes == 0)
             break;
-        drained_bytes += _pipeline.last_speculative_read_bytes;
-        last_bytes = _pipeline.last_speculative_read_bytes;
-        last_request = _pipeline.last_read_request_size;
+        drained_bytes += _pipeline.last_read_bytes;
     }
 
     _pipeline.in_read_drain = false;
@@ -1249,17 +1310,99 @@ bool zlink::asio_engine_t::prepare_output_buffer ()
     size_t target_out_batch =
       zlink::asio_stream_fastpath_policy::output_target_batch (*this, _options);
 
-    while (_outsize < target_out_batch) {
-        if ((this->*_next_msg) (&_pipeline.tx_msg) == -1) {
+    std::shared_ptr<msg_t> gather_body_owner;
+    size_t prepared_size = _outsize;
+    bool have_pending_pointer_body =
+      _pipeline.gather_split_offset == bounded_gather_pending_body;
+    if (have_pending_pointer_body)
+        _pipeline.gather_split_offset = 0;
+
+    while (prepared_size < target_out_batch) {
+        if (!have_pending_pointer_body
+            && (this->*_next_msg) (&_pipeline.tx_msg) == -1) {
             if (errno == ECONNRESET)
                 return false;
             else
                 break;
         }
+        have_pending_pointer_body = false;
+
+        const size_t body_size = _pipeline.tx_msg.size ();
+        if (_pipeline.async_gather && body_size >= asio_gather_threshold) {
+            _pipeline.gather_split_offset |= bounded_gather_pending_body;
+            break;
+        }
+
+        const bool bounded_pointer_gather =
+          !_pipeline.async_gather && !_connection_facade.handshaking
+          && zmp_transport_has_message_boundaries ()
+          && _transport_adapter.transport->supports_gather_write ()
+          && body_size >= asio_gather_threshold
+          && ws_batch_policy::use_pointer_body_in_batch (
+            _outsize, sizeof (_pipeline.gather_header), body_size,
+            target_out_batch, ws_batch_policy::zmp_send_batch_max_size ());
+        if (bounded_pointer_gather) {
+            msg_t *const owned_message = new (std::nothrow) msg_t ();
+            if (owned_message) {
+                const int rc = owned_message->init ();
+                errno_assert (rc == 0);
+                try {
+                    gather_body_owner = std::shared_ptr<msg_t> (
+                      owned_message, &close_gather_body);
+                }
+                catch (const std::bad_alloc &) {
+                    // shared_ptr invokes the supplied deleter if its control
+                    // block allocation fails. Fall back to the encoder path.
+                }
+            }
+        }
+
+        if (gather_body_owner && !_pipeline.async_gather) {
+            size_t header_size = 0;
+            if (!build_gather_header (_pipeline.tx_msg, _pipeline.gather_header,
+                                      sizeof (_pipeline.gather_header), header_size)) {
+                _outpos = NULL;
+                _outsize = 0;
+                const int rc = _pipeline.tx_msg.close ();
+                errno_assert (rc == 0);
+                const int rc_init = _pipeline.tx_msg.init ();
+                errno_assert (rc_init == 0);
+                if (errno == 0)
+                    errno = EPROTO;
+                error (protocol_error);
+                return false;
+            }
+
+            if (_outsize == 0) {
+                _pipeline.gather_split_offset = bounded_gather_no_prefix;
+            } else {
+                std::memcpy (_outpos + _outsize, _pipeline.gather_header,
+                             header_size);
+                _outsize += header_size;
+                _pipeline.gather_split_offset = _outsize;
+            }
+            _pipeline.gather_header_size = header_size;
+            const int rc = gather_body_owner->move (_pipeline.tx_msg);
+            errno_assert (rc == 0);
+            _pipeline.gather_body = static_cast<const unsigned char *> (
+              gather_body_owner->data ());
+            _pipeline.gather_body_size = body_size;
+            _pipeline.async_gather = true;
+            _output_stopped = false;
+            prepared_size = ws_batch_policy::pointer_batch_size (
+              _outsize + ((_pipeline.gather_split_offset
+                            & bounded_gather_offset_mask)
+                              == bounded_gather_no_prefix
+                            ? _pipeline.gather_header_size
+                            : 0),
+              _pipeline.gather_body_size);
+            continue;
+        }
 
         _encoder->load_msg (&_pipeline.tx_msg);
-        unsigned char *bufptr = _outpos + _outsize;
-        const size_t n = _encoder->encode (&bufptr, target_out_batch - _outsize);
+        unsigned char *bufptr = _outpos ? _outpos + _outsize : NULL;
+        const size_t n = _encoder->encode (&bufptr,
+                                           target_out_batch - prepared_size);
         if (unlikely (n == 0)) {
             // A loaded frame that produces no bytes was rejected by the
             // protocol encoder. Discard the whole batch so valid neighbours
@@ -1274,9 +1417,21 @@ bool zlink::asio_engine_t::prepare_output_buffer ()
         if (_outpos == NULL)
             _outpos = bufptr;
         _outsize += n;
+        prepared_size = ws_batch_policy::pointer_batch_size (
+          _outsize + ((_pipeline.gather_split_offset
+                        & bounded_gather_offset_mask)
+                         == bounded_gather_no_prefix
+                        ? _pipeline.gather_header_size
+                        : 0),
+          _pipeline.async_gather ? _pipeline.gather_body_size : 0);
     }
 
-    maybe_schedule_stream_encoder_growth (_outsize);
+    maybe_schedule_stream_encoder_growth (prepared_size);
+
+    if (_pipeline.async_gather) {
+        start_async_gather_write (gather_body_owner);
+        return true;
+    }
 
     ENGINE_DBG ("prepare_output_buffer: prepared %zu bytes", _outsize);
     return _outsize > 0;
@@ -1312,6 +1467,14 @@ void zlink::asio_engine_t::speculative_write ()
     if (!prepare_output_buffer ()) {
         _output_stopped = true;
         ENGINE_DBG ("speculative_write: no data to send, output_stopped=true");
+        return;
+    }
+
+    if (_pipeline.write_pending)
+        return;
+
+    if (_pipeline.async_gather) {
+        start_async_gather_write ();
         return;
     }
 
@@ -1383,6 +1546,8 @@ void zlink::asio_engine_t::speculative_write ()
         //  Try to prepare and write more data speculatively.
         //  This loop enables efficient burst writes without async overhead.
         while (prepare_output_buffer ()) {
+            if (_pipeline.write_pending)
+                return;
             const std::size_t more_bytes = _transport_adapter.transport->write_some (
               reinterpret_cast<const std::uint8_t *> (_outpos), _outsize);
 
@@ -1424,56 +1589,8 @@ void zlink::asio_engine_t::process_output ()
 {
     ENGINE_DBG ("process_output: outsize=%zu", _outsize);
 
-    //  If write buffer is empty, try to read new data from the encoder.
-    if (_outsize == 0) {
-        //  Even when we stop as soon as there is no data to send,
-        //  there may be a pending async_write.
-        if (unlikely (_encoder == NULL)) {
-            zlink_assert (_connection_facade.handshaking);
-            return;
-        }
-
-        apply_pending_stream_encoder_resize ();
-        _outpos = NULL;
-        _outsize = _encoder->encode (&_outpos, 0);
-
-        size_t target_out_batch =
-          zlink::asio_stream_fastpath_policy::output_target_batch (*this, _options);
-
-        while (_outsize < target_out_batch) {
-            if ((this->*_next_msg) (&_pipeline.tx_msg) == -1) {
-                if (errno == ECONNRESET)
-                    return;
-                else
-                    break;
-            }
-            _encoder->load_msg (&_pipeline.tx_msg);
-            unsigned char *bufptr = _outpos + _outsize;
-            const size_t n = _encoder->encode (&bufptr, target_out_batch - _outsize);
-            if (unlikely (n == 0)) {
-                // A loaded frame that produces no bytes was rejected by the
-                // protocol encoder. Discard the whole batch so valid neighbours
-                // cannot be spliced across that invalid frame.
-                _outpos = NULL;
-                _outsize = 0;
-                if (errno == 0)
-                    errno = EPROTO;
-                error (protocol_error);
-                return;
-            }
-            if (_outpos == NULL)
-                _outpos = bufptr;
-            _outsize += n;
-        }
-
-        maybe_schedule_stream_encoder_growth (_outsize);
-
-        //  If there is no data to send, mark output as stopped.
-        if (_outsize == 0) {
-            _output_stopped = true;
-            return;
-        }
-    }
+    if (_outsize == 0 && !prepare_output_buffer ())
+        _output_stopped = true;
 }
 
 void zlink::asio_engine_t::restart_output ()

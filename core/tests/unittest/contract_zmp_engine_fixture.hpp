@@ -92,6 +92,7 @@ struct contract_zmp_transport_state_t
     size_t read_capacity;
     zlink::i_asio_transport::completion_handler_t read_handler;
     std::deque<std::vector<unsigned char>> incoming, outgoing;
+    std::deque<size_t> outgoing_buffer_counts;
     std::deque<std::pair<zlink::i_asio_transport::completion_handler_t, size_t>> writes;
 
     void deliver ()
@@ -201,6 +202,7 @@ class contract_zmp_transport_t : public zlink::i_asio_transport
         return 0;
     }
     bool supports_speculative_write () const ZLINK_OVERRIDE { return false; }
+    bool supports_gather_write () const ZLINK_OVERRIDE { return state->messages; }
     bool has_message_boundaries () const ZLINK_OVERRIDE { return state->messages; }
     bool is_encrypted () const ZLINK_OVERRIDE { return state->encrypted; }
     const char *name () const ZLINK_OVERRIDE { return "unit-memory"; }
@@ -209,7 +211,24 @@ class contract_zmp_transport_t : public zlink::i_asio_transport
                            completion_handler_t handler_) ZLINK_OVERRIDE
     {
         state->outgoing.push_back (std::vector<unsigned char> (buffer_, buffer_ + size_));
+        state->outgoing_buffer_counts.push_back (1);
         state->writes.push_back (std::make_pair (handler_, size_));
+        if (!state->hold_writes)
+            state->drain_writes ();
+    }
+    void async_writev (const boost::asio::const_buffer *buffers_,
+                       size_t buffer_count_,
+                       completion_handler_t handler_) ZLINK_OVERRIDE
+    {
+        std::vector<unsigned char> bytes;
+        for (size_t i = 0; i != buffer_count_; ++i) {
+            const unsigned char *const data =
+              static_cast<const unsigned char *> (buffers_[i].data ());
+            bytes.insert (bytes.end (), data, data + buffers_[i].size ());
+        }
+        state->outgoing.push_back (bytes);
+        state->outgoing_buffer_counts.push_back (buffer_count_);
+        state->writes.push_back (std::make_pair (handler_, bytes.size ()));
         if (!state->hold_writes)
             state->drain_writes ();
     }
@@ -230,34 +249,73 @@ class contract_zmp_session_t : public zlink::session_base_t
                             zlink::socket_base_t *socket_,
                             const zlink::options_t &options_,
                             bool *alive_) :
-        session_base_t (io_, false, socket_, options_, NULL), alive (alive_)
+        session_base_t (io_, false, socket_, options_, NULL), alive (alive_),
+        test_output_enabled (false)
     {
         *alive = true;
     }
-    ~contract_zmp_session_t () ZLINK_OVERRIDE { *alive = false; }
+    ~contract_zmp_session_t () ZLINK_OVERRIDE
+    {
+        while (!test_output.empty ()) {
+            const int rc = test_output.front ().close ();
+            errno_assert (rc == 0);
+            test_output.pop_front ();
+        }
+        *alive = false;
+    }
     void stop () { terminate (); }
+    int pull_msg (zlink::msg_t *msg_) ZLINK_OVERRIDE
+    {
+        if (!test_output_enabled)
+            return session_base_t::pull_msg (msg_);
+        if (test_output.empty ()) {
+            errno = EAGAIN;
+            return -1;
+        }
+        const int rc = msg_->move (test_output.front ());
+        errno_assert (rc == 0);
+        test_output.pop_front ();
+        return 0;
+    }
+    void queue_test_output (zlink::msg_t &msg_)
+    {
+        test_output.emplace_back ();
+        const int init_rc = test_output.back ().init ();
+        errno_assert (init_rc == 0);
+        const int move_rc = test_output.back ().move (msg_);
+        errno_assert (move_rc == 0);
+    }
+
+    bool test_output_enabled;
 
   private:
     bool *alive;
+    std::deque<zlink::msg_t> test_output;
 };
 
 struct contract_zmp_engine_t
 {
-    contract_zmp_engine_t (void *socket_, bool messages_ = false, bool encrypted_ = false) :
+    contract_zmp_engine_t (void *socket_,
+                           bool messages_ = false,
+                           bool encrypted_ = false,
+                           size_t out_batch_size_ = 0) :
         core (as_socket_handle (socket_).socket),
         io (core->get_ctx (), core->get_tid ()),
         state (new contract_zmp_transport_state_t (messages_, encrypted_)),
         alive (false),
+        engine (NULL),
         descriptor (zlink::open_socket (AF_INET, SOCK_STREAM, IPPROTO_TCP))
     {
         TEST_ASSERT_NOT_EQUAL (zlink::retired_fd, descriptor);
         zlink::options_t options = zlink::session_termination_test_access_t::options_for (core);
+        if (out_batch_size_ != 0)
+            options.out_batch_size = static_cast<int> (out_batch_size_);
         options.handshake_ivl = 0;
         options.linger.store (0);
         options.transport_pair_initiator = false;
         session = new contract_zmp_session_t (&io, core, options, &alive);
         std::unique_ptr<zlink::i_asio_transport> transport (new contract_zmp_transport_t (state));
-        zlink::asio_zmp_engine_t *engine = new zlink::asio_zmp_engine_t (
+        engine = new zlink::asio_zmp_engine_t (
           descriptor, options, zlink::make_unconnected_bind_endpoint_pair ("unit://memory"),
           std::move (transport));
         zlink::command_t command = {};
@@ -331,6 +389,7 @@ struct contract_zmp_engine_t
     zlink::io_thread_t io;
     std::shared_ptr<contract_zmp_transport_state_t> state;
     bool alive;
+    zlink::asio_zmp_engine_t *engine;
     zlink::fd_t descriptor;
     contract_zmp_session_t *session;
 };

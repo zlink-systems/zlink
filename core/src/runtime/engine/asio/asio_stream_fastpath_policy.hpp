@@ -26,21 +26,6 @@ inline size_t gather_threshold ()
     return env::positive_size ("ZLINK_ASIO_GATHER_THRESHOLD", 65536);
 }
 
-inline bool stream_gather_enabled ()
-{
-    return !env::flag_enabled ("ZLINK_ASIO_STREAM_DISABLE_GATHER");
-}
-
-inline size_t stream_gather_threshold ()
-{
-    return env::positive_size ("ZLINK_ASIO_STREAM_GATHER_THRESHOLD", 1024);
-}
-
-inline size_t stream_tiny_gather_threshold ()
-{
-    return env::positive_size ("ZLINK_ASIO_STREAM_TINY_GATHER_THRESHOLD", 0);
-}
-
 inline bool trace_enabled ()
 {
     return env::flag_enabled ("ZLINK_ASIO_TRACE");
@@ -151,15 +136,11 @@ inline bool use_speculative_write_for (int socket_type_,
 //  Deciding it once here keeps the raw write turn from preparing a gather
 //  that can never be built (see core/doc/spec/core/systems/03-io-thread.ko.md
 //  section 4: one prepared buffer per turn).
-inline bool use_gather_write_for (int socket_type_,
-                                  bool protocol_builds_gather_header_,
+inline bool use_gather_write_for (bool protocol_builds_gather_header_,
                                   bool transport_supports_gather_)
 {
-    if (!protocol_builds_gather_header_ || !transport_supports_gather_)
-        return false;
-
-    return gather_write_enabled ()
-           || (socket_type_ == ZLINK_CORE_SOCKET_STREAM && stream_gather_enabled ());
+    return protocol_builds_gather_header_ && transport_supports_gather_
+           && gather_write_enabled ();
 }
 
 inline bool use_speculative_read_for (int socket_type_,
@@ -192,7 +173,7 @@ class connection_fastpath_policy_t
           use_speculative_read_for (socket_type_, _tcp_transport,
                                     capabilities_.speculative_read, diagnostics_)),
         _gather_write_enabled (use_gather_write_for (
-          socket_type_, protocol_builds_gather_header_, capabilities_.gather_write))
+          protocol_builds_gather_header_, capabilities_.gather_write))
     {
     }
 
@@ -348,18 +329,10 @@ inline size_t encoder_max_write_target (const zlink::options_t &options_)
     return encoder_max_write_target (options_, 0, initial_target_cap ());
 }
 
-inline size_t next_stream_target_after_full_hit (size_t current_,
-                                                 size_t max_,
-                                                 size_t *full_hits_,
-                                                 size_t required_hits_)
+inline size_t next_stream_target_after_full_hit (size_t current_, size_t max_)
 {
-    if (!full_hits_ || current_ >= max_)
+    if (current_ >= max_)
         return 0;
-
-    ++(*full_hits_);
-    if (*full_hits_ < required_hits_)
-        return 0;
-    *full_hits_ = 0;
 
     size_t grown = current_;
     if (grown > max_ / 2)
@@ -391,23 +364,16 @@ inline size_t next_decoder_read_target (int socket_type_,
                                         const void *decoder_,
                                         size_t current_,
                                         size_t max_,
-                                        bool last_read_had_partial_prefix_,
                                         size_t last_read_request_size_,
-                                        size_t bytes_transferred_,
-                                        size_t *full_hits_,
-                                        size_t required_hits_)
+                                        size_t bytes_transferred_)
 {
     if (!can_grow_stream_target (socket_type_, decoder_, current_, max_))
         return 0;
 
-    if (last_read_had_partial_prefix_
-        || !stream_read_filled_request (last_read_request_size_, bytes_transferred_)) {
-        if (full_hits_)
-            *full_hits_ = 0;
+    if (!stream_read_filled_request (last_read_request_size_, bytes_transferred_))
         return 0;
-    }
 
-    return next_stream_target_after_full_hit (current_, max_, full_hits_, required_hits_);
+    return next_stream_target_after_full_hit (current_, max_);
 }
 
 inline size_t next_encoder_write_target (int socket_type_,
@@ -416,9 +382,7 @@ inline size_t next_encoder_write_target (int socket_type_,
                                          size_t initial_,
                                          size_t current_,
                                          size_t max_,
-                                         size_t filled_out_batch_,
-                                         size_t *full_hits_,
-                                         size_t required_hits_)
+                                         size_t filled_out_batch_)
 {
     const bool stream = socket_type_ == ZLINK_CORE_SOCKET_STREAM;
     if ((!stream && !message_boundary_transport_) || encoder_ == NULL
@@ -426,15 +390,13 @@ inline size_t next_encoder_write_target (int socket_type_,
         return 0;
 
     if (filled_out_batch_ < current_) {
-        if (full_hits_)
-            *full_hits_ = 0;
         if (message_boundary_transport_ && current_ > initial_
             && filled_out_batch_ < current_ / 2)
             return initial_;
         return 0;
     }
 
-    return next_stream_target_after_full_hit (current_, max_, full_hits_, required_hits_);
+    return next_stream_target_after_full_hit (current_, max_);
 }
 
 template <typename Engine>

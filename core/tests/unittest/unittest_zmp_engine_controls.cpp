@@ -5,6 +5,7 @@
 #include "api/socket/socket_request_reply_internal.hpp"
 #include "sockets/dealer/dealer.hpp"
 #include "sockets/router/router.hpp"
+#include "transports/ws/ws_batch_policy.hpp"
 
 SETUP_TEARDOWN_TESTCONTEXT
 
@@ -95,6 +96,93 @@ void assert_no_completion (void *socket_)
     TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
     zlink_completion_close (&completion);
 }
+
+void assert_ws_batch_operations (const std::vector<size_t> &body_sizes_,
+                                 const std::vector<size_t> &buffer_counts_)
+{
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    {
+        contract_zmp_engine_t application (
+          dealer, true, false, zlink::ws_batch_policy::zmp_send_batch_size ());
+        application.handshake (test_zmp_wire::socket_router, "bounded-batch-router");
+        assert_ready_reply (application);
+        application_pipe (application, true);
+        application.session->test_output_enabled = true;
+
+        application.engine->test_set_stream_encoder_write_target_size (
+          zlink::ws_batch_policy::zmp_send_batch_max_size ());
+        TEST_ASSERT_EQUAL_UINT64 (
+          128 * 1024,
+          application.engine->stream_encoder_write_target_size ());
+        application.state->outgoing.clear ();
+        application.state->outgoing_buffer_counts.clear ();
+        application.state->hold_writes = true;
+
+        for (size_t i = 0; i != body_sizes_.size (); ++i) {
+            zlink::msg_t message;
+            TEST_ASSERT_SUCCESS_ERRNO (message.init_size (body_sizes_[i]));
+            if (body_sizes_[i] != 0)
+                memset (message.data (), static_cast<int> ('a' + i), body_sizes_[i]);
+            if (i + 1 != body_sizes_.size ())
+                message.set_flags (zlink::msg_t::more);
+            application.session->queue_test_output (message);
+            TEST_ASSERT_SUCCESS_ERRNO (message.close ());
+        }
+        application.engine->restart_output ();
+        application.pump ();
+
+        size_t completion_rounds = 0;
+        while (!application.state->writes.empty ()) {
+            TEST_ASSERT_LESS_THAN_UINT (body_sizes_.size () + 3,
+                                        ++completion_rounds);
+            application.state->drain_writes ();
+            application.pump ();
+        }
+
+        TEST_ASSERT_EQUAL_UINT (buffer_counts_.size (),
+                                application.state->outgoing.size ());
+        TEST_ASSERT_EQUAL_UINT (buffer_counts_.size (),
+                                application.state->outgoing_buffer_counts.size ());
+        for (size_t i = 0; i != buffer_counts_.size (); ++i)
+            TEST_ASSERT_EQUAL_UINT (buffer_counts_[i],
+                                    application.state->outgoing_buffer_counts[i]);
+
+        const std::vector<contract_zmp_wire_frame_t> frames =
+          contract_zmp_take_output (*application.state);
+        TEST_ASSERT_EQUAL_UINT (body_sizes_.size (), frames.size ());
+        for (size_t i = 0; i != body_sizes_.size (); ++i) {
+            TEST_ASSERT_EQUAL_UINT (body_sizes_[i], frames[i].body.size ());
+            if (body_sizes_[i] != 0) {
+                TEST_ASSERT_EQUAL_UINT8 (static_cast<unsigned char> ('a' + i),
+                                         frames[i].body.front ());
+                TEST_ASSERT_EQUAL_UINT8 (static_cast<unsigned char> ('a' + i),
+                                         frames[i].body.back ());
+            }
+        }
+    }
+    test_context_socket_close_zero_linger (dealer);
+}
+}
+
+void test_ws_batch_64k_then_small_is_one_three_buffer_write ()
+{
+    assert_ws_batch_operations ({64 * 1024, 64}, {3});
+}
+
+void test_ws_batch_small_64k_small_is_one_three_buffer_write ()
+{
+    assert_ws_batch_operations ({64, 64 * 1024, 64}, {3});
+}
+
+void test_ws_batch_over_max_uses_two_encoder_writes ()
+{
+    assert_ws_batch_operations (
+      {64, zlink::ws_batch_policy::zmp_send_batch_max_size ()}, {1, 1});
+}
+
+void test_ws_batch_two_pointer_bodies_use_two_writes ()
+{
+    assert_ws_batch_operations ({64 * 1024, 64 * 1024}, {2, 2});
 }
 
 void test_raw_wire_peer_weight_bypasses_application_limit_and_consumes_malformed ()
@@ -365,5 +453,9 @@ int main ()
     RUN_TEST (test_stale_application_connection_cannot_complete_reconnected_request);
     RUN_TEST (test_stamped_records_are_dropped_after_transport_replacement);
     RUN_TEST (test_error_reply_payload_export_allocation_failure_is_payloadless);
+    RUN_TEST (test_ws_batch_64k_then_small_is_one_three_buffer_write);
+    RUN_TEST (test_ws_batch_small_64k_small_is_one_three_buffer_write);
+    RUN_TEST (test_ws_batch_over_max_uses_two_encoder_writes);
+    RUN_TEST (test_ws_batch_two_pointer_bodies_use_two_writes);
     return UNITY_END ();
 }

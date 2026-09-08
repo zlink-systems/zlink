@@ -8,11 +8,11 @@
 
 #include <boost/asio.hpp>
 #include <boost/beast/websocket.hpp>
-#include <array>
 #include <cerrno>
 #include <cstdio>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "core/address.hpp"
 #include "engine/asio/i_asio_transport.hpp"
@@ -236,10 +236,8 @@ void async_write_some (std::shared_ptr<connection_t> connection_,
 template <typename connection_t>
 void async_writev (std::shared_ptr<connection_t> connection_,
                    bool ready_,
-                   const unsigned char *header_,
-                   std::size_t header_size_,
-                   const unsigned char *body_,
-                   std::size_t body_size_,
+                   const boost::asio::const_buffer *buffers_,
+                   std::size_t buffer_count_,
                    i_asio_transport::completion_handler_t handler_,
                    const char *debug_category_)
 {
@@ -249,11 +247,13 @@ void async_writev (std::shared_ptr<connection_t> connection_,
         return;
     }
 
-    const std::array<boost::asio::const_buffer, 2> buffers = {
-      boost::asio::buffer (header_, header_size_),
-      boost::asio::buffer (body_, body_size_)};
+    std::vector<boost::asio::const_buffer> buffers (buffers_,
+                                                    buffers_ + buffer_count_);
+    std::size_t payload_size = 0;
+    for (std::size_t i = 0; i != buffer_count_; ++i)
+        payload_size += buffers_[i].size ();
     connection_->stream.write_buffer_bytes (
-      write_buffer_bytes_for_payload (header_size_ + body_size_));
+      write_buffer_bytes_for_payload (payload_size));
     connection_->stream.async_write (
       buffers,
       [connection = std::move (connection_), handler = std::move (handler_),

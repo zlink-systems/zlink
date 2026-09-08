@@ -228,7 +228,7 @@ class asio_engine_t : public i_engine
 
     //  Drain a bounded number of immediately available STREAM reads after an
     //  async callback to reduce callback churn on small payloads.
-    void maybe_drain_stream_reads (size_t last_read_bytes_);
+    void maybe_drain_stream_reads ();
 
     bool buffer_stream_backpressure_read (size_t bytes_transferred_);
 
@@ -239,6 +239,11 @@ class asio_engine_t : public i_engine
     //  Prepare gather write (header + body) for large messages.
     //  Returns true if gather write was scheduled or output was stopped.
     bool prepare_gather_output ();
+
+    //  Submit the prepared buffer sequence. A bounded batch transfers its
+    //  pointer body's message ownership to the completion handler.
+    void start_async_gather_write (
+      const std::shared_ptr<msg_t> &body_owner_ = std::shared_ptr<msg_t> ());
 
     //  Finalize message state after gather write completion.
     void finish_gather_output ();
@@ -329,6 +334,15 @@ class asio_engine_t : public i_engine
     {
         return _pipeline.stream_encoder_write_target_size;
     }
+
+#ifdef ZLINK_BUILD_TESTS
+    void test_set_stream_encoder_write_target_size (size_t size_)
+    {
+        _pipeline.stream_encoder_write_target_size = size_;
+        if (_encoder)
+            _encoder->resize_buffer (size_);
+    }
+#endif
 
     ZLINK_NON_COPYABLE_NOR_MOVABLE (asio_engine_t)
 };

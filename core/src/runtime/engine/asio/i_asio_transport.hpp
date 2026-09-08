@@ -143,12 +143,12 @@ class i_asio_transport
     //  Default: false (unsupported).
     virtual bool supports_gather_write () const { return false; }
 
-    //  Async gather write (header + body).
+    //  Async gather write. The buffer sequence is copied before this method
+    //  returns; the referenced bytes remain owned by the engine until the
+    //  completion handler runs.
     //  Default: not supported; handler receives operation_not_supported.
-    virtual void async_writev (const unsigned char *header,
-                               std::size_t header_size,
-                               const unsigned char *body,
-                               std::size_t body_size,
+    virtual void async_writev (const boost::asio::const_buffer *buffers,
+                               std::size_t buffer_count,
                                completion_handler_t handler)
     {
         if (handler) {

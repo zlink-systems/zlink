@@ -10,8 +10,8 @@
 #include "utils/env.hpp"
 #include <atomic>
 #include <algorithm>
-#include <array>
 #include <limits>
+#include <vector>
 #ifndef ZLINK_HAVE_WINDOWS
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -567,10 +567,8 @@ void tcp_transport_t::async_write_some (const unsigned char *buffer,
     }
 }
 
-void tcp_transport_t::async_writev (const unsigned char *header,
-                                    std::size_t header_size,
-                                    const unsigned char *body,
-                                    std::size_t body_size,
+void tcp_transport_t::async_writev (const boost::asio::const_buffer *buffers,
+                                    std::size_t buffer_count,
                                     completion_handler_t handler)
 {
     if (tcp_stats_on) {
@@ -585,18 +583,25 @@ void tcp_transport_t::async_writev (const unsigned char *header,
     }
     const std::shared_ptr<boost::asio::ip::tcp::socket> socket = _socket;
 
-    if (body_size == 0) {
-        async_write_some (header, header_size, std::move (handler));
+    if (buffer_count == 0) {
+        if (handler)
+            handler (boost::system::error_code (), 0);
+        return;
+    }
+    if (buffer_count == 1) {
+        async_write_some (
+          static_cast<const unsigned char *> (buffers[0].data ()), buffers[0].size (),
+          std::move (handler));
         return;
     }
 
-    if (header_size == 0) {
-        async_write_some (body, body_size, std::move (handler));
-        return;
-    }
-
+    bool use_asio_sequence = buffer_count > 2;
 #if !defined ZLINK_HAVE_WINDOWS
-    if (tcp_use_asio_writev_on) {
+    use_asio_sequence = use_asio_sequence || tcp_use_asio_writev_on;
+#endif
+    if (use_asio_sequence) {
+        const std::vector<boost::asio::const_buffer> buffer_sequence (
+          buffers, buffers + buffer_count);
         if (tcp_stats_on) {
             auto stats_handler = [handler = std::move (handler),
                                   socket] (const boost::system::error_code &ec,
@@ -609,9 +614,8 @@ void tcp_transport_t::async_writev (const unsigned char *header,
                 if (handler)
                     handler (ec, bytes);
             };
-            std::array<boost::asio::const_buffer, 2> buffers = {
-              boost::asio::buffer (header, header_size), boost::asio::buffer (body, body_size)};
-            boost::asio::async_write (*socket, buffers, std::move (stats_handler));
+            boost::asio::async_write (*socket, buffer_sequence,
+                                      std::move (stats_handler));
         } else {
             auto wrapped_handler = [handler = std::move (handler),
                                     socket] (const boost::system::error_code &ec,
@@ -620,15 +624,18 @@ void tcp_transport_t::async_writev (const unsigned char *header,
                 if (handler)
                     handler (ec, bytes);
             };
-            std::array<boost::asio::const_buffer, 2> buffers = {
-              boost::asio::buffer (header, header_size), boost::asio::buffer (body, body_size)};
-            boost::asio::async_write (*socket, buffers, std::move (wrapped_handler));
+            boost::asio::async_write (*socket, buffer_sequence,
+                                      std::move (wrapped_handler));
         }
         return;
     }
 
-#endif
-
+    const unsigned char *const header =
+      static_cast<const unsigned char *> (buffers[0].data ());
+    const size_t header_size = buffers[0].size ();
+    const unsigned char *const body =
+      static_cast<const unsigned char *> (buffers[1].data ());
+    const size_t body_size = buffers[1].size ();
     tcp_native_writev_cursor_t cursor = {header, header_size, 0, body, body_size, 0};
     const tcp_native_writev_result_t result = tcp_run_native_writev (socket, cursor);
     if (result.status != tcp_native_writev_result_t::pending) {

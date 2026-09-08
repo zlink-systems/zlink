@@ -23,6 +23,7 @@
 
 #include "core/options.hpp"
 #include "engine/asio/asio_stream_fastpath_policy.hpp"
+#include "transports/ws/ws_batch_policy.hpp"
 
 #include <unity.h>
 #include <cstdlib>
@@ -35,6 +36,7 @@ const char *const legacy_sync_write_env = "ZLINK_ASIO_LEGACY_SYNC_WRITE";
 const char *const stream_async_write_env = "ZLINK_ASIO_STREAM_ASYNC_WRITE";
 const char *const non_tcp_speculative_read_env =
   "ZLINK_ASIO_STREAM_ENABLE_NON_TCP_SPEC_READ";
+const char *const gather_write_env = "ZLINK_ASIO_GATHER_WRITE";
 
 void set_diagnostic_option (const char *name_, bool enabled_)
 {
@@ -99,6 +101,7 @@ void setUp ()
     set_diagnostic_option (legacy_sync_write_env, false);
     set_diagnostic_option (stream_async_write_env, false);
     set_diagnostic_option (non_tcp_speculative_read_env, false);
+    set_diagnostic_option (gather_write_env, false);
 }
 
 void tearDown ()
@@ -106,6 +109,7 @@ void tearDown ()
     set_diagnostic_option (legacy_sync_write_env, false);
     set_diagnostic_option (stream_async_write_env, false);
     set_diagnostic_option (non_tcp_speculative_read_env, false);
+    set_diagnostic_option (gather_write_env, false);
 }
 
 //  The one admitted case: STREAM over tcp, where the byte budget applies.
@@ -165,23 +169,33 @@ void test_admitted_turn_carries_a_positive_byte_budget ()
 
 void test_message_boundary_encoder_target_grows_and_reclaims ()
 {
-    size_t full_hits = 0;
     const size_t initial = 16 * 1024;
     const size_t maximum = 128 * 1024;
     const void *const encoder = reinterpret_cast<const void *> (1);
 
-    TEST_ASSERT_EQUAL_UINT64 (
-      0, policy::next_encoder_write_target (
-           ZLINK_CORE_SOCKET_PAIR, encoder, true, initial, initial, maximum,
-           initial, &full_hits, 2));
     const size_t grown = policy::next_encoder_write_target (
       ZLINK_CORE_SOCKET_PAIR, encoder, true, initial, initial, maximum,
-      initial, &full_hits, 2);
+      initial);
     TEST_ASSERT_EQUAL_UINT64 (2 * initial, grown);
     TEST_ASSERT_EQUAL_UINT64 (
       initial, policy::next_encoder_write_target (
                  ZLINK_CORE_SOCKET_PAIR, encoder, true, initial, grown,
-                 maximum, 1024, &full_hits, 2));
+                 maximum, 1024));
+}
+
+void test_stream_decoder_target_grows_after_one_full_read ()
+{
+    const size_t initial = 4096;
+    const size_t maximum = 1024 * 1024;
+    const void *const decoder = reinterpret_cast<const void *> (1);
+
+    TEST_ASSERT_EQUAL_UINT64 (
+      2 * initial,
+      policy::next_decoder_read_target (ZLINK_CORE_SOCKET_STREAM, decoder, initial,
+                                        maximum, initial, initial));
+    TEST_ASSERT_EQUAL_UINT64 (
+      0, policy::next_decoder_read_target (ZLINK_CORE_SOCKET_STREAM, decoder, initial,
+                                           maximum, initial, initial - 1));
 }
 
 //  Both escape hatches are diagnostics and must be off unless asked for, so
@@ -261,28 +275,32 @@ void test_transport_capabilities_are_snapshotted_per_connection ()
     TEST_ASSERT_FALSE (before.gather_write_enabled ());
     TEST_ASSERT_TRUE (after.speculative_write_enabled ());
     TEST_ASSERT_TRUE (after.speculative_read_enabled ());
-    TEST_ASSERT_TRUE (after.gather_write_enabled ());
+    TEST_ASSERT_FALSE (after.gather_write_enabled ());
 }
 
 void test_transport_capability_matrix ()
 {
     const policy::connection_fastpath_policy_t tcp = make_policy_with_capabilities (
-      ZLINK_CORE_SOCKET_STREAM, "tcp", make_capabilities (true, true, true));
+      ZLINK_CORE_SOCKET_STREAM, "tcp", make_capabilities (true, true, true), false, false, false,
+      false);
     const policy::connection_fastpath_policy_t ipc = make_policy_with_capabilities (
-      ZLINK_CORE_SOCKET_STREAM, "ipc_transport", make_capabilities (false, true, true));
+      ZLINK_CORE_SOCKET_STREAM, "ipc_transport", make_capabilities (false, true, true), false,
+      false, false, false);
     const policy::connection_fastpath_policy_t ws = make_policy_with_capabilities (
-      ZLINK_CORE_SOCKET_STREAM, "ws", make_capabilities (false, false, true));
+      ZLINK_CORE_SOCKET_STREAM, "ws", make_capabilities (false, false, true), false, false, false,
+      false);
     const policy::connection_fastpath_policy_t wss = make_policy_with_capabilities (
-      ZLINK_CORE_SOCKET_STREAM, "wss", make_capabilities (false, false, true));
+      ZLINK_CORE_SOCKET_STREAM, "wss", make_capabilities (false, false, true), false, false, false,
+      false);
 
     TEST_ASSERT_TRUE (tcp.speculative_read_enabled ());
-    TEST_ASSERT_TRUE (tcp.gather_write_enabled ());
+    TEST_ASSERT_FALSE (tcp.gather_write_enabled ());
     TEST_ASSERT_TRUE (ipc.speculative_read_enabled ());
-    TEST_ASSERT_TRUE (ipc.gather_write_enabled ());
+    TEST_ASSERT_FALSE (ipc.gather_write_enabled ());
     TEST_ASSERT_FALSE (ws.speculative_read_enabled ());
-    TEST_ASSERT_TRUE (ws.gather_write_enabled ());
+    TEST_ASSERT_FALSE (ws.gather_write_enabled ());
     TEST_ASSERT_FALSE (wss.speculative_read_enabled ());
-    TEST_ASSERT_TRUE (wss.gather_write_enabled ());
+    TEST_ASSERT_FALSE (wss.gather_write_enabled ());
 }
 
 //  Gather needs both halves. The raw engine builds no frame header, so no
@@ -293,9 +311,11 @@ void test_gather_needs_both_transport_and_protocol_support ()
     const policy::connection_fastpath_policy_t raw_on_tcp = make_policy_with_capabilities (
       ZLINK_CORE_SOCKET_STREAM, "tcp", make_capabilities (true, true, true), false, false, false,
       false);
-    const policy::connection_fastpath_policy_t zmp_on_tcp = make_policy_with_capabilities (
-      ZLINK_CORE_SOCKET_STREAM, "tcp", make_capabilities (true, true, true), false, false, false,
-      true);
+    set_diagnostic_option (gather_write_env, true);
+    const policy::connection_fastpath_policy_t zmp_on_tcp =
+      policy::connection_fastpath_policy_t::from_environment (
+        ZLINK_CORE_SOCKET_PAIR, "tcp", make_capabilities (true, true, true), true);
+    set_diagnostic_option (gather_write_env, false);
     const policy::connection_fastpath_policy_t zmp_without_transport =
       make_policy_with_capabilities (ZLINK_CORE_SOCKET_PAIR, "inproc",
                                      make_capabilities (false, false, false), false, false, false,
@@ -304,6 +324,32 @@ void test_gather_needs_both_transport_and_protocol_support ()
     TEST_ASSERT_FALSE (raw_on_tcp.gather_write_enabled ());
     TEST_ASSERT_TRUE (zmp_on_tcp.gather_write_enabled ());
     TEST_ASSERT_FALSE (zmp_without_transport.gather_write_enabled ());
+}
+
+void test_ws_batch_keeps_ready_64k_and_small_frame_in_one_operation ()
+{
+    const size_t target = 128 * 1024;
+    const size_t maximum = zlink::ws_batch_policy::zmp_send_batch_max_size ();
+    const size_t header = 8;
+    const size_t large_body = 64 * 1024;
+    const size_t small_frame = header + 64;
+
+    // The small frame is already in the copy batch. The following large-frame
+    // header joins it, and the large body closes the same two-buffer write.
+    TEST_ASSERT_TRUE (zlink::ws_batch_policy::use_pointer_body_in_batch (
+      small_frame, header, large_body, target, maximum));
+}
+
+void test_ws_batch_gathers_target_crossing_body_but_splits_over_max ()
+{
+    const size_t initial_target = 16 * 1024;
+    const size_t maximum = zlink::ws_batch_policy::zmp_send_batch_max_size ();
+    const size_t header = 8;
+
+    TEST_ASSERT_TRUE (zlink::ws_batch_policy::use_pointer_body_in_batch (
+      0, header, 64 * 1024, initial_target, maximum));
+    TEST_ASSERT_FALSE (zlink::ws_batch_policy::use_pointer_body_in_batch (
+      0, header, maximum + 1, initial_target, maximum));
 }
 
 void test_non_tcp_speculative_read_is_snapshotted_per_connection ()
@@ -338,11 +384,14 @@ int main ()
     RUN_TEST (test_transport_without_speculative_support_is_not_admitted);
     RUN_TEST (test_admitted_turn_carries_a_positive_byte_budget);
     RUN_TEST (test_message_boundary_encoder_target_grows_and_reclaims);
+    RUN_TEST (test_stream_decoder_target_grows_after_one_full_read);
     RUN_TEST (test_diagnostic_opt_ins_default_off);
     RUN_TEST (test_legacy_sync_write_is_snapshotted_per_connection);
     RUN_TEST (test_stream_async_write_is_snapshotted_per_connection);
     RUN_TEST (test_transport_capabilities_are_snapshotted_per_connection);
     RUN_TEST (test_gather_needs_both_transport_and_protocol_support);
+    RUN_TEST (test_ws_batch_keeps_ready_64k_and_small_frame_in_one_operation);
+    RUN_TEST (test_ws_batch_gathers_target_crossing_body_but_splits_over_max);
     RUN_TEST (test_transport_capability_matrix);
     RUN_TEST (test_non_tcp_speculative_read_is_snapshotted_per_connection);
     return UNITY_END ();

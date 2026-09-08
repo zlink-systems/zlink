@@ -102,31 +102,6 @@ bool is_complete_stream_frame (const unsigned char *payload_, size_t payload_siz
                                      header_size);
 }
 
-bool try_parse_stream_frame (const unsigned char *payload_,
-                             size_t payload_size_,
-                             size_t *frame_size_out_)
-{
-    if (!payload_ || !frame_size_out_ || payload_size_ < stream_echo::k_stream_packet_prefix_size)
-        return false;
-
-    const size_t header_size = static_cast<size_t> (stream_echo::load_u16_be (payload_));
-    const size_t body_size = static_cast<size_t> (stream_echo::load_u32_be (payload_ + 2));
-    if (!stream_echo::valid_frame_sizes (header_size, body_size))
-        return false;
-
-    const size_t frame_size = stream_echo::k_stream_packet_prefix_size + header_size + body_size;
-    if (payload_size_ < frame_size)
-        return false;
-
-    if (!stream_echo::is_msg_name (payload_ + stream_echo::k_stream_packet_prefix_size,
-                                   header_size)) {
-        return false;
-    }
-
-    *frame_size_out_ = frame_size;
-    return true;
-}
-
 class zlink_stream_echo_server_t
 {
   public:
@@ -230,61 +205,6 @@ class zlink_stream_echo_server_t
         protocol_error.fetch_add (1, std::memory_order_relaxed);
     }
 
-    bool try_process_complete_chunk (const zlink_routing_id_t *rid_,
-                                     zlink_msg_t *msg_,
-                                     const unsigned char *payload_,
-                                     size_t payload_size_)
-    {
-        if (!rid_ || !msg_ || !payload_ || payload_size_ == 0)
-            return false;
-
-        size_t offset = 0;
-        size_t frame_count = 0;
-        while (offset < payload_size_) {
-            size_t frame_size = 0;
-            if (!try_parse_stream_frame (payload_ + offset, payload_size_ - offset, &frame_size)) {
-                if (offset == 0)
-                    return false;
-                mark_parse_error ();
-                (void) zlink_msg_close (msg_);
-                return true;
-            }
-
-            recv_msgs.fetch_add (1, std::memory_order_relaxed);
-            if (offset == 0 && frame_size == payload_size_ && frame_count == 0) {
-                if (zlink_send_part_rid (server, rid_, msg_, ZLINK_SEND_FLAGS_NONE,
-                                         ZLINK_PART_FINAL, NULL, NULL)
-                    != 0) {
-                    send_error.fetch_add (1, std::memory_order_relaxed);
-                    (void) zlink_msg_close (msg_);
-                }
-                return true;
-            }
-
-            zlink_msg_t reply;
-            if (zlink_msg_init_size (&reply, frame_size) != 0) {
-                send_error.fetch_add (1, std::memory_order_relaxed);
-                (void) zlink_msg_close (msg_);
-                return true;
-            }
-            std::memcpy (zlink_msg_data (&reply), payload_ + offset, frame_size);
-            if (zlink_send_part_rid (server, rid_, &reply, ZLINK_SEND_FLAGS_NONE,
-                                     ZLINK_PART_FINAL, NULL, NULL)
-                != 0) {
-                send_error.fetch_add (1, std::memory_order_relaxed);
-                (void) zlink_msg_close (&reply);
-                (void) zlink_msg_close (msg_);
-                return true;
-            }
-            (void) zlink_msg_close (&reply);
-            offset += frame_size;
-            ++frame_count;
-        }
-
-        (void) zlink_msg_close (msg_);
-        return frame_count > 0;
-    }
-
     int on_raw_packet (const zlink_routing_id_t *rid_, zlink_msg_t *msg_)
     {
         if (!rid_ || rid_->size != 4) {
@@ -328,8 +248,6 @@ class zlink_stream_echo_server_t
                 }
                 return 0;
             }
-            if (try_process_complete_chunk (rid_, msg_, payload, payload_size))
-                return 0;
         }
 
         stream_echo::append_frame_bytes (&buffer, payload, payload_size);

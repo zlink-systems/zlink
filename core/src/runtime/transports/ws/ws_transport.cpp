@@ -127,16 +127,14 @@ void ws_transport_t::async_write_some (const unsigned char *buffer,
       std::move (handler), "WS");
 }
 
-void ws_transport_t::async_writev (const unsigned char *header,
-                                   std::size_t header_size,
-                                   const unsigned char *body,
-                                   std::size_t body_size,
+void ws_transport_t::async_writev (const boost::asio::const_buffer *buffers,
+                                   std::size_t buffer_count,
                                    completion_handler_t handler)
 {
     const std::shared_ptr<connection_generation_t> connection = _connection;
     ws_transport_common_internal::async_writev (
-      connection, connection && connection->handshake_complete, header, header_size, body,
-      body_size, std::move (handler), "WS");
+      connection, connection && connection->handshake_complete, buffers,
+      buffer_count, std::move (handler), "WS");
 }
 
 std::size_t ws_transport_t::write_some (const std::uint8_t *data, std::size_t len)

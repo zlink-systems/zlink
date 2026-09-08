@@ -85,10 +85,8 @@ class ws_transport_t : public i_asio_transport
     // STREAM 64 KiB echo relies on this capability to avoid copying the body
     // through the encoder batch buffer. Keep it aligned with async_writev().
     bool supports_gather_write () const ZLINK_OVERRIDE { return true; }
-    void async_writev (const unsigned char *header,
-                       std::size_t header_size,
-                       const unsigned char *body,
-                       std::size_t body_size,
+    void async_writev (const boost::asio::const_buffer *buffers,
+                       std::size_t buffer_count,
                        completion_handler_t handler) ZLINK_OVERRIDE;
     bool is_encrypted () const ZLINK_OVERRIDE { return false; }
     const char *name () const ZLINK_OVERRIDE { return "ws"; }

@@ -12,6 +12,7 @@
 
 #if !defined ZLINK_HAVE_WINDOWS
 #include <arpa/inet.h>
+#include <array>
 #include <cerrno>
 #include <cstring>
 #include <memory>
@@ -130,7 +131,10 @@ void assert_immediate_writev_releases_completion (Transport &transport_,
     };
     lifetime.reset ();
 
-    transport_.async_writev (&header, sizeof (header), &body, sizeof (body),
+    const std::array<boost::asio::const_buffer, 2> buffers = {
+      boost::asio::buffer (&header, sizeof (header)),
+      boost::asio::buffer (&body, sizeof (body))};
+    transport_.async_writev (buffers.data (), buffers.size (),
                              std::move (completion));
     call_returned = true;
 
@@ -163,8 +167,11 @@ void assert_pending_writev_releases_completion (Transport &transport_,
     const unsigned char header = 0x01;
     const unsigned char body = 0x02;
 
+    const std::array<boost::asio::const_buffer, 2> buffers = {
+      boost::asio::buffer (&header, sizeof (header)),
+      boost::asio::buffer (&body, sizeof (body))};
     transport_.async_writev (
-      &header, sizeof (header), &body, sizeof (body),
+      buffers.data (), buffers.size (),
       [lifetime, &completion_count, &completion_bytes,
        &completion_error] (const boost::system::error_code &ec, std::size_t bytes) {
           ++completion_count;
