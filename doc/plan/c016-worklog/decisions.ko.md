@@ -4834,3 +4834,6 @@ Windows Actions green으로 WIN-2의 host 한정 판정 확정(`test_wake_invari
 ## D-B286 (2026-09-08 22:45, 머신 B) review-CCU-4 — 차단 2건: `applied > planned`는 정상 deferred shrink(§4)에서도 참이라 수렴 지표 불가(장주기 tick마다 full pass 반복), 증분 기록이 deadline을 0으로 지워 attach마다 timer 재무장 → CCU-5(1 h): **수렴 의무 = deadline 자체**
 
 `review-ccu4.md`(sol): 1(d) fast-path guard·ctx 종료 task 수명은 해소. 규칙 확정: 증분 성공은 `arm_debounce()`만(deadline 없으면 세우고 wake 1회, 있으면 무동작), 증분 경로 plan 기록은 deadline 불변(해제는 full pass 완료 지점 한 곳), `recalc_due()`는 deadline 경과만. 경고: 증분 진입 assert를 attach마다, barrier 실제 동시 출발. 이후 review-CCU-5.
+## D-B287 (2026-09-08 23:00, 머신 B) MAC-4 결과 — **Core 결함**: ctx 종료 게시가 monitor teardown 뒤로 밀리고(macOS 13 ms 창, Linux 0.4 ms) 블로킹 receive 루프 3곳이 종료를 진입 시에만 확인(send는 매 턴) → 종료 선게시 + receive 매 턴 ETERM(send와 대칭); macOS 20/20·serial 150/150·parallel 57/57; `wip/0.17.4` 적용(MERGE-2a)
+
+`core-rf-MAC-4-report.md`, `MAC-4.patch`(5파일 +49/−1). ALL-3 fence·MAC-3 msleep은 원인 아님. 계약: `zlink_ctx_shutdown()` 이후 blocking receive ETERM은 진입부가 이미 하던 동작을 루프 안에도 적용한 것(새 동작 없음, 새 상태·상수 0). 테스트 1줄(측정 시점을 join 전으로). Linux `^test_stream` until-fail:5 통과; dev 트리 hotpath_gate 실패는 LTO OFF 빌드 기존 성질(변경 없는 트리와 동일 수치). 후속: `core/builds/macos/build.sh`에 `--output-on-failure`(MERGE-2a에 포함). CHANGELOG [0.17.4] Fixed 항목.
