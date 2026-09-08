@@ -4686,6 +4686,27 @@ REQREP 정합 검증(4 agent)과 경계 3-run이 로컬 0.17.3 prefix로 짝지�
 전부 실패한다(D-BP42 재발). **큐가 비면** (1) 7개 언어 Multi·Single을 공식 prefix로 재빌드, (2) C tcp DD·RR REQREP
 64 B 1-run을 로컬 prefix 값과 대조해 ±5% 안이면 로컬 0.17.3 값을 그대로 인정, (3) 이후 새 측정은 공식 prefix. 행에는
 prefix를 명시한다.
+### D-BP45 (2026-09-08 17:30) 티켓이 Core prefix를 보장한다 — env 없이 낸 티켓이 core/build를 자동 재빌드해 dev 빌드를 쟀다
+
+**사실:** 17:14에 새 Bash 셸(`ZLINK_CORE_*` 미설정)에서 낸 `sg2` 티켓 4건에서 C 러너가 "stale core runtime"을 감지해
+`core/build`를 B의 최신 소스로 자동 재빌드하고 그 runtime으로 측정했다(`Rust perf runtime: core/build/lib/libzlink.so.0.17.3`).
+측정 중 Core 재빌드 금지·고정 prefix 규칙 위반. 이미 기록한 `m173b`·`sg1` 값은 티켓 로그의 runtime 줄로 전수 확인해 모두
+`core-pinned/0.17.3`이었다.
+
+**결정:** (1) 해당 C `sg2` report는 `-INVALID-corebuild` 접미사로 무효화, 돌던 Rust `sg2`는 pid로 중단, 4건 재제출.
+(2) `perf-ticket.sh`는 제출자 env에 prefix가 없으면 `.artifacts/perf-queue/core-prefix.env`(현재 core-pinned/0.17.3)를
+티켓에 export한다(`2d3fa99aa3`). prefix 전환(D-BP44) 시 이 파일을 바꾼다. (3) 기록 전 티켓 로그의 runtime 줄 확인을 절차에 넣는다.
+
+### D-BP46 (2026-09-08 18:10) C Single DEALER_ROUTER_REQREP 64 B·256 B 간헐 종료 실패는 러너 결함 — Core 결함 아님
+
+**사실:** 4회 재현(`replier_fatal=1 replied=0`, requester는 정상 완료). codex 진단 보강으로 `zlink_reply_part(FINAL) →
+BACKPRESSURED/EAGAIN`을 종료 국면에 fatal로 분류한 것과, 2-part reply 경로가 `replied` 카운터를 건너뛴 것이 원인으로 확정
+(log `2026-09-08-c-single-dr-reqrep-replier-fatal.ko.md`).
+
+**결정:** 종료 drain은 deadline 전 admission된 `in_flight`만 대상(retained request 재제출 제거), DR REQREP은 in-band STOP
+대신 local stop, stop 뒤 backpressure는 정상 종료, 카운터 수정(`54c1651c91`). 측정 조건 무변경. 64 B·256 B 5-run 2회 20/20.
+이전에 이 결함으로 무효 처리한 셀(dotnet DR 64 B, rust DR 256 B 등)은 `sg2` 이후 값으로 대체됐다.
+
 ## D-B251 (2026-09-08 15:25, 머신 B) 사용자 지시 — macOS 실패를 병렬로 미리 수정해 0.17.4가 바로 빌드되게: MAC-1(Claude) 착수
 
 **절차**: macOS 머신 없음 → 진단 workflow `core-macos-test.yml`(workflow_dispatch, macos-15, ctest 정규식 입력, serial -j1)을 브랜치 `wip/mac-1`(베이스 `wip/0.17.3-all2` + Intel 제거·build.sh gating 커밋 cherry-pick)에 추가하고 Actions로 재현·검증 loop. 진단 run 34190928956(main, 새 gating)의 macOS ARM64 실패 목록을 확정 입력으로. 알려진 실제 실패: auto-HWM applied limit −1(`test_ctx_options:657`), xpub NODROP blocking publish timeout(`test_xpub_nodrop:243`), `test_stream_packet_progress`; timeout군은 병렬 실행 제거 뒤 재판정. 수정은 `__APPLE__` 분기 최소, Linux 동작 불변. patch `all-artifacts/MAC-1.patch` → 0.17.4 병합.
