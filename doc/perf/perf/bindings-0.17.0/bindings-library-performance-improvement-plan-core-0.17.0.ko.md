@@ -1470,8 +1470,8 @@ callgrind·프로파일 분석, 후보 no-go 목록과 그 근거(D-B121~D-B130)
 | 1 | C++ | REQREP 연속 제출 정합 완료(63.6%) | **0.17.2 `tcp`·`tls`·`ws`·`wss` 24 cell 기록 완료** — 통과 10, 보류 14(REQREP 4 구조적, Core/transport 귀속 10), 차단 1(wss DD). 열린 조사 없음 | 90.8 / 57.4 / 68.4 / 93.2% | 3건 push + 러너 정합 4건(`31c5e4f7f0` `e0862e1e5c` `33f63ae89d` `1aa2751b1b`) |
 | 2 | .NET | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 62.5, PUBSUB 61.0, DR SS 63.9, RR SS **69.5(3-run 경계, 목표 70)**, DR REQREP 60.5, RR REQREP 63.1%. 격차는 pattern 무관 ~60~70% 띠 = D-BP31 두 지배 항목(공개 API 계약). client echo drain 채택(D-BP34). tls·ws·wss·STREAM 22 cell `보류(Core 대기)` | 59.6 / 58.3 / 67.0 / 61.3% | 3건 push |
 | 3 | Java | 미측정 | **0.17.2 `tcp` 5/6 기록** — PUBSUB `통과` 93.2; DD 72.0, DR SS 78.7, DR REQREP 46.3, RR REQREP 47.6 `미달`. REQREP 65536 B만 11%(byte HWM 16개/socket + client admission gate 부재, `log/2026-09-08-java-reqrep-64k-analysis.ko.md`) — POLLOUT gate 수정 진행 중. RR SS는 4096 B relay 실패(`multi_routed_relay_failed`) 수정 진행 중 → `차단`. 나머지 22 cell `보류(Core 대기)` | 80.9 / 59.4 / 58.7 / 80.9% | 3건 push |
-| 4 | Node | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 43.1, PUBSUB 29.6, DR SS 32.6, RR SS 35.4, DR REQREP 32.5, RR REQREP 29.7%(목표 60). 초 단위 latency가 DD·SS에 걸쳐 있음(admitted echo backlog client당 ~1,070건, D-BP34 교차 발견) — client echo drain·backlog 조사 진행 중. 22 cell `보류(Core 대기)` | 35.9 / 24.3 / 24.8 / 30.2% | 4건 push |
-| 5 | Go | 미측정 | **0.17.2 `tcp` 3/6 기록** — PUBSUB 39.8, DR REQREP 67.7, RR REQREP 67.1 `미달`(REQREP 작은 크기 latency ~3x = async terminal 왕복 후보). DD·DR SS는 단방향 drain 수정(codex) 뒤 5-run `complete`, RR SS 65536 B만 4/5 실패 → 수정 결과 받은 뒤 기록. 22 cell `보류(Core 대기)` | 53.2 / 19.0 / 21.8 / 54.6% | 2건 push |
+| 4 | Node | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 43.1, PUBSUB 29.6, DR SS 33.7, RR SS 35.5, DR REQREP 32.5, RR REQREP 29.7%(목표 60). client echo drain 채택(`93bcf7156a`). 초 단위 latency가 DD·SS 전 크기에 걸침(교차 현상, §10.3.2 첫 항목). 22 cell `보류(Core 대기)` | 35.9 / 24.3 / 24.8 / 30.2% | 4건 push |
+| 5 | Go | 미측정 | **0.17.2 `tcp` 5/6 기록** — PUBSUB 39.8, DD 31.5(5-run), DR SS 50.1(5-run 경계), DR REQREP 67.7, RR REQREP 67.1 `미달`; RR SS 65536 B `차단`(server_shutdown_failed 2~3/5, 64~4096 B는 complete). 단방향·echo client를 C turn 모델로(`e05d6d2636`, 이전 DD·SS 차단 해소). 22 cell `보류(Core 대기)` | 53.2 / 19.0 / 21.8 / 54.6% | 2건 push |
 | 6 | Rust | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 60.5, PUBSUB 89.0, DR SS 73.5, RR SS 63.8, DR REQREP 54.3, RR REQREP 55.1%(목표 95/85). 4096 B만 초 단위 latency(SS 2종), 65536 B 21~38%. REQREP 비율 하락은 C 기준 상승분. 22 cell `보류(Core 대기)` | 59.3 / 67.3 / 69.8 / 87.7% | 2건 push |
 | 7 | Python | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 15.9, PUBSUB 34.0, DR SS 24.2, RR SS 23.3, DR REQREP 14.2, RR REQREP 15.7%(목표 60). 크기·pattern 무관 평탄 = 인터프리터 고정 per-message 비용. 22 cell `보류(Core 대기)` | 15.4 / 15.5 / 19.6 / 31.9% | 2건 push |
 
@@ -1570,6 +1570,8 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 | 2026-09-08 | C++ | Multi `tcp` SENDSEND 2종 개선 pass 1과 판정 | `p8ss5r` before / 확인 재측정 | before와 같은 5 sizes·5초·**5회**·100 clients·고정 Core 0.17.1 prefix. pass는 library를 수정하지 않았고 확인 재측정은 **변경 없는 source**다(최적화 after가 아니다) | **후보 없음** — routed send 고유 비용에 격차가 없다: native routed send inclusive C 5,278 / C++ 5,278 Ir, RR client native는 C 5,627 / C++ 5,362로 C++가 낮고, C++ builder 추가분은 132 Ir뿐. 축소 가능 항목 3개 합계 약 250 Ir는 64 B application 구간 차이 1,732 Ir의 14%로 전부 구현해도 약 93.5%(감독자 확인, pass 2 미개설). 판정 **DR `통과(92.37%)`·RR `통과(92.45%)`**(§2.1 완화 목표 90%). 기능 27/27, 회귀 gate 5-run 통과(처리량 최대 −2.30%, latency 최대 +5.08%), 공개 헤더 diff 0줄. **5-run 재현성**: source 변경 0줄 재측정에서 DR −0.13%p, RR −0.21%p(1-run은 ±5%p) | [pass 1 기록](log/2026-09-08-cpp-multi-sendsend-pass1.ko.md) |
 
 
+| 2026-09-08 | 7개 binding | Multi `tcp` 6 pattern 전 언어 판정(오늘 마무리 범위 §10.3.2) | 언어별 태그 `r1net`~`r13java3`, `nodedrain`, `gorr`, codex/agent 검증 태그 | 5 sizes(64~65536), 5초, **1회 기본**·경계만 3-run(D-BP32), 100 clients, 고정 Core **0.17.2**. 판정 통과: C++ 10 cell, Java PUBSUB·DR SS·RR SS(throughput). 미달: .NET 6, Node 6, Rust 6, Python 6, Go 5, Java 3. 차단: Go RR SS 65536 B(server shutdown), Java RR SS 4096 B 간헐. 러너 정합 커밋 9건(Node/.NET/Go/Java client·relay drain, 집계 median, teardown 창 D-BP34, Go FAIL 사유). 측정 인프라: 티켓 큐(D-BP33). 상세는 §9.x.2 각 행 |
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
@@ -1597,3 +1599,18 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
   있지 않다.
 - 최종 리뷰에서 public interface가 더 복잡해지지 않았고 비용이 binding 내부에서
   줄었는지 확인했다.
+
+### 12.1 2026-09-08 종료 시점 상태 (사용자 결정 "오늘 마무리", §10.3.2)
+
+§12 조건 중 충족: inventory 일치, 판정에 쓴 paired report 전부 고정 Core 0.17.2 `status: complete`
+(3-run 경계 포함), 채택 개선·러너 정합은 검증 범위만 커밋·푸시(commit id는 §9.x·D-BP24~35),
+단위 테스트 통과(Java perf-multi 15/15, Node routed SENDSEND 계약 10/10, Go vet), timeout/sleep
+증가 없음(teardown 창 정합은 C 기준과 동일화, D-BP34).
+
+**미충족(다음 캠페인 출발점)**: (1) Multi 상세 표의 `미달`·`보류`·`차단` — tcp 6 pattern에서 통과는
+C++ 10 + Java 3뿐이고 .NET·Node·Rust·Python·Go는 전 pattern 미달(격차의 성격은
+`BINDINGS_OPTIMIZATION_GUIDE.ko.md` §3.1: C++·.NET은 공개 API 형태, Python은 인터프리터 고정
+비용, Node·Go·Rust·Java는 초 단위 latency 교차 현상과 64 KB 왕복 비용). (2) tls·ws·wss·STREAM 132 cell
+`보류(Core 대기)`(D-BP23·D-BP28·D-BP29). (3) Go RR SS 65536 B·Java RR SS 4096 B 러너 teardown 결함.
+(4) 평균 latency 한도(≤3~5x)는 Node·Rust·Java·Go SS/DD에서 100~2,500x로 미충족 — 처리량과 별개
+항목으로 §10.3.2 첫 이월 항목. 목록 전체는 §10.3.2.
