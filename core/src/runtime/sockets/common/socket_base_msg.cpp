@@ -57,15 +57,19 @@ int receive_once_guarded (zlink::socket_receive_runtime_t &runtime_,
                           bool defer_record_scope_ = false)
 {
     // The normal public-recv path does not share its socket with an async
-    // mailbox owner.  The runtime owns the handoff when that changes.
-    if (runtime_.try_acquire_public_receive_lease ()) {
+    // mailbox owner.  The runtime owns the handoff when that changes: this
+    // either takes the lock-free lease or leaves `sync` held under a
+    // re-validated mutex-only mode, never both and never neither.
+    if (runtime_.enter_receive_exclusion ()
+        == zlink::socket_receive_runtime_t::receive_entry_lease) {
         // A whole-record receive also fences mailbox commands, whose
         // receive-side mutations already run under this sync. Ordinary
         // single-frame receive keeps the lock-free public fast path.
         if (record_scope_ && !defer_record_scope_)
             runtime_.sync.lock ();
         if (observed_epoch_out_)
-            *observed_epoch_out_ = runtime_.progress_epoch;
+            *observed_epoch_out_ =
+              runtime_.progress_epoch.load (std::memory_order_acquire);
         if (record_scope_ && !defer_record_scope_
             && record_scope_->prepare_receive_attempt () != 0) {
             runtime_.sync.unlock ();
@@ -97,9 +101,11 @@ int receive_once_guarded (zlink::socket_receive_runtime_t &runtime_,
         return rc;
     }
 
-    runtime_.sync.lock ();
+    //  `sync` is already held by enter_receive_exclusion(), under a mode it
+    //  re-validated after acquiring it.
     if (observed_epoch_out_)
-        *observed_epoch_out_ = runtime_.progress_epoch;
+        *observed_epoch_out_ =
+          runtime_.progress_epoch.load (std::memory_order_acquire);
     if (record_scope_ && !defer_record_scope_
         && record_scope_->prepare_receive_attempt () != 0) {
         runtime_.sync.unlock ();

@@ -1028,7 +1028,19 @@ bool zlink::socket_base_t::has_in ()
                 return true;
         }
     }
-    scoped_lock_t lock (receive_runtime ().sync);
+    //  xhas_in() is not a pure query: it runs the STREAM packet pump and
+    //  re-partitions the fair queue, so it owns receive state exactly like a
+    //  public receive and takes the same ownership rather than the mutex
+    //  alone.  The pump also publishes receive progress, which lives under
+    //  `sync`, so a readiness probe that took the lock-free lease adds `sync`
+    //  on top - lease first, `sync` second, the order a whole-record public
+    //  receive uses.  That is the same one mutex this probe took before.
+    receive_runtime_t &receive = receive_runtime ();
+    const socket_receive_entry_scope_t entry (receive);
+    if (entry.owns_lease ()) {
+        scoped_lock_t lock (receive.sync);
+        return xhas_in ();
+    }
     return xhas_in ();
 }
 
@@ -1675,14 +1687,18 @@ bool zlink::socket_base_t::drain_claimed_completion_pipe (
     if (!count1_application) {
         return drain (false);
     }
-    if (receive.try_acquire_public_receive_lease ()) {
+    //  Same receive-state ownership as a public receive: the lock-free lease
+    //  when it is free, otherwise `sync` under a mode re-validated after the
+    //  mutex was acquired.  Falling back on the raw mutex would let this
+    //  drain overlap a lease holder that took the word after the fallback
+    //  decision.
+    const socket_receive_entry_scope_t entry (receive);
+    if (entry.owns_lease ()) {
         bool yielded_for_discard = drain (false);
         if (!yielded_for_discard)
             yielded_for_discard = drain (false);
-        receive.release_public_receive_lease ();
         return yielded_for_discard;
     }
-    scoped_lock_t receive_lock (receive.sync);
     return drain (true);
 }
 

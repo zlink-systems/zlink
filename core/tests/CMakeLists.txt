@@ -158,6 +158,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_stream_packet_progress
   ${INTEGRATION_TEST_ROOT}/test_stream_threadsafe
   ${INTEGRATION_TEST_ROOT}/test_stream_multiclient_delivery
+  ${INTEGRATION_TEST_ROOT}/test_stream_concurrent_pull_send
   ${INTEGRATION_TEST_ROOT}/test_stream_send_blocking_wakeup
   ${INTEGRATION_TEST_ROOT}/test_stream_fastpath
   ${INTEGRATION_TEST_ROOT}/test_transport_matrix
@@ -613,6 +614,9 @@ if(TARGET test_stream_socket)
 endif()
 if(TARGET test_stream_fastpath)
   set_tests_properties(test_stream_fastpath PROPERTIES TIMEOUT 30)
+endif()
+if(TARGET test_stream_concurrent_pull_send)
+  set_tests_properties(test_stream_concurrent_pull_send PROPERTIES TIMEOUT 180)
 endif()
 function(add_env_case_test test_name target_name test_case)
   add_test(
