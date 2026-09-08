@@ -319,6 +319,12 @@ class asio_engine_t : public i_engine
     connection_facade_t _connection_facade;
 
   public:
+    bool adaptive_encoder_write_target () const
+    {
+        return _options.type == ZLINK_CORE_SOCKET_STREAM
+               || zmp_transport_has_message_boundaries ();
+    }
+
     size_t stream_encoder_write_target_size () const
     {
         return _pipeline.stream_encoder_write_target_size;

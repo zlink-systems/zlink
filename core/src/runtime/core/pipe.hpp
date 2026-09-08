@@ -31,6 +31,12 @@ enum pipe_write_observer_phase_t
 };
 typedef bool (*pipe_write_observer_fn) (
   pipe_t *pipe_, void *userdata_, pipe_write_observer_phase_t phase_);
+#ifdef ZLINK_BUILD_TESTS
+typedef void (*pipe_write_commit_test_hook_fn) (pipe_t *pipe_, bool more_,
+                                                void *userdata_);
+void test_set_pipe_write_commit_hook (pipe_write_commit_test_hook_fn hook_,
+                                      void *userdata_);
+#endif
 
 //  Sentinel for the deferred absolute peer-weight slot. It lives here so the
 //  hot slot-presence predicate can be evaluated inline at its call sites.
@@ -628,7 +634,8 @@ class pipe_t ZLINK_FINAL : public object_t,
     bool write_message_unlocked (const msg_t *msg_,
                                  bool enforce_hwm_,
                                  bool enforce_incremental_hwm_ = false,
-                                 pipe_message_admission_t *admission_out_ = NULL);
+                                 pipe_message_admission_t *admission_out_ = NULL,
+                                 const uint64_t *max_message_bytes_snapshot_ = NULL);
     pipe_message_admission_t write_state_admission_unlocked () const;
     bool remote_flow_blocked_unlocked () const;
     bool write_state_ready_unlocked (
@@ -662,11 +669,13 @@ class pipe_t ZLINK_FINAL : public object_t,
     void discard_pending_peer_controls_unlocked ();
     bool can_commit_bytes_unlocked (uint64_t message_bytes_,
                                     uint64_t payload_bytes_,
-                                    bool allow_empty_pipe_exception_) const;
+                                    bool allow_empty_pipe_exception_,
+                                    const uint64_t *max_message_bytes_snapshot_ = NULL) const;
     bool can_commit_bytes_with_peer_snapshot_unlocked (
       uint64_t message_bytes_,
       uint64_t payload_bytes_,
-      bool allow_empty_pipe_exception_);
+      bool allow_empty_pipe_exception_,
+      const uint64_t *max_message_bytes_snapshot_ = NULL);
     bool check_hwm_with_peer_snapshot_unlocked ();
     void refresh_peer_credit_snapshot_unlocked ();
     pipe_t *retain_peer_snapshot_unlocked () const;
@@ -735,9 +744,10 @@ class pipe_t ZLINK_FINAL : public object_t,
     //  `_in_active` is the inbound reader's "the queue looked empty" hint.
     //  Two owners touch it: the lock-free public receive lease
     //  (check_read()/read_internal()/probe_normalized_head_kind()) and the
-    //  command owner (process_activate_read()), which run under different
-    //  exclusion (the receive lease vs the socket's receive `sync`). It is
-    //  therefore an atomic; it carries no payload -- the frames themselves
+    //  command owner (process_activate_read()). Socket endpoints use the same
+    //  lifecycle turn, while session endpoints publish from their I/O owner.
+    //  The value is atomic because the peer command crosses that boundary; it
+    //  carries no payload -- the frames themselves
     //  cross through the inbound ypipe's own release/acquire -- so a stale
     //  read only costs the reader one extra `_in_pipe->check_read()`.
     std::atomic<bool> _in_active;
@@ -1075,10 +1085,13 @@ inline bool pipe_t::append_outbound_frame_bytes_unlocked (const msg_t *msg_)
 inline bool
 pipe_t::can_commit_bytes_unlocked (uint64_t message_bytes_,
                                    uint64_t payload_bytes_,
-                                   bool allow_empty_pipe_exception_) const
+                                   bool allow_empty_pipe_exception_,
+                                   const uint64_t *max_message_bytes_snapshot_) const
 {
-    const uint64_t max_message_bytes =
-      _max_message_bytes.load (std::memory_order_acquire);
+    const uint64_t max_message_bytes = max_message_bytes_snapshot_
+                                         ? *max_message_bytes_snapshot_
+                                         : _max_message_bytes.load (
+                                             std::memory_order_acquire);
     if (max_message_bytes != 0 && payload_bytes_ > max_message_bytes)
         return false;
     const uint64_t hwm = _hwm.load (std::memory_order_acquire);
@@ -1106,14 +1119,17 @@ pipe_t::can_commit_bytes_unlocked (uint64_t message_bytes_,
 inline bool pipe_t::can_commit_bytes_with_peer_snapshot_unlocked (
   uint64_t message_bytes_,
   uint64_t payload_bytes_,
-  bool allow_empty_pipe_exception_)
+  bool allow_empty_pipe_exception_,
+  const uint64_t *max_message_bytes_snapshot_)
 {
     if (can_commit_bytes_unlocked (
-          message_bytes_, payload_bytes_, allow_empty_pipe_exception_))
+          message_bytes_, payload_bytes_, allow_empty_pipe_exception_,
+          max_message_bytes_snapshot_))
         return true;
     refresh_peer_credit_snapshot_unlocked ();
     return can_commit_bytes_unlocked (
-      message_bytes_, payload_bytes_, allow_empty_pipe_exception_);
+      message_bytes_, payload_bytes_, allow_empty_pipe_exception_,
+      max_message_bytes_snapshot_);
 }
 
 void send_routing_id (pipe_t *pipe_, const options_t &options_);

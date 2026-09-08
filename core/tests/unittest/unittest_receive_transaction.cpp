@@ -13,6 +13,7 @@
 #include "core/msg.hpp"
 #include "core/pipe.hpp"
 #include "core/signaler.hpp"
+#include "utils/config.hpp"
 #include "sockets/common/socket_base.hpp"
 #include "sockets/pair/pair.hpp"
 
@@ -134,6 +135,15 @@ struct pair_send_gate_t
     bool entered;
     bool release;
 };
+
+void count_request_completion_command (void *userdata_, int command_type_,
+                                       bool, bool)
+{
+    if (command_type_
+        == static_cast<int> (zlink::command_t::request_completion))
+        static_cast<std::atomic<size_t> *> (userdata_)->fetch_add (
+          1, std::memory_order_relaxed);
+}
 
 class passive_pipe_sink_t : public zlink::i_pipe_events
 {
@@ -1132,6 +1142,36 @@ void test_empty_router_receive_rolls_back_capacity_attempt ()
         test_context_socket_close_zero_linger (receiver);
     }
 }
+
+void test_command_drain_yields_after_existing_inbound_poll_batch ()
+{
+    void *pair = test_context_socket (ZLINK_SOCKET_PAIR);
+    zlink::socket_base_t *const core = as_socket_handle (pair).socket;
+    zlink::mailbox_t *const mailbox =
+      static_cast<zlink::mailbox_t *> (core->get_mailbox ());
+    std::atomic<size_t> processed (0);
+    core->test_set_receive_command_sync_probe_hook (
+      &count_request_completion_command, &processed);
+
+    zlink::command_t command = {};
+    command.destination = core;
+    command.type = zlink::command_t::request_completion;
+    for (size_t i = 0; i != static_cast<size_t> (zlink::inbound_poll_rate) + 1;
+         ++i)
+        mailbox->send (command);
+
+    const int first_rc = core->test_process_commands_only ();
+    const size_t first_count = processed.load (std::memory_order_acquire);
+    const int second_rc = core->test_process_commands_only ();
+    const size_t second_count = processed.load (std::memory_order_acquire);
+    core->test_set_receive_command_sync_probe_hook (NULL, NULL);
+    test_context_socket_close_zero_linger (pair);
+
+    TEST_ASSERT_EQUAL_INT (0, first_rc);
+    TEST_ASSERT_EQUAL_UINT64 (zlink::inbound_poll_rate, first_count);
+    TEST_ASSERT_EQUAL_INT (0, second_rc);
+    TEST_ASSERT_EQUAL_UINT64 (zlink::inbound_poll_rate + 1, second_count);
+}
 }
 
 int main ()
@@ -1151,5 +1191,6 @@ int main ()
     RUN_TEST (test_close_commands_wait_for_parked_multipart_cleanup_sync);
     RUN_TEST (test_router_capacity_reservation_is_atomic_and_non_consuming);
     RUN_TEST (test_empty_router_receive_rolls_back_capacity_attempt);
+    RUN_TEST (test_command_drain_yields_after_existing_inbound_poll_batch);
     return UNITY_END ();
 }

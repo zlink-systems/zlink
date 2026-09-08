@@ -20,6 +20,17 @@ TRANSPORTS = ("tcp",) + COMPARISON_TRANSPORTS
 SIZES = (1024, 65536)
 METRIC = "throughput"
 Q64_OVER_Q1_MIN = 0.80
+PROVENANCE_FIELDS = (
+    "os",
+    "cpu",
+    "cores",
+    "build",
+    "core_revision",
+    "timestamp",
+    "load_avg",
+    "runs",
+    "clients",
+)
 
 
 def _load_regression_gate ():
@@ -34,6 +45,32 @@ def _load_regression_gate ():
 
 
 REGRESSION_GATE = _load_regression_gate ()
+
+
+def _report_provenance (
+    path: pathlib.Path,
+) -> Tuple[Dict[str, str], List[str]]:
+    values: Dict[str, str] = {}
+    errors: List[str] = []
+    try:
+        lines = path.read_text (encoding="utf-8").splitlines ()
+    except OSError as exc:
+        return values, [f"{path}: could not read provenance: {exc}"]
+
+    for line_number, raw_line in enumerate (lines, start=1):
+        if not raw_line.startswith ("META,"):
+            continue
+        parts = raw_line.split (",", 2)
+        if len (parts) != 3:
+            errors.append (f"{path}: line {line_number}: malformed META line")
+            continue
+        key, value = parts[1].strip (), parts[2].strip ()
+        if key in values and values[key] != value:
+            errors.append (
+              f"{path}: conflicting META value for {key}: "
+              f"{values[key]!r} != {value!r}")
+        values[key] = value
+    return values, errors
 
 
 def _completion_errors (result) -> List[str]:
@@ -84,7 +121,27 @@ def load_cells (
     cells: Dict[REGRESSION_GATE.CellKey, float] = {}
     errors: List[str] = []
     sources: Dict[REGRESSION_GATE.CellKey, pathlib.Path] = {}
+    reference_provenance: Dict[str, str] | None = None
+    reference_path: pathlib.Path | None = None
     for path in paths:
+        provenance, provenance_errors = _report_provenance (path)
+        errors.extend (provenance_errors)
+        if len (paths) > 1:
+            for field in PROVENANCE_FIELDS:
+                if not provenance.get (field):
+                    errors.append (
+                      f"{path}: missing comparison provenance META field: {field}")
+            if reference_provenance is None:
+                reference_provenance = provenance
+                reference_path = path
+            else:
+                for field in PROVENANCE_FIELDS:
+                    if (field in provenance and field in reference_provenance
+                        and provenance[field] != reference_provenance[field]):
+                        errors.append (
+                          f"{path}: comparison provenance {field}={provenance[field]!r} "
+                          f"does not match {reference_path}: "
+                          f"{reference_provenance[field]!r}")
         report = REGRESSION_GATE.parse_report (path)
         errors.extend (REGRESSION_GATE.report_errors (str (path), report))
         errors.extend (_completion_errors (report))

@@ -99,7 +99,9 @@ void zlink::socket_inprocs_t::emplace (const char *endpoint_uri_, pipe_t *pipe_)
 }
 
 int zlink::socket_inprocs_t::erase_pipes (const std::string &endpoint_uri_str_,
-                                          socket_base_t *owner_)
+                                          socket_base_t *owner_,
+                                          std::vector<pipe_t *> *terminating_pipes_,
+                                          std::vector<pipe_t *> *peer_progress_pipes_)
 {
     const std::pair<map_t::iterator, map_t::iterator> range =
       _inprocs.equal_range (endpoint_uri_str_);
@@ -120,8 +122,8 @@ int zlink::socket_inprocs_t::erase_pipes (const std::string &endpoint_uri_str_,
     // The context's existing helper gives them an owner before we terminate.
     (void) owner_->get_ctx ()->materialize_pending_inproc (endpoint_uri_str_, owner_);
     for (size_t i = 0; i != pipes.size (); ++i) {
-        owner_->terminate_inproc_pipe_with_peer_progress (pipes[i]);
-        pipes[i]->release_lifetime_ref ();
+        owner_->begin_inproc_pipe_termination (pipes[i], peer_progress_pipes_);
+        terminating_pipes_->push_back (pipes[i]);
     }
     return 0;
 }

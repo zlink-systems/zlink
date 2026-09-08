@@ -29,9 +29,9 @@ const uint64_t public_api_inflight_mask = UINT64_C (0xffffffff);
 const uint32_t mailbox_ref_sealed_bit = UINT32_C (1) << 31;
 const uint32_t mailbox_ref_count_mask = mailbox_ref_sealed_bit - 1;
 
-//  The sync bit is held for the whole body of a public API call, which can be
-//  arbitrarily long (a blocking recv, an endpoint teardown). A contended
-//  waiter therefore cannot assume the holder releases within a few hundred
+//  The sync bit is held for each socket-state turn. A blocking operation drops
+//  it before waiting, but a state transition may still be long enough that a
+//  contended waiter cannot assume the holder releases within a few hundred
 //  cycles, so an unbounded CAS spin burns a whole core - observed as a thread
 //  pinned at 100% CPU during shutdown. Spin briefly for the common short hold,
 //  then yield, then sleep so a long hold costs no CPU.

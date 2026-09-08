@@ -4,9 +4,11 @@
 #include "testutil_unity.hpp"
 
 #include <chrono>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace { std::vector<void *> monitors; }
@@ -297,6 +299,49 @@ void test_inproc_two_lane_unbind_progress ()
     printf ("idle two-lane unbind: 50 iterations, maximum %ld us\n", maximum_us);
 }
 
+void test_inproc_binder_and_connector_terminate_concurrently ()
+{
+    const char *const endpoint = "inproc://concurrent-endpoint-termination";
+    void *bound = make_socket (ZLINK_SOCKET_ROUTER);
+    void *peer = make_socket (ZLINK_SOCKET_ROUTER);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (bound, "bound", 5));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_routing_id (peer, "peer", 4));
+    void *bound_monitor = open_monitor (bound, ZLINK_EVENT_CONNECTION_READY);
+    void *peer_monitor = open_monitor (peer, ZLINK_EVENT_CONNECTION_READY);
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (bound, endpoint));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (peer, endpoint));
+    wait_event (bound_monitor, ZLINK_EVENT_CONNECTION_READY);
+    wait_event (peer_monitor, ZLINK_EVENT_CONNECTION_READY);
+    close_monitors ();
+
+    std::atomic<int> ready (0);
+    std::atomic<bool> start (false);
+    int unbind_rc = -1;
+    int disconnect_rc = -1;
+    std::thread binder ([&] {
+        ready.fetch_add (1, std::memory_order_release);
+        while (!start.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        unbind_rc = zlink_unbind (bound, endpoint);
+    });
+    std::thread connector ([&] {
+        ready.fetch_add (1, std::memory_order_release);
+        while (!start.load (std::memory_order_acquire))
+            std::this_thread::yield ();
+        disconnect_rc = zlink_disconnect (peer, endpoint);
+    });
+    while (ready.load (std::memory_order_acquire) != 2)
+        std::this_thread::yield ();
+    start.store (true, std::memory_order_release);
+    binder.join ();
+    connector.join ();
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, unbind_rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, disconnect_rc);
+    test_context_socket_close (peer);
+    test_context_socket_close (bound);
+}
+
 int main ()
 {
     setup_test_environment ();
@@ -308,6 +353,7 @@ int main ()
     RUN_TEST (test_tls_releases_listener);
     RUN_TEST (test_wss_releases_listener);
     RUN_TEST (test_inproc_two_lane_unbind_progress);
+    RUN_TEST (test_inproc_binder_and_connector_terminate_concurrently);
     RUN_TEST (test_inproc_unbind_disconnected_and_not_found);
     return UNITY_END ();
 }

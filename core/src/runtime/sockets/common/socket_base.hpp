@@ -998,8 +998,14 @@ class socket_base_t : public own_t,
 
     int connect_internal (const char *endpoint_uri_,
                           bool process_pending_commands_ = true);
-    void terminate_inproc_pipe_with_peer_progress (pipe_t *pipe_);
-    int term_endpoint_internal (const char *endpoint_uri_);
+    void begin_inproc_pipe_termination (
+      pipe_t *pipe_, std::vector<pipe_t *> *peer_progress_pipes_);
+    void finish_inproc_endpoint_termination (
+      std::vector<pipe_t *> *terminating_pipes_,
+      std::vector<pipe_t *> *peer_progress_pipes_);
+    int term_endpoint_internal (
+      const char *endpoint_uri_, std::vector<pipe_t *> *terminating_pipes_,
+      std::vector<pipe_t *> *peer_progress_pipes_);
     int bind_inproc_endpoint (const char *endpoint_uri_);
     int bind_transport_listener (const std::string &protocol_,
                                  const std::string &address_,
@@ -1022,7 +1028,7 @@ class socket_base_t : public own_t,
     void arm_send_recovery_after_backpressure ();
 
   protected:
-    // The caller owns receive state (receive sync or the public receive lease).
+    // The caller owns socket receive state through the lifecycle turn.
     // Transfer a monitor-started command executor lease to a longer-lived
     // async socket consumer before registering that consumer.
     void retain_async_command_processing ();

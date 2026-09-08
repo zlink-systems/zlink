@@ -55,9 +55,9 @@ void zlink::pipe_t::process_activate_read ()
     // check_read()/read() test and assign exactly these two members with no
     // `_out_sync` held (see the identical guard at the top of check_read()).
     // `_out_sync` therefore protects nothing here, so the wake-or-not
-    // decision is taken without it; the two members carry their own ordering
-    // because the command owner and the public receive lease are different
-    // exclusion domains. The lock is kept only for the head-reclassify
+    // decision is taken without it. Socket endpoints serialize both accesses
+    // with their lifecycle turn; session endpoints publish the wake through
+    // the atomic members. The lock is kept only for the head-reclassify
     // branch below, which reads the outbound topology cluster.
     const lifecycle_state_t state = _state.load (std::memory_order_acquire);
     if (state != active && state != waiting_for_delimiter)
@@ -69,7 +69,7 @@ void zlink::pipe_t::process_activate_read ()
     }
     //  An awake reader only needs a wake when a count-1 head reclassification
     //  was armed. That marker is atomic, so the common "nothing armed" answer
-    //  costs one relaxed-ordered load instead of a lock round trip.
+    //  costs one acquire load instead of a lock round trip.
     if (likely (_head_reclassify_wake.load (std::memory_order_acquire)
                 == head_reclassify_idle))
         return;

@@ -503,6 +503,7 @@ int zlink::socket_base_t::process_commands (
             if (rc != 0 && errno == EINTR)
                 return -1;
 
+            size_t command_count = 0;
             while (rc == 0 || errno == EINTR) {
                 if (rc == 0) {
 #ifdef ZLINK_BUILD_TESTS
@@ -522,6 +523,13 @@ int zlink::socket_base_t::process_commands (
                     // cleanup until the command's receive scope is gone.
                     process_deferred_socket_msg_pipe_terminations ();
                     processed_command = true;
+                    ++command_count;
+                    if (_ctx_terminated
+                        || command_count
+                             == static_cast<size_t> (inbound_poll_rate)) {
+                        errno = EAGAIN;
+                        break;
+                    }
                 }
                 rc = recv_next_command (&cmd);
             }
@@ -1429,8 +1437,14 @@ void zlink::socket_base_t::process_term_endpoint (std::string *endpoint_)
 {
     // Both sessions can end the same connect intent. Once its exact key is
     // gone, a later command must not resolve its address to another intent.
-    if (endpoint_runtime ().endpoints.count (*endpoint_) != 0)
-        term_endpoint_internal (endpoint_->c_str ());
+    if (endpoint_runtime ().endpoints.count (*endpoint_) != 0) {
+        std::vector<pipe_t *> terminating_pipes;
+        std::vector<pipe_t *> peer_progress_pipes;
+        term_endpoint_internal (endpoint_->c_str (), &terminating_pipes,
+                                &peer_progress_pipes);
+        zlink_assert (terminating_pipes.empty ());
+        zlink_assert (peer_progress_pipes.empty ());
+    }
     delete endpoint_;
 }
 

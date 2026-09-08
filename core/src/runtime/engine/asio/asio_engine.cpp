@@ -8,6 +8,7 @@
 #include "engine/asio/asio_poller.hpp"
 #include "engine/asio/i_asio_transport.hpp"
 #include "transports/tcp/tcp_transport.hpp"
+#include "transports/ws/ws_batch_policy.hpp"
 #include "core/io_thread.hpp"
 #include "core/session_base.hpp"
 #include "protocol/zmp_decoder.hpp"
@@ -166,6 +167,9 @@ zlink::asio_engine_t::asio_engine_t (fd_t fd_,
       zlink::asio_stream_fastpath_policy::encoder_initial_write_target (options_);
     _pipeline.stream_encoder_write_target_max =
       zlink::asio_stream_fastpath_policy::encoder_max_write_target (options_);
+    if (zmp_transport_has_message_boundaries ())
+        _pipeline.stream_encoder_write_target_max =
+          ws_batch_policy::zmp_send_batch_max_size ();
 
     const int rc = _pipeline.tx_msg.init ();
     errno_assert (rc == 0);
@@ -818,10 +822,14 @@ void zlink::asio_engine_t::maybe_grow_stream_decoder_read_target (size_t bytes_t
 
 void zlink::asio_engine_t::apply_pending_stream_encoder_resize ()
 {
-    if (_options.type != ZLINK_CORE_SOCKET_STREAM || !_encoder)
+    if ((_options.type != ZLINK_CORE_SOCKET_STREAM
+         && !zmp_transport_has_message_boundaries ())
+        || !_encoder)
         return;
 
-    if (_pipeline.stream_encoder_pending_resize_size <= _pipeline.stream_encoder_write_target_size)
+    if (_pipeline.stream_encoder_pending_resize_size == 0
+        || _pipeline.stream_encoder_pending_resize_size
+             == _pipeline.stream_encoder_write_target_size)
         return;
 
     _pipeline.stream_encoder_write_target_size = _pipeline.stream_encoder_pending_resize_size;
@@ -833,6 +841,8 @@ void zlink::asio_engine_t::maybe_schedule_stream_encoder_growth (size_t filled_o
 {
     const size_t grown = zlink::asio_stream_fastpath_policy::next_encoder_write_target (
       _options.type, _encoder,
+      zmp_transport_has_message_boundaries (),
+      static_cast<size_t> (_options.out_batch_size),
       _pipeline.stream_encoder_write_target_size, _pipeline.stream_encoder_write_target_max,
       filled_out_batch_, &_pipeline.stream_encoder_write_target_full_hits, 2);
     if (grown == 0)
@@ -1096,6 +1106,9 @@ void zlink::asio_engine_t::on_write_complete (const boost::system::error_code &e
 
         _pipeline.async_zero_copy = false;
     }
+
+    if (_outsize == 0)
+        apply_pending_stream_encoder_resize ();
 
     //  Some protocols must wait for peer metadata before constructing their
     //  final handshake frame. Let them publish that frame after the current
@@ -1420,6 +1433,7 @@ void zlink::asio_engine_t::process_output ()
             return;
         }
 
+        apply_pending_stream_encoder_resize ();
         _outpos = NULL;
         _outsize = _encoder->encode (&_outpos, 0);
 
@@ -1451,6 +1465,8 @@ void zlink::asio_engine_t::process_output ()
                 _outpos = bufptr;
             _outsize += n;
         }
+
+        maybe_schedule_stream_encoder_growth (_outsize);
 
         //  If there is no data to send, mark output as stopped.
         if (_outsize == 0) {

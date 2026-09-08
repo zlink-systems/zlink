@@ -961,24 +961,25 @@ void zlink::socket_base_t::add_endpoint (const endpoint_uri_pair_t &endpoint_pai
       endpoint_pair_.identifier (), endpoint_pipe_t (endpoint_, pipe_, endpoint_pair_.local_type));
 }
 
-void zlink::socket_base_t::terminate_inproc_pipe_with_peer_progress (pipe_t *pipe_)
+void zlink::socket_base_t::begin_inproc_pipe_termination (
+  pipe_t *pipe_, std::vector<pipe_t *> *peer_progress_pipes_)
 {
     if (!pipe_)
         return;
 
-    pipe_t *const peer = pipe_->retain_peer_snapshot ();
-    socket_base_t *peer_socket = NULL;
-    bool peer_progress_started = false;
+    pipe_t *peer = pipe_->retain_peer_snapshot ();
     const int saved_errno = errno;
     const bool paired_transport =
       options.type == ZLINK_CORE_SOCKET_DEALER
       || options.type == ZLINK_CORE_SOCKET_ROUTER;
     if (paired_transport && peer
         && !peer->is_session_pipe () && peer->_sink) {
+        //  The peer's delay flag belongs to this socket's turn and must be
+        //  published before the termination handshake starts; once
+        //  terminate() below is visible the peer's own owner reads it.
         peer->set_nodelay ();
-        peer_socket = static_cast<socket_base_t *> (peer->_sink);
-        peer_progress_started =
-          peer_socket->ensure_async_command_processing () == 0;
+        peer_progress_pipes_->push_back (peer);
+        peer = NULL;
     }
 
     pipe_->send_disconnect_msg ();
@@ -986,14 +987,47 @@ void zlink::socket_base_t::terminate_inproc_pipe_with_peer_progress (pipe_t *pip
     // non-inproc term_endpoint path also uses terminate(false).
     pipe_->terminate (false);
 
-    if (peer_progress_started)
-        peer_socket->request_unowned_async_command_processing_stop ();
     if (peer)
         peer->release_lifetime_ref ();
     errno = saved_errno;
 }
 
-int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
+void zlink::socket_base_t::finish_inproc_endpoint_termination (
+  std::vector<pipe_t *> *terminating_pipes_,
+  std::vector<pipe_t *> *peer_progress_pipes_)
+{
+    for (size_t i = 0; i != peer_progress_pipes_->size (); ++i) {
+        pipe_t *const peer = (*peer_progress_pipes_)[i];
+        socket_base_t *const peer_socket = peer->_sink
+                                             ? static_cast<socket_base_t *> (
+                                                 peer->_sink)
+                                             : NULL;
+        if (peer_socket
+            && peer_socket->ensure_async_command_processing () == 0)
+            peer_socket->request_unowned_async_command_processing_stop ();
+        peer->release_lifetime_ref ();
+    }
+    peer_progress_pipes_->clear ();
+
+    const int disconnect_errno = errno;
+    for (int attempt = 0; attempt != 20; ++attempt) {
+        bool complete = true;
+        for (size_t i = 0; i != terminating_pipes_->size (); ++i)
+            complete = complete
+                       && (*terminating_pipes_)[i]->has_completed_termination ();
+        if (complete)
+            break;
+        (void) process_commands (10, false);
+    }
+    for (size_t i = 0; i != terminating_pipes_->size (); ++i)
+        (*terminating_pipes_)[i]->release_lifetime_ref ();
+    terminating_pipes_->clear ();
+    errno = disconnect_errno;
+}
+
+int zlink::socket_base_t::term_endpoint_internal (
+  const char *endpoint_uri_, std::vector<pipe_t *> *terminating_pipes_,
+  std::vector<pipe_t *> *peer_progress_pipes_)
 {
     if (unlikely (_ctx_terminated)) {
         errno = ETERM;
@@ -1043,7 +1077,6 @@ int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
         fail_public_pending_for_endpoint (endpoint_uri_str);
         if (unregister_endpoint (endpoint_uri_str, this) == 0) {
             std::vector<pipe_t *> attached;
-            std::vector<pipe_t *> terminating;
             snapshot_attached_pipes (&attached);
             for (size_t i = 0; i != attached.size (); ++i) {
                 pipe_t *const pipe = attached[i];
@@ -1051,32 +1084,18 @@ int zlink::socket_base_t::term_endpoint_internal (const char *endpoint_uri_)
                     && pipe->get_endpoint_pair ().identifier ()
                          == endpoint_uri_str) {
                     if (pipe->retain_lifetime_ref ())
-                        terminating.push_back (pipe);
-                    terminate_inproc_pipe_with_peer_progress (pipe);
+                        terminating_pipes_->push_back (pipe);
+                    begin_inproc_pipe_termination (pipe, peer_progress_pipes_);
                 }
             }
-            // Complete the local half of the inproc termination handshake
-            // before returning the explicit disconnect. The peer executor
-            // sends the first ack asynchronously; this socket is the current
-            // public command owner and must drain that ack so the peer can
-            // receive the reciprocal ack without another application call.
-            const int disconnect_errno = errno;
-            for (int attempt = 0; attempt != 20; ++attempt) {
-                bool complete = true;
-                for (size_t i = 0; i != terminating.size (); ++i)
-                    complete = complete
-                               && terminating[i]->has_completed_termination ();
-                if (complete)
-                    break;
-                (void) process_commands (10, false);
-            }
-            for (size_t i = 0; i != terminating.size (); ++i)
-                terminating[i]->release_lifetime_ref ();
-            errno = disconnect_errno;
+            // The caller starts the peer executor and waits for reciprocal
+            // acknowledgement only after releasing this socket's turn.
             return 0;
         }
         return endpoint_runtime ().inprocs.erase_pipes (endpoint_uri_str,
-                                                        this);
+                                                        this,
+                                                        terminating_pipes_,
+                                                        peer_progress_pipes_);
     }
 
     const std::string resolved_endpoint_uri =
@@ -1130,13 +1149,25 @@ int zlink::socket_base_t::term_endpoint (const char *endpoint_uri_)
     if (!admission.acquired ())
         return -1;
 
+    std::vector<pipe_t *> terminating_pipes;
+    std::vector<pipe_t *> peer_progress_pipes;
+    int term_rc = 0;
+    int term_errno = 0;
     {
         socket_public_api_lock_scope_t guard (lifecycle_coordinator ());
         const int rc = process_commands (0, false);
         if (unlikely (rc != 0))
             return -1;
-        if (term_endpoint_internal (endpoint_uri_) != 0)
-            return -1;
+        term_rc = term_endpoint_internal (endpoint_uri_, &terminating_pipes,
+                                          &peer_progress_pipes);
+        term_errno = errno;
+    }
+
+    finish_inproc_endpoint_termination (&terminating_pipes,
+                                        &peer_progress_pipes);
+    if (term_rc != 0) {
+        errno = term_errno;
+        return -1;
     }
 
     // Install progress after the synchronous listener release has completed:

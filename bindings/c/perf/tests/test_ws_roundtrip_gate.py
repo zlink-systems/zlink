@@ -33,7 +33,17 @@ CELLS = {
 
 def measured_report (cells=None, *, metadata=None, duplicate=None):
     values = dict (CELLS if cells is None else cells)
-    lines = []
+    lines = [
+        "META,os,Linux test-host",
+        "META,cpu,test-cpu",
+        "META,cores,8",
+        "META,build,Release",
+        "META,core_revision,abc123",
+        "META,timestamp,2026-09-08T12:00:00+09:00",
+        "META,load_avg,0.10 0.20 0.30",
+        "META,runs,1",
+        "META,clients,100",
+    ]
     for (pattern, transport, size), throughput in values.items ():
         lines.extend (
           [
@@ -47,7 +57,7 @@ def measured_report (cells=None, *, metadata=None, duplicate=None):
         pattern, transport, size = duplicate
         lines.append (
           f"RESULT,current,{pattern},{transport},{size},throughput,1000.000")
-    result_count = len (lines)
+    result_count = sum (line.startswith ("RESULT,") for line in lines)
     completion = {
         "success": len (values),
         "unsupported": 0,
@@ -121,6 +131,16 @@ class WsRoundtripGateTests (unittest.TestCase):
           [measured_report (first), measured_report (second)])
         self.assertEqual (exit_code, 0)
         self.assertIn ("Final: PASS", output)
+
+    def test_rejects_multiple_reports_from_different_load_or_run (self):
+        first = dict (list (CELLS.items ())[:4])
+        second = dict (list (CELLS.items ())[4:])
+        mismatched = measured_report (second).replace (
+          "META,load_avg,0.10 0.20 0.30", "META,load_avg,4.00 3.00 2.00")
+        exit_code, output = self.run_gate (
+          [measured_report (first), mismatched])
+        self.assertEqual (exit_code, 1)
+        self.assertIn ("comparison provenance load_avg", output)
 
     def test_rejects_missing_required_cell (self):
         incomplete = dict (CELLS)
