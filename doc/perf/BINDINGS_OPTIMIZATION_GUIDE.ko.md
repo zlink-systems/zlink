@@ -119,6 +119,7 @@ credit 회복 시 `ZLINK_COMPLETION_WRITABLE`, callback 없음, pull 방식 comp
 - C++의 "즉시 admission SEND는 completion bundle을 만들지 않는다"(§2.1)는 Java·Node에 이미 있다(§3). .NET·Go·Rust·Python에 같은 경로가 있는지 비용 지도로 확인할 것.
 - .NET의 reply closure→struct(−352 B/op)는 closure를 쓰는 Node·Python reply 경로에 후보.
 - 러너: relay 수신-송신 결합과 client echo drain은 **7개 전부**에 필요했다(D-BP24). Java·Go만 처음부터 C 모델이었다.
+- 러너 teardown 결함 2종(같은 날): (a) Java client가 admission 대기 중 수신을 멈춰 relay와 상호 대기 → 대기 중에도 poll+수신(C `tracker_has_pending_replies` 루프); (b) Go relay가 STOP 뒤 퇴장한 peer의 WRITABLE 토큰을 blocking Submit에서 영원히 기다림 → STOP 뒤 drain 창(3 s) cancel. 다른 언어에서 같은 두 형태를 확인할 것(.NET·Rust·Python relay는 async submit이라 (b) 노출 없음, Node는 확인 필요).
 - **STREAM(Core 0.17.3-alpha, D-BP37)**: C++ 96.7·.NET 95.8·Java 103.4 통과, Go 65.9 경계, Node 35.1 미달, **Rust 20.4·Python 19.1 미달** — Rust만 크기 무관 ~88 K ops/s(메시지당 ~11 µs 고정 비용)로 다른 pattern(54~89%)과 동떨어져 있어 Rust STREAM 서버 수신·packet 경로가 첫 지도 대상.
 - 러너 집계: 다중 run의 대표 RESULT는 metric별 median 한 줄(D-BP35). .NET Multi는 마지막 run 값, Go는 중복 raw를 내고 있었다 — 새 언어 러너를 볼 때 "5-run인데 RESULT가 5줄인가/마지막 값인가"를 먼저 확인할 것.
 - **Node의 초 단위 latency는 Single(client 1·동기 API)에서도 그대로다**(sg1: PAIR 1,179x·DR 2,104x·RR 3,268x, 처리량은 54~58%; REQREP은 12/11%·360x). 100 client·async terminal과 무관한 **수신 경로 자체**의 문제 → Node 비용 지도가 찾은 `recv`(native 수신 + JS materialization 75%)와 같은 자리. Node Single one-way 처리량(54~58%)이 Multi(30~43%)보다 높으므로 Multi 격차에는 100 client·async terminal 성분이 추가로 있다.
