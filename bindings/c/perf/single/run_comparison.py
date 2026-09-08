@@ -782,6 +782,15 @@ def single_table_row_line(
     )
 
 
+def failure_case_log_lines(
+    pattern: str, transport: str, size: int, run_no: int, stderr: str
+) -> List[str]:
+    lines = [f"- {pattern} current {transport} {size}B run#{run_no} stderr:"]
+    text = stderr.rstrip("\n")
+    lines.extend(f"    {line}" for line in text.splitlines())
+    return lines
+
+
 def run_single_test(
     build_dir: str,
     current_lib_dir: str,
@@ -1242,6 +1251,7 @@ def main() -> int:
     print_effective_options("start", effective_options)
 
     all_failures: List[Tuple[str, str, int, str]] = []
+    failure_case_logs: List[Tuple[str, str, int, int, str]] = []
     combo_results: Dict[Tuple[str, str, int], ComboRecord] = {}
     run_warnings: List[str] = []
     auto_hwm_detail_rows: List[Dict[str, str]] = []
@@ -1401,6 +1411,10 @@ def main() -> int:
                     reason = outcome.reason or "fail"
                     failed_sizes[size] = reason
                     all_failures.append((pattern, transport, size, reason))
+                    if outcome.stderr.strip():
+                        failure_case_logs.append(
+                            (pattern, transport, size, run_no, outcome.stderr)
+                        )
                     failed_record = ComboRecord(status="fail")
                     failed_records[size] = failed_record
                     row = single_table_row_line(size, "fail", failed_record, pattern)
@@ -1501,6 +1515,13 @@ def main() -> int:
         print("\n## Failures")
         for pattern, transport, size, reason in all_failures:
             print(f"- {pattern} current {transport} {size}B: {reason}")
+        if failure_case_logs:
+            print("\n## Failure case logs")
+            for pattern, transport, size, run_no, stderr in failure_case_logs:
+                for line in failure_case_log_lines(
+                    pattern, transport, size, run_no, stderr
+                ):
+                    print(line)
 
     for pattern in patterns:
         emit_auto_hwm_detail_table(auto_hwm_detail_rows, pattern)

@@ -1,6 +1,7 @@
 //! Single PAIR throughput/latency benchmark.
 
 mod common;
+mod one_way;
 
 use zlink::{SocketMonitor, SubmitResult};
 
@@ -67,41 +68,27 @@ fn main() {
         common::send_stop_token(|msg| {
             // Match C perf: the phase terminator must be queued after every
             // accepted payload even when the data path has reached its HWM.
-            perf_submit_measurement!(sender.send(), msg).map(|()| true)
+            common::submit_now(sender.send().message(msg).submit()).map(|()| true)
         });
+        sender
     });
 
-    let mut stop_seen = false;
-    let stop_wait_deadline = active_deadline + common::resolve_single_stop_wait().as_nanos() as u64;
     let mut received = zlink::Received::empty();
-    while !stop_seen {
-        if common::now_ns() >= stop_wait_deadline {
-            break;
-        }
-        let flags = if common::now_ns() < active_deadline {
-            zlink::RecvFlags::NONE
-        } else {
-            zlink::RecvFlags::DONT_WAIT
-        };
-        match receiver.recv(&mut received, flags) {
-            Ok(true) => loop {
-                let data = common::message_payload(received.parts());
-                if common::is_stop_token(data) {
-                    stop_seen = true;
-                    break;
-                }
+    one_way::recv_until_stop(&receiver, || {
+        match receiver.recv(&mut received, zlink::RecvFlags::DONT_WAIT) {
+            Ok(true) => {
+                let data = match one_way::classify(received.parts()) {
+                    one_way::Content::Payload(data) => data,
+                    one_way::Content::Stop => return one_way::RecvStep::Stop,
+                };
                 common::handle_recv(data, config.size, &stats, active_deadline);
-                match receiver.recv(&mut received, zlink::RecvFlags::DONT_WAIT) {
-                    Ok(true) => continue,
-                    Ok(false) => break,
-                    Err(err) => panic!("pair receiver recv failed: {err}"),
-                }
-            },
-            Ok(false) => common::poll_idle(std::time::Duration::from_millis(1)),
+                one_way::RecvStep::Payload
+            }
+            Ok(false) => one_way::RecvStep::Empty,
             Err(err) => panic!("pair receiver recv failed: {err}"),
         }
-    }
-    send_thread.join().expect("sender thread");
+    });
+    let _sender = send_thread.join().expect("sender thread");
 
     let result = collector.finish();
     common::print_result(

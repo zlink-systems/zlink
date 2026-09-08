@@ -36,9 +36,7 @@ def _send_router_stop_token(router, dest_routing_id):
 
     for _ in range(100):
         try:
-            router.send(dest_routing_id).message(STOP_TOKEN).submit_sync(
-                flags=zlink.SendFlags.NONE
-            )
+            router.send(dest_routing_id).message(STOP_TOKEN).submit_sync()
             return
         except zlink.SubmitError as exc:
             if exc.result not in (
@@ -47,6 +45,7 @@ def _send_router_stop_token(router, dest_routing_id):
             ):
                 raise
             poll_idle_ms(1)
+    raise RuntimeError("router-router stop token retry exhausted")
 
 
 def _public_one_way_metrics(sender, receiver, *, msg_size, duration_s, run_id):

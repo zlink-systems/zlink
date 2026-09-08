@@ -338,6 +338,22 @@ class RunComparisonPolicyTests(unittest.TestCase):
             os.environ.clear()
             os.environ.update(old_env)
 
+    def test_failure_case_log_keeps_case_and_stderr_lines(self):
+        self.assertEqual(
+            RC.failure_case_log_lines(
+                "DEALER_ROUTER_REQREP",
+                "tcp",
+                64,
+                2,
+                "requester fatal\nshutdown failed\n",
+            ),
+            [
+                "- DEALER_ROUTER_REQREP current tcp 64B run#2 stderr:",
+                "    requester fatal",
+                "    shutdown failed",
+            ],
+        )
+
     def test_stream_patterns_removed_from_single_runner(self):
         with self.assertRaises(ValueError):
             RC.parse_pattern_arg("STREAM")

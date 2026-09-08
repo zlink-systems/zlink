@@ -43,6 +43,7 @@ def _publish_stop_token(publisher):
             if exc.result != zlink.SubmitResult.BACKPRESSURED:
                 raise
             poll_idle_ms(1)
+    raise RuntimeError("pubsub stop token backpressure retry exhausted")
 
 
 def _public_one_way_metrics(sender, receiver, *, msg_size, duration_s, run_id):

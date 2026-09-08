@@ -53,8 +53,22 @@ func runPubSub(cfg benchmarkConfig) perfcommon.Result {
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
+		poller := perfcommon.NewSocketPoller(subscriber, perfcommon.ZLinkPollIn)
+		defer poller.Close()
+		events := make([]zlink.PollEvent, 1)
 		for {
-			stop, drainErr := recvSinglePubSubUntilStop(subscriber, &received, stats, cfg.msgSize, window.ActiveAtNs, window.StopAtNs)
+			event, waitErr := perfcommon.WaitPollerOne(poller, events, -1)
+			if waitErr != nil {
+				if perfcommon.IsTransient(waitErr) {
+					continue
+				}
+				receiverDone <- waitErr
+				return
+			}
+			if event == nil || event.Revents&perfcommon.ZLinkPollIn == 0 {
+				continue
+			}
+			stop, drainErr := drainSinglePubSubUntilStop(subscriber, &received, stats, cfg.msgSize, window.ActiveAtNs, window.StopAtNs)
 			if drainErr != nil {
 				receiverDone <- drainErr
 				return
@@ -107,10 +121,6 @@ func recvSinglePubSubUntilStop(
 	activeAtNs int64,
 	stopAtNs int64,
 ) (bool, error) {
-	stop, _, err := recvSinglePubSubOnce(subscriber, received, stats, msgSize, activeAtNs, stopAtNs, zlink.RecvFlagsNone)
-	if err != nil || stop {
-		return stop, err
-	}
 	return drainSinglePubSubUntilStop(subscriber, received, stats, msgSize, activeAtNs, stopAtNs)
 }
 

@@ -13,6 +13,23 @@ const { POLLIN, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail,
 const MEASUREMENT_PART_COUNT = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
 const SERVER_ROUTING_ID = zlink.RoutingId.from(Buffer.from('SERVER', 'ascii'));
 const ASYNC_PROGRESS_BATCH = 64;
+const RELAY_TEARDOWN_RESERVE_MS = 2000;
+function positiveEnvMs(names, fallback) {
+    for (const name of names) {
+        const parsed = Number(process.env[name]);
+        if (Number.isFinite(parsed) && parsed > 0)
+            return Math.floor(parsed);
+    }
+    return fallback;
+}
+function relayShutdownDrainMs() {
+    const sendDrainMs = positiveEnvMs(['PERF_MULTI_SEND_DRAIN_TIMEOUT_MS'], 5000);
+    const shutdownMs = positiveEnvMs([
+        'PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS',
+        'PERF_SERVER_SHUTDOWN_TIMEOUT_MS'
+    ], 5000);
+    return Math.max(250, Math.min(sendDrainMs, shutdownMs - RELAY_TEARDOWN_RESERVE_MS));
+}
 // Echo clients keep their sockets open until every admitted record has been
 // received. This count is observed only during teardown; it never gates sends
 // in the active window.
@@ -76,12 +93,16 @@ class RoutedReplySender {
     pendingTail;
     task;
     failure;
-    constructor(router) {
+    pendingCount;
+    submitReply;
+    constructor(router, submitReply = sendServerReply) {
         this.router = router;
         this.pendingHead = null;
         this.pendingTail = null;
         this.task = null;
         this.failure = null;
+        this.pendingCount = 0;
+        this.submitReply = submitReply;
     }
     enqueue(received) {
         this.raiseIfFailed();
@@ -97,6 +118,7 @@ class RoutedReplySender {
             this.pendingHead = reply;
         }
         this.pendingTail = reply;
+        this.pendingCount += 1;
         this.start();
     }
     raiseIfFailed() {
@@ -108,6 +130,13 @@ class RoutedReplySender {
             await this.task;
         }
         this.raiseIfFailed();
+    }
+    async drainUntil(deadlineNs, nowNs = currentEpochNs, yieldTurn = sleepImmediate) {
+        while (this.task && BigInt(nowNs()) < BigInt(deadlineNs)) {
+            await yieldTurn();
+        }
+        this.raiseIfFailed();
+        return this.task === null;
     }
     start() {
         if (this.task || this.failure || !this.pendingHead)
@@ -127,10 +156,11 @@ class RoutedReplySender {
     async sendPending() {
         while (this.pendingHead) {
             const reply = this.pendingHead;
-            await sendServerReply(this.router, reply.routingId, reply.parts);
+            await this.submitReply(this.router, reply.routingId, reply.parts);
             this.pendingHead = reply.next;
             if (!this.pendingHead)
                 this.pendingTail = null;
+            this.pendingCount -= 1;
         }
     }
 }
@@ -422,7 +452,19 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
             await sleepImmediate();
             replies.raiseIfFailed();
         }
-        await replies.drain();
+        // Node SEND admission is asynchronous: sendRouted() returns the Promise
+        // from op.submit(). STOP therefore does not block the event loop, but an
+        // unconditional await here can still wait forever for a departed peer's
+        // WRITABLE token. Give the already-owned reply the same bounded post-STOP
+        // drain as the C relay, while reserving time for socket/context teardown.
+        const drainMs = relayShutdownDrainMs();
+        const drainDeadlineNs = currentEpochNs() + BigInt(drainMs) * 1000000n;
+        if (!(await replies.drainUntil(drainDeadlineNs))) {
+            console.error('[perf-multi-relay] shutdown drain expired '
+                + `window_ms=${drainMs} pending_replies=${replies.pendingCount}`);
+            console.error('[perf-multi-relay] reply abandoned after shutdown drain; '
+                + 'socket close will terminate its admission Promise');
+        }
     }
     finally {
         rl?.close();
@@ -438,5 +480,7 @@ module.exports = {
     runRoutedSendSendRounds,
     runRoutedSendSendClient,
     runRoutedSendSendServer,
+    RoutedReplySender,
+    relayShutdownDrainMs,
     trackPendingReplyTask
 };

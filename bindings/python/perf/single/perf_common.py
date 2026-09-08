@@ -285,11 +285,10 @@ def recv_into_storage(sock, storage, *, method="recv", blocking=True):
 def run_one_way_receiver(sock, *, method, msg_size, run_id, active_end,
                          received, latency_sampler):
     """C perf_single_one_way.hpp run_active_phase receiver, fused for the
-    Python hot path on one reused storage object. Python uses DONTWAIT for
-    the receive loop so a lost stop token cannot leave the runner blocked
-    inside native recv. Header is decoded strictly at offset 0 with an exact
-    size check; latency = recv_ns - sent_ts_ns clamped to 0.0. Returns the
-    updated received count."""
+    Python hot path on one reused storage object. This thread waits for POLLIN,
+    drains with DONTWAIT, and terminates only on the wire stop token. Header is
+    decoded strictly at offset 0 with an exact size check; latency = recv_ns -
+    sent_ts_ns clamped to 0.0. Returns the updated received count."""
 
     from perf_metrics import (
         HEADER_FORMAT,
@@ -303,42 +302,40 @@ def run_one_way_receiver(sock, *, method, msg_size, run_id, active_end,
     no_data = zlink_mod.RecvResult.NO_DATA
     storage = _recv_storage(method)
     poller, poll_events = new_socket_poller(sock, zlink_mod.PollEventFlag.POLLIN)
-    perf_counter = time.perf_counter
     time_ns = time.monotonic_ns
     active_end_ns = int(active_end * 1_000_000_000)
     count = received
-    stop_view = memoryview(STOP_TOKEN)
-    stop_wait_end = active_end + (_env_int("PERF_SINGLE_STOP_WAIT_MS", 2000) / 1000.0)
 
     try:
-        stop_received = False
-        while not stop_received:
-            if perf_counter() >= stop_wait_end:
-                break
-            flags = dont_wait
+        while True:
+            try:
+                if safe_poll(poller, poll_events, -1) == 0:
+                    continue
+            except zlink_mod.ZlinkError as exc:
+                if exc.native_errno in (errno.EINTR, errno.EAGAIN):
+                    continue
+                raise
+
             while True:
                 try:
                     recv_method = (
                         sock.subscribe_into if method == "subscribe" else sock.recv_into
                     )
-                    if recv_method(storage, flags=flags):
+                    if recv_method(storage, flags=dont_wait):
                         parts = storage.to_bytes_list()
                         if len(parts) == 1 and is_stop_token(parts[0]):
-                            stop_received = True
-                            break
+                            return count
                         data = measurement_payload(parts)
+                        if data is None:
+                            raise RuntimeError(
+                                "invalid one-way application frame shape"
+                            )
                     else:
-                        wait_socket_readable_until(poller, poll_events, stop_wait_end)
                         break
                 except recv_error as exc:
                     if exc.result == no_data:
-                        wait_socket_readable_until(poller, poll_events, stop_wait_end)
                         break
                     raise
-                if perf_counter() >= stop_wait_end:
-                    stop_received = True
-                    break
-                flags = dont_wait
                 if data is None or len(data) != max(msg_size, HEADER_SIZE):
                     continue
                 magic, hdr_run_id, phase, hdr_msg_size, _seq, sent_ts_ns = (
@@ -361,7 +358,6 @@ def run_one_way_receiver(sock, *, method, msg_size, run_id, active_end,
                     latency_sampler.add(0.0)
     finally:
         poller.close()
-    return count
 
 
 def run_one_way_receiver_public_recv(

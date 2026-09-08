@@ -46,14 +46,28 @@ func runSingleOneWayWithTransient(
 	defer received.Close()
 
 	// perf_single_one_way.hpp run_active_phase starts the receiver thread
-	// before the sender thread and waits with a blocking recv. Only the
-	// burst drain after the first payload uses DONTWAIT.
+	// before the sender and uses POLLIN readiness followed by a DONTWAIT
+	// receive drain. The role remains pinned to this dedicated OS thread.
 	receiverDone := make(chan error, 1)
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
+		poller := perfcommon.NewSocketPoller(receiver, perfcommon.ZLinkPollIn)
+		defer poller.Close()
+		events := make([]zlink.PollEvent, 1)
 		for {
-			stop, drainErr := recvSingleOneWayUntilStop(receiver, &received, stats, cfg.msgSize, window.ActiveAtNs, window.StopAtNs)
+			event, waitErr := perfcommon.WaitPollerOne(poller, events, -1)
+			if waitErr != nil {
+				if perfcommon.IsTransient(waitErr) {
+					continue
+				}
+				receiverDone <- waitErr
+				return
+			}
+			if event == nil || event.Revents&perfcommon.ZLinkPollIn == 0 {
+				continue
+			}
+			stop, drainErr := drainSingleOneWayUntilStop(receiver, &received, stats, cfg.msgSize, window.ActiveAtNs, window.StopAtNs)
 			if drainErr != nil {
 				receiverDone <- drainErr
 				return
@@ -108,10 +122,6 @@ func recvSingleOneWayUntilStop(
 	activeAtNs int64,
 	stopAtNs int64,
 ) (bool, error) {
-	stop, _, err := recvSingleOneWayOnce(receiver, received, stats, msgSize, activeAtNs, stopAtNs, zlink.RecvFlagsNone)
-	if err != nil || stop {
-		return stop, err
-	}
 	return drainSingleOneWayUntilStop(receiver, received, stats, msgSize, activeAtNs, stopAtNs)
 }
 

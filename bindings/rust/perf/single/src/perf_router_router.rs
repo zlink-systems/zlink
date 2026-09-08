@@ -1,6 +1,7 @@
 //! Single ROUTER/ROUTER throughput/latency benchmark.
 
 mod common;
+mod one_way;
 
 use std::time::Duration;
 use zlink::{Message, Received, RoutingId, SocketMonitor, SubmitResult};
@@ -116,46 +117,27 @@ fn main() {
             },
         );
         common::send_stop_token(|msg| {
-            perf_submit_measurement!(sender.send(&send_target), msg).map(|()| true)
+            common::submit_now(sender.send(&send_target).message(msg).submit()).map(|()| true)
         });
+        sender
     });
 
     let mut received = Received::empty();
-    let stop_wait_deadline = active_deadline + common::resolve_single_stop_wait().as_nanos() as u64;
-    'recv: loop {
-        if common::now_ns() >= stop_wait_deadline {
-            break;
-        }
-        let flags = if common::now_ns() < active_deadline {
-            zlink::RecvFlags::NONE
-        } else {
-            zlink::RecvFlags::DONT_WAIT
-        };
-        match receiver.recv(&mut received, flags) {
+    one_way::recv_until_stop(&receiver, || {
+        match receiver.recv(&mut received, zlink::RecvFlags::DONT_WAIT) {
             Ok(true) => {
-                debug_assert_eq!(received.parts().len(), 1);
-                let data = received.first_part().expect("router payload").as_bytes();
-                if common::is_stop_token(data) {
-                    break;
-                }
+                let data = match one_way::classify(received.parts()) {
+                    one_way::Content::Payload(data) => data,
+                    one_way::Content::Stop => return one_way::RecvStep::Stop,
+                };
                 common::handle_recv(data, config.size, &stats, active_deadline);
-                while receiver
-                    .recv(&mut received, zlink::RecvFlags::DONT_WAIT)
-                    .expect("router-router receiver recv failed")
-                {
-                    debug_assert_eq!(received.parts().len(), 1);
-                    let data = received.first_part().expect("router payload").as_bytes();
-                    if common::is_stop_token(data) {
-                        break 'recv;
-                    }
-                    common::handle_recv(data, config.size, &stats, active_deadline);
-                }
+                one_way::RecvStep::Payload
             }
-            Ok(false) => common::poll_idle(Duration::from_millis(1)),
+            Ok(false) => one_way::RecvStep::Empty,
             Err(err) => panic!("router-router receiver recv failed: {err}"),
         }
-    }
-    send_thread.join().expect("sender thread");
+    });
+    let _sender = send_thread.join().expect("sender thread");
 
     let result = collector.finish();
     common::print_result(

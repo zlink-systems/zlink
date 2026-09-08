@@ -1,8 +1,8 @@
 //! Single PUB/SUB throughput/latency benchmark.
 
 mod common;
+mod one_way;
 
-use std::time::Duration;
 use zlink::{Message, RecvFlags, SocketMonitor, SubmitResult, TopicMessage};
 
 fn main() {
@@ -55,7 +55,7 @@ fn main() {
     let collector = common::MetricCollector::new();
     let stats = collector.shared();
 
-    let active = Duration::from_secs(config.duration_seconds);
+    let active = std::time::Duration::from_secs(config.duration_seconds);
     let active_deadline = common::now_ns() + active.as_nanos() as u64;
     let send_thread = std::thread::spawn(move || {
         common::send_loop(active_deadline, config.size, common::PHASE_ACTIVE, |msg| {
@@ -84,32 +84,25 @@ fn main() {
             }
         });
         common::send_stop_token(|msg| pub_sock.publish("P").message(msg).submit().map(|()| true));
+        pub_sock
     });
 
-    let stop_wait_deadline = active_deadline + common::resolve_single_stop_wait().as_nanos() as u64;
-    loop {
-        if common::now_ns() >= stop_wait_deadline {
-            break;
-        }
-        let mut received = TopicMessage::empty();
-        let flags = if common::now_ns() < active_deadline {
-            RecvFlags::NONE
-        } else {
-            RecvFlags::DONT_WAIT
-        };
-        match sub_sock.subscribe(&mut received, flags) {
+    let mut received = TopicMessage::empty();
+    one_way::recv_until_stop(&sub_sock, || {
+        match sub_sock.subscribe(&mut received, RecvFlags::DONT_WAIT) {
             Ok(true) => {
-                let data = common::message_payload(received.parts());
-                if common::is_stop_token(data) {
-                    break;
-                }
+                let data = match one_way::classify(received.parts()) {
+                    one_way::Content::Payload(data) => data,
+                    one_way::Content::Stop => return one_way::RecvStep::Stop,
+                };
                 common::handle_recv(data, config.size, &stats, active_deadline);
+                one_way::RecvStep::Payload
             }
-            Ok(false) => common::poll_idle(Duration::from_millis(1)),
+            Ok(false) => one_way::RecvStep::Empty,
             Err(err) => panic!("pubsub subscriber recv failed: {err}"),
         }
-    }
-    send_thread.join().expect("sender thread");
+    });
+    let _pub_sock = send_thread.join().expect("sender thread");
 
     let result = collector.finish();
     common::print_result(

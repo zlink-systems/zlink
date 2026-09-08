@@ -11,6 +11,8 @@ const {
   waitForConnectionReady
 } = require('../perf/multi/perf_multi_runtime');
 const {
+  RoutedReplySender,
+  relayShutdownDrainMs,
   runRoutedSendSendRounds,
   trackPendingReplyTask
 } = require('../perf/multi/perf_multi_routed_sendsend');
@@ -332,6 +334,50 @@ test('routed server reply tracking has no 4096-operation application cap', async
   await Promise.resolve();
   assert.equal(pendingTasks.size, 0);
   assert.deepEqual(failures, []);
+});
+
+test('routed relay bounds a pending reply admission after STOP', async () => {
+  let releaseAdmission;
+  const admission = new Promise<boolean>((resolve) => { releaseAdmission = resolve; });
+  const replies = new RoutedReplySender(
+    {},
+    async () => admission
+  );
+  const routingId = zlink.RoutingId.from(Buffer.from('CLIENT'));
+  replies.enqueue({
+    routingId,
+    parts: [{ data: () => Buffer.alloc(64) }, { data: () => Buffer.alloc(0) }]
+  });
+
+  let now = 0n;
+  const drained = await replies.drainUntil(
+    3n,
+    () => now,
+    async () => { now += 1n; await nextTurn(); }
+  );
+  assert.equal(drained, false);
+  assert.equal(replies.pendingCount, 1);
+
+  releaseAdmission(true);
+  await replies.drain();
+  assert.equal(replies.pendingCount, 0);
+});
+
+test('routed relay drain stays inside the server shutdown budget', () => {
+  const savedSendDrain = process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS;
+  const savedShutdown = process.env.PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS;
+  try {
+    process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS = '5000';
+    process.env.PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS = '5000';
+    assert.equal(relayShutdownDrainMs(), 3000);
+    process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS = '1000';
+    assert.equal(relayShutdownDrainMs(), 1000);
+  } finally {
+    if (savedSendDrain === undefined) delete process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS;
+    else process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS = savedSendDrain;
+    if (savedShutdown === undefined) delete process.env.PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS;
+    else process.env.PERF_MULTI_SERVER_SHUTDOWN_TIMEOUT_MS = savedShutdown;
+  }
 });
 
 test('routed SENDSEND reuses receive envelopes and echoes exactly two application parts', async () => {

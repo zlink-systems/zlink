@@ -133,16 +133,25 @@ void run_dealer_router_reqrep (const std::string &transport,
                              && zlink_poller_destroy (&completion_poller) == ZLINK_CLOSE_OK;
     if (!ok || !stop_ok || !poller_ok
         || reply_state.fatal.load (std::memory_order_acquire)) {
-        if (bench_debug_enabled ())
-            std::cerr << "[perf-single-reqrep] shutdown failed requester=" << ok
-                      << " stop=" << stop_ok << " poller=" << poller_ok
-                      << " replier_fatal="
-                      << reply_state.fatal.load (std::memory_order_acquire)
-                      << " received="
-                      << reply_state.received.load (std::memory_order_acquire)
-                      << " replied="
-                      << reply_state.replied.load (std::memory_order_acquire)
-                      << " completed=" << completed << std::endl;
+        // Failure stderr is captured per case by run_comparison.py. Keep the
+        // terminal state visible without requiring a second diagnostic run;
+        // this branch is outside the measured path.
+        std::cerr << "[perf-single-reqrep] shutdown failed requester=" << ok
+                  << " requester_fatal="
+                  << request_state.fatal.load (std::memory_order_acquire)
+                  << " in_flight="
+                  << request_state.in_flight.load (std::memory_order_acquire)
+                  << " retained=" << request_state.retained_request
+                  << " wait_token=" << request_state.wait_token
+                  << " retry_ready=" << request_state.retry_ready
+                  << " stop=" << stop_ok << " poller=" << poller_ok
+                  << " replier_fatal="
+                  << reply_state.fatal.load (std::memory_order_acquire)
+                  << " received="
+                  << reply_state.received.load (std::memory_order_acquire)
+                  << " replied="
+                  << reply_state.replied.load (std::memory_order_acquire)
+                  << " completed=" << completed << std::endl;
         print_fail ();
         fflush (NULL);
         std::_Exit (1);
