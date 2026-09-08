@@ -16,6 +16,9 @@ import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.eventing.MonitorEvent;
+import systems.zlink.contracts.eventing.MonitorEventType;
+import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.RecvFlags;
@@ -33,6 +36,8 @@ final class ZLinkRouteMeshInboundIdentityIntegrationTest {
         try (Context context = Zlink.createContext();
              RouterSocket listener = context.createRouterSocket();
              RouterSocket initiator = context.createRouterSocket();
+             SocketMonitor listenerMonitor =
+                 listener.monitorOpen(MonitorEventType.DISCONNECTED);
              ExecutorService responder = Executors.newSingleThreadExecutor(task -> {
                  Thread thread = new Thread(task, "zlink-route-inbound-identity-responder");
                  thread.setDaemon(true);
@@ -51,6 +56,7 @@ final class ZLinkRouteMeshInboundIdentityIntegrationTest {
             assertReverseRequest(listener, initiator, responder, initiatorRid, "first");
 
             initiator.disconnect(endpoint);
+            awaitDisconnected(listenerMonitor);
             connectWithProbe(initiator, listenerRid, endpoint);
             assertInboundProbe(listener, initiatorRid);
             assertReverseRequest(listener, initiator, responder, initiatorRid, "second");
@@ -116,6 +122,13 @@ final class ZLinkRouteMeshInboundIdentityIntegrationTest {
             Message.closeAll(reply);
         }
         server.get(3, TimeUnit.SECONDS);
+    }
+
+    private static void awaitDisconnected(SocketMonitor monitor) {
+        awaitCondition(() -> {
+            MonitorEvent event = monitor.recv(RecvFlags.DONT_WAIT);
+            return event != null && event.event() == MonitorEventType.DISCONNECTED;
+        });
     }
 
     private static void assumeNative() {
