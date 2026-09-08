@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -83,9 +84,25 @@ struct fixture_t
         //  contends with the very io thread that has to ingest the fragments
         //  and, on a small host, starves it out of the deadline. Give the
         //  scheduler a real gap between probes instead.
-        while (pending () < chunks_ && std::chrono::steady_clock::now () < end)
+        uint64_t queued = pending ();
+        uint64_t stalled_at = queued;
+        int64_t last_progress_ms = 0;
+        const auto started = std::chrono::steady_clock::now ();
+        while (queued < chunks_ && std::chrono::steady_clock::now () < end) {
             std::this_thread::sleep_for (std::chrono::milliseconds (1));
-        TEST_ASSERT_TRUE_MESSAGE (pending () >= chunks_, "transport did not queue all fragments");
+            queued = pending ();
+            if (queued != stalled_at) {
+                stalled_at = queued;
+                last_progress_ms =
+                  std::chrono::duration_cast<std::chrono::milliseconds> (
+                    std::chrono::steady_clock::now () - started).count ();
+            }
+        }
+        std::ostringstream details;
+        details << "transport did not queue all fragments: queued=" << queued
+                << " expected=" << chunks_ << " last_progress_ms="
+                << last_progress_ms;
+        TEST_ASSERT_TRUE_MESSAGE (queued >= chunks_, details.str ().c_str ());
     }
 
     void expect_packet (const std::string &header_, const std::string &body_, bool blocking_ = false)
