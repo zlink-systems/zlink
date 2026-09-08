@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { hostEnvironment } from '../../host-environment.mjs';
 
 export const sampleName = 'ZoneWorld';
 
@@ -680,10 +681,9 @@ async function waitForCrossOwnerBot(ctx, nodes) {
 
 async function startSharedBrowser(ctx, gateway, ops, lifecycleNodeId) {
   const browserRoot = path.resolve(ctx.nodeRoot, '../shared_sample/zoneworld/client');
-  const browserEnv = {
-    ...process.env,
+  const browserEnv = hostEnvironment({
     PLAYWRIGHT_BROWSERS_PATH: path.join(browserRoot, '.cache', 'ms-playwright')
-  };
+  });
   const viteCli = path.join(browserRoot, 'node_modules', 'vite', 'bin', 'vite.js');
   const playwrightCli = path.join(browserRoot, 'node_modules', 'playwright', 'cli.js');
   const outputDirectory = path.join(ctx.workDir, 'zoneworld-browser-dist');

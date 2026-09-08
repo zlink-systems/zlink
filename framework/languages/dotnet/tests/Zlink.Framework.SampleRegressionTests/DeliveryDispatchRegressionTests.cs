@@ -135,14 +135,14 @@ public sealed partial class RegressionTests
         {
             Assert.Contains($"\"deliverydispatch-ready kind=route node={node}\" \"${{LOG_DIR}}/{node}.log\" 1",
                 shellRunner, StringComparison.Ordinal);
-            Assert.Contains($"(Join-Path $LogDir \"{node}.log\") \"deliverydispatch-ready kind=route node={node}\" 1",
+            Assert.Contains($"(Join-Path $LogDir \"{node}.out.log\") \"deliverydispatch-ready kind=route node={node}\" 1",
                 powershellRunner, StringComparison.Ordinal);
         }
         foreach (var node in new[] { "courier-node-1", "courier-node-2" })
         {
             Assert.Contains($"\"deliverydispatch-ready kind=actor-route node=dispatch target={node}\" \"${{LOG_DIR}}/dispatch.log\" 1",
                 shellRunner, StringComparison.Ordinal);
-            Assert.Contains($"(Join-Path $LogDir \"dispatch.log\") \"deliverydispatch-ready kind=actor-route node=dispatch target={node}\" 1",
+            Assert.Contains($"(Join-Path $LogDir \"dispatch.out.log\") \"deliverydispatch-ready kind=actor-route node=dispatch target={node}\" 1",
                 powershellRunner, StringComparison.Ordinal);
         }
         Assert.DoesNotContain("message flow", powershellRunner, StringComparison.OrdinalIgnoreCase);
@@ -239,7 +239,7 @@ public sealed partial class RegressionTests
         {
             Assert.Contains($"\"deliverydispatch-courier bound courier={courier}\" \"${{LOG_DIR}}/courier-session.log\" 1",
                 shellRunner, StringComparison.Ordinal);
-            Assert.Contains($"(Join-Path $LogDir \"courier-session.log\") \"deliverydispatch-courier bound courier={courier}\" 1",
+            Assert.Contains($"(Join-Path $LogDir \"courier-session.out.log\") \"deliverydispatch-courier bound courier={courier}\" 1",
                 powershellRunner, StringComparison.Ordinal);
         }
         Assert.DoesNotContain("CourierGateway", readme, StringComparison.Ordinal);
