@@ -2356,3 +2356,9 @@ Go relay는 D-BP24 대상이 아니다 — DR·RR 모두 공유 echo server가 r
 
 **결과**(`core-rf-WS-1-analysis.md`): 64 KiB 왕복 축소 셀 callgrind에서 Beast `mask_inplace()`가 client 32.27M Ir(27.9 %), server 32.28M Ir(48.2 %); TCP에는 없음. 두 번째: 65,536 B payload + ZMP header + 빈 FINAL part가 기본 설정에서 방향당 Beast write 3회(16 KiB batch, zero-copy 나머지, 빈 FINAL frame) → 64 KiB syscall/op TCP 8.53 vs WS 22.44(2.63배). 실험(적용 금지, §9 diff): masking 8-byte scalar −78.2 % Ir/chunk; WS batch 16→256 KiB 왕복 +24.0 %, Beast write buffer 64→256 KiB까지 +37.2 %(load 상이, 방향성 근거). 계약: client masking은 RFC 6455 의무(구현 폭은 자유), 01-zmp §8/§9의 WS binary message 경계·bounded batch 규칙은 유지.
 **결정**: 수정은 ALL-1 B 항목(트랙 2)에서 — (1) masking 구현 폭 확대(vendored Beast 수정 대신 가능하면 Core ws engine 쪽 masking 경로로; vendored 라이브러리 패치는 D 표에 올려 사용자 확인), (2) WS 전용 batch가 payload 하나+multipart 경계를 담도록 기존 encoder buffer 성장/회수 정책 안에서, connection당 고정 buffer 증가 없이. 회귀 테스트: 같은 크기에서 단방향/왕복 처리량 비가 tcp 대비 ws에서 상한 안. D-BP29 latency 스파이크(OS 송신 queue 766 MB)는 같은 write 분할·batch 경계에서 오는지 ALL-1이 대조.
+
+## D-B229 (2026-09-08 09:20, 머신 B) 트랙 1 착지 — receive 소유권 프로토콜(ST-1/2/3) `de730d4ac5`; D-e 종결
+
+**게이트**(`gate-st-summary.md`, 1회차 OOM 뒤 메모리 가드로 재실행): ctest 210/210, 변경 suite 98×3, 새 테스트 20/20, 공개 인터페이스 diff 없음·mirror 12/12, hotpath 5셀 1.005~1.030 PASS, with_stream 0.17.2 idle 대비 0.98/1.01/0.99, perf/c multi 1024 B DR_REQREP 233.1/RR_SENDSEND 250.8/PUBSUB 1039.5(0.17.2 idle 대비 +22~38 %, load 상이라 관측치; `has_in()` 편입 회귀 없음).
+**착지**: Core 4 파일 + 테스트 2 파일. §7.5 D-e(`receive_once_guarded` race)는 이 수정으로 닫힘(TSan suppression 없이 receive 소유권 경고 0). 잔여 경계: control attach(sync만), lease handoff FIFO 없음, mailbox TSan 11건 — 트랙 2(ALL-1) 범위. 머신 A: C++·.NET MULTI_STREAM은 0.17.3 태그 후 재측정.
+**0.17.3 태그 시점**: 트랙 2(ALL-1) 결과를 본 뒤 결정 — ALL-1이 게이트까지 통과하면 함께, 아니면 이 수정 + perf/c 재확인만으로 먼저 태그.
