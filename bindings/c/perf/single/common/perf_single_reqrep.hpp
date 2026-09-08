@@ -63,13 +63,36 @@ struct request_state_t
 
 struct reply_state_t
 {
-    reply_state_t () : received (0), replied (0), stop (false), fatal (false) {}
+    reply_state_t () :
+        received (0),
+        replied (0),
+        stop (false),
+        fatal (false),
+        fatal_stage ("none"),
+        fatal_rc (0),
+        fatal_errno (0)
+    {
+    }
 
     std::atomic<unsigned long long> received;
     std::atomic<unsigned long long> replied;
     std::atomic<bool> stop;
     std::atomic<bool> fatal;
+    const char *fatal_stage;
+    int fatal_rc;
+    int fatal_errno;
 };
+
+inline void mark_reply_fatal (reply_state_t *state_,
+                              const char *stage_,
+                              int rc_,
+                              int errno_)
+{
+    state_->fatal_stage = stage_;
+    state_->fatal_rc = rc_;
+    state_->fatal_errno = errno_;
+    state_->fatal.store (true, std::memory_order_release);
+}
 
 enum submit_step_t
 {
@@ -444,22 +467,17 @@ inline bool run_request_phase (void *requester_,
         }
     }
 
+    // A retained request was not admitted before the active deadline. The
+    // bounded drain owns only already-admitted request completions and must not
+    // submit this request after the measurement window.
+    clear_retained_request (state_);
     const auto drain_deadline = std::chrono::steady_clock::now ()
                                 + std::chrono::milliseconds (drain_timeout_ms);
-    while ((state_->in_flight.load (std::memory_order_acquire) > 0
-            || state_->retained_request)
+    while (state_->in_flight.load (std::memory_order_acquire) > 0
            && std::chrono::steady_clock::now () < drain_deadline) {
         if (!poll_completion_once (poller_, requester_, state_, 50)) {
             state_->fatal.store (true, std::memory_order_release);
             break;
-        }
-        if (state_->retained_request && state_->retry_ready) {
-            const submit_step_t step = submit_request (
-              state_, payload_, submit_fn_, timeout_ms);
-            if (step == submit_step_fatal) {
-                state_->fatal.store (true, std::memory_order_release);
-                break;
-            }
         }
     }
 
@@ -469,12 +487,10 @@ inline bool run_request_phase (void *requester_,
                       << std::endl;
         return false;
     }
-    if (state_->in_flight.load (std::memory_order_acquire) != 0
-        || state_->retained_request) {
+    if (state_->in_flight.load (std::memory_order_acquire) != 0) {
         if (bench_debug_enabled ())
             std::cerr << "[perf-single-reqrep] completion drain timed out in_flight="
                       << state_->in_flight.load (std::memory_order_acquire)
-                      << " retained=" << state_->retained_request
                       << " completed=" << state_->completed.load (std::memory_order_acquire)
                       << std::endl;
         return false;
@@ -589,14 +605,19 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
         if (recv_rc == 0)
             continue;
         if (recv_rc < 0) {
+            const int err = zlink_errno ();
             if (bench_debug_enabled ())
                 std::cerr << "[perf-single-reqrep] router recv failed rc=" << recv_rc
-                          << " errno=" << zlink_errno () << std::endl;
-            state_->fatal.store (true, std::memory_order_release);
+                          << " errno=" << err << std::endl;
+            mark_reply_fatal (state_, "router_recv", recv_rc, err);
             return;
         }
         state_->received.fetch_add (1, std::memory_order_relaxed);
         if (is_stop_token (zlink_msg_data (&request), zlink_msg_size (&request))) {
+            zlink_msg_close (&request);
+            return;
+        }
+        if (state_->stop.load (std::memory_order_acquire)) {
             zlink_msg_close (&request);
             return;
         }
@@ -613,7 +634,10 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
 #endif
               router_, &source_rid, reply_token, &request, ZLINK_PART_MORE);
             if (payload_rc != ZLINK_SUBMIT_OK) {
-                state_->fatal.store (true, std::memory_order_release);
+                if (state_->stop.load (std::memory_order_acquire))
+                    return;
+                mark_reply_fatal (state_, "reply_payload_more", payload_rc,
+                                  zlink_errno ());
                 return;
             }
             zlink_submit_result_t final_rc = ZLINK_SUBMIT_BACKPRESSURED;
@@ -625,7 +649,8 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
                    && !state_->stop.load (std::memory_order_acquire)) {
                 zlink_msg_t empty_part;
                 if (zlink_msg_init (&empty_part) != 0) {
-                    state_->fatal.store (true, std::memory_order_release);
+                    mark_reply_fatal (state_, "reply_final_init", -1,
+                                      zlink_errno ());
                     return;
                 }
 #if defined(PERF_ZLINK_LEGACY_REQUEST_CALLBACK_API)
@@ -638,9 +663,13 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
                     std::this_thread::yield ();
             }
             if (final_rc != ZLINK_SUBMIT_OK) {
-                state_->fatal.store (true, std::memory_order_release);
+                if (state_->stop.load (std::memory_order_acquire))
+                    return;
+                mark_reply_fatal (state_, "reply_final", final_rc,
+                                  zlink_errno ());
                 return;
             }
+            state_->replied.fetch_add (1, std::memory_order_relaxed);
             continue;
         }
 
@@ -654,7 +683,10 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
             if (retry_template_initialized)
                 zlink_msg_close (&retry_template);
             zlink_msg_close (&request);
-            state_->fatal.store (true, std::memory_order_release);
+            mark_reply_fatal (state_, retry_template_initialized
+                                        ? "reply_retry_template_copy"
+                                        : "reply_retry_template_init",
+                              -1, zlink_errno ());
             return;
         }
 
@@ -678,7 +710,10 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
                     if (retry_initialized)
                         zlink_msg_close (&retry);
                     zlink_msg_close (&retry_template);
-                    state_->fatal.store (true, std::memory_order_release);
+                    mark_reply_fatal (state_, retry_initialized
+                                                ? "reply_retry_copy"
+                                                : "reply_retry_init",
+                                      -1, zlink_errno ());
                     return;
                 }
                 std::this_thread::yield ();
@@ -692,10 +727,13 @@ inline void run_router_replier (void *router_, reply_state_t *state_)
         }
         zlink_msg_close (&retry_template);
         if (reply_rc != ZLINK_SUBMIT_OK) {
+            if (state_->stop.load (std::memory_order_acquire))
+                return;
             if (bench_debug_enabled ())
                 std::cerr << "[perf-single-reqrep] router reply failed rc=" << reply_rc
                           << " errno=" << zlink_errno () << std::endl;
-            state_->fatal.store (true, std::memory_order_release);
+            mark_reply_fatal (state_, "reply_final", reply_rc,
+                              zlink_errno ());
             return;
         }
 

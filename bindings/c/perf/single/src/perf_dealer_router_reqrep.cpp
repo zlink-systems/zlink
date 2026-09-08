@@ -125,13 +125,13 @@ void run_dealer_router_reqrep (const std::string &transport,
 #endif
       &completion_poller, &completed, &latency);
 
-    const bool stop_ok = perf_single_reqrep::send_stop_to_router (requester.get ());
-    if (!stop_ok)
-        reply_state.stop.store (true, std::memory_order_release);
+    // Completion drain ends this case. Stop the local replier without placing
+    // an in-band token behind requests that the process is about to discard.
+    reply_state.stop.store (true, std::memory_order_release);
     replier_thread.join ();
     const bool poller_ok = completion_poller
                              && zlink_poller_destroy (&completion_poller) == ZLINK_CLOSE_OK;
-    if (!ok || !stop_ok || !poller_ok
+    if (!ok || !poller_ok
         || reply_state.fatal.load (std::memory_order_acquire)) {
         // Failure stderr is captured per case by run_comparison.py. Keep the
         // terminal state visible without requiring a second diagnostic run;
@@ -144,14 +144,21 @@ void run_dealer_router_reqrep (const std::string &transport,
                   << " retained=" << request_state.retained_request
                   << " wait_token=" << request_state.wait_token
                   << " retry_ready=" << request_state.retry_ready
-                  << " stop=" << stop_ok << " poller=" << poller_ok
+                  << " stop="
+                  << reply_state.stop.load (std::memory_order_acquire)
+                  << " poller=" << poller_ok
                   << " replier_fatal="
                   << reply_state.fatal.load (std::memory_order_acquire)
                   << " received="
                   << reply_state.received.load (std::memory_order_acquire)
                   << " replied="
                   << reply_state.replied.load (std::memory_order_acquire)
-                  << " completed=" << completed << std::endl;
+                  << " replier_fatal_stage=" << reply_state.fatal_stage
+                  << " replier_fatal_rc=" << reply_state.fatal_rc
+                  << " replier_fatal_errno=" << reply_state.fatal_errno
+                  << " completed="
+                  << request_state.completed.load (std::memory_order_acquire)
+                  << std::endl;
         print_fail ();
         fflush (NULL);
         std::_Exit (1);
