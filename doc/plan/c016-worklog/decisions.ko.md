@@ -4759,3 +4759,8 @@ prefix를 명시한다.
 ## D-B265 (2026-09-08 18:15, 머신 B) 사용자 결정 — macOS 제외는 Intel job뿐; macOS ARM64는 지원 플랫폼이므로 테스트 제외 없이 gating green이 릴리스 조건
 
 **결정**: "mac에서 제외하는 건 intel용만. mac을 지원하긴 해야 해" — D-B258·D-B264의 "최후 수단 `ZLINK_CTEST_EXCLUDE_REGEX`" 옵션 철회. `test_wake_invariants`는 MAC-3에서 반드시 수정(관찰 방식이면 이벤트 대기로, Core 결함이면 플랫폼 가드로 수정, Linux 불변). MAC-3 상한 4 h로 확장. 0.17.4 태그 run은 macOS ARM64 ctest 전체 통과가 조건.
+
+## D-B266 (2026-09-08 18:25, 머신 B) CCU-1 결과 — attach마다 컨텍스트 전체 Auto-HWM 동기 재계산(O(N²))이 CCU 4000 STREAM 정지의 원인; CCU 1000에서도 +11.7 % 여지 → CCU-2 수정(0.17.4 포함)
+
+**원인**(`core-rf-CCU-1-report.md`, Claude): `socket_base_api.cpp:634-647`(및 `:311-326`)의 `attach_pipe()`가 debounce 3000 ms를 우회해 `auto_hwm_recalculate_now`(`ctx_auto_hwm_recalc.cpp:119-198` → `ctx_physical_queue_registry.cpp:749-830`, 전체 physical queue 순회·map 재구축)를 동기 호출 → 연결 N개 수락 O(N²). 증거: CCU 4000 재현에서 connect 4000/4000, 3 s 창 echo 0; LD_PRELOAD 스택 샘플 12/13이 `zlink_poller_wait→process_commands→attach_pipe→auto_hwm_recalculate_now`, main thread 100 % CPU, I/O thread 4개 idle; main thread 누적 CPU CCU 1000 2.3 s → 4000 12 s+. 환경 무관(fd 1M, 포트 28k, somaxconn 4096, asio 통과). 실험(debounce 예약): CCU 4000 263.2 kops 통과, **CCU 1000 263.4→294.2 kops(+11.7 %)**. 부수: 러너 `stop_active_server()`가 SIGINT 1 s 뒤 SIGKILL → 고 CCU에서 서버 METRIC 유실.
+**결정**: CCU-2(Claude opus, 3 h) — 06-auto-hwm의 즉시 가시성 계약을 지키는 **증분 plan 적용**(attach O(1), 전체 재계산은 debounce 경로·예외에서만) 구현, 계약 테스트·TSan·hotpath·CCU 4000/1000 전후 측정. patch는 `wip/0.17.4`에 후속 적용(0.17.4 포함). 러너 SIGKILL 유예는 별도 소항목.
