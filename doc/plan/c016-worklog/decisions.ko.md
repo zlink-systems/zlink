@@ -4713,3 +4713,8 @@ prefix를 명시한다.
 
 **ALL-2b 상태**: patch 23 파일(+600/−88)이 worktree `all`에 미커밋으로 남음. codex 진행 기록: B-ALL2-1 max snapshot을 record 사전검사·part별 HWM 검사까지 동일 전달, command batch를 `inbound_poll_rate`로 상한 + batch 내 종료 검사(W-ALL2-1), inproc peer progress/ack 대기를 socket turn 밖으로(W-ALL2-2), WS batch/scratch 성장·회수(W-ALL2-3), 신규 5 target ×20·관련 70 target ×3 통과. TSan·ASan·hotpath·ws 게이트·보고서 미완 → ALL-2c(Claude opus, 2 h)가 이어받음(같은 worktree, 진행 파일 이어 씀).
 **S-C 중간(15:34)**: with_stream CCU 20 축소 셀에서 zlink 9,108.8 Ir/msg(mutex 8.5/msg) vs asio 5,014.7 Ir/msg — startup 미차감. zmq는 PERF_LOCK 대기 중.
+
+## D-B257 (2026-09-08 16:10, 머신 B) cppserver 4 스택 1차(오염) — cppserver가 ≥1 KiB에서 asio의 1.5~1.6배; pull 변형 1차는 세 pull 스택이 동일값(공통 병목 의심, 검증 지시)
+
+**4 스택**(`measure-cppserver-summary.md`, load 7 잔류·오염, runs 3 중앙값 kops): 64 B zlink 109.8 / asio 143.4 / cppserver 128.1 / zmq 111.8; 1024 B 106.7 / 139.2 / **224.5** / 132.4; 64 KiB 10.7 / 18.7 / **27.3** / 14.8. 비율 zlink/cppserver 0.86 / 0.48 / 0.39, cppserver/asio 0.89 / 1.61 / 1.46. 절대값은 idle 재측정(pull 변형 job의 6런)으로 대체하되, **cppserver가 큰 payload에서 asio 기본 서버보다 빠른 것은 write 경로 차이**(버퍼 재사용·배치·복사 회피 추정) — S-C가 cppserver `stream_fixed_server.cpp`의 read/write 경로를 asio·zlink와 함수 단위로 대조해야 한다. cppserver 의존 모듈은 vendored `.gitlinks`대로 clone(소스 수정 없음).
+**pull 변형 1차**(64 B, load 4): zlink 148.1 / asio 185.3 / asio_pull 148.9 / cppserver 177.0 / cppserver_pull 148.1 / zmq 164.3. 세 pull 스택이 소수점까지 같아 사용자가 공통 병목을 의심 — 검증 지시: 서버·client CPU%, worker 경유 카운터, CCU 100/1000/4000, idle 6런, wake 방식(condvar vs eventfd) 대조. zmq(164)가 같은 모델에서 10 % 높은 점이 남은 개선 여지.
