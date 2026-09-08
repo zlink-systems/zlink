@@ -149,7 +149,7 @@ jobs:
 
       - name: Build and test
         working-directory: framework/languages/java
-        run: ./gradlew --no-daemon check
+        run: ./gradlew --no-daemon --max-workers=1 check
 
       - name: Sign and upload a Maven Central bundle
         if: needs.resolve.outputs.publish_registry == 'true'
