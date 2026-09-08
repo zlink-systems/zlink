@@ -4686,3 +4686,6 @@ REQREP 정합 검증(4 agent)과 경계 3-run이 로컬 0.17.3 prefix로 짝지�
 전부 실패한다(D-BP42 재발). **큐가 비면** (1) 7개 언어 Multi·Single을 공식 prefix로 재빌드, (2) C tcp DD·RR REQREP
 64 B 1-run을 로컬 prefix 값과 대조해 ±5% 안이면 로컬 0.17.3 값을 그대로 인정, (3) 이후 새 측정은 공식 prefix. 행에는
 prefix를 명시한다.
+## D-B251 (2026-09-08 15:25, 머신 B) 사용자 지시 — macOS 실패를 병렬로 미리 수정해 0.17.4가 바로 빌드되게: MAC-1(Claude) 착수
+
+**절차**: macOS 머신 없음 → 진단 workflow `core-macos-test.yml`(workflow_dispatch, macos-15, ctest 정규식 입력, serial -j1)을 브랜치 `wip/mac-1`(베이스 `wip/0.17.3-all2` + Intel 제거·build.sh gating 커밋 cherry-pick)에 추가하고 Actions로 재현·검증 loop. 진단 run 34190928956(main, 새 gating)의 macOS ARM64 실패 목록을 확정 입력으로. 알려진 실제 실패: auto-HWM applied limit −1(`test_ctx_options:657`), xpub NODROP blocking publish timeout(`test_xpub_nodrop:243`), `test_stream_packet_progress`; timeout군은 병렬 실행 제거 뒤 재판정. 수정은 `__APPLE__` 분기 최소, Linux 동작 불변. patch `all-artifacts/MAC-1.patch` → 0.17.4 병합.
