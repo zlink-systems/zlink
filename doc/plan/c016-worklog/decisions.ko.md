@@ -2383,3 +2383,17 @@ native send 본체는 C와 같다(440.2 vs 467.5 ns). .NET 전용 항목 합 ≈
 **조치**: 개선 pass 1 개설(astra/high). 대상은 위 두 항목. PUBSUB(61.01%)·REQREP(60.45/63.10%)도 같은 send 경로를 쓰므로 DD after와 함께 다시 잰다.
 
 **참고**: 65536 B는 잔여 2,277 ns/msg가 미분리(순수 인라인 전환과 함수별 wall 기여 미분리)라 지도가 불완전하다. 64 B 지도만 판정 근거로 쓴다.
+
+## D-BP32 (2026-09-08 10:45, 머신 A) run 수 규칙을 §7.2대로 되돌린다 — **기본 1-run, 경계·outlier cell만 5-run**; .NET 5-run 집계 결함
+**(1) 1-run vs 5-run 실측 차이.** 같은 source에서 aggregate는 보통 0.3~2.3%p 차이다(C++ tcp DD 95.42→94.73, PUBSUB 95.52→95.16, tls DD 95.23→95.55, DR SS 94.70→92.37). 문제는 둘이다 — 개별 size가 1-run에서 ±5% 흔들리고(source 0줄 변경으로 DD 1024 B −5.5%·latency +25% 재현, D-BP21), **outlier 하나가 aggregate를 6%p 밀어 판정을 뒤집는다**(RR SS 98.11→92.45는 C 4096 B가 337 ms로 한 번 튄 결과; DD 95.42→94.73은 95% 선을 넘음). 5-run도 bimodal cell에는 무력하다(tls PUBSUB 256 B, 5-run끼리 2.4%p).
+
+**(2) 비용.** paired cell당 5-run ≈ 5분, 1-run ≈ 1.5분. 남은 ~150 cell이면 12시간 vs 4시간.
+
+**(3) 규칙 — §7.2가 이미 이렇게 정하고 있었고 감독자가 과하게 적용했다.** 사용자 지적(2026-09-08 10:40 "큰 차이 아니면 run 수를 줄이는게 좋을듯")으로 되돌린다:
+- **기본 1-run**(§7.2 '탐색'). 목표에서 5%p 이상 떨어진 cell은 판정이 바뀌지 않는다 — 지금까지 .NET(~60%), Node(30~40%), Go(40~67%), REQREP(70%대 vs 85%)이 전부 해당한다.
+- **5-run은 경계 cell만**(§7.2 '최종·경계 판정'): 1-run aggregate가 목표 ±5%p 안이거나, 어느 size가 이웃의 절반 이하 또는 latency 3배 이상으로 튈 때.
+- 이미 5-run으로 큐에 있는 Java 2·Node 1·Go 1 cell은 그대로 두고, 이후 launch부터 적용한다(`measure-lang.sh` 기본 runs=1).
+
+**(4) .NET 5-run 집계 결함.** .NET pass 1(astra/high, `log/2026-09-08-dotnet-dd-pass1.ko.md` §4·§6)이 발견했고 감독자가 확인했다 — `r1net` .NET report의 최종 `RESULT`는 **5회 median이 아니라 마지막 반복값**이다(64 B DD: final 922,800 = 5회차, median 922,359). `bindings/dotnet/perf/multi/run_comparison.py`에 `median` 호출이 없다(C는 `run_comparison.py:3515,3695`의 `statistics.median`). 재집계해도 .NET 4 cell의 판정(전부 미달, ~60%)은 바뀌지 않는다(재집계 aggregate 61.77%). **C·C++·Node는 report의 run 표와 최종값이 median으로 일치**한다. **Java·Go는 report에 run별 값이 없어 미확인**이다. 수정 브리프(`.artifacts/codex/dotnet-runs-median/brief.md`)는 준비됐고 codex 슬롯이 나면 띄운다 — 7개 러너 전부 확인(D-BP11).
+
+**(5) .NET pass 1 판정.** 비용 지도(D-BP31)의 두 지배 항목이 모두 계약에 묶였다 — builder 80.5 B/msg는 공개 인터페이스로 반환되는 operation 객체 자체(submitter는 이미 struct, closure 0개), "close를 다음 init에 합침"은 ownership release가 terminal 계약. 유일한 계약 유지 후보(기존 `zlink_multipart_close`로 scratch 정리 통합, 전환 10→9)는 5-run after가 61.45%로 개선 없음 → 기각·원복. 공개 API diff 0, 단위·contract 232·sample 7 통과. **.NET의 38%p 격차는 현재 공개 API 형태(메시지당 공개 operation 객체 + message wrapper의 P/Invoke 왕복)에 내재한다.** C++(D-BP26)와 결론은 같고 이유가 다르다. .NET tcp 4 cell은 `미달` 유지, 후속 pass 없음 — 공개 API 변경은 이 캠페인 범위 밖이다.
