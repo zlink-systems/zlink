@@ -1468,12 +1468,12 @@ callgrind·프로파일 분석, 후보 no-go 목록과 그 근거(D-B121~D-B130)
 | 순서 | 언어 | 현재 artifact Single | 현재 artifact Multi | 이전 호스트 Multi `tcp` 참고값 (DD / DR REQREP / RR REQREP / PUBSUB) | 적용된 개선 pass |
 |------|------|------|------|------|------|
 | 1 | C++ | REQREP 연속 제출 정합 완료(63.6%) | **0.17.2 `tcp`·`tls`·`ws`·`wss` 24 cell 기록 완료** — 통과 10, 보류 14(REQREP 4 구조적, Core/transport 귀속 10), 차단 1(wss DD). 열린 조사 없음 | 90.8 / 57.4 / 68.4 / 93.2% | 3건 push + 러너 정합 4건(`31c5e4f7f0` `e0862e1e5c` `33f63ae89d` `1aa2751b1b`) |
-| 2 | .NET | 미측정 | **0.17.2 `tcp` 4 cell 전부 `미달`** — DD 62.51, PUBSUB 61.01, DR REQREP 60.45, RR REQREP 63.10%(pattern 무관 ~60% 띠); SENDSEND 2종은 relay 정합(D-BP24) 뒤; DD 비용 지도 job 진행 중 | 59.6 / 58.3 / 67.0 / 61.3% | 3건 push |
-| 3 | Java | 미측정 | 0.17.2 빌드 완료, `tcp` 6 pattern 측정 중(relay는 이미 C 모델) | 80.9 / 59.4 / 58.7 / 80.9% | 3건 push |
-| 4 | Node | 미측정 | 0.17.2 빌드 완료, `tcp` 4 pattern 측정 중; SENDSEND는 relay 정합 필요(D-BP24 '있음' 확정) | 35.9 / 24.3 / 24.8 / 30.2% | 4건 push |
-| 5 | Go | 미측정 | **REQREP 재개**(0.17.2 동시 multipart 지원, 상한 제거 `add837942b`, D-BP16 완료); `tcp` REQREP 2 + DD·PUBSUB·SENDSEND 2 측정 중(relay는 C 모델 — 공유 echo server 동기 제출) | 53.2 / 19.0 / 21.8 / 54.6% | 2건 push |
-| 6 | Rust | 미측정 | `tcp` 6 pattern 1-run 측정 중(relay 정합 `fb3f37191d` 적용) | 59.3 / 67.3 / 69.8 / 87.7% | 2건 push |
-| 7 | Python | 미측정 | `tcp` 6 pattern 1-run 측정 중(relay 정합 `fb3f37191d` 적용) | 15.4 / 15.5 / 19.6 / 31.9% | 2건 push |
+| 2 | .NET | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 62.5, PUBSUB 61.0, DR SS 63.9, RR SS **69.5(3-run 경계, 목표 70)**, DR REQREP 60.5, RR REQREP 63.1%. 격차는 pattern 무관 ~60~70% 띠 = D-BP31 두 지배 항목(공개 API 계약). client echo drain 채택(D-BP34). tls·ws·wss·STREAM 22 cell `보류(Core 대기)` | 59.6 / 58.3 / 67.0 / 61.3% | 3건 push |
+| 3 | Java | 미측정 | **0.17.2 `tcp` 5/6 기록** — PUBSUB `통과` 93.2; DD 72.0, DR SS 78.7, DR REQREP 46.3, RR REQREP 47.6 `미달`. REQREP 65536 B만 11%(byte HWM 16개/socket + client admission gate 부재, `log/2026-09-08-java-reqrep-64k-analysis.ko.md`) — POLLOUT gate 수정 진행 중. RR SS는 4096 B relay 실패(`multi_routed_relay_failed`) 수정 진행 중 → `차단`. 나머지 22 cell `보류(Core 대기)` | 80.9 / 59.4 / 58.7 / 80.9% | 3건 push |
+| 4 | Node | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 43.1, PUBSUB 29.6, DR SS 32.6, RR SS 35.4, DR REQREP 32.5, RR REQREP 29.7%(목표 60). 초 단위 latency가 DD·SS에 걸쳐 있음(admitted echo backlog client당 ~1,070건, D-BP34 교차 발견) — client echo drain·backlog 조사 진행 중. 22 cell `보류(Core 대기)` | 35.9 / 24.3 / 24.8 / 30.2% | 4건 push |
+| 5 | Go | 미측정 | **0.17.2 `tcp` 3/6 기록** — PUBSUB 39.8, DR REQREP 67.7, RR REQREP 67.1 `미달`(REQREP 작은 크기 latency ~3x = async terminal 왕복 후보). DD·DR SS는 단방향 drain 수정(codex) 뒤 5-run `complete`, RR SS 65536 B만 4/5 실패 → 수정 결과 받은 뒤 기록. 22 cell `보류(Core 대기)` | 53.2 / 19.0 / 21.8 / 54.6% | 2건 push |
+| 6 | Rust | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 60.5, PUBSUB 89.0, DR SS 73.5, RR SS 63.8, DR REQREP 54.3, RR REQREP 55.1%(목표 95/85). 4096 B만 초 단위 latency(SS 2종), 65536 B 21~38%. REQREP 비율 하락은 C 기준 상승분. 22 cell `보류(Core 대기)` | 59.3 / 67.3 / 69.8 / 87.7% | 2건 push |
+| 7 | Python | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 15.9, PUBSUB 34.0, DR SS 24.2, RR SS 23.3, DR REQREP 14.2, RR REQREP 15.7%(목표 60). 크기·pattern 무관 평탄 = 인터프리터 고정 per-message 비용. 22 cell `보류(Core 대기)` | 15.4 / 15.5 / 19.6 / 31.9% | 2건 push |
 
 참고값은 2026-09-06 00:22, 이전 호스트(16 논리 CPU / 11.7 GiB), Core `a40cb46335` 기준이다
 (`doc/plan/c016-worklog/morning-summary-2026-09-05-B.ko.md`, D-B121~D-B130). 새 측정의 목표
