@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# perf 측정 티켓 runner — 한 프로세스만 띄우고, pending 티켓을 이름순으로 하나씩 실행한다.
+#
+#   scripts/perf/perf-queue-runner.sh            # 포그라운드 (보통 nohup … & 로 띄운다)
+#
+# 직렬성은 "runner가 하나"라는 사실에서 나온다(D-BP33 후속, 사용자 제안 "공통 파일에 티켓").
+# 티켓은 .artifacts/perf-queue/pending/<이름>.ticket 파일 하나이며, 파일 자체가 bash 스니펫이다
+# (`perf-ticket.sh submit`이 만든다). 실행 중 running/, 끝나면 done/으로 옮기고 rc·시각·log를
+# 티켓 끝에 덧붙인다. QUEUE.md에 대기·실행·완료 상태판을 쓴다.
+#
+# 이전 방식(with-perf-lock.sh·wait-for-idle-perf.sh)과 겹치지 않도록 티켓 하나를 실행하는 동안
+# 같은 flock(/tmp/zlink-perf.lock)을 쥔다. 새 측정은 모두 티켓으로 낸다.
+set -u
+repo="$(cd "$(dirname "$0")/../.." && pwd)"
+root="${ZLINK_PERF_QUEUE:-${repo}/.artifacts/perf-queue}"
+lock_file="${ZLINK_PERF_LOCK:-/tmp/zlink-perf.lock}"
+load_max="${ZLINK_PERF_LOAD_MAX:-5}"
+mkdir -p "${root}/pending" "${root}/running" "${root}/done" "${root}/log"
+
+# runner 단일 인스턴스
+exec 8>>"${root}/runner.lock"
+if ! flock -n 8; then echo "runner가 이미 떠 있다: $(cat "${root}/runner.pid" 2>/dev/null)" >&2; exit 1; fi
+echo $$ > "${root}/runner.pid"
+trap 'rm -f "${root}/runner.pid"' EXIT
+
+board() {
+  {
+    echo "# perf queue — $(date '+%Y-%m-%d %H:%M:%S') runner pid $$ load $(cut -d' ' -f1-3 /proc/loadavg)"
+    echo; echo "## 실행 중"
+    for t in "${root}"/running/*.ticket; do [ -e "$t" ] || continue; st="$(grep -m1 '^# started:' "$t" | cut -c12-)"; echo "- $(basename "$t" .ticket) — $(grep -m1 '^# desc:' "$t" | cut -c9-) (${st:+시작 $st}${st:-lock·load 대기 중})"; done
+    echo; echo "## 대기 (이름순 = 우선순위-제출시각)"
+    for t in $(ls "${root}"/pending/*.ticket 2>/dev/null | sort); do echo "- $(basename "$t" .ticket) — $(grep -m1 '^# desc:' "$t" | cut -c9-)"; done
+    echo; echo "## 최근 완료 (20)"
+    for t in $(ls -t "${root}"/done/*.ticket 2>/dev/null | head -20); do echo "- $(basename "$t" .ticket) — $(grep -m1 '^# desc:' "$t" | cut -c9-) → rc=$(grep -m1 '^# rc:' "$t" | cut -c7-) ($(grep -m1 '^# started:' "$t" | cut -c12-)~$(grep -m1 '^# finished:' "$t" | cut -c13-))"; done
+  } > "${root}/QUEUE.md.tmp" && mv "${root}/QUEUE.md.tmp" "${root}/QUEUE.md"
+}
+
+# 이전 runner가 죽어 running/에 남은 티켓은 다시 pending으로 돌린다(실행 여부는 log로 확인).
+for t in "${root}"/running/*.ticket; do
+  [ -e "$t" ] || continue
+  echo "# requeued: $(date '+%H:%M:%S') 이전 runner 종료" >> "$t"; mv "$t" "${root}/pending/"
+done
+echo "perf queue runner 시작 pid $$ root ${root}"
+board
+while :; do
+  t="$(ls "${root}"/pending/*.ticket 2>/dev/null | sort | head -1)"
+  if [ -z "${t}" ]; then sleep 3; continue; fi
+  name="$(basename "${t}")"
+  mv "${t}" "${root}/running/${name}" || continue
+  t="${root}/running/${name}"
+  echo "# waiting: $(date '+%H:%M:%S') lock·load 대기" >> "${t}"
+  board
+  # 이전 방식 측정과 겹치지 않게 같은 lock을 쥐고, load가 내려갈 때까지 기다린다.
+  exec 9>>"${lock_file}"
+  flock -w 3600 9 || echo "# warn: perf lock 3600s 초과, 그대로 진행" >> "${t}"
+  waited=0
+  while awk -v m="${load_max}" '{exit !($1>m)}' /proc/loadavg && [ "${waited}" -lt 600 ]; do sleep 5; waited=$((waited+5)); done
+  echo "# started: $(date '+%H:%M:%S') (lock·load 대기 ${waited}s, load $(cut -d' ' -f1 /proc/loadavg))" >> "${t}"
+  board
+  ( cd "${repo}" && bash "${t}" ) > "${root}/log/${name%.ticket}.log" 2>&1
+  rc=$?
+  exec 9>&-
+  { echo "# finished: $(date '+%H:%M:%S')"; echo "# rc: ${rc}"; echo "# log: ${root}/log/${name%.ticket}.log"; } >> "${t}"
+  mv "${t}" "${root}/done/${name}"
+  board
+done
