@@ -4702,3 +4702,9 @@ prefix를 명시한다.
 ## D-B254 (2026-09-08 15:25, 머신 B) 사용자 지시 — asio·cppserver 서버에 zlink와 같은 pull 구조 변형(`asio_pull`, `cppserver_pull`)을 만들어 핸드오프 비용을 분리 측정
 
 **설계**: read 콜백 → queue 적재 + wake → 별도 worker thread가 pull·echo → 소유 io_context/strand에 `post`로 write 위임(asio socket 비-thread-safe → zlink의 command hop과 동일). wire·프레이밍·io thread 수·러너 옵션은 기존 스택과 동일. 6 스택(zlink, asio, asio_pull, cppserver, cppserver_pull, zmq) runs 3 idle 측정. 판독: asio vs asio_pull = 핸드오프 설계 비용(하한), zlink vs asio_pull/cppserver_pull = zlink 계층 고유 비용(0이어야 할 부분), zlink/zmq는 같은 모델 대조. 벤치 코드만 변경(bindings/c/bench/with_stream), Core 불변. 결과는 §7.1과 S-C 분석의 입력.
+
+## D-B255 (2026-09-08 15:35, 머신 B) RR-1 결과 — D-BP43은 0.17.4 베이스(ALL-2)에서 이미 해소; 경계 회귀 테스트만 추가
+
+**원인**(`core-rf-RR-1-report.md`, Claude, 계측으로 확정): 0.17.3 `drain_claimed_completion_pipe`(`socket_base_api.cpp:1694-1700`)가 `owns_lease()`일 때 `drain(false)`를 무조건 두 번 돌림 → 1차 drain이 public-head 출구에서 count-1 claim을 release한 뒤 2차 drain이 같은 분기(`:1637-1641`)에 들어가 `zlink_assert(released)`. 트리거는 reply record 뒤 peer ROUTER close의 delimiter 프레임(`probe_normalized_head()`가 `pipe_head_data`로 분류 — 의도된 설계). **1,024는 계약 상한이 아니라 타이밍 상수**(1,025 part면 drain 진입 시 record와 delimiter가 함께 큐에 있어 결정적). 계약(socket README·01-zmp)에 reply part 수 상한 없음; 05-polling owner 규칙상 0.17.3의 2차 drain이 위반. ALL-2의 lifecycle turn 통합이 이 이중 drain을 없애 0.17.4 베이스에서는 Rust 원본 테스트 PASS(0.17.3은 30/30 SIGABRT).
+**산출물**: `core/tests/integration/test_request_reply_part_count_boundary.cpp`(inproc+tcp × 1023/1024/1025/2048 × pull 3변형 × 순차/동시) 20/20, 관련 62 target ×3 PASS, Rust 원본 PASS. C 공개 API만으로는 0.17.3의 원 결함을 결정적으로 재현하지 못함(owns_lease 경로·delimiter 도착 순서 필요). TSan·ASan은 게이트에서. patch `all-artifacts/RR-1.patch`.
+**머신 A**: 0.17.4 재고정 후 Rust 러너 검증에서 이 테스트 제외를 해제 가능.
