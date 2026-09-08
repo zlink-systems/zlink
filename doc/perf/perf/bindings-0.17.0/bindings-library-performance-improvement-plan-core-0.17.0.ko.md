@@ -1479,6 +1479,8 @@ prefix** `~/.cache/zlink/core-pinned/0.17.2/lib/libzlink.so.0.17.2`(Build ID
 > `1dd6f2e129017140d9ef1e045fbd73f88b974b45`, SHA-256 `4779e33380356d469ec3b0c30b12bb6c828c8710a4cdd71b44d0669cafa1a1af`)에
 > 설치했다. 14:11 이후 모든 측정은 이 prefix(태그 `a173smoke3`로 전 언어 Multi·Single 재빌드). alpha 값은
 > Core 코드가 같으므로 유효하며 행에 "0.17.3-alpha"로 남긴다.
+> **22:35 sanity(D-BP48):** 공식 `core/v0.17.3` artifact로 C Multi 64 B를 재측정해 로컬 빌드 대비 DD +1.3 %, DR REQREP +1.2 %,
+> RR REQREP +5.2 %(3-run) — 노이즈 범위. 로컬 0.17.3 값을 그대로 인정하고 prefix 전환은 0.17.4에서 한 번에 한다.
 2026-09-05/06의 수치는 아래 표에 **참고**로만 남긴다.
 
 유지하는 것은 수치가 아니라 **작업 자산**이다. 7개 언어에 적용·푸시된 개선 pass 15건의 코드,

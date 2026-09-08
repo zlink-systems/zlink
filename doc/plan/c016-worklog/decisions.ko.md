@@ -4725,6 +4725,17 @@ Core PR을 내지 않는다. (2) 0.17.4 도착 뒤 같은 절차(1,000→5,000�
 미도달이면 러너 monitor drain(START 전 소비)을 계약 안에서 고친다. (3) 10,000이 되면 `s10k-full` 6 크기를 재서 계획서 STREAM
 행에 clients=10,000 값을 별도 표기한다. 기존 STREAM 행(clients 100)은 그대로 유효.
 
+### D-BP48 (2026-09-08 22:35) D-BP44 sanity 완료 — 공식 0.17.3 artifact와 로컬 0.17.3 빌드는 동등, 로컬 값 그대로 인정; prefix 전환은 0.17.4 도착 때 한 번에
+
+**사실:** 큐가 빈 뒤 C Multi tcp 64 B를 공식 artifact(`~/.cache/zlink/core/0.17.3/linux-x64`, Build ID 850e69f1…)로 재빌드해 쟀다
+(`off173` 1-run, `off173b` RR REQREP 3-run). 로컬 pinned(`m173b`) 대비 DEALER_DEALER +1.3 %, DR REQREP +1.2 %, RR REQREP 1-run
++6.0 % → 3-run median 359,151 ops/s(+5.2 % vs 341,503; 같은 날 다른 pinned run은 355,8xx이라 run 간 편차 안). 공식 artifact가
+느리지 않고 차이는 노이즈 범위.
+
+**결정:** D-BP44 (2)의 ±5 % 조건을 충족한 것으로 판정하고 로컬 0.17.3 prefix로 잰 모든 행을 그대로 인정한다. 7개 언어
+재빌드 비용을 두 번 내지 않도록 큐 기본 prefix(`core-prefix.env`)는 0.17.4가 올 때 공식 0.17.4 artifact로 한 번에 바꾼다.
+그때까지 새 측정이 필요하면 pinned 0.17.3을 유지한다.
+
 ## D-B251 (2026-09-08 15:25, 머신 B) 사용자 지시 — macOS 실패를 병렬로 미리 수정해 0.17.4가 바로 빌드되게: MAC-1(Claude) 착수
 
 **절차**: macOS 머신 없음 → 진단 workflow `core-macos-test.yml`(workflow_dispatch, macos-15, ctest 정규식 입력, serial -j1)을 브랜치 `wip/mac-1`(베이스 `wip/0.17.3-all2` + Intel 제거·build.sh gating 커밋 cherry-pick)에 추가하고 Actions로 재현·검증 loop. 진단 run 34190928956(main, 새 gating)의 macOS ARM64 실패 목록을 확정 입력으로. 알려진 실제 실패: auto-HWM applied limit −1(`test_ctx_options:657`), xpub NODROP blocking publish timeout(`test_xpub_nodrop:243`), `test_stream_packet_progress`; timeout군은 병렬 실행 제거 뒤 재판정. 수정은 `__APPLE__` 분기 최소, Linux 동작 불변. patch `all-artifacts/MAC-1.patch` → 0.17.4 병합.
