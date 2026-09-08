@@ -4478,3 +4478,8 @@ median 변경과 무관(ws는 §10.3.2 Core 대기 항목, 0.18.0 이월).
 
 **결정**: 0.17.3 = 트랙 1(`de730d4ac5`) + ALL-1/ALL-2 → Actions 릴리스. **0.17.4부터는 Windows 쪽 세션**에서 WSL·Windows를 함께 보며 진행한다(호스트: VS 2022 BuildTools MSVC 14.44, CMake 4.4.1, Git, OpenSSL-Win64, 체크아웃 `D:\project\zlink`, `scripts/gate/rebuild-dev.ps1`). WSL 세션은 0.17.3 릴리스 완료 후 인계 문서(0.17.4 착수 항목, worktree·patch 위치, Windows 빌드·ctest 절차, Linux 게이트 병행 규칙)를 남긴다.
 **0.17.4 착수 항목(예정)**: B-4 큰 payload 할당·ws/tls 64 KiB 왕복 지연·RSS(D-BP28/29/34), Windows 전용 `test_zmp_metadata::test_paired_incomplete_lane_fence_timeout_and_fresh_pair` 실패, perf 관찰 2건(single tcp 1024 B −4~5 %, C multi RR_SENDSEND −16 %), D 표 결정 항목(D-a/b/d/f, D-W1, D-MP3), 스펙 11-synchronization-model에 ALL-1 통합 turn 반영, 잔여 fixture 간헐(`test_stream_packet_progress` 262K frame 적재).
+
+## D-B234 (2026-09-08 12:40, 머신 B) Actions Windows x64가 현재 main에서도 `test_zmp_metadata:720` FAIL — 0.17.3 릴리스 차단, WIN-1(Claude, 호스트 MSVC로 WSL에서 구동) 착수
+
+**관찰**: run 34183182643(main, dispatch): Linux x64/ARM64·Windows ARM64 성공, Windows x64는 "Verify Windows test configuration"에서 `test_paired_incomplete_lane_fence_timeout_and_fresh_pair` "Expected TRUE Was FALSE"(09-04 run과 동일). verify·release job이 이 job에 의존하므로 태그 run도 실패한다. Windows ARM64 job은 테스트를 돌리지 않아 통과.
+**결정**: WIN-1(Claude opus, 2.5 h) — `D:\project\zlink`를 origin/main으로 동기화해 CI와 같은 구성(VS 2022, x64, Release, TLS)으로 재현 → 원인(timer 해상도·socket 정리·IOCP 순서·dual-stack 등 Windows 차이 vs 실제 순서 결함) 확정 → Core 결함이면 소유 모듈 수정, 테스트 전제면 관측 가능한 이벤트 대기로 결정화(timeout 확대 금지) → Windows 10회·Linux 반복 검증. 0.17.3 게이트에 이 patch를 포함한다. 이후 Windows 작업은 D-B233대로 Windows 세션으로.
