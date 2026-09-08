@@ -1534,6 +1534,8 @@ cell마다 개선 pass가 30~60분씩 붙는다. **§12를 문자 그대로 완�
 - **.NET·C++ 미달 cell의 다음 단계** — 공개 API 형태 논의(메시지당 operation 객체, message wrapper
   P/Invoke 왕복; C++ 요청당 5개 할당). 캠페인 범위 밖.
 
+**범위 확정(사용자, 10:50)**: Core에서 해결돼야 하는 것은 제외한다 — STREAM 전 언어, `tls`·`ws`·`wss` 전 언어는 `보류(Core 대기)`로 일괄 기록하고 측정하지 않는다. **오늘 판정 대상은 7개 언어 × `tcp` 7 pattern(STREAM 제외 6)뿐이다.**
+
 **측정 규칙 확정**: 기본 1-run, 경계(목표 ±5%p)·outlier cell만 5-run(D-BP32). 측정은
 `scripts/perf/wait-for-idle-perf.sh`의 flock으로 직렬화(D-BP25 이후 3차 수정).
 
