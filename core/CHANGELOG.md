@@ -71,6 +71,11 @@ Design decisions are in `doc/plan/c016-worklog/decisions.ko.md` (D-B…).
 
 ### Changed
 
+- Linux release artifacts are built on Ubuntu 22.04 (glibc 2.35) instead of
+  24.04, so the shipped `libzlink.so` no longer requires glibc 2.38
+  (`__isoc23_strtol` and friends) and loads on Ubuntu 22.04 / Debian 12. The
+  release provenance now records the highest glibc symbol version each Linux
+  library needs.
 - Windows random-byte entropy and context-termination `EAGAIN` fixes shipped
   in 0.17.3 are unchanged; Windows release gating is done by GitHub Actions
   (host Smart App Control blocks freshly built test binaries).

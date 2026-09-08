@@ -268,7 +268,7 @@ jobs:
 
   build-linux:
     name: Build Linux x64
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     needs: read-versions
     steps:
       - name: Checkout repository
@@ -349,7 +349,7 @@ jobs:
 
   build-linux-arm64:
     name: Build Linux ARM64
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-22.04-arm
     needs: read-versions
     steps:
       - name: Checkout repository
@@ -543,6 +543,19 @@ jobs:
           SOURCE_SHA="$(git rev-parse "${TAG_NAME}^{commit}")"
           CHECKSUMS_SHA="$(sha256sum artifacts/checksums/checksums.txt | awk '{print $1}')"
           SOURCE_ARCHIVE_SHA="$(sha256sum "${SOURCE_ARCHIVE}" | awk '{print $1}')"
+          # Highest glibc symbol version the shipped Linux libraries require.
+          # readelf parses any architecture, so one runner can read both.
+          glibc_min() {
+            local lib="$1"
+            [ -f "$lib" ] || { echo "unknown"; return; }
+            readelf --dyn-syms --wide "$lib" \
+              | grep -o 'GLIBC_[0-9][0-9.]*' \
+              | sort -t. -k2,2n -k3,3n -u \
+              | tail -1 \
+              | sed 's/^GLIBC_//'
+          }
+          LINUX_X64_GLIBC="$(glibc_min artifacts/libzlink-linux-x64/libzlink.so)"
+          LINUX_ARM64_GLIBC="$(glibc_min artifacts/libzlink-linux-arm64/libzlink.so)"
           {
             echo "schema=1"
             echo "tag=${TAG_NAME}"
@@ -552,7 +565,10 @@ jobs:
             echo "source_archive=${SOURCE_ARCHIVE}"
             echo "source_archive_sha256=${SOURCE_ARCHIVE_SHA}"
             echo "asset_url=https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_ENCODED}/${SOURCE_ARCHIVE}"
+            echo "linux_x64_glibc_min=${LINUX_X64_GLIBC}"
+            echo "linux_arm64_glibc_min=${LINUX_ARM64_GLIBC}"
           } > release-provenance.txt
+          cat release-provenance.txt
 
       - name: Detect release channel
         id: channel
