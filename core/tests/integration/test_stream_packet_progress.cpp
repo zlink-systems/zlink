@@ -333,13 +333,23 @@ void test_shutdown_during_drain ()
     zlink_msg_t header, body;
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&header));
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&body));
+    const auto recv_started = std::chrono::steady_clock::now ();
     const zlink_recv_result_t rc = zlink_stream_recv_packet (
       f.socket, NULL, &header, &body, ZLINK_RECV_FLAGS_NONE);
+    zlink_monitor_status_t at_return_status = {};
+    const int at_return_rc = zlink_monitor_status (f.monitor, &at_return_status);
+    const int64_t recv_us =
+      std::chrono::duration_cast<std::chrono::microseconds> (
+        std::chrono::steady_clock::now () - recv_started).count ();
     control.join ();
     const uint64_t remaining = f.pending ();
-    std::printf ("shutdown: %llu chunks at request, %llu at receive return\n",
+    std::printf ("DIAG-MAC4 shutdown: %llu at request, %llu at recv return"
+                 " (rc=%d), %llu after join, recv_us=%lld\n",
                  static_cast<unsigned long long> (at_shutdown),
-                 static_cast<unsigned long long> (remaining));
+                 static_cast<unsigned long long> (at_return_status.rcv_pending_msgs),
+                 at_return_rc,
+                 static_cast<unsigned long long> (remaining),
+                 static_cast<long long> (recv_us));
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, shutdown_rc);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, monitor_rc);
     TEST_ASSERT_TRUE (at_shutdown > 0);
