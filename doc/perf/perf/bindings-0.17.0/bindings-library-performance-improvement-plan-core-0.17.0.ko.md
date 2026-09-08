@@ -1016,7 +1016,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미달(75.9%) | 미달(72.9%) | 미달(77.0%) | 미달(66.1%) | 미달(62.2%) | 미측정 | pass 1+1b(`82b0fd9f38`) 뒤 3-run `p1java-r3q`: aggregate **70.8%**(목표 90%, 최소 70% 충족; before 50.8), latency 0.47x; 처리량 Java/C 757.0/998.0, 691.0/947.2, 606.7/787.6, 198.6/300.4, 39.9/64.2 Kmsg/s; 리뷰 pass 2 전; [log](log/2026-09-05-java-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_DEALER_DEALER` | 미달(71.5%) | 미달(71.0%) | 미달(84.8%) | 미달(79.1%) | 미달(53.7%) | 미측정 | **`미달(72.02%)`** — §7.2 5-run, 고정 Core **0.17.2**(`r3java`, C·Java 모두 `status: complete`); latency 0.689x. 0.17.1 참고값 80.9%. Java relay는 이미 C 모델(`submit_sync`)이라 러너 정합 대상이 아니다(D-BP24). 처리량 Java·C 1,238.9/1,732.7, 1,017.6/1,433.3, 1,004.3/1,183.9, 496.7/628.2, 85.7/159.7 Kmsg/s; C `perf_c_multi_linux_20260908_090046_r3java.txt`, Java `perf_java_multi_linux_20260908_091620_r3java.txt` |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미달(37.0%) | 미달(38.5%) | 미달(44.8%) | 미달(44.4%) | 미달(108.8%) | 미측정 | pass 1+1b 뒤 3-run: **54.7%**(목표 70%; before 15.1), latency 0.64x; 처리량 Java/C 71.2/192.3, 64.1/166.6, 75.2/168.0, 57.1/128.5, 24.5/22.5 Kops/s; 리뷰 pass 2 전; [log](log/2026-09-05-java-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
