@@ -1,0 +1,79 @@
+name: Core macOS hang sampler (diagnostic)
+
+# Runs the tests that time out on macOS directly and, when one hangs,
+# dumps every thread's stack with `sample`. Driven by pushes to the
+# wip/mac-1-hang branch (workflow_dispatch only works on the default branch).
+on:
+  push:
+    branches:
+      - wip/mac-1-hang
+  workflow_dispatch:
+
+env:
+  HANG_TESTS: 'test_router_multiple_dealers test_endpoint_release unittest_request_timeout_scheduler unittest_flow_state_socket test_wake_invariants test_stream_packet_progress'
+  HANG_WAIT: '45'
+
+jobs:
+  sample:
+    name: macOS ARM64 hang sampler
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: brew install cmake pkg-config openssl@3
+
+      - name: Configure and build
+        run: |
+          set -e
+          export OPENSSL_ROOT_DIR=$(/opt/homebrew/bin/brew --prefix openssl@3)
+          cmake -S core -B core/build-macos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DBUILD_SHARED=ON -DBUILD_STATIC=ON -DBUILD_TESTS=ON -DWITH_TLS=ON \
+            -DZLINK_CXX_STANDARD=17 -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_MACOSX_RPATH=ON \
+            -DOPENSSL_ROOT_DIR="$OPENSSL_ROOT_DIR" \
+            -DOPENSSL_INCLUDE_DIR="$OPENSSL_ROOT_DIR/include" \
+            "-DOPENSSL_LIBRARIES=$OPENSSL_ROOT_DIR/lib/libssl.dylib;$OPENSSL_ROOT_DIR/lib/libcrypto.dylib"
+          cmake --build core/build-macos --parallel $(sysctl -n hw.ncpu)
+
+      - name: Run and sample
+        run: |
+          cd core/build-macos
+          for t in $HANG_TESTS; do
+            bin=$(find . -type f -name "$t" -perm +111 | head -n 1)
+            if [ -z "$bin" ]; then echo "!!! binary $t not found"; continue; fi
+            echo "==================== $t ($bin)"
+            "$bin" > "/tmp/$t.out" 2>&1 &
+            pid=$!
+            i=0
+            while [ $i -lt "$HANG_WAIT" ]; do
+              kill -0 $pid 2>/dev/null || break
+              sleep 1
+              i=$((i+1))
+            done
+            if kill -0 $pid 2>/dev/null; then
+              echo "--- still running after ${HANG_WAIT}s: sampling"
+              sample $pid 3 -f "/tmp/$t.sample.txt" 2>&1 || true
+              echo "--- sample:"
+              cat "/tmp/$t.sample.txt" || true
+              kill -9 $pid 2>/dev/null || true
+            else
+              wait $pid; rc=$?
+              echo "--- exited rc=$rc"
+            fi
+            echo "--- last 25 lines of stdout:"
+            tail -n 25 "/tmp/$t.out"
+          done
+
+      - name: Upload samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hang-samples
+          path: /tmp/*.sample.txt
+          retention-days: 7
+          if-no-files-found: ignore
