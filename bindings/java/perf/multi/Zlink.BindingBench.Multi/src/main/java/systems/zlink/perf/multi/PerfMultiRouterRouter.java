@@ -136,7 +136,13 @@ final class PerfMultiRouterRouter {
                 index -> sendPayload(clients.get(index), msgSize, activeEnd),
                 index -> drainReplies(clients.get(index), msgSize, metrics,
                     replyBuffer, activeEnd),
-                PerfMultiTargetCoordinator.sendDrainTimeout(),
+                // C echo client: teardown window max(env, 3 s per active second).
+                PerfMultiTargetCoordinator.sendDrainTimeout().compareTo(
+                    java.time.Duration.ofSeconds(
+                        Math.max(1L, (long) config.durationSeconds()) * 3L)) >= 0
+                    ? PerfMultiTargetCoordinator.sendDrainTimeout()
+                    : java.time.Duration.ofSeconds(
+                        Math.max(1L, (long) config.durationSeconds()) * 3L),
                 "multi router/router async sends");
             replyBuffer.close();
             // C routed echo ends the relay through the runner control path.
