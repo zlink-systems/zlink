@@ -52,12 +52,13 @@ while :; do
   board
   # 이전 방식 측정과 겹치지 않게 같은 lock을 쥐고, load가 내려갈 때까지 기다린다.
   exec 9>>"${lock_file}"
-  flock -w 3600 9 || echo "# warn: perf lock 3600s 초과, 그대로 진행" >> "${t}"
+  flock -w 3600 9 8>&- || echo "# warn: perf lock 3600s 초과, 그대로 진행" >> "${t}"
   waited=0
   while awk -v m="${load_max}" '{exit !($1>m)}' /proc/loadavg && [ "${waited}" -lt 600 ]; do sleep 5; waited=$((waited+5)); done
   echo "# started: $(date '+%H:%M:%S') (lock·load 대기 ${waited}s, load $(cut -d' ' -f1 /proc/loadavg))" >> "${t}"
   board
-  ( cd "${repo}" && bash "${t}" ) > "${root}/log/${name%.ticket}.log" 2>&1
+  # 자식에게 runner lock(8)·perf lock(9)을 물려주지 않는다 — 자식이 남으면 lock도 남는다.
+  ( exec 8>&- 9>&-; cd "${repo}" && bash "${t}" ) > "${root}/log/${name%.ticket}.log" 2>&1
   rc=$?
   exec 9>&-
   { echo "# finished: $(date '+%H:%M:%S')"; echo "# rc: ${rc}"; echo "# log: ${root}/log/${name%.ticket}.log"; } >> "${t}"
