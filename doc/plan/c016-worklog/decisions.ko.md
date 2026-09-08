@@ -4840,3 +4840,6 @@ Windows Actions green으로 WIN-2의 host 한정 판정 확정(`test_wake_invari
 ## D-B288 (2026-09-08 23:10, 머신 B) CCU-5 완료 — 수렴 의무 = deadline(`arm_debounce` 첫 무장만 wake, `clear_debounce`는 full pass 완료 한 곳, `recalc_due` = 경과만; `record_applied_plan`은 deadline 미접촉), deferred shrink 반복 없음·burst N회에 full pass 1회를 공개 지표 테스트로 고정; unittest 10/10·until-fail 32×5·ctest 211/211·TSan 0건·CCU 4000 209.1 kops; review-CCU-5(25분)
 
 `core-rf-CCU-5-report.md`, `CCU-5.patch`(13파일). `recalc_due()` 조건 3→1, 새 상태 0. 부수 효과: 후속 무장이 마감을 밀지 않아 긴 burst에서는 debounce 주기마다 수렴이 전진(보장이 더 강함). CCU 추이 202.8→203.2→209.1 kops.
+## D-B289 (2026-09-08 23:25, 머신 B) review-CCU-5 — **차단 0, 채택 가능**; CCU-2~5 누적 패치를 `wip/0.17.4`에 적용(MERGE-2b); SD-2 측정 창 우선을 위해 rel174 빌드·테스트 보류
+
+`review-ccu5.md`(sol): B-CCU4-1/2 해소 — deadline 하나가 수렴 의무를 소유, full pass 완료만 해제, 증분 기록은 deadline 보존, 기존 요청 debounce 의미 유지. 잔여 W(차단 아님): timer wake 횟수를 직접 관측하지 않는 테스트, 실시간 의존 테스트 2개(flaky 후보 — 최종 게이트 until-fail로 확인), 구현과 반대인 주석 1곳(MERGE-2b에서 정정). 리뷰 4회(CCU-2→5) 총 차단 6건 해소, 최종 새 상태 0·규칙 1(수렴=deadline). 창 조정: 읽기 전용 리뷰 codex는 idle 조건에서 제외, MERGE-2a/2b는 SD-2 측정 완료까지 적용·커밋만.
