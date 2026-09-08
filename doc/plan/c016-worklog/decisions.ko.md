@@ -4564,3 +4564,7 @@ Multi에만 있다). Rust·Python 지도 브리프에 반영; Java·Node·Go 지
 
 **결정**: "리눅스 빌드 실패만 수정하면 되는 것 아니냐" — 맞다. 0.17.3 = `core/v0.17.3-alpha`(0.17.2 + receive 소유권 `de730d4ac5` + Windows 엔트로피·ctx 종료 `f5d7cccde2`) + LIN-1 patch. Actions는 Windows x64 포함 5 플랫폼 green, Linux x64만 `unittest_flow_state_monitor`. changelog 0.17.3 절은 이미 이 범위. ALL-2(트랙 2 누적: 통합 turn·C-2a/2b/2d·ws·D·E)와 ALL-3(큰 payload·latency 등)는 **0.17.4**로. review-all2·gate-all은 계속 돌려 0.17.4 착지 근거로 쓴다.
 **절차**: LIN-1 완료 → release worktree(`rel`, origin/main)에서 patch 커밋 → bump 0.17.3 → 태그 `core/v0.17.3` → `gh workflow run build.yml --ref core/v0.17.3` → Release 확인 → A 통보. main 작업 트리는 gate-all이 사용 중이라 건드리지 않는다. 예상 17:00 전후.
+
+## D-B241 (2026-09-08 13:45, 머신 B) 사용자 결정 — 0.17.3 정식 릴리스 생략, 0.17.4로 한 번에(ALL-2 + ALL-3 + LIN-1)
+
+**결정**: "0.17.4 버전 작업 먼저 진행해 아까 말한대로". 0.17.3은 `core/v0.17.3-alpha`(머신 A 선행용)로 두고 정식 태그·릴리스는 하지 않는다. 다음 정식 = **0.17.4** = ALL-2 누적 patch(통합 turn·C-2a/2b/2d·ws masking/batch·D·E) + ALL-3(큰 payload·latency·RSS·perf 재확인·fixture) + LIN-1(Linux CI 수정). 진행 중인 review-all2·gate-all은 ALL-2 근거로, ALL-3 완료 후 최종 게이트(Linux+Windows) 한 번 → main 착지 → changelog 0.17.4 절(0.17.3 절 병합) → bump 0.17.4 → 태그 → Actions 릴리스. bump 준비 agent를 0.17.4로 전환.
