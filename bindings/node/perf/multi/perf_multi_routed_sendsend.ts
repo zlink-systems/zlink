@@ -61,13 +61,9 @@ function sendPayload(socket, routerClient, payload) {
     : sendRouted(socket, payload);
 }
 
-async function sendServerReply(received) {
+async function sendServerReply(router, routingId, parts) {
   try {
-    let reply = received.send();
-    for (const part of received.parts) {
-      reply = reply.message(part);
-    }
-    await reply.submit();
+    await sendRouted(router, routingId, parts);
     return true;
   } catch (error) {
     if (error instanceof zlink.SubmitError
@@ -76,6 +72,80 @@ async function sendServerReply(received) {
       return true;
     }
     throw error;
+  }
+}
+
+interface PendingRoutedReply {
+  routingId: any;
+  parts: Buffer[];
+  next: PendingRoutedReply | null;
+}
+
+class RoutedReplySender {
+  router: any;
+  pendingHead: PendingRoutedReply | null;
+  pendingTail: PendingRoutedReply | null;
+  task: Promise<void> | null;
+  failure: unknown;
+
+  constructor(router) {
+    this.router = router;
+    this.pendingHead = null;
+    this.pendingTail = null;
+    this.task = null;
+    this.failure = null;
+  }
+
+  enqueue(received) {
+    this.raiseIfFailed();
+    const reply = {
+      routingId: zlink.RoutingId.from(received.routingId.toBytes()),
+      parts: received.parts.map((part) => Buffer.from(part.data())),
+      next: null
+    };
+    if (this.pendingTail) {
+      this.pendingTail.next = reply;
+    } else {
+      this.pendingHead = reply;
+    }
+    this.pendingTail = reply;
+    this.start();
+  }
+
+  raiseIfFailed() {
+    if (this.failure) throw this.failure;
+  }
+
+  async drain() {
+    while (this.task) {
+      await this.task;
+    }
+    this.raiseIfFailed();
+  }
+
+  start() {
+    if (this.task || this.failure || !this.pendingHead) return;
+    const task = this.sendPending();
+    this.task = task;
+    task.then(
+      () => {
+        if (this.task !== task) return;
+        this.task = null;
+        this.start();
+      },
+      (error) => {
+        if (this.task === task) this.failure ??= error;
+      }
+    );
+  }
+
+  async sendPending() {
+    while (this.pendingHead) {
+      const reply = this.pendingHead;
+      await sendServerReply(this.router, reply.routingId, reply.parts);
+      this.pendingHead = reply.next;
+      if (!this.pendingHead) this.pendingTail = null;
+    }
   }
 }
 
@@ -310,8 +380,7 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
   const router = zlink.createRouterSocket(ctx);
   const poller = zlink.createPoller();
   const received = new zlink.Received();
-  const pendingTasks = new Set();
-  let sendFailure = null;
+  const replies = new RoutedReplySender(router);
   let replyBatchCount = 0;
   let pollBuffer = null;
   let rl = null;
@@ -360,31 +429,23 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
               `invalid multipart echo request: expected=${expectedParts}, sizes=${partSizes}`
             );
           }
-          // Received.send captures this source route. Direct admission or a
-          // backpressure snapshot consumes the application parts immediately;
-          // a pending retry owns only the immutable packet. A terminal failure
-          // before either point can leave parts for refill or final close.
-          const task = sendServerReply(received);
-          trackPendingReplyTask(
-            pendingTasks,
-            task,
-            (error) => { sendFailure ??= error; }
-          );
+          // Keep receiving immutable snapshots, but let the single sender
+          // await the preceding reply admission before submitting the next.
+          replies.enqueue(received);
           replyBatchCount += 1;
           if (replyBatchCount === ASYNC_PROGRESS_BATCH) {
             replyBatchCount = 0;
-            // Let Promise continuations reap settled tasks without imposing an
-            // application reply window; the binding owns WRITABLE retries.
+            // This is only a scheduler fairness budget. It neither caps the
+            // pending FIFO nor changes its one-at-a-time admission rule.
             await sleepImmediate();
-            if (sendFailure) throw sendFailure;
+            replies.raiseIfFailed();
           }
         }
       }
       await sleepImmediate();
-      if (sendFailure) throw sendFailure;
+      replies.raiseIfFailed();
     }
-    await Promise.all(pendingTasks);
-    if (sendFailure) throw sendFailure;
+    await replies.drain();
   } finally {
     rl?.close();
     received.close();
