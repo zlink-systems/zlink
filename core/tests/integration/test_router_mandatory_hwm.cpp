@@ -14,6 +14,18 @@ SETUP_TEARDOWN_TESTCONTEXT
 
 namespace
 {
+const int hwm_socket_buffer_bytes = 4096;
+
+void configure_hwm_socket_buffers (void *socket_)
+{
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (socket_, ZLINK_OPT_SNDBUF, &hwm_socket_buffer_bytes,
+                        sizeof (hwm_socket_buffer_bytes)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (socket_, ZLINK_OPT_RCVBUF, &hwm_socket_buffer_bytes,
+                        sizeof (hwm_socket_buffer_bytes)));
+}
+
 int send_routed_payload_expect_maybe_eagain (
   void *router_, const zlink_routing_id_t *rid_, const void *buf_, size_t size_, int flags_)
 {
@@ -75,6 +87,7 @@ void test_router_mandatory_hwm ()
     int linger = 1;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (router, ZLINK_OPT_LINGER, &linger, sizeof (linger)));
+    configure_hwm_socket_buffers (router);
 
     bind_loopback_ipv4 (router, my_endpoint, sizeof my_endpoint);
 
@@ -84,6 +97,7 @@ void test_router_mandatory_hwm ()
     const uint64_t rcvhwm = sndhwm;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (dealer, ZLINK_OPT_RCVHWM, &rcvhwm, sizeof (rcvhwm)));
+    configure_hwm_socket_buffers (dealer);
 
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, my_endpoint));
 
@@ -144,6 +158,7 @@ void test_router_send_rid_mandatory_hwm ()
     int linger = 1;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (router, ZLINK_OPT_LINGER, &linger, sizeof (linger)));
+    configure_hwm_socket_buffers (router);
 
     bind_loopback_ipv4 (router, my_endpoint, sizeof my_endpoint);
 
@@ -152,6 +167,7 @@ void test_router_send_rid_mandatory_hwm ()
     const uint64_t rcvhwm = sndhwm;
     TEST_ASSERT_SUCCESS_ERRNO (
       zlink_set_option (dealer, ZLINK_OPT_RCVHWM, &rcvhwm, sizeof (rcvhwm)));
+    configure_hwm_socket_buffers (dealer);
     TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (dealer, my_endpoint));
 
     send_string_expect_success (dealer, "Hello", 0);

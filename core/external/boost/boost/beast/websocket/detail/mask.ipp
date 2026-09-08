@@ -12,6 +12,9 @@
 
 #include <boost/beast/websocket/detail/mask.hpp>
 
+#include <cstdint>
+#include <cstring>
+
 namespace boost {
 namespace beast {
 namespace websocket {
@@ -43,10 +46,25 @@ mask_inplace(net::mutable_buffer const& b, prepared_key& key)
     auto n = b.size();
     auto const mask = key; // avoid aliasing
     auto p = static_cast<unsigned char*>(b.data());
-    while(n >= 4)
+    std::uint32_t mask32;
+    std::memcpy(&mask32, mask.data(), sizeof(mask32));
+    std::uint64_t const mask64 =
+        std::uint64_t(mask32) | (std::uint64_t(mask32) << 32);
+    while(n >= 8)
     {
-        for(int i = 0; i < 4; ++i)
-            p[i] ^= mask[i];
+        std::uint64_t word;
+        std::memcpy(&word, p, sizeof(word));
+        word ^= mask64;
+        std::memcpy(p, &word, sizeof(word));
+        p += 8;
+        n -= 8;
+    }
+    if(n >= 4)
+    {
+        std::uint32_t word;
+        std::memcpy(&word, p, sizeof(word));
+        word ^= mask32;
+        std::memcpy(p, &word, sizeof(word));
         p += 4;
         n -= 4;
     }

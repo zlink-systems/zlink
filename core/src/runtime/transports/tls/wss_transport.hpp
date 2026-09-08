@@ -13,12 +13,12 @@
 #include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/beast/websocket/ssl.hpp>
-#include <array>
 #include <memory>
 #include <string>
 #include <utility>
 
 #include "engine/asio/i_asio_transport.hpp"
+#include "transports/ws/ws_transport_common_internal.hpp"
 
 namespace zlink
 {
@@ -77,8 +77,7 @@ class wss_transport_t : public i_asio_transport
     bool has_message_boundaries () const ZLINK_OVERRIDE { return true; }
     bool read_message_binary () const ZLINK_OVERRIDE
     {
-        return !_connection
-               || _connection->read_message_state.is_binary ();
+        return ws_transport_common_internal::read_message_binary (_connection);
     }
 
     void async_write_some (const unsigned char *buffer,
@@ -112,7 +111,8 @@ class wss_transport_t : public i_asio_transport
 
   private:
     //  SSL stream type
-    typedef boost::asio::ssl::stream<boost::asio::ip::tcp::socket> ssl_stream_t;
+    typedef boost::asio::ssl::stream<
+      ws_transport_common_internal::socket_t> ssl_stream_t;
 
     //  WebSocket stream over SSL
     typedef boost::beast::websocket::stream<ssl_stream_t> wss_stream_t;

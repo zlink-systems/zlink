@@ -11,7 +11,8 @@ namespace connect_result_internal
 {
 inline zlink_connect_result_t from_errno (int err_)
 {
-    if (zlink::result_errno_internal::is_not_supported (err_))
+    if (zlink::result_errno_internal::is_not_supported (err_)
+        || err_ == EPROTONOSUPPORT)
         return ZLINK_CONNECT_NOT_SUPPORTED;
 
     switch (err_) {

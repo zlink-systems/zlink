@@ -30,6 +30,7 @@ namespace zlink
 class io_thread_t;
 class mailbox_t;
 class socket_base_t;
+class socket_lifecycle_coordinator_t;
 
 enum
 {
@@ -196,7 +197,8 @@ class socket_command_runtime_t
 
   private:
     uint64_t last_command_tsc;
-    int recv_ticks;
+    // A C3 scheduling hint sampled before entering a receive turn.
+    std::atomic<int> recv_ticks;
 };
 
 struct socket_monitor_runtime_t
@@ -258,7 +260,7 @@ struct socket_monitor_runtime_t
     // lock across context/socket creation or async mailbox ownership changes.
     recursive_mutex_t operation_sync;
     mutable recursive_mutex_t sync;
-    recursive_mutex_t queue_sync;
+    mutex_t queue_sync;
     condition_variable_t queue_cv;
     std::deque<socket_monitor_event_record_t> queue;
     uint64_t queue_hwm_bytes;
@@ -275,26 +277,18 @@ struct socket_monitor_runtime_t
     std::map<std::string, uint8_t> transport_pair_ready_lanes;
 };
 
-// A socket can have a long-lived asynchronous mailbox executor while a public
-// receive is blocking on the same socket.  The executor owns command delivery;
-// this runtime provides the separate hand-off used to wake the public receiver
-// after an application pipe has actually been activated.
+// Socket receive state is C2: public attempts, whole records, readiness and
+// commands all use the lifecycle socket turn. Async installation changes who
+// drains commands, never the exclusion mechanism for socket state.
 struct socket_receive_runtime_t
 {
-    enum mode_t
-    {
-        mode_plain,
-        mode_pipe,
-        mode_routed
-    };
-
-    socket_receive_runtime_t () :
+    enum mode_t { mode_plain, mode_pipe, mode_routed };
+    socket_receive_runtime_t (socket_lifecycle_coordinator_t &coordinator_) :
+        coordinator (coordinator_),
         async_command_handoff_pending (false),
         command_drain_active (false),
-        receive_owner (receive_owner_available),
         progress_epoch (0),
-        waiters (0),
-        lease_handoff_waiters (0)
+        waiters (0)
 #ifdef ZLINK_BUILD_TESTS
         ,
         public_mailbox_drains (0),
@@ -310,296 +304,32 @@ struct socket_receive_runtime_t
     {
     }
 
-    recursive_mutex_t command_owner_sync;
+
+    socket_lifecycle_coordinator_t &coordinator;
     std::atomic<bool> async_command_handoff_pending;
-    // Published before the command owner clears the mailbox pending hint and
-    // retained until every claimed command-side state change is visible.
     std::atomic<bool> command_drain_active;
-    // The async mailbox executor mutates receive-side socket state under
-    // `sync`.  These operations own the transition from a lock-free public
-    // receive lease to that exclusive owner; callers do not manipulate the
-    // gate or reader count directly.
-    //  Receive-state ownership protocol.  `receive_owner` is the gate for
-    //  every execution that reads or writes receive-side socket state
-    //  (fair-queue membership and partitions, pipe activation, pipe
-    //  termination, the packet pump, readiness probes) through the public
-    //  API, a command turn or the async mailbox executor.  It does not yet
-    //  cover the non-STREAM direct control attach in
-    //  socket_base_endpoint.cpp, which still takes `sync` alone; that
-    //  remaining boundary is tracked separately.  At any instant at
-    //  most one of these may touch that state:
-    //
-    //    * the public lease holder  - `receive_owner_public`, lock free, no
-    //      mutex at all;
-    //    * an execution running under `sync` while an async mailbox executor
-    //      is installed - `receive_owner_async`, a durable mode in which
-    //      *every* toucher takes `sync`, so `sync` alone separates them;
-    //    * a command turn - `receive_owner_command`, a transient mode that
-    //      holds `sync` for exactly as long as it holds the word.
-    //
-    //  The two transient owners (`public`, `command`) are therefore never
-    //  mixed with the mutex-only mode.  An entrant that loses the lock-free
-    //  claim blocks on `sync` and **re-validates the word after acquiring
-    //  it** (`enter_receive_exclusion()`): only a word that still reads
-    //  `async` or `command` permits running under `sync` alone, and a
-    //  `command` word observed while holding `sync` can only belong to this
-    //  same thread, because a command turn publishes the word under `sync`
-    //  and clears it before releasing `sync`.  Anything else means the
-    //  transient mode has ended, so the entrant drops `sync` and re-takes the
-    //  lock-free lease.  This is what keeps a delayed mutex-only entrant from
-    //  overlapping a later lease holder.
-    //
-    //  The reverse direction is closed by the same mutex: the async mode is
-    //  installed and, crucially, *removed* while holding `sync`
-    //  (release_receive_sync_from_async_owner()), so an entrant that already
-    //  re-validated `async` and is running under `sync` completes before the
-    //  word can read `available` again, and therefore before any lock-free
-    //  lease of the next mode can start.
-    //
-    //  Hot path unchanged: an uncontended public receive is one CAS to take
-    //  and one RMW to release.
-    bool try_acquire_public_receive_lease ()
+
+    // Returns whether this scope acquired the turn, so an internal call
+    // already inside a command/public turn does not release its caller's turn.
+    bool acquire_turn ();
+    void release_turn ();
+    void report_turn_contention ();
+
+    // C3 publication. The registration/publication seq_cst pair prevents a
+    // missed edge; only a registered waiter makes notification take a mutex.
+    void publish_receive_progress ()
     {
-        uint8_t expected = receive_owner_available;
-#ifdef ZLINK_BUILD_TESTS
-        bool contention_reported = false;
-#endif
-        while (!receive_owner.compare_exchange_weak (
-          expected, receive_owner_public, std::memory_order_acquire,
-          std::memory_order_relaxed)) {
-            //  Both mutex-holding owners are reported to the caller, which
-            //  decides under `sync` whether the mode is still in force.
-            if (expected == receive_owner_async
-                || expected == receive_owner_command)
-                return false;
-#ifdef ZLINK_BUILD_TESTS
-            if ((expected == receive_owner_public
-                 || expected == receive_owner_public_waiting)
-                && !contention_reported
-                && record_contention_hook.load (std::memory_order_acquire)) {
-                socket_receive_runtime_t::record_hook_fn hook =
-                  record_contention_hook.load (std::memory_order_relaxed);
-                if (hook) {
-                    contention_reported = true;
-                    hook (record_hook_userdata.load (
-                      std::memory_order_acquire));
-                }
-            }
-#endif
-            expected = receive_owner_available;
-        }
-        return true;
+        progress_epoch.fetch_add (1, std::memory_order_seq_cst);
+        if (waiters.load (std::memory_order_seq_cst) == 0)
+            return;
+        scoped_lock_t lock (progress_sync);
+        progress_cv.broadcast ();
     }
 
-    void release_public_receive_lease ()
-    {
-        //  One RMW instead of one store: a command turn that parked on this
-        //  lease marked the word, and the exchange picks that mark up so the
-        //  parked turn is woken rather than polling the word.  The exchange
-        //  itself runs outside every mutex; only the wake below takes the
-        //  handoff lock.  Entrants that lose a lock-free claim still retry
-        //  their CAS, so this is not a claim that nothing anywhere spins.
-        const uint8_t previous = receive_owner.exchange (
-          receive_owner_available, std::memory_order_release);
-        if (unlikely (previous == receive_owner_public_waiting))
-            wake_receive_owner_waiter ();
-    }
-
-    enum receive_entry_t
-    {
-        //  The caller holds the lock-free public lease and no mutex.
-        receive_entry_lease,
-        //  The caller holds `sync`, under a still-valid mutex-only mode.
-        receive_entry_sync
-    };
-
-    //  Establishes exactly one receive-state ownership for the caller.  See
-    //  the protocol comment above; on `receive_entry_sync` the caller owns
-    //  `sync` and must unlock it, on `receive_entry_lease` it must release
-    //  the lease.
-    receive_entry_t enter_receive_exclusion ()
-    {
-        for (;;) {
-            if (try_acquire_public_receive_lease ())
-                return receive_entry_lease;
-            sync.lock ();
-            const uint8_t owner =
-              receive_owner.load (std::memory_order_acquire);
-            if (owner == receive_owner_async
-                || owner == receive_owner_command)
-                return receive_entry_sync;
-            //  The transient owner ended while this entrant waited for
-            //  `sync`; running under `sync` alone now would overlap the next
-            //  lock-free lease holder.
-            sync.unlock ();
-        }
-    }
-
-    void require_receive_sync_for_async_owner ()
-    {
-        uint8_t expected = receive_owner_available;
-        while (!receive_owner.compare_exchange_weak (
-          expected, receive_owner_async, std::memory_order_acquire,
-          std::memory_order_relaxed)) {
-            if (expected == receive_owner_async)
-                return;
-            expected = receive_owner_available;
-        }
-    }
-
-    //  Ends the durable mutex-only mode.  The store runs **under `sync`**,
-    //  and that is load bearing: an entrant that re-validated the word as
-    //  `async` performs its whole receive-state access holding `sync`, so
-    //  taking `sync` here orders this transition after that access has
-    //  finished.  A bare store could publish `available` while such an
-    //  entrant is still inside the fair queue, a new lock-free lease could
-    //  start, and the two would touch the same receive state at once.
-    //
-    //  Invariant, for every value of the word: no execution may begin under
-    //  one exclusion form before every execution that entered under the
-    //  previous form has left it.  For available->public/command that is the
-    //  CAS itself, for available->async and async->available it is `sync`.
-    void release_receive_sync_from_async_owner ()
-    {
-        scoped_lock_t lock (sync);
-        receive_owner.store (receive_owner_available,
-                             std::memory_order_release);
-    }
-
-    enum receive_owner_claim_t
-    {
-        receive_owner_claim_acquired,
-        //  An installed async executor already holds the word; every toucher
-        //  runs under `sync`, which the command turn holds, so do not claim
-        //  and do not release.
-        receive_owner_claim_already_held,
-        //  A lock-free public receive attempt holds the word right now.
-        receive_owner_claim_busy
-    };
-
-    //  A command batch applies receive-side socket state (fair-queue
-    //  membership, pipe activation, pipe termination), which is exactly the
-    //  state the lock-free public receive attempt reads and writes.  `sync`
-    //  alone does not separate the two owners because that attempt never
-    //  takes it, so the command turn claims the word itself - with its own
-    //  value, never the async executor's, so that no entrant mistakes this
-    //  transient turn for the durable mutex-only mode.  Must be called with
-    //  `sync` held: that is what makes "word reads `command` while I hold
-    //  `sync`" mean "this thread's own command turn".
-    receive_owner_claim_t try_acquire_receive_owner_for_commands ()
-    {
-        uint8_t expected = receive_owner_available;
-        if (receive_owner.compare_exchange_strong (
-              expected, receive_owner_command, std::memory_order_acquire,
-              std::memory_order_acquire))
-            return receive_owner_claim_acquired;
-        return expected == receive_owner_async ? receive_owner_claim_already_held
-                                               : receive_owner_claim_busy;
-    }
-
-    //  Clears the command turn's claim.  Called with `sync` still held, so
-    //  the word never reads `command` outside `sync`.
-    void release_receive_owner_for_commands ()
-    {
-        receive_owner.store (receive_owner_available,
-                             std::memory_order_release);
-    }
-
-    //  Marks the in-flight public lease as having a command turn parked on
-    //  it.  Returns false when the lease has already gone, in which case the
-    //  caller must retry its claim instead of waiting.  Called with `sync`
-    //  held.
-    bool mark_public_lease_waiter ()
-    {
-        uint8_t expected = receive_owner_public;
-        if (receive_owner.compare_exchange_strong (
-              expected, receive_owner_public_waiting,
-              std::memory_order_acq_rel, std::memory_order_acquire))
-            return true;
-        return expected == receive_owner_public_waiting;
-    }
-
-    //  Parks the caller until the marked lease is released and returns with
-    //  `sync` released - the caller retakes it to retry its claim.  Called
-    //  with `sync` held.
-    //
-    //  No wake can be lost: the marking ran under `sync`, this takes
-    //  `lease_handoff_sync` **before** dropping `sync`, and it re-reads the
-    //  word under that lock.  release_public_receive_lease() clears the word
-    //  before it takes the same lock to broadcast, so a release that beats
-    //  this wait is seen by the re-read instead of being waited for.
-    void wait_for_receive_owner_release ()
-    {
-        lease_handoff_sync.lock ();
-        sync.unlock ();
-        while (receive_owner.load (std::memory_order_acquire)
-               == receive_owner_public_waiting) {
-            ++lease_handoff_waiters;
-            (void) lease_handoff_cv.wait (&lease_handoff_sync, -1);
-            zlink_assert (lease_handoff_waiters > 0);
-            --lease_handoff_waiters;
-        }
-        lease_handoff_sync.unlock ();
-    }
-
-    //  The single receive-progress notifier.  Every publication of a receive
-    //  progress edge - socket_base_t::notify_receive_progress_locked() and
-    //  the shutdown edge a command turn publishes before it parks - runs
-    //  through this one implementation.  Called with `sync` held.
-    void publish_receive_progress_locked ()
-    {
-        progress_epoch.fetch_add (1, std::memory_order_release);
-        if (waiters.load (std::memory_order_acquire) != 0)
-            progress_cv.broadcast ();
-    }
-
-  private:
-    enum receive_owner_t : uint8_t
-    {
-        receive_owner_available,
-        //  A lock-free public receive attempt owns receive state.
-        receive_owner_public,
-        //  ... and a command turn is parked on its release.
-        receive_owner_public_waiting,
-        //  An async mailbox executor is installed: receive state is owned
-        //  under `sync` until it is uninstalled.
-        receive_owner_async,
-        //  One command application owns receive state and holds `sync`.
-        receive_owner_command
-    };
-    std::atomic<uint8_t> receive_owner;
-
-    void wake_receive_owner_waiter ()
-    {
-        scoped_lock_t lock (lease_handoff_sync);
-        if (lease_handoff_waiters != 0)
-            lease_handoff_cv.broadcast ();
-    }
-
-  public:
-    recursive_mutex_t sync;
+    mutex_t progress_sync;
     condition_variable_t progress_cv;
-    //  Read on the lock-free public lease path without `sync` (the receive
-    //  attempt's pre-attempt snapshot) and published under `sync`, so both
-    //  sides are atomic: acquire on the snapshot, release on the
-    //  publication.
     std::atomic<uint64_t> progress_epoch;
     std::atomic<uint32_t> waiters;
-
-    //  Command-turn handoff channel.  A command turn that found the word held
-    //  by a lock-free public lease parks here until that lease is released.
-    //  `mutex_t` is the plain, non-recursive type and no execution that holds
-    //  it ever takes it again, which is what the synchronization model
-    //  requires of any lock a condition variable waits on (spec 11 S5/S6).
-    //  `receive.sync` is recursive - a command application re-enters it
-    //  through the nested count-1 completion drain - so it cannot carry this
-    //  wait.
-    //  Lock order: `sync` -> `lease_handoff_sync`, never the reverse; the
-    //  releasing side takes `lease_handoff_sync` alone.
-    mutex_t lease_handoff_sync;
-    condition_variable_t lease_handoff_cv;
-    //  Guarded by lease_handoff_sync.
-    uint32_t lease_handoff_waiters;
 #ifdef ZLINK_BUILD_TESTS
     typedef void (*wait_hook_fn) (void *userdata_);
     std::atomic<uint64_t> public_mailbox_drains;
@@ -619,44 +349,31 @@ struct socket_receive_runtime_t
 #endif
 };
 
-//  Holds one receive-state ownership for the duration of a scope, whichever
-//  of the two forms socket_receive_runtime_t::enter_receive_exclusion()
-//  established.  Every early return and every exception therefore releases
-//  exactly what was taken.
 class socket_receive_entry_scope_t
 {
   public:
-    explicit socket_receive_entry_scope_t (
-      socket_receive_runtime_t &runtime_) :
-        _runtime (runtime_),
-        _owns_lease (runtime_.enter_receive_exclusion ()
-                     == socket_receive_runtime_t::receive_entry_lease)
-    {
-    }
-
+    explicit socket_receive_entry_scope_t (socket_receive_runtime_t &runtime_) :
+        _runtime (runtime_), _owns_turn (runtime_.acquire_turn ()) {}
     ~socket_receive_entry_scope_t ()
     {
-        if (_owns_lease)
-            _runtime.release_public_receive_lease ();
-        else
-            _runtime.sync.unlock ();
+        if (_owns_turn)
+            _runtime.release_turn ();
     }
-
-    bool owns_lease () const { return _owns_lease; }
+    bool release ()
+    {
+        const bool owns = _owns_turn;
+        _owns_turn = false;
+        return owns;
+    }
 
   private:
     socket_receive_runtime_t &_runtime;
-    const bool _owns_lease;
-
+    bool _owns_turn;
     ZLINK_NON_COPYABLE_NOR_MOVABLE (socket_receive_entry_scope_t)
 };
 
-// Owns one receive-side socket transaction after its first frame has been
-// consumed. A public transaction retains both its public receive lease and
-// receive_runtime_t::sync across every continuation; when an asynchronous
-// mailbox owns socket commands, the transaction already enters through that
-// same sync. This prevents either another reader or a mailbox command from
-// changing receive-side socket state between API-level frame reads.
+// A complete physical record retains the same socket turn across frame
+// reads, then releases it before returning buffered public parts or waiting.
 class socket_receive_record_scope_t
 {
   public:
@@ -664,163 +381,83 @@ class socket_receive_record_scope_t
     typedef void (*admission_rollback_fn) (void *userdata_);
 
     socket_receive_record_scope_t () :
-        _runtime (NULL),
-        _owner (owner_none),
-        _admission (NULL),
-        _admission_rollback (NULL),
-        _admission_userdata (NULL),
-        _admission_failed (false)
-    {
-    }
-
+        _runtime (NULL), _owns_turn (false), _admission (NULL),
+        _admission_rollback (NULL), _admission_userdata (NULL),
+        _admission_failed (false), _attempt_runtime (NULL) {}
     ~socket_receive_record_scope_t () { release (); }
 
     void set_admission (admission_fn admission_,
                         admission_rollback_fn rollback_, void *userdata_)
     {
-        zlink_assert (_owner == owner_none);
+        zlink_assert (!_runtime);
         _admission = admission_;
         _admission_rollback = rollback_;
         _admission_userdata = userdata_;
     }
-
     int prepare_receive_attempt ()
     {
-        if (!_admission)
+        if (!_admission || _admission (_admission_userdata) == 0)
             return 0;
-        if (_admission (_admission_userdata) == 0)
-            return 0;
-        // Capacity EAGAIN is a per-pipe readiness miss. The fair queue may
-        // skip that queued record and admit another source in this same
-        // receive attempt, so it must not poison the whole record scope.
         if (errno != EAGAIN)
             _admission_failed = true;
         return -1;
     }
-
-    // Deferred admission lets a routed receiver inspect the queued first
-    // application frame before paying whole-record ownership. The admission
-    // hook invokes acquire_before_frame() while its receive attempt is active.
-    void begin_deferred_attempt (socket_receive_runtime_t *runtime_,
-                                 bool *sync_held_)
+    void begin_deferred_attempt (socket_receive_runtime_t *runtime_)
     {
-        zlink_assert (_owner == owner_none);
+        zlink_assert (!_runtime);
         _attempt_runtime = runtime_;
-        _attempt_sync_held = sync_held_;
     }
-
-    void end_deferred_attempt ()
-    {
-        _attempt_runtime = NULL;
-        _attempt_sync_held = NULL;
-    }
-
+    void end_deferred_attempt () { _attempt_runtime = NULL; }
     int acquire_before_frame ()
     {
-        if (!_attempt_runtime || !_attempt_sync_held) {
+        if (!_attempt_runtime) {
             errno = EFAULT;
             return -1;
         }
-
-        const bool sync_was_held = *_attempt_sync_held;
-        if (!sync_was_held) {
-            _attempt_runtime->sync.lock ();
-            *_attempt_sync_held = true;
-        }
-        if (prepare_receive_attempt () != 0) {
-            if (!sync_was_held) {
-                _attempt_runtime->sync.unlock ();
-                *_attempt_sync_held = false;
-            }
+        if (prepare_receive_attempt () != 0)
             return -1;
-        }
-        _runtime = _attempt_runtime;
-        _owner = sync_was_held ? owner_async_sync : owner_public;
-#ifdef ZLINK_BUILD_TESTS
-        socket_receive_runtime_t::record_hook_fn hook =
-          _runtime->record_acquired_hook.load (std::memory_order_acquire);
-        if (hook)
-            hook (_runtime->record_hook_userdata.load (std::memory_order_acquire));
-#endif
+        adopt (_attempt_runtime, false);
         return 0;
     }
-
     bool admission_failed () const { return _admission_failed; }
-
     void rollback_receive_attempt ()
     {
         if (_admission_rollback)
             _admission_rollback (_admission_userdata);
     }
-
     bool owns (const socket_receive_runtime_t *runtime_) const
     {
-        return _runtime == runtime_ && _owner != owner_none;
+        return _runtime == runtime_;
     }
-
-    void adopt_public_owner (socket_receive_runtime_t *runtime_)
+    void adopt (socket_receive_runtime_t *runtime_, bool owns_turn_)
     {
-        zlink_assert (runtime_ != NULL);
-        zlink_assert (_owner == owner_none);
+        zlink_assert (runtime_);
+        const bool acquired = !_runtime;
         _runtime = runtime_;
-        _owner = owner_public;
+        _owns_turn = owns_turn_;
 #ifdef ZLINK_BUILD_TESTS
         socket_receive_runtime_t::record_hook_fn hook =
-          _runtime->record_acquired_hook.load (std::memory_order_acquire);
-        if (hook)
-            hook (_runtime->record_hook_userdata.load (
-              std::memory_order_acquire));
+          runtime_->record_acquired_hook.load (std::memory_order_acquire);
+        if (acquired && hook)
+            hook (runtime_->record_hook_userdata.load (std::memory_order_acquire));
 #endif
     }
-
-    void adopt_async_sync (socket_receive_runtime_t *runtime_)
-    {
-        zlink_assert (runtime_ != NULL);
-        zlink_assert (_owner == owner_none);
-        _runtime = runtime_;
-        _owner = owner_async_sync;
-#ifdef ZLINK_BUILD_TESTS
-        socket_receive_runtime_t::record_hook_fn hook =
-          _runtime->record_acquired_hook.load (std::memory_order_acquire);
-        if (hook)
-            hook (_runtime->record_hook_userdata.load (
-              std::memory_order_acquire));
-#endif
-    }
-
     void release ()
     {
-        if (!_runtime)
-            return;
-        if (_owner == owner_public) {
-            // Keep the public lease closed until command-side mutation is no
-            // longer excluded by sync. A new public reader can then acquire
-            // the lease without overlapping the record that just completed.
-            _runtime->sync.unlock ();
-            _runtime->release_public_receive_lease ();
-        } else if (_owner == owner_async_sync)
-            _runtime->sync.unlock ();
+        if (_runtime && _owns_turn)
+            _runtime->release_turn ();
         _runtime = NULL;
-        _owner = owner_none;
+        _owns_turn = false;
     }
 
   private:
-    enum owner_t
-    {
-        owner_none,
-        owner_public,
-        owner_async_sync
-    };
-
     socket_receive_runtime_t *_runtime;
-    owner_t _owner;
+    bool _owns_turn;
     admission_fn _admission;
     admission_rollback_fn _admission_rollback;
     void *_admission_userdata;
     bool _admission_failed;
-    socket_receive_runtime_t *_attempt_runtime = NULL;
-    bool *_attempt_sync_held = NULL;
-
+    socket_receive_runtime_t *_attempt_runtime;
     ZLINK_NON_COPYABLE_NOR_MOVABLE (socket_receive_record_scope_t)
 };
 
@@ -948,10 +585,9 @@ struct socket_dispatch_bridge_t
 
     std::atomic<bool> send_recovery_pending_flag;
     std::atomic<bool> send_recovery_ready_flag;
-    // Pipe termination is reported while the command executor owns the
-    // receive mutex. Routing cleanup must wait until that outer scope
-    // is gone, so keep a lifetime-pinned intrusive queue with no allocation
-    // failure in the terminal path.
+    // Pipe termination is reported inside command dispatch. A lifetime-pinned
+    // intrusive queue separates that dispatch from route retirement without
+    // allocation failure; retirement reacquires the same socket turn.
     // The head doubles as the queue's emptiness answer. It is atomic so the
     // command drain can ask that question — the only question it asks on the
     // hot path, where the queue is empty — without taking the mutex; every
@@ -974,7 +610,7 @@ struct socket_submit_progress_runtime_t
     {
     }
 
-    recursive_mutex_t sync;
+    mutex_t sync;
     condition_variable_t cv;
     std::atomic<uint64_t> epoch;
     std::atomic<uint32_t> waiters;
@@ -1082,7 +718,7 @@ class socket_lifecycle_coordinator_t
     // off to the complete-record submit.
     std::atomic<bool> public_multipart_control_boundary;
     std::atomic<bool> deferred_peer_controls_pending;
-    recursive_mutex_t async_done_mu;
+    mutex_t async_done_mu;
     condition_variable_t async_done_cv;
 
   private:
@@ -1187,6 +823,8 @@ class socket_public_send_scope_t
 
 struct socket_runtime_t
 {
+    socket_runtime_t () : receive_runtime (lifecycle_coordinator) {}
+    socket_lifecycle_coordinator_t lifecycle_coordinator;
     socket_endpoint_runtime_t endpoint_runtime;
     socket_command_runtime_t command_runtime;
     socket_receive_runtime_t receive_runtime;
@@ -1195,7 +833,6 @@ struct socket_runtime_t
     socket_submit_progress_runtime_t submit_progress_runtime;
     socket_blocking_send_runtime_t blocking_send_runtime;
     socket_completion::queue_state_t completion_runtime;
-    socket_lifecycle_coordinator_t lifecycle_coordinator;
 };
 }
 

@@ -459,9 +459,9 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         }
         if (reject_attached_application && reject_pipes[1]) {
             receive_runtime_t &receive = receive_runtime ();
-            scoped_lock_t receive_lock (receive.sync);
+            socket_receive_entry_scope_t receive_lock (receive);
             xpipe_terminated (reject_pipes[1]);
-            notify_receive_progress_locked ();
+            notify_receive_progress ();
         }
         for (size_t i = 0; i < 3; ++i) {
             if (reject_pipes[i])
@@ -475,7 +475,7 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         bool application_active = false;
         {
             receive_runtime_t &receive = receive_runtime ();
-            scoped_lock_t receive_lock (receive.sync);
+            socket_receive_entry_scope_t receive_lock (receive);
             // Linearize with pipe_terminated(), which owns the same receive
             // lock around xpipe_terminated(). If termination already removed
             // the pipe, skip this stale bind; if it starts after this check,
@@ -489,7 +489,7 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
                     && application->get_transport_lane_count () == 1u)
                     (void) reclassify_transport_pair_application_head (
                       application);
-                notify_receive_progress_locked ();
+                notify_receive_progress ();
             }
         }
         if (!application_active)
@@ -615,9 +615,9 @@ void zlink::socket_base_t::attach_pipe (pipe_t *pipe_,
         if (ready_application && ready_completion != ready_application
             && ready_application->check_read ()) {
             receive_runtime_t &receive = receive_runtime ();
-            scoped_lock_t receive_lock (receive.sync);
+            socket_receive_entry_scope_t receive_lock (receive);
             xread_activated (ready_application);
-            notify_receive_progress_locked ();
+            notify_receive_progress ();
         }
     } else if (completion) {
         bool pair_ready = false;
@@ -704,6 +704,18 @@ int zlink::socket_base_t::setsockopt (int option_, const void *optval_, size_t o
     return rc;
 }
 
+int zlink::socket_base_t::receive_timeout_ms () const
+{
+    const socket_receive_entry_scope_t turn (_runtime.receive_runtime);
+    return options.rcvtimeo;
+}
+
+int zlink::socket_base_t::send_timeout_ms () const
+{
+    const socket_receive_entry_scope_t turn (_runtime.receive_runtime);
+    return options.sndtimeo;
+}
+
 int zlink::socket_base_t::getsockopt (int option_, void *optval_, size_t *optvallen_)
 {
     socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
@@ -788,7 +800,6 @@ int zlink::socket_base_t::get_events (int events_, uint32_t *out_)
             int drained_completions = 0;
             {
                 socket_public_api_lock_scope_t guard (lifecycle);
-                scoped_lock_t owner_lock (_completion_owner_sync);
                 const completion_drain_scope_t drain_scope (this, &discard);
                 (void) _request_completion_pending.exchange (
                   false, std::memory_order_acq_rel);
@@ -857,7 +868,9 @@ int zlink::socket_base_t::get_events_internal (
             int drained_completions = 0;
             socket_reqrep_internal::completion_discard_t discard;
             {
-                scoped_lock_t owner_lock (_completion_owner_sync);
+                socket_public_api_lock_scope_t command_owner (
+                  lifecycle_coordinator (),
+                  !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
                 const completion_drain_scope_t drain_scope (this, &discard);
                 _request_completion_pending.exchange (
                   false, std::memory_order_acq_rel);
@@ -884,7 +897,9 @@ int zlink::socket_base_t::get_events_internal (
         while (true) {
             socket_reqrep_internal::completion_discard_t discard;
             {
-                scoped_lock_t owner_lock (_completion_owner_sync);
+                socket_public_api_lock_scope_t command_owner (
+                  lifecycle_coordinator (),
+                  !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
                 const completion_drain_scope_t drain_scope (this, &discard);
                 (void) _request_completion_pending.exchange (
                   false, std::memory_order_acq_rel);
@@ -1028,19 +1043,8 @@ bool zlink::socket_base_t::has_in ()
                 return true;
         }
     }
-    //  xhas_in() is not a pure query: it runs the STREAM packet pump and
-    //  re-partitions the fair queue, so it owns receive state exactly like a
-    //  public receive and takes the same ownership rather than the mutex
-    //  alone.  The pump also publishes receive progress, which lives under
-    //  `sync`, so a readiness probe that took the lock-free lease adds `sync`
-    //  on top - lease first, `sync` second, the order a whole-record public
-    //  receive uses.  That is the same one mutex this probe took before.
-    receive_runtime_t &receive = receive_runtime ();
-    const socket_receive_entry_scope_t entry (receive);
-    if (entry.owns_lease ()) {
-        scoped_lock_t lock (receive.sync);
-        return xhas_in ();
-    }
+    // Readiness pumps/repartitions the same receive queue as public recv.
+    const socket_receive_entry_scope_t entry (receive_runtime ());
     return xhas_in ();
 }
 
@@ -1059,6 +1063,7 @@ bool zlink::socket_base_t::has_out ()
 
 bool zlink::socket_base_t::transport_has_out ()
 {
+    const socket_receive_entry_scope_t entry (receive_runtime ());
     return xhas_out ();
 }
 
@@ -1275,8 +1280,7 @@ void zlink::socket_base_t::bind_public_part_receive_delivery_hold (
     }
 }
 
-void zlink::socket_base_t::end_public_part_receive_delivery_hold (
-  bool receive_sync_held_)
+void zlink::socket_base_t::end_public_part_receive_delivery_hold ()
 {
     //  Steady-state receives never hold; skip both locks unless a hold was
     //  published. The flag is only set by this socket's own request/reply
@@ -1285,61 +1289,53 @@ void zlink::socket_base_t::end_public_part_receive_delivery_hold (
           std::memory_order_acquire))
         return;
     receive_runtime_t &receive = receive_runtime ();
-    const auto release = [&] () {
-        pipe_t *held_pipe = NULL;
-        bool lifetime_retained = false;
-        bool inbound_retained = false;
-        bool had_hold = false;
-        {
-            scoped_lock_t lock (_transport_pairs_sync);
-            had_hold = _public_part_receive_delivery_hold_active;
-            if (!had_hold)
-                return;
+    const socket_receive_entry_scope_t entry (receive);
+    pipe_t *held_pipe = NULL;
+    bool lifetime_retained = false;
+    bool inbound_retained = false;
+    bool had_hold = false;
+    {
+        scoped_lock_t lock (_transport_pairs_sync);
+        had_hold = _public_part_receive_delivery_hold_active;
+        if (!had_hold)
+            return;
 
-            if (_public_part_receive_delivery_hold_pipe) {
-                const transport_pairs_t::const_iterator it =
-                  _transport_pairs.find (
-                    _public_part_receive_delivery_hold_key);
-                if (it != _transport_pairs.end () && it->second.ready
-                    && it->second.expected_lane_count == 1u
-                    && it->second.application
-                         == _public_part_receive_delivery_hold_pipe) {
-                    held_pipe = it->second.application;
-                    lifetime_retained = held_pipe->retain_lifetime_ref ();
+        if (_public_part_receive_delivery_hold_pipe) {
+            const transport_pairs_t::const_iterator it =
+              _transport_pairs.find (
+                _public_part_receive_delivery_hold_key);
+            if (it != _transport_pairs.end () && it->second.ready
+                && it->second.expected_lane_count == 1u
+                && it->second.application
+                     == _public_part_receive_delivery_hold_pipe) {
+                held_pipe = it->second.application;
+                lifetime_retained = held_pipe->retain_lifetime_ref ();
+                if (lifetime_retained)
+                    inbound_retained =
+                      held_pipe->retain_inbound_read_ref ();
+                if (!inbound_retained) {
                     if (lifetime_retained)
-                        inbound_retained =
-                          held_pipe->retain_inbound_read_ref ();
-                    if (!inbound_retained) {
-                        if (lifetime_retained)
-                            held_pipe->release_lifetime_ref ();
-                        held_pipe = NULL;
-                        lifetime_retained = false;
-                    }
+                        held_pipe->release_lifetime_ref ();
+                    held_pipe = NULL;
+                    lifetime_retained = false;
                 }
             }
-
-            _public_part_receive_delivery_hold_active = false;
-            _public_part_receive_delivery_hold_pipe = NULL;
-            _public_part_receive_delivery_hold_key =
-              transport_pair_key_t (0, 0);
         }
 
-        if (held_pipe) {
-            (void) reclassify_transport_pair_application_head (held_pipe);
-            // A failed receive with no suppressed pipe made no progress.
-            // Waking its own blocking retry would starve the command owner.
-            notify_receive_progress_locked ();
-            held_pipe->release_inbound_read_ref ();
-            held_pipe->release_lifetime_ref ();
-        }
-    };
-
-    if (receive_sync_held_) {
-        release ();
-        return;
+        _public_part_receive_delivery_hold_active = false;
+        _public_part_receive_delivery_hold_pipe = NULL;
+        _public_part_receive_delivery_hold_key =
+          transport_pair_key_t (0, 0);
     }
-    scoped_lock_t receive_lock (receive.sync);
-    release ();
+
+    if (held_pipe) {
+        (void) reclassify_transport_pair_application_head (held_pipe);
+        // A failed receive with no suppressed pipe made no progress.
+        // Waking its own blocking retry would starve the command owner.
+        notify_receive_progress ();
+        held_pipe->release_inbound_read_ref ();
+        held_pipe->release_lifetime_ref ();
+    }
 }
 
 #ifdef ZLINK_BUILD_TESTS
@@ -1566,7 +1562,7 @@ bool zlink::socket_base_t::finish_completion_pipe_drain (
 
 bool zlink::socket_base_t::requeue_completion_pipe_after_budget (
   uint64_t transport_pair_id_, uint64_t transport_pair_generation_,
-  pipe_t *completion_pipe_, bool receive_sync_held_)
+  pipe_t *completion_pipe_)
 {
     if (!completion_pipe_)
         return false;
@@ -1578,10 +1574,7 @@ bool zlink::socket_base_t::requeue_completion_pipe_after_budget (
             return false;
         const bool queued =
           reclassify_transport_pair_application_head (completion_pipe_);
-        if (receive_sync_held_)
-            notify_receive_progress_locked ();
-        else
-            notify_receive_progress ();
+        notify_receive_progress ();
         return queued;
     }
 
@@ -1628,78 +1621,57 @@ bool zlink::socket_base_t::drain_claimed_completion_pipe (
       && completion_pipe_->get_transport_lane ()
            == transport_lane_application;
     receive_runtime_t &receive = receive_runtime ();
-    const auto drain = [&] (bool receive_sync_held_) {
-        while (true) {
-            const socket_reqrep_internal::completion_pipe_drain_result_t result =
-              socket_reqrep_internal::process_completion_pipe (
-                this, completion_pipe_, tls_completion_discard);
-            if (result
-                == socket_reqrep_internal::completion_pipe_public_head) {
-                if (count1_application) {
-                    const bool released =
-                      release_count1_completion_drain (completion_pipe_);
-                    zlink_assert (released);
-                } else {
-                    const transport_pair_key_t key (
-                      transport_pair_id_, transport_pair_generation_);
-                    scoped_lock_t lock (_transport_pairs_sync);
-                    transport_pairs_t::iterator it =
-                      _transport_pairs.find (key);
-                    if (it != _transport_pairs.end ()
-                        && it->second.completion_source () == completion_pipe_)
-                        it->second.draining = false;
-                }
-                (void) reclassify_transport_pair_application_head (
-                  completion_pipe_);
-                if (receive_sync_held_)
-                    notify_receive_progress_locked ();
-                else
-                    notify_receive_progress ();
-                return false;
-            }
-            if (result
-                == socket_reqrep_internal::completion_pipe_terminated) {
-                if (count1_application)
-                    (void) release_count1_completion_drain (completion_pipe_);
-                return false;
-            }
-            if (result
-                == socket_reqrep_internal::completion_pipe_budget_exhausted) {
-                (void) requeue_completion_pipe_after_budget (
-                  transport_pair_id_, transport_pair_generation_,
-                  completion_pipe_, receive_sync_held_);
-                return false;
-            }
-            if (result
-                == socket_reqrep_internal::completion_pipe_discard_deferred) {
-                (void) requeue_completion_pipe_after_budget (
-                  transport_pair_id_, transport_pair_generation_,
-                  completion_pipe_, receive_sync_held_);
-                return true;
-            }
-            if (!finish_completion_pipe_drain (
-                  transport_pair_id_, transport_pair_generation_,
-                  completion_pipe_))
-                return false;
-        }
-    };
-
-    if (!count1_application) {
-        return drain (false);
-    }
-    //  Same receive-state ownership as a public receive: the lock-free lease
-    //  when it is free, otherwise `sync` under a mode re-validated after the
-    //  mutex was acquired.  Falling back on the raw mutex would let this
-    //  drain overlap a lease holder that took the word after the fallback
-    //  decision.
     const socket_receive_entry_scope_t entry (receive);
-    if (entry.owns_lease ()) {
-        bool yielded_for_discard = drain (false);
-        if (!yielded_for_discard)
-            yielded_for_discard = drain (false);
-        return yielded_for_discard;
+    while (true) {
+        const socket_reqrep_internal::completion_pipe_drain_result_t result =
+          socket_reqrep_internal::process_completion_pipe (
+            this, completion_pipe_, tls_completion_discard);
+        if (result
+            == socket_reqrep_internal::completion_pipe_public_head) {
+            if (count1_application) {
+                const bool released =
+                  release_count1_completion_drain (completion_pipe_);
+                zlink_assert (released);
+            } else {
+                const transport_pair_key_t key (
+                  transport_pair_id_, transport_pair_generation_);
+                scoped_lock_t lock (_transport_pairs_sync);
+                transport_pairs_t::iterator it =
+                  _transport_pairs.find (key);
+                if (it != _transport_pairs.end ()
+                    && it->second.completion_source () == completion_pipe_)
+                    it->second.draining = false;
+            }
+            (void) reclassify_transport_pair_application_head (
+              completion_pipe_);
+            notify_receive_progress ();
+            return false;
+        }
+        if (result
+            == socket_reqrep_internal::completion_pipe_terminated) {
+            if (count1_application)
+                (void) release_count1_completion_drain (completion_pipe_);
+            return false;
+        }
+        if (result
+            == socket_reqrep_internal::completion_pipe_budget_exhausted) {
+            (void) requeue_completion_pipe_after_budget (
+              transport_pair_id_, transport_pair_generation_,
+              completion_pipe_);
+            return false;
+        }
+        if (result
+            == socket_reqrep_internal::completion_pipe_discard_deferred) {
+            (void) requeue_completion_pipe_after_budget (
+              transport_pair_id_, transport_pair_generation_,
+              completion_pipe_);
+            return true;
+        }
+        if (!finish_completion_pipe_drain (
+              transport_pair_id_, transport_pair_generation_,
+              completion_pipe_))
+            return false;
     }
-    return drain (true);
 }
 
 void zlink::socket_base_t::read_activated (pipe_t *pipe_)
@@ -1714,9 +1686,9 @@ void zlink::socket_base_t::read_activated (pipe_t *pipe_)
             && pipe_->get_transport_lane_count () == 1u) {
             {
                 receive_runtime_t &receive = receive_runtime ();
-                scoped_lock_t receive_lock (receive.sync);
+                socket_receive_entry_scope_t receive_lock (receive);
                 (void) reclassify_transport_pair_application_head (pipe_);
-                notify_receive_progress_locked ();
+                notify_receive_progress ();
             }
             if (completion_drain_permitted ())
                 process_ready_completion_pipes ();
@@ -1779,9 +1751,9 @@ void zlink::socket_base_t::read_activated (pipe_t *pipe_)
         }
     }
     receive_runtime_t &receive = receive_runtime ();
-    scoped_lock_t receive_lock (receive.sync);
+    socket_receive_entry_scope_t receive_lock (receive);
     xread_activated (pipe_);
-    notify_receive_progress_locked ();
+    notify_receive_progress ();
 }
 
 void zlink::socket_base_t::write_activated (pipe_t *pipe_)
@@ -1981,9 +1953,9 @@ void zlink::socket_base_t::pipe_terminated (pipe_t *pipe_)
     if (!completion && application_attached) {
         receive_runtime_t &receive = receive_runtime ();
         {
-            scoped_lock_t receive_lock (receive.sync);
+            socket_receive_entry_scope_t receive_lock (receive);
             xpipe_terminated (pipe_);
-            notify_receive_progress_locked ();
+            notify_receive_progress ();
         }
     }
     if (!completion) {

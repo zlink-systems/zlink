@@ -231,39 +231,46 @@ bool zlink::ctx_t::start ()
 
 zlink::socket_base_t *zlink::ctx_t::create_socket (int type_)
 {
-    scoped_lock_t locker (_slot_sync);
+    socket_base_t *s = NULL;
+    {
+        scoped_lock_t locker (_slot_sync);
 
-    //  Once zlink_ctx_term() or zlink_ctx_shutdown() was called, we can't create
-    //  new sockets.
-    if (_terminating) {
-        errno = ETERM;
-        return NULL;
-    }
-
-    if (unlikely (_starting)) {
-        if (!start ())
+        //  Once zlink_ctx_term() or zlink_ctx_shutdown() was called, we can't create
+        //  new sockets.
+        if (_terminating) {
+            errno = ETERM;
             return NULL;
+        }
+
+        if (unlikely (_starting)) {
+            if (!start ())
+                return NULL;
+        }
+
+        //  If max_sockets limit was reached, return error.
+        if (!_socket_registry.has_available_socket_slot ()) {
+            errno = EMFILE;
+            return NULL;
+        }
+
+        //  Choose a slot for the socket.
+        const uint32_t slot = _socket_registry.claim_socket_slot ();
+
+        //  Generate new unique socket ID.
+        const int sid = (static_cast<int> (max_socket_id.add (1))) + 1;
+
+        //  Create the socket and register its mailbox.
+        s = socket_base_t::create (type_, this, slot, sid);
+        if (!s) {
+            _socket_registry.release_unused_socket_slot (slot);
+            return NULL;
+        }
+        _socket_registry.publish_socket (s);
     }
 
-    //  If max_sockets limit was reached, return error.
-    if (!_socket_registry.has_available_socket_slot ()) {
-        errno = EMFILE;
-        return NULL;
-    }
-
-    //  Choose a slot for the socket.
-    const uint32_t slot = _socket_registry.claim_socket_slot ();
-
-    //  Generate new unique socket ID.
-    const int sid = (static_cast<int> (max_socket_id.add (1))) + 1;
-
-    //  Create the socket and register its mailbox.
-    socket_base_t *s = socket_base_t::create (type_, this, slot, sid);
-    if (!s) {
-        _socket_registry.release_unused_socket_slot (slot);
-        return NULL;
-    }
-    _socket_registry.publish_socket (s);
+    // The socket is fully constructed and published before the planner can
+    // observe it. Runtime bootstrap may acquire the registry mutex itself.
+    schedule_auto_hwm_recalculate ();
 
     return s;
 }
@@ -305,7 +312,7 @@ int zlink::ctx_t::close_socket_and_wait (socket_base_t *&socket_, int timeout_ms
 
 size_t zlink::ctx_t::socket_count () const
 {
-    scoped_lock_t locker (const_cast<recursive_mutex_t &> (_slot_sync));
+    scoped_lock_t locker (const_cast<mutex_t &> (_slot_sync));
     return _socket_registry.socket_count ();
 }
 

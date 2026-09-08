@@ -59,9 +59,6 @@ class lb_t
                      pipe_write_observer_fn observer_ = NULL,
                      void *observer_userdata_ = NULL);
 
-    int send (msg_t *msg_,
-              pipe_message_admission_t *admission_out_ = NULL);
-
     //  Sends a message and stores the pipe that was used in pipe_.
     //  It is possible for this function to return success but keep pipe_
     //  unset if the rest of a multipart message to a terminated pipe is

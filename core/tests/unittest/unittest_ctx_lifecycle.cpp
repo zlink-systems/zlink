@@ -53,6 +53,42 @@ struct async_owner_transition_gate_t
     bool release_explicit_stop;
 };
 
+struct command_sync_probe_t
+{
+    explicit command_sync_probe_t (int expected_command_type_) :
+        observed (false),
+        expected_command_type (expected_command_type_)
+    {
+    }
+
+    std::mutex sync;
+    std::condition_variable changed;
+    bool observed;
+    int expected_command_type;
+};
+
+void observe_command_sync_probe (void *userdata_, int command_type_,
+                                 bool, bool)
+{
+    command_sync_probe_t *const probe =
+      static_cast<command_sync_probe_t *> (userdata_);
+    if (!probe || command_type_ != probe->expected_command_type)
+        return;
+
+    {
+        std::lock_guard<std::mutex> lock (probe->sync);
+        probe->observed = true;
+    }
+    probe->changed.notify_all ();
+}
+
+bool wait_for_command_sync_probe (command_sync_probe_t *probe_)
+{
+    std::unique_lock<std::mutex> lock (probe_->sync);
+    return probe_->changed.wait_for (
+      lock, std::chrono::seconds (3), [probe_] { return probe_->observed; });
+}
+
 void pause_async_owner_transition (
   zlink::async_owner_transition_test_point_t point_, void *userdata_)
 {
@@ -1143,30 +1179,25 @@ void test_transport_owner_start_waits_for_explicit_async_quiesce ()
       && !zlink::session_termination_test_access_t::async_quiesce_pending (
         source_handle.socket);
 
+    command_sync_probe_t completion_probe (
+      static_cast<int> (zlink::command_t::request_completion));
+    bool completion_probe_installed = false;
     bool command_progressed_after_handoff = false;
     if (replacement_owner_active) {
+        source_handle.socket->test_set_receive_command_sync_probe_hook (
+          &observe_command_sync_probe, &completion_probe);
+        completion_probe_installed = true;
         zlink::session_termination_test_access_t::wait_async_started (
           source_handle.socket);
         source_handle.socket->acknowledge_request_completion_notification ();
-        uint64_t drains_before = 0;
-        source_handle.socket->test_receive_owner_snapshot (
-          NULL, NULL, &drains_before);
         source_handle.socket->notify_request_completion ();
-
-        const std::chrono::steady_clock::time_point deadline =
-          std::chrono::steady_clock::now () + std::chrono::seconds (3);
-        while (std::chrono::steady_clock::now () < deadline) {
-            uint64_t drains_after = 0;
-            source_handle.socket->test_receive_owner_snapshot (
-              NULL, NULL, &drains_after);
-            if (drains_after > drains_before) {
-                command_progressed_after_handoff = true;
-                break;
-            }
-            msleep (1);
-        }
+        command_progressed_after_handoff =
+          wait_for_command_sync_probe (&completion_probe);
     }
 
+    if (completion_probe_installed)
+        source_handle.socket->test_set_receive_command_sync_probe_hook (NULL,
+                                                                         NULL);
     if (transport_acquire_rc == 0)
         source_handle.socket->release_transport_pair_owner_progress ();
     if (completion_poller_acquired)

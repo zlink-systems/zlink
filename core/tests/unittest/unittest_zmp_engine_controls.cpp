@@ -239,6 +239,76 @@ void test_stale_application_connection_cannot_complete_reconnected_request ()
     test_context_socket_close_zero_linger (server);
 }
 
+void test_stamped_records_are_dropped_after_transport_replacement ()
+{
+    void *dealer = test_context_socket (ZLINK_SOCKET_DEALER);
+    {
+        contract_zmp_engine_t application (dealer);
+        application.handshake (test_zmp_wire::socket_router, "stamped-record-replacement");
+        assert_ready_reply (application);
+        zlink::pipe_t *const pipe = application_pipe (application, true);
+        std::optional<zlink::socket_public_send_scope_t> turn;
+        TEST_ASSERT_TRUE (application.core->begin_complete_send_scope (&turn));
+        const uint64_t old_connection = pipe->get_transport_connection_id ();
+        TEST_ASSERT_TRUE (old_connection != 0);
+        const uint64_t new_connection =
+          old_connection == UINT64_MAX ? 1 : old_connection + 1;
+
+        zlink::msg_t stale_single;
+        TEST_ASSERT_SUCCESS_ERRNO (stale_single.init_buffer ("stale-single", 12));
+        stale_single.set_transport_connection_id (old_connection);
+        TEST_ASSERT_TRUE (pipe->write (&stale_single));
+        TEST_ASSERT_SUCCESS_ERRNO (stale_single.close ());
+
+        //  The record is staged with the old stamp. Replacing the shared
+        //  connection identity before publication must make session pull drop it.
+        pipe->set_transport_connection_id (new_connection);
+        pipe->flush ();
+        turn.reset ();
+        application.pump ();
+        TEST_ASSERT_TRUE (contract_zmp_take_output (*application.state).empty ());
+
+        TEST_ASSERT_TRUE (application.core->begin_complete_send_scope (&turn));
+        zlink::msg_t stale_prefix;
+        TEST_ASSERT_SUCCESS_ERRNO (stale_prefix.init_buffer ("stale-prefix", 12));
+        stale_prefix.set_flags (zlink::msg_t::more);
+        stale_prefix.set_transport_connection_id (old_connection);
+        TEST_ASSERT_TRUE (pipe->write (&stale_prefix));
+        TEST_ASSERT_SUCCESS_ERRNO (stale_prefix.close ());
+
+        //  Let the final part carry the replacement stamp. Once the prefix is
+        //  recognized as stale, the existing multipart drop window consumes this
+        //  final part too, so no fragment of the old record reaches the wire.
+        zlink::msg_t stale_final;
+        TEST_ASSERT_SUCCESS_ERRNO (stale_final.init_buffer ("stale-final", 11));
+        stale_final.set_transport_connection_id (new_connection);
+        TEST_ASSERT_TRUE (pipe->write (&stale_final));
+        TEST_ASSERT_SUCCESS_ERRNO (stale_final.close ());
+        pipe->flush ();
+        turn.reset ();
+        application.pump ();
+        TEST_ASSERT_TRUE (contract_zmp_take_output (*application.state).empty ());
+
+        TEST_ASSERT_TRUE (application.core->begin_complete_send_scope (&turn));
+        zlink::msg_t fresh;
+        TEST_ASSERT_SUCCESS_ERRNO (fresh.init_buffer ("fresh", 5));
+        fresh.set_transport_connection_id (new_connection);
+        TEST_ASSERT_TRUE (pipe->write (&fresh));
+        TEST_ASSERT_SUCCESS_ERRNO (fresh.close ());
+        pipe->flush ();
+        turn.reset ();
+        application.pump ();
+
+        const std::vector<contract_zmp_wire_frame_t> frames =
+          contract_zmp_take_output (*application.state);
+        TEST_ASSERT_EQUAL_UINT (1, frames.size ());
+        TEST_ASSERT_EQUAL_UINT8 (test_zmp_wire::zmp_kind_data, frames[0].kind);
+        TEST_ASSERT_EQUAL_UINT (5, frames[0].body.size ());
+        TEST_ASSERT_EQUAL_MEMORY ("fresh", frames[0].body.data (), 5);
+    }
+    test_context_socket_close_zero_linger (dealer);
+}
+
 void test_error_reply_payload_export_allocation_failure_is_payloadless ()
 {
     void *server = test_context_socket (ZLINK_SOCKET_DEALER);
@@ -293,6 +363,7 @@ int main ()
     RUN_TEST (test_raw_wire_peer_weight_bypasses_application_limit_and_consumes_malformed);
     RUN_TEST (test_raw_wire_peer_weight_waits_for_exact_pair_readiness);
     RUN_TEST (test_stale_application_connection_cannot_complete_reconnected_request);
+    RUN_TEST (test_stamped_records_are_dropped_after_transport_replacement);
     RUN_TEST (test_error_reply_payload_export_allocation_failure_is_payloadless);
     return UNITY_END ();
 }

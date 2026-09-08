@@ -326,7 +326,6 @@ zlink::socket_base_t::~socket_base_t ()
     //  inbound ypipe independently of transport-pair teardown; release those
     //  final pins before destroying the socket mailbox.
     discard_count1_completion_ready_pipes ();
-    scoped_lock_t lock (monitor_runtime ().sync);
     stop_monitor ();
 
     // stop_monitor() may release the monitor's async-mailbox ownership and
@@ -349,9 +348,11 @@ void zlink::socket_base_t::stop ()
     //  ROUTER may have a receiver and a blocked sender on different threads.
     //  Either thread can consume the command mailbox
     //  edge, so an additional wake plus the shared atomic state makes both
-    //  blocking paths observe ETERM. The command still performs the ordinary
-    //  monitor shutdown on the socket thread.
+    //  blocking paths observe ETERM. Monitor shutdown belongs to this control
+    //  boundary: it may wait for a worker or enter another socket and must
+    //  finish before the administrative command takes this socket's turn.
     _ctx_terminated.store (true, std::memory_order_release);
+    stop_monitor ();
     send_stop ();
     static_cast<mailbox_t *> (_mailbox)->signal ();
 }

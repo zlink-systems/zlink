@@ -229,7 +229,8 @@ void pull_thread (harness_t *harness_, void *server_, uint64_t expected_)
 }
 
 //  Thread B: a separate dispatcher submits the echo on the same socket.
-void submit_thread (harness_t *harness_, void *server_, uint64_t expected_)
+void submit_thread (harness_t *harness_, void *server_, uint64_t expected_,
+                    bool routed_)
 {
     while (!harness_->stop.load () && harness_->submitted.load () < expected_) {
         echo_item_t item;
@@ -247,10 +248,12 @@ void submit_thread (harness_t *harness_, void *server_, uint64_t expected_)
         zlink_msg_t part;
         zlink_msg_init_size (&part, item.wire.size ());
         memcpy (zlink_msg_data (&part), item.wire.data (), item.wire.size ());
-        const zlink_submit_result_t rc =
-          zlink_send_part_rid (server_, &item.rid, &part,
-                               ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL,
-                               NULL);
+        const zlink_submit_result_t rc = routed_
+          ? zlink_send_part_rid (server_, &item.rid, &part,
+                                ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL,
+                                NULL)
+          : zlink_send_part (server_, &part, ZLINK_SEND_FLAGS_NONE,
+                             ZLINK_PART_FINAL, NULL, NULL);
         zlink_msg_close (&part);
         if (rc != ZLINK_SUBMIT_OK) {
             ++harness_->submit_failures;
@@ -299,7 +302,7 @@ void run_concurrent_pull_send (unsigned clients_, unsigned frames_,
     harness_t harness;
     const uint64_t expected = static_cast<uint64_t> (clients_) * frames_;
     std::thread pull (pull_thread, &harness, server, expected);
-    std::thread submit (submit_thread, &harness, server, expected);
+    std::thread submit (submit_thread, &harness, server, expected, true);
     std::vector<std::thread> clients;
     clients.reserve (clients_);
     for (unsigned i = 0; i != clients_; ++i)
@@ -344,6 +347,157 @@ void run_concurrent_pull_send (unsigned clients_, unsigned frames_,
         TEST_FAIL_MESSAGE (message);
     }
 }
+
+void message_pull_thread (harness_t *harness_, void *server_, uint64_t expected_,
+                          bool router_)
+{
+    void *poller = zlink_poller_new ();
+    if (!poller || zlink_poller_add (poller, server_, server_, ZLINK_POLLIN)
+                     != ZLINK_CONFIG_OK) {
+        ++harness_->client_failures;
+        if (poller)
+            zlink_poller_destroy (&poller);
+        return;
+    }
+    while (!harness_->stop.load () && harness_->received.load () < expected_) {
+        zlink_poller_event_t event = {};
+        if (zlink_poller_wait (poller, &event, 1, 50, NULL) < 0) {
+            ++harness_->client_failures;
+            break;
+        }
+        if (!(event.events & ZLINK_POLLIN))
+            continue;
+        for (;;) {
+            zlink_msg_t part;
+            zlink_msg_init (&part);
+            const zlink_routing_id_t *rid = NULL;
+            zlink_part_flag_t more = ZLINK_PART_FINAL;
+            zlink_reply_token_t reply_token = 0;
+            const zlink_recv_result_t rc = router_
+              ? zlink_router_recv_part (server_, &rid, &reply_token, &part,
+                                         &more, ZLINK_RECV_FLAGS_DONTWAIT)
+              : zlink_recv_part (server_, &rid, &part, &more,
+                                 ZLINK_RECV_FLAGS_DONTWAIT);
+            if (rc != ZLINK_RECV_OK) {
+                zlink_msg_close (&part);
+                if (rc != ZLINK_RECV_NO_DATA) {
+                    ++harness_->client_failures;
+                    harness_->stop.store (true);
+                }
+                break;
+            }
+            echo_item_t item = {};
+            if (rid)
+                item.rid = *rid;
+            item.wire.assign (static_cast<const char *> (zlink_msg_data (&part)),
+                              zlink_msg_size (&part));
+            zlink_msg_close (&part);
+            if (more != ZLINK_PART_FINAL) {
+                ++harness_->client_failures;
+                break;
+            }
+            {
+                std::lock_guard<std::mutex> lock (harness_->mutex);
+                harness_->items.push_back (std::move (item));
+            }
+            ++harness_->received;
+            harness_->condition.notify_one ();
+        }
+    }
+    zlink_poller_destroy (&poller);
+}
+
+void message_client_thread (harness_t *harness_, void *client_,
+                            unsigned id_, unsigned frames_)
+{
+    for (unsigned sequence = 0;
+         sequence != frames_ && !harness_->stop.load (); ++sequence) {
+        const std::string expected = packet (id_, sequence, 64);
+        zlink_msg_t part;
+        zlink_msg_init_size (&part, expected.size ());
+        memcpy (zlink_msg_data (&part), expected.data (), expected.size ());
+        const zlink_submit_result_t sent = zlink_send_part (
+          client_, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
+        zlink_msg_close (&part);
+        if (sent != ZLINK_SUBMIT_OK) {
+            ++harness_->client_failures;
+            return;
+        }
+        zlink_msg_init (&part);
+        zlink_part_flag_t more = ZLINK_PART_FINAL;
+        const zlink_recv_result_t received = zlink_recv_part (
+          client_, NULL, &part, &more, ZLINK_RECV_FLAGS_NONE);
+        const bool matches = received == ZLINK_RECV_OK
+          && more == ZLINK_PART_FINAL
+          && zlink_msg_size (&part) == expected.size ()
+          && memcmp (zlink_msg_data (&part), expected.data (), expected.size ()) == 0;
+        zlink_msg_close (&part);
+        if (!matches) {
+            ++harness_->client_failures;
+            return;
+        }
+        ++harness_->echoed;
+    }
+}
+
+void run_message_concurrent_pull_send (bool router_)
+{
+    const unsigned clients_count = router_ ? 16 : 1;
+    const unsigned frames = router_ ? 100 : 1600;
+    const uint64_t expected = clients_count * frames;
+    const uint64_t hwm = 4096;
+    const int timeout = stall_timeout_ms;
+    void *server = test_context_socket (router_ ? ZLINK_SOCKET_ROUTER
+                                               : ZLINK_SOCKET_DEALER);
+    std::vector<void *> clients;
+    for (unsigned i = 0; i != clients_count; ++i)
+        clients.push_back (test_context_socket (ZLINK_SOCKET_DEALER));
+    std::vector<void *> sockets = clients;
+    sockets.push_back (server);
+    for (size_t i = 0; i != sockets.size (); ++i) {
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_option (
+          sockets[i], ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_option (
+          sockets[i], ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_option (
+          sockets[i], ZLINK_OPT_RCVTIMEO, &timeout, sizeof (timeout)));
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_option (
+          sockets[i], ZLINK_OPT_SNDTIMEO, &timeout, sizeof (timeout)));
+    }
+    std::vector<std::string> endpoints;
+    for (unsigned i = 0; i != clients_count; ++i) {
+        char endpoint[MAX_SOCKET_STRING];
+        bind_loopback_ipv4 (clients[i], endpoint, sizeof (endpoint));
+        endpoints.emplace_back (endpoint);
+    }
+    harness_t harness;
+    std::thread pull (message_pull_thread, &harness, server, expected, router_);
+    std::thread submit (submit_thread, &harness, server, expected, router_);
+    std::vector<std::thread> threads;
+    for (unsigned i = 0; i != clients_count; ++i) {
+        // Direct control attach on the socket whose receive/send are live.
+        if (zlink_connect (server, endpoints[i].c_str ()) != ZLINK_CONNECT_OK) {
+            ++harness.client_failures;
+            harness.stop.store (true);
+            break;
+        }
+        threads.emplace_back (message_client_thread, &harness, clients[i], i, frames);
+    }
+    for (size_t i = 0; i != threads.size (); ++i)
+        threads[i].join ();
+    harness.stop.store (true);
+    harness.condition.notify_all ();
+    pull.join ();
+    submit.join ();
+    for (size_t i = 0; i != sockets.size (); ++i)
+        test_context_socket_close_zero_linger (sockets[i]);
+    TEST_ASSERT_EQUAL_UINT64 (0, harness.client_failures.load ());
+    TEST_ASSERT_EQUAL_UINT64 (0, harness.submit_failures.load ());
+    TEST_ASSERT_EQUAL_UINT64 (expected, harness.received.load ());
+    TEST_ASSERT_EQUAL_UINT64 (expected, harness.submitted.load ());
+    TEST_ASSERT_EQUAL_UINT64 (expected, harness.echoed.load ());
+}
+
 }
 
 //  Backpressure on the receive side is what used to strand the fair queue,
@@ -360,6 +514,16 @@ void test_stream_concurrent_pull_send_unbounded_hwm ()
     run_concurrent_pull_send (40, 40, 0, 64);
 }
 
+void test_dealer_concurrent_pull_send ()
+{
+    run_message_concurrent_pull_send (false);
+}
+
+void test_router_concurrent_pull_send ()
+{
+    run_message_concurrent_pull_send (true);
+}
+
 int main ()
 {
     setup_test_environment ();
@@ -370,6 +534,8 @@ int main ()
     RUN_TEST (name)
     RUN_SELECTED (test_stream_concurrent_pull_send_bounded_hwm);
     RUN_SELECTED (test_stream_concurrent_pull_send_unbounded_hwm);
+    RUN_SELECTED (test_dealer_concurrent_pull_send);
+    RUN_SELECTED (test_router_concurrent_pull_send);
 #undef RUN_SELECTED
     return UNITY_END ();
 }

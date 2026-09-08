@@ -31,7 +31,6 @@ zlink::pair_t::pair_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     _recv_part_index (0)
 {
     options.type = ZLINK_CORE_SOCKET_PAIR;
-    refresh_auto_hwm_policy ();
 }
 
 zlink::pair_t::~pair_t ()

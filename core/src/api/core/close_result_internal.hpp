@@ -15,6 +15,7 @@ inline zlink_close_result_t from_errno (int err_)
         case 0:
             return ZLINK_CLOSE_OK;
         case EBUSY:
+        case EDEADLK:
             return ZLINK_CLOSE_BUSY;
 #ifdef ESHUTDOWN
         case ESHUTDOWN:

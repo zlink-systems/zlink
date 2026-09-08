@@ -441,12 +441,6 @@ void zlink::lb_t::commit_weighted_selection (pipe_entry_t *selected_, uint32_t t
         selected_->running_value -= static_cast<int64_t> (total_weight_);
 }
 
-int zlink::lb_t::send (
-  msg_t *msg_, pipe_message_admission_t *admission_out_)
-{
-    return sendpipe (msg_, NULL, admission_out_);
-}
-
 int zlink::lb_t::sendpipe (
   msg_t *msg_, pipe_t **pipe_,
   pipe_message_admission_t *admission_out_,

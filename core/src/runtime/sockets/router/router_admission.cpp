@@ -482,6 +482,9 @@ int router_t::apply_peer_weight (pipe_t *pipe_, uint32_t weight_)
 #ifdef ZLINK_BUILD_TESTS
 uint32_t router_t::test_peer_weight (pipe_t *pipe_) const
 {
+    socket_public_api_lock_scope_t owner (
+      lifecycle_coordinator (),
+      !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
     if (!pipe_)
         return 0;
     std::lock_guard<std::mutex> route_lifecycle_lock (

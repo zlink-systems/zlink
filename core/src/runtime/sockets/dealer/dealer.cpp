@@ -16,7 +16,6 @@ zlink::dealer_t::dealer_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     options.type = ZLINK_CORE_SOCKET_DEALER;
     options.can_send_hello_msg = true;
     options.can_recv_hiccup_msg = true;
-    refresh_auto_hwm_policy ();
 }
 
 zlink::dealer_t::~dealer_t ()
@@ -533,11 +532,17 @@ void zlink::dealer_t::remember_request_route (pipe_t *pipe_, uint32_t weight_)
 #ifdef ZLINK_BUILD_TESTS
 uint32_t zlink::dealer_t::test_peer_weight (pipe_t *pipe_) const
 {
+    socket_public_api_lock_scope_t owner (
+      lifecycle_coordinator (),
+      !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
     return _lb.weight (pipe_);
 }
 
 size_t zlink::dealer_t::test_peer_weight_count (uint32_t weight_) const
 {
+    socket_public_api_lock_scope_t owner (
+      lifecycle_coordinator (),
+      !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
     return _lb.test_weight_count (weight_);
 }
 #endif
