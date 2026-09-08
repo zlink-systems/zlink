@@ -133,6 +133,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/test_disconnect_progress
   ${INTEGRATION_TEST_ROOT}/test_phase3_completion_contract
   ${INTEGRATION_TEST_ROOT}/test_phase3_request_reply_contract
+  ${INTEGRATION_TEST_ROOT}/test_request_reply_part_count_boundary
   ${INTEGRATION_TEST_ROOT}/test_request_writable_contract
   ${INTEGRATION_TEST_ROOT}/test_writable_resubmit_from_other_thread_while_sequence_open
   ${INTEGRATION_TEST_ROOT}/test_dealer_router_single_lane_contract
@@ -1249,4 +1250,10 @@ if(WIN32)
         "PATH=${test_runtime_dirs}\\;${test_runtime_path}")
     endif()
   endforeach()
+endif()
+
+if(TARGET test_request_reply_part_count_boundary)
+  set_tests_properties(
+    test_request_reply_part_count_boundary
+    PROPERTIES TIMEOUT 300)
 endif()
