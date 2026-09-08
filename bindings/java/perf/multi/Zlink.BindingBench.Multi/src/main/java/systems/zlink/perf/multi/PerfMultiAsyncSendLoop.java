@@ -126,7 +126,8 @@ final class PerfMultiAsyncSendLoop {
 
     private static IllegalStateException rethrow(String label,
                                                   Throwable cause) {
-        return new IllegalStateException(label + " failed", cause);
+        return new IllegalStateException(label + " failed:"
+            + PerfMultiRoutedRelay.describe(cause), cause);
     }
 
     static Throwable completionCause(Throwable error) {

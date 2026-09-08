@@ -3,8 +3,8 @@
 package systems.zlink.perf.multi;
 
 import java.util.List;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
@@ -29,31 +29,61 @@ final class PerfMultiRoutedRelay {
     }
 
     static void run(RouterSocket server, AtomicBoolean stopRequested) {
-        AtomicReference<Throwable> failure = new AtomicReference<>();
+        // Reply admission is asynchronous. A blocking submit is a `NONE FINAL`
+        // send that only waits out its SNDTIMEO snapshot and then reports
+        // BACKPRESSURED/EAGAIN (core socket spec, part send and pending
+        // admission), which turns ordinary echo backpressure into a relay
+        // failure. The public async submit lets Core pace admission and owns
+        // the WRITABLE retry, exactly like the C relay's retry snapshot.
+        PerfMultiRoutedReplyQueue<PendingReply> replies =
+            new PerfMultiRoutedReplyQueue<>(
+                reply -> submitReply(server, reply),
+                PendingReply::close,
+                cause -> isStaleRoute(cause) || stopRequested.get());
         try (Received received = new Received();
              PerfSocketPollSet pollSet = PerfSocketPollSet.fromSockets(
                  List.of(server), PollEventFlags.POLLIN)) {
-            while (!stopRequested.get() && failure.get() == null) {
+            while (!stopRequested.get() && !replies.hasFailure()) {
                 int readyCount = pollSet.poll(50);
                 if (readyCount <= 0
                     || !pollSet.readyHasEventAt(0, PollEventFlags.POLLIN)) {
                     continue;
                 }
-                drainRequests(server, received, stopRequested, failure);
+                drainRequests(server, received, stopRequested, replies);
+            }
+            if (!replies.drain(PerfMultiTargetCoordinator.sendDrainTimeout())
+                && !replies.hasFailure()) {
+                System.err.println("RELAY_DRAIN_DETAIL,timed_out,pending="
+                    + replies.pendingCount() + ",sending=" + replies.sending());
             }
         }
 
-        Throwable error = failure.get();
+        Throwable error = replies.failure();
         if (error != null) {
-            throw new IllegalStateException("multi routed relay failed", error);
+            String detail = describe(error);
+            // The FAIL line keeps only the deepest non-blank message, and a
+            // zlink exception carries none. Name the result and errno here and
+            // in the server log so the reason is never lost.
+            System.err.println("RELAY_FAILURE_DETAIL," + detail);
+            throw new IllegalStateException(
+                "multi routed relay failed:" + detail, error);
         }
     }
 
-    private static void drainRequests(RouterSocket server,
-                                      Received received,
-                                      AtomicBoolean stopRequested,
-                                      AtomicReference<Throwable> failure) {
-        while (!stopRequested.get() && failure.get() == null) {
+    private static void drainRequests(
+            RouterSocket server,
+            Received received,
+            AtomicBoolean stopRequested,
+            PerfMultiRoutedReplyQueue<PendingReply> replies) {
+        while (!stopRequested.get() && !replies.hasFailure()) {
+            // Do not pull another request out of Core's receive queue while
+            // the previous reply is still awaiting admission. The C relay
+            // refuses a second reply under a live wait token; parking here
+            // keeps the un-forwarded reply backpressuring its source through
+            // Core's receive queue instead of an unbounded application queue.
+            if (!replies.awaitIdle(50L)) {
+                continue;
+            }
             boolean ok;
             try {
                 ok = server.recv(received, RecvFlags.DONT_WAIT);
@@ -72,41 +102,59 @@ final class PerfMultiRoutedRelay {
                 received.getRoutingId().orElseThrow().toBytes());
             Message payload = PerfUtil.measurementPayload(received.parts());
             if (payload != null) {
-                submitReply(server, routingId, payload, stopRequested,
-                    failure);
+                // Keep receiving under send backpressure. The FIFO owns an
+                // immutable snapshot, so the next recv may refill `received`.
+                replies.enqueue(capture(routingId, payload));
             }
             received.close();
         }
     }
 
-    private static void submitReply(RouterSocket server,
-                                    RoutingId routingId,
-                                    Message source,
-                                    AtomicBoolean stopRequested,
-                                    AtomicReference<Throwable> failure) {
-        try (Message payload = Message.from(source);
-             Message tail = PerfUtil.measurementPartCount() == 2
-                 ? PerfUtil.measurementTail() : null) {
-            if (tail != null) {
-                server.send(routingId).message(payload).message(tail)
-                    .submit_sync();
-            } else {
-                server.send(routingId).message(payload).submit_sync();
+    private static PendingReply capture(RoutingId routingId, Message source) {
+        Message payload = Message.from(source);
+        Message tail = null;
+        try {
+            if (PerfUtil.measurementPartCount() == 2) {
+                tail = PerfUtil.measurementTail();
             }
-        } catch (Throwable error) {
-            recordFailure(error, stopRequested, failure);
+        } catch (RuntimeException | Error error) {
+            payload.close();
+            throw error;
         }
+        return new PendingReply(routingId, payload, tail);
     }
 
-    private static void recordFailure(Throwable error,
-                                      AtomicBoolean stopRequested,
-                                      AtomicReference<Throwable> failure) {
-        Throwable cause = PerfMultiAsyncSendLoop.completionCause(error);
-        if (isStaleRoute(cause) || stopRequested.get()) {
-            return;
+    private static CompletionStage<Void> submitReply(RouterSocket server,
+                                                     PendingReply reply) {
+        if (reply.tail() != null) {
+            return server.send(reply.routingId())
+                .message(reply.payload())
+                .message(reply.tail())
+                .submit();
         }
-        failure.compareAndSet(null, cause);
-        stopRequested.set(true);
+        return server.send(reply.routingId())
+            .message(reply.payload())
+            .submit();
+    }
+
+    /** Renders a submit failure so the FAIL reason names result and errno. */
+    static String describe(Throwable error) {
+        if (error == null) {
+            return "unknown";
+        }
+        StringBuilder text = new StringBuilder(
+            error.getClass().getSimpleName());
+        if (error instanceof ZlinkSubmitException submit) {
+            text.append(":result=").append(submit.getResult());
+        }
+        if (error instanceof ZlinkException zlink) {
+            text.append(":errno=").append(zlink.getNativeErrno());
+        }
+        String message = error.getMessage();
+        if (message != null && !message.isBlank()) {
+            text.append(':').append(message);
+        }
+        return text.toString();
     }
 
     static boolean isStaleRoute(Throwable error) {
@@ -123,5 +171,16 @@ final class PerfMultiRoutedRelay {
             || errno == PerfErrno.EHOSTUNREACH
             || errno == ENOTCONN_WIN
             || errno == EHOSTUNREACH_WIN;
+    }
+
+    /** One immutable routed reply snapshot waiting for its admission turn. */
+    private record PendingReply(RoutingId routingId, Message payload,
+                                Message tail) {
+        void close() {
+            payload.close();
+            if (tail != null) {
+                tail.close();
+            }
+        }
     }
 }

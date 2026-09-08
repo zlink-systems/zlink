@@ -293,7 +293,10 @@ final class PerfMultiTargetCoordinator {
         void throwIfFailed(String label) {
             Throwable cause = failure.get();
             if (cause != null) {
-                throw new IllegalStateException(label + " failed", cause);
+                // Zlink exceptions carry a null message, so the FAIL reason
+                // would otherwise stop at this label. Name result and errno.
+                throw new IllegalStateException(label + " failed:"
+                    + PerfMultiRoutedRelay.describe(cause), cause);
             }
         }
 
