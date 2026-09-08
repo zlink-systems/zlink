@@ -875,7 +875,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 - perf 경로: `bindings/dotnet/perf`
 - Single 상태: `미측정`
-- Multi 상태: **0.17.2 기준 `tcp` 4 cell 측정 완료, 전부 `미달`** — DD 62.51%, PUBSUB 61.01%, DR REQREP 60.45%, RR REQREP 63.10%(`r1net`, 5-run). **pattern과 무관하게 약 60%에 묶여 있다** — 메시지당 고정 오버헤드가 균일하게 얹힌 형태로, C++(5~8%p, 퍼진 비용)와 격차의 규모가 다르다(38%p). PUBSUB은 64/256/1024 B가 43~47%, 65536 B가 102%로 작은 메시지 오버헤드가 지배적임을 보인다. DD 비용 지도 job 진행 중([기록](log/2026-09-08-dotnet-dd-cost-map.ko.md)) — GC·P/Invoke 경계 비중을 먼저 확정한 뒤 개선 pass를 연다. SENDSEND 2종은 relay 정합(D-BP24) 적용 뒤 측정한다. 0.17.1 판정(59.6/58.3/67.0/61.3%)은 참고값이다.
+- Multi 상태: **0.17.2 기준 `tcp` 4 cell 측정 완료, 전부 `미달`** — DD 62.51%, PUBSUB 61.01%, DR REQREP 60.45%, RR REQREP 63.10%(`r1net`, 5-run). **pattern과 무관하게 약 60%에 묶여 있다** — 메시지당 고정 오버헤드가 균일하게 얹힌 형태로, C++(5~8%p, 퍼진 비용)와 격차의 규모가 다르다(38%p). PUBSUB은 64/256/1024 B가 43~47%, 65536 B가 102%로 작은 메시지 오버헤드가 지배적임을 보인다. **DD 비용 지도 완료(D-BP31)** — C++와 반대로 **지배적 항목이 있다**: send builder 177.7 ns·80.5 B/msg(격차의 35%)와 message helper P/Invoke 전환 137.5 ns(27%). GC는 0.3%로 무관. **개선 pass 1 진행 중**([지도](log/2026-09-08-dotnet-dd-cost-map.ko.md)). SENDSEND 2종은 relay 정합(D-BP24) 적용 뒤 측정한다. 0.17.1 판정(59.6/58.3/67.0/61.3%)은 참고값이다.
 - 다음 작업: inventory gate에서 확인한 pattern으로 paired 측정을 시작한다.
 
 #### 9.2.1 Single suite

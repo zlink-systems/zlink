@@ -2362,3 +2362,24 @@ Go relay는 D-BP24 대상이 아니다 — DR·RR 모두 공유 echo server가 r
 **게이트**(`gate-st-summary.md`, 1회차 OOM 뒤 메모리 가드로 재실행): ctest 210/210, 변경 suite 98×3, 새 테스트 20/20, 공개 인터페이스 diff 없음·mirror 12/12, hotpath 5셀 1.005~1.030 PASS, with_stream 0.17.2 idle 대비 0.98/1.01/0.99, perf/c multi 1024 B DR_REQREP 233.1/RR_SENDSEND 250.8/PUBSUB 1039.5(0.17.2 idle 대비 +22~38 %, load 상이라 관측치; `has_in()` 편입 회귀 없음).
 **착지**: Core 4 파일 + 테스트 2 파일. §7.5 D-e(`receive_once_guarded` race)는 이 수정으로 닫힘(TSan suppression 없이 receive 소유권 경고 0). 잔여 경계: control attach(sync만), lease handoff FIFO 없음, mailbox TSan 11건 — 트랙 2(ALL-1) 범위. 머신 A: C++·.NET MULTI_STREAM은 0.17.3 태그 후 재측정.
 **0.17.3 태그 시점**: 트랙 2(ALL-1) 결과를 본 뒤 결정 — ALL-1이 게이트까지 통과하면 함께, 아니면 이 수정 + perf/c 재확인만으로 먼저 태그.
+
+## D-BP31 (2026-09-08 09:25, 머신 A) .NET DD 비용 지도 — **지배적 항목이 있다** (C++와 반대); GC는 무관
+.NET `tcp` `MULTI_DEALER_DEALER` 64 B가 62.51%인 원인을 D-BP26과 같은 측정 전용 job(astra/high, `log/2026-09-08-dotnet-dd-cost-map.ko.md`)으로 귀속했다. 메시지당 1,083.66 ns(1/throughput)를 CPU 샘플로 환산한 표이며 합이 맞는다(미귀속 잔여 0.46%). C는 약 574 ns/msg. **감독자 가설(GC·P/Invoke가 지배)은 절반만 맞았다** — GC pause는 **0.3%**(Gen0 1회/구간)로 무관하고, P/Invoke는 맞다.
+
+| .NET 전용 항목(C에 없음) | ns/msg | 전체 비중 | alloc B/msg |
+|---|---:|---:|---:|
+| send builder·runner helper (`SocketSendOperation`, `PerfSocketIo.SendMeasurementAsync`, 인라인된 builder·동기 terminal) | **177.7** | 16.4% | **80.5** |
+| message helper P/Invoke 경계 (`InlinedCallFrame::Init`·`JIT_InitPInvokeFrame`·message IL stub — `init_size`/`copy`/`close` 전환마다) | **137.5** | 12.7% | 0 |
+| Message wrapper 생성·소멸 (`AllocateCoreValidated`·`CopyTo`·pool/Dispose) | 76.1 | 7.0% | 0 |
+| 2-part staging·collection | 17.1 | 1.6% | 31.3 |
+| native send P/Invoke 경계 | 8.2 | 0.8% | 0 |
+| GC pause | 3.3 | 0.3% | — |
+| async terminal·재개 | 0.7 | 0.1% | 0 |
+
+native send 본체는 C와 같다(440.2 vs 467.5 ns). .NET 전용 항목 합 ≈ 417 ns로 격차(≈510 ns)의 **82%**이고, **상위 둘(builder 177.7 + P/Invoke 전환 137.5 = 315 ns)이 격차의 62%**다. C++(D-BP26: 380~830 Ir짜리 10개에 퍼짐, 최대 항목이 격차의 12%)와 구조가 다르다 — **.NET은 고칠 곳이 있다.**
+
+**해석.** (1) builder 177.7 ns·80.5 B/msg: 공개 send builder 경로가 메시지마다 상태 객체를 만든다. 이전 pass 2가 REQREP reply closure를 struct로 바꿔 352 B를 없앤 것(D-B108)과 같은 종류의 비용이 send 쪽에 남아 있다. (2) P/Invoke 137.5 ns: 비용은 전환 1회의 크기가 아니라 **메시지당 전환 횟수**다 — `zlink_msg_init_size`·`copy`·`close`가 각각 managed↔native를 건넌다. C는 같은 호출을 직접 한다. 횟수를 줄이는 것이 후보이되, 이전 pass 2가 "direct 2-part submit"을 contract no-go로 기각했으므로 **공개 API를 바꾸지 않는 내부 helper 통합**만 허용 범위다.
+
+**조치**: 개선 pass 1 개설(astra/high). 대상은 위 두 항목. PUBSUB(61.01%)·REQREP(60.45/63.10%)도 같은 send 경로를 쓰므로 DD after와 함께 다시 잰다.
+
+**참고**: 65536 B는 잔여 2,277 ns/msg가 미분리(순수 인라인 전환과 함수별 wall 기여 미분리)라 지도가 불완전하다. 64 B 지도만 판정 근거로 쓴다.
