@@ -147,6 +147,23 @@ jobs:
           distribution: temurin
           java-version: '22'
 
+      # zlink-stream-connector's JavaNodeStreamInteropTest drives the Node
+      # stream-connector (packages/stream-connector/dist) with `node`, so the
+      # Node workspace is built here the same way the Node job builds it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build the Node workspace for the Java/Node interop tests
+        shell: bash
+        run: |
+          mkdir -p .artifacts/wsl/npm
+          npm pack framework/languages/node/packages/http-client \
+            --pack-destination .artifacts/wsl/npm
+          cd framework/languages/node
+          npm ci
+          npm run build
+
       - name: Build and test
         working-directory: framework/languages/java
         run: ./gradlew --no-daemon --max-workers=1 check
