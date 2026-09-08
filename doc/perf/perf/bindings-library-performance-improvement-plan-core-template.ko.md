@@ -246,7 +246,7 @@ managed subscriber가 형성하는 queue 깊이와 고정 수신 비용이 비�
 | .NET | Single `DEALER_ROUTER` | `ws` | 131072B | 5.0배 |
 | .NET | Single `DEALER_ROUTER` | `tls` | 131072B | 3.5배 |
 
-목표 경계 셀과 secure transport는 5회 반복 결과로 판정한다. 최적화 전후를 비교할 때
+판정은 1회 측정이 기본이고, 목표 경계 셀만 3회 반복으로 확정한다(§7.2). 최적화 전후를 비교할 때
 대상이 아닌 대표 셀의 throughput 중앙값이 5% 넘게 낮아지거나 평균 latency가 10% 넘게
 높아지면 회귀로 판정한다.
 
@@ -463,12 +463,13 @@ C와 binding의 pattern별 smoke가 모두 `status: complete`여야 본 측정�
 | 단계 | 기본 조건 | 용도 |
 |------|-----------|------|
 | smoke | 1초, 1회 | 실행 경로와 종료 상태 확인 |
-| 탐색 | 기본 duration, 1회 | 병목 후보 선별 |
-| 후보 판정 | 기본 duration, 3회 | before/after와 C 대비 비율 판정 |
-| 최종·경계 판정 | 기본 duration, 5회, CPU pin 없음 | 필요할 때 반복값을 추가 기록하는 측정 근거 |
+| 기본 판정 | 기본 duration, **1회** | 탐색, before/after, C 대비 비율 판정 — 모든 셀의 기본 |
+| 경계 확인 | 기본 duration, **3회**, CPU pin 없음 | 1회 결과가 목표 경계(aggregate mean이 목표 ±5%p) 안이거나 반복값과 어긋나는 이상치일 때만 |
 
-반복 횟수는 perf 정책의 실행 조건을 따른다. `runs=1`이면 해당 측정값을 사용하고,
-`runs>1`이면 metric별 median을 대표값으로 사용한다. 원시 반복값은 측정 기록에 남기며
+기본은 1회다. 1회 결과와 5회 결과의 차이가 판정을 바꾸는 경우는 경계 셀뿐이고, 모든 셀을
+반복하면 캠페인 시간이 몇 배로 늘어난다. 경계 확인은 셀 단위로 3회를 추가 실행하고 그
+결과로 판정을 확정한다. secure transport도 같은 규칙을 따른다. `runs=1`이면 해당 측정값을
+사용하고, `runs>1`이면 metric별 median을 대표값으로 사용한다. 원시 반복값은 측정 기록에 남기며
 판정 입력은 throughput ratio와 평균 latency ratio다. 노트북 부하와 측정 오차가 있더라도
 측정값이 생성된 셀은 즉시 기준과 비교하고 다음 셀로 진행한다.
 유리한 실행 결과만 선택하지 않으며, CPU pin·timeout·sleep 증가로 수치를 조정하지 않는다.
