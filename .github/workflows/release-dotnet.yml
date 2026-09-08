@@ -1,0 +1,149 @@
+name: Release .NET Binding
+
+on:
+  push:
+    tags:
+      - 'dotnet/v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Binding version to release (for example, 0.17.3)'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  release-dotnet:
+    name: Build and publish .NET binding
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve and validate versions
+        id: versions
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            version="${GITHUB_REF_NAME#dotnet/v}"
+          else
+            version="${REQUESTED_VERSION}"
+          fi
+
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid binding version: ${version:-<missing>}" >&2
+            exit 1
+          fi
+
+          repository_binding_version=$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' BINDINGS_VERSION)
+          if [ "${version}" != "${repository_binding_version}" ]; then
+            echo "Binding version mismatch: requested=${version}, BINDINGS_VERSION=${repository_binding_version}" >&2
+            exit 1
+          fi
+
+          project_version=$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' bindings/dotnet/src/Zlink/Zlink.csproj | head -n1)
+          if [ "${version}" != "${project_version}" ]; then
+            echo "Binding version mismatch: requested=${version}, Zlink.csproj=${project_version}" >&2
+            exit 1
+          fi
+
+          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
+          if ! [[ "${core_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid Core version in VERSION: ${core_version:-<missing>}" >&2
+            exit 1
+          fi
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "core_version=${core_version}" >> "${GITHUB_OUTPUT}"
+          echo "core_tag=core/v${core_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate exact Core release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CORE_TAG: ${{ steps.versions.outputs.core_tag }}
+        run: |
+          api_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${CORE_TAG}"
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${api_url}")
+          if [ "${status}" != "200" ]; then
+            echo "Core release tag not found: ${CORE_TAG}" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/tags/${CORE_TAG}:refs/tags/${CORE_TAG}"
+          if ! git diff --quiet "${CORE_TAG}" -- VERSION core; then
+            echo "Checked-out VERSION/core differs from ${CORE_TAG}" >&2
+            echo "Binding releases must use the exact tagged Core source." >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Prepare verified Linux x64 Core release
+        id: dotnet-core
+        shell: bash
+        env:
+          ZLINK_CORE_RELEASE_VERSION: ${{ steps.versions.outputs.core_version }}
+          ZLINK_CORE_CACHE_DIR: ${{ runner.temp }}/zlink-core
+        run: |
+          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
+            --version "${ZLINK_CORE_RELEASE_VERSION}" \
+            --platform linux-x64 \
+            --cache-dir "${ZLINK_CORE_CACHE_DIR}")
+          echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build, test, and pack
+        env:
+          CI: true
+          ZLINK_LIBRARY_PATH: ${{ steps.dotnet-core.outputs.prefix }}/lib/libzlink.so.${{ steps.versions.outputs.core_version }}
+          LD_LIBRARY_PATH: ${{ steps.dotnet-core.outputs.prefix }}/lib
+        run: |
+          dotnet build bindings/dotnet/src/Zlink/Zlink.csproj -c Release
+          dotnet test bindings/dotnet/tests/Zlink.Tests/Zlink.Tests.csproj -c Release
+          mkdir -p dist/dotnet
+          dotnet pack bindings/dotnet/src/Zlink/Zlink.csproj -c Release \
+            -p:PackageOutputPath="${GITHUB_WORKSPACE}/dist/dotnet" \
+            -p:ZLinkLinuxX64NativeRoot="${{ steps.dotnet-core.outputs.prefix }}/lib" \
+            -p:ZLinkCoreVersion="${{ steps.versions.outputs.core_version }}" \
+            -p:ZLinkCoreProvenancePath="${{ steps.dotnet-core.outputs.prefix }}/share/zlink/core-package-provenance.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binding-dotnet-${{ steps.versions.outputs.version }}
+          path: |
+            dist/dotnet/*.nupkg
+            dist/dotnet/*.snupkg
+          if-no-files-found: error
+
+      - name: Log in to NuGet with trusted publishing
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: zlink
+
+      - name: Publish packages to nuget.org
+        shell: bash
+        run: |
+          dotnet nuget push dist/dotnet/*.nupkg \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+          dotnet nuget push dist/dotnet/*.snupkg \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

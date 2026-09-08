@@ -1,11 +1,18 @@
 <Project>
     <PropertyGroup>
-        <Authors>ulalax</Authors>
+        <Authors>zlink</Authors>
+        <Company>zlink</Company>
         <PackageLicenseExpression Condition="'$(PackageLicenseExpression)' == ''">MPL-2.0</PackageLicenseExpression>
         <PackageProjectUrl Condition="'$(PackageProjectUrl)' == ''">https://github.com/zlink-systems/zlink</PackageProjectUrl>
-        <RepositoryUrl>https://github.com/zlink-systems/zlink</RepositoryUrl>
-        <RepositoryType>git</RepositoryType>
+        <RepositoryUrl Condition="'$(RepositoryUrl)' == ''">https://github.com/zlink-systems/zlink</RepositoryUrl>
+        <RepositoryType Condition="'$(RepositoryType)' == ''">git</RepositoryType>
         <PackageReadmeFile Condition="'$(PackageReadmeFile)' == ''">README.md</PackageReadmeFile>
+        <PublishRepositoryUrl Condition="'$(PublishRepositoryUrl)' == ''">true</PublishRepositoryUrl>
+        <EmbedUntrackedSources Condition="'$(EmbedUntrackedSources)' == ''">true</EmbedUntrackedSources>
+        <IncludeSymbols Condition="'$(IncludeSymbols)' == ''">true</IncludeSymbols>
+        <SymbolPackageFormat Condition="'$(SymbolPackageFormat)' == ''">snupkg</SymbolPackageFormat>
+        <Deterministic Condition="'$(CI)' == 'true'">true</Deterministic>
+        <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
         <ZLinkCoreSource Condition="'$(ZLinkCoreSource)' == ''">$(ZLINK_CORE_SOURCE)</ZLinkCoreSource>
         <ZLinkLinuxX64NativeRoot Condition="'$(ZLinkCoreSource)' == 'local' And '$(ZLinkLinuxX64NativeRoot)' == ''">$(ZLINK_CORE_LIB_DIR)</ZLinkLinuxX64NativeRoot>
         <ZLinkCoreVersion Condition="'$(ZLinkCoreSource)' == 'local' And '$(ZLinkCoreVersion)' == ''">$(ZLINK_CORE_VERSION)</ZLinkCoreVersion>

@@ -9,9 +9,11 @@
         <PackageId>Systems.Zlink</PackageId>
         <RootNamespace>Systems.Zlink</RootNamespace>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-        <Authors>ulalax</Authors>
         <Description>zlink .NET bindings - high-performance async messaging library</Description>
     </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+    </ItemGroup>
     <ItemGroup Condition="'$(ZLinkLinuxX64NativeRoot)' != ''">
         <None Include="$(ZLinkLinuxX64NativeRoot)\libzlink.so;$(ZLinkLinuxX64NativeRoot)\libzlink.so.0;$(ZLinkLinuxX64NativeRoot)\libzlink.so.$(ZLinkCoreVersion)">
             <Pack>true</Pack>
