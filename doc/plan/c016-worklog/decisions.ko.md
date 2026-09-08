@@ -4634,3 +4634,8 @@ worktree에서 빌드해 `~/.cache/zlink/core-pinned/0.17.3` 설치 → 7개 언
 **교훈:** 머신 B의 버전 bump는 예고 없이 오며 러너 검사가 즉시 전체를 막는다 — rebase 뒤 `VERSION`이 바뀌면
 먼저 prefix를 재고정한다(재고정 절차 §10.3).
 
+
+## D-B246 (2026-09-08 14:25, 머신 B) gate-all(ALL-2) — Linux 검증 통과, Windows 단계에서 중단(체크아웃 잔여 변경); 재실행 대신 0.17.4 최종 게이트로
+
+**결과**(`gate-all-summary.md`): 적용 68 파일 충돌 0, 공개 인터페이스 0·mirror 12/12, 전체 ctest 210/211(hotpath_gate만 dev 측정), 변경 suite 121×3 전부 통과, TSan(suppression 없이) runtime report 0·209/211(`test_shutdown_during_drain` 기존 fixture 전제, hotpath 계측 오버헤드). Windows 단계는 `D:\project\zlink`의 WIN-1 잔여 변경(이미 `f5d7cccde2`로 착지, 내용 동일 확인) 때문에 detach checkout 거부 → 측정·ASan·Windows 미실행.
+**조치**: 감독자가 `D:\project\zlink` 두 파일을 원복하고 origin/main detach로 정리, main 작업 트리도 origin/main으로 복구(staged ALL-2 patch는 `wip/0.17.3-all2`·`all-artifacts`에 보존). gate-all은 재실행하지 않고, ALL-2b + ALL-3 병합 뒤 **0.17.4 최종 게이트**(Linux 전체·TSan·ASan·hotpath·with_stream·perf/c·ws 비율·Windows 전체)로 한 번에 검증한다.
