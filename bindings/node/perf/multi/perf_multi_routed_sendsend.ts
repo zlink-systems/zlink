@@ -8,6 +8,7 @@ const {
   createMetricCollector,
   createPayload,
   createRunId,
+  decodeMetricHeader,
   HEADER_SIZE,
   currentEpochNs,
   sleepImmediate,
@@ -39,6 +40,36 @@ const MEASUREMENT_PART_COUNT = process.env.PERF_PART_COUNT === '1' ? 1 : 2;
 
 const SERVER_ROUTING_ID = zlink.RoutingId.from(Buffer.from('SERVER', 'ascii'));
 const ASYNC_PROGRESS_BATCH = 64;
+
+// Echo clients keep their sockets open until every admitted record has been
+// received. This count is observed only during teardown; it never gates sends
+// in the active window.
+class EchoReplyDrain {
+  pending: number;
+
+  constructor() {
+    this.pending = 0;
+  }
+
+  // Count before awaiting admission because receive dispatch can precede the
+  // Promise continuation even though Core has already admitted the record.
+  submitted() {
+    this.pending += 1;
+  }
+
+  admissionRejected() {
+    this.finishOne('echo admission rejection without a matching submission');
+  }
+
+  received() {
+    this.finishOne('echo reply without a matching submission');
+  }
+
+  finishOne(errorMessage) {
+    if (this.pending === 0) throw new Error(errorMessage);
+    this.pending -= 1;
+  }
+}
 
 function resolveRoutedPattern(pattern, family) {
   const base = `MULTI_${family}`;
@@ -158,8 +189,9 @@ async function runRoutedSendSendRounds({
   runId,
   activeStopNs,
   sendDrainStopNs,
+  replyDrain = null,
   submit = sendPayload,
-  drainReplies = async () => {},
+  drainReplies = async (_timeoutMs = 0) => {},
   yieldTurn = sleepImmediate,
   nowNs = currentEpochNs
 }) {
@@ -172,6 +204,7 @@ async function runRoutedSendSendRounds({
   const submitOne = (index) => {
     available[index] = false;
     pendingCount += 1;
+    replyDrain?.submitted();
     let admission;
     try {
       admission = submit(
@@ -180,6 +213,12 @@ async function runRoutedSendSendRounds({
     } catch (error) {
       available[index] = true;
       pendingCount -= 1;
+      try {
+        replyDrain?.admissionRejected();
+      } catch (drainError) {
+        failure ??= drainError;
+        return;
+      }
       failure ??= error;
       return;
     }
@@ -192,6 +231,12 @@ async function runRoutedSendSendRounds({
       (error) => {
         available[index] = true;
         pendingCount -= 1;
+        try {
+          replyDrain?.admissionRejected();
+        } catch (drainError) {
+          failure ??= drainError;
+          return;
+        }
         failure ??= error;
       }
     );
@@ -224,15 +269,24 @@ async function runRoutedSendSendRounds({
   }
 
   // The active deadline stops new records. Keep receive/retry progress alive
-  // for sends whose packets remain owned by the binding until admission.
-  while (pendingCount > 0 && nowNs() < sendDrainStopNs) {
-    await drainReplies();
+  // inside the existing teardown deadline. Once admissions have settled, the
+  // poller can wait for echoes without delaying a Promise continuation.
+  while (pendingCount > 0 || (replyDrain?.pending ?? 0) > 0) {
+    const remainingNs = BigInt(sendDrainStopNs) - BigInt(nowNs());
+    if (remainingNs <= 0n) break;
+    const waitMs = pendingCount === 0
+      ? Math.max(1, Number(remainingNs / 1_000_000n))
+      : 0;
+    await drainReplies(waitMs);
     await yieldTurn();
   }
 
   if (failure) throw failure;
-  if (pendingCount > 0) {
-    throw new Error('multi routed send admission drain timed out');
+  if (pendingCount > 0 || (replyDrain?.pending ?? 0) > 0) {
+    throw new Error(
+      'multi routed send admission or echo drain timed out '
+      + `(echoes=${replyDrain?.pending ?? 0}, admissions=${pendingCount})`
+    );
   }
 
   return { sent: seq - 1n };
@@ -301,9 +355,10 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
       activeStopNs,
       roundTrip: true
     });
+    const replyDrain = new EchoReplyDrain();
     let repliesSinceYield = 0;
-    const drainReadyReplies = async () => {
-      const readyCount = poller.wait(pollBuffer, 0);
+    const drainReadyReplies = async (timeoutMs = 0) => {
+      const readyCount = poller.wait(pollBuffer, timeoutMs);
       for (let offset = 0; offset < readyCount; offset += 1) {
         const index = pollBuffer.slot(offset);
         if (!Number.isInteger(index) || index < 0 || index >= sockets.length) {
@@ -315,7 +370,17 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
             const reply = replies[index];
             const payload = measurementPayload(reply.parts);
             if (!payload) throw new Error('invalid multipart echo reply');
-            collector.recordPayload(payload.data(), currentEpochNs());
+            const data = payload.data();
+            const header = decodeMetricHeader(data);
+            if (!header || data.length !== options.msgSize
+                || header.runId !== runId || header.phase !== 1
+                || header.msgSize !== options.msgSize) {
+              continue;
+            }
+            const receivedAtNs = currentEpochNs();
+            replyDrain.received();
+            if (receivedAtNs >= activeStopNs) continue;
+            collector.recordPayload(data, receivedAtNs);
             repliesSinceYield += 1;
             if (repliesSinceYield === ASYNC_PROGRESS_BATCH) {
               repliesSinceYield = 0;
@@ -327,8 +392,12 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
         }
       }
     };
-    const sendDrainMs = Math.max(1,
-      Number(process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS ?? 5000));
+    // C echo client (perf_multi_client_helpers.hpp): the teardown window is
+    // max(PERF_MULTI_SEND_DRAIN_TIMEOUT_MS, 3 s per active second) because
+    // small messages can fill every per-client Core queue.
+    const sendDrainMs = Math.max(
+      Math.max(1, Number(process.env.PERF_MULTI_SEND_DRAIN_TIMEOUT_MS ?? 5000)),
+      Math.max(1, Math.floor(options.duration)) * 3000);
     const sendDrainStopNs = activeStopNs + BigInt(Math.floor(sendDrainMs * 1_000_000));
 
     await runRoutedSendSendRounds({
@@ -340,10 +409,9 @@ async function runRoutedSendSendClient({ options, pattern, routerClient }) {
       runId,
       activeStopNs,
       sendDrainStopNs,
+      replyDrain,
       drainReplies: drainReadyReplies
     });
-
-    await drainReadyReplies();
 
     const result = await collector.finish();
     for (const metricLine of summarizeMetrics(
