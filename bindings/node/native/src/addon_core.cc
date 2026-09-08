@@ -479,8 +479,10 @@ bool read_stress_part (zlink_msg_t *part, stress_part_payload_t *payload)
 void run_send_close_stress_sender (void *sender,
                                    uint32_t sender_index,
                                    uint32_t iterations,
+                                   uint64_t total_attempts,
                                    std::atomic<uint32_t> *ready,
                                    std::atomic<bool> *start,
+                                   std::atomic<bool> *close_finished,
                                    send_close_stress_counts_t *counts)
 {
     ready->fetch_add (1, std::memory_order_release);
@@ -489,6 +491,21 @@ void run_send_close_stress_sender (void *sender,
 
     for (uint32_t sequence = 0; sequence < iterations; ++sequence) {
         const uint32_t part_count = (sequence & 1u) == 0 ? 1u : 3u;
+        if (part_count == 1)
+            counts->single_attempts.fetch_add (1, std::memory_order_relaxed);
+        else
+            counts->multipart_attempts.fetch_add (1, std::memory_order_relaxed);
+        const uint64_t attempt_number =
+          counts->attempts.fetch_add (1, std::memory_order_release) + 1u;
+
+        // Hold one known submit outside Core until close has sealed the
+        // public handle. This makes the post-close ESHUTDOWN edge observable
+        // without depending on scheduler timing or send throughput.
+        if (attempt_number == total_attempts) {
+            while (!close_finished->load (std::memory_order_acquire))
+                std::this_thread::yield ();
+        }
+
         zlink_msg_t parts[3];
         uint32_t initialized = 0;
         for (; initialized < part_count; ++initialized) {
@@ -499,15 +516,8 @@ void run_send_close_stress_sender (void *sender,
         if (initialized != part_count) {
             zlink_multipart_close (parts, initialized);
             counts->other_submit.fetch_add (1, std::memory_order_relaxed);
-            counts->attempts.fetch_add (1, std::memory_order_relaxed);
             continue;
         }
-
-        if (part_count == 1)
-            counts->single_attempts.fetch_add (1, std::memory_order_relaxed);
-        else
-            counts->multipart_attempts.fetch_add (1, std::memory_order_relaxed);
-        counts->attempts.fetch_add (1, std::memory_order_release);
 
         const int result = send_parts (
           sender, parts, part_count, ZLINK_SEND_FLAGS_DONTWAIT);
@@ -605,6 +615,7 @@ void run_send_close_stress_receiver (void *receiver,
 
 void run_send_close_stress_closer (void *sender,
                                    uint64_t close_after_attempts,
+                                   std::atomic<bool> *close_finished,
                                    send_close_stress_counts_t *counts)
 {
     while (counts->attempts.load (std::memory_order_acquire)
@@ -624,12 +635,12 @@ void run_send_close_stress_closer (void *sender,
         }
         if (result == ZLINK_CLOSE_SHUTDOWN) {
             counts->close_shutdown.fetch_add (1, std::memory_order_relaxed);
-            return;
+            break;
         }
         counts->close_other.fetch_add (1, std::memory_order_relaxed);
-        return;
+        break;
     }
-
+    close_finished->store (true, std::memory_order_release);
 }
 
 int publish_parts (
@@ -1841,20 +1852,22 @@ napi_value test_run_send_close_stress (napi_env env, napi_callback_info info)
     send_close_stress_counts_t counts;
     std::atomic<uint32_t> ready (0);
     std::atomic<bool> start (false);
+    std::atomic<bool> close_finished (false);
     std::atomic<bool> senders_done (false);
+    const uint64_t total_attempts =
+      static_cast<uint64_t> (thread_count) * iterations;
     std::vector<std::thread> senders;
     senders.reserve (thread_count);
     for (uint32_t index = 0; index < thread_count; ++index) {
         senders.emplace_back (
           run_send_close_stress_sender, sender, index, iterations,
-          &ready, &start, &counts);
+          total_attempts, &ready, &start, &close_finished, &counts);
     }
     std::thread receiver_thread (
       run_send_close_stress_receiver, receiver, &senders_done, &counts);
-    const uint64_t total_attempts =
-      static_cast<uint64_t> (thread_count) * iterations;
     std::thread closer_thread (
-      run_send_close_stress_closer, sender, total_attempts, &counts);
+      run_send_close_stress_closer, sender, total_attempts,
+      &close_finished, &counts);
 
     while (ready.load (std::memory_order_acquire) != thread_count)
         std::this_thread::yield ();

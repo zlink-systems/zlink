@@ -105,7 +105,8 @@ test('native thread stress mixes single-part, multipart, and close races', () =>
     counts.attempts
   );
   assert.ok(counts.submitted > 0n);
-  assert.ok(counts.rejected_einval > 0n);
+  assert.equal(counts.rejected_einval, 0n);
+  assert.ok(counts.shutdown > 0n);
   assert.ok(counts.received_records > 0n);
   assert.equal(counts.bad_records, 0n);
   assert.equal(counts.close_ok, 1n);
