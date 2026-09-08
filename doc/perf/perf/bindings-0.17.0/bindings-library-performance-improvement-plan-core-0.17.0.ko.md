@@ -1459,6 +1459,14 @@ prefix** `~/.cache/zlink/core-pinned/0.17.2/lib/libzlink.so.0.17.2`(Build ID
 > `benchmark runtime check target is missing`으로 실패한다.
 `ZLINK_CORE_SOURCE=release`와 `ZLINK_CORE_PACKAGE_PREFIX`로 이 prefix를 가리킨다 — 머신 B가
 `core/`에 계속 커밋하므로 작업 트리 build를 기준으로 삼으면 staleness 검사가 깨진다.
+
+> **2026-09-08 12:47 STREAM 전용 추가 고정 (D-BP37).** 태그 `core/v0.17.3-alpha`(커밋 `d6432ec4fa`,
+> STREAM 수신 소유권 수정 D-B218…229 포함, 버전 문자열은 0.17.2)를 worktree에서
+> `scripts/build-core.sh release --lib-only`로 빌드해 **`~/.cache/zlink/core-pinned/0.17.3-alpha`**
+> (`lib/libzlink.so.0.17.2` Build ID `a60952ff86b70b6acfc069cd25d1623f891b7f96`, SHA-256
+> `c4f4da4bb06573837d5945ccc489d6e940610a5e371885c154fd17409112fb39`)에 설치했다. 이 prefix는
+> **MULTI_STREAM cell 재측정에만** 쓰고(태그 `s173`), tcp 6 pattern의 0.17.2 판정은 유지한다. 각 언어는
+> 전 pattern을 `--reuse-build` 없이 한 번 빌드했다(태그 `a173smoke`, C 7/7 complete).
 2026-09-05/06의 수치는 아래 표에 **참고**로만 남긴다.
 
 유지하는 것은 수치가 아니라 **작업 자산**이다. 7개 언어에 적용·푸시된 개선 pass 15건의 코드,
