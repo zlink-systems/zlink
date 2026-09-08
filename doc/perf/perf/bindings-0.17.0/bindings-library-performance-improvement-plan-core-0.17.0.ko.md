@@ -1103,7 +1103,7 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 보류(15.8%) | 보류(17.5%) | 보류(20.4%) | 보류(39.9%) | 보류(44.2%) | 미측정 | 판정 `보류`(4 pass 뒤, D-B129; quiet 3-run 22:10 값은 log) — before; aggregate 27.6%(목표 60%), latency 204x(큐 깊이, 판정 제외); 처리량 Node/C 160.7/1017.4, 166.7/955.0, 169.7/832.4, 126.0/315.6, 26.8/60.7 Kmsg/s; `p1node`; Node `perf_node_multi_linux_20260905_135524_p1node.txt`; [log](log/2026-09-05-node-multi-tcp-before.ko.md) |
+| `tcp` | `MULTI_DEALER_DEALER` | 미달(33.1%) | 미달(38.0%) | 미달(42.5%) | 미달(51.5%) | 미달(50.1%) | 미측정 | **`미달(43.05%)`** — §7.2 5-run, 고정 Core **0.17.2**(`r4node`, C·Node 모두 `status: complete`); latency 3789.991x. 0.17.1 참고값 35.9%. SENDSEND 2종은 relay 정합(D-BP24 '있음') 뒤 측정. 처리량 Node·C 578.0/1,744.5, 548.3/1,444.8, 502.5/1,181.3, 334.1/649.2, 81.8/163.1 Kmsg/s; C `perf_c_multi_linux_20260908_090843_r4node.txt`, Node `perf_node_multi_linux_20260908_092340_r4node.txt` |
 | `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 보류(7.6%) | 보류(6.2%) | 보류(5.3%) | 보류(9.7%) | 보류(64.9%) | 미측정 | 판정 `보류`(4 pass 뒤, D-B129; quiet 3-run 22:10 값은 log) — before; aggregate 18.7%(목표 60%), latency 42x; 8~15k ops/s 고정; 처리량 Node/C 11.0/145.3, 10.1/163.5, 8.3/155.3, 11.9/122.9, 14.4/22.2 Kops/s; Node `..._135649_p1node.txt`; [log](log/2026-09-05-node-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
