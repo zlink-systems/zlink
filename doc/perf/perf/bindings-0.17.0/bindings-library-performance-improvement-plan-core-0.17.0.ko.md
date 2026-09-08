@@ -1550,7 +1550,7 @@ cell마다 개선 pass가 30~60분씩 붙는다. **§12를 문자 그대로 완�
 - **Go DD 64 B 14%·latency 7x** — C turn 모델 도입 뒤 첫 complete 값. 제출당 goroutine+channel 왕복이 후보.
 - **REQREP async terminal 왕복 고정 비용** — Go·Node 작은 크기 latency ~3x 공통. 비용 지도 미작성.
 - **.NET tls RR SS 65536 B echo 경로 정지** — 15 s 창에서도 4/5 실패(echo 684건 미수신, admission 완료). C는 1-run만 확인 → 다음 캠페인 재개 시 C 5-run 먼저(D-BP34).
-- **`tls`·`ws`·`wss`·STREAM 6개 언어(132 cell)** — `보류(Core 대기)`(D-BP23·D-BP28·D-BP29). Core 수정 뒤 전 언어 재측정.
+- **`tls`·`ws`·`wss` 6 pattern × 6개 언어(108 cell)** — `보류(Core 대기)`(D-BP28·D-BP29, 0.17.4 항목). STREAM 28 cell은 0.17.3(-alpha)에서 전부 측정 완료(D-BP23 해소): 통과 C++ 3/4(wss 91.3 경계)·.NET 4/4·Java 4/4·Go 4/4(ws 경계)·Rust 4/4(pass 1 뒤); 미달 Node 4/4(35~51%)·Python 4/4(19~33%).
 - **wss DD C 러너 간헐 실패** — 깨끗한 재현 1승 1패, 오염 3회 무효.
 - **.NET·C++ 미달 cell** — 지도 완료(D-BP26·D-BP31), 현재 수준 유지. 공개 API 변경은 제안하지 않는다(D-BP38). **Node·Go·Rust·Python·Java REQREP은 지도부터**(D-BP38, 진행 중).
 - **Node `npm test` native stress assertion**(`rejected_einval > 0n`) — 범위 밖, 단독 재현.
@@ -1635,7 +1635,6 @@ STREAM·tls·ws·wss 수정(D-BP23·D-BP28·D-BP29 보고서)이 끝나면 `보�
 **미충족(다음 캠페인 출발점)**: (1) Multi 상세 표의 `미달`·`보류`·`차단` — tcp 6 pattern에서 통과는
 C++ 10 + Java 3뿐이고 .NET·Node·Rust·Python·Go는 전 pattern 미달(격차의 성격은
 `BINDINGS_OPTIMIZATION_GUIDE.ko.md` §3.1: C++·.NET은 공개 API 형태, Python은 인터프리터 고정
-비용, Node·Go·Rust·Java는 초 단위 latency 교차 현상과 64 KB 왕복 비용). (2) tls·ws·wss·STREAM 132 cell
-`보류(Core 대기)`(D-BP23·D-BP28·D-BP29). (3) Go RR SS 65536 B·Java RR SS 4096 B 러너 teardown 결함.
+비용, Node·Go·Rust·Java는 초 단위 latency 교차 현상과 64 KB 왕복 비용). (2) tls·ws·wss 108 cell `보류(Core 대기)`(D-BP28·D-BP29; STREAM 28 cell은 0.17.3-alpha/0.17.3에서 측정 완료, §10.3.2). (3) Go RR SS 65536 B·Java RR SS 4096 B 러너 teardown 결함.
 (4) 평균 latency 한도(≤3~5x)는 Node·Rust·Java·Go SS/DD에서 100~2,500x로 미충족 — 처리량과 별개
 항목으로 §10.3.2 첫 이월 항목. 목록 전체는 §10.3.2.
