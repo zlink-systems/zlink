@@ -2397,3 +2397,20 @@ native send 본체는 C와 같다(440.2 vs 467.5 ns). .NET 전용 항목 합 ≈
 **(4) .NET 5-run 집계 결함.** .NET pass 1(astra/high, `log/2026-09-08-dotnet-dd-pass1.ko.md` §4·§6)이 발견했고 감독자가 확인했다 — `r1net` .NET report의 최종 `RESULT`는 **5회 median이 아니라 마지막 반복값**이다(64 B DD: final 922,800 = 5회차, median 922,359). `bindings/dotnet/perf/multi/run_comparison.py`에 `median` 호출이 없다(C는 `run_comparison.py:3515,3695`의 `statistics.median`). 재집계해도 .NET 4 cell의 판정(전부 미달, ~60%)은 바뀌지 않는다(재집계 aggregate 61.77%). **C·C++·Node는 report의 run 표와 최종값이 median으로 일치**한다. **Java·Go는 report에 run별 값이 없어 미확인**이다. 수정 브리프(`.artifacts/codex/dotnet-runs-median/brief.md`)는 준비됐고 codex 슬롯이 나면 띄운다 — 7개 러너 전부 확인(D-BP11).
 
 **(5) .NET pass 1 판정.** 비용 지도(D-BP31)의 두 지배 항목이 모두 계약에 묶였다 — builder 80.5 B/msg는 공개 인터페이스로 반환되는 operation 객체 자체(submitter는 이미 struct, closure 0개), "close를 다음 init에 합침"은 ownership release가 terminal 계약. 유일한 계약 유지 후보(기존 `zlink_multipart_close`로 scratch 정리 통합, 전환 10→9)는 5-run after가 61.45%로 개선 없음 → 기각·원복. 공개 API diff 0, 단위·contract 232·sample 7 통과. **.NET의 38%p 격차는 현재 공개 API 형태(메시지당 공개 operation 객체 + message wrapper의 P/Invoke 왕복)에 내재한다.** C++(D-BP26)와 결론은 같고 이유가 다르다. .NET tcp 4 cell은 `미달` 유지, 후속 pass 없음 — 공개 API 변경은 이 캠페인 범위 밖이다.
+
+### D-BP33 (2026-09-08) perf 직렬화 lock은 명령 수명과 같게 쥔다 — holder 추정 방식 폐기
+
+**결정:** 측정 명령은 `scripts/perf/with-perf-lock.sh [max_wait] -- <command>`로 실행한다. flock을 얻고
+lock 밖 perf 프로세스가 없고 load ≤ 5이면 명령을 `exec`하며, 명령이 끝나면(정상·오류·kill 모두) fd가
+닫혀 lock이 풀린다. `wait-for-idle-perf.sh`는 호환용으로만 남긴다.
+
+**근거:** holder 방식(lock을 백그라운드 subshell에 넘기고 "호출자의 perf 프로세스가 보이는 동안"
+쥐는 것)은 프로세스 패턴·grace·max_hold·호출자 생존이라는 네 가지 추정에 기댔고, 2026-09-08 하루에
+네 번 고쳤다(`63ec6187d9`·`68a010df5c`·`a355d6e19e`·`a5b7f4ca4a`). 그 사이 고아 holder가 큐를
+두 번(10분+, 12개 대기) 멈췄다. 사용자 지적: "저 lock 때문에 오히려 버그생기고 지체되는건 아니야?" —
+맞다. 다만 lock을 없애면 동시 출발 오염(10:03 .NET·Go 겹침, wss DD 3회분)으로 돌아가므로,
+lock 자체가 아니라 "lock을 넘기는" 구조를 버린다.
+
+**적용:** 감독자 측정 스크립트(measure.sh·measure-lang.sh)는 전환 완료. 이미 대기 중인 호출자
+10개(codex 3건 포함)는 이전 스크립트로 끝까지 가고, 이후 codex 브리프는 새 스크립트를 지시한다.
+

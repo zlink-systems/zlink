@@ -474,8 +474,9 @@ host CPU·memory·I/O 부하를 섞지 않는다.
 용도로 쓰는 순간, 그 값은 판정 입력이 된다. 병렬로 돌면 두 프로세스가 서로를 눌러 느린
 원인이 코드인지 경합인지 구분할 수 없다. 크기를 읽을 때는 직렬로 다시 잰다.
 
-측정 직전에 `scripts/perf/wait-for-idle-perf.sh`로 다른 perf process가 없는지 확인한다.
-있으면 끝날 때까지 기다렸다 시작한다.
+측정 명령은 `scripts/perf/with-perf-lock.sh -- <command>`로 실행한다 — flock을 얻고 load가
+내려간 뒤 명령을 실행하며 lock 수명이 명령 수명과 같다(D-BP33). 이전의
+`wait-for-idle-perf.sh`(lock을 백그라운드 holder에게 넘기는 방식)는 호환용으로만 남긴다.
 
 ### 7.0.1 `PERF_SINGLE_TEST_POLICY` parity gate
 
@@ -1538,7 +1539,7 @@ cell마다 개선 pass가 30~60분씩 붙는다. **§12를 문자 그대로 완�
 **범위 확정(사용자, 10:50)**: Core에서 해결돼야 하는 것은 제외한다 — STREAM 전 언어, `tls`·`ws`·`wss` 전 언어는 `보류(Core 대기)`로 일괄 기록하고 측정하지 않는다. **오늘 판정 대상은 7개 언어 × `tcp` 7 pattern(STREAM 제외 6)뿐이다.**
 
 **측정 규칙 확정**: 기본 1-run, 경계(목표 ±5%p)·outlier cell만 5-run(D-BP32). 측정은
-`scripts/perf/wait-for-idle-perf.sh`의 flock으로 직렬화(D-BP25 이후 3차 수정).
+`scripts/perf/with-perf-lock.sh`의 flock으로 직렬화(명령 수명 = lock 수명, D-BP33; 그 전 `wait-for-idle-perf.sh` holder 방식은 하루 4차 수정 끝에 대체).
 
 ## 11. 측정 기록과 결과
 

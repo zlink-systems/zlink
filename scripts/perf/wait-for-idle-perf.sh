@@ -8,6 +8,9 @@
 # 사용:
 #   scripts/perf/wait-for-idle-perf.sh && <measurement command>
 #   scripts/perf/wait-for-idle-perf.sh 600   # 최대 대기 초 (기본 1800)
+#
+# 새 측정은 scripts/perf/with-perf-lock.sh -- <command>를 쓴다 — lock 수명이 명령 수명과 같아
+# 아래 holder 추정(패턴·grace·max_hold·호출자 생존)이 필요 없다. 이 스크립트는 호환용.
 
 set -euo pipefail
 max_wait="${1:-1800}"
