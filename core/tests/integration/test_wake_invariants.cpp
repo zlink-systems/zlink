@@ -1374,7 +1374,6 @@ void test_multi_dealer_dealer_tcp_large_hwm_drain_wakes_all_pollout ()
             << " no_extra_delivery=" << no_extra_delivery
             << " extra_poll_errno=" << extra_poll_error
             << " pollers_closed=" << pollers_closed;
-    fprintf (stderr, "DIAG-MAC3 %s\n", details.str ().c_str ());
     TEST_ASSERT_TRUE_MESSAGE (fill_ready, details.str ().c_str ());
     TEST_ASSERT_TRUE_MESSAGE (waiter_armed && waiters_blocked,
                               details.str ().c_str ());
