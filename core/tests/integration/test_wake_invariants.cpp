@@ -548,14 +548,6 @@ bool completion_queue_is_empty (void *socket_, int *error_)
     const zlink_recv_result_t result = zlink_completion_recv (
       socket_, &completion, ZLINK_RECV_FLAGS_DONTWAIT);
     if (result == ZLINK_RECV_OK) {
-        printf ("DIAG-MAC1 extra completion: kind=%d id=%llu send_result=%d "
-                "terminal_errno=%d peer_rid_size=%u reply_parts=%u\n",
-                (int) completion.kind,
-                (unsigned long long) completion.completion_id,
-                (int) completion.send_result,
-                (int) completion.send_terminal_errno,
-                (unsigned) completion.peer_rid.size,
-                (unsigned) completion.reply_part_count);
         zlink_completion_close (&completion);
         if (error_)
             *error_ = EEXIST;
