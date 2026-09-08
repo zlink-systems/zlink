@@ -4660,3 +4660,4 @@ perf 측정에는 영향 없음(러너는 2-part). 러너 검증에서 이 테�
 
 **D-BP43**: DEALER request future가 1,025-part reply에서 `release_count1_completion_drain` false → `zlink_assert(released)` SIGABRT(1,024까지 정상). RR-1(sol/high, 2 h, worktree rr1 @ wip/0.17.3-all2): 공개 C API 테스트로 1,023/1,024/1,025/2,048 재현 → count-1 completion drain claim/release 계약과 1,024 상한 계약 대조 → 소유 모듈 수정 + 경계 회귀 테스트. ALL-2b·ALL-3와 함께 0.17.4 병합.
 **bump 누락**: `0761c1d4d0`이 `bindings/rust/include/zlink.h`의 `ZLINK_VERSION_PATCH`를 안 올려 Rust `build.rs`가 0.17.2 lib를 찾음 → A가 수정. Core 릴리스 산출물(`build.yml`)은 bindings/rust를 쓰지 않아 태그 재생성 불필요. 0.17.4 bump 체크리스트에 "bindings/{c,cpp,go,rust}/include/zlink.h + zlink/common.h 4언어 전부"를 명시.
+**RR-1 codex 중단(14:21)**: ST-1과 같은 외부 콘텐츠 필터로 시작 직후 종료 → AGENTS.md §2.1대로 Claude(opus) 에이전트 RR-1b가 같은 brief·worktree로 인계.
