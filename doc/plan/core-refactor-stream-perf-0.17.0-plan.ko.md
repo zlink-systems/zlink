@@ -249,6 +249,8 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 
 ### 7.5 D(spec gap) 후보 — 사용자 결정 대기
 
+**D-B270(09-08)**: STREAM 관련 대기 항목(D-S1·D-a·D-b·D-f)은 0.17.5에서 항목별 A/B 구현·측정(with_stream 6 스택·hotpath·RSS, idle 3-run) 결과로 확정한다. 계약 변경이 있는 D-a·D-b는 실험 patch로만 측정하고 착지하지 않는다. 순서 B1·B2 → D-f → D-S1 → D-a·D-b.
+
 | # | 발견 job | 바꿔야 하는 계약(스펙 절·문장) | 예상 이득 | 결정 |
 |---|---|---|---|---|
 | D-a | S-B | 08-stream §4 118-120·README part send: 앱 send를 N개/T µs 묶어 I/O 스레드에 알림 → 제출 경계 지연 관측(§4.1-3) | 핸드오프 command 수 감소 | 대기 |
