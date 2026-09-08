@@ -4449,3 +4449,22 @@ Core 대기 항목(D-BP28/29 계열)에 귀속하되, C는 같은 셀을 1-run�
 **ALL-1**(`core-rf-ALL-1-report.md`, astra, 4 h 12 min, 64 파일 +5581/−4419, 공개 API diff 0·raw header 32/32): A receive/command/completion 배타를 lifecycle turn 하나로 통합(별도 receive owner word·fallback mutex·command_owner_sync·`_completion_owner_sync` 제거, CV recursive 4→0, control attach·has_in·packet header/body까지 같은 turn). B Beast `mask.ipp` 8-byte XOR + WS encoder/scratch 기본 상한 128 KiB 통합 + 구체 io_context executor 유지 → WS/WSS 크기 비율 게이트(Q64/Q1≥0.80) 1.85/2.59 PASS; B-4 큰 payload 할당(decoder buffer 교체는 수명 위반) 부분. C 2a/2b/2d 완료 — stream_tcp **lock/msg 8.386**(목표 8.3). D 8건(pipe.cpp 4분할 body SHA 196/196 동일, ws/wss twin 병합, `_slot_sync` plain mutex, mailbox post noexcept, lb 중복, R7·R11-B). E TSan debt 5건 해소 → **TSan 전체 210/210 경고 0, suppression 0**. 검증: 관련 116×3=348/348, 신규 120/120, lost-wake 80/80, ASan(신규 leak 0; D-ALL-1 assertion 탈출 leak은 별개). 성능: hotpath DD −4.1/reqrep −5.6/PAIR +3.6/RR_tcp +2.0/STREAM −0.4 %; with_stream 294.2/265.7/35.6 kops(Phase 0 대비 +9/+9/+17 %); C multi DD +9.4/DR_SS +8.3/**RR_SS −16.1 %**(실행 간 변동 큼, 별도 확인).
 **D-ALL-1**(계약 충돌): 기존 unit이 두 번째 `disconnect_rid`에 OK를 요구하나 계약(README :909-921)은 없는 대상 = NOT_FOUND. 감독자 결정: runtime 불변, 테스트를 결정적으로(종료 완료 대기 후 NOT_FOUND / 종료 전 OK 별도 케이스). 
 **절차**: ALL-2(sol, 2 h) — main(`de730d4ac5` 이후) rebase(ALL-1 설계 채택, 트랙 1 결함 목록이 ALL-1에서 각각 닫히는지 대조표) + D-ALL-1 + 전체 ctest·TSan 재확인 → astra 차단 검증 리뷰와 게이트 병행 → 커밋 → 0.17.3 태그(A에 Windows 빌드 요청 포함). C multi RR −16 %는 게이트에서 3회로 재확인.
+
+### D-BP35 (2026-09-08) 다중 run의 대표 RESULT는 7개 러너 모두 "metric별 표본 median" 한 줄
+
+**결정:** 최종 `RESULT` 집계 규칙을 C(`bindings/c/perf/run_comparison.py:3695`)와 같이 key별 표본
+list의 `statistics.median()` 하나로 통일한다. 원시 반복값은 report의 run별 표에 남긴다.
+
+**근거(codex dotnet-runs-median, 감독자 검토 채택):** .NET Multi는 같은 key를 run마다 덮어써 마지막
+run 값을 최종 RESULT로 냈고(`multi/run_benchmarks.sh:2246-2264`), Go Single·Multi는 run 수만큼 raw
+RESULT를 중복 출력해 key-value parser가 마지막 값을 읽었다. C·.NET Single·Java·Node·Rust·Python은
+이미 median이었다. 이 결함으로 .NET 5-run 판정 4건(`r1net`)의 report RESULT는 실질 1-run 값이었다 —
+단, 감독자 집계 스크립트(`record.py`)는 report의 RESULT 줄 전부를 읽어 스스로 median을 취하므로
+계획서 §9.2.2에 기록된 비율은 영향이 없다. Go는 `--runs`와 표본 수가 다른 size(부분 실패)에는 대표
+RESULT를 만들지 않는다(complete만 대표값).
+
+**검증:** .NET tcp DD 64 B 5-run — 원시 5개 median = RESULT(예: throughput 891,724.5); Go DD 5-run —
+run 표 median = RESULT, 최종 5줄. `bash -n`·`compileall`·합성 median 검사 통과. 남은 실패: .NET perf
+test의 ws wallclock 회귀 테스트가 Auto-HWM `MsgUnit(B)=?` assertion으로 실패 — 측정은 complete이고
+median 변경과 무관(ws는 §10.3.2 Core 대기 항목, 0.18.0 이월).
+

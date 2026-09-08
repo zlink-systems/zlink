@@ -2234,13 +2234,18 @@ if [[ -s "${RESULT_DATA_FILE}" ]]; then
   print_line ""
   print_line "## Result Data"
   # C emit_result_lines iterates sorted((pattern,transport,size,metric))
-  # tuples and tags every row "current". Re-tag + re-sort the collected
-  # dotnet RESULT lines so the block is byte-identical to C multi.
+  # tuples after run_comparison.py has taken statistics.median() for each
+  # metric. Aggregate the collected dotnet samples by the same key and emit
+  # the same sorted, current-tagged median rows.
   while IFS= read -r result_line; do
     print_line "${result_line}"
   done < <(python3 - "${RESULT_DATA_FILE}" <<'PY'
-import csv, sys
-rows = {}
+import csv
+import statistics
+import sys
+from collections import defaultdict
+
+rows = defaultdict(list)
 with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
     for row in csv.reader(fh):
         if len(row) != 7 or row[0] != "RESULT":
@@ -2250,18 +2255,15 @@ with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
         )
         try:
             size_i = int(size)
+            value_f = float(value)
         except ValueError:
-            size_i = 0
-        rows[(pattern, transport, size_i, metric)] = (size, value)
+            continue
+        rows[(pattern, transport, size_i, metric)].append(value_f)
 for key in sorted(rows.keys()):
-    pattern, transport, _size_i, metric = key
-    size, value = rows[key]
-    try:
-        precision = 6 if metric.startswith("latency") else 3
-        value = f"{float(value):.{precision}f}"
-    except ValueError:
-        pass
-    print(f"RESULT,current,{pattern},{transport},{size},{metric},{value}")
+    pattern, transport, size, metric = key
+    precision = 6 if metric.startswith("latency") else 3
+    value = statistics.median(rows[key])
+    print(f"RESULT,current,{pattern},{transport},{size},{metric},{value:.{precision}f}")
 PY
 )
 fi

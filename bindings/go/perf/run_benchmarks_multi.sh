@@ -1228,6 +1228,7 @@ resolve_case_gomaxprocs() {
 }
 
 run_multi_process_case() {
+  LAST_CASE_FAIL_REASON=""
   local pattern="$1"
   local transport="$2"
   local size="$3"
@@ -1295,18 +1296,18 @@ run_multi_process_case() {
 
     client_ready_line="$(wait_for_file_prefix "${client_out}" "CLIENT_READY," "${ONE_WAY_CLIENT_READY_TIMEOUT}" || true)"
     if [[ "${client_ready_line}" != "CLIENT_READY,${size}" ]]; then
-      case_status=1
+      case_status=1; LAST_CASE_FAIL_REASON=client_ready_timeout
       kill_process_tree "${client_pid}"
       wait "${client_pid}" 2>/dev/null || true
     else
       printf 'START,%s\n' "${size}" >&"${server_control_fd}" || true
       printf 'START,%s\n' "${size}" >&"${client_control_fd}" || true
       if ! wait_for_pid "${client_pid}" "${client_timeout}"; then
-        case_status=1
+        case_status=1; LAST_CASE_FAIL_REASON=client_timeout
         kill_process_tree "${client_pid}"
         wait "${client_pid}" 2>/dev/null || true
       elif ! wait "${client_pid}"; then
-        case_status=1
+        case_status=1; LAST_CASE_FAIL_REASON=client_exit_nonzero
       fi
     fi
     exec {client_control_fd}>&- || true
@@ -1328,7 +1329,7 @@ run_multi_process_case() {
     rm -f "${client_fifo}"
     client_ready_line="$(wait_for_file_prefix "${client_out}" "CLIENT_DONE," "${client_timeout}" || true)"
     if [[ "${client_ready_line}" != "CLIENT_DONE,${size}" ]]; then
-      case_status=1
+      case_status=1; LAST_CASE_FAIL_REASON=client_done_timeout
     fi
   elif [[ "${pattern}" == "MULTI_STREAM" ]]; then
     # Shared C reference client; the Go binding has no STREAM client
@@ -1345,24 +1346,24 @@ run_multi_process_case() {
 
     client_ready_line="$(wait_for_file_prefix "${client_out}" "CLIENT_READY," "${ONE_WAY_CLIENT_READY_TIMEOUT}" || true)"
     if [[ "${client_ready_line}" != "CLIENT_READY,${size}" ]]; then
-      case_status=1
+      case_status=1; LAST_CASE_FAIL_REASON=client_ready_timeout
       kill_process_tree "${client_pid}"
       wait "${client_pid}" 2>/dev/null || true
     else
       printf 'START,%s\n' "${size}" >&"${server_control_fd}" || true
       server_start_ready_line="$(wait_for_file_prefix "${srv_out}" "SERVER_START_READY," "${ONE_WAY_CLIENT_READY_TIMEOUT}" || true)"
       if [[ "${server_start_ready_line}" != "SERVER_START_READY,${size}" ]]; then
-        case_status=1
+        case_status=1; LAST_CASE_FAIL_REASON=server_start_ready_timeout
         kill_process_tree "${client_pid}"
         wait "${client_pid}" 2>/dev/null || true
       else
         printf 'START,%s\n' "${size}" >&"${client_control_fd}" || true
         if ! wait_for_pid "${client_pid}" "${client_timeout}"; then
-          case_status=1
+          case_status=1; LAST_CASE_FAIL_REASON=client_timeout
           kill_process_tree "${client_pid}"
           wait "${client_pid}" 2>/dev/null || true
         elif ! wait "${client_pid}"; then
-          case_status=1
+          case_status=1; LAST_CASE_FAIL_REASON=client_exit_nonzero
         fi
       fi
     fi
@@ -1379,16 +1380,16 @@ run_multi_process_case() {
       > "${client_out}" 2> "${client_err}" &
     client_pid=$!
     if ! wait_for_pid "${client_pid}" "${client_timeout}"; then
-      case_status=1
+      case_status=1; LAST_CASE_FAIL_REASON=client_timeout
       kill_process_tree "${client_pid}"
       wait "${client_pid}" 2>/dev/null || true
     elif ! wait "${client_pid}"; then
-      case_status=1
+      case_status=1; LAST_CASE_FAIL_REASON=client_exit_nonzero
     fi
   fi
 
   if ! shutdown_server "${server_pid}" "${server_control_fd}"; then
-    case_status=1
+    case_status=1; LAST_CASE_FAIL_REASON=server_shutdown_failed
   fi
   if (( reqrep_client )); then
     # Completion targets outlive the server's last reply. CLIENT_DONE ends
@@ -1396,11 +1397,11 @@ run_multi_process_case() {
     { printf 'STOP\n' >&"${client_control_fd}"; } 2>/dev/null || true
     exec {client_control_fd}>&- || true
     if ! wait_for_pid "${client_pid}" "${SERVER_SHUTDOWN_TIMEOUT_SECONDS}"; then
-      case_status=1
+      case_status=1; LAST_CASE_FAIL_REASON=client_stop_timeout
       kill_process_tree "${client_pid}"
       wait "${client_pid}" 2>/dev/null || true
     elif ! wait "${client_pid}"; then
-      case_status=1
+      case_status=1; LAST_CASE_FAIL_REASON=client_exit_nonzero
     fi
   fi
   {
@@ -1422,7 +1423,7 @@ run_multi_process_case() {
 
 render_tables() {
   python3 "${PERF_REPORT_PY}" render-log-tables --suite multi --tmp-dir "$TMP_DIR" \
-    --auto-hwm-raw "${RAW_RESULTS_FILE}"
+    --auto-hwm-raw "${RAW_RESULTS_FILE}" --runs "${RUNS}"
 }
 
 {
@@ -1581,10 +1582,14 @@ for pattern_index in "${!PATTERNS[@]}"; do
             progress_case_row "${pattern}" "${size}" "${case_log}"
             continue
           fi
-          echo "FAIL,current,${pattern},${transport},${size},exit_nonzero" >> "${RAW_RESULTS_FILE}"
+          echo "FAIL,current,${pattern},${transport},${size},exit_nonzero:${LAST_CASE_FAIL_REASON:-unknown}" >> "${RAW_RESULTS_FILE}"
           fail=$((fail + 1))
           transport_failures=$((transport_failures + 1))
-          FAILURES+=("${pattern} current ${transport} ${size}B: exit_nonzero")
+          FAILURES+=("${pattern} current ${transport} ${size}B: exit_nonzero:${LAST_CASE_FAIL_REASON:-unknown}")
+		  if [[ "${PERF_GO_DUMP_FAILURE_LOG:-0}" == "1" ]]; then
+		    echo "--- failed case log: ${pattern} ${transport} ${size}B run ${run} ---" >&2
+		    cat "${case_log}" >&2
+		  fi
         fi
         progress_table_header
         progress_case_row "${pattern}" "${size}" "${case_log}"
@@ -1646,7 +1651,8 @@ fi
   if [[ "${result_lines}" -gt 0 && -s "${RAW_RESULTS_FILE}" ]]; then
     echo
     echo "## Result Data"
-    python3 "${PERF_REPORT_PY}" sort-result-data "${RAW_RESULTS_FILE}"
+    python3 "${PERF_REPORT_PY}" median-result-data "${RAW_RESULTS_FILE}" \
+      --suite multi --runs "${RUNS}"
   fi
   echo
   echo "## Completion"

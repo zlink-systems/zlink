@@ -119,6 +119,7 @@ credit 회복 시 `ZLINK_COMPLETION_WRITABLE`, callback 없음, pull 방식 comp
 - C++의 "즉시 admission SEND는 completion bundle을 만들지 않는다"(§2.1)는 Java·Node에 이미 있다(§3). .NET·Go·Rust·Python에 같은 경로가 있는지 비용 지도로 확인할 것.
 - .NET의 reply closure→struct(−352 B/op)는 closure를 쓰는 Node·Python reply 경로에 후보.
 - 러너: relay 수신-송신 결합과 client echo drain은 **7개 전부**에 필요했다(D-BP24). Java·Go만 처음부터 C 모델이었다.
+- 러너 집계: 다중 run의 대표 RESULT는 metric별 median 한 줄(D-BP35). .NET Multi는 마지막 run 값, Go는 중복 raw를 내고 있었다 — 새 언어 러너를 볼 때 "5-run인데 RESULT가 5줄인가/마지막 값인가"를 먼저 확인할 것.
 - **초 단위 latency 이상은 언어 하나의 문제가 아니다** (0.17.2 tcp 1-run, 같은 셀의 다른 크기는 정상): Node DD 64~4096 B(1.2 s), Node RR SS 256·1024·4096 B(C 대비 500~1,600x), Rust DR SS 4096 B만(2,226x, 64~1024 B는 0.6~1.4x), Java SS 일부. C·C++·.NET에는 없다. 크기 하나만 튀고 처리량은 정상이므로 처리량 격차와 분리해 다룬다 — client 수신 cadence 조사(astra)가 Java에서 "admission pending + poll(0)에 수신 없음 → admission 신호만 대기"를 찾았고 Node는 미설명. Rust도 같은 client 대기 구조인지 먼저 볼 것.
 
 **언어별 격차의 성격이 다르다** — C++는 퍼진 비용(개별 후보 무의미), .NET은 두 항목이 지배하나 공개 API에 묶임, Node·Go는 latency 이상이 throughput과 별개로 있음. 비용 지도 없이 후보를 고르면 pass 2가 오히려 나빠진 C++ 사례(D-BP21)를 반복한다. **pass 전에 지도부터.**

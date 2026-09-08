@@ -651,7 +651,8 @@ resolve_case_gomaxprocs() {
 }
 
 render_tables() {
-  python3 "${PERF_REPORT_PY}" render-log-tables --suite single --tmp-dir "$TMP_DIR"
+  python3 "${PERF_REPORT_PY}" render-log-tables --suite single --tmp-dir "$TMP_DIR" \
+    --runs "${RUNS}"
 }
 
 {
@@ -792,7 +793,8 @@ fi
   if [[ "${result_lines}" -gt 0 && -s "${RAW_RESULTS_FILE}" ]]; then
     echo
     echo "## Result Data"
-    grep -E '^RESULT,' "${RAW_RESULTS_FILE}" || true
+    python3 "${PERF_REPORT_PY}" median-result-data "${RAW_RESULTS_FILE}" \
+      --suite single --runs "${RUNS}"
   fi
   echo
   echo "## Completion"

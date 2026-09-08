@@ -3,6 +3,7 @@ import csv
 import math
 import os
 import platform
+import re
 import subprocess
 import sys
 from collections import defaultdict
@@ -205,6 +206,36 @@ def sort_result_data_lines(lines):
         if line.startswith("RESULT,")
     ]
     return sorted(selected, key=sort_key)
+
+
+def median_result_data_lines(lines, suite, runs):
+    rows = defaultdict(lambda: defaultdict(list))
+    for raw in lines:
+        parts = raw.strip().split(",")
+        if len(parts) != 7 or parts[0] != "RESULT" or parts[1] != "current":
+            continue
+        pattern, transport, size, metric, value = parts[2:7]
+        if metric not in REQUIRED_METRICS:
+            continue
+        try:
+            size_value = int(size)
+            metric_value = float(value)
+        except ValueError:
+            continue
+        if not math.isfinite(metric_value):
+            continue
+        rows[(pattern, transport, size_value)][metric].append(metric_value)
+
+    metric_order = REQUIRED_METRICS if suite == "single" else RESULT_METRICS
+    for pattern, transport, size in sorted(rows):
+        samples = rows[(pattern, transport, size)]
+        if any(len(samples.get(metric, [])) != runs for metric in REQUIRED_METRICS):
+            continue
+        for metric in metric_order:
+            yield (
+                f"RESULT,current,{pattern},{transport},{size},{metric},"
+                f"{_fmt_metric(metric, _median(samples[metric]))}"
+            )
 
 
 def _read_metric_case_files(metrics_path, cases_path):
@@ -713,8 +744,12 @@ def render_skips(args):
 
 def _read_result_rows_from_logs(tmp_dir):
     rows = defaultdict(lambda: defaultdict(list))
-    for entry in os.listdir(tmp_dir):
-        if not entry.endswith(".log"):
+    natural_key = lambda value: [
+        int(part) if part.isdigit() else part
+        for part in re.split(r"(\d+)", value)
+    ]
+    for entry in sorted(os.listdir(tmp_dir), key=natural_key):
+        if entry == "result_data.log" or not entry.endswith(".log"):
             continue
         path = os.path.join(tmp_dir, entry)
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -784,6 +819,7 @@ def status_row(args):
 
 def render_log_tables(args):
     rows = _read_result_rows_from_logs(args.tmp_dir)
+    runs = int(args.runs)
     auto_hwm_rows = load_auto_hwm_detail_rows(args.auto_hwm_raw)
     by_pattern = defaultdict(list)
     for key, metric_values in rows.items():
@@ -796,7 +832,7 @@ def render_log_tables(args):
         if len(values) != len(REQUIRED_METRICS):
             continue
         pattern, transport, size = key
-        by_pattern[pattern].append((transport, size, values))
+        by_pattern[pattern].append((transport, size, metric_values, values))
 
     table_headers = SINGLE_TABLE_HEADER_LINES if args.suite == "single" else MULTI_TABLE_HEADER_LINES
     case_row = _single_case_row if args.suite == "single" else _multi_case_row
@@ -808,17 +844,37 @@ def render_log_tables(args):
         lines.append(f"## PATTERN: {pattern} ({direction(pattern)})")
         lines.append(f"  > Benchmarking current for {pattern}...")
         transports = defaultdict(list)
-        for transport, size, values in by_pattern[pattern]:
-            transports[transport].append((size, values))
+        for transport, size, metric_values, values in by_pattern[pattern]:
+            transports[transport].append((size, metric_values, values))
         for transport in sorted(transports):
             lines.append(f"    Testing {transport}:")
+            if runs > 1:
+                for run_index in range(runs):
+                    lines.append(f"      run {run_index + 1}/{runs}:")
+                    for header in table_headers:
+                        lines.append(f"        {header}")
+                    for size, metric_values, _median_values in sorted(transports[transport]):
+                        run_values = {
+                            metric: (
+                                metric_values[metric][run_index]
+                                if run_index < len(metric_values.get(metric, []))
+                                else math.nan
+                            )
+                            for metric in REQUIRED_METRICS
+                        }
+                        if any(math.isnan(value) for value in run_values.values()):
+                            continue
+                        lines.append(f"  {case_row(pattern, size, run_values)}")
+                lines.append("      median:")
+            indent = "        " if runs > 1 else "      "
             for header in table_headers:
-                lines.append(f"      {header}")
+                lines.append(f"{indent}{header}")
             sizes = []
-            for size, values in sorted(transports[transport]):
+            for size, _metric_values, values in sorted(transports[transport]):
                 if args.suite == "multi":
                     lines.append(f"    Testing {transport} | {size}B:")
-                lines.append(case_row(pattern, size, values))
+                row = case_row(pattern, size, values)
+                lines.append(f"  {row}" if runs > 1 else row)
                 sizes.append(size)
             lines.append(f"    Testing {transport}: Done")
             if args.suite == "multi":
@@ -869,6 +925,11 @@ def main(argv=None):
     sort_data = subparsers.add_parser("sort-result-data")
     sort_data.add_argument("path")
 
+    median_data = subparsers.add_parser("median-result-data")
+    median_data.add_argument("path")
+    median_data.add_argument("--suite", choices=("single", "multi"), required=True)
+    median_data.add_argument("--runs", type=int, required=True)
+
     skips = subparsers.add_parser("render-skips")
     skips.add_argument("--cases", required=True)
     skips.add_argument("--output", default="")
@@ -888,6 +949,7 @@ def main(argv=None):
     log_tables.add_argument("--suite", choices=("single", "multi"), required=True)
     log_tables.add_argument("--tmp-dir", required=True)
     log_tables.add_argument("--auto-hwm-raw", default="")
+    log_tables.add_argument("--runs", type=int, required=True)
 
     render_single = subparsers.add_parser("render-single")
     add_common_report_args(render_single)
@@ -921,6 +983,11 @@ def main(argv=None):
     if args.command == "sort-result-data":
         with open(args.path, "r", encoding="utf-8", errors="replace") as fh:
             for line in sort_result_data_lines(fh):
+                print(line)
+        return
+    if args.command == "median-result-data":
+        with open(args.path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in median_result_data_lines(fh, args.suite, args.runs):
                 print(line)
         return
     if args.command == "render-skips":
