@@ -22,15 +22,39 @@ async function main() {
     if (event?.event === zlink.MonitorEventType.ConnectionReady) routingId = event.routingId;
     else await new Promise(resolve => setImmediate(resolve));
   }
-  monitor.close();
-  const payload = Buffer.alloc(65536);
+  const readyStatus = monitor.status();
+  assert.equal(readyStatus.autoHwmAppliedSndHwmBytes, 65536n);
+  const payload = Buffer.alloc(Number(
+    readyStatus.autoHwmAppliedSndHwmBytes - readyStatus.minimumCoreMessageChargeBytes
+  ));
   const failures = [];
   let completed = 0;
   const sends = Array.from({ length: 256 }, () => socket.submit(routingId, payload)
     .then(() => { completed++; return 'submitted'; }, error => { failures.push(error); return error; }));
-  await new Promise(resolve => setTimeout(resolve, 50));
+  let admissionStatus;
+  let saturatedAt;
+  let saturatedCompleted;
+  while (completed < sends.length) {
+    admissionStatus = monitor.status();
+    if (admissionStatus.sndPendingBytes >= admissionStatus.autoHwmAppliedSndHwmBytes) {
+      // A first full snapshot can still drain into the kernel socket buffer.
+      if (saturatedCompleted !== completed) {
+        saturatedAt = process.hrtime.bigint();
+        saturatedCompleted = completed;
+      } else if (process.hrtime.bigint() - saturatedAt >= 25_000_000n) {
+        break;
+      }
+    } else {
+      saturatedAt = undefined;
+      saturatedCompleted = undefined;
+    }
+    await new Promise(resolve => setImmediate(resolve));
+  }
   assert.ok(completed < sends.length, 'the non-reading peer must leave native admission pending');
+  assert.ok(admissionStatus.sndPendingBytes >= admissionStatus.autoHwmAppliedSndHwmBytes,
+    'the Core send queue must leave no byte-HWM budget for the heartbeat');
   assert.deepEqual(failures, []);
+  monitor.close();
   const stream = new framework.ZLinkManagedStream(socket, routingId);
   let heartbeatCompleted = false;
   const heartbeat = stream.writeControl('$zlink.heartbeat.ping').then(
