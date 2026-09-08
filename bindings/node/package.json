@@ -10,6 +10,13 @@
     "directory": "bindings/node"
   },
   "homepage": "https://zlink.systems/",
+  "bugs": {
+    "url": "https://github.com/zlink-systems/zlink/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "engines": {
     "node": ">=22"
   },
@@ -25,14 +32,17 @@
   },
   "files": [
     "dist/**/*",
-    "prebuilds/**/*",
-    "provenance/**/*",
+    "prebuilds/**/zlink.node",
+    "prebuilds/linux-*/libzlink.so.*.*.*",
+    "prebuilds/darwin-*/*.dylib",
+    "prebuilds/win32-*/*.dll",
+    "provenance/core-package-provenance.json",
     "native/src/**/*",
-    "scripts/verify_prebuilds.js",
     "scripts/install.js",
-    "scripts/rebuild_native.sh",
+    "scripts/resolve_core.js",
     "binding.gyp",
     "README.md",
+    "LICENSE",
     "THIRD_PARTY_NOTICES.md"
   ],
   "gypfile": true,
