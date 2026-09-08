@@ -42,8 +42,10 @@ export interface NativeReceivedEnvelope {
   replyToken?: bigint | null;
 }
 
+type NativeReceivedBufferParts = readonly Buffer[];
+
 /** Internal receive transfer: either an envelope or an unrouted native frame. */
-export type NativeReceivedRaw = NativeReceivedEnvelope | object;
+export type NativeReceivedRaw = NativeReceivedEnvelope | NativeReceivedBufferParts | object;
 
 export interface NativeTopicMessageRaw {
   topic: string;
@@ -59,6 +61,12 @@ type NativeTopicMessageEnvelope = NativeTopicMessageRaw | NativeTopicMessageSing
 function isNativeTopicMessageSinglePart(
   raw: NativeTopicMessageEnvelope
 ): raw is NativeTopicMessageSinglePart {
+  return Array.isArray(raw);
+}
+
+function isNativeReceivedBufferParts(
+  raw: NativeReceivedRaw
+): raw is NativeReceivedBufferParts {
   return Array.isArray(raw);
 }
 
@@ -127,6 +135,13 @@ function materializeParts(parts: MessageSnapshot[]): Message[] {
 }
 
 function materializeReceivedParts(raw: NativeReceivedRaw): Message[] {
+  if (isNativeReceivedBufferParts(raw)) {
+    const messages = new Array<Message>(raw.length);
+    for (let i = 0; i < raw.length; i += 1) {
+      messages[i] = messageFromOwnedBuffer(raw[i]);
+    }
+    return messages;
+  }
   const envelope = envelopeOf(raw);
   if (envelope === null) {
     if (Buffer.isBuffer(raw)) {

@@ -662,12 +662,27 @@ napi_value create_recv_message_value (napi_env env,
                                       size_t part_count,
                                       napi_value routing_id_storage = NULL)
 {
-    napi_value obj;
-    napi_create_object (env, &obj);
-
     // Hot path: this is an internal raw shape consumed by the TypeScript
     // materializer, not a public Received object. Do not add unused per-
     // message fields here; each property set is paid on every recv().
+    if (part_count > 1 && routing_id.size == 0) {
+        // Plain multipart receives need only their owned payload Buffers.
+        // Returning the array directly avoids an envelope and one snapshot
+        // object per part while preserving the public Message[] shape.
+        napi_value parts_array;
+        napi_create_array_with_length (env, part_count, &parts_array);
+        for (size_t i = 0; i < part_count; ++i) {
+            napi_value data = create_received_message_buffer (env, &parts[i]);
+            if (!data)
+                return NULL;
+            napi_set_element (env, parts_array, static_cast<uint32_t> (i), data);
+        }
+        return parts_array;
+    }
+
+    napi_value obj;
+    napi_create_object (env, &obj);
+
     if (part_count == 1) {
         // A one-part receive needs neither a parts array nor a part snapshot.
         // Allocate the payload as a JS-owned Buffer immediately. This keeps
