@@ -78,7 +78,7 @@ jobs:
       - name: Install npm with Trusted Publishing support
         run: npm install -g npm@latest
 
-      - name: Prepare the private HTTP client development package
+      - name: Materialize the local-package pin of @zlink-systems/http-client used by the workspace manifest
         shell: bash
         run: |
           mkdir -p .artifacts/wsl/npm
@@ -98,6 +98,7 @@ jobs:
             framework-codec-protobuf \
             framework-codec-msgpack \
             framework-locations-redis \
+            http-client \
             nestjs; do
             npm pack "./packages/${package_dir}" \
               --pack-destination ../../../dist/framework-node
@@ -114,6 +115,7 @@ jobs:
             framework-codec-protobuf \
             framework-codec-msgpack \
             framework-locations-redis \
+            http-client \
             nestjs; do
             npm publish "./packages/${package_dir}" --provenance --access public
           done
