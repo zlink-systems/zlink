@@ -4618,3 +4618,19 @@ C 대비 55.06→49.77%로 **하락** → 원복. (2) operation 상태 객체 �
 
 **리뷰**(`review-all2.md`, astra): 단일 lifecycle turn 설계는 트랙 1 반례 7건을 모두 닫음(재현 순서 대조). **B-ALL2-1**: C-2b가 socket 쪽 `_out_sync`를 제거하면서 PAIR complete-record의 max 사전 검증(`pipe_write.cpp:832/866`)과 part 쓰기(`:871-875`, 성공 단정) 사이에 I/O thread의 peer max release store(`session_base.cpp:150`, `set_max_message_bytes` `:1102`)가 끼어들 수 있음 → `zlink_assert(written)`. 부모는 둘 다 `_out_sync` 아래였음. W-ALL2-1 무제한 command batch(turn 기아·종료 지연), W-ALL2-2 inproc endpoint 종료의 교차 turn 대기(교착), W-ALL2-3 ws batch/scratch 128 KiB 고정 → 연결쌍당 +288 KiB, W-ALL2-4 ws 비율 게이트 비교 조건, W-ALL2-5/6 검증 범위·원자 연산 수 판정 한계, S 스펙 초안·주석. D-ALL-1·WIN-1 공존 해소.
 **결정**: ALL-2b(sol/high, 2.5 h, worktree all @ wip/0.17.3-all2)로 B-ALL2-1 + W 전부 수정. ALL-3(all3, 진행 중)와 ALL-2b patch를 합쳐 0.17.4 최종 게이트(Linux+Windows) → 착지 → bump 0.17.4 → 릴리스. gate-all 결과(진행 중)는 ALL-2 성능 근거로만.
+
+### D-BP42 (2026-09-08 14:05) 머신 B의 0.17.3 bump(`0761c1d4d0`)로 모든 러너가 정지 — `core/v0.17.3` prefix로 재고정, 큐 일시 정지
+
+**사건:** 14:01 rebase가 `chore(version): bump libzlink and bindings to 0.17.3`을 작업 트리에 가져오자 러너의
+release prefix 검사가 "Core release prefix version 0.17.2 does not match 0.17.3"으로 모든 측정을 즉시 거부했다
+(14:02~14:04 티켓 13장 rc=1 — 코드 문제 아님). 같은 시각 `doc/perf/perf/`가 작업 트리에서 통째로 사라져 감독자
+커밋 `55078867b2`가 삭제를 기록했고 `fe5149fa1f`로 즉시 복구했다(내용 손실 없음, 삭제 주체 미확인).
+
+**조치:** runner 정지 → 태그 `core/v0.17.3`(`91541a005e`, alpha + LIN-1 테스트 수정 + bump; Core 코드는 alpha와 같음)을
+worktree에서 빌드해 `~/.cache/zlink/core-pinned/0.17.3` 설치 → 7개 언어 전 pattern 재빌드(prio 0) → pending
+티켓의 prefix를 0.17.3으로 고쳐 runner 재개. alpha 값(STREAM·Single·비용 지도 before/after)은 Core 코드가 같으므로
+유효하며 행에는 "0.17.3-alpha"로 남긴다. 이후 새 측정은 `0.17.3` prefix. Claude sub-agent 2건에는 측정 중단을 통지.
+
+**교훈:** 머신 B의 버전 bump는 예고 없이 오며 러너 검사가 즉시 전체를 막는다 — rebase 뒤 `VERSION`이 바뀌면
+먼저 prefix를 재고정한다(재고정 절차 §10.3).
+
