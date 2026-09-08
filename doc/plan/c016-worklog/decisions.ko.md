@@ -2133,7 +2133,7 @@ C++ `tls` 4096 B SENDSEND에서 client가 exit 1로 죽는 것을 진단한 결�
 | Rust | `replies.push(async move {...})`(`perf_multi_dealer_router_server.rs:129`) | **있음** |
 | Python | `asyncio.create_task` per 메시지, 주석에 "neither caps pending replies nor gates Core"(`perf_multi_dealer_router_server.py:86-98`) | **있음** |
 | Node | `pendingTasks = new Set()`에 수신마다 task 추가, 끝에 `Promise.all`(`perf_multi_routed_sendsend.ts:307~`) | **있음**(2026-09-08 08:58 확인) |
-| Go | 확인 중 — server echo 경로 `perf_multi_router_router.go:254` `startMultiRouterRouterEchoServer` | 확인 필요 |
+| Go | DR·RR 모두 공유 echo server `startMultiRouterRouterEchoServer`(`perf_multi_router_router.go:254`)가 recv loop 안에서 `SubmitMeasurementSend`로 동기 제출, goroutine 없음 | 없음(2026-09-08 09:00 확인) — Java와 같음 |
 
 tcp에서만 재서 지금까지 드러나지 않았을 뿐, 각 언어의 `tls`·`ws`·`wss` 차례에 같은 형태로 터진다.
 
@@ -2335,3 +2335,10 @@ C의 같은 항목 `Core poller wait·reply 진행`은 **4,593.91 Ir(C 잔여의
 **교훈 두 가지.** (1) **중앙값으로 "정상"을 판단하지 말 것** — 간헐 현상은 개별 run을 봐야 보인다. 앞으로 "C 기준 이상" 판별은 개별 run 분포로 한다. (2) 조사 job이 `diag2` 실행이 외부 측정과 1초 차이로 겹친 것을 PID 시각으로 스스로 잡아 판정에서 뺐다 — idle 가드 lock(`63ec6187d9`)이 그 뒤에 들어갔다.
 
 **러너 수정 없음.** C++ 계측은 전부 제거·원복됐고(`bindings/cpp` diff 0), 요청한 검증 4항목은 "고칠 결함이 없다"로 미완료가 맞다.
+
+## D-BP30 (2026-09-08 09:05, 머신 A) **Go REQREP 재개 완료** — D-BP16의 상한 제거, 0.17.2에서 첫 유효 수치 67.72%
+0.17.2가 동시 multipart를 지원하므로(D-B216) Go REQREP 러너의 상한(`maxOutstanding`, `PERF_*_REQREP_MAX_OUTSTANDING`)을 제거해 C 기준 turn 구조로 맞췄다(`add837942b`, sol/high, `log/2026-09-08-go-reqrep-resume.ko.md`). 검증 6항목 통과 — go test·vet, Single·Multi REQREP smoke, Multi REQREP 전 크기 runs 5(50/50), DD 회귀. **0.17.1에서 두 번째 동시 multipart request가 single `EAGAIN`·multi `EINVAL`로 실패하던 것이 0.17.2에서 정상 동작한다.** D-BP16은 완료다.
+
+첫 paired 판정: `tcp` `MULTI_DEALER_ROUTER_REQREP` **67.72%**(5-run), latency 6.427x. 0.17.1 참고값 19.0%는 깨진 러너의 값이었으므로 비교 대상이 아니다. **작은 크기에서 latency가 3.03~3.05x로 일정한 것이 Go 고유 서명**이다(C++는 1.0x 안팎). throughput 격차와 별개로 Go binding의 REQREP 경로에 고정 지연이 있다는 뜻이며, 비용 지도 대상이다.
+
+Go relay는 D-BP24 대상이 아니다 — DR·RR 모두 공유 echo server가 recv loop 안에서 동기 제출한다(Java와 같음). 표를 갱신했다.
