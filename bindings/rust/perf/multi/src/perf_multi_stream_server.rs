@@ -6,7 +6,10 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
-use zlink::{Message, RecvFlags, RecvResult, StreamPacket, StreamRecvMode, SubmitResult};
+use zlink::{
+    Message, POLLCOMPLETION, POLLIN, PollEvent, Poller, RecvFlags, RecvResult, StreamPacket,
+    StreamRecvMode, SubmitResult,
+};
 
 fn build_packet_frame(header: &[u8], body: &[u8]) -> Message {
     let mut packet = Message::with_size(6 + header.len() + body.len()).expect("packet");
@@ -90,6 +93,11 @@ fn main() {
         dispatcher.unpark();
     });
     let mut tasks = common::ConcurrentTasks::new(0);
+    let poller = Poller::new().expect("poller");
+    poller
+        .add_socket(&stream, POLLIN | POLLCOMPLETION, 0)
+        .expect("poller add");
+    let mut events = [PollEvent::default()];
     let mut drain_deadline = None;
     let mut packet = StreamPacket::empty();
     loop {
@@ -139,10 +147,13 @@ fn main() {
             }
             if !received_packet && !completed_send {
                 let wait = deadline.saturating_duration_since(Instant::now());
-                tasks.wait_for_wake(wait);
+                let wait_ms = wait.as_millis().clamp(1, i64::MAX as u128) as i64;
+                poller
+                    .wait(&mut events, wait_ms)
+                    .expect("stream drain poll");
             }
         } else if !received_packet && !completed_send {
-            tasks.wait_for_wake(Duration::from_millis(1));
+            poller.wait(&mut events, 1).expect("stream poll");
         }
     }
 }
