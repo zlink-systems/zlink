@@ -282,6 +282,12 @@ class socket_base_t : public own_t,
     //  Returns the mailbox associated with this socket.
     i_mailbox *get_mailbox () const;
 
+    //  Publish context termination without doing any teardown work. The
+    //  blocking send and receive loops consult this state every turn, so it
+    //  must land before the control path spends time on monitor teardown.
+    //  This function can be called from a different thread!
+    void publish_ctx_terminated ();
+
     //  Interrupt blocking call if the socket is stuck in one.
     //  This function can be called from a different thread!
     void stop ();

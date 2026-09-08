@@ -699,6 +699,14 @@ int zlink::socket_base_t::recv (msg_t *msg_, int flags_,
     const uint64_t end = timeout < 0 ? 0 : (_clock.now_ms () + timeout);
     bool block = command_runtime ().should_block_on_recv ();
     while (true) {
+        //  stop() publishes termination before it queues the administrative
+        //  command. A receive already inside this loop must observe the same
+        //  ETERM that the entry check gives a receive starting one
+        //  instruction later, exactly as the blocking send loop does.
+        if (unlikely (_ctx_terminated)) {
+            errno = ETERM;
+            return -1;
+        }
         const int progress_rc = async_mailbox_owns_commands ()
                                   ? wait_receive_progress (
                                       observed_epoch, block ? timeout : 0)
@@ -820,6 +828,14 @@ int zlink::socket_base_t::recv_common (
     const uint64_t end = timeout < 0 ? 0 : (_clock.now_ms () + timeout);
     bool block = command_runtime ().should_block_on_recv ();
     while (true) {
+        //  stop() publishes termination before it queues the administrative
+        //  command. A receive already inside this loop must observe the same
+        //  ETERM that the entry check gives a receive starting one
+        //  instruction later, exactly as the blocking send loop does.
+        if (unlikely (_ctx_terminated)) {
+            errno = ETERM;
+            return -1;
+        }
         const int progress_rc = async_mailbox_owns_commands ()
                                   ? wait_receive_progress (
                                       observed_epoch, block ? timeout : 0)
@@ -962,6 +978,14 @@ int zlink::socket_base_t::recv_routed (msg_t *msg_,
     const uint64_t end = timeout < 0 ? 0 : (_clock.now_ms () + timeout);
     bool block = command_runtime ().should_block_on_recv ();
     while (true) {
+        //  stop() publishes termination before it queues the administrative
+        //  command. A receive already inside this loop must observe the same
+        //  ETERM that the entry check gives a receive starting one
+        //  instruction later, exactly as the blocking send loop does.
+        if (unlikely (_ctx_terminated)) {
+            errno = ETERM;
+            return -1;
+        }
         const int progress_rc = async_mailbox_owns_commands ()
                                   ? wait_receive_progress (
                                       observed_epoch, block ? timeout : 0)
