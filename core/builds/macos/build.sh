@@ -153,30 +153,22 @@ if [ "$RUN_TESTS" = "ON" ]; then
     # Build test executables
     make -j$(sysctl -n hw.ncpu)
 
-    # Run tests with ctest
-    # Note: Some tests may be skipped based on platform capabilities
-    # TIPC tests are Linux-only and will fail on macOS
+    # Run tests with ctest. Tests labelled "serial" are run one at a time
+    # (they share ports and timing budgets); the rest run in parallel. Any
+    # failure fails the build, like the Linux and Windows CI jobs.
     CTEST_JOBS="$(sysctl -n hw.ncpu)"
-    CTEST_ARGS=(--output-on-failure "-j${CTEST_JOBS}")
+    CTEST_COMMON=(--output-on-failure)
     if [ -n "${ZLINK_CTEST_EXCLUDE_REGEX:-}" ]; then
         echo "Excluding tests matching regex: ${ZLINK_CTEST_EXCLUDE_REGEX}"
-        CTEST_ARGS+=(--exclude-regex "${ZLINK_CTEST_EXCLUDE_REGEX}")
+        CTEST_COMMON+=(--exclude-regex "${ZLINK_CTEST_EXCLUDE_REGEX}")
     fi
-
-    ctest "${CTEST_ARGS[@]}" || {
-        echo ""
-        echo "Some tests failed. Checking results..."
-        # Allow some tests to fail (TIPC tests are Linux-only, some platform-specific tests may fail)
-        FAILED_LOG="Testing/Temporary/LastTestsFailed.log"
-        FAILED_TESTS=0
-        if [ -f "$FAILED_LOG" ]; then
-            FAILED_TESTS=$(wc -l < "$FAILED_LOG")
-        fi
-        if [ "$FAILED_TESTS" -gt 20 ]; then
-            echo "Too many test failures ($FAILED_TESTS). Build may be broken."
-            exit 1
-        fi
-        echo "Acceptable number of test failures. Continuing..."
+    ctest "${CTEST_COMMON[@]}" -L serial -j1 || {
+        echo "Serial tests failed (see Testing/Temporary/LastTestsFailed.log)."
+        exit 1
+    }
+    ctest "${CTEST_COMMON[@]}" -LE serial "-j${CTEST_JOBS}" || {
+        echo "Parallel tests failed (see Testing/Temporary/LastTestsFailed.log)."
+        exit 1
     }
 
     cd "$REPO_ROOT"
