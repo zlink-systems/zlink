@@ -1,0 +1,12 @@
+너는 job review-CCU-3(review-CCU-2 차단 3건 해소 재검증)다. /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽는다. **읽기·리뷰 전용**(소스·스펙·테스트 수정, 빌드·실행, 커밋 금지). 상한 40분.
+
+대상: worktree `/home/hep7hep7/project/zlink-work/ccu2`의 미커밋 diff(= `~/project/zlink-work/all-artifacts/CCU-3.patch`, core/** 13파일, untracked `core/tests/unittest/unittest_auto_hwm_incremental_plan.cpp` 포함). 입력: 1차 리뷰 `doc/plan/c016-worklog/review-ccu2.md`(B-CCU2-1/2/3, W-1/2/3, S-1), 수정 보고서 `core-rf-CCU-3-report.md`, 스펙 `core/doc/spec/core/systems/06-auto-hwm.ko.md`(§2 표 행은 D-H1 채택으로 갱신됨: attach는 붙는 방향만 즉시 기록, 기존 방향 인하는 debounce 재계산), `core/doc/spec/posddd.ko.md` 단일 소유 규칙.
+
+검증 항목(근거 파일:행, 판정 해소/부분/미해소):
+1. **B-3 단일 소유**: 새 지속 상태가 `auto_hwm_context_plan_t` 3필드뿐인지(registry·queue record에 plan 복제·flag·guard가 남아 있지 않은지 grep으로 확인), 증분 경로가 applied plan 하나만 읽고 그 하나에 되쓰는지, detach 무효화가 pending generation guard만으로 완전한지(terminating pipe의 schedule 호출이 registry endpoint 은퇴보다 항상 먼저인 경로 전부: 정상 close, ctx term, reject, handover), `queue_id > max_planned_queue_id` 규칙의 반례(재사용 ID, inproc pair 두 번째 attach, 동시 attach 중 max 갱신 순서).
+2. **B-1**: attach 경로 힙 할당 0(고정 배열 2개), ctx 경계 backstop이 전체 pass와 동일한 매핑인지, 폴백 후 attach 결과가 일관적인지.
+3. **B-2**: recalc mutex가 registry 확장→pipe `_hwm` 적용→plan·generation 기록 전체를 덮는지, 그 mutex 아래에서 잡는 다른 락(registry `_sync`, pipe, `_opt_sync`)의 순서가 기존 전체 재계산·option setter·detach 경로와 역전되지 않는지(TSan은 통과했으나 lock-order는 정적으로 확인), snapshot 경로가 같은 generation의 planned/applied를 보는지.
+4. **테스트**: 7 케이스가 실제로 증분 vs 전체 재계산을 필드 단위로 비교하는지, `total_applied ≥ 전체` 완화가 D-H1 범위에 정확히 한정되는지, 동시 attach 케이스가 결정적인지(flaky 요소).
+5. 1차 리뷰 W-1/W-2 해소, 주석·헤더 정합, public 헤더·`libzlink.vers` 무변경, Windows/macOS 빌드 가능 API만 사용.
+
+보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/review-ccu3.md (한국어; 항목별 판정 표, 신규 B/W/S, 마지막 줄 "차단 항목 수 / 채택 가능 여부"). 진행 파일 progress-review-ccu3.md.
