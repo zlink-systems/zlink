@@ -15,6 +15,7 @@
 #include <cerrno>
 #include <cstring>
 #include <memory>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -70,6 +71,7 @@ connected_fds_t make_ipc_connection ()
 void fill_send_buffer (int fd_)
 {
     const int send_buffer_size = 4096;
+    const int quiet_ms = 200;
     TEST_ASSERT_EQUAL_INT (
       0, setsockopt (fd_, SOL_SOCKET, SO_SNDBUF, &send_buffer_size, sizeof (send_buffer_size)));
 
@@ -87,6 +89,15 @@ void fill_send_buffer (int fd_)
             continue;
         TEST_ASSERT_EQUAL_INT (-1, rc);
         TEST_ASSERT_TRUE (errno == EAGAIN || errno == EWOULDBLOCK);
+        //  EAGAIN only says the buffer is full at this instant. The stack may
+        //  still be handing bytes to the peer, and the room that frees is
+        //  enough for the two-byte write this fixture needs to stay pending.
+        //  Keep filling until the socket stays unwritable for a whole window.
+        pollfd writable = {fd_, POLLOUT, 0};
+        const int ready = poll (&writable, 1, quiet_ms);
+        if (ready > 0 && (writable.revents & POLLOUT) != 0)
+            continue;
+        TEST_ASSERT_GREATER_OR_EQUAL_INT (0, ready);
         return;
     }
 }
