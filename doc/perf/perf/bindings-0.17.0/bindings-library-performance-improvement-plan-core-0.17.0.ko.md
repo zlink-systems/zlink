@@ -976,13 +976,13 @@ cell은 `보류(사유)`로 표시하고 수치는 그대로 남긴다. 러너 �
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | Core 0.17.1 artifact로 재측정 대상 |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | Core 0.17.1 artifact로 재측정 대상 |
+| `tcp` | `PAIR` | 93.0% | 95.9% | 106.7% | 41.1% | 34.0% | 33.7% | **참고 67.4%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·java `complete`); latency 52.17x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 java·C 1,654.3/1,777.8, 1,376.7/1,435.0, 1,131.2/1,059.8, 44.2/107.6, 21.8/64.2, 11.0/32.5 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, java `perf_java_single_linux_20260908_132754_sg1.txt` |
+| `tcp` | `PUBSUB` | 73.3% | 79.4% | 113.7% | 99.3% | 100.1% | 100.2% | **참고 94.3%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·java `complete`); latency 2.45x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 java·C 1,064.5/1,452.0, 928.4/1,169.6, 893.7/786.3, 13.5/13.6, 6.3/6.3, 2.7/2.7 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, java `perf_java_single_linux_20260908_132754_sg1.txt` |
+| `tcp` | `DEALER_DEALER` | 81.2% | 89.4% | 105.6% | 39.8% | 34.4% | 32.4% | **참고 63.8%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·java `complete`); latency 1.62x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 java·C 1,471.8/1,813.6, 1,241.2/1,388.5, 1,110.9/1,052.2, 43.9/110.5, 22.0/64.1, 11.0/34.1 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, java `perf_java_single_linux_20260908_132754_sg1.txt` |
+| `tcp` | `DEALER_ROUTER` | 85.7% | 87.3% | 107.8% | 39.6% | 34.1% | 32.4% | **참고 64.5%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·java `complete`); latency 3.07x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 java·C 1,547.9/1,806.9, 1,258.0/1,440.7, 1,134.2/1,051.9, 43.2/109.2, 21.9/64.3, 11.0/33.8 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, java `perf_java_single_linux_20260908_132754_sg1.txt` |
+| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 0.6% | 0.7% | 38.8% | 44.5% | 44.8% | **참고 25.9%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·java `complete`); latency 0.74x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 java·C 5.3/834.1, 5.3/740.4, 4.4/11.4, 4.1/9.2, 3.2/7.3 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, java `perf_java_single_linux_20260908_132754_sg1.txt` |
+| `tcp` | `ROUTER_ROUTER` | 85.6% | 95.0% | 113.9% | 41.2% | 37.0% | 33.2% | **참고 67.7%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·java `complete`); latency 1.82x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 java·C 1,421.1/1,659.6, 1,159.8/1,221.0, 1,121.7/984.7, 44.2/107.2, 22.0/59.4, 11.0/33.1 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, java `perf_java_single_linux_20260908_132754_sg1.txt` |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 0.6% | 0.6% | 0.7% | 39.7% | 45.3% | 45.9% | **참고 22.1%**(D-BP2: Single은 판정 대상 아님) — 1-run, 고정 Core 0.17.2(`sg1`, C `partial`·java `complete`); latency 0.88x. Core 0.17.3-alpha prefix, C와 같은 시각 짝지음(D-BP39). 처리량 java·C 5.3/881.8, 5.3/837.2, 5.4/724.5, 4.5/11.3, 4.1/9.2, 3.2/7.0 Kops/s; C `perf_c_single_linux_20260908_130119_sg1.txt`, java `perf_java_single_linux_20260908_132754_sg1.txt` |
 | `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
