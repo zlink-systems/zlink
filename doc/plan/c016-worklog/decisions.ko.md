@@ -4809,3 +4809,6 @@ prefix를 명시한다.
 ## D-B278 (2026-09-08 19:55, 사용자) CCU 10k 확인은 머신 A에서 — 머신 B(노트북, WSL 11.9 GB)는 CCU 1000 판정 + 4000 회귀 확인 1회만
 
 사용자: "ccu 10k는 A머신에서 시간될 때 확인해볼게". 머신 B 근거: CCU 4000 실패는 메모리가 아니라 attach O(N²) CPU(CCU-1: OOM 없음, RSS 134 MB; CCU-2 후 162 MiB), 그러나 클라이언트 4000도 같은 박스라 10k는 부적합. 머신 A 확인 시 조건: 0.17.4(CCU-2 포함) Core, `bindings/c/bench/with_stream` zlink·asio·cppserver·zmq(pull 4 스택, D-B275), size 64, CCU 1000/4000/10000, 서버 RSS·accept 완료 시간 기록. 결과는 §7.1에 "A 10k" 행으로.
+## D-B279 (2026-09-08 20:00, 머신 B) CCU-3 중간 — applied plan 단일 소유로 B-3 해소(plan descriptor 리팩터 불필요); B-1 고정 배열·예외 backstop, B-2 pipe hwm 적용 후 기록·mutex 전체; 신규 unittest 7/7; 완료 예상 21:00~21:30
+
+새 상태: registry 8개 + queue record 2개 삭제 → `auto_hwm_context_plan_t`에 3필드(auto role, auto direction count, max planned queue id)만. detach 무효화는 pending generation guard가 소유(별도 flag 없음). 증분 vs 전체 재계산 비트 비교 unittest(`unittest_auto_hwm_incremental_plan.cpp`, 7 케이스; ID wrap은 공개 API로 도달 불가라 미커버). hotpath 재측정 생략(데이터패스 무변경, 병합 게이트에서 실행). 이후 review-CCU-3(짧은 재검증, 40분) → `wip/0.17.4` 적용. **ETA**: 임계 경로가 SD-1(≈23:00)로 바뀌어 0.17.4 릴리즈 **09-09 02:00~03:00**(D-B277의 08:00~10:00에서 앞당김).
