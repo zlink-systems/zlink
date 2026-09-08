@@ -4438,3 +4438,8 @@ echo 684건(client당 ~7) 미수신, admission은 전부 완료. 즉 admitted �
 Core 대기 항목(D-BP28/29 계열)에 귀속하되, C는 같은 셀을 1-run만 `complete`로 확인했고 5-run은 미측정이므로
 0.18.0 재개 시 **C tls RR SS 65536 B 5-run을 먼저** 돌려 Core/relay 귀속을 확정한다. 수정 전 .NET이 45/50
 "통과"한 것은 echo를 기다리지 않고 닫았기 때문이므로, 채택한 drain이 결함을 드러낸 것이지 만든 것이 아니다.
+
+## D-B230 (2026-09-08 12:20, 머신 B) Windows 관련 Core 항목 정리(사용자 요청 확인) — CRT 링크 결정은 D 표, 0.17.3 태그 전 Windows Core 빌드 요청
+
+**확인**(`doc/bug/2026-09-07-windows-framework-sample-execution.ko.md`, Core 0.17.0 기준): Core 소스의 Windows 빌드 실패는 없음. Core에 닿는 항목: (1) Java 22 + `/MD` Core DLL에서 `EXCEPTION_ACCESS_VIOLATION`(`msvcp140.dll`, `setUInt64Option` 경로), `/MT` DLL이면 사라짐 → CRT 로딩 충돌 유력, 미확정. (2) C++ binding 헤더 MSVC C2668은 bindings 문제(우회 완료). (3) .NET ready timeout·C++ TicTacToe 종료는 framework 단계. (4) ROUTER alias pair 재admission Windows 미관측(기존). D-BP34(tls RR SS 65536 B echo 정지)는 D-BP28/29 계열로 ALL-1 B 항목 리뷰에서 tls 커버 여부 확인.
+**결정**: (a) Windows Core DLL CRT(`/MT` 배포 vs `/MD`+redistributable 문서화)는 §7.5 D 표 항목 D-W1로 올려 사용자 결정 — 감독자 권고 `/MT` 배포(또는 두 변형), A의 Windows 머신에서 Java 재현으로 확정. (b) 0.17.3 태그 전 머신 A에 Windows Core 빌드(0.17.3 후보 커밋) 1회 요청 — ST·ALL-1 patch는 Linux에서만 빌드·검증됐고 새 테스트는 Boost.Asio로 이식했으나 MSVC 컴파일은 미확인.

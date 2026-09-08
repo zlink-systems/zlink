@@ -260,6 +260,7 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 | D-MP3 | MP-1 | ZMP :241-265·:543, ROUTER :419: control(FLOW/WEIGHT) 보류를 실제 pipe multipart write 구간으로 한정 — public 조립 buffer만 있는 동안 control 진행(**관찰 동작 변화**: MORE 후 FINAL을 미루는 caller가 control을 막지 않음) | 전역 boundary 상태 제거 | 확정(D-B198) — 사용자 재확인 요망 |
 | D-MP4 | MP-1 | README :1071, ZMP :472 "admission 전 payload 미보관": 호출 사이 조립 buffer와 거절된 record 미보관을 구분 | 문장 정합 | 확정(D-B198) |
 | D-MP5 | MP-1 | ROUTER :54 family/RID 혼합 금지를 같은 thread의 sequence로 한정 | 문장 정합 | 확정(D-B198) |
+| D-W1 | Windows 검증(A, 09-07) | Windows Core DLL의 CRT 링크: `/MD`(현재) + Java 22에서 `msvcp140.dll` access violation vs `/MT`(충돌 없음). 패키징 정책 결정 필요 | Windows Java/Framework 안정성 | **대기** — 권고 `/MT` 배포 또는 두 변형; A Windows 재현으로 확정(D-B230) |
 | 관찰 | S-A | 64 KiB에서 zlink 서버 앱 스레드 1개가 93 % 포화(I/O 스레드 45 % idle). 벤치 서버 구조(앱 스레드 1개) 문제이며 Core 계약과 무관 — asio 스택은 io 워커 8개에서 read→write 직결 | — | 기록 |
 
 ## 7.6 머신 A(bindings 성능 작업)와의 조율
