@@ -35,6 +35,12 @@ final class PerfMultiSocketReqRep {
         "SERVER".getBytes(StandardCharsets.UTF_8));
     /** C reference perf_aux_poll_wait_ms() (perf_multi_poll.hpp:39). */
     private static final int AUX_POLL_WAIT_MS = 100;
+    /**
+     * Opt-in submit/readiness instrumentation. Off by default so a measured
+     * run keeps the plain POLLCOMPLETION registration and the plain completion
+     * consumer. Set PERF_MULTI_REQREP_DIAG=1 to enable.
+     */
+    private static final boolean DIAGNOSTICS = diagnosticsEnabled();
 
     private PerfMultiSocketReqRep() {
     }
@@ -135,6 +141,15 @@ final class PerfMultiSocketReqRep {
             monitors.clear();
             PerfUtil.recalculateAutoHwm(ctx);
             runClients(clients, config, routedClients, metrics);
+            if (DIAGNOSTICS && !clients.isEmpty()) {
+                // Diagnostic only: the applied byte send-HWM and the pending
+                // send bytes explain how wide the admission window really is
+                // at this payload size.
+                PerfUtil.printMultiSocketAutoHwm(config, clients.get(0),
+                    "client", "reqrep_client_0",
+                    routedClients ? systems.zlink.contracts.sockets.SocketType.ROUTER
+                                  : systems.zlink.contracts.sockets.SocketType.DEALER);
+            }
             PerfUtil.Result result = metrics.finishMulti(config);
             String resultLine = result.toLine("current");
             if (!resultLine.isEmpty()) {
@@ -171,10 +186,12 @@ final class PerfMultiSocketReqRep {
                                    PerfUtil.Metrics metrics) {
         AtomicReference<Throwable> failure = new AtomicReference<>();
         AtomicLong outstanding = new AtomicLong();
+        AtomicLong timeouts = new AtomicLong();
         long activeEnd = System.nanoTime()
             + config.durationSeconds() * 1_000_000_000L;
         int requestTimeoutMs = resolveRequestTimeoutMs();
         Duration timeout = Duration.ofMillis(requestTimeoutMs);
+        int clientCount = clients.size();
         java.util.function.BiConsumer<List<Message>, Throwable> completion =
             (parts, error) -> {
             try {
@@ -188,7 +205,11 @@ final class PerfMultiSocketReqRep {
                 } else if (error != null) {
                     Throwable cause = PerfMultiAsyncSendLoop.completionCause(
                         error);
-                    if (!isExpectedRequestFailure(cause)) {
+                    if (isExpectedRequestFailure(cause)) {
+                        // Reported as TIMEOUTS at the end of the run. The
+                        // aggregate never counts a timed-out request.
+                        timeouts.incrementAndGet();
+                    } else {
                         failure.compareAndSet(null, cause);
                     }
                 }
@@ -202,6 +223,13 @@ final class PerfMultiSocketReqRep {
             }
         };
 
+        SubmitDiagnostics diagnostics = DIAGNOSTICS
+            ? new SubmitDiagnostics(clientCount, completion) : null;
+        PollEventFlags[] pollEvents = DIAGNOSTICS
+            ? new PollEventFlags[] {PollEventFlags.POLLCOMPLETION,
+                                    PollEventFlags.POLLOUT}
+            : new PollEventFlags[] {PollEventFlags.POLLCOMPLETION};
+
         // PERF_MULTI_TEST_POLICY.md:164-168 — do not fix the inflight request
         // count and do not serialize the round trip 1:1. Each turn submits one
         // new logical request per client socket and never waits for the
@@ -212,7 +240,7 @@ final class PerfMultiSocketReqRep {
         try (RequestPayloadTemplates payloadTemplates =
                  new RequestPayloadTemplates(config.size(), clients.size());
              PerfSocketPollSet completionPoller = PerfSocketPollSet.fromSockets(
-                 clients, PollEventFlags.POLLCOMPLETION)) {
+                 clients, pollEvents)) {
             while (System.nanoTime() < activeEnd && failure.get() == null) {
                 for (int i = 0; i < clients.size(); i++) {
                     if (System.nanoTime() >= activeEnd) {
@@ -222,14 +250,19 @@ final class PerfMultiSocketReqRep {
                         System.nanoTime());
                     submit(clients.get(i), routedClients,
                         payloadTemplates.copyForSubmit(i), timeout,
-                        outstanding, completion);
+                        outstanding,
+                        diagnostics == null ? completion
+                                            : diagnostics.beforeSubmit(i));
                 }
 
                 // Completion callbacks are dispatched only by this poller.
                 // One bounded wait paces every submit/progress turn, including
                 // intervals where every submit is suspended by backpressure.
-                completionPoller.poll(Math.min(50,
+                int ready = completionPoller.poll(Math.min(50,
                     remainingTimeoutMs(activeEnd)));
+                if (diagnostics != null) {
+                    diagnostics.afterPoll(completionPoller, ready);
+                }
             }
             long drainEnd = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
                 Math.max(1_000, requestTimeoutMs * 4));
@@ -237,13 +270,110 @@ final class PerfMultiSocketReqRep {
                 completionPoller.poll(remainingTimeoutMs(drainEnd));
             }
             if (outstanding.get() != 0 || failure.get() != null) {
+                System.err.println("TIMEOUTS," + timeouts.get());
+                if (diagnostics != null) {
+                    diagnostics.report(config, System.err);
+                }
                 throw new IllegalStateException("multi socket reqrep failed",
                     failure.get());
             }
         }
+        // Diagnostic only: the aggregate never sees this line. A timed-out
+        // request is dropped from the measurement, so the count states how
+        // much of the submitted load never produced a reply.
+        System.err.println("TIMEOUTS," + timeouts.get());
+        if (diagnostics != null) {
+            diagnostics.report(config, System.err);
+        }
         // No wire stop token here: PERF_POLICY.md:481 keeps STOP a runner
         // orchestration command, and the C request/reply server terminates on
         // the runner stdin STOP alone.
+    }
+
+    /**
+     * Opt-in counters that answer two questions without changing the submit
+     * cadence: how deep the per-socket inflight queue grows, and whether the
+     * public POLLOUT readiness ever reports the sockets this loop is about to
+     * submit on.
+     */
+    private static final class SubmitDiagnostics {
+        private final java.util.function.BiConsumer<List<Message>, Throwable>[]
+            consumers;
+        private final AtomicLong[] inflight;
+        private final long[] maxInflight;
+        private long submits;
+        private long turns;
+        private long idleTurns;
+        private long readySockets;
+        private long polloutSockets;
+        private long completionSockets;
+
+        @SuppressWarnings("unchecked")
+        private SubmitDiagnostics(int clientCount,
+                                  java.util.function.BiConsumer<List<Message>,
+                                      Throwable> delegate) {
+            consumers = new java.util.function.BiConsumer[clientCount];
+            inflight = new AtomicLong[clientCount];
+            maxInflight = new long[clientCount];
+            for (int i = 0; i < clientCount; i++) {
+                AtomicLong slot = new AtomicLong();
+                inflight[i] = slot;
+                consumers[i] = (parts, error) -> {
+                    try {
+                        delegate.accept(parts, error);
+                    } finally {
+                        slot.decrementAndGet();
+                    }
+                };
+            }
+        }
+
+        private java.util.function.BiConsumer<List<Message>, Throwable>
+            beforeSubmit(int index) {
+            long depth = inflight[index].incrementAndGet();
+            if (depth > maxInflight[index]) {
+                maxInflight[index] = depth;
+            }
+            submits++;
+            return consumers[index];
+        }
+
+        private void afterPoll(PerfSocketPollSet poller, int ready) {
+            turns++;
+            if (ready <= 0) {
+                idleTurns++;
+                return;
+            }
+            readySockets += ready;
+            for (int offset = 0; offset < ready; offset++) {
+                int mask = poller.readyMaskAt(offset);
+                if ((mask & PollEventFlags.POLLOUT.mask()) != 0) {
+                    polloutSockets++;
+                }
+                if ((mask & PollEventFlags.POLLCOMPLETION.mask()) != 0) {
+                    completionSockets++;
+                }
+            }
+        }
+
+        private void report(PerfUtil.Config config, java.io.PrintStream out) {
+            long deepest = 0;
+            long residual = 0;
+            for (int i = 0; i < inflight.length; i++) {
+                deepest = Math.max(deepest, maxInflight[i]);
+                residual += inflight[i].get();
+            }
+            out.println("REQREP_DIAG,size=" + config.size()
+                + ",clients=" + inflight.length
+                + ",submits=" + submits
+                + ",turns=" + turns
+                + ",idle_turns=" + idleTurns
+                + ",ready_sockets=" + readySockets
+                + ",pollcompletion_sockets=" + completionSockets
+                + ",pollout_sockets=" + polloutSockets
+                + ",max_inflight_per_socket=" + deepest
+                + ",residual_inflight=" + residual);
+        }
     }
 
     private static void submit(Socket client, boolean routedClients,
@@ -317,6 +447,12 @@ final class PerfMultiSocketReqRep {
         }
         return (int) Math.min(Integer.MAX_VALUE,
             (remainingNs + 999_999L) / 1_000_000L);
+    }
+
+    private static boolean diagnosticsEnabled() {
+        String configured = System.getenv("PERF_MULTI_REQREP_DIAG");
+        return configured != null && !configured.isBlank()
+            && !configured.equals("0");
     }
 
     private static int resolveRequestTimeoutMs() {
