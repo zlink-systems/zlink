@@ -266,7 +266,7 @@ Phase 0 절대값(1024 B tcp, runs 1, 22:02, 파일 `perf_c_single_linux_2026090
 | D-MP4 | MP-1 | README :1071, ZMP :472 "admission 전 payload 미보관": 호출 사이 조립 buffer와 거절된 record 미보관을 구분 | 문장 정합 | 확정(D-B198) |
 | D-MP5 | MP-1 | ROUTER :54 family/RID 혼합 금지를 같은 thread의 sequence로 한정 | 문장 정합 | 확정(D-B198) |
 | D-W1 | Windows 검증(A, 09-07) | Windows Core DLL의 CRT 링크: `/MD`(현재) + Java 22에서 `msvcp140.dll` access violation vs `/MT`(충돌 없음). 패키징 정책 결정 필요 | Windows Java/Framework 안정성 | **대기** — 권고 `/MT` 배포 또는 두 변형; A Windows 재현으로 확정(D-B230) |
-| D-S1 | S-D(sol, 09-08) | `rcvbuf=-1`일 때 STREAM decoder read target max(현재 4 KiB)를 OS default socket buffer 크기까지 올릴지 — CCU별 user-space buffer 메모리 상한 정책이 먼저 필요 | 64 KiB 처리량/latency vs connection당 RSS | **대기** — D-B267; B2(성장 규칙 단순화)는 기존 max 유지라 별개로 진행 가능 |
+| D-S1 | S-D(sol, 09-08) · SD-2 측정 | `rcvbuf=-1`일 때 STREAM decoder read target max(현재 4 KiB)를 OS default socket buffer 크기까지 올릴지 — CCU별 user-space buffer 메모리 상한 정책이 먼저 필요 | 64 KiB 처리량/latency vs connection당 RSS | **대기** — D-B267·D-B291: B2 채택으로 64 KiB CCU 1000 서버 RSS 279 → 423 MiB(+141 MiB, 연결당 1 MiB 상한의 14 %); max 상향 여부는 이 자료로 결정 |
 | D-H1 | CCU-2(09-08) | 06-auto-hwm §2 "연결 증가로 목표 감소 → 새 목표를 즉시 기록": attach 증분 plan 확장(O(N²) 결함 수정)은 새 방향만 즉시, 기존 방향 인하는 debounce(3000 ms)까지 지연(연결 2048개 초과 구간) | CCU 4000 PASS(0→202.8 kops) vs 일시적 admission 느슨함(상한 있음) | **채택(D-B269, 09-08 18:20)** — §2 표 한 행 갱신(ko/en), CCU-2는 0.17.4에 포함 |
 | 관찰 | S-A | 64 KiB에서 zlink 서버 앱 스레드 1개가 93 % 포화(I/O 스레드 45 % idle). 벤치 서버 구조(앱 스레드 1개) 문제이며 Core 계약과 무관 — asio 스택은 io 워커 8개에서 read→write 직결 | — | 기록 |
 

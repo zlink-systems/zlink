@@ -1,0 +1,13 @@
+너는 job review-SD-2(STREAM 큰 payload·WS frame 경계 수정의 차단 검증 리뷰)다. /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽는다. **읽기·리뷰 전용**(수정·빌드·실행·커밋 금지). 상한 40분.
+
+대상: `~/project/zlink-work/all-artifacts/SD-2.patch`(base `84d25131a6` = `wip/0.17.4` 당시 HEAD; worktree `~/project/zlink-work/sd1`의 미커밋 diff와 동일 — 단 SD-3 job이 동시에 이 worktree에서 B1을 되돌리는 중이므로 **worktree가 아니라 patch 파일을 읽어라**). 감독관 판정(D-B291): B1(readiness rearm) **기각**, 채택 = 계측 app 수정 + B2 + D-f + WS gate 수정. 리뷰는 채택 부분에 집중하고 B1은 "깨끗이 분리 가능한가"만 본다. 입력: `core-rf-SD-2-report.md`, `core-rf-S-D-cppserver-contrast.md` §6, 스펙 `core/doc/spec/core/systems/03-io-thread.ko.md` §3.2·§4, `core/doc/spec/core/socket/08-stream.ko.md` §5·§6.3·§10·런타임 기본값(:400-410), `core/doc/spec/core/protocol/01-zmp.ko.md` §9(encoder 경계, WS bounded batch), ws/wss transport 스펙(`core/doc/spec/core/transport/*ws*` 또는 해당 문서)에서 WebSocket frame과 ZMP frame의 대응 문장.
+
+검증 항목(근거 파일:행, 판정):
+1. **B2**(`asio_stream_fastpath_policy.hpp:338-416`, `asio_engine.cpp:822-858`, `asio_engine_pipeline.hpp`): "요청 크기를 한 번 채우면 target 2×, 기존 max clamp" 규칙이 decoder·encoder 모두에 정확히 적용되고 축소 규칙·max(1 MiB)·`rcvbuf` 유도 max가 불변인지, `last_read_bytes` 단일 상태가 async/speculative 두 경로에서 일관되게 갱신되는지(short read 뒤 stale 값으로 성장하는 반례), 연결당 메모리 상한(1 MiB)이 스펙 런타임 기본값 문장과 일치하는지, 64 KiB RSS +52 %(1000 연결 +141 MiB)가 상한 안인지.
+2. **WS gate 수정**(`asio_stream_fastpath_policy.hpp:139-198`, `asio_engine.cpp:148-153,442-535`): "ZMP header 생성 가능 && transport gather 지원 && transport가 message boundary"이면 connection 생성 때 gather 선택 — (a) WS/WSS 스펙에 "ZMP frame 하나 = WebSocket message 하나"류 문장이 있는지, 있으면 이전 동작(header/body 별도 frame)이 위반이었고 수정이 스펙 정합인지 확인; (b) TCP ZMP는 message-boundary가 아니라 기존 env opt-in 유지 → RAW STREAM·TCP 경로 바이트 동일성; (c) gather 시 bounded batch("준비된 byte만 상한까지, 대기 없음") 유지, 64 KiB+header가 한 WebSocket frame으로 나갈 때 Beast write 경로의 buffer 수명·부분 write 처리; (d) 수신 측(zlink 자신 및 타 구현)이 한 frame에 header+body가 온 경우와 분리된 경우를 모두 받는지(하위 호환, 0.17.3 peer와의 혼용).
+3. **D-f**: 제거된 env 3개 접근자 사용처 0, ZMP `ZLINK_ASIO_GATHER_WRITE` 불변, 스펙 08-stream :405-407 문장 삭제 초안 타당성.
+4. **계측 app**(`test_scenario_stream_zlink.cpp`): per-RID 조립이 다른 스택 계측과 같은 규칙인지, zero-copy 경로 조건이 정확한지(1-frame exact).
+5. **B1 분리 가능성**: B1 hunk를 되돌렸을 때 B2·WS 수정이 의존하는 선언/상태가 남는지.
+6. TSan·hotpath 결과(보고서 §7)와 public 헤더·`libzlink.vers` 무변경, Windows/macOS 빌드 가능 API(Beast/Asio 버전 의존 API 사용 여부).
+
+보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/review-sd2.md (항목별 판정 표, 신규 B/W/S, 마지막 줄 "차단 항목 수 / 채택 가능 여부"). 진행 파일 progress-review-sd2.md.
