@@ -777,6 +777,11 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 > 다시 잰다.** 옛 수치는 지우지 않고 참고값으로 남긴다 — §10.3대로 유지하는 것은 수치가
 > 아니라 개선 pass 코드·프로파일·no-go 목록 같은 작업 자산이다.
 
+**판정 표기 규칙(2026-09-08 13:00, 사용자 지시):** `미달`은 **개선 여지가 있는 cell**에만 쓴다(비용 지도 미작성 또는
+지배 항목이 남아 있음). 비용 지도가 끝나 현재 수준으로 두는 cell(C++ D-BP26, .NET D-BP31)과 Core 수정을 기다리는
+cell은 `보류(사유)`로 표시하고 수치는 그대로 남긴다. 러너 결함으로 측정이 안 되는 cell은 `차단(사유)`. 수치는 항상
+최신 측정으로 갱신한다(태그·report 경로가 행에 있다).
+
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
@@ -1475,13 +1480,13 @@ callgrind·프로파일 분석, 후보 no-go 목록과 그 근거(D-B121~D-B130)
 
 | 순서 | 언어 | 현재 artifact Single | 현재 artifact Multi | 이전 호스트 Multi `tcp` 참고값 (DD / DR REQREP / RR REQREP / PUBSUB) | 적용된 개선 pass |
 |------|------|------|------|------|------|
-| 1 | C++ | REQREP 연속 제출 정합 완료(63.6%) | **0.17.2 `tcp`·`tls`·`ws`·`wss` 24 cell 기록 완료** — 통과 10, 보류 14(REQREP 4 구조적, Core/transport 귀속 10), 차단 1(wss DD). 열린 조사 없음 | 90.8 / 57.4 / 68.4 / 93.2% | 3건 push + 러너 정합 4건(`31c5e4f7f0` `e0862e1e5c` `33f63ae89d` `1aa2751b1b`) |
-| 2 | .NET | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 62.5, PUBSUB 61.0, DR SS 63.9, RR SS **69.5(3-run 경계, 목표 70)**, DR REQREP 60.5, RR REQREP 63.1%. 격차는 pattern 무관 ~60~70% 띠 = D-BP31 두 지배 항목(공개 API 계약). client echo drain 채택(D-BP34). tls·ws·wss·STREAM 22 cell `보류(Core 대기)` | 59.6 / 58.3 / 67.0 / 61.3% | 3건 push |
-| 3 | Java | 미측정 | **0.17.2 `tcp` 6/6 기록** — PUBSUB `통과` 93.2, DR SS `통과` 73.2(3-run 경계), RR SS `통과` 84.9(throughput; 4096 B teardown 간헐 실패 1/4); DD 72.0, DR REQREP 46.3, RR REQREP 47.6 `미달`. relay backpressure 결함 수정(`611b022b37`), REQREP 65536 B 11%는 왕복 비용(gate 기각, `log/2026-09-08-java-reqrep-64k-*.ko.md`). latency 한도는 SS 2종에서 초과(교차 현상). 22 cell `보류(Core 대기)` | 80.9 / 59.4 / 58.7 / 80.9% | 3건 push |
-| 4 | Node | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 43.1, PUBSUB 29.6, DR SS 33.7, RR SS 35.5, DR REQREP 32.5, RR REQREP 29.7%(목표 60). client echo drain 채택(`93bcf7156a`). 초 단위 latency가 DD·SS 전 크기에 걸침(교차 현상, §10.3.2 첫 항목). 22 cell `보류(Core 대기)` | 35.9 / 24.3 / 24.8 / 30.2% | 4건 push |
-| 5 | Go | 미측정 | **0.17.2 `tcp` 5/6 기록** — PUBSUB 39.8, DD 31.5(5-run), DR SS 50.1(5-run 경계), DR REQREP 67.7, RR REQREP 67.1 `미달`; RR SS 65536 B `차단`(server_shutdown_failed 2~3/5, 64~4096 B는 complete). 단방향·echo client를 C turn 모델로(`e05d6d2636`, 이전 DD·SS 차단 해소). 22 cell `보류(Core 대기)` | 53.2 / 19.0 / 21.8 / 54.6% | 2건 push |
-| 6 | Rust | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 60.5, PUBSUB 89.0, DR SS 73.5, RR SS 63.8, DR REQREP 54.3, RR REQREP 55.1%(목표 95/85). 4096 B만 초 단위 latency(SS 2종), 65536 B 21~38%. REQREP 비율 하락은 C 기준 상승분. 22 cell `보류(Core 대기)` | 59.3 / 67.3 / 69.8 / 87.7% | 2건 push |
-| 7 | Python | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 15.9, PUBSUB 34.0, DR SS 24.2, RR SS 23.3, DR REQREP 14.2, RR REQREP 15.7%(목표 60). 크기·pattern 무관 평탄 = 인터프리터 고정 per-message 비용. 22 cell `보류(Core 대기)` | 15.4 / 15.5 / 19.6 / 31.9% | 2건 push |
+| 1 | C++ | REQREP 연속 제출 정합 완료(63.6%) | **0.17.2 `tcp`·`tls`·`ws`·`wss` 24 cell 기록 완료** — 통과 10, 보류 14(REQREP 4 구조적, Core/transport 귀속 10), 차단 1(wss DD). 열린 조사 없음 STREAM(0.17.3-alpha) 96.7 `통과`. | 90.8 / 57.4 / 68.4 / 93.2% | 3건 push + 러너 정합 4건(`31c5e4f7f0` `e0862e1e5c` `33f63ae89d` `1aa2751b1b`) |
+| 2 | .NET | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 62.5, PUBSUB 61.0, DR SS 63.9, RR SS **69.5(3-run 경계, 목표 70)**, DR REQREP 60.5, RR REQREP 63.1%. 격차는 pattern 무관 ~60~70% 띠 = D-BP31 두 지배 항목(공개 API 계약). client echo drain 채택(D-BP34). tls·ws·wss·STREAM 22 cell `보류(Core 대기)` STREAM(0.17.3-alpha) 95.8 `통과`. tcp 6 cell은 지도 완료로 `보류(계약)` 재표기(D-BP38). | 59.6 / 58.3 / 67.0 / 61.3% | 3건 push |
+| 3 | Java | 미측정 | **0.17.2 `tcp` 6/6 기록** — PUBSUB `통과` 93.2, DR SS `통과` 73.2(3-run 경계), RR SS `통과` 84.9(throughput; 4096 B teardown 간헐 실패 1/4); DD 72.0, DR REQREP 46.3, RR REQREP 47.6 `미달`. relay backpressure 결함 수정(`611b022b37`), REQREP 65536 B 11%는 왕복 비용(gate 기각, `log/2026-09-08-java-reqrep-64k-*.ko.md`). latency 한도는 SS 2종에서 초과(교차 현상). 22 cell `보류(Core 대기)` STREAM(0.17.3-alpha) 103.4 `통과`. | 80.9 / 59.4 / 58.7 / 80.9% | 3건 push |
+| 4 | Node | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 43.1, PUBSUB 29.6, DR SS 33.7, RR SS 35.5, DR REQREP 32.5, RR REQREP 29.7%(목표 60). client echo drain 채택(`93bcf7156a`). 초 단위 latency가 DD·SS 전 크기에 걸침(교차 현상, §10.3.2 첫 항목). 22 cell `보류(Core 대기)` STREAM(0.17.3-alpha) 35.1 `미달`. | 35.9 / 24.3 / 24.8 / 30.2% | 4건 push |
+| 5 | Go | 미측정 | **0.17.2 `tcp` 5/6 기록** — PUBSUB 39.8, DD 31.5(5-run), DR SS 50.1(5-run 경계), DR REQREP 67.7, RR REQREP 67.1 `미달`; RR SS 65536 B `차단`(server_shutdown_failed 2~3/5, 64~4096 B는 complete). 단방향·echo client를 C turn 모델로(`e05d6d2636`, 이전 DD·SS 차단 해소). 22 cell `보류(Core 대기)` STREAM(0.17.3-alpha) 65.9 경계(3-run 중). | 53.2 / 19.0 / 21.8 / 54.6% | 2건 push |
+| 6 | Rust | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 60.5, PUBSUB 89.0, DR SS 73.5, RR SS 63.8, DR REQREP 54.3, RR REQREP 55.1%(목표 95/85). 4096 B만 초 단위 latency(SS 2종), 65536 B 21~38%. REQREP 비율 하락은 C 기준 상승분. 22 cell `보류(Core 대기)` STREAM(0.17.3-alpha) **20.4 `미달`**(크기 무관 ~88 K = 메시지당 ~11 µs 고정 비용, STREAM 경로 고유). | 59.3 / 67.3 / 69.8 / 87.7% | 2건 push |
+| 7 | Python | 미측정 | **0.17.2 `tcp` 6/6 기록, 전부 `미달`** — DD 15.9, PUBSUB 34.0, DR SS 24.2, RR SS 23.3, DR REQREP 14.2, RR REQREP 15.7%(목표 60). 크기·pattern 무관 평탄 = 인터프리터 고정 per-message 비용. 22 cell `보류(Core 대기)` STREAM(0.17.3-alpha) 19.1 `미달`. | 15.4 / 15.5 / 19.6 / 31.9% | 2건 push |
 
 참고값은 2026-09-06 00:22, 이전 호스트(16 논리 CPU / 11.7 GiB), Core `a40cb46335` 기준이다
 (`doc/plan/c016-worklog/morning-summary-2026-09-05-B.ko.md`, D-B121~D-B130). 새 측정의 목표
