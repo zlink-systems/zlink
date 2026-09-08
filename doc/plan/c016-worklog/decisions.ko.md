@@ -4755,3 +4755,7 @@ prefix를 명시한다.
 ## D-B264 (2026-09-08 18:05, 머신 B) MAC-2 확인 run 34202650122 — serial 148/149(`test_wake_invariants`), 병렬 56/57(`unittest_flow_state_monitor` Timeout = LIN-1 미포함 베이스) → MAC-3
 
 **판정**: 병렬 그룹의 `unittest_flow_state_monitor` Timeout은 LIN-1(`550f0e3f6e`, main)이 고친 선행 race이며 `wip/mac-1` 베이스에 없어서 재현된 것 — 0.17.4 병합 브랜치(origin/main rebase)에는 포함. 잔여 `test_wake_invariants`(관찰자 측 `waiters_blocked=0`)는 MAC-3(Claude opus, 2.5 h)로 계속: LIN-1 cherry-pick 후 관찰 방식(단발 샘플 → 이벤트 대기)인지 Darwin completion 순서 결함인지 확정. 실패 시 최소 제외 정규식 `^(test_wake_invariants)$`(macOS 전용)을 사용자 결정으로. MERGE-1과 병행하며 MAC-3 patch는 병합 브랜치에 후속 적용.
+
+## D-B265 (2026-09-08 18:15, 머신 B) 사용자 결정 — macOS 제외는 Intel job뿐; macOS ARM64는 지원 플랫폼이므로 테스트 제외 없이 gating green이 릴리스 조건
+
+**결정**: "mac에서 제외하는 건 intel용만. mac을 지원하긴 해야 해" — D-B258·D-B264의 "최후 수단 `ZLINK_CTEST_EXCLUDE_REGEX`" 옵션 철회. `test_wake_invariants`는 MAC-3에서 반드시 수정(관찰 방식이면 이벤트 대기로, Core 결함이면 플랫폼 가드로 수정, Linux 불변). MAC-3 상한 4 h로 확장. 0.17.4 태그 run은 macOS ARM64 ctest 전체 통과가 조건.
