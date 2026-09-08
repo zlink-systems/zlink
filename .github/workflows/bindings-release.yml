@@ -144,8 +144,8 @@ jobs:
           fi
           git fetch --no-tags origin \
             "refs/tags/${{ steps.resolve.outputs.core_tag }}:refs/tags/${{ steps.resolve.outputs.core_tag }}"
-          if ! git diff --quiet "${{ steps.resolve.outputs.core_tag }}" -- VERSION core; then
-            echo "Checked-out VERSION/core differs from ${{ steps.resolve.outputs.core_tag }}" >&2
+          if ! git diff --quiet "${{ steps.resolve.outputs.core_tag }}" -- VERSION core/src core/include core/CMakeLists.txt core/cmake; then
+            echo "Checked-out VERSION/core runtime sources differ from ${{ steps.resolve.outputs.core_tag }}" >&2
             echo "Binding releases must build the exact tagged Core source." >&2
             git diff --stat "${{ steps.resolve.outputs.core_tag }}" -- VERSION core >&2
             exit 1
