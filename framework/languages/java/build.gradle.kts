@@ -54,6 +54,10 @@ subprojects {
 
         tasks.withType<Javadoc>().configureEach {
             (options as StandardJavadocDocletOptions).addStringOption("Xdoclint:-missing", "-quiet")
+            // Kotlin-only modules (zlink-framework-kotlin, zlink-http-client-kotlin) have no
+            // Java sources; javadoc then reports "No public or protected classes found" and
+            // must not fail the publication. Maven Central only requires the -javadoc jar to exist.
+            isFailOnError = false
         }
 
         extensions.configure<SourceSetContainer> {
