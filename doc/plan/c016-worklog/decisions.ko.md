@@ -4498,3 +4498,21 @@ median 변경과 무관(ws는 §10.3.2 Core 대기 항목, 0.18.0 이월).
 
 **내용**: 현재 main `6f9a163121`(0.17.2 + 트랙 1 receive 소유권 수정 `de730d4ac5` + changelog/workflow)에 pre-release 태그를 단다. VERSION·소스 버전은 아직 0.17.2다(soname libzlink.so.0.17.2). ALL-2·WIN-1은 미포함이며 정식 0.17.3은 그 둘의 게이트 뒤 bump·태그·Actions 릴리스로 낸다. Actions build.yml의 태그 패턴은 `-rc.N`만 인식하므로 이 alpha 태그로는 릴리스 workflow를 돌리지 않는다.
 **머신 A**: STREAM 정체 수정이 포함됐으므로 C++·.NET MULTI_STREAM 재측정을 이 태그로 시작할 수 있다. 고정 prefix는 태그 이름으로 구분한다(버전 문자열은 0.17.2).
+
+### D-BP37 (2026-09-08) `core/v0.17.3-alpha` 고정은 STREAM cell 재측정에만 쓴다 — 0.17.2 tcp 판정은 유지
+
+**결정:** 사용자 지시("0.17.3-alpha 버전이 들어왔고 이걸로 나머지 작업 진행")로 캠페인을 재개한다. 태그
+`core/v0.17.3-alpha`(D-B235, main `d6432ec4fa`, 버전 문자열은 0.17.2 그대로)에서 worktree를 만들어
+`scripts/build-core.sh release --lib-only`로 빌드하고 저장소 밖 prefix `~/.cache/zlink/core-pinned/0.17.3-alpha`에
+설치한다(재고정 절차 §10.3). 이 prefix로 재는 것은 **STREAM cell(7개 언어 × tcp; ws·wss·tls STREAM 포함
+여부는 C 기준 결과로 결정)**이다. 0.17.2로 판정한 tcp 6 pattern은 유지한다 — D-B216의 "재고정 시 전부 재측정"
+규칙에 대한 명시적 예외이며, 이유는 (1) alpha는 pre-release라 0.17.3 정식에서 어차피 전면 재고정이
+필요하고, (2) 이 태그의 Core 변경은 STREAM 수신 소유권 수정(D-B218…229) 하나이며, (3) 오늘 남은 시간에
+7×6 재측정(약 1.5 h)보다 STREAM 결함 해소 확인이 사용자가 요청한 "나머지 작업"이기 때문이다. 수신
+소유권 수정이 "모든 fair-queue socket에 잠재"했다는 changelog 문구는 tcp 판정에 영향이 있을 수 있으므로,
+STREAM 뒤 시간이 남으면 **C 기준 tcp 6 pattern 1-run**을 이 prefix로 한 번 돌려 0.17.2 C 기준과 ±5% 안인지
+확인하고 어긋나면 그 pattern만 재측정한다.
+
+**이 prefix의 한계:** ws/wss/tls 64 KiB 왕복(D-BP28/29/34)은 0.17.4 항목(D-B233)이라 이 태그에 없다 →
+그 cell들은 계속 `보류(Core 대기)`.
+
