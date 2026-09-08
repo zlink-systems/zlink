@@ -4644,3 +4644,14 @@ worktree에서 빌드해 `~/.cache/zlink/core-pinned/0.17.3` 설치 → 7개 언
 
 **확인**(D-BP42 표): .NET·C MULTI_STREAM ws 93.24 %, wss 96.19 %, tls 93.07 %, latency 1.04~1.07× — receive 소유권 수정(`de730d4ac5`) 전에는 C++·.NET이 이 셀에서 partial이었다. A는 `core/v0.17.3` prefix로 재고정 완료.
 **규칙(감독자, D-BP42 교훈 반영)**: 머신 B는 VERSION bump 커밋을 push하기 **전에** decisions에 D 항목으로 예고하고(버전·포함 커밋·예상 push 시각), A의 러너가 재고정할 수 있게 한다. 0.17.4 bump도 같은 절차.
+
+### D-BP43 (2026-09-08 14:15) 머신 B에 보고 — Core 1,025-part reply request future에서 `release_count1_completion_drain` assertion
+
+Rust binding `request_future_preserves_more_than_1024_reply_parts`가 고정 Core 0.17.3-alpha(=0.17.3 코드)에서
+`socket_base_api.cpp:1641 zlink_assert(released)` SIGABRT. 보고서 `doc/bug/perf/2026-09-08-core-count1-completion-drain-released-assert.ko.md`.
+perf 측정에는 영향 없음(러너는 2-part). 러너 검증에서 이 테스트만 제외한다.
+
+**같은 시각 Python 지도(부분):** Single DD C 571 vs Python 5,325 ns/msg(10.7%) — 메시지당 Python 함수 호출 19.3회, C 확장
+경계 5.0회. Python Single DR REQREP 러너가 측정 구간에 `asyncio.sleep(0)`+event loop를 쓰는 §1.1 위반 발견 → Single 러너
+정합 항목으로 추가(Claude sub-agent). ns 귀속은 0.17.3 bump로 중단, 재개 시 이어간다.
+
