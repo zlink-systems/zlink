@@ -1,0 +1,11 @@
+너는 job review-CCU-4(review-CCU-3 차단 1건·경고 3건 해소 재검증)다. /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽는다. **읽기·리뷰 전용**(소스·스펙·테스트 수정, 빌드·실행, 커밋 금지). 상한 30분.
+
+대상: worktree `/home/hep7hep7/project/zlink-work/ccu2`의 미커밋 diff(= `~/project/zlink-work/all-artifacts/CCU-4.patch`, core/** 13파일 + `unittest_auto_hwm_incremental_plan.cpp`). 입력: `review-ccu3.md`(B-CCU3-1, W-CCU3-1/2/3), `core-rf-CCU-4-report.md`, 스펙 `06-auto-hwm.ko.md` §2(D-H1 갱신 행)·§3·§4, `11-synchronization-model.ko.md` §3.3 mailbox/timer.
+
+검증 항목(근거 파일:행, 판정 해소/부분/미해소):
+1. **B-CCU3-1**: 수렴 규칙 "`total_applied_hwm_bytes > total_planned_hwm_bytes`이면 replan 필요"(`ctx_auto_hwm_state.cpp:325-341` `recalc_due()`)가 (a) 증분 성공 후 반드시 debounce 1회 전체 재계산을 실행하고, (b) 전체 pass 후 `applied == planned`로 스스로 꺼지며(반복 타이머 없음), (c) deferred shrink 상태(스펙 §4:477-480, 큐가 아직 drain 중이라 applied > planned가 정당하게 유지되는 경우)에서 **재계산을 무한 반복하지 않는지** — 이 경우 full pass가 planned를 다시 써도 applied가 여전히 큰데 `recalc_due()`가 계속 true가 되는 것은 아닌지 정적으로 확인(반례가 있으면 차단). (d) `pending_generation`을 올리지 않아 fast path guard가 유지되는지.
+2. **타이머 무장 규칙**: "마감을 처음 세우는 무장만 runtime 타이머를 깨우고, 일찍 깬 task가 남은 시간만큼 재무장" — 새 상태 없이 구현됐는지, ctx term 중 timer/task 수명(해제 후 실행), 두 스레드가 동시에 첫 무장을 시도하는 경쟁, mailbox wake 계약(§3.3)과의 정합.
+3. **W-CCU3-1/2/3**: 테스트가 `settle()` 후 증분 진입을 `budget_generation` 정확히 +1과 `total_applied > total_planned`로 assert하는지, 완화 범위가 증분 가능 케이스에만 한정되는지, barrier가 실제 동시 출발을 보장하는지, 수렴 자율 실행 테스트의 폴링 상한이 debounce(3000 ms)에 대해 flaky하지 않은지, inproc pair 케이스의 `zlink_recv(DONTWAIT)` 구동이 결정적인지.
+4. 주석 정합, public 헤더·`libzlink.vers` 무변경, Windows/macOS API.
+
+보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/review-ccu4.md (한국어; 항목별 판정 표, 신규 B/W/S, 마지막 줄 "차단 항목 수 / 채택 가능 여부"). 진행 파일 progress-review-ccu4.md.
