@@ -23,6 +23,7 @@ if ! flock -n 8; then echo "runner가 이미 떠 있다: $(cat "${root}/runner.p
 echo $$ > "${root}/runner.pid"
 trap 'rm -f "${root}/runner.pid"' EXIT
 
+log() { echo "$(date '+%H:%M:%S') $*" >> "${root}/runner.log"; }
 board() {
   {
     echo "# perf queue — $(date '+%Y-%m-%d %H:%M:%S') runner pid $$ load $(cut -d' ' -f1-3 /proc/loadavg)"
@@ -48,7 +49,8 @@ while :; do
   # 대기 목록이 바뀌면 상태판을 갱신한다(제출만 되고 실행이 안 넘어갈 때도 보이게).
   sig="$(ls "${root}"/pending 2>/dev/null | md5sum)"; [ "${sig}" != "${last_sig:-}" ] && { board; last_sig="${sig}"; }
   name="$(basename "${t}")"
-  mv "${t}" "${root}/running/${name}" || continue
+  log "pick ${name}"
+  mv "${t}" "${root}/running/${name}" || { log "mv-to-running 실패 ${name}"; continue; }
   t="${root}/running/${name}"
   echo "# waiting: $(date '+%H:%M:%S') lock·load 대기" >> "${t}"
   board
@@ -59,12 +61,14 @@ while :; do
   waited=0
   while awk -v m="${load_max}" '{exit !($1>m)}' /proc/loadavg && [ "${waited}" -lt 600 ]; do sleep 5; waited=$((waited+5)); done
   echo "# started: $(date '+%H:%M:%S') (lock·load 대기 ${waited}s, load $(cut -d' ' -f1 /proc/loadavg))" >> "${t}"
+  log "start ${name} (대기 ${waited}s)"
   board
   # 자식에게 runner lock(8)·perf lock(9)을 물려주지 않는다 — 자식이 남으면 lock도 남는다.
   ( exec 8>&- 9>&-; cd "${repo}" && bash "${t}" ) > "${root}/log/${name%.ticket}.log" 2>&1
   rc=$?
   exec 9>&-
   { echo "# finished: $(date '+%H:%M:%S')"; echo "# rc: ${rc}"; echo "# log: ${root}/log/${name%.ticket}.log"; } >> "${t}"
-  mv "${t}" "${root}/done/${name}"
+  mv "${t}" "${root}/done/${name}" || log "mv-to-done 실패 ${name}"
+  log "done ${name} rc=${rc}"
   board
 done
