@@ -27,6 +27,43 @@ enum class reqrep_launch_t
     fatal
 };
 
+// PERF_SINGLE_TEST_POLICY.md 1.1.3 (D-BP40): the awaitable request terminal
+// never reports admission, so the runner reproduces the C reference boundary
+// from the admission window Core actually applied to this socket -
+// `auto_hwm_applied_sndhwm_bytes` divided by the wire size of one request.
+// This is the same window whose exhaustion makes the C runner see
+// ZLINK_SUBMIT_BACKPRESSURED; it is not a fixed number.
+inline uint64_t reqrep_applied_sndhwm_bytes (const zlink::monitor_status_t &status_)
+{
+    return status_.auto_hwm_applied_sndhwm_bytes;
+}
+
+template <typename SocketLike>
+inline uint64_t reqrep_admission_window_bytes (const SocketLike &socket_)
+{
+    try {
+        zlink::socket_monitor_t monitor =
+          socket_.monitor_open (zlink::monitor_event::connection_ready);
+        if (!monitor.valid ())
+            return 0;
+        return reqrep_applied_sndhwm_bytes (monitor.status ());
+    }
+    catch (const zlink::binding_error_t &) {
+        return 0;
+    }
+}
+
+// Requests that fit in the applied admission window. One in-flight request is
+// always allowed so a window smaller than a single message still progresses.
+inline unsigned long long reqrep_admission_window_requests (uint64_t window_bytes_,
+                                                            size_t wire_size_)
+{
+    if (window_bytes_ == 0 || wire_size_ == 0)
+        return 1;
+    const uint64_t slots = window_bytes_ / static_cast<uint64_t> (wire_size_);
+    return slots < 1 ? 1ULL : static_cast<unsigned long long> (slots);
+}
+
 struct reqrep_state_t
 {
     reqrep_state_t (uint32_t run_id_, size_t msg_size_) :
@@ -423,6 +460,15 @@ inline bool run_reqrep_pattern_impl (const reqrep_config_t &config_,
         (void) ready_queue.run_ready_round ();
     };
 
+    // PERF_SINGLE_TEST_POLICY.md 1.1.3 (D-BP40): the outstanding set is bounded
+    // by the admission window Core applied to the requester socket, read from
+    // the same auto-HWM snapshot the runner reports in "## Auto-HWM Detail".
+    const unsigned long long admission_window = reqrep_admission_window_requests (
+      reqrep_admission_window_bytes (client), payload_size);
+    if (bench_debug_enabled ())
+        std::cerr << "[perf-single-reqrep] admission window requests=" << admission_window
+                  << " wire_size=" << payload_size << std::endl;
+
     {
         uint64_t seq = 1;
         const auto deadline =
@@ -434,37 +480,51 @@ inline bool run_reqrep_pattern_impl (const reqrep_config_t &config_,
           std::memory_order_release);
         while (std::chrono::steady_clock::now () < deadline
                && !request_state.fatal.load (std::memory_order_acquire)) {
-            // One requester turn submits one operation. The binding retains a
-            // refused input and resumes it from the matching WRITABLE token.
-            if (!perf_single_metric::stamp_payload (
-                  payload.data (), payload.size (), run_id,
-                  perf_single_metric::phase_active, msg_size_, seq,
-                  perf_single_metric::now_ns ())) {
-                request_state.fatal.store (true, std::memory_order_release);
-                break;
+            // Submit continuously without awaiting any reply, up to the applied
+            // admission window. The binding retains a refused input and resumes
+            // it from the matching WRITABLE token.
+            unsigned int submitted_since_progress = 0;
+            while (std::chrono::steady_clock::now () < deadline
+                   && !request_state.fatal.load (std::memory_order_acquire)
+                   && request_state.in_flight.load (std::memory_order_acquire)
+                        < admission_window) {
+                if (!perf_single_metric::stamp_payload (
+                      payload.data (), payload.size (), run_id,
+                      perf_single_metric::phase_active, msg_size_, seq,
+                      perf_single_metric::now_ns ())) {
+                    request_state.fatal.store (true, std::memory_order_release);
+                    break;
+                }
+                zlink::message_t request =
+                  message_from_payload (payload.data (), payload.size ());
+                if (!request.valid ()) {
+                    request_state.fatal.store (true, std::memory_order_release);
+                    break;
+                }
+                request_state.launch.store (reqrep_launch_t::launching,
+                                            std::memory_order_release);
+                submit_async_request (ready_queue, client, server_rid,
+                                      std::move (request),
+                                      std::chrono::milliseconds (request_timeout_ms),
+                                      &request_state);
+                if (request_state.launch.load (std::memory_order_acquire)
+                    != reqrep_launch_t::owned_by_operation) {
+                    request_state.fatal.store (true, std::memory_order_release);
+                    break;
+                }
+                ++seq;
+                // C parity (perf_single_reqrep.hpp run_request_phase): drain
+                // completions without waiting every 64 submissions so a long
+                // submission burst still settles replies as it goes.
+                if (++submitted_since_progress >= 64) {
+                    submitted_since_progress = 0;
+                    progress_once (std::chrono::milliseconds::zero ());
+                }
             }
-            zlink::message_t request =
-              message_from_payload (payload.data (), payload.size ());
-            if (!request.valid ()) {
-                request_state.fatal.store (true, std::memory_order_release);
-                break;
-            }
-            request_state.launch.store (reqrep_launch_t::launching,
-                                        std::memory_order_release);
-            submit_async_request (ready_queue, client, server_rid,
-                                  std::move (request),
-                                  std::chrono::milliseconds (request_timeout_ms),
-                                  &request_state);
-            if (request_state.launch.load (std::memory_order_acquire)
-                != reqrep_launch_t::owned_by_operation) {
-                request_state.fatal.store (true, std::memory_order_release);
-                break;
-            }
-            ++seq;
             if (request_state.fatal.load (std::memory_order_acquire))
                 break;
-            // Progress on this thread and block when there is no completion,
-            // so a fully backpressured interval cannot spin.
+            // The window is full (or the deadline passed): progress on this
+            // thread and block bounded so a saturated interval cannot spin.
             progress_once (std::chrono::milliseconds (50));
         }
 

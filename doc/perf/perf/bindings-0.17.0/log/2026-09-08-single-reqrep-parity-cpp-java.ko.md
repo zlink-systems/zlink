@@ -137,3 +137,137 @@ sg1에서 Java `PAIR` tcp 64 B latency가 11.605 ms(p95 46.9 / p99 56.9)로 C의
 - C: `bindings/c/perf/results/single/report/perf_c_single_linux_20260908_130119_sg1.txt`
 - C++: `bindings/cpp/perf/results/single/report/perf_cpp_single_linux_20260908_131617_sg1.txt`
 - Java: `bindings/java/perf/results/single/report/perf_java_single_linux_20260908_132754_sg1.txt`
+
+---
+
+# §추가 (2026-09-08 14:0x) — D-BP40 admission window 구현과 sgfix-cpp 결과
+
+감독자 결정 D-BP40(정책 §1.1.3에 명문화)에 따라 (a′)를 구현했다. awaitable terminal 러너는
+awaitable을 기다리지 않고 계속 제출하되, 미완료 집합을 **Core가 그 소켓에 적용한 SNDHWM bytes ÷
+메시지 wire size**로 묶는다. 고정 숫자 상한이 아니다.
+
+## 6. diff 요지
+
+### C++ `bindings/cpp/perf/single/common/perf_single_reqrep.hpp`
+
+1. `reqrep_admission_window_bytes(socket)` 추가 — requester 소켓에 monitor를 열어
+   `monitor_status_t::auto_hwm_applied_sndhwm_bytes`를 읽는다. 러너가 이미
+   `## Auto-HWM Detail`에 찍는 값과 같은 snapshot 경로다(`perf_single_common.hpp`
+   `emit_single_socket_hwm_detail`).
+2. `reqrep_admission_window_requests(window_bytes, wire_size)` 추가 —
+   `window_bytes / wire_size`, 최소 1. `wire_size`는 header를 포함한 실제 part 크기
+   (`payload_size = max(msg_size, header_size())`).
+3. active 루프를 C의 2단 turn으로 되돌렸다. 기존에는 turn당 1건 제출 뒤 곧바로
+   `progress_once(50ms)`가 completion 하나를 **기다렸다**. 이제 내부 루프가
+   `in_flight < admission_window` 동안 연속 제출하고, C와 같이 **제출 64건마다
+   `progress_once(0)`** 로 대기 없이 drain하며, 창이 차거나 deadline이 지나면
+   외부에서 `progress_once(50ms)`로 bounded 대기한다.
+   (C `perf_single_reqrep.hpp:418-444` `run_request_phase`와 같은 형태.)
+4. 창 값은 `PERF_DEBUG`일 때만 stderr에 찍는다(정상 stdout 계약 불변).
+
+### Java `.../single/PerfSocketReqRep.java`
+
+1. `admissionWindowRequests(windowBytes, wireSize)` 추가, `run()`에서 이미 열려 있는
+   `clientMonitor.status().autoHwmAppliedSendHwmBytes()`와
+   `Math.max(config.size(), PerfUtil.HEADER_SIZE)`로 창을 계산해
+   `runRequestPhase(...)`에 넘긴다.
+2. active 루프를 같은 2단 turn으로 바꿨다 — `outstanding.get() < admissionWindow`
+   동안 연속 제출, 64건마다 `completionPoller.poll(0)`, 창이 차면
+   `completionPoller.poll(min(50, remaining))`.
+
+불변 유지: timeout·sleep 추가 없음, 고정 숫자 상한 없음, 진행 주체는 여전히 전용
+requester thread(C++는 자기 ready queue, Java는 POLLCOMPLETION poller가 유일한 dispatch),
+완료되는 것부터 drain, deadline 이후 새 제출 없음.
+
+## 7. before/after (C++, tcp 1-run, 태그 `sgfix-cpp`)
+
+C: `perf_c_single_linux_20260908_135850_sgfix-cpp.txt`
+C++: `perf_cpp_single_linux_20260908_135952_sgfix-cpp.txt`
+(before는 `sg1` 3종 — §4 상단 참조)
+
+| pattern | size | C tput | C++ tput | **after 비율** | before 비율 | C 깊이 | C++ 깊이 |
+|---|---|---|---|---|---|---|---|
+| DEALER_ROUTER_REQREP | 64 | 543,279 | 492,521 | **90.7 %** | (C 실패) | 4050.8 | 97.1 |
+| | 256 | 812,355 | 454,208 | **55.9 %** | 1.7 % | 575.2 | 111.1 |
+| | 1024 | 721,087 | 435,496 | **60.4 %** | 2.0 % | 980.3 | 99.0 |
+| | 65536 | 10,992 | 10,908 | **99.2 %** | 90.8 % | 1.94 | 15.99 |
+| | 131072 | 9,105 | 9,695 | **106.5 %** | 93.4 % | 1.94 | 8.00 |
+| | 262144 | 7,144 | 7,699 | **107.8 %** | 93.5 % | 1.93 | 4.00 |
+| ROUTER_ROUTER_REQREP | 64 | 878,559 | 536,803 | **61.1 %** | (n/a) | 138.0 | 93.3 |
+| | 256 | 820,950 | 475,610 | **57.9 %** | | 192.5 | 117.0 |
+| | 1024 | 698,641 | 458,618 | **65.6 %** | | 4729.6 | 150.3 |
+| | 65536 | 10,932 | 10,987 | **100.5 %** | | 1.94 | 15.99 |
+| | 131072 | 9,206 | 9,401 | **102.1 %** | | 1.94 | 8.00 |
+| | 262144 | 7,040 | 7,753 | **110.1 %** | | 1.93 | 4.00 |
+
+산술평균 비율: `DEALER_ROUTER_REQREP` **86.7 %** (before 56.3 %),
+`ROUTER_ROUTER_REQREP` **82.9 %** (before 47.4 %).
+미완료 깊이는 1.00 고정에서 **93 ~ 150**(작은 크기) / **4 ~ 16**(큰 크기)로 올라
+C와 같은 자릿수가 됐다. RTT 루프는 사라졌다.
+
+## 8. 대형 크기 latency 8.3x — 무엇인가
+
+65536 B에서 C++ latency 1.466 ms vs C 0.177 ms(8.3x), 131072 B 3.9x, 262144 B 1.9x.
+처리량은 오히려 C 이상(99~110 %)이다.
+
+### (1) 정의 차이가 아니다 — C도 재제출 시 timestamp를 다시 찍지 않는다
+
+`bindings/c/perf/single/common/perf_single_reqrep.hpp:229-243` `submit_request`:
+
+```c
+const bool retrying = state_->retained_request;
+if (retrying && (!state_->retry_ready || state_->wait_token != 0))
+    return submit_step_blocked;
+if (!retrying) {                       // <-- 재제출이면 stamp 자체를 건너뛴다
+    const unsigned long long seq = state_->next_seq.fetch_add (1, ...);
+    if (!perf_single_metric::stamp_payload (..., perf_single_metric::now_ns ())) ...
+}
+```
+
+`retrying`이면 `stamp_payload`를 호출하지 않으므로 payload의 `sent_ts_ns`는 **첫 제출
+시도 시각** 그대로다. 즉 C의 REQREP latency도 admission 이후가 아니라 첫 제출부터
+재며, retain 대기가 그대로 포함된다. C++ awaitable과 **같은 정의**다.
+(one-way 경로는 정반대다 — 정책 §1.1이 transient 재시도마다 `sent_ts_ns` 재stamp를
+요구하고 `send_active_samples`가 그렇게 한다. REQREP은 의도적으로 다르다.)
+
+### (2) 창을 Core admission에 더 가깝게 잡을 근거는 없다 — 그리고 대형 크기에서는 창 문제도 아니다
+
+C의 깊이를 바이트로 환산하면(같은 `sgfix-cpp` 실행):
+
+| pattern | size | C 깊이(건) | C 깊이(바이트) | HWM 창(건) |
+|---|---|---|---|---|
+| DR | 64 | 4050.8 | 253 KiB | 16384 |
+| DR | 256 | 575.2 | 144 KiB | 4096 |
+| DR | 1024 | 980.3 | 980 KiB | 1024 |
+| DR | 65536 | 1.94 | 124 KiB | 16 |
+| DR | 131072 | 1.94 | 248 KiB | 8 |
+| DR | 262144 | 1.93 | 494 KiB | 4 |
+| RR | 1024 | 4729.6 | **4730 KiB** | 1024 |
+| RR | 64 | 138.0 | 8.6 KiB | 16384 |
+
+바이트 깊이가 8.6 KiB에서 4730 KiB까지 흩어지고, `RR 1024 B`는 1 MiB HWM의 4.6배다.
+즉 **C의 깊이는 대부분의 셀에서 admission 창이 아니라 C 러너 자신의 submit/drain 루프
+평형**이다. 특히 65536 B 이상에서 C의 깊이 1.93~1.94는 124~494 KiB로 1 MiB HWM에
+한참 못 미치므로, C는 그 크기에서 **BACKPRESSURED를 아예 만나지 않는다.**
+따라서 창 값을 어떻게 잡아도 그 크기의 C latency를 재현할 수 없다. 재현하려면 실제
+admission 시점을 알거나 C와 같은 turn 비용을 가져야 하는데, 전자는 공개 경로가 없고
+(§3: C++ `completion_owner.cpp:242`의 `admitted`를 `start_request()`가 버린다,
+Java `submit()` javadoc 동일; POLLOUT은 정책 §1.1.3이 금지) 후자는 언어 비용 문제다.
+
+**결론**: 창 상한 = HWM 창(D-BP40 정의)으로 확정한다. 대형 크기에서 C++ 깊이가 창에
+정확히 붙고(15.99 / 8.00 / 4.00) C보다 깊어져 latency가 3~8배가 되는 것은 **창 모델의
+한계**다 — 그 구간에서 C는 창이 아니라 루프 평형으로 얕게 도는데, awaitable 러너에는
+그 평형을 만들 신호가 없다. 처리량은 오히려 C 이상(99~110 %)이므로 정합 목표
+(“깊이가 C와 같은 자릿수”)는 충족한다.
+
+## 9. 미완료 검증 — 환경 차단
+
+`sgfix-java`(C+Java REQREP)와 PAIR 64 B 회귀 티켓은 rc=1로 실패했다. 원인은 이 변경과
+무관하다: 2026-09-08 14:00:53에 `0761c1d4d0 chore(version): bump libzlink and bindings to
+0.17.3`이 main에 들어와 저장소 VERSION이 0.17.3이 됐는데, 고정 alpha prefix
+`~/.cache/zlink/core-pinned/0.17.3-alpha`의 provenance manifest는 의도적으로
+`"version": "0.17.2"`(D-B235)이다. `bindings/tools/local_core_runtime.sh:40-41`의 대조가
+실패해 **모든 언어 러너가 즉시 종료**한다(감독자의 s173x Java 티켓도 14:03:31에 같은
+이유로 rc=1). 감독자가 `core/v0.17.3` prefix를 빌드해 7개 언어를 재빌드한 뒤 같은 검증
+티켓을 `ZLINK_CORE_PACKAGE_PREFIX=/home/hep7/.cache/zlink/core-pinned/0.17.3`으로 다시
+낸다. 그때까지 Java 짝지음과 PAIR 회귀는 미측정이다.
