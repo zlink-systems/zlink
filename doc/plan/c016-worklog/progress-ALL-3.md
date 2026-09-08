@@ -1,0 +1,454 @@
+# ALL-3 진행
+
+- 시작: 2026-09-08 04:21 UTC. 상한: 08:21 UTC.
+- 04:22 UTC: 공통 규칙·ALL-1·WS-1·WIN-1 보고서 확인. all3 detached 1a79625d3d, clean. A allocator/engine와 D fixture 조사 시작. JOBS=4, 자원 게이트 및 PERF_LOCK 준수. 아직 빌드·측정 없음.
+- 04:25 UTC: dev 최초 빌드 진행(시작 자원 ninja=0, available=10002MB). A: OS 송신 queue를 HWM에 넣는 안은 05-memory §3.4/06-auto-hwm dequeue 경계와 충돌하여 D 검토. 현재 read buffer를 보존한 채 같은 allocator recycle state로 큰 payload를 생성하는 대안 설계 중. C/E 읽기 전용 agent, D fixture 한 파일 agent 독립 투입.
+- 04:31 UTC: A allocator 후보 구현: 현재 read buffer는 보존하고 기존 한 칸 spare와 callback으로 큰 payload를 소유. 입력 보존·admission retry·cross-thread close·allocator 종료 신규 unit 추가. dev 빌드 진행 중이며 아직 검증 전. 새 latency/RSS 비율 gate(Python 6개) 및 기존 WS gate 11개 통과.
+- 04:36 UTC: D fixture 검토 후 pong event fence 채택, control drain-start 기존3초 timeout 복원. exact262152 pending 및 shutdown 후 잔여>0 유지. Windows clone 준비 완료(no-checkout). C/E 초안·gate·sampler 독립 조사 완료; sampler 실제 binary comp_src_* 이름을 감독이 대조하여 보완.
+- 04:37:12 UTC: dev-allocator-build: gate ninja=0 available=8571MiB load=(7.97265625, 9.01513671875, 6.61962890625)
+- 04:37:12 UTC: dev-allocator-build: 시작
+- 04:39:00 UTC: dev-allocator-build: 종료 rc=0, 105.04s; 로그 dev-allocator-build.log
+- 04:39:02 UTC: dev-allocator-fixture-focused: 시작
+- 04:39:04 UTC: dev-allocator-fixture-focused: 종료 rc=8, 2.0s; 로그 dev-allocator-fixture-focused.log
+- 04:39:16 UTC: release-allocator-build: gate ninja=0 available=9480MiB load=(8.50732421875, 9.05029296875, 6.93408203125)
+- 04:39:16 UTC: release-allocator-build: 시작
+- 04:42:03 UTC: release-allocator-build: 종료 rc=0, 162.07s; 로그 release-allocator-build.log
+- 04:43:17 UTC: perf-tools-build: gate ninja=0 available=10525MiB load=(2.74267578125, 6.64892578125, 6.4951171875)
+- 04:43:17 UTC: perf-tools-build: 시작
+- 04:43:21 UTC: perf-tools-build: 종료 rc=1, 4.0s; 로그 perf-tools-build.log
+- 04:44:34 UTC: perf-tools-build-focused: gate ninja=0 available=10563MiB load=(4.0654296875, 5.9658203125, 6.2529296875)
+- 04:44:34 UTC: perf-tools-build-focused: 시작
+- 04:45:47 UTC: perf-tools-build-focused: 종료 rc=0, 71.01s; 로그 perf-tools-build-focused.log
+- 04:46:29 UTC: dev-new-repeat20: 시작
+- 04:46:32 UTC: hotpath-release-build: gate ninja=0 available=10206MiB load=(2.2763671875, 4.7255859375, 5.76953125)
+- 04:46:32 UTC: hotpath-release-build: 시작
+- 04:46:46 UTC: dev-new-repeat20: 종료 rc=0, 16.0s; 로그 dev-new-repeat20.log
+- 04:47:08 UTC: hotpath-release-build: 종료 rc=0, 35.01s; 로그 hotpath-release-build.log
+- 04:48:20 UTC: candidate-multi64: 대기 ninja=0 available=9558MiB PERF_LOCK_free=True load=(4.423828125, 4.9501953125, 5.75)
+- 04:50 UTC: 신규/변경2 target×20회 통과(15.96s); allocator41case 중 신규5개 포함. Release lib·hotpath binary 준비 완료. 공개 interface diff0(f5d 기준),mirror12/12. 성능은 타 job compiler/load 대기 중. 보고서 C/E 초안 작성 및 직접 코드 검증(poller registry mutex 잔존 확인).
+- 04:51:25 UTC: candidate-multi64: 대기 ninja=0 available=8075MiB PERF_LOCK_free=True load=(7.6171875, 5.78662109375, 5.900390625)
+- 04:53:21 UTC: python-performance-gates: 시작
+- 04:53:22 UTC: python-performance-gates: 종료 rc=0, 1.0s; 로그 python-performance-gates.log
+- 04:54:30 UTC: candidate-multi64: 대기 ninja=0 available=10503MiB PERF_LOCK_free=True load=(3.09912109375, 4.77197265625, 5.5)
+- 04:57:00 UTC: windows-configure: gate ninja=0 available=10645MiB load=(1.25, 3.4677734375, 4.90625)
+- 04:57:00 UTC: windows-configure: 시작
+- 04:57:01 UTC: windows-configure: 종료 rc=1, 1.01s; 로그 windows-configure.log
+- 04:57:35 UTC: candidate-multi64: gate ninja=0 available=10646MiB load=(0.69580078125, 3.08251953125, 4.72314453125)
+- 04:57:35 UTC: candidate-multi64: 시작
+- 04:57:40 UTC: windows-configure-local-script: 대기 ninja=0 available=10472MiB PERF_LOCK_free=False load=(1.12060546875, 3.13134765625, 4.73046875)
+- 04:59:24 UTC: candidate-multi64: 종료 rc=0, 106.02s; 로그 candidate-multi64.log
+- 04:59:43 UTC: windows-configure-local-script: gate ninja=0 available=10497MiB load=(3.85302734375, 3.64697265625, 4.73291015625)
+- 04:59:43 UTC: windows-configure-local-script: 시작
+- 05:00:15 UTC: windows-configure-local-script: 종료 rc=0, 32.01s; 로그 windows-configure-local-script.log
+- 05:01:21 UTC: massif-large-payload: gate ninja=0 available=10561MiB load=(1.484375, 2.9140625, 4.3642578125)
+- 05:01:21 UTC: massif-large-payload: 시작
+- 05:01:39 UTC: massif-large-payload: 종료 rc=0, 17.0s; 로그 massif-large-payload.log
+- 05:03:20 UTC: massif100-large-payload: gate ninja=0 available=10146MiB load=(0.798828125, 2.234375, 3.9453125)
+- 05:03:20 UTC: massif100-large-payload: 시작
+- 05:03:34 UTC: massif100-large-payload: 종료 rc=0, 14.0s; 로그 massif100-large-payload.log
+- 05:10:37 UTC: heap-probe-build: gate ninja=0 available=10686MiB load=(0.08935546875, 0.62451171875, 2.5341796875)
+- 05:10:37 UTC: heap-probe-build: 시작
+- 05:10:38 UTC: heap-probe-build: 종료 rc=0, 1.0s; 로그 heap-probe-build.log
+- 05:10:53 UTC: heap-native-diagnostic: gate ninja=0 available=10682MiB load=(0.06884765625, 0.59326171875, 2.4931640625)
+- 05:10:53 UTC: heap-native-diagnostic: 시작
+- 05:11:20 UTC: heap-native-diagnostic: 종료 rc=0, 26.0s; 로그 heap-native-diagnostic.log
+- 05:11:39 UTC: tsan-build: gate ninja=0 available=10717MiB load=(1.876953125, 1.068359375, 2.568359375)
+- 05:11:39 UTC: tsan-build: 시작
+- 05:15 UTC: 100client Massif live heap tcp29.93MB/ws34.07MB; native mallinfo2 diagnostic은 live heap 자체 증가(최대GB)를 확인. C relay pending/WRITABLE service starvation 가설 직접 코드 조사·독립 재검증 진행. C++ D-BP29 pending≤1 증거와 분리. TSan 전체 계측 build 진행 중.
+- 05:14:02 UTC: dev-full: 시작
+- 05:14:44 UTC: tsan-build: 실행 중
+- 05:15:38 UTC: relay-diagnostic-build: 대기 ninja=1 available=9339MiB PERF_LOCK_free=False load=(4.53857421875, 2.904296875, 2.97998046875)
+- 05:17:06 UTC: dev-full: 실행 중
+- 05:17:49 UTC: tsan-build: 실행 중
+- 05:18:19 UTC: dev-full: 종료 rc=0, 250.05s; 로그 dev-full.log
+- 05:18:43 UTC: relay-diagnostic-build: 대기 ninja=1 available=9966MiB PERF_LOCK_free=False load=(4.3017578125, 3.5732421875, 3.2353515625)
+- 05:19:07 UTC: tsan-build: 종료 rc=0, 436.1s; 로그 tsan-build.log
+- 05:19:45 UTC: relay-diagnostic-build: gate ninja=0 available=10627MiB load=(2.2861328125, 3.19091796875, 3.1298828125)
+- 05:19:45 UTC: relay-diagnostic-build: 시작
+- 05:19:48 UTC: relay-diagnostic-build: 종료 rc=0, 3.0s; 로그 relay-diagnostic-build.log
+- 05:20:10 UTC: relay-pending-before: 대기 ninja=0 available=10625MiB PERF_LOCK_free=True load=(1.50537109375, 2.93359375, 3.04541015625)
+- 05:21:12 UTC: relay-pending-before: gate ninja=0 available=10628MiB load=(0.60400390625, 2.412109375, 2.857421875)
+- 05:21:12 UTC: relay-pending-before: 시작
+- 05:21:19 UTC: relay-pending-before: 종료 rc=0, 7.0s; 로그 relay-pending-before.log
+- 05:21:39 UTC: bp34-before-five: gate ninja=0 available=10543MiB load=(0.79833984375, 2.326171875, 2.8173828125)
+- 05:21:39 UTC: bp34-before-five: 시작
+- 05:22:24 UTC: bp34-before-five: 종료 rc=0, 44.01s; 로그 bp34-before-five.log
+- 05:22 UTC: C relay native trace pending16384건 관측(64KiB payload·allocator overhead로GB RSS 설명). 계약 socket README991-1018/polling60-68 직접검증 후 application event-loop B로채택. 반송대기 중 POLLIN수신중단·WRITABLE drain으로회귀하도록 최소수정. 회귀test독립추가중. 기존C tls RR64KiB5run(15s drain창) 재현중.
+- 05:22:48 UTC: relay-final-build: gate ninja=0 available=10597MiB load=(2.53515625, 2.66796875, 2.91015625)
+- 05:22:48 UTC: relay-final-build: 시작
+- 05:22:51 UTC: relay-final-build: 종료 rc=0, 3.0s; 로그 relay-final-build.log
+- 05:23:09 UTC: relay-fixed-multi64: 대기 ninja=0 available=10568MiB PERF_LOCK_free=True load=(1.89501953125, 2.5107421875, 2.8525390625)
+- 05:24:11 UTC: relay-fixed-multi64: gate ninja=0 available=10582MiB load=(0.6943359375, 2.05126953125, 2.6708984375)
+- 05:24:11 UTC: relay-fixed-multi64: 시작
+- 05:26:00 UTC: relay-fixed-multi64: 종료 rc=0, 106.02s; 로그 relay-fixed-multi64.log
+- 05:27:06 UTC: tsan-related: 시작
+- 05:27:06 UTC: asan-build: gate ninja=0 available=9823MiB load=(2.8896484375, 2.59716796875, 2.7880859375)
+- 05:27:06 UTC: asan-build: 시작
+- 05:27:28 UTC: asan-build: 종료 rc=1, 21.0s; 로그 asan-build.log
+- 05:28:08 UTC: tsan-related: 종료 rc=0, 60.01s; 로그 tsan-related.log
+- 05:30:08 UTC: compact-payload-dev-build: gate ninja=0 available=8150MiB load=(4.3505859375, 3.5302734375, 3.1318359375)
+- 05:30:08 UTC: compact-payload-dev-build: 시작
+- 05:30:10 UTC: compact-payload-dev-build: 종료 rc=2, 2.0s; 로그 compact-payload-dev-build.log
+- 05:31:12 UTC: compact-payload-dev-rebuild: gate ninja=0 available=8744MiB load=(3.83642578125, 3.564453125, 3.171875)
+- 05:31:12 UTC: compact-payload-dev-rebuild: 시작
+- 05:31:30 UTC: compact-payload-dev-rebuild: 종료 rc=0, 18.0s; 로그 compact-payload-dev-rebuild.log
+- 05:31:56 UTC: compact-payload-repeat20: 시작
+- 05:32:16 UTC: compact-payload-repeat20: 종료 rc=0, 19.01s; 로그 compact-payload-repeat20.log
+- 05:32:41 UTC: relay-regression-build: 대기 ninja=1 available=8133MiB PERF_LOCK_free=True load=(6.8623046875, 4.533203125, 3.544921875)
+- 05:35:46 UTC: relay-regression-build: 대기 ninja=1 available=8881MiB PERF_LOCK_free=True load=(7.41357421875, 6.24951171875, 4.41455078125)
+- 05:36:47 UTC: dev-final-build: 대기 ninja=1 available=8896MiB PERF_LOCK_free=True load=(5.37451171875, 5.88037109375, 4.40283203125)
+- 05:38:49 UTC: dev-final-build: gate ninja=0 available=10615MiB load=(3.1015625, 5.0419921875, 4.28369140625)
+- 05:38:49 UTC: dev-final-build: 시작
+- 05:38:51 UTC: relay-regression-build: 대기 ninja=0 available=10277MiB PERF_LOCK_free=False load=(3.1015625, 5.0419921875, 4.28369140625)
+- 05:39:16 UTC: dev-final-build: 종료 rc=0, 26.01s; 로그 dev-final-build.log
+- 05:39:16 UTC: tsan-final-build: gate ninja=0 available=10629MiB load=(3.767578125, 5.03955078125, 4.30224609375)
+- 05:39:16 UTC: tsan-final-build: 시작
+- 05:39:58 UTC: tsan-final-build: 종료 rc=0, 40.01s; 로그 tsan-final-build.log
+- 05:39:58 UTC: asan-final-build: gate ninja=0 available=10630MiB load=(4.1689453125, 4.9853515625, 4.3154296875)
+- 05:39:58 UTC: asan-final-build: 시작
+- 05:40:06 UTC: dev-final-full: 시작
+- 05:40:28 UTC: windows-final-build-ctest: 대기 ninja=1 available=8897MiB PERF_LOCK_free=False load=(4.88525390625, 5.0576171875, 4.359375)
+- 05:41:56 UTC: relay-regression-build: 대기 ninja=1 available=9516MiB PERF_LOCK_free=False load=(7.91162109375, 5.99755859375, 4.75439453125)
+- 05:43:03 UTC: asan-final-build: 실행 중
+- 05:43:11 UTC: dev-final-full: 실행 중
+- 05:43:33 UTC: windows-final-build-ctest: 대기 ninja=1 available=6563MiB PERF_LOCK_free=False load=(8.37353515625, 6.69970703125, 5.1298828125)
+- 05:44:36 UTC: dev-final-full: 종료 rc=0, 262.06s; 로그 dev-final-full.log
+- 05:44:36 UTC: dev-final-related-repeat3: 시작
+- 05:45:01 UTC: relay-regression-build: 대기 ninja=1 available=7975MiB PERF_LOCK_free=False load=(6.3681640625, 6.58984375, 5.23876953125)
+- 05:46:08 UTC: asan-final-build: 실행 중
+- 05:46:22 UTC: dev-final-related-repeat3: 종료 rc=0, 104.02s; 로그 dev-final-related-repeat3.log
+- 05:46:23 UTC: tsan-final-related: 시작
+- 05:46:39 UTC: windows-final-build-ctest: 대기 ninja=1 available=8218MiB PERF_LOCK_free=False load=(5.38818359375, 6.171875, 5.21923828125)
+- 05:47:27 UTC: tsan-final-related: 종료 rc=8, 62.03s; 로그 tsan-final-related.log
+- 05:48:06 UTC: relay-regression-build: 대기 ninja=1 available=8211MiB PERF_LOCK_free=False load=(4.83740234375, 5.86181640625, 5.19580078125)
+- 05:49:13 UTC: asan-final-build: 실행 중
+- 05:49:43 UTC: windows-final-build-ctest: 대기 ninja=1 available=6208MiB PERF_LOCK_free=False load=(7.5615234375, 6.1640625, 5.34765625)
+- 05:51:11 UTC: relay-regression-build: 대기 ninja=1 available=6533MiB PERF_LOCK_free=False load=(8.44091796875, 6.841796875, 5.66455078125)
+- 05:51:58 UTC: asan-final-build: 종료 rc=0, 701.16s; 로그 asan-final-build.log
+- 05:51:58 UTC: release-final-build: gate ninja=0 available=9523MiB load=(8.4306640625, 7.072265625, 5.80517578125)
+- 05:51:58 UTC: release-final-build: 시작
+- 05:52:35 UTC: release-final-build: 종료 rc=0, 36.12s; 로그 release-final-build.log
+- 05:52:36 UTC: hotpath-final-build: gate ninja=0 available=9115MiB load=(13.546875, 8.5048828125, 6.33154296875)
+- 05:52:36 UTC: hotpath-final-build: 시작
+- 05:52:49 UTC: windows-final-build-ctest: 대기 ninja=0 available=9074MiB PERF_LOCK_free=False load=(12.84765625, 8.521484375, 6.36083984375)
+- 05:53:29 UTC: hotpath-final-build: 종료 rc=0, 52.02s; 로그 hotpath-final-build.log
+- 05:53:30 UTC: perf-final-build: 대기 ninja=1 available=9433MiB PERF_LOCK_free=True load=(12.5439453125, 8.990234375, 6.61083984375)
+- 05:54:16 UTC: relay-regression-build: 대기 ninja=1 available=7260MiB PERF_LOCK_free=True load=(12.34130859375, 9.44287109375, 6.8779296875)
+- 05:55:18 UTC: relay-regression-build: gate ninja=0 available=8604MiB load=(12.525390625, 10.0791015625, 7.26220703125)
+- 05:55:18 UTC: relay-regression-build: 시작
+- 05:55:26 UTC: relay-regression-build: 종료 rc=0, 8.05s; 로그 relay-regression-build.log
+- 05:55:33 UTC: perf-final-build: gate ninja=0 available=9610MiB load=(11.5224609375, 9.9765625, 7.275390625)
+- 05:55:33 UTC: perf-final-build: 시작
+- 05:55:38 UTC: perf-final-build: 종료 rc=0, 5.0s; 로그 perf-final-build.log
+- 05:55:54 UTC: windows-final-build-ctest: gate ninja=0 available=9281MiB load=(9.6982421875, 9.66748046875, 7.2314453125)
+- 05:55:54 UTC: windows-final-build-ctest: 시작
+- 05:58:01 UTC: relay-regression-repeat20: 시작
+- 05:58:06 UTC: relay-regression-repeat20: 종료 rc=8, 5.08s; 로그 relay-regression-repeat20.log
+- 05:59:00 UTC: windows-final-build-ctest: 실행 중
+- 06:02:06 UTC: windows-final-build-ctest: 실행 중
+- 06:05:12 UTC: windows-final-build-ctest: 실행 중
+- 06:06:44 UTC: windows-final-build-ctest: 종료 rc=1, 632.39s; 로그 windows-final-build-ctest.log
+- 06:10:06 UTC: relay-regression-fenced-build: 대기 ninja=2 available=8840MiB PERF_LOCK_free=True load=(15.5146484375, 14.81591796875, 11.80517578125)
+- 06:11:31 UTC: windows-portable-build-ctest: 대기 ninja=2 available=8495MiB PERF_LOCK_free=True load=(13.2685546875, 14.357421875, 11.9150390625)
+- 06:11:32 UTC: asan-final-related: 시작
+- 06:11:55 UTC: asan-final-related: 종료 rc=0, 22.02s; 로그 asan-final-related.log
+- 06:13:11 UTC: relay-regression-fenced-build: 대기 ninja=1 available=9824MiB PERF_LOCK_free=True load=(12.33642578125, 13.65966796875, 11.89697265625)
+- 06:13:24 UTC: final64: 대기 ninja=1 available=10077MiB PERF_LOCK_free=True load=(10.642578125, 13.21875, 11.78076171875)
+- 06:13:55 UTC: tsan-fixture-isolated-repeat20: 대기 ninja=1 available=9375MiB PERF_LOCK_free=True load=(8.3564453125, 12.41650390625, 11.55859375)
+- 06:14:37 UTC: windows-portable-build-ctest: gate ninja=0 available=10547MiB load=(5.2919921875, 11.224609375, 11.19189453125)
+- 06:14:37 UTC: windows-portable-build-ctest: 시작
+- 06:14:57 UTC: windows-portable-build-ctest: 종료 rc=1, 20.01s; 로그 windows-portable-build-ctest.log
+- 06:16:17 UTC: relay-regression-fenced-build: 대기 ninja=1 available=9295MiB PERF_LOCK_free=True load=(4.240234375, 9.01904296875, 10.39111328125)
+- 06:16:30 UTC: final64: 대기 ninja=1 available=9770MiB PERF_LOCK_free=True load=(4.32763671875, 8.80517578125, 10.298828125)
+- 06:17:01 UTC: tsan-fixture-isolated-repeat20: 대기 ninja=1 available=10521MiB PERF_LOCK_free=True load=(6.33837890625, 8.88427734375, 10.2783203125)
+- 06:17:46 UTC: relay-asan-build: 대기 ninja=1 available=10036MiB PERF_LOCK_free=True load=(5.2666015625, 8.2861328125, 10.01708984375)
+- 06:19:22 UTC: relay-regression-fenced-build: 대기 ninja=1 available=9497MiB PERF_LOCK_free=True load=(4.97802734375, 7.47314453125, 9.56005859375)
+- 06:19:36 UTC: final64: 대기 ninja=0 available=10553MiB PERF_LOCK_free=True load=(3.9423828125, 7.1220703125, 9.4111328125)
+- 06:20:06 UTC: tsan-fixture-isolated-repeat20: 대기 ninja=0 available=10547MiB PERF_LOCK_free=True load=(2.45068359375, 6.45556640625, 9.1162109375)
+- 06:20:24 UTC: relay-regression-fenced-build: gate ninja=0 available=10526MiB load=(1.9873046875, 6.1552734375, 8.974609375)
+- 06:20:24 UTC: relay-regression-fenced-build: 시작
+- 06:20:27 UTC: relay-regression-fenced-build: 종료 rc=0, 3.01s; 로그 relay-regression-fenced-build.log
+- 06:20:52 UTC: relay-asan-build: gate ninja=0 available=10239MiB load=(1.6318359375, 5.7392578125, 8.76171875)
+- 06:20:52 UTC: relay-asan-build: 시작
+- 06:20:56 UTC: relay-asan-build: 종료 rc=0, 4.0s; 로그 relay-asan-build.log
+- 06:20:56 UTC: relay-asan-test: 대기 ninja=0 available=9843MiB PERF_LOCK_free=True load=(2.14208984375, 5.77685546875, 8.75732421875)
+- 06:21:37 UTC: relay-regression-fenced-repeat20: 시작
+- 06:21:38 UTC: relay-regression-fenced-repeat20: 종료 rc=0, 1.01s; 로그 relay-regression-fenced-repeat20.log
+- 06:21:38 UTC: relay-regression-before-proof: 시작
+- 06:21:39 UTC: relay-regression-before-proof: 종료 rc=1, 1.0s; 로그 relay-regression-before-proof.log
+- 06:22:41 UTC: final64: 대기 ninja=0 available=9026MiB PERF_LOCK_free=False load=(5.953125, 6.02685546875, 8.5224609375)
+- 06:23:12 UTC: tsan-fixture-isolated-repeat20: 대기 ninja=0 available=9999MiB PERF_LOCK_free=False load=(4.947265625, 5.7958984375, 8.3798828125)
+- 06:24:02 UTC: relay-asan-test: 대기 ninja=0 available=7091MiB PERF_LOCK_free=False load=(13.9501953125, 8.05322265625, 9.0087890625)
+- 06:25:46 UTC: final64: 대기 ninja=0 available=9531MiB PERF_LOCK_free=False load=(14.22705078125, 10.4619140625, 9.810546875)
+- 06:26:17 UTC: tsan-fixture-isolated-repeat20: 대기 ninja=0 available=10523MiB PERF_LOCK_free=False load=(8.90966796875, 9.53857421875, 9.52392578125)
+- 06:27:06 UTC: relay-asan-test: 대기 ninja=0 available=10552MiB PERF_LOCK_free=False load=(4.68017578125, 8.3271484375, 9.11328125)
+- 06:28:02 UTC: windows-final-portability-build-ctest: 대기 ninja=0 available=10557MiB PERF_LOCK_free=False load=(2.57666015625, 7.0986328125, 8.64453125)
+- 06:28:46 UTC: portability-dev-build: gate ninja=0 available=10545MiB load=(1.45947265625, 6.16650390625, 8.25390625)
+- 06:28:46 UTC: portability-dev-build: 시작
+- 06:28:51 UTC: final64: 대기 ninja=0 available=10543MiB PERF_LOCK_free=False load=(1.42236328125, 6.08056640625, 8.21484375)
+- 06:29:12 UTC: portability-dev-build: 종료 rc=0, 25.0s; 로그 portability-dev-build.log
+- 06:29:12 UTC: portability-dev-tests: 시작
+- 06:29:16 UTC: portability-dev-tests: 종료 rc=0, 4.0s; 로그 portability-dev-tests.log
+- 06:29:22 UTC: tsan-fixture-isolated-repeat20: gate ninja=0 available=10557MiB load=(1.12353515625, 5.638671875, 8.01123046875)
+- 06:29:22 UTC: tsan-fixture-isolated-repeat20: 시작
+- 06:30:12 UTC: relay-asan-test: 대기 ninja=0 available=10494MiB PERF_LOCK_free=False load=(1.94970703125, 5.15625, 7.72021484375)
+- 06:31:06 UTC: windows-final-portability-build-ctest: 대기 ninja=0 available=10502MiB PERF_LOCK_free=False load=(1.76904296875, 4.58642578125, 7.3779296875)
+- 06:31:07 UTC: tsan-fixture-isolated-repeat20: 종료 rc=0, 102.02s; 로그 tsan-fixture-isolated-repeat20.log
+- 06:31:07 UTC: tsan-related-isolated: 대기 ninja=0 available=10540MiB PERF_LOCK_free=False load=(1.76904296875, 4.58642578125, 7.3779296875)
+- 06:31:57 UTC: final64: gate ninja=0 available=10546MiB load=(1.2412109375, 4.076171875, 7.0732421875)
+- 06:31:57 UTC: final64: 시작
+- 06:33:17 UTC: relay-asan-test: 대기 ninja=0 available=10519MiB PERF_LOCK_free=False load=(3.236328125, 4.03173828125, 6.80810546875)
+- 06:33:47 UTC: final64: 종료 rc=0, 107.02s; 로그 final64.log
+- 06:33:47 UTC: final1024: 대기 ninja=0 available=10542MiB PERF_LOCK_free=False load=(4.70947265625, 4.30224609375, 6.81005859375)
+- 06:34:12 UTC: windows-final-portability-build-ctest: 대기 ninja=0 available=10557MiB PERF_LOCK_free=False load=(3.1689453125, 3.9716796875, 6.63330078125)
+- 06:34:13 UTC: tsan-related-isolated: 대기 ninja=0 available=10557MiB PERF_LOCK_free=False load=(3.1689453125, 3.9716796875, 6.63330078125)
+- 06:35:14 UTC: windows-final-portability-build-ctest: gate ninja=0 available=10613MiB load=(1.58935546875, 3.35546875, 6.251953125)
+- 06:35:14 UTC: windows-final-portability-build-ctest: 시작
+- 06:36:23 UTC: relay-asan-test: 대기 ninja=0 available=10597MiB PERF_LOCK_free=False load=(0.74951171875, 2.76904296875, 5.8515625)
+- 06:36:53 UTC: final1024: 대기 ninja=0 available=10577MiB PERF_LOCK_free=False load=(1.18798828125, 2.66650390625, 5.716796875)
+- 06:37:18 UTC: tsan-related-isolated: 대기 ninja=0 available=10523MiB PERF_LOCK_free=False load=(1.18017578125, 2.546875, 5.595703125)
+- 06:37:35 UTC: windows-final-portability-build-ctest: 종료 rc=1, 137.05s; 로그 windows-final-portability-build-ctest.log
+- 06:39:28 UTC: relay-asan-test: 대기 ninja=0 available=10483MiB PERF_LOCK_free=False load=(4.052734375, 3.2919921875, 5.48681640625)
+- 06:39:58 UTC: final1024: 대기 ninja=0 available=10595MiB PERF_LOCK_free=False load=(3.96875, 3.34326171875, 5.43359375)
+- 06:40:24 UTC: tsan-related-isolated: 대기 ninja=0 available=10594MiB PERF_LOCK_free=False load=(3.68505859375, 3.33056640625, 5.3740234375)
+- 06:40:32 UTC: windows-hooks-build-ctest: 대기 ninja=0 available=10527MiB PERF_LOCK_free=False load=(3.51904296875, 3.3037109375, 5.3427734375)
+- 06:40:34 UTC: unity-hooks-dev-build: 대기 ninja=0 available=10581MiB PERF_LOCK_free=False load=(3.51904296875, 3.3037109375, 5.3427734375)
+- 06:42:34 UTC: relay-asan-test: 대기 ninja=0 available=10587MiB PERF_LOCK_free=False load=(3.0634765625, 3.2236328125, 5.07373046875)
+- 06:43:04 UTC: final1024: 대기 ninja=0 available=10465MiB PERF_LOCK_free=False load=(2.43994140625, 3.0703125, 4.96435546875)
+- 06:43:29 UTC: tsan-related-isolated: 대기 ninja=1 available=9762MiB PERF_LOCK_free=False load=(4.373046875, 3.46923828125, 5.04638671875)
+- 06:43:38 UTC: windows-hooks-build-ctest: 대기 ninja=1 available=9743MiB PERF_LOCK_free=False load=(4.31494140625, 3.4873046875, 5.03466796875)
+- 06:43:39 UTC: unity-hooks-dev-build: 대기 ninja=1 available=9901MiB PERF_LOCK_free=False load=(4.31494140625, 3.4873046875, 5.03466796875)
+- 06:45:54 UTC: final1024: 대기 ninja=1 available=8195MiB lock_held=False load=(7.1875, 4.927734375, 5.365234375)
+- 06:45:55 UTC: windows-hooks-build-ctest: 대기 ninja=1 available=8276MiB lock_held=False load=(7.1875, 4.927734375, 5.365234375)
+- 06:45:57 UTC: tsan-related-isolated: 대기 ninja=1 available=9040MiB lock_held=False load=(7.01220703125, 4.92919921875, 5.36279296875)
+- 06:45:58 UTC: relay-asan-test: 대기 ninja=1 available=8657MiB lock_held=False load=(7.01220703125, 4.92919921875, 5.36279296875)
+- 06:45:59 UTC: unity-hooks-dev-build: 대기 ninja=1 available=8628MiB lock_held=False load=(7.01220703125, 4.92919921875, 5.36279296875)
+- 06:48:59 UTC: final1024: 대기 ninja=1 available=7193MiB lock_held=False load=(7.3623046875, 5.97021484375, 5.6845703125)
+- 06:49:00 UTC: windows-hooks-build-ctest: 대기 ninja=1 available=7092MiB lock_held=False load=(7.3623046875, 5.97021484375, 5.6845703125)
+- 06:49:01 UTC: tsan-related-isolated: 대기 ninja=1 available=7023MiB lock_held=False load=(7.3623046875, 5.97021484375, 5.6845703125)
+- 06:49:02 UTC: relay-asan-test: 대기 ninja=1 available=6957MiB lock_held=False load=(7.0927734375, 5.9375, 5.67529296875)
+- 06:49:04 UTC: unity-hooks-dev-build: 대기 ninja=1 available=6965MiB lock_held=False load=(7.0927734375, 5.9375, 5.67529296875)
+- 06:52:05 UTC: final1024: PERF_LOCK 대기열 진입
+- 06:52:06 UTC: windows-hooks-build-ctest: PERF_LOCK 대기열 진입
+- 06:52:07 UTC: tsan-related-isolated: PERF_LOCK 대기열 진입
+- 06:52:08 UTC: relay-asan-test: PERF_LOCK 대기열 진입
+- 06:52:09 UTC: unity-hooks-dev-build: PERF_LOCK 대기열 진입
+- 06:55:09 UTC: final1024: PERF_LOCK 대기 중
+- 06:55:11 UTC: windows-hooks-build-ctest: PERF_LOCK 대기 중
+- 06:55:12 UTC: tsan-related-isolated: PERF_LOCK 대기 중
+- 06:55:13 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 06:55:15 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 06:57:49 UTC: final1024: PERF_LOCK 획득; 실행 전 자원 재확인
+- 06:57:49 UTC: final1024: 대기 ninja=0 available=10541MiB lock_held=True load=(1.62548828125, 4.0986328125, 5.08349609375)
+- 06:58:17 UTC: windows-hooks-build-ctest: PERF_LOCK 대기 중
+- 06:58:18 UTC: tsan-related-isolated: PERF_LOCK 대기 중
+- 06:58:19 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 06:58:21 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 06:58:51 UTC: final1024: gate ninja=0 available=10509MiB load=(1.00537109375, 3.47021484375, 4.80419921875)
+- 06:58:51 UTC: final1024: 시작
+- 06:59:44 UTC: final1024: 종료 rc=0, 50.02s; 로그 final1024.log
+- 06:59:44 UTC: windows-hooks-build-ctest: PERF_LOCK 획득; 실행 전 자원 재확인
+- 06:59:44 UTC: windows-hooks-build-ctest: 대기 ninja=1 available=9939MiB lock_held=True load=(4.3916015625, 3.904296875, 4.87548828125)
+- 06:59:44 UTC: ws-final-gate: 대기 ninja=1 available=9906MiB lock_held=False load=(4.3916015625, 3.904296875, 4.87548828125)
+- 07:01:24 UTC: tsan-related-isolated: PERF_LOCK 대기 중
+- 07:01:25 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:01:27 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:02:10 UTC: ws-final-gate: 시작
+- 07:02:11 UTC: ws-final-gate: 종료 rc=0, 1.0s; 로그 ws-final-gate.log
+- 07:02:11 UTC: latency-rss-final-gate: 시작
+- 07:02:12 UTC: latency-rss-final-gate: 종료 rc=1, 1.0s; 로그 latency-rss-final-gate.log
+- 07:02:13 UTC: single-alternating: 대기 ninja=1 available=8126MiB lock_held=False load=(4.40966796875, 4.140625, 4.82568359375)
+- 07:02:49 UTC: windows-hooks-build-ctest: 대기 ninja=1 available=7546MiB lock_held=True load=(4.33251953125, 4.15478515625, 4.80419921875)
+- 07:04:29 UTC: tsan-related-isolated: PERF_LOCK 대기 중
+- 07:04:30 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:04:32 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:04:32 UTC: final1024-idle-recheck: 대기 ninja=2 available=7587MiB lock_held=False load=(7.18701171875, 5.01806640625, 5.03759765625)
+- 07:05:19 UTC: single-alternating: 대기 ninja=2 available=6869MiB lock_held=False load=(8.13330078125, 5.58837890625, 5.232421875)
+- 07:05:55 UTC: windows-hooks-build-ctest: 대기 ninja=2 available=6927MiB lock_held=True load=(8.9560546875, 6.07763671875, 5.41064453125)
+- 07:07:35 UTC: tsan-related-isolated: PERF_LOCK 대기 중
+- 07:07:37 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:07:38 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:07:38 UTC: final1024-idle-recheck: 대기 ninja=1 available=6016MiB lock_held=False load=(7.787109375, 6.76513671875, 5.740234375)
+- 07:08:24 UTC: single-alternating: 대기 ninja=2 available=5516MiB lock_held=False load=(7.3642578125, 6.71923828125, 5.7685546875)
+- 07:09:00 UTC: windows-hooks-build-ctest: 대기 ninja=1 available=5983MiB lock_held=True load=(8.77490234375, 7.25732421875, 5.98974609375)
+- 07:10:40 UTC: tsan-related-isolated: PERF_LOCK 대기 중
+- 07:10:42 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:10:43 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:10:44 UTC: final1024-idle-recheck: 대기 ninja=1 available=8930MiB lock_held=False load=(5.2392578125, 6.43115234375, 5.81884765625)
+- 07:11:04 UTC: windows-hooks-build-ctest: gate ninja=0 available=10490MiB load=(4.4130859375, 6.17333984375, 5.7470703125)
+- 07:11:04 UTC: windows-hooks-build-ctest: 시작
+- 07:11:30 UTC: single-alternating: PERF_LOCK 대기열 진입
+- 07:11:46 UTC: final1024-idle-recheck: PERF_LOCK 대기열 진입
+- 07:13:47 UTC: tsan-related-isolated: PERF_LOCK 대기 중
+- 07:13:48 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:13:49 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:14:10 UTC: windows-hooks-build-ctest: 실행 중
+- 07:14:35 UTC: single-alternating: PERF_LOCK 대기 중
+- 07:14:52 UTC: final1024-idle-recheck: PERF_LOCK 대기 중
+- 07:16:52 UTC: tsan-related-isolated: PERF_LOCK 대기 중
+- 07:16:53 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:16:55 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:17:16 UTC: windows-hooks-build-ctest: 실행 중
+- 07:17:42 UTC: single-alternating: PERF_LOCK 대기 중
+- 07:17:57 UTC: final1024-idle-recheck: PERF_LOCK 대기 중
+- 07:19:51 UTC: windows-hooks-build-ctest: 종료 rc=8, 509.18s; 로그 windows-hooks-build-ctest.log
+- 07:19:59 UTC: tsan-related-isolated: PERF_LOCK 대기 중
+- 07:20:00 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:20:01 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:20:47 UTC: single-alternating: PERF_LOCK 대기 중
+- 07:21:04 UTC: final1024-idle-recheck: PERF_LOCK 대기 중
+- 07:22:24 UTC: windows-failed-targets-recheck: PERF_LOCK 대기열 진입
+- 07:23:04 UTC: tsan-related-isolated: PERF_LOCK 대기 중
+- 07:23:05 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:23:06 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:23:49 UTC: final1024-idle-recheck: PERF_LOCK 획득; 실행 전 자원 재확인
+- 07:23:49 UTC: final1024-idle-recheck: 대기 ninja=0 available=10487MiB lock_held=True load=(2.1513671875, 1.88134765625, 3.185546875)
+- 07:23:54 UTC: single-alternating: PERF_LOCK 대기 중
+- 07:24:50 UTC: final1024-idle-recheck: gate ninja=0 available=10482MiB load=(0.83349609375, 1.5517578125, 2.98828125)
+- 07:24:50 UTC: final1024-idle-recheck: 시작
+- 07:25:30 UTC: windows-failed-targets-recheck: PERF_LOCK 대기 중
+- 07:25:41 UTC: final1024-idle-recheck: 종료 rc=0, 49.02s; 로그 final1024-idle-recheck.log
+- 07:25:41 UTC: tsan-related-isolated: PERF_LOCK 획득; 실행 전 자원 재확인
+- 07:25:41 UTC: tsan-related-isolated: 대기 ninja=0 available=10477MiB lock_held=True load=(2.05078125, 1.7880859375, 2.994140625)
+- 07:25:41 UTC: ws-idle-recheck-gate: 시작
+- 07:25:42 UTC: ws-idle-recheck-gate: 종료 rc=1, 1.0s; 로그 ws-idle-recheck-gate.log
+- 07:26:12 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:26:13 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:26:44 UTC: tsan-related-isolated: gate ninja=0 available=10495MiB load=(0.75146484375, 1.46044921875, 2.8037109375)
+- 07:26:44 UTC: tsan-related-isolated: 시작
+- 07:26:59 UTC: single-alternating: PERF_LOCK 대기 중
+- 07:27:42 UTC: tsan-related-isolated: 종료 rc=0, 56.02s; 로그 tsan-related-isolated.log
+- 07:27:42 UTC: windows-failed-targets-recheck: PERF_LOCK 획득; 실행 전 자원 재확인
+- 07:27:42 UTC: windows-failed-targets-recheck: gate ninja=0 available=10502MiB load=(0.53955078125, 1.2744140625, 2.6611328125)
+- 07:27:42 UTC: windows-failed-targets-recheck: 시작
+- 07:27:42 UTC: tsan-final-full: PERF_LOCK 대기열 진입
+- 07:28:30 UTC: windows-failed-targets-recheck: 종료 rc=8, 47.01s; 로그 windows-failed-targets-recheck.log
+- 07:29:17 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:29:18 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:30:05 UTC: single-alternating: PERF_LOCK 획득; 실행 전 자원 재확인
+- 07:30:05 UTC: single-alternating: 대기 ninja=0 available=10496MiB lock_held=True load=(4.22021484375, 2.15234375, 2.77490234375)
+- 07:30:18 UTC: windows-routing-export-flow: PERF_LOCK 대기열 진입
+- 07:30:18 UTC: routing-dev-build: PERF_LOCK 대기열 진입
+- 07:30:47 UTC: tsan-final-full: PERF_LOCK 대기 중
+- 07:32:08 UTC: single-alternating: gate ninja=0 available=10483MiB load=(0.697265625, 1.50048828125, 2.45751953125)
+- 07:32:08 UTC: single-alternating: 시작
+- 07:32:24 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:32:25 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:33:25 UTC: windows-routing-export-flow: PERF_LOCK 대기 중
+- 07:33:25 UTC: routing-dev-build: PERF_LOCK 대기 중
+- 07:33:54 UTC: tsan-final-full: PERF_LOCK 대기 중
+- 07:35:15 UTC: single-alternating: 실행 중
+- 07:35:29 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:35:32 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:36:30 UTC: windows-routing-export-flow: PERF_LOCK 대기 중
+- 07:36:31 UTC: routing-dev-build: PERF_LOCK 대기 중
+- 07:37:00 UTC: tsan-final-full: PERF_LOCK 대기 중
+- 07:38:21 UTC: single-alternating: 실행 중
+- 07:38:36 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:38:37 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:39:37 UTC: windows-routing-export-flow: PERF_LOCK 대기 중
+- 07:39:37 UTC: routing-dev-build: PERF_LOCK 대기 중
+- 07:40:06 UTC: tsan-final-full: PERF_LOCK 대기 중
+- 07:41:26 UTC: single-alternating: 실행 중
+- 07:41:42 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:41:43 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:42:25 UTC: single-alternating: 종료 rc=0, 597.2s; 로그 single-alternating.log
+- 07:42:25 UTC: rr1024-three: PERF_LOCK 대기열 진입
+- 07:42:42 UTC: windows-routing-export-flow: PERF_LOCK 대기 중
+- 07:42:42 UTC: routing-dev-build: PERF_LOCK 대기 중
+- 07:43:11 UTC: tsan-final-full: PERF_LOCK 대기 중
+- 07:44:47 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:44:48 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:45:30 UTC: rr1024-three: PERF_LOCK 대기 중
+- 07:45:48 UTC: windows-routing-export-flow: PERF_LOCK 대기 중
+- 07:45:48 UTC: routing-dev-build: PERF_LOCK 대기 중
+- 07:46:17 UTC: tsan-final-full: PERF_LOCK 대기 중
+- 07:47:53 UTC: relay-asan-test: PERF_LOCK 대기 중
+- 07:47:54 UTC: unity-hooks-dev-build: PERF_LOCK 대기 중
+- 07:49:27 UTC final-batch: PERF_LOCK 단일 검증 batch 대기
+- 07:52:33 UTC final-batch: PERF_LOCK 대기 중
+- 07:55:03 UTC final-batch: PERF_LOCK 확보
+- 07:55:03 UTC final-batch: dispatch final-portability-dev-build
+- 07:55:03 UTC: final-portability-dev-build: gate ninja=0 available=10585MiB load=(1.38134765625, 2.23046875, 2.13037109375)
+- 07:55:03 UTC: final-portability-dev-build: 시작
+- 07:55:19 UTC: final-portability-dev-build: 종료 rc=0, 14.0s; 로그 final-portability-dev-build.log
+- 07:55:20 UTC final-batch: result final-portability-dev-build rc=0
+- 07:55:20 UTC final-batch: dispatch final-portability-dev-tests
+- 07:55:20 UTC: final-portability-dev-tests: 시작
+- 07:55:23 UTC: final-portability-dev-tests: 종료 rc=0, 3.0s; 로그 final-portability-dev-tests.log
+- 07:55:24 UTC final-batch: result final-portability-dev-tests rc=0
+- 07:55:24 UTC final-batch: dispatch relay-asan-test
+- 07:55:24 UTC: relay-asan-test: 시작
+- 07:55:25 UTC: relay-asan-test: 종료 rc=0, 1.01s; 로그 relay-asan-test.log
+- 07:55:26 UTC final-batch: result relay-asan-test rc=0
+- 07:55:26 UTC final-batch: dispatch relay-tsan-build
+- 07:55:26 UTC: relay-tsan-build: gate ninja=0 available=10582MiB load=(1.39013671875, 2.181640625, 2.1162109375)
+- 07:55:26 UTC: relay-tsan-build: 시작
+- 07:55:28 UTC: relay-tsan-build: 종료 rc=0, 2.0s; 로그 relay-tsan-build.log
+- 07:55:29 UTC final-batch: result relay-tsan-build rc=0
+- 07:55:29 UTC final-batch: dispatch relay-tsan-test
+- 07:55:29 UTC: relay-tsan-test: 시작
+- 07:55:30 UTC: relay-tsan-test: 종료 rc=0, 1.0s; 로그 relay-tsan-test.log
+- 07:55:31 UTC final-batch: result relay-tsan-test rc=0
+- 07:55:31 UTC final-batch: dispatch tsan-final-portability-build
+- 07:55:31 UTC: tsan-final-portability-build: gate ninja=0 available=10584MiB load=(1.27880859375, 2.14501953125, 2.1044921875)
+- 07:55:31 UTC: tsan-final-portability-build: 시작
+- 07:57:29 UTC: tsan-final-portability-build: 종료 rc=0, 114.03s; 로그 tsan-final-portability-build.log
+- 07:57:30 UTC final-batch: result tsan-final-portability-build rc=0
+- 07:57:30 UTC final-batch: dispatch tsan-final-full
+- 07:57:30 UTC: tsan-final-full: 시작
+- 08:00:36 UTC: tsan-final-full: 실행 중
+- 08:03:43 UTC: tsan-final-full: 실행 중
+- 08:03:58 UTC: tsan-final-full: 종료 rc=0, 375.07s; 로그 tsan-final-full.log
+- 08:03:59 UTC final-batch: result tsan-final-full rc=0
+- 08:03:59 UTC final-batch: dispatch windows-routing-export-flow
+- 08:03:59 UTC: windows-routing-export-flow: gate ninja=0 available=10478MiB load=(0.55322265625, 1.240234375, 1.783203125)
+- 08:03:59 UTC: windows-routing-export-flow: 시작
+- 08:04:14 UTC: windows-routing-export-flow: 종료 rc=0, 14.01s; 로그 windows-routing-export-flow.log
+- 08:04:15 UTC final-batch: result windows-routing-export-flow rc=0
+- 08:04:15 UTC final-batch: dispatch rr1024-three
+- 08:04:15 UTC: rr1024-three: gate ninja=0 available=10486MiB load=(0.43017578125, 1.1787109375, 1.75390625)
+- 08:04:15 UTC: rr1024-three: 시작
+- 08:04:39 UTC: rr1024-three: 종료 rc=0, 23.0s; 로그 rr1024-three.log
+- 08:04:40 UTC final-batch: result rr1024-three rc=0
+- 08:04:40 UTC final-batch: dispatch bp29-final-five
+- 08:04:40 UTC: bp29-final-five: 대기 ninja=0 available=10477MiB lock_held=True load=(1.654296875, 1.41845703125, 1.81884765625)
+- 08:05:41 UTC: bp29-final-five: gate ninja=0 available=10591MiB load=(0.654296875, 1.17236328125, 1.70751953125)
+- 08:05:41 UTC: bp29-final-five: 시작
+- 08:06:23 UTC: bp29-final-five: 종료 rc=0, 40.01s; 로그 bp29-final-five.log
+- 08:06:24 UTC final-batch: result bp29-final-five rc=0
+- 08:06:24 UTC final-batch: dispatch bp34-final-five
+- 08:06:24 UTC: bp34-final-five: 대기 ninja=0 available=10592MiB lock_held=True load=(2.2783203125, 1.513671875, 1.79833984375)
+- 08:07:27 UTC: bp34-final-five: gate ninja=0 available=10580MiB load=(0.8349609375, 1.23583984375, 1.68310546875)
+- 08:07:27 UTC: bp34-final-five: 시작
+- 08:08:12 UTC: bp34-final-five: 종료 rc=0, 44.01s; 로그 bp34-final-five.log
+- 08:08:13 UTC final-batch: result bp34-final-five rc=0
+- 08:08:13 UTC final-batch: dispatch hotpath-final
+- 08:08:13 UTC: hotpath-final: 대기 ninja=0 available=10618MiB lock_held=True load=(3.05517578125, 1.73828125, 1.83056640625)
+- 08:09:15 UTC: hotpath-final: gate ninja=0 available=10614MiB load=(1.1201171875, 1.41845703125, 1.712890625)
+- 08:09:15 UTC: hotpath-final: 시작
+- 08:09:26 UTC: hotpath-final: 종료 rc=1, 11.0s; 로그 hotpath-final.log
+- 08:09:27 UTC final-batch: result hotpath-final rc=1
+- 08:09:27 UTC final-batch: dispatch with-stream-final
+- 08:09:27 UTC: with-stream-final: gate ninja=0 available=10609MiB load=(1.02099609375, 1.3876953125, 1.69970703125)
+- 08:09:27 UTC: with-stream-final: 시작
+- 08:10:39 UTC: with-stream-final: 종료 rc=0, 70.01s; 로그 with-stream-final.log
+- 08:10:40 UTC final-batch: result with-stream-final rc=0
+- 08:10:40 UTC final-batch: all remaining steps completed
+- 08:12:01 UTC: asan-final-fixture-build: PERF_LOCK 대기열 진입
+- 08:12:04 UTC: asan-final-fixture-build: PERF_LOCK 획득; 실행 전 자원 재확인
+- 08:12:04 UTC: asan-final-fixture-build: gate ninja=0 available=10612MiB load=(0.853515625, 1.3515625, 1.64990234375)
+- 08:12:04 UTC: asan-final-fixture-build: 시작
+- 08:12:16 UTC: asan-final-fixture-build: 종료 rc=0, 12.0s; 로그 asan-final-fixture-build.log
+- 08:12:16 UTC: asan-final-fixture-tests: PERF_LOCK 대기열 진입
+- 08:12:16 UTC: asan-final-fixture-tests: PERF_LOCK 획득; 실행 전 자원 재확인
+- 08:12:16 UTC: asan-final-fixture-tests: gate ninja=0 available=10618MiB load=(1.2578125, 1.4228515625, 1.669921875)
+- 08:12:16 UTC: asan-final-fixture-tests: 시작
+- 08:12:23 UTC: asan-final-fixture-tests: 종료 rc=0, 7.0s; 로그 asan-final-fixture-tests.log
+- 08:12:23 UTC: dev-final-raw-helper-repeat3: PERF_LOCK 대기열 진입
+- 08:12:32 UTC: dev-final-raw-helper-repeat3: PERF_LOCK 획득; 실행 전 자원 재확인
+- 08:12:32 UTC: dev-final-raw-helper-repeat3: gate ninja=0 available=10602MiB load=(1.12646484375, 1.384765625, 1.65283203125)
+- 08:12:32 UTC: dev-final-raw-helper-repeat3: 시작
+- 08:12:41 UTC: dev-final-raw-helper-repeat3: 종료 rc=0, 9.0s; 로그 dev-final-raw-helper-repeat3.log
+
+- 2026-09-08 08:17:37 UTC: ALL-3 종료. dev210/210, TSan210/210 및 관련61/61, ASan최종fixture12/12+native PASS. B single8셀/RR3회 완료, TLS10회 complete, with_stream6/6 mismatch0. WS ratio·latency/RSS·hotpath strict gate FAIL. Windows 전체201/210, 이식성 수정 후5개 suite 실패와 reconnect 간헐 위험 유지. 보고서·누적patch 확정; public diff0/mirror12/12/Windows파일25/25. commit/stash/spec 변경0, own watcher 종료.

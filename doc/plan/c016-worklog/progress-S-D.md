@@ -1,0 +1,25 @@
+# S-D 진행
+
+- 2026-09-08 시작: 공통 규칙·문서 규칙·브리프 확인. `main`이며 기존 benchmark/보고서 변경은 사용자 작업으로 보존한다. 분석 전용으로 소스·스펙·git 상태를 변경하지 않는다.
+- 현재 단계: 측정 재현 방법과 세 서버의 정적 read/write 경로 조사.
+- 2026-09-08 16:09: 정적 대조 1차 완료. cppserver는 connection별 독립 `io_service`, accept 직후 조회한 커널 기본값 크기의 user read buffer와 full-read 시 2배 성장, 2개 send vector swap, 1 KiB inline handler allocator를 사용한다. 벤치의 1 MiB `SO_RCVBUF` 설정은 첫 read arm 뒤여서 user vector 초기 크기는 바꾸지 않는다. 기본 asio는 16 KiB 고정 read chunk·connection strand·read와 write 직렬화다. zlink는 4 KiB에서 시작해 2회 full-hit마다 성장하고 별도 app↔I/O pipe/mailbox 경로를 거친다. 현재 ninja=2라 측정 gate 대기 중.
+- 2026-09-08 16:16: ninja=0, available=10.4 GiB, load1=0.48에서 첫 strace 셀을 제출했으나 다른 gate job이 PERF_LOCK을 보유 중이라 대기한다. 대기 중 확인 결과 기본 asio client는 connection당 inflight=10이므로 cppserver의 read/write 동시 진행과 cross-read send 병합이 실제 비교에서 활용된다.
+- 2026-09-08 16:22: asio 1024 B strace 완료(`recv_msgs=40,557`, 시작/종료 load1 0.87/0.88). cppserver 1024 B 셀은 다음 PERF_LOCK 순서를 기다린다. 세 서버 모두 `-O3`, GCC 13.3이며 cppserver는 standalone Asio 1.32, 기본 서버는 Boost 1.83이다.
+- 2026-09-08 16:28: cppserver strace 첫 시도는 잠금 획득 시 load1=2.15라 실행 전 중단했고 60 s 대기 후 load1=1.84에서 재제출했다. 현재 다른 TSan/gate job의 PERF_LOCK 종료를 기다린다. asio 1024 B는 `recvfrom` 1.002/msg, `sendto` 1.000/msg, `epoll_wait` 0.101/msg.
+- 2026-09-08 16:31: cppserver 1024 B strace 완료(`recv_msgs=39,778`, 시작/종료 load1 0.25/0.29). `recvfrom` 1.003/msg·`sendto` 1.000/msg로 병합은 이 축소 셀에서 나타나지 않았지만 `epoll_wait`은 0.051/msg로 기본 asio의 절반이다. zlink 1024 B 셀은 PERF_LOCK 대기 중.
+- 2026-09-08 16:35: zlink 1024 B strace는 실행 전이며 병행 gate job의 PERF_LOCK을 계속 기다린다(ninja=0, 최근 load1=0.39). 정적 복사 하한은 기본 asio 2×wire bytes/msg, cppserver 3×wire bytes/msg이며 zlink RAW는 steady-state complete-chunk echo에서 payload copy 0회다. 따라서 cppserver 우위가 zero-copy 때문이라는 가설은 코드상 반박된다.
+- 2026-09-08 16:38: PERF_LOCK 보유 중인 `single-alternating` 측정이 계속되어 zlink strace가 대기 중이다. 신규 실행은 없으며, lock 밖 빌드·valgrind도 시작하지 않았다.
+- 2026-09-08 16:42: 같은 PERF_LOCK 대기 지속. 보유 job의 측정 child가 실행 중이며 시스템은 ninja=0·load1<1 상태다. 확보된 두 셀과 정적 근거는 보존했다.
+- 2026-09-08 16:45: 앞선 보유 job 뒤 다른 `final.sh` 측정 job이 PERF_LOCK을 획득해 zlink 1024 B 셀 대기 지속. 소스·스펙 변경 없음.
+- 2026-09-08 16:48: `final.sh`가 CCU1000 전체 크기 3회 측정을 진행해 load1=3.22다. 잠금과 idle 조건이 모두 회복될 때까지 현재 셀을 시작하지 않는다.
+- 2026-09-08 16:52: 병행 CCU1000 측정이 계속되어 PERF_LOCK 대기 중(load1 2.61). 본 job의 신규 측정은 없다.
+- 2026-09-08 16:57: zlink 1024 B 시도는 앞선 측정 직후 load1=3.46이라 실행 전 중단했다. 60 s 뒤 load1=1.54에서 재제출했으나 `final-batch.py`가 PERF_LOCK을 보유하고 TSan build 중이어서 다시 대기한다.
+- 2026-09-08 17:00: TSan build의 ninja는 종료됐지만 `final-batch.py`가 PERF_LOCK을 계속 보유한다. zlink 1024 B 셀은 시작 전 상태로 대기한다.
+- 2026-09-08 17:03: `final-batch.py`의 후속 작업이 계속되어 동일 대기 상태다. 보고서의 정적 표와 계약 적합성 판단을 정리 중이다.
+- 2026-09-08 17:07: PERF_LOCK 보유 job이 5-run TLS perf 단계로 진행했다. 본 job은 zlink strace 대기 상태를 유지하며 병행 측정에 간섭하지 않는다.
+- 2026-09-08 17:14: idle 회복 뒤 strace 6개 셀 완료. 64 KiB의 socket syscall/msg는 asio `recvfrom=5.007`, `sendto=2.000`; cppserver `1.009`, `1.000`; zlink `3.024`, `1.000`. cppserver의 큰 read buffer와 `async_write_some`이 큰 payload에서 약 5 socket syscall/msg를 제거함을 확인했다. Callgrind baseline으로 이동.
+- 2026-09-08 17:20: Callgrind 6개 셀과 서버별 무클라이언트 baseline 완료. baseline 차감 self Ir/msg는 1 KiB에서 asio 4,986, cppserver 3,642, zlink 8,686이고, 64 KiB에서 각각 279,810, 272,725, 214,990이다. 64 KiB zlink의 Ir/msg가 낮아도 strace상 pipe/mailbox syscall과 reactor 왕복이 많으므로 wall throughput과 모순되지 않는다. 함수·할당·복사 정규화 및 보고서 작성 단계로 이동.
+- 2026-09-08 17:29: 보고서 1차 작성 완료. cppserver 우위는 64 KiB에서 기본 asio 대비 성공 recv 약 4회, send 1회, epoll_wait 0.30회를 줄이는 경로로 귀속했다. zlink 후속은 (B1) restart speculative EAGAIN 제거와 (B2) 2-hit target 성장 규칙 단순화로 제한했다. 수치·링크·작업 범위 최종 검산 중.
+- 2026-09-08 17:43: 정규화 산식과 상위 20 함수표 재검산 완료. 64 KiB zlink `speculative_read()` 호출 1.104/msg가 strace의 EAGAIN recv 1.000/msg와 일치함을 추가 확인했다. allocation은 connection setup 포함 상한임을 명시하고, complete-chunk 기대값을 1 KiB 관측치 약 1.2 alloc/msg로 보수화했다.
+- 2026-09-08 17:50: effective 첫 read target이 4,096 B임을 정책 cap에서 재확인했다. 또한 큰 RAW chunk가 `완전 frame + 다음 frame 일부`이면 benchmark가 정상 suffix를 malformed로 분류하는 독립 결함을 발견했다. B2의 copy/Ir 이득을 TCP chunk 경계 종속 범위로 수정하고, benchmark 선행 수정(≤1 h)을 보고서에 분리했다.
+- 2026-09-08 17:51 완료: 최종 보고서 315행 작성, Markdown table 구조·trailing whitespace·원본 metric error를 검증했다. 소스·스펙·build·git 조작은 하지 않았고 보고서와 진행 파일만 새로 만들었다.

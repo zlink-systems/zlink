@@ -1,0 +1,1 @@
+R10-B: DONE. worktree ~/project/zlink-work/r10, main d98ef46fd7. Bundle B(ctx_socket_registry 중복 폴링 통합 + _slot_sync 계약 주석) + Bundle C(send_pending_max_* no-op 주석) 적용. dev 빌드 성공, ctest -R 'ctx|registry|socket_count|term|close|option' 5/5회 14/14 통과. 커밋 안 함. 보고서: core-rf-R10-B-summary.md

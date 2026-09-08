@@ -1,0 +1,26 @@
+# MP-7 진행
+
+- 2026-09-07 22:08 KST: 공통 규칙과 저장소 지침 확인. `mp2`의 MP-6 기준 diff를 지정 scratchpad patch로 보존했고, detached worktree·기존 dev/ASan/TSan 빌드 트리·ninja 0개를 확인했다.
+- 현재 단계: MP-6 보고서와 D-B198 계약 위치를 확인하고 새 REQUEST 회귀 테스트를 dev 빌드에서 기존 진단과 함께 재현한다.
+- 2026-09-07 22:11 KST: dev RED 재현. REQUEST inproc/tcp 모두 B reply 성공 뒤 `NO_DATA/EAGAIN`; `ZLINK_ROUTED_PART_DEBUG=1`에는 제출 오류가 없었다.
+- 2026-09-07 22:16 KST: 임시 `ZLINK_MP7_DEBUG` trace로 B reply의 `request_seq=2` completion이 대기 중에는 publish되지 않고 실패 후 A FINAL 진행 뒤 completion pipe drain에서 publish됨을 확인했다. queue receive 거절이 아니라 poller-owner 상태의 ready completion pipe 미-drain으로 범위를 좁혔다.
+- 현재 단계: 열린 sequence와 무관한 일반 poller/direct-pull 문제인지 기존 계약 테스트와 대조한 뒤 소유 함수에서 최소 수정한다. 임시 trace는 원인 확정 후 제거한다.
+- 2026-09-07 22:20 KST: 기존 테스트는 reply 뒤 poller wait가 먼저 transport head를 drain했다. 새 테스트는 같은 단일 owner가 직접 blocking pull하며, 이때 poller 등록이 async owner를 배제했지만 pull도 pipe를 drain하지 않아 queue publisher가 없었다.
+- 2026-09-07 22:23 KST: 진입 시 1회 drain은 inproc만 통과하고 tcp의 늦은 transport 도착에서 실패했다. 이를 폐기하고, poller owner의 blocking pull이 기존 mailbox command를 timeout budget 안에서 기다리며 기존 owner gate로 ready pipe를 drain하는 구현으로 교체했다. 임시 trace는 제거했다.
+- 현재 단계: 내부 헤더 변경에 따른 dev 전수 재컴파일 후 새 REQUEST/SEND 테스트를 우선 검증한다.
+- 2026-09-07 22:26 KST: dev 빌드 성공. 새 REQUEST/SEND는 1회 및 각각 `until-fail:10` 모두 통과했다. blocking pull은 poller 등록 시 기존 mailbox command와 completion owner gate를 사용하고, poller가 없으면 종전 async owner/queue wait를 유지한다.
+- 2026-09-07 22:28 KST: 관련 정규식 81 target `until-fail:3` foreground 실행 중. 현재 첫 7 target 반복에서 실패 없음.
+- 2026-09-07 22:34 KST: 첫 related 실행은 80/81 target 통과, `unittest_phase3_request_reply_owners`의 fairness case가 timeout. DONTWAIT pull까지 physical drain을 소유하게 한 범위 확대가 원인이었다.
+- 2026-09-07 22:36 KST: progress owner를 blocking `NONE` pull에만 한정하고 DONTWAIT를 종전 queue-only 동작으로 복원. fairness suite 3/3, 새 REQUEST/SEND 각각 10/10 통과.
+- 2026-09-07 22:38 KST: final 코드로 related 81 target `until-fail:3` 재실행 중. 현재 실패 없음.
+- 2026-09-07 22:44 KST: final related 81 target ×3 = 243/243 통과(408.51초).
+- 2026-09-07 22:45 KST: `wake-invariant` 라벨 4개 `until-fail:10` 실행 시작. 첫 장시간 반복에서 실패 없음.
+- 2026-09-07 22:51 KST: `wake-invariant` 4 target ×10 = 40/40 통과(312.14초). ASan 빌드와 관련 8 target도 8/8 통과했으며 sanitizer/leak 보고가 없었다.
+- 2026-09-07 22:59 KST: GCC ThreadSanitizer 계측(`-fsanitize=thread`) 빌드 성공. 중복 실행이 없음을 확인했고 MP-5 관련 8개와 신규 2개를 suppression 적용 상태로 다시 확정한다.
+- 현재 단계: TSan 결과 확정 후 release lib와 PERF_LOCK 하 hotpath 5셀을 1회 측정한다.
+- 2026-09-07 23:00 KST: TSan 관련 10 target 10/10 통과(24.61초), race 보고 없음.
+- 2026-09-07 23:02 KST: Release+LTO library와 정적 `hotpath_bench`를 현재 source로 foreground 재빌드했다.
+- 2026-09-07 23:04 KST: 시작 load 2.66/1.83/1.34, PERF_LOCK 아래 hotpath 5셀 1회 완료. MP-5 대비 4셀은 ±1%, stream은 -1.292%(개선 방향), 공식 gate는 5/5 PASS. 1회 조건에 따라 재측정하지 않았다.
+- 2026-09-07 23:07 KST: `git diff --check`, 공개 API/ABI 무변경, 임시 debug 제거, MP-7 tracked delta 3 files(57+/10-)를 확인하고 결과 보고서를 작성했다.
+- 2026-09-07 23:08 KST: 보고서·progress 문서도 diff check 통과. detached `mp2`의 기존 MP-3+4+5+6 변경과 신규 MP-6 테스트를 보존했고 MP-7 patch는 미커밋 상태다.
+- 현재 단계: MP-7 완료.

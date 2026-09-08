@@ -1,0 +1,22 @@
+# ALL-2b 진행
+
+- 2026-09-08 14:03 KST — 공통 규칙 확인 완료. `wip/0.17.3-all2`, HEAD `1a79625d3d`, clean worktree 확인. 리뷰·선행 보고서·스펙 및 코드 근거 조사 시작.
+- 2026-09-08 14:29 KST — B-ALL2-1 max snapshot 재사용과 PAIR/DEALER 결정적 hook 테스트 구현. command batch를 `inbound_poll_rate`로 제한하고 batch 내부 종료 검사 추가. inproc peer progress/ack 대기를 socket turn 밖으로 분리하고 동시 binder/connector 종료 테스트 추가. WS 초기 16/64 KiB·적응 성장/회수 및 복수 성능 report provenance 검사 구현 중.
+- 2026-09-08 14:38 KST — 개발 빌드가 오류 없이 최종 컴파일·링크 단계까지 진행. 완료 뒤 새 결정적 회귀 테스트부터 좁게 검증 예정.
+- 2026-09-08 14:41 KST — 첫 개발 빌드는 신규 테스트의 지원되지 않는 Unity char assertion 매크로 1건으로 중단. 정수 assertion으로 교정했고, 다른 ninja 작업 종료를 기다린 뒤 재빌드 중.
+- 2026-09-08 14:44 KST — 공통 자원 규칙에 따라 병행 ninja 1개가 끝날 때까지 60초 간격 대기 중(available 6.8 GiB).
+- 2026-09-08 14:48 KST — ALL-3 ASan 빌드가 계속 실행 중이라 재빌드 시작을 보류. ninja 1, available 8.4 GiB 확인.
+- 2026-09-08 14:51 KST — 병행 빌드가 계속 활성 상태이며 available 7.7 GiB. 자원 조건 충족 전에는 빌드·측정을 시작하지 않고 대기 유지.
+- 2026-09-08 15:01 KST — 개발 빌드 완료. 집중 테스트에서 WS/W1 정책 테스트 통과, max 경쟁 테스트가 HWM helper 내부의 두 번째 max load와 reject ownership 과잉 기대를 노출해 동일 snapshot 전달 및 테스트 기대를 교정.
+- 2026-09-08 15:05 KST — max snapshot을 record 사전검사와 part별 HWM 검사까지 동일하게 전달하도록 보완. private pipe header 변경으로 재빌드가 전파되어 진행 중.
+- 2026-09-08 15:10 KST — snapshot 보완 재빌드가 library 링크를 통과하고 test-core 컴파일 진행 중. 병행 빌드 없이 foreground 유지.
+- 2026-09-08 15:33 KST — 신규 5개 테스트 20회 반복 및 관련 70개 테스트 3회 반복 완료, 모두 통과. 다음은 diff 재검토와 sanitizer 검증.
+- 2026-09-08 15:29 KST — 신규 5개 target을 `--repeat until-fail:20`으로 모두 통과(PAIR/DEALER max 경쟁, bounded command drain, concurrent inproc term, WS growth/reclaim). 관련 70-test 정규식 suite 3회로 확대 예정.
+- 2026-09-08 16:05 KST — ALL-2b 인수(job ALL-2c). diff 23파일 전량 재검토, 리뷰 항목 매핑 완료(B-ALL2-1/W-1~4/S-2 코드 반영 확인). S-ALL2-2 잔여 1건(`pipe_transport.cpp:72` "relaxed-ordered load" → acquire) 기계적 수정. 이제 dev 재빌드 → 전체 ctest → TSan/ASan → release+hotpath → ws 게이트 순으로 검증.
+- 2026-09-08 16:16 KST — dev 재빌드 완료, 전체 `ctest -E hotpath_gate` 1회 통과(245 s). ws 게이트 파이썬 테스트 12/12 통과. 다음 TSan 빌드.
+- 2026-09-08 16:35 KST — TSan 트리(`core/build-tsan`, `-fsanitize=thread -fno-omit-frame-pointer`, LTO OFF) 재빌드 진행 중(포그라운드 대기). 완료 후 신규 5 target + owners + stream 테스트, 이어서 TSan 전체 ctest 1회.
+- 2026-09-08 15:58 KST — TSan에서 신규 경고 1건 발견: W-ALL2-2 리팩터가 peer `set_nodelay()`를 `terminate()` **뒤**(turn 밖)로 옮겨 `pipe_t::_delay`가 peer 소유자의 `process_pipe_term_ack()`와 경쟁(`pipe_transport.cpp:289` 읽기 / `:383` 쓰기). 원래 순서대로 `begin_inproc_pipe_termination()`에서 terminate 이전에 발행하도록 수정. TSan 재빌드·재검증 진행.
+- 2026-09-08 16:12 KST — 수정 후 TSan 대상 24 테스트 중 실패는 기존 `test_stream_packet_progress`(TSan 전용 fixture 처리량 가정, 경고 0) 1건뿐. dev 재빌드 후 관련 70개 통과. TSan 전체 ctest 진행 중.
+- 2026-09-08 16:45 KST — TSan 전체 209/210(경고 0, 실패는 기존 `test_stream_packet_progress` fixture 가정) · 446.93 s. release lib(LTO ON) + hotpath_bench 빌드 완료. PERF_LOCK·idle에서 hotpath 5셀 측정 중. 이어서 ASan 변경 테스트, ws 비율 게이트, 보고서·patch.
+- 2026-09-08 17:03 KST — hotpath 5셀 도구 판정 5/5 PASS(DD 3104.85 / DR_REQREP 15635.50 / PAIR 2456.73 / RR_TCP 3041.96 / STREAM 13982.50). ASan 변경 6 target 6/6 통과(경고 0). ws 비율 게이트 실측 실행 중(PERF_LOCK).
+- 2026-09-08 16:33 KST — ws 비율 게이트 실측 1회 PASS(ws 0.899753 / wss 1.456018, reports=1 errors=0, 시작 load 0.29). 보고서 `core-rf-ALL-2b-report.md` 작성 완료, patch `all-artifacts/ALL-2b.patch` 저장(23파일 +603/−88). worktree는 미커밋 유지.

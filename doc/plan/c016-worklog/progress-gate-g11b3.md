@@ -1,0 +1,22 @@
+# g11b3 gate progress
+
+- 2026-09-07 KST: main/origin-main 동기화 확인, `core/doc/spec/**`의 감독관 변경은 제외했다.
+- G-11b-3 patch를 `git apply --3way`로 충돌 없이 적용했다(3개 runtime 파일, staged 상태).
+- `JOBS=4 scripts/build-core.sh release --lib-only` 성공(92 compile/link target 최신화).
+- `JOBS=4 scripts/build-core.sh dev` 성공(기존 컴파일러 경고 1건: `unittest_monitor_ready_drain`).
+- 전체 ctest 1회 실행 중(`-j2`, 출력 보존); 완료 뒤 실패만 3회 판별하고 확대 반복 검증으로 진행한다.
+- 2026-09-07 KST: 전체 ctest는 아직 실행 중이며, 현 시점까지 runner 오류는 관찰되지 않았다.
+- 전체 ctest 결과: 208개 중 207 통과, `hotpath_gate`만 기준보다 6.1~27.3% 빠른 측정값을 FAIL로 표기했다(기준 파일은 변경하지 않음).
+- wake/poll/stream/pipe/mailbox/hwm/flow/credit/monitor/send/recv/router/dealer/pair/inproc 105개 패턴의 5회 반복을 실행 중이다.
+- 5회 반복 완료: 각 105/105 통과(실시간 124.67, 124.36, 126.56, 123.18, 123.10 s).
+- 다음: lost-wake 세트의 `until-fail:20` 및 각 wake invariant 추가 20회 실행.
+- 2026-09-07 KST: lost-wake `until-fail:20` 실행이 계속 진행 중이며, 아직 중도 실패 출력은 없다.
+- 2026-09-07 KST: lost-wake 반복은 계속 진행 중이다. foreground 규칙 때문에 close-release 병행 ctest는 이 단계 종료 뒤 순차 실행한다.
+- 2026-09-07 KST: lost-wake 반복은 계속 foreground로 진행 중이며, 임시 로그에 FAIL 표기는 아직 없다.
+- lost-wake `until-fail:20` 첫 세트는 3/3 통과(616.92 s)했고, 동일 세트의 추가 20회를 실행 중이다.
+- lost-wake 추가 20회도 3/3 통과(625.15 s); close-completion 50회 50/50 통과(21.29 s), stream|pipe `-j4` 23/23 통과(9.85 s).
+- 다음: monitor/flow-state/auto-HWM/HWM 26개를 10회 반복하고 TSan 비교.
+- monitor/flow-state/auto-HWM/HWM 10회 반복은 foreground에서 진행 중이며, 현재 로그에는 FAIL이 없다.
+- monitor/flow-state/auto-HWM/HWM 10회는 26/26 통과(182.56 s). TSan pristine/after 재구성 비교에서 3개 기존 signature의 집합 차이가 0이었다.
+- 다른 ninja 1개와 load 4.08 때문에 hotpath/성능 시작 조건을 충족하지 못했고, 2분 idle/load 조건을 관찰 중이다.
+- ninja 없음/load<1.5 2분을 확인한 뒤 hotpath 5셀은 모두 PASS했다(측정 직전 build 직후 load 4.27 기록). with_stream/perf-c는 시간 상한으로 미실행이며 summary에 남겼다.

@@ -1,0 +1,21 @@
+# MP-8 진행
+
+- 2026-09-07 시작: 공통 규칙 확인, detached worktree 상태 확인, MP-7 기준 patch(4,622행) 보존.
+- 현재: 2차/1차 리뷰, MP-3~7 보고서, 결정 기록, 확정 계약을 대조 중.
+- 2026-09-07 조사: B201~B206/W201~W206/S201~S202 근거와 main 미커밋 REPLY token·completion pull·poller owner 계약 확인. POSDDD와 시스템 설계 원칙 확인 완료.
+- 현재: registry, helper lifecycle/cleanup, physical submit ownership, completion wait 구현과 테스트 hook 구조를 코드에서 재검증 중.
+- 2026-09-07 구현 1: B201/B206 registry 전이·오류 우선순위, B202 FINAL lifecycle admission, B203 abort pin, B205 whole-record ref, B204 command epoch 기반 drain/wait를 반영.
+- 현재: dev 증분 빌드로 컴파일 경계 확인 후 결정적 회귀 테스트를 추가 중.
+- 2026-09-07 검증 1: dev 증분 빌드 성공. W201 최초/재제출 스레드 분리, W202 즉시 token 관찰, W204 초기화 실패 wake와 MORE part close 검증을 반영.
+- 현재: B201~B205 경합·callback 재진입 테스트와 B204 poller/command-owner 경합 테스트 작성 중.
+- 2026-09-08 검증 2: B201 반복 revoke/late restore·commit, B202 FINAL OOM/동시 close, B203 publish invalid-flags/close, B204 command-owner·poller·registration 전환, B205 REPLY 실패·blocking REQUEST 성공 callback 재진입 테스트가 개별 PASS.
+- 2026-09-08 검증 3: helper ownership 17, complete-record admission 4, phase3 req/rep 20, WRITABLE thread-transfer 2 테스트 PASS. W202는 20 ms 부재 판정을 제거하고 즉시 token 관찰로 바꿨으며 TCP는 SEND 변형이 담당한다.
+- 현재: 소스 정리·diff 검토 후 반복/전체/sanitizer/perf 검증으로 확장 중.
+- 2026-09-08 검증 4: 신규·변경 6 target until-fail:10(60회), lost-wake 2 case ×20(40회), 관련 정규식 97 target ×3(291회), 전체 dev 209/209, ASan+LSan 6/6 통과.
+- 2026-09-08 검증 5: MP-3 GCC TSan 구성과 기존 suppression으로 관련 10/10 통과(24.64초), race 진단 없음.
+- 현재: Release+LTO library와 MP-7 기준 hotpath 5셀 1회 측정 후 최종 보고서를 작성 중.
+- 2026-09-08 성능: Release+LTO lib/static runner 빌드 PASS. ninja 0, 시작 load 3.46/1.76/1.14에서 PERF_LOCK 아래 5셀 1회 실행. MP-7 대비 dealer -0.002%, req/rep -11.912%, pair +0.009%, router/tcp -0.396%, stream -0.099%; req/rep은 큰 개선으로 ±1% 목표와 공식 양방향 gate를 벗어났고 재측정·reference 갱신은 하지 않음.
+- 현재: diff/ABI 보호 확인과 리뷰 ID별 최종 보고서 작성 중.
+- 2026-09-08 최종 W202: REQUEST TCP를 생략하지 않고 application lane prime → 공개 PAUSED monitor 확인 → token pending → RUNNING 전환으로 고정했다. REQUEST·SEND inproc/TCP 각 10회(20/20), 최종 ASan 2/2, TSan 2/2 통과.
+- 현재: 보고서와 최종 patch 상태를 교차 확인 중.
+- 2026-09-08 완료: tracked/untracked whitespace, 공개 header·ABI diff, detached worktree 상태를 확인했다. 기능·ASan·TSan 잔여 실패 0; hotpath req/rep 개선 방향 gate 이탈은 보고서에 명시. `core-rf-MP-8-report.md` 작성, patch 미커밋 유지.

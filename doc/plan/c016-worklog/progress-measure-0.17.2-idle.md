@@ -1,0 +1,26 @@
+# measure-0.17.2-idle 진행
+
+- 2026-09-08 03:55 KST: 시작 조건 확인. `main`은 `core/v0.17.2` 이후 계획 문서 커밋에 있고, `core`·`bindings` 작업 트리는 깨끗하다. 실행 중인 다른 Codex job과 `ninja`는 없다.
+- 유휴 판정: `pgrep -x ninja`가 비어 있고 1분 load average가 1.0 미만인 상태를 2분 유지한 뒤 시작한다(최대 20분).
+- 예정: Release lib-only(JOBS=4) → with_stream(3 stacks × all sizes × runs 3) → perf/c single 5 패턴 및 multi 7 패턴(tcp, 전 size, runs 3). 각 측정 직전 load를 기록하고 PERF_LOCK으로 직렬화한다.
+- 2026-09-08 03:56 KST: 유휴 판정 통과(03:54/03:55/03:56의 1분 load = 0.27/0.23/0.12, `ninja` 없음). `JOBS=4 scripts/build-core.sh release --lib-only`를 포그라운드로 시작했으며, 현재 `ninja -j4 libzlink`가 동작 중이다.
+- 2026-09-08 03:59 KST: Release lib-only가 완료되어 `core/build/lib/libzlink.so.0.17.2`(03:57 갱신)를 확인했다. PERF_LOCK에서 with_stream을 시작했다. 결과 디렉터리는 `bindings/c/bench/with_stream/results/20260908_035802`; 시작 직전 load(1/5/15분)는 1.94/1.38/1.58이며, 작업 부하 중 현재 1분 load는 약 2.4이다.
+- 2026-09-08 04:02 KST: with_stream은 계속 PERF_LOCK을 점유하며 64 B와 1024 B의 3회 측정을 저장했다. 벤치 부하 중 1분 load는 3.3까지 상승했으며, 이는 CCU 1000 클라이언트·서버 프로세스의 측정 부하다. 현재 65536 B 구간을 실행 중이다.
+- 2026-09-08 04:05 KST: with_stream 전체 27건(zlink/asio/zmq × 3 sizes × 3 runs)이 모두 PASS로 종료했다. 결과 중앙값 kops/s는 zlink/asio가 64 B 290.74/370.24, 1024 B 272.86/334.67, 65536 B 34.68/41.48이다. perf/c 전에는 벤치 부하가 해소되는지 확인 중이며, 1분 load는 0.92 → 0.58 → 0.32로 하락했다.
+- 2026-09-08 04:08 KST: 두 번째 유휴 확인(04:04~04:06, 1분 load 0.92→0.10, `ninja` 없음) 뒤 PERF_LOCK에서 perf/c single을 시작했다. 범위는 PAIR·PUBSUB·DEALER_DEALER·DEALER_ROUTER·ROUTER_ROUTER, tcp, size 64/256/1024/65536/131072/262144, runs 3(90 케이스)이다. 시작 직전 load(1/5/15분)는 0.06/1.10/1.52이고 결과 파일은 `bindings/c/perf/results/single/report/perf_c_single_linux_20260908_040657_measure-0.17.2-idle.txt`이다.
+- 2026-09-08 04:10 KST: perf/c single은 PAIR 중앙값을 기록했고 PUBSUB을 진행 중이다. 현재 측정 부하의 load(1/5/15분)는 약 1.49/1.35/1.54이며, 자동 Core 재빌드는 발생하지 않았다.
+- 2026-09-08 04:12 KST: perf/c single은 PAIR·PUBSUB·DEALER_DEALER 중앙값을 완료하고 DEALER_ROUTER를 진행 중이다. 1분 load는 1.4~1.8 범위이며 PERF_LOCK은 계속 유지된다.
+- 2026-09-08 04:15 KST: perf/c single은 마지막 ROUTER_ROUTER의 2/3 run을 진행 중이다. 앞의 4개 패턴은 완료했고, 측정 중 1분 load는 약 1.74이다.
+- 2026-09-08 04:16 KST: perf/c single이 성공 30/30, 실패 0으로 완료했다(`RESULT` 150개). PERF_LOCK 해제 뒤 multi 전 재유휴 상태를 확인하고 있다. 마지막 single 측정 load(1/5/15분)는 1.39/1.51/1.56이다.
+- 2026-09-08 04:22 KST: 세 번째 유휴 확인(04:17~04:19, 1분 load 0.70→0.07, `ninja` 없음) 뒤 PERF_LOCK에서 perf/c multi를 시작했다. 범위는 DD·DR_SENDSEND·RR_SENDSEND·DR_REQREP·RR_REQREP·PUBSUB·STREAM, tcp, 6 sizes(각 STREAM에도 6개를 명시), runs 3이다. 시작 직전 load(1/5/15분)는 0.06/0.79/1.26이고 결과 파일은 `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260908_041947_measure-0.17.2-idle.txt`이다. DD 완료 후 DR_SENDSEND을 실행 중이며 부하 중 1분 load는 4.04이다.
+- 2026-09-08 04:25 KST: multi는 DD·DR_SENDSEND을 완료하고 RR_SENDSEND을 실행 중이다. 벤치 부하의 1분 load는 5.53이며, 다른 빌드·측정 프로세스는 확인되지 않았다.
+- 2026-09-08 04:27 KST: multi는 RR_SENDSEND·DR_REQREP까지 완료하고 RR_REQREP을 실행 중이다. 1분 load는 5.45이다.
+- 2026-09-08 04:29 KST: multi는 RR_REQREP을 완료하고 PUBSUB을 실행 중이다. 1분 load는 5.75이며, 모두 tcp 전 size·runs 3 범위를 유지한다.
+- 2026-09-08 04:31 KST: multi는 PUBSUB을 완료하고 마지막 MULTI_STREAM을 실행 중이다. STREAM도 명시한 6 sizes와 runs 3으로 실행한다. 현재 1분 load는 5.51이다.
+- 2026-09-08 04:32 KST: 첫 multi는 성공 42/42, 실패·skip·unsupported 0으로 완료했다. 단, 입력 size 목록에 4096 B가 빠지고 262144 B가 들어가 runner 기본 “전 size”와 다름을 사후 확인했다. 이 패스(`...041947...`)는 참고로 보존하고, 유휴 조건 뒤 기본 multi size(64/256/1024/4096/65536/131072; STREAM은 README 기본 64/256/1024/65536)로 정확한 runs 3 패스를 다시 실행한다.
+- 2026-09-08 04:34 KST: 정정 multi 전 유휴 대기 중이다. 1분 load는 1.19 → 0.66 → 0.37로 하락했고 `ninja`와 다른 벤치 프로세스는 없다. 2분 연속 조건 뒤 실행한다.
+- 2026-09-08 04:39 KST: 정정 multi를 시작했다. 시작 직전 load(1/5/15분)는 0.10/1.98/2.62이고, runner의 유효 size는 64/256/1024/4096/65536/131072으로 확인됐다(STREAM은 README 기본 4 size). 결과 파일은 `bindings/c/perf/results/multi/report/perf_c_multi_linux_20260908_043702_measure-0.17.2-idle-corrected.txt`; DD 완료 후 DR_SENDSEND을 실행 중이며 부하 중 1분 load는 4.41이다.
+- 2026-09-08 04:42 KST: 정정 multi는 DD·DR_SENDSEND을 완료하고 RR_SENDSEND을 실행 중이다. 1분 load는 5.63이고, 별도 빌드·경쟁 측정은 없다.
+- 2026-09-08 04:44 KST: 정정 multi는 RR_SENDSEND·DR_REQREP까지 완료하고 RR_REQREP을 실행 중이다. 1분 load는 6.18이다.
+- 2026-09-08 04:46 KST: 정정 multi는 RR_REQREP을 완료하고 PUBSUB을 실행 중이다. 1분 load는 6.35이다.
+- 2026-09-08 04:49 KST: 정정 multi가 성공 40/40, 실패·skip·unsupported 0으로 완료했다(`RESULT` 200개). 0.17.2 Release lib, with_stream 27/27 PASS, single 30/30 성공, 정정 multi 40/40 성공의 결과와 계획 §7.1·§7.4 비교표를 `measure-0.17.2-idle-summary.md`에 기록했다. `core`·`bindings`·`scripts`에는 변경이 없다.

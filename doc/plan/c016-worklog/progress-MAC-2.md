@@ -1,0 +1,22 @@
+# MAC-2 진행
+
+- 시작: 상한 3.5 h. worktree ~/project/zlink-work/mac1, branch wip/mac-1.
+- 0분: 브리프·MAC-1 보고서 읽음. worktree fetch 확인 중.
+- 15분: worktree 동기 확인(0bc5e0da8b). MAC-1 진단 재적용 + TCP 상태 샘플러 추가, 5개 실패 테스트만 `--repeat until-fail:5`로 push (커밋 657c9bac60). 목적: 단독 반복에서도 재현되는지(=플래키) 판정.
+- 코드 조사: signaler는 macOS에서 eventfd 대신 socketpair(1바이트/신호). eventfd는 1회 read로 카운터 전부 소진, socketpair는 1회 read=1바이트 → 드레인 회계 차이 후보.
+- 45분: run 34198394530 빌드 중. 코드 조사 진행:
+  - 블로킹 send의 대기는 signaler가 아니라 `mailbox_t::wait_for_command_signal`(pthread CV, `_command_wait_epoch`/`_command_pending_hint`)이다 → eventfd/socketpair 차이는 이 경로엔 직접 영향 없음.
+  - `condition_variable_t`는 macOS도 stl11(`std::condition_variable_any`) 선택.
+  - 잘못된 READY 경로: `asio_zmp_engine.cpp` process_handshake_input→process_command_message→process_ready_message → error(protocol_error) → ERROR 프레임 전송 후 transport close. 67바이트만 도착 = ERROR 프레임 없음 → error()가 3 s 내 호출되지 않음. HANDSHAKE_IVL 500 ms 타이머도 안 걸림.
+  - Linux dev 빌드 재빌드 완료(검증 준비).
+- 1h50: run 34198394530 결과 — **5개 모두 단독 실행에서도 실패**(332 s). MAC-1의 "단독은 통과"는 우연.
+  - raw_close hex 해독: 라우터가 ERROR 프레임("transport pair metadata invalid")까지 정상 전송. 3 s 동안 61바이트만 읽음 = 테스트 관찰자가 1바이트/10 ms(=100 B/s)로 드레인 → 자기 마감시간 안에 EOF에 도달 못함. **테스트 결함**.
+  - ctx_options: drain 루프가 레코드당 20 ms 대기 → queued*20 ms > SNDTIMEO 1000 ms.
+  - xpub: 구독자가 EAGAIN마다 msleep(1) → NODROP 발행자 SNDTIMEO 200 ms 초과.
+  - wake_invariants: kind=3(WRITABLE) id=1 = client 0이 backpressure 후 크레딧을 되찾음(서버 io 스레드가 뒤늦게 TCP를 파이프로 옮기며 창이 열림). 테스트 전제가 타이밍 의존.
+- 수정 3건 + 진단 1건 커밋 8b9a88b2c8 push. Linux `--repeat until-fail:3` 5개 전부 통과.
+- 2h40: run 34200082673 — 5개 중 4개 통과(11.99 s). 남은 test_wake_invariants는 이번엔 `waiters_blocked=0`(모든 waiter가 arming 후 72 ms 안에 깨어남, drain은 2017 ms) — 같은 원인(첫 EAGAIN 후 체인 하류에 여유가 남아 크레딧이 리더 없이 복귀).
+- 수정: fill 루프에 saturation settle 단계 추가(조기 WRITABLE 소비 후 해당 클라이언트 재충전, 아무도 크레딧을 되찾지 않을 때만 saturated). 기대값/토큰 규칙 불변. Linux until-fail:3 통과. 커밋 fa7ab9a356, 전체 serial 스코프로 push.
+- 3h05: MAC-2.patch 생성 완료(all-artifacts/MAC-2.patch, core/ 8파일). 보고서 초안 작성. full serial 게이트 run 34201309177 대기 중.
+- 3h30: full 게이트 run 34201309177 — serial 148/149(391.6 s, MAC-1 716.0 s에서 단축), parallel 55/56(unittest_flow_state_monitor Timeout, 신규 -j3 플레이크). 남은 test_wake_invariants는 `waiters_blocked=0` 하나뿐이고 settle 단계는 성공(max_wait_ms=2018=drain 시간, accepted_max 16→31).
+- 원인: `wait_until_poller_wait_is_active()`의 `yield()` 스핀이 3코어에서 waiter 스레드를 굶김. `msleep(1)`로 교체(커밋 77a2f81db6), Linux until-fail:3 통과, macOS run 34202650122 진행 중. 상한 도달로 종료.

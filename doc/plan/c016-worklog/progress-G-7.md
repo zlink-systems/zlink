@@ -1,0 +1,21 @@
+# G-7 진행
+
+- 2026-09-07: 공통 규칙, G-7 brief, 동기화 모델 §3.2·§3.3·§6, G-A/S-A 측정 근거를 확인했다. 메인 worktree의 타 job 변경은 보존하며 지정 detached worktree 준비 중이다.
+- 2026-09-07: `origin/main` d17889b981 기반 detached `~/project/zlink-work/g7`를 만들었다. 현재 primary poller의 `drain_primary_signaler()`와 command owner의 `mailbox::recv()`가 같은 non-coalescing eventfd를 읽고, async drain 종료마다 `rearm_primary_signaler()`가 새 write를 만드는 경로를 확인했다. before 측정 준비 중이다.
+- 2026-09-07: before용 Release+LTO release-gate 빌드를 `JOBS=4`로 완료했다. 경고는 기존 `unittest_monitor_ready_drain`의 GCC stringop 경고 1건뿐이며 빌드는 성공했다. PERF_LOCK 아래 hotpath/STREAM 계측으로 진단을 수치화한다.
+- 2026-09-07: before 재현: callgrind 1024 B CCU20에서 signaler write/read 0.460/0.795, epoll_wait 0.508/msg; native에서 eventfd write/read 0.713/0.864, voluntary ctxsw 0.607/msg. 변경은 `mailbox.cpp` 한 파일에서 primary signaler를 기존 coalescing 모드로 사용하고, scheduled async owner가 primary poller edge를 소비하지 않으며, poller가 관측 edge를 한 번만 drain하도록 통합했다. 새 상태·플래그·옵션 없음.
+- 2026-09-07: after 1차: callgrind write/read 0.422/0.710, epoll_wait 0.507/msg; hotpath STREAM 14377.944→14197.647 instr/msg. native write/read 0.713/0.864→0.622/0.825이나 ctxsw 0.607→0.630으로 단일 런 개선은 불확실하다. lost-wake 6종 until-fail:20 실행 중이다.
+- 2026-09-07: 1차 안은 lost-wake 세트에서 `test_wake_invariants` 2번째 반복 ROUTER/inproc iteration 86이 2초 늦어져 기각했다. `_scheduled`로 async owner의 primary-edge 비소비를 추론할 수 없었다. 해당 생략을 제거하고 기존 command owner 소비를 유지한 보수안(primary coalescing + poller 단일 drain)은 `test_wake_invariants` 3/3 통과했다. 1차 성능 수치는 기각안 수치로 분리한다.
+- 2026-09-07: 보수안은 이득이 작고 primary coalescing 의미를 mailbox 전체로 넓히므로 제외했다. 최종 후보는 asio executor가 설치되고 public primary descriptor가 없는 mailbox에서 중복 eventfd를 쓰지 않고, scheduled owner도 존재하지 않는 signal을 읽지 않는 방식이다. 동일 command는 기존 asio post 하나로 전달되고 blocking/public-poller 경로는 그대로다. wake invariant 3/3 통과.
+- 2026-09-07: 최종 후보 callgrind는 write/read 0.214/0.546, epoll_wait 0.514/msg. native 2회는 write 0.331/0.329, read 0.502/0.501, ctxsw 0.638/0.643/msg로 eventfd는 크게 줄었으나 ctxsw는 개선되지 않았다. 남은 ctxsw는 제거하지 않은 asio post 기반 I/O↔앱 handoff이며 pipe/flush 경계 변경 없이 줄일 수 없는 지점으로 분리했다. dev/TSan 반복 검증을 시작한다.
+- 2026-09-07: 최종 후보 dev 빌드를 `JOBS=4`로 완료했다. 지정 정규식에 잡히는 wake/poller/mailbox/STREAM/pipe/close/release 회귀 38개를 5회 반복한다.
+- 2026-09-07: dev 회귀군 2/5(각 38개)는 모두 통과했고 3회차 진행 중이다. `test_wake_invariants`도 현재 3회 연속 통과했다.
+- 2026-09-07: dev 회귀군 38개 × 5회(190 test)를 모두 통과했다. lost-wake 핵심 6종을 CTest `--repeat until-fail:20`으로 검증한다.
+- 2026-09-07: lost-wake `until-fail:20`의 장시간 `test_wake_invariants`가 6/20 연속 통과했다. 1차 기각안이 실패했던 2회차 경계를 넘겼고 지연/timeout은 없다.
+- 2026-09-07: `test_wake_invariants` 11/20 연속 통과. primary/secondary poller와 command-owner가 섞이는 행렬에서 lost wake는 관측되지 않았다.
+- 2026-09-07: `test_wake_invariants` 17/20 연속 통과. 장시간 반복에서 timeout/assertion/hang은 없다.
+- 2026-09-07: lost-wake 핵심 6종이 각각 CTest `until-fail:20`을 모두 통과했다(총 120회, 646.24초). TSan 빌드와 before/after 경고 집합 비교를 시작한다.
+- 2026-09-07: Clang 부재로 저장소 `ENABLE_TSAN`은 LLVM 전용 플래그에서 실패해 GCC 완전 TSan 계측 빌드로 대체했다. 동일 바이너리 조건의 before/after는 모두 `ypipe.hpp:104` 8건 + `socket_base_msg.cpp:68` 1건(총 9), 신규 warning delta 0이다. `test_stream_packet_progress`의 계측 지연 실패도 양쪽 동일했다.
+- 2026-09-07: 최종 hotpath 5셀 모두 PASS. before→after instr/msg는 DD 3271.176→3271.112, DR 18658.231→18753.765, PAIR 2330.998→2331.770, RR 2916.369→2916.133, STREAM 14377.944→14184.872다. with_stream 최종 측정으로 이동한다.
+- 2026-09-07: with_stream runs 1은 전 크기 mismatch 0으로 완료했다. 기준 asio도 함께 크게 하락해 단일 런 throughput delta는 환경 변동으로 보고 과해석하지 않았다. 최종 보고서를 `core-rf-G-7-summary.md`에 작성했고, eventfd는 감소했으나 ctxsw 미개선 지점에서 종료한다.
+- 2026-09-07: TSan baseline 대조 뒤 최종 소스를 복원해 release/dev/TSan을 증분 재링크했다. 최종 산출물로 lost-wake 대표 6종 6/6 재통과. source diff와 보고서 위치를 최종 확인한다.

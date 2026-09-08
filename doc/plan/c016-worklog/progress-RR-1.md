@@ -1,0 +1,6 @@
+# RR-1 진행
+
+- 2026-09-08 14:20 KST — 공통 규칙, detached/clean worktree, D-BP43 및 결함 보고서를 확인했다. 공개 C API 재현 테스트와 completion drain 계약/구현 조사 시작.
+- 2026-09-08 (RR-1 재시작, 이전 codex job이 필터로 중단) — worktree ~/project/zlink-work/rr1 clean(1a79625d3d). 코드 조사: `release_count1_completion_drain` (socket_base_api.cpp:1150), claim은 `process_ready_completion_pipes`(:1407)와 `reclassify_transport_pair_application_head`(:1232), assert 지점은 `drain_claimed_completion_pipe`의 `completion_pipe_public_head` 분기(:1630대). record budget = 64(part 아님). 다음: 공개 C API 경계 테스트 작성 후 재현.
+- 원인 확정: 0.17.3 `drain_claimed_completion_pipe`가 `entry.owns_lease()`일 때 `drain(false)`를 무조건 두 번 돌린다. 1차 drain이 count-1 claim을 이미 release한 뒤 2차 drain이 같은 public-head 분기에 다시 들어가 `zlink_assert(released)` 실패. 트리거 입력은 ROUTER close가 남긴 delimiter 프레임(probe가 `pipe_head_data`로 분류) — 1,024는 계약 상한이 아니라 타이밍 상수였다. 0.17.4 베이스(ALL-2)는 2차 drain이 제거되어 Rust 원본 테스트가 통과.
+- 완료: 보고서 doc/plan/c016-worklog/core-rf-RR-1-report.md, patch ~/project/zlink-work/all-artifacts/RR-1.patch(테스트 추가만, Core 소스 변경 0). 검증: 신규 테스트 until-fail:20 PASS, `request|reply|completion|router|dealer|poll` until-fail:3 (62 tests) PASS, Rust 원본 테스트 0.17.4 PASS / 0.17.3 30/30 SIGABRT. TSan·ASan은 2h 상한으로 미실행.

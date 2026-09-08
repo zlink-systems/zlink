@@ -1,0 +1,135 @@
+# S-C 진행
+- 시작: 2026-09-08 15:01 KST. 상한: 17:31 KST.
+- 분석 전용. 소스·스펙·commit·stash 변경 없음.
+- 공통 규칙 확인, detached worktree 생성 진행. 기존 main untracked 보고서는 보존.
+- 기준: wip/0.17.3-all2, JOBS=4, ninja=0 및 available≥6000 MB 이후 PERF_LOCK 내부 재확인으로 측정.
+- 현재: Phase 1 근거와 hotpath/with_stream 측정 절차 확인.
+- 15:06 KST: worktree 생성 완료, HEAD 1a79625d3d(VERSION 0.17.2, 사용자 지정 ALL-2 ref). hotpath와 with_stream zlink 모두 RAW; recv_packet pump 비용은 미실행으로 분리. 기존 strace를 /tmp/ws1-tools/root/usr/bin/strace에서 발견. 새 worktree Release+LTO hotpath/서버 빌드 준비, 다른 ninja 종료 대기.
+- 2026-09-08T15:05:26 build ninja=1 available=6338 MB load=(14.61767578125, 14.8515625, 10.84228515625) — 자원/idle 조건 대기.
+- 2026-09-08T15:06:29 build ninja=1 available=6356 MB load=(14.93310546875, 14.85986328125, 11.09619140625) — 자원/idle 조건 대기.
+- 측정 도구 준비: 기존 libzmq 4.3.5 배포 바이너리를 sc의 ignored lib 디렉터리로 복제, strace는 기존 WS-1 도구 사용. 현행 client에는 --warmup 옵션이 없어 warmup 2초 별도 client 후 15초 client로 재현하고 전체 서버 recv_msgs를 분모로 사용할 예정. RAW queue·envelope와 PACKET pump의 구분을 소스에서 확인.
+- 2026-09-08T15:07:30 build ninja=1 available=6821 MB load=(13.17041015625, 14.3662109375, 11.16357421875) — 자원/idle 조건 대기.
+- 2026-09-08T15:08:32 build ninja=2 available=6062 MB load=(13.63525390625, 14.24462890625, 11.32470703125) — 자원/idle 조건 대기.
+- 2026-09-08T15:09:34 build ninja=2 available=7751 MB load=(16.58203125, 14.90380859375, 11.73193359375) — 자원/idle 조건 대기.
+- 2026-09-08T15:10:35 build ninja=2 available=9098 MB load=(15.275390625, 14.79296875, 11.8935546875) — 자원/idle 조건 대기.
+- 2026-09-08T15:11:36: callgrind 함수/edge 파서 준비, 기존 덤프에서 self 합계=totals 검산 통과. caller 8단계 문맥으로 공유 함수를 경로에 귀속할 예정. S-3/S-5 반증과 G-7 중복 wake 제거를 확인하여 후보 중복 제외. 소스 변경 없음.
+- 2026-09-08T15:11:37 build ninja=2 available=8657 MB load=(13.08642578125, 14.30126953125, 11.90966796875) — 자원/idle 조건 대기.
+- 2026-09-08T15:12:39 build ninja=2 available=8221 MB load=(10.876953125, 13.525390625, 11.79541015625) — 자원/idle 조건 대기.
+- 2026-09-08T15:13:41 build ninja=1 available=9119 MB load=(9.3916015625, 12.8154296875, 11.67138671875) — 자원/idle 조건 대기.
+- 2026-09-08T15:15:50: ninja=0, available≥6000 조건 통과 후 hotpath Release+LTO 빌드 시작(JOBS=4). 이후 production shared lib는 tests OFF로 별도 빌드. 원본 build.log/resources.log는 scratchpad/sc 보존.
+- 2026-09-08T15:18:41: hotpath 정적 Release+LTO 빌드 완료, production shared lib 빌드 진행. 후보 근거: socket_message_api.cpp:212 단일 part에도 TLS parts→caller move와 multipart_close; recv publication 소유권 경로 축약을 실측 후 판정.
+- 2026-09-08T15:20:49: 모든 빌드 성공. ldd에서 sc/core/build/lib 및 sc/libzmq dist 로드 확인, SHA256 보존. hotpath callgrind는 PERF_LOCK+idle gate 안에서 시작 대기/진행.
+- 2026-09-08T15:21:09 measure ninja=0 available=10269 MB load=(3.169921875, 5.82177734375, 8.7236328125) — 자원/idle 조건 대기.
+- 2026-09-08T15:22:10 measure ninja=0 available=8918 MB load=(5.31640625, 5.92529296875, 8.57373046875) — 자원/idle 조건 대기.
+- 2026-09-08T15:23:12 measure ninja=0 available=9782 MB load=(5.19189453125, 5.83251953125, 8.37744140625) — 자원/idle 조건 대기.
+- 2026-09-08T15:24:14 measure ninja=0 available=7408 MB load=(15.84521484375, 8.75537109375, 9.22314453125) — 자원/idle 조건 대기.
+- 2026-09-08T15:25:16 measure ninja=0 available=7208 MB load=(17.81103515625, 10.62353515625, 9.83837890625) — 자원/idle 조건 대기.
+- 2026-09-08T15:26:18 measure ninja=0 available=10518 MB load=(8.90966796875, 9.53857421875, 9.52392578125) — 자원/idle 조건 대기.
+- 2026-09-08T15:27:19 measure ninja=0 available=10546 MB load=(3.87646484375, 7.9677734375, 8.982421875) — 자원/idle 조건 대기.
+- 2026-09-08T15:27:41: hotpath 276,084,191 / 20,000 = 13,804.20955 Ir/msg; raw self 합계 검산 통과. libc IFUNC memcpy/memmove 250 Ir/msg 복원. with_stream은 다른 작업 load 상승으로 idle 대기. 신규 후보: i_asio_transport.hpp:55 std::function 경계가 custom allocator를 지움; tcp_transport.cpp:413 wrapper와 engine.cpp:498 실제 대조.
+- 2026-09-08T15:33:47 measure ninja=0 available=10546 MB load=(4.70947265625, 4.30224609375, 6.81005859375) — 자원/idle 조건 대기.
+- 2026-09-08T15:34:06: zlink CCU20 52,974 msg / 482,530,511 Ir=9,108.82, mutex8.545/msg; asio128,749msg /645,637,050Ir=5,014.70. 두 서버 error0. 아직 startup 미차감. zmq는 PERF_LOCK 대기 중.
+- 2026-09-08T15:41:28: zmq75,504msg/552,507,749Ir=7,317.60, error0. 시작/종료 baseline zlink 수집 완료, asio/zmq는 PERF_LOCK 대기. 방향이 합쳐진 zmq mailbox 공통 self를 숨기지 않고 별도 표시하며, publish boundary inclusive는 RX190.08/TX217.49 Ir/msg로 별도 확인.
+- 2026-09-08T15:47:16+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:48:18+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:49:20+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:50:22+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:51:24+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:52:25+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:53:27+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:54:21: 보고서 초안221행 작성, 문서 원칙§9에 따른 독립 2축 리뷰 시작(sol/high, 읽기 전용). decoder malloc0.00151/msg 대 read callback new/delete~1/msg, inclusive합~161Ir/msg 확인. 표 원본/key-metrics.json 보존. syscall/baseline은 병행 전체 with_stream benchmark의 PERF_LOCK 반환 대기.
+- 2026-09-08T15:54:29+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:55:31+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:55:44 measure ninja=1 available=9581 MB compilers=4 load=(5.7529296875, 5.52880859375, 5.6162109375) — 자원/idle 조건 대기.
+- 2026-09-08T15:56:33+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:56:46 measure ninja=0 available=10528 MB compilers=0 load=(2.98291015625, 4.81201171875, 5.365234375) — 자원/idle 조건 대기.
+- 2026-09-08T15:57:35+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:58:37+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:58:51+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:59:38+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T15:59:53+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:00:40+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:00:55+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:01:42+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:01:58+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:02:44+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:02:59+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:03:46+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:04:01+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:04:48+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:05:03+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:05:49+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:06:05+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:06:51+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:07:07+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:07:53+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:08:04: 독립 리뷰 완료, 감독 코드 재검증 후 단일 frame echo 조건·decoder owned-copy fallback·B4 async activation 경쟁·thread-local 명칭을 채택 보정. Asio baseline 차감 4,998.56 Ir/msg 확정. 단계 표 한국어화, load/분모/시작종료 baseline 표 추가. zmq baseline과 strace는 PERF_LOCK 대기.
+- 2026-09-08T16:08:09+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:08:55+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:09:10+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:09:57+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:10:12+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:11:00+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:11:14+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:12:02+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:12:16+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:13:03+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:13:18+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:14:05+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:14:20+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:15:07+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:15:22+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:16:09+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:16:23+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:17:11+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:17:26+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:18:13+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:18:28+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:19:14+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:19:30+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:20:17+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:20:32+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:21:19+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:21:34+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:22:21+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:22:35+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:23:23+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:23:37+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:24:25+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:24:40+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:25:20: Asio 대비 self 격차4,042 Ir/msg 중 앱 recv·pipe·양방향 command/wake 묶음3,770을 별도 비교표로 정리(A/B 혼합, 전부 제거 대상 아님). 현재 PERF_LOCK holder는 ALL-3 Windows 검증 PID3538053; 남은 baseline/strace 대기, 기존 셀 재실행 없음.
+- 2026-09-08T16:25:28+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:25:42+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:26:29+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:26:44+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:27:31+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:27:46+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:28:33+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:28:48+09:00: S-C 측정 PERF_LOCK 대기; 다른 job의 측정 종료 대기 중.
+- 2026-09-08T16:30:47: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:31:49: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:32:52: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:33:54: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:34:55: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:35:57: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:36:59: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:38:01: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:39:04: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:40:06: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:41:08: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:42:09: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:43:10: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:44:12: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:45:14: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:46:16: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:47:18: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:48:19: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:49:21: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:50:24: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:51:26: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:52:28: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:53:30: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:53:32 measure ninja=0 available=10575 MB compilers=0 load=(3.45947265625, 2.80615234375, 2.29248046875) — 자원/idle 조건 대기.
+- 2026-09-08T16:54:32: S-C 남은 측정 foreground 대기/실행 중. PERF_LOCK 요청은 재등록 없이 유지.
+- 2026-09-08T16:58:35: 남은 측정 전체 완료(rc0). zmq baseline3,304,863 차감 후7,273.83 Ir/msg. strace CCU20 zlink17,586/asio49,771/zmq15,725msg 오류0; hotpath20,100msg 포함 모두 종료. syscall/msg zlink6.6238/asio2.3801/zmq8.4098. load표·원본·SHA256 manifest·합계 검산 완료, 최종 추가 독립 리뷰 중.
+- 2026-09-08T16:59:50: S-C 완료. 최종 보고서·상위40 함수·단계별 self/inclusive 원본·strace·load·A/B/C·D 표·≤3h 후속 job·조건부 Ir/비율 추정 작성. 최종 독립 리뷰의 LTO 요약 표기 보정 채택, 나머지 중요한 finding 없음. 채택 측정 실패0, sc tracked diff0, main 변경은 요청 보고서/진행 파일만. 원본은 scratchpad/sc 보존.
