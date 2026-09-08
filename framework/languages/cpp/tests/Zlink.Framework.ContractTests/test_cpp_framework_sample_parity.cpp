@@ -2024,7 +2024,10 @@ TEST (CppFrameworkSampleParity, CppRunnerPortsAndRedisAreLanguageIsolated)
     const auto shell_aggregate = read_file (sample_root / "run_samples.sh");
     const auto powershell_aggregate = read_file (sample_root / "run_samples.ps1");
     EXPECT_NE (shell_aggregate.find ("bash \"$SCRIPT_DIR/$runner\""), std::string::npos);
-    EXPECT_NE (powershell_aggregate.find ("ZoneWorld/run_sample.sh"), std::string::npos);
+    // run_samples.ps1 dispatches to each sample's own run_sample.ps1 (f9906673b2);
+    // the aggregate must still drive ZoneWorld through that per-sample runner.
+    EXPECT_NE (powershell_aggregate.find ("\"$Name/run_sample.ps1\""), std::string::npos);
+    EXPECT_NE (powershell_aggregate.find ("\"ZoneWorld\""), std::string::npos);
 }
 
 TEST (CppFrameworkSampleParity, CppZoneWorldRunnerUsesCanonicalVerdictLedger)
