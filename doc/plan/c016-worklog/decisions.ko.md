@@ -4831,3 +4831,6 @@ Windows Actions green으로 WIN-2의 host 한정 판정 확정(`test_wake_invari
 ## D-B285 (2026-09-08 22:20, 머신 B) CCU-4 완료 — 수렴 규칙 "plan의 `applied > planned`가 replan 필요를 말한다"(`recalc_due()`, 새 상태 0, pending generation 불변), 타이머 첫 무장만 wake(4000회 재무장 함정 → 150.9 kops 회귀를 잡아 203.2 kops), unittest 9/9·until-fail 32×5·ctest 211/211·TSan 0건; review-CCU-4(30분) 착수
 
 `core-rf-CCU-4-report.md`, `CCU-4.patch`(core/** 13파일). 테스트: `settle()`로 pending 소진 후 attach, 증분 진입을 generation 정확히 +1과 `total_applied > total_planned`로 assert, 수렴 자율 실행·사이 요청 full fallback·inproc pair 결정적 재현 3 케이스 추가, field 전부 비교, atomic barrier. 리뷰 초점: deferred shrink(§4)로 applied > planned가 정당하게 유지될 때 재계산 반복 여부, 타이머 수명·경쟁.
+## D-B286 (2026-09-08 22:45, 머신 B) review-CCU-4 — 차단 2건: `applied > planned`는 정상 deferred shrink(§4)에서도 참이라 수렴 지표 불가(장주기 tick마다 full pass 반복), 증분 기록이 deadline을 0으로 지워 attach마다 timer 재무장 → CCU-5(1 h): **수렴 의무 = deadline 자체**
+
+`review-ccu4.md`(sol): 1(d) fast-path guard·ctx 종료 task 수명은 해소. 규칙 확정: 증분 성공은 `arm_debounce()`만(deadline 없으면 세우고 wake 1회, 있으면 무동작), 증분 경로 plan 기록은 deadline 불변(해제는 full pass 완료 지점 한 곳), `recalc_due()`는 deadline 경과만. 경고: 증분 진입 assert를 attach마다, barrier 실제 동시 출발. 이후 review-CCU-5.
