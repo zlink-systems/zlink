@@ -430,10 +430,6 @@ STREAM retains the following runtime environment variables.
 - `ZLINK_ASIO_STREAM_ENABLE_NON_TCP_SPEC_READ`: disabled by default
 - `ZLINK_ASIO_STREAM_ASYNC_WRITE`: disabled by default; enabling it disables
   STREAM/TCP speculative writes and uses the pure asynchronous write path
-- `ZLINK_ASIO_STREAM_DISABLE_GATHER`, `ZLINK_ASIO_STREAM_GATHER_THRESHOLD`,
-  `ZLINK_ASIO_STREAM_TINY_GATHER_THRESHOLD`: STREAM raw connections do not use
-  gather writes, so these three variables have no effect (they are read only for
-  compatibility)
 - `ZLINK_ASIO_STREAM_INITIAL_TARGET_CAP`: default `4096`
 - `ZLINK_ASIO_STREAM_BATCH_SIZE`: default `4096`
 - `ZLINK_ASIO_STREAM_BATCH_HEADROOM`: default `64`

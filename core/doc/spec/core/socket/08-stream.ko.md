@@ -402,9 +402,6 @@ socket/listener 기본값은 다음과 같다.
 - `ZLINK_ASIO_STREAM_ENABLE_NON_TCP_SPEC_READ`: 기본 비활성
 - `ZLINK_ASIO_STREAM_ASYNC_WRITE`: 기본 비활성. 활성화하면 STREAM/TCP speculative
   write를 끄고 순수 async write 경로를 사용
-- `ZLINK_ASIO_STREAM_DISABLE_GATHER`, `ZLINK_ASIO_STREAM_GATHER_THRESHOLD`,
-  `ZLINK_ASIO_STREAM_TINY_GATHER_THRESHOLD`: STREAM raw 연결은 gather write를 쓰지 않으므로
-  이 세 변수는 동작에 영향이 없다(호환을 위해 읽기만 한다)
 - `ZLINK_ASIO_STREAM_INITIAL_TARGET_CAP`: 기본 `4096`
 - `ZLINK_ASIO_STREAM_BATCH_SIZE`: 기본 `4096`
 - `ZLINK_ASIO_STREAM_BATCH_HEADROOM`: 기본 `64`
