@@ -1311,7 +1311,7 @@ cell은 `보류(사유)`로 표시하고 수치는 그대로 남긴다. 러너 �
 | `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
 | `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
 | `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
-| `tls` | `MULTI_STREAM` | 통과(98.0%) | 통과(99.7%) | 통과(100.2%) | 해당 없음 | 통과(94.7%) | 해당 없음 | **`통과(98.15%)`** — 1-run(D-BP32), 고정 Core **0.17.3-alpha**(`s173x`, C `complete`·rust `complete`); latency 1.02x. Core 0.17.3, STREAM pass 1(Poller 대기, 044079fc68) 적용 빌드. 처리량 rust·C 410.9/419.2, 410.8/411.9, 397.7/397.0, 42.2/44.6 Kops/s; C `perf_c_multi_linux_20260908_135739_s173x.txt`, rust `perf_rust_multi_linux_20260908_142255_s173x.txt` |
+| `tls` | `MULTI_STREAM` | 통과(100.4%) | 통과(92.4%) | 미달(83.9%) | 해당 없음 | 미달(81.0%) | 해당 없음 | **`미달(89.43%)`** — 3-run(D-BP32), 고정 Core **0.17.3-alpha**(`s173rust3`, C `complete`·rust `complete`); latency 1.13x. 경계 확인 3-run(1-run 98.2). Core 0.17.3, STREAM pass 1 적용. 처리량 rust·C 387.9/386.6, 371.4/402.0, 326.8/389.3, 31.9/39.4 Kops/s; C `perf_c_multi_linux_20260908_143509_s173rust3.txt`, rust `perf_rust_multi_linux_20260908_143629_s173rust3.txt` |
 
 ### 9.7 Python
 
