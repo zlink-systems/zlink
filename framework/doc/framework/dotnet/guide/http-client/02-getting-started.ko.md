@@ -4,12 +4,12 @@
 
 ## 프로젝트 참조
 
-소비 프로젝트에 `Zlink.HttpClient` package를 추가한다. 서버 runtime 전체가 아니라
+소비 프로젝트에 `Systems.Zlink.HttpClient` package를 추가한다. 서버 runtime 전체가 아니라
 HTTP client가 사용하는 framework contract package만 함께 설치된다.
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Zlink.HttpClient" Version="0.5.1" />
+  <PackageReference Include="Systems.Zlink.HttpClient" Version="0.10.0" />
 </ItemGroup>
 ```
 

@@ -2,7 +2,7 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
-    <ZLinkBindingsPackageVersion Condition="'$(ZLinkBindingsPackageVersion)' == ''">0.17.0</ZLinkBindingsPackageVersion>
+    <ZLinkBindingsPackageVersion Condition="'$(ZLinkBindingsPackageVersion)' == ''">0.17.3</ZLinkBindingsPackageVersion>
     <!-- e2e/sample consumers pin the local http-client snapshot; bump deliberately after
          republishing (framework/doc/http-client/http-client-unification-plan.ko.md Phase 2). -->
     <ZLinkHttpClientPackageVersion Condition="'$(ZLinkHttpClientPackageVersion)' == ''">0.10.0</ZLinkHttpClientPackageVersion>
@@ -10,7 +10,7 @@
 
   <ItemGroup>
     <PackageVersion Include="Systems.Zlink" Version="$(ZLinkBindingsPackageVersion)" />
-    <PackageVersion Include="Zlink.HttpClient" Version="$(ZLinkHttpClientPackageVersion)" />
+    <PackageVersion Include="Systems.Zlink.HttpClient" Version="$(ZLinkHttpClientPackageVersion)" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="8.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="8.0.1" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
@@ -31,6 +31,7 @@
     <PackageVersion Include="System.Text.Json" Version="8.0.5" />
     <PackageVersion Include="StackExchange.Redis" Version="2.8.31" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="8.0.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />
     <PackageVersion Include="coverlet.collector" Version="6.0.2" />
     <PackageVersion Include="coverlet.msbuild" Version="6.0.2" />

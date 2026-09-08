@@ -22,7 +22,7 @@ automatic cookie are all turned off, and the wrapper implements them.
 | Language | Transport Stack | Deliverable |
 | --- | --- | --- |
 | cpp | Boost.Beast + Asio (+OpenSSL optional) | `zlink::http_client` (CMake, static) |
-| dotnet | `System.Net.Http` + `SocketsHttpHandler` | `Zlink.HttpClient` (NuGet) |
+| dotnet | `System.Net.Http` + `SocketsHttpHandler` | `Systems.Zlink.HttpClient` (NuGet) |
 | java | `java.net.http.HttpClient` | `zlink-http-client` (Gradle) |
 | kotlin | Reuses the java runtime transitively + coroutine extension | `zlink-http-client-kotlin` (Gradle) |
 | node | undici low-level `request` | `@zlink-systems/http-client` (npm) |

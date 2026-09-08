@@ -7,6 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Shared/SubmitAdmission.Shared.csproj" />
-    <PackageReference Include="Zlink.HttpClient" />
+    <PackageReference Include="Systems.Zlink.HttpClient" />
   </ItemGroup>
 </Project>

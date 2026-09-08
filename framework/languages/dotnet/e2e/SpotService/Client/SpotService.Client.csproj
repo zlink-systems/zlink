@@ -15,7 +15,7 @@
         <Compile Include="../../InstanceSpot/Client/Scenarios/InstanceSpotIdleEvictionScenario.cs" Link="Scenarios/InstanceSpotIdleEvictionScenario.cs" />
         <ProjectReference Include="../Shared/SpotService.Shared.csproj"/>
         <ProjectReference Include="../../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj"/>
-        <PackageReference Include="Zlink.HttpClient"/>
+        <PackageReference Include="Systems.Zlink.HttpClient"/>
         <ProjectReference Include="../../../src/Zlink.Framework/Zlink.Framework.csproj"/>
         <ProjectReference Include="../../../src/Zlink.Framework.AspNetCore/Zlink.Framework.AspNetCore.csproj"/>
     </ItemGroup>

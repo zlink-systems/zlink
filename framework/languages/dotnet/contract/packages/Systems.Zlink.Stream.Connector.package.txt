@@ -1,19 +1,20 @@
 package Systems.Zlink.Stream.Connector
-entry LICENSE
+entry README.md
 entry Systems.Zlink.Stream.Connector.nuspec
 entry [Content_Types].xml
 entry _rels/.rels
 entry lib/net8.0/Systems.Zlink.Stream.Connector.dll
 entry lib/net8.0/Systems.Zlink.Stream.Connector.xml
 entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
-content-sha256 lib/net8.0/Systems.Zlink.Stream.Connector.xml=b44fe0bd8344de3cb5761b315572dabff29b6661c74c949f0a757c237431dc9f
-metadata authors=Systems.Zlink.Stream.Connector
+content-sha256 lib/net8.0/Systems.Zlink.Stream.Connector.xml=f4f3daf8a5f7f6987d7f2ddd926c725c3b92f2c90cbbbbce90a7bae2af04d22a
+metadata authors=zlink
 metadata description=ZLink STREAM client connector for .NET.
 metadata id=Systems.Zlink.Stream.Connector
-metadata license=LICENSE type=file
-metadata licenseUrl=https://aka.ms/deprecateLicenseUrl
+metadata license=MPL-2.0 type=expression
+metadata licenseUrl=https://licenses.nuget.org/MPL-2.0
 metadata projectUrl=https://github.com/zlink-systems/zlink
+metadata readme=README.md
 metadata version={VERSION}
-metadata repository commit={COMMIT} type=git
+metadata repository commit={COMMIT} type=git url=https://github.com/zlink-systems/zlink
 dependency-group targetFramework=net8.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=K4os.Compression.LZ4 version=1.3.8

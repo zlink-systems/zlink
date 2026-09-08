@@ -1,26 +1,27 @@
-package Zlink.Framework.AspNetCore
-entry LICENSE
-entry Zlink.Framework.AspNetCore.nuspec
+package Systems.Zlink.Framework.AspNetCore
+entry README.md
+entry Systems.Zlink.Framework.AspNetCore.nuspec
 entry [Content_Types].xml
 entry _rels/.rels
-entry lib/net8.0/Zlink.Framework.AspNetCore.dll
-entry lib/net8.0/Zlink.Framework.AspNetCore.xml
+entry lib/net8.0/Systems.Zlink.Framework.AspNetCore.dll
+entry lib/net8.0/Systems.Zlink.Framework.AspNetCore.xml
 entry package/services/metadata/core-properties/{CORE_PROPERTIES}.psmdcp
-content-sha256 lib/net8.0/Zlink.Framework.AspNetCore.xml=fe83b2a45161057af74af93324dc4869c86aef5469f60ebd476ccb0c3c84bae5
-metadata authors=Zlink.Framework.AspNetCore
+content-sha256 lib/net8.0/Systems.Zlink.Framework.AspNetCore.xml=16ed41d865cf7d38b0287edace85c4b3673a93f1b6b944ed51ee8e094cdfd8dc
+metadata authors=zlink
 metadata description=ASP.NET Core integration layer for ZLink framework.
-metadata id=Zlink.Framework.AspNetCore
-metadata license=LICENSE type=file
-metadata licenseUrl=https://aka.ms/deprecateLicenseUrl
+metadata id=Systems.Zlink.Framework.AspNetCore
+metadata license=MPL-2.0 type=expression
+metadata licenseUrl=https://licenses.nuget.org/MPL-2.0
 metadata projectUrl=https://github.com/zlink-systems/zlink
+metadata readme=README.md
 metadata version={VERSION}
-metadata repository commit={COMMIT} type=git
+metadata repository commit={COMMIT} type=git url=https://github.com/zlink-systems/zlink
 dependency-group targetFramework=net8.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=K4os.Compression.LZ4 version=1.3.8
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extensions.DependencyInjection.Abstractions version=8.0.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extensions.Diagnostics.HealthChecks version=8.0.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extensions.Hosting.Abstractions version=8.0.0
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Microsoft.Extensions.Logging.Abstractions version=8.0.0
-dependency targetFramework=net8.0 exclude=Build,Analyzers id=Systems.Zlink version=0.17.0
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Systems.Zlink version=0.17.3
+dependency targetFramework=net8.0 exclude=Build,Analyzers id=Systems.Zlink.HttpClient version={VERSION}
 dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework version={VERSION}
-dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.HttpClient version={VERSION}

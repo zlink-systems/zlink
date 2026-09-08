@@ -14,7 +14,7 @@ $LocalPackageRoot = (Resolve-Path -LiteralPath $LocalPackageRoot).Path
 [xml]$versions = Get-Content -LiteralPath (Join-Path $FrameworkRoot 'Directory.Packages.props')
 $bindingVersion = $versions.SelectSingleNode('//ZLinkBindingsPackageVersion').InnerText
 $httpVersion = $versions.SelectSingleNode('//ZLinkHttpClientPackageVersion').InnerText
-foreach ($package in @("Systems.Zlink.$bindingVersion.nupkg", "Zlink.HttpClient.$httpVersion.nupkg")) {
+foreach ($package in @("Systems.Zlink.$bindingVersion.nupkg", "Systems.Zlink.HttpClient.$httpVersion.nupkg")) {
     if (-not (Test-Path -LiteralPath (Join-Path $LocalPackageRoot "nuget/$package"))) {
         throw "Missing local package: $package in $LocalPackageRoot/nuget"
     }

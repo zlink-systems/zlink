@@ -1,3 +1,8 @@
+import java.util.Base64
+import org.gradle.api.publish.PublishingExtension
+import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.plugins.signing.SigningExtension
+
 plugins {
     idea
     id("org.jetbrains.kotlin.jvm") version "2.2.21" apply false
@@ -14,6 +19,9 @@ idea {
 }
 
 val junitVersion = "5.10.2"
+val signingKey = providers.environmentVariable("SIGNING_KEY").orNull
+val signingPassphrase = providers.environmentVariable("SIGNING_PASSPHRASE").orNull
+val centralBundleDir = providers.environmentVariable("MAVEN_CENTRAL_BUNDLE_DIR").orNull
 
 subprojects {
     group = rootProject.group
@@ -40,6 +48,12 @@ subprojects {
             toolchain {
                 languageVersion.set(JavaLanguageVersion.of(22))
             }
+            withSourcesJar()
+            withJavadocJar()
+        }
+
+        tasks.withType<Javadoc>().configureEach {
+            (options as StandardJavadocDocletOptions).addStringOption("Xdoclint:-missing", "-quiet")
         }
 
         extensions.configure<SourceSetContainer> {
@@ -138,6 +152,7 @@ subprojects {
     }
 
     plugins.withId("maven-publish") {
+        pluginManager.apply("signing")
         extensions.configure<PublishingExtension> {
             publications {
                 create<MavenPublication>("mavenJava") {
@@ -165,6 +180,12 @@ subprojects {
                                 }
                             }
                         }
+                        developers {
+                            developer {
+                                id.set("zlink-systems")
+                                name.set("zlink")
+                            }
+                        }
                         scm {
                             connection.set("scm:git:https://github.com/zlink-systems/zlink.git")
                             developerConnection.set("scm:git:git@github.com:zlink-systems/zlink.git")
@@ -174,6 +195,12 @@ subprojects {
                 }
             }
             repositories {
+                if (!centralBundleDir.isNullOrBlank()) {
+                    maven {
+                        name = "centralStaging"
+                        url = uri(centralBundleDir)
+                    }
+                }
                 maven {
                     name = "releaseRepo"
                     val configuredUrl = providers.environmentVariable("MAVEN_REPOSITORY_URL")
@@ -194,6 +221,18 @@ subprojects {
                             password = configuredPassword.orElse(githubToken).orNull
                         }
                     }
+                }
+            }
+        }
+        afterEvaluate {
+            extensions.configure<SigningExtension> {
+                isRequired = false
+                if (!signingKey.isNullOrBlank() && !signingPassphrase.isNullOrBlank()) {
+                    useInMemoryPgpKeys(
+                        String(Base64.getDecoder().decode(signingKey)),
+                        signingPassphrase,
+                    )
+                    sign(extensions.getByType<PublishingExtension>().publications)
                 }
             }
         }

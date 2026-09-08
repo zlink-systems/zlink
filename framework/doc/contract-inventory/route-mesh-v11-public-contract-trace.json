@@ -1649,7 +1649,7 @@
       "language": "dotnet",
       "packages": [
         "Zlink.Framework",
-        "Zlink.Framework.AspNetCore"
+        "Systems.Zlink.Framework.AspNetCore"
       ],
       "contractTestOwners": [
         "V11-M7-CONTRACT"
@@ -9578,7 +9578,7 @@
       "ownershipProfileId": "ownership:00c91a0bb2fd04f0a0b8",
       "packages": [
         "Zlink.Framework",
-        "Zlink.Framework.AspNetCore"
+        "Systems.Zlink.Framework.AspNetCore"
       ]
     },
     {
@@ -101879,7 +101879,7 @@
       "ownerIdentity": "Zlink.Framework::ServiceCollectionExtensions",
       "packages": [
         "Zlink.Framework",
-        "Zlink.Framework.AspNetCore"
+        "Systems.Zlink.Framework.AspNetCore"
       ],
       "signatureSha256": "7a73ec2f756119de53bc0d6e07f20ffbab31d7423d64a03c0f23229383f3bfc9",
       "canonicalIdentity": "dotnet|Zlink.Framework|Zlink.Framework::ServiceCollectionExtensions.AddZLinkDrainHealthCheck#7a73ec2f756119de",
@@ -101912,7 +101912,7 @@
       "ownerIdentity": "Zlink.Framework::ServiceCollectionExtensions",
       "packages": [
         "Zlink.Framework",
-        "Zlink.Framework.AspNetCore"
+        "Systems.Zlink.Framework.AspNetCore"
       ],
       "signatureSha256": "ccfdff2d12b15ae150120bd42d84a96d805ca3f393285df4005d5ac1292a20c1",
       "canonicalIdentity": "dotnet|Zlink.Framework|Zlink.Framework::ServiceCollectionExtensions.AddZLinkFramework#ccfdff2d12b15ae1",
@@ -101945,7 +101945,7 @@
       "ownerIdentity": "Zlink.Framework::ServiceCollectionExtensions",
       "packages": [
         "Zlink.Framework",
-        "Zlink.Framework.AspNetCore"
+        "Systems.Zlink.Framework.AspNetCore"
       ],
       "signatureSha256": "0b1bf854a45d7f7ec5a3d4fc868df0389bbb1439dcbd40496630eccff75f2238",
       "canonicalIdentity": "dotnet|Zlink.Framework|Zlink.Framework::ServiceCollectionExtensions.AddZLinkHttpClient#0b1bf854a45d7f7e",

@@ -34,11 +34,16 @@ expected=(
 
 cd "$ROOT_DIR"
 BINDING_SPEC="$(node -p "require('./package.json').dependencies['@zlink-systems/zlink']")"
-if [[ "$BINDING_SPEC" != file:* ]]; then
-  echo "Node binding dependency must use the central local-package file pin" >&2
+if [[ "$BINDING_SPEC" == file:* ]]; then
+  BINDING_TGZ="$(realpath "$ROOT_DIR/${BINDING_SPEC#file:}")"
+elif [[ "$BINDING_SPEC" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  npm pack --silent "@zlink-systems/zlink@$BINDING_SPEC" \
+    --pack-destination "$TEMP_DIR" >/dev/null
+  BINDING_TGZ="$TEMP_DIR/zlink-systems-zlink-$BINDING_SPEC.tgz"
+else
+  echo "Node binding dependency must be an exact registry version or local package file" >&2
   exit 1
 fi
-BINDING_TGZ="$(realpath "$ROOT_DIR/${BINDING_SPEC#file:}")"
 HTTP_CLIENT_SPEC="$(node -p "require('./package.json').dependencies['@zlink-systems/http-client']")"
 if [[ "$HTTP_CLIENT_SPEC" != file:* ]]; then
   echo "Node HTTP client dependency must use the central local-package file pin" >&2

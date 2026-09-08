@@ -43,11 +43,11 @@ PACKAGE_IDS=(
   Zlink.Framework.Contracts
   Zlink.Framework.Provider.Abstractions
   Zlink.Framework
-  Zlink.Framework.AspNetCore
+  Systems.Zlink.Framework.AspNetCore
   Zlink.Framework.Codecs.MessagePack
   Zlink.Framework.Codecs.Protobuf
   Zlink.Framework.Locations.Redis
-  Zlink.HttpClient
+  Systems.Zlink.HttpClient
   Systems.Zlink.Stream.Connector
 )
 OUT_OF_SCOPE_PACKABLE_PROJECTS=()
@@ -163,7 +163,7 @@ dotnet run --project "$INSPECTOR_DIR/PackageInspector.csproj" \
 framework_snapshot="$WORK_DIR/package-snapshots/Zlink.Framework.package.txt"
 contracts_snapshot="$WORK_DIR/package-snapshots/Zlink.Framework.Contracts.package.txt"
 redis_snapshot="$WORK_DIR/package-snapshots/Zlink.Framework.Locations.Redis.package.txt"
-http_client_snapshot="$WORK_DIR/package-snapshots/Zlink.HttpClient.package.txt"
+http_client_snapshot="$WORK_DIR/package-snapshots/Systems.Zlink.HttpClient.package.txt"
 exact_connector_dependency="dependency targetFramework=net8.0 exclude=Build,Analyzers id=Systems.Zlink.Stream.Connector version=[{VERSION}]"
 exact_framework_contracts_dependency="dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework.Contracts version=[{VERSION}]"
 exact_framework_provider_dependency="dependency targetFramework=net8.0 exclude=Build,Analyzers id=Zlink.Framework.Provider.Abstractions version=[{VERSION}]"
@@ -190,7 +190,7 @@ if grep -Fq "id=Zlink.Framework version=" "$redis_snapshot"; then
   exit 1
 fi
 grep -Fxq "$exact_http_contracts_dependency" "$http_client_snapshot" || {
-  echo "Zlink.HttpClient must declare its Zlink.Framework.Contracts package dependency." >&2
+  echo "Systems.Zlink.HttpClient must declare its Zlink.Framework.Contracts package dependency." >&2
   exit 1
 }
 for forbidden_dependency in \
@@ -202,12 +202,12 @@ for forbidden_dependency in \
     exit 1
   fi
   if grep -Fq "id=$forbidden_dependency version=" "$http_client_snapshot"; then
-    echo "Zlink.HttpClient must not depend on $forbidden_dependency." >&2
+    echo "Systems.Zlink.HttpClient must not depend on $forbidden_dependency." >&2
     exit 1
   fi
 done
 if grep -Fq "id=Zlink.Framework version=" "$http_client_snapshot"; then
-  echo "Zlink.HttpClient must not depend on the Framework runtime package." >&2
+  echo "Systems.Zlink.HttpClient must not depend on the Framework runtime package." >&2
   exit 1
 fi
 
@@ -240,11 +240,11 @@ cat >"$CONSUMER_DIR/NuGet.Config" <<EOF
       <package pattern="Zlink.Framework" />
       <package pattern="Zlink.Framework.Contracts" />
       <package pattern="Zlink.Framework.Provider.Abstractions" />
-      <package pattern="Zlink.Framework.AspNetCore" />
+      <package pattern="Systems.Zlink.Framework.AspNetCore" />
       <package pattern="Zlink.Framework.Codecs.MessagePack" />
       <package pattern="Zlink.Framework.Codecs.Protobuf" />
       <package pattern="Zlink.Framework.Locations.Redis" />
-      <package pattern="Zlink.HttpClient" />
+      <package pattern="Systems.Zlink.HttpClient" />
       <package pattern="Systems.Zlink.Stream.Connector" />
     </packageSource>
     <packageSource key="bindings">
@@ -329,11 +329,11 @@ cat >"$CONSUMER_DIR/Consumer.csproj" <<EOF
     <PackageReference Include="Zlink.Framework" Version="$VERSION" />
     <PackageReference Include="Zlink.Framework.Contracts" Version="$VERSION" />
     <PackageReference Include="Zlink.Framework.Provider.Abstractions" Version="$VERSION" />
-    <PackageReference Include="Zlink.Framework.AspNetCore" Version="$VERSION" />
+    <PackageReference Include="Systems.Zlink.Framework.AspNetCore" Version="$VERSION" />
     <PackageReference Include="Zlink.Framework.Codecs.MessagePack" Version="$VERSION" />
     <PackageReference Include="Zlink.Framework.Codecs.Protobuf" Version="$VERSION" />
     <PackageReference Include="Zlink.Framework.Locations.Redis" Version="$VERSION" />
-    <PackageReference Include="Zlink.HttpClient" Version="$VERSION" />
+    <PackageReference Include="Systems.Zlink.HttpClient" Version="$VERSION" />
     <PackageReference Include="Systems.Zlink.Stream.Connector" Version="$VERSION" />
   </ItemGroup>
 </Project>
@@ -349,7 +349,7 @@ cat >"$HTTP_CONSUMER_DIR/HttpConsumer.csproj" <<EOF
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Zlink.HttpClient" Version="$VERSION" />
+    <PackageReference Include="Systems.Zlink.HttpClient" Version="$VERSION" />
   </ItemGroup>
 </Project>
 EOF

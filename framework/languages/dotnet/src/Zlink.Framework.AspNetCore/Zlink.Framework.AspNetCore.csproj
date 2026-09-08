@@ -2,10 +2,20 @@
     <PropertyGroup>
         <IsPackable>true</IsPackable>
         <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
-        <AssemblyName>Zlink.Framework.AspNetCore</AssemblyName>
+        <AssemblyName>Systems.Zlink.Framework.AspNetCore</AssemblyName>
+        <PackageId>Systems.Zlink.Framework.AspNetCore</PackageId>
         <RootNamespace>Zlink.Framework.AspNetCore</RootNamespace>
         <Description>ASP.NET Core integration layer for ZLink framework.</Description>
         <NoWarn>$(NoWarn);ZLINK1100</NoWarn>
+        <Authors>zlink</Authors>
+        <RepositoryUrl>https://github.com/zlink-systems/zlink</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageProjectUrl>https://github.com/zlink-systems/zlink</PackageProjectUrl>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <PublishRepositoryUrl>true</PublishRepositoryUrl>
+        <EmbedUntrackedSources>true</EmbedUntrackedSources>
+        <IncludeSymbols>true</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     </PropertyGroup>
 
     <ItemGroup>
@@ -13,9 +23,11 @@
         <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks"/>
         <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions"/>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions"/>
-        <PackageReference Include="Zlink.HttpClient">
+        <PackageReference Include="Systems.Zlink.HttpClient">
             <VersionOverride Condition="'$(ZLinkHttpClientDependencyVersion)' != ''">$(ZLinkHttpClientDependencyVersion)</VersionOverride>
         </PackageReference>
+        <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
+        <None Include="../../README.md" Pack="true" PackagePath="/" />
     </ItemGroup>
 
     <ItemGroup>

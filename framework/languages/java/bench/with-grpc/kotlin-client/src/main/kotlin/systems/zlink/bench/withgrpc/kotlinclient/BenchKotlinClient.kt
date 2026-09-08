@@ -322,7 +322,7 @@ class BenchKotlinClient(private val options: BenchOptions) {
         // the client-facing API.
         metadata["serverProcesses"] = "java row binaries (bench-grpc-server," +
             " bench-zlink-raw-server, bench-zlink-framework-server) on the kotlin band"
-        metadata["zlinkBindingVersion"] = "0.17.0"
+        metadata["zlinkBindingVersion"] = "0.17.3"
         metadata["zlinkBindingNote"] =
             "bindings/kotlin has no native binding of its own; it is systems.zlink:zlink" +
                 " used from kotlin"

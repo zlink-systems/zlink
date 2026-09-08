@@ -117,7 +117,7 @@ contract.
   `coroutine_resume_scheduler_t`, `framework_resume_scheduler_t`.
   (`body_stream_provider_t` is a nested typedef inside
   `request_builder_t`, not a top-level symbol)
-- **dotnet** `Zlink.HttpClient`: `ZLinkHttpClient`, `ZLinkHttpClientBuilder`,
+- **dotnet** `Systems.Zlink.HttpClient`: `ZLinkHttpClient`, `ZLinkHttpClientBuilder`,
   `ZLinkHttpRequestBuilder`, `ZLinkHttpMethod`, `RawHttpResponse`,
   `HttpResponse<T>`.
 - **java** `systems.zlink.httpclient`: `ZLinkHttpClient`,

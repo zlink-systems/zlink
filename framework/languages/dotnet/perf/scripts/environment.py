@@ -32,7 +32,7 @@ def collect() -> dict:
                 if line.startswith("model name")), platform.processor())
     artifacts = []
     runtime_settings = {}
-    paths = [ROOT / ".artifacts/wsl/nuget/Systems.Zlink.0.17.0.nupkg"]
+    paths = [ROOT / ".artifacts/wsl/nuget/Systems.Zlink.0.17.3.nupkg"]
     paths.append(PERF / "ZLink.Framework.Perf.Shared/histogram-bounds.json")
     paths.extend((ROOT / "core/build-dev/lib").glob("libzlink.so*"))
     for role in ("Client", "SessionServer", "ChannelServer"):
@@ -52,7 +52,7 @@ def collect() -> dict:
         "schemaVersion": 2,
         "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True)),
-        "buildMode": "Release", "frameworkVersion": "0.10.0", "bindingVersion": "0.17.0",
+        "buildMode": "Release", "frameworkVersion": "0.10.0", "bindingVersion": "0.17.3",
         "coreVersion": next(line.split("=", 1)[1] for line in (ROOT / "VERSION").read_text().splitlines() if line.startswith("LIBZLINK_VERSION=")),
         "cpuModel": cpu, "effectiveProcessorCount": len(os.sched_getaffinity(0)),
         "cpuAffinity": sorted(os.sched_getaffinity(0)),

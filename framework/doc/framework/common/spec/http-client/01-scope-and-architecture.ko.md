@@ -18,7 +18,7 @@ client가 아니다. JSON 전용 client도 아니며, typed JSON 경로는 raw H
 | 언어 | 전송 스택 | 산출물 |
 | --- | --- | --- |
 | cpp | Boost.Beast + Asio (+OpenSSL 선택) | `zlink::http_client` (CMake, static) |
-| dotnet | `System.Net.Http` + `SocketsHttpHandler` | `Zlink.HttpClient` (NuGet) |
+| dotnet | `System.Net.Http` + `SocketsHttpHandler` | `Systems.Zlink.HttpClient` (NuGet) |
 | java | `java.net.http.HttpClient` | `zlink-http-client` (Gradle) |
 | kotlin | java 런타임 전이 재사용 + coroutine 확장 | `zlink-http-client-kotlin` (Gradle) |
 | node | undici 저수준 `request` | `@zlink-systems/http-client` (npm) |

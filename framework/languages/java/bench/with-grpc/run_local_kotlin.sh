@@ -33,7 +33,7 @@ STAMP="${STAMP:-$(date +%Y%m%d_%H%M%S)}"
 OUTROOT="${OUTROOT:-$HERE/log/$STAMP}"
 TIMELINE="$OUTROOT/timeline.txt"
 
-export ZLINK_LIBRARY_PATH="${ZLINK_LIBRARY_PATH:-$REPO/.artifacts/wsl/install/zlink-core/0.17.0/lib/libzlink.so}"
+export ZLINK_LIBRARY_PATH="${ZLINK_LIBRARY_PATH:-$REPO/.artifacts/wsl/install/zlink-core/0.17.3/lib/libzlink.so}"
 
 mkdir -p "$OUTROOT"
 note() { echo "$(date --iso-8601=seconds) $*" | tee -a "$TIMELINE"; }

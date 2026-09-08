@@ -1,0 +1,208 @@
+name: Release Framework
+
+on:
+  push:
+    tags:
+      - 'framework/v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Framework version to release (for example, 0.10.0)'
+        required: true
+        type: string
+      publish_registry:
+        description: 'Publish Node and Java packages to public registries'
+        required: true
+        default: false
+        type: boolean
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  resolve:
+    name: Resolve framework version
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish_registry: ${{ steps.version.outputs.publish_registry }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          REQUESTED_PUBLISH: ${{ inputs.publish_registry }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            version="${GITHUB_REF_NAME#framework/v}"
+            publish_registry=true
+          else
+            version="${REQUESTED_VERSION}"
+            publish_registry="${REQUESTED_PUBLISH}"
+          fi
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid framework version: ${version:-<missing>}" >&2
+            exit 1
+          fi
+
+          node_version=$(node -p "require('./framework/languages/node/packages/framework/package.json').version")
+          java_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' framework/languages/java/build.gradle.kts | head -n1)
+          cpp_version=$(node -p "require('./framework/languages/cpp/vcpkg.json')['version-string']")
+          for declared in "${node_version}" "${java_version}" "${cpp_version}"; do
+            if [ "${declared}" != "${version}" ]; then
+              echo "Framework version mismatch: requested=${version}, declared=${declared}" >&2
+              exit 1
+            fi
+          done
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "publish_registry=${publish_registry}" >> "${GITHUB_OUTPUT}"
+
+  release-node:
+    name: Build and publish Node framework packages
+    runs-on: ubuntu-22.04
+    needs: resolve
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install npm with Trusted Publishing support
+        run: npm install -g npm@latest
+
+      - name: Prepare the private HTTP client development package
+        shell: bash
+        run: |
+          mkdir -p .artifacts/wsl/npm
+          npm pack framework/languages/node/packages/http-client \
+            --pack-destination .artifacts/wsl/npm
+
+      - name: Build and pack
+        working-directory: framework/languages/node
+        run: |
+          npm ci
+          npm run build
+          mkdir -p ../../../dist/framework-node
+          for package_dir in \
+            stream-wire \
+            stream-connector \
+            framework \
+            framework-codec-protobuf \
+            framework-codec-msgpack \
+            framework-locations-redis \
+            nestjs; do
+            npm pack "./packages/${package_dir}" \
+              --pack-destination ../../../dist/framework-node
+          done
+
+      - name: Publish with npm provenance
+        if: needs.resolve.outputs.publish_registry == 'true'
+        working-directory: framework/languages/node
+        run: |
+          for package_dir in \
+            stream-wire \
+            stream-connector \
+            framework \
+            framework-codec-protobuf \
+            framework-codec-msgpack \
+            framework-locations-redis \
+            nestjs; do
+            npm publish "./packages/${package_dir}" --provenance --access public
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: framework-node-${{ needs.resolve.outputs.version }}
+          path: dist/framework-node/*.tgz
+          if-no-files-found: error
+
+  release-java:
+    name: Build and stage Java framework packages
+    runs-on: ubuntu-22.04
+    needs: resolve
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '22'
+
+      - name: Build and test
+        working-directory: framework/languages/java
+        run: ./gradlew --no-daemon check
+
+      - name: Sign and upload a Maven Central bundle
+        if: needs.resolve.outputs.publish_registry == 'true'
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_PASSPHRASE: ${{ secrets.SIGNING_PASSPHRASE }}
+          MAVEN_CENTRAL_BUNDLE_DIR: ${{ runner.temp }}/zlink-framework-java-central-staging
+          MAVEN_CENTRAL_BUNDLE_PATH: ${{ github.workspace }}/dist/framework-java/zlink-framework-java-${{ needs.resolve.outputs.version }}-central-bundle.zip
+        working-directory: framework/languages/java
+        run: |
+          ./gradlew --no-daemon publishAllPublicationsToCentralStagingRepository
+          bash scripts/upload-central-bundle.sh
+
+      - name: Build unsigned Maven artifacts for review
+        if: needs.resolve.outputs.publish_registry != 'true'
+        working-directory: framework/languages/java
+        run: ./gradlew --no-daemon publish
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: framework-java-${{ needs.resolve.outputs.version }}
+          path: |
+            framework/languages/java/*/build/libs/*.jar
+            framework/languages/java/*/build/repo/**
+            dist/framework-java/*.zip
+          if-no-files-found: error
+
+  release-cpp:
+    name: Package C++ framework sources
+    runs-on: ubuntu-22.04
+    needs: resolve
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create source archive and checksum
+        shell: bash
+        run: |
+          mkdir -p dist/framework-cpp
+          stage="${RUNNER_TEMP}/zlink-framework-cpp-${{ needs.resolve.outputs.version }}"
+          mkdir -p "${stage}"
+          git archive HEAD:framework/languages/cpp | tar -x -C "${stage}"
+          install -m644 LICENSE "${stage}/LICENSE"
+          archive="dist/framework-cpp/zlink-framework-cpp-${{ needs.resolve.outputs.version }}.tar.gz"
+          tar -C "${RUNNER_TEMP}" -czf "${archive}" \
+            "zlink-framework-cpp-${{ needs.resolve.outputs.version }}"
+          sha256sum "${archive}" >"${archive}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: framework-cpp-${{ needs.resolve.outputs.version }}
+          path: dist/framework-cpp/*
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: framework/v${{ needs.resolve.outputs.version }}
+          name: ZLink Framework v${{ needs.resolve.outputs.version }}
+          files: dist/framework-cpp/*
+
+# The .NET framework packages are intentionally not pushed here. nuget.org's
+# zlink-dotnet-release Trusted Publishing policy is bound to release-dotnet.yml.

@@ -4,12 +4,12 @@
 
 ## Project Reference
 
-Add the `Zlink.HttpClient` package to the consuming project. Only the framework contract package the
+Add the `Systems.Zlink.HttpClient` package to the consuming project. Only the framework contract package the
 HTTP client uses is installed alongside it — not the whole server runtime.
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Zlink.HttpClient" Version="0.5.1" />
+  <PackageReference Include="Systems.Zlink.HttpClient" Version="0.10.0" />
 </ItemGroup>
 ```
 

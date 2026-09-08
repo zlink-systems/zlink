@@ -321,7 +321,7 @@ public final class BenchClient {
         metadata.put("protobufJavaVersion", "4.30.2");
         metadata.put("grpcServerConfiguration",
             stats.info(options.grpcStatsUrl).replace("\"", "'"));
-        metadata.put("zlinkBindingVersion", "0.17.0");
+        metadata.put("zlinkBindingVersion", "0.17.3");
         metadata.put("frameworkHost", "zlink-framework-spring-boot-starter 0.10.0");
         metadata.put("logical_cores", ClientResources.LOGICAL_CORES);
         metadata.put("client_saturation_metric", ClientResources.CLIENT_SATURATION_METRIC);

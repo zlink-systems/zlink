@@ -5,6 +5,6 @@
     <ProjectReference Include="../../../src/Systems.Zlink.Stream.Connector/Systems.Zlink.Stream.Connector.csproj" />
     <ProjectReference Include="../../../src/Zlink.Framework/Zlink.Framework.csproj" />
     <PackageReference Include="StackExchange.Redis" />
-    <PackageReference Include="Zlink.HttpClient" />
+    <PackageReference Include="Systems.Zlink.HttpClient" />
   </ItemGroup>
 </Project>

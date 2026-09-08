@@ -3,11 +3,23 @@
         <IsPackable>true</IsPackable>
         <TargetFrameworks>$(ZLinkFrameworkTargetFrameworks)</TargetFrameworks>
         <AssemblyName>Systems.Zlink.Stream.Connector</AssemblyName>
+        <PackageId>Systems.Zlink.Stream.Connector</PackageId>
         <RootNamespace>Systems.Zlink.Stream.Connector</RootNamespace>
         <Description>ZLink STREAM client connector for .NET.</Description>
+        <Authors>zlink</Authors>
+        <RepositoryUrl>https://github.com/zlink-systems/zlink</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageProjectUrl>https://github.com/zlink-systems/zlink</PackageProjectUrl>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <PublishRepositoryUrl>true</PublishRepositoryUrl>
+        <EmbedUntrackedSources>true</EmbedUntrackedSources>
+        <IncludeSymbols>true</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     </PropertyGroup>
 
     <ItemGroup>
         <PackageReference Include="K4os.Compression.LZ4"/>
+        <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
+        <None Include="../../README.md" Pack="true" PackagePath="/" />
     </ItemGroup>
 </Project>
