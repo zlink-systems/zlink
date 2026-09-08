@@ -4708,3 +4708,8 @@ prefix를 명시한다.
 **원인**(`core-rf-RR-1-report.md`, Claude, 계측으로 확정): 0.17.3 `drain_claimed_completion_pipe`(`socket_base_api.cpp:1694-1700`)가 `owns_lease()`일 때 `drain(false)`를 무조건 두 번 돌림 → 1차 drain이 public-head 출구에서 count-1 claim을 release한 뒤 2차 drain이 같은 분기(`:1637-1641`)에 들어가 `zlink_assert(released)`. 트리거는 reply record 뒤 peer ROUTER close의 delimiter 프레임(`probe_normalized_head()`가 `pipe_head_data`로 분류 — 의도된 설계). **1,024는 계약 상한이 아니라 타이밍 상수**(1,025 part면 drain 진입 시 record와 delimiter가 함께 큐에 있어 결정적). 계약(socket README·01-zmp)에 reply part 수 상한 없음; 05-polling owner 규칙상 0.17.3의 2차 drain이 위반. ALL-2의 lifecycle turn 통합이 이 이중 drain을 없애 0.17.4 베이스에서는 Rust 원본 테스트 PASS(0.17.3은 30/30 SIGABRT).
 **산출물**: `core/tests/integration/test_request_reply_part_count_boundary.cpp`(inproc+tcp × 1023/1024/1025/2048 × pull 3변형 × 순차/동시) 20/20, 관련 62 target ×3 PASS, Rust 원본 PASS. C 공개 API만으로는 0.17.3의 원 결함을 결정적으로 재현하지 못함(owns_lease 경로·delimiter 도착 순서 필요). TSan·ASan은 게이트에서. patch `all-artifacts/RR-1.patch`.
 **머신 A**: 0.17.4 재고정 후 Rust 러너 검증에서 이 테스트 제외를 해제 가능.
+
+## D-B256 (2026-09-08 15:40, 머신 B) ALL-2b codex가 sanitizer 검증 직전 필터로 중단 → ALL-2c(Claude)가 검증·보고서 마무리; S-C 중간값 zlink 9.1k vs asio 5.0k Ir/msg
+
+**ALL-2b 상태**: patch 23 파일(+600/−88)이 worktree `all`에 미커밋으로 남음. codex 진행 기록: B-ALL2-1 max snapshot을 record 사전검사·part별 HWM 검사까지 동일 전달, command batch를 `inbound_poll_rate`로 상한 + batch 내 종료 검사(W-ALL2-1), inproc peer progress/ack 대기를 socket turn 밖으로(W-ALL2-2), WS batch/scratch 성장·회수(W-ALL2-3), 신규 5 target ×20·관련 70 target ×3 통과. TSan·ASan·hotpath·ws 게이트·보고서 미완 → ALL-2c(Claude opus, 2 h)가 이어받음(같은 worktree, 진행 파일 이어 씀).
+**S-C 중간(15:34)**: with_stream CCU 20 축소 셀에서 zlink 9,108.8 Ir/msg(mutex 8.5/msg) vs asio 5,014.7 Ir/msg — startup 미차감. zmq는 PERF_LOCK 대기 중.
