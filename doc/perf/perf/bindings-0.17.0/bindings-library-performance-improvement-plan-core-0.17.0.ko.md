@@ -938,28 +938,28 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 통과(59.0%) | 통과(59.7%) | 통과(56.6%) | 통과(62.0%) | 통과(91.0%) | 미측정 | **`미달(65.66%)`** — 1-run(D-BP32), 고정 Core **0.17.2**(`r6net`, C `complete`·dotnet `complete`); latency 1.08x. relay 정합(fb3f37191d) 뒤 첫 유효 측정. 처리량 dotnet·C 286.0/484.5, 252.3/422.6, 249.7/441.3, 232.7/375.6, 61.6/67.7 Kops/s; C `perf_c_multi_linux_20260908_111054_r6net.txt`, dotnet `perf_dotnet_multi_linux_20260908_111409_r6net.txt` |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미달(62.2%) | 미달(67.3%) | 미달(66.0%) | 미달(63.8%) | 미달(56.2%) | 미측정 | **`미달(63.10%)`** — §7.2 5-run, 고정 Core **0.17.2**(`r1net`, C·.NET 모두 `status: complete`); latency 2.468x(65536 B 7.43x). 0.17.1 참고값 67.0%보다 낮다. DR REQREP(60.45%)과 같은 형태이며 근거·후보는 그 행과 같다. 처리량 .NET·C 223.5/359.4, 227.9/338.8, 216.9/328.5, 190.8/298.8, 32.4/57.7 Kops/s; C `perf_c_multi_linux_20260908_083320_r1net.txt`, .NET `perf_dotnet_multi_linux_20260908_083617_r1net.txt` |
 | `tcp` | `MULTI_PUBSUB` | 미달(43.5%) | 미달(47.4%) | 미달(44.4%) | 미달(67.7%) | 미달(102.2%) | 미측정 | **`미달(61.01%)`** — §7.2 5-run, 고정 Core **0.17.2**(`r1net`, C·.NET 모두 `status: complete`); latency 1.385x `통과`. 0.17.1 참고값 61.3%와 같다. DD(62.51%)와 같은 규모이며 **64/256/1024 B가 43~47%로 더 낮고 65536 B는 102%** — 작은 메시지의 메시지당 오버헤드가 지배적이라는 신호로 DD와 같은 원인(GC·P/Invoke 후보)일 가능성이 크다. DD 비용 지도([기록](log/2026-09-08-dotnet-dd-cost-map.ko.md))가 나온 뒤 함께 판단한다. 처리량 .NET·C 1,021.9/2,351.2, 1,139.5/2,405.3, 1,106.8/2,494.8, 1,085.6/1,603.8, 118.5/116.0 Kmsg/s; C `perf_c_multi_linux_20260908_082221_r1net.txt`, .NET `perf_dotnet_multi_linux_20260908_082458_r1net.txt` |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: STREAM packet pump stall(D-BP23, 0.17.2 재현) Core 수정 대기, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
 
 ### 9.3 Java
 
@@ -1025,28 +1025,28 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 통과(53.3%) | 통과(57.9%) | 통과(57.2%) | 통과(58.6%) | 미달(11.2%) | 미측정 | **`미달(47.62%)`** — 1-run(D-BP32), 고정 Core **0.17.2**(`r3java`, C `complete`·java `complete`); latency 4.01x **latency 4.01x > 3.0x**. relay 정합 뒤 첫 유효 측정; DR REQREP 대기 중. 처리량 java·C 174.3/327.0, 193.1/333.7, 185.7/324.5, 171.0/292.0, 6.4/57.3 Kops/s; C `perf_c_multi_linux_20260908_111121_r3java.txt`, java `perf_java_multi_linux_20260908_111437_r3java.txt` |
 | `tcp` | `MULTI_PUBSUB` | 통과(75.2%) | 통과(77.5%) | 통과(77.6%) | 통과(97.2%) | 통과(138.5%) | 미측정 | **`통과(93.21%)`** — §7.2 5-run, 고정 Core **0.17.2**(`r3java`, C·Java 모두 `status: complete`); latency 1.031x. 0.17.1 참고값 80.9%. 처리량 Java·C 1,765.9/2,349.0, 1,826.3/2,355.2, 1,931.7/2,488.4, 1,648.9/1,696.6, 178.1/128.6 Kmsg/s; C `perf_c_multi_linux_20260908_093125_r3java.txt`, Java `perf_java_multi_linux_20260908_094213_r3java.txt` |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: STREAM packet pump stall(D-BP23, 0.17.2 재현) Core 수정 대기, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
 
 ### 9.4 Node
 
@@ -1112,28 +1112,28 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 통과(37.9%) | 통과(36.9%) | 통과(31.1%) | 미달(28.6%) | 통과(42.5%) | 미측정 | **`미달(35.40%)`** — 1-run(D-BP32), 고정 Core **0.17.2**(`r10node`, C `complete`·node `complete`); latency 681.72x **latency 681.72x > 5.0x**. relay 정합(d744799803) 뒤 첫 유효 측정. 처리량 node·C 179.8/474.0, 162.0/438.7, 138.3/445.1, 106.5/372.7, 29.0/68.2 Kops/s; C `perf_c_multi_linux_20260908_111241_r10node.txt`, node `perf_node_multi_linux_20260908_111649_r10node.txt` |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미달(33.9%) | 미달(32.5%) | 미달(32.6%) | 미달(26.5%) | 미달(22.8%) | 미측정 | **`미달(29.66%)`** — §7.2 5-run, 고정 Core **0.17.2**(`r4node`, C·Node 모두 `status: complete`); latency 6.007x. 0.17.1 참고값 24.8%. DR REQREP(32.51%)과 같은 형태 — 작은 크기 latency ~3x는 Go와 같은 async terminal 왕복 비용 후보(이월). 처리량 Node·C 121.1/357.1, 108.2/332.6, 103.6/317.7, 77.2/290.8, 13.3/58.4 Kops/s; C `perf_c_multi_linux_20260908_103613_r4node.txt`, Node `perf_node_multi_linux_20260908_105010_r4node.txt` |
 | `tcp` | `MULTI_PUBSUB` | 미달(20.0%) | 미달(18.4%) | 미달(14.5%) | 미달(18.0%) | 미달(77.0%) | 미측정 | **`미달(29.58%)`** — §7.2 5-run, 고정 Core **0.17.2**(`r4node`, C·Node 모두 `status: complete`); latency 0.601x(Node 절대값 64 B 1218.4 ms vs C 1344.617 ms). 0.17.1 참고값 30.2%. DD 행과 같은 latency 이상(Node 쪽 조사 항목) — 원인이 갈릴 때까지 latency는 판정 입력이 아니다. 처리량 Node·C 469.8/2,354.7, 434.4/2,356.6, 365.3/2,519.1, 303.5/1,688.7, 96.9/125.8 Kmsg/s; C `perf_c_multi_linux_20260908_093351_r4node.txt`, Node `perf_node_multi_linux_20260908_094840_r4node.txt` |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: STREAM packet pump stall(D-BP23, 0.17.2 재현) Core 수정 대기, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
 
 ### 9.5 Go
 
@@ -1199,28 +1199,28 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미달(71.4%) | 미달(74.1%) | 미달(71.3%) | 미달(64.9%) | 미달(53.9%) | 미측정 | **`미달(67.11%)`** — §7.2 5-run, 고정 Core **0.17.2**(`r2go`, C·Go 모두 `status: complete`); latency 6.148x(64~1024 B 3.19~2.92x, 65536 B 18.28x). DR REQREP(67.72%)과 같은 형태 — **작은 크기 latency ~3x가 두 pattern 공통**이라 Go REQREP 경로의 고정 지연으로 확정한다(D-BP30). 0.17.1 참고값 21.8%는 깨진 러너의 값이다. 처리량 Go·C 253.2/354.7, 252.0/340.0, 231.6/324.7, 193.7/298.7, 31.1/57.7 Kops/s; C `perf_c_multi_linux_20260908_091114_r2go.txt`, Go `perf_go_multi_linux_20260908_092343_r2go.txt` |
 | `tcp` | `MULTI_PUBSUB` | 미달(29.6%) | 미달(28.0%) | 미달(25.1%) | 미달(33.3%) | 미달(82.8%) | 미측정 | **`미달(39.76%)`** — §7.2 5-run, 고정 Core **0.17.2**(`r5go`, C·Go 모두 `status: complete`, 09:56~09:59 단독 실행); latency 2.208x. 0.17.1 참고값 54.6%. Go DD가 duration 5에서 실패하는 것과 달리 PUBSUB은 완주한다 — DD 결함이 PUBSUB 경로에는 없다. 처리량 Go·C 696.4/2,354.2, 679.0/2,421.7, 627.0/2,500.0, 544.4/1,633.6, 97.6/117.9 Kmsg/s; C `perf_c_multi_linux_20260908_093932_r5go.txt`, Go `perf_go_multi_linux_20260908_095641_r5go.txt` |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: STREAM packet pump stall(D-BP23, 0.17.2 재현) Core 수정 대기, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
 
 ### 9.6 Rust
 
@@ -1286,28 +1286,28 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 보류(67.3%) | 보류(66.0%) | 보류(66.1%) | 보류(69.3%) | 보류(72.3%) | 미측정 | 판정 `보류`(pass 1·2 뒤 3-run 값은 log) — before; aggregate 68.2%(목표 85%), latency 1.54x; 처리량 Rust/C 97.4/144.8, 90.2/136.7, 89.2/135.0, 81.0/116.8, 15.9/22.1 Kops/s; [log](log/2026-09-05-rust-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_PUBSUB` | 통과(85.0%) | 미달(78.0%) | 통과(86.1%) | 통과(88.8%) | 통과(106.8%) | 미측정 | **`미달(88.95%)`** — 1-run(D-BP32), 고정 Core **0.17.2**(`r7rust`, C `complete`·rust `complete`); latency 1.05x. relay 정합 뒤 첫 유효 측정(이전 3-run 67.7~105.4%). 처리량 rust·C 1,966.8/2,313.0, 1,898.1/2,432.0, 2,164.8/2,515.7, 1,432.0/1,611.8, 122.8/115.0 Kops/s; C `perf_c_multi_linux_20260908_111147_r7rust.txt`, rust `perf_rust_multi_linux_20260908_111507_r7rust.txt` |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: STREAM packet pump stall(D-BP23, 0.17.2 재현) Core 수정 대기, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
 
 ### 9.7 Python
 
@@ -1373,28 +1373,28 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
 | `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 보류(8.7%) | 보류(8.7%) | 보류(8.9%) | 보류(9.9%) | 보류(40.7%) | 미측정 | 판정 `보류`(pass 1·2 뒤 3-run 값은 log) — before; aggregate 15.4%(목표 60%), latency 6.80x; 처리량 Py/C 11.9/137.1, 11.8/136.1, 11.4/128.4, 11.3/113.7, 8.7/21.3 Kops/s; [log](log/2026-09-05-python-multi-tcp-before.ko.md) |
 | `tcp` | `MULTI_PUBSUB` | 보류(21.7%) | 보류(17.2%) | 보류(13.7%) | 보류(18.0%) | 보류(60.5%) | 미측정 | 판정 `보류`(pass 1·2 뒤 3-run 값은 log) — before; aggregate 26.2%(목표 60%), latency 1.09x; 처리량 Py/C 141.1/651.6, 134.6/780.4, 123.9/903.0, 124.7/691.1, 43.4/71.6 Kmsg/s; [log](log/2026-09-05-python-multi-tcp-before.ko.md) |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: STREAM packet pump stall(D-BP23, 0.17.2 재현) Core 수정 대기, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
+| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 | `보류(Core 대기)` — §10.3.2: tls·ws·wss는 C 기준에서 재현되는 Core 결함(ws/wss 왕복 크기 비례 붕괴 D-BP28, tls·ws·wss latency spike D-BP29)으로 오늘 범위에서 제외, 0.18.0 이월 |
 
 
 ## 10. 전체 진행 상태
