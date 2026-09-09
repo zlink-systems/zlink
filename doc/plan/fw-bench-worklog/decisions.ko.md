@@ -1006,3 +1006,10 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 - **결정(감독자)**: Issue #25로 등록. raw 드라이버의 per-message 작업을 (a) 수신 payload 1회 스캔, (b) 응답 payload 1회 복사,
   (c) 계측 스위치는 시작 시 1회 조회로 통일하고 대조표를 벤치 문서에 남긴다. 수정 뒤 3-run 재측정으로 비교표를 갱신한다.
   P2 판정(0.90)은 이 수정 뒤의 raw 기준으로 한다.
+- **추가 확인(framework 쪽, 2026-09-10)**: framework **서버**는 네 언어 모두 깨끗하다(계측이 디코딩된 객체를 읽고,
+  per-message env·로그가 없다). framework **클라이언트**에는 반대 방향의 하네스 비용이 있다 — C++가 완료 대기를
+  `await_ready` + `std::this_thread::yield()` spin으로 하고(`cpp/client/bench_cpp_client.cpp:795,821`; raw는 `_poller.wait` `:486`),
+  완료마다 vector 중간을 `erase`하며(`:817`, window 100이면 완료 1건당 최대 100회 이동; raw는 `remove_if` 한 번 `:471-474`),
+  Java·Kotlin이 payload를 한 번 더 복사한다(`FrameworkStack.java:88-90`). Node는 framework 클라이언트가 없어 행이 UNSUPPORTED다.
+  **즉 raw 쪽 결함은 비율을 높이고 framework 클라이언트 결함은 비율을 낮춘다 — 두 방향이 섞여 현재 숫자는 어느 쪽으로도
+  신뢰할 수 없다.** Issue #25의 완료 조건에 framework 클라이언트의 event 기반 대기·O(1) 완료 정리·복사 없는 payload를 더했다.
