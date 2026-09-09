@@ -34,8 +34,65 @@ test('runtime gate leaves actual browser E2E to the dedicated browser gate', () 
   const testFiles = commands.filter((args) => args.includes('--test')).map((args) => args.at(-1));
   assert(testFiles.includes(__filename));
   assert(!testFiles.some((file) => file.startsWith(path.join(workspaceRoot, 'test', 'browser') + path.sep)));
+  assert(!testFiles.some((file) => /^(sample-|tictactoe-|node-sample-client-bundle)/.test(path.basename(file))));
   const manifest = JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'package.json'), 'utf8'));
   assert.equal(manifest.scripts['test:browser'], 'node --test test/browser/*.test.js');
+  assert(!manifest.workspaces.some((entry) => entry.startsWith('samples/')));
+});
+
+test('standalone samples stay outside workspaces and carry package-mode build inputs', () => {
+  const sampleNames = [
+    'Bingo.Ts',
+    'DeliveryDispatch.Ts',
+    'GameQuest.Ts',
+    'ShoppingMall.Ts',
+    'SupportChat.Ts',
+    'TicTacToe.Ts',
+    'ZoneWorld'
+  ];
+  const generator = fs.readFileSync(
+    path.join(workspaceRoot, 'scripts', 'generate-framework-json-schemas.mjs'),
+    'utf8'
+  );
+  const sampleRunner = fs.readFileSync(path.join(workspaceRoot, 'samples', 'run-sample.mjs'), 'utf8');
+  const browserRunner = fs.readFileSync(
+    path.join(workspaceRoot, 'scripts', 'browser-e2e', 'run-sample.mjs'),
+    'utf8'
+  );
+  const browserSamples = new Set([
+    'Bingo.Ts', 'DeliveryDispatch.Ts', 'GameQuest.Ts', 'SupportChat.Ts', 'TicTacToe.Ts'
+  ]);
+
+  for (const sampleName of sampleNames) {
+    const sampleRoot = path.join(workspaceRoot, 'samples', sampleName);
+    const manifest = JSON.parse(fs.readFileSync(path.join(sampleRoot, 'package.json'), 'utf8'));
+    const tsconfig = JSON.parse(fs.readFileSync(path.join(sampleRoot, 'tsconfig.json'), 'utf8'));
+    assert.equal(manifest.dependencies['@zlink-systems/framework'], '0.10.0', sampleName);
+    assert.equal(manifest.scripts.prebuild, 'node scripts/prepare-dependencies.mjs', sampleName);
+    assert.equal(manifest.scripts.sample, 'node scripts/run-sample.mjs Runner/sample-runner.mjs', sampleName);
+    assert.doesNotMatch(manifest.scripts.build, /\.\.\/\.\.\/(?:node_modules|scripts)/, sampleName);
+    assert.equal(tsconfig.extends, undefined, sampleName);
+    assert.equal(tsconfig.compilerOptions.paths, undefined, sampleName);
+    assert.equal(tsconfig.compilerOptions.moduleResolution, 'Node16', sampleName);
+    assert.equal(fs.existsSync(path.join(sampleRoot, 'package-lock.json')), false, sampleName);
+    assert.equal(
+      fs.readFileSync(path.join(sampleRoot, 'scripts', 'generate-framework-json-schemas.mjs'), 'utf8'),
+      generator,
+      sampleName
+    );
+    assert.equal(
+      fs.readFileSync(path.join(sampleRoot, 'scripts', 'run-sample.mjs'), 'utf8'),
+      sampleRunner,
+      sampleName
+    );
+    if (browserSamples.has(sampleName)) {
+      assert.equal(
+        fs.readFileSync(path.join(sampleRoot, 'scripts', 'browser-e2e', 'run-sample.mjs'), 'utf8'),
+        browserRunner,
+        sampleName
+      );
+    }
+  }
 });
 
 test('node runtime and coverage gates isolate native test handles and concurrent runs', () => {

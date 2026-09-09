@@ -14,4 +14,4 @@ async function loadSampleConfig(): Promise<GameQuestClientConfig> {
 
 export { loadSampleConfig };
 export type { GameQuestClientConfig };
-import { loadBrowserConfig } from '../../../browser-client-runtime';
+import { loadBrowserConfig } from '../browser-client-runtime';

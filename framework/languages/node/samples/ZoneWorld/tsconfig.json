@@ -1,17 +1,22 @@
 {
-  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "baseUrl": ".",
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
     "declaration": false,
+    "sourceMap": false,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "baseUrl": ".",
     "outDir": "dist",
     "rootDir": ".",
-    "strict": true,
-    "paths": {
-      "@zlink-systems/framework": ["../../packages/framework/dist"],
-      "@zlink-systems/nestjs": ["../../packages/nestjs/dist"],
-      "@zlink-systems/stream-connector": ["../../packages/stream-connector/dist"],
-      "@zlink-systems/framework-locations-redis": ["../../packages/framework-locations-redis/dist"]
-    }
+    "strict": true
   },
-  "include": ["Shared/**/*.ts", "Server/**/*.ts", "Client/**/*.ts"]
+  "include": ["Shared/**/*.ts", "Server/**/*.ts"]
 }

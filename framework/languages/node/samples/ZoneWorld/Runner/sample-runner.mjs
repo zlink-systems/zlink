@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { hostEnvironment } from '../../../scripts/host-environment.mjs';
+import { hostEnvironment } from '../scripts/host-environment.mjs';
 
 export const sampleName = 'ZoneWorld';
 
@@ -340,7 +340,7 @@ async function runFullLane(ctx) {
 
 async function runB8ChildLane(ctx) {
   await ctx.runCommand(process.execPath, [
-    path.join(ctx.nodeRoot, 'samples/run-sample.mjs'),
+    path.join(ctx.sampleRoot, 'scripts/run-sample.mjs'),
     path.join(ctx.sampleRoot, 'Runner/sample-runner.mjs'),
     '--lane', 'b8'
   ]);
@@ -680,12 +680,17 @@ async function waitForCrossOwnerBot(ctx, nodes) {
 }
 
 async function startSharedBrowser(ctx, gateway, ops, lifecycleNodeId) {
-  const browserRoot = path.resolve(ctx.nodeRoot, '../shared_sample/zoneworld/client');
-  const browserEnv = hostEnvironment({
+  const packagedBrowserRoot = path.join(ctx.sampleRoot, 'Browser');
+  const packagedBrowser = ctx.nodeRoot === ctx.sampleRoot && fs.existsSync(packagedBrowserRoot);
+  const browserRoot = packagedBrowser
+    ? packagedBrowserRoot
+    : path.resolve(ctx.nodeRoot, '../shared_sample/zoneworld/client');
+  const browserToolsRoot = packagedBrowser ? ctx.sampleRoot : browserRoot;
+  const browserEnv = hostEnvironment(packagedBrowser ? {} : {
     PLAYWRIGHT_BROWSERS_PATH: path.join(browserRoot, '.cache', 'ms-playwright')
   });
-  const viteCli = path.join(browserRoot, 'node_modules', 'vite', 'bin', 'vite.js');
-  const playwrightCli = path.join(browserRoot, 'node_modules', 'playwright', 'cli.js');
+  const viteCli = path.join(browserToolsRoot, 'node_modules', 'vite', 'bin', 'vite.js');
+  const playwrightCli = path.join(browserToolsRoot, 'node_modules', 'playwright', 'cli.js');
   const outputDirectory = path.join(ctx.workDir, 'zoneworld-browser-dist');
   const previewPort = await ctx.port();
   const markerPath = path.join(ctx.runDir, 'browser-lifecycle-armed');

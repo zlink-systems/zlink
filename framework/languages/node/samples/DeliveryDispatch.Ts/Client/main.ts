@@ -3,7 +3,7 @@ import { loadSampleConfig } from './Configuration/sample-config';
 import { DeliveryDispatchClientScenario } from './deliverydispatch-client-scenario';
 import { SampleTimings } from '../Shared/Configuration/sample-names';
 import type { ZlinkStreamConnector } from '@zlink-systems/stream-connector';
-import { BrowserHttpClientFactory, runBrowserSample } from '../../browser-client-runtime';
+import { BrowserHttpClientFactory, runBrowserSample } from './browser-client-runtime';
 
 async function main(): Promise<void> {
   const config = await loadSampleConfig();

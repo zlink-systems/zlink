@@ -9,7 +9,7 @@ import {
   createGameHttpReq,
   placeMarkStreamReq
 } from '../Shared/Contracts/messages';
-import { BrowserHttpClientFactory } from '../../browser-client-runtime';
+import { BrowserHttpClientFactory } from './browser-client-runtime';
 import * as connector from '@zlink-systems/stream-connector';
 import type {
   AuthenticateRes,

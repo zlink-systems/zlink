@@ -1,0 +1,101 @@
+#!/usr/bin/env node
+
+import fs from 'node:fs';
+import path from 'node:path';
+import process from 'node:process';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const nodeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const repoRoot = path.resolve(nodeRoot, '../../..');
+const packageRoot = path.join(nodeRoot, 'node_modules', '@zlink-systems');
+const installedPath = path.join(packageRoot, 'zlink');
+const backupPath = path.join(packageRoot, '.zlink-registry-package');
+const mode = process.argv[2];
+
+if (mode === 'select') {
+  if (process.env.ZLINK_NODE_USE_BINDINGS_SOURCE === '1') useSourcePackage();
+} else if (mode === 'source') useSourcePackage();
+else if (mode === 'package') useRegistryPackage();
+else throw new Error('Usage: node scripts/use-bindings-dependency.mjs <select|source|package>');
+
+function useSourcePackage() {
+  if (fs.existsSync(backupPath)) {
+    if (fs.existsSync(installedPath)) {
+      process.stdout.write(`Local bindings package is already selected at ${installedPath}\n`);
+      return;
+    }
+    throw new Error(`A bindings package backup exists without an active package at ${backupPath}. Run npm run use:bindings-package.`);
+  }
+  const version = readVersion(path.join(repoRoot, 'BINDINGS_VERSION'), 'ZLINK_BINDINGS_VERSION');
+  const archive = findArchive(version);
+  requireInstalledPackage(version);
+
+  fs.renameSync(installedPath, backupPath);
+  try {
+    fs.mkdirSync(installedPath, { recursive: true });
+    const result = spawnSync('tar', ['-xzf', archive, '--strip-components=1', '-C', installedPath], {
+      cwd: nodeRoot,
+      stdio: 'inherit',
+      shell: false
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`tar exited with status ${result.status ?? 1}.`);
+    const installedVersion = readPackageVersion(installedPath);
+    if (installedVersion !== version) {
+      throw new Error(`Local bindings archive contains ${installedVersion}; expected ${version}.`);
+    }
+  } catch (error) {
+    fs.rmSync(installedPath, { recursive: true, force: true });
+    fs.renameSync(backupPath, installedPath);
+    throw error;
+  }
+  process.stdout.write(`Using local bindings package ${archive}\n`);
+}
+
+function useRegistryPackage() {
+  if (!fs.existsSync(backupPath)) {
+    throw new Error('No saved registry bindings package exists. Run npm run use:bindings-source first.');
+  }
+  fs.rmSync(installedPath, { recursive: true, force: true });
+  fs.renameSync(backupPath, installedPath);
+  process.stdout.write(`Restored registry bindings package ${readPackageVersion(installedPath)}\n`);
+}
+
+function findArchive(version) {
+  const filename = `zlink-systems-zlink-${version}.tgz`;
+  const configuredRoot = process.env.ZLINK_LOCAL_PACKAGE_ROOT;
+  const roots = configuredRoot === undefined
+    ? [
+        path.join(repoRoot, '.artifacts', 'wsl', 'npm'),
+        path.join(repoRoot, '.artifacts', 'windows', 'node', 'package')
+      ]
+    : [path.resolve(configuredRoot), path.resolve(configuredRoot, 'npm')];
+  const candidates = roots.map((root) => path.join(root, filename));
+  const archive = candidates.find((candidate) => fs.existsSync(candidate));
+  if (archive !== undefined) return archive;
+  throw new Error(
+    `Local bindings package ${filename} was not found. Build it with scripts/local-package/node/build-wsl.sh `
+    + `or set ZLINK_LOCAL_PACKAGE_ROOT. Checked: ${candidates.join(', ')}`
+  );
+}
+
+function requireInstalledPackage(version) {
+  if (!fs.existsSync(installedPath)) {
+    throw new Error(`Registry bindings package is not installed at ${installedPath}. Run npm ci first.`);
+  }
+  const actual = readPackageVersion(installedPath);
+  if (actual !== version) {
+    throw new Error(`Installed registry bindings version is ${actual}; expected ${version}. Run npm ci first.`);
+  }
+}
+
+function readPackageVersion(directory) {
+  return JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8')).version;
+}
+
+function readVersion(file, key) {
+  const line = fs.readFileSync(file, 'utf8').split(/\r?\n/u).find((value) => value.startsWith(`${key}=`));
+  if (line === undefined) throw new Error(`${key} is missing from ${file}.`);
+  return line.slice(key.length + 1).trim();
+}

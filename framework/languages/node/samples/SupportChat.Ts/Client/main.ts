@@ -2,7 +2,7 @@ import * as connector from '@zlink-systems/stream-connector';
 import { loadSampleConfig } from './Configuration/sample-config';
 import { SupportChatClientScenario } from './supportchat-client-scenario';
 import type { ZlinkStreamConnector } from '@zlink-systems/stream-connector';
-import { runBrowserSample } from '../../browser-client-runtime';
+import { runBrowserSample } from './browser-client-runtime';
 
 async function main(): Promise<void> {
   const config = await loadSampleConfig();

@@ -1,37 +1,22 @@
 {
-  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "sourceMap": false,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "types": ["node"],
     "baseUrl": ".",
     "declaration": false,
     "outDir": "dist",
     "rootDir": ".",
-    "strict": false,
-    "paths": {
-      "@zlink-systems/framework": [
-        "../../packages/framework/dist"
-      ],
-      "@zlink-systems/nestjs": [
-        "../../packages/nestjs/dist"
-      ],
-      "@zlink-systems/stream-connector": [
-        "../../packages/stream-connector/dist"
-      ],
-      "@zlink-systems/framework-codec-protobuf": [
-        "../../packages/framework-codec-protobuf/dist"
-      ],
-      "@zlink-systems/framework-codec-protobuf/framework": [
-        "../../packages/framework-codec-protobuf/dist/framework"
-      ],
-      "@zlink-systems/stream-wire": [
-        "../../packages/stream-wire/dist"
-      ],
-      "@zlink-systems/framework-locations-redis": [
-        "../../packages/framework-locations-redis/dist"
-      ],
-      "@zlink-systems/zlink": [
-        "../../node_modules/-systems/zlink/dist/index.d.ts"
-      ]
-    }
+    "strict": false
   },
   "include": [
     "Server/**/*.ts",

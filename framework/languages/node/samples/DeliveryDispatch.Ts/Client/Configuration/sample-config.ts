@@ -15,4 +15,4 @@ export {
 export type {
   DeliveryDispatchClientConfig
 };
-import { loadBrowserConfig } from '../../../browser-client-runtime';
+import { loadBrowserConfig } from '../browser-client-runtime';

@@ -11,7 +11,7 @@ import {
   syncQuestProgressReq,
   unlockFeatureReq
 } from '../Shared/Contracts/messages';
-import type { BrowserHttpClient } from '../../browser-client-runtime';
+import type { BrowserHttpClient } from './browser-client-runtime';
 import { zlinkStreamAssert } from '@zlink-systems/stream-connector';
 import type { ZlinkStreamConnector } from '@zlink-systems/stream-connector';
 import type {

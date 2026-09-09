@@ -23,7 +23,9 @@ test('Node sample and e2e application code does not read environment configurati
   const applicationFiles = [
     ...sourceFiles(path.join(root, 'e2e')),
     ...sourceFiles(path.join(root, 'samples')).filter((file) =>
-      !file.includes(`${path.sep}Runner${path.sep}`) && path.basename(file) !== 'run-sample.mjs')
+      !file.includes(`${path.sep}Runner${path.sep}`)
+      && !file.includes(`${path.sep}scripts${path.sep}`)
+      && path.basename(file) !== 'run-sample.mjs')
   ];
   const offenders = applicationFiles
     .filter((file) => /\bprocess\.env\b/.test(fs.readFileSync(file, 'utf8')))

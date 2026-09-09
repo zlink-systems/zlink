@@ -1,4 +1,4 @@
-import { loadBrowserConfig } from '../../../browser-client-runtime';
+import { loadBrowserConfig } from '../browser-client-runtime';
 type TicTacToeSampleConfig = {
   apiHttpEndpoint: string;
   lifecycleCompletionPath?: string;

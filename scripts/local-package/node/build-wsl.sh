@@ -47,7 +47,7 @@ esac
 mkdir -p "$artifact_root/npm"
 (
   cd "$bindings_dir"
-  rm -rf prebuilds provenance
+  node -e "const fs=require('node:fs'); for (const target of ['prebuilds','provenance']) fs.rmSync(target,{recursive:true,force:true})"
   ZLINK_SKIP_NATIVE_INSTALL=1 npm ci
   npm run build
   npm run rebuild-native

@@ -373,7 +373,7 @@ test('node client flow files use ClientScenario names', () => {
 
 test('node samples keep only the maintained canonical variants', () => {
   const entries = fs.readdirSync(samplesRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => entry.isDirectory() && fs.existsSync(path.join(samplesRoot, entry.name, 'package.json')))
     .map((entry) => entry.name)
     .sort();
 
@@ -1195,7 +1195,8 @@ test('node samples do not hide readiness with sleeps or pre-ready pings', () => 
     'samples/ZoneWorld/Client/main.ts'
   ]);
   for (const file of sampleSourceFiles(samplesRoot)) {
-    if (allowedTimingFiles.has(relativePath(workspaceRoot, file))) {
+    if (allowedTimingFiles.has(relativePath(workspaceRoot, file))
+      || file.includes(`${path.sep}scripts${path.sep}`)) {
       continue;
     }
     const content = fs.readFileSync(file, 'utf8');
@@ -2404,7 +2405,7 @@ function listFiles(root) {
 }
 
 function findUnreachableSampleTypeScriptFiles() {
-  const files = new Set(listFiles(samplesRoot).filter((file) => file.endsWith('.ts')));
+  const files = new Set(listFiles(samplesRoot).filter((file) => /\.tsx?$/.test(file)));
   const used = new Set();
   const queue = [];
 
@@ -2420,7 +2421,12 @@ function findUnreachableSampleTypeScriptFiles() {
     // Discover each role entry point dynamically. A role may use a qualified name
     // when two instances share one directory, such as `node1-main.ts`.
     for (const file of listFiles(path.join(samplesRoot, sample))) {
-      if (/(?:^|-)main\.ts$/.test(path.basename(file))) {
+      const relative = relativePath(samplesRoot, file);
+      if (/(?:^|-)main\.ts$/.test(path.basename(file))
+        || relative.includes('/Browser/src/app/')
+        || relative.includes('/Browser/tests/')
+        || /(?:^|\/)vite\.config\.ts$/.test(relative)
+        || /\.test\.ts$/.test(relative)) {
         add(file);
       }
     }
@@ -2507,7 +2513,9 @@ function resolveSampleImport(fromFile, specifier, files) {
   const base = path.resolve(path.dirname(fromFile), specifier);
   for (const candidate of [
     `${base}.ts`,
-    path.join(base, 'index.ts')
+    `${base}.tsx`,
+    path.join(base, 'index.ts'),
+    path.join(base, 'index.tsx')
   ]) {
     if (files.has(candidate)) {
       return candidate;

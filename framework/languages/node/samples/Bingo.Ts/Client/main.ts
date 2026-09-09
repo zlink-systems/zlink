@@ -4,7 +4,7 @@ import { BingoClientScenario } from './bingo-client-scenario';
 import type { ZlinkStreamConnector } from '@zlink-systems/stream-connector';
 import { SampleTimings } from './Configuration/sample-names';
 import { loadSampleConfig } from './Configuration/sample-config';
-import { runBrowserSample } from '../../browser-client-runtime';
+import { runBrowserSample } from './browser-client-runtime';
 async function main(): Promise<void> {
   const config = await loadSampleConfig();
   const observedClients = new Set<string>();

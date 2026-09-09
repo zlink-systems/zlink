@@ -3,7 +3,7 @@ import { SampleNames } from '../Shared/Configuration/sample-names';
 import { GameQuestClientScenario } from './gamequest-client-scenario';
 import { loadSampleConfig } from './Configuration/sample-config';
 import type { ZlinkStreamConnector } from '@zlink-systems/stream-connector';
-import { BrowserHttpClientFactory, runBrowserSample } from '../../browser-client-runtime';
+import { BrowserHttpClientFactory, runBrowserSample } from './browser-client-runtime';
 
 async function main(): Promise<void> {
   const config = await loadSampleConfig();

@@ -3,8 +3,35 @@
   "version": "0.10.0",
   "private": true,
   "scripts": {
-    "generate:framework-json": "node ../../scripts/generate-framework-json-schemas.mjs --project tsconfig.json --source Shared/contracts.ts --out dist/.zlink-framework-json-schemas.cjs --browser-out dist/browser/.zlink-framework-json-schemas.mjs",
-    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && node ../../node_modules/typescript/bin/tsc -p tsconfig.json && npm run generate:framework-json && node ../../scripts/bundle-node-sample-clients.mjs . Client/main.ts Client/special.ts",
+    "prebuild": "node scripts/prepare-dependencies.mjs",
+    "sample": "node scripts/run-sample.mjs Runner/sample-runner.mjs",
+    "browser:install": "playwright install chromium",
+    "generate:framework-json": "node scripts/generate-framework-json.mjs --project tsconfig.json --source Shared/contracts.ts --out dist/.zlink-framework-json-schemas.cjs --browser-out dist/browser/.zlink-framework-json-schemas.mjs",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json && tsc -p tsconfig.client.json && npm run generate:framework-json && node scripts/bundle-node-sample-clients.mjs . Client/main.ts Client/special.ts",
     "test": "node --test test/*.test.js Runner/test/*.test.js"
+  },
+  "dependencies": {
+    "@nestjs/common": "^10.4.22",
+    "@nestjs/config": "^4.0.4",
+    "@nestjs/core": "^10.4.22",
+    "@preact/signals": "^2.9.3",
+    "@zlink-systems/framework": "0.10.0",
+    "@zlink-systems/framework-locations-redis": "0.10.0",
+    "@zlink-systems/nestjs": "0.10.0",
+    "@zlink-systems/stream-connector": "0.10.0",
+    "redis": "^6.1.0",
+    "preact": "^10.29.7",
+    "reflect-metadata": "^0.2.2",
+    "undici": "6.27.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@preact/preset-vite": "^2.10.2",
+    "@types/node": "^22.15.30",
+    "esbuild": "^0.25.6",
+    "playwright": "^1.61.1",
+    "typescript": "^5.8.3",
+    "vite": "^7.1.9",
+    "vitest": "^3.2.4"
   }
 }
