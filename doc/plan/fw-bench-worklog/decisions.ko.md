@@ -909,6 +909,27 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
   뒤로. 브랜치 `framework-cpp/7-dispatch-turn-cost`(worktree zlink-fwperf-cpp), job `fwperf-cpp-p2`(astra).
   보고서: `.artifacts/codex/fwperf-cpp/summary.md`.
 
+## FB-057 — .NET framework 병목 진단(P1, fwperf-dotnet): 단일 receive loop의 1건 읽기(spec은 64 batch)·단일 pump의 1 claim·요청별 cold Task+supervisor+DI scope, codec 전체 복사 (2026-09-10, Issue #5·#19)
+
+- serial p50 968 µs: source encode→target outer decode 333 µs(service-wire envelope 생성·multipart 전체 복사·단일 receive
+  loop), reply submit→source completion 227 µs, mailbox→pump claim 122 µs, handler 38 µs, codec 각 40 µs. 100 ms
+  PollInterval은 idle 상한이라 정상 요청 경로가 아님(기각).
+- 부하: `ZLinkManagedMeshNode.cs:4991-4994`가 Application job queue가 있으면 한 건만 `Recv`(spec 04-application-job-queue
+  §3·§4는 회전당 최대 64건), `ZLinkMeshDispatchPump.cs:313-321`이 claim 1건, `ZLinkRuntimeTaskRunner.cs:106-168`이
+  요청마다 cold `Task<Task>`+supervisor 등록 → window 100에서 socket 앞 7.45 ms·mailbox 앞 1.54 ms 대기(동시성은
+  실제로 100). send는 소비 33 KMSG/s(제출 111)로 drain 4.7 s. 규격 published 값(111 KMSG/s)과 소비율 차이는 FB-051.
+- codec: `ZLinkApplicationPayloadEnvelopeCodec.cs:166-183, 284-323, 357-370`이 payload 전체를 새 byte[]로 합치고 수신이
+  part별 `Message.From` 재생성 — payload ownership spec(추가 복사 0) 위반.
+- backpressure 오류 2,511건: `ZLinkRequestFailureMapper.cs:149-168`이 `Backpressured` submit을 DeadlineExceeded로 —
+  binding/Core 정상 terminal인지 framework가 중간 admission을 terminal로 바꾼 것인지 repro로 분리 필요(Issue #19).
+- 실험(2초 smoke, framework/raw): 기준 serial 0.171·window 0.037·send 0.157; socket batch 64 단독·PollOut 제거·inline
+  dispatch·Task.Yield 제거 모두 0.90 미달(각 단독 효과 없음).
+- 결정(감독자): P2 승인 — (1) receive 64 batch + pump 다중 claim + persistent worker batch 제출을 하나의 bounded drain
+  규칙으로(규칙 3→1, permit·HWM·timeout 불변), (2) codec 전체 복사 제거, (3) DI fast path는 잔여 격차 시, (4) #19
+  backpressure 분리 repro·framework 측이면 수정. C++ FB-056과 같은 구조(1건/회차 ingress). 브랜치
+  `framework-dotnet/5-dispatch-batch`(worktree zlink-5-dispatch-batch), job `fwperf-dotnet-p2`(sol).
+  보고서 `.artifacts/codex/fwperf-dotnet/summary.md`.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |

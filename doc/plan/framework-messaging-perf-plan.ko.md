@@ -45,3 +45,4 @@ serial의 2~8배에 그친다(raw는 13~23배). 즉 요청당 **ms 단위의 고
 |---|---|---|---|
 | 2026-09-10 | C++·.NET·Java | P1 시작 | job `fwperf-cpp`(astra), `fwperf-dotnet`(sol), `fwperf-java`(sol) |
 | 2026-09-10 | C++ | P1 완료 | FB-056: 1 ms sleep 아님. record당 끝나는 dispatch 회차(873 µs 관리 작업)와 요청당 동기 state-lane 왕복이 병목; FB-054는 probe가 application FIFO 뒤에 놓여 만료. P2 승인 → job `fwperf-cpp-p2` (Issue #7·#8) |
+| 2026-09-10 | .NET | P1 완료 | FB-057: 단일 receive loop 1건 읽기(spec 64)·pump 1 claim·요청별 cold Task+DI scope·codec 전체 복사. 100 ms poll은 원인 아님. P2 승인 → job `fwperf-dotnet-p2` (Issue #5·#19) |
