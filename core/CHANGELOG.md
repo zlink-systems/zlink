@@ -12,6 +12,25 @@ Design decisions are in `doc/plan/c016-worklog/decisions.ko.md` (D-B…).
 
 ## [Unreleased]
 
+## [0.17.5] - 2026-09-09
+
+### Fixed
+
+- STREAM: accepting a connection reserved the pair's minimum Auto-HWM budget
+  against the seed plan (queue count 0, i.e. only the profile's fixed cap), so
+  once the fixed cap was consumed every further connection was refused with
+  `ENOBUFS` (Balanced profile: about 3,500 connections). The reservation now
+  tracks the reserved directions and admits against the effective budget of the
+  topology being reserved, the same function the planner uses (spec
+  06-auto-hwm §2 effective cap, atomic pair reservation). A STREAM echo server
+  now reaches 10,000 TCP connections within the perf contract (connect
+  concurrency 1024, ready timeout 10 s): 396.6 kops at 64 B, all six message
+  sizes pass; 1,000-connection throughput unchanged (+0.55 %); ctest 213/213
+  including the valgrind hotpath gate (machine A, D-BP52, `c72bc2dc63`).
+- C perf runner: monitor event timing and errors, the client START-wait errno
+  and a dirty-prefix provenance flag are recorded in the report so a failed
+  connection barrier carries its cause.
+
 ## [0.17.4] - 2026-09-09
 
 ### Fixed
