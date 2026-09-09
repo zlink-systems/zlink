@@ -91,26 +91,27 @@ cannot actually be set or read through this pair.
 Sets or reads a context option whose public type is not a plain `int` — a byte buffer or string.
 
 ```c
-uint64_t unit_bytes = 2048;
-zlink_ctx_set_data(ctx, ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES, &unit_bytes, sizeof(unit_bytes));
+uint64_t memory_limit_bytes = 512ULL * 1024 * 1024;
+zlink_ctx_set_data(ctx, ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES,
+                   &memory_limit_bytes, sizeof(memory_limit_bytes));
 
 const char *prefix = "app-io";
 zlink_ctx_set_data(ctx, ZLINK_THREAD_NAME_PREFIX, prefix, strlen(prefix) + 1);
 ```
 
-**Parameters.** `option_` is `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` (requires exactly
-`sizeof(uint64_t)` bytes; `0` selects the socket type's default unit) or
-`ZLINK_THREAD_NAME_PREFIX` (a null-terminated string, `optvallen_` including the terminator,
-bounded to 16 bytes for the platform thread-name limit).
+**Parameters.** `option_` is one of the Auto HWM byte options
+`ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES`, `ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES`,
+`ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`, or `ZLINK_THREAD_NAME_PREFIX`. Byte options require
+exactly `sizeof(uint64_t)` bytes; `0` leaves the corresponding explicit value unset. The name
+prefix is a null-terminated string of at most 16 bytes, including its terminator.
 
-**Return and errno.** Both return `zlink_config_result_t` — `ZLINK_CONFIG_OK` on success,
-`EINVAL` for an unknown option, an invalid value, or (for the HWM unit option) any size other
-than exactly `sizeof(uint64_t)` — including a legacy 4-byte value, which is rejected rather than
-reinterpreted. `EFAULT` (`ZLINK_CONFIG_INVALID_HANDLE`) for an invalid context.
+**Return and errno.** Success returns `ZLINK_CONFIG_OK`. An unknown option, invalid value, or
+invalid size returns `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`; an invalid context returns
+`ZLINK_CONFIG_INVALID_HANDLE`/`EFAULT`.
 
-**When to use.** Use these only for the two options above; every other option goes through
-`zlink_ctx_set`/`zlink_ctx_get`. `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES` is a planning input for
-the automatic HWM planner, not an observed average message size.
+**When to use.** These options use the data APIs. Use `zlink_ctx_set`/`zlink_ctx_get` for `int`
+options. [Context options](../spec/core/01-context.en.md#4-options) defines the budget meaning
+of each byte input.
 
 ---
 

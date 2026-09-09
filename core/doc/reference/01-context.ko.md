@@ -90,26 +90,27 @@ automatic HWM 재계산에 적용되고, enable 토글은 여전히 automatic HW
 공개 타입이 단순 `int`가 아닌(byte buffer나 문자열) context 옵션을 설정하거나 읽는다.
 
 ```c
-uint64_t unit_bytes = 2048;
-zlink_ctx_set_data(ctx, ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES, &unit_bytes, sizeof(unit_bytes));
+uint64_t memory_limit_bytes = 512ULL * 1024 * 1024;
+zlink_ctx_set_data(ctx, ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES,
+                   &memory_limit_bytes, sizeof(memory_limit_bytes));
 
 const char *prefix = "app-io";
 zlink_ctx_set_data(ctx, ZLINK_THREAD_NAME_PREFIX, prefix, strlen(prefix) + 1);
 ```
 
-**Parameters.** `option_`은 `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES`(정확히 `sizeof(uint64_t)`
-바이트가 필요하다 — `0`이면 socket 타입의 기본 unit을 쓴다) 또는 `ZLINK_THREAD_NAME_PREFIX`(널
-종료 문자열 — `optvallen_`은 terminator를 포함하며, 플랫폼 thread-name 상한 때문에 16바이트로
-제한된다) 중 하나다.
+**Parameters.** `option_`은 Auto HWM byte 옵션 `ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES`,
+`ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES`, `ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES`
+또는 `ZLINK_THREAD_NAME_PREFIX`다. Byte 옵션은 정확히 `sizeof(uint64_t)` byte를 사용하며,
+`0`은 해당 명시값을 지정하지 않음을 뜻한다. 이름 접두사는 terminator를 포함한 널 종료
+문자열이고 길이는 최대 16 byte다.
 
-**Return과 errno.** 둘 다 `zlink_config_result_t`를 반환한다 — 성공하면 `ZLINK_CONFIG_OK`,
-알 수 없는 옵션이거나 잘못된 값이면 `EINVAL`, (HWM unit 옵션의 경우) 정확히
-`sizeof(uint64_t)`가 아닌 크기면 — legacy 4바이트 값을 포함해 재해석하지 않고 거부한다.
-잘못된 context면 `EFAULT`(`ZLINK_CONFIG_INVALID_HANDLE`).
+**Return과 errno.** 성공하면 `ZLINK_CONFIG_OK`, 알 수 없는 옵션, 잘못된 값이나 크기는
+`ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`, 잘못된 context는
+`ZLINK_CONFIG_INVALID_HANDLE`/`EFAULT`다.
 
-**선택 기준.** 위 두 옵션에만 쓴다 — 나머지 옵션은 전부 `zlink_ctx_set`/`zlink_ctx_get`을
-거친다. `ZLINK_CTX_OPT_AUTO_HWM_MSG_UNIT_BYTES`는 automatic HWM planner의 계획 입력값이지
-관측된 평균 메시지 크기가 아니다.
+**선택 기준.** 이 옵션들은 data API를 사용한다. `int` 옵션은
+`zlink_ctx_set`/`zlink_ctx_get`을 사용한다. 각 byte 입력의 budget 의미는
+[Context 옵션](../spec/core/01-context.ko.md#4-옵션)이 정의한다.
 
 ---
 
