@@ -250,6 +250,7 @@ Framework sample은 단순 API 호출뿐 아니라 여러 역할의 server와 cl
 | Framework package 설치와 첫 실행 | [Framework 시작하기](./framework/doc/framework/common/guide/server/02-getting-started.ko.md) |
 | Framework runtime source/build 진입점 | [C++](./framework/languages/cpp/) · [.NET](./framework/languages/dotnet/) · [JVM](./framework/languages/java/) · [Node.js](./framework/languages/node/) |
 | 릴리스 package 구성 | [패키징 가이드](./doc/building/packaging.ko.md) |
+| 빌드 스크립트 위치와 배포 경로 파악 | [빌드·배포 파이프라인](./doc/building/release-pipeline.ko.md) |
 | 라이선스 정책 | [라이선스 안내](./doc/license/README.ko.md) |
 | 보안 취약점 보고 | [보안 정책](./SECURITY.md) |
 

@@ -89,6 +89,7 @@
 | [build-guide.ko.md](building/build-guide.ko.md) | 빌드 방법 (CMake, 플랫폼별) |
 | [cmake-options.ko.md](building/cmake-options.ko.md) | CMake 옵션 상세 |
 | [packaging.ko.md](building/packaging.ko.md) | 릴리즈 및 패키징 |
+| [release-pipeline.ko.md](building/release-pipeline.ko.md) | 빌드 스크립트 위치와 배포 파이프라인(워크플로우·채널·인증) 한눈에 보기 |
 | [release-accounts.ko.md](building/release-accounts.ko.md) | 공식 배포 계정/시크릿 |
 | [platforms.ko.md](building/platforms.ko.md) | 지원 플랫폼 및 컴파일러 |
 

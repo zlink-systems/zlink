@@ -12,7 +12,7 @@ public zlink releases. The Python, Go, and Rust bindings are outside this releas
 | GitHub | `zlink-systems` organization, `zlink-systems/zlink` repository | Language tags and GitHub Release assets |
 | Maven Central | Verified `systems.zlink` namespace | Sonatype Central Portal bundle upload |
 | nuget.org | Personal account `zlink` | Trusted Publishing (OIDC), no API key |
-| npm | Personal account `zlink-systems`, `@zlink-systems` scope, 2FA | First release published manually by the user; then connect Trusted Publishing with provenance |
+| npm | Personal account `zlink-systems`, `@zlink-systems` scope, 2FA | Trusted Publishing (OIDC) with provenance; the binding is registered to `bindings-release.yml`, the 8 framework packages to `framework-release.yml` (done 2026-09-09) |
 | ConanCenter | GitHub account `zlink-systems` | Recipe pull request |
 | vcpkg | GitHub account `zlink-systems` | Ports pull request |
 

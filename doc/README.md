@@ -101,6 +101,7 @@ language-specific rules.
 | [build-guide.md](building/build-guide.md) | Build instructions (CMake, per-platform) |
 | [cmake-options.md](building/cmake-options.md) | CMake options reference |
 | [packaging.md](building/packaging.md) | Release and packaging |
+| [release-pipeline.md](building/release-pipeline.md) | Build script locations and the release pipeline (workflows, channels, auth) at a glance |
 | [release-accounts.md](building/release-accounts.md) | Official distribution accounts/secrets |
 | [../core/tests/README.md](../core/tests/README.md) | Test strategy, layout, and lane execution |
 | [platforms.md](building/platforms.md) | Supported platforms and compilers |

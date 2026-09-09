@@ -111,3 +111,9 @@ the order by publishing a Framework package that references an unavailable bindi
 - [ ] Release each binding individually with its own tag
 - [ ] Verify public installation of the C++, Node.js, Java, and .NET bindings
 - [ ] Release Framework after the bindings
+
+## 9. Related documents
+
+- [Build and release pipeline at a glance](./release-pipeline.md)
+- [Framework/bindings dependency boundary](./framework-bindings-dependency-boundary.ko.md)
+- [Local package scripts](../../scripts/local-package/README.ko.md)

@@ -123,5 +123,6 @@ Framework package가 아직 공개되지 않은 binding을 참조하는 순서 �
 
 ## 9. 관련 문서
 
+- [빌드·배포 파이프라인 한눈에 보기](./release-pipeline.ko.md)
 - [Framework와 Bindings 의존 경계 정리](./framework-bindings-dependency-boundary.ko.md)
 - [Local Package 스크립트](../../scripts/local-package/README.ko.md)

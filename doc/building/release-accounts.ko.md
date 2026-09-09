@@ -12,7 +12,7 @@
 | GitHub | 조직 `zlink-systems`, 저장소 `zlink-systems/zlink` | 언어별 태그와 GitHub Release 자산 |
 | Maven Central | namespace `systems.zlink` 검증 완료 | Sonatype Central Portal bundle 업로드 |
 | nuget.org | 개인 계정 `zlink` | Trusted Publishing(OIDC), API key 없음 |
-| npm | 개인 계정 `zlink-systems`, scope `@zlink-systems`, 2FA | 첫 배포는 사용자 로컬에서 수동 게시하고 이후 Trusted Publishing과 provenance 연결 |
+| npm | 개인 계정 `zlink-systems`, scope `@zlink-systems`, 2FA | Trusted Publishing(OIDC)+provenance. binding은 `bindings-release.yml`, framework 8개는 `framework-release.yml`로 패키지별 등록(2026-09-09 완료) |
 | ConanCenter | GitHub 계정 `zlink-systems` | recipe PR 제출 방식 |
 | vcpkg | GitHub 계정 `zlink-systems` | ports PR 제출 방식 |
 
@@ -25,7 +25,7 @@ nuget.org Trusted Publishing 정책은 다음 값으로 고정돼 있다.
 | repository | `zlink` |
 | workflow 파일명 | `release-dotnet.yml` |
 | environment | 없음 |
-| package glob | `Zlink*` |
+| package glob | `Zlink`, `Zlink.*` |
 
 따라서 binding과 framework의 .NET package push는 모두
 `.github/workflows/release-dotnet.yml`에서 수행한다. 다른 workflow에서 받은 OIDC token은 이
