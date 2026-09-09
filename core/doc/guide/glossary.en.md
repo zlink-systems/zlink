@@ -1,4 +1,8 @@
 
+<!-- zlink-nav:start -->
+[← ZMP Protocol](zmp-protocol.en.md) | [Core Usage Scenarios →](scenarios.en.md)
+<!-- zlink-nav:end -->
+
 # Core Glossary
 
 > **What this chapter answers** — it gathers the core terms used throughout

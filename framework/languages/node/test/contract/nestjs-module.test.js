@@ -16,6 +16,7 @@ const {
   reserveTcpEndpoint,
   resolveModuleProviders
 } = require('./helpers/nestjs-test-utils');
+const { waitForClientServerTargets } = require('./helpers/client-server-readiness');
 
 class NoopRequestHandler {
   async handle() {}
@@ -70,12 +71,6 @@ function fakeSpotRouteBridge(calls, reply) {
       calls.push('bridge:dispose');
     }
   };
-}
-
-async function waitForClientServerTargets(runtime, channelName, expectedCount) {
-  while (runtime.snapshot(channelName).readyTargetCount !== expectedCount) {
-    await new Promise(resolve => setImmediate(resolve));
-  }
 }
 
 function exposeLegacyTestSpotAsMeshNode(spotNode) {

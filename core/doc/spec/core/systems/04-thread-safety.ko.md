@@ -35,7 +35,7 @@ Core 구현은 공개 API를 동시 호출 특성에 따라 세 등급으로 나
 | 등급 | 의미 |
 |---|---|
 | Hot path | 여러 application thread가 지원 socket의 send·request를 동시에 호출할 수 있다. |
-| Control path | option, bind·connect와 handler 등록은 handle별로 직렬화된다. |
+| Control path | option과 bind·connect는 handle별로 직렬화된다. |
 | Lifecycle | close·destroy는 같은 handle의 다른 mutable operation과 동시에 실행하지 않는다. |
 
 ## 3. 내부 규칙
@@ -50,11 +50,18 @@ session/engine 사이에서 message를 전달하는 queue([Architecture](01-arch
 Connection에서 protocol 처리를 담당하는 engine의 state는 그 connection의
 [I/O thread](../glossary.ko.md#io-thread)가 소유한다.
 
-**수신 모드.** callback mode와 synchronous receive mode는 같은 queue의 single consumer다 —
-한 queue에서 message를 꺼내는 소비자는 하나여야 하므로 두 모드를 동시에 등록하지 않는다.
+**수신 경로.** 수신은 pull 전용이며 한 queue에서 message를 꺼내는 소비자는 하나다 — Core는
+application callback을 등록받지 않으므로 소비자는 항상 `*_recv_part()`·`zlink_completion_recv()`
+계열을 호출하는 application thread다.
 
 **Public API guard와 close.** 공개 API 진입을 지키는 guard는 handle pin — API 호출이 진행
 중인 동안 핸들을 유효하게 고정하는 표시 — 과 close state만 관리한다. Service kind나
-application lifecycle을 분기하지 않는다. Guard는 기다리지 않는다: close가 accepted된 뒤의 새 진입과
-진행 중인 API가 있을 때의 close는 모두 즉시 거부되며, caller가 관찰하는 결과(`ESHUTDOWN`, `EBUSY`)는
+application lifecycle을 분기하지 않는다. close가 accepted된 뒤의 새 진입은 즉시 `ESHUTDOWN`으로
+거부한다. close가 실행 중 public API를 발견하면 `EBUSY`로 거부하되, public poller의 짧은 readiness
+sample에는 최대 1024회의 bounded backoff로 끝날 기회를 준다 — 그 안에 admission이 끝나지 않으면
+`EBUSY`를 반환한다. caller가 관찰하는 결과(`ESHUTDOWN`, `EBUSY`)는
 [Socket 공통 §2 스레드 안전성](../socket/README.ko.md#2-스레드-안전성)이 정의한다.
+
+<!-- zlink-nav:start -->
+[시스템 목차](README.ko.md) | [이전: I/O thread](03-io-thread.ko.md) | [다음: Connection별 memory](05-connection-memory.ko.md)
+<!-- zlink-nav:end -->

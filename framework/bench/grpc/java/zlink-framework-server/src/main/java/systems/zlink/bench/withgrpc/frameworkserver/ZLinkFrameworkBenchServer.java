@@ -37,11 +37,11 @@ public class ZLinkFrameworkBenchServer {
     // send is traced received/admitted/dispatched, the sender is told it succeeded,
     // and the handler never runs. This wiring is what makes the send row measurable.
     private static final BenchServerMetrics METRICS = new BenchServerMetrics();
-    private static volatile String listenEndpoint = "tcp://127.0.0.1:5092";
+    private static volatile String listenEndpoint = "tcp://127.0.0.1:5254";
 
     public static void main(String[] args) {
-        String endpoint = Args.value(args, "--endpoint", "tcp://127.0.0.1:5092");
-        String metricsUrl = Args.value(args, "--metrics-url", "http://127.0.0.1:5093");
+        String endpoint = Args.value(args, "--endpoint", "tcp://127.0.0.1:5254");
+        String metricsUrl = Args.value(args, "--metrics-url", "http://127.0.0.1:5255");
         BenchServerMetrics metrics = METRICS;
         listenEndpoint = endpoint;
 
@@ -113,8 +113,8 @@ public class ZLinkFrameworkBenchServer {
     }
 
     @Bean
-    BenchEchoHandler benchEchoHandler() {
-        return new BenchEchoHandler();
+    BenchEchoHandler benchEchoHandler(BenchServerMetrics metrics) {
+        return new BenchEchoHandler(metrics);
     }
 
     @Bean

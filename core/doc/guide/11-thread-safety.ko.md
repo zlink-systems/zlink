@@ -20,8 +20,8 @@ Core는 같은 handle에 단계별 concurrency 계약을 적용한다.
 연속성을 유지하지만 하나의 논리적 multipart sequence를 여러 thread로 나누면 안 된다.
 
 별도 계약이 없으면 receive는 single-consumer다. 같은 socket에서 receive를 동시에 실행하지 않는다.
-Receive가 반환한 routing-id와 topic view는 thread-local이며 같은 thread의 다음 receive 계열 호출에서
-무효화될 수 있다.
+Receive가 반환한 routing-id view는 socket이 소유한다 — 같은 socket의 다음 data-recv 호출(성공·실패
+모두)이나 close 뒤에는 이 view를 쓰지 않는다. 값을 보관하려면 반환 즉시 복사한다.
 
 ## Control 경로
 
@@ -30,12 +30,13 @@ lifecycle 변경에 의미를 부여하지 않는다. 가능하면 traffic을 �
 
 ## Close
 
-Close는 더 엄격한 lifecycle gate를 사용한다. 다른 operation이나 callback 때문에 안전하게 제거할 수 없으면
-busy를 반환한다. Close가 접수된 뒤 새 API 진입은 shutdown을 반환한다. STREAM raw callback에서는 자기
-handle을 닫을 수 없다.
+Close는 더 엄격한 lifecycle gate를 사용한다. 다른 thread가 같은 handle에서 API를 실행 중이면
+`ZLINK_CLOSE_BUSY`(`EBUSY`)를 반환한다. Close가 접수된 뒤 새 API 진입은 `ESHUTDOWN`을 반환한다.
 
-## Callback
+## Pull 모델 — 콜백이 없다
 
-Socket receive callback은 해당 socket의 I/O thread에서 실행된다. Monitor와 generic timer callback은 Core
-control runtime에서 실행된다. Callback을 짧게 유지하고 blocking application 작업은 application이 소유한
-queue로 넘긴다.
+Core는 application 콜백을 등록받지 않는다. socket data, completion, monitor event, timer fire는 모두
+application thread가 poller로 readiness를 기다린 뒤 `*_recv_part()`·`zlink_completion_recv()`·
+`zlink_socket_monitor_recv()`·`zlink_timer_recv()`로 직접 꺼낸다. 따라서 "콜백을 짧게 유지한다"
+같은 규칙은 없고, 어느 thread에서 받을지는 application이 정한다 — 한 socket의 receive 소비자는
+하나로 유지한다.

@@ -51,11 +51,15 @@ There are three initialization methods.
   of the specified size. The buffer contents are uninitialized, so obtain a pointer with
   [`zlink_msg_data`](#zlink_msg_data) and populate the data before sending.
 - **Zero-copy** — [`zlink_msg_init_data`](#zlink_msg_init_data) references a caller-provided
-  buffer without copying it. When the library no longer needs the buffer, after the message is
-  sent or closed, it invokes a callback so the caller can release the buffer.
+  buffer without copying it. When the last message referencing the buffer is closed (the library
+  closes a sent message once transmission is done), the library invokes the caller-supplied
+  release callback `ffn_(data_, hint_)`.
 
 For a zero-copy message, the callback is the ownership boundary. The caller must not modify or
-release the buffer until the callback is invoked.
+release the buffer until the callback is invoked, and **releasing the buffer is done inside the
+callback** — releasing the same buffer again after the callback returns is a double free. If
+`ffn_` is `NULL`, the library invokes no callback and the buffer lifetime is entirely the
+caller's responsibility.
 
 ```mermaid
 sequenceDiagram
@@ -66,7 +70,7 @@ sequenceDiagram
     App->>Lib: Send through a socket or zlink_msg_close(msg)
     Note over App: Do not modify or release data before ffn is invoked
     Lib-->>App: Invoke ffn(data, hint)
-    Note over App: The caller may now release the buffer
+    Note over App: Release the buffer inside ffn<br/>Do not release it again after ffn returns
 ```
 
 Access the payload with [`zlink_msg_data`](#zlink_msg_data) and
@@ -80,7 +84,7 @@ Three functions transfer or share ownership of message content.
 | Function | Purpose | State after success |
 |---|---|---|
 | [`zlink_msg_move`](#zlink_msg_move) | Move content | `src_` becomes an empty message, and `dest_` contains the original content. |
-| [`zlink_msg_copy`](#zlink_msg_copy) | Lightweight copy | The two messages share the buffer for large/zero-copy storage, while a small inline message is copied by value. |
+| [`zlink_msg_copy`](#zlink_msg_copy) | Lightweight copy | The two messages share the buffer for large/zero-copy storage, while a small inline message (a payload created with `zlink_msg_init_size` and `size_ <= 29` bytes) is copied by value. |
 | [`zlink_msg_adopt`](#zlink_msg_adopt) | Allow a binding to take ownership into uninitialized storage | `dest_` is initialized and owns the original content, while `src_` becomes an empty initialized message. |
 
 When large/zero-copy storage is copied, both messages share the same data buffer. The number of
@@ -154,9 +158,14 @@ message. The library invokes this function when the message data buffer is no lo
 
 ## 6. Functions
 
-The following input rule applies to every `zlink_msg_*` function: if a handle is `NULL` or a
-message is invalid (uninitialized or already closed), the function sets `errno == EFAULT`. Each
-function then returns the following value.
+The following input rule applies to every `zlink_msg_*` function: a `NULL` handle sets
+`errno == EFAULT`. `zlink_msg_close`, `zlink_msg_data`, `zlink_msg_size`, `zlink_msg_refcnt`, and
+the `src_` of `zlink_msg_adopt` require an initialized message; an invalid one (uninitialized or
+already closed) also yields `EFAULT`. `zlink_msg_init*` takes non-NULL uninitialized storage and
+does not inspect its previous state — calling init again on an already initialized message leaks
+the previous content, so close it first. `zlink_msg_move` and `zlink_msg_copy` proceed when both
+pointers are non-NULL and require `src_` to be an initialized message. Each function then returns
+the following value.
 
 | Function | Return value |
 |---|---|

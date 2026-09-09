@@ -119,7 +119,9 @@ sequenceDiagram
 제거할 수 있다. 다른 source나 `zlink_poll()` item에서 이 bit를 사용하면
 `ZLINK_CONFIG_INVALID_ARGUMENT`, `errno == EINVAL`이다.
 
-한 socket의 completion bit를 소유하는 poller registration은 최대 하나다. 다른 poller가 이미
+같은 socket은 서로 다른 poller에 동시에 등록할 수 있다 — 등록마다 독립된 readiness wake 경로와
+lifetime pin을 가진다. 예외는 completion bit 하나다: 한 socket의 completion bit를 소유하는
+poller registration은 최대 하나다. 다른 poller가 이미
 소유한 socket에 bit를 add하거나 modify로 추가하면 `ZLINK_CONFIG_INVALID_STATE`,
 `errno == EBUSY`로 실패하고 기존 registration은 변하지 않는다. 기존 owner가 modify로 bit를
 제거하거나 registration을 remove하면 다른 poller가 소유할 수 있으며, 전환 중 queue record와
@@ -168,7 +170,7 @@ typedef struct zlink_pollitem_t {
   void *socket;    // SOCKET source일 때만 유효
   zlink_fd_t fd;   // FD source일 때만 유효
   short events;    // 기다릴 event bit
-  short revents;   // 반환된 readiness. 호출 전 0으로 초기화한다 (§7 zlink_poll)
+  short revents;   // 반환된 readiness. zlink_poll이 진입 시 0으로 지운다 (§7 zlink_poll)
 } zlink_pollitem_t;
 
 typedef struct zlink_poller_event_t {
@@ -196,8 +198,9 @@ ZLINK_EXPORT int zlink_poll(
 ```
 
 return은 readiness가 있는 item 수, timeout은 0, 실패는 -1이다. 실패하면 `error_out`과
-errno를 함께 설정한다. `timeout_ms == -1`은 무기한, 0은 즉시 반환한다. item의
-`revents`는 호출 전에 0으로 초기화하고 함수 반환 뒤의 snapshot만 유효하다.
+errno를 함께 설정한다. `timeout_ms < 0`은 무기한, 0은 즉시 반환한다. `item_count == 0`이면
+timeout 값과 관계없이 즉시 `0`/`ZLINK_CONFIG_OK`를 반환한다. 함수는 기다리기 전에 모든 item의
+`revents`를 0으로 지우므로 호출자가 미리 초기화할 필요가 없고, 반환 뒤의 snapshot만 유효하다.
 `error_out`은 NULL을 허용하는 선택 output이다.
 
 ### Poller 함수
@@ -247,11 +250,13 @@ ZLINK_EXPORT int zlink_poller_wait(
 
 `zlink_poller_size()`는 성공 시 현재 등록 count를, 실패 시 `-1`을 반환한다.
 `zlink_poller_wait()`는 성공 시 기록한 event 수를, timeout이면 `0`, 실패하면
-`-1`을 반환한다. `events == NULL`이거나 `event_capacity <= 0`이면 `EINVAL`로
-실패한다. `zlink_poller_size()`와 `zlink_poller_wait()`의 `error_out`은 NULL을
+`-1`을 반환한다. `timeout_ms < 0`은 모두 무기한 대기로 정규화한다. `events == NULL`이거나
+`event_capacity <= 0`이면 `EINVAL`로 실패한다. `zlink_poller_size()`와 `zlink_poller_wait()`의 `error_out`은 NULL을
 허용하는 선택 output이다.
 
-같은 source를 두 번 add하면 `ZLINK_CONFIG_CONFLICT`/`EEXIST`다. 없는 source의
+같은 source를 두 번 add하면 `ZLINK_CONFIG_CONFLICT`/`EEXIST`다. timer는 한 번에 poller 하나에만
+등록할 수 있다 — 다른 poller에 이미 등록된 timer를 add하면 `ZLINK_CONFIG_INVALID_STATE`/`EBUSY`로
+실패하고, 등록된 timer를 `zlink_timer_destroy()`로 파괴하면 `ZLINK_CLOSE_BUSY`/`EBUSY`다. 없는 source의
 modify·remove는 `ZLINK_CONFIG_NOT_FOUND`/`ENOENT`다. 잘못된 event bit는
 `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`, source가 지원하지 않는 event는
 `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`이다. poller destroy 중 wait가 active이면
@@ -280,6 +285,8 @@ array)만으로 다음을 확인한다. 각 항목은 unit test 하나로 이어
 
 **poller 등록**
 - 같은 source를 두 번 add하면 `ZLINK_CONFIG_CONFLICT`/`EEXIST`다.
+- 다른 poller에 이미 등록된 timer를 add하면 `ZLINK_CONFIG_INVALID_STATE`/`EBUSY`이고, 등록된 timer를 `zlink_timer_destroy()`로 파괴하면 `ZLINK_CLOSE_BUSY`/`EBUSY`다.
+- 같은 socket을 두 poller에 readiness bit(completion 제외)로 등록하면 둘 다 성공하고 각각 독립적으로 readiness를 보고한다.
 - 없는 source를 modify·remove하면 `ZLINK_CONFIG_NOT_FOUND`/`ENOENT`다.
 - 잘못된 event bit는 `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`이고, source가 지원하지 않는 event는 `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`이다.
 - `ZLINK_POLLCOMPLETION`은 PAIR·DEALER·ROUTER·STREAM의 add·modify에서 단독 또는 다른 socket

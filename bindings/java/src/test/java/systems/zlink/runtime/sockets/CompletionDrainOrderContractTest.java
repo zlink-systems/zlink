@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.TestSupport;
 import systems.zlink.contracts.core.*;
@@ -36,16 +37,22 @@ class CompletionDrainOrderContractTest {
                 core.requestResult(core.submissions.getLast(), RequestResult.TIMED_OUT);
                 core.attempts.add(new CompletionNativeFixture.Attempt(SubmitResult.OK, 0, request ? 23 : 0));
                 core.order.clear();
-                List<Runnable> settlements = new ArrayList<>();
-                assertEquals(2, owner.drain(settlements));
+                AtomicReference<Thread> completionThread = new AtomicReference<>();
+                second.whenComplete((ignored, failure) ->
+                    completionThread.set(Thread.currentThread()));
+                Thread drainThread = Thread.currentThread();
+                assertEquals(2, owner.drain());
                 assertEquals(List.of("recv:21", "recv:22", "recv:NO_DATA", "submit:" + (request ? 23 : 0)), core.order);
-                settlements.forEach(Runnable::run);
+                assertTrue(second.isDone(),
+                    "public drain must settle terminal completions before returning");
+                assertSame(drainThread, completionThread.get(),
+                    "public completion owner must settle on its drain thread");
                 assertEquals(RequestResult.TIMED_OUT,
                     assertInstanceOf(ZlinkRequestException.class, CompletionNativeFixture.failure(second)).getResult());
                 if (request) {
                     assertFalse(waiter.isDone());
                     core.requestResult(core.submissions.getLast(), RequestResult.OK);
-                    assertEquals(1, owner.drain(null));
+                    assertEquals(1, owner.drain());
                 }
                 waiter.get(TestSupport.DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
             }

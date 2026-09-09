@@ -345,22 +345,22 @@ ROUTING_ID는 `zlink_set_routing_id()` / `zlink_get_routing_id()` 전용
 
 ```c
 typedef enum zlink_option_t {
-  ZLINK_OPT_AFFINITY                  = 0x3001,  // I/O thread affinity bitmask (uint64_t)
-  ZLINK_OPT_RATE                      = 0x3003,  // multicast 전송률 (kbps, int)
-  ZLINK_OPT_RECOVERY_IVL              = 0x3004,  // multicast 복구 간격 (ms, int)
+  ZLINK_OPT_AFFINITY                  = 0x3001,  // I/O thread affinity bitmask (uint64_t; 기본값 0)
+  ZLINK_OPT_RATE                      = 0x3003,  // multicast 전송률 (kbps, int; 기본값 100)
+  ZLINK_OPT_RECOVERY_IVL              = 0x3004,  // multicast 복구 간격 (ms, int; 기본값 10000)
   ZLINK_OPT_SNDBUF                    = 0x3005,  // kernel 송신 buffer 크기 (int; -1=OS 기본값 유지, 0 이상=OS에 크기 요청)
   ZLINK_OPT_RCVBUF                    = 0x3006,  // kernel 수신 buffer 크기 (int; -1=OS 기본값 유지, 0 이상=OS에 크기 요청)
   ZLINK_OPT_FD                        = 0x3007,  // file descriptor (zlink_fd_t, 읽기 전용)
   ZLINK_OPT_EVENTS                    = 0x3008,  // 이벤트 상태 bitmask (int, 읽기 전용)
   ZLINK_OPT_TYPE                      = 0x3009,  // socket type (`zlink_socket_type_t` 값을 int로, 읽기 전용)
-  ZLINK_OPT_LINGER                    = 0x300A,  // 종료 시 대기 (ms, int; -1=무한, 0=즉시)
-  ZLINK_OPT_RECONNECT_IVL             = 0x300B,  // 초기 재연결 간격 (ms, int)
-  ZLINK_OPT_BACKLOG                   = 0x300C,  // listener backlog (int)
-  ZLINK_OPT_RECONNECT_IVL_MAX         = 0x300D,  // 최대 재연결 간격 (ms, int; 0=IVL만 사용)
+  ZLINK_OPT_LINGER                    = 0x300A,  // 종료 시 대기 (ms, int; -1=무한, 0=즉시; 기본값 -1)
+  ZLINK_OPT_RECONNECT_IVL             = 0x300B,  // 초기 재연결 간격 (ms, int; 기본값 100)
+  ZLINK_OPT_BACKLOG                   = 0x300C,  // listener backlog (int; 기본값 100)
+  ZLINK_OPT_RECONNECT_IVL_MAX         = 0x300D,  // 최대 재연결 간격 (ms, int; 0=IVL만 사용; 기본값 0)
   ZLINK_OPT_MAXMSGSIZE                = 0x300E,  // 최대 인바운드 message 크기 (int64_t; 양수=상한, 0 이하=무제한, 기본값 -1)
   ZLINK_OPT_SNDHWM                    = 0x300F,  // directional send pipe의 accounted byte HWM (uint64_t; 기본값 4,096,000, 0=무제한)
   ZLINK_OPT_RCVHWM                    = 0x3010,  // directional receive pipe의 accounted byte HWM (uint64_t; 기본값 4,096,000, 0=무제한)
-  ZLINK_OPT_MULTICAST_HOPS            = 0x3011,  // multicast TTL (int)
+  ZLINK_OPT_MULTICAST_HOPS            = 0x3011,  // multicast TTL (int; 기본값 1)
   ZLINK_OPT_RCVTIMEO                  = 0x3012,  // 수신 timeout (ms, int; 기본 1000; 명시적으로 -1 설정 시 무한)
   ZLINK_OPT_SNDTIMEO                  = 0x3013,  // 송신 timeout (ms, int; 기본 1000; 명시적으로 -1 설정 시 무한)
   ZLINK_OPT_LAST_ENDPOINT             = 0x3014,  // binding된 endpoint (string, 읽기 전용)
@@ -368,27 +368,27 @@ typedef enum zlink_option_t {
   ZLINK_OPT_TCP_KEEPALIVE_CNT         = 0x3016,  // TCP_KEEPCNT (int; -1=OS 기본값)
   ZLINK_OPT_TCP_KEEPALIVE_IDLE        = 0x3017,  // TCP_KEEPIDLE (초, int; -1=OS 기본값)
   ZLINK_OPT_TCP_KEEPALIVE_INTVL       = 0x3018,  // TCP_KEEPINTVL (초, int; -1=OS 기본값)
-  ZLINK_OPT_IMMEDIATE                 = 0x3019,  // 완료된 연결에만 message queue 사용 (int)
-  ZLINK_OPT_IPV6                      = 0x301A,  // socket에서 IPv6 활성화 (int; 0=off, 양수=on, getter는 0/1 반환)
-  ZLINK_OPT_CONFLATE                  = 0x301B,  // PUB/SUB에서 topic당 최신 message만 유지 (int; DEALER는 활성화 불가)
-  ZLINK_OPT_TOS                       = 0x301C,  // IP Type-of-Service 값 (int)
-  ZLINK_OPT_HANDSHAKE_IVL             = 0x301D,  // ZMTP handshake timeout (ms, int)
+  ZLINK_OPT_IMMEDIATE                 = 0x3019,  // 완료된 연결에만 message queue 사용 (int; 기본값 0)
+  ZLINK_OPT_IPV6                      = 0x301A,  // socket에서 IPv6 활성화 (int; 0 또는 1만 허용, 그 밖의 값은 EINVAL; 기본값 0)
+  ZLINK_OPT_CONFLATE                  = 0x301B,  // PUB/SUB에서 topic당 최신 message만 유지 (int; 0 또는 1만 허용; DEALER는 활성화 불가; 기본값 0)
+  ZLINK_OPT_TOS                       = 0x301C,  // IP Type-of-Service 값 (int; 기본값 0)
+  ZLINK_OPT_HANDSHAKE_IVL             = 0x301D,  // ZMTP handshake timeout (ms, int; 기본값 30000)
   ZLINK_OPT_BLOCKY                    = 0x301E,  // socket option API가 지원하지 않는 식별자 — 아래 설명 참조
   ZLINK_OPT_INVERT_MATCHING           = 0x3020,  // topic 매칭 반전 (int)
-  ZLINK_OPT_CONNECT_TIMEOUT           = 0x3024,  // 연결 timeout (ms, int)
-  ZLINK_OPT_TCP_MAXRT                 = 0x3025,  // 최대 TCP 재전송 timeout (ms, int)
-  ZLINK_OPT_MULTICAST_MAXTPDU         = 0x3026,  // 최대 multicast TPDU 크기 (int)
+  ZLINK_OPT_CONNECT_TIMEOUT           = 0x3024,  // 연결 timeout (ms, int; 기본값 0=OS 기본)
+  ZLINK_OPT_TCP_MAXRT                 = 0x3025,  // 최대 TCP 재전송 timeout (ms, int; 기본값 0=OS 기본)
+  ZLINK_OPT_MULTICAST_MAXTPDU         = 0x3026,  // 최대 multicast TPDU 크기 (int; 기본값 1500)
   ZLINK_OPT_BINDTODEVICE              = 0x3027,  // network interface binding (string)
   ZLINK_OPT_TLS_CERT                   = 0x3028,  // PEM 인코딩 TLS 인증서 경로 (string)
   ZLINK_OPT_TLS_KEY                    = 0x3029,  // PEM 인코딩 TLS 개인 키 경로 (string)
   ZLINK_OPT_TLS_CA                     = 0x302A,  // PEM 인코딩 CA 인증서 번들 경로 (string)
-  ZLINK_OPT_TLS_VERIFY                 = 0x302B,  // TLS peer 검증 활성화 (int; 0=off, 양수=on, getter는 0/1 반환)
-  ZLINK_OPT_TLS_REQUIRE_CLIENT_CERT    = 0x302C,  // client 인증서 요구 (int; 0=off, 양수=on, getter는 0/1 반환)
+  ZLINK_OPT_TLS_VERIFY                 = 0x302B,  // TLS peer 검증 활성화 (int; 0 또는 1만 허용, 그 밖의 값은 EINVAL; 기본값 1)
+  ZLINK_OPT_TLS_REQUIRE_CLIENT_CERT    = 0x302C,  // client 인증서 요구 (int; 0 또는 1만 허용; 기본값 0)
   ZLINK_OPT_TLS_HOSTNAME               = 0x302D,  // SNI 및 인증서 검증용 hostname (string)
-  ZLINK_OPT_TLS_TRUST_SYSTEM           = 0x302E,  // 시스템 CA 인증서 저장소 신뢰 (int; 0=off, 양수=on, getter는 0/1 반환)
+  ZLINK_OPT_TLS_TRUST_SYSTEM           = 0x302E,  // 시스템 CA 인증서 저장소 신뢰 (int; 0 또는 1만 허용; 기본값 1)
   ZLINK_OPT_TLS_PASSWORD               = 0x302F,  // 개인 키 암호 (string)
-  ZLINK_OPT_ZMP_METADATA               = 0x3030,  // ZMP metadata 첨부 on/off (int; 0=off, 양수=on, getter는 0/1 반환)
-  ZLINK_OPT_TCP_NODELAY                = 0x3031,  // TCP_NODELAY 활성화 (int; 0=off, 양수=on, getter는 0/1 반환)
+  ZLINK_OPT_ZMP_METADATA               = 0x3030,  // ZMP metadata 첨부 on/off (int; 0 또는 1만 허용, 그 밖의 값은 EINVAL; 기본값 0)
+  ZLINK_OPT_TCP_NODELAY                = 0x3031,  // TCP_NODELAY (int; -1=OS 기본값, 0=off, 1=on; 기본값 1)
   ZLINK_OPT_RID_DUPLICATE_POLICY       = 0x3033,  // peer routing id 중복 정책 (int; 기본 REJECT — §4 rid 중복 정책 참조)
   ZLINK_OPT_SUBMIT_RETRY_MODE          = 0x3037,  // local submit 실패 재시도 모드 (int; ZLINK_SUBMIT_RETRY_OFF 또는 ZLINK_SUBMIT_RETRY_LOCAL_FAILURE, raw socket 기본값 off)
   ZLINK_OPT_SUBMIT_RETRY_TIMEOUT       = 0x3038,  // local submit 실패 재시도 예산 (ms, int; raw socket 기본값 0, 0이면 재시도 없음)
@@ -429,8 +429,8 @@ control 중 하나를 유실할 수 있다. 따라서 DEALER는 부분적인 con
 두 [HWM](../glossary.ko.md#hwm) `uint64_t` option(`ZLINK_OPT_SNDHWM`, `ZLINK_OPT_RCVHWM`)은
 `zlink_set_option()`과 `zlink_get_option()`에서 정확히
 `sizeof(uint64_t)` byte를 사용해야 한다. 4-byte 값은
-`ZLINK_CONFIG_INVALID_ARGUMENT`로 거절한다. 제거된 socket option 값 `0x3034`도
-알 수 없는 option이므로 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로 실패한다.
+`ZLINK_CONFIG_INVALID_ARGUMENT`로 거절한다. 위 enum에 없는 option 값은 알 수 없는 option이므로
+`ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로 실패한다.
 pipe admission은 실제로 보관한 byte를 계산한다.
 
 HWM은 각 HWM-controlled application directional pipe에 적용한다. DEALER-ROUTER의 DATA·REQUEST·
@@ -639,7 +639,8 @@ Socket이 bind한 endpoint는 `zlink_unbind`와 같은 규칙으로 close가 반
 **반환값:** 성공 시 `ZLINK_CLOSE_OK`, 실패 시 `zlink_close_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 
 **에러:** pointer가 유효하지 않으면 `EFAULT`, opaque value가 stale 상태이면 `ESTALE`.
-다른 작업이 진행 중이면 `EBUSY`.
+다른 작업이 진행 중이면 `EBUSY`. 같은 handle에 close가 이미 accepted됐으면(두 번째 close 포함)
+`ESHUTDOWN`.
 
 **참고:** `zlink_socket`
 
@@ -775,8 +776,11 @@ ZLINK_EXPORT zlink_config_result_t zlink_set_tls_server (void *handle_,
 server socket에 TLS 인증서, 개인 키를 설정하고, client 인증서 요구 여부를
 지정한다.
 
-이 함수는 TLS를 지원하는 raw server socket에 적용된다. 지원하지 않는 raw socket type과 다른 핸들은
-`ZLINK_CONFIG_NOT_SUPPORTED`, `errno == ENOTSUP`이다.
+이 함수는 raw socket handle에 적용되며 socket type을 가리지 않는다 — 설정한 값은 그 socket이
+`tls://`·`wss://` endpoint를 bind할 때 쓰인다. `cert_`나 `key_`가 NULL이면
+`ZLINK_CONFIG_INVALID_HANDLE`, `errno == EFAULT`이고, `require_client_cert_`는 `0` 또는 `1`만
+허용한다(그 밖의 값은 `ZLINK_CONFIG_INVALID_ARGUMENT`, `EINVAL`). raw socket이 아닌 핸들은
+[§2 스레드 안전성](#2-스레드-안전성)의 handle 오류로 실패한다.
 
 **반환값:** 성공 시 `ZLINK_CONFIG_OK`, 실패 시 `zlink_config_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 
@@ -798,8 +802,11 @@ ZLINK_EXPORT zlink_config_result_t zlink_set_tls_client (void *handle_,
 client socket에 CA 인증서, hostname(SNI 및 인증서 검증용), 시스템 CA
 저장소 신뢰 여부를 설정한다.
 
-이 함수는 TLS를 지원하는 raw client socket에 적용된다. 지원하지 않는 raw socket type과 다른 핸들은
-`ZLINK_CONFIG_NOT_SUPPORTED`, `errno == ENOTSUP`이다.
+이 함수는 raw socket handle에 적용되며 socket type을 가리지 않는다 — 설정한 값은 그 socket이
+`tls://`·`wss://` endpoint에 connect할 때 쓰인다. `ca_cert_`나 `hostname_`이 NULL이면
+`ZLINK_CONFIG_INVALID_HANDLE`, `errno == EFAULT`이고, `trust_system_`은 `0` 또는 `1`만
+허용한다(그 밖의 값은 `ZLINK_CONFIG_INVALID_ARGUMENT`, `EINVAL`). raw socket이 아닌 핸들은
+[§2 스레드 안전성](#2-스레드-안전성)의 handle 오류로 실패한다.
 
 **반환값:** 성공 시 `ZLINK_CONFIG_OK`, 실패 시 `zlink_config_result_t` 값. `zlink_errno()`는 진단용 내부 errno를 그대로 유지한다.
 
@@ -820,9 +827,10 @@ socket을 local endpoint에 binding한다. endpoint 문자열은
 
 - `tcp://interface:port` 또는 `tcp://*:port`
 - `inproc://name` (process 내 직접 연결, in-process transport)
-- `ipc://pathname` (process 간, POSIX 전용)
+- `ipc://pathname` (process 간; `ZLINK_HAVE_IPC` build에서만, Windows 제외)
 - `ws://interface:port` (WebSocket)
-- `tls://interface:port` (TLS 암호화 TCP)
+- `wss://interface:port` (TLS 위의 WebSocket; `ZLINK_HAVE_WSS` build에서만)
+- `tls://interface:port` (TLS 암호화 TCP; `ZLINK_HAVE_TLS` build에서만)
 
 socket은 여러 endpoint에 binding할 수 있다. TCP의 경우 port 0을 지정하면
 시스템이 임시 port를 할당한다. 실제 endpoint를 가져오려면
@@ -997,7 +1005,7 @@ completion이 없다. HWM·byte credit·flow pause에 의한 backpressure이거�
 결과와 같이 소비·폐기되므로 caller는 자신이 보관한 복사본으로 다시 제출한다. ROUTER·STREAM에서
 지정한 RID에 route가 전혀 없으면(ROUTER는 `ZLINK_ROUTER_OPT_MANDATORY`가 양수일 때, 기본값) 즉시
 `ZLINK_SUBMIT_NOT_CONNECTED`, `errno == EHOSTUNREACH`, ID `0`이며 토큰을 만들지 않는다. 두 경로의
-실패한 `FINAL`은 staging한 prefix와 함께 소비·폐기한다.
+실패한 `FINAL`은 임시로 보관한 prefix와 함께 소비·폐기한다.
 
 REQUEST completion과 대기 토큰은 socket당 65,536개의 unified completion reservation을 공유한다.
 SEND는 `DONTWAIT FINAL`이 대기 토큰을 반환할 때만 slot을 예약하고, REQUEST `FINAL`은 admission되어
@@ -1032,8 +1040,9 @@ Core는 SEND·REQUEST payload를 admission 전에 보관하지 않으며 Core �
 
 대기 토큰은 다음 세 경우로만 종료된다. (a) 위의 WRITABLE record. (b) target의 명시적
 제거(`zlink_disconnect_rid`, 해당 RID의 endpoint termination)로 `send_result == ZLINK_SEND_TERMINAL`,
-`send_terminal_errno == ENOENT`인 WRITABLE record. (c) socket close·context termination으로
-`ZLINK_SEND_TERMINAL`과 lifecycle errno(`ESHUTDOWN` 또는 `ETERM`)인 WRITABLE record. Peer weight가
+`send_terminal_errno == ENOENT`인 WRITABLE record. (c) socket close·context termination — Core가
+token을 내부에서 `ZLINK_SEND_TERMINAL`과 lifecycle errno(`ESHUTDOWN` 또는 `ETERM`)로 끝내며
+record는 전달하지 않는다. Peer weight가
 0으로 떨어져도 대기 토큰은 종료되지 않는다. 아직 반환하지 않은 `NONE` wait는 target 제거 시
 `ZLINK_SUBMIT_NOT_FOUND`+`ENOENT`, peer-type 거절 시 `ZLINK_SUBMIT_NOT_ADMITTED`+`EPROTOTYPE`, context termination 시
 `ZLINK_SUBMIT_TERMINATED`+`ETERM`, socket shutdown 시
@@ -1379,8 +1388,8 @@ reconnect, TCP keepalive, kernel buffer, TOS, handshake interval과 TLS field는
   토큰은 target 단위(PAIR pipe, DEALER candidate peer 집합, ROUTER·STREAM의 해당 RID)로 예약하며
   admission 전 transient disconnect는 토큰을 종료하지 않는다. ID `0` 뒤에는 application payload를
   replay하지 않는다.
-- 대기 토큰은 WRITABLE record, target 명시적 제거(`ZLINK_SEND_TERMINAL`+`ENOENT`), socket close·context
-  termination(`ZLINK_SEND_TERMINAL`+lifecycle errno)으로만 종료되며 peer weight 0은 대기 토큰을
+- 대기 토큰은 WRITABLE record, target 명시적 제거(`ZLINK_SEND_TERMINAL`+`ENOENT`), 또는 socket
+  close·context termination(record 없이 내부 종료)으로만 끝나며 peer weight 0은 대기 토큰을
   종료하지 않는다.
 - SEND 대기 토큰과 REQUEST completion을 섞어 65,536개 slot을 채우면 다음 SEND `DONTWAIT FINAL`은
   `ZLINK_SUBMIT_OUT_OF_MEMORY`+`ENOMEM`, 다음 REQUEST FINAL은 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`,

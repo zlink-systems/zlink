@@ -10,9 +10,11 @@
 STREAM is a **server-only** socket for communicating with **external raw clients**.
 
 Core rules:
-- `ZLINK_SOCKET_STREAM` supports `zlink_bind()` only.
-- Calling `zlink_connect()` on `ZLINK_SOCKET_STREAM` returns `EOPNOTSUPP`.
-- Clients must use OS/Asio/WebSocket raw client stacks, not zlink STREAM sockets.
+- Set `ZLINK_STREAM_OPT_RECV_MODE` to RAW or PACKET before the first `zlink_bind()` or
+  `zlink_connect()`. Bind or connect without a mode fails with `EINVAL`.
+- `ZLINK_SOCKET_STREAM` supports both bind and connect (`zlink_connect()` returns
+  `ZLINK_CONNECT_OK` on success). The peer can be an OS/Asio/WebSocket raw client or another
+  zlink STREAM socket with a receive mode set.
 - RAW mode has no zlink-level wire framing — it is a transparent byte
   stream (the encoder/decoder pass bytes through unchanged). For
   length-delimited packets, use PACKET mode, which frames as
@@ -36,12 +38,14 @@ external raw client  <---- RAW byte stream (no framing) ---->  STREAM(server)
 
 ```c
 void *stream = zlink_socket(ctx, ZLINK_SOCKET_STREAM);
+zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_RAW;   /* required before bind */
+zlink_set_stream_option(stream, ZLINK_STREAM_OPT_RECV_MODE, &mode, sizeof(mode));
 int linger = 0;
 zlink_set_option(stream, ZLINK_OPT_LINGER, &linger, sizeof(linger));
 zlink_bind(stream, "tcp://0.0.0.0:8080");
 ```
 
-Supported server transports:
+Supported transports (bind and connect):
 - `tcp://`
 - `tls://`
 - `ws://`
@@ -72,18 +76,24 @@ STREAM-specific behavior:
   always fixed 4 bytes (`uint32`, big-endian).
 - To close one client, pass the `source_rid` received from recv
   to `zlink_disconnect_rid()`. STREAM target routing ids must be 4 bytes.
-- Connect/disconnect are **not** in-band data markers. They are reported
-  through the socket monitor as `ZLINK_EVENT_CONNECTION_READY` /
-  `ZLINK_EVENT_DISCONNECTED`, each carrying the 4-byte `routing_id`. A raw
-  payload that happens to be a single `0x00`/`0x01` byte is delivered as
-  ordinary data.
+- With the default `ZLINK_STREAM_OPT_NOTIFY=0`, connect/disconnect are **not**
+  in-band data markers. They are reported through the socket monitor as
+  `ZLINK_EVENT_CONNECTION_READY` / `ZLINK_EVENT_DISCONNECTED`, each carrying
+  the 4-byte `routing_id`. A raw payload that happens to be a single
+  `0x00`/`0x01` byte is delivered as ordinary data. If `ZLINK_STREAM_OPT_NOTIFY`
+  is set to `1` before bind/connect in RAW mode, `zlink_recv_part()` additionally
+  returns a **zero-length record** with the affected `source_rid` for every
+  connect and disconnect, so a zero-length part must then be treated as a
+  notification rather than data.
 
 ---
 
 ## 4. RAW Pull Example
 
-In STREAM RAW mode every pulled part is application data; observe
-connect/disconnect on the socket monitor (see [Monitoring](../spec/core/06-monitoring.en.md)).
+With `ZLINK_STREAM_OPT_NOTIFY=0` (the default), every part pulled in STREAM RAW
+mode is application data; observe connect/disconnect on the socket monitor (see
+[Monitoring](06-monitoring.en.md)). With `NOTIFY=1`, zero-length records arrive
+interleaved as connect/disconnect notifications.
 
 ```c
 zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_RAW;
@@ -173,7 +183,8 @@ boundaries differ from packet boundaries.
 
 ## 5. Client Implementation Rule
 
-Clients must be implemented as raw socket/websocket clients.
+Clients can be raw socket/websocket clients, or another zlink STREAM socket that
+sets a receive mode and calls `zlink_connect()`.
 
 Conceptual POSIX TCP example (RAW mode — no zlink framing, just bytes):
 
@@ -205,7 +216,7 @@ send(fd, body, body_len, 0);
 
 Main supported options:
 - `ZLINK_OPT_MAXMSGSIZE`, `ZLINK_OPT_SNDHWM`, `ZLINK_OPT_RCVHWM`, `ZLINK_OPT_SNDBUF`, `ZLINK_OPT_RCVBUF`, `ZLINK_OPT_BACKLOG`, `ZLINK_OPT_LINGER`
-- `ZLINK_STREAM_OPT_RECV_MODE` (via `zlink_set_stream_option()` / `zlink_get_stream_option()`): select RAW or PACKET before bind
+- `ZLINK_STREAM_OPT_RECV_MODE` (via `zlink_set_stream_option()` / `zlink_get_stream_option()`): select RAW or PACKET before the first bind or connect
 - `ZLINK_STREAM_OPT_NOTIFY`: enable zero-length connect/disconnect records in RAW mode; it cannot be combined with PACKET mode
 - TLS/WSS server: `zlink_set_tls_server()` / TLS client: `zlink_set_tls_client()`
 
@@ -219,17 +230,12 @@ Unsupported/changed:
 
 ### 6.1 Default STREAM runtime profile
 
-Defaults currently used by STREAM internals:
+Defaults a STREAM socket applies to its public options:
 - `ZLINK_OPT_BACKLOG`: `65536`
 - `ZLINK_OPT_SNDHWM` / `ZLINK_OPT_RCVHWM`: STREAM profile byte value from the default balanced auto-HWM policy, or the manual byte default if context auto-HWM is disabled
 - `ZLINK_OPT_SNDBUF` / `ZLINK_OPT_RCVBUF`: default `-1`, leaving OS buffer defaults and TCP autotuning in control
-- STREAM batch size default: `4096`
-- STREAM read headroom default: `64`
-- STREAM accept concurrency default: `4` (clamped to max `128`)
-- STREAM session scheduling default: `rr`
 
-> STREAM runtime environment variables and internal tuning constants
-> are documented in [STREAM internals](../spec/core/socket/08-stream.en.md).
+> The exact contract of each option is owned by the [STREAM socket spec](../spec/core/socket/08-stream.en.md).
 
 ---
 

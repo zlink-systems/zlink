@@ -379,11 +379,11 @@ memcpy(zlink_msg_data(&part), "sunny", 5);
 zlink_publish_part(pub, "weather", &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);  /* OK */
 
 /* PUB 에서 zlink_send_part() → ZLINK_SUBMIT_NOT_SUPPORTED 반환 */
-zlink_send_part(pub, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(pub, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 /* SUB: zlink_subscribe_part() 로만 수신. send/publish 불가 */
 zlink_publish_part(sub, "weather", &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);  /* ZLINK_SUBMIT_NOT_SUPPORTED */
-zlink_send_part(sub, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);                /* ZLINK_SUBMIT_NOT_SUPPORTED */
+zlink_send_part(sub, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);                /* ZLINK_SUBMIT_NOT_SUPPORTED */
 ```
 
 ---
@@ -525,15 +525,17 @@ zlink_recv_result_t rc = zlink_xpub_recv_part(
 | 옵션 | 타입 | 기본값 | 설명 |
 |------|------|--------|------|
 | `ZLINK_PUB_OPT_MANUAL` | int | 0 | 수동 구독 관리 모드 활성화 |
-| `ZLINK_PUB_OPT_VERBOSE` | int | 0 | 중복 구독 메시지도 전달 |
-| `zlink_set_subscription()` | -- | -- | (MANUAL 모드) 현재 파이프에 구독 추가 |
-| `zlink_unset_subscription()` | -- | -- | (MANUAL 모드) 현재 파이프에서 구독 해제 |
+| `ZLINK_PUB_OPT_VERBOSE` | int | 0 | 이미 구독 중인 topic의 중복 subscribe도 event로 공개 |
+| `ZLINK_PUB_OPT_APPROVE_SUBSCRIBE` | binary | -- | (MANUAL 모드) 가장 최근에 꺼낸 구독 event의 pipe에 topic 구독을 승인 |
+| `ZLINK_PUB_OPT_REJECT_SUBSCRIBE` | binary | -- | (MANUAL 모드) 가장 최근에 꺼낸 구독 event의 pipe에서 topic 구독을 거부 |
 
 ### XPUB_MANUAL 모드
 
 기본적으로 XPUB는 SUB의 구독을 자동 처리한다.
-MANUAL 모드에서는 구독 프레임을 받은 뒤 애플리케이션이 직접
-`zlink_set_subscription()` / `zlink_unset_subscription()`로 실제 구독을 결정한다.
+MANUAL 모드에서는 `zlink_xpub_recv_part()`로 구독 event를 받은 뒤 애플리케이션이
+`zlink_set_pub_option()`의 `ZLINK_PUB_OPT_APPROVE_SUBSCRIBE` / `ZLINK_PUB_OPT_REJECT_SUBSCRIBE`로
+실제 구독을 결정한다. `zlink_set_subscription()` / `zlink_unset_subscription()`은 SUB·XSUB 전용이라
+XPUB handle에서는 `ZLINK_CONFIG_INVALID_ARGUMENT`로 실패한다.
 
 ```c
 /* Enable MANUAL mode */
@@ -541,8 +543,10 @@ int manual = 1;
 zlink_set_pub_option(xpub, ZLINK_PUB_OPT_MANUAL, &manual, sizeof(manual));
 
 /* zlink_xpub_recv_part() returns subscribed=1, topic="A"
-   Then apply transformed subscription: */
-zlink_set_subscription(xpub, "XA");
+   Then approve a transformed subscription for that subscriber's pipe: */
+const char mapped_topic[] = "XA";
+zlink_set_pub_option(xpub, ZLINK_PUB_OPT_APPROVE_SUBSCRIBE,
+                     mapped_topic, sizeof(mapped_topic) - 1);
 
 /* Publish */
 zlink_msg_t msg_a;
@@ -592,19 +596,20 @@ for (;;) {
     size_t topic_len = 0;
 
     zlink_recv_result_t rc = zlink_xpub_recv_part(
-      xpub, &source_rid, &subscribed, topic, sizeof(topic), &topic_len, ZLINK_RECV_FLAGS_NONE);
+      xpub, &source_rid, &subscribed, topic, sizeof(topic) - 1, &topic_len, ZLINK_RECV_FLAGS_NONE);
     if (rc != ZLINK_RECV_OK)
         break;
+    topic[topic_len] = '\0';   /* topic은 binary-safe라 NUL이 없다 — set_subscription은 C 문자열을 받는다 */
 
     if (subscribed) {
-        /* Register subscription */
-        zlink_set_subscription(xpub, topic);
+        /* Approve the subscription for the pipe of the event just dequeued */
+        zlink_set_pub_option(xpub, ZLINK_PUB_OPT_APPROVE_SUBSCRIBE, topic, topic_len);
 
         /* Propagate subscription upstream (XSUB) */
         zlink_set_subscription(xsub, topic);
     } else {
-        /* Unsubscription */
-        zlink_unset_subscription(xpub, topic);
+        /* Reject (remove) the subscription for that pipe */
+        zlink_set_pub_option(xpub, ZLINK_PUB_OPT_REJECT_SUBSCRIBE, topic, topic_len);
 
         zlink_unset_subscription(xsub, topic);
     }
@@ -666,7 +671,7 @@ msleep(100);  /* wait for subscription propagation */
 
 ### XPUB MANUAL 모드에서 구독 관리
 
-MANUAL 모드에서 구독 프레임을 받은 뒤 `zlink_set_subscription()`를 호출하지 않으면 그 구독은 등록되지 않는다. 반드시 명시적으로 구독을 처리해야 한다.
+MANUAL 모드에서 구독 event를 받은 뒤 `ZLINK_PUB_OPT_APPROVE_SUBSCRIBE`를 적용하지 않으면 그 구독은 등록되지 않는다. 반드시 명시적으로 구독을 처리해야 한다.
 
 ### 다중 구독자 → 단일 XPUB
 

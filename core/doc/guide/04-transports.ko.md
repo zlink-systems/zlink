@@ -27,16 +27,18 @@ title: "Transport 가이드"
 
 | Transport | PAIR | PUB/SUB | DEALER | ROUTER | STREAM |
 |-----------|:----:|:-------:|:------:|:------:|:------:|
-| tcp       |  O   |    O    |   O    |   O    | O (bind) |
-| ipc       |  O   |    O    |   O    |   O    | O (bind) |
-| inproc    |  O   |    O    |   O    |   O    |   -    |
-| tls       |  O   |    O    |   O    |   O    | O (bind) |
-| ws        |  O   |    O    |   O    |   O    | O (bind) |
-| wss       |  O   |    O    |   O    |   O    | O (bind) |
+| tcp       |  O   |    O    |   O    |   O    |   O    |
+| ipc       |  O   |    O    |   O    |   O    |   O    |
+| inproc    |  O   |    O    |   O    |   O    |   O    |
+| tls       |  O   |    O    |   O    |   O    |   O    |
+| ws        |  O   |    O    |   O    |   O    |   O    |
+| wss       |  O   |    O    |   O    |   O    |   O    |
 
-- STREAM은 **bind만** 지원하며, 클라이언트는 raw socket/websocket으로 구현한다.
-- STREAM은 inproc을 지원하지 않는다(ipc는 bind만 지원).
-- `tls`/`ws`/`wss`는 빌드 옵션에 따라 제공되며, `zlink_has("tls"|"ws"|"wss")`로 확인할 수 있다.
+- STREAM은 첫 bind 또는 connect 전에 `ZLINK_STREAM_OPT_RECV_MODE`를 RAW 또는 PACKET으로 설정한
+  뒤 bind와 connect를 모두 사용할 수 있다. 반대편은 raw socket/websocket client이거나 다른 STREAM
+  socket이다.
+- `ws`는 모든 zlink build에서 제공한다. `tls`는 `WITH_TLS` build 옵션에 따라 제공하며, `wss`는 TLS를
+  켠 build에서 제공한다. `zlink_has("tls")`·`zlink_has("wss")`로 지원 여부를 확인한다.
 
 ## 2. TCP
 
@@ -158,7 +160,7 @@ if (rc == ZLINK_BIND_INTERNAL_ERROR) {
 
 ### 특성
 
-- **Linux/macOS에서만 지원** (Windows 미지원)
+- **Windows를 제외한 platform에서 지원** (`ZLINK_HAVE_IPC` build)
 - TCP 대비 낮은 오버헤드 (네트워크 스택 우회)
 - 파일 경로 기반 주소 (경로는 플랫폼 sun_path 한계보다 짧아야 함)
 
@@ -169,25 +171,24 @@ if (rc == ZLINK_BIND_INTERNAL_ERROR) {
 ### 기본 사용법
 
 ```c
-/* bind must be called first */
+/* bind와 connect 순서는 제한하지 않는다 */
 zlink_bind(socket_a, "inproc://workers");
 zlink_connect(socket_b, "inproc://workers");
 ```
 
-### 에러 처리
+### connect가 먼저인 경우
 
 ```c
-/* bind 없이 connect 시도 */
-zlink_connect_result_t rc = zlink_connect(socket, "inproc://nonexistent");
-if (rc != ZLINK_CONNECT_OK) {
-    printf("No bind exists yet\n");
-}
+/* 아직 bind되지 않은 endpoint에 connect — 성공하며 Core가 endpoint를 보류한다 */
+zlink_connect_result_t rc = zlink_connect(socket_b, "inproc://workers");
+/* 같은 context에서 bind가 뒤에 오면 그때 연결된다 */
+zlink_bind(socket_a, "inproc://workers");
 ```
 
 ### 특성
 
 - **동일 context 내에서만** 사용 가능
-- **bind가 connect보다 먼저** 호출되어야 함
+- bind와 connect 순서는 제한하지 않음 — connect가 먼저면 Core가 보류했다가 같은 context의 bind와 연결
 - 잠금 없는(lock-free) 파이프 직접 연결 (네트워크 없음)
 - 가장 낮은 지연시간, 가장 높은 처리량
 
@@ -269,9 +270,9 @@ zlink_connect(socket, "tls://server:5555");
 
 | 제약 | 설명 |
 |------|------|
-| STREAM | bind만 지원, inproc 미지원(ipc는 bind만) |
-| inproc | bind가 connect보다 먼저 호출 필요 |
-| ipc | Unix/Linux/macOS만 지원 (Windows 미지원) |
+| STREAM | 첫 bind/connect 전에 `ZLINK_STREAM_OPT_RECV_MODE` 설정 필요; bind·connect 모두 지원 |
+| inproc | bind와 connect 순서 제한 없음 (connect가 먼저면 보류 뒤 bind와 연결) |
+| ipc | Windows를 제외한 platform에서 지원 |
 | inproc context | 동일 context 내에서만 사용 |
 | IPC 경로 | Unix 도메인 소켓 경로는 플랫폼 sun_path 한계보다 짧아야 함 |
 

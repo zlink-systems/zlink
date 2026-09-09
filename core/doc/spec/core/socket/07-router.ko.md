@@ -61,7 +61,7 @@ ID를 섞을 수 없다. 다른 thread의 sequence는 독립이며 서로 다른
 보관해야 한다.
 
 각 send helper family는 성공한 중간 part를 `ZLINK_PART_FINAL`이 성공할 때까지 하나의 record로
-staging한다. 열린 sequence의 중간 또는 마지막 submit이 실패하면 Core는 이전에 staging한 part와
+임시로 보관한다. 열린 sequence의 중간 또는 마지막 submit이 실패하면 Core는 이전에 임시로 보관한 part와
 실패한 part를 원자적으로 폐기하고 sequence를 닫는다. peer에는 그 record의 어떤 part도 보이지
 않는다. 실패한 호출의 `part_`도 소비되며 다음 submit은 새 record의 첫 part로 시작한다. 실패한
 request submit은 ID `0`이고 completion과 context echo를 만들지 않는다. Reply sequence가 실패해도
@@ -117,8 +117,11 @@ ZLINK_EXPORT zlink_config_result_t zlink_get_router_option(
 
 - `ZLINK_ROUTER_OPT_MANDATORY`가 양수이면 연결된 pipe가 없는 routing ID의 directed submit을
   `ZLINK_SUBMIT_NOT_CONNECTED`로 실패시킨다. 그때 route가 전혀 없는 routing ID의 `DONTWAIT FINAL`은
-  즉시 `ZLINK_SUBMIT_NOT_CONNECTED`이며 wait token을 만들지 않는다. option이 `0`이면 기존대로 record를
+  즉시 `ZLINK_SUBMIT_NOT_CONNECTED`이며 wait token을 만들지 않는다. option이 `0`이면 record를
   조용히 버리고 `ZLINK_SUBMIT_OK`, ID `0`이다.
+- `ZLINK_ROUTER_OPT_PROBE`는 ROUTER handle뿐 아니라 DEALER handle에서도 `zlink_set_router_option()`과
+  `zlink_get_router_option()`으로 설정·조회할 수 있다. DEALER handle에 다른 `zlink_router_option_t` 값을
+  넘기면 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`이다.
 - `ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID`는 다음 `zlink_connect()`로 만든 pipe를 식별할 local
   alias를 설정하며, 각 connect 전에 설정한다.
 
@@ -175,7 +178,7 @@ ZLINK_EXPORT zlink_submit_result_t zlink_send_part_rid(
 않았으면(transport pair 미준비, weight `0`) `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID에
 묶인 nonzero wait token을 반환하며 payload는 유지하지 않는다. `target_rid_`에 route가 전혀
 없으면 `ZLINK_ROUTER_OPT_MANDATORY`가 양수일 때(기본값) 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`이고 token을
-만들지 않는다(option이 `0`이면 기존대로 조용히 버리고 ID `0`). 같은 RID에 write credit이 생기면(peer drain, reconnect·route 채택·standby 승격,
+만들지 않는다(option이 `0`이면 조용히 버리고 ID `0`). 같은 RID에 write credit이 생기면(peer drain, reconnect·route 채택·standby 승격,
 weight `0`→양수) Core는 그 token의 `ZLINK_COMPLETION_WRITABLE` record를 정확히 하나 만들며
 `send_result == ZLINK_SEND_ADMITTED`, `peer_rid`는 제출한 RID다. 다른 RID의 credit은 이 token을
 깨우지 않는다. 호출자는 보관한 record를 같은 RID에 `DONTWAIT`로 다시 제출한다.
@@ -456,7 +459,7 @@ test 하나로 이어진다.
 **Directed submit**
 - `zlink_send_part_rid()`의 `NONE FINAL`은 `SNDTIMEO` 안에서 같은 logical RID의 local admission을 기다리고 ID `0`과 completion 없음으로 끝난다.
 - `DONTWAIT FINAL`이 즉시 admission되면 ID `0`과 completion 없음이다. HWM·credit 또는 준비되지 않은 route 때문에 거절되면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID의 nonzero wait token이며 payload는 유지되지 않는다.
-- route가 없는 RID의 `DONTWAIT FINAL`은 `ZLINK_ROUTER_OPT_MANDATORY`가 양수일 때 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`, ID `0`이고 token이 없다. option이 `0`이면 기존대로 조용히 버리고 `ZLINK_SUBMIT_OK`, ID `0`이다.
+- route가 없는 RID의 `DONTWAIT FINAL`은 `ZLINK_ROUTER_OPT_MANDATORY`가 양수일 때 즉시 `ZLINK_SUBMIT_NOT_CONNECTED`, ID `0`이고 token이 없다. option이 `0`이면 조용히 버리고 `ZLINK_SUBMIT_OK`, ID `0`이다.
 - 같은 RID에 write credit이 생기면 그 token의 `ZLINK_COMPLETION_WRITABLE` record(`ZLINK_SEND_ADMITTED`, `peer_rid`는 제출한 RID)를 정확히 한 번 반환하고 다른 RID의 credit은 이 token을 깨우지 않는다. 읽기 전까지 `ZLINK_POLLOUT`이 level로 유지된다.
 - `zlink_disconnect_rid()`로 RID를 제거하면 그 RID의 token은 `ZLINK_SEND_TERMINAL`+`ENOENT`인 WRITABLE record로 끝난다.
 - Wait token은 같은 logical RID에만 묶이고 reconnect 뒤 그 RID의 pipe attach가 WRITABLE record를 발행하며, ID `0` 뒤에는 payload를 replay하지 않는다.

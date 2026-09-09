@@ -20,9 +20,9 @@ const { RESPONSE_ENVELOPE, ROUTING_IDS, encodeBenchPayload, decodeBenchPayloadBo
   require('../shared/raw-wire');
 
 const argv = process.argv.slice(2);
-const endpoint = argValue(argv, '--endpoint', 'tcp://127.0.0.1:5085');
-const commandEndpoint = argValue(argv, '--command-endpoint', 'tcp://127.0.0.1:5087');
-const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5086');
+const endpoint = argValue(argv, '--endpoint', 'tcp://127.0.0.1:5227');
+const commandEndpoint = argValue(argv, '--command-endpoint', 'tcp://127.0.0.1:5228');
+const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5229');
 const batch = argInt(argv, '--recv-batch', 256);
 
 const metrics = new BenchServerMetrics();
@@ -78,6 +78,7 @@ function pumpRequests() {
       const part = bodyPart(requestReceived);
       const body = part === null ? null : decodeBenchPayloadBody(part.data());
       if (body === null) throw new Error('invalid raw protobuf payload');
+      metrics.record(body);
       const reply = encodeBenchPayload(body);
       const operation = requestReceived.replyToken !== null
         ? requestReceived.reply()

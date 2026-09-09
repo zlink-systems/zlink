@@ -54,9 +54,9 @@ add_custom_command(
 # --- the C++ binding under test ---------------------------------------------
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.17.3" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.17.6" CACHE STRING
   "Exact local zlink_cpp package version consumed by this bench")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "0.17.3" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "0.17.5" CACHE STRING
   "Exact local zlink Core package version consumed by zlink_cpp")
 if(NOT ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT)
   set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "${BENCH_REPO_ROOT}/.artifacts/wsl")
@@ -72,10 +72,32 @@ list(PREPEND CMAKE_PREFIX_PATH
   "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}")
 find_package(zlink_cpp ${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION} EXACT CONFIG REQUIRED)
 
+# Consume the repository Framework through its own public CMake targets.
+foreach(option_name IN ITEMS ZLINK_FRAMEWORK_CPP_BUILD_TESTS
+    ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES
+    ZLINK_FRAMEWORK_CPP_BUILD_E2E ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE
+    ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT ZLINK_STREAM_CONNECTOR_BUILD_UNREAL
+    ZLINK_STREAM_CONNECTOR_BUILD_GODOT ZLINK_STREAM_CONNECTOR_BUILD_AXMOL
+    ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
+  set(${option_name} OFF CACHE BOOL "Bench builds only its required libraries" FORCE)
+endforeach()
+add_subdirectory("${BENCH_REPO_ROOT}/framework/languages/cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/framework" EXCLUDE_FROM_ALL)
+
+file(STRINGS "${BENCH_REPO_ROOT}/FRAMEWORK_VERSION" BENCH_FRAMEWORK_VERSION LIMIT_COUNT 1)
+string(REGEX REPLACE "^[^=]*=" "" BENCH_FRAMEWORK_VERSION "${BENCH_FRAMEWORK_VERSION}")
+
 set(BENCH_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/common")
 
 function(bench_target name)
   target_include_directories(${name} PRIVATE ${BENCH_COMMON_DIR})
+  target_link_libraries(${name} PRIVATE zlink::framework)
+  target_compile_definitions(${name} PRIVATE
+    BENCH_FRAMEWORK_VERSION="${BENCH_FRAMEWORK_VERSION}"
+    BENCH_BINDING_VERSION="${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION}"
+    BENCH_CORE_VERSION="${ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION}"
+    BENCH_GRPC_VERSION="${BENCH_GRPCPP_VERSION}"
+    BENCH_PROTOBUF_VERSION="${BENCH_PROTOBUF_VERSION}")
   target_compile_options(${name} PRIVATE -O3)
   set_target_properties(${name} PROPERTIES
     BUILD_RPATH "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib")
@@ -105,3 +127,9 @@ add_executable(bench_cpp_client client/bench_cpp_client.cpp ${BENCH_PROTO_CC} ${
 target_link_libraries(bench_cpp_client PRIVATE zlink::cpp Threads::Threads)
 bench_target(bench_cpp_client)
 bench_grpc_target(bench_cpp_client)
+
+add_executable(bench_cpp_framework_server framework/bench_framework_cpp_server.cpp ${BENCH_PROTO_CC})
+target_include_directories(bench_cpp_framework_server PRIVATE ${BENCH_PROTO_GEN_DIR})
+target_link_libraries(bench_cpp_framework_server PRIVATE zlink::framework_codec_protobuf)
+bench_target(bench_cpp_framework_server)
+target_link_libraries(bench_cpp_client PRIVATE zlink::framework_codec_protobuf)

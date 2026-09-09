@@ -3,7 +3,7 @@ title: "Core 성능"
 ---
 
 <!-- zlink-nav:start -->
-[가이드 목록](README.ko.md) | [이전: Raw socket monitoring](../spec/core/06-monitoring.ko.md) | [다음: Core C API](02-core-api.ko.md)
+[가이드 목록](README.ko.md) | [이전: Monitoring](06-monitoring.ko.md) | [다음: Core C API](02-core-api.ko.md)
 <!-- zlink-nav:end -->
 
 # Core 성능
@@ -11,7 +11,7 @@ title: "Core 성능"
 > **이 장이 답하는 것** — 처리량과 지연에 영향을 주는 설정과 측정 방법을 정리한다.
 
 Socket option을 바꾸기 전에 application 전체 경로를 측정한다. Message size, connection 수,
-queue depth, transport, TLS와 callback 작업이 throughput과 latency에 영향을 준다.
+queue depth, transport와 TLS가 throughput과 latency에 영향을 준다.
 
 ## Backpressure와 HWM
 

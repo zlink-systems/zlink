@@ -252,8 +252,8 @@ socket으로 확인되지 않는 경우다. 어느 쪽도 state를 일부만 적
 
 ```c
 #define ZLINK_VERSION_MAJOR 0
-#define ZLINK_VERSION_MINOR 13
-#define ZLINK_VERSION_PATCH 0
+#define ZLINK_VERSION_MINOR 17
+#define ZLINK_VERSION_PATCH 5
 
 #define ZLINK_MAKE_VERSION(major, minor, patch) \
   ((major) * 10000 + (minor) * 100 + (patch))
@@ -291,10 +291,12 @@ errno 값에 대한 설명 문자열을 반환한다.
 ZLINK_EXPORT const char *zlink_strerror(int errnum);
 ```
 
-반환한 pointer는 caller가 해제하거나 수정하지 않는다. zlink 확장 errno는 library 내부 상수
-문자열을, 그 밖의 errno는 platform libc `strerror` 결과를 가리키므로, pointer가 이후 호출과
-locale 변경에도 유효하다고 가정하지 않는다. 반환 문자열을 보관해야 하면 즉시 복사하는 것을
-권장한다.
+반환한 pointer는 caller가 해제하거나 수정하지 않는다. `EFSM`, `ENOCOMPATPROTO`, `ETERM`,
+`EMTHREAD`, `EHOSTUNREACH`, `ESTALE`은 library 내부 상수 문자열을 반환하고, Windows에서는
+`ENOTSUP`, `EPROTONOSUPPORT`, `ENOBUFS`, `ENETDOWN`, `EADDRINUSE`, `EADDRNOTAVAIL`,
+`ECONNREFUSED`, `EINPROGRESS`도 내부 상수 문자열이다. 그 밖의 값은 zlink 확장 영역이라도
+platform libc `strerror` 결과를 그대로 가리키므로, pointer가 이후 호출과 locale 변경에도
+유효하다고 가정하지 않는다. 반환 문자열을 보관해야 하면 즉시 복사하는 것을 권장한다.
 
 **반환값:** `errnum`에 대한 설명 문자열 pointer. 해제·수정 금지, 수명 보장은 위 본문을 따른다.
 
@@ -343,11 +345,11 @@ transport·internal failure 순서로 하나를 반환한다. 성공한 함수�
 | `ZLINK_SUBMIT_TERMINATED` | `ETERM`, `ESHUTDOWN` | Context 또는 socket lifecycle 종료 |
 | `ZLINK_SUBMIT_INVALID_HANDLE` | `EFAULT` | handle이 `NULL`이거나 종류가 다름 |
 | `ZLINK_SUBMIT_INVALID_ARGUMENT` | `EINVAL`, `EMSGSIZE` | 잘못된 pointer, count, metadata 또는 flags |
-| `ZLINK_SUBMIT_NOT_SUPPORTED` | `ENOTSUP` | handle에서 지원하지 않는 operation |
-| `ZLINK_SUBMIT_INVALID_STATE` | `EBUSY`, `ESTALE`, `EALREADY` | socket lifecycle 또는 request state 오류 |
+| `ZLINK_SUBMIT_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | handle에서 지원하지 않는 operation |
+| `ZLINK_SUBMIT_INVALID_STATE` | `EFSM`, `EBUSY`, `ESTALE`, `EALREADY` | socket lifecycle 또는 request state 오류 |
 | `ZLINK_SUBMIT_THREAD_VIOLATION` | `EDEADLK`, `EPERM`, `EMTHREAD` | 금지한 재진입 또는 thread 사용 |
 | `ZLINK_SUBMIT_OUT_OF_MEMORY` | `ENOMEM` | 필요한 storage 확보 실패 |
-| `ZLINK_SUBMIT_SEQ_EXHAUSTED` | `EOVERFLOW` | operation sequence 공간 소진 |
+| `ZLINK_SUBMIT_SEQ_EXHAUSTED` | `EOVERFLOW`, request submit 경로의 `EBUSY` | operation sequence 공간 소진 |
 | `ZLINK_SUBMIT_INTERNAL_ERROR` | 보존된 errno | 다른 공개 분류가 없는 내부 실패 |
 
 각 socket 문서가 input ownership과 socket별 세부 조건을 정의한다.
@@ -362,7 +364,7 @@ transport·internal failure 순서로 하나를 반환한다. 성공한 함수�
 | `ZLINK_REQUEST_TERMINATED` | `ETERM`, `ESHUTDOWN` | owner lifecycle 종료 |
 | `ZLINK_REQUEST_PROTOCOL_ERROR` | `EPROTO`, `ENOCOMPATPROTO` | malformed 또는 호환되지 않는 reply |
 | `ZLINK_REQUEST_INTERNAL_ERROR` | 보존된 errno | 다른 terminal 분류가 없는 내부 실패 |
-| `ZLINK_REQUEST_REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED` | peer 또는 admission 거절 |
+| `ZLINK_REQUEST_REJECTED` | `EACCES`, `ECONNREFUSED`, `ECANCELED`, `EPROTOTYPE` | peer, admission 또는 peer socket type 거절 |
 | `ZLINK_REQUEST_CONFLICT` | `EEXIST`, `ESTALE` | request correlation 충돌(`EEXIST`) 또는 transport pair [generation](glossary.ko.md#generation) 불일치(`ESTALE`) |
 | `ZLINK_REQUEST_BUSY` | `EBUSY` | active request lifecycle 존재 |
 | `ZLINK_REQUEST_NOT_CONNECTED` | `ENOTCONN`, `EHOSTUNREACH` | terminal route 단절 |
@@ -383,7 +385,7 @@ Request submit 성공 뒤에는 nonzero completion ID마다 terminal result를 �
 | `ZLINK_RECV_BUSY` | `EBUSY` | 다른 receive mode 사용 중, 또는 열린 multipart receive의 owner thread·family가 아닌 호출 |
 | `ZLINK_RECV_TERMINATED` | `ETERM` | Context 종료 |
 | `ZLINK_RECV_INVALID_HANDLE` | `EFAULT` | handle 또는 필수 output pointer가 유효하지 않음 |
-| `ZLINK_RECV_NOT_SUPPORTED` | `ENOTSUP` | handle이 해당 receive를 지원하지 않음 |
+| `ZLINK_RECV_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | handle이 해당 receive를 지원하지 않음 |
 | `ZLINK_RECV_INTERNAL_ERROR` | 보존된 errno | 다른 공개 분류가 없는 내부 실패 |
 | `ZLINK_RECV_BUFFER_TOO_SMALL` | `ENOBUFS` | caller output capacity 부족 |
 | `ZLINK_RECV_INVALID_STATE` | `EINVAL`, `ESTALE`, `ESHUTDOWN` | receive lifecycle state 오류 |
@@ -397,7 +399,7 @@ Raw subscription과 XPUB의 `BUFFER_TOO_SMALL`에서는 필요한 topic 길이�
 |---|---|---|
 | `ZLINK_HANDLER_INVALID_ARGUMENT` | `EINVAL` | handler 인자가 잘못됨 |
 | `ZLINK_HANDLER_BUSY` | `EBUSY` | 배타적인 handler 상태가 이미 존재함 |
-| `ZLINK_HANDLER_NOT_SUPPORTED` | `ENOTSUP` | handle에서 handler operation을 지원하지 않음 |
+| `ZLINK_HANDLER_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | handle에서 handler operation을 지원하지 않음 |
 | `ZLINK_HANDLER_DEADLOCK` | `EDEADLK` | 금지한 handler 재진입 |
 | `ZLINK_HANDLER_INVALID_HANDLE` | `EFAULT` | handle이 유효하지 않음 |
 | `ZLINK_HANDLER_INTERNAL_ERROR` | 보존된 errno | 다른 공개 분류가 없는 내부 실패 |
@@ -412,11 +414,11 @@ Raw subscription과 XPUB의 `BUFFER_TOO_SMALL`에서는 필요한 topic 길이�
 |---|---|---|
 | `ZLINK_BIND_INVALID_ARGUMENT` | `EINVAL` | endpoint가 잘못됨 |
 | `ZLINK_BIND_ADDR_IN_USE` | `EADDRINUSE` | endpoint가 이미 사용 중 |
-| `ZLINK_BIND_NOT_SUPPORTED` | `ENOTSUP`, `EPROTONOSUPPORT` | transport 미지원 |
+| `ZLINK_BIND_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP`, `EPROTONOSUPPORT` | transport 미지원 |
 | `ZLINK_BIND_INVALID_HANDLE` | `EFAULT` | handle이 유효하지 않음 |
 | `ZLINK_BIND_INTERNAL_ERROR` | 보존된 errno | 다른 공개 분류가 없는 bind 실패 |
 | `ZLINK_CONNECT_INVALID_ARGUMENT` | `EINVAL` | endpoint 또는 expected RID가 잘못됨 |
-| `ZLINK_CONNECT_NOT_SUPPORTED` | `ENOTSUP`, `EPROTONOSUPPORT` | transport 또는 operation 미지원 |
+| `ZLINK_CONNECT_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP`, `EPROTONOSUPPORT` | transport 또는 operation 미지원 |
 | `ZLINK_CONNECT_INVALID_HANDLE` | `EFAULT` | handle이 유효하지 않음 |
 | `ZLINK_CONNECT_INTERNAL_ERROR` | 보존된 errno | 다른 공개 분류가 없는 connect 실패 |
 | `ZLINK_CONNECT_NOT_FOUND` | `ENOENT` | connection intent가 없음 |
@@ -430,7 +432,7 @@ Raw subscription과 XPUB의 `BUFFER_TOO_SMALL`에서는 필요한 topic 길이�
 |---|---|---|
 | `ZLINK_CONFIG_INVALID_HANDLE` | `EFAULT` | handle 또는 output pointer가 유효하지 않음 |
 | `ZLINK_CONFIG_INVALID_ARGUMENT` | `EINVAL`, `EMSGSIZE` | option, size, name 또는 value가 잘못됨 |
-| `ZLINK_CONFIG_NOT_SUPPORTED` | `ENOTSUP` | handle과 option 조합 미지원 |
+| `ZLINK_CONFIG_NOT_SUPPORTED` | `ENOTSUP`, `EOPNOTSUPP` | handle과 option 조합 미지원 |
 | `ZLINK_CONFIG_INTERNAL_ERROR` | 보존된 errno | 다른 공개 분류가 없는 내부 실패 |
 | `ZLINK_CONFIG_INVALID_STATE` | `EBUSY`, `ESTALE`, `EALREADY`, `ESHUTDOWN`, `ENOTCONN`, `ETIMEDOUT`, `EPROTO` | socket lifecycle 또는 terminal state가 변경을 거부함 |
 | `ZLINK_CONFIG_NOT_FOUND` | `ENOENT` | local query target 없음 |
@@ -448,8 +450,9 @@ Raw subscription과 XPUB의 `BUFFER_TOO_SMALL`에서는 필요한 topic 길이�
 ### Layers
 
 - 내부 실행 경로는 계속 `int errno`를 사용한다.
-- 공개 C API는 실패를 **함수 범주별 8개 typed result enum**으로 정규화한다. 정확한 enum은
-  함수 범주에 따라 달라진다.
+- 공개 C API는 함수 반환 실패를 **함수 범주별 8개 typed result enum**으로 정규화한다. 정확한 enum은
+  함수 범주에 따라 달라진다. completion record의 SEND 상태에는 이와 별도인
+  `zlink_send_complete_result_t`(`ZLINK_SEND_ADMITTED = 0`, `ZLINK_SEND_TERMINAL = 202`)를 쓴다.
   - `zlink_submit_result_t` — send / publish / request submit / reply submit
   - `zlink_request_result_t` — request completion record
   - `zlink_recv_result_t` — recv / subscribe / monitor recv / timer recv
@@ -460,8 +463,10 @@ Raw subscription과 XPUB의 `BUFFER_TOO_SMALL`에서는 필요한 topic 길이�
   - `zlink_config_result_t` — option set/get, snapshot, poller mutation,
     message lifecycle, timer config
 - 0이 아닌 result enum 값은 family별 번호 대역(1-13, 101-113, 201-208, 301-306, 401-404, 501-505,
-  601-608, 701-709)을 사용해 서로 겹치지 않으므로, 0이 아닌 `int` 값만으로도 항상
-  출처를 명확히 식별할 수 있다.
+  601-608, 701-709)을 사용해 서로 겹치지 않는다. 단 `zlink_send_complete_result_t`의
+  `ZLINK_SEND_TERMINAL`(202)은 `ZLINK_RECV_BUSY`(202)와 같은 숫자이므로, 0이 아닌 `int` 값만으로
+  출처를 식별하려면 그 값이 함수 반환값인지 completion record의 `send_result`인지를 함께 알아야
+  한다.
 - 정식 enum 목록은 위의 [Result와 errno 대응](#result와-errno-대응) 절을 참조한다.
 - Request completion queue는 내부 errno를 `from_errno` 정규화를 거쳐 `zlink_request_result_t`로 전달하며, 이 completion channel은 계약상
   `zlink_request_result_t`로 정규화되어 있다.
@@ -469,9 +474,9 @@ Raw subscription과 XPUB의 `BUFFER_TOO_SMALL`에서는 필요한 topic 길이�
 코드는 세 파일을 중심으로 구성된다.
 
 - [core/include/zlink_errno.h](https://github.com/zlink-systems/zlink/blob/main/core/include/zlink_errno.h)는
-  공개 확장 errno 값을 정의한다.
-- [core/include/zlink_enum.h](https://github.com/zlink-systems/zlink/blob/main/core/include/zlink_enum.h)는
-  공개 result enum을 정의한다.
+  공개 확장 errno 값과 함수 범주별 result enum 8개를 정의한다.
+- [core/include/zlink/socket/api.h](https://github.com/zlink-systems/zlink/blob/main/core/include/zlink/socket/api.h)는
+  completion record용 `zlink_send_complete_result_t`를 정의한다.
 - [core/src/runtime/core/internal_errno.hpp](https://github.com/zlink-systems/zlink/blob/main/core/src/runtime/core/internal_errno.hpp)는
   정규화 helper가 사용하는 내부 errno catalog를 정의한다.
 

@@ -22,9 +22,9 @@ protocol encoding and decoding, and connection management occur on I/O threads.
 
 Each I/O thread runs a dedicated **asynchronous event loop** that performs the following tasks:
 
-1. Polls the read/write readiness of registered [sockets](../glossary.en.md#socket)
+1. Runs the completion handlers of asynchronous reads and writes submitted to the transports of registered [sockets](../glossary.en.md#socket)
 2. Processes commands received through a mailbox (an inter-thread command delivery channel)
-3. Executes timers
+3. Executes the timers used for engine deadlines
 
 This document describes the observable behavior of I/O thread creation and lifetime, as well as
 the internal implementation of the event loop, command processing, and thread assignment. The
@@ -178,7 +178,7 @@ before increasing the value beyond 4.
 | `core/src/runtime/core/ctx_runtime_resources.cpp` | Thread creation in `start_io_threads_locked()` |
 | `core/src/runtime/engine/asio/asio_poller.hpp/.cpp` | Boost ASIO event loop and socket monitoring |
 | `core/src/runtime/core/poller_base.hpp` | Worker thread base class |
-| `core/src/runtime/core/mailbox.hpp` | Lock-free command queue and signaler |
+| `core/src/runtime/core/mailbox.hpp` | Command queue whose multi-producer insertion is serialized by a mutex, plus the signaler |
 
 ## 6. Implementation and contract-test verification requirements
 
@@ -196,3 +196,7 @@ API).
   `IO/0` … `IO/N-1`.
 - The assignment unit is a connection — several connections of one socket may span several I/O
   threads.
+
+<!-- zlink-nav:start -->
+[Systems Index](README.en.md) | [Previous: Threading Model](02-threading-model.en.md) | [Next: Thread Safety](04-thread-safety.en.md)
+<!-- zlink-nav:end -->

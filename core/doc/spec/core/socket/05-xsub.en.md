@@ -17,9 +17,9 @@ title: "Socket — XSUB"
 XSUB is an extended subscriber [socket](../glossary.en.md#socket) that supports
 subscription forwarding. XSUB supports the same subscribe/unsubscribe and topic
 receive APIs as SUB, but does not filter received messages with its own filter
-matching. A connected XPUB receives XSUB's subscription messages and performs
-upstream filtering. XSUB delivers every message that actually arrives to the
-application.
+matching. A connected PUB or XPUB receives XSUB's subscription messages and
+performs the filtering on the publisher side. XSUB delivers every message that
+actually arrives to the application.
 
 This document defines the public contract for registering, removing, and querying
 subscriptions on XSUB and for receiving topic messages one part at a time. Its
@@ -41,10 +41,13 @@ XSUB subscriptions operate on topic filters.
 1. The application registers a topic filter with
    [`zlink_set_subscription`](#zlink_set_subscription). XSUB increments a
    reference count when the same filter is registered more than once.
-2. The subscription message is forwarded upstream. The publisher-side XPUB is
+2. XSUB updates its local reference count first and then sends the subscribe
+   message to each connected upstream pipe. The publisher-side PUB or XPUB is
    responsible for filtering and selects only messages whose topics match the
-   filter byte prefix. [XPUB](04-xpub.en.md) owns the contract for observing and
-   manually managing subscription events.
+   filter byte prefix. If a pipe cannot accept the write because of `SNDHWM`,
+   the subscribe message for that pipe is dropped while `zlink_set_subscription`
+   still succeeds — that pipe never receives the subscription. [XPUB](04-xpub.en.md)
+   owns the contract for observing and manually managing subscription events.
 3. XSUB does not apply its own filter matching. It delivers every message that
    actually arrives so that the application can receive it one part at a time
    with [`zlink_subscribe_part`](#zlink_subscribe_part).
@@ -202,10 +205,10 @@ The caller must close the received part exactly once with
 
 If `topic_id_capacity_` is smaller than the topic length (a zero-length topic
 succeeds with capacity 0), the function writes the required topic length to `*topic_id_len_out_` and returns
-`ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. It does not consume the queued
-topic or payload, and leaves `part_out_` and every output other than
-`topic_id_len_out_` unchanged. It also does not transfer part ownership, so the
-caller can receive the same message again with a sufficient buffer. If capacity
+`ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. Core keeps that message's topic
+and payload internally, and leaves `part_out_` and every output other than
+`topic_id_len_out_` unchanged. It also does not transfer part ownership; calling
+again with a sufficient buffer returns the same retained message. If capacity
 is greater than zero but `topic_id_buf_` is NULL, the function returns
 `ZLINK_RECV_INVALID_HANDLE` with `EFAULT` before inspecting or consuming the
 queue and leaves every output and `part_out_` unchanged.
@@ -327,10 +330,12 @@ to one unit test.
   on success.
 - If `topic_id_capacity_` is smaller than the topic length (a zero-length topic
   succeeds with capacity 0), the function writes the required topic length to `*topic_id_len_out_` and returns
-  `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. It does not consume the queued
-  topic or payload, leaves `part_out_` and every output other than
-  `topic_id_len_out_` unchanged, and does not transfer part ownership, so the
-  caller can receive the same message again with a sufficient buffer.
+  `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`. Core retains that message's
+  topic and payload internally, leaves `part_out_` and every output other than
+  `topic_id_len_out_` unchanged, and does not transfer part ownership, so
+  calling again with a sufficient buffer receives the same message.
+- A record whose topic frame is not followed by a payload part (the topic frame
+  lacks `MORE`) returns `ZLINK_RECV_INTERNAL_ERROR` with `EPROTO`.
 - If capacity is greater than zero but `topic_id_buf_` is NULL, the function
   returns `ZLINK_RECV_INVALID_HANDLE` with `EFAULT` before inspecting or
   consuming the queue and leaves every output and `part_out_` unchanged.
@@ -349,3 +354,7 @@ to one unit test.
   `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` and does not emit
   `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, or
   `ZLINK_EVENT_FLOW_STATE_STALE`.
+
+<!-- zlink-nav:start -->
+[Socket Index](README.en.md) | [Previous: XPUB](04-xpub.en.md) | [Next: DEALER](06-dealer.en.md)
+<!-- zlink-nav:end -->

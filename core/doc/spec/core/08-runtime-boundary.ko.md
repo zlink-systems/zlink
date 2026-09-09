@@ -49,7 +49,7 @@ Core는 다음 기능을 공개 C ABI로 제공한다.
 - message allocation, ownership, multipart frame과 routing ID
 - PAIR, PUB, SUB, XPUB, XSUB, DEALER, ROUTER와 STREAM raw socket
 - bind, connect, disconnect, endpoint와 connection lifecycle
-- TCP, WebSocket과 TLS transport
+- inproc과 TCP transport, 그리고 build 설정에 따른 IPC, WebSocket, WSS와 TLS transport
 - classic PUB/SUB와 raw STREAM
 - raw socket monitor, generic event, poll과 poller
 - generic timer, thread, stopwatch, atomic counter와 proxy
@@ -63,14 +63,15 @@ Core는 다음 service 개념을 공개 C ABI, 설치 header, exported symbol �
 
 - MeshName, ChannelName membership과 service discovery
 - MeshNode lifecycle, peer admission과 node·channel messaging
-- ready batch, claim, receive batch와 reply token
+- ready batch, claim, receive batch와 service-level reply token (raw ROUTER request/reply의
+  socket-local `zlink_reply_token_t`와 request completion state는 Core가 소유한다)
 - Spot, Actor, Instance Spot activation과 Logical Multicast
 - Actor transfer, bound STREAM session과 service drain
 - MeshNode monitor, service snapshot과 Spot 소유 timer
 
 따라서 Core 설치 tree에는 `zlink/service/*.h`가 없고 root `zlink.h`도 service header를 포함하지 않는다.
 Raw socket에는 ChannelName setter나 getter가 없다. Generic poller는 socket, file descriptor와 generic timer만
-다루며 service owner나 claim을 반환하지 않는다. Socket monitor는 transport와 protocol 상태만 보고한다.
+다루며 service owner나 claim을 반환하지 않는다. Socket monitor는 raw socket·connection의 transport, protocol, queue, Auto HWM과 receive-flow 상태를 event와 status snapshot으로 보고하며, MeshName·ChannelName·service owner·claim·application handler 상태는 보고하지 않는다.
 
 Framework runtime은 언어 binding의 공개 raw socket API만 사용해 service 계약을 구현한다. Framework를 위한
 공통 native service runtime, 별도 Core C SPI, private binding 진입점과 language-neutral service C ABI를 두지
@@ -124,7 +125,7 @@ Core는 accepted service work, handler completion, Actor transfer, checkpoint와
 > [검증 요구](#7-구현-및-contract-test-검증-요구) 절이 소유한다. 이 절은 그 경계를
 > 내부 계층이 실제로 어떻게 나눠 지키는지 설명한다.
 
-Core 0.13.0은 raw socket과 transport만 구현한다. Public API facade는 argument·handle·ownership을 검증하고,
+Core는 raw socket과 transport runtime을 구현한다. Public API facade는 argument·handle·ownership을 검증하고,
 socket semantic 계층은 PAIR·PUB/SUB·DEALER/ROUTER·STREAM의 routing을 결정한다. Runtime core는
 connection, session, pipe와 I/O thread를 관리하며 engine이 TCP·WebSocket·TLS framing을 처리한다.
 
@@ -188,7 +189,7 @@ PAIR queue를 거치지 않는다. REQUEST의 reply payload는 socket-local comp
 
 ### Transport liveness 구현
 
-TCP와 WebSocket engine은 orderly disconnect, read·write failure와 protocol failure를 session에 전달한다. Session은
+TCP, IPC, WebSocket(WSS)과 TLS engine은 orderly disconnect, read·write failure와 protocol failure를 session에 전달한다. Session은
 이를 socket monitor에 보고하고 configured endpoint의 reconnect state를 갱신한다. 운영체제 TCP keepalive와 TCP
 재전송 상한은 transport option으로 적용하며 engine이 별도 application control frame을 만들지 않는다.
 
@@ -224,7 +225,9 @@ Core raw monitor queue와 Framework typed observer queue는 서로 다른 resour
 ### Raw-only 불변 조건
 
 - Core source와 public ABI는 service protocol command와 state machine을 소유하지 않는다.
-- Core는 application mailbox, ready owner, claim, reply token과 terminal request state를 만들지 않는다.
+- Core는 application mailbox, ready owner, claim과 service-level reply token을 만들지 않는다. raw
+  ROUTER request/reply의 socket-local `zlink_reply_token_t`와 request completion state는 이 경계
+  안쪽의 Core 계약이다.
 - Core는 Spot·Actor·Instance identity, generation과 activation barrier를 해석하지 않는다.
 - Core는 Location·Checkpoint Store, lease, owner CAS와 maintenance recovery를 호출하지 않는다.
 - Raw engine timer와 raw monitor는 connection resource다.
@@ -254,7 +257,7 @@ send·receive·monitor 결과)만으로 다음을 확인한다. 각 항목은 �
 - raw socket, generic poller·timer와 socket monitor contract test가 통과한다.
 - Generic poller는 socket, file descriptor와 generic timer만 다루며 service owner나 claim을
   반환하지 않는다.
-- Socket monitor는 transport와 protocol 상태만 보고한다.
+- Socket monitor는 raw socket·connection의 transport, protocol, queue, Auto HWM과 receive-flow 상태를 event와 status snapshot으로 보고하며, MeshName·ChannelName·service owner·claim·application handler 상태는 보고하지 않는다.
 
 **receive-flow 상태**
 - receive-flow 상태의 공개 표면은 `zlink_socket_set_receive_flow_state()`, receive-flow

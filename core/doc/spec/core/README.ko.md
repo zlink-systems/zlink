@@ -99,3 +99,7 @@ wire 프로토콜, event·polling·monitoring과 내부 시스템 구조는 필�
 | Core 내부 코드를 유지보수한다 | [Systems](systems/README.ko.md)부터 순서대로 |
 | 스펙·header·test를 함께 바꾼다 | [Public Contract Governance](00-public-contract-governance.ko.md) |
 | Core 위에 상위 계층을 얹는 경계를 확인한다 | [Runtime Boundary](08-runtime-boundary.ko.md) |
+
+<!-- zlink-nav:start -->
+[스펙 목차](../README.ko.md) | [다음: Public Contract Governance](00-public-contract-governance.ko.md)
+<!-- zlink-nav:end -->

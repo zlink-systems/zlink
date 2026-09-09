@@ -23,11 +23,11 @@
 namespace
 {
 std::unique_ptr<grpc::Server> g_server;
+std::atomic<bool> g_stop {false};
 
 void on_signal (int)
 {
-    if (g_server)
-        g_server->Shutdown ();
+    g_stop.store (true);
 }
 
 class bench_service_t final : public zlink::framework::bench::withgrpc::BenchService::Service
@@ -60,11 +60,9 @@ class bench_service_t final : public zlink::framework::bench::withgrpc::BenchSer
 int main (int argc, char **argv)
 {
     using namespace zlink_cpp_bench;
-    std::signal (SIGINT, on_signal);
-    std::signal (SIGTERM, on_signal);
 
-    const std::string endpoint = arg_value (argc, argv, "--endpoint", "127.0.0.1:5111");
-    const int stats_port = std::atoi (arg_value (argc, argv, "--stats-port", "5114").c_str ());
+    const std::string endpoint = arg_value (argc, argv, "--endpoint", "127.0.0.1:5282");
+    const int stats_port = std::atoi (arg_value (argc, argv, "--stats-port", "5283").c_str ());
 
     server_metrics_t metrics;
     stats_http_server_t stats (metrics, stats_port);
@@ -73,6 +71,8 @@ int main (int argc, char **argv)
         return 2;
     }
 
+    std::signal (SIGINT, on_signal);
+    std::signal (SIGTERM, on_signal);
     bench_service_t service (metrics);
     grpc::ServerBuilder builder;
     builder.AddListeningPort (endpoint, grpc::InsecureServerCredentials ());
@@ -85,6 +85,8 @@ int main (int argc, char **argv)
     std::fprintf (stderr, "grpc-cpp server: endpoint=%s stats=%d grpc=%s\n", endpoint.c_str (),
                   stats_port, grpc::Version ().c_str ());
     std::fflush (stderr);
-    g_server->Wait ();
+    while (!g_stop.load ())
+        std::this_thread::sleep_for (std::chrono::milliseconds (100));
+    g_server->Shutdown ();
     return 0;
 }

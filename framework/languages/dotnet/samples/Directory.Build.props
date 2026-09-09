@@ -8,7 +8,7 @@
     <ZLinkSampleRepositoryDetected Condition="'$(ZLinkSampleRepositoryDetected)' == ''">false</ZLinkSampleRepositoryDetected>
     <ZLinkSampleFrameworkVersionFile Condition="'$(ZLinkSampleRepositoryDetected)' == 'true'">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../../FRAMEWORK_VERSION'))</ZLinkSampleFrameworkVersionFile>
     <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' == 'true' and Exists('$(ZLinkSampleFrameworkVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkSampleFrameworkVersionFile)').Trim().Replace('ZLINK_FRAMEWORK_VERSION=', ''))</ZLinkSampleFrameworkVersion>
-    <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' != 'true'">0.10.0</ZLinkSampleFrameworkVersion>
+    <ZLinkSampleFrameworkVersion Condition="'$(ZLinkSampleFrameworkVersion)' == '' and '$(ZLinkSampleRepositoryDetected)' != 'true'">0.11.0</ZLinkSampleFrameworkVersion>
     <ZLinkBindingsPackageVersion Condition="'$(ZLinkBindingsPackageVersion)' == ''">0.17.6</ZLinkBindingsPackageVersion>
     <ZLinkSampleUseLocalSource Condition="'$(ZLinkSampleUseLocalSource)' == '' and '$(ZLinkSampleRepositoryDetected)' == 'true'">true</ZLinkSampleUseLocalSource>
     <ZLinkSampleUseLocalSource Condition="'$(ZLinkSampleUseLocalSource)' == ''">false</ZLinkSampleUseLocalSource>

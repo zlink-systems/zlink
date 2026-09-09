@@ -1,4 +1,8 @@
 
+<!-- zlink-nav:start -->
+[← Choosing a socket pattern](03-0-socket-patterns.en.md) | [Design Rationale — Why It Was Built This Way →](design-rationale.en.md)
+<!-- zlink-nav:end -->
+
 # Raw Messaging Reliability
 
 > **What this chapter answers** — it separates what Core guarantees for

@@ -31,3 +31,7 @@ budget 계약을 그 내부 구현과 함께 소유한다.
 | [09. Core design decisions](09-design-decisions.ko.md) | 주요 설계 결정 사항 |
 | [10. Core hot path](10-hot-path.ko.md) | message당 실행 경로의 범위·금지 동작·상태 캐시·성능 gate |
 | [11. Synchronization model](11-synchronization-model.ko.md) | 상태 소유 단위(socket turn·pipe 끝·mailbox), lock을 두어도 되는 조건과 금지 형태, lock 인벤토리 |
+
+<!-- zlink-nav:start -->
+[Core 스펙 목차](../README.ko.md) | [이전: RAW (STREAM) 프로토콜 상세](../protocol/02-raw.ko.md) | [다음: Architecture](01-architecture.ko.md)
+<!-- zlink-nav:end -->

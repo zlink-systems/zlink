@@ -16,7 +16,10 @@ title: "Socket — XPUB"
 
 XPUB is an extended publisher that supports subscription forwarding and manual control. Like PUB, XPUB is a publishing
 [socket](../glossary.en.md#socket), an endpoint that exchanges messages. In addition, XPUB receives subscribe and unsubscribe requests
-from subscriber peers as subscription-event messages and supports manual subscription management.
+from subscriber peers as subscription-event messages and supports manual subscription management. In the default mode only the
+first subscribe for a topic and the last unsubscribe that leaves no subscriber for that topic are surfaced as events — a duplicate
+subscribe for an already-subscribed topic, or an unsubscribe while other subscribers remain, becomes visible only with
+`ZLINK_PUB_OPT_VERBOSE` / `ZLINK_PUB_OPT_VERBOSER` ([§4](#4-pub-options-zlink_pub_option_t)).
 
 This document defines the public contracts specific to XPUB: PUB/XPUB-only options, message-part publishing, and subscription-event
 receiving.
@@ -34,12 +37,14 @@ The following documents own the related contracts.
 
 Subscribe and unsubscribe requests sent by a subscriber arrive at XPUB as subscription-event messages. The application retrieves these
 events one at a time with [`zlink_xpub_recv_part`](#zlink_xpub_recv_part) and observes which peer sent the event (routing ID), whether it
-is a subscribe or unsubscribe event, and which topic it addresses. A topic is the byte sequence carried by the topic frame at the front
-of a message and identifies the subscription target.
+is a subscribe or unsubscribe event, and which topic it addresses. A subscription event is a single frame: the first byte is `0x01`
+for subscribe or `0x00` for unsubscribe, and the remaining bytes are the topic (the byte sequence that identifies the subscription
+target). An event with an empty topic still carries that one byte. `zlink_xpub_recv_part` splits the first byte into `*subscribed_out_`
+and the rest into the topic output, so the application never parses the frame itself.
 
 Enable manual subscription management with `ZLINK_PUB_OPT_MANUAL`. In manual mode, set `ZLINK_PUB_OPT_APPROVE_SUBSCRIBE` to approve a
-subscription and `ZLINK_PUB_OPT_REJECT_SUBSCRIBE` to reject it. The complete option set, including the verbose options that forward
-subscription messages upstream, appears in [§4](#4-pub-options-zlink_pub_option_t).
+subscription and `ZLINK_PUB_OPT_REJECT_SUBSCRIBE` to reject it. The complete option set, including the verbose options that also surface
+duplicate subscribes and unsubscribes as events, appears in [§4](#4-pub-options-zlink_pub_option_t).
 
 ```mermaid
 sequenceDiagram
@@ -58,7 +63,9 @@ sequenceDiagram
 `ZLINK_PUB_OPT_NODROP` defaults to `0`. Fanout delivery permits loss. The [HWM](../glossary.en.md#hwm) (High-Water Mark) is the byte limit
 retained by the send queue. When that limit is reached, `zlink_publish_part()` drops the message for that subscriber and reports success.
 To apply [backpressure](../glossary.en.md#backpressure), which limits additional submissions by the publisher instead of dropping when
-the send queue is full, explicitly set this option to `1`. `zlink_publish_part()` then returns `ZLINK_SUBMIT_BACKPRESSURED`.
+the send queue is full, explicitly set this option to `1`. `zlink_publish_part()` then returns `ZLINK_SUBMIT_BACKPRESSURED`. Only the
+pipes whose filter matches the current topic are checked against the HWM — if any of them is full, the record is delivered to none of the
+matching subscribers, and the state of a non-matching subscriber's pipe does not affect this publish.
 
 Setting the option to `1` couples the publisher to its slowest subscriber because one full pipe stops delivery to every subscriber on
 the same socket. Reliable delivery that must not depend on subscriber speed belongs on a request-reply socket, not on XPUB/XSUB.
@@ -70,8 +77,8 @@ Use these options with `zlink_set_pub_option()` / `zlink_get_pub_option()`.
 ```c
 typedef enum zlink_pub_option_t
 {
-    ZLINK_PUB_OPT_VERBOSE = 0x3301,            // Forward all subscription messages upstream (int; 0=off, positive=on (getter returns 0/1))
-    ZLINK_PUB_OPT_VERBOSER = 0x3302,           // Forward subscribe/unsubscribe messages upstream (int; 0=off, positive=on (getter returns 0/1))
+    ZLINK_PUB_OPT_VERBOSE = 0x3301,            // Also surface subscribes for already-subscribed topics as events (int; 0=off, positive=on (getter returns 0/1))
+    ZLINK_PUB_OPT_VERBOSER = 0x3302,           // Surface duplicate subscribes and every unsubscribe as events (int; 0=off, positive=on (getter returns 0/1))
     ZLINK_PUB_OPT_MANUAL = 0x3303,             // XPUB manual subscription management (int; 0=off, positive=on (getter returns 0/1))
     ZLINK_PUB_OPT_MANUAL_LAST_VALUE = 0x3304,  // Enable manual mode + send the next publish only to the last subscription-event pipe (int; 0=off, positive=on (getter returns 0/1))
     ZLINK_PUB_OPT_NODROP = 0x3305,             // Return EAGAIN instead of dropping at HWM (int; 0=off, positive=on (getter returns 0/1), default 0)
@@ -189,10 +196,13 @@ ZLINK_EXPORT zlink_recv_result_t zlink_xpub_recv_part (void *xpub_,
                                zlink_recv_flags_t flags_);
 ```
 
-Receives the next subscription event in recv mode. On success, `source_rid_out_` is an optional output that may be NULL. When it is not
-NULL, `*source_rid_out_` is set to the Core-owned routing ID view of the subscribing peer, whose lifetime follows the
-[Socket Common borrowed-RID rule](README.en.md#3-pull-receive-and-completion-model) (valid until the same socket's next data receive API
-entry or close). `*subscribed_out_` is 1 for subscribe or 0 for unsubscribe, and
+Receives the next subscription event in recv mode. `subscribed_out_` and `topic_id_len_out_` are required outputs, and `topic_id_buf_`
+is required when `topic_id_capacity_` is greater than 0 — if any of these pointers is NULL, the call fails with
+`ZLINK_RECV_INVALID_HANDLE` and `EFAULT` before reading an event or touching any output. `source_rid_out_` is an optional output that may be NULL. When it is not
+NULL and the event came from a peer that is still connected, `*source_rid_out_` is set to the Core-owned routing ID view of that peer,
+whose lifetime follows the [Socket Common borrowed-RID rule](README.en.md#3-pull-receive-and-completion-model) (valid until the same
+socket's next data receive API entry or close). For an unsubscribe event that Core synthesized because the peer disconnected, or an event
+whose peer disconnected before it was dequeued, `*source_rid_out_` is `NULL`. `*subscribed_out_` is 1 for subscribe or 0 for unsubscribe, and
 `topic_id_buf_` / `*topic_id_len_out_` receive the topic bytes (binary-safe).
 
 A receive on another socket and poller, completion or monitor calls don't affect this view's lifetime. Copy the routing ID
@@ -209,7 +219,7 @@ Applicable type: raw XPUB only.
 **Returns:** `ZLINK_RECV_OK` on success; otherwise a `zlink_recv_result_t` value. `zlink_errno()` retains the detailed internal errno for
 diagnostics.
 
-**Errors:** `EFAULT` if `xpub_` is NULL. `EAGAIN` if `ZLINK_DONTWAIT` is set and no event is available. `ZLINK_RECV_BUFFER_TOO_SMALL` with
+**Errors:** `ZLINK_RECV_INVALID_HANDLE` with `EFAULT` if `xpub_`, `subscribed_out_`, or `topic_id_len_out_` is NULL, or if `topic_id_capacity_ > 0` and `topic_id_buf_` is NULL. `ZLINK_RECV_NO_DATA` with `EAGAIN` if `flags_` has `ZLINK_RECV_FLAGS_DONTWAIT` set and no event is available. `ZLINK_RECV_BUFFER_TOO_SMALL` with
 `ENOBUFS` if the topic is longer than `topic_id_capacity_`. `ZLINK_RECV_NOT_SUPPORTED` with `ENOTSUP` if the subject is not XPUB.
 
 **See also:** `zlink_publish_part`
@@ -239,9 +249,11 @@ Verify the following only through the public surface (`zlink_set_pub_option`, `z
 
 - When a raw XPUB has a subscription event, the caller observes `ZLINK_RECV_OK` together with `*subscribed_out_` (subscribe=1, unsubscribe=0), the subscribing peer's routing ID pointer, and binary-safe topic bytes.
 - `source_rid_out_` is an optional output that may be NULL.
-- The `*source_rid_out_` routing ID view stays valid until the same socket's next data receive API entry or close, and a receive on another socket doesn't change it. Copy the value immediately to retain it.
-- When `ZLINK_DONTWAIT` is set and no event is available, errno is `EAGAIN`.
-- If the topic is longer than `topic_id_capacity_`, the function writes the required length to `*topic_id_len_out_` and returns `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`; the event is preserved and the next receive with a sufficient buffer returns it once. A subject that is not XPUB fails with `EINVAL`. In both cases, the public result surfaces as `ZLINK_RECV_INTERNAL_ERROR`, and `zlink_errno()` retains the detailed errno.
+- For an event from a peer that is still connected, the `*source_rid_out_` routing ID view stays valid until the same socket's next data receive API entry or close, and a receive on another socket doesn't change it. Copy the value immediately to retain it.
+- An unsubscribe event that Core synthesized because the peer disconnected, or an event whose peer disconnected before it was dequeued, returns `ZLINK_RECV_OK` with `*source_rid_out_ == NULL`.
+- When `flags_` has `ZLINK_RECV_FLAGS_DONTWAIT` set and no event is available, the result is `ZLINK_RECV_NO_DATA` with `EAGAIN`.
+- If the topic is longer than `topic_id_capacity_`, the function writes the required length to `*topic_id_len_out_` and returns `ZLINK_RECV_BUFFER_TOO_SMALL` with `ENOBUFS`; the event is retained internally and the next receive with a sufficient buffer returns it once.
+- A subject that is not a raw XPUB returns `ZLINK_RECV_NOT_SUPPORTED` with `ENOTSUP`.
 - If `xpub_` is NULL, errno is `EFAULT`.
 
 **Publish and topic (`zlink_publish_part`)**
@@ -266,3 +278,7 @@ Verify the following only through the public surface (`zlink_set_pub_option`, `z
 
 - `zlink_socket_set_receive_flow_state()` returns `ZLINK_CONFIG_NOT_SUPPORTED` with `errno == ENOTSUP` for an XPUB socket and changes nothing.
 - A monitor for an XPUB socket does not set `ZLINK_MONITOR_STATUS_DETAIL_FLOW_STATE` and does not emit `ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, or `ZLINK_EVENT_FLOW_STATE_STALE`.
+
+<!-- zlink-nav:start -->
+[Socket Index](README.en.md) | [Previous: SUB](03-sub.en.md) | [Next: XSUB](05-xsub.en.md)
+<!-- zlink-nav:end -->

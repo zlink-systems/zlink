@@ -1,0 +1,26 @@
+# fwb2-05 — `zlink-c` 기준선의 4096B 셀 재현성 실패(G5 58.9%) 원인 규명과 최소 수정 (계획 S4)
+
+저장소 /home/hep7/project/zlink, branch main(HEAD ed2347d0b0 이후). 한국어로 보고. 감독자(Claude)가 diff를 검토하고 커밋한다.
+계획: `doc/plan/framework-bench-with-grpc-s2s-plan.ko.md` §8 S4·§9(위험). 규격: `framework/bench/grpc/README.ko.md` §1.2(C 기준 bench는 client-driven 유지), §7.2(zlink-c request-window가 formula 1의 분모), 1차 계획 §6의 G5(3-run 중앙값 대비 스프레드 ≤10%). 결정 기록 `doc/plan/fw-bench-worklog/decisions.ko.md`의 FB-044(고정 window가 C harness의 readiness 결함을 가림)·FB-010·FB-013을 먼저 읽는다. 규격·계획·문서는 읽기만 한다.
+금지: git commit/push; `.github/**`; 측정 조건(payload, 5초 active, window 100, MAX_OUTSTANDING 4096, drain) 완화·변경; Core 소스 수정(Core 결함이면 파일:줄로 보고만); 집계기·다른 언어 bench 수정; `rm -rf`·`git clean`·`git stash`·`git checkout --`·`git restore`; 앵커 없는 `pkill -f`. **벤치 실행(진단 run 포함)은 반드시 티켓으로** `bash scripts/perf/perf-ticket.sh submit -p 2 -o astra-fwb2-05 -d "<설명>" -- <명령>`(완료 대기; 직접 실행 금지). 빌드는 load average 10 미만일 때 한 번에 하나(`--parallel 2`). 임시 산출물 `/tmp/zlink-astra-fwb2-05/`. 자격 증명 금지. 다른 job이 `framework/bench/grpc/node/**`와 `/home/hep7/project/zlink-jdk25`(별도 worktree)를 고치고 있으니 건드리지 않는다.
+
+## 관측(감독자, 2026-09-09 S1 C 기준선 3-run, DURATION_SECONDS=5)
+C bench 빌드: `cmake -S framework/bench/grpc/c -B <build> -G Ninja -DCMAKE_BUILD_TYPE=Release -DZLINK_C_CORE_BUILD_DIR=$HOME/.cache/zlink/core/0.17.5/linux-x64`. 실행: `SKIP_BUILD=1 BUILD_DIR=<build> DURATION_SECONDS=5 RUN_STAMP=<stamp> bash framework/bench/grpc/c/run_local.sh`. 원본: `framework/bench/grpc/log/c/with_grpc_c_s1_run{1,2,3}_*/report.txt`(집계기용 복사본; 원 파일은 `with_grpc_c_<stamp>.txt`).
+
+| 셀 | run1 | run2 | run3 | G5 |
+|---|---:|---:|---:|---|
+| zlink-c request-window @1024 | 518.1 | 488.4 | 458.1 KOPS | pass(6.2%) |
+| zlink-c request-window @4096 | 419.8 | 264.2 | 261.3 KOPS | **fail(58.9%)** |
+| zlink-c request-backpressure @4096 | 415.6 | 265.9 | 263.6 KOPS | **fail(56.3%)** |
+| zlink-c request-backpressure @1024 | — | — | — | pass(1.5%) |
+| send-saturation 1024/4096 | | | | pass(6.3%/1.9%) |
+
+4096B의 두 request 셀만 run1과 run2·3 사이에 **2가지 모드(~420 vs ~263 KOPS)** 로 갈린다. 1024B는 안정. grpc-c는 모든 셀에서 안정(참고: grpc-c의 memory 1.4~2 GB는 별도 관측). run1은 16:36, run2 16:38, run3 16:41에 티켓 큐에서 순차 실행됐고 같은 시간대에 다른 언어 빌드·테스트 job이 돌고 있었다(부하 후보). 집계기 명령: `python3 framework/bench/grpc/tools/bench_aggregate.py --lang c --judgement-pattern request-window --runs-glob 'framework/bench/grpc/log/c/with_grpc_c_s1_run*' --format full`.
+
+## 할 일
+1. 원인 규명: 두 모드의 차이가 (a) 외부 부하/CPU 스케줄링(다른 job의 빌드), (b) harness 결함(예: 4096B에서 message part 할당·복사 경로, window/outstanding 처리, warmup 부족, drain/settle 판정, timer), (c) Core 동작(4096B에서 batch/HWM/pipe 경계 등 — 수정 금지, 보고), (d) 측정 구간/표본화 중 무엇인지 파일:줄 근거와 진단 run(티켓; 셀 하나·짧은 duration도 가능하되 결과에 "진단"임을 명시)으로 판정한다. 부하 가설은 `taskset`·부하 없는 시간대 반복으로 분리한다. report.txt의 `Submitted/Completed/Errors/Blocked/MaxOut/SubmitMs` 열과 `[bench]` 라인, 깊이(FB-044의 backpressure 깊이 557/14,111 관측)를 근거로 쓴다.
+2. harness 결함(b)이면 최소 수정 + 근거. 측정 조건은 바꾸지 않는다(warmup이 원인이라면 규격 §8.2의 "언어별 warmup은 기록"에 따라 값을 바꾸지 말고 보고서에 제안).
+3. 최종 확인: 수정 뒤(또는 수정 없이 원인이 외부 부하라면 부하 없는 조건에서) `DURATION_SECONDS=5` 전체 run ×3을 티켓으로 실행하고 집계기 G5가 4096 두 셀에서 통과하는지 본다. 통과하지 못하면 통과시키려고 조건을 바꾸지 말고 현재 상태와 원인을 보고한다.
+
+## 보고
+`doc/plan/fw-bench-worklog/fwb2-05-summary.md`: 판정(a/b/c/d)과 근거(파일:줄, 진단 run 표: 티켓·조건·값), 변경 파일과 diff 요지, 수정 전/후 규칙 수, 최종 3-run 집계기 출력(spec4·judgement), formula 1 분모로 게재 가능한지 판정, BLOCKERS, 재검증 명령.

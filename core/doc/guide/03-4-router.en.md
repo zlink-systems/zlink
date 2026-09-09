@@ -80,10 +80,10 @@ zlink_msg_init_size(&body, 4);
 memcpy(zlink_msg_data(&body), "body", 4);
 
 zlink_submit_result_t rc = zlink_send_part_rid(
-    router, source_rid, &header, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
+    router, source_rid, &header, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL);
 if (rc == ZLINK_SUBMIT_OK)
     rc = zlink_send_part_rid(
-        router, source_rid, &body, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+        router, source_rid, &body, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 ```
 
 ## 3. Options
@@ -126,7 +126,7 @@ zlink_msg_t part;
 zlink_msg_init_size(&part, 4);
 memcpy(zlink_msg_data(&part), "data", 4);
 zlink_submit_result_t rc = zlink_send_part_rid(
-    router, target_rid, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+    router, target_rid, &part, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 /* rc == ZLINK_SUBMIT_NOT_CONNECTED because MANDATORY is on */
 ```
 

@@ -267,12 +267,12 @@ zlink_connect(dealer2, endpoint);
 zlink_msg_t m1;
 zlink_msg_init_size(&m1, 12);
 memcpy(zlink_msg_data(&m1), "from_dealer1", 12);
-zlink_send_part(dealer1, &m1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(dealer1, &m1, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 zlink_msg_t m2;
 zlink_msg_init_size(&m2, 12);
 memcpy(zlink_msg_data(&m2), "from_dealer2", 12);
-zlink_send_part(dealer2, &m2, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(dealer2, &m2, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 /* zlink_router_recv_part()는 각 DEALER의 메시지를 source_rid로 구분한다 */
 ```
@@ -325,8 +325,8 @@ void worker_thread(void *arg) {
     zlink_msg_init_size(&reply, 5);
     memcpy(zlink_msg_data(&reply), "World", 5);
 
-    zlink_send_part(worker, &envelope, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE);
-    zlink_send_part(worker, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+    zlink_send_part(worker, &envelope, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_MORE, NULL, NULL);
+    zlink_send_part(worker, &reply, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
     zlink_msg_close(&request);
 
     /* 워커는 소켓이 닫힐 때까지 살아 있는다 */
@@ -353,12 +353,12 @@ zlink_connect(b, "tcp://127.0.0.1:5558");
 zlink_msg_t ping;
 zlink_msg_init_size(&ping, 4);
 memcpy(zlink_msg_data(&ping), "ping", 4);
-zlink_send_part(a, &ping, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(a, &ping, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 zlink_msg_t pong;
 zlink_msg_init_size(&pong, 4);
 memcpy(zlink_msg_data(&pong), "pong", 4);
-zlink_send_part(b, &pong, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
+zlink_send_part(b, &pong, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL, NULL, NULL);
 
 /* b는 zlink_recv_part()로 "ping"을, a는 "pong"을 받는다 */
 ```
@@ -377,12 +377,14 @@ zlink_send_part(b, &pong, ZLINK_SEND_FLAGS_NONE, ZLINK_PART_FINAL);
 zlink_msg_t msg;
 zlink_msg_init_size(&msg, 4);
 memcpy(zlink_msg_data(&msg), "data", 4);
+zlink_completion_id_t wait_token = 0;   /* BACKPRESSURED일 때 WRITABLE record를 식별하는 token */
 zlink_submit_result_t rc = zlink_send_part(
-    dealer, &msg, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL);
+    dealer, &msg, ZLINK_SEND_FLAGS_DONTWAIT, ZLINK_PART_FINAL, NULL, &wait_token);
 if (rc == ZLINK_SUBMIT_NOT_ADMITTED) {
     /* 메시지를 받아줄 연결된 peer가 없음 */
 } else if (rc == ZLINK_SUBMIT_BACKPRESSURED) {
-    /* peer는 연결됐지만 큐가 HWM에 도달 */
+    /* peer는 연결됐지만 큐가 HWM에 도달 — part는 소비됐으므로 보관해 둔 사본을
+       ZLINK_POLLCOMPLETION 뒤 zlink_completion_recv()로 wait_token의 WRITABLE record를 받고 다시 제출 */
 }
 ```
 

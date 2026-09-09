@@ -132,7 +132,9 @@ sequenceDiagram
 bit for a supported socket. Using the bit with another source or in a
 `zlink_poll()` item returns `ZLINK_CONFIG_INVALID_ARGUMENT` with `errno == EINVAL`.
 
-At most one poller registration owns a socket's completion bit. If another poller
+The same socket may be registered with several pollers at once — each registration has its own
+readiness wake path and lifetime pin. The one exception is the completion bit: at most one poller
+registration owns a socket's completion bit. If another poller
 already owns it, adding the socket or adding the bit through modify fails with
 `ZLINK_CONFIG_INVALID_STATE` and `errno == EBUSY`, and the existing registration
 remains unchanged. Another poller may take ownership after the current owner removes
@@ -184,7 +186,7 @@ typedef struct zlink_pollitem_t {
   void *socket;    // valid only for a SOCKET source
   zlink_fd_t fd;   // valid only for an FD source
   short events;    // event bits to wait for
-  short revents;   // returned readiness; initialize to 0 before the call (§7 zlink_poll)
+  short revents;   // returned readiness; zlink_poll clears it to 0 on entry (§7 zlink_poll)
 } zlink_pollitem_t;
 
 typedef struct zlink_poller_event_t {
@@ -212,10 +214,12 @@ ZLINK_EXPORT int zlink_poll(
 ```
 
 The return value is the number of items with readiness, `0` on timeout, and `-1`
-on failure. Failure sets both `error_out` and errno. `timeout_ms == -1` waits
-indefinitely, and `0` returns immediately. Each item's `revents` is initialized
-to `0` before the call, and only its snapshot after the function returns is
-valid. `error_out` is an optional output that may be NULL.
+on failure. Failure sets both `error_out` and errno. `timeout_ms < 0` waits
+indefinitely, and `0` returns immediately. With `item_count == 0` the call
+returns `0`/`ZLINK_CONFIG_OK` immediately regardless of the timeout. The
+function clears every item's `revents` to `0` before waiting, so the caller
+need not initialize it; only the snapshot after the function returns is valid.
+`error_out` is an optional output that may be NULL.
 
 ### Poller functions
 
@@ -264,12 +268,16 @@ returns `NULL` and sets `errno` to `ENOMEM`. On successful completion,
 
 `zlink_poller_size()` returns the current registration count on success and `-1`
 on failure. `zlink_poller_wait()` returns the number of events written on
-success, `0` on timeout, and `-1` on failure. If `events == NULL` or
+success, `0` on timeout, and `-1` on failure. Every `timeout_ms < 0` is
+normalized to an indefinite wait. If `events == NULL` or
 `event_capacity <= 0`, it fails with `EINVAL`. The `error_out` parameters of
 `zlink_poller_size()` and `zlink_poller_wait()` are optional outputs that may be
 NULL.
 
-Adding the same source twice returns `ZLINK_CONFIG_CONFLICT`/`EEXIST`. Modifying
+Adding the same source twice returns `ZLINK_CONFIG_CONFLICT`/`EEXIST`. A timer can be
+registered with only one poller at a time — adding a timer that another poller already holds
+fails with `ZLINK_CONFIG_INVALID_STATE`/`EBUSY`, and destroying a registered timer with
+`zlink_timer_destroy()` returns `ZLINK_CLOSE_BUSY`/`EBUSY`. Modifying
 or removing a missing source returns `ZLINK_CONFIG_NOT_FOUND`/`ENOENT`. An
 invalid event bit returns `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`, while an
 event unsupported by the source returns `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`.
@@ -304,6 +312,8 @@ and event-array contents. Each item maps to one unit test.
 **Poller registration**
 
 - Adding the same source twice returns `ZLINK_CONFIG_CONFLICT`/`EEXIST`.
+- Adding a timer that another poller already holds returns `ZLINK_CONFIG_INVALID_STATE`/`EBUSY`, and destroying a registered timer with `zlink_timer_destroy()` returns `ZLINK_CLOSE_BUSY`/`EBUSY`.
+- Registering the same socket with two pollers for readiness bits (other than completion) succeeds on both, and each reports readiness independently.
 - Modifying or removing a missing source returns `ZLINK_CONFIG_NOT_FOUND`/`ENOENT`.
 - An invalid event bit returns `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`, while an event unsupported by the source returns `ZLINK_CONFIG_NOT_SUPPORTED`/`ENOTSUP`.
 - `ZLINK_POLLCOMPLETION` can be added or removed by add or modify for PAIR, DEALER, ROUTER, and STREAM, alone or OR-ed with other socket readiness. Other sources and `zlink_poll()` items return `ZLINK_CONFIG_INVALID_ARGUMENT`/`EINVAL`. The bit reports two record kinds: REQUEST and WRITABLE.

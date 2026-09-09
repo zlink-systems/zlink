@@ -93,3 +93,7 @@ If you know the task you need to perform, use the table below to find the starti
 | Maintain Core internals | Start with [Systems](systems/README.en.md) and read in order |
 | Change specifications, headers, and tests together | [Public Contract Governance](00-public-contract-governance.en.md) |
 | Confirm the boundary for adding a higher layer on top of Core | [Runtime Boundary](08-runtime-boundary.en.md) |
+
+<!-- zlink-nav:start -->
+[Specification Index](../README.en.md) | [Next: Public Contract Governance](00-public-contract-governance.en.md)
+<!-- zlink-nav:end -->

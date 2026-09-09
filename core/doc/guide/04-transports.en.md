@@ -126,9 +126,9 @@ zlink_get_option(socket, ZLINK_OPT_LAST_ENDPOINT, endpoint, &len);
 /* Path too long */
 zlink_bind_result_t rc = zlink_bind(
     socket, "ipc:///very/long/path/.../endpoint.ipc");
-if (rc == ZLINK_BIND_INVALID_ARGUMENT) {
-    /* IPC path exceeds system limit (108 characters) — INVALID_ARGUMENT */
-    printf("IPC path exceeds system limit (108 characters)\n");
+if (rc != ZLINK_BIND_OK && zlink_errno() == ENAMETOOLONG) {
+    /* IPC path reaches the platform sun_path limit — surfaced as ZLINK_BIND_INTERNAL_ERROR */
+    printf("IPC path exceeds the platform sun_path limit\n");
 }
 ```
 
@@ -136,9 +136,9 @@ if (rc == ZLINK_BIND_INVALID_ARGUMENT) {
 
 ### Characteristics
 
-- **Supported on Linux/macOS only** (not supported on Windows)
+- **Supported on every platform except Windows** (`ZLINK_HAVE_IPC` builds)
 - Lower overhead than TCP (bypasses network stack)
-- File path-based address (max path length: 108 characters)
+- File path-based address (the path must be shorter than the platform's `sun_path` limit)
 
 ## 4. inproc
 
@@ -147,25 +147,24 @@ In-process communication. The fastest transport.
 ### Basic Usage
 
 ```c
-/* bind must be called first */
+/* bind and connect may be called in either order */
 zlink_bind(socket_a, "inproc://workers");
 zlink_connect(socket_b, "inproc://workers");
 ```
 
-### Error Handling
+### Connect first
 
 ```c
-/* Attempting connect without bind */
-zlink_connect_result_t rc = zlink_connect(socket, "inproc://nonexistent");
-if (rc != ZLINK_CONNECT_OK) {
-    printf("No bind exists yet\n");
-}
+/* Connect to an endpoint that is not bound yet — succeeds; Core holds the endpoint */
+zlink_connect_result_t rc = zlink_connect(socket_b, "inproc://workers");
+/* The connection is established when a bind in the same context follows */
+zlink_bind(socket_a, "inproc://workers");
 ```
 
 ### Characteristics
 
 - Usable **only within the same context**
-- **bind must be called before** connect
+- No ordering constraint between bind and connect — a connect that comes first is held by Core and linked when the same context binds
 - Direct lock-free pipe connection (no network)
 - Lowest latency, highest throughput
 
@@ -239,7 +238,7 @@ zlink_set_tls_server(socket, "/path/to/cert.pem", "/path/to/key.pem", 0);
 zlink_bind(socket, "tls://*:5555");
 
 /* Client */
-zlink_set_tls_client(socket, "/path/to/ca.pem", NULL, 1);
+zlink_set_tls_client(socket, "/path/to/ca.pem", "server", 1);   /* hostname is required */
 zlink_connect(socket, "tls://server:5555");
 ```
 
@@ -249,11 +248,11 @@ For detailed TLS configuration, see the [TLS Security Guide](05-tls-security.en.
 
 | Constraint | Description |
 |------------|-------------|
-| STREAM is bind-only | A `STREAM` socket supports `zlink_bind()` only; `zlink_connect()` returns `EOPNOTSUPP`. ws/wss/tcp/tls all work with normal ZMP socket types too |
-| inproc bind first | inproc requires bind to be called before connect |
-| ipc platform | ipc is only supported on Unix/Linux/macOS (not supported on Windows) |
+| STREAM receive mode | A `STREAM` socket must set `ZLINK_STREAM_OPT_RECV_MODE` before its first bind or connect; both `zlink_bind()` and `zlink_connect()` are supported. ws/wss/tcp/tls all work with normal ZMP socket types too |
+| inproc ordering | No ordering constraint between bind and connect (a connect that comes first is held until the bind) |
+| ipc platform | ipc is supported on every platform except Windows |
 | Same context | inproc is usable only within the same context |
-| IPC path length | Unix domain socket path maximum of 108 characters |
+| IPC path length | The Unix domain socket path must be shorter than the platform's `sun_path` limit |
 
 ## 9. Transport Selection Guide
 

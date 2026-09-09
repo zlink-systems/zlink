@@ -125,3 +125,7 @@ connections from external clients, and monitor events). Each item maps to one te
 - The [verification requirements of Socket —
   STREAM](../socket/08-stream.en.md#11-implementation-and-contract-test-verification-requirements)
   own detailed verification of PACKET-mode output ownership and malformed framing.
+
+<!-- zlink-nav:start -->
+[Protocol Index](README.en.md) | [Previous: ZMP Protocol Details](01-zmp.en.md) | [Next: Systems Overview](../systems/README.en.md)
+<!-- zlink-nav:end -->

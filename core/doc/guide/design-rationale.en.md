@@ -1,4 +1,8 @@
 
+<!-- zlink-nav:start -->
+[← Raw Messaging Reliability](reliability.en.md) | [Message API and ownership →](09-message-api.en.md)
+<!-- zlink-nav:end -->
+
 # Design Rationale — Why It Was Built This Way
 
 > **What this chapter answers** — it explains the reasoning behind zlink's
@@ -33,7 +37,7 @@ fewer choices, which also means less room to choose wrong.
 
 ### Zero-Copy — Small Messages Inline, Large Messages Reference-Counted
 
-A small message (41 bytes or less, on 64-bit) is stored directly inside the
+A small message (29 bytes or less) is stored directly inside the
 message object without a separate heap allocation (VSM, Very Small
 Message). A message larger than that is shared without copying, through
 reference counting.
@@ -54,9 +58,10 @@ Message delivery between threads uses a CAS (Compare-And-Swap)-based FIFO
 queue (YPipe) instead of a lock.
 
 **What this means for the user**: there's no lock contention on the hot
-path, so multicore scaling works well. In exchange, a socket is not
-thread-safe — the premise is that the same socket is never handled from
-multiple threads at once ([11 Thread Safety](../spec/core/systems/04-thread-safety.en.md)).
+path, so multicore scaling works well. The public socket handle API is
+thread-safe: several threads may `send` on the same socket concurrently, while
+the receiving side of one socket is kept to a single consumer thread
+([11 Thread Safety](11-thread-safety.en.md)).
 
 ### True Async — The Proactor Pattern
 
@@ -64,9 +69,11 @@ Built on Boost.Asio, I/O **completion** events are delivered to a handler
 (Proactor). This is a structure that gets notified of completion rather
 than polling I/O directly.
 
-**What this means for the user**: a callback runs on the I/O thread the
-Context owns — keep a callback short, don't hold a lock inside it, and
-don't close a handle from inside it. Multiple sockets are grouped under one
+**What this means for the user**: I/O completions are handled inside the I/O
+threads the Context owns, and user code never runs there — Core has no
+application callbacks; the application waits for readiness with a poller and
+then **pulls** results with `*_recv_part()` / `zlink_completion_recv()`.
+Multiple sockets are grouped under one
 loop with a poller (the concept is in [02 Core API](02-core-api.en.md); the
 per-language surface is in each
 [binding guide](../../../bindings/doc/guide/README.en.md)).

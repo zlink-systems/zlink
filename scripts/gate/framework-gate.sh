@@ -14,5 +14,7 @@ TMPDIR=/dev/shm/zlink-tmp-java run java-coretest framework/languages/java ./grad
 ( dotnet_env; run dotnet-sampleregression framework/languages/dotnet dotnet test tests/Zlink.Framework.SampleRegressionTests )
 ( dotnet_env; run dotnet-unit-main framework/languages/dotnet dotnet test tests/Zlink.Framework.UnitTests --filter 'FullyQualifiedName!~CanonicalActorJoinIngressReplyTests' --blame-hang --blame-hang-timeout 10m )
 ( dotnet_env; run dotnet-unit-join framework/languages/dotnet dotnet test tests/Zlink.Framework.UnitTests --filter 'FullyQualifiedName~CanonicalActorJoinIngressReplyTests' --blame-hang --blame-hang-timeout 10m )
+# Build-only: the with-grpc benches (5 languages) must keep compiling against the current runtime (bench plan S6).
+( export ZLINK_CORE_PACKAGE_PREFIX="${ZLINK_GATE_CORE_PREFIX:-$Z/core/build-dev}" ZLINK_LOCAL_PACKAGE_ROOT="$Z/.artifacts/wsl"; run bench-build framework/bench/grpc bash build_all.sh )
 echo "GATE_DONE $TAG"; awk '$2!=0{f=1; print "FAILED:", $1} END{exit f}' "$LOGS/results.txt" && echo "ALL GREEN"
 touch "$LOGS/gate.done"

@@ -1,0 +1,23 @@
+# fwb2-07 — C++ bench runner를 server-driven(A/B + HTTP trigger) 모델로 개정하고 `zlink-framework-cpp` 6셀(4패턴×2 payload 중 request 3패턴 + send)을 구현한다 (계획 S3)
+
+저장소 /home/hep7/project/zlink, branch main(HEAD f8b4fa98dd 이후). 한국어로 보고. 감독자(Claude)가 diff를 검토하고 커밋한다.
+계획: `doc/plan/framework-bench-with-grpc-s2s-plan.ko.md` §3·§4(C++ 행)·§8 S3. 규격: `framework/bench/grpc/README.ko.md` §3, §4(셀 원본 role·trigger 8필드(runId, cellId, pattern, payloadBytes, durationMs, warmup, endpoint, receivedAtUnixMs)·streams·target_stats), §6, §9(cpp 대역 5280-5299: grpc A 5280/5281, B 5282/5283; raw A 5285/5286, B 5287/5288/5289; framework A 5292/5293, B 5294/5295), §10. **참고 구현**(같은 모델로 완료): .NET `framework/bench/grpc/dotnet/`(fwb2-03 보고서), Node `framework/bench/grpc/node/`(fwb2-04), Java `framework/bench/grpc/java/`(fwb2-06; `runner_common.sh`의 셀 순서·count 대조 §5.2 불변식 completed ≤ received ≤ completed+errors+abandoned). 셀 JSON은 집계기 `framework/bench/grpc/tools/`가 읽는 `with-grpc-cell-v1`(fixture `tools/tests/fixtures/s2s/`). 규격·계획·문서는 읽기만 한다.
+금지: git commit/push; `.github/**`; 측정 조건 변경; Core·bindings·framework 런타임 소스 수정(결함이면 파일:줄로 보고); 집계기·다른 언어 bench 수정; `rm -rf`·`git clean`·`git stash`·`git checkout --`·`git restore`; 앵커 없는 `pkill -f`. **벤치 실행(smoke 포함)은 반드시 티켓으로** `bash scripts/perf/perf-ticket.sh submit -p 2 -o astra-fwb2-07 -d "<설명>" -- <명령>`(완료 대기; 직접 실행 금지). 빌드는 load average 10 미만일 때 한 번에 하나(`--parallel 2`). 임시 산출물 `/tmp/zlink-astra-fwb2-07/`. 자격 증명 금지. 다른 worktree(`zlink-jdk25`, `zlink-core-audit`)는 건드리지 않는다.
+
+## 목표
+`framework/bench/grpc/cpp/`(client, grpc/bench_grpc_cpp_server, zlink/bench_zlink_cpp_server, common)를 규격 §10의 server-driven 모델로 바꾼다. 구현별 source A(HTTP trigger listener + stats + B로 향하는 client + logical stream 부하)와 target B(echo/count + stats), `run_local.sh`는 §10.4 셀 순서(B→A→warmup→active→settle→target_stats 병합·count 대조→종료, 셀마다 새 process 쌍, 5280-5299 LISTEN preflight). 그리고 아직 없는 `zlink-framework-cpp` 구현(A: framework C++ channel client, B: framework C++ server host의 typed request/send handler)을 추가한다.
+
+## 설계 지침
+- A의 trigger/stats listener는 framework C++ HTTP hosting(`framework/languages/cpp/framework` 안의 HTTP 기능; 없으면 `common/bench_stats_server.hpp`의 기존 경량 HTTP 서버를 확장)으로 한 곳에 둔다. trigger 계약은 .NET/Node/Java와 같은 규칙(중복 trigger 같은 acknowledgement, phase idle/warmup/active/failed, stats ready·submitted·completed·errors·inFlight).
+- logical stream: serial 1×1, window 1×100, backpressure 1×무제한, send 8×1. 구현 방식(thread·async)을 `streams.implementation`에 기록.
+- gRPC B는 기존 grpc server(system libgrpc++ 1.51.1, §8.1), A는 unary stub을 stream 수만큼. raw는 기존 zlink server(request/command ROUTER 분리)와 raw ROUTER client. framework A/B는 저장소 framework C++ 소스를 CMake로 참조(현재 CMakeLists의 참조 방식 유지: `.artifacts/<platform>/install/zlink-{cpp,core}/<version>` package prefix 또는 `ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT`; 이 머신은 `.artifacts/wsl/install/zlink-{core,cpp}/0.17.3`이 있고 Core release prefix `$HOME/.cache/zlink/core/0.17.5/linux-x64`, zlink_cpp 0.17.6 prefix는 `cmake -S bindings/cpp -B <b> -DCMAKE_PREFIX_PATH=<core prefix> -DCMAKE_INSTALL_PREFIX=<prefix> -DZLINK_CPP_BUILD_TESTS=OFF && build && install`로 만든다).
+- 기존 환경 변수·옵션(`--implementations`, `--patterns`, `--payload-sizes`, `--duration-seconds`, `BUILD_DIR`)은 유지. `measure_span.sh`는 새 구조에 맞게 고치거나 runner에 흡수.
+- 규격 §8.2대로 warmup·gRPC 서버 구성·컴파일러·라이브러리 버전을 원본에 기록.
+
+## 검증
+- `cmake -S framework/bench/grpc/cpp -B /tmp/zlink-astra-fwb2-07/cpp -G Ninja -DCMAKE_BUILD_TYPE=Release <prefix 옵션>` + build rc=0.
+- smoke(티켓, `--duration-seconds 2`): `grpc-cpp`·`zlink-cpp`·`zlink-framework-cpp` × `request-serial@1024`, `zlink-cpp` × `send-saturation@1024`, `zlink-framework-cpp` × `request-window@1024`·`send-saturation@1024`. 각 rc=0, RESULT 라인, 원본 JSON에 role/trigger/streams/target_stats, count 대조 통과. 집계기 `--lang cpp --format spec4`가 나오는지 확인.
+- `bash -n run_local.sh`, `git diff --check`. 3-run 측정은 하지 않는다.
+
+## 보고
+`doc/plan/fw-bench-worklog/fwb2-07-summary.md`: 프로세스 구성 표(A/B/포트/모듈), 변경 파일과 diff 요지, 수정 전/후 규칙 수, smoke 검증 표(티켓·rc·RESULT), 언어별 문서(계획 §5 절 1~6; `framework/bench/grpc/doc/dotnet.ko.md`와 같은 구성)에 들어갈 표와 값, 발견한 런타임 결함(파일:줄), BLOCKERS, 재검증 명령.

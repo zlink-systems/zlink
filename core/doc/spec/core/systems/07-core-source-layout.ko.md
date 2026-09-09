@@ -10,12 +10,12 @@ title: "Core source layout"
 
 # Core source layout
 
-> **이 장이 정의하는 것** — Core 0.13.0에 남는 raw runtime source가 디렉터리와 include
+> **이 장이 정의하는 것** — Core raw runtime source가 디렉터리와 include
 > 방향으로 어떻게 나뉘는지의 구현 서술.
 
 ## 1. Core source layout 개요
 
-이 문서는 Core 0.13.0에 남는 raw runtime source의 디렉터리 구획별 책임과, 구획 사이에
+이 문서는 Core raw runtime source의 디렉터리 구획별 책임과, 구획 사이에
 허용하는 include 방향을 설명한다. 대상 독자는 Core source를 수정하거나 새 파일의 위치를
 정하는 유지보수자다.
 
@@ -38,9 +38,9 @@ Source는 다음 구획으로 나뉜다.
 core/
 |-- include/                public raw C ABI (root zlink.h, zlink_enum.h, zlink_errno.h)
 |   `-- zlink/              domain header (common.h, core/, message/, socket/, eventing/)
-|-- src/api/                validation and C ABI facade (core, message, monitoring, socket)
-|-- src/runtime/sockets/    socket-type semantics
-|-- src/runtime/core/       context, session, pipe, message runtime과 poller·timer·monitor 기반
+|-- src/api/                C ABI, validation, public multipart·request/reply·completion state와 timer scheduler
+|-- src/runtime/sockets/    socket-type routing과 pipe semantics
+|-- src/runtime/core/       context, session, pipe, message runtime과 poller·monitor 기반
 |-- src/runtime/engine/     ZMP and RAW engines
 |-- src/runtime/protocol/   ZMP·RAW wire codec (encoder/decoder)
 |-- src/runtime/transports/ transport integration
@@ -55,9 +55,10 @@ session·pipe·message runtime을 구현한다.
 
 ## 3. Include 방향
 
-`src/api/`의 public API facade는 socket semantic 계층을 호출하고, socket semantic 계층은
-runtime core의 공통 connection·pipe 메커니즘을 사용한다. Engine과 transport는 socket
-type의 application 의미를 알지 못한다. 하위 계층은 상위 계층 header를 include하지 않는다.
+`src/api/`의 public 진입점은 socket semantic 계층을 호출한다. 반대 방향으로 socket runtime은
+public multipart·request/reply·completion state와 연결할 때 `api/socket` internal header를
+include한다. socket semantic 계층은 runtime core의 공통 connection·pipe 메커니즘을 사용한다.
+Engine과 transport는 socket type의 application 의미를 알지 못한다.
 
 MeshName, ChannelName, application mailbox, Spot, Actor, Location Store와 service lifecycle
 상태는 Core 위에서 application service를 제공하는 상위 계층인 Framework가 소유하는 개념이다
@@ -70,3 +71,7 @@ Root `zlink.h`는 `zlink/common.h`와 core(`zlink/core/api.h`), message, socket,
 header만 포함한다.
 Public header는 `src/` private header를 include하지 않는다. 설치 header와 export manifest는
 [Core runtime 경계](../08-runtime-boundary.ko.md)와 일치해야 한다.
+
+<!-- zlink-nav:start -->
+[시스템 목차](README.ko.md) | [이전: Auto HWM](06-auto-hwm.ko.md) | [다음: POSD module 구조](08-posd-module-structure.ko.md)
+<!-- zlink-nav:end -->

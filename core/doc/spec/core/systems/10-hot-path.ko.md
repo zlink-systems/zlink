@@ -18,10 +18,9 @@ title: "Core hot path"
 Core의 정합성 계약(reconnect, generation, pair readiness, request correlation)은 대부분
 "현재 상태를 다시 해석하는" 일반 경로로 구현된다. 그 경로는 연결이 바뀔 때 한 번 실행되는
 것을 전제로 설계되었고, message마다 실행되면 처리량을 수십 퍼센트 떨어뜨린다. Contract test는
-이 차이를 보지 못한다. 0.16.0에서 pull-completion 전환과 single-lane 전환이 각각 DEALER 계열
-throughput을 25~35%, 6~16% 떨어뜨렸을 때 contract test는 전부 green이었다. 두 변경 모두 같은
-형태였다 — 선택한 pipe를 endpoint 문자열로 다시 찾고, pair table을 mutex 아래에서 조회하고,
-임시 vector를 할당하는 일반 경로를 message 경로 안에 넣었다.
+이 차이를 보지 못한다 — 선택한 pipe를 endpoint 문자열로 다시 찾거나, pair table을 mutex
+아래에서 조회하거나, 임시 vector를 할당하는 일반 경로를 message 경로 안에 넣어도 contract
+test는 전부 green으로 남는다.
 
 따라서 hot path는 정합성 코드와 다른 규칙으로 다루며, 이 장이 그 규칙을 고정한다.
 
@@ -33,12 +32,12 @@ path다. 이 표는 규범이다: 표의 함수(또는 그 callee)를 고치는 
 
 | 진입점 | 경로 |
 |---|---|
-| `zlink_send_part` (PAIR·DEALER·ROUTER·STREAM) | `submit_completion_aware_part` → `send_completion_submit_blocking` (거절 시 DONTWAIT는 `register_send_writable_wait`) → `try_admit_send_parts_scoped` → `xsend_selected_pipe` / `xsend_configured_endpoint` / `send_direct_with_retry` → `lb_t::sendpipe_to` → `pipe_t::write_*` |
+| `zlink_send_part` (PAIR·DEALER·ROUTER·STREAM) | `submit_completion_aware_part` → blocking은 `send_completion_submit_blocking`, DONTWAIT 거절은 `register_send_writable_wait_after_failure` → `try_admit_send_parts_scoped` → `xsend_selected_pipe` / `xsend_configured_endpoint` / `send_direct_with_retry` → `lb_t::sendpipe_to` → `pipe_t::write_*` |
 | `zlink_send_part_rid` (ROUTER·STREAM) | 위와 같되 `send_direct_with_retry` 분기 |
-| `zlink_request_part` FINAL (DEALER) | `request_part_common` → `submit_pull_blocking_request` → `request_admission_submit_blocking` → `try_admit_send_parts_scoped` → `arm_socket_pending_request_timeout` |
-| `zlink_reply_part` FINAL (ROUTER) | `public_router_reply_submit` → `checkout_public_router_reply_target` → `send_public_router_reply_with_wait` → `retain_reply_transport_pipe` → `send_completion_staged_frames_on_pipe` |
+| `zlink_request_part` FINAL (DEALER·ROUTER) | `request_part_common` → `submit_pull_blocking_request` → `request_admission_submit_blocking` → `try_admit_send_parts_scoped` → `arm_socket_pending_request_timeout` |
+| `zlink_reply_part` FINAL (ROUTER) | `public_router_reply_submit` → `checkout_router_reply_target` → `send_public_router_reply_with_wait` → `retain_reply_transport_pipe` → `send_completion_staged_frames_on_pipe` |
 | `zlink_recv_part` / `zlink_router_recv_part` | `recv_dealer_message_direct` / `router_recv_part_impl` → `recv_common` / `recv_routed` → `fq_t::recvpipe` → `pipe_t::read` → `reclassify_transport_pair_application_head` → `end_public_part_receive_delivery_hold` |
-| `zlink_completion_recv` | `process_submit_commands` → `drive_request_pending` → `socket_completion::recv` |
+| `zlink_completion_recv` | `process_submit_commands` → blocking이고 timeout이 0이 아니면 `prepare_completion_pull` → `socket_completion::recv` |
 | `zlink_poll` / `zlink_poller_wait` | `get_events_internal` → `process_commands` → `xhas_in` / `xhas_out` |
 | I/O thread → socket 전달 | `pipe_t::flush` → `activate_read` command → `xread_activated` → `fq_t::activated`; `process_async_mailbox` |
 
@@ -142,3 +141,7 @@ Cell 판정과 집계 판정이 모두 통과해야 gate를 통과한 것이다.
 2. §3의 항목을 하나라도 위반하는 코드는 §4의 캐시·후퇴 경로 형태로 다시 쓴다.
 3. §5.1 gate를 변경 전후로 실행해 결과를 기록한다. Release 준비 단계에서는 §5.2까지 실행한다.
 4. 새 진입점이나 새 per-message 함수를 추가하면 §2 표와 §5.1 cell을 같이 추가한다.
+
+<!-- zlink-nav:start -->
+[시스템 목차](README.ko.md) | [이전: Core design decisions](09-design-decisions.ko.md) | [다음: Synchronization model](11-synchronization-model.ko.md)
+<!-- zlink-nav:end -->

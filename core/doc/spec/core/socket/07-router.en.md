@@ -124,7 +124,10 @@ each option. The following contracts are not included in those comments.
 - When `ZLINK_ROUTER_OPT_MANDATORY` is positive, a directed submit to a routing ID without a
   connected pipe fails with `ZLINK_SUBMIT_NOT_CONNECTED`. A `DONTWAIT FINAL` to a routing ID with
   no route at all then returns `ZLINK_SUBMIT_NOT_CONNECTED` immediately and creates no wait token.
-  With the option at `0` the record is silently dropped as before (`ZLINK_SUBMIT_OK`, ID `0`).
+  With the option at `0` the record is silently dropped (`ZLINK_SUBMIT_OK`, ID `0`).
+- `ZLINK_ROUTER_OPT_PROBE` can be set and read with `zlink_set_router_option()` and
+  `zlink_get_router_option()` on a DEALER handle as well as on a ROUTER handle. Passing any other
+  `zlink_router_option_t` value to a DEALER handle returns `ZLINK_CONFIG_INVALID_ARGUMENT` with `EINVAL`.
 - `ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID` sets the local alias that identifies the pipe created by
   the next `zlink_connect()` and is set before each connect.
 

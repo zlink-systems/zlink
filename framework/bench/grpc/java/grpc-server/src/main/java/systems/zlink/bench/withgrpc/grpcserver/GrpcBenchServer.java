@@ -23,8 +23,8 @@ public final class GrpcBenchServer {
     }
 
     public static void main(String[] args) throws Exception {
-        int port = Args.integer(args, "--port", 5091);
-        String metricsUrl = Args.value(args, "--metrics-url", "http://127.0.0.1:5094");
+        int port = Args.integer(args, "--port", 5242);
+        String metricsUrl = Args.value(args, "--metrics-url", "http://127.0.0.1:5243");
 
         BenchServerMetrics metrics = new BenchServerMetrics();
         Server server = ServerBuilder.forPort(port)
@@ -53,6 +53,7 @@ public final class GrpcBenchServer {
         // 29-byte header that came back (G2).
         @Override
         public void echo(BenchPayload request, StreamObserver<BenchPayload> observer) {
+            metrics.record(request.getBody().asReadOnlyByteBuffer());
             observer.onNext(request);
             observer.onCompleted();
         }
