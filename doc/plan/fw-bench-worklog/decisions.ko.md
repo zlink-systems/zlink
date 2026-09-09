@@ -803,6 +803,52 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
   framework window 1,861 vs `grpc-kotlin` 64,433. Java framework 계층도 .NET(FB-047)과 같은 계열의
   배율 문제로 보이며 3-run 뒤 판정한다.
 
+## FB-051 — 2차 send-saturation의 `KMSG/s` 분자는 settle 뒤 B의 active-header 수신 수다; drain 열을 함께 읽는다 (2026-09-09, fwb2-07 지적)
+
+- 관측: fwb2-07이 집계기 `readers.py:606·615`가 source의 `server_received_at_close`를 settle 뒤
+  `target_stats.received`로 덮고 send 처리량을 그 값/`durationMs`로 다시 계산한다고 지적했다.
+  C++ framework send smoke(2초)에서 active 경계 2,204건, settle 뒤 8,918건, drain 5.5초 —
+  원본 `RESULT` 1,102 msg/s가 표에서는 4,459 msg/s가 된다. FB-013은 1차 모델(client가 server
+  snapshot을 직접 읽던 구성)에서 "active window가 닫히는 시점"의 snapshot을 요구했다.
+- 판정: **집계기는 규격대로다.** 2차 규격 §6은 B가 header의 phase로 active 메시지를 세고, §10.4
+  7단계는 settle 뒤 runner가 B stats를 `target_stats`에 합친다고 정한다. .NET·Node·Java runner
+  (`dotnet/run_local.sh:191`, `node/run_local.sh:179`, `java/runner_common.sh:113-118`)와 집계기
+  모두 같은 값을 쓰며 S1 published 표(FB-047)도 이 기준이다. 2차 모델에서 A는 B의 수신 수를
+  알 수 없으므로 A의 "경계값"은 A 자신의 완료 관측일 뿐이다. C++ source가 남기는
+  `completed_at_close`는 진단 필드로 유지한다.
+- 그러나 FB-013의 우려(분모가 active 길이인데 분자에 drain 중 수신이 들어간다)는 그대로
+  유효하다. **결정**: 표의 `KMSG/s`는 규격 값(active-header 수신 / `durationMs`)으로 싣고,
+  결과 문서(언어별 §5·S5 비교 보고서)의 send 행에는 `drain ms`를 반드시 같은 표에 두며,
+  drain이 active의 10%를 넘는 행은 `received / (durationMs + drainMs)`의 **소비율**을 각주로
+  함께 적는다. 규격·집계기·runner는 바꾸지 않는다.
+
+## FB-052 — C++ framework 계층: request-serial 0.55 KOPS(raw의 7%), window 1.05 KOPS — ms 단위 pump 의심 (2026-09-09, fwb2-07 smoke, 판정 아님)
+
+- 관측(1-run 2초 smoke @1024): `zlink-framework-cpp` request-serial 555 ops/s(mean 1.80 ms)
+  vs `zlink-cpp` 7,605(0.131 ms)·`grpc-cpp` 13,830; request-window(100) 1,052 ops/s(mean 92 ms),
+  send-saturation 1,102 msg/s(active 경계) / drain 5.5초. .NET(FB-047)의 0.12~0.24, Java(FB-050
+  부수)의 309 vs 5,598과 같은 계열이며 C++이 가장 낮다.
+- 벤치 쪽 요인 검토: A는 public `task_t::await_ready()`를 `yield()`로 polling한다(driver 한
+  thread). serial에서 in-flight 1건이 1.8 ms 걸리는 것은 polling 비용(µs)으로 설명되지 않는다.
+  window 100에서 처리량이 2배에 그치고 지연이 92 ms로 늘어난 것은 요청당 ~1 ms의 직렬화가
+  있다는 뜻이다.
+- 제품 쪽 후보(fwb2-07은 조사하지 않음, 감독자 grep):
+  `mesh_node_host_service.cpp:2476`(1 ms 단위 wait), `mesh_node_runtime.cpp:3283`·`:3799`
+  (`co_await delay(1ms)` 루프), `route_mesh_runtime_service.cpp:482`(10 ms sleep).
+- 결정: 3-run(S3) 값으로 판정하되, 벤치 결함으로 보지 않는다. 원인 조사는 1.0 묶음의 framework
+  C++ 성능 항목(FB-047과 같은 항목)으로 넘긴다.
+
+## FB-053 — Framework C++ HTTP host: listener bind 실패가 start 결과로 전달되지 않고 프로세스가 abort된다 (2026-09-09, fwb2-07 발견, 감독자 확인)
+
+- 관측: raw A의 실제 포트 충돌에서 프로세스 abort. `http_listener.cpp:149`는 bind/listen 실패를
+  `std::runtime_error`로 throw하고, `http_host_service_t::start`(`:515-526`)는 endpoint마다
+  thread를 띄워 `run()`을 호출한 뒤 즉시 success를 돌려준다. thread 안의 예외는 잡히지 않아
+  `std::terminate`. `app.is_ready()`가 bind 완료를 보장하지도 않는다.
+- 소유: framework C++ runtime(HTTP hosting). 벤치는 HTTP 응답 readiness로 우회했다(규격 §10.4
+  2·3단계가 요구하는 대기와 같다).
+- 결정: 제품 결함. 1.0 묶음의 framework C++ 항목. 다른 언어의 HTTP host는 bind 실패를 start
+  실패로 돌려주는지 1.0 준비 때 함께 확인한다.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
@@ -824,5 +870,6 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 | `fwb2-02` | S1 | sol | 완료·커밋 `eb24d66003`(+감독자 `59521bf2f4` trigger 필드 확정) | 집계기 S2S 스키마·(runId, cellId) 병합·incomplete·Source/Target·KOPS/KMSG/s·`doc-table`, 테스트 60 |
 | `fwb2-03` | S1 | sol | 완료·커밋 `d59e8a00e8` | .NET A/B runner, ServerSupport 재사용, 5셀 smoke rc=0. 3-run은 감독자 티켓(claude-fwb2-s1) |
 | `fwb2-04` | S2 | sol | 완료·커밋 `b2aeda9f9d` | Node A/B runner, unsupported manifest, raw window 결함 재현(FB-049) |
-| `fwb2-06` | S2 | sol | 완료·커밋 예정 | Java A/B runner + Kotlin 보조 2셀, raw window reply 유실 재현(FB-050) |
+| `fwb2-06` | S2 | sol | 완료·커밋 `f8b4fa98dd` | Java A/B runner + Kotlin 보조 2셀, raw window reply 유실 재현(FB-050) |
+| `fwb2-07` | S3 | astra | 완료·커밋 `3ad4d048c9` | C++ A/B runner + `zlink-framework-cpp`(RouteMesh typed protobuf), 6셀 smoke rc=0. FB-051(집계기 지적 기각)·FB-052·FB-053 |
 | `fwb2-05` | S4 | astra | 완료·커밋 `7786eec28a`(보고서만) | zlink-c 4096B 두 모드 = Core I/O 배치(FB-048), 4096 분모 게재 불가 |
