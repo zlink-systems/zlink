@@ -64,7 +64,7 @@ int threads = zlink_ctx_get(ctx, ZLINK_IO_THREADS, &err);
 ```
 
 **Parameters.** `option_`은 `zlink_ctx_option_t` 값 중 하나다(`ZLINK_IO_THREADS`,
-`ZLINK_MAX_SOCKETS`, `ZLINK_THREAD_PRIORITY`, `ZLINK_THREAD_SCHED_POLICY`, `ZLINK_MAX_MSGSZ`,
+`ZLINK_MAX_SOCKETS`, `ZLINK_THREAD_PRIORITY`, `ZLINK_THREAD_SCHED_POLICY`,
 `ZLINK_THREAD_AFFINITY_CPU_ADD`/`_REMOVE`, `ZLINK_CTX_OPT_BLOCKY`,
 `ZLINK_CTX_OPT_AUTO_HWM_ENABLE`, `ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS`,
 `ZLINK_CTX_OPT_AUTO_HWM_PROFILE` — 각각의 의미와 기본값은 Context 스펙의 옵션 표 참고).
@@ -79,9 +79,8 @@ int threads = zlink_ctx_get(ctx, ZLINK_IO_THREADS, &err);
 **선택 기준.** 위 `int` 타입 옵션에 쓴다. `ZLINK_CTX_OPT_AUTO_HWM_PROFILE`과
 `ZLINK_CTX_OPT_AUTO_HWM_ENABLE`은 실행 중인 context에서 바꿔도 안전하다 — profile 변경은 다음
 automatic HWM 재계산에 적용되고, enable 토글은 여전히 automatic HWM을 쓰는 socket에 즉시
-적용된다. `ZLINK_SOCKET_LIMIT`과 `ZLINK_THREAD_PRIORITY`는 enum 값 `3`을 공유한다 — lookup은
-읽기 전용 `ZLINK_SOCKET_LIMIT`으로 확정되므로, 이 쌍으로는 `ZLINK_THREAD_PRIORITY`를 실제로
-설정·조회할 수 없다.
+적용된다. `ZLINK_THREAD_PRIORITY`(값 22, 기본 -1)는 이 쌍으로 설정·조회하고,
+`ZLINK_SOCKET_LIMIT`(값 3)은 읽기 전용이다.
 
 ---
 

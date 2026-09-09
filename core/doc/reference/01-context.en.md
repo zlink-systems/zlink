@@ -64,7 +64,7 @@ int threads = zlink_ctx_get(ctx, ZLINK_IO_THREADS, &err);
 ```
 
 **Parameters.** `option_` is one of the `zlink_ctx_option_t` values (`ZLINK_IO_THREADS`,
-`ZLINK_MAX_SOCKETS`, `ZLINK_THREAD_PRIORITY`, `ZLINK_THREAD_SCHED_POLICY`, `ZLINK_MAX_MSGSZ`,
+`ZLINK_MAX_SOCKETS`, `ZLINK_THREAD_PRIORITY`, `ZLINK_THREAD_SCHED_POLICY`,
 `ZLINK_THREAD_AFFINITY_CPU_ADD`/`_REMOVE`, `ZLINK_CTX_OPT_BLOCKY`,
 `ZLINK_CTX_OPT_AUTO_HWM_ENABLE`, `ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS`,
 `ZLINK_CTX_OPT_AUTO_HWM_PROFILE`; see the Context specification's option table for each one's
@@ -80,9 +80,8 @@ failure.
 **When to use.** Use these for the `int`-typed options above. `ZLINK_CTX_OPT_AUTO_HWM_PROFILE`
 and `ZLINK_CTX_OPT_AUTO_HWM_ENABLE` are safe to change on a live context — the profile change
 applies to the next automatic HWM recalculation, and the enable toggle applies immediately to
-sockets still on automatic HWM. `ZLINK_SOCKET_LIMIT` and `ZLINK_THREAD_PRIORITY` share enum
-value `3`; the lookup resolves to the read-only `ZLINK_SOCKET_LIMIT`, so `ZLINK_THREAD_PRIORITY`
-cannot actually be set or read through this pair.
+sockets still on automatic HWM. `ZLINK_THREAD_PRIORITY` (value 22, default -1) is set and read
+through this pair; `ZLINK_SOCKET_LIMIT` (value 3) is read-only.
 
 ---
 
