@@ -29,9 +29,11 @@ page. Every stage is decided and executed by the runtime.
 | Core and binding | Provide socket readiness notification, record receive/claim, completion notification of binding operations and HWM retries. Their internal queues and threads belong to the binding and are not counted here. |
 | Remote runtime (target) | Runs receive, handler and reply under the same rules. Source and target differ only in role; they are the same runtime code. |
 
-Completion meaning, handler order, permits, copies and state protection stay with their own pages;
-this page defines only **the order in which those rules combine on the hot path** and the observable
-result of that combination.
+Completion meaning, handler order, permits — the slot the target runtime acquires per record to bound
+the number of received items ahead of handler execution, whose shared queue is the
+[Application job queue](../00-foundation/02-glossary.en.md#application-job-queue) —, copies and state
+protection stay with their own pages; this page defines only **the order in which those rules combine
+on the hot path** and the observable result of that combination.
 
 | Question | Section |
 |---|---|
@@ -59,35 +61,34 @@ glossary term; §6 gives the real type names per language.
 The individual rules — take the permit first, read at most 64 records per wake-up, never poll with a
 fixed delay, the Framework adds no payload copies, prepare candidate lists at change time — already
 exist in other pages. When rules are scattered, an implementer picks one of several shapes that
-satisfy them, and each shape has a different cost. The four language runtimes did pick different
-shapes under the same rules — a receive loop that reads one record whenever a permit exists, receive
-polling repeated with a fixed 1 ms sleep, a receive turn that ends after every record and repeats its
-management work each turn — and Framework-path throughput fell far short of the binding-direct path
-(the measurements and causes are owned by the [framework messaging bench](../../../bench/with-grpc-local.en.md)
-and the decision records).
+satisfy them, and each shape has a different cost. Ending the receive turn after every record repeats
+the wake-up and management cost for each record. Fixed-interval polling adds a fixed delay between
+arrival and claim. This page fixes one common execution order that removes those costs.
 
-This page fixes one low-cost shape. A language chooses only the kind of execution resource (thread,
-event loop, virtual thread); it does not choose the number, order or waiting style of the stages.
+A language chooses only the kind of execution resource (thread, event loop, virtual thread); it does
+not choose the number, order or waiting style of the stages.
 
 ## 3. Source side — the submit path
 
-When a caller submits `send` or `request`, the runtime passes through five stages. The first four
-finish synchronously on the execution resource the caller invoked; the fifth runs on the process-wide
+When a caller submits `send` or `request`, the runtime passes through five stages. E1 finishes
+synchronously on the execution resource the caller invoked. E2–E4 finish synchronously inside the turn
+of the state lane that owns their state — the selector owner for E2, the operation owner for E3 and
+E4, at most two on the normal path. E5 runs on the process-wide
 [completion dispatcher](../00-foundation/02-glossary.en.md#completion-dispatcher) — the place where a
 completion callback runs in a new execution turn.
 
 ```mermaid
 sequenceDiagram
     participant C as Caller
-    participant R as Source runtime (caller context)
+    participant R as Source runtime (caller context · owner turn)
     participant B as Binding·Core
     participant D as Completion dispatcher
 
     C->>R: submit send·request
     R->>R: E1 encode the typed payload into wire parts (once)
-    R->>R: E2 read the target from the prepared candidate list
-    R->>R: E3 register pending entry and dispatcher slot (plus reply route for a request)
-    R->>B: E4 start the binding's async operation, get the pending result
+    R->>R: E2 read the target from the prepared candidate list in the selector owner's turn
+    R->>R: E3 register pending entry and dispatcher slot in the operation owner's turn (plus reply route for a request)
+    R->>B: E4 start the binding's async operation in the same turn, get the pending result
     B-->>R: (send) local admission succeeded — immediately or as a later completion
     B->>R: (request) reply·error·timeout notification → terminal authority decided
     R->>D: E5 hand the decided result to the reserved dispatcher slot
@@ -97,20 +98,27 @@ sequenceDiagram
 | Stage | What the runtime does | Execution resource | So that |
 |---|---|---|---|
 | E1 encode | Encodes the typed payload with the codec into a list of wire parts. Never allocates a new buffer to join header and body. | caller | The Framework adds zero full copies ([Payload Ownership "2"](05-payload-ownership-and-codec.en.md#2-copies-that-can-be-eliminated)). |
-| E2 resolve | Picks one target from the candidate list and selection order prepared at change time. Ownership of the selection state (candidate list, accumulators, cursor), the way candidate replacement and selection are put into one order, and the fallback that runs the selection procedure when the cycle search reached its bound are owned by [Channel Messaging "The Candidate List and Selection Order Are Prepared in Advance Whenever State Changes"](../02-channel-transport/02-channel-messaging.en.md#the-candidate-list-and-selection-order-are-prepared-in-advance-whenever-state-changes). What this page requires is that selection finishes in constant time in the caller context and never waits, per request, for a lane turn of another state owner (topology, liveness, port). | caller | No per-request scan of peers, no repeated filtering or sorting, no waiting on another owner's lane. |
-| E3 register | For every operation whose terminal completion may arrive later — request and send alike — registers the pending entry and the completion-dispatcher slot **before the transport submit**. For a request it also creates `OperationId` and `ReplyRouteId` and registers the reply route, as in [Submit And Completion "10"](01-submit-and-completion.en.md#10-operation-identity-and-where-completion-happens-implementation). Without a free slot the operation is refused with `CapacityExceeded`. The state class, protection and lifetime of the pending entry and the dispatcher reservation (held until the callback returns) are defined by [Submit And Completion "11"](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation) and [State Ownership And Lanes "4"](06-state-ownership-and-lanes.en.md#4-state-classifications-and-how-to-tell-them-apart). What this page requires is that registration finishes in constant time in the caller context without waiting for another owner's lane turn. | caller | A completion is never processed before its registration, and no timer object is created per request — the deadline is a field of the entry and expiry is checked by the management work of §4.2 or a timer wheel. |
-| E4 submit | Starts the binding's asynchronous request/send operation **once** and receives the pending result. The Framework keeps no send queue of its own. | caller | HWM waiting and retries after the operation started belong to Core and the binding ([Submit And Completion "5"](01-submit-and-completion.en.md#5-backpressure-and-error-classification)); the Framework never creates a second operation. |
+| E2 resolve | Picks one target from the candidate list and selection order prepared at change time. Candidate replacement and selection are decided in one order on the selector owner's state lane — ownership of the selection state (candidate list, accumulators, cursor), the way that order is built, and the fallback that runs the selection procedure when the cycle search reached its bound are owned by [Channel Messaging "The Candidate List and Selection Order Are Prepared in Advance Whenever State Changes"](../02-channel-transport/02-channel-messaging.en.md#the-candidate-list-and-selection-order-are-prepared-in-advance-whenever-state-changes). The normal path of a prepared selection order only looks up the target and advances the cursor, and requests no **additional** turn on the topology, liveness or port owner's lane to do so. What this page requires is that selection finishes in constant time within one turn of the selector owner — when the caller is not already on that lane, the one switch into that turn is part of the normal path. | the selector owner's turn | No per-request scan of peers, no repeated filtering or sorting, no waiting on another owner's lane. |
+| E3 register | For every operation whose terminal completion may arrive later — request and send alike — registers the pending entry and the completion-dispatcher slot. For a request it also creates `OperationId` and `ReplyRouteId` and registers the reply route, as in [Submit And Completion "10"](01-submit-and-completion.en.md#10-operation-identity-and-where-completion-happens-implementation). Without a free slot the operation is refused with `CapacityExceeded`. Registration, the capacity decision, close and terminal handling are serialised by the same operation owner. Registration completes before the transport submit ([State Ownership And Lanes "Completion Before Return"](06-state-ownership-and-lanes.en.md#completion-before-return)), and the dispatcher reservation is held until the callback returns. Beyond the required owner turn no separate registration queue and no additional lane round trip is created. The state class and lifetime of the pending entry and the dispatcher reservation are defined by [Submit And Completion "11"](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation) and [State Ownership And Lanes "4"](06-state-ownership-and-lanes.en.md#4-state-classifications-and-how-to-tell-them-apart). What this page requires is that registration finishes in constant time within one turn of the operation owner. | the operation owner's turn | A completion is never processed before its registration, and no timer object is created per request — the deadline is a field of the entry and expiry is checked by the management work of §4.2 or a timer wheel. |
+| E4 submit | Starts the binding's asynchronous request/send operation **once** and receives the pending result. It starts within the same turn that decided the E3 registration, so the caller may rely on the registration being complete before it observes the return of the submit. The Framework keeps no send queue of its own. | the same turn as E3 | HWM waiting and retries after the operation started belong to Core and the binding ([Submit And Completion "5"](01-submit-and-completion.en.md#5-backpressure-and-error-classification)); the Framework never creates a second operation. |
 | E5 complete | Where the binding reports completion (reply, error, timeout, local admission), decides terminal authority once through the atomic take-out of [Submit And Completion "9"](01-submit-and-completion.en.md#9-request-completion--the-completion-race-and-timeout-budget) and hands the result to the dispatcher slot reserved in E3. The caller continuation runs in a **new execution turn** after the current completion handling and the lane-current scope have ended ([Submit And Completion "11"](01-submit-and-completion.en.md#11-the-execution-turn-of-the-completion-callback-implementation)). | binding completion resource → completion dispatcher | The only execution-resource switch the Framework introduces is that one dispatcher turn. No host mailbox or dispatch thread sits between the completion notification and the dispatcher. |
 
-**On the source path the Framework introduces exactly one execution-resource switch, the dispatcher
-turn of E5.** An execution-resource switch is a point where a message or its completion enters a queue
-and is taken out on another thread, task or event-loop turn. Because E1–E4 finish synchronously in the
-caller context, a caller that submits 100 requests back to back gets all 100 into the binding. The
-switch count is taken over the interval from "the binding's completion notification arrived" to "the
-first instruction of the caller continuation".
+**Execution-resource switches on the source path are counted separately over two intervals.** An
+execution-resource switch is a point where a message or its completion enters a queue and is taken out
+on another thread, task or event-loop turn. Over the submit interval — from the caller's call to the
+binding submit of E4 — the only switches allowed are entries into the required owner turns, at most two
+on the normal path: caller → the selector owner's turn (E2), → the operation owner's turn (E3 and E4).
+When both owners are the same there is at most one, and when the caller is already on that lane the
+entry is not counted. Over the completion interval — from "the binding's completion notification
+arrived" to "the first instruction of the caller continuation" — the Framework introduces exactly one
+switch, the dispatcher turn of E5. Owner turns run FIFO, so a caller that submits 100 requests back to
+back gets all 100 into the binding in submit order.
 
-**A send completes** not when the E4 call returns but when local admission actually succeeded
-([Submit And Completion "2"](01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-per-language-names)).
+**A send completes** not when the E4 call returns but when local admission actually succeeded — the
+[source-local admission](../00-foundation/02-glossary.en.md#source-local-admission) in which the socket's
+send queue accepts the message, not a confirmation of remote receipt
+([Submit And Completion "2"](01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-per-language-names),
+["13"](01-submit-and-completion.en.md#13-the-completion-point-of-a-call-that-does-not-wait-for-a-reply)).
 With immediate admission, E5 takes out the E3 entry within the same call, decides the result and hands
 it to the dispatcher slot; when admission is pending on HWM, a later completion takes the same E5 path.
 Either way the caller continuation runs in a new dispatcher turn. The continuation of a caller that released its gate with `Yield` runs
@@ -121,11 +129,13 @@ that re-acquisition is not part of the switch count.
 owned by Channel Messaging, the pending entry and dispatcher reservation by Submit And Completion "10"
 and "11", and the classification rules by
 [State Ownership And Lanes "4"](06-state-ownership-and-lanes.en.md#4-state-classifications-and-how-to-tell-them-apart).
-What this page fixes is the **shape** that protection takes on the submit path: the request never asks
-**another owner** for a turn of its [state lane](../00-foundation/02-glossary.en.md#state-lane) — the
-execution unit that serialises access to a component's state — and waits for the result, and E1–E4
-finish as constant-time operations in the caller context. An implementation that waits on the topology,
-liveness, selector and port lanes in turn for every request violates this page.
+What this page fixes is the **shape** that protection takes on the submit path: the only turns of a
+[state lane](../00-foundation/02-glossary.en.md#state-lane) — the execution unit that serialises access
+to a component's state — that the request enters are the two required owner turns, the selector owner
+for E2 and the operation owner for E3 and E4; inside those turns it never asks **another owner** for a
+lane turn and waits for the result, and each stage finishes as a constant-time operation within its own
+turn. An implementation that waits on the topology, liveness and port lanes in turn for every request
+violates this page.
 
 **Framework capacity waiting before handing over to the binding** follows
 [Submit And Completion "5"](01-submit-and-completion.en.md#5-backpressure-and-error-classification) and
@@ -133,9 +143,11 @@ liveness, selector and port lanes in turn for every request violates this page.
 The internal `Backpressured` state is not a public terminal result, while deadline, capacity and
 shutdown errors reach the caller exactly as those pages define.
 
-Internal check — that no state-lane `Run`/`TryPost` call and no per-request timer registration occurs
-between E1 and E4, and that E5 puts no host mailbox or dispatch thread in front of the dispatcher, are
-white-box invariants verified by tracing.
+Internal check — that between E1 and E4 there is no state-lane round trip to any owner other than the
+required owner turns (the selector owner for E2, the operation owner for E3 and E4) and no per-request
+timer registration, that owner-turn entries number at most two on the normal path (one when both
+owners are the same), and that E5 puts no host mailbox or dispatch thread in front of the dispatcher,
+are white-box invariants verified by tracing.
 
 ## 4. Target side — the receive turn
 
@@ -179,7 +191,7 @@ sequenceDiagram
 
 | Stage | What the ingress owner does | So that |
 |---|---|---|
-| I0 wait | Waits for data readiness and completion readiness **without occupying the execution resource**. The wait bound is the next management deadline. While nothing is ready it neither busy-polls nor checks for data at a fixed interval. | Idle CPU is zero and no fixed sleep value is added to the arrival-to-claim latency. |
+| I0 wait | Waits for data readiness and completion readiness **without occupying the execution resource**. The wait bound is the next management deadline. While nothing is ready it neither busy-polls nor checks for data at a fixed interval. | No CPU is spent on repeated data checks while waiting for readiness, and no fixed sleep delays reception. |
 | I1 permit | Before claiming ordinary records, acquires this turn's permit budget from the host-shared permit in the order of [Application Job Queue "3"](04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order). The budget is the smaller of the per-turn limit (64) and the remaining permits. Without a permit it stops ordinary receive, while handling of supply identified pre-receive as a terminal completion, management deadlines, permit returns and shutdown notifications keep progressing. | Never receives without a permit, and with zero permits the completions of already started operations and the management work never stall. |
 | I2 claim | Claims records from Core/binding continuously within the budget, applying whichever of permit, count (at most 64), byte and elapsed-time limits is reached first and keeping the cursor ([Application Job Queue "4"](04-application-job-queue-and-backpressure.en.md#4-reading-multiple-items-from-the-socket-implementation)). Never ends the turn after one record. | Wake-up and read are not repeated once per queued record. |
 | I3 classify | Decodes only the header of each record. Control records — liveness probes and ACKs, topology — are handled internally here and their permit returned; they are never put on an application handler queue. For application records the payload is not decoded; only the owner is determined. | A claimed control record never waits behind the application workers' backlog (§4.2). |
@@ -286,8 +298,8 @@ check conditions of each stage.
 |---|---|---|---|
 | C++ | the per-node host dispatch thread | worker threads of the application executor | workers of the shared completion dispatcher |
 | .NET | the MeshNode receive loop (a dedicated task) | ThreadPool work items | continuations posted to the ThreadPool |
-| Java | the virtual-thread pump | application lane workers | virtual threads of the shared completion dispatcher |
-| Node | the event loop's readable callback | microtasks on the same event loop | the same event loop |
+| Java | the virtual-thread pump | application lane workers | platform worker threads of the shared completion dispatcher |
+| Node | the event loop | microtasks on the same event loop | the same event loop |
 
 The table names only kinds of resources. Each language page (`spec/server/languages/`) records the
 real type names, how the current implementation realises each stage of §3–§4, and which tests and bench
@@ -300,9 +312,10 @@ instrumentation — switch counts, copy counts, task creation — are owned by t
 of §3 and §4, and the language pages link the instrumentation points and test identifiers.
 
 - (a) **Waiting style**: while nothing is ready the ingress owner neither busy-polls nor checks for
-  data at a fixed interval. With sufficient permits and yielding application handlers, the latency
-  distribution from readiness observation to claim, and the CPU during idle waiting, are checked with
-  the measurement boundaries and tolerances the language page defines.
+  data at a fixed interval. The waiting style is verified by code and trace review. The measurement
+  specification — which CPU is measured, whether management work is included, the observation window,
+  the latency statistics from readiness observation to claim and their tolerances — is a **pending
+  item**: once the language page defines it, this section links to that section.
 - (b) **Batched claim**: under measurement conditions that do not reach the byte or time limit, with 64
   records queued one turn claims 64 (given enough permits). With fewer permits it claims that many and
   leaves the rest in the Core queue — no reject, no drop.
@@ -310,18 +323,22 @@ of §3 and §4, and the language pages link the instrumentation points and test 
   path. As rows of the [framework messaging bench](../../../bench/with-grpc-local.en.md),
   `zlink-framework-<lang> / zlink-<lang>` is at least 0.90 for each of request-serial, request-window and
   send-saturation and for each payload 1024 and 4096, the value being the ratio of the aggregator's 3-run
-  medians. This 0.90 is a target this page sets (user decision 2026-09-10), separate from the 0.80 pass
-  line bench spec §7.2 applies to request-backpressure.
-- (d) **Concurrency**: in request-window(100), the 3-run median of the per-run mean in-flight count
+  medians. This 0.90 is the pass line this page has confirmed, separate from the 0.80 pass line bench
+  spec §7.2 applies to request-backpressure — a gap of 10% or more from the binding-direct path is a
+  defect (user decision 2026-09-10).
+- (d) **Concurrency** (measurement candidate): in request-window(100), the 3-run median of the per-run mean in-flight count
   (throughput × mean latency) is at least 90.
-- (e) **Consumption rate**: in send-saturation the time D from the close of the active window to the
+- (e) **Consumption rate** (measurement candidate): in send-saturation the time D from the close of the active window to the
   moment the last active record was received at the target is at most 10% of the active length T
   (`D / T ≤ 0.10`). The judgement applies only after full reception, zero errors and zero abandoned
   operations are confirmed. The `drain_ms` the bench runner records includes the settle check and is a
   diagnostic value; D is measured separately from target receive events.
 
-Missing (c)–(e) means that language's runtime violates this page; bench conditions, timeouts and HWM
-values are never adjusted to meet them. The 90 and 10% of (d) and (e) are values this page sets; they
-are confirmed with their evidence after the first 3-run judgement.
+Missing (c) means that language's runtime violates this page; bench conditions, timeouts and HWM values
+are never adjusted to meet it.
+
+The 90 and 10% of (d) and (e) are measurement candidates and are not used for violation judgements
+until the pass line is confirmed. They are confirmed with their evidence after the first 3-run
+judgement; once confirmed, the same rule as (c) applies.
 
 [Execution overview](README.en.md) · [Spec index](../README.en.md) · [Previous: 07. Serial Executor Layers](07-serial-executor-layers.en.md)
