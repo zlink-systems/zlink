@@ -28,22 +28,23 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 public final class ZLinkStateLane {
     private static final int DRAIN_BATCH_LIMIT = 100;
     private static final ThreadLocal<ZLinkStateLane> CURRENT = new ThreadLocal<>();
+    // Lane identity and FIFO belong to the mailbox, not to an executor.
+    // In particular, a request-scoped handler owner needs no private executor.
+    private static final ExecutorService DEFAULT_EXECUTOR =
+        Executors.newVirtualThreadPerTaskExecutor();
 
     private final ConcurrentLinkedQueue<WorkItem> mailbox = new ConcurrentLinkedQueue<>();
     private final AtomicInteger scheduled = new AtomicInteger();
     private final AtomicInteger closed = new AtomicInteger();
     private final CompletableFuture<Void> completed = new CompletableFuture<>();
-    private final ExecutorService ownedExecutor;
     private final Executor executor;
 
     public ZLinkStateLane() {
-        ownedExecutor = Executors.newVirtualThreadPerTaskExecutor();
-        executor = ownedExecutor;
+        this(DEFAULT_EXECUTOR);
     }
 
     public ZLinkStateLane(Executor executor) {
         this.executor = Objects.requireNonNull(executor, "executor");
-        ownedExecutor = null;
     }
 
     public static ZLinkStateLane current() {
@@ -116,7 +117,6 @@ public final class ZLinkStateLane {
         if (closed.compareAndSet(0, 1)) {
             if (scheduled.get() == 0 && mailbox.isEmpty()) {
                 completed.complete(null);
-                closeOwnedExecutor();
             } else {
                 scheduleDrain();
             }
@@ -161,7 +161,6 @@ public final class ZLinkStateLane {
                 scheduleDrain();
             } else if (closed.get() != 0) {
                 completed.complete(null);
-                closeOwnedExecutor();
             }
             return;
         }
@@ -179,16 +178,9 @@ public final class ZLinkStateLane {
                 scheduled.set(0);
                 if (closed.get() != 0) {
                     completed.completeExceptionally(rejected);
-                    closeOwnedExecutor();
                 }
             }
         });
-    }
-
-    private void closeOwnedExecutor() {
-        if (ownedExecutor != null) {
-            ownedExecutor.shutdown();
-        }
     }
 
     private static void runWithCurrent(ZLinkStateLane lane, Runnable command) {
