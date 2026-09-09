@@ -170,6 +170,56 @@ void test_default_publish_drops_instead_of_backpressuring ()
     test_context_socket_close (pub);
 }
 
+void test_a12_xsub_subscription_reports_success_but_is_lost_at_hwm ()
+{
+    void *pub = test_context_socket (ZLINK_SOCKET_XPUB);
+    void *sub = test_context_socket (ZLINK_SOCKET_XSUB);
+    // One subscription contains its command byte and a one-byte filter.
+    const uint64_t hwm = sizeof (zlink_msg_t) + 2;
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (sub, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_set_option (pub, ZLINK_OPT_RCVHWM, &hwm, sizeof (hwm)));
+    contract_socket_pair_t pair (pub, sub, 0, 0, true, hwm);
+
+    // Do not pump the publisher owner until both calls finish. This fills
+    // the upstream pipe without a scheduling race or a transport buffer.
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_subscription (sub, "a"));
+    TEST_ASSERT_EQUAL_UINT64 (1, pair.application[1]->get_msgs_written ());
+    TEST_ASSERT_FALSE (pair.application[1]->check_hwm ());
+
+    // A12 diagnosis only: this records the current success-plus-loss behavior
+    // in XSUB spec section 2; it does not define a future delivery guarantee.
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_subscription (sub, "b"));
+    TEST_ASSERT_EQUAL_UINT64 (1, pair.application[1]->get_msgs_written ());
+    int topics = 0;
+    size_t topics_size = sizeof (topics);
+    TEST_ASSERT_SUCCESS_ERRNO (
+      zlink_get_sub_option (sub, ZLINK_SUB_OPT_TOPICS_COUNT, &topics, &topics_size));
+    TEST_ASSERT_EQUAL_INT (2, topics);
+
+    pair.pump ();
+    char command[2] = {0, 0};
+    TEST_ASSERT_EQUAL_INT (2, recv_raw_frame (pub, command, sizeof (command), ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_UINT8 (1, static_cast<unsigned char> (command[0]));
+    TEST_ASSERT_EQUAL_UINT8 ('a', static_cast<unsigned char> (command[1]));
+    TEST_ASSERT_EQUAL_INT (-1, recv_raw_frame (pub, command, sizeof (command), ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+
+    // Recovered credit allows a fresh subscription, but does not replay b.
+    TEST_ASSERT_TRUE (pair.application[1]->check_hwm ());
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_subscription (sub, "c"));
+    pair.pump ();
+    TEST_ASSERT_EQUAL_INT (2, recv_raw_frame (pub, command, sizeof (command), ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_UINT8 (1, static_cast<unsigned char> (command[0]));
+    TEST_ASSERT_EQUAL_UINT8 ('c', static_cast<unsigned char> (command[1]));
+    TEST_ASSERT_EQUAL_INT (-1, recv_raw_frame (pub, command, sizeof (command), ZLINK_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (EAGAIN, errno);
+
+    test_context_socket_close (sub);
+    test_context_socket_close (pub);
+}
+
 }
 
 int main ()
@@ -178,5 +228,6 @@ int main ()
     UNITY_BEGIN ();
     RUN_TEST (test_nodrop_raw_empty_frame_hwm);
     RUN_TEST (test_default_publish_drops_instead_of_backpressuring);
+    RUN_TEST (test_a12_xsub_subscription_reports_success_but_is_lost_at_hwm);
     return UNITY_END ();
 }
