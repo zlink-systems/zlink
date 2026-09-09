@@ -36,6 +36,8 @@ public final class ZLinkSerialExecutionQueue {
     public static final int DEFAULT_LIFECYCLE_BURST_LIMIT = 8;
     public static final Duration DEFAULT_OWNER_TIME_BUDGET = Duration.ofMillis(10);
     private static final ThreadLocal<ZLinkSerialExecutionQueue> CURRENT = new ThreadLocal<>();
+    private static final ThreadLocal<ZLinkSerialExecutionQueue> EXECUTION_OWNER =
+        new ThreadLocal<>();
     private static final ThreadLocal<CompletableFuture<Void>> CURRENT_GATE = new ThreadLocal<>();
     private static final ThreadLocal<Boolean> CURRENT_RELEASE_DEFERRED = new ThreadLocal<>();
     // A queue never runs a drain on its submitter's stack.  This is shared by
@@ -755,14 +757,22 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private void drainScheduled() {
+        drainScheduled(false);
+    }
+
+    private void drainScheduled(boolean inline) {
         Entry entry;
         synchronized (this) {
             drainScheduled = false;
             entry = takeNextForDrainLocked();
         }
         if (entry != null) {
-            invoke(entry.operation, entry.result, entry.flow,
-                entry.applicationJobOwnership).whenComplete(
+            CompletionStage<Void> invocation = inline
+                ? invokeInline(entry.operation, entry.result, entry.flow,
+                    entry.applicationJobOwnership)
+                : invoke(entry.operation, entry.result, entry.flow,
+                    entry.applicationJobOwnership);
+            invocation.whenComplete(
                     (ignored, error) -> finish(entry));
         }
     }
@@ -789,6 +799,7 @@ public final class ZLinkSerialExecutionQueue {
         List<CompletableFuture<Void>> quiescent = List.of();
         RelocationBoundary boundary = entry.relocationBoundary;
         boolean scheduleDrain = false;
+        boolean drainInline = false;
         synchronized (this) {
             if (active != entry) {
                 return;
@@ -804,9 +815,16 @@ public final class ZLinkSerialExecutionQueue {
                 turnClaimedAtNanos = 0;
             }
             scheduleDrain = requestDrainLocked();
+            drainInline = scheduleDrain
+                && !yieldToExecutor
+                && EXECUTION_OWNER.get() == this;
             quiescent = takeQuiescenceWaitersIfReady();
         }
-        scheduleDrainIfNeeded(scheduleDrain);
+        if (drainInline) {
+            drainScheduled(true);
+        } else {
+            scheduleDrainIfNeeded(scheduleDrain);
+        }
         if (boundary != null) {
             boundary.finished.complete(null);
         }
@@ -1073,10 +1091,29 @@ public final class ZLinkSerialExecutionQueue {
         CompletableFuture<Void> result,
         ZLinkFlowContext.State flow,
         ZLinkApplicationJobContext.QueuedOwnership applicationJobOwnership) {
+        return invoke(operation, result, flow, applicationJobOwnership, false);
+    }
+
+    private CompletionStage<Void> invokeInline(
+        Supplier<CompletionStage<Void>> operation,
+        CompletableFuture<Void> result,
+        ZLinkFlowContext.State flow,
+        ZLinkApplicationJobContext.QueuedOwnership applicationJobOwnership) {
+        return invoke(operation, result, flow, applicationJobOwnership, true);
+    }
+
+    private CompletionStage<Void> invoke(
+        Supplier<CompletionStage<Void>> operation,
+        CompletableFuture<Void> result,
+        ZLinkFlowContext.State flow,
+        ZLinkApplicationJobContext.QueuedOwnership applicationJobOwnership,
+        boolean inline) {
         CompletableFuture<Void> gate = new CompletableFuture<>();
         CompletableFuture<Void> invocationReturned = new CompletableFuture<>();
-        try {
-            executor.execute(() -> {
+        Runnable invocation = () -> {
+            ZLinkSerialExecutionQueue previousExecutionOwner = EXECUTION_OWNER.get();
+            EXECUTION_OWNER.set(this);
+            try {
                 ZLinkSerialExecutionQueue previous = CURRENT.get();
                 CompletableFuture<Void> previousGate = CURRENT_GATE.get();
                 Boolean previousDeferred = CURRENT_RELEASE_DEFERRED.get();
@@ -1129,7 +1166,20 @@ public final class ZLinkSerialExecutionQueue {
                     }
                     invocationReturned.complete(null);
                 }
-            });
+            } finally {
+                if (previousExecutionOwner == null) {
+                    EXECUTION_OWNER.remove();
+                } else {
+                    EXECUTION_OWNER.set(previousExecutionOwner);
+                }
+            }
+        };
+        try {
+            if (inline) {
+                invocation.run();
+            } else {
+                executor.execute(invocation);
+            }
         } catch (RuntimeException rejected) {
             result.completeExceptionally(rejected);
             gate.complete(null);
