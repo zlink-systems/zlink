@@ -1984,7 +1984,7 @@ request_spot_parts_async (service::spot_handle_t egress,
               "SPOT mesh request requires at least one message part"));
             co_return co_await output;
         }
-        service::call_id_t operation_id;
+        service::pending_operation_t operation_id;
         const auto submitted = co_await egress.request_to_spot (
           target_node_rid, target_spot_id, target_generation, native_parts, operation_id,
           zlink::send_flags_t::none, timeout, {},

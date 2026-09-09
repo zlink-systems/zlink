@@ -280,6 +280,9 @@ class local_handler_t
     {
         last_route_request = request.value;
         last_route_source = context.source_node_rid.to_string ();
+        last_route_request_thread = std::this_thread::get_id ();
+        route_request_saw_permit_release =
+          application_permit_released != nullptr && *application_permit_released;
         return {request.value + 200};
     }
 
@@ -288,6 +291,9 @@ class local_handler_t
     {
         last_route_event = event.value;
         last_route_source = context.source_node_rid.to_string ();
+        last_route_send_thread = std::this_thread::get_id ();
+        route_send_saw_permit_release =
+          application_permit_released != nullptr && *application_permit_released;
     }
 
     int last_request = 0;
@@ -296,6 +302,11 @@ class local_handler_t
     int last_route_event = 0;
     int internal_dispatch_provider_seen = 0;
     std::string last_route_source;
+    std::thread::id last_route_request_thread;
+    std::thread::id last_route_send_thread;
+    bool *application_permit_released = nullptr;
+    bool route_request_saw_permit_release = false;
+    bool route_send_saw_permit_release = false;
     std::mutex send_gate_mutex;
     std::condition_variable send_gate_changed;
     bool blocking_send_entered = false;
@@ -2476,9 +2487,20 @@ int main ()
     route_handlers.on_send<local_handler_t, event_t> ("game.route", "event",
                                                       &local_handler_t::handle_route_send);
     zlink::framework::detail::no_route_internal_packet_dispatcher_t no_internal;
+    const auto route_dispatch_thread = std::this_thread::get_id ();
+    bool application_permit_released = false;
+    provider.get_required<local_handler_t> ().application_permit_released =
+      &application_permit_released;
     test_route_receive_pump_t route_handler_pump{
       zlink::framework::detail::route_packet_dispatcher_t ("game.route", provider, serializers,
-                                                           route_handlers, no_internal)};
+                                                           route_handlers, no_internal, {}, nullptr,
+                                                           zlink::framework::handler_dispatch_kind_t::
+                                                             node_direct_send,
+                                                           zlink::framework::handler_dispatch_kind_t::
+                                                             node_direct_request,
+                                                           [&] {
+                                                               application_permit_released = true;
+                                                           })};
     route_handler_pump.enqueue (zlink::framework::detail::route_received_packet_t{
       zlink::routing_id_t::from (std::string ("source-node")), 78, route_request_parts});
     const auto route_handler_receive = route_handler_pump.drain ();
@@ -2494,15 +2516,22 @@ int main ()
                .value
              != 224
         || provider.get_required<local_handler_t> ().last_route_request != 24
-        || provider.get_required<local_handler_t> ().last_route_source != "source-node") {
+        || provider.get_required<local_handler_t> ().last_route_source != "source-node"
+        || provider.get_required<local_handler_t> ().last_route_request_thread
+             != route_dispatch_thread
+        || !provider.get_required<local_handler_t> ().route_request_saw_permit_release) {
         return 49;
     }
     route_handler_pump.enqueue (zlink::framework::detail::route_received_packet_t{
       zlink::routing_id_t::from (std::string ("source-node")), std::nullopt,
       route_runtime.outbound_packets ()[0].parts});
+    application_permit_released = false;
     const auto route_send_receive = route_handler_pump.drain ();
     if (!route_send_receive || !route_send_receive.value ().replies.empty ()
-        || provider.get_required<local_handler_t> ().last_route_event != 78) {
+        || provider.get_required<local_handler_t> ().last_route_event != 78
+        || provider.get_required<local_handler_t> ().last_route_send_thread
+             != route_dispatch_thread
+        || !provider.get_required<local_handler_t> ().route_send_saw_permit_release) {
         return 50;
     }
 

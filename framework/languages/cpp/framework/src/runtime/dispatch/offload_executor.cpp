@@ -77,7 +77,7 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
                   work ();
               }
           },
-          std::stop_source{}});
+          std::nullopt});
         if (_idle_workers == 0 && _live_workers < _max_worker_count) {
             start_worker_locked ();
         }
@@ -232,12 +232,14 @@ void offload_executor_t::worker_loop ()
             work = std::move (_queue.front ());
             _queue.pop ();
             ++_active;
-            _active_cancellations.push_back (&work.cancellation);
+            if (work.cancellation)
+                _active_cancellations.push_back (&*work.cancellation);
         }
 
         try {
             if (work.work) {
-                work.work (work.cancellation.get_token ());
+                work.work (work.cancellation ? work.cancellation->get_token ()
+                                             : std::stop_token{});
             }
         }
         catch (...) {
@@ -248,11 +250,13 @@ void offload_executor_t::worker_loop ()
 
         {
             std::lock_guard lock (_mutex);
-            const auto active = std::find (_active_cancellations.begin (),
-                                           _active_cancellations.end (),
-                                           &work.cancellation);
-            if (active != _active_cancellations.end ()) {
-                _active_cancellations.erase (active);
+            if (work.cancellation) {
+                const auto active = std::find (_active_cancellations.begin (),
+                                               _active_cancellations.end (),
+                                               &*work.cancellation);
+                if (active != _active_cancellations.end ()) {
+                    _active_cancellations.erase (active);
+                }
             }
             --_active;
             if (_queue.empty () && _active == 0) {

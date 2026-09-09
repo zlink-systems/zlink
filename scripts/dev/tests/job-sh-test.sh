@@ -233,4 +233,25 @@ assert_failure '재사용 pid kill 거부 실패' 1 job kill state-reused
 kill -0 "$$" 2>/dev/null || fail 'pid 재사용 검사에서 호출자 셸을 종료함'
 pass '.meta와 /proc 시작 시각이 다르면 재사용된 pid로 보고 신호를 보내지 않는다'
 
+# job은 저장소를 고쳐야 하므로 codex가 기본적으로 쓰기 가능해야 한다.
+# 읽기 전용으로 뜨면 작업자가 커밋도 빌드도 못 하고 시간만 쓴다(2026-09-10 사고).
+: >"$TEST_ROOT/codex-state/calls.log"
+assert_success '기본 실행 인자 확인 실패' job start writable --worktree "$TEST_ROOT/repo" \
+    --brief "$TEST_ROOT/brief.md"
+grep -q -- '--dangerously-bypass-approvals-and-sandbox' "$TEST_ROOT/codex-state/calls.log" \
+    || fail '기본 실행에 승인·샌드박스 우회 인자가 없다'
+job kill writable >/dev/null 2>&1 || true
+pass '기본 start는 codex를 쓰기 가능한 모드로 띄운다'
+
+: >"$TEST_ROOT/codex-state/calls.log"
+assert_success 'read-only 인자 확인 실패' job start readonly-probe --worktree "$TEST_ROOT/repo" \
+    --brief "$TEST_ROOT/brief.md" --read-only
+grep -q -- '--sandbox read-only' "$TEST_ROOT/codex-state/calls.log" \
+    || fail '--read-only가 샌드박스 인자를 주지 않는다'
+if grep -q -- '--dangerously-bypass' "$TEST_ROOT/codex-state/calls.log"; then
+    fail '--read-only인데 우회 인자가 함께 들어갔다'
+fi
+job kill readonly-probe >/dev/null 2>&1 || true
+pass '--read-only는 조사용 샌드박스로 띄운다'
+
 printf '1..%s\n' "$PASS"

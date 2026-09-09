@@ -45,9 +45,10 @@ class runtime_wake_timer_t final
         if (!_poller)
             return;
         try {
-            /* A one-shot timer gives the poller a bounded, cross-platform
-             * wake event while coalescing concurrent notifications. */
-            _timer.start (std::chrono::milliseconds (1), 1);
+            /* The shared one-shot is an event notification, not a polling
+             * interval. Core requires a positive interval; use its smallest
+             * unit so publishing work does not add a millisecond of latency. */
+            _timer.start (std::chrono::nanoseconds (1), 1);
         }
         catch (...) {
         }

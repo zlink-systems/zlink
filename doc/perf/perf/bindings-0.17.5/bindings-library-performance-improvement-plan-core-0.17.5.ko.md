@@ -1417,6 +1417,97 @@ paired 측정을 완료할 때마다 아래 표에 측정 조건과 결과만 �
 | 날짜 | 언어 | suite / 범위 | pair tag | 측정 조건 | 결과 | report |
 |------|------|---------------|----------|----------------|------|---------------|
 | 2026-09-09 | 전체 | 계획 초기화 | - | Core 0.17.4 release, C 기준과 binding paired 비교, 단일 perf process 조건을 사용한다. | 계획 작성 | 이 문서 |
+| 2026-09-10 | cpp | multi routed | c0175-cpp-multi-rebaseline | **Core 0.17.5**(cpp도 최신으로 통일), relay 정리 후, tcp, runs=3 median, C 0.17.5 baseline 재사용 | 아래 §11.1 | `results-cpp-multi-rebaseline.tsv` (10e06c7988) |
+| 2026-09-10 | node | multi routed | c0175-node-multi-rebaseline | Core 0.17.5, relay 정리 후, tcp, runs=3 median | 아래 §11.1 | `results-node-multi-rebaseline.tsv` (4ad7a50a82) |
+
+### 11.1 Core 0.17.5 routed 재측정 (relay 정리 후, tcp, runs=3, C 0.17.5 대비 %)
+
+relay anti-pattern 정리 후 최신 Core 0.17.5로 4개 언어 routed 4패턴을 재측정한다(cpp도 0.17.4→0.17.5). "최악 = 목표 median 대비 pattern
+평균 갭 최대"로 개선 대상을 정한다. **목표 median: cpp routed/reqrep=85, node routed/reqrep=60**(§ autofill TARGETS).
+
+**cpp** (0.17.5, tcp %C / pattern 평균 → 목표85 갭):
+
+| pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 평균 | 갭(85−) |
+|---|--|--|--|--|--|--|--|--|
+| MULTI_DEALER_ROUTER_SENDSEND | 92.8 | 82.5 | 78.4 | 89.0 | 78.2 | 100.9 | 87.0 | -2.0 (통과) |
+| MULTI_ROUTER_ROUTER_SENDSEND | 66.3 | 102.1 | 92.7 | 94.9 | 92.3 | **47.0** | 82.6 | +2.4 (경미) |
+| MULTI_DEALER_ROUTER_REQREP | 77.0 | 81.1 | 83.4 | 90.7 | 86.2 | 99.0 | 86.2 | -1.2 (통과) |
+| MULTI_ROUTER_ROUTER_REQREP | 94.4 | 79.9 | 86.2 | 87.9 | 94.0 | 104.4 | 91.1 | -6.1 (통과) |
+
+> cpp는 pattern 평균으로는 사실상 목표 충족. 단 개별 셀 `RR_SENDSEND 131072=47.0`·`64=66.3`가 outlier(대형은 노이즈 가능성, 확인 필요).
+
+**node** (0.17.5, tcp %C / pattern 평균 → 목표60 갭):
+
+| pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 평균 | 갭(60−) |
+|---|--|--|--|--|--|--|--|--|
+| MULTI_DEALER_ROUTER_SENDSEND | 24.2 | 20.9 | 18.7 | 20.9 | 59.0 | 70.7 | 35.7 | **24.3** |
+| MULTI_ROUTER_ROUTER_SENDSEND | 27.8 | 37.9 | 32.9 | 38.0 | 48.4 | 42.3 | 37.9 | 22.1 |
+| MULTI_DEALER_ROUTER_REQREP | 22.3 | 28.5 | 32.9 | 33.8 | 42.2 | 47.8 | 34.6 | **25.4** |
+| MULTI_ROUTER_ROUTER_REQREP | 40.0 | 40.8 | 42.0 | 40.5 | 56.9 | 56.3 | 46.1 | 13.9 |
+
+> node는 전 pattern이 목표 median 60에 미달. 특히 **DEALER_ROUTER (REQREP 갭 25.4, SENDSEND 24.3)** 의 작은 size(64~4096 ~19~34%)가 최저.
+> node의 작은 size routed가 구조적 병목(N-API 경계·per-message 오버헤드) 후보.
+
+**java** (0.17.5, tcp %C / pattern 평균 → 목표 routed85·reqrep70):
+
+| pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 평균 | 판정 |
+|---|--|--|--|--|--|--|--|--|
+| MULTI_DEALER_ROUTER_SENDSEND | 94.0 | 102.5 | 72.8 | 76.7 | 86.8 | 99.5 | 88.7 | 통과 |
+| MULTI_ROUTER_ROUTER_SENDSEND | 99.2 | 159.7 | 149.0 | 67.0 | 61.0 | 81.3 | 102.9 | 통과 |
+| MULTI_DEALER_ROUTER_REQREP | 84.6 | 107.4 | 115.4 | 116.2 | **27.0** | **37.7** | 81.4 | 통과(대용량 셀 급락) |
+| MULTI_ROUTER_ROUTER_REQREP | 107.0 | 123.1 | 131.2 | 128.3 | **28.4** | **39.5** | 92.9 | 통과(대용량 셀 급락) |
+
+> java는 relay 정리로 routed 평균이 이전 70.5%→81~103%로 크게 개선(목표 충족). 단 **REQREP 대용량(65536/131072)=27~40%** 는 기존 Core
+> work-charge cubic 절벽 + 바인딩 async 상호작용(§ 별도 기록). Core 레벨 요인이라 바인딩 단독 개선 대상 아님.
+
+**dotnet** (0.17.5, tcp %C / pattern 평균 → 목표 routed80·reqrep70):
+
+| pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 평균 | 갭 |
+|---|--|--|--|--|--|--|--|--|
+| MULTI_DEALER_ROUTER_SENDSEND | 49.4 | 58.5 | 52.2 | 71.0 | 81.2 | 60.5 | 62.1 | **17.9(미달)** |
+| MULTI_ROUTER_ROUTER_SENDSEND | 53.7 | 70.3 | 70.3 | 70.5 | 112.3 | 39.5 | 69.4 | 10.6(미달) |
+| MULTI_DEALER_ROUTER_REQREP | 56.9 | 64.6 | 66.2 | 70.4 | 64.2 | 78.0 | 66.7 | 3.3(경미) |
+| MULTI_ROUTER_ROUTER_REQREP | 72.7 | 67.0 | 66.8 | 71.8 | 76.7 | 91.4 | 74.4 | 통과 |
+
+### 11.2 목표 대비 갭 순위 → 개선 대상
+
+pattern 평균의 목표 median 대비 갭(큰 순):
+
+| 순위 | 언어·pattern | 평균%C | 목표 | 갭 |
+|--|--|--|--|--|
+| 1 | **node · DEALER_ROUTER_REQREP** | 34.6 | 60 | **25.4** |
+| 2 | node · DEALER_ROUTER_SENDSEND | 35.7 | 60 | 24.3 |
+| 3 | node · ROUTER_ROUTER_SENDSEND | 37.9 | 60 | 22.1 |
+| 4 | dotnet · DEALER_ROUTER_SENDSEND | 62.1 | 80 | 17.9 |
+| 5 | node · ROUTER_ROUTER_REQREP | 46.1 | 60 | 13.9 |
+| 6 | dotnet · ROUTER_ROUTER_SENDSEND | 69.4 | 80 | 10.6 |
+
+- cpp·java는 pattern 평균으로 목표 충족(각각 outlier 셀: cpp `RR_SENDSEND 131072=47`, java 대용량 REQREP는 Core 절벽 요인).
+- **셀 단위 최악**: node 작은 size routed(예: `DEALER_ROUTER_SENDSEND 1024=18.7` → 갭 41). node routed hot-path가 전 pattern에 걸쳐
+  목표 미달이라 **구조적(systemic) 병목**으로 판단.
+- **개선 1순위 = Node routed hot-path**(N-API 경계·per-message wrapper·event-loop 오버헤드). 근본원인 진단 → 최적화 → §7.7 채택/revert.
+  이후 dotnet DEALER_ROUTER_SENDSEND(2순위)로 이어간다.
+
+### 11.3 개선 #1 — Node routed relay native frame 보존 (채택, commit f317aa4d7b)
+
+- **근본원인(프로파일 근거):** Node routed relay가 record당 **수신 payload를 JS Buffer로 복사한 뒤 send용 native message를 재생성**(+ send-side
+  snapshot 객체 2개/record + property lookup)해, C에 없는 per-message 고정비가 작은 size를 지배했다. `submitSend`가 server CPU의 44.9%.
+- **최적화:** 관찰(read)되지 않은 routed multipart payload를 **receive→submit 내내 native frame으로 보존**(eager Buffer 복사·part별 snapshot 제거),
+  .NET/C++처럼 native 소유권을 직접 전달. addon(`addon_core.cc`)+`message_snapshot.ts`+`message_conversion.ts`. **공개 API·wire·routing·part
+  순서·DONTWAIT/consume 계약 불변.** 프로파일: `submitSend` −26%, `recv` −15%.
+- **before→after (Core 0.17.5, tcp, runs=3, C 대비 %):**
+
+| pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 평균 |
+|---|--|--|--|--|--|--|--|
+| MULTI_DEALER_ROUTER_SENDSEND | 24.2→26.3 | 20.9→24.6 | 18.7→24.5 | 20.9→**35.2** | 59.0→67.8 | 70.7→79.6 | 35.7→**43.0** |
+| MULTI_ROUTER_ROUTER_SENDSEND | 27.8→28.4 | 37.9→41.2 | 32.9→38.1 | 38.0→43.4 | 48.4→47.0 | 42.3→43.6 | 37.9→40.3 |
+| MULTI_DEALER_ROUTER_REQREP | 22.3→26.2 | 28.5→33.9 | 32.9→32.5 | 33.8→36.2 | 42.2→52.8 | 47.8→**63.1** | 34.6→**40.8** |
+| MULTI_ROUTER_ROUTER_REQREP | 40.0→38.6 | 40.8→42.4 | 42.0→41.5 | 40.5→42.2 | 56.9→56.4 | 56.3→59.0 | 46.1→46.7 |
+
+- 전 패턴 개선(최대 갭이던 DEALER_ROUTER SENDSEND/REQREP 평균 +7.3/+6.2pp). 몇 셀 −0.4~1.4는 3-run 변동 범위. **비대상 회귀 없음**
+  (routed 65536 +2.9~6.4%, PAIR/PUBSUB 변동 내). 계약 테스트 27개+전체 npm test+샘플 7/7 통과.
+- 남은 병목: 메시지당 N-API 경계 2회, receive envelope/parts/snapshot, async continuation. Node는 목표 median 60엔 아직 못 미치나 최대 갭
+  패턴을 유의미하게 축소. **다음: dotnet DEALER_ROUTER_SENDSEND(갭 17.9)**.
 
 ## 12. 완료 기준
 
