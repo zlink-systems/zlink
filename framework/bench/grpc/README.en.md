@@ -256,7 +256,7 @@ the following in addition.
 | Field | Meaning |
 |-------|---------|
 | `role` | `source` or `target`. A and B each write their own raw file and the runner merges them into one cell |
-| `trigger` | The trigger request A received (`runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup`) and the time it arrived |
+| `trigger` | The trigger request A received, kept as is. Fields: `runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup` (the warmup length, in the unit the language harness records per §8.2), `endpoint` (A's trigger URL, the companion information of §7.1) and `receivedAtUnixMs` (the wall-clock time A received the trigger). All eight are required; the aggregator accepts no alias or default |
 | `streams` | A's logical stream count and the per-stream in-flight ceiling (§10.3) |
 | `target_stats` | Receive count, error count, and drain time the runner read from B's stats endpoint after settle |
 

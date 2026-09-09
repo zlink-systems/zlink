@@ -82,7 +82,8 @@ source와 target이 별도 파일을 쓰더라도 집계기는 `trigger.runId`�
         "payloadBytes": 1024,
         "durationMs": 5000,
         "warmup": 1000,
-        "receivedAt": "2026-09-09T00:00:00Z"
+        "endpoint": "http://127.0.0.1:5212/bench/start",
+        "receivedAtUnixMs": 1788937000000
       },
       "streams": {"count": 1, "inFlightPerStream": 100},
       "throughput_per_second": 3663.2,
@@ -110,7 +111,8 @@ source와 target이 별도 파일을 쓰더라도 집계기는 `trigger.runId`�
         "payloadBytes": 1024,
         "durationMs": 5000,
         "warmup": 1000,
-        "receivedAt": "2026-09-09T00:00:00Z"
+        "endpoint": "http://127.0.0.1:5212/bench/start",
+        "receivedAtUnixMs": 1788937000000
       },
       "server_cpu_percent": 5.2,
       "server_memory_mb": 486.1,
@@ -134,9 +136,8 @@ source와 target이 별도 파일을 쓰더라도 집계기는 `trigger.runId`�
 `target_stats.errors` 또는 `abandoned`가 0이 아닌 셀은 규격 §5.2에 따라 처리량 판정에 쓰지 않는다.
 완전한 `send-saturation` 셀은 target 수신 수를 가지므로 server-counted 조건도 함께 충족한다.
 
-규격 §7.1은 trigger endpoint를 결과와 함께 요구하지만, 규격 §4의 셀 스키마에는 endpoint 필드가
-없다. 집계기는 §9 포트로 실제 값을 추측하지 않고 동반 정보 표에 `n/a`를 출력한다. endpoint를
-원본에서 출력하려면 먼저 규격 §4가 그 필드의 위치와 이름을 정해야 한다.
+규격 §7.1의 trigger endpoint는 §4 `trigger.endpoint`에서 읽어 동반 정보 표에 낸다. 3-run의 값이
+다르면 `mixed`, 없으면 `n/a`이며 §9 포트로 추측하지 않는다.
 
 ## 게재 조건 (이 도구가 기계적으로 강제하는 것)
 

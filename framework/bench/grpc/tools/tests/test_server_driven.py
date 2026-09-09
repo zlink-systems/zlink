@@ -106,7 +106,8 @@ class ServerDrivenMergeTest(unittest.TestCase):
                 "payloadBytes": 1024,
                 "durationMs": 5000,
                 "warmup": 1000,
-                "receivedAt": "2026-09-09T01:00:00Z",
+                "endpoint": "http://127.0.0.1:5205/bench/start",
+                "receivedAtUnixMs": 1788937000000,
             },
             "streams": {"count": 1, "inFlightPerStream": 100},
             "target_stats": {"received": 500000, "errors": 0, "drainMs": 20},
@@ -158,7 +159,7 @@ class ServerDrivenMergeTest(unittest.TestCase):
             "metadata": {"implementation": "zlink-dotnet"},
             "results": [{}],
         }
-        with self.assertRaisesRegex(ReportError, "warmup, receivedAt"):
+        with self.assertRaisesRegex(ReportError, "warmup, endpoint"):
             cells_from_server_document(payload, "root-run", "results.json")
 
 
@@ -184,13 +185,19 @@ class ServerDrivenRenderTest(unittest.TestCase):
             output,
         )
 
-    def test_companion_table_carries_streams_without_guessing_endpoint(self):
+    def test_companion_table_carries_streams_and_trigger_endpoint(self):
         table = render_companion_table(
             self.rows, (1024,), implementations=("zlink-dotnet",)
         )
-        self.assertIn("| request-window | 1024 | `zlink-dotnet` | 1 | 100 | n/a |", table)
-        self.assertIn("| send-saturation | 1024 | `zlink-dotnet` | 8 | 1 | n/a |", table)
-        self.assertIn("does not carry an endpoint field", table)
+        self.assertIn(
+            "| request-window | 1024 | `zlink-dotnet` | 1 | 100 | http://127.0.0.1:5200/bench/start |",
+            table,
+        )
+        self.assertIn(
+            "| send-saturation | 1024 | `zlink-dotnet` | 8 | 1 | http://127.0.0.1:5200/bench/start |",
+            table,
+        )
+        self.assertIn("does not infer one from spec 9 ports", table)
 
     def test_doc_table_is_language_scoped_markdown(self):
         table = render_doc_table(self.rows, (1024,), "dotnet")

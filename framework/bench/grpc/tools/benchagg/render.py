@@ -209,9 +209,9 @@ def render_diagnostics_table(rows: dict[CellKey, Row], payload_sizes, implementa
 def render_companion_table(rows: dict[CellKey, Row], payload_sizes, implementations=None) -> str:
     """Server-driven companion data required by spec 7.1.
 
-    Spec 4 carries stream declarations but currently has no trigger endpoint
-    field. The endpoint therefore remains ``n/a`` instead of being guessed from
-    the port table or a file name.
+    Streams and the trigger endpoint come from the spec 4 ``streams`` and
+    ``trigger.endpoint`` fields of the cell files; nothing is inferred from
+    the port table or a file name. ``n/a`` means the field was absent.
     """
     lines = [
         "| Pattern | Size | Implementation | Streams | In-flight/stream | Trigger endpoint |",
@@ -229,13 +229,18 @@ def render_companion_table(rows: dict[CellKey, Row], payload_sizes, implementati
                 else "unbounded" if row.in_flight_per_stream is None
                 else str(row.in_flight_per_stream)
             )
+        endpoint = (
+            "mixed" if row.trigger_endpoint_mixed
+            else row.trigger_endpoint if row.trigger_endpoint
+            else "n/a"
+        )
         lines.append(
             f"| {key.pattern} | {key.payload_size} | `{key.implementation}` "
-            f"| {count} | {in_flight} | n/a |"
+            f"| {count} | {in_flight} | {endpoint} |"
         )
     lines.append("")
     lines.append(
-        "`n/a` trigger endpoint means the spec 4 cell schema does not carry an endpoint field; "
+        "`n/a` means the cell files carried no `trigger.endpoint`; "
         "the aggregator does not infer one from spec 9 ports."
     )
     return "\n".join(lines)

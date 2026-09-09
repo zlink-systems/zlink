@@ -237,7 +237,7 @@ server-driven 모델(§10)에서 `client_*`는 **source process A**, `server_*`�
 | 필드 | 의미 |
 |------|------|
 | `role` | `source` 또는 `target`. A와 B가 각자 원본을 쓰고 runner가 셀 하나로 합친다 |
-| `trigger` | A가 받은 trigger 요청(`runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup`)과 수신 시각 |
+| `trigger` | A가 받은 trigger 요청을 그대로 둔 객체. 필드는 `runId`, `cellId`, `pattern`, `payloadBytes`, `durationMs`, `warmup`(warmup 길이; 언어 harness의 단위를 §8.2대로 기록), `endpoint`(A의 trigger URL, §7.1의 동반 정보), `receivedAtUnixMs`(A가 trigger를 받은 wall-clock 시각). 여덟 필드 모두 필수이며 집계기는 별칭이나 기본값을 두지 않는다 |
 | `streams` | A의 logical stream 수와 stream당 in-flight 상한(§10.3) |
 | `target_stats` | settle 뒤 runner가 B의 stats endpoint에서 읽은 수신 수·오류 수·drain 시간 |
 

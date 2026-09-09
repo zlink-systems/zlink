@@ -83,6 +83,8 @@ class Row:
     streams_reported: bool = False
     stream_count_mixed: bool = False
     in_flight_per_stream_mixed: bool = False
+    trigger_endpoint: str | None = None
+    trigger_endpoint_mixed: bool = False
 
     excluded_runs: list[str] = field(default_factory=list)
     incomplete_runs: list[str] = field(default_factory=list)
@@ -213,6 +215,14 @@ def build_row(run_set: RunSet, key: CellKey, min_runs_for_g5: int = 3) -> Row | 
     errors.extend(target_errors)
     row.errors = max(errors) if errors else None
     reported_streams = [c for c in cells if c.streams]
+    endpoints = {
+        str(c.trigger["endpoint"]) for c in cells
+        if isinstance(c.trigger, dict) and c.trigger.get("endpoint")
+    }
+    if len(endpoints) == 1:
+        row.trigger_endpoint = endpoints.pop()
+    elif endpoints:
+        row.trigger_endpoint_mixed = True
     row.streams_reported = bool(reported_streams)
     stream_counts = {c.stream_count for c in reported_streams}
     if len(stream_counts) == 1:

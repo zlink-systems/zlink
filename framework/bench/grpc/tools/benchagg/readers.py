@@ -359,7 +359,8 @@ _TRIGGER_FIELDS = (
     "payloadBytes",
     "durationMs",
     "warmup",
-    "receivedAt",
+    "endpoint",
+    "receivedAtUnixMs",
 )
 
 
