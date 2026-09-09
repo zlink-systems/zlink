@@ -111,9 +111,10 @@ final class PerfMultiRoutedRelay {
     }
 
     private static PendingReply capture(RoutingId routingId, Message source) {
-        Message payload = Message.from(source);
+        Message payload = new Message();
         Message tail = null;
         try {
+            source.move(payload);
             if (PerfUtil.measurementPartCount() == 2) {
                 tail = PerfUtil.measurementTail();
             }

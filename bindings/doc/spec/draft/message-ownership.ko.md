@@ -130,9 +130,12 @@ refcount는 증가하지 않는다. 받은 message를 그대로 다시 보내는
 
 **Clone (= deep copy, 독립 버퍼).** payload를 **독립 storage로 깊은 복사**한 owned
 `Message`를 반환한다. 원본과 refcount를 공유하지 않으므로 복제 뒤 어느 쪽을 수정해도
-서로 영향이 없다. 독립적으로 수정할 payload가 필요할 때 사용한다. (기존 binding의
-깊은 복사 메서드는 이 이름으로 정렬하며, 이전 이름은 한 릴리스 사이클 동안 이전 의미를
-가리키는 deprecated alias로 유지한다.)
+서로 영향이 없다. 독립적으로 수정할 payload가 필요할 때 사용한다. `Clone`은 모든
+binding이 같은 이름으로 제공한다(API 통일). 기존에 깊은 복사 메서드를 **다른 이름**으로
+갖고 있던 binding은 이 이름으로 정렬하고 이전 이름은 한 릴리스 사이클 동안 deprecated
+alias로 유지한다. 다만 기존 깊은 복사가 **`copy`와 같은 시그니처**였던 binding(Node)은
+`copy`가 ref-share로 재정의되므로 동일 시그니처 alias가 불가능하다 — 그 경우 deep copy를
+`clone`으로 옮기는 **major 버전 breaking change**로 처리하고 마이그레이션을 문서로 안내한다.
 
 일반 socket에서 재시도하거나 여러 socket에 같은 payload를 보내야 하는 Application은
 첫 submit 전에 필요한 수만큼 `Copy`(공유) 또는 `Clone`(독립)을 만든다. Binding이 일반

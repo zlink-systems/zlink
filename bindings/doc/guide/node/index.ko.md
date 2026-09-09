@@ -171,6 +171,37 @@ try {
 }
 ```
 
+### 공유·이전·복제 (copy / move / clone)
+
+`Message` payload를 다루는 세 가지 명시적 동작입니다. 이름과 의미는 모든 바인딩에서
+동일하며 Core C API(`zlink_msg_copy`/`zlink_msg_move`)와 1:1로 대응합니다.
+
+| 동작 | 시그니처 | 의미 | 언제 |
+|------|----------|------|------|
+| `copy()` | `copy(): Message` | **ref-count 공유** — 같은 버퍼를 가리키는 새 `Message`, 원본 유효 유지 | 같은 payload를 보관하며 원본도 계속 써야 할 때 |
+| `move(dest)` | `move(dest: Message): void` | **소유권 이전** — `dest`로 넘기고 호출자는 empty | 받은 메시지를 사본 없이 그대로 다시 보낼 때(relay/echo) |
+| `clone()` | `clone(): Message` | **깊은 복사** — 독립 버퍼 | 복제 후 payload를 독립적으로 수정할 때 |
+
+```javascript
+// Copy: 같은 버퍼를 공유하는 새 핸들. 둘 다 각자 close.
+const shared = msg.copy();
+await socket.send().message(shared).submit();  // shared는 소비됨
+// msg는 여전히 유효
+
+// Move: 받은 메시지를 사본 없이 그대로 echo (가장 효율적)
+const out = new zlink.Message();
+receivedPart.move(out);                         // receivedPart는 empty가 됨
+await socket.send(routingId).message(out).submit();
+
+// Clone: 독립 복제 후 수정
+const dup = msg.clone();
+```
+
+> **⚠ Breaking change:** 기존 `copy()`는 깊은 복사였으나 이제 `copy()`는 **ref-count
+> 공유**이고, 깊은 복사는 `clone()`으로 이동했습니다. JS는 동일 시그니처를 반환 의미만
+> 달리해 공존시킬 수 없어 alias가 불가능하므로 major 버전 breaking으로 처리합니다.
+> **기존 코드의 `copy()`(깊은 복사 의도)는 반드시 `clone()`으로 바꾸세요.**
+
 ---
 
 ## 에러 처리

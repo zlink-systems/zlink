@@ -6,7 +6,7 @@ const zlink = require('@zlink-systems/zlink');
 const { createMetricCollector, createPayload, createRunId, decodeMetricHeader, HEADER_SIZE, currentEpochNs, sleepImmediate, stampPayload, summarizeMetrics } = require('../common/perf_metrics');
 const { configureTlsClient, configureTlsServer } = require('../common/perf_tls');
 const { parseMultiArgs } = require('./perf_multi_common');
-const { POLLIN, POLLCOMPLETION, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, measurementParts, measurementPayload, pollEvents, pollEventHas, recvNoWaitInto, sendRouted, waitForConnectionReady, waitForConnectionReadyCount, waitPollerOne } = require('./perf_multi_runtime');
+const { POLLIN, POLLCOMPLETION, applyContextPolicy, applySocketPolicy, emitMultiSocketHwmDetail, measurementParts, measurementPayload, moveRelayMessage, pollEvents, pollEventHas, recvNoWaitInto, sendRouted, waitForConnectionReady, waitForConnectionReadyCount, waitPollerOne } = require('./perf_multi_runtime');
 // Read once per process: the runner fixes PERF_PART_COUNT before launching
 // this process, and this is on the per-message recv path. A per-message
 // `process.env` lookup puts harness instrumentation inside the measured path.
@@ -74,9 +74,12 @@ function sendPayload(socket, routerClient, payload) {
         : sendRouted(socket, payload);
 }
 async function sendServerReply(received) {
+    const movedParts = [];
     try {
+        for (const part of received.parts)
+            movedParts.push(moveRelayMessage(part));
         let reply = received.send();
-        for (const part of received.parts) {
+        for (const part of movedParts) {
             reply = reply.message(part);
         }
         await reply.submit();
@@ -89,6 +92,12 @@ async function sendServerReply(received) {
             return true;
         }
         throw error;
+    }
+    finally {
+        for (let index = 0; index < movedParts.length; index += 1) {
+            if (movedParts[index] !== received.parts[index])
+                movedParts[index].close();
+        }
     }
 }
 async function runRoutedSendSendRounds({ sockets, payloads, measurementRecords, routerClient, msgSize, runId, activeStopNs, sendDrainStopNs, replyDrain = null, submit = sendPayload, drainReplies = async (_timeoutMs = 0) => { }, yieldTurn = sleepImmediate, nowNs = currentEpochNs }) {
@@ -360,8 +369,8 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
                     }
                     const expectedParts = MEASUREMENT_PART_COUNT;
                     if (received.parts.length !== expectedParts
-                        || (expectedParts === 2 && received.parts[1].data().length !== 0)) {
-                        const partSizes = received.parts.map((part) => part.data().length).join(',');
+                        || (expectedParts === 2 && received.parts[1].size() !== 0)) {
+                        const partSizes = received.parts.map((part) => part.size()).join(',');
                         throw new Error(`invalid multipart echo request: expected=${expectedParts}, sizes=${partSizes}`);
                     }
                     // Submit every reply through the public async terminal. Core and the

@@ -196,7 +196,35 @@ dispose of it** — always with `using` (or `await using`).
 - Dispose sockets **before** the context that created them.
 - The reply parts returned by `Request().Async()`/`Join(...).Async()`
   (`IReadOnlyList<Message>`) are **owned by the caller** — dispose them after use.
-- To hold onto a span, copy it first with `ToArray()`/`CopyTo(...)`.
+- To hold onto a span, copy it first with `ToArray()`/`AsReadOnlyMemory()`.
+
+### Share / Move / Clone (Copy / Move / Clone)
+
+Three explicit `Message` payload operations, with the same name and meaning across every
+binding, mapping 1:1 to the Core C API (`zlink_msg_copy`/`zlink_msg_move`).
+
+| Operation | Signature | Meaning | When |
+|------|----------|------|------|
+| `Copy()` | `Message Copy()` | **ref-count share** — new `Message` on the same buffer, original stays valid | keep the same payload while still using the original |
+| `Move(dest)` | `void Move(Message dest)` | **ownership transfer** — hands off to `dest`, caller left empty | re-send a received message with no copy (relay/echo) |
+| `Clone()` | `Message Clone()` | **deep copy** — independent buffer | mutate the duplicate independently |
+
+```csharp
+using Message shared = msg.Copy();
+socket.Send().Message(shared).Submit();   // shared is consumed
+// msg is still valid
+
+var outMsg = new Message();
+receivedPart.Move(outMsg);                 // receivedPart becomes empty
+socket.Send(routingId).Message(outMsg).Submit();
+
+using Message dup = msg.Clone();
+```
+
+> `Copy()` is a ref-share and does not guarantee mutation isolation — use `Clone()` for an
+> independently mutable payload. .NET's `CopyTo(Span<byte>)`/`CopyTo(IBufferWriter<byte>)`
+> are span-fill methods (they write the payload into a buffer, separate from the `Clone`
+> deep copy) and stay unchanged.
 
 For thread-safety rules, see [thread safety](https://zlink-systems.github.io/zlink/guide/11-thread-safety/).
 `IContext` is safe to share across threads. **Sockets are not** — never call the

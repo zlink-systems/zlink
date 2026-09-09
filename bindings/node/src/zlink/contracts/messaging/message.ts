@@ -26,10 +26,18 @@ type MutableMessageState = {
 /** @internal */
 export interface MessageNativeOperations {
   allocate(size: number): { data?: Buffer; nativeMessage: unknown };
-  close(nativeMessage: unknown): void;
+  close(nativeMessage: unknown, data?: Buffer): void;
+  copy(nativeMessage: unknown): { data?: Buffer; nativeMessage: unknown };
   data(nativeMessage: unknown): Buffer;
   copyData(nativeMessage: unknown): Buffer;
   fromBuffer(data: Buffer): { data?: Buffer; nativeMessage: unknown };
+  move(
+    destination: unknown,
+    source: unknown,
+    destinationData?: Buffer,
+    sourceData?: Buffer
+  ): void;
+  refCount(nativeMessage: unknown): number;
   size(nativeMessage: unknown): number;
 }
 
@@ -130,8 +138,63 @@ export class Message {
     return Buffer.from(this.ensureBuffer());
   }
 
-  /** Return a new message holding an independent copy of this payload. */
+  /** Return a new message sharing this native payload by reference count. */
   copy(): Message {
+    const operations = requireMessageNativeOperations();
+    const nativeMessage = operations.copy(this.ensureNativeMessage());
+    const state = this as unknown as MutableMessageState;
+    return acquireMessageWrapper(
+      nativeMessage.data,
+      operations.refCount(nativeMessage.nativeMessage),
+      state._properties,
+      nativeMessage.nativeMessage,
+      state._metadata
+    );
+  }
+
+  /**
+   * Move this payload into `destination`, replacing its previous payload and
+   * leaving this message empty.
+   */
+  move(destination: Message): void {
+    if (!(destination instanceof Message)) {
+      throw new TypeError('destination must be a Message');
+    }
+    if (destination === this) {
+      throw new TypeError('destination must be a different Message');
+    }
+    const sourceState = this as unknown as MutableMessageState;
+    const destinationState = destination as unknown as MutableMessageState;
+    if (sourceState._released || destinationState._released) {
+      throw new Error('cannot move a closed Message');
+    }
+
+    const operations = requireMessageNativeOperations();
+    const sourceHadNativeStorage = sourceState._nativeMessage !== undefined;
+    const destinationHadNativeStorage = destinationState._nativeMessage !== undefined;
+    const sourceNative = this.ensureNativeMessage();
+    const destinationNative = destination.ensureNativeMessage(true);
+    operations.move(
+      destinationNative,
+      sourceNative,
+      destinationHadNativeStorage ? destinationState._buffer : undefined,
+      sourceHadNativeStorage ? sourceState._buffer : undefined
+    );
+
+    destinationState._buffer = undefined;
+    destinationState._refCount = operations.refCount(destinationNative);
+    destinationState._properties = sourceState._properties;
+    destinationState._metadata = sourceState._metadata;
+    destinationState._nativeReadOnly = false;
+    sourceState._buffer = undefined;
+    sourceState._refCount = operations.refCount(sourceNative);
+    sourceState._properties = EMPTY_PROPERTIES;
+    sourceState._metadata = EMPTY_METADATA;
+    sourceState._nativeReadOnly = false;
+  }
+
+  /** Return a new message holding an independent deep copy of this payload. */
+  clone(): Message {
     return Message.from(this);
   }
 
@@ -221,7 +284,9 @@ export class Message {
 
   /** Return the native payload reference count (a diagnostic only). */
   refCount(): number {
-    return this._refCount;
+    return this._nativeMessage === undefined
+      ? this._refCount
+      : requireMessageNativeOperations().refCount(this._nativeMessage);
   }
 
   /** Release native storage and return this wrapper; do not use it afterward. */
@@ -230,7 +295,7 @@ export class Message {
       return;
     }
     if (this._nativeMessage !== undefined) {
-      requireMessageNativeOperations().close(this._nativeMessage);
+      requireMessageNativeOperations().close(this._nativeMessage, this._buffer);
     }
     releaseMessageWrapper(this);
   }
@@ -260,6 +325,21 @@ export class Message {
     }
     this._buffer = operations.data(nativeMessage);
     return this._buffer;
+  }
+
+  private ensureNativeMessage(empty = false): unknown {
+    if (this._nativeMessage !== undefined) {
+      return this._nativeMessage;
+    }
+    const operations = requireMessageNativeOperations();
+    const nativeMessage = empty
+      ? operations.allocate(0)
+      : operations.fromBuffer(this.ensureBuffer());
+    this._buffer = nativeMessage.data;
+    this._nativeMessage = nativeMessage.nativeMessage;
+    this._nativeReadOnly = false;
+    this._refCount = 1;
+    return nativeMessage.nativeMessage;
   }
 }
 
@@ -293,7 +373,7 @@ export function refillMessageWrapper(
 ): Message {
   const state = message as unknown as MutableMessageState;
   if (state._nativeMessage !== undefined && state._nativeMessage !== nativeMessage) {
-    requireMessageNativeOperations().close(state._nativeMessage);
+    requireMessageNativeOperations().close(state._nativeMessage, state._buffer);
   }
   state._buffer = buffer;
   state._refCount = 1;
@@ -351,7 +431,7 @@ export function hasObservedManagedReceiveData(message: Message): boolean {
 export function consumeSubmittedMessage(message: Message): void {
   const state = message as unknown as MutableMessageState;
   if (state._nativeMessage !== undefined) {
-    requireMessageNativeOperations().close(state._nativeMessage);
+    requireMessageNativeOperations().close(state._nativeMessage, state._buffer);
   }
   markMessageConsumed(message);
 }

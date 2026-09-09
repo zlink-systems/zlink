@@ -189,6 +189,36 @@ try {
 }
 ```
 
+### 공유·이전·복제 (Copy / Move / Clone)
+
+payload를 다룰 때 세 가지 명시적 동작이 있습니다. 이름과 의미는 모든 바인딩에서
+동일하며 Core C API(`zlink_msg_copy`/`zlink_msg_move`)와 1:1로 대응합니다.
+
+| 동작 | 시그니처 | 의미 | 언제 |
+|------|----------|------|------|
+| `copy()` | `message_t copy() const` | **ref-count 공유** — 같은 버퍼를 가리키는 새 값 반환, 원본 유효 유지 | 같은 payload를 보관하며 원본도 계속 써야 할 때 |
+| `move(dest)` | `void move(message_t& dest)` | **소유권 이전** — `dest`로 넘기고 호출자는 empty | 받은 메시지를 사본 없이 그대로 다시 보낼 때(relay/echo) |
+| `clone()` | `message_t clone() const` | **깊은 복사** — 독립 버퍼 | 복제 후 payload를 독립적으로 수정할 때 |
+
+```cpp
+// Copy: 같은 버퍼를 공유하는 새 핸들. 둘 다 각자 닫는다(refcount).
+zlink::message_t shared = msg.copy ();
+socket.send ().message (shared).submit ();   // shared는 move됨
+// msg는 여전히 유효 — 재사용/close 가능
+
+// Move: 받은 메시지를 사본 없이 그대로 echo (가장 효율적)
+zlink::message_t out;
+received_part.move (out);                     // received_part는 empty가 됨
+socket.send (routing_id).message (out).submit ();
+
+// Clone: 독립 복제 후 수정
+zlink::message_t dup = msg.clone ();
+std::memcpy (dup.data (), patch, len);        // msg에는 영향 없음
+```
+
+`copy()`는 mutation 격리를 보장하지 않습니다(공유 버퍼) — 독립 수정이 필요하면
+`clone()`을 쓰세요.
+
 ---
 
 ## 에러 처리

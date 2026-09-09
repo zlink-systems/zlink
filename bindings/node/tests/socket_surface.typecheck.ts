@@ -17,6 +17,14 @@ const timer = zlink.createTimer();
 const writableCompletion: zlink.CompletionKindValue = zlink.CompletionKind.Writable;
 void writableCompletion;
 
+const messageSource = zlink.Message.from('message-source');
+const messageCopy: zlink.Message = messageSource.copy();
+const messageClone: zlink.Message = messageSource.clone();
+const messageDestination = zlink.Message.allocate(0);
+const messageMoveResult: void = messageSource.move(messageDestination);
+void messageMoveResult;
+messageDestination.close(); messageClone.close(); messageCopy.close(); messageSource.close();
+
 const pairSend: Promise<void> = pair.send().message('one').message('two').submit();
 const pairSync: void = pair.send().message('sync').submit_sync();
 const dealerSend: Promise<void> = dealer.send().message('dealer').submit();

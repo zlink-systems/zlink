@@ -310,6 +310,47 @@ public final class Message implements AutoCloseable {
         return msg;
     }
 
+    /** Returns a new message sharing this message's native payload. */
+    public Message copy() {
+        return sharedFrom(this);
+    }
+
+    /** Returns a new message holding an independent copy of this payload. */
+    @Override
+    public Message clone() {
+        return from(this);
+    }
+
+    /**
+     * Moves this message's native payload into {@code dest}, replacing its
+     * previous payload and leaving this message empty.
+     */
+    public void move(Message dest) {
+        Objects.requireNonNull(dest, "dest");
+        requireValidNativeOwnership();
+        dest.requireValidNativeOwnership();
+
+        boolean moreFlag = more;
+        int size = cachedSize;
+        int rc = ContractAccess.nativeMessageMove(dest.msg, msg);
+        if (rc != 0)
+            throw ZlinkException.fromLastError(
+                systems.zlink.contracts.errors.ErrorCategory.CONFIG);
+
+        dest.valid = true;
+        dest.recvArmed = false;
+        dest.more = moreFlag;
+        if (size > 0) {
+            dest.cachePayload(size);
+        } else {
+            dest.clearPayloadCache();
+        }
+        valid = true;
+        recvArmed = false;
+        more = false;
+        clearPayloadCache();
+    }
+
     /** Moves this message into a new owned message instance. */
     Message move() {
         requireValidNativeOwnership();
