@@ -24,6 +24,9 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.sockets.RequestResult;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
@@ -133,6 +136,64 @@ final class ZLinkClientServerM6ARuntimeTest {
         sockets.reconnectClientServerConnection("same", oldDealer);
 
         assertSame(newDealer, sockets.clientForOutbound("orders"));
+    }
+
+    @Test
+    void admissionTimeoutRetryPreservesPhysicalGenerationAndFencesOldAttempt() {
+        ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+        ControlledDealer dealer = new ControlledDealer();
+        var value = descriptor("orders", RoutingId.from("server"), 7, 1,
+            "tcp://127.0.0.1:7001", 100);
+        sockets.addClientServerConnection("manual", value, dealer);
+        var first = sockets.clientServerTransportReady("manual");
+        List<Runnable> queued = new ArrayList<>();
+        List<ZLinkChannelSocketRegistry.AdmissionFence> attempts = new ArrayList<>();
+        assertTrue(sockets.retryTimedOutClientServerAdmission("manual", first,
+            new ZlinkRequestException(RequestResult.TIMED_OUT), queued::add, attempts::add));
+        queued.removeFirst().run();
+        var second = attempts.getFirst();
+        assertEquals(first.physicalGeneration(), second.physicalGeneration());
+        assertNotEquals(first.admissionGeneration(), second.admissionGeneration());
+        assertSame(dealer, second.dealer());
+        assertFalse(sockets.admitClientServerConnection("manual", value, first));
+        assertTrue(sockets.admitClientServerConnection("manual", value, second));
+    }
+
+    @Test
+    void queuedAdmissionTimeoutCannotRestartAfterFenceInvalidation() {
+        for (String invalidation : List.of("disconnect", "replacement", "remove", "admit")) {
+            ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+            ControlledDealer dealer = new ControlledDealer();
+            var value = descriptor("orders", RoutingId.from("server"), 7, 1,
+                "tcp://127.0.0.1:7001", 100);
+            sockets.addClientServerConnection("manual", value, dealer);
+            var fence = sockets.clientServerTransportReady("manual");
+            List<Runnable> queued = new ArrayList<>();
+            List<ZLinkChannelSocketRegistry.AdmissionFence> attempts = new ArrayList<>();
+            assertTrue(sockets.retryTimedOutClientServerAdmission("manual", fence,
+                new ZlinkRequestException(RequestResult.TIMED_OUT), queued::add, attempts::add));
+            switch (invalidation) {
+                case "disconnect" -> sockets.clientServerTransportTerminated("manual");
+                case "replacement" -> sockets.clientServerTransportReady("manual");
+                case "remove" -> sockets.removeClientServerConnection("manual");
+                case "admit" -> assertTrue(sockets.admitClientServerConnection("manual", value, fence));
+            }
+            queued.removeFirst().run();
+            assertTrue(attempts.isEmpty(), invalidation);
+        }
+    }
+
+    @Test
+    void admissionRejectionAndShutdownDoNotRestartHello() {
+        ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
+        for (RequestResult result : List.of(RequestResult.REJECTED, RequestResult.TERMINATED)) {
+            assertFalse(sockets.retryTimedOutClientServerAdmission("manual", null,
+                new ZlinkRequestException(result), command -> {
+                    throw new AssertionError("terminal completion must not schedule admission");
+                }, fence -> {
+                    throw new AssertionError("terminal completion must not restart hello");
+                }));
+        }
     }
 
     @Test
@@ -551,6 +612,15 @@ final class ZLinkClientServerM6ARuntimeTest {
 
     @Test
     void sameProcessServerUsesStoreDiscoveryAndExactDealerRouterAdmission() {
+        assertStoreAdmission(false);
+    }
+
+    @Test
+    void locationAdmissionTimeoutRestartsHelloOnTheSamePhysicalConnection() {
+        assertStoreAdmission(true);
+    }
+
+    private void assertStoreAdmission(boolean timeoutFirst) {
         ZLinkClientServerServerDescriptor descriptor =
             descriptor(
                 "orders",
@@ -564,14 +634,37 @@ final class ZLinkClientServerM6ARuntimeTest {
         ZLinkChannelSocketRegistry sockets =
             new ZLinkChannelSocketRegistry();
         sockets.setClientServerServerDescriptor("orders", descriptor);
-        ZLinkBackendDealerSocket dealer =
-            admittingDealer("automatic", descriptor);
+        AtomicInteger requests = new AtomicInteger();
+        AtomicInteger creates = new AtomicInteger();
+        AtomicInteger connects = new AtomicInteger();
+        AtomicInteger disconnects = new AtomicInteger();
+        ZLinkBackendDealerSocket admittedDealer = admittingDealer("automatic", descriptor);
+        ZLinkBackendDealerSocket dealer = (ZLinkBackendDealerSocket) Proxy.newProxyInstance(
+            getClass().getClassLoader(), new Class<?>[] {ZLinkBackendDealerSocket.class},
+            (proxy, method, arguments) -> {
+                switch (method.getName()) {
+                    case "request" -> {
+                        assertEquals(Duration.ofSeconds(1), arguments[1]);
+                        @SuppressWarnings("unchecked")
+                        List<Message> parts = (List<Message>) arguments[0];
+                        assertTrue(ZLinkClientServerServiceWire.decode(parts.getFirst().toByteArray())
+                            instanceof ZLinkClientServerServiceWire.Hello);
+                        if (requests.incrementAndGet() == 1 && timeoutFirst) {
+                            return CompletableFuture.failedFuture(
+                                new ZlinkRequestException(RequestResult.TIMED_OUT));
+                        }
+                    }
+                    case "connect" -> connects.incrementAndGet();
+                    case "disconnect", "close" -> disconnects.incrementAndGet();
+                }
+                return method.invoke(admittedDealer, arguments);
+            });
         ZLinkChannelBackendAdapter adapter =
             (ZLinkChannelBackendAdapter) Proxy.newProxyInstance(
                 ZLinkChannelBackendAdapter.class.getClassLoader(),
                 new Class<?>[] {ZLinkChannelBackendAdapter.class},
                 (proxy, method, arguments) -> switch (method.getName()) {
-                    case "createDealerSocket" -> dealer;
+                    case "createDealerSocket" -> { creates.incrementAndGet(); yield dealer; }
                     default -> throw new UnsupportedOperationException(
                         method.getName());
                 });
@@ -642,6 +735,10 @@ final class ZLinkClientServerM6ARuntimeTest {
                 dealer,
                 sockets.awaitClientForOutbound(
                     "orders", Duration.ofSeconds(1)));
+            assertEquals(timeoutFirst ? 2 : 1, requests.get());
+            assertEquals(1, creates.get());
+            assertEquals(1, connects.get());
+            assertEquals(0, disconnects.get());
             runtime.stop().toCompletableFuture().join();
         } finally {
             runtime.close();

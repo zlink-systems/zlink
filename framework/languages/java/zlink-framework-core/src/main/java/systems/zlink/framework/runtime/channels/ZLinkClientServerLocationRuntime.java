@@ -560,7 +560,7 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
     private void requestAdmission(
         Connection connection,
         ZLinkChannelSocketRegistry.AdmissionFence fence) {
-        if (fence == null) {
+        if (fence == null || !inStateLane(() -> running)) {
             return;
         }
         byte[] hello = ZLinkClientServerServiceWire.encodeHello(
@@ -575,6 +575,12 @@ final class ZLinkClientServerLocationRuntime implements AutoCloseable {
                     if (failure == null) {
                         completeAdmission(connection, fence, reply);
                     } else {
+                        if (sockets.retryTimedOutClientServerAdmission(
+                                connection.connectionId(), fence, failure,
+                                infrastructureExecutor,
+                                next -> requestAdmission(connection, next))) {
+                            return;
+                        }
                         removeConnection(connection.connectionId(), connection);
                     }
                 });

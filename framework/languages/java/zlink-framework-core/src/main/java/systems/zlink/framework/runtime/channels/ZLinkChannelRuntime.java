@@ -924,6 +924,7 @@ public final class ZLinkChannelRuntime
         String endpoint,
         ZLinkBackendDealerSocket dealer,
         ZLinkChannelSocketRegistry.AdmissionFence fence) {
+        if (!running) return;
         byte[] hello = ZLinkClientServerServiceWire.encodeHello(
             new ZLinkClientServerServiceWire.Hello(
                 channelName, "default", Integer.MAX_VALUE));
@@ -931,6 +932,14 @@ public final class ZLinkChannelRuntime
             dealer.request(List.of(message), defaultRequestTimeout(channelName))
                 .whenComplete((reply, failure) -> {
                     if (failure != null) {
+                        if (sockets.retryTimedOutClientServerAdmission(
+                                connectionId, fence, failure,
+                                infrastructureExecutor,
+                                next -> requestManualClientServerAdmission(
+                                    connectionId, channelName, endpoint,
+                                    dealer, next))) {
+                            return;
+                        }
                         sockets.clientServerTransportTerminated(
                             connectionId, dealer);
                         return;

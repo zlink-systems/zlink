@@ -8,6 +8,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 import java.util.stream.Collectors;
 import systems.zlink.contracts.errors.ZlinkCloseException;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.sockets.RequestResult;
+import java.util.concurrent.Executor;
+import java.util.function.Consumer;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -376,6 +380,33 @@ final class ZLinkChannelSocketRegistry {
             current.dealer);
     }
 
+    boolean retryTimedOutClientServerAdmission(
+        String connectionId,
+        AdmissionFence fence,
+        Throwable failure,
+        Executor executor,
+        Consumer<AdmissionFence> retry) {
+        if (!(ZLinkChannelCallRuntime.unwrap(failure)
+                instanceof ZlinkRequestException request)
+            || request.getResult() != RequestResult.TIMED_OUT) {
+            return false;
+        }
+        // The request deadline paces hello retries. Only the attempt changes;
+        // Core still owns the physical connection and its reconnect policy.
+        executor.execute(() -> {
+            AdmissionFence next = inStateLane(() -> {
+                ClientServerConnection current =
+                    clientServerConnections.get(connectionId);
+                if (!fence.matches(current) || current.ready) return null;
+                current.admissionGeneration++;
+                return new AdmissionFence(current.physicalGeneration,
+                    current.admissionGeneration, current.dealer);
+            });
+            if (next != null) retry.accept(next);
+        });
+        return true;
+    }
+
     void clientServerTransportTerminated(
         String connectionId) {
         inStateLane(() -> {
@@ -457,11 +488,7 @@ final class ZLinkChannelSocketRegistry {
         AdmissionResult result = inStateLane(() -> {
             ClientServerConnection current =
                 clientServerConnections.get(connectionId);
-            if (current == null
-                || fence == null
-                || current.dealer != fence.dealer()
-                || current.physicalGeneration != fence.physicalGeneration()
-                || current.admissionGeneration != fence.admissionGeneration()) {
+            if (fence == null || !fence.matches(current)) {
                 return new AdmissionResult(false, null);
             }
             current.descriptor = descriptor;
@@ -1648,6 +1675,12 @@ final class ZLinkChannelSocketRegistry {
         long physicalGeneration,
         long admissionGeneration,
         ZLinkBackendDealerSocket dealer) {
+        private boolean matches(ClientServerConnection current) {
+            return current != null
+                && current.dealer == dealer
+                && current.physicalGeneration == physicalGeneration
+                && current.admissionGeneration == admissionGeneration;
+        }
     }
 
     record ClientServerTargetSnapshot(

@@ -25,6 +25,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.channels.ZLinkRequestCall;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -37,6 +39,33 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServe
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 
 final class ZLinkClientServerReadyWaitTest {
+    @Test
+    void admissionTimeoutAfterBeginCloseDoesNotRestartHello() throws Exception {
+        Fixture fixture = new Fixture(Duration.ofSeconds(1));
+        fixture.runtime.beginClose();
+        fixture.admission.completeExceptionally(new ZlinkRequestException(RequestResult.TIMED_OUT));
+        fixture.close();
+        assertEquals(1, fixture.helloRequests.get());
+        assertEquals(1, fixture.connects.get());
+    }
+
+    @Test
+    void admissionTimeoutRestartsHelloOnTheSamePhysicalConnection() throws Exception {
+        try (Fixture fixture = new Fixture(Duration.ofSeconds(1))) {
+            fixture.admission.completeExceptionally(
+                new CompletionException(new ZlinkRequestException(RequestResult.TIMED_OUT)));
+            assertTrue(fixture.secondAdmissionStarted.await(1, TimeUnit.SECONDS));
+            fixture.admit();
+
+            assertEquals(new Reply("reply"), fixture.runtime
+                .requestToChannel("orders", new Request("recovered"))
+                .submit(Reply.class).toCompletableFuture().join());
+            assertEquals(2, fixture.helloRequests.get());
+            assertEquals(1, fixture.connects.get());
+            assertEquals(0, fixture.disconnects.get());
+        }
+    }
+
     @Test
     void shortCallTimeoutBoundsReadyWaitAtSubmit() throws Exception {
         try (Fixture fixture = new Fixture(Duration.ofSeconds(2))) {
@@ -140,7 +169,18 @@ final class ZLinkClientServerReadyWaitTest {
         private final ManualTime time = new ManualTime();
         private final CountDownLatch admissionListening = new CountDownLatch(1);
         private final CompletableFuture<ZLinkBackendReceived> admission = new CompletableFuture<>();
-        private final CountDownLatch admissionStarted = new CountDownLatch(1);
+        private final CompletableFuture<ZLinkBackendReceived> secondAdmission = new CompletableFuture<>() {
+            @Override public CompletableFuture<ZLinkBackendReceived> whenComplete(
+                java.util.function.BiConsumer<? super ZLinkBackendReceived, ? super Throwable> action) {
+                var result = super.whenComplete(action);
+                secondAdmissionStarted.countDown();
+                return result;
+            }
+        };
+        private final CountDownLatch secondAdmissionStarted = new CountDownLatch(1);
+        private final AtomicInteger helloRequests = new AtomicInteger();
+        private final AtomicInteger connects = new AtomicInteger();
+        private final AtomicInteger disconnects = new AtomicInteger();
         private final AtomicInteger businessRequests = new AtomicInteger();
         private final AtomicReference<Duration> requestTimeout = new AtomicReference<>();
         private volatile long requestStarted;
@@ -152,9 +192,16 @@ final class ZLinkClientServerReadyWaitTest {
                 getClass().getClassLoader(), new Class<?>[] {ZLinkBackendDealerSocket.class},
                 (proxy, method, args) -> switch (method.getName()) {
                     case "request" -> {
-                        if (admissionStarted.getCount() != 0) {
-                            admissionStarted.countDown();
-                            yield admission;
+                        @SuppressWarnings("unchecked")
+                        List<Message> parts = (List<Message>) args[0];
+                        if (ZLinkClientServerServiceWire.isControlFrame(parts.getFirst().toByteArray())) {
+                            assertInstanceOf(ZLinkClientServerServiceWire.Hello.class,
+                                ZLinkClientServerServiceWire.decode(parts.getFirst().toByteArray()));
+                            assertEquals(channelTimeout, args[1]);
+                            if (helloRequests.incrementAndGet() == 1) {
+                                yield admission;
+                            }
+                            yield secondAdmission;
                         }
                         requestStarted = time.nanoTime();
                         requestTimeout.set((Duration) args[1]);
@@ -169,7 +216,9 @@ final class ZLinkClientServerReadyWaitTest {
                     case "name" -> "ready-wait-dealer";
                     case "hashCode" -> System.identityHashCode(proxy);
                     case "equals" -> proxy == args[0];
-                    case "setReceiveFlowState", "setChannelName", "connect", "disconnect", "close" -> null;
+                    case "connect" -> { connects.incrementAndGet(); yield null; }
+                    case "disconnect" -> { disconnects.incrementAndGet(); yield null; }
+                    case "setReceiveFlowState", "setChannelName", "close" -> null;
                     default -> throw new UnsupportedOperationException(method.toString());
                 });
             ZLinkBackendContext context = new ZLinkBackendContext() {
@@ -217,7 +266,8 @@ final class ZLinkClientServerReadyWaitTest {
         }
 
         private void admit() {
-            admission.complete(received(Message.from(ZLinkClientServerServiceWire.encodeAdmit(
+            (helloRequests.get() == 1 ? admission : secondAdmission)
+                .complete(received(Message.from(ZLinkClientServerServiceWire.encodeAdmit(
                 new ZLinkClientServerServerDescriptor("orders", RoutingId.from("server"), 1, 1,
                     "inproc://ready-wait", 100, ZLinkFrameworkRuntimeState.SERVING,
                     "default", "server", 1, Instant.EPOCH), Integer.MAX_VALUE))));
