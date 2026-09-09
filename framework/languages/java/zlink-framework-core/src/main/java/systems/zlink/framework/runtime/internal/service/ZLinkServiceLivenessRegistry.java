@@ -7,10 +7,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.CompletionException;
 import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /**
  * Tracks probe round trips on a monotonic clock. Application traffic never
@@ -30,7 +28,6 @@ public final class ZLinkServiceLivenessRegistry {
     private final long probeIntervalNanos;
     private final long notReadyProbeRetryNanos;
     private final long peerTimeoutNanos;
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<RoutingId, PeerState> peers = new HashMap<>();
     private long nextProbeId = 1;
 
@@ -54,19 +51,8 @@ public final class ZLinkServiceLivenessRegistry {
         peerTimeoutNanos = peerTimeout.toNanos();
     }
 
-    private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+    private synchronized <T> T inStateLane(Supplier<T> work) {
+        return work.get();
     }
 
     public void admit(

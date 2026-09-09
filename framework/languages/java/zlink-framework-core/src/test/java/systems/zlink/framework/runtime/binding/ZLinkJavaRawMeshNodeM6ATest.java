@@ -1084,6 +1084,80 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
+    void ingressReservesPermitBeforeReceiveAndCapsEachBatch() throws Exception {
+        String endpoint = "inproc://jvm-permit-before-receive-"
+            + System.nanoTime();
+        RoutingId sourceRid = RoutingId.from("jvm-permit-source");
+        RoutingId targetRid = RoutingId.from("jvm-permit-target");
+        var queue = new ZLinkApplicationJobQueue(
+            ZLinkApplicationJobQueueProfile.BALANCED,
+            OptionalLong.of(1),
+            new ZLinkApplicationJobQueue.ProcessorCandidates(
+                1, null, null, null));
+        CountDownLatch firstEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch secondEntered = new CountDownLatch(1);
+        AtomicInteger received = new AtomicInteger();
+        try (var context = Zlink.createContext();
+             var source = meshNode(context);
+             var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            target.setApplicationJobQueue(queue);
+            source.setRoutingId(sourceRid);
+            source.setBind("inproc://jvm-permit-source-" + System.nanoTime());
+            target.setRoutingId(targetRid);
+            target.setBind(endpoint);
+            target.startDispatch(record -> {
+                int ordinal = received.incrementAndGet();
+                if (ordinal == 1) {
+                    firstEntered.countDown();
+                    try {
+                        releaseFirst.await(2, TimeUnit.SECONDS);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                } else {
+                    secondEntered.countDown();
+                }
+                record.close();
+            });
+            source.start();
+            target.start();
+            source.connectPeer(endpoint, targetRid);
+            awaitAdmitted(source);
+
+            sendNodeMarker(source, targetRid, (byte) 1)
+                .get(2, TimeUnit.SECONDS);
+            assertTrue(firstEntered.await(2, TimeUnit.SECONDS));
+            sendNodeMarker(source, targetRid, (byte) 2);
+            Thread.sleep(100);
+            assertEquals(1, queue.snapshot().permitsInUse());
+            assertEquals(
+                systems.zlink.framework.monitoring
+                    .ZLinkApplicationJobQueuePressureState.PAUSED,
+                queue.snapshot().pressureState());
+            assertEquals(1, received.get());
+            assertEquals(64, ZLinkJavaRawMeshNode.ingressBatchLimit());
+
+            releaseFirst.countDown();
+            assertTrue(secondEntered.await(2, TimeUnit.SECONDS));
+        } finally {
+            releaseFirst.countDown();
+            queue.close();
+        }
+    }
+
+    private static CompletableFuture<Void> sendNodeMarker(
+        ZLinkJavaRawMeshNode source,
+        RoutingId target,
+        byte marker) {
+        try (Message packet = Message.from("permit.test");
+             Message payload = Message.from(new byte[] {marker})) {
+            return source.spotNode().sendToNode(
+                target, List.of(packet, payload)).toCompletableFuture();
+        }
+    }
+
+    @Test
     void messageFollowIsDeliveredAsInfrastructureWithoutApplicationDispatch()
         throws Exception {
         String endpoint =

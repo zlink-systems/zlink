@@ -10,9 +10,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.locks.LockSupport;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
@@ -96,7 +94,6 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceAdmissionGuard;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceMailbox;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
@@ -106,6 +103,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
 import systems.zlink.framework.runtime.internal.service.ZLinkCanonicalActorJoinReplyCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
@@ -129,6 +127,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     // it is a count snapshot and cannot admit a physical candidate.
     private static final int CONNECTION_READY_EDGE_FLAG = 1;
     private static final int MAX_INFRASTRUCTURE_CONTROL_PARTS = 64;
+    private static final int MAX_INGRESS_BATCH = 64;
+    private static final long MAX_INGRESS_BATCH_BYTES = 4L * 1024 * 1024;
+    private static final long MAX_INGRESS_BATCH_NANOS = 2_000_000L;
+    private static final Duration MAX_INGRESS_WAIT_TIMEOUT = Duration.ofMillis(100);
     private static final long MAX_INFRASTRUCTURE_CONTROL_BYTES = 256L * 1024;
     private static final long MAX_INFRASTRUCTURE_PAYLOAD_BYTES =
         4_294_966_774L;
@@ -169,15 +171,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private final Map<RoutingId, AutomaticNotRequiredPeer>
         automaticNotRequiredPeers = new ConcurrentHashMap<>();
     private final AtomicLong nextIntent = new AtomicLong(1);
-    private final AtomicLong channelSelectionCursor = new AtomicLong();
     private final AtomicLong nextCorrelation = new AtomicLong(1);
-    private final AtomicLong nextDispatchEnvelope = new AtomicLong(1);
     private final long preStartBindingGenerationSeed =
         positiveRandomLong();
-    private final Map<Long, ZLinkMeshDispatchRecord> dispatchEnvelopes =
-        new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final AtomicBoolean applicationDrainActive = new AtomicBoolean();
     // Descriptor mutation and deferred-ready state are one C2 group.
     private final ZLinkStateLane descriptorStateLane = new ZLinkStateLane();
     // Lazy SpotNode construction is a separate C1 registry state.
@@ -189,6 +186,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private final ZLinkServiceM6BWireCodec statefulWire =
         new ZLinkServiceM6BWireCodec();
     private final ZLinkServiceLivenessRegistry liveness;
+    private final Duration ingressWaitTimeout;
     private final ScheduledExecutorService deadlines =
         ZLinkProcessExecutionLanes.deadlines();
     private final Executor applicationDispatch =
@@ -229,7 +227,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private volatile int placementWeight = 100;
     private volatile ZLinkServiceNodeDescriptor.ObjectRole objectRole =
         ZLinkServiceNodeDescriptor.ObjectRole.NONE;
-    private volatile ZLinkServiceMailbox mailbox;
     private volatile ZLinkServiceTopologyRegistry topology;
     private volatile ZLinkServiceNodeDescriptor localDescriptor;
     private boolean deferServiceReadyPublication;
@@ -315,6 +312,10 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         this.currentTimeMillis = Objects.requireNonNull(
             currentTimeMillis, "currentTimeMillis");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
+        this.ingressWaitTimeout = livenessProbeInterval.compareTo(
+            MAX_INGRESS_WAIT_TIMEOUT) < 0
+                ? livenessProbeInterval
+                : MAX_INGRESS_WAIT_TIMEOUT;
         this.liveness = new ZLinkServiceLivenessRegistry(
             livenessProbeInterval, livenessPeerTimeout);
     }
@@ -753,8 +754,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 descriptorChannels,
                 ZLinkServiceNodeDescriptor.State.PREPARING);
             topology = new ZLinkServiceTopologyRegistry(localDescriptor);
-            mailbox = new ZLinkServiceMailbox(
-                4096, 64L * 1024 * 1024, 1024, 8L * 1024 * 1024);
             state = MeshNodeState.STARTED;
             state = MeshNodeState.READY;
             rawMonitor = port.openMonitor(
@@ -1108,10 +1107,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 .filter(this::isReadyPeer)
                 .count()),
             0,
-            mailbox == null
-                ? 0
-                : mailbox.pendingMessages(
-                    ZLinkServiceMailbox.Domain.APPLICATION),
+            0,
             0,
             0,
             0,
@@ -1360,6 +1356,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             && liveness.isReady(peerRoutingId, peer.connectionId());
     }
 
+    private void refreshChannelReadiness(RoutingId peerRoutingId) {
+        ZLinkServiceTopologyRegistry current = topology;
+        if (current == null) {
+            return;
+        }
+        current.peer(peerRoutingId).ifPresent(peer ->
+            current.setChannelReady(
+                peerRoutingId,
+                peer.connectionId(),
+                isReadyPeer(peer)));
+    }
+
     @Override
     public boolean canRequestCanonicalActorJoin(
         ZLinkInternalMeshNode.CanonicalActorJoinRequest request) {
@@ -1594,7 +1602,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         ZLinkServiceTopologyRegistry currentTopology = topology;
         Optional<RoutingId> target = currentTopology == null
             ? Optional.empty()
-            : currentTopology.selectChannel(selectedChannel, this::isReadyPeer)
+            : currentTopology.selectReadyChannel(selectedChannel)
                 .map(peer -> peer.descriptor().nodeRoutingId());
         if (target.isEmpty()) {
             return CompletableFuture.failedFuture(
@@ -1693,8 +1701,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         List<Message> parts,
         Duration timeout) {
         String selectedChannel = requireChannel(channelName);
-        Optional<RoutingId> target = topology.selectChannel(
-                selectedChannel, this::isReadyPeer)
+        Optional<RoutingId> target = topology.selectReadyChannel(
+                selectedChannel)
             .map(peer -> peer.descriptor().nodeRoutingId());
         streamTrace(STREAM_TRACE ? "request-channel-select channel=" + selectedChannel
             + " target=" + target.map(RoutingId::toString).orElse("none")
@@ -1729,8 +1737,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         String selectedChannel = requireChannel(channelName);
         ZLinkServiceTopologyRegistry currentTopology = topology;
         if (currentTopology != null
-                && currentTopology.hasSelectableChannel(
-                    selectedChannel, ignored -> true)) {
+                && currentTopology.hasSelectableChannel(selectedChannel)) {
             return Optional.empty();
         }
         boolean knownDisconnectedTarget = knownPeerChannels.values().stream()
@@ -4190,12 +4197,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             currentPump.shutdownNow();
             awaitExecutorTermination(currentPump);
         }
-        ZLinkServiceMailbox currentMailbox = mailbox;
-        if (currentMailbox != null) {
-            currentMailbox.close();
-        }
-        dispatchEnvelopes.values().forEach(ZLinkMeshDispatchRecord::close);
-        dispatchEnvelopes.clear();
         pendingReplyRelays.values().forEach(pending ->
             {
                 pending.cancelTimeout();
@@ -4239,24 +4240,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     }
 
     private void startPump() {
+        RouterSocket pumpSocket = requireStarted();
         pump = Executors.newSingleThreadExecutor(Thread.ofVirtual()
             .name("zlink-jvm-raw-mesh-" + meshName)
             .factory());
         pump.execute(() -> {
             while (!closed.get()) {
-                Optional<ZLinkJavaRawServicePort.Inbound> inbound;
-                try {
-                    inbound = port.receive(requireStarted());
-                } catch (RuntimeException ignored) {
-                    if (closed.get()) {
-                        return;
-                    }
-                    // A transient transport receive failure must not stop the
-                    // only service pump. Retry on the next pump iteration.
-                    LockSupport.parkNanos(
-                        Duration.ofMillis(1).toNanos());
-                    continue;
-                }
+                boolean readable = port.waitForReadable(
+                    pumpSocket, ingressWaitTimeout);
                 // receive advances the public poller and can commit transport
                 // transitions. Observe those transitions before publishing
                 // admission or replacement state from this receive turn.
@@ -4265,14 +4256,66 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 drainPeerCloseRequests();
                 announceExpectedPeers(now);
                 tickLiveness(now);
-                if (inbound.isEmpty()) {
-                    LockSupport.parkNanos(
-                        Duration.ofMillis(1).toNanos());
-                    continue;
+                if (readable) {
+                    drainIngressBatch(pumpSocket);
                 }
-                dispatch(inbound.orElseThrow());
             }
         });
+    }
+
+    private void drainIngressBatch(RouterSocket pumpSocket) {
+        long startedAt = System.nanoTime();
+        long receivedBytes = 0;
+        for (int count = 0; count < MAX_INGRESS_BATCH && !closed.get(); count++) {
+            if (count > 0
+                && !port.waitForReadable(pumpSocket, Duration.ZERO)) {
+                return;
+            }
+            systems.zlink.framework.runtime.internal.dispatch
+                .ZLinkApplicationJobQueue.Permit permit = null;
+            try {
+                var queue = applicationJobQueue;
+                if (queue != null) {
+                    permit = queue.acquireBlocking();
+                }
+                Optional<ZLinkJavaRawServicePort.Inbound> inbound =
+                    port.receiveNow(pumpSocket);
+                if (inbound.isEmpty()) {
+                    return;
+                }
+                ZLinkJavaRawServicePort.Inbound record = inbound.orElseThrow();
+                receivedBytes = Math.addExact(
+                    receivedBytes, retainedBytes(record.frames()));
+                try (ZLinkApplicationJobContext.Scope ignored = permit == null
+                         ? () -> { }
+                         : ZLinkApplicationJobContext.enter(permit)) {
+                    dispatch(record);
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            } finally {
+                if (permit != null) {
+                    permit.abandonReservation();
+                }
+            }
+            if (receivedBytes >= MAX_INGRESS_BATCH_BYTES
+                || System.nanoTime() - startedAt >= MAX_INGRESS_BATCH_NANOS) {
+                return;
+            }
+        }
+    }
+
+    private static long retainedBytes(List<byte[]> frames) {
+        long bytes = 0;
+        for (byte[] frame : frames) {
+            bytes = Math.addExact(bytes, frame.length);
+        }
+        return bytes;
+    }
+
+    static int ingressBatchLimit() {
+        return MAX_INGRESS_BATCH;
     }
 
     private boolean hasCurrentInfrastructureControlSource(
@@ -4679,32 +4722,38 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             reply,
             inbound::close);
         handedOff = true;
-        long envelopeId = nextDispatchEnvelope.getAndIncrement();
-        ZLinkServiceMailbox currentMailbox = mailbox;
-        String owner = channelName == null
-            ? "node:" + routingId
-            : "channel:" + channelName;
-        boolean enqueued = currentMailbox != null
-            && currentMailbox.tryEnqueue(new ZLinkServiceMailbox.Record(
-                owner,
-                ZLinkServiceMailbox.Domain.APPLICATION,
-                frames,
-                inbound.source().toBytes(),
-                null,
-                envelopeId));
-        if (!enqueued) {
-            streamTrace(STREAM_TRACE ? "channel-application-mailbox-rejected channel="
-                + channelName + " source=" + inbound.source()
-                + " correlation=" + correlation
-                + " mailbox=" + (currentMailbox != null) : null);
-            dispatch.close();
+        ZLinkMeshApplicationReceiver directReceiver = applicationReceiver;
+        if (directReceiver != null) {
+            boolean accepted = false;
+            try {
+                directReceiver.accept(dispatch);
+                accepted = true;
+            } finally {
+                if (!accepted) {
+                    dispatch.close();
+                }
+            }
             return;
         }
-        dispatchEnvelopes.put(envelopeId, dispatch);
-        streamTrace(STREAM_TRACE ? "channel-application-mailbox-enqueued channel="
-            + channelName + " source=" + inbound.source()
-            + " correlation=" + correlation + " envelope=" + envelopeId : null);
-        drainApplicationMailbox();
+        boolean scheduled = false;
+        try {
+            applicationDispatch.execute(() -> {
+                boolean accepted = false;
+                try {
+                    receiver.accept(dispatch);
+                    accepted = true;
+                } finally {
+                    if (!accepted) {
+                        dispatch.close();
+                    }
+                }
+            });
+            scheduled = true;
+        } finally {
+            if (!scheduled) {
+                dispatch.close();
+            }
+        }
         } finally {
             if (!handedOff) {
                 inbound.close();
@@ -5142,7 +5191,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         byte[] metadata = payloadOffset == 2
             ? frames.get(1).clone()
             : new byte[0];
-        resolveAcceptedAuthorities(inbound).whenComplete((authorities, failure) -> {
+        ZLinkApplicationJobContext.QueuedOwnership applicationJob =
+            ZLinkApplicationJobContext.transferToQueuedJob();
+        try {
+            resolveAcceptedAuthorities(inbound).whenComplete((authorities, failure) -> {
+            try (ZLinkApplicationJobContext.Scope ignored =
+                     ZLinkApplicationJobContext.enterQueued(applicationJob)) {
             streamTrace(STREAM_TRACE ? "spot-authorities request=" + header.request()
                 + " target=" + header.target().targetNodeRid()
                 + " spot=" + header.target().spotId()
@@ -5228,7 +5282,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 replySpotFailure(inbound, header, 102, 1);
                 inbound.close();
             }
-        });
+            } finally {
+                if (applicationJob != null) {
+                    applicationJob.close();
+                }
+            }
+            });
+        } catch (RuntimeException rejected) {
+            if (applicationJob != null) {
+                applicationJob.close();
+            }
+            throw rejected;
+        }
         return true;
     }
 
@@ -6076,7 +6141,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             return false;
         }
         final List<Message> receivedMessages = messages;
-        resolveAcceptedAuthorities(inbound).whenComplete((authorities, failure) -> {
+        ZLinkApplicationJobContext.QueuedOwnership applicationJob =
+            ZLinkApplicationJobContext.transferToQueuedJob();
+        try {
+            resolveAcceptedAuthorities(inbound).whenComplete((authorities, failure) -> {
+            try (ZLinkApplicationJobContext.Scope ignored =
+                     ZLinkApplicationJobContext.enterQueued(applicationJob)) {
             if (failure != null || authorities.isEmpty()) {
                 receivedMessages.forEach(Message::close);
                 replyActorFailure(inbound, header, 107, 21);
@@ -6135,7 +6205,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                 replyActorFailure(inbound, header, 102, 1);
                 inbound.close();
             }
-        });
+            } finally {
+                if (applicationJob != null) {
+                    applicationJob.close();
+                }
+            }
+            });
+        } catch (RuntimeException rejected) {
+            if (applicationJob != null) {
+                applicationJob.close();
+            }
+            throw rejected;
+        }
         return true;
     }
 
@@ -6471,6 +6552,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                         inbound.source(),
                         currentPeer.connectionId(),
                         System.nanoTime());
+                    refreshChannelReadiness(inbound.source());
                 }
                 streamTrace(STREAM_TRACE ? "duplicate-admission-reject source="
                     + inbound.source()
@@ -6521,6 +6603,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             if (command == ServiceWireConstants.COMMAND_ADMIT) {
                 admissionControlReadyConnections.put(
                     inbound.source(), connectionId);
+                refreshChannelReadiness(inbound.source());
                 // HELLO and the host's SERVING transition can cross. In that
                 // race the peer admits the PREPARING descriptor carried by
                 // HELLO after markServiceReady already broadcast its update
@@ -6609,6 +6692,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
             return;
         }
         admissionControlReadyConnections.put(target, connectionId);
+        refreshChannelReadiness(target);
     }
 
     private void dispatchLiveness(
@@ -6651,6 +6735,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     peer.connectionId(),
                     probeId,
                     System.nanoTime());
+                if (acknowledged) {
+                    refreshChannelReadiness(inbound.source());
+                }
                 if (acknowledged
                     && !wasReady
                     && liveness.isReady(
@@ -6744,6 +6831,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                         peerRid,
                         admitted.connectionId(),
                         System.nanoTime());
+                    refreshChannelReadiness(peerRid);
                 }
                 nextAnnouncementNanos.put(peer.orElseThrow(), 0L);
             } else if (event.event() == MonitorEventType.DISCONNECTED
@@ -7343,78 +7431,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
                     // if the transport already removed the candidate.
                 }
             });
-    }
-
-    private void drainApplicationMailbox() {
-        ZLinkServiceMailbox currentMailbox = mailbox;
-        var queue = applicationJobQueue;
-        if (currentMailbox == null
-            || queue == null
-            || !applicationDrainActive.compareAndSet(false, true)) {
-            return;
-        }
-        queue.acquire().whenComplete((permit, admissionFailure) -> {
-            if (admissionFailure != null || permit == null || closed.get()) {
-                if (permit != null) {
-                    permit.close();
-                }
-                applicationDrainActive.set(false);
-                return;
-            }
-            Optional<ZLinkServiceMailbox.Claim> claimed = currentMailbox.tryClaim(
-                ZLinkServiceMailbox.Domain.APPLICATION,
-                1,
-                1024L * 1024);
-            if (claimed.isEmpty()) {
-                permit.close();
-                applicationDrainActive.set(false);
-                if (currentMailbox.pendingMessages(
-                    ZLinkServiceMailbox.Domain.APPLICATION) > 0) {
-                    applicationDispatch.execute(this::drainApplicationMailbox);
-                }
-                return;
-            }
-            ZLinkServiceMailbox.Claim claim = claimed.orElseThrow();
-            try (var ignored = systems.zlink.framework.runtime.internal.dispatch
-                     .ZLinkApplicationJobContext.enter(permit)) {
-                applicationDispatch.execute(() -> {
-                    try {
-                        ZLinkServiceMailbox.Record record =
-                            claim.records().getFirst();
-                        Long envelopeId = record.correlation();
-                        ZLinkMeshDispatchRecord dispatch =
-                            dispatchEnvelopes.remove(envelopeId);
-                        if (dispatch != null) {
-                            boolean accepted = false;
-                            try {
-                                receiver.accept(dispatch);
-                                accepted = true;
-                            } finally {
-                                if (!accepted) {
-                                    dispatch.close();
-                                }
-                            }
-                        }
-                    } finally {
-                        currentMailbox.release(claim);
-                        drainApplicationMailbox();
-                    }
-                });
-            } catch (RejectedExecutionException rejected) {
-                for (ZLinkServiceMailbox.Record record : claim.records()) {
-                    ZLinkMeshDispatchRecord dispatch =
-                        dispatchEnvelopes.remove(record.correlation());
-                    if (dispatch != null) {
-                        dispatch.close();
-                    }
-                }
-                currentMailbox.release(claim);
-            } finally {
-                permit.abandonReservation();
-                applicationDrainActive.set(false);
-                drainApplicationMailbox();
-            }
-        });
     }
 
     private RouterSocket requireStarted() {
