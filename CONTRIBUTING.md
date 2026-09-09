@@ -172,8 +172,13 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 
 ## 9. Branches, commits, PRs, releases
 
+- **Workflow (from 2026-09-10)**: every piece of work is a GitHub Issue; each Issue gets a branch
+  `<area>/<issue-number>-<slug>` plus a worktree and lands on main through a PR. main changes only
+  through PRs (exceptions: plans and decision records that do not affect code, release tags).
+  Milestones are releases, the Project board is status. Owned by
+  [`doc/principal/dev/development-workflow.md`](doc/principal/dev/development-workflow.md).
 - Branches, commits, pushes and merges happen only on an explicit request, and the working
-  branch is the one the user designates (`AGENTS.md` §1).
+  branch follows the Issue-branch rule (`AGENTS.md` §1).
 - Commit message: `<module>: <one line>` plus a body with cause, fix, evidence numbers and
   gate results. Refactors keep their items (dead code removal / responsibility split /
   naming) distinguishable in the diff.
@@ -213,6 +218,8 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   refactor into one job.
 - Jobs do not loop on gates or perf measurements. The supervisor runs the gate once after the
   job exits, reads the diff, and commits with explicit file names (never `git add -A`).
+- One job gets one Issue, one worktree and one branch (`-C <worktree>`); the job commits only on
+  that branch and the supervisor pushes, opens the PR and merges (`doc/principal/dev/development-workflow.md` §4).
 - Jobs do not modify or run `doc/**`, `core/doc/**`, `hotpath_reference.json` or
   `scripts/local-package/**`. A needed spec change is reported as a BLOCKER and committed
   separately by the supervisor.
