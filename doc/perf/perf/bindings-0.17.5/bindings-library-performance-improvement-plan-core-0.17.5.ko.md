@@ -4,9 +4,10 @@
 >
 > 작업 기준: `main` (별도 브랜치 없음; 검증된 단위마다 커밋·푸시)
 >
-> Core 기준 runtime: **0.17.5** — tag `core/v0.17.5`, source `c72bc2dc63`, GitHub Release 자산
-> (Linux 요구 glibc 2.34). `checksums_sha256`은 첫 0.17.5 측정에서 runtime을 resolve할 때
-> report META로 확정한다.
+> Core 기준 runtime: **0.17.5** — tag `core/v0.17.5`, release revision `766dd1bb6e`
+> (fix 커밋 `c72bc2dc63`, D-BP52), GitHub Release 자산(Linux 요구 glibc 2.34). 첫 0.17.5
+> 측정에서 runtime resolve를 확인했다: `~/.cache/zlink/core/0.17.5/linux-x64/lib/libzlink.so.0.17.5`,
+> provenance(`share/zlink/core-package-provenance.json`) version=0.17.5, revision 766dd1bb6e.
 >
 > **버전 전환 메모(2026-09-09).** C++(첫 언어)는 core **0.17.4**에서 Single·Multi를 모두
 > 측정 완료했다(§9.1, pair tag `c0174-*`). 0.17.5의 변경은 STREAM 대규모 CCU(약 3,500↑,
@@ -822,57 +823,59 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 ### 9.2 .NET
 
-- perf 경로: `bindings/dotnet/perf`
-- Single 상태: `미측정`
+- perf 경로: `bindings/dotnet/perf` (core **0.17.5**, pair tag `c0175-*`)
+- Single 상태: `측정 완료(2026-09-09)` — 6 transport × 7 pattern, 42셀 모두 complete(실패 0).
+  통과 28 / 미달 14. 미달: tcp req/reply, inproc·ipc의 다수(작은 payload managed/native 전환
+  비용; local transport는 §2.1 예외 목표 적용). 2단계 개선 대상.
 - Multi 상태: `미측정`
-- 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
+- 다음 작업: .NET Multi paired 측정(STREAM 100 CCU).
 
 #### 9.2.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|-------|--------|--------|------------------|
-| `tcp` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `tcp` | `PAIR` | 43.2% | 49.8% | 76.2% | 141.7% | 121.0% | 109.5% | 통과 90.2%/lat0.94× · c0175-dotnet-single-tcp |
+| `tcp` | `PUBSUB` | 47.4% | 51.3% | 85.9% | 215.0% | 198.0% | 171.1% | 통과 128.1%/lat1.32× · c0175-dotnet-single-tcp |
+| `tcp` | `DEALER_DEALER` | 42.8% | 45.3% | 64.6% | 162.1% | 139.3% | 105.1% | 통과 93.2%/lat0.64× · c0175-dotnet-single-tcp |
+| `tcp` | `DEALER_ROUTER` | 41.7% | 45.0% | 64.7% | 146.2% | 125.4% | 108.9% | 통과 88.6%/lat0.82× · c0175-dotnet-single-tcp |
+| `tcp` | `DEALER_ROUTER_REQREP` | 44.4% | 42.4% | 59.6% | 60.4% | 78.7% | 93.3% | 미달 63.1%/lat1.19× · c0175-dotnet-single-tcp |
+| `tcp` | `ROUTER_ROUTER` | 42.7% | 48.9% | 63.2% | 145.2% | 125.9% | 107.5% | 통과 88.9%/lat1.09× · c0175-dotnet-single-tcp |
+| `tcp` | `ROUTER_ROUTER_REQREP` | 36.6% | 36.8% | 54.8% | 59.3% | 70.8% | 80.2% | 미달 56.4%/lat1.95× · c0175-dotnet-single-tcp |
+| `ws` | `PAIR` | 42.1% | 46.4% | 68.3% | 137.4% | 116.6% | 112.9% | 통과 87.3%/lat0.09× · c0175-dotnet-single-ws |
+| `ws` | `PUBSUB` | 49.6% | 50.6% | 67.0% | 178.2% | 184.2% | 154.1% | 통과 113.9%/lat0.93× · c0175-dotnet-single-ws |
+| `ws` | `DEALER_DEALER` | 46.0% | 46.8% | 60.9% | 168.0% | 151.7% | 112.8% | 통과 97.7%/lat0.08× · c0175-dotnet-single-ws |
+| `ws` | `DEALER_ROUTER` | 42.5% | 45.3% | 57.4% | 154.9% | 148.0% | 122.4% | 통과 95.1%/lat0.10× · c0175-dotnet-single-ws |
+| `ws` | `DEALER_ROUTER_REQREP` | 48.3% | 98.9% | 57.8% | 69.6% | 77.4% | 89.4% | 통과 73.6%/lat1.20× · c0175-dotnet-single-ws |
+| `ws` | `ROUTER_ROUTER` | 47.3% | 46.9% | 55.6% | 158.0% | 132.2% | 116.4% | 통과 92.7%/lat0.07× · c0175-dotnet-single-ws |
+| `ws` | `ROUTER_ROUTER_REQREP` | 47.7% | 89.1% | 79.2% | 72.1% | 82.2% | 86.0% | 통과 76.0%/lat1.23× · c0175-dotnet-single-ws |
+| `wss` | `PAIR` | 43.8% | 57.2% | 126.8% | 166.9% | 159.0% | 149.6% | 통과 117.2%/lat0.06× · c0175-dotnet-single-wss |
+| `wss` | `PUBSUB` | 48.1% | 56.3% | 121.9% | 133.0% | 114.3% | 96.7% | 통과 95.0%/lat0.22× · c0175-dotnet-single-wss |
+| `wss` | `DEALER_DEALER` | 42.5% | 53.3% | 110.1% | 167.6% | 162.6% | 152.0% | 통과 114.7%/lat0.35× · c0175-dotnet-single-wss |
+| `wss` | `DEALER_ROUTER` | 43.0% | 53.3% | 101.8% | 159.7% | 160.7% | 146.4% | 통과 110.8%/lat0.09× · c0175-dotnet-single-wss |
+| `wss` | `DEALER_ROUTER_REQREP` | 43.7% | 143.2% | 80.0% | 93.0% | 108.1% | 135.8% | 통과 100.6%/lat0.81× · c0175-dotnet-single-wss |
+| `wss` | `ROUTER_ROUTER` | 46.2% | 54.6% | 109.5% | 157.7% | 167.3% | 155.5% | 통과 115.1%/lat0.05× · c0175-dotnet-single-wss |
+| `wss` | `ROUTER_ROUTER_REQREP` | 39.8% | 125.7% | 148.7% | 88.2% | 106.5% | 123.8% | 통과 105.5%/lat0.85× · c0175-dotnet-single-wss |
+| `tls` | `PAIR` | 40.8% | 59.2% | 172.5% | 155.2% | 158.1% | 151.1% | 통과 122.8%/lat1.40× · c0175-dotnet-single-tls |
+| `tls` | `PUBSUB` | 41.5% | 66.8% | 176.7% | 103.7% | 103.4% | 98.4% | 통과 98.4%/lat1.42× · c0175-dotnet-single-tls |
+| `tls` | `DEALER_DEALER` | 33.5% | 39.5% | 109.0% | 138.2% | 145.8% | 143.8% | 통과 101.6%/lat1.34× · c0175-dotnet-single-tls |
+| `tls` | `DEALER_ROUTER` | 41.2% | 49.4% | 131.8% | 146.5% | 154.6% | 151.7% | 통과 112.5%/lat0.76× · c0175-dotnet-single-tls |
+| `tls` | `DEALER_ROUTER_REQREP` | 41.6% | 44.5% | 91.9% | 80.6% | 89.9% | 111.1% | 통과 76.6%/lat0.97× · c0175-dotnet-single-tls |
+| `tls` | `ROUTER_ROUTER` | 41.9% | 50.5% | 95.9% | 137.9% | 141.2% | 141.4% | 통과 101.5%/lat0.43× · c0175-dotnet-single-tls |
+| `tls` | `ROUTER_ROUTER_REQREP` | 31.2% | 38.2% | 105.0% | 78.6% | 90.0% | 122.8% | 통과 77.6%/lat0.96× · c0175-dotnet-single-tls |
+| `inproc` | `PAIR` | 49.3% | 51.7% | 55.6% | 21.4% | 20.0% | 24.3% | 미달 37.1%/lat2.83× · c0175-dotnet-single-inproc |
+| `inproc` | `PUBSUB` | 56.5% | 65.7% | 64.4% | 148.1% | 112.1% | 49.8% | 미달 82.8%/lat3.07× · c0175-dotnet-single-inproc |
+| `inproc` | `DEALER_DEALER` | 54.0% | 55.4% | 54.2% | 24.8% | 67.3% | 82.8% | 통과 56.4%/lat1.81× · c0175-dotnet-single-inproc |
+| `inproc` | `DEALER_ROUTER` | 55.4% | 58.4% | 58.9% | 20.3% | 50.6% | 81.3% | 미달 54.1%/lat1.64× · c0175-dotnet-single-inproc |
+| `inproc` | `DEALER_ROUTER_REQREP` | 55.2% | 52.1% | 55.4% | 25.5% | 46.9% | 55.6% | 미달 48.4%/lat2.54× · c0175-dotnet-single-inproc |
+| `inproc` | `ROUTER_ROUTER` | 54.4% | 58.5% | 58.7% | 26.2% | 52.4% | 73.9% | 미달 54.0%/lat1.55× · c0175-dotnet-single-inproc |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 46.3% | 49.3% | 45.8% | 7.4% | 14.6% | 22.0% | 미달 30.9%/lat23.52× · c0175-dotnet-single-inproc |
+| `ipc` | `PAIR` | 37.8% | 45.3% | 62.1% | 86.7% | 91.7% | 89.1% | 미달 68.8%/lat0.95× · c0175-dotnet-single-ipc |
+| `ipc` | `PUBSUB` | 45.8% | 49.6% | 74.3% | 152.0% | 170.7% | 163.6% | 통과 109.3%/lat1.29× · c0175-dotnet-single-ipc |
+| `ipc` | `DEALER_DEALER` | 38.0% | 44.7% | 56.9% | 109.6% | 96.7% | 78.1% | 미달 70.7%/lat0.70× · c0175-dotnet-single-ipc |
+| `ipc` | `DEALER_ROUTER` | 35.2% | 39.6% | 50.0% | 96.3% | 85.3% | 87.7% | 미달 65.7%/lat0.99× · c0175-dotnet-single-ipc |
+| `ipc` | `DEALER_ROUTER_REQREP` | 45.6% | 43.0% | 42.0% | 59.1% | 77.1% | 78.0% | 미달 57.5%/lat1.48× · c0175-dotnet-single-ipc |
+| `ipc` | `ROUTER_ROUTER` | 39.9% | 42.5% | 52.3% | 101.5% | 86.8% | 76.4% | 미달 66.6%/lat1.23× · c0175-dotnet-single-ipc |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 35.6% | 36.1% | 35.9% | 62.4% | 69.1% | 76.1% | 미달 52.5%/lat2.09× · c0175-dotnet-single-ipc |
 
 #### 9.2.2 Multi suite
 
