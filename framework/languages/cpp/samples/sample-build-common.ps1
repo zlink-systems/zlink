@@ -111,10 +111,30 @@ function Resolve-ZlinkCppSampleBuild {
             if ($Configuration -notin @("Debug", "Release", "RelWithDebInfo", "MinSizeRel")) {
                 $Configuration = "Debug"
             }
+            $RuntimeDirectories = @()
+            $CachePath = Join-Path $BuildRoot "CMakeCache.txt"
+            $PrefixValue = Get-ZlinkCppSampleCacheValue -BuildDir $BuildRoot -Name "CMAKE_PREFIX_PATH"
+            if ($PrefixValue) {
+                $RuntimeDirectories += $PrefixValue -split ';' | ForEach-Object { Join-Path $_ "bin" }
+            }
+            foreach ($CacheName in @("zlink_DIR", "zlink_cpp_DIR")) {
+                $PackageDir = Get-ZlinkCppSampleCacheValue -BuildDir $BuildRoot -Name $CacheName
+                if ($PackageDir) {
+                    $ConfigPath = Join-Path $PackageDir "zlinkConfig.cmake"
+                    if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
+                        $CoreMatch = Select-String -LiteralPath $ConfigPath -Pattern 'ZLINK_CORE_PACKAGE_PREFIX\s+"([^"]+)"' |
+                            Select-Object -First 1
+                        if ($CoreMatch) {
+                            $RuntimeDirectories += Join-Path $CoreMatch.Matches[0].Groups[1].Value "bin"
+                        }
+                    }
+                }
+            }
             return [pscustomobject]@{
                 BuildDir = $BuildRoot
                 BinDir = $BinDir
                 Configuration = $Configuration
+                RuntimeDirectories = @($RuntimeDirectories | Select-Object -Unique)
             }
         }
     }
@@ -143,6 +163,26 @@ function Get-ZlinkCppSampleBinary {
     throw "Missing executable: $Name under $($Build.BinDir)"
 }
 
+function Initialize-ZlinkCppSampleRuntime {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Build
+    )
+
+    $Directories = @($Build.RuntimeDirectories)
+    if ($env:ZLINK_CPP_RUNTIME_DIR) {
+        $Directories += $env:ZLINK_CPP_RUNTIME_DIR
+    }
+    $Directories = @($Directories | Where-Object {
+        $_ -and (Test-Path -LiteralPath $_ -PathType Container)
+    } | Select-Object -Unique)
+    if ($Directories.Count -eq 0) {
+        return
+    }
+    $CurrentPath = if ($env:PATH) { @($env:PATH -split ';') } else { @() }
+    $env:PATH = @(($Directories + $CurrentPath) | Select-Object -Unique) -join ';'
+}
+
 function Invoke-ZlinkCppSampleCTest {
     param(
         [Parameter(Mandatory = $true)]
@@ -155,6 +195,12 @@ function Invoke-ZlinkCppSampleCTest {
 
     if (-not (Test-Path -LiteralPath (Join-Path $Build.BuildDir "CTestTestfile.cmake") -PathType Leaf)) {
         Write-Host "sample pre-run tests=skipped reason=no-ctest-metadata buildDir=$($Build.BuildDir)"
+        return
+    }
+
+    $TestList = (& $CTestBin --test-dir $Build.BuildDir -C $Build.Configuration -R $Pattern -N 2>&1 | Out-String)
+    if ($TestList -match "No tests were found") {
+        Write-Host "sample pre-run tests=skipped reason=no-matching-tests buildDir=$($Build.BuildDir)"
         return
     }
 

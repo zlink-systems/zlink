@@ -15,6 +15,7 @@ $SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRo
 ) -AllowMissingBinaries
 $BuildDir = $SampleBuild.BuildDir
 $BuildConfiguration = $SampleBuild.Configuration
+Initialize-ZlinkCppSampleRuntime -Build $SampleBuild
 $CTestBin = if ($env:CTEST_BIN) { $env:CTEST_BIN } else { "ctest" }
 
 function Reserve-Ports([int]$Count) {

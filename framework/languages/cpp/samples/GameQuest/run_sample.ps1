@@ -13,6 +13,7 @@ $SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRo
 ) -AllowMissingBinaries
 $BuildDir = $SampleBuild.BuildDir
 $BuildConfiguration = $SampleBuild.Configuration
+Initialize-ZlinkCppSampleRuntime -Build $SampleBuild
 $WaitAttempts = 300
 $WaitMilliseconds = 100
 $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
