@@ -195,6 +195,68 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         if (!TryDispatch(received)) received.Dispose();
     }
 
+    public void Dispatch(IReadOnlyList<ZLinkBackendRouteReceived> received)
+    {
+        if (received.Count == 0)
+            return;
+        var batch = received.ToArray();
+        if (_taskRunner.TryRunDetached(
+                "mesh-node-route-dispatch-batch",
+                ct => DispatchBatchAsync(batch, ct)))
+            return;
+
+        DisposeBatch(batch);
+    }
+
+    private static void DisposeBatch(
+        IReadOnlyList<ZLinkBackendRouteReceived> batch)
+    {
+        foreach (var record in batch)
+            record.Dispose();
+    }
+
+    private async ValueTask DispatchBatchAsync(
+        IReadOnlyList<ZLinkBackendRouteReceived> batch,
+        CancellationToken cancellationToken)
+    {
+        var pending = new List<Task>(batch.Count);
+        for (var index = 0; index < batch.Count; index++)
+        {
+            var received = batch[index];
+            ZLinkEnvelopeHeader? header = null;
+            if (received.PartCount > 0)
+            {
+                try
+                {
+                    header = received.ApplicationPayloadView is { } view
+                        ? ZLinkEnvelopeCodec.DecodeHeader(
+                            view,
+                            _dispatchErrors.Flow.CaptureEnabled)
+                        : ZLinkEnvelopeCodec.DecodeHeader(
+                            received.Parts,
+                            _dispatchErrors.Flow.CaptureEnabled);
+                }
+                catch
+                {
+                    // Normal dispatch owns malformed-frame reporting.
+                }
+            }
+
+            if (header is not null
+                && TryGetOrderedActorRelayKey(received, header, out var actorId))
+            {
+                if (!TryDispatchOrderedActorRelay(actorId, received, header))
+                    received.Dispose();
+                continue;
+            }
+
+            pending.Add(DispatchAsync(received, header, cancellationToken).AsTask());
+        }
+
+        if (pending.Count != 0)
+            await Task.WhenAll(pending).ConfigureAwait(false);
+    }
+
     internal bool TryDispatch(ZLinkBackendRouteReceived received)
     {
         // Decode the header once here; every later stage (relay-key probe,
@@ -202,13 +264,17 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         // same bytes. A malformed header stays null so DispatchAsync can own
         // the protocol-error reporting.
         ZLinkEnvelopeHeader? header = null;
-        if (received.Parts.Count > 0)
+        if (received.PartCount > 0)
         {
             try
             {
-                header = ZLinkEnvelopeCodec.DecodeHeader(
-                    received.Parts,
-                    _dispatchErrors.Flow.CaptureEnabled);
+                header = received.ApplicationPayloadView is { } view
+                    ? ZLinkEnvelopeCodec.DecodeHeader(
+                        view,
+                        _dispatchErrors.Flow.CaptureEnabled)
+                    : ZLinkEnvelopeCodec.DecodeHeader(
+                        received.Parts,
+                        _dispatchErrors.Flow.CaptureEnabled);
             }
             catch
             {
@@ -233,7 +299,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         out ZLinkActorId actorId)
     {
         actorId = default;
-        if (received.ChannelName is not null || received.Parts.Count < 2)
+        if (received.ChannelName is not null || received.PartCount < 2)
             return false;
 
         try
@@ -245,11 +311,17 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                     StringComparison.Ordinal))
                 return false;
 
-            var relay = ZLinkEnvelopeCodec.DecodeBody(
-                    received.Parts,
-                    typeof(ZLinkRemoteActorFrameRelay),
-                    header.ContentType,
-                    _codecs)
+            var relay = (received.ApplicationPayloadView is { } view
+                    ? ZLinkEnvelopeCodec.DecodeBody(
+                        view,
+                        typeof(ZLinkRemoteActorFrameRelay),
+                        header.ContentType,
+                        _codecs)
+                    : ZLinkEnvelopeCodec.DecodeBody(
+                        received.Parts,
+                        typeof(ZLinkRemoteActorFrameRelay),
+                        header.ContentType,
+                        _codecs))
                 as ZLinkRemoteActorFrameRelay;
             if (string.IsNullOrWhiteSpace(relay?.ActorId))
                 return false;
@@ -346,7 +418,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 : null;
         using (received)
         {
-            if (received.Parts.Count == 0)
+            if (received.PartCount == 0)
             {
                 HandleProtocolError(received, ZLinkEnvelopeCodec.MissingHeader());
                 return;
@@ -356,9 +428,13 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             try
             {
                 header = decodedHeader
-                         ?? ZLinkEnvelopeCodec.DecodeHeader(
-                             received.Parts,
-                             _dispatchErrors.Flow.CaptureEnabled);
+                         ?? (received.ApplicationPayloadView is { } view
+                             ? ZLinkEnvelopeCodec.DecodeHeader(
+                                 view,
+                                 _dispatchErrors.Flow.CaptureEnabled)
+                             : ZLinkEnvelopeCodec.DecodeHeader(
+                                 received.Parts,
+                                 _dispatchErrors.Flow.CaptureEnabled));
                 ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
             }
             catch (ZLinkEnvelopeProtocolException protocolError)
@@ -412,8 +488,26 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                     await DispatchChannelAsync(received, channelName, header, cancellationToken)
                         .ConfigureAwait(false);
                 else
-                    await DispatchNodeRouteAsync(received, header, cancellationToken)
-                        .ConfigureAwait(false);
+                {
+                    Message[]? materialized = null;
+                    try
+                    {
+                        var parts = received.ApplicationPayloadView is { } view
+                            ? materialized = view.RetainMessages().ToArray()
+                            : received.Parts;
+                        await DispatchNodeRouteAsync(
+                                received,
+                                header,
+                                parts,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        if (materialized is not null)
+                            ZLinkMessageParts.DisposeAll(materialized);
+                    }
+                }
             }
         }
     }
@@ -431,6 +525,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     private async ValueTask DispatchNodeRouteAsync(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
+        IReadOnlyList<Message> parts,
         CancellationToken cancellationToken)
     {
         var isRequest = header.Kind == ZLinkMessageKind.Request;
@@ -479,7 +574,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                         _meshName.Value,
                         sourceRid,
                         header,
-                        received.Parts,
+                        parts,
                         cancellationToken,
                         received.Metadata)
                     .ConfigureAwait(false);
@@ -504,7 +599,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                     _meshName.Value,
                     sourceRid,
                     header,
-                    received.Parts,
+                    parts,
                     cancellationToken,
                     received.Metadata)
                 .ConfigureAwait(false);
@@ -559,29 +654,54 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         switch (header.Kind)
         {
             case ZLinkMessageKind.Request:
-                await _channelRequestPipeline.DispatchAsync(
-                        channelName,
-                        received.Parts,
-                        header,
-                        (Self: this, received, cancellationToken),
-                        static (s, replyHeader, reply, replyType) =>
-                            s.Self.SubmitEnvelopeAsync(s.received, replyHeader, reply, replyType, s.cancellationToken),
-                        static (s, errorHeader) =>
-                            s.Self.SubmitEnvelopeAsync(s.received, errorHeader, null, null, s.cancellationToken),
-                        cancellationToken,
-                        received.Metadata,
-                        received.SourceNodeRid)
-                    .ConfigureAwait(false);
+                if (received.ApplicationPayloadView is { } requestView)
+                    await _channelRequestPipeline.DispatchAsync(
+                            channelName,
+                            requestView,
+                            header,
+                            (Self: this, received, cancellationToken),
+                            static (s, replyHeader, reply, replyType) =>
+                                s.Self.SubmitEnvelopeAsync(s.received, replyHeader, reply, replyType, s.cancellationToken),
+                            static (s, errorHeader) =>
+                                s.Self.SubmitEnvelopeAsync(s.received, errorHeader, null, null, s.cancellationToken),
+                            cancellationToken,
+                            received.Metadata,
+                            received.SourceNodeRid)
+                        .ConfigureAwait(false);
+                else
+                    await _channelRequestPipeline.DispatchAsync(
+                            channelName,
+                            received.Parts,
+                            header,
+                            (Self: this, received, cancellationToken),
+                            static (s, replyHeader, reply, replyType) =>
+                                s.Self.SubmitEnvelopeAsync(s.received, replyHeader, reply, replyType, s.cancellationToken),
+                            static (s, errorHeader) =>
+                                s.Self.SubmitEnvelopeAsync(s.received, errorHeader, null, null, s.cancellationToken),
+                            cancellationToken,
+                            received.Metadata,
+                            received.SourceNodeRid)
+                        .ConfigureAwait(false);
                 return;
             case ZLinkMessageKind.Command:
-                await _channelCommandPipeline.DispatchAsync(
-                        channelName,
-                        received.Parts,
-                        header,
-                        cancellationToken,
-                        received.Metadata,
-                        received.SourceNodeRid)
-                    .ConfigureAwait(false);
+                if (received.ApplicationPayloadView is { } commandView)
+                    await _channelCommandPipeline.DispatchAsync(
+                            channelName,
+                            commandView,
+                            header,
+                            cancellationToken,
+                            received.Metadata,
+                            received.SourceNodeRid)
+                        .ConfigureAwait(false);
+                else
+                    await _channelCommandPipeline.DispatchAsync(
+                            channelName,
+                            received.Parts,
+                            header,
+                            cancellationToken,
+                            received.Metadata,
+                            received.SourceNodeRid)
+                        .ConfigureAwait(false);
                 return;
         }
     }

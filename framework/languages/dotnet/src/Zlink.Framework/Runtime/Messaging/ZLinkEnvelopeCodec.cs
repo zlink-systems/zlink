@@ -5,6 +5,54 @@ using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
+internal sealed class ZLinkMultipartPayloadView(
+    Message frame,
+    int[] ranges)
+{
+    private ReadOnlyMemory<byte>? _managedFrame;
+
+    internal int Count => ranges.Length / 2;
+
+    internal ReadOnlySpan<byte> GetSpan(int index)
+    {
+        EnsureIndex(index);
+        return frame.AsReadOnlySpan().Slice(
+            ranges[index * 2],
+            ranges[index * 2 + 1]);
+    }
+
+    internal ReadOnlyMemory<byte> GetMemory(int index)
+    {
+        EnsureIndex(index);
+        var memory = _managedFrame ??= frame.AsReadOnlyMemory();
+        return memory.Slice(ranges[index * 2], ranges[index * 2 + 1]);
+    }
+
+    internal IReadOnlyList<Message> RetainMessages()
+    {
+        var result = new Message[Count];
+        var created = 0;
+        try
+        {
+            for (; created < result.Length; created++)
+                result[created] = Message.From(GetSpan(created));
+            return result;
+        }
+        catch
+        {
+            for (var index = 0; index < created; index++)
+                result[index].Dispose();
+            throw;
+        }
+    }
+
+    private void EnsureIndex(int index)
+    {
+        if ((uint)index >= (uint)Count)
+            throw new ArgumentOutOfRangeException(nameof(index));
+    }
+}
+
 internal enum ZLinkMessageKind
 {
     Request = 1,
@@ -305,6 +353,29 @@ internal static class ZLinkEnvelopeCodec
         return DecodeHeader(parts[0], validateFlow);
     }
 
+    internal static ZLinkEnvelopeHeader DecodeHeader(
+        ZLinkMultipartPayloadView parts,
+        bool validateFlow = true)
+    {
+        EnsurePart(parts, 0, "header");
+        ZLinkEnvelopeHeader header;
+        try
+        {
+            header = JsonSerializer.Deserialize<ZLinkEnvelopeHeader>(
+                         parts.GetSpan(0),
+                         ZLinkJsonSerializerOptions.Default)
+                     ?? throw new JsonException("ZLink envelope header is null.");
+        }
+        catch (JsonException error)
+        {
+            throw new ZLinkEnvelopeProtocolException(
+                InvalidProtocolHeader(),
+                $"ZLink envelope header is invalid: {error.Message}");
+        }
+        ValidateProtocolHeader(header, validateFlow);
+        return ValidateDecodedFlow(header, validateFlow);
+    }
+
     internal static ulong MeasureApplicationPayloadBytes(
         IReadOnlyList<Message> parts)
     {
@@ -416,6 +487,46 @@ internal static class ZLinkEnvelopeCodec
             bodyType);
     }
 
+    internal static object? DecodeBody(
+        ZLinkMultipartPayloadView parts,
+        Type bodyType,
+        string contentType,
+        ZLinkCodecRegistryBuilder? codecs)
+    {
+        EnsurePart(parts, 1, "body");
+        var body = parts.GetSpan(1);
+        IZLinkMessageSerializer? customSerializer = null;
+        if (!contentType.Equals(JsonContentType, StringComparison.OrdinalIgnoreCase)
+            && (codecs is null
+                || !codecs.TryGetSerializer(contentType, out customSerializer)))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                $"No payload serializer is registered for received content type '{contentType}'.");
+
+        if (bodyType == typeof(Message))
+            return Message.From(body);
+        if (bodyType == typeof(ZLinkMessage))
+            return ZLinkMessage.FromEncoded(
+                contentType,
+                parts.GetMemory(1),
+                codecs ?? new ZLinkCodecRegistryBuilder());
+        if (bodyType == typeof(ReadOnlyMemory<byte>))
+            return parts.GetMemory(1);
+        if (body.IsEmpty)
+            return bodyType.IsValueType
+                ? Activator.CreateInstance(bodyType)
+                : null;
+        if (customSerializer is not null)
+        {
+            if (customSerializer is IZLinkMessageSpanDeserializer spanDeserializer)
+                return spanDeserializer.Deserialize(body, bodyType);
+            return customSerializer.Deserialize(
+                ZLinkEncodedPayload.FromOwned(parts.GetMemory(1)),
+                bodyType);
+        }
+        return ZLinkFrameworkJsonPayloadCodec.Deserialize(body, bodyType);
+    }
+
     public static Message EncodeJsonPart<T>(T value)
     {
         return Message.From(EncodeJsonBytes(value));
@@ -477,6 +588,17 @@ internal static class ZLinkEnvelopeCodec
     private static void EnsurePart(IReadOnlyList<Message> parts, int index, string name)
     {
         if (parts.Count <= index) throw new InvalidOperationException($"ZLink envelope {name} part is missing.");
+    }
+
+    private static void EnsurePart(
+        ZLinkMultipartPayloadView parts,
+        int index,
+        string name)
+    {
+        if (parts.Count <= index)
+            throw new ZLinkEnvelopeProtocolException(
+                InvalidProtocolHeader(),
+                $"ZLink envelope {name} part is missing.");
     }
 
     private static bool IsSimpleHeader(ZLinkEnvelopeHeader header)

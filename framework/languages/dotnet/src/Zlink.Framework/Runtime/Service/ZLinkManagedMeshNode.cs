@@ -173,6 +173,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private long _queuedMessages;
     private long _queuedBytes;
+    private ZLinkApplicationJobQueueLease? _reservedRawApplicationAdmission;
+    private int _rawApplicationAdmissionWaitActive;
     private int _readyPosted;
     private int _disposed;
     private bool _inboundOperationAdmissionClosed;
@@ -1988,7 +1990,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         entry.Key.OwnerKind,
                         entry.Key.Domain,
                         entry.Key.SpotId,
-                        entry.Key.Actor),
+                        entry.Key.Actor,
+                        Math.Min(mailbox.Count, ReceiveBatchSize),
+                        entry.Key.Domain == MeshReadyDomains.Application
+                        && mailbox.AllRecordsHaveApplicationAdmission),
                     new MeshClaim
                     {
                         Receiver = (receiveBatch, receiveFlags) =>
@@ -2937,6 +2942,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         foreach (var mailbox in _ownedMailboxes.Values)
             mailbox.Dispose();
         _ownedMailboxes.Clear();
+        Interlocked.Exchange(
+            ref _reservedRawApplicationAdmission,
+            null)?.Dispose();
         while (_transportDisconnects.TryDequeue(out _))
         {
         }
@@ -4498,7 +4506,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         if (replyParts.Count != 2
             || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-                replyParts[1].AsReadOnlyMemory(),
+                replyParts[1],
                 out var decodedParts))
             return new InstanceSpotActivationTerminal(
                 RequestResult.ProtocolError,
@@ -4988,12 +4996,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         var startedAt = Stopwatch.GetTimestamp();
         long bytes = 0;
-        var maximumRecords = _applicationJobQueue is null
-            ? ReceiveBatchSize
-            : 1;
-        for (var index = 0; index < maximumRecords; index++)
+        for (var index = 0; index < ReceiveBatchSize; index++)
         {
             if (ZLinkReceiveBatchBudget.IsExhausted(index, bytes, startedAt))
+                return;
+            var admission = TryTakeRawApplicationAdmission(
+                cancellationToken,
+                waitIfUnavailable: index == 0);
+            if (_applicationJobQueue is not null && admission is null)
                 return;
             Received? received = null;
             try
@@ -5009,14 +5019,74 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     bytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts));
                 using var ownership = new RawIngressOwnership(
                     received,
-                    admission: null);
+                    admission);
                 received = null;
+                admission = null;
                 ProcessReceived(ownership);
             }
             finally
             {
                 received?.Dispose();
+                admission?.Dispose();
             }
+        }
+    }
+
+    private ZLinkApplicationJobQueueLease? TryTakeRawApplicationAdmission(
+        CancellationToken cancellationToken,
+        bool waitIfUnavailable)
+    {
+        var reserved = Interlocked.Exchange(
+            ref _reservedRawApplicationAdmission,
+            null);
+        if (reserved is not null)
+            return reserved;
+        var queue = _applicationJobQueue;
+        if (queue is null)
+            return null;
+        if (queue.TryAcquire(out var immediate))
+            return immediate;
+        if (waitIfUnavailable
+            && Interlocked.CompareExchange(
+                ref _rawApplicationAdmissionWaitActive,
+                1,
+                0) == 0)
+        {
+            using (ExecutionContext.SuppressFlow())
+                _ = Task.Run(() => WaitForRawApplicationAdmissionAsync(
+                    queue,
+                    cancellationToken));
+        }
+        return null;
+    }
+
+    private async Task WaitForRawApplicationAdmissionAsync(
+        ZLinkApplicationJobQueue queue,
+        CancellationToken cancellationToken)
+    {
+        ZLinkApplicationJobQueueLease? admission = null;
+        try
+        {
+            admission = await queue.AcquireAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (cancellationToken.IsCancellationRequested)
+                return;
+            Interlocked.Exchange(
+                ref _reservedRawApplicationAdmission,
+                admission)?.Dispose();
+            admission = null;
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        finally
+        {
+            admission?.Dispose();
+            Volatile.Write(ref _rawApplicationAdmissionWaitActive, 0);
         }
     }
 
@@ -5621,7 +5691,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var multicastPayloadOffset = logicalMulticast.HasMetadata ? 2 : 1;
             if (received.Parts.Count != multicastPayloadOffset + 1
                 || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-                    received.Parts[multicastPayloadOffset].AsReadOnlyMemory(),
+                    received.Parts[multicastPayloadOffset],
                     out var decodedMulticastParts))
             {
                 Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
@@ -5707,8 +5777,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
         var payloadOffset = application.HasMetadata ? 2 : 1;
         if (received.Parts.Count != payloadOffset + 1
-            || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-                received.Parts[payloadOffset].AsReadOnlyMemory(),
+            || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                received.Parts[payloadOffset],
                 out var parts))
         {
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
@@ -5726,7 +5796,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             // RouteMesh 11 requests use Core's request window. Accepting the old
             // raw request envelope would put its reply back on the Application
             // connection and reintroduce the ingress/completion dependency.
-            DisposeParts(parts);
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
             return false;
         }
@@ -5787,12 +5856,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 null,
                 metadata,
                 0,
-                parts.Length,
+                parts.Count,
                 0,
                 0,
                 null,
-                replyHandler),
-            parts,
+                replyHandler,
+                applicationPayloadView: parts),
+            Array.Empty<Message>(),
             true,
             ownership.TakeApplicationOwner());
     }
@@ -6709,7 +6779,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
 
         if (!ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-                received.Parts[payloadOffset].AsReadOnlyMemory(),
+                received.Parts[payloadOffset],
                 out var decodedPayload))
         {
             if (request)
@@ -7048,7 +7118,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ? received.Parts[1].ToArray()
             : null;
         if (!ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-                received.Parts[payloadOffset].AsReadOnlyMemory(),
+                received.Parts[payloadOffset],
                 out var parts))
         {
             if (request)
@@ -9003,7 +9073,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return peer;
     }
 
-    private static IReadOnlyList<ReadOnlyMemory<byte>> CreateApplicationWire(
+    private static IReadOnlyList<Message> CreateApplicationWire(
         ServiceWireConstants.Command command,
         ulong correlation,
         string? channelName,
@@ -9013,15 +9083,54 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ArgumentNullException.ThrowIfNull(parts);
         if (parts.Count == 0)
             throw new ArgumentException("Application payload is required.", nameof(parts));
-        var wire = new List<ReadOnlyMemory<byte>>(metadata.IsEmpty ? 2 : 3)
+        var wire = new Message[metadata.IsEmpty ? 2 : 3];
+        var created = 0;
+        try
         {
-            ZLinkServiceWireCodec.EncodeApplication(
-                command, correlation, channelName, !metadata.IsEmpty)
-        };
-        if (!metadata.IsEmpty)
-            wire.Add(metadata);
-        wire.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
-        return wire;
+            wire[created++] = Message.From(
+                ZLinkServiceWireCodec.EncodeApplication(
+                    command,
+                    correlation,
+                    channelName,
+                    !metadata.IsEmpty));
+            if (!metadata.IsEmpty)
+                wire[created++] = Message.From(metadata);
+            wire[created++] = ZLinkApplicationPayloadEnvelopeCodec
+                .EncodeFrameworkMultipartMessage(parts);
+            return wire;
+        }
+        catch
+        {
+            for (var index = 0; index < created; index++)
+                wire[index].Dispose();
+            throw;
+        }
+    }
+
+    private async ValueTask SendDirectWireAsync(
+        RoutingId target,
+        IReadOnlyList<Message> messages,
+        CancellationToken cancellationToken)
+    {
+        var ownershipTransferred = false;
+        try
+        {
+            Task admission;
+            lock (_socketGate)
+            {
+                var socket = _socket;
+                if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
+                    throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
+                admission = socket.Send(target).Messages(messages).Async(cancellationToken);
+                ownershipTransferred = true;
+            }
+            await admission.ConfigureAwait(false);
+        }
+        finally
+        {
+            if (!ownershipTransferred)
+                DisposeParts(messages);
+        }
     }
 
     private async ValueTask SendDirectWireAsync(
@@ -9058,6 +9167,36 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken)
     {
         var messages = wire.Select(Message.From).ToArray();
+        var ownershipTransferred = false;
+        try
+        {
+            Task<IReadOnlyList<Message>> request;
+            lock (_socketGate)
+            {
+                var socket = _socket;
+                if (socket is null || _activeSocketGeneration != _lifecycleGeneration)
+                    throw new ObjectDisposedException(nameof(ZLinkManagedMeshNode));
+                request = socket.Request(target)
+                    .Messages(messages)
+                    .Timeout(timeout)
+                    .Async(cancellationToken);
+                ownershipTransferred = true;
+            }
+            return await request.ConfigureAwait(false);
+        }
+        finally
+        {
+            if (!ownershipTransferred)
+                DisposeParts(messages);
+        }
+    }
+
+    private async ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
+        RoutingId target,
+        IReadOnlyList<Message> messages,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
         var ownershipTransferred = false;
         try
         {
@@ -9172,7 +9311,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             }
             if (replyParts.Count != 2
                 || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-                    replyParts[1].AsReadOnlyMemory(), out var decoded))
+                    replyParts[1], out var decoded))
                 throw new ZlinkRequestException(
                     ZlinkRequestException.ErrorCode.ProtocolError);
             return decoded;
@@ -9420,7 +9559,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             {
                 if (replyParts.Count != 2
                     || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-                        replyParts[1].AsReadOnlyMemory(),
+                        replyParts[1],
                         out var decodedReplyParts))
                 {
                     CompleteManagedOperation(
@@ -9574,7 +9713,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             Message[] applicationParts = [];
             if (replyParts.Count == 2
                 && !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-                    replyParts[1].AsReadOnlyMemory(),
+                    replyParts[1],
                     out applicationParts))
             {
                 CompleteManagedOperation(
@@ -9810,7 +9949,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     (int)result,
                     failureCode));
             if (parts.Count != 0)
-                wire[created++] = Message.From(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
+                wire[created++] = ZLinkApplicationPayloadEnvelopeCodec
+                    .EncodeFrameworkMultipartMessage(parts);
             return (reply.Messages(wire), wire);
         }
         catch
@@ -10019,7 +10159,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
             if (receivedParts.Count != 2
                 || !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-                    receivedParts[1].AsReadOnlyMemory(),
+                    receivedParts[1],
                     out var decodedParts))
             {
                 EnqueueCompletion(
@@ -10128,7 +10268,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (receivedParts.Count == 1)
             payload = [];
         else if (!ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipart(
-                     receivedParts[1].AsReadOnlyMemory(),
+                     receivedParts[1],
                      out payload))
         {
             Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
@@ -10381,9 +10521,25 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         MeshReceiveRecord record,
         IReadOnlyList<Message> parts) =>
         record.ApplicationPayloadBytes
-        ?? (parts is IZLinkApplicationPayloadSized sized
-            ? sized.ApplicationPayloadBytes
-            : ZLinkEnvelopeCodec.MeasureApplicationPayloadBytes(parts));
+        ?? (record.ApplicationPayloadView is { } view
+            ? MeasureApplicationPayloadView(view)
+            : parts is IZLinkApplicationPayloadSized sized
+                ? sized.ApplicationPayloadBytes
+                : ZLinkEnvelopeCodec.MeasureApplicationPayloadBytes(parts));
+
+    private static ulong MeasureApplicationPayloadView(
+        ZLinkMultipartPayloadView parts)
+    {
+        var total = 0UL;
+        for (var index = Math.Min(1, parts.Count); index < parts.Count; index++)
+        {
+            var size = checked((ulong)parts.GetSpan(index).Length);
+            if (size > ulong.MaxValue - total)
+                return ulong.MaxValue;
+            total += size;
+        }
+        return total;
+    }
 
     private void RecordOwnedRecordEnqueued(ulong pendingBytes)
     {

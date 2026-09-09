@@ -368,7 +368,8 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
     // (NodeSend/NodeRequest) and channel-addressed (ChannelSend/ChannelRequest)
     // records, so the MeshNode builder's registered route/channel handlers receiver
     // inbound traffic. Requests reply through the record's held reply token.
-    void OnNodeRoute(Action<ZLinkBackendRouteReceived> handler);
+    void OnNodeRoute(
+        Action<IReadOnlyList<ZLinkBackendRouteReceived>> handler);
 }
 
 internal interface IZLinkBackendRelocationReplyRelay

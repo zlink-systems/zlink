@@ -247,16 +247,16 @@ public sealed partial class EntrySpotActorDispatchTests
         };
         node.ApplicationIngressOnActivation = () =>
         {
-            node.NodeRouteHandler!(CreateImmediateMeshRequest(
+            node.NodeRouteHandler!([CreateImmediateMeshRequest(
                 value: "node",
                 channelName: null,
                 requestSequence: 11,
-                nodeReply));
-            node.NodeRouteHandler!(CreateImmediateMeshRequest(
+                nodeReply)]);
+            node.NodeRouteHandler!([CreateImmediateMeshRequest(
                 value: "channel",
                 channelName: "startup-channel",
                 requestSequence: 12,
-                channelReply));
+                channelReply)]);
         };
 
         var (runtime, _) = await CreateStartedRuntimeAsync(
@@ -10729,7 +10729,8 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public bool EntryDispatchReadyAtActivation { get; private set; }
 
-        public Action<ZLinkBackendRouteReceived>? NodeRouteHandler { get; private set; }
+        public Action<IReadOnlyList<ZLinkBackendRouteReceived>>?
+            NodeRouteHandler { get; private set; }
 
         public void AddChannel(string channelName) => AddedChannels.Add(channelName);
 
@@ -10761,7 +10762,8 @@ public sealed partial class EntrySpotActorDispatchTests
             ApplicationIngressOnActivation?.Invoke();
         }
 
-        public void OnNodeRoute(Action<ZLinkBackendRouteReceived> handler)
+        public void OnNodeRoute(
+            Action<IReadOnlyList<ZLinkBackendRouteReceived>> handler)
         {
             NodeRouteHandler = handler;
             InitializationEvents.Enqueue("node-route-handler");
