@@ -7,13 +7,15 @@ RESUME_COMMAND=""
 ARTIFACT_ROOT=""
 STARTING_PID=""
 STARTING_TICKS=""
-ERROR_PATTERN='invalid_request_error|not supported when using Codex|(^|[^0-9])(401|403)([^0-9]|$)|rate limit|No space left on device|panicked at|command not found'
+STATUS_ALL=0
+# 로그 본문(코드 인용 등)의 우연한 일치를 막으려고 줄 머리의 오류 표시나 고유 문구만 본다.
+ERROR_PATTERN='^(ERROR|error)[: ]|^codex: |invalid_request_error|not supported when using Codex|(^|[[:space:]])(401|403) ?(Forbidden|forbidden|Unauthorized|unauthorized)|rate limit exceeded|No space left on device|panicked at|command not found'
 
 usage() {
     cat <<'EOF'
 사용법:
   job.sh [--dry-run] start <이름> --worktree <경로> --brief <파일> [--model <모델>] [--effort high|medium|low] [--max-jobs N]
-  job.sh [--dry-run] status [<이름>]
+  job.sh [--dry-run] status [--all] [<이름>]
   job.sh [--dry-run] watch [--interval 180]
   job.sh [--dry-run] kill <이름>
   job.sh [--dry-run] logs <이름> [-n N]
@@ -55,6 +57,18 @@ trap 'on_error $? $LINENO' ERR
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || die 1 "필요한 명령을 찾을 수 없습니다: $1"
+}
+
+
+primary_worktree() {
+    local first
+    first=$(git worktree list --porcelain 2>/dev/null \
+        | awk '$1 == "worktree" { print substr($0, index($0, " ") + 1); exit }')
+    if [[ -n "$first" ]]; then
+        printf '%s' "$first"
+    else
+        printf '%s' "$(repo_root)"
+    fi
 }
 
 repo_root() {
@@ -385,12 +399,14 @@ start_command() {
 
 job_state() {
     local job_dir=$1
+    # 보고서를 남겼으면 도중에 오류 줄이 있었어도 job은 끝난 것이다.
+    # 오류는 보고서가 없을 때만 실패와 죽음을 가른다.
     if job_is_running "$job_dir"; then
         printf '실행'
-    elif log_has_error "$job_dir/job.log"; then
-        printf '실패'
     elif [[ -f "$job_dir/summary.md" ]]; then
         printf '완료'
+    elif log_has_error "$job_dir/job.log"; then
+        printf '실패'
     else
         printf '죽음'
     fi
@@ -425,7 +441,12 @@ print_status_row() {
     started=$(meta_value "$job_dir/.meta" started_at_epoch)
     state=$(job_state "$job_dir")
     [[ -f "$job_dir/summary.md" ]] && summary='있음' || summary='없음'
-    error=$(last_log_error "$job_dir/job.log")
+    # 완료했거나 아직 도는 job의 중간 오류는 결과가 아니므로 표에 싣지 않는다.
+    if [[ "$state" == '완료' ]]; then
+        error=''
+    else
+        error=$(last_log_error "$job_dir/job.log")
+    fi
     error=${error//$'\t'/ }
     error=${error//$'\r'/ }
     error=${error//$'\n'/ }
@@ -436,10 +457,22 @@ print_status_row() {
         "$elapsed" "$state" "$summary" "$error"
 }
 
+
+# 최근 창(기본 24시간) 안에 job.log가 갱신됐는가. find 구현마다 상대 시각 표기가 달라 stat으로 비교한다.
+recently_active() {
+    local log="$1/job.log" window=${ZLINK_JOB_RECENT_SECONDS:-7200} mtime now
+    [[ -f "$log" ]] || return 1
+    mtime=$(stat -c %Y "$log" 2>/dev/null) || return 1
+    now=$(date +%s)
+    (( now - mtime <= window ))
+}
+
 status_command() {
     local name="" job_dir found=0
+    STATUS_ALL=0
     while (($#)); do
         case "$1" in
+            --all) STATUS_ALL=1; shift ;;
             --dry-run) DRY_RUN=1; shift ;;
             --*) die 2 "알 수 없는 status 옵션입니다: $1" ;;
             *) [[ -z "$name" ]] || die 2 "status 이름은 하나만 지정할 수 있습니다."; name=$1; shift ;;
@@ -456,6 +489,10 @@ status_command() {
     [[ -d "$ARTIFACT_ROOT" ]] || return 0
     for job_dir in "$ARTIFACT_ROOT"/*; do
         [[ -d "$job_dir" ]] || continue
+        if ((STATUS_ALL == 0)); then
+            # 기본은 지금 도는 job과 최근 2시간 안에 움직인 job만 본다(ZLINK_JOB_RECENT_SECONDS로 조정, --all은 전부).
+            [[ -f "$job_dir/.pid" ]] || recently_active "$job_dir" || continue
+        fi
         print_status_row "$job_dir"
         found=1
     done
@@ -552,7 +589,7 @@ logs_command() {
 }
 
 main() {
-    local original=("$0" "$@") args=() command arg root
+    local original=("$0" "$@") args=() command arg
     local -a AVAILABLE_MODELS=()
     require_command git
     for arg in "$@"; do
@@ -565,8 +602,8 @@ main() {
     ((${#args[@]} > 0)) || { usage; exit 2; }
     command=${args[0]}
     RESUME_COMMAND=$(quote_command "${original[@]}")
-    root=$(repo_root)
-    ARTIFACT_ROOT="$root/.artifacts/codex"
+    # job 디렉터리는 기본 worktree 하나에 모은다 — 작업 worktree에서 실행해도 같은 목록을 본다.
+    ARTIFACT_ROOT=${ZLINK_JOB_ROOT:-$(primary_worktree)/.artifacts/codex}
     set -- "${args[@]:1}"
     case "$command" in
         start) start_command "$@" ;;
