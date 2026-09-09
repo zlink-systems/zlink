@@ -104,8 +104,10 @@ jobs:
           # installed on current Windows runners ("Could not find any Visual
           # Studio installation to use"); Node 22's node-gyp 11 can. Point npm
           # at a current node-gyp for every Node version.
-          npm install -g node-gyp@latest
-          echo "npm_config_node_gyp=$(npm root -g)/node-gyp/bin/node-gyp.js" >> "${GITHUB_ENV}"
+          # node-gyp 11 supports Node 20 and 22 (13 requires Node 22+). npm needs a
+          # Windows-style path here: `npm root -g` prints a POSIX path in Git Bash.
+          npm install -g node-gyp@11
+          echo "npm_config_node_gyp=$(cygpath -w "$(npm root -g)/node-gyp/bin/node-gyp.js")" >> "${GITHUB_ENV}"
 
       - name: Install Linux build dependencies
         if: startsWith(matrix.target.name, 'linux-')

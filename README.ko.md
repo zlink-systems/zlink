@@ -133,18 +133,20 @@ Binding이나 Framework package를 사용하는 애플리케이션은 Core 저�
 package에 포함하며, 다른 언어도 각 가이드가 설치와 native runtime 준비 방법을
 소유합니다.
 
-- Core API를 언어별 package로 사용하려면 [Bindings 언어 선택](https://zlink.systems/ko/bindings/guide/)에서
-  사용할 언어의 설치 절차와 5분 예제를 확인하세요.
-- ZLink Framework를 사용하려면 아래 "Framework 패키지 설치"에서 언어를 고르거나
-  [공식 사이트](https://zlink.systems/ko/)에서 언어별 가이드를 여세요.
-- 설치 후에는 해당 언어의 sample을 실행해 package와 native runtime이 실제
-  client/server process에서 함께 동작하는지 확인하세요.
+- Core API를 언어별 package로 사용하려면 [Bindings 가이드](https://zlink.systems/ko/bindings/guide/)에서
+  언어를 고릅니다. 설치 절차와 5분 예제가 언어별로 있습니다.
+- ZLink Framework를 사용하려면 아래 "Framework 패키지 설치"에서 언어를 고릅니다. 언어별
+  전체 가이드는 [공식 사이트](https://zlink.systems/ko/)에 있습니다.
+- 설치 뒤에는 해당 언어의 sample을 실행해 package와 native runtime이 실제
+  client/server process에서 함께 동작하는지 확인합니다.
 
 ### Framework 패키지 설치
 
-배포된 패키지만으로 시작합니다. 언어를 펼쳐 설치 명령과 첫 등록 방법을 확인하세요.
-각 항목의 링크는 그 언어의 "설치와 첫 동작" 가이드입니다. 현재 버전은 framework 0.11,
-binding 0.17.6이며 framework 패키지가 맞는 binding을 함께 설치합니다.
+Framework는 각 언어의 패키지 저장소에 게시된 패키지로 설치합니다. Framework 패키지가
+의존하는 binding 패키지를 함께 끌어오고, binding 패키지에는 Core의 native 런타임이 들어
+있으므로 Core를 직접 빌드할 필요가 없습니다. 현재 게시 버전은 framework 0.11, binding
+0.17.6입니다. 언어별 항목을 펼치면 설치 명령과 host 등록 방법이 나오고, 각 항목의 링크는
+그 언어의 "설치와 첫 동작" 가이드입니다.
 
 <details>
 <summary><b>C# / .NET</b> — nuget.org, ASP.NET Core 통합</summary>
@@ -155,7 +157,7 @@ dotnet add package Zlink.Framework             # 계약과 runtime
 dotnet add package Zlink.Framework.AspNetCore  # DI·hosted service 등록
 ```
 
-`builder.Services.AddZLinkFramework(...)`로 host에 등록합니다.
+`builder.Services.AddZLinkFramework(...)`가 framework host를 ASP.NET Core의 DI와 lifecycle에 등록합니다.
 [설치와 첫 동작](https://zlink.systems/ko/dotnet/guide/server/02-getting-started/) ·
 [Stream Connector](https://zlink.systems/ko/dotnet/guide/stream-connector/) ·
 [HTTP Client](https://zlink.systems/ko/dotnet/guide/http-client/)
@@ -172,7 +174,7 @@ dependencies {
 }
 ```
 
-Spring Boot auto-configuration이 host를 Bean으로 올립니다.
+Spring Boot auto-configuration이 framework host를 Bean으로 등록하고 애플리케이션 lifecycle에 연결합니다.
 [설치와 첫 동작](https://zlink.systems/ko/java/guide/server/02-getting-started/) ·
 [Stream Connector](https://zlink.systems/ko/java/guide/stream-connector/) ·
 [HTTP Client](https://zlink.systems/ko/java/guide/http-client/)
@@ -204,7 +206,7 @@ npm install @zlink-systems/framework   # 계약과 runtime (binding @zlink-syste
 npm install @zlink-systems/nestjs      # DI·모듈 등록
 ```
 
-NestJS 없이 Express 등과 쓰려면 framework 패키지만 설치하고 host를 직접 시작합니다.
+NestJS를 쓰지 않는 서버(Express 등)는 framework 패키지만 설치하고 host를 코드에서 직접 시작합니다.
 [설치와 첫 동작](https://zlink.systems/ko/node/guide/server/02-getting-started/) ·
 [Stream Connector](https://zlink.systems/ko/node/guide/stream-connector/) ·
 [HTTP Client](https://zlink.systems/ko/node/guide/http-client/)
@@ -220,8 +222,8 @@ find_package(zlink_framework CONFIG REQUIRED)  # Framework (vcpkg overlay port `
 target_link_libraries(app PRIVATE zlink::framework)
 ```
 
-Core는 vcpkg·Conan 레시피로, framework는 GitHub Release의 source archive 또는 저장소의
-vcpkg overlay port로 설치합니다.
+Core는 vcpkg 또는 Conan 레시피로 설치합니다. Framework는 GitHub Release의 source archive를
+CMake로 설치하거나 저장소의 vcpkg overlay port `zlink-framework`로 설치합니다.
 [설치와 첫 동작](https://zlink.systems/ko/cpp/guide/server/02-getting-started/) ·
 [Stream Connector](https://zlink.systems/ko/cpp/guide/stream-connector/) ·
 [HTTP Client](https://zlink.systems/ko/cpp/guide/http-client/)
@@ -342,9 +344,9 @@ Framework sample은 단순 API 호출뿐 아니라 여러 역할의 server와 cl
 | 라이선스 정책 | [라이선스 안내](./doc/license/README.ko.md) |
 | 보안 취약점 보고 | [보안 정책](./SECURITY.md) |
 
-가이드와 스펙은 [zlink.systems](https://zlink.systems/ko/)에 게시된 것이 읽기 편하고,
-원본은 이 저장소의 `core/doc`, `bindings/doc`, `framework/doc`입니다. 가이드는 개념과 사용법을 설명하고,
-스펙과 언어별 exact interface가 정식 계약을 소유합니다. 두 내용이 다르면 스펙과 exact interface를 우선합니다.
+가이드와 스펙은 [zlink.systems](https://zlink.systems/ko/)에 게시된 판을 기준으로 읽습니다.
+원본 파일은 이 저장소의 `core/doc`, `bindings/doc`, `framework/doc` 아래에 있습니다. 가이드는 개념과
+사용법을 설명하고, 스펙과 언어별 exact interface가 정식 계약을 소유합니다. 두 내용이 다르면 스펙과 exact interface를 우선합니다.
 
 ## 지원 플랫폼
 
