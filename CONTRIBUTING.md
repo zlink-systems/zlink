@@ -182,23 +182,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - After a release, move the baseline worktree to the new tag, and record workflow or procedure fixes
   made during release preparation under `doc/building/release-prep/<date>-<topic>.ko.md`.
 
-## 9. Known debt and planned work
-
-- Test link structure: done (`ddf9ff7e95`, 2026-09-06) — integration, contract and C tests link the
-  shared `libzlink` and unit tests link the non-LTO `test-core` archive; the rule lives in
-  `core/tests/README.md` ("Interface Boundary"). Day-to-day development still uses the
-  `scripts/build-core.sh dev` tree (§1) because the release tree's LTO library link is slow.
-- Carry-overs of the 0.16.0 campaign (the full 70-cell four-size sweep, POSDDD refactor
-  BLOCKERS) are in the last entries of
-  [`doc/plan/c016-worklog/decisions.ko.md`](doc/plan/c016-worklog/decisions.ko.md).
-- The framework CI (`framework-node.yml`, `framework-dotnet.yml`) was rewritten on 2026-09-09 around the
-  published packages and the Core release archives; remaining items and causes are in
-  [`doc/building/release-prep/2026-09-09-ci-warnings-and-cleanup.ko.md`](doc/building/release-prep/2026-09-09-ci-warnings-and-cleanup.ko.md).
-- `core-conan-release.yml` is a legacy workflow for a private Conan remote without secrets (replaced
-  by the ConanCenter PR). The framework Java release job runs `assemble` only because its timing
-  tests are load-sensitive (D-BP51).
-
-## 10. Agent operating conventions
+## 9. Agent operating conventions
 
 - Rule text: [`AGENTS.md`](AGENTS.md) (global) and per-directory `AGENTS.md`. Documentation
   rules: [`doc/AGENTS.md`](doc/AGENTS.md).

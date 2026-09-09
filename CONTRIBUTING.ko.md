@@ -172,22 +172,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 릴리스 뒤 baseline worktree를 새 태그로 갱신하고, 릴리스 준비 중 고친 워크플로우·절차는
   `doc/building/release-prep/<날짜>-<주제>.ko.md`로 남긴다.
 
-## 9. 알려진 부채와 예정 작업
-
-- 테스트 링크 구조: 완료(`ddf9ff7e95`, 2026-09-06) — 통합·계약·C 테스트는 공유 `libzlink`에, 단위
-  테스트는 non-LTO `test-core` 아카이브에 링크하며 규칙은 `core/tests/README.md`("Interface
-  Boundary")에 있다. 일상 개발은 release 트리의 LTO 링크가 느리므로 여전히 §1의
-  `scripts/build-core.sh dev` 트리를 쓴다.
-- 0.16.0 캠페인의 이월 항목(전체 70 cell 4-size sweep, POSDDD 리팩토링 BLOCKERS)은
-  [`doc/plan/c016-worklog/decisions.ko.md`](doc/plan/c016-worklog/decisions.ko.md)의 마지막
-  판정을 본다.
-- framework CI(`framework-node.yml`, `framework-dotnet.yml`)는 2026-09-09에 공개 패키지+Core 릴리스
-  아카이브 기준으로 재작성했다. 남은 항목과 원인은
-  [`doc/building/release-prep/2026-09-09-ci-warnings-and-cleanup.ko.md`](doc/building/release-prep/2026-09-09-ci-warnings-and-cleanup.ko.md).
-- `core-conan-release.yml`은 사내 Conan remote용 legacy로 secret이 없어 동작하지 않는다(ConanCenter
-  PR로 대체). framework Java의 타이밍 민감 테스트는 릴리스 job에서 `assemble`만 수행한다(D-BP51).
-
-## 10. 에이전트 운영 관례
+## 9. 에이전트 운영 관례
 
 - 규칙 본문: [`AGENTS.md`](AGENTS.md)(전역), 디렉터리별 `AGENTS.md`(세부). 문서 작성은
   [`doc/AGENTS.md`](doc/AGENTS.md).
