@@ -20,6 +20,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
@@ -34,6 +35,37 @@ using clock_t_ = std::chrono::steady_clock;
 
 namespace
 {
+
+class completion_signal_t
+{
+  public:
+    void notify (size_t slot)
+    {
+        {
+            std::lock_guard<std::mutex> lock (_mutex);
+            _completed.push_back (slot);
+        }
+        _ready.notify_one ();
+    }
+
+    void take_completed (std::vector<size_t> &completed)
+    {
+        std::lock_guard<std::mutex> lock (_mutex);
+        completed.assign (_completed.begin (), _completed.end ());
+        _completed.clear ();
+    }
+
+    void wait_until (clock_t_::time_point deadline)
+    {
+        std::unique_lock<std::mutex> lock (_mutex);
+        _ready.wait_until (lock, deadline, [&] { return !_completed.empty (); });
+    }
+
+  private:
+    std::mutex _mutex;
+    std::condition_variable _ready;
+    std::deque<size_t> _completed;
+};
 
 
 struct options_t
@@ -778,24 +810,55 @@ class framework_driver_t final : public driver_t
     void run_tasks (clock_t_::time_point deadline, size_t size, phase_t phase,
                     counters_t &counters, latency_sampler_t *latency)
     {
-        struct pending_t { fw::task_t<T> task; uint64_t sent_ns; uint64_t seq; };
-        std::vector<pending_t> pending;
+        struct pending_t
+        {
+            pending_t (fw::task_t<T> task_, uint64_t sent_ns_, uint64_t seq_) :
+                task (std::move (task_)), sent_ns (sent_ns_), seq (seq_)
+            {
+            }
+
+            fw::task_t<T> task;
+            uint64_t sent_ns;
+            uint64_t seq;
+        };
+        std::vector<std::optional<pending_t>> pending;
+        if (_window > 0)
+            pending.reserve (static_cast<size_t> (_window));
+        std::vector<size_t> free_slots;
+        std::vector<size_t> completed_slots;
+        size_t in_flight = 0;
+        auto completion_signal = std::make_shared<completion_signal_t> ();
         const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
         do {
             close_window (deadline);
             // Unbounded admission submits once per cooperative completion-pump turn.
-            while (clock_t_::now () < deadline && (_window <= 0 || pending.size () < static_cast<size_t> (_window))) {
-                auto payload = make_payload (size, phase);
+            while (clock_t_::now () < deadline
+                   && (_window <= 0 || in_flight < static_cast<size_t> (_window))) {
                 const auto sent = now_ns ();
+                auto payload = make_payload (size, phase);
                 counters.enter ();
                 ++counters.submitted;
-                pending.push_back ({submit<T> (std::move (payload)), sent, _seq - 1});
+                size_t slot = 0;
+                if (free_slots.empty ()) {
+                    slot = pending.size ();
+                    pending.emplace_back (std::nullopt);
+                } else {
+                    slot = free_slots.back ();
+                    free_slots.pop_back ();
+                }
+                pending[slot].emplace (submit<T> (std::move (payload)), sent, _seq - 1);
+                fw::detail::observe_task_completion (
+                  pending[slot]->task, [completion_signal, slot] (const auto &) {
+                      completion_signal->notify (slot);
+                  });
+                ++in_flight;
                 if (_window <= 0)
                     break;
             }
-            for (auto it = pending.begin (); it != pending.end ();) {
-                if (!it->task.await_ready ()) { ++it; continue; }
-                const auto &result = it->task.result ();
+            completion_signal->take_completed (completed_slots);
+            for (const size_t slot : completed_slots) {
+                auto &item = *pending[slot];
+                const auto &result = item.task.result ();
                 bool valid = static_cast<bool> (result);
                 if constexpr (!std::is_void_v<T>) {
                     if (valid) {
@@ -803,25 +866,32 @@ class framework_driver_t final : public driver_t
                         decoded_header_t header;
                         valid = decode_payload (reply.body ().data (), reply.body ().size (), &header)
                           && header.run_id == _run_id && header.phase == phase
-                          && header.payload_size == size && reply.body ().size () == size && header.seq == it->seq;
+                          && header.payload_size == size && reply.body ().size () == size && header.seq == item.seq;
                         if (!valid) ++counters.header_failures;
                     }
                 }
                 if (valid) {
                     ++counters.completed;
-                    if (latency) latency->add_us (static_cast<double> (now_ns () - it->sent_ns) / 1000.0);
+                    if (latency) latency->add_us (static_cast<double> (now_ns () - item.sent_ns) / 1000.0);
                 } else {
                     ++counters.errors;
                     if (counters.errors.load () == 1 && !result)
                         std::fprintf (stderr, "framework operation failed: %s\n", result.error ()->what ());
                 }
                 counters.leave ();
-                it = pending.erase (it);
+                pending[slot].reset ();
+                free_slots.push_back (slot);
+                --in_flight;
             }
-            if (clock_t_::now () >= hard_stop)
+
+            const auto now = clock_t_::now ();
+            if (now >= hard_stop)
                 break;
-            if (!pending.empty ()) std::this_thread::yield ();
-        } while (clock_t_::now () < deadline || !pending.empty ());
+            const bool can_submit = now < deadline
+              && (_window <= 0 || in_flight < static_cast<size_t> (_window));
+            if (in_flight != 0 && !can_submit)
+                completion_signal->wait_until (now < deadline ? deadline : hard_stop);
+        } while (clock_t_::now () < deadline || in_flight != 0);
         close_window (deadline);
     }
 
@@ -1074,7 +1144,7 @@ class source_t
              : json (_options.pattern == "request-window" ? 100 : 1)},
           {"implementation", _options.implementation == "grpc-cpp" ? "one application thread; async unary CompletionQueue; one stub per logical stream"
              : _options.implementation == "zlink-cpp" ? "one application thread; coroutine slots and binding completion poller"
-             : "one application thread; public Framework task polling"}};
+             : "one application thread; Framework task completion notifications"}};
         value["completed_at_close"] = completed_at_close;
         value["active_elapsed_ms"] = elapsed * 1000;
         std::ofstream output (temporary, std::ios::trunc);
