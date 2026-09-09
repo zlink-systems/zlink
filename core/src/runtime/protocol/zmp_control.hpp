@@ -404,7 +404,7 @@ inline int parse_error_frame (msg_t *msg_, uint8_t *code_out_, const char **erro
     const unsigned char *data = static_cast<const unsigned char *> (msg_->data ());
     const uint8_t code = data[1];
     const size_t reason_len = data[2];
-    if (size < 3 + reason_len) {
+    if (size != 3 + reason_len) {
         if (error_reason_out_)
             *error_reason_out_ = "error frame invalid";
         errno = EPROTO;
