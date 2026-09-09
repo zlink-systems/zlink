@@ -72,20 +72,17 @@ class RawKotlinStack private constructor(
 
     fun request(): BenchOperation = BenchOperation { payloadSize, phase, sequence ->
         scope.benchFuture {
-            val payload =
-                BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence)
             val call = if (router != null) router.request(peer) else dealer!!.request()
             // FB-024: an envelope header part plus a protobuf-encoded BenchPayload part.
             // The same two parts zlink-c and zlink-java put on the wire; formula 1
             // divides zlink-<lang> by zlink-c, so a different wire shape would divide
             // two different experiments.
-            val parts = call
-                .message(Message.from(RawWire.REQUEST_ENVELOPE))
-                .message(Message.from(RawWire.encodeBenchPayload(payload)))
-                .timeout(timeout)
-                .submit()
-                .toCompletableFuture()
-                .await()
+            val pending = Message.from(RawWire.REQUEST_ENVELOPE).use { header ->
+                RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence).use { body ->
+                    call.message(header).message(body).timeout(timeout).submit().toCompletableFuture()
+                }
+            }
+            val parts = pending.await()
             try {
                 check(parts.isNotEmpty()) { "raw request returned no reply parts" }
                 val body = RawWire.decodeBenchPayloadBody(parts.last().dataBuffer())
@@ -103,15 +100,13 @@ class RawKotlinStack private constructor(
 
     fun send(): BenchOperation = BenchOperation { payloadSize, phase, sequence ->
         scope.benchFuture {
-            val payload =
-                BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence)
             val call = if (router != null) router.send(peer) else dealer!!.send()
-            call
-                .message(Message.from(RawWire.REQUEST_ENVELOPE))
-                .message(Message.from(RawWire.encodeBenchPayload(payload)))
-                .submit()
-                .toCompletableFuture()
-                .await()
+            val pending = Message.from(RawWire.REQUEST_ENVELOPE).use { header ->
+                RawWire.encodeBenchPayloadMessage(payloadSize, runId, phase, sequence).use { body ->
+                    call.message(header).message(body).submit().toCompletableFuture()
+                }
+            }
+            pending.await()
         }
     }
 
