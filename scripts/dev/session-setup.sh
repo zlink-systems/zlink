@@ -235,20 +235,26 @@ has_package() {
 }
 
 check_local_packages() {
-    local binding_version count=0
-    binding_version=$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$REPO_ROOT/BINDINGS_VERSION")
-    if [[ -z "$binding_version" || ! -d "$LOCAL_PACKAGE_ROOT" ]]; then
+    local core_version language binding_version count=0
+    core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' "$REPO_ROOT/VERSION")
+    if [[ -z "$core_version" || ! -d "$LOCAL_PACKAGE_ROOT" ]]; then
         PACKAGE_STATUS="없음 ($LOCAL_PACKAGE_ROOT)"
         return 0
     fi
-    has_package "c/zlink-c-$binding_version.tar.gz" && ((count += 1))
-    has_package "install/zlink-cpp/$binding_version/include/zlink.hpp" && ((count += 1))
-    has_package "nuget/Zlink.$binding_version.nupkg" && ((count += 1))
-    has_package "go/zlink-go-$binding_version.tar.gz" && ((count += 1))
-    has_package "maven/systems/zlink/zlink/$binding_version/zlink-$binding_version.jar" && ((count += 1))
-    has_package "npm/zlink-systems-zlink-$binding_version.tgz" && ((count += 1))
-    has_package "python/zlink-$binding_version-*.whl" && ((count += 1))
-    has_package "rust/zlink-$binding_version.crate" && ((count += 1))
+    has_package "c/zlink-c-$core_version.tar.gz" && ((count += 1))
+    for language in cpp dotnet go java node python rust; do
+        binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$REPO_ROOT/bindings/$language/VERSION")
+        [[ -n "$binding_version" ]] || continue
+        case "$language" in
+            cpp) has_package "install/zlink-cpp/$binding_version/include/zlink.hpp" && ((count += 1)) ;;
+            dotnet) has_package "nuget/Zlink.$binding_version.nupkg" && ((count += 1)) ;;
+            go) has_package "go/zlink-go-$binding_version.tar.gz" && ((count += 1)) ;;
+            java) has_package "maven/systems/zlink/zlink/$binding_version/zlink-$binding_version.jar" && ((count += 1)) ;;
+            node) has_package "npm/zlink-systems-zlink-$binding_version.tgz" && ((count += 1)) ;;
+            python) has_package "python/zlink-$binding_version-*.whl" && ((count += 1)) ;;
+            rust) has_package "rust/zlink-$binding_version.crate" && ((count += 1)) ;;
+        esac
+    done
     if ((count == 0)); then
         PACKAGE_STATUS="없음 ($LOCAL_PACKAGE_ROOT)"
     else
