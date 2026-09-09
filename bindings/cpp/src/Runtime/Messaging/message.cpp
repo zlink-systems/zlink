@@ -189,8 +189,12 @@ int message_t::ref_count () const noexcept
 
 message_t message_t::copy () const
 {
-    message_t result;
-    const config_result_t rc = static_cast<config_result_t> (
+    message_t result{no_init_t ()};
+    config_result_t rc = static_cast<config_result_t> (
+      zlink_msg_init (detail::native_handle (result)));
+    detail::throw_if_failed<config_error_t> (rc);
+    result._valid = true;
+    rc = static_cast<config_result_t> (
       zlink_msg_copy (detail::native_handle (result),
                       const_cast<zlink_msg_t *> (detail::native_handle (*this))));
     detail::throw_if_failed<config_error_t> (rc);
