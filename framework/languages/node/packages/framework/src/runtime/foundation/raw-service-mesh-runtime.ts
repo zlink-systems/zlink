@@ -624,8 +624,35 @@ export class RawServiceMeshRuntime {
     nowMs = performance.now(),
     observe?: RawServicePumpObserver
   ): Promise<RawServicePumpResult> {
-    const router = this.requireStarted();
     this.pullMonitorEvents();
+    return this.receiveOne(nowMs, observe);
+  }
+
+  /** One ingress round owns its receive budget and management work. */
+  async pumpBatch(): Promise<boolean> {
+    await this.drainMonitorEvents();
+    const startedAtMs = performance.now();
+    let messages = 0;
+    let bytes = 0;
+    const observe: RawServicePumpObserver = (_source, byteCount) => { bytes += byteCount; };
+    while (messages < 64) {
+      const result = await this.receiveOne(performance.now(), observe);
+      if (result === 'noData') break;
+      messages += 1;
+      // Core owns the per-peer fair-queue cursor. The Framework limit bounds
+      // the entire round, so changing peers does not renew its byte/count budget.
+      if (bytes >= 4 * 1024 * 1024 || performance.now() - startedAtMs >= 2) break;
+    }
+    await this.announceExpectedPeers();
+    await this.tickLiveness();
+    return messages > 0;
+  }
+
+  private async receiveOne(
+    nowMs: number,
+    observe?: RawServicePumpObserver
+  ): Promise<RawServicePumpResult> {
+    const router = this.requireStarted();
     let permit: ApplicationJobPermitPort;
     try {
       permit = await this.applicationJobQueue.acquire(this.applicationJobStop.signal);
