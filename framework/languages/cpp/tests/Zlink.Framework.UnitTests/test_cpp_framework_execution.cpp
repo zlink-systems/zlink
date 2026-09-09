@@ -3929,7 +3929,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
                     == runtime::protocol::framework_multipart_packet_name
                && wire_outcome.application_reply->content_type
                     == runtime::protocol::framework_multipart_content_type
-               && wire_outcome.application_reply->payload == expected_payload
+               && wire_outcome.application_reply->payload_bytes () == expected_payload
                && unwrapped_reply == encoded_reply
                && serializers.get<std::string> ().deserialize (
                     detail::encoded_payload_from_raw (reconstructed_reply))
