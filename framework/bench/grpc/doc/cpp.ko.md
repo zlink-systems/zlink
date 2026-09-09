@@ -123,6 +123,9 @@ python3 framework/bench/grpc/tools/bench_aggregate.py --lang cpp --judgement-pat
 - `zlink-framework-cpp`는 request-serial에서 raw의 약 7%, window에서 요청당 ~1 ms의 직렬화가
   보인다(결정 기록 FB-052). 벤치 결함이 아니라 framework C++ runtime의 특성으로 다루며 3-run
   값으로 판정한다.
+- `zlink-framework-cpp send-saturation`: warmup flood 뒤 RouteMesh send target이 사라져 active
+  send가 전부 실패한다(결정 기록 FB-054, FB-012 계열). 결함 수정 전에는 그 행을 오류 셀로만
+  기록하고 게재하지 않는다.
 - framework HTTP host는 listener bind 실패를 start 결과로 돌려주지 않는다(FB-053). runner는 HTTP
   응답 readiness로 listener 시작을 확인한다.
 - HTTP host의 여러 listen 포트에 같은 route가 노출된다. trigger URL은 규격의 trigger 포트만

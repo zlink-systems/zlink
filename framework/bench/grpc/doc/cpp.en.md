@@ -128,6 +128,9 @@ python3 framework/bench/grpc/tools/bench_aggregate.py --lang cpp --judgement-pat
 - `zlink-framework-cpp` shows about 7% of raw on request-serial and roughly 1 ms of per-request
   serialisation on window (decision record FB-052). This is treated as a property of the framework
   C++ runtime, not a bench defect, and is judged on the 3-run values.
+- `zlink-framework-cpp send-saturation`: after the warmup flood the RouteMesh send target
+  disappears and every active send fails (decision record FB-054, same class as FB-012). Until the
+  defect is fixed that row is recorded as an error cell only and not published.
 - The framework HTTP host does not return a listener bind failure as a start failure (FB-053). The
   runner confirms listener start by HTTP response readiness.
 - The HTTP host exposes the same routes on all of its listen ports. The trigger URL records only the

@@ -849,6 +849,23 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 - 결정: 제품 결함. 1.0 묶음의 framework C++ 항목. 다른 언어의 HTTP host는 bind 실패를 start
   실패로 돌려주는지 1.0 준비 때 함께 확인한다.
 
+## FB-054 — C++ framework: send-saturation warmup flood 뒤 RouteMesh send target이 사라져 active 전부 실패 (2026-09-09, 감독자 smoke, FB-012와 같은 계열)
+
+- 관측: `zlink-framework-cpp send-saturation @1024`에서 warmup 5초는 ~4,400 msg/s로 정상
+  (B `anyPhaseMessages` 17,972)인데, active 첫 send부터 모두 `RouteMesh channel send target was
+  not found`(source 오류 17,500~18,254건, B 수신 0). 5회 연속 재현. fwb2-07의 원 binary와 원 runner
+  (`3ad4d048c9`)로도 재현되므로 감독자의 runner 수정(`FB-054` 직전 커밋)과 무관하다. fwb2-07의
+  smoke 1회 통과(8,918건)는 우연이었다.
+- 소유: framework C++ runtime(RouteMesh peer 연결 유지). .NET 1차의 FB-012(saturation flood 뒤
+  route가 영구히 끊김)와 같은 계열이며 C++은 warmup flood만으로 끊긴다.
+- 결정: 제품 결함. 벤치는 그 셀을 오류 셀로 기록하고(판정 제외) run을 계속한다. 1.0 묶음의
+  framework C++ 항목(FB-052·FB-053과 함께). 원본: `/tmp/zlink-claude-fwb2-s2/smoke-send{1,2,3}`,
+  `smoke-astra-bin`, `smoke-old-runner`.
+- 부수: 감독자의 첫 C++ 3-run(`s3q_run1`)은 framework request-backpressure 셀의 오류 3,457건에서
+  runner가 중단돼 21/24 셀만 남았다(runner 결함, 수정 커밋 참조). 같은 셀이 수정 뒤 smoke에서는
+  오류 0이었으므로 그 오류는 부하(감독자의 Node 테스트가 겹침)로 본다. 3-run은 `s3r_run{1,2,3}`으로
+  다시 낸다.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
