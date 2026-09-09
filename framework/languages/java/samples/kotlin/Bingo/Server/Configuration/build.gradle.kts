@@ -8,7 +8,3 @@ dependencies {
     api("io.micrometer:micrometer-core:1.15.8")
     implementation("org.slf4j:slf4j-api:2.0.16")
 }
-
-kotlin {
-    jvmToolchain(22)
-}

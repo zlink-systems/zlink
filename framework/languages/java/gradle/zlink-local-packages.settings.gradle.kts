@@ -6,6 +6,9 @@ fun zlinkFrameworkJavaRoot(): java.io.File {
     return current
 }
 
+apply(from = zlinkFrameworkJavaRoot()
+    .resolve("samples/gradle/zlink-jvm-baseline.settings.gradle.kts"))
+
 fun zlinkLocalMavenRepository(): java.io.File {
     val configuredRoot = providers.gradleProperty("zlink.localPackageRoot")
         .orElse(providers.environmentVariable("ZLINK_LOCAL_PACKAGE_ROOT"))

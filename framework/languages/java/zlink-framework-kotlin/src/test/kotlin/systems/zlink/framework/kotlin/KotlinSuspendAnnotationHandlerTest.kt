@@ -418,7 +418,9 @@ final class KotlinSuspendAnnotationHandlerTest {
                 .get(1, TimeUnit.SECONDS)
         }
 
-        assertEquals("cancel:Ada", failure.message)
+        assertEquals("get", failure.message)
+        assertTrue(failure.cause is CancellationException)
+        assertEquals("cancel:Ada", failure.cause!!.message)
     }
 
     @Test

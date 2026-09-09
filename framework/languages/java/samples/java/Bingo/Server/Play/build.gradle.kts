@@ -32,11 +32,6 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(22))
-    }
-}
 
 application {
     mainClass.set("systems.zlink.samples.bingo.server.play.Program")

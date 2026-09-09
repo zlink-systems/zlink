@@ -14,9 +14,3 @@ dependencies {
     api(zlinkLibs.zlink.framework.locations.redis)
     api("org.springframework.boot:spring-boot:3.5.14")
 }
-
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(22))
-    }
-}

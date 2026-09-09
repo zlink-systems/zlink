@@ -17,7 +17,3 @@ dependencies {
     api("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")
     api("org.springframework.boot:spring-boot:3.5.14")
 }
-
-kotlin {
-    jvmToolchain(22)
-}

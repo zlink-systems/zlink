@@ -15,9 +15,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 application {
     applicationName = "to-actor-kotlin-caller"

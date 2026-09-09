@@ -8,9 +8,6 @@ dependencies {
     implementation("systems.zlink:zlink-stream-connector:0.10.0")
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 application {
     applicationName = "automatic-turn-dispatch-kotlin-client"

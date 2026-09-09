@@ -8,9 +8,6 @@ dependencies {
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 application {
     applicationName = "runtime-monitoring-kotlin-client"

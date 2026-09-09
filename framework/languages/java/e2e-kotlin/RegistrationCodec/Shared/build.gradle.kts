@@ -3,9 +3,6 @@ plugins {
     id("com.google.protobuf")
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 dependencies {
     api("systems.zlink:zlink-framework-core:0.10.0")

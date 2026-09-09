@@ -8,7 +8,3 @@ dependencies {
     api(zlinkLibs.zlink.framework.core)
     api(zlinkLibs.zlink.framework.locations.redis)
 }
-
-kotlin {
-    jvmToolchain(22)
-}

@@ -14,7 +14,6 @@ dependencies {
     implementation(kotlin("stdlib"))
 }
 
-kotlin { jvmToolchain(22) }
 
 application {
     applicationName = "observability-ops-trigger"

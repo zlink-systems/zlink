@@ -14,7 +14,3 @@ protobuf {
         artifact = "com.google.protobuf:protoc:4.30.2"
     }
 }
-
-kotlin {
-    jvmToolchain(22)
-}

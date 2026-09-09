@@ -5,8 +5,8 @@ import org.gradle.plugins.signing.SigningExtension
 
 plugins {
     idea
-    id("org.jetbrains.kotlin.jvm") version "2.2.21" apply false
-    kotlin("plugin.spring") version "2.2.21"
+    id("org.jetbrains.kotlin.jvm") apply false
+    kotlin("plugin.spring")
 }
 
 group = "systems.zlink"
@@ -54,9 +54,6 @@ subprojects {
         }
 
         extensions.configure<JavaPluginExtension> {
-            toolchain {
-                languageVersion.set(JavaLanguageVersion.of(22))
-            }
             withSourcesJar()
             withJavadocJar()
         }

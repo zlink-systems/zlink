@@ -8,9 +8,3 @@ dependencies {
     api("org.springframework.boot:spring-boot:3.5.14")
     implementation("org.slf4j:slf4j-api:2.0.16")
 }
-
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(22))
-    }
-}

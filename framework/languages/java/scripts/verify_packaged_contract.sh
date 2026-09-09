@@ -86,7 +86,7 @@ dependencies {
     implementation("systems.zlink:zlink-framework-codec-msgpack:0.10.0")
 }
 application { mainClass.set("contract.PackagedContractConsumer") }
-java { toolchain { languageVersion.set(JavaLanguageVersion.of(22)) } }
+java { toolchain { languageVersion.set(JavaLanguageVersion.of(25)) } }
 EOF
     cat > "$consumer_dir/src/main/java/contract/PackagedContractConsumer.java" <<'EOF'
 package contract;
@@ -130,7 +130,7 @@ else
     cat > "$consumer_dir/build.gradle.kts" <<'EOF'
 plugins {
     application
-    kotlin("jvm") version "2.2.21"
+    kotlin("jvm") version "2.3.21"
 }
 dependencies {
     implementation("systems.zlink:zlink-framework-kotlin:0.10.0")
@@ -142,7 +142,7 @@ dependencies {
     implementation("systems.zlink:zlink-framework-codec-msgpack:0.10.0")
 }
 application { mainClass.set("contract.PackagedContractConsumerKt") }
-kotlin { jvmToolchain(22) }
+kotlin { jvmToolchain(25) }
 EOF
     cat > "$consumer_dir/src/main/kotlin/contract/PackagedContractConsumer.kt" <<'EOF'
 package contract

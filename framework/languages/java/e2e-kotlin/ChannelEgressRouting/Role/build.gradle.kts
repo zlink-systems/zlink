@@ -21,5 +21,3 @@ application {
     mainClass.set("systems.zlink.e2e.kotlin.channelegress.role.RoleApplicationKt")
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
-
-kotlin.jvmToolchain(22)

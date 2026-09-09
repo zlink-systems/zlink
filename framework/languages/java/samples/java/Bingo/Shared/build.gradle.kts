@@ -13,9 +13,3 @@ protobuf {
         artifact = "com.google.protobuf:protoc:4.30.2"
     }
 }
-
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(22))
-    }
-}

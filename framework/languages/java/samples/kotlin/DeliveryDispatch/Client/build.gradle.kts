@@ -13,9 +13,6 @@ dependencies {
     implementation("io.netty:netty-buffer:4.1.100.Final")
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 application {
     mainClass.set("systems.zlink.samples.kotlin.deliverydispatch.client.ProgramKt")

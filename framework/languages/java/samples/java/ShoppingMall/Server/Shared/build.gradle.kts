@@ -19,9 +19,3 @@ dependencies {
     api("io.lettuce:lettuce-core:6.3.2.RELEASE")
     api("com.fasterxml.jackson.core:jackson-databind:2.17.2")
 }
-
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(22))
-    }
-}

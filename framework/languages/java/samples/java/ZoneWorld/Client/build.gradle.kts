@@ -10,11 +10,6 @@ dependencies {
     implementation(zlinkLibs.zlink.bindings)
 }
 
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(22))
-    }
-}
 
 application {
     mainClass.set("systems.zlink.samples.zoneworld.client.Program")

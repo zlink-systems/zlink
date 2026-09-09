@@ -15,11 +15,6 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter:3.5.14")
 }
 
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(22))
-    }
-}
 
 application {
     applicationName = "submit-admission-role"

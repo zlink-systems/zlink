@@ -2,9 +2,6 @@ plugins {
     id("org.jetbrains.kotlin.jvm")
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 dependencies {
     implementation("systems.zlink:zlink-framework-core:0.10.0")

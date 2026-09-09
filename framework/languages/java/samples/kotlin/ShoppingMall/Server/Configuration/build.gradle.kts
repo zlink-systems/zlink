@@ -23,7 +23,3 @@ dependencies {
     api("org.springframework.boot:spring-boot:3.5.14")
     implementation(kotlin("stdlib"))
 }
-
-kotlin {
-    jvmToolchain(22)
-}
