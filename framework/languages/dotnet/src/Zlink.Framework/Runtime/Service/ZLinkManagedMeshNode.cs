@@ -112,7 +112,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly ConcurrentQueue<TransportDisconnect> _transportDisconnects = new();
     private readonly ConcurrentQueue<PendingNativeTerminalReply>
         _pendingNativeTerminalReplies = new();
-    private readonly List<RawMeshMonitor> _monitors = new();
+    // This is the sole storage for node state and monitor membership. The lane
+    // replaces the immutable pair; event publication only observes that pair.
+    private Tuple<RawMeshMonitor[], MeshNodeState> _monitorState =
+        new([], MeshNodeState.Created);
     private readonly HashSet<Task> _inboundOperations = [];
     private readonly Dictionary<ControlSendKey, ControlSendState>
         _controlSends = [];
@@ -156,7 +159,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private ZLinkMeshNodeObjectRole _objectRole;
     private string _bindEndpoint = string.Empty;
     private string _advertisedEndpoint = string.Empty;
-    private MeshNodeState _state = MeshNodeState.Created;
+    private MeshNodeState _state
+    {
+        get => Volatile.Read(ref _monitorState).Item2;
+        set => Volatile.Write(ref _monitorState, new(_monitorState.Item1, value));
+    }
     private ulong _descriptorRevision = 1;
     private ulong _nextIntent;
     private ulong _nextPeerConnectionGeneration;
@@ -1940,7 +1947,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         MeshMonitorEventMask events = MeshMonitorEventMask.All)
     {
         var monitor = new RawMeshMonitor(events);
-        RunState(() => _monitors.Add(monitor));
+        RunState(() => Volatile.Write(ref _monitorState,
+            new([.. _monitorState.Item1, monitor], _monitorState.Item2)));
         return monitor;
     }
 
@@ -2984,9 +2992,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Publish(MeshMonitorEventKind.StateChanged);
         RunState(() =>
         {
-            foreach (var monitor in _monitors)
+            foreach (var monitor in _monitorState.Item1)
                 monitor.Dispose();
-            _monitors.Clear();
+            Volatile.Write(ref _monitorState, new([], _monitorState.Item2));
         });
     }
 
@@ -11475,10 +11483,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         int resultCode = 0,
         int failureErrno = 0)
     {
-        var snapshot = _lane.IsOnLane
-            ? GetMonitorSnapshotCore()
-            : RunState(GetMonitorSnapshotCore);
-        var (monitors, state) = snapshot;
+        var snapshot = Volatile.Read(ref _monitorState);
+        var (monitors, state) = (snapshot.Item1, snapshot.Item2);
         foreach (var monitor in monitors)
             monitor.Publish(
                 kind,
@@ -11489,9 +11495,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 resultCode,
                 failureErrno);
     }
-
-    private (RawMeshMonitor[] Monitors, MeshNodeState State) GetMonitorSnapshotCore() =>
-        (_monitors.ToArray(), _state);
 
     private void ThrowIfStarted()
     {
