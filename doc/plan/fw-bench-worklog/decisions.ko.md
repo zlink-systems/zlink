@@ -887,6 +887,28 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
   outbound 소켓이 고정 포트를 ephemeral로 잡는다(runner의 LISTEN preflight로는 못 잡음). 환경 조치:
   `sysctl net.ipv4.ip_local_reserved_ports=5200-5299,6200-6219`(측정 세션마다). 재측정 `s3t_run3`.
 
+## FB-056 — C++ framework 병목 진단(P1, fwperf-cpp): 1 ms sleep이 아니라 요청당 동기 state-lane 왕복과 record당 끝나는 dispatch 회차; FB-054는 liveness probe가 application FIFO 뒤에 놓여 15초 만료 (2026-09-10, Issue #7·#8)
+
+- 경로 계측(1-run, 2초): route API 전체 2,024 µs 중 encode→raw request 진입 245 µs(state-lane 왕복·operation 등록),
+  raw request→B receive 462 µs, B receive→application queue 407 µs(mesh dispatch의 raw owner/mailbox/host 관리 작업),
+  reply→A native scope 종료 320 µs, native 종료→route API 종료 384 µs(registry completion dispatcher·host mailbox).
+  application queue 대기는 18 µs, handler 118 µs — 즉 병목은 handler가 아니라 **hop 사이의 관리 작업과 동기 handoff**.
+- B의 dispatch 회차(`public_host_runtime.cpp:5656-5710`, `mesh_node_host_service.cpp:2203-2430`)는 application
+  record **한 건**마다 끝나며 회차당 평균 873 µs(`tick_liveness` 108, `pump_one` 267, `dispatch_user_spot_operations`
+  183 µs 등)다. window 100에서 B는 2초에 1,895회차·1,894건 수신 → 요청들은 겹쳐 있지만 단일 ingress가 1건/회차로
+  소비해 ~1.06 ms/op. idle sleep(100 ms 상한 poll, 1 ms 종료 대기, 10 ms claim 펌프)은 active 경로가 아님(기각).
+- FB-054 원인: liveness probe·ACK가 일반 application record와 같은 FIFO에 있어 warmup backlog(약 1.6만 건) 뒤에
+  놓인 probe가 15초 deadline 안에 처리되지 못하고 `service_liveness_registry.cpp:103`이 peer를 제거 → topology
+  select가 not_found. 스펙(05-transport-liveness §3-4)은 일반 메시지로 deadline을 연장하지 않는다고 정하므로, 수정은
+  "probe/ACK를 application backlog와 분리해 처리" 쪽이 스펙과 맞는다.
+- protobuf codec bridge는 왕복 최소 8회 payload 복사(sub-µs 수준, ms 병목 아님) — 후속.
+- 실험: generic state-lane inline drain은 serial 0.64배 악화·window 1.58배·count 불일치로 기각(C). 제품 수정 없음.
+- 결정(감독자): P2 승인 범위 — (1) B dispatch 회차의 관리 작업(liveness tick·spot 작업 등)을 record마다가 아니라
+  회차/시간 단위로 상각하고, permit 예산 안에서 여러 application record를 한 회차에 소비, (2) request submit·completion
+  경로의 `.run().get()` 동기 왕복 합치기, (3) liveness probe/ACK를 application FIFO 앞에서 처리(FB-054). codec 복사는
+  뒤로. 브랜치 `framework-cpp/7-dispatch-turn-cost`(worktree zlink-fwperf-cpp), job `fwperf-cpp-p2`(astra).
+  보고서: `.artifacts/codex/fwperf-cpp/summary.md`.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
