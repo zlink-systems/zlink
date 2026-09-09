@@ -61,7 +61,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         MaxRoutedAdmissionWaiters,
         MaxRoutedAdmissionWaiters);
     private readonly ConcurrentExclusiveSchedulerPair _routedSubmitScheduler;
-    private readonly Func<IRouterSocket, SocketEvent, ISocketMonitor> _openSocketMonitor;
+    private readonly Func<ISocketMonitor, Action, ISocketMonitor>? _decorateSocketMonitor;
     private readonly Dictionary<ZLinkChannelName, uint> _channels = new();
     private readonly Dictionary<ulong, Peer> _peersByIntent = new();
     private readonly Dictionary<RoutingId, Peer> _peersByRid = new();
@@ -192,7 +192,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Func<ReplySubmitOperation, SubmitResult>?
             nativeTerminalReplySubmitOverride = null,
         TaskScheduler? routedSubmitScheduler = null,
-        Func<IRouterSocket, SocketEvent, ISocketMonitor>? openSocketMonitor = null)
+        Func<ISocketMonitor, Action, ISocketMonitor>? decorateSocketMonitor = null)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
@@ -220,8 +220,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _nativeTerminalReplySubmitOverride = nativeTerminalReplySubmitOverride;
         _routedSubmitScheduler = new ConcurrentExclusiveSchedulerPair(
             routedSubmitScheduler ?? TaskScheduler.Default, maxConcurrencyLevel: 1);
-        _openSocketMonitor = openSocketMonitor
-            ?? (static (socket, events) => socket.MonitorOpen(events));
+        _decorateSocketMonitor = decorateSocketMonitor;
     }
 
     public RoutingId RoutingId => _routingId;
@@ -335,9 +334,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         StringComparison.Ordinal))
                     _advertisedEndpoint = _bindEndpoint;
 
-                socketMonitor = _openSocketMonitor(
-                    socket,
+                var nativeMonitor = socket.MonitorOpen(
                     SocketEvent.ConnectionReady | SocketEvent.Disconnected);
+                socketMonitor = _decorateSocketMonitor?.Invoke(nativeMonitor, WakeIngress)
+                    ?? nativeMonitor;
 
                 poller = Systems.Zlink.Zlink.CreatePoller();
                 poller.Add(
@@ -346,7 +346,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     | PollEventFlags.PollErr
                     | PollEventFlags.PollCompletion,
                     1);
-                poller.Add(socketMonitor, PollEventFlags.PollIn, 2);
+                poller.Add(nativeMonitor, PollEventFlags.PollIn, 2);
                 _ingressWake = Systems.Zlink.Zlink.CreateTimer();
                 poller.Add(_ingressWake, 3);
                 _socket = socket;
