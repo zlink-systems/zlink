@@ -36,6 +36,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private static readonly TimeSpan AdmissionRetryInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan RelocationAckRetryInterval =
         TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan NativeReplyRetryInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan NativeReplySubmissionTimeout =
         TimeSpan.FromSeconds(5);
 
@@ -8611,7 +8612,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RetryPendingNativeTerminalReplies();
         var peers = RunState(() => _peersByIntent.Values.ToArray());
         bool? admissionSealed = null;
-        var nextDeadline = long.MaxValue;
+        // The former 100ms poll also scheduled pending native reply upkeep.
+        // Preserve that management deadline only while such work exists.
+        var nextDeadline = _pendingNativeTerminalReplies.IsEmpty
+            ? long.MaxValue
+            : Add(now, NativeReplyRetryInterval);
 
         foreach (var peer in peers)
         {
