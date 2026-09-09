@@ -402,7 +402,7 @@ namespace
 
 task_t<result_t<messaging::message_parts_t>> wait_for_actor_completion (
   detail::mesh_node_runtime_t &node,
-  const detail::host::call_id_t &operation_id,
+  const detail::host::pending_operation_t &operation_id,
   const zlink::routing_id_t &target_rid,
   live_location_reader_t &locations,
   const location_owner_token_t &owner,
@@ -999,7 +999,7 @@ class actor_client_impl_t final : public actor_client_t
                 }
                 co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
             }
-            detail::host::call_id_t operation_id;
+            detail::host::pending_operation_t operation_id;
             const auto submit =
               co_await runtime.request_to_actor (actor.native_ref, copied, operation_id, timeout, {},
                                         actor.authority_owner_generation,

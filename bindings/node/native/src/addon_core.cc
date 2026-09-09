@@ -717,7 +717,20 @@ napi_value create_recv_message_value (napi_env env,
     napi_value properties = create_message_properties_snapshot (
       env, &routing_id, NULL, false);
     for (size_t i = 0; i < part_count; ++i) {
-        napi_value part = create_message_snapshot_value (env, NULL, &parts[i]);
+        napi_value part;
+        if (routing_id.size > 0) {
+            // Routed relays usually submit these parts again without reading
+            // their payload. Preserve each native frame until Message.data()
+            // is requested instead of copying it into a Buffer eagerly.
+            napi_create_object (env, &part);
+            napi_value native_message = move_message_to_native_frame_value (
+              env, &parts[i]);
+            if (!native_message)
+                return NULL;
+            napi_set_named_property (env, part, "nativeMessage", native_message);
+        } else {
+            part = create_message_snapshot_value (env, NULL, &parts[i]);
+        }
         if (!part)
             return NULL;
         if (properties)
@@ -1154,6 +1167,21 @@ bool init_msg_from_value (napi_env env,
         return true;
     }
 
+    native_message_frame_handle_t *direct_handle = NULL;
+    if (napi_get_value_external (
+          env, value, reinterpret_cast<void **> (&direct_handle)) == napi_ok
+        && direct_handle && direct_handle->frame) {
+        if (zlink_msg_init (msg) != 0)
+            return false;
+        if (zlink_msg_copy (msg, &direct_handle->frame->message) != 0) {
+            zlink_msg_close (msg);
+            return false;
+        }
+        if (contains_native_frame)
+            *contains_native_frame = true;
+        return true;
+    }
+
     bool has_native_message = false;
     if (napi_has_named_property (env, value, "nativeMessage", &has_native_message) != napi_ok) {
         napi_throw_type_error (env, NULL, "message snapshot native frame lookup failed");
@@ -1209,6 +1237,14 @@ void consume_native_message_value (napi_env env, napi_value value)
             if (napi_get_element (env, value, index, &part) == napi_ok)
                 consume_native_message_value (env, part);
         }
+        return;
+    }
+    native_message_frame_handle_t *direct_handle = NULL;
+    if (napi_get_value_external (
+          env, value, reinterpret_cast<void **> (&direct_handle)) == napi_ok
+        && direct_handle && direct_handle->frame) {
+        zlink_msg_close (&direct_handle->frame->message);
+        zlink_msg_init (&direct_handle->frame->message);
         return;
     }
     napi_valuetype value_type = napi_undefined;

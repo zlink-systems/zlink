@@ -523,7 +523,7 @@ void verify_topology_snapshot_and_connection_fence ()
     const auto first_connection = bytes ("connection-a");
     assert (topology.admit (peer, first_connection)
             == mesh::peer_admission_result_t::admitted);
-    assert (topology.select ("alpha")->descriptor.node_routing_id == bytes ("peer"));
+    assert (*topology.select ("alpha") == bytes ("peer"));
 
     auto older = peer;
     older.descriptor_revision = 0;
@@ -1083,11 +1083,9 @@ void verify_signed_weight_contract ()
     for (std::size_t index = 0; index < 400; ++index) {
         const auto selected = topology.select ("weighted");
         assert (selected);
-        if (selected->descriptor.node_routing_id
-            == bytes ("weight-100"))
+        if (*selected == bytes ("weight-100"))
             ++selected_100;
-        else if (selected->descriptor.node_routing_id
-                 == bytes ("weight-300"))
+        else if (*selected == bytes ("weight-300"))
             ++selected_300;
         else
             assert (false);
@@ -1963,8 +1961,20 @@ void verify_client_server_weighted_selection ()
     for (const auto &expected : expected_route_ids) {
         const auto selected_route = topology.select ("alpha");
         assert (selected_route
-                && selected_route->descriptor.node_routing_id == expected);
+                && *selected_route == expected);
     }
+    assert (!topology.select ("unknown-before-change"));
+    const auto before_change = topology.select ("alpha");
+    assert (before_change
+            && *before_change == bytes ("route-a"));
+    auto route_c = descriptor ("route-c");
+    route_c.state = mesh::service_node_state_t::serving;
+    assert (topology.admit (route_c, bytes ("route-connection-c"))
+            == mesh::peer_admission_result_t::admitted);
+    const auto retained_after_change = topology.select ("alpha");
+    assert (retained_after_change
+            && *retained_after_change == bytes ("route-b"));
+    assert (!topology.select ("unknown-after-change"));
 
     auto weighted_route_a = descriptor ("weighted-route-a");
     auto weighted_route_b = descriptor ("weighted-route-b");
@@ -1984,7 +1994,7 @@ void verify_client_server_weighted_selection ()
     for (std::size_t index = 0; index < 400; ++index) {
         const auto selected_route = weighted_topology.select ("alpha");
         assert (selected_route);
-        ++weighted_selected[selected_route->descriptor.node_routing_id];
+        ++weighted_selected[*selected_route];
     }
     assert (weighted_selected[bytes ("weighted-route-a")] == 300);
     assert (weighted_selected[bytes ("weighted-route-b")] == 100);
@@ -1997,22 +2007,62 @@ void verify_client_server_weighted_selection ()
     for (std::size_t index = 0; index < 32; ++index) {
         const auto selected_route = weighted_topology.select ("alpha");
         assert (selected_route
-                && selected_route->descriptor.node_routing_id
-                     == bytes ("weighted-route-a"));
+                && *selected_route == bytes ("weighted-route-a"));
+    }
+
+    mesh::service_topology_registry_t cycle_topology (
+      descriptor ("cycle-route-local"));
+    auto cycle_route_a = descriptor ("cycle-route-a");
+    auto cycle_route_b = descriptor ("cycle-route-b");
+    cycle_route_a.channels.front ().weight = 5;
+    cycle_route_b.channels.front ().weight = 3;
+    cycle_route_a.state = mesh::service_node_state_t::serving;
+    cycle_route_b.state = mesh::service_node_state_t::serving;
+    assert (cycle_topology.admit (
+              cycle_route_a, bytes ("cycle-route-connection-a"))
+            == mesh::peer_admission_result_t::admitted);
+    assert (cycle_topology.admit (
+              cycle_route_b, bytes ("cycle-route-connection-b"))
+            == mesh::peer_admission_result_t::admitted);
+    client_server::smooth_weighted_selector_t cycle_reference;
+    std::vector<client_server::weighted_candidate_t> cycle_candidates{
+      {"cycle-route-a", 5}, {"cycle-route-b", 3}};
+    for (std::size_t index = 0; index < 257; ++index) {
+        const auto expected = cycle_reference.select (cycle_candidates);
+        const auto actual = cycle_topology.select ("alpha");
+        assert (expected && actual && *actual == bytes (*expected));
+    }
+
+    auto cycle_route_c = descriptor ("cycle-route-c");
+    cycle_route_c.channels.front ().weight = 2;
+    cycle_route_c.state = mesh::service_node_state_t::serving;
+    assert (cycle_topology.admit (
+              cycle_route_c, bytes ("cycle-route-connection-c"))
+            == mesh::peer_admission_result_t::admitted);
+    cycle_candidates.push_back ({"cycle-route-c", 2});
+    for (std::size_t index = 0; index < 211; ++index) {
+        const auto expected = cycle_reference.select (cycle_candidates);
+        const auto actual = cycle_topology.select ("alpha");
+        assert (expected && actual && *actual == bytes (*expected));
     }
 }
 
 void verify_raw_owner_node_send_and_liveness ()
 {
+    auto first_context = std::make_shared<zlink::context_t> ();
+    auto second_context = std::make_shared<zlink::context_t> ();
+    first_context->options ().auto_hwm_enabled (false);
+    second_context->options ().auto_hwm_enabled (false);
     mesh::raw_mesh_node_owner_t first (
-      mesh::raw_mesh_node_options_t{descriptor ("raw-a")});
+      mesh::raw_mesh_node_options_t{descriptor ("raw-a")}, first_context);
     mesh::raw_mesh_node_owner_t second (
       mesh::raw_mesh_node_options_t{
         descriptor ("raw-b"),
         1,
         16u * 1024u * 1024u,
         1024,
-        4u * 1024u * 1024u});
+        4u * 1024u * 1024u},
+      second_context);
     assert (first.topology ().local_descriptor ().state
             == mesh::service_node_state_t::preparing);
     assert (second.topology ().local_descriptor ().state
@@ -2047,6 +2097,14 @@ void verify_raw_owner_node_send_and_liveness ()
     assert (first.topology ().peer (second_descriptor.node_routing_id));
     assert (second.topology ().peer (first_descriptor.node_routing_id));
 
+    std::atomic_int local_operation_callbacks{0};
+    const auto local_operation = first.register_local_operation (
+      foundation::operation_registry_t::clock_t::time_point::max (),
+      [&] (auto, auto) {
+          local_operation_callbacks.fetch_add (1, std::memory_order_release);
+      });
+    assert (local_operation);
+
     bool submitted = false;
     while (!submitted && mesh::service_liveness_registry_t::clock_t::now ()
                            < deadline) {
@@ -2066,7 +2124,10 @@ void verify_raw_owner_node_send_and_liveness ()
     // A missing host-wide Application Job Queue permit fences the ordinary
     // ROUTER before Core receive.  Poll readiness alone must not consume or
     // retain the application record in the Framework owner.
-    assert (second.wait_for_activity (1s, false));
+    // Observe queued DATA with receive readiness enabled, then verify that
+    // a claim without a permit still leaves it at Core. Completion-only idle
+    // waiting is covered by the raw route port contract test.
+    assert (second.wait_for_activity (1s, true));
     const auto without_shared_permit = await_task (second.pump_one (
       mesh::service_liveness_registry_t::clock_t::now (), false));
     assert (without_shared_permit == mesh::raw_mesh_pump_result_t::no_data);
@@ -2116,7 +2177,7 @@ void verify_raw_owner_node_send_and_liveness ()
     const auto paused_probe = await_task (
       first.tick_liveness (paused_liveness_base + 5s));
     assert (paused_probe.probes.size () == 1);
-    assert (second.wait_for_activity (1s, false));
+    assert (second.wait_for_activity (1s, true));
     const auto paused_without_shared_permit = await_task (second.pump_one (
       mesh::service_liveness_registry_t::clock_t::now (), false));
     assert (paused_without_shared_permit
@@ -2269,6 +2330,8 @@ void verify_raw_owner_node_send_and_liveness ()
       "RequestReply", "application/json", bytes ("reply")};
     assert (protocol::decode_application_payload (request_result.second)
             == expected_reply);
+    assert (first.unregister_local_operation (*local_operation));
+    assert (local_operation_callbacks.load (std::memory_order_acquire) == 0);
 
     std::promise<request_result_t> actor_create_promise;
     auto actor_create_future = actor_create_promise.get_future ();
@@ -2446,6 +2509,126 @@ void verify_raw_owner_node_send_and_liveness ()
     assert (next_probe.probes.size () == 1);
     assert (next_probe.probes.front ().probe_id
             != first_probe.probes.front ().probe_id);
+
+    // Fill the source-to-target Core HWM without pumping the target.  A
+    // registry entry remains present only while binding admission is still
+    // pending; dispatcher scheduling after an immediate admission cannot
+    // produce this observation because terminal claim removes the entry.
+    assert (first.pending_operation_count () == 0);
+    const protocol::application_payload_t saturated_payload{
+      "SaturatedControl",
+      "application/octet-stream",
+      std::vector<std::uint8_t> (512u * 1024u, 0x5a)};
+    std::vector<std::shared_ptr<zlink::framework::task_t<zlink::submit_result_t>>>
+      saturated_sends;
+    for (std::size_t index = 0;
+         index < 128 && first.pending_operation_count () == 0;
+         ++index) {
+        saturated_sends.push_back (
+          std::make_shared<zlink::framework::task_t<zlink::submit_result_t>> (
+            first.send_to_node_result (
+              second_descriptor.node_routing_id, saturated_payload)));
+    }
+    assert (first.pending_operation_count () != 0);
+
+    // The reverse-direction probe itself is not behind the saturated route.
+    // Claiming it starts one ACK binding operation, then I3 must return so the
+    // same source poller remains able to drain that operation's completion.
+    const auto reverse_probe_time =
+      mesh::service_liveness_registry_t::clock_t::now () + 5s;
+    const auto reverse_probe = await_task (
+      second.tick_liveness (reverse_probe_time));
+    assert (reverse_probe.probes.size () == 1);
+    bool reverse_probe_claimed = false;
+    const auto reverse_probe_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!reverse_probe_claimed
+           && std::chrono::steady_clock::now () < reverse_probe_deadline) {
+        auto pumping = first.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ());
+        assert (pumping.await_ready ());
+        const auto result = pumping.result ().value ();
+        assert (result != mesh::raw_mesh_pump_result_t::protocol_error);
+        assert (result != mesh::raw_mesh_pump_result_t::capacity_exceeded);
+        reverse_probe_claimed =
+          result == mesh::raw_mesh_pump_result_t::infrastructure;
+        if (!reverse_probe_claimed)
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (reverse_probe_claimed);
+
+    // Drain the original application prefix and drive both existing pollers.
+    // All application sends and the registered ACK must reach terminal without
+    // a second poller or a detached control-send table.
+    const auto saturation_deadline = std::chrono::steady_clock::now () + 5s;
+    auto all_sends_ready = [&] {
+        return std::all_of (
+          saturated_sends.begin (), saturated_sends.end (),
+          [] (const auto &send) { return send->await_ready (); });
+    };
+    while ((!all_sends_ready () || first.pending_operation_count () != 0
+            || second.pending_operation_count () != 0)
+           && std::chrono::steady_clock::now () < saturation_deadline) {
+        auto target_pump = second.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ());
+        assert (target_pump.await_ready ());
+        const auto target_result = target_pump.result ().value ();
+        assert (target_result != mesh::raw_mesh_pump_result_t::protocol_error);
+        auto claim = second.mailbox ().try_claim (
+          mesh::service_mailbox_domain_t::application,
+          1,
+          1024u * 1024u);
+        if (claim)
+            assert (second.mailbox ().release (*claim));
+
+        auto source_pump = first.pump_one (
+          mesh::service_liveness_registry_t::clock_t::now ());
+        assert (source_pump.await_ready ());
+        assert (source_pump.result ().value ()
+                != mesh::raw_mesh_pump_result_t::protocol_error);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (all_sends_ready ());
+    assert (first.pending_operation_count () == 0);
+    assert (second.pending_operation_count () == 0);
+    for (const auto &send : saturated_sends)
+        assert (send->result ().value () == zlink::submit_result_t::ok);
+
+    std::vector<foundation::call_id_t> capacity_operations;
+    capacity_operations.reserve (foundation::default_operation_capacity);
+    const auto capacity_deadline = std::chrono::steady_clock::now () + 2s;
+    while (capacity_operations.size () < foundation::default_operation_capacity
+           && std::chrono::steady_clock::now () < capacity_deadline) {
+        const auto reserved = first.register_local_operation (
+          foundation::operation_registry_t::clock_t::time_point::max (),
+          [] (auto, auto) {});
+        if (reserved)
+            capacity_operations.push_back (*reserved);
+        else
+            std::this_thread::sleep_for (1ms);
+    }
+    assert (capacity_operations.size () == foundation::default_operation_capacity);
+    assert (first.pending_operation_count () == foundation::default_operation_capacity);
+
+    const protocol::application_payload_t capacity_payload{
+      "Capacity", "application/json", bytes ("payload")};
+    const auto send_capacity = first.send_to_node_result (
+      second_descriptor.node_routing_id, capacity_payload).result ();
+    assert (!send_capacity);
+    assert (send_capacity.error_kind ()
+            == zlink::framework::framework_error_kind_t::capacity_exceeded);
+    std::atomic_int rejected_request_callbacks{0};
+    const auto request_capacity = first.request_to_node (
+      second_descriptor.node_routing_id, capacity_payload, 2s,
+      [&] (auto, auto) {
+          rejected_request_callbacks.fetch_add (1, std::memory_order_release);
+      }).result ();
+    assert (!request_capacity);
+    assert (request_capacity.error_kind ()
+            == zlink::framework::framework_error_kind_t::capacity_exceeded);
+    assert (rejected_request_callbacks.load (std::memory_order_acquire) == 0);
+    for (const auto &operation : capacity_operations)
+        assert (first.unregister_local_operation (operation));
+    assert (first.pending_operation_count () == 0);
 
     first.close ();
     second.close ();
