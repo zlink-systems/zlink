@@ -199,7 +199,6 @@ string    h = a.ToHex();                             // 원시 바이트 보존�
 |------|----------|------|------|
 | `Copy()` | `Message Copy()` | **ref-count 공유** — 같은 버퍼를 가리키는 새 `Message`, 원본 유효 유지 | 같은 payload를 보관하며 원본도 계속 써야 할 때 |
 | `Move(dest)` | `void Move(Message dest)` | **소유권 이전** — `dest`로 넘기고 호출자는 empty | 받은 메시지를 사본 없이 그대로 다시 보낼 때(relay/echo) |
-| `Clone()` | `Message Clone()` | **깊은 복사** — 독립 버퍼 | 복제 후 payload를 독립적으로 수정할 때 |
 
 ```csharp
 // Copy: 같은 버퍼를 공유하는 새 핸들. 둘 다 각자 Dispose.
@@ -211,14 +210,12 @@ socket.Send().Message(shared).Submit();   // shared는 소비됨
 var outMsg = new Message();
 receivedPart.Move(outMsg);                 // receivedPart는 empty가 됨
 socket.Send(routingId).Message(outMsg).Submit();
-
-// Clone: 독립 복제 후 수정
-using Message dup = msg.Clone();
 ```
 
-> 기존 `CopyTo`(깊은 복사)는 `Clone`으로 정렬되었고, `CopyTo`는 한 릴리스 사이클 동안
-> `[Obsolete]` alias로 남습니다. `Copy()`는 ref-share이므로 mutation 격리를 보장하지
-> 않습니다 — 독립 수정이 필요하면 `Clone()`을 쓰세요.
+> 독립 버퍼로 payload를 수정해야 하면 `ToArray()`로 바이트를 꺼내 새 `Message`를 만드세요.
+> .NET의 `CopyTo(Span<byte>)`/`CopyTo(IBufferWriter<byte>)`는 payload를 버퍼에 채우는
+> span-fill이라 그대로 유지됩니다(Message deep copy가 아님). `Copy()`는 ref-share이므로
+> mutation 격리를 보장하지 않습니다.
 
 스레드 안전성 규칙은 [스레드 안전성](https://zlink-systems.github.io/zlink/ko/guide/11-thread-safety/)을 참고하세요.
 `IContext`는 여러 스레드에서 공유해도 안전합니다. **소켓은 안전하지 않습니다** —
