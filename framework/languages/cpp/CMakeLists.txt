@@ -318,6 +318,14 @@ if(NOT nlohmann_json_FOUND)
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
   FetchContent_MakeAvailable(nlohmann_json)
 endif()
+# These object libraries compile Framework headers before they are consumed by
+# zlink_framework, so they need the JSON include usage requirement directly.
+foreach(M6ObjectTarget IN ITEMS
+    zlink_framework_m6a_objects
+    zlink_framework_m6b_objects
+    zlink_framework_m6c_objects)
+  target_link_libraries(${M6ObjectTarget} PRIVATE nlohmann_json::nlohmann_json)
+endforeach()
 find_package(OpenSSL QUIET)
 target_link_libraries(zlink_framework PUBLIC nlohmann_json::nlohmann_json)
 if(OpenSSL_FOUND)

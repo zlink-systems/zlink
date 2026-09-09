@@ -15,23 +15,68 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$CppRoot = $PSScriptRoot
-$RepositoryRoot = (Resolve-Path (Join-Path $CppRoot "../../..")).Path
-$CoreVersion = (Select-String -LiteralPath (Join-Path $RepositoryRoot "VERSION") -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
-$BindingVersion = (Select-String -LiteralPath (Join-Path $RepositoryRoot "bindings/cpp/VERSION") -Pattern "^ZLINK_BINDING_VERSION=(.+)$").Matches.Groups[1].Value
-$FrameworkVersion = (Select-String -LiteralPath (Join-Path $CppRoot "VERSION") -Pattern "^ZLINK_FRAMEWORK_VERSION=(.+)$").Matches.Groups[1].Value
-if (@($CoreVersion, $BindingVersion, $FrameworkVersion) | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
-    throw "Unable to read Core, C++ binding, or C++ Framework version."
+function Invoke-ZlinkCMake {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$FailureMessage
+    )
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell wraps legitimate CMake stderr warnings as
+        # NativeCommandError records. The native exit code remains the verdict.
+        $ErrorActionPreference = "Continue"
+        & cmake @Arguments
+        $CMakeExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+    if ($CMakeExitCode -ne 0) {
+        throw "$FailureMessage with exit code $CMakeExitCode."
+    }
 }
 
+function Get-ZlinkVersion {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Key
+    )
+    $VersionMatches = @(Select-String -LiteralPath $Path -Pattern "^$([regex]::Escape($Key))=(\d+\.\d+\.\d+)$")
+    if ($VersionMatches.Count -ne 1) {
+        throw "Expected exactly one canonical $Key version in $Path."
+    }
+    return $VersionMatches[0].Matches[0].Groups[1].Value
+}
+
+function Get-StableBuildToken {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $Sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $Bytes = [Text.Encoding]::UTF8.GetBytes($Path.ToLowerInvariant())
+        return ([BitConverter]::ToString($Sha256.ComputeHash($Bytes), 0, 4)).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $Sha256.Dispose()
+    }
+}
+
+$CppRoot = $PSScriptRoot
+$RepositoryRoot = (Resolve-Path (Join-Path $CppRoot "../../..")).Path
+$CoreVersion = Get-ZlinkVersion -Path (Join-Path $RepositoryRoot "VERSION") -Key "LIBZLINK_VERSION"
+$BindingVersion = Get-ZlinkVersion -Path (Join-Path $RepositoryRoot "bindings/cpp/VERSION") -Key "ZLINK_BINDING_VERSION"
+$FrameworkVersion = Get-ZlinkVersion -Path (Join-Path $CppRoot "VERSION") -Key "ZLINK_FRAMEWORK_VERSION"
+$CleanPackageRoot = Join-Path $RepositoryRoot ".artifacts/cpp-clean-$BindingVersion-package"
+
 if (-not $BuildDir) {
-    $BuildDir = Join-Path $RepositoryRoot ".artifacts/windows/build/framework-cpp"
+    $BuildDrive = Split-Path -Qualifier $RepositoryRoot
+    if (-not $BuildDrive) {
+        $BuildDrive = [IO.Path]::GetTempPath()
+    }
+    $BuildDir = Join-Path $BuildDrive ".zlink-build/cpp-$(Get-StableBuildToken -Path $RepositoryRoot)"
 }
 if (-not $LocalPackageRoot) {
     $LocalPackageRoot = if ($env:ZLINK_LOCAL_PACKAGE_ROOT) {
         $env:ZLINK_LOCAL_PACKAGE_ROOT
-    } elseif (Test-Path (Join-Path $RepositoryRoot ".artifacts/cpp-clean-$BindingVersion-package")) {
-        Join-Path $RepositoryRoot ".artifacts/cpp-clean-$BindingVersion-package"
+    } elseif (Test-Path $CleanPackageRoot) {
+        $CleanPackageRoot
     } else {
         Join-Path $RepositoryRoot ".artifacts/windows"
     }
@@ -55,19 +100,50 @@ if (-not (Test-Path $VcpkgInstalledDir)) {
     throw "Missing vcpkg installed tree: $VcpkgInstalledDir"
 }
 
-$CoreCMakeDir = Join-Path $CorePrefix "CMake"
-if (-not (Test-Path (Join-Path $CoreCMakeDir "zlinkConfig.cmake"))) {
-    throw "Missing Core CMake package metadata: $CoreCMakeDir/zlinkConfig.cmake"
+$CoreCMakeDir = Join-Path $CorePrefix "lib/cmake/zlink"
+$CoreConfigPath = Join-Path $CoreCMakeDir "zlinkConfig.cmake"
+$CoreConfigVersionPath = Join-Path $CoreCMakeDir "zlinkConfigVersion.cmake"
+$CoreConfigExists = Test-Path $CoreConfigPath -PathType Leaf
+$CoreConfigVersionExists = Test-Path $CoreConfigVersionPath -PathType Leaf
+if ($CoreConfigExists -ne $CoreConfigVersionExists) {
+    throw "Core CMake package metadata is incomplete: $CoreCMakeDir"
 }
-
-# The Framework install export expects Core's package metadata under the
-# conventional lib/cmake/zlink layout. Local Core packages also retain their
-# source CMake directory, so stage that metadata when the conventional layout
-# is absent.
-$CoreInstallCMakeDir = Join-Path $CorePrefix "lib/cmake/zlink"
-if (-not (Test-Path (Join-Path $CoreInstallCMakeDir "zlinkConfig.cmake"))) {
-    New-Item -ItemType Directory -Force -Path $CoreInstallCMakeDir | Out-Null
-    Copy-Item -Path (Join-Path $CoreCMakeDir "*") -Destination $CoreInstallCMakeDir -Recurse -Force
+if (-not $CoreConfigExists) {
+    foreach ($RequiredPath in @("include/zlink.h", "bin/zlink.dll", "lib/zlink.lib")) {
+        if (-not (Test-Path (Join-Path $CorePrefix $RequiredPath) -PathType Leaf)) {
+            throw "Core release package is missing $RequiredPath`: $CorePrefix"
+        }
+    }
+    New-Item -ItemType Directory -Force -Path $CoreCMakeDir | Out-Null
+    $CoreConfig = @'
+get_filename_component(ZLINK_CORE_PACKAGE_PREFIX "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+if(NOT TARGET libzlink)
+  add_library(libzlink SHARED IMPORTED)
+  set_target_properties(libzlink PROPERTIES
+    IMPORTED_LOCATION "${ZLINK_CORE_PACKAGE_PREFIX}/bin/zlink.dll"
+    IMPORTED_IMPLIB "${ZLINK_CORE_PACKAGE_PREFIX}/lib/zlink.lib"
+    INTERFACE_INCLUDE_DIRECTORIES "${ZLINK_CORE_PACKAGE_PREFIX}/include")
+  foreach(_zlink_config IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set_property(TARGET libzlink APPEND PROPERTY IMPORTED_CONFIGURATIONS "${_zlink_config}")
+    set_target_properties(libzlink PROPERTIES
+      IMPORTED_LOCATION_${_zlink_config} "${ZLINK_CORE_PACKAGE_PREFIX}/bin/zlink.dll"
+      IMPORTED_IMPLIB_${_zlink_config} "${ZLINK_CORE_PACKAGE_PREFIX}/lib/zlink.lib")
+  endforeach()
+endif()
+set(zlink_FOUND TRUE)
+'@
+    $CoreConfigVersion = @"
+set(PACKAGE_VERSION `"$CoreVersion`")
+if(PACKAGE_FIND_VERSION VERSION_EQUAL PACKAGE_VERSION)
+  set(PACKAGE_VERSION_EXACT TRUE)
+  set(PACKAGE_VERSION_COMPATIBLE TRUE)
+else()
+  set(PACKAGE_VERSION_COMPATIBLE FALSE)
+endif()
+"@
+    $Utf8NoBom = [Text.UTF8Encoding]::new($false)
+    [IO.File]::WriteAllText($CoreConfigPath, $CoreConfig, $Utf8NoBom)
+    [IO.File]::WriteAllText($CoreConfigVersionPath, $CoreConfigVersion, $Utf8NoBom)
 }
 
 $VcpkgRoot = if ($env:VCPKG_ROOT) {
@@ -82,30 +158,32 @@ if (-not (Test-Path $Toolchain)) {
 
 $TestsEnabled = if ($IncludeTests) { "ON" } else { "OFF" }
 $E2EEnabled = if ($IncludeE2E) { "ON" } else { "OFF" }
+$ImportedConfigurationMaps = @("Debug", "Release", "RelWithDebInfo", "MinSizeRel") |
+    Where-Object { $_ -ne $Configuration } |
+    ForEach-Object { "-DCMAKE_MAP_IMPORTED_CONFIG_$($_.ToUpperInvariant())=$Configuration" }
 
-& cmake -S $CppRoot -B $BuildDir -G "Visual Studio 17 2022" -A x64 `
-    "-DCMAKE_TOOLCHAIN_FILE=$Toolchain" `
-    "-DVCPKG_INSTALLED_DIR=$VcpkgInstalledDir" `
-    -DVCPKG_MANIFEST_MODE=OFF `
-    "-Dzlink_DIR=$CoreCMakeDir" `
-    "-DCMAKE_CXX_FLAGS=/EHsc /bigobj /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00" `
-    "-DCMAKE_CXX_FLAGS_RELEASE=/Od /DNDEBUG" `
-    "-DZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT=$LocalPackageRoot" `
-    "-DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=$CoreVersion" `
-    "-DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=$BindingVersion" `
-    "-DZLINK_FRAMEWORK_CPP_BUILD_TESTS=$TestsEnabled" `
-    "-DZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS=$TestsEnabled" `
-    "-DZLINK_FRAMEWORK_CPP_BUILD_E2E=$E2EEnabled" `
-    -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=ON `
-    -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=ON
-if ($LASTEXITCODE -ne 0) {
-    throw "C++ Framework configure failed with exit code $LASTEXITCODE."
-}
+$ConfigureArguments = @(
+    "-S", $CppRoot, "-B", $BuildDir, "-G", "Visual Studio 17 2022", "-A", "x64",
+    "-DCMAKE_TOOLCHAIN_FILE=$Toolchain",
+    "-DVCPKG_INSTALLED_DIR=$VcpkgInstalledDir",
+    "-DVCPKG_MANIFEST_MODE=OFF",
+    "-Dzlink_DIR=$CoreCMakeDir",
+    "-DCMAKE_CXX_FLAGS=/EHsc /bigobj /DNOMINMAX /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00",
+    "-DCMAKE_CXX_FLAGS_RELEASE=/Od /DNDEBUG",
+    "-DZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT=$LocalPackageRoot",
+    "-DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=$CoreVersion",
+    "-DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=$BindingVersion",
+    "-DZLINK_FRAMEWORK_CPP_BUILD_TESTS=$TestsEnabled",
+    "-DZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS=$TestsEnabled",
+    "-DZLINK_FRAMEWORK_CPP_BUILD_E2E=$E2EEnabled",
+    "-DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=ON",
+    "-DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=ON"
+) + $ImportedConfigurationMaps
+Invoke-ZlinkCMake -FailureMessage "C++ Framework configure failed" -Arguments $ConfigureArguments
 
-& cmake --build $BuildDir --config $Configuration --parallel $Parallel
-if ($LASTEXITCODE -ne 0) {
-    throw "C++ Framework build failed with exit code $LASTEXITCODE."
-}
+Invoke-ZlinkCMake -FailureMessage "C++ Framework build failed" -Arguments @(
+    "--build", $BuildDir, "--config", $Configuration, "--parallel", "$Parallel"
+)
 
 # Server sample targets are intentionally EXCLUDE_FROM_ALL. Build every client
 # and server target explicitly so a successful default build cannot omit them.
@@ -139,17 +217,16 @@ $SampleTargets = @(
     "sample_cpp_framework_zoneworld_ops",
     "sample_cpp_framework_zoneworld_client"
 )
-& cmake --build $BuildDir --config $Configuration --parallel $Parallel --target $SampleTargets
-if ($LASTEXITCODE -ne 0) {
-    throw "C++ Framework sample build failed with exit code $LASTEXITCODE."
-}
+$SampleBuildArguments = @(
+    "--build", $BuildDir, "--config", $Configuration, "--parallel", "$Parallel", "--target"
+) + $SampleTargets
+Invoke-ZlinkCMake -FailureMessage "C++ Framework sample build failed" -Arguments $SampleBuildArguments
 
 if ($Install) {
     $InstallPrefix = Join-Path $LocalPackageRoot "install/zlink-framework-cpp/$FrameworkVersion"
-    & cmake --install $BuildDir --config $Configuration --prefix $InstallPrefix
-    if ($LASTEXITCODE -ne 0) {
-        throw "C++ Framework install failed with exit code $LASTEXITCODE."
-    }
+    Invoke-ZlinkCMake -FailureMessage "C++ Framework install failed" -Arguments @(
+        "--install", $BuildDir, "--config", $Configuration, "--prefix", $InstallPrefix
+    )
     Write-Host "C++ Framework install result=passed prefix=$InstallPrefix"
 }
 
