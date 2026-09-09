@@ -3849,7 +3849,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                 correlation = protocol::decode_node_request_header (
                   received->parts.front ());
             }
-            mailbox_owner = owner_key (local.node_routing_id);
+            mailbox_owner = service_mailbox_t::application_owner (host::owner_kind_t::node);
         } else if (header.kind == protocol::command::channelSend
                    || header.kind == protocol::command::channelRequest) {
             std::string channel_name;
@@ -3875,7 +3875,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
             if (channel == local.channels.end () || channel->name != channel_name) {
                 co_return raw_mesh_pump_result_t::protocol_error;
             }
-            mailbox_owner = "channel:" + channel_name;
+            mailbox_owner = service_mailbox_t::application_owner (host::owner_kind_t::channel, channel_name);
         } else if (header.kind == protocol::command::spotSend
                    || header.kind == protocol::command::spotRequest) {
             if (header.kind == protocol::command::spotRequest
@@ -3893,8 +3893,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
             correlation = spot.correlation;
             operation = std::pair{
               spot.operation.high, spot.operation.low};
-            mailbox_owner = spot.target.spot_id;
-            mailbox_owner.insert (0, "spot:");
+            mailbox_owner = service_mailbox_t::application_owner (host::owner_kind_t::spot, spot.target.spot_id);
         } else {
             if (header.kind == protocol::command::actorRequest
                 && !received->reply_token) {
@@ -3917,7 +3916,7 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
                   actor.bound_session_source->binding_generation,
                   actor.bound_session_source->session_sequence};
             }
-            mailbox_owner = "actor:" + actor.target.actor_id;
+            mailbox_owner = service_mailbox_t::application_owner (host::owner_kind_t::actor, actor.target.actor_id);
         }
         auto result = enqueue_received_or_retain (
           service_mailbox_record_t{
@@ -3951,6 +3950,7 @@ bool raw_mesh_node_owner_t::wait_for_activity (
     if (_mailbox.pending_messages (service_mailbox_domain_t::infrastructure)
         != 0
         || (accept_application_receive
+            && !_mailbox.has_application_dispatch ()
             && _mailbox.pending_messages (
                  service_mailbox_domain_t::application)
                  != 0))

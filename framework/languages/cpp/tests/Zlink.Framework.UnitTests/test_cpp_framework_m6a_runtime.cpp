@@ -1155,6 +1155,83 @@ void verify_signed_weight_contract ()
       == 4'300'000'000ull);
 }
 
+void verify_envelope_body_retains_native_storage ()
+{
+    namespace messaging = zlink::framework::runtime::messaging;
+    std::optional<zlink::message_t> retained;
+    {
+        std::vector<zlink::message_t> values;
+        values.emplace_back ();
+        values.push_back (zlink::message_t::from (std::vector<std::uint8_t> (4096, 7)));
+        messaging::message_parts_t parts (std::move (values));
+        const auto address = parts[1].data ();
+        auto body = messaging::envelope_codec_t{}.decode_body (parts);
+        assert (body && body.value ().data () == address);
+        retained.emplace (std::move (body.value ()));
+    }
+    assert (retained->size () == 4096);
+    assert (retained->to_bytes () == std::vector<std::uint8_t> (4096, 7));
+}
+
+void verify_application_owner_drain_transitions ()
+{
+    mesh::service_mailbox_t mailbox (4, 4096, 1, 4096);
+    std::vector<std::string> ready;
+    int prepared = 0;
+    mailbox.bind_application_dispatch (
+      [&] (mesh::service_mailbox_record_t &) { ++prepared; },
+      [&] (const std::string &owner) { ready.push_back (owner); });
+    const auto enqueue = [&] (std::string owner, std::uint8_t value) {
+        return mailbox.try_enqueue (mesh::service_mailbox_record_t{
+          std::move (owner), mesh::service_mailbox_domain_t::application, {{value}}});
+    };
+    mailbox.begin_application_receive_turn ();
+    assert (enqueue ("a", 1));
+    assert (ready.empty ());
+    assert (enqueue ("a", 2));
+    assert (enqueue ("b", 3));
+    assert (ready.empty ());
+    mailbox.end_application_receive_turn ();
+    assert (prepared == 3);
+    assert ((ready == std::vector<std::string>{"a", "b"}));
+    assert (mailbox.begin_application_drain ("a"));
+    assert (!mailbox.begin_application_drain ("a"));
+    assert (mailbox.begin_application_drain ("b"));
+    auto first = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "a", 1, 4096);
+    auto other = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "b", 1, 4096);
+    assert (first && other && first->records[0].parts[0][0] == 1);
+    assert (mailbox.release (*first));
+    auto second = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "a", 1, 4096);
+    assert (second && second->records[0].parts[0][0] == 2);
+    assert (ready.size () == 2); // The same drain keeps its execution right.
+    assert (enqueue ("a", 4));
+    mailbox.end_application_drain ("a"); // A deferred handler retains its reservation.
+    assert (ready.size () == 2);
+    assert (!mailbox.begin_application_drain ("a"));
+    mailbox.begin_application_receive_turn ();
+    assert (mailbox.release (*second));
+    assert (ready.size () == 2);
+    mailbox.end_application_receive_turn ();
+    assert (ready.size () == 3 && ready.back () == "a");
+    assert (!mailbox.release (*second));
+    assert (mailbox.begin_application_drain ("a"));
+    auto third = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "a", 1, 4096);
+    assert (third && third->records[0].parts[0][0] == 4);
+    assert (enqueue ("a", 5));
+    assert (mailbox.release (*third));
+    mailbox.end_application_drain ("a"); // A time-budget yield wakes this owner once.
+    assert (ready.size () == 4 && ready.back () == "a");
+    assert (mailbox.release (*other));
+    mailbox.end_application_drain ("b");
+    assert (mailbox.begin_application_drain ("a"));
+    auto final = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, "a", 1, 4096);
+    assert (final && final->records[0].parts[0][0] == 5);
+    assert (mailbox.release (*final));
+    mailbox.end_application_drain ("a");
+    assert (mailbox.pending_messages (mesh::service_mailbox_domain_t::application) == 0);
+    assert (ready.size () == 4);
+}
+
 void verify_independent_mailbox_domains_and_claim_fence ()
 {
     constexpr auto fixed_work_cost = runtime::dispatch_limits::fixed_work_byte_cost;
@@ -3431,6 +3508,8 @@ int main (int argc, char **argv)
     verify_object_client_connection_requirement ();
     verify_manual_object_client_pair_ends_not_required ();
     verify_signed_weight_contract ();
+    verify_envelope_body_retains_native_storage ();
+    verify_application_owner_drain_transitions ();
     verify_independent_mailbox_domains_and_claim_fence ();
     verify_liveness_reuses_probe_and_fences_reconnect ();
     verify_location_descriptor_cas_snapshot_and_watch ();

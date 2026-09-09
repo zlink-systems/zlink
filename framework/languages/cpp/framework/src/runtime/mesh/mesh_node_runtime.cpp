@@ -1855,6 +1855,7 @@ void mesh_node_runtime_t::stop () noexcept
         spot_runtime.release_native_handles ();
         return;
     }
+    _node->transport ().mailbox ().bind_application_dispatch ({}, {});
     try {
         _peer_connection_intent_lane.run ([&] {
             _peer_connection_intents.clear ();

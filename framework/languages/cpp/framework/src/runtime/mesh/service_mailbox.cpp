@@ -12,6 +12,17 @@
 namespace zlink::framework::runtime::mesh
 {
 
+std::string service_mailbox_t::application_owner (host::owner_kind_t kind, std::string_view id)
+{
+    switch (kind) {
+        case host::owner_kind_t::node: return "node";
+        case host::owner_kind_t::channel: return "channel:" + std::string (id);
+        case host::owner_kind_t::spot: return "spot:" + std::string (id);
+        case host::owner_kind_t::actor: return "actor:" + std::string (id);
+    }
+    throw std::invalid_argument ("unknown application owner kind");
+}
+
 service_mailbox_t::service_mailbox_t (
   std::size_t application_message_budget,
   std::size_t application_byte_budget,
@@ -52,7 +63,7 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record)
 service_mailbox_enqueue_result_t
 service_mailbox_t::try_enqueue_result (service_mailbox_record_t &&record)
 {
-    if (record.owner.empty () || record.parts.empty ()) {
+    if (record.owner.empty () || (record.parts.empty () && !record.application)) {
         throw std::invalid_argument (
           "service mailbox record requires an owner and retained payload");
     }
@@ -60,7 +71,7 @@ service_mailbox_t::try_enqueue_result (service_mailbox_record_t &&record)
     if (retained.overflow) {
         return service_mailbox_enqueue_result_t::capacity_exceeded;
     }
-    std::lock_guard lock (_mutex);
+    std::unique_lock lock (_mutex);
     auto &target = domain (record.domain);
     if (_closed) {
         return service_mailbox_enqueue_result_t::closed;
@@ -90,14 +101,21 @@ service_mailbox_t::try_enqueue_result (service_mailbox_record_t &&record)
         || retained.bytes > target.byte_budget - used_bytes) {
         return service_mailbox_enqueue_result_t::capacity_exceeded;
     }
+    if (record.domain == service_mailbox_domain_t::application && _application_prepare)
+        _application_prepare (record);
     queue.bytes += retained.bytes;
     ++queue.messages;
     queue.records.push_back (std::move (record));
     ++target.messages;
     target.bytes += retained.bytes;
-    if (!queue.claimed && target.indexed.insert (owner).second) {
+    if (queue.phase == owner_phase_t::idle) {
+        queue.phase = owner_phase_t::ready;
         target.ready.push_back (owner);
     }
+    const bool notify = &target == &_application && !_application_receive_turn;
+    lock.unlock ();
+    if (notify)
+        notify_application_ready ();
     return service_mailbox_enqueue_result_t::accepted;
 }
 
@@ -114,9 +132,8 @@ std::optional<service_mailbox_claim_t> service_mailbox_t::try_claim (
     while (!source.ready.empty ()) {
         auto owner = std::move (source.ready.front ());
         source.ready.pop_front ();
-        source.indexed.erase (owner);
         auto found = source.owners.find (owner);
-        if (found == source.owners.end () || found->second.claimed
+        if (found == source.owners.end () || found->second.phase != owner_phase_t::ready
             || found->second.records.empty ()) {
             continue;
         }
@@ -140,14 +157,15 @@ service_mailbox_t::try_claim_owner (
     std::lock_guard lock (_mutex);
     auto &source = domain (domain_value);
     const auto found = source.owners.find (owner);
-    if (found == source.owners.end () || found->second.claimed
+    if (found == source.owners.end () || found->second.active_messages != 0
         || found->second.records.empty ()) {
         return std::nullopt;
     }
-    source.indexed.erase (owner);
-    source.ready.erase (
-      std::remove (source.ready.begin (), source.ready.end (), owner),
-      source.ready.end ());
+    if (found->second.phase != owner_phase_t::draining) {
+        source.ready.erase (
+          std::remove (source.ready.begin (), source.ready.end (), owner),
+          source.ready.end ());
+    }
     return claim_owner_locked (
       source, domain_value, owner, message_budget, byte_budget);
 }
@@ -161,12 +179,13 @@ service_mailbox_t::claim_owner_locked (
   std::size_t byte_budget)
 {
     const auto found = source.owners.find (owner);
-    if (found == source.owners.end () || found->second.claimed
+    if (found == source.owners.end () || found->second.active_messages != 0
         || found->second.records.empty ()) {
         return std::nullopt;
     }
     auto &queue = found->second;
-    queue.claimed = true;
+    if (queue.phase != owner_phase_t::draining)
+        queue.phase = owner_phase_t::retained;
     if (_next_claim_serial == 0) {
         _next_claim_serial = 1;
     }
@@ -210,41 +229,126 @@ service_mailbox_t::retained_size_t
 service_mailbox_t::retained_bytes (const service_mailbox_record_t &record)
 {
     std::size_t result = dispatch_limits::fixed_work_byte_cost;
-    for (const auto &part : record.parts) {
-        if (part.size () > std::numeric_limits<std::size_t>::max () - result)
-            return {std::numeric_limits<std::size_t>::max (), true};
-        result += part.size ();
-    }
+    const auto add = [&] (const auto &parts) {
+        for (const auto &part : parts) {
+            if (part.size () > std::numeric_limits<std::size_t>::max () - result)
+                return false;
+            result += part.size ();
+        }
+        return true;
+    };
+    if (!add (record.parts) || (record.application && !add (record.application->parts)))
+        return {std::numeric_limits<std::size_t>::max (), true};
     return {result, false};
 }
 
 bool service_mailbox_t::release (const service_mailbox_claim_t &claim)
 {
-    std::lock_guard lock (_mutex);
+    std::unique_lock lock (_mutex);
     auto &target = domain (claim.domain);
     const auto found = target.owners.find (claim.owner);
-    if (found == target.owners.end () || !found->second.claimed
-        || found->second.claim_serial != claim.serial) {
+    if (found == target.owners.end () || found->second.active_messages == 0
+        || found->second.claim_serial != claim.serial)
         return false;
-    }
-    if (claim.claimed_messages > found->second.active_messages
-        || claim.claimed_bytes > found->second.active_bytes
+    auto &queue = found->second;
+    if (claim.claimed_messages > queue.active_messages
+        || claim.claimed_bytes > queue.active_bytes
         || claim.claimed_messages > target.active_messages
-        || claim.claimed_bytes > target.active_bytes) {
+        || claim.claimed_bytes > target.active_bytes)
         return false;
-    }
-    found->second.active_messages -= claim.claimed_messages;
-    found->second.active_bytes -= claim.claimed_bytes;
+    queue.active_messages -= claim.claimed_messages;
+    queue.active_bytes -= claim.claimed_bytes;
     target.active_messages -= claim.claimed_messages;
     target.active_bytes -= claim.claimed_bytes;
-    found->second.claimed = false;
-    found->second.claim_serial = 0;
-    if (found->second.records.empty () && found->second.active_messages == 0) {
-        target.owners.erase (found);
-    } else if (target.indexed.insert (claim.owner).second) {
-        target.ready.push_back (claim.owner);
+    queue.claim_serial = 0;
+    if (queue.phase != owner_phase_t::draining) {
+        if (queue.records.empty ()) {
+            target.owners.erase (found);
+        } else {
+            queue.phase = owner_phase_t::ready;
+            target.ready.push_back (claim.owner);
+        }
     }
+    const bool notify = &target == &_application && !_application_receive_turn;
+    lock.unlock ();
+    if (notify)
+        notify_application_ready ();
     return true;
+}
+
+void service_mailbox_t::bind_application_dispatch (application_prepare_t prepare,
+                                                  application_ready_t ready)
+{
+    std::lock_guard lock (_mutex);
+    _application_prepare = std::move (prepare);
+    _application_ready = std::move (ready);
+}
+
+bool service_mailbox_t::has_application_dispatch () const
+{
+    std::lock_guard lock (_mutex);
+    return static_cast<bool> (_application_ready);
+}
+
+bool service_mailbox_t::begin_application_drain (const std::string &owner)
+{
+    std::lock_guard lock (_mutex);
+    const auto found = _application.owners.find (owner);
+    if (found == _application.owners.end () || found->second.phase != owner_phase_t::ready)
+        return false;
+    found->second.phase = owner_phase_t::draining;
+    return true;
+}
+
+void service_mailbox_t::end_application_drain (const std::string &owner)
+{
+    std::unique_lock lock (_mutex);
+    const auto found = _application.owners.find (owner);
+    if (found == _application.owners.end () || found->second.phase != owner_phase_t::draining)
+        return;
+    auto &queue = found->second;
+    if (queue.active_messages != 0) {
+        queue.phase = owner_phase_t::retained;
+    } else if (queue.records.empty ()) {
+        _application.owners.erase (found);
+    } else {
+        queue.phase = owner_phase_t::ready;
+        _application.ready.push_back (owner);
+    }
+    const bool notify = !_application_receive_turn;
+    lock.unlock ();
+    if (notify)
+        notify_application_ready ();
+}
+
+void service_mailbox_t::begin_application_receive_turn ()
+{
+    std::lock_guard lock (_mutex);
+    _application_receive_turn = true;
+}
+
+void service_mailbox_t::end_application_receive_turn ()
+{
+    {
+        std::lock_guard lock (_mutex);
+        _application_receive_turn = false;
+    }
+    notify_application_ready ();
+}
+
+void service_mailbox_t::notify_application_ready ()
+{
+    std::deque<std::string> ready;
+    application_ready_t notify;
+    {
+        std::lock_guard lock (_mutex);
+        if (_application_receive_turn || !_application_ready)
+            return;
+        ready.swap (_application.ready);
+        notify = _application_ready;
+    }
+    for (const auto &owner : ready)
+        notify (owner);
 }
 
 void service_mailbox_t::close ()

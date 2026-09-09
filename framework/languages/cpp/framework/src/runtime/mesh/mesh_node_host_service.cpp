@@ -3,6 +3,7 @@
 #include "runtime/diagnostics/mesh_trace.hpp"
 
 #include "runtime/mesh/mesh_node_host_service.hpp"
+#include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/actors/actor_manager_access.hpp"
 #include "runtime/locations/sha256.hpp"
@@ -81,6 +82,15 @@ application_dispatch_terminal_owner_t::application_dispatch_terminal_owner_t (
     _node (std::move (node)),
     _complete_stateful_dispatch (std::move (complete_stateful_dispatch)),
     _release_mailbox_reservation (std::move (release_mailbox_reservation))
+{
+}
+
+application_dispatch_terminal_owner_t::application_dispatch_terminal_owner_t (
+  application_dispatch_terminal_owner_t &&other) noexcept :
+    _settled (other._settled.exchange (true, std::memory_order_acq_rel)),
+    _node (std::move (other._node)),
+    _complete_stateful_dispatch (std::move (other._complete_stateful_dispatch)),
+    _release_mailbox_reservation (std::move (other._release_mailbox_reservation))
 {
 }
 
@@ -575,7 +585,7 @@ mesh_node_host_service_t::mesh_node_host_service_t (
     _serializers (&serializers),
     _filters (&filters),
     _dispatch_options (std::move (dispatch_options)),
-    _application_dispatch (std::make_unique<offload_executor_t> (
+    _application_dispatch (std::make_shared<offload_executor_t> (
       1,
       std::max<std::size_t> (2, std::thread::hardware_concurrency ()),
       4096,
@@ -2202,12 +2212,52 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
         for (std::size_t index = 0; index < _nodes.size (); ++index) {
             const auto node = _nodes[index];
             const auto registration = _registrations[index];
-            _threads.emplace_back ([this, node, registration] {
+            auto receive_permit =
+              std::make_shared<std::optional<application_job_queue_t::permit_t>> ();
+            auto &mailbox = node->native_node ().transport ().mailbox ();
+            mailbox.bind_application_dispatch (
+              [this, node, receive_permit] (mesh::service_mailbox_record_t &record) {
+                  std::lock_guard lock (_dispatch_gate_mutex);
+                  if (!_accept_application_dispatch.load (std::memory_order_relaxed)) {
+                      if (record.before_application_handler)
+                          record.before_application_handler = {};
+                      else
+                          receive_permit->reset ();
+                      node->application_work_enqueued ();
+                      return;
+                  }
+                  if (!record.before_application_handler) {
+                      if (!*receive_permit)
+                          throw std::logic_error ("Application owner enqueue requires a receive permit");
+                      auto permit = std::make_shared<application_job_queue_t::permit_t> (
+                        std::move (**receive_permit));
+                      receive_permit->reset ();
+                      permit->mark_queued ();
+                      record.before_application_handler = [permit] {
+                          permit->release_for_handler_entry ();
+                      };
+                  }
+                  node->application_work_enqueued ();
+              },
+              [executor = _application_dispatch, node, registration,
+               services = _services, serializers = _serializers, filters = _filters,
+               options = _dispatch_options] (const std::string &owner) {
+                  if (!executor->try_submit_internal (
+                        [node, registration, owner, services, serializers, filters, options] {
+                            drain_application_owner (node, registration, owner, false,
+                                                     services, serializers, filters, options);
+                        })) {
+                      drain_application_owner (node, registration, owner, true,
+                                               services, serializers, filters, options);
+                  }
+              });
+            _threads.emplace_back ([this, node, registration, receive_permit] {
                 application_supply_slot_t supply (
                   _application_jobs, [node] { node->native_node ().signal_dispatch_activity (); });
+                auto &application_permit = *receive_permit;
+                auto &mailbox = node->native_node ().transport ().mailbox ();
                 while (!_stop.load (std::memory_order_acquire)) {
                     constexpr std::size_t max_application_permits_per_turn = 64;
-                    std::optional<application_job_queue_t::permit_t> application_permit;
                     std::array<application_job_queue_t::permit_t,
                                max_application_permits_per_turn - 1>
                       application_permit_budget;
@@ -2235,6 +2285,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     };
                     const bool accept_application_receive =
                       static_cast<bool> (application_permit);
+                    mailbox.begin_application_receive_turn ();
+                    terminal_callback_guard_t receive_turn ([&mailbox] {
+                        mailbox.end_application_receive_turn ();
+                    });
                     const auto count =
                       std::move (
                         node->dispatch_ready (
@@ -2311,122 +2365,23 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                   }
                               }
                               if (owner.domain == host::ready_domain_t::application) {
-                                  bool accepted = false;
-                                  {
-                                      std::lock_guard lock (_dispatch_gate_mutex);
-                                      if (_accept_application_dispatch.load (
-                                            std::memory_order_relaxed)) {
-                                          node->application_work_enqueued ();
-                                          accepted = true;
-                                      }
-                                  }
+                                  mesh::service_mailbox_record_t mailbox_record;
+                                  mailbox_record.owner = mesh::service_mailbox_t::application_owner (owner);
+                                  mailbox_record.domain = mesh::service_mailbox_domain_t::application;
+                                  mailbox_record.application =
+                                    std::make_shared<host::local_application_dispatch_t> (
+                                      host::local_application_dispatch_t{owner, record, std::move (parts)});
+                                  const auto accepted = node->native_node ().transport ().mailbox ()
+                                    .try_enqueue (std::move (mailbox_record));
                                   if (!accepted) {
                                       reject_application_request (
-                                        record, std::move (parts), framework_error_kind_t::rejected,
-                                        "MeshNode is draining and rejects new application work");
-                                      release_mailbox ();
+                                        record, std::move (mailbox_record.application->parts),
+                                        framework_error_kind_t::rejected,
+                                        "MeshNode application owner queue rejected the record");
                                       return;
                                   }
-                                  if (!application_permit) {
-                                      reject_application_request (
-                                        record, std::move (parts),
-                                        framework_error_kind_t::shutting_down,
-                                        "Application Job Queue supply is unavailable");
-                                      release_mailbox ();
-                                      return;
-                                  }
-                                  auto application_job =
-                                    std::make_shared<application_job_queue_t::permit_t> (
-                                      std::move (*application_permit));
-                                  application_permit.reset ();
-                                  application_job->mark_queued ();
-                                  trace_mesh_application ("submit", record, parts.size ());
-                                  if (retain_mailbox_reservation) {
+                                  if (retain_mailbox_reservation)
                                       retain_mailbox_reservation ();
-                                  }
-                                  auto dispatch_parts =
-                                    std::make_shared<std::vector<zlink::message_t>> (
-                                      std::move (parts));
-                                  const auto submitted =
-                                    _application_dispatch->try_submit_internal (
-                                      [this, node, registration, owner, record,
-                                       release_mailbox_reservation, complete_stateful_dispatch,
-                                       dispatch_parts, application_job] () mutable {
-                                          terminal_callback_guard_t release_guard (
-                                            release_mailbox_reservation);
-                                          terminal_callback_guard_t stateful_guard (
-                                            complete_stateful_dispatch);
-                                          auto parts = std::move (*dispatch_parts);
-                                          trace_mesh_application ("start", record, parts.size ());
-                                          node->application_work_started ();
-                                          const auto before_application_handler =
-                                            [application_job] {
-                                                application_job->release_for_handler_entry ();
-                                            };
-                                          const auto terminal = std::make_shared<
-                                            application_dispatch_terminal_owner_t> (
-                                            node, complete_stateful_dispatch,
-                                            release_mailbox_reservation);
-                                          stateful_guard.dismiss ();
-                                          release_guard.dismiss ();
-                                          try {
-                                              detail::spot_node_runtime_t application_spot_runtime (
-                                                registration->spot_state);
-                                              bool terminal_deferred = false;
-                                              const auto framework_handled =
-                                                application_spot_runtime.dispatch_mesh_record (
-                                                  owner, record, parts, *_services, *_serializers,
-                                                  [terminal] { terminal->settle (); },
-                                                  &terminal_deferred, before_application_handler);
-                                              trace_mesh_application (
-                                                "framework-dispatch", record, parts.size (),
-                                                framework_handled ? "handled" : "not-handled");
-                                              if (!framework_handled && !terminal_deferred) {
-                                                  detail::mesh_record_dispatcher_t dispatcher (
-                                                    *_services, *_serializers,
-                                                    registration->handlers, *_filters,
-                                                    _dispatch_options, before_application_handler);
-                                                  auto dispatched =
-                                                    dispatcher.dispatch (record, std::move (parts));
-                                                  if (dispatched) {
-                                                      trace_mesh_application ("route-dispatch",
-                                                                              record, 0, "success");
-                                                  } else {
-                                                      trace_mesh_application ("route-dispatch",
-                                                                              record, 0, "failure");
-                                                  }
-                                              }
-                                              if (terminal_deferred)
-                                                  return;
-                                          }
-                                          catch (const std::exception &error) {
-                                              trace_mesh_application ("exception", record,
-                                                                      parts.size (), error.what ());
-                                              terminal->settle ();
-                                              return;
-                                          }
-                                          catch (...) {
-                                              trace_mesh_application ("exception", record,
-                                                                      parts.size (), "unknown");
-                                              terminal->settle ();
-                                              return;
-                                          }
-                                          terminal->settle ();
-                                      });
-                                  if (!submitted) {
-                                      trace_mesh_application ("reject", record,
-                                                              dispatch_parts->size (),
-                                                              "application executor is stopping");
-                                      reject_application_request (
-                                        record, std::move (*dispatch_parts),
-                                        framework_error_kind_t::shutting_down,
-                                        "MeshNode application executor is stopping");
-                                      node->application_work_started ();
-                                      node->application_work_finished ();
-                                      _dispatch_gate_changed.notify_all ();
-                                      release_mailbox ();
-                                      return;
-                                  }
                                   stateful_guard.dismiss ();
                                   release_guard.dismiss ();
                                   return;
@@ -2445,6 +2400,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                           accept_application_receive, next_application_receive))
                         .result ()
                         .value ();
+                    mailbox.end_application_receive_turn ();
+                    receive_turn.dismiss ();
                     application_permit.reset ();
                     while (application_permit_budget_size != 0) {
                         application_permit_budget[--application_permit_budget_size]
@@ -2649,8 +2606,9 @@ void mesh_node_host_service_t::stop () noexcept
     }
     trace_mesh_host_stop ("pump-join-end");
     _threads.clear ();
-    for (auto &node : _nodes)
+    for (auto &node : _nodes) {
         node->bind_descriptor_publisher ({});
+    }
     const auto owner = current_location_owner ();
     if (_location_store && owner) {
         for (const auto &key : _published_mesh_nodes) {
@@ -2692,6 +2650,94 @@ std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_node_host_service
     return _nodes;
 }
 
+void mesh_node_host_service_t::dispatch_application (
+  const std::shared_ptr<detail::mesh_node_runtime_t> &node,
+  const std::shared_ptr<detail::mesh_node_builder_state_t> &registration,
+  const host::ready_record_t &owner, const host::receive_record_t &record,
+  std::vector<zlink::message_t> parts, bool reject_only,
+  service_provider_t *services, serializer_registry_t *serializers,
+  const handler_registry_t *filters, const dispatch_options_t &dispatch_options)
+{
+    if (record.retain_mailbox_reservation)
+        record.retain_mailbox_reservation ();
+    application_dispatch_terminal_owner_t terminal (
+      node, record.complete_stateful_dispatch, record.release_mailbox_reservation);
+    std::shared_ptr<application_dispatch_terminal_owner_t> deferred_terminal;
+    try {
+        if (reject_only || !record.before_application_handler) {
+            reject_application_request (
+              record, std::move (parts),
+              reject_only ? framework_error_kind_t::shutting_down : framework_error_kind_t::rejected,
+              "MeshNode is draining and rejects new application work");
+            return;
+        }
+        if (owner.owner_kind == host::owner_kind_t::node
+            || owner.owner_kind == host::owner_kind_t::channel) {
+            detail::mesh_record_dispatcher_t dispatcher (
+              *services, *serializers, registration->handlers, *filters,
+              dispatch_options, record.before_application_handler);
+            const auto dispatched = dispatcher.dispatch (record, std::move (parts));
+            trace_mesh_application ("route-dispatch", record, 0,
+                                    dispatched ? "success" : "failure");
+            return;
+        }
+        deferred_terminal = std::make_shared<application_dispatch_terminal_owner_t> (
+          std::move (terminal));
+        detail::spot_node_runtime_t application_spot_runtime (registration->spot_state);
+        bool terminal_deferred = false;
+        const auto handled = application_spot_runtime.dispatch_mesh_record (
+          owner, record, parts, *services, *serializers,
+          [deferred_terminal] { deferred_terminal->settle (); },
+          &terminal_deferred, record.before_application_handler);
+        trace_mesh_application ("framework-dispatch", record, parts.size (),
+                                handled ? "handled" : "not-handled");
+        if (!terminal_deferred)
+            deferred_terminal->settle ();
+    }
+    catch (const std::exception &error) {
+        trace_mesh_application ("exception", record, parts.size (), error.what ());
+        if (deferred_terminal)
+            deferred_terminal->settle ();
+    }
+    catch (...) {
+        trace_mesh_application ("exception", record, parts.size (), "unknown");
+        if (deferred_terminal)
+            deferred_terminal->settle ();
+    }
+}
+
+void mesh_node_host_service_t::drain_application_owner (
+  const std::shared_ptr<detail::mesh_node_runtime_t> &node,
+  const std::shared_ptr<detail::mesh_node_builder_state_t> &registration,
+  const std::string &owner, bool reject_only,
+  service_provider_t *services, serializer_registry_t *serializers,
+  const handler_registry_t *filters, const dispatch_options_t &dispatch_options)
+{
+    auto &mailbox = node->native_node ().transport ().mailbox ();
+    if (!mailbox.begin_application_drain (owner))
+        return;
+    const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
+    const auto dispatch = [&] (const host::ready_record_t &ready,
+                              const host::receive_record_t &record,
+                              std::vector<zlink::message_t> parts) {
+        dispatch_application (node, registration, ready, record, std::move (parts), reject_only,
+                              services, serializers, filters, dispatch_options);
+    };
+    const auto started = [node] { node->application_work_started (); };
+    const auto rejected = [node] { node->application_work_finished (); };
+    try {
+        while (node->native_node ().dispatch_application_owner (owner, dispatch, started, rejected)) {
+            if (!reject_only && std::chrono::steady_clock::now () >= deadline)
+                break;
+        }
+    }
+    catch (...) {
+        mailbox.end_application_drain (owner);
+        throw;
+    }
+    mailbox.end_application_drain (owner);
+}
+
 zlink::submit_result_t mesh_node_host_service_t::submit_local_node_send (
   const std::shared_ptr<detail::mesh_node_runtime_t> &node, std::vector<zlink::message_t> parts)
 {
@@ -2719,41 +2765,24 @@ zlink::submit_result_t mesh_node_host_service_t::submit_local_node_send (
         std::lock_guard lock (_dispatch_gate_mutex);
         if (!_accept_application_dispatch.load (std::memory_order_relaxed))
             return zlink::submit_result_t::terminated;
-        node->application_work_enqueued ();
         application_job->mark_queued ();
     }
 
-    const auto submitted = _application_dispatch->try_submit_internal (
-      [this, node, registration, source_rid, parts = std::move (parts),
-       application_job] () mutable {
-          node->application_work_started ();
-          try {
-              host::receive_record_t record;
-              record.kind = host::record_kind_t::node_send;
-              record.domain = host::ready_domain_t::application;
-              record.source_node_rid = *source_rid;
-              const auto before_application_handler = [application_job] {
-                  application_job->release_for_handler_entry ();
-              };
-              detail::mesh_record_dispatcher_t dispatcher (
-                *_services, *_serializers, registration->handlers, *_filters, _dispatch_options,
-                before_application_handler);
-              (void) dispatcher.dispatch (record, std::move (parts));
-          }
-          catch (...) {
-              node->local_application_work_finished ();
-              _dispatch_gate_changed.notify_all ();
-              return;
-          }
-          node->local_application_work_finished ();
-          _dispatch_gate_changed.notify_all ();
-      });
-    if (!submitted) {
-        node->application_work_started ();
-        node->local_application_work_finished ();
-        _dispatch_gate_changed.notify_all ();
+    host::ready_record_t owner;
+    host::receive_record_t record;
+    record.kind = host::record_kind_t::node_send;
+    record.domain = host::ready_domain_t::application;
+    record.source_node_rid = *source_rid;
+    mesh::service_mailbox_record_t mailbox_record;
+    mailbox_record.owner = mesh::service_mailbox_t::application_owner (owner);
+    mailbox_record.domain = mesh::service_mailbox_domain_t::application;
+    mailbox_record.before_application_handler = [application_job] {
+        application_job->release_for_handler_entry ();
+    };
+    mailbox_record.application = std::make_shared<host::local_application_dispatch_t> (
+      host::local_application_dispatch_t{std::move (owner), std::move (record), std::move (parts)});
+    if (!node->native_node ().transport ().mailbox ().try_enqueue (std::move (mailbox_record)))
         return zlink::submit_result_t::terminated;
-    }
     return zlink::submit_result_t::ok;
 }
 
