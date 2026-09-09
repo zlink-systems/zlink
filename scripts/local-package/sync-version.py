@@ -160,6 +160,11 @@ def node_internal_dependency_pattern() -> str:
 # directories to discover additional targets.
 FRAMEWORK_SCALAR_FIELDS = (
     FrameworkField(
+        "framework/languages/java/zlink-http-client/src/main/java/systems/zlink/httpclient/internal/HttpClientVersion.java",
+        "HttpClientVersion.VERSION (drives zlink-http-client and zlink-http-client-kotlin Gradle versions)",
+        rf'(public static final String VERSION = ")(?P<version>{SEMVER})(";)',
+    ),
+    FrameworkField(
         "framework/languages/dotnet/samples/Directory.Build.props",
         "PropertyGroup/ZLinkSampleFrameworkVersion default",
         rf"(<ZLinkSampleFrameworkVersion Condition=\"'\$\(ZLinkSampleFrameworkVersion\)' == '' and '\$\(ZLinkSampleRepositoryDetected\)' != 'true'\">)(?P<version>{SEMVER})(</ZLinkSampleFrameworkVersion>)",
