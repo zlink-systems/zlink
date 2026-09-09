@@ -111,12 +111,12 @@ binding 로컬 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `sys
 | `scripts/local-package/package-cache.py`·`cache-prune.sh` | binding 로컬 패키지 공유 캐시와 정리 (§4.1) | 있음 |
 | `scripts/perf/perf-ticket.sh`·`perf-queue-runner.sh` | 모든 측정을 티켓 하나씩 직렬로 실행 | 있음 |
 | `scripts/gate/*.sh` | 언어별 게이트 | 있음 |
-| `scripts/dev/job.sh` | codex sub-agent job의 시작·상태·3분 주기 감시·종료. 시작 직후 로그를 검사해 잘못된 모델 id나 인증 실패를 즉시 알린다. 종료는 기록한 pid로만 한다 | Issue #33 |
-| `scripts/dev/worktree-sweep.sh` | 방치된 worktree를 안전 기준(미커밋·미push·main 포함·실행 중 job)으로 판정해 정리 | Issue #34 |
-| `scripts/dev/session-setup.sh` | 세션 시작 시 벤치 포트 예약·tmpfs 여유·측정 큐·로컬 패키지 상태를 한 번에 맞춘다 | Issue #35 |
-| `scripts/dev/release-check.sh` | 태그 전에 버전 동기화·릴리스 노트·패키지 메타데이터·배포 대상을 검사 | Issue #36 |
+| `scripts/dev/job.sh` | codex sub-agent job의 시작·상태·3분 주기 감시·종료. 시작 직후 로그를 검사해 잘못된 모델 id나 인증 실패를 즉시 알린다. 종료는 기록한 pid로만 한다 | 있음 |
+| `scripts/dev/worktree-sweep.sh` | 방치된 worktree를 안전 기준(미커밋·미push·main 포함·실행 중 job)으로 판정해 정리 | 있음 |
+| `scripts/dev/session-setup.sh` | 세션 시작 시 벤치 포트 예약·tmpfs 여유·측정 큐·로컬 패키지 상태를 한 번에 맞춘다 | 있음 |
+| `scripts/dev/release-check.sh` | 태그 전에 버전 동기화·릴리스 노트·패키지 메타데이터·배포 대상을 검사 | 있음 |
 | 벤치 결과 비교 도구 | 측정 두 벌을 시나리오 × payload 표(처리량·지연·비율·변화)로 낸다 | Issue #37 |
-| `scripts/dev/ci-watch.sh` | CI 감시자를 하나로 제한하고 10분 주기로 확인한다(GitHub API 한도) | Issue #38 |
+| `scripts/dev/ci-watch.sh` | CI 감시자를 하나로 제한하고 10분 주기로 확인한다(GitHub API 한도) | 있음 |
 
 원칙 셋을 이 스크립트들에 공통으로 적용한다.
 
