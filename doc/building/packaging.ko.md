@@ -17,7 +17,7 @@
 - .NET: `dotnet/vA.B.C`
 - C++ binding: `cpp/vA.B.C`
 
-Core 버전(`VERSION`)과 바인딩 버전은 독립적으로 관리한다.
+번호 규칙은 [버전 정책](./versioning.ko.md)이 소유한다: Core `MAJOR.MINOR`, binding `CORE_MAJOR.CORE_MINOR.N`, framework `MAJOR.MINOR.HOTFIX`.
 
 ## 3. GitHub Actions
 

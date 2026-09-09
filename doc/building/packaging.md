@@ -17,7 +17,7 @@
 - .NET: `dotnet/vA.B.C`
 - C++ binding: `cpp/vA.B.C`
 
-Core version (`VERSION`) and binding versions are managed independently.
+Number rules are owned by the [versioning policy](./versioning.md): Core `MAJOR.MINOR`, binding `CORE_MAJOR.CORE_MINOR.N`, framework `MAJOR.MINOR.HOTFIX`.
 
 ## 3. GitHub Actions
 

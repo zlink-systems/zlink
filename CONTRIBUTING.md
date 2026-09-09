@@ -175,6 +175,8 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - Commit message: `<module>: <one line>` plus a body with cause, fix, evidence numbers and
   gate results. Refactors keep their items (dead code removal / responsibility split /
   naming) distinguishable in the diff.
+- Number rules (Core `MAJOR.MINOR`, binding `CORE_MAJOR.CORE_MINOR.N`, framework `MAJOR.MINOR.HOTFIX`) are
+  owned by [`doc/building/versioning.md`](doc/building/versioning.md).
 - Version bump checklist (one commit):
   1. Edit only the root `VERSION` (Core) and `BINDINGS_VERSION` (binding and framework pins).
   2. Run `python3 scripts/local-package/sync-version.py --write`; it updates `core/CMakeLists.txt`,

@@ -167,6 +167,8 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   없으면 `main`에서 작업한다.
 - 커밋 메시지: `<모듈>: <한 줄 요약>` + 본문에 원인·수정·근거 수치·gate 결과. 리팩토링은 항목
   (불필요 코드 제거 / 책임 분리 / 명명)이 diff에서 구분되게 한다.
+- 번호 규칙(Core `MAJOR.MINOR`, binding `CORE_MAJOR.CORE_MINOR.N`, framework `MAJOR.MINOR.HOTFIX`)은
+  [`doc/building/versioning.ko.md`](doc/building/versioning.ko.md)가 소유한다.
 - 버전 범프 체크리스트(한 커밋에 모두):
   1. root `VERSION`(Core)과 `BINDINGS_VERSION`(binding·framework pin)만 수정한다.
   2. `python3 scripts/local-package/sync-version.py --write`로 `core/CMakeLists.txt`, 공개 헤더,

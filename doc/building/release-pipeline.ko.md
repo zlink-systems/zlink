@@ -46,7 +46,7 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
 
 ## 3. 배포 순서
 
-버전 파일은 `VERSION`(Core)과 `BINDINGS_VERSION`이며 `scripts/local-package/sync-version.py --write`가
+번호 규칙과 호환 관계는 [버전 정책](./versioning.ko.md)이 소유한다. 버전 파일은 `VERSION`(Core)과 `BINDINGS_VERSION`이며 `scripts/local-package/sync-version.py --write`가
 저장소 전체의 pin을 맞춘다. 순서는 항상 **Core → bindings 4언어 → framework 4언어**다. framework
 패키지는 공개된 binding 패키지를 pin으로 참조하므로 순서 역전은 허용하지 않는다.
 

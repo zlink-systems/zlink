@@ -46,7 +46,7 @@ scope. `core-conan-release.yml` is a legacy workflow for a private Conan remote 
 
 ## 3. Order
 
-`VERSION` (Core) and `BINDINGS_VERSION` are the version files; `scripts/local-package/sync-version.py
+Number rules and compatibility are owned by the [versioning policy](./versioning.md). `VERSION` (Core) and `BINDINGS_VERSION` are the version files; `scripts/local-package/sync-version.py
 --write` propagates pins across the repository. The order is always **Core → 4 bindings → 4
 frameworks**; framework packages pin the published binding packages, so the order never inverts.
 
