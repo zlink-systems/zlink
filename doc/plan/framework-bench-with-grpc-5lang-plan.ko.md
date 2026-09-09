@@ -1,3 +1,6 @@
+> **이 계획은 종료됐다(2026-09-07).** 결과 보고서·언어별 요약·측정 원본은 2026-09-09에 저장소에서 제거했고,
+> 후속은 [`framework-bench-with-grpc-s2s-plan.ko.md`](framework-bench-with-grpc-s2s-plan.ko.md)가 잇는다.
+
 # Framework gRPC 비교 bench 5언어 확장 캠페인 — .NET · Node · Java · Kotlin · C++
 
 > 작성일: 2026-09-06 23:10 (main `3c19ab456a`, 0.17.0)
@@ -188,7 +191,7 @@ Performance harness가 쓰는 구조를 따른다.
 ### Phase 0 — raw 소켓 통일과 기준선 확보 (완료 2026-09-07)
 
 **완료**. 커밋 `7ecb81a461`(ROUTER 통일·harness 결함 4건), `c67d677832`(경계 표본화·admission
-계측), 요약 [`fw-bench-worklog/bench-dotnet-summary.ko.md`](fw-bench-worklog/bench-dotnet-summary.ko.md).
+계측), 요약 `fw-bench-worklog/bench-dotnet-summary.ko.md`(2026-09-09 제거).
 
 이 단계는 기준선을 얻는 것이 목적이었으나, **bench가 동작하지 않는 상태였다는 사실을
 먼저 드러냈다.** 그 발견들이 Phase 1~5의 요구사항을 바꾸었으므로 아래에 남긴다.
@@ -225,8 +228,7 @@ Performance harness가 쓰는 구조를 따른다.
 - **실제 in-flight 깊이**를 처리량 × 평균 지연으로 계산해 함께 낸다. Phase 0에서 이 값이
   판정을 뒤집었다.
 
-판정 조건: Phase 0의 `gated2` 원본을 집계기에 넣었을 때 [`bench-dotnet-summary.ko.md`]
-(fw-bench-worklog/bench-dotnet-summary.ko.md)의 표와 같은 값이 나와야 한다. 다르면 채택하지 않는다.
+판정 조건: Phase 0의 `gated2` 원본을 집계기에 넣었을 때 `bench-dotnet-summary.ko.md`(2026-09-09 제거)의 표와 같은 값이 나와야 한다. 다르면 채택하지 않는다.
 
 ### Phase 2~5 공통 요구 (Phase 0이 추가한 것)
 

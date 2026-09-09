@@ -163,6 +163,6 @@ cd framework/bench/tools && python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
 `tests/test_acceptance_gated2.py`가 Phase 0 원본(`tests/fixtures/gated2/`)을 집계기에 넣어
-[`bench-dotnet-summary.ko.md`](../../../doc/plan/fw-bench-worklog/bench-dotnet-summary.ko.md)의
+1차 캠페인의 `.NET` 요약(2026-09-09 제거)의
 18셀, 행별 G5, 네 판정을 그대로 재현하는지 확인한다. `tests/test_normalization.py`는 Phase 0
 원본에 없는 경로(오염, 포화, 단위 판별 실패)를 다룬다.

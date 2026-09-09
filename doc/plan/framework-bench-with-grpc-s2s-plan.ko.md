@@ -23,7 +23,7 @@
 | Node framework 행 | codec `bytes` 미지원은 제품(framework Node codec) 결함이다. 수정 전까지 `unsupported`로 기록하고 codec 수정은 별도 작업 |
 | 보고서 | 새 공개 보고서를 쓰고 README와 zlink.systems에서 참조한다. 1차 결과는 병기하지 않는다 |
 | 버전 | 공개된 framework 0.10.0 + binding 0.17.6으로 시작하고, framework 0.11.0이 나오면 그 버전으로 다시 잰다 |
-| 1차 결과의 취급 | 1차(2026-09-07)는 binding 결함(.NET 깊이 8·Node 정지·Java reply 유실)이 window 셀을 무효로 만든 시점의 기록이다. 그 결함은 **Core·binding 0.17.5에서 모두 수정됐다**(사용자 확인). 비교 보고서에 1차 값을 쓰지 않고 `fw-bench-worklog/`에 그대로 둔다 |
+| 1차 결과의 취급 | 1차(2026-09-07)는 binding 결함(.NET 깊이 8·Node 정지·Java reply 유실)이 window 셀을 무효로 만든 시점의 기록이다. 그 결함은 **Core·binding 0.17.5에서 모두 수정됐다**(사용자 확인). 1차 보고서·언어별 요약·측정 원본은 **저장소에서 제거했다**(2026-09-09). 남긴 것은 1차 계획 문서와 `decisions.ko.md`의 결정 이력뿐이다 |
 | 측정 시점 | 공개 binding 0.17.6·framework 0.10.0으로 바로 잰다. 기다릴 외부 조건은 없다 |
 | 위치 | 언어별 `framework/languages/<lang>/bench/with-grpc/`에 흩어진 bench를 **`framework/bench/grpc/` 한 곳**으로 모은다. 문서·집계기·로그도 함께(§2.1) |
 
@@ -57,7 +57,7 @@
 | gRPC 대응 | client stub → server | A의 gRPC client stub → B |
 | 결과 수집 | client 출력 + server stats | A·B의 stats endpoint(이미 §9 포트에 있음) |
 
-### 1.2 언어별 구현 상태 (1차 캠페인 결과, `fw-bench-worklog/report-with-grpc-5lang.ko.md`)
+### 1.2 언어별 구현 상태 (1차 캠페인이 남긴 구현 상태; 1차 수치는 제거됨)
 
 | 언어 | grpc | zlink raw | zlink framework | 언어별 문서 | 상태 요약 |
 | --- | --- | --- | --- | --- | --- |
@@ -81,7 +81,7 @@
   sequence, 중복 trigger 처리, stats endpoint가 이미 설계·검증돼 있다.
 - 측정 티켓 큐(`scripts/perf/perf-ticket.sh`)와 고정 Core prefix(D-BP33·D-BP45). 측정 중
   Core를 다시 빌드하지 않는다.
-- 측정 원본 위치: `framework/languages/<lang>/bench/with-grpc/log/<stamp>/`(보고서 부록).
+- 측정 원본 위치는 `framework/bench/grpc/log/<lang>/<stamp>/`로 새로 정한다. 1차 원본은 제거했다.
 
 ### 1.4 알려진 결함과 차단 요인 (고치지 않으면 새 측정도 같은 자리에서 막힌다)
 
@@ -144,6 +144,7 @@ framework/bench/grpc/
   비교 보고서 링크를 넣는다.
 - `bindings/c/bench/BENCH_POLICY.md`는 C bench 정책이므로 C 기준 bench와 함께 옮기되 정책
   문장은 유지한다.
+- `framework/bench/tools/tests/fixtures/`의 1차 fixture는 집계기 테스트 입력이므로 유지한다.
 
 ## 3. 측정 모델 (규격 개정안의 핵심)
 
@@ -241,7 +242,8 @@ gRPC 구현의 A는 같은 HTTP trigger listener를 갖고, B로 향하는 unary
 5. 한계 — 로컬 loopback, 단일 머신, 기준선 불안정 등
 6. 원본 위치
 
-1차 보고서의 §8 "계측이 바로잡은 것"·§9 "한계" 중 공개 가치가 있는 것만 옮긴다.
+1차 보고서는 제거했으므로 새 보고서는 2차 측정만으로 쓴다. 계측 규칙(표본화 시점, 실험 분리)은
+규격 본문이 소유한다.
 
 ## 7. 측정 절차
 
