@@ -94,6 +94,12 @@ if(NOT TARGET libzlink)
     IMPORTED_LOCATION "${ZLINK_CORE_PACKAGE_PREFIX}/bin/zlink.dll"
     IMPORTED_IMPLIB "${ZLINK_CORE_PACKAGE_PREFIX}/lib/zlink.lib"
     INTERFACE_INCLUDE_DIRECTORIES "${ZLINK_CORE_PACKAGE_PREFIX}/include")
+  foreach(_zlink_config IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set_property(TARGET libzlink APPEND PROPERTY IMPORTED_CONFIGURATIONS "${_zlink_config}")
+    set_target_properties(libzlink PROPERTIES
+      IMPORTED_LOCATION_${_zlink_config} "${ZLINK_CORE_PACKAGE_PREFIX}/bin/zlink.dll"
+      IMPORTED_IMPLIB_${_zlink_config} "${ZLINK_CORE_PACKAGE_PREFIX}/lib/zlink.lib")
+  endforeach()
 endif()
 set(zlink_FOUND TRUE)
 '@.Replace("@CORE_PREFIX@", $CorePrefixCMake)
@@ -123,8 +129,11 @@ if (-not (Test-Path $Toolchain)) {
 
 $TestsEnabled = if ($IncludeTests) { "ON" } else { "OFF" }
 $E2EEnabled = if ($IncludeE2E) { "ON" } else { "OFF" }
+$ImportedConfigurationMaps = @("Debug", "Release", "RelWithDebInfo", "MinSizeRel") |
+    Where-Object { $_ -ne $Configuration } |
+    ForEach-Object { "-DCMAKE_MAP_IMPORTED_CONFIG_$($_.ToUpperInvariant())=$Configuration" }
 
-Invoke-ZlinkCMake -FailureMessage "C++ Framework configure failed" -Arguments @(
+$ConfigureArguments = @(
     "-S", $CppRoot, "-B", $BuildDir, "-G", "Visual Studio 17 2022", "-A", "x64",
     "-DCMAKE_TOOLCHAIN_FILE=$Toolchain",
     "-DVCPKG_INSTALLED_DIR=$VcpkgInstalledDir",
@@ -140,7 +149,8 @@ Invoke-ZlinkCMake -FailureMessage "C++ Framework configure failed" -Arguments @(
     "-DZLINK_FRAMEWORK_CPP_BUILD_E2E=$E2EEnabled",
     "-DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=ON",
     "-DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=ON"
-)
+) + $ImportedConfigurationMaps
+Invoke-ZlinkCMake -FailureMessage "C++ Framework configure failed" -Arguments $ConfigureArguments
 
 Invoke-ZlinkCMake -FailureMessage "C++ Framework build failed" -Arguments @(
     "--build", $BuildDir, "--config", $Configuration, "--parallel", "$Parallel"
