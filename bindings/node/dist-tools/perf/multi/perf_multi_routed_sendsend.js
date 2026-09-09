@@ -73,9 +73,13 @@ function sendPayload(socket, routerClient, payload) {
         ? sendRouted(socket, SERVER_ROUTING_ID, payload)
         : sendRouted(socket, payload);
 }
-async function sendServerReply(router, routingId, parts) {
+async function sendServerReply(received) {
     try {
-        await sendRouted(router, routingId, parts);
+        let reply = received.send();
+        for (const part of received.parts) {
+            reply = reply.message(part);
+        }
+        await reply.submit();
         return true;
     }
     catch (error) {
@@ -85,90 +89,6 @@ async function sendServerReply(router, routingId, parts) {
             return true;
         }
         throw error;
-    }
-}
-class RoutedReplySender {
-    router;
-    pendingHead;
-    pendingTail;
-    task;
-    failure;
-    pendingCount;
-    submitReply;
-    constructor(router, submitReply = sendServerReply) {
-        this.router = router;
-        this.pendingHead = null;
-        this.pendingTail = null;
-        this.task = null;
-        this.failure = null;
-        this.pendingCount = 0;
-        this.submitReply = submitReply;
-    }
-    enqueue(received) {
-        this.raiseIfFailed();
-        const reply = {
-            routingId: zlink.RoutingId.from(received.routingId.toBytes()),
-            parts: received.parts.map((part) => Buffer.from(part.data())),
-            next: null
-        };
-        if (this.pendingTail) {
-            this.pendingTail.next = reply;
-        }
-        else {
-            this.pendingHead = reply;
-        }
-        this.pendingTail = reply;
-        this.pendingCount += 1;
-        this.start();
-    }
-    raiseIfFailed() {
-        if (this.failure)
-            throw this.failure;
-    }
-    async drain() {
-        while (this.task) {
-            await this.task;
-        }
-        this.raiseIfFailed();
-    }
-    async drainUntil(deadlineNs, nowNs = currentEpochNs, yieldTurn = sleepImmediate) {
-        while (this.task && BigInt(nowNs()) < BigInt(deadlineNs)) {
-            await yieldTurn();
-        }
-        this.raiseIfFailed();
-        return this.task === null;
-    }
-    start() {
-        if (this.task || this.failure || !this.pendingHead)
-            return;
-        const task = this.sendPending();
-        this.task = task;
-        task.then(() => {
-            if (this.task !== task)
-                return;
-            this.task = null;
-            this.start();
-        }, (error) => {
-            if (this.task === task)
-                this.failure ??= error;
-        });
-    }
-    async sendPending() {
-        while (this.pendingHead) {
-            const reply = this.pendingHead;
-            await this.submitReply(this.router, reply.routingId, reply.parts);
-            this.pendingHead = reply.next;
-            if (!this.pendingHead)
-                this.pendingTail = null;
-            this.pendingCount -= 1;
-        }
-    }
-}
-async function waitForReplyAdmissionOrStop({ replies, stopSignal, progress = () => { }, yieldTurn = sleepImmediate }) {
-    while (replies.pendingCount > 0 && !stopSignal.aborted) {
-        progress();
-        await yieldTurn();
-        replies.raiseIfFailed();
     }
 }
 async function runRoutedSendSendRounds({ sockets, payloads, measurementRecords, routerClient, msgSize, runId, activeStopNs, sendDrainStopNs, replyDrain = null, submit = sendPayload, drainReplies = async (_timeoutMs = 0) => { }, yieldTurn = sleepImmediate, nowNs = currentEpochNs }) {
@@ -399,7 +319,8 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
     const router = zlink.createRouterSocket(ctx);
     const poller = zlink.createPoller();
     const received = new zlink.Received();
-    const replies = new RoutedReplySender(router);
+    const pendingTasks = new Set();
+    let sendFailure = null;
     let replyBatchCount = 0;
     let pollBuffer = null;
     let rl = null;
@@ -443,32 +364,25 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
                         const partSizes = received.parts.map((part) => part.data().length).join(',');
                         throw new Error(`invalid multipart echo request: expected=${expectedParts}, sizes=${partSizes}`);
                     }
-                    // Capture one immutable snapshot for the single sender.
-                    replies.enqueue(received);
-                    // Preserve Core receive backpressure like the C relay: do not move
-                    // another request into the application FIFO until this reply is
-                    // admitted. STOP remains able to interrupt this wait so the existing
-                    // bounded shutdown drain owns the final pending admission.
-                    await waitForReplyAdmissionOrStop({
-                        replies,
-                        stopSignal: stopController.signal,
-                        progress: () => { waitPollerOne(poller, pollBuffer, 0); }
-                    });
-                    replies.raiseIfFailed();
-                    if (stopController.signal.aborted)
-                        break;
+                    // Submit every reply through the public async terminal. Core and the
+                    // binding own backpressure and ordering; this Set observes terminal
+                    // lifetime only and never stores a retry payload or serializes sends.
+                    const task = sendServerReply(received);
+                    trackPendingReplyTask(pendingTasks, task, (error) => { sendFailure ??= error; });
                     replyBatchCount += 1;
                     if (replyBatchCount === ASYNC_PROGRESS_BATCH) {
                         replyBatchCount = 0;
-                        // This is only a scheduler fairness budget. It neither caps the
-                        // pending FIFO nor changes its one-at-a-time admission rule.
+                        // Let Promise continuations reap settled tasks without imposing an
+                        // application reply window; the binding owns WRITABLE retries.
                         await sleepImmediate();
-                        replies.raiseIfFailed();
+                        if (sendFailure)
+                            throw sendFailure;
                     }
                 }
             }
             await sleepImmediate();
-            replies.raiseIfFailed();
+            if (sendFailure)
+                throw sendFailure;
         }
         // Node SEND admission is asynchronous: sendRouted() returns the Promise
         // from op.submit(). STOP therefore does not block the event loop, but an
@@ -477,9 +391,15 @@ async function runRoutedSendSendServer({ options, pattern, family }) {
         // drain as the C relay, while reserving time for socket/context teardown.
         const drainMs = relayShutdownDrainMs();
         const drainDeadlineNs = currentEpochNs() + BigInt(drainMs) * 1000000n;
-        if (!(await replies.drainUntil(drainDeadlineNs))) {
+        while (pendingTasks.size > 0 && currentEpochNs() < drainDeadlineNs) {
+            waitPollerOne(poller, pollBuffer, 0);
+            await sleepImmediate();
+            if (sendFailure)
+                throw sendFailure;
+        }
+        if (pendingTasks.size > 0) {
             console.error('[perf-multi-relay] shutdown drain expired '
-                + `window_ms=${drainMs} pending_replies=${replies.pendingCount}`);
+                + `window_ms=${drainMs} pending_replies=${pendingTasks.size}`);
             console.error('[perf-multi-relay] reply abandoned after shutdown drain; '
                 + 'socket close will terminate its admission Promise');
         }
@@ -498,8 +418,7 @@ module.exports = {
     runRoutedSendSendRounds,
     runRoutedSendSendClient,
     runRoutedSendSendServer,
-    RoutedReplySender,
     relayShutdownDrainMs,
-    trackPendingReplyTask,
-    waitForReplyAdmissionOrStop
+    sendServerReply,
+    trackPendingReplyTask
 };
