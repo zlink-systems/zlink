@@ -532,6 +532,13 @@ void zlink::socket_base_t::event_handshake_failed_no_detail (
     event_scalar (endpoint_uri_pair_, ZLINK_EVENT_HANDSHAKE_FAILED_NO_DETAIL, static_cast<uint64_t> (err_));
 }
 
+void zlink::socket_base_t::event_handshake_failed_auth (
+  const endpoint_uri_pair_t &endpoint_uri_pair_, int err_)
+{
+    event_scalar (endpoint_uri_pair_, ZLINK_EVENT_HANDSHAKE_FAILED_AUTH,
+                  static_cast<uint64_t> (err_));
+}
+
 void zlink::socket_base_t::event_handshake_failed_protocol (
   const endpoint_uri_pair_t &endpoint_uri_pair_, int err_)
 {

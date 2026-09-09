@@ -713,6 +713,7 @@ class socket_base_t : public own_t,
                              uint64_t transport_pair_id_ = 0,
                              uint64_t transport_pair_generation_ = 0);
     void event_handshake_failed_no_detail (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
+    void event_handshake_failed_auth (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
     void event_handshake_failed_protocol (const endpoint_uri_pair_t &endpoint_uri_pair_, int err_);
     void event_connection_ready_changed (const endpoint_uri_pair_t &endpoint_uri_pair_,
                                          const unsigned char *routing_id_,
