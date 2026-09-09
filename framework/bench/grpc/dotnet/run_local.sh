@@ -205,9 +205,20 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     value = json.load(handle)
-completed = value["cells"][0]["completed"]
-received = value["cells"][0]["target_stats"]["received"]
-if completed != received:
+cell = value["cells"][0]
+completed = int(cell["completed"])
+submitted = int(cell.get("submitted", completed))
+errors = int(cell.get("errors", 0))
+abandoned = int(cell.get("abandoned", 0))
+received = int(cell["target_stats"]["received"])
+# B may receive requests that A submitted but never completed (abandoned after the
+# active window, spec 5.2) or that failed at A after reaching B. B can never receive
+# more than A submitted, nor fewer than A completed.
+if received > submitted or received < completed:
+    raise SystemExit(
+        f"request count mismatch: source submitted={submitted} completed={completed} "
+        f"errors={errors} abandoned={abandoned}, target received={received}")
+if errors == 0 and abandoned == 0 and completed != received:
     raise SystemExit(f"request count mismatch: source completed={completed}, target received={received}")
 PY
 }
