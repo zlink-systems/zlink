@@ -278,6 +278,77 @@ sticky LB · WebSocket 서버 · pub/sub 경유 · 분산 락 · service discove
 | 주문 워크플로 | 주문 접수 → 단계별 처리 → 상태 변경 → 알림 | 분산 락 없는 주문 단위 직렬 처리 |
 | 배송·배차 | 배차 요청 → 배정·수락 → 상태 추적 → 실시간 push | 배차 상태의 직렬 처리, 실시간 위치 push |
 
+## 설치
+
+배포된 패키지만으로 시작한다. framework 패키지가 맞는 binding(Core 엔진 포함)을 함께
+설치하므로 Core를 따로 빌드하지 않는다. 현재 버전은 framework 0.11, binding 0.17.6이다.
+지원 플랫폼은 linux-x64 · linux-arm64 · macos-arm64 · windows-x64 · windows-arm64다.
+
+=== "C#/.NET"
+
+    ```bash
+    dotnet add package Zlink                       # Core 메시징 엔진(.NET binding)
+    dotnet add package Zlink.Framework             # 계약과 runtime
+    dotnet add package Zlink.Framework.AspNetCore  # DI·hosted service 등록
+    ```
+
+    ```csharp
+    builder.Services.AddZLinkFramework(options =>
+    {
+        options.AddHandlersFromAssemblyOf<Program>();
+        options.AddRouteMesh("services").Listen("tcp://0.0.0.0:7101")
+            .Channel("greeting").Server();
+    });
+    ```
+
+    이어서 [설치와 첫 동작](dotnet/guide/server/02-getting-started.ko.md).
+
+=== "C++"
+
+    ```cmake
+    find_package(zlink CONFIG REQUIRED)            # Core: vcpkg `zlink` 또는 Conan `zlink`
+    find_package(zlink_framework CONFIG REQUIRED)  # Framework: vcpkg overlay port `zlink-framework`
+    target_link_libraries(app PRIVATE zlink::framework)
+    ```
+
+    Core는 vcpkg·Conan 레시피로, framework는 GitHub Release의 source archive 또는 저장소의
+    vcpkg overlay port로 설치한다. IDE는 `CMakePresets.json`의 preset(`vs2022`, `windows-ninja`,
+    `linux-ninja`, `macos-ninja`)으로 연다. 이어서 [설치와 첫 동작](cpp/guide/server/02-getting-started.ko.md).
+
+=== "Java"
+
+    ```kotlin
+    dependencies {
+        implementation("systems.zlink:zlink-framework-core")                // 계약과 runtime
+        implementation("systems.zlink:zlink-framework-spring-boot-starter") // DI·수명주기 등록
+    }
+    ```
+
+    Spring Boot auto-configuration이 host를 Bean으로 올린다. 이어서
+    [설치와 첫 동작](java/guide/server/02-getting-started.ko.md).
+
+=== "Kotlin"
+
+    ```kotlin
+    dependencies {
+        implementation("systems.zlink:zlink-framework-core")
+        implementation("systems.zlink:zlink-framework-spring-boot-starter")
+        implementation("systems.zlink:zlink-framework-kotlin")              // coroutine idiom
+    }
+    ```
+
+    이어서 [설치와 첫 동작](kotlin/guide/server/02-getting-started.ko.md).
+
+=== "Node/TypeScript"
+
+    ```bash
+    npm install @zlink-systems/framework   # 계약과 runtime (binding @zlink-systems/zlink 포함)
+    npm install @zlink-systems/nestjs      # DI·모듈 등록
+    ```
+
+    NestJS 없이 쓰려면 framework 패키지만 설치하고 host를 직접 시작한다. 이어서
+    [설치와 첫 동작](node/guide/server/02-getting-started.ko.md).
+
 ## 언어 선택
 
 가이드는 **언어마다 한 벌씩 완결되어 있다.** 고른 언어의 가이드 안에는 그 언어의 코드만
