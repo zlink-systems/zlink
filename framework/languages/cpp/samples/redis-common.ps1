@@ -36,7 +36,7 @@ function Get-ZlinkSamplePorts {
     $used = [System.Collections.Generic.HashSet[int]]::new()
     try {
         foreach ($candidate in $candidates) {
-            $ports = if ($offset) { @($candidate, $candidate + $offset) } else { @($candidate) }
+            $ports = if ($offset) { @($candidate, ($candidate + $offset)) } else { @($candidate) }
             if (@($ports | Where-Object {
                 $_ -gt $script:ZlinkCppSampleAppPortMax -or $used.Contains($_)
             }).Count) {
