@@ -275,6 +275,7 @@ contract first, then select a language implementation.
 | Read the formal Binding contracts | [Bindings specification](https://zlink.systems/bindings/spec/) |
 | Understand Framework and its use cases | [Framework guide](https://zlink.systems/) (chapter 1 of each language's server guide) |
 | Read the formal Framework contract | [Common Framework specification](https://zlink.systems/common/spec/server/) |
+| Messaging performance against gRPC | [gRPC comparison report](https://zlink.systems/bench/comparison/) (the specification and per-language bench pages sit in the same Bench section) |
 | Framework internals and exact interfaces | [Per-language specifications](https://zlink.systems/common/spec/server/) (source: `framework/doc/framework/common/spec/`) |
 | Build and test Core from source | [Core build guide](./doc/building/build-guide.md) |
 | Build local Core and Binding packages from the current source | [Local package guide](./scripts/local-package/README.ko.md) |

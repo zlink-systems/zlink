@@ -262,6 +262,7 @@ Framework sample은 단순 API 호출뿐 아니라 여러 역할의 server와 cl
 | Binding 정식 계약 | [Bindings 스펙](https://zlink.systems/ko/bindings/spec/) |
 | Framework 개념과 사용 상황 | [Framework 가이드](https://zlink.systems/ko/) (언어별 서버 가이드 1장 개요) |
 | Framework 정식 계약 | [Framework 공통 스펙](https://zlink.systems/ko/common/spec/server/) |
+| gRPC와의 messaging 성능 비교 | [gRPC 비교 보고서](https://zlink.systems/ko/bench/comparison/) (규격·언어별 bench 문서는 같은 Bench 절) |
 | Framework 내부 구조·exact interface | [언어별 스펙](https://zlink.systems/ko/common/spec/server/) (저장소 원본: `framework/doc/framework/common/spec/`) |
 | Core를 소스에서 빌드하고 테스트 | [Core 빌드 가이드](./doc/building/build-guide.ko.md) |
 | 현재 source로 Core와 Bindings local package 생성 | [Local package 가이드](./scripts/local-package/README.ko.md) |
