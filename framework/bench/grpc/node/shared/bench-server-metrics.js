@@ -49,6 +49,14 @@ class BenchServerMetrics {
     const cpu = process.cpuUsage(this._cpuStart);
     const samples = this._latencyNs.slice().sort((a, b) => a - b);
     return {
+      ready: true,
+      phase: 'idle',
+      submitted: 0,
+      completed: this._activeMessages,
+      received: this._activeMessages,
+      currentInFlight: 0,
+      inFlight: 0,
+      peakInFlight: 0,
       activeMessages: this._activeMessages,
       errors: this._errors,
       meanMicros: mean(samples) / 1000,

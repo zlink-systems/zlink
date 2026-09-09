@@ -1,39 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 'use strict';
 
-// Pattern drivers shared by every implementation in the node row.
-//
-// Each driver returns a cell record in the `with-grpc-cell-v1` shape the shared
-// aggregator reads (FB-021). Nothing here decides a verdict: medians, G5 and the
-// section 7.2 ratios belong to framework/bench/grpc/tools, never to a language harness.
-
+const os = require('node:os');
 const { performance } = require('node:perf_hooks');
 const header = require('../shared/bench-metric-header');
 
-const LOGICAL_CORES = require('node:os').cpus().length;
-
-/**
- * spec section 5.1 / FB-023: a harness declares WHAT IT MEASURES as well as the
- * ceiling, because the right instrument differs by language.
- *
- * Counting process cores is wrong for node. The ZLink binding runs native I/O
- * threads, so process CPU divided by elapsed time reads 1.3-1.4 "cores" on this
- * client -- above a ceiling of 1 -- while those threads run no user code at all.
- * Against that ceiling every cell would be marked saturated and the mark would
- * carry no information (FB-019 declared the ceiling correctly and the instrument
- * incorrectly).
- *
- * What actually limits this client is the one JS thread where user code runs, and
- * `performance.eventLoopUtilization()` measures exactly that: the fraction of
- * wall time the loop spent in callbacks rather than idle. Its ceiling is 1.0 and
- * a cell at or above 0.95 measured the client runtime, not the transport, so the
- * aggregator drops it from throughput comparisons. That is the correct outcome
- * for a single-threaded client -- not a defect to engineer around by adding
- * worker threads, which would measure a different client.
- *
- * `client_cores` is still reported beside it as an observation. It is not the
- * declared instrument and does not decide saturation.
- */
+const LOGICAL_CORES = os.cpus().length;
 const CLIENT_SATURATION_METRIC = 'event_loop_utilization';
 const CLIENT_PARALLELISM_CEILING = 1.0;
 
@@ -47,8 +19,7 @@ class ResourceSample {
   finish() {
     const cpu = process.cpuUsage(this.cpuStart);
     const elu = performance.eventLoopUtilization(this.eluStart);
-    const elapsedNs = header.nowNs() - this.startNs;
-    const elapsedSeconds = Number(elapsedNs) / 1e9;
+    const elapsedSeconds = Number(header.nowNs() - this.startNs) / 1e9;
     const cpuSeconds = (cpu.user + cpu.system) / 1e6;
     const cores = elapsedSeconds > 0 ? cpuSeconds / elapsedSeconds : 0;
     return {
@@ -56,38 +27,75 @@ class ResourceSample {
       elapsedSeconds,
       cores,
       cpuPercent: (cores / LOGICAL_CORES) * 100,
-      // FB-023: the declared saturation instrument for this language.
       eventLoopUtilization: elu.utilization,
       memoryMb: process.memoryUsage().rss / 1024 / 1024
     };
   }
 }
 
-class Latencies {
-  constructor(limit) {
-    this.limit = limit;
+class SourceMetrics {
+  constructor(sampleLimit) {
+    this.sampleLimit = sampleLimit;
+    this.reset();
+  }
+
+  reset() {
+    this.submitted = 0;
+    this.completed = 0;
+    this.errors = 0;
+    this.inFlight = 0;
+    this.peakInFlight = 0;
+    this.abandoned = 0;
+    this.sampleCount = 0;
+    this.sampleSumMicros = 0;
     this.samples = [];
   }
 
-  add(micros) {
-    if (this.samples.length < this.limit) this.samples.push(micros);
+  begin() {
+    this.submitted += 1;
+    this.inFlight += 1;
+    this.peakInFlight = Math.max(this.peakInFlight, this.inFlight);
+    return header.nowNs();
   }
 
-  summary() {
-    const sorted = this.samples.slice().sort((a, b) => a - b);
+  complete(started, success) {
+    const micros = Number(header.nowNs() - started) / 1000;
+    this.inFlight -= 1;
+    if (success) this.completed += 1;
+    else this.errors += 1;
+    this.sampleCount += 1;
+    this.sampleSumMicros += micros;
+    if (this.samples.length < this.sampleLimit) this.samples.push(micros);
+  }
+
+  recordAbandoned(count) {
+    this.abandoned = Math.max(this.abandoned, count);
+  }
+
+  snapshot() {
     return {
-      mean: mean(sorted),
-      p95: percentile(sorted, 0.95),
-      p99: percentile(sorted, 0.99)
+      submitted: this.submitted,
+      completed: this.completed,
+      errors: this.errors,
+      received: 0,
+      inFlight: this.inFlight,
+      peakInFlight: this.peakInFlight
     };
   }
-}
 
-function mean(sorted) {
-  if (sorted.length === 0) return 0;
-  let total = 0;
-  for (const value of sorted) total += value;
-  return total / sorted.length;
+  result() {
+    const sorted = this.samples.slice().sort((a, b) => a - b);
+    return {
+      completed: this.completed,
+      errors: this.errors,
+      inFlight: this.inFlight,
+      peakInFlight: this.peakInFlight,
+      abandoned: this.abandoned,
+      meanMicros: this.sampleCount === 0 ? 0 : this.sampleSumMicros / this.sampleCount,
+      p95Micros: percentile(sorted, 0.95),
+      p99Micros: percentile(sorted, 0.99)
+    };
+  }
 }
 
 function percentile(sorted, fraction) {
@@ -96,59 +104,21 @@ function percentile(sorted, fraction) {
   return sorted[Math.min(Math.max(index, 0), sorted.length - 1)];
 }
 
-function elapsedMicros(startNs) {
-  return Number(header.nowNs() - startNs) / 1000;
-}
-
-async function resetServer(statsUrl) {
-  const response = await fetch(`${statsUrl}/bench/reset`, { method: 'POST' });
-  if (!response.ok) throw new Error(`reset ${statsUrl} failed: ${response.status}`);
-}
-
-async function serverStats(statsUrl) {
-  const response = await fetch(`${statsUrl}/bench/stats`);
-  if (!response.ok) throw new Error(`stats ${statsUrl} failed: ${response.status}`);
-  return response.json();
-}
-
-/**
- * spec section 3 / FB-008 settle: no fixed sleep. Poll the server's received count
- * until it stops moving, bounded. On bound expiry the caller marks the next cell
- * that uses this same server contaminated and excludes it, rather than measuring
- * a cell that is standing behind the previous cell's backlog.
- */
-async function waitForServerDrain(statsUrl, quietMs, boundMs) {
-  const startNs = header.nowNs();
-  let latest = null;
-  let lastCount = -1;
-  let lastChangeMs = 0;
-  for (;;) {
-    const elapsed = Number(header.nowNs() - startNs) / 1e6;
-    if (elapsed >= boundMs) {
-      return { snapshot: latest, drainMs: elapsed, boundHit: true };
-    }
-    latest = await serverStats(statsUrl);
-    const count = latest.activeMessages + latest.errors;
-    if (count !== lastCount) {
-      lastCount = count;
-      lastChangeMs = Number(header.nowNs() - startNs) / 1e6;
-    } else if (Number(header.nowNs() - startNs) / 1e6 - lastChangeMs >= quietMs) {
-      return { snapshot: latest, drainMs: Number(header.nowNs() - startNs) / 1e6, boundHit: false };
-    }
-    await delay(10);
-  }
-}
-
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Bounded route-readiness probe. A ROUTER addressing a peer by routing id fails
- * until that peer's id is in the local routing map, so every socket is probed
- * ONCE, before warmup. It never runs inside a measured window and it is not a
- * retry: the reset that opens the active phase happens after it returns.
- */
+async function resetTarget(statsUrl) {
+  const response = await fetch(`${statsUrl}/bench/reset`, { method: 'POST' });
+  if (!response.ok) throw new Error(`target reset failed: ${response.status}`);
+}
+
+async function targetStats(statsUrl) {
+  const response = await fetch(`${statsUrl}/bench/stats`);
+  if (!response.ok) throw new Error(`target stats failed: ${response.status}`);
+  return response.json();
+}
+
 async function waitForRouteReady(probe, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let last = null;
@@ -161,305 +131,205 @@ async function waitForRouteReady(probe, timeoutMs) {
       await delay(20);
     }
   }
-  throw new Error(`route not ready within ${timeoutMs}ms: ${last && last.message}`);
+  throw new Error(`target route did not become ready within ${timeoutMs}ms: ${last && last.message}`);
 }
 
-/** `request-serial`: one outstanding request, next one submitted after the reply. */
-async function runRequestSerial({ payloadSize, options, statsUrl, operation }) {
-  for (let i = 0; i < options.warmup; i++) {
-    await operation(payloadSize, header.PHASE_WARMUP, i);
+function headerRunId(runId) {
+  let hash = 2166136261;
+  for (const value of Buffer.from(runId, 'utf8')) {
+    hash = Math.imul(hash ^ value, 16777619) >>> 0;
   }
-  await resetServer(statsUrl);
+  return hash === 0 ? 1 : hash;
+}
 
-  const latencies = new Latencies(options.latencySampleLimit);
-  let completed = 0;
-  let errors = 0;
-  let sequence = 0;
-  const resources = new ResourceSample();
-  const startNs = header.nowNs();
-  const activeUntilNs = startNs + BigInt(Math.round(options.durationSeconds * 1e9));
-
-  while (header.nowNs() < activeUntilNs) {
-    const index = sequence++;
-    const t0 = header.nowNs();
-    try {
-      await operation(payloadSize, header.PHASE_ACTIVE, index);
-      completed += 1;
-    } catch (error) {
-      errors += 1;
+async function runWarmup(transport, options, trigger) {
+  const runId = headerRunId(trigger.runId);
+  for (let index = 0; index < options.warmup; index++) {
+    const stream = trigger.pattern === 'send-saturation'
+      ? index % trigger.sendConcurrency
+      : 0;
+    const payload = header.createPayloadBytes(
+      trigger.payloadBytes, runId, header.PHASE_WARMUP, index
+    );
+    if (trigger.pattern === 'send-saturation') await transport.send(stream, payload);
+    else {
+      const reply = await transport.request(stream, payload);
+      validateReply(reply, runId, header.PHASE_WARMUP, trigger.payloadBytes, index);
     }
-    latencies.add(elapsedMicros(t0));
+  }
+}
+
+async function runActive(transport, metrics, options, trigger) {
+  await resetTarget(options.targetStatsUrl);
+  metrics.reset();
+  const resources = new ResourceSample();
+  const deadline = header.nowNs() + BigInt(Math.round(trigger.durationMs * 1e6));
+  const runId = headerRunId(trigger.runId);
+  let sequence = 0;
+  const nextSequence = () => sequence++;
+
+  if (trigger.pattern === 'request-serial') {
+    await requestWorkers(1, transport, metrics, trigger, runId, nextSequence, deadline);
+  } else if (trigger.pattern === 'request-window') {
+    await requestWorkers(
+      trigger.requestWindow, transport, metrics, trigger, runId, nextSequence, deadline
+    );
+  } else if (trigger.pattern === 'request-backpressure') {
+    await requestBackpressure(
+      transport, metrics, options, trigger, runId, nextSequence, deadline
+    );
+  } else if (trigger.pattern === 'send-saturation') {
+    await sendWorkers(
+      trigger.sendConcurrency, transport, metrics, trigger, runId, nextSequence, deadline
+    );
+  } else {
+    throw new Error(`unsupported pattern ${trigger.pattern}`);
   }
 
   const usage = resources.finish();
-  const server = await serverStats(statsUrl);
-  return finishRequestCell({
-    payloadSize, options, usage, server, latencies, completed, errors,
-    peakInFlight: 1, abandoned: 0
-  });
-}
-
-/**
- * `request-window`: up to `request_window` outstanding requests at a time.
- *
- * Admission is a counter, not a scan over a pending list: FB-010 showed an
- * O(window) drain scan capping the submit rate so hard that the .NET raw row
- * held 8 requests against a configured window of 100. `peak_in_flight` and the
- * abandoned count are reported per cell (FB-017) because that pair is what
- * separates "the harness cannot fill the window" from "the stack only reaches
- * this depth"; without it a wrong premise survives.
- */
-async function runRequestWindow({ payloadSize, options, statsUrl, operation }) {
-  for (let i = 0; i < options.warmup; i++) {
-    await operation(payloadSize, header.PHASE_WARMUP, i);
-  }
-  await resetServer(statsUrl);
-
-  const latencies = new Latencies(options.latencySampleLimit);
-  let inFlight = 0;
-  let peakInFlight = 0;
-  let completed = 0;
-  let errors = 0;
-  let sequence = 0;
-  let wakeSlot = null;
-
-  const releaseSlot = () => {
-    inFlight -= 1;
-    if (wakeSlot !== null) {
-      const resume = wakeSlot;
-      wakeSlot = null;
-      resume();
-    }
-  };
-
-  const resources = new ResourceSample();
-  const startNs = header.nowNs();
-  const activeUntilNs = startNs + BigInt(Math.round(options.durationSeconds * 1e9));
-
-  while (header.nowNs() < activeUntilNs) {
-    if (inFlight >= options.requestWindow) {
-      await new Promise((resolve) => { wakeSlot = resolve; });
-      continue;
-    }
-    inFlight += 1;
-    if (inFlight > peakInFlight) peakInFlight = inFlight;
-    const index = sequence++;
-    const t0 = header.nowNs();
-    operation(payloadSize, header.PHASE_ACTIVE, index).then(
-      () => { completed += 1; latencies.add(elapsedMicros(t0)); },
-      () => { errors += 1; latencies.add(elapsedMicros(t0)); }
-    ).then(releaseSlot, releaseSlot);
-  }
-
-  // Settle the requests already in flight. Bounded; whatever is still
-  // outstanding at the bound is counted as abandoned rather than dropped.
-  const settleDeadline = Date.now() + options.windowSettleMs;
-  while (inFlight > 0 && Date.now() < settleDeadline) {
-    await delay(1);
-  }
-  const abandoned = inFlight;
-  if (abandoned > 0) errors += abandoned;
-
-  const usage = resources.finish();
-  const server = await serverStats(statsUrl);
-  return finishRequestCell({
-    payloadSize, options, usage, server, latencies, completed, errors,
-    peakInFlight, abandoned
-  });
-}
-
-/**
- * `request-backpressure` (spec 2): no application ceiling on outstanding
- * requests.
- *
- * This is the COOPERATIVE-YIELD variant. Node's public async request terminal
- * absorbs admission backpressure -- it waits for the WRITABLE token inside the
- * terminal and resubmits -- so nothing here can submit "until refused". What it
- * does instead is submit continuously and hand the turn to the completion pump
- * after every submission. Depth then settles where the submission and
- * completion rates balance, and that settled depth is the result (spec 5.2),
- * not a number this harness chose.
- *
- * The yield is not optional: without it this loop would never let a reply be
- * counted and would report enormous depth instead of a working point.
- */
-async function runRequestBackpressure({ payloadSize, options, statsUrl, operation }) {
-  for (let i = 0; i < options.warmup; i++) {
-    await operation(payloadSize, header.PHASE_WARMUP, i);
-  }
-  await resetServer(statsUrl);
-
-  const latencies = new Latencies(options.latencySampleLimit);
-  let inFlight = 0;
-  let peakInFlight = 0;
-  let completed = 0;
-  let errors = 0;
-  let sequence = 0;
-
-  const resources = new ResourceSample();
-  const startNs = header.nowNs();
-  const activeUntilNs = startNs + BigInt(Math.round(options.durationSeconds * 1e9));
-
-  const release = () => { inFlight -= 1; };
-
-  while (header.nowNs() < activeUntilNs) {
-    inFlight += 1;
-    if (inFlight > peakInFlight) peakInFlight = inFlight;
-    const index = sequence++;
-    const t0 = header.nowNs();
-    operation(payloadSize, header.PHASE_ACTIVE, index).then(
-      () => { completed += 1; latencies.add(elapsedMicros(t0)); },
-      () => { errors += 1; latencies.add(elapsedMicros(t0)); }
-    ).then(release, release);
-    // The cooperative yield. One macrotask turn lets every ready completion be
-    // counted before the next submission.
-    await new Promise((resolve) => { setImmediate(resolve); });
-  }
-
-  const settleDeadline = Date.now() + options.windowSettleMs;
-  while (inFlight > 0 && Date.now() < settleDeadline) {
-    await delay(1);
-  }
-  const abandoned = inFlight;
-  if (abandoned > 0) errors += abandoned;
-
-  const usage = resources.finish();
-  const server = await serverStats(statsUrl);
-  return finishRequestCell({
-    payloadSize, options, usage, server, latencies, completed, errors,
-    peakInFlight, abandoned, requestWindow: 0
-  });
-}
-
-function finishRequestCell({
-  payloadSize, options, usage, server, latencies, completed, errors, peakInFlight, abandoned,
-  requestWindow
-}) {
-  const seconds = Math.max(1e-9, options.durationSeconds);
-  const throughput = completed / seconds;
-  const summary = latencies.summary();
+  const target = await targetStats(options.targetStatsUrl);
+  const source = metrics.result();
+  const send = trigger.pattern === 'send-saturation';
+  const completed = send ? target.received : source.completed;
+  const seconds = trigger.durationMs / 1000;
+  const meanMicros = send ? target.meanMicros : source.meanMicros;
+  const p95Micros = send ? target.p95Micros : source.p95Micros;
+  const p99Micros = send ? target.p99Micros : source.p99Micros;
+  const throughput = completed / Math.max(0.001, seconds);
   return {
+    completed: source.completed,
+    errors: source.errors,
+    server_errors: target.errors,
     throughput_per_second: throughput,
-    bandwidth_mb_s: (throughput * payloadSize) / 1e6,
-    latency_mean_ms: summary.mean / 1000,
-    latency_p95_ms: summary.p95 / 1000,
-    latency_p99_ms: summary.p99 / 1000,
+    bandwidth_mb_s: throughput * trigger.payloadBytes / 1_000_000,
+    latency_mean_ms: meanMicros / 1000,
+    latency_p95_ms: p95Micros / 1000,
+    latency_p99_ms: p99Micros / 1000,
     client_cpu_percent: usage.cpuPercent,
     client_memory_mb: usage.memoryMb,
-    server_cpu_percent: (server.cpuSeconds / usage.elapsedSeconds / LOGICAL_CORES) * 100,
-    server_memory_mb: server.workingSetMb,
+    server_cpu_percent: target.cpuSeconds / Math.max(0.001, seconds) / LOGICAL_CORES * 100,
+    server_memory_mb: target.workingSetMb,
     client_cores: usage.cores,
+    client_parallelism_ceiling: CLIENT_PARALLELISM_CEILING,
     client_saturation_metric: CLIENT_SATURATION_METRIC,
     event_loop_utilization: usage.eventLoopUtilization,
-    client_parallelism_ceiling: CLIENT_PARALLELISM_CEILING,
-    peak_in_flight: peakInFlight,
-    // 0 means no imposed ceiling (spec 2 request-backpressure).
-    request_window: requestWindow === undefined ? options.requestWindow : requestWindow,
-    abandoned,
-    errors,
-    completed
+    peak_in_flight: source.peakInFlight,
+    request_window: trigger.pattern === 'request-window' ? trigger.requestWindow : null,
+    abandoned: source.abandoned,
+    server_received_at_close: send ? target.received : null
   };
 }
 
-/**
- * `send-saturation`. spec section 5 / G3: throughput is what the SERVER received
- * during the active phase.
- *
- * FB-013: the snapshot is taken AT THE ACTIVE-WINDOW BOUNDARY. Reading it after
- * the drain counts messages that landed seconds after the window closed and
- * reports the client's submit rate as the server's consumption rate; on .NET
- * that inflated the framework row 4.2x and manufactured a 2.8x advantage over
- * gRPC that vanished once corrected. The drain still runs, purely as settle and
- * contamination detection (FB-008), and its observed time is reported per cell.
- */
-async function runSendSaturation({ payloadSize, options, statsUrl, operation }) {
-  for (let i = 0; i < options.warmup; i++) {
-    await operation(payloadSize, header.PHASE_WARMUP, i);
-  }
-  await resetServer(statsUrl);
-
-  const latencies = new Latencies(options.latencySampleLimit);
-  let submitted = 0;
-  let errors = 0;
-  let inFlight = 0;
-  let peakInFlight = 0;
-  const resources = new ResourceSample();
-  const startNs = header.nowNs();
-  const activeUntilNs = startNs + BigInt(Math.round(options.durationSeconds * 1e9));
-
-  const worker = async () => {
-    while (header.nowNs() < activeUntilNs) {
-      const index = submitted++;
-      const t0 = header.nowNs();
-      inFlight += 1;
-      if (inFlight > peakInFlight) peakInFlight = inFlight;
-      try {
-        await operation(payloadSize, header.PHASE_ACTIVE, index);
-      } catch (error) {
-        errors += 1;
-      } finally {
-        inFlight -= 1;
-      }
-      latencies.add(elapsedMicros(t0));
+async function requestWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
+  const workers = Array.from({ length: count }, () => (async () => {
+    while (header.nowNs() < deadline) {
+      await executeRequest(transport, metrics, trigger, runId, 0, nextSequence());
     }
-  };
-
-  const workers = [];
-  for (let slot = 0; slot < options.sendConcurrency; slot++) workers.push(worker());
+  })());
   await Promise.all(workers);
+}
 
-  const usage = resources.finish();
-  const boundary = await serverStats(statsUrl);
-  const outcome = await waitForServerDrain(statsUrl, options.commandSettleMs, options.drainBoundMs);
-  const postDrain = outcome.snapshot || boundary;
+async function requestBackpressure(
+  transport, metrics, options, trigger, runId, nextSequence, deadline
+) {
+  const pending = new Set();
+  let issuedSinceYield = 0;
+  while (header.nowNs() < deadline) {
+    const operation = executeRequest(transport, metrics, trigger, runId, 0, nextSequence());
+    pending.add(operation);
+    operation.finally(() => pending.delete(operation));
+    issuedSinceYield += 1;
+    if (issuedSinceYield === 256) {
+      issuedSinceYield = 0;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+  if (pending.size === 0) return;
+  let drained = false;
+  await Promise.race([
+    Promise.all([...pending]).then(() => { drained = true; }),
+    delay(options.drainBoundMs)
+  ]);
+  if (!drained) metrics.recordAbandoned(metrics.inFlight);
+}
 
-  const seconds = Math.max(1e-9, options.durationSeconds);
-  const throughput = boundary.activeMessages / seconds;
-  const clientSummary = latencies.summary();
-  return {
-    throughput_per_second: throughput,
-    bandwidth_mb_s: (throughput * payloadSize) / 1e6,
-    // spec section 5: for send, the reported latency is the SERVER-side receive latency
-    // computed from the header, not the client's submit-call duration.
-    latency_mean_ms: boundary.meanMicros / 1000,
-    latency_p95_ms: boundary.p95Micros / 1000,
-    latency_p99_ms: boundary.p99Micros / 1000,
-    client_cpu_percent: usage.cpuPercent,
-    client_memory_mb: usage.memoryMb,
-    server_cpu_percent: (boundary.cpuSeconds / usage.elapsedSeconds / LOGICAL_CORES) * 100,
-    server_memory_mb: boundary.workingSetMb,
-    client_cores: usage.cores,
-    client_saturation_metric: CLIENT_SATURATION_METRIC,
-    event_loop_utilization: usage.eventLoopUtilization,
-    client_parallelism_ceiling: CLIENT_PARALLELISM_CEILING,
-    peak_in_flight: peakInFlight,
-    request_window: options.sendConcurrency,
-    abandoned: 0,
-    drain_ms: outcome.drainMs,
-    drain_bound_hit: outcome.boundHit,
-    server_received_at_close: boundary.activeMessages,
-    server_received_post_drain: postDrain.activeMessages,
-    errors,
-    submitted,
-    client_submit_latency_mean_ms: clientSummary.mean / 1000,
-    client_submit_latency_p95_ms: clientSummary.p95 / 1000,
-    client_submit_latency_p99_ms: clientSummary.p99 / 1000
-  };
+async function sendWorkers(count, transport, metrics, trigger, runId, nextSequence, deadline) {
+  const workers = Array.from({ length: count }, (_, stream) => (async () => {
+    while (header.nowNs() < deadline) {
+      const sequence = nextSequence();
+      const payload = header.createPayloadBytes(
+        trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
+      );
+      const started = metrics.begin();
+      try {
+        await transport.send(stream, payload);
+        metrics.complete(started, true);
+      } catch (error) {
+        metrics.complete(started, false);
+      }
+    }
+  })());
+  await Promise.all(workers);
+}
+
+async function executeRequest(transport, metrics, trigger, runId, stream, sequence) {
+  const payload = header.createPayloadBytes(
+    trigger.payloadBytes, runId, header.PHASE_ACTIVE, sequence
+  );
+  const started = metrics.begin();
+  try {
+    const reply = await transport.request(stream, payload);
+    validateReply(reply, runId, header.PHASE_ACTIVE, trigger.payloadBytes, sequence);
+    metrics.complete(started, true);
+  } catch (error) {
+    metrics.complete(started, false);
+  }
+}
+
+function validateReply(reply, runId, phase, payloadBytes, sequence) {
+  const decoded = header.decode(reply);
+  if (!header.isExpected(decoded, runId, phase, payloadBytes, sequence)) {
+    throw new Error('echo reply did not carry the expected metric header');
+  }
+}
+
+function streamDescription(pattern, requestWindow, sendConcurrency) {
+  if (pattern === 'request-serial') {
+    return { count: 1, inFlightPerStream: 1, implementation: 'Node Promise; one sequential loop' };
+  }
+  if (pattern === 'request-window') {
+    return {
+      count: 1,
+      inFlightPerStream: requestWindow,
+      implementation: `Node event loop; ${requestWindow} Promises share one logical-stream window`
+    };
+  }
+  if (pattern === 'request-backpressure') {
+    return {
+      count: 1,
+      inFlightPerStream: null,
+      implementation: 'Node event loop; uncapped Promises with cooperative completion yields'
+    };
+  }
+  if (pattern === 'send-saturation') {
+    return {
+      count: sendConcurrency,
+      inFlightPerStream: 1,
+      implementation: 'Node Promise per logical stream; one submit awaiting completion'
+    };
+  }
+  throw new Error(`unknown pattern ${pattern}`);
 }
 
 module.exports = {
   LOGICAL_CORES,
   CLIENT_SATURATION_METRIC,
   CLIENT_PARALLELISM_CEILING,
-  ResourceSample,
-  Latencies,
+  SourceMetrics,
   delay,
-  resetServer,
-  serverStats,
-  waitForServerDrain,
   waitForRouteReady,
-  runRequestSerial,
-  runRequestWindow,
-  runRequestBackpressure,
-  runSendSaturation
+  headerRunId,
+  runWarmup,
+  runActive,
+  streamDescription
 };

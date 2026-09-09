@@ -13,8 +13,8 @@ const { argValue } = require('../shared/args');
 const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server-metrics');
 
 const argv = process.argv.slice(2);
-const url = argValue(argv, '--url', '127.0.0.1:5081');
-const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5084');
+const url = argValue(argv, '--url', '127.0.0.1:5222');
+const metricsUrl = argValue(argv, '--metrics-url', 'http://127.0.0.1:5223');
 
 const definition = protoLoader.loadSync(path.join(__dirname, '..', '..', 'proto', 'bench.proto'), {
   keepCase: true,
@@ -33,6 +33,7 @@ server.addService(proto.BenchService.service, {
   // spec section 2: `Echo` returns the payload, so the client can validate the
   // 29-byte header that came back (G2).
   Echo(call, callback) {
+    metrics.record(call.request.body);
     callback(null, { body: call.request.body });
   },
   // FB-002: the send comparison keeps this unary Command returning Empty. No
