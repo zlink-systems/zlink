@@ -1,9 +1,6 @@
 [English](./framework-0.11.0.md) | [한국어](./framework-0.11.0.ko.md)
 
-# ZLink Framework 0.11.0 Release Notes (draft)
-
-> Draft. Released with the `framework/v0.11.0` tag once CI is green on all five platforms.
-> Remove the "Before release" section before publishing.
+# ZLink Framework 0.11.0 Release Notes
 
 ## Dependency versions
 
@@ -75,9 +72,3 @@ dependencies {
 For C++, download the GitHub Release asset, install the CMake package, and use
 `find_package(zlink_framework_cpp CONFIG REQUIRED)`. Put the installed Core and binding package
 prefixes on `CMAKE_PREFIX_PATH` as well.
-
-## Before release
-
-- Fold in the macOS Node contract-test hang investigation (in progress). The macOS .NET timing
-  tests are folded in.
-- Bump `FRAMEWORK_VERSION` to 0.11.0 and run `sync-version.py --write`.

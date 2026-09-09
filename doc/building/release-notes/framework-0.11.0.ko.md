@@ -1,9 +1,6 @@
 [English](./framework-0.11.0.md) | [한국어](./framework-0.11.0.ko.md)
 
-# ZLink Framework 0.11.0 릴리스 노트 초안
-
-> 초안이다. CI가 다섯 플랫폼에서 녹색이 된 뒤 `framework/v0.11.0` 태그로 배포한다. 배포 전에
-> "배포 전 확인" 절의 항목을 지운다.
+# ZLink Framework 0.11.0 릴리스 노트
 
 ## 의존 버전
 
@@ -71,8 +68,3 @@ dependencies {
 C++은 GitHub Release 자산을 내려받아 CMake package를 설치한 뒤
 `find_package(zlink_framework_cpp CONFIG REQUIRED)`로 사용한다. 설치된 Core·binding package
 prefix를 `CMAKE_PREFIX_PATH`에 함께 준다.
-
-## 배포 전 확인
-
-- macOS Node 계약 테스트의 hang 조사(진행 중) 결과를 반영한다. macOS .NET 타이밍 테스트는 반영했다.
-- `FRAMEWORK_VERSION`을 0.11.0으로 올리고 `sync-version.py --write`를 실행한다.
