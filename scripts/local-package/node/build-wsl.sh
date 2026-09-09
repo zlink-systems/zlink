@@ -12,7 +12,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR]
 
-Builds and packs @zlink-systems/zlink@<BINDINGS_VERSION> with the Core
+Builds and packs @zlink-systems/zlink@<bindings/node/VERSION> with the Core
 <VERSION> native runtime. The native ABI SONAME is libzlink.so.0.
 EOF
 }
@@ -29,7 +29,7 @@ done
 core_prefix="$(readlink -f "$core_prefix")"
 export ZLINK_CORE_INSTALL_PREFIX="$core_prefix"
 core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
-binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$repo_root/bindings/node/VERSION")"
 package_version="$(node -p "require('$bindings_dir/package.json').version")"
 [[ "$package_version" = "$binding_version" ]] || {
   echo "Node package version $package_version does not match $binding_version" >&2

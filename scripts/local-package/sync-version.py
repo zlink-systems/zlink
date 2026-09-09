@@ -48,32 +48,38 @@ def repository_version() -> tuple[str, str, str, str]:
     return major, minor, patch, version
 
 
-def bindings_version() -> str:
-    """Read the independently released first-party binding package version."""
-    path = REPO_ROOT / "BINDINGS_VERSION"
+def package_version(relative: str, key: str) -> str:
+    """Read one package-owned semantic version file."""
+    path = REPO_ROOT / relative
     lines = path.read_text(encoding="utf-8").splitlines()
-    if len(lines) != 1 or not lines[0].startswith("ZLINK_BINDINGS_VERSION="):
-        raise SyncError("BINDINGS_VERSION must contain exactly ZLINK_BINDINGS_VERSION=X.Y.Z")
-    key, version = lines[0].split("=", 1)
-    if key != "ZLINK_BINDINGS_VERSION" or not re.fullmatch(SEMVER, version):
-        raise SyncError("BINDINGS_VERSION must contain ZLINK_BINDINGS_VERSION=X.Y.Z")
+    if len(lines) != 1 or not lines[0].startswith(f"{key}="):
+        raise SyncError(f"{relative} must contain exactly {key}=X.Y.Z")
+    actual_key, version = lines[0].split("=", 1)
+    if actual_key != key or not re.fullmatch(SEMVER, version):
+        raise SyncError(f"{relative} must contain exactly {key}=X.Y.Z")
     return version
 
 
-def framework_version() -> str:
-    """Read the independently released Framework package version."""
-    path = REPO_ROOT / "FRAMEWORK_VERSION"
-    lines = path.read_text(encoding="utf-8").splitlines()
-    if len(lines) != 1 or not lines[0].startswith("ZLINK_FRAMEWORK_VERSION="):
-        raise SyncError(
-            "FRAMEWORK_VERSION must contain exactly ZLINK_FRAMEWORK_VERSION=X.Y.Z"
+BINDING_LANGUAGES = ("cpp", "dotnet", "go", "java", "node", "python", "rust")
+FRAMEWORK_LANGUAGES = ("cpp", "dotnet", "java", "node")
+
+
+def binding_versions() -> dict[str, str]:
+    return {
+        language: package_version(
+            f"bindings/{language}/VERSION", "ZLINK_BINDING_VERSION"
         )
-    key, version = lines[0].split("=", 1)
-    if key != "ZLINK_FRAMEWORK_VERSION" or not re.fullmatch(SEMVER, version):
-        raise SyncError(
-            "FRAMEWORK_VERSION must contain ZLINK_FRAMEWORK_VERSION=X.Y.Z"
+        for language in BINDING_LANGUAGES
+    }
+
+
+def framework_versions() -> dict[str, str]:
+    return {
+        language: package_version(
+            f"framework/languages/{language}/VERSION", "ZLINK_FRAMEWORK_VERSION"
         )
-    return version
+        for language in FRAMEWORK_LANGUAGES
+    }
 
 
 def file_sha256(relative: str) -> str:
@@ -120,6 +126,7 @@ class FrameworkField:
     """One explicitly owned Framework version field."""
 
     relative: str
+    owner: str
     field: str
     pattern: str
     expected: int = 1
@@ -155,43 +162,56 @@ def node_internal_dependency_pattern() -> str:
     )
 
 
-# This registry is the complete ownership list for FRAMEWORK_VERSION. The
+# This registry is the complete ownership list for language-owned Framework versions. The
 # patterns identify fields within each listed file; synchronization never scans
 # directories to discover additional targets.
 FRAMEWORK_SCALAR_FIELDS = (
     FrameworkField(
+        "framework/languages/cpp/CMakeLists.txt",
+        "cpp",
+        "project version",
+        rf"(project\(zlink_framework_cpp VERSION )(?P<version>{SEMVER})( LANGUAGES C CXX\))",
+    ),
+    FrameworkField(
         "framework/languages/java/zlink-http-client/src/main/java/systems/zlink/httpclient/internal/HttpClientVersion.java",
+        "java",
         "HttpClientVersion.VERSION (drives zlink-http-client and zlink-http-client-kotlin Gradle versions)",
         rf'(public static final String VERSION = ")(?P<version>{SEMVER})(";)',
     ),
     FrameworkField(
         "framework/languages/dotnet/samples/Directory.Build.props",
+        "dotnet",
         "PropertyGroup/ZLinkSampleFrameworkVersion default",
         rf"(<ZLinkSampleFrameworkVersion Condition=\"'\$\(ZLinkSampleFrameworkVersion\)' == '' and '\$\(ZLinkSampleRepositoryDetected\)' != 'true'\">)(?P<version>{SEMVER})(</ZLinkSampleFrameworkVersion>)",
     ),
     FrameworkField(
         "framework/languages/java/samples/gradle/zlink-sample-dependencies.settings.gradle.kts",
+        "java",
         "zlink.frameworkVersion default",
         rf'(providers\.provider \{{ ")(?P<version>{SEMVER})(" \}})',
     ),
     FrameworkField(
         "framework/languages/cpp/vcpkg.json",
+        "cpp",
         "version-string",
         rf'("version-string"\s*:\s*")(?P<version>{SEMVER})(")',
     ),
     FrameworkField(
         "framework/languages/cpp/packaging/conan/conandata.yml",
+        "cpp",
         "release key and asset URL",
         rf"(?P<version>{SEMVER})",
         3,
     ),
     FrameworkField(
         "framework/languages/cpp/packaging/conan/conanfile.py",
+        "cpp",
         "recipe version",
         rf'(    version = ")(?P<version>{SEMVER})(")',
     ),
     FrameworkField(
         "vcpkg/ports/zlink-framework/vcpkg.json",
+        "cpp",
         "overlay port version",
         rf'("version"\s*:\s*")(?P<version>{SEMVER})(")',
     ),
@@ -213,7 +233,7 @@ FRAMEWORK_NODE_PACKAGE_REGISTRY = (
 
 
 # Sample package versions are sample metadata; only these internal dependency
-# fields are owned by FRAMEWORK_VERSION.
+# fields are owned by the corresponding Framework language VERSION file.
 FRAMEWORK_NODE_SAMPLE_REGISTRY = (
     ("framework/languages/node/samples/Bingo.Ts/package.json", 6),
     ("framework/languages/node/samples/DeliveryDispatch.Ts/package.json", 4),
@@ -315,8 +335,9 @@ def update_framework_node_lock(source: str, version: str) -> str:
     return source[:start] + block + source[end:]
 
 
-def synchronize_framework(sync: Synchronizer, version: str) -> None:
+def synchronize_framework(sync: Synchronizer, versions: dict[str, str]) -> None:
     for field in FRAMEWORK_SCALAR_FIELDS:
+        version = versions[field.owner]
         sync.regex(
             field.relative,
             field.pattern,
@@ -324,6 +345,7 @@ def synchronize_framework(sync: Synchronizer, version: str) -> None:
             field.expected,
         )
 
+    version = versions["node"]
     internal_dependency_pattern = node_internal_dependency_pattern()
     for relative, package_name, expected_dependencies in FRAMEWORK_NODE_PACKAGE_REGISTRY:
         sync.regex(
@@ -374,6 +396,7 @@ def synchronize_framework(sync: Synchronizer, version: str) -> None:
         1,
     )
 
+    version = versions["cpp"]
     for relative in FRAMEWORK_CPP_SAMPLE_VCPKG_REGISTRY:
         sync.regex(
             relative,
@@ -390,10 +413,12 @@ def synchronize_framework(sync: Synchronizer, version: str) -> None:
         )
 
 
-def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
+def synchronize(
+    write: bool,
+) -> tuple[str, dict[str, str], dict[str, str], list[Path], list[Path]]:
     major, minor, patch, core_version = repository_version()
-    binding_version = bindings_version()
-    framework_package_version = framework_version()
+    bindings = binding_versions()
+    frameworks = framework_versions()
     version_path = f"{major}_{minor}_{patch}"
     sync = Synchronizer(write)
 
@@ -479,6 +504,7 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
                 1,
             )
 
+    binding_version = bindings["cpp"]
     sync.regex(
         "bindings/cpp/CMakeLists.txt",
         rf"project\(zlink_cpp VERSION {SEMVER} LANGUAGES CXX\)",
@@ -501,6 +527,30 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
         "bindings/cpp/CMakeLists.txt",
         rf"Expected an installed Core {SEMVER} package",
         f"Expected an installed Core {core_version} package",
+        1,
+    )
+    sync.regex(
+        "bindings/cpp/packaging/conan/conanfile.py",
+        rf'(    version = "){SEMVER}(")',
+        rf"\g<1>{binding_version}\2",
+        1,
+    )
+    sync.regex(
+        "bindings/cpp/packaging/conan/conandata.yml",
+        rf"(?P<version>{SEMVER})",
+        lambda match, version=binding_version: replace_version_group(match, version),
+        3,
+    )
+    sync.regex(
+        "vcpkg/ports/zlink-cpp/vcpkg.json",
+        rf'("version"\s*:\s*"){SEMVER}(")',
+        rf"\g<1>{binding_version}\2",
+        1,
+    )
+    sync.regex(
+        "vcpkg/ports/zlink-cpp/usage",
+        rf"(find_package\(zlink_cpp ){SEMVER}( CONFIG REQUIRED\))",
+        rf"\g<1>{binding_version}\2",
         1,
     )
     cpp_version_test = "bindings/cpp/tests/contract/test_cpp_contract_common_header_version.cpp"
@@ -534,12 +584,7 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
             f"ZLINK_MAKE_VERSION ({major}, {minor}, {patch})",
             1,
         )
-    sync.regex(
-        "bindings/dotnet/src/Zlink/Zlink.csproj",
-        rf"(<Version>){SEMVER}(</Version>)",
-        rf"\g<1>{binding_version}\2",
-        1,
-    )
+    binding_version = bindings["dotnet"]
     sync.regex(
         "bindings/dotnet/src/Zlink/Zlink.csproj",
         rf"Core {SEMVER} package",
@@ -553,6 +598,7 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
         2,
     )
 
+    binding_version = bindings["java"]
     java = "bindings/java/build.gradle"
     java_rules = (
         (rf"(?m)^version = '{SEMVER}'$", f"version = '{binding_version}'"),
@@ -566,6 +612,7 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
     for pattern, replacement in java_rules:
         sync.regex(java, pattern, replacement, 1)
 
+    binding_version = bindings["node"]
     sync.regex(
         "bindings/node/package.json",
         rf'("name"\s*:\s*"@zlink-systems/zlink",\s*\n\s*"version"\s*:\s*"){SEMVER}(")',
@@ -604,6 +651,7 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
             rf"\g<1>{file_sha256(source_path)}\2",
             1,
         )
+    binding_version = bindings["python"]
     sync.regex(
         "bindings/python/pyproject.toml",
         rf'(?m)^version = "{SEMVER}"$',
@@ -612,6 +660,7 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
     )
     for relative in ("bindings/python/setup.py", "bindings/python/src/zlink/_native/_native_loader.py"):
         sync.regex(relative, rf"(?<![0-9.]){SEMVER}(?![0-9.])", core_version, 1)
+    binding_version = bindings["rust"]
     sync.regex(
         "bindings/rust/Cargo.toml",
         rf'(\[package\]\nname = "zlink"\nversion = "){SEMVER}(")',
@@ -641,12 +690,14 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
         1,
     )
 
+    binding_version = bindings["dotnet"]
     sync.regex(
         "scripts/local-package/dotnet/fixtures/public-consumer/PublicConsumer.csproj",
         rf'(<PackageReference Include="Zlink" Version="){SEMVER}(" />)',
         rf"\g<1>{binding_version}\2",
         1,
     )
+    binding_version = bindings["node"]
     sync.regex(
         "scripts/local-package/node/fixtures/public-consumer/package.json",
         rf'("@zlink-systems/zlink"\s*:\s*"){SEMVER}(")',
@@ -654,6 +705,7 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
         1,
     )
 
+    binding_version = bindings["cpp"]
     sync.regex(
         "framework/languages/cpp/CMakeLists.txt",
         rf'(set\(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "){SEMVER}(" CACHE STRING)',
@@ -661,9 +713,27 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
         1,
     )
     sync.regex(
+        "framework/languages/cpp/packaging/conan/conanfile.py",
+        rf'("zlink-cpp/){SEMVER}(")',
+        rf"\g<1>{binding_version}\2",
+        1,
+    )
+    sync.regex(
+        "vcpkg/ports/zlink-framework/portfile.cmake",
+        rf"(-DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=){SEMVER}",
+        rf"\g<1>{binding_version}",
+        1,
+    )
+    sync.regex(
         "framework/languages/cpp/CMakeLists.txt",
         rf'(set\(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "){SEMVER}(" CACHE STRING)',
         rf"\g<1>{core_version}\2",
+        1,
+    )
+    sync.regex(
+        "vcpkg/ports/zlink-framework/portfile.cmake",
+        rf"(-DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=){SEMVER}",
+        rf"\g<1>{core_version}",
         1,
     )
     sync.regex(
@@ -684,12 +754,7 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
         f"libzlink.so.{core_version}",
         1,
     )
-    sync.regex(
-        "framework/languages/dotnet/Directory.Packages.props",
-        rf"(<ZLinkBindingsPackageVersion[^>]*>){SEMVER}(</ZLinkBindingsPackageVersion>)",
-        rf"\g<1>{binding_version}\2",
-        1,
-    )
+    binding_version = bindings["dotnet"]
     for relative in (
         "framework/languages/dotnet/contract/packages/Zlink.Framework.package.txt",
         "framework/languages/dotnet/contract/packages/Zlink.Framework.AspNetCore.package.txt",
@@ -700,6 +765,7 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
             rf"\g<1>{binding_version}",
             1,
         )
+    binding_version = bindings["java"]
     sync.regex(
         "framework/languages/java/gradle/libs.versions.toml",
         rf'(?m)^zlinkBindings = "{SEMVER}"$',
@@ -713,11 +779,18 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
         1,
     )
     sync.regex(
+        "framework/languages/java/samples/gradle/zlink-sample-dependencies.settings.gradle.kts",
+        rf'(val bindingsVersion = providers\.gradleProperty\("zlink\.bindingsVersion"\)\s*\.orElse\("){SEMVER}("\))',
+        rf"\g<1>{binding_version}\2",
+        1,
+    )
+    sync.regex(
         "framework/languages/java/e2e/SubmitAdmission/run_e2e.sh",
         rf"Core {SEMVER} package",
         f"Core {core_version} package",
         1,
     )
+    binding_version = bindings["node"]
     for relative, expected in (
         ("framework/languages/node/package.json", 1),
         ("framework/languages/node/packages/framework/package.json", 1),
@@ -740,11 +813,11 @@ def synchronize(write: bool) -> tuple[str, str, str, list[Path], list[Path]]:
         1,
     )
     framework_sync = Synchronizer(write)
-    synchronize_framework(framework_sync, framework_package_version)
+    synchronize_framework(framework_sync, frameworks)
     return (
         core_version,
-        binding_version,
-        framework_package_version,
+        bindings,
+        frameworks,
         sync.changed,
         framework_sync.changed,
     )
@@ -759,8 +832,8 @@ def main() -> int:
     try:
         (
             core_version,
-            binding_version,
-            framework_package_version,
+            bindings,
+            frameworks,
             changed,
             framework_changed,
         ) = synchronize(args.write)
@@ -771,7 +844,7 @@ def main() -> int:
         if changed:
             print(
                 "Core/binding versions must be synchronized "
-                f"(Core={core_version}, bindings={binding_version}):",
+                f"(Core={core_version}, bindings={bindings}):",
                 file=sys.stderr,
             )
             for path in changed:
@@ -779,7 +852,7 @@ def main() -> int:
         if framework_changed:
             print(
                 "Framework versions must be synchronized "
-                f"(Framework={framework_package_version}):",
+                f"(Framework={frameworks}):",
                 file=sys.stderr,
             )
             for path in framework_changed:
@@ -787,11 +860,11 @@ def main() -> int:
         return 1
     action = "synchronized" if args.write else "verified"
     print(
-        f"Core {core_version}; binding packages {binding_version} {action} "
+        f"Core {core_version}; binding packages {bindings} {action} "
         f"({len(changed)} changed file(s))"
     )
     print(
-        f"Framework packages {framework_package_version} {action} "
+        f"Framework packages {frameworks} {action} "
         f"({len(framework_changed)} changed file(s))"
     )
     return 0

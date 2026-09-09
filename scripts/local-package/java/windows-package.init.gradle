@@ -9,10 +9,12 @@ rootProject {
 
         def prefixValue = System.getenv('ZLINK_CORE_PACKAGE_PREFIX')
         def summaryValue = System.getenv('ZLINK_CORE_PACKAGE_SUMMARY')
+        def expectedCoreVersion = System.getenv('ZLINK_CORE_VERSION')
         if (prefixValue == null || prefixValue.trim().isEmpty()
-            || summaryValue == null || summaryValue.trim().isEmpty()) {
+            || summaryValue == null || summaryValue.trim().isEmpty()
+            || expectedCoreVersion == null || expectedCoreVersion.trim().isEmpty()) {
             throw new GradleException(
-                'Windows Java packaging requires ZLINK_CORE_PACKAGE_PREFIX and ZLINK_CORE_PACKAGE_SUMMARY')
+                'Windows Java packaging requires ZLINK_CORE_PACKAGE_PREFIX, ZLINK_CORE_PACKAGE_SUMMARY and ZLINK_CORE_VERSION')
         }
 
         def prefix = file(prefixValue).canonicalFile
@@ -25,8 +27,8 @@ rootProject {
                 .digest(input.bytes).encodeHex().toString()
         }
         if (!runtime.isFile() || !manifest.isFile()
-            || metadata.version != project.version.toString()
-            || approved.version != project.version.toString()
+            || metadata.version != expectedCoreVersion
+            || approved.version != expectedCoreVersion
             || approved.prefix != prefix.canonicalPath
             || approved.provenanceSha256 != sha256(manifest)
             || approved.runtime.sha256 != sha256(runtime)

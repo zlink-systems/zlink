@@ -12,7 +12,7 @@ usage() {
   cat <<'EOF'
 Usage: build-wsl.sh [--core-prefix ABSOLUTE_DIR] [--python-executable PATH]
 
-Creates zlink-<BINDINGS_VERSION> source and wheel packages with the exact Core
+Creates zlink-<bindings/python/VERSION> source and wheel packages with the exact Core
 VERSION Linux runtime. The current Python native target is Linux x86_64.
 EOF
 }
@@ -33,7 +33,7 @@ command -v "$python_executable" >/dev/null 2>&1 || {
   exit 1
 }
 core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
-binding_version="$(sed -n 's/^ZLINK_BINDINGS_VERSION=//p' "$repo_root/BINDINGS_VERSION")"
+binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$repo_root/bindings/python/VERSION")"
 export ZLINK_CORE_PACKAGE_PREFIX="$core_prefix"
 export ZLINK_CORE_VERSION="$core_version"
 package_version="$(sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"/\1/p' "$repo_root/bindings/python/pyproject.toml" | head -n1)"
