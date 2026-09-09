@@ -46,7 +46,11 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 | `framework/` | 언어별 Framework(actor, DI, codec) | [`framework/AGENTS.md`](framework/AGENTS.md) |
 | `doc/` | 사용자 문서, 설계 원칙, 빌드, 계획 | [`doc/README.ko.md`](doc/README.ko.md) |
 | `doc/plan/` | 캠페인 계획과 판정 기록(공개 계약 아님) | §7 |
-| `scripts/local-package/` | Core·바인딩 로컬 패키징, 버전 동기화 | `scripts/local-package/README.ko.md` |
+| `scripts/local-package/` | Core·바인딩 로컬 패키징, 버전 동기화(`sync-version.py`) | `scripts/local-package/README.ko.md` |
+| `scripts/gate/` | 머신 로컬 통합 gate(bindings·framework·cross-language) | [`scripts/gate/README.md`](scripts/gate/README.md) |
+| `scripts/perf/` | 성능 측정 티켓 큐(`perf-ticket.sh`, `perf-queue-runner.sh`) | §6 |
+| `.github/workflows/`, `.github/actions/`, `scripts/ci/` | 빌드·배포·CI 워크플로우와 보조 도구 | [`doc/building/release-pipeline.ko.md`](doc/building/release-pipeline.ko.md) |
+| `doc/building/` | 빌드 가이드, 패키징, 배포 파이프라인, 계정, 릴리스 노트·준비 기록 | [`doc/building/release-pipeline.ko.md`](doc/building/release-pipeline.ko.md) |
 
 ## 3. 코드 규칙
 
@@ -100,6 +104,12 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   감독자만 `--update-reference`로 갱신하며, 의도한 비용 증가는 근거와 함께 판정 기록에 남긴다.
 - §6의 release 비교는 release 준비 단계에서 실행한다(변경 단위 의무는 `hotpath_gate` 하나 —
   [`10-hot-path.ko.md` §5](core/doc/spec/core/systems/10-hot-path.ko.md)).
+- 바인딩·framework 전체 범위는 `scripts/gate/{bindings-gate,framework-gate,cross-language-e2e}.sh <tag>`로
+  돌리고 결과는 `zlink-work/gates/<tag>/results.txt`에서 본다. gate는 한 번에 하나만, load average
+  10 미만에서 시작한다(타이밍 assert가 부하에 민감하다). 부하로 깨진 테스트는 단독 재실행으로
+  판정하고 허용치를 넓히지 않는다.
+- framework의 기본 빌드·솔루션·CI는 `cross-language` e2e만 포함한다. 언어별 시나리오 e2e
+  (`framework/languages/<lang>/e2e/*`)는 각 `run_e2e.sh`로만 돌리며 sln·CMake 기본 타깃·CI에 넣지 않는다.
 
 ### Core 테스트의 인터페이스 경계
 
@@ -116,6 +126,9 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 도구: `bindings/c/perf/run_benchmarks.sh`(single) / `run_benchmarks_multi.sh`(multi),
   `bindings/c/perf/perf_regression_gate.py`. baseline은 직전 release 태그를 같은 머신에서 자체
   빌드한 worktree를 쓴다(`--core-version` 금지).
+- 측정은 티켓 큐로만 낸다: `bash scripts/perf/perf-ticket.sh submit -p <0-3> -o <owner> -d "<설명>" -- <명령>`.
+  세션마다 감독자가 `scripts/perf/perf-queue-runner.sh`를 하나 띄우고, 티켓은 고정 Core prefix
+  (`.artifacts/perf-queue/core-prefix.env`)를 사용한다. 측정 중 Core를 다시 빌드하지 않는다.
 - 측정 중에는 같은 머신에서 빌드·테스트를 돌리지 않는다. 판정은 cell 단위로 하고, 개선 대상이
   나오면 전체를 기다리지 말고 바로 고친 뒤 재측정한다. 단일 run 편차가 크면 runner의
   `--runs 3`(size별 median)으로 확인한다.
@@ -139,14 +152,25 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 커밋 메시지: `<모듈>: <한 줄 요약>` + 본문에 원인·수정·근거 수치·gate 결과. 리팩토링은 항목
   (불필요 코드 제거 / 책임 분리 / 명명)이 diff에서 구분되게 한다.
 - 버전 범프 체크리스트(한 커밋에 모두):
-  1. `VERSION`, `core/CMakeLists.txt`, `core/include/zlink/common.h`, `core/include/zlink.h`.
-  2. raw header mirror: `bindings/{c,cpp,go,rust}/include/zlink.h`, `zlink/common.h`를 `core/include`에서
-     그대로 복사(`contract_c_header_mirror`가 검사한다).
-  3. 버전을 하드코딩한 계약 테스트 갱신: `bindings/cpp/tests/contract/test_cpp_contract_common_header_version.cpp`.
-  4. 바인딩 매니페스트와 `scripts/local-package/build-wsl.sh --sync-versions`.
+  1. root `VERSION`(Core)과 `BINDINGS_VERSION`(binding·framework pin)만 수정한다.
+  2. `python3 scripts/local-package/sync-version.py --write`로 `core/CMakeLists.txt`, 공개 헤더,
+     raw header mirror(`bindings/{c,cpp,go,rust}/include`), 바인딩 매니페스트, framework pin,
+     debian changelog 첫 stanza, 계약 스냅샷을 한 번에 맞춘다. 손으로 찾아 고치지 않는다.
+  3. `core/CHANGELOG.md`에 새 절을 추가한다(Core Release 노트가 여기서 추출된다).
+  4. `scripts/local-package/build-wsl.sh --verify-versions`로 누락 pin을 확인한다.
 - 릴리스 태그 조건: §5 gate green, `hotpath_gate` PASS, §6 release 비교 판정 PASS(또는 판정
   기록에 사용자 결정으로 예외 명시), 패키징 검증 `scripts/local-package/core/verify-package.sh`.
-- 릴리스 뒤 baseline worktree를 새 태그로 갱신한다.
+- 배포는 **전부 GitHub Actions에서** 한다. 로컬에서 `npm publish`·`dotnet nuget push`·Central 업로드를
+  하지 않으며 API 토큰을 만들지 않는다(npm·nuget은 Trusted Publishing, Maven Central은 repository
+  secret). 순서는 Core(`core/vX.Y.Z` 태그 + `build.yml` dispatch) → bindings 4언어(`cpp/`, `node/`,
+  `java/`, `dotnet/v*` 태그) → framework 4언어(`framework/vA.B.C` 태그 하나)이며, 워크플로우·트리거·
+  채널·확인 명령은 [`doc/building/release-pipeline.ko.md`](doc/building/release-pipeline.ko.md)가
+  소유한다. 계정·secret은 [`doc/building/release-accounts.ko.md`](doc/building/release-accounts.ko.md),
+  ConanCenter·vcpkg는 PR 방식([`doc/building/pr-drafts/`](doc/building/pr-drafts/)).
+- 지원 플랫폼은 linux-x64·linux-arm64·macos-arm64·windows-x64·windows-arm64다. Intel Mac은
+  Core부터 지원하지 않으며 CI matrix·prebuild에 넣지 않는다.
+- 릴리스 뒤 baseline worktree를 새 태그로 갱신하고, 릴리스 준비 중 고친 워크플로우·절차는
+  `doc/building/release-prep/<날짜>-<주제>.ko.md`로 남긴다.
 
 ## 9. 알려진 부채와 예정 작업
 
@@ -157,6 +181,11 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 0.16.0 캠페인의 이월 항목(전체 70 cell 4-size sweep, POSDDD 리팩토링 BLOCKERS)은
   [`doc/plan/c016-worklog/decisions.ko.md`](doc/plan/c016-worklog/decisions.ko.md)의 마지막
   판정을 본다.
+- framework CI(`framework-node.yml`, `framework-dotnet.yml`)는 2026-09-09에 공개 패키지+Core 릴리스
+  아카이브 기준으로 재작성했다. 남은 항목과 원인은
+  [`doc/building/release-prep/2026-09-09-ci-warnings-and-cleanup.ko.md`](doc/building/release-prep/2026-09-09-ci-warnings-and-cleanup.ko.md).
+- `core-conan-release.yml`은 사내 Conan remote용 legacy로 secret이 없어 동작하지 않는다(ConanCenter
+  PR로 대체). framework Java의 타이밍 민감 테스트는 릴리스 job에서 `assemble`만 수행한다(D-BP51).
 
 ## 10. 에이전트 운영 관례
 

@@ -46,7 +46,11 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 | `framework/` | Per-language Framework (actors, DI, codecs) | [`framework/AGENTS.md`](framework/AGENTS.md) |
 | `doc/` | User docs, design principles, building, plans | [`doc/README.md`](doc/README.md) |
 | `doc/plan/` | Campaign plans and decision logs (not public contract) | §7 |
-| `scripts/local-package/` | Local Core/binding packaging and version sync | `scripts/local-package/README.ko.md` |
+| `scripts/local-package/` | Local Core/binding packaging and version sync (`sync-version.py`) | `scripts/local-package/README.ko.md` |
+| `scripts/gate/` | Machine-local integrated gates (bindings, framework, cross-language) | [`scripts/gate/README.md`](scripts/gate/README.md) |
+| `scripts/perf/` | Performance measurement ticket queue (`perf-ticket.sh`, `perf-queue-runner.sh`) | §6 |
+| `.github/workflows/`, `.github/actions/`, `scripts/ci/` | Build, release and CI workflows with their helpers | [`doc/building/release-pipeline.md`](doc/building/release-pipeline.md) |
+| `doc/building/` | Build guide, packaging, release pipeline, accounts, release notes and preparation records | [`doc/building/release-pipeline.md`](doc/building/release-pipeline.md) |
 
 ## 3. Code rules
 
@@ -105,6 +109,13 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   intended cost increase is recorded in the decision log with its reason.
 - The release comparison of §6 runs during release preparation (the per-change obligation is
   `hotpath_gate` alone — [`10-hot-path.en.md` §5](core/doc/spec/core/systems/10-hot-path.en.md)).
+- Run the full binding/framework scope with `scripts/gate/{bindings-gate,framework-gate,cross-language-e2e}.sh <tag>`
+  and read `zlink-work/gates/<tag>/results.txt`. One gate at a time, started below load average 10
+  (timing asserts are load-sensitive). A test broken by load is judged by a solo rerun; tolerances
+  are never widened.
+- The framework's default builds, solutions and CI include only the `cross-language` e2e. Per-language
+  scenario e2e (`framework/languages/<lang>/e2e/*`) runs only through its `run_e2e.sh` and is never
+  added to the sln, the default CMake targets or CI.
 
 ### Interface boundary of Core tests
 
@@ -148,16 +159,28 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   gate results. Refactors keep their items (dead code removal / responsibility split /
   naming) distinguishable in the diff.
 - Version bump checklist (one commit):
-  1. `VERSION`, `core/CMakeLists.txt`, `core/include/zlink/common.h`, `core/include/zlink.h`.
-  2. Raw header mirrors: copy `zlink.h` and `zlink/common.h` from `core/include` into
-     `bindings/{c,cpp,go,rust}/include` verbatim (`contract_c_header_mirror` checks this).
-  3. Contract tests that hard-code the version:
-     `bindings/cpp/tests/contract/test_cpp_contract_common_header_version.cpp`.
-  4. Binding manifests and `scripts/local-package/build-wsl.sh --sync-versions`.
+  1. Edit only the root `VERSION` (Core) and `BINDINGS_VERSION` (binding and framework pins).
+  2. Run `python3 scripts/local-package/sync-version.py --write`; it updates `core/CMakeLists.txt`,
+     the public headers, the raw header mirrors (`bindings/{c,cpp,go,rust}/include`), binding
+     manifests, framework pins, the first debian changelog stanza and contract snapshots at once.
+     Never hunt for pins by hand.
+  3. Add a section to `core/CHANGELOG.md` (the Core release notes are extracted from it).
+  4. Check for missing pins with `scripts/local-package/build-wsl.sh --verify-versions`.
 - Release tag preconditions: §5 gate green, `hotpath_gate` PASS, §6 release comparison PASS
   (or a user decision recorded in the decision log), package verification with
   `scripts/local-package/core/verify-package.sh`.
-- After a release, move the baseline worktree to the new tag.
+- Every publish happens **in GitHub Actions**. Never run `npm publish`, `dotnet nuget push` or a
+  Central upload locally, and never create API tokens (npm and nuget use Trusted Publishing, Maven
+  Central uses repository secrets). The order is Core (`core/vX.Y.Z` tag + `build.yml` dispatch) →
+  the four bindings (`cpp/`, `node/`, `java/`, `dotnet/v*` tags) → the four frameworks (one
+  `framework/vA.B.C` tag). Workflows, triggers, channels and verification commands are owned by
+  [`doc/building/release-pipeline.md`](doc/building/release-pipeline.md); accounts and secrets by
+  [`doc/building/release-accounts.md`](doc/building/release-accounts.md); ConanCenter and vcpkg go
+  through PRs ([`doc/building/pr-drafts/`](doc/building/pr-drafts/)).
+- Supported platforms are linux-x64, linux-arm64, macos-arm64, windows-x64 and windows-arm64. Intel
+  Mac is unsupported from Core up and never appears in CI matrices or prebuilds.
+- After a release, move the baseline worktree to the new tag, and record workflow or procedure fixes
+  made during release preparation under `doc/building/release-prep/<date>-<topic>.ko.md`.
 
 ## 9. Known debt and planned work
 
@@ -168,6 +191,12 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - Carry-overs of the 0.16.0 campaign (the full 70-cell four-size sweep, POSDDD refactor
   BLOCKERS) are in the last entries of
   [`doc/plan/c016-worklog/decisions.ko.md`](doc/plan/c016-worklog/decisions.ko.md).
+- The framework CI (`framework-node.yml`, `framework-dotnet.yml`) was rewritten on 2026-09-09 around the
+  published packages and the Core release archives; remaining items and causes are in
+  [`doc/building/release-prep/2026-09-09-ci-warnings-and-cleanup.ko.md`](doc/building/release-prep/2026-09-09-ci-warnings-and-cleanup.ko.md).
+- `core-conan-release.yml` is a legacy workflow for a private Conan remote without secrets (replaced
+  by the ConanCenter PR). The framework Java release job runs `assemble` only because its timing
+  tests are load-sensitive (D-BP51).
 
 ## 10. Agent operating conventions
 
