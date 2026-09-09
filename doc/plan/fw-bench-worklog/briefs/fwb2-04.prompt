@@ -1,0 +1,25 @@
+# fwb2-04 — Node bench runner를 server-driven(A/B + HTTP trigger) 모델로 개정 (계획 S2)
+
+저장소 /home/hep7/project/zlink, branch main(HEAD 60a933f62a 이후). 한국어로 보고. 감독자(Claude)가 diff를 검토하고 커밋한다.
+계획: `doc/plan/framework-bench-with-grpc-s2s-plan.ko.md` §3·§4(Node 행)·§8 S2. 규격: `framework/bench/grpc/README.ko.md` §3, §4(셀 원본: role·trigger 8필드(runId, cellId, pattern, payloadBytes, durationMs, warmup, endpoint, receivedAtUnixMs)·streams·target_stats), §6, §9(node 대역 5220-5239: grpc A 5220/5221, B 5222/5223; raw A 5225/5226, B 5227/5228/5229; framework A 5232/5233, B 5234/5235), §10. 공통 perf 규격 `framework/doc/framework/common/perf/README.ko.md` §4.2·§5.1·§16. **참고 구현**: .NET이 같은 모델로 먼저 개정됐다 — `framework/bench/grpc/dotnet/run_local.sh`(셀 순서·preflight·settle·target_stats 병합·count 대조)와 `Client/Program.cs`, 보고서 `doc/plan/fw-bench-worklog/fwb2-03-summary.md`. 셀 JSON 형식은 집계기 `framework/bench/grpc/tools/`(fixture `tools/tests/fixtures/s2s/`)가 읽는 `with-grpc-cell-v1`이며 .NET 원본과 같은 필드를 낸다. 규격·계획·문서(`doc/**`, `framework/doc/**`, `framework/bench/grpc/README*`, `framework/bench/grpc/doc/**`)는 읽기만 한다.
+금지: git commit/push; `.github/**`; 측정 조건(payload 1024·4096, warmup, 5초 active, window 100, send 8, timeout) 변경; Core·bindings·framework 런타임 소스 수정(결함이면 파일:줄로 보고); 집계기·.NET bench 수정; `rm -rf`·`git clean`·`git stash`·`git checkout --`·`git restore`; 앵커 없는 `pkill -f`. **벤치 실행(smoke 포함)은 반드시 티켓으로** `bash scripts/perf/perf-ticket.sh submit -p 2 -o sol-fwb2-04 -d "<설명>" -- <명령>`(완료 대기; 직접 실행 금지 — 지금 큐에 p 1 측정 티켓 6개가 있어 순서를 기다린다). 빌드는 load average 10 미만일 때 한 번에 하나. 임시 산출물 `/tmp/zlink-sol-fwb2-04/`. 자격 증명 금지.
+
+## 목표
+`framework/bench/grpc/node/`(client, grpc-server, zlink-raw-server, zlink-framework-server)를 규격 §10의 server-driven 모델로 바꾼다. 구현별 source A(HTTP trigger listener + stats + B로 향하는 client + logical stream 부하)와 target B(echo/count + stats), `run_local.sh`는 §10.4 셀 순서(B→A→warmup→active→settle→target_stats 병합·완료/수신 수 대조→종료, 셀마다 새 process 쌍, 5220-5239 LISTEN preflight).
+
+## 설계 지침
+- A의 trigger/stats는 Node 표준 `http` 모듈. trigger 계약(중복 trigger는 같은 acknowledgement, phase 전이 idle/warmup/active/failed, stats에 ready·submitted·completed·errors·inFlight)은 .NET `BenchHttpApplication.cs`와 같은 규칙으로 구현하되 Node 코드 안에 한 곳(`shared/`)만 둔다.
+- logical stream: serial 1×1, window 1×100(하나의 window를 Promise 100개가 공유), backpressure 1×무제한, send 8×1. 구현 방식(Promise/event loop)을 `streams.implementation`에 기록.
+- `zlink-framework-node` 행: framework codec이 protobuf `bytes`를 지원하지 않는 제품 결함이 있어(계획 §0·§4) 이 행은 **`unsupported`로 기록**한다. runner가 그 셀을 실행하지 않고 원본에 `status: "unsupported"`와 이유를 남기는지, 아니면 셀을 생략하는지 — 집계기 reader가 받아들이는 형식을 확인해(`tools/benchagg/readers.py`, `model.py`의 status) 맞춘다. framework codec을 고치지 않는다.
+- gRPC B는 기존 grpc-server, A는 `@grpc/grpc-js` unary stub을 stream 수만큼. raw는 기존 zlink-raw-server(request/command ROUTER 분리)와 raw client. 기존 `RUN_DEALER`(DEALER 추가 run)는 비교 계약(ROUTER)에 따라 제거하거나 기본 0으로.
+- 기존 환경 변수(`DURATION`, `WARMUP`, `PAYLOADS`, `SCENARIO`, `IMPLEMENTATION`, `WINDOW`, `STAMP`, `OUTROOT`)는 유지. `RUNS`는 티켓이 run 단위로 내므로 기본 1로.
+- 1차 재현 `node/repro/`는 회귀 확인용으로 유지(수정하지 않음).
+
+## 검증
+- `cd framework/bench/grpc/node && npm ci && npm run build` rc=0 (binding published 0.17.6, framework workspace 참조 — 현재 package.json 관례 유지).
+- smoke(티켓): `grpc-node`·`zlink-node` × `request-serial@1024`, `zlink-node` × `send-saturation@1024`, `zlink-node` × `request-window@1024`, `DURATION=2 WARMUP=100`. 각 rc=0, RESULT 라인, 원본 JSON에 role/trigger/streams/target_stats, request 셀의 A 완료 수 = B 수신 수. framework 셀은 `unsupported` 처리 확인.
+- 집계기로 smoke 원본을 읽어 `--format spec4`가 나오는지 확인(`python3 framework/bench/grpc/tools/bench_aggregate.py --lang node --runs-glob '<OUTROOT>/*' --format spec4`).
+- `bash -n run_local.sh`, `git diff --check`. 3-run 측정은 하지 않는다.
+
+## 보고
+`doc/plan/fw-bench-worklog/fwb2-04-summary.md`: 프로세스 구성 표(A/B/포트/모듈), 변경 파일과 diff 요지, 수정 전/후 규칙 수, smoke 검증 표(티켓 이름·rc·RESULT), 언어별 문서(계획 §5 절 1~6)에 들어갈 표와 값(.NET 보고서와 같은 구성: 비교 대상 API, 실행 방법·환경 변수 표, warmup·gRPC 구성·런타임/라이브러리 버전, 결과 파일 구성, unsupported 셀과 이유), 발견한 런타임 결함(파일:줄), BLOCKERS, 감독자 재검증 명령.
