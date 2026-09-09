@@ -38,6 +38,53 @@ public sealed class MeshNodeShutdownSealTests
     }
 
     [Fact]
+    public async Task OutboundHello_StartsWhenTransportReadyIsDelivered()
+    {
+        var scheduler = new GatedTaskScheduler();
+        DeferredReadyMonitor? transportMonitor = null;
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            routedSubmitScheduler: scheduler,
+            decorateSocketMonitor: (monitor, wake) =>
+                transportMonitor = new DeferredReadyMonitor(monitor, wake));
+        var suffix = Guid.NewGuid().ToString("N");
+        node.SetRoutingId(RoutingId.From($"ready-node-{suffix}"));
+        node.SetBind(EphemeralTcpEndpoint);
+        node.AddChannel(MeshName);
+        node.Start();
+        var peerRid = RoutingId.From($"ready-peer-{suffix}");
+        await using var peer = StartPeer(context, peerRid, EphemeralTcpEndpoint);
+
+        try
+        {
+            node.ConnectPeer(peer.Status().LocalEndpoint, peerRid);
+            await transportMonitor!.ReadyCaptured.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // Even after an admission retry interval, the first Hello must
+            // await transport readiness rather than attempt an unready route.
+            await Task.Delay(TimeSpan.FromMilliseconds(600));
+            Assert.False(scheduler.Queued.IsCompleted);
+            Assert.Equal(0U, node.Status().AdmittedPeerCount);
+            Assert.Equal(0U, peer.Status().AdmittedPeerCount);
+
+            transportMonitor.ReleaseReady();
+            await transportMonitor.ReadyApplied.WaitAsync(TimeSpan.FromSeconds(5));
+            await scheduler.Queued.WaitAsync(TimeSpan.FromSeconds(5));
+            scheduler.Release();
+            await WaitUntilAsync(() =>
+                node.Status().AdmittedPeerCount == 1
+                && peer.Status().AdmittedPeerCount == 1);
+        }
+        finally
+        {
+            transportMonitor!.ReleaseReady();
+            scheduler.Release();
+        }
+    }
+
+    [Fact]
     public async Task CrossedHelloAdmit_CompletesOnceOnBothSides()
     {
         var scheduler = new GatedTaskScheduler();

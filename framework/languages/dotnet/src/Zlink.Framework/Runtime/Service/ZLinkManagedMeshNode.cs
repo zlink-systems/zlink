@@ -8765,6 +8765,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         ? ZLinkServiceConnectionDirection.Inbound
                         : ZLinkServiceConnectionDirection.Outbound,
                     value.RemoteAddr);
+                if (outboundCandidate is { Admitted: false, State: MeshPeerState.Connecting })
+                    outboundCandidate.NextAdmissionTimestamp = 0;
             });
             return;
         }
@@ -10873,7 +10875,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             _socket!.Options.SetConnectRoutingId(peer.PhysicalRoutingId);
             _socket.Connect(peer.Endpoint);
         }
-        peer.NextAdmissionTimestamp = 0;
+        // The first service Hello starts at the transport READY edge.
+        peer.NextAdmissionTimestamp = long.MaxValue;
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"mesh_peer_connect local={_routingId} peer={peer.ExpectedRid?.ToString() ?? "<unknown>"} "
             + $"endpoint={peer.Endpoint} intent={peer.Intent}");
