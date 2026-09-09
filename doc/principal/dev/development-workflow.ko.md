@@ -45,11 +45,40 @@ Issue 등록 ──> 브랜치 + worktree ──> 작업(사람 또는 codex job
   `bench/61-dealer-router-rows`.
 - worktree: `git worktree add ~/project/zlink-<slug> -b <branch> origin/main`. 작업 디렉터리 하나에
   브랜치 하나. 같은 브랜치를 두 worktree에서 열지 않는다.
-- 로컬 패키지(`.artifacts/wsl`)는 worktree마다 따로 만든다. Core release prefix(`~/.cache/zlink/core/<ver>`)만
-  공유한다(사용자 결정 2026-09-09).
+- 로컬 패키지는 **내용 해시로 키를 잡은 공유 캐시**에서 가져온다(§4.1). worktree마다 다시 빌드하지 않는다.
 - codex job에는 worktree 경로를 `-C`로 주고, **그 브랜치에만** 커밋하게 한다. push는 감독자가 한다.
   job이 `doc/**`·스펙·`.github/**`를 고치지 않는 규칙은 그대로다(BLOCKERS로 보고).
 - main을 따라잡을 때는 `git fetch && git merge origin/main`(rebase는 공유 브랜치에서 쓰지 않는다).
+
+### 4.1 로컬 패키지 공유 캐시 (content-addressed)
+
+binding 로컬 패키지(nuget·npm·maven·C++ install)의 입력은 `bindings/` 소스 트리, `BINDINGS_VERSION`,
+Core 버전 세 가지뿐이다. 같은 입력이면 어느 worktree에서 빌드했든 결과가 같으므로 해시로 공유한다
+(vcpkg binary cache·Conan cache·Gradle build cache와 같은 원리).
+
+- 키: `sha256(git rev-parse HEAD:bindings ‖ BINDINGS_VERSION ‖ core_version)` 앞 16자리.
+- 위치: `~/.cache/zlink/packages/<키>/{nuget,npm,maven,install}` + 완료 마커 `.complete`(빌드 중인
+  키를 다른 worktree가 읽지 않게 한다).
+- worktree의 `.artifacts/wsl`은 그 디렉터리로의 symlink다. `scripts/local-package/build-wsl.sh`가
+  "키가 있고 `.complete`면 링크만, 없으면 빌드 뒤 링크"를 한다. Core release prefix
+  `~/.cache/zlink/core/<ver>`는 지금처럼 버전으로 공유한다.
+- bindings를 고친 브랜치는 키가 달라져 자동으로 자기 산출물을 갖는다. framework 소스는 패키지가 아니라
+  workspace/ProjectReference로 소비되므로 캐시 대상이 아니다.
+- 정리: `scripts/local-package/cache-prune.sh --keep 5`가 최근 5개 키만 남긴다.
+
+### 4.2 명령 하나로 — `scripts/dev/work.sh`
+
+절차를 잊지 않도록 단계마다 명령 하나로 묶는다. 감독자와 사람 모두 이 명령으로만 작업을 시작·제출·종료한다.
+
+| 명령 | 하는 일 |
+|---|---|
+| `work.sh start "<제목>" --area <area> --kind <kind> [--body <파일>]` | Issue 생성(라벨·milestone `1.0`·Project `Todo`) → 브랜치 `<area>/<번호>-<slug>` → worktree `~/project/zlink-<slug>` → 로컬 패키지 링크(§4.1) → Project `In progress`. 출력: worktree 경로 |
+| `work.sh pr [--body <파일>]` | 현재 worktree 브랜치 push → PR 생성(첫 줄 `Closes #<번호>`, 본문 §5 세 항목) → Project `Review` |
+| `work.sh status` | 이 machine의 worktree·브랜치·Issue·PR·CI check 상태 표 |
+| `work.sh done` | PR merge(`--merge`) → 원격 브랜치 삭제 → worktree 제거 → Project `Done`(Issue는 `Closes`로 닫힘) |
+
+`start`는 Issue 본문 세 항목(범위/완료 조건/근거)이 비어 있으면 거부한다. codex job에는 `start`가 낸
+worktree 경로를 `-C`로 넘긴다.
 
 ## 5. PR과 merge
 
@@ -85,7 +114,8 @@ Issue 등록 ──> 브랜치 + worktree ──> 작업(사람 또는 codex job
 
 ## 8. 첫 적용 목록 (2026-09-10)
 
-- Milestone `1.0`, 라벨 §2, Project `ZLink` 생성.
+- Milestone `1.0`, 라벨 §2 생성(완료 2026-09-10). Project `ZLink`는 gh 토큰 `project` 권한 뒤 생성.
+- `scripts/dev/work.sh`(§4.2)와 패키지 공유 캐시(§4.1)를 첫 PR로 만든다(Issue 등록).
 - 열린 작업을 Issue로: framework messaging 성능 P1~P3(언어별), gRPC bench DEALER→ROUTER·ClientServer 행
   추가, Node framework codec `bytes`, Node/Java raw request-window 유실(FB-049/050), C++ framework
   send peer 소실(FB-054), HTTP host bind 실패 전달(FB-053), Unsafe→FFM 잔여 회귀, bindings 1.0에서

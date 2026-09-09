@@ -45,11 +45,42 @@ Register an Issue ──> branch + worktree ──> work (person or codex job) �
   `bench/61-dealer-router-rows`.
 - Worktree: `git worktree add ~/project/zlink-<slug> -b <branch> origin/main`. One directory per
   branch; never open the same branch in two worktrees.
-- Local packages (`.artifacts/wsl`) are per worktree; only the Core release prefix
-  (`~/.cache/zlink/core/<ver>`) is shared (user decision 2026-09-09).
+- Local packages come from a **content-addressed shared cache** (§4.1); worktrees do not rebuild them.
 - A codex job gets the worktree path via `-C` and commits **only on that branch**; the supervisor
   pushes. Jobs still never touch `doc/**`, specs or `.github/**` (report as BLOCKERS).
 - Catch up with main using `git fetch && git merge origin/main` (no rebase on shared branches).
+
+### 4.1 Shared local-package cache (content-addressed)
+
+The inputs of the binding local packages (nuget, npm, maven, C++ install) are only the `bindings/`
+source tree, `BINDINGS_VERSION` and the Core version. Equal inputs give equal outputs whichever
+worktree built them, so they are shared by hash (the same principle as the vcpkg binary cache, the
+Conan cache and the Gradle build cache).
+
+- Key: the first 16 characters of `sha256(git rev-parse HEAD:bindings ‖ BINDINGS_VERSION ‖ core_version)`.
+- Location: `~/.cache/zlink/packages/<key>/{nuget,npm,maven,install}` plus a `.complete` marker (so a
+  key still being built is never read by another worktree).
+- A worktree's `.artifacts/wsl` is a symlink to that directory. `scripts/local-package/build-wsl.sh`
+  links when the key exists with `.complete`, otherwise builds and then links. The Core release prefix
+  `~/.cache/zlink/core/<ver>` stays shared by version as today.
+- A branch that changes bindings gets a different key and therefore its own outputs automatically.
+  Framework sources are consumed through workspaces/ProjectReferences, not packages, so they are not cached.
+- Pruning: `scripts/local-package/cache-prune.sh --keep 5` keeps the five most recent keys.
+
+### 4.2 One command per step — `scripts/dev/work.sh`
+
+Each step is one command so that nothing is forgotten. The supervisor and people start, submit and
+finish work only through it.
+
+| Command | What it does |
+|---|---|
+| `work.sh start "<title>" --area <area> --kind <kind> [--body <file>]` | creates the Issue (labels, milestone `1.0`, Project `Todo`) → branch `<area>/<number>-<slug>` → worktree `~/project/zlink-<slug>` → local-package link (§4.1) → Project `In progress`. Prints the worktree path |
+| `work.sh pr [--body <file>]` | pushes the current worktree's branch → creates the PR (first line `Closes #<number>`, body per §5) → Project `Review` |
+| `work.sh status` | table of this machine's worktrees, branches, Issues, PRs and CI checks |
+| `work.sh done` | merges the PR (`--merge`) → deletes the remote branch → removes the worktree → Project `Done` (the Issue closes through `Closes`) |
+
+`start` refuses an Issue body that lacks the three sections (scope / done criteria / evidence). A codex
+job receives the worktree path printed by `start` via `-C`.
 
 ## 5. PRs and merging
 
@@ -90,7 +121,8 @@ Register an Issue ──> branch + worktree ──> work (person or codex job) �
 
 ## 8. First application (2026-09-10)
 
-- Milestone `1.0`, the §2 labels, Project `ZLink`.
+- Milestone `1.0` and the §2 labels (done 2026-09-10). Project `ZLink` follows once the gh token has the `project` scope.
+- `scripts/dev/work.sh` (§4.2) and the shared package cache (§4.1) are the first PR (registered as an Issue).
 - Open work as Issues: framework messaging performance P1–P3 (per language), gRPC bench
   DEALER→ROUTER and ClientServer rows, Node framework codec `bytes`, Node/Java raw request-window loss
   (FB-049/050), C++ framework send peer loss (FB-054), HTTP host bind failure propagation (FB-053),
