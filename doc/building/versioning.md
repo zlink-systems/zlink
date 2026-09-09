@@ -60,13 +60,19 @@ is the safer path. The full procedure is in [the release pipeline](./release-pip
 
 ## 5. The 1.0 plan
 
-Core and the bindings move to `1.0` once the binding performance campaign running on machine B is
-finished. Conditions:
+The last 0.x published now is framework 0.11.0 (user decision, 2026-09-09). Everything after it
+is collected and shipped at once, with no intermediate release, as Core `1.0`, bindings `1.0.0` and
+framework `1.0.0`; there is no intermediate binding release such as 0.17.7. Conditions for 1.0:
 
 - Public C API/ABI frozen (`libzlink.vers`), release archives and green CI for the five supported
   platforms (linux-x64, linux-arm64, macos-arm64, windows-x64, windows-arm64).
-- Public APIs of the four bindings frozen and the performance campaign judged complete.
-- The framework schedules its own `1.0`.
+- Public APIs of the four bindings frozen and the binding performance campaign on machine B
+  judged complete.
+- The framework aligns with the same 1.0 as Core and the bindings. The order stays Core →
+  bindings → framework ([release pipeline](./release-pipeline.md) §4), all three tags on the same
+  day.
+- 1.0 refreshes the C++ public assets (source archives) and the checksums of the vcpkg ports and
+  Conan recipes.
 
 ## 6. History
 

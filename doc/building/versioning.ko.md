@@ -58,13 +58,16 @@
 
 ## 5. 1.0 계획
 
-Core와 bindings는 B 머신에서 진행 중인 binding 성능 개선 캠페인이 끝나면 `1.0`으로 올린다.
-조건은 다음과 같다.
+지금 배포하는 마지막 0.x는 framework 0.11.0이다(사용자 결정 2026-09-09). 그 뒤의 수정은 중간
+릴리스 없이 모아서 Core `1.0`, bindings `1.0.0`, framework `1.0.0`으로 한 번에 배포한다. 0.17.7 같은
+중간 binding 릴리스는 만들지 않는다. 1.0 조건은 다음과 같다.
 
 - 공개 C API·ABI 동결(`libzlink.vers`), 지원 플랫폼 5종(linux-x64·linux-arm64·macos-arm64·
   windows-x64·windows-arm64) 릴리스 아카이브와 CI green.
-- 네 언어 binding의 공개 API 동결과 성능 캠페인 판정 완료.
-- Framework는 별도 일정으로 `1.0`을 정한다.
+- 네 언어 binding의 공개 API 동결과 B 머신의 binding 성능 개선 캠페인 판정 완료.
+- Framework는 Core·bindings와 같은 1.0에 맞춘다. 배포 순서는 Core → bindings → framework
+  ([릴리스 파이프라인](./release-pipeline.ko.md) §4)이며 세 태그를 같은 날 낸다.
+- 1.0에서 C++ 공개 자산(소스 archive)과 vcpkg port·Conan recipe의 checksum을 갱신한다.
 
 ## 6. 이력
 
