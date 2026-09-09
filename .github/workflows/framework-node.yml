@@ -138,6 +138,13 @@ jobs:
 
       # framework CI often runs minutes after a binding publish; the registry
       # serves the package metadata before its tarball (up to ~30 min).
+      - name: Materialize the local-package pin of @zlink-systems/http-client used by the workspace manifest
+        shell: bash
+        run: |
+          mkdir -p .artifacts/wsl/npm
+          npm pack framework/languages/node/packages/http-client \
+            --pack-destination .artifacts/wsl/npm
+
       - name: Wait for the binding package on npm
         shell: bash
         run: |
@@ -255,6 +262,13 @@ jobs:
 
       # framework CI often runs minutes after a binding publish; the registry
       # serves the package metadata before its tarball (up to ~30 min).
+      - name: Materialize the local-package pin of @zlink-systems/http-client used by the workspace manifest
+        shell: bash
+        run: |
+          mkdir -p .artifacts/wsl/npm
+          npm pack framework/languages/node/packages/http-client \
+            --pack-destination .artifacts/wsl/npm
+
       - name: Wait for the binding package on npm
         shell: bash
         run: |

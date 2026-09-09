@@ -27,9 +27,10 @@ runs:
         $before = @{}
         Get-ChildItem env: | ForEach-Object { $before[$_.Name] = $_.Value }
         $marker = '__ZLINK_VCVARS_ENV__'
-        $output = & cmd.exe /d /s /c "`"$vcvarsall`" ${{ inputs.arch }} && echo $marker && set"
+        # No space before '&&' after echo: cmd would print it as part of the marker line.
+        $output = & cmd.exe /d /s /c "`"$vcvarsall`" ${{ inputs.arch }} && echo $marker&& set"
         if ($LASTEXITCODE -ne 0) { throw "vcvarsall.bat failed with exit code $LASTEXITCODE" }
-        $lines = @($output)
+        $lines = @($output | ForEach-Object { "$_".TrimEnd() })
         $start = [Array]::IndexOf($lines, $marker)
         if ($start -lt 0) { throw 'vcvarsall.bat did not print the environment' }
         $changed = 0
