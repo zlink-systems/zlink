@@ -6,6 +6,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const node_test_1 = __importDefault(require("node:test"));
 const strict_1 = __importDefault(require("node:assert/strict"));
+const node_os_1 = require("node:os");
 const { CompletionOwner } = require('../../dist/zlink/runtime/messaging/completion_owner');
 const { SubmitResult } = require('../../dist/zlink/contracts/errors/errors');
 function writable(completionId, token) {
@@ -28,12 +29,12 @@ for (const kind of ['send', 'request']) {
             submissions += 1;
             if (submissions === 1) {
                 completions.push(writable(101n, token));
-                return { result: SubmitResult.Backpressured, nativeErrno: 11, completionId: 101n };
+                return { result: SubmitResult.Backpressured, nativeErrno: node_os_1.constants.errno.EAGAIN, completionId: 101n };
             }
             order.push(`resubmit-${submissions - 1}`);
             if (submissions === 2) {
                 completions.push(writable(103n, token));
-                return { result: SubmitResult.Backpressured, nativeErrno: 11, completionId: 103n };
+                return { result: SubmitResult.Backpressured, nativeErrno: node_os_1.constants.errno.EAGAIN, completionId: 103n };
             }
             strict_1.default.equal(submissions, 3);
             if (kind === 'request')
@@ -112,7 +113,7 @@ for (const kind of ['send', 'request']) {
         socketSubmitSend: (_handle, _parts, _target, _flags, token) => {
             if (sendToken === 0n) {
                 sendToken = token;
-                return { result: SubmitResult.Backpressured, nativeErrno: 11, completionId: 301n };
+                return { result: SubmitResult.Backpressured, nativeErrno: node_os_1.constants.errno.EAGAIN, completionId: 301n };
             }
             order.push('resubmit');
             return { result: SubmitResult.Ok, nativeErrno: 0, completionId: 0n };

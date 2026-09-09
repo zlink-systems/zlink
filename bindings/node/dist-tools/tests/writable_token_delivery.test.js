@@ -6,6 +6,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const node_test_1 = __importDefault(require("node:test"));
 const strict_1 = __importDefault(require("node:assert/strict"));
+const node_os_1 = require("node:os");
 const { CompletionOwner } = require('../../dist/zlink/runtime/messaging/completion_owner');
 const { SubmitResult } = require('../../dist/zlink/contracts/errors/errors');
 for (const kind of ['send', 'request']) {
@@ -27,7 +28,7 @@ for (const kind of ['send', 'request']) {
                         },
                         sendResult: 0, terminalErrno: 0, requestResult: 0,
                     });
-                    return { result: SubmitResult.Backpressured, nativeErrno: 11, completionId: 71n };
+                    return { result: SubmitResult.Backpressured, nativeErrno: node_os_1.constants.errno.EAGAIN, completionId: 71n };
                 }
                 strict_1.default.equal(submissions, 2, 'one WRITABLE authorizes one resubmission');
                 if (kind === 'request') {
