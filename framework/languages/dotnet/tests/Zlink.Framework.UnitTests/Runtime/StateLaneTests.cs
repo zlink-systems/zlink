@@ -119,6 +119,25 @@ public sealed class StateLaneTests
         Assert.Equal(250, await lane.RunAsync(() => count));
     }
 
+    [Fact]
+    public async Task EnqueueRacingWithDrainRelease_DoesNotStrandTheNextTurn()
+    {
+        var lane = new ZLinkStateLane();
+        var count = 0;
+        // A single producer repeatedly races the completion of its previous
+        // turn with the drainer's empty-queue check. Multiple producers tend to
+        // keep the queue nonempty and hide this idle-transition race.
+        var producer = Task.Run(() =>
+        {
+            for (var index = 0; index < 1_000_000; index++)
+                lane.RunAsync(() => ++count).GetAwaiter().GetResult();
+        });
+
+        await producer.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(1_000_000, count);
+        await lane.DisposeAsync();
+    }
+
     // ---- 재진입: 행 대신 진단 가능한 실패 ---------------------------------------------
 
     [Fact]

@@ -159,7 +159,10 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
         finally
         {
             CurrentLane.Value = null;
-            Volatile.Write(ref _scheduled, 0);
+            // Publish the release before checking for a racing enqueue. A release
+            // store alone allows that following load to observe the old empty
+            // queue while a producer still observes the old scheduled owner.
+            Interlocked.Exchange(ref _scheduled, 0);
             if (!_mailbox.IsEmpty)
                 ScheduleDrain();
             else if (Volatile.Read(ref _closed) != 0)
