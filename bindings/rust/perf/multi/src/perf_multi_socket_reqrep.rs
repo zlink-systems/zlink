@@ -146,7 +146,7 @@ pub fn run_server(config: ReqRepConfig) {
 
         while !stop.load(Ordering::Acquire) {
             match router.recv(&mut received, RecvFlags::DONT_WAIT) {
-                Ok(true) => reply_request(&received),
+                Ok(true) => reply_request(std::mem::take(&mut received)),
                 Ok(false) => break,
                 Err(error) if error.code() == RecvResult::NoData => break,
                 Err(error) => panic!("request receive failed: {error}"),
@@ -155,7 +155,7 @@ pub fn run_server(config: ReqRepConfig) {
     }
 }
 
-fn reply_request(received: &zlink::Received) {
+fn reply_request(received: zlink::Received) {
     if received.routing_id().is_none() || received.reply_token().is_none() {
         panic!("request is missing its reply route");
     }
@@ -164,12 +164,13 @@ fn reply_request(received: &zlink::Received) {
         panic!("request has an invalid measurement envelope");
     }
 
-    // Message::try_clone uses zlink_msg_copy, so the reply owns an independent
-    // native reference without copying the payload bytes out to a Vec and back.
-    let reply_payload = received.parts()[0]
-        .try_clone()
-        .expect("clone received reply payload");
-    let reply = received.reply().message(reply_payload);
+    let reply = received.reply();
+    let reply_payload = received
+        .into_parts()
+        .into_iter()
+        .next()
+        .expect("received reply payload");
+    let reply = reply.message(reply_payload);
     let result = if common::measurement_part_count() == 2 {
         reply
             .message(Message::try_from(&[] as &[u8]).expect("empty reply tail"))

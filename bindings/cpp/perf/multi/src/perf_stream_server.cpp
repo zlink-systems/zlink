@@ -199,9 +199,7 @@ perf::detached_async_task_t send_packet_async (
   zlink::routing_id_t source_rid_, zlink::message_t packet_)
 {
     try {
-        co_await std::move (ctx_->server->send (source_rid_))
-          .message (std::move (packet_))
-          .async ();
+        co_await ctx_->server->send (source_rid_).message (packet_).async ();
     }
     catch (const zlink::submit_error_t &error) {
         if (!stale_stream_route (error)) {

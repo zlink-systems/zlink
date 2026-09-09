@@ -100,6 +100,30 @@ binding 로컬 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `sys
   `status`는 로컬 정보를 항상 보여 준다.
 - `work.sh`가 생기기 전(§8)의 수동 절차는 §8에 적힌 명령 목록이다.
 
+### 4.3 그 밖의 개발 스크립트
+
+`work.sh`는 Issue 하나의 흐름만 맡는다. 그 바깥에서 반복되는 일은 다음 스크립트가 맡는다.
+있는 것과 없는 것을 구분해 적는다 — **없는 스크립트를 문서가 있는 것처럼 적지 않는다.**
+
+| 스크립트 | 하는 일 | 상태 |
+|---|---|---|
+| `scripts/dev/work.sh` | Issue → 브랜치·worktree → PR → merge·정리 (§4.2) | 있음 |
+| `scripts/local-package/package-cache.py`·`cache-prune.sh` | binding 로컬 패키지 공유 캐시와 정리 (§4.1) | 있음 |
+| `scripts/perf/perf-ticket.sh`·`perf-queue-runner.sh` | 모든 측정을 티켓 하나씩 직렬로 실행 | 있음 |
+| `scripts/gate/*.sh` | 언어별 게이트 | 있음 |
+| `scripts/dev/job.sh` | codex sub-agent job의 시작·상태·3분 주기 감시·종료. 시작 직후 로그를 검사해 잘못된 모델 id나 인증 실패를 즉시 알린다. 종료는 기록한 pid로만 한다 | 있음 |
+| `scripts/dev/worktree-sweep.sh` | 방치된 worktree를 안전 기준(미커밋·미push·main 포함·실행 중 job)으로 판정해 정리 | 있음 |
+| `scripts/dev/session-setup.sh` | 세션 시작 시 벤치 포트 예약·tmpfs 여유·측정 큐·로컬 패키지 상태를 한 번에 맞춘다 | 있음 |
+| `scripts/dev/release-check.sh` | 태그 전에 버전 동기화·릴리스 노트·패키지 메타데이터·배포 대상을 검사 | 있음 |
+| 벤치 결과 비교 도구 | 측정 두 벌을 시나리오 × payload 표(처리량·지연·비율·변화)로 낸다 | Issue #37 |
+| `scripts/dev/ci-watch.sh` | CI 감시자를 하나로 제한하고 10분 주기로 확인한다(GitHub API 한도) | 있음 |
+
+원칙 셋을 이 스크립트들에 공통으로 적용한다.
+
+- **재실행 안전**: 같은 명령을 다시 실행해도 상태가 어긋나지 않는다.
+- **조용한 실패 금지**: 배경 프로세스를 띄우는 스크립트는 시작 직후 살아 있는지 확인하고, 죽었으면 로그의 마지막 오류를 사람에게 보여 준다.
+- **이름으로 죽인다**: 프로세스 종료는 기록한 pid로만 한다. `pkill -f`처럼 패턴으로 찾으면 호출자 셸까지 죽는다.
+
 ## 5. PR과 merge
 
 - PR 제목은 `<모듈>: <한 줄 요약>`. 본문 첫 줄은 `Closes #N`(완료) 또는 `Refs #N`(부분). 본문에는

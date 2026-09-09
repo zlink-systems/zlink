@@ -628,6 +628,40 @@ final class ZLinkM6ARuntimeContractTest {
     }
 
     @Test
+    void channelSelectionPlanChangesOnlyWithTopologyReadiness() {
+        var topology = new ZLinkServiceTopologyRegistry(
+            descriptor("mesh", "local", 1, 1, List.of(), 100));
+        var peerA = descriptor(
+            "mesh", "peer-a", 1, 1,
+            List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
+            100);
+        var peerB = descriptor(
+            "mesh", "peer-b", 1, 1,
+            List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 300)),
+            100);
+        topology.admit(peerA, "pipe-a");
+        topology.admit(peerB, "pipe-b");
+
+        assertTrue(topology.selectReadyChannel("orders").isEmpty());
+        assertTrue(topology.setChannelReady(peerA.nodeRoutingId(), "pipe-a", true));
+        assertTrue(topology.setChannelReady(peerB.nodeRoutingId(), "pipe-b", true));
+        assertEquals(
+            List.of("peer-b", "peer-a", "peer-b", "peer-b"),
+            java.util.stream.IntStream.range(0, 4)
+                .mapToObj(ignored -> topology.selectReadyChannel("orders")
+                    .orElseThrow().descriptor().nodeRoutingId().toString())
+                .toList());
+
+        assertTrue(topology.setChannelReady(peerB.nodeRoutingId(), "pipe-b", false));
+        for (int index = 0; index < 4; index++) {
+            assertEquals(
+                peerA.nodeRoutingId(),
+                topology.selectReadyChannel("orders")
+                    .orElseThrow().descriptor().nodeRoutingId());
+        }
+    }
+
+    @Test
     void topologyReadinessPredicateCanReenterTheRegistry() {
         var topology = new ZLinkServiceTopologyRegistry(
             descriptor("mesh", "local", 1, 1, List.of(), 100));

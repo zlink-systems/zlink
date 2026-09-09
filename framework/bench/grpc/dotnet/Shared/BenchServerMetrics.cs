@@ -36,6 +36,11 @@ public sealed class BenchServerMetrics
         Record(payload.Body.Span, includeLatency: false);
     }
 
+    public void RecordReceived(ReadOnlySpan<byte> payload)
+    {
+        Record(payload, includeLatency: false);
+    }
+
     private void Record(ReadOnlySpan<byte> payload, bool includeLatency)
     {
         if (!BenchMetricHeaders.TryDecode(payload, out var header) || header.Phase != BenchPhase.Active)

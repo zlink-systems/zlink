@@ -4,6 +4,9 @@ import systems.zlink.contracts.sockets.RouterSocket;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.time.Duration;
@@ -18,6 +21,36 @@ import systems.zlink.contracts.core.RoutingId;
 
 final class ZLinkJavaRawServicePortContractTest {
     @Test
+    void blockingReadinessSleepsUntilArrivalAndWakesImmediately() throws Exception {
+        RoutingId leftRid = RoutingId.from("readiness-left");
+        RoutingId rightRid = RoutingId.from("readiness-right");
+        String endpoint = "inproc://readiness-" + System.nanoTime();
+
+        try (ZLinkJavaRawServicePort port = new ZLinkJavaRawServicePort();
+             ExecutorService executor = Executors.newSingleThreadExecutor()) {
+            var left = port.openRouter(leftRid);
+            var right = port.openRouter(rightRid);
+            left.bind(endpoint);
+            right.connect(endpoint);
+
+            var readiness = executor.submit(() ->
+                port.waitForReadable(left, Duration.ofSeconds(2)));
+            Thread.sleep(50);
+            assertFalse(readiness.isDone());
+            long sentAt = System.nanoTime();
+            port.send(right, leftRid, List.of(new byte[] {1}))
+                .toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+            assertTrue(readiness.get(2, TimeUnit.SECONDS));
+            assertTrue(Duration.ofNanos(System.nanoTime() - sentAt)
+                .compareTo(Duration.ofMillis(250)) < 0);
+            try (var inbound = port.receiveNow(left).orElseThrow()) {
+                assertArrayEquals(new byte[] {1}, inbound.frames().getFirst());
+            }
+        }
+    }
+
+    @Test
     void closesOwnedRawResourcesOnceAndRejectsNewResourcesAfterClose() {
         ZLinkJavaRawServicePort port = new ZLinkJavaRawServicePort();
         port.openRouter(RoutingId.from("m5-resource-owner"));
@@ -30,7 +63,7 @@ final class ZLinkJavaRawServicePortContractTest {
     }
 
     @Test
-    void sendsAndReceivesCopiedMultipartWithSourceRoutingId() throws Exception {
+    void inboundRetainsOneMultipartOwnerWithSourceRoutingId() throws Exception {
         RoutingId leftRid = RoutingId.from("m5-left");
         RoutingId rightRid = RoutingId.from("m5-right");
         String endpoint = "inproc://m5-raw-service-port-" + System.nanoTime();
@@ -62,13 +95,12 @@ final class ZLinkJavaRawServicePortContractTest {
             }
 
             assertEquals(rightRid, received.orElseThrow().source());
-            List<byte[]> retained = received.orElseThrow().frames();
-            assertArrayEquals(new byte[] {1, 2, 3}, retained.get(0));
-            assertArrayEquals(new byte[] {4, 5, 6}, retained.get(1));
-            retained.get(0)[0] = 8;
-            assertArrayEquals(
-                new byte[] {1, 2, 3},
-                received.orElseThrow().frames().get(0));
+            try (var inbound = received.orElseThrow()) {
+                List<byte[]> retained = inbound.frames();
+                assertArrayEquals(new byte[] {1, 2, 3}, retained.get(0));
+                assertArrayEquals(new byte[] {4, 5, 6}, retained.get(1));
+                assertSame(retained, inbound.frames());
+            }
         }
     }
 

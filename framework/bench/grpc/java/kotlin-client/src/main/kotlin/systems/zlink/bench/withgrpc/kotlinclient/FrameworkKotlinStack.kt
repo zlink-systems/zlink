@@ -2,7 +2,7 @@
 
 package systems.zlink.bench.withgrpc.kotlinclient
 
-import com.google.protobuf.ByteString
+import com.google.protobuf.UnsafeByteOperations
 import java.time.Duration
 import kotlinx.coroutines.CoroutineScope
 import org.springframework.boot.Banner
@@ -92,7 +92,7 @@ class FrameworkKotlinStack private constructor(
     private fun payload(payloadSize: Int, phase: Byte, sequence: Long): BenchPayload =
         BenchPayload.newBuilder()
             .setBody(
-                ByteString.copyFrom(
+                UnsafeByteOperations.unsafeWrap(
                     BenchMetricHeader.createPayload(payloadSize, runId, phase, sequence),
                 ),
             )

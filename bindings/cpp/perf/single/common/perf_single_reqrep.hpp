@@ -422,9 +422,9 @@ inline bool run_reqrep_pattern_impl (const reqrep_config_t &config_,
                 zlink::message_t &part = received.parts ().front ();
                 if (measurement_part_count () == 2) {
                     zlink::message_t tail = message_from_payload (NULL, 0);
-                    std::move (received.reply ().message (part)).message (tail).submit ();
+                    received.reply ().message (part).message (tail).submit ();
                 } else {
-                    std::move (received.reply ().message (part)).submit ();
+                    received.reply ().message (part).submit ();
                 }
             }
             catch (const zlink::binding_error_t &) {

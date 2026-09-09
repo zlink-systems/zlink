@@ -171,7 +171,7 @@ default_milestone() {
     value=$(sed -n -E '/^[[:space:]]*current_milestone[[:space:]]*=/ {
         s/^[^=]*=//; s/[[:space:]]*#.*$//; s/^[[:space:]\"]+//; s/[[:space:]\"]+$//; p; q
     }' "$conf")
-    value=${value%${value##*[![:space:]]}}
+    value=${value%"${value##*[![:space:]]}"}
     printf '%s' "$value"
 }
 
@@ -281,7 +281,7 @@ existing_branch_for_issue() {
         printf '%s\n' "$branch"
         return 0
     fi
-    branch=$(git worktree list --porcelain | awk -v pattern="/"$number"-[a-z0-9-]+$" '
+    branch=$(git worktree list --porcelain | awk -v pattern="/$number-[a-z0-9-]+$" '
         $1 == "branch" {
             value = $2
             sub(/^refs\/heads\//, "", value)
@@ -294,23 +294,13 @@ existing_branch_for_issue() {
     fi
     git for-each-ref --format='%(refname:short)' refs/heads refs/remotes/origin \
         | sed 's#^origin/##' \
-        | awk -v pattern="/"$number"-[a-z0-9-]+$" '$0 ~ pattern { print; exit }'
+        | awk -v pattern="/$number-[a-z0-9-]+$" '$0 ~ pattern { print; exit }'
 }
 
 prepare_packages() {
-    local worktree=$1 link source
-    link="$worktree/.artifacts/wsl"
-    source="$ZLINK_BASELINE_ROOT/.artifacts/wsl"
-
-    if [[ -L "$link" ]]; then
-        [[ "$(readlink "$link")" == "$source" ]] || die 1 "기존 패키지 링크 대상이 다릅니다: $link"
-        printf '패키지 링크 재사용: %s -> %s\n' "$link" "$source"
-        return 0
-    fi
-    [[ ! -e "$link" ]] || die 1 "패키지 링크 위치에 다른 파일이 있습니다: $link"
-    run_mutation mkdir -p "$worktree/.artifacts"
-    run_mutation ln -s "$source" "$link"
-    printf '패키지 준비: %s -> %s\n' "$link" "$source"
+    local worktree=$1
+    run_mutation bash "$worktree/scripts/local-package/build-wsl.sh"
+    printf '패키지 준비: %s/.artifacts/wsl\n' "$worktree"
 }
 
 ensure_worktree() {
@@ -340,7 +330,7 @@ ensure_worktree() {
 
 start_command() {
     local root title="" area="" kind="" body="" milestone="" issue_arg="" no_packages=0
-    local found found_number found_url existing_kind slug target
+    local found found_number _found_url existing_kind slug target
     root=$(repo_root)
 
     while (($#)); do
@@ -371,11 +361,10 @@ start_command() {
         validate_area "$area"
         validate_kind "$kind"
         validate_issue_body "$body"
-        [[ -n "$milestone" ]] || milestone=$(default_milestone "$root")
 
         found=$(find_issue_by_title "$title" || true)
         if [[ -n "$found" ]]; then
-            IFS=$'\t' read -r found_number found_url <<<"$found"
+            IFS=$'\t' read -r found_number _found_url <<<"$found"
             load_issue "$found_number"
             [[ "$(issue_label_value "$ISSUE_NUMBER" 'area:' || true)" == "$area" ]] \
                 || die 1 "같은 제목의 Issue #$ISSUE_NUMBER가 다른 area에 있습니다."
@@ -402,8 +391,10 @@ start_command() {
         if [[ -z "$existing_kind" ]]; then
             run_mutation gh issue edit "$ISSUE_NUMBER" --add-label "kind: $kind"
         fi
-        set_milestone_best_effort "$ISSUE_NUMBER" "$milestone"
     fi
+
+    [[ -n "$milestone" ]] || milestone=$(default_milestone "$root")
+    set_milestone_best_effort "$ISSUE_NUMBER" "$milestone"
 
     slug=$(slugify "$ISSUE_TITLE")
     WORK_BRANCH=$(existing_branch_for_issue "$ISSUE_NUMBER" || true)

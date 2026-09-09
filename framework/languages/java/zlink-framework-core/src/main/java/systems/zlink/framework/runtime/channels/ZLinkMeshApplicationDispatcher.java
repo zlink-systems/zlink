@@ -128,14 +128,14 @@ public final class ZLinkMeshApplicationDispatcher
             NODE_NAMESPACE,
             routeNamespace(
                 mesh.nodeHandlers(),
-                framework.serialExecutor()));
+                framework.handlerExecutor()));
         mesh.channelHandlers().forEach((name, handlers) ->
             namespaces.put(name, channelNamespace(
                 name,
                 handlers,
                 mesh.channelHandlerGroups().getOrDefault(name, List.of()),
                 scannedHandlers,
-                framework.serialExecutor())));
+                framework.handlerExecutor())));
     }
 
     @Override

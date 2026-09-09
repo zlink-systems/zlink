@@ -16,7 +16,7 @@
 const zlink = require('@zlink-systems/zlink');
 const { argValue, argInt } = require('../shared/args');
 const { BenchServerMetrics, startStatsServer } = require('../shared/bench-server-metrics');
-const { RESPONSE_ENVELOPE, ROUTING_IDS, encodeBenchPayload, decodeBenchPayloadBody } =
+const { RESPONSE_ENVELOPE, ROUTING_IDS, encodeBenchPayloadMessage, decodeBenchPayloadBody } =
   require('../shared/raw-wire');
 
 const argv = process.argv.slice(2);
@@ -79,7 +79,7 @@ function pumpRequests() {
       const body = part === null ? null : decodeBenchPayloadBody(part.data());
       if (body === null) throw new Error('invalid raw protobuf payload');
       metrics.record(body);
-      const reply = encodeBenchPayload(body);
+      const reply = encodeBenchPayloadMessage(body);
       const operation = requestReceived.replyToken !== null
         ? requestReceived.reply()
         : requestReceived.send();
@@ -87,8 +87,6 @@ function pumpRequests() {
     } catch (error) {
       metrics.recordError();
       console.error(`raw request loop failed: ${error.message}`);
-    } finally {
-      requestReceived.close();
     }
   }
   return handled;
@@ -115,8 +113,6 @@ function pumpCommands() {
     } catch (error) {
       metrics.recordError();
       console.error(`raw command loop failed: ${error.message}`);
-    } finally {
-      commandReceived.close();
     }
   }
   return handled;

@@ -1013,3 +1013,19 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
   Java·Kotlin이 payload를 한 번 더 복사한다(`FrameworkStack.java:88-90`). Node는 framework 클라이언트가 없어 행이 UNSUPPORTED다.
   **즉 raw 쪽 결함은 비율을 높이고 framework 클라이언트 결함은 비율을 낮춘다 — 두 방향이 섞여 현재 숫자는 어느 쪽으로도
   신뢰할 수 없다.** Issue #25의 완료 조건에 framework 클라이언트의 event 기반 대기·O(1) 완료 정리·복사 없는 payload를 더했다.
+
+## FB-061 — .NET framework P2 1차: 채택 불가(send-saturation 4096 회귀, persistent worker 미완) (2026-09-10, Issue #5)
+
+- **결과(1-run, branch `framework-dotnet/5-dispatch-batch`, WIP 커밋 62d1cff790 — 채택 아님)**: 비율 0.0023~0.2762로 전 셀 0.90 미달.
+  request-serial 1024 0.2064 → 0.2159, request-window 1024 0.1422 → 0.1532로 소폭 개선. **send-saturation 4096은
+  0.0116 → 0.0023(before 대비 0.1848배)로 회귀**했고 target backlog가 5 GiB급으로 쌓였다. 이 회귀 때문에 커밋을 채택하지 않았다.
+- **구현한 것**: 회전당 최대 64건 drain, binding receive 전 permit 예약, framework multipart를 직접 할당한 native `Message`에 기록,
+  pump가 한 claim에서 64건까지 받고 batch callback으로 넘김, node route batch당 detached task 1개(요청별 task·supervisor 등록 제거).
+- **미완**: 스펙 08 W1~W5의 **persistent application worker**. batch 사이에 살아 있는 worker 대신 batch마다 task를 만든다.
+- **검증**: Unit 2,034/2,034, Contract 77/77 통과. 첫 실행에서 raw ingress가 읽을 frame이 없는데 다음 permit waiter를 미리 예약해
+  multicast child가 굶는 race가 1회 재현됐고, poll 결과가 있는 turn만 waiter를 만들도록 고쳐 20회 반복과 전체 suite가 통과했다.
+- **binding 쪽 관찰**: published binding 0.17.6 단독 repro에서 completion reservation 65,536개를 채우면 tokenless request submit이
+  `Backpressured`(errno 11)로 끝난다. binding·Core 계약의 정상 terminal이므로 Framework mapper를 바꾸지 않았다(Issue #19와 별개).
+- **결정(감독자)**: 2차 범위 = (1) persistent application worker, (2) **send-saturation 4096 회귀와 target backlog 원인 규명 우선**
+  — 프레임워크 target이 4096에서 소비하지 못하는 이유를 계측으로 특정한다(raw는 361k msg/s인데 framework는 814 msg/s),
+  (3) 스펙 08 §3~§4 순서 준수. 수치를 맞추려고 벤치 조건·HWM·timeout을 바꾸지 않는다.

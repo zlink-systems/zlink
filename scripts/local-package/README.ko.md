@@ -29,7 +29,8 @@ scripts/local-package/build-wsl.sh --sync-versions
 scripts/local-package/build-wsl.sh --verify-versions
 ```
 
-일반 local-package build도 package 작업 전에 같은 sync와 verify를 실행한다.
+일반 local-package build와 cache hit는 버전을 검사하고, 불일치하면 종료한다.
+버전 파일을 변경한 뒤에는 위의 `--sync-versions`를 명시적으로 실행한다.
 Framework package 자체 version과 언어별 sample pin도 같은 동기화 대상이다.
 
 ## 전체 빌드
@@ -42,10 +43,26 @@ scripts/local-package/build-wsl.sh
 뒤 `BINDINGS_VERSION`의 C, C++, .NET, Go, Java, Node.js, Python, Rust binding을
 차례로 package한다.
 
-특정 binding만 package하려면 언어 이름을 넘긴다.
+`bindings/`와 `scripts/local-package/`가 깨끗하면 입력 hash에 해당하는 공유
+binding package를 재사용한다. Cache miss에서는 8개 binding을 모두 빌드한다.
+`.artifacts/wsl/`은 worktree별 디렉터리이며 binding package 파일만 공유 cache로
+연결한다. Framework package와 빌드 디렉터리는 worktree별로 유지한다.
+
+위 입력 경로에 staged·unstaged·untracked 변경이 있거나 기본 Release와 다른
+빌드 설정·compiler flag를 사용하면 `.artifacts/wsl-private/`에서 빌드한다.
+이때 특정 binding만 package하려면 언어 이름을 넘긴다.
 
 ```bash
 scripts/local-package/build-wsl.sh dotnet java node
+```
+
+Cache key·도구 버전 조회와 cache 정리는 다음 명령을 사용한다.
+공유 정책은 [개발 흐름 §4.1](../../doc/principal/dev/development-workflow.ko.md#41-로컬-패키지-공유-캐시-content-addressed)이 소유한다.
+
+```bash
+scripts/local-package/build-wsl.sh --cache-key
+scripts/local-package/cache-prune.sh --keep 5 --dry-run
+scripts/local-package/cache-prune.sh --keep 5
 ```
 
 **Core release가 선행 조건이다 — 우회 경로는 없다(2026-08-28 확정).** Core source
