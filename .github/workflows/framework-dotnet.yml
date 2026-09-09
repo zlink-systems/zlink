@@ -125,9 +125,13 @@ jobs:
             exit 1
           fi
           core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
-          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
+          case "${RUNNER_OS}" in
+            Windows) package_core_platform=windows-x64 ;;
+            *) package_core_platform=linux-x64 ;;
+          esac
+          package_core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
             --version "${core_version}" \
-            --platform "${{ matrix.target.core_platform }}" \
+            --platform "${package_core_platform}" \
             --cache-dir .artifacts/core-release)
           pack_args=(
             pack bindings/dotnet/src/Zlink/Zlink.csproj
@@ -135,11 +139,11 @@ jobs:
             -o "${nuget_source}"
             "-p:ZLinkCoreVersion=${core_version}"
             "-p:ZLinkCoreSource=local"
-            "-p:ZLinkCoreProvenancePath=${core_prefix}/share/zlink/core-package-provenance.json"
+            "-p:ZLinkCoreProvenancePath=${package_core_prefix}/share/zlink/core-package-provenance.json"
           )
-          case "${{ matrix.target.core_platform }}" in
-            windows-*) pack_args+=("-p:ZLinkWindowsX64NativeRoot=${core_prefix}/bin") ;;
-            *) pack_args+=("-p:ZLinkLinuxX64NativeRoot=${core_prefix}/lib") ;;
+          case "${package_core_platform}" in
+            windows-*) pack_args+=("-p:ZLinkWindowsX64NativeRoot=${package_core_prefix}/bin") ;;
+            *) pack_args+=("-p:ZLinkLinuxX64NativeRoot=${package_core_prefix}/lib") ;;
           esac
           dotnet "${pack_args[@]}"
           test -s "${nuget_source}/Zlink.${binding_version}.nupkg" \
