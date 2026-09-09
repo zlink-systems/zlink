@@ -123,12 +123,14 @@ public sealed class RemoteRelayFrameAssemblerTests
     public async Task ExpiredOrShutdownAssemblyCannotReuseItsPrefix()
     {
         using var shutdown = new CancellationTokenSource();
+        var time = new ControllableTimeProvider();
         using var assembler = new ZLinkRemoteRelayFrameAssembler(
             TimeSpan.FromMilliseconds(20),
-            () => shutdown.Token);
+            () => shutdown.Token,
+            time);
         var expired = Key(operationLow: 4);
         _ = await AppendAsync(assembler, expired, [1], true);
-        await Task.Delay(100);
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(20));
 
         var afterExpiry = await AppendAsync(assembler, expired, [2], false);
         Assert.Single(afterExpiry!.Parts);
@@ -136,7 +138,6 @@ public sealed class RemoteRelayFrameAssemblerTests
         var stopped = Key(operationLow: 5);
         _ = await AppendAsync(assembler, stopped, [1], true);
         shutdown.Cancel();
-        await Task.Delay(20);
         var stoppedAppend = await assembler.TryAppendAsync(stopped, [2], false);
         Assert.False(stoppedAppend.Accepted);
     }

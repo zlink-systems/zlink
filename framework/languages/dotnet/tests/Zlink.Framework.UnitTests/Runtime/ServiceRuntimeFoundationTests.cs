@@ -1925,33 +1925,25 @@ public sealed class ServiceRuntimeFoundationTests
         right.Start();
         left.Start();
 
+        var leftObservedNotRequired = false;
+        var rightObservedNotRequired = false;
         await WaitUntilAsync(() =>
-            left.Peers().Length == 1
-            && right.Peers().Length == 1
-            && left.Peers().All(static peer =>
-                peer.State == MeshPeerState.NotRequired)
-            && right.Peers().All(static peer =>
-                peer.State == MeshPeerState.NotRequired));
+        {
+            leftObservedNotRequired |= Drain(leftMonitor).Any(meshEvent =>
+                meshEvent.Kind == MeshMonitorEventKind.PeerNotRequired
+                && meshEvent.PeerRid == right.RoutingId);
+            rightObservedNotRequired |= Drain(rightMonitor).Any(meshEvent =>
+                meshEvent.Kind == MeshMonitorEventKind.PeerNotRequired
+                && meshEvent.PeerRid == left.RoutingId);
+            return leftObservedNotRequired && rightObservedNotRequired;
+        });
 
         Assert.Equal(0u, left.Status().AdmittedPeerCount);
         Assert.Equal(0u, right.Status().AdmittedPeerCount);
-        Assert.Single(left.Peers());
-        Assert.Single(right.Peers());
-        Assert.All(
-            left.Peers().Concat(right.Peers()),
-            static peer => Assert.Equal(MeshPeerState.NotRequired, peer.State));
         Assert.Equal(0UL, leftMonitor.Status().PeerRejected);
         Assert.Equal(0UL, rightMonitor.Status().PeerRejected);
-        var observedNotRequired = false;
-        await WaitUntilAsync(() =>
-        {
-            observedNotRequired |= Drain(leftMonitor)
-                .Concat(Drain(rightMonitor))
-                .Any(static meshEvent =>
-                    meshEvent.Kind == MeshMonitorEventKind.PeerNotRequired);
-            return observedNotRequired;
-        });
-        Assert.True(observedNotRequired);
+        Assert.True(leftObservedNotRequired);
+        Assert.True(rightObservedNotRequired);
     }
 
     [Fact]

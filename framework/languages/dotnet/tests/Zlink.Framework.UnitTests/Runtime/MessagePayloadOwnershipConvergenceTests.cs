@@ -206,7 +206,7 @@ public sealed class MessagePayloadOwnershipConvergenceTests
     }
 
     [Fact]
-    public async Task FailedCacheOwnerPublishesOneFailureWithoutConcurrentRedeserialize()
+    public void FailedCacheOwnerPublishesOneFailureWithoutConcurrentRedeserialize()
     {
         using var firstDecodeEntered = new ManualResetEventSlim();
         using var releaseFirstFailure = new ManualResetEventSlim();
@@ -219,29 +219,37 @@ public sealed class MessagePayloadOwnershipConvergenceTests
             nativePayload,
             codecs);
 
-        var failedOwner = Task.Run(() => message.Decode<Probe>());
+        Exception? ownerFailure = null;
+        var failedOwner = new Thread(() =>
+            ownerFailure = Record.Exception(() => message.Decode<Probe>()));
+        failedOwner.Start();
         Assert.True(firstDecodeEntered.Wait(TimeSpan.FromSeconds(5)));
 
         using var retriesReady = new CountdownEvent(8);
+        var concurrentFailures = new Exception?[retriesReady.InitialCount];
         var concurrentReads = Enumerable.Range(0, retriesReady.InitialCount)
-            .Select(index => Task.Run(() =>
+            .Select(index => new Thread(() =>
             {
                 retriesReady.Signal();
-                return index % 2 == 0
+                concurrentFailures[index] = index % 2 == 0
                     ? Record.Exception(() => message.Decode<Probe>())
                     : Record.Exception(() => message.Decode<OtherProbe>());
             }))
             .ToArray();
+        foreach (var concurrentRead in concurrentReads)
+            concurrentRead.Start();
         Assert.True(retriesReady.Wait(TimeSpan.FromSeconds(5)));
         releaseFirstFailure.Set();
 
-        var ownerFailure = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => failedOwner);
-        var concurrentFailures = await Task.WhenAll(concurrentReads);
+        Assert.True(failedOwner.Join(TimeSpan.FromSeconds(5)));
+        foreach (var concurrentRead in concurrentReads)
+            Assert.True(concurrentRead.Join(TimeSpan.FromSeconds(5)));
         var repeatedFailure = Record.Exception(() => message.Decode<OtherProbe>());
 
         Assert.Equal(1, serializer.DeserializeCalls);
-        Assert.Equal("The first decode attempt fails.", ownerFailure.Message);
+        Assert.Equal(
+            "The first decode attempt fails.",
+            Assert.IsType<InvalidOperationException>(ownerFailure).Message);
         Assert.All(concurrentFailures, AssertDecodeFailure);
         AssertDecodeFailure(repeatedFailure);
 

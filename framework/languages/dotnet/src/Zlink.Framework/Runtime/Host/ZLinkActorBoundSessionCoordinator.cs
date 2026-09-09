@@ -38,11 +38,13 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         _sessionBindings = new ZLinkSessionActorBindingTable(
             registration.DefaultRequestTimeout + registration.DefaultRequestTimeout,
             registration.Locations.SessionRelocationSealTimeoutAtStartup,
+            registration.TimeProvider,
             logger: loggerFactory?.CreateLogger<ZLinkSessionActorBindingTable>());
         _boundSessions = new ZLinkActorBoundSessionRegistry(UnbindActorSession);
         _remoteFrames = new ZLinkRemoteRelayFrameAssembler(
             registration.DefaultRequestTimeout,
-            getShutdownToken);
+            getShutdownToken,
+            registration.TimeProvider);
     }
 
     /// <summary>Set by the runtime after construction: relays an encoded push
@@ -504,10 +506,10 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         PendingRemoteRequest? expected,
         bool allowClaimed)
     {
-        PendingRemoteRequest? pending = null;
+        PendingRemoteRequest? removed = null;
         RunState(() =>
         {
-            if (!_pendingRemoteRequests.TryGetValue(key, out pending)
+            if (!_pendingRemoteRequests.TryGetValue(key, out var pending)
                 || (expected is not null && !ReferenceEquals(pending, expected))
                 || (!allowClaimed && pending.Claimed))
                 return;
@@ -516,13 +518,14 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 ZLinkSessionBindingKey.FromBoundary(
                     key.ActorId,
                     pending.Binding.BindingToken));
+            removed = pending;
         });
-        if (pending is not null)
+        if (removed is not null)
         {
-            pending.Dispose();
+            removed.Dispose();
             AwaitStateLane(_sessionBindings.CompleteAcceptedAsync(
                 key.ActorId,
-                pending.Binding.BindingToken));
+                removed.Binding.BindingToken));
         }
     }
 
@@ -534,6 +537,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         {
             await Task.Delay(
                     _registration.DefaultRequestTimeout,
+                    _registration.TimeProvider,
                     pending.Cancellation.Token)
                 .ConfigureAwait(false);
         }

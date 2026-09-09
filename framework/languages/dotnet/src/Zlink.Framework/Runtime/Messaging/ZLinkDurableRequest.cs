@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace Zlink.Framework.Runtime.Messaging;
 
 // Actor model §sender replay: only durable lifecycle callers enter this owner.
@@ -13,14 +11,16 @@ internal static class ZLinkDurableRequest
         TimeSpan timeout,
         Func<IReadOnlyList<ReadOnlyMemory<byte>>, TimeSpan, CancellationToken,
             ValueTask<IReadOnlyList<Message>>> submit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeProvider? timeProvider = null)
     {
+        timeProvider ??= TimeProvider.System;
         var admitted = false;
         Exception? lastFailure = null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var remaining = timeout - Stopwatch.GetElapsedTime(startTimestamp);
+            var remaining = timeout - timeProvider.GetElapsedTime(startTimestamp);
             if (remaining <= TimeSpan.Zero)
                 throw Exhausted(admitted, lastFailure);
             try
@@ -34,12 +34,13 @@ internal static class ZLinkDurableRequest
                 lastFailure = error;
             }
 
-            remaining = timeout - Stopwatch.GetElapsedTime(startTimestamp);
+            remaining = timeout - timeProvider.GetElapsedTime(startTimestamp);
             if (remaining <= TimeSpan.Zero)
                 throw Exhausted(admitted, lastFailure);
             await Task.Delay(
                     remaining < TimeSpan.FromMilliseconds(10)
                         ? remaining : TimeSpan.FromMilliseconds(10),
+                    timeProvider,
                     cancellationToken)
                 .ConfigureAwait(false);
         }

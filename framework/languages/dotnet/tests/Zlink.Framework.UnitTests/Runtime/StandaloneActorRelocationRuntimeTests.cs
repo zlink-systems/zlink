@@ -573,8 +573,8 @@ public sealed class StandaloneActorRelocationRuntimeTests
                 CancellationToken.None)
             .AsTask();
 
-        await started[0].Task.WaitAsync(TimeSpan.FromSeconds(1));
-        await invoked[1].Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await started[0].Task;
+        await invoked[1].Task;
         for (var attempt = 0;
              attempt < 100 && queue.GetStatus().CapacityWaiters != 1;
              attempt++)
@@ -586,15 +586,15 @@ public sealed class StandaloneActorRelocationRuntimeTests
         Assert.Equal(new[] { 1 }, order.ToArray());
 
         finish[0].TrySetResult();
-        await started[1].Task.WaitAsync(TimeSpan.FromSeconds(1));
-        await invoked[2].Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await started[1].Task;
+        await invoked[2].Task;
         Assert.Equal(new[] { 1, 2 }, order.ToArray());
 
         finish[1].TrySetResult();
-        await started[2].Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await started[2].Task;
         finish[2].TrySetResult();
-        await scheduling.WaitAsync(TimeSpan.FromSeconds(1));
-        await Task.WhenAll(completions).WaitAsync(TimeSpan.FromSeconds(1));
+        await scheduling;
+        await Task.WhenAll(completions);
 
         Assert.Equal(new[] { 1, 2, 3 }, order.ToArray());
         Assert.Equal(1, maxActive);

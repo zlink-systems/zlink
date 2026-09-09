@@ -359,7 +359,10 @@ public sealed class SessionActorCoordinatorTests
     [Fact]
     public async Task Expired_Request_Timer_Does_Not_Remove_A_Replacement_Correlation()
     {
-        var runtime = CreateRuntime(defaultRequestTimeout: TimeSpan.FromMilliseconds(80));
+        var time = new ControllableTimeProvider();
+        var runtime = CreateRuntime(
+            defaultRequestTimeout: TimeSpan.FromMilliseconds(80),
+            timeProvider: time);
         var stream = new TestStream(RoutingId.From("session-timeout"));
         var context = new ZLinkSessionContext(
             runtime,
@@ -384,12 +387,13 @@ public sealed class SessionActorCoordinatorTests
             binding.ObjectGeneration,
             binding.BindingToken,
             23);
-        await Task.Delay(40);
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(40));
         var replacementCapability = runtime.TrackRemoteSessionActorRequest(
             actor.ActorId,
             23,
             binding.BindingToken);
-        await Task.Delay(50);
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(40));
+        await Task.Yield();
 
         await runtime.DeliverRemoteActorReplyAsync(
             actor.ActorId,
@@ -2370,12 +2374,15 @@ public sealed class SessionActorCoordinatorTests
         IZLinkActorResolver? actorDirectory = null,
         TimeSpan? defaultRequestTimeout = null,
         ILoggerFactory? loggerFactory = null,
-        IZLinkLocationStore? locationStore = null)
+        IZLinkLocationStore? locationStore = null,
+        TimeProvider? timeProvider = null)
     {
         var registration = new ZLinkFrameworkRegistration();
         registration.Locations.StoreInstance = locationStore;
         if (defaultRequestTimeout is { } timeout)
             registration.DefaultRequestTimeout = timeout;
+        if (timeProvider is not null)
+            registration.TimeProvider = timeProvider;
         var services = new ServiceCollection();
         services.AddSingleton(registration);
         if (actorDirectory is not null) services.AddSingleton(actorDirectory);

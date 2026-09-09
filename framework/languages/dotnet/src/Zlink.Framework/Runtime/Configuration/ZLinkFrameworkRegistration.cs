@@ -7,6 +7,8 @@ internal sealed class ZLinkFrameworkRegistration
 {
     private ZLinkScannedHandlerCatalog? _scannedHandlerCatalog;
 
+    internal TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+
     public TimeSpan DefaultRequestTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     public TimeSpan SessionReplacementCallbackTimeout { get; set; } =

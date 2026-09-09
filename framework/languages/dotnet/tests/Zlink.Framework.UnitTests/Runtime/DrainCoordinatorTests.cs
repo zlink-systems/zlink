@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.AspNetCore;
+using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
@@ -1368,11 +1369,17 @@ public sealed class DrainCoordinatorTests : RegistrationValidationSupport
         Assert.Equal("active", reply.Value);
         await host.Services.GetRequiredService<IZLinkFanoutClient>()
             .Publish("events", new TestPublishedEvent("active")).Async();
-        var actor = await host.Services.GetRequiredService<IZLinkActorManager>()
-            .GetOrCreate("shutdown-actor-1", "shutdown-actor")
-            .InMesh("shutdown-mesh").Request(new BehaviorCreate(7))
-            .Timeout(TimeSpan.FromSeconds(5)).Async();
-        Assert.IsType<ZLinkActorCreateResult.Created>(actor);
+        var frameworkRuntime =
+            host.Services.GetRequiredService<ZLinkFrameworkRuntime>();
+        var actor = await frameworkRuntime.PrepareReservedActorAsync(
+            "shutdown-actor-1",
+            "shutdown-actor",
+            ZLinkMessage.From(new BehaviorCreate(7)),
+            objectGeneration: 1,
+            authorityOwnerGeneration: 1,
+            CancellationToken.None);
+        Assert.True(actor.Created);
+        frameworkRuntime.PublishReservedActor("shutdown-actor-1");
         await using var connector = ZlinkStreamConnectorFactory.Create(
             new ZlinkStreamConnectorOptions
             {

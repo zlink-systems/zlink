@@ -46,6 +46,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private readonly TimeSpan _remoteUserSpotTerminalRetention;
     private readonly TimeSpan _inboundOperationShutdownTimeout;
     private readonly ZLinkDeadlineClock _deadlineClock;
+    private readonly TimeProvider _deadlineTimeProvider;
     private readonly ZLinkApplicationJobQueue? _applicationJobQueue;
     private readonly Func<ReplySubmitOperation, SubmitResult>?
         _nativeTerminalReplySubmitOverride;
@@ -210,8 +211,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _inboundOperationShutdownTimeout =
             inboundOperationShutdownTimeout
             ?? DefaultInboundOperationShutdownTimeout;
-        _deadlineClock = new ZLinkDeadlineClock(
-            deadlineTimeProvider ?? TimeProvider.System);
+        _deadlineTimeProvider = deadlineTimeProvider ?? TimeProvider.System;
+        _deadlineClock = new ZLinkDeadlineClock(_deadlineTimeProvider);
         _applicationJobQueue = applicationJobQueue;
         _nativeTerminalReplySubmitOverride = nativeTerminalReplySubmitOverride;
         _routedSubmitScheduler = new ConcurrentExclusiveSchedulerPair(
@@ -9282,7 +9283,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                                 peer.PhysicalRoutingId, frames, remaining, token)
                             .ConfigureAwait(false);
                     },
-                    cancellation.Token)
+                    cancellation.Token,
+                    _deadlineTimeProvider)
                 .ConfigureAwait(false);
             complete(pending, RequestResult.Ok, replies);
         }
@@ -9659,7 +9661,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var effectiveTimeout = timeout <= TimeSpan.Zero
             ? TimeSpan.FromSeconds(30)
             : timeout;
-        pending.DeadlineStartTimestamp = Stopwatch.GetTimestamp();
+        pending.DeadlineStartTimestamp = _deadlineTimeProvider.GetTimestamp();
         pending.DeadlineTimeout = effectiveTimeout;
         pending.DeadlineUnixMs = checked((ulong)DateTimeOffset.UtcNow
             .Add(effectiveTimeout)

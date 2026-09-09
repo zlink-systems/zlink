@@ -231,15 +231,6 @@ public sealed class RuntimeMetricsTests
     [Fact]
     public void Application_job_pressure_metrics_project_exact_states_and_durations()
     {
-        using var registration =
-            ZLinkRuntimeMetrics.RegisterApplicationJobQueuePressure(
-                () => new ZLinkApplicationJobQueuePressureMetrics(
-                    ZLinkApplicationJobQueuePressureState.Paused,
-                    PausedTransitionCount: 4,
-                    RunningTransitionCount: 3,
-                    CurrentPauseDuration: TimeSpan.FromSeconds(5),
-                    CumulativePauseDuration: TimeSpan.FromSeconds(9),
-                    FlowStateConfigFailures: 2));
         var longSamples = new List<(
             string Name,
             long Value,
@@ -261,6 +252,24 @@ public sealed class RuntimeMetricsTests
 
         longListener.RecordObservableInstruments();
         durationListener.RecordObservableInstruments();
+        var baselineLongSamples = longSamples.ToArray();
+        var baselineDurationSamples = durationSamples.ToArray();
+        longSamples.Clear();
+        durationSamples.Clear();
+
+        using var registration =
+            ZLinkRuntimeMetrics.RegisterApplicationJobQueuePressure(
+                () => new ZLinkApplicationJobQueuePressureMetrics(
+                    ZLinkApplicationJobQueuePressureState.Paused,
+                    PausedTransitionCount: 4,
+                    RunningTransitionCount: 3,
+                    CurrentPauseDuration: TimeSpan.FromSeconds(5),
+                    CumulativePauseDuration: TimeSpan.FromSeconds(9),
+                    FlowStateConfigFailures: 2));
+        longListener.RecordObservableInstruments();
+        durationListener.RecordObservableInstruments();
+        RemoveLongBaseline(longSamples, baselineLongSamples);
+        RemoveDurationBaseline(durationSamples, baselineDurationSamples);
 
         Assert.Contains(longSamples, sample =>
             sample.Name == "zlink.host.application_job_queue.pressure_state"
@@ -285,6 +294,45 @@ public sealed class RuntimeMetricsTests
             sample.Value == 5 && sample.Tags["state"] == "current");
         Assert.Contains(durationSamples, sample =>
             sample.Value == 9 && sample.Tags["state"] == "cumulative");
+
+        static void RemoveDurationBaseline(
+            List<(double Value, IReadOnlyDictionary<string, string> Tags)> samples,
+            IEnumerable<(double Value, IReadOnlyDictionary<string, string> Tags)> baseline)
+        {
+            foreach (var expected in baseline)
+            {
+                var index = samples.FindIndex(candidate =>
+                    candidate.Value == expected.Value
+                    && TagsEqual(candidate.Tags, expected.Tags));
+                if (index >= 0)
+                    samples.RemoveAt(index);
+            }
+        }
+
+        static void RemoveLongBaseline(
+            List<(string Name, long Value,
+                IReadOnlyDictionary<string, string> Tags)> samples,
+            IEnumerable<(string Name, long Value,
+                IReadOnlyDictionary<string, string> Tags)> baseline)
+        {
+            foreach (var expected in baseline)
+            {
+                var index = samples.FindIndex(candidate =>
+                    candidate.Name == expected.Name
+                    && candidate.Value == expected.Value
+                    && TagsEqual(candidate.Tags, expected.Tags));
+                if (index >= 0)
+                    samples.RemoveAt(index);
+            }
+        }
+
+        static bool TagsEqual(
+            IReadOnlyDictionary<string, string> left,
+            IReadOnlyDictionary<string, string> right) =>
+            left.Count == right.Count
+            && left.All(entry =>
+                right.TryGetValue(entry.Key, out var value)
+                && value == entry.Value);
     }
 
     [Fact]

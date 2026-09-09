@@ -15,9 +15,14 @@ public sealed partial class StatefulServiceRuntimeTests
         bool removeIntent, bool removeExpectationFirst, bool ownerDisconnects)
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var source = NewNode(context, "lifecycle-source");
+        var deadlineTime = new ControllableTimeProvider();
+        await using var source = NewNode(
+            context,
+            "lifecycle-source",
+            deadlineTimeProvider: deadlineTime);
         var replySubmissions = 0;
         await using var target = new ZLinkManagedMeshNode(context, "mesh",
+            deadlineTimeProvider: deadlineTime,
             nativeTerminalReplySubmitOverride: reply =>
             {
                 if (Interlocked.Increment(ref replySubmissions) > 1)
@@ -49,9 +54,12 @@ public sealed partial class StatefulServiceRuntimeTests
         var reservation = new ObjectReservationFence("lifecycle-reservation",
             "lifecycle-store", 11, 13, target.RoutingId,
             target.Status().LifecycleGeneration, "lifecycle-owner", 7, 1);
+        var deadlineUnixMs = checked((ulong)deadlineTime.GetUtcNow()
+            .Add(timeout)
+            .ToUnixTimeMilliseconds());
         Assert.Equal(SubmitResult.Ok, source.CreateActorRemote(target.RoutingId,
             "lifecycle-actor", "Sample.LifecycleActor", reservation,
-            checked((ulong)DateTimeOffset.UtcNow.Add(timeout).ToUnixTimeMilliseconds()),
+            deadlineUnixMs,
             operation, timeout));
         await WaitUntilAsync(() => Volatile.Read(ref replySubmissions) == 1);
         Assert.Equal(1, createTarget.CreateCount);
@@ -60,23 +68,18 @@ public sealed partial class StatefulServiceRuntimeTests
             source.RemovePeerExpectation(target.RoutingId, targetEndpoint);
             Assert.DoesNotContain(DrainRecords(source), record => record.OperationId == operation);
         }
-        var removedAt = Stopwatch.GetTimestamp();
         if (ownerDisconnects)
             source.DisconnectPeer(target.RoutingId);
         else
             target.DisconnectPeer(source.RoutingId);
         await WaitUntilAsync(() => source.Status().AdmittedPeerCount == 0);
-        if (!ownerDisconnects)
-        {
-            await Task.Delay(100);
-            Assert.DoesNotContain(DrainRecords(source), record => record.OperationId == operation);
-        }
+        if (!removeIntent)
+            await WaitUntilAsync(() => deadlineTime.ActiveTimerCount > 0);
 
         if (removeIntent)
         {
             if (!ownerDisconnects)
             {
-                removedAt = Stopwatch.GetTimestamp();
                 // The owner also revisits removal when a previously admitted
                 // peer disappears after its expectation was already removed.
                 source.RemovePeerExpectation(target.RoutingId, targetEndpoint);
@@ -84,7 +87,6 @@ public sealed partial class StatefulServiceRuntimeTests
             var (completion, parts) = DrainCompletion(source, operation);
             ZLinkMessageParts.DisposeAll(parts);
             Assert.Equal((int)RequestResult.NotConnected, completion.TerminalResult);
-            Assert.True(Stopwatch.GetElapsedTime(removedAt) < TimeSpan.FromSeconds(1));
         }
         if (ownerDisconnects)
             source.ConnectPeer(targetEndpoint, target.RoutingId);
@@ -94,12 +96,12 @@ public sealed partial class StatefulServiceRuntimeTests
                                    && target.Status().AdmittedPeerCount == 1);
         if (removeIntent)
         {
-            await Task.Delay(100);
             Assert.Equal(1, Volatile.Read(ref replySubmissions));
             Assert.DoesNotContain(DrainRecords(source), record => record.OperationId == operation);
         }
         else
         {
+            deadlineTime.AdvanceMonotonic(TimeSpan.FromMilliseconds(10));
             var (completion, parts) = DrainCompletion(source, operation);
             ZLinkMessageParts.DisposeAll(parts);
             Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);

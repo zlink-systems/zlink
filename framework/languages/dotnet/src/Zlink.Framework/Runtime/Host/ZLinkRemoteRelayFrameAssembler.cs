@@ -32,15 +32,18 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
     private readonly Dictionary<ZLinkRemoteRelayFrameKey, PendingFrame> _pending = [];
     private readonly TimeSpan _timeout;
     private readonly Func<CancellationToken> _getShutdownToken;
+    private readonly TimeProvider _time;
     private long _bufferedBytes;
     private bool _disposed;
 
     internal ZLinkRemoteRelayFrameAssembler(
         TimeSpan timeout,
-        Func<CancellationToken> getShutdownToken)
+        Func<CancellationToken> getShutdownToken,
+        TimeProvider? timeProvider = null)
     {
         _timeout = timeout;
         _getShutdownToken = getShutdownToken;
+        _time = timeProvider ?? TimeProvider.System;
     }
 
     internal async ValueTask<ZLinkRemoteRelayFrameAppendResult> TryAppendAsync(
@@ -55,7 +58,15 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
             if (_disposed || shutdownToken.IsCancellationRequested)
                 return new AppendPreparation(new(false, null), null);
 
-            if (!_pending.TryGetValue(key, out var pending))
+            _pending.TryGetValue(key, out var pending);
+            if (pending is not null
+                && _time.GetElapsedTime(pending.StartedAt) >= _timeout)
+            {
+                Remove(key, pending);
+                pending = null;
+            }
+
+            if (pending is null)
             {
                 if (!hasMore)
                 {
@@ -70,7 +81,7 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
                     || _bufferedBytes + part.LongLength > MaxBufferedBytes)
                     return new AppendPreparation(new(false, null), null);
 
-                pending = new PendingFrame();
+                pending = new PendingFrame(_time.GetTimestamp());
                 _pending.Add(key, pending);
                 pending.Parts.Add(part);
                 pending.Bytes = part.LongLength;
@@ -208,7 +219,7 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
             expiry.PendingToken);
         try
         {
-            await Task.Delay(_timeout, linkedExpiry.Token).ConfigureAwait(false);
+            await Task.Delay(_timeout, _time, linkedExpiry.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -256,8 +267,9 @@ internal sealed class ZLinkRemoteRelayFrameAssembler : IDisposable
         CancellationToken ShutdownToken,
         CancellationToken PendingToken);
 
-    internal sealed class PendingFrame
+    internal sealed class PendingFrame(long startedAt)
     {
+        internal long StartedAt { get; } = startedAt;
         internal List<byte[]> Parts { get; } = [];
         internal CancellationTokenSource Cancellation { get; } = new();
         internal long Bytes { get; set; }

@@ -148,7 +148,8 @@ internal sealed class ZLinkChannelRuntimeManager(
                     ?? registration.DefaultSocketSendTimeout,
                     state.StopTokenSource.Token,
                     state.ApplicationJobQueue,
-                    outboundFlow?.Invoke());
+                    outboundFlow?.Invoke(),
+                    registration.TimeProvider);
                 AwaitStateLane(state.RunStateAsync(() =>
                 {
                     state.ClientServerClientRuntimes.Add(entry.Key, runtime);

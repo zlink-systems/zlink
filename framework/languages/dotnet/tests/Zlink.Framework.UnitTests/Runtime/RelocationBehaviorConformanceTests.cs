@@ -716,22 +716,19 @@ public sealed class RelocationBehaviorConformanceTests
 
         try
         {
-            await transport.PrepareCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
-            transport.ReleasePrepareCall.TrySetResult();
-            await transport.TargetReadyFailureInjected.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await transport.PrepareCallStarted.Task;
+            await Assert.ThrowsAsync<IOException>(async () =>
+                await transport.RetryGatedTargetPrepareAsync(
+                    CancellationToken.None));
             Assert.Equal(0, transport.TargetAbortCallCount);
             Assert.False(trace.HasTargetAuthorityMutation);
-            var retry = transport.RetryPrepareAsync(
-                    CancellationToken.None,
-                    TimeSpan.FromSeconds(3))
+            var retry = transport.RetryGatedTargetPrepareAsync(
+                    CancellationToken.None)
                 .AsTask();
-            await transport.TargetPreparedBeforeReadySend.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await transport.TargetPreparedBeforeReadySend.Task;
             transport.ReleaseTargetReadySend.TrySetResult();
-            _ = await retry.WaitAsync(TimeSpan.FromSeconds(3));
-            await transport.ReadyReplyReceived.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            _ = await retry;
+            transport.SubmitRetriedTargetReady();
             Assert.False(trace.HasTargetAuthorityMutation);
             Assert.True(target.Runtime.TryGetCreatedActorState(
                 actorId,
@@ -1836,6 +1833,7 @@ internal sealed class CanonicalRelocationTransportProbe
     private int _failTargetReadyOnce;
     private IZLinkBackendCanonicalRelocation? _prepareTransport;
     private ICanonicalRelocationTarget? _target;
+    private ICanonicalRelocationTarget? _gatedTarget;
     private RoutingId _prepareTargetNodeRid;
     private RoutingId _prepareSourceNodeRid;
     private ZLinkServiceWireCodec.RelocationPrepareRecord? _prepare;
@@ -1907,10 +1905,26 @@ internal sealed class CanonicalRelocationTransportProbe
         ICanonicalRelocationTarget target)
     {
         _target = target;
-        return _holdTargetReady
+        _gatedTarget = _holdTargetReady
             ? new ReadyGatedCanonicalRelocationTarget(target, this)
             : target;
+        return _gatedTarget;
     }
+
+    internal ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord>
+        RetryGatedTargetPrepareAsync(CancellationToken cancellationToken) =>
+        (_gatedTarget ?? throw new InvalidOperationException(
+            "No canonical relocation target was captured."))
+        .PrepareAsync(
+            _prepare ?? throw new InvalidOperationException(
+                "No canonical prepare was captured."),
+            ZLinkRelocationTransferPayload.DecodeEnvelope(
+                (_preparePayload ?? throw new InvalidOperationException(
+                    "No canonical prepare payload was captured.")).Encoded),
+            (_prepare ?? throw new InvalidOperationException(
+                "No canonical prepare was captured.")).SourceNodeRid,
+            new ZLinkCanonicalRelocationPreparationLease(),
+            cancellationToken);
 
     internal ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord>
         RetryTargetPrepareAsync(CancellationToken cancellationToken) =>
@@ -1925,7 +1939,8 @@ internal sealed class CanonicalRelocationTransportProbe
             ZLinkRelocationTransferPayload.DecodeEnvelope(
                 (_preparePayload ?? throw new InvalidOperationException(
                     "No canonical prepare payload was captured.")).Encoded),
-            _prepareSourceNodeRid,
+            (_prepare ?? throw new InvalidOperationException(
+                "No canonical prepare was captured.")).SourceNodeRid,
             new ZLinkCanonicalRelocationPreparationLease(),
             cancellationToken);
 

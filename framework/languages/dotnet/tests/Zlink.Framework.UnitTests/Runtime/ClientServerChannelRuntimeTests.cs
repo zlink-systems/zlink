@@ -1811,10 +1811,11 @@ public sealed class ClientServerChannelRuntimeTests
     {
         var port = ReservePort();
         var endpoint = $"tcp://127.0.0.1:{port}";
+        var time = new ControllableTimeProvider();
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var router = CreateClientServerRouter(context);
         router.Bind(endpoint);
-        await using var client = CreateClient(port);
+        await using var client = CreateClient(port, timeProvider: time);
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         try
@@ -1824,35 +1825,33 @@ public sealed class ClientServerChannelRuntimeTests
                 storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
             ReplyAdmission(router, hello, endpoint);
             await WaitUntilAsync(transport, () => transport.ReadyCount == 1, TimeSpan.FromSeconds(5));
-            var admittedAt = Stopwatch.GetTimestamp();
 
+            time.AdvanceMonotonic(TimeSpan.FromSeconds(5));
             using var first = await PollReceivedAsync(
-                storage => TryReceive(router, storage), TimeSpan.FromSeconds(6));
-            var firstAt = Stopwatch.GetTimestamp();
+                storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
             Assert.True(ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(first.Parts, out var firstId));
             Assert.NotNull(first.ReplyToken);
             Assert.NotEqual(0UL, firstId);
-            Assert.InRange(Stopwatch.GetElapsedTime(admittedAt, firstAt).TotalSeconds, 4, 6);
 
+            time.AdvanceMonotonic(TimeSpan.FromSeconds(5));
             using var second = await PollReceivedAsync(
-                storage => TryReceive(router, storage), TimeSpan.FromSeconds(6));
+                storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
             Assert.True(ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(second.Parts, out var secondId));
             Assert.NotNull(second.ReplyToken);
             Assert.Equal(firstId, secondId);
-            Assert.InRange(Stopwatch.GetElapsedTime(firstAt).TotalSeconds, 4, 6);
             Assert.Equal(1, transport.ReadyCount);
 
+            time.AdvanceMonotonic(TimeSpan.FromSeconds(5));
             try
             {
-                await WaitUntilAsync(transport, () => transport.ReadyCount == 0, TimeSpan.FromSeconds(7));
+                await WaitUntilAsync(transport, () => transport.ReadyCount == 0, TimeSpan.FromSeconds(5));
             }
             catch (TimeoutException exception)
             {
                 throw new TimeoutException(
-                    $"elapsed={Stopwatch.GetElapsedTime(admittedAt)}; sent={transport.SentLivenessProbeCount}; "
+                    $"elapsed={time.GetElapsedTime(0)}; sent={transport.SentLivenessProbeCount}; "
                     + $"acks={transport.LivenessAckCount}; {transport.AdmissionDiagnostics}", exception);
             }
-            Assert.InRange(Stopwatch.GetElapsedTime(admittedAt).TotalSeconds, 14, 17);
             Assert.Equal(0, transport.LivenessAckCount);
             Assert.Equal(2, transport.SentLivenessProbeCount);
         }
@@ -1867,10 +1866,11 @@ public sealed class ClientServerChannelRuntimeTests
     {
         var port = ReservePort();
         var endpoint = $"tcp://127.0.0.1:{port}";
+        var time = new ControllableTimeProvider();
         using var context = Systems.Zlink.Zlink.CreateContext();
         using var router = CreateClientServerRouter(context);
         router.Bind(endpoint);
-        await using var client = CreateClient(port);
+        await using var client = CreateClient(port, timeProvider: time);
         var runtime = client.GetRequiredService<ZLinkFrameworkRuntime>();
         await runtime.StartAsync(CancellationToken.None);
         try
@@ -1880,29 +1880,25 @@ public sealed class ClientServerChannelRuntimeTests
                 storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
             ReplyAdmission(router, hello, endpoint);
             await WaitUntilAsync(transport, () => transport.ReadyCount == 1, TimeSpan.FromSeconds(5));
-            var previousAt = Stopwatch.GetTimestamp();
             ulong previousId = 0;
 
             for (var index = 0; index < 3; index++)
             {
+                time.AdvanceMonotonic(TimeSpan.FromSeconds(5));
                 using var probe = await PollReceivedAsync(
-                    storage => TryReceive(router, storage), TimeSpan.FromSeconds(6));
-                var receivedAt = Stopwatch.GetTimestamp();
+                    storage => TryReceive(router, storage), TimeSpan.FromSeconds(5));
                 Assert.True(ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probe.Parts, out var probeId));
                 Assert.NotEqual(previousId, probeId);
                 Assert.NotEqual(0UL, probeId);
                 Assert.NotNull(probe.ReplyToken);
-                Assert.InRange(Stopwatch.GetElapsedTime(previousAt, receivedAt).TotalSeconds, 4, 6);
                 Assert.Equal(1, transport.ReadyCount);
 
-                await Task.Delay(TimeSpan.FromSeconds(2));
                 using var ack = ZLinkClientServerControlProtocol.EncodeLivenessAck(probeId);
                 probe.Reply().Message(ack).Submit();
                 var expectedAcks = index + 1;
                 await WaitUntilAsync(
                     transport,
                     () => transport.LivenessAckCount == expectedAcks, TimeSpan.FromSeconds(1));
-                previousAt = receivedAt;
                 previousId = probeId;
             }
             Assert.Equal(1, transport.ReadyCount);
@@ -2308,7 +2304,8 @@ public sealed class ClientServerChannelRuntimeTests
 
     private static ServiceProvider CreateClient(
         int port,
-        long maximumMessageBytes = 16L * 1024L * 1024L)
+        long maximumMessageBytes = 16L * 1024L * 1024L,
+        TimeProvider? timeProvider = null)
     {
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
@@ -2318,9 +2315,12 @@ public sealed class ClientServerChannelRuntimeTests
                 .Connect($"tcp://127.0.0.1:{port}");
         });
         var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<ZLinkFrameworkRegistration>()
-            .Channels["work"].Client!.SocketConfig.MaxMessageSize =
+        var registration =
+            provider.GetRequiredService<ZLinkFrameworkRegistration>();
+        registration.Channels["work"].Client!.SocketConfig.MaxMessageSize =
             maximumMessageBytes;
+        if (timeProvider is not null)
+            registration.TimeProvider = timeProvider;
         return provider;
     }
 
