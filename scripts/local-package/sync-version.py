@@ -260,6 +260,17 @@ FRAMEWORK_CPP_SAMPLE_CONAN_REGISTRY = (
 )
 
 
+FRAMEWORK_CPP_SAMPLE_CMAKE_REGISTRY = (
+    "framework/languages/cpp/samples/Bingo/CMakeLists.txt",
+    "framework/languages/cpp/samples/DeliveryDispatch/CMakeLists.txt",
+    "framework/languages/cpp/samples/GameQuest/CMakeLists.txt",
+    "framework/languages/cpp/samples/ShoppingMall/CMakeLists.txt",
+    "framework/languages/cpp/samples/SupportChat/CMakeLists.txt",
+    "framework/languages/cpp/samples/TicTacToe/CMakeLists.txt",
+    "framework/languages/cpp/samples/ZoneWorld/CMakeLists.txt",
+)
+
+
 def update_framework_node_dependency(source: str, version: str, expected: int) -> str:
     pattern = re.compile(r'("@zlink-systems/zlink"\s*:\s*")([^"]+)(")')
 
@@ -385,6 +396,13 @@ def synchronize_framework(sync: Synchronizer, version: str) -> None:
         sync.regex(
             relative,
             rf"(?m)^(zlink-framework/)(?P<version>{SEMVER})$",
+            lambda match, version=version: replace_version_group(match, version),
+            1,
+        )
+    for relative in FRAMEWORK_CPP_SAMPLE_CMAKE_REGISTRY:
+        sync.regex(
+            relative,
+            rf"(find_package\(zlink_framework )(?P<version>{SEMVER})( CONFIG REQUIRED\))",
             lambda match, version=version: replace_version_group(match, version),
             1,
         )
