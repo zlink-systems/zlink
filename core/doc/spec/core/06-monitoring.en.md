@@ -447,6 +447,9 @@ monitor queue's byte budget ([§5](#5-monitor-queue-byte-budget)). This function
 options, and the status-structure layout follow [§6.1](#61-abi-version-and-layout): Core
 does not add caller size/version negotiation or a parallel versioned entry point.
 
+A socket can have one open monitor. A second open returns `NULL` with `EBUSY` while
+preserving the existing handle and its event consumption.
+
 **Returns:** A monitor handle on success; `NULL` on failure, with errno set.
 
 **Errors:** If an HWM range or calculation or an allocation prevents monitor creation,

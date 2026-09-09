@@ -271,8 +271,10 @@ int zlink::socket_base_t::monitor (const char *endpoint_,
         scoped_lock_t monitor_lock (monitor.sync);
         has_monitor = monitor.socket != NULL;
     }
-    if (has_monitor)
-        stop_monitor (true);
+    if (has_monitor) {
+        errno = EBUSY;
+        return -1;
+    }
 
     switch (type_) {
         case ZLINK_CORE_SOCKET_PAIR:

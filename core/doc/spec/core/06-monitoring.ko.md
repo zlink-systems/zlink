@@ -431,6 +431,9 @@ ZLINK_EXPORT void *zlink_socket_monitor_open(
 이 함수, open options와 status 구조체의 layout 정책은 [§6.1](#61-abi-version과-layout)을
 따른다 — caller size/version 협상이나 병렬 versioned entrypoint를 추가하지 않는다.
 
+같은 socket에는 monitor 하나만 열 수 있다. 기존 monitor가 열려 있으면 두 번째 open은
+`NULL`과 `EBUSY`를 반환하며 기존 handle의 수명과 event 소비는 유지된다.
+
 **반환값:** 성공 시 monitor 핸들, 실패 시 `NULL` (errno가 설정됨).
 
 **에러:** HWM 범위·계산 또는 allocation 때문에 monitor를 열 수 없으면 `NULL`과 `errno`로
