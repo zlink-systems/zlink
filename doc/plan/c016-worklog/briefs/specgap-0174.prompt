@@ -1,0 +1,17 @@
+너는 job specgap-0174(0.17.4 착지 변경과 Core 스펙 문서의 정합 검사)다. /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽는다. **읽기 전용**(스펙·소스·테스트 수정 금지, 빌드·실행·커밋 금지). 상한 40분. 저장소 /home/hep7hep7/project/zlink, main `d826d23598` 이후 최신.
+
+대상 변경(0.17.4, main 착지 `eb6abfb995`~): ALL-1/2/2b/3, RR-1, MAC-1~4, CCU-2~5, SD-1~5. 근거 문서: `core/CHANGELOG.md` [0.17.4], `doc/plan/c016-worklog/decisions.ko.md` D-B263~D-B303, 보고서 `core-rf-{ALL-3,MAC-4,CCU-5,SD-5}-report.md`, 리뷰 `review-{ccu5,sd5}.md`.
+
+검사 대상 스펙(ko/en 쌍 모두): `core/doc/spec/core/socket/README`, `07-router`, `08-stream`, `core/doc/spec/core/protocol/01-zmp`, `02-message`, `core/doc/spec/core/systems/{03-io-thread,04-thread-safety,05-connection-memory,06-auto-hwm,10-hot-path,11-synchronization-model}`.
+
+확인 항목(문장 인용 + 코드 파일:행으로 판정: 정합 / **불일치(수정 필요)** / 스펙 침묵(문서화 불필요 사유 명시)):
+1. **ALL-1/2**: receive lease·command owner·async executor를 socket turn 하나로 통합했고 socket 쪽 `_out_sync`와 receive partition lock을 제거했다. 11-synchronization-model §3.1(turn이 C2 상태 전부 소유)·§3.2·§3.4와 04-thread-safety의 소유권 문장이 **현재 코드와 일치하는지**. 0.17.3의 `receive_owner` 워드를 전제한 문장이 남아 있으면 불일치.
+2. **MAC-4**: "blocking receive는 context 종료를 매 턴 관측해 ETERM" — socket README `:545-552`의 blocking wait 문장과 04-thread-safety/11-sync의 종료 절이 이 동작(진행 중인 drain을 중단하고 ETERM)을 이미 규정하는지, 아니면 "drain이 끝난 뒤에야"로 읽히는 문장이 있는지.
+3. **CCU-2~5**: 06-auto-hwm §2 표(D-H1 갱신 행), §3 `budget_generation`, §4 deferred shrink, §5 결정성이 증분 확장·debounce 수렴(deadline 소유)과 정합인지. attach가 "동기 전체 재계산"을 전제하는 잔여 문장, `zlink_ctx_auto_hwm_recalculate`(즉시 기록) 문장과의 충돌 여부.
+4. **SD B2**: decoder/encoder read target이 "첫 full read에서 2배 성장, 기존 max clamp"로 바뀌었다. 08-stream 런타임 기본값(`ZLINK_ASIO_STREAM_INITIAL_TARGET_CAP` 등)·03-io-thread §3.2/§4가 성장 규칙을 명시하는지, 명시한다면 옛 "연속 2회" 규칙이 남아 있는지. 스펙이 침묵하면 침묵이 옳은지(구현 정책인지) 판단.
+5. **SD-5 WS gather**: 01-zmp §9 WebSocket 구현 문장("현재 준비된 ZMP byte를 `out_batch_size` 상한까지 모아 Beast binary write 한 번")이 [batch 앞, pointer body, batch 뒤] 3-buffer 한 번 제출과 정합인지. gather로 body를 복사하지 않는다는 사실을 §9의 copy 회피 문장(:411-414)이 이미 포괄하는지.
+6. **D-f**: 08-stream ko/en에서 gather env 3개 문장이 지워졌고 남은 env 목록이 실제 접근자와 일치하는지(`asio_stream_fastpath_policy.hpp`의 `ZLINK_ASIO_GATHER_WRITE` 등 실제로 읽는 변수 전부와 대조).
+7. **RR-1**: 1,025-part reply 경계 — 02-message/README의 part 수 한도 문장이 실제 한도·오류와 일치하는지.
+8. ko/en 쌍이 같은 내용인지(한쪽만 갱신된 문장 목록).
+
+보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/specgap-0174.md (한국어; 항목별 판정 표, **수정 필요 문장은 파일:행 + 현재 문장 + 제안 문장** 형태로, 마지막 줄 "수정 필요 문장 수 / 스펙 정합 여부"). 진행 파일 progress-specgap-0174.md.

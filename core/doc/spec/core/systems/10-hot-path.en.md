@@ -72,8 +72,10 @@ Code on the hot path does none of the following. The only exception is the fallb
    commands on the socket's behalf and then detaches re-arms the public poller with
    `rearm_primary_signaler()`. Without it a poller sleeps until its own timeout.
 
-Allowed: the pipe's own `_in_sync` / `_out_sync`, atomic loads and stores, fixed-size stack
-arrays, and the send/recv scope already held.
+Allowed: atomic loads and stores, fixed-size stack arrays, the send/recv scope already held, and
+the endpoint's established C2 owner/turn. `_out_sync` is used only on the cold paths defined by
+the [synchronization model](11-synchronization-model.en.md); the per-message write, read and
+flush do not take it.
 
 ## 4. State caches and the fallback path
 

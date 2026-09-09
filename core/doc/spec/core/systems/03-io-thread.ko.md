@@ -80,7 +80,7 @@ slot registry에 등록되어 command routing에 쓰인다.
 
 네트워크 I/O는 Proactor 모델로 처리한다 — 읽기/쓰기 준비 상태를 직접 polling하는 대신 OS에
 비동기 I/O를 요청해 두고 완료 결과만 처리하는 방식이다. engine(`asio_engine_t`)이
-transport에 `async_read_some()` / `async_write_some()`을 요청하면 I/O thread의
+transport에 `async_read_some()`, `async_write_some()` 또는 buffer-sequence `async_writev()`를 요청하면 I/O thread의
 `io_context`가 OS 비동기 I/O 완료를 기다렸다가 completion callback을 부른다. engine은
 읽기/쓰기 준비 상태를 직접 polling하지 않고 완료 결과만 처리한다.
 
@@ -100,7 +100,7 @@ sequenceDiagram
 - **Read 완료** → 읽은 byte를 protocol decoder에 넘겨 frame을 decode한 뒤 receive pipe로
   message를 전달하고, 다시 `async_read_some()`을 건다.
 - **Write 완료** → send pipe에서 꺼낸 message를 encode해 보낸 뒤, 남은 data가 있으면 다음
-  `async_write_some()`을 건다.
+  비동기 write operation(`async_write_some()` 또는 `async_writev()`)을 건다.
 
 `asio_poller`의 `async_wait` readiness 경로는 네트워크 data가 아니라 mailbox command
 wakeup에만 쓴다.

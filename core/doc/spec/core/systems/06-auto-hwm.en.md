@@ -123,7 +123,7 @@ When the number of connections changes a per-queue target, Core applies the chan
 
 | Change | Core behavior |
 |---|---|
-| A connection increase lowers the per-queue target | The attaching directions record their new target immediately. The lowered target of directions already attached is recorded by the same debounced recalculation path that option changes use (an attach does not run a synchronous full recalculation). Once a new target is recorded, further admission is blocked until current retained bytes drain below it |
+| A connection increase lowers the per-queue target | The attaching directions record their new target immediately. The lowered target of directions already attached is recorded by the same debounced recalculation path that option changes use. When the last plan can be extended exactly, an attach does not run a synchronous full recalculation; when the incremental extension is not possible, that same attach path falls back to a synchronous full recalculation. Once a new target is recorded, further admission is blocked until current retained bytes drain below it |
 | A connection decrease raises the target | Applies it after the cooldown only to a live queue with the same generation |
 | Detached queue | When all endpoints are released, clears any remaining provisional and committed charge once and removes the registry entry |
 
@@ -371,6 +371,63 @@ Application HWM does not apply to the ROUTER-ROUTER Completion queue that advanc
 and error replies and synchronizes receive-flow-state frames. DEALER-ROUTER replies and error
 replies apply the same Application queue HWM and peer PAUSED as DATA and REQUEST. Monitor queues are
 also excluded from the queue list used to distribute the application budget.
+
+### Synchronization and convergence of the recalculation
+
+Four owners cover the path that produces an Auto-HWM plan: the option lock owns the context
+options and planning inputs, the state lock owns the generation, the deadline and the last
+recorded plan, the recalculation lock serializes a full replan and an incremental extension, and
+the pin lock owns the lifetime pins of the socket list. The lock order is in
+[the synchronization model §6.1](11-synchronization-model.en.md#61-implementation-lock-list-and-acquisition-order).
+
+**Full replan.** Holding the recalculation lock from start to finish, it snapshots the generation
+under the state lock, collects only the socket lifetime pins under the pin lock and releases that
+lock immediately, then reads the inputs under the option lock. It then collects per-socket
+policies, plans in the registry, applies to sockets and pipes, and records the plan. Because the
+generation is snapshotted before the inputs, the combination "new generation with old inputs"
+cannot arise. When the plan is recorded and the applied generation equals the pending one, the
+pending marker is cleared and the budget generation is raised.
+
+**Incremental extension on attach.** An attach publishes the pipe into the endpoint list first.
+If that pipe is an application direction and the socket's Auto-HWM policy is on, it attempts the
+incremental extension and falls back to a full replan on the spot if that fails. The incremental
+path holds the recalculation lock and proceeds in this order.
+
+1. Under the state lock, check that the pending generation equals the last applied generation and
+   copy the applied plan.
+2. Under the option lock, read the current inputs and check they match the inputs of the copied
+   plan.
+3. Under the registry lock, add only the two attaching directions to the plan and update the
+   targets and aggregates.
+4. Release the registry lock and apply that pipe's HWM under the attaching pipe's endpoint lock.
+5. Record the plan and the direction counts under the socket's Auto-HWM lock.
+6. Record the plan and the budget generation under the state lock.
+
+The targets are therefore applied before the plan and the generation are recorded, so a snapshot
+that observes the new generation only ever sees a plan that is already applied.
+
+**Fallback conditions.** The incremental extension is abandoned for a full replan when any of the
+following holds: zero or more than two directions; a disabled plan; a pending generation that
+differs from the last applied one; copied plan inputs that differ from the current inputs; mixed
+roles among the automatic directions, or none; a manual direction or an unlimited manual HWM
+taking part; a new queue id inside the already planned id range; a queue that is not registered or
+has no endpoint reference; overflow or shortfall in the direction count, the manual reservation,
+the minimum total, the data budget or the planned aggregate; a terminating context; or a failed
+allocation.
+
+**Convergence.** A successful incremental extension arms the debounce deadline on the spot. Only
+the first caller that finds no deadline arms one and wakes the timer; later attaches in the same
+burst join the deadline already armed and never push it out. The deadline does not raise the
+pending generation, so it does not block the incremental path of the attaches that follow. When
+the deadline passes, one full replan runs and clears the deadline as it records its plan. A
+[deferred shrink](#hwm-changes) that leaves the applied value above the planned one therefore does
+not make the recalculation repeat.
+
+**Applying a target.** A planned value is always published with a release store. When the target
+grows, or shrinks while the currently accounted bytes are already at or below the new target, the
+applied value is published with it. When it shrinks and more bytes are retained, only the planned
+value changes and the applied value stays, which is what the snapshot reports as a deferred
+shrink.
 
 ### Pending-request admission
 

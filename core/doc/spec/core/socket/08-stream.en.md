@@ -230,8 +230,10 @@ socket or close; poller wait, completion recv, monitor recv, and data recv on an
 invalidate it.
 
 `NONE` snapshots `RCVTIMEO` on entry. DONTWAIT and timeout return `ZLINK_RECV_NO_DATA` with `EAGAIN`.
-Context termination while blocked returns `ZLINK_RECV_TERMINATED` with `ETERM`; socket shutdown
-returns `ZLINK_RECV_INVALID_STATE` with `ESHUTDOWN`.
+A blocking PACKET receive observes context termination at the start of every receive turn:
+whether waiting or draining a ready packet backlog, observing termination returns
+`ZLINK_RECV_TERMINATED` with `ETERM`; socket shutdown returns `ZLINK_RECV_INVALID_STATE` with
+`ESHUTDOWN`.
 
 ### 6.3 Queue and malformed framing
 
@@ -423,7 +425,7 @@ Socket and listener defaults are as follows.
 - accept concurrency (STREAM only): default `4`, maximum `128`
 - session scheduler (STREAM): default `rr`
 
-STREAM retains the following runtime environment variables.
+STREAM retains the following STREAM-specific runtime environment variables. Generic Asio diagnostic and gather variables shared by several socket types are outside this list.
 
 - `ZLINK_ASIO_STREAM_ACCEPT_CONCURRENCY`: default `4`, clamped to `128`
 - `ZLINK_ASIO_STREAM_SESSION_SCHED` (`rr|minload`): default `rr`
@@ -435,6 +437,39 @@ STREAM retains the following runtime environment variables.
 - `ZLINK_ASIO_STREAM_BATCH_HEADROOM`: default `64`
 - `ZLINK_STREAM_PIPE_LWM_HINT`: default `4`; applies a low-water-mark hint of
   `configured value * 1024` bytes to the STREAM application pipe
+
+### Adaptive read/write targets and speculative reads
+
+A STREAM connection keeps its own target — the number of bytes one kernel read or write should
+move — and that value changes only on what the connection observed. The rules in this section are an internal
+heuristic that applies inside the Core I/O thread and change no public contract such as part
+ownership, queue bounds or ordering. The multiplier and the number of observations are a record of
+the current implementation, not a contract, and may change as long as the public behaviour does
+not.
+
+**Initial value and maximum.** The initial target starts from the batch size or 4,096 bytes,
+is capped by `ZLINK_ASIO_STREAM_INITIAL_TARGET_CAP` (4,096 by default), and is capped again by
+`ZLINK_OPT_RCVBUF` for reads, `ZLINK_OPT_SNDBUF` for writes and by `ZLINK_OPT_MAXMSGSIZE` for both
+when those are smaller; the floor is 1. The maximum starts at the initial value and rises to a
+larger positive `RCVBUF` for reads or `SNDBUF` for writes, capped by `MAXMSGSIZE`. If that socket
+buffer option is not larger than the initial value, the maximum stays at the initial value, so a
+connection that set no buffer option keeps its initial target.
+
+**Growth and shrink.** When the previous read filled everything it asked for, the target doubles
+immediately, clamped to the maximum. One full read decides it; no consecutive observation is
+required. A read that did not fill the request leaves the target unchanged, and the decoder has no
+shrink rule. The encoder doubles the same way when a prepared batch fills the current target, and
+on a transport with message boundaries it returns to the initial value when a batch fills less than
+half of the current target. A decoder resize takes effect right after the read that caused it; an
+encoder resize takes effect at the next output-preparation boundary so it never rewrites a buffer
+that is already prepared.
+
+**Speculative reads and the bounded drain.** Only when the previous read filled its request does
+the engine issue the next read inline in the same callback. The repetition is bounded to 64 reads
+per callback turn and to less than 1 MiB read in that turn, and it stops on a short read, `EAGAIN`,
+an error, termination, or a read already outstanding. Where it stops, the asynchronous read is
+re-armed if the conditions still hold. Only one asynchronous read exists per connection at a time;
+that fact is held in state owned by the I/O thread so two are never armed together.
 
 ### Peer routing ID disconnect implementation
 

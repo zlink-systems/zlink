@@ -1,0 +1,15 @@
+너는 job sync-impl-inventory(0.17.4 코드의 동기화·I/O 규칙을 스펙 상세화용으로 채록)다. /home/hep7hep7/project/zlink/doc/plan/c016-worklog/briefs/_common-rules.md 를 읽는다. **읽기 전용**: 소스·스펙·테스트 수정 금지, 빌드·실행·커밋 금지. 상한 1시간. 대상 트리 /home/hep7hep7/project/zlink (main, 0.17.4 착지본).
+
+목적: 감독관이 Core 스펙(`core/doc/spec/core/systems/11-synchronization-model`, `06-auto-hwm`, `03-io-thread`, `socket/08-stream`, `protocol/01-zmp`)을 **구현 수준으로 상세화**할 때 인용할 사실을 모은다. 너는 스펙 문장을 쓰지 말고, "현재 코드가 실제로 지키는 규칙"을 파일:행 근거와 함께 기술한다. 추측 금지 — 코드에서 확인되지 않으면 "확인 불가"로 적는다.
+
+채록 항목:
+1. **socket turn**: 공개 API 진입 상태어의 비트 배치와 의미, turn 획득/반납에 쓰는 atomic 연산과 memory order, 재진입(이미 turn을 쥔 thread)의 처리, command drain이 turn 안에서 도는 경로, blocking wait 진입 시 turn 반납과 깨어난 뒤 재획득 순서, close/lifecycle gate가 turn 대기에서 제외되는 방식. 관련 파일: `core/src/runtime/sockets/common/socket_base*.cpp/hpp`, `socket_base_api.cpp`, `socket_base_msg.cpp`.
+2. **receive 경로**: single-consumer 제약을 무엇이 강제하는지, fair-queue/active partition 접근이 turn 아래에서만 일어나는 근거, `has_in`/`check_read`/`activate_read` 경로, 공개 recv가 반환하는 RID view의 무효화 시점.
+3. **pipe 두 끝**: SPSC 규칙, `_out_sync` 제거 후 남은 lock, C3 ledger(seqlock) 읽기·쓰기 절차와 memory order, credit/peer-consumed 카운터의 소유자, cold 경로(재연결·종료)에서만 잡는 lock.
+4. **mailbox와 깨어남**: 삽입 lock 범위, signaler 단일 소비자, "이유가 생긴 전이에서 1회" 규칙을 구현이 어떻게 지키는지, async executor(asio post) 경로와 public FD 사용자가 있을 때의 차이.
+5. **Auto-HWM 동기화(0.17.4 신규)**: `_auto_hwm_recalc_sync`·`_auto_hwm_state_sync`·registry `_sync`·`_opt_sync`의 순서와 각 구간에서 잡는 범위, attach 증분 확장 경로(입력 읽기 → registry 확장 → pipe `_hwm` 적용 → plan/generation 기록)의 정확한 순서, `arm_debounce`/`clear_debounce`/`recalc_due`의 조건과 소유자, pending generation guard와 fast path 거절 조건 전부, 폴백 목록.
+6. **STREAM/Asio I/O(0.17.4 신규)**: decoder·encoder read/write target의 초기값·성장 규칙(어떤 관측에서 몇 배, 어떤 상한으로 clamp)·축소 규칙, speculative read/bounded drain의 조건과 상한(횟수·byte), async rearm 시점, I/O thread 소유 범위.
+7. **WS/WSS 출력**: bounded batch가 모으는 대상과 상한(`out_batch_size`, `zmp_send_batch_max_size`), pointer 전달 body의 split offset 처리와 `[앞, body, 뒤]` 제출 조건, 합계가 상한을 넘을 때의 분리, buffer 수명이 completion까지 유지되는 근거.
+8. **lock 순서 전체 목록**: 위 항목에서 확인한 모든 lock의 획득 순서(중첩 쌍)와 hot path에서 잡는 횟수(가능하면 메시지당).
+
+보고서: /home/hep7hep7/project/zlink/doc/plan/c016-worklog/sync-impl-inventory-0174.md (한국어; 항목별로 "규칙 문장 + 근거 파일:행" 표. 스펙 초안 문장은 쓰지 말 것. 확인 불가 항목은 목록으로 분리). 진행 파일 progress-sync-impl-inventory.md.

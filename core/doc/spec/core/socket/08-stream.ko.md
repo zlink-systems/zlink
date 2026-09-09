@@ -219,8 +219,9 @@ Caller는 두 message를 각각 정확히 한 번 닫거나 다음 owner로 move
 wait, completion recv, monitor recv와 다른 socket의 data recv는 무효화하지 않는다.
 
 `NONE`은 진입 시 `RCVTIMEO`를 snapshot하고, `DONTWAIT`과 timeout은
-`ZLINK_RECV_NO_DATA`+`EAGAIN`이다. Blocking 중 context termination은
-`ZLINK_RECV_TERMINATED`+`ETERM`, socket shutdown은
+`ZLINK_RECV_NO_DATA`+`EAGAIN`이다. Blocking PACKET receive는 각 receive turn 시작에서
+context termination을 관측한다. Wait 중이든 준비된 packet backlog를 drain 중이든 종료를
+관측하면 `ZLINK_RECV_TERMINATED`+`ETERM`이며, socket shutdown은
 `ZLINK_RECV_INVALID_STATE`+`ESHUTDOWN`이다.
 
 ### 6.3 Queue와 malformed framing
@@ -395,7 +396,7 @@ socket/listener 기본값은 다음과 같다.
 - accept 동시성(STREAM 전용): 기본 `4`, 최대 `128`
 - 세션 스케줄러(STREAM): 기본 `rr`
 
-현재 유지되는 STREAM 런타임 환경변수는 다음과 같다.
+현재 유지되는 STREAM 전용 런타임 환경변수는 다음과 같다. 여러 socket type이 함께 쓰는 Asio 진단·gather 변수는 이 목록에 넣지 않는다.
 
 - `ZLINK_ASIO_STREAM_ACCEPT_CONCURRENCY`: 기본 `4`, 최대 `128`로 제한
 - `ZLINK_ASIO_STREAM_SESSION_SCHED` (`rr|minload`): 기본 `rr`
@@ -407,6 +408,34 @@ socket/listener 기본값은 다음과 같다.
 - `ZLINK_ASIO_STREAM_BATCH_HEADROOM`: 기본 `64`
 - `ZLINK_STREAM_PIPE_LWM_HINT`: 기본 `4`. STREAM application pipe의 LWM hint를
   `설정값 * 1024` byte로 적용
+
+### 적응형 read/write target과 speculative read
+
+STREAM 연결은 한 번의 kernel read/write로 옮길 byte 수(target)를 연결마다 따로 들고 있으며,
+그 값은 관측한 결과에 따라서만 바뀐다. 이 절의 규칙은 Core의 I/O thread 안에서만 적용되는 내부 휴리스틱이고,
+part ownership·queue 상한·순서 같은 공개 계약은 바꾸지 않는다. 배수와 판정 횟수는 계약이
+아니라 현재 구현의 기록이며, 공개 동작을 바꾸지 않는 선에서 바뀔 수 있다.
+
+**초기값과 상한.** 초기 target은 batch 크기 또는 4,096 byte에서 시작해
+`ZLINK_ASIO_STREAM_INITIAL_TARGET_CAP`(기본 4,096)으로 제한하고, read는 `ZLINK_OPT_RCVBUF`,
+write는 `ZLINK_OPT_SNDBUF`, 양쪽은 `ZLINK_OPT_MAXMSGSIZE`가 더 작으면 그 값으로 다시 제한한다.
+최솟값은 1이다. 상한(max)은 초기값에서 시작해 read는 더 큰 양수 `RCVBUF`, write는 더 큰 양수
+`SNDBUF`까지 올리고 `MAXMSGSIZE`로 제한한다. 해당 socket buffer option이 초기값보다 크지 않으면
+상한도 초기값에 머문다. 따라서 buffer option을 지정하지 않은 연결의 target은 초기값에서 자라지
+않는다.
+
+**성장과 축소.** 직전 read가 요청한 byte를 모두 채웠으면 그 즉시 target을 2배로 올리고 상한에서
+멈춘다. 한 번의 full read로 판정하며 연속 관측을 요구하지 않는다. 채우지 못한 read는 target을
+바꾸지 않고, decoder에는 축소 규칙이 없다. encoder는 준비한 batch가 현재 target을 채우면 같은
+방식으로 2배까지 올리고, message 경계를 가진 transport에서 현재 target의 절반도 채우지 못하면
+초기값으로 되돌린다. decoder의 크기 변경은 그 read를 처리한 직후 적용하고, encoder의 크기 변경은
+다음 output 준비 경계에서 적용해 이미 준비한 buffer를 바꾸지 않는다.
+
+**Speculative read와 bounded drain.** 직전 read가 요청량을 모두 채웠을 때에만 같은 callback
+안에서 다음 read를 곧바로 시도한다. 반복은 한 callback turn에서 64회, 그 turn에서 읽은 누계
+1 MiB 미만까지이며, short read·`EAGAIN`·오류·종료·이미 걸려 있는 비동기 read 중 하나를 만나면
+멈춘다. 멈춘 자리에서 조건이 살아 있으면 비동기 read를 다시 건다. 비동기 read는 연결마다 하나만
+걸며, 그 사실을 I/O thread가 소유한 상태로 표시해 두 개가 동시에 걸리지 않게 한다.
 
 ### Peer rid disconnect 구현
 

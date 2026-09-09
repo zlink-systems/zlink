@@ -527,6 +527,22 @@ It does not wait for future traffic merely to fill the batch and does not change
 bytes, ordering, or application multipart boundaries. This avoids starting a Beast async
 write and, on WSS, TLS processing for every ZMP frame.
 
+A large payload is not copied into the batch: its place is marked and it travels in the same
+submission. One such payload may ride in a batch, and the buffer order is the front of the batch,
+the payload, then the rest of the batch; when the front is empty the submission starts with the
+header and the payload. It is chosen only when (1) the transport can emit several buffers in one
+operation, (2) the payload is large enough to be worth it, (3) the already copied batch and the
+header fit inside the current target, and (4) the sum of front, payload and rest is at or below the
+batch bound of a message-boundary transport (128 KiB by default). If any of these fails, that
+payload does not ride in this batch: the encoder produces only up to the current target and the
+remaining frames continue in the next batch. This rule does not change the sentence above — no
+traffic that is not yet available is waited for.
+
+The storage of a payload passed this way is kept until completion. Core moves that message into an
+owning object and the asynchronous completion handler captures that ownership by value, so the
+bytes stay alive until the transport finishes the write. When that ownership cannot be created, the
+payload takes the copying path instead.
+
 ## 10. Implementation and contract-test verification requirements
 
 Interoperability with another implementation is verified by observing bytes on the wire,

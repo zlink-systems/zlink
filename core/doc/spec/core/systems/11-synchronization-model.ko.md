@@ -96,6 +96,32 @@ close 상태를 같은 word에 담으므로, 획득과 해제는 **다른 bit를
 
 내부 확인 조건: socket의 C2 상태를 읽고 쓰는 코드는 turn을 쥔 실행 주체 하나뿐이다.
 
+**구현(0.17.4).** turn과 공개 API 진입 상태는 하나의 상태어에 들어 있다.
+
+| 비트 | 의미 |
+|---|---|
+| 63 | close gate |
+| 62 | socket turn |
+| 61 | 진행 중인 multipart lease |
+| 32..60 | complete-record admission 수(단위 `1 << 32`) |
+| 0..31 | 실행 중 public API 수 |
+
+- 무경합 진입은 상태어 `0`을 `1 | turn`으로 바꾸는 strong CAS 하나로 admission과 turn을 함께
+  얻는다(성공 `acq_rel`, 실패 `acquire`). 실패하면 admission을 먼저 얻고 turn을 따로 CAS한다.
+  send admission은 acquire load 뒤 weak CAS로 admission과 multipart 표지 또는 complete-record
+  수를 함께 올리며, 가능하면 같은 CAS에서 turn까지 세운다.
+- 반납은 turn 비트에 대한 `fetch_and(release)`이고, admission까지 함께 놓는 경로는
+  `fetch_sub(turn | 1, acq_rel)` 하나다. multipart 호출이 대기로 물러날 때는 multipart 표지만
+  남기고 admission과 turn을 내린다.
+- 경합 backoff는 spin 64회 → `yield`(1024회 미만) → 100 µs sleep 순이다.
+- 같은 thread가 이미 그 socket의 turn을 쥐고 있으면 내부 재진입은 새 turn을 얻지 않는다. 소유
+  여부는 thread-local 목록으로 판정하고, 반납은 실제로 획득한 scope만 한다.
+- command drain은 batch 시작에서 turn을 얻어 mailbox dequeue, command 적용, 지연된 pipe 종료,
+  readiness·submit progress 발행까지 같은 turn 안에서 끝낸다.
+- close는 turn을 기다리지 않는다. 실행 중 public API 수가 0일 때 close 비트를 CAS로 세운다.
+  poller 등록은 lifetime pin을 잡는 순간에만 admission을 얻고 즉시 반납하므로 등록이 close를
+  막지 않는다.
+
 ### 3.2 pipe의 두 끝과 그 사이
 
 socket과 session 사이에서 message를 나르는 pipe([Architecture](01-architecture.ko.md))는 양
@@ -128,6 +154,21 @@ lock을 잡으면 안 된다.
 내부 확인 조건: pipe 끝의 값마다 writer가 하나이고, 그 값을 읽는 다른 주체가 있으면 발행돼
 있다.
 
+**구현(0.17.4).** 정상 송수신 경로에서 pipe가 잡는 mutex는 없다.
+
+- ypipe는 reader 하나·writer 하나의 SPSC이고 두 끝이 공유하는 것은 발행된 pointer 하나다.
+  writer의 flush는 그 CAS가 "reader가 잠들었다"를 관측했을 때만 `activate_read` command를
+  만든다. reader는 큐가 비면 같은 pointer에 잠듦을 발행한다.
+- 두 끝이 서로의 진행을 보는 누계(메시지 수·byte 수)는 C3 ledger로 발행한다. 유일한 writer는
+  짝수 sequence를 홀수로 `exchange(acq_rel)`한 뒤 두 counter를 release store하고 다음 짝수를
+  release store한다. reader는 sequence를 acquire load해 홀수면 재시도하고, 두 counter를 읽은 뒤
+  sequence를 다시 읽어 같을 때만 그 쌍을 채택한다.
+- 남은 endpoint lock은 hot path가 아니라 cold·control 구간이다: 재연결로 큐를 교체할 때,
+  종료·delimiter로 lifecycle 상태를 바꿀 때, route blob 발행, HWM 적용과 credit 회수,
+  transport pair hold. 두 끝이 공유하는 transport lock은 재진입하지 않는다.
+- 상대 끝을 떼어낼 때는 자기 endpoint lock을 놓은 뒤 상대의 것을 잡는다. 두 끝의 lock을 동시에
+  쥐지 않는다.
+
 ### 3.3 mailbox와 깨어남
 
 thread 사이의 command 전달 채널인 mailbox는 여러 thread가 넣고 한 번에 하나의 소유자가 꺼낸다.
@@ -153,6 +194,19 @@ poller와 command owner가 나눠 소비할 때 누가 먼저 소비하고 누�
 
 내부 확인 조건: 대기 등록과 알림 발행 사이에서 깨어남을 잃지 않는다 — 등록 뒤 잠들기 전에
 queue를 재확인하고, 알림은 등록을 본 뒤 발행한다.
+
+**구현(0.17.4).** producer는 command 하나당 mailbox lock을 한 번 잡는다. 그 구간에서 command
+기록과 flush, 관찰자 epoch·대기자 갱신, pending hint, 등록된 poller signal, Asio 예약 여부를
+모두 결정한다.
+
+- 깨움은 "비어 있고 잠든 receiver"에서 "일감 있음"으로 바뀌는 전이에서만 낸다. 이미 깨어 있는
+  receiver 뒤에 붙는 command는 신호를 만들지 않는다.
+- Asio executor가 설치돼 있으면 예약 플래그를 `exchange(true)`로 접어 callback 하나만 post하고,
+  drain 뒤 lock 아래에서 예약을 내리며 큐를 다시 확인해 남은 일감이 있으면 예약을 유지한다.
+  공개 FD 사용자가 등록돼 있으면 primary signaler에도 신호하고, 없으면 post만으로 깨운다.
+- signaler는 신호 상태를 `exchange(true)`로 접어 이미 신호된 상태면 syscall을 생략한다.
+- 대기 등록과 command 도착의 경합은 lock 아래의 command epoch·pending hint·대기자 수와 조건
+  변수로 닫는다. 관찰자도 대기자도 없는 평범한 전송은 그 비용을 내지 않는다.
 
 ### 3.4 대기와 재획득
 
@@ -233,6 +287,22 @@ lock을 semaphore나 `try_lock` 재시도로 바꾸는 것은 형태를 바꾸�
 - **memory ordering.** 다른 thread에 값을 발행할 때는 release store, 읽을 때는 acquire load를
   쓴다. 대기자 등록과 알림 발행처럼 두 갱신 중 어느 하나도 놓치면 안 되는 자리에는 양쪽에
   `seq_cst` fence를 둔다. relaxed는 통계처럼 순서가 의미 없는 값에만 쓴다.
+
+### 6.1 구현 lock 목록과 획득 순서
+
+| 구간 | 순서 |
+|---|---|
+| command drain | socket turn → mailbox lock(짧은 snapshot) → 대기자가 있으면 submit progress lock |
+| attach 최초 게시 | socket turn → monitor lock |
+| Auto-HWM 전체 재계산 | 재계산 lock → 상태 lock / socket pin lock(pin 뒤 즉시 반납) / option lock → socket Auto-HWM lock → monitor lock → pipe endpoint lock |
+| Auto-HWM 증분 확장 | 재계산 lock → 상태 lock → option lock → registry lock → (registry 반납) pipe endpoint lock → socket Auto-HWM lock → 상태 lock |
+| pipe 상대 끝 분리 | 자기 endpoint lock 반납 → 상대 endpoint lock |
+
+메시지당 hot path 비용은 다음과 같다. 정상 public send는 pipe mutex 0회, socket 상태어 CAS
+1회(획득)와 atomic 1회(반납)를 쓴다. 정상 public receive도 pipe와 fair queue에서 mutex 0회이며,
+multipart physical record는 record 전체가 같은 turn을 유지한다. 메시지 경계마다 C3 ledger writer가
+sequence exchange 1회와 release store 3회를 낸다. mailbox producer는 command당 lock 1회이고
+실제 신호는 위의 전이에서만 낸다.
 
 ## 7. 변경 절차
 

@@ -105,6 +105,35 @@ released as in §3.4.
 Internal check condition: the code that reads or writes the socket's C2 state is exactly one
 execution party, the one holding the turn.
 
+**Implementation (0.17.4).** The turn and the public-API entry state live in one state word.
+
+| Bit | Meaning |
+|---|---|
+| 63 | close gate |
+| 62 | socket turn |
+| 61 | multipart lease in progress |
+| 32..60 | complete-record admissions (unit `1 << 32`) |
+| 0..31 | public API calls in flight |
+
+- The uncontended entry takes admission and the turn in one strong CAS that moves the word from
+  `0` to `1 | turn` (success `acq_rel`, failure `acquire`). If it fails, the caller takes the
+  admission first and then CASes the turn separately. A send admission acquire-loads the word and
+  uses a weak CAS to raise the admission together with the multipart marker or the
+  complete-record count, setting the turn in the same CAS when it can.
+- Releasing the turn is a `fetch_and(release)` on the turn bit; the path that also drops the
+  admission is a single `fetch_sub(turn | 1, acq_rel)`. When a multipart call suspends to wait it
+  keeps only the multipart marker and drops both the admission and the turn.
+- Contention backs off as 64 spins, then `yield` below 1024 attempts, then a 100 µs sleep.
+- If the calling thread already owns that socket's turn, an inner re-entry does not take a new
+  one; ownership is decided from a thread-local list and only the scope that actually acquired the
+  turn releases it.
+- A command drain takes the turn at the start of the batch and finishes the mailbox dequeue,
+  command application, deferred pipe termination and readiness / submit-progress publication
+  inside that same turn.
+- Close does not wait for the turn: it CASes the close bit once the in-flight public API count is
+  zero. Poller registration holds an admission only while it takes the lifetime pin and releases
+  it immediately, so a registration never blocks close.
+
 ### 3.2 The two ends of a pipe and what lies between
 
 A pipe carries messages between a socket and a session ([Architecture](01-architecture.en.md));
@@ -141,6 +170,24 @@ the other's counter.
 Internal check condition: every value at a pipe end has one writer, and if another party reads
 it, it is published.
 
+**Implementation (0.17.4).** The steady send and receive paths take no pipe mutex.
+
+- The ypipe is single-producer / single-consumer, and the only value the two ends share is one
+  published pointer. The writer's flush raises an `activate_read` command only when that CAS
+  observes that the reader went to sleep; the reader publishes that sleep on the same pointer when
+  it drains the queue.
+- The running totals each end needs from the other (messages and bytes) are published as a C3
+  ledger. The single writer `exchange(acq_rel)`s the even sequence to odd, release-stores both
+  counters and release-stores the next even value. The reader acquire-loads the sequence, retries
+  while it is odd, reads both counters, then re-reads the sequence and accepts the pair only when
+  the two reads match.
+- The endpoint lock that remains is a cold / control lock, not a hot-path one: swapping the queue
+  on reconnect, changing lifecycle state on termination or a delimiter, publishing the route blob,
+  applying HWM and recovering credit, and holding the transport pair. The transport lock the two
+  ends share is never re-entered.
+- Detaching the peer end releases this end's lock before taking the peer's. The two endpoint locks
+  are never held at the same time.
+
 ### 3.3 The mailbox and wake-ups
 
 The mailbox, the channel that carries commands between threads, is inserted into by many threads
@@ -171,6 +218,22 @@ destination state.
 Internal check condition: no wake-up is lost between waiter registration and notification — the
 queue is re-checked after registering and before sleeping, and the notification is issued after
 the registration has been seen.
+
+**Implementation (0.17.4).** A producer takes the mailbox lock once per command. That section
+covers writing and flushing the command, updating the observer epoch and waiters, the pending
+hint, signalling registered pollers, and deciding whether to schedule the Asio callback.
+
+- A wake-up is raised only on the transition from "empty with a sleeping receiver" to "work
+  pending". A command appended behind an already awake receiver raises no signal.
+- When an Asio executor is installed, the scheduled flag is folded with `exchange(true)` so only
+  one callback is posted; after the drain the flag is cleared under the lock and the queue is
+  re-checked, keeping the schedule if work remains. If a public FD user is registered the primary
+  signaler is signalled as well; with no such user the post alone wakes the owner.
+- The signaler folds its signalled flag with `exchange(true)` and skips the syscall when it is
+  already set.
+- The race between registering to wait and a command arriving is closed under the lock by the
+  command epoch, the pending hint, the waiter count and the condition variable. An ordinary send
+  with no observer and no waiter pays none of that.
 
 ### 3.4 Waiting and re-taking
 
@@ -261,6 +324,23 @@ guarding state.
   an acquire load. Where neither of two updates may be missed — waiter registration and
   notification — a `seq_cst` fence is placed on both sides. Relaxed is used only for values whose
   order has no meaning, such as statistics.
+
+### 6.1 Implementation lock list and acquisition order
+
+| Section | Order |
+|---|---|
+| Command drain | socket turn → mailbox lock (short snapshot) → submit-progress lock when a waiter exists |
+| First publication of an attach | socket turn → monitor lock |
+| Auto-HWM full replan | recalculation lock → state lock / socket-pin lock (released right after pinning) / option lock → socket Auto-HWM lock → monitor lock → pipe endpoint lock |
+| Auto-HWM incremental extension | recalculation lock → state lock → option lock → registry lock → (registry released) pipe endpoint lock → socket Auto-HWM lock → state lock |
+| Detaching the peer pipe end | release this endpoint lock → take the peer endpoint lock |
+
+The per-message hot-path cost is as follows. A steady public send takes no pipe mutex and uses one
+state-word CAS to acquire and one atomic to release. A steady public receive likewise takes no
+mutex in the pipe or the fair queue, and a multipart physical record keeps one turn for the whole
+record. At each message boundary the C3 ledger writer issues one sequence exchange and three
+release stores. A mailbox producer takes the lock once per command and signals only on the
+transition above.
 
 ## 7. Change procedure
 

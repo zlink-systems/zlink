@@ -65,8 +65,9 @@ Hot path 안의 코드는 다음을 하지 않는다. 예외는 §4의 후퇴 �
    `rearm_primary_signaler()`로 public poller를 깨운다. 이를 빠뜨리면 poller는 자기 timeout까지
    잠든다.
 
-허용되는 것: pipe 자신의 `_in_sync`·`_out_sync`, atomic load/store, 고정 크기 스택 배열, 이미
-잡고 있는 send/recv scope.
+허용되는 것: atomic load/store, 고정 크기 스택 배열, 이미 잡고 있는 send/recv scope와
+endpoint의 기존 C2 owner/turn. `_out_sync`는 [동기화 모델](11-synchronization-model.ko.md)이 정한
+cold path에서만 쓰며, message마다 도는 write·read·flush는 잡지 않는다.
 
 ## 4. 상태 캐시와 후퇴 경로
 

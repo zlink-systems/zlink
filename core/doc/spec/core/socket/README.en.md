@@ -585,7 +585,9 @@ When no record is available, `DONTWAIT` immediately returns
 `ZLINK_RECV_NO_DATA` with `errno == EAGAIN`. `NONE` snapshots
 `ZLINK_OPT_RCVTIMEO` on entry: the default is 1,000 ms, `0` is immediate, and
 `-1` waits indefinitely. A timeout returns `ZLINK_RECV_NO_DATA` with
-`errno == EAGAIN`. Context termination during a blocking wait returns
+`errno == EAGAIN`. A `NONE` data receive observes context
+termination at the start of every receive turn: whether it is in a blocking wait
+or continuously draining an already-ready backlog, observing termination returns
 `ZLINK_RECV_TERMINATED` with `errno == ETERM`; socket shutdown returns
 `ZLINK_RECV_INVALID_STATE` with `errno == ESHUTDOWN`. Every failure leaves all
 outputs and message contents unchanged.

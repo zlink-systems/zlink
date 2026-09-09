@@ -491,6 +491,19 @@ Text opcode는 HELLO parsing이나 data frame decode 전에 거부한다.
 traffic을 기다리지 않으며, ZMP frame byte·순서와 application multipart 경계를 바꾸지 않는다.
 이 구조는 ZMP frame마다 Beast async write와 WSS의 TLS 처리를 시작하는 비용을 없앤다.
 
+큰 payload는 batch에 복사하지 않고 그 자리만 표시한 뒤 같은 제출에 실어 보낸다. 한 batch가
+가질 수 있는 이런 payload는 하나이며, buffer 순서는 batch의 앞부분, payload, batch의 뒷부분이다.
+앞부분이 비어 있으면 header와 payload로 시작한다. 선택 조건은 (1) transport가 여러 buffer를 한
+번에 낼 수 있고, (2) payload가 그렇게 낼 만한 크기이며, (3) 이미 복사한 batch와 header가 현재
+target 안에 들고, (4) 앞부분·payload·뒷부분의 합이 message 경계 transport의 batch 상한(기본
+128 KiB) 이하인 것이다. 하나라도 어긋나면 그 payload는 이 batch에 싣지 않고 encoder가 현재
+target까지만 만들며, 남은 frame은 다음 batch로 이어진다. 이 규칙은 "지금 준비된 byte만 상한까지
+모은다"는 위 문장을 바꾸지 않는다 — 아직 준비되지 않은 traffic을 기다리지 않는다.
+
+전달한 payload의 저장소는 completion까지 유지한다. Core는 그 message를 소유권 있는 객체로 옮기고
+비동기 완료 handler가 그 소유권을 값으로 잡으므로, transport가 write를 끝낼 때까지 byte가 살아
+있다. 이 소유권을 만들지 못하면 그 payload는 복사 경로로 처리한다.
+
 ## 10. 구현 및 contract test 검증 요구
 
 다른 구현과의 상호운용은 wire에서 관찰하는 byte로, request-reply 완료는 공개

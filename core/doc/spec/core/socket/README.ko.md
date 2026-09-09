@@ -545,8 +545,9 @@ recv family를 사용한다.
 
 `DONTWAIT`에 record가 없으면 즉시 `ZLINK_RECV_NO_DATA`, `errno == EAGAIN`이다. `NONE`은
 호출 진입 시 `ZLINK_OPT_RCVTIMEO`를 snapshot한다. 기본값은 1,000 ms이고 `0`은 즉시,
-`-1`은 무한 대기다. Timeout은 `ZLINK_RECV_NO_DATA`, `errno == EAGAIN`이다. Blocking wait
-중 context termination은 `ZLINK_RECV_TERMINATED`, `errno == ETERM`, socket shutdown은
+`-1`은 무한 대기다. Timeout은 `ZLINK_RECV_NO_DATA`, `errno == EAGAIN`이다. `NONE` data receive는 각 receive turn 시작에서
+context termination을 관측한다. Blocking wait 중이든 이미 준비된 backlog를 연속 drain 중이든
+종료를 관측하면 `ZLINK_RECV_TERMINATED`, `errno == ETERM`으로 끝나며, socket shutdown은
 `ZLINK_RECV_INVALID_STATE`, `errno == ESHUTDOWN`이다. 모든 실패는 output과 message content를
 변경하지 않는다.
 

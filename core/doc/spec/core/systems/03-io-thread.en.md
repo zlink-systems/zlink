@@ -81,7 +81,8 @@ Each I/O thread owns a Boost ASIO-based poller (`asio_poller.cpp`). The main loo
 
 Network I/O uses the Proactor model: instead of directly polling read/write readiness, it submits
 asynchronous I/O requests to the OS and processes only their completion results. When the engine
-(`asio_engine_t`) calls `async_read_some()` / `async_write_some()` on the transport, the I/O
+(`asio_engine_t`) calls `async_read_some()`, `async_write_some()` or the buffer-sequence
+`async_writev()` on the transport, the I/O
 thread's `io_context` waits for the OS asynchronous I/O operation to complete and then invokes the
 completion callback. The engine does not directly poll read/write readiness; it processes only
 completion results.
@@ -102,7 +103,7 @@ sequenceDiagram
 - **Read completion** → Pass the read bytes to the protocol decoder to decode frames, deliver the
   message to the receive pipe, and issue `async_read_some()` again.
 - **Write completion** → Encode and send the message pulled from the send pipe, then issue the next
-  `async_write_some()` if data remains.
+  asynchronous write operation (`async_write_some()` or `async_writev()`) if data remains.
 
 The `asio_poller` `async_wait` readiness path is used only to wake up mailbox command processing,
 not for network data.

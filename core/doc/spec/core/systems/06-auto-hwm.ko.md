@@ -157,7 +157,7 @@ stable queue ID 순서로 1 byte씩 배정한다. 따라서 같은 registry snap
 
 | 변화 | Core 동작 |
 |---|---|
-| 연결 증가로 queue별 목표가 감소 | attach하는 방향은 새 목표를 즉시 기록한다. 이미 붙어 있는 방향의 목표 인하는 option 변경과 같은 debounce 재계산 경로가 기록한다(attach는 전체 재계산을 동기로 돌리지 않는다). 새 목표가 기록되면 현재 보관량이 새 목표 아래로 drain될 때까지 추가 admission을 막음 |
+| 연결 증가로 queue별 목표가 감소 | attach하는 방향은 새 목표를 즉시 기록한다. 이미 붙어 있는 방향의 목표 인하는 option 변경과 같은 debounce 재계산 경로가 기록한다. Attach는 마지막 plan을 정확히 증분 확장할 수 있으면 전체 재계산을 동기로 돌리지 않으며, 증분 확장이 불가능하면 같은 attach 경로에서 동기 전체 재계산으로 물러난다. 새 목표가 기록되면 현재 보관량이 새 목표 아래로 drain될 때까지 추가 admission을 막음 |
 | 연결 감소로 목표가 증가 | cooldown 뒤 같은 generation의 live queue에만 적용 |
 | Detach된 queue | endpoint가 모두 해제되면 남은 provisional·committed charge를 한 번 정리하고 registry entry를 제거 |
 
@@ -483,6 +483,54 @@ ROUTER-ROUTER가 terminal reply와 error reply를 진행시키고 receive-flow-s
 동기화하는 Completion queue에는 application HWM을 적용하지 않는다. DEALER-ROUTER reply와
 error reply는 DATA·REQUEST와 같은 Application queue의 HWM과 peer PAUSED를 적용한다. Monitor
 queue도 application budget을 나누는 queue 목록에서 제외한다.
+
+### 재계산의 동기화와 수렴
+
+Auto-HWM 계획을 만드는 경로에는 네 개의 owner가 있다. context option과 계획 입력은 option
+lock, generation·deadline·마지막으로 기록한 계획은 상태 lock, 전체 재계산과 증분 확장의 직렬화는
+재계산 lock, socket 목록의 수명 pin은 pin lock이 소유한다. 잠금 순서는
+[동기화 모델 §6.1](11-synchronization-model.ko.md#61-구현-lock-목록과-획득-순서)에 있다.
+
+**전체 재계산.** 재계산 lock을 처음부터 끝까지 쥔 채 상태 lock에서 generation을 snapshot하고,
+pin lock 아래에서 socket 수명 pin만 모은 뒤 곧바로 pin lock을 놓고, option lock으로 입력을
+읽는다. 이어서 socket별 정책 수집 → registry 계획 → socket·pipe 적용 → 계획 기록 순으로
+진행한다. generation을 입력보다 먼저 snapshot하므로 "새 generation과 옛 입력"의 조합은
+생기지 않는다. 계획을 기록할 때 적용 generation이 대기 중 generation과 같으면 대기 표시를
+지우고, budget generation을 올린다.
+
+**Attach의 증분 확장.** attach는 pipe를 endpoint 목록에 먼저 게시한다. 그 pipe가 application
+방향이고 socket의 Auto-HWM 정책이 켜져 있으면 증분 확장을 시도하며, 실패하면 그 자리에서 전체
+재계산으로 물러난다. 증분 경로는 재계산 lock을 쥔 채 다음 순서로 진행한다.
+
+1. 상태 lock에서 대기 중 generation이 마지막 적용 generation과 같은지 확인하고 적용된 계획을
+   복사한다.
+2. option lock에서 현재 입력을 읽어 복사한 계획의 입력과 같은지 확인한다.
+3. registry lock에서 붙는 두 방향만 계획에 더하고 목표와 합계를 갱신한다.
+4. registry lock을 놓고 붙는 pipe의 endpoint lock 아래에서 그 pipe의 HWM을 적용한다.
+5. socket의 Auto-HWM lock에서 계획과 방향 수를 기록한다.
+6. 상태 lock에서 계획과 budget generation을 기록한다.
+
+즉 목표를 적용한 뒤에 계획과 generation을 기록한다. 그래서 새 generation을 관측한 snapshot은
+그 계획이 이미 적용된 상태만 본다.
+
+**폴백 조건.** 다음 중 하나라도 해당하면 증분 확장을 포기하고 전체 재계산을 실행한다.
+방향이 0개이거나 2개를 넘는 경우, 계획이 비활성인 경우, 대기 중 generation이 마지막 적용
+generation과 다른 경우, 복사한 계획의 입력이 현재 입력과 다른 경우, 자동 방향의 role이 섞여
+있거나 자동 방향이 없는 경우, 수동 방향이거나 무제한 수동 HWM이 관여하는 경우, 새 queue ID가
+이미 계획된 ID 범위 안인 경우, registry에 등록되지 않았거나 endpoint 참조가 없는 경우,
+방향 수·수동 예약·최소 합계·데이터 예산·계획 합계에서 overflow나 부족이 생기는 경우,
+context가 종료 중이거나 메모리 할당에 실패한 경우.
+
+**수렴.** 증분 확장이 성공하면 그 자리에서 debounce 마감을 세운다. 마감이 없을 때의 첫
+호출자만 마감을 세우고 timer를 깨우며, 같은 burst의 뒤따르는 attach는 이미 세워진 마감에
+합류하고 마감을 미루지 않는다. 이 마감은 대기 중 generation을 올리지 않으므로 뒤따르는
+attach의 증분 경로를 막지 않는다. 마감이 지나면 전체 재계산이 한 번 돌고, 그 계획을 기록하면서
+마감을 지운다. 따라서 [§4 deferred shrink](#hwm-변경)로 applied가 planned보다 큰 상태가
+남아 있어도 재계산이 반복되지 않는다.
+
+**목표 적용.** 계획된 값은 항상 release store로 발행한다. 목표가 커지거나, 줄어드는데 현재
+보관량이 새 목표 이하이면 적용 값도 같이 발행한다. 줄어드는데 보관량이 더 많으면 계획 값만
+바꾸고 적용 값은 그대로 두어 deferred shrink 상태로 보고한다.
 
 ### Pending request 수용
 
