@@ -827,8 +827,12 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 - Single 상태: `측정 완료(2026-09-09)` — 6 transport × 7 pattern, 42셀 모두 complete(실패 0).
   통과 28 / 미달 14. 미달: tcp req/reply, inproc·ipc의 다수(작은 payload managed/native 전환
   비용; local transport는 §2.1 예외 목표 적용). 2단계 개선 대상.
-- Multi 상태: `미측정`
-- 다음 작업: .NET Multi paired 측정(STREAM 100 CCU).
+- Multi 상태: `측정 완료(2026-09-09, 원샷)` — 4 transport × 7 pattern, clients=100.
+  통과 18 / 미달 9 / 미측정 1. 미측정 1셀(ws MULTI_ROUTER_ROUTER_SENDSEND 65536·131072B)은
+  **C multi 러너의 `non_zero_exit_1 at AUTO_HWM_DETAIL`**(C측 실패, 바인딩 무관) 때문 — 실패
+  진단 대상(§9.2 하단). .NET report에 `META,core_version` 라인이 없어 status에 `core_meta_missing`을
+  부기했으나 package provenance·console로 release 0.17.5 확인(양성).
+- 다음 작업: Java Single·Multi paired 측정.
 
 #### 9.2.1 Single suite
 
@@ -881,34 +885,42 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 
 | Transport | Pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 결과 파일 / 메모 |
 |-----------|---------|----|-----|------|------|-------|--------|------------------|
-| `tcp` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tcp` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `ws` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `wss` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
-| `tls` | `MULTI_DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `MULTI_STREAM` | 미측정 | 미측정 | 미측정 | 해당 없음 | 미측정 | 해당 없음 |  |
+| `tcp` | `MULTI_DEALER_DEALER` | 34.5% | 44.7% | 54.9% | 72.9% | 79.9% | 92.2% | 미달 63.2%/lat0.52× · c0175-dotnet-multi |
+| `tcp` | `MULTI_DEALER_ROUTER_SENDSEND` | 47.8% | 43.3% | 47.0% | 57.8% | 80.7% | 57.4% | 미달 55.7%/lat2.50× · c0175-dotnet-multi |
+| `tcp` | `MULTI_DEALER_ROUTER_REQREP` | 85.1% | 55.2% | 46.0% | 90.1% | 142.9% | 157.0% | 통과 96.0%/lat1.01× · c0175-dotnet-multi |
+| `tcp` | `MULTI_ROUTER_ROUTER_SENDSEND` | 101.2% | 82.7% | 83.7% | 85.9% | 99.0% | 44.9% | 통과 82.9%/lat0.92× · c0175-dotnet-multi |
+| `tcp` | `MULTI_ROUTER_ROUTER_REQREP` | 70.3% | 68.2% | 62.3% | 67.3% | 68.2% | 81.7% | 미달 69.7%/lat1.04× · c0175-dotnet-multi |
+| `tcp` | `MULTI_PUBSUB` | 83.4% | 79.6% | 62.4% | 85.9% | 123.5% | 96.7% | 통과 88.6%/lat1.28× · c0175-dotnet-multi |
+| `tcp` | `MULTI_STREAM` | 93.7% | 84.5% | 88.5% | 해당 없음 | 110.7% | 해당 없음 | 통과 94.3%/lat1.10× · c0175-dotnet-multi |
+| `ws` | `MULTI_DEALER_DEALER` | 42.3% | 41.9% | 37.3% | 95.3% | 71.4% | 98.7% | 미달 64.5%/lat0.34× · c0175-dotnet-multi |
+| `ws` | `MULTI_DEALER_ROUTER_SENDSEND` | 66.5% | 71.2% | 54.3% | 130.8% | 79.3% | 106.8% | 통과 84.8%/lat0.95× · c0175-dotnet-multi |
+| `ws` | `MULTI_DEALER_ROUTER_REQREP` | 171.9% | 132.0% | 174.8% | 247.5% | 76.3% | 118.0% | 통과 153.4%/lat0.47× · c0175-dotnet-multi |
+| `ws` | `MULTI_ROUTER_ROUTER_SENDSEND` | 72.8% | 64.7% | 75.3% | 70.3% | 실패 | 실패 | 미측정(불완전: 실패 65536,131072B) 부분평균 70.8%/lat1.02× · c0175-dotnet-multi |
+| `ws` | `MULTI_ROUTER_ROUTER_REQREP` | 59.5% | 65.5% | 86.3% | 127.2% | 104.0% | 92.5% | 통과 89.2%/lat1.62× · c0175-dotnet-multi |
+| `ws` | `MULTI_PUBSUB` | 45.8% | 111.6% | 168.0% | 172.9% | 302.2% | 131.1% | 통과 155.3%/lat0.89× · c0175-dotnet-multi |
+| `ws` | `MULTI_STREAM` | 94.8% | 91.5% | 96.5% | 해당 없음 | 109.7% | 해당 없음 | 통과 98.1%/lat1.04× · c0175-dotnet-multi |
+| `wss` | `MULTI_DEALER_DEALER` | 45.4% | 49.3% | 71.4% | 91.2% | 75.9% | 69.5% | 미달 67.1%/lat0.43× · c0175-dotnet-multi |
+| `wss` | `MULTI_DEALER_ROUTER_SENDSEND` | 64.7% | 58.7% | 85.0% | 116.2% | 107.6% | 83.0% | 통과 85.9%/lat0.60× · c0175-dotnet-multi |
+| `wss` | `MULTI_DEALER_ROUTER_REQREP` | 49.0% | 58.0% | 74.7% | 115.0% | 71.2% | 82.5% | 미달 75.1%/lat3.46× · c0175-dotnet-multi |
+| `wss` | `MULTI_ROUTER_ROUTER_SENDSEND` | 73.1% | 65.3% | 60.9% | 206.6% | 115.1% | 104.7% | 통과 104.3%/lat0.71× · c0175-dotnet-multi |
+| `wss` | `MULTI_ROUTER_ROUTER_REQREP` | 62.2% | 59.0% | 94.5% | 201.2% | 66.1% | 70.1% | 통과 92.2%/lat0.73× · c0175-dotnet-multi |
+| `wss` | `MULTI_PUBSUB` | 35.3% | 40.5% | 61.1% | 95.3% | 111.0% | 107.8% | 미달 75.2%/lat1.09× · c0175-dotnet-multi |
+| `wss` | `MULTI_STREAM` | 98.3% | 103.6% | 107.9% | 해당 없음 | 128.3% | 해당 없음 | 통과 109.5%/lat0.95× · c0175-dotnet-multi |
+| `tls` | `MULTI_DEALER_DEALER` | 40.9% | 81.4% | 79.4% | 88.9% | 104.7% | 89.3% | 미달 80.8%/lat0.45× · c0175-dotnet-multi |
+| `tls` | `MULTI_DEALER_ROUTER_SENDSEND` | 50.6% | 52.7% | 62.0% | 159.9% | 107.6% | 111.6% | 통과 90.7%/lat0.68× · c0175-dotnet-multi |
+| `tls` | `MULTI_DEALER_ROUTER_REQREP` | 53.2% | 50.4% | 52.0% | 400.6% | 57.5% | 82.3% | 통과 116.0%/lat0.83× · c0175-dotnet-multi |
+| `tls` | `MULTI_ROUTER_ROUTER_SENDSEND` | 88.4% | 89.8% | 100.7% | 160.4% | 167.5% | 129.9% | 통과 122.8%/lat0.73× · c0175-dotnet-multi |
+| `tls` | `MULTI_ROUTER_ROUTER_REQREP` | 43.4% | 50.7% | 56.8% | 75.8% | 75.5% | 95.6% | 미달 66.3%/lat0.85× · c0175-dotnet-multi |
+| `tls` | `MULTI_PUBSUB` | 55.1% | 68.3% | 81.0% | 135.8% | 118.6% | 149.1% | 통과 101.3%/lat0.91× · c0175-dotnet-multi |
+| `tls` | `MULTI_STREAM` | 94.9% | 80.4% | 82.9% | 해당 없음 | 94.1% | 해당 없음 | 통과 88.1%/lat1.14× · c0175-dotnet-multi |
+
+> **C multi 러너 재현 실패 메모(공통, 2단계 진단 대상).** `MULTI_ROUTER_ROUTER_SENDSEND`
+> ws의 65536·131072B에서 **C multi 러너**가 `non_zero_exit_1`로 종료했고 첫 오류가
+> `AUTO_HWM_DETAIL`(monitor snapshot 조회) 단계였다. C 자체 실패이므로 그 셀의 ratio를 계산할 수
+> 없어 모든 언어에서 `미측정`이 된다(C++ 0.17.4 multi에서는 나타나지 않았고 0.17.5 측정에서 관측).
+> release runtime의 monitor ABI와 large ws SENDSEND 조합에서 재현되는지, single 러너처럼 release일 때
+> `PERF_PRINT_AUTO_HWM_DETAIL=0`을 multi 러너에도 적용해야 하는지 2단계에서 확인한다. Core 원인이면
+> D-BP로 올린다.
 
 ### 9.3 Java
 
