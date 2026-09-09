@@ -226,6 +226,12 @@ const dup = msg.clone();
 > return meanings, so no alias is possible — this is a major-version break. **Replace
 > deep-copy-intent `copy()` calls with `clone()`.**
 
+> **Note (refcount timing):** Node exposes payload as a `Buffer`. While an exposed `Buffer`
+> is alive, the native storage is reclaimed when that `Buffer` is GC'd. So after `copy()`
+> shares handles and you `close()` one, `refCount()` does not drop to 1 immediately — it
+> reflects after the buffer is GC'd (diagnostic only; no effect on behavior, safety, or
+> ownership independence).
+
 ---
 
 ## C API Mapping

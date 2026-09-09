@@ -641,6 +641,13 @@ native config 실패를 native errno가 포함된 config 범주의 `ZlinkError`�
   달리해 공존시킬 수 없어 deprecated alias가 불가능하므로, 이는 **major 버전 breaking
   change**로 처리하고 마이그레이션(`copy`→`clone`)을 안내한다(조용한 변경 아님). 정의는
   [Message ownership 공통 계약](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
+  - **refcount 관찰 타이밍(Node 한정):** Node는 payload를 JS `Buffer`로 노출하며, 노출된
+    `Buffer` view가 살아 있는 동안 native frame은 그 view가 GC/finalize될 때 정리된다(예전부터
+    안전하게 이렇게 동작). 따라서 `copy()`로 공유한 두 핸들 중 하나를 `close()`해도, 버퍼 view가
+    노출된 경우 `refCount()` 관찰값은 **즉시 1로 떨어지지 않고** 버퍼 GC 이후 반영된다. 이는
+    진단용 `refCount()` 표시에만 영향을 주며 정확성·안전성·소유권 독립에는 영향이 없다(각 핸들은
+    독립적으로 유효하고 각자 close된다). `close()`는 모든 경우 단일 release 경로로, 노출 버퍼는
+    GC가 정리한다 — REQREP 등 close 집약 경로의 per-close 비용을 늘리지 않기 위한 결정이다.
 - 모든 소켓 패밀리와 그 타입 있는 옵션.
 - Monitor, poller, timer, readiness 의미.
 - SPOT node, SPOT 핸들, 토폴로지 스냅샷, Actor, 스트림

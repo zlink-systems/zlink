@@ -163,6 +163,17 @@ C++·.NET·Java의 추가는 non-breaking(이름 정렬 alias 불필요). **Node
 - 공유 후 수명 오사용(공유 중 원본 mutate, 한쪽만 close 후 다른 쪽 사용) 방지를 테스트로 강제.
 - perf relay가 `Move`로 바뀌면 재제출/드레인 경로에서 소유권이 이미 이전됐음을 전제로 해야 하므로, 재제출이 필요한 언어는 C처럼 `Copy` snapshot을 병행.
 
+### 8.1 결정 기록 — Node `close()`는 GC 기반 정리 유지 (refcount 즉시성 미보장)
+- **배경:** `copy()`(ref-share) 도입 시 "copy 후 close하면 refcount 즉시 하락"을 보장하려고 Node `message_frame_close`에 버퍼 노출
+  메시지마다 `detach + close + reinit`를 강제하는 경로를 넣었더니, **MULTI_ROUTER_ROUTER_REQREP tcp 작은 size가 C 대비 ~38% →
+  ~8~10%로 3~5배 회귀**했다(REQREP는 요청·응답 메시지를 왕복 임계경로에서 close해 per-close 비용에 가장 민감; runs=3 재현).
+- **결정(사용자 승인):** Node `close()`는 **모든 경우 예전의 단일 release 경로**로 되돌린다. 노출된 `Buffer` view는 예전처럼
+  **GC/finalize 시점에 안전하게 정리**한다. 공개 `copy()`/`move()`/`clone()` API와 relay(move)는 그대로 유지.
+- **대가:** `copy()`로 공유한 두 핸들 중 하나를 close해도, 버퍼 view가 노출된 경우 `refCount()` 관찰값은 **즉시 1로 떨어지지 않고**
+  버퍼 GC 이후 반영된다. 이는 **진단용 `refCount()` 표시에만** 영향을 주며 정확성·안전성·소유권 독립에는 영향이 없다.
+- **회귀 원인은 refcount/move 로직이 아니라** 함께 들어간 "close 즉시 정리" 결정이었다. 계약 테스트는 "즉시 refcount 하락"이 아니라
+  "소유권 독립(양쪽 유효·각자 close·use-after-free 없음)"을 검증하도록 조정한다. Node spec/guide에 이 타이밍을 문서화했다.
+
 ## 9. 검증
 
 - 단위·계약 테스트(`Copy`/`Move`/`Clone` 수명·refcount), 교차언어 parity 테스트 통과.

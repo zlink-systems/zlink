@@ -202,6 +202,11 @@ const dup = msg.clone();
 > 달리해 공존시킬 수 없어 alias가 불가능하므로 major 버전 breaking으로 처리합니다.
 > **기존 코드의 `copy()`(깊은 복사 의도)는 반드시 `clone()`으로 바꾸세요.**
 
+> **참고(refcount 타이밍):** Node는 payload를 `Buffer`로 노출합니다. 노출된 `Buffer`가 살아
+> 있는 동안 native 저장소는 그 `Buffer`가 GC될 때 정리됩니다. 그래서 `copy()`로 공유한 뒤
+> 한쪽을 `close()`해도 `refCount()` 값은 즉시 1로 떨어지지 않고 버퍼 GC 후 반영됩니다(진단용
+> 표시일 뿐, 동작·안전·소유권 독립엔 영향 없음).
+
 ---
 
 ## 에러 처리

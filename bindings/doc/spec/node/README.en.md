@@ -696,6 +696,15 @@ covers all of the following stable user-facing capabilities.
   return meanings, so a deprecated alias is impossible — this is a **major-version breaking
   change** with a documented migration (`copy`→`clone`), not a silent one. See the
   [common Message ownership contract](../draft/message-ownership.ko.md) §"명시적 Copy / Move / Clone".
+  - **refcount observation timing (Node-specific):** Node exposes payload as a JS `Buffer`;
+    while an exposed `Buffer` view is alive, the native frame is released when that view is
+    GC'd/finalized (this has always been the safe behavior). So after `copy()` shares two
+    handles and one is `close()`d, if a Buffer view was exposed the `refCount()` observation
+    does **not** drop to 1 immediately — it reflects after the buffer is GC'd. This affects
+    only the diagnostic `refCount()` reading, not correctness, safety, or ownership
+    independence (each handle stays valid and is closed independently). `close()` uses a
+    single release path in all cases and lets GC reclaim exposed buffers — a deliberate
+    choice so close-heavy paths (e.g. REQREP) do not pay extra per-close cost.
 - Every socket family and its typed options.
 - Monitor, poller, timer, and readiness semantics.
 - SPOT node, SPOT handle, topology snapshot, Actor, and stream Actor
