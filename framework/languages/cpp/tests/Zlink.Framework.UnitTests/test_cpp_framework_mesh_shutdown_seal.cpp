@@ -229,9 +229,7 @@ void verify_crossed_admission_diagnostics ()
     target.topology ().set_change_handler ([&] { ++target_changes; });
     std::ostringstream trace;
     auto *previous = std::cerr.rdbuf (trace.rdbuf ());
-    setenv ("ZLINK_CPP_MESH_TRACE", "1", 1);
     connect (source, target);
-    unsetenv ("ZLINK_CPP_MESH_TRACE");
     std::cerr.rdbuf (previous);
     source.topology ().set_change_handler ({});
     target.topology ().set_change_handler ({});
@@ -263,6 +261,7 @@ void verify_crossed_admission_diagnostics ()
 
 int main ()
 {
+    setenv ("ZLINK_CPP_MESH_TRACE", "1", 1);
     verify_inbound_hello (true);
     verify_inbound_hello (false);
     verify_admitted_peer_update_after_seal ();

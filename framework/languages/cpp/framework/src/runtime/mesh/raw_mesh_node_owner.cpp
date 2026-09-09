@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include "runtime/diagnostics/mesh_trace.hpp"
+
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/dispatch/application_job_receive_flow.hpp"
 #include "runtime/transport/listener_identity.hpp"
@@ -45,11 +47,7 @@ constexpr std::size_t max_pending_admissions = 64;
 constexpr std::size_t max_pending_admission_bytes = 64u * 1024u;
 constexpr auto infrastructure_not_connected_retry_interval =
   std::chrono::milliseconds (75);
-bool mesh_trace_enabled ()
-{
-    const char *value = std::getenv ("ZLINK_CPP_MESH_TRACE");
-    return value != nullptr && *value != '\0' && std::string_view (value) != "0";
-}
+using ::zlink::framework::detail::mesh_trace_enabled;
 
 void trace_mesh_enabled (const std::string &message)
 {

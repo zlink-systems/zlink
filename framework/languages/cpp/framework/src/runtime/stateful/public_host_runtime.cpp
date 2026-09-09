@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include "runtime/diagnostics/mesh_trace.hpp"
+
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
@@ -62,11 +64,7 @@ namespace
 constexpr std::string_view multipart_packet_name = protocol::framework_multipart_packet_name;
 constexpr std::string_view multipart_content_type = protocol::framework_multipart_content_type;
 
-bool mesh_trace_enabled ()
-{
-    const char *value = std::getenv ("ZLINK_CPP_MESH_TRACE");
-    return value != nullptr && *value != '\0' && std::string_view (value) != "0";
-}
+using ::zlink::framework::detail::mesh_trace_enabled;
 
 void trace_mesh_host_enabled (std::string_view stage, std::string_view detail)
 {

@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: FSL-1.1-ALv2 */
 
+#include "runtime/diagnostics/mesh_trace.hpp"
+
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/actors/actor_manager_access.hpp"
@@ -504,8 +506,7 @@ void trace_mesh_application (std::string_view stage,
                              std::size_t parts,
                              std::string_view detail = {})
 {
-    const char *value = std::getenv ("ZLINK_CPP_MESH_TRACE");
-    if (value == nullptr || std::string_view (value) == "" || std::string_view (value) == "0")
+    if (!::zlink::framework::detail::mesh_trace_enabled ())
         return;
     std::cerr << "zlink mesh-host stage=" << stage << " kind=" << static_cast<int> (record.kind)
               << " source=" << record.source_node_rid.to_string () << " parts=" << parts;
