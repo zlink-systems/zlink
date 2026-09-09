@@ -3,6 +3,7 @@
 #include "runtime/mesh/mesh_record_dispatcher.hpp"
 
 #include "runtime/channels/route_packet_dispatcher.hpp"
+#include "runtime/diagnostics/message_flow_tracer.hpp"
 
 #include <utility>
 
@@ -41,9 +42,8 @@ mesh_record_dispatcher_t::dispatch (
 
     runtime::messaging::message_parts_t message_parts (std::move (parts));
     runtime::messaging::envelope_codec_t codec;
-    /* Routing-only peek (kind/channel); the flow processing point is the
-     * route packet dispatcher's own gated decode below. */
-    const auto header = codec.decode_header (message_parts, false);
+    auto header = codec.decode_header (
+      message_parts, message_flow_tracer_t (_dispatch_options).capture_enabled ());
     if (!header) {
         return detail::propagate_failure<void> (header, "MeshNode envelope header decode failed");
     }
@@ -61,7 +61,8 @@ mesh_record_dispatcher_t::dispatch (
                        : handler_dispatch_kind_t::node_direct_request,
       _before_application_handler);
     auto dispatched = dispatcher.dispatch (
-      route_received_packet_t{record.source_node_rid, {}, std::move (message_parts), {}});
+      route_received_packet_t{record.source_node_rid, {}, std::move (message_parts), {}},
+      std::move (header.value ()));
     if (!dispatched) {
         return detail::propagate_failure<void> (dispatched, "MeshNode handler dispatch failed");
     }

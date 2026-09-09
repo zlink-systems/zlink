@@ -21,6 +21,7 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
+#include "runtime/mesh/mesh_record_dispatcher.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/spots/spot_route_internal_dispatcher.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -792,6 +793,70 @@ await_native_reply (
 
 int main ()
 {
+    // The Mesh classification decode carries flow capture through route dispatch.
+    {
+        using namespace zlink::framework;
+        namespace msg = runtime::messaging;
+        struct flow_command_handler_t
+        {
+            int invocations = 0;
+            int last_value = 0;
+            void handle (const int &value, const route_message_context_t &)
+            {
+                ++invocations;
+                last_value = value;
+            }
+        };
+        service_collection_t services;
+        services.add_singleton<flow_command_handler_t> ();
+        auto provider = services.build_provider ();
+        serializer_registry_t serializers;
+        detail::route_handler_registry_t handlers;
+        handlers.on_send<flow_command_handler_t, int> (
+          "mesh", "flow-command", &flow_command_handler_t::handle);
+        auto &handler = provider.get_required<flow_command_handler_t> ();
+        handler_registry_t filters;
+        runtime::host::receive_record_t record;
+        record.channel_name = "mesh";
+        msg::envelope_header_t header;
+        header.kind = msg::message_kind_t::command;
+        header.channel_name = "mesh";
+        header.message_name = "flow-command";
+        header.flow_id = "01890a5d-ac96-774b-bcce-b302099a8057";
+        header.flow_origin = flow_origin_t::timer;
+        msg::envelope_codec_t codec;
+        const auto wire = codec.encode_header (header).to_string ();
+        auto malformed = wire;
+        malformed.replace (malformed.find (*header.flow_id), 4, "ZZZZ");
+        auto parts = [] (const std::string &encoded) {
+            return std::vector<zlink::message_t>{zlink::message_t::from (encoded),
+                                                  zlink::message_t::from (std::string ("42"))};
+        };
+        dispatch_options_t off_options;
+        off_options.message_flow (message_flow_log_mode_t::off);
+        detail::mesh_record_dispatcher_t off (provider, serializers, handlers, filters, off_options);
+        if (!off.dispatch (record, parts (malformed))
+            || handler.invocations != 1 || handler.last_value != 42)
+            return 220;
+        dispatch_options_t options;
+        options.message_flow (message_flow_log_mode_t::normal);
+        bool preserved = false;
+        detail::dispatch_options_access_t::set_observer_for_tests (
+          options, [&] (const message_flow_event_t &event) {
+              if (event.outcome == message_flow_outcome_t::received)
+                  preserved = event.flow_id == header.flow_id
+                              && event.flow_origin == header.flow_origin;
+          });
+        detail::mesh_record_dispatcher_t on (provider, serializers, handlers, filters, options);
+        if (!on.dispatch (record, parts (wire)) || !preserved
+            || handler.invocations != 2 || handler.last_value != 42)
+            return 221;
+        const auto rejected = on.dispatch (record, parts (malformed));
+        if (rejected || rejected.error_kind () != framework_error_kind_t::protocol_error
+            || handler.invocations != 2)
+            return 222;
+    }
+
     zlink::framework::zlink_builder_t zlink;
     zlink.add_node ("outbound-node");
     zlink.default_request_timeout (std::chrono::milliseconds (10000));
