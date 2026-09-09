@@ -43,6 +43,7 @@ function dispatchOptions() {
 }
 const frameworkProtobuf = require('../../packages/framework-codec-protobuf/dist/server/framework.cjs');
 const nestjs = require('../../packages/nestjs/dist');
+const { waitForClientServerTargets } = require('./helpers/client-server-readiness');
 const { resolveModuleProviders } = require('./helpers/nestjs-test-utils');
 const reservedPorts = new Set();
 
@@ -2158,6 +2159,7 @@ test('ZLinkModule channel client uses runtime host channel transport after boots
   try {
     await serverRuntime.start();
     await runtime.start();
+    await waitForClientServerTargets(runtime.clientServerRuntime, 'api', 1);
 
     const reply = await client
       .requestToChannel('api', typedPacket('Ping', { value: 'ping' }))
@@ -2204,7 +2206,7 @@ test('CH-001 ZLinkFrameworkRuntimeHost dispatches client-server channel request 
     await serverRuntime.start();
     await clientRuntime.start();
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
-    await waitUntil(() => clientRuntime.clientServerRuntime.isReady('play'), 5000);
+    await waitForClientServerTargets(clientRuntime.clientServerRuntime, 'play', 1);
     const reply = await client
       .requestToChannel('play', typedPacket('CreateGame', { gameName: 'sample' }))
       .timeout(1000)
@@ -2352,9 +2354,8 @@ test('CH-006 ZLinkFrameworkRuntimeHost dispatches client-server send handlers', 
     await serverRuntime.start();
     await clientRuntime.start();
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
-    await submitWhenReachable(() =>
-      client.sendToChannel(channelName, typedPacket('RecordCommand', { gameName: 'sample' })).submit()
-    );
+    await waitForClientServerTargets(clientRuntime.clientServerRuntime, channelName, 1);
+    await client.sendToChannel(channelName, typedPacket('RecordCommand', { gameName: 'sample' })).submit();
 
     await waitFor(() => calls.length === 1, 'CH-006 channel send handler evidence');
     assert.deepEqual(calls, ['sample']);
@@ -2399,10 +2400,7 @@ test('DERR-001 ZLinkFrameworkRuntimeHost replies error and reports provider reco
     await clientRuntime.start();
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
 
-    // Runtime topology is the readiness contract. Waiting for it avoids
-    // spending the whole request deadline in the first not-yet-connected
-    // submission when coverage instrumentation delays socket monitoring.
-    await waitUntil(() => clientRuntime.clientServerRuntime.isReady('play'));
+    await waitForClientServerTargets(clientRuntime.clientServerRuntime, 'play', 1);
     const knownBefore = await client
       .requestToChannel('play', typedPacket('KnownReq', { value: 'before' }))
       .timeout(1000)
@@ -2473,9 +2471,11 @@ test('DERR-002 ZLinkFrameworkRuntimeHost reports provider record for missing cha
     clientRuntime.errorSink.onRuntimeTaskException(failure => runtimeFailures.push({ host: 'client', ...failure }));
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
 
-    const knownBefore = await submitWhenReachable(() =>
-      client.requestToChannel(channelName, typedPacket('KnownReq', { value: 'before-send-error' })).timeout(1000).submit()
-    );
+    await waitForClientServerTargets(clientRuntime.clientServerRuntime, channelName, 1);
+    const knownBefore = await client
+      .requestToChannel(channelName, typedPacket('KnownReq', { value: 'before-send-error' }))
+      .timeout(1000)
+      .submit();
     assert.deepEqual(knownBefore, { value: 'known:before-send-error' });
 
     client.sendToChannel(channelName, typedPacket('UnknownCommand', { value: 'missing-send' })).submit();
@@ -2586,12 +2586,11 @@ test('REG-003 ZLinkFrameworkRuntimeHost dispatches manual channel handlers and r
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
     const fanout = new framework.DefaultZLinkFanoutClient(publisherRegistration, publisherRuntime.channelTransport);
 
-    const reply = await submitWhenReachable(() =>
-      client
-        .requestToChannel('manual-reg', typedPacket('ManualRegisteredReq', { value: 'registered' }))
-        .timeout(1000)
-        .submit()
-    );
+    await waitForClientServerTargets(clientRuntime.clientServerRuntime, 'manual-reg', 1);
+    const reply = await client
+      .requestToChannel('manual-reg', typedPacket('ManualRegisteredReq', { value: 'registered' }))
+      .timeout(1000)
+      .submit();
     assert.deepEqual(reply, { value: 'manual:registered' });
 
     await client
@@ -2727,9 +2726,11 @@ test('DERR-007 ZLinkFrameworkRuntimeHost replies error and reports provider reco
     await clientRuntime.start();
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
 
-    const knownBefore = await submitWhenReachable(() =>
-      client.requestToChannel('play', typedPacket('KnownReq', { value: 'before-handler-error' })).timeout(1000).submit()
-    );
+    await waitForClientServerTargets(clientRuntime.clientServerRuntime, 'play', 1);
+    const knownBefore = await client
+      .requestToChannel('play', typedPacket('KnownReq', { value: 'before-handler-error' }))
+      .timeout(1000)
+      .submit();
     assert.deepEqual(knownBefore, { value: 'known:before-handler-error' });
 
     await assert.rejects(
@@ -2836,6 +2837,10 @@ test('DSC-008 requestToChannel traffic survives location scale-out and scale-in'
     clientAppB = await createScaleoutClientApp(locationProvider);
     const clientA = clientAppA.get(nestjs.ZLINK_CHANNEL_CLIENT);
     const clientB = clientAppB.get(nestjs.ZLINK_CHANNEL_CLIENT);
+    const clientRuntimeA = clientAppA.get(nestjs.ZLINK_CLIENT_SERVER_RUNTIME);
+    const clientRuntimeB = clientAppB.get(nestjs.ZLINK_CLIENT_SERVER_RUNTIME);
+    await waitForClientServerTargets(clientRuntimeA, 'scaleout-api', 1);
+    await waitForClientServerTargets(clientRuntimeB, 'scaleout-api', 1);
 
     const first = await requestScaleoutProbe(clientA, 'node-warmup-a');
     assert.equal(first.providerId, 'provider-a');
@@ -2852,12 +2857,15 @@ test('DSC-008 requestToChannel traffic survives location scale-out and scale-in'
     await heldPorts.release(providerCEndpoint);
     await providerC.runtime.start();
     await waitForReadyEndpoints(locationQuery, [providerAEndpoint, providerBEndpoint, providerCEndpoint]);
+    await waitForClientServerTargets(clientRuntimeA, 'scaleout-api', 3);
+    await waitForClientServerTargets(clientRuntimeB, 'scaleout-api', 3);
     const scaleoutTraffic = await waitForScaleoutTrafficProviders([clientA, clientB], 'node-scaleout', ['provider-b', 'provider-c']);
     assertRequestIdsHandledOnce(scaleoutTraffic.completedRequestIds, providerA, providerB, providerC);
 
     await providerA.runtime.stop();
     await waitUntilEndpointIsNotReady(locationQuery, providerAEndpoint);
-    await waitForAutoConnectPollCycle();
+    await waitForClientServerTargets(clientRuntimeA, 'scaleout-api', 2);
+    await waitForClientServerTargets(clientRuntimeB, 'scaleout-api', 2);
 
     const providerACountBeforeScaleIn = providerA.evidence.length;
     const scaleinTraffic = await runScaleoutTrafficBatch([clientA, clientB], 'node-scalein-traffic', 10);
@@ -2969,9 +2977,11 @@ test('ZLinkFrameworkRuntimeHost uses channel serializer registry for typed reque
     await serverRuntime.start();
     await clientRuntime.start();
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
-    const reply = await submitWhenReachable(() =>
-      client.requestToChannel('play', typedPacket('CreateGame', { gameName: 'sample' })).timeout(1000).submit()
-    );
+    await waitForClientServerTargets(clientRuntime.clientServerRuntime, 'play', 1);
+    const reply = await client
+      .requestToChannel('play', typedPacket('CreateGame', { gameName: 'sample' }))
+      .timeout(1000)
+      .submit();
 
     assert.deepEqual(calls, [{ created: 'sample' }]);
     assert.deepEqual(reply, { created: 'sample' });
@@ -3024,9 +3034,11 @@ test('CDC-001 ZLinkFrameworkRuntimeHost JSON codec round-trips nested arrays and
     await serverRuntime.start();
     await clientRuntime.start();
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
-    const reply = await submitWhenReachable(() =>
-      client.requestToChannel('codec', typedPacket('JsonCodecProbe', request)).timeout(1000).submit()
-    );
+    await waitForClientServerTargets(clientRuntime.clientServerRuntime, 'codec', 1);
+    const reply = await client
+      .requestToChannel('codec', typedPacket('JsonCodecProbe', request))
+      .timeout(1000)
+      .submit();
 
     assert.deepEqual(reply, request);
     assert.equal(reply.optionalLabel, null);
@@ -3084,11 +3096,11 @@ test('ZLinkFrameworkRuntimeHost uses protobuf codec extension for channels', asy
     await serverRuntime.start();
     await clientRuntime.start();
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
-    const reply = await submitWhenReachable(() =>
-      client.requestToChannel('play', typedPacket('CreateGame', { gameName: 'sample', players: ['p1', 'p2'] }))
-        .timeout(1000)
-        .submit()
-    );
+    await waitForClientServerTargets(clientRuntime.clientServerRuntime, 'play', 1);
+    const reply = await client
+      .requestToChannel('play', typedPacket('CreateGame', { gameName: 'sample', players: ['p1', 'p2'] }))
+      .timeout(1000)
+      .submit();
 
     assert.deepEqual(reply, { created: 'sample', players: ['p1', 'p2'] });
     assert.deepEqual(calls, [{ gameName: 'sample', players: ['p1', 'p2'] }]);
@@ -4644,29 +4656,6 @@ async function waitForRouteMeshPeerReady(runtime, meshName, peerRid) {
   }
 }
 
-async function submitWhenReachable(submit) {
-  const deadline = Date.now() + 1000;
-  let lastError;
-  while (Date.now() < deadline) {
-    try {
-      return await submit();
-    } catch (error) {
-      if (!isHostUnreachable(error)) {
-        throw error;
-      }
-      lastError = error;
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-  }
-  throw lastError;
-}
-
-async function waitForClientServerTargets(runtime, channelName, expectedCount) {
-  while (runtime.snapshot(channelName).readyTargetCount !== expectedCount) {
-    await new Promise(resolve => setImmediate(resolve));
-  }
-}
-
 function createScaleoutProvider(locationStore, bindEndpoint, providerId, routingId) {
   const evidence = [];
   const registration = framework.createFrameworkRegistration({
@@ -4764,18 +4753,12 @@ function scaleoutLocationOptions() {
   };
 }
 
-async function waitForAutoConnectPollCycle() {
-  await new Promise((resolve) => setTimeout(resolve, scaleoutLocationOptions().pollingIntervalMs * 3));
-}
-
 function requestScaleoutProbe(client, requestId) {
   return withAbortTimeout(
-    (signal) => submitWhenReachable(() =>
-      client
-        .requestToChannel('scaleout-api', typedPacket('ScaleoutProbe', { requestId }))
-        .timeout(1000)
-        .submit(signal)
-    ),
+    (signal) => client
+      .requestToChannel('scaleout-api', typedPacket('ScaleoutProbe', { requestId }))
+      .timeout(1000)
+      .submit(signal),
     1500,
     `scaleout probe ${requestId}`
   );
@@ -4876,16 +4859,6 @@ async function waitForScaleoutPeers(store, predicate, routingId) {
   assert.fail(
     `HAR-007 classification-required labels=core-capi,bindings,framework,sample,harness: location peers did not converge: ${JSON.stringify(lastEntries)}`
   );
-}
-
-function isHostUnreachable(error) {
-  if (error instanceof framework.ZLinkFrameworkException) {
-    return error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
-      && !('isRetriable' in error);
-  }
-  return error instanceof Error &&
-    (((error.code === 2 || error.code === 12) && /Host unreachable/.test(error.message)) ||
-      (error.code === 5 && /Connection refused/.test(error.message)));
 }
 
 async function waitFor(predicate, label) {

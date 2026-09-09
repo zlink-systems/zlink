@@ -6,6 +6,7 @@ const { NestFactory } = require('@nestjs/core');
 
 const framework = require('../../packages/framework/dist');
 const nestjs = require('../../packages/nestjs/dist');
+const { waitForClientServerTargets } = require('./helpers/client-server-readiness');
 
 class Ping {
   constructor(value) {
@@ -80,12 +81,13 @@ test('Client+Server ClientServer topology counts the local Server once after a p
     channel.server().listen().setWeight(100).addRequestHandler('Ping', PingHandler);
   });
   try {
+    const runtime = app.get(nestjs.ZLINK_CLIENT_SERVER_RUNTIME);
+    await waitForClientServerTargets(runtime, 'work', 1);
     const reply = await app.get(nestjs.ZLINK_CHANNEL_CLIENT)
       .requestToChannel('work', new Ping('local'))
       .timeout(1000)
       .submit();
     assert.deepEqual(reply, { value: 'local' });
-    const runtime = app.get(nestjs.ZLINK_CLIENT_SERVER_RUNTIME);
     const status = runtime.snapshot('work');
     assert.equal(app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME).status.state,
       framework.ZLinkFrameworkRuntimeState.Serving);
@@ -114,10 +116,7 @@ test('ClientServer topology counts distinct local and remote Ready Servers toget
     });
     try {
       const runtime = local.get(nestjs.ZLINK_CLIENT_SERVER_RUNTIME);
-      const deadline = Date.now() + 5000;
-      while (runtime.snapshot('work').readyTargetCount !== 2 && Date.now() < deadline) {
-        await new Promise(resolve => setImmediate(resolve));
-      }
+      await waitForClientServerTargets(runtime, 'work', 2);
       const status = runtime.snapshot('work');
       assert.equal(status.state, framework.ZLinkTopologyState.Ready);
       assert.equal(status.isReady, true);
