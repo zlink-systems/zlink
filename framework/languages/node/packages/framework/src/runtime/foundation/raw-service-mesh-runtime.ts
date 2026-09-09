@@ -28,7 +28,7 @@ import {
   type ServiceNodeDescriptor
 } from './service-topology-registry';
 import {
-  decodeApplicationPayload,
+  decodeApplicationPayloadView,
   decodeChannelRequestHeader,
   decodeChannelSendHeader,
   decodeHeader,
@@ -71,6 +71,9 @@ export interface RawServiceRequestResult {
   readonly failureCode: number;
   readonly payload?: ServiceApplicationPayload;
 }
+
+/** An M6A application frame already owned by the Framework runtime. */
+type ServiceApplicationPayloadInput = ServiceApplicationPayload | Buffer;
 
 export interface RawServiceIngressRecord {
   readonly command: number;
@@ -474,23 +477,24 @@ export class RawServiceMeshRuntime {
 
   async sendToNode(
     targetNodeRoutingId: string,
-    payload: ServiceApplicationPayload
+    payload: ServiceApplicationPayloadInput
   ): Promise<boolean> {
     return this.send(
       targetNodeRoutingId,
-      [encodeNodeSendHeader(), encodeApplicationPayload(payload)]
+      [encodeNodeSendHeader(), this.applicationFrame(payload)]
     );
   }
 
   async sendToChannel(
     channelName: string,
-    payload: ServiceApplicationPayload
+    payload: ServiceApplicationPayloadInput
   ): Promise<boolean> {
     const selected = this.topology.selectChannel(
       channelName,
       peer => this.isLocalOrReadyPeer(peer.descriptor.nodeRoutingId)
     );
     if (selected === undefined) return false;
+    const applicationFrame = this.applicationFrame(payload);
     if (selected.descriptor.nodeRoutingId === this.descriptor.nodeRoutingId) {
       const applicationJobOwner = await this.reserveLocalIngress();
       try {
@@ -498,7 +502,7 @@ export class RawServiceMeshRuntime {
         const accepted = this.mailbox.tryEnqueue({
           owner: `channel:${channelName}`,
           domain: 'application',
-          parts: [encodeChannelSendHeader(channelName), encodeApplicationPayload(payload)],
+          parts: [encodeChannelSendHeader(channelName), applicationFrame],
           sourceRoutingId: this.descriptor.nodeRoutingId,
           applicationJob
         });
@@ -510,13 +514,13 @@ export class RawServiceMeshRuntime {
     }
     return this.send(selected.descriptor.nodeRoutingId, [
       encodeChannelSendHeader(channelName),
-      encodeApplicationPayload(payload)
+      applicationFrame
     ]);
   }
 
   requestToNode(
     targetNodeRoutingId: string,
-    payload: ServiceApplicationPayload,
+    payload: ServiceApplicationPayloadInput,
     timeoutMs: number
   ): PendingOperation<RawServiceRequestResult> {
     return this.requestToTarget(targetNodeRoutingId, payload, timeoutMs);
@@ -524,7 +528,7 @@ export class RawServiceMeshRuntime {
 
   requestToChannel(
     channelName: string,
-    payload: ServiceApplicationPayload,
+    payload: ServiceApplicationPayloadInput,
     timeoutMs: number
   ): PendingOperation<RawServiceRequestResult> | undefined {
     const selected = this.topology.selectChannel(
@@ -595,7 +599,7 @@ export class RawServiceMeshRuntime {
 
   reply(
     request: ServiceMailboxRecord,
-    payload: ServiceApplicationPayload,
+    payload: ServiceApplicationPayloadInput,
     terminalResult = 0,
     failureCode = 0
   ): void {
@@ -603,7 +607,7 @@ export class RawServiceMeshRuntime {
       request.localReply(
         terminalResult,
         failureCode,
-        terminalResult === 0 ? payload : undefined
+        terminalResult === 0 ? this.applicationPayload(payload) : undefined
       );
       return;
     }
@@ -612,7 +616,7 @@ export class RawServiceMeshRuntime {
     }
     request.reply([
       encodeReplyHeader(request.correlation, terminalResult, failureCode),
-      ...(terminalResult === 0 ? [encodeApplicationPayload(payload)] : [])
+      ...(terminalResult === 0 ? [this.applicationFrame(payload)] : [])
     ]);
   }
 
@@ -1122,7 +1126,7 @@ export class RawServiceMeshRuntime {
 
   private requestToTarget(
     targetNodeRoutingId: string,
-    payload: ServiceApplicationPayload,
+    payload: ServiceApplicationPayloadInput,
     timeoutMs: number,
     channelName?: string
   ): PendingOperation<RawServiceRequestResult> {
@@ -1130,7 +1134,7 @@ export class RawServiceMeshRuntime {
     const header = channelName === undefined
       ? encodeNodeRequestHeader(correlation)
       : encodeChannelRequestHeader(correlation, channelName);
-    const encodedPayload = encodeApplicationPayload(payload);
+    const encodedPayload = this.applicationFrame(payload);
     const pending = this.operations.reserve(timeoutMs);
     let selectedTargetNodeRoutingId = targetNodeRoutingId;
     if (
@@ -1263,7 +1267,7 @@ export class RawServiceMeshRuntime {
           this.operations.complete(
             pending.id,
             reply.terminalResult === 0
-              ? { ...result, payload: decodeApplicationPayload(replyParts[1]!) }
+              ? { ...result, payload: decodeApplicationPayloadView(replyParts[1]!) }
               : result
           );
         } catch (error) {
@@ -1275,6 +1279,18 @@ export class RawServiceMeshRuntime {
       }
     );
     return pending;
+  }
+
+  /**
+   * The generic node/channel backend may supply its single owned M6A frame
+   * directly. All other callers keep the typed application-payload boundary.
+   */
+  private applicationFrame(payload: ServiceApplicationPayloadInput): Buffer {
+    return Buffer.isBuffer(payload) ? payload : encodeApplicationPayload(payload);
+  }
+
+  private applicationPayload(payload: ServiceApplicationPayloadInput): ServiceApplicationPayload {
+    return Buffer.isBuffer(payload) ? decodeApplicationPayloadView(payload) : payload;
   }
 
   private admitPeer(

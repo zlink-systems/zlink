@@ -17,6 +17,8 @@ import {
   ZLinkBackendResultError,
   type ZLinkBackendMessageLike as MessageLike
 } from '../runtime-values';
+import { ZLinkBufferMessage } from '../runtime-message';
+import type { Message as FrameworkMessage } from '../../../contracts/Common/Message';
 import type {
   MeshOperationId,
   MeshPeerEntry,
@@ -614,7 +616,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): Promise<SubmitResultValue> {
     return await this.requireRuntime().sendToNode(
       String(targetRid),
-      encodeMultipart(parts)
+      encodeMultipartApplicationFrame(parts)
     ) ? SubmitResult.Ok : SubmitResult.NotConnected;
   }
 
@@ -657,7 +659,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToNode(
       String(targetRid),
-      encodeMultipart(parts),
+      encodeMultipartApplicationFrame(parts),
       options?.timeoutMs ?? 30_000
     );
     return this.observeCompletion(pending.id, OperationKind.NodeRequest, pending.promise);
@@ -669,7 +671,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): Promise<SubmitResultValue> {
     return await this.requireRuntime().sendToChannel(
       channelName,
-      encodeMultipart(parts)
+      encodeMultipartApplicationFrame(parts)
     ) ? SubmitResult.Ok : SubmitResult.NotConnected;
   }
 
@@ -680,7 +682,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ): MeshOperationId {
     const pending = this.requireRuntime().requestToChannel(
       channelName,
-      encodeMultipart(parts),
+      encodeMultipartApplicationFrame(parts),
       options?.timeoutMs ?? 30_000
     );
     if (pending === undefined) {
@@ -2297,7 +2299,7 @@ function decodeMultipartRecord(
     parts: decodeMultipart(application.payload),
     reply(parts) {
       if (record.correlation === undefined) return SubmitResult.InvalidState;
-      runtime.reply(record, encodeMultipart(parts));
+      runtime.reply(record, encodeMultipartApplicationFrame(parts));
       return SubmitResult.Ok;
     },
     replyActorJoin: () => SubmitResult.NotSupported
@@ -2585,9 +2587,9 @@ function decodeApplicationEnvelope(frame: Uint8Array) {
   return { packetName, contentType, payload: bytes.subarray(offset) };
 }
 
-function decodeMultipart(payload: Uint8Array): Message[] {
+function decodeMultipart(payload: Uint8Array): FrameworkMessage[] {
   const buffers = decodeMultipartBuffers(payload);
-  return buffers.map(part => Message.from(part));
+  return buffers.map(part => ZLinkBufferMessage.fromOwned(part));
 }
 
 function decodeMultipartBuffers(payload: Uint8Array): Buffer[] {
