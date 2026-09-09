@@ -8,12 +8,11 @@ namespace Systems.Zlink.Tests;
 public sealed class test_message
 {
     [Fact]
-    public void message_move_is_not_public_contract()
+    public void message_move_is_public_contract()
     {
-        Assert.Null(typeof(Message).GetMethod("Move",
+        Assert.NotNull(typeof(Message).GetMethod("Move",
             BindingFlags.Public | BindingFlags.Instance,
-            binder: null,
-            Type.EmptyTypes,
+            binder: null, types: new[] { typeof(Message) },
             modifiers: null));
     }
 
@@ -31,6 +30,30 @@ public sealed class test_message
         Assert.True(source.RefCount >= 2);
         Assert.True(copy.RefCount >= 2);
         Assert.True(copy.AsReadOnlySpan().SequenceEqual(source.AsReadOnlySpan()));
+    }
+
+    [Fact]
+    public void message_move_transfers_payload_and_leaves_source_empty()
+    {
+        if (!CoreTestSupport.IsNativeAvailable())
+            return;
+
+        byte[] payload = new byte[512];
+        new Random(4321).NextBytes(payload);
+        using var source = Message.From(payload);
+        Message shared = source.Copy();
+        using var destination = Message.From("replaced"u8);
+
+        source.Move(destination);
+
+        Assert.True(source.IsEmpty);
+        Assert.Equal(1, source.RefCount);
+        Assert.True(destination.AsReadOnlySpan().SequenceEqual(payload));
+        Assert.True(destination.RefCount >= 2);
+
+        shared.Dispose();
+        Assert.True(destination.AsReadOnlySpan().SequenceEqual(payload));
+        Assert.Equal(1, destination.RefCount);
     }
 
     [Fact]

@@ -216,8 +216,8 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    ///     Creates a new message holding an independent copy of this payload; the
-    ///     caller owns and must dispose it.
+    ///     Creates a new message sharing this message's native payload; the caller
+    ///     owns and must dispose it.
     /// </summary>
     public Message Copy()
     {
@@ -227,6 +227,27 @@ public sealed partial class Message : IDisposable, IAsyncDisposable
         copy._knownSize = _knownSize;
         copy.IsValid = true;
         return copy;
+    }
+
+    /// <summary>
+    ///     Moves this message's native payload into <paramref name="dest" />,
+    ///     replacing its previous payload and leaving this message empty.
+    /// </summary>
+    public void Move(Message dest)
+    {
+        ArgumentNullException.ThrowIfNull(dest);
+        EnsureValid();
+        dest.EnsureValid();
+
+        var knownSize = _knownSize;
+        var rc = NativeMethods.zlink_msg_move(ref dest._msg, ref _msg);
+        if (rc != 0)
+            throw ZlinkException.CreateConfigException(NativeMethods.zlink_errno());
+
+        dest._knownSize = knownSize;
+        dest.IsValid = true;
+        _knownSize = 0;
+        IsValid = true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
