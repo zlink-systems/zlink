@@ -760,5 +760,5 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 | `fwb-02b` | 0 | opus | 완료·커밋 `c67d677832` | FB-010 판정(b), FB-013 정정, gated2 8/8. ROUTER 3회 18/18 clean |
 | `fwb-01` | 1(문서) | opus | 완료·커밋 `146db4da4c` | 규격 5언어 중립화(ko 338행·en 359행), FB-001~003 반영. 고정값·RPC 미변경 확인. FB-004·FB-005 추가 지시 |
 | `fwb2-01` | S-1 | sol | 완료·커밋 `bc6c54d37a`(rename)·`c57d6c26f2` | `framework/bench/grpc/` 통합, 공통 `bench.proto` 하나, 5언어 빌드·집계기 50 테스트·언어별 1셀 smoke 티켓 통과 |
-| `fwb2-02` | S1 | sol | 진행 중 | 집계기 S2S 스키마·A/B 병합·`doc-table` |
-| `fwb2-03` | S1 | sol | 진행 중 | .NET runner server-driven 개정 + smoke |
+| `fwb2-02` | S1 | sol | 완료·커밋 `eb24d66003`(+감독자 `59521bf2f4` trigger 필드 확정) | 집계기 S2S 스키마·(runId, cellId) 병합·incomplete·Source/Target·KOPS/KMSG/s·`doc-table`, 테스트 60 |
+| `fwb2-03` | S1 | sol | 완료·커밋 `d59e8a00e8` | .NET A/B runner, ServerSupport 재사용, 5셀 smoke rc=0. 3-run은 감독자 티켓(claude-fwb2-s1) |
