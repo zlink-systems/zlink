@@ -449,12 +449,10 @@ func startMultiRouterRouterEchoServer(
 				_ = received.Close()
 				break
 			}
-			part, partErr := perfcommon.MeasurementPayload(parts)
+			_, partErr := perfcommon.MeasurementPayload(parts)
 			if partErr == nil {
-				routingID := received.RoutingID()
-				payload := append([]byte(nil), part.Data()...)
 				relayReplySubmitStart.Add(1)
-				replyErr := submitMultiRouterReply(sendCtx, server, routingID, payload)
+				replyErr := submitMultiRouterReply(sendCtx, &received)
 				relayReplySubmitEnd.Add(1)
 				if replyErr != nil && sendCtx.Err() != nil {
 					// The bounded post-STOP drain expired. Name the abandoned
@@ -476,12 +474,14 @@ func startMultiRouterRouterEchoServer(
 
 func submitMultiRouterReply(
 	ctx context.Context,
-	server *zlink.RouterSocket,
-	target zlink.RoutingID,
-	payload []byte,
+	received *zlink.Received,
 ) error {
-	message := perfcommon.NewMessage(payload)
-	err := perfcommon.SubmitMeasurementSendContext(ctx, server.SendTo(target), message)
+	parts := received.Parts()
+	reply := received.Send().MoveMessage(parts[0])
+	for _, part := range parts[1:] {
+		reply = reply.MoveMessage(part)
+	}
+	err := reply.Submit(ctx)
 	if err == nil || perfcommon.IsStaleRoute(err) {
 		return nil
 	}
