@@ -95,6 +95,16 @@ void zlink::dist_t::unmatch ()
 
 void zlink::dist_t::pipe_terminated (pipe_t *pipe_)
 {
+    //  Terminate only removes a pipe this distributor actually holds. A socket
+    //  may skip dist_t::attach() for a pipe whose peer completed termination
+    //  before the attach command ran (socket_base_t::attach_pipe early return),
+    //  yet still deliver its termination callback. Such a pipe keeps the
+    //  default array index (-1); acting on it would skip every counter
+    //  decrement and then erase at (size_type)-1, an out-of-bounds write.
+    //  Same membership rule fq_t::pipe_terminated already applies.
+    if (!has_pipe (pipe_))
+        return;
+
     //  Remove the pipe from the list; adjust number of matching, active and/or
     //  eligible pipes accordingly.
     if (_pipes.index (pipe_) < _matching) {

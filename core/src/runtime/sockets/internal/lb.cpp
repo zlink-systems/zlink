@@ -67,6 +67,13 @@ void zlink::lb_t::attach (pipe_t *pipe_, uint32_t initial_weight_)
 
 void zlink::lb_t::pipe_terminated (pipe_t *pipe_)
 {
+    //  Terminate only removes a pipe this balancer actually holds. Same
+    //  membership rule fq_t/dist_t::pipe_terminated apply: a pipe whose
+    //  attach was skipped keeps the default array index (-1), so acting on it
+    //  would erase at (size_type)-1, an out-of-bounds write.
+    if (!_pipes.contains (pipe_))
+        return;
+
     const pipes_t::size_type index = _pipes.index (pipe_);
 
     //  If we are in the middle of multipart message and current pipe
