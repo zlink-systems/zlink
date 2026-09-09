@@ -755,10 +755,13 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 
 - formula 2(`zlink-framework-dotnet / zlink-dotnet ≥ 0.80`)는 모든 셀에서 실패한다. formula 1
   (`zlink-dotnet / zlink-c`)도 window @1024에서 85.5/488.4 = 0.17로 실패(binding 캠페인 범위).
-- **판정 보류**: 이 3-run은 같은 시간대에 codex 빌드·테스트 job(Java/Kotlin, .NET)이 돌아 G5가
-  24행 중 13행에서 실패(10~20% 스프레드)했다. 공개 값으로 쓰지 않고, 큐가 조용한 창에서 3-run을
-  다시 낸다. 그러나 framework 계층의 배율(0.13~0.24)과 backpressure의 오류·지연은 부하로 설명되지
-  않는 크기라 제품 판정 대상으로 기록한다.
+- 조용한 창에서 다시 잰 3-run(`results/s1-dotnet-c-2026-09-09.md`): G5 실패는 24행 중 4행
+  (framework backpressure 1024/4096, framework send 4096, grpc serial 1024)뿐이다. 중앙값은 위 표와
+  같은 크기(window @1024: grpc 139.6 / raw 98.9 / framework 12.3 KOPS). **formula 2 =
+  0.124(1024)·0.127(4096), published·fail.** formula 1은 분모 zlink-c window가 G5 12.0%/11.8%로
+  실패해 unsupported(FB-048의 Core I/O 배치가 1024에도 미침).
+- framework 계층의 배율(0.12~0.24)과 backpressure의 오류·지연은 부하로 설명되지 않는 크기라
+  제품 판정 대상으로 기록한다.
 - request-backpressure의 framework 오류 2,511건은 admission 거절이 request terminal로 표면화되는
   경로(FB-042)에서 나온다. 규격대로 오류 셀은 처리량 판정에 쓰지 않는다(§5.2).
 - 위치: framework .NET runtime. 1.0 묶음의 성능 항목으로 넘긴다(측정은 벤치가, 수정은 제품이).
