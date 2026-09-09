@@ -2,8 +2,8 @@
 
 ## Description
 
-This adds zlink 0.17.3 as a new vcpkg port. The port downloads the immutable
-`core/v0.17.3` GitHub tag archive, supports the selected static or dynamic vcpkg
+This adds zlink 0.17.5 as a new vcpkg port. The port downloads the immutable
+`core/v0.17.5` GitHub tag archive, supports the selected static or dynamic vcpkg
 library linkage, builds with TLS through OpenSSL, installs the upstream CMake
 configuration, and provides usage guidance for its linkage-specific targets.
 

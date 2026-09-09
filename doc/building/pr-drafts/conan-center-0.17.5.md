@@ -1,14 +1,14 @@
-# [zlink] Add version 0.17.3
+# [zlink] Add version 0.17.5
 
 ## Description
 
-This adds the first ConanCenter recipe for zlink 0.17.3, a high-performance
+This adds the first ConanCenter recipe for zlink 0.17.5, a high-performance
 asynchronous messaging library. The recipe builds either the shared or static
 library, optionally enables TLS through OpenSSL, and exposes the upstream CMake
 targets `libzlink` and `libzlink-static`.
 
-The source is the dedicated `zlink-0.17.3-source.tar.gz` asset attached to the
-immutable `core/v0.17.3` GitHub release.
+The source is the dedicated `zlink-0.17.5-source.tar.gz` asset attached to the
+immutable `core/v0.17.5` GitHub release.
 
 ## Checklist
 
@@ -26,7 +26,7 @@ immutable `core/v0.17.3` GitHub release.
 - Linux 6.6 (WSL2), x86_64
 - Ubuntu 24.04 toolchain, GCC 13.3.0
 - Conan 2.32.0
-- `conan create core/packaging/conan --version 0.17.3 -s build_type=Release`
-- `conan create core/packaging/conan --version 0.17.3 -s build_type=Release -o 'zlink/*:shared=False'`
+- `conan create core/packaging/conan --version 0.17.5 -s build_type=Release`
+- `conan create core/packaging/conan --version 0.17.5 -s build_type=Release -o 'zlink/*:shared=False'`
 
 No pull request has been submitted from this draft.

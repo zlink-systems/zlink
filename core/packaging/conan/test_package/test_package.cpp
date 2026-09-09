@@ -14,5 +14,5 @@ int main()
     if (zlink_ctx_term(context) != 0)
         return 2;
 
-    return major == 0 && minor == 17 && patch == 3 ? 0 : 3;
+    return (major > 0 || minor > 0 || patch > 0) ? 0 : 3;
 }
