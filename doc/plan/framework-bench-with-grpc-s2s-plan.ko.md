@@ -6,7 +6,7 @@
 
 ## 0. 요청 정리 (사용자, 2026-09-09)
 
-- `framework/doc/framework/common/bench/with-grpc-local.ko.md`가 어느 정도 작성돼 있으나
+- `framework/bench/grpc/README.ko.md`가 어느 정도 작성돼 있으나
   **server to server 메시징 성능 측정이고 트리거는 HTTP call**이라는 측정 방식이 문서에 없다.
   이를 명확히 한다.
 - 언어별로 **같은 형식**의 bench 문서를 둔다.
@@ -72,7 +72,7 @@
 
 ### 1.3 이미 있는 자산 중 재사용할 것
 
-- 공용 집계기 `framework/bench/tools/`(테스트 28개). 언어 client의 자체 표는 판정 근거가
+- 공용 집계기 `framework/bench/grpc/tools/`(테스트 28개). 언어 client의 자체 표는 판정 근거가
   아니다(규격 §7.1). 새 모델에서도 판정은 집계기 출력으로 한다.
 - 7축 perf 규격의 HTTP trigger·admin 계약(§4.2, §5.1 role config, §16)과 그것을 구현한 .NET
   canonical runner(`framework/languages/dotnet/perf/`, c016 phase 1). trigger listener, reset
@@ -115,7 +115,7 @@ binding 완료 전달 결함(Node 정지, Java reply 유실, .NET 제출 처리�
 ### 2.1 위치 통합 — `framework/bench/grpc/`
 
 현재 bench는 언어별 트리(`framework/languages/{cpp,dotnet,java,node}/bench/with-grpc/`, C 기준은
-`bindings/c/bench/with_grpc/`)에 흩어져 있고 집계기는 `framework/bench/tools/`, 규격은
+`framework/bench/grpc/c/`)에 흩어져 있고 집계기는 `framework/bench/grpc/tools/`, 규격은
 `framework/doc/framework/common/bench/`에 있다. 이를 한 곳으로 모은다.
 
 ```text
@@ -127,9 +127,9 @@ framework/bench/grpc/
 │   ├── java.ko.md / .md          # Kotlin 보조 셀 포함
 │   ├── cpp.ko.md / .md
 │   └── comparison.ko.md / .md     # gRPC 비교 보고서(공개)
-├── tools/                         # 공용 집계기(현재 framework/bench/tools 이동)
+├── tools/                         # 공용 집계기(현재 framework/bench/grpc/tools 이동)
 ├── dotnet/  node/  java/  cpp/    # 언어별 runner·A/B server(현재 with-grpc 이동; kotlin A client는 java/ 아래)
-├── c/                             # C 기준 bench(현재 bindings/c/bench/with_grpc 이동)
+├── c/                             # C 기준 bench(현재 framework/bench/grpc/c 이동)
 ├── proto/                         # 다섯 언어가 공유하는 bench.proto (언어별 복제본 제거)
 └── log/<lang>/<stamp>/            # 측정 원본
 ```
@@ -137,14 +137,14 @@ framework/bench/grpc/
 - 이동은 `git mv`로 하고, 각 언어의 build 정의(csproj·package.json·build.gradle.kts·CMake)가
   framework 소스를 참조하는 상대 경로를 새 위치에 맞게 고친다. 샘플과 같은 원칙으로
   **bench는 framework 기본 빌드·sln·workspace·CI에 포함하지 않는다.**
-- `framework/languages/dotnet/bench/with-grpc/`(784 MB)·`java`(472 MB)에는 bin/obj/build
+- `framework/bench/grpc/dotnet/`(784 MB)·`java`(472 MB)에는 bin/obj/build
   산출물이 있다. 이동 전에 tracked 파일만 옮기고 산출물은 남기지 않는다.
 - 사이트: `doc/site/docs/bench -> ../../../framework/bench/grpc/doc` 심링크와 mkdocs nav 항목을
   추가해 규격·언어별 문서·비교 보고서를 zlink.systems에서 본다. README(한/영)의 문서 표에
   비교 보고서 링크를 넣는다.
 - `bindings/c/bench/BENCH_POLICY.md`는 C bench 정책이므로 C 기준 bench와 함께 옮기되 정책
   문장은 유지한다.
-- `framework/bench/tools/tests/fixtures/`의 1차 fixture는 집계기 테스트 입력이므로 유지한다.
+- `framework/bench/grpc/tools/tests/fixtures/`의 1차 fixture는 집계기 테스트 입력이므로 유지한다.
 
 ## 3. 측정 모델 (규격 개정안의 핵심)
 
