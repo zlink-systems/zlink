@@ -8,6 +8,35 @@ namespace Zlink.Framework.UnitTests;
 /// </summary>
 public sealed class StateLaneTests
 {
+    [Fact]
+    public async Task IdleSynchronousTurn_ReturnsValueWithoutATask()
+    {
+        await using var lane = new ZLinkStateLane();
+        var result = lane.RunAsync(static () => 48);
+        Assert.Equal(ValueTask.FromResult(48), result);
+        Assert.Equal(48, await result);
+
+        var completed = lane.RunAsync(static () => { });
+        Assert.Equal(ValueTask.CompletedTask, completed);
+        await completed;
+    }
+
+    [Fact]
+    public async Task NestedIdleTurn_RestoresOuterOwnershipEvenWhenInnerWorkFails()
+    {
+        await using var outer = new ZLinkStateLane();
+        await using var inner = new ZLinkStateLane();
+        await outer.RunAsync(() =>
+        {
+            Assert.True(outer.IsOnLane);
+            Assert.Throws<InvalidOperationException>(() => inner.RunAsync<int>(
+                () => throw new InvalidOperationException("inner")).GetAwaiter().GetResult());
+            Assert.Same(outer, ZLinkStateLane.Current);
+            Assert.Throws<InvalidOperationException>(() => outer.RunAsync(static () => 0));
+        });
+        Assert.Null(ZLinkStateLane.Current);
+    }
+
     // ---- 기본 동작 -------------------------------------------------------------------
 
     [Fact]
