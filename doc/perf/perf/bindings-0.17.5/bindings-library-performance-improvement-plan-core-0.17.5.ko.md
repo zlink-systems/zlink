@@ -1488,6 +1488,27 @@ pattern 평균의 목표 median 대비 갭(큰 순):
 - **개선 1순위 = Node routed hot-path**(N-API 경계·per-message wrapper·event-loop 오버헤드). 근본원인 진단 → 최적화 → §7.7 채택/revert.
   이후 dotnet DEALER_ROUTER_SENDSEND(2순위)로 이어간다.
 
+### 11.3 개선 #1 — Node routed relay native frame 보존 (채택, commit f317aa4d7b)
+
+- **근본원인(프로파일 근거):** Node routed relay가 record당 **수신 payload를 JS Buffer로 복사한 뒤 send용 native message를 재생성**(+ send-side
+  snapshot 객체 2개/record + property lookup)해, C에 없는 per-message 고정비가 작은 size를 지배했다. `submitSend`가 server CPU의 44.9%.
+- **최적화:** 관찰(read)되지 않은 routed multipart payload를 **receive→submit 내내 native frame으로 보존**(eager Buffer 복사·part별 snapshot 제거),
+  .NET/C++처럼 native 소유권을 직접 전달. addon(`addon_core.cc`)+`message_snapshot.ts`+`message_conversion.ts`. **공개 API·wire·routing·part
+  순서·DONTWAIT/consume 계약 불변.** 프로파일: `submitSend` −26%, `recv` −15%.
+- **before→after (Core 0.17.5, tcp, runs=3, C 대비 %):**
+
+| pattern | 64 | 256 | 1024 | 4096 | 65536 | 131072 | 평균 |
+|---|--|--|--|--|--|--|--|
+| MULTI_DEALER_ROUTER_SENDSEND | 24.2→26.3 | 20.9→24.6 | 18.7→24.5 | 20.9→**35.2** | 59.0→67.8 | 70.7→79.6 | 35.7→**43.0** |
+| MULTI_ROUTER_ROUTER_SENDSEND | 27.8→28.4 | 37.9→41.2 | 32.9→38.1 | 38.0→43.4 | 48.4→47.0 | 42.3→43.6 | 37.9→40.3 |
+| MULTI_DEALER_ROUTER_REQREP | 22.3→26.2 | 28.5→33.9 | 32.9→32.5 | 33.8→36.2 | 42.2→52.8 | 47.8→**63.1** | 34.6→**40.8** |
+| MULTI_ROUTER_ROUTER_REQREP | 40.0→38.6 | 40.8→42.4 | 42.0→41.5 | 40.5→42.2 | 56.9→56.4 | 56.3→59.0 | 46.1→46.7 |
+
+- 전 패턴 개선(최대 갭이던 DEALER_ROUTER SENDSEND/REQREP 평균 +7.3/+6.2pp). 몇 셀 −0.4~1.4는 3-run 변동 범위. **비대상 회귀 없음**
+  (routed 65536 +2.9~6.4%, PAIR/PUBSUB 변동 내). 계약 테스트 27개+전체 npm test+샘플 7/7 통과.
+- 남은 병목: 메시지당 N-API 경계 2회, receive envelope/parts/snapshot, async continuation. Node는 목표 median 60엔 아직 못 미치나 최대 갭
+  패턴을 유의미하게 축소. **다음: dotnet DEALER_ROUTER_SENDSEND(갭 17.9)**.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.
