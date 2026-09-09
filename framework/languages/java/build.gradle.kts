@@ -160,6 +160,13 @@ subprojects {
         extensions.configure<PublishingExtension> {
             publications {
                 create<MavenPublication>("mavenJava") {
+                    // Maven Central validation requires explicit dependency versions;
+                    // Spring BOM-managed dependencies would otherwise be published
+                    // without a version. Write the resolved versions into the POM.
+                    versionMapping {
+                        usage("java-api") { fromResolutionOf("runtimeClasspath") }
+                        usage("java-runtime") { fromResolutionResult() }
+                    }
                     from(components["java"])
                     groupId = project.group.toString()
                     artifactId = project.name

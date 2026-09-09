@@ -91,7 +91,7 @@ deployment_id="$(curl --fail-with-body --silent --show-error \
   --request POST \
   --header "Authorization: Bearer $authorization" \
   --form "bundle=@$bundle_path;type=application/octet-stream" \
-  "https://central.sonatype.com/api/v1/publisher/upload?name=zlink-java-$version&publishingType=USER_MANAGED")"
+  "https://central.sonatype.com/api/v1/publisher/upload?name=zlink-java-$version&publishingType=AUTOMATIC")"
 unset authorization
 
-echo "Central Portal deployment created (USER_MANAGED): $deployment_id"
+echo "Central Portal deployment created (AUTOMATIC): $deployment_id"
