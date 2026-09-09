@@ -7,6 +7,35 @@ namespace Zlink.Framework.UnitTests;
 public sealed class EnvelopeHeaderCacheHotPathTests
 {
     [Fact]
+    public void WarmEncodingAllocatesOnlyTheOwnedMessage()
+    {
+        var header = Header("cache-allocation");
+        byte[] bytes;
+        using (var encoded = ZLinkEnvelopeCodec.EncodeHeader(header))
+            bytes = encoded.ToArray();
+        for (var index = 0; index < 256; index++)
+        {
+            using var direct = Message.From(bytes);
+            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+        }
+        const int iterations = 1024;
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            using var direct = Message.From(bytes);
+        }
+        var directBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
+        }
+        var encodedBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        Assert.True(encodedBytes <= directBytes + iterations * 16L,
+            $"Warm encoding allocated {encodedBytes} bytes; owned Message allocated {directBytes} bytes.");
+    }
+
+    [Fact]
     public async Task WarmHeaderEncodingAndBothDecodersDoNotWaitForCacheMutation()
     {
         var header = Header("cache-hot");

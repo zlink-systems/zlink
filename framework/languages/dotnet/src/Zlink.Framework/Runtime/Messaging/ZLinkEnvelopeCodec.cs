@@ -718,21 +718,26 @@ internal static class ZLinkEnvelopeCodec
         // have filled the cache.
         if (Volatile.Read(ref SimpleHeaderCache).TryGetValue(key, out var hit))
             return hit;
-        return AwaitStateLane(CacheLane.RunAsync(() =>
-        {
-            var cache = SimpleHeaderCache;
-            if (cache.TryGetValue(key, out var cached))
-                return cached;
+        return AddOnMiss(key);
 
-            while (cache.Count >= MaximumSimpleHeaderCacheEntries
-                   && SimpleHeaderCacheOrder.TryDequeue(out var evicted))
-                cache = cache.Remove(evicted);
+        // Keep the mutation closure on the miss path; a warm lookup does not
+        // allocate an owner-turn callback merely to return immutable bytes.
+        static byte[] AddOnMiss(SimpleHeaderKey key) =>
+            AwaitStateLane(CacheLane.RunAsync(() =>
+            {
+                var cache = SimpleHeaderCache;
+                if (cache.TryGetValue(key, out var cached))
+                    return cached;
 
-            var encoded = EncodeSimpleHeaderBytes(key);
-            SimpleHeaderCacheOrder.Enqueue(key);
-            Volatile.Write(ref SimpleHeaderCache, cache.Add(key, encoded));
-            return encoded;
-        }));
+                while (cache.Count >= MaximumSimpleHeaderCacheEntries
+                       && SimpleHeaderCacheOrder.TryDequeue(out var evicted))
+                    cache = cache.Remove(evicted);
+
+                var encoded = EncodeSimpleHeaderBytes(key);
+                SimpleHeaderCacheOrder.Enqueue(key);
+                Volatile.Write(ref SimpleHeaderCache, cache.Add(key, encoded));
+                return encoded;
+            }));
     }
 
     private static byte[] EncodeSimpleHeaderBytes(SimpleHeaderKey key) =>
