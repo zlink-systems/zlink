@@ -109,14 +109,31 @@ Java relay의 deep-copy가 고정 per-message 비용의 큰 부분).
   payload immutability·empty 여부. 전 언어 동일 시맨틱임을 규범(normative)으로 기재.
 - 언어별 spec 문서의 `Message` API 절에 §3.3 시그니처 표를 반영(관용 케이싱·반환형·에러).
 - 기존 깊은복사 이름(`copy`/`CopyTo`) → `Clone` 개명과 **deprecated alias 유지 기간**을 명시.
-- 대상 파일은 실제 spec 트리를 확인 후 확정하되, 최소: 공통 messaging ownership 문서 1건 + 언어별 Message 절(cpp/dotnet/node/java) 4건.
+
+**대상 파일(확정):**
+| 파일 | 반영 지점 | 넣을 내용 |
+|------|-----------|-----------|
+| `bindings/doc/spec/draft/message-ownership.ko.md` | §"명시적 copy"(L109), §"언어별 표현 범위"(L348), §"Contract test 요구사항"(L444) | `Copy`/`Move`/`Clone` 3동작 규범 정의로 분리. **주의:** 현행 문서의 `copy()`는 이미 "독립 ownership·deep copy 미보장(=ref-share 허용)"으로 서술되어 우리 `Copy` 의미와 사실상 일치 → `Copy`로 명명 확정하고, 깊은복사는 `allocate`+`copy_to` 대신 `Clone`으로 정리. `moveMessage()` 관련 문단은 `Move` 명명과 정합. contract test 요구사항에 3동작 항목 추가. |
+| `bindings/doc/spec/cpp/README.ko.md` / `.en.md` | Message/소유 절 | C++ `copy()`/`move(dest)`/`clone()` 시그니처·계약 |
+| `bindings/doc/spec/dotnet/README.ko.md` / `.en.md` (+ `api-reference-comments.{ko,en}.md`) | Message API 절 | .NET `Copy()`/`Move(dest)`/`Clone` + `CopyTo` deprecation |
+| `bindings/doc/spec/node/README.ko.md` / `.en.md` | Message API 절 | Node `copy()`/`move(dest)`/`clone()` + 기존 `copy`(깊은복사) 의미 전환 경고 |
+| `bindings/doc/spec/java/README.ko.md` / `.en.md` | Message API 절 | Java `copy()`/`move(dest)`/`clone()` + `sharedCopyOf`/`moveInto` alias |
 
 ### 6.2 guide/사용법 문서 — **없으면 추가**
-- 각 바인딩 README(및 사용자 가이드)의 Message 절에 **사용 예제**를 추가: (a) `Copy`로 공유 후 양쪽 각자 close, (b) `Move`로 send에
-  넘기기(echo relay 패턴), (c) `Clone`으로 독립 복제가 필요한 경우. **"언제 어느 것을 쓰나"** 결정 가이드 한 단락 포함.
-- guide에 관련 서술이 **현재 없으면 신규 섹션으로 추가**(단순 시그니처 나열이 아니라 소유권·수명 관점 사용법).
-- 대상(존재 확인 후 확정): `bindings/cpp/README*`, `bindings/dotnet/README*`, `bindings/node/README*`, `bindings/java/README*`,
-  그리고 상위 사용자 가이드 문서가 있으면 그 Messaging 절.
+- 각 언어 가이드의 Message/소유권 절에 **사용 예제**를 추가: (a) `Copy`로 공유 후 양쪽 각자 close, (b) `Move`로 send에 넘기기
+  (echo relay 패턴), (c) `Clone`으로 독립 복제가 필요한 경우. **"언제 어느 것을 쓰나"** 결정 가이드 한 단락 포함.
+- 단순 시그니처 나열이 아니라 소유권·수명 관점 사용법으로 쓴다. 현재 가이드에 관련 서술이 없으므로 **신규 소절로 추가**.
+
+**대상 파일(확정):**
+| 파일 | 반영 지점 | 넣을 내용 |
+|------|-----------|-----------|
+| `bindings/doc/guide/cpp/index.ko.md` / `.en.md` | `### 메시지`(L87), `## 소유권과 수명`(L173) | `Copy`/`Move`/`Clone` 사용 예제 + 결정 가이드 |
+| `bindings/doc/guide/dotnet/index.ko.md` / `.en.md` | `### 2. 메시지`(L94), `## 소유권과 수명`(L182) | 동일 |
+| `bindings/doc/guide/node/index.ko.md` / `.en.md` | `### 메시지`(L86), `## 소유권과 수명`(L155) | 동일 |
+| `bindings/doc/guide/java/index.ko.md` / `.en.md` | `### 2. 메시지`(L120), `## 소유권과 수명`(L243) | 동일 |
+| `bindings/{dotnet,node}/README.md`, `bindings/cpp/README.doxygen.md`, `bindings/java/README.javadoc.md`, `bindings/node/README.typedoc.md`, `bindings/dotnet/README.docfx.md` | Message 절 | API 표면 doc의 Message 멤버 목록에 `Copy`/`Move`/`Clone` 반영 |
+
+> 라인 번호는 조사 시점(현재 main) 기준 앵커이며 편집 전 재확인한다. en/ko는 동일 내용으로 동기화한다.
 
 ### 6.3 반영 순서
 1. (이 문서 검토·승인)
