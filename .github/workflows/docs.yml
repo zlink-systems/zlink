@@ -27,14 +27,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # 공개 계약 추적기가 baseline 커밋을 `git cat-file`로 읽는다.
           # 기본 depth 1로는 그 커밋이 없어 실패한다.
           fetch-depth: 0
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -66,7 +66,7 @@ jobs:
       # 가이드가 인용하는 교육용 예제는 실제 컴파일 대상이다. 계약과 어긋난 코드가
       # 문서에 실리는 것을 컴파일러가 막는다.
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           # gradle toolchain이 22를 요구한다(framework/languages/java/
@@ -106,7 +106,7 @@ jobs:
         run: python3 doc/site/scripts/make_core_redirects.py doc/site/site
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: doc/site/site
 
@@ -119,4 +119,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

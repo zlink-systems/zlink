@@ -41,50 +41,96 @@ jobs:
           - name: win-x64
             runner: windows-latest
             rid: win-x64
+            core_platform: windows-x64
           - name: win-arm64
             runner: windows-11-arm
             rid: win-arm64
+            core_platform: windows-arm64
           - name: linux-x64
             runner: ubuntu-24.04
             rid: linux-x64
+            core_platform: linux-x64
           - name: linux-arm64
             runner: ubuntu-24.04-arm
             rid: linux-arm64
+            core_platform: linux-arm64
           - name: osx-x64
             runner: macos-15-intel
             rid: osx-x64
+            core_platform: macos-x64
           - name: osx-arm64
             runner: macos-15
             rid: osx-arm64
+            core_platform: macos-arm64
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup .NET 8 SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
 
       - name: Setup .NET 10 SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
 
-      - name: Build local dependency packages
-        shell: pwsh
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - name: Prepare local dependency packages
+        shell: bash
         run: |
-          $packageRoot = Join-Path $env:RUNNER_TEMP "zlink-local-packages"
-          $nugetSource = Join-Path $packageRoot "nuget"
-          New-Item -ItemType Directory -Force -Path $nugetSource | Out-Null
+          # The framework consumes the released binding package surface. The
+          # binding pin comes from Directory.Packages.props; the HttpClient
+          # package is packed from this checkout.
+          package_root="${RUNNER_TEMP}/zlink-local-packages"
+          nuget_source="${package_root}/nuget"
+          mkdir -p "${nuget_source}"
+          binding_version=$(sed -n 's/.*<ZLinkBindingsPackageVersion[^>]*>\(.*\)<\/ZLinkBindingsPackageVersion>.*/\1/p' framework/languages/dotnet/Directory.Packages.props | head -n1)
+          if [ -z "${binding_version}" ]; then
+            echo "::error::Zlink pin not found in framework/languages/dotnet/Directory.Packages.props" >&2
+            exit 1
+          fi
+          # nuget.org lists a freshly pushed package only after validation (minutes).
+          url="https://api.nuget.org/v3-flatcontainer/zlink/${binding_version}/zlink.${binding_version}.nupkg"
+          for attempt in $(seq 1 45); do
+            if curl -sSfL -o "${nuget_source}/Zlink.${binding_version}.nupkg" "${url}"; then
+              break
+            fi
+            echo "attempt ${attempt}: Zlink ${binding_version} not on nuget.org yet; waiting 60s"
+            sleep 60
+          done
+          test -s "${nuget_source}/Zlink.${binding_version}.nupkg" \
+            || { echo "::error::Zlink ${binding_version} is not available on nuget.org after 45 minutes" >&2; exit 1; }
+          dotnet pack framework/languages/dotnet/src/Zlink.HttpClient/Zlink.HttpClient.csproj -c Release -o "${nuget_source}"
+          echo "ZLINK_LOCAL_PACKAGE_ROOT=${package_root}" >> "${GITHUB_ENV}"
+          echo "ZLinkLocalPackageRoot=${package_root}" >> "${GITHUB_ENV}"
+          echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
+        id: packages
 
-          # The framework consumes released package surfaces even in CI. Build the
-          # packages first so restore never falls back to bindings source references.
-          $env:ZLinkLocalPackageRoot = $packageRoot
-          dotnet pack bindings/dotnet/src/Zlink/Zlink.csproj -c Release -o $nugetSource
-          dotnet pack framework/languages/dotnet/src/Zlink.HttpClient/Zlink.HttpClient.csproj -c Release -o $nugetSource
-
-          "ZLinkLocalPackageRoot=$packageRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Prepare the Core release runtime for this platform
+        shell: bash
+        env:
+          ZLINK_CORE_CACHE_DIR: ${{ runner.temp }}/zlink-core
+        run: |
+          # The released binding package carries the linux-x64 runtime only; the
+          # other RIDs run the tests against the verified Core release archive.
+          core_version="${{ steps.packages.outputs.binding_version }}"
+          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
+            --version "${core_version}" \
+            --platform "${{ matrix.target.core_platform }}" \
+            --cache-dir "${ZLINK_CORE_CACHE_DIR}")
+          case "${{ matrix.target.core_platform }}" in
+            windows-*) library="${core_prefix}/bin/zlink.dll" ;;
+            macos-*) library="${core_prefix}/lib/libzlink.dylib" ;;
+            *) library="${core_prefix}/lib/libzlink.so.${core_version}" ;;
+          esac
+          test -f "${library}" || { echo "::error::Core runtime not found at ${library}" >&2; ls -R "${core_prefix}" >&2; exit 1; }
+          echo "ZLINK_LIBRARY_PATH=${library}" >> "${GITHUB_ENV}"
 
       - name: Restore framework solution
         run: dotnet restore ${{ env.FRAMEWORK_SOLUTION }}

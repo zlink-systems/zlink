@@ -85,7 +85,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Setup MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ./.github/actions/msvc-env
         with:
           arch: x64
 

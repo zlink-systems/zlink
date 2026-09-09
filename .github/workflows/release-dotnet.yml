@@ -36,7 +36,7 @@ jobs:
     name: Build and publish .NET binding
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Resolve and validate versions
         id: versions
@@ -99,7 +99,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
 
@@ -116,7 +116,7 @@ jobs:
             --cache-dir "${ZLINK_CORE_CACHE_DIR}")
           echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
 
@@ -135,7 +135,7 @@ jobs:
             -p:ZLinkCoreVersion="${{ steps.versions.outputs.core_version }}" \
             -p:ZLinkCoreProvenancePath="${{ steps.dotnet-core.outputs.prefix }}/share/zlink/core-package-provenance.json"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: binding-dotnet-${{ steps.versions.outputs.version }}
           path: |
@@ -159,7 +159,7 @@ jobs:
             --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate --no-symbols
-          for attempt in $(seq 1 15); do
+          for attempt in $(seq 1 30); do
             if dotnet nuget push dist/dotnet/*.snupkg \
                  --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
                  --source https://api.nuget.org/v3/index.json \
@@ -169,14 +169,14 @@ jobs:
             echo "symbols push attempt ${attempt} failed (package validation pending?); retrying in 60s"
             sleep 60
           done
-          echo "::warning::symbol package (.snupkg) was not accepted after 15 attempts; the package itself is published"
+          echo "::warning::symbol package (.snupkg) was not accepted after 30 attempts; the package itself is published"
 
   release-framework-dotnet:
     if: startsWith(github.ref_name, 'framework/v') || (github.event_name == 'workflow_dispatch' && inputs.target == 'framework')
     name: Build and publish .NET framework packages
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Resolve and validate framework version
         id: versions
@@ -200,7 +200,7 @@ jobs:
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
 
@@ -250,7 +250,7 @@ jobs:
           done
           ls dist/framework-dotnet
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: framework-dotnet-${{ steps.versions.outputs.version }}
           path: |
@@ -284,4 +284,4 @@ jobs:
             echo "symbols push attempt ${attempt} failed (package validation pending?); retrying in 60s"
             sleep 60
           done
-          echo "::warning::symbol package (.snupkg) was not accepted after 15 attempts; the package itself is published"
+          echo "::warning::symbol package (.snupkg) was not accepted after 30 attempts; the package itself is published"

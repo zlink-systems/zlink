@@ -1,0 +1,48 @@
+name: MSVC developer environment
+description: >-
+  Loads the Visual Studio developer command prompt (vcvarsall.bat) into the job
+  environment. Composite action without a Node runtime, so it never depends on
+  the runner's Node.js deprecation cycle.
+inputs:
+  arch:
+    description: Target architecture passed to vcvarsall.bat (x64, x86, arm64, x64_arm64, ...)
+    required: false
+    default: x64
+runs:
+  using: composite
+  steps:
+    - name: Load vcvarsall.bat into GITHUB_ENV
+      shell: pwsh
+      run: |
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+        if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found at $vswhere" }
+        $installationPath = & $vswhere -latest -products * -prerelease `
+          -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+          -property installationPath
+        if (-not $installationPath) { throw 'No Visual Studio installation with the VC tools was found' }
+        $vcvarsall = Join-Path $installationPath 'VC\Auxiliary\Build\vcvarsall.bat'
+        if (-not (Test-Path $vcvarsall)) { throw "vcvarsall.bat not found at $vcvarsall" }
+        Write-Host "Using $vcvarsall ${{ inputs.arch }}"
+
+        $before = @{}
+        Get-ChildItem env: | ForEach-Object { $before[$_.Name] = $_.Value }
+        $marker = '__ZLINK_VCVARS_ENV__'
+        $output = & cmd.exe /d /s /c "`"$vcvarsall`" ${{ inputs.arch }} && echo $marker && set"
+        if ($LASTEXITCODE -ne 0) { throw "vcvarsall.bat failed with exit code $LASTEXITCODE" }
+        $lines = @($output)
+        $start = [Array]::IndexOf($lines, $marker)
+        if ($start -lt 0) { throw 'vcvarsall.bat did not print the environment' }
+        $changed = 0
+        foreach ($line in $lines[($start + 1)..($lines.Length - 1)]) {
+          $index = $line.IndexOf('=')
+          if ($index -le 0) { continue }
+          $name = $line.Substring(0, $index)
+          $value = $line.Substring($index + 1)
+          if ($before.ContainsKey($name) -and $before[$name] -eq $value) { continue }
+          if ($name -in @('PROMPT', 'PWD', 'OLDPWD')) { continue }
+          # Multi-line safe heredoc form of GITHUB_ENV.
+          $delimiter = "ZLINK_ENV_$([guid]::NewGuid().ToString('N'))"
+          Add-Content -Path $env:GITHUB_ENV -Value "$name<<$delimiter`n$value`n$delimiter" -Encoding utf8
+          $changed++
+        }
+        Write-Host "Exported $changed environment variables from the developer command prompt"

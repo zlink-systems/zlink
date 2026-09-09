@@ -57,16 +57,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node-version }}
 
       - name: Setup MSVC environment
         if: startsWith(matrix.target.name, 'win-')
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ./.github/actions/msvc-env
         with:
           arch: ${{ matrix.target.msvc_arch }}
 
@@ -136,13 +136,31 @@ jobs:
         working-directory: bindings/node
         run: npm install --ignore-scripts
 
+      # framework CI often runs minutes after a binding publish; the registry
+      # serves the package metadata before its tarball (up to ~30 min).
+      - name: Wait for the binding package on npm
+        shell: bash
+        run: |
+          version=$(node -p "require('./framework/languages/node/packages/framework/package.json').dependencies['@zlink-systems/zlink']")
+          url="https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
+          for attempt in $(seq 1 45); do
+            if curl -sfIL -o /dev/null "${url}"; then
+              echo "@zlink-systems/zlink@${version} is available"
+              exit 0
+            fi
+            echo "attempt ${attempt}: ${url} not served yet; waiting 60s"
+            sleep 60
+          done
+          echo "::error::@zlink-systems/zlink@${version} tarball is not available on npm after 45 minutes" >&2
+          exit 1
+
       - name: Install framework dependencies
         working-directory: framework/languages/node
         run: npm ci
 
       - name: Cache Chromium for browser connector E2E
         if: matrix.node-version == 22 && (matrix.target.name == 'linux-x64' || matrix.target.name == 'win-x64')
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: framework/languages/node/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('framework/languages/node/package-lock.json') }}
@@ -207,15 +225,15 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
 
       - name: Setup .NET 8 SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
 
@@ -234,6 +252,24 @@ jobs:
       - name: Install binding dependencies
         working-directory: bindings/node
         run: npm install --ignore-scripts
+
+      # framework CI often runs minutes after a binding publish; the registry
+      # serves the package metadata before its tarball (up to ~30 min).
+      - name: Wait for the binding package on npm
+        shell: bash
+        run: |
+          version=$(node -p "require('./framework/languages/node/packages/framework/package.json').dependencies['@zlink-systems/zlink']")
+          url="https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
+          for attempt in $(seq 1 45); do
+            if curl -sfIL -o /dev/null "${url}"; then
+              echo "@zlink-systems/zlink@${version} is available"
+              exit 0
+            fi
+            echo "attempt ${attempt}: ${url} not served yet; waiting 60s"
+            sleep 60
+          done
+          echo "::error::@zlink-systems/zlink@${version} tarball is not available on npm after 45 minutes" >&2
+          exit 1
 
       - name: Install framework dependencies
         working-directory: framework/languages/node

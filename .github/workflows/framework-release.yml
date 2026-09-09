@@ -27,7 +27,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       publish_registry: ${{ steps.version.outputs.publish_registry }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - id: version
         shell: bash
@@ -68,11 +68,11 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # No registry-url here: it would write an empty _authToken into .npmrc and
       # npm would then use token auth (404) instead of OIDC trusted publishing.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -148,7 +148,7 @@ jobs:
             npm publish "./packages/${package_dir}" --provenance --access public
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: framework-node-${{ needs.resolve.outputs.version }}
           path: dist/framework-node/*.tgz
@@ -159,9 +159,9 @@ jobs:
     runs-on: ubuntu-24.04
     needs: resolve
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '22'
@@ -169,7 +169,7 @@ jobs:
       # zlink-stream-connector's JavaNodeStreamInteropTest drives the Node
       # stream-connector (packages/stream-connector/dist) with `node`, so the
       # Node workspace is built here the same way the Node job builds it.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -228,7 +228,7 @@ jobs:
         working-directory: framework/languages/java
         run: ./gradlew --no-daemon publish
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: framework-java-${{ needs.resolve.outputs.version }}
           path: |
@@ -244,7 +244,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Create source archive and checksum
         shell: bash
@@ -259,7 +259,7 @@ jobs:
             "zlink-framework-cpp-${{ needs.resolve.outputs.version }}"
           sha256sum "${archive}" >"${archive}.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: framework-cpp-${{ needs.resolve.outputs.version }}
           path: dist/framework-cpp/*
@@ -267,7 +267,7 @@ jobs:
 
       - name: Create GitHub Release
         if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: framework/v${{ needs.resolve.outputs.version }}
           name: ZLink Framework v${{ needs.resolve.outputs.version }}
