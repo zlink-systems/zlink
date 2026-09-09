@@ -1,6 +1,5 @@
-# Current public asset lacks runtime/protocol/generated/cpp. Update the hash
-# after publishing the complete prepared archive; checksum bypass is not used.
+# Hash of the published framework release source unit; checksum bypass is not used.
 sources:
   "0.11.0":
     url: "https://github.com/zlink-systems/zlink/releases/download/framework/v0.11.0/zlink-framework-cpp-0.11.0.tar.gz"
-    sha256: "81c3b4e8143d9219ec4de93d117293fb1a6d48eccdef199e6b5232a31732fdf5"
+    sha256: "d4a847177716e2a3adb02cddc506593b7d41758622954e96b0de55e53e799d0b"

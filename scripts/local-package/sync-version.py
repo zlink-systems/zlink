@@ -185,6 +185,16 @@ FRAMEWORK_SCALAR_FIELDS = (
         rf"(?P<version>{SEMVER})",
         3,
     ),
+    FrameworkField(
+        "framework/languages/cpp/packaging/conan/conanfile.py",
+        "recipe version",
+        rf'(    version = ")(?P<version>{SEMVER})(")',
+    ),
+    FrameworkField(
+        "vcpkg/ports/zlink-framework/vcpkg.json",
+        "overlay port version",
+        rf'("version"\s*:\s*")(?P<version>{SEMVER})(")',
+    ),
 )
 
 

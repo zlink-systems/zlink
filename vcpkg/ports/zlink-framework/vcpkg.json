@@ -1,6 +1,6 @@
 {
   "name": "zlink-framework",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Zlink C++ server framework, HTTP client and stream connector",
   "homepage": "https://github.com/zlink-systems/zlink",
   "license": "FSL-1.1-ALv2",
