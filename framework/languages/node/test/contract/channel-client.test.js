@@ -6,6 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { once } = require('node:events');
 const { fork } = require('node:child_process');
+const { inspect } = require('node:util');
 const { Module } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 
@@ -2432,7 +2433,7 @@ test('DERR-001 ZLinkFrameworkRuntimeHost replies error and reports provider reco
   }
 });
 
-test('DERR-002 ZLinkFrameworkRuntimeHost reports provider record for missing channel send handler', async () => {
+test('DERR-002 ZLinkFrameworkRuntimeHost reports provider record for missing channel send handler', async (t) => {
   const channelName = 'play-missing-send';
   const endpoint = `tcp://127.0.0.1:${await reservePort()}`;
   telemetry.reset();
@@ -2462,10 +2463,13 @@ test('DERR-002 ZLinkFrameworkRuntimeHost reports provider record for missing cha
   });
   const serverRuntime = new framework.ZLinkFrameworkRuntimeHost({ registration: serverRegistration });
   const clientRuntime = new framework.ZLinkFrameworkRuntimeHost({ registration: clientRegistration });
+  const runtimeFailures = [];
 
   try {
     await serverRuntime.start();
+    serverRuntime.errorSink.onRuntimeTaskException(failure => runtimeFailures.push({ host: 'server', ...failure }));
     await clientRuntime.start();
+    clientRuntime.errorSink.onRuntimeTaskException(failure => runtimeFailures.push({ host: 'client', ...failure }));
     const client = new framework.DefaultZLinkChannelClient(clientRegistration, clientRuntime.channelTransport);
 
     const knownBefore = await submitWhenReachable(() =>
@@ -2489,6 +2493,11 @@ test('DERR-002 ZLinkFrameworkRuntimeHost reports provider record for missing cha
       .timeout(1000)
       .submit();
     assert.deepEqual(knownAfter, { value: 'known:after-send-error' });
+  } catch (error) {
+    // Admission failures reach the task error sink before a channel dispatch exists.
+    // Preserve those causes and the existing flow records without retrying the operation.
+    t.diagnostic(inspect({ runtimeFailures, flow: telemetry.records }, { depth: 6 }));
+    throw error;
   } finally {
     await clientRuntime.stop();
     await serverRuntime.stop();

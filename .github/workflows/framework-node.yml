@@ -89,6 +89,17 @@ jobs:
           echo "VSCMD_VER=17.0" >> $env:GITHUB_ENV
           echo "VisualStudioVersion=17.0" >> $env:GITHUB_ENV
 
+      - name: Use a node-gyp that recognizes the runner's Visual Studio
+        if: startsWith(matrix.target.name, 'win-')
+        shell: bash
+        run: |
+          # Node 20 bundles node-gyp 10, which cannot find the Visual Studio
+          # installed on current Windows runners ("Could not find any Visual
+          # Studio installation to use"); Node 22's node-gyp 11 can. Point npm
+          # at a current node-gyp for every Node version.
+          npm install -g node-gyp@latest
+          echo "npm_config_node_gyp=$(npm root -g)/node-gyp/bin/node-gyp.js" >> "${GITHUB_ENV}"
+
       - name: Install Linux build dependencies
         if: startsWith(matrix.target.name, 'linux-')
         run: |

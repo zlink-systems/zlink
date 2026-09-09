@@ -45,6 +45,8 @@ run('lint', process.execPath, [
 ]);
 for (const testFile of listTestFiles(path.join(nodeRoot, 'test'))) {
   const relative = relativePath(nodeRoot, testFile);
+  // Actual browser E2E belongs to `test:browser`, whose CI jobs install Chromium.
+  if (relative.startsWith('test/browser/')) continue;
   if (!includeSamples && sampleTestPattern.test(path.basename(testFile))) continue;
   if (skippedTestFiles.has(relative) || skippedTestFiles.has(path.basename(testFile))) {
     console.log(`-- ${relative} # SKIP explicitly requested; skipped tests are not a pass`);

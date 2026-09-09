@@ -13,17 +13,22 @@ const serverScript = path.join(__dirname, 'support/stream-server.js');
 const certificate = path.join(workspaceRoot, 'test/fixtures/tls/server-cert.pem');
 const key = path.join(workspaceRoot, 'test/fixtures/tls/server-key.pem');
 
-test('actual Chromium uses ws/wss, explicit flow, reconnect, drain, and browser trust', { timeout: 120_000 }, async () => {
+test('actual Chromium uses ws/wss, explicit flow, reconnect, drain, and browser trust', { timeout: 120_000 }, async (t) => {
   const [wsPort, wssPort, untrustedWssPort] = await freePorts(3);
   const staticServer = await startStaticServer();
+  t.after(() => staticServer.close());
   let wsServer = await startStreamServer(`ws://127.0.0.1:${wsPort}`);
+  t.after(() => stopStreamServer(wsServer));
   const wssServer = await startStreamServer(`wss://127.0.0.1:${wssPort}`, certificate, key);
+  t.after(() => stopStreamServer(wssServer));
   const untrustedWssServer = await startStreamServer(
     `wss://127.0.0.1:${untrustedWssPort}`,
     certificate,
     key
   );
+  t.after(() => stopStreamServer(untrustedWssServer));
   const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
   const context = await browser.newContext();
   const page = await context.newPage();
   const secureContext = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -71,13 +76,6 @@ test('actual Chromium uses ws/wss, explicit flow, reconnect, drain, and browser 
       securePage.evaluate(() => window.browserConnectorTest.close()),
       untrustedPage.evaluate(() => window.browserConnectorTest.close())
     ]);
-    await browser.close();
-    await Promise.allSettled([
-      stopStreamServer(wsServer),
-      stopStreamServer(wssServer),
-      stopStreamServer(untrustedWssServer)
-    ]);
-    await staticServer.close();
   }
 });
 

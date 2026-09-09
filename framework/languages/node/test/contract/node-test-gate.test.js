@@ -3,10 +3,40 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 const { once } = require('node:events');
 
 const workspaceRoot = path.resolve(__dirname, '..', '..');
 const lockModule = path.join(workspaceRoot, 'scripts', 'node-test-gate-lock.js');
+
+test('runtime gate leaves actual browser E2E to the dedicated browser gate', () => {
+  const source = fs.readFileSync(path.join(workspaceRoot, 'scripts', 'run_node_runtime_gate.js'), 'utf8');
+  const commands = [];
+  vm.runInNewContext(source, {
+    __dirname: path.join(workspaceRoot, 'scripts'),
+    require(name) {
+      if (name === './node-test-gate-lock') return { acquireNodeTestGateLock: () => () => {} };
+      if (name === 'node:child_process') return {
+        spawnSync(command, args) {
+          commands.push([command, ...args]);
+          return { status: 0, stdout: '# Subtest: fixture\nok 1 - fixture\n1..1\n# tests 1\n' };
+        }
+      };
+      return require(name);
+    },
+    process: {
+      env: {}, versions: process.versions, platform: process.platform, execPath: process.execPath,
+      stdout: { write() {} }, stderr: { write() {} },
+      exit(code) { throw new Error(`Unexpected gate exit ${code}`); }
+    },
+    console: { log() {}, error() {} }
+  });
+  const testFiles = commands.filter((args) => args.includes('--test')).map((args) => args.at(-1));
+  assert(testFiles.includes(__filename));
+  assert(!testFiles.some((file) => file.startsWith(path.join(workspaceRoot, 'test', 'browser') + path.sep)));
+  const manifest = JSON.parse(fs.readFileSync(path.join(workspaceRoot, 'package.json'), 'utf8'));
+  assert.equal(manifest.scripts['test:browser'], 'node --test test/browser/*.test.js');
+});
 
 test('node runtime and coverage gates isolate native test handles and concurrent runs', () => {
   for (const scriptName of ['run_node_runtime_gate.js', 'run_node_coverage_gate.js']) {
