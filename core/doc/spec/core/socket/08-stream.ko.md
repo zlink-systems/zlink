@@ -119,17 +119,19 @@ STREAM 송신은 `ZLINK_PART_FINAL`로 제출하는 단일 part다. 공통 인�
 wire framing으로 정하며, PACKET 수신의 header/body는 [§6](#6-packet-receive와-framing)의
 한 packet을 구성한다. 이는 송신 multipart sequence가 아니다.
 
-`NONE FINAL`은 `SNDTIMEO`를 snapshot해 같은 RID의 local queue admission과 reconnect를
+`NONE FINAL`은 `SNDTIMEO`를 snapshot해 같은 RID의 local queue admission을
 기다린다. `DONTWAIT FINAL`은 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`과
 completion 없음이다. HWM·byte credit 때문에 admission하지 못하거나 연결은 있지만 아직 준비되지
 않았으면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID에 묶인 nonzero wait token을 반환하며
 payload는 유지하지 않는다. `target_rid_`에 해당하는 연결이 없으면 즉시
 `ZLINK_SUBMIT_NOT_CONNECTED`이고 token을 만들지 않는다. 같은 RID에 write credit이
-생기면(peer drain, reconnect로 인한 pipe attach) Core는 그 token의 `ZLINK_COMPLETION_WRITABLE`
+생기면(peer drain 또는 아직 준비되지 않았던 pipe attach) Core는 그 token의 `ZLINK_COMPLETION_WRITABLE`
 record를 정확히 하나 만들며 `send_result == ZLINK_SEND_ADMITTED`, `peer_rid`는 제출한 RID다.
 다른 RID의 credit은 이 token을 깨우지 않는다. 호출자는 보관한 record를 같은 RID에 `DONTWAIT`로
 다시 제출한다. `zlink_disconnect_rid()`로 그 RID를 명시적으로 제거하면 token은
-`ZLINK_SEND_TERMINAL`+`ENOENT`인 WRITABLE record로 끝난다. socket close·context 종료는 token을
+`ZLINK_SEND_TERMINAL`+`ENOENT`인 WRITABLE record로 끝난다. 물리 연결이 끊기면 그 RID의
+token은 `ZLINK_SEND_TERMINAL`+`ENOTCONN`인 WRITABLE record로 끝난다. 재연결은 새 RID를
+사용한다. socket close·context 종료는 token을
 내부에서 끝내며 record를 전달하지 않는다([§7](#7-completion과-thread-safety)). ID `0` 뒤에는 application
 payload를 replay하지 않는다. 상세 ownership·result·errno는
 [소켓 공통](README.ko.md#part-send와-pending-admission)을 따른다.

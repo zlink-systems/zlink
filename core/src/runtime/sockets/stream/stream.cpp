@@ -272,6 +272,10 @@ void zlink::stream_t::xpipe_terminated (pipe_t *pipe_)
         erase_out_pipe (pipe_);
         _fq.pipe_terminated (pipe_);
     }
+    zlink_routing_id_t rid = {};
+    rid.size = sizeof (server_routing_id);
+    put_uint32 (rid.data, server_routing_id);
+    fail_blocking_send_waits_for_logical_target (&rid, ENOTCONN);
 
 }
 

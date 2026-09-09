@@ -122,18 +122,19 @@ A send-call boundary does not guarantee a matching receive boundary at the peer.
 message boundaries come from wire framing. The header and body returned by PACKET receive form
 one packet under [§6](#6-packet-receive-and-framing), not a multipart send sequence.
 
-`NONE FINAL` snapshots `SNDTIMEO` and waits for local queue admission and reconnect of the same
-RID. A `DONTWAIT FINAL` makes exactly one admission attempt. If admitted immediately, it has ID
+`NONE FINAL` snapshots `SNDTIMEO` and waits for local queue admission of the same RID. A `DONTWAIT FINAL` makes exactly one admission attempt. If admitted immediately, it has ID
 `0` and no completion. If HWM or byte credit prevents admission, or the connection exists but is
 not ready yet, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token
 bound to that RID, and Core does not retain the payload. If no connection matches `target_rid_`,
 the result is `ZLINK_SUBMIT_NOT_CONNECTED` immediately with no token. When the same RID gains
-write credit (peer drain, or pipe attach on reconnect), Core produces exactly one
+write credit (peer drain, or attachment of a not-yet-ready pipe), Core produces exactly one
 `ZLINK_COMPLETION_WRITABLE` record for that token with `send_result == ZLINK_SEND_ADMITTED` and
 `peer_rid` set to the submitted RID. Credit on another RID does not wake this token. The caller
 resubmits its retained record to the same RID with `DONTWAIT`. Explicitly removing that RID with
 `zlink_disconnect_rid()` ends the token with a WRITABLE record carrying `ZLINK_SEND_TERMINAL` and
-`ENOENT`. Socket close or context termination ends the token internally and delivers no record
+`ENOENT`. A physical disconnect ends the RID's token with a WRITABLE record carrying
+`ZLINK_SEND_TERMINAL` and `ENOTCONN`. Reconnection uses a new RID. Socket close or context
+termination ends the token internally and delivers no record
 ([§7](#7-completion-and-thread-safety)). After ID `0`, Core does not replay the application payload.
 [Socket Common](README.en.md#part-send-and-pending-admission) owns detailed ownership, result, and
 errno rules.
