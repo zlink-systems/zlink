@@ -69,9 +69,9 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          # gradle toolchain이 22를 요구한다(framework/languages/java/
-          # build.gradle.kts). 21을 깔면 toolchain을 못 찾아 실패한다.
-          java-version: '22'
+          # Gradle toolchain 기준값은 JDK 25다(framework/languages/java/samples/gradle/
+          # zlink-jvm-baseline.settings.gradle.kts). 낮은 JDK를 깔면 toolchain을 못 찾아 실패한다.
+          java-version: '25'
 
       - name: Compile guide examples (Java)
         working-directory: framework/languages/java

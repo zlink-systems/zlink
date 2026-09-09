@@ -16,21 +16,21 @@ This workspace is configured so language-level code browsing works for:
 - .NET SDK (latest stable)
 - Node.js (latest LTS, project requires `>=20`)
 - Python (latest stable, project requires `>=3.9`)
-- Adoptium JDK 22
+- Adoptium JDK 25
 
-## Java 22 setup (required)
+## Java 25 setup (required)
 
-Set `JDK22_HOME` to your Adoptium JDK 22 install path.
+Set `JDK25_HOME` to your Adoptium JDK 25 install path.
 Set `JAVA_HOME` to the same path.
 
 Windows PowerShell example:
 
 ```powershell
-setx JDK22_HOME "C:\Program Files\Eclipse Adoptium\jdk-22.*"
-setx JAVA_HOME "C:\Program Files\Eclipse Adoptium\jdk-22.*"
+setx JDK25_HOME "C:\Program Files\Eclipse Adoptium\jdk-25.*"
+setx JAVA_HOME "C:\Program Files\Eclipse Adoptium\jdk-25.*"
 ```
 
-Restart VS Code after setting `JDK22_HOME`.
+Restart VS Code after setting `JDK25_HOME`.
 
 `bindings/java` includes Gradle Wrapper (`gradlew`, `gradlew.bat`), so a separate Gradle installation is optional.
 

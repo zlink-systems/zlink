@@ -57,7 +57,7 @@ echo 성능을 비교하기 위한 벤치마크입니다.
 - CMake + C++ 컴파일러
 - Python 3
 - .NET SDK (`dotnet`, `netzlink` 스택 사용 시)
-- JDK 22 + Gradle 8.8+ (`netty`, `jvmzlink` 스택 사용 시)
+- JDK 25 + Gradle 9.3+ (`netty`, `jvmzlink` 스택 사용 시)
 - 선택한 스택에 따른 외부 의존성
 
 고CCU(예: `--ccu 10000`)에서는 OS 튜닝이 중요합니다:
@@ -127,7 +127,7 @@ cat /proc/sys/net/ipv4/ip_local_port_range
 - `RESULT_DIR`: 결과 출력 디렉토리 지정
 - `HOST`: 벤치 대상 호스트 (기본값 `127.0.0.1`)
 - `BASE_PORT`: 스택 실행 시작 포트 (기본값 `22000`)
-- `NETTY_JAVA_HOME`: `netty`, `jvmzlink` 스택에서 사용할 JDK 22 경로
+- `NETTY_JAVA_HOME`: `netty`, `jvmzlink` 스택에서 사용할 JDK 25 경로
 - `NETTY_GRADLE_BIN`: `netty`, `jvmzlink` 스택에서 사용할 Gradle 실행 파일 경로
 
 참고:
@@ -137,7 +137,7 @@ cat /proc/sys/net/ipv4/ip_local_port_range
 - `--reuse-build`는 기존 빌드 디렉토리/바이너리가 이미 있어야 동작
 - `--clean-build`는 core 빌드 디렉토리와 스택 로컬 빌드 산출물을 삭제 후 재빌드
 - 일부 스택 빌드 실패 시 전체 중단 대신 `skip`으로 기록
-- `netty`는 JDK 22 이상이 필요하며 탐색 우선순위는
+- `netty`는 JDK 25 이상이 필요하며 탐색 우선순위는
   `NETTY_JAVA_HOME -> JAVA_HOME -> PATH java` 순서
 - `netty`는 Gradle 8.8+가 필요하며 시스템 `gradle`이 오래된 경우
   러너가 `bindings/c/bench/with_stream/stacks/netty/.gradle-tools/` 아래에

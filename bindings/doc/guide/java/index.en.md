@@ -40,7 +40,7 @@ dependencies {
 </dependency>
 ```
 
-- **Java 22** or later.
+- **Java 25** or later. The library calls Core through the FFM (Foreign Function & Memory) API, so run with `--enable-native-access=ALL-UNNAMED` (classpath) or `--enable-native-access=systems.zlink` (module path).
 - No separate native install — the per-RID shared library loads automatically.
 
 ```java

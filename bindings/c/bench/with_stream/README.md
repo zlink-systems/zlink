@@ -56,7 +56,7 @@ Supported payload sizes:
 - CMake + C++ toolchain
 - Python 3
 - .NET SDK (for `dotnet`, `netzlink`, `netzlink-len32be` stacks)
-- JDK 22 + Gradle 8.8+ (for `netty`, `jvmzlink` stacks)
+- JDK 25 + Gradle 9.3+ (for `netty`, `jvmzlink` stacks)
 - Optional external libs/tools depending on selected stacks
 
 For high CCU (for example `--ccu 10000`), host tuning is important:
@@ -126,7 +126,7 @@ Supported environment variables:
 - `RESULT_DIR`: override output directory
 - `HOST`: benchmark target host (default `127.0.0.1`)
 - `BASE_PORT`: start port for stack runs (default `22000`)
-- `NETTY_JAVA_HOME`: JDK home for `netty`, `jvmzlink` stacks (must be Java 22+)
+- `NETTY_JAVA_HOME`: JDK home for `netty`, `jvmzlink` stacks (must be Java 25+)
 - `NETTY_GRADLE_BIN`: override Gradle binary for `netty`, `jvmzlink` stacks
 
 Notes:
@@ -137,7 +137,7 @@ Notes:
 - `--clean-build` removes core build directory and stack-local build outputs before rebuilding.
 - Stacks are built before execution. Build failure for one stack is recorded as
   skipped, not a hard stop for all stacks.
-- `netty` requires Java 22+ and resolves Java in this order:
+- `netty` requires Java 25+ and resolves Java in this order:
   `NETTY_JAVA_HOME -> JAVA_HOME -> PATH java`.
 - `netty` requires Gradle 8.8+. If system `gradle` is older, the runner
   auto-downloads Gradle `8.10.2` under
