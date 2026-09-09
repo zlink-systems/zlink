@@ -175,52 +175,49 @@ try {
     $RedisEndpoint = $redis.Endpoint
     Wait-Port "redis" $RedisEndpoint
 
-    $topologyArgs = @(
-        "--sample.topology.apiEndpoint=$ApiAEndpoint",
-        "--sample.topology.apiAEndpoint=$ApiAEndpoint",
-        "--sample.topology.apiBEndpoint=$ApiBEndpoint",
-        "--sample.topology.apiHttpEndpoint=$ApiAHttpEndpoint",
-        "--sample.topology.apiAHttpEndpoint=$ApiAHttpEndpoint",
-        "--sample.topology.apiBHttpEndpoint=$ApiBHttpEndpoint",
-        "--sample.topology.playEndpoint=$PlayAEndpoint",
-        "--sample.topology.playAEndpoint=$PlayAEndpoint",
-        "--sample.topology.playBEndpoint=$PlayBEndpoint",
-        "--sample.topology.playARouteEndpoint=$PlayARouteEndpoint",
-        "--sample.topology.playBRouteEndpoint=$PlayBRouteEndpoint",
-        "--sample.topology.apiARouteEndpoint=$ApiARouteEndpoint",
-        "--sample.topology.apiBRouteEndpoint=$ApiBRouteEndpoint",
-        "--sample.topology.playASpotEndpoint=$PlayASpotEndpoint",
-        "--sample.topology.playBSpotEndpoint=$PlayBSpotEndpoint",
-        "--sample.topology.playASpotRouterEndpoint=$PlayASpotRouterEndpoint",
-        "--sample.topology.playBSpotRouterEndpoint=$PlayBSpotRouterEndpoint",
-        "--sample.topology.playAStreamEndpoint=$PlayAStreamEndpoint",
-        "--sample.topology.playBStreamEndpoint=$PlayBStreamEndpoint",
-        "--sample.topology.redisEndpoint=$RedisEndpoint",
-        "--sample.topology.redisKeyPrefix=$RedisKeyPrefix"
-    )
-    $serverArgs = @("--sample.host.keepRunning", "true") + $topologyArgs
+    $ConfigDir = Join-Path $LogDir "config"
+    New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
+    function Write-RoleConfig([string]$Role, [string]$ApiNode, [string]$PlayNode) {
+        $configuration = @{ sample = @{
+            host = @{ keepRunning = $true }
+            topology = @{
+                logDir = $env:TICTACTOE_LOG_DIR; apiNode = $ApiNode; playNode = $PlayNode
+                apiEndpoint = $ApiAEndpoint; apiAEndpoint = $ApiAEndpoint; apiBEndpoint = $ApiBEndpoint
+                apiHttpEndpoint = $ApiAHttpEndpoint; apiAHttpEndpoint = $ApiAHttpEndpoint; apiBHttpEndpoint = $ApiBHttpEndpoint
+                playEndpoint = $PlayAEndpoint; playAEndpoint = $PlayAEndpoint; playBEndpoint = $PlayBEndpoint
+                playARouteEndpoint = $PlayARouteEndpoint; playBRouteEndpoint = $PlayBRouteEndpoint
+                apiARouteEndpoint = $ApiARouteEndpoint; apiBRouteEndpoint = $ApiBRouteEndpoint
+                playASpotEndpoint = $PlayASpotEndpoint; playBSpotEndpoint = $PlayBSpotEndpoint
+                playASpotRouterEndpoint = $PlayASpotRouterEndpoint; playBSpotRouterEndpoint = $PlayBSpotRouterEndpoint
+                playAStreamEndpoint = $PlayAStreamEndpoint; playBStreamEndpoint = $PlayBStreamEndpoint
+                redisEndpoint = $RedisEndpoint; redisKeyPrefix = $RedisKeyPrefix
+            }
+        } }
+        $configuration | ConvertTo-Json -Depth 6 |
+            Set-Content -LiteralPath (Join-Path $ConfigDir "$Role.json") -Encoding UTF8
+    }
+    Write-RoleConfig "api-a" "a" "a"
+    Write-RoleConfig "api-b" "b" "a"
+    Write-RoleConfig "play-a" "a" "a"
+    Write-RoleConfig "play-b" "a" "b"
 
-    Start-Server "api-a" $ApiBin ($serverArgs + @("--sample.topology.apiNode=a"))
+    Start-Server "api-a" $ApiBin @("--config=`"$(Join-Path $ConfigDir 'api-a.json')`"")
     Wait-Port "api-a-channel" $ApiAEndpoint
     Wait-Port "api-a-http" $ApiAHttpEndpoint
     Wait-Port "api-a-route" $ApiARouteEndpoint
 
-    Start-Server "api-b" $ApiBin ($serverArgs + @("--sample.topology.apiNode=b"))
+    Start-Server "api-b" $ApiBin @("--config=`"$(Join-Path $ConfigDir 'api-b.json')`"")
     Wait-Port "api-b-channel" $ApiBEndpoint
     Wait-Port "api-b-http" $ApiBHttpEndpoint
     Wait-Port "api-b-route" $ApiBRouteEndpoint
 
-    Start-Server "play-a" $PlayBin ($serverArgs + @("--sample.topology.playNode=a"))
-    Wait-Port "play-a-channel" $PlayAEndpoint
+    Start-Server "play-a" $PlayBin @("--config=`"$(Join-Path $ConfigDir 'play-a.json')`"")
+    Wait-Port "play-a-object-route" $PlayARouteEndpoint
     Wait-Port "play-a-stream" $PlayAStreamEndpoint
-    Wait-Port "play-a-spot-router" $PlayASpotRouterEndpoint
-    Wait-Port "play-a-spot-pub" $PlayASpotEndpoint
 
-    Start-Server "play-b" $PlayBin ($serverArgs + @("--sample.topology.playNode=b"))
-    Wait-Port "play-b-channel" $PlayBEndpoint
+    Start-Server "play-b" $PlayBin @("--config=`"$(Join-Path $ConfigDir 'play-b.json')`"")
+    Wait-Port "play-b-object-route" $PlayBRouteEndpoint
     Wait-Port "play-b-stream" $PlayBStreamEndpoint
-    Wait-Port "play-b-spot-router" $PlayBSpotRouterEndpoint
-    Wait-Port "play-b-spot-pub" $PlayBSpotEndpoint
     Wait-RouteReady $ApiAHttpEndpoint "tictactoe-play-a"
     Wait-RouteReady $ApiAHttpEndpoint "tictactoe-play-b"
 
