@@ -1,32 +1,24 @@
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot/../redis-common.ps1"
+. "$PSScriptRoot/../sample-build-common.ps1"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$CppRoot = Resolve-Path (Join-Path $ScriptDir "../..")
+$CppRoot = (Resolve-Path (Join-Path $ScriptDir "../..")).Path
 $env:TICTACTOE_LOG_DIR = if ($env:TICTACTOE_LOG_DIR) { $env:TICTACTOE_LOG_DIR } else { Join-Path $ScriptDir "logs" }
 New-Item -ItemType Directory -Force -Path $env:TICTACTOE_LOG_DIR | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:TICTACTOE_LOG_DIR "*.log")
 
-$BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
-$BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
-$BinDir = $BuildDir
-if (Test-Path (Join-Path $BuildDir "$BuildConfiguration/sample_cpp_framework_tictactoe_play.exe")) {
-    $BinDir = Join-Path $BuildDir $BuildConfiguration
-} elseif (-not (Test-Path (Join-Path $BinDir "sample_cpp_framework_tictactoe_play.exe")) -and
-    (Test-Path (Join-Path $BinDir "linux-ninja-debug/sample_cpp_framework_tictactoe_play.exe"))) {
-    $BinDir = Join-Path $BinDir "linux-ninja-debug"
-}
-
-$PlayBin = Join-Path $BinDir "sample_cpp_framework_tictactoe_play.exe"
-$ApiBin = Join-Path $BinDir "sample_cpp_framework_tictactoe_api.exe"
-$ClientBin = Join-Path $BinDir "sample_cpp_framework_tictactoe_client.exe"
+$SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRoot -RequiredBinaries @(
+    "sample_cpp_framework_tictactoe_play",
+    "sample_cpp_framework_tictactoe_api",
+    "sample_cpp_framework_tictactoe_client"
+)
+$BuildDir = $SampleBuild.BuildDir
+$BuildConfiguration = $SampleBuild.Configuration
+$PlayBin = Get-ZlinkCppSampleBinary -Build $SampleBuild -Name "sample_cpp_framework_tictactoe_play"
+$ApiBin = Get-ZlinkCppSampleBinary -Build $SampleBuild -Name "sample_cpp_framework_tictactoe_api"
+$ClientBin = Get-ZlinkCppSampleBinary -Build $SampleBuild -Name "sample_cpp_framework_tictactoe_client"
 $CTestBin = if ($env:CTEST_BIN) { $env:CTEST_BIN } else { "ctest" }
-
-foreach ($Binary in @($PlayBin, $ApiBin, $ClientBin)) {
-    if (-not (Test-Path $Binary)) {
-        throw "Missing executable: $Binary. Build C++ samples first or set ZLINK_CPP_BUILD_DIR."
-    }
-}
 
 function Reserve-Ports([int]$Count) {
     return @(Get-ZlinkSamplePorts -Count $Count)
@@ -100,6 +92,7 @@ function Start-Server([string]$Name, [string]$Binary, [string[]]$Arguments) {
     $stdout = Join-Path $LogDir "$Name.log"
     $stderr = Join-Path $LogDir "$Name.err.log"
     $process = Start-Process -FilePath $Binary -ArgumentList $Arguments -RedirectStandardOutput $stdout -RedirectStandardError $stderr -NoNewWindow -PassThru
+    [void]$process.Handle
     $script:Processes.Add($process)
 }
 
@@ -149,11 +142,8 @@ function Cleanup([int]$Status) {
     return $Status
 }
 
-& $CTestBin --test-dir $BuildDir `
-    -C $BuildConfiguration `
-    -R "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway|sample_smoke_sample_cpp_framework_tictactoe_(play|api)" `
-    --output-on-failure
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Invoke-ZlinkCppSampleCTest -Build $SampleBuild -CTestBin $CTestBin `
+    -Pattern "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway|sample_smoke_sample_cpp_framework_tictactoe_(play|api)"
 
 $ports = Reserve-Ports 16
 $ApiAEndpoint = "tcp://127.0.0.1:$($ports[0])"
