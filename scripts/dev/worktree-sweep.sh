@@ -151,8 +151,32 @@ path_owner_worktree() {
     return 1
 }
 
+
+# 실행 중 job이 선언한 작업 worktree. .meta의 기록을 먼저 보고, 없으면 명령줄의 -C 인자를 읽는다.
+job_declared_worktree() {
+    local pidfile=$1 pid=$2 meta value previous item
+    meta="${pidfile%/.pid}/.meta"
+    if [[ -f "$meta" ]]; then
+        value=$(sed -n 's/^worktree=//p' "$meta" | head -n 1)
+        if [[ -n "$value" ]]; then
+            readlink -f -- "$value" 2>/dev/null || printf '%s' "$value"
+            return 0
+        fi
+    fi
+    [[ -r "/proc/$pid/cmdline" ]] || return 0
+    previous=""
+    while IFS= read -r -d '' item; do
+        if [[ "$previous" == "-C" || "$previous" == "--cd" ]]; then
+            readlink -f -- "$item" 2>/dev/null || printf '%s' "$item"
+            return 0
+        fi
+        previous=$item
+    done < "/proc/$pid/cmdline"
+    return 0
+}
+
 load_active_worktrees() {
-    local path _branch pidfile pid cwd owner
+    local path _branch pidfile pid cwd owner declared
     ACTIVE_WORKTREES=()
     ACTIVE_UNKNOWN=0
     while IFS=$'\t' read -r path _branch; do
@@ -161,6 +185,12 @@ load_active_worktrees() {
             pid=$(tr -d '[:space:]' <"$pidfile")
             [[ "$pid" =~ ^[0-9]+$ ]] || continue
             kill -0 "$pid" 2>/dev/null || continue
+            # job이 실제로 고치는 곳은 실행 디렉터리가 아니라 codex에 준 worktree다.
+            # codex는 launch 디렉터리에서 돌기 때문에 cwd만 보면 작업 worktree를 보호하지 못한다.
+            declared=$(job_declared_worktree "$pidfile" "$pid")
+            if [[ -n "$declared" ]] && owner=$(path_owner_worktree "$declared"); then
+                ACTIVE_WORKTREES["$owner"]=1
+            fi
             if ! cwd=$(readlink -f -- "/proc/$pid/cwd" 2>/dev/null); then
                 ACTIVE_UNKNOWN=1
                 printf '경고: 실행 중 PID %s의 작업 경로를 읽지 못해 모든 삭제를 보호합니다: %s\n' \

@@ -7,13 +7,16 @@ SOURCE_ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 SWEEP_SH="$SOURCE_ROOT/scripts/dev/worktree-sweep.sh"
 PASS=0
 RUN_PID=""
+DECLARED_PID=""
 export TEST_ROOT SWEEP_SH
 
 cleanup() {
-    if [[ -n "$RUN_PID" ]]; then
-        kill "$RUN_PID" 2>/dev/null || true
-        wait "$RUN_PID" 2>/dev/null || true
-    fi
+    local held
+    for held in "$RUN_PID" "$DECLARED_PID"; do
+        [[ -n "$held" ]] || continue
+        kill "$held" 2>/dev/null || true
+        wait "$held" 2>/dev/null || true
+    done
     [[ "$TEST_ROOT" == /tmp/zlink-worktree-sweep-test.* ]] && rm -rf -- "$TEST_ROOT"
 }
 trap cleanup EXIT
@@ -95,6 +98,18 @@ make_repository() {
     done
     printf '%s\n' "$RUN_PID" >"$TEST_ROOT/repo/.artifacts/codex/running/.pid"
 
+    # codex는 launch 디렉터리에서 돌고 작업 worktree는 -C 인자와 .meta에만 있다.
+    # 실행 디렉터리가 기본 worktree인 job이 다른 worktree를 고치는 상황을 만든다.
+    git -C "$TEST_ROOT/repo" worktree add -b declared "$TEST_ROOT/wt-declared" origin/main >/dev/null
+    mkdir -p "$TEST_ROOT/repo/.artifacts/codex/declared"
+    (cd "$TEST_ROOT/repo" && printf 'ready\n' >"$TEST_ROOT/declared.ready" && exec sleep 300) &
+    DECLARED_PID=$!
+    while [[ ! -f "$TEST_ROOT/declared.ready" ]]; do
+        sleep 0.05
+    done
+    printf '%s\n' "$DECLARED_PID" >"$TEST_ROOT/repo/.artifacts/codex/declared/.pid"
+    printf 'worktree=%s\n' "$TEST_ROOT/wt-declared" >"$TEST_ROOT/repo/.artifacts/codex/declared/.meta"
+
     git -C "$TEST_ROOT/repo" worktree add -b untracked "$TEST_ROOT/wt-untracked" origin/main >/dev/null
     printf 'keep me\n' >"$TEST_ROOT/wt-untracked/untracked.txt"
 
@@ -134,6 +149,7 @@ assert_success '--prune 판정 실패' bash -c "cd '$TEST_ROOT/repo' && $(declar
 [[ -d "$TEST_ROOT/wt-dirty" ]] || fail 'dirty worktree가 제거됨'
 [[ -d "$TEST_ROOT/wt-unpushed" ]] || fail '미push worktree가 제거됨'
 [[ -d "$TEST_ROOT/wt-running" ]] || fail '실행 중 worktree가 제거됨'
+[[ -d "$TEST_ROOT/wt-declared" ]] || fail '실행 중 job이 .meta로 선언한 worktree가 제거됨'
 assert_contains "$TEST_ROOT/last.out" "건너뜀: $TEST_ROOT/wt-dirty .*tracked 변경 1개"
 assert_contains "$TEST_ROOT/last.out" "건너뜀: $TEST_ROOT/wt-unpushed .*push되지 않은 커밋 1개"
 assert_contains "$TEST_ROOT/last.out" "건너뜀: $TEST_ROOT/wt-running .*실행 중 job"
