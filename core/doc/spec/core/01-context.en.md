@@ -94,31 +94,27 @@ sequenceDiagram
 
 ## 4. Options
 
-Set and query `int` options with `zlink_ctx_set` and `zlink_ctx_get`. Use
-`zlink_ctx_set_data` and `zlink_ctx_get_data` for the Auto HWM byte options.
+The table defines each option value, type, access API, default, and application point.
+Set/get means `zlink_ctx_set`/`zlink_ctx_get`; set_data/get_data means the corresponding data APIs.
 
-```c
-typedef enum zlink_ctx_option_t
-{
-    ZLINK_IO_THREADS              = 1,  // Number of I/O threads in the context
-    ZLINK_MAX_SOCKETS             = 2,  // Maximum number of sockets allowed
-    ZLINK_SOCKET_LIMIT            = 3,  // Hard upper limit on socket count (read-only)
-    ZLINK_THREAD_PRIORITY         = 22,  // I/O thread scheduling priority
-    ZLINK_THREAD_SCHED_POLICY     = 4,  // I/O thread scheduling policy
-    ZLINK_MSG_T_SIZE              = 6,  // Size of zlink_msg_t (bytes, read-only)
-    ZLINK_THREAD_AFFINITY_CPU_ADD      = 7,  // Add a CPU to the I/O thread affinity set
-    ZLINK_THREAD_AFFINITY_CPU_REMOVE   = 8,  // Remove a CPU from the I/O thread affinity set
-    ZLINK_THREAD_NAME_PREFIX      = 9,  // Prefix for I/O thread names
-    ZLINK_CTX_OPT_BLOCKY          = 10,  // If 0, default LINGER=0 for subsequently created sockets (int, default 1; see section 3)
-    ZLINK_CTX_OPT_AUTO_HWM_ENABLE = 12,  // Whether automatic HWM is enabled (0=disabled, 1=enabled)
-    ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS = 14,  // Automatic HWM recalculation debounce (ms, >= 0)
-    ZLINK_CTX_OPT_AUTO_HWM_PROFILE = 17,  // Automatic HWM profile. Unknown values fail with EINVAL
-    /* Value 18 is intentionally unassigned. */
-    ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES = 19,  // Explicit memory limit (uint64_t bytes, set/get_data). 0=unset
-    ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES = 20,  // Runtime memory hint (uint64_t bytes, set/get_data). 0=no detection
-    ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES = 21  // Core budget used as-is without a profile (uint64_t bytes, set/get_data). 0=unset
-} zlink_ctx_option_t;
-```
+| Option (`ZLINK_` prefix) | Value·Type·Access | Initial or read-only value | Application point |
+|---|---|---|---|
+| `IO_THREADS` | `1`; `int`, set/get | `4` | Queries reflect the setting immediately; the pool size is fixed when the runtime first starts |
+| `MAX_SOCKETS` | `2`; `int`, set/get | `4095`, reduced to the poller limit | Queries reflect the setting immediately; slot capacity is fixed when the runtime first starts |
+| `SOCKET_LIMIT` | `3`; `int`, get-only | `65535`, reduced to the poller limit | Always returns the current platform hard limit |
+| `THREAD_PRIORITY` | `22`; `int`, set/get | `-1` | Applies to I/O threads started after the setting |
+| `THREAD_SCHED_POLICY` | `4`; `int`, set/get | `-1` | Applies to I/O threads started after the setting |
+| `MSG_T_SIZE` | `6`; `int`, get-only | `64`, equal to `sizeof(zlink_msg_t)` | Returns the compile-time ABI size |
+| `THREAD_AFFINITY_CPU_ADD` | `7`; `int`, set-only | Empty CPU set | Adds the CPU immediately and applies the set to I/O threads started afterward |
+| `THREAD_AFFINITY_CPU_REMOVE` | `8`; `int`, set-only | Empty CPU set | Removes the CPU immediately and applies the set to I/O threads started afterward |
+| `THREAD_NAME_PREFIX` | `9`; Byte string, set_data/get_data | Length `0` | Applies to I/O threads started after the setting |
+| `CTX_OPT_BLOCKY` | `10`; `int`, set/get | `1` | Applies to the default `LINGER` of sockets created afterward |
+| `CTX_OPT_AUTO_HWM_ENABLE` | `12`; `int`, set/get | `1` | Stores the value and schedules recalculation, including existing sockets |
+| `CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS` | `14`; `int`, set/get | `3000` ms | Stores the value and schedules recalculation with that debounce |
+| `CTX_OPT_AUTO_HWM_PROFILE` | `17`; `int`, set/get | `BALANCED` | Stores the value and schedules recalculation, including existing sockets |
+| `CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES` | `19`; `uint64_t`, set_data/get_data | `0` | Stores the value and schedules recalculation, including existing sockets |
+| `CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES` | `20`; `uint64_t`, set_data/get_data | `0` | Stores the value and schedules recalculation, including existing sockets |
+| `CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES` | `21`; `uint64_t`, set_data/get_data | `0` | Stores the value and schedules recalculation, including existing sockets |
 
 ```c
 typedef enum zlink_auto_hwm_profile_t
