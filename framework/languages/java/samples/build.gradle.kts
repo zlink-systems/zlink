@@ -105,8 +105,8 @@ tasks.register("verifyPackageMode") {
     group = LifecycleBasePlugin.VERIFICATION_GROUP
     description = "Verifies that samples resolve published packages without composite source builds."
     doLast {
-        check(providers.gradleProperty("zlink.samples.packageMode").orNull == "true") {
-            "Run with -Pzlink.samples.packageMode=true."
+        check(gradle.extensions.extraProperties["zlink.samples.effectivePackageMode"] == true) {
+            "Run outside the framework repository or use -Pzlink.samples.packageMode=true."
         }
         check(gradle.includedBuilds.isEmpty()) {
             "Package mode must not include framework or bindings source builds: " +

@@ -207,7 +207,7 @@ jobs:
       # therefore builds what the local gate validated; tests run in the gate.
       - name: Build
         working-directory: framework/languages/java
-        run: ./gradlew --no-daemon --max-workers=1 assemble
+        run: ./gradlew --no-daemon --max-workers=1 assemble -Pzlink.includeSamples=false
 
       - name: Sign and upload a Maven Central bundle
         if: needs.resolve.outputs.publish_registry == 'true'

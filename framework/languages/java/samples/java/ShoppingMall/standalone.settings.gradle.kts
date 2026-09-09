@@ -5,15 +5,9 @@ pluginManagement {
     }
 }
 
-apply(from = generateSequence(settingsDir) { it.parentFile }
-    .first { it.resolve("gradle/zlink-local-packages.settings.gradle.kts").isFile }
-    .resolve("gradle/zlink-local-packages.settings.gradle.kts"))
+apply(from = settingsDir.resolve("../../gradle/zlink-sample-dependencies.settings.gradle.kts"))
 
 rootProject.name = "zlink-framework-java-shoppingmall-sample"
-
-includeBuild("../../..") {
-    name = "zlink-framework-java-build"
-}
 
 include(
     ":Client",

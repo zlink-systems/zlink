@@ -10,26 +10,9 @@ pluginManagement {
     }
 }
 
-apply(from = generateSequence(settingsDir) { it.parentFile }
-    .first { it.resolve("gradle/zlink-local-packages.settings.gradle.kts").isFile }
-    .resolve("gradle/zlink-local-packages.settings.gradle.kts"))
-
 rootProject.name = "zlink-framework-java-samples"
 
-val packageMode = providers.gradleProperty("zlink.samples.packageMode")
-    .map(String::toBoolean)
-    .orElse(false)
-    .get()
-
-if (packageMode && !providers.environmentVariable("ZLINK_JAVA_BINDINGS_SOURCE").orNull.isNullOrBlank()) {
-    error("Package mode cannot use ZLINK_JAVA_BINDINGS_SOURCE.")
-}
-
-if (gradle.parent == null && !packageMode) {
-    includeBuild("..") {
-        name = "zlink-framework-java-build"
-    }
-}
+apply(from = settingsDir.resolve("gradle/zlink-sample-dependencies.settings.gradle.kts"))
 
 include(
     ":java:Bingo:Client",
