@@ -83,6 +83,7 @@ plugins:
           # 실제로 그렇게 갈라져서 영어 전환이 반쪽만 되고 있었다.
           nav_translations:
             # 최상위 구획. Framework · Bindings · Core가 같은 이름을 공유한다.
+            Install: 설치
             Guide: 가이드
             Reference: 레퍼런스
             Spec: 스펙
@@ -208,6 +209,7 @@ exclude_docs: |
   bindings/plan/
 
 nav:
+  - Install: install.md
   - Framework:
       - Guide:
           - .NET:

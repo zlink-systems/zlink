@@ -9,6 +9,7 @@
 [![License: MPL-2.0 / FSL-1.1 / Apache-2.0](https://img.shields.io/badge/License-multiple-blue.svg)](./doc/license/README.ko.md)
 
 [공식 사이트](https://zlink.systems/ko/) ·
+[설치](https://zlink.systems/ko/install/) ·
 [Framework 가이드](https://zlink.systems/ko/) ·
 [Core 가이드](https://zlink.systems/ko/guide/01-overview/) ·
 [Bindings 가이드](https://zlink.systems/ko/bindings/guide/) ·
@@ -135,100 +136,28 @@ package에 포함하며, 다른 언어도 각 가이드가 설치와 native runt
 
 - Core API를 언어별 package로 사용하려면 [Bindings 가이드](https://zlink.systems/ko/bindings/guide/)에서
   언어를 고릅니다. 설치 절차와 5분 예제가 언어별로 있습니다.
-- ZLink Framework를 사용하려면 아래 "Framework 패키지 설치"에서 언어를 고릅니다. 언어별
-  전체 가이드는 [공식 사이트](https://zlink.systems/ko/)에 있습니다.
+- ZLink Framework를 사용하려면 [설치](https://zlink.systems/ko/install/) 페이지에서 언어를
+  고릅니다. 언어별 전체 가이드는 [공식 사이트](https://zlink.systems/ko/)에 있습니다.
 - 설치 뒤에는 해당 언어의 sample을 실행해 package와 native runtime이 실제
   client/server process에서 함께 동작하는지 확인합니다.
 
 ### Framework 패키지 설치
 
-Framework는 각 언어의 패키지 저장소에 게시된 패키지로 설치합니다. Framework 패키지가
-의존하는 binding 패키지를 함께 끌어오고, binding 패키지에는 Core의 native 런타임이 들어
-있으므로 Core를 직접 빌드할 필요가 없습니다. 현재 게시 버전은 framework 0.11, binding
-0.17.6입니다. 언어별 항목을 펼치면 설치 명령과 host 등록 방법이 나오고, 각 항목의 링크는
-그 언어의 "설치와 첫 동작" 가이드입니다.
-
-<details>
-<summary><b>C# / .NET</b> — nuget.org, ASP.NET Core 통합</summary>
+Framework는 각 언어의 패키지 저장소에 게시된 패키지로 설치합니다. binding 패키지와 Core native
+런타임을 함께 끌어오므로 Core를 빌드할 필요가 없습니다.
 
 ```bash
-dotnet add package Zlink                       # Core 메시징 엔진(.NET binding)
-dotnet add package Zlink.Framework             # 계약과 runtime
-dotnet add package Zlink.Framework.AspNetCore  # DI·hosted service 등록
+dotnet add package Zlink.Framework.AspNetCore                 # C# / .NET (nuget.org)
+npm install @zlink-systems/framework @zlink-systems/nestjs    # Node.js / TypeScript (npm)
 ```
-
-`builder.Services.AddZLinkFramework(...)`가 framework host를 ASP.NET Core의 DI와 lifecycle에 등록합니다.
-[설치와 첫 동작](https://zlink.systems/ko/dotnet/guide/server/02-getting-started/) ·
-[Stream Connector](https://zlink.systems/ko/dotnet/guide/stream-connector/) ·
-[HTTP Client](https://zlink.systems/ko/dotnet/guide/http-client/)
-
-</details>
-
-<details>
-<summary><b>Java</b> — Maven Central, Spring Boot 통합</summary>
 
 ```kotlin
-dependencies {
-    implementation("systems.zlink:zlink-framework-core")                // 계약과 runtime
-    implementation("systems.zlink:zlink-framework-spring-boot-starter") // DI·수명주기 등록
-}
+implementation("systems.zlink:zlink-framework-spring-boot-starter")   // Java · Kotlin (Maven Central)
 ```
 
-Spring Boot auto-configuration이 framework host를 Bean으로 등록하고 애플리케이션 lifecycle에 연결합니다.
-[설치와 첫 동작](https://zlink.systems/ko/java/guide/server/02-getting-started/) ·
-[Stream Connector](https://zlink.systems/ko/java/guide/stream-connector/) ·
-[HTTP Client](https://zlink.systems/ko/java/guide/http-client/)
-
-</details>
-
-<details>
-<summary><b>Kotlin</b> — Maven Central, Spring Boot 통합 + coroutine idiom</summary>
-
-```kotlin
-dependencies {
-    implementation("systems.zlink:zlink-framework-core")
-    implementation("systems.zlink:zlink-framework-spring-boot-starter")
-    implementation("systems.zlink:zlink-framework-kotlin")              // coroutine idiom
-}
-```
-
-[설치와 첫 동작](https://zlink.systems/ko/kotlin/guide/server/02-getting-started/) ·
-[Stream Connector](https://zlink.systems/ko/kotlin/guide/stream-connector/) ·
-[HTTP Client](https://zlink.systems/ko/kotlin/guide/http-client/)
-
-</details>
-
-<details>
-<summary><b>Node.js / TypeScript</b> — npm, NestJS 통합</summary>
-
-```bash
-npm install @zlink-systems/framework   # 계약과 runtime (binding @zlink-systems/zlink 포함)
-npm install @zlink-systems/nestjs      # DI·모듈 등록
-```
-
-NestJS를 쓰지 않는 서버(Express 등)는 framework 패키지만 설치하고 host를 코드에서 직접 시작합니다.
-[설치와 첫 동작](https://zlink.systems/ko/node/guide/server/02-getting-started/) ·
-[Stream Connector](https://zlink.systems/ko/node/guide/stream-connector/) ·
-[HTTP Client](https://zlink.systems/ko/node/guide/http-client/)
-
-</details>
-
-<details>
-<summary><b>C++</b> — vcpkg/Conan + CMake, framework host 내장</summary>
-
-```cmake
-find_package(zlink CONFIG REQUIRED)            # Core (vcpkg `zlink` / Conan `zlink`)
-find_package(zlink_framework CONFIG REQUIRED)  # Framework (vcpkg overlay port `zlink-framework`)
-target_link_libraries(app PRIVATE zlink::framework)
-```
-
-Core는 vcpkg 또는 Conan 레시피로 설치합니다. Framework는 GitHub Release의 source archive를
-CMake로 설치하거나 저장소의 vcpkg overlay port `zlink-framework`로 설치합니다.
-[설치와 첫 동작](https://zlink.systems/ko/cpp/guide/server/02-getting-started/) ·
-[Stream Connector](https://zlink.systems/ko/cpp/guide/stream-connector/) ·
-[HTTP Client](https://zlink.systems/ko/cpp/guide/http-client/)
-
-</details>
+C++는 vcpkg 또는 Conan으로 Core를 설치하고 framework는 vcpkg overlay port `zlink-framework`로
+설치합니다. host 등록 코드, C++ CMake preset, 언어별 "설치와 첫 동작" 링크는
+[설치](https://zlink.systems/ko/install/) 페이지에 있습니다.
 
 ### 저장소에서 Core 빌드
 
@@ -282,8 +211,8 @@ scripts/local-package/build-wsl.sh dotnet java node
 [local package 가이드](./scripts/local-package/README.ko.md)를 참고하세요. 이 runner는
 Core와 Bindings package를 만들며 Framework 빌드 완료를 의미하지 않습니다.
 
-Framework package 설치와 첫 실행은 위 "Framework 패키지 설치"와 언어별
-[설치와 첫 동작](https://zlink.systems/ko/) 가이드가 안내합니다. Framework source build와 test는 matching Binding package를 준비한 뒤
+Framework package 설치와 첫 실행은 [설치](https://zlink.systems/ko/install/) 페이지와 언어별
+"설치와 첫 동작" 가이드가 안내합니다. Framework source build와 test는 matching Binding package를 준비한 뒤
 각 런타임의 source root에서 독립적으로 수행합니다:
 [C++](./framework/languages/cpp/),
 [.NET](./framework/languages/dotnet/),
@@ -337,7 +266,7 @@ Framework sample은 단순 API 호출뿐 아니라 여러 역할의 server와 cl
 | Core를 소스에서 빌드하고 테스트 | [Core 빌드 가이드](./doc/building/build-guide.ko.md) |
 | 현재 source로 Core와 Bindings local package 생성 | [Local package 가이드](./scripts/local-package/README.ko.md) |
 | Binding package 설치와 사용 | [Bindings 가이드](https://zlink.systems/ko/bindings/guide/) |
-| Framework package 설치와 첫 실행 | 위 "Framework 패키지 설치"와 [설치와 첫 동작](https://zlink.systems/ko/dotnet/guide/server/02-getting-started/) (언어 전환 줄로 다른 언어) |
+| Framework package 설치와 첫 실행 | [설치](https://zlink.systems/ko/install/), 그 다음 언어별 [설치와 첫 동작](https://zlink.systems/ko/dotnet/guide/server/02-getting-started/) (언어 전환 줄로 다른 언어) |
 | Framework runtime source/build 진입점 | [C++](./framework/languages/cpp/) · [.NET](./framework/languages/dotnet/) · [JVM](./framework/languages/java/) · [Node.js](./framework/languages/node/) |
 | 릴리스 package 구성 | [패키징 가이드](./doc/building/packaging.ko.md) |
 | 빌드 스크립트 위치와 배포 경로 파악 | [빌드·배포 파이프라인](./doc/building/release-pipeline.ko.md) |
