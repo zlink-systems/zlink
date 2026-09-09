@@ -81,6 +81,11 @@ class message_t
     bool is_empty () const noexcept;
     int ref_count () const noexcept;
 
+    /// @brief Returns a new message sharing this message's native payload.
+    message_t copy () const;
+    /// @brief Moves this message's native payload into @p dest_, leaving this empty.
+    void move (message_t &dest_);
+
     std::vector<uint8_t> to_bytes () const;
     size_t copy_to (std::span<std::byte> destination_) const;
     size_t copy_to (std::span<uint8_t> destination_) const;

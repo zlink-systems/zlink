@@ -87,6 +87,35 @@ void test_copy_and_move_preserve_payload ()
     assert (moved.ref_count () == 2);
 }
 
+void test_explicit_copy_shares_and_move_transfers_payload ()
+{
+    const std::string payload (1024, 's');
+    zlink::message_t original = zlink::message_t::from (payload);
+    assert (original.ref_count () == 1);
+
+    zlink::message_t shared = original.copy ();
+    assert (original.valid ());
+    assert (shared.valid ());
+    assert (original.to_string () == payload);
+    assert (shared.to_string () == payload);
+    assert (original.ref_count () == 2);
+    assert (shared.ref_count () == 2);
+
+    original.close ();
+    assert (shared.valid ());
+    assert (shared.to_string () == payload);
+    assert (shared.ref_count () == 1);
+
+    zlink::message_t destination = zlink::message_t::from ("replaced");
+    shared.move (destination);
+    assert (shared.valid ());
+    assert (shared.is_empty ());
+    assert (shared.ref_count () == 1);
+    assert (destination.valid ());
+    assert (destination.to_string () == payload);
+    assert (destination.ref_count () == 1);
+}
+
 void test_large_owned_payload_survives_reuse_and_copy ()
 {
     constexpr size_t payload_size = 262144;
@@ -173,6 +202,7 @@ int main ()
     test_allocate_exposes_writable_owned_payload ();
     test_copy_helpers_copy_payload ();
     test_copy_and_move_preserve_payload ();
+    test_explicit_copy_shares_and_move_transfers_payload ();
     test_large_owned_payload_survives_reuse_and_copy ();
     test_external_message_uses_caller_owned_storage_until_close ();
     test_diagnostic_surface_uses_canonical_names ();
