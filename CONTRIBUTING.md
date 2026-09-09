@@ -45,10 +45,11 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 | `bindings/c/perf/` | C benchmarks and the release comparison gate | [`bindings/c/perf/README.md`](bindings/c/perf/README.md) |
 | `framework/` | Per-language Framework (actors, DI, codecs) | [`framework/AGENTS.md`](framework/AGENTS.md) |
 | `doc/` | User docs, design principles, building, plans | [`doc/README.md`](doc/README.md) |
-| `doc/plan/` | Campaign plans and decision logs (not public contract) | §7 |
+| `doc/plan/` | Campaign plans and decision logs (not public contract) | §8 |
+| `doc/principal/` | Design principles (`dev/`), comment principles, technical-writing principles and guides (`documentation/`) | §3, §4 |
 | `scripts/local-package/` | Local Core/binding packaging and version sync (`sync-version.py`) | `scripts/local-package/README.ko.md` |
 | `scripts/gate/` | Machine-local integrated gates (bindings, framework, cross-language) | [`scripts/gate/README.md`](scripts/gate/README.md) |
-| `scripts/perf/` | Performance measurement ticket queue (`perf-ticket.sh`, `perf-queue-runner.sh`) | §6 |
+| `scripts/perf/` | Performance measurement ticket queue (`perf-ticket.sh`, `perf-queue-runner.sh`) | §7 |
 | `.github/workflows/`, `.github/actions/`, `scripts/ci/` | Build, release and CI workflows with their helpers | [`doc/building/release-pipeline.md`](doc/building/release-pipeline.md) |
 | `doc/building/` | Build guide, packaging, release pipeline, accounts, release notes and preparation records | [`doc/building/release-pipeline.md`](doc/building/release-pipeline.md) |
 
@@ -68,7 +69,22 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   a contract is split out as a design change and reported before implementation
   (`AGENTS.md` §3).
 
-## 4. Test rules
+## 4. Documentation rules
+
+- Every technical document follows the [technical writing principles](doc/principal/documentation/documentation-principles.ko.md)
+  (reader and scope, narration and verification, prose style, present-state description, post-writing
+  review). Pick the per-kind procedure from [`doc/principal/documentation/README.ko.md`](doc/principal/documentation/README.ko.md):
+  [spec](doc/principal/documentation/spec-writing-guide.ko.md), [user guide](doc/principal/documentation/guide-writing-guide.ko.md),
+  [reference](doc/principal/documentation/reference-writing-guide.ko.md), [E2E scenario](doc/principal/documentation/e2e-scenario-writing-guide.ko.md),
+  [sample](doc/principal/documentation/sample-writing-guide.ko.md), [diagram](doc/principal/documentation/diagram-authoring-guide.ko.md).
+  Read the principles first, then the guide for the kind you are writing, and finish with that guide's
+  completion checklist. (These guides are currently Korean-only.)
+- Placement, ownership and linking rules (one fact owned by one document, `doc/plan/**` never linked
+  from public documents, Korean/English pairs kept together) are owned by [`doc/AGENTS.md`](doc/AGENTS.md).
+- Specs (`core/doc/spec/**`, `bindings/doc/spec/**`, `framework/doc/**/spec/**`) and plan/policy
+  documents are edited by the supervisor only; agent jobs report needed changes as BLOCKERS (§10).
+
+## 5. Test rules
 
 - Categories and labels (`unittest` / `integration` / `e2e` / `regression`,
   `parallel-safe` / `serial`) are owned by [`core/tests/README.md`](core/tests/README.md).
@@ -87,7 +103,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   the parallel suite, judged by one standalone rerun) and C++ binding test exit 86/134 right
   after a relink (one rerun).
 
-## 5. Gate before every commit
+## 6. Gate before every commit
 
 Every Core commit turns the following green and records the result in the commit message.
 
@@ -107,7 +123,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   is found. Without it, the report says "gate not run" and it does not count as green. Only
   a supervisor updates `core/tests/perf/hotpath_reference.json` (`--update-reference`), and an
   intended cost increase is recorded in the decision log with its reason.
-- The release comparison of §6 runs during release preparation (the per-change obligation is
+- The release comparison of §7 runs during release preparation (the per-change obligation is
   `hotpath_gate` alone — [`10-hot-path.en.md` §5](core/doc/spec/core/systems/10-hot-path.en.md)).
 - Run the full binding/framework scope with `scripts/gate/{bindings-gate,framework-gate,cross-language-e2e}.sh <tag>`
   and read `zlink-work/gates/<tag>/results.txt`. One gate at a time, started below load average 10
@@ -124,7 +140,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - Test code and shared helpers never expose private Core headers or symbols, and no test executable LTO-links the production Core archive.
 - When splitting a test, record where each original assertion moved, which public observation replaced it, and which duplicates were removed, together with its CTest lane; production LTO settings and the hotpath reference stay untouched.
 
-## 6. Performance judgement
+## 7. Performance judgement
 
 - The criteria are owned by the spec [`10-hot-path.en.md` §5](core/doc/spec/core/systems/10-hot-path.en.md):
   the 5% per cell (pattern, transport, size, metric) is measurement tolerance; a
@@ -140,7 +156,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   interval, rounding coarser than the gate), fix the bench, not the gate, and copy the same
   sources into the baseline worktree.
 
-## 7. Plans and decision logs
+## 8. Plans and decision logs
 
 - A campaign lives in `doc/plan/<campaign>.ko.md` (plan) and `doc/plan/<campaign>-worklog/`
   (briefs, summaries, drivers, `decisions.ko.md`). `doc/plan/**` is temporary and is never
@@ -151,7 +167,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - Agent job briefs (`briefs/*.prompt`) and summaries (`*-summary.md`) are kept verbatim. A
   summary lists changed files, evidence, gate results and BLOCKERS.
 
-## 8. Branches, commits, PRs, releases
+## 9. Branches, commits, PRs, releases
 
 - Branches, commits, pushes and merges happen only on an explicit request (`AGENTS.md` §1);
   otherwise work on `main`.
@@ -166,7 +182,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
      Never hunt for pins by hand.
   3. Add a section to `core/CHANGELOG.md` (the Core release notes are extracted from it).
   4. Check for missing pins with `scripts/local-package/build-wsl.sh --verify-versions`.
-- Release tag preconditions: §5 gate green, `hotpath_gate` PASS, §6 release comparison PASS
+- Release tag preconditions: §6 gate green, `hotpath_gate` PASS, §7 release comparison PASS
   (or a user decision recorded in the decision log), package verification with
   `scripts/local-package/core/verify-package.sh`.
 - Every publish happens **in GitHub Actions**. Never run `npm publish`, `dotnet nuget push` or a
@@ -182,7 +198,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - After a release, move the baseline worktree to the new tag, and record workflow or procedure fixes
   made during release preparation under `doc/building/release-prep/<date>-<topic>.ko.md`.
 
-## 9. Agent operating conventions
+## 10. Agent operating conventions
 
 - Rule text: [`AGENTS.md`](AGENTS.md) (global) and per-directory `AGENTS.md`. Documentation
   rules: [`doc/AGENTS.md`](doc/AGENTS.md).

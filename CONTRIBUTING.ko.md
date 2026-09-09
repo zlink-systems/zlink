@@ -45,10 +45,11 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 | `bindings/c/perf/` | C 성능 벤치와 release 비교 gate | [`bindings/c/perf/README.md`](bindings/c/perf/README.md) |
 | `framework/` | 언어별 Framework(actor, DI, codec) | [`framework/AGENTS.md`](framework/AGENTS.md) |
 | `doc/` | 사용자 문서, 설계 원칙, 빌드, 계획 | [`doc/README.ko.md`](doc/README.ko.md) |
-| `doc/plan/` | 캠페인 계획과 판정 기록(공개 계약 아님) | §7 |
+| `doc/plan/` | 캠페인 계획과 판정 기록(공개 계약 아님) | §8 |
+| `doc/principal/` | 설계 원칙(`dev/`), 주석 원칙, 기술문서 작성 원칙·가이드(`documentation/`) | §3, §4 |
 | `scripts/local-package/` | Core·바인딩 로컬 패키징, 버전 동기화(`sync-version.py`) | `scripts/local-package/README.ko.md` |
 | `scripts/gate/` | 머신 로컬 통합 gate(bindings·framework·cross-language) | [`scripts/gate/README.md`](scripts/gate/README.md) |
-| `scripts/perf/` | 성능 측정 티켓 큐(`perf-ticket.sh`, `perf-queue-runner.sh`) | §6 |
+| `scripts/perf/` | 성능 측정 티켓 큐(`perf-ticket.sh`, `perf-queue-runner.sh`) | §7 |
 | `.github/workflows/`, `.github/actions/`, `scripts/ci/` | 빌드·배포·CI 워크플로우와 보조 도구 | [`doc/building/release-pipeline.ko.md`](doc/building/release-pipeline.ko.md) |
 | `doc/building/` | 빌드 가이드, 패키징, 배포 파이프라인, 계정, 릴리스 노트·준비 기록 | [`doc/building/release-pipeline.ko.md`](doc/building/release-pipeline.ko.md) |
 
@@ -67,7 +68,21 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 공개 API·ABI·enum 변경은 스펙 문서 변경과 함께 별도 커밋으로 한다. 계약 없는 API는 구현 전에
   설계 변경으로 분리해 보고한다(`AGENTS.md` §3).
 
-## 4. 테스트 규칙
+## 4. 문서 규칙
+
+- 모든 기술문서는 [기술문서 작성 원칙](doc/principal/documentation/documentation-principles.ko.md)
+  (독자와 범위, 서술과 검증, 한글 산문 문체, 현재 상태 기술, 작성 후 리뷰)을 따른다. 문서 종류별
+  절차는 [`doc/principal/documentation/README.ko.md`](doc/principal/documentation/README.ko.md)에서
+  고른다: [스펙](doc/principal/documentation/spec-writing-guide.ko.md), [사용자 가이드](doc/principal/documentation/guide-writing-guide.ko.md),
+  [레퍼런스](doc/principal/documentation/reference-writing-guide.ko.md), [E2E 시나리오](doc/principal/documentation/e2e-scenario-writing-guide.ko.md),
+  [샘플](doc/principal/documentation/sample-writing-guide.ko.md), [다이어그램](doc/principal/documentation/diagram-authoring-guide.ko.md).
+  원칙을 먼저 읽고, 쓰려는 종류의 가이드를 읽은 뒤 그 가이드의 완료 점검표로 마무리한다.
+- 문서 배치·소유·링크 규칙(한 사실은 한 문서만 소유, `doc/plan/**`은 공개 문서에서 링크하지 않음,
+  한/영 쌍 유지)은 [`doc/AGENTS.md`](doc/AGENTS.md)가 소유한다.
+- 스펙(`core/doc/spec/**`, `bindings/doc/spec/**`, `framework/doc/**/spec/**`)과 계획·정책 문서는
+  감독자만 수정한다. 에이전트 job은 변경이 필요하면 BLOCKERS로 보고한다(§10).
+
+## 5. 테스트 규칙
 
 - 분류와 라벨(`unittest` / `integration` / `e2e` / `regression`, `parallel-safe` / `serial`)은
   [`core/tests/README.md`](core/tests/README.md)가 소유한다.
@@ -83,7 +98,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 알려진 load flake: `test_single_lane_flow_snapshot_accounting`(병렬 suite에서 드물게 즉시 실패 →
   단독 재실행 1회로 판정), C++ 바인딩 테스트의 exit 86/134(재링크 직후 → 1회 재실행).
 
-## 5. 커밋 전 gate
+## 6. 커밋 전 gate
 
 모든 Core 커밋은 아래를 green으로 만든 뒤 커밋 메시지에 결과를 적는다.
 
@@ -102,7 +117,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - `hotpath_gate`(callgrind, 명령어 수/msg ±5%)는 valgrind가 있을 때만 등록된다. 없으면 "gate
   미실행"을 보고에 남기고 green으로 세지 않는다. 기준값 `core/tests/perf/hotpath_reference.json`은
   감독자만 `--update-reference`로 갱신하며, 의도한 비용 증가는 근거와 함께 판정 기록에 남긴다.
-- §6의 release 비교는 release 준비 단계에서 실행한다(변경 단위 의무는 `hotpath_gate` 하나 —
+- §7의 release 비교는 release 준비 단계에서 실행한다(변경 단위 의무는 `hotpath_gate` 하나 —
   [`10-hot-path.ko.md` §5](core/doc/spec/core/systems/10-hot-path.ko.md)).
 - 바인딩·framework 전체 범위는 `scripts/gate/{bindings-gate,framework-gate,cross-language-e2e}.sh <tag>`로
   돌리고 결과는 `zlink-work/gates/<tag>/results.txt`에서 본다. gate는 한 번에 하나만, load average
@@ -118,7 +133,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 테스트 코드와 공용 helper에 Core의 private header·symbol을 노출하거나, 테스트 실행 파일마다 제품 Core archive를 LTO 링크하지 않는다.
 - 테스트를 분리할 때는 원본 assertion의 이동·공개 관찰 대체·중복 제거 근거와 CTest lane을 함께 대조하며, 제품 LTO 설정과 hotpath 기준은 유지한다.
 
-## 6. 성능 판정
+## 7. 성능 판정
 
 - 판정 기준은 스펙 [`10-hot-path.ko.md` §5](core/doc/spec/core/systems/10-hot-path.ko.md)가
   소유한다: cell(pattern·transport·size·metric) 5%는 측정 오차 허용치, (pattern, transport)별
@@ -135,7 +150,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 벤치가 잘못 재고 있으면(포화 구간의 queue 깊이를 latency로 보고, 반올림이 gate보다 큰 경우)
   gate가 아니라 벤치를 고치고 baseline worktree에 같은 소스를 복사한다.
 
-## 7. 계획과 판정 기록
+## 8. 계획과 판정 기록
 
 - 캠페인은 `doc/plan/<campaign>.ko.md`(계획)와 `doc/plan/<campaign>-worklog/`(브리프, 요약,
   드라이버, `decisions.ko.md`)로 남긴다. `doc/plan/**`은 임시 문서이며 공개 문서에서 링크하지
@@ -145,7 +160,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 에이전트 job의 브리프(`briefs/*.prompt`)와 요약(`*-summary.md`)은 그대로 보관한다. 요약에는
   변경 파일, 근거, gate 결과, BLOCKERS를 적는다.
 
-## 8. 브랜치·커밋·PR·릴리스
+## 9. 브랜치·커밋·PR·릴리스
 
 - 브랜치·commit·push·merge는 사용자가 명시적으로 요청할 때만 한다(`AGENTS.md` §1). 요청이
   없으면 `main`에서 작업한다.
@@ -158,7 +173,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
      debian changelog 첫 stanza, 계약 스냅샷을 한 번에 맞춘다. 손으로 찾아 고치지 않는다.
   3. `core/CHANGELOG.md`에 새 절을 추가한다(Core Release 노트가 여기서 추출된다).
   4. `scripts/local-package/build-wsl.sh --verify-versions`로 누락 pin을 확인한다.
-- 릴리스 태그 조건: §5 gate green, `hotpath_gate` PASS, §6 release 비교 판정 PASS(또는 판정
+- 릴리스 태그 조건: §6 gate green, `hotpath_gate` PASS, §7 release 비교 판정 PASS(또는 판정
   기록에 사용자 결정으로 예외 명시), 패키징 검증 `scripts/local-package/core/verify-package.sh`.
 - 배포는 **전부 GitHub Actions에서** 한다. 로컬에서 `npm publish`·`dotnet nuget push`·Central 업로드를
   하지 않으며 API 토큰을 만들지 않는다(npm·nuget은 Trusted Publishing, Maven Central은 repository
@@ -172,7 +187,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 릴리스 뒤 baseline worktree를 새 태그로 갱신하고, 릴리스 준비 중 고친 워크플로우·절차는
   `doc/building/release-prep/<날짜>-<주제>.ko.md`로 남긴다.
 
-## 9. 에이전트 운영 관례
+## 10. 에이전트 운영 관례
 
 - 규칙 본문: [`AGENTS.md`](AGENTS.md)(전역), 디렉터리별 `AGENTS.md`(세부). 문서 작성은
   [`doc/AGENTS.md`](doc/AGENTS.md).
