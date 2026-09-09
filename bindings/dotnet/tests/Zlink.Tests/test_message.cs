@@ -24,12 +24,16 @@ public sealed class test_message
 
         byte[] payload = new byte[512];
         new Random(1234).NextBytes(payload);
-        using var source = new Message((ReadOnlySpan<byte>)payload);
+        var source = new Message((ReadOnlySpan<byte>)payload);
         using Message copy = source.Copy();
 
         Assert.True(source.RefCount >= 2);
         Assert.True(copy.RefCount >= 2);
         Assert.True(copy.AsReadOnlySpan().SequenceEqual(source.AsReadOnlySpan()));
+
+        source.Dispose();
+        Assert.True(copy.AsReadOnlySpan().SequenceEqual(payload));
+        Assert.Equal(1, copy.RefCount);
     }
 
     [Fact]
