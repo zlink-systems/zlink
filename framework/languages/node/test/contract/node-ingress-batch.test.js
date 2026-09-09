@@ -2,12 +2,13 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const backend = require('../../packages/framework/dist/runtime/backend');
 const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } =
   require('../../packages/framework/dist/runtime/host/application-job-queue');
 const { ReadyDomain } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 
-test('mesh owner drains 64 pre-admitted records in one receive batch without losing FIFO', async () => {
+test('mesh owner drains 64 pre-admitted records in one receive batch without losing FIFO', async t => {
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
   const context = factory.createChannelAdapter().createContext();
   const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({}));
@@ -43,18 +44,31 @@ test('mesh owner drains 64 pre-admitted records in one receive batch without los
     for (let i = 0; i < 64; i++) {
       await node.sendToChannel('batch', Buffer.from(String(i)));
     }
+    let areaEntries = 0;
+    let ioTurn = false;
+    let firstHandlerAfterIo;
+    const run = AsyncLocalStorage.prototype.run;
+    t.mock.method(AsyncLocalStorage.prototype, 'run', function (store, ...args) {
+      if (store === 'application') areaEntries++;
+      return run.call(this, store, ...args);
+    });
     pump = new backend.ZLinkMeshDispatchPump(node, {
       applicationJobQueue: queue,
+      monotonicNowMs: () => 0,
       dispatch(_owner, record) {
+        firstHandlerAfterIo ??= ioTurn;
         received.push(Number(record.parts[0].data().toString()));
         if (received.length === 64) finish();
       },
       reportError: fail
     });
+    setImmediate(() => { ioTurn = true; });
     pump.start();
     await done;
     assert.deepEqual(received, Array.from({ length: 64 }, (_, i) => i));
     assert.deepEqual(batches, [64]);
+    assert.equal(areaEntries, 1, 'one execution-area scope spans the whole owner drain');
+    assert.equal(firstHandlerAfterIo, false, 'ready work begins in a microtask');
   } finally {
     await pump?.dispose();
     node.close();
