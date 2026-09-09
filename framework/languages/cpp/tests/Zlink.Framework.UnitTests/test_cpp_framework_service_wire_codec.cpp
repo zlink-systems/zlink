@@ -424,8 +424,56 @@ void verify_generated_adoption_goldens ()
 }
 }
 
+// Frozen pre-Issue-49 encoder: the final wire, including multipart lengths,
+// is the compatibility boundary rather than an encode/decode round trip.
+static void test_application_payload_wire_bytes ()
+{
+    for (const auto size : {0u, 1u, 1024u, 4096u}) {
+        for (const bool multipart : {false, true}) {
+            for (const bool traced : {false, true}) {
+                std::vector<std::uint8_t> bytes (size);
+                for (std::size_t i = 0; i < bytes.size (); ++i)
+                    bytes[i] = static_cast<std::uint8_t> (i);
+                if (multipart) {
+                    std::vector<std::uint8_t> parts;
+                    put_u32 (parts, 3);
+                    put_u32 (parts, 3);
+                    parts.insert (parts.end (), {'h', 0, 255});
+                    put_u32 (parts, 0);
+                    put_u32 (parts, size);
+                    parts.insert (parts.end (), bytes.begin (), bytes.end ());
+                    bytes = std::move (parts);
+                }
+                protocol::application_payload_t payload{
+                  multipart ? protocol::framework_multipart_packet_name : "Packet",
+                  multipart ? protocol::framework_multipart_content_type
+                            : "application/x-protobuf",
+                  bytes};
+                if (traced) {
+                    payload.flow_id = "019fc5b9-9df3-786b-bb69-d55358f6d48b";
+                    payload.flow_origin = zlink::framework::flow_origin_t::application;
+                }
+                std::vector<std::uint8_t> body;
+                put_text8 (body, payload.packet_name);
+                put_text8 (body, payload.content_type);
+                put_u32 (body, static_cast<std::uint32_t> (bytes.size ()));
+                body.insert (body.end (), bytes.begin (), bytes.end ());
+                if (traced) {
+                    put_text8 (body, *payload.flow_id);
+                    body.push_back (static_cast<std::uint8_t> (*payload.flow_origin));
+                }
+                std::vector<std::uint8_t> expected{static_cast<std::uint8_t> (traced ? 2 : 1)};
+                put_u32 (expected, static_cast<std::uint32_t> (body.size ()));
+                expected.insert (expected.end (), body.begin (), body.end ());
+                assert (protocol::encode_application_payload (payload) == expected);
+            }
+        }
+    }
+}
+
 int main ()
 {
+    test_application_payload_wire_bytes ();
     verify_generated_adoption_goldens ();
     const protocol::actor_route_fence_t bound_actor{
       .actor_id = "actor-a",
