@@ -2239,10 +2239,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   }
                   node->application_work_enqueued ();
               },
-              [executor = _application_dispatch, node, registration,
+              [_application_dispatch = _application_dispatch, node, registration,
                services = _services, serializers = _serializers, filters = _filters,
                options = _dispatch_options] (const std::string &owner) {
-                  if (!executor->try_submit_internal (
+                  if (!_application_dispatch->try_submit_internal (
                         [node, registration, owner, services, serializers, filters, options] {
                             drain_application_owner (node, registration, owner, false,
                                                      services, serializers, filters, options);
@@ -2717,15 +2717,16 @@ void mesh_node_host_service_t::drain_application_owner (
     if (!mailbox.begin_application_drain (owner))
         return;
     const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
-    const auto dispatch = [&] (const host::ready_record_t &ready,
-                              const host::receive_record_t &record,
-                              std::vector<zlink::message_t> parts) {
-        dispatch_application (node, registration, ready, record, std::move (parts), reject_only,
-                              services, serializers, filters, dispatch_options);
-    };
-    const auto started = [node] { node->application_work_started (); };
-    const auto rejected = [node] { node->application_work_finished (); };
     try {
+        const std::function<void (const host::ready_record_t &, const host::receive_record_t &,
+                                  std::vector<zlink::message_t>)> dispatch =
+          [&] (const host::ready_record_t &ready, const host::receive_record_t &record,
+               std::vector<zlink::message_t> parts) {
+              dispatch_application (node, registration, ready, record, std::move (parts), reject_only,
+                                    services, serializers, filters, dispatch_options);
+          };
+        const std::function<void ()> started = [&node] { node->application_work_started (); };
+        const std::function<void ()> rejected = [&node] { node->application_work_finished (); };
         while (node->native_node ().dispatch_application_owner (owner, dispatch, started, rejected)) {
             if (!reject_only && std::chrono::steady_clock::now () >= deadline)
                 break;

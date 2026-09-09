@@ -338,15 +338,13 @@ void service_mailbox_t::end_application_receive_turn ()
 
 void service_mailbox_t::notify_application_ready ()
 {
+    std::unique_lock lock (_mutex);
+    if (_application_receive_turn || !_application_ready || _application.ready.empty ())
+        return;
     std::deque<std::string> ready;
-    application_ready_t notify;
-    {
-        std::lock_guard lock (_mutex);
-        if (_application_receive_turn || !_application_ready)
-            return;
-        ready.swap (_application.ready);
-        notify = _application_ready;
-    }
+    ready.swap (_application.ready);
+    auto notify = _application_ready;
+    lock.unlock ();
     for (const auto &owner : ready)
         notify (owner);
 }
