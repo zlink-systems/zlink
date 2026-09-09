@@ -1179,6 +1179,21 @@ int main ()
       protobuf_serializers);
     zlink::framework_codecs::protobuf ().register_framework_codecs (
       protobuf_registration);
+    for (const auto size : {0u, 1u, 1024u, 4096u}) {
+        google::protobuf::StringValue value;
+        value.set_value (std::string (size, 'x'));
+        const auto serializer = protobuf_serializers.get<google::protobuf::StringValue> ();
+        zlink::message_t retained;
+        {
+            const auto encoded = serializer.serialize (value);
+            assert (encoded.to_string () == value.SerializeAsString ());
+            retained = zlink::framework::detail::encoded_payload_to_raw (encoded);
+            if (size >= 1024)
+                assert (retained.data () == encoded.bytes ().data ());
+            assert (serializer.deserialize (encoded).value () == value.value ());
+        }
+        assert (retained.to_string () == value.SerializeAsString ());
+    }
     zlink::framework::zlink_builder_t protobuf_client_builder;
     protobuf_client_builder.channel ("protobuf-client")
       .enable_client ()

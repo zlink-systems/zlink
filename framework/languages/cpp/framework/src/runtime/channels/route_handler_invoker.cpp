@@ -26,7 +26,7 @@ route_handler_invoker_t::invoke_send (const route_handler_registry_t &handlers,
       dispatch_kind, invocation_services, serializers, context,
       [&handlers, router_channel_id = std::string (router_channel_id),
        packet_name = std::string (packet_name), &invocation_services,
-       &serializers, message, context,
+       &serializers, message = message.copy (), context,
        before_application_handler = std::move (before_application_handler)] () mutable {
           if (before_application_handler) {
               before_application_handler ();
@@ -59,7 +59,7 @@ route_handler_invoker_t::invoke_request (const route_handler_registry_t &handler
           dispatch_kind, invocation_services, serializers, context,
           [&handlers, router_channel_id = std::string (router_channel_id),
            packet_name = std::string (packet_name), &invocation_services,
-           &serializers, message, context,
+           &serializers, message = message.copy (), context,
            before_application_handler = std::move (before_application_handler)] () mutable {
               if (before_application_handler) {
                   before_application_handler ();

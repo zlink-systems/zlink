@@ -184,7 +184,7 @@ raw_route_port_t::raw_route_port_t (zlink::router_socket_t &socket,
 
 task_t<zlink::submit_result_t> raw_route_port_t::send_result (
   const raw_bytes_t &target_routing_id,
-  const raw_message_t &parts,
+  raw_message_t parts,
   raw_send_stage_trace_t trace)
 {
     auto source =
@@ -198,7 +198,7 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
         if (target_routing_id.empty () || parts.empty ())
             throw std::invalid_argument (
               "raw route send requires a target and message parts");
-        auto messages = materialize_binding_parts (parts);
+        auto messages = materialize_binding_parts (std::move (parts));
         if (trace) {
             try {
                 trace ("router_admission_submit", "begin");
@@ -290,15 +290,15 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
 }
 
 task_t<bool> raw_route_port_t::send (const raw_bytes_t &target_routing_id,
-                                     const raw_message_t &parts)
+                                     raw_message_t parts)
 {
-    co_return co_await send_result (target_routing_id, parts)
+    co_return co_await send_result (target_routing_id, std::move (parts))
               == zlink::submit_result_t::ok;
 }
 
 task_t<raw_request_completion_t> raw_route_port_t::request (
   const raw_bytes_t &target_routing_id,
-  const raw_message_t &parts,
+  raw_message_t parts,
   std::chrono::milliseconds timeout)
 {
     auto source =
@@ -313,7 +313,7 @@ task_t<raw_request_completion_t> raw_route_port_t::request (
             throw std::invalid_argument (
               "raw route request requires target, parts and timeout");
         }
-        auto messages = materialize_binding_parts (parts);
+        auto messages = materialize_binding_parts (std::move (parts));
         std::optional<zlink::async_result_t<std::vector<zlink::message_t>>> pending;
         {
             std::lock_guard lock (*_socket_mutex);
@@ -447,7 +447,7 @@ std::optional<raw_received_t> raw_route_port_t::try_receive ()
 }
 
 bool raw_route_port_t::reply (
-  const raw_received_t &request, const raw_message_t &parts)
+  const raw_received_t &request, raw_message_t parts)
 {
     if (request.source_routing_id.empty () || !request.reply_token
         || parts.empty ()) {
@@ -457,7 +457,7 @@ bool raw_route_port_t::reply (
     std::lock_guard lock (*_socket_mutex);
     if (_socket == nullptr)
         return false;
-    auto messages = materialize_binding_parts (parts);
+    auto messages = materialize_binding_parts (std::move (parts));
     auto operation = std::move (
       _socket->reply (
         zlink::routing_id_t::from (request.source_routing_id),

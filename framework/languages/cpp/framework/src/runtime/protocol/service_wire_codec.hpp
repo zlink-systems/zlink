@@ -8,7 +8,10 @@
 
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 
+#include <zlink/Contracts/Messaging/message.hpp>
+
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -46,16 +49,44 @@ struct service_wire_header_t
 
 struct application_payload_t
 {
+    using multipart_t = std::vector<zlink::message_t>;
+
+    application_payload_t () = default;
+    application_payload_t (std::string packet, std::string content,
+                           std::vector<std::uint8_t> bytes,
+                           std::optional<std::string> flow = {},
+                           std::optional<flow_origin_t> origin = {}) :
+        packet_name (std::move (packet)), content_type (std::move (content)),
+        flow_id (std::move (flow)), flow_origin (origin), _body (std::move (bytes))
+    {
+    }
+
+    static application_payload_t from_parts (const multipart_t &parts);
+    const multipart_t *parts () const noexcept
+    {
+        const auto value = std::get_if<std::shared_ptr<const multipart_t>> (&_body);
+        return value ? value->get () : nullptr;
+    }
+    const std::vector<std::uint8_t> &payload_bytes () const
+    {
+        return std::get<std::vector<std::uint8_t>> (_body);
+    }
+    std::vector<std::uint8_t> &payload_bytes ()
+    {
+        return std::get<std::vector<std::uint8_t>> (_body);
+    }
+
     std::string packet_name;
     std::string content_type;
-    std::vector<std::uint8_t> payload;
-    /* Flow context is framework-owned and is present only on a traced
-     * activation payload. It is not application metadata. */
     std::optional<std::string> flow_id;
     std::optional<flow_origin_t> flow_origin;
 
     friend bool operator== (const application_payload_t &,
-                            const application_payload_t &) = default;
+                            const application_payload_t &);
+
+  private:
+    // The codec owns either incoming bytes or outgoing parts, never both.
+    std::variant<std::vector<std::uint8_t>, std::shared_ptr<const multipart_t>> _body;
 };
 
 struct spot_route_fence_t

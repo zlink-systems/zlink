@@ -384,7 +384,7 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
             std::optional<message_t> rejected_reply;
             if (completed_remote.application_reply)
                 rejected_reply = message_t::from_raw (
-                  zlink::message_t::from (completed_remote.application_reply->payload),
+                  zlink::message_t::from (completed_remote.application_reply->payload_bytes ()),
                   _serializers);
             const auto rejected_envelope = actor_terminal_envelope (
               creation_terminal_state_t::rejected, std::nullopt, rejected_reply, *_serializers);
@@ -431,7 +431,7 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
         std::optional<message_t> reply;
         if (completed_remote.application_reply)
             reply = message_t::from_raw (
-              zlink::message_t::from (completed_remote.application_reply->payload), _serializers);
+              zlink::message_t::from (completed_remote.application_reply->payload_bytes ()), _serializers);
         const auto envelope = actor_terminal_envelope (creation_terminal_state_t::created, created,
                                                        reply, *_serializers);
         const creation_terminal_publication_t publication{operation, envelope, sha256 (envelope),
@@ -1486,7 +1486,7 @@ mesh_node_host_service_t::create_user_spot (const std::shared_ptr<detail::mesh_n
         std::optional<message_t> decoded_reply;
         if (application_reply)
             decoded_reply = message_t::from_raw (
-              zlink::message_t::from (application_reply->payload), serializers);
+              zlink::message_t::from (application_reply->payload_bytes ()), serializers);
         completion->complete (result_t<spot_create_result_t>::success (
           {{spot_id_t (reply.spot_id), reply.object_generation, target.mesh_name,
             node_rid_t::from_string (target.rid.to_string ())},
@@ -1811,7 +1811,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                               detail::spot_node_runtime_t (registration->spot_state)
                                 .dispatch_instance_activation (
                                   spot_id_t (request.target.spot_id), application.packet_name,
-                                  application.content_type, application.payload,
+                                  application.content_type, application.payload_bytes (),
                                   std::move (decoded_metadata), request.request,
                                   std::to_string (request.operation.high) + ":"
                                     + std::to_string (request.operation.low),

@@ -4700,7 +4700,7 @@ void verify_raw_spot_and_actor_routing ()
       dispatch.try_claim (spot);
     assert (spot_delivery_error == stateful::stateful_error_t::none);
     assert (spot_delivery
-            && spot_delivery->payload.payload == bytes ("spot"));
+            && spot_delivery->payload.payload_bytes () == bytes ("spot"));
     const auto &frozen_spot = spot_delivery->frozen;
     assert (spot_delivery->turn.payload.empty ());
     assert (spot_delivery->turn.application_record.has_value ());
@@ -4737,7 +4737,7 @@ void verify_raw_spot_and_actor_routing ()
       dispatch.try_claim (spot);
     assert (relocated_error == stateful::stateful_error_t::none);
     assert (relocated_delivery && !relocated_delivery->request);
-    assert (relocated_delivery->payload.payload == bytes ("relocated"));
+    assert (relocated_delivery->payload.payload_bytes () == bytes ("relocated"));
     assert (dispatch.complete_async (*relocated_delivery).result ().value ()
             == stateful::stateful_error_t::none);
 
@@ -4782,7 +4782,7 @@ void verify_raw_spot_and_actor_routing ()
       dispatch.try_claim (actor);
     assert (actor_delivery_error == stateful::stateful_error_t::none);
     assert (actor_delivery && actor_delivery->request);
-    assert (actor_delivery->payload.payload == bytes ("request"));
+    assert (actor_delivery->payload.payload_bytes () == bytes ("request"));
     const auto &frozen_actor = actor_delivery->frozen;
     assert (actor_delivery->turn.payload.empty ());
     assert (actor_delivery->turn.application_record.has_value ());
@@ -4814,7 +4814,7 @@ void verify_raw_spot_and_actor_routing ()
     const auto result = future.get ();
     assert (result.first
             == foundation::operation_terminal_t::completed);
-    assert (protocol::decode_application_payload (result.second).payload
+    assert (protocol::decode_application_payload (result.second).payload_bytes ()
             == bytes ("reply"));
 
     // A bound-session actorRequest journals the frozen source with the
@@ -4915,7 +4915,7 @@ void verify_raw_spot_and_actor_routing ()
     const auto bound_result = bound_future.get ();
     assert (bound_result.first
             == foundation::operation_terminal_t::completed);
-    assert (protocol::decode_application_payload (bound_result.second).payload
+    assert (protocol::decode_application_payload (bound_result.second).payload_bytes ()
             == bytes ("bound-reply"));
 
     // A bound-session-routed actorRequest that is missing its exact fence
@@ -5085,7 +5085,7 @@ void verify_raw_spot_and_actor_routing ()
     assert (recreated_result.first
             == foundation::operation_terminal_t::completed);
     assert (protocol::decode_application_payload (
-              recreated_result.second).payload
+              recreated_result.second).payload_bytes ()
             == bytes ("recreated"));
     assert (stale_terminal_count == 1);
     source.close ();
@@ -5160,7 +5160,7 @@ void verify_relocated_source_reply_failure_keeps_terminal_record ()
 
     const auto [claim_error, delivery] = dispatch.try_claim (actor);
     assert (claim_error == stateful::stateful_error_t::none && delivery);
-    assert (delivery->payload.payload == bytes ("request"));
+    assert (delivery->payload.payload_bytes () == bytes ("request"));
     assert (objects.complete_claim (
               actor, stateful::turn_domain_t::application)
             == stateful::stateful_error_t::none);
@@ -5412,7 +5412,7 @@ void verify_node_request_requires_remote_admission ()
     assert (protocol::decode_header (request.parts.front ()).kind
             == protocol::command::nodeRequest);
     assert (request.correlation && *request.correlation == 4242);
-    assert (protocol::decode_application_payload (request.parts.at (1)).payload
+    assert (protocol::decode_application_payload (request.parts.at (1)).payload_bytes ()
             == bytes ("request"));
     assert (target.reply (
       request,
@@ -5430,7 +5430,7 @@ void verify_node_request_requires_remote_admission ()
     assert (future.wait_for (0ms) == std::future_status::ready);
     const auto result = future.get ();
     assert (result.first == foundation::operation_terminal_t::completed);
-    assert (protocol::decode_application_payload (result.second).payload
+    assert (protocol::decode_application_payload (result.second).payload_bytes ()
             == bytes ("reply"));
     source.close ();
     target.close ();
@@ -5982,7 +5982,7 @@ void verify_durable_reply_relay_single_winner ()
     assert (target_coordinator.pending_terminal_relays () == 1);
 
     auto conflicting_reply = reply;
-    conflicting_reply.payload = bytes ("conflicting");
+    conflicting_reply.payload_bytes () = bytes ("conflicting");
     assert (target.send_reply_relay (
               source_descriptor.node_routing_id, relay, conflicting_reply)
               .result ()

@@ -216,7 +216,7 @@ result_t<zlink::message_t> envelope_codec_t::decode_body (const message_parts_t 
         return result_t<zlink::message_t>::failure (framework_error_kind_t::protocol_error,
                                                     "ZLink envelope body part is missing");
     }
-    return result_t<zlink::message_t>::success (parts[1]);
+    return result_t<zlink::message_t>::success (parts[1].copy ());
 }
 
 } // namespace zlink::framework::runtime::messaging

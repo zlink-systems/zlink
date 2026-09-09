@@ -1118,7 +1118,7 @@ task_t<bool> raw_mesh_node_owner_t::observe_request (
                 foundation::operation_terminal_t::transport_failed);
               return;
           }
-          auto completion = settled.value ();
+          const auto &completion = settled.value ();
           trace_mesh (
             "request-completion correlation="
               + std::to_string (correlation)
@@ -1278,7 +1278,8 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
     auto encoded_payload = protocol::encode_application_payload (application_payload);
     struct request_start_t
     {
-        pending_request_t request;
+        foundation::call_id_t operation;
+        std::uint64_t correlation = 0;
         std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> running;
         bool registered = false;
     };
@@ -1294,30 +1295,31 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
         if (!port)
             return std::optional<request_start_t>{};
         request_start_t value;
-        value.request.target_routing_id = std::move (target_routing_id);
-        value.request.correlation = take_reply_route_id_locked (requested_correlation);
-        value.request.operation = operation_id (
-          _options.descriptor.lifecycle_generation, value.request.correlation);
-        value.request.wire = {
-          header (value.request.correlation), std::move (encoded_payload)};
+        value.correlation = take_reply_route_id_locked (requested_correlation);
+        value.operation = operation_id (
+          _options.descriptor.lifecycle_generation, value.correlation);
+        detail::backend::raw_message_t wire;
+        wire.reserve (2);
+        wire.push_back (header (value.correlation));
+        wire.push_back (std::move (encoded_payload));
         value.registered = _operations->register_operation (
-          value.request.operation,
+          value.operation,
           foundation::operation_registry_t::clock_t::now () + timeout,
           std::move (callback));
         if (value.registered) {
             try {
                 trace_mesh (
                   "request-submit correlation="
-                    + std::to_string (value.request.correlation)
+                    + std::to_string (value.correlation)
                     + " targetBytes="
-                    + std::to_string (value.request.target_routing_id.size ()));
+                    + std::to_string (target_routing_id.size ()));
                 value.running = std::make_shared<
                   task_t<detail::backend::raw_request_completion_t>> (
                     port->request (
-                      value.request.target_routing_id, value.request.wire, timeout));
+                      target_routing_id, std::move (wire), timeout));
             }
             catch (...) {
-                (void) _operations->unregister (value.request.operation);
+                (void) _operations->unregister (value.operation);
                 throw;
             }
         }
@@ -1331,7 +1333,7 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
           "raw mesh request completion capacity is exhausted");
     }
     co_return co_await observe_request (
-      start->request.operation, start->request.correlation,
+      start->operation, start->correlation,
       std::move (start->running));
 }
 
@@ -1399,7 +1401,7 @@ raw_mesh_node_owner_t::send_start_result_t raw_mesh_node_owner_t::start_send (
         if (value.registered) {
             try {
                 value.running = std::make_shared<task_t<zlink::submit_result_t>> (
-                  port->send_result (target_routing_id, parts, std::move (trace)));
+                  port->send_result (target_routing_id, std::move (parts), std::move (trace)));
             }
             catch (...) {
                 (void) _operations->unregister (operation);
@@ -1458,12 +1460,12 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_with_header_result (
     completion->source =
       std::make_shared<detail::task_completion_source_t<zlink::submit_result_t>> ();
     auto pending_completion = completion->source->task ();
+    detail::backend::raw_message_t parts;
+    parts.reserve (2);
+    parts.push_back (std::move (header));
+    parts.push_back (protocol::encode_application_payload (application_payload));
     const auto started = start_send (
-      std::move (target_routing_id),
-      detail::backend::raw_message_t{
-        std::move (header),
-        protocol::encode_application_payload (application_payload)},
-      completion, std::move (trace));
+      std::move (target_routing_id), std::move (parts), completion, std::move (trace));
     if (started == send_start_result_t::terminated)
         co_return zlink::submit_result_t::terminated;
     if (started == send_start_result_t::capacity_exceeded) {
@@ -1622,7 +1624,7 @@ task_t<bool> raw_mesh_node_owner_t::send_reply_relay (
         parts.emplace_back (
           protocol::encode_application_payload (*application_reply));
     }
-    co_return co_await port->send (target_routing_id, parts);
+    co_return co_await port->send (target_routing_id, std::move (parts));
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_reply_relay_ack (
@@ -1669,7 +1671,7 @@ raw_mesh_node_owner_t::request_relocation_prepare (
     for (const auto &route : session_routes)
         parts.emplace_back (
           protocol::encode_session_relocation_route (route));
-    auto pending = port->request (target_routing_id, parts, timeout);
+    auto pending = port->request (target_routing_id, std::move (parts), timeout);
     const auto completed = co_await pending;
     if (completed.result != detail::backend::raw_request_result_t::ok
         || completed.parts.size () != 1)
@@ -1735,7 +1737,7 @@ bool raw_mesh_node_owner_t::reply_relocation_ready (
     return port->reply (
       detail::backend::raw_received_t{
         request.source_routing_id, request.reply_token, {}},
-      parts);
+      std::move (parts));
 }
 
 bool raw_mesh_node_owner_t::reply_relocation_failed (
@@ -1755,7 +1757,7 @@ bool raw_mesh_node_owner_t::reply_relocation_failed (
     return port->reply (
       detail::backend::raw_received_t{
         request.source_routing_id, request.reply_token, {}},
-      parts);
+      std::move (parts));
 }
 
 bool raw_mesh_node_owner_t::reply (
@@ -1774,13 +1776,14 @@ bool raw_mesh_node_owner_t::reply (
     }).get ();
     if (!port)
         return false;
-    detail::backend::raw_message_t parts{
-      protocol::encode_reply_header (*request.correlation, 0, 0),
-      protocol::encode_application_payload (application_payload)};
+    detail::backend::raw_message_t parts;
+    parts.reserve (2);
+    parts.push_back (protocol::encode_reply_header (*request.correlation, 0, 0));
+    parts.push_back (protocol::encode_application_payload (application_payload));
     return port->reply (
       detail::backend::raw_received_t{
         request.source_routing_id, request.reply_token, {}},
-      parts);
+      std::move (parts));
 }
 
 bool raw_mesh_node_owner_t::reply_failure (
@@ -1815,7 +1818,7 @@ bool raw_mesh_node_owner_t::reply_failure (
     return port->reply (
       detail::backend::raw_received_t{
         request.source_routing_id, request.reply_token, {}},
-      parts);
+      std::move (parts));
 }
 
 std::size_t raw_mesh_node_owner_t::expire_requests (
@@ -2339,7 +2342,7 @@ raw_mesh_node_owner_t::request_actor_join (
           payload
             ? std::optional<
                 protocol::service_wire_pilot_application_payload_envelope_v1>{
-                {payload->packet_name, payload->content_type, payload->payload}}
+                {payload->packet_name, payload->content_type, payload->payload_bytes ()}}
             : std::nullopt});
     }
     catch (const std::invalid_argument &) {
@@ -2669,7 +2672,7 @@ bool raw_mesh_node_owner_t::reply_infrastructure (
     return port->reply (
       detail::backend::raw_received_t{
         request.source_routing_id, request.reply_token, {}},
-      parts);
+      std::move (parts));
 }
 
 bool raw_mesh_node_owner_t::reply_user_spot_create (
@@ -2715,7 +2718,7 @@ bool raw_mesh_node_owner_t::reply_user_spot_create (
     return port->reply (
       detail::backend::raw_received_t{
         request.source_routing_id, request.reply_token, {}},
-      parts);
+      std::move (parts));
 }
 
 bool raw_mesh_node_owner_t::reply_actor_create (
@@ -2838,7 +2841,7 @@ bool raw_mesh_node_owner_t::reply_instance_spot_activation (
         request.source_routing_id,
         request.reply_token,
         {}},
-      parts);
+      std::move (parts));
 }
 
 bool raw_mesh_node_owner_t::reply_user_spot_close (

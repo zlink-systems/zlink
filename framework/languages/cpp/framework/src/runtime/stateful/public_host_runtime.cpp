@@ -210,30 +210,6 @@ std::uint32_t read_u32 (const std::vector<std::uint8_t> &bytes, std::size_t &off
     return value;
 }
 
-std::vector<std::uint8_t> encode_parts (const std::vector<zlink::message_t> &parts)
-{
-    if (parts.empty ()) {
-        throw std::invalid_argument ("framework multipart requires at least one part");
-    }
-    if (parts.size () > std::numeric_limits<std::uint32_t>::max ()) {
-        throw std::length_error ("framework multipart part count is too large");
-    }
-    std::vector<std::uint8_t> encoded;
-    append_u32 (encoded, static_cast<std::uint32_t> (parts.size ()));
-    for (const auto &part : parts) {
-        const auto bytes = part.bytes ();
-        if (bytes.size () > std::numeric_limits<std::uint32_t>::max ()) {
-            throw std::length_error ("framework multipart part is too large");
-        }
-        append_u32 (encoded, static_cast<std::uint32_t> (bytes.size ()));
-        if (!bytes.empty ()) {
-            const auto *data = reinterpret_cast<const std::uint8_t *> (bytes.data ());
-            encoded.insert (encoded.end (), data, data + bytes.size ());
-        }
-    }
-    return encoded;
-}
-
 std::vector<zlink::message_t> decode_parts (const std::vector<std::uint8_t> &encoded)
 {
     std::size_t offset = 0;
@@ -6091,8 +6067,7 @@ protocol::application_payload_t
 public_host_runtime_t::encode_application (const std::vector<zlink::message_t> &parts,
                                            std::span<const std::uint8_t>) const
 {
-    return {std::string (multipart_packet_name), std::string (multipart_content_type),
-            encode_parts (parts)};
+    return protocol::application_payload_t::from_parts (parts);
 }
 
 std::vector<zlink::message_t>
@@ -6103,7 +6078,14 @@ public_host_runtime_t::decode_application (const protocol::application_payload_t
         throw protocol::service_wire_error_t (
           "framework application payload profile is unsupported");
     }
-    return decode_parts (payload.payload);
+    if (const auto *parts = payload.parts ()) {
+        std::vector<zlink::message_t> result;
+        result.reserve (parts->size ());
+        for (const auto &part : *parts)
+            result.push_back (part.copy ());
+        return result;
+    }
+    return decode_parts (payload.payload_bytes ());
 }
 
 actor_ref_t public_host_runtime_t::framework_actor_ref (const stateful::object_ref_t &object,
