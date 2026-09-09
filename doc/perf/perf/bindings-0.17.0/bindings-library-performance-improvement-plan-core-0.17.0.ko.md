@@ -1599,6 +1599,21 @@ STREAM·tls·ws·wss 수정(D-BP23·D-BP28·D-BP29 보고서)이 끝나면 `보�
 재개한다. 공개 API 형태 변경(.NET·C++ 미달)은 열지 않는다. 재개 시 절차: (1) Core 새 버전을 §10.3의
 재핀 절차로 고정, (2) C 기준을 먼저 전 transport 1-run으로 다시 잡고, (3) §10.3.2 이월 목록 순서대로.
 
+### 11.9 C STREAM 동시 접속(CCU) 10,000 — Core 0.17.5 (2026-09-09)
+
+사용자 요청(D-BP47·D-BP52)으로 `MULTI_STREAM tcp`를 `--clients 10000`(기본 100 대신)으로 쟀다. 조건은 §12.3 기본값 그대로
+(connect concurrency 자동 1024, connect/server ready timeout 10 s, monitor HWM 4,096,000 B, duration 5 s). Core 0.17.3·0.17.4는
+5,000부터 서버 ready barrier 미도달(pipe 최소 예약 admission이 초기 plan의 고정 cap을 써 `ENOBUFS`), 0.17.5(`c72bc2dc63`)에서 해소.
+
+| clients | 64 B (1-run) | 64 B (3-run median) | 상태 |
+|---:|---:|---:|---|
+| 1,000 | 313.1 K ops/s | 370.5 K ops/s | complete |
+| 5,000 | 371.9 K | — | complete |
+| 10,000 | 381.9 K | 361.2 K | complete |
+
+10,000 × 6 크기(1-run, `s175-full`): 64 B 365.6 K · 256 B 321.3 K · 1 KB 207.1 K · 4 KB 294.5 K · 64 KB 22.0 K · 128 KB 9.1 K ops/s, 전부 `complete`.
+공식 artifact `~/.cache/zlink/core/0.17.5/linux-x64`. 7개 binding의 clients=10,000 STREAM 측정은 다음 캠페인(binding 0.17.5 러너) 항목.
+
 ## 12. 완료 기준
 
 다음 조건을 모두 만족해야 작업을 완료한다.

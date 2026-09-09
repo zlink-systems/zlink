@@ -4786,6 +4786,8 @@ dirty provenance 표시 보강(측정 조건 불변).
 5,000 = 408,510, 10,000 = 396,601; 10,000 × 6 크기 전부 PASS; DD·DR REQREP tcp 64 B 회귀 없음. 계약 조건(connect concurrency 1024, ready timeout
 10 s, monitor HWM 4,096,000 B) 불변.
 
+**공식 0.17.5 확인(10:45):** `core/v0.17.5` 릴리스 artifact로 1,000 = 370 K(3-run), 5,000 = 372 K, 10,000 = 361 K(3-run)·6 크기 전부 complete — 계획서 §11.9. D-BP47 종결.
+
 **결정(사용자, 09:30·09:40):** B 전달 없이 여기서 완료 — 브랜치 `fix/core-ccu-10k`를 main에 fast-forward 병합(`c72bc2dc63`). 0.17.5 Core 릴리스에
 포함하고, 릴리스 뒤 공식 0.17.5 prefix로 STREAM 1k/5k/10k(6 크기)를 계획서 STREAM 행에 clients=10,000 값으로 별도 기록한다(D-BP47 종결).
 
