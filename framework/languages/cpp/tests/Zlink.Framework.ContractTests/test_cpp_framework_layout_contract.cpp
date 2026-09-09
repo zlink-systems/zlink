@@ -6,6 +6,7 @@
 #include <cctype>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifndef ZLINK_FRAMEWORK_CPP_SOURCE_DIR
@@ -887,20 +888,22 @@ bool client_sample_does_not_include_server_implementation (const std::filesystem
 
 bool sample_client_targets_do_not_link_framework (const std::filesystem::path &root)
 {
-    const auto path = root / "CMakeLists.txt";
-    std::ifstream input (path);
-    std::string text ((std::istreambuf_iterator<char> (input)), std::istreambuf_iterator<char> ());
-
     bool ok = true;
-    const std::string targets[] = {"sample_cpp_framework_bingo_client",
-                                   "sample_cpp_framework_tictactoe_client"};
-    for (const auto &target : targets) {
+    const std::pair<const char *, const char *> targets[] = {
+      {"sample_cpp_framework_bingo_client", "samples/Bingo/CMakeLists.txt"},
+      {"sample_cpp_framework_tictactoe_client", "samples/TicTacToe/CMakeLists.txt"}};
+    for (const auto &[target, cmake_path] : targets) {
+        std::ifstream input (root / cmake_path);
+        std::string text ((std::istreambuf_iterator<char> (input)),
+                          std::istreambuf_iterator<char> ());
         std::istringstream lines (text);
         std::string line;
         std::string block;
         bool found = false;
         while (std::getline (lines, line)) {
-            if (!found && line.find ("target_link_libraries(" + target) == std::string::npos) {
+            if (!found
+                && line.find (std::string ("target_link_libraries(") + target)
+                     == std::string::npos) {
                 continue;
             }
             found = true;
