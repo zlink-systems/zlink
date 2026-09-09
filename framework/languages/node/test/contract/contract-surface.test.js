@@ -953,7 +953,7 @@ test('old public contract names from the redesign rename table do not re-enter n
     path.join(workspaceRoot, 'e2e'),
     path.join(workspaceRoot, 'samples')
   ])) {
-    const relativePath = path.relative(workspaceRoot, file);
+    const relativePath = path.relative(workspaceRoot, file).split(path.sep).join('/');
     if (allowlist.has(relativePath)) {
       continue;
     }

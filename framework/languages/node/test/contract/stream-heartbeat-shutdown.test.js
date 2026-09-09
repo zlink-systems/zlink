@@ -15,7 +15,10 @@ test('SIGINT runs while heartbeat admission is pending in the real binding', asy
   const messages = [];
   child.on('message', message => {
     messages.push(message);
-    if (message.type === 'pending') child.kill('SIGINT');
+    if (message.type === 'pending') {
+      if (process.platform === 'win32') child.send({ type: 'raise-sigint' });
+      else child.kill('SIGINT');
+    }
   });
   try {
     const [code, signal] = await exited;

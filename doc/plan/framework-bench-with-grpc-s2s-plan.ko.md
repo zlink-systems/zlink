@@ -232,7 +232,10 @@ gRPC 구현의 A는 같은 HTTP trigger listener를 갖고, B로 향하는 unary
 ## 6. gRPC 비교 보고서의 구성 (공개 문서)
 
 1. 무엇을 비교하는가 — 규격 §0의 질문, 측정 모델(§3), 언어와 버전
-2. 결과 요약 — 언어 × 패턴 × payload의 처리량·p99 표(집계기 출력 그대로), formula 1·2 판정
+2. 결과 요약 — 언어 × 패턴 × payload 표(집계기 출력 그대로). 단위를 표 머리에 명시한다: request
+   계열은 완료 수 기준 **KOPS/s**, `send-saturation`은 server 수신 수 기준 **KMSG/s**, 값은 warmup 뒤
+   **5초 active 구간의 평균**(3-run 중앙값). request 행에는 평균·p95·p99 지연(ms)을 함께 싣는다.
+   formula 1·2 판정은 부록으로 내린다(사용자 결정 2026-09-09)
 3. 언어별 3자 표 — 규격 §7.1이 요구하는 동반 정보(warmup, 구성, 깊이, drain)
 4. 읽는 방법 — §7.3 언어 간 비교 금지 규칙, `unsupported`의 의미
 5. 한계 — 로컬 loopback, 단일 머신, 기준선 불안정 등

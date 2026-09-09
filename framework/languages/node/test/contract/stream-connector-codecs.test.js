@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const test = require('node:test');
+const { buildSync } = require('esbuild');
 
 const connector = require('../../packages/stream-connector/dist');
 const protocolCodecs = require('./helpers/stream-protocol-codecs');
@@ -167,13 +168,15 @@ test('generated Bingo browser codec is deterministic and round-trips without fil
       `export { bingoProtobuf } from ${JSON.stringify(path.join(sample, 'Shared/Contracts/protobuf-browser-codec.ts'))};`,
       `export { AuthenticateReq, AuthenticatePlayerRes } from ${JSON.stringify(generated)};`
     ].join('\n'));
-    childProcess.execFileSync(path.join(root, 'node_modules/.bin/esbuild'), [
-      entry,
-      '--bundle',
-      '--platform=browser',
-      '--format=esm',
-      `--outfile=${output}`
-    ], { cwd: root });
+    buildSync({
+      absWorkingDir: root,
+      entryPoints: [entry],
+      bundle: true,
+      platform: 'browser',
+      format: 'esm',
+      outfile: output,
+      logLevel: 'silent'
+    });
     const browser = await import(`${pathToFileURL(output).href}?v=${Date.now()}`);
     const authenticate = new browser.AuthenticateReq({ accessToken: 'player-1' });
     const encoded = browser.bingoProtobuf.encode(authenticate, browser.AuthenticateReq);

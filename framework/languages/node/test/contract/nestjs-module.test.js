@@ -114,11 +114,7 @@ function exposeLegacyTestSpotAsMeshNode(spotNode) {
   return spotNode;
 }
 
-let ipcEndpointSequence = 0;
-function uniqueIpcEndpoint(label) {
-  ipcEndpointSequence += 1;
-  return `ipc://${path.join(os.tmpdir(), `zlink-node-nest-${process.pid}-${ipcEndpointSequence}-${label}.sock`)}`;
-}
+const ephemeralTcpEndpoint = 'tcp://127.0.0.1:0';
 
 function createNoopMonitoringAdapter() {
   return {
@@ -1304,7 +1300,7 @@ test('ZLinkModule.forRoot exposes exact create calls for registered Spot factori
 });
 
 test('ZLinkModule.forRoot preserves Spot factories in the formal MeshNode registration', async () => {
-  const spotEndpoint = uniqueIpcEndpoint('spot-factory');
+  const spotEndpoint = ephemeralTcpEndpoint;
   class SpotDependency {
     constructor() {
       this.marker = 'spot-di';
@@ -1339,7 +1335,7 @@ test('ZLinkModule.forRoot preserves Spot factories in the formal MeshNode regist
 });
 
 test('ZLinkModule.forRoot preserves Entry Spot type in the formal MeshNode registration', async () => {
-  const spotEndpoint = uniqueIpcEndpoint('entry-spot');
+  const spotEndpoint = ephemeralTcpEndpoint;
   class EntryDependency {
     constructor() {
       this.initialized = false;
@@ -1374,7 +1370,7 @@ test('ZLinkModule.forRoot preserves Entry Spot type in the formal MeshNode regis
 });
 
 test('ZLinkModule.forRoot preserves Actor factories in the formal MeshNode registration', async () => {
-  const spotEndpoint = uniqueIpcEndpoint('actor-factory');
+  const spotEndpoint = ephemeralTcpEndpoint;
   class ActorDependency {
     constructor() {
       this.marker = 'actor-di';
@@ -1413,8 +1409,7 @@ test('ZLinkModule.forRoot preserves Actor factories in the formal MeshNode regis
 });
 
 test('ZLinkModule.forRoot discovers SPOT actor request handler decorators from NestJS providers', async () => {
-  const spotEndpoint = uniqueIpcEndpoint('handler-router');
-  const spotPubSubEndpoint = uniqueIpcEndpoint('handler-pubsub');
+  const spotEndpoint = ephemeralTcpEndpoint;
   class PlayerActor {}
   class EntrySpot {}
   class RoomSpot {}
@@ -2238,7 +2233,7 @@ test('ZLinkModule.forRoot exposes only the public Spot manager capability', asyn
   class ManagedSpot {}
   const options = nestjs.zlinkFramework().addLocationStore(store);
   const mesh = options.addRouteMesh('game')
-    .listen(uniqueIpcEndpoint('public-spot-manager'))
+    .listen(ephemeralTcpEndpoint)
     .routingId('game-node');
   mesh.objects().server().addSpotFactory(
     ManagedSpot.name,
@@ -2256,7 +2251,7 @@ test('ZLinkModule.forRoot exposes only the public Spot manager capability', asyn
 });
 
 test('ZLinkModule.forRootFactory exposes capability providers through the real NestJS app context', async () => {
-  const spotEndpoint = uniqueIpcEndpoint('async-capabilities');
+  const spotEndpoint = ephemeralTcpEndpoint;
   class AsyncSpot {
     constructor(context) {
       this.context = context;

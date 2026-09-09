@@ -75,6 +75,9 @@ async function main() {
       process.disconnect();
     })().catch(error => { console.error(error); process.exitCode = 1; process.disconnect(); });
   });
+  process.once('message', message => {
+    if (message?.type === 'raise-sigint') process.emit('SIGINT');
+  });
   process.send({ type: 'pending', completed });
 }
 main().catch(error => { console.error(error); process.exitCode = 1; process.disconnect(); });

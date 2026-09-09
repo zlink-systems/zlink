@@ -1,10 +1,10 @@
 const assert = require('node:assert/strict');
-const childProcess = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { buildSync } = require('esbuild');
 const protocolCodecs = require('./helpers/stream-protocol-codecs');
 
 let browserEntry;
@@ -179,19 +179,20 @@ test('package root creates a browser bundle without Node-only modules or Buffer'
   const root = path.resolve(__dirname, '../..');
   const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'zlink-browser-bundle-'));
   const output = path.join(outputDirectory, 'stream-connector-browser.js');
-  const metadata = path.join(outputDirectory, 'metadata.json');
   try {
-    childProcess.execFileSync(path.join(root, 'node_modules/.bin/esbuild'), [
-      'packages/stream-connector/dist/browser/index.mjs',
-      '--bundle',
-      '--platform=browser',
-      '--format=esm',
-      `--outfile=${output}`,
-      `--metafile=${metadata}`
-    ], { cwd: root, stdio: 'pipe' });
+    const result = buildSync({
+      absWorkingDir: root,
+      entryPoints: ['packages/stream-connector/dist/browser/index.mjs'],
+      bundle: true,
+      platform: 'browser',
+      format: 'esm',
+      outfile: output,
+      metafile: true,
+      logLevel: 'silent'
+    });
 
-    const graph = JSON.parse(fs.readFileSync(metadata, 'utf8'));
-    const inputs = Object.keys(graph.inputs);
+    const inputs = Object.keys(result.metafile.inputs)
+      .map((input) => input.split(path.sep).join('/'));
     const forbiddenModules = /(^|\/)(node:)?(net|tls|async_hooks|crypto)(\.[cm]?[jt]s)?$/;
     assert.equal(inputs.some((input) => forbiddenModules.test(input)), false, inputs.join('\n'));
 

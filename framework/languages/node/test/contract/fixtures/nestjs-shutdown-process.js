@@ -1,7 +1,5 @@
 const assert = require('node:assert/strict');
 const { createHook } = require('node:async_hooks');
-const path = require('node:path');
-const os = require('node:os');
 const { Injectable, Module, Scope } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const framework = require('../../../packages/framework/dist');
@@ -45,7 +43,7 @@ for (const type of [EntrySpot, UserSpot, InstanceSpot]) Injectable({ scope: Scop
 async function main() {
   const builder = nestjs.zlinkFramework().options({ locations: { useInMemoryStores: true } });
   builder.addRouteMesh('shutdown-test')
-    .listen(`ipc://${path.join(os.tmpdir(), `nest-shutdown-${process.pid}.sock`)}`)
+    .listen('tcp://127.0.0.1:0')
     .routingId('shutdown-node')
     .objects().server()
     .addEntrySpot(EntrySpot)
