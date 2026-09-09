@@ -41,7 +41,6 @@ enum class context_option : int
     socket_limit = 3,
     thread_priority = 3,
     thread_sched_policy = 4,
-    max_msgsz = 5,
     msg_t_size = 6,
     thread_affinity_cpu_add = 7,
     thread_affinity_cpu_remove = 8,

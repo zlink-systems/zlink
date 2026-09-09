@@ -126,8 +126,6 @@ template <typename T> class has_context_options_facade_t
                    std::declval<U &> ().io_threads (zlink::io_thread_count_t::value (1)),
                    std::declval<U &> ().max_sockets (),
                    std::declval<U &> ().max_sockets (zlink::socket_count_t::value (1)),
-                   std::declval<U &> ().max_msg_size (),
-                   std::declval<U &> ().max_msg_size (zlink::byte_size_t::bytes (1)),
                    std::declval<U &> ().thread_priority (),
                    std::declval<U &> ().thread_priority (zlink::thread_priority_t::value (1)),
                    std::declval<U &> ().thread_scheduling_policy (),

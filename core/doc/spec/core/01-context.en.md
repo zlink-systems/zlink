@@ -105,7 +105,6 @@ typedef enum zlink_ctx_option_t
     ZLINK_SOCKET_LIMIT            = 3,  // Hard upper limit on socket count (read-only)
     ZLINK_THREAD_PRIORITY         = 3,  // I/O thread scheduling priority
     ZLINK_THREAD_SCHED_POLICY     = 4,  // I/O thread scheduling policy
-    ZLINK_MAX_MSGSZ               = 5,  // Maximum message size (bytes, >= 0, default INT_MAX)
     ZLINK_MSG_T_SIZE              = 6,  // Size of zlink_msg_t (bytes, read-only)
     ZLINK_THREAD_AFFINITY_CPU_ADD      = 7,  // Add a CPU to the I/O thread affinity set
     ZLINK_THREAD_AFFINITY_CPU_REMOVE   = 8,  // Remove a CPU from the I/O thread affinity set

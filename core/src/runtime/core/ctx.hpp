@@ -211,9 +211,6 @@ class ctx_t ZLINK_FINAL
     //  Maximum number of sockets that can be opened at the same time.
     int _max_sockets;
 
-    //  Maximum allowed message size
-    int _max_msgsz;
-
     //  Number of I/O threads to launch.
     int _io_thread_count;
 

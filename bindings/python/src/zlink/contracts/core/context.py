@@ -128,14 +128,6 @@ class ContextOptions(Protocol):
     def max_sockets(self, value): ...
 
     @property
-    def max_message_size(self):
-        """The default maximum inbound message size, in bytes, for new
-        sockets."""
-        ...
-    @max_message_size.setter
-    def max_message_size(self, value): ...
-
-    @property
     def thread_scheduling_policy(self):
         """The OS scheduling policy of the context's I/O threads."""
         ...

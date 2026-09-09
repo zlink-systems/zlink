@@ -272,14 +272,6 @@ impl ContextStorage {
         )
     }
 
-    pub(crate) fn max_message_size(&self) -> Result<i32, ConfigError> {
-        self.get_int_option(ffi::zlink_ctx_option_t::ZLINK_MAX_MSGSZ as i32)
-    }
-
-    pub(crate) fn set_max_message_size(&self, size: i32) -> Result<(), ConfigError> {
-        self.set_int_option(ffi::zlink_ctx_option_t::ZLINK_MAX_MSGSZ as i32, size)
-    }
-
     pub(crate) fn msg_t_size(&self) -> Result<i32, ConfigError> {
         self.get_int_option(ffi::zlink_ctx_option_t::ZLINK_MSG_T_SIZE as i32)
     }

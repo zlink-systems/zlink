@@ -92,7 +92,6 @@ typedef enum zlink_ctx_option_t
     ZLINK_SOCKET_LIMIT            = 3,  // socket 수 하드 상한 (읽기 전용)
     ZLINK_THREAD_PRIORITY         = 3,  // I/O thread 스케줄링 우선순위
     ZLINK_THREAD_SCHED_POLICY     = 4,  // I/O thread 스케줄링 정책
-    ZLINK_MAX_MSGSZ               = 5,  // 최대 message 크기 (byte, >= 0, 기본 INT_MAX)
     ZLINK_MSG_T_SIZE              = 6,  // zlink_msg_t 크기 (byte, 읽기 전용)
     ZLINK_THREAD_AFFINITY_CPU_ADD      = 7,  // I/O thread 어피니티에 CPU 추가
     ZLINK_THREAD_AFFINITY_CPU_REMOVE   = 8,  // I/O thread 어피니티에서 CPU 제거

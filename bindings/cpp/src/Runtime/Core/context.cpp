@@ -272,23 +272,6 @@ void context_options_t::max_sockets (socket_count_t value_)
       context_option_id_value (detail::context_option_id::max_sockets), value_.value ()));
 }
 
-byte_size_t context_options_t::max_msg_size () const
-{
-    int error = 0;
-    const int value =
-      _ctx.get_option_raw (context_option_id_value (detail::context_option_id::max_msgsz), &error);
-    if (error != 0)
-        throw config_error_t (static_cast<config_result_t> (error));
-    return byte_size_t::bytes (value);
-}
-
-void context_options_t::max_msg_size (byte_size_t value_)
-{
-    detail::throw_if_failed<config_error_t> (
-      _ctx.set_option_raw (context_option_id_value (detail::context_option_id::max_msgsz),
-                           static_cast<int> (value_.bytes ())));
-}
-
 std::optional<thread_priority_t> context_options_t::thread_priority () const
 {
     int error = 0;

@@ -34,12 +34,6 @@ public interface IContextOptions
     int ThreadSchedulingPolicy { get; set; }
 
     /// <summary>
-    ///     Gets or sets the default maximum inbound message size, in bytes, for new
-    ///     sockets.
-    /// </summary>
-    int MaxMessageSize { get; set; }
-
-    /// <summary>
     ///     Gets the size of the context's message worker thread pool.
     /// </summary>
     int MessageThreadSize { get; }

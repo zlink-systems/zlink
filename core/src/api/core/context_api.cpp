@@ -27,7 +27,6 @@ static const public_ctx_option_descriptor_t public_ctx_options[] = {
   {ZLINK_SOCKET_LIMIT, false, true},
   {ZLINK_THREAD_PRIORITY, true, true},
   {ZLINK_THREAD_SCHED_POLICY, true, true},
-  {ZLINK_MAX_MSGSZ, true, true},
   {ZLINK_MSG_T_SIZE, false, true},
   {ZLINK_THREAD_AFFINITY_CPU_ADD, true, true},
   {ZLINK_THREAD_AFFINITY_CPU_REMOVE, true, true},
