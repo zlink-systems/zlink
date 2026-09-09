@@ -136,6 +136,9 @@ releases; they are verified only by the local gate (`scripts/gate/framework-gate
 | `build.yml` | Core build and verification (also the release workflow) | 5 platforms |
 | `docs.yml` | documentation site build and deploy | ubuntu |
 
+The CI workflows use a per-ref `concurrency` group, so a newer push to the same branch cancels the
+run in progress (no matrix pile-up, no runner starvation for releases). Release workflows are never
+cancelled.
 Windows jobs set up MSVC through `.github/actions/msvc-env` (composite, no Node runtime). .NET unit
 tests that fail from scheduler noise on shared runners are rerun once, failed tests only, by
 `scripts/ci/dotnet-test-retry.sh`; test tolerances are never widened.

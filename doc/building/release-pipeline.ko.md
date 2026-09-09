@@ -137,6 +137,8 @@ gh release view core/v0.17.5 --json assets -q '.assets[].name'
 | `build.yml` | Core 빌드·검증(릴리스 겸용) | 5 플랫폼 |
 | `docs.yml` | 문서 사이트 빌드·배포 | ubuntu |
 
+CI 워크플로우는 ref별 `concurrency`로 같은 브랜치의 새 push가 진행 중인 run을 취소한다(matrix job 누적과
+릴리스 runner 기아 방지). 릴리스 워크플로우는 취소하지 않는다.
 Windows job의 MSVC 환경은 `.github/actions/msvc-env`(composite, Node 런타임 없음)로 잡는다.
 공유 러너의 스케줄러 노이즈로 실패한 .NET 단위 테스트는 `scripts/ci/dotnet-test-retry.sh`가 실패
 테스트만 한 번 재실행한다(테스트 허용치는 바꾸지 않는다).
