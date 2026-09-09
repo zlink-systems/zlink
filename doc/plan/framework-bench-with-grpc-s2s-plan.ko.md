@@ -13,14 +13,26 @@
 - 언어별 성능 테스트를 수행한다.
 - **gRPC 성능 비교 문서**를 작성한다.
 
-### 0.1 이 계획이 확정으로 두는 해석
+### 0.1 사용자 결정 (2026-09-09, §11에 대한 답)
+
+| 항목 | 결정 |
+| --- | --- |
+| 측정 모델 | HTTP call은 부하 시작 신호, 측정 대상은 server A → server B 메시징 (§0.2) |
+| 포트 | A/B 쌍 구조에 맞게 새로 정한다(§3.4). 기존 대역과 겹치지 않게 언어당 20개 |
+| Kotlin | 측정하지 않는다. Kotlin은 Java와 같은 runtime·server를 쓰므로 Java 결과로 대신한다 |
+| Node framework 행 | codec `bytes` 미지원은 제품(framework Node codec) 결함이다. 수정 전까지 `unsupported`로 기록하고 codec 수정은 별도 작업 |
+| 보고서 | 새 공개 보고서를 쓰고 README와 zlink.systems에서 참조한다. 1차 결과는 병기하지 않는다 |
+| 버전 | 공개된 framework 0.10.0 + binding 0.17.6으로 시작하고, framework 0.11.0이 나오면 그 버전으로 다시 잰다 |
+| 위치 | 언어별 `framework/languages/<lang>/bench/with-grpc/`에 흩어진 bench를 **`framework/bench/grpc/` 한 곳**으로 모은다. 문서·집계기·로그도 함께(§2.1) |
+
+### 0.2 측정 모델의 해석
 
 "server to server, 트리거는 HTTP call"은 공통 perf 규격
 (`framework/doc/framework/common/perf/README.ko.md` §4.2 server-driven 부하)의 모델과 같다.
 즉 측정 대상은 **server process A가 server process B에 보내는 메시징**이고, HTTP 호출은
 **부하를 시작하라는 신호(control)**이며 측정 operation이 아니다. A는 HTTP 요청을 받으면
-자기 안의 logical stream으로 B에 요청을 반복하고, 완료·지연을 자기가 집계한다. 이 해석이
-틀리면 §11의 결정 항목에서 바로잡는다.
+자기 안의 logical stream으로 B에 요청을 반복하고, 완료·지연을 자기가 집계한다. 사용자가
+이 해석을 확정했다(§0.1).
 
 ## 1. 현재 상태
 
@@ -97,6 +109,39 @@
 비교 보고서는 1차의 `report-with-grpc-5lang.ko.md`(doc/plan, 비공개)와 달리 **공개 문서**다.
 그래서 근거 수치·조건·한계를 규격 §7.1대로 남기되, 캠페인 진행 기록은 담지 않는다.
 
+### 2.1 위치 통합 — `framework/bench/grpc/`
+
+현재 bench는 언어별 트리(`framework/languages/{cpp,dotnet,java,node}/bench/with-grpc/`, C 기준은
+`bindings/c/bench/with_grpc/`)에 흩어져 있고 집계기는 `framework/bench/tools/`, 규격은
+`framework/doc/framework/common/bench/`에 있다. 이를 한 곳으로 모은다.
+
+```text
+framework/bench/grpc/
+├── README.ko.md / README.md      # 규격(현재 with-grpc-local.*를 이동·개정)
+├── doc/
+│   ├── dotnet.ko.md / .md         # 언어별 bench 문서(§5 공통 형식)
+│   ├── node.ko.md / .md
+│   ├── java.ko.md / .md
+│   ├── cpp.ko.md / .md
+│   └── comparison.ko.md / .md     # gRPC 비교 보고서(공개)
+├── tools/                         # 공용 집계기(현재 framework/bench/tools 이동)
+├── dotnet/  node/  java/  cpp/    # 언어별 runner·A/B server·proto(현재 with-grpc 이동)
+├── c/                             # C 기준 bench(현재 bindings/c/bench/with_grpc 이동)
+├── proto/                         # 다섯 언어가 공유하는 bench.proto (언어별 복제본 제거)
+└── log/<lang>/<stamp>/            # 측정 원본
+```
+
+- 이동은 `git mv`로 하고, 각 언어의 build 정의(csproj·package.json·build.gradle.kts·CMake)가
+  framework 소스를 참조하는 상대 경로를 새 위치에 맞게 고친다. 샘플과 같은 원칙으로
+  **bench는 framework 기본 빌드·sln·workspace·CI에 포함하지 않는다.**
+- `framework/languages/dotnet/bench/with-grpc/`(784 MB)·`java`(472 MB)에는 bin/obj/build
+  산출물이 있다. 이동 전에 tracked 파일만 옮기고 산출물은 남기지 않는다.
+- 사이트: `doc/site/docs/bench -> ../../../framework/bench/grpc/doc` 심링크와 mkdocs nav 항목을
+  추가해 규격·언어별 문서·비교 보고서를 zlink.systems에서 본다. README(한/영)의 문서 표에
+  비교 보고서 링크를 넣는다.
+- `bindings/c/bench/BENCH_POLICY.md`는 C bench 정책이므로 C 기준 bench와 함께 옮기되 정책
+  문장은 유지한다.
+
 ## 3. 측정 모델 (규격 개정안의 핵심)
 
 ### 3.1 역할
@@ -108,8 +153,24 @@
 | Server B (target) | 1 per 구현 | echo(request) 또는 count(send) + stats endpoint |
 
 구현 셋(`grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`)마다 A·B 한 쌍이다. 같은
-언어의 세 쌍은 §9 포트 대역 안에서 offset으로 구분한다(대역에 trigger 포트 1개를 추가하거나
-예비 포트 `+8`을 trigger로 쓴다 — §11 결정).
+언어의 세 쌍은 §3.4의 포트 대역 안에서 offset으로 구분한다.
+
+### 3.4 포트 대역 (새 규격 §9가 된다)
+
+구현 하나에 A trigger, A stats, B endpoint, B stats 네 포트가 필요하고(raw binding은 B의
+request·command endpoint가 분리되어 다섯), 언어당 세 구현이므로 20개 대역을 잡는다. 기존
+1차 대역(5071~5119, 6071~6079)과 겹치지 않는다.
+
+| 언어 | 대역 | grpc A trigger/stats, B | zlink raw A trigger/stats, B request/command/stats | framework A trigger/stats, B endpoint/stats |
+| --- | --- | --- | --- | --- |
+| `dotnet` | 5200-5219 | 5200/5201, 5202 | 5205/5206, 5207/5208/5209 | 5212/5213, 5214/5215 |
+| `node` | 5220-5239 | 5220/5221, 5222 | 5225/5226, 5227/5228/5229 | 5232/5233, 5234/5235 |
+| `java` | 5240-5259 | 5240/5241, 5242 | 5245/5246, 5247/5248/5249 | 5252/5253, 5254/5255 |
+| `cpp` | 5260-5279 | 5260/5261, 5262 | 5265/5266, 5267/5268/5269 | 5272/5273, 5274/5275 |
+| C 기준 | 6200-6219 | 6200/6201, 6202 | 6205/6206, 6207/6208/6209 | 없음 |
+
+각 대역의 `+16`~`+19`는 예비다. runner는 시작 전에 자기 대역이 비어 있는지 확인하고, 사용
+중이면 옮기지 않고 중단한다(현재 규격 §9와 같은 규칙).
 
 ### 3.2 측정 구간과 집계
 
@@ -133,9 +194,8 @@ gRPC 구현의 A는 같은 HTTP trigger listener를 갖고, B로 향하는 unary
 | 언어 | runner 개정 | 추가로 필요한 것 | 예상 job |
 | --- | --- | --- | --- |
 | `.NET` | client → server A로 재구성. canonical perf runner의 `ServerSupport`(trigger·admin·stats)를 재사용 | `Zlink.Framework.Perf.ServerSupport`를 bench가 참조할 수 있게 공유 위치로 이동 또는 복제 없이 참조 | sol 1 |
-| Node | 같음 | framework 행은 codec bytes 지원이 선행(제품 결함) — 그 전에는 `unsupported`로 기록 | sol 1 (+ codec 별도) |
+| Node | 같음 | framework 행은 codec bytes 지원이 선행(제품 결함, 사용자 결정: 별도 작업) — 그 전에는 `unsupported`로 기록 | sol 1 |
 | Java | 같음 | reply 유실 재현(`repro/`)이 S2S에서도 재현되는지 먼저 확인 | sol 1 |
-| Kotlin | client(A) Kotlin, B는 Java 바이너리 공유(1차와 동일 판단) | 없음 | terra 1 |
 | C++ | 같음 + `zlink-framework-cpp` 6셀 구현 | framework C++ HTTP hosting(trigger listener)은 framework 자체 기능으로 있음 | astra 1 |
 | C 기준 | A/B 재구성 없이 유지(HTTP trigger 없음). formula 1 분모 안정화가 별도 항목 | 기준선 안정화 job | astra 1 |
 | 집계기 | S2S 셀 스키마·A/B 병합·언어별 문서 표 생성 | 테스트 유지 | sol 1 |
@@ -145,7 +205,8 @@ gRPC 구현의 A는 같은 HTTP trigger listener를 갖고, B로 향하는 unary
 
 ## 5. 언어별 bench 문서의 공통 형식
 
-다섯 문서가 같은 절 번호와 제목을 갖는다. `.NET` README를 이 형식으로 고쳐 기준으로 삼는다.
+네 문서(`dotnet`, `node`, `java`, `cpp`)가 같은 절 번호와 제목을 갖는다. 현재 `.NET` README를
+이 형식으로 고쳐 기준으로 삼고 `framework/bench/grpc/doc/`에 둔다.
 
 1. 비교 대상 — 그 언어의 세 구현 이름과 사용하는 API(표)
 2. 실행 방법 — runner 명령, 환경 변수 표, 한 패턴만 실행하는 방법
@@ -181,12 +242,13 @@ gRPC 구현의 A는 같은 HTTP trigger listener를 갖고, B로 향하는 unary
 
 | 단계 | 내용 | 산출 | 담당 |
 | --- | --- | --- | --- |
-| S0 | §11 결정 확정, 규격 개정(§3 실행 조건·§4 출력·§9 포트·새 §10 S2S 모델), `.NET` README를 §5 형식으로 | 규격 ko/en, .NET 문서 | 감독자 |
+| S-1 | bench 위치 통합(§2.1): `git mv`, build 참조 경로 수정, 집계기 이동, 언어별 runner가 새 위치에서 빌드·1셀 smoke 통과 | `framework/bench/grpc/` | codex sol 1 |
+| S0 | 규격 개정(§3 실행 조건·§4 출력·§9 포트·새 §10 S2S 모델)과 이동, `.NET` 문서를 §5 형식으로, 사이트 nav | 규격 ko/en, .NET 문서 | 감독자 |
 | S1 | 집계기 S2S 스키마 + `.NET` runner 개정 + `.NET` 3-run | 원본·표 | codex sol ×2 |
-| S2 | Node·Java·Kotlin runner 개정과 3-run(정지·유실 결함은 재현되면 기록하고 멈춘다 — 고치는 것은 별도) | 원본·표 | codex sol/terra |
+| S2 | Node·Java runner 개정과 3-run(정지·유실 결함은 재현되면 기록하고 멈춘다 — 고치는 것은 별도) | 원본·표 | codex sol |
 | S3 | C++ runner 개정 + `zlink-framework-cpp` 구현 + 3-run | 원본·표 | codex astra |
 | S4 | `zlink-c` 기준선 안정화(원인 규명 후 최소 수정) | 판정 게재 가능 여부 | codex astra |
-| S5 | 언어별 문서 4개 + 비교 보고서 ko/en | 공개 문서 | 감독자 |
+| S5 | 언어별 문서 3개(Node·Java·C++) + 비교 보고서 ko/en, README·사이트 링크 | 공개 문서 | 감독자 |
 | S6 | bench를 로컬 gate(`scripts/gate/framework-gate.sh`)에 빌드만 편입 | 재파손 방지 | 감독자 |
 
 각 job은 원인 하나, 1.5시간 상한, 브리프는 `doc/plan/fw-bench-worklog/briefs/fwb2-<id>.prompt`,
@@ -208,7 +270,7 @@ gRPC 구현의 A는 같은 HTTP trigger listener를 갖고, B로 향하는 unary
 - 7축 perf 규격의 나머지 축(CS, AC, PS, Spot local/worker). 이 계획은 S2S 축의 gRPC 비교만 다룬다.
 - binding 완료 전달 결함의 수정(B 캠페인).
 
-## 11. 결정이 필요한 항목 (사용자)
+## 11. 결정 항목 (2026-09-09 사용자 답변으로 확정 — §0.1)
 
 1. §0.1의 해석이 맞는가 — HTTP call은 부하 시작 신호이고 측정 operation은 A→B 메시징인가.
    (대안: HTTP 요청 하나마다 A→B 요청 하나를 보내고 HTTP 왕복을 재는 모델. 이 경우 HTTP
