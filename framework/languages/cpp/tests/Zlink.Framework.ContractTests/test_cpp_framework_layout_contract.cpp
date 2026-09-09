@@ -1390,11 +1390,13 @@ int main ()
     ok &= require_exists (root / "samples/run_samples.ps1");
     const auto sample_shell_aggregate = root / "samples/run_samples.sh";
     const auto sample_powershell_aggregate = root / "samples/run_samples.ps1";
-    for (const auto &runner :
-         {"TicTacToe", "Bingo", "DeliveryDispatch", "SupportChat", "GameQuest", "ShoppingMall"}) {
+    for (const auto &runner : {"TicTacToe", "Bingo", "DeliveryDispatch", "SupportChat",
+                               "GameQuest", "ShoppingMall", "ZoneWorld"}) {
         ok &= file_contains (sample_shell_aggregate, std::string (runner) + "/run_sample.sh");
-        ok &= file_contains (sample_powershell_aggregate, std::string (runner) + "/run_sample.sh");
+        ok &= file_contains (sample_powershell_aggregate,
+                             std::string ("\"") + runner + '"');
     }
+    ok &= file_contains (sample_powershell_aggregate, "$Name/run_sample.ps1");
     ok &= file_does_not_contain (sample_shell_aggregate, "MAX_ATTEMPTS",
                                  "the C++ sample aggregate must not retry a bind failure");
     ok &= file_does_not_contain (
