@@ -389,7 +389,8 @@ int zlink::stream_t::decode_packet_bytes (uint32_t source_rid_,
         state.reset ();
         unsigned char source_rid_bytes[sizeof (source_rid_)];
         put_uint32 (source_rid_bytes, source_rid_);
-        event_disconnected (source_pipe_->get_endpoint_pair (), failure_errno_,
+        event_disconnected (source_pipe_->get_endpoint_pair (),
+                            ZLINK_DISCONNECT_REASON_TRANSPORT_ERROR,
                             source_rid_bytes, sizeof (source_rid_bytes));
         source_pipe_->terminate (false);
         _fq.deactivate (source_pipe_);
