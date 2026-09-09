@@ -708,9 +708,11 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 ### 9.1 C++
 
 - perf 경로: `bindings/cpp/perf`
-- Single 상태: `미측정`
+- Single 상태: `측정 완료(2026-09-09)` — 6 transport × 7 pattern paired 완료(42셀 모두 complete).
+  통과 16 / 미달 26. 미달은 2단계 개선 대상(임시 상태). 특이: ws·wss·tls의 1024B routed
+  req/reply 급락, inproc routed·req/reply 대폭 미달(memory-copy 상한·snapshot 비용).
 - Multi 상태: `미측정`
-- 다음 작업: 현재 binding runner에 등록된 pattern을 inventory gate에서 확인한 뒤 paired 측정을 시작한다.
+- 다음 작업: C++ Multi suite paired 측정(STREAM은 100 CCU).
 
 #### 9.1.1 Single suite
 
@@ -723,41 +725,41 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
 | `tcp` | `DEALER_ROUTER_REQREP` | 74.0% | 67.3% | 90.4% | 95.6% | 102.4% | 102.5% | 통과 88.7%/lat1.10× · c0174-cpp-single-tcp |
 | `tcp` | `ROUTER_ROUTER` | 80.9% | 88.7% | 93.0% | 97.2% | 97.1% | 97.4% | 통과 92.4%/lat1.03× · c0174-cpp-single-tcp |
 | `tcp` | `ROUTER_ROUTER_REQREP` | 64.2% | 63.4% | 85.3% | 99.8% | 102.1% | 102.8% | 통과 86.3%/lat1.40× · c0174-cpp-single-tcp |
-| `ws` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ws` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `wss` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `tls` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `inproc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PAIR` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `PUBSUB` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_DEALER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `DEALER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
-| `ipc` | `ROUTER_ROUTER_REQREP` | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 | 미측정 |  |
+| `ws` | `PAIR` | 75.8% | 77.1% | 83.1% | 96.0% | 98.6% | 100.5% | 미달 88.5%/lat1.02× · c0174-cpp-single-ws |
+| `ws` | `PUBSUB` | 77.8% | 75.2% | 84.6% | 113.3% | 125.2% | 136.9% | 통과 102.2%/lat1.25× · c0174-cpp-single-ws |
+| `ws` | `DEALER_DEALER` | 77.7% | 68.1% | 77.1% | 82.2% | 89.7% | 88.6% | 미달 80.6%/lat1.21× · c0174-cpp-single-ws |
+| `ws` | `DEALER_ROUTER` | 66.8% | 65.7% | 74.5% | 76.9% | 82.5% | 91.1% | 미달 76.2%/lat1.43× · c0174-cpp-single-ws |
+| `ws` | `DEALER_ROUTER_REQREP` | 77.5% | 77.6% | 24.5% | 94.7% | 96.6% | 99.4% | 미달 78.4%/lat1.21× · c0174-cpp-single-ws |
+| `ws` | `ROUTER_ROUTER` | 80.4% | 71.5% | 83.5% | 93.5% | 94.7% | 91.5% | 통과 85.9%/lat1.15× · c0174-cpp-single-ws |
+| `ws` | `ROUTER_ROUTER_REQREP` | 79.0% | 65.5% | 23.0% | 89.8% | 95.2% | 97.5% | 미달 75.0%/lat1.26× · c0174-cpp-single-ws |
+| `wss` | `PAIR` | 77.3% | 82.2% | 96.7% | 97.2% | 99.8% | 95.3% | 미달 91.4%/lat1.06× · c0174-cpp-single-wss |
+| `wss` | `PUBSUB` | 77.0% | 84.4% | 98.9% | 97.4% | 94.7% | 84.7% | 미달 89.5%/lat1.10× · c0174-cpp-single-wss |
+| `wss` | `DEALER_DEALER` | 84.6% | 82.7% | 84.9% | 92.4% | 88.6% | 99.8% | 미달 88.8%/lat1.02× · c0174-cpp-single-wss |
+| `wss` | `DEALER_ROUTER` | 75.7% | 81.3% | 100.7% | 101.9% | 103.1% | 103.9% | 통과 94.4%/lat1.10× · c0174-cpp-single-wss |
+| `wss` | `DEALER_ROUTER_REQREP` | 81.1% | 79.4% | 19.2% | 101.4% | 101.3% | 99.0% | 미달 80.2%/lat1.22× · c0174-cpp-single-wss |
+| `wss` | `ROUTER_ROUTER` | 77.9% | 81.4% | 91.8% | 96.7% | 98.1% | 102.3% | 통과 91.4%/lat1.06× · c0174-cpp-single-wss |
+| `wss` | `ROUTER_ROUTER_REQREP` | 74.3% | 78.1% | 28.5% | 103.3% | 108.2% | 107.0% | 미달 83.2%/lat1.11× · c0174-cpp-single-wss |
+| `tls` | `PAIR` | 79.0% | 92.7% | 101.9% | 97.1% | 96.1% | 96.5% | 미달 93.9%/lat1.02× · c0174-cpp-single-tls |
+| `tls` | `PUBSUB` | 78.6% | 94.6% | 102.8% | 97.7% | 94.8% | 83.6% | 미달 92.0%/lat1.04× · c0174-cpp-single-tls |
+| `tls` | `DEALER_DEALER` | 88.4% | 88.9% | 109.5% | 93.1% | 93.3% | 94.6% | 미달 94.6%/lat1.06× · c0174-cpp-single-tls |
+| `tls` | `DEALER_ROUTER` | 67.1% | 77.3% | 91.9% | 96.0% | 101.0% | 101.7% | 통과 89.2%/lat1.08× · c0174-cpp-single-tls |
+| `tls` | `DEALER_ROUTER_REQREP` | 71.8% | 71.7% | 53.7% | 102.8% | 98.2% | 103.8% | 미달 83.7%/lat1.10× · c0174-cpp-single-tls |
+| `tls` | `ROUTER_ROUTER` | 97.5% | 98.5% | 107.6% | 107.9% | 108.0% | 100.4% | 통과 103.3%/lat0.96× · c0174-cpp-single-tls |
+| `tls` | `ROUTER_ROUTER_REQREP` | 63.7% | 75.0% | 57.1% | 94.6% | 98.4% | 97.0% | 미달 81.0%/lat1.11× · c0174-cpp-single-tls |
+| `inproc` | `PAIR` | 83.3% | 82.1% | 76.6% | 87.0% | 93.6% | 99.2% | 미달 87.0%/lat0.81× · c0174-cpp-single-inproc |
+| `inproc` | `PUBSUB` | 82.4% | 84.7% | 83.9% | 72.3% | 141.8% | 113.8% | 통과 96.5%/lat0.80× · c0174-cpp-single-inproc |
+| `inproc` | `DEALER_DEALER` | 84.4% | 93.5% | 91.8% | 22.7% | 38.9% | 49.1% | 미달 63.4%/lat1.50× · c0174-cpp-single-inproc |
+| `inproc` | `DEALER_ROUTER` | 81.7% | 87.1% | 90.0% | 94.0% | 39.6% | 102.6% | 미달 82.5%/lat1.10× · c0174-cpp-single-inproc |
+| `inproc` | `DEALER_ROUTER_REQREP` | 64.0% | 63.2% | 65.3% | 55.0% | 58.8% | 45.3% | 미달 58.6%/lat2.96× · c0174-cpp-single-inproc |
+| `inproc` | `ROUTER_ROUTER` | 91.4% | 89.5% | 86.0% | 21.2% | 86.5% | 95.6% | 미달 78.4%/lat0.92× · c0174-cpp-single-inproc |
+| `inproc` | `ROUTER_ROUTER_REQREP` | 49.2% | 48.8% | 47.3% | 30.3% | 40.9% | 39.2% | 미달 42.6%/lat13.08× · c0174-cpp-single-inproc |
+| `ipc` | `PAIR` | 80.1% | 83.9% | 98.0% | 96.3% | 97.2% | 97.2% | 미달 92.1%/lat1.02× · c0174-cpp-single-ipc |
+| `ipc` | `PUBSUB` | 76.8% | 83.5% | 100.8% | 133.4% | 98.4% | 98.7% | 통과 98.6%/lat1.05× · c0174-cpp-single-ipc |
+| `ipc` | `DEALER_DEALER` | 76.9% | 83.0% | 83.8% | 88.9% | 91.2% | 90.6% | 미달 85.7%/lat1.10× · c0174-cpp-single-ipc |
+| `ipc` | `DEALER_ROUTER` | 70.8% | 80.4% | 104.3% | 102.9% | 106.3% | 99.1% | 통과 94.0%/lat0.96× · c0174-cpp-single-ipc |
+| `ipc` | `DEALER_ROUTER_REQREP` | 77.8% | 74.1% | 71.3% | 98.9% | 88.1% | 105.4% | 통과 85.9%/lat1.08× · c0174-cpp-single-ipc |
+| `ipc` | `ROUTER_ROUTER` | 82.9% | 85.5% | 90.1% | 96.0% | 98.8% | 103.3% | 통과 92.8%/lat1.03× · c0174-cpp-single-ipc |
+| `ipc` | `ROUTER_ROUTER_REQREP` | 65.1% | 62.4% | 65.9% | 103.3% | 100.5% | 109.7% | 미달 84.5%/lat1.38× · c0174-cpp-single-ipc |
 
 #### 9.1.2 Multi suite
 
