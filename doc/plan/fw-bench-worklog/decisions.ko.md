@@ -930,6 +930,22 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
   `framework-dotnet/5-dispatch-batch`(worktree zlink-5-dispatch-batch), job `fwperf-dotnet-p2`(sol).
   보고서 `.artifacts/codex/fwperf-dotnet/summary.md`.
 
+## FB-058 — Java framework 병목 진단(P1, fwperf-java): 1 ms park 폴링 수신 + 요청당 state-lane 동기 park 5회 + permit 전 receive·mailbox 3회 복사·1건 claim + executor hop (2026-09-10, Issue #6)
+
+- hot path 순서 규칙 7개(idle sleep, service state lane, post-receive mailbox, 1-record application lane, Channel gate,
+  handler executor, call-time selector). 확정: `ZLinkJavaRawServicePort.receive:239-246`+`ZLinkJavaRawMeshNode.startPump:4241-4273`이
+  `waitForReadable(ZERO)` 뒤 `parkNanos(1 ms)`로 폴링(spec 04 §3 위반; wrapper가 `POLLCOMPLETION` wake를 readable로 안 봐
+  completion-only wake도 1 ms park로 이어짐). polling-wait.patch 단독으로 serial 377→562 ops/s(+49%), RTT −0.87 ms.
+- source 요청당 동기 join park 5회(topology `peers()` 2회 60 µs, liveness 51 µs, WRR 79 µs, port request 129 µs ≈379 µs);
+  target은 permit 전에 receive해 mailbox에 full copy 3회 뒤 1건 claim(`dispatch:4391-4707`, `drainApplicationMailbox:7348-7417`);
+  Channel serial queue→handler executor hop. send는 admission 11.6 KMSG/s vs target 소비 ~5 KMSG/s로 drain 2.6 s.
+- window 100: Little's law로 평균 in-flight 4.6건 — source submit thread의 동기 hot path가 depth를 제한.
+- 실험 최고치(polling+동기 owner+fusion): serial 0.186, send 0.025 — 단순 수정으로 0.90 불가.
+- 결정(감독자): P2 승인 — (1) blocking readiness+permit-before-receive+bounded batch 64를 하나의 ingress owner로(Node·C++ 구조),
+  mailbox copy 단계 제거, (2) selector 사전 준비(변경 시점)로 state-lane park 제거, (3) Message lifetime 단일 소유,
+  (4) executor hop·completion chain은 잔여 시. 규칙 7→3 이하. 브랜치 `framework-java/6-mesh-ingress`, job `fwperf-java-p2`(sol).
+  보고서 `.artifacts/codex/fwperf-java/summary.md`.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
