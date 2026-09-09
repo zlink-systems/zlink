@@ -22,6 +22,32 @@ import systems.zlink.contracts.messaging.Message;
 
 final class ZLinkJavaRawServicePortContractTest {
     @Test
+    void oneOrderedRegistryOwnsSocketsAndRejectsForeignSockets() throws Exception {
+        try (ZLinkJavaRawServicePort owner = new ZLinkJavaRawServicePort();
+             ZLinkJavaRawServicePort foreign = new ZLinkJavaRawServicePort()) {
+            var first = owner.openRouter(RoutingId.from("owner-first"));
+            var second = owner.openRouter(RoutingId.from("owner-second"));
+            var other = foreign.openRouter(RoutingId.from("owner-first"));
+            var registryField = ZLinkJavaRawServicePort.class
+                .getDeclaredField("receivePollers");
+            registryField.setAccessible(true);
+            var registry = (java.util.SequencedMap<?, ?>) registryField.get(owner);
+            assertEquals(List.of(second, first),
+                List.copyOf(registry.reversed().keySet()));
+            assertFalse(java.util.Arrays.stream(ZLinkJavaRawServicePort.class.getDeclaredFields())
+                .anyMatch(field -> List.class.isAssignableFrom(field.getType())),
+                "socket ownership must not also be kept in a linear list");
+            assertThrows(IllegalArgumentException.class,
+                () -> owner.receiveNow(other));
+            assertThrows(IllegalArgumentException.class,
+                () -> owner.send(other, RoutingId.from("target"), List.of(new byte[] {1})));
+            owner.close();
+            assertTrue(registry.isEmpty());
+            assertThrows(IllegalStateException.class, () -> owner.receiveNow(first));
+        }
+    }
+
+    @Test
     void requestDecoderReadsNativeReplyBeforeThePortClosesItsOwner() throws Exception {
         RoutingId callerId = RoutingId.from("native-reply-caller");
         RoutingId targetId = RoutingId.from("native-reply-target");

@@ -1,10 +1,8 @@
 package systems.zlink.framework.runtime.binding;
 
-import java.util.ArrayList;
 import java.util.AbstractList;
-import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -39,9 +37,8 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
 final class ZLinkJavaRawServicePort implements AutoCloseable {
     private final Context context;
     private final boolean ownsContext;
-    private final List<RouterSocket> routers = new ArrayList<>();
-    private final Map<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
-        new IdentityHashMap<>();
+    private final LinkedHashMap<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
+        new LinkedHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
 
     ZLinkJavaRawServicePort() {
@@ -69,7 +66,6 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         boolean accepted = false;
         try {
             router.setRoutingId(Objects.requireNonNull(routingId, "routingId"));
-            routers.add(router);
             receivePollers.put(router, new ZLinkJavaSocketReceivePoller(router));
             accepted = true;
             return router;
@@ -317,16 +313,11 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        for (int index = routers.size() - 1; index >= 0; index--) {
-            RouterSocket router = routers.get(index);
-            ZLinkJavaSocketReceivePoller receivePoller = receivePollers.remove(router);
-            if (receivePoller != null) {
-                receivePoller.close();
-            }
-            router.close();
+        for (var entry : receivePollers.reversed().entrySet()) {
+            entry.getValue().close();
+            entry.getKey().close();
         }
         receivePollers.clear();
-        routers.clear();
         if (ownsContext) {
             context.close();
         }
@@ -334,7 +325,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
 
     private void ensureOwnedOnLane(RouterSocket router) {
         ensureOpen();
-        if (!routers.contains(Objects.requireNonNull(router, "router"))) {
+        if (!receivePollers.containsKey(Objects.requireNonNull(router, "router"))) {
             throw new IllegalArgumentException("router is not owned by this service port");
         }
     }
