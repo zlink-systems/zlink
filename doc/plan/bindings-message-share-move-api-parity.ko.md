@@ -62,9 +62,10 @@ Java relay의 deep-copy가 고정 per-message 비용의 큰 부분).
 깊은 복사는 이름을 **`Clone`(독립 복제)** 으로 옮긴다. 그러면 세 동작이 이름만으로 구분된다:
 - `Copy` = ref-count 공유(같은 버퍼) — C `zlink_msg_copy`.
 - `Move` = 소유권 이전(원본 empty) — C `zlink_msg_move`.
-- `Clone` = 깊은 복사(독립 버퍼) — **Message를 반환하는 깊은복사 메서드가 이미 있던 언어만** 이름 이동.
-  (Node `copy()`가 해당. C++·.NET·Java엔 그런 메서드가 없어 `Clone` 추가 안 함 — .NET `CopyTo(Span)`은 payload를
-  버퍼에 채우는 span-fill이라 대상 아님. 필요 시 바이트 materialize 후 새 `Message` 생성.)
+- `Clone` = 깊은 복사(독립 버퍼). **Node**는 기존 공개 `copy()`(깊은복사)를 `clone()`으로 이름 이동, **Java**는
+  독립 버퍼 `clone()`을 제공(테스트로 refcount=1·독립 mutation 검증). **C++·.NET**은 Message 반환 깊은복사 메서드가
+  없어 `Clone` 미제공(.NET `CopyTo(Span)`은 payload를 버퍼에 채우는 span-fill이라 대상 아님) — 필요 시 바이트를
+  materialize해 새 `Message`를 만든다.
 
 ### 3.3 언어별 시그니처 (두 함수 각각)
 언어별 관용 케이싱을 따르되 의미어(Copy/Move/Clone)는 동일하게 맞춘다.

@@ -22,7 +22,7 @@ bindings/cpp/doxygen/html/index.html
 - Contract projections for core, messaging, sockets, eventing, and errors
 - Runtime-backed public types (`context_t`, `socket_t`, `message_t`, `poller_t`, etc.)
 - `context_t::options()` exposes the typed `context_options_t` facade
-- `message_t` diagnostics expose `ref_count()`; `copy()` (ref-count share), `move(dest)` (ownership transfer, caller left empty), and `clone()` (deep copy) map to `zlink_msg_copy`/`zlink_msg_move` and a deep copy
+- `message_t` diagnostics expose `ref_count()`; `copy()` (ref-count share) and `move(dest)` (ownership transfer, caller left empty) map to `zlink_msg_copy`/`zlink_msg_move`
 - `socket_monitor_t` is the public monitoring wrapper for socket-level events and snapshots
 
 ## DONTWAIT send, request, and completions

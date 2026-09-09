@@ -198,7 +198,6 @@ payload를 다룰 때 세 가지 명시적 동작이 있습니다. 이름과 의
 |------|----------|------|------|
 | `copy()` | `message_t copy() const` | **ref-count 공유** — 같은 버퍼를 가리키는 새 값 반환, 원본 유효 유지 | 같은 payload를 보관하며 원본도 계속 써야 할 때 |
 | `move(dest)` | `void move(message_t& dest)` | **소유권 이전** — `dest`로 넘기고 호출자는 empty | 받은 메시지를 사본 없이 그대로 다시 보낼 때(relay/echo) |
-| `clone()` | `message_t clone() const` | **깊은 복사** — 독립 버퍼 | 복제 후 payload를 독립적으로 수정할 때 |
 
 ```cpp
 // Copy: 같은 버퍼를 공유하는 새 핸들. 둘 다 각자 닫는다(refcount).
@@ -210,14 +209,11 @@ socket.send ().message (shared).submit ();   // shared는 move됨
 zlink::message_t out;
 received_part.move (out);                     // received_part는 empty가 됨
 socket.send (routing_id).message (out).submit ();
-
-// Clone: 독립 복제 후 수정
-zlink::message_t dup = msg.clone ();
-std::memcpy (dup.data (), patch, len);        // msg에는 영향 없음
 ```
 
-`copy()`는 mutation 격리를 보장하지 않습니다(공유 버퍼) — 독립 수정이 필요하면
-`clone()`을 쓰세요.
+`copy()`는 mutation 격리를 보장하지 않습니다(공유 버퍼) — 독립적으로 수정할 payload가
+필요하면 바이트를 materialize해(`to_bytes()`/`copy_to()`) 새 `message_t`를 만드세요.
+(C++엔 Message 반환 깊은복사 `clone()`이 없습니다.)
 
 ---
 
