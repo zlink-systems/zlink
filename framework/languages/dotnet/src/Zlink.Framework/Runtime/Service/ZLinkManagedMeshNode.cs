@@ -10643,7 +10643,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void SignalReadyIfNeeded()
     {
-        if (!_ownedMailboxes.Values.Any(static mailbox => mailbox.HasRecords)
+        if (Volatile.Read(ref _queuedMessages) == 0
             || Interlocked.CompareExchange(ref _readyPosted, 1, 0) != 0)
             return;
         _readyHandler?.Invoke(MeshReadyDomains.All);

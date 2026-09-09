@@ -78,7 +78,7 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
         ulong byteBudget)
     {
         var pendingBytes = record.PendingBytes;
-        var enqueued = AwaitStateLane(_lane.RunAsync(() =>
+        return AwaitStateLane(_lane.RunAsync(() =>
         {
             if (pendingBytes == ulong.MaxValue)
                 return false;
@@ -92,16 +92,11 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
                 _applicationAdmissionRecords++;
             _pendingBytes = checked(_pendingBytes + pendingBytes);
 
-            // Enqueue accounting must precede the callback. A dequeue can
-            // otherwise publish its decrement before the corresponding
-            // increment and expose a transient negative global count.
+            // Publish accounting before another mailbox turn can dequeue
+            // this record. Readiness reads this existing aggregate directly.
+            onRecordEnqueued(pendingBytes);
             return true;
         }));
-        if (!enqueued)
-            return false;
-
-        onRecordEnqueued(pendingBytes);
-        return true;
     }
 
     internal bool TryClaim()
@@ -122,32 +117,32 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
         var dequeued = AwaitStateLane(
             _lane.RunAsync(() => TryDequeueOnLane(batch)));
 
-        if (dequeued.Record is not { } dequeuedRecord)
+        if (dequeued is null)
         {
             record = null!;
             return false;
         }
 
-        record = dequeuedRecord;
-        onRecordDequeued(dequeued.PendingBytes);
+        record = dequeued;
         return true;
     }
 
-    private (ZLinkMeshQueuedRecord? Record, ulong PendingBytes) TryDequeueOnLane(
+    private ZLinkMeshQueuedRecord? TryDequeueOnLane(
         MeshReceiveBatch batch)
     {
         if (_records.Count == 0)
-            return (null, 0);
+            return null;
         var candidate = _records.Peek();
         if (!batch.CanAdd(checked((long)candidate.PayloadBytes)))
-            return (null, 0);
+            return null;
 
         var record = _records.Dequeue();
         if (record.HasApplicationJobAdmission)
             _applicationAdmissionRecords--;
         var pendingBytes = record.PendingBytes;
         _pendingBytes -= pendingBytes;
-        return (record, pendingBytes);
+        onRecordDequeued(pendingBytes);
+        return record;
     }
 
     internal void Release()
@@ -157,24 +152,22 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
 
     internal void Dispose()
     {
-        List<(ZLinkMeshQueuedRecord Record, ulong PendingBytes)> removed = [];
+        List<ZLinkMeshQueuedRecord> removed = [];
         AwaitStateLane(_lane.RunAsync(() =>
         {
             while (_records.Count != 0)
             {
                 var record = _records.Dequeue();
-                removed.Add((record, record.PendingBytes));
+                removed.Add(record);
+                onRecordDequeued(record.PendingBytes);
             }
             _pendingBytes = 0;
             _applicationAdmissionRecords = 0;
             _claimed = false;
         }));
 
-        foreach (var (record, pendingBytes) in removed)
-        {
-            onRecordDequeued(pendingBytes);
+        foreach (var record in removed)
             record.Dispose();
-        }
     }
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
