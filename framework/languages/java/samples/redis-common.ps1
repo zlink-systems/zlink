@@ -177,6 +177,18 @@ function Invoke-ZlinkSampleGradleBuild {
         $normalizedArguments = @($Arguments | ForEach-Object {
             if ($_ -eq "--settings-file") { "-c" } else { $_ }
         })
+        $settingsIndex = [Array]::IndexOf($normalizedArguments, "-c")
+        $temporarySettingsPath = $null
+        $existingSettingsContent = $null
+        if ($settingsIndex -ge 0 -and $settingsIndex + 1 -lt $normalizedArguments.Count) {
+            $settingsSourcePath = Join-Path (Get-Location) $normalizedArguments[$settingsIndex + 1]
+            $temporarySettingsPath = Join-Path (Get-Location) "settings.gradle.kts"
+            if (Test-Path -LiteralPath $temporarySettingsPath) {
+                $existingSettingsContent = Get-Content -LiteralPath $temporarySettingsPath -Raw
+            }
+            Copy-Item -LiteralPath $settingsSourcePath -Destination $temporarySettingsPath -Force
+            $normalizedArguments = @($normalizedArguments | Where-Object { $_ -ne "-c" -and $_ -ne $normalizedArguments[$settingsIndex + 1] })
+        }
         & $GradleExecutable @normalizedArguments
         if ($LASTEXITCODE -ne 0) {
             throw "Gradle build failed: $($normalizedArguments -join ' ')"
@@ -185,6 +197,13 @@ function Invoke-ZlinkSampleGradleBuild {
             Optimize-ZlinkSampleWindowsLaunchers -Root (Get-Location).Path
         }
     } finally {
+        if ($temporarySettingsPath) {
+            if ($null -eq $existingSettingsContent) {
+                Remove-Item -LiteralPath $temporarySettingsPath -Force -ErrorAction SilentlyContinue
+            } else {
+                Set-Content -LiteralPath $temporarySettingsPath -Value $existingSettingsContent -NoNewline
+            }
+        }
         $lockStream.Dispose()
     }
 }
