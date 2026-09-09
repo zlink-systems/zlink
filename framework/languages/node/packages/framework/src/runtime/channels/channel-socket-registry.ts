@@ -53,6 +53,9 @@ import {
 } from './fanout-service-wire';
 import type { ZLinkChannelEnvelopeHeader } from './channel-envelope';
 import type { ApplicationJobQueue } from '../host/application-job-queue';
+import {
+  isBackendRequestTimeoutError
+} from '../backend/runtime-values';
 
 const MAX_LIFECYCLE_GENERATION = 0x7fff_ffff_ffff_ffffn;
 const CLIENT_SERVER_PROBE_INTERVAL_MS = 5_000;
@@ -1213,6 +1216,7 @@ export class ZLinkChannelSocketRegistry {
     if (connection.admissionAttempt !== undefined) return;
     const admissionAttempt = Symbol(connectionId);
     connection.admissionAttempt = admissionAttempt;
+    let retryAdmission = false;
     try {
       const admission = await requestClientServerAdmission(
         connection.dealer,
@@ -1242,11 +1246,20 @@ export class ZLinkChannelSocketRegistry {
         || connection.physicalConnectionId !== physicalConnectionId
         || connection.admissionAttempt !== admissionAttempt) return;
       this.removeReadyConnection(connectionId);
+      if (isBackendRequestTimeoutError(error)) {
+        retryAdmission = true;
+        return;
+      }
       throw error;
     } finally {
       if (this.clientServerConnections.get(connectionId) === connection
+        && connection.physicalConnectionId === physicalConnectionId
         && connection.admissionAttempt === admissionAttempt) {
         connection.admissionAttempt = undefined;
+        if (retryAdmission) {
+          void this.admitConfiguredClientServerConnection(channelName, connectionId)
+            .catch(error => this.oneWayFailureSink?.(error));
+        }
       }
     }
   }

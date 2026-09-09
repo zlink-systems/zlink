@@ -24,6 +24,9 @@ import {
 } from './client-server-service-wire';
 import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
 import { ZLinkStateLane } from '../execution/state-lane';
+import {
+  isBackendRequestTimeoutError
+} from '../backend/runtime-values';
 
 interface ActiveClientServerTarget {
   descriptor: ZLinkClientServerServerDescriptor;
@@ -331,6 +334,7 @@ export class ZLinkClientServerLocationRuntime {
     if (current === undefined) {
       return;
     }
+    let retryAdmission = false;
     try {
       const admission = await requestAdmission(
         current.dealer,
@@ -370,11 +374,21 @@ export class ZLinkClientServerLocationRuntime {
         current.target.dealer = undefined;
         await this.sockets.closeClientServerConnection(connectionId);
       }
+      if (isBackendRequestTimeoutError(error)) {
+        retryAdmission = true;
+        return;
+      }
       throw error;
     } finally {
-      await this.lane.run(() => {
-        if (this.connections.get(connectionId) === current.target) current.target.handshakeInFlight = false;
+      const shouldRetry = await this.lane.run(() => {
+        if (this.connections.get(connectionId) !== current.target) return false;
+        current.target.handshakeInFlight = false;
+        return retryAdmission;
       });
+      if (shouldRetry) {
+        void this.handleTransportReady(connectionId, _routingId, _endpoint)
+          .catch(error => this.locationRuntime.reportDiscoveryFailure(error));
+      }
     }
   }
 

@@ -68,6 +68,12 @@ export function isBackendNotConnectedError(error: unknown): boolean {
   const result = error.result;
   return result === SubmitResult.NotConnected || result === RequestResult.NotConnected;
 }
+
+export function isBackendRequestTimeoutError(error: unknown): boolean {
+  return isZLinkBackendResultError(error)
+    && error.operation === 'request'
+    && error.result === RequestResult.TimedOut;
+}
 export type ZLinkBackendMessageLike = Message | Buffer | Uint8Array | string;
 export interface ZLinkBackendSendSubmitBuilder {
   message(message: ZLinkBackendMessageLike): ZLinkBackendSendSubmitBuilder;

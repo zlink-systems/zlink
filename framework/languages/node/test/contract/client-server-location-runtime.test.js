@@ -800,6 +800,68 @@ test('manual ClientServer endpoints use dedicated monitored admission and reconn
   await sockets.dispose();
 });
 
+test('manual ClientServer admission timeout retries hello on the same physical connection', async () => {
+  const endpoint = 'tcp://10.0.0.1:9401';
+  const registration = internal.createFrameworkRegistration({
+    channels: { orders: { client: { manualConnections: [endpoint] } } }
+  });
+  const dealer = fakeDealer('manual-timeout');
+  const requests = [];
+  const connects = [];
+  dealer.connect = value => connects.push(value);
+  dealer.request = message => new Promise((resolve, reject) => {
+    requests.push({ frame: Buffer.from(message.data()), resolve, reject });
+  });
+  let monitorHandler;
+  const sockets = new ZLinkChannelSocketRegistry(
+    registration,
+    {
+      createDealerSocket() { return dealer; },
+      createReadablePoller() { return readyPoller(); }
+    },
+    {},
+    {
+      openSocketMonitor() {
+        return {
+          nativeInstance: {},
+          onEvent(handler) { monitorHandler = handler; },
+          drain() { return 0; },
+          async dispose() {}
+        };
+      }
+    }
+  );
+  try {
+    sockets.startManualClientServerConnections();
+    monitorHandler({
+      nativeEvent: internal.ZLinkSocketNativeEventType.ConnectionReady,
+      routingId: 'server-a',
+      remoteAddr: endpoint,
+      value: 1n
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(requests.length, 1);
+
+    requests[0].reject(new ZLinkBackendResultError('request', RequestResult.TimedOut));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(requests.length, 2);
+    assert.equal(clientServerWire.decodeClientServerControl(requests[1].frame).kind, 'hello');
+    assert.deepEqual(connects, [endpoint]);
+
+    requests[1].resolve([
+      zlink.Message.from(clientServerWire.encodeClientServerAdmit({
+        ...descriptor({ token: { ownerId: 'owner', leaseGeneration: 1n } }),
+        securityIdentity: 'default'
+      }, 4096))
+    ]);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(sockets.clientDealerForOutbound('orders'), dealer);
+    assert.deepEqual(connects, [endpoint]);
+  } finally {
+    await sockets.dispose();
+  }
+});
+
 for (const cause of ['malformed control', 'invalid pushed control', 'liveness deadline']) {
   test(`ClientServer ${cause} restores intent only after its endpoint closes`, async () => {
     const endpoint = 'tcp://10.0.0.1:9401';
@@ -1542,6 +1604,50 @@ test('automatic ClientServer client reconciles dedicated server descriptors by R
 
   await discovery.stop();
   await localRuntime.stop();
+});
+
+test('automatic ClientServer admission timeout retries hello on the same physical connection', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const localRuntime = new internal.ZLinkLocationRuntime({
+    stores: stores(store), ownerId: 'client-owner'
+  });
+  await localRuntime.start('client-host');
+  const remoteOwner = await store.claimOwnerLease('remote-owner', 30_000);
+  const expected = descriptor(remoteOwner);
+  await store.updateClientServer(expected, internal.ZLinkLocationWriteIntent.NewClaim);
+  const registration = internal.createFrameworkRegistration({
+    channels: { orders: { client: { manualConnections: [] } } },
+    locations: { useInMemoryStores: true }
+  });
+  const sockets = automaticClientServerSockets();
+  const discovery = new internal.ZLinkClientServerLocationRuntime(
+    registration, sockets, localRuntime, stores(store), { pollingIntervalMs: 60_000 }
+  );
+  try {
+    await discovery.start();
+    const connection = [...sockets.connections.values()][0];
+    connection.callbacks.onTransportReady(expected.serverRid, expected.endpoint);
+    await new Promise(resolve => setImmediate(resolve));
+    const firstReply = connection.reply;
+    assert.notEqual(firstReply, undefined);
+
+    connection.reject(new ZLinkBackendResultError('request', RequestResult.TimedOut));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.notEqual(connection.reply, firstReply);
+    assert.equal(clientServerWire.decodeClientServerControl(connection.hello).kind, 'hello');
+    assert.deepEqual(sockets.calls, [`connect:${expected.endpoint}`]);
+
+    connection.reply([
+      zlink.Message.from(clientServerWire.encodeClientServerAdmit(expected, 0x7fff_ffff))
+    ]);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(discovery.activeTargets('orders').length, 1);
+    assert.deepEqual(sockets.calls, [`connect:${expected.endpoint}`]);
+    assert.equal(sockets.connections.size, 1);
+  } finally {
+    await discovery.stop();
+    await localRuntime.stop();
+  }
 });
 
 test('same ClientServer RID and endpoint reset transport readiness on a new lifecycle', async () => {
