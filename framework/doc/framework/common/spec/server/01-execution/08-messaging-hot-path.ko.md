@@ -47,7 +47,7 @@ session의 packet 경로는 각 문서가 소유한다. 수신 쪽 permit 순서
 
 낱개 규칙 — permit을 먼저 얻는다, 한 번 깨어나면 최대 64건을 읽는다, 고정 지연으로 폴링하지
 않는다, Framework는 payload를 추가로 복사하지 않는다, 후보 목록은 변경 시점에 준비한다 — 는 이미
-다른 문서에 있다. 그런데 2026-09-10의 측정([framework messaging bench](../../../../../bench/grpc/README.ko.md),
+다른 문서에 있다. 그런데 2026-09-10의 측정([framework messaging bench](../../../../../../bench/grpc/README.ko.md),
 결정 기록 `doc/plan/fw-bench-worklog/decisions.ko.md` FB-056~058)은 네 언어 runtime이 이 규칙들을
 각자 다른 방식으로 어긴 것을 보여 줬다. .NET은 permit이 있으면 한 건만 읽었고, Java는 1 ms 고정
 sleep으로 수신을 폴링했으며, C++은 record 한 건마다 수신 회전을 끝내고 회전마다 관리 작업을 반복했다.
@@ -233,7 +233,7 @@ claim, I4 한 번의 전환, W1~W5의 묶음 처리라는 관찰 결과는 같�
 
 ## 7. 검증 요구
 
-(a)~(d)는 언어별 contract test가, (e)~(g)는 [framework messaging bench](../../../../../bench/grpc/README.ko.md)의
+(a)~(d)는 언어별 contract test가, (e)~(g)는 [framework messaging bench](../../../../../../bench/grpc/README.ko.md)의
 3-run 중앙값이 확인한다.
 
 - (a) **실행 자원 전환 수**: 수신 회전에서 Framework가 만드는 전환 1(I4), 제출 경로에서 1(E5). 요청 하나가

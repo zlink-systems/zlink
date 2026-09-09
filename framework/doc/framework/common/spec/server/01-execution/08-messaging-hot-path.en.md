@@ -49,7 +49,7 @@ as this page.
 
 The individual rules — take the permit first, read at most 64 records per wake-up, never poll with a
 fixed delay, the Framework adds no payload copies, prepare candidate lists at change time — already
-exist in other pages. Yet the 2026-09-10 measurement ([framework messaging bench](../../../../../bench/grpc/README.en.md),
+exist in other pages. Yet the 2026-09-10 measurement ([framework messaging bench](../../../../../../bench/grpc/README.en.md),
 decision records `doc/plan/fw-bench-worklog/decisions.ko.md` FB-056–058) showed the four language
 runtimes each breaking those rules in a different way: .NET read one record when a permit existed,
 Java polled the socket with a fixed 1 ms sleep, C++ ended a receive turn after every record and
@@ -86,10 +86,10 @@ sequenceDiagram
 
 | Stage | What the runtime does | Execution resource | So that |
 |---|---|---|---|
-| E1 encode | Encodes the typed payload with the codec into a list of wire parts. Never allocates a new buffer to join header and body. | caller | The Framework adds zero full copies ([Payload Ownership "2"](05-payload-ownership-and-codec.en.md#2-copies-that-can-be-removed)). |
-| E2 resolve | Reads one target from the candidate list and selection order prepared at change time ([Channel Messaging "Prepare the candidate list and selection order at change time"](../02-channel-transport/02-channel-messaging.en.md#prepare-the-candidate-list-and-selection-order-at-change-time)). One atomic reference read and one cursor increment. | caller | No per-request scan of peers and no question to a state owner. |
+| E1 encode | Encodes the typed payload with the codec into a list of wire parts. Never allocates a new buffer to join header and body. | caller | The Framework adds zero full copies ([Payload Ownership "2"](05-payload-ownership-and-codec.en.md#2-copies-that-can-be-eliminated)). |
+| E2 resolve | Reads one target from the candidate list and selection order prepared at change time ([Channel Messaging "Prepare the candidate list and selection order at change time"](../02-channel-transport/02-channel-messaging.en.md#the-candidate-list-and-selection-order-are-prepared-in-advance-whenever-state-changes)). One atomic reference read and one cursor increment. | caller | No per-request scan of peers and no question to a state owner. |
 | E3 register | For a request, records the [reply correlation](../00-foundation/02-glossary.en.md#reply-correlation) — the value that matches a reply to its request — and the deadline in a table. Registration is an atomic operation in the caller context. | caller | No timer object per request. Deadline expiry is checked by the management work of §4.2 or by a single timer wheel. |
-| E4 submit | Hands the part list to the binding's async request/send API. The Framework keeps no send queue of its own. | caller | A send completes here at local admission ([Submit And Completion "2"](01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-language-names)). |
+| E4 submit | Hands the part list to the binding's async request/send API. The Framework keeps no send queue of its own. | caller | A send completes here at local admission ([Submit And Completion "2"](01-submit-and-completion.en.md#2-completion-meaning-per-terminator-and-per-language-names)). |
 | E5 complete | Where the binding reports reply, error or timeout, finds the correlation and runs the caller continuation. Never detours through the Framework's host mailbox or dispatch thread. | binding completion resource | The only execution-resource switch the Framework introduces is this one (the caller continuation). |
 
 **On the source path the Framework introduces exactly one execution-resource switch, E5.** An
@@ -101,7 +101,7 @@ context, a caller that submits 100 requests back to back gets all 100 into the b
 The candidate list and the correlation table are state that changes rarely and is read often. Changes
 (peer added or removed, weight changed, deadline expired) run on the lane; the submit path reads the
 immutable snapshot the lane published — the classification under which
-[State Ownership And Lanes "4. State classification"](06-state-ownership-and-lanes.en.md#4-state-classification-and-criteria)
+[State Ownership And Lanes "4. State classification"](06-state-ownership-and-lanes.en.md#4-state-classifications-and-how-to-tell-them-apart)
 allows read-only snapshots to be read outside the lane. An implementation that enters a lane and
 waits for its result on every request violates this page — in the 2026-09-10 diagnosis five lane
 waits per request held the real concurrency of a 100-request window at 4.6.
@@ -150,14 +150,14 @@ sequenceDiagram
 |---|---|---|
 | I0 wait | Blocks on transport readiness — readable **and** completion. The idle bound is the management period of §4.2; an arriving record wakes it immediately. | No fixed-delay sleep and no repeated zero-timeout poll. Idle CPU is zero and arrival latency never exceeds transport latency. |
 | I1 permit | Acquires this turn's permit budget from the host-shared permit, in the order of [Application Job Queue "3"](04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order). The budget is the smaller of the per-turn limit (64) and the remaining permits. | Never receives without a permit and claims only as many records as permits allow. |
-| I2 claim | Claims records from Core/binding continuously within the budget, applying whichever of the count (64), byte and elapsed-time limits is reached first and keeping the cursor ([Application Job Queue "4"](04-application-job-queue-and-backpressure.en.md#4-reading-several-records-from-a-socket-implementation)). Never ends the turn after one record. | Wake-up and read are not repeated once per queued record. |
+| I2 claim | Claims records from Core/binding continuously within the budget, applying whichever of the count (64), byte and elapsed-time limits is reached first and keeping the cursor ([Application Job Queue "4"](04-application-job-queue-and-backpressure.en.md#4-reading-multiple-items-from-the-socket-implementation)). Never ends the turn after one record. | Wake-up and read are not repeated once per queued record. |
 | I3 classify | Decodes only the header of each record. Control records — liveness probes and ACKs, topology, completions — are handled here and their permit returned. For application records the payload is not decoded; only the owner is determined. | Control records never wait behind the application backlog (§4.2). |
-| I4 commit | Enqueues the application record to its owner queue — the atomic check-and-enqueue section of ["Do not split deciding and enqueuing"](04-application-job-queue-and-backpressure.en.md#do-not-split-deciding-whether-to-enqueue-from-enqueuing-implementation). The record is moved, not copied. When an empty queue became non-empty, the owner is added to the ready set and a worker is woken. | The only execution-resource switch the Framework introduces is this worker wake-up. |
+| I4 commit | Enqueues the application record to its owner queue — the atomic check-and-enqueue section of ["Do Not Separate the Admission Decision from Enqueueing"](04-application-job-queue-and-backpressure.en.md#do-not-separate-the-admission-decision-from-enqueueing-implementation). The record is moved, not copied. When an empty queue became non-empty, the owner is added to the ready set and a worker is woken. | The only execution-resource switch the Framework introduces is this worker wake-up. |
 
 **In the receive turn the Framework introduces exactly one execution-resource switch, I4.** A shape
 with three switches — "receive loop → separate mailbox → dispatch pump → new task per record" — is a
 violation. A language whose receive context belongs to the transport and therefore needs a mailbox
-([Application Job Queue "5"](04-application-job-queue-and-backpressure.en.md#5-separating-receive-handling-from-state-changes-implementation))
+([Application Job Queue "5"](04-application-job-queue-and-backpressure.en.md#5-separating-receipt-handling-from-state-change-implementation))
 makes that mailbox the owner queue itself; it never dequeues after receive to move records into
 another queue.
 
@@ -187,8 +187,8 @@ workers**.
 
 | Stage | What the worker does | So that |
 |---|---|---|
-| W1 acquire | Takes an owner from the ready set and acquires that owner's [execution gate](../00-foundation/02-glossary.en.md#execution-gate) ([Handler Turn "6"](02-handler-turn-and-execution-gate.en.md#6-the-trap-in-acquiring-the-processing-right-implementation), ["11"](02-handler-turn-and-execution-gate.en.md#11-making-the-two-synchronisation-points-cheap-implementation)). | Without contention the gate is acquired with one atomic operation. |
-| W2 decode | Deserialises the typed payload once ([Payload Ownership "6"](05-payload-ownership-and-codec.en.md#6-when-to-deserialise)). | Nothing is deserialised before the execution right is held. |
+| W1 acquire | Takes an owner from the ready set and acquires that owner's [execution gate](../00-foundation/02-glossary.en.md#execution-gate) ([Handler Turn "6"](02-handler-turn-and-execution-gate.en.md#6-the-trap-in-acquiring-processing-authority-implementation), ["11"](02-handler-turn-and-execution-gate.en.md#11-making-the-two-synchronization-points-cheap-implementation)). | Without contention the gate is acquired with one atomic operation. |
+| W2 decode | Deserialises the typed payload once ([Payload Ownership "6"](05-payload-ownership-and-codec.en.md#6-when-deserialization-happens)). | Nothing is deserialised before the execution right is held. |
 | W3 run | Invokes the handler. The permit is returned right before the handler's first instruction. | An `await` inside the handler never re-acquires the permit. |
 | W4 reply | Encodes the reply payload and submits it through the binding's reply API right there. Never hands it to another execution resource. | The reply path has no Framework execution-resource switch. |
 | W5 next | Within the time budget ([Handler Turn "9"](02-handler-turn-and-execution-gate.en.md#9-time-budget-and-batch-processing-implementation)) processes the same owner's next record; otherwise releases the gate and moves to the next owner. | One owner cannot monopolise a worker. |
@@ -199,7 +199,7 @@ batches. Even when a language's execution resource is task based (a thread-pool 
 work item processes several records.
 
 **This page does not reduce handler concurrency.** The rule that two turns of the same gate never run
-concurrently ([Handler Turn "1"](02-handler-turn-and-execution-gate.en.md#1-queue-and-gate-separation-principle))
+concurrently ([Handler Turn "1"](02-handler-turn-and-execution-gate.en.md#1-separating-queue-from-gate))
 stands, and turns of different gates run in parallel on several workers. Serialising on one worker to
 save switches is a violation — in the 2026-09-10 .NET diagnosis an inline-dispatch experiment halved
 window throughput.
@@ -220,7 +220,7 @@ connection the reply arrives.
 |---|---|---|---|
 | [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) channel | the channel's candidate list and weighted round-robin order | ROUTER–ROUTER; the reply arrives on the separate [Completion connection](../00-foundation/02-glossary.en.md#completion-connection) | Completion connection → binding completion → E5 |
 | [ClientServer channel](../00-foundation/02-glossary.en.md#clientserver-channel) | the ready Server candidate list ([ClientServer "4"](../02-channel-transport/03-client-server-channel.en.md#4-weight-and-target-selection)) | DEALER (client)–ROUTER (server), one Application connection | identified as a completion before receive on the same connection, bypasses the permit ([Application Job Queue "3"](04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order)) → E5 |
-| [Spot direct](../00-foundation/02-glossary.en.md#spot-direct) | the [positive route cache](../00-foundation/02-glossary.en.md#positive-route-cache) pointing at the current owner ([Spot Address Messaging "5"](../03-spot-actor/06-spot-address-messaging.en.md#5-direct-calls-to-an-existing-owner-and-the-completion-boundary)) | the owner node's RouteMesh | same as RouteMesh |
+| [Spot direct](../00-foundation/02-glossary.en.md#spot-direct) | the [positive route cache](../00-foundation/02-glossary.en.md#positive-route-cache) pointing at the current owner ([Spot Address Messaging "5"](../03-spot-actor/06-spot-address-messaging.en.md#5-direct-call-to-an-existing-owner-and-the-completion-boundary)) | the owner node's RouteMesh | same as RouteMesh |
 
 That a ClientServer reply passes the same FIFO as the preceding DATA ([ClientServer "5"](../02-channel-transport/03-client-server-channel.en.md#5-send-request-and-reply))
 is a Core contract this page does not change.
@@ -254,7 +254,7 @@ records which tests and bench cells verify §7.
 ## 7. Verification requirements
 
 (a)–(d) are verified by per-language contract tests, (e)–(g) by the 3-run medians of the
-[framework messaging bench](../../../../../bench/grpc/README.en.md).
+[framework messaging bench](../../../../../../bench/grpc/README.en.md).
 
 - (a) **Switch count**: one Framework-introduced execution-resource switch in the receive turn (I4) and
   one on the submit path (E5). Each language has a test that counts the switches one request passes
