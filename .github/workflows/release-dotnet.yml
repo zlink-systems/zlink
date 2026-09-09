@@ -193,6 +193,11 @@ jobs:
             echo "Invalid framework version: ${version:-<missing>}" >&2
             exit 1
           fi
+          framework_version=$(sed -n 's/^ZLINK_FRAMEWORK_VERSION=//p' FRAMEWORK_VERSION)
+          if [ "${version}" != "${framework_version}" ]; then
+            echo "Framework version mismatch: requested=${version}, FRAMEWORK_VERSION=${framework_version}" >&2
+            exit 1
+          fi
           declared=$(sed -n 's/.*<Version Condition="[^"]*">\(.*\)<\/Version>.*/\1/p' framework/languages/dotnet/Directory.Build.props | head -n1)
           if [ "${version}" != "${declared}" ]; then
             echo "Framework version mismatch: requested=${version}, Directory.Build.props=${declared}" >&2
