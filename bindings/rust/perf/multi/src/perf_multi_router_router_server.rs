@@ -70,7 +70,7 @@ fn main() {
     let mut events = vec![PollEvent::default(); 1];
     let mut received = zlink::Received::empty();
     let mut auto_hwm_printed = false;
-    let mut replies = common::RoutedReplySender::new(&router);
+    let mut replies = common::RoutedReplySender::new();
     while !stop.load(Ordering::Acquire) {
         // Bound the idle wait so the control thread's STOP/QUIT request can
         // terminate the server even when no request is queued.
@@ -102,11 +102,13 @@ fn main() {
                                 );
                                 auto_hwm_printed = true;
                             }
-                            let Some(rid) = received.routing_id().cloned() else {
+                            if received.routing_id().is_none() {
                                 continue;
-                            };
-                            let reply_bytes = common::message_payload(received.parts()).to_vec();
-                            replies.enqueue(rid, reply_bytes);
+                            }
+                            if common::message_payload(received.parts()).is_empty() {
+                                continue;
+                            }
+                            replies.enqueue(std::mem::take(&mut received));
                         }
                         Ok(false) => break,
                         Err(err) if err.code() == RecvResult::NoData => break,

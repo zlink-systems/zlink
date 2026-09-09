@@ -4,7 +4,7 @@ use std::fs;
 use std::future::Future;
 use std::io;
 use std::path::Path;
-use std::pin::{pin, Pin};
+use std::pin::{Pin, pin};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context as TaskContext, Poll, Waker};
 use std::time::{Duration, Instant};
@@ -938,9 +938,13 @@ pub fn run_router_replier(router: RouterSocket) -> Result<(), String> {
         if payload.is_empty() {
             continue;
         }
-        let payload_part = Message::try_from(payload)
-            .map_err(|error| format!("reply payload allocation failed: {error}"))?;
-        let reply = request.reply().message(payload_part);
+        let reply = request.reply();
+        let payload_part = std::mem::take(&mut request)
+            .into_parts()
+            .into_iter()
+            .next()
+            .ok_or_else(|| "request reply payload is missing".to_string())?;
+        let reply = reply.message(payload_part);
         let result = if measurement_part_count() == 2 {
             reply
                 .message(Message::new().map_err(|error| error.to_string())?)
