@@ -18,10 +18,10 @@
 | Binding Node | `@zlink-systems/zlink` (linux-x64 prebuild 포함) | npm | `bindings-release.yml` | `node/v*` 태그 또는 dispatch | npm Trusted Publishing(OIDC, provenance) |
 | Binding Java | `systems.zlink:zlink`, `zlink-ext-netty` | Maven Central, GitHub Packages | `bindings-release.yml` | `java/v*` 태그 또는 dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*`(GPG) |
 | Binding .NET | `Zlink` nupkg (+snupkg) | nuget.org | `release-dotnet.yml` (target `binding`) | `dotnet/v*` 태그 또는 dispatch | nuget Trusted Publishing(`NuGet/login`, 정책 `zlink-dotnet-release`) |
-| Framework C++ | source archive + sha256(`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol header를 `--check`로 검증) | GitHub Release `framework/vA.B.C` | `framework-release.yml` | `framework/v*` 태그 또는 dispatch | `GITHUB_TOKEN` |
-| Framework Node | `@zlink-systems/*` 8개 | npm | `framework-release.yml` | 위와 동일 | npm Trusted Publishing(패키지별 등록) |
-| Framework JVM | `systems.zlink:zlink-framework-*` 13개(Kotlin 포함) | Maven Central | `framework-release.yml` | 위와 동일 | `MAVEN_CENTRAL_*`, `SIGNING_*` |
-| Framework .NET | `Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector` 등 9개 | nuget.org | `release-dotnet.yml` (target `framework`) | `framework/v*` 태그 또는 dispatch | nuget Trusted Publishing |
+| Framework C++ | source archive + sha256(`cmake -P framework/languages/cpp/cmake/prepare-source-archive.cmake`: `framework/languages/cpp` + `framework/runtime` + `framework/LICENSE`, generated protocol header를 `--check`로 검증) | GitHub Release `framework-cpp/vA.B.C` | `framework-release.yml` | `framework-cpp/v*` 태그 또는 `target=cpp` dispatch | `GITHUB_TOKEN` |
+| Framework Node | `@zlink-systems/*` 8개 | npm | `framework-release.yml` | `framework-node/v*` 태그 또는 `target=node` dispatch | npm Trusted Publishing(패키지별 등록) |
+| Framework JVM | `systems.zlink:zlink-framework-*` 13개(Kotlin 포함) | Maven Central | `framework-release.yml` | `framework-java/v*` 태그 또는 `target=java` dispatch | `MAVEN_CENTRAL_*`, `SIGNING_*` |
+| Framework .NET | `Zlink.Framework*`, `Zlink.HttpClient`, `Zlink.Stream.Connector` 등 9개 | nuget.org | `release-dotnet.yml` (target `framework`) | `framework-dotnet/v*` 태그 또는 dispatch | nuget Trusted Publishing |
 | 문서 사이트 | mkdocs 정적 사이트 | GitHub Pages | `docs.yml` | `main` push(문서 경로) | `GITHUB_TOKEN` |
 
 Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 배포 범위 밖이다.
@@ -34,7 +34,7 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
 | Core | `scripts/build-core.sh dev\|release\|release-gate` (트리 `core/build-dev`, `core/build-release`). CMake 직접 빌드는 [빌드 가이드](./build-guide.ko.md)·[CMake 옵션](./cmake-options.ko.md) | `build.yml`의 플랫폼 job이 `core/`를 CMake로 빌드해 `core/dist/<platform>/`를 아카이브 | GitHub Release `core/vX.Y.Z` 자산 |
 | Core 로컬 prefix | `scripts/local-package/core/fetch-release.sh --version V --platform P` (릴리스 아카이브 → `~/.cache/zlink/core/<V>/<P>`), `scripts/gate/materialize-local-core-prefix.sh` (dev 빌드 → prefix) | 모든 binding·framework job이 같은 `fetch-release.sh`를 사용 | `~/.cache/zlink/core/`, CI는 `.artifacts/core-release/` |
 | Bindings 7언어 | `scripts/local-package/build-wsl.sh [cpp\|node\|java\|dotnet\|python\|go\|rust\|c]` (Windows `build-windows.ps1`); 언어별 테스트 `bindings/<lang>/tests/run_tests.sh` | `bindings-release.yml`·`release-dotnet.yml` 각 job의 "Build and test" 단계 | `.artifacts/wsl/{npm,nuget,maven,install}/` |
-| Framework C++ | `framework/languages/cpp/CMakePresets.json` preset, Windows `build-windows.ps1`; 샘플 `samples/run_samples.sh`; 시나리오 e2e `e2e/<name>/run_e2e.sh`(opt-in) | `framework-release.yml`은 source archive만 만든다 | GitHub Release `framework/vA.B.C` |
+| Framework C++ | `framework/languages/cpp/CMakePresets.json` preset, Windows `build-windows.ps1`; 샘플 `samples/run_samples.sh`; 시나리오 e2e `e2e/<name>/run_e2e.sh`(opt-in) | `framework-release.yml`은 source archive만 만든다 | GitHub Release `framework-cpp/vA.B.C` |
 | Framework .NET | `dotnet build framework/languages/dotnet/Zlink.Framework.sln` (`ZLINK_LOCAL_PACKAGE_ROOT` 필요); 샘플 `samples/<name>/<name>.sln` | `framework-dotnet.yml`(검증), `release-dotnet.yml` target `framework`(pack·push) | nuget.org |
 | Framework JVM | `framework/languages/java/gradlew assemble` (테스트는 `test`); Central bundle `scripts/upload-central-bundle.sh` | `framework-release.yml` `release-java` | Maven Central |
 | Framework Node | `framework/languages/node`에서 `npm ci && npm run build`; http-client 로컬 tgz는 `scripts/local-package/http-client/build-wsl.sh node`; 게이트 `npm run verify:ci`, 릴리스 게이트 `verify:release` | `framework-node.yml`(검증), `framework-release.yml` `release-node`(pack·publish) | npm |
@@ -46,19 +46,22 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
 
 ## 3. 배포 순서
 
-번호 규칙과 호환 관계는 [버전 정책](./versioning.ko.md)이 소유한다. 버전 파일은 `VERSION`(Core)과 `BINDINGS_VERSION`이며 `scripts/local-package/sync-version.py --write`가
-저장소 전체의 pin을 맞춘다. 순서는 항상 **Core → bindings 4언어 → framework 4언어**다. framework
-패키지는 공개된 binding 패키지를 pin으로 참조하므로 순서 역전은 허용하지 않는다.
+번호 규칙과 호환 관계는 [버전 정책](./versioning.ko.md)이 소유한다. 원본은 `VERSION`(Core),
+`bindings/<language>/VERSION`, `framework/languages/<language>/VERSION`이며
+`scripts/local-package/sync-version.py --write`가 각 원본의 manifest와 pin을 맞춘다. 언어별 순서는 항상
+**Core → 해당 binding → 해당 framework**다. framework 패키지는 공개된 binding 패키지를 pin으로
+참조하므로 순서 역전은 허용하지 않는다.
 
 1. Core: `VERSION` 갱신, `core/CHANGELOG.md` 절 추가, `core/vX.Y.Z` 태그 push, 그 ref로
    `build.yml` dispatch. Release 자산과 `checksums.txt`, `release-provenance.txt`를 확인한다.
-2. Bindings: `sync-version.py --write` 후 `cpp/v`, `node/v`, `java/v` 태그(→ `bindings-release.yml`)와
-   `dotnet/v` 태그(→ `release-dotnet.yml`). 각 job은 checkout의 `VERSION`·Core 소스가 태그와
+2. Bindings: 대상 언어 VERSION을 갱신하고 `sync-version.py --write` 후 `<language>/vX.Y.N` 태그를
+   push한다(`bindings-release.yml`, .NET은 `release-dotnet.yml`). 각 job은 선택 언어 VERSION과
+   checkout의 `VERSION`·Core 소스가 태그와
    정확히 같은지 검증하고, Core 릴리스 아카이브(`scripts/local-package/core/fetch-release.sh`)를 받아
    빌드·테스트·패키징한다. CI에서 Core를 다시 빌드하지 않는다.
-3. Framework: `framework/vA.B.C` 태그 하나로 `framework-release.yml`(C++·Node·JVM)과
-   `release-dotnet.yml`(.NET)이 함께 돈다. 두 워크플로우는 binding 패키지가 레지스트리에서 실제로
-   제공될 때까지(최대 45분) 기다린 뒤 진행한다.
+3. Framework: 대상 언어 VERSION을 갱신하고 `framework-<language>/vA.B.C` 태그를 push한다.
+   C++·Node·JVM은 `framework-release.yml`, .NET은 `release-dotnet.yml`이 해당 언어 패키지만
+   배포한다. 워크플로우는 pin한 binding 패키지가 레지스트리에서 실제로 제공될 때까지 기다린다.
 4. Conan·vcpkg: Release의 source tarball 해시로 `core/packaging/conan/conandata.yml`과
    `vcpkg/ports/zlink/portfile.cmake`를 갱신하고 두 upstream 저장소에 PR을 낸다. 초안 본문은
    `doc/building/pr-drafts/`에 있다.
@@ -67,10 +70,10 @@ dispatch 예시:
 
 ```bash
 gh workflow run build.yml --ref core/v0.17.5 -f libzlink_version=0.17.5
-gh workflow run bindings-release.yml -f target=node -f version=0.17.5 -f create_release=true -f publish_registry=true
-gh workflow run release-dotnet.yml -f target=binding -f version=0.17.5
-gh workflow run framework-release.yml -f version=0.10.0 -f publish_registry=true
-gh workflow run release-dotnet.yml -f target=framework -f version=0.10.0
+gh workflow run bindings-release.yml -f target=node -f version=0.17.7 -f create_release=true -f publish_registry=true
+gh workflow run release-dotnet.yml -f target=binding -f version=0.17.7
+gh workflow run framework-release.yml -f target=node -f version=0.11.1 -f publish_registry=true
+gh workflow run release-dotnet.yml -f target=framework -f version=0.11.1
 ```
 
 ## 4. 채널별 동작 방식

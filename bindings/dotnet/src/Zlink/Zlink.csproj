@@ -4,13 +4,18 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
-        <Version>0.17.6</Version>
+        <ZLinkBindingVersionFile>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../VERSION'))</ZLinkBindingVersionFile>
+        <Version Condition="'$(Version)' == '' and Exists('$(ZLinkBindingVersionFile)')">$([System.IO.File]::ReadAllText('$(ZLinkBindingVersionFile)').Trim().Replace('ZLINK_BINDING_VERSION=', ''))</Version>
         <AssemblyName>Systems.Zlink</AssemblyName>
         <PackageId>Zlink</PackageId>
         <RootNamespace>Systems.Zlink</RootNamespace>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <Description>zlink .NET bindings - high-performance async messaging library</Description>
     </PropertyGroup>
+    <Target Name="ValidateZLinkBindingVersionFile" BeforeTargets="PrepareForBuild">
+        <Error Condition="!Exists('$(ZLinkBindingVersionFile)')"
+               Text="Zlink .NET binding version file was not found: $(ZLinkBindingVersionFile)" />
+    </Target>
     <ItemGroup>
         <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
     </ItemGroup>

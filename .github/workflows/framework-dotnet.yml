@@ -9,8 +9,8 @@ on:
     paths:
       - ".github/workflows/framework-dotnet.yml"
       - "scripts/ci/**"
-      - "FRAMEWORK_VERSION"
-      - "BINDINGS_VERSION"
+      - "framework/languages/dotnet/VERSION"
+      - "bindings/dotnet/VERSION"
       - "framework/runtime/**"
       - "framework/languages/dotnet/Directory.Build.props"
       - "framework/languages/dotnet/Directory.Build.targets"
@@ -30,8 +30,8 @@ on:
     paths:
       - ".github/workflows/framework-dotnet.yml"
       - "scripts/ci/**"
-      - "FRAMEWORK_VERSION"
-      - "BINDINGS_VERSION"
+      - "framework/languages/dotnet/VERSION"
+      - "bindings/dotnet/VERSION"
       - "framework/runtime/**"
       - "framework/languages/dotnet/Directory.Build.props"
       - "framework/languages/dotnet/Directory.Build.targets"

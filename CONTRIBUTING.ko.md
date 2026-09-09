@@ -177,18 +177,19 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - 번호 규칙(Core `MAJOR.MINOR`, binding `CORE_MAJOR.CORE_MINOR.N`, framework `MAJOR.MINOR.HOTFIX`)은
   [`doc/building/versioning.ko.md`](doc/building/versioning.ko.md)가 소유한다.
 - 버전 범프 체크리스트(한 커밋에 모두):
-  1. root `VERSION`(Core)과 `BINDINGS_VERSION`(binding·framework pin)만 수정한다.
+  1. 대상 구성 요소의 원본만 수정한다: Core는 root `VERSION`, binding은
+     `bindings/<language>/VERSION`, framework는 `framework/languages/<language>/VERSION`.
   2. `python3 scripts/local-package/sync-version.py --write`로 `core/CMakeLists.txt`, 공개 헤더,
      raw header mirror(`bindings/{c,cpp,go,rust}/include`), 바인딩 매니페스트, framework pin,
      debian changelog 첫 stanza, 계약 스냅샷을 한 번에 맞춘다. 손으로 찾아 고치지 않는다.
-  3. `core/CHANGELOG.md`에 새 절을 추가한다(Core Release 노트가 여기서 추출된다).
+  3. Core를 올렸다면 `core/CHANGELOG.md`에 새 절을 추가한다(Core Release 노트가 여기서 추출된다).
   4. `scripts/local-package/build-wsl.sh --verify-versions`로 누락 pin을 확인한다.
 - 릴리스 태그 조건: §6 gate green, `hotpath_gate` PASS, §7 release 비교 판정 PASS(또는 판정
   기록에 사용자 결정으로 예외 명시), 패키징 검증 `scripts/local-package/core/verify-package.sh`.
 - 배포는 **전부 GitHub Actions에서** 한다. 로컬에서 `npm publish`·`dotnet nuget push`·Central 업로드를
   하지 않으며 API 토큰을 만들지 않는다(npm·nuget은 Trusted Publishing, Maven Central은 repository
-  secret). 순서는 Core(`core/vX.Y.Z` 태그 + `build.yml` dispatch) → bindings 4언어(`cpp/`, `node/`,
-  `java/`, `dotnet/v*` 태그) → framework 4언어(`framework/vA.B.C` 태그 하나)이며, 워크플로우·트리거·
+  secret). 언어별 순서는 Core(`core/vX.Y.Z` 태그 + `build.yml` dispatch) → binding
+  (`<language>/vX.Y.N`) → framework(`framework-<language>/vA.B.C`)이며, 워크플로우·트리거·
   채널·확인 명령은 [`doc/building/release-pipeline.ko.md`](doc/building/release-pipeline.ko.md)가
   소유한다. 계정·secret은 [`doc/building/release-accounts.ko.md`](doc/building/release-accounts.ko.md),
   ConanCenter·vcpkg는 PR 방식([`doc/building/pr-drafts/`](doc/building/pr-drafts/)).

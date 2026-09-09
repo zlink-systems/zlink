@@ -423,7 +423,7 @@ version을 받는 옵션을 둔다.
 예:
 
 ```bash
-ZLINK_BINDINGS_VERSION=8.6.3
+ZLINK_BINDING_VERSION=8.6.3
 ZLINK_LOCAL_PACKAGE_ROOT=.artifacts
 ```
 

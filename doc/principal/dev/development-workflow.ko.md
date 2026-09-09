@@ -43,7 +43,8 @@ Issue ──> 브랜치 + worktree ──> 작업(사람 또는 codex job) ─�
 - **Project** = 보드 `ZLink`(https://github.com/users/zlink-systems/projects/1, 저장소 Projects 탭에도 연결).
   보드의 행은 **Issue만**이다(PR은 Issue의 연결 정보로 본다). Status `Todo → In progress → Review → Done`,
   필드 `area`(라벨과 같은 값, 자동 채움), `runner`(`astra` / `sol` / `direct` / 비움; 선택). 상태 전환의
-  주체는 **`work.sh` 하나**다(GitHub 내장 workflow는 같은 필드를 건드리지 않게 끈다). Project 갱신 실패는
+  주체는 **`work.sh`와 동등한 Windows `work.ps1` 진입점**이다(GitHub 내장 workflow는 같은 필드를
+  건드리지 않게 끈다). Project 갱신 실패는
   경고로 남기고 작업을 막지 않는다(§4.2).
 - 라벨은 §2의 두 축으로 끝내고 상태·runner는 Project 필드로만 관리한다.
 
@@ -63,7 +64,7 @@ Issue ──> 브랜치 + worktree ──> 작업(사람 또는 codex job) ─�
 binding 로컬 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `systems.zlink:zlink*`, C++ `install/zlink-cpp`)는
 입력이 같으면 결과가 같으므로 해시로 공유한다(vcpkg binary cache·Conan cache와 같은 원리). 규칙:
 
-- **키** = `sha256(bindings/ 트리 해시 ‖ BINDINGS_VERSION ‖ Core 버전 ‖ scripts/local-package/ 트리 해시 ‖ 플랫폼
+- **키** = `sha256(bindings/ 트리 해시 ‖ 언어별 bindings/<language>/VERSION 값 map ‖ Core 버전 ‖ scripts/local-package/ 트리 해시 ‖ 플랫폼
   `<os>-<arch>` ‖ 도구 버전 id)` 앞 16자리. 도구 버전 id는 `build-wsl.sh`가 사용하는 컴파일러·SDK·Node·JDK
   버전을 한 줄로 합친 값이다(스크립트가 출력한다).
 - **깨끗한 트리에서만 공유**: `bindings/`·`scripts/local-package/`에 staged·unstaged·untracked 변경이 있으면
@@ -82,7 +83,7 @@ binding 로컬 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `sys
   키와 baseline worktree의 키는 지우지 않는다. `work.sh done`은 링크만 지우고 캐시는 건드리지 않는다.
 - 문서 작업처럼 패키지가 필요 없는 Issue는 `work.sh start --no-packages`로 시작한다.
 
-### 4.2 명령 하나로 — `scripts/dev/work.sh`
+### 4.2 명령 하나로 — `scripts/dev/work.sh` / Windows `scripts/dev/work.ps1`
 
 절차를 잊지 않도록 단계마다 명령 하나로 묶는다. 사람도 감독자도 이 명령으로만 시작·제출·종료한다.
 **모든 명령은 재실행해도 안전하다**: 기존 Issue/branch/worktree/PR 상태를 먼저 조회해 끝난 단계는
@@ -99,6 +100,7 @@ binding 로컬 패키지(nuget `Zlink.*`, npm `@zlink-systems/zlink`, maven `sys
 - Project·milestone 갱신은 best-effort다: 권한이 없거나 통신이 실패하면 경고를 내고 로컬 단계는 계속한다.
   `status`는 로컬 정보를 항상 보여 준다.
 - `work.sh`가 생기기 전(§8)의 수동 절차는 §8에 적힌 명령 목록이다.
+- Windows에서는 같은 하위 명령과 옵션을 `powershell -File scripts/dev/work.ps1 ...`로 실행한다.
 
 ## 5. PR과 merge
 
