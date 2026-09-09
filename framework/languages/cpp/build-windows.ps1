@@ -17,6 +17,13 @@ Set-StrictMode -Version Latest
 
 $CppRoot = $PSScriptRoot
 $RepositoryRoot = (Resolve-Path (Join-Path $CppRoot "../../..")).Path
+$CoreVersion = (Select-String -LiteralPath (Join-Path $RepositoryRoot "VERSION") -Pattern "^LIBZLINK_VERSION=(.+)$").Matches.Groups[1].Value
+$BindingVersion = (Select-String -LiteralPath (Join-Path $RepositoryRoot "BINDINGS_VERSION") -Pattern "^ZLINK_BINDINGS_VERSION=(.+)$").Matches.Groups[1].Value
+$FrameworkVersion = (Select-String -LiteralPath (Join-Path $RepositoryRoot "FRAMEWORK_VERSION") -Pattern "^ZLINK_FRAMEWORK_VERSION=(.+)$").Matches.Groups[1].Value
+if (@($CoreVersion, $BindingVersion, $FrameworkVersion) | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
+    throw "Unable to read Core, binding, or Framework version from $RepositoryRoot"
+}
+$CleanPackageRoot = Join-Path $RepositoryRoot ".artifacts/cpp-clean-$BindingVersion-package"
 
 if (-not $BuildDir) {
     $BuildDir = Join-Path $RepositoryRoot ".artifacts/windows/build/framework-cpp"
@@ -24,8 +31,8 @@ if (-not $BuildDir) {
 if (-not $LocalPackageRoot) {
     $LocalPackageRoot = if ($env:ZLINK_LOCAL_PACKAGE_ROOT) {
         $env:ZLINK_LOCAL_PACKAGE_ROOT
-    } elseif (Test-Path (Join-Path $RepositoryRoot ".artifacts/cpp-clean-0.17.3-package")) {
-        Join-Path $RepositoryRoot ".artifacts/cpp-clean-0.17.3-package"
+    } elseif (Test-Path $CleanPackageRoot) {
+        $CleanPackageRoot
     } else {
         Join-Path $RepositoryRoot ".artifacts/windows"
     }
@@ -38,8 +45,8 @@ if (-not $VcpkgInstalledDir) {
     }
 }
 
-$CorePrefix = Join-Path $LocalPackageRoot "install/zlink-core/0.17.3"
-$CppPrefix = Join-Path $LocalPackageRoot "install/zlink-cpp/0.17.3"
+$CorePrefix = Join-Path $LocalPackageRoot "install/zlink-core/$CoreVersion"
+$CppPrefix = Join-Path $LocalPackageRoot "install/zlink-cpp/$BindingVersion"
 foreach ($Prefix in @($CorePrefix, $CppPrefix)) {
     if (-not (Test-Path $Prefix)) {
         throw "Missing local package: $Prefix. Publish Core and the C++ binding locally first."
@@ -137,7 +144,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($Install) {
-    $InstallPrefix = Join-Path $LocalPackageRoot "install/zlink-framework-cpp/0.10.0"
+    $InstallPrefix = Join-Path $LocalPackageRoot "install/zlink-framework-cpp/$FrameworkVersion"
     & cmake --install $BuildDir --config $Configuration --prefix $InstallPrefix
     if ($LASTEXITCODE -ne 0) {
         throw "C++ Framework install failed with exit code $LASTEXITCODE."

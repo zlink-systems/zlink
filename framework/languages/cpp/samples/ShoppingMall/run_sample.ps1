@@ -2,11 +2,17 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 . "$PSScriptRoot/../redis-common.ps1"
+. "$PSScriptRoot/../sample-build-common.ps1"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$CppRoot = Resolve-Path (Join-Path $ScriptDir "../..")
-$BuildDir = if ($env:ZLINK_CPP_BUILD_DIR) { $env:ZLINK_CPP_BUILD_DIR } else { Join-Path $CppRoot "build" }
-$BuildConfiguration = if ($env:ZLINK_CPP_BUILD_CONFIGURATION) { $env:ZLINK_CPP_BUILD_CONFIGURATION } else { "Release" }
+$CppRoot = (Resolve-Path (Join-Path $ScriptDir "../..")).Path
+$SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRoot -RequiredBinaries @(
+    "sample_cpp_framework_shoppingmall_order_workflow",
+    "sample_cpp_framework_shoppingmall_commerce_api",
+    "sample_cpp_framework_shoppingmall_client"
+)
+$BuildDir = $SampleBuild.BuildDir
+$BuildConfiguration = $SampleBuild.Configuration
 $WaitAttempts = 300
 $WaitMilliseconds = 100
 $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
@@ -18,15 +24,7 @@ $ConfigDir = Join-Path $RunDir "config"
 New-Item -ItemType Directory -Force -Path $LogDir, $FlowLogDir, $ConfigDir | Out-Null
 
 function Find-Binary([string]$Name) {
-    foreach ($candidate in @(
-        (Join-Path $BuildDir $Name), (Join-Path $BuildDir "$Name.exe"),
-        (Join-Path $BuildDir "$BuildConfiguration/$Name"), (Join-Path $BuildDir "$BuildConfiguration/$Name.exe"),
-        (Join-Path $BuildDir "linux-ninja-debug/$Name"),
-        (Join-Path $BuildDir "linux-ninja-debug/$Name.exe")
-    )) {
-        if (Test-Path $candidate) { return $candidate }
-    }
-    throw "Missing executable: $Name"
+    return Get-ZlinkCppSampleBinary -Build $SampleBuild -Name $Name
 }
 
 function Role-Logs([string]$Name) {
