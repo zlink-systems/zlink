@@ -171,10 +171,54 @@ final class ZLinkServiceM6AWireCodecTest {
                 assertArrayEquals(multipart.array(), encoded.payload(), "payload size " + size);
                 assertArrayEquals(frame.array(), codec.encodeApplicationPayload(encoded),
                     "complete frame size " + size);
+                assertArrayEquals(frame.array(),
+                    codec.encodeFrameworkMultipartFrame(List.of(first, second)),
+                    "direct frame size " + size);
                 assertArrayEquals(header, first.toByteArray());
                 assertArrayEquals(body, second.toByteArray());
             }
         }
+    }
+
+    @Test
+    void nativeFrameDecodeBorrowsInputAndReturnsIndependentlyOwnedParts() {
+        byte[] body = new byte[4096];
+        Arrays.fill(body, (byte) 0xa7);
+        List<Message> decoded;
+        try (Message header = Message.from(new byte[] {0, 127, -1});
+             Message payload = Message.from(body);
+             Message frame = Message.from(codec.encodeFrameworkMultipartFrame(
+                 List.of(header, payload)))) {
+            var view = frame.dataBuffer();
+            int position = view.position();
+            int limit = view.limit();
+            decoded = codec.decodeFrameworkMultipartFrame(view);
+            assertEquals(position, view.position());
+            assertEquals(limit, view.limit());
+        }
+        try {
+            assertArrayEquals(new byte[] {0, 127, -1}, decoded.getFirst().toByteArray());
+            assertArrayEquals(body, decoded.get(1).toByteArray());
+        } finally {
+            Message.closeAll(decoded);
+        }
+    }
+
+    @Test
+    void directFrameDecodeRejectsTruncationAndInvalidPartLengths() {
+        byte[] frame;
+        try (Message part = Message.from(new byte[] {1, 2, 3})) {
+            frame = codec.encodeFrameworkMultipartFrame(List.of(part));
+        }
+        for (int size = 0; size < frame.length; size++) {
+            var truncated = java.nio.ByteBuffer.wrap(Arrays.copyOf(frame, size));
+            assertThrows(ZLinkServiceWireException.class,
+                () -> codec.decodeFrameworkMultipartFrame(truncated));
+        }
+        // The final part's length starts immediately before its three bytes.
+        java.nio.ByteBuffer.wrap(frame).putInt(frame.length - 7, Integer.MAX_VALUE);
+        assertThrows(ZLinkServiceWireException.class,
+            () -> codec.decodeFrameworkMultipartFrame(java.nio.ByteBuffer.wrap(frame)));
     }
 
     @Test
