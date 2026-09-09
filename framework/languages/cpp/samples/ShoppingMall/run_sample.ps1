@@ -10,7 +10,7 @@ $SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRo
     "sample_cpp_framework_shoppingmall_order_workflow",
     "sample_cpp_framework_shoppingmall_commerce_api",
     "sample_cpp_framework_shoppingmall_client"
-)
+) -AllowMissingBinaries
 $BuildDir = $SampleBuild.BuildDir
 $BuildConfiguration = $SampleBuild.Configuration
 $WaitAttempts = 300

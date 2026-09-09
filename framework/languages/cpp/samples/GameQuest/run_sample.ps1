@@ -10,7 +10,7 @@ $SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRo
     "sample_cpp_framework_gamequest_quest_mission",
     "sample_cpp_framework_gamequest_game_api",
     "sample_cpp_framework_gamequest_client"
-)
+) -AllowMissingBinaries
 $BuildDir = $SampleBuild.BuildDir
 $BuildConfiguration = $SampleBuild.Configuration
 $WaitAttempts = 300

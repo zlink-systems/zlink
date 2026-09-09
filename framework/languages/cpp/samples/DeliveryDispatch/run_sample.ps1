@@ -13,7 +13,7 @@ $SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRo
     "sample_cpp_framework_deliverydispatch_courier_session",
     "sample_cpp_framework_deliverydispatch_tracking",
     "sample_cpp_framework_deliverydispatch_client"
-)
+) -AllowMissingBinaries
 $BuildDir = $SampleBuild.BuildDir
 $BuildConfiguration = $SampleBuild.Configuration
 $WaitAttempts = 300

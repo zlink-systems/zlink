@@ -12,12 +12,9 @@ $SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRo
     "sample_cpp_framework_tictactoe_play",
     "sample_cpp_framework_tictactoe_api",
     "sample_cpp_framework_tictactoe_client"
-)
+) -AllowMissingBinaries
 $BuildDir = $SampleBuild.BuildDir
 $BuildConfiguration = $SampleBuild.Configuration
-$PlayBin = Get-ZlinkCppSampleBinary -Build $SampleBuild -Name "sample_cpp_framework_tictactoe_play"
-$ApiBin = Get-ZlinkCppSampleBinary -Build $SampleBuild -Name "sample_cpp_framework_tictactoe_api"
-$ClientBin = Get-ZlinkCppSampleBinary -Build $SampleBuild -Name "sample_cpp_framework_tictactoe_client"
 $CTestBin = if ($env:CTEST_BIN) { $env:CTEST_BIN } else { "ctest" }
 
 function Reserve-Ports([int]$Count) {
@@ -141,6 +138,13 @@ function Cleanup([int]$Status) {
     }
     return $Status
 }
+
+& cmake --build $BuildDir --config $BuildConfiguration --parallel 2 --target `
+    sample_cpp_framework_tictactoe_play sample_cpp_framework_tictactoe_api sample_cpp_framework_tictactoe_client
+if ($LASTEXITCODE -ne 0) { throw "TicTacToe sample build failed." }
+$PlayBin = Get-ZlinkCppSampleBinary -Build $SampleBuild -Name "sample_cpp_framework_tictactoe_play"
+$ApiBin = Get-ZlinkCppSampleBinary -Build $SampleBuild -Name "sample_cpp_framework_tictactoe_api"
+$ClientBin = Get-ZlinkCppSampleBinary -Build $SampleBuild -Name "sample_cpp_framework_tictactoe_client"
 
 Invoke-ZlinkCppSampleCTest -Build $SampleBuild -CTestBin $CTestBin `
     -Pattern "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway|sample_smoke_sample_cpp_framework_tictactoe_(play|api)"

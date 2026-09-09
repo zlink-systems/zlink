@@ -42,7 +42,8 @@ function Resolve-ZlinkCppSampleBuild {
         [Parameter(Mandatory = $true)]
         [string]$CppRoot,
         [Parameter(Mandatory = $true)]
-        [string[]]$RequiredBinaries
+        [string[]]$RequiredBinaries,
+        [switch]$AllowMissingBinaries
     )
 
     # An explicit build directory is authoritative. Otherwise prefer this
@@ -75,11 +76,29 @@ function Resolve-ZlinkCppSampleBuild {
         }
         $Configurations += @("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
         $Configurations = @($Configurations | Select-Object -Unique)
+        $ExistingConfigurations = @($Configurations | Where-Object {
+            Test-Path -LiteralPath (Join-Path $BuildRoot $_) -PathType Container
+        })
+        $CachedConfigurationIsAvailable =
+            $CachedConfiguration -in @("Debug", "Release", "RelWithDebInfo", "MinSizeRel") -and
+            (Test-Path -LiteralPath (Join-Path $BuildRoot $CachedConfiguration) -PathType Container)
+        if (-not $env:ZLINK_CPP_BUILD_CONFIGURATION -and
+            -not $CachedConfigurationIsAvailable -and
+            $ExistingConfigurations.Count -eq 1) {
+            $Configurations = @($ExistingConfigurations[0]) + @($Configurations | Where-Object { $_ -ne $ExistingConfigurations[0] })
+        }
 
-        $BinDirs = @($BuildRoot)
-        $BinDirs += $Configurations | ForEach-Object { Join-Path $BuildRoot $_ }
+        $ConfigurationBinDirs = @($Configurations | ForEach-Object { Join-Path $BuildRoot $_ })
+        $BinDirs = if ($AllowMissingBinaries -and $ExistingConfigurations.Count -gt 0) {
+            $ConfigurationBinDirs + @($BuildRoot)
+        } else {
+            @($BuildRoot) + $ConfigurationBinDirs
+        }
         foreach ($BinDir in $BinDirs) {
-            if (-not (Test-ZlinkCppSampleBinaries -BinDir $BinDir -Names $RequiredBinaries)) {
+            $HasBinaries = Test-ZlinkCppSampleBinaries -BinDir $BinDir -Names $RequiredBinaries
+            if (-not $HasBinaries -and -not $AllowMissingBinaries) { continue }
+            if (-not $HasBinaries -and
+                -not (Test-Path -LiteralPath (Join-Path $BuildRoot "CMakeCache.txt") -PathType Leaf)) {
                 continue
             }
             $Configuration = $CachedConfiguration

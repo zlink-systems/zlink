@@ -11,7 +11,7 @@ $SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRo
     "sample_cpp_framework_zoneworld_gateway",
     "sample_cpp_framework_zoneworld_ops",
     "sample_cpp_framework_zoneworld_client"
-)
+) -AllowMissingBinaries
 $BuildDir = $SampleBuild.BuildDir
 $BuildConfiguration = $SampleBuild.Configuration
 $RunDir = Join-Path ([System.IO.Path]::GetTempPath()) "zoneworld-cpp-$PID-$([Guid]::NewGuid().ToString('N'))"

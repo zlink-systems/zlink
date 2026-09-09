@@ -11,7 +11,7 @@ $SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRo
     "sample_cpp_framework_supportchat_session",
     "sample_cpp_framework_supportchat_support",
     "sample_cpp_framework_supportchat_client"
-)
+) -AllowMissingBinaries
 $BuildDir = $SampleBuild.BuildDir
 $BuildConfiguration = $SampleBuild.Configuration
 $WaitAttempts = 300

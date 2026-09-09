@@ -53,6 +53,11 @@ try {
     $env:ZLINK_CPP_BUILD_DIR = $null
     $args.SampleDir = Join-Path $fixture 'samples/Unbuilt'
     Assert-Equal (Resolve-ZlinkCppSampleBuild @args).BuildDir $shared 'Shared development fallback'
+    $clean = New-TestBuild 'clean-release' '' @()
+    $env:ZLINK_CPP_BUILD_DIR = $clean
+    New-Item -ItemType Directory -Force (Join-Path $clean 'Release') | Out-Null
+    $cleanResult = Resolve-ZlinkCppSampleBuild @args -AllowMissingBinaries
+    Assert-Equal $cleanResult.Configuration 'Release' 'Clean multi-config build selection'
     Write-Host "sample-build-common: $checks checks passed"
 } finally {
     $env:ZLINK_CPP_BUILD_DIR = $oldBuildDir

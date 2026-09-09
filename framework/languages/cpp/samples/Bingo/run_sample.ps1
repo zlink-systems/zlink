@@ -10,7 +10,7 @@ $SampleBuild = Resolve-ZlinkCppSampleBuild -SampleDir $ScriptDir -CppRoot $CppRo
     "sample_cpp_framework_bingo_play",
     "sample_cpp_framework_bingo_session",
     "sample_cpp_framework_bingo_client"
-)
+) -AllowMissingBinaries
 $BuildDir = $SampleBuild.BuildDir
 $BuildConfiguration = $SampleBuild.Configuration
 $CTestBin = if ($env:CTEST_BIN) { $env:CTEST_BIN } else { "ctest" }
@@ -22,12 +22,6 @@ Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $LogDir "*.log")
 function Find-Binary([string]$Name) {
     return Get-ZlinkCppSampleBinary -Build $SampleBuild -Name $Name
 }
-
-$ApiBin = Find-Binary "sample_cpp_framework_bingo_api"
-$MatchmakingBin = Find-Binary "sample_cpp_framework_bingo_matchmaking"
-$PlayBin = Find-Binary "sample_cpp_framework_bingo_play"
-$SessionBin = Find-Binary "sample_cpp_framework_bingo_session"
-$ClientBin = Find-Binary "sample_cpp_framework_bingo_client"
 
 $Processes = New-Object System.Collections.Generic.List[System.Diagnostics.Process]
 $RedisContainer = $null
@@ -163,6 +157,15 @@ function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {
 
 $Status = 1
 try {
+    & cmake --build $BuildDir --config $BuildConfiguration --parallel 2 --target `
+        sample_cpp_framework_bingo_api sample_cpp_framework_bingo_matchmaking `
+        sample_cpp_framework_bingo_play sample_cpp_framework_bingo_session sample_cpp_framework_bingo_client
+    if ($LASTEXITCODE -ne 0) { throw "Bingo sample build failed." }
+    $ApiBin = Find-Binary "sample_cpp_framework_bingo_api"
+    $MatchmakingBin = Find-Binary "sample_cpp_framework_bingo_matchmaking"
+    $PlayBin = Find-Binary "sample_cpp_framework_bingo_play"
+    $SessionBin = Find-Binary "sample_cpp_framework_bingo_session"
+    $ClientBin = Find-Binary "sample_cpp_framework_bingo_client"
     Invoke-ZlinkCppSampleCTest -Build $SampleBuild -CTestBin $CTestBin `
         -Pattern "test_cpp_framework_sample_parity|zlink_cpp_framework_mesh_node_vertical_test|test_cpp_framework_actor_gateway"
 
