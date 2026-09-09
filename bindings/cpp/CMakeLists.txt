@@ -63,11 +63,22 @@ function(zlink_cpp_resolve_core_build_layout out_dir_var out_lib_var)
 endfunction()
 
 function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
-  if(TARGET libzlink)
-    set(${out_target_var} libzlink PARENT_SCOPE)
-    set(${out_runtime_dir_var} "$<TARGET_FILE_DIR:libzlink>" PARENT_SCOPE)
-    return()
+  if(NOT TARGET libzlink AND NOT TARGET libzlink-static
+      AND NOT ZLINK_CPP_USE_CORE_BUILD_RUNTIME)
+    if(ZLINK_CPP_CORE_PACKAGE_PREFIX)
+      find_package(zlink ${ZLINK_CPP_CORE_VERSION} EXACT CONFIG QUIET
+        PATHS "${ZLINK_CPP_CORE_PACKAGE_PREFIX}" NO_DEFAULT_PATH)
+    else()
+      find_package(zlink ${ZLINK_CPP_CORE_VERSION} EXACT CONFIG QUIET)
+    endif()
   endif()
+  foreach(_core_target IN ITEMS libzlink libzlink-static)
+    if(TARGET ${_core_target})
+      set(${out_target_var} ${_core_target} PARENT_SCOPE)
+      set(${out_runtime_dir_var} "$<TARGET_FILE_DIR:${_core_target}>" PARENT_SCOPE)
+      return()
+    endif()
+  endforeach()
 
   if(ZLINK_CPP_USE_CORE_BUILD_RUNTIME)
     zlink_cpp_resolve_core_build_layout(_core_build_dir _core_build_lib)
@@ -106,17 +117,6 @@ function(zlink_cpp_ensure_core_target out_target_var out_runtime_dir_var)
   endif()
 
   if(ZLINK_CPP_CORE_PACKAGE_PREFIX)
-    find_package(zlink ${ZLINK_CPP_CORE_VERSION} EXACT CONFIG QUIET
-      PATHS "${ZLINK_CPP_CORE_PACKAGE_PREFIX}"
-      NO_DEFAULT_PATH)
-    if(TARGET libzlink)
-      get_target_property(_package_runtime libzlink IMPORTED_LOCATION)
-      get_filename_component(_package_runtime_dir "${_package_runtime}" DIRECTORY)
-      set(${out_target_var} libzlink PARENT_SCOPE)
-      set(${out_runtime_dir_var} "${_package_runtime_dir}" PARENT_SCOPE)
-      return()
-    endif()
-
     # GitHub Core release archives contain the runtime and public headers, but
     # not a CMake package config. Materialize an imported target for this
     # normalized release prefix.
@@ -291,9 +291,10 @@ target_include_directories(zlink_cpp
   PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src
 )
+# The installed config resolves Core linkage from its dependency package.
+# A build-tree runtime target must never escape into the installed export.
 target_link_libraries(zlink_cpp PUBLIC
-  $<BUILD_INTERFACE:${ZLINK_CPP_CORE_TARGET}>
-  $<INSTALL_INTERFACE:libzlink>)
+  $<BUILD_INTERFACE:${ZLINK_CPP_CORE_TARGET}>)
 target_compile_features(zlink_cpp PUBLIC cxx_std_20)
 set_target_properties(zlink_cpp PROPERTIES
   EXPORT_NAME cpp
@@ -311,10 +312,14 @@ install(TARGETS zlink_cpp
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-install(DIRECTORY include/
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING PATTERN "*.hpp"
-)
+# Install only binding-owned headers; Core owns the adjacent C header tree.
+file(GLOB_RECURSE ZLINK_CPP_PUBLIC_HEADERS RELATIVE "${CMAKE_CURRENT_LIST_DIR}/include"
+  "${CMAKE_CURRENT_LIST_DIR}/include/*.hpp")
+foreach(header IN LISTS ZLINK_CPP_PUBLIC_HEADERS)
+  get_filename_component(header_dir "${header}" DIRECTORY)
+  install(FILES "${CMAKE_CURRENT_LIST_DIR}/include/${header}"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${header_dir}")
+endforeach()
 install(EXPORT zlink_cppTargets
   NAMESPACE zlink::
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_cpp

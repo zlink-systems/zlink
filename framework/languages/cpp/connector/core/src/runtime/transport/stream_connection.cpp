@@ -174,8 +174,11 @@ bool wait_readable_until_asio (boost::asio::io_context &io_context,
                 state->wait_cancellation.slot (),
                 boost::asio::bind_executor (
                   strand, [state] (const boost::system::error_code &socket_error) {
-                      boost::system::error_code ignored;
-                      state->timer.cancel (ignored);
+                      try {
+                          state->timer.cancel ();
+                      }
+                      catch (const boost::system::system_error &) {
+                      }
                       state->report_socket (socket_error, !socket_error);
                   })));
         });

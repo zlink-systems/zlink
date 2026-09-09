@@ -1,0 +1,6 @@
+zlink-cpp provides a CMake package:
+
+    find_package(zlink_cpp 0.17.6 CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE zlink::cpp)
+
+The binding is static and follows the installed zlink package for Core linkage.

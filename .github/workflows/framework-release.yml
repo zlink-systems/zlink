@@ -247,18 +247,29 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
       - name: Create source archive and checksum
+        # prepare-source-archive.cmake verifies the generated protocol headers
+        # (--check) and stages framework/languages/cpp, framework/runtime (as
+        # runtime/) and framework/LICENSE. The archive keeps one top-level
+        # directory, the same layout as the C++ binding archive.
         shell: bash
         run: |
           mkdir -p dist/framework-cpp
           stage="${RUNNER_TEMP}/zlink-framework-cpp-${{ needs.resolve.outputs.version }}"
-          mkdir -p "${stage}"
-          git archive HEAD:framework/languages/cpp | tar -x -C "${stage}"
-          install -m644 LICENSE "${stage}/LICENSE"
+          cmake -DZLINK_SOURCE_DIR="${PWD}" -DZLINK_STAGE_DIR="${stage}" \
+            -P framework/languages/cpp/cmake/prepare-source-archive.cmake
+          for required in CMakeLists.txt runtime/protocol/generated/cpp/service_wire_constants.hpp runtime/protocol/generated/cpp/service_wire_pilot_codec.hpp LICENSE; do
+            test -f "${stage}/${required}" || { echo "missing ${required} in the framework C++ source archive" >&2; exit 1; }
+          done
           archive="dist/framework-cpp/zlink-framework-cpp-${{ needs.resolve.outputs.version }}.tar.gz"
           tar -C "${RUNNER_TEMP}" -czf "${archive}" \
             "zlink-framework-cpp-${{ needs.resolve.outputs.version }}"
           sha256sum "${archive}" >"${archive}.sha256"
+          sha512sum "${archive}"
 
       - uses: actions/upload-artifact@v6
         with:

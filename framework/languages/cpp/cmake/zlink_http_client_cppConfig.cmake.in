@@ -1,13 +1,10 @@
 @PACKAGE_INIT@
-
 include(CMakeFindDependencyMacro)
+find_dependency(zlink @ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION@ EXACT CONFIG)
+find_dependency(zlink_cpp @ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION@ EXACT CONFIG)
 find_dependency(Threads)
 find_dependency(nlohmann_json CONFIG)
+find_dependency(Boost)
 @ZLINK_HTTP_CLIENT_EXPORT_OPENSSL_DEPENDENCY@
-
-# The HTTP client is a separate install component; it consumes the framework
-# public contract through the framework package instead of re-exporting it.
-if(NOT TARGET zlink::framework)
-  include("${CMAKE_CURRENT_LIST_DIR}/../zlink_framework_cpp/zlink_framework_cppConfig.cmake")
-endif()
+find_dependency(zlink_framework_cpp CONFIG)
 include("${CMAKE_CURRENT_LIST_DIR}/zlink_http_client_cppTargets.cmake")

@@ -6,7 +6,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     $<$<COMPILE_LANGUAGE:CXX>:-fvisibility=hidden>
     $<$<COMPILE_LANGUAGE:CXX>:-fvisibility-inlines-hidden>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU>>:-fno-gnu-unique>)
-  if(NOT APPLE)
+  if(UNIX AND NOT APPLE)
     add_link_options($<$<LINK_LANGUAGE:CXX>:-Wl,--exclude-libs,ALL>)
   endif()
   if(UNIX AND NOT APPLE AND EXISTS "${CMAKE_CURRENT_LIST_DIR}/cmake/hide-executable-symbols.map")
@@ -45,6 +45,21 @@ set(ZLINK_FRAMEWORK_CPP_COVERAGE_THRESHOLD 80 CACHE STRING
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 set(ZLINK_FRAMEWORK_CPP_REPO_ROOT "${ZLINK_FRAMEWORK_CPP_DIR}/../../.." CACHE PATH
   "Path to the zlink repository root")
+# Release staging places the shared runtime inputs next to this CMake project.
+if(EXISTS "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp/service_wire_constants.hpp")
+  set(ZLINK_FRAMEWORK_CPP_RUNTIME_DIR "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime")
+  set(_zlink_use_system_boost OFF)
+else()
+  set(ZLINK_FRAMEWORK_CPP_RUNTIME_DIR "${ZLINK_FRAMEWORK_CPP_DIR}/runtime")
+  set(_zlink_use_system_boost ON)
+endif()
+if(NOT EXISTS "${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp/service_wire_constants.hpp"
+    OR NOT EXISTS "${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp/service_wire_pilot_codec.hpp")
+  message(FATAL_ERROR "Missing generated protocol headers; prepare the C++ source archive with cmake/prepare-source-archive.cmake")
+endif()
+option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
+  "Use packaged Boost instead of the repository's vendored Boost" ${_zlink_use_system_boost})
+list(APPEND CMAKE_MODULE_PATH "${ZLINK_FRAMEWORK_CPP_DIR}/cmake")
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
 set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "0.17.6" CACHE STRING
@@ -66,27 +81,6 @@ set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX
 set(ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX
   "${ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT}/install/zlink-core/${ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION}" CACHE PATH
   "Local zlink Core package install prefix used by zlink_cpp")
-if(WIN32)
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
-    set(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin/zlink.dll")
-  else()
-    set(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/bin/zlink.dll")
-  endif()
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
-    set(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.dylib")
-  else()
-    set(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.dylib")
-  endif()
-else()
-  set(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME
-    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/libzlink.so")
-endif()
-
 if(NOT TARGET zlink::cpp)
   list(PREPEND CMAKE_PREFIX_PATH
     "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}"
@@ -161,7 +155,7 @@ function(zlink_framework_cpp_configure_m6_objects target_name)
   target_include_directories(${target_name} PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(${target_name} PRIVATE
     zlink::cpp
     Threads::Threads)
@@ -262,28 +256,32 @@ target_include_directories(zlink_framework PUBLIC
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_include_directories(zlink_framework PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-  ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+  ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
 target_link_libraries(zlink_framework PUBLIC zlink::cpp)
 if(WIN32)
   target_link_libraries(zlink_framework PUBLIC bcrypt)
 endif()
 set(ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR "" CACHE PATH
   "Boost include directory used by the C++ framework and stream connector")
-if(NOT ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR
+if(NOT ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST AND NOT ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR
     AND EXISTS "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/core/external/boost/boost/asio.hpp")
   set(ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR
     "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/core/external/boost" CACHE PATH
     "Boost include directory used by the C++ framework and stream connector" FORCE)
 endif()
-find_package(Boost QUIET)
+if(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST OR NOT ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR)
+  find_package(Boost REQUIRED)
+endif()
 function(zlink_framework_cpp_add_boost_headers target_name)
-  if(ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR)
+  if(NOT ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST AND ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR)
     # Keep the bundled Boost tree ahead of transitive package include paths. A
     # framework target and the standalone HTTP client are linked into the same
     # consumer; selecting different Asio headers in those targets is an ABI
     # violation even though the headers are nominally header-only.
     target_include_directories(${target_name} BEFORE PRIVATE
       "${ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR}")
+  elseif(TARGET Boost::headers)
+    target_link_libraries(${target_name} PRIVATE Boost::headers)
   elseif(Boost_FOUND AND Boost_INCLUDE_DIRS)
     target_include_directories(${target_name} BEFORE PRIVATE ${Boost_INCLUDE_DIRS})
   elseif(Boost_FOUND AND Boost_INCLUDE_DIR)
@@ -439,65 +437,14 @@ if(ZLINK_STREAM_CONNECTOR_WITH_WEBSOCKET)
     ZLINK_STREAM_CONNECTOR_WITH_WEBSOCKET)
 endif()
 if(ZLINK_STREAM_CONNECTOR_WITH_LZ4 OR ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4)
-  find_path(ZLINK_LZ4_INCLUDE_DIR lz4.h)
-  find_library(ZLINK_LZ4_LIBRARY NAMES lz4 liblz4)
-  if(ZLINK_LZ4_INCLUDE_DIR AND ZLINK_LZ4_LIBRARY)
-    set(ZLINK_LZ4_INSTALL_LIBRARY "${ZLINK_LZ4_LIBRARY}")
-    if(UNIX)
-      get_filename_component(ZLINK_LZ4_LIBRARY_DIR
-        "${ZLINK_LZ4_LIBRARY}" DIRECTORY)
-      set(ZLINK_LZ4_STATIC_LIBRARY
-        "${ZLINK_LZ4_LIBRARY_DIR}/liblz4.a")
-      if(EXISTS "${ZLINK_LZ4_STATIC_LIBRARY}")
-        set(ZLINK_LZ4_INSTALL_LIBRARY
-          "${ZLINK_LZ4_STATIC_LIBRARY}")
-      endif()
-    endif()
-    get_filename_component(ZLINK_LZ4_LIBRARY_NAME
-      "${ZLINK_LZ4_INSTALL_LIBRARY}" NAME)
-    add_library(zlink_framework_cpp_lz4 INTERFACE)
-    add_library(zlink::framework_cpp_lz4 ALIAS zlink_framework_cpp_lz4)
-    set_target_properties(zlink_framework_cpp_lz4 PROPERTIES
-      EXPORT_NAME framework_cpp_lz4)
-    add_library(zlink_stream_connector_cpp_lz4 INTERFACE)
-    add_library(zlink::stream_connector_cpp_lz4 ALIAS zlink_stream_connector_cpp_lz4)
-    set_target_properties(zlink_stream_connector_cpp_lz4 PROPERTIES
-      EXPORT_NAME stream_connector_cpp_lz4)
-    foreach(lz4_target IN ITEMS
-        zlink_framework_cpp_lz4 zlink_stream_connector_cpp_lz4)
-      target_link_libraries(${lz4_target} INTERFACE
-        "$<BUILD_INTERFACE:${ZLINK_LZ4_LIBRARY}>")
-    endforeach()
-    if(ZLINK_STREAM_CONNECTOR_WITH_LZ4)
-      target_include_directories(zlink_stream_connector PRIVATE
-        ${ZLINK_LZ4_INCLUDE_DIR})
-      target_link_libraries(zlink_stream_connector PRIVATE
-        zlink_stream_connector_cpp_lz4)
-    endif()
-    if(ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4)
-      target_include_directories(zlink_framework PRIVATE
-        ${ZLINK_LZ4_INCLUDE_DIR})
-      target_link_libraries(zlink_framework PRIVATE
-        zlink_framework_cpp_lz4)
-    endif()
-  else()
-    FetchContent_Declare(
-      zlink_lz4
-      URL https://github.com/lz4/lz4/archive/refs/tags/v1.10.0.tar.gz
-      DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-    FetchContent_MakeAvailable(zlink_lz4)
-    if(ZLINK_STREAM_CONNECTOR_WITH_LZ4)
-      target_sources(zlink_stream_connector PRIVATE
-        ${zlink_lz4_SOURCE_DIR}/lib/lz4.c)
-      target_include_directories(zlink_stream_connector PRIVATE
-        ${zlink_lz4_SOURCE_DIR}/lib)
-    endif()
-    if(ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4)
-      target_sources(zlink_framework PRIVATE
-        ${zlink_lz4_SOURCE_DIR}/lib/lz4.c)
-      target_include_directories(zlink_framework PRIVATE
-        ${zlink_lz4_SOURCE_DIR}/lib)
-    endif()
+  find_package(lz4 REQUIRED)
+  if(ZLINK_STREAM_CONNECTOR_WITH_LZ4)
+    target_link_libraries(zlink_stream_connector PRIVATE lz4::lz4)
+    set(ZLINK_STREAM_CONNECTOR_EXPORT_LZ4_DEPENDENCY "find_dependency(lz4)")
+  endif()
+  if(ZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4)
+    target_link_libraries(zlink_framework PRIVATE lz4::lz4)
+    set(ZLINK_FRAMEWORK_EXPORT_LZ4_DEPENDENCY "find_dependency(lz4)")
   endif()
 endif()
 target_compile_definitions(zlink_framework PRIVATE
@@ -556,17 +503,7 @@ if(ZLINK_STREAM_CONNECTOR_BUILD_UNREAL)
     zlink::stream_connector_codecs)
   zlink_framework_cpp_add_asio_system_libraries(zlink_unreal_stream_connector)
   if(ZLINK_STREAM_CONNECTOR_WITH_LZ4)
-    if(ZLINK_LZ4_INCLUDE_DIR AND ZLINK_LZ4_LIBRARY)
-      target_include_directories(zlink_unreal_stream_connector PRIVATE
-        ${ZLINK_LZ4_INCLUDE_DIR})
-      target_link_libraries(zlink_unreal_stream_connector PRIVATE
-        zlink_stream_connector_cpp_lz4)
-    else()
-      target_sources(zlink_unreal_stream_connector PRIVATE
-        ${zlink_lz4_SOURCE_DIR}/lib/lz4.c)
-      target_include_directories(zlink_unreal_stream_connector PRIVATE
-        ${zlink_lz4_SOURCE_DIR}/lib)
-    endif()
+    target_link_libraries(zlink_unreal_stream_connector PRIVATE lz4::lz4)
   endif()
   target_compile_definitions(zlink_unreal_stream_connector PRIVATE
     $<$<BOOL:${ZLINK_STREAM_CONNECTOR_WITH_LZ4}>:ZLINK_UNREAL_STREAM_CONNECTOR_WITH_LZ4>)
@@ -736,14 +673,6 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     zlink_http_client
     EXPORT zlink_http_client_cppTargets
     COMPONENT HttpClient)
-  if(TARGET zlink_framework_cpp_lz4)
-    install(TARGETS zlink_framework_cpp_lz4
-      EXPORT zlink_framework_cppTargets
-      COMPONENT Framework)
-    install(FILES "${ZLINK_LZ4_INSTALL_LIBRARY}"
-      DESTINATION ${CMAKE_INSTALL_LIBDIR}
-      COMPONENT Framework)
-  endif()
 endif()
 install(TARGETS
   zlink_stream_connector
@@ -751,14 +680,6 @@ install(TARGETS
   zlink_stream_connector_throwing
   EXPORT zlink_stream_connector_cppTargets
   COMPONENT StreamConnector)
-if(TARGET zlink_stream_connector_cpp_lz4)
-  install(TARGETS zlink_stream_connector_cpp_lz4
-    EXPORT zlink_stream_connector_cppTargets
-    COMPONENT StreamConnector)
-  install(FILES "${ZLINK_LZ4_INSTALL_LIBRARY}"
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT StreamConnector)
-endif()
 if(TARGET zlink_unreal_stream_connector)
   install(TARGETS
     zlink_unreal_stream_connector
@@ -770,51 +691,6 @@ if(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT)
     zlink_stream_e2e_client
     EXPORT zlink_stream_connector_cppTargets
     COMPONENT StreamConnector)
-endif()
-# The stream connector and Unreal adapter both consume the C++ binding. Keep
-# this dependency in the connector package even when the server framework is
-# not installed.
-if(TARGET zlink_stream_connector AND NOT ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE)
-  install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/include/"
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-    COMPONENT StreamConnector
-    FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h")
-  file(GLOB ZLINK_FRAMEWORK_CPP_BINDING_LIBRARIES
-    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/libzlink_cpp.a"
-    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/zlink_cpp.lib"
-    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/libzlink_cpp.lib"
-    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/libzlink_cpp.dll.a")
-  if(NOT ZLINK_FRAMEWORK_CPP_BINDING_LIBRARIES)
-    message(FATAL_ERROR
-      "The installed zlink_cpp package has no link library under "
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib")
-  endif()
-  install(FILES ${ZLINK_FRAMEWORK_CPP_BINDING_LIBRARIES}
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT StreamConnector)
-  install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/cmake/zlink_cpp"
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake
-    COMPONENT StreamConnector)
-  if(NOT EXISTS
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/cmake/zlink")
-    message(FATAL_ERROR
-      "The installed Core package has no CMake config under "
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/cmake/zlink")
-  endif()
-  install(DIRECTORY
-    "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}/lib/cmake/zlink"
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake
-    COMPONENT StreamConnector)
-  if(WIN32)
-    file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/*.lib"
-      "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/lib/*.dll.a")
-    if(ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES)
-      install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES}
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT StreamConnector)
-    endif()
-  endif()
 endif()
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   install(DIRECTORY framework/include/
@@ -860,37 +736,6 @@ if(TARGET zlink_unreal_stream_connector)
     COMPONENT StreamConnector
     FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
 endif()
-if(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME AND EXISTS "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}")
-  if(WIN32)
-    install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
-      DESTINATION ${CMAKE_INSTALL_BINDIR}
-      COMPONENT StreamConnector)
-    get_filename_component(ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR
-      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}" DIRECTORY)
-    file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES
-      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR}/../lib/*.lib"
-      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR}/*.lib")
-    if(ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES)
-      install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_IMPORT_LIBRARIES}
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT StreamConnector)
-    endif()
-  elseif(UNIX AND NOT APPLE)
-    get_filename_component(
-      ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR
-      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
-      DIRECTORY)
-    file(GLOB ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES
-      "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_DIR}/libzlink.so*")
-    install(FILES ${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME_FILES}
-      DESTINATION ${CMAKE_INSTALL_LIBDIR}
-      COMPONENT StreamConnector)
-  else()
-    install(FILES "${ZLINK_FRAMEWORK_CPP_NATIVE_RUNTIME}"
-      DESTINATION ${CMAKE_INSTALL_LIBDIR}
-      COMPONENT StreamConnector)
-  endif()
-endif()
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   install(EXPORT zlink_framework_cppTargets
     NAMESPACE zlink::
@@ -905,6 +750,19 @@ install(EXPORT zlink_stream_connector_cppTargets
   NAMESPACE zlink::
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_stream_connector_cpp
   COMPONENT StreamConnector)
+
+foreach(_package zlink_framework_cpp zlink_stream_connector_cpp)
+  if(_package STREQUAL "zlink_framework_cpp" AND NOT ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
+    continue()
+  endif()
+  if(_package STREQUAL "zlink_framework_cpp")
+    set(_component Framework)
+  else()
+    set(_component StreamConnector)
+  endif()
+  install(FILES "${CMAKE_CURRENT_LIST_DIR}/cmake/Findlz4.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${_package} COMPONENT ${_component})
+endforeach()
 
 configure_package_config_file(
   "${CMAKE_CURRENT_LIST_DIR}/cmake/zlink_framework_cppConfig.cmake.in"
@@ -994,18 +852,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_include_directories(test_cpp_framework_service_wire_codec PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_service_wire_codec PRIVATE
-    ZLINK_BOUND_SESSION_REPLACED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/bound-session-replaced-v1.json"
-    ZLINK_REPLY_RELAY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/reply-relay-v1.json"
-    ZLINK_RELOCATION_CONTROL_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/relocation-control-v1.json"
-    ZLINK_SESSION_RELOCATION_BARRIER_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/session-relocation-barrier-v1.json"
-    ZLINK_USER_SPOT_CREATE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/user-spot-create-v1.json"
-    ZLINK_USER_SPOT_CLOSE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/user-spot-close-v1.json"
-    ZLINK_ACTOR_CREATE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/actor-create-v1.json"
-    ZLINK_ZLJR_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/zljr-v1.json"
-    ZLINK_ACTOR_JOIN_REQUEST_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/actor-join-request-v1.json"
-    ZLINK_ACTOR_JOIN_REPLY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/actor-join-reply-v1.json")
+    ZLINK_BOUND_SESSION_REPLACED_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/bound-session-replaced-v1.json"
+    ZLINK_REPLY_RELAY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/reply-relay-v1.json"
+    ZLINK_RELOCATION_CONTROL_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/relocation-control-v1.json"
+    ZLINK_SESSION_RELOCATION_BARRIER_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/session-relocation-barrier-v1.json"
+    ZLINK_USER_SPOT_CREATE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/user-spot-create-v1.json"
+    ZLINK_USER_SPOT_CLOSE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/user-spot-close-v1.json"
+    ZLINK_ACTOR_CREATE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/actor-create-v1.json"
+    ZLINK_ZLJR_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/zljr-v1.json"
+    ZLINK_ACTOR_JOIN_REQUEST_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/actor-join-request-v1.json"
+    ZLINK_ACTOR_JOIN_REPLY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/actor-join-reply-v1.json")
   target_link_libraries(test_cpp_framework_service_wire_codec PRIVATE
     zlink::cpp
     nlohmann_json::nlohmann_json
@@ -1035,7 +893,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   target_compile_definitions(test_cpp_framework_authority_key_codec PRIVATE
-    ZLINK_AUTHORITY_KEY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/authority-key-v1.json")
+    ZLINK_AUTHORITY_KEY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/authority-key-v1.json")
   target_link_libraries(test_cpp_framework_authority_key_codec PRIVATE
     zlink::framework
     nlohmann_json::nlohmann_json)
@@ -1051,9 +909,9 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_include_directories(test_cpp_framework_relocation_envelope_golden PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_relocation_envelope_golden PRIVATE
-    ZLINK_RELOCATION_ENVELOPE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/relocation-envelope-v1.json")
+    ZLINK_RELOCATION_ENVELOPE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/relocation-envelope-v1.json")
   target_link_libraries(test_cpp_framework_relocation_envelope_golden PRIVATE
     nlohmann_json::nlohmann_json
     zlink::framework
@@ -1071,8 +929,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   target_compile_definitions(test_cpp_framework_actor_authority_payload PRIVATE
-    ZLINK_DURABLE_AUTHORITY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/durable-authority-v1.json"
-    ZLINK_AUTHORITY_RELOCATION_STATE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/authority-relocation-state-v1.json")
+    ZLINK_DURABLE_AUTHORITY_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/durable-authority-v1.json"
+    ZLINK_AUTHORITY_RELOCATION_STATE_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/authority-relocation-state-v1.json")
   target_link_libraries(test_cpp_framework_actor_authority_payload PRIVATE
     nlohmann_json::nlohmann_json
     zlink::framework)
@@ -1091,7 +949,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/extensions/framework-locations-redis/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/include)
   target_compile_definitions(test_cpp_framework_store_record_golden PRIVATE
-    ZLINK_STORE_RECORD_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/golden/store-record-v1.json")
+    ZLINK_STORE_RECORD_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/store-record-v1.json")
   target_link_libraries(test_cpp_framework_store_record_golden PRIVATE
     nlohmann_json::nlohmann_json
     zlink::framework
@@ -1109,7 +967,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_include_directories(test_cpp_framework_operation_registry PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
   target_compile_definitions(test_cpp_framework_operation_registry PRIVATE
-    ZLINK_COMPLETION_TERMINAL_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/completion-terminal-v1.json")
+    ZLINK_COMPLETION_TERMINAL_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/completion-terminal-v1.json")
   target_link_libraries(test_cpp_framework_operation_registry PRIVATE
     Threads::Threads
     nlohmann_json::nlohmann_json)
@@ -1124,7 +982,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_features(test_cpp_framework_m6a_runtime PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_m6a_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_m6a_runtime PRIVATE
     zlink_framework_m6a_runtime
     Threads::Threads)
@@ -1155,7 +1013,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_compile_features(test_cpp_framework_mesh_shutdown_seal PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_mesh_shutdown_seal PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_mesh_shutdown_seal PRIVATE
     zlink_framework_m6a_runtime Threads::Threads)
   zlink_framework_cpp_enable_test_assertions(test_cpp_framework_mesh_shutdown_seal)
@@ -1171,7 +1029,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_include_directories(test_cpp_framework_m6b_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_m6b_runtime PRIVATE
     zlink_framework_m6b_runtime
     zlink_framework
@@ -1189,7 +1047,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_include_directories(test_cpp_framework_reply_submit_claim PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_reply_submit_claim PRIVATE
     zlink_framework_m6b_runtime
     zlink_framework
@@ -1207,7 +1065,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
   target_include_directories(test_cpp_framework_m6c_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_m6c_runtime PRIVATE
     zlink_framework
     Threads::Threads)
@@ -1246,7 +1104,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(zlink_cpp_framework_mesh_node_vertical_test PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(zlink_cpp_framework_mesh_node_vertical_test PRIVATE
     zlink::framework
     Threads::Threads)
@@ -1448,7 +1306,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
     "framework-unit;framework-regression;framework-client-server;framework-monitoring")
   target_include_directories(test_cpp_framework_client_server_runtime PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   set_tests_properties(test_cpp_framework_client_server_runtime PROPERTIES
     RESOURCE_LOCK "zlink_cpp_heavy_runtime"
     TIMEOUT 30)
@@ -1459,7 +1317,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_actor_gateway PRIVATE
     zlink::framework_codec_protobuf)
   target_include_directories(test_cpp_framework_actor_gateway PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   foreach(reconcile_case source no-commit target indeterminate)
     add_test(NAME test_cpp_framework_reconcile_${reconcile_case}
       COMMAND test_cpp_framework_actor_gateway --reconcile-${reconcile_case})
@@ -1509,7 +1367,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.PerfTests/entry_spot_admission_burst.cpp)
   target_include_directories(test_cpp_framework_entry_spot_admission_burst PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_entry_spot_admission_burst PRIVATE
     zlink_framework Threads::Threads)
   add_test(NAME test_cpp_framework_entry_spot_admission_burst
@@ -1543,16 +1401,16 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_join_handoff_id.cpp
     "framework-unit;framework-regression;actor-join")
   target_include_directories(test_cpp_framework_actor_join_handoff_id PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_execution
     tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
     "framework-unit;framework-regression;execution;spot;yield")
   target_include_directories(test_cpp_framework_execution PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_execution PRIVATE
-    ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/serial-execution-v1.json"
-    ZLINK_RUNTIME_OBSERVATION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/runtime-observation-v1.json")
+    ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/serial-execution-v1.json"
+    ZLINK_RUNTIME_OBSERVATION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/runtime-observation-v1.json")
   add_executable(test_cpp_framework_state_lane
     tests/Zlink.Framework.UnitTests/test_cpp_framework_state_lane.cpp)
   target_link_libraries(test_cpp_framework_state_lane PRIVATE
@@ -1572,8 +1430,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
     "framework-unit;serializer")
   target_compile_definitions(test_cpp_framework_serializer_registry PRIVATE
-    ZLINK_CODEC_SELECTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/codec-selection-v1.json"
-    ZLINK_PAYLOAD_OWNERSHIP_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/conformance/payload-ownership-v1.json")
+    ZLINK_CODEC_SELECTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/codec-selection-v1.json"
+    ZLINK_PAYLOAD_OWNERSHIP_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/payload-ownership-v1.json")
   add_executable(test_cpp_framework_location_key_codec
     tests/Zlink.Framework.UnitTests/test_cpp_framework_location_key_codec.cpp)
   target_compile_features(test_cpp_framework_location_key_codec PRIVATE cxx_std_20)
@@ -1667,7 +1525,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_store_location_resolvers PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   zlink_framework_cpp_enable_test_assertions(
     test_cpp_framework_store_location_resolvers)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_store_location_resolvers)
@@ -1694,7 +1552,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_compile_definitions(test_cpp_framework_channel_reply_admission PRIVATE
     ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}")
   target_include_directories(test_cpp_framework_channel_reply_admission PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_channel_reply_admission PRIVATE
     GTest::gtest_main)
   add_zlink_framework_test(
@@ -1708,13 +1566,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_instance_spot_activation.cpp
     "framework-unit;framework-regression;spot;instance-activation")
   target_include_directories(test_cpp_framework_instance_spot_activation PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_instance_spot_activation PRIVATE
     GTest::gtest_main)
   # The channel messaging test reaches the service wire codec headers, which include the
   # schema-generated constants header (see test_cpp_framework_service_wire_codec above).
   target_include_directories(test_cpp_framework_channel_messaging PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_backpressure_reliability
     tests/Zlink.Framework.UnitTests/test_cpp_framework_backpressure_reliability.cpp
@@ -1728,7 +1586,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   zlink_framework_cpp_add_boost_headers(
     test_cpp_framework_stream_framework)
   target_include_directories(test_cpp_framework_stream_framework PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   if(OpenSSL_FOUND AND ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL)
     target_compile_definitions(test_cpp_framework_stream_framework PRIVATE
       ZLINK_FRAMEWORK_STREAM_TEST_WITH_OPENSSL
@@ -1750,7 +1608,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
     "framework-unit;framework-regression;messaging")
   target_include_directories(test_cpp_framework_messaging PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_executable(test_cpp_framework_gtest_harness
     tests/Zlink.Framework.UnitTests/test_cpp_framework_gtest_harness.cpp)
   target_link_libraries(test_cpp_framework_gtest_harness PRIVATE
@@ -2429,7 +2287,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE)
     zlink::stream_e2e_client)
   target_include_directories(zlink_cpp_cross_language_host PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)

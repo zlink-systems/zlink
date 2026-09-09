@@ -673,8 +673,12 @@ struct stream_async_operation_state_t : std::enable_shared_from_this<stream_asyn
             error = completion_error;
         }
         completed.store (true, std::memory_order_release);
-        boost::system::error_code ignored;
-        timer.cancel (ignored);
+        // Boost >= 1.87 removed cancel(error_code&) from waitable timers.
+        try {
+            timer.cancel ();
+        }
+        catch (const boost::system::system_error &) {
+        }
     }
 
     boost::system::error_code result ()
@@ -1373,7 +1377,11 @@ class stream_host_service_t::listener_t
         asio::post (_io, [this] {
             boost::system::error_code ignored;
             _acceptor.close (ignored);
-            _accept_retry_timer.cancel (ignored);
+            try {
+                _accept_retry_timer.cancel ();
+            }
+            catch (const boost::system::system_error &) {
+            }
         });
     }
 
@@ -1767,8 +1775,11 @@ class stream_host_service_t::listener_t
         const auto completed =
           [weak, replacement_copy, deadline] (
             const result_t<void> &) {
-              boost::system::error_code ignored;
-              deadline->cancel (ignored);
+              try {
+                  deadline->cancel ();
+              }
+              catch (const boost::system::system_error &) {
+              }
               auto delay = std::make_shared<asio::steady_timer> (
                 asio::system_executor {});
               delay->expires_after (std::chrono::milliseconds (100));

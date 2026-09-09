@@ -537,10 +537,19 @@ jobs:
           ctest --test-dir build_cpp_release --output-on-failure -R test_cpp_
 
       - name: Package
+        # The C++ binding is a source unit: CMakeLists, cmake config template,
+        # include/ and src/ plus the root LICENSE. The vcpkg port and the Conan
+        # recipe build it against an installed Core package.
         run: |
-          mkdir -p dist/cpp/zlink-cpp-${{ needs.resolve.outputs.version }}/include
-          cp -r bindings/cpp/include/* dist/cpp/zlink-cpp-${{ needs.resolve.outputs.version }}/include/
+          stage="dist/cpp/zlink-cpp-${{ needs.resolve.outputs.version }}"
+          mkdir -p "${stage}"
+          git archive HEAD:bindings/cpp | tar -x -C "${stage}"
+          git show HEAD:LICENSE > "${stage}/LICENSE"
+          for required in CMakeLists.txt cmake/zlink_cppConfig.cmake.in include/zlink.hpp src/Runtime/Core/context.cpp LICENSE; do
+            test -f "${stage}/${required}" || { echo "missing ${required} in the C++ source archive" >&2; exit 1; }
+          done
           tar -C dist/cpp -czf dist/cpp/zlink-cpp-${{ needs.resolve.outputs.version }}.tar.gz zlink-cpp-${{ needs.resolve.outputs.version }}
+          sha512sum dist/cpp/zlink-cpp-${{ needs.resolve.outputs.version }}.tar.gz
 
       - uses: actions/upload-artifact@v6
         with:

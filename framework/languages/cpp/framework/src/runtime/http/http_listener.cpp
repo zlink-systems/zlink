@@ -100,7 +100,11 @@ class http_host_service_t::listener_t
             beast::error_code ignored;
             _acceptor.cancel (ignored);
             _acceptor.close (ignored);
-            _accept_retry_timer.cancel (ignored);
+            try {
+                _accept_retry_timer.cancel ();
+            }
+            catch (const boost::system::system_error &) {
+            }
         });
     }
 
