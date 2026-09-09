@@ -973,6 +973,21 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   routed req/reply·echo가 여전히 다수 미달(tcp req/reply가 특히 낮음) — 추가 개선 여지. C baseline은
   canonical C 0.17.5 재사용(C 재측정 없음).
 
+> **Java routed 비율 심층 진단(2026-09-09, 프로파일 근거).** "req/reply가 async 세금으로 일률적으로 낮다"는 해석은
+> 틀렸다. 프로파일이 밝힌 사실:
+> - **REQREP 대형 붕괴는 Core 정책 절벽**이다. Core 0.17.5는 request 크기 B에 work-charge를 매기고(≤1KiB:B, 1~32KiB:
+>   ceil(B³/1KiB²), >32KiB:32MiB+1; pair 예산 32MiB — `core/src/runtime/core/transport_pair_policy.hpp:14`,
+>   `pipe_receive.cpp:624`, spec `06-auto-hwm.ko.md:629`), 그래서 **동시 미해결 request가 4KiB 512 → 16KiB 8 → 32KiB 1**로
+>   급감한다. 32KiB부터 파이프라인이 1건으로 막혀 CPU가 놀며(32KiB: server 31%·client 57%, POLLOUT 99% 대기) throughput이
+>   폭락한다(113→61→5 Kops/s). **C도 같은 절벽을 맞는다**(Core 계약). SENDSEND는 correlation 예약이 없어 절벽이 없다.
+>   절벽에서 Java가 C보다 더 낮은 건 Java가 backpressure 뒤 payload를 보존·재제출(`CompletionOwner`)하는 반면 C는 사전
+>   할당 slot flag/token만 갱신(`bindings/c/perf/multi/common/perf_multi_socket_reqrep.hpp:290`)하기 때문 — **분류 A(문서화된
+>   Core 계약에 대한 Java 재제출 경로 적응)**. 단 절대 처리량은 Core가 캡하므로 절벽 자체는 못 넘는다.
+> - **SENDSEND 소형 저성능은 양쪽 CPU 포화**다(64B: server 364%·client 277%). Java 벤치 relay가 매 메시지 routing-id 방어
+>   복사 + payload 깊은 복사를 하는데 C relay는 `zlink_msg_move`로 소유권만 옮긴다(`perf_multi_relay_server.hpp:120`).
+>   즉 고정 per-message 비용(객체·FFM·ownership) + **Java harness relay의 copy↔C의 move 비대칭**이다. payload가 커지면 희석돼
+>   비율이 회복한다. 이 harness 비대칭은 parity로 정렬 검토 대상(수치만 올리는 게 아니라 동일 의미 정렬).
+
 #### 9.3.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
