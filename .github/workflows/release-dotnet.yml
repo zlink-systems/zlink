@@ -221,8 +221,17 @@ jobs:
         run: |
           mkdir -p "${ZLINK_LOCAL_PACKAGE_ROOT}/nuget"
           binding_version=$(sed -n 's/.*<ZLinkBindingsPackageVersion[^>]*>\(.*\)<\/ZLinkBindingsPackageVersion>.*/\1/p' framework/languages/dotnet/Directory.Packages.props | head -n1)
-          curl -sSfL -o "${ZLINK_LOCAL_PACKAGE_ROOT}/nuget/Zlink.${binding_version}.nupkg" \
-            "https://api.nuget.org/v3-flatcontainer/zlink/${binding_version}/zlink.${binding_version}.nupkg"
+          # nuget.org lists a freshly pushed package only after validation (minutes).
+          url="https://api.nuget.org/v3-flatcontainer/zlink/${binding_version}/zlink.${binding_version}.nupkg"
+          for attempt in $(seq 1 45); do
+            if curl -sSfL -o "${ZLINK_LOCAL_PACKAGE_ROOT}/nuget/Zlink.${binding_version}.nupkg" "${url}"; then
+              break
+            fi
+            echo "attempt ${attempt}: Zlink ${binding_version} not on nuget.org yet; waiting 60s"
+            sleep 60
+          done
+          test -s "${ZLINK_LOCAL_PACKAGE_ROOT}/nuget/Zlink.${binding_version}.nupkg" \
+            || { echo "::error::Zlink ${binding_version} is not available on nuget.org after 45 minutes" >&2; exit 1; }
           bash scripts/local-package/http-client/build-wsl.sh dotnet
           ls "${ZLINK_LOCAL_PACKAGE_ROOT}/nuget"
 

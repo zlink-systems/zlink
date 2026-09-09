@@ -79,6 +79,24 @@ jobs:
       - name: Install npm with Trusted Publishing support
         run: npm install -g npm@latest
 
+      # A framework release usually follows a binding release by minutes; the
+      # registry's metadata appears before its tarball is served (up to ~30 min).
+      - name: Wait for the binding package on npm
+        shell: bash
+        run: |
+          version=$(node -p "require('./framework/languages/node/packages/framework/package.json').dependencies['@zlink-systems/zlink']")
+          url="https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
+          for attempt in $(seq 1 45); do
+            if curl -sfIL -o /dev/null "${url}"; then
+              echo "@zlink-systems/zlink@${version} is available"
+              exit 0
+            fi
+            echo "attempt ${attempt}: ${url} not served yet; waiting 60s"
+            sleep 60
+          done
+          echo "::error::@zlink-systems/zlink@${version} tarball is not available on npm after 45 minutes" >&2
+          exit 1
+
       - name: Materialize the local-package pin of @zlink-systems/http-client used by the workspace manifest
         shell: bash
         run: |
@@ -154,6 +172,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      # A framework release usually follows a binding release by minutes; the
+      # registry's metadata appears before its tarball is served (up to ~30 min).
+      - name: Wait for the binding package on npm
+        shell: bash
+        run: |
+          version=$(node -p "require('./framework/languages/node/packages/framework/package.json').dependencies['@zlink-systems/zlink']")
+          url="https://registry.npmjs.org/@zlink-systems/zlink/-/zlink-${version}.tgz"
+          for attempt in $(seq 1 45); do
+            if curl -sfIL -o /dev/null "${url}"; then
+              echo "@zlink-systems/zlink@${version} is available"
+              exit 0
+            fi
+            echo "attempt ${attempt}: ${url} not served yet; waiting 60s"
+            sleep 60
+          done
+          echo "::error::@zlink-systems/zlink@${version} tarball is not available on npm after 45 minutes" >&2
+          exit 1
 
       - name: Build the Node workspace for the Java/Node interop tests
         shell: bash
