@@ -1060,6 +1060,15 @@ timeout, no result, runtime mismatch, message size 불일치, client 수 불일�
   비-STREAM partial 때문에 건너뛴 것을 재측정해 채움. routed echo·req/reply는 30~40%대로 목표 미달(2단계).
 - 다음 작업: 실패 셀 원인 진단·수정 후 재측정(§9.4 하단 메모).
 
+> **Node routed echo(SENDSEND) 개선 시도 — 보류(2026-09-09).** MULTI_DEALER_ROUTER_SENDSEND 등이 C 대비 매우 낮아
+> (tcp 24.9%) 프로파일했다. echo당 최소 recv 1회·submit 1회의 **JS↔native 경계가 CPU의 ~78%**(submitSend 41.7% + routed
+> recv 36.5%)를 차지하고 GC는 1.98%뿐이다. Java의 completion worker-queue 왕복 문제는 없었다(그 실험은 효과 없어 revert).
+> 근본 병목은 SENDSEND의 2-part(payload+빈 tail) multipart 바인딩 경계 비용이다(1-part 진단은 +65% 빨랐다). 권장 수정은
+> routed multipart part를 기존 `nativeReadOnly` 저장으로 materialize해 복사를 줄이는 것이나, 이는 **protected spec
+> `bindings/doc/spec/node/README.ko.md`의 routed lazy-materialization 예외와 비용 계약을 바꿔야** 가능하다. 계약/스펙 변경은
+> perf를 위해 우회하지 않으므로(§7.5·§8) **보류**로 둔다. 코드·테스트 무변경(routed contract test 12/12 통과). 스펙 개정을
+> 승인하면 별도 설계로 다룬다.
+
 #### 9.4.1 Single suite
 
 | Transport | Pattern | 64 | 256 | 1024 | 65536 | 131072 | 262144 | 결과 파일 / 메모 |
