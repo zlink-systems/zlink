@@ -87,6 +87,30 @@ public sealed class ApplicationJobQueueContractTests
 public sealed class ApplicationJobQueueTests
 {
     [Fact]
+    public async Task IngressBatch_ReservesAvailableBudgetAndDoesNotPassAnOlderWaiter()
+    {
+        using var queue = new ZLinkApplicationJobQueue(new(
+            ZLinkApplicationJobQueueProfile.Balanced, 3, 1, 3));
+        var leases = new ZLinkApplicationJobQueueLease?[64];
+        Assert.Equal(3, queue.TryAcquireBatch(leases, 0, leases.Length));
+        Assert.Equal(3UL, queue.GetStatus().PermitsInUse);
+        Assert.Equal(0, queue.TryAcquireBatch(new ZLinkApplicationJobQueueLease?[64], 0, 64));
+        var waiting = queue.AcquireAsync(CancellationToken.None).AsTask();
+        Assert.False(waiting.IsCompleted);
+        leases[0]!.Dispose();
+        leases[0] = null;
+        using var oldest = await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, queue.TryAcquireBatch(leases, 0, 1));
+        leases[1]!.Dispose();
+        leases[1] = null;
+        Assert.Equal(1, queue.TryAcquireBatch(leases, 0, 1));
+        foreach (var lease in leases)
+            lease?.Dispose();
+        oldest.Dispose();
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
+    [Fact]
     public void Pressure_thresholds_use_exact_rounding_and_validate_hysteresis()
     {
         var defaults = new ZLinkInboundDispatchOptionsModel();
