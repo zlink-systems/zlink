@@ -15,7 +15,11 @@ RESERVED_PORTS="5200-5299,6200-6219"
 TMP_DIR="${ZLINK_TMP_DIR:-/tmp}"
 TMPFS_MIN_FREE_KB="${ZLINK_TMPFS_MIN_FREE_KB:-1048576}"
 JOB_TMP_MAX_AGE_DAYS="${ZLINK_JOB_TMP_MAX_AGE_DAYS:-7}"
-PERF_QUEUE_ROOT="${ZLINK_PERF_QUEUE:-$REPO_ROOT/.artifacts/perf-queue}"
+# 측정 큐는 저장소 전체에 하나뿐이므로 기본 worktree 기준으로 찾는다.
+PRIMARY_WORKTREE="$(git worktree list --porcelain 2>/dev/null \
+    | awk '$1 == "worktree" { print substr($0, index($0, " ") + 1); exit }')"
+[ -n "$PRIMARY_WORKTREE" ] || PRIMARY_WORKTREE="$REPO_ROOT"
+PERF_QUEUE_ROOT="${ZLINK_PERF_QUEUE:-$PRIMARY_WORKTREE/.artifacts/perf-queue}"
 LOCAL_PACKAGE_ROOT="${ZLINK_LOCAL_PACKAGE_ROOT:-$REPO_ROOT/.artifacts/wsl}"
 SYSCTL_BIN="${ZLINK_SYSCTL_BIN:-sysctl}"
 DF_BIN="${ZLINK_DF_BIN:-df}"
