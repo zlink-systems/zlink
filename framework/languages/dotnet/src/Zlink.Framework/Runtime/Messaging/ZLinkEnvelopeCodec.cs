@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Text.Json;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Runtime.Execution;
@@ -101,7 +102,8 @@ internal static class ZLinkEnvelopeCodec
     private const string JsonContentType = "application/json";
     private const int MaximumSimpleHeaderCacheEntries = 4096;
     private static readonly ZLinkStateLane CacheLane = new();
-    private static readonly Dictionary<SimpleHeaderKey, byte[]> SimpleHeaderCache = new();
+    private static ImmutableDictionary<SimpleHeaderKey, byte[]> SimpleHeaderCache =
+        ImmutableDictionary<SimpleHeaderKey, byte[]>.Empty;
     private static readonly ConcurrentQueue<SimpleHeaderKey> SimpleHeaderCacheOrder = new();
     private static HeaderCacheEntry[] DecodedHeaderCache = [];
 
@@ -292,11 +294,15 @@ internal static class ZLinkEnvelopeCodec
 
     public static ZLinkEnvelopeHeader DecodeHeader(
         Message message,
-        bool validateFlow = true)
+        bool validateFlow = true) =>
+        DecodeHeader(message.AsReadOnlySpan(), validateFlow);
+
+    private static ZLinkEnvelopeHeader DecodeHeader(
+        ReadOnlySpan<byte> bytes,
+        bool validateFlow)
     {
-        var bytes = message.AsReadOnlySpan();
         var hash = HashBytes(bytes);
-        var cached = FindDecodedHeaderCacheEntry(message, hash);
+        var cached = FindDecodedHeaderCacheEntry(bytes, hash);
         if (cached is not null)
             return ValidateDecodedFlow(cached, validateFlow);
 
@@ -341,22 +347,7 @@ internal static class ZLinkEnvelopeCodec
         bool validateFlow = true)
     {
         EnsurePart(parts, 0, "header");
-        ZLinkEnvelopeHeader header;
-        try
-        {
-            header = JsonSerializer.Deserialize<ZLinkEnvelopeHeader>(
-                         parts.GetSpan(0),
-                         ZLinkJsonSerializerOptions.Default)
-                     ?? throw new JsonException("ZLink envelope header is null.");
-        }
-        catch (JsonException error)
-        {
-            throw new ZLinkEnvelopeProtocolException(
-                InvalidProtocolHeader(),
-                $"ZLink envelope header is invalid: {error.Message}");
-        }
-        ValidateProtocolHeader(header, validateFlow);
-        return ValidateDecodedFlow(header, validateFlow);
+        return DecodeHeader(parts.GetSpan(0), validateFlow);
     }
 
     internal static ulong MeasureApplicationPayloadBytes(
@@ -725,18 +716,21 @@ internal static class ZLinkEnvelopeCodec
         // Message and channel names are application input. Keep a bounded
         // replacement cache so hot keys remain cheap after arbitrary keys
         // have filled the cache.
+        if (Volatile.Read(ref SimpleHeaderCache).TryGetValue(key, out var hit))
+            return hit;
         return AwaitStateLane(CacheLane.RunAsync(() =>
         {
-            if (SimpleHeaderCache.TryGetValue(key, out var cached))
+            var cache = SimpleHeaderCache;
+            if (cache.TryGetValue(key, out var cached))
                 return cached;
 
-            while (SimpleHeaderCache.Count >= MaximumSimpleHeaderCacheEntries
+            while (cache.Count >= MaximumSimpleHeaderCacheEntries
                    && SimpleHeaderCacheOrder.TryDequeue(out var evicted))
-                SimpleHeaderCache.Remove(evicted);
+                cache = cache.Remove(evicted);
 
             var encoded = EncodeSimpleHeaderBytes(key);
-            SimpleHeaderCache[key] = encoded;
             SimpleHeaderCacheOrder.Enqueue(key);
+            Volatile.Write(ref SimpleHeaderCache, cache.Add(key, encoded));
             return encoded;
         }));
     }
@@ -767,20 +761,16 @@ internal static class ZLinkEnvelopeCodec
     }
 
     private static ZLinkEnvelopeHeader? FindDecodedHeaderCacheEntry(
-        Message message,
-        ulong hash) =>
-        AwaitStateLane(CacheLane.RunAsync(() =>
+        ReadOnlySpan<byte> bytes,
+        ulong hash)
+    {
+        foreach (var entry in Volatile.Read(ref DecodedHeaderCache))
         {
-            var cache = DecodedHeaderCache;
-            foreach (var entry in cache)
-            {
-                if (entry.Hash == hash
-                    && entry.Bytes.AsSpan().SequenceEqual(message.AsReadOnlySpan()))
-                    return entry.Header;
-            }
-
-            return null;
-        }));
+            if (entry.Hash == hash && entry.Bytes.AsSpan().SequenceEqual(bytes))
+                return entry.Header;
+        }
+        return null;
+    }
 
     private static void AddDecodedHeaderCacheEntry(
         byte[] copy,
@@ -809,7 +799,7 @@ internal static class ZLinkEnvelopeCodec
                 next[^1] = new HeaderCacheEntry(copy, hash, header);
             }
 
-            DecodedHeaderCache = next;
+            Volatile.Write(ref DecodedHeaderCache, next);
         }));
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
