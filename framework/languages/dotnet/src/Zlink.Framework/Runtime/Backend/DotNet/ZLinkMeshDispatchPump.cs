@@ -252,6 +252,9 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         {
             var domains = requestedDomains;
             readyBatch.Reset();
+            readyBatch.RequireReservedApplicationAdmission =
+                Volatile.Read(ref _applicationAdmissionWaitActive) != 0
+                && Volatile.Read(ref _reservedApplicationAdmission) is null;
             bool residue;
             try
             {
@@ -280,6 +283,10 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                     receiveBatch,
                     pending,
                     cancellationToken);
+
+            // Even a claim that could not obtain admission must be released
+            // before this worker sleeps: its permit wake may go to another worker.
+            readyBatch.Reset();
 
             // Re-enter through the shared ready signal so another waiting
             // worker can acquire a different owner during a suspended handler.

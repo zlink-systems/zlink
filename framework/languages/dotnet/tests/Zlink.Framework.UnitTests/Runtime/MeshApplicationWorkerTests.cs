@@ -142,6 +142,46 @@ public sealed class MeshApplicationWorkerTests
         }
     }
 
+    [Fact]
+    public async Task AdmissionWake_ReleasesTheClaimBeforeAnotherWorkerConsumesIt()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var jobs = new ZLinkApplicationJobQueue(new(
+            ZLinkApplicationJobQueueProfile.Balanced, 1, 2, 1));
+        await using var node = new ZLinkManagedMeshNode(context, "workers", applicationJobQueue: jobs);
+        var rid = RoutingId.From("admission-worker");
+        node.SetRoutingId(rid);
+        node.Start();
+        await using var pump = new ZLinkMeshDispatchPump(node, new ZLinkMeshCompletionTable(), jobs);
+        var first = new TaskCompletionSource<ZLinkBackendRouteReceived>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource<ZLinkBackendRouteReceived>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var count = 0;
+        pump.SetNodeRouteHandler((records, _) =>
+        {
+            foreach (var record in records)
+                (Interlocked.Increment(ref count) == 1 ? first : second).TrySetResult(record);
+            return ValueTask.CompletedTask;
+        });
+        using var payload = Message.From(new byte[4096]);
+        Assert.Equal(SubmitResult.Ok, node.SendToNode(rid, [payload]));
+        Assert.Equal(SubmitResult.Ok, node.SendToNode(rid, [payload]));
+        pump.EnsureStarted();
+        using var firstRecord = await first.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (jobs.GetStatus().CapacityWaiters == 0)
+        {
+            Assert.True(DateTime.UtcNow < deadline);
+            await Task.Delay(1);
+        }
+        Assert.False(second.Task.IsCompleted);
+        firstRecord.ApplicationJobAdmission!.ReleaseForHandlerStart();
+        using var secondRecord = await second.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        secondRecord.ApplicationJobAdmission!.ReleaseForHandlerStart();
+        Assert.Equal(0UL, jobs.GetStatus().PermitsInUse);
+    }
+
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 

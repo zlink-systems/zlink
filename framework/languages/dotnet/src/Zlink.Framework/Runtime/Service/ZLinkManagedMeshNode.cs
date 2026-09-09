@@ -1985,6 +1985,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 if (batch.Count >= batch.MaximumRecords)
                 {
                     if (entry.Value.IsReady)
+                if (batch.RequireReservedApplicationAdmission
+                    && entry.Key.Domain == MeshReadyDomains.Application
+                    && !entry.Value.AllRecordsHaveApplicationAdmission)
+                    continue;
                         return true;
                     continue;
                 }
