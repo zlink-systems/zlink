@@ -2,7 +2,19 @@
   "name": "@zlink-systems/framework-codec-msgpack",
   "version": "0.11.0",
   "license": "SEE LICENSE IN LICENSE",
-  "files": ["dist/browser", "dist/server", "dist/framework.d.ts", "dist/index.d.ts", "LICENSE"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zlink-systems/zlink.git",
+    "directory": "framework/languages/node/packages/framework-codec-msgpack"
+  },
+  "homepage": "https://zlink.systems/",
+  "files": [
+    "dist/browser",
+    "dist/server",
+    "dist/framework.d.ts",
+    "dist/index.d.ts",
+    "LICENSE"
+  ],
   "exports": {
     ".": {
       "types": "./dist/browser/index.d.ts",
@@ -23,6 +35,8 @@
     "@zlink-systems/stream-connector": "0.11.0"
   },
   "peerDependenciesMeta": {
-    "@zlink-systems/framework": { "optional": true }
+    "@zlink-systems/framework": {
+      "optional": true
+    }
   }
 }
