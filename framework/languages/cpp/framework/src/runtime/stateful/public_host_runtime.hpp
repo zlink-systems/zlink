@@ -1063,7 +1063,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::vector<session_route_state_t> session_routes;
         bool ready = false;
         bool cutover_received = false;
-        std::chrono::steady_clock::time_point ready_fallback_at{};
+        // Starts at the cutover fallback, becomes due on cutover, and advances
+        // at each management attempt without changing Restore's expiry.
+        std::chrono::steady_clock::time_point next_finalize_at{};
         bool target_finalized = false;
         std::chrono::steady_clock::time_point attempt_expires_at{};
         /* Pre-boundary relay verification: count and running CRC-32C over

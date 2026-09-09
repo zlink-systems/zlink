@@ -2452,10 +2452,17 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     }
                     detail::spot_node_runtime_t maintenance (registration->spot_state);
                     (void) maintenance.cleanup_expired_actor_admissions ();
-                    if (count == 0)
+                    if (count == 0) {
+                        auto wait = std::chrono::milliseconds (-1);
+                        if (const auto next = maintenance.next_management_activity ()) {
+                            const auto now = std::chrono::steady_clock::now ();
+                            wait = *next <= now
+                                     ? std::chrono::milliseconds::zero ()
+                                     : std::chrono::ceil<std::chrono::milliseconds> (*next - now);
+                        }
                         (void) node->native_node ().wait_for_dispatch_activity (
-                          std::chrono::milliseconds (100),
-                          accept_application_receive);
+                          wait, accept_application_receive);
+                    }
                 }
                 supply.close ();
             });
@@ -2628,6 +2635,8 @@ void mesh_node_host_service_t::stop () noexcept
         _application_dispatch->drain ();
     trace_mesh_host_stop ("application-drained");
     _stop.store (true, std::memory_order_release);
+    for (const auto &node : _nodes)
+        node->signal_dispatch_activity ();
     trace_mesh_host_stop ("pump-join-begin");
     for (auto &thread : _threads) {
         if (thread.joinable ())

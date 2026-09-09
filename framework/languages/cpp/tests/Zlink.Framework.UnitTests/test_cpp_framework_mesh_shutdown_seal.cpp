@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdlib>
+#include <future>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -55,6 +56,36 @@ void connect (mesh::raw_mesh_node_owner_t &source, mesh::raw_mesh_node_owner_t &
         pump (target);
         std::this_thread::sleep_for (1ms);
     }
+}
+
+void verify_monitor_wakes_ingress_without_application_permit ()
+{
+    mesh::raw_mesh_node_owner_t source (options ('g'));
+    mesh::raw_mesh_node_owner_t target (options ('h'));
+    source.start ();
+    target.start ();
+    auto waiting = std::async (std::launch::async, [&] {
+        return target.wait_for_activity (-1ms, false);
+    });
+    assert (waiting.wait_for (20ms) == std::future_status::timeout);
+    assert (source.connect_peer (target.endpoint (), target.topology ().local_descriptor ()));
+    assert (waiting.wait_for (500ms) == std::future_status::ready);
+    assert (waiting.get ());
+    assert (target.drain_monitor_events (mesh::service_liveness_registry_t::clock_t::now ())
+              .result ().value () > 0);
+}
+
+void verify_close_wakes_unbounded_ingress_wait ()
+{
+    mesh::raw_mesh_node_owner_t node (options ('i'));
+    node.start ();
+    auto waiting = std::async (std::launch::async, [&] {
+        return node.wait_for_activity (-1ms, false);
+    });
+    assert (waiting.wait_for (20ms) == std::future_status::timeout);
+    node.close ();
+    assert (waiting.wait_for (500ms) == std::future_status::ready);
+    (void) waiting.get ();
 }
 
 void verify_restart (bool sealed, bool draining)
@@ -262,6 +293,8 @@ void verify_crossed_admission_diagnostics ()
 int main ()
 {
     setenv ("ZLINK_CPP_MESH_TRACE", "1", 1);
+    verify_monitor_wakes_ingress_without_application_permit ();
+    verify_close_wakes_unbounded_ingress_wait ();
     verify_inbound_hello (true);
     verify_inbound_hello (false);
     verify_admitted_peer_update_after_seal ();

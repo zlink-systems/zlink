@@ -365,14 +365,14 @@ zlink::poll_event_flag_t raw_route_port_t::poll (
     std::lock_guard lock (_poller_mutex);
     if (_socket == nullptr)
         return zlink::poll_event_flag_t::none;
-    zlink::poll_event_t events[2];
+    zlink::poll_event_t events[3];
     const auto completion_events =
       zlink::poll_event_flag_t::pollout | zlink::poll_event_flag_t::pollcompletion;
     if (!accept_application_receive)
         _poller->modify (*_socket, completion_events);
     std::size_t count;
     try {
-        count = _poller->wait (events, 2, timeout);
+        count = _poller->wait (events, 3, timeout);
     }
     catch (...) {
         if (!accept_application_receive)
@@ -393,6 +393,11 @@ zlink::poll_event_flag_t raw_route_port_t::poll (
               static_cast<short> (readiness)
               | (static_cast<short> (events[index].revents)
                  & static_cast<short> (_receive_events)));
+        }
+        else {
+            // Shared-poller sources (the mesh monitor) wake management;
+            // their owner drains them without claiming ordinary records.
+            wake = true;
         }
     }
     return readiness != zlink::poll_event_flag_t::none

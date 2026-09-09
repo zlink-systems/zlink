@@ -978,7 +978,7 @@ public_host_runtime_t::public_host_runtime_t (host_options_t options) :
                                              : std::make_optional (found->second.second);
           })
           .get ();
-    })
+    }, [this] { _transport->signal_activity (); })
 {
     if (_options.session_relocation_seal_timeout <= std::chrono::milliseconds::zero ()) {
         throw std::invalid_argument (
@@ -1655,6 +1655,8 @@ public_host_runtime_t::admit_session_relocation_seal (
           const auto [stored, was_inserted] =
             _session_seal_terminals.emplace (relocation_key, std::move (record));
           inserted = was_inserted;
+          if (inserted)
+              _transport->signal_activity ();
           if (!inserted) {
               if (stored->second.seal != seal) {
                   immediate.reset ();
@@ -2811,9 +2813,8 @@ void public_host_runtime_t::poll_relocation_target_attempts ()
       .run ([&] {
           for (const auto &[key, attempt] : _relocation_target_attempts) {
               if (!attempt.target_finalized && attempt.ready
-                  && (attempt.cutover_received
-                      || (attempt.ready_fallback_at != std::chrono::steady_clock::time_point{}
-                          && attempt.ready_fallback_at <= now))) {
+                  && attempt.next_finalize_at != std::chrono::steady_clock::time_point{}
+                  && attempt.next_finalize_at <= now) {
                   pending.push_back (key);
               }
           }
@@ -3248,12 +3249,13 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
                                        } else {
                                            const auto now = std::chrono::steady_clock::now ();
                                            if (!found->second.ready
-                                               || (!found->second.cutover_received
-                                                   && (found->second.ready_fallback_at
-                                                         == std::chrono::steady_clock::time_point{}
-                                                       || now < found->second.ready_fallback_at)))
+                                               || found->second.next_finalize_at
+                                                    == std::chrono::steady_clock::time_point{}
+                                               || now < found->second.next_finalize_at)
                                                return false;
                                            attempt = found->second;
+                                           found->second.next_finalize_at =
+                                             now + dispatch_limits::management_retry_interval;
                                        }
                                        return true;
                                    })
@@ -3523,7 +3525,7 @@ void public_host_runtime_t::activate_relocation_assembly (
           .run ([&] {
               const auto found = _relocation_target_attempts.find (key);
               if (found != _relocation_target_attempts.end ())
-                  found->second.ready_fallback_at =
+                  found->second.next_finalize_at =
                     std::chrono::steady_clock::now () + _relocation_cutover_wait;
           })
           .get ();
@@ -4172,7 +4174,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                               .run ([&] {
                                   const auto found = _relocation_target_attempts.find (key);
                                   if (found != _relocation_target_attempts.end ())
-                                      found->second.ready_fallback_at =
+                                      found->second.next_finalize_at =
                                         std::chrono::steady_clock::now ()
                                         + _relocation_cutover_wait;
                               })
@@ -4306,6 +4308,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                          && found->second.boundary_accumulator.value ()
                                               == cutover->boundary_checksum_crc32c) {
                                   found->second.cutover_received = true;
+                                  found->second.next_finalize_at = std::chrono::steady_clock::now ();
                                   accepted = true;
                               } else {
                                 /* Ordered connection: the boundary record
@@ -5970,6 +5973,36 @@ bool public_host_runtime_t::wait_for_dispatch_activity (std::chrono::millisecond
                   .run ([&] { return !_local_application_dispatches.empty (); })
                   .get ())
                 return true;
+        }
+        auto next = _relocation_wire->next_activity ();
+        _relocation_session_terminal_lane.run ([&] {
+            const auto include = [&] (std::chrono::steady_clock::time_point deadline) {
+                if (!next || deadline < *next)
+                    next = deadline;
+            };
+            for (const auto &[key, assembly] : _relocation_assemblies)
+                include (assembly.expires_at);
+            for (const auto &[key, attempt] : _relocation_target_attempts) {
+                if (!attempt.target_finalized) {
+                    if (attempt.attempt_expires_at != std::chrono::steady_clock::time_point{})
+                        include (attempt.attempt_expires_at);
+                    if (attempt.ready
+                        && attempt.next_finalize_at != std::chrono::steady_clock::time_point{})
+                        include (attempt.next_finalize_at);
+                }
+            }
+            for (const auto &[key, seal] : _session_seal_terminals) {
+                if (!seal.consumed)
+                    include (seal.expires_at);
+            }
+        }).get ();
+        if (next) {
+            const auto now = std::chrono::steady_clock::now ();
+            const auto remaining = *next <= now
+                                     ? std::chrono::milliseconds::zero ()
+                                     : std::chrono::ceil<std::chrono::milliseconds> (*next - now);
+            if (timeout < std::chrono::milliseconds::zero () || remaining < timeout)
+                timeout = remaining;
         }
         return _transport->wait_for_activity (timeout, accept_application_receive);
     }

@@ -2121,6 +2121,12 @@ mesh_node_runtime_t::admitted_peer_epoch (const zlink::routing_id_t &peer_rid,
     return peer->admission_epoch;
 }
 
+void mesh_node_runtime_t::signal_dispatch_activity ()
+{
+    if (_node)
+        _node->signal_dispatch_activity ();
+}
+
 host::public_host_runtime_t &mesh_node_runtime_t::native_node ()
 {
     if (!_node) {

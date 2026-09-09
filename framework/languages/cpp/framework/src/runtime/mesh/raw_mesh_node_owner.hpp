@@ -544,7 +544,7 @@ class raw_mesh_node_owner_t
     std::unique_ptr<zlink::router_socket_t> _router;
     application_job_queue_t::receive_flow_registration_t
       _receive_flow_registration;
-    std::unique_ptr<zlink::poller_t> _monitor_poller;
+    std::unique_ptr<zlink::poller_t> _ingress_poller;
     std::unique_ptr<zlink::socket_monitor_t> _monitor;
     std::shared_ptr<detail::backend::raw_route_port_t> _port;
     service_topology_registry_t _topology;

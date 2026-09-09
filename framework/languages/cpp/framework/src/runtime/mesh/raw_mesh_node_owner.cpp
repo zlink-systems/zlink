@@ -626,12 +626,12 @@ void raw_mesh_node_owner_t::start ()
       router->options ().last_endpoint (), _options.advertise_host, "MeshNode");
     ++descriptor.descriptor_revision;
 
+    auto ingress_poller = std::make_unique<zlink::poller_t> ();
+    ingress_poller->add (*monitor, zlink::poll_event_flag_t::pollin, 2);
     _port = std::make_shared<detail::backend::raw_route_port_t> (
       *router, &_socket_mutex,
-      zlink::poll_event_flag_t::pollin);
-    auto monitor_poller = std::make_unique<zlink::poller_t> ();
-    monitor_poller->add (*monitor, zlink::poll_event_flag_t::pollin, 1);
-    _monitor_poller = std::move (monitor_poller);
+      zlink::poll_event_flag_t::pollin, ingress_poller.get (), 1);
+    _ingress_poller = std::move (ingress_poller);
     _monitor = std::move (monitor);
     _router = std::move (router);
     _receive_flow_registration =
@@ -669,12 +669,12 @@ void raw_mesh_node_owner_t::close () noexcept
 {
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     std::unique_ptr<zlink::router_socket_t> router;
-    std::unique_ptr<zlink::poller_t> monitor_poller;
+    std::unique_ptr<zlink::poller_t> ingress_poller;
     std::unique_ptr<zlink::socket_monitor_t> monitor;
     application_job_queue_t::receive_flow_registration_t
       receive_flow_registration;
     try {
-        _lane.run ([this, &port, &router, &monitor_poller, &monitor,
+        _lane.run ([this, &port, &router, &ingress_poller, &monitor,
                     &receive_flow_registration] {
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
         if (_closed) {
@@ -685,7 +685,7 @@ void raw_mesh_node_owner_t::close () noexcept
         _pending_admission_bytes = 0;
         port = std::move (_port);
         monitor = std::move (_monitor);
-        monitor_poller = std::move (_monitor_poller);
+        ingress_poller = std::move (_ingress_poller);
         receive_flow_registration =
           std::move (_receive_flow_registration);
         router = std::move (_router);
@@ -700,9 +700,9 @@ void raw_mesh_node_owner_t::close () noexcept
     if (port) {
         port->close ();
     }
-    if (monitor_poller) {
+    if (ingress_poller) {
         try {
-            monitor_poller->close ();
+            ingress_poller->close ();
         }
         catch (...) {
         }
@@ -1543,7 +1543,7 @@ task_t<bool> raw_mesh_node_owner_t::send_session_relocation_route (
                  != local.lifecycle_generation) {
             co_return false;
         }
-        co_return _mailbox.try_enqueue (
+        const auto accepted = _mailbox.try_enqueue (
           service_mailbox_record_t{
             owner_key (local.node_routing_id),
             service_mailbox_domain_t::infrastructure,
@@ -1552,6 +1552,9 @@ task_t<bool> raw_mesh_node_owner_t::send_session_relocation_route (
             std::nullopt,
             std::nullopt,
             local.lifecycle_generation});
+        if (accepted)
+            signal_activity ();
+        co_return accepted;
     }
     co_return co_await send_header_only (
       target_routing_id,
@@ -1583,6 +1586,7 @@ task_t<bool> raw_mesh_node_owner_t::request_session_relocation_seal (
           foundation::operation_registry_t::clock_t::now () + timeout,
           std::move (callback)))
         co_return false;
+    signal_activity ();
     if (co_await send_session_relocation_seal (target_routing_id, seal))
         co_return true;
     (void) _operations->fail (
@@ -1853,6 +1857,7 @@ raw_mesh_node_owner_t::register_local_operation (
         if (!_operations->register_operation (
               operation, deadline, std::move (callback)))
             return std::nullopt;
+        signal_activity ();
         return operation;
     }).get ();
 }
@@ -2420,12 +2425,15 @@ task_t<bool> raw_mesh_node_owner_t::send_instance_spot_activation (
     parts.push_back (
       protocol::encode_application_payload (application_payload));
     if (target_routing_id == local.node_routing_id) {
-        co_return _mailbox.try_enqueue (
+        const auto accepted = _mailbox.try_enqueue (
           service_mailbox_record_t{
             owner_key (local.node_routing_id),
             service_mailbox_domain_t::infrastructure,
             std::move (parts), local.node_routing_id,
             std::nullopt, std::nullopt});
+        if (accepted)
+            signal_activity ();
+        co_return accepted;
     }
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     {
@@ -2491,6 +2499,8 @@ task_t<bool> raw_mesh_node_owner_t::request_instance_spot_activation (
         if (!accepted)
             (void) _operations->fail (
               id, foundation::operation_terminal_t::transport_failed);
+        if (accepted)
+            signal_activity ();
         co_return accepted;
     }
     const auto operations = _operations;
@@ -2632,6 +2642,8 @@ task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
             (void) _operations->fail (
               id,
               foundation::operation_terminal_t::transport_failed);
+        if (accepted)
+            signal_activity ();
         co_return accepted;
     }
     const auto operations = _operations;
@@ -2906,17 +2918,15 @@ task_t<raw_mesh_pump_result_t> raw_mesh_node_owner_t::pump_one (
   bool accept_application_receive)
 {
     _last_pump_bytes.store (0, std::memory_order_relaxed);
-    const auto port = _lane.run ([this] {
+    std::shared_ptr<detail::backend::raw_route_port_t> port;
+    {
         std::lock_guard lifecycle_lock (_lifecycle_mutex);
-        return _port;
-    }).get ();
-    if (!port) {
-        co_return raw_mesh_pump_result_t::no_data;
+        port = _port;
     }
+    if (!port)
+        co_return raw_mesh_pump_result_t::no_data;
     zlink::poll_event_flag_t readiness = zlink::poll_event_flag_t::none;
     try {
-        /* The ROUTER's normal receive pump owns both infrastructure and
-         * application traffic. */
         readiness = port->poll (std::chrono::milliseconds::zero ());
     }
     catch (...) {
@@ -3960,7 +3970,7 @@ bool raw_mesh_node_owner_t::wait_for_activity (
                                      ? std::chrono::milliseconds::zero ()
                                      : std::chrono::ceil<std::chrono::milliseconds> (
                                          *next_activity - now);
-            if (remaining < timeout)
+            if (timeout < std::chrono::milliseconds::zero () || remaining < timeout)
                 timeout = remaining;
         }
         port = _lane.run ([this] {
@@ -3985,10 +3995,8 @@ void raw_mesh_node_owner_t::signal_activity () noexcept
 {
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     try {
-        port = _lane.run ([this] {
-            std::lock_guard lock (_lifecycle_mutex);
-            return _port;
-        }).get ();
+        std::lock_guard lock (_lifecycle_mutex);
+        port = _port;
     }
     catch (...) {
         return;
@@ -4052,24 +4060,6 @@ task_t<std::size_t> raw_mesh_node_owner_t::drain_monitor_events (
         const auto event = _lane.run ([this] {
             std::lock_guard lifecycle_lock (_lifecycle_mutex);
             if (!_monitor || !_monitor->valid ()) {
-                return std::optional<zlink::monitor_event_t>{};
-            }
-            if (!_monitor_poller) {
-                return std::optional<zlink::monitor_event_t>{};
-            }
-            zlink::poll_event_t readiness;
-            try {
-                if (_monitor_poller->wait (
-                      &readiness, 1, std::chrono::milliseconds::zero ())
-                      != 1
-                    || readiness.slot != 1
-                    || (static_cast<short> (readiness.revents)
-                        & static_cast<short> (zlink::poll_event_flag_t::pollin))
-                         == 0) {
-                    return std::optional<zlink::monitor_event_t>{};
-                }
-            }
-            catch (...) {
                 return std::optional<zlink::monitor_event_t>{};
             }
             try {
