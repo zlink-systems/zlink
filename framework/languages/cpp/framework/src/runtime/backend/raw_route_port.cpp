@@ -9,6 +9,7 @@
 
 #include <cerrno>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace zlink::framework::detail::backend
@@ -34,6 +35,127 @@ const char *submit_result_name (zlink::submit_result_t result) noexcept
         case zlink::submit_result_t::not_admitted: return "not_admitted";
     }
     return "unknown";
+}
+
+struct binding_completion_observer_t
+{
+    struct promise_type
+    {
+        binding_completion_observer_t get_return_object () noexcept { return {}; }
+        std::suspend_never initial_suspend () noexcept { return {}; }
+        std::suspend_never final_suspend () noexcept { return {}; }
+        void return_void () noexcept {}
+        void unhandled_exception () noexcept { std::terminate (); }
+
+        detail::task_scheduler_t zlink_continuation_scheduler () const
+        {
+            // Binding completion already arrives on its owning completion
+            // resource. Raw transport classification runs there and hands the
+            // terminal directly to the reserved Framework dispatcher item.
+            return {};
+        }
+    };
+};
+
+binding_completion_observer_t observe_send_completion (
+  zlink::async_result_t<void> pending,
+  raw_send_stage_trace_t trace,
+  std::shared_ptr<detail::task_completion_source_t<zlink::submit_result_t>> source)
+{
+    try {
+        co_await std::move (pending);
+        if (trace) {
+            try {
+                trace ("router_admission_submit", "admitted");
+                trace ("router_admission_complete", "ok");
+            }
+            catch (const std::exception &error) {
+                source->complete (result_t<zlink::submit_result_t>::failure (
+                  framework_error_kind_t::internal_failure,
+                  std::string ("raw route send completion trace failed: ") + error.what ()));
+                co_return;
+            }
+            catch (...) {
+                source->complete (result_t<zlink::submit_result_t>::failure (
+                  framework_error_kind_t::internal_failure,
+                  "raw route send completion trace failed"));
+                co_return;
+            }
+        }
+        source->complete (result_t<zlink::submit_result_t>::success (
+          zlink::submit_result_t::ok));
+    }
+    catch (const zlink::submit_error_t &error) {
+        if (trace) {
+            try {
+                trace ("router_admission_submit", submit_result_name (error.result ()));
+                trace ("router_admission_complete", submit_result_name (error.result ()));
+            }
+            catch (const std::exception &trace_error) {
+                source->complete (result_t<zlink::submit_result_t>::failure (
+                  framework_error_kind_t::internal_failure,
+                  std::string ("raw route send completion trace failed: ")
+                    + trace_error.what ()));
+                co_return;
+            }
+            catch (...) {
+                source->complete (result_t<zlink::submit_result_t>::failure (
+                  framework_error_kind_t::internal_failure,
+                  "raw route send completion trace failed"));
+                co_return;
+            }
+        }
+        source->complete (result_t<zlink::submit_result_t>::success (error.result ()));
+    }
+    catch (const std::exception &error) {
+        source->complete (result_t<zlink::submit_result_t>::failure (
+          framework_error_kind_t::internal_failure, error.what ()));
+    }
+    catch (...) {
+        source->complete (result_t<zlink::submit_result_t>::failure (
+          framework_error_kind_t::internal_failure,
+          "raw route send completion failed"));
+    }
+}
+
+binding_completion_observer_t observe_request_completion (
+  zlink::async_result_t<std::vector<zlink::message_t>> pending,
+  std::shared_ptr<detail::task_completion_source_t<raw_request_completion_t>> source)
+{
+    try {
+        auto reply = co_await std::move (pending);
+        source->complete (result_t<raw_request_completion_t>::success (
+          raw_request_completion_t{
+            raw_request_result_t::ok, copy_binding_parts (reply)}));
+    }
+    catch (const zlink::request_error_t &error) {
+        source->complete (result_t<raw_request_completion_t>::success (
+          raw_request_completion_t{
+            map_binding_request_result (error.result ()), {},
+            raw_request_failure_t{
+              raw_request_failure_phase_t::completion_terminal,
+              std::nullopt, error.result (), error.internal_errno ()}}));
+    }
+    catch (const zlink::submit_error_t &error) {
+        const auto result = error.result () == zlink::submit_result_t::terminated
+                              ? raw_request_result_t::terminated
+                              : raw_request_result_t::failed;
+        source->complete (result_t<raw_request_completion_t>::success (
+          raw_request_completion_t{
+            result, {},
+            raw_request_failure_t{
+              raw_request_failure_phase_t::completion_terminal,
+              error.result (), std::nullopt, error.internal_errno ()}}));
+    }
+    catch (const std::exception &error) {
+        source->complete (result_t<raw_request_completion_t>::failure (
+          framework_error_kind_t::internal_failure, error.what ()));
+    }
+    catch (...) {
+        source->complete (result_t<raw_request_completion_t>::failure (
+          framework_error_kind_t::internal_failure,
+          "raw route request completion failed"));
+    }
 }
 }
 
@@ -65,23 +187,44 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
   const raw_message_t &parts,
   raw_send_stage_trace_t trace)
 {
-    if (target_routing_id.empty () || parts.empty ()) {
-        throw std::invalid_argument ("raw route send requires a target and message parts");
-    }
-    auto messages = materialize_binding_parts (parts);
-    std::optional<zlink::async_result_t<void>> pending;
+    auto source =
+      std::make_shared<detail::task_completion_source_t<zlink::submit_result_t>> ();
+    auto result = source->task ();
     // The binding owns DONTWAIT backpressure retry and its payload snapshot.
-    // Submit under the socket lock, then release it before awaiting so the
-    // public poller can drive WRITABLE completion progress.
+    // Submit under the socket lock. Its terminal observer deliberately has no
+    // handler-executor scheduler, so completion classification stays on the
+    // binding completion resource.
     try {
-        if (trace)
-            trace ("router_admission_submit", "begin");
+        if (target_routing_id.empty () || parts.empty ())
+            throw std::invalid_argument (
+              "raw route send requires a target and message parts");
+        auto messages = materialize_binding_parts (parts);
+        if (trace) {
+            try {
+                trace ("router_admission_submit", "begin");
+            }
+            catch (const std::exception &error) {
+                source->complete (result_t<zlink::submit_result_t>::failure (
+                  framework_error_kind_t::internal_failure,
+                  std::string ("raw route send submission trace failed: ") + error.what ()));
+                return result;
+            }
+            catch (...) {
+                source->complete (result_t<zlink::submit_result_t>::failure (
+                  framework_error_kind_t::internal_failure,
+                  "raw route send submission trace failed"));
+                return result;
+            }
+        }
+        std::optional<zlink::async_result_t<void>> pending;
         {
             std::lock_guard lock (*_socket_mutex);
             if (_socket == nullptr) {
                 if (trace)
                     trace ("router_admission_submit", "terminated");
-                co_return zlink::submit_result_t::terminated;
+                source->complete (result_t<zlink::submit_result_t>::success (
+                  zlink::submit_result_t::terminated));
+                return result;
             }
             auto operation = std::move (_socket->send (
                                           zlink::routing_id_t::from (target_routing_id)))
@@ -91,25 +234,59 @@ task_t<zlink::submit_result_t> raw_route_port_t::send_result (
             }
             pending.emplace (std::move (operation).async ());
         }
-        co_await std::move (*pending);
-        if (trace) {
-            trace ("router_admission_submit", "admitted");
-            trace ("router_admission_complete", "ok");
-        }
-        co_return zlink::submit_result_t::ok;
+        observe_send_completion (
+          std::move (*pending), std::move (trace), source);
     }
     catch (const zlink::submit_error_t &error) {
         if (trace) {
-            trace ("router_admission_submit", submit_result_name (error.result ()));
-            trace ("router_admission_complete", submit_result_name (error.result ()));
+            try {
+                trace ("router_admission_submit", submit_result_name (error.result ()));
+                trace ("router_admission_complete", submit_result_name (error.result ()));
+            }
+            catch (const std::exception &trace_error) {
+                source->complete (result_t<zlink::submit_result_t>::failure (
+                  framework_error_kind_t::internal_failure,
+                  std::string ("raw route send submission trace failed: ")
+                    + trace_error.what ()));
+                return result;
+            }
+            catch (...) {
+                source->complete (result_t<zlink::submit_result_t>::failure (
+                  framework_error_kind_t::internal_failure,
+                  "raw route send submission trace failed"));
+                return result;
+            }
         }
-        co_return error.result ();
+        source->complete (result_t<zlink::submit_result_t>::success (error.result ()));
+    }
+    catch (const std::exception &error) {
+        if (trace) {
+            try {
+                trace ("router_admission_submit", "exception");
+            }
+            catch (const std::exception &trace_error) {
+                source->complete (result_t<zlink::submit_result_t>::failure (
+                  framework_error_kind_t::internal_failure,
+                  std::string ("raw route send submission trace failed: ")
+                    + trace_error.what ()));
+                return result;
+            }
+            catch (...) {
+                source->complete (result_t<zlink::submit_result_t>::failure (
+                  framework_error_kind_t::internal_failure,
+                  "raw route send submission trace failed"));
+                return result;
+            }
+        }
+        source->complete (result_t<zlink::submit_result_t>::failure (
+          framework_error_kind_t::internal_failure, error.what ()));
     }
     catch (...) {
-        if (trace)
-            trace ("router_admission_submit", "exception");
-        throw;
+        source->complete (result_t<zlink::submit_result_t>::failure (
+          framework_error_kind_t::internal_failure,
+          "raw route send submission failed"));
     }
+    return result;
 }
 
 task_t<bool> raw_route_port_t::send (const raw_bytes_t &target_routing_id,
@@ -124,21 +301,27 @@ task_t<raw_request_completion_t> raw_route_port_t::request (
   const raw_message_t &parts,
   std::chrono::milliseconds timeout)
 {
-    if (target_routing_id.empty () || parts.empty ()
-        || timeout <= std::chrono::milliseconds::zero ()) {
-        throw std::invalid_argument ("raw route request requires target, parts and timeout");
-    }
-    auto messages = materialize_binding_parts (parts);
-    std::optional<zlink::async_result_t<std::vector<zlink::message_t>>> pending;
+    auto source =
+      std::make_shared<detail::task_completion_source_t<raw_request_completion_t>> ();
+    auto result = source->task ();
     // Route selection happens synchronously inside .async(). Keep that initial
     // admission boundary separate from the pending terminal: the same errno
     // has different meaning after Core has issued a WRITABLE wait token.
     try {
+        if (target_routing_id.empty () || parts.empty ()
+            || timeout <= std::chrono::milliseconds::zero ()) {
+            throw std::invalid_argument (
+              "raw route request requires target, parts and timeout");
+        }
+        auto messages = materialize_binding_parts (parts);
+        std::optional<zlink::async_result_t<std::vector<zlink::message_t>>> pending;
         {
             std::lock_guard lock (*_socket_mutex);
             if (_socket == nullptr) {
-                co_return raw_request_completion_t{
-                  raw_request_result_t::terminated, {}};
+                source->complete (result_t<raw_request_completion_t>::success (
+                  raw_request_completion_t{
+                    raw_request_result_t::terminated, {}}));
+                return result;
             }
             auto operation = std::move (_socket->request (
                                           zlink::routing_id_t::from (target_routing_id)))
@@ -148,6 +331,7 @@ task_t<raw_request_completion_t> raw_route_port_t::request (
             }
             pending.emplace (std::move (operation).timeout (timeout).async ());
         }
+        observe_request_completion (std::move (*pending), source);
     }
     catch (const zlink::submit_error_t &error) {
         const auto phase = raw_request_failure_phase_t::initial_admission;
@@ -157,46 +341,46 @@ task_t<raw_request_completion_t> raw_route_port_t::request (
           : error.result () == zlink::submit_result_t::terminated
             ? raw_request_result_t::terminated
             : raw_request_result_t::failed;
-        co_return raw_request_completion_t{
-          result,
-          {},
-          raw_request_failure_t{
-            phase, error.result (), std::nullopt, error.internal_errno ()}};
+        source->complete (result_t<raw_request_completion_t>::success (
+          raw_request_completion_t{
+            result, {},
+            raw_request_failure_t{
+              phase, error.result (), std::nullopt, error.internal_errno ()}}));
     }
-
-    try {
-        auto reply = co_await std::move (*pending);
-        co_return raw_request_completion_t{
-          raw_request_result_t::ok, copy_binding_parts (reply)};
+    catch (const std::exception &error) {
+        source->complete (result_t<raw_request_completion_t>::failure (
+          framework_error_kind_t::internal_failure, error.what ()));
     }
-    catch (const zlink::request_error_t &error) {
-        co_return raw_request_completion_t{
-          map_binding_request_result (error.result ()), {},
-          raw_request_failure_t{
-            raw_request_failure_phase_t::completion_terminal,
-            std::nullopt, error.result (), error.internal_errno ()}};
+    catch (...) {
+        source->complete (result_t<raw_request_completion_t>::failure (
+          framework_error_kind_t::internal_failure,
+          "raw route request submission failed"));
     }
-    catch (const zlink::submit_error_t &error) {
-        const auto result = error.result () == zlink::submit_result_t::terminated
-            ? raw_request_result_t::terminated
-            : raw_request_result_t::failed;
-        co_return raw_request_completion_t{
-          result,
-          {},
-          raw_request_failure_t{
-            raw_request_failure_phase_t::completion_terminal,
-            error.result (), std::nullopt, error.internal_errno ()}};
-    }
+    return result;
 }
 
 zlink::poll_event_flag_t raw_route_port_t::poll (
-  std::chrono::milliseconds timeout)
+  std::chrono::milliseconds timeout, bool accept_application_receive)
 {
-    std::lock_guard lock (*_socket_mutex);
+    std::lock_guard lock (_poller_mutex);
     if (_socket == nullptr)
         return zlink::poll_event_flag_t::none;
     zlink::poll_event_t events[2];
-    const auto count = _poller->wait (events, 2, timeout);
+    const auto completion_events =
+      zlink::poll_event_flag_t::pollout | zlink::poll_event_flag_t::pollcompletion;
+    if (!accept_application_receive)
+        _poller->modify (*_socket, completion_events);
+    std::size_t count;
+    try {
+        count = _poller->wait (events, 2, timeout);
+    }
+    catch (...) {
+        if (!accept_application_receive)
+            _poller->modify (*_socket, _receive_events | completion_events);
+        throw;
+    }
+    if (!accept_application_receive)
+        _poller->modify (*_socket, _receive_events | completion_events);
     auto readiness = zlink::poll_event_flag_t::none;
     bool wake = false;
     for (int index = 0; index < count; ++index) {
@@ -292,7 +476,8 @@ bool raw_route_port_t::reply (
 
 void raw_route_port_t::close () noexcept
 {
-    std::lock_guard lock (*_socket_mutex);
+    _wake_timer.signal ();
+    std::scoped_lock lock (_poller_mutex, *_socket_mutex);
     _wake_timer.detach ();
     auto *socket = _socket;
     _socket = nullptr;

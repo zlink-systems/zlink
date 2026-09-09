@@ -23,6 +23,7 @@
 #include "runtime/spots/spot_route_packets.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -574,7 +575,7 @@ mesh_node_host_service_t::mesh_node_host_service_t (
     _filters (&filters),
     _dispatch_options (std::move (dispatch_options)),
     _application_dispatch (std::make_unique<offload_executor_t> (
-      0,
+      1,
       std::max<std::size_t> (2, std::thread::hardware_concurrency ()),
       4096,
       std::chrono::milliseconds (100),
@@ -2204,16 +2205,35 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                 application_supply_slot_t supply (
                   _application_jobs, [node] { node->native_node ().signal_dispatch_activity (); });
                 while (!_stop.load (std::memory_order_acquire)) {
+                    constexpr std::size_t max_application_permits_per_turn = 64;
                     std::optional<application_job_queue_t::permit_t> application_permit;
+                    std::array<application_job_queue_t::permit_t,
+                               max_application_permits_per_turn - 1>
+                      application_permit_budget;
+                    std::size_t application_permit_budget_size = 0;
+                    supply.ensure_waiter ();
+                    application_permit = supply.take ();
+                    while (application_permit
+                           && application_permit_budget_size
+                                < application_permit_budget.size ()) {
+                        auto extra = _application_jobs->try_reserve_supply ();
+                        if (!extra)
+                            break;
+                        application_permit_budget[application_permit_budget_size++] =
+                          std::move (*extra);
+                    }
                     const auto next_application_receive = [&] {
                         application_permit.reset ();
                         if (_stop.load (std::memory_order_acquire))
                             return false;
-                        supply.ensure_waiter ();
-                        application_permit = supply.take ();
+                        if (application_permit_budget_size == 0)
+                            return false;
+                        application_permit.emplace (std::move (
+                          application_permit_budget[--application_permit_budget_size]));
                         return static_cast<bool> (application_permit);
                     };
-                    const bool accept_application_receive = next_application_receive ();
+                    const bool accept_application_receive =
+                      static_cast<bool> (application_permit);
                     const auto count =
                       std::move (
                         node->dispatch_ready (
@@ -2221,11 +2241,6 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                const host::receive_record_t &record,
                                std::vector<zlink::message_t> parts) {
                               trace_mesh_application ("callback", record, parts.size ());
-                              if (record.kind == host::record_kind_t::completion
-                                  && record.operation_kind == host::operation_kind_t::actor_join
-                                  && node->complete_application_actor_entry_spot_join (record,
-                                                                                       parts))
-                                  return;
                               detail::spot_node_runtime_t spot_runtime (registration->spot_state);
                               const bool transfer_dispatch =
                                 owner.owner_kind == host::owner_kind_t::actor
@@ -2430,11 +2445,16 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         .result ()
                         .value ();
                     application_permit.reset ();
+                    while (application_permit_budget_size != 0) {
+                        application_permit_budget[--application_permit_budget_size]
+                          .release_without_handler ();
+                    }
                     detail::spot_node_runtime_t maintenance (registration->spot_state);
                     (void) maintenance.cleanup_expired_actor_admissions ();
                     if (count == 0)
                         (void) node->native_node ().wait_for_dispatch_activity (
-                          std::chrono::milliseconds (100), false);
+                          std::chrono::milliseconds (100),
+                          accept_application_receive);
                 }
                 supply.close ();
             });

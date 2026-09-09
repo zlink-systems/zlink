@@ -1070,7 +1070,7 @@ void verify_mesh_stop_drains_admitted_request_completion ()
     assert (source.has_admitted_peer (
       target_status.routing_id (), target_status.lifecycle_generation ()));
 
-    host::call_id_t operation;
+    host::pending_operation_t operation;
     assert (source.request_to_node (
               target_status.routing_id (),
               {zlink::message_t::from (std::string ("message-follow"))},
@@ -1119,7 +1119,9 @@ void verify_mesh_stop_drains_admitted_request_completion ()
     const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
     while (completion.wait_for (0ms) != std::future_status::ready
            && std::chrono::steady_clock::now () < completion_deadline) {
-        (void) source.dispatch_ready (discard);
+        // E5 must settle while the host dispatch thread is not running.
+        (void) source.native_node ().transport ().pump_one (
+          std::chrono::steady_clock::now (), false).result ().value ();
         (void) target.dispatch_ready (discard);
         std::this_thread::sleep_for (1ms);
     }

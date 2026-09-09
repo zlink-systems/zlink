@@ -3,13 +3,17 @@
 #include "runtime/backend/raw_dealer_port.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/backend/raw_route_port.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 
 #include <zlink.hpp>
 
 #include <cassert>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <optional>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -83,6 +87,107 @@ backend::raw_message_t request_parts ()
 {
     return backend::raw_message_t{
       backend::raw_bytes_t{'r', 'e', 'q', 'u', 'e', 's', 't'}};
+}
+
+void verify_binding_completion_bypasses_handler_executor ()
+{
+    zlink::framework::runtime::configure_handler_coroutine_executor (1);
+    std::mutex blocker_mutex;
+    std::condition_variable blocker_changed;
+    bool blocker_started = false;
+    bool release_blocker = false;
+    zlink::framework::runtime::handler_coroutine_executor ().post_native_continuation ([&] {
+        std::unique_lock lock (blocker_mutex);
+        blocker_started = true;
+        blocker_changed.notify_all ();
+        blocker_changed.wait (lock, [&] { return release_blocker; });
+    });
+    {
+        std::unique_lock lock (blocker_mutex);
+        assert (blocker_changed.wait_for (lock, 2s, [&] { return blocker_started; }));
+    }
+
+    zlink::context_t context;
+    zlink::router_socket_t source (context), target (context);
+    const auto source_rid = zlink::routing_id_t::from ("direct-completion-source");
+    const auto target_rid = zlink::routing_id_t::from ("direct-completion-target");
+    source.set_routing_id (source_rid);
+    target.set_routing_id (target_rid);
+    source.options ().linger (0ms);
+    target.options ().linger (0ms);
+    target.bind ("inproc://framework-direct-binding-completion");
+    auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
+    source.options ().connect_routing_id (target_rid);
+    source.connect ("inproc://framework-direct-binding-completion");
+    assert (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready, 2s));
+
+    backend::raw_route_port_t source_port (source), target_port (target);
+    auto pending = source_port.request (target_rid.to_bytes (), request_parts (), 2s);
+    std::atomic_bool observed{false};
+    zlink::framework::detail::observe_task_completion (
+      pending, [&] (const auto &settled) {
+          assert (settled && settled.value ().result == backend::raw_request_result_t::ok);
+          observed.store (true, std::memory_order_release);
+      });
+    std::optional<backend::raw_received_t> received;
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    while (!received && std::chrono::steady_clock::now () < deadline)
+        received = target_port.receive_if_ready (target_port.poll (10ms));
+    assert (received && received->reply_token);
+    assert (target_port.reply (*received, request_parts ()));
+    const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
+    while (!observed.load (std::memory_order_acquire)
+           && std::chrono::steady_clock::now () < completion_deadline) {
+        (void) source_port.poll (10ms);
+    }
+    // The only handler-executor worker is still blocked. The raw binding
+    // terminal must therefore reach its observer on the binding completion
+    // resource rather than waiting for that executor.
+    assert (observed.load (std::memory_order_acquire));
+
+    {
+        std::lock_guard lock (blocker_mutex);
+        release_blocker = true;
+    }
+    blocker_changed.notify_all ();
+    zlink::framework::runtime::shutdown_handler_coroutine_executor ();
+    source_port.close ();
+    target_port.close ();
+    monitor.close ();
+}
+
+void verify_completion_only_wait_keeps_ordinary_record_unclaimed ()
+{
+    zlink::context_t context;
+    zlink::router_socket_t source (context), target (context);
+    const auto source_rid = zlink::routing_id_t::from ("permit-mask-source");
+    const auto target_rid = zlink::routing_id_t::from ("permit-mask-target");
+    source.set_routing_id (source_rid);
+    target.set_routing_id (target_rid);
+    source.options ().linger (0ms);
+    target.options ().linger (0ms);
+    target.bind ("inproc://framework-permit-mask");
+    auto monitor = source.monitor_open (zlink::monitor_event::connection_ready);
+    source.options ().connect_routing_id (target_rid);
+    source.connect ("inproc://framework-permit-mask");
+    assert (wait_for_monitor_event (monitor, zlink::monitor_event::connection_ready, 2s));
+    backend::raw_route_port_t source_port (source), target_port (target);
+    auto sent = source_port.send_result (target_rid.to_bytes (), request_parts ());
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    while (!sent.await_ready () && std::chrono::steady_clock::now () < deadline)
+        (void) source_port.poll (10ms);
+    assert (sent.await_ready ());
+    assert (sent.result ().value () == zlink::submit_result_t::ok);
+    assert (target_port.poll (2s) == zlink::poll_event_flag_t::pollin);
+    // Queued DATA does not turn a completion-only wait into a busy loop.
+    const auto started = std::chrono::steady_clock::now ();
+    assert (target_port.poll (20ms, false) == zlink::poll_event_flag_t::none);
+    assert (std::chrono::steady_clock::now () - started >= 15ms);
+    const auto received = target_port.receive_if_ready (target_port.poll (0ms));
+    assert (received && received->parts == request_parts ());
+    source_port.close ();
+    target_port.close ();
+    monitor.close ();
 }
 
 void verify_missing_rid_is_initial_not_connected_without_wait_token ()
@@ -226,6 +331,8 @@ void verify_disconnect_rid_ends_issued_wait_token_with_enoent ()
 
 int main ()
 {
+    verify_binding_completion_bypasses_handler_executor ();
+    verify_completion_only_wait_keeps_ordinary_record_unclaimed ();
     verify_handover_request_completion_is_replayable ();
     verify_missing_rid_is_initial_not_connected_without_wait_token ();
     verify_disconnect_rid_ends_issued_wait_token_with_enoent ();

@@ -1850,25 +1850,6 @@ void mesh_node_runtime_t::stop () noexcept
         _peer_callback_gate->changed.wait (callback_lock,
                                            [this] { return _peer_callback_gate->active == 0; });
     }
-    std::vector<std::shared_ptr<detail::task_completion_source_t<operation_completion_t>>>
-      completion_awaiters;
-    {
-        std::lock_guard lock (_completion_mutex);
-        _actor_join_continuations.clear ();
-        _completed_operations.clear ();
-        _timed_out_operations.clear ();
-        _timed_out_operation_order.clear ();
-        _completion_overflow_operations.clear ();
-        _completion_overflow_order.clear ();
-        for (auto &[_, awaiter] : _completion_awaiters)
-            completion_awaiters.push_back (std::move (awaiter));
-        _completion_awaiters.clear ();
-    }
-    for (auto &awaiter : completion_awaiters) {
-        awaiter->complete (detail::boundary_failure<operation_completion_t> (
-          detail::boundary_error_t::shutdown,
-          "MeshNode operation stopped because the runtime is shutting down"));
-    }
     spot_runtime.cancel_pending_work ();
     if (!_node) {
         spot_runtime.release_native_handles ();
@@ -2027,7 +2008,7 @@ mesh_node_runtime_t::request_to_spot (const std::string &source_spot_id,
                                       const std::string &target_spot_id,
                                       std::uint64_t target_spot_generation,
                                       const std::vector<zlink::message_t> &parts,
-                                      host::call_id_t &operation_id,
+                                      host::pending_operation_t &operation_id,
                                       std::chrono::milliseconds timeout,
                                       std::vector<std::uint8_t> metadata)
 {
@@ -2077,7 +2058,7 @@ task_t<zlink::submit_result_t> mesh_node_runtime_t::send_to_actor (
 task_t<zlink::submit_result_t> mesh_node_runtime_t::request_to_actor (
   const actor_ref_t &target,
   const std::vector<zlink::message_t> &parts,
-  host::call_id_t &operation_id,
+  host::pending_operation_t &operation_id,
   std::chrono::milliseconds timeout,
   std::vector<std::uint8_t> metadata,
   std::uint64_t authority_owner_generation,
@@ -2240,7 +2221,7 @@ mesh_node_runtime_t::join_application_actor_to_entry_spot (const actor_ref_t &ac
         return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
                                                       "local Actor handle was not found");
     }
-    host::call_id_t operation;
+    host::pending_operation_t operation;
     const std::vector<zlink::message_t> parts{request};
     const auto submitted = found->second.join_entry_spot (
       zlink::routing_id_t::from (std::string (target_node.value ())), parts, operation, timeout);
@@ -2267,39 +2248,26 @@ mesh_node_runtime_t::submit_application_actor_entry_spot_join (const actor_ref_t
         return result_t<void>::failure (framework_error_kind_t::not_found,
                                         "local Actor handle was not found");
 
-    host::call_id_t operation;
+    host::pending_operation_t operation;
+    auto pending = operation.completion->task ();
+    detail::observe_task_completion (
+      pending, [actor, state = _state, completion = std::move (completion)] (
+                 const result_t<operation_completion_t> &result) mutable {
+          if (!result) {
+              completion (detail::propagate_failure<actor_join_reply_t> (
+                result, "Actor entry Spot join completion failed"));
+              return;
+          }
+          completion (actor_join_reply_from_completion (
+            result.value ().record, result.value ().parts, actor, state));
+      });
     const std::vector<zlink::message_t> parts{request};
-    std::unique_lock lock (_completion_mutex);
     const auto submitted = found->second.join_entry_spot (
       zlink::routing_id_t::from (std::string (target_node.value ())), parts, operation, timeout);
     if (submitted != zlink::submit_result_t::ok)
         return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                         "Actor entry Spot join was not submitted");
-    const auto [_, inserted] = _actor_join_continuations.emplace (
-      operation, actor_join_continuation_t{actor, std::move (completion)});
-    if (!inserted)
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "Actor entry Spot join operation was duplicated");
     return result_t<void>::success ();
-}
-
-bool mesh_node_runtime_t::complete_application_actor_entry_spot_join (
-  const host::receive_record_t &record, const std::vector<zlink::message_t> &parts)
-{
-    actor_join_completion_t completion;
-    std::optional<actor_ref_t> actor;
-    {
-        std::lock_guard lock (_completion_mutex);
-        const auto found = _actor_join_continuations.find (record.operation_id);
-        if (found == _actor_join_continuations.end ())
-            return false;
-        actor = found->second.actor;
-        completion = std::move (found->second.completion);
-        _actor_join_continuations.erase (found);
-        (void) _completed_operations.erase (record.operation_id);
-    }
-    completion (actor_join_reply_from_completion (record, parts, *actor));
-    return true;
 }
 
 task_t<runtime::messaging::message_parts_t>
@@ -2308,7 +2276,7 @@ mesh_node_runtime_t::request_actor_join_spot_route (const runtime::spot_address_
                                                     std::chrono::milliseconds timeout)
 {
     auto origin = get_or_create_spot ("__zlink-route-origin-" + routing_id ()->to_hex ());
-    host::call_id_t operation;
+    host::pending_operation_t operation;
     const auto submitted = co_await origin.request_to_spot (
       target.node_rid, spot_id_t (target.spot_id), target.object_generation, encoded.items (),
       operation, zlink::send_flags_t::none, timeout);
@@ -2436,7 +2404,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
                                                              "current local Actor was not found");
         }
         host::actor_handle_t handle (_node, actor, *current);
-        host::call_id_t operation;
+        host::pending_operation_t operation;
         const std::vector<zlink::message_t> parts{request};
         const auto submitted =
           handle.join_spot (target.node_rid, spot_id_t (target.spot_id), target.object_generation,
@@ -2446,8 +2414,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
               framework_error_kind_t::internal_failure, "Actor Spot join was not submitted");
         }
         auto completed = co_await await_completion (operation);
-        auto joined = actor_join_reply_from_completion (completed.record, completed.parts, actor);
-        const auto delivered = deliver_completion (operation.high, operation.low, joined);
+        auto joined = actor_join_reply_from_completion (completed.record, completed.parts, actor, _state);
+        const auto delivered = deliver_completion (operation.id.high, operation.id.low, joined);
         if (!delivered)
             co_return detail::propagate_failure<actor_join_reply_t> (
               delivered, "local Actor Join completion callback failed");
@@ -3363,7 +3331,8 @@ mesh_node_runtime_t::reserve_application_actor_join_barrier (const actor_ref_t &
 result_t<actor_join_reply_t>
 mesh_node_runtime_t::actor_join_reply_from_completion (const host::receive_record_t &record,
                                                        const std::vector<zlink::message_t> &parts,
-                                                       const actor_ref_t &actor)
+                                                       const actor_ref_t &actor,
+                                                       const std::shared_ptr<mesh_node_builder_state_t> &state)
 {
     if (record.terminal_result != 0) {
         //  Spec 32-framework-error-model:119-136 — a Framework failure carried
@@ -3389,8 +3358,8 @@ mesh_node_runtime_t::actor_join_reply_from_completion (const host::receive_recor
         return result_t<actor_join_reply_t>::success (actor_join_reply_t{1, actor, reply});
     }
     const auto &native = joined.current_actor;
-    _state->spot_state->lane.run ([&] {
-        ++_state->spot_state
+    state->spot_state->lane.run ([&] {
+        ++state->spot_state
             ->core_actor_membership_epochs[std::string (actor.actor_id ().value ())];
     }).get ();
     return result_t<actor_join_reply_t>::success (actor_join_reply_t{
@@ -3403,7 +3372,7 @@ mesh_node_runtime_t::actor_join_reply_from_completion (const host::receive_recor
 }
 
 result_t<actor_join_reply_t> mesh_node_runtime_t::wait_for_join_completion (
-  const host::call_id_t &operation, const actor_ref_t &actor, std::chrono::milliseconds timeout)
+  const host::pending_operation_t &operation, const actor_ref_t &actor, std::chrono::milliseconds timeout)
 {
     auto completed = wait_for_completion (operation, timeout);
     if (!completed) {
@@ -3412,7 +3381,7 @@ result_t<actor_join_reply_t> mesh_node_runtime_t::wait_for_join_completion (
           completed.error () ? completed.error ()->what () : "Actor Spot join failed");
     }
     auto completion = std::move (completed.value ());
-    return actor_join_reply_from_completion (completion.record, completion.parts, actor);
+    return actor_join_reply_from_completion (completion.record, completion.parts, actor, _state);
 }
 
 task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_actor (
@@ -3554,7 +3523,7 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
                   "Actor message follow target Spot generation is unavailable");
             }
             auto origin = get_or_create_spot ("__zlink-route-origin-" + routing_id ()->to_hex ());
-            host::call_id_t operation;
+            host::pending_operation_t operation;
             const auto submitted = co_await origin.request_to_spot (
               target_node, follow_target.route.spot_id, *target_generation, request_parts.items (),
               operation, zlink::send_flags_t::none, timeout);
@@ -3690,7 +3659,7 @@ task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_application_a
             co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
         }
 
-        host::call_id_t operation;
+        host::pending_operation_t operation;
         const auto submitted = co_await request_to_actor (
           native_actor, encoded.items (), operation, timeout, {}, authority_owner_generation,
           owner_lease_generation, wire_bound_session_source);
@@ -3973,7 +3942,7 @@ task_t<void> mesh_node_runtime_t::notify_application_actor_disconnected (
                                  spot_actor_disconnect_route_request_t::packet_name, timeout);
         auto encoded = codec.encode_envelope_parts (
           envelope, make_spot_actor_disconnect_route_request (actor), *_serializers);
-        host::call_id_t operation;
+        host::pending_operation_t operation;
         const auto submitted =
           co_await request_to_node (zlink::routing_id_t::from (std::string (target_node.value ())),
                                     encoded.items (), operation, timeout);
@@ -4007,7 +3976,7 @@ task_t<void> mesh_node_runtime_t::notify_application_actor_disconnected (
 }
 
 result_t<mesh_node_runtime_t::operation_completion_t>
-mesh_node_runtime_t::wait_for_completion (const host::call_id_t &operation,
+mesh_node_runtime_t::wait_for_completion (const host::pending_operation_t &operation,
                                           std::chrono::milliseconds timeout,
                                           std::optional<zlink::routing_id_t> target)
 {
@@ -4034,24 +4003,23 @@ mesh_node_runtime_t::wait_for_completion (const host::call_id_t &operation,
     } completion_wait (_active_completion_waiters, _completion_ready,
                        target
                          && (!routing_id () || target->to_bytes () != routing_id ()->to_bytes ()));
-    std::unique_lock lock (_completion_mutex);
-    if (!_completion_ready.wait_for (lock, timeout, [&] {
-            return _completed_operations.contains (operation)
-                   || _completion_overflow_operations.contains (operation)
-                   || _stopping.load (std::memory_order_acquire);
-        })) {
-        _completed_operations.erase (operation);
-        if (_timed_out_operations.insert (operation).second)
-            _timed_out_operation_order.push_back (operation);
-        while (!_timed_out_operation_order.empty ()
-               && !_timed_out_operations.contains (_timed_out_operation_order.front ()))
-            _timed_out_operation_order.pop_front ();
-        while (_timed_out_operations.size () > timed_out_operation_capacity) {
-            if (_timed_out_operation_order.empty ())
-                break;
-            _timed_out_operations.erase (_timed_out_operation_order.front ());
-            _timed_out_operation_order.pop_front ();
+    struct wait_state_t
+    {
+        std::mutex mutex;
+        std::condition_variable ready;
+        std::optional<result_t<operation_completion_t>> result;
+    };
+    auto state = std::make_shared<wait_state_t> ();
+    auto pending = operation.completion->task ();
+    detail::observe_task_completion (pending, [state] (const auto &result) {
+        {
+            std::lock_guard lock (state->mutex);
+            state->result.emplace (result);
         }
+        state->ready.notify_one ();
+    });
+    std::unique_lock lock (state->mutex);
+    if (!state->ready.wait_for (lock, timeout, [&] { return state->result.has_value (); })) {
         const auto local = routing_id ();
         const bool targets_local_node =
           target && local && target->to_bytes () == local->to_bytes ();
@@ -4064,55 +4032,13 @@ mesh_node_runtime_t::wait_for_completion (const host::call_id_t &operation,
         return detail::boundary_failure<operation_completion_t> (
           detail::boundary_error_t::timed_out, "MeshNode operation timed out");
     }
-    if (_completion_overflow_operations.erase (operation) != 0) {
-        const auto found = std::find (_completion_overflow_order.begin (),
-                                      _completion_overflow_order.end (), operation);
-        if (found != _completion_overflow_order.end ())
-            _completion_overflow_order.erase (found);
-        return result_t<operation_completion_t>::failure (
-          framework_error_kind_t::capacity_exceeded, "MeshNode completion holding table is full");
-    }
-    if (!_completed_operations.contains (operation)) {
-        return detail::boundary_failure<operation_completion_t> (
-          detail::boundary_error_t::shutdown,
-          "MeshNode operation stopped because the runtime is shutting down");
-    }
-    operation_completion_t completion;
-    if (!_completed_operations.take (operation, completion)) {
-        return result_t<operation_completion_t>::failure (
-          framework_error_kind_t::internal_failure,
-          "MeshNode operation completion was consumed concurrently");
-    }
-    return result_t<operation_completion_t>::success (std::move (completion));
+    return std::move (*state->result);
 }
 
 task_t<mesh_node_runtime_t::operation_completion_t>
-mesh_node_runtime_t::await_completion (const host::call_id_t &operation)
+mesh_node_runtime_t::await_completion (const host::pending_operation_t &operation)
 {
-    std::shared_ptr<detail::task_completion_source_t<operation_completion_t>> source;
-    {
-        std::lock_guard lock (_completion_mutex);
-        if (_completion_overflow_operations.erase (operation) != 0) {
-            co_return result_t<operation_completion_t>::failure (
-              framework_error_kind_t::capacity_exceeded,
-              "MeshNode completion holding table is full");
-        }
-        operation_completion_t completed;
-        if (_completed_operations.take (operation, completed))
-            co_return result_t<operation_completion_t>::success (std::move (completed));
-        if (_stopping.load (std::memory_order_acquire)) {
-            co_return detail::boundary_failure<operation_completion_t> (
-              detail::boundary_error_t::shutdown,
-              "MeshNode operation stopped because the runtime is shutting down");
-        }
-        source = std::make_shared<detail::task_completion_source_t<operation_completion_t>> ();
-        if (!_completion_awaiters.emplace (operation, source).second) {
-            co_return result_t<operation_completion_t>::failure (
-              framework_error_kind_t::invalid_operation,
-              "MeshNode operation completion is already awaited");
-        }
-    }
-    co_return co_await source->task ();
+    return operation.completion->task ();
 }
 
 std::optional<zlink::submit_result_t>
@@ -4186,7 +4112,7 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
 task_t<zlink::submit_result_t>
 mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
                                       const std::vector<zlink::message_t> &parts,
-                                      host::call_id_t &operation_id,
+                                      host::pending_operation_t &operation_id,
                                       std::chrono::milliseconds timeout,
                                       std::vector<std::uint8_t> metadata)
 {
@@ -4204,7 +4130,7 @@ mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
 task_t<zlink::submit_result_t>
 mesh_node_runtime_t::request_to_node (const zlink::routing_id_t &target,
                                       const std::vector<zlink::message_t> &parts,
-                                      host::call_id_t &operation_id,
+                                      host::pending_operation_t &operation_id,
                                       std::chrono::milliseconds timeout,
                                       const std::map<std::string, std::string> &metadata)
 {
@@ -4237,7 +4163,7 @@ mesh_node_runtime_t::send_to_channel (const std::string &channel_name,
 task_t<zlink::submit_result_t>
 mesh_node_runtime_t::request_to_channel (const std::string &channel_name,
                                          const std::vector<zlink::message_t> &parts,
-                                         host::call_id_t &operation_id,
+                                         host::pending_operation_t &operation_id,
                                          std::chrono::milliseconds timeout,
                                          std::vector<std::uint8_t> metadata)
 {
@@ -4251,7 +4177,7 @@ mesh_node_runtime_t::request_to_channel (const std::string &channel_name,
 task_t<zlink::submit_result_t>
 mesh_node_runtime_t::request_to_channel (const std::string &channel_name,
                                          const std::vector<zlink::message_t> &parts,
-                                         host::call_id_t &operation_id,
+                                         host::pending_operation_t &operation_id,
                                          std::chrono::milliseconds timeout,
                                          const std::map<std::string, std::string> &metadata)
 {
@@ -4271,45 +4197,7 @@ task_t<std::size_t> mesh_node_runtime_t::dispatch_ready (
         throw configuration_error ("MeshNode dispatch callback is required");
 
     co_return co_await _node->dispatch_ready (
-      [&] (const host::ready_record_t &ready_record, const host::receive_record_t &record,
-           std::vector<zlink::message_t> parts) {
-          if (record.kind == host::record_kind_t::completion) {
-              std::shared_ptr<detail::task_completion_source_t<operation_completion_t>> awaiter;
-              {
-                  std::lock_guard lock (_completion_mutex);
-                  if (_timed_out_operations.erase (record.operation_id) != 0) {
-                      const auto timed_out =
-                        std::find (_timed_out_operation_order.begin (),
-                                   _timed_out_operation_order.end (), record.operation_id);
-                      if (timed_out != _timed_out_operation_order.end ())
-                          _timed_out_operation_order.erase (timed_out);
-                  } else if (const auto found = _completion_awaiters.find (record.operation_id);
-                             found != _completion_awaiters.end ()) {
-                      awaiter = std::move (found->second);
-                      _completion_awaiters.erase (found);
-                  } else if (!_completed_operations.contains (record.operation_id)
-                             && !_completed_operations.complete (
-                               record.operation_id, operation_completion_t{record, parts})) {
-                      if (_completion_overflow_operations.insert (record.operation_id).second) {
-                          _completion_overflow_order.push_back (record.operation_id);
-                          while (_completion_overflow_operations.size () > completion_capacity
-                                 && !_completion_overflow_order.empty ()) {
-                              _completion_overflow_operations.erase (
-                                _completion_overflow_order.front ());
-                              _completion_overflow_order.pop_front ();
-                          }
-                      }
-                  }
-              }
-              if (awaiter) {
-                  awaiter->complete (result_t<operation_completion_t>::success (
-                    operation_completion_t{record, parts}));
-              }
-              _completion_ready.notify_all ();
-          }
-          dispatch (ready_record, record, std::move (parts));
-      },
-      accept_application_receive, next_application_receive);
+      dispatch, accept_application_receive, next_application_receive);
 }
 
 host::node_status_t mesh_node_runtime_t::status () const

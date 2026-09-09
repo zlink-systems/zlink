@@ -12,6 +12,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace zlink::framework::runtime::mesh
@@ -126,7 +127,7 @@ class service_topology_registry_t
     std::vector<admitted_peer_t> peers () const;
     std::vector<service_node_descriptor_t> not_required_peers () const;
     std::optional<admitted_peer_t> peer (const std::vector<std::uint8_t> &node_routing_id) const;
-    std::optional<admitted_peer_t> select (const std::string &channel_name);
+    std::optional<std::vector<std::uint8_t>> select (const std::string &channel_name);
     std::vector<admitted_peer_t> multicast_targets (const std::string &channel_name) const;
 
   private:
@@ -152,28 +153,23 @@ class service_topology_registry_t
       _not_required_peers;
     struct selection_state_t
     {
-        bool initialized = false;
-        std::uint64_t topology_version = 0;
         std::uint64_t total_weight = 0;
         std::map<std::vector<std::uint8_t>, std::uint64_t, byte_vector_less_t> weights;
         std::map<std::vector<std::uint8_t>, std::int64_t, byte_vector_less_t> cumulative;
         std::vector<std::vector<std::uint8_t>> ordered_node_ids;
         std::vector<std::uint64_t> ordered_weights;
         std::vector<std::int64_t> precomputed_initial_cumulative;
-        std::vector<std::int64_t> precomputed_cycle_start_cumulative;
         std::vector<std::size_t> precomputed_schedule;
-        std::vector<std::size_t> precomputed_selected_counts;
-        std::size_t precomputed_total_selections = 0;
         std::size_t precomputed_cursor = 0;
         std::size_t precomputed_cycle_start = 0;
-        std::size_t precomputed_schedule_end = 0;
         bool precomputed = false;
     };
 
     void materialize_selection_state (selection_state_t &state);
     void rebuild_selection_schedule (selection_state_t &state);
+    void rebuild_channel_selections ();
 
-    std::map<std::string, selection_state_t> _selection_state;
+    std::unordered_map<std::string, selection_state_t> _selection_state;
     std::uint64_t _topology_version = 0;
     std::function<void ()> _change_handler;
 };

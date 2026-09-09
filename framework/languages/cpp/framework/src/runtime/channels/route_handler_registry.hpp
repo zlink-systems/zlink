@@ -13,9 +13,9 @@
 #include <zlink/framework/contracts/errors/result.hpp>
 
 #include <functional>
-#include <map>
 #include <string>
 #include <typeindex>
+#include <unordered_map>
 
 namespace zlink::framework::detail
 {
@@ -190,15 +190,24 @@ class route_handler_registry_t
         runtime::messaging::message_kind_t kind;
         std::string packet_name;
 
-        friend bool operator< (const key_t &left, const key_t &right) noexcept
+        friend bool operator== (const key_t &left, const key_t &right) noexcept
         {
-            if (left.router_channel_id != right.router_channel_id) {
-                return left.router_channel_id < right.router_channel_id;
-            }
-            if (left.kind != right.kind) {
-                return static_cast<int> (left.kind) < static_cast<int> (right.kind);
-            }
-            return left.packet_name < right.packet_name;
+            return left.router_channel_id == right.router_channel_id
+                   && left.kind == right.kind
+                   && left.packet_name == right.packet_name;
+        }
+    };
+
+    struct key_hash_t
+    {
+        std::size_t operator() (const key_t &key) const noexcept
+        {
+            auto seed = std::hash<std::string>{} (key.router_channel_id);
+            seed ^= std::hash<int>{} (static_cast<int> (key.kind))
+                    + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
+            seed ^= std::hash<std::string>{} (key.packet_name)
+                    + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
+            return seed;
         }
     };
 
@@ -208,7 +217,7 @@ class route_handler_registry_t
         invoker_t invoker;
     };
 
-    std::map<key_t, entry_t> _handlers;
+    std::unordered_map<key_t, entry_t, key_hash_t> _handlers;
 };
 
 } // namespace zlink::framework::detail
