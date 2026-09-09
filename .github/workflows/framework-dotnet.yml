@@ -114,14 +114,14 @@ jobs:
         shell: bash
         run: |
           # The framework consumes the released binding package surface. The
-          # binding pin comes from Directory.Packages.props; the HttpClient
-          # package is packed from this checkout.
+          # The binding package version is owned by bindings/dotnet/VERSION;
+          # the HttpClient package is packed from this checkout.
           package_root="${RUNNER_TEMP}/zlink-local-packages"
           nuget_source="${package_root}/nuget"
           mkdir -p "${nuget_source}"
-          binding_version=$(sed -n 's/.*<ZLinkBindingsPackageVersion[^>]*>\(.*\)<\/ZLinkBindingsPackageVersion>.*/\1/p' framework/languages/dotnet/Directory.Packages.props | head -n1)
+          binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
           if [ -z "${binding_version}" ]; then
-            echo "::error::Zlink pin not found in framework/languages/dotnet/Directory.Packages.props" >&2
+            echo "::error::Zlink binding version not found in bindings/dotnet/VERSION" >&2
             exit 1
           fi
           # nuget.org lists a freshly pushed package only after validation (minutes).
