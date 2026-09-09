@@ -61,16 +61,14 @@
 
 | 언어 | grpc | zlink raw | zlink framework | 언어별 문서 | 상태 요약 |
 | --- | --- | --- | --- | --- | --- |
-| `.NET` | 측정 | 측정 | 측정 | `bench/with-grpc/README.ko.md` 있음 | raw window 깊이 8(단일 thread 제출 한계), framework window p99 174 ms |
-| Node | 측정 | window에서 정지 | **미구현**(codec이 bytes 미지원) | 없음 | client socket 정지 최소 재현 `bench/with-grpc/repro/` |
-| Java | 측정 | window에서 정지(reply 유실) | 측정(깊이 4.5) | 없음 | 정지 재현 `bench/with-grpc/repro/` |
-| Kotlin | 측정 | 측정 | 측정 | 없음 | client만 Kotlin, server는 Java 바이너리 공유; send @1024 G5 미달 |
-| C++ | 측정 | 측정(12셀 G5 통과) | **미구현** | 없음 | 6셀 미측정 |
-| C 기준 | 측정 | 측정 | 해당 없음 | `bindings/c/bench/BENCH_POLICY.md` | request-window @4096 분모가 세 구간에서 G5 미달 |
+| `.NET` | 구현 | 구현 | 구현 | `bench/with-grpc/README.ko.md` 있음 | 1차에서 raw window 깊이가 binding 제출 처리율에 묶였다(0.17.5에서 수정) |
+| Node | 구현 | 구현 | **미구현**(codec이 bytes 미지원) | 없음 | 1차에서 window 셀의 client socket 정지(0.17.5에서 수정); 최소 재현 `bench/with-grpc/repro/`는 회귀 확인용으로 유지 |
+| Java | 구현 | 구현 | 구현 | 없음 | 1차에서 window 셀의 reply 유실(0.17.5에서 수정); 재현 `bench/with-grpc/repro/` 유지 |
+| Kotlin | 구현(A만) | 구현(A만) | 구현(A만) | 없음 | server는 Java 바이너리 공유 |
+| C++ | 구현 | 구현 | **미구현** | 없음 | framework 행 6셀을 새로 구현해야 한다 |
+| C 기준 | 구현 | 구현 | 해당 없음 | `bindings/c/bench/BENCH_POLICY.md` | 1차에서 request-window @4096의 3-run 재현성이 흔들렸다(원인 미규명, S4) |
 
-90셀 중 78셀 측정, 판정 20개 중 게재 조건을 만족한 것은 2개(모두 기준 0.80 미달). 관리형
-런타임 binding 셋(.NET·Node·Java)이 window 100에서 서로 다른 방식으로 무너지는 것이 중심
-관측이었다.
+1차 수치는 제거했으므로 여기에는 구현 유무와 결함 유형만 남긴다.
 
 ### 1.3 이미 있는 자산 중 재사용할 것
 
@@ -83,33 +81,36 @@
   Core를 다시 빌드하지 않는다.
 - 측정 원본 위치는 `framework/bench/grpc/log/<lang>/<stamp>/`로 새로 정한다. 1차 원본은 제거했다.
 
-### 1.4 알려진 결함과 차단 요인 (고치지 않으면 새 측정도 같은 자리에서 막힌다)
+### 1.4 2차에서 재확인할 1차 관측과 남은 작업
 
-| 우선 | 항목 | 영향 |
+binding 완료 전달 결함(Node 정지, Java reply 유실, .NET 제출 처리율)은 Core·binding 0.17.5에서
+수정됐다(사용자 확인). 아래는 그 밖에 1차가 남긴 관측이며, 2차 측정이 각각을 재확인한다.
+값이 다시 나오면 그때 결함으로 기록하고 고치는 것은 별도 작업이다.
+
+| 구분 | 항목 | 2차에서의 처리 |
 | --- | --- | --- |
-| 0 | `zlink-c` 기준선 불안정(request-window @4096 G5 미달 3회) | formula 1 분모. 이 행이 풀리기 전에는 어떤 언어도 판정을 게재하지 못한다 |
-| — | 관리형 binding의 완료 전달(Node 정지, Java reply 유실, .NET 단일 thread 제출) | **0.17.5에서 수정됨**(사용자 확인). 2차 측정이 이를 검증한다. 같은 증상이 다시 나오면 회귀로 기록 |
-| 0 | framework handler 생성 실패를 수락·폐기하고 성공을 돌려줌 | 결과 정합성 |
-| 1 | Node framework codec의 bytes 미지원 | Node framework 행이 비교에 참여 불가 |
-| 1 | framework send 경로의 backpressure/drain(.NET drain 16.7 s) | send-saturation 셀 |
-| 1 | framework request 깊이 상한(window 100에 실제 4.5~12) | window 셀 |
-| 2 | `zlink-framework-cpp` 6셀 미구현 | C++ 3자 표 불완전 |
-| 2 | bench가 gate에 없음(.NET bench가 빌드 불가 상태로 커밋된 적 있음) | 재파손 위험 |
+| 재확인 | `zlink-c` request-window @4096의 3-run 재현성 | S4에서 원인 규명. 재현성이 안 나오면 formula 1은 게재하지 않고 직접 비교 표만 싣는다 |
+| 재확인 | framework handler 생성 실패 시 메시지를 수락·폐기하고 성공을 돌려주는 동작 | 2차 셀의 오류·유실 수와 대조. 재현되면 framework 결함으로 별도 기록 |
+| 재확인 | framework send 경로의 drain 지연 | send-saturation 셀의 drain 시간으로 확인 |
+| 재확인 | framework request 경로가 설정 window보다 낮은 깊이에 머무는 현상 | window 셀의 관측 깊이로 확인 |
+| 제품 제약 | Node framework codec의 bytes 미지원 | Node framework 행 `unsupported`, codec 수정은 별도 작업 |
+| 작업 | `zlink-framework-cpp` 6셀 미구현 | S3 |
+| 작업 | bench가 gate에 없음(.NET bench가 빌드 불가 상태로 커밋된 적 있음) | S6 |
 
 ## 2. 목표와 산출물
 
 | 산출물 | 위치 | 소유 |
 | --- | --- | --- |
-| 규격 개정: server-driven 모델·HTTP trigger·S2S 측정 구간 정의 | `framework/doc/framework/common/bench/with-grpc-local.{ko,en}.md` | 감독자 |
-| 언어별 bench 문서 5개(같은 절 구성) | `framework/languages/<lang>/bench/with-grpc/README.{ko,en}.md` | 감독자(초안은 job이 보고서로 제출) |
-| 언어별 runner 개정(server A: trigger + logical stream, server B: echo) | `framework/languages/<lang>/bench/with-grpc/` | codex job |
-| 공용 집계기 확장(S2S 셀 스키마, A/B stats 병합) | `framework/bench/tools/` | codex job |
-| 언어별 측정 원본 | `framework/languages/<lang>/bench/with-grpc/log/<stamp>/` | 티켓 큐 |
-| gRPC 비교 보고서(공개 문서) | `framework/doc/framework/common/bench/with-grpc-comparison.{ko,en}.md` | 감독자 |
+| 규격 개정: server-driven 모델·HTTP trigger·S2S 측정 구간 정의 | `framework/bench/grpc/README.{ko,en}.md` (현재 `framework/doc/framework/common/bench/with-grpc-local.*`를 이동) | 감독자 |
+| 언어별 bench 문서 4개(`dotnet`·`node`·`java`(Kotlin 보조 절 포함)·`cpp`, 같은 절 구성) | `framework/bench/grpc/doc/<lang>.{ko,en}.md` | 감독자(초안은 job이 보고서로 제출) |
+| 언어별 runner 개정(server A: trigger + logical stream, server B: echo) | `framework/bench/grpc/<lang>/` | codex job |
+| 공용 집계기 확장(S2S 셀 스키마, A/B stats 병합) | `framework/bench/grpc/tools/` | codex job |
+| 언어별 측정 원본 | `framework/bench/grpc/log/<lang>/<stamp>/` | 티켓 큐 |
+| gRPC 비교 보고서(공개 문서) | `framework/bench/grpc/doc/comparison.{ko,en}.md` (사이트·README에서 링크) | 감독자 |
 | 결정 기록 | `doc/plan/fw-bench-worklog/decisions.ko.md` (FB-045~) | 감독자 |
 
-비교 보고서는 1차의 `report-with-grpc-5lang.ko.md`(doc/plan, 비공개)와 달리 **공개 문서**다.
-그래서 근거 수치·조건·한계를 규격 §7.1대로 남기되, 캠페인 진행 기록은 담지 않는다.
+비교 보고서는 **공개 문서**다. 근거 수치·조건·한계를 규격 §7.1대로 남기되, 캠페인 진행 기록은
+담지 않는다.
 
 ### 2.1 위치 통합 — `framework/bench/grpc/`
 
@@ -158,24 +159,6 @@ framework/bench/grpc/
 구현 셋(`grpc-<lang>`, `zlink-<lang>`, `zlink-framework-<lang>`)마다 A·B 한 쌍이다. 같은
 언어의 세 쌍은 §3.4의 포트 대역 안에서 offset으로 구분한다.
 
-### 3.4 포트 대역 (새 규격 §9가 된다)
-
-구현 하나에 A trigger, A stats, B endpoint, B stats 네 포트가 필요하고(raw binding은 B의
-request·command endpoint가 분리되어 다섯), 언어당 세 구현이므로 20개 대역을 잡는다. 기존
-1차 대역(5071~5119, 6071~6079)과 겹치지 않는다.
-
-| 언어 | 대역 | grpc A trigger/stats, B | zlink raw A trigger/stats, B request/command/stats | framework A trigger/stats, B endpoint/stats |
-| --- | --- | --- | --- | --- |
-| `dotnet` | 5200-5219 | 5200/5201, 5202 | 5205/5206, 5207/5208/5209 | 5212/5213, 5214/5215 |
-| `node` | 5220-5239 | 5220/5221, 5222 | 5225/5226, 5227/5228/5229 | 5232/5233, 5234/5235 |
-| `java` | 5240-5259 | 5240/5241, 5242 | 5245/5246, 5247/5248/5249 | 5252/5253, 5254/5255 |
-| `kotlin`(보조) | 5260-5279 | 5260/5261, (B는 java 대역 5242) | 없음 | 5272/5273, (B는 java 대역 5254/5255) |
-| `cpp` | 5280-5299 | 5280/5281, 5282 | 5285/5286, 5287/5288/5289 | 5292/5293, 5294/5295 |
-| C 기준 | 6200-6219 | 6200/6201, 6202 | 6205/6206, 6207/6208/6209 | 없음 |
-
-각 대역의 `+16`~`+19`는 예비다. runner는 시작 전에 자기 대역이 비어 있는지 확인하고, 사용
-중이면 옮기지 않고 중단한다(현재 규격 §9와 같은 규칙).
-
 ### 3.2 측정 구간과 집계
 
 1차와 형식이 달라지는 점을 먼저 적는다. (1) 부하 위치가 client process에서 server A로 옮겨지고
@@ -198,6 +181,25 @@ request·command endpoint가 분리되어 다섯), 언어당 세 구현이므로
 gRPC 구현의 A는 같은 HTTP trigger listener를 갖고, B로 향하는 unary stub을 logical stream
 수만큼 돌린다. gRPC server 구성은 언어 기본값을 두고 결과에 기록한다(규격 §8.2). 이렇게
 해야 "같은 업무(A→B 요청)를 두 스택으로 구현했을 때의 비용"이라는 규격의 질문이 유지된다.
+
+### 3.4 포트 대역 (새 규격 §9가 된다)
+
+구현 하나에 A trigger, A stats, B endpoint, B stats 네 포트가 필요하고(raw binding은 B의
+request·command endpoint가 분리되어 다섯), 언어당 세 구현이므로 20개 대역을 잡는다. Kotlin
+보조 셀은 Java B를 그대로 쓰므로 Java 측정과 같은 시간에 돌리지 않는다(한 번에 한 언어). 기존
+1차 대역(5071~5119, 6071~6079)과 겹치지 않는다.
+
+| 언어 | 대역 | grpc A trigger/stats, B endpoint/stats | zlink raw A trigger/stats, B request/command/stats | framework A trigger/stats, B endpoint/stats |
+| --- | --- | --- | --- | --- |
+| `dotnet` | 5200-5219 | 5200/5201, 5202/5203 | 5205/5206, 5207/5208/5209 | 5212/5213, 5214/5215 |
+| `node` | 5220-5239 | 5220/5221, 5222/5223 | 5225/5226, 5227/5228/5229 | 5232/5233, 5234/5235 |
+| `java` | 5240-5259 | 5240/5241, 5242/5243 | 5245/5246, 5247/5248/5249 | 5252/5253, 5254/5255 |
+| `kotlin`(보조) | 5260-5279 | 5260/5261, (B는 java 대역 5242/5243) | 없음 | 5272/5273, (B는 java 대역 5254/5255) |
+| `cpp` | 5280-5299 | 5280/5281, 5282/5283 | 5285/5286, 5287/5288/5289 | 5292/5293, 5294/5295 |
+| C 기준 | 6200-6219 | 6200/6201, 6202/6203 | 6205/6206, 6207/6208/6209 | 없음 |
+
+각 대역의 `+16`~`+19`는 예비다. runner는 시작 전에 자기 대역이 비어 있는지 확인하고, 사용
+중이면 옮기지 않고 중단한다(현재 규격 §9와 같은 규칙).
 
 ## 4. 언어별 작업
 
@@ -249,7 +251,7 @@ gRPC 구현의 A는 같은 HTTP trigger listener를 갖고, B로 향하는 unary
 - 모든 측정은 티켓 큐로 낸다(`scripts/perf/perf-ticket.sh submit -p 1 -o <owner> -d "<설명>" -- <명령>`).
   한 번에 한 언어. load average 10 미만에서 시작. Core는 `.artifacts/perf-queue/core-prefix.env`의
   고정 prefix(현재 0.17.5)이며 측정 중 재빌드하지 않는다.
-- 셀당 3-run, 재현성 조건 G5(스프레드 ≤10%)는 1차 게이트(계획 §6)를 그대로 쓴다.
+- 셀당 3-run, 재현성 조건 G5(3-run 중앙값 대비 스프레드 ≤10%)는 1차 계획 §6의 게이트 정의를 그대로 쓴다.
 - 조건(timeout·sleep·window·HWM·client 수)을 완화하지 않는다. 벤치가 잘못 재면 벤치를 고친다.
 - 결과와 판정은 집계기 출력만 인용한다.
 
@@ -283,9 +285,10 @@ gRPC 구현의 A는 같은 HTTP trigger listener를 갖고, B로 향하는 unary
 
 - 운영 환경(mesh, TLS, 다중 노드) 측정.
 - 7축 perf 규격의 나머지 축(CS, AC, PS, Spot local/worker). 이 계획은 S2S 축의 gRPC 비교만 다룬다.
-- binding 완료 전달 결함의 수정(B 캠페인).
+- framework 제품 결함(Node codec bytes, handler 생성 실패 처리 등)의 수정. 발견하면 기록만 한다.
+- 측정 머신은 WSL(A 머신) 하나다. runner는 bash이며 Windows 실행은 범위 밖이다.
 
-## 11. 결정 항목 (2026-09-09 사용자 답변으로 확정 — §0.1)
+## 11. 결정 이력 (질문과 답은 §0.1에 반영됨; 아래는 질문 원문)
 
 1. §0.1의 해석이 맞는가 — HTTP call은 부하 시작 신호이고 측정 operation은 A→B 메시징인가.
    (대안: HTTP 요청 하나마다 A→B 요청 하나를 보내고 HTTP 왕복을 재는 모델. 이 경우 HTTP
