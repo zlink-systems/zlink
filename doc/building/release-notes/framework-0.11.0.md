@@ -18,6 +18,12 @@ Framework 0.11.0 uses ZLink binding 0.17.6 (Core 0.17.5) in C++, .NET, Java and 
   runtime no longer records it as terminal; it restarts the next `hello` inside the same physical
   generation/attempt fence. On slow machines a single one-second timeout used to leave the
   connection intent permanently not-ready.
+- Java: after a ClientServer client's admission `hello` times out, the next `hello` restarts on
+  the same physical connection (the same fix as .NET). The manual/local path used to treat the
+  timeout as transport termination and the location path removed the connection.
+- .NET: the remote relay multipart prefix expiry is now judged on the monotonic clock at append
+  time too, so a late part no longer joins an expired prefix, and an earlier session request
+  timeout no longer disposes the replacement correlation.
 - Java: the public ClientServer weight is no longer passed to Core `peerWeight`. A server with
   weight 0 was classified Unavailable and selected instead of being excluded (NotFound).
 - C++: the waitable timer `cancel(error_code&)` calls removed in Boost 1.87+ were replaced with the
@@ -72,8 +78,8 @@ prefixes on `CMAKE_PREFIX_PATH` as well.
 
 ## Before release
 
-- Fold in the Node.js ClientServer admission-timeout restart (in progress) and the Java/C++ audit
-  of the same path (in progress).
-- Fold in the classification and fixes of the macOS .NET timing tests and the macOS Node contract
-  tests failing in CI.
+- Fold in the Node.js ClientServer admission-timeout restart (in progress). Java is folded in
+  and C++ already restarts.
+- Fold in the macOS Node contract-test hang investigation (in progress). The macOS .NET timing
+  tests are folded in.
 - Bump `FRAMEWORK_VERSION` to 0.11.0 and run `sync-version.py --write`.

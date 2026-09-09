@@ -718,6 +718,30 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 오류 0으로 도달한다. 즉 window 100은 C에게 상한이 아니라 **제약**이었다. 이 값들은
 잠금 없는 2초 smoke이며 측정이 아니다. 정식 구간에서 다시 확인한다.
 
+## FB-045 — 2차 캠페인 규격 개정(S0): server-driven 모델과 새 포트 대역 (2026-09-09, 커밋 `bc6c54d37a`)
+
+- **결정(사용자)**: 측정 대상은 server A→server B 메시징이고 HTTP 호출은 trigger일 뿐이다. 포트는
+  자유롭게 정한다. Kotlin은 보조 셀(`grpc-kotlin`, `zlink-framework-kotlin`의 `request-window @1024`)만
+  잰다. 표 단위는 request `KOPS`, send `KMSG/s`, 5초 active 평균(3-run 중앙값)과 p95/p99.
+- **규격 반영**: §3 실행 조건(A/B 한 쌍, runner는 부하를 만들지 않음), §4 원본에 `role`·`trigger`·
+  `streams`·`target_stats`, 표 머리 `Source/Target`(metric 이름 `client_*`/`server_*`는 집계기 호환을
+  위해 유지), §7.2에 "zlink-c 분모는 client-driven 값"임을 적고 비율은 부록으로, §9 언어당 20개
+  대역(5200+, C 6200+), §10 신설(역할·trigger 계약은 perf README §4.2·§5.1·§16 재사용·logical
+  stream과 패턴 대응·셀 순서·Kotlin 보조 셀).
+- **C 기준 bench**는 client-driven 그대로 둔다. 기준값으로 쓰는 것은 요청당 비용이지 부하 생성
+  위치가 아니기 때문이다.
+
+## FB-046 — bench 통합 위치와 규격 문서의 사이트 노출 (2026-09-09, 커밋 `c57d6c26f2`·`22c8dfe08d`)
+
+- 규격은 `framework/bench/grpc/README.{ko,en}.md`가 정본이고, 옛 경로
+  `framework/doc/framework/common/bench/with-grpc-local.{ko,en}.md`는 symlink로 남겨 사이트(`common`
+  symlink)와 기존 링크가 계속 열린다. 언어별 문서·비교 보고서는 `framework/bench/grpc/doc/`에 두고
+  사이트 nav는 S5에서 붙인다.
+- 1차 계획·decisions·perf 기록의 옛 경로는 당시 기록이므로 고치지 않는다.
+- **사고 기록**: fwb2-01 job이 `git mv`로 stage해 둔 rename 124개가 감독자의 규격 커밋
+  `bc6c54d37a`에 함께 들어갔다(내용 변경 없는 순수 rename). history는 두고 `c57d6c26f2`의 메시지에
+  적었다. 이후 감독자 커밋은 `git commit -- <경로>`로 지정 경로만 커밋한다.
+
 ## 범위 밖으로 확인하고 미룬 항목
 
 | 항목 | 처리 |
@@ -735,3 +759,6 @@ job `fwb-09`이 두 선택지를 올렸다. (a) 연속 제출에 완료 pump 양
 | `fwb-03` | 1 | opus | 완료 | 공용 집계기 `framework/bench/tools/`, 28 테스트. Phase 0 재현 확인, FB-019~022 발견 |
 | `fwb-02b` | 0 | opus | 완료·커밋 `c67d677832` | FB-010 판정(b), FB-013 정정, gated2 8/8. ROUTER 3회 18/18 clean |
 | `fwb-01` | 1(문서) | opus | 완료·커밋 `146db4da4c` | 규격 5언어 중립화(ko 338행·en 359행), FB-001~003 반영. 고정값·RPC 미변경 확인. FB-004·FB-005 추가 지시 |
+| `fwb2-01` | S-1 | sol | 완료·커밋 `bc6c54d37a`(rename)·`c57d6c26f2` | `framework/bench/grpc/` 통합, 공통 `bench.proto` 하나, 5언어 빌드·집계기 50 테스트·언어별 1셀 smoke 티켓 통과 |
+| `fwb2-02` | S1 | sol | 진행 중 | 집계기 S2S 스키마·A/B 병합·`doc-table` |
+| `fwb2-03` | S1 | sol | 진행 중 | .NET runner server-driven 개정 + smoke |
