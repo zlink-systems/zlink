@@ -113,51 +113,18 @@ internal static class ZLinkEnvelopeCodec
         Type? bodyType,
         ZLinkCodecRegistryBuilder? codecs)
     {
-        if (bodyType == typeof(ZLinkMessage))
+        var bodyMessage = EncodeBody(body, bodyType, codecs, out var contentType);
+        try
         {
-            if (body is not ZLinkMessage message)
-                throw new InvalidOperationException(
-                    $"Envelope body type is ZLinkMessage, but body instance is '{body?.GetType()}'.");
-
-            var encoded = message.Encode(codecs ?? new ZLinkCodecRegistryBuilder());
             return ZLinkMessageParts.Create(
-                EncodeHeader(header, encoded.ContentType),
-                Message.From(encoded.Payload.Bytes.Span));
+                EncodeHeader(header, contentType),
+                bodyMessage);
         }
-
-        var hasSerializer = TryResolveBodySerializer(
-            body,
-            bodyType,
-            codecs,
-            out var contentType,
-            out var serializer,
-            out var resolutionCompleted);
-        if (hasSerializer)
+        catch
         {
-            var headerMessage = EncodeHeader(header, contentType);
-            try
-            {
-                return ZLinkMessageParts.Create(
-                    headerMessage,
-                    EncodeBodyWithSerializer(body!, bodyType!, serializer!));
-            }
-            catch
-            {
-                headerMessage.Dispose();
-                throw;
-            }
+            bodyMessage.Dispose();
+            throw;
         }
-
-        return ZLinkMessageParts.Create(
-            EncodeHeader(
-                header,
-                resolutionCompleted ? contentType : JsonContentType),
-            EncodeBody(
-                body,
-                bodyType,
-                codecs,
-                resolutionCompleted,
-                serializer));
     }
 
     public static IReadOnlyList<Message> EncodeRawBodyParts(
@@ -229,13 +196,40 @@ internal static class ZLinkEnvelopeCodec
 
     public static Message EncodeBody(object? body, Type? bodyType, ZLinkCodecRegistryBuilder? codecs)
     {
+        return EncodeBody(body, bodyType, codecs, out _);
+    }
+
+    // The encoded body may outlive one request attempt (for example, a channel
+    // reselection). Return the resolved content type with the owned Message so
+    // each fresh envelope header describes those same bytes without resolving
+    // or serializing the typed value again.
+    public static Message EncodeBody(
+        object? body,
+        Type? bodyType,
+        ZLinkCodecRegistryBuilder? codecs,
+        out string contentType)
+    {
+        if (bodyType == typeof(ZLinkMessage))
+        {
+            if (body is not ZLinkMessage message)
+                throw new InvalidOperationException(
+                    $"Envelope body type is ZLinkMessage, but body instance is '{body?.GetType()}'.");
+
+            var encoded = message.Encode(codecs ?? new ZLinkCodecRegistryBuilder());
+            contentType = encoded.ContentType;
+            return Message.From(encoded.Payload.Bytes.Span);
+        }
+
         var hasSerializer = TryResolveBodySerializer(
             body,
             bodyType,
             codecs,
-            out _,
+            out var resolvedContentType,
             out var serializer,
             out var resolutionCompleted);
+        contentType = resolutionCompleted
+            ? resolvedContentType
+            : JsonContentType;
         return EncodeBody(
             body,
             bodyType,
@@ -283,17 +277,6 @@ internal static class ZLinkEnvelopeCodec
         }
 
         return EncodeJsonPart(body, bodyType);
-    }
-
-    private static Message EncodeBodyWithSerializer(
-        object body,
-        Type bodyType,
-        IZLinkMessageSerializer serializer)
-    {
-        if (serializer is IZLinkMessagePartSerializer partSerializer)
-            return partSerializer.SerializePart(body, bodyType);
-
-        return Message.From(serializer.Serialize(body, bodyType).Bytes.Span);
     }
 
     public static T DecodePart<T>(Message message)

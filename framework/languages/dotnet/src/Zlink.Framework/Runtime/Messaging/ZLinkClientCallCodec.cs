@@ -51,6 +51,36 @@ internal static class ZLinkClientCallCodec
             codecs);
     }
 
+    // A logical request can be reselected before admission. The body remains
+    // the caller-owned typed encoding, while each attempt owns a new header
+    // and native Message reference for transport handoff.
+    public static Message EncodeEnvelopeBody<TMessage>(
+        TMessage message,
+        ZLinkCodecRegistryBuilder? codecs,
+        out string contentType) =>
+        ZLinkEnvelopeCodec.EncodeBody(
+            message,
+            ZLinkClientCallTypeCache<TMessage>.Resolve(message),
+            codecs,
+            out contentType);
+
+    public static IReadOnlyList<Message> CopyEnvelopeParts(
+        ZLinkEnvelopeHeader header,
+        Message encodedBody,
+        string contentType)
+    {
+        var headerPart = ZLinkEnvelopeCodec.EncodeHeader(header, contentType);
+        try
+        {
+            return ZLinkMessageParts.Create(headerPart, encodedBody.Copy());
+        }
+        catch
+        {
+            headerPart.Dispose();
+            throw;
+        }
+    }
+
     public static TReply DecodeEnvelopeReplyAndDispose<TReply>(
         IReadOnlyList<Message> reply,
         string emptyMessage,
