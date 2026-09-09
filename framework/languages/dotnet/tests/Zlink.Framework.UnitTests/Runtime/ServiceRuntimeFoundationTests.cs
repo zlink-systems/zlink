@@ -1175,6 +1175,51 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
+    public async Task ManagedNode_RegisteredTerminal_ReachesDispatcherWithoutHostMailboxDrain()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "direct-completion");
+        var rid = RoutingId.From("direct-completion");
+        node.SetRoutingId(rid);
+        var table = new ZLinkMeshCompletionTable();
+        node.SetCompletionHandlerCore(table.Complete);
+        using var payload = Message.From(new byte[] { 1 });
+        Assert.Equal(SubmitResult.Ok,
+            node.RequestToNode(rid, [payload], out var operationId, TimeSpan.FromSeconds(3)));
+        var completed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(table.Register(operationId, (record, parts) =>
+        {
+            try
+            {
+                Assert.True(ZLinkCompletionDispatcher.IsCurrentExecution);
+                Assert.Equal(operationId, record.OperationId);
+                Assert.Equal((int)RequestResult.Ok, record.TerminalResult);
+                completed.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                completed.TrySetException(exception);
+            }
+            finally
+            {
+                ZLinkMessageParts.DisposeAll(parts);
+            }
+        }));
+        using var ready = new MeshReadyBatch();
+        node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+        using var claim = ready.TakeClaim(0);
+        using var received = new MeshReceiveBatch();
+        Assert.True(claim.Receive(received, RecvFlags.DontWait));
+        Assert.Equal(SubmitResult.Ok, received[0].Reply([payload]));
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await table.CompletionDrained;
+        ready.Reset();
+        node.DrainReady(MeshReadyDomains.Infrastructure, ready, RecvFlags.DontWait);
+        Assert.Equal(0, ready.Count);
+    }
+
+    [Fact]
     public async Task ManagedNode_Status_RemainsReadable_DuringConcurrentQueueDrain()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

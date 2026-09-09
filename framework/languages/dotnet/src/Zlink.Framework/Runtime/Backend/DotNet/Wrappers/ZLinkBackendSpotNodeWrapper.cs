@@ -51,7 +51,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper :
             node,
             _completions,
             applicationJobQueue);
-        _node.SetCompletionOverflowHandlerCore(
+        _node.SetCompletionHandlerCore(
             (record, parts) => _completions.Complete(record, parts));
         _messageFollowIngress = new ActorMessageFollowIngressAdapter(_pump);
         _node.SetActorMessageFollowIngressTarget(_messageFollowIngress);

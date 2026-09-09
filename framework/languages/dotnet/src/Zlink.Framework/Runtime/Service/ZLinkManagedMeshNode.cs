@@ -137,7 +137,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private Task? _disposeTask;
     private Func<MeshReadyDomains, MeshReadyDomains>? _readyHandler;
     private Action<MeshReceiveRecord, IReadOnlyList<Message>>?
-        _completionOverflowHandler;
+        _completionHandler;
     private IUserSpotOperationTarget? _userSpotOperationTarget;
     private IActorCreateOperationTarget? _actorCreateOperationTarget;
     private IActorDestroyOperationTarget? _actorDestroyOperationTarget;
@@ -1952,15 +1952,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         SignalReadyIfNeeded();
     }
 
-    void IMeshNode.SetCompletionOverflowHandler(
+    void IMeshNode.SetCompletionHandler(
         Action<MeshReceiveRecord, IReadOnlyList<Message>> handler) =>
-        SetCompletionOverflowHandlerCore(handler);
+        SetCompletionHandlerCore(handler);
 
-    internal void SetCompletionOverflowHandlerCore(
+    internal void SetCompletionHandlerCore(
         Action<MeshReceiveRecord, IReadOnlyList<Message>> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
-        Volatile.Write(ref _completionOverflowHandler, handler);
+        Volatile.Write(ref _completionHandler, handler);
     }
 
     public bool DrainReady(
@@ -10421,38 +10421,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             result,
             failure,
             kindData);
-        var queued = new QueuedRecord(
-            completionRecord,
-            parts,
-            GetApplicationPayloadBytes(completionRecord, parts));
-        if (TryEnqueueInfrastructureCompletion(queued))
+        var terminal = Volatile.Read(ref _completionHandler);
+        if (terminal is not null)
         {
             SignalReadyIfNeeded();
         }
         else
         {
-            // A completion is a binding operation terminal, not an application
-            // admission record. Do not retain, evict, or replace it in a
-            // Framework-owned queue when the diagnostic mailbox is full.
-            var terminal = Volatile.Read(ref _completionOverflowHandler);
-            if (terminal is null)
-            {
-                queued.Dispose();
-            }
+            // Standalone raw-service users consume diagnostic completions via
+            // the pull API instead of installing a Framework completion table.
+            var queued = new QueuedRecord(completionRecord, parts,
+                GetApplicationPayloadBytes(completionRecord, parts));
+            if (TryEnqueueInfrastructureCompletion(queued))
+                SignalReadyIfNeeded();
             else
-            {
-                try
-                {
-                    terminal(completionRecord, parts);
-                }
-                catch (Exception exception)
-                {
-                    queued.Dispose();
-                    ZLinkFrameworkDebugLog.TaskFailure(
-                        "completion-terminal-handler",
-                        exception);
-                }
-            }
+                queued.Dispose();
         }
         if (publishEvent)
             Publish(
@@ -10517,7 +10500,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 Publish(MeshMonitorEventKind.Backpressured);
                 return false;
             }
-            SignalReadyIfNeeded();
+            // A registered table owns the terminal and its dispatcher slot.
+            // Transfer directly from this completion context, without a host
+            // mailbox or application worker between it and the dispatcher.
+            terminal(completionRecord, parts);
             return true;
         }
         catch

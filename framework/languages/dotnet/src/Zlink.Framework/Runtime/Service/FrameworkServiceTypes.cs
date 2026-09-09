@@ -727,7 +727,7 @@ internal interface IMeshNode : IDisposable, IAsyncDisposable
     MeshPeerChannel[] PeerChannels(RoutingId peerRid, ulong lifecycleGeneration);
     IMeshNodeMonitor OpenMonitor(MeshMonitorEventMask events = MeshMonitorEventMask.All);
     void SetReadyHandler(Func<MeshReadyDomains, MeshReadyDomains> handler);
-    void SetCompletionOverflowHandler(
+    void SetCompletionHandler(
         Action<MeshReceiveRecord, IReadOnlyList<Message>> handler) { }
     bool DrainReady(MeshReadyDomains domains, MeshReadyBatch batch, RecvFlags flags = RecvFlags.None);
     ISpot CreateSpot();
