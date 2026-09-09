@@ -3,10 +3,7 @@
 #ifndef __ZLINK_THREAD_HPP_INCLUDED__
 #define __ZLINK_THREAD_HPP_INCLUDED__
 
-#if defined ZLINK_HAVE_VXWORKS
-#include <vxWorks.h>
-#include <taskLib.h>
-#elif !defined ZLINK_HAVE_WINDOWS
+#if !defined ZLINK_HAVE_WINDOWS
 #include <pthread.h>
 #endif
 #include <set>
@@ -38,14 +35,6 @@ class thread_t
         memset (_name, 0, sizeof (_name));
     }
 
-#ifdef ZLINK_HAVE_VXWORKS
-    ~thread_t ()
-    {
-        if (descriptor != NULL || descriptor > 0) {
-            taskDelete (descriptor);
-        }
-    }
-#endif
 
     //  Creates OS thread. 'tfn' is main thread function. It'll be passed
     //  'arg' as an argument.
@@ -87,14 +76,6 @@ class thread_t
 #else
     unsigned int _thread_id;
 #endif
-#elif defined ZLINK_HAVE_VXWORKS
-    int _descriptor;
-    enum
-    {
-        DEFAULT_PRIORITY = 100,
-        DEFAULT_OPTIONS = 0,
-        DEFAULT_STACK_SIZE = 4000
-    };
 #else
     pthread_t _descriptor;
 #endif

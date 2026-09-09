@@ -140,66 +140,6 @@ void zlink::thread_t::applyThreadName () // to be called in secondary thread con
 }
 
 
-#elif defined ZLINK_HAVE_VXWORKS
-
-extern "C" {
-static void *thread_routine (void *arg_)
-{
-    zlink::thread_t *self = (zlink::thread_t *) arg_;
-    self->applySchedulingParameters ();
-    self->_tfn (self->_arg);
-    return NULL;
-}
-}
-
-void zlink::thread_t::start (thread_fn *tfn_, void *arg_, const char *name_)
-{
-    LIBZLINK_UNUSED (name_);
-    _tfn = tfn_;
-    _arg = arg_;
-    _descriptor = taskSpawn (NULL, DEFAULT_PRIORITY, DEFAULT_OPTIONS, DEFAULT_STACK_SIZE,
-                             (FUNCPTR) thread_routine, (int) this, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-    if (_descriptor != NULL || _descriptor > 0)
-        _started = true;
-}
-
-void zlink::thread_t::stop ()
-{
-    if (_started) {
-        while ((_descriptor != NULL || _descriptor > 0) && taskIdVerify (_descriptor) == 0) {
-        }
-        _descriptor = NULL;
-        _started = false;
-    }
-}
-
-bool zlink::thread_t::is_current_thread () const
-{
-    return taskIdSelf () == _descriptor;
-}
-
-void zlink::thread_t::setSchedulingParameters (int priority_,
-                                               int schedulingPolicy_,
-                                               const std::set<int> &affinity_cpus_)
-{
-    _thread_priority = priority_;
-    _thread_sched_policy = schedulingPolicy_;
-    _thread_affinity_cpus = affinity_cpus_;
-}
-
-void zlink::thread_t::applySchedulingParameters () // to be called in secondary thread context
-{
-    int priority = (_thread_priority >= 0 ? _thread_priority : DEFAULT_PRIORITY);
-    priority = (priority < UCHAR_MAX ? priority : DEFAULT_PRIORITY);
-    if (_descriptor != NULL || _descriptor > 0) {
-        taskPrioritySet (_descriptor, priority);
-    }
-}
-
-void zlink::thread_t::applyThreadName () // to be called in secondary thread context
-{
-    // No-op: VxWorks builds do not expose a portable thread-name hook here.
-}
 
 #else
 
@@ -300,7 +240,6 @@ void zlink::thread_t::applySchedulingParameters () // to be called in secondary 
 #ifdef __NetBSD__
     if (policy == SCHED_OTHER)
         param.sched_priority = -1;
-#endif
 
     rc = pthread_setschedparam (pthread_self (), policy, &param);
 
@@ -312,7 +251,6 @@ void zlink::thread_t::applySchedulingParameters () // to be called in secondary 
 
     posix_assert (rc);
 
-#if !defined ZLINK_HAVE_VXWORKS
     if (use_nice_instead_priority && _thread_priority != ZLINK_THREAD_PRIORITY_DFLT
         && _thread_priority > 0) {
         // assume the user wants to decrease the thread's nice value
