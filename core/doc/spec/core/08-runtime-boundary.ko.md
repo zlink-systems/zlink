@@ -40,6 +40,8 @@ runtime은 Framework가 소유한다. 대상 독자는 Core와 Framework runtime
 | poller·timer 등 utilities | [Utilities](07-utilities.ko.md) |
 | completion progress lane의 HWM·budget 제외 | [Auto HWM](systems/06-auto-hwm.ko.md) |
 
+각 기능이 실행되는 thread는 [Threading model](systems/02-threading-model.ko.md)이 정의한다.
+
 ## 2. Core가 제공하는 기능
 
 Core는 다음 기능을 공개 C ABI로 제공한다.

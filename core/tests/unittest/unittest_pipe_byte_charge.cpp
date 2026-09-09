@@ -255,6 +255,80 @@ void test_dequeue_notifies_only_a_writer_waiting_for_credit ()
     TEST_ASSERT_EQUAL_INT (1, credit_recoveries);
     TEST_ASSERT_EQUAL_INT (0, resumed_writer_commands);
 }
+
+void test_conflate_decoder_replacement_releases_record_charge ()
+{
+    const zlink::physical_queue_class_t classes[] = {
+      zlink::physical_queue_class_application,
+      zlink::physical_queue_class_completion};
+    for (size_t mode = 0; mode != 2; ++mode) {
+        setup_test_context ();
+        void *writer = test_context_socket (ZLINK_SOCKET_PAIR);
+        void *reader = test_context_socket (ZLINK_SOCKET_PAIR);
+        zlink::socket_base_t *writer_core = as_socket_handle (writer).socket;
+        zlink::socket_base_t *reader_core = as_socket_handle (reader).socket;
+        zlink::object_t *parents[] = {writer_core, reader_core};
+        zlink::pipe_t *pipes[2];
+        const uint64_t hwms[] = {0, 0};
+        const bool conflates[] = {true, true};
+        zlink::pipepair_options_t options;
+        options.session_pipe = true;
+        options.session_owner_index = 0;
+        options.queue_class = classes[mode];
+        TEST_ASSERT_SUCCESS_ERRNO (
+          zlink::pipepair (parents, pipes, hwms, conflates, options));
+        credit_pipe_sink_t sink;
+        pipes[0]->set_event_sink (&sink);
+        pipes[1]->set_event_sink (&sink);
+
+        const char frames[] = {'A', '1', 'B', '2', 'A', '3'};
+        for (size_t i = 0; i != sizeof (frames); ++i) {
+            zlink::msg_t msg;
+            TEST_ASSERT_SUCCESS_ERRNO (msg.init_size (1));
+            *static_cast<char *> (msg.data ()) = frames[i];
+            if (i % 2 == 0)
+                msg.set_flags (zlink::msg_t::more);
+            zlink::decoder_frame_reservation_t storage;
+            zlink::decoder_frame_reservation_t *reservation = NULL;
+            TEST_ASSERT_SUCCESS_ERRNO (pipes[0]->reserve_inbound_decoder_frame (
+              1, msg.flags (), true, &storage, &reservation));
+            TEST_ASSERT_SUCCESS_ERRNO (
+              pipes[0]->write_reserved_decoder_frame (&msg, &reservation));
+            TEST_ASSERT_SUCCESS_ERRNO (msg.init ());
+        }
+        pipes[0]->flush ();
+        drain_credit_commands (reader_core);
+        TEST_ASSERT_EQUAL_UINT64 (2, pipes[0]->get_snd_pending_msgs ());
+        TEST_ASSERT_EQUAL_UINT64 (4 * (k_metadata_bytes + 1),
+                                  pipes[0]->get_snd_queue_accounted_bytes ());
+        const char expected[] = {'B', '2', 'A', '3'};
+        for (size_t i = 0; i != sizeof (expected); ++i) {
+            zlink::msg_t msg;
+            TEST_ASSERT_TRUE (pipes[1]->read (&msg));
+            TEST_ASSERT_EQUAL_INT (expected[i],
+                                    *static_cast<char *> (msg.data ()));
+            TEST_ASSERT_SUCCESS_ERRNO (msg.close ());
+        }
+        // An unlimited, active writer receives no credit wakeup. Its cached
+        // peer count is intentionally stale; inspect the published ledgers
+        // and the receiver's pending snapshot after the completed reads.
+        TEST_ASSERT_EQUAL_UINT64 (2, pipes[0]->get_msgs_written ());
+        TEST_ASSERT_EQUAL_UINT64 (2, pipes[1]->get_msgs_read ());
+        TEST_ASSERT_EQUAL_UINT64 (0, pipes[1]->get_rcv_pending_msgs_approx ());
+        TEST_ASSERT_EQUAL_UINT64 (0,
+                                  pipes[0]->get_snd_queue_accounted_bytes ());
+        pipes[0]->terminate (false);
+        pipes[1]->terminate (false);
+        drain_credit_commands (reader_core);
+        drain_credit_commands (writer_core);
+        drain_credit_commands (reader_core);
+        TEST_ASSERT_EQUAL_INT (2, sink.terminated);
+        test_context_socket_close_zero_linger (reader);
+        test_context_socket_close_zero_linger (writer);
+        teardown_test_context ();
+    }
+}
+
 }
 
 int main ()
@@ -268,5 +342,6 @@ int main ()
     RUN_TEST (test_absent_hint_and_unlimited_hwm_leave_the_default);
     RUN_TEST (test_hint_at_or_above_hwm_clamps_and_keeps_a_floor_of_one);
     RUN_TEST (test_dequeue_notifies_only_a_writer_waiting_for_credit);
+    RUN_TEST (test_conflate_decoder_replacement_releases_record_charge);
     return UNITY_END ();
 }

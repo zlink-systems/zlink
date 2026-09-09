@@ -462,6 +462,11 @@ int zlink::msg_t::close ()
 
 int zlink::msg_t::move (msg_t &src_)
 {
+    if (unlikely (this == &src_)) {
+        errno = EINVAL;
+        return -1;
+    }
+
     //  Check the validity of the source.
     if (unlikely (!src_.check ())) {
         errno = EFAULT;
@@ -485,6 +490,11 @@ int zlink::msg_t::move (msg_t &src_)
 
 int zlink::msg_t::copy (msg_t &src_)
 {
+    if (unlikely (this == &src_)) {
+        errno = EINVAL;
+        return -1;
+    }
+
     //  Check the validity of the source.
     if (unlikely (!src_.check ())) {
         errno = EFAULT;

@@ -63,8 +63,6 @@ export interface ContextOptions {
   maxSockets: number;
   /** The largest value `maxSockets` may take on this build. */
   readonly socketLimit: number;
-  /** The default maximum inbound message size, in bytes, for new sockets. */
-  maxMsgSize: number;
   /** The size of the context's message worker thread pool. */
   readonly msgTSize: number;
   /** The OS scheduling priority of the context's I/O threads. */

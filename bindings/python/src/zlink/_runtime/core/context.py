@@ -151,14 +151,6 @@ class NativeContextOptions:
         self._context._set_option(ContextOption.MAX_SOCKETS, value)
 
     @property
-    def max_message_size(self):
-        return self._context._get_option(ContextOption.MAX_MSGSZ)
-
-    @max_message_size.setter
-    def max_message_size(self, value):
-        self._context._set_option(ContextOption.MAX_MSGSZ, value)
-
-    @property
     def thread_scheduling_policy(self):
         return self._context._get_option(ContextOption.THREAD_SCHED_POLICY)
 

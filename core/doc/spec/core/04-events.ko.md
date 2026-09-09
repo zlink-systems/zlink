@@ -41,12 +41,49 @@ Monitor event는 이미 일어난 일의 관측 기록이다. 반면 readiness�
 유지되는 동안 계속 참으로 관찰되는 상태 값이다. Readiness 하나가 message 하나와
 일대일로 대응하거나 다음 operation의 성공을 보장한다고 가정하지 않는다.
 
+### Readiness flag
+
+| Flag | 값 | 의미·범위 |
+|---|---:|---|
+| `ZLINK_POLLIN` | `1` | socket receive 또는 FD read 가능성 |
+| `ZLINK_POLLOUT` | `2` | socket submit 또는 FD write 가능성 |
+| `ZLINK_POLLERR` | `4` | socket terminal 상태 또는 FD 오류 |
+| `ZLINK_POLLPRI` | `8` | FD urgent data; socket 등록은 ENOTSUP |
+| `ZLINK_POLLCOMPLETION` | `32` | completion channel이 있는 socket의 completion record 준비 |
+
+`ZLINK_POLLCOMPLETION`은 completion channel이 있는 socket의 지속 poller 등록에서만
+허용한다. FD와 `zlink_poll`에서는 `EINVAL`이다. `ZLINK_POLLITEMS_DFLT = 16`은 inline
+capacity이며 event flag가 아니므로 mask에 넣으면 `EINVAL`이다.
+
 ## 3. Raw socket lifecycle
 
 Raw socket monitor는 endpoint bind/listen, outgoing connect, accept, handshake
 success/failure, disconnect, protocol error와 close를 기록한다. Disconnect reason은
 transport error, handshake failure, [Context](glossary.ko.md#context) 종료와 unknown을
 구분한다. Event는 service topology나 application payload를 포함하지 않는다.
+
+Event 식별자는 `ZLINK_EVENT_` 접두사를 쓰며 `ZLINK_SOCKET_MONITOR_EVENT_` alias와 같은
+값이다. `value`, disconnect reason, protocol error, lane과 event flag의 값은
+[Monitoring §3.2](06-monitoring.ko.md#32-value와-flags)가 정의한다.
+
+| Event | Bit | 발생 조건 |
+|---|---|---|
+| `CONNECTED` | `1u << 0` | outgoing transport 연결 성립 |
+| `CONNECT_DELAYED` | `1u << 1` | connect가 즉시 완료되지 않음 |
+| `CONNECT_RETRIED` | `1u << 2` | 다음 reconnect 예약 |
+| `LISTENING` | `1u << 3` | endpoint listen 시작 |
+| `BIND_FAILED` | `1u << 4` | bind 또는 listener 설정 실패 |
+| `ACCEPTED` | `1u << 5` | inbound transport accept |
+| `ACCEPT_FAILED` | `1u << 6` | accept 처리 실패 |
+| `CLOSED` | `1u << 7` | transport 또는 endpoint close 완료 |
+| `CLOSE_FAILED` | `1u << 8` | close 또는 endpoint 정리 실패 |
+| `DISCONNECTED` | `1u << 9` | transport 연결 종료 |
+| `MONITOR_STOPPED` | `1u << 10` | monitor 중지 알림 |
+| `HANDSHAKE_FAILED_NO_DETAIL` | `1u << 11` | 상세 protocol 값이 없는 handshake 실패 |
+| `CONNECTION_READY` | `1u << 12` | logical peer ready 전이 또는 disconnect에 따른 count snapshot |
+| `HANDSHAKE_FAILED_PROTOCOL` | `1u << 13` | ZMP handshake protocol 검증 실패 |
+| `HANDSHAKE_FAILED_AUTH` | `1u << 14` | TLS verify 또는 client-cert 인증 실패 |
+| `PEER_WEIGHT_CHANGED` | `1u << 15` | peer weight 적용 |
 
 ## 4. Receive-flow event
 
@@ -65,18 +102,15 @@ identity 불일치로 내부 폐기하는 flow-state frame도 public monitor eve
 
 적용된 flow 상태의 버전 번호를 flow epoch라 한다. 각 event가 담는 값은 다음과 같다.
 
-| Event | `value` | `flags` | 다른 field |
-|---|---|---|---|
-| `ZLINK_EVENT_SEND_FLOW_PAUSED` | 적용된 상태의 flow epoch | 없음 | PAUSED된 peer의 `routing_id`, `connection_id`, Application `transport_lane` |
-| `ZLINK_EVENT_SEND_FLOW_RESUMED` | 적용된 상태의 flow epoch | remote pause를 해제한 결과 pipe가 실제로 writable이면 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` | PAUSED와 동일 |
-| `ZLINK_EVENT_FLOW_STATE_STALE` | 받은 flow epoch | `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` | 해당 peer의 `routing_id`, `connection_id`, Application `transport_lane` |
+[Receive-flow value와 flag](06-monitoring.ko.md#32-value와-flags)는 Monitoring이 정의한다.
 
 byte [HWM](glossary.ko.md#hwm), transport wait, termination 같은 다른 원인이 계속 pipe를
 막고 있으면 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE`이 없다. 따라서 RESUMED event만으로
 다음 send가 수락된다고 보장하지 않는다.
 
 `FLOW_STATE_STALE_EPOCH`는 flow epoch가 전진하지 않은 frame을 뜻한다. `value`는 받은 epoch이고,
-현재 epoch는 같은 connection의 직전 PAUSED 또는 RESUMED event가 보고한 값이다.
+같은 monitor가 같은 connection의 직전 PAUSED 또는 RESUMED event를 관찰한 경우에만
+그 값을 현재 epoch로 사용할 수 있다.
 
 이 event 3개는 monitor event mask의 bit 16, 17, 18을 사용하므로 `ZLINK_EVENT_ALL`은
 `0x7FFFF`다. Mask를 직접 지정하는 monitor는 해당 bit를 설정해야 이 event를 받는다.
@@ -107,7 +141,7 @@ open 시 지정한 event mask)만으로 다음을 확인한다. 각 항목은 un
   connection에서 왔더라도 event의 lane을 Completion으로 바꾸지 않는다.
 - remote pause를 해제한 결과 pipe가 실제로 writable일 때만 RESUMED event에 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE`이 있다. byte HWM, transport wait, termination 같은 다른 원인이 pipe를 계속 막으면 이 flag가 없고, RESUMED event만으로 다음 send 수락이 보장되지 않는다.
 - STALE event의 `flags`에는 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH`이 있고 `value`는 받은
-  epoch다. 현재 epoch는 같은 connection의 직전 PAUSED 또는 RESUMED event가 보고한 값과 같다.
+  epoch다. 같은 monitor가 같은 connection의 직전 PAUSED 또는 RESUMED event를 관찰한 경우에만 그 값을 현재 epoch로 사용할 수 있다.
 
 **Event mask**
 - Receive-flow event 3개는 monitor event mask의 bit 16, 17, 18을 사용하고 `ZLINK_EVENT_ALL`은 `0x7FFFF`다.

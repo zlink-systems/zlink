@@ -299,14 +299,6 @@ public class CommonSocketOptions {
         ContractAccess.socketSetOption(socket, SocketOptions.CONFLATE, enabled ? 1 : 0);
     }
 
-    boolean blocky() {
-        return ContractAccess.socketGetOption(socket, SocketOptions.BLOCKY) != 0;
-    }
-
-    void blocky(boolean enabled) {
-        ContractAccess.socketSetOption(socket, SocketOptions.BLOCKY, enabled ? 1 : 0);
-    }
-
     boolean invertMatching() {
         return ContractAccess.socketGetOption(socket, SocketOptions.INVERT_MATCHING) != 0;
     }

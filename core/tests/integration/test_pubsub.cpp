@@ -40,11 +40,36 @@ void test_tcp ()
     test ("tcp://127.0.0.1:*");
 }
 
+void test_conflate_preserves_topic_and_payload ()
+{
+    void *pub = test_context_socket (ZLINK_SOCKET_PUB);
+    void *sub = test_context_socket (ZLINK_SOCKET_SUB);
+    const int enabled = 1;
+    const int timeout = 250;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      pub, ZLINK_OPT_CONFLATE, &enabled, sizeof (enabled)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      sub, ZLINK_OPT_CONFLATE, &enabled, sizeof (enabled)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      sub, ZLINK_OPT_RCVTIMEO, &timeout, sizeof (timeout)));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_subscription (sub, ""));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_bind (pub, "inproc://conflate-record"));
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_connect (sub, "inproc://conflate-record"));
+    send_published_string_expect_success (pub, "topic", "old");
+    send_published_string_expect_success (pub, "other", "independent");
+    send_published_string_expect_success (pub, "topic", "latest");
+    recv_subscribed_string_expect_success (sub, "other", "independent");
+    recv_subscribed_string_expect_success (sub, "topic", "latest");
+    test_context_socket_close (sub);
+    test_context_socket_close (pub);
+}
+
 int main ()
 {
     setup_test_environment ();
 
     UNITY_BEGIN ();
     RUN_TEST (test_tcp);
+    RUN_TEST (test_conflate_preserves_topic_and_payload);
     return UNITY_END ();
 }

@@ -235,15 +235,6 @@ impl<'a> ContextOptions<'a> {
     pub fn set_thread_scheduling_policy(&self, policy: i32) -> Result<(), ConfigError> {
         self.context.set_thread_scheduling_policy(policy)
     }
-    /// Returns the default maximum inbound message size, in bytes, for new
-    /// sockets.
-    pub fn max_message_size(&self) -> Result<i32, ConfigError> {
-        self.context.max_message_size()
-    }
-    /// Sets the default maximum inbound message size, in bytes, for new sockets.
-    pub fn set_max_message_size(&self, size: i32) -> Result<(), ConfigError> {
-        self.context.set_max_message_size(size)
-    }
     /// Returns the size of the context's message worker thread pool.
     pub fn msg_t_size(&self) -> Result<i32, ConfigError> {
         self.context.msg_t_size()

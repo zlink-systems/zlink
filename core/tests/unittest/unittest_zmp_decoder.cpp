@@ -1072,9 +1072,33 @@ void test_shared_message_allocator_shutdown_races_final_close ()
     }
 }
 
+void test_error_frame_requires_exact_reason_length ()
+{
+    const unsigned char data[] = {0x05, 0x01, 0x01, 'x', 0xff};
+    for (size_t size = 2; size <= sizeof (data); ++size) {
+        zlink::msg_t msg;
+        TEST_ASSERT_EQUAL_INT (0, msg.init_size (size));
+        memcpy (msg.data (), data, size);
+        uint8_t code = 0;
+        const char *reason = NULL;
+        TEST_ASSERT_EQUAL_INT (-1, zlink::zmp_control::parse_error_frame (
+          &msg, &code, &reason));
+        TEST_ASSERT_EQUAL_INT (EPROTO, errno);
+        if (size == 4) {
+            TEST_ASSERT_EQUAL_UINT8 (1, code);
+            TEST_ASSERT_NULL (reason);
+        } else {
+            TEST_ASSERT_EQUAL_UINT8 (0, code);
+            TEST_ASSERT_NOT_NULL (reason);
+        }
+        TEST_ASSERT_EQUAL_INT (0, msg.close ());
+    }
+}
+
 int main (void)
 {
     UNITY_BEGIN ();
+    RUN_TEST (test_error_frame_requires_exact_reason_length);
 
     zlink::initialize_network ();
     setup_test_environment ();

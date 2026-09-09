@@ -119,17 +119,19 @@ STREAM 송신은 `ZLINK_PART_FINAL`로 제출하는 단일 part다. 공통 인�
 wire framing으로 정하며, PACKET 수신의 header/body는 [§6](#6-packet-receive와-framing)의
 한 packet을 구성한다. 이는 송신 multipart sequence가 아니다.
 
-`NONE FINAL`은 `SNDTIMEO`를 snapshot해 같은 RID의 local queue admission과 reconnect를
+`NONE FINAL`은 `SNDTIMEO`를 snapshot해 같은 RID의 local queue admission을
 기다린다. `DONTWAIT FINAL`은 admission을 한 번만 시도한다. 즉시 admission되면 ID `0`과
 completion 없음이다. HWM·byte credit 때문에 admission하지 못하거나 연결은 있지만 아직 준비되지
 않았으면 `ZLINK_SUBMIT_BACKPRESSURED`+`EAGAIN`과 그 RID에 묶인 nonzero wait token을 반환하며
 payload는 유지하지 않는다. `target_rid_`에 해당하는 연결이 없으면 즉시
 `ZLINK_SUBMIT_NOT_CONNECTED`이고 token을 만들지 않는다. 같은 RID에 write credit이
-생기면(peer drain, reconnect로 인한 pipe attach) Core는 그 token의 `ZLINK_COMPLETION_WRITABLE`
+생기면(peer drain 또는 아직 준비되지 않았던 pipe attach) Core는 그 token의 `ZLINK_COMPLETION_WRITABLE`
 record를 정확히 하나 만들며 `send_result == ZLINK_SEND_ADMITTED`, `peer_rid`는 제출한 RID다.
 다른 RID의 credit은 이 token을 깨우지 않는다. 호출자는 보관한 record를 같은 RID에 `DONTWAIT`로
 다시 제출한다. `zlink_disconnect_rid()`로 그 RID를 명시적으로 제거하면 token은
-`ZLINK_SEND_TERMINAL`+`ENOENT`인 WRITABLE record로 끝난다. socket close·context 종료는 token을
+`ZLINK_SEND_TERMINAL`+`ENOENT`인 WRITABLE record로 끝난다. 물리 연결이 끊기면 그 RID의
+token은 `ZLINK_SEND_TERMINAL`+`ENOTCONN`인 WRITABLE record로 끝난다. 재연결은 새 RID를
+사용한다. socket close·context 종료는 token을
 내부에서 끝내며 record를 전달하지 않는다([§7](#7-completion과-thread-safety)). ID `0` 뒤에는 application
 payload를 replay하지 않는다. 상세 ownership·result·errno는
 [소켓 공통](README.ko.md#part-send와-pending-admission)을 따른다.
@@ -320,17 +322,6 @@ WS/WSS 성능 특성은 다음과 같다.
 - **Frame 분할** — `auto_fragment(false)`. 논리 message 하나가 하나의 WebSocket
   frame에 대응한다.
 
-표준 벤치마크 머신의 단일 socket 대표 처리량은 다음과 같다.
-
-| Transport | Throughput |
-|---|---|
-| TCP | 1493 MB/s |
-| WS | 696 MB/s |
-| WSS 1KB | 382 MB/s |
-
-WS framing을 택해서 얻는 이득은 대용량 message에서 가장 크다. 64KB 이상 payload에서는
-WS가 TCP 라인 레이트에 근접하고, WSS 비용은 TLS 암호화 오버헤드가 좌우한다.
-
 설계 트레이드오프는 다음과 같다.
 
 - Speculative write 미지원 (WebSocket frame 기반)
@@ -381,8 +372,7 @@ STREAM은 transport 전반에 공통된 기본 성능 프로파일을 쓴다. ST
 아래 값들은 STREAM의 내부 기본값이다.
 
 - read drain: 활성
-- speculative write: STREAM/TCP 경로에서 기본 활성. `ZLINK_ASIO_STREAM_ASYNC_WRITE`를
-  활성화하면 순수 async write 경로로 전환
+- speculative write: STREAM/TCP 경로에서 기본 활성
 - RX slab buffering: 활성
 - speculative write byte budget: `2097152`
 - read drain max loops: `64`
@@ -397,19 +387,6 @@ socket/listener 기본값은 다음과 같다.
 - accept 동시성(STREAM 전용): 기본 `4`, 최대 `128`
 - 세션 스케줄러(STREAM): 기본 `rr`
 
-현재 유지되는 STREAM 전용 런타임 환경변수는 다음과 같다. 여러 socket type이 함께 쓰는 Asio 진단·gather 변수는 이 목록에 넣지 않는다.
-
-- `ZLINK_ASIO_STREAM_ACCEPT_CONCURRENCY`: 기본 `4`, 최대 `128`로 제한
-- `ZLINK_ASIO_STREAM_SESSION_SCHED` (`rr|minload`): 기본 `rr`
-- `ZLINK_ASIO_STREAM_ENABLE_NON_TCP_SPEC_READ`: 기본 비활성
-- `ZLINK_ASIO_STREAM_ASYNC_WRITE`: 기본 비활성. 활성화하면 STREAM/TCP speculative
-  write를 끄고 순수 async write 경로를 사용
-- `ZLINK_ASIO_STREAM_INITIAL_TARGET_CAP`: 기본 `4096`
-- `ZLINK_ASIO_STREAM_BATCH_SIZE`: 기본 `4096`
-- `ZLINK_ASIO_STREAM_BATCH_HEADROOM`: 기본 `64`
-- `ZLINK_STREAM_PIPE_LWM_HINT`: 기본 `4`. STREAM application pipe의 LWM hint를
-  `설정값 * 1024` byte로 적용
-
 ### 적응형 read/write target과 speculative read
 
 STREAM 연결은 한 번의 kernel read/write로 옮길 byte 수(target)를 연결마다 따로 들고 있으며,
@@ -418,7 +395,7 @@ part ownership·queue 상한·순서 같은 공개 계약은 바꾸지 않는다
 아니라 현재 구현의 기록이며, 공개 동작을 바꾸지 않는 선에서 바뀔 수 있다.
 
 **초기값과 상한.** 초기 target은 batch 크기 또는 4,096 byte에서 시작해
-`ZLINK_ASIO_STREAM_INITIAL_TARGET_CAP`(기본 4,096)으로 제한하고, read는 `ZLINK_OPT_RCVBUF`,
+내부 초기 상한으로 제한하고, read는 `ZLINK_OPT_RCVBUF`,
 write는 `ZLINK_OPT_SNDBUF`, 양쪽은 `ZLINK_OPT_MAXMSGSIZE`가 더 작으면 그 값으로 다시 제한한다.
 최솟값은 1이다. 상한(max)은 초기값에서 시작해 read는 더 큰 양수 `RCVBUF`, write는 더 큰 양수
 `SNDBUF`까지 올리고 `MAXMSGSIZE`로 제한한다. 해당 socket buffer option이 초기값보다 크지 않으면

@@ -29,7 +29,7 @@ The following documents own the related contracts.
 
 | Related contract | Defining document |
 |---|---|
-| Socket event-family catalog, emission conditions for the three receive-flow events, and the meanings of their `value` and `flags` | [Events](04-events.en.md) |
+| Socket event-family catalog and receive-flow event occurrence conditions | [Events](04-events.en.md) |
 | Exclusion of monitor queues from Auto HWM planning and their aggregation in context budget snapshots | [Auto HWM](systems/06-auto-hwm.en.md) |
 | Mapping between each result value and errno | [Errors](03-errors.en.md#result-and-errno-mapping) |
 
@@ -96,11 +96,12 @@ Each event defines `value` as follows.
 | `MONITOR_STOPPED` | `0` |
 | `DISCONNECTED` | A `zlink_disconnect_reason_t` value |
 | `HANDSHAKE_FAILED_PROTOCOL` | A `zlink_protocol_error_t` value |
+| `HANDSHAKE_FAILED_AUTH` | `EACCES` for TLS verification or client-certificate failure |
 | `PEER_WEIGHT_CHANGED` | The new `0..10000` weight |
-| `CONNECTION_READY` | The current count of public transports that are ready for this monitor source |
-| Three receive-flow events | Owned by [Events](04-events.en.md) |
+| `CONNECTION_READY` | The current count of ready logical peers for this monitor source |
+| Receive-flow events | Receive-flow table below |
 
-Because the `value` of `CONNECTION_READY` is the current count of public ready transports, use
+Because the `value` of `CONNECTION_READY` is the current count of ready logical peers, use
 `ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE` in `flags` to identify the instant when
 the count increases. A ready-count event without this flag is a count snapshot, not the
 ready edge of a new connection.
@@ -108,8 +109,30 @@ ready edge of a new connection.
 `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` and
 `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` apply only to the three receive-flow
 events (`ZLINK_EVENT_SEND_FLOW_PAUSED`, `ZLINK_EVENT_SEND_FLOW_RESUMED`, and
-`ZLINK_EVENT_FLOW_STATE_STALE`). [Events](04-events.en.md) owns their emission conditions
-and the meaning of `value` for each event.
+`ZLINK_EVENT_FLOW_STATE_STALE`).
+
+[Events](04-events.en.md) defines occurrence conditions and event bits. Receive-flow field
+values are as follows.
+
+| Event | `value` | `flags` | Other fields |
+|---|---|---|---|
+| `ZLINK_EVENT_SEND_FLOW_PAUSED` | flow epoch of the applied state | none | `routing_id`, `connection_id`, and Application `transport_lane` of the paused peer |
+| `ZLINK_EVENT_SEND_FLOW_RESUMED` | flow epoch of the applied state | `ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` if clearing the remote pause makes the pipe actually writable | same as PAUSED |
+| `ZLINK_EVENT_FLOW_STATE_STALE` | received flow epoch | `ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` | `routing_id`, `connection_id`, and Application `transport_lane` of the peer |
+
+| Auxiliary identifier (`ZLINK_` prefix) | Value | Meaning |
+|---|---|---|
+| `DISCONNECT_REASON_UNKNOWN` | `0` | Termination not classified by another public reason |
+| `DISCONNECT_REASON_HANDSHAKE_FAILED` | `3` | Handshake failure |
+| `DISCONNECT_REASON_TRANSPORT_ERROR` | `4` | Transport error |
+| `DISCONNECT_REASON_CTX_TERM` | `5` | Context termination |
+| `PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_HELLO` | `0x10000013` | Malformed HELLO |
+| `PROTOCOL_ERROR_ZMP_MALFORMED_COMMAND_READY` | `0x10000016` | Malformed READY metadata or paired-lane topology |
+| `MONITOR_TRANSPORT_LANE_APPLICATION` | `0` | Application connection |
+| `MONITOR_TRANSPORT_LANE_COMPLETION` | `1` | Separate Completion connection |
+| `MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE` | `1u << 0` | Logical peer transitions from not-ready to ready |
+| `MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE` | `1u << 1` | No other cause blocks the pipe after RESUMED |
+| `MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH` | `1u << 3` | Epoch did not advance within the same generation |
 
 ## 4. Ordering, Overflow, and Thread Safety
 
@@ -305,8 +328,8 @@ typedef enum zlink_monitor_transport_lane_e {
 } zlink_monitor_transport_lane_t;
 
 #define ZLINK_MONITOR_EVENT_FLAG_CONNECTION_READY_EDGE (1u << 0)       // Ready edge that increased the count (§3.2)
-#define ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE (1u << 1)          // Receive-flow event only; Events owns the meaning
-#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH (1u << 3)      // Receive-flow event only; Events owns the meaning
+#define ZLINK_MONITOR_EVENT_FLAG_SEND_FLOW_WRITABLE (1u << 1)          // Receive-flow event only; see §3.2
+#define ZLINK_MONITOR_EVENT_FLAG_FLOW_STATE_STALE_EPOCH (1u << 3)      // Receive-flow event only; see §3.2
 
 typedef zlink_monitor_event_t zlink_socket_monitor_event_t;
 ```
@@ -446,6 +469,9 @@ The `events` mask in `options` selects the events to receive
 monitor queue's byte budget ([§5](#5-monitor-queue-byte-budget)). This function, the open
 options, and the status-structure layout follow [§6.1](#61-abi-version-and-layout): Core
 does not add caller size/version negotiation or a parallel versioned entry point.
+
+A socket can have one open monitor. A second open returns `NULL` with `EBUSY` while
+preserving the existing handle and its event consumption.
 
 **Returns:** A monitor handle on success; `NULL` on failure, with errno set.
 

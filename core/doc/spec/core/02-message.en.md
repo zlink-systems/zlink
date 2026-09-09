@@ -275,6 +275,9 @@ Move message content from a source to a destination.
 ZLINK_EXPORT zlink_config_result_t zlink_msg_move (zlink_msg_t *dest_, zlink_msg_t *src_);
 ```
 
+Two pointers to the same valid message (`dest_ == src_`, non-NULL) are rejected with `ZLINK_CONFIG_INVALID_ARGUMENT` and `EINVAL`, without
+changing the message contents.
+
 Moves the content of `src_` into `dest_`. After a successful move, `src_` becomes an empty
 message equivalent to a freshly initialized message, and `dest_` contains the original content.
 Any previous content of `dest_` is released.
@@ -295,6 +298,9 @@ Copy a message.
 ```c
 ZLINK_EXPORT zlink_config_result_t zlink_msg_copy (zlink_msg_t *dest_, zlink_msg_t *src_);
 ```
+
+Two pointers to the same valid message (`dest_ == src_`, non-NULL) are rejected with `ZLINK_CONFIG_INVALID_ARGUMENT` and `EINVAL`, without
+changing the message contents.
 
 Copies the content of `src_` into `dest_`. For large/zero-copy storage, both messages share the
 underlying data buffer through reference counting; a small inline message is copied by value. Any
@@ -317,6 +323,9 @@ Adopt ownership from a source message without a separate init+move step.
 ```c
 ZLINK_EXPORT zlink_config_result_t zlink_msg_adopt (zlink_msg_t *dest_, zlink_msg_t *src_);
 ```
+
+Two pointers to the same valid message (`dest_ == src_`, non-NULL) are rejected with `ZLINK_CONFIG_INVALID_ARGUMENT` and `EINVAL`, without
+changing the message contents.
 
 This function is for bindings that already hold storage for `dest_` and need to take ownership
 of a newly received native message efficiently. Unlike `zlink_msg_move`, `dest_` must not

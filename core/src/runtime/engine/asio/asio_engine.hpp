@@ -69,7 +69,8 @@ class asio_engine_t : public i_engine
     bool init_properties (properties_t &properties_);
 
     //  Function to handle network disconnections.
-    virtual void error (error_reason_t reason_);
+    virtual void error (error_reason_t reason_,
+                        const boost::system::error_code &handshake_error_ = boost::system::error_code ());
 
     int pull_msg_from_session (msg_t *msg_);
     int push_msg_to_session (msg_t *msg_);

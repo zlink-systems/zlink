@@ -1173,11 +1173,30 @@ void test_ctx_option_invalid ()
     TEST_ASSERT_EQUAL_INT (EINVAL, errno);
 }
 
+void test_thread_priority_has_independent_context_option ()
+{
+    zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
+    const int socket_limit = zlink_ctx_get (get_test_context (), ZLINK_SOCKET_LIMIT, &error);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
+    TEST_ASSERT_EQUAL_INT (-1, zlink_ctx_get (get_test_context (), ZLINK_THREAD_PRIORITY, &error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_ctx_set (
+      get_test_context (), ZLINK_THREAD_PRIORITY, 0));
+    TEST_ASSERT_EQUAL_INT (0, zlink_ctx_get (get_test_context (), ZLINK_THREAD_PRIORITY, &error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
+    TEST_ASSERT_EQUAL_INT (socket_limit, zlink_ctx_get (
+      get_test_context (), ZLINK_SOCKET_LIMIT, &error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_INVALID_ARGUMENT, zlink_ctx_set (
+      get_test_context (), ZLINK_SOCKET_LIMIT, 0));
+    TEST_ASSERT_EQUAL_INT (EINVAL, errno);
+}
+
 int main (void)
 {
     setup_test_environment ();
 
     UNITY_BEGIN ();
+    RUN_TEST (test_thread_priority_has_independent_context_option);
     RUN_TEST (test_ctx_option_max_sockets);
     RUN_TEST (test_ctx_option_socket_limit);
     RUN_TEST (test_ctx_option_io_threads);

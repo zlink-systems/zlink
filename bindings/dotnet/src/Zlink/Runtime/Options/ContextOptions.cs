@@ -41,12 +41,6 @@ internal sealed class ContextOptions : IContextOptions
         set => _context.SetOption(ContextOption.ThreadSchedPolicy, value);
     }
 
-    public int MaxMessageSize
-    {
-        get => _context.GetOption(ContextOption.MaxMsgSz);
-        set => _context.SetOption(ContextOption.MaxMsgSz, value);
-    }
-
     public int MessageThreadSize => _context.GetOption(ContextOption.MsgTSize);
 
     public bool Blocky

@@ -8,6 +8,7 @@
 #include "engine/asio/asio_poller.hpp"
 #include "engine/asio/i_asio_transport.hpp"
 #include "transports/tcp/tcp_transport.hpp"
+#include "transports/tls/ssl_context_helper.hpp"
 #include "transports/ws/ws_batch_policy.hpp"
 #include "core/io_thread.hpp"
 #include "core/session_base.hpp"
@@ -327,7 +328,7 @@ void zlink::asio_engine_t::on_transport_handshake (const boost::system::error_co
     }
 
     if (ec) {
-        error (connection_error);
+        error (connection_error, ec);
         return;
     }
 
@@ -1875,7 +1876,8 @@ int zlink::asio_engine_t::push_msg_to_session (msg_t *msg_)
     return _connection_facade.session->push_msg (msg_);
 }
 
-void zlink::asio_engine_t::error (error_reason_t reason_)
+void zlink::asio_engine_t::error (error_reason_t reason_,
+                                    const boost::system::error_code &handshake_error_)
 {
     ENGINE_DBG ("error: reason=%d", static_cast<int> (reason_));
 
@@ -1890,7 +1892,14 @@ void zlink::asio_engine_t::error (error_reason_t reason_)
     // protocol errors have been signaled already at the point where they occurred
     if (reason_ != protocol_error && _connection_facade.handshaking) {
         const int err = errno;
-        _connection_facade.socket->event_handshake_failed_no_detail (_endpoint_uri_pair, err);
+#if defined ZLINK_HAVE_ASIO_SSL
+        if (ssl_context_helper_t::is_authentication_failure (handshake_error_))
+            _connection_facade.socket->event_handshake_failed_auth (_endpoint_uri_pair, EACCES);
+        else
+#else
+        LIBZLINK_UNUSED (handshake_error_);
+#endif
+            _connection_facade.socket->event_handshake_failed_no_detail (_endpoint_uri_pair, err);
     }
 
     uint64_t disconnect_reason = ZLINK_DISCONNECT_UNKNOWN;

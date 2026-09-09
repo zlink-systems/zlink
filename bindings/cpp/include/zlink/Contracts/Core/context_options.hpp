@@ -23,8 +23,6 @@ class context_options_t
     void io_threads (io_thread_count_t value_);
     socket_count_t max_sockets () const;
     void max_sockets (socket_count_t value_);
-    byte_size_t max_msg_size () const;
-    void max_msg_size (byte_size_t value_);
     std::optional<thread_priority_t> thread_priority () const;
     void thread_priority (thread_priority_t value_);
     thread_scheduling_policy_t thread_scheduling_policy () const;

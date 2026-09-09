@@ -40,6 +40,8 @@ The following documents own the related contracts.
 | Utilities such as pollers and timers | [Utilities](07-utilities.en.md) |
 | Exclusion of the completion progress lane from HWM and budget accounting | [Auto HWM](systems/06-auto-hwm.en.md) |
 
+The [Threading model](systems/02-threading-model.en.md) defines the thread on which each function runs.
+
 ## 2. Capabilities provided by Core
 
 Core provides the following capabilities through its public C ABI.

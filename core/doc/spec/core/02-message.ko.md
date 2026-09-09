@@ -263,6 +263,9 @@ source에서 대상으로 message 내용을 이동한다.
 ZLINK_EXPORT zlink_config_result_t zlink_msg_move (zlink_msg_t *dest_, zlink_msg_t *src_);
 ```
 
+두 포인터가 같은 유효 message를 가리키는 경우(`dest_ == src_`, non-NULL), 내용을 변경하지 않고 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로
+거부한다.
+
 `src_`의 내용을 `dest_`로 이동한다. 성공한 이동 후 `src_`는 빈 message가 되고(새로
 초기화된 message와 동일) `dest_`는 원래 내용을 포함한다. `dest_`의 이전 내용은 해제된다.
 
@@ -281,6 +284,9 @@ message를 복사한다.
 ```c
 ZLINK_EXPORT zlink_config_result_t zlink_msg_copy (zlink_msg_t *dest_, zlink_msg_t *src_);
 ```
+
+두 포인터가 같은 유효 message를 가리키는 경우(`dest_ == src_`, non-NULL), 내용을 변경하지 않고 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로
+거부한다.
 
 `src_`의 내용을 `dest_`로 복사한다. large/zero-copy storage는 두 message가 reference
 counting으로 기본 data buffer를 공유하고, 작은 inline message는 값으로 복사된다. `dest_`의
@@ -301,6 +307,9 @@ counting으로 기본 data buffer를 공유하고, 작은 inline message는 값�
 ```c
 ZLINK_EXPORT zlink_config_result_t zlink_msg_adopt (zlink_msg_t *dest_, zlink_msg_t *src_);
 ```
+
+두 포인터가 같은 유효 message를 가리키는 경우(`dest_ == src_`, non-NULL), 내용을 변경하지 않고 `ZLINK_CONFIG_INVALID_ARGUMENT`와 `EINVAL`로
+거부한다.
 
 이미 `dest_`에 대한 storage를 보유하고 있고, 새로 수신한 native message의 소유권을
 효율적으로 가져와야 하는 binding을 위한 함수다. `zlink_msg_move`와 달리 `dest_`는 현재

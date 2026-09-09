@@ -560,6 +560,14 @@ core가 aggregate 함수와 `*_part` substrate를 모두 제공하던 시기에�
   aggregate 결과 저장소 API만 제공한다. `RecvPart`/`SubscribePart` 계열은
   성능 최적화 substrate의 이름일 뿐 public contract 이름이 아니다.
 
+### Multipart attempt 직렬화
+
+Part 호출마다 public API scope가 따로이므로 binding은 첫 part부터 FINAL까지 한 번의
+`DONTWAIT` 시도 동안만 socket-local attempt gate를 유지한다. 실패하면 Core sequence
+rollback 뒤 gate를 즉시 해제하고, `BACKPRESSURED` readiness 대기 중에는 보유하지 않는다.
+Request submit도 raw send와 같은 짧은 socket-local attempt gate 아래에서 첫 request part부터
+FINAL까지 한 번 시도한다. 이 gate는 새 Core multipart API나 공개 FIFO 계약이 아니다.
+
 ## Spot Get-Or-Create 매핑
 
 Core는 "routing id로 local logical Spot을 가져오거나, 없으면 생성한다"는 원자 계약을

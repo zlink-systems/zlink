@@ -66,14 +66,6 @@ public final class ContextOptions {
         threadNamePrefix = prefix;
     }
 
-    public int maxMessageSize() {
-        return ContractAccess.contextGetOption(context, ContextOption.MAX_MSGSZ);
-    }
-
-    public void maxMessageSize(int bytes) {
-        ContractAccess.contextSetOption(context, ContextOption.MAX_MSGSZ, bytes);
-    }
-
     public int messageThreadSize() {
         return ContractAccess.contextGetOption(context, ContextOption.MSG_T_SIZE);
     }

@@ -92,6 +92,8 @@ class ssl_context_helper_t
     static bool configure_server_verification (boost::asio::ssl::context &ctx,
                                                bool require_client_cert);
 
+    static bool is_authentication_failure (const boost::system::error_code &error);
+
     //  Get OpenSSL error string
     static std::string get_ssl_error_string ();
 };

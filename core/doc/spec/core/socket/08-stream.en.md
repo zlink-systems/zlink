@@ -122,18 +122,19 @@ A send-call boundary does not guarantee a matching receive boundary at the peer.
 message boundaries come from wire framing. The header and body returned by PACKET receive form
 one packet under [§6](#6-packet-receive-and-framing), not a multipart send sequence.
 
-`NONE FINAL` snapshots `SNDTIMEO` and waits for local queue admission and reconnect of the same
-RID. A `DONTWAIT FINAL` makes exactly one admission attempt. If admitted immediately, it has ID
+`NONE FINAL` snapshots `SNDTIMEO` and waits for local queue admission of the same RID. A `DONTWAIT FINAL` makes exactly one admission attempt. If admitted immediately, it has ID
 `0` and no completion. If HWM or byte credit prevents admission, or the connection exists but is
 not ready yet, it returns `ZLINK_SUBMIT_BACKPRESSURED` with `EAGAIN` and a nonzero wait token
 bound to that RID, and Core does not retain the payload. If no connection matches `target_rid_`,
 the result is `ZLINK_SUBMIT_NOT_CONNECTED` immediately with no token. When the same RID gains
-write credit (peer drain, or pipe attach on reconnect), Core produces exactly one
+write credit (peer drain, or attachment of a not-yet-ready pipe), Core produces exactly one
 `ZLINK_COMPLETION_WRITABLE` record for that token with `send_result == ZLINK_SEND_ADMITTED` and
 `peer_rid` set to the submitted RID. Credit on another RID does not wake this token. The caller
 resubmits its retained record to the same RID with `DONTWAIT`. Explicitly removing that RID with
 `zlink_disconnect_rid()` ends the token with a WRITABLE record carrying `ZLINK_SEND_TERMINAL` and
-`ENOENT`. Socket close or context termination ends the token internally and delivers no record
+`ENOENT`. A physical disconnect ends the RID's token with a WRITABLE record carrying
+`ZLINK_SEND_TERMINAL` and `ENOTCONN`. Reconnection uses a new RID. Socket close or context
+termination ends the token internally and delivers no record
 ([§7](#7-completion-and-thread-safety)). After ID `0`, Core does not replay the application payload.
 [Socket Common](README.en.md#part-send-and-pending-admission) owns detailed ownership, result, and
 errno rules.
@@ -338,19 +339,6 @@ WS/WSS has the following performance characteristics.
 - **Frame fragmentation** — `auto_fragment(false)`. One logical message maps
   to one WebSocket frame.
 
-Representative single-socket throughput on the standard benchmark machine is
-as follows.
-
-| Transport | Throughput |
-|---|---|
-| TCP | 1493 MB/s |
-| WS | 696 MB/s |
-| WSS 1KB | 382 MB/s |
-
-Large messages benefit most from the WS framing choices. With payloads of 64KB
-or more, WS approaches the TCP line rate, and TLS encryption overhead dominates
-the WSS cost.
-
 The design trade-offs are as follows.
 
 - Speculative write is not supported because WebSocket is frame-based.
@@ -408,8 +396,7 @@ socket defaults outside STREAM, see the [internals section of Socket Common](REA
 The following values are internal STREAM defaults.
 
 - read drain: enabled
-- speculative write: enabled by default on the STREAM/TCP path; enabling
-  `ZLINK_ASIO_STREAM_ASYNC_WRITE` switches to the pure asynchronous write path
+- speculative write: enabled by default on the STREAM/TCP path
 - RX slab buffering: enabled
 - speculative write byte budget: `2097152`
 - read drain max loops: `64`
@@ -426,19 +413,6 @@ Socket and listener defaults are as follows.
 - accept concurrency (STREAM only): default `4`, maximum `128`
 - session scheduler (STREAM): default `rr`
 
-STREAM retains the following STREAM-specific runtime environment variables. Generic Asio diagnostic and gather variables shared by several socket types are outside this list.
-
-- `ZLINK_ASIO_STREAM_ACCEPT_CONCURRENCY`: default `4`, clamped to `128`
-- `ZLINK_ASIO_STREAM_SESSION_SCHED` (`rr|minload`): default `rr`
-- `ZLINK_ASIO_STREAM_ENABLE_NON_TCP_SPEC_READ`: disabled by default
-- `ZLINK_ASIO_STREAM_ASYNC_WRITE`: disabled by default; enabling it disables
-  STREAM/TCP speculative writes and uses the pure asynchronous write path
-- `ZLINK_ASIO_STREAM_INITIAL_TARGET_CAP`: default `4096`
-- `ZLINK_ASIO_STREAM_BATCH_SIZE`: default `4096`
-- `ZLINK_ASIO_STREAM_BATCH_HEADROOM`: default `64`
-- `ZLINK_STREAM_PIPE_LWM_HINT`: default `4`; applies a low-water-mark hint of
-  `configured value * 1024` bytes to the STREAM application pipe
-
 ### Adaptive read/write targets and speculative reads
 
 A STREAM connection keeps its own target — the number of bytes one kernel read or write should
@@ -449,7 +423,7 @@ the current implementation, not a contract, and may change as long as the public
 not.
 
 **Initial value and maximum.** The initial target starts from the batch size or 4,096 bytes,
-is capped by `ZLINK_ASIO_STREAM_INITIAL_TARGET_CAP` (4,096 by default), and is capped again by
+is capped by the internal initial limit, and is capped again by
 `ZLINK_OPT_RCVBUF` for reads, `ZLINK_OPT_SNDBUF` for writes and by `ZLINK_OPT_MAXMSGSIZE` for both
 when those are smaller; the floor is 1. The maximum starts at the initial value and rises to a
 larger positive `RCVBUF` for reads or `SNDBUF` for writes, capped by `MAXMSGSIZE`. If that socket

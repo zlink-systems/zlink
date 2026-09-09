@@ -134,7 +134,6 @@ internal static class SocketOptions
     public static SocketOptionKey<int> XPubNoDrop { get; } =
         Int(SocketOption.XPubNoDrop);
 
-    public static SocketOptionKey<int> Blocky { get; } = Int(SocketOption.Blocky);
 
     public static SocketOptionKey<int> XPubManual { get; } =
         Int(SocketOption.XPubManual);

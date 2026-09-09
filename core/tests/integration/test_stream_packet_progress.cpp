@@ -354,6 +354,35 @@ void test_shutdown_during_drain ()
     TEST_ASSERT_TRUE_MESSAGE (remaining > 0, "receive ignored shutdown until all partial input was drained");
 }
 
+void test_invalid_packet_reports_transport_disconnect_reason ()
+{
+    fixture_t f;
+    const int64_t limit = 1024;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_option (
+      f.socket, ZLINK_OPT_MAXMSGSIZE, &limit, sizeof (limit)));
+    client_t peer (f.port);
+    // A four-GiB body cannot fit the configured maximum message size.
+    const std::string invalid ("\0\1\xff\xff\xff\xff", 6);
+    peer.write (invalid);
+    zlink_msg_t header, body;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&header));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init (&body));
+    const zlink_routing_id_t *rid = NULL;
+    const zlink_recv_result_t result = zlink_stream_recv_packet (
+      f.socket, &rid, &header, &body, ZLINK_RECV_FLAGS_NONE);
+    TEST_ASSERT_NOT_EQUAL (ZLINK_RECV_OK, result);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&header));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&body));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_option (
+      f.monitor, ZLINK_OPT_RCVTIMEO, &timeout_ms, sizeof (timeout_ms)));
+    zlink_socket_monitor_event_t event = {};
+    do {
+        TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_socket_monitor_recv (
+          f.monitor, &event, ZLINK_RECV_FLAGS_NONE));
+    } while (event.event != ZLINK_EVENT_DISCONNECTED);
+    TEST_ASSERT_EQUAL_UINT64 (ZLINK_DISCONNECT_REASON_TRANSPORT_ERROR, event.value);
+}
+
 int main ()
 {
     if (!zlink_has ("ws"))
@@ -362,6 +391,7 @@ int main ()
     const char *selected = std::getenv ("ZLINK_TEST_CASE");
 #define RUN_SELECTED(name) \
     if (!selected || std::strcmp (selected, #name) == 0) RUN_TEST (name)
+    RUN_SELECTED (test_invalid_packet_reports_transport_disconnect_reason);
     RUN_SELECTED (test_buffered_poll);
     RUN_SELECTED (test_buffered_recv);
     RUN_SELECTED (test_buffered_poll_without_monitor);

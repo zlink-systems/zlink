@@ -139,9 +139,6 @@ public final class SocketOptions {
     public static final SocketOptionKey<Integer> XPUB_NODROP =
       SocketOptionKey.int32("XPUB_NODROP", SocketOption.XPUB_NODROP,
         true, true);
-    public static final SocketOptionKey<Integer> BLOCKY =
-      SocketOptionKey.int32("BLOCKY", SocketOption.BLOCKY,
-        true, true);
     public static final SocketOptionKey<Integer> XPUB_MANUAL =
       SocketOptionKey.int32("XPUB_MANUAL", SocketOption.XPUB_MANUAL,
         true, true);
@@ -240,7 +237,7 @@ public final class SocketOptions {
         SUBMIT_RETRY_MODE, SUBMIT_RETRY_TIMEOUT, SUBMIT_RETRY_ATTEMPTS,
         PENDING_MAX_MSGS, PENDING_MAX_BYTES, TOS,
         CONNECT_ROUTING_ID, CONNECT_ROUTING_ID_BYTES,
-        HANDSHAKE_IVL, XPUB_NODROP, BLOCKY, XPUB_MANUAL,
+        HANDSHAKE_IVL, XPUB_NODROP, XPUB_MANUAL,
         XPUB_WELCOME_MSG, XPUB_WELCOME_MSG_BYTES,
         STREAM_NOTIFY, STREAM_RECV_MODE, INVERT_MATCHING, XPUB_VERBOSER,
         CONNECT_TIMEOUT, TCP_MAXRT, MULTICAST_MAXTPDU, USE_FD,

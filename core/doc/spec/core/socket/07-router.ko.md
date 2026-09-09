@@ -387,19 +387,7 @@ routing ID part를 이미 수락한 record는 남은 part를 끝까지 보낸 �
 [Monitoring](../06-monitoring.ko.md)의 status snapshot은 현재 pause 상태인 peer 수와 함께
 socket 전체의 적용된 전이 수, stale 수, pause 길이를 제공한다.
 
-## 12. 내부 구조
-
-> **이 절의 계약 소유** — directed submit과 request submit의 공개 계약은
-> [§6](#6-directed-raw-send)과 [§7](#7-raw-request-submit)이 소유한다. 이 절은 binding이 그
-> 계약 위에서 multipart 시도를 어떻게 직렬화하는지 설명한다.
-
-Part 호출마다 public API scope가 따로이므로 binding은 첫 part부터 FINAL까지 한 번의
-`DONTWAIT` 시도 동안만 socket-local attempt gate를 유지한다. 실패하면 Core sequence
-rollback 뒤 gate를 즉시 해제하고, `BACKPRESSURED` readiness 대기 중에는 보유하지 않는다.
-Request submit도 raw send와 같은 짧은 socket-local attempt gate 아래에서 첫 request part부터
-FINAL까지 한 번 시도한다. 이 gate는 새 Core multipart API나 공개 FIFO 계약이 아니다.
-
-## 13. 구현 및 contract test 검증 요구
+## 12. 구현 및 contract test 검증 요구
 
 공개 표면(ROUTER send·request·receive·reply 함수, completion pull, ROUTER option set·get,
 반환값·errno, event·status snapshot)만으로 다음을 확인한다. 각 항목은

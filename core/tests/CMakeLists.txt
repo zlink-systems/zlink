@@ -95,6 +95,7 @@ set(tests
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_enhanced
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_connection_identity
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_socket_contract
+  ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_tls_auth
   ${INTEGRATION_TEST_ROOT}/monitoring/test_monitor_perf_contract
   ${INTEGRATION_TEST_ROOT}/monitoring/test_multi_stream_server_reassembly
   ${INTEGRATION_TEST_ROOT}/test_connect_resolve

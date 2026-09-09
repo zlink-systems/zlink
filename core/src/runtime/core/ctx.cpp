@@ -69,7 +69,6 @@ zlink::ctx_t::ctx_t () :
     _starting (true),
     _terminating (false),
     _max_sockets (ctx_t::clipped_maxsocket (ZLINK_MAX_SOCKETS_DFLT)),
-    _max_msgsz (INT_MAX),
     _io_thread_count (ZLINK_IO_THREADS_DFLT),
     _auto_hwm_recalc_stopped (false),
     _blocky (true),

@@ -81,32 +81,27 @@ sequenceDiagram
 
 ## 4. 옵션
 
-`int` 옵션은 `zlink_ctx_set`과 `zlink_ctx_get`으로 설정하고 조회한다. Auto HWM byte 옵션은
-`zlink_ctx_set_data`와 `zlink_ctx_get_data`를 사용한다.
+각 option의 값, 타입, 접근 API, 초기값과 적용 시점은 다음과 같다. 표의 set/get은
+`zlink_ctx_set`/`zlink_ctx_get`, set_data/get_data는 같은 이름의 data API를 뜻한다.
 
-```c
-typedef enum zlink_ctx_option_t
-{
-    ZLINK_IO_THREADS              = 1,  // Context의 I/O thread 수
-    ZLINK_MAX_SOCKETS             = 2,  // 허용되는 최대 socket 수
-    ZLINK_SOCKET_LIMIT            = 3,  // socket 수 하드 상한 (읽기 전용)
-    ZLINK_THREAD_PRIORITY         = 3,  // I/O thread 스케줄링 우선순위
-    ZLINK_THREAD_SCHED_POLICY     = 4,  // I/O thread 스케줄링 정책
-    ZLINK_MAX_MSGSZ               = 5,  // 최대 message 크기 (byte, >= 0, 기본 INT_MAX)
-    ZLINK_MSG_T_SIZE              = 6,  // zlink_msg_t 크기 (byte, 읽기 전용)
-    ZLINK_THREAD_AFFINITY_CPU_ADD      = 7,  // I/O thread 어피니티에 CPU 추가
-    ZLINK_THREAD_AFFINITY_CPU_REMOVE   = 8,  // I/O thread 어피니티에서 CPU 제거
-    ZLINK_THREAD_NAME_PREFIX      = 9,  // I/O thread 이름 접두사
-    ZLINK_CTX_OPT_BLOCKY          = 10,  // 0이면 이후 생성 socket의 기본 LINGER=0 (int, 기본 1, §3 참조)
-    ZLINK_CTX_OPT_AUTO_HWM_ENABLE = 12,  // 자동 HWM 사용 여부 (0=비활성, 1=활성)
-    ZLINK_CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS = 14,  // 자동 HWM 재계산 debounce (ms, >= 0)
-    ZLINK_CTX_OPT_AUTO_HWM_PROFILE = 17,  // 자동 HWM profile. 알 수 없는 값은 EINVAL
-    /* 값 18은 할당하지 않는다. */
-    ZLINK_CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES = 19,  // 명시적 memory limit (uint64_t byte, set/get_data). 0=미설정
-    ZLINK_CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES = 20,  // runtime memory hint (uint64_t byte, set/get_data). 0=감지 없음
-    ZLINK_CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES = 21  // profile 없이 그대로 쓰는 Core budget (uint64_t byte, set/get_data). 0=미설정
-} zlink_ctx_option_t;
-```
+| Option (`ZLINK_` 접두사) | 값·Type·접근 | 초기값 또는 read-only 값 | 적용 시점 |
+|---|---|---|---|
+| `IO_THREADS` | `1`; `int`, set/get | `4` | 설정값은 즉시 조회되며 runtime이 처음 시작될 때 pool 크기로 고정됨 |
+| `MAX_SOCKETS` | `2`; `int`, set/get | `4095`를 poller limit에 맞춰 줄인 값 | 설정값은 즉시 조회되며 runtime이 처음 시작될 때 slot capacity로 고정됨 |
+| `SOCKET_LIMIT` | `3`; `int`, get-only | `65535`를 poller limit에 맞춰 줄인 값 | 항상 현재 platform hard limit을 반환함 |
+| `THREAD_PRIORITY` | `22`; `int`, set/get | `-1` | 설정 뒤 시작하는 I/O thread에 적용됨 |
+| `THREAD_SCHED_POLICY` | `4`; `int`, set/get | `-1` | 설정 뒤 시작하는 I/O thread에 적용됨 |
+| `MSG_T_SIZE` | `6`; `int`, get-only | `sizeof(zlink_msg_t)`인 `64` | compile-time ABI 크기를 반환함 |
+| `THREAD_AFFINITY_CPU_ADD` | `7`; `int`, set-only | 빈 CPU 집합 | CPU를 즉시 집합에 추가하고 이후 시작하는 I/O thread에 적용함 |
+| `THREAD_AFFINITY_CPU_REMOVE` | `8`; `int`, set-only | 빈 CPU 집합 | CPU를 즉시 집합에서 제거하고 이후 시작하는 I/O thread에 적용함 |
+| `THREAD_NAME_PREFIX` | `9`; byte string, set_data/get_data | 길이 `0` | 설정 뒤 시작하는 I/O thread의 이름에 적용함 |
+| `CTX_OPT_BLOCKY` | `10`; `int`, set/get | `1` | 설정 뒤 만드는 socket의 기본 `LINGER`에 적용함 |
+| `CTX_OPT_AUTO_HWM_ENABLE` | `12`; `int`, set/get | `1` | 저장한 뒤 기존 socket을 포함한 재계산을 예약함 |
+| `CTX_OPT_AUTO_HWM_RECALC_DEBOUNCE_MS` | `14`; `int`, set/get | `3000` ms | 저장한 debounce로 재계산을 예약함 |
+| `CTX_OPT_AUTO_HWM_PROFILE` | `17`; `int`, set/get | `BALANCED` | 저장한 뒤 기존 socket을 포함한 재계산을 예약함 |
+| `CTX_OPT_AUTO_HWM_MEMORY_LIMIT_BYTES` | `19`; `uint64_t`, set_data/get_data | `0` | 저장한 뒤 기존 socket을 포함한 재계산을 예약함 |
+| `CTX_OPT_AUTO_HWM_RUNTIME_MEMORY_LIMIT_BYTES` | `20`; `uint64_t`, set_data/get_data | `0` | 저장한 뒤 기존 socket을 포함한 재계산을 예약함 |
+| `CTX_OPT_AUTO_HWM_CORE_BUDGET_BYTES` | `21`; `uint64_t`, set_data/get_data | `0` | 저장한 뒤 기존 socket을 포함한 재계산을 예약함 |
 
 ```c
 typedef enum zlink_auto_hwm_profile_t
@@ -120,11 +115,6 @@ typedef enum zlink_auto_hwm_profile_t
 
 각 profile의 정확한 memory 비율, 고정 cap과 역할별 하한·상한은
 [Auto HWM §2](systems/06-auto-hwm.ko.md#2-auto-hwm-budget-계산)가 소유한다.
-
-> **참고:** `ZLINK_SOCKET_LIMIT`과 `ZLINK_THREAD_PRIORITY`는 enum 값 `3`을
-> 공유한다. 현재 공개 C ABI의 옵션 조회는 값 `3`을 읽기 전용
-> `ZLINK_SOCKET_LIMIT`으로 먼저 해석하므로, `ZLINK_THREAD_PRIORITY`는
-> `zlink_ctx_set` / `zlink_ctx_get`으로 설정하거나 조회할 수 없다.
 
 Auto HWM byte 옵션 세 개(`MEMORY_LIMIT_BYTES`, `RUNTIME_MEMORY_LIMIT_BYTES`,
 `CORE_BUDGET_BYTES`)가 어떤 budget을 계산하고 어떻게 admission에 쓰이는지는
@@ -373,7 +363,7 @@ unit test 하나로 이어진다.
 
 **옵션**
 - `zlink_ctx_set`에 알 수 없는 옵션이나 유효하지 않은 값을 주면 `EINVAL`, 유효하지 않은 핸들이면 `EFAULT`(`ZLINK_CONFIG_INVALID_HANDLE`)다.
-- 값 `3`을 `zlink_ctx_get`으로 조회하면 읽기 전용 `ZLINK_SOCKET_LIMIT`으로 해석되며, `ZLINK_THREAD_PRIORITY`는 이 경로로 조회할 수 없다.
+- `ZLINK_THREAD_PRIORITY`는 고유 값 `22`로 설정·조회하고 `ZLINK_SOCKET_LIMIT` 값 `3`의 읽기 전용 계약에 영향을 주지 않는다.
 - 세 Auto HWM byte 옵션을 `zlink_ctx_set`으로 설정하려 하면 `EINVAL`이다(설정은 `zlink_ctx_set_data`만 허용).
 - Auto HWM byte 옵션을 `zlink_ctx_get_data`로 정확히 `sizeof(uint64_t)`가 아닌 크기로 조회하면 `EINVAL`이고 필요한 크기를 `*optvallen_`에 기록한다.
 - enum에 없는 context 옵션 값을 `zlink_ctx_set_data`로 쓰면 `ZLINK_CONFIG_INVALID_ARGUMENT`다.

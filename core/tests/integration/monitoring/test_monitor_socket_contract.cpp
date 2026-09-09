@@ -1504,11 +1504,38 @@ void test_stream_ready_with_monitor_recv_and_socket_recv ()
     run_stream_ready_matrix (monitor_recv_mode, socket_recv_mode);
 }
 
+void test_second_monitor_open_preserves_first_monitor ()
+{
+    void *socket = test_context_socket (ZLINK_SOCKET_PAIR);
+    zlink_socket_monitor_open_options_t options = {};
+    options.events = ZLINK_SOCKET_MONITOR_EVENT_LISTENING;
+    void *first = zlink_socket_monitor_open (socket, &options);
+    TEST_ASSERT_NOT_NULL (first);
+    void *second = zlink_socket_monitor_open (socket, &options);
+    TEST_ASSERT_NULL (second);
+    TEST_ASSERT_EQUAL_INT (EBUSY, errno);
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (socket, endpoint, sizeof (endpoint));
+    const int timeout = 1000;
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_set_option (
+      first, ZLINK_OPT_RCVTIMEO, &timeout, sizeof (timeout)));
+    zlink_socket_monitor_event_t event = {};
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_socket_monitor_recv (
+      first, &event, ZLINK_RECV_FLAGS_NONE));
+    TEST_ASSERT_EQUAL_UINT64 (ZLINK_SOCKET_MONITOR_EVENT_LISTENING, event.event);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&first));
+    second = zlink_socket_monitor_open (socket, &options);
+    TEST_ASSERT_NOT_NULL (second);
+    TEST_ASSERT_SUCCESS_ERRNO (zlink_monitor_close (&second));
+    test_context_socket_close (socket);
+}
+
 int main ()
 {
     setup_test_environment (120);
 
     UNITY_BEGIN ();
+    RUN_TEST (test_second_monitor_open_preserves_first_monitor);
     RUN_TEST (test_pair_ready_with_monitor_recv_and_socket_recv);
     RUN_TEST (test_dealer_router_ready_with_monitor_recv_and_socket_recv);
     RUN_TEST (test_inproc_dealer_router_ready_after_bind);

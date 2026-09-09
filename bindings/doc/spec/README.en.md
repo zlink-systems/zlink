@@ -672,6 +672,15 @@ regardless of this rule.
   `RecvPart`/`SubscribePart` family is a name for the performance
   optimization substrate, not a public contract name.
 
+### Multipart attempt serialization
+
+Because each part call has a separate public API scope, a binding holds a socket-local attempt gate
+only for one `DONTWAIT` attempt from the first part through FINAL. On failure, it releases the gate
+immediately after Core rolls back the sequence and does not hold it while waiting for
+`BACKPRESSURED` readiness. Request submit also makes one attempt from the first request part through
+FINAL under the same short socket-local attempt gate as raw send. This gate is neither a new Core
+multipart API nor a public FIFO contract.
+
 ## Spot Get-Or-Create Mapping
 
 Core provides `zlink_spot_node_spot_get_or_new(...)` for the atomic

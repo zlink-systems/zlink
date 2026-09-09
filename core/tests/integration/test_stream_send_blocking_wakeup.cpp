@@ -396,10 +396,50 @@ void test_stream_backpressure_wakes_pollout_and_retry_succeeds ()
 #endif
 }
 
+void test_stream_disconnect_terminates_wait_token ()
+{
+#if defined(ZLINK_HAVE_WINDOWS)
+    TEST_IGNORE_MESSAGE ("raw tcp helper unavailable on Windows");
+#else
+    void *stream = test_context_socket (ZLINK_SOCKET_STREAM);
+    configure_stream (stream);
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (stream, endpoint, sizeof (endpoint));
+    const int raw_fd = connect_raw_tcp (endpoint);
+    TEST_ASSERT_GREATER_OR_EQUAL_INT (0, raw_fd);
+    const zlink_routing_id_t rid = receive_connected_rid (stream);
+    const std::vector<unsigned char> payload (payload_size, 0x5a);
+    int context = 73;
+    zlink_completion_id_t token = 0;
+    TEST_ASSERT_GREATER_THAN (0, fill_until_backpressured (
+      stream, &rid, payload, &context, &token));
+    TEST_ASSERT_EQUAL_INT (0, close (raw_fd));
+    zlink_pollitem_t writable = {stream, 0, ZLINK_POLLOUT, 0};
+    zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
+    TEST_ASSERT_EQUAL_INT (1, zlink_poll (&writable, 1, send_timeout_ms, &error));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
+    zlink_completion_t completion = {};
+    completion.struct_size = sizeof (completion);
+    TEST_ASSERT_EQUAL_INT (ZLINK_RECV_OK, zlink_completion_recv (
+      stream, &completion, ZLINK_RECV_FLAGS_DONTWAIT));
+    TEST_ASSERT_EQUAL_INT (ZLINK_COMPLETION_WRITABLE, completion.kind);
+    TEST_ASSERT_EQUAL_UINT64 (token, completion.completion_id);
+    TEST_ASSERT_EQUAL_PTR (&context, completion.user_context);
+    TEST_ASSERT_EQUAL_UINT (rid.size, completion.peer_rid.size);
+    TEST_ASSERT_EQUAL_MEMORY (rid.data, completion.peer_rid.data, rid.size);
+    TEST_ASSERT_EQUAL_INT (ZLINK_SEND_TERMINAL, completion.send_result);
+    TEST_ASSERT_EQUAL_INT (ENOTCONN, completion.send_terminal_errno);
+    zlink_completion_close (&completion);
+    assert_no_completion (stream);
+    test_context_socket_close_zero_linger (stream);
+#endif
+}
+
 int main ()
 {
     setup_test_environment ();
     UNITY_BEGIN ();
+    RUN_TEST (test_stream_disconnect_terminates_wait_token);
     RUN_TEST (test_stream_blocking_send_wakes_after_peer_reads);
     RUN_TEST (test_stream_backpressure_wakes_pollout_and_retry_succeeds);
     return UNITY_END ();
