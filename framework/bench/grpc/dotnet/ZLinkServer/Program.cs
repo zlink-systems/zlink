@@ -4,8 +4,8 @@ using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Handlers;
 
-var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5072";
-var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5073";
+var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5214";
+var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5215";
 
 var builder = WebApplication.CreateBuilder(args);
 ConfigureQuietLogging(builder);
@@ -23,13 +23,14 @@ builder.Services.AddZLinkFramework(framework =>
 });
 
 var app = builder.Build();
+var metrics = app.Services.GetRequiredService<BenchServerMetrics>();
 app.MapGet("/ready", () => Results.Ok("ready"));
-app.MapPost("/bench/reset", (BenchServerMetrics metrics) =>
+app.MapPost("/bench/reset", () =>
 {
     metrics.Reset();
     return Results.Ok();
 });
-app.MapGet("/bench/stats", (BenchServerMetrics metrics) => Results.Ok(metrics.Snapshot()));
+app.MapGet("/bench/stats", () => Results.Ok(metrics.Snapshot()));
 await app.RunAsync();
 
 static void ConfigureQuietLogging(WebApplicationBuilder builder)
@@ -49,13 +50,14 @@ static string? ArgValue(string[] args, string name)
     return null;
 }
 
-internal sealed class EchoHandler : IZLinkRequestHandler<BenchPayload, BenchPayload>
+internal sealed class EchoHandler(BenchServerMetrics metrics) : IZLinkRequestHandler<BenchPayload, BenchPayload>
 {
     public ValueTask<BenchPayload> HandleAsync(
         BenchPayload request,
         IZLinkMessageContext context,
         CancellationToken cancellationToken)
     {
+        metrics.RecordReceived(request);
         return ValueTask.FromResult(request);
     }
 }

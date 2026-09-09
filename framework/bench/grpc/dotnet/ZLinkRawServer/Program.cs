@@ -3,9 +3,9 @@ using Systems.Zlink;
 using System.Text;
 using WithGrpcBench.Shared;
 
-var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5075";
-var commandEndpoint = ArgValue(args, "--command-endpoint") ?? "tcp://127.0.0.1:5077";
-var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5076";
+var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5207";
+var commandEndpoint = ArgValue(args, "--command-endpoint") ?? "tcp://127.0.0.1:5208";
+var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5209";
 
 var builder = WebApplication.CreateBuilder(args);
 ConfigureQuietLogging(builder);
@@ -13,15 +13,16 @@ builder.WebHost.UseUrls(metricsUrl);
 builder.Services.AddSingleton<BenchServerMetrics>();
 
 var app = builder.Build();
+var metrics = app.Services.GetRequiredService<BenchServerMetrics>();
 app.MapGet("/ready", () => Results.Ok("ready"));
-app.MapPost("/bench/reset", (BenchServerMetrics metrics) =>
+app.MapPost("/bench/reset", () =>
 {
     metrics.Reset();
     return Results.Ok();
 });
-app.MapGet("/bench/stats", (BenchServerMetrics metrics) => Results.Ok(metrics.Snapshot()));
+app.MapGet("/bench/stats", () => Results.Ok(metrics.Snapshot()));
 
-using var context = Zlink.CreateContext();
+using var context = Systems.Zlink.Zlink.CreateContext();
 using var requestRouter = context.CreateRouterSocket();
 using var commandRouter = context.CreateRouterSocket();
 // FB-001 / bench spec 1.3: a ROUTER client addresses this server by routing id,
@@ -32,7 +33,6 @@ commandRouter.SetRoutingId(RoutingId.From(BenchRoutingIds.RawCommandServer));
 requestRouter.Bind(endpoint);
 commandRouter.Bind(commandEndpoint);
 
-var metrics = app.Services.GetRequiredService<BenchServerMetrics>();
 var requestReceiver = Task.Run(() => RunRequestRouter(requestRouter, metrics));
 var commandReceiver = Task.Run(() => RunCommandRouter(commandRouter, metrics));
 
@@ -59,6 +59,7 @@ static void RunRequestRouter(IRouterSocket router, BenchServerMetrics metrics)
             }
 
             var body = PayloadPart(received);
+            metrics.RecordReceived(DecodeRawPayload(body));
             if (received.ReplyToken is not null)
             {
                 ReplyMultipart(received, body);

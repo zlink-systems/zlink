@@ -12,6 +12,7 @@
         <PackageReference Include="Grpc.Net.Client"/>
         <PackageReference Include="Microsoft.Extensions.Hosting"/>
         <ProjectReference Include="..\Shared\WithGrpcBench.Shared.csproj"/>
+        <ProjectReference Include="..\..\..\..\languages\dotnet\perf\ZLink.Framework.Perf.ServerSupport\ZLink.Framework.Perf.ServerSupport.csproj"/>
         <PackageReference Include="Zlink"/>
         <ProjectReference Include="..\..\..\..\languages\dotnet\src\Zlink.Framework\Zlink.Framework.csproj"/>
         <ProjectReference Include="..\..\..\..\languages\dotnet\src\Zlink.Framework.AspNetCore\Zlink.Framework.AspNetCore.csproj"/>

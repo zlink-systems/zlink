@@ -23,21 +23,33 @@ public sealed class BenchServerMetrics
 
     public void Record(BenchPayload payload)
     {
-        Record(payload.Body.Span);
+        Record(payload.Body.Span, includeLatency: true);
     }
 
     public void Record(ReadOnlySpan<byte> payload)
+    {
+        Record(payload, includeLatency: true);
+    }
+
+    public void RecordReceived(BenchPayload payload)
+    {
+        Record(payload.Body.Span, includeLatency: false);
+    }
+
+    private void Record(ReadOnlySpan<byte> payload, bool includeLatency)
     {
         if (!BenchMetricHeaders.TryDecode(payload, out var header) || header.Phase != BenchPhase.Active)
         {
             return;
         }
 
-        var latency = Math.Max(0, BenchMetricHeaders.NowNs() - header.SentTimestampNs);
+        var latency = includeLatency
+            ? Math.Max(0, BenchMetricHeaders.NowNs() - header.SentTimestampNs)
+            : 0;
         lock (_gate)
         {
             _activeMessages++;
-            _latencyNs.Add(latency);
+            if (includeLatency) _latencyNs.Add(latency);
         }
     }
 
@@ -90,5 +102,12 @@ public sealed record BenchServerSnapshot(
     double CpuSeconds,
     double WorkingSetMb)
 {
+    public bool Ready => true;
+    public string Phase => "idle";
+    public long Submitted => 0;
+    public long Completed => ActiveMessages;
+    public long Received => ActiveMessages;
+    public long CurrentInFlight => 0;
+    public long PeakInFlight => 0;
     public static BenchServerSnapshot Empty { get; } = new(0, 0, 0, 0, 0, 0, 0, 0);
 }

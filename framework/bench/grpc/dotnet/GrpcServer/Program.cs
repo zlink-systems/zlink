@@ -1,10 +1,11 @@
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using System.Net;
 using WithGrpcBench.Shared;
 
-var url = ArgValue(args, "--url") ?? "http://127.0.0.1:5071";
-var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5074";
+var url = ArgValue(args, "--url") ?? "http://127.0.0.1:5202";
+var metricsUrl = ArgValue(args, "--metrics-url") ?? "http://127.0.0.1:5203";
 var listen = new Uri(url);
 var metrics = new BenchServerMetrics();
 
@@ -12,7 +13,7 @@ var builder = WebApplication.CreateBuilder(args);
 ConfigureQuietLogging(builder);
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenAnyIP(listen.Port, endpoint =>
+    options.Listen(IPAddress.Loopback, listen.Port, endpoint =>
     {
         endpoint.Protocols = HttpProtocols.Http2;
     });
@@ -30,12 +31,12 @@ metricsBuilder.Services.AddSingleton(metrics);
 
 var metricsApp = metricsBuilder.Build();
 metricsApp.MapGet("/ready", () => Results.Ok("ready"));
-metricsApp.MapPost("/bench/reset", (BenchServerMetrics metrics) =>
+metricsApp.MapPost("/bench/reset", () =>
 {
     metrics.Reset();
     return Results.Ok();
 });
-metricsApp.MapGet("/bench/stats", (BenchServerMetrics metrics) => Results.Ok(metrics.Snapshot()));
+metricsApp.MapGet("/bench/stats", () => Results.Ok(metrics.Snapshot()));
 
 await Task.WhenAll(app.RunAsync(), metricsApp.RunAsync());
 
@@ -60,6 +61,7 @@ internal sealed class BenchGrpcService(BenchServerMetrics metrics) : BenchServic
 {
     public override Task<BenchPayload> Echo(BenchPayload request, ServerCallContext context)
     {
+        metrics.RecordReceived(request);
         return Task.FromResult(request);
     }
 
