@@ -52,7 +52,7 @@ internal static class ActorNodeHostFactory
             // This E2E host is not started inside a memory-limited container.
             // Supply a deterministic finite limit so the default Auto HWM
             // contract does not depend on the developer or CI host.
-            framework.ConfigureCoreHwm().CoreHwmMemoryLimitBytes =
+            framework.ConfigureInboundDispatch().CoreHwmMemoryLimitBytes =
                 1UL * 1024 * 1024 * 1024;
             // Normal diagnostics emits the received/replied Activity pairs used
             // by the relocation workload's public correlation assertion.

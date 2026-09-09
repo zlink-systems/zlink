@@ -21,7 +21,8 @@ find_package(Threads REQUIRED)
 option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS "Build isolated C++ service foundation tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES "Build C++ framework samples" ON)
-option(ZLINK_FRAMEWORK_CPP_BUILD_E2E "Build C++ framework scenario e2e apps" ON)
+option(ZLINK_FRAMEWORK_CPP_BUILD_E2E "Build C++ framework scenario e2e apps (opt-in; the e2e run scripts enable it)" OFF)
+option(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE "Build the C++ cross-language e2e host" ON)
 option(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK "Install C++ framework and HTTP client package artifacts" ON)
 option(ZLINK_STREAM_CONNECTOR_BUILD_E2E_CLIENT "Build Stream Connector e2e client helpers" ON)
 option(ZLINK_STREAM_CONNECTOR_BUILD_UNREAL "Build Unreal Stream Connector source adapter" ON)
@@ -2355,19 +2356,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
   target_include_directories(zlink_cpp_e2e_channel_egress_client PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
 
-  # Cross-language host (G6): the same role modes the peer languages' test
-  # hosts expose, so every producer/consumer direction runs against the other
-  # language's real package.
-  add_executable(zlink_cpp_cross_language_host
-    cross-language/cross_language_host.cpp)
-  target_link_libraries(zlink_cpp_cross_language_host PRIVATE
-    zlink::framework
-    zlink::framework_locations_redis
-    zlink::stream_e2e_client)
-  target_include_directories(zlink_cpp_cross_language_host PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
-    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
-
   # These executables still exercise the removed SpotMesh/SpotNode host surface.
   # Keep them available as explicit migration targets, but do not make a normal
   # framework build compile the retired topology.
@@ -2395,6 +2383,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_E2E)
     zlink_cpp_e2e_runtime_monitoring_throwing_service
     PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
+endif()
+
+if(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE)
+  # Cross-language host (G6): the same role modes the peer languages' test
+  # hosts expose, so every producer/consumer direction runs against the other
+  # language's real package. It is part of the normal framework build; the
+  # per-language scenario e2e apps above are opt-in.
+  add_executable(zlink_cpp_cross_language_host
+    cross-language/cross_language_host.cpp)
+  target_link_libraries(zlink_cpp_cross_language_host PRIVATE
+    zlink::framework
+    zlink::framework_locations_redis
+    zlink::stream_e2e_client)
+  target_include_directories(zlink_cpp_cross_language_host PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/framework/runtime/protocol/generated/cpp)
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)

@@ -57,7 +57,7 @@ if [[ ! -f "$VCPKG_PREFIX/share/protobuf/protobuf-config.cmake" ]]; then
   echo "C++ framework dependency prefix is missing: $VCPKG_PREFIX" >&2
   exit 1
 fi
-cmake -S "$CPP_DIR" -B "$BUILD_DIR" \
+cmake -S "$CPP_DIR" -B "$BUILD_DIR" -DZLINK_FRAMEWORK_CPP_BUILD_E2E=ON \
   -Dprotobuf_DIR="$VCPKG_PREFIX/share/protobuf" \
   -Dabsl_DIR="$VCPKG_PREFIX/share/absl" \
   -Dutf8_range_DIR="$VCPKG_PREFIX/share/utf8_range" \

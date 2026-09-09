@@ -45,7 +45,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cmake -S "$CPP_DIR" -B "$BUILD_DIR" >/dev/null
+cmake -S "$CPP_DIR" -B "$BUILD_DIR" -DZLINK_FRAMEWORK_CPP_BUILD_E2E=ON >/dev/null
 cmake --build "$BUILD_DIR" --target \
   zlink_cpp_e2e_instance_spot_role \
   zlink_cpp_e2e_instance_spot_client >/dev/null

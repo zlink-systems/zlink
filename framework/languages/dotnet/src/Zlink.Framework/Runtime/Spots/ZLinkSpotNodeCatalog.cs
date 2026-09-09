@@ -765,7 +765,7 @@ internal sealed class ZLinkSpotNodeCatalog(
             if (_spots.TryGetValue(requestedSpotId, out var existing))
             {
                 ThrowIfSpotTypeMismatch(existing.Spot.GetType(), spotType, requestedSpotId);
-                return (new ZLinkSpotCreateResult(
+                return ((ZLinkSpotCreateResult?)new ZLinkSpotCreateResult(
                     Reference(existing),
                     ZLinkSpotCreateState.Existing,
                     null), (PendingSpotCreation?)null, false);
@@ -781,9 +781,9 @@ internal sealed class ZLinkSpotNodeCatalog(
                 BeginCreationLocked();
                 pending = new PendingSpotCreation(spotType);
                 _pending.Add(requestedSpotId, pending);
-                return ((ZLinkSpotCreateResult?)null, pending, true);
+                return ((ZLinkSpotCreateResult?)null, (PendingSpotCreation?)pending, true);
             }
-            return ((ZLinkSpotCreateResult?)null, pending, false);
+            return ((ZLinkSpotCreateResult?)null, (PendingSpotCreation?)pending, false);
         }).ConfigureAwait(false);
         if (start.Item1 is { } existingResult) return existingResult;
         pending = start.Item2!;

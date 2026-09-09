@@ -96,7 +96,7 @@ CONFIG_DIR="$LOG_DIR/config"
 mkdir -p "$CONFIG_DIR"
 echo "log_dir=$LOG_DIR"
 
-cmake -S "$CPP_DIR" -B "$BUILD_DIR" >/dev/null
+cmake -S "$CPP_DIR" -B "$BUILD_DIR" -DZLINK_FRAMEWORK_CPP_BUILD_E2E=ON >/dev/null
 cmake --build "$BUILD_DIR" --target \
   zlink_cpp_e2e_store_failure_provider \
   zlink_cpp_e2e_store_failure_consumer \

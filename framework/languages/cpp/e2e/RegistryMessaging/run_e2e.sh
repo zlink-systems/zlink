@@ -134,7 +134,7 @@ REDIS_TCP_PORT="${REDIS_ENDPOINT##*:}"
 wait_tcp "$REDIS_HOST" "$REDIS_TCP_PORT" redis
 echo "redis key prefix=$REDIS_KEY_PREFIX"
 
-cmake -S "$CPP_DIR" -B "$BUILD_DIR" >/dev/null
+cmake -S "$CPP_DIR" -B "$BUILD_DIR" -DZLINK_FRAMEWORK_CPP_BUILD_E2E=ON >/dev/null
 if [[ "$SCENARIO" == "RM-A3" || "$SCENARIO" == "rm-a3" ]]; then
   cmake --build "$BUILD_DIR" --target \
     zlink_cpp_e2e_registry_messaging_object_client >/dev/null

@@ -53,7 +53,7 @@ mkdir -p "$LOG_DIR"
 echo "log_dir=$LOG_DIR"
 echo "start_order=$E2E_START_ORDER"
 
-cmake -S "$SCRIPT_DIR/../.." -B "$BUILD_DIR" >/dev/null
+cmake -S "$SCRIPT_DIR/../.." -B "$BUILD_DIR" -DZLINK_FRAMEWORK_CPP_BUILD_E2E=ON >/dev/null
 cmake --build "$BUILD_DIR" --target \
   zlink_cpp_e2e_to_actor_messaging_actor \
   zlink_cpp_e2e_to_actor_messaging_caller \

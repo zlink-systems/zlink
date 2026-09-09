@@ -45,7 +45,7 @@ read -r CHANNEL CHANNEL_FILTERED CHANNEL_THROW SPOT_ROUTER_SERVICE \
     tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp tcp \
     http http http http http)"
 
-cmake -S "$FRAMEWORK_DIR" -B "$BUILD_DIR" >/dev/null
+cmake -S "$FRAMEWORK_DIR" -B "$BUILD_DIR" -DZLINK_FRAMEWORK_CPP_BUILD_E2E=ON >/dev/null
 cmake --build "$BUILD_DIR" --target \
   zlink_cpp_e2e_runtime_monitoring_service \
   zlink_cpp_e2e_runtime_monitoring_filtered_service \

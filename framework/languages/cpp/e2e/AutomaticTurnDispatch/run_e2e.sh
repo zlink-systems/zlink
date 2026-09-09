@@ -76,7 +76,7 @@ allocate_role_endpoints() {
 
 # 샘플 러너와 build 디렉터리를 공유한다. 여기서 BUILD_SAMPLES를 끄면 그 cache가 남아
 # ctest에서 sample smoke 테스트가 통째로 사라진다(게이트가 실행 순서에 의존하게 된다).
-cmake -S "$FRAMEWORK_DIR" -B "$BUILD_DIR" >/dev/null
+cmake -S "$FRAMEWORK_DIR" -B "$BUILD_DIR" -DZLINK_FRAMEWORK_CPP_BUILD_E2E=ON >/dev/null
 cmake --build "$BUILD_DIR" --target \
   zlink_cpp_e2e_automatic_turn_dispatch_delay \
   zlink_cpp_e2e_automatic_turn_dispatch_external_api \

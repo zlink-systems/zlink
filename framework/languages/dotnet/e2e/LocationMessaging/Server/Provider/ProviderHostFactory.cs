@@ -58,7 +58,7 @@ internal static class ProviderHostFactory
             //  This E2E host is not started inside a memory-limited
             //  container. Supply a deterministic finite limit so the
             //  default Auto HWM contract does not depend on the host.
-            var coreHwm = framework.ConfigureCoreHwm();
+            var coreHwm = framework.ConfigureInboundDispatch();
             coreHwm.CoreHwmMemoryLimitBytes = 1UL * 1024 * 1024 * 1024;
             if (options.CoreHwmBudgetBytes > 0)
                 coreHwm.CoreHwmBudgetBytes = options.CoreHwmBudgetBytes;
