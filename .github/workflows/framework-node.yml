@@ -284,6 +284,8 @@ jobs:
           echo "ZLINK_CORE_PACKAGE_PREFIX=${core_prefix}" >> "${GITHUB_ENV}"
           echo "ZLINK_LIBRARY_PATH=${core_prefix}/lib/libzlink.so.${core_version}" >> "${GITHUB_ENV}"
           echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
+          echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
+          echo "core_version=${core_version}" >> "${GITHUB_OUTPUT}"
 
       - name: Prepare the .NET local packages for the cross-language test host
         shell: bash
@@ -292,16 +294,17 @@ jobs:
           nuget_source="${package_root}/nuget"
           mkdir -p "${nuget_source}"
           binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
-          url="https://api.nuget.org/v3-flatcontainer/zlink/${binding_version}/zlink.${binding_version}.nupkg"
-          for attempt in $(seq 1 45); do
-            if curl -sSfL -o "${nuget_source}/Zlink.${binding_version}.nupkg" "${url}"; then
-              break
-            fi
-            echo "attempt ${attempt}: Zlink ${binding_version} not on nuget.org yet; waiting 60s"
-            sleep 60
-          done
+          core_version="${{ steps.core.outputs.core_version }}"
+          core_prefix="${{ steps.core.outputs.prefix }}"
+          dotnet pack bindings/dotnet/src/Zlink/Zlink.csproj \
+            -c Release \
+            -o "${nuget_source}" \
+            "-p:ZLinkCoreVersion=${core_version}" \
+            "-p:ZLinkCoreSource=local" \
+            "-p:ZLinkLinuxX64NativeRoot=${core_prefix}/lib" \
+            "-p:ZLinkCoreProvenancePath=${core_prefix}/share/zlink/core-package-provenance.json"
           test -s "${nuget_source}/Zlink.${binding_version}.nupkg" \
-            || { echo "::error::Zlink ${binding_version} is not available on nuget.org after 45 minutes" >&2; exit 1; }
+            || { echo "::error::Local Zlink ${binding_version} package was not created" >&2; exit 1; }
           dotnet pack framework/languages/dotnet/src/Zlink.HttpClient/Zlink.HttpClient.csproj -c Release -o "${nuget_source}"
           echo "ZLINK_LOCAL_PACKAGE_ROOT=${package_root}" >> "${GITHUB_ENV}"
           echo "ZLinkLocalPackageRoot=${package_root}" >> "${GITHUB_ENV}"

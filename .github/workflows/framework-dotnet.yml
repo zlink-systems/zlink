@@ -133,6 +133,9 @@ jobs:
             --version "${core_version}" \
             --platform "${package_core_platform}" \
             --cache-dir .artifacts/core-release)
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            package_core_prefix=$(cygpath -w "${package_core_prefix}")
+          fi
           pack_args=(
             pack bindings/dotnet/src/Zlink/Zlink.csproj
             -c Release
