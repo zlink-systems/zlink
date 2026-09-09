@@ -45,14 +45,18 @@ void request_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metri
         }
         try {
             auto &parts = received.parts ();
-            if (parts.empty ())
+            if (parts.size () != 2) {
+                metrics.record_error ();
                 continue;
+            }
             zlink::message_t &body = parts.back ();
             const unsigned char *payload = nullptr;
             size_t payload_size = 0;
             if (zlink_cpp_bench::decode_bench_payload_body (
                   static_cast<const void *> (body.data ()), body.size (), &payload, &payload_size))
                 metrics.record (payload, payload_size);
+            else
+                metrics.record_error ();
 
             const char *envelope = zlink_cpp_bench::response_envelope ();
             zlink::message_t header = zlink::message_t::from (std::as_bytes (
@@ -84,14 +88,18 @@ void command_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metri
         }
         try {
             auto &parts = received.parts ();
-            if (parts.empty ())
+            if (parts.size () != 2) {
+                metrics.record_error ();
                 continue;
+            }
             zlink::message_t &body = parts.back ();
             const unsigned char *payload = nullptr;
             size_t payload_size = 0;
             if (zlink_cpp_bench::decode_bench_payload_body (
                   static_cast<const void *> (body.data ()), body.size (), &payload, &payload_size))
                 metrics.record (payload, payload_size);
+            else
+                metrics.record_error ();
         }
         catch (const std::exception &error) {
             std::fprintf (stderr, "zlink-cpp command loop: %s\n", error.what ());
@@ -104,14 +112,12 @@ void command_loop (zlink::router_socket_t &router, zlink_cpp_bench::server_metri
 int main (int argc, char **argv)
 {
     using namespace zlink_cpp_bench;
-    std::signal (SIGINT, on_signal);
-    std::signal (SIGTERM, on_signal);
 
     const std::string request_endpoint =
-      arg_value (argc, argv, "--endpoint", "tcp://127.0.0.1:5115");
+      arg_value (argc, argv, "--endpoint", "tcp://127.0.0.1:5287");
     const std::string command_endpoint =
-      arg_value (argc, argv, "--command-endpoint", "tcp://127.0.0.1:5117");
-    const int stats_port = std::atoi (arg_value (argc, argv, "--stats-port", "5116").c_str ());
+      arg_value (argc, argv, "--command-endpoint", "tcp://127.0.0.1:5288");
+    const int stats_port = std::atoi (arg_value (argc, argv, "--stats-port", "5289").c_str ());
     const std::string request_rid =
       arg_value (argc, argv, "--request-routing-id", "zlink-cpp-bench-request-server");
     const std::string command_rid =
@@ -124,6 +130,8 @@ int main (int argc, char **argv)
         return 2;
     }
 
+    std::signal (SIGINT, on_signal);
+    std::signal (SIGTERM, on_signal);
     try {
         zlink::context_t ctx;
         zlink::router_socket_t request_router (ctx);
@@ -140,6 +148,7 @@ int main (int argc, char **argv)
         std::thread command_thread ([&] { command_loop (command_router, metrics); });
         while (!g_stop.load ())
             std::this_thread::sleep_for (std::chrono::milliseconds (100));
+        ctx.shutdown ();
         request_thread.join ();
         command_thread.join ();
     }
