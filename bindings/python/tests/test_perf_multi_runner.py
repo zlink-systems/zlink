@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import unittest
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -24,6 +25,7 @@ from perf_multi_common import (
     PYTHON_MULTI_DEFAULT_IO_THREADS,
     RELAY_SCHEDULER_QUANTUM,
     RelaySchedulerQuantum,
+    RoutedReplySender,
     STOP_TOKEN,
     benchmark_endpoint,
     make_relay_send_done_callback,
@@ -62,6 +64,71 @@ import zlink
 
 
 class PerfMultiRunnerTests(unittest.TestCase):
+    def test_routed_reply_sender_closes_forwarded_received_envelope(self):
+        async def scenario():
+            with zlink.create_context() as context:
+                with zlink.create_router_socket(context) as router:
+                    with zlink.create_dealer_socket(context) as dealer:
+                        endpoint = "inproc://python-perf-relay-" + uuid.uuid4().hex
+                        router.bind(endpoint)
+                        dealer.connect(endpoint)
+                        await dealer.send().messages(b"payload", b"").submit()
+
+                        received = zlink.create_received()
+                        self.assertTrue(router.recv_into(received))
+                        sender = RoutedReplySender()
+                        sender.enqueue(received)
+                        await sender.drain()
+
+                        self.assertEqual(received.parts, ())
+                        self.assertIs(sender.acquire_storage(), received)
+                        received.close()
+                        with zlink.create_received() as echoed:
+                            self.assertTrue(dealer.recv_into(echoed))
+                            self.assertEqual(echoed.to_bytes_list(), [b"payload", b""])
+
+        asyncio.run(scenario())
+
+    def test_routed_reply_sender_submits_received_parts_directly(self):
+        first = object()
+        second = object()
+
+        class SendOperation:
+            def __init__(self, owner):
+                self.owner = owner
+                self.parts = ()
+
+            def messages(self, *parts):
+                self.parts = parts
+                return self
+
+            async def submit(self):
+                self.owner.submitted = self.parts
+
+        class Received:
+            def __init__(self):
+                self.parts = (first, second)
+                self.submitted = None
+                self.close_count = 0
+
+            def send(self):
+                return SendOperation(self)
+
+            def close(self):
+                self.close_count += 1
+
+        received = Received()
+
+        async def scenario():
+            sender = RoutedReplySender()
+            sender.enqueue(received)
+            await sender.drain()
+
+        asyncio.run(scenario())
+        self.assertIs(received.submitted[0], first)
+        self.assertIs(received.submitted[1], second)
+        self.assertEqual(received.close_count, 1)
+
     def test_runner_does_not_treat_partial_results_from_failed_case_as_success(self):
         partial = (
             "RESULT,current,MULTI_PUBSUB,tcp,1024,throughput,1.000\n"
