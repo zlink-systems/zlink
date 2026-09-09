@@ -6,9 +6,6 @@ plugins {
 
 description = "ZLink Framework Kotlin coroutine and DSL extensions"
 
-kotlin {
-    jvmToolchain(22)
-}
 
 dependencies {
     api(project(":zlink-framework-core"))

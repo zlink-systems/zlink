@@ -6,7 +6,3 @@ plugins {
 dependencies {
     implementation("systems.zlink:zlink-framework-core:0.10.0")
 }
-
-kotlin {
-    jvmToolchain(22)
-}

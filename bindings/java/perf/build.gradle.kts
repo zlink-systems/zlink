@@ -12,7 +12,7 @@ repositories {
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(22)
+        languageVersion = JavaLanguageVersion.of(libs.versions.java.get().toInt())
     }
 }
 
@@ -25,8 +25,8 @@ sourceSets {
 }
 
 dependencies {
-    compileOnly("io.netty:netty-buffer:4.1.100.Final")
-    runtimeOnly("io.netty:netty-buffer:4.1.100.Final")
+    compileOnly(libs.netty.buffer)
+    runtimeOnly(libs.netty.buffer)
 }
 
 tasks.named<ProcessResources>("processResources") {

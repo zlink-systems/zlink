@@ -16,9 +16,6 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter:3.5.14")
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 application {
     applicationName = "registry-messaging-kotlin-provider"

@@ -23,9 +23,6 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 application {
     mainClass.set("systems.zlink.samples.kotlin.zoneworld.server.ProgramKt")

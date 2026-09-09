@@ -1,5 +1,5 @@
 plugins {
-    id 'org.jetbrains.kotlin.jvm' version '2.1.0'
+    alias(libs.plugins.kotlin.jvm)
 }
 
 repositories {
@@ -7,12 +7,12 @@ repositories {
 }
 
 kotlin {
-    jvmToolchain(22)
+    jvmToolchain(libs.versions.java.get().toInteger())
 }
 
 dependencies {
     implementation project(':')
-    testImplementation 'org.jetbrains.kotlin:kotlin-test-junit5:2.1.0'
+    testImplementation libs.kotlin.test.junit5
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.9.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
@@ -20,4 +20,5 @@ dependencies {
 
 test {
     useJUnitPlatform()
+    jvmArgs '--enable-native-access=ALL-UNNAMED', '--illegal-native-access=deny'
 }

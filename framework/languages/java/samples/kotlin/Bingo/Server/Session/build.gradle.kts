@@ -33,9 +33,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.9.0")
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 application {
     mainClass.set("systems.zlink.samples.kotlin.bingo.server.session.ProgramKt")

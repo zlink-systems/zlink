@@ -87,10 +87,13 @@ val verifyPublicContractModuleBoundary by tasks.registering {
     val testkitJar = project(":zlink-framework-testkit")
         .tasks.named<Jar>("jar")
     dependsOn(tasks.jar, starterJar, testkitJar)
+    val javaToolchains = project.extensions.getByType<JavaToolchainService>()
+    val configuredToolchain = project.extensions.getByType<JavaPluginExtension>().toolchain
+    val compiler = javaToolchains.compilerFor(configuredToolchain)
+    val launcher = javaToolchains.launcherFor(configuredToolchain)
 
     doLast {
-        val compiler = javax.tools.ToolProvider.getSystemJavaCompiler()
-            ?: error("A JDK compiler is required")
+        val javacExecutable = compiler.get().executablePath.asFile.absolutePath
         val companionProjects = listOf(
             project(":zlink-framework-spring-boot-starter"),
             project(":zlink-framework-testkit"),
@@ -117,16 +120,14 @@ val verifyPublicContractModuleBoundary by tasks.registering {
                 .dir("module-boundary/$name").get().asFile
             output.deleteRecursively()
             output.mkdirs()
-            return compiler.run(
-                null,
-                null,
-                null,
+            return ProcessBuilder(
+                javacExecutable,
                 "--module-path",
                 modulePath,
                 "-d",
                 output.absolutePath,
                 *sources.toTypedArray(),
-            )
+            ).inheritIO().start().waitFor()
         }
 
         check(compileFixture("positive") == 0) {
@@ -159,16 +160,14 @@ val verifyPublicContractModuleBoundary by tasks.registering {
                     .filterNot { it.name.startsWith("zlink-framework-binding-internal") }
                     .map { it.absolutePath })
             }.distinct().joinToString(File.pathSeparator)
-            return compiler.run(
-                null,
-                null,
-                null,
+            return ProcessBuilder(
+                javacExecutable,
                 "-classpath",
                 publicClasspath,
                 "-d",
                 output.absolutePath,
                 *sources.toTypedArray(),
-            )
+            ).inheritIO().start().waitFor()
         }
 
         check(compileClasspathFixture("positive") == 0) {
@@ -192,10 +191,7 @@ val verifyPublicContractModuleBoundary by tasks.registering {
         }.filter { it.isFile && it.extension == "jar" }
             .distinctBy { it.absolutePath }
             .joinToString(File.pathSeparator) { it.absolutePath }
-        val javaExecutable = File(
-            System.getProperty("java.home"),
-            "bin/java",
-        ).absolutePath
+        val javaExecutable = launcher.get().executablePath.asFile.absolutePath
         val validation = ProcessBuilder(
             javaExecutable,
             "--validate-modules",
@@ -216,10 +212,8 @@ val verifyPublicContractModuleBoundary by tasks.registering {
             .dir("module-startup/spring").get().asFile
         smokeOutput.deleteRecursively()
         smokeOutput.mkdirs()
-        check(compiler.run(
-            null,
-            null,
-            null,
+        check(ProcessBuilder(
+            javacExecutable,
             "--module-path",
             companionModulePath,
             "--patch-module",
@@ -227,7 +221,7 @@ val verifyPublicContractModuleBoundary by tasks.registering {
             "-d",
             smokeOutput.absolutePath,
             *smokeSources.toTypedArray(),
-        ) == 0) {
+        ).inheritIO().start().waitFor() == 0) {
             "modular Spring bootstrap smoke must compile"
         }
         val smoke = ProcessBuilder(

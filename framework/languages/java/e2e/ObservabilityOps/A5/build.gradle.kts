@@ -12,9 +12,4 @@ subprojects {
     if (!rootE2eBuildDir.isNullOrBlank()) {
         layout.buildDirectory.set(file("${rootE2eBuildDir}/${project.name}"))
     }
-    plugins.withType<JavaPlugin> {
-        extensions.configure<JavaPluginExtension> {
-            toolchain.languageVersion.set(JavaLanguageVersion.of(22))
-        }
-    }
 }

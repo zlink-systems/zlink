@@ -15,5 +15,3 @@ application {
     applicationName = "channel-egress-kotlin-client"
     mainClass.set("systems.zlink.e2e.kotlin.channelegress.client.ClientApplicationKt")
 }
-
-kotlin.jvmToolchain(22)

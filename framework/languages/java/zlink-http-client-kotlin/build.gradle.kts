@@ -12,9 +12,6 @@ version = Regex("VERSION = \"([^\"]+)\"")
     .find(file("../zlink-http-client/src/main/java/systems/zlink/httpclient/internal/HttpClientVersion.java").readText())!!
     .groupValues[1]
 
-kotlin {
-    jvmToolchain(22)
-}
 
 dependencies {
     api(project(":zlink-http-client"))

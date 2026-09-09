@@ -743,7 +743,7 @@ resolve_netty_java()
 
     candidate="$(command -v java || true)"
     if [[ -z "${candidate}" ]]; then
-        log "java not found in PATH (need JDK 22+ for netty stack)"
+        log "java not found in PATH (need JDK 25+ for netty stack)"
         return 1
     fi
     candidate="$(readlink -f "${candidate}" || printf '%s' "${candidate}")"

@@ -10,11 +10,4 @@ subprojects {
         layout.buildDirectory.set(file("${rootE2eBuildDir}/${project.path.removePrefix(":").replace(":", "-")}"))
     }
 
-    plugins.withType<JavaPlugin> {
-        extensions.configure<JavaPluginExtension> {
-            toolchain {
-                languageVersion.set(JavaLanguageVersion.of(22))
-            }
-        }
-    }
 }

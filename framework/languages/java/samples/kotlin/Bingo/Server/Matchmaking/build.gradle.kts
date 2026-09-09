@@ -25,7 +25,6 @@ dependencies {
     implementation(kotlin("reflect"))
 }
 
-kotlin { jvmToolchain(22) }
 
 application {
     mainClass.set("systems.zlink.samples.kotlin.bingo.server.matchmaking.ProgramKt")

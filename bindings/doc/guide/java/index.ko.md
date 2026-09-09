@@ -38,7 +38,7 @@ dependencies {
 </dependency>
 ```
 
-- **Java 22** 이상.
+- **Java 25** 이상. 라이브러리가 FFM(Foreign Function & Memory API)으로 Core를 호출하므로 실행 시 `--enable-native-access=ALL-UNNAMED`(classpath) 또는 `--enable-native-access=systems.zlink`(module path)를 준다.
 - 네이티브 별도 설치 불필요 — RID별 공유 라이브러리를 자동 로드합니다.
 
 ```java

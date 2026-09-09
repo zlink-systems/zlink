@@ -2,9 +2,6 @@ plugins {
     id("org.jetbrains.kotlin.jvm")
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 dependencies {
     api("com.fasterxml.jackson.core:jackson-databind:2.17.2")

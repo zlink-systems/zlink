@@ -1,5 +1,5 @@
 plugins {
-    id 'org.jetbrains.kotlin.jvm' version '2.1.0'
+    alias(libs.plugins.kotlin.jvm)
     id 'application'
 }
 
@@ -10,7 +10,7 @@ repositories {
 }
 
 kotlin {
-    jvmToolchain(22)
+    jvmToolchain(libs.versions.java.get().toInteger())
 }
 
 // Kotlin samples share the Java binding runtime (systems.zlink.*) and the
@@ -21,7 +21,7 @@ dependencies {
     implementation project(':samples')
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.9.0'
-    compileOnly 'io.netty:netty-buffer:4.1.100.Final'
+    compileOnly libs.netty.buffer
 }
 
 def sampleMainClasses = [

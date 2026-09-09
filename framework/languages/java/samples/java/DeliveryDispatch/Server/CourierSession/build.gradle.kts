@@ -25,11 +25,6 @@ dependencies {
     implementation("io.netty:netty-buffer:4.1.100.Final")
 }
 
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(22))
-    }
-}
 
 application {
     mainClass.set("systems.zlink.samples.deliverydispatch.server.couriersession.Program")

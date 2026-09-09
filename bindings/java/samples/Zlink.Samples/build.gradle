@@ -10,13 +10,13 @@ repositories {
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(22)
+        languageVersion = JavaLanguageVersion.of(libs.versions.java.get().toInteger())
     }
 }
 
 dependencies {
     implementation project(':')
-    compileOnly 'io.netty:netty-buffer:4.1.100.Final'
+    compileOnly libs.netty.buffer
 }
 
 def sampleMainClasses = [

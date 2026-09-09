@@ -9,7 +9,7 @@ description = 'zlink Java Netty buffer extension'
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(22)
+        languageVersion = JavaLanguageVersion.of(libs.versions.java.get().toInteger())
     }
     withJavadocJar()
     withSourcesJar()
@@ -21,7 +21,7 @@ repositories {
 
 dependencies {
     api project(':')
-    api 'io.netty:netty-buffer:4.1.100.Final'
+    api libs.netty.buffer
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

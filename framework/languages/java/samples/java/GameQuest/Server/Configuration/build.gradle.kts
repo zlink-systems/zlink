@@ -16,9 +16,3 @@ dependencies {
     api("com.fasterxml.jackson.core:jackson-databind:2.17.2")
     api("org.springframework.boot:spring-boot:3.5.14")
 }
-
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(22))
-    }
-}

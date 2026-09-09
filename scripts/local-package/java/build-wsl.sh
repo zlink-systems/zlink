@@ -42,6 +42,15 @@ cat >"$summary" <<EOF
 }
 EOF
 
+# The binding targets JDK 25 (bindings/java/gradle/libs.versions.toml) and Gradle
+# toolchain auto-download stays off, so the JDK that runs Gradle must be 25+.
+java_bin="${JAVA_HOME:+$JAVA_HOME/bin/}java"
+java_major="$("$java_bin" -version 2>&1 | sed -n 's/.*version "\([0-9]*\).*/\1/p' | head -n1)"
+if [[ -z "$java_major" || "$java_major" -lt 25 ]]; then
+  echo "bindings/java needs JDK 25 or newer to run Gradle; found: $("$java_bin" -version 2>&1 | head -n1). Set JAVA_HOME to a JDK 25 install." >&2
+  exit 1
+fi
+
 (
   cd "$repo_root/bindings/java"
   ZLINK_CORE_PACKAGE_PREFIX="$core_prefix" \

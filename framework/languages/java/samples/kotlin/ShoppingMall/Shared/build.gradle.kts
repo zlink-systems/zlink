@@ -7,7 +7,3 @@ dependencies {
     api(zlinkLibs.zlink.framework.core)
     implementation(kotlin("stdlib"))
 }
-
-kotlin {
-    jvmToolchain(22)
-}

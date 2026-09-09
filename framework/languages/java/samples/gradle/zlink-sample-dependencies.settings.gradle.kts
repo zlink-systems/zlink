@@ -4,6 +4,10 @@ val frameworkRoot = generateSequence(settingsDir.parentFile) { it.parentFile }
             candidate.resolve("gradle/zlink-local-packages.settings.gradle.kts").isFile
     }
 
+val samplesRoot = generateSequence(settingsDir) { it.parentFile }
+    .first { it.resolve("gradle/zlink-sample-dependencies.settings.gradle.kts").isFile }
+apply(from = samplesRoot.resolve("gradle/zlink-jvm-baseline.settings.gradle.kts"))
+
 val packageMode = providers.gradleProperty("zlink.samples.packageMode")
     .map(String::toBoolean)
     .orElse(frameworkRoot == null)

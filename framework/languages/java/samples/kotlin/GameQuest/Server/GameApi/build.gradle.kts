@@ -26,9 +26,6 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter:3.5.14")
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 application {
     mainClass.set("systems.zlink.samples.kotlin.gamequest.server.gameapi.ProgramKt")

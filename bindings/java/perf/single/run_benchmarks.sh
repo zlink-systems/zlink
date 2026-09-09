@@ -50,7 +50,7 @@ else
 fi
 source "${REPO_DIR}/bindings/tools/local_core_runtime.sh"
 export ZLINK_CORE_INCLUDE_DIR ZLINK_CORE_LIB_DIR
-source "${ROOT_DIR}/require_java22.sh"
+source "${ROOT_DIR}/require_java25.sh"
 VERSION_FILE="${REPO_DIR}/VERSION"
 CORE_VERSION="$(awk -F= '/^LIBZLINK_VERSION=/{print $2}' "${VERSION_FILE}")"
 CORE_RUNTIME="${ZLINK_LOCAL_CORE_RUNTIME}"
@@ -313,7 +313,7 @@ ensure_single_runner() {
   fi
 }
 
-require_java22
+require_java25
 
 mkdir -p "${RESULTS_ROOT}/single/report"
 cd "${ROOT_DIR}"

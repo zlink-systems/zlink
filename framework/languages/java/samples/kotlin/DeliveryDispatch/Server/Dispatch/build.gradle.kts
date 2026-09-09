@@ -15,9 +15,6 @@ dependencies {
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.17.2")
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 application {
     mainClass.set("systems.zlink.samples.kotlin.deliverydispatch.server.dispatch.ProgramKt")

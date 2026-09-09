@@ -5789,7 +5789,7 @@ The perf policy is managed across every language in a shared way, in
 |---------|-----------|-------------------|---------|
 | C++ | C++20 | — | CMake 3.10+ |
 | .NET | C# 12 | .NET 8.0 | MSBuild |
-| Java | Java 22 | JDK 22 | Gradle 8.10.2 |
+| Java | Java 25 | JDK 25 | Gradle 9.3.0 |
 | Go | Go 1.22+ | — | Go modules |
 | Rust | Rust 2024 edition | MSRV 1.85+ | Cargo |
 | Node | TypeScript 5.8 | Node 22+ | npm |

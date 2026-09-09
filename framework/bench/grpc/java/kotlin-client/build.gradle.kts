@@ -11,13 +11,10 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
     application
-    id("org.jetbrains.kotlin.jvm") version "2.2.21"
+    id("org.jetbrains.kotlin.jvm")
     id("com.google.protobuf") version "0.9.4"
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 dependencies {
     implementation(project(":shared"))

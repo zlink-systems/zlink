@@ -6,7 +6,3 @@ dependencies {
     api("com.fasterxml.jackson.core:jackson-annotations:2.17.2")
     api(zlinkLibs.zlink.framework.core)
 }
-
-kotlin {
-    jvmToolchain(22)
-}

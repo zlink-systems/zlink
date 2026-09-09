@@ -33,9 +33,6 @@ dependencies {
     implementation(kotlin("stdlib"))
 }
 
-kotlin {
-    jvmToolchain(22)
-}
 
 application {
     mainClass.set("systems.zlink.samples.kotlin.bingo.server.api.ProgramKt")
