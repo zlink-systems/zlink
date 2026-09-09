@@ -63,6 +63,9 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     internal bool HasRecords => AwaitStateLane(
         _lane.RunAsync(() => _records.Count != 0));
 
+    internal bool IsReady => AwaitStateLane(
+        _lane.RunAsync(() => !_claimed && _records.Count != 0));
+
     internal int Count => AwaitStateLane(_lane.RunAsync(() => _records.Count));
 
     internal bool AllRecordsHaveApplicationAdmission => AwaitStateLane(

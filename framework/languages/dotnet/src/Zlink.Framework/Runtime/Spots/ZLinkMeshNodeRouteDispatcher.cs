@@ -195,31 +195,11 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         if (!TryDispatch(received)) received.Dispose();
     }
 
-    public void Dispatch(IReadOnlyList<ZLinkBackendRouteReceived> received)
-    {
-        if (received.Count == 0)
-            return;
-        var batch = received.ToArray();
-        if (_taskRunner.TryRunDetached(
-                "mesh-node-route-dispatch-batch",
-                ct => DispatchBatchAsync(batch, ct)))
-            return;
-
-        DisposeBatch(batch);
-    }
-
-    private static void DisposeBatch(
-        IReadOnlyList<ZLinkBackendRouteReceived> batch)
-    {
-        foreach (var record in batch)
-            record.Dispose();
-    }
-
-    private async ValueTask DispatchBatchAsync(
+    internal async ValueTask DispatchBatchAsync(
         IReadOnlyList<ZLinkBackendRouteReceived> batch,
         CancellationToken cancellationToken)
     {
-        var pending = new List<Task>(batch.Count);
+        List<Task>? pending = null;
         for (var index = 0; index < batch.Count; index++)
         {
             var received = batch[index];
@@ -242,56 +222,24 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 }
             }
 
-            if (header is not null
-                && TryGetOrderedActorRelayKey(received, header, out var actorId))
-            {
-                if (!TryDispatchOrderedActorRelay(actorId, received, header))
-                    received.Dispose();
-                continue;
-            }
-
-            pending.Add(DispatchAsync(received, header, cancellationToken).AsTask());
+            var invocation = header is not null
+                && TryGetOrderedActorRelayKey(received, header, out var actorId)
+                ? DispatchOrderedActorRelayAsync(actorId, received, header, cancellationToken)
+                : DispatchAsync(received, header, cancellationToken);
+            if (invocation.IsCompletedSuccessfully)
+                invocation.GetAwaiter().GetResult();
+            else
+                (pending ??= []).Add(invocation.AsTask());
         }
 
-        if (pending.Count != 0)
+        if (pending is not null)
             await Task.WhenAll(pending).ConfigureAwait(false);
     }
 
-    internal bool TryDispatch(ZLinkBackendRouteReceived received)
-    {
-        // Decode the header once here; every later stage (relay-key probe,
-        // infrastructure check, dispatch) reuses it instead of re-parsing the
-        // same bytes. A malformed header stays null so DispatchAsync can own
-        // the protocol-error reporting.
-        ZLinkEnvelopeHeader? header = null;
-        if (received.PartCount > 0)
-        {
-            try
-            {
-                header = received.ApplicationPayloadView is { } view
-                    ? ZLinkEnvelopeCodec.DecodeHeader(
-                        view,
-                        _dispatchErrors.Flow.CaptureEnabled)
-                    : ZLinkEnvelopeCodec.DecodeHeader(
-                        received.Parts,
-                        _dispatchErrors.Flow.CaptureEnabled);
-            }
-            catch
-            {
-                // Normal dispatch owns malformed-frame reporting.
-            }
-        }
-
-        if (header is not null
-            && TryGetOrderedActorRelayKey(received, header, out var actorId))
-        {
-            return TryDispatchOrderedActorRelay(actorId, received, header);
-        }
-
-        return _taskRunner.TryRunDetached(
+    internal bool TryDispatch(ZLinkBackendRouteReceived received) =>
+        _taskRunner.TryRunDetached(
             "mesh-node-route-dispatch",
-            ct => DispatchAsync(received, header, ct));
-    }
+            ct => DispatchBatchAsync([received], ct));
 
     private bool TryGetOrderedActorRelayKey(
         ZLinkBackendRouteReceived received,
@@ -338,10 +286,11 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         }
     }
 
-    private bool TryDispatchOrderedActorRelay(
+    private ValueTask DispatchOrderedActorRelayAsync(
         ZLinkActorId actorId,
         ZLinkBackendRouteReceived received,
-        ZLinkEnvelopeHeader header)
+        ZLinkEnvelopeHeader header,
+        CancellationToken cancellationToken)
     {
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -354,19 +303,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             return prior;
         }));
 
-        if (_taskRunner.TryRunDetached(
-                "mesh-node-actor-relay-dispatch",
-                ct => DispatchOrderedActorRelayAsync(
-                    actorId,
-                    received,
-                    header,
-                    prior,
-                    completion,
-                    ct)))
-            return true;
-
-        CompleteOrderedActorRelay(actorId, completion);
-        return false;
+        return DispatchOrderedActorRelayAsync(
+            actorId, received, header, prior, completion, cancellationToken);
     }
 
     private async ValueTask DispatchOrderedActorRelayAsync(

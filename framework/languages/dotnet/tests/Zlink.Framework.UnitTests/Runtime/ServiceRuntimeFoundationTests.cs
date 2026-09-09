@@ -2191,7 +2191,7 @@ public sealed class ServiceRuntimeFoundationTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var receivedCount = 0;
         var maximumBatch = 0;
-        pump.SetNodeRouteHandler(records =>
+        pump.SetNodeRouteHandler((records, _) =>
         {
             maximumBatch = Math.Max(maximumBatch, records.Count);
             receivedCount += records.Count;
@@ -2199,6 +2199,7 @@ public sealed class ServiceRuntimeFoundationTests
                 record.Dispose();
             if (receivedCount == capacity)
                 completed.TrySetResult();
+            return ValueTask.CompletedTask;
         });
         var suffix = Guid.NewGuid().ToString("N");
         var sourceEndpoint = $"inproc://orders-batch-source-{suffix}";

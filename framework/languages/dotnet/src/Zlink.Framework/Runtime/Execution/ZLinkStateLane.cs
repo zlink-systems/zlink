@@ -84,7 +84,7 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
 
             return ValueTask.CompletedTask;
         });
-        ScheduleDrain();
+        ScheduleDrain(inline: true);
         return new ValueTask<T>(completion.Task);
     }
 
@@ -125,11 +125,15 @@ internal sealed class ZLinkStateLane : IAsyncDisposable
                 + "surface.");
     }
 
-    private void ScheduleDrain()
+    private void ScheduleDrain(bool inline = false)
     {
         //  Exactly one drain runs at a time. The drain clears the flag and re-checks the mailbox
         //  before exiting, so an item enqueued during that window is never left unscheduled.
-        if (Interlocked.CompareExchange(ref _scheduled, 1, 0) == 0)
+        if (Interlocked.CompareExchange(ref _scheduled, 1, 0) != 0)
+            return;
+        if (inline)
+            _ = DrainAsync();
+        else
             ThreadPool.UnsafeQueueUserWorkItem(
                 static state => _ = state.DrainAsync(), this, preferLocal: true);
     }

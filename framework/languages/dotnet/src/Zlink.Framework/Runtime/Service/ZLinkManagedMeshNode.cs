@@ -1982,6 +1982,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                          .ThenBy(static entry => entry.Key.OwnerKind)
                          .ThenBy(static entry => entry.Key.Identity, StringComparer.Ordinal))
             {
+                if (batch.Count >= batch.MaximumRecords)
+                {
+                    if (entry.Value.IsReady)
+                        return true;
+                    continue;
+                }
                 if (!entry.Value.TryClaim())
                     continue;
                 var mailbox = entry.Value;
@@ -5838,7 +5844,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             };
         }
         return EnqueueOwned(
-            MailboxKey.ForNode(MeshReadyDomains.Application),
+            MailboxKey.ForNode(MeshReadyDomains.Application, application.ChannelName),
             new MeshReceiveRecord(
                 kind,
                 MeshReadyDomains.Application,
@@ -9878,7 +9884,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     return SubmitResult.Ok;
                 };
             EnqueueOwned(
-                MailboxKey.ForNode(MeshReadyDomains.Application),
+                MailboxKey.ForNode(MeshReadyDomains.Application, channelName),
                 new MeshReceiveRecord(
                     recordKind,
                     MeshReadyDomains.Application,
@@ -11587,8 +11593,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         string SpotId,
         ActorRef Actor)
     {
-        internal static MailboxKey ForNode(MeshReadyDomains domain) =>
-            new(MeshOwnerKind.Node, string.Empty, 0, domain, string.Empty, default);
+        internal static MailboxKey ForNode(MeshReadyDomains domain, string? channelName = null) =>
+            new(MeshOwnerKind.Node, channelName ?? string.Empty, 0, domain, string.Empty, default);
 
         internal static MailboxKey ForSpot(
             ZLinkManagedSpot spot,

@@ -9,18 +9,11 @@ using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Backend.DotNet;
 
-// RouteMesh 10.0.0 node-level pull-dispatch pump (Option B, S8-06).
-//
-// A single background loop drains the node ready index (SetReadyHandler signals →
-// DrainReady(All) until residue is exhausted, infrastructure domain first). Each
-// MeshReadyRecord is claimed, its messages pulled into a receive batch, and each
-// receive record dispatched by Kind. Claims are always released in finally so a
-// dropped claim cannot pin an owner. Records are fanned out to per-owner state
-// (keyed by spot rid) that the framework's existing per-spot pull-drain consumers
-// (RecvRoute/Subscribe/RecvActorJoin/RecvActorLifecycle) read, and the per-spot
-// dispatch-event handler registered via IZLinkBackendSpot.OnDispatchEvent is
-// invoked so the framework schedules its drains. Completion records resolve the
-// request/reply completion table.
+// Persistent application workers claim the existing node/owner mailboxes and
+// invoke node/channel handlers directly. The shared ready mask reserves wakeups;
+// no per-batch supervisor task or second application queue is involved. Claims
+// are released in finally, while suspended handler results remain worker-owned.
+// Spot pull consumers and completion callbacks retain their existing contracts.
 internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 {
     private readonly IMeshNode _node;
@@ -31,14 +24,15 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         (RoutingId NodeRid, ulong NodeGeneration),
         ZLinkServiceWireCodec.RequestSourceFence> _requestSources = new();
 
-    private Action<IReadOnlyList<ZLinkBackendRouteReceived>>? _nodeRouteHandler;
+    private Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask>? _nodeRouteHandler;
+    private ZLinkRuntimeTaskRunner? _applicationTaskRunner;
     private readonly ZLinkStateLane _lane = new();
     private readonly SemaphoreSlim _signal = new(0);
     private CancellationTokenSource? _stop;
     private Task? _loop;
     private ZLinkApplicationJobQueueLease? _reservedApplicationAdmission;
     private int _applicationAdmissionWaitActive;
-    private MeshReadyDomains _pendingReadyDomains;
+    private int _pendingReadyDomains;
     private bool _started;
     private bool _disposed;
 
@@ -88,7 +82,15 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         _stop = new CancellationTokenSource();
         _node.SetReadyHandler(OnReady);
         using (ExecutionContext.SuppressFlow())
-            _loop = Task.Run(() => RunAsync(_stop.Token));
+        {
+            var workers = new Task[Math.Max(2, Environment.ProcessorCount)];
+            for (var index = 0; index < workers.Length; index++)
+                workers[index] = _applicationTaskRunner is { } runner
+                    ? runner.Run("mesh-application-worker",
+                        ct => RunAsync(_stop.Token, ct))
+                    : Task.Run(() => RunAsync(_stop.Token, CancellationToken.None).AsTask());
+            _loop = Task.WhenAll(workers);
+        }
     }
 
     // Registers (or replaces) the per-spot dispatch-event handler and returns the
@@ -155,9 +157,11 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     // queue. They are delivered to this single node-level consumer, which routes
     // them to the MeshNode builder's registered route/channel handlers.
     public void SetNodeRouteHandler(
-        Action<IReadOnlyList<ZLinkBackendRouteReceived>> handler)
+        Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask> handler,
+        ZLinkRuntimeTaskRunner? taskRunner = null)
     {
         _nodeRouteHandler = handler;
+        _applicationTaskRunner = taskRunner;
     }
 
     private MeshReadyDomains OnReady(MeshReadyDomains readyDomains)
@@ -168,17 +172,12 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 
     private void SignalReady(MeshReadyDomains readyDomains)
     {
-        if (readyDomains == MeshReadyDomains.None) return;
-        if (_lane.IsOnLane)
-            SignalReadyOnLane(readyDomains);
-        else
-            AwaitStateLane(_lane.RunAsync(() => SignalReadyOnLane(readyDomains)));
-    }
-
-    private void SignalReadyOnLane(MeshReadyDomains readyDomains)
-    {
-        if (_disposed) return;
-        _pendingReadyDomains |= readyDomains;
+        if (readyDomains == MeshReadyDomains.None || Volatile.Read(ref _disposed))
+            return;
+        // The pending-domain mask is also the wake reservation. Only its empty
+        // to nonempty transition publishes a signal; no state-lane turn is needed.
+        if (Interlocked.Or(ref _pendingReadyDomains, (int)readyDomains) != 0)
+            return;
         try
         {
             _signal.Release();
@@ -188,43 +187,64 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         }
     }
 
-    private MeshReadyDomains TakePendingReadyDomains()
-    {
-        return AwaitStateLane(_lane.RunAsync(TakePendingReadyDomainsOnLane));
-    }
+    private MeshReadyDomains TakePendingReadyDomains() =>
+        (MeshReadyDomains)Interlocked.Exchange(ref _pendingReadyDomains, 0);
 
-    private MeshReadyDomains TakePendingReadyDomainsOnLane()
+    private async ValueTask RunAsync(
+        CancellationToken stopToken,
+        CancellationToken runtimeToken)
     {
-        var pending = _pendingReadyDomains;
-        _pendingReadyDomains = MeshReadyDomains.None;
-        return pending;
-    }
-
-    private async Task RunAsync(CancellationToken cancellationToken)
-    {
-        using var readyBatch = new MeshReadyBatch();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(stopToken, runtimeToken);
+        var cancellationToken = stop.Token;
+        using var readyBatch = new MeshReadyBatch { MaximumRecords = 1 };
         using var receiveBatch = new MeshReceiveBatch();
-        while (!cancellationToken.IsCancellationRequested)
+        // These are handler-returned asynchronous results, not another queue of
+        // records. Keep their lifetime inside the persistent worker registration.
+        var pending = new List<Task>();
+        try
         {
-            try
+            while (!cancellationToken.IsCancellationRequested)
             {
+                for (var index = pending.Count - 1; index >= 0; index--)
+                {
+                    if (!pending[index].IsCompleted)
+                        continue;
+                    ObserveDispatchResult(pending[index]);
+                    pending.RemoveAt(index);
+                }
                 await _signal.WaitAsync(cancellationToken).ConfigureAwait(false);
+                DrainResidue(readyBatch, receiveBatch, pending, cancellationToken);
             }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (pending.Count != 0)
+                await Task.WhenAll(pending).ConfigureAwait(false);
+        }
+    }
 
-            DrainResidue(
-                readyBatch,
-                receiveBatch,
-                cancellationToken);
+    private void ObserveDispatchResult(Task result)
+    {
+        try
+        {
+            result.GetAwaiter().GetResult();
+        }
+        catch (Exception exception)
+        {
+            if (_applicationTaskRunner is null)
+                throw;
+            _applicationTaskRunner.ErrorSink.ReportRuntimeTaskException(
+                "mesh-application-worker", exception);
         }
     }
 
     private void DrainResidue(
         MeshReadyBatch readyBatch,
         MeshReceiveBatch receiveBatch,
+        List<Task> pending,
         CancellationToken cancellationToken)
     {
         var requestedDomains = TakePendingReadyDomains();
@@ -251,16 +271,19 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 return;
             }
 
+            if (residue)
+                SignalReady(domains);
             for (var i = 0; i < readyBatch.Count; i++)
                 DrainClaim(
                     readyBatch,
                     i,
                     receiveBatch,
+                    pending,
                     cancellationToken);
 
-            requestedDomains = TakePendingReadyDomains();
-            if (residue)
-                requestedDomains |= domains;
+            // Re-enter through the shared ready signal so another waiting
+            // worker can acquire a different owner during a suspended handler.
+            requestedDomains = MeshReadyDomains.None;
         }
     }
 
@@ -268,6 +291,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         MeshReadyBatch readyBatch,
         int index,
         MeshReceiveBatch receiveBatch,
+        List<Task> pending,
         CancellationToken cancellationToken)
     {
         // The claim owner identifies the local consumer the records belong to.
@@ -374,8 +398,15 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                     admission?.Dispose();
                 }
             }
-            DispatchNodeRoutes(nodeRoutes);
+            // Start this owner's records in claim order. A suspended handler's
+            // result remains with the worker, while the claim returns for the
+            // next bounded batch and other owners run on their own workers.
+            var dispatch = DispatchNodeRoutes(nodeRoutes, cancellationToken);
             nodeRoutes.Clear();
+            if (dispatch.IsCompletedSuccessfully)
+                dispatch.GetAwaiter().GetResult();
+            else
+                pending.Add(dispatch.AsTask());
         }
         catch (OperationCanceledException)
             when (cancellationToken.IsCancellationRequested)
@@ -384,12 +415,15 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         catch (ObjectDisposedException)
         {
         }
-        catch (Exception)
+        catch (Exception exception)
         {
-            // A failed pull or a poison record must not kill the pump loop: the
-            // pump is the node's only dispatch thread, so surviving and moving to
-            // the next claim keeps every other owner (and the completion table)
-            // alive.
+            foreach (var received in nodeRoutes)
+                received.Dispose();
+            nodeRoutes.Clear();
+            if (_applicationTaskRunner is null)
+                throw;
+            _applicationTaskRunner.ErrorSink.ReportRuntimeTaskException(
+                "mesh-application-worker", exception);
         }
         finally
         {
@@ -630,19 +664,21 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         return admission is not null;
     }
 
-    private void DispatchNodeRoutes(List<ZLinkBackendRouteReceived> nodeRoutes)
+    private ValueTask DispatchNodeRoutes(
+        List<ZLinkBackendRouteReceived> nodeRoutes,
+        CancellationToken cancellationToken)
     {
         if (nodeRoutes.Count == 0)
-            return;
+            return ValueTask.CompletedTask;
         var handler = _nodeRouteHandler;
         if (handler is not null)
         {
-            handler(nodeRoutes);
-            return;
+            return handler(nodeRoutes, cancellationToken);
         }
 
         foreach (var received in nodeRoutes)
             received.Dispose();
+        return ValueTask.CompletedTask;
     }
 
     private bool EnqueueSubscribe(

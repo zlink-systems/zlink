@@ -460,6 +460,7 @@ internal readonly record struct MeshReadyRecord(
 
 internal sealed class MeshReadyBatch : IDisposable
 {
+    internal int MaximumRecords { get; set; } = int.MaxValue;
     private readonly List<(MeshReadyRecord Record, MeshClaim Claim)> _entries = new();
     public int Count => _entries.Count;
     public MeshReadyRecord this[int index] => _entries[index].Record;

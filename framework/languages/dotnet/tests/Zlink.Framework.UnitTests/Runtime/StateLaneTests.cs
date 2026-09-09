@@ -173,6 +173,43 @@ public sealed class StateLaneTests
         Assert.Equal(5, result);
     }
 
+    [Fact]
+    public async Task IdleSynchronousTurn_DrainsInlineAndRestoresCallerContext()
+    {
+        await using var lane = new ZLinkStateLane();
+        var caller = Environment.CurrentManagedThreadId;
+        var operation = lane.RunAsync(() =>
+        {
+            Assert.True(lane.IsOnLane);
+            return Environment.CurrentManagedThreadId;
+        });
+        Assert.True(operation.IsCompletedSuccessfully);
+        Assert.Equal(caller, await operation);
+        Assert.Null(ZLinkStateLane.Current);
+    }
+
+    [Fact]
+    public async Task InlineDrain_DoesNotPassAnEarlierSuspendedTurn()
+    {
+        await using var lane = new ZLinkStateLane();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var order = new List<int>();
+        lane.TryPost(async () =>
+        {
+            started.SetResult();
+            await release.Task;
+            order.Add(1);
+        });
+        await started.Task;
+        var second = lane.RunAsync(() => order.Add(2));
+        Assert.False(second.IsCompleted);
+        release.SetResult();
+        await second;
+        Assert.Equal(new[] { 1, 2 }, order);
+        Assert.Null(ZLinkStateLane.Current);
+    }
+
     // ---- 종료 ------------------------------------------------------------------------
 
     [Fact]

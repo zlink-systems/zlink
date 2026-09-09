@@ -10763,9 +10763,10 @@ public sealed partial class EntrySpotActorDispatchTests
         }
 
         public void OnNodeRoute(
-            Action<IReadOnlyList<ZLinkBackendRouteReceived>> handler)
+            Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask> handler,
+            ZLinkRuntimeTaskRunner taskRunner)
         {
-            NodeRouteHandler = handler;
+            NodeRouteHandler = records => _ = handler(records, CancellationToken.None);
             InitializationEvents.Enqueue("node-route-handler");
         }
 
