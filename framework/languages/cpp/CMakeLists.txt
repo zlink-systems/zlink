@@ -1,12 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.10.0 LANGUAGES C CXX)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(
     $<$<COMPILE_LANGUAGE:CXX>:-fvisibility=hidden>
     $<$<COMPILE_LANGUAGE:CXX>:-fvisibility-inlines-hidden>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU>>:-fno-gnu-unique>)
-  add_link_options($<$<LINK_LANGUAGE:CXX>:-Wl,--exclude-libs,ALL>)
+  if(NOT APPLE)
+    add_link_options($<$<LINK_LANGUAGE:CXX>:-Wl,--exclude-libs,ALL>)
+  endif()
   if(UNIX AND NOT APPLE AND EXISTS "${CMAKE_CURRENT_LIST_DIR}/cmake/hide-executable-symbols.map")
     add_link_options(
       $<$<LINK_LANGUAGE:CXX>:-Wl,--version-script=${CMAKE_CURRENT_LIST_DIR}/cmake/hide-executable-symbols.map>)
@@ -17,6 +19,8 @@ include(GNUInstallDirs)
 include(FetchContent)
 include(CMakePackageConfigHelpers)
 find_package(Threads REQUIRED)
+
+option(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE "Build bindings/cpp from the workspace (explicit opt-in)" OFF)
 
 option(ZLINK_FRAMEWORK_CPP_BUILD_TESTS "Build C++ framework tests" ON)
 option(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS "Build isolated C++ service foundation tests" ON)
@@ -87,7 +91,17 @@ if(NOT TARGET zlink::cpp)
   list(PREPEND CMAKE_PREFIX_PATH
     "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}"
     "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}")
-  find_package(zlink_cpp ${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION} EXACT CONFIG REQUIRED)
+  if(ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE)
+    if(NOT EXISTS "${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/bindings/cpp/CMakeLists.txt")
+      message(FATAL_ERROR "Bindings source mode requires a zlink repository checkout")
+    endif()
+    set(ZLINK_CPP_CORE_PACKAGE_PREFIX "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX}" CACHE PATH
+      "Core package used by the workspace binding")
+    add_subdirectory("${ZLINK_FRAMEWORK_CPP_REPO_ROOT}/bindings/cpp"
+      "${CMAKE_CURRENT_BINARY_DIR}/bindings-cpp")
+  else()
+    find_package(zlink_cpp ${ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION} EXACT CONFIG REQUIRED)
+  endif()
 endif()
 
 add_library(zlink_framework_provider_abstractions INTERFACE)
@@ -760,7 +774,7 @@ endif()
 # The stream connector and Unreal adapter both consume the C++ binding. Keep
 # this dependency in the connector package even when the server framework is
 # not installed.
-if(TARGET zlink_stream_connector)
+if(TARGET zlink_stream_connector AND NOT ZLINK_FRAMEWORK_CPP_USE_BINDINGS_SOURCE)
   install(DIRECTORY "${ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX}/include/"
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     COMPONENT StreamConnector
@@ -918,6 +932,20 @@ install(FILES
   "${CMAKE_CURRENT_BINARY_DIR}/zlink_stream_connector_cppConfig.cmake"
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_stream_connector_cpp
   COMPONENT StreamConnector)
+
+if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
+  configure_package_config_file(
+    "${CMAKE_CURRENT_LIST_DIR}/cmake/zlink_frameworkConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/zlink_frameworkConfig.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_framework)
+  write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/zlink_frameworkConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION} COMPATIBILITY SameMinorVersion)
+  install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/zlink_frameworkConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/zlink_frameworkConfigVersion.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlink_framework COMPONENT Framework)
+endif()
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   enable_testing()
@@ -1205,8 +1233,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
 
 endif()
 
-if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS OR ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
-  add_zlink_protobuf_schema(sample_cpp_framework_bingo_proto
+if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
+  add_zlink_protobuf_schema(zlink_framework_bingo_proto
     ${ZLINK_FRAMEWORK_CPP_DIR}/samples/Bingo/Shared/Contracts/bingo_messages.proto)
 endif()
 
@@ -1324,7 +1352,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::framework
     zlink::framework_codec_protobuf
     zlink::stream_connector
-    sample_cpp_framework_bingo_proto
+    zlink_framework_bingo_proto
     GTest::gtest
     GTest::gmock)
   target_include_directories(test_cpp_framework_sample_parity PRIVATE
@@ -1817,27 +1845,30 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       OpenSSL::SSL
       OpenSSL::Crypto)
   endif()
-  add_executable(sample_stream_connector_core_client
-    connector/core/samples/core_client_smoke.cpp)
-  target_link_libraries(sample_stream_connector_core_client PRIVATE
-    zlink::stream_connector)
-  add_test(NAME sample_stream_connector_core_client
-    COMMAND sample_stream_connector_core_client)
-  set_tests_properties(sample_stream_connector_core_client PROPERTIES
-    LABELS "connector-e2e;connector-contract"
-    RESOURCE_LOCK zlink_cpp_heavy_runtime
-    TIMEOUT 30)
+  if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
+    add_executable(sample_stream_connector_core_client
+      connector/core/samples/core_client_smoke.cpp)
+    target_link_libraries(sample_stream_connector_core_client PRIVATE
+      zlink::stream_connector)
+    add_test(NAME sample_stream_connector_core_client
+      COMMAND sample_stream_connector_core_client)
+    set_tests_properties(sample_stream_connector_core_client PROPERTIES
+      LABELS "connector-e2e;connector-contract"
+      RESOURCE_LOCK zlink_cpp_heavy_runtime
+      TIMEOUT 30)
 
-  add_executable(sample_stream_e2e_client
-    connector/e2e-client/samples/e2e_client_smoke.cpp)
-  target_link_libraries(sample_stream_e2e_client PRIVATE
-    zlink::stream_e2e_client)
-  add_test(NAME sample_stream_e2e_client
-    COMMAND sample_stream_e2e_client)
-  set_tests_properties(sample_stream_e2e_client PROPERTIES
-    LABELS "connector-e2e"
-    RESOURCE_LOCK zlink_cpp_heavy_runtime
-    TIMEOUT 30)
+    add_executable(sample_stream_e2e_client
+      connector/e2e-client/samples/e2e_client_smoke.cpp)
+    target_link_libraries(sample_stream_e2e_client PRIVATE
+      zlink::stream_e2e_client)
+    add_test(NAME sample_stream_e2e_client
+      COMMAND sample_stream_e2e_client)
+    set_tests_properties(sample_stream_e2e_client PROPERTIES
+      LABELS "connector-e2e"
+      RESOURCE_LOCK zlink_cpp_heavy_runtime
+      TIMEOUT 30)
+
+  endif()
 
   add_executable(connector_perf_client
     connector/perf/connector_perf_client.cpp)
@@ -2402,204 +2433,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE)
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES)
-  function(add_zlink_framework_sample target_name source_file label)
-    add_executable(${target_name} EXCLUDE_FROM_ALL ${source_file})
-    target_link_libraries(${target_name} PRIVATE ${ARGN})
-    target_include_directories(${target_name} PRIVATE
-      ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
-    # Sample sources include Boost directly (asio-based redis helpers). Without
-    # this the vcpkg Boost that rides in on redis++'s interface include path
-    # wins for the sample TU while the framework objects use the vendored tree,
-    # mixing two Boost versions in one binary (ODR/ABI mismatch, observed as a
-    # deterministic SEGV in asio scheduler internals).
-    zlink_framework_cpp_add_boost_headers(${target_name})
-  endfunction()
-
-  add_zlink_framework_sample(
-    sample_cpp_framework_bingo_api
-    samples/Bingo/Server/Api/main.cpp
-    "framework-sample-bingo;framework-sample-api"
-    zlink::framework_locations_redis
-    zlink::framework
-    zlink::framework_codec_protobuf
-    sample_cpp_framework_bingo_proto)
-  add_zlink_framework_sample(
-    sample_cpp_framework_bingo_matchmaking
-    samples/Bingo/Server/Matchmaking/main.cpp
-    "framework-sample-bingo;framework-sample-matchmaking"
-    zlink::framework_locations_redis
-    zlink::framework
-    zlink::framework_codec_protobuf
-    sample_cpp_framework_bingo_proto)
-  add_zlink_framework_sample(
-    sample_cpp_framework_bingo_play
-    samples/Bingo/Server/Play/main.cpp
-    "framework-sample-bingo;framework-sample-play"
-    zlink::framework_locations_redis
-    zlink::framework
-    zlink::framework_codec_protobuf
-    sample_cpp_framework_bingo_proto)
-  add_zlink_framework_sample(
-    sample_cpp_framework_bingo_session
-    samples/Bingo/Server/Session/main.cpp
-    "framework-sample-bingo;framework-sample-session"
-    zlink::framework_locations_redis
-    zlink::framework
-    zlink::framework_codec_protobuf
-    sample_cpp_framework_bingo_proto
-    zlink::stream_connector)
-  add_executable(sample_cpp_framework_bingo_client
-    samples/Bingo/Client/main.cpp)
-  target_link_libraries(sample_cpp_framework_bingo_client PRIVATE
-    zlink::stream_e2e_client
-    zlink::framework_codec_protobuf
-    sample_cpp_framework_bingo_proto)
-  add_zlink_framework_sample(
-    sample_cpp_framework_tictactoe_api
-    samples/TicTacToe/Server/Api/main.cpp
-    "framework-sample-tictactoe;framework-sample-api"
-    zlink::framework_locations_redis
-    zlink::framework
-    zlink::stream_connector)
-  add_zlink_framework_sample(
-    sample_cpp_framework_tictactoe_play
-    samples/TicTacToe/Server/Play/main.cpp
-    "framework-sample-tictactoe;framework-sample-play"
-    zlink::framework_locations_redis
-    zlink::framework
-    zlink::stream_connector)
-  add_executable(sample_cpp_framework_tictactoe_client
-    samples/TicTacToe/Client/main.cpp)
-  target_link_libraries(sample_cpp_framework_tictactoe_client PRIVATE
-    zlink::http_client
-    zlink::stream_e2e_client)
-  add_zlink_framework_sample(
-    sample_cpp_framework_deliverydispatch_dispatch
-    samples/DeliveryDispatch/Server/Dispatch/main.cpp
-    "framework-sample-deliverydispatch;framework-sample-api;framework-sample-dispatch"
-    zlink::framework
-    zlink::framework_locations_redis
-    zlink::http_client)
-  add_zlink_framework_sample(
-    sample_cpp_framework_deliverydispatch_courier_actor_node
-    samples/DeliveryDispatch/Server/CourierActorNode/main.cpp
-    "framework-sample-deliverydispatch;framework-sample-courier"
-    zlink::framework
-    zlink::framework_locations_redis)
-  add_zlink_framework_sample(
-    sample_cpp_framework_deliverydispatch_customer_gateway
-    samples/DeliveryDispatch/Server/CustomerGateway/main.cpp
-    "framework-sample-deliverydispatch;framework-sample-session"
-    zlink::framework
-    zlink::framework_locations_redis)
-  add_zlink_framework_sample(
-    sample_cpp_framework_deliverydispatch_courier_session
-    samples/DeliveryDispatch/Server/CourierSession/main.cpp
-    "framework-sample-deliverydispatch;framework-sample-session"
-    zlink::framework
-    zlink::framework_locations_redis)
-  add_zlink_framework_sample(
-    sample_cpp_framework_deliverydispatch_tracking
-    samples/DeliveryDispatch/Server/Tracking/main.cpp
-    "framework-sample-deliverydispatch;framework-sample-tracking"
-    zlink::framework
-    zlink::framework_locations_redis)
-  add_executable(sample_cpp_framework_deliverydispatch_client
-    samples/DeliveryDispatch/Client/main.cpp)
-  target_link_libraries(sample_cpp_framework_deliverydispatch_client PRIVATE
-    zlink::framework
-    zlink::http_client
-    zlink::stream_connector
-    zlink::stream_e2e_client)
-  add_zlink_framework_sample(
-    sample_cpp_framework_gamequest_game_api
-    samples/GameQuest/Server/GameApi/main.cpp
-    "framework-sample-gamequest;framework-sample-api"
-    zlink::framework
-    zlink::framework_locations_redis
-    zlink::http_client
-    zlink::stream_connector)
-  add_zlink_framework_sample(
-    sample_cpp_framework_gamequest_quest_mission
-    samples/GameQuest/Server/QuestMission/main.cpp
-    "framework-sample-gamequest;framework-sample-mission"
-    zlink::framework
-    zlink::framework_locations_redis)
-  add_executable(sample_cpp_framework_gamequest_client
-    samples/GameQuest/Client/main.cpp)
-  target_link_libraries(sample_cpp_framework_gamequest_client PRIVATE
-    zlink::framework
-    zlink::http_client
-    zlink::stream_connector
-    zlink::stream_e2e_client)
-  add_zlink_framework_sample(
-    sample_cpp_framework_shoppingmall_commerce_api
-    samples/ShoppingMall/Server/CommerceApi/main.cpp
-    "framework-sample-shoppingmall;framework-sample-api"
-    zlink::framework
-    zlink::framework_locations_redis
-    zlink::http_client)
-  add_zlink_framework_sample(
-    sample_cpp_framework_shoppingmall_order_workflow
-    samples/ShoppingMall/Server/OrderWorkflow/main.cpp
-    "framework-sample-shoppingmall;framework-sample-workflow"
-    zlink::framework
-    zlink::framework_locations_redis)
-  add_executable(sample_cpp_framework_shoppingmall_client
-    samples/ShoppingMall/Client/main.cpp)
-  target_link_libraries(sample_cpp_framework_shoppingmall_client PRIVATE
-    zlink::http_client)
-  add_zlink_framework_sample(
-    sample_cpp_framework_supportchat_api
-    samples/SupportChat/Server/Api/main.cpp
-    "framework-sample-supportchat;framework-sample-api"
-    zlink::framework
-    zlink::framework_locations_redis)
-  add_zlink_framework_sample(
-    sample_cpp_framework_supportchat_session
-    samples/SupportChat/Server/Session/main.cpp
-    "framework-sample-supportchat;framework-sample-session"
-    zlink::framework
-    zlink::framework_locations_redis
-    zlink::stream_connector)
-  add_zlink_framework_sample(
-    sample_cpp_framework_supportchat_support
-    samples/SupportChat/Server/Support/main.cpp
-    "framework-sample-supportchat;framework-sample-support"
-    zlink::framework
-    zlink::framework_locations_redis)
-  add_executable(sample_cpp_framework_supportchat_client
-    samples/SupportChat/Client/main.cpp)
-  target_link_libraries(sample_cpp_framework_supportchat_client PRIVATE
-    zlink::framework
-    zlink::http_client
-    zlink::stream_connector
-    zlink::stream_e2e_client)
-  add_zlink_framework_sample(
-    sample_cpp_framework_zoneworld_zone_node
-    samples/ZoneWorld/Server/ZoneNode/main.cpp
-    "framework-sample-zoneworld;framework-sample-zone-node"
-    zlink::framework
-    zlink::framework_locations_redis)
-  add_zlink_framework_sample(
-    sample_cpp_framework_zoneworld_gateway
-    samples/ZoneWorld/Server/Gateway/main.cpp
-    "framework-sample-zoneworld;framework-sample-gateway"
-    zlink::framework
-    zlink::framework_locations_redis
-    zlink::stream_connector)
-  add_zlink_framework_sample(
-    sample_cpp_framework_zoneworld_ops
-    samples/ZoneWorld/Server/Ops/main.cpp
-    "framework-sample-zoneworld;framework-sample-ops"
-    zlink::framework
-    zlink::framework_locations_redis
-    zlink::stream_connector)
-  add_executable(sample_cpp_framework_zoneworld_client
-    samples/ZoneWorld/Client/main.cpp)
-  target_link_libraries(sample_cpp_framework_zoneworld_client PRIVATE
-    zlink::stream_connector
-    zlink::stream_e2e_client)
+  add_subdirectory(samples/Bingo)
+  add_subdirectory(samples/TicTacToe)
+  add_subdirectory(samples/DeliveryDispatch)
+  add_subdirectory(samples/GameQuest)
+  add_subdirectory(samples/ShoppingMall)
+  add_subdirectory(samples/SupportChat)
+  add_subdirectory(samples/ZoneWorld)
 
   function(add_zlink_framework_sample_runner sample_name labels timeout_seconds)
     add_test(

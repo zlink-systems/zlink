@@ -2,7 +2,7 @@
   "version": 4,
   "cmakeMinimumRequired": {
     "major": 3,
-    "minor": 20,
+    "minor": 24,
     "patch": 0
   },
   "configurePresets": [
@@ -10,114 +10,194 @@
       "name": "base",
       "hidden": true,
       "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
         "CMAKE_CXX_STANDARD": "20",
         "CMAKE_CXX_EXTENSIONS": "OFF",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "ZLINK_FRAMEWORK_CPP_REPO_ROOT": "${sourceDir}/../../..",
-        "ZLINK_FRAMEWORK_CPP_BUILD_TESTS": "ON",
+        "CMAKE_BUILD_TYPE": "Debug",
         "ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES": "ON",
-        "ZLINK_STREAM_CONNECTOR_WITH_LZ4": "ON"
+        "ZLINK_FRAMEWORK_CPP_BUILD_E2E": "ON",
+        "ZLINK_FRAMEWORK_CPP_BUILD_TESTS": "ON",
+        "ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE": "ON",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/../../../vcpkg/ports"
       }
     },
     {
       "name": "vcpkg",
       "hidden": true,
-      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      "inherits": "base"
+    },
+    {
+      "name": "linux-ninja",
+      "inherits": "base",
+      "generator": "Ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "windows-ninja",
+      "inherits": "base",
+      "generator": "Ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "macos-ninja",
+      "inherits": "base",
+      "generator": "Ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "VCPKG_TARGET_TRIPLET": "arm64-osx"
+      }
+    },
+    {
+      "name": "vs2022",
+      "inherits": "base",
+      "generator": "Visual Studio 17 2022",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "architecture": "x64"
+    },
+    {
+      "name": "dev",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES": "ON",
+        "ZLINK_FRAMEWORK_CPP_BUILD_E2E": "ON",
+        "ZLINK_FRAMEWORK_CPP_BUILD_TESTS": "ON",
+        "ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS": "ON",
+        "ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE": "ON"
+      }
+    },
+    {
+      "name": "ci",
+      "inherits": "base",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "ZLINK_FRAMEWORK_CPP_BUILD_SAMPLES": "OFF",
+        "ZLINK_FRAMEWORK_CPP_BUILD_E2E": "OFF",
+        "ZLINK_FRAMEWORK_CPP_BUILD_TESTS": "ON",
+        "ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS": "ON",
+        "ZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE": "ON"
+      }
     },
     {
       "name": "default",
-      "displayName": "Default WSL/Linux Debug",
-      "inherits": "base",
-      "generator": "Ninja",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
-      }
+      "inherits": "dev"
     },
     {
       "name": "linux-ninja-debug",
-      "displayName": "Linux Ninja Debug",
-      "inherits": "base",
-      "generator": "Ninja",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
-      }
+      "inherits": "linux-ninja",
+      "condition": true
     },
     {
       "name": "linux-ninja-release",
-      "displayName": "Linux Ninja Release",
-      "inherits": "base",
-      "generator": "Ninja",
+      "inherits": "linux-ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
-      }
+      },
+      "condition": true
     },
     {
       "name": "linux-ninja-vcpkg-debug",
-      "displayName": "Linux Ninja Debug vcpkg",
-      "inherits": [
-        "base",
-        "vcpkg"
-      ],
-      "generator": "Ninja",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
-      }
+      "inherits": "linux-ninja",
+      "condition": true
     },
     {
       "name": "macos-ninja-debug",
-      "displayName": "macOS Ninja Debug",
-      "inherits": "base",
-      "generator": "Ninja",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
-      }
+      "inherits": "macos-ninja",
+      "condition": true
     },
     {
       "name": "windows-msvc-debug",
-      "displayName": "Windows MSVC Debug",
-      "inherits": "base",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64"
+      "inherits": "vs2022",
+      "condition": true
     },
     {
       "name": "windows-msvc-release",
-      "displayName": "Windows MSVC Release",
-      "inherits": "base",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64"
+      "inherits": "vs2022",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "condition": true
     },
     {
       "name": "windows-msvc-vcpkg-debug",
-      "displayName": "Windows MSVC Debug vcpkg",
-      "inherits": [
-        "base",
-        "vcpkg"
-      ],
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64"
+      "inherits": "vs2022",
+      "condition": true
     }
   ],
   "buildPresets": [
     {
+      "name": "linux-ninja",
+      "configurePreset": "linux-ninja",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-ninja",
+      "configurePreset": "windows-ninja",
+      "configuration": "Debug"
+    },
+    {
+      "name": "macos-ninja",
+      "configurePreset": "macos-ninja",
+      "configuration": "Debug"
+    },
+    {
+      "name": "vs2022",
+      "configurePreset": "vs2022",
+      "configuration": "Debug"
+    },
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "configuration": "Debug"
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci",
+      "configuration": "Debug"
+    },
+    {
       "name": "default",
-      "configurePreset": "default"
+      "configurePreset": "default",
+      "configuration": "Debug"
     },
     {
       "name": "linux-ninja-debug",
-      "configurePreset": "linux-ninja-debug"
+      "configurePreset": "linux-ninja-debug",
+      "configuration": "Debug"
     },
     {
       "name": "linux-ninja-release",
-      "configurePreset": "linux-ninja-release"
+      "configurePreset": "linux-ninja-release",
+      "configuration": "Release"
     },
     {
       "name": "linux-ninja-vcpkg-debug",
-      "configurePreset": "linux-ninja-vcpkg-debug"
+      "configurePreset": "linux-ninja-vcpkg-debug",
+      "configuration": "Debug"
     },
     {
       "name": "macos-ninja-debug",
-      "configurePreset": "macos-ninja-debug"
+      "configurePreset": "macos-ninja-debug",
+      "configuration": "Debug"
     },
     {
       "name": "windows-msvc-debug",
@@ -137,8 +217,57 @@
   ],
   "testPresets": [
     {
+      "name": "linux-ninja",
+      "configurePreset": "linux-ninja",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-ninja",
+      "configurePreset": "windows-ninja",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "macos-ninja",
+      "configurePreset": "macos-ninja",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "vs2022",
+      "configurePreset": "vs2022",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
       "name": "default",
       "configurePreset": "default",
+      "configuration": "Debug",
       "output": {
         "outputOnFailure": true
       }
@@ -146,6 +275,7 @@
     {
       "name": "linux-ninja-debug",
       "configurePreset": "linux-ninja-debug",
+      "configuration": "Debug",
       "output": {
         "outputOnFailure": true
       }
@@ -153,6 +283,7 @@
     {
       "name": "linux-ninja-release",
       "configurePreset": "linux-ninja-release",
+      "configuration": "Release",
       "output": {
         "outputOnFailure": true
       }
@@ -160,6 +291,7 @@
     {
       "name": "linux-ninja-vcpkg-debug",
       "configurePreset": "linux-ninja-vcpkg-debug",
+      "configuration": "Debug",
       "output": {
         "outputOnFailure": true
       }
@@ -167,6 +299,7 @@
     {
       "name": "macos-ninja-debug",
       "configurePreset": "macos-ninja-debug",
+      "configuration": "Debug",
       "output": {
         "outputOnFailure": true
       }

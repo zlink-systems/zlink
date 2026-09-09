@@ -1,0 +1,20 @@
+{
+  "name": "zlink-framework",
+  "version": "0.10.0",
+  "description": "Zlink C++ server framework, HTTP client and stream connector",
+  "homepage": "https://github.com/zlink-systems/zlink",
+  "license": "FSL-1.1-ALv2",
+  "supports": "!(osx & x64)",
+  "dependencies": [
+    "zlink",
+    "boost-asio",
+    "boost-beast",
+    "lz4",
+    "nlohmann-json",
+    "openssl",
+    "protobuf",
+    { "name": "redis-plus-plus", "features": ["async-std"] },
+    { "name": "vcpkg-cmake", "host": true },
+    { "name": "vcpkg-cmake-config", "host": true }
+  ]
+}

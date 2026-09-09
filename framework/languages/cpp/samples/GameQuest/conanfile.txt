@@ -1,0 +1,7 @@
+[requires]
+zlink/0.17.5
+zlink-framework/0.10.0
+
+[generators]
+CMakeDeps
+CMakeToolchain
